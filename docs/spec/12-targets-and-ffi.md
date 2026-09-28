@@ -13,6 +13,8 @@ A **target** is either `native` or `js`. These two names are used in `@external`
 
 32-bit native platforms are not supported, because fiber stacks rely on large virtual-memory reservations (D-124, ADR-0032).
 
+There are no operating-system targets in v1: `native` covers macOS, Linux and Windows alike, and there is no `@target(windows)` or similar (D-214, ADR-0039). The standard library and runtime hide operating-system differences. Foreign code that exists only on some operating systems must handle its own portability, typically with a small C shim that is linked on every native platform.
+
 Native debug info is DWARF on every platform in v1, including Windows. CodeView/PDB is added when the bundled linker lands ([§13.1](13-tooling.md#131-the-cheby-command)) (D-184, D-088).
 
 ## 12.2 Native
@@ -91,7 +93,8 @@ pub fn open(path: String) -> Result<Db, String>
 - `@external(native, "symbol")` binds to a C-ABI symbol, linked into the program (D-030).
 - `@external(js, "module", "name")` binds to the named export of an ES module. A relative module path is resolved against the Cheby source file's location (D-030).
 - There may be at most one `@external` per target. A function with an `@external` for only some targets exists only on those targets, as if it had `@target` ([§12.6](#126-target-specific-code)).
-- A function with a body may also have an `@external` for some target. The foreign implementation is used on that target and the body on the others.
+- A function with a body may also have an `@external` for some target. The foreign implementation is used on that target and the body on the others. The body is checked as code restricted to the targets that have no `@external`, so it may use items marked `@target` for those targets ([§12.6](#126-target-specific-code)) (D-207).
+- A relative module path in `@external(js, "./…", …)` names a file next to the source, usually under `src/`. Such files are not modules and are exempt from the file naming rule, and a JS build copies each of them into its output at the same location relative to the compiled module ([§7.2](07-modules-and-packages.md#72-modules-and-files)) (D-208).
 - The declared Cheby signature is trusted. The compiler cannot check it against the foreign code, so a wrong signature is undefined behavior on native.
 - Foreign functions may be generic, as in Gleam. Values cross the boundary in the uniform representation, so values whose type is a type parameter are passed as opaque references (D-186).
 
@@ -165,6 +168,23 @@ pub fn read_file(path: String) -> Result<String, io::Error> { … }
 
 - An item with `@target(t)` is type-checked on every build, but compiled only for target `t`.
 - Code that uses a target-specific item must itself be restricted to the same target, directly or through its callers. The compiler checks this and reports any use that would fail on some target, even when building for a target where it would work (D-056).
+- The body of a function that has an `@external` for some targets counts as restricted to the remaining targets, because it only runs there (D-207). This is how a function is written as "foreign code on one target, Cheby on the other":
+
+```cheby
+/// Returns a random number from 0 up to but not including `bound`.
+@external(native, "arc4random_uniform")
+priv fn below(bound: U32) -> U32 {
+  // Runs only on JS, so it may call the JS-only `js_random`.
+  let assert Ok(whole) = float::truncate(js_random() * float::from_u32(bound))
+  let assert Ok(number) = u32::from_int(whole)
+  number
+}
+
+@target(js)
+@external(js, "./random_ffi.mjs", "random")
+priv fn js_random() -> Float
+```
+
 - A whole module is restricted to a target with the inner attribute `@!target(t)`, written before the module's first item. It applies `@target(t)` to every item of the module (D-141).
 
 A package may declare the targets it supports with the optional `targets` field in `cheby.toml` ([§13.3](13-tooling.md#133-manifest)), which defaults to both targets. The cross-target check of the second bullet covers only the declared targets, so a package that supports only `native` gets no errors for uses that would fail on `js` (D-190).

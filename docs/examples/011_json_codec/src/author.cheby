@@ -4,8 +4,8 @@
 //! `{"name":"Frank Herbert","born":1920}`. When the year of birth is not
 //! known, `born` may be `null` or left out.
 
-import json
-import json::decode
+import std::json
+import std::json::decode
 
 /// A book's author, with the year they were born if it is known.
 ///

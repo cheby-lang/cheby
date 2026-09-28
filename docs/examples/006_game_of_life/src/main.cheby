@@ -85,9 +85,10 @@ fn step(grid: Grid) -> Grid {
   let candidates = set::fold(grid.cells, grid.cells, fn(found, cell) {
     list::fold(neighbours(cell), found, set::insert)
   })
-  // A capture fills in `grid` now and leaves the cell for later.
-  let survives = lives_on(grid, _)
-  Grid { cells: set::filter(candidates, survives) }
+  // The capture `lives_on(grid, _)` fills in `grid` now and leaves the
+  // cell for later. Its `_` belongs to `lives_on`, so `set::filter`
+  // receives it as an ordinary one-argument function.
+  Grid { cells: set::filter(candidates, lives_on(grid, _)) }
 }
 
 /// Tells whether `cell` is alive in the generation after `grid`.
@@ -102,10 +103,12 @@ fn lives_on(grid: Grid, cell: (Int, Int)) -> Bool {
 
 /// Returns how many of the eight neighbours of `cell` are alive.
 fn live_neighbours(grid: Grid, cell: (Int, Int)) -> Int {
-  let alive = is_alive(grid, _)
+  // The pipe only fills a `_` that is a whole argument of `list::filter`.
+  // The `_` here belongs to `is_alive`, so the neighbours become the
+  // first argument of `list::filter`, as with any other call.
   cell
   |> neighbours
-  |> list::filter(alive)
+  |> list::filter(is_alive(grid, _))
   |> list::length
 }
 
@@ -148,9 +151,8 @@ priv fn range(from: Int, to: Int) -> List<Int> {
 /// Makes `Grid` satisfy `Show`, so a grid can be interpolated as
 /// `{grid}`. Rows are separated by newlines.
 fn show(grid: Grid) -> String {
-  let row = render_row(grid, _)
   positions
-  |> list::map(row)
+  |> list::map(render_row(grid, _))
   |> string::join(_, "\n")
 }
 

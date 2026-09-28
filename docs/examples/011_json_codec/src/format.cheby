@@ -3,8 +3,8 @@
 //! In JSON a format is a string: `"hardcover"`, `"paperback"` or
 //! `"ebook"`.
 
-import json
-import json::decode
+import std::json
+import std::json::decode
 
 /// How a book is published.
 ///

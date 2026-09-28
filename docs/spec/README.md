@@ -22,6 +22,8 @@ This specification describes the Cheby programming language: its syntax, static 
 
 Appendix: [A. Grammar](appendix-a-grammar.md)
 
+The standard library is specified separately, one file per module, in [`../stdlib/`](../stdlib/) (D-204, D-220). This specification fixes the language and the semantics the runtime must provide. Standard-library names used in its examples, such as `fiber::scope` or `channel::new`, are provisional until the standard-library spec fixes them (D-174, D-199).
+
 ## Conventions
 
 ### Normative language

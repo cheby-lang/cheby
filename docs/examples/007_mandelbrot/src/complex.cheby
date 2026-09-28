@@ -34,7 +34,9 @@ fn magnitude_squared(z: Complex) -> Float {
 }
 
 /// Makes `Complex` satisfy `Show`, so a number can be interpolated as
-/// `{z}`. It shows as `1.5 - 2.0i` rather than `1.5 + -2.0i`.
+/// `{z}`. It shows as `1.5 - 2.0i` rather than `1.5 + -2.0i`. A `Float`
+/// always shows with a `.` or an exponent, on every target (D-203), so
+/// the parts read `2.0`, not `2`.
 fn show(z: Complex) -> String {
   case {
     z.im < 0.0 => {

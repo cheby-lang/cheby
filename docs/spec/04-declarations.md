@@ -51,7 +51,20 @@ Unused items warn according to their visibility (D-152, D-080): an unused `priv`
 
 ### 4.1.4 Doc comments
 
-`///` comments before an item document it, and `//!` comments at the top of a file document the module (D-078). They are used by `cheby doc` and the language server ([chapter 13](13-tooling.md)). Doc comments are Markdown.
+`///` comments before an item document it, and `//!` comments at the top of a file document the module (D-078). `///` comments may also document a variant or a field of a type declaration (D-211), and a function of an interface declaration (D-227). They are used by `cheby doc` and the language server ([chapter 13](13-tooling.md)). Doc comments are Markdown.
+
+```cheby
+/// Why a request failed.
+pub exposed type Error {
+  /// The server did not answer in time.
+  TimedOut,
+  /// The server answered with a status other than 2xx.
+  Status {
+    /// The HTTP status code.
+    code: Int,
+  },
+}
+```
 
 ## 4.2 Functions
 
@@ -114,10 +127,11 @@ type_params_plain = "<" UPPER { "," UPPER } [ "," ] ">" ;
 type_body   = "{" variant { "," variant } [ "," ] "}"      (* variants *)
             | "{" field { "," field } [ "," ] "}"          (* single-variant shorthand *)
             | (* empty: external type, see §12.5.3 *) ;
-variant     = UPPER
+variant     = { doc_comment NL } variant_body ;   (* D-211 *)
+variant_body = UPPER
             | UPPER "(" type { "," type } [ "," ] ")"
             | UPPER "{" field { "," field } [ "," ] "}" ;
-field       = LOWER ":" type ;
+field       = { doc_comment NL } LOWER ":" type ;   (* D-211 *)
 ```
 
 Every user-defined data type is an algebraic data type: a set of variants, each with its own fields (D-022). There is no `struct` or `enum` keyword. A record is a type with one variant ([§4.3.3](#433-single-variant-shorthand)).
@@ -285,7 +299,7 @@ The set of attributes is fixed, and user-defined attributes do not exist (D-200,
 | `@external(target, …)`   | functions, types                                        | foreign implementation for one target | [§12.5](12-targets-and-ffi.md#125-foreign-functions)      |
 | `@target(target)`        | functions, types, aliases, constants, interfaces, tests | item exists only on that target       | [§12.6](12-targets-and-ffi.md#126-target-specific-code)   |
 | `@blocking`              | `@external` functions                                   | the foreign call may block            | [§12.7](12-targets-and-ffi.md#127-blocking-foreign-calls) |
-| `@async`                 | functions with `@external(js, …)`                       | the JS function returns a `Promise`   | [§12.5.2](12-targets-and-ffi.md#1252-js-abi)  |
+| `@async`                 | functions with `@external(js, …)`                       | the JS function returns a `Promise`   | [§12.5.2](12-targets-and-ffi.md#1252-js-abi)              |
 | `@deprecated("message")` | `pub` items                                             | using the item warns with the message | below                                                     |
 
 An unknown attribute name, a duplicated attribute (other than `@external` with different targets), or an attribute in a place it is not allowed is a compile error.

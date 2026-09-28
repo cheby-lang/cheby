@@ -24,21 +24,20 @@ import json::value
 /// Why parsing failed, and where, counted in code points from 0.
 type ParseError { position: Int, reason: Reason }
 
-/// What went wrong. Doc comments are only allowed on top-level items, so
-/// the variants are described with plain comments.
+/// What went wrong.
 type Reason {
-  // The text ended before the value did.
+  /// The text ended before the value did.
   UnexpectedEnd,
-  // This code point cannot appear here.
+  /// This code point cannot appear here.
   UnexpectedChar(String),
-  // A `\` in a string is followed by this code point, which JSON does
-  // not allow after it.
+  /// A `\` in a string is followed by this code point, which JSON does
+  /// not allow after it.
   InvalidEscape(String),
-  // A `\u` escape, which this parser does not decode.
+  /// A `\u` escape, which this parser does not decode.
   UnicodeEscape,
-  // A line break or tab written directly inside a string.
+  /// A line break or tab written directly inside a string.
   ControlCharacter,
-  // Text that looks like a number but that `float::parse` rejects.
+  /// Text that looks like a number but that `float::parse` rejects.
   InvalidNumber(String),
 }
 

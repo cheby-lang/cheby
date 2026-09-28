@@ -60,7 +60,8 @@ priv type Event {
 /// scope does not return until the counter has stopped.
 fn start(scope: fiber::Scope) -> (Counter, Stopper) {
   // Both channels have capacity 0, so a request is handed straight to
-  // the actor. When `increment` returns, the actor already has the
+  // the actor. The actor waits in a selector, which counts as a
+  // receiver and completes the handoff (D-206). When `increment` returns, the actor already has the
   // request, and serves it before anything the same fiber sends later,
   // even a stop on the other channel.
   let (requests_tx, requests_rx) = channel::new::<Request>(0)

@@ -24,7 +24,9 @@ Each source file is a module (D-162). A module's path is the package name follow
 
 There are no `mod` declarations. The file system is the single source of truth (D-162). A file and a directory may share a name: `src/web.cheby` and `src/web/router.cheby` are the modules `my_app::web` and `my_app::web::router`, and neither contains the other.
 
-File and directory names under `src/` must be valid `LOWER` identifiers. Files and directories whose names are not valid identifiers are a compile error, except for hidden files, which are ignored.
+The names of `.cheby` files and of directories under `src/` must be valid `LOWER` identifiers. Such files and directories whose names are not valid identifiers are a compile error, except for hidden files, which are ignored.
+
+Other files under `src/`, such as the JS helper modules named by `@external(js, "./…")`, are not modules. The naming rule does not apply to them, and module discovery ignores them (D-208). A JS build copies every file named by a relative `@external(js, …)` path into its output, at the same location relative to the compiled module ([§12.5](12-targets-and-ffi.md#125-foreign-functions)).
 
 The package's **root module** is `src/main.cheby`. Its path is just the package name (`my_app`), and it cannot also be imported as `my_app::main` (D-142). Its `main` function is the program's default entry point. Any other module's `main` can be run by its module path, for example `cheby run my_app::tools::migrate` ([§4.2.1](04-declarations.md#421-main), D-137).
 
@@ -146,7 +148,7 @@ Every module implicitly imports the prelude. It contains only types, constructor
 
 Functions on these types come from their modules, which must be imported: `std::int`, `std::float`, `std::string`, `std::list`, `std::result`, `std::option` and so on. The operator interfaces live in `std::ops`, not in the prelude (D-169).
 
-A module may declare, or explicitly import, a type or constructor with the same name as a prelude item, for example a type called `Order` in a shop application. The local declaration or import hides the prelude item of the same name in that module, and doing so is a warning (D-146). This is not shadowing in the sense of [§5.2.3](05-expressions.md#523-no-shadowing), which is about value bindings.
+A module may declare, or explicitly import, a type or constructor with the same name as a prelude item, for example a type called `Order` in a shop application. The local declaration or import hides the prelude item of the same name in that module, and doing so is a warning (D-146). Hiding is per namespace ([§7.7](#77-namespaces-and-name-resolution)) (D-212): a type hides only a prelude type, and a constructor only a prelude constructor. A constructor named `String` or `Bool`, as in `Value { String(String), Bool(Bool) }`, hides nothing and does not warn, because `String` and `Bool` are prelude types, not prelude constructors. A constructor named `Some` or `Ok` does hide a prelude constructor and warns. This is not shadowing in the sense of [§5.2.3](05-expressions.md#523-no-shadowing), which is about value bindings.
 
 ## 7.7 Namespaces and name resolution
 

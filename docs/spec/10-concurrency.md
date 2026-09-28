@@ -107,7 +107,7 @@ Its result type is `Result<T, Nil>` (D-179).
 
 ### 10.5.3 Closing
 
-There is no `close` function. A channel is closed exactly when its last `Sender` or its last `Receiver` is dropped (D-054, D-087). "Dropped" means the last reference to any handle of that kind is released, which the runtime detects precisely through reference counting ([§9.5](09-memory-model.md#95-handles-and-drop-functions)), on every target (D-100, ADR-0028).
+There is no `close` function. A channel is closed exactly when its last `Sender` or its last `Receiver` is dropped (D-054, D-087). "Dropped" means the last reference to any handle of that kind is released, which the runtime detects precisely through reference counting ([§9.5](09-memory-model.md#95-handles-and-drop-functions)), on every target (D-100, ADR-0028). A binding releases its handle right after its last use ([§9.2](09-memory-model.md#92-reference-counting)) (D-205, ADR-0036), so a channel closes as soon as no code can use its last handle of that kind again, not when the enclosing function returns.
 
 _Example:_ a producer that ends closes the channel for its consumer.
 
@@ -154,6 +154,7 @@ case selector::select(selector) {
 - If several arms are ready, which one is chosen is unspecified and should not systematically favor any arm.
 - A timer arm ([§10.8](#108-timeouts)) is ready when its duration has elapsed (D-103).
 - Each receive arm's mapping function takes a `Result<T, Nil>`, like `channel::receive`. A receive arm on a closed, empty channel is ready, and passes `Err(Nil)` to its mapping function, so selectors can observe closure (D-180).
+- A fiber waiting in `select` counts as a receiver on every channel it has a receive arm for (D-206). On a capacity-0 channel, a receive arm is ready while a sender is blocked on it, and a `send` does not block for want of a receiver while a selector waits on its channel. When the selector chooses that arm, the handoff completes: the value is taken and the sender's `send` returns `Ok(Nil)`. When it chooses another arm, no value is taken from the other channels, and their senders stay blocked.
 
 ## 10.7 Cancellation
 

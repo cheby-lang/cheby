@@ -6,7 +6,7 @@ Interfaces provide ad-hoc polymorphism. They are **structural**: a type satisfie
 
 ```ebnf
 interface_decl = [ "pub" | "priv" ] "interface" UPPER [ ":" bound ] [ "{" [ NL ] { interface_fn NL } "}" ] ;
-interface_fn   = "fn" LOWER "(" [ type { "," type } [ "," ] ] ")" [ "->" type ] ;
+interface_fn   = { doc_comment NL } "fn" LOWER "(" [ type { "," type } [ "," ] ] ")" [ "->" type ] ;   (* doc comments: D-227 *)
 bound          = interface_ref { "+" interface_ref } ;
 interface_ref  = [ LOWER "::" ] UPPER ;
 ```
@@ -27,7 +27,8 @@ pub interface Shape {
 - Each function has a name and parameter types. Parameter names are not written.
 - A missing return type means `Nil` (D-083).
 - `Self` may appear anywhere in parameter and return types, including nested (`List<Self>`, `fn(Self) -> Bool`), subject to the `dyn` restriction in [§8.6](#86-dyn-values).
-- Every function must mention `Self` in at least one parameter, so that the satisfying type can be found from the arguments.
+- Every function must mention `Self` in at least one parameter, so that the satisfying type can be found from the arguments. A function with `Self` only in its return type, such as `fn default() -> Self` or `fn from_json(json::Value) -> Result<Self, E>`, is a compile error in v1 (D-209, ADR-0037). Constructing values of an unknown type is done with ordinary values instead, such as a decoder value (`std::json`).
+- Each function may have `///` doc comments (D-227).
 - Function names must be distinct within the interface, including functions inherited by embedding ([§8.3](#83-embedding)).
 - There are no default implementations (D-117).
 - Interfaces have no type parameters, and interface functions are not generic: an interface function has no type parameter list of its own, and `interface Into<T> { fn into(Self) -> T }` is a compile error (D-165).
@@ -216,4 +217,4 @@ The built-in numeric types, `String` (whose `show` returns the string unchanged)
 
 Equality, hashing and debug printing are **not** interfaces. They are built in for all types except functions and cannot be customized (D-033, [§3.13](03-types.md#313-equality-hashing-and-debug-printing)).
 
-Other standard interfaces (for example for iteration, hashing into custom structures or serialization) are standard-library API and are outside this specification.
+Other standard interfaces (for example for iteration, hashing into custom structures or serialization) are standard-library API and are specified in the standard-library spec, [`../stdlib/`](../stdlib/) (D-204). JSON encoding and decoding live in `std::json` (D-210, ADR-0038). Because of the `Self` rule of [§8.1](#81-declaration), encoding can be an interface, but decoding uses decoder values (D-209).

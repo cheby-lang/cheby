@@ -29,7 +29,8 @@ fn main() -> Result<Nil, fiber::Panic> {
 fn count_concurrently(clients: Int, times: Int) -> Result<Int, fiber::Panic> {
   use scope <- fiber::scope()
   // The stopper is dropped at once, so only `tally` keeps the counter
-  // running. After its last use below, `tally` is dropped too, which
+  // running. After its last use below, `tally` is dropped too (a
+  // binding releases its value after its last use, D-205), which
   // closes the request channel. The actor then returns, and so does
   // this scope.
   let (tally, _) = counter::start(scope)

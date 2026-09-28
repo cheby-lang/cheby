@@ -1,15 +1,20 @@
 //! Random numbers, taken from the host platform through the foreign
 //! function interface.
 //!
-//! Cheby has no mutable variables to keep a generator's state in, and
-//! good randomness comes from the operating system anyway, so this
-//! module asks the host. On native targets the numbers come from the C
+//! Ordinary programs get random numbers from `std::random` in the
+//! standard library (D-226). This module does it by hand to show the
+//! foreign function interface: `@external` for native, `@target` for
+//! JS-only code, and a JS helper module next to the source. Like
+//! `std::random`, it asks the host, because good randomness comes from
+//! the operating system anyway. On native targets the numbers come from the C
 //! library's `arc4random_uniform`, and on JS from `Math.random`. The
 //! rest of the package only calls `between`, which hides the foreign
 //! types and checks its bounds.
 //!
 //! `arc4random_uniform` is in the C library on macOS, the BSDs and
-//! Linux with glibc 2.36 or later, but not on Windows.
+//! Linux with glibc 2.36 or later, but not on Windows. There are no
+//! operating-system targets (D-214), so a portable program would link a
+//! small C shim instead, or simply use `std::random`.
 
 import std::float
 import std::int
@@ -60,7 +65,8 @@ priv fn below(bound: U32) -> U32 {
 // only on that target, and `@target(js)` says so explicitly: the
 // function is type-checked on every build but compiled only for JS.
 // The compiler checks that it is used only by code that runs on JS,
-// like the body of `below`, which native builds replace with the C
+// like the body of `below`, which counts as JS-only code (D-207)
+// because native builds replace it with the C
 // function.
 //
 // `Math.random` returns a number, not a `Promise`, so this is not

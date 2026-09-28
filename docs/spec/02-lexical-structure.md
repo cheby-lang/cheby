@@ -14,15 +14,15 @@ Line terminators are LF (`U+000A`) and CRLF (`U+000D U+000A`). A lone CR is a co
 
 There are three kinds of comments, and all run to the end of the line (D-078):
 
-| Form    | Meaning                                                          |
-| ------- | ---------------------------------------------------------------- |
-| `// …`  | ordinary comment, ignored                                        |
-| `/// …` | doc comment, attached to the item that follows                   |
-| `//! …` | module doc comment, allowed only before the first item of a file |
+| Form    | Meaning                                                                              |
+| ------- | ------------------------------------------------------------------------------------ |
+| `// …`  | ordinary comment, ignored                                                            |
+| `/// …` | doc comment, attached to the item, variant, field or interface function that follows |
+| `//! …` | module doc comment, allowed only before the first item of a file                     |
 
 There are no block comments (D-078). A comment does not affect newline handling: a line that ends with a comment ends where the comment starts.
 
-A `///` comment must be followed, possibly after more `///` lines and attributes, by a top-level declaration. A `///` comment anywhere else is a compile error.
+A `///` comment must be followed, possibly after more `///` lines and attributes, by a top-level declaration, a variant or field of a type declaration, or a function of an interface declaration (D-211, D-227). A `///` comment anywhere else is a compile error.
 
 ## 2.3 Identifiers
 

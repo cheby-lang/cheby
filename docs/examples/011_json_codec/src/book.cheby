@@ -6,8 +6,8 @@
 //! type. The same rule means a module can satisfy an interface such as
 //! `json::ToJson` for only one type (ADR-0020).
 
-import json
-import json::decode
+import std::json
+import std::json::decode
 import json_codec::author
 import json_codec::format
 

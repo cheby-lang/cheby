@@ -3,8 +3,9 @@
 //! Reads the file named by the only command-line argument. The file holds
 //! an object such as `{"books": [...]}`, and the `book` module describes
 //! how each book is written. The program prints one line per book, then
-//! the paperbacks as one line of compact JSON. If there is not exactly one argument, the file cannot be read or
-//! it does not hold a list of books, `main` returns an error, which the
+//! the paperbacks as one line of compact JSON. If there is not exactly
+//! one argument, the file cannot be read or it does not hold a list of
+//! books, `main` returns an error, which the
 //! runtime prints to standard error with `show` before exiting with
 //! status 1.
 //!
@@ -14,15 +15,18 @@
 //! module, as ordinary code that can then be read and edited like the
 //! rest. The `format`, `author` and `book` modules show the result.
 //!
-//! The JSON helpers come from the `json` package listed in `cheby.toml`.
-//! This example assumes the following API for it:
+//! The JSON helpers come from `std::json` in the standard library
+//! (D-210), so the package has no dependencies. The standard-library spec
+//! is still being written, so this example assumes the following API:
 //!
 //! - `json::Value` is an opaque JSON value. `json::null`, `json::bool`,
 //!   `json::int`, `json::float`, `json::string` and `json::object` build
 //!   values. `json::array(items, encode)` and
 //!   `json::nullable(option, encode)` encode lists and options with a
 //!   given function, and `json::to_string` prints a value as compact
-//!   JSON, with no spaces and the keys in the order given.
+//!   JSON, with no spaces and the keys in the order given (D-218).
+//!   Integers and floats stay apart, so `1965` reads back as an `Int`
+//!   (D-217).
 //! - `json::ToJson` is the interface `{ fn to_json(Self) -> Value }`, and
 //!   `json::list(items)` encodes a list of any type that satisfies it.
 //! - `json::parse(text, decoder)` parses `text` and decodes it, returning
@@ -40,8 +44,8 @@ import std::env
 import std::io
 import std::list
 import std::result
-import json
-import json::decode
+import std::json
+import std::json::decode
 import json_codec::book
 import json_codec::format
 

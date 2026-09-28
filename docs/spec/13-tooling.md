@@ -196,6 +196,20 @@ Hash-based collections (`Map`, `Set`) may appear in constants, even though the h
 
 The language server evaluates constants under the limits of [§13.9](#139-compile-time-evaluation), and never runs `main` or tests on its own.
 
+### 13.11.1 Generating JSON code
+
+Cheby has no derive (D-057, ADR-0022). Instead, the language server offers a code action on a type declaration that writes a `to_json` function and a decoder for the type against `std::json` (D-210, D-215). The generated functions are ordinary source code in the type's module. They are meant to be read and edited by hand, and nothing regenerates or checks them afterwards: there is no CLI generator and no staleness check (D-215).
+
+The generated code follows these conventions:
+
+- Each field becomes a JSON key with the field's name unchanged, such as `first_name` (D-225). Renaming a key is a hand edit.
+- A variant without fields is encoded as a JSON string of its name in snake_case, such as `"paperback"`.
+- A variant with named fields is encoded as an internally tagged object: a `"type"` key with the variant's name in snake_case, followed by its fields, such as `{"type":"circle","radius":1.0}` (D-224). If a field is itself called `type`, the generated code must be edited by hand.
+- A field whose type is declared in another module is encoded and decoded through that module's own `to_json` and decoder.
+- The encoding function has the signature that `std::json`'s encoding interface requires, and the visibility of the type, so that the type satisfies the interface ([§8.2](08-interfaces.md#82-satisfaction)).
+
+The code action is part of the language server, not of the language. Its exact output is informative, and it may improve between toolchain versions without affecting existing code.
+
 ## 13.12 Build order (informative)
 
 All tools ship in v1, but the reference implementation is built in this order (D-099):

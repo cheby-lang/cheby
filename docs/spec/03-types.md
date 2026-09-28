@@ -112,6 +112,17 @@ There are no implicit numeric conversions (D-047). Explicit conversions are func
 - `Float → Int` has explicit rounding functions such as `float::truncate` and `float::round`. They return `Result<Int, Nil>`, with `Err(Nil)` for NaN, infinities and values out of `Int`'s range (D-132).
 - `Int ↔ I64` is a narrowing conversion in the `I64 → Int` direction, because it can fail on JS (ADR-0030).
 
+### 3.3.6 Text of floats
+
+`show` for `Float` and `F32`, and therefore `{x}` interpolation, produces the same text on every target (D-203):
+
+- A finite value is written as the shortest decimal that reads back as the same value of that type. For `F32` this is judged at `F32` precision, so `0.1` as an `F32` shows as `0.1`, not `0.10000000149011612` (D-228).
+- The text always contains a `.` or an exponent, so a float never looks like an integer: `2.0`, `0.1`, `-2.25`.
+- Very large and very small magnitudes use an exponent, written like a float literal ([§2.5.2](02-lexical-structure.md#252-float-literals)): `1.0e21`, `1.0e-7`.
+- The special values are written `NaN`, `inf`, `-inf` and `-0.0` (D-219).
+
+_Note:_ on JS, the compiler cannot use `String(x)` directly, because `String(2.0)` is `"2"`. The exact thresholds for switching to an exponent are fixed in the standard-library spec for `std::float` (D-204).
+
 ## 3.4 Bool
 
 `Bool` is an ordinary built-in ADT with the constructors `True` and `False` (D-065). It is matched with `case` like any other ADT. There is no truthiness: only `Bool` values may be used where a condition is expected. The logical operators are defined in [§5.4](05-expressions.md#54-operators).

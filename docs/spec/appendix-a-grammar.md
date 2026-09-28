@@ -50,10 +50,11 @@ type_decl       = [ "pub" [ "exposed" ] | "priv" ] "type" UPPER [ plain_params ]
 plain_params    = "<" UPPER { "," UPPER } [ "," ] ">" ;
 type_body       = "{" [ NL ] variant { "," [ NL ] variant } [ "," ] [ NL ] "}"
                 | "{" [ NL ] field { "," [ NL ] field } [ "," ] [ NL ] "}" ;   (* single-variant shorthand, §4.3.3 *)
-variant         = UPPER
+variant         = { doc_comment NL } variant_body ;              (* D-211 *)
+variant_body    = UPPER
                 | UPPER "(" type { "," type } [ "," ] ")"
                 | UPPER "{" [ NL ] field { "," [ NL ] field } [ "," ] [ NL ] "}" ;
-field           = LOWER ":" type ;
+field           = { doc_comment NL } LOWER ":" type ;           (* D-211 *)
 
 alias_decl      = [ visibility ] "type" UPPER [ plain_params ] "=" type ;
 
@@ -61,7 +62,7 @@ const_decl      = [ visibility ] "const" LOWER ":" type "=" expr ;
 
 interface_decl  = [ visibility ] "interface" UPPER [ ":" bound ]
                   [ "{" [ NL ] { interface_fn NL } "}" ] ;
-interface_fn    = "fn" LOWER "(" [ type { "," type } [ "," ] ] ")" [ "->" type ] ;
+interface_fn    = { doc_comment NL } "fn" LOWER "(" [ type { "," type } [ "," ] ] ")" [ "->" type ] ;   (* doc comments: D-227 *)
 
 test_decl       = "test" STRING block ;                   (* no visibility *)
 ```
@@ -72,7 +73,7 @@ Notes:
 
 - A `type_decl` without a body is an external type and requires an `@external` attribute ([§12.5.3](12-targets-and-ffi.md#1253-external-types)).
 - An `fn_decl` without a block requires an `@external` attribute ([§12.5](12-targets-and-ffi.md#125-foreign-functions)).
-- The two `type_body` forms are told apart by the second token: `UPPER` starts variants, `LOWER ":"` starts fields.
+- The two `type_body` forms are told apart by the first token after any doc comments: `UPPER` starts variants, `LOWER ":"` starts fields.
 - Newlines inside `{ … }` of type bodies are allowed only where the rules show `[ NL ]`, so variants and fields may be written one per line with commas.
 
 ## A.3 Types
@@ -134,7 +135,7 @@ unary_expr      = ( "-" | "!" ) unary_expr
                 | postfix ;
 postfix         = primary { call_suffix | field_suffix } ;
 call_suffix     = "(" [ arg { "," arg } [ "," ] ] ")" ;
-arg             = expr | "_" ;                                  (* at most one "_", §5.6 *)
+arg             = expr | "_" ;                                  (* at most one "_" per argument list; it belongs to this call, §5.6, D-202 *)
 field_suffix    = "." ( LOWER | DEC_INT ) ;
 
 primary         = literal

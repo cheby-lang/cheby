@@ -6,6 +6,13 @@
 //! argument, the file cannot be read or it is not valid JSON, `main`
 //! returns an error, which the runtime prints to standard error with
 //! `show` before exiting with status 1.
+//!
+//! Ordinary programs read JSON with `std::json` from the standard library
+//! (D-210), as example 011 does. This one writes its own parser to show
+//! how a recursive-descent parser looks in Cheby: `use` chains for the
+//! steps that can fail, and tail calls for the loops. Its `Value` is
+//! simpler than `std::json`'s too, with one `Number(Float)` for every
+//! number.
 
 import std::env
 import std::io

@@ -229,7 +229,10 @@ list::map(numbers, int::add(1, _))
 list::map(numbers, fn(x) { int::add(1, x) })
 ```
 
-At most one `_` may appear, and only as a whole argument. `f(_, _)` and `f(g(_))` are compile errors.
+A `_` belongs to the innermost call that has it as a whole argument (D-202). A capture may itself be an argument of another call, which then receives the capture as an ordinary function value: `f(a, g(_))` means `f(a, fn(x) { g(x) })`.
+
+- At most one `_` may appear in one argument list. `f(_, _)` is a compile error.
+- A `_` must be a whole argument. `f(_ + 1)` and `f(x._)` are compile errors, and so is a `_` anywhere else in an expression.
 
 The other arguments of a capture are evaluated once, from left to right, when the capture expression itself is evaluated, and the resulting closure holds their values (D-155). Calling the closure does not evaluate them again, so their side effects happen exactly once. This deliberately differs from Gleam, where they are evaluated at each call.
 
@@ -470,6 +473,7 @@ field_access = postfix "." ( LOWER | DEC_INT ) ;
 ```
 
 - `x.name` reads a named field. If `x`'s type has several variants, every variant must have a field `name` of the same type (D-071). Otherwise, use `case`.
+- `x`'s type must already be known at the point of the access, from an annotation, a signature or an earlier use (D-213). Field names are not unique across types, so the compiler does not guess the type from the field name or wait for later uses. Otherwise it is a compile error that asks for a type annotation. The same rule applies to record update ([§5.11](#511-constructors-and-records)). In local functions and closures, whose parameter types are inferred, this usually means annotating the parameter: `fn go(current: Input) { current.rest }`.
 - `x.0`, `x.1`, … read tuple elements ([§3.7](03-types.md#37-tuples)). The index must be less than the tuple's length. Positional variant fields are not accessible with `.0`; use a pattern.
 - Reading fields of a `priv` type is possible only in its own module (D-151). Reading fields of a type from another package requires the type to be `exposed` (D-048).
 
@@ -558,6 +562,8 @@ pipe        = expr "|>" expr ;
 | a call with a `_` argument, `f(a, _)` | `x` fills the hole: `f(a, x)`                |
 | any other call, `f(a, b)`             | `x` becomes the first argument: `f(x, a, b)` |
 | any other expression `g`              | `g` is called with `x`: `g(x)`               |
+
+Only a `_` that is a whole argument of the call on the right side counts as its hole (D-221). A `_` nested in another argument belongs to that inner call ([§5.6](#56-function-capture)), so `x |> f(a, g(_))` means `f(x, a, fn(y) { g(y) })`. A `_` therefore means the same thing with or without a pipe in front.
 
 `x` is evaluated before the rest of the right side ([§5.15.1](#5151-evaluation-order)). To pipe into a function returned by a call, parenthesize the call: `x |> (make_handler(config))`.
 
