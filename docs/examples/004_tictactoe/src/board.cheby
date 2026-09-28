@@ -1,0 +1,155 @@
+//! A 3x3 board, stored as a list of nine cells in reading order.
+//!
+//! Cells are numbered 1 to 9, left to right and top to bottom:
+//!
+//! ```text
+//!  1 | 2 | 3
+//! ---+---+---
+//!  4 | 5 | 6
+//! ---+---+---
+//!  7 | 8 | 9
+//! ```
+
+import std::list
+import std::string
+import tictactoe::player
+
+type Board { cells: List<Cell> }
+
+type Cell = Option<player::Player>
+
+type Status {
+  Playing,
+  Won(player::Player),
+  Draw,
+}
+
+/// Returns a board with every cell free.
+fn empty() -> Board {
+  Board { cells: [None, None, None, None, None, None, None, None, None] }
+}
+
+/// Returns the numbers of the free cells, in increasing order.
+fn free_cells(board: Board) -> List<Int> {
+  fn go(number, rest, found) {
+    case rest {
+      [] => found
+      [None, ..tail] => go(number + 1, tail, [..found, number])
+      [Some(_), ..tail] => go(number + 1, tail, found)
+    }
+  }
+  go(1, board.cells, [])
+}
+
+/// Puts `mark` in the cell numbered `number`. Returns `None` if the
+/// cell is taken or there is no such cell.
+fn place(board: Board, number: Int, mark: player::Player) -> Option<Board> {
+  fn go(before, rest, remaining) {
+    case rest, remaining {
+      [None, ..after], 1 => Some(Board { cells: [..before, Some(mark), ..after] })
+      [cell, ..after], _ when remaining > 1 => go([..before, cell], after, remaining - 1)
+      _, _ => None
+    }
+  }
+  go([], board.cells, number)
+}
+
+/// Tells whether the game is still going, won or drawn.
+fn status(board: Board) -> Status {
+  let assert [a, b, c, d, e, f, g, h, i] = board.cells
+  let lines = [
+    (a, b, c),
+    (d, e, f),
+    (g, h, i),
+    (a, d, g),
+    (b, e, h),
+    (c, f, i),
+    (a, e, i),
+    (c, e, g),
+  ]
+  case line_winner(lines), free_cells(board) {
+    Some(mark), _ => Won(mark)
+    None, [] => Draw
+    None, _ => Playing
+  }
+}
+
+/// Returns the player who owns all three cells of some line, if any.
+priv fn line_winner(lines: List<(Cell, Cell, Cell)>) -> Option<player::Player> {
+  case lines {
+    [] => None
+    [(Some(first), Some(second), Some(third)), ..] when first == second && second == third => Some(first)
+    [_, ..rest] => line_winner(rest)
+  }
+}
+
+/// Makes `Board` satisfy `Show`. Free cells show their number, so the
+/// player can see which moves are left.
+fn show(board: Board) -> String {
+  let assert [a, b, c, d, e, f, g, h, i] = board.cells
+  [
+    row(label(a, 1), label(b, 2), label(c, 3)),
+    row(label(d, 4), label(e, 5), label(f, 6)),
+    row(label(g, 7), label(h, 8), label(i, 9)),
+  ]
+  |> string::join(_, "\n---+---+---\n")
+}
+
+priv fn row(left: String, middle: String, right: String) -> String {
+  " {left} | {middle} | {right}"
+}
+
+priv fn label(cell: Cell, number: Int) -> String {
+  case cell {
+    Some(mark) => "{mark}"
+    None => "{number}"
+  }
+}
+
+test "free cells are listed in increasing order" {
+  let x = Some(player::X)
+  let o = Some(player::O)
+  assert free_cells(empty()) == [1, 2, 3, 4, 5, 6, 7, 8, 9]
+  assert free_cells(Board { cells: [x, None, o, None, x, None, None, None, o] }) == [2, 4, 6, 7, 8]
+}
+
+test "place fills only a free cell that exists" {
+  let assert Some(position) = place(empty(), 5, player::X)
+  assert position == Board { cells: [None, None, None, None, Some(player::X), None, None, None, None] }
+  assert place(position, 5, player::O) == None
+  assert place(empty(), 0, player::X) == None
+  assert place(empty(), 10, player::X) == None
+}
+
+test "place fills exactly the cell it names" {
+  list::each(free_cells(empty()), fn(number) {
+    let assert Some(position) = place(empty(), number, player::X)
+    assert free_cells(position) == list::filter(free_cells(empty()), fn(cell) { cell != number })
+  })
+}
+
+test "three in a row, column or diagonal wins" {
+  let x = Some(player::X)
+  let o = Some(player::O)
+  assert status(Board { cells: [x, x, x, o, o, None, None, None, None] }) == Won(player::X)
+  assert status(Board { cells: [o, x, x, o, x, None, o, None, None] }) == Won(player::O)
+  assert status(Board { cells: [x, o, o, None, x, None, None, None, x] }) == Won(player::X)
+}
+
+test "a full board with no line is a draw" {
+  let x = Some(player::X)
+  let o = Some(player::O)
+  assert status(Board { cells: [x, o, x, x, o, o, o, x, x] }) == Draw
+}
+
+test "a game with free cells and no line is still going" {
+  let x = Some(player::X)
+  let o = Some(player::O)
+  assert status(empty()) == Playing
+  assert status(Board { cells: [x, o, None, None, x, None, None, None, o] }) == Playing
+}
+
+test "free cells show their numbers and taken cells their marks" {
+  let assert Some(position) = place(empty(), 5, player::X)
+  assert show(position) == " 1 | 2 | 3\n---+---+---\n 4 | X | 6\n---+---+---\n 7 | 8 | 9"
+}

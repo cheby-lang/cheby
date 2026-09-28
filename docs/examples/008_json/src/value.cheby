@@ -1,0 +1,185 @@
+//! JSON values, and how to print them as indented text.
+//!
+//! `show` prints a value the way most tools pretty-print JSON: every array
+//! element and object member goes on its own line, indented by two spaces
+//! per level of nesting, and empty arrays and objects stay on one line.
+
+import std::float
+import std::list
+import std::string
+
+/// A JSON value.
+///
+/// The constructors `Bool` and `String` do not clash with the types of
+/// the same name, because constructors live in the value namespace and
+/// types in the type namespace.
+///
+/// An object keeps its members as a list of key and value pairs rather
+/// than as a `map::Map`. A list keeps the keys in the order they were
+/// written, so printing a parsed file does not shuffle it, while a map's
+/// iteration order changes from run to run. The costs are that looking up
+/// a key takes time proportional to the number of members, and that two
+/// objects with the same members in a different order are not `==`.
+///
+/// The type is `pub exposed`, so other packages could build values and
+/// match on them too.
+pub exposed type Value {
+  Null,
+  Bool(Bool),
+  Number(Float),
+  String(String),
+  Array(List<Value>),
+  Object(List<(String, Value)>),
+}
+
+/// Makes `Value` satisfy `Show`, so a value can be interpolated as
+/// `{document}`. Prints `node` as indented JSON text. It is `pub` because
+/// only functions at least as visible as the type count towards an
+/// interface.
+pub fn show(node: Value) -> String {
+  pretty(node, "")
+}
+
+/// Prints `node` as it appears when nested at `indent`. The first line is
+/// not indented, because the caller has already placed it, and every later
+/// line starts with `indent`.
+///
+/// The recursive calls are not tail calls, so the stack grows with how
+/// deeply the value is nested, but not with how long its lists are.
+priv fn pretty(node: Value, indent: String) -> String {
+  let inner = indent + "  "
+  case node {
+    Null => "null"
+    Bool(True) => "true"
+    Bool(False) => "false"
+    Number(n) => format_number(n)
+    String(text) => quote(text)
+    Array([]) => "[]"
+    Array(items) => {
+      let lines = list::map(items, fn(item) { inner + pretty(item, inner) })
+      "[\n" + string::join(lines, ",\n") + "\n" + indent + "]"
+    }
+    // An unescaped `{` in a string literal starts an interpolation, so a
+    // literal brace is written `\{`. A lone `}` needs no escape.
+    Object([]) => "\{}"
+    Object(members) => {
+      let lines = list::map(members, fn(member) {
+        let (key, item) = member
+        inner + quote(key) + ": " + pretty(item, inner)
+      })
+      "\{\n" + string::join(lines, ",\n") + "\n" + indent + "}"
+    }
+  }
+}
+
+/// Prints a number. Whole numbers print without a fraction, so `3` stays
+/// `3` instead of becoming `3.0`. Other numbers print with `Float`'s own
+/// `show`.
+priv fn format_number(n: Float) -> String {
+  case {
+    // Below 10^15 every whole number is exact as a `Float` and fits in an
+    // `Int` on every target, including JS. `%` on floats is the remainder,
+    // which is zero only for whole numbers, and never for NaN or the
+    // infinities.
+    n % 1.0 == 0.0 && n > -1.0e15 && n < 1.0e15 => {
+      let assert Ok(whole) = float::truncate(n)
+      "{whole}"
+    }
+    _ => "{n}"
+  }
+}
+
+/// Prints `text` as a JSON string, in double quotes, with the characters
+/// that JSON requires escaped.
+///
+/// This printer has no `\u` escapes, so a control character other than
+/// those handled in `escape` is printed as it is, which strict JSON
+/// parsers reject.
+priv fn quote(text: String) -> String {
+  // There is no character type, so each code point comes as a
+  // one-code-point `String`.
+  let escaped =
+    text
+    |> string::to_code_points
+    |> list::map(escape)
+    |> string::join(_, "")
+  "\"{escaped}\""
+}
+
+/// Returns the JSON text for one code point inside a string.
+priv fn escape(code_point: String) -> String {
+  case code_point {
+    "\"" => "\\\""
+    "\\" => "\\\\"
+    "\n" => "\\n"
+    "\r" => "\\r"
+    "\t" => "\\t"
+    // Backspace and form feed have JSON escapes but no Cheby ones.
+    "\u{8}" => "\\b"
+    "\u{c}" => "\\f"
+    _ => code_point
+  }
+}
+
+test "keywords print as themselves" {
+  assert show(Null) == "null"
+  assert show(Bool(True)) == "true"
+  assert show(Bool(False)) == "false"
+}
+
+test "whole numbers print without a fraction" {
+  assert show(Number(42.0)) == "42"
+  assert show(Number(-3.0)) == "-3"
+  assert show(Number(0.0)) == "0"
+  assert show(Number(-0.0)) == "0"
+  assert show(Number(0.5)) == "0.5"
+  assert show(Number(-2.25)) == "-2.25"
+}
+
+test "strings are quoted and escaped" {
+  // Raw strings `r#"..."#` keep backslashes and quotes as they are, which
+  // makes the expected JSON easy to read.
+  assert show(String("plain")) == r#""plain""#
+  assert show(String("")) == r#""""#
+  assert show(String("a\"b\\c/d")) == r#""a\"b\\c/d""#
+  assert show(String("line\nbreak\ttab\r")) == r#""line\nbreak\ttab\r""#
+  assert show(String("\u{8}\u{c}")) == r#""\b\f""#
+  assert show(String("héllo 🎉")) == r#""héllo 🎉""#
+}
+
+test "empty arrays and objects stay on one line" {
+  assert show(Array([])) == "[]"
+  assert show(Object([])) == "\{}"
+}
+
+test "nested values are indented by two spaces per level" {
+  let person = Object([
+    ("name", String("Ada")),
+    ("born", Number(1815.0)),
+    ("languages", Array([String("English"), String("French")])),
+    ("spouse", Null),
+    ("notes", Object([])),
+  ])
+  assert show(person) == string::join([
+    "\{",
+    r#"  "name": "Ada","#,
+    r#"  "born": 1815,"#,
+    r#"  "languages": ["#,
+    r#"    "English","#,
+    r#"    "French""#,
+    "  ],",
+    r#"  "spouse": null,"#,
+    r#"  "notes": {}"#,
+    "}",
+  ], "\n")
+}
+
+test "arrays inside arrays close at their own depth" {
+  let grid = Array([Array([Number(1.0), Number(2.0)]), Array([])])
+  assert show(grid) == "[\n  [\n    1,\n    2\n  ],\n  []\n]"
+}
+
+test "object keys are escaped like strings and keep their order" {
+  let members = Object([("z\"", Bool(True)), ("a", Bool(False))])
+  assert show(members) == string::join(["\{", r#"  "z\"": true,"#, r#"  "a": false"#, "}"], "\n")
+}

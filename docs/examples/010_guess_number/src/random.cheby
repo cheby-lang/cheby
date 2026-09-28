@@ -1,0 +1,96 @@
+//! Random numbers, taken from the host platform through the foreign
+//! function interface.
+//!
+//! Cheby has no mutable variables to keep a generator's state in, and
+//! good randomness comes from the operating system anyway, so this
+//! module asks the host. On native targets the numbers come from the C
+//! library's `arc4random_uniform`, and on JS from `Math.random`. The
+//! rest of the package only calls `between`, which hides the foreign
+//! types and checks its bounds.
+//!
+//! `arc4random_uniform` is in the C library on macOS, the BSDs and
+//! Linux with glibc 2.36 or later, but not on Windows.
+
+import std::float
+import std::int
+import std::u32
+
+/// Returns a random whole number from `low` to `high`, both included.
+/// Panics if `low` is greater than `high`, or if the range has more
+/// numbers than the largest `U32`, 4294967295.
+fn between(low: Int, high: Int) -> Int {
+  assert low <= high as "between needs low <= high, got {low} and {high}"
+  // The foreign function takes a `U32`, so the size of the range must
+  // be narrowed first. Narrowing can fail, so it returns a `Result`.
+  let assert Ok(size) = u32::from_int(high - low + 1) as "the range from {low} to {high} is too large"
+  // Widening from `U32` to `Int` always succeeds, so it returns an
+  // `Int` directly.
+  low + int::from_u32(below(size))
+}
+
+/// Returns a random number from 0 up to but not including `bound`,
+/// which must be at least 1.
+@external(native, "arc4random_uniform")
+priv fn below(bound: U32) -> U32 {
+  // A function can have both a body and an `@external`. On native, the
+  // `@external` wins: calls go straight to the C function
+  // `uint32_t arc4random_uniform(uint32_t upper_bound)`. `U32` maps to
+  // `uint32_t` exactly, and it has to: the compiler cannot see the C
+  // code, so it trusts the declared signature. There is no
+  // `@external(js, …)`, so on JS this body runs instead.
+  //
+  // `below` is not `@blocking`, because `arc4random_uniform` returns
+  // at once. The call therefore stays on the fiber's own thread
+  // instead of moving to the runtime's blocking thread pool.
+  //
+  // `js_random()` is below 1.0, so `scaled` is below `bound` and its
+  // whole part is from 0 to `bound - 1`, which always fits a `U32`.
+  let scaled = js_random() * float::from_u32(bound)
+  let assert Ok(whole) = float::truncate(scaled)
+  let assert Ok(number) = u32::from_int(whole)
+  number
+}
+
+// `Math.random` is a global, not the export of an ES module, so the
+// small helper module `random_ffi.mjs` next to this file exports it.
+// A relative path in `@external` is resolved against the location of
+// this source file.
+//
+// A function with an `@external` for only one target already exists
+// only on that target, and `@target(js)` says so explicitly: the
+// function is type-checked on every build but compiled only for JS.
+// The compiler checks that it is used only by code that runs on JS,
+// like the body of `below`, which native builds replace with the C
+// function.
+//
+// `Math.random` returns a number, not a `Promise`, so this is not
+// `@async`. `@blocking` would have no effect on JS.
+
+/// Returns a random `Float` from 0.0 up to but not including 1.0.
+@target(js)
+@external(js, "./random_ffi.mjs", "random")
+priv fn js_random() -> Float
+
+test "between always stays within its bounds" {
+  // The numbers are random, so each range is sampled many times.
+  fn sample(low, high, remaining) {
+    case remaining {
+      0 => Nil
+      _ => {
+        let number = between(low, high)
+        assert number >= low && number <= high as "between({low}, {high}) gave {number}"
+        sample(low, high, remaining - 1)
+      }
+    }
+  }
+  sample(1, 100, 1000)
+  sample(1, 2, 1000)
+  sample(-10, 10, 1000)
+  // Still safe on JS, where an `Int` must stay within 2^53 - 1.
+  sample(0, 4_000_000_000, 1000)
+}
+
+test "a range of one number always gives that number" {
+  assert between(7, 7) == 7
+  assert between(-3, -3) == -3
+}

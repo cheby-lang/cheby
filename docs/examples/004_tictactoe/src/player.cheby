@@ -1,0 +1,33 @@
+//! The two players and their marks.
+
+type Player {
+  X,
+  O,
+}
+
+/// Returns the player who moves after `mark`.
+fn opponent(mark: Player) -> Player {
+  case mark {
+    X => O
+    O => X
+  }
+}
+
+/// Makes `Player` satisfy `Show`, so a mark can be interpolated as
+/// `{mark}`.
+fn show(mark: Player) -> String {
+  case mark {
+    X => "X"
+    O => "O"
+  }
+}
+
+test "each player's opponent is the other player" {
+  assert opponent(X) == O
+  assert opponent(O) == X
+}
+
+test "players show as their marks" {
+  assert show(X) == "X"
+  assert show(O) == "O"
+}

@@ -1,0 +1,133 @@
+//! Chooses the computer's moves with a full minimax search.
+//!
+//! The board is small enough to search every game to its end, so the
+//! computer never loses.
+
+import std::list
+import tictactoe::board
+import tictactoe::player
+
+/// Returns the best cell number for `mark` to play. The board must
+/// have at least one free cell.
+fn best_move(position: board::Board, mark: player::Player) -> Int {
+  let assert [first, ..others] = board::free_cells(position)
+  let start = (first, score_move(position, mark, first))
+  let (cell_number, _) = list::fold(others, start, fn(best_so_far, cell) {
+    let cell_score = score_move(position, mark, cell)
+    case cell_score > best_so_far.1 {
+      True => (cell, cell_score)
+      False => best_so_far
+    }
+  })
+  cell_number
+}
+
+/// Scores playing `cell` for `mark`: positive if it leads to a win,
+/// negative if it leads to a loss and zero if it leads to a draw.
+priv fn score_move(position: board::Board, mark: player::Player, cell: Int) -> Int {
+  let assert Some(next) = board::place(position, cell, mark)
+  -score(next, player::opponent(mark))
+}
+
+/// Scores `position` for `to_move`, the player whose turn it is,
+/// assuming both players play perfectly from here.
+priv fn score(position: board::Board, to_move: player::Player) -> Int {
+  case board::status(position) {
+    // Only the player who just moved can have won, so this is a loss
+    // for `to_move`. Losing later is less bad, which makes the winner
+    // prefer the quickest win.
+    board::Won(_) => -1 - list::length(board::free_cells(position))
+    board::Draw => 0
+    board::Playing => {
+      board::free_cells(position)
+      |> list::map(fn(cell) { score_move(position, to_move, cell) })
+      |> list::fold(-100, max)
+    }
+  }
+}
+
+priv fn max(a: Int, b: Int) -> Int {
+  case a > b {
+    True => a
+    False => b
+  }
+}
+
+test "the computer takes a winning move" {
+  let x = Some(player::X)
+  let o = Some(player::O)
+  // O wins at 3. X threatens 3 and 6, but winning now comes first.
+  //  o | o | 3
+  //  x | x | 6
+  //  x | 8 | 9
+  let position = board::Board { cells: [o, o, None, x, x, None, x, None, None] }
+  assert best_move(position, player::O) == 3
+}
+
+test "the computer blocks the opponent's winning move" {
+  let x = Some(player::X)
+  let o = Some(player::O)
+  // Every move except 3 lets X win next turn.
+  //  x | x | 3
+  //  4 | o | 6
+  //  7 | 8 | 9
+  let position = board::Board { cells: [x, x, None, None, o, None, None, None, None] }
+  assert best_move(position, player::O) == 3
+}
+
+test "perfect play from both sides is a draw" {
+  fn play_out(position, mark) {
+    case board::status(position) {
+      board::Playing => {
+        let assert Some(next) = board::place(position, best_move(position, mark), mark)
+        play_out(next, player::opponent(mark))
+      }
+      ended => ended
+    }
+  }
+  assert play_out(board::empty(), player::X) == board::Draw
+}
+
+test "the computer never loses, whatever X plays" {
+  // At X's turns, tries every free cell. At O's turns, plays best_move.
+  fn safe(position, mark) {
+    case board::status(position), mark {
+      board::Won(player::X), _ => False
+      board::Won(player::O), _ => True
+      board::Draw, _ => True
+      board::Playing, player::X => {
+        board::free_cells(position)
+        |> list::fold(True, fn(ok, cell) {
+          let assert Some(next) = board::place(position, cell, player::X)
+          ok && safe(next, player::O)
+        })
+      }
+      board::Playing, player::O => {
+        let assert Some(next) = board::place(position, best_move(position, player::O), player::O)
+        safe(next, player::X)
+      }
+    }
+  }
+  assert safe(board::empty(), player::X)
+}
+
+test "the computer prefers the quickest win" {
+  let x = Some(player::X)
+  let o = Some(player::O)
+  // 9 wins now. 3 and 7 each set up two threats and win a move later.
+  //  o | x | 3
+  //  x | o | x
+  //  7 | 8 | 9
+  let position = board::Board { cells: [o, x, None, x, o, x, None, None, None] }
+  assert best_move(position, player::O) == 9
+}
+
+test "with one free cell, the computer plays it" {
+  let x = Some(player::X)
+  let o = Some(player::O)
+  //  x | o | x
+  //  x | o | o
+  //  o | x | 9
+  let position = board::Board { cells: [x, o, x, x, o, o, o, x, None] }
+  assert best_move(position, player::X) == 9
+}

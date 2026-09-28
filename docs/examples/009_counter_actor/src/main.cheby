@@ -1,0 +1,98 @@
+//! Shows a counter actor (see `counter.cheby`) at work.
+//!
+//! First, ten client fibers increment one counter at the same time.
+//! Their requests reach the actor in an unspecified order, but the
+//! actor serves them one at a time, so none is lost and the final
+//! count is always the same. Nobody stops this counter: it shuts down
+//! when its last `Counter` handle is dropped.
+//!
+//! Then a second counter is reset and stopped explicitly, and a
+//! request after the stop fails.
+
+import std::duration
+import std::fiber
+import std::io
+import std::result
+import counter_actor::counter
+
+const client_count: Int = 10
+const increments_per_client: Int = 100
+
+fn main() -> Result<Nil, fiber::Panic> {
+  use total <- result::try(count_concurrently(client_count, increments_per_client))
+  io::println("{client_count} clients added 1, {increments_per_client} times each: the count is {total}")
+  reset_and_stop()
+}
+
+/// Starts a counter, lets `clients` fibers each add 1 to it `times`
+/// times, all at once, and returns the final count.
+fn count_concurrently(clients: Int, times: Int) -> Result<Int, fiber::Panic> {
+  use scope <- fiber::scope()
+  // The stopper is dropped at once, so only `tally` keeps the counter
+  // running. After its last use below, `tally` is dropped too, which
+  // closes the request channel. The actor then returns, and so does
+  // this scope.
+  let (tally, _) = counter::start(scope)
+  let assert Ok(Nil) = run_clients(tally, clients, times)
+  let assert Ok(total) = counter::get(tally, duration::seconds(1))
+  total
+}
+
+/// Runs `clients` fibers that each add 1 to the count `times` times,
+/// and returns when they have all finished.
+fn run_clients(tally: counter::Counter, clients: Int, times: Int) -> Result<Nil, fiber::Panic> {
+  // A scope of its own, so that returning from it means every client
+  // is done. The counter keeps running in the caller's scope.
+  use scope <- fiber::scope()
+  fn spawn_clients(remaining) {
+    case remaining {
+      0 => Nil
+      _ => {
+        fiber::spawn(scope, fn() { add_ones(tally, times) })
+        spawn_clients(remaining - 1)
+      }
+    }
+  }
+  spawn_clients(clients)
+}
+
+/// Adds 1 to the count `times` times, with one request each time.
+fn add_ones(tally: counter::Counter, times: Int) {
+  case times {
+    0 => Nil
+    _ => {
+      let assert Ok(Nil) = counter::increment(tally, 1)
+      add_ones(tally, times - 1)
+    }
+  }
+}
+
+/// Uses a counter, resets it and stops it, printing the count at each
+/// step.
+fn reset_and_stop() -> Result<Nil, fiber::Panic> {
+  use scope <- fiber::scope()
+  let (tally, stopper) = counter::start(scope)
+  let assert Ok(Nil) = counter::increment(tally, 42)
+  report("before a reset", tally)
+  let assert Ok(Nil) = counter::reset(tally)
+  report("after a reset", tally)
+  counter::stop(stopper)
+  report("after stopping", tally)
+}
+
+/// Prints the count, or why it could not be read.
+fn report(label: String, tally: counter::Counter) {
+  case counter::get(tally, duration::seconds(1)) {
+    Ok(count) => io::println("{label}: the count is {count}")
+    Err(error) => io::println("{label}: {error}")
+  }
+}
+
+test "concurrent increments are never lost" {
+  assert count_concurrently(10, 100) == Ok(1000)
+  assert count_concurrently(3, 1) == Ok(3)
+}
+
+test "with no clients the count stays at 0" {
+  assert count_concurrently(0, 100) == Ok(0)
+}

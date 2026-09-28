@@ -1,0 +1,458 @@
+//! A recursive-descent parser that turns JSON text into a `value::Value`.
+//!
+//! The text is first split into code points. Each parsing function takes
+//! an `Input`, which holds the code points not read yet and how many have
+//! been read, and returns what it parsed together with the `Input` that
+//! follows it. A failure is a `ParseError` with the position of the code
+//! point where parsing went wrong, counted from 0.
+//!
+//! Everything in JSON is supported except `\u` escapes such as `\u00e9`,
+//! which are reported as an error instead of being decoded. The parser is
+//! also a little lenient: inside strings it rejects raw line breaks and
+//! tabs, but accepts the other control characters that JSON forbids.
+//! Duplicate object keys are kept, in the order they were written.
+//!
+//! Strings, whitespace and long arrays and objects are read by tail calls,
+//! so they take constant stack space. Nesting is not: every level of
+//! arrays or objects inside each other uses a few more stack frames.
+
+import std::float
+import std::result
+import std::string
+import json::value
+
+/// Why parsing failed, and where, counted in code points from 0.
+type ParseError { position: Int, reason: Reason }
+
+/// What went wrong. Doc comments are only allowed on top-level items, so
+/// the variants are described with plain comments.
+type Reason {
+  // The text ended before the value did.
+  UnexpectedEnd,
+  // This code point cannot appear here.
+  UnexpectedChar(String),
+  // A `\` in a string is followed by this code point, which JSON does
+  // not allow after it.
+  InvalidEscape(String),
+  // A `\u` escape, which this parser does not decode.
+  UnicodeEscape,
+  // A line break or tab written directly inside a string.
+  ControlCharacter,
+  // Text that looks like a number but that `float::parse` rejects.
+  InvalidNumber(String),
+}
+
+/// The code points still to read, and how many have been read before
+/// them. It is `priv` because only this module needs it.
+priv type Input { rest: List<String>, position: Int }
+
+/// What a parsing step returns: the parsed thing and the input after it.
+priv type Parsed<T> = Result<(T, Input), ParseError>
+
+/// Parses `text` as one JSON value, with optional whitespace around it.
+/// Anything else after the value is an error.
+fn parse(text: String) -> Result<value::Value, ParseError> {
+  let start = skip_whitespace(Input { rest: string::to_code_points(text), position: 0 })
+  // `use` replaces `?`: on `Err`, `result::try` returns it at once, and
+  // on `Ok` it calls the rest of the block with the tuple inside.
+  use (document, after) <- result::try(parse_value(start))
+  let end = skip_whitespace(after)
+  case end.rest {
+    [] => Ok(document)
+    _ => unexpected(end)
+  }
+}
+
+/// Makes `ParseError` satisfy `Show`, so `main` can print it.
+fn show(error: ParseError) -> String {
+  let message = describe(error.reason)
+  "{message} at position {error.position}"
+}
+
+/// Returns the message for `reason`. A module has at most one `show`, so
+/// this helper has a different name.
+priv fn describe(reason: Reason) -> String {
+  case reason {
+    UnexpectedEnd => "unexpected end of input"
+    // `:?` prints the code point in quotes, with escapes, using the
+    // built-in debug printing.
+    UnexpectedChar(found) => "unexpected {found:?}"
+    InvalidEscape(found) => "invalid escape \\{found}"
+    UnicodeEscape => "\\u escapes are not supported"
+    ControlCharacter => "line break or tab in a string, write it as an escape"
+    InvalidNumber(text) => "invalid number {text}"
+  }
+}
+
+/// Parses the value that starts at `input`, which must not start with
+/// whitespace. The first code point decides what kind of value it is.
+priv fn parse_value(input: Input) -> Parsed<value::Value> {
+  case input.rest {
+    ["n", ..] => keyword(input, "null", value::Null)
+    ["t", ..] => keyword(input, "true", value::Bool(True))
+    ["f", ..] => keyword(input, "false", value::Bool(False))
+    ["\"", ..] => {
+      use (text, after) <- result::try(parse_quoted(input))
+      Ok((value::String(text), after))
+    }
+    ["[", ..rest] => parse_array(skip_whitespace(advance(input, 1, rest)))
+    // `"{"` would start an interpolation, so the brace is escaped.
+    ["\{", ..rest] => parse_object(skip_whitespace(advance(input, 1, rest)))
+    ["-", ..] => parse_number(input)
+    [first, ..] when is_digit(first) => parse_number(input)
+    _ => unexpected(input)
+  }
+}
+
+/// Reads the code points of `word` and returns `parsed`, or fails at the
+/// first code point that differs.
+priv fn keyword(input: Input, word: String, parsed: value::Value) -> Parsed<value::Value> {
+  fn go(current: Input, expected: List<String>) {
+    case current.rest, expected {
+      _, [] => Ok((parsed, current))
+      [found, ..rest], [wanted, ..others] when found == wanted => go(advance(current, 1, rest), others)
+      _, _ => unexpected(current)
+    }
+  }
+  go(input, string::to_code_points(word))
+}
+
+/// Parses the elements of an array. `input` is just after the `[` and
+/// its whitespace.
+priv fn parse_array(input: Input) -> Parsed<value::Value> {
+  case input.rest {
+    ["]", ..rest] => Ok((value::Array([]), advance(input, 1, rest)))
+    _ => array_items(input, [])
+  }
+}
+
+/// Parses the array element at `input` and the ones after it, adding
+/// them to `items`.
+///
+/// Parsing the element is not a tail call, but the recursive call to
+/// `array_items` is: `use` makes it the last call of the callback, which
+/// `result::try` calls in tail position. So a long array takes constant
+/// stack space.
+priv fn array_items(input: Input, items: List<value::Value>) -> Parsed<value::Value> {
+  use (item, after_item) <- result::try(parse_value(input))
+  let after = skip_whitespace(after_item)
+  case after.rest {
+    [",", ..rest] => array_items(skip_whitespace(advance(after, 1, rest)), [..items, item])
+    ["]", ..rest] => Ok((value::Array([..items, item]), advance(after, 1, rest)))
+    _ => unexpected(after)
+  }
+}
+
+/// Parses the members of an object. `input` is just after the `{` and
+/// its whitespace.
+priv fn parse_object(input: Input) -> Parsed<value::Value> {
+  case input.rest {
+    ["}", ..rest] => Ok((value::Object([]), advance(input, 1, rest)))
+    _ => object_members(input, [])
+  }
+}
+
+/// Parses the `"key": value` member at `input` and the ones after it,
+/// adding them to `members`. Like `array_items`, it recurses by a tail
+/// call.
+priv fn object_members(input: Input, members: List<(String, value::Value)>) -> Parsed<value::Value> {
+  use (key, after_key) <- result::try(parse_quoted(input))
+  use after_colon <- result::try(expect(skip_whitespace(after_key), ":"))
+  use (item, after_item) <- result::try(parse_value(skip_whitespace(after_colon)))
+  let after = skip_whitespace(after_item)
+  case after.rest {
+    [",", ..rest] => object_members(skip_whitespace(advance(after, 1, rest)), [..members, (key, item)])
+    ["}", ..rest] => Ok((value::Object([..members, (key, item)]), advance(after, 1, rest)))
+    _ => unexpected(after)
+  }
+}
+
+/// Reads one `wanted` code point.
+priv fn expect(input: Input, wanted: String) -> Result<Input, ParseError> {
+  case input.rest {
+    [found, ..rest] when found == wanted => Ok(advance(input, 1, rest))
+    _ => unexpected(input)
+  }
+}
+
+/// Parses a string, starting at its opening quote, and returns its
+/// contents with the escapes decoded.
+priv fn parse_quoted(input: Input) -> Parsed<String> {
+  case input.rest {
+    ["\"", ..rest] => string_body(advance(input, 1, rest), "")
+    _ => unexpected(input)
+  }
+}
+
+/// Reads the rest of a string up to its closing quote, adding the decoded
+/// code points to `text`.
+priv fn string_body(input: Input, text: String) -> Parsed<String> {
+  case input.rest {
+    [] => fail(input, UnexpectedEnd)
+    ["\"", ..rest] => Ok((text, advance(input, 1, rest)))
+    ["\\", "u", ..] => fail(input, UnicodeEscape)
+    ["\\", escaped, ..rest] => case unescape(escaped) {
+      Some(decoded) => string_body(advance(input, 2, rest), text + decoded)
+      None => fail(input, InvalidEscape(escaped))
+    }
+    // `|` in a pattern means "or".
+    ["\n" | "\r" | "\t", ..] => fail(input, ControlCharacter)
+    // A `\` that ends the text lands here too, and the next call then
+    // reports the unexpected end.
+    [found, ..rest] => string_body(advance(input, 1, rest), text + found)
+  }
+}
+
+/// Returns the code point that the escape `\` followed by `code` stands
+/// for, if JSON has such an escape.
+priv fn unescape(code: String) -> Option<String> {
+  case code {
+    "\"" => Some("\"")
+    "\\" => Some("\\")
+    "/" => Some("/")
+    "b" => Some("\u{8}")
+    "f" => Some("\u{c}")
+    "n" => Some("\n")
+    "r" => Some("\r")
+    "t" => Some("\t")
+    _ => None
+  }
+}
+
+/// Parses a number. JSON numbers have an optional `-`, a whole part
+/// without leading zeros, an optional fraction and an optional exponent,
+/// as in `-12.5e3`. Each part is checked here, so that an error points
+/// at the code point that is wrong, and the text is then converted by
+/// `float::parse`.
+///
+/// The text given to `float::parse` always has a fraction, so that it is
+/// also a valid Cheby float literal: `42` is converted as `42.0`, and
+/// `1e3` as `1.0e3`.
+priv fn parse_number(input: Input) -> Parsed<value::Value> {
+  let (minus, unsigned) = case input.rest {
+    ["-", ..rest] => ("-", advance(input, 1, rest))
+    _ => ("", input)
+  }
+  use (whole, after_whole) <- result::try(whole_part(unsigned))
+  use (fraction, after_fraction) <- result::try(fraction_part(after_whole))
+  use (exponent, after_exponent) <- result::try(exponent_part(after_fraction))
+  let fraction_or_zero = case fraction {
+    "" => ".0"
+    _ => fraction
+  }
+  case float::parse(minus + whole + fraction_or_zero + exponent) {
+    Ok(n) => Ok((value::Number(n), after_exponent))
+    Err(_) => fail(input, InvalidNumber(minus + whole + fraction + exponent))
+  }
+}
+
+/// Reads the whole part of a number. JSON does not allow leading zeros,
+/// so a `0` is a whole part on its own, and in `01` the `1` is then
+/// unexpected.
+priv fn whole_part(input: Input) -> Parsed<String> {
+  case input.rest {
+    ["0", ..rest] => Ok(("0", advance(input, 1, rest)))
+    _ => required_digits(input)
+  }
+}
+
+/// Reads `.` and the digits after it, if the number has a fraction.
+priv fn fraction_part(input: Input) -> Parsed<String> {
+  case input.rest {
+    [".", ..rest] => {
+      use (fraction_digits, after) <- result::try(required_digits(advance(input, 1, rest)))
+      Ok(("." + fraction_digits, after))
+    }
+    _ => Ok(("", input))
+  }
+}
+
+/// Reads `e` or `E`, an optional sign and digits, if the number has an
+/// exponent.
+priv fn exponent_part(input: Input) -> Parsed<String> {
+  case input.rest {
+    // `|` in a pattern means "or", and `as` names whichever matched.
+    ["e" | "E", "+" | "-" as sign, ..rest] => {
+      use (power, after) <- result::try(required_digits(advance(input, 2, rest)))
+      Ok(("e" + sign + power, after))
+    }
+    ["e" | "E", ..rest] => {
+      use (power, after) <- result::try(required_digits(advance(input, 1, rest)))
+      Ok(("e" + power, after))
+    }
+    _ => Ok(("", input))
+  }
+}
+
+/// Reads one digit or more.
+priv fn required_digits(input: Input) -> Parsed<String> {
+  case input.rest {
+    [first, ..] when is_digit(first) => Ok(digits(input, ""))
+    _ => unexpected(input)
+  }
+}
+
+/// Reads digits for as long as there are any, adding them to `text`.
+priv fn digits(input: Input, text: String) -> (String, Input) {
+  case input.rest {
+    [first, ..rest] when is_digit(first) => digits(advance(input, 1, rest), text + first)
+    _ => (text, input)
+  }
+}
+
+/// Tells whether the code point `c` is an ASCII digit. Strings compare
+/// by their code points, so a range check works.
+priv fn is_digit(c: String) -> Bool {
+  c >= "0" && c <= "9"
+}
+
+/// Skips spaces, tabs and line breaks.
+priv fn skip_whitespace(input: Input) -> Input {
+  case input.rest {
+    [" " | "\n" | "\r" | "\t", ..rest] => skip_whitespace(advance(input, 1, rest))
+    _ => input
+  }
+}
+
+/// Moves `count` code points forward, to where `rest` starts.
+priv fn advance(input: Input, count: Int, rest: List<String>) -> Input {
+  Input { rest, position: input.position + count }
+}
+
+/// Fails at `input` because what comes next is not allowed there.
+priv fn unexpected<T>(input: Input) -> Result<T, ParseError> {
+  case input.rest {
+    [] => fail(input, UnexpectedEnd)
+    [found, ..] => fail(input, UnexpectedChar(found))
+  }
+}
+
+/// Fails at the position of `input` for `reason`. It is generic, so any
+/// parsing step can return it.
+priv fn fail<T>(input: Input, reason: Reason) -> Result<T, ParseError> {
+  Err(ParseError { position: input.position, reason })
+}
+
+test "keywords parse to their values" {
+  assert parse("null") == Ok(value::Null)
+  assert parse("true") == Ok(value::Bool(True))
+  assert parse("false") == Ok(value::Bool(False))
+}
+
+test "numbers can be negative and have fractions and exponents" {
+  assert parse("0") == Ok(value::Number(0.0))
+  assert parse("42") == Ok(value::Number(42.0))
+  assert parse("-7") == Ok(value::Number(-7.0))
+  assert parse("3.25") == Ok(value::Number(3.25))
+  assert parse("-0.5") == Ok(value::Number(-0.5))
+  assert parse("1e3") == Ok(value::Number(1000.0))
+  assert parse("2.5E-1") == Ok(value::Number(0.25))
+  assert parse("1E+2") == Ok(value::Number(100.0))
+}
+
+test "strings decode their escapes" {
+  assert parse(r#""hello""#) == Ok(value::String("hello"))
+  assert parse(r#""""#) == Ok(value::String(""))
+  assert parse(r#""a\"b\\c\/d\ne\tf\rg\bh\fi""#) == Ok(value::String("a\"b\\c/d\ne\tf\rg\u{8}h\u{c}i"))
+  assert parse(r#""héllo 🎉""#) == Ok(value::String("héllo 🎉"))
+}
+
+test "arrays hold any values, including other arrays" {
+  assert parse("[]") == Ok(value::Array([]))
+  assert parse("[ ]") == Ok(value::Array([]))
+  assert parse(r#"[ 1 , [true] , "x" ]"#) == Ok(value::Array([
+    value::Number(1.0),
+    value::Array([value::Bool(True)]),
+    value::String("x"),
+  ]))
+}
+
+test "objects keep their members in order" {
+  assert parse(r"{}") == Ok(value::Object([]))
+  assert parse(r#"{ "b": 1, "a": {"c": [null]} }"#) == Ok(value::Object([
+    ("b", value::Number(1.0)),
+    ("a", value::Object([("c", value::Array([value::Null]))])),
+  ]))
+}
+
+test "duplicate keys are kept as written" {
+  assert parse(r#"{"a": 1, "a": 2}"#) == Ok(value::Object([
+    ("a", value::Number(1.0)),
+    ("a", value::Number(2.0)),
+  ]))
+}
+
+test "whitespace around and between tokens is skipped" {
+  assert parse(" \n\t null \r\n") == Ok(value::Null)
+  assert parse("\{\n  \"a\" :\n  [ ]\n}") == Ok(value::Object([("a", value::Array([]))]))
+}
+
+test "missing input is an unexpected end" {
+  assert parse("") == Err(ParseError { position: 0, reason: UnexpectedEnd })
+  assert parse("   ") == Err(ParseError { position: 3, reason: UnexpectedEnd })
+  assert parse("nul") == Err(ParseError { position: 3, reason: UnexpectedEnd })
+  assert parse("[1, 2") == Err(ParseError { position: 5, reason: UnexpectedEnd })
+  assert parse(r#"{"a": "#) == Err(ParseError { position: 6, reason: UnexpectedEnd })
+  assert parse(r#""open"#) == Err(ParseError { position: 5, reason: UnexpectedEnd })
+}
+
+test "errors point at the first code point that is wrong" {
+  assert parse("nope") == Err(ParseError { position: 1, reason: UnexpectedChar("o") })
+  assert parse("[1,]") == Err(ParseError { position: 3, reason: UnexpectedChar("]") })
+  assert parse("[1 2]") == Err(ParseError { position: 3, reason: UnexpectedChar("2") })
+  assert parse(r#"{"a" 1}"#) == Err(ParseError { position: 5, reason: UnexpectedChar("1") })
+  assert parse(r"{a: 1}") == Err(ParseError { position: 1, reason: UnexpectedChar("a") })
+  assert parse(r#"{"a": 1,}"#) == Err(ParseError { position: 8, reason: UnexpectedChar("}") })
+}
+
+test "bad escapes and raw line breaks in strings are errors" {
+  assert parse(r#""bad \x""#) == Err(ParseError { position: 5, reason: InvalidEscape("x") })
+  assert parse(r#""\u0041""#) == Err(ParseError { position: 1, reason: UnicodeEscape })
+  assert parse("\"a\nb\"") == Err(ParseError { position: 2, reason: ControlCharacter })
+}
+
+test "malformed numbers are errors" {
+  assert parse("-") == Err(ParseError { position: 1, reason: UnexpectedEnd })
+  assert parse("-x") == Err(ParseError { position: 1, reason: UnexpectedChar("x") })
+  assert parse("1.") == Err(ParseError { position: 2, reason: UnexpectedEnd })
+  assert parse("1.e5") == Err(ParseError { position: 2, reason: UnexpectedChar("e") })
+  assert parse("1e+") == Err(ParseError { position: 3, reason: UnexpectedEnd })
+  assert parse(".5") == Err(ParseError { position: 0, reason: UnexpectedChar(".") })
+  assert parse("+1") == Err(ParseError { position: 0, reason: UnexpectedChar("+") })
+  assert parse("01") == Err(ParseError { position: 1, reason: UnexpectedChar("1") })
+}
+
+test "anything after the value is rejected" {
+  assert parse("null x") == Err(ParseError { position: 5, reason: UnexpectedChar("x") })
+  assert parse("1 2") == Err(ParseError { position: 2, reason: UnexpectedChar("2") })
+  assert parse("[] []") == Err(ParseError { position: 3, reason: UnexpectedChar("[") })
+  assert parse(r"{}}") == Err(ParseError { position: 2, reason: UnexpectedChar("}") })
+}
+
+test "positions count code points, not bytes" {
+  // `é` takes two bytes in UTF-8 but is one code point.
+  assert parse("\"\u{e9}\" x") == Err(ParseError { position: 4, reason: UnexpectedChar("x") })
+}
+
+test "errors show as messages for the user" {
+  assert show(ParseError { position: 3, reason: UnexpectedEnd }) == "unexpected end of input at position 3"
+  assert show(ParseError { position: 7, reason: UnexpectedChar("x") }) == "unexpected \"x\" at position 7"
+  assert show(ParseError { position: 5, reason: InvalidEscape("x") }) == "invalid escape \\x at position 5"
+  assert show(ParseError { position: 1, reason: UnicodeEscape }) == "\\u escapes are not supported at position 1"
+}
+
+test "parsing pretty-printed JSON gives back the same value" {
+  let round_trips = fn(document) { parse(value::show(document)) == Ok(document) }
+  assert round_trips(value::Null)
+  assert round_trips(value::Bool(False))
+  assert round_trips(value::Number(-2.25))
+  assert round_trips(value::Number(1815.0))
+  assert round_trips(value::String("quote \" backslash \\ tab \t line\n é \u{8}"))
+  assert round_trips(value::Array([]))
+  assert round_trips(value::Object([]))
+  assert round_trips(value::Object([
+    ("name", value::String("Ada")),
+    ("tags", value::Array([value::Bool(True), value::Null, value::Number(0.5)])),
+    ("nested", value::Object([("deeper", value::Array([value::Array([])]))])),
+  ]))
+}

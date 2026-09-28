@@ -1,0 +1,123 @@
+//! Prints the first 20 prime numbers with a concurrent sieve.
+//!
+//! One fiber generates the numbers 2, 3, 4 and so on. Each prime found
+//! adds a filter fiber to the end of a pipeline of channels, which
+//! drops the multiples of that prime and passes the other numbers on.
+//! The first number to come out of the pipeline is always the next
+//! prime.
+//!
+//! Nothing stops the fibers explicitly. When enough primes have been
+//! found, the last receiver is dropped, which closes the last channel.
+//! Each fiber then fails to send, returns and drops its own receiver,
+//! so the pipeline shuts down from its end back to the generator, and
+//! the scope can return.
+
+import std::channel
+import std::fiber
+import std::io
+import std::list
+import std::result
+
+const prime_count: Int = 20
+
+fn main() -> Result<Nil, fiber::Panic> {
+  use found <- result::try(primes(prime_count))
+  list::each(found, fn(prime) { io::println("{prime}") })
+  Ok(Nil)
+}
+
+/// Returns the first `count` primes, in increasing order. The result
+/// is an `Err` only if a fiber in the pipeline panics.
+fn primes(count: Int) -> Result<List<Int>, fiber::Panic> {
+  use scope <- fiber::scope()
+
+  // Takes the next `remaining` primes from `numbers` and adds them to
+  // `found`. Every channel has capacity 0, so each number is handed
+  // straight from one fiber to the next.
+  fn sieve(numbers, remaining, found) {
+    case remaining {
+      // `numbers` is dropped here, which starts the shutdown.
+      0 => found
+      _ => {
+        // The generator never stops on its own, so a number arrives.
+        let assert Ok(prime) = channel::receive(numbers)
+        let (tx, rx) = channel::new::<Int>(0)
+        fiber::spawn(scope, fn() { filter(numbers, tx, prime) })
+        sieve(rx, remaining - 1, [..found, prime])
+      }
+    }
+  }
+
+  let (naturals_tx, naturals_rx) = channel::new::<Int>(0)
+  fiber::spawn(scope, fn() { generate(naturals_tx, 2) })
+  sieve(naturals_rx, count, [])
+}
+
+/// Sends `n`, `n + 1`, `n + 2` and so on, until nobody receives them.
+/// `send` blocks this fiber only, and the recursive call is a tail
+/// call, so counting forever takes constant stack space.
+fn generate(output: channel::Sender<Int>, n: Int) {
+  case channel::send(output, n) {
+    Ok(_) => generate(output, n + 1)
+    Err(_) => Nil
+  }
+}
+
+/// Passes on the numbers from `input` that `prime` does not divide,
+/// until either end of the pipeline goes away. Returning drops `input`,
+/// which closes the channel for the fiber before this one.
+fn filter(input: channel::Receiver<Int>, output: channel::Sender<Int>, prime: Int) {
+  case channel::receive(input) {
+    Ok(n) when n % prime == 0 => filter(input, output, prime)
+    Ok(n) => case channel::send(output, n) {
+      Ok(_) => filter(input, output, prime)
+      Err(_) => Nil
+    }
+    Err(_) => Nil
+  }
+}
+
+test "the first ten primes" {
+  assert primes(10) == Ok([2, 3, 5, 7, 11, 13, 17, 19, 23, 29])
+}
+
+test "asking for no primes shuts the pipeline down at once" {
+  assert primes(0) == Ok([])
+}
+
+test "the pipeline keeps working past the first few filters" {
+  // Trial division, as a check that does not depend on the sieve.
+  fn is_prime(n) {
+    fn go(divisor) {
+      case {
+        divisor * divisor > n => True
+        n % divisor == 0 => False
+        _ => go(divisor + 1)
+      }
+    }
+    n > 1 && go(2)
+  }
+  let assert Ok(found) = primes(100)
+  assert list::length(found) == 100
+  assert found == list::filter(found, is_prime)
+}
+
+test "filter drops multiples and stops when its input closes" {
+  let assert Ok(passed) = {
+    use scope <- fiber::scope()
+    let (in_tx, in_rx) = channel::new::<Int>(0)
+    let (out_tx, out_rx) = channel::new::<Int>(0)
+    fn collect(found) {
+      case channel::receive(out_rx) {
+        Ok(n) => collect([..found, n])
+        Err(_) => found
+      }
+    }
+    fiber::spawn(scope, fn() {
+      list::each([3, 4, 5, 6, 7, 9], fn(n) { let assert Ok(_) = channel::send(in_tx, n) })
+    })
+    fiber::spawn(scope, fn() { filter(in_rx, out_tx, 3) })
+    collect([])
+  }
+  assert passed == [4, 5, 7]
+}

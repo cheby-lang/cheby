@@ -1,0 +1,86 @@
+//! Tic-tac-toe against the computer.
+//!
+//! You play X and move first by typing a cell number from 1 to 9. The
+//! computer plays O and never loses. End of input (Ctrl-D) quits.
+
+import std::int
+import std::io
+import std::result
+import std::string
+import tictactoe::ai
+import tictactoe::board
+import tictactoe::player
+
+fn main() -> Result<Nil, io::Error> {
+  io::println("You are X. Enter a cell number from 1 to 9.")
+  play(board::empty(), player::X)
+}
+
+/// Plays from `position`, with `mark` to move, until the game ends or
+/// the input runs out. Every call below is a tail call, so the whole
+/// game runs in constant stack space.
+fn play(position: board::Board, mark: player::Player) -> Result<Nil, io::Error> {
+  case board::status(position), mark {
+    board::Won(player::X), _ => finish(position, "You win!")
+    board::Won(player::O), _ => finish(position, "The computer wins.")
+    board::Draw, _ => finish(position, "It's a draw.")
+    board::Playing, player::X => human_turn(position)
+    board::Playing, player::O => computer_turn(position)
+  }
+}
+
+fn human_turn(position: board::Board) -> Result<Nil, io::Error> {
+  io::println("\n{position}\n")
+  ask_move(position)
+}
+
+/// Asks for a move until the player types the number of a free cell.
+fn ask_move(position: board::Board) -> Result<Nil, io::Error> {
+  io::println("Your move:")
+  use line <- result::try(io::read_line())
+  case line {
+    None => Ok(Nil)
+    Some(text) => case parse_move(position, text) {
+      Some(next) => play(next, player::O)
+      None => {
+        io::println("Enter the number of a free cell.")
+        ask_move(position)
+      }
+    }
+  }
+}
+
+/// Returns the board after X plays the cell typed in `text`, or `None`
+/// if `text` is not the number of a free cell.
+fn parse_move(position: board::Board, text: String) -> Option<board::Board> {
+  case int::parse(string::trim(text)) {
+    Ok(cell) => board::place(position, cell, player::X)
+    Err(_) => None
+  }
+}
+
+fn computer_turn(position: board::Board) -> Result<Nil, io::Error> {
+  let cell = ai::best_move(position, player::O)
+  io::println("The computer plays {cell}.")
+  let assert Some(next) = board::place(position, cell, player::O)
+  play(next, player::X)
+}
+
+fn finish(position: board::Board, message: String) -> Result<Nil, io::Error> {
+  io::println("\n{position}\n")
+  io::println(message)
+  Ok(Nil)
+}
+
+test "parse_move plays X in the typed free cell" {
+  let assert Some(position) = board::place(board::empty(), 5, player::O)
+  assert parse_move(position, " 1 ") == board::place(position, 1, player::X)
+}
+
+test "parse_move rejects taken cells, missing cells and other text" {
+  let assert Some(position) = board::place(board::empty(), 5, player::O)
+  assert parse_move(position, "5") == None
+  assert parse_move(position, "10") == None
+  assert parse_move(position, "one") == None
+  assert parse_move(position, "") == None
+}

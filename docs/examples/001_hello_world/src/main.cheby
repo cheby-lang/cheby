@@ -1,0 +1,7 @@
+//! Prints a greeting to standard output.
+
+import std::io
+
+fn main() {
+  io::println("Hello, world!")
+}

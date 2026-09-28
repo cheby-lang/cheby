@@ -1,0 +1,154 @@
+//! A number-guessing game.
+//!
+//! The program picks a secret whole number from 1 to a maximum, and you
+//! try to find it by typing guesses. After each guess it says whether
+//! the guess was too low or too high, until you get it right. End of
+//! input (Ctrl-D) quits.
+//!
+//! The maximum is 100, or the only command-line argument if there is
+//! one. With a bad argument, `main` returns an error, which the runtime
+//! prints to standard error with `show` before exiting with status 1.
+
+import std::env
+import std::int
+import std::io
+import std::list
+import std::result
+import guess_number::game
+import guess_number::random
+
+/// The largest secret number when no argument is given.
+const default_max: Int = 100
+
+/// The largest maximum the player may ask for.
+const max_limit: Int = 1_000_000
+
+fn main() -> Result<Nil, AppError> {
+  use max <- result::try(parse_args(env::args()))
+  // Picking the secret is the only random step. `game::judge` and
+  // `game::parse_guess` are pure, so their tests need no randomness.
+  let secret = random::between(1, max)
+  io::println("I'm thinking of a number from 1 to {max}. Guess it!")
+  play(secret, max, 0)
+}
+
+/// Reads the maximum from the arguments, which do not include the
+/// program name. Without arguments it is `default_max`.
+fn parse_args(args: List<String>) -> Result<Int, AppError> {
+  case args {
+    [] => Ok(default_max)
+    [text] => case int::parse(text) {
+      Ok(max) when max >= 1 && max <= max_limit => Ok(max)
+      Ok(max) => Err(MaxOutOfRange(max))
+      Err(_) => Err(MaxNotANumber(text))
+    }
+    _ => Err(TooManyArguments(list::length(args)))
+  }
+}
+
+/// Asks for guesses until the player finds `secret` or the input runs
+/// out. `guesses` counts the valid guesses made so far. Every call to
+/// `play` below is a tail call, so a long game runs in constant stack
+/// space.
+fn play(secret: Int, max: Int, guesses: Int) -> Result<Nil, AppError> {
+  io::println("Your guess:")
+  // `ReadFailed` is a positional constructor used as a function value:
+  // it wraps the `io::Error` in an `AppError`.
+  use line <- result::try(result::map_error(io::read_line(), ReadFailed))
+  case line {
+    None => {
+      io::println("Bye! The number was {secret}.")
+      Ok(Nil)
+    }
+    Some(text) => case game::parse_guess(text, max) {
+      // Text that is not a guess does not count as one.
+      Err(error) => {
+        io::println("{error}")
+        play(secret, max, guesses)
+      }
+      Ok(guess) => {
+        let count = guesses + 1
+        let verdict = game::judge(secret, guess)
+        io::println(reply(verdict, count))
+        case verdict {
+          game::Correct => Ok(Nil)
+          _ => play(secret, max, count)
+        }
+      }
+    }
+  }
+}
+
+/// Returns what the game says after a guess with `verdict`, when it
+/// was guess number `guesses`.
+fn reply(verdict: game::Verdict, guesses: Int) -> String {
+  case verdict, guesses {
+    game::TooLow, _ => "Too low."
+    game::TooHigh, _ => "Too high."
+    game::Correct, 1 => "Correct in 1 guess!"
+    game::Correct, _ => "Correct in {guesses} guesses!"
+  }
+}
+
+type AppError {
+  MaxNotANumber(String),
+  MaxOutOfRange(Int),
+  TooManyArguments(Int),
+  ReadFailed(io::Error),
+}
+
+/// Makes `AppError` satisfy `Show`, so an error from `main` prints as
+/// readable text instead of debug output.
+fn show(error: AppError) -> String {
+  case error {
+    MaxNotANumber(text) => "MAX must be a whole number, got \"{text}\""
+    MaxOutOfRange(max) => "MAX must be from 1 to {max_limit}, got {max}"
+    TooManyArguments(count) => "usage: guess_number [MAX], got {count} arguments"
+    // `:?` uses the built-in debug printing, which works for every type.
+    ReadFailed(reason) => "cannot read input: {reason:?}"
+  }
+}
+
+test "parse_args uses the default maximum without arguments" {
+  assert parse_args([]) == Ok(default_max)
+}
+
+test "parse_args reads the maximum from the only argument" {
+  assert parse_args(["10"]) == Ok(10)
+  assert parse_args(["1"]) == Ok(1)
+  assert parse_args(["1000000"]) == Ok(max_limit)
+}
+
+test "parse_args rejects bad maximums and extra arguments" {
+  assert parse_args(["ten"]) == Err(MaxNotANumber("ten"))
+  assert parse_args(["0"]) == Err(MaxOutOfRange(0))
+  assert parse_args(["1000001"]) == Err(MaxOutOfRange(1000001))
+  assert parse_args(["10", "20"]) == Err(TooManyArguments(2))
+}
+
+test "the reply says which way to go, or how many guesses it took" {
+  assert reply(game::TooLow, 3) == "Too low."
+  assert reply(game::TooHigh, 3) == "Too high."
+  assert reply(game::Correct, 1) == "Correct in 1 guess!"
+  assert reply(game::Correct, 7) == "Correct in 7 guesses!"
+}
+
+test "errors show as messages for the user" {
+  assert show(MaxNotANumber("ten")) == "MAX must be a whole number, got \"ten\""
+  assert show(MaxOutOfRange(0)) == "MAX must be from 1 to 1000000, got 0"
+  assert show(TooManyArguments(2)) == "usage: guess_number [MAX], got 2 arguments"
+}
+
+test "every secret the game can pick is a valid guess" {
+  fn check(remaining) {
+    case remaining {
+      0 => Nil
+      _ => {
+        let secret = random::between(1, default_max)
+        assert game::parse_guess("{secret}", default_max) == Ok(secret)
+        check(remaining - 1)
+      }
+    }
+  }
+  check(1000)
+}

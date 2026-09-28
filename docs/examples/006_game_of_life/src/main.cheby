@@ -1,0 +1,241 @@
+//! Runs Conway's Game of Life and prints each generation.
+//!
+//! The board is a square of `size` by `size` cells whose edges wrap
+//! around, like a torus: a cell on the right edge is a neighbour of the
+//! cell on the left edge in the same row, and likewise for the top and
+//! bottom. The grid stores only its live cells, as a `Set` of `(x, y)`
+//! coordinates, with `(0, 0)` in the top left corner.
+//!
+//! Every generation follows the same rules. A live cell with two or
+//! three live neighbours stays alive, a dead cell with exactly three
+//! live neighbours comes alive, and every other cell is dead in the
+//! next generation.
+//!
+//! The program starts from a glider, which moves one cell down and one
+//! cell right every four generations, and prints the grid with `#` for
+//! live cells and `.` for dead ones.
+
+import std::io
+import std::list
+import std::set
+import std::string
+
+/// The width and height of the board. It must be at least 3, so that a
+/// cell's eight neighbours are all different cells.
+const size: Int = 8
+
+/// The number of generations to run after the starting one.
+const generations: Int = 8
+
+/// The glider, in its top left corner:
+///
+/// ```text
+/// .#.
+/// ..#
+/// ###
+/// ```
+const glider: List<(Int, Int)> = [(1, 0), (2, 1), (0, 2), (1, 2), (2, 2)]
+
+/// The first generation. Constants are computed by the compiler, so
+/// the program starts with this grid already built, `Set` and all.
+const start: Grid = from_cells(glider)
+
+/// The coordinates along one side of the board, from 0 to `size - 1`.
+const positions: List<Int> = range(0, size)
+
+/// The offsets from a cell to its eight neighbours.
+const offsets: List<(Int, Int)> = [
+  (-1, -1), (0, -1), (1, -1),
+  (-1, 0), (1, 0),
+  (-1, 1), (0, 1), (1, 1),
+]
+
+type Grid { cells: set::Set<(Int, Int)> }
+
+fn main() {
+  // There are no loops, so a local function counts the generations by
+  // calling itself. The recursive call is in tail position, so the
+  // stack does not grow.
+  fn run(grid, generation) {
+    io::println("Generation {generation}\n{grid}")
+    case {
+      generation == generations => Nil
+      _ => {
+        io::println("")
+        run(step(grid), generation + 1)
+      }
+    }
+  }
+  run(start, 0)
+}
+
+/// Returns a grid whose live cells are `cells`. Coordinates off the
+/// board wrap around onto it.
+fn from_cells(cells: List<(Int, Int)>) -> Grid {
+  let live = cells |> list::map(wrap_cell) |> set::from_list
+  Grid { cells: live }
+}
+
+/// Computes the next generation. Only live cells and their neighbours
+/// can be alive in it, so the work grows with the number of live cells,
+/// not with the size of the board.
+fn step(grid: Grid) -> Grid {
+  // `set::insert` takes a set and a cell and returns a new set, which
+  // is exactly the shape `list::fold` expects, so it is passed as is.
+  let candidates = set::fold(grid.cells, grid.cells, fn(found, cell) {
+    list::fold(neighbours(cell), found, set::insert)
+  })
+  // A capture fills in `grid` now and leaves the cell for later.
+  let survives = lives_on(grid, _)
+  Grid { cells: set::filter(candidates, survives) }
+}
+
+/// Tells whether `cell` is alive in the generation after `grid`.
+fn lives_on(grid: Grid, cell: (Int, Int)) -> Bool {
+  case is_alive(grid, cell), live_neighbours(grid, cell) {
+    // `2 | 3` matches either number.
+    True, 2 | 3 => True
+    False, 3 => True
+    _, _ => False
+  }
+}
+
+/// Returns how many of the eight neighbours of `cell` are alive.
+fn live_neighbours(grid: Grid, cell: (Int, Int)) -> Int {
+  let alive = is_alive(grid, _)
+  cell
+  |> neighbours
+  |> list::filter(alive)
+  |> list::length
+}
+
+/// Returns the eight cells around `cell`, wrapping around the edges.
+fn neighbours(cell: (Int, Int)) -> List<(Int, Int)> {
+  list::map(offsets, fn(offset) {
+    wrap_cell((cell.0 + offset.0, cell.1 + offset.1))
+  })
+}
+
+/// Tells whether `cell` is alive in `grid`.
+fn is_alive(grid: Grid, cell: (Int, Int)) -> Bool {
+  set::contains(grid.cells, cell)
+}
+
+/// Moves both coordinates of `cell` onto the board.
+fn wrap_cell(cell: (Int, Int)) -> (Int, Int) {
+  (wrap(cell.0), wrap(cell.1))
+}
+
+/// Moves a coordinate onto the board, so that -1 becomes `size - 1`
+/// and `size` becomes 0. The result of `%` has the sign of its left
+/// operand, so the first `%` can be negative, and adding `size` before
+/// the second `%` fixes that.
+fn wrap(n: Int) -> Int {
+  (n % size + size) % size
+}
+
+/// Returns the numbers from `from` up to, but not including, `to`.
+priv fn range(from: Int, to: Int) -> List<Int> {
+  fn go(n, found) {
+    case {
+      n >= to => found
+      _ => go(n + 1, [..found, n])
+    }
+  }
+  go(from, [])
+}
+
+/// Makes `Grid` satisfy `Show`, so a grid can be interpolated as
+/// `{grid}`. Rows are separated by newlines.
+fn show(grid: Grid) -> String {
+  let row = render_row(grid, _)
+  positions
+  |> list::map(row)
+  |> string::join(_, "\n")
+}
+
+/// Renders row `y` of the grid.
+priv fn render_row(grid: Grid, y: Int) -> String {
+  positions
+  |> list::map(fn(x) {
+    case is_alive(grid, (x, y)) {
+      True => "#"
+      False => "."
+    }
+  })
+  |> string::join(_, "")
+}
+
+test "coordinates wrap around the board" {
+  assert wrap(0) == 0
+  assert wrap(7) == 7
+  assert wrap(8) == 0
+  assert wrap(-1) == 7
+  assert from_cells([(-1, 8)]) == from_cells([(7, 0)])
+}
+
+test "neighbours are counted, across the edges too" {
+  let blinker = from_cells([(1, 2), (2, 2), (3, 2)])
+  assert live_neighbours(blinker, (2, 2)) == 2
+  assert live_neighbours(blinker, (1, 2)) == 1
+  assert live_neighbours(blinker, (2, 1)) == 3
+  assert live_neighbours(blinker, (5, 5)) == 0
+  let corners = from_cells([(7, 0), (0, 7), (7, 7)])
+  assert live_neighbours(corners, (0, 0)) == 3
+}
+
+test "a blinker oscillates with period 2" {
+  let horizontal = from_cells([(1, 2), (2, 2), (3, 2)])
+  let vertical = from_cells([(2, 1), (2, 2), (2, 3)])
+  // Sets are equal when they have the same cells, in any order.
+  assert step(horizontal) == vertical
+  assert step(vertical) == horizontal
+  assert horizontal |> step |> step == horizontal
+}
+
+test "a block is a still life" {
+  let block = from_cells([(1, 1), (2, 1), (1, 2), (2, 2)])
+  assert step(block) == block
+}
+
+test "lonely cells die and nothing comes from nothing" {
+  assert step(from_cells([(4, 4)])) == from_cells([])
+  assert step(from_cells([])) == from_cells([])
+}
+
+test "a glider moves one cell diagonally every four generations" {
+  let moved = from_cells(list::map(glider, fn(cell) { (cell.0 + 1, cell.1 + 1) }))
+  assert start |> step |> step |> step |> step == moved
+  assert start |> step |> step != moved
+}
+
+test "a glider crosses the edges and comes back to where it started" {
+  fn advance(grid, count) {
+    case count {
+      0 => grid
+      _ => advance(step(grid), count - 1)
+    }
+  }
+  assert advance(start, 4 * size) == start
+}
+
+test "range counts up to its end" {
+  assert range(2, 5) == [2, 3, 4]
+  assert range(3, 3) == []
+  assert positions == [0, 1, 2, 3, 4, 5, 6, 7]
+}
+
+test "a grid shows as rows of # and ." {
+  let expected = string::join([
+    ".#......",
+    "..#.....",
+    "###.....",
+    "........",
+    "........",
+    "........",
+    "........",
+    "........",
+  ], "\n")
+  assert show(start) == expected
+  assert "{start}" == expected
+}

@@ -1,0 +1,254 @@
+//! A counter kept by an actor: a fiber that owns the count and serves
+//! requests for it, one at a time.
+//!
+//! Cheby has no mutable state, so the count cannot be a variable that
+//! several fibers update. Instead it is the argument of the actor's
+//! tail-recursive loop, and each request the actor serves produces the
+//! count for the next call. Other fibers never see the count itself.
+//! They send requests over a channel, and a request that needs an
+//! answer carries its own reply channel.
+//!
+//! `start` returns two handles. A `Counter` sends requests and can be
+//! copied to any number of fibers. A `Stopper` stops the counter, so
+//! the right to stop it is kept apart from everyday use. Each handle
+//! wraps its own channel, and the actor waits on both at once with a
+//! selector.
+//!
+//! Stopping is optional. Once every `Counter` is gone, the last
+//! `Sender` of the request channel has been dropped, which closes the
+//! channel, and the actor returns on its own.
+
+import std::channel
+import std::duration
+import std::fiber
+import std::selector
+
+/// A handle for sending requests to the counter. All copies talk to
+/// the same actor.
+///
+/// Other modules of this package could read the field, because a type
+/// is opaque only to other packages. They use the functions below
+/// instead.
+type Counter { requests: channel::Sender<Request> }
+
+/// A handle for stopping the counter. Dropping it without calling
+/// `stop` leaves the counter running until every `Counter` is gone.
+type Stopper { signal: channel::Sender<Nil> }
+
+/// The messages a `Counter` sends to the actor. `Get` carries the
+/// channel the actor sends the count back on.
+type Request {
+  Increment(Int),
+  Reset,
+  Get(channel::Sender<Int>),
+}
+
+type Error {
+  Stopped,
+  TimedOut,
+}
+
+/// What the actor's selector returns: a request, or a signal from the
+/// stopper. Each carries the `Result` of the receive, so the actor also
+/// learns when a channel closes.
+priv type Event {
+  FromCounter(Result<Request, Nil>),
+  FromStopper(Result<Nil, Nil>),
+}
+
+/// Starts a counter at 0. Its actor runs as a fiber in `scope`, so the
+/// scope does not return until the counter has stopped.
+fn start(scope: fiber::Scope) -> (Counter, Stopper) {
+  // Both channels have capacity 0, so a request is handed straight to
+  // the actor. When `increment` returns, the actor already has the
+  // request, and serves it before anything the same fiber sends later,
+  // even a stop on the other channel.
+  let (requests_tx, requests_rx) = channel::new::<Request>(0)
+  let (signal_tx, signal_rx) = channel::new::<Nil>(0)
+  fiber::spawn(scope, fn() { serve(requests_rx, signal_rx, 0) })
+  (Counter { requests: requests_tx }, Stopper { signal: signal_tx })
+}
+
+/// Adds `n` to the count.
+fn increment(counter: Counter, n: Int) -> Result<Nil, Error> {
+  tell(counter, Increment(n))
+}
+
+/// Sets the count back to 0.
+fn reset(counter: Counter) -> Result<Nil, Error> {
+  tell(counter, Reset)
+}
+
+/// Reads the count, waiting at most `limit` for the answer.
+fn get(counter: Counter, limit: duration::Duration) -> Result<Int, Error> {
+  // `fiber::timeout` runs `ask` in a scope of its own. When the time
+  // runs out, `ask` is cancelled wherever it is blocked, sending the
+  // request or waiting for the answer, and its reply channel is
+  // dropped on the way out.
+  case fiber::timeout(limit, fn() { ask(counter) }) {
+    Ok(answer) => answer
+    Err(fiber::TimedOut) => Err(TimedOut)
+    // `ask` has no way to panic, but the type still has this case.
+    Err(fiber::Panicked(failure)) => panic as "asking the counter panicked: {failure:?}"
+  }
+}
+
+/// Stops the counter. Requests sent afterwards fail with `Stopped`.
+fn stop(stopper: Stopper) {
+  // If every `Counter` is already gone, the actor has returned and
+  // nobody takes the signal, which is fine: it is stopped either way.
+  let _ = channel::send(stopper.signal, Nil)
+}
+
+/// Makes `Error` satisfy `Show`, so an error can be interpolated.
+fn show(error: Error) -> String {
+  case error {
+    Stopped => "the counter has stopped"
+    TimedOut => "the counter did not answer in time"
+  }
+}
+
+/// Sends a request that needs no answer.
+priv fn tell(counter: Counter, request: Request) -> Result<Nil, Error> {
+  case channel::send(counter.requests, request) {
+    Ok(_) => Ok(Nil)
+    // `send` gives the request back, which is of no use here.
+    Err(_) => Err(Stopped)
+  }
+}
+
+/// Sends a `Get` request with a new reply channel and waits for the
+/// answer.
+priv fn ask(counter: Counter) -> Result<Int, Error> {
+  // Capacity 1 lets the actor leave its answer and move on, without
+  // waiting for this fiber to take it.
+  let (reply_tx, reply_rx) = channel::new::<Int>(1)
+  // Once `reply_tx` is inside the request, this fiber holds no
+  // `Sender` for the reply channel. If the actor ends without
+  // answering, the channel closes and `receive` returns `Err` instead
+  // of waiting forever.
+  case channel::send(counter.requests, Get(reply_tx)) {
+    Ok(_) => case channel::receive(reply_rx) {
+      Ok(count) => Ok(count)
+      Err(_) => Err(Stopped)
+    }
+    Err(_) => Err(Stopped)
+  }
+}
+
+/// Serves requests from both kinds of handle. The whole state of the
+/// counter is `count`, and each recursive call is a tail call, so the
+/// actor can serve requests forever in constant stack space. Returns
+/// the final count once the counter stops.
+priv fn serve(
+  requests: channel::Receiver<Request>,
+  signals: channel::Receiver<Nil>,
+  count: Int,
+) -> Int {
+  // The selector takes one value from whichever channel is ready. A
+  // stop and a request sent at the same moment may be served in
+  // either order.
+  let event =
+    selector::new()
+    |> selector::receive(requests, FromCounter)
+    |> selector::receive(signals, FromStopper)
+    |> selector::select
+  case event {
+    FromCounter(Ok(request)) => serve(requests, signals, apply(request, count))
+    // Every `Counter` is gone, so no request can arrive any more.
+    FromCounter(Err(Nil)) => count
+    FromStopper(Ok(Nil)) => count
+    // The stopper was dropped without being used. A closed channel is
+    // always ready, so selecting on it again would never wait. The
+    // actor serves the counters alone from now on.
+    FromStopper(Err(Nil)) => serve_counters(requests, count)
+  }
+}
+
+/// Serves requests like `serve` once nobody can stop the counter, until
+/// every `Counter` is gone.
+priv fn serve_counters(requests: channel::Receiver<Request>, count: Int) -> Int {
+  case channel::receive(requests) {
+    Ok(request) => serve_counters(requests, apply(request, count))
+    Err(Nil) => count
+  }
+}
+
+/// Serves one request and returns the count for the next one.
+priv fn apply(request: Request, count: Int) -> Int {
+  case request {
+    Increment(n) => count + n
+    Reset => 0
+    Get(reply) => {
+      // The client may have given up waiting (see `get`), so an answer
+      // that nobody receives is not an error.
+      let _ = channel::send(reply, count)
+      count
+    }
+  }
+}
+
+test "increments add up" {
+  let assert Ok(reading) = {
+    use scope <- fiber::scope()
+    // The stopper is dropped at once, which leaves the counter running.
+    let (counter, _) = start(scope)
+    let assert Ok(_) = increment(counter, 2)
+    let assert Ok(_) = increment(counter, 3)
+    get(counter, duration::seconds(1))
+  }
+  assert reading == Ok(5)
+}
+
+test "a reset sets the count back to 0" {
+  let assert Ok(readings) = {
+    use scope <- fiber::scope()
+    let (counter, _) = start(scope)
+    let assert Ok(_) = increment(counter, 7)
+    let assert Ok(_) = reset(counter)
+    let after_reset = get(counter, duration::seconds(1))
+    let assert Ok(_) = increment(counter, 4)
+    (after_reset, get(counter, duration::seconds(1)))
+  }
+  assert readings == (Ok(0), Ok(4))
+}
+
+test "a stopped counter refuses requests" {
+  let assert Ok(answers) = {
+    use scope <- fiber::scope()
+    let (counter, stopper) = start(scope)
+    let assert Ok(_) = increment(counter, 1)
+    stop(stopper)
+    (increment(counter, 1), get(counter, duration::seconds(1)))
+  }
+  assert answers == (Err(Stopped), Err(Stopped))
+}
+
+test "get gives up on a counter that does not answer" {
+  // Nobody receives from `idle`, so the request is never handed off.
+  let (requests_tx, idle) = channel::new::<Request>(0)
+  assert get(Counter { requests: requests_tx }, duration::seconds(1)) == Err(TimedOut)
+  // A handle is dropped after its last use, and dropping `idle` early
+  // would make `get` fail at once with `Stopped`. Receiving here keeps
+  // it alive until `get` has given up. By then the `Counter` is gone
+  // too, so the channel is closed and this does not block.
+  let assert Err(Nil) = channel::receive(idle)
+}
+
+test "the actor returns its count once every Counter is gone" {
+  let assert Ok(final) = {
+    use scope <- fiber::scope()
+    let (requests_tx, requests_rx) = channel::new::<Request>(0)
+    // The signal's `Sender` is dropped at once, so only the `Counter`
+    // keeps the actor going.
+    let (_, signal_rx) = channel::new::<Nil>(0)
+    let actor = fiber::spawn(scope, fn() { serve(requests_rx, signal_rx, 0) })
+    let counter = Counter { requests: requests_tx }
+    let assert Ok(_) = increment(counter, 2)
+    let assert Ok(_) = increment(counter, 3)
+    // `counter` is not used after the line above, so it is dropped
+    // there. That closes the request channel, and the actor returns.
+    fiber::join(actor)
+  }
+  assert final == 5
+}

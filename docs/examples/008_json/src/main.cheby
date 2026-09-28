@@ -1,0 +1,105 @@
+//! Pretty-prints a JSON file.
+//!
+//! Reads the file named by the only command-line argument, parses it and
+//! prints it again with every array element and object member on its own
+//! line, indented by two spaces per level. If there is not exactly one
+//! argument, the file cannot be read or it is not valid JSON, `main`
+//! returns an error, which the runtime prints to standard error with
+//! `show` before exiting with status 1.
+
+import std::env
+import std::io
+import std::list
+import std::result
+import json::parser
+
+fn main() -> Result<Nil, AppError> {
+  // Each `use` stops at the first `Err` and returns it from `main`.
+  // `result::try` never converts errors, so `result::map_error` first
+  // wraps each module's own error in an `AppError`. `ReadFailed(path, _)`
+  // is a function capture: a function that takes the error and builds a
+  // `ReadFailed` with it.
+  use path <- result::try(parse_args(env::args()))
+  use text <- result::try(result::map_error(io::read_file(path), ReadFailed(path, _)))
+  use pretty <- result::try(result::map_error(reformat(text), InvalidJson(path, _)))
+  io::println(pretty)
+  Ok(Nil)
+}
+
+/// Extracts the single file name from the arguments, which do not
+/// include the program name.
+fn parse_args(args: List<String>) -> Result<String, AppError> {
+  case args {
+    [] => Err(MissingPath)
+    [path] => Ok(path)
+    _ => Err(TooManyArguments(list::length(args)))
+  }
+}
+
+/// Parses `text` as JSON and returns it pretty-printed.
+fn reformat(text: String) -> Result<String, parser::ParseError> {
+  use document <- result::try(parser::parse(text))
+  // `value::Value` satisfies `Show`, so interpolation pretty-prints it.
+  Ok("{document}")
+}
+
+type AppError {
+  MissingPath,
+  TooManyArguments(Int),
+  ReadFailed(String, io::Error),
+  InvalidJson(String, parser::ParseError),
+}
+
+/// Makes `AppError` satisfy `Show`, so an error from `main` prints as
+/// readable text instead of debug output.
+fn show(error: AppError) -> String {
+  case error {
+    MissingPath => "usage: json FILE"
+    TooManyArguments(count) => "expected one file name, got {count} arguments"
+    // `:?` uses the built-in debug printing, which works for every type.
+    ReadFailed(path, reason) => "cannot read {path}: {reason:?}"
+    // `parser::ParseError` has its own `show`, so `{reason}` uses it.
+    InvalidJson(path, reason) => "{path}: {reason}"
+  }
+}
+
+test "parse_args accepts exactly one file name" {
+  assert parse_args(["data.json"]) == Ok("data.json")
+  assert parse_args([]) == Err(MissingPath)
+  assert parse_args(["a.json", "b.json"]) == Err(TooManyArguments(2))
+}
+
+test "reformat puts each element and member on its own line" {
+  // A string literal may span several lines, and a raw string keeps the
+  // quotes and braces as they are.
+  let expected = r#"{
+  "name": "cheby",
+  "tags": [
+    "fibers",
+    "immutable"
+  ],
+  "version": 0.1,
+  "stable": false,
+  "license": null,
+  "deps": {}
+}"#
+  let compact = r#"{"name":"cheby","tags":["fibers","immutable"],"version":0.1,"stable":false,"license":null,"deps":{}}"#
+  assert reformat(compact) == Ok(expected)
+}
+
+test "reformat leaves pretty-printed JSON as it is" {
+  let assert Ok(once) = reformat(r#"[1, {"a": [true, "x"]}, []]"#)
+  assert reformat(once) == Ok(once)
+}
+
+test "reformat reports where invalid JSON goes wrong" {
+  assert reformat("[1,]") == Err(parser::ParseError { position: 3, reason: parser::UnexpectedChar("]") })
+  assert reformat("") == Err(parser::ParseError { position: 0, reason: parser::UnexpectedEnd })
+}
+
+test "errors show as messages for the user" {
+  assert show(MissingPath) == "usage: json FILE"
+  assert show(TooManyArguments(3)) == "expected one file name, got 3 arguments"
+  let error = parser::ParseError { position: 4, reason: parser::UnexpectedEnd }
+  assert show(InvalidJson("data.json", error)) == "data.json: unexpected end of input at position 4"
+}

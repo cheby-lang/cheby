@@ -1,0 +1,50 @@
+//! Prints the numbers from 1 to 100, replacing multiples of 3 with
+//! "Fizz", multiples of 5 with "Buzz" and multiples of both with
+//! "FizzBuzz".
+
+import std::io
+
+fn main() {
+  // There are no loops, so a local function counts by calling itself.
+  // The recursive call is in tail position, so the stack does not grow.
+  fn count(n) {
+    case {
+      n > 100 => Nil
+      _ => {
+        io::println(fizzbuzz(n))
+        count(n + 1)
+      }
+    }
+  }
+  count(1)
+}
+
+/// Returns the FizzBuzz text for `n`.
+fn fizzbuzz(n: Int) -> String {
+  case n % 3, n % 5 {
+    0, 0 => "FizzBuzz"
+    0, _ => "Fizz"
+    _, 0 => "Buzz"
+    _, _ => "{n}"
+  }
+}
+
+test "multiples of 3 are Fizz" {
+  assert fizzbuzz(3) == "Fizz"
+  assert fizzbuzz(99) == "Fizz"
+}
+
+test "multiples of 5 are Buzz" {
+  assert fizzbuzz(5) == "Buzz"
+  assert fizzbuzz(100) == "Buzz"
+}
+
+test "multiples of both are FizzBuzz" {
+  assert fizzbuzz(15) == "FizzBuzz"
+  assert fizzbuzz(90) == "FizzBuzz"
+}
+
+test "other numbers stay as they are" {
+  assert fizzbuzz(1) == "1"
+  assert fizzbuzz(98) == "98"
+}

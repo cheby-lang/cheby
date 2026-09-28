@@ -1,0 +1,5 @@
+name = "json_codec"
+version = "0.1.0"
+
+[dependencies]
+json = { git = "https://github.com/example/cheby-json", tag = "v1.2.0" }

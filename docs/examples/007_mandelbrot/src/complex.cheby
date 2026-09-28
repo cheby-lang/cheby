@@ -1,0 +1,74 @@
+//! Complex numbers with `Float` parts.
+//!
+//! This module declares `add` and `mul` with exactly the signatures of
+//! the `Add` and `Mul` interfaces from `std::ops`, so `Complex`
+//! satisfies both and `a + b` and `a * b` work on complex numbers.
+//! Nothing says so explicitly: interfaces are satisfied structurally,
+//! by the functions of the module that declares the type.
+
+/// The complex number `re + im i`.
+type Complex { re: Float, im: Float }
+
+/// Returns the complex number `re + im i`.
+fn new(re: Float, im: Float) -> Complex {
+  Complex { re, im }
+}
+
+/// Makes `Complex` satisfy `Add`, so `a + b` calls this function.
+fn add(a: Complex, b: Complex) -> Complex {
+  Complex { re: a.re + b.re, im: a.im + b.im }
+}
+
+/// Makes `Complex` satisfy `Mul`, so `a * b` calls this function.
+/// It expands `(a.re + a.im i)(b.re + b.im i)` using `i * i = -1`.
+fn mul(a: Complex, b: Complex) -> Complex {
+  // Inside this function the parts are plain `Float`s, so these
+  // operators are the built-in float arithmetic.
+  Complex { re: a.re * b.re - a.im * b.im, im: a.re * b.im + a.im * b.re }
+}
+
+/// Returns the square of the distance from `z` to zero. Comparing it
+/// with the square of a distance avoids taking a square root.
+fn magnitude_squared(z: Complex) -> Float {
+  z.re * z.re + z.im * z.im
+}
+
+/// Makes `Complex` satisfy `Show`, so a number can be interpolated as
+/// `{z}`. It shows as `1.5 - 2.0i` rather than `1.5 + -2.0i`.
+fn show(z: Complex) -> String {
+  case {
+    z.im < 0.0 => {
+      let size = -z.im
+      "{z.re} - {size}i"
+    }
+    _ => "{z.re} + {z.im}i"
+  }
+}
+
+test "addition adds the parts separately" {
+  assert new(1.0, 2.0) + new(3.0, -5.0) == new(4.0, -3.0)
+  assert new(0.5, 0.5) + new(0.0, 0.0) == new(0.5, 0.5)
+}
+
+test "multiplication follows i * i = -1" {
+  let i = new(0.0, 1.0)
+  assert i * i == new(-1.0, 0.0)
+  assert new(1.0, 2.0) * new(3.0, 4.0) == new(-5.0, 10.0)
+  assert new(2.0, 0.0) * new(3.0, 0.0) == new(6.0, 0.0)
+}
+
+test "operators combine with the usual precedence" {
+  // `*` binds tighter than `+`, as for numbers: this is (i * i) + 1.
+  let i = new(0.0, 1.0)
+  assert i * i + new(1.0, 0.0) == new(0.0, 0.0)
+}
+
+test "magnitude_squared is the squared distance from zero" {
+  assert magnitude_squared(new(3.0, 4.0)) == 25.0
+  assert magnitude_squared(new(0.0, 0.0)) == 0.0
+}
+
+test "numbers show with the sign of the imaginary part" {
+  assert show(new(1.5, -2.0)) == "1.5 - 2.0i"
+  assert show(new(0.0, 1.0)) == "0.0 + 1.0i"
+}

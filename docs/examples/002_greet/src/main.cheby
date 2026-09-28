@@ -1,0 +1,51 @@
+//! Greets the person named by the only command-line argument.
+//!
+//! With no argument, or with more than one, `main` returns an error.
+//! The runtime prints it to standard error with `show` and exits with
+//! status 1.
+
+import std::env
+import std::io
+import std::list
+import std::result
+
+fn main() -> Result<Nil, ArgsError> {
+  use name <- result::try(parse_args(env::args()))
+  io::println("Hello, {name}!")
+  Ok(Nil)
+}
+
+/// Extracts the single name from the arguments, which do not include
+/// the program name.
+fn parse_args(args: List<String>) -> Result<String, ArgsError> {
+  case args {
+    [] => Err(MissingName)
+    [name] => Ok(name)
+    _ => Err(TooManyArguments(list::length(args)))
+  }
+}
+
+type ArgsError {
+  MissingName,
+  TooManyArguments(Int),
+}
+
+/// Makes `ArgsError` satisfy `Show`, so an error from `main` prints as
+/// readable text instead of debug output.
+fn show(error: ArgsError) -> String {
+  case error {
+    MissingName => "usage: greet NAME"
+    TooManyArguments(count) => "expected one name, got {count} arguments"
+  }
+}
+
+test "parse_args accepts exactly one name" {
+  assert parse_args(["Ada"]) == Ok("Ada")
+  assert parse_args([]) == Err(MissingName)
+  assert parse_args(["Ada", "Grace"]) == Err(TooManyArguments(2))
+}
+
+test "errors show as messages for the user" {
+  assert show(MissingName) == "usage: greet NAME"
+  assert show(TooManyArguments(3)) == "expected one name, got 3 arguments"
+}

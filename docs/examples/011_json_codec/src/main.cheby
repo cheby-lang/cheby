@@ -1,0 +1,159 @@
+//! Lists the books in a JSON file, then prints its paperbacks as JSON.
+//!
+//! Reads the file named by the only command-line argument. The file holds
+//! an object such as `{"books": [...]}`, and the `book` module describes
+//! how each book is written. The program prints one line per book, then
+//! the paperbacks as one line of compact JSON. If there is not exactly one argument, the file cannot be read or
+//! it does not hold a list of books, `main` returns an error, which the
+//! runtime prints to standard error with `show` before exiting with
+//! status 1.
+//!
+//! Cheby has no macros and no `derive` (ADR-0022), so no annotation can
+//! write the JSON code for a type. Instead the language server's
+//! "Generate JSON functions" code action writes it once into the type's
+//! module, as ordinary code that can then be read and edited like the
+//! rest. The `format`, `author` and `book` modules show the result.
+//!
+//! The JSON helpers come from the `json` package listed in `cheby.toml`.
+//! This example assumes the following API for it:
+//!
+//! - `json::Value` is an opaque JSON value. `json::null`, `json::bool`,
+//!   `json::int`, `json::float`, `json::string` and `json::object` build
+//!   values. `json::array(items, encode)` and
+//!   `json::nullable(option, encode)` encode lists and options with a
+//!   given function, and `json::to_string` prints a value as compact
+//!   JSON, with no spaces and the keys in the order given.
+//! - `json::ToJson` is the interface `{ fn to_json(Self) -> Value }`, and
+//!   `json::list(items)` encodes a list of any type that satisfies it.
+//! - `json::parse(text, decoder)` parses `text` and decodes it, returning
+//!   a `json::Error`: `Syntax(Int)` with the position of invalid JSON,
+//!   or `Decode(List<decode::Error>)` with every value that did not fit.
+//! - `json::decode::Decoder<T>` decodes a `T`. The module has decoders
+//!   for `string`, `int`, `float`, `bool`, `list` and `optional` (`null`
+//!   becomes `None`), and combines them with `field`, `optional_field`,
+//!   `then`, `success` and `failure`. A `decode::Error` records what was
+//!   `expected`, the kind of JSON value `found` (such as `"String"`,
+//!   `"Int"` or `"Null"`) and the `path` to it, with keys and list
+//!   indexes as strings, such as `["books", "1", "format"]`.
+
+import std::env
+import std::io
+import std::list
+import std::result
+import json
+import json::decode
+import json_codec::book
+import json_codec::format
+
+fn main() -> Result<Nil, AppError> {
+  // Each `use` stops at the first `Err` and returns it from `main`, after
+  // `result::map_error` has wrapped it in an `AppError`.
+  use path <- result::try(parse_args(env::args()))
+  use text <- result::try(result::map_error(io::read_file(path), ReadFailed(path, _)))
+  use books <- result::try(result::map_error(json::parse(text, library_decoder()), InvalidLibrary(path, _)))
+  books
+  |> list::map(summary)
+  |> list::each(io::println)
+  io::println(paperbacks_json(books))
+  Ok(Nil)
+}
+
+/// Extracts the single file name from the arguments, which do not
+/// include the program name.
+fn parse_args(args: List<String>) -> Result<String, AppError> {
+  case args {
+    [] => Err(MissingPath)
+    [path] => Ok(path)
+    _ => Err(TooManyArguments(list::length(args)))
+  }
+}
+
+/// Decodes the whole document: an object whose `books` key holds a list
+/// of books. It is written by hand, since the document has no type of
+/// its own.
+fn library_decoder() -> decode::Decoder<List<book::Book>> {
+  use books <- decode::field("books", decode::list(book::decoder()))
+  decode::success(books)
+}
+
+/// Describes `entry` on one line, as in
+/// `"Dune" by Frank Herbert (1965, paperback)`.
+fn summary(entry: book::Book) -> String {
+  // `Book` and `Author` are opaque only to other packages, so this module
+  // can read their fields. `{entry.format}` uses `format::show`.
+  "\"{entry.title}\" by {entry.author.name} ({entry.published}, {entry.format})"
+}
+
+/// Encodes the paperbacks among `books` as a compact JSON array.
+fn paperbacks_json(books: List<book::Book>) -> String {
+  let paperbacks = list::filter(books, fn(entry) { entry.format == format::Paperback })
+  // `json::list` accepts any `List<T>` where `T: json::ToJson`, and calls
+  // `json::ToJson::to_json` on each element. `Book` satisfies the
+  // interface only because `book::to_json` has the right signature and is
+  // `pub` like the type. Were it package-visible, this call would not
+  // compile.
+  json::to_string(json::list(paperbacks))
+}
+
+type AppError {
+  MissingPath,
+  TooManyArguments(Int),
+  ReadFailed(String, io::Error),
+  InvalidLibrary(String, json::Error),
+}
+
+/// Makes `AppError` satisfy `Show`, so an error from `main` prints as
+/// readable text instead of debug output.
+fn show(error: AppError) -> String {
+  case error {
+    MissingPath => "usage: json_codec FILE"
+    TooManyArguments(count) => "expected one file name, got {count} arguments"
+    ReadFailed(path, reason) => "cannot read {path}: {reason:?}"
+    // `json::Error` satisfies `Show`, so `{reason}` uses its `show`.
+    InvalidLibrary(path, reason) => "{path}: {reason}"
+  }
+}
+
+test "parse_args accepts exactly one file name" {
+  assert parse_args(["books.json"]) == Ok("books.json")
+  assert parse_args([]) == Err(MissingPath)
+  assert parse_args(["a.json", "b.json"]) == Err(TooManyArguments(2))
+}
+
+test "a whole document decodes into books" {
+  let text = r#"{"books": [
+    {"title": "Dune", "author": {"name": "Frank Herbert", "born": 1920},
+     "year": 1965, "format": "paperback", "tags": ["classic"]},
+    {"title": "Beloved", "author": {"name": "Toni Morrison"},
+     "year": 1987, "format": "hardcover"}
+  ]}"#
+  let assert Ok(books) = json::parse(text, library_decoder())
+  assert list::map(books, summary) == [
+    "\"Dune\" by Frank Herbert (1965, paperback)",
+    "\"Beloved\" by Toni Morrison (1987, hardcover)",
+  ]
+  let expected = r#"[{"title":"Dune","author":{"name":"Frank Herbert","born":1920},"year":1965,"format":"paperback","tags":["classic"]}]"#
+  assert paperbacks_json(books) == expected
+}
+
+test "a problem in one book is reported with its path" {
+  let text = r#"{"books": [
+    {"title": "Dune", "author": {"name": "Frank Herbert"}, "year": 1965, "format": "paperback"},
+    {"title": "Beloved", "author": {"name": "Toni Morrison"}, "year": 1987, "format": "audiobook"}
+  ]}"#
+  let problem = decode::Error { expected: "Format", found: "String", path: ["books", "1", "format"] }
+  assert json::parse(text, library_decoder()) == Err(json::Decode([problem]))
+}
+
+test "text that is not JSON is a syntax error" {
+  let assert Err(json::Syntax(_)) = json::parse(r#"{"books": ["#, library_decoder())
+}
+
+test "errors show as messages for the user" {
+  assert show(MissingPath) == "usage: json_codec FILE"
+  assert show(TooManyArguments(3)) == "expected one file name, got 3 arguments"
+  let problem = json::Decode([decode::Error { expected: "List", found: "Null", path: ["books"] }])
+  // The wording of the problem itself comes from `json::Error`'s `show`,
+  // and `show` only puts the file name in front of it.
+  assert show(InvalidLibrary("books.json", problem)) == "books.json: {problem}"
+}

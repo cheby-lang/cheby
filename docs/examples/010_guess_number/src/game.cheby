@@ -1,0 +1,87 @@
+//! The rules of the game: reading a guess and comparing it with the
+//! secret number.
+//!
+//! Everything here is pure, so it is tested without any randomness or
+//! input.
+
+import std::int
+import std::string
+
+/// How a guess compares with the secret number.
+type Verdict {
+  TooLow,
+  TooHigh,
+  Correct,
+}
+
+/// Why a line of input is not a guess.
+type GuessError {
+  NotANumber(String),
+  // The guess and the largest allowed guess.
+  OutOfRange(Int, Int),
+}
+
+/// Compares `guess` with `secret`.
+fn judge(secret: Int, guess: Int) -> Verdict {
+  case {
+    guess < secret => TooLow
+    guess > secret => TooHigh
+    _ => Correct
+  }
+}
+
+/// Reads a guess from a line of input. Surrounding whitespace is
+/// ignored, and the guess must be a whole number from 1 to `max`.
+fn parse_guess(text: String, max: Int) -> Result<Int, GuessError> {
+  let trimmed = string::trim(text)
+  case int::parse(trimmed) {
+    Ok(guess) when guess >= 1 && guess <= max => Ok(guess)
+    Ok(guess) => Err(OutOfRange(guess, max))
+    Err(_) => Err(NotANumber(trimmed))
+  }
+}
+
+/// Makes `GuessError` satisfy `Show`, so the game can tell the player
+/// what was wrong with a guess by interpolating `{error}`.
+fn show(error: GuessError) -> String {
+  case error {
+    NotANumber(text) => "\"{text}\" is not a whole number."
+    OutOfRange(guess, max) => "{guess} is not from 1 to {max}."
+  }
+}
+
+test "judge compares the guess with the secret" {
+  assert judge(50, 25) == TooLow
+  assert judge(50, 75) == TooHigh
+  assert judge(50, 50) == Correct
+  assert judge(1, 1) == Correct
+}
+
+test "parse_guess accepts whole numbers from 1 to max" {
+  assert parse_guess("42", 100) == Ok(42)
+  assert parse_guess("1", 100) == Ok(1)
+  assert parse_guess("100", 100) == Ok(100)
+}
+
+test "parse_guess ignores surrounding whitespace" {
+  assert parse_guess("  7 \n", 10) == Ok(7)
+  assert parse_guess("\t3", 10) == Ok(3)
+}
+
+test "parse_guess rejects numbers outside the range" {
+  assert parse_guess("0", 100) == Err(OutOfRange(0, 100))
+  assert parse_guess("101", 100) == Err(OutOfRange(101, 100))
+  assert parse_guess("-3", 100) == Err(OutOfRange(-3, 100))
+}
+
+test "parse_guess rejects text that is not a whole number" {
+  assert parse_guess("seven", 100) == Err(NotANumber("seven"))
+  assert parse_guess(" 4.5 ", 100) == Err(NotANumber("4.5"))
+  assert parse_guess("", 100) == Err(NotANumber(""))
+  assert parse_guess("   ", 100) == Err(NotANumber(""))
+}
+
+test "guess errors show as messages for the player" {
+  assert show(NotANumber("seven")) == "\"seven\" is not a whole number."
+  assert show(OutOfRange(101, 100)) == "101 is not from 1 to 100."
+}
