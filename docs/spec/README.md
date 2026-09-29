@@ -42,7 +42,7 @@ Grammar snippets use EBNF:
 | `a = b ;`               | rule definition                                         |
 | `"fn"`                  | terminal (keyword or punctuation)                       |
 | `UPPER`, `LOWER`, `INT` | token classes from [chapter 2](02-lexical-structure.md) |
-| `NL`                    | a statement-separating newline token (see D-107)        |
+| `NL`                    | a statement-separating newline token (D-107, D-231)     |
 | `a b`                   | sequence                                                |
 | `a \| b`                | alternative                                             |
 | `[ a ]`                 | optional                                                |

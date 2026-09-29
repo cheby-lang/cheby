@@ -1,6 +1,6 @@
 # Appendix A. Grammar
 
-This appendix collects the complete grammar of Cheby. Chapter snippets are excerpts of it ([README](README.md#grammar-notation)). Token classes (`LOWER`, `UPPER`, `INT`, `FLOAT`, `STRING`, `RAW_STRING`, `NL`) are defined in [chapter 2](02-lexical-structure.md). `NL` tokens are produced and suppressed as described in [§2.8](02-lexical-structure.md#28-newlines-and-statement-separation).
+This appendix collects the complete grammar of Cheby. Chapter snippets are excerpts of it ([README](README.md#grammar-notation)). Token classes (`LOWER`, `UPPER`, `INT`, `FLOAT`, `STRING`, `RAW_STRING`, `NL`) are defined in [chapter 2](02-lexical-structure.md). `NL` tokens are produced by the lexer and ignored by the parser where a line continues, as described in [§2.8](02-lexical-structure.md#28-newlines-and-statement-separation) (D-231). The rules below show `NL` only where it is significant, so newlines inside `( )`, `[ ]` and the `< >` of `type_args`, `type_params` and `plain_params` need no `[ NL ]`.
 
 Operator precedence is given by the layered `expr` rules below and summarized in [§5.4.1](05-expressions.md#541-precedence-and-associativity) (D-108).
 

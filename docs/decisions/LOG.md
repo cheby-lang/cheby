@@ -289,3 +289,13 @@ Open:
 - ~~Examples 006 to 011 not yet updated to match D-202 to D-228.~~ Done, with D-229 and D-230.
 - The standard-library spec in `docs/stdlib/` (D-204) is not written yet. The examples still use functions it must define, such as `set::*`, `string::to_code_points`, `float::parse`, `u32::from_int`, `duration::Duration`, `fiber::Scope` and the `std::json` API assumed by example 011.
 - ~~How a pipe treats a nested capture, `x |> f(a, g(_))` (Q19, user asked for clarification).~~ → D-221
+
+## 2026-09-29: Review fixes
+
+Goal: fix spec bugs found in a review of the draft. Continues [Language gaps found by the examples](#2026-09-29-language-gaps-found-by-the-examples).
+
+- **D-231 Newline continuation is decided by the parser**: The lexer turns every line break outside strings and comments into an `NL`, and the parser decides whether the line continues. It ignores an `NL` inside an unclosed `(`, `[` or type-argument or type-parameter `<`, after a token it has read as a binary operator or after `,`, `=`, `=>`, `->` or `<-`, and before a leading `|>`, `&&` or `||`. A `>` that closes type arguments is not an operator, so `type Cell = Option<Player>` ends its line. The parser always knows which `<` and `>` are brackets, because in expressions type arguments appear only after `::`. Why: the old rule already depended on parsing (binary position, unary `-`), and this is the only variant that ends lines at a closing `>` and also lets type arguments span lines. Tools such as highlighters and the formatter need the parser's view of `<` and `>`. Refines D-107.
+
+Open:
+
+- None.

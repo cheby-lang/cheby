@@ -149,21 +149,25 @@ An attribute is `@` followed immediately by a `LOWER` name and an optional paren
 
 ## 2.8 Newlines and statement separation
 
-Cheby has no semicolons. Newlines separate statements, `case` arms and top-level items (D-051, D-107). The lexer turns each line break (outside string literals and comments) into an `NL` token, and then removes the `NL` tokens that do not end anything according to the rules below.
+Cheby has no semicolons. Newlines separate statements, `case` arms and top-level items (D-051, D-107). The lexer turns each line break (outside string literals and comments) into an `NL` token. The parser then decides, by the rules below, which `NL` tokens end something and which it ignores (D-231).
 
-A line break does **not** produce an `NL` token if any of the following holds (D-107):
+The lexer merges consecutive `NL` tokens into one and drops `NL` tokens directly after `{` and directly before `}`. It does not decide continuation by itself.
 
-1. **Open brackets.** The innermost unclosed delimiter is `(` or `[`. Inside `{`, newlines are significant again, so a closure body passed as an argument still separates its statements by newlines.
-2. **Trailing continuation token.** The last token before the line break is one of:
-   - a binary operator used in binary position (`+ - * / % & | ^ << >> == != < <= > >= && || |>`),
+The parser ignores an `NL` token, so the line continues, if any of the following holds (D-107, D-231):
+
+1. **Open brackets.** The innermost unclosed delimiter is `(`, `[`, or the `<` of a type-argument or type-parameter list (`type_args`, `type_params` or `plain_params` in [Appendix A](appendix-a-grammar.md), including a turbofish `::<…>`). Inside `{`, newlines are significant again, so a closure body passed as an argument still separates its statements by newlines.
+2. **Trailing continuation token.** The token before the line break is one of:
+   - a token the parser has read as a binary operator (`+ - * / % & | ^ << >> == != < <= > >= && || |>`),
    - `,`, `=`, `=>`, `->` or `<-`.
+
+   A `>` that closes a type-argument or type-parameter list is not a binary operator, and neither is either half of a `>>` split in a type context ([§2.6](#26-operators-and-punctuation)). A line that ends with such a `>` ends normally.
+
 3. **Leading continuation token.** The first token of the next non-blank, non-comment line is `|>`, `&&` or `||`.
 
 In addition:
 
-- Consecutive `NL` tokens are merged into one.
-- `NL` tokens directly after `{` and directly before `}` are ignored.
 - A leading `-` on the next line does **not** continue the previous line, so it is always unary (D-107).
+- The parser always knows whether a `<` or `>` is a bracket or an operator. In type positions `<` always opens type arguments, and in expressions type arguments appear only after `::` (a turbofish, `list::new::<Int>()`).
 
 _Example:_ continuation in pipelines and conditions.
 
@@ -188,4 +192,21 @@ let a = b
 
 The formatter never produces the second example. It is shown only to fix the rule.
 
-_Rationale:_ the innermost-delimiter rule is what makes `list::map(xs, fn(x) { … })` work with multi-statement closure bodies. The leading-operator rule is what makes multi-line pipelines work without trailing operators (D-107).
+_Example:_ type arguments. A closing `>` ends the line, and type arguments may span lines.
+
+```cheby
+type Cell = Option<player::Player>
+type Grid = List<List<Cell>>      // `>>` split into two closing `>`, the line ends
+
+fn index() -> map::Map<
+  String,
+  List<Int>,
+> {
+  map::new::<
+    String,
+    List<Int>,
+  >()
+}
+```
+
+_Rationale:_ the innermost-delimiter rule is what makes `list::map(xs, fn(x) { … })` work with multi-statement closure bodies. The leading-operator rule is what makes multi-line pipelines work without trailing operators (D-107). Continuation is decided by the parser because only the parser can tell a `>` that closes type arguments from a comparison. With a purely lexical rule, `type Cell = Option<Player>` would continue into the next item, and type arguments could not span lines. The old rule already depended on parsing through "binary position" and unary `-`. The cost is that tools such as syntax highlighters and the formatter need the parser's view of `<` and `>` (D-231).
