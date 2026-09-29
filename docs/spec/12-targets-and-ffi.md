@@ -58,7 +58,7 @@ Only some JS engines implement proper tail calls. The JS backend therefore compi
 | `Bool`               | boolean                                           |
 | `Nil`                | `undefined`                                       |
 
-The representation of ADTs, tuples, lists, maps, closures and `dyn` values is unspecified. FFI code must only rely on the representations listed here and on values passed through as opaque ([§12.5](#125-foreign-functions)).
+The representation of ADTs, tuples, lists, maps, closures, `dyn` values, type descriptors and the function packages passed for bounds is unspecified. Type descriptors are nevertheless the same as on native, so `Int`, `I64`, `F32` and `Float` stay distinct inside `dyn` values ([§8.6.1](08-interfaces.md#861-type-descriptors)) (D-237). FFI code must only rely on the representations listed here and on values passed through as opaque ([§12.5](#125-foreign-functions)).
 
 ## 12.4 Semantic differences between targets
 
@@ -100,6 +100,7 @@ pub fn open(path: String) -> Result<Db, String>
 - A relative module path in `@external(js, "./…", …)` names a file next to the source, usually under `src/`. Such files are not modules and are exempt from the file naming rule, and a JS build copies each of them into its output at the same location relative to the compiled module ([§7.2](07-modules-and-packages.md#72-modules-and-files)) (D-208).
 - The declared Cheby signature is trusted. The compiler cannot check it against the foreign code, so a wrong signature is undefined behavior on native.
 - Foreign functions may be generic, as in Gleam. Values cross the boundary in the uniform representation, so values whose type is a type parameter are passed as opaque references (D-186).
+- In v1, the type parameters of a foreign function must not have bounds, because function packages and type descriptors have no foreign ABI. This also applies to a function that has a body and an `@external` for some targets (D-207), because the foreign implementation receives the same arguments. Foreign code cannot build or inspect `dyn` values: they cross the boundary only as opaque values ([§12.5.1](#1251-native-abi), [§12.5.2](#1252-js-abi)) (D-237).
 
 - Compile-time constant evaluation cannot call foreign functions ([§4.5](04-declarations.md#45-constants)) (D-090).
 
@@ -117,7 +118,7 @@ On native targets, foreign functions use the C ABI of the platform (D-030). Para
 | external types ([§12.5.3](#1253-external-types)) | a pointer                                               |
 | any other type                                   | an opaque, reference-counted pointer to the Cheby value |
 
-Values such as `String`, `Bytes`, `List` and `Result` cross the native FFI as opaque pointers. The runtime ships a C header, `cheby.h`, with functions to inspect and build Cheby values and to increment and decrement their reference counts. The runtime representation itself stays private (D-187).
+Values such as `String`, `Bytes`, `List` and `Result` cross the native FFI as opaque pointers. The runtime ships a C header, `cheby.h`, with functions to inspect and build Cheby values and to increment and decrement their reference counts. The runtime representation itself stays private (D-187). The header has no functions for `dyn` values, type descriptors or the function packages passed for bounds, so `dyn` values stay opaque (D-237).
 
 Ownership follows one convention (D-187):
 
@@ -157,7 +158,7 @@ pub type Db
 
 - An external type has no constructors and no fields. Its values can only be created and inspected by foreign functions.
 - An `@external` on an external type names its **drop function** for that target, which is called with the handle when the last reference to it goes away (D-101, [§9.5](09-memory-model.md#95-handles-and-drop-functions)). Without one, the handle is simply forgotten.
-- External types have no structural equality and do not compare by identity, because identity differs between targets. `==` on a value that contains an external type panics, like function values (D-070, D-189).
+- External types have no structural equality and do not compare by identity, because identity differs between targets. `==` or hashing on a value that contains an external type panics, like function values (D-070, D-189, D-233). A value of an external type debug-prints as its type name in angle brackets, such as `<Db>` (D-233).
 - External types are handle types for reference counting on every target, including JS (D-100, ADR-0028).
 
 ## 12.6 Target-specific code

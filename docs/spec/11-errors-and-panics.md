@@ -119,7 +119,7 @@ Assertions are never removed from release builds.
 
 ## 11.6 panic and todo
 
-`panic` and `todo` are keyword expressions of type `Never` ([§3.10](03-types.md#310-never)), so they can be used where any type is expected (D-068, D-161).
+`panic` and `todo` are keyword expressions of type `Never` ([§3.10](03-types.md#310-never)), so they can be used where any type is expected ([§3.12.5](03-types.md#3125-expected-types-and-conversions)) (D-068, D-161, D-235).
 
 ```ebnf
 panic_expr = "panic" [ "as" expr ] ;
@@ -171,17 +171,17 @@ fn handle_request(req: Request) -> Response {
 
 The following are panics, not undefined behavior or silent results:
 
-| Condition                                                              | Decision     |
-| ---------------------------------------------------------------------- | ------------ |
-| integer overflow in arithmetic, negation or shifts                     | D-025, D-092 |
-| integer division or remainder by zero                                  | D-069        |
-| shift by a negative amount or by the type's width or more              | D-092        |
-| an `Int` leaving the safe-integer range on JS                          | D-037        |
-| `==` reaching a function value                                         | D-070        |
-| a failed `let assert` or `assert`                                      | D-068, D-096 |
-| reaching `panic` or `todo`                                             | D-068        |
-| list index out of range, in the standard library's panicking accessors | D-039        |
-| stack overflow                                                         | see below    |
+| Condition                                                              | Decision            |
+| ---------------------------------------------------------------------- | ------------------- |
+| integer overflow in arithmetic, negation or shifts                     | D-025, D-092        |
+| integer division or remainder by zero                                  | D-069               |
+| shift by a negative amount or by the type's width or more              | D-092               |
+| an `Int` leaving the safe-integer range on JS                          | D-037               |
+| `==` or hashing reaching a function value or a handle                  | D-070, D-189, D-233 |
+| a failed `let assert` or `assert`                                      | D-068, D-096        |
+| reaching `panic` or `todo`                                             | D-068               |
+| list index out of range, in the standard library's panicking accessors | D-039               |
+| stack overflow                                                         | see below           |
 
 ### 11.8.1 Stack overflow
 

@@ -84,7 +84,7 @@ let (tx, rx) = channel::new::<Job>(16)   // capacity 16
 - `Sender<T>` sends values of type `T`, and `Receiver<T>` receives them (D-054).
 - The **capacity** is the number of values the channel buffers. Capacity `0` means a synchronous handoff: a send completes only when a receiver takes the value (D-054). A negative capacity panics.
 - Values are received in the order they were sent by any one sender. Values from different senders are interleaved in an unspecified order.
-- Handles are ordinary immutable values. Passing a `Sender` to several fibers gives several producers, and passing a `Receiver` to several fibers gives several competing consumers.
+- Handles are ordinary immutable values, but they cannot be compared with `==` or used as `Map` keys or `Set` elements ([§9.5](09-memory-model.md#95-handles-and-drop-functions)) (D-233). Passing a `Sender` to several fibers gives several producers, and passing a `Receiver` to several fibers gives several competing consumers.
 
 ### 10.5.1 Sending
 

@@ -8,7 +8,7 @@ A value is never modified after it is created, so sharing a value is never obser
 
 Because data is immutable, there is no way to build a reference cycle out of ordinary values: a value can only refer to values that existed before it. Cycles can only arise through runtime objects ([§9.6](#96-reference-cycles)).
 
-Identity is not observable. There is no pointer equality, and `==` is always structural ([§3.13](03-types.md#313-equality-hashing-and-debug-printing)).
+Identity is not observable. There is no pointer equality, and `==` is always structural ([§3.13](03-types.md#313-equality-hashing-and-debug-printing)). For this reason functions and handles cannot be compared or hashed, and they debug-print as placeholders (D-233).
 
 ## 9.2 Reference counting
 
@@ -76,6 +76,7 @@ Some runtime and FFI types are **handles**: channel `Sender` and `Receiver` valu
 - Drop functions run deterministically on every target, including JS ([§9.8](#98-memory-on-the-js-target)) (D-100, ADR-0028).
 - Drop functions also run when a fiber unwinds because of a panic or cancellation ([§11.3](11-errors-and-panics.md#113-unwinding)).
 - User-defined ADTs never have drop functions (D-101). A user type that contains a handle releases it when the user value itself is released.
+- Handles have no structural equality or hash: `==` and hashing panic when they reach one, and a handle debug-prints as a placeholder such as `<Sender>` ([§3.13](03-types.md#313-equality-hashing-and-debug-printing)) (D-233).
 
 - A drop function runs on the fiber that released the last reference to the handle (D-171).
 - A panic inside a drop function aborts the whole process, because there is no sensible place to report it and continuing would silently leak the resource (D-171).

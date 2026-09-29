@@ -5,9 +5,13 @@
 A **package** is the unit of distribution and versioning. It is a directory with a `cheby.toml` manifest and a `src/` directory of source files ([§13.2](13-tooling.md#132-project-layout), D-097).
 
 - A package name is a `LOWER` identifier. The name `std` is reserved for the standard library (D-058).
-- The package name is the first segment of every module path in the package (D-111).
+- Inside a package, the first segment of its module paths is its own `name` from the manifest (D-111, D-142). Another package imports those modules with the key it gave the package in its own manifest ([§13.3](13-tooling.md#133-manifest)), so a dependency's own name need not be unique in a build (D-238).
 - A package depends on other packages through its manifest ([§13.3](13-tooling.md#133-manifest)). Dependency cycles between packages are a compile error.
 - The package is the **opacity boundary**: every module of a package can see the constructors and fields of the package's types that are not `priv`, while other packages can see those of a `pub` type only if it is `exposed` (D-048, D-151, [§4.3.4](04-declarations.md#434-opacity-and-exposed)).
+
+A dependency is identified by its git URL together with its major version (D-238). URLs are compared after normalization: the same repository written in different ways, for example with or without a trailing `.git` or `/`, or with the host name in a different case, is one URL, while different repositories, including forks, are different packages. Different major versions of one URL are different packages, and a build may contain several of them under different dependency keys ([§13.4](13-tooling.md#134-dependencies-and-lockfile)). The major version is the first non-zero part of the version, so `0.1` and `0.2` are different majors (D-239). The package being built is identified by itself, and `std` by being the standard library (D-058).
+
+"Same package" in this specification means the same identity. Two majors of one URL are different packages, so neither can see the other's non-`exposed` constructors and fields. Types from different packages are different types even when their module paths and names are the same: `json::Value` from major 1 and from major 2 of one URL are distinct and have different type descriptors ([§8.6.1](08-interfaces.md#861-type-descriptors)). Diagnostics that mention such types should say which package and version each comes from (D-238).
 
 The standard library is the package `std`. It ships with the compiler and is versioned with it (D-058). It needs no manifest entry.
 
@@ -21,6 +25,8 @@ Each source file is a module (D-162). A module's path is the package name follow
 | `src/web.cheby`           | `my_app::web`              |
 | `src/web/router.cheby`    | `my_app::web::router`      |
 | `src/tools/migrate.cheby` | `my_app::tools::migrate`   |
+
+These are the paths inside `my_app`. A package that depends on `my_app` writes its own key for `my_app` as the first segment instead ([§7.1](#71-packages)).
 
 There are no `mod` declarations. The file system is the single source of truth (D-162). A file and a directory may share a name: `src/web.cheby` and `src/web/router.cheby` are the modules `my_app::web` and `my_app::web::router`, and neither contains the other.
 
@@ -88,20 +94,21 @@ The visibility of a type also governs its constructors, patterns and fields (D-0
 
 ```ebnf
 import_decl = "import" module_path [ "as" LOWER ]
-            | "import" module_path "::" "{" import_item { "," import_item } [ "," ] "}" ;
+            | "import" module_path "::" "{" [ NL ] import_item { "," [ NL ] import_item } [ "," ] [ NL ] "}" ;
 module_path = LOWER { "::" LOWER } ;
-import_item = ( LOWER | UPPER ) [ "as" ( LOWER | UPPER ) ] ;
+import_item = LOWER [ "as" LOWER ]
+            | UPPER [ "as" UPPER ] ;
 ```
 
 Imports use Rust-style paths with the `import` keyword (D-060). All imports of a module must come before its first item (D-143). An import after an item is a compile error.
 
-Any module of the current package, of a dependency or of `std` may be imported. What an import gives access to is limited by item visibility ([§7.3](#73-visibility)): from a module of the same package, all items that are not `priv`, and from a module of another package, only its `pub` items. `priv` items of another module are never accessible.
+Any module of the current package, of a dependency or of `std` may be imported. The first segment of a module path is the current package's own name, a dependency key from its manifest ([§13.3](13-tooling.md#133-manifest)) or `std` (D-238). What an import gives access to is limited by item visibility ([§7.3](#73-visibility)): from a module of the same package, all items that are not `priv`, and from a module of another package, only its `pub` items. `priv` items of another module are never accessible.
 
 ### 7.5.1 Module imports
 
 `import a::b::c` makes the module `a::b::c` available under the name of its last segment, `c`. Its items visible to the importing module are then accessed as `c::name` (D-060). `import a::b::c as d` uses the name `d` instead (D-111).
 
-A path without braces always names a module, never an item. The root module is imported by the package name alone: `import my_app`.
+A path without braces always names a module, never an item. The root module is imported by the first segment alone: the package's own name inside the package, as in `import my_app`, and the dependency key in other packages ([§7.1](#71-packages)).
 
 ```cheby
 import std::list
@@ -125,7 +132,7 @@ A module name brought in by an import is a name in scope for the whole module. I
 
 An item import binds only the listed items. It does not make the module name `b` available (D-144). To use both, write `import a::b` and `import a::b::{x}`.
 
-Every path must be imported before use. `std::list::map(xs, f)` without `import std::list` is a compile error: a qualified path in an expression has exactly two segments, `module::item` (D-060).
+Every path must be imported before use. `std::list::map(xs, f)` without `import std::list` is a compile error: a qualified path in an expression starts with exactly one module segment, `module::item` (D-060). The only longer form is an interface function named through its module, `shape::Shape::area` ([§8.5](08-interfaces.md#85-calling-interface-functions), D-173).
 
 ### 7.5.3 Import cycles
 

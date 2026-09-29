@@ -4,7 +4,7 @@ A module ([chapter 7](07-modules-and-packages.md)) is a sequence of top-level de
 
 ```ebnf
 module      = [ NL ] { module_doc NL } { inner_attribute NL } { import_decl NL } { item NL } ;   (* imports: §7.5, inner_attribute: §4.8 *)
-item        = { doc_comment NL } { attribute [ NL ] } item_body ;
+item        = { doc_comment NL } { attribute NL } item_body ;
 item_body   = fn_decl | type_decl | alias_decl | const_decl | interface_decl | test_decl ;
 ```
 
@@ -79,7 +79,7 @@ param       = LOWER ":" type ;
 
 - Every parameter must have a type, and the return type must be written unless it is `Nil` (D-011, D-083).
 - A missing `-> type` means `-> Nil` (D-083). A function declared `-> Never` must not return ([§3.10](03-types.md#310-never)).
-- The body is a block ([§5.1](05-expressions.md#51-blocks-and-statements)). Its type must be the declared return type.
+- The body is a block ([§5.1](05-expressions.md#51-blocks-and-statements)). Its type must be the declared return type, which is its expected type ([§3.12.5](03-types.md#3125-expected-types-and-conversions)).
 - A function without a body is allowed only with an `@external` attribute ([§12.5](12-targets-and-ffi.md#125-foreign-functions)).
 - Parameters are bindings and follow the no-shadowing rule ([§5.2.3](05-expressions.md#523-no-shadowing)).
 - Type parameters are `UPPER` names and may have interface bounds ([§8.4](08-interfaces.md#84-bounds)).
@@ -87,6 +87,10 @@ param       = LOWER ":" type ;
 Parameters are plain names. Patterns are not allowed in parameter position; destructure with `let` in the body.
 
 ```cheby
+import std::io
+import std::list
+import std::ops
+
 pub fn clamp(value: Int, low: Int, high: Int) -> Int {
   case {
     value < low => low
@@ -122,15 +126,14 @@ Any module's `main` can be run by module path, for example `cheby run my_app::to
 ## 4.3 Type declarations
 
 ```ebnf
-type_decl   = [ "pub" [ "exposed" ] | "priv" ] "type" UPPER [ type_params_plain ] type_body ;
-type_params_plain = "<" UPPER { "," UPPER } [ "," ] ">" ;
-type_body   = "{" variant { "," variant } [ "," ] "}"      (* variants *)
-            | "{" field { "," field } [ "," ] "}"          (* single-variant shorthand *)
-            | (* empty: external type, see §12.5.3 *) ;
+type_decl   = [ "pub" [ "exposed" ] | "priv" ] "type" UPPER [ plain_params ] [ type_body ] ;   (* no body: external type, §12.5.3 *)
+plain_params = "<" UPPER { "," UPPER } [ "," ] ">" ;
+type_body   = "{" [ NL ] variant { "," [ NL ] variant } [ "," ] [ NL ] "}"   (* variants *)
+            | "{" [ NL ] field { "," [ NL ] field } [ "," ] [ NL ] "}" ;    (* single-variant shorthand *)
 variant     = { doc_comment NL } variant_body ;   (* D-211 *)
 variant_body = UPPER
             | UPPER "(" type { "," type } [ "," ] ")"
-            | UPPER "{" field { "," field } [ "," ] "}" ;
+            | UPPER "{" [ NL ] field { "," [ NL ] field } [ "," ] [ NL ] "}" ;
 field       = { doc_comment NL } LOWER ":" type ;   (* D-211 *)
 ```
 
@@ -198,14 +201,14 @@ Types are opaque outside their package by default (D-035, D-048). The package is
 
 "Constructors, patterns and fields" means constructing values with the type's constructors, matching on them in patterns, reading fields with `.field`, and record update (D-048). `priv type T` hides the type together with its constructors and fields outside its module, and a package-visible type is fully transparent inside its package (D-151). `exposed` requires `pub` (D-121, D-150), since it only matters across packages.
 
-Code outside package `p` can still pass values of an opaque type around, compare them with `==`, hash them and debug-print them ([§3.13](03-types.md#313-equality-hashing-and-debug-printing)), and use any `pub` functions the package provides.
+Code outside package `p` can still pass values of an opaque type around, compare them with `==`, hash them and debug-print them ([§3.13](03-types.md#313-equality-hashing-and-debug-printing)), with the same panics on functions and handles as any other value (D-233), and use any `pub` functions the package provides.
 
 _Rationale:_ the default lets a library change its representation without breaking users (ADR-0016). This reverses Gleam, where types are transparent unless marked `opaque`.
 
 ## 4.4 Type aliases
 
 ```ebnf
-alias_decl  = [ visibility ] "type" UPPER [ type_params_plain ] "=" type ;
+alias_decl  = [ visibility ] "type" UPPER [ plain_params ] "=" type ;
 ```
 
 A type alias gives another name to an existing type (D-081). The alias is transparent: it is the same type as its definition, interchangeable everywhere, and it satisfies the same interfaces. An alias may have type parameters, which must all be used in the definition. An alias must not refer to itself, directly or indirectly.
@@ -245,6 +248,8 @@ There are no comptime parameters and types are not values (D-090, D-057).
 
 A constant's value must not contain function values (including references to top-level functions), channels, fibers or external/handle types (D-139). Baking these into a binary is either impossible or meaningless. The type checker rejects a declared type that contains them, and evaluation rejects any such value it produces.
 
+In v1 a constant's value must not contain `dyn` values either, because a `dyn` value carries a function table and a type descriptor ([§8.6](08-interfaces.md#86-dyn-values)). The type checker rejects a declared type that contains `dyn`. Allowing it later breaks no program (D-237).
+
 ```cheby
 pub const max_connections: Int = 1024
 const primes: List<Int> = sieve(1000)
@@ -257,8 +262,8 @@ Constants are never reference counted at run time and may be shared by all fiber
 ## 4.6 Interfaces
 
 ```ebnf
-interface_decl = [ visibility ] "interface" UPPER [ ":" bound ] [ "{" { interface_fn NL } "}" ] ;
-interface_fn   = "fn" LOWER "(" [ type { "," type } [ "," ] ] ")" [ "->" type ] ;
+interface_decl = [ visibility ] "interface" UPPER [ ":" bound ] [ "{" [ NL ] { interface_fn NL } "}" ] ;
+interface_fn   = { doc_comment NL } "fn" LOWER "(" [ type { "," type } [ "," ] ] ")" [ "->" type ] ;
 ```
 
 Interfaces are defined in [chapter 8](08-interfaces.md) (D-063, D-117).

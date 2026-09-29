@@ -14,10 +14,12 @@ primary_pat   = "_"
               | tuple_pattern
               | list_pattern
               | "(" pattern ")" ;
-literal_pat   = [ "-" ] INT | STRING ;
+literal_pat   = [ "-" ] INT | STRING | RAW_STRING ;       (* no interpolation *)
 ctor_pattern  = ctor_path
               | ctor_path "(" pattern { "," pattern } [ "," ] ")"
-              | ctor_path "{" [ field_pat { "," field_pat } ] [ "," ".." | ".." ] [ "," ] "}" ;
+              | ctor_path "{" [ field_pats ] "}" ;
+field_pats    = field_pat { "," field_pat } [ "," ".." ] [ "," ]
+              | ".." ;
 field_pat     = LOWER [ ":" pattern ] ;
 tuple_pattern = "(" pattern "," pattern { "," pattern } [ "," ] ")" ;
 list_pattern  = "[" [ list_pat_item { "," list_pat_item } [ "," ] ] "]" ;

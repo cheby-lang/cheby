@@ -52,21 +52,22 @@ targets = ["native", "js"]
 
 [dependencies]
 json = { git = "https://github.com/example/cheby-json", tag = "v1.2.0" }
+json_next = { git = "https://github.com/example/cheby-json", tag = "v2.0.0" }
+other_json = { git = "https://github.com/other/cheby-json", tag = "v1.0.0" }
 http = { git = "https://github.com/example/cheby-http", rev = "4f2a9c1" }
-json2 = { git = "https://github.com/other/cheby-json", tag = "v2.0.0", package = "json" }
 
 [const-eval]
 time-limit = "10s"
 memory-limit = "1GiB"
 ```
 
-The spelling of the `package` key and of the `[const-eval]` table is illustrative.
+Here `json` and `json_next` are majors 1 and 2 of one repository, which are two different packages, and `other_json` is a different repository and so a different package, whatever its own name is ([§7.1](07-modules-and-packages.md#71-packages), D-238). The spelling of the `[const-eval]` table is illustrative.
 
 - `name` is the package name, a `LOWER` identifier ([§7.1](07-modules-and-packages.md#71-packages)). It must not be `std`.
 - `version` is a semantic version (D-097).
 - `targets` is optional and lists the targets the package supports, `"native"` and/or `"js"`. It defaults to both. Cross-target checks ([§12.6](12-targets-and-ffi.md#126-target-specific-code)) cover only the declared targets (D-190).
-- Each dependency is keyed by the name used in import paths. In v1 a dependency is a git URL plus a `tag` or a commit `rev` (D-044, D-097).
-- A dependency may be renamed locally: its key is the local name, and a `package` field names the package it refers to (D-192).
+- Each dependency is keyed by the name used in import paths: the key is the first segment of the dependency's module paths in this package, as in `import json_next::decode` (D-238). In v1 a dependency is a git URL plus a `tag` or a commit `rev` (D-044, D-097).
+- A key must be a `LOWER` identifier, must not be `std` and must differ from the package's own `name`. Keys are local to each manifest: two packages may use different keys for the same dependency, and the same key for different ones. Renaming a dependency is just choosing its key, so the dependency's own `name` never has to be unique in a build (D-192, D-238).
 - The dependency table is designed so that a later registry form, such as `json = "1.2"`, can be added without changing existing entries (D-044).
 - The optional compile-time evaluation limits ([§13.9](#139-compile-time-evaluation)) can be raised or lowered for the package (D-195).
 
@@ -74,9 +75,12 @@ The spelling of the `package` key and of the `[const-eval]` table is illustrativ
 
 Dependencies are fetched directly from their git URLs. There is no central registry in v1 (D-044).
 
-- `cheby.lock` records, for every direct and indirect dependency, the exact commit and a checksum of its contents (D-044, D-097). Builds use the lockfile and fail if a checksum does not match.
+- `cheby.lock` records, for every package identity in the build ([§7.1](07-modules-and-packages.md#71-packages)), direct or indirect, its URL, its major version, the chosen version, the exact commit and a checksum of its contents (D-044, D-097, D-238). Builds use the lockfile and fail if a checksum does not match.
 - `cheby add` adds a dependency to the manifest and lockfile. `cheby update` re-resolves tags and refreshes the lockfile. `cheby fetch` downloads what the lockfile names.
-- A build contains at most one version of each package. Versions are chosen by minimal version selection, as in Go, and conflicting requirements are an error reported by `cheby update` (D-192).
+- A package identity is a git URL together with a major version, so different majors of one URL are different packages and may all be in one build under different keys ([§7.1](07-modules-and-packages.md#71-packages), D-238).
+- The major version is the first non-zero part of the version, as in Cargo (D-239). `1.4.2` and `1.9.0` share major `1`, `0.1.3` and `0.1.8` share major `0.1`, while `0.1` and `0.2` are different majors, and every `0.0.z` release is a major of its own. A version whose parts are all zero, `0.0.0`, is its own major too.
+- A build contains exactly one version of each package identity. Versions are chosen by minimal version selection, as in Go, so requirements within one major never conflict (D-192, D-238).
+- The version of a dependency is the `version` in its `cheby.toml` at the fetched tag or commit, and it is authoritative. A tag should spell the same version, such as `v1.2.0`. For a `rev`, the version at that commit is used for version selection. Two required commits of one identity that claim the same version, or a `rev` chosen by version selection while another requirement pins a different commit, are an error reported by `cheby update`, as is a `rev` whose `version` is not in the requested major (D-238).
 - Applications should commit `cheby.lock`.
 - The standard library is not a dependency. It is part of the toolchain and versioned with it (D-058).
 
@@ -164,7 +168,7 @@ The following are warnings (D-080 and the cited decisions):
 | `let assert` with an irrefutable pattern                                | D-159        |
 | `todo` in compiled code                                                 | D-068        |
 | unreachable `case` arm                                                  | D-022        |
-| `==` on a type statically known to contain a function type              | D-070        |
+| `==` on a type statically known to contain a function or handle type    | D-070, D-233 |
 | use of a `@deprecated` item                                             | D-200        |
 
 Unused `pub` items are never reported (D-152). Bindings whose names start with `_` are not reported as unused ([§2.3](02-lexical-structure.md#23-identifiers)).

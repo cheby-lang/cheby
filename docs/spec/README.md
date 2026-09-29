@@ -60,7 +60,7 @@ Where the decision log does not settle something that the spec needs, the spec m
 
 The identifier is `OQ-<chapter>-<n>`. Text that depends on an open question is written as if the proposal were accepted, but it is **provisional** until the question is settled in the decision log. When a question is settled, the marker is replaced by normative text that cites the new decision. If the decision differs from the proposal, the dependent text is rewritten.
 
-All gaps marked in the first draft were settled by D-126 to D-197, and no open questions remain.
+All gaps marked in the first draft were settled by D-126 to D-197, and later gaps are marked as they are found. No open questions remain: the last one, OQ-13-7, was settled by D-239.
 
 ### Examples
 

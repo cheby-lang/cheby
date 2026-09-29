@@ -72,9 +72,9 @@ They are reserved so the compiler can give targeted errors for constructs Cheby 
 
 ```ebnf
 INT      = DEC_INT | HEX_INT | BIN_INT | OCT_INT ;
-DEC_INT  = digit { digit | "_" } ;
+DEC_INT  = "0" | nonzero_digit { digit | "_" } ;
 HEX_INT  = "0x" hex_digit { hex_digit | "_" } ;
-BIN_INT  = "0b" ( "0" | "1" ) { "0" | "1" | "_" } ;
+BIN_INT  = "0b" bin_digit { bin_digit | "_" } ;
 OCT_INT  = "0o" oct_digit { oct_digit | "_" } ;
 ```
 
