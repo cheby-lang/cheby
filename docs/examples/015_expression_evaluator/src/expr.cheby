@@ -1,0 +1,122 @@
+//! The syntax tree of an expression, and how to print it back as text.
+//!
+//! `Expr` is a recursive type: a negation holds another expression, and
+//! a binary operation holds two. Every function that walks it is a
+//! `case` with one arm per variant, and the compiler checks that none is
+//! forgotten.
+//!
+//! The tree has its own module, instead of living in the parser, because
+//! a module satisfies `Show` for one type only (D-045), and the parser
+//! already has a `show` for its errors.
+
+/// An expression.
+type Expr {
+  /// A whole number as written. The parser never makes a negative one:
+  /// `-5` is `Negate(Number(5))`.
+  Number(Int),
+  /// The value of a variable.
+  Variable(String),
+  /// Unary minus.
+  Negate(Expr),
+  /// A binary operation and its left and right operands.
+  Binary(Op, Expr, Expr),
+}
+
+/// A binary operator.
+type Op {
+  Add,
+  Subtract,
+  Multiply,
+  Divide,
+}
+
+/// How tightly `op` binds its operands. Higher binds tighter, so in
+/// `1 + 2 * 3` the `*` goes first. The parser and `show` both use this
+/// table, so they cannot disagree.
+fn precedence(op: Op) -> Int {
+  // `|` in a pattern means "or": each arm covers two operators.
+  case op {
+    Add | Subtract => 1
+    Multiply | Divide => 2
+  }
+}
+
+/// Returns the text of `op`.
+fn symbol(op: Op) -> String {
+  case op {
+    Add => "+"
+    Subtract => "-"
+    Multiply => "*"
+    Divide => "/"
+  }
+}
+
+/// Makes `Expr` satisfy `Show`, so an expression can be interpolated as
+/// `{node}`. It prints only the parentheses that are needed to read the
+/// text back as the same tree: `(1 + 2) * 3` keeps them, `1 + (2 * 3)`
+/// loses them.
+fn show(node: Expr) -> String {
+  case node {
+    Number(n) => "{n}"
+    Variable(name) => name
+    // A number, a variable or another negation can follow `-` directly.
+    // `as` names whichever of them matched, so the arm can print it.
+    Negate(Number(_) | Variable(_) | Negate(_) as inner) => "-" + show(inner)
+    // A binary operation after `-` needs parentheses: `-(a + b)`.
+    Negate(inner) => "-(" + show(inner) + ")"
+    Binary(op, left, right) => {
+      let own = precedence(op)
+      // All four operators group to the left, so `a - b - c` is
+      // `(a - b) - c`. The right operand therefore needs parentheses
+      // already when it binds exactly as tightly: `a - (b - c)`.
+      let left_text = print_operand(left, own)
+      let right_text = print_operand(right, own + 1)
+      let operator = symbol(op)
+      "{left_text} {operator} {right_text}"
+    }
+  }
+}
+
+/// Prints `node` as an operand, in parentheses if it is a binary
+/// operation that binds less tightly than `needed`. Numbers, variables
+/// and negations bind tighter than any binary operator.
+priv fn print_operand(node: Expr, needed: Int) -> String {
+  case node {
+    Binary(op, _, _) when precedence(op) < needed => "(" + show(node) + ")"
+    _ => show(node)
+  }
+}
+
+test "multiplication and division bind tighter than addition and subtraction" {
+  assert precedence(Multiply) > precedence(Add)
+  assert precedence(Divide) > precedence(Subtract)
+  assert precedence(Add) == precedence(Subtract)
+}
+
+test "parentheses appear only where the tree needs them" {
+  let one = Number(1)
+  let two = Number(2)
+  let three = Number(3)
+  assert show(Binary(Add, one, Binary(Multiply, two, three))) == "1 + 2 * 3"
+  assert show(Binary(Multiply, Binary(Add, one, two), three)) == "(1 + 2) * 3"
+  assert show(Binary(Multiply, one, Binary(Divide, two, three))) == "1 * (2 / 3)"
+}
+
+test "left-grouped chains print flat and right-grouped ones keep parentheses" {
+  let a = Variable("a")
+  let b = Variable("b")
+  let c = Variable("c")
+  assert show(Binary(Subtract, Binary(Subtract, a, b), c)) == "a - b - c"
+  assert show(Binary(Subtract, a, Binary(Subtract, b, c))) == "a - (b - c)"
+  assert show(Binary(Divide, a, Binary(Multiply, b, c))) == "a / (b * c)"
+  assert show(Binary(Add, a, Binary(Add, b, c))) == "a + (b + c)"
+}
+
+test "negation needs parentheses only around a binary operation" {
+  let x = Variable("x")
+  assert show(Negate(Number(5))) == "-5"
+  assert show(Negate(Negate(x))) == "--x"
+  assert show(Negate(Binary(Add, x, Number(1)))) == "-(x + 1)"
+  assert show(Binary(Multiply, Negate(x), Number(2))) == "-x * 2"
+  assert show(Binary(Subtract, x, Negate(x))) == "x - -x"
+}

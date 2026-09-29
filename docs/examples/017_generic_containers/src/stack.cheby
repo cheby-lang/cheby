@@ -1,0 +1,90 @@
+//! A persistent last-in, first-out stack.
+//!
+//! A stack is one list with the top item first. Unlike `Queue`, it has
+//! no invariant to protect: every list is a valid stack. It is opaque
+//! anyway, like every `pub` type that is not `exposed` (ADR-0016), so
+//! the list could later be replaced by something else without breaking
+//! other packages.
+
+import std::list
+import std::string
+
+/// A stack of items of type `T`.
+pub type Stack<T> {
+  /// The items, top first.
+  items: List<T>,
+}
+
+/// Returns an empty stack.
+pub fn new<T>() -> Stack<T> {
+  Stack { items: [] }
+}
+
+/// Returns `stack` with `item` on top.
+pub fn push<T>(stack: Stack<T>, item: T) -> Stack<T> {
+  Stack { items: [item, ..stack.items] }
+}
+
+/// Returns the top item of `stack` without removing it, or `None` if
+/// `stack` is empty.
+pub fn peek<T>(stack: Stack<T>) -> Option<T> {
+  case stack.items {
+    [] => None
+    [top, ..] => Some(top)
+  }
+}
+
+/// Removes the top item of `stack`. Returns that item and the rest of
+/// the stack, or `None` if `stack` is empty.
+pub fn pop<T>(stack: Stack<T>) -> Option<(T, Stack<T>)> {
+  case stack.items {
+    [] => None
+    [top, ..rest] => Some((top, Stack { items: rest }))
+  }
+}
+
+/// Returns the number of items in `stack`.
+pub fn length<T>(stack: Stack<T>) -> Int {
+  list::length(stack.items)
+}
+
+/// Returns the items of `stack`, top first.
+pub fn to_list<T>(stack: Stack<T>) -> List<T> {
+  stack.items
+}
+
+/// Makes `Stack<T>` satisfy `Show` whenever `T` does (D-064). The top
+/// comes first.
+pub fn show<T: Show>(stack: Stack<T>) -> String {
+  // Interpolating `{item}` needs `T: Show`, which the bound provides.
+  let items =
+    stack.items
+    |> list::map(fn(item) { "{item}" })
+    |> string::join(_, ", ")
+  "stack [{items}]"
+}
+
+test "the last item pushed is the first popped" {
+  let filled = new() |> push(1) |> push(2) |> push(3)
+  let assert Some((top, rest)) = pop(filled)
+  assert top == 3
+  assert peek(rest) == Some(2)
+  assert to_list(rest) == [2, 1]
+}
+
+test "an empty stack has nothing to peek at or pop" {
+  let nothing = new::<Int>()
+  assert peek(nothing) == None
+  assert pop(nothing) == None
+  assert length(nothing) == 0
+}
+
+test "stacks with the same items are ==" {
+  // A stack has only one way to hold given items, so `==` is also
+  // "same items", unlike for `Queue`.
+  assert push(push(new(), "a"), "b") == Stack { items: ["b", "a"] }
+}
+
+test "stacks show their items top first" {
+  assert show(push(push(new(), "a"), "b")) == "stack [b, a]"
+}

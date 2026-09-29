@@ -1,0 +1,78 @@
+//! A journal: numbered entries kept in a host `store::Store`.
+//!
+//! `Journal` is an ordinary Cheby record that holds a handle. User
+//! types never have drop functions of their own (D-101). When the last
+//! reference to a journal goes away, its fields are released with it,
+//! and so is its reference to the store. If that was the last one, the
+//! store's drop function runs.
+//!
+//! A journal is immutable, so `add` returns a new journal with a new
+//! entry count. The new journal refers to the same store as the old
+//! one: copying a handle into another value adds a reference, it does
+//! not open a second store. However many journals are built from one
+//! `new`, their store closes once.
+//!
+//! Journals are never compared with `==`, which would reach the store
+//! inside and panic (D-233). The tests compare their fields instead.
+
+import ffi_handle::store
+
+type Journal {
+  title: String,
+  pages: store::Store,
+  entries: Int,
+}
+
+/// Starts an empty journal, with a store of its own named after
+/// `title`.
+fn new(title: String) -> Journal {
+  Journal { title, pages: store::open(title), entries: 0 }
+}
+
+/// Adds `text` to `journal` as the next numbered entry.
+fn add(journal: Journal, text: String) -> Journal {
+  let number = journal.entries + 1
+  store::write(journal.pages, entry_line(number, text))
+  // If nothing else refers to the old journal, the new one may reuse
+  // its memory. Either way the new journal holds a reference to
+  // the store before the old one lets go of its own, so the store
+  // stays open.
+  Journal { ..journal, entries: number }
+}
+
+/// Returns every entry of `journal`, oldest first.
+fn read(journal: Journal) -> String {
+  store::contents(journal.pages)
+}
+
+/// Formats entry number `number` of a journal.
+fn entry_line(number: Int, text: String) -> String {
+  "{number}. {text}"
+}
+
+/// Makes `Journal` satisfy `Show`, with its title and the number of
+/// entries. Showing a journal does not touch its store.
+fn show(journal: Journal) -> String {
+  case journal.entries {
+    1 => "{journal.title}, 1 entry"
+    count => "{journal.title}, {count} entries"
+  }
+}
+
+test "entries are numbered from 1" {
+  assert entry_line(1, "woke up") == "1. woke up"
+  assert entry_line(12, "slept") == "12. slept"
+}
+
+test "a journal writes numbered entries to its store" {
+  let diary = new("test diary") |> add("woke up") |> add("had tea")
+  assert diary.title == "test diary"
+  assert diary.entries == 2
+  assert read(diary) == "1. woke up; 2. had tea"
+}
+
+test "a journal shows its title and number of entries" {
+  let empty = new("empty")
+  assert show(empty) == "empty, 0 entries"
+  assert show(add(empty, "one")) == "empty, 1 entry"
+}

@@ -1,0 +1,91 @@
+//! Prints the most frequent words of a text file.
+//!
+//! Reads the file named by the first command-line argument and prints
+//! its 10 most frequent words, or as many as the optional second
+//! argument says, one per line with its count. The most frequent word
+//! comes first, and words with the same count come in alphabetical
+//! order. The counting itself is in `count.cheby`.
+//!
+//! With no argument, too many arguments or a count that is not a whole
+//! number of at least 1, or if the file cannot be read, `main` returns
+//! an error, which the runtime prints to standard error with `show`
+//! before exiting with status 1.
+
+import std::env
+import std::int
+import std::io
+import std::list
+import std::result
+import word_count::count
+
+/// How many words are printed when no count is given.
+const default_limit: Int = 10
+
+fn main() -> Result<Nil, AppError> {
+  // A `use` binder is a pattern, so the tuple from `parse_args` is taken
+  // apart right away.
+  use (path, limit) <- result::try(parse_args(env::args()))
+  use text <- result::try(result::map_error(io::read_file(path), ReadFailed(path, _)))
+  // None of these steps has a `_` hole, so each `|>` passes the value on
+  // as the first argument of a call, or as the only argument of a bare
+  // function name such as `count::format_lines`.
+  text
+  |> count::top(limit)
+  |> count::format_lines
+  |> list::each(io::println)
+  Ok(Nil)
+}
+
+/// Reads the file name and the number of words to print from the
+/// arguments, which do not include the program name.
+fn parse_args(args: List<String>) -> Result<(String, Int), AppError> {
+  case args {
+    [] => Err(MissingPath)
+    [path] => Ok((path, default_limit))
+    [path, text] => case int::parse(text) {
+      Ok(limit) when limit >= 1 => Ok((path, limit))
+      _ => Err(BadLimit(text))
+    }
+    _ => Err(TooManyArguments(list::length(args)))
+  }
+}
+
+type AppError {
+  MissingPath,
+  TooManyArguments(Int),
+  /// The second argument, which is not a whole number of at least 1.
+  BadLimit(String),
+  ReadFailed(String, io::Error),
+}
+
+/// Makes `AppError` satisfy `Show`, so an error from `main` prints as
+/// readable text instead of debug output.
+fn show(error: AppError) -> String {
+  // The binding is called `given`, not `count`, because `count` is the
+  // name of an imported module, and a binding cannot reuse it.
+  case error {
+    MissingPath => "usage: word_count FILE [COUNT]"
+    TooManyArguments(given) => "expected a file name and at most one count, got {given} arguments"
+    BadLimit(text) => "the count must be a whole number of at least 1, got \"{text}\""
+    ReadFailed(path, reason) => "cannot read {path}: {reason:?}"
+  }
+}
+
+test "parse_args takes a file name and an optional count" {
+  assert parse_args(["book.txt"]) == Ok(("book.txt", 10))
+  assert parse_args(["book.txt", "3"]) == Ok(("book.txt", 3))
+  assert parse_args([]) == Err(MissingPath)
+  assert parse_args(["a.txt", "3", "b.txt"]) == Err(TooManyArguments(3))
+}
+
+test "parse_args rejects a count that is not a whole number of at least 1" {
+  assert parse_args(["book.txt", "0"]) == Err(BadLimit("0"))
+  assert parse_args(["book.txt", "-2"]) == Err(BadLimit("-2"))
+  assert parse_args(["book.txt", "ten"]) == Err(BadLimit("ten"))
+}
+
+test "errors show as messages for the user" {
+  assert show(MissingPath) == "usage: word_count FILE [COUNT]"
+  assert show(TooManyArguments(3)) == "expected a file name and at most one count, got 3 arguments"
+  assert show(BadLimit("ten")) == "the count must be a whole number of at least 1, got \"ten\""
+}

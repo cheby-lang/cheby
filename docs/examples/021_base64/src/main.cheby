@@ -1,0 +1,99 @@
+//! Encodes the only command-line argument as Base64, decodes it back,
+//! and prints the CRC-32 of its bytes in hex.
+//!
+//! `base64 hello` prints:
+//!
+//! ```text
+//! aGVsbG8=
+//! round-trip OK
+//! crc32 3610a686
+//! ```
+//!
+//! The argument is text, and text always becomes bytes as UTF-8, on
+//! every target. The encoding is in `base64.cheby` and the checksum in
+//! `crc32.cheby`.
+//!
+//! With no argument or with more than one, or if the Base64 text does
+//! not decode, `main` returns an error, which the runtime prints to
+//! standard error with `show` before exiting with status 1.
+
+import std::bytes
+import std::env
+import std::io
+import std::list
+import std::result
+import base64::base64
+import base64::crc32
+
+fn main() -> Result<Nil, AppError> {
+  use text <- result::try(parse_args(env::args()))
+  // `DecodeFailed` is a positional constructor used as a function
+  // value: it wraps the `base64::DecodeError` in an `AppError`.
+  use lines <- result::try(result::map_error(report(text), DecodeFailed))
+  list::each(lines, io::println)
+  Ok(Nil)
+}
+
+/// Extracts the single text from the arguments, which do not include
+/// the program name.
+fn parse_args(args: List<String>) -> Result<String, AppError> {
+  case args {
+    [] => Err(MissingText)
+    [text] => Ok(text)
+    _ => Err(TooManyArguments(list::length(args)))
+  }
+}
+
+/// Returns the lines to print for `text`: its Base64 encoding, whether
+/// decoding that gives back the same bytes, and its CRC-32.
+fn report(text: String) -> Result<List<String>, base64::DecodeError> {
+  let data = bytes::from_string(text)
+  let encoded = base64::encode(data)
+  use decoded <- result::try(base64::decode(encoded))
+  // `Bytes` values compare with the built-in structural `==`, byte by
+  // byte, like every other value.
+  let verdict = case decoded == data {
+    True => "round-trip OK"
+    False => "round-trip FAILED"
+  }
+  let digits = crc32::to_hex(crc32::checksum(data))
+  Ok([encoded, verdict, "crc32 {digits}"])
+}
+
+type AppError {
+  MissingText,
+  TooManyArguments(Int),
+  DecodeFailed(base64::DecodeError),
+}
+
+/// Makes `AppError` satisfy `Show`, so an error from `main` prints as
+/// readable text instead of debug output.
+fn show(error: AppError) -> String {
+  // `{reason}` uses the `show` of `base64::DecodeError`, which is
+  // declared next to that type in `base64.cheby`.
+  case error {
+    MissingText => "usage: base64 TEXT"
+    TooManyArguments(count) => "expected one text, got {count} arguments"
+    DecodeFailed(reason) => "cannot decode: {reason}"
+  }
+}
+
+test "parse_args accepts exactly one text" {
+  assert parse_args(["hello"]) == Ok("hello")
+  assert parse_args([""]) == Ok("")
+  assert parse_args([]) == Err(MissingText)
+  assert parse_args(["a", "b"]) == Err(TooManyArguments(2))
+}
+
+test "the report has the encoding, the round trip and the checksum" {
+  assert report("hello") == Ok(["aGVsbG8=", "round-trip OK", "crc32 3610a686"])
+  assert report("123456789") == Ok(["MTIzNDU2Nzg5", "round-trip OK", "crc32 cbf43926"])
+  assert report("") == Ok(["", "round-trip OK", "crc32 00000000"])
+}
+
+test "errors show as messages for the user" {
+  assert show(MissingText) == "usage: base64 TEXT"
+  assert show(TooManyArguments(3)) == "expected one text, got 3 arguments"
+  let reason = base64::InvalidLength(3)
+  assert show(DecodeFailed(reason)) == "cannot decode: the length must be a multiple of 4, got 3 characters"
+}

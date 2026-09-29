@@ -1,0 +1,30 @@
+//! Waiting for a while, one fiber at a time.
+//!
+//! A selector with nothing but a timer arm is a sleep: `select` waits
+//! until the timer fires, and nothing else can make it ready. Only the calling fiber waits. The others go on running.
+
+import std::duration
+import std::fiber
+import std::selector
+
+/// Suspends the calling fiber for `length`.
+///
+/// Waiting on a timer is a real suspension point, so the fiber gives
+/// up its thread here on every target, JS included (D-232). That makes
+/// `sleep` the natural place for a long-running fiber to let others
+/// run, and for a timeout to cancel it.
+fn sleep(length: duration::Duration) {
+  selector::new()
+  |> selector::after(length, fn() { Nil })
+  |> selector::select
+}
+
+test "sleep returns once its time has passed" {
+  let short = fiber::timeout(duration::seconds(1), fn() { sleep(duration::milliseconds(10)) })
+  assert short == Ok(Nil)
+}
+
+test "a sleeping fiber can be cancelled" {
+  let long = fiber::timeout(duration::milliseconds(10), fn() { sleep(duration::seconds(10)) })
+  assert long == Err(fiber::TimedOut)
+}

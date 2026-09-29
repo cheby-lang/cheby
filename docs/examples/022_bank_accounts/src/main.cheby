@@ -1,0 +1,175 @@
+//! A small bank at work.
+//!
+//! Each customer opens an account with the same amount, and the
+//! customers sit in a circle. Every customer is a client fiber that
+//! pays the next one in the circle again and again, with amounts that
+//! change from round to round, while all the others do the same. Every
+//! account is an actor (see `account.cheby`), and every transfer is
+//! coordinated by the paying client (see `bank.cheby`).
+//!
+//! Some payments are refused for lack of money, and which ones depends
+//! on how the fibers happen to interleave, so the final balances change
+//! from run to run. What never changes is the total: a transfer only
+//! moves money, so once every client has finished, the bank holds
+//! exactly what the customers brought. `main` checks that with
+//! `assert`, which is also allowed outside tests.
+
+import std::fiber
+import std::io
+import std::list
+import std::result
+import bank_accounts::account
+import bank_accounts::bank
+import bank_accounts::money
+
+/// The customers, in their order around the circle.
+const owners: List<String> = ["Ada", "Grace", "Alan", "Edsger", "Barbara"]
+
+/// What each customer brings to the bank, in cents.
+const opening_cents: Int = 100_00
+
+/// How many payments each customer tries to make.
+const client_rounds: Int = 40
+
+/// How the payments of one or more clients went.
+type Tally {
+  /// Payments that reached the payee.
+  moved: Int,
+  /// Payments refused because the payer's balance was too small.
+  refused: Int,
+}
+
+/// A tally of no payments at all.
+const nothing_yet: Tally = Tally { moved: 0, refused: 0 }
+
+/// The outcome of a day of trading.
+type Ledger {
+  tally: Tally,
+  /// Each owner with the balance paid out when their account closed,
+  /// in the order of the owners.
+  balances: List<(String, money::Money)>,
+}
+
+fn main() -> Result<Nil, fiber::Panic> {
+  let count = list::length(owners)
+  let brought = money::from_cents(opening_cents * count)
+  io::println("{count} customers bring {brought} to the bank and pay each other {client_rounds} times each.")
+  use ledger <- result::try(trade(owners, client_rounds))
+  io::println("{ledger.tally.moved} payments went through and {ledger.tally.refused} were refused.")
+  list::each(ledger.balances, fn((owner, closing)) { io::println("  {owner} leaves with {closing}") })
+  let held = list::fold(ledger.balances, money::zero, fn(sum, (_, closing)) { sum + closing })
+  // Money that appears or disappears is a bug in this program, not
+  // something a customer can cause, so it panics instead of returning
+  // an error.
+  assert held == brought as "the bank holds {held}, but the customers brought {brought}"
+  io::println("The bank paid out {held}, exactly what the customers brought.")
+  Ok(Nil)
+}
+
+/// Opens an account with `opening_cents` for each of `names`, lets
+/// each owner try `rounds` payments to the next owner around the
+/// circle, all at once, and then closes every account.
+fn trade(names: List<String>, rounds: Int) -> Result<Ledger, fiber::Panic> {
+  use scope <- fiber::scope()
+  // The other arguments of a capture are evaluated once, here,
+  // so the opening amount is built once and shared by every account.
+  let accounts = list::map(names, account::start(scope, _, money::from_cents(opening_cents)))
+  // Clients only transfer, so none of them can panic unless this
+  // program is wrong. That makes this a `let assert`: if it fails, this
+  // scope fails too, and `main` returns the panic.
+  let assert Ok(tally) = run_clients(accounts, rounds)
+  // Every client has finished, so nobody is paying from an account
+  // any more, and closing them now is safe.
+  let balances = list::map(accounts, fn(handle) {
+    let assert Ok(last) = account::close(handle) as "nobody else closes an account"
+    (account::name(handle), last.balance)
+  })
+  // Closing ends every actor, so this scope returns at once.
+  Ledger { tally, balances }
+}
+
+/// Runs one client fiber per account, which pays the next account
+/// around the circle `rounds` times, and returns once every client has
+/// finished. Panics if there are no accounts.
+fn run_clients(accounts: List<account::Handle>, rounds: Int) -> Result<Tally, fiber::Panic> {
+  // Checked before the scope opens. Inside it, a failure would be
+  // caught by the scope and come back as an `Err`.
+  let assert [first, ..others] = accounts as "a bank needs at least one account"
+  // The last account pays the first, which closes the circle.
+  let payees = [..others, first]
+  // A scope of its own, so that returning from it means every client
+  // is done. The accounts keep running in the caller's scope.
+  use scope <- fiber::scope()
+  fn spawn_clients(payers_left, payees_left, started) {
+    case payers_left, payees_left {
+      [payer, ..more_payers], [payee, ..more_payees] => {
+        let client = fiber::spawn(scope, fn() { pay(payer, payee, 1, rounds, nothing_yet) })
+        spawn_clients(more_payers, more_payees, [..started, client])
+      }
+      _, _ => started
+    }
+  }
+  let clients = spawn_clients(accounts, payees, [])
+  list::fold(clients, nothing_yet, fn(sum, client) { combine(sum, fiber::join(client)) })
+}
+
+/// Pays `payee` from `payer` in rounds `round` to `rounds`, and returns
+/// how the payments went, added to `tally`. The amounts go round from
+/// 5.00 to 35.00, so a payer sometimes has too little.
+fn pay(
+  payer: account::Handle,
+  payee: account::Handle,
+  round: Int,
+  rounds: Int,
+  tally: Tally,
+) -> Tally {
+  case {
+    round > rounds => tally
+    _ => {
+      let amount = money::from_cents((round % 7 + 1) * 5_00)
+      let next = case bank::transfer(payer, payee, amount) {
+        Ok(Nil) => Tally { ..tally, moved: tally.moved + 1 }
+        // Too little money is a customer's problem, not a bug, so it
+        // came back as a `Result`, and the client just counts it.
+        Err(bank::NotTaken(account::InsufficientFunds { .. })) => Tally { ..tally, refused: tally.refused + 1 }
+        // No account is closed while the clients trade, so any other
+        // error means this program is wrong.
+        Err(error) => panic as "no account closes while the clients trade, but {error}"
+      }
+      pay(payer, payee, round + 1, rounds, next)
+    }
+  }
+}
+
+/// Adds up two tallies.
+fn combine(a: Tally, b: Tally) -> Tally {
+  Tally { moved: a.moved + b.moved, refused: a.refused + b.refused }
+}
+
+test "trading never creates or loses money" {
+  let assert Ok(ledger) = trade(["a", "b", "c"], 25)
+  let held = list::fold(ledger.balances, money::zero, fn(sum, (_, closing)) { sum + closing })
+  assert held == money::from_cents(opening_cents * 3)
+  // Every payment is either made or refused.
+  assert ledger.tally.moved + ledger.tally.refused == 3 * 25
+}
+
+test "a single customer pays themselves and keeps everything" {
+  let assert Ok(ledger) = trade(["solo"], 10)
+  assert ledger.balances == [("solo", money::from_cents(opening_cents))]
+}
+
+test "a lone client counts its payments and refusals" {
+  let assert Ok(tally) = {
+    use scope <- fiber::scope()
+    let ada = account::start(scope, "Ada", money::from_cents(12_00))
+    let grace = account::start(scope, "Grace", money::zero)
+    // Rounds 1 to 3 pay 10.00, 15.00 and 20.00. Only the first fits.
+    pay(ada, grace, 1, 3, nothing_yet)
+  }
+  assert tally == Tally { moved: 1, refused: 2 }
+}
+
+test "tallies add up field by field" {
+  assert combine(Tally { moved: 2, refused: 1 }, Tally { moved: 3, refused: 4 }) == Tally { moved: 5, refused: 5 }
+}

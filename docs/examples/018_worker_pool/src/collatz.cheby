@@ -1,0 +1,59 @@
+//! The Collatz stopping time, the job the pool runs in `main.cheby`.
+//!
+//! The Collatz sequence of a positive number halves it when it is even
+//! and triples it and adds 1 when it is odd. Every start that anyone
+//! has tried reaches 1 eventually. The stopping time is how many steps
+//! that takes. It jumps about wildly between neighbouring numbers, so
+//! the jobs in a pool take quite different times.
+//!
+//! Everything here is pure, and nothing here knows about fibers. Only
+//! the last test opens a scope, to catch a panic.
+
+import std::fiber
+
+/// Returns the number of steps the Collatz sequence of `n` takes to
+/// reach 1. Panics if `n` is not positive, because the sequence of 0
+/// never reaches 1 and that of a negative number may loop forever.
+fn stopping_time(n: Int) -> Int {
+  // Each step is a tail call, so a long sequence takes constant stack
+  // space.
+  fn step(current, steps) {
+    case {
+      current == 1 => steps
+      current % 2 == 0 => step(current / 2, steps + 1)
+      _ => step(3 * current + 1, steps + 1)
+    }
+  }
+  case {
+    // `panic` has type `Never`, so this arm fits where an `Int` is
+    // expected.
+    n < 1 => panic as "a Collatz sequence must start above 0, not at {n}"
+    _ => step(n, 0)
+  }
+}
+
+test "1 is already there" {
+  assert stopping_time(1) == 0
+}
+
+test "small numbers" {
+  // 6, 3, 10, 5, 16, 8, 4, 2, 1
+  assert stopping_time(6) == 8
+  assert stopping_time(7) == 16
+  assert stopping_time(16) == 4
+}
+
+test "27 climbs a long way before it falls" {
+  assert stopping_time(27) == 111
+  assert stopping_time(837799) == 524
+}
+
+test "a start below 1 panics" {
+  // A panic ends only the fiber it happens in, and a scope turns it
+  // into an `Err`, so a test can check that it happens.
+  let outcome = {
+    use _scope <- fiber::scope()
+    stopping_time(0)
+  }
+  let assert Err(_) = outcome
+}

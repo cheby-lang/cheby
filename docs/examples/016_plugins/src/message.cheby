@@ -1,0 +1,29 @@
+//! The messages that notifiers send.
+
+/// A message for the team. Only an urgent message gets through to
+/// notifiers that are for emergencies, such as text messages.
+type Message { subject: String, body: String, urgent: Bool }
+
+/// Returns an everyday message.
+fn routine(subject: String, body: String) -> Message {
+  Message { subject, body, urgent: False }
+}
+
+/// Returns a message that should reach someone at once.
+fn urgent(subject: String, body: String) -> Message {
+  Message { subject, body, urgent: True }
+}
+
+/// Makes `Message` satisfy `Show`. Urgent messages are marked, so the
+/// mark travels with the text through every notifier.
+fn show(note: Message) -> String {
+  case note.urgent {
+    True => "[urgent] {note.subject}: {note.body}"
+    False => "{note.subject}: {note.body}"
+  }
+}
+
+test "only urgent messages are marked" {
+  assert show(routine("Lunch", "Pizza at noon")) == "Lunch: Pizza at noon"
+  assert show(urgent("Disk full", "/var is at 98%")) == "[urgent] Disk full: /var is at 98%"
+}

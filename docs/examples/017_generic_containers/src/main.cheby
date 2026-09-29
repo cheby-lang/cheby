@@ -1,0 +1,154 @@
+//! Walks a small family tree twice: breadth first with a `Queue` and
+//! depth first with a `Stack`. At each step it prints the node it
+//! visits and the container of nodes still waiting:
+//!
+//! ```text
+//! Breadth first, with a queue:
+//!   visit Ada, waiting: queue [Ben, Cy]
+//!   visit Ben, waiting: queue [Cy, Dan, Eve]
+//!   ...
+//! Depth first, with a stack:
+//!   visit Ada, waiting: stack [Ben, Cy]
+//!   visit Ben, waiting: stack [Dan, Eve, Cy]
+//!   ...
+//! ```
+//!
+//! Both containers are generic, and neither says anything about trees.
+//! They can be printed because they satisfy `Show` for every item type
+//! that does, and `tree::Tree` does.
+//!
+//! This module is in the same package as `queue`, so it could build a
+//! `queue::Queue` with braces (D-151). It uses the functions instead,
+//! as another package would have to.
+
+import std::io
+import std::list
+import generic_containers::queue
+import generic_containers::stack
+import generic_containers::tree
+
+/// The family to walk. Ada's children are Ben and Cy, Ben's are Dan
+/// and Eve, and Cy's is Fay.
+const family: tree::Tree = tree::node("Ada", [
+  tree::node("Ben", [tree::leaf("Dan"), tree::leaf("Eve")]),
+  tree::node("Cy", [tree::leaf("Fay")]),
+])
+
+fn main() {
+  io::println("Breadth first, with a queue:")
+  breadth_first(family, Nil, fn(_, current, waiting) {
+    io::println("  " + step_line(current, waiting))
+  })
+  io::println("Depth first, with a stack:")
+  depth_first(family, Nil, fn(_, current, waiting) {
+    io::println("  " + step_line(current, waiting))
+  })
+  compare_queues()
+}
+
+/// Visits every node of `root` level by level, and from left to right
+/// within a level. For each node it calls `visit` with the result so
+/// far, the node and the queue of nodes still waiting, starting from
+/// `start`, and returns the last result.
+///
+/// `A` is whatever the caller builds up along the way. `main` only
+/// prints, so its `A` is `Nil`, and the tests collect names in a list.
+fn breadth_first<A>(
+  root: tree::Tree,
+  start: A,
+  visit: fn(A, tree::Tree, queue::Queue<tree::Tree>) -> A,
+) -> A {
+  fn step(waiting, acc) {
+    case queue::pop(waiting) {
+      None => acc
+      Some((tree::Tree { children, .. } as current, rest)) => {
+        // `queue::push` is generic. Passed as a value, it is
+        // instantiated for `tree::Tree`.
+        let next_waiting = list::fold(children, rest, queue::push)
+        step(next_waiting, visit(acc, current, next_waiting))
+      }
+    }
+  }
+  step(queue::from_list([root]), start)
+}
+
+/// Visits every node of `root`, going as deep as possible before
+/// moving right. Otherwise like `breadth_first`, with a stack in place
+/// of the queue.
+fn depth_first<A>(
+  root: tree::Tree,
+  start: A,
+  visit: fn(A, tree::Tree, stack::Stack<tree::Tree>) -> A,
+) -> A {
+  fn step(waiting, acc) {
+    case stack::pop(waiting) {
+      None => acc
+      Some((tree::Tree { children, .. } as current, rest)) => {
+        // The first child has to come off the stack first, so it goes
+        // on last.
+        let next_waiting = list::fold(list::reverse(children), rest, stack::push)
+        step(next_waiting, visit(acc, current, next_waiting))
+      }
+    }
+  }
+  step(stack::push(stack::new(), root), start)
+}
+
+/// Describes one step of a walk: the node visited and the nodes still
+/// waiting.
+///
+/// `C` is the container, and the bound `C: Show` is all this function
+/// needs from it (D-063), so one function serves both walks. `main`
+/// passes a `queue::Queue<tree::Tree>` and a `stack::Stack<tree::Tree>`.
+/// They meet the bound only through conditional conformance (D-064):
+/// `queue::show` and `stack::show` require `T: Show`, and `tree::Tree`
+/// satisfies it.
+fn step_line<C: Show>(current: tree::Tree, waiting: C) -> String {
+  "visit {current}, waiting: {waiting}"
+}
+
+/// Prints two queues that hold the same items but are not `==`. See
+/// `queue::same_items` for why.
+fn compare_queues() {
+  let pushed = queue::new() |> queue::push(1) |> queue::push(2)
+  let listed = queue::from_list([1, 2])
+  let equal = pushed == listed
+  let same = queue::same_items(pushed, listed)
+  io::println("{pushed} and {listed}: == is {equal}, same_items is {same}")
+}
+
+/// Adds the name of `current` to `names`. A walk's `visit` function
+/// for the tests. `C` is left open, so it fits both walks.
+fn add_name<C>(names: List<String>, current: tree::Tree, _waiting: C) -> List<String> {
+  [..names, current.name]
+}
+
+test "breadth first visits the tree level by level" {
+  assert breadth_first(family, [], add_name) == ["Ada", "Ben", "Cy", "Dan", "Eve", "Fay"]
+}
+
+test "depth first finishes each subtree before the next" {
+  assert depth_first(family, [], add_name) == ["Ada", "Ben", "Dan", "Eve", "Cy", "Fay"]
+}
+
+test "the queue holds exactly the nodes found but not yet visited" {
+  let lines = breadth_first(family, [], fn(found, current, waiting) {
+    [..found, step_line(current, waiting)]
+  })
+  assert lines == [
+    "visit Ada, waiting: queue [Ben, Cy]",
+    "visit Ben, waiting: queue [Cy, Dan, Eve]",
+    "visit Cy, waiting: queue [Dan, Eve, Fay]",
+    "visit Dan, waiting: queue [Eve, Fay]",
+    "visit Eve, waiting: queue [Fay]",
+    "visit Fay, waiting: queue []",
+  ]
+}
+
+test "a single node is visited with nothing waiting" {
+  // An empty queue fixes no item type, and `step_line` needs one to
+  // find its `show`, so the turbofish names it.
+  let empty = queue::new::<tree::Tree>()
+  assert step_line(tree::leaf("Gus"), empty) == "visit Gus, waiting: queue []"
+  assert breadth_first(tree::leaf("Gus"), [], add_name) == ["Gus"]
+}

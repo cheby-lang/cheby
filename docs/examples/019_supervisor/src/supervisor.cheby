@@ -1,0 +1,220 @@
+//! A small supervisor: it runs a piece of work, and when the work
+//! fails, it runs it again, up to a limit.
+//!
+//! Cheby has no exceptions to catch. A panic ends only the fiber it
+//! happens in, and comes back as an `Err` from the scope that fiber
+//! belongs to (D-040). So the supervisor runs each attempt as a
+//! worker fiber in a scope of its own, and a crash in the worker is
+//! just a `Result` to look at. The supervisor's own fiber carries on
+//! and decides whether to try again. This is what D-040 means by
+//! building supervision "on top of scopes": no special support from
+//! the runtime is needed.
+//!
+//! A worker can also fail by taking too long. Each attempt has a
+//! deadline, enforced with `fiber::timeout`, which cancels a
+//! worker that is still running when the time is up.
+//!
+//! The work is any function from the attempt number to a value, so
+//! `supervise` is generic over the type of that value. The attempt
+//! number lets a worker behave differently on each try, which is how
+//! the examples here fail in a reproducible way.
+
+import std::channel
+import std::duration
+import std::fiber
+import std::list
+import supervisor::clock
+
+/// How hard a supervisor tries.
+type Policy {
+  /// How many times the work may be restarted after the first attempt.
+  max_restarts: Int,
+  /// How long each attempt may run before it is cancelled.
+  deadline: duration::Duration,
+  /// The wait before the first restart, in milliseconds. Each later
+  /// restart waits twice as long as the one before.
+  backoff_ms: Int,
+}
+
+/// Why one attempt produced no value.
+type Failure {
+  /// The worker panicked with this message.
+  Crashed(String),
+  /// The worker was still running at the deadline, and was cancelled.
+  Overran,
+}
+
+/// What the supervisor does after a failure.
+type Decision {
+  /// Start the work again, after waiting this long.
+  RestartAfter(duration::Duration),
+  /// Stop trying.
+  GiveUp,
+}
+
+/// A restart, as reported to the caller of `supervise` before it
+/// happens.
+type Restart {
+  /// 1 for the first restart, 2 for the second, and so on.
+  number: Int,
+  /// Why the attempt before it failed.
+  cause: Failure,
+}
+
+/// The error of a supervisor that ran out of restarts.
+type GaveUp {
+  /// How many restarts were used, which is all of them.
+  restarts: Int,
+  /// Why the last attempt failed.
+  cause: Failure,
+}
+
+/// Runs `work` until an attempt succeeds, restarting it after every
+/// failure as long as `policy` allows. `work` is called with the
+/// attempt number, from 1. `on_restart` is called before each restart,
+/// from the supervisor's fiber.
+///
+/// Returns the value of the first successful attempt, or `GaveUp` once
+/// an attempt fails and no restarts are left.
+fn supervise<T>(policy: Policy, work: fn(Int) -> T, on_restart: fn(Restart)) -> Result<T, GaveUp> {
+  // `restarts` is how many restarts have happened so far. Each restart
+  // is a tail call, so the loop takes constant stack space however
+  // many attempts it makes.
+  fn step(restarts) {
+    case run_once(work, restarts + 1, policy.deadline) {
+      Ok(value) => Ok(value)
+      Err(failure) => case decide(policy, restarts) {
+        GiveUp => Err(GaveUp { restarts, cause: failure })
+        RestartAfter(delay) => {
+          on_restart(Restart { number: restarts + 1, cause: failure })
+          clock::sleep(delay)
+          step(restarts + 1)
+        }
+      }
+    }
+  }
+  step(0)
+}
+
+/// Decides what to do after an attempt fails, when `restarts` restarts
+/// have already happened. This is the whole restart policy, and it
+/// does not depend on why the attempt failed: a crash and an overrun
+/// both use up a restart.
+fn decide(policy: Policy, restarts: Int) -> Decision {
+  fn doubled(ms, times) {
+    case times {
+      0 => ms
+      _ => doubled(ms * 2, times - 1)
+    }
+  }
+  case {
+    restarts >= policy.max_restarts => GiveUp
+    _ => RestartAfter(duration::milliseconds(doubled(policy.backoff_ms, restarts)))
+  }
+}
+
+/// Runs attempt `number` of `work` as a worker fiber, and returns its
+/// value, or why it failed.
+priv fn run_once<T>(work: fn(Int) -> T, number: Int, deadline: duration::Duration) -> Result<T, Failure> {
+  // Two scopes nest here. The inner one belongs to the worker: if the
+  // worker panics, that scope cancels whatever else is in it and
+  // returns `Err`, and the panic goes no further (D-176). The outer
+  // one is opened by `fiber::timeout`: when the deadline passes, it
+  // cancels everything inside it, the inner scope and the worker
+  // included, and returns `TimedOut` once they have unwound (D-103).
+  let outcome = fiber::timeout(deadline, fn() {
+    use scope <- fiber::scope()
+    let worker = fiber::spawn(scope, fn() { work(number) })
+    // If the worker panics, the scope fails and this `join` never
+    // returns. The scope's `Err` reports the worker's panic (D-177).
+    fiber::join(worker)
+  })
+  case outcome {
+    Ok(Ok(value)) => Ok(value)
+    Ok(Err(crash)) => Err(Crashed(fiber::message(crash)))
+    Err(fiber::TimedOut) => Err(Overran)
+    // The worker's panic stops at the inner scope, so the timeout
+    // never sees one. Should it, it is a crash all the same.
+    Err(fiber::Panicked(crash)) => Err(Crashed(fiber::message(crash)))
+  }
+}
+
+/// Makes `Failure` satisfy `Show`, so a failure can be interpolated.
+fn show(failure: Failure) -> String {
+  case failure {
+    Crashed(message) => "crashed: {message}"
+    Overran => "missed its deadline"
+  }
+}
+
+/// A policy with short times, so that the tests run quickly.
+priv fn quick_policy(max_restarts: Int) -> Policy {
+  Policy { max_restarts, deadline: duration::milliseconds(50), backoff_ms: 1 }
+}
+
+/// Supervises `work` under `policy` and returns its result together
+/// with every restart it reported, in order.
+priv fn supervise_and_log<T>(policy: Policy, work: fn(Int) -> T) -> (Result<T, GaveUp>, List<Restart>) {
+  // Room for every restart, so reporting one never blocks.
+  let (log_tx, log_rx) = channel::new::<Restart>(policy.max_restarts)
+  let outcome = supervise(policy, work, fn(restart) {
+    let assert Ok(Nil) = channel::send(log_tx, restart)
+  })
+  // The closure holding `log_tx` was dropped when `supervise` returned,
+  // so the log is closed, and draining it does not block.
+  fn drain(found) {
+    case channel::receive(log_rx) {
+      Ok(restart) => drain([..found, restart])
+      Err(Nil) => found
+    }
+  }
+  (outcome, drain([]))
+}
+
+test "restarts wait longer each time, up to the limit" {
+  let policy = Policy { max_restarts: 3, deadline: duration::seconds(1), backoff_ms: 100 }
+  assert decide(policy, 0) == RestartAfter(duration::milliseconds(100))
+  assert decide(policy, 1) == RestartAfter(duration::milliseconds(200))
+  assert decide(policy, 2) == RestartAfter(duration::milliseconds(400))
+  assert decide(policy, 3) == GiveUp
+}
+
+test "a policy without restarts gives up at once" {
+  assert decide(quick_policy(0), 0) == GiveUp
+}
+
+test "work that succeeds is not restarted" {
+  let (outcome, restarts) = supervise_and_log(quick_policy(3), fn(attempt) { attempt * 10 })
+  assert outcome == Ok(10)
+  assert restarts == []
+}
+
+test "crashes and overruns are restarted until an attempt succeeds" {
+  let flaky = fn(attempt) {
+    case attempt {
+      1 => panic as "boom"
+      // Sleeping suspends the worker, so the deadline can cancel it on
+      // every target.
+      2 => {
+        clock::sleep(duration::seconds(10))
+        "too late"
+      }
+      _ => "done on attempt {attempt}"
+    }
+  }
+  let (outcome, restarts) = supervise_and_log(quick_policy(3), flaky)
+  assert outcome == Ok("done on attempt 3")
+  assert restarts == [Restart { number: 1, cause: Crashed("boom") }, Restart { number: 2, cause: Overran }]
+}
+
+test "the supervisor gives up when the restarts run out" {
+  let doomed = fn(_) -> Int { panic as "always" }
+  let (outcome, restarts) = supervise_and_log(quick_policy(2), doomed)
+  assert outcome == Err(GaveUp { restarts: 2, cause: Crashed("always") })
+  assert list::length(restarts) == 2
+}
+
+test "failures show as short explanations" {
+  assert show(Crashed("out of paper")) == "crashed: out of paper"
+  assert show(Overran) == "missed its deadline"
+}

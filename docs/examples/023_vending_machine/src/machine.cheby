@@ -1,0 +1,335 @@
+//! The vending machine itself, as a pure state machine.
+//!
+//! `step` takes the current state and one command, and returns the next
+//! state with what the machine does in response, such as dropping an
+//! item or paying back coins. It reads no input and prints nothing, so
+//! the tests below drive the machine through whole purchases directly.
+//! The driver in `main.cheby` does the reading and printing.
+//!
+//! The machine is in one of three states. It is idle when it has no
+//! credit, collecting once coins have gone in, and sold out when every
+//! slot is empty. A sold-out machine takes no coins until it is
+//! restocked.
+
+import std::list
+import std::map
+import std::map::{Map}
+import std::string
+import vending_machine::change
+import vending_machine::command
+
+/// The most items one slot holds.
+const capacity: Int = 10
+
+/// One slot of the machine and the items in it.
+type Slot {
+  /// The code typed to select the slot, such as `A1`.
+  code: String,
+  /// The name of the item in the slot.
+  name: String,
+  /// The price of one item, in cents.
+  price: Int,
+  /// How many items are left.
+  count: Int,
+}
+
+/// What the machine holds, apart from any credit.
+type Machine {
+  /// Every slot, by its code.
+  slots: Map<String, Slot>,
+  /// The money taken for the items sold so far, in cents.
+  takings: Int,
+}
+
+/// The state of the machine between two commands.
+type State {
+  /// No credit, and at least one slot has items.
+  Idle(Machine),
+  /// Coins worth this many cents have been inserted.
+  Collecting(Machine, Int),
+  /// Every slot is empty.
+  SoldOut(Machine),
+}
+
+/// What the machine does in response to a command.
+type Output {
+  /// A coin was taken, and the credit is now this many cents.
+  Credit(Int),
+  /// A coin the machine does not take, handed straight back.
+  Rejected(Int),
+  /// A coin handed straight back because everything is sold out.
+  NothingForSale(Int),
+  /// No slot has this code.
+  UnknownSlot(String),
+  /// The slot with the item of this name is empty.
+  SlotEmpty(String),
+  /// The credit is `missing` cents short of the price of `name`.
+  NeedMore { name: String, missing: Int },
+  /// The item of this name drops into the tray.
+  Dispensed(String),
+  /// These coins drop into the coin return, largest first.
+  Returned(List<Int>),
+  /// `cancel` without any credit.
+  NoCredit,
+  /// Restocking is refused while someone is paying.
+  Busy,
+  /// Restocking would overfill the slot of `name`, which has room for
+  /// `room` more items.
+  Overfull { name: String, room: Int },
+  /// A slot, after restocking it or in the menu.
+  Listing(Slot),
+}
+
+/// Builds a machine with `slots` and no takings. Panics if a price is
+/// not a positive multiple of 10 or a count does not fit in a slot.
+///
+/// Every coin is a multiple of 10, so with such prices every amount the
+/// machine owes is a multiple of 10 too, and the 10 coin can always
+/// make it up.
+fn new(slots: List<Slot>) -> Machine {
+  list::each(slots, fn(slot) {
+    assert slot.price > 0 && slot.price % 10 == 0 as "the price of {slot.code} is not a positive multiple of 10"
+    assert slot.count >= 0 && slot.count <= capacity as "the count of {slot.code} is not from 0 to {capacity}"
+  })
+  Machine {
+    slots: list::fold(slots, map::new(), fn(found, slot) { map::insert(found, slot.code, slot) }),
+    takings: 0,
+  }
+}
+
+/// Returns the state of `machine` with no credit in it: idle, or sold
+/// out if every slot is empty.
+fn ready(machine: Machine) -> State {
+  let stocked = machine.slots |> map::values |> list::any(fn(slot) { slot.count > 0 })
+  case stocked {
+    True => Idle(machine)
+    False => SoldOut(machine)
+  }
+}
+
+/// Handles `action` in `state`. Returns the next state and what the
+/// machine does, in order.
+fn step(state: State, action: command::Command) -> (State, List<Output>) {
+  // One arm per combination that behaves differently. An alternative
+  // such as `Idle(machine) | SoldOut(machine)` handles several states
+  // alike, and it may bind `machine` because every alternative binds
+  // it with the same type. The compiler checks that every state meets
+  // every command somewhere.
+  case state, action {
+    SoldOut(_), command::InsertCoin(cents) => (state, [NothingForSale(cents)])
+    Idle(machine), command::InsertCoin(cents) => insert(machine, 0, cents)
+    Collecting(machine, credit), command::InsertCoin(cents) => insert(machine, credit, cents)
+    Idle(machine) | SoldOut(machine), command::Select(code) => select(machine, 0, code)
+    Collecting(machine, credit), command::Select(code) => select(machine, credit, code)
+    Collecting(machine, credit), command::Cancel => (ready(machine), [Returned(pay(credit))])
+    Idle(_) | SoldOut(_), command::Cancel => (state, [NoCredit])
+    Collecting(_, _), command::Restock(_, _) => (state, [Busy])
+    Idle(machine) | SoldOut(machine), command::Restock(code, count) => restock(machine, code, count)
+    Idle(machine) | SoldOut(machine) | Collecting(machine, _), command::ShowMenu => (state, menu(machine))
+  }
+}
+
+/// Takes the coin `cents` into a machine that already has `credit`.
+priv fn insert(machine: Machine, credit: Int, cents: Int) -> (State, List<Output>) {
+  case {
+    change::is_coin(cents) => {
+      let total = credit + cents
+      (Collecting(machine, total), [Credit(total)])
+    }
+    _ => (waiting(machine, credit), [Rejected(cents)])
+  }
+}
+
+/// Sells the item in the slot `code` for `credit`, if it can.
+priv fn select(machine: Machine, credit: Int, code: String) -> (State, List<Output>) {
+  case map::get(machine.slots, code) {
+    None => (waiting(machine, credit), [UnknownSlot(code)])
+    Some(slot) => buy(machine, credit, slot)
+  }
+}
+
+/// Sells the item in `slot` for `credit`, if there is one and the
+/// credit covers its price.
+priv fn buy(machine: Machine, credit: Int, slot: Slot) -> (State, List<Output>) {
+  // Each question is a plain condition, so a `case` without a subject
+  // asks them in order and takes the first that holds. The credit is
+  // kept when the sale does not happen, so the user can choose again.
+  case {
+    slot.count == 0 => (waiting(machine, credit), [SlotEmpty(slot.name)])
+    credit < slot.price => {
+      let missing = slot.price - credit
+      (waiting(machine, credit), [NeedMore { name: slot.name, missing }])
+    }
+    // Exact money: nothing to pay back.
+    credit == slot.price => (ready(sell(machine, slot)), [Dispensed(slot.name)])
+    _ => (ready(sell(machine, slot)), [Dispensed(slot.name), Returned(pay(credit - slot.price))])
+  }
+}
+
+/// Returns `machine` after one item from `slot` is sold.
+priv fn sell(machine: Machine, slot: Slot) -> Machine {
+  let taken = Slot { ..slot, count: slot.count - 1 }
+  Machine {
+    slots: map::insert(machine.slots, slot.code, taken),
+    takings: machine.takings + slot.price,
+  }
+}
+
+/// Adds `count` items, at least 1, to the slot `code`, unless that
+/// would overfill it. Restocking a sold-out machine makes it idle
+/// again.
+priv fn restock(machine: Machine, code: String, count: Int) -> (State, List<Output>) {
+  case map::get(machine.slots, code) {
+    None => (ready(machine), [UnknownSlot(code)])
+    Some(slot) => case {
+      slot.count + count > capacity => {
+        let room = capacity - slot.count
+        (ready(machine), [Overfull { name: slot.name, room }])
+      }
+      _ => {
+        let filled = Slot { ..slot, count: slot.count + count }
+        let stocked = Machine { ..machine, slots: map::insert(machine.slots, code, filled) }
+        (ready(stocked), [Listing(filled)])
+      }
+    }
+  }
+}
+
+/// Lists every slot, in the order of their codes.
+priv fn menu(machine: Machine) -> List<Output> {
+  // A `Map` has no order of its own (D-093), so the slots are sorted
+  // by code to list them the same way on every run.
+  machine.slots
+  |> map::to_sorted_list
+  |> list::map(fn((_, slot)) { Listing(slot) })
+}
+
+/// Returns the state of `machine` with `credit` still in it.
+priv fn waiting(machine: Machine, credit: Int) -> State {
+  case credit {
+    0 => ready(machine)
+    _ => Collecting(machine, credit)
+  }
+}
+
+/// Returns the coins that pay back `amount`.
+priv fn pay(amount: Int) -> List<Int> {
+  // `new` makes every price a multiple of 10, and credit only grows by
+  // whole coins, so `amount` is a multiple of 10 and never negative.
+  let assert Some(coins) = change::greedy(amount) as "cannot pay back {amount} in coins"
+  coins
+}
+
+/// Makes `Output` satisfy `Show`, so the driver can print what the
+/// machine does by interpolating `{output}`.
+fn show(output: Output) -> String {
+  // Interpolation takes only names and fields, so amounts formatted
+  // with `change::format` are joined with `+` instead.
+  case output {
+    Credit(cents) => "credit " + change::format(cents)
+    Rejected(cents) => "rejected " + change::format(cents) + ", not a coin this machine takes"
+    NothingForSale(cents) => "everything is sold out, returned " + change::format(cents)
+    UnknownSlot(code) => "there is no slot {code}"
+    SlotEmpty(name) => "{name} is sold out"
+    NeedMore { name, missing } => name + " needs " + change::format(missing) + " more"
+    Dispensed(name) => "dispensed {name}"
+    Returned(coins) => "returned " + string::join(list::map(coins, change::format), " + ")
+    NoCredit => "there is no credit to return"
+    Busy => "finish or cancel the purchase before restocking"
+    Overfull { name, room } => "{name} has room for only {room} more"
+    Listing(slot) => {
+      let price = change::format(slot.price)
+      "{slot.code}  {slot.name}  {price}  ({slot.count} left)"
+    }
+  }
+}
+
+/// A small machine for the tests: two colas, and a slot of crisps that
+/// is already empty.
+priv fn sample() -> Machine {
+  new([
+    Slot { code: "A1", name: "Cola", price: 150, count: 2 },
+    Slot { code: "B1", name: "Crisps", price: 120, count: 0 },
+  ])
+}
+
+test "coins add up, and other amounts are handed back" {
+  let (first, first_outputs) = step(Idle(sample()), command::InsertCoin(100))
+  assert first == Collecting(sample(), 100)
+  assert first_outputs == [Credit(100)]
+  let (second, second_outputs) = step(first, command::InsertCoin(50))
+  assert second == Collecting(sample(), 150)
+  assert second_outputs == [Credit(150)]
+  assert step(second, command::InsertCoin(5)) == (second, [Rejected(5)])
+  assert step(Idle(sample()), command::InsertCoin(-50)) == (Idle(sample()), [Rejected(-50)])
+}
+
+test "exact money buys an item with no change" {
+  let (next, outputs) = step(Collecting(sample(), 150), command::Select("A1"))
+  assert outputs == [Dispensed("Cola")]
+  let assert Idle(sold) = next
+  assert sold.takings == 150
+  let assert Some(slot) = map::get(sold.slots, "A1")
+  assert slot.count == 1
+}
+
+test "too much money buys an item and pays back the change" {
+  let (_, outputs) = step(Collecting(sample(), 400), command::Select("A1"))
+  assert outputs == [Dispensed("Cola"), Returned([200, 50])]
+}
+
+test "a failed selection keeps the credit" {
+  let machine = sample()
+  assert step(Collecting(machine, 100), command::Select("A1")) == (
+    Collecting(machine, 100),
+    [NeedMore { name: "Cola", missing: 50 }],
+  )
+  assert step(Collecting(machine, 200), command::Select("B1")) == (Collecting(machine, 200), [SlotEmpty("Crisps")])
+  assert step(Collecting(machine, 200), command::Select("Z9")) == (Collecting(machine, 200), [UnknownSlot("Z9")])
+  assert step(Idle(machine), command::Select("A1")) == (Idle(machine), [NeedMore { name: "Cola", missing: 150 }])
+}
+
+test "cancel pays back the credit in the fewest coins" {
+  let machine = sample()
+  assert step(Collecting(machine, 370), command::Cancel) == (Idle(machine), [Returned([200, 100, 50, 20])])
+  assert step(Idle(machine), command::Cancel) == (Idle(machine), [NoCredit])
+}
+
+test "selling the last item leaves the machine sold out until it is restocked" {
+  let one_left = new([Slot { code: "A1", name: "Cola", price: 150, count: 1 }])
+  let (empty, sale) = step(Collecting(one_left, 200), command::Select("A1"))
+  assert sale == [Dispensed("Cola"), Returned([50])]
+  let assert SoldOut(_) = empty
+  assert step(empty, command::InsertCoin(100)) == (empty, [NothingForSale(100)])
+  let (refilled, outputs) = step(empty, command::Restock("A1", 4))
+  assert outputs == [Listing(Slot { code: "A1", name: "Cola", price: 150, count: 4 })]
+  let assert Idle(_) = refilled
+}
+
+test "restocking waits for the purchase and never overfills a slot" {
+  let machine = sample()
+  assert step(Collecting(machine, 100), command::Restock("A1", 3)) == (Collecting(machine, 100), [Busy])
+  assert step(Idle(machine), command::Restock("A1", 9)) == (Idle(machine), [Overfull { name: "Cola", room: 8 }])
+  assert step(Idle(machine), command::Restock("Z9", 1)) == (Idle(machine), [UnknownSlot("Z9")])
+}
+
+test "a machine with only empty slots starts sold out" {
+  let empty = new([Slot { code: "A1", name: "Cola", price: 150, count: 0 }])
+  assert ready(empty) == SoldOut(empty)
+  assert ready(sample()) == Idle(sample())
+}
+
+test "the menu lists every slot in the order of their codes" {
+  let (_, outputs) = step(Collecting(sample(), 50), command::ShowMenu)
+  assert outputs == [
+    Listing(Slot { code: "A1", name: "Cola", price: 150, count: 2 }),
+    Listing(Slot { code: "B1", name: "Crisps", price: 120, count: 0 }),
+  ]
+}
+
+test "outputs show as messages for the user" {
+  assert show(Credit(150)) == "credit 1.50"
+  assert show(Returned([200, 50])) == "returned 2.00 + 0.50"
+  assert show(NeedMore { name: "Cola", missing: 50 }) == "Cola needs 0.50 more"
+  assert show(Listing(Slot { code: "A1", name: "Cola", price: 150, count: 2 })) == "A1  Cola  1.50  (2 left)"
+}

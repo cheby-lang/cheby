@@ -1,0 +1,70 @@
+//! Computes Collatz stopping times (see `collatz.cheby`) on a pool of
+//! worker fibers (see `pool.cheby`), twice.
+//!
+//! The first run has only valid starts. The workers take the jobs in
+//! whatever order they get to them and finish them in any order, but
+//! the results are printed in the order of the starts, every time.
+//!
+//! The second run has a start of 0 among the others, and the job for it
+//! panics. A panic ends only the fiber it happens in: the pool's scope
+//! cancels the other workers and turns the panic into a `fiber::Panic`
+//! value, which `main` prints like any other result before it returns
+//! normally.
+
+import std::fiber
+import std::io
+import std::list
+import worker_pool::collatz
+import worker_pool::pool
+
+/// How many workers share the jobs.
+const worker_count: Int = 4
+
+/// Starts whose stopping times vary a lot, from 0 steps for 1 to 524
+/// for 837799.
+const starts: List<Int> = [27, 97, 871, 6171, 77031, 837799, 9, 703, 7, 1]
+
+/// The same starts with a 0 in the middle, which makes its job panic.
+const faulty_starts: List<Int> = [27, 97, 871, 6171, 0, 77031, 837799, 9, 703, 7, 1]
+
+fn main() {
+  report("All starts are positive", pool::map(starts, worker_count, timed))
+  report("One start is 0", pool::map(faulty_starts, worker_count, timed))
+}
+
+/// The job: returns `start` together with its stopping time, so each
+/// result says which start it belongs to.
+fn timed(start: Int) -> (Int, Int) {
+  (start, collatz::stopping_time(start))
+}
+
+/// Prints the stopping times of a run, or the panic that ended it.
+fn report(title: String, outcome: Result<List<(Int, Int)>, fiber::Panic>) {
+  case outcome {
+    Ok(times) => {
+      io::println("{title}:")
+      list::each(times, fn((start, steps)) { io::println("  {start} reaches 1 after {steps} steps") })
+      io::println("")
+    }
+    // `fiber::Panic` holds the message and source location of the
+    // first panic in the pool. The workers cancelled because of it are
+    // not reported (D-178). Debug printing works for every type.
+    Err(failure) => {
+      io::println("{title}: the pool stopped because a job panicked.")
+      io::println("  {failure:?}")
+    }
+  }
+}
+
+test "every start comes back with its own stopping time" {
+  assert pool::map([7, 6, 1], 2, timed) == Ok([(7, 16), (6, 8), (1, 0)])
+}
+
+test "the valid starts all succeed" {
+  let assert Ok(times) = pool::map(starts, worker_count, timed)
+  assert list::map(times, fn((start, _)) { start }) == starts
+}
+
+test "the faulty starts fail with a panic" {
+  let assert Err(_) = pool::map(faulty_starts, worker_count, timed)
+}

@@ -1,0 +1,151 @@
+//! Computes the value of an expression.
+//!
+//! Evaluation walks the tree with one `case` arm per kind of node. Each
+//! step that can fail returns a `Result`, and `use` with `result::try`
+//! passes the first error straight up, so the arms read as the plain
+//! arithmetic they do.
+//!
+//! Arithmetic on `Int` panics on overflow and on division by zero. A
+//! calculator should report both instead of crashing, so this module
+//! checks for zero itself and uses the checked functions of `std::int`,
+//! which return `None` instead of panicking.
+
+import std::int
+import std::map
+import std::result
+import expression_evaluator::expr
+
+/// The variables defined so far and their values. A map is immutable,
+/// so defining a variable builds a new map, and the old one stays as it
+/// was.
+type Env = map::Map<String, Int>
+
+/// Why an expression has no value.
+type EvalError {
+  /// The expression uses a variable that has not been defined.
+  UnknownVariable(String),
+  /// The right operand of a `/`, which evaluated to 0.
+  DivisionByZero(expr::Expr),
+  /// The operation whose result does not fit in an `Int`.
+  Overflow(expr::Expr),
+}
+
+/// Computes the value of `node`, looking its variables up in `env`.
+/// Operands are evaluated left to right, and the first error wins.
+///
+/// The recursive calls are not tail calls, so the stack grows with how
+/// deeply the expression is nested, but a single line never nests
+/// deeply enough for that to matter.
+fn evaluate(node: expr::Expr, env: Env) -> Result<Int, EvalError> {
+  case node {
+    expr::Number(n) => Ok(n)
+    expr::Variable(name) => case map::get(env, name) {
+      Some(value) => Ok(value)
+      None => Err(UnknownVariable(name))
+    }
+    expr::Negate(inner) => {
+      use value <- result::try(evaluate(inner, env))
+      // `-value` overflows for the smallest `Int`, which has no
+      // positive counterpart, so negation is checked like subtraction.
+      checked(apply(expr::Subtract, 0, value), node)
+    }
+    expr::Binary(op, left, right) => {
+      use a <- result::try(evaluate(left, env))
+      use b <- result::try(evaluate(right, env))
+      case op, b {
+        expr::Divide, 0 => Err(DivisionByZero(right))
+        _, _ => checked(apply(op, a, b), node)
+      }
+    }
+  }
+}
+
+/// Applies `op` to `a` and `b`, or returns `None` if the result does not
+/// fit in an `Int`. Division truncates toward zero, like `/` on `Int`.
+priv fn apply(op: expr::Op, a: Int, b: Int) -> Option<Int> {
+  case op {
+    expr::Add => int::checked_add(a, b)
+    expr::Subtract => int::checked_sub(a, b)
+    expr::Multiply => int::checked_mul(a, b)
+    expr::Divide => int::checked_div(a, b)
+  }
+}
+
+/// Turns the result of `apply` into a `Result`, blaming `node` when
+/// there is none.
+priv fn checked(outcome: Option<Int>, node: expr::Expr) -> Result<Int, EvalError> {
+  case outcome {
+    Some(n) => Ok(n)
+    None => Err(Overflow(node))
+  }
+}
+
+/// Makes `EvalError` satisfy `Show`. The expressions inside the errors
+/// print with `expr::show`, so the user sees the part of the line that
+/// failed, written the way the parser read it.
+fn show(error: EvalError) -> String {
+  case error {
+    UnknownVariable(name) => "unknown variable {name}"
+    // Saying that `0` is 0 would be no help.
+    DivisionByZero(expr::Number(_)) => "division by zero"
+    DivisionByZero(divisor) => "division by zero: {divisor} is 0"
+    Overflow(operation) => "the result of {operation} is too large"
+  }
+}
+
+test "numbers, operators and negation compute as usual" {
+  let env = map::new()
+  let seven = expr::Number(7)
+  let two = expr::Number(2)
+  assert evaluate(expr::Binary(expr::Add, seven, two), env) == Ok(9)
+  assert evaluate(expr::Binary(expr::Subtract, two, seven), env) == Ok(-5)
+  assert evaluate(expr::Binary(expr::Multiply, seven, two), env) == Ok(14)
+  assert evaluate(expr::Negate(expr::Negate(seven)), env) == Ok(7)
+}
+
+test "division truncates toward zero" {
+  let env = map::new()
+  assert evaluate(expr::Binary(expr::Divide, expr::Number(7), expr::Number(2)), env) == Ok(3)
+  assert evaluate(expr::Binary(expr::Divide, expr::Negate(expr::Number(7)), expr::Number(2)), env) == Ok(-3)
+}
+
+test "variables are looked up in the environment" {
+  let env = map::insert(map::insert(map::new(), "width", 6), "height", 7)
+  let area = expr::Binary(expr::Multiply, expr::Variable("width"), expr::Variable("height"))
+  assert evaluate(area, env) == Ok(42)
+}
+
+test "an unknown variable is an error, and the leftmost one is reported" {
+  let env = map::insert(map::new(), "x", 1)
+  let sum = expr::Binary(expr::Add, expr::Variable("y"), expr::Variable("z"))
+  assert evaluate(sum, env) == Err(UnknownVariable("y"))
+  assert evaluate(expr::Negate(expr::Variable("x")), env) == Ok(-1)
+}
+
+test "division by zero is an error that names the divisor" {
+  let env = map::insert(map::new(), "n", 3)
+  let n = expr::Variable("n")
+  let difference = expr::Binary(expr::Subtract, n, n)
+  assert evaluate(expr::Binary(expr::Divide, n, difference), env) == Err(DivisionByZero(difference))
+  assert evaluate(expr::Binary(expr::Divide, n, expr::Number(0)), env) == Err(DivisionByZero(expr::Number(0)))
+}
+
+test "a result too large for an Int is an error, not a panic" {
+  // Each operand is small enough to be exact on JS too, where an `Int`
+  // must stay within 2^53 - 1, but the product does not fit anywhere.
+  let big = expr::Number(4_000_000_000)
+  let square = expr::Binary(expr::Multiply, big, big)
+  assert evaluate(square, map::new()) == Err(Overflow(square))
+  let larger = expr::Binary(expr::Add, expr::Number(1), square)
+  assert evaluate(larger, map::new()) == Err(Overflow(square))
+}
+
+test "evaluation errors show as messages for the user" {
+  let n = expr::Variable("n")
+  let difference = expr::Binary(expr::Subtract, n, n)
+  let big = expr::Number(4_000_000_000)
+  assert show(UnknownVariable("y")) == "unknown variable y"
+  assert show(DivisionByZero(expr::Number(0))) == "division by zero"
+  assert show(DivisionByZero(difference)) == "division by zero: n - n is 0"
+  assert show(Overflow(expr::Binary(expr::Multiply, big, big))) == "the result of 4000000000 * 4000000000 is too large"
+}

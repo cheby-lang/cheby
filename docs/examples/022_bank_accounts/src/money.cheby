@@ -1,0 +1,126 @@
+//! Amounts of money, counted in whole cents.
+//!
+//! Money is never a `Float`: `0.1 + 0.2` is not `0.3` in binary
+//! floating point, and a bank must not lose a cent to rounding. An
+//! amount is a whole number of cents in an `Int`, wrapped in a type of
+//! its own so that it cannot be mixed up with other numbers, such as a
+//! count of transfers.
+//!
+//! This module declares `add`, `sub` and `compare` with exactly the
+//! signatures of the `Add`, `Sub` and `Compare` interfaces from
+//! `std::ops`, so `a + b`, `a - b` and `a < b` work on amounts. There
+//! is no `mul` or `div`, because the product of two amounts means
+//! nothing, and without them `a * b` is a compile error.
+//!
+//! `Money` is `pub` but not `exposed` (ADR-0016). Other packages can
+//! name the type, pass amounts around and use the functions below, but
+//! they cannot build a `Money` from a bare `Int`, or take the cents
+//! out of one, except through `from_cents` and `to_cents`. The other
+//! modules of this package could use the constructor, because a type
+//! is opaque only to other packages (D-151). They use the functions
+//! anyway.
+
+import std::int
+import std::string
+
+/// An amount of money in cents. It may be negative, as the difference
+/// of two amounts can be.
+pub type Money { Money(Int) }
+
+/// No money at all.
+pub const zero: Money = Money(0)
+
+/// Returns the amount of `amount` cents.
+pub fn from_cents(amount: Int) -> Money {
+  Money(amount)
+}
+
+/// Returns the number of cents in `amount`.
+pub fn to_cents(amount: Money) -> Int {
+  // `Money` has one variant, so this pattern is irrefutable and a
+  // plain `let` can take it apart.
+  let Money(cents) = amount
+  cents
+}
+
+/// Makes `Money` satisfy `Add`, so `a + b` calls this function. Like
+/// all `Int` arithmetic, it panics on overflow instead of wrapping
+/// round to a negative balance.
+pub fn add(a: Money, b: Money) -> Money {
+  let Money(x) = a
+  let Money(y) = b
+  // `x` and `y` are plain `Int`s, so this `+` is the built-in one.
+  Money(x + y)
+}
+
+/// Makes `Money` satisfy `Sub`, so `a - b` calls this function.
+pub fn sub(a: Money, b: Money) -> Money {
+  let Money(x) = a
+  let Money(y) = b
+  Money(x - y)
+}
+
+/// Makes `Money` satisfy `Compare`, so `a < b`, `a >= b` and the other
+/// comparisons work on amounts.
+pub fn compare(a: Money, b: Money) -> Order {
+  let Money(x) = a
+  let Money(y) = b
+  int::compare(x, y)
+}
+
+/// Makes `Money` satisfy `Show`, so an amount can be interpolated as
+/// `{amount}`. It shows as units, a dot and exactly two digits of
+/// cents: `12.34`, `0.05`, `-3.10`.
+pub fn show(amount: Money) -> String {
+  let Money(cents) = amount
+  case {
+    cents < 0 => "-" + digits(-cents)
+    _ => digits(cents)
+  }
+}
+
+/// Returns `amount` with a year's interest at `rate_percent` percent
+/// added.
+///
+/// Not written yet. `todo` has type `Never` (D-161), which
+/// takes the expected type, here the declared result `Money` (D-235),
+/// so the function type-checks and the package builds. The
+/// compiler warns about every `todo` it compiles, whether or not it is
+/// ever reached (D-068), so the gap cannot be forgotten,
+/// and `--deny-warnings` in CI turns the warning into a failed build.
+/// A call that reaches it panics, saying the code is not implemented
+/// and giving the message. Nothing in this package calls it.
+pub fn apply_interest(amount: Money, rate_percent: Int) -> Money {
+  // The message is an ordinary `String` expression, so it may
+  // interpolate the arguments. Using them here also keeps them from
+  // being reported as unused parameters.
+  todo as "interest on {amount} at {rate_percent}% is not implemented yet"
+}
+
+/// Formats a number of cents that is not negative.
+priv fn digits(cents: Int) -> String {
+  let units = cents / 100
+  let remainder = cents % 100
+  let padded = string::pad_start("{remainder}", 2, "0")
+  "{units}.{padded}"
+}
+
+test "amounts add and subtract to the cent" {
+  assert from_cents(1_050) + from_cents(275) == from_cents(1_325)
+  assert from_cents(100) - from_cents(250) == from_cents(-150)
+  assert to_cents(from_cents(7) + zero) == 7
+}
+
+test "amounts compare by their cents" {
+  assert from_cents(5) < from_cents(10)
+  assert from_cents(-1) < zero
+  assert from_cents(10) >= from_cents(10)
+}
+
+test "amounts show as units and two digits of cents" {
+  assert show(from_cents(1_234)) == "12.34"
+  assert show(from_cents(5)) == "0.05"
+  assert show(from_cents(100_000)) == "1000.00"
+  assert show(from_cents(-310)) == "-3.10"
+  assert show(zero) == "0.00"
+}

@@ -1,0 +1,134 @@
+//! Sends a few messages to a team through a mix of notifiers: email,
+//! text messages and logs.
+//!
+//! The notifiers have different types, declared in different modules,
+//! so they can share one list only as `dyn notifier::Notifier` values.
+//! Each value carries the functions of its own type, and a call through
+//! the interface picks them at run time. An on-call rota, where every
+//! entry is a text message, is a plain `List<sms::Sms>` instead, and
+//! goes through the same generic `notifier::broadcast` with its type
+//! known when the program is compiled.
+
+import std::io
+import std::list
+import std::string
+import plugins::email
+import plugins::log
+import plugins::message
+import plugins::notifier
+import plugins::sms
+
+/// The messages of the day, in the order they are sent.
+const messages: List<message::Message> = [
+  message::routine("Lunch", "Pizza at noon"),
+  message::urgent("Disk full", "/var is at 98%"),
+]
+
+fn main() {
+  let targets = notifier::register(team(), log::new("audit"))
+  let names = describe(targets)
+  io::println("Notifiers: {names}")
+  list::each(messages, fn(note) {
+    io::println("")
+    io::println("Sending {note}")
+    list::each(report(targets, note), io::println)
+  })
+  io::println("")
+  page_rota(message::urgent("Site down", "The shop returns 502"))
+}
+
+/// Returns the team's notifiers.
+///
+/// This is a function and not a constant, because a constant cannot
+/// hold `dyn` values: each one carries a table of functions. The
+/// declared result type makes every element of the list a
+/// `dyn notifier::Notifier` as it is checked, so the three types can
+/// share the list. Without an expected type nothing converts, so
+/// `let mixed = [email::new(address), sms::new(number)]` would be a
+/// type mismatch.
+fn team() -> List<dyn notifier::Notifier> {
+  [email::new("ops@example.com"), sms::new("+44 20 7946 0000"), log::new("ops")]
+}
+
+/// Lists what the notifiers of `targets` are, separated by commas.
+fn describe(targets: List<dyn notifier::Notifier>) -> String {
+  // `dyn notifier::Notifier` satisfies `Show`, which `Notifier` embeds,
+  // so `{target}` works and calls the `show` of the value's own type.
+  targets
+  |> list::map(fn(target) { "{target}" })
+  |> string::join(_, ", ")
+}
+
+/// Sends `note` through each notifier of `targets` and returns one line
+/// per notifier, saying what it sent or that it skipped the message.
+fn report(targets: List<dyn notifier::Notifier>, note: message::Message) -> List<String> {
+  // `notifier::deliver` is generic, and here its `N` is
+  // `dyn notifier::Notifier`, which satisfies `Notifier` itself.
+  list::map(targets, fn(target) {
+    case notifier::deliver(target, note) {
+      Some(text) => "  sent: {text}"
+      None => "  skipped by {target}"
+    }
+  })
+}
+
+/// Texts `note` to everyone on call.
+fn page_rota(note: message::Message) {
+  // Every entry has the same type, so the list needs no `dyn`. In
+  // `notifier::broadcast`, `N` is `sms::Sms`, and the calls inside it
+  // go to `sms::accepts` and `sms::notify` through the bound.
+  let rota = [sms::new("+44 20 7946 0001"), sms::new("+44 20 7946 0002")]
+  io::println("Paging the on-call rota with {note}")
+  list::each(notifier::broadcast(rota, note), fn(text) { io::println("  {text}") })
+}
+
+test "a routine message skips the text notifier" {
+  assert report(team(), message::routine("Lunch", "Pizza at noon")) == [
+    "  sent: email to ops@example.com: Lunch: Pizza at noon",
+    "  skipped by text to +44 20 7946 0000",
+    "  sent: [ops] Lunch: Pizza at noon",
+  ]
+}
+
+test "an urgent message goes through every notifier" {
+  let note = message::urgent("Disk full", "/var is at 98%")
+  assert notifier::broadcast(team(), note) == [
+    "email to ops@example.com: [urgent] Disk full: /var is at 98%",
+    "text to +44 20 7946 0000: Disk full",
+    "[ops] [urgent] Disk full: /var is at 98%",
+  ]
+}
+
+test "register adds a notifier at the end" {
+  let targets = notifier::register(team(), log::new("audit"))
+  assert list::length(targets) == 4
+  assert describe(targets) == "email to ops@example.com, text to +44 20 7946 0000, log ops, log audit"
+}
+
+test "a rota of one type is broadcast to without dyn" {
+  let rota = [sms::new("+44 20 7946 0001"), sms::new("+44 20 7946 0002")]
+  assert notifier::broadcast(rota, message::routine("Lunch", "Pizza at noon")) == []
+  assert notifier::broadcast(rota, message::urgent("Site down", "The shop returns 502")) == [
+    "text to +44 20 7946 0001: Site down",
+    "text to +44 20 7946 0002: Site down",
+  ]
+}
+
+test "an interface function called on a concrete type is that type's function" {
+  let inbox = email::new("ops@example.com")
+  let note = message::routine("Lunch", "Pizza at noon")
+  // The interface is named through its module. For an `email::Email`,
+  // the call resolves to `email::notify` when the program is compiled.
+  assert notifier::Notifier::notify(inbox, note) == email::notify(inbox, note)
+  assert notifier::deliver(inbox, note) == Some(email::notify(inbox, note))
+}
+
+test "dyn values are equal only with the same type and equal values" {
+  let first: dyn notifier::Notifier = log::new("ops")
+  let second: dyn notifier::Notifier = log::new("ops")
+  let other: dyn notifier::Notifier = email::new("ops")
+  assert first == second
+  // `Log` and `Email` both hold one `String`, here the same one, but
+  // they are different types, so their `dyn` values differ.
+  assert first != other
+}

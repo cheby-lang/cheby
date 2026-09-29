@@ -1,0 +1,230 @@
+//! Turns the tokens of one line into a statement.
+//!
+//! A line is either `let name = expression` or an expression on its
+//! own. Expressions are parsed by recursive descent, with precedence
+//! climbing for the binary operators: `expression` reads one operand,
+//! and `climb` then keeps taking operators that bind at least as tightly
+//! as its `min` argument, parsing the right operand of each with a
+//! higher `min`. One function covers every precedence level, and the levels
+//! come from `expr::precedence`, which printing uses too.
+//!
+//! Each parsing function takes the tokens not read yet and returns what
+//! it parsed together with the tokens after it. The lexer ends every
+//! line with an `End` token and no function reads past it, so there is
+//! always a next token to look at, and to blame in an error.
+//!
+//! Chains of operators are read by tail calls. Parentheses and unary
+//! minus are not: every level of nesting uses a few more stack frames.
+
+import std::result
+import expression_evaluator::expr
+import expression_evaluator::lexer
+
+/// A parsed line.
+type Statement {
+  /// `let name = value` defines a variable, or gives it a new value.
+  Assign(String, expr::Expr),
+  /// Any other line is an expression whose value is printed.
+  Evaluate(expr::Expr),
+}
+
+/// Why a line is not a statement, and the position of the token where
+/// that became clear.
+type ParseError { position: Int, problem: Problem }
+
+/// What is wrong with the line.
+type Problem {
+  /// The token of this kind came where something else was expected.
+  /// The `String` describes what may come there.
+  Expected(String, lexer::Kind),
+  /// The `(` at this position is not closed before the token of this
+  /// kind.
+  Unclosed(Int, lexer::Kind),
+}
+
+/// What a parsing step returns: the expression it read and the tokens
+/// after it.
+priv type Parsed = Result<(expr::Expr, List<lexer::Token>), ParseError>
+
+/// What an operand may start with, for error messages.
+const operand_description: String = "a number, a name, \"-\" or \"(\""
+
+/// Parses the tokens of one line.
+fn parse(tokens: List<lexer::Token>) -> Result<Statement, ParseError> {
+  case tokens {
+    [
+      lexer::Token { kind: lexer::Let, .. },
+      lexer::Token { kind: lexer::Name(name), .. },
+      lexer::Token { kind: lexer::Equals, .. },
+      ..rest
+    ] => {
+      use value <- result::try(whole_line(rest))
+      Ok(Assign(name, value))
+    }
+    // The arms are tried in order, so these two only see a `let` line
+    // that the first arm rejected.
+    [lexer::Token { kind: lexer::Let, .. }, lexer::Token { kind: lexer::Name(_), .. }, ..rest] => fail(rest, "\"=\"")
+    [lexer::Token { kind: lexer::Let, .. }, ..rest] => fail(rest, "a name")
+    _ => {
+      use value <- result::try(whole_line(tokens))
+      Ok(Evaluate(value))
+    }
+  }
+}
+
+/// Parses an expression that must fill the rest of the line.
+priv fn whole_line(tokens: List<lexer::Token>) -> Result<expr::Expr, ParseError> {
+  // Every precedence is above 0, so `min` 0 lets every operator in.
+  use (value, rest) <- result::try(expression(tokens, 0))
+  case rest {
+    [lexer::Token { kind: lexer::End, .. }] => Ok(value)
+    _ => fail(rest, "an operator or the end of the line")
+  }
+}
+
+/// Parses an expression whose binary operators, outside parentheses,
+/// all have a precedence of at least `min`.
+priv fn expression(tokens: List<lexer::Token>, min: Int) -> Parsed {
+  use (first, rest) <- result::try(operand(tokens))
+  climb(first, rest, min)
+}
+
+/// Extends `left` with each operator at the start of `tokens` whose
+/// precedence is at least `min`, together with its right operand.
+priv fn climb(left: expr::Expr, tokens: List<lexer::Token>, min: Int) -> Parsed {
+  case tokens {
+    [lexer::Token { kind: lexer::Operator(op), .. }, ..rest] when expr::precedence(op) >= min => {
+      // The operators group to the left, so the right operand of `op`
+      // may only hold operators that bind more tightly. In `a - b + c`
+      // the right operand of `-` is just `b`, and the next round adds
+      // `c` to `a - b`.
+      use (right, after) <- result::try(expression(rest, expr::precedence(op) + 1))
+      climb(expr::Binary(op, left, right), after, min)
+    }
+    _ => Ok((left, tokens))
+  }
+}
+
+/// Parses a number, a variable, a negation or an expression in
+/// parentheses.
+priv fn operand(tokens: List<lexer::Token>) -> Parsed {
+  case tokens {
+    [lexer::Token { kind: lexer::Number(n), .. }, ..rest] => Ok((expr::Number(n), rest))
+    [lexer::Token { kind: lexer::Name(name), .. }, ..rest] => Ok((expr::Variable(name), rest))
+    // Unary minus binds tighter than every binary operator, so it takes
+    // only the operand right after it: `-a * b` is `(-a) * b`.
+    [lexer::Token { kind: lexer::Operator(expr::Subtract), .. }, ..rest] => {
+      use (inner, after) <- result::try(operand(rest))
+      Ok((expr::Negate(inner), after))
+    }
+    // `as` keeps the whole `(` token, so that an error about a missing
+    // `)` can say where the parenthesis was opened.
+    [lexer::Token { kind: lexer::LeftParen, .. } as open, ..rest] => {
+      use (inner, after) <- result::try(expression(rest, 0))
+      case after {
+        [lexer::Token { kind: lexer::RightParen, .. }, ..tail] => Ok((inner, tail))
+        _ => {
+          let found = next(after)
+          Err(ParseError { position: found.position, problem: Unclosed(open.position, found.kind) })
+        }
+      }
+    }
+    _ => fail(tokens, operand_description)
+  }
+}
+
+/// Fails at the next token of `tokens`, which is not what `expected`
+/// describes. It is generic, so any parsing step can return it.
+priv fn fail<T>(tokens: List<lexer::Token>, expected: String) -> Result<T, ParseError> {
+  let found = next(tokens)
+  Err(ParseError { position: found.position, problem: Expected(expected, found.kind) })
+}
+
+/// Returns the next token of `tokens`.
+priv fn next(tokens: List<lexer::Token>) -> lexer::Token {
+  let assert [first, ..] = tokens as "the parser never reads past the End token"
+  first
+}
+
+/// Makes `ParseError` satisfy `Show`. Columns are counted from 1, as
+/// editors do.
+fn show(error: ParseError) -> String {
+  let column = error.position + 1
+  case error.problem {
+    Expected(expected, found) => {
+      let found_text = lexer::describe(found)
+      "expected {expected}, found {found_text} at column {column}"
+    }
+    Unclosed(opened, found) => {
+      let open_column = opened + 1
+      let found_text = lexer::describe(found)
+      "expected \")\" to close the \"(\" at column {open_column}, found {found_text} at column {column}"
+    }
+  }
+}
+
+test "operators follow the usual precedence and group to the left" {
+  fn read(text) {
+    let assert Ok(tokens) = lexer::tokenize(text)
+    parse(tokens)
+  }
+  let one = expr::Number(1)
+  let two = expr::Number(2)
+  let three = expr::Number(3)
+  assert read("1 + 2 * 3") == Ok(Evaluate(expr::Binary(expr::Add, one, expr::Binary(expr::Multiply, two, three))))
+  assert read("1 * 2 + 3") == Ok(Evaluate(expr::Binary(expr::Add, expr::Binary(expr::Multiply, one, two), three)))
+  assert read("-1 * 2") == Ok(Evaluate(expr::Binary(expr::Multiply, expr::Negate(one), two)))
+  assert read("--1") == Ok(Evaluate(expr::Negate(expr::Negate(one))))
+  // Operators of the same precedence group to the left.
+  // `3 / 2 * 1` is `(3 / 2) * 1`, not `3 / (2 * 1)`.
+  let chain = expr::Binary(expr::Subtract, expr::Binary(expr::Subtract, three, two), one)
+  assert read("3 - 2 - 1") == Ok(Evaluate(chain))
+  let mixed = expr::Binary(expr::Multiply, expr::Binary(expr::Divide, three, two), one)
+  assert read("3 / 2 * 1") == Ok(Evaluate(mixed))
+  // A let line names a variable and its expression.
+  let sum = expr::Binary(expr::Add, expr::Variable("a"), expr::Variable("b"))
+  let doubled = expr::Binary(expr::Multiply, sum, two)
+  assert read("let total = (a + b) * 2") == Ok(Assign("total", doubled))
+}
+
+test "printing a parsed expression drops only the redundant parentheses" {
+  fn reprint(text) {
+    let assert Ok(tokens) = lexer::tokenize(text)
+    let assert Ok(Evaluate(tree)) = parse(tokens)
+    expr::show(tree)
+  }
+  assert reprint("(1 + 2) * 3") == "(1 + 2) * 3"
+  assert reprint("1 + (2 * 3)") == "1 + 2 * 3"
+  assert reprint("((a - b)) - c") == "a - b - c"
+  assert reprint("a - (b - c)") == "a - (b - c)"
+  assert reprint("-(x) * -(y + 1)") == "-x * -(y + 1)"
+  assert reprint("2*-3") == "2 * -3"
+}
+
+test "errors point at the token where the line goes wrong" {
+  fn read(text) {
+    let assert Ok(tokens) = lexer::tokenize(text)
+    parse(tokens)
+  }
+  let after_value = "an operator or the end of the line"
+  assert read("1 + * 2") == Err(ParseError {
+    position: 4,
+    problem: Expected(operand_description, lexer::Operator(expr::Multiply)),
+  })
+  assert read("1 2") == Err(ParseError { position: 2, problem: Expected(after_value, lexer::Number(2)) })
+  assert read("x = 5") == Err(ParseError { position: 2, problem: Expected(after_value, lexer::Equals) })
+  assert read("1 + 2)") == Err(ParseError { position: 5, problem: Expected(after_value, lexer::RightParen) })
+  assert read("let 5 = 1") == Err(ParseError { position: 4, problem: Expected("a name", lexer::Number(5)) })
+  assert read("let x 5") == Err(ParseError { position: 6, problem: Expected("\"=\"", lexer::Number(5)) })
+  assert read("let x =") == Err(ParseError { position: 7, problem: Expected(operand_description, lexer::End) })
+  // An unclosed parenthesis is reported together with where it opened.
+  assert read("2 * (3 + 4") == Err(ParseError { position: 10, problem: Unclosed(4, lexer::End) })
+  assert read("(1 2)") == Err(ParseError { position: 3, problem: Unclosed(0, lexer::Number(2)) })
+}
+
+test "parse errors show as messages for the user" {
+  let misplaced = ParseError { position: 4, problem: Expected(operand_description, lexer::Operator(expr::Multiply)) }
+  assert show(misplaced) == "expected a number, a name, \"-\" or \"(\", found \"*\" at column 5"
+  let unclosed = ParseError { position: 10, problem: Unclosed(4, lexer::End) }
+  assert show(unclosed) == "expected \")\" to close the \"(\" at column 5, found end of line at column 11"
+}

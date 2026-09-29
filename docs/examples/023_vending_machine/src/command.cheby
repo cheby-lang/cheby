@@ -1,0 +1,132 @@
+//! Reading a command from a line of input.
+//!
+//! A line is a command name followed by its arguments, separated by
+//! spaces. Command names may be typed in any case, and slot codes are
+//! turned into upper case, so `Select a2` means `select A2`.
+
+import std::int
+import std::list
+import std::string
+
+/// What the user asks the machine to do.
+type Command {
+  /// `coin CENTS` puts a coin worth `CENTS` into the machine.
+  InsertCoin(Int),
+  /// `select CODE` buys the item in the slot `CODE`.
+  Select(String),
+  /// `cancel` gives back the credit.
+  Cancel,
+  /// `restock CODE COUNT` adds `COUNT` items to the slot `CODE`.
+  Restock(String, Int),
+  /// `menu` lists the slots with their prices and how many are left.
+  ShowMenu,
+}
+
+/// Why a line is not a command.
+type ParseError {
+  /// The line has nothing but spaces.
+  Blank,
+  /// The first word is not the name of a command.
+  UnknownCommand(String),
+  /// A known command with the wrong number of arguments. The `String`
+  /// shows how the command is used.
+  Usage(String),
+  /// The argument of `coin`, which is not a whole number.
+  NotAnAmount(String),
+  /// The count of `restock`, which is not a whole number of at least 1.
+  NotACount(String),
+}
+
+/// The commands and their arguments, for help messages.
+const help: String = "commands: coin CENTS, select CODE, cancel, restock CODE COUNT, menu"
+
+/// Reads a command from `line`. Extra spaces between words, and before
+/// or after them, are ignored.
+fn parse_command(line: String) -> Result<Command, ParseError> {
+  // Splitting on single spaces leaves an empty word wherever two spaces
+  // meet, so those are dropped.
+  let words =
+    line
+    |> string::trim
+    |> string::split(" ")
+    |> list::filter(fn(word) { word != "" })
+  case words {
+    [] => Err(Blank)
+    [name, ..arguments] => parse_words(string::lowercase(name), arguments)
+  }
+}
+
+/// Reads the command called `name` with the words after it. Each
+/// command has one arm for the right number of arguments and one for
+/// any other number.
+priv fn parse_words(name: String, arguments: List<String>) -> Result<Command, ParseError> {
+  case name, arguments {
+    "coin", [text] => case int::parse(text) {
+      Ok(cents) => Ok(InsertCoin(cents))
+      Err(_) => Err(NotAnAmount(text))
+    }
+    "coin", _ => Err(Usage("coin CENTS"))
+    "select", [code] => Ok(Select(string::uppercase(code)))
+    "select", _ => Err(Usage("select CODE"))
+    "cancel", [] => Ok(Cancel)
+    "cancel", _ => Err(Usage("cancel"))
+    "restock", [code, text] => case int::parse(text) {
+      Ok(count) when count >= 1 => Ok(Restock(string::uppercase(code), count))
+      _ => Err(NotACount(text))
+    }
+    "restock", _ => Err(Usage("restock CODE COUNT"))
+    "menu", [] => Ok(ShowMenu)
+    "menu", _ => Err(Usage("menu"))
+    _, _ => Err(UnknownCommand(name))
+  }
+}
+
+/// Makes `ParseError` satisfy `Show`, so the driver can tell the user
+/// what was wrong with a line by interpolating `{error}`.
+fn show(error: ParseError) -> String {
+  case error {
+    Blank => help
+    UnknownCommand(name) => "unknown command \"{name}\", {help}"
+    Usage(usage) => "usage: {usage}"
+    NotAnAmount(text) => "\"{text}\" is not a whole number of cents"
+    NotACount(text) => "\"{text}\" is not a whole number of at least 1"
+  }
+}
+
+test "every command reads with its arguments" {
+  assert parse_command("coin 50") == Ok(InsertCoin(50))
+  assert parse_command("select A1") == Ok(Select("A1"))
+  assert parse_command("cancel") == Ok(Cancel)
+  assert parse_command("restock B2 12") == Ok(Restock("B2", 12))
+  assert parse_command("menu") == Ok(ShowMenu)
+}
+
+test "case and extra spaces do not matter" {
+  assert parse_command("  SELECT   a2 \n") == Ok(Select("A2"))
+  assert parse_command("Restock b1 3") == Ok(Restock("B1", 3))
+}
+
+test "any whole number reads as a coin, and the machine judges it" {
+  // Whether 5 or -50 is a coin the machine takes is not the parser's
+  // business, so both read as commands.
+  assert parse_command("coin 5") == Ok(InsertCoin(5))
+  assert parse_command("coin -50") == Ok(InsertCoin(-50))
+}
+
+test "bad lines say what is wrong" {
+  assert parse_command("") == Err(Blank)
+  assert parse_command("   ") == Err(Blank)
+  assert parse_command("kick machine") == Err(UnknownCommand("kick"))
+  assert parse_command("coin") == Err(Usage("coin CENTS"))
+  assert parse_command("coin 50 50") == Err(Usage("coin CENTS"))
+  assert parse_command("cancel now") == Err(Usage("cancel"))
+  assert parse_command("coin fifty") == Err(NotAnAmount("fifty"))
+  assert parse_command("restock A1 0") == Err(NotACount("0"))
+  assert parse_command("restock A1 many") == Err(NotACount("many"))
+}
+
+test "parse errors show as messages for the user" {
+  assert show(Usage("select CODE")) == "usage: select CODE"
+  assert show(UnknownCommand("kick")) == "unknown command \"kick\", " + help
+  assert show(NotAnAmount("fifty")) == "\"fifty\" is not a whole number of cents"
+}

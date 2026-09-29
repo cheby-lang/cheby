@@ -1,0 +1,122 @@
+//! CRC-32, the checksum of zip, gzip, PNG and Ethernet.
+//!
+//! This is the common IEEE variant: the polynomial is `0x04C11DB7`,
+//! written bit-reversed as `0xEDB88320` because the bits of each byte
+//! are processed lowest first. The register starts with all bits set,
+//! and all its bits are flipped at the end.
+//!
+//! Working bit by bit takes eight steps per byte. The usual shortcut is
+//! a table of the 256 possible results of those eight steps, so each
+//! byte takes a single lookup. Here the table is a `const`: the compiler
+//! runs `build_table` while building the program and stores the finished
+//! list in it, so no time is spent on the table when the program runs.
+//!
+//! The checksum is a `U32`, not an `Int`. A CRC is a pattern of exactly
+//! 32 bits, and a sized type says so, on every target.
+
+import std::bytes
+import std::int
+import std::list
+import std::string
+import std::u32
+
+/// The CRC-32 polynomial, bit-reversed. Underscores in number literals
+/// only group the digits.
+const polynomial: U32 = 0xEDB8_8320
+
+/// The result of running the bitwise algorithm on each byte value from
+/// 0 to 255. The entry for a byte is at the index equal to its value.
+const table: List<U32> = build_table()
+
+/// The hex digits, where a digit's index is its value.
+const hex_digits: List<String> = string::to_code_points("0123456789abcdef")
+
+/// Returns the CRC-32 of `data`.
+fn checksum(data: bytes::Bytes) -> U32 {
+  // `update` takes the register and a byte and returns the new register,
+  // which is exactly the shape `bytes::fold` expects.
+  bytes::fold(data, 0xFFFF_FFFF, update) ^ 0xFFFF_FFFF
+}
+
+/// Feeds one byte into the register `crc`.
+priv fn update(crc: U32, byte: U8) -> U32 {
+  // `^` needs both operands of the same type, so the byte is widened to
+  // a `U32` first. Widening cannot fail, so it returns a `U32` directly.
+  let index = (crc ^ u32::from_u8(byte)) & 0xFF
+  // Lists are indexed with an `Int`. Every `U32` fits in an `Int`, so
+  // this conversion is a widening one too.
+  let assert Some(entry) = list::get(table, int::from_u32(index))
+  (crc >> 8) ^ entry
+}
+
+/// Builds the lookup table. It runs only at compile time, to compute
+/// `table`.
+priv fn build_table() -> List<U32> {
+  // The counter is a `U32` as well, so it can be passed to
+  // `table_entry` without a conversion. 256 still fits in it.
+  fn step(index: U32, found) {
+    case index {
+      256 => found
+      _ => step(index + 1, [..found, table_entry(index)])
+    }
+  }
+  step(0, [])
+}
+
+/// Runs the bitwise algorithm on the byte value `byte`: eight times,
+/// shift the register right by one bit, and when the bit shifted out
+/// was 1, XOR the polynomial into it.
+priv fn table_entry(byte: U32) -> U32 {
+  fn step(register: U32, rounds: Int) -> U32 {
+    case rounds, register & 1 {
+      0, _ => register
+      _, 1 => step((register >> 1) ^ polynomial, rounds - 1)
+      _, _ => step(register >> 1, rounds - 1)
+    }
+  }
+  step(byte, 8)
+}
+
+/// Formats `value` as eight lower-case hex digits, with leading zeros.
+fn to_hex(value: U32) -> String {
+  // `shift` counts down from 28 to 0 in steps of 4, picking out the
+  // digits from the highest to the lowest. `>>` binds tighter than `&`,
+  // so `value >> shift & 0xF` is `(value >> shift) & 0xF`.
+  fn step(shift: U32, found: String) -> String {
+    let nibble = value >> shift & 0xF
+    let assert Some(digit) = list::get(hex_digits, int::from_u32(nibble))
+    case shift {
+      0 => found + digit
+      _ => step(shift - 4, found + digit)
+    }
+  }
+  step(28, "")
+}
+
+test "the check value of CRC-32 is right" {
+  // The checksum of "123456789" is the standard test of a CRC variant.
+  assert checksum(bytes::from_string("123456789")) == 0xCBF4_3926
+}
+
+test "checksums of other texts" {
+  assert checksum(bytes::from_string("")) == 0
+  assert checksum(bytes::from_string("hello")) == 0x3610_A686
+  assert checksum(bytes::from_string("The quick brown fox jumps over the lazy dog")) == 0x414F_A339
+}
+
+test "the table has the known entries" {
+  assert list::length(table) == 256
+  assert list::get(table, 0) == Some(0)
+  assert list::get(table, 1) == Some(0x7707_3096)
+  // Byte 128 has only its top bit set, which is shifted out in the
+  // last round, so its entry is the polynomial itself.
+  assert list::get(table, 128) == Some(polynomial)
+  assert list::get(table, 255) == Some(0x2D02_EF8D)
+}
+
+test "hex output always has eight digits" {
+  assert to_hex(0xCBF4_3926) == "cbf43926"
+  assert to_hex(0xFF) == "000000ff"
+  assert to_hex(0) == "00000000"
+  assert to_hex(0xFFFF_FFFF) == "ffffffff"
+}

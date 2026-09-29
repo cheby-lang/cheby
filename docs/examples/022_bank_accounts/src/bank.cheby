@@ -1,0 +1,142 @@
+//! Transfers between accounts, and the total held by the bank.
+//!
+//! Each account is its own actor (see `account.cheby`), and no request
+//! touches two accounts at once. So a transfer is coordinated from
+//! outside, by `transfer`, which runs in the fiber of whoever asks for
+//! it: it withdraws from the payer, then deposits with the payee, and
+//! if the deposit fails it pays the money back. There is no lock and no
+//! transaction across the two actors. While a transfer is running, its
+//! money has left one account and not yet reached the other, so the
+//! total is only meaningful once no transfer is running.
+//!
+//! A transfer holds nothing while it waits, unlike a philosopher
+//! holding a fork in `013_dining_philosophers`, and an actor never
+//! waits for another actor. Each request is answered on its own, so
+//! any number of transfers can run at once without deadlock.
+//!
+//! The module also shows the two kinds of failure side by side
+//! (ADR-0008): `Result` for errors and `let assert` for bugs
+//!. A customer can cause a transfer to fail, by asking for
+//! more than the balance or by paying into a closed account, so those
+//! failures are `Result` values that the caller must look at. A refund
+//! that fails can only mean that this program is wrong, so it is a
+//! `let assert`, which panics instead of asking every caller to handle
+//! a case that should never happen.
+
+import std::fiber
+import std::result
+import bank_accounts::account
+import bank_accounts::money
+
+/// Why a transfer did not happen. In both cases no money has moved by
+/// the time `transfer` returns.
+type TransferError {
+  /// The payer's account refused the withdrawal.
+  NotTaken(account::Error),
+  /// The payee's account refused the deposit, so the money went back
+  /// to the payer.
+  Returned(account::Error),
+}
+
+/// Moves `amount` from `payer` to `payee`.
+///
+/// Transfers are made on behalf of the payer, and in this bank an
+/// account is closed only by its owner, who never closes it while
+/// paying from it. So `payer` stays open during the transfer, and the
+/// refund always succeeds.
+fn transfer(
+  payer: account::Handle,
+  payee: account::Handle,
+  amount: money::Money,
+) -> Result<Nil, TransferError> {
+  // A refused withdrawal ends the transfer here: `result::try` returns
+  // the `Err`, wrapped by `result::map_error` in `NotTaken`, and the
+  // rest of the body never runs.
+  use _ <- result::try(result::map_error(account::withdraw(payer, amount), NotTaken))
+  case account::deposit(payee, amount) {
+    Ok(Nil) => Ok(Nil)
+    Err(reason) => {
+      // The payee's account may have been closed by its owner, which
+      // is a customer's choice and so a `Result`. The payer's cannot
+      // have been (see above). If this refund fails, the money is
+      // gone and the program has a bug, so it panics with the reason
+      // rather than returning an error that nobody could act on.
+      let payer_name = account::name(payer)
+      let assert Ok(Nil) = account::deposit(payer, amount) as "could not refund {amount} to {payer_name}"
+      Err(Returned(reason))
+    }
+  }
+}
+
+/// Returns the sum of the balances of `accounts`, or the first error.
+/// The sum is exact only if no transfer between them is running.
+fn total(accounts: List<account::Handle>) -> Result<money::Money, account::Error> {
+  fn step(rest, sum) {
+    case rest {
+      [] => Ok(sum)
+      [first, ..others] => {
+        use amount <- result::try(account::balance(first))
+        // Both operands are `Money`, so this is `money::add`.
+        step(others, sum + amount)
+      }
+    }
+  }
+  step(accounts, money::zero)
+}
+
+/// Makes `TransferError` satisfy `Show`. The reason shows through
+/// `account::show`.
+fn show(error: TransferError) -> String {
+  case error {
+    NotTaken(reason) => "the payment was refused: {reason}"
+    Returned(reason) => "the payment was returned: {reason}"
+  }
+}
+
+test "a transfer moves money from the payer to the payee" {
+  let assert Ok(balances) = {
+    use scope <- fiber::scope()
+    let ada = account::start(scope, "Ada", money::from_cents(10_00))
+    let grace = account::start(scope, "Grace", money::from_cents(1_00))
+    let assert Ok(Nil) = transfer(ada, grace, money::from_cents(7_50))
+    (account::balance(ada), account::balance(grace))
+  }
+  assert balances == (Ok(money::from_cents(2_50)), Ok(money::from_cents(8_50)))
+}
+
+test "a transfer larger than the balance moves nothing" {
+  let assert Ok(outcome) = {
+    use scope <- fiber::scope()
+    let ada = account::start(scope, "Ada", money::from_cents(10_00))
+    let grace = account::start(scope, "Grace", money::from_cents(1_00))
+    let attempt = transfer(grace, ada, money::from_cents(2_00))
+    (attempt, total([ada, grace]))
+  }
+  let refusal = account::InsufficientFunds { balance: money::from_cents(1_00), requested: money::from_cents(2_00) }
+  assert outcome == (Err(NotTaken(refusal)), Ok(money::from_cents(11_00)))
+}
+
+test "money paid into a closed account goes back to the payer" {
+  let assert Ok(outcome) = {
+    use scope <- fiber::scope()
+    let ada = account::start(scope, "Ada", money::from_cents(10_00))
+    let grace = account::start(scope, "Grace", money::from_cents(1_00))
+    let assert Ok(_) = account::close(grace)
+    (transfer(ada, grace, money::from_cents(4_00)), account::balance(ada))
+  }
+  assert outcome == (Err(Returned(account::Closed)), Ok(money::from_cents(10_00)))
+}
+
+test "the total adds up every balance" {
+  let assert Ok(sums) = {
+    use scope <- fiber::scope()
+    let ada = account::start(scope, "Ada", money::from_cents(10_00))
+    let grace = account::start(scope, "Grace", money::from_cents(2_34))
+    (total([ada, grace]), total([]))
+  }
+  assert sums == (Ok(money::from_cents(12_34)), Ok(money::zero))
+}
+
+test "transfer errors show their reason" {
+  assert show(Returned(account::Closed)) == "the payment was returned: the account is closed"
+}

@@ -1,0 +1,166 @@
+//! Opens host stores (see `store.cheby`) in several ways, and shows
+//! through the host's `closing` messages exactly when each one closes.
+//!
+//! Each store closes exactly once, right after the last use of the last
+//! reference to it (D-205). That point is fixed by the program
+//! text alone, so the output is the same on every run, and the same on
+//! native and on JS (D-100, ADR-0028):
+//!
+//! ```text
+//! 1. Stores close at their last use
+//! closing outer
+//! outer held: opened first
+//! closing inner
+//! inner held: opened second
+//! 2. Stores passed to functions
+//! shared has 2 entries
+//! closing shared
+//! shared held: alpha; beta
+//! closing scratch
+//! scratch held: gamma; delta
+//! 3. Stores in branches
+//! closing draft one
+//! published: Some("keep me")
+//! closing draft two
+//! draft two is thrown away
+//! published: None
+//! 4. A store inside a journal
+//! diary, 1 entry
+//! read through morning: 1. woke up; 2. went to bed
+//! diary, 2 entries
+//! closing diary
+//! read through evening: 1. woke up; 2. went to bed
+//! ```
+//!
+//! Every store is opened inside the function that prints about it, and
+//! never escapes it, so each `closing` line is tied to one statement of
+//! that function.
+
+import std::io
+import std::list
+import ffi_handle::journal
+import ffi_handle::store
+
+fn main() {
+  io::println("1. Stores close at their last use")
+  nested_blocks()
+  io::println("2. Stores passed to functions")
+  passing_to_functions()
+  io::println("3. Stores in branches")
+  branches()
+  io::println("4. A store inside a journal")
+  journal_sharing()
+}
+
+/// Shows that a store closes after its last use, not at the end of the
+/// block that bound it, and not in the reverse order of opening.
+fn nested_blocks() {
+  let outer = store::open("outer")
+  store::write(outer, "opened first")
+  let inner_text = {
+    let inner = store::open("inner")
+    store::write(inner, "opened second")
+    let outer_text = store::contents(outer)
+    // That was the last use of `outer`, so it has already closed, in
+    // the middle of a block nested inside its own scope. Rust would
+    // close it at the end of the function, after `inner`.
+    io::println("outer held: {outer_text}")
+    // The last use of `inner`. It closes before the block's value is
+    // bound to `inner_text`.
+    store::contents(inner)
+  }
+  io::println("inner held: {inner_text}")
+}
+
+/// Shows that passing a store to a function keeps it open while the
+/// caller still uses it, and that a store that never leaves a function
+/// closes inside it.
+fn passing_to_functions() {
+  let shared = store::open("shared")
+  write_all(shared, ["alpha", "beta"])
+  // `write_all` has returned and dropped its references, but `shared`
+  // is used below, so the store is still open.
+  let written = store::count(shared)
+  io::println("shared has {written} entries")
+  let text = store::contents(shared)
+  io::println("shared held: {text}")
+  let copy = scratch_copy(["gamma", "delta"])
+  io::println("scratch held: {copy}")
+}
+
+/// Writes each of `lines` to `target`, in order.
+fn write_all(target: store::Store, lines: List<String>) {
+  // The capture `store::write(target, _)` is a closure that holds a
+  // reference to `target`. It is released together with the closure,
+  // when `list::each` is done with it.
+  list::each(lines, store::write(target, _))
+}
+
+/// Writes `lines` to a store of its own and returns what it holds. The
+/// store never leaves this function, so it closes before the function
+/// returns.
+fn scratch_copy(lines: List<String>) -> String {
+  let scratch = store::open("scratch")
+  write_all(scratch, lines)
+  store::contents(scratch)
+}
+
+/// Shows a store kept by one branch of a `case` and thrown away by the
+/// other.
+fn branches() {
+  let kept = draft("draft one", "keep me", True)
+  io::println("published: {kept:?}")
+  let dropped = draft("draft two", "lose me", False)
+  io::println("published: {dropped:?}")
+}
+
+/// Writes `text` to a new store called `title`, and returns what the
+/// store holds if `publish` is `True`.
+fn draft(title: String, text: String, publish: Bool) -> Option<String> {
+  let pad = store::open(title)
+  store::write(pad, text)
+  case publish {
+    // `pad` closes right after `store::contents` returns.
+    True => Some(store::contents(pad))
+    // This branch does not use `pad`, so it is released as the branch
+    // starts, and the store closes before the message prints.
+    False => {
+      io::println("{title} is thrown away")
+      None
+    }
+  }
+}
+
+/// Shows that several journals can share one store, which closes once,
+/// when the last of them goes away.
+fn journal_sharing() {
+  let morning = journal::new("diary") |> journal::add("woke up")
+  let evening = journal::add(morning, "went to bed")
+  // `morning` is an immutable Cheby value, so it still counts one
+  // entry. Its store belongs to the host, and `evening` refers to the
+  // same one, so reading through `morning` shows both entries.
+  io::println("{morning}")
+  let from_morning = journal::read(morning)
+  io::println("read through morning: {from_morning}")
+  // `morning` is gone now, but `evening` still refers to the store,
+  // so it stays open until the line below.
+  io::println("{evening}")
+  let from_evening = journal::read(evening)
+  io::println("read through evening: {from_evening}")
+}
+
+test "write_all writes every line, in order" {
+  let target = store::open("write_all test")
+  write_all(target, ["a", "b", "c"])
+  assert store::contents(target) == "a; b; c"
+}
+
+test "scratch_copy returns what it wrote" {
+  assert scratch_copy(["x", "y"]) == "x; y"
+  assert scratch_copy([]) == ""
+}
+
+test "a draft is returned only when it is published" {
+  assert draft("draft test", "words", True) == Some("words")
+  assert draft("draft test", "words", False) == None
+}

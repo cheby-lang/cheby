@@ -1,0 +1,118 @@
+//! A small in-memory log that belongs to the host, reached through the
+//! foreign function interface.
+//!
+//! A `Store` is a foreign handle. On native targets it points to a C
+//! struct, and on JS it is a JS object. Cheby code cannot look inside
+//! it, only pass it to the functions below. `Store` is an external
+//! type: a type declaration with no body. Its `@external`
+//! attributes name its drop function for each target, which the
+//! runtime calls exactly once, when the last reference to the store
+//! goes away (D-101). Here the drop function prints `closing <name>`
+//! from the host side, so the output of `main` shows exactly when each
+//! store is released.
+//!
+//! Handles are reference counted on every target, including JS, where
+//! ordinary data is left to the garbage collector (D-100, ADR-0028). A
+//! binding stops holding its value right after its last use (D-205,
+//! ADR-0036). So a store closes at the same point on both targets:
+//! right after the last use of the last reference to it, not at the
+//! end of a scope and not whenever a collector gets round to it. It is
+//! also closed if a fiber that holds it unwinds after a panic or
+//! cancellation.
+//!
+//! On JS the functions come from `store_ffi.mjs` next to this file. On
+//! native they are C functions with the prototypes below, where
+//! `Store` is the host's own struct and `cheby_value` stands for the
+//! opaque Cheby value type of the runtime's `cheby.h`:
+//!
+//! ```text
+//! Store *ffi_handle_store_open(cheby_value *name);
+//! void ffi_handle_store_write(Store *store, cheby_value *entry);
+//! cheby_value *ffi_handle_store_contents(Store *store);
+//! int64_t ffi_handle_store_count(Store *store);
+//! void ffi_handle_store_close(Store *store);
+//! ```
+//!
+//! Arguments are only borrowed for the duration of a call (D-187), so
+//! `ffi_handle_store_open` copies `name`, or increments its reference
+//! count, to keep it for the closing message. `ffi_handle_store_contents`
+//! builds a new Cheby string, and the caller owns it. The drop function
+//! `ffi_handle_store_close` prints its message, then frees the struct
+//! and releases the name it kept.
+//!
+//! The C side is not part of this package: nothing in the manifest or
+//! under `src/` says how C code is built, so a native build links
+//! these symbols from a library provided some other way.
+
+// `==` on a `Store`, or on any value that contains one, panics, and
+// the compiler warns when it can see such a comparison (D-189, D-233):
+//
+//   store::open("a") == store::open("a")   // panics
+//
+// Two stores are never compared, not even a store with itself, because
+// identity differs between targets and is never observable. For
+// the same reason a store cannot be a `Map` key or a `Set` element.
+// Debug printing does work, and shows the placeholder `<Store>`.
+
+/// A named log kept by the host. A store can only be made by `open`,
+/// and it is closed when the last reference to it goes away.
+///
+/// The drop function runs on the fiber that released the last
+/// reference (D-171). It must not fail: a panic in a drop function
+/// aborts the whole program.
+@external(native, "ffi_handle_store_close")
+@external(js, "./store_ffi.mjs", "close")
+type Store
+
+/// Opens a new, empty store called `name`.
+@external(native, "ffi_handle_store_open")
+@external(js, "./store_ffi.mjs", "open")
+fn open(name: String) -> Store
+
+/// Adds `entry` to the end of `store`.
+///
+/// This changes the host's object, not a Cheby value. Every reference
+/// to the store sees the new entry, as with a file.
+@external(native, "ffi_handle_store_write")
+@external(js, "./store_ffi.mjs", "write")
+fn write(store: Store, entry: String)
+
+/// Returns every entry of `store`, oldest first, separated by `; `.
+@external(native, "ffi_handle_store_contents")
+@external(js, "./store_ffi.mjs", "contents")
+fn contents(store: Store) -> String
+
+/// Returns how many entries have been written to `store`.
+@external(native, "ffi_handle_store_count")
+@external(js, "./store_ffi.mjs", "count")
+fn count(store: Store) -> Int
+
+// None of these functions is `@blocking`: they only touch memory and
+// return at once, so they run directly on the calling fiber's thread.
+// Each has an `@external` for both targets, so each exists on both,
+// and none needs `@target`.
+
+// Each test's stores are closed during the test, so `cheby test` also
+// prints their `closing` lines.
+
+test "a store gives back what was written, in order" {
+  let log = open("test log")
+  assert count(log) == 0
+  write(log, "one")
+  write(log, "two")
+  assert count(log) == 2
+  assert contents(log) == "one; two"
+}
+
+test "stores are independent of each other" {
+  let first = open("first")
+  let second = open("second")
+  write(first, "only in first")
+  assert contents(second) == ""
+  assert contents(first) == "only in first"
+}
+
+test "a store debug-prints as its type name" {
+  let probe = open("probe")
+  assert "{probe:?}" == "<Store>"
+}

@@ -1,0 +1,208 @@
+//! A vending machine, driven by commands typed one per line.
+//!
+//! Put coins in with `coin 50`, buy with `select A1`, get the credit
+//! back with `cancel`, add items with `restock A1 5` and list the slots
+//! with `menu`. Amounts are in cents, and the machine takes coins of
+//! 10, 20, 50, 100 and 200. End of input (Ctrl-D) pays back any credit
+//! and quits.
+//!
+//! A session looks like this, with `>` marking the lines typed in:
+//!
+//! ```text
+//! commands: coin CENTS, select CODE, cancel, restock CODE COUNT, menu
+//! Insert a coin, or type menu.
+//! > coin 200
+//! credit 2.00
+//! Credit 2.00. Select an item, add coins or cancel.
+//! > select a1
+//! dispensed Cola
+//! returned 0.50
+//! Insert a coin, or type menu.
+//! ```
+//!
+//! The rules live in `machine.cheby`, as a pure `step` function that
+//! the tests there drive without any input. This module is the driver.
+//! It has one function per state, `idle`, `collecting` and `sold_out`,
+//! and moves between them by calling the function of the next state.
+//! A state function never returns to the one before it: the calls go
+//! on for as long as the input does, and every one of them is a tail
+//! call. Cheby guarantees every tail call, including mutual ones
+//! between different top-level functions (ADR-0006), so the
+//! machine runs in constant stack space however many commands it
+//! reads. Without that guarantee this design would overflow the stack
+//! after enough commands, and it would have to be one self-recursive
+//! loop instead.
+
+import std::io
+import std::list
+import std::result
+import vending_machine::change
+import vending_machine::command
+import vending_machine::machine
+
+/// The machine as it is switched on. Constants are evaluated when the
+/// program is compiled, so a slot with a bad price or count
+/// makes the `assert`s in `machine::new` fail at compile time, not
+/// when the machine starts.
+const stock: machine::Machine = machine::new([
+  machine::Slot { code: "A1", name: "Cola", price: 150, count: 5 },
+  machine::Slot { code: "A2", name: "Water", price: 100, count: 5 },
+  machine::Slot { code: "B1", name: "Crisps", price: 120, count: 3 },
+  machine::Slot { code: "B2", name: "Chocolate", price: 180, count: 0 },
+])
+
+fn main() -> Result<Nil, io::Error> {
+  io::println(command::help)
+  enter(machine::ready(stock))
+}
+
+/// Moves the machine into `state` by calling that state's function.
+/// Each arm is a tail call.
+fn enter(state: machine::State) -> Result<Nil, io::Error> {
+  case state {
+    machine::Idle(vending) => idle(vending)
+    machine::Collecting(vending, credit) => collecting(vending, credit)
+    machine::SoldOut(vending) => sold_out(vending)
+  }
+}
+
+// The state functions below only differ in what they say. What each
+// command does in each state is decided by `machine::step`, which
+// already handles every state and command in one `case`. Writing the
+// rules again here, split over the three functions, would keep two
+// copies of them in step, so the split is: rules in the pure core,
+// input, output and the shape of the program here.
+
+/// The state with no credit. Waits for a coin.
+fn idle(vending: machine::Machine) -> Result<Nil, io::Error> {
+  io::println("Insert a coin, or type menu.")
+  next(machine::Idle(vending))
+}
+
+/// The state with `credit` cents inserted. Waits for more coins, a
+/// selection or `cancel`.
+fn collecting(vending: machine::Machine, credit: Int) -> Result<Nil, io::Error> {
+  let shown = change::format(credit)
+  io::println("Credit {shown}. Select an item, add coins or cancel.")
+  next(machine::Collecting(vending, credit))
+}
+
+/// The state with every slot empty. Waits for `restock`.
+fn sold_out(vending: machine::Machine) -> Result<Nil, io::Error> {
+  io::println("Sold out. Waiting to be restocked.")
+  next(machine::SoldOut(vending))
+}
+
+/// Reads the next line in `state`, prints the machine's response and
+/// enters the state that follows. At the end of the input it shuts
+/// the machine down instead.
+///
+/// `enter` is the last call of the callback that `use` makes out of the
+/// rest of this block, and `result::try` makes that callback its own
+/// last call, so the chain `idle`, `next`, `enter`, `collecting`,
+/// `next` and so on never grows the stack.
+fn next(state: machine::State) -> Result<Nil, io::Error> {
+  use line <- result::try(io::read_line())
+  case line {
+    None => shut_down(state)
+    Some(text) => {
+      let (after, replies) = respond(state, text)
+      list::each(replies, io::println)
+      enter(after)
+    }
+  }
+}
+
+/// Handles one line of input in `state`. Returns the next state and the
+/// lines to print. A line that is not a command changes nothing.
+fn respond(state: machine::State, text: String) -> (machine::State, List<String>) {
+  case command::parse_command(text) {
+    Err(error) => (state, ["{error}"])
+    Ok(action) => {
+      let (after, outputs) = machine::step(state, action)
+      // `machine::show` is a top-level function, so it can be passed
+      // as a value.
+      (after, list::map(outputs, machine::show))
+    }
+  }
+}
+
+/// Pays back any credit left in `state` and says goodbye.
+fn shut_down(state: machine::State) -> Result<Nil, io::Error> {
+  case state {
+    machine::Collecting(_, _) => {
+      let (_, outputs) = machine::step(state, command::Cancel)
+      list::each(outputs, fn(output) { io::println("{output}") })
+    }
+    machine::Idle(_) | machine::SoldOut(_) => Nil
+  }
+  io::println("Bye.")
+  Ok(Nil)
+}
+
+/// Feeds `lines` to `respond` one by one, as `next` does, starting in
+/// `state`, and returns everything that would be printed.
+priv fn session(lines: List<String>, state: machine::State) -> List<String> {
+  fn feed(rest, current, printed) {
+    case rest {
+      [] => printed
+      [text, ..later] => {
+        let (after, replies) = respond(current, text)
+        feed(later, after, [..printed, ..replies])
+      }
+    }
+  }
+  feed(lines, state, [])
+}
+
+test "the machine starts idle" {
+  let assert machine::Idle(_) = machine::ready(stock)
+}
+
+test "a purchase takes coins, drops the item and pays back the change" {
+  let lines = ["coin 200", "coin 5", "select a1", "cancel"]
+  assert session(lines, machine::ready(stock)) == [
+    "credit 2.00",
+    "rejected 0.05, not a coin this machine takes",
+    "dispensed Cola",
+    "returned 0.50",
+    "there is no credit to return",
+  ]
+}
+
+test "a bad line is reported and changes nothing" {
+  let lines = ["coin 50", "kick machine", "select B2", "cancel"]
+  assert session(lines, machine::ready(stock)) == [
+    "credit 0.50",
+    "unknown command \"kick\", " + command::help,
+    "Chocolate is sold out",
+    "returned 0.50",
+  ]
+}
+
+test "restocking fills an empty slot" {
+  let lines = ["restock b2 4", "coin 200", "select B2"]
+  assert session(lines, machine::ready(stock)) == [
+    "B2  Chocolate  1.80  (4 left)",
+    "credit 2.00",
+    "dispensed Chocolate",
+    "returned 0.20",
+  ]
+}
+
+test "a long session runs in constant stack space" {
+  // 100000 rounds of inserting a coin and cancelling, each a tail
+  // call of `repeat`, with every line going through the same `respond`
+  // as the driver.
+  fn repeat(remaining, state) {
+    case remaining {
+      0 => state
+      _ => {
+        let (with_coin, _) = respond(state, "coin 100")
+        let (without_coin, _) = respond(with_coin, "cancel")
+        repeat(remaining - 1, without_coin)
+      }
+    }
+  }
+  assert repeat(100_000, machine::ready(stock)) == machine::ready(stock)
+}

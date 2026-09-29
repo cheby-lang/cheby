@@ -1,0 +1,232 @@
+//! A persistent first-in, first-out queue.
+//!
+//! A queue is two lists. `front` holds the oldest items, oldest first,
+//! and items leave from its start. `back` holds the newest items,
+//! newest first, and items join at its start. When `front` runs out,
+//! `back` is reversed to become the new `front`. Each item is moved
+//! from `back` to `front` at most once, so pushing and popping take
+//! constant time on average. If an old version of a queue is popped
+//! again and again, the same reversal is repeated, so the average holds
+//! only when each version is used once, as in this example.
+//!
+//! This is the classic queue of languages whose lists are linked. A
+//! Cheby `List` is a vector that already adds items cheaply at both
+//! ends (D-039), so a plain list would also do. The two-list queue is
+//! here for its invariant, which the type has to protect:
+//!
+//! **`front` is empty only when the whole queue is empty.**
+//!
+//! That is what lets `peek`, `pop` and `is_empty` look at `front`
+//! alone. `push` and `pop` build their result through `balance`, which
+//! restores the invariant, and `from_list` keeps it by putting every
+//! item in `front`.
+//!
+//! Values are immutable, so `push` and `pop` return a new queue and the
+//! old one stays as it was. The two share most of their items.
+
+import std::list
+import std::string
+
+/// A queue of items of type `T`.
+///
+/// `Queue` is `pub` but not `exposed`, so it is opaque (ADR-0016,
+/// D-048). Other packages can name the type, pass queues around and
+/// call the `pub` functions below, but they cannot build a `Queue` with
+/// braces, match on its fields or read them. So they cannot make a
+/// queue such as `Queue { front: [], back: [1] }`, which breaks the
+/// invariant: `peek` would call it empty although it holds an item.
+///
+/// The package is the only opacity boundary (D-151). Every module of
+/// this package could still build or take apart a `Queue`, and a type
+/// cannot be hidden from the rest of its package without hiding its
+/// name too (`priv type`). The other modules here keep to the functions
+/// instead.
+pub type Queue<T> {
+  /// The oldest items, oldest first. Empty only if `back` is empty too.
+  front: List<T>,
+  /// The newest items, newest first.
+  back: List<T>,
+}
+
+/// Returns an empty queue.
+///
+/// Nothing in the arguments fixes `T`, so a caller whose context does
+/// not fix it either names it with a turbofish, `queue::new::<Int>()`
+/// (D-049).
+pub fn new<T>() -> Queue<T> {
+  Queue { front: [], back: [] }
+}
+
+/// Returns a queue holding `items`, with the first item at the front.
+pub fn from_list<T>(items: List<T>) -> Queue<T> {
+  // An empty `front` here means `items` is empty, so the invariant
+  // holds without `balance`.
+  Queue { front: items, back: [] }
+}
+
+/// Returns `queue` with `item` added at the back.
+pub fn push<T>(queue: Queue<T>, item: T) -> Queue<T> {
+  balance(queue.front, [item, ..queue.back])
+}
+
+/// Returns the item at the front of `queue` without removing it, or
+/// `None` if `queue` is empty.
+pub fn peek<T>(queue: Queue<T>) -> Option<T> {
+  // By the invariant, an empty `front` means an empty queue, so `back`
+  // need not be looked at.
+  case queue.front {
+    [] => None
+    [first, ..] => Some(first)
+  }
+}
+
+/// Removes the item at the front of `queue`. Returns that item and the
+/// rest of the queue, or `None` if `queue` is empty.
+pub fn pop<T>(queue: Queue<T>) -> Option<(T, Queue<T>)> {
+  case queue.front {
+    [] => None
+    [first, ..rest] => Some((first, balance(rest, queue.back)))
+  }
+}
+
+/// Returns the number of items in `queue`.
+pub fn length<T>(queue: Queue<T>) -> Int {
+  list::length(queue.front) + list::length(queue.back)
+}
+
+/// Tells whether `queue` holds no items.
+pub fn is_empty<T>(queue: Queue<T>) -> Bool {
+  list::is_empty(queue.front)
+}
+
+/// Returns the items of `queue`, front first.
+pub fn to_list<T>(queue: Queue<T>) -> List<T> {
+  [..queue.front, ..list::reverse(queue.back)]
+}
+
+/// Tells whether `a` and `b` hold the same items in the same order.
+///
+/// `a == b` is a different test. `==` is the built-in structural
+/// equality, and a module cannot override it (D-047). Opacity does
+/// not change it either: other packages can compare queues with `==`
+/// too (D-048). It compares the fields, so a queue built by
+/// pushing 1, 2 and 3 (`front` is `[1]`, `back` is `[3, 2]`) is not
+/// `==` to `from_list([1, 2, 3])` (`front` is `[1, 2, 3]`, `back` is
+/// `[]`), although both hand out 1, 2 and 3.
+///
+/// `==` is still right in one direction: queues that are `==` always
+/// hold the same items. Keeping every queue in one normal form, with
+/// `back` always empty, would make `==` mean "same items", but every
+/// `push` would then copy the whole queue. Comparing `to_list` results
+/// costs the work only when a comparison is made.
+pub fn same_items<T>(a: Queue<T>, b: Queue<T>) -> Bool {
+  to_list(a) == to_list(b)
+}
+
+/// Makes `Queue<T>` satisfy `Show` whenever `T` does, so a queue of
+/// showable items can be interpolated as `{queue}`. The front comes
+/// first.
+///
+/// This is conditional conformance (D-064). With
+/// `Self = Queue<T>` the signature is `fn show(Self) -> String`, as
+/// `Show` requires, and the bound `T: Show` limits which queues
+/// satisfy it. `Queue<Int>` does, because `Int` does. A queue of
+/// functions, `Queue<fn() -> Nil>`, does not, so `{jobs}` on one is a
+/// compile error, while the built-in debug form `{jobs:?}` still works.
+///
+/// It is `pub` because `Queue` is. A function less visible than its
+/// type does not count toward an interface at all (D-164).
+pub fn show<T: Show>(queue: Queue<T>) -> String {
+  // `T` is a type parameter, so its module cannot be named. Its `show`
+  // is called through the interface, and the bound supplies it
+  // (D-173).
+  let items =
+    to_list(queue)
+    |> list::map(fn(item) { Show::show(item) })
+    |> string::join(_, ", ")
+  "queue [{items}]"
+}
+
+/// Builds a queue from its two halves and restores the invariant: if
+/// `front` is empty, `back` is reversed to become the new `front`.
+/// `priv`, so the rest of the package reaches it only through `push`
+/// and `pop`.
+priv fn balance<T>(front: List<T>, back: List<T>) -> Queue<T> {
+  case front {
+    [] => Queue { front: list::reverse(back), back: [] }
+    _ => Queue { front, back }
+  }
+}
+
+test "items leave in the order they arrived" {
+  let filled = new() |> push(1) |> push(2) |> push(3)
+  let assert Some((first, after_first)) = pop(filled)
+  let assert Some((second, after_second)) = pop(push(after_first, 4))
+  assert (first, second) == (1, 2)
+  assert to_list(after_second) == [3, 4]
+}
+
+test "the front is empty only when the whole queue is empty" {
+  // The field access needs the parameter's type, so it is annotated.
+  fn holds(checked: Queue<Int>) {
+    !list::is_empty(checked.front) || list::is_empty(checked.back)
+  }
+  let one = push(new(), 1)
+  let two = push(one, 2)
+  let assert Some((_, popped_once)) = pop(two)
+  let assert Some((_, popped_twice)) = pop(popped_once)
+  let refilled = push(popped_twice, 3)
+  list::each([one, two, popped_once, popped_twice, refilled], fn(checked) {
+    assert holds(checked)
+  })
+  // Popping 1 left only `back`, and `balance` moved it to the front.
+  assert popped_once == Queue { front: [2], back: [] }
+}
+
+test "an empty queue has nothing to peek at or pop" {
+  // Nothing else fixes the item type, so the turbofish names it.
+  let nothing = new::<String>()
+  assert peek(nothing) == None
+  assert pop(nothing) == None
+  assert is_empty(nothing)
+  assert length(nothing) == 0
+}
+
+test "peek returns the next item without removing it" {
+  let filled = from_list(["a", "b"])
+  assert peek(filled) == Some("a")
+  assert length(filled) == 2
+  assert peek(push(new(), "c")) == Some("c")
+}
+
+test "pushing and popping leave the original queue unchanged" {
+  let original = from_list([1, 2])
+  let longer = push(original, 3)
+  let assert Some((_, shorter)) = pop(original)
+  assert to_list(original) == [1, 2]
+  assert to_list(longer) == [1, 2, 3]
+  assert to_list(shorter) == [2]
+}
+
+test "== compares the halves and same_items compares the items" {
+  let pushed = new() |> push(1) |> push(2) |> push(3)
+  let listed = from_list([1, 2, 3])
+  assert pushed == Queue { front: [1], back: [3, 2] }
+  assert pushed != listed
+  assert same_items(pushed, listed)
+  assert to_list(pushed) == to_list(listed)
+  assert !same_items(pushed, from_list([3, 2, 1]))
+}
+
+test "a queue built by hand can break the invariant" {
+  // Possible only inside this package. Other packages cannot write
+  // this, because `Queue` is not `exposed`.
+  let broken = Queue { front: [], back: [1] }
+  assert length(broken) == 1
+  assert peek(broken) == None
+}
+
+test "queues show their items front first" {
+  assert show(push(from_list(["a", "b"]), "c")) == "queue [a, b, c]"
+  assert show(new::<Int>()) == "queue []"
+}

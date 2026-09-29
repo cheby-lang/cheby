@@ -1,0 +1,99 @@
+//! Paying back money in coins.
+//!
+//! The greedy method takes the largest coin that still fits, again and
+//! again. For the coins used here it always gives the fewest coins
+//! possible. That is not true of every set of coins: with coins of 40,
+//! 30 and 10, it would pay 60 as 40, 10 and 10 instead of 30 and 30.
+//!
+//! Amounts are whole numbers of cents.
+
+import std::list
+import std::string
+
+/// The coins the machine takes and gives back, in cents, largest first.
+const coins: List<Int> = [200, 100, 50, 20, 10]
+
+/// Tells whether `value` is one of `coins`.
+fn is_coin(value: Int) -> Bool {
+  list::contains(coins, value)
+}
+
+/// Pays `amount` cents in as few coins as possible, largest first.
+/// Returns `None` if no coins add up to exactly `amount`, which happens
+/// when it is negative or not a multiple of 10.
+fn greedy(amount: Int) -> Option<List<Int>> {
+  // `available` holds the coins still worth trying, largest first. A
+  // coin stays available after it is used, so it can be used again.
+  fn step(remaining, available, paid) {
+    case remaining, available {
+      0, _ => Some(paid)
+      _, [] => None
+      _, [coin, ..] when coin <= remaining => step(remaining - coin, available, [..paid, coin])
+      _, [_, ..smaller] => step(remaining, smaller, paid)
+    }
+  }
+  step(amount, coins, [])
+}
+
+/// Formats `cents` as money with two decimal places, such as `1.50`.
+fn format(cents: Int) -> String {
+  case {
+    cents < 0 => "-" + format(-cents)
+    _ => {
+      let whole = cents / 100
+      // Interpolation takes only names, not expressions, so the
+      // remainder is bound to a name first.
+      let rest = cents % 100
+      let padded = string::pad_start("{rest}", 2, "0")
+      "{whole}.{padded}"
+    }
+  }
+}
+
+test "only the listed coins are coins" {
+  assert is_coin(200)
+  assert is_coin(10)
+  assert !is_coin(5)
+  assert !is_coin(500)
+  assert !is_coin(0)
+}
+
+test "greedy takes the largest coins first" {
+  assert greedy(380) == Some([200, 100, 50, 20, 10])
+  assert greedy(410) == Some([200, 200, 10])
+  assert greedy(60) == Some([50, 10])
+  assert greedy(40) == Some([20, 20])
+}
+
+test "nothing is owed, nothing is paid" {
+  assert greedy(0) == Some([])
+}
+
+test "amounts the coins cannot make have no change" {
+  assert greedy(15) == None
+  assert greedy(5) == None
+  assert greedy(-10) == None
+}
+
+test "the change always adds up to the amount" {
+  fn check(amount) {
+    case {
+      amount > 2000 => Nil
+      _ => {
+        let assert Some(paid) = greedy(amount)
+        assert list::fold(paid, 0, fn(total, coin) { total + coin }) == amount
+        check(amount + 10)
+      }
+    }
+  }
+  check(0)
+}
+
+test "amounts show with two decimal places" {
+  assert format(150) == "1.50"
+  assert format(1000) == "10.00"
+  assert format(50) == "0.50"
+  assert format(5) == "0.05"
+  assert format(0) == "0.00"
+  assert format(-120) == "-1.20"
+}

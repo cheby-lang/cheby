@@ -1,0 +1,244 @@
+//! Base64, as defined in RFC 4648, with padding.
+//!
+//! Base64 writes binary data as text. Every group of three bytes, 24
+//! bits, is split into four 6-bit values, and each value becomes one of
+//! the 64 characters of `alphabet`. When the data does not fill the last
+//! group, it is written with two or three characters and padded with
+//! `=` to four.
+//!
+//! The bits are moved around with the bitwise operators on `U32`, a
+//! sized integer type that holds a whole 24-bit group. Bytes are `U8`s,
+//! and every change between `U8`, `U32` and `Int` is an explicit
+//! conversion: a widening one returns the new type directly, and a
+//! narrowing one returns a `Result`.
+
+import std::bytes
+import std::int
+import std::list
+import std::map
+import std::map::{Map}
+import std::result
+import std::string
+import std::u32
+import std::u8
+
+/// The 64 characters, where a character's index is the 6-bit value it
+/// stands for.
+const alphabet: String = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+/// The characters of `alphabet`, one per element, for encoding.
+const digits: List<String> = string::to_code_points(alphabet)
+
+/// The 6-bit value of each character of `alphabet`, for decoding. The
+/// compiler builds the map while building the program, so decoding
+/// never spends time on it.
+const sextets: Map<String, U32> = index_digits()
+
+/// Why a text is not valid Base64.
+type DecodeError {
+  /// The number of characters, which is not a multiple of 4.
+  InvalidLength(Int),
+  /// A character outside the alphabet, and its position, counted in
+  /// characters from 0.
+  InvalidCharacter(String, Int),
+  /// The position of a `=` that is not part of the padding at the end.
+  MisplacedPadding(Int),
+}
+
+/// Encodes `data` as Base64 text.
+fn encode(data: bytes::Bytes) -> String {
+  // Each step takes one group of three bytes. Only the last group can
+  // be shorter, and it is shifted up to where three bytes would put its
+  // bits, so the characters are always taken from the top.
+  fn step(rest, found) {
+    case rest {
+      [] => found
+      [first] => [..found, to_characters(join_bytes([first]) << 16, 2), "=="]
+      [first, second] => [..found, to_characters(join_bytes([first, second]) << 8, 3), "="]
+      [first, second, third, ..tail] => {
+        step(tail, [..found, to_characters(join_bytes([first, second, third]), 4)])
+      }
+    }
+  }
+  // The pieces are collected in a list and joined once at the end.
+  data
+  |> bytes::to_list
+  |> step(_, [])
+  |> string::join(_, "")
+}
+
+/// Decodes Base64 text back into bytes.
+fn decode(text: String) -> Result<bytes::Bytes, DecodeError> {
+  // `position` is the index of the first character of `rest` in the
+  // whole text, for error messages. `=` may only end the text, so the
+  // padded groups match only when nothing follows them.
+  fn step(rest, position, found) {
+    case rest {
+      [] => Ok(bytes::from_list(found))
+      [first, second, "=", "="] => {
+        use group <- result::try(join_sextets([first, second], position))
+        Ok(bytes::from_list([..found, ..split_group(group << 12, 1)]))
+      }
+      [first, second, third, "="] => {
+        use group <- result::try(join_sextets([first, second, third], position))
+        Ok(bytes::from_list([..found, ..split_group(group << 6, 2)]))
+      }
+      [first, second, third, fourth, ..tail] => {
+        use group <- result::try(join_sextets([first, second, third, fourth], position))
+        step(tail, position + 4, [..found, ..split_group(group, 3)])
+      }
+      // One to three characters are left over.
+      _ => Err(InvalidLength(position + list::length(rest)))
+    }
+  }
+  step(string::to_code_points(text), 0, [])
+}
+
+/// Joins up to three bytes into one number, the first byte highest.
+priv fn join_bytes(group: List<U8>) -> U32 {
+  // `|` needs both operands of the same type, so each byte is widened
+  // to a `U32`. Widening cannot fail, so it returns a `U32` directly.
+  list::fold(group, 0, fn(acc, byte) { acc << 8 | u32::from_u8(byte) })
+}
+
+/// Writes the top `count` 6-bit values of the 24-bit `group` as
+/// characters.
+priv fn to_characters(group: U32, count: Int) -> String {
+  // `>>` binds tighter than `&`, so no parentheses are needed.
+  [18, 12, 6, 0]
+  |> list::take(count)
+  |> list::map(fn(shift) { digit(group >> shift & 0b11_1111) })
+  |> string::join(_, "")
+}
+
+/// Returns the character for the 6-bit `value`.
+priv fn digit(value: U32) -> String {
+  // Lists are indexed with an `Int`. Every `U32` fits in an `Int`, so
+  // this conversion is a widening one.
+  let assert Some(character) = list::get(digits, int::from_u32(value))
+  character
+}
+
+/// Returns the 6-bit value of `character`, which is at `position` in
+/// the text.
+priv fn sextet(character: String, position: Int) -> Result<U32, DecodeError> {
+  case character, map::get(sextets, character) {
+    _, Some(value) => Ok(value)
+    "=", None => Err(MisplacedPadding(position))
+    _, None => Err(InvalidCharacter(character, position))
+  }
+}
+
+/// Joins the 6-bit values of up to four `characters` into one number,
+/// the first character highest. `position` is where the first one is in
+/// the text.
+priv fn join_sextets(characters: List<String>, position: Int) -> Result<U32, DecodeError> {
+  fn step(rest, index, group: U32) {
+    case rest {
+      [] => Ok(group)
+      [first, ..tail] => {
+        use value <- result::try(sextet(first, index))
+        step(tail, index + 1, group << 6 | value)
+      }
+    }
+  }
+  step(characters, position, 0)
+}
+
+/// Returns the top `count` bytes of the 24-bit `group`.
+priv fn split_group(group: U32, count: Int) -> List<U8> {
+  [16, 8, 0]
+  |> list::take(count)
+  |> list::map(fn(shift) {
+    // Narrowing a `U32` to a `U8` fails for values above 255, so it
+    // returns a `Result`. The mask keeps only the low 8 bits, so it
+    // cannot fail here.
+    let assert Ok(byte) = u8::from_u32(group >> shift & 0xFF)
+    byte
+  })
+}
+
+/// Builds `sextets`. It runs only at compile time.
+priv fn index_digits() -> Map<String, U32> {
+  fn step(rest, value: U32, found) {
+    case rest {
+      [] => found
+      [first, ..tail] => step(tail, value + 1, map::insert(found, first, value))
+    }
+  }
+  step(digits, 0, map::new())
+}
+
+/// Makes `DecodeError` satisfy `Show`, so a decoding error can be
+/// interpolated as readable text.
+fn show(error: DecodeError) -> String {
+  case error {
+    InvalidLength(count) => "the length must be a multiple of 4, got {count} characters"
+    InvalidCharacter(character, position) => "\"{character}\" at position {position} is not a Base64 character"
+    MisplacedPadding(position) => "\"=\" at position {position} is not padding at the end"
+  }
+}
+
+test "the RFC 4648 test vectors encode" {
+  assert encode(bytes::from_string("")) == ""
+  assert encode(bytes::from_string("f")) == "Zg=="
+  assert encode(bytes::from_string("fo")) == "Zm8="
+  assert encode(bytes::from_string("foo")) == "Zm9v"
+  assert encode(bytes::from_string("foob")) == "Zm9vYg=="
+  assert encode(bytes::from_string("fooba")) == "Zm9vYmE="
+  assert encode(bytes::from_string("foobar")) == "Zm9vYmFy"
+}
+
+test "the RFC 4648 test vectors decode" {
+  assert decode("") == Ok(bytes::from_string(""))
+  assert decode("Zg==") == Ok(bytes::from_string("f"))
+  assert decode("Zm8=") == Ok(bytes::from_string("fo"))
+  assert decode("Zm9v") == Ok(bytes::from_string("foo"))
+  assert decode("Zm9vYg==") == Ok(bytes::from_string("foob"))
+  assert decode("Zm9vYmE=") == Ok(bytes::from_string("fooba"))
+  assert decode("Zm9vYmFy") == Ok(bytes::from_string("foobar"))
+}
+
+test "bytes that are not text use the last characters of the alphabet" {
+  let data = bytes::from_list([0xFF, 0x00, 0xFE, 0xFB, 0xFF])
+  assert encode(data) == "/wD++/8="
+  assert decode("/wD++/8=") == Ok(data)
+}
+
+test "text that is not ASCII survives the round trip" {
+  // A string always becomes bytes as UTF-8, so "é" is two bytes.
+  let data = bytes::from_string("café")
+  assert encode(data) == "Y2Fmw6k="
+  assert decode(encode(data)) == Ok(data)
+}
+
+test "the alphabet has 64 different characters" {
+  assert list::length(digits) == 64
+  assert map::get(sextets, "A") == Some(0)
+  assert map::get(sextets, "h") == Some(0b10_0001)
+  assert map::get(sextets, "/") == Some(63)
+}
+
+test "a length that is not a multiple of 4 is an error" {
+  assert decode("Zm9") == Err(InvalidLength(3))
+  assert decode("Zm9vYg") == Err(InvalidLength(6))
+  assert decode("Zg=") == Err(InvalidLength(3))
+}
+
+test "characters outside the alphabet are errors" {
+  assert decode("Zm9*") == Err(InvalidCharacter("*", 3))
+  assert decode("Zm9vY g=") == Err(InvalidCharacter(" ", 5))
+  assert decode("Zm9é") == Err(InvalidCharacter("é", 3))
+}
+
+test "padding is only allowed at the end" {
+  assert decode("Zg=a") == Err(MisplacedPadding(2))
+  assert decode("Zg==Zg==") == Err(MisplacedPadding(2))
+  assert decode("Z===") == Err(MisplacedPadding(1))
+}
+
+test "decoding errors show as messages" {
+  assert show(InvalidLength(3)) == "the length must be a multiple of 4, got 3 characters"
+  assert show(InvalidCharacter("*", 3)) == "\"*\" at position 3 is not a Base64 character"
+  assert show(MisplacedPadding(2)) == "\"=\" at position 2 is not padding at the end"
+}

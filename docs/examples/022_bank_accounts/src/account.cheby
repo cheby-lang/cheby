@@ -1,0 +1,297 @@
+//! A bank account kept by an actor: a fiber that owns the account and
+//! serves requests for it, one at a time.
+//!
+//! This is the actor of `009_counter_actor`, with an account in place
+//! of the count. The account is the argument of the actor's
+//! tail-recursive loop, and each request the actor serves produces the
+//! account for the next call. Other fibers send requests over a
+//! channel, and a request that needs an answer carries its own reply
+//! channel.
+//!
+//! The account is an immutable record. A deposit does not change it:
+//! it builds a new one with a record update such as
+//! `Account { ..state, balance: total }`, which copies the fields it
+//! does not list. Usually the actor holds the only reference
+//! to its account, and then the compiler can reuse the old record's
+//! memory, so the update happens in place.
+//!
+//! Because every value is immutable, the actor can also send its whole
+//! account to a client as a statement. The client gets a snapshot that
+//! later requests can never change, and nothing needs to be copied to
+//! make that safe.
+//!
+//! Unlike the counter, an account has no separate stopper. Any holder
+//! of a `Handle` may close the account, and an account whose last
+//! `Handle` is dropped closes by itself.
+
+import std::channel
+import std::fiber
+import std::result
+import bank_accounts::money
+
+/// A handle for sending requests to an account. All copies talk to the
+/// same actor.
+///
+/// Other modules of this package could read the fields, because a type
+/// is opaque only to other packages. They use the functions below
+/// instead.
+type Handle {
+  /// Whose account it is, for messages.
+  owner: String,
+  requests: channel::Sender<Request>,
+}
+
+/// The state of an account, which only its actor holds. Clients see it
+/// through `statement` and `close`.
+type Account {
+  balance: money::Money,
+  /// How many deposits have been made.
+  deposits: Int,
+  /// How many withdrawals have been made. Refused ones do not count.
+  withdrawals: Int,
+}
+
+/// The messages a `Handle` sends to the actor. Every variant except
+/// `Deposit` carries the channel the actor answers on.
+type Request {
+  Deposit(money::Money),
+  Withdraw(money::Money, channel::Sender<Result<Nil, Error>>),
+  Statement(channel::Sender<Account>),
+  Close(channel::Sender<Account>),
+}
+
+/// Why a request failed. Both are things a customer can cause, so they
+/// are values for the caller to handle, not panics.
+type Error {
+  /// A withdrawal asked for more than the balance.
+  InsufficientFunds { balance: money::Money, requested: money::Money },
+  /// The account has been closed, or its actor has returned.
+  Closed,
+}
+
+/// Opens an account for `owner` holding `opening`. Its actor runs as a
+/// fiber in `scope`, so the scope does not return until the account is
+/// closed.
+fn start(scope: fiber::Scope, owner: String, opening: money::Money) -> Handle {
+  assert opening >= money::zero as "an account cannot open with a debt of {opening}"
+  // Capacity 0, as for the counter: a request is handed straight to
+  // the actor, so when `deposit` returns, the actor already has the
+  // deposit and serves it before anything the same fiber sends later.
+  let (requests_tx, requests_rx) = channel::new::<Request>(0)
+  let state = Account { balance: opening, deposits: 0, withdrawals: 0 }
+  fiber::spawn(scope, fn() { serve(requests_rx, state) })
+  Handle { owner, requests: requests_tx }
+}
+
+/// Returns the owner of the account.
+fn name(handle: Handle) -> String {
+  handle.owner
+}
+
+/// Adds `amount` to the balance. Fails only if the account is closed.
+fn deposit(handle: Handle, amount: money::Money) -> Result<Nil, Error> {
+  // A deposit that is not positive can only come from a mistake in the
+  // calling code, never from a customer, so it is a bug and panics
+  // rather than being one more `Error` for every caller to handle.
+  assert amount > money::zero as "a deposit must be positive, not {amount}"
+  tell(handle, Deposit(amount))
+}
+
+/// Takes `amount` from the balance. Fails with `InsufficientFunds`,
+/// and changes nothing, if the balance is smaller than `amount`.
+fn withdraw(handle: Handle, amount: money::Money) -> Result<Nil, Error> {
+  assert amount > money::zero as "a withdrawal must be positive, not {amount}"
+  // `Withdraw(amount, _)` is a function capture: a function
+  // that takes the reply channel and builds the request.
+  use outcome <- result::try(ask(handle, Withdraw(amount, _)))
+  outcome
+}
+
+/// Returns a snapshot of the account.
+fn statement(handle: Handle) -> Result<Account, Error> {
+  ask(handle, Statement)
+}
+
+/// Returns the balance of the account.
+fn balance(handle: Handle) -> Result<money::Money, Error> {
+  use snapshot <- result::try(statement(handle))
+  Ok(snapshot.balance)
+}
+
+/// Closes the account and returns its final state, whose balance is
+/// paid out to the owner. Every request sent afterwards, through any
+/// copy of the handle, fails with `Closed`.
+fn close(handle: Handle) -> Result<Account, Error> {
+  ask(handle, Close)
+}
+
+/// Makes `Error` satisfy `Show`, so an error can be interpolated.
+fn show(error: Error) -> String {
+  case error {
+    // `balance` is also the name of a function in this module, so the
+    // field is bound to a new name instead of being punned: a binding
+    // must not shadow a top-level item.
+    InsufficientFunds { balance: available, requested } =>
+      "the balance of {available} is less than {requested}"
+    Closed => "the account is closed"
+  }
+}
+
+/// Sends a request that needs no answer.
+priv fn tell(handle: Handle, request: Request) -> Result<Nil, Error> {
+  case channel::send(handle.requests, request) {
+    Ok(_) => Ok(Nil)
+    // `send` gives the request back, which is of no use here.
+    Err(_) => Err(Closed)
+  }
+}
+
+/// Sends the request that `make_request` builds around a new reply
+/// channel, and waits for the answer.
+priv fn ask<T>(handle: Handle, make_request: fn(channel::Sender<T>) -> Request) -> Result<T, Error> {
+  // Capacity 1 lets the actor leave its answer and move on, without
+  // waiting for this fiber to take it.
+  let (reply_tx, reply_rx) = channel::new::<T>(1)
+  // Once `reply_tx` is inside the request, this fiber holds no
+  // `Sender` for the reply channel. If the actor ends without
+  // answering, the channel closes and `receive` returns `Err` instead
+  // of waiting forever.
+  case channel::send(handle.requests, make_request(reply_tx)) {
+    Ok(_) => case channel::receive(reply_rx) {
+      Ok(answer) => Ok(answer)
+      Err(_) => Err(Closed)
+    }
+    Err(_) => Err(Closed)
+  }
+}
+
+/// Serves requests until the account is closed or every `Handle` is
+/// gone, and returns the final account. Each recursive call is a tail
+/// call, so an account can serve requests forever in constant stack
+/// space.
+priv fn serve(requests: channel::Receiver<Request>, state: Account) -> Account {
+  case channel::receive(requests) {
+    Ok(request) => case apply(request, state) {
+      Some(next) => serve(requests, next)
+      // The account was closed. `requests` is not used on this branch,
+      // so it is dropped here (D-205). A `send` that is waiting, or
+      // comes later, then fails and its caller gets `Closed`.
+      None => state
+    }
+    // Every `Handle` is gone, so no request can arrive any more.
+    Err(Nil) => state
+  }
+}
+
+/// Serves one request. Returns the account for the next one, or `None`
+/// once the account is closed.
+priv fn apply(request: Request, state: Account) -> Option<Account> {
+  // The clients of this package always wait for their answer, so each
+  // answer below is taken. A client that has gone away was cancelled
+  // with its whole scope, and then nobody is left to tell, so the
+  // result of sending is ignored.
+  case request {
+    Deposit(amount) => Some(credit(state, amount))
+    Withdraw(amount, reply) => case debit(state, amount) {
+      Ok(next) => {
+        let _ = channel::send(reply, Ok(Nil))
+        Some(next)
+      }
+      Err(refusal) => {
+        let _ = channel::send(reply, Err(refusal))
+        Some(state)
+      }
+    }
+    Statement(reply) => {
+      let _ = channel::send(reply, state)
+      Some(state)
+    }
+    Close(reply) => {
+      let _ = channel::send(reply, state)
+      None
+    }
+  }
+}
+
+/// Returns `state` with `amount` added.
+priv fn credit(state: Account, amount: money::Money) -> Account {
+  // `withdrawals` is not listed, so it is copied from `state`. The
+  // `+` is `money::add`, because both operands are `Money`.
+  Account { ..state, balance: state.balance + amount, deposits: state.deposits + 1 }
+}
+
+/// Returns `state` with `amount` taken away, or `InsufficientFunds` if
+/// the balance is too small. An account never goes below zero.
+priv fn debit(state: Account, amount: money::Money) -> Result<Account, Error> {
+  case {
+    amount > state.balance => Err(InsufficientFunds { balance: state.balance, requested: amount })
+    _ => Ok(Account { ..state, balance: state.balance - amount, withdrawals: state.withdrawals + 1 })
+  }
+}
+
+test "credit adds to the balance and counts the deposit" {
+  let before = Account { balance: money::from_cents(10_00), deposits: 2, withdrawals: 1 }
+  let after = credit(before, money::from_cents(2_50))
+  assert after == Account { balance: money::from_cents(12_50), deposits: 3, withdrawals: 1 }
+  // An update builds a new record. `before` itself is unchanged.
+  assert before.balance == money::from_cents(10_00)
+}
+
+test "debit refuses to go below zero" {
+  let before = Account { balance: money::from_cents(10_00), deposits: 0, withdrawals: 0 }
+  assert debit(before, money::from_cents(10_00)) == Ok(Account { balance: money::zero, deposits: 0, withdrawals: 1 })
+  let refusal = InsufficientFunds { balance: money::from_cents(10_00), requested: money::from_cents(10_01) }
+  assert debit(before, money::from_cents(10_01)) == Err(refusal)
+}
+
+test "deposits and withdrawals change the balance" {
+  let assert Ok(Ok(snapshot)) = {
+    use scope <- fiber::scope()
+    let wallet = start(scope, "Ada", money::from_cents(10_00))
+    let assert Ok(Nil) = deposit(wallet, money::from_cents(5_00))
+    let assert Ok(Nil) = withdraw(wallet, money::from_cents(12_50))
+    statement(wallet)
+  }
+  assert snapshot == Account { balance: money::from_cents(2_50), deposits: 1, withdrawals: 1 }
+}
+
+test "a refused withdrawal changes nothing" {
+  let assert Ok(answers) = {
+    use scope <- fiber::scope()
+    let wallet = start(scope, "Ada", money::from_cents(3_00))
+    (withdraw(wallet, money::from_cents(3_01)), balance(wallet))
+  }
+  let refusal = InsufficientFunds { balance: money::from_cents(3_00), requested: money::from_cents(3_01) }
+  assert answers == (Err(refusal), Ok(money::from_cents(3_00)))
+}
+
+test "a closed account refuses every request" {
+  let assert Ok(answers) = {
+    use scope <- fiber::scope()
+    let wallet = start(scope, "Ada", money::from_cents(1_00))
+    let assert Ok(last) = close(wallet)
+    (last.balance, deposit(wallet, money::from_cents(1_00)), balance(wallet))
+  }
+  assert answers == (money::from_cents(1_00), Err(Closed), Err(Closed))
+}
+
+test "the actor returns its account once every Handle is gone" {
+  let assert Ok(final) = {
+    use scope <- fiber::scope()
+    let (requests_tx, requests_rx) = channel::new::<Request>(0)
+    let empty = Account { balance: money::zero, deposits: 0, withdrawals: 0 }
+    let actor = fiber::spawn(scope, fn() { serve(requests_rx, empty) })
+    let wallet = Handle { owner: "Ada", requests: requests_tx }
+    let assert Ok(Nil) = deposit(wallet, money::from_cents(4_00))
+    // `wallet` is not used after the line above, so it is dropped
+    // there. That closes the request channel, and the actor returns.
+    fiber::join(actor)
+  }
+  assert final == Account { balance: money::from_cents(4_00), deposits: 1, withdrawals: 0 }
+}
+
+test "errors show as messages for the customer" {
+  let refusal = InsufficientFunds { balance: money::from_cents(3_00), requested: money::from_cents(12_50) }
+  assert show(refusal) == "the balance of 3.00 is less than 12.50"
+  assert show(Closed) == "the account is closed"
+}

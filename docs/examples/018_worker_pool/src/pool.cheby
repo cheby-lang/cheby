@@ -1,0 +1,174 @@
+//! A parallel map on a fixed pool of worker fibers.
+//!
+//! `map` opens a scope with three kinds of fiber in it. A feeder sends
+//! every input, tagged with its position, on one job channel. A fixed
+//! number of workers all receive from that same channel, so they
+//! compete for the jobs, and each job goes to exactly one of them. A
+//! worker sends each result, tagged like its input, on a result
+//! channel, and the scope's body collects the results. Jobs take
+//! different times, so results arrive in any order, and the tags put
+//! them back in the order of the inputs.
+//!
+//! Nothing stops the fibers explicitly. Each channel closes when the
+//! last handle of one kind is dropped:
+//!
+//! - The feeder holds the only job `Sender`. It returns after the last
+//!   job, which drops the `Sender` and closes the job channel.
+//! - Each worker holds the job `Receiver` and a result `Sender`. A
+//!   worker returns once the job channel is empty and closed, which
+//!   drops its result `Sender`. When the last worker returns, the
+//!   result channel closes.
+//! - The body holds only the result `Receiver`. It collects results
+//!   until the result channel closes, and by then every job is done and
+//!   every fiber has returned, so the scope returns at once.
+//!
+//! If a job panics, the worker running it unwinds and ends. The scope
+//! then cancels the feeder, the other workers and its own body, wherever
+//! they are blocked, and their handles are dropped as they unwind. Once
+//! all of them have ended, `map` returns `Err` with the panic, and the
+//! results collected so far are lost with the body.
+
+import std::channel
+import std::fiber
+import std::int
+import std::list
+
+/// A value tagged with the position of its input, from 0.
+priv type Tagged<T> = (Int, T)
+
+/// Applies `job` to every element of `inputs` on `workers` fibers, and
+/// returns the results in the order of the inputs. Returns `Err` with
+/// the first panic if `job` panics on any input. Panics itself unless
+/// `workers` is positive, because with no workers the jobs would never
+/// be taken.
+fn map<A, B>(inputs: List<A>, workers: Int, job: fn(A) -> B) -> Result<List<B>, fiber::Panic> {
+  assert workers > 0 as "a pool needs at least one worker"
+  use scope <- fiber::scope()
+  // Capacity 0: a job is handed straight to a worker that asks for
+  // one, so the next job always goes to a free worker, and a busy one
+  // never sits on jobs that others could run.
+  let (jobs_tx, jobs_rx) = channel::new::<Tagged<A>>(0)
+  let (results_tx, results_rx) = channel::new::<Tagged<B>>(0)
+  // The closure is the last use of `jobs_tx`, so from here on the
+  // feeder holds the only job `Sender`.
+  fiber::spawn(scope, fn() { feed(jobs_tx, inputs, 0) })
+  // Every worker gets the same `Receiver`, which makes them competing
+  // consumers of one queue.
+  fn hire(remaining) {
+    case remaining {
+      0 => Nil
+      _ => {
+        fiber::spawn(scope, fn() { work(jobs_rx, results_tx, job) })
+        hire(remaining - 1)
+      }
+    }
+  }
+  hire(workers)
+  // `hire` is not used again, so it is released here, together with
+  // the `jobs_rx` and `results_tx` it captured (D-205). Only the
+  // workers hold those now. Were the body to keep a result `Sender`,
+  // the result channel could never close and `collect` would wait
+  // forever.
+  fn collect(found) {
+    case channel::receive(results_rx) {
+      Ok(done) => collect([..found, done])
+      // Every worker has returned.
+      Err(Nil) => found
+    }
+  }
+  in_order(collect([]))
+}
+
+/// Sends each of `inputs` as a job, tagged with its position counted
+/// from `index`. Returning drops `jobs`, which closes the job channel.
+priv fn feed<A>(jobs: channel::Sender<Tagged<A>>, inputs: List<A>, index: Int) {
+  case inputs {
+    // `jobs` is dropped here. Workers still take the jobs already sent
+    // and then find the channel closed.
+    [] => Nil
+    [input, ..rest] => {
+      // The workers hold the `Receiver` until the channel is closed,
+      // and it cannot close while this fiber holds the `Sender`, so a
+      // worker is always there to take the job. If the scope is
+      // cancelled instead, `send` never returns.
+      let assert Ok(Nil) = channel::send(jobs, (index, input))
+      feed(jobs, rest, index + 1)
+    }
+  }
+}
+
+/// Runs jobs from `jobs` until the job channel is empty and closed,
+/// and sends each result on `results` with the tag of its input. The
+/// recursive call is a tail call, so a worker can run any number of
+/// jobs in constant stack space.
+priv fn work<A, B>(
+  jobs: channel::Receiver<Tagged<A>>,
+  results: channel::Sender<Tagged<B>>,
+  job: fn(A) -> B,
+) {
+  case channel::receive(jobs) {
+    Ok((index, input)) => {
+      // The body receives until the result channel closes, which it
+      // cannot do while this worker holds a `Sender`, so the result is
+      // always taken.
+      let assert Ok(Nil) = channel::send(results, (index, job(input)))
+      work(jobs, results, job)
+    }
+    // No job is left. Returning drops this worker's `jobs` and
+    // `results`, and the last worker to return closes the result
+    // channel.
+    Err(Nil) => Nil
+  }
+}
+
+/// Puts tagged values in the order of their tags and drops the tags.
+priv fn in_order<T>(tagged: List<Tagged<T>>) -> List<T> {
+  tagged
+  |> list::sort(fn((first, _), (second, _)) { int::compare(first, second) })
+  |> list::map(fn((_, value)) { value })
+}
+
+test "tagged values are put in the order of their tags" {
+  assert in_order([(2, "c"), (0, "a"), (3, "d"), (1, "b")]) == ["a", "b", "c", "d"]
+  assert in_order::<String>([]) == []
+}
+
+test "results come back in the order of the inputs" {
+  // The numbers from 1 to 200. With many workers, results arrive in no
+  // particular order, and the answer must still match a plain map.
+  fn count_up(n, built) {
+    case n {
+      0 => built
+      _ => count_up(n - 1, [n, ..built])
+    }
+  }
+  let inputs = count_up(200, [])
+  let square = fn(n) { n * n }
+  assert map(inputs, 8, square) == Ok(list::map(inputs, square))
+}
+
+test "one worker, and more workers than jobs, give the same results" {
+  let double = fn(n) { n * 2 }
+  assert map([3, 1, 2], 1, double) == Ok([6, 2, 4])
+  assert map([3, 1, 2], 10, double) == Ok([6, 2, 4])
+}
+
+test "no inputs give no results" {
+  assert map([], 4, fn(n: Int) { n + 1 }) == Ok([])
+}
+
+test "a job that panics fails the whole map" {
+  // Dividing by zero panics, so the job for 0 ends its worker, and the
+  // scope cancels the others.
+  let assert Err(_) = map([1, 2, 0, 4, 6], 2, fn(n) { 12 / n })
+}
+
+test "a pool without workers is refused" {
+  // `map` panics before it opens its own scope, so a scope is needed
+  // here to catch the panic.
+  let outcome = {
+    use _scope <- fiber::scope()
+    map([1, 2], 0, fn(n: Int) { n })
+  }
+  let assert Err(_) = outcome
+}

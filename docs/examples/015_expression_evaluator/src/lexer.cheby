@@ -1,0 +1,219 @@
+//! Splits one line of input into tokens.
+//!
+//! A token is a number, a name, the keyword `let`, an operator, a
+//! parenthesis or `=`. Whitespace between tokens is skipped. Each
+//! token records its position, counted in code points from 0, so that
+//! the parser can say where a line goes wrong.
+//!
+//! The last token is always `End`, at the position just after the line.
+//! The parser therefore always has a token to look at, and an error at
+//! the end of a line still has a position.
+
+import std::int
+import std::list
+import std::string
+import expression_evaluator::expr
+
+/// A token and the position where it starts.
+type Token { kind: Kind, position: Int }
+
+/// What kind of token it is.
+type Kind {
+  /// A whole number. Numbers have no sign: `-5` is the operator `-`
+  /// and then the number 5.
+  Number(Int),
+  /// A variable name: an ASCII letter or `_`, then letters, digits and
+  /// `_`.
+  Name(String),
+  /// The keyword `let`.
+  Let,
+  /// `+`, `-`, `*` or `/`. The token holds the operator of the syntax
+  /// tree directly, so the parser needs no table to translate it.
+  Operator(expr::Op),
+  LeftParen,
+  RightParen,
+  Equals,
+  /// The end of the line.
+  End,
+}
+
+/// Why a line cannot be split into tokens, and where.
+type LexError { position: Int, problem: Problem }
+
+/// What is wrong with the line.
+type Problem {
+  /// This code point cannot start a token.
+  UnexpectedChar(String),
+  /// These digits make a number too large for an `Int`.
+  NumberTooLarge(String),
+}
+
+/// Splits `text` into tokens, ending with an `End` token.
+fn tokenize(text: String) -> Result<List<Token>, LexError> {
+  // `rest` holds the code points not read yet, and `position` is the
+  // position of the first of them. Every call to `step` is a tail call,
+  // so a long line takes constant stack space.
+  fn step(rest, position, tokens) {
+    case rest {
+      [] => Ok([..tokens, Token { kind: End, position }])
+      // `|` in a pattern means "or": any of these is whitespace.
+      [" " | "\t" | "\r" | "\n", ..tail] => step(tail, position + 1, tokens)
+      [first, ..] when is_digit(first) => {
+        let (digits, after) = split_while(rest, is_digit)
+        let spelling = string::join(digits, "")
+        case int::parse(spelling) {
+          Ok(n) => {
+            let token = Token { kind: Number(n), position }
+            step(after, position + list::length(digits), [..tokens, token])
+          }
+          Err(_) => Err(LexError { position, problem: NumberTooLarge(spelling) })
+        }
+      }
+      [first, ..] when is_name_start(first) => {
+        let (letters, after) = split_while(rest, is_name_part)
+        let word = string::join(letters, "")
+        let kind = case word {
+          "let" => Let
+          _ => Name(word)
+        }
+        step(after, position + list::length(letters), [..tokens, Token { kind, position }])
+      }
+      [first, ..tail] => case punctuation(first) {
+        Some(kind) => step(tail, position + 1, [..tokens, Token { kind, position }])
+        None => Err(LexError { position, problem: UnexpectedChar(first) })
+      }
+    }
+  }
+  step(string::to_code_points(text), 0, [])
+}
+
+/// Returns the kind of the one-code-point token `c`, if there is one.
+priv fn punctuation(c: String) -> Option<Kind> {
+  case c {
+    "+" => Some(Operator(expr::Add))
+    "-" => Some(Operator(expr::Subtract))
+    "*" => Some(Operator(expr::Multiply))
+    "/" => Some(Operator(expr::Divide))
+    "(" => Some(LeftParen)
+    ")" => Some(RightParen)
+    "=" => Some(Equals)
+    _ => None
+  }
+}
+
+/// Splits `items` before the first one that `keep` rejects.
+priv fn split_while(items: List<String>, keep: fn(String) -> Bool) -> (List<String>, List<String>) {
+  fn step(taken, rest) {
+    case rest {
+      [first, ..tail] when keep(first) => step([..taken, first], tail)
+      _ => (taken, rest)
+    }
+  }
+  step([], items)
+}
+
+/// Tells whether the code point `c` is an ASCII digit. Strings compare
+/// by their code points, so a range check works.
+priv fn is_digit(c: String) -> Bool {
+  c >= "0" && c <= "9"
+}
+
+/// Tells whether the code point `c` can start a name.
+priv fn is_name_start(c: String) -> Bool {
+  c >= "a" && c <= "z" || c >= "A" && c <= "Z" || c == "_"
+}
+
+/// Tells whether the code point `c` can continue a name.
+priv fn is_name_part(c: String) -> Bool {
+  is_name_start(c) || is_digit(c)
+}
+
+/// Describes a token of kind `kind` for an error message. A module
+/// satisfies `Show` for one type only (D-045), and here that is
+/// `LexError`, so this function has a different name.
+fn describe(kind: Kind) -> String {
+  case kind {
+    Number(n) => "number {n}"
+    Name(name) => "name {name}"
+    Let => "\"let\""
+    Operator(op) => "\"" + expr::symbol(op) + "\""
+    LeftParen => "\"(\""
+    RightParen => "\")\""
+    Equals => "\"=\""
+    End => "end of line"
+  }
+}
+
+/// Makes `LexError` satisfy `Show`. Columns are counted from 1, as
+/// editors do.
+fn show(error: LexError) -> String {
+  let column = error.position + 1
+  case error.problem {
+    // `:?` prints the code point in quotes, with escapes.
+    UnexpectedChar(found) => "unexpected character {found:?} at column {column}"
+    NumberTooLarge(digits) => "the number {digits} is too large at column {column}"
+  }
+}
+
+test "tokens record the position where they start" {
+  assert tokenize("12 + x") == Ok([
+    Token { kind: Number(12), position: 0 },
+    Token { kind: Operator(expr::Add), position: 3 },
+    Token { kind: Name("x"), position: 5 },
+    Token { kind: End, position: 6 },
+  ])
+}
+
+test "every operator, parenthesis and = is a token of its own" {
+  let assert Ok(tokens) = tokenize("let a=(b-c)*d/e")
+  assert list::map(tokens, fn(token) { token.kind }) == [
+    Let,
+    Name("a"),
+    Equals,
+    LeftParen,
+    Name("b"),
+    Operator(expr::Subtract),
+    Name("c"),
+    RightParen,
+    Operator(expr::Multiply),
+    Name("d"),
+    Operator(expr::Divide),
+    Name("e"),
+    End,
+  ]
+}
+
+test "let is a keyword only as a whole word" {
+  let assert Ok(tokens) = tokenize("letter let_1 let _x2")
+  assert list::map(tokens, fn(token) { token.kind }) == [Name("letter"), Name("let_1"), Let, Name("_x2"), End]
+}
+
+test "a blank line is just its end" {
+  assert tokenize("") == Ok([Token { kind: End, position: 0 }])
+  assert tokenize(" \t\n") == Ok([Token { kind: End, position: 3 }])
+}
+
+test "unknown characters and numbers too large for an Int are errors" {
+  assert tokenize("2 # 3") == Err(LexError { position: 2, problem: UnexpectedChar("#") })
+  assert tokenize("1 + 99999999999999999999") == Err(LexError {
+    position: 4,
+    problem: NumberTooLarge("99999999999999999999"),
+  })
+}
+
+test "names are ASCII only" {
+  // `caf` is a name, and the `é` after it cannot start a token.
+  assert tokenize("caf\u{e9}") == Err(LexError { position: 3, problem: UnexpectedChar("\u{e9}") })
+}
+
+test "lex errors show as messages for the user" {
+  assert show(LexError { position: 2, problem: UnexpectedChar("#") }) == "unexpected character \"#\" at column 3"
+  let too_large = LexError { position: 4, problem: NumberTooLarge("99999999999999999999") }
+  assert show(too_large) == "the number 99999999999999999999 is too large at column 5"
+}
+
+test "token kinds are described as the user wrote them" {
+  assert describe(Operator(expr::Divide)) == "\"/\""
+  assert describe(Name("x")) == "name x"
+  assert describe(End) == "end of line"
+}

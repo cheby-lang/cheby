@@ -1,0 +1,170 @@
+//! Counting words in a text and ranking them by how often they appear.
+//!
+//! Everything here is pure, so the tests below cover the whole logic
+//! without touching files. A word is a run of letters, lowercased, and
+//! anything else separates words, so "Don't" is the two words "don" and
+//! "t".
+//!
+//! The imports show both kinds. `import std::map` brings in the module,
+//! used as `map::new`, and `import std::map::{Map}` brings in the type
+//! `Map` itself, so signatures can say `Map<String, Int>`. `std::int` and
+//! `std::string` both have a function called `compare`, and two names in
+//! scope must differ, so each is renamed with `as` when it is imported.
+
+import std::int::{compare as compare_counts}
+import std::list
+import std::map
+import std::map::{Map}
+import std::string
+import std::string::{compare as compare_words}
+
+/// A word and how many times it appears.
+type Entry = (String, Int)
+
+/// Returns the `limit` most frequent words of `text` with their counts,
+/// most frequent first. Words with the same count come in alphabetical
+/// order.
+fn top(text: String, limit: Int) -> List<Entry> {
+  // A `Map` has no order of its own, and it changes from run to run
+  // (D-093). The sort decides every tie, so the output is the same on
+  // every run anyway.
+  text
+  |> split_words
+  |> tally
+  |> map::to_list
+  |> list::sort(by_frequency)
+  |> list::take(_, limit)
+}
+
+/// Splits `text` into lowercased words, in the order they appear.
+fn split_words(text: String) -> List<String> {
+  // `current` is the word being read, and `found` the words finished
+  // so far. There is no character type, so each code point comes as a
+  // one-code-point `String`.
+  fn step(rest, current, found) {
+    case rest {
+      [] => keep(current, found)
+      [first, ..tail] when is_letter(first) => step(tail, current + first, found)
+      [_, ..tail] => step(tail, "", keep(current, found))
+    }
+  }
+  // `step(_, "", [])` is a function capture. The pipe fills the hole
+  // with the code points.
+  text
+  |> string::lowercase
+  |> string::to_code_points
+  |> step(_, "", [])
+}
+
+/// Tells whether `code_point` is a lower-case letter. Only the letters
+/// `a` to `z` count, so a letter such as `é` separates words. Strings
+/// compare by Unicode scalar values, which for one code point is the
+/// order of the alphabet.
+priv fn is_letter(code_point: String) -> Bool {
+  code_point >= "a" && code_point <= "z"
+}
+
+/// Adds `word` to the end of `found`, unless it is empty. Appending to a
+/// `List` is cheap, because it is a vector, not a linked list.
+priv fn keep(word: String, found: List<String>) -> List<String> {
+  case word {
+    "" => found
+    _ => [..found, word]
+  }
+}
+
+/// Counts how many times each word appears in `words`.
+fn tally(words: List<String>) -> Map<String, Int> {
+  // Each step builds a new map from the previous one. `map::upsert`
+  // passes the old count, if there is one, to `bump`, and stores what
+  // `bump` returns.
+  list::fold(words, map::new(), fn(counts, word) { map::upsert(counts, word, bump) })
+}
+
+/// Returns the count after one more occurrence of a word that has been
+/// seen `previous` times, or never.
+priv fn bump(previous: Option<Int>) -> Int {
+  case previous {
+    Some(n) => n + 1
+    None => 1
+  }
+}
+
+/// Orders entries by count, highest first, then by word, alphabetically.
+/// `list::sort` calls it to compare two entries: `Less` puts `first`
+/// before `second`.
+fn by_frequency(first: Entry, second: Entry) -> Order {
+  let (first_word, first_count) = first
+  let (second_word, second_count) = second
+  // The counts are compared the other way round, so the higher count
+  // comes first. Only a tie falls through to the words.
+  case compare_counts(second_count, first_count) {
+    Equal => compare_words(first_word, second_word)
+    decided => decided
+  }
+}
+
+/// Formats `entries` as lines of a table, with each count right-aligned
+/// in a column as wide as the largest one, then the word.
+fn format_lines(entries: List<Entry>) -> List<String> {
+  case entries {
+    [] => []
+    // The entries are sorted, so the first one has the largest count.
+    [(_, highest), ..] => {
+      let width = string::length("{highest}")
+      // `format_line(_, width)` is a capture nested in the call to
+      // `list::map`, so the `_` belongs to `format_line` (D-202). The
+      // pipe has no hole of its own and fills the first argument of
+      // `list::map` (D-221).
+      entries |> list::map(format_line(_, width))
+    }
+  }
+}
+
+/// Formats one entry, with its count padded on the left to `width`.
+priv fn format_line(entry: Entry, width: Int) -> String {
+  let (word, occurrences) = entry
+  let padded = string::pad_start("{occurrences}", width, " ")
+  "{padded}  {word}"
+}
+
+test "words are lowercased runs of letters" {
+  assert split_words("Hello, world! Don't panic.") == ["hello", "world", "don", "t", "panic"]
+  assert split_words("well-known 2nd_place") == ["well", "known", "nd", "place"]
+  assert split_words("café") == ["caf"]
+}
+
+test "text without letters has no words" {
+  assert split_words("") == []
+  assert split_words(" 42, ... !") == []
+}
+
+test "tally counts every word" {
+  // `map::to_sorted_list` gives the entries in the order of their keys,
+  // so the result can be compared with a list.
+  assert map::to_sorted_list(tally(["b", "a", "b", "c", "b"])) == [("a", 1), ("b", 3), ("c", 1)]
+  assert map::to_sorted_list(tally([])) == []
+}
+
+test "higher counts come first, and ties go alphabetically" {
+  assert by_frequency(("zebra", 5), ("apple", 2)) == Less
+  assert by_frequency(("apple", 2), ("zebra", 5)) == Greater
+  assert by_frequency(("apple", 3), ("banana", 3)) == Less
+  assert by_frequency(("apple", 3), ("apple", 3)) == Equal
+}
+
+test "top ranks the most frequent words" {
+  let text = "The cat and the hat. And the bat!"
+  assert top(text, 3) == [("the", 3), ("and", 2), ("bat", 1)]
+  assert top(text, 1) == [("the", 3)]
+}
+
+test "top returns every word when there are fewer than the limit" {
+  assert top("to be or not to be", 10) == [("be", 2), ("to", 2), ("not", 1), ("or", 1)]
+  assert top("", 10) == []
+}
+
+test "counts line up in a right-aligned column" {
+  assert format_lines([("the", 12), ("a", 3)]) == ["12  the", " 3  a"]
+  assert format_lines([]) == []
+}

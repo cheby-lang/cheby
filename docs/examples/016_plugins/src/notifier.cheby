@@ -1,0 +1,74 @@
+//! The `Notifier` interface, and functions that send a message through
+//! notifiers.
+//!
+//! Interfaces are structural. The modules `email`, `sms` and `log`
+//! never mention `Notifier` and do not even import this module.
+//! Each declares one type and, next to it, the functions `accepts`,
+//! `notify` and `show` with the right signatures, and that is what
+//! makes the type a `Notifier`. Each type has a module of its own,
+//! because a module can satisfy an interface for only one type: two
+//! functions named `notify` in one module would clash.
+//!
+//! There are two ways to write code that works with any notifier:
+//!
+//! - A bound, `N: Notifier`, when the code handles one notifier type
+//!   at a time. The caller's type is known at each call, and one set of
+//!   its functions is passed along for the whole call. A `List<N>`
+//!   holds values of that one type only.
+//! - `dyn Notifier`, when the type is only known at run time or differs
+//!   from one value to the next, as in a list that mixes email, text
+//!   and log notifiers. Each value is packaged with the functions of
+//!   its own type, and every call goes through them.
+//!
+//! The two combine: `dyn Notifier` satisfies `Notifier` itself, so the
+//! bounded functions below also accept a `List<dyn Notifier>`, with
+//! `N` being `dyn Notifier`.
+
+import std::list
+import plugins::message
+
+/// A way to send a message to someone. It embeds `Show`, so a notifier
+/// must also have a `show` that describes where it sends messages, and
+/// every notifier, even a `dyn Notifier`, can be interpolated.
+///
+/// `Self` appears only as the first parameter of each function,
+/// including the embedded `show`. That is what allows `dyn Notifier`.
+/// A function such as `fn merge(Self, Self) -> Self` would rule it out,
+/// since two `dyn` values need not have the same type.
+interface Notifier: Show {
+  /// Tells whether the notifier sends the message at all.
+  fn accepts(Self, message::Message) -> Bool
+  /// Returns the text the notifier sends for the message.
+  fn notify(Self, message::Message) -> String
+}
+
+/// Sends `note` through `target`. Returns the text sent, or `None` if
+/// `target` does not accept `note`.
+fn deliver<N: Notifier>(target: N, note: message::Message) -> Option<String> {
+  // Inside a generic function the type of `target` is unknown, so its
+  // module cannot be named. The functions are called through the
+  // interface instead, and found through the bound.
+  case Notifier::accepts(target, note) {
+    True => Some(Notifier::notify(target, note))
+    False => None
+  }
+}
+
+/// Sends `note` through every notifier of `targets` that accepts it,
+/// and returns the texts sent, in order.
+fn broadcast<N: Notifier>(targets: List<N>, note: message::Message) -> List<String> {
+  targets
+  |> list::filter(fn(target) { Notifier::accepts(target, note) })
+  |> list::map(fn(target) { Notifier::notify(target, note) })
+}
+
+/// Returns `registry` with `target` added at the end.
+///
+/// `target` becomes a `dyn Notifier` as it goes into the list, because
+/// the declared result type tells the list literal what its elements
+/// must be. Its type is a type parameter here, and the functions and
+/// type descriptor packaged with it come from the bound `N: Notifier`.
+/// Without a bound, the conversion would be a compile error.
+fn register<N: Notifier>(registry: List<dyn Notifier>, target: N) -> List<dyn Notifier> {
+  [..registry, target]
+}

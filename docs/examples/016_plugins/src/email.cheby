@@ -1,0 +1,48 @@
+//! Notifications by email.
+//!
+//! `Email` is a `Notifier` (see `notifier.cheby`) because this module,
+//! the one that declares it, has `accepts`, `notify` and `show` with
+//! the signatures the interface asks for, `Self` replaced by `Email`.
+//! Nothing here says so, and nothing needs to.
+
+import plugins::message
+
+/// Sends messages to one email address.
+type Email { address: String }
+
+/// Returns a notifier that sends email to `address`.
+fn new(address: String) -> Email {
+  Email { address }
+}
+
+/// Email takes every message, urgent or not. The message is not
+/// needed to decide, and the leading `_` says so without a warning.
+fn accepts(_inbox: Email, _note: message::Message) -> Bool {
+  True
+}
+
+/// Returns the email sent for `note`. The subject line comes from
+/// `message::show`, so urgent messages are marked.
+fn notify(inbox: Email, note: message::Message) -> String {
+  "email to {inbox.address}: {note}"
+}
+
+/// Makes `Email` satisfy `Show`, which `Notifier` embeds.
+fn show(inbox: Email) -> String {
+  "email to {inbox.address}"
+}
+
+test "email takes every message" {
+  let inbox = new("ops@example.com")
+  assert accepts(inbox, message::routine("Lunch", "Pizza at noon"))
+  assert accepts(inbox, message::urgent("Disk full", "/var is at 98%"))
+}
+
+test "an email carries the whole message" {
+  let text = notify(new("ops@example.com"), message::urgent("Disk full", "/var is at 98%"))
+  assert text == "email to ops@example.com: [urgent] Disk full: /var is at 98%"
+}
+
+test "an email notifier shows its address" {
+  assert show(new("ops@example.com")) == "email to ops@example.com"
+}

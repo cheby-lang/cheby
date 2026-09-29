@@ -1,0 +1,31 @@
+//! A tree whose nodes have a name and any number of children.
+
+/// A node, with the subtrees below it from left to right.
+///
+/// The type is package-visible, so every module of this package can
+/// build it and match on its fields (D-151). `main` does both.
+type Tree { name: String, children: List<Tree> }
+
+/// Returns a node named `name` with the given children.
+fn node(name: String, children: List<Tree>) -> Tree {
+  Tree { name, children }
+}
+
+/// Returns a node named `name` with no children.
+fn leaf(name: String) -> Tree {
+  Tree { name, children: [] }
+}
+
+/// Makes `Tree` satisfy `Show`. A tree shows as the name of its root
+/// only, so a queue of subtrees shows as a short list of names.
+fn show(root: Tree) -> String {
+  root.name
+}
+
+test "a leaf is a node without children" {
+  assert leaf("Ben") == node("Ben", [])
+}
+
+test "a tree shows as the name of its root" {
+  assert show(node("Ada", [leaf("Ben"), leaf("Cy")])) == "Ada"
+}

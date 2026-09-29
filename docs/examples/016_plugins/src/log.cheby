@@ -1,0 +1,45 @@
+//! Notifications written to a named log.
+//!
+//! `Log` has the same shape as `email::Email`, a single `String` field,
+//! but it is a different type with functions of its own. As `dyn`
+//! values the two are never equal, even with the same text inside
+//! (see the tests in `main.cheby`).
+
+import plugins::message
+
+/// Records every message in the log called `name`.
+type Log { name: String }
+
+/// Returns a notifier that writes to the log called `name`.
+fn new(name: String) -> Log {
+  Log { name }
+}
+
+/// A log keeps a record of everything, so it takes every message.
+fn accepts(_journal: Log, _note: message::Message) -> Bool {
+  True
+}
+
+/// Returns the log line written for `note`.
+fn notify(journal: Log, note: message::Message) -> String {
+  "[{journal.name}] {note}"
+}
+
+/// Makes `Log` satisfy `Show`, which `Notifier` embeds.
+fn show(journal: Log) -> String {
+  "log {journal.name}"
+}
+
+test "a log takes every message" {
+  let journal = new("ops")
+  assert accepts(journal, message::routine("Lunch", "Pizza at noon"))
+  assert accepts(journal, message::urgent("Disk full", "/var is at 98%"))
+}
+
+test "a log line names the log" {
+  assert notify(new("ops"), message::routine("Lunch", "Pizza at noon")) == "[ops] Lunch: Pizza at noon"
+}
+
+test "a log notifier shows its name" {
+  assert show(new("ops")) == "log ops"
+}

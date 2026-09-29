@@ -1,0 +1,103 @@
+//! A heartbeat and a supervisor, side by side.
+//!
+//! `main` first starts a heartbeat (see `heartbeat.cheby`), a detached
+//! fiber that prints `tick 1`, `tick 2` and so on in the background.
+//! Then it supervises two jobs (see `supervisor.cheby`):
+//!
+//! - fetching a report, which crashes on the first attempt, hangs past
+//!   its deadline on the second and succeeds on the third,
+//! - saving the report, which crashes every time, so the supervisor
+//!   gives up once its restarts run out.
+//!
+//! Which attempt fails, and how, depends only on the attempt number,
+//! so the restarts and the results are the same on every run. The tick
+//! lines come from another fiber on a timer, so where they fall between
+//! the other lines depends on timing.
+//!
+//! `main` does not wait for the heartbeat. When the second job is
+//! over, `main` returns, and the program ends and kills the heartbeat
+//! mid-beat (D-073).
+
+import std::duration
+import std::io
+import supervisor::clock
+import supervisor::heartbeat
+import supervisor::supervisor
+
+/// Fetching may be restarted three times, and each attempt may take a
+/// second.
+const fetch_policy: supervisor::Policy = supervisor::Policy {
+  max_restarts: 3,
+  deadline: duration::seconds(1),
+  backoff_ms: 100,
+}
+
+/// Saving may be restarted twice.
+const save_policy: supervisor::Policy = supervisor::Policy {
+  max_restarts: 2,
+  deadline: duration::seconds(1),
+  backoff_ms: 100,
+}
+
+fn main() {
+  heartbeat::start(duration::milliseconds(200))
+  io::println("Fetching the report.")
+  case supervisor::supervise(fetch_policy, fetch_report, announce) {
+    Ok(report) => io::println(report)
+    Err(gave_up) => explain(gave_up)
+  }
+  io::println("Saving the report.")
+  case supervisor::supervise(save_policy, save_report, announce) {
+    Ok(Nil) => io::println("The report is saved.")
+    Err(gave_up) => explain(gave_up)
+  }
+  io::println("Done. The heartbeat stops with the program.")
+}
+
+/// Fetches a report, badly. `attempt` counts from 1.
+fn fetch_report(attempt: Int) -> String {
+  case attempt {
+    1 => panic as "the connection dropped"
+    2 => {
+      // Hangs for longer than any deadline. The sleep suspends the
+      // worker, so its deadline can cancel it on every target (D-232).
+      clock::sleep(duration::seconds(60))
+      "a report nobody waits for"
+    }
+    _ => {
+      clock::sleep(duration::milliseconds(250))
+      "The report arrived on attempt {attempt}."
+    }
+  }
+}
+
+/// Saves the report, or rather never does.
+fn save_report(_attempt: Int) {
+  panic as "the disk is full"
+}
+
+/// Prints a restart before it happens.
+fn announce(restart: supervisor::Restart) {
+  io::println("Restart {restart.number}: the worker {restart.cause}.")
+}
+
+/// Prints why the supervisor gave up.
+fn explain(gave_up: supervisor::GaveUp) {
+  let supervisor::GaveUp { restarts, cause } = gave_up
+  io::println("Giving up after {restarts} restarts: the worker {cause}.")
+}
+
+test "the third attempt at fetching succeeds" {
+  assert fetch_report(3) == "The report arrived on attempt 3."
+}
+
+test "fetching succeeds under its supervisor" {
+  let quick = supervisor::Policy { max_restarts: 3, deadline: duration::milliseconds(500), backoff_ms: 1 }
+  assert supervisor::supervise(quick, fetch_report, fn(_) { Nil }) == Ok("The report arrived on attempt 3.")
+}
+
+test "saving always fails" {
+  let quick = supervisor::Policy { ..save_policy, backoff_ms: 1 }
+  let outcome = supervisor::supervise(quick, save_report, fn(_) { Nil })
+  assert outcome == Err(supervisor::GaveUp { restarts: 2, cause: supervisor::Crashed("the disk is full") })
+}

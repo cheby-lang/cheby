@@ -1,0 +1,46 @@
+//! Notifications by text message, for emergencies only.
+//!
+//! `Sms` is a `Notifier` in the same way as `email::Email`: this module
+//! has `accepts`, `notify` and `show` for it. Its `accepts` is the one
+//! that says no to most messages.
+
+import plugins::message
+
+/// Sends urgent messages to one phone number.
+type Sms { number: String }
+
+/// Returns a notifier that texts `number`.
+fn new(number: String) -> Sms {
+  Sms { number }
+}
+
+/// A text wakes someone up, so only urgent messages are sent.
+fn accepts(_phone: Sms, note: message::Message) -> Bool {
+  note.urgent
+}
+
+/// Returns the text sent for `note`. Texts are short, so only the
+/// subject is sent.
+fn notify(phone: Sms, note: message::Message) -> String {
+  "text to {phone.number}: {note.subject}"
+}
+
+/// Makes `Sms` satisfy `Show`, which `Notifier` embeds.
+fn show(phone: Sms) -> String {
+  "text to {phone.number}"
+}
+
+test "texts are only for urgent messages" {
+  let phone = new("+44 20 7946 0000")
+  assert !accepts(phone, message::routine("Lunch", "Pizza at noon"))
+  assert accepts(phone, message::urgent("Disk full", "/var is at 98%"))
+}
+
+test "a text carries only the subject" {
+  let text = notify(new("+44 20 7946 0000"), message::urgent("Disk full", "/var is at 98%"))
+  assert text == "text to +44 20 7946 0000: Disk full"
+}
+
+test "a text notifier shows its number" {
+  assert show(new("+44 20 7946 0000")) == "text to +44 20 7946 0000"
+}

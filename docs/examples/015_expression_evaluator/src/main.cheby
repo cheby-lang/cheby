@@ -1,0 +1,154 @@
+//! A small calculator for whole numbers.
+//!
+//! Each line of input is either `let name = expression`, which gives a
+//! variable a value, or an expression, whose value is printed.
+//! Expressions have whole numbers, variables, `+ - * /`, unary minus and
+//! parentheses, with the usual precedence. A line with an error prints
+//! the error and changes nothing, and the next line carries on. End of
+//! input (Ctrl-D) quits.
+//!
+//! A session looks like this, with `>` marking the lines typed in (the
+//! program itself prints no prompt):
+//!
+//! ```text
+//! > let width = 6
+//! width = 6
+//! > let height = width + 1
+//! height = 7
+//! > width * height
+//! 42
+//! > width / (height - 7)
+//! error: division by zero: height - 7 is 0
+//! ```
+//!
+//! A line goes through three modules: `lexer` splits it into tokens,
+//! `parser` builds a syntax tree from them, declared in `expr`, and
+//! `eval` computes its value.
+
+import std::io
+import std::map
+import std::result
+import std::string
+import expression_evaluator::eval
+import expression_evaluator::lexer
+import expression_evaluator::parser
+
+fn main() -> Result<Nil, io::Error> {
+  io::println("Enter expressions or let lines, one per line.")
+  repl(map::new())
+}
+
+/// Reads lines until the input runs out. `env` holds the variables
+/// defined so far. Each line gives the next call its own `env`, so there
+/// is no state to change: the variables are just an argument. The call
+/// to `repl` is a tail call, so a long session runs in constant stack
+/// space.
+fn repl(env: eval::Env) -> Result<Nil, io::Error> {
+  use line <- result::try(io::read_line())
+  case line {
+    None => Ok(Nil)
+    Some(text) => {
+      let (reply, next_env) = respond(text, env)
+      case reply {
+        Some(message) => io::println(message)
+        None => Nil
+      }
+      repl(next_env)
+    }
+  }
+}
+
+/// Handles one line of input with the variables `env`. Returns what to
+/// print, if anything, and the variables for the next line. Blank lines
+/// print nothing, and a line with an error leaves `env` as it was.
+fn respond(text: String, env: eval::Env) -> (Option<String>, eval::Env) {
+  case string::trim(text) {
+    "" => (None, env)
+    _ => case run(text, env) {
+      Ok((reply, next_env)) => (Some(reply), next_env)
+      Err(error) => (Some("error: {error}"), env)
+    }
+  }
+}
+
+/// Why a line failed, whichever step it failed in.
+type LineError {
+  LexFailed(lexer::LexError),
+  ParseFailed(parser::ParseError),
+  EvalFailed(eval::EvalError),
+}
+
+/// Lexes, parses and evaluates `text`. Returns the text to print and
+/// the variables for the next line.
+fn run(text: String, env: eval::Env) -> Result<(String, eval::Env), LineError> {
+  // Each step has its own error type, and `result::try` never converts
+  // errors, so `result::map_error` first wraps each one in a
+  // `LineError`. Its positional constructors work as functions.
+  use tokens <- result::try(result::map_error(lexer::tokenize(text), LexFailed))
+  use statement <- result::try(result::map_error(parser::parse(tokens), ParseFailed))
+  // Both kinds of statement hold an expression to evaluate. The two
+  // alternatives of the pattern bind the same name with the same type,
+  // so one arm takes it out of either.
+  let tree = case statement {
+    parser::Assign(_, value) | parser::Evaluate(value) => value
+  }
+  use number <- result::try(result::map_error(eval::evaluate(tree, env), EvalFailed))
+  case statement {
+    parser::Assign(name, _) => Ok(("{name} = {number}", map::insert(env, name, number)))
+    parser::Evaluate(_) => Ok(("{number}", env))
+  }
+}
+
+/// Makes `LineError` satisfy `Show`. Each module's error has its own
+/// `show`, so interpolation prints it as a message.
+fn show(error: LineError) -> String {
+  case error {
+    LexFailed(reason) => "{reason}"
+    ParseFailed(reason) => "{reason}"
+    EvalFailed(reason) => "{reason}"
+  }
+}
+
+test "a session keeps its variables, and a line with an error changes nothing" {
+  // Feeds `lines` to `respond` one by one, as `repl` does, and returns
+  // what would be printed.
+  fn session(lines, env, printed) {
+    case lines {
+      [] => printed
+      [text, ..rest] => {
+        let (reply, next_env) = respond(text, env)
+        case reply {
+          Some(message) => session(rest, next_env, [..printed, message])
+          None => session(rest, next_env, printed)
+        }
+      }
+    }
+  }
+  let good = [
+    "let width = 6",
+    "let height = width + 1",
+    "",
+    "width * height",
+    "let width = width * 2",
+    "width * height - -1",
+  ]
+  assert session(good, map::new(), []) == ["width = 6", "height = 7", "42", "width = 12", "85"]
+  let bad = ["let x = 2", "let x = x / 0", "x", "y + 1", "2 +", "3 $ 4", "x / (x - 2)"]
+  assert session(bad, map::new(), []) == [
+    "x = 2",
+    "error: division by zero",
+    "2",
+    "error: unknown variable y",
+    "error: expected a number, a name, \"-\" or \"(\", found end of line at column 4",
+    "error: unexpected character \"$\" at column 3",
+    "error: division by zero: x - 2 is 0",
+  ]
+}
+
+test "run reports the step that failed" {
+  let env = map::new()
+  let assert Err(LexFailed(_)) = run("1 # 2", env)
+  let assert Err(ParseFailed(_)) = run("(1 + 2", env)
+  let assert Err(EvalFailed(eval::UnknownVariable("z"))) = run("z", env)
+  assert run("let z = 3 * (4 - 1)", env) == Ok(("z = 9", map::insert(env, "z", 9)))
+}
