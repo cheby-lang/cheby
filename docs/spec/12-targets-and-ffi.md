@@ -39,7 +39,7 @@ JavaScript has no stackful coroutines. The compiler performs a whole-program **s
 - JS builds therefore require whole-program compilation (ADR-0005).
 - The runtime schedules fibers cooperatively on the single JS thread. Parallelism is not available on JS; concurrency semantics are otherwise the same as on native.
 
-The JS backend inserts no yield checks at function entry, because they would make almost every function suspending and defeat the suspension analysis (D-185, ADR-0035). A fiber on JS runs until its next real suspension point, so a CPU-bound fiber can starve other fibers. This is a documented difference between targets ([§12.4](#124-semantic-differences-between-targets)).
+The JS backend inserts no yield checks at function entry, because they would make almost every function suspending and defeat the suspension analysis (D-185, ADR-0035). A fiber on JS runs until its next real suspension point, so a CPU-bound fiber can starve other fibers. Timeouts, timers and cancellation therefore take effect only at that suspension point (D-232). This is a documented difference between targets ([§12.4](#124-semantic-differences-between-targets)).
 
 ### 12.3.2 Tail calls on JS
 
@@ -62,15 +62,18 @@ The representation of ADTs, tuples, lists, maps, closures and `dyn` values is un
 
 ## 12.4 Semantic differences between targets
 
-The same program should behave the same on every target. Every documented difference ends in a **panic on JS where native succeeds**, never in a different result:
+A program whose result does not depend on timing or scheduling order computes the same result on every target (D-232). Every failure that happens only on JS is a **panic on JS where native succeeds**, never a different value. Timing, scheduling and liveness may differ between targets, because JS fibers are not preempted (D-185).
 
-| Difference                  | Native                                 | JS                                                                     | Decision        |
-| --------------------------- | -------------------------------------- | ---------------------------------------------------------------------- | --------------- |
-| `Int` range                 | 64-bit, panics on overflow             | panics outside ±(2⁵³−1)                                                | D-037, ADR-0017 |
-| Non-tail recursion depth    | limited by a large fiber stack         | limited by the engine, roughly ten thousand frames                     | D-094           |
-| Parallelism                 | fibers run in parallel on many threads | fibers interleave on one thread                                        | D-012           |
-| Preemption                  | yield check at every function entry    | only at real suspension points, so a CPU-bound fiber can starve others | D-028, D-185    |
-| `Map`/`Set` iteration order | random per process                     | random per process                                                     | D-093           |
+| Difference                        | Native                                 | JS                                                                                                        | Decision            |
+| --------------------------------- | -------------------------------------- | --------------------------------------------------------------------------------------------------------- | ------------------- |
+| `Int` range                       | 64-bit, panics on overflow             | panics outside ±(2⁵³−1)                                                                                   | D-037, ADR-0017     |
+| Non-tail recursion depth          | limited by a large fiber stack         | limited by the engine, roughly ten thousand frames                                                        | D-094               |
+| Parallelism                       | fibers run in parallel on many threads | fibers interleave on one thread                                                                           | D-012               |
+| Preemption                        | yield check at every function entry    | only at real suspension points, so a CPU-bound fiber can starve others or keep the program from finishing | D-028, D-185, D-232 |
+| Timeouts, timers and cancellation | take effect at the next function entry | take effect only at the fiber's next real suspension point                                                | D-103, D-185, D-232 |
+| `Map`/`Set` iteration order       | random per process                     | random per process                                                                                        | D-093               |
+
+The `Int` range and recursion depth rows are the failures that happen only on JS, and both are panics. The parallelism, preemption and timeout rows affect only timing, scheduling and liveness. On JS a CPU-bound fiber holds the thread until its next real suspension point, so a timeout cannot interrupt it, and `fiber::timeout` may return `Ok` after its deadline ([§10.8](10-concurrency.md#108-timeouts)). A program that needs a timeout to bound CPU work on JS must put suspension points in that work, such as a channel operation or a timer (D-232).
 
 Memory management differs in mechanism but not in observable behavior: handle drop functions and channel closing happen at the same points on both targets ([§9.8](09-memory-model.md#98-memory-on-the-js-target), D-100).
 

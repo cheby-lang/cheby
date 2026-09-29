@@ -27,7 +27,9 @@ A fiber gives up its thread at **suspension points**:
 - IO and timers ([§10.9](#109-blocking-io)),
 - **yield checks**, which the compiler inserts at the entry of every function (D-028). On native targets the yield check is the same compare as the stack-limit check ([§11.8.1](11-errors-and-panics.md#1181-stack-overflow)) (D-124).
 
-Because there are no loops, every repetition goes through a function call, so the entry yield check guarantees that no fiber can hold a thread indefinitely without passing a suspension point (D-028). Preemption only happens at these points; a fiber is never interrupted in the middle of a function body without calls.
+Because there are no loops, every repetition goes through a function call, so on native targets the entry yield check guarantees that no fiber can hold a thread indefinitely without passing a suspension point (D-028). Preemption only happens at these points; a fiber is never interrupted in the middle of a function body without calls.
+
+The JS target inserts no entry yield checks, so a JS fiber runs until its next real suspension point. Timers, including selector timer arms, fire only when the running fiber suspends, and a CPU-bound fiber can starve all others (D-185, D-232, [§12.4](12-targets-and-ffi.md#124-semantic-differences-between-targets)).
 
 The scheduling order of runnable fibers is unspecified. Programs must not depend on it.
 
@@ -67,7 +69,7 @@ A fiber can also be spawned **detached**, outside any user-visible scope, with a
 
 - is not waited for by anyone,
 - does not cancel anything when it panics; its panic is reported to standard error and the fiber ends,
-- is killed when the program exits ([§10.10](#1010-program-entry-and-exit)) (D-073).
+- is killed when the program exits ([§10.10](#1010-program-entry-and-exit)) (D-073). On JS, a detached fiber that never suspends keeps the program from finishing, because `main` never gets the thread back (D-232).
 
 Detached fibers are the escape hatch for long-lived background work. Leaked detached fibers, and fibers blocked forever, are not collected (D-029). Erlang-style links, monitors and supervision are provided by a library on top of scopes and detached fibers (D-040).
 
@@ -160,7 +162,7 @@ case selector::select(selector) {
 
 A fiber is **cancelled** when its scope fails ([§10.3](#103-scopes)), when an enclosing scope is cancelled, or when a timeout expires ([§10.8](#108-timeouts)). Cancellation (D-102, ADR-0029):
 
-- is delivered at the fiber's next suspension point or function-entry yield check ([§10.2](#102-scheduling)),
+- is delivered at the fiber's next suspension point or function-entry yield check ([§10.2](#102-scheduling)); on JS, which has no entry yield checks, only at the next real suspension point (D-185, D-232, [§12.4](12-targets-and-ffi.md#124-semantic-differences-between-targets)),
 - makes the fiber unwind exactly like a panic: its stack is released and handle drop functions run ([§11.3](11-errors-and-panics.md#113-unwinding)),
 - cannot be caught, ignored or delayed by the fiber,
 - means that a blocking operation that is cancelled never returns to its caller.
@@ -185,6 +187,8 @@ case fiber::timeout(duration::seconds(2), fn() { http::get(url) }) {
 - If `f` finishes within `d`, it returns `Ok` with its value.
 - Otherwise `f` and every fiber it spawned are cancelled, and it returns `Err(TimedOut)` once they have unwound (D-103).
 - If `f`, or a fiber in its scope, panics, it returns `Err(Panicked(p))` with the scope's `fiber::Panic` ([§10.3](#103-scopes)), so callers can tell a timeout from a crash (D-181).
+
+On JS, a timeout cannot interrupt `f` between real suspension points, so a CPU-bound `f` may run past `d`, finish and return `Ok`. To bound CPU work on JS, the work must suspend, for example on a channel operation or a timer (D-185, D-232, [§12.4](12-targets-and-ffi.md#124-semantic-differences-between-targets)).
 
 Selectors have a timer arm for deadlines ([§10.6](#106-selectors)). Timers use the runtime's poller ([§10.9](#109-blocking-io)).
 

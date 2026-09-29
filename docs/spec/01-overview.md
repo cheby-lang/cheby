@@ -10,7 +10,7 @@ This chapter is informative. It summarizes the language and points to the normat
 2. **Immutability everywhere.** Every value is immutable, and there is no mutable escape hatch (D-004, D-017). Long-lived state lives in fibers that carry it through recursion.
 3. **No function coloring.** Concurrency uses stackful fibers. Any function may block without changing its signature (D-003).
 4. **Deterministic memory.** Memory is managed with Perceus-style reference counting, not a tracing GC. Uniquely owned values are updated in place (D-005).
-5. **The same program behaves the same everywhere.** Native and JS targets share semantics. The few documented differences all end in a panic rather than a different result (D-037, D-094, [chapter 12](12-targets-and-ffi.md)).
+5. **The same program computes the same result everywhere.** Native and JS targets share semantics. A program whose result does not depend on timing or scheduling computes the same result on every target, and a failure that happens only on JS is a panic, never a different value. Timing, scheduling and liveness may differ, because JS fibers are not preempted (D-037, D-094, D-232, [chapter 12](12-targets-and-ffi.md)).
 6. **Tooling is part of the language.** One `cheby` binary ships the compiler, REPL, test runner, formatter, language server, documentation generator and package manager from v1 (D-031).
 7. **Stability after 1.0.** After 1.0 the language and standard library only grow (D-075).
 
