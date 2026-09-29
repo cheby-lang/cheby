@@ -1,0 +1,73 @@
+//! A fork on the table, which one philosopher at a time can hold.
+//!
+//! Cheby has no locks and no mutable state, so a fork cannot be a flag
+//! that fibers set and clear. Instead a fork is a channel with room for
+//! one value, and it holds a single token, `Nil`, while the fork lies
+//! on the table. Picking the fork up receives the token, and putting it
+//! down sends it back. While someone holds the token the channel is
+//! empty, so anyone else who tries to pick the fork up waits in
+//! `receive` until it is put down again.
+//!
+//! A `Fork` holds both ends of its channel. As long as anyone can still
+//! use a fork, its channel has a `Sender` and a `Receiver`, so it never
+//! closes and picking up and putting down always succeed.
+
+import std::channel
+import std::duration
+import std::fiber
+
+/// A fork. `number` tells forks apart and puts them in order. The
+/// channel ends are used only by the functions below.
+type Fork {
+  number: Int,
+  /// Where the token is taken from when the fork is picked up.
+  from_table: channel::Receiver<Nil>,
+  /// Where the token goes back when the fork is put down.
+  to_table: channel::Sender<Nil>,
+}
+
+/// Makes fork `number`, lying on the table.
+fn new(number: Int) -> Fork {
+  // Capacity 1 is room for exactly the one token.
+  let (to_table, from_table) = channel::new::<Nil>(1)
+  // The buffer is empty, so this does not block.
+  let assert Ok(Nil) = channel::send(to_table, Nil)
+  Fork { number, from_table, to_table }
+}
+
+/// Picks `fork` up, waiting while someone else holds it. When several
+/// fibers wait for the same fork, which of them gets it next is not
+/// specified.
+fn pick_up(fork: Fork) {
+  // `fork` holds a `Sender` for this channel, so the channel cannot
+  // close, and the token always comes back eventually.
+  let assert Ok(Nil) = channel::receive(fork.from_table)
+}
+
+/// Puts `fork` back on the table. Only the fiber holding the fork may
+/// do this: an extra token would let two fibers hold it at once.
+fn put_down(fork: Fork) {
+  // The token is in this fiber's hand, so the buffer is empty and this
+  // does not block.
+  let assert Ok(Nil) = channel::send(fork.to_table, Nil)
+}
+
+test "a fork that is put down can be picked up again" {
+  let spare = new(0)
+  pick_up(spare)
+  put_down(spare)
+  pick_up(spare)
+  put_down(spare)
+}
+
+test "nobody can pick up a fork that is held" {
+  let held = new(0)
+  pick_up(held)
+  // The second attempt waits in `receive` until the timeout cancels it.
+  // `timeout` returns only once the attempt has unwound, so nobody is
+  // waiting any more when the token goes back below.
+  let attempt = fiber::timeout(duration::milliseconds(50), fn() { pick_up(held) })
+  assert attempt == Err(fiber::TimedOut)
+  put_down(held)
+  pick_up(held)
+}

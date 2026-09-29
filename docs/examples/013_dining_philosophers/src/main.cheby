@@ -1,0 +1,234 @@
+//! The dining philosophers.
+//!
+//! Five philosophers sit at a round table, with one fork between each
+//! pair of neighbours. A philosopher thinks for a while, then picks up
+//! the forks on both sides and eats, then puts them down and thinks
+//! again. Each philosopher is a fiber, and each fork is a channel that
+//! holds one token while the fork lies on the table (see `fork.cheby`).
+//!
+//! If every philosopher picked up the left fork first, they could all
+//! hold their left fork at the same moment and wait forever for the
+//! right one, which their neighbour holds. Here every philosopher picks
+//! up the lower-numbered of their two forks first. Then a philosopher
+//! who holds a fork only ever waits for a fork with a higher number, so
+//! the forks being waited for keep getting higher along any chain of
+//! waiting philosophers, and the chain can never close into a circle.
+//! Whoever holds the highest fork in use waits for nothing, finishes
+//! eating and puts it down, so the dinner cannot deadlock.
+//!
+//! Thinking and eating take a random time, so the order in which the
+//! philosophers eat changes from run to run. Each of them eats a fixed
+//! number of meals and then leaves, and the program ends once the table
+//! is empty.
+
+import std::channel
+import std::duration
+import std::fiber
+import std::io
+import std::list
+import std::random
+import std::result
+import std::selector
+import std::set
+import dining_philosophers::fork
+
+/// Who comes to dinner, in their order around the table.
+const guests: List<String> = ["Aristotle", "Kant", "Spinoza", "Marx", "Russell"]
+
+/// How many meals each philosopher eats before leaving.
+const meal_count: Int = 3
+
+/// The longest a philosopher thinks or eats at a time, in milliseconds.
+const max_pause_ms: Int = 100
+
+/// A philosopher at the table, with the two forks next to their seat
+/// in the order they are picked up: `first` always has the lower
+/// number.
+type Philosopher {
+  name: String,
+  first: fork::Fork,
+  second: fork::Fork,
+}
+
+/// What a philosopher reports while dining. `Int` is the number of the
+/// meal, from 1.
+type Event {
+  /// Sent after picking up both forks.
+  StartsEating(Philosopher, Int),
+  /// Sent before putting either fork down.
+  StopsEating(Philosopher, Int),
+}
+
+fn main() -> Result<Nil, fiber::Panic> {
+  let count = list::length(guests)
+  io::println("{count} philosophers sit down to eat {meal_count} meals each.")
+  use _ <- result::try(dinner(guests, meal_count, max_pause_ms, announce))
+  io::println("Everyone has left, and the table is empty.")
+  Ok(Nil)
+}
+
+/// Seats `names` around a table and lets each of them eat `meals`
+/// meals, pausing for up to `max_pause` milliseconds to think and to
+/// eat. `report` is called on every `Event`, from the philosopher's own
+/// fiber. Returns once everyone has left, and panics if fewer than two
+/// philosophers come, because a lone philosopher would have only one
+/// fork on both sides.
+fn dinner(
+  names: List<String>,
+  meals: Int,
+  max_pause: Int,
+  report: fn(Event),
+) -> Result<Nil, fiber::Panic> {
+  assert list::length(names) >= 2 as "a dinner needs at least two philosophers"
+  use scope <- fiber::scope()
+  fn seat_all(remaining) {
+    case remaining {
+      [] => Nil
+      [philosopher, ..others] => {
+        fiber::spawn(scope, fn() { dine(philosopher, 1, meals, max_pause, report) })
+        seat_all(others)
+      }
+    }
+  }
+  seat_all(seating(names))
+}
+
+/// Lays one fork per philosopher and seats the philosophers in order.
+/// Philosopher `i` has fork `i` on the left and fork `i + 1` on the
+/// right, and the last one has fork 0 on the right, which closes the
+/// circle.
+fn seating(names: List<String>) -> List<Philosopher> {
+  let forks = lay_table(list::length(names))
+  let assert [first_fork, ..other_forks] = forks
+  let right_forks = [..other_forks, first_fork]
+  fn step(unseated, lefts, rights, seated) {
+    case unseated, lefts, rights {
+      [name, ..more_names], [left, ..more_lefts], [right, ..more_rights] =>
+        step(more_names, more_lefts, more_rights, [..seated, sit(name, left, right)])
+      _, _, _ => seated
+    }
+  }
+  step(names, forks, right_forks, [])
+}
+
+/// Returns forks numbered from 0 to `count - 1`, all on the table.
+fn lay_table(count: Int) -> List<fork::Fork> {
+  fn step(number, laid) {
+    case {
+      number == count => laid
+      _ => step(number + 1, [..laid, fork::new(number)])
+    }
+  }
+  step(0, [])
+}
+
+/// Seats `name` between `left` and `right`, deciding once and for all
+/// which fork this philosopher picks up first. This order is the whole
+/// cure for deadlock.
+fn sit(name: String, left: fork::Fork, right: fork::Fork) -> Philosopher {
+  case {
+    left.number < right.number => Philosopher { name, first: left, second: right }
+    _ => Philosopher { name, first: right, second: left }
+  }
+}
+
+/// Thinks and eats meals `meal` to `meals`. The recursive call is a
+/// tail call, so a long dinner takes constant stack space.
+fn dine(philosopher: Philosopher, meal: Int, meals: Int, max_pause: Int, report: fn(Event)) {
+  case {
+    meal > meals => Nil
+    _ => {
+      // Thinking.
+      pause(max_pause)
+      // Either `pick_up` may wait for a neighbour. Holding `first`
+      // while waiting for `second` is safe, because `second` has the
+      // higher number, and whoever holds it waits only for forks with
+      // higher numbers still.
+      fork::pick_up(philosopher.first)
+      fork::pick_up(philosopher.second)
+      report(StartsEating(philosopher, meal))
+      // Eating.
+      pause(max_pause)
+      report(StopsEating(philosopher, meal))
+      fork::put_down(philosopher.second)
+      fork::put_down(philosopher.first)
+      dine(philosopher, meal + 1, meals, max_pause, report)
+    }
+  }
+}
+
+/// Suspends this fiber for a random time from 0 to `max_ms`
+/// milliseconds. A selector with only a timer arm waits for the timer
+/// and nothing else. Only this fiber waits: the others go on thinking
+/// and eating.
+fn pause(max_ms: Int) {
+  let wait = duration::milliseconds(random::int_between(0, max_ms))
+  selector::new()
+  |> selector::after(wait, fn() { Nil })
+  |> selector::select
+}
+
+/// Prints an event. Philosophers print from their own fibers, so their
+/// lines interleave in whatever order they happen.
+fn announce(event: Event) {
+  case event {
+    StartsEating(eater, meal) =>
+      io::println("{eater.name} picks up forks {eater.first.number} and {eater.second.number} and eats meal {meal}.")
+    StopsEating(eater, meal) when meal == meal_count =>
+      io::println("{eater.name} puts the forks down and leaves.")
+    StopsEating(eater, _) => io::println("{eater.name} puts the forks down and thinks.")
+  }
+}
+
+/// Reads every event from `log` until the channel closes, checks that
+/// no fork is picked up while someone else holds it, and returns how
+/// many meals were started. `held` has the numbers of the forks in use.
+fn check_log(log: channel::Receiver<Event>, held: set::Set<Int>, started: Int) -> Int {
+  case channel::receive(log) {
+    Ok(StartsEating(eater, _)) => {
+      assert !set::contains(held, eater.first.number) as "fork {eater.first.number} is held twice"
+      assert !set::contains(held, eater.second.number) as "fork {eater.second.number} is held twice"
+      let taken = held |> set::insert(eater.first.number) |> set::insert(eater.second.number)
+      check_log(log, taken, started + 1)
+    }
+    Ok(StopsEating(eater, _)) => {
+      let freed = held |> set::remove(eater.first.number) |> set::remove(eater.second.number)
+      check_log(log, freed, started)
+    }
+    Err(Nil) => started
+  }
+}
+
+test "the first and the last philosopher both reach for fork 0 first" {
+  let order = list::map(seating(["a", "b", "c"]), fn(seated) {
+    (seated.first.number, seated.second.number)
+  })
+  assert order == [(0, 1), (1, 2), (0, 2)]
+}
+
+test "everyone eats every meal, and no fork is ever held twice" {
+  // Without pauses the philosophers fight over the forks as hard as
+  // they can. A deadlock would make the test time out instead of hang.
+  let outcome = fiber::timeout(duration::seconds(10), fn() {
+    use scope <- fiber::scope()
+    // Capacity 0: a philosopher's `report` returns only once the event
+    // has been received. `StopsEating` is received before the forks
+    // go down, and `StartsEating` is sent after they are picked up, so
+    // the log sees every fork change hands in the order it happened.
+    let (log_tx, log_rx) = channel::new::<Event>(0)
+    fiber::spawn(scope, fn() {
+      dinner(guests, 20, 0, fn(event) { let assert Ok(Nil) = channel::send(log_tx, event) })
+    })
+    // When the dinner ends, the closure holding `log_tx` is dropped,
+    // which closes the log and ends `check_log`.
+    check_log(log_rx, set::from_list([]), 0)
+  })
+  assert outcome == Ok(Ok(list::length(guests) * 20))
+}
+
+test "two philosophers share both forks without deadlock" {
+  let outcome = fiber::timeout(duration::seconds(10), fn() {
+    dinner(["Plato", "Hume"], 50, 0, fn(_) { Nil })
+  })
+  assert outcome == Ok(Ok(Nil))
+}
