@@ -88,14 +88,14 @@ test "asking for no primes shuts the pipeline down at once" {
 test "the pipeline keeps working past the first few filters" {
   // Trial division, as a check that does not depend on the sieve.
   fn is_prime(n) {
-    fn go(divisor) {
+    fn step(divisor) {
       case {
         divisor * divisor > n => True
         n % divisor == 0 => False
-        _ => go(divisor + 1)
+        _ => step(divisor + 1)
       }
     }
-    n > 1 && go(2)
+    n > 1 && step(2)
   }
   let assert Ok(found) = primes(100)
   assert list::length(found) == 100

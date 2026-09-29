@@ -31,27 +31,27 @@ fn empty() -> Board {
 
 /// Returns the numbers of the free cells, in increasing order.
 fn free_cells(board: Board) -> List<Int> {
-  fn go(number, rest, found) {
+  fn step(number, rest, found) {
     case rest {
       [] => found
-      [None, ..tail] => go(number + 1, tail, [..found, number])
-      [Some(_), ..tail] => go(number + 1, tail, found)
+      [None, ..tail] => step(number + 1, tail, [..found, number])
+      [Some(_), ..tail] => step(number + 1, tail, found)
     }
   }
-  go(1, board.cells, [])
+  step(1, board.cells, [])
 }
 
 /// Puts `mark` in the cell numbered `number`. Returns `None` if the
 /// cell is taken or there is no such cell.
 fn place(board: Board, number: Int, mark: player::Player) -> Option<Board> {
-  fn go(before, rest, remaining) {
+  fn step(before, rest, remaining) {
     case rest, remaining {
       [None, ..after], 1 => Some(Board { cells: [..before, Some(mark), ..after] })
-      [cell, ..after], _ when remaining > 1 => go([..before, cell], after, remaining - 1)
+      [cell, ..after], _ when remaining > 1 => step([..before, cell], after, remaining - 1)
       _, _ => None
     }
   }
-  go([], board.cells, number)
+  step([], board.cells, number)
 }
 
 /// Tells whether the game is still going, won or drawn.

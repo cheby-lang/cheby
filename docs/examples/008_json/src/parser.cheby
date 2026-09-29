@@ -106,14 +106,14 @@ priv fn parse_value(input: Input) -> Parsed<value::Value> {
 /// Reads the code points of `word` and returns `parsed`, or fails at the
 /// first code point that differs.
 priv fn keyword(input: Input, word: String, parsed: value::Value) -> Parsed<value::Value> {
-  fn go(current: Input, expected: List<String>) {
+  fn step(current: Input, expected: List<String>) {
     case current.rest, expected {
       _, [] => Ok((parsed, current))
-      [found, ..rest], [wanted, ..others] when found == wanted => go(advance(current, 1, rest), others)
+      [found, ..rest], [wanted, ..others] when found == wanted => step(advance(current, 1, rest), others)
       _, _ => unexpected(current)
     }
   }
-  go(input, string::to_code_points(word))
+  step(input, string::to_code_points(word))
 }
 
 /// Parses the elements of an array. `input` is just after the `[` and

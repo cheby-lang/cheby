@@ -250,13 +250,13 @@ For built-in numeric types, operators use the built-in operations ([§5.4.2](05-
 
 ```cheby
 fn sum(numbers: List<Int>) -> Int {
-  fn go(acc, rest) {
+  fn step(acc, rest) {
     case rest {
       [] => acc
-      [first, ..tail] => go(acc + first, tail)   // `+` is resolved at the end: Int
+      [first, ..tail] => step(acc + first, tail)   // `+` is resolved at the end: Int
     }
   }
-  go(0, numbers)
+  step(0, numbers)
 }
 
 fn total(items: List<Item>) -> Int {

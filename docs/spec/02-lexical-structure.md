@@ -52,15 +52,16 @@ import    interface let       panic     priv      pub       test
 todo      type      use       when
 ```
 
-The following words are also reserved, although Cheby gives them no meaning (D-128):
+The following words are also reserved, although Cheby gives them no meaning (D-128, D-240):
 
 ```
 if        else      for       while     loop      break     continue
 return    mut       impl      trait     struct    enum      match
 async     await     macro     self      super     where     yield
+go
 ```
 
-They are reserved so the compiler can give targeted errors for constructs Cheby deliberately lacks (for example "Cheby has no `if`, use `case`"), and so they stay free for later additions, since adding keywords after 1.0 would break code (D-075, D-128).
+They are reserved so the compiler can give targeted errors for constructs Cheby deliberately lacks (for example "Cheby has no `if`, use `case`", or "Cheby has no `go`, spawn a fiber in a scope" for Go's `go` statement), and so they stay free for later additions, since adding keywords after 1.0 would break code (D-075, D-128).
 
 `Self` is a reserved `UPPER` identifier, valid only inside interface declarations ([chapter 8](08-interfaces.md)).
 

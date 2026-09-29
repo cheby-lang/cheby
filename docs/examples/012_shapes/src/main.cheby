@@ -57,7 +57,7 @@ fn sink(item: shape::Shape) -> shape::Shape {
   // The body of a local function is checked before any call to it, so
   // nothing tells the compiler what `current` is when it checks
   // `current.origin`. The parameter is annotated instead.
-  fn go(current: shape::Shape) {
+  fn step(current: shape::Shape) {
     case {
       current.origin.y >= ground => current
       _ => {
@@ -65,11 +65,11 @@ fn sink(item: shape::Shape) -> shape::Shape {
         // `current` is not used after this update, so once it is
         // uniquely owned, each step can write the new origin into the
         // same shape instead of copying it.
-        go(shape::Shape { ..current, origin: lower })
+        step(shape::Shape { ..current, origin: lower })
       }
     }
   }
-  go(item)
+  step(item)
 }
 
 /// Lands the bird on the ground and turns on the lights in the house.

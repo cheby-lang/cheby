@@ -96,13 +96,13 @@ Recursion replaces loops. A local function can carry the loop state:
 
 ```cheby
 fn sum(numbers: List<Int>) -> Int {
-  fn go(acc, rest) {
+  fn step(acc, rest) {
     case rest {
       [] => acc
-      [first, ..tail] => go(acc + first, tail)
+      [first, ..tail] => step(acc + first, tail)
     }
   }
-  go(0, numbers)
+  step(0, numbers)
 }
 ```
 

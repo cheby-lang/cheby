@@ -51,13 +51,13 @@ fn main() {
 
 /// Returns the rows of the picture, from top to bottom.
 fn render() -> List<String> {
-  fn go(im, remaining, rows) {
+  fn step(im, remaining, rows) {
     case remaining {
       0 => rows
-      _ => go(im - row_step, remaining - 1, [..rows, render_row(left, im, width)])
+      _ => step(im - row_step, remaining - 1, [..rows, render_row(left, im, width)])
     }
   }
-  go(top, height, [])
+  step(top, height, [])
 }
 
 /// Returns `count` characters for the points on the row with
@@ -66,22 +66,22 @@ fn render_row(re: Float, im: Float, count: Int) -> String {
   // Numbers are never converted implicitly, so instead of turning a
   // column number into a `Float`, the real part itself is carried
   // along and advanced by `column_step` each time.
-  fn go(point_re, remaining, text) {
+  fn step(point_re, remaining, text) {
     case remaining {
       0 => text
       _ => {
         let character = shade(escape_time(complex::new(point_re, im)))
-        go(point_re + column_step, remaining - 1, text + character)
+        step(point_re + column_step, remaining - 1, text + character)
       }
     }
   }
-  go(re, count, "")
+  step(re, count, "")
 }
 
 /// Returns how many steps it takes the point `c` to get further than 2
 /// from zero, or `None` if it has not after `max_iterations` steps.
 fn escape_time(c: complex::Complex) -> Option<Int> {
-  fn go(z, steps) {
+  fn step(z, steps) {
     case {
       steps == max_iterations => None
       // Comparing squares avoids a square root: `z` is further than 2
@@ -90,10 +90,10 @@ fn escape_time(c: complex::Complex) -> Option<Int> {
       // `square(z) + c` is the same as `z * z + c`. The `+` resolves
       // to `complex::add`, because `Complex` is declared in the
       // `complex` module. No import of `std::ops` is needed for that.
-      _ => go(square(z) + c, steps + 1)
+      _ => step(square(z) + c, steps + 1)
     }
   }
-  go(complex::new(0.0, 0.0), 0)
+  step(complex::new(0.0, 0.0), 0)
 }
 
 /// Multiplies `x` by itself, for any type that satisfies `Mul`.

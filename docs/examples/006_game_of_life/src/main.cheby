@@ -139,13 +139,13 @@ fn wrap(n: Int) -> Int {
 
 /// Returns the numbers from `from` up to, but not including, `to`.
 priv fn range(from: Int, to: Int) -> List<Int> {
-  fn go(n, found) {
+  fn collect(n, found) {
     case {
       n >= to => found
-      _ => go(n + 1, [..found, n])
+      _ => collect(n + 1, [..found, n])
     }
   }
-  go(from, [])
+  collect(from, [])
 }
 
 /// Makes `Grid` satisfy `Show`, so a grid can be interpolated as

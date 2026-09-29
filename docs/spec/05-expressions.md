@@ -286,14 +286,14 @@ Local functions are the usual way to write loops that carry state (ADR-0001):
 
 ```cheby
 fn count_positive(numbers: List<Int>) -> Int {
-  fn go(acc, rest) {
+  fn step(acc, rest) {
     case rest {
       [] => acc
-      [first, ..tail] when first > 0 => go(acc + 1, tail)
-      [_, ..tail] => go(acc, tail)
+      [first, ..tail] when first > 0 => step(acc + 1, tail)
+      [_, ..tail] => step(acc, tail)
     }
   }
-  go(0, numbers)
+  step(0, numbers)
 }
 ```
 
@@ -477,7 +477,7 @@ field_access = postfix "." ( LOWER | DEC_INT ) ;
 ```
 
 - `x.name` reads a named field. If `x`'s type has several variants, every variant must have a field `name` of the same type (D-071). Otherwise, use `case`.
-- `x`'s type must already be known at the point of the access, from an annotation, a signature or a use checked earlier (D-213). Statements are checked in order, and closure arguments after the other arguments of a call ([§3.12.4](03-types.md#3124-order-of-inference)) (D-234), so `list::filter(books, fn(entry) { entry.format == format::Paperback })` knows `entry`'s type from `books`. Field names are not unique across types, so the compiler does not guess the type from the field name or wait for later uses. Otherwise it is a compile error that asks for a type annotation. The same rule applies to record update ([§5.11](#511-constructors-and-records)). In local functions and closures, whose parameter types are inferred, this usually means annotating the parameter: `fn go(current: Input) { current.rest }`.
+- `x`'s type must already be known at the point of the access, from an annotation, a signature or a use checked earlier (D-213). Statements are checked in order, and closure arguments after the other arguments of a call ([§3.12.4](03-types.md#3124-order-of-inference)) (D-234), so `list::filter(books, fn(entry) { entry.format == format::Paperback })` knows `entry`'s type from `books`. Field names are not unique across types, so the compiler does not guess the type from the field name or wait for later uses. Otherwise it is a compile error that asks for a type annotation. The same rule applies to record update ([§5.11](#511-constructors-and-records)). In local functions and closures, whose parameter types are inferred, this usually means annotating the parameter: `fn step(current: Input) { current.rest }`.
 - `x.0`, `x.1`, … read tuple elements ([§3.7](03-types.md#37-tuples)). The index must be less than the tuple's length. Positional variant fields are not accessible with `.0`; use a pattern.
 - Reading fields of a `priv` type is possible only in its own module (D-151). Reading fields of a type from another package requires the type to be `exposed` (D-048).
 

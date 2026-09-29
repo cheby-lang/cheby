@@ -307,3 +307,9 @@ Goal: fix spec bugs found in a review of the draft. Continues [Language gaps fou
 Open:
 
 - ~~What "major version" means for `0.x` versions: whether `0.1` and `0.2` of one URL are one package identity, as in Go, or different ones, as in Cargo (OQ-13-7).~~ → D-239
+
+## 2026-09-29: Reserving `go`
+
+Goal: keep `go` free so it can later guide how fibers are used.
+
+- **D-240 `go` is reserved**: `go` joins the reserved words of D-128. It has no meaning and cannot be used as an identifier. The local recursive helpers named `go` in the spec and examples are renamed to `step`, except in `006_game_of_life`, where `step` is already a top-level function and the helper in `range` becomes `collect`. Why: `go` is kept free for later use in guiding how fibers are used, for example a targeted error for Go's `go` statement that points to spawning a fiber in a scope, and adding keywords after 1.0 would break code (D-075). Refines D-128.

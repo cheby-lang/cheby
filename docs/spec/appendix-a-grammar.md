@@ -249,11 +249,12 @@ as  assert  case  const  dyn  exposed  fn  import  interface
 let  panic  priv  pub  test  todo  type  use  when
 ```
 
-Reserved words, which have no meaning but cannot be used as identifiers (D-128):
+Reserved words, which have no meaning but cannot be used as identifiers (D-128, D-240):
 
 ```
 if  else  for  while  loop  break  continue  return  mut  impl
 trait  struct  enum  match  async  await  macro  self  super  where  yield
+go
 ```
 
 Reserved `UPPER` identifier: `Self`.
