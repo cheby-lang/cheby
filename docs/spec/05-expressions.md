@@ -236,6 +236,7 @@ list::map(numbers, fn(x) { int::add(1, x) })
 A `_` belongs to the innermost call that has it as a whole argument (D-202). A capture may itself be an argument of another call, which then receives the capture as an ordinary function value: `f(a, g(_))` means `f(a, fn(x) { g(x) })`.
 
 - At most one `_` may appear in one argument list. `f(_, _)` is a compile error.
+- A call whose only argument is `_` is a compile error, because `f(_)` means exactly `f`. Write `f` instead (D-245).
 - A `_` must be a whole argument. `f(_ + 1)` and `f(x._)` are compile errors, and so is a `_` anywhere else in an expression.
 
 The other arguments of a capture are evaluated once, from left to right, when the capture expression itself is evaluated, and the resulting closure holds their values (D-155). Calling the closure does not evaluate them again, so their side effects happen exactly once. This deliberately differs from Gleam, where they are evaluated at each call.
@@ -536,7 +537,7 @@ Evaluation is strict and left to right (D-120):
 - In a call, the callee first, then the arguments in order.
 - In a binary operator, the left operand, then the right, except for the short-circuit rules of `&&` and `||`.
 - In tuples, lists, constructors and record updates, items in the order written.
-- In `x |> f(a)`, `x` first, then `a`.
+- In `x |> f(_, a)`, `x` first, then `a`.
 - In `case`, the subjects in order, then guards in arm order.
 
 ### 5.15.2 Tail position
@@ -562,25 +563,29 @@ Calls to `@external` functions are not covered by the guarantee ([§12.8](12-tar
 pipe        = expr "|>" expr ;
 ```
 
-`x |> rhs` passes `x` into a function call (D-050):
+`x |> rhs` passes `x` into a function call (D-244):
 
-| Right side                            | Meaning                                      |
-| ------------------------------------- | -------------------------------------------- |
-| a call with a `_` argument, `f(a, _)` | `x` fills the hole: `f(a, x)`                |
-| any other call, `f(a, b)`             | `x` becomes the first argument: `f(x, a, b)` |
-| any other expression `g`              | `g` is called with `x`: `g(x)`               |
+| Right side                            | Meaning                              |
+| ------------------------------------- | ------------------------------------ |
+| a call with a `_` argument, `f(a, _)` | `x` fills the hole: `f(a, x)`        |
+| any other call, `f(a, b)`             | compile error: the call needs a `_`  |
+| any other expression `g`              | `g` is called with `x` alone: `g(x)` |
 
-Only a `_` that is a whole argument of the call on the right side counts as its hole (D-221). A `_` nested in another argument belongs to that inner call ([§5.6](#56-function-capture)), so `x |> f(a, g(_))` means `f(x, a, fn(y) { g(y) })`. A `_` therefore means the same thing with or without a pipe in front.
+The hole may be in any position, including the first: `xs |> list::map(_, f)` means `list::map(xs, f)`. A function with more than one parameter is therefore always piped into with an explicit `_`, and a one-parameter function is written bare, `xs |> list::length`, never `xs |> list::length(_)` ([§5.6](#56-function-capture), D-245).
+
+Only a `_` that is a whole argument of the call on the right side counts as its hole. A `_` nested in another argument belongs to that inner call ([§5.6](#56-function-capture)), so `x |> f(a, g(_))` has no hole and is a compile error. It is written `x |> f(_, a, g(_))`, which means `f(x, a, fn(y) { g(y) })`. A `_` therefore means the same thing with or without a pipe in front.
 
 `x` is evaluated before the rest of the right side ([§5.15.1](#5151-evaluation-order)). To pipe into a function returned by a call, parenthesize the call: `x |> (make_handler(config))`.
 
 ```cheby
 let names =
   users
-  |> list::filter(is_active)
-  |> list::map(fn(user) { user.name })
-  |> list::sort(string::compare)
+  |> list::filter(_, is_active)
+  |> list::map(_, fn(user) { user.name })
+  |> list::sort(_, string::compare)
   |> string::join(_, ", ")
+
+let count = names |> list::length
 ```
 
 ## 5.17 Paths

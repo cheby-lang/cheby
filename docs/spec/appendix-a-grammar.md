@@ -135,7 +135,7 @@ unary_expr      = ( "-" | "!" ) unary_expr
                 | postfix ;
 postfix         = primary { call_suffix | field_suffix } ;
 call_suffix     = "(" [ arg { "," arg } [ "," ] ] ")" ;
-arg             = expr | "_" ;                                  (* at most one "_" per argument list; it belongs to this call, §5.6, D-202 *)
+arg             = expr | "_" ;                                  (* at most one "_" per argument list, not the only argument; it belongs to this call, §5.6, D-202, D-245 *)
 field_suffix    = "." LOWER ;                                  (* no tuple index, D-241 *)
 
 primary         = literal

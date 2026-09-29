@@ -106,8 +106,8 @@ priv fn join_bytes(group: List<U8>) -> U32 {
 priv fn to_characters(group: U32, count: Int) -> String {
   // `>>` binds tighter than `&`, so no parentheses are needed.
   [18, 12, 6, 0]
-  |> list::take(count)
-  |> list::map(fn(shift) { digit(group >> shift & 0b11_1111) })
+  |> list::take(_, count)
+  |> list::map(_, fn(shift) { digit(group >> shift & 0b11_1111) })
   |> string::join(_, "")
 }
 
@@ -148,8 +148,8 @@ priv fn join_sextets(characters: List<String>, position: Int) -> Result<U32, Dec
 /// Returns the top `count` bytes of the 24-bit `group`.
 priv fn split_group(group: U32, count: Int) -> List<U8> {
   [16, 8, 0]
-  |> list::take(count)
-  |> list::map(fn(shift) {
+  |> list::take(_, count)
+  |> list::map(_, fn(shift) {
     // Narrowing a `U32` to a `U8` fails for values above 255, so it
     // returns a `Result`. The mask keeps only the low 8 bits, so it
     // cannot fail here.

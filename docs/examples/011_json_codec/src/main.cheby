@@ -56,8 +56,8 @@ fn main() -> Result<Nil, AppError> {
   use text <- result::try(result::map_error(io::read_file(path), ReadFailed(path, _)))
   use books <- result::try(result::map_error(json::parse(text, library_decoder()), InvalidLibrary(path, _)))
   books
-  |> list::map(summary)
-  |> list::each(io::println)
+  |> list::map(_, summary)
+  |> list::each(_, io::println)
   io::println(paperbacks_json(books))
   Ok(Nil)
 }

@@ -164,7 +164,7 @@ fn dine(philosopher: Philosopher, meal: Int, meals: Int, max_pause: Int, report:
 fn pause(max_ms: Int) {
   let wait = duration::milliseconds(random::int_between(0, max_ms))
   selector::new()
-  |> selector::after(wait, fn() { Nil })
+  |> selector::after(_, wait, fn() { Nil })
   |> selector::select
 }
 
@@ -188,11 +188,11 @@ fn check_log(log: channel::Receiver<Event>, held: set::Set<Int>, started: Int) -
     Ok(StartsEating(eater, _)) => {
       assert !set::contains(held, eater.first.number) as "fork {eater.first.number} is held twice"
       assert !set::contains(held, eater.second.number) as "fork {eater.second.number} is held twice"
-      let taken = held |> set::insert(eater.first.number) |> set::insert(eater.second.number)
+      let taken = held |> set::insert(_, eater.first.number) |> set::insert(_, eater.second.number)
       check_log(log, taken, started + 1)
     }
     Ok(StopsEating(eater, _)) => {
-      let freed = held |> set::remove(eater.first.number) |> set::remove(eater.second.number)
+      let freed = held |> set::remove(_, eater.first.number) |> set::remove(_, eater.second.number)
       check_log(log, freed, started)
     }
     Err(Nil) => started

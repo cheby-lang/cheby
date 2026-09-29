@@ -151,8 +151,8 @@ priv fn serve(
   // either order.
   let event =
     selector::new()
-    |> selector::receive(requests, FromCounter)
-    |> selector::receive(signals, FromStopper)
+    |> selector::receive(_, requests, FromCounter)
+    |> selector::receive(_, signals, FromStopper)
     |> selector::select
   case event {
     FromCounter(Ok(request)) => serve(requests, signals, apply(request, count))

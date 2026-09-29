@@ -48,8 +48,8 @@ fn parse_command(line: String) -> Result<Command, ParseError> {
   let words =
     line
     |> string::trim
-    |> string::split(" ")
-    |> list::filter(fn(word) { word != "" })
+    |> string::split(_, " ")
+    |> list::filter(_, fn(word) { word != "" })
   case words {
     [] => Err(Blank)
     [name, ..arguments] => parse_words(string::lowercase(name), arguments)

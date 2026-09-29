@@ -72,8 +72,8 @@ import std::io
 
 fn main() {
   [1, 2, 3]
-  |> list::map(fn(x) { x * 2 })
-  |> list::fold(0, add)
+  |> list::map(_, fn(x) { x * 2 })
+  |> list::fold(_, 0, add)
   |> show_total
 }
 

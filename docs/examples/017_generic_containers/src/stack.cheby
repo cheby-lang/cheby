@@ -59,13 +59,13 @@ pub fn show<T: Show>(stack: Stack<T>) -> String {
   // Interpolating `{item}` needs `T: Show`, which the bound provides.
   let items =
     stack.items
-    |> list::map(fn(item) { "{item}" })
+    |> list::map(_, fn(item) { "{item}" })
     |> string::join(_, ", ")
   "stack [{items}]"
 }
 
 test "the last item pushed is the first popped" {
-  let filled = new() |> push(1) |> push(2) |> push(3)
+  let filled = new() |> push(_, 1) |> push(_, 2) |> push(_, 3)
   let assert Some((top, rest)) = pop(filled)
   assert top == 3
   assert peek(rest) == Some(2)

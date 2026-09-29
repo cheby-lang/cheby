@@ -110,7 +110,7 @@ fn step_line<C: Show>(current: tree::Tree, waiting: C) -> String {
 /// Prints two queues that hold the same items but are not `==`. See
 /// `queue::same_items` for why.
 fn compare_queues() {
-  let pushed = queue::new() |> queue::push(1) |> queue::push(2)
+  let pushed = queue::new() |> queue::push(_, 1) |> queue::push(_, 2)
   let listed = queue::from_list([1, 2])
   let equal = pushed == listed
   let same = queue::same_items(pushed, listed)

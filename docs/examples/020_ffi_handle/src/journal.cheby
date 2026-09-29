@@ -65,7 +65,7 @@ test "entries are numbered from 1" {
 }
 
 test "a journal writes numbered entries to its store" {
-  let diary = new("test diary") |> add("woke up") |> add("had tea")
+  let diary = new("test diary") |> add(_, "woke up") |> add(_, "had tea")
   assert diary.title == "test diary"
   assert diary.entries == 2
   assert read(diary) == "1. woke up; 2. had tea"

@@ -15,7 +15,7 @@ import std::selector
 /// run, and for a timeout to cancel it.
 fn sleep(length: duration::Duration) {
   selector::new()
-  |> selector::after(length, fn() { Nil })
+  |> selector::after(_, length, fn() { Nil })
   |> selector::select
 }
 

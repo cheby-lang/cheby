@@ -55,7 +55,7 @@ fn describe(targets: List<dyn notifier::Notifier>) -> String {
   // `dyn notifier::Notifier` satisfies `Show`, which `Notifier` embeds,
   // so `{target}` works and calls the `show` of the value's own type.
   targets
-  |> list::map(fn(target) { "{target}" })
+  |> list::map(_, fn(target) { "{target}" })
   |> string::join(_, ", ")
 }
 

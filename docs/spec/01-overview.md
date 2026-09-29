@@ -23,7 +23,7 @@ This chapter is informative. It summarizes the language and points to the normat
 | Exhaustive `case` with guards, multiple subjects and a subjectless form | [5](05-expressions.md), [6](06-patterns.md)           | D-052, D-109               |
 | Guaranteed tail calls, including mutual and indirect calls              | [5](05-expressions.md), [12](12-targets-and-ffi.md)   | D-015, D-120               |
 | Gleam-style `use` for callbacks, errors and resources                   | [5](05-expressions.md), [11](11-errors-and-panics.md) | D-018, D-023               |
-| Pipe operator `\|>` and function capture `f(a, _)`                      | [5](05-expressions.md)                                | D-050                      |
+| Pipe operator `\|>` and function capture `f(a, _)`                      | [5](05-expressions.md)                                | D-050, D-244, D-245        |
 | Structural interfaces, satisfied implicitly by module functions         | [8](08-interfaces.md)                                 | D-020, D-061, D-063        |
 | Operator overloading through interfaces                                 | [8](08-interfaces.md)                                 | D-034, D-047, D-118        |
 | Persistent collections: RRB-tree `List`, HAMT `Map` and `Set`           | [3](03-types.md), [9](09-memory-model.md)             | D-039                      |
@@ -68,10 +68,10 @@ import std::string
 fn main() -> Result<Nil, io::Error> {
   use text <- result::try(io::read_file("input.txt"))
   text
-  |> string::split(" ")
+  |> string::split(_, " ")
   |> count_words
   |> map::to_sorted_list
-  |> list::each(print_entry)
+  |> list::each(_, print_entry)
   Ok(Nil)
 }
 

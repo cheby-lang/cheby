@@ -40,8 +40,8 @@ priv fn score(position: board::Board, to_move: player::Player) -> Int {
     board::Draw => 0
     board::Playing => {
       board::free_cells(position)
-      |> list::map(fn(cell) { score_move(position, to_move, cell) })
-      |> list::fold(-100, max)
+      |> list::map(_, fn(cell) { score_move(position, to_move, cell) })
+      |> list::fold(_, -100, max)
     }
   }
 }
@@ -97,7 +97,7 @@ test "the computer never loses, whatever X plays" {
       board::Draw, _ => True
       board::Playing, player::X => {
         board::free_cells(position)
-        |> list::fold(True, fn(ok, cell) {
+        |> list::fold(_, True, fn(ok, cell) {
           let assert Some(next) = board::place(position, cell, player::X)
           ok && safe(next, player::O)
         })

@@ -100,7 +100,7 @@ fn new(slots: List<Slot>) -> Machine {
 /// Returns the state of `machine` with no credit in it: idle, or sold
 /// out if every slot is empty.
 fn ready(machine: Machine) -> State {
-  let stocked = machine.slots |> map::values |> list::any(fn(slot) { slot.count > 0 })
+  let stocked = machine.slots |> map::values |> list::any(_, fn(slot) { slot.count > 0 })
   case stocked {
     True => Idle(machine)
     False => SoldOut(machine)
@@ -201,7 +201,7 @@ priv fn menu(machine: Machine) -> List<Output> {
   // by code to list them the same way on every run.
   machine.slots
   |> map::to_sorted_list
-  |> list::map(fn((_, slot)) { Listing(slot) })
+  |> list::map(_, fn((_, slot)) { Listing(slot) })
 }
 
 /// Returns the state of `machine` with `credit` still in it.

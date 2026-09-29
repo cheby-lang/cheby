@@ -124,8 +124,8 @@ priv fn work<A, B>(
 /// Puts tagged values in the order of their tags and drops the tags.
 priv fn in_order<T>(tagged: List<Tagged<T>>) -> List<T> {
   tagged
-  |> list::sort(fn((first, _), (second, _)) { int::compare(first, second) })
-  |> list::map(fn((_, value)) { value })
+  |> list::sort(_, fn((first, _), (second, _)) { int::compare(first, second) })
+  |> list::map(_, fn((_, value)) { value })
 }
 
 test "tagged values are put in the order of their tags" {

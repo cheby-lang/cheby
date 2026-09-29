@@ -101,7 +101,7 @@ priv fn quote(text: String) -> String {
   let escaped =
     text
     |> string::to_code_points
-    |> list::map(escape)
+    |> list::map(_, escape)
     |> string::join(_, "")
   "\"{escaped}\""
 }

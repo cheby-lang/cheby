@@ -134,7 +134,7 @@ fn draft(title: String, text: String, publish: Bool) -> Option<String> {
 /// Shows that several journals can share one store, which closes once,
 /// when the last of them goes away.
 fn journal_sharing() {
-  let morning = journal::new("diary") |> journal::add("woke up")
+  let morning = journal::new("diary") |> journal::add(_, "woke up")
   let evening = journal::add(morning, "went to bed")
   // `morning` is an immutable Cheby value, so it still counts one
   // entry. Its store belongs to the host, and `evening` refers to the

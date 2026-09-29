@@ -58,8 +58,8 @@ fn deliver<N: Notifier>(target: N, note: message::Message) -> Option<String> {
 /// and returns the texts sent, in order.
 fn broadcast<N: Notifier>(targets: List<N>, note: message::Message) -> List<String> {
   targets
-  |> list::filter(fn(target) { Notifier::accepts(target, note) })
-  |> list::map(fn(target) { Notifier::notify(target, note) })
+  |> list::filter(_, fn(target) { Notifier::accepts(target, note) })
+  |> list::map(_, fn(target) { Notifier::notify(target, note) })
 }
 
 /// Returns `registry` with `target` added at the end.

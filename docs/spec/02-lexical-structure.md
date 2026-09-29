@@ -174,9 +174,9 @@ _Example:_ continuation in pipelines and conditions.
 ```cheby
 let total =
   orders
-  |> list::filter(is_paid)
-  |> list::map(price)
-  |> list::fold(0, add)
+  |> list::filter(_, is_paid)
+  |> list::map(_, price)
+  |> list::fold(_, 0, add)
 
 let ok = is_valid(order)
   && has_stock(order)

@@ -32,7 +32,7 @@ fn top(text: String, limit: Int) -> List<Entry> {
   |> split_words
   |> tally
   |> map::to_list
-  |> list::sort(by_frequency)
+  |> list::sort(_, by_frequency)
   |> list::take(_, limit)
 }
 
@@ -112,11 +112,10 @@ fn format_lines(entries: List<Entry>) -> List<String> {
     // The entries are sorted, so the first one has the largest count.
     [(_, highest), ..] => {
       let width = string::length("{highest}")
-      // `format_line(_, width)` is a capture nested in the call to
-      // `list::map`, so the `_` belongs to `format_line` (D-202). The
-      // pipe has no hole of its own and fills the first argument of
-      // `list::map` (D-221).
-      entries |> list::map(format_line(_, width))
+      // The first `_` is the pipe's hole in `list::map`. The second is
+      // nested in `format_line(_, width)`, so it belongs to
+      // `format_line` and makes a capture (D-202, D-244).
+      entries |> list::map(_, format_line(_, width))
     }
   }
 }

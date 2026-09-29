@@ -139,9 +139,9 @@ There is no `select` statement. Waiting on several channels is done with a **sel
 ```cheby
 let selector =
   selector::new()
-  |> selector::receive(jobs, fn(r) { Job(r) })
-  |> selector::receive(control, fn(r) { Control(r) })
-  |> selector::after(duration::seconds(5), fn() { Idle })
+  |> selector::receive(_, jobs, fn(r) { Job(r) })
+  |> selector::receive(_, control, fn(r) { Control(r) })
+  |> selector::after(_, duration::seconds(5), fn() { Idle })
 
 case selector::select(selector) {
   Job(Ok(job)) => run(job)

@@ -72,7 +72,7 @@ fn main() {
 /// Returns a grid whose live cells are `cells`. Coordinates off the
 /// board wrap around onto it.
 fn from_cells(cells: List<(Int, Int)>) -> Grid {
-  let live = cells |> list::map(wrap_cell) |> set::from_list
+  let live = cells |> list::map(_, wrap_cell) |> set::from_list
   Grid { cells: live }
 }
 
@@ -103,12 +103,12 @@ fn lives_on(grid: Grid, cell: (Int, Int)) -> Bool {
 
 /// Returns how many of the eight neighbours of `cell` are alive.
 fn live_neighbours(grid: Grid, cell: (Int, Int)) -> Int {
-  // The pipe only fills a `_` that is a whole argument of `list::filter`.
-  // The `_` here belongs to `is_alive`, so the neighbours become the
-  // first argument of `list::filter`, as with any other call.
+  // The first `_` is the pipe's hole, a whole argument of `list::filter`,
+  // so the neighbours go there. The second `_` belongs to `is_alive`, so
+  // `is_alive(grid, _)` is a capture passed as the predicate (D-202).
   cell
   |> neighbours
-  |> list::filter(is_alive(grid, _))
+  |> list::filter(_, is_alive(grid, _))
   |> list::length
 }
 
@@ -154,14 +154,14 @@ priv fn range(from: Int, to: Int) -> List<Int> {
 /// `{grid}`. Rows are separated by newlines.
 fn show(grid: Grid) -> String {
   positions
-  |> list::map(render_row(grid, _))
+  |> list::map(_, render_row(grid, _))
   |> string::join(_, "\n")
 }
 
 /// Renders row `y` of the grid.
 priv fn render_row(grid: Grid, y: Int) -> String {
   positions
-  |> list::map(fn(x) {
+  |> list::map(_, fn(x) {
     case is_alive(grid, (x, y)) {
       True => "#"
       False => "."

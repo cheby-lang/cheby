@@ -26,13 +26,13 @@ fn main() -> Result<Nil, AppError> {
   // apart right away.
   use (path, limit) <- result::try(parse_args(env::args()))
   use text <- result::try(result::map_error(io::read_file(path), ReadFailed(path, _)))
-  // None of these steps has a `_` hole, so each `|>` passes the value on
-  // as the first argument of a call, or as the only argument of a bare
-  // function name such as `count::format_lines`.
+  // Each `|>` passes the value into the `_` hole of a call, or as the
+  // only argument of a bare one-parameter function such as
+  // `count::format_lines` (D-244).
   text
-  |> count::top(limit)
+  |> count::top(_, limit)
   |> count::format_lines
-  |> list::each(io::println)
+  |> list::each(_, io::println)
   Ok(Nil)
 }
 
