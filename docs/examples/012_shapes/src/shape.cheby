@@ -1,0 +1,120 @@
+//! Shapes on the plane, and the ways to change them.
+//!
+//! Values are immutable, so changing a shape means building a new one.
+//! A record update, `Shape { ..shape, label: "new" }`, builds a copy of
+//! `shape` with only the listed fields replaced, so a function names
+//! just the fields it changes. When the old shape is not used
+//! afterwards and is not shared, for example through a constant, the
+//! compiler can reuse its memory and the update happens in place.
+
+import shapes::point
+
+/// A shape. Every variant has a `label` and an `origin`, with the same
+/// types, so those two fields can be read and updated on any shape
+/// without a `case`. The other fields belong to one variant each.
+type Shape {
+  /// A circle whose center is `origin`.
+  Circle { label: String, origin: point::Point, radius: Float },
+  /// A rectangle whose top left corner is `origin`.
+  Rect { label: String, origin: point::Point, width: Float, height: Float },
+  /// A single point, with no size.
+  Dot { label: String, origin: point::Point },
+}
+
+/// Moves `shape` by `dx` to the right and `dy` down.
+fn translate(shape: Shape, dx: Float, dy: Float) -> Shape {
+  // The name before `{ ..` is the type, `Shape`, not a constructor.
+  // The update keeps whichever variant `shape` has, so a circle stays
+  // a circle. It is allowed because every variant has an `origin` of
+  // the same type.
+  Shape { ..shape, origin: point::offset(shape.origin, dx, dy) }
+}
+
+/// Gives `shape` a new label, keeping its kind, position and size.
+fn rename(shape: Shape, label: String) -> Shape {
+  // `label` alone is short for `label: label`, as in a construction.
+  Shape { ..shape, label }
+}
+
+/// Moves `shape` straight down, or up, so that its origin is at
+/// height `y`.
+fn drop_to(shape: Shape, y: Float) -> Shape {
+  // Updates nest. The inner one replaces `y` and keeps `x`, and the
+  // outer one replaces `origin` and keeps the rest of the shape.
+  // `Point` is declared in the `point` module, so its name is
+  // qualified, as in a construction.
+  Shape { ..shape, origin: point::Point { ..shape.origin, y } }
+}
+
+/// Makes `shape` `factor` times larger, keeping its origin in place.
+fn scale(shape: Shape, factor: Float) -> Shape {
+  // Only circles have a `radius`, so `Shape { ..shape, radius: r }`
+  // is a compile error: an update may only list fields that every
+  // variant has. The fields of one variant are changed by matching on
+  // it and building it again. Matching a value and building one of the
+  // same variant in the same arm lets the compiler reuse its memory
+  // too.
+  case shape {
+    Circle { label, origin, radius } => Circle { label, origin, radius: radius * factor }
+    Rect { label, origin, width, height } => {
+      Rect { label, origin, width: width * factor, height: height * factor }
+    }
+    Dot { .. } => shape
+  }
+}
+
+/// Makes `Shape` satisfy `Show`, so a shape can be interpolated as
+/// `{shape}`. The origin shows through `point::show`.
+fn show(shape: Shape) -> String {
+  case shape {
+    Circle { label, origin, radius } => "{label}: circle at {origin}, radius {radius}"
+    Rect { label, origin, width, height } => "{label}: {width} by {height} rectangle at {origin}"
+    Dot { label, origin } => "{label}: dot at {origin}"
+  }
+}
+
+test "translate moves every kind of shape and keeps its kind" {
+  let circle = Circle { label: "sun", origin: point::new(1.0, 2.0), radius: 1.0 }
+  let rect = Rect { label: "box", origin: point::new(0.0, 0.0), width: 2.0, height: 3.0 }
+  let dot = Dot { label: "star", origin: point::new(5.0, 5.0) }
+  assert translate(circle, 2.0, 3.0) == Circle { label: "sun", origin: point::new(3.0, 5.0), radius: 1.0 }
+  assert translate(rect, 2.0, 3.0) == Rect { label: "box", origin: point::new(2.0, 3.0), width: 2.0, height: 3.0 }
+  assert translate(dot, 2.0, 3.0) == Dot { label: "star", origin: point::new(7.0, 8.0) }
+}
+
+test "an update leaves the original shape unchanged" {
+  let circle = Circle { label: "sun", origin: point::new(1.0, 2.0), radius: 1.0 }
+  let moved = translate(circle, 2.0, 3.0)
+  assert moved.origin == point::new(3.0, 5.0)
+  // `circle` is used again here, so the update above copies it instead
+  // of reusing it in place.
+  assert circle.origin == point::new(1.0, 2.0)
+}
+
+test "rename changes only the label" {
+  let rect = Rect { label: "box", origin: point::new(1.0, 1.0), width: 2.0, height: 3.0 }
+  assert rename(rect, "shed") == Rect { label: "shed", origin: point::new(1.0, 1.0), width: 2.0, height: 3.0 }
+}
+
+test "drop_to changes only the height of the origin" {
+  let dot = Dot { label: "bird", origin: point::new(6.0, 1.0) }
+  assert drop_to(dot, 7.0) == Dot { label: "bird", origin: point::new(6.0, 7.0) }
+}
+
+test "scale resizes circles and rectangles and leaves dots alone" {
+  let circle = Circle { label: "sun", origin: point::new(1.0, 2.0), radius: 1.5 }
+  let rect = Rect { label: "box", origin: point::new(0.0, 0.0), width: 2.0, height: 3.0 }
+  let dot = Dot { label: "star", origin: point::new(5.0, 5.0) }
+  assert scale(circle, 2.0) == Circle { label: "sun", origin: point::new(1.0, 2.0), radius: 3.0 }
+  assert scale(rect, 0.5) == Rect { label: "box", origin: point::new(0.0, 0.0), width: 1.0, height: 1.5 }
+  assert scale(dot, 2.0) == dot
+}
+
+test "shapes show their label, kind, size and position" {
+  let circle = Circle { label: "sun", origin: point::new(1.0, 2.0), radius: 1.5 }
+  let rect = Rect { label: "box", origin: point::new(0.0, 0.0), width: 2.0, height: 3.0 }
+  let dot = Dot { label: "star", origin: point::new(5.0, 5.0) }
+  assert show(circle) == "sun: circle at (1.0, 2.0), radius 1.5"
+  assert show(rect) == "box: 2.0 by 3.0 rectangle at (0.0, 0.0)"
+  assert show(dot) == "star: dot at (5.0, 5.0)"
+}

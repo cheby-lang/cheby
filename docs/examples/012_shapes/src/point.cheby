@@ -1,0 +1,41 @@
+//! Points on the plane.
+//!
+//! `Point` has its own module so that it can satisfy `Show` with its
+//! own `show`, next to `Shape`, which has another one.
+
+/// A point. `x` grows to the right and `y` grows downwards, as on a
+/// screen.
+type Point { x: Float, y: Float }
+
+/// Returns the point at `x`, `y`.
+fn new(x: Float, y: Float) -> Point {
+  Point { x, y }
+}
+
+/// Returns `p` moved by `dx` to the right and `dy` down.
+fn offset(p: Point, dx: Float, dy: Float) -> Point {
+  Point { x: p.x + dx, y: p.y + dy }
+}
+
+/// Makes `Point` satisfy `Show`, so a point can be interpolated as
+/// `{p}`.
+fn show(p: Point) -> String {
+  "({p.x}, {p.y})"
+}
+
+test "offset moves a point" {
+  assert offset(new(1.0, 2.0), 3.0, -1.0) == new(4.0, 1.0)
+}
+
+test "a record update replaces only the listed fields" {
+  let start = new(1.0, 2.0)
+  // `Point` has one variant, so the type name before `{ ..` is also
+  // the name of its constructor.
+  assert Point { ..start, x: 5.0 } == new(5.0, 2.0)
+  // An update builds a new value. `start` itself is unchanged.
+  assert start == new(1.0, 2.0)
+}
+
+test "points show as coordinate pairs" {
+  assert show(new(1.5, -2.0)) == "(1.5, -2.0)"
+}

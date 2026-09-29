@@ -1,0 +1,116 @@
+//! Changes a small scene of shapes over one day and prints the scene
+//! after each change.
+//!
+//! The scene is an immutable list, so each change builds a new scene
+//! from the previous one. The shapes in it change through record
+//! updates, `shape::Shape { ..item, label: "new" }`, which copy a shape
+//! with some of its fields replaced.
+
+import std::io
+import std::list
+import shapes::point
+import shapes::shape
+
+/// The height of the ground. The sun sets onto it and the bird lands
+/// on it.
+const ground: Float = 7.0
+
+/// The scene in the morning.
+const scene: List<shape::Shape> = [
+  shape::Circle { label: "sun", origin: point::new(8.0, 2.0), radius: 1.5 },
+  shape::Rect { label: "house", origin: point::new(1.0, 4.0), width: 4.0, height: 3.0 },
+  shape::Dot { label: "bird", origin: point::new(6.0, 1.0) },
+]
+
+fn main() {
+  print_scene("Morning", scene)
+  let panned = pan(scene, 2.0)
+  print_scene("The view pans left", panned)
+  let evening = sunset(panned)
+  print_scene("Sunset", evening)
+  print_scene("Night", nightfall(evening))
+}
+
+/// Moves every shape of `items` by `dx` to the right.
+fn pan(items: List<shape::Shape>, dx: Float) -> List<shape::Shape> {
+  list::map(items, shape::translate(_, dx, 0.0))
+}
+
+/// Lowers the sun to the ground and makes it look larger on the way
+/// down. The other shapes stay where they are.
+fn sunset(items: List<shape::Shape>) -> List<shape::Shape> {
+  // `list::map` checks `items` before the closure, so `item` is
+  // already known to be a `shape::Shape` when `item.label` is checked.
+  // Field access and record update need that type at that point, and
+  // here it is known without an annotation.
+  list::map(items, fn(item) {
+    case item.label {
+      "sun" => sink(shape::scale(item, 1.5))
+      _ => item
+    }
+  })
+}
+
+/// Moves `item` down one unit at a time until its origin is on the
+/// ground or below it.
+fn sink(item: shape::Shape) -> shape::Shape {
+  // The body of a local function is checked before any call to it, so
+  // nothing tells the compiler what `current` is when it checks
+  // `current.origin`. The parameter is annotated instead.
+  fn go(current: shape::Shape) {
+    case {
+      current.origin.y >= ground => current
+      _ => {
+        let lower = point::offset(current.origin, 0.0, 1.0)
+        // `current` is not used after this update, so once it is
+        // uniquely owned, each step can write the new origin into the
+        // same shape instead of copying it.
+        go(shape::Shape { ..current, origin: lower })
+      }
+    }
+  }
+  go(item)
+}
+
+/// Lands the bird on the ground and turns on the lights in the house.
+fn nightfall(items: List<shape::Shape>) -> List<shape::Shape> {
+  list::map(items, fn(item) {
+    case item.label {
+      "bird" => shape::drop_to(item, ground)
+      "house" => shape::rename(item, "house, lights on")
+      _ => item
+    }
+  })
+}
+
+/// Prints `title`, then each shape of `items` on its own line.
+fn print_scene(title: String, items: List<shape::Shape>) {
+  io::println("{title}:")
+  list::each(items, fn(item) { io::println("  {item}") })
+  io::println("")
+}
+
+test "panning moves every shape sideways" {
+  let origins = list::map(pan(scene, 2.0), fn(item) { item.origin })
+  assert origins == [point::new(10.0, 2.0), point::new(3.0, 4.0), point::new(8.0, 1.0)]
+}
+
+test "the sun sinks one unit at a time until it reaches the ground" {
+  // 2.5, 3.5, 4.5, 5.5, 6.5, then 7.5, which is below the ground.
+  let sun = shape::Circle { label: "sun", origin: point::new(0.0, 2.5), radius: 1.0 }
+  assert sink(sun) == shape::Circle { label: "sun", origin: point::new(0.0, 7.5), radius: 1.0 }
+}
+
+test "the sun sets larger and the other shapes stay" {
+  let assert [sun, house, bird] = sunset(scene)
+  assert sun == shape::Circle { label: "sun", origin: point::new(8.0, 7.0), radius: 2.25 }
+  assert house.origin == point::new(1.0, 4.0)
+  assert bird.origin == point::new(6.0, 1.0)
+}
+
+test "at night the bird lands and the lights turn on" {
+  let assert [sun, house, bird] = nightfall(scene)
+  assert sun.label == "sun"
+  assert house.label == "house, lights on"
+  assert bird == shape::Dot { label: "bird", origin: point::new(6.0, 7.0) }
+}
