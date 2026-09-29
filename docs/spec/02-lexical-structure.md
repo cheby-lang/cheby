@@ -93,7 +93,7 @@ FLOAT    = DEC_INT "." digit { digit | "_" } [ exponent ]
 exponent = ( "e" | "E" ) [ "+" | "-" ] digit { digit | "_" } ;
 ```
 
-Digits are required on both sides of the `.`, so `1.` and `.5` are not float literals. This keeps `x.0` (tuple field access) and `..` unambiguous.
+Digits are required on both sides of the `.`, so `1.` and `.5` are not float literals. This keeps `..` unambiguous.
 
 ### 2.5.3 String literals
 
@@ -116,17 +116,16 @@ There is no character literal and no `Char` type (D-114).
 Inside a non-raw string literal, `{` starts an interpolation, which ends at the next `}`:
 
 ```ebnf
-interpolation = "{" LOWER { "." ( LOWER | DEC_INT ) } [ ":?" ] "}" ;
+interpolation = "{" LOWER { "." LOWER } [ ":?" ] "}" ;
 ```
 
-The contents are a name, optionally followed by field or tuple-index accesses, optionally followed by `:?` (D-115). Whitespace is not allowed inside the braces. Anything else inside `{…}` is a compile error that suggests binding the value to a name first or escaping the brace as `\{`.
+The contents are a name, optionally followed by field accesses, optionally followed by `:?` (D-115). Whitespace is not allowed inside the braces. Anything else inside `{…}` is a compile error that suggests binding the value to a name first or escaping the brace as `\{`.
 
 The meaning of interpolation is defined in [§5.3.2](05-expressions.md#532-string-interpolation).
 
 ```cheby
 "hello {name}"             // Show of name
 "at {point.x}, {point.y}"  // field paths
-"pair: {pair.0}"           // tuple index
 "debug: {state:?}"         // built-in debug printing
 "a literal \{brace}"       // no interpolation
 r"^\d{3}-\d{4}$"           // raw string, no escapes or interpolation

@@ -149,7 +149,14 @@ The representation is UTF-8 on native targets and a JS string on JS (D-038). Bec
 
 ## 3.7 Tuples
 
-A tuple groups a fixed number of values of possibly different types (D-076). The type is written `(A, B)`, `(A, B, C)` and so on, and values are written the same way with expressions ([§5.12](05-expressions.md#512-tuples)). Tuple elements are read with `.0`, `.1`, … ([§5.11.3](05-expressions.md#5113-field-access)) or with a tuple pattern.
+A tuple groups a fixed number of values of possibly different types (D-076). The type is written `(A, B)`, `(A, B, C)` and so on, and values are written the same way with expressions ([§5.12](05-expressions.md#512-tuples)). Tuple elements are read only with a tuple pattern ([§6.5](06-patterns.md#65-tuple-patterns)) in `let`, `case`, `use` binders or the parameters of closures and local functions. There is no positional access such as `pair.0` (D-241), so a tuple is taken apart where it is used and its parts get names.
+
+```cheby
+let (name, age) = person
+list::map(pairs, fn((key, value)) { key + "=" + value })
+```
+
+A written type that contains a tuple with a tuple element, such as `((Int, Int), Bool)`, or a tuple with four or more elements, is a warning that suggests a named type instead ([§13.8](13-tooling.md#138-diagnostics-and-warnings)) (D-243).
 
 A tuple has at least two elements. `(x)` is a parenthesized expression, and there is no one-element tuple.
 
@@ -242,7 +249,7 @@ This order concerns type checking only. Evaluation is always strictly left to ri
 
 Some constructs need a known type at the point where they are checked. Others are resolved at the end of the body (D-234). Here "the body" is always the body of the enclosing top-level function or `test`, including every local function and closure inside it, so a constraint in a local function can be resolved by a call that comes after the local function's declaration:
 
-- **Known at that point.** Field access `x.name`, tuple index `x.0` and record update `T { ..base, … }` require the type of `x` or `base` to be known when they are checked in this order ([§5.11.3](05-expressions.md#5113-field-access)) (D-213). Otherwise it is a compile error that asks for a type annotation.
+- **Known at that point.** Field access `x.name` and record update `T { ..base, … }` require the type of `x` or `base` to be known when they are checked in this order ([§5.11.3](05-expressions.md#5113-field-access)) (D-213). Otherwise it is a compile error that asks for a type annotation.
 - **Resolved at the end of the body.** Operators whose meaning depends on the operand type ([§5.4](05-expressions.md#54-operators)): arithmetic, unary `-`, `<`, `<=`, `>`, `>=` and the bitwise operators. Also interface-qualified calls such as `Compare::compare(x, y)` ([§8.5](08-interfaces.md#85-calling-interface-functions)), the `Show` requirement of `{x}` interpolation ([§5.3.2](05-expressions.md#532-string-interpolation)), and conversions to `dyn I`: the check that the value's type satisfies `I` and the choice of its function package and type descriptor ([§3.12.5](#3125-expected-types-and-conversions)) (D-237). These are recorded and resolved after the whole top-level body has been inferred and numeric literals have been defaulted ([§3.3.4](#334-numeric-literals)) (D-133). Their result types are known before that: arithmetic, unary `-` and bitwise operators return the operands' type (D-118), comparisons return `Bool`, and an interface call's type follows from the interface signature. Interfaces have no type parameters and function names are not overloaded (D-045, D-165), so resolving such a constraint never changes a type. `==` and `!=` only require both operands to have the same type.
 - **Still unknown at the end.** If a type that a deferred operator, interface call, interpolation or conversion to `dyn` depends on is still unknown after the top-level body has been inferred and literals defaulted, it is a compile error that asks for a type annotation.
 

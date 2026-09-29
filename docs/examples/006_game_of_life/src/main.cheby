@@ -114,9 +114,10 @@ fn live_neighbours(grid: Grid, cell: (Int, Int)) -> Int {
 
 /// Returns the eight cells around `cell`, wrapping around the edges.
 fn neighbours(cell: (Int, Int)) -> List<(Int, Int)> {
-  list::map(offsets, fn(offset) {
-    wrap_cell((cell.0 + offset.0, cell.1 + offset.1))
-  })
+  // Tuples have no `.0` access, so `let` and the closure's parameter
+  // take them apart with patterns.
+  let (x, y) = cell
+  list::map(offsets, fn((dx, dy)) { wrap_cell((x + dx, y + dy)) })
 }
 
 /// Tells whether `cell` is alive in `grid`.
@@ -126,7 +127,8 @@ fn is_alive(grid: Grid, cell: (Int, Int)) -> Bool {
 
 /// Moves both coordinates of `cell` onto the board.
 fn wrap_cell(cell: (Int, Int)) -> (Int, Int) {
-  (wrap(cell.0), wrap(cell.1))
+  let (x, y) = cell
+  (wrap(x), wrap(y))
 }
 
 /// Moves a coordinate onto the board, so that -1 becomes `size - 1`
@@ -206,7 +208,7 @@ test "lonely cells die and nothing comes from nothing" {
 }
 
 test "a glider moves one cell diagonally every four generations" {
-  let moved = from_cells(list::map(glider, fn(cell) { (cell.0 + 1, cell.1 + 1) }))
+  let moved = from_cells(list::map(glider, fn((x, y)) { (x + 1, y + 1) }))
   assert start |> step |> step |> step |> step == moved
   assert start |> step |> step != moved
 }

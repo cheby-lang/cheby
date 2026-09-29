@@ -170,6 +170,7 @@ The following are warnings (D-080 and the cited decisions):
 | unreachable `case` arm                                                  | D-022        |
 | `==` on a type statically known to contain a function or handle type    | D-070, D-233 |
 | use of a `@deprecated` item                                             | D-200        |
+| a written tuple type with a tuple element or with four or more elements | D-243        |
 
 Unused `pub` items are never reported (D-152). Bindings whose names start with `_` are not reported as unused ([§2.3](02-lexical-structure.md#23-identifiers)).
 

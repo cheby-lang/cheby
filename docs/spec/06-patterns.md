@@ -36,7 +36,7 @@ A pattern is **irrefutable** if it matches every value of its type. The irrefuta
 - `[..]` and `[..rest]`,
 - alternatives with at least one irrefutable alternative, and `p as x` when `p` is irrefutable.
 
-Every other pattern is **refutable**. `let` and `use` binders require irrefutable patterns. `case` arms and `let assert` accept both.
+Every other pattern is **refutable**. `let`, `use` binders and the parameters of closures and local functions (D-242) require irrefutable patterns. `case` arms and `let assert` accept both.
 
 ## 6.2 Wildcards and bindings
 
@@ -101,6 +101,8 @@ Matching on the constructors of a `priv` type is possible only in its own module
 ```cheby
 let (name, age) = person
 ```
+
+Tuple patterns are the only way to read tuple elements. There is no `.0` access (D-241).
 
 ## 6.6 List patterns
 

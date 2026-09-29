@@ -136,7 +136,7 @@ unary_expr      = ( "-" | "!" ) unary_expr
 postfix         = primary { call_suffix | field_suffix } ;
 call_suffix     = "(" [ arg { "," arg } [ "," ] ] ")" ;
 arg             = expr | "_" ;                                  (* at most one "_" per argument list; it belongs to this call, §5.6, D-202 *)
-field_suffix    = "." ( LOWER | DEC_INT ) ;
+field_suffix    = "." LOWER ;                                  (* no tuple index, D-241 *)
 
 primary         = literal
                 | path_expr
@@ -163,7 +163,7 @@ list            = "[" [ list_item { "," list_item } [ "," ] ] "]" ;
 list_item       = expr | ".." expr ;                            (* any number of spreads, anywhere, D-157 *)
 closure         = "fn" "(" [ closure_params ] ")" [ "->" type ] block ;
 closure_params  = closure_param { "," closure_param } [ "," ] ;
-closure_param   = LOWER [ ":" type ] ;
+closure_param   = pattern [ ":" type ] ;                       (* irrefutable, D-242 *)
 panic_expr      = "panic" [ "as" expr ] ;                      (* D-161 *)
 todo_expr       = "todo" [ "as" expr ] ;                       (* D-161 *)
 
@@ -216,7 +216,7 @@ RAW_STRING      = "r" { "#" } '"' { any character } '"' { "#" } ;
                      were written after "r", so r"..." cannot contain '"',
                      r#"..."# cannot contain '"#', and so on *)
 escape          = "\n" | "\t" | "\r" | "\\" | '\"' | "\{" | "\u{" hex_digit { hex_digit } "}" ;
-interpolation   = "{" LOWER { "." ( LOWER | DEC_INT ) } [ ":?" ] "}" ;
+interpolation   = "{" LOWER { "." LOWER } [ ":?" ] "}" ;
 string_char     = any character except '"', "\" and "{" ;
 ```
 

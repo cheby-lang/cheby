@@ -84,7 +84,7 @@ param       = LOWER ":" type ;
 - Parameters are bindings and follow the no-shadowing rule ([§5.2.3](05-expressions.md#523-no-shadowing)).
 - Type parameters are `UPPER` names and may have interface bounds ([§8.4](08-interfaces.md#84-bounds)).
 
-Parameters are plain names. Patterns are not allowed in parameter position; destructure with `let` in the body.
+Parameters of top-level functions are plain names, so signatures and generated documentation always name them. Destructure with `let` in the body. Closures and local functions may take irrefutable patterns as parameters ([§5.7](05-expressions.md#57-anonymous-functions)) (D-242).
 
 ```cheby
 import std::io

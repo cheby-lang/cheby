@@ -129,20 +129,20 @@ let message = "user {user.name} has {count} items, state {state:?}"
 
 From highest to lowest (D-108):
 
-| Level | Operators                                    | Associativity |
-| ----- | -------------------------------------------- | ------------- |
-| 1     | call `f(…)`, field `.name`, tuple index `.0` | left          |
-| 2     | unary `-`, `!`                               | prefix        |
-| 3     | `*` `/` `%`                                  | left          |
-| 4     | `+` `-`                                      | left          |
-| 5     | `<<` `>>`                                    | left          |
-| 6     | `&`                                          | left          |
-| 7     | `^`                                          | left          |
-| 8     | `\|`                                         | left          |
-| 9     | `\|>`                                        | left          |
-| 10    | `==` `!=` `<` `<=` `>` `>=`                  | none          |
-| 11    | `&&`                                         | left          |
-| 12    | `\|\|`                                       | left          |
+| Level | Operators                   | Associativity |
+| ----- | --------------------------- | ------------- |
+| 1     | call `f(…)`, field `.name`  | left          |
+| 2     | unary `-`, `!`              | prefix        |
+| 3     | `*` `/` `%`                 | left          |
+| 4     | `+` `-`                     | left          |
+| 5     | `<<` `>>`                   | left          |
+| 6     | `&`                         | left          |
+| 7     | `^`                         | left          |
+| 8     | `\|`                        | left          |
+| 9     | `\|>`                       | left          |
+| 10    | `==` `!=` `<` `<=` `>` `>=` | none          |
+| 11    | `&&`                        | left          |
+| 12    | `\|\|`                      | left          |
 
 Comparison operators do not chain. `a < b < c` and `a == b == c` are compile errors that suggest `&&` (D-108).
 
@@ -250,11 +250,13 @@ let b = add_next(2)                      // same id as for `a`
 
 ```ebnf
 closure     = "fn" "(" [ closure_param { "," closure_param } [ "," ] ] ")" [ "->" type ] block ;
-closure_param = LOWER [ ":" type ] ;
+closure_param = pattern [ ":" type ] ;
 ```
 
 An anonymous function (closure) uses the Gleam form `fn(x) { … }` (D-036). Parameter types and the return type are optional and inferred when omitted (D-011).
 
+- A parameter is an irrefutable pattern ([§6.1](06-patterns.md#61-pattern-syntax)), usually a plain name (D-242). A refutable pattern such as `fn(Some(x))` is a compile error, as with `let`. A type annotation applies to the whole pattern: `fn((key, value): (String, Int)) { … }`. `fn((a, b)) { … }` takes one tuple parameter, and `fn(a, b) { … }` takes two parameters.
+- A parameter pattern behaves like a `let` of that pattern at the start of the body: `fn((a, b)) { body }` takes one parameter `t`, a fresh name, and starts its body with `let (a, b) = t`.
 - A closure may refer to any binding in scope where it is written. Because all values are immutable, capturing a binding captures its value.
 - A closure's parameters follow the no-shadowing rule ([§5.2.3](#523-no-shadowing)).
 - A closure is monomorphic: it has exactly one function type, fixed by inference within the enclosing body (D-123, [§3.12.3](03-types.md#3123-inference-inside-bodies)).
@@ -266,6 +268,7 @@ let double = fn(x) { x * 2 }
 let parse_all = fn(lines: List<String>) -> List<Int> {
   list::filter_map(lines, int::parse)
 }
+let total = list::fold(entries, 0, fn(acc, (_, quantity)) { acc + quantity })
 ```
 
 ## 5.8 Local named functions
@@ -279,7 +282,7 @@ A statement of the form `fn name(…) { … }` inside a block declares a local n
 - It may refer to bindings in scope before it, like a closure.
 - Inside its own body, its name refers to itself, so it may call itself recursively. Only self-recursion is supported: a local function cannot refer to local functions declared after it (D-110).
 - Its name is a binding and follows the no-shadowing rule ([§5.2.3](#523-no-shadowing)).
-- Parameter and return types are optional and inferred. It is monomorphic (D-123).
+- Parameters are irrefutable patterns, as for closures ([§5.7](#57-anonymous-functions)) (D-242). Parameter and return types are optional and inferred. It is monomorphic (D-123).
 - Tail calls to itself, and all other tail calls in its body, are guaranteed (D-015).
 
 Local functions are the usual way to write loops that carry state (ADR-0001):
@@ -473,12 +476,12 @@ let moved = Point { ..origin, x: 10.0 }
 ### 5.11.3 Field access
 
 ```ebnf
-field_access = postfix "." ( LOWER | DEC_INT ) ;
+field_access = postfix "." LOWER ;
 ```
 
 - `x.name` reads a named field. If `x`'s type has several variants, every variant must have a field `name` of the same type (D-071). Otherwise, use `case`.
 - `x`'s type must already be known at the point of the access, from an annotation, a signature or a use checked earlier (D-213). Statements are checked in order, and closure arguments after the other arguments of a call ([§3.12.4](03-types.md#3124-order-of-inference)) (D-234), so `list::filter(books, fn(entry) { entry.format == format::Paperback })` knows `entry`'s type from `books`. Field names are not unique across types, so the compiler does not guess the type from the field name or wait for later uses. Otherwise it is a compile error that asks for a type annotation. The same rule applies to record update ([§5.11](#511-constructors-and-records)). In local functions and closures, whose parameter types are inferred, this usually means annotating the parameter: `fn step(current: Input) { current.rest }`.
-- `x.0`, `x.1`, … read tuple elements ([§3.7](03-types.md#37-tuples)). The index must be less than the tuple's length. Positional variant fields are not accessible with `.0`; use a pattern.
+- There is no positional access. Tuple elements and positional variant fields are read with a pattern ([§3.7](03-types.md#37-tuples), [§6.5](06-patterns.md#65-tuple-patterns)) (D-241). `x.0` is a compile error that suggests a tuple pattern.
 - Reading fields of a `priv` type is possible only in its own module (D-151). Reading fields of a type from another package requires the type to be `exposed` (D-048).
 
 The `.` operator is only for field access. Module members are accessed with `::` (D-060).
@@ -494,7 +497,7 @@ A tuple expression has two or more elements (D-076). Elements are evaluated from
 
 ```cheby
 let pair = (name, 42)
-let name_again = pair.0
+let (name_again, count) = pair
 ```
 
 ## 5.13 List literals

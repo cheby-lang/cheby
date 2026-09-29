@@ -12,11 +12,11 @@ import tictactoe::player
 fn best_move(position: board::Board, mark: player::Player) -> Int {
   let assert [first, ..others] = board::free_cells(position)
   let start = (first, score_move(position, mark, first))
-  let (cell_number, _) = list::fold(others, start, fn(best_so_far, cell) {
+  let (cell_number, _) = list::fold(others, start, fn((best_cell, best_score), cell) {
     let cell_score = score_move(position, mark, cell)
-    case cell_score > best_so_far.1 {
+    case cell_score > best_score {
       True => (cell, cell_score)
-      False => best_so_far
+      False => (best_cell, best_score)
     }
   })
   cell_number
