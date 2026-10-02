@@ -1,0 +1,92 @@
+//! Crawls one website and prints the status of every page on it.
+//!
+//! `cheby run -- https://example.com` starts at `/` and follows every
+//! link to the same site, with up to 4 fetches at once, until it has
+//! seen 50 pages or found no new ones. It prints one line per page,
+//! sorted by path:
+//!
+//! ```text
+//! 200      /
+//! 200      /about
+//! 404      /old
+//! timeout  /slow
+//! ```
+//!
+//! The crawl is in `crawl.cheby` and finding links in `html.cheby`.
+//!
+//! The standard-library spec is still being written (D-204), so this
+//! example assumes `http::get(url)`, which returns
+//! `Result<http::Response, http::Error>`, a response with the fields
+//! `status: Int` and `body: String`, as well as `string::starts_with`,
+//! `string::trim_end(text, suffix)`, `string::pad_end` and `set::size`.
+
+import std::duration
+import std::env
+import std::fiber
+import std::http
+import std::io
+import std::list
+import std::result
+import std::string
+import web_scraper::crawl
+import web_scraper::html
+
+/// How many fetches may run at once.
+const limit: Int = 4
+
+/// How many pages the crawl visits at most.
+const max_pages: Int = 50
+
+fn main() -> Result<Nil, AppError> {
+  use base <- result::try(parse_args(env::args()))
+  let fetch = fn(path) { get(base, path) }
+  use visits <- result::try(result::map_error(crawl::crawl("/", limit, max_pages, duration::seconds(5), fetch), Crashed))
+  list::each(visits, fn(found) {
+    // `{found.outcome}` uses the `show` in `crawl`. This module's
+    // `show` is for `AppError`.
+    let status = string::pad_end("{found.outcome}", 8, " ")
+    io::println("{status} {found.path}")
+  })
+  Ok(Nil)
+}
+
+/// Fetches `path` on the site at `base`, and finds its links.
+priv fn get(base: String, path: String) -> Result<crawl::Page, String> {
+  case http::get(base + path) {
+    Ok(response) => Ok(crawl::Page { status: response.status, links: html::links(response.body) })
+    Err(reason) => Err("{reason:?}")
+  }
+}
+
+/// Takes the site's address, without a `/` at the end.
+fn parse_args(args: List<String>) -> Result<String, AppError> {
+  case args {
+    [base] => case string::starts_with(base, "http://") || string::starts_with(base, "https://") {
+      True => Ok(base |> string::trim_end(_, "/"))
+      False => Err(NotAUrl(base))
+    }
+    _ => Err(Usage)
+  }
+}
+
+type AppError {
+  Usage,
+  NotAUrl(String),
+  /// Fetching panicked, which is a bug in the crawler.
+  Crashed(fiber::Panic),
+}
+
+/// Makes `AppError` satisfy `Show`, so `main` prints it as a message.
+fn show(error: AppError) -> String {
+  case error {
+    Usage => "usage: web_scraper URL"
+    NotAUrl(text) => "expected an http or https address, got \"{text}\""
+    Crashed(crash) => "the crawl crashed: {crash:?}"
+  }
+}
+
+test "the site's address is taken without a trailing slash" {
+  assert parse_args(["https://example.com/"]) == Ok("https://example.com")
+  assert parse_args(["example.com"]) == Err(NotAUrl("example.com"))
+  assert parse_args([]) == Err(Usage)
+}

@@ -1,0 +1,192 @@
+//! The crawl itself: a queue of paths, at most `limit` fetches in
+//! flight, and a cap on how many pages the crawl visits in total.
+//!
+//! The scope's body is the coordinator. It starts a fiber for the next
+//! path whenever a slot is free, and otherwise waits for a fiber to
+//! report. Every report may add new paths to the end of the queue. The
+//! crawl ends when the queue is empty and no fetch is in flight.
+//!
+//! Fetches finish in any order, but every path is fetched exactly once,
+//! so the set of pages visited does not depend on timing, as long as
+//! the site has no more than `max_pages` pages. When it has more, which
+//! pages make it in depends on which fetches finish first.
+//!
+//! Fetching is a parameter, so the tests below crawl a fake site held
+//! in a `Map`, with no network.
+
+import std::channel
+import std::duration
+import std::fiber
+import std::list
+import std::map
+import std::selector
+import std::set
+import std::string
+
+/// A page the server answered with.
+type Page {
+  status: Int,
+  /// The paths the page links to, on the same site.
+  links: List<String>,
+}
+
+/// What fetching one path gave.
+type Outcome {
+  Loaded(Page),
+  /// The request failed before any answer, for this reason.
+  Failed(String),
+  /// No answer came before the deadline.
+  TimedOut,
+}
+
+/// One path the crawl visited, and what it found there.
+type Visit { path: String, outcome: Outcome }
+
+/// Crawls the site from `start`, with at most `limit` fetches at once
+/// and at most `max_pages` pages in all. Each fetch may take up to
+/// `deadline`. Returns the visits sorted by path, or `Err` if `fetch`
+/// panics.
+fn crawl(
+  start: String,
+  limit: Int,
+  max_pages: Int,
+  deadline: duration::Duration,
+  fetch: fn(String) -> Result<Page, String>,
+) -> Result<List<Visit>, fiber::Panic> {
+  assert limit > 0 as "a crawl needs at least one fetch in flight"
+  use scope <- fiber::scope()
+  // Capacity 0: a fetcher waits until the coordinator takes its visit.
+  let (done_tx, done_rx) = channel::new::<Visit>(0)
+  // `queue` holds the paths not fetched yet, `seen` every path ever
+  // queued, and `in_flight` how many fetchers have not reported.
+  fn step(queue, seen, in_flight, visits) {
+    case queue, in_flight {
+      [], 0 => visits
+      [path, ..rest], busy when busy < limit => {
+        fiber::spawn(scope, fn() { visit(path, deadline, fetch, done_tx) })
+        step(rest, seen, busy + 1, visits)
+      }
+      // The queue is empty or every slot is taken. Some fetcher is
+      // still running and will report, so `receive` always gets a
+      // visit.
+      _, _ => {
+        let assert Ok(finished) = channel::receive(done_rx)
+        let (fresh, known) = case finished.outcome {
+          Loaded(page) => admit(page.links, seen, max_pages)
+          _ => ([], seen)
+        }
+        step([..queue, ..fresh], known, in_flight - 1, [..visits, finished])
+      }
+    }
+  }
+  step([start], set::from_list([start]), 0, []) |> list::sort(_, by_path)
+}
+
+/// Fetches `path` within `deadline` and reports the visit on `done`.
+priv fn visit(
+  path: String,
+  deadline: duration::Duration,
+  fetch: fn(String) -> Result<Page, String>,
+  done: channel::Sender<Visit>,
+) {
+  let outcome = case fiber::timeout(deadline, fn() { fetch(path) }) {
+    Ok(Ok(page)) => Loaded(page)
+    Ok(Err(reason)) => Failed(reason)
+    Err(fiber::TimedOut) => TimedOut
+    // A panic in `fetch` is a bug, not a bad page, so it fails the
+    // whole crawl.
+    Err(fiber::Panicked(crash)) => panic as fiber::message(crash)
+  }
+  // The coordinator receives until every fetcher has reported, so the
+  // visit is always taken.
+  let assert Ok(Nil) = channel::send(done, Visit { path, outcome })
+}
+
+/// Picks the links not seen before, in order, while there is room
+/// under `max_pages`. Returns them with `seen` updated.
+fn admit(links: List<String>, seen: set::Set<String>, max_pages: Int) -> (List<String>, set::Set<String>) {
+  list::fold(links, ([], seen), fn((fresh, known), link) {
+    case {
+      set::contains(known, link) || set::size(known) >= max_pages => (fresh, known)
+      _ => ([..fresh, link], set::insert(known, link))
+    }
+  })
+}
+
+priv fn by_path(first: Visit, second: Visit) -> Order {
+  string::compare(first.path, second.path)
+}
+
+/// Makes `Outcome` satisfy `Show`, for the report.
+fn show(outcome: Outcome) -> String {
+  case outcome {
+    Loaded(page) => "{page.status}"
+    Failed(_) => "failed"
+    TimedOut => "timeout"
+  }
+}
+
+/// A fake site: each path maps to the paths it links to. Other paths
+/// are a 404, and `/slow` never answers in time.
+priv fn fake(pages: map::Map<String, List<String>>) -> fn(String) -> Result<Page, String> {
+  fn(path) {
+    case path, map::get(pages, path) {
+      "/slow", _ => {
+        // A selector with only a timer arm is a sleep.
+        selector::new() |> selector::after(_, duration::seconds(10), fn() { Nil }) |> selector::select
+        Ok(Page { status: 200, links: [] })
+      }
+      _, Some(links) => Ok(Page { status: 200, links })
+      _, None => Ok(Page { status: 404, links: [] })
+    }
+  }
+}
+
+/// Each visit's path and `show`n outcome, for the tests.
+priv fn brief(visits: List<Visit>) -> List<(String, String)> {
+  list::map(visits, fn(found) { (found.path, show(found.outcome)) })
+}
+
+priv const site: List<(String, List<String>)> = [
+  ("/", ["/a", "/b"]),
+  ("/a", ["/", "/c"]),
+  ("/b", ["/c", "/missing"]),
+  ("/c", ["/a", "/slow"]),
+]
+
+test "admit skips seen links and stops at the cap" {
+  let (fresh, known) = admit(["/a", "/", "/b", "/a", "/c"], set::from_list(["/"]), 3)
+  assert fresh == ["/a", "/b"]
+  assert known == set::from_list(["/", "/a", "/b"])
+}
+
+test "every page is visited once, cycles and all" {
+  let fetch = fake(map::from_list(site))
+  let assert Ok(visits) = crawl("/", 2, 100, duration::milliseconds(50), fetch)
+  assert brief(visits) == [
+    ("/", "200"),
+    ("/a", "200"),
+    ("/b", "200"),
+    ("/c", "200"),
+    ("/missing", "404"),
+    ("/slow", "timeout"),
+  ]
+}
+
+test "one fetch at a time finds the same pages" {
+  let fetch = fake(map::from_list(site))
+  let assert Ok(visits) = crawl("/", 1, 100, duration::milliseconds(50), fetch)
+  assert list::length(visits) == 6
+}
+
+test "the cap limits the pages visited" {
+  // Only `/` is in flight when its links are admitted, so the cap
+  // picks the same pages every time here.
+  let fetch = fake(map::from_list(site))
+  let assert Ok(visits) = crawl("/", 4, 3, duration::milliseconds(50), fetch)
+  assert brief(visits) == [("/", "200"), ("/a", "200"), ("/b", "200")]
+}
+
+test "a fetch that panics fails the crawl" {
+  let assert Err(_) = crawl("/", 2, 10, duration::seconds(1), fn(_) -> Result<Page, String> { panic as "bug" })
+}

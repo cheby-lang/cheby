@@ -1,0 +1,34 @@
+//! Finds the links in a page, without a real HTML parser.
+//!
+//! Only `href="/..."` attributes count: links to other sites, relative
+//! links and links in single quotes are skipped. Fragments are dropped,
+//! so `/a#top` and `/a` are the same page.
+
+import std::list
+import std::string
+
+/// Returns the same-site paths that `body` links to, in order, each
+/// once.
+fn links(body: String) -> List<String> {
+  // Every part after the first starts right after an `href="`.
+  let assert [_, ..parts] = string::split(body, "href=\"")
+  list::fold(parts, [], fn(found, part) {
+    let assert [value, ..] = string::split(part, "\"")
+    let assert [path, ..] = string::split(value, "#")
+    case string::starts_with(path, "/") && !list::contains(found, path) {
+      True => [..found, path]
+      False => found
+    }
+  })
+}
+
+test "same-site links are found in order, each once" {
+  let body = r#"<a href="/a">A</a> <a href="/b#top">B</a> <a href="/a">again</a>"#
+  assert links(body) == ["/a", "/b"]
+}
+
+test "other links are skipped" {
+  let body = r#"<a href="https://other.org/">x</a> <a href="c.html">c</a> <p>no links</p>"#
+  assert links(body) == []
+  assert links("") == []
+}
