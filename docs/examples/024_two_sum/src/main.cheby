@@ -1,0 +1,97 @@
+//! Solves the two sum problem for a few lists and prints the answers.
+//!
+//! Given a list of numbers and a target, two sum finds two different
+//! positions whose numbers add up to the target. Trying every pair
+//! takes time that grows with the square of the length. This example
+//! walks the list once instead and keeps a `Map` from each number seen
+//! so far to its index. The partner a number needs is
+//! `target - number`, so one lookup tells whether it came earlier.
+
+import std::io
+import std::list
+import std::map
+import std::map::{Map}
+import std::string
+
+fn main() {
+  // Each example is a list of numbers and a target.
+  let examples = [
+    ([2, 7, 11, 15], 9),
+    ([3, 2, 4], 6),
+    ([3, 3], 6),
+    ([1, 2, 3], 7),
+  ]
+  list::each(examples, fn(example) {
+    let (numbers, target) = example
+    io::println(describe(numbers, target))
+  })
+}
+
+/// Returns the indices of two different numbers in `numbers` that add
+/// up to `target`, the smaller index first, or `None` if no two do.
+/// When several pairs work, the one that is complete first wins, so
+/// the second index is as small as possible.
+fn two_sum(numbers: List<Int>, target: Int) -> Option<(Int, Int)> {
+  // `seen` maps each number before `index` to where it is. Each number
+  // is looked up before it is added, so it is never paired with
+  // itself, but a second copy of it finds the first one. The recursive
+  // call is a tail call, so a long list takes constant stack space.
+  fn step(rest, index, seen: Map<Int, Int>) {
+    case rest {
+      [] => None
+      [number, ..tail] => case map::get(seen, target - number) {
+        Some(earlier) => Some((earlier, index))
+        None => step(tail, index + 1, map::insert(seen, number, index))
+      }
+    }
+  }
+  step(numbers, 0, map::new())
+}
+
+/// Returns a line that shows `numbers`, `target` and the answer of
+/// `two_sum` for them.
+fn describe(numbers: List<Int>, target: Int) -> String {
+  let shown = numbers |> list::map(_, fn(n) { "{n}" }) |> string::join(_, ", ")
+  case two_sum(numbers, target) {
+    Some((first, second)) => "[{shown}] and {target}: indices {first} and {second}"
+    None => "[{shown}] and {target}: no two numbers add up"
+  }
+}
+
+test "finds the pair that adds up to the target" {
+  assert two_sum([2, 7, 11, 15], 9) == Some((0, 1))
+  assert two_sum([3, 2, 4], 6) == Some((1, 2))
+  assert two_sum([1, 5, 8, 3], 11) == Some((2, 3))
+}
+
+test "two copies of the same number make a pair" {
+  assert two_sum([3, 3], 6) == Some((0, 1))
+  assert two_sum([1, 4, 2, 4], 8) == Some((1, 3))
+}
+
+test "a number is never paired with itself" {
+  assert two_sum([3], 6) == None
+  assert two_sum([3, 4], 6) == None
+}
+
+test "negative numbers and zero work too" {
+  assert two_sum([-3, 4, 3, 90], 0) == Some((0, 2))
+  assert two_sum([0, 4, 3, 0], 0) == Some((0, 3))
+  assert two_sum([-1, -2, -3, -4], -7) == Some((2, 3))
+}
+
+test "the pair that is complete first wins" {
+  // Both (0, 3) and (1, 2) add up to 5, and (1, 2) is found first.
+  assert two_sum([1, 2, 3, 4], 5) == Some((1, 2))
+}
+
+test "lists without a pair have no answer" {
+  assert two_sum([1, 2, 3], 7) == None
+  assert two_sum([], 0) == None
+}
+
+test "describe shows the list, the target and the answer" {
+  assert describe([2, 7, 11, 15], 9) == "[2, 7, 11, 15] and 9: indices 0 and 1"
+  assert describe([1, 2, 3], 7) == "[1, 2, 3] and 7: no two numbers add up"
+  assert describe([], 0) == "[] and 0: no two numbers add up"
+}
