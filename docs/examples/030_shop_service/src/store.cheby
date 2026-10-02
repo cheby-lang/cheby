@@ -1,0 +1,246 @@
+//! The database side of the shop, through the `sql` package.
+//!
+//! Every query is a raw string, `r"…"`. A raw string has no escapes and
+//! no interpolation (D-114), so a value can never be pasted into the SQL
+//! text by accident. Values go in as numbered parameters, `$1`, `$2`
+//! and so on, which the database keeps apart from the query, and that
+//! rules out SQL injection.
+//!
+//! Placing an order runs in one transaction. The products are read with
+//! `FOR UPDATE`, which locks their rows until the transaction ends, so
+//! two orders for the last teapot cannot both find it in stock. If any
+//! step returns an `Err`, or the fiber panics, `sql::transaction` rolls
+//! everything back, so an order is never saved without its lines or its
+//! stock taken.
+//!
+//! This module has no tests: they would need a database. The decisions
+//! are made in `checkout`, which is pure and tested, and this module
+//! only moves data between it and the tables.
+
+import std::list
+import std::map
+import std::map::{Map}
+import std::result
+import sql
+import sql::decode
+import shop_service::checkout
+import shop_service::checkout::{Product}
+import shop_service::order
+
+/// Why a store operation failed.
+type StoreError {
+  /// The database failed, for example the connection dropped.
+  Database(sql::Error),
+  /// The order is valid, but the shop cannot fill it.
+  Rejected(checkout::CheckoutError),
+}
+
+/// An order that was saved, with the id the database gave it.
+type Placed { id: Int, quote: checkout::Quote }
+
+/// A line of a saved order.
+type StoredLine { product_id: Int, name: String, quantity: Int, unit_cents: Int }
+
+/// A saved order, as `GET /orders/:id` shows it.
+type StoredOrder {
+  id: Int,
+  email: String,
+  /// By product id. The order the client sent them in is not kept.
+  lines: List<StoredLine>,
+  subtotal_cents: Int,
+  discount_cents: Int,
+  shipping_cents: Int,
+  total_cents: Int,
+}
+
+/// Returns every product, by id.
+fn list_products(pool: sql::Pool) -> Result<List<Product>, StoreError> {
+  // `Database` is a constructor, so it can be passed as the function
+  // that turns a failure to connect into a `StoreError`.
+  use connection <- sql::with_connection(pool, Database)
+  let query = r"SELECT id, name, price_cents, stock FROM products ORDER BY id"
+  db(sql::query(connection, query, [], product_row()))
+}
+
+/// Returns the product with `id`, or `None` if there is none.
+fn find_product(pool: sql::Pool, id: Int) -> Result<Option<Product>, StoreError> {
+  use connection <- sql::with_connection(pool, Database)
+  let query = r"SELECT id, name, price_cents, stock FROM products WHERE id = $1"
+  db(sql::query_one(connection, query, [sql::int(id)], product_row()))
+}
+
+/// Prices `new_order` and saves it, taking its products out of stock.
+/// `new_order` must have passed `order::validate`.
+fn place_order(pool: sql::Pool, new_order: order::NewOrder) -> Result<Placed, StoreError> {
+  use connection <- sql::transaction(pool, Database)
+  let ids = list::map(new_order.items, fn(line: order::Line) { line.product_id })
+  use products <- result::try(lock_products(connection, ids))
+  use codes <- result::try(load_codes(connection, new_order.discount))
+  let priced = checkout::quote(new_order.items, new_order.discount, products, codes)
+  use quote <- result::try(result::map_error(priced, Rejected))
+  use id <- result::try(insert_order(connection, new_order.email, quote))
+  use _ <- result::try(try_each(quote.lines, fn(line) { save_line(connection, id, line) }))
+  Ok(Placed { id, quote })
+}
+
+/// Returns the order with `id` and its lines, or `None` if there is
+/// none.
+fn find_order(pool: sql::Pool, id: Int) -> Result<Option<StoredOrder>, StoreError> {
+  use connection <- sql::with_connection(pool, Database)
+  let order_query = r"
+    SELECT id, email, subtotal_cents, discount_cents, shipping_cents, total_cents
+    FROM orders
+    WHERE id = $1"
+  let lines_query = r"
+    SELECT l.product_id, p.name, l.quantity, l.unit_cents
+    FROM order_lines l JOIN products p ON p.id = l.product_id
+    WHERE l.order_id = $1
+    ORDER BY l.product_id"
+  use found <- result::try(db(sql::query_one(connection, order_query, [sql::int(id)], order_row())))
+  case found {
+    None => Ok(None)
+    Some(stored) => {
+      use lines <- result::try(db(sql::query(connection, lines_query, [sql::int(id)], line_row())))
+      Ok(Some(StoredOrder { ..stored, lines }))
+    }
+  }
+}
+
+/// Reads the products with the given ids, keyed by id, and locks them
+/// until the transaction ends. Ids with no product are simply missing
+/// from the map, and `checkout::quote` reports them.
+priv fn lock_products(connection: sql::Connection, ids: List<Int>) -> Result<Map<Int, Product>, StoreError> {
+  let query = r"
+    SELECT id, name, price_cents, stock
+    FROM products
+    WHERE id = ANY($1)
+    FOR UPDATE"
+  use rows <- result::try(db(sql::query(connection, query, [sql::ints(ids)], product_row())))
+  Ok(list::fold(rows, map::new(), fn(found, product: Product) { map::insert(found, product.id, product) }))
+}
+
+/// Reads the discount code the order names, if any, as a map with at
+/// most one entry, which is what `checkout::quote` takes.
+priv fn load_codes(
+  connection: sql::Connection,
+  discount: Option<String>,
+) -> Result<Map<String, checkout::Code>, StoreError> {
+  case discount {
+    None => Ok(map::new())
+    Some(text) => {
+      let query = r"
+        SELECT code, percent_off, cents_off, minimum_cents
+        FROM discount_codes
+        WHERE code = $1"
+      use found <- result::try(db(sql::query_one(connection, query, [sql::text(text)], code_row())))
+      case found {
+        None => Ok(map::new())
+        Some(code) => Ok(map::insert(map::new(), code.code, code))
+      }
+    }
+  }
+}
+
+/// Saves the totals of an order and returns its new id.
+priv fn insert_order(connection: sql::Connection, email: String, quote: checkout::Quote) -> Result<Int, StoreError> {
+  let query = r"
+    INSERT INTO orders (email, subtotal_cents, discount_cents, shipping_cents, total_cents)
+    VALUES ($1, $2, $3, $4, $5)
+    RETURNING id"
+  let params = [
+    sql::text(email),
+    sql::int(quote.subtotal_cents),
+    sql::int(quote.discount_cents),
+    sql::int(quote.shipping_cents),
+    sql::int(quote.total_cents),
+  ]
+  use found <- result::try(db(sql::query_one(connection, query, params, id_row())))
+  let assert Some(id) = found as "INSERT … RETURNING always returns the new row"
+  Ok(id)
+}
+
+/// Saves one line of order `order_id` and takes its quantity out of
+/// stock. The price is saved too, so a later price change does not
+/// change old orders.
+priv fn save_line(connection: sql::Connection, order_id: Int, line: checkout::PricedLine) -> Result<Nil, StoreError> {
+  let insert = r"
+    INSERT INTO order_lines (order_id, product_id, quantity, unit_cents)
+    VALUES ($1, $2, $3, $4)"
+  let take = r"UPDATE products SET stock = stock - $2 WHERE id = $1"
+  let product = line.product
+  let insert_params = [sql::int(order_id), sql::int(product.id), sql::int(line.quantity), sql::int(product.price_cents)]
+  use _ <- result::try(db(sql::execute(connection, insert, insert_params)))
+  use _ <- result::try(db(sql::execute(connection, take, [sql::int(product.id), sql::int(line.quantity)])))
+  Ok(Nil)
+}
+
+/// Runs `action` on each item in turn and stops at the first `Err`.
+/// The recursive call is inside a callback, so it is not a tail call,
+/// but an order has at most 10 lines.
+priv fn try_each<T, E>(items: List<T>, action: fn(T) -> Result<Nil, E>) -> Result<Nil, E> {
+  case items {
+    [] => Ok(Nil)
+    [first, ..rest] => {
+      use _ <- result::try(action(first))
+      try_each(rest, action)
+    }
+  }
+}
+
+/// Wraps a database failure in a `StoreError`.
+priv fn db<T>(outcome: Result<T, sql::Error>) -> Result<T, StoreError> {
+  result::map_error(outcome, Database)
+}
+
+/// Decodes a row of `products`. Like a JSON decoder, each `use` reads
+/// one column by name and checks its type.
+priv fn product_row() -> decode::Decoder<Product> {
+  use id <- decode::column("id", decode::int())
+  use name <- decode::column("name", decode::text())
+  use price_cents <- decode::column("price_cents", decode::int())
+  use stock <- decode::column("stock", decode::int())
+  decode::success(Product { id, name, price_cents, stock })
+}
+
+/// Decodes a row of `discount_codes`. The table's `CHECK` makes exactly
+/// one of `percent_off` and `cents_off` set, and the `case` turns the
+/// two nullable columns into one `Discount`.
+priv fn code_row() -> decode::Decoder<checkout::Code> {
+  use code <- decode::column("code", decode::text())
+  use percent_off <- decode::column("percent_off", decode::nullable(decode::int()))
+  use cents_off <- decode::column("cents_off", decode::nullable(decode::int()))
+  use minimum_cents <- decode::column("minimum_cents", decode::int())
+  case percent_off, cents_off {
+    Some(percent), None =>
+      decode::success(checkout::Code { code, discount: checkout::PercentOff(percent), minimum_cents })
+    None, Some(cents) =>
+      decode::success(checkout::Code { code, discount: checkout::CentsOff(cents), minimum_cents })
+    _, _ => decode::failure("exactly one of percent_off and cents_off")
+  }
+}
+
+/// Decodes the `id` column alone.
+priv fn id_row() -> decode::Decoder<Int> {
+  use id <- decode::column("id", decode::int())
+  decode::success(id)
+}
+
+/// Decodes a row of `orders`, without its lines.
+priv fn order_row() -> decode::Decoder<StoredOrder> {
+  use id <- decode::column("id", decode::int())
+  use email <- decode::column("email", decode::text())
+  use subtotal_cents <- decode::column("subtotal_cents", decode::int())
+  use discount_cents <- decode::column("discount_cents", decode::int())
+  use shipping_cents <- decode::column("shipping_cents", decode::int())
+  use total_cents <- decode::column("total_cents", decode::int())
+  decode::success(StoredOrder { id, email, lines: [], subtotal_cents, discount_cents, shipping_cents, total_cents })
+}
+
+/// Decodes a row of the lines query in `find_order`.
+priv fn line_row() -> decode::Decoder<StoredLine> {
+  use product_id <- decode::column("product_id", decode::int())
+  use name <- decode::column("name", decode::text())
+  use quantity <- decode::column("quantity", decode::int())
+  use unit_cents <- decode::column("unit_cents", decode::int())
+  decode::success(StoredLine { product_id, name, quantity, unit_cents })
+}

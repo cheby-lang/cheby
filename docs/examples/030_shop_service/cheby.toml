@@ -1,0 +1,6 @@
+name = "shop_service"
+version = "0.1.0"
+targets = ["native"]
+
+[dependencies]
+sql = { git = "https://github.com/example/cheby-sql", tag = "v1.4.0" }

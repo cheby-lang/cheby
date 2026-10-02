@@ -1,0 +1,277 @@
+//! The HTTP side of the shop: which request goes to which handler, and
+//! how results and errors become JSON responses.
+//!
+//! `handle` is the only function that touches the database, through
+//! `store`. Matching a request to a `Route` and turning an error into a
+//! `Response` are pure, so the tests below cover them without a server
+//! or a database.
+
+import std::http
+import std::int
+import std::io
+import std::json
+import std::list
+import std::result
+import std::string
+import sql
+import shop_service::checkout
+import shop_service::checkout::{Product}
+import shop_service::order
+import shop_service::store
+
+/// What a request asks for.
+type Route {
+  ListProducts,
+  ShowProduct(Int),
+  PlaceOrder,
+  ShowOrder(Int),
+  /// The path matches a route, but not with this method.
+  WrongMethod(List<http::Method>),
+  NotFound,
+}
+
+/// Why a request failed, before it is turned into a response.
+type Failure {
+  BadJson(json::Error),
+  Invalid(List<order::FieldError>),
+  Store(store::StoreError),
+  Missing(String),
+  Unrouted(Route),
+}
+
+/// Answers one request. `http::serve` calls it on a fiber of its own
+/// for each request, so a slow query holds up only its own request.
+fn handle(pool: sql::Pool, request: http::Request) -> http::Response {
+  let outcome = case route(request.method, request.segments) {
+    ListProducts => store::list_products(pool) |> stored(_, products_json)
+    ShowProduct(id) => store::find_product(pool, id) |> found(_, "product", product_json)
+    PlaceOrder => place(pool, request.body)
+    ShowOrder(id) => store::find_order(pool, id) |> found(_, "order", stored_order_json)
+    other => Err(Unrouted(other))
+  }
+  case outcome {
+    Ok(response) => response
+    Err(failure) => failure_response(failure)
+  }
+}
+
+/// Matches a method and the segments of a path, such as `["orders",
+/// "17"]` for `/orders/17`.
+fn route(method: http::Method, segments: List<String>) -> Route {
+  case method, segments {
+    http::Get, ["products"] => ListProducts
+    http::Get, ["products", id] => by_id(id, ShowProduct)
+    http::Post, ["orders"] => PlaceOrder
+    http::Get, ["orders", id] => by_id(id, ShowOrder)
+    // The path exists, but only for the methods above.
+    _, ["products"] => WrongMethod([http::Get])
+    _, ["products", _] => WrongMethod([http::Get])
+    _, ["orders", _] => WrongMethod([http::Get])
+    _, ["orders"] => WrongMethod([http::Post])
+    _, _ => NotFound
+  }
+}
+
+/// Builds the route for an id segment. An id that is not a whole number
+/// cannot name anything, so it is a 404, not a 400.
+priv fn by_id(text: String, make: fn(Int) -> Route) -> Route {
+  case int::parse(text) {
+    Ok(id) => make(id)
+    Err(_) => NotFound
+  }
+}
+
+/// `POST /orders`: decode, validate, then place. Each step stops at its
+/// first failure, and each kind of failure gets its own status.
+priv fn place(pool: sql::Pool, body: String) -> Result<http::Response, Failure> {
+  use new_order <- result::try(result::map_error(json::parse(body, order::decoder()), BadJson))
+  use valid <- result::try(result::map_error(order::validate(new_order), Invalid))
+  use placed <- result::try(result::map_error(store::place_order(pool, valid), Store))
+  Ok(http::json(201, placed_json(placed)))
+}
+
+/// Turns a list from the store into a `200` response.
+priv fn stored<T>(outcome: Result<T, store::StoreError>, encode: fn(T) -> json::Value) -> Result<http::Response, Failure> {
+  use value <- result::try(result::map_error(outcome, Store))
+  Ok(http::json(200, encode(value)))
+}
+
+/// Turns a lookup by id into a `200` response, or a `404` naming
+/// `what` was missing.
+priv fn found<T>(
+  outcome: Result<Option<T>, store::StoreError>,
+  what: String,
+  encode: fn(T) -> json::Value,
+) -> Result<http::Response, Failure> {
+  use value <- result::try(result::map_error(outcome, Store))
+  case value {
+    Some(item) => Ok(http::json(200, encode(item)))
+    None => Err(Missing(what))
+  }
+}
+
+/// Picks the status and body for a failure. Every error body has the
+/// same shape, `{"error": "...", ...}`, so a client can always read
+/// `error`.
+fn failure_response(failure: Failure) -> http::Response {
+  case failure {
+    BadJson(_) => error_json(400, "the body is not a valid order", [])
+    Invalid(errors) => error_json(422, "the order has invalid fields", [("fields", json::array(errors, field_error_json))])
+    Missing(what) => error_json(404, "no such {what}", [])
+    Unrouted(WrongMethod(allowed)) => http::with_header(
+      error_json(405, "method not allowed", []),
+      "allow",
+      allowed |> list::map(_, http::method_name) |> string::join(_, ", "),
+    )
+    Unrouted(_) => error_json(404, "no such page", [])
+    Store(store::Rejected(problem)) => rejected_response(problem)
+    // The details of a database failure go to the log, not to the
+    // client, which can do nothing with them.
+    Store(store::Database(error)) => {
+      io::eprintln("database error: {error:?}")
+      error_json(503, "the shop is unavailable, try again later", [])
+    }
+  }
+}
+
+/// A valid order the shop cannot fill. An unknown code is a `422`,
+/// because the client typed it, and running out of stock is a `409`,
+/// because the order conflicts with the shop's current state.
+priv fn rejected_response(problem: checkout::CheckoutError) -> http::Response {
+  case problem {
+    checkout::UnknownProduct(id) =>
+      error_json(422, "no such product", [("product_id", json::int(id))])
+    checkout::OutOfStock { product_id, requested, available } =>
+      error_json(409, "not enough in stock", [
+        ("product_id", json::int(product_id)),
+        ("requested", json::int(requested)),
+        ("available", json::int(available)),
+      ])
+    checkout::UnknownCode(code) =>
+      error_json(422, "no such discount code", [("discount", json::string(code))])
+    checkout::BelowMinimum { code, minimum_cents } =>
+      error_json(422, "the order is too small for this code", [
+        ("discount", json::string(code)),
+        ("minimum_cents", json::int(minimum_cents)),
+      ])
+  }
+}
+
+/// Builds an error response with `message` and some extra keys.
+priv fn error_json(status: Int, message: String, extra: List<(String, json::Value)>) -> http::Response {
+  http::json(status, json::object([("error", json::string(message)), ..extra]))
+}
+
+/// Encodes one invalid field.
+priv fn field_error_json(error: order::FieldError) -> json::Value {
+  json::object([("field", json::string(error.field)), ("problem", json::string(error.problem))])
+}
+
+/// Encodes a product.
+fn product_json(product: Product) -> json::Value {
+  json::object([
+    ("id", json::int(product.id)),
+    ("name", json::string(product.name)),
+    ("price_cents", json::int(product.price_cents)),
+    ("in_stock", json::bool(product.stock > 0)),
+  ])
+}
+
+/// Encodes a list of products.
+priv fn products_json(products: List<Product>) -> json::Value {
+  json::object([("products", json::array(products, product_json))])
+}
+
+/// Encodes a newly placed order.
+fn placed_json(placed: store::Placed) -> json::Value {
+  let quote = placed.quote
+  json::object([
+    ("id", json::int(placed.id)),
+    ("subtotal_cents", json::int(quote.subtotal_cents)),
+    ("discount_cents", json::int(quote.discount_cents)),
+    ("shipping_cents", json::int(quote.shipping_cents)),
+    ("total_cents", json::int(quote.total_cents)),
+  ])
+}
+
+/// Encodes a saved order with its lines.
+priv fn stored_order_json(stored: store::StoredOrder) -> json::Value {
+  let line_json = fn(line: store::StoredLine) {
+    json::object([
+      ("product_id", json::int(line.product_id)),
+      ("name", json::string(line.name)),
+      ("quantity", json::int(line.quantity)),
+      ("unit_cents", json::int(line.unit_cents)),
+    ])
+  }
+  json::object([
+    ("id", json::int(stored.id)),
+    ("email", json::string(stored.email)),
+    ("lines", json::array(stored.lines, line_json)),
+    ("subtotal_cents", json::int(stored.subtotal_cents)),
+    ("discount_cents", json::int(stored.discount_cents)),
+    ("shipping_cents", json::int(stored.shipping_cents)),
+    ("total_cents", json::int(stored.total_cents)),
+  ])
+}
+
+/// Returns the status and body of `response`, for the tests.
+priv fn sent(response: http::Response) -> (Int, String) {
+  (response.status, response.body)
+}
+
+test "requests are routed by method and path" {
+  assert route(http::Get, ["products"]) == ListProducts
+  assert route(http::Get, ["products", "3"]) == ShowProduct(3)
+  assert route(http::Post, ["orders"]) == PlaceOrder
+  assert route(http::Get, ["orders", "17"]) == ShowOrder(17)
+}
+
+test "a known path with the wrong method is told the allowed one" {
+  assert route(http::Delete, ["products", "3"]) == WrongMethod([http::Get])
+  assert route(http::Get, ["orders"]) == WrongMethod([http::Post])
+  let response = failure_response(Unrouted(WrongMethod([http::Post])))
+  assert response.status == 405
+  assert http::header(response, "allow") == Some("POST")
+}
+
+test "unknown paths and ids that are not numbers are not found" {
+  assert route(http::Get, []) == NotFound
+  assert route(http::Get, ["products", "tea"]) == NotFound
+  assert route(http::Get, ["products", "3", "reviews"]) == NotFound
+}
+
+test "invalid fields are a 422 that lists every field" {
+  let errors = [
+    order::FieldError { field: "email", problem: "must be an email address" },
+    order::FieldError { field: "items[0].quantity", problem: "must be at least 1" },
+  ]
+  assert sent(failure_response(Invalid(errors))) == (
+    422,
+    r#"{"error":"the order has invalid fields","fields":[{"field":"email","problem":"must be an email address"},{"field":"items[0].quantity","problem":"must be at least 1"}]}"#,
+  )
+}
+
+test "running out of stock is a conflict" {
+  let problem = checkout::OutOfStock { product_id: 2, requested: 4, available: 3 }
+  assert sent(failure_response(Store(store::Rejected(problem)))) == (
+    409,
+    r#"{"error":"not enough in stock","product_id":2,"requested":4,"available":3}"#,
+  )
+}
+
+test "a placed order shows its totals" {
+  let quote = checkout::Quote {
+    lines: [],
+    subtotal_cents: 4_550,
+    discount_cents: 455,
+    shipping_cents: 495,
+    total_cents: 4_590,
+  }
+  assert json::to_string(placed_json(store::Placed { id: 17, quote })) == r#"{"id":17,"subtotal_cents":4550,"discount_cents":455,"shipping_cents":495,"total_cents":4590}"#
+}
+
+test "a product shows whether it is in stock, not how many" {
+  let honey = Product { id: 4, name: "Honey", price_cents: 875, stock: 0 }
+  assert json::to_string(product_json(honey)) == r#"{"id":4,"name":"Honey","price_cents":875,"in_stock":false}"#
+}

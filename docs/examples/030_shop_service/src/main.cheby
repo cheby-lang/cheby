@@ -1,0 +1,139 @@
+//! A small shop as a JSON web service: products, discount codes and
+//! orders, stored in a SQL database.
+//!
+//! ```text
+//! GET  /products      the catalogue
+//! GET  /products/:id  one product
+//! POST /orders        place an order
+//! GET  /orders/:id    one order, with its lines
+//! ```
+//!
+//! A session against the products in `schema.sql`:
+//!
+//! ```text
+//! POST /orders {"email":"ada@example.com","items":[{"product_id":1,"quantity":3},{"product_id":2,"quantity":1}],"discount":"spring10"}
+//! 201 {"id":1,"subtotal_cents":4550,"discount_cents":455,"shipping_cents":495,"total_cents":4590}
+//!
+//! POST /orders {"email":"ada","items":[{"product_id":1,"quantity":0}]}
+//! 422 {"error":"the order has invalid fields","fields":[{"field":"email","problem":"must be an email address"},{"field":"items[0].quantity","problem":"must be at least 1"}]}
+//!
+//! POST /orders {"email":"bo@example.com","items":[{"product_id":2,"quantity":4}]}
+//! 409 {"error":"not enough in stock","product_id":2,"requested":4,"available":2}
+//! ```
+//!
+//! The first order took one of the three teapots, so the last one finds
+//! only two.
+//!
+//! The modules, from pure to effectful:
+//!
+//! - `order` decodes and validates the body of `POST /orders`.
+//! - `checkout` prices an order: stock, discount codes, shipping.
+//! - `store` runs the SQL, with each order in one transaction.
+//! - `routes` matches requests to handlers and errors to responses.
+//!
+//! The first two never touch the database or the network, so their
+//! tests cover all the shop's rules.
+//!
+//! The standard-library spec is still being written (D-204), and `sql`
+//! is a third-party package, so this example assumes the APIs below.
+//!
+//! `std::http`:
+//!
+//! - `http::serve(port, handler)` listens on `port` and calls
+//!   `handler(request)` on a new fiber for each request. It returns
+//!   only if the listener fails, with an `http::Error`.
+//! - `http::Request` has the fields `method: http::Method`, `segments:
+//!   List<String>` (the path split at `/`, without empty segments),
+//!   `headers` and `body: String`. `http::Method` has the variants `Get`,
+//!   `Post`, `Put`, `Patch` and `Delete`, and `http::method_name` gives
+//!   `"GET"` and so on.
+//! - `http::Response` has the fields `status: Int`, `headers` and
+//!   `body: String`. `http::json(status, value)` builds one with a JSON
+//!   body and its content type, `http::with_header(response, name,
+//!   value)` adds a header, and `http::header(response, name)` reads one.
+//!
+//! `sql`, a dependency in `cheby.toml`:
+//!
+//! - `sql::connect(url, size)` opens a `sql::Pool` of `size` connections.
+//!   A pool is a handle that fibers share, and it closes when the last
+//!   reference goes away (D-101).
+//! - `sql::with_connection(pool, wrap, body)` lends `body` a
+//!   `sql::Connection` and gives it back afterwards. `sql::transaction`
+//!   does the same inside a transaction, which it commits if `body`
+//!   returns `Ok` and rolls back otherwise. Both turn a failure to get a
+//!   connection into the caller's error type with `wrap`.
+//! - `sql::query(connection, text, params, decoder)` returns every row,
+//!   `sql::query_one` the first row or `None`, and `sql::execute` runs a
+//!   statement and returns the number of rows changed. Parameters are
+//!   built with `sql::int`, `sql::ints`, `sql::text` and so on.
+//! - `sql::decode` reads rows the way `std::json::decode` reads objects:
+//!   `decode::column(name, decoder)`, `int`, `text`, `nullable`,
+//!   `success` and `failure`.
+
+import std::env
+import std::http
+import std::int
+import std::result
+import sql
+import shop_service::routes
+
+/// The port to listen on when `PORT` is not set.
+const default_port: Int = 8080
+
+/// How many database connections the requests share.
+const pool_size: Int = 10
+
+fn main() -> Result<Nil, AppError> {
+  use settings <- result::try(read_settings(env::get("DATABASE_URL"), env::get("PORT")))
+  let (url, port) = settings
+  use pool <- result::try(result::map_error(sql::connect(url, pool_size), DatabaseUnreachable))
+  // The handler captures `pool`. Every request's fiber shares the one
+  // pool, which is safe because it is a handle, not mutable data.
+  http::serve(port, fn(request) { routes::handle(pool, request) })
+  |> result::map_error(_, ServerFailed)
+}
+
+/// Reads the settings from the values of `DATABASE_URL` and `PORT`.
+fn read_settings(url: Option<String>, port: Option<String>) -> Result<(String, Int), AppError> {
+  case url, port {
+    None, _ => Err(MissingDatabaseUrl)
+    Some(found), None => Ok((found, default_port))
+    Some(found), Some(text) => case int::parse(text) {
+      Ok(number) when number >= 1 && number <= 65_535 => Ok((found, number))
+      _ => Err(BadPort(text))
+    }
+  }
+}
+
+type AppError {
+  MissingDatabaseUrl,
+  BadPort(String),
+  DatabaseUnreachable(sql::Error),
+  ServerFailed(http::Error),
+}
+
+/// Makes `AppError` satisfy `Show`, so an error from `main` prints as a
+/// message before the program exits with status 1 (D-182).
+fn show(error: AppError) -> String {
+  case error {
+    MissingDatabaseUrl => "set DATABASE_URL to the database to use"
+    BadPort(text) => "PORT must be a number from 1 to 65535, got \"{text}\""
+    DatabaseUnreachable(reason) => "cannot connect to the database: {reason:?}"
+    ServerFailed(reason) => "the server stopped: {reason:?}"
+  }
+}
+
+test "the port defaults to 8080" {
+  assert read_settings(Some("postgres://shop"), None) == Ok(("postgres://shop", 8_080))
+  assert read_settings(Some("postgres://shop"), Some("3000")) == Ok(("postgres://shop", 3_000))
+}
+
+test "bad settings are refused" {
+  assert read_settings(None, Some("3000")) == Err(MissingDatabaseUrl)
+  assert read_settings(Some("postgres://shop"), Some("0")) == Err(BadPort("0"))
+  assert read_settings(Some("postgres://shop"), Some("web")) == Err(BadPort("web"))
+}
+
+test "errors show as messages" {
+  assert show(BadPort("web")) == "PORT must be a number from 1 to 65535, got \"web\""
+}

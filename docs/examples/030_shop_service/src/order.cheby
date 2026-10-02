@@ -1,0 +1,205 @@
+//! The body of `POST /orders`: decoding it from JSON and validating it.
+//!
+//! This happens in two steps, and they report different things:
+//!
+//! 1. `decoder` checks the *shape*: `email` is a string, `items` is a
+//!    list of objects with whole-number `product_id` and `quantity`,
+//!    and `discount` is a string or missing. A body of the wrong shape
+//!    is a `400 Bad Request`.
+//! 2. `validate` checks the *values*: the email looks like one, there
+//!    are between 1 and 10 lines, and so on. It reports every problem
+//!    at once, not just the first, so a form can mark all bad fields
+//!    together. Such a body is a `422 Unprocessable Content`.
+//!
+//! Neither step touches the database. Whether a product exists or is
+//! in stock is decided later, in `checkout`.
+
+import std::json
+import std::json::decode
+import std::list
+import std::set
+import std::string
+
+/// The most lines one order may have.
+const max_lines: Int = 10
+
+/// The most of one product one order may ask for.
+const max_quantity: Int = 20
+
+/// One line of an order: a product and how many of it.
+type Line { product_id: Int, quantity: Int }
+
+/// An order as the client sent it. After `validate`, the same type
+/// holds an order whose values are all acceptable.
+type NewOrder {
+  email: String,
+  items: List<Line>,
+  /// The discount code, uppercased and trimmed, if one was given.
+  discount: Option<String>,
+}
+
+/// A value that is not acceptable, with the path of its field in the
+/// body, such as `items[2].quantity`.
+type FieldError { field: String, problem: String }
+
+/// Decodes the body of `POST /orders`. `discount` may be left out.
+fn decoder() -> decode::Decoder<NewOrder> {
+  use email <- decode::field("email", decode::string())
+  use items <- decode::field("items", decode::list(line_decoder()))
+  use discount <- decode::optional_field("discount", None, decode::optional(decode::string()))
+  decode::success(NewOrder { email, items, discount })
+}
+
+/// Decodes one line, `{"product_id": 3, "quantity": 2}`.
+priv fn line_decoder() -> decode::Decoder<Line> {
+  use product_id <- decode::field("product_id", decode::int())
+  use quantity <- decode::field("quantity", decode::int())
+  decode::success(Line { product_id, quantity })
+}
+
+/// Returns `order` with its email and code tidied up, or every problem
+/// found in it, in the order of the fields.
+fn validate(order: NewOrder) -> Result<NewOrder, List<FieldError>> {
+  let email = string::trim(order.email)
+  let discount = case order.discount {
+    Some(code) => Some(code |> string::trim |> string::uppercase)
+    None => None
+  }
+  let errors = [
+    ..check_email(email),
+    ..check_items(order.items),
+    ..check_discount(discount),
+  ]
+  case errors {
+    [] => Ok(NewOrder { ..order, email, discount })
+    _ => Err(errors)
+  }
+}
+
+/// A light check only. The real test of an address is sending mail to
+/// it, so this just catches typing mistakes: one `@`, with something on
+/// both sides.
+priv fn check_email(email: String) -> List<FieldError> {
+  case string::split(email, "@") {
+    [name, domain] when name != "" && domain != "" => []
+    _ => [FieldError { field: "email", problem: "must be an email address" }]
+  }
+}
+
+/// Checks the number of lines, each quantity, and that no product is
+/// on two lines.
+priv fn check_items(items: List<Line>) -> List<FieldError> {
+  let count = list::length(items)
+  let size_errors = case {
+    count == 0 => [FieldError { field: "items", problem: "must not be empty" }]
+    count > max_lines => [FieldError { field: "items", problem: "must have at most {max_lines} lines" }]
+    _ => []
+  }
+  // `index` is the position of `rest`'s first line in `items`, and
+  // `seen` the products of the lines before it.
+  fn step(rest, index, seen, found) {
+    case rest {
+      [] => found
+      [first, ..tail] => {
+        let line: Line = first
+        let problems = [
+          ..check_quantity(line.quantity, index),
+          ..check_repeat(line.product_id, seen, index),
+        ]
+        step(tail, index + 1, set::insert(seen, line.product_id), [..found, ..problems])
+      }
+    }
+  }
+  [..size_errors, ..step(items, 0, set::from_list([]), [])]
+}
+
+/// Checks the quantity of the line at `index`.
+priv fn check_quantity(quantity: Int, index: Int) -> List<FieldError> {
+  let field = "items[{index}].quantity"
+  case {
+    quantity < 1 => [FieldError { field, problem: "must be at least 1" }]
+    quantity > max_quantity => [FieldError { field, problem: "must be at most {max_quantity}" }]
+    _ => []
+  }
+}
+
+/// Checks that the product of the line at `index` is not on an earlier
+/// line. Two lines for one product would make the stock check count it
+/// twice.
+priv fn check_repeat(product_id: Int, seen: set::Set<Int>, index: Int) -> List<FieldError> {
+  case set::contains(seen, product_id) {
+    True => [FieldError { field: "items[{index}].product_id", problem: "is already on an earlier line" }]
+    False => []
+  }
+}
+
+/// A code is letters and digits only. Whether it exists is up to the
+/// database.
+priv fn check_discount(discount: Option<String>) -> List<FieldError> {
+  let is_code_point = fn(point) { (point >= "A" && point <= "Z") || (point >= "0" && point <= "9") }
+  case discount {
+    None => []
+    Some("") => [FieldError { field: "discount", problem: "must not be empty" }]
+    Some(code) => case list::all(string::to_code_points(code), is_code_point) {
+      True => []
+      False => [FieldError { field: "discount", problem: "must be letters and digits only" }]
+    }
+  }
+}
+
+/// A valid order, for the tests below to change one field of.
+priv const sample: NewOrder = NewOrder {
+  email: "ada@example.com",
+  items: [Line { product_id: 1, quantity: 2 }, Line { product_id: 3, quantity: 1 }],
+  discount: None,
+}
+
+/// Returns the fields named by `validate`'s errors for `order`.
+priv fn bad_fields(order: NewOrder) -> List<String> {
+  case validate(order) {
+    Ok(_) => []
+    Err(errors) => list::map(errors, fn(error: FieldError) { error.field })
+  }
+}
+
+test "a valid order is tidied up and accepted" {
+  let messy = NewOrder { ..sample, email: "  ada@example.com ", discount: Some(" spring10") }
+  assert validate(messy) == Ok(NewOrder { ..sample, discount: Some("SPRING10") })
+}
+
+test "every problem is reported, in field order" {
+  let bad = NewOrder {
+    email: "ada",
+    items: [Line { product_id: 1, quantity: 0 }, Line { product_id: 1, quantity: 21 }],
+    discount: Some("10%"),
+  }
+  assert validate(bad) == Err([
+    FieldError { field: "email", problem: "must be an email address" },
+    FieldError { field: "items[0].quantity", problem: "must be at least 1" },
+    FieldError { field: "items[1].quantity", problem: "must be at most 20" },
+    FieldError { field: "items[1].product_id", problem: "is already on an earlier line" },
+    FieldError { field: "discount", problem: "must be letters and digits only" },
+  ])
+}
+
+test "an order needs between 1 and 10 lines" {
+  assert bad_fields(NewOrder { ..sample, items: [] }) == ["items"]
+  let eleven = list::map([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], fn(id) { Line { product_id: id, quantity: 1 } })
+  assert bad_fields(NewOrder { ..sample, items: eleven }) == ["items"]
+}
+
+test "an email needs something on both sides of one @" {
+  assert bad_fields(NewOrder { ..sample, email: "@example.com" }) == ["email"]
+  assert bad_fields(NewOrder { ..sample, email: "a@b@c" }) == ["email"]
+  assert bad_fields(NewOrder { ..sample, email: "a@b" }) == []
+}
+
+test "an empty discount code is an error, a missing one is not" {
+  assert bad_fields(NewOrder { ..sample, discount: Some("  ") }) == ["discount"]
+  assert bad_fields(NewOrder { ..sample, discount: None }) == []
+}
+
+test "the decoder reads the body, with the discount optional" {
+  let text = r#"{"email":"ada@example.com","items":[{"product_id":1,"quantity":2},{"product_id":3,"quantity":1}]}"#
+  assert json::parse(text, decoder()) == Ok(sample)
+}
