@@ -1,0 +1,70 @@
+//! Solves Advent of Code 2024, day 1, for the input file named by the
+//! only command-line argument. The puzzle itself is in `puzzle.cheby`.
+//!
+//! `cheby run -- sample.txt`, with the puzzle's sample input next to
+//! `cheby.toml`, prints:
+//!
+//! ```text
+//! Part 1: 11
+//! Part 2: 31
+//! ```
+//!
+//! Advent of Code asks people not to share their puzzle inputs, so only
+//! the sample is included. Download your own input to solve the real
+//! puzzle.
+
+import std::env
+import std::io
+import std::result
+import aoc_2024_day_1::puzzle
+
+fn main() -> Result<Nil, AppError> {
+  // Each step builds a `Result` with an `AppError` in it, and `use`
+  // stops at the first `Err`. `result::map_error` wraps each module's
+  // error. The `_` in `ReadFailed(path, _)` belongs to that
+  // constructor, not to the pipe (D-244).
+  let found_path = env::args() |> parse_args
+  use path <- result::try(found_path)
+  let file_text = io::read_file(path) |> result::map_error(_, ReadFailed(path, _))
+  use text <- result::try(file_text)
+  let columns = text |> puzzle::parse |> result::map_error(_, BadInput(path, _))
+  use (lefts, rights) <- result::try(columns)
+  // Interpolation takes a path, not a call, so the answers are bound
+  // first.
+  let part1 = puzzle::total_distance(lefts, rights)
+  let part2 = puzzle::similarity(lefts, rights)
+  io::println("Part 1: {part1}")
+  io::println("Part 2: {part2}")
+  Ok(Nil)
+}
+
+/// Takes the single file name from the arguments.
+fn parse_args(args: List<String>) -> Result<String, AppError> {
+  case args {
+    [path] => Ok(path)
+    _ => Err(Usage)
+  }
+}
+
+type AppError {
+  Usage,
+  ReadFailed(String, io::Error),
+  BadInput(String, puzzle::ParseError),
+}
+
+/// Makes `AppError` satisfy `Show`, so `main` prints it as a message.
+fn show(error: AppError) -> String {
+  case error {
+    Usage => "usage: aoc_2024_day_1 INPUT"
+    ReadFailed(path, reason) => "cannot read {path}: {reason:?}"
+    // `puzzle::ParseError` satisfies `Show` through the `show` in
+    // `puzzle`.
+    BadInput(path, reason) => "{path}: {reason}"
+  }
+}
+
+test "exactly one file name is taken" {
+  assert parse_args(["input.txt"]) == Ok("input.txt")
+  assert parse_args([]) == Err(Usage)
+  assert parse_args(["a.txt", "b.txt"]) == Err(Usage)
+}

@@ -1,0 +1,137 @@
+//! Advent of Code 2024, day 1: Historian Hysteria.
+//!
+//! The input has two columns of numbers, a left list and a right list,
+//! one pair per line.
+//!
+//! - Part 1 pairs the smallest number on the left with the smallest on
+//!   the right, the second smallest with the second smallest, and so
+//!   on, and adds up how far apart each pair is.
+//! - Part 2 multiplies each number on the left by how many times it
+//!   appears on the right, and adds up the products.
+//!
+//! Everything here is pure, so the tests check both parts on the
+//! sample input from the puzzle.
+
+import std::int
+import std::list
+import std::map
+import std::string
+
+/// A line of the input that is not two whole numbers.
+type ParseError {
+  /// The line number, counted from 1.
+  line: Int,
+  text: String,
+}
+
+/// Reads the two columns. Blank lines are skipped, so a line break at
+/// the end of the file is fine. Both lists have the same length.
+fn parse(input: String) -> Result<(List<Int>, List<Int>), ParseError> {
+  fn step(rest, number, lefts, rights) {
+    case rest {
+      [] => Ok((lefts, rights))
+      [text, ..tail] => {
+        let problem = ParseError { line: number, text }
+        case words(text) {
+          [] => step(tail, number + 1, lefts, rights)
+          [first, second] => case int::parse(first), int::parse(second) {
+            Ok(left), Ok(right) => step(tail, number + 1, [..lefts, left], [..rights, right])
+            _, _ => Err(problem)
+          }
+          _ => Err(problem)
+        }
+      }
+    }
+  }
+  input |> string::split(_, "\n") |> step(_, 1, [], [])
+}
+
+/// Splits a line at runs of spaces. Trimming first also drops the CR
+/// of a CRLF line ending.
+priv fn words(text: String) -> List<String> {
+  text
+  |> string::trim
+  |> string::split(_, " ")
+  |> list::filter(_, fn(word) { word != "" })
+}
+
+/// Part 1: the sum of the distances between the sorted lists, pair by
+/// pair.
+fn total_distance(lefts: List<Int>, rights: List<Int>) -> Int {
+  // There is no `zip` loop, so a local function walks both lists at
+  // once. `parse` gives lists of the same length, and should they
+  // differ, the extra numbers have no partner and are ignored.
+  fn step(xs, ys, total) {
+    case xs, ys {
+      [x, ..xs_rest], [y, ..ys_rest] => step(xs_rest, ys_rest, total + distance(x, y))
+      _, _ => total
+    }
+  }
+  let sorted_lefts = lefts |> list::sort(_, int::compare)
+  let sorted_rights = rights |> list::sort(_, int::compare)
+  step(sorted_lefts, sorted_rights, 0)
+}
+
+/// How far apart two numbers are.
+priv fn distance(a: Int, b: Int) -> Int {
+  case {
+    a > b => a - b
+    _ => b - a
+  }
+}
+
+/// Part 2: each number on the left times how often it appears on the
+/// right, added up.
+fn similarity(lefts: List<Int>, rights: List<Int>) -> Int {
+  // Counting the right list once makes each lookup cheap, instead of
+  // scanning the whole right list for every number on the left.
+  let counts = rights |> list::fold(_, map::new(), fn(found, n) { map::upsert(found, n, bump) })
+  lefts |> list::fold(_, 0, fn(total, n) {
+    case map::get(counts, n) {
+      Some(times) => total + n * times
+      None => total
+    }
+  })
+}
+
+/// Adds one to a count that may not exist yet.
+priv fn bump(previous: Option<Int>) -> Int {
+  case previous {
+    Some(n) => n + 1
+    None => 1
+  }
+}
+
+/// Makes `ParseError` satisfy `Show`, so `main` can print it.
+fn show(error: ParseError) -> String {
+  // `:?` prints the text in quotes, with escapes.
+  "line {error.line}: expected two whole numbers, got {error.text:?}"
+}
+
+/// The sample input from the puzzle.
+priv const sample: String = "3   4\n4   3\n2   5\n1   3\n3   9\n3   3\n"
+
+test "the sample is read as two columns" {
+  assert parse(sample) == Ok(([3, 4, 2, 1, 3, 3], [4, 3, 5, 3, 9, 3]))
+}
+
+test "part 1 on the sample is 11" {
+  let assert Ok((lefts, rights)) = parse(sample)
+  assert total_distance(lefts, rights) == 11
+}
+
+test "part 2 on the sample is 31" {
+  let assert Ok((lefts, rights)) = parse(sample)
+  assert similarity(lefts, rights) == 31
+}
+
+test "a bad line is reported with its number" {
+  assert parse("1   2\n3\n") == Err(ParseError { line: 2, text: "3" })
+  assert parse("1   x\n") == Err(ParseError { line: 1, text: "1   x" })
+  assert show(ParseError { line: 2, text: "3" }) == "line 2: expected two whole numbers, got \"3\""
+}
+
+test "CRLF line endings and blank lines are fine" {
+  assert parse("1 2\r\n\r\n3 4\r\n") == Ok(([1, 3], [2, 4]))
+  assert parse("") == Ok(([], []))
+}

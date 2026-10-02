@@ -38,9 +38,13 @@ const limit: Int = 4
 const max_pages: Int = 50
 
 fn main() -> Result<Nil, AppError> {
-  use base <- result::try(parse_args(env::args()))
+  let found_base = env::args() |> parse_args
+  use base <- result::try(found_base)
   let fetch = fn(path) { get(base, path) }
-  use visits <- result::try(result::map_error(crawl::crawl("/", limit, max_pages, duration::seconds(5), fetch), Crashed))
+  let crawled =
+    crawl::crawl("/", limit, max_pages, duration::seconds(5), fetch)
+    |> result::map_error(_, Crashed)
+  use visits <- result::try(crawled)
   list::each(visits, fn(found) {
     // `{found.outcome}` uses the `show` in `crawl`. This module's
     // `show` is for `AppError`.
