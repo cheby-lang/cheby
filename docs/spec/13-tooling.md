@@ -20,7 +20,7 @@ Cheby ships as one `cheby` binary that contains the compiler, runtime, REPL, tes
 
 `cheby run` runs the `main` of the module named by its module path argument, for example `cheby run my_app::tools::migrate`. Without an argument it runs the root module's `main` (D-137). `main` may have any visibility, including `priv` (D-163).
 
-`cheby run` and `cheby repl` never produce files: they compile in memory with the JIT (D-007, D-019).
+`cheby run` and `cheby repl` produce no output files: they run code in memory with the JIT (D-007, D-019). Like every command, they may read and write the build cache ([§13.12.4](#13124-build-cache-and-standard-library)) (D-254, D-255).
 
 ## 13.2 Project layout
 
@@ -33,7 +33,7 @@ my_app/
     web.cheby     my_app::web
     web/
       router.cheby  my_app::web::router
-  build/          compiler output, not checked in
+  build/          output of cheby build, not checked in
 ```
 
 Module paths follow from file paths ([§7.2](07-modules-and-packages.md#72-modules-and-files)). The root module, whose path is just the package name, is `src/main.cheby`, and it cannot also be imported as `my_app::main` (D-142). There are no `internal` directories. Visibility is controlled only by `pub` and `priv` (D-162). Tests live inside the modules they test, so there is no separate test directory (D-055).
@@ -137,7 +137,7 @@ Detached fibers ([§10.4](10-concurrency.md#104-detached-fibers)) started from t
 - Tests may run in parallel. They cannot interfere through shared state, because there is none (D-004).
 - Test output reports each failure with its panic message, which for `assert` includes both sides of a failing comparison (D-096).
 - Tests can be filtered by name and by module.
-- Test blocks are not compiled into any other build (D-055).
+- Test blocks are not compiled into any other build (D-055). They and doc examples are compiled as separate units per module, outside the module's interface artifact and normal cached code, so editing a test never rebuilds other modules ([§13.12.3](#13123-interface-artifacts-and-recompilation)) (D-265).
 
 Test blocks are type-checked by `cheby build` as well, so a broken test is caught even when tests are not run.
 
@@ -172,7 +172,7 @@ The following are warnings (D-080 and the cited decisions):
 | use of a `@deprecated` item                                             | D-200        |
 | a written tuple type with a tuple element or with four or more elements | D-243        |
 
-Unused `pub` items are never reported (D-152). Bindings whose names start with `_` are not reported as unused ([§2.3](02-lexical-structure.md#23-identifiers)).
+Unused `pub` items are never reported (D-152). Warnings that need the whole package, such as unused package-visible items, are computed in a separate pass that does not delay `cheby run` (D-266). Bindings whose names start with `_` are not reported as unused ([§2.3](02-lexical-structure.md#23-identifiers)).
 
 The compiler should report errors with the source span, a short explanation, and a suggested fix where one exists, for example a new name for a shadowing binding (D-062) or `{x:?}` for a type without `Show` (D-086).
 
@@ -182,6 +182,7 @@ Constant initializers ([§4.5](04-declarations.md#45-constants)) are run by the 
 
 - Each constant's evaluation is limited to 10 seconds and 1 GiB by default. The limits can be adjusted for a package in `cheby.toml` ([§13.3](#133-manifest)). Exceeding a limit is a compile error on that constant (D-195).
 - Evaluation is deterministic: it must not depend on the time, the environment, the file system or randomness, and any attempt to use them is an error (D-090).
+- The hash seed used during evaluation is not random. It is derived from the constant's identity (package, module path and name) and the content hash of what it depends on, so a constant that depends on `Map` or `Set` iteration order gets the same value on every build of the same inputs, but may get a different one when the code it depends on changes (D-269, [§13.12.6](#13126-deterministic-builds)).
 - Results are cached, so a constant is re-evaluated only when something it depends on changes.
 
 Hash-based collections (`Map`, `Set`) may appear in constants, even though the hash seed is random per process (D-093) and the constant is built in the compiler's process. The runtime rebuilds or re-seeds such maps and sets at program start, so their iteration order is still randomized per run (D-196).
@@ -215,7 +216,70 @@ The generated code follows these conventions:
 
 The code action is part of the language server, not of the language. Its exact output is informative, and it may improve between toolchain versions without affecting existing code.
 
-## 13.12 Build order (informative)
+## 13.12 Build model
+
+This section describes how the toolchain compiles packages. [§13.12.1](#13121-the-locality-rule) and [§13.12.6](#13126-deterministic-builds) are normative. The rest is informative and describes the reference implementation.
+
+### 13.12.1 The locality rule
+
+Type-checking a module needs only the interfaces of the modules it depends on, never their function bodies (D-246, ADR-0043). An interface consists of the module's items as seen from outside: function signatures, types, interfaces, aliases and the declared types of constants. Every language feature must keep this rule. The current language meets it because top-level signatures are required (D-011), inference is local to one top-level body (D-234), there is no metaprogramming (D-057) and imports are acyclic (D-145).
+
+### 13.12.2 Units of compilation
+
+The module, one source file, is the unit of compilation, caching and parallelism (D-248). Modules are compiled in the order of the import graph, and independent modules in parallel. Within a module, type-checking and code generation run per function, in parallel, apart from a few per-module steps such as borrowing inference and per-type layout tables (D-263).
+
+### 13.12.3 Interface artifacts and recompilation
+
+Compiling a module produces an **interface artifact** with its signatures, types, interfaces, constant types and, in release builds, small inlinable bodies, together with its compiled code (D-249, ADR-0044). A module is recompiled when its source changes or when the hash of an interface it uses changes. Editing a function body leaves the interface unchanged, so only that module is recompiled.
+
+Nothing that depends on function bodies is part of an interface in debug builds:
+
+- Borrowing is inferred only within a module, and calls across modules use a fixed owned convention (D-250, ADR-0045).
+- Constant values are linked in as data. Only their declared types are in the interface. Release builds may also export the values of small scalar constants (D-257).
+- Whether a function suspends on JS is computed at link time from small per-module summaries, not stored in interfaces ([§12.3.1](12-targets-and-ffi.md#1231-fibers-on-js)) (D-258, ADR-0048).
+
+When a module needs a fact about a type from a module it does not import, for example whether a `geometry::Point` received through another module's signature satisfies `Show`, it reads that module's interface directly, and the dependency is recorded for recompilation (D-260). Interface artifacts do not copy facts about other modules' types.
+
+Test blocks and doc examples are compiled as separate units, outside interface artifacts and normal cached code (D-265).
+
+### 13.12.4 Build cache and standard library
+
+Compiled artifacts are stored in one cache per machine, shared by all projects and addressed by the content hash of their inputs, the compiler version and the build flags (D-255). The toolchain ships `std` precompiled, with its interface artifacts, native code for every supported native platform and its JS output (D-256).
+
+`cheby run` loads cached code for every unchanged module and compiles changed modules lazily with the JIT, each function on its first call, through the same indirection table the REPL uses for redefinition (D-254, ADR-0047, [§13.5.2](#1352-redefinition)).
+
+### 13.12.5 Build profiles
+
+There are two build profiles (D-251, D-252, D-259, ADR-0046):
+
+| Profile         | Optimization               | Across modules                                   | Equality, hashing, debug printing                    | Debug info                               |
+| --------------- | -------------------------- | ------------------------------------------------ | ---------------------------------------------------- | ---------------------------------------- |
+| debug (default) | Cranelift optimization off | no specialization, no inlining                   | one runtime routine driven by per-type layout tables | line tables only, full debug info opt-in |
+| release         | Cranelift optimization on  | specialization and inlining within a size budget | may be generated per type                            | line tables only, full debug info opt-in |
+
+Both profiles insert and optimize reference counting and unwind cleanup on the mid-level IR, before Cranelift, with cleanup blocks shared between calls (D-262). Whole-program, LTO-style optimization is not used. The flag that selects the release profile is informative.
+
+### 13.12.6 Deterministic builds
+
+The toolchain must be deterministic: the same inputs, compiler version and flags produce bit-identical artifacts, including interface artifacts, object code and JS output (D-264). Compile-time evaluation of constants uses a hash seed derived from the constant's inputs ([§13.9](#139-compile-time-evaluation)) (D-269). Output must not depend on the order of file-system listings, on absolute paths, on the time or on the number of threads used.
+
+### 13.12.7 Process model
+
+Every `cheby` command runs as its own process, and the build cache is the only state shared between commands. The language server keeps its own state in memory. A persistent build server may be added later, but only as an accelerator whose results are bit-identical to those of a fresh process. Correctness never depends on it (D-268, ADR-0049).
+
+### 13.12.8 Compile-speed budgets
+
+The reference compiler tracks these budgets in CI from its first milestone (D-247, D-267):
+
+- A clean debug build checks and generates code for at least 100,000 lines per second per core, and scales with the number of cores.
+- After an edit to one function body in a project of one million lines, `cheby run` starts running the program in under 500 ms.
+- A clean release build takes at most three times as long as a clean debug build of the same project.
+
+The budgets are estimates and will be revised against measurements.
+
+Unused imports remain warnings ([§13.8](#138-diagnostics-and-warnings)) (D-253), and AOT builds use the system linker, then a bundled lld before 1.0 (D-088, D-261).
+
+## 13.13 Build order (informative)
 
 All tools ship in v1, but the reference implementation is built in this order (D-099):
 

@@ -217,7 +217,7 @@ fn swap<A, B>(pair: Pair<A, B>) -> Pair<B, A> {
 
 A type parameter of a function may have interface bounds ([§8.4](08-interfaces.md#84-bounds)).
 
-Generic code is compiled once, over a uniform boxed representation (D-021). Type arguments are not kept at run time, except in the type descriptors carried by `dyn` values and by the function packages passed for bounds ([§8.6.1](08-interfaces.md#861-type-descriptors)) (D-236). Specialization is an implementation optimization and is not observable.
+Generic code is compiled once, over a uniform boxed representation (D-021). Type arguments are not kept at run time, except in the type descriptors carried by `dyn` values and by the function packages passed for bounds ([§8.6.1](08-interfaces.md#861-type-descriptors)) (D-236). Specialization is an implementation optimization and is not observable. Specialization across modules is limited to release builds ([§13.12.5](13-tooling.md#13125-build-profiles)) (D-251).
 
 ### 3.12.2 Where types are required
 

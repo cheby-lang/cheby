@@ -13,6 +13,7 @@ This chapter is informative. It summarizes the language and points to the normat
 5. **The same program computes the same result everywhere.** Native and JS targets share semantics. A program whose result does not depend on timing or scheduling computes the same result on every target, and a failure that happens only on JS is a panic, never a different value. Timing, scheduling and liveness may differ, because JS fibers are not preempted (D-037, D-094, D-232, [chapter 12](12-targets-and-ffi.md)).
 6. **Tooling is part of the language.** One `cheby` binary ships the compiler, REPL, test runner, formatter, language server, documentation generator and package manager from v1 (D-031).
 7. **Stability after 1.0.** After 1.0 the language and standard library only grow (D-075).
+8. **Compile speed is a design constraint.** Cheby aims for Go-class compile times. Type-checking a module needs only the interfaces of the modules it depends on, never their function bodies, and every language feature must keep this locality rule (D-246, [§13.12](13-tooling.md#1312-build-model)). Required top-level signatures, inference local to one body, no macros and acyclic imports are what make it hold.
 
 ## 1.2 What Cheby has
 
@@ -130,6 +131,8 @@ The reference implementation is written in Rust (D-010). A single mid-level IR f
 - a JavaScript emitter producing ES modules.
 
 There is no interpreter tier. Generic code uses a uniform boxed representation, with small integers tagged and unboxed (D-021).
+
+Each module is compiled separately into an interface artifact and cached code. A module is recompiled when it changes, and its dependents only when an interface they use changes. Debug builds optimize only within a module, and release builds may also specialize and inline across modules within a budget (D-249, D-251). The build model is described in [§13.12](13-tooling.md#1312-build-model).
 
 ## 1.6 Stability and licensing
 

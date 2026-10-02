@@ -152,7 +152,7 @@ For a concrete type, the type's module function can always be called directly, f
 
 ### 8.5.1 Implementation (informative)
 
-Bounds are resolved by dictionary passing: a generic function with bounds receives, for each bound, a record of the satisfying type's functions (D-046). Each such function package also carries the type descriptor of the type it was built for, which `dyn` conversions inside the function use ([§8.6](#86-dyn-values)) (D-236). A type parameter without bounds receives nothing. With the uniform representation (D-021), each generic function is compiled once. An implementation may specialize generic functions for known types as an optimization.
+Bounds are resolved by dictionary passing: a generic function with bounds receives, for each bound, a record of the satisfying type's functions (D-046). Each such function package also carries the type descriptor of the type it was built for, which `dyn` conversions inside the function use ([§8.6](#86-dyn-values)) (D-236). A type parameter without bounds receives nothing. With the uniform representation (D-021), each generic function is compiled once. An implementation may specialize generic functions for known types as an optimization. Debug builds do not specialize across modules, and release builds may do so only within a size budget ([§13.12.5](13-tooling.md#13125-build-profiles)) (D-251).
 
 Descriptors of generic types such as `List<T>` are built at run time from the descriptors of their type arguments. An implementation may cache or intern them.
 

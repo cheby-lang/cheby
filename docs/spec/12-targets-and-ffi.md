@@ -15,7 +15,7 @@ A **target** is either `native` or `js`. These two names are used in `@external`
 
 There are no operating-system targets in v1: `native` covers macOS, Linux and Windows alike, and there is no `@target(windows)` or similar (D-214, ADR-0039). The standard library and runtime hide operating-system differences. Foreign code that exists only on some operating systems must handle its own portability, typically with a small C shim that is linked on every native platform.
 
-Native debug info is DWARF on every platform in v1, including Windows. CodeView/PDB is added when the bundled linker lands ([§13.1](13-tooling.md#131-the-cheby-command)) (D-184, D-088).
+Native debug info is DWARF on every platform in v1, including Windows. CodeView/PDB is added when the bundled linker lands ([§13.1](13-tooling.md#131-the-cheby-command)) (D-184, D-088). By default only line tables are emitted, which is enough for panic backtraces, and full debug info is opt-in ([§13.12.5](13-tooling.md#13125-build-profiles)) (D-259).
 
 ## 12.2 Native
 
@@ -36,7 +36,7 @@ JavaScript has no stackful coroutines. The compiler performs a whole-program **s
 
 - The coloring is internal to the generated code. Cheby source never shows it (D-003).
 - Calls through function values and `dyn` interface values are treated conservatively: if any function that could be called there may suspend, the call site is compiled as suspending (ADR-0005).
-- JS builds therefore require whole-program compilation (ADR-0005).
+- JS builds therefore require a whole-program step (ADR-0005). It runs at link time: each module exports a small summary of which functions suspend directly and its call edges, the link step computes which functions suspend transitively, and JS code is generated and cached per function, keyed on the function's IR and whether it suspends. An edit regenerates only the functions whose suspension status changed ([§13.12.3](13-tooling.md#13123-interface-artifacts-and-recompilation)) (D-258, ADR-0048).
 - The runtime schedules fibers cooperatively on the single JS thread. Parallelism is not available on JS; concurrency semantics are otherwise the same as on native.
 
 The JS backend inserts no yield checks at function entry, because they would make almost every function suspending and defeat the suspension analysis (D-185, ADR-0035). A fiber on JS runs until its next real suspension point, so a CPU-bound fiber can starve other fibers. Timeouts, timers and cancellation therefore take effect only at that suspension point (D-232). This is a documented difference between targets ([§12.4](#124-semantic-differences-between-targets)).
