@@ -1,0 +1,124 @@
+//! Builds a linked list and prints what the functions of
+//! `linked_list.cheby` make of it:
+//!
+//! ```text
+//! numbers: [1 -> 2 -> 3 -> 4]
+//! pushed 0: [0 -> 1 -> 2 -> 3 -> 4]
+//! popped 1, leaving [2 -> 3 -> 4]
+//! reversed: [4 -> 3 -> 2 -> 1]
+//! squared: [1 -> 4 -> 9 -> 16]
+//! length 4, sum 10
+//! opening: starts with 1 and 2
+//! numbers afterwards: [1 -> 2 -> 3 -> 4]
+//! ```
+//!
+//! The last line shows that none of the calls changed `numbers`. Each
+//! returned a new list, and `pushed` and the rest after popping share
+//! their nodes with `numbers` instead of copying them.
+//!
+//! The module is imported twice, as in `014_word_count`. `import
+//! linked_list::linked_list` brings in the module, used as
+//! `linked_list::push`. The item import brings in the type
+//! `LinkedList` for signatures, and the constructors `Empty` and `Node`
+//! for patterns.
+
+import std::io
+import std::list
+import linked_list::linked_list
+import linked_list::linked_list::{Empty, LinkedList, Node}
+
+fn main() {
+  linked_list::from_list([1, 2, 3, 4])
+  |> report
+  |> list::each(_, io::println)
+}
+
+/// Returns the lines `main` prints for `numbers`.
+fn report(numbers: LinkedList<Int>) -> List<String> {
+  // An interpolation holds a name or a field path, not a call, so each
+  // result gets a name first.
+  let pushed = linked_list::push(numbers, 0)
+  let popped = case linked_list::pop(numbers) {
+    Some((first, rest)) => "popped {first}, leaving {rest}"
+    None => "nothing to pop"
+  }
+  let reversed = linked_list::reverse(numbers)
+  let squared = linked_list::map(numbers, fn(n) { n * n })
+  let count = linked_list::length(numbers)
+  let total = sum(numbers)
+  let opening = describe_opening(numbers)
+  [
+    "numbers: {numbers}",
+    "pushed 0: {pushed}",
+    popped,
+    "reversed: {reversed}",
+    "squared: {squared}",
+    "length {count}, sum {total}",
+    "opening: {opening}",
+    "numbers afterwards: {numbers}",
+  ]
+}
+
+/// Adds up the items of `numbers`.
+///
+/// It matches on `Empty` and `Node` directly instead of calling
+/// `linked_list::fold`. Every module of this package could do that
+/// anyway (D-151), and because `LinkedList` is `pub exposed`, a module
+/// of another package could too.
+fn sum(numbers: LinkedList<Int>) -> Int {
+  fn step(rest, total) {
+    case rest {
+      Empty => total
+      Node(first, tail) => step(tail, total + first)
+    }
+  }
+  step(numbers, 0)
+}
+
+/// Describes how `items` starts. Patterns nest, so one `case` can look
+/// two nodes deep. The arms cover every list: empty, one item, and two
+/// or more.
+fn describe_opening<T: Show>(items: LinkedList<T>) -> String {
+  case items {
+    Empty => "empty"
+    Node(only, Empty) => "just {only}"
+    Node(first, Node(second, _)) => "starts with {first} and {second}"
+  }
+}
+
+test "the report shows each operation on the list" {
+  assert report(linked_list::from_list([1, 2, 3, 4])) == [
+    "numbers: [1 -> 2 -> 3 -> 4]",
+    "pushed 0: [0 -> 1 -> 2 -> 3 -> 4]",
+    "popped 1, leaving [2 -> 3 -> 4]",
+    "reversed: [4 -> 3 -> 2 -> 1]",
+    "squared: [1 -> 4 -> 9 -> 16]",
+    "length 4, sum 10",
+    "opening: starts with 1 and 2",
+    "numbers afterwards: [1 -> 2 -> 3 -> 4]",
+  ]
+}
+
+test "the report of an empty list" {
+  assert report(linked_list::new()) == [
+    "numbers: []",
+    "pushed 0: [0]",
+    "nothing to pop",
+    "reversed: []",
+    "squared: []",
+    "length 0, sum 0",
+    "opening: empty",
+    "numbers afterwards: []",
+  ]
+}
+
+test "sum adds up every item" {
+  assert sum(Node(1, Node(2, Node(3, Empty)))) == 6
+  assert sum(Empty) == 0
+}
+
+test "the opening looks at no more than two items" {
+  assert describe_opening(linked_list::from_list(["a", "b", "c"])) == "starts with a and b"
+  assert describe_opening(Node(7, Empty)) == "just 7"
+  assert describe_opening(linked_list::new::<Int>()) == "empty"
+}

@@ -1,0 +1,212 @@
+//! A persistent singly linked list.
+//!
+//! The built-in `List` is a vector, not a linked list (D-039), and it is
+//! what ordinary programs use. This module builds the classic linked
+//! list from scratch, as an example of a recursive generic type: a list
+//! is either empty, or an item followed by another list.
+//!
+//! Values are immutable, so nothing is ever changed in place. `push`
+//! returns a new list whose rest is the old list itself, so the two
+//! share every item but the new one, and the old list stays usable.
+//!
+//! There are no loops (ADR-0001), so every function walks the list by
+//! calling itself, or through `fold`. Only calls in tail position are
+//! guaranteed not to grow the stack (ADR-0006), so each walk is written
+//! with an accumulator and makes its recursive call last. That is why
+//! `map` builds its result backwards and then reverses it: the obvious
+//! `Node(transform(first), map(rest, transform))` still has work to do
+//! after the inner call returns, so a long enough list would overflow
+//! the stack.
+
+import std::list
+import std::string
+
+/// A list of items of type `T`.
+///
+/// The type is `pub exposed`, so other packages can build lists with
+/// `Empty` and `Node` and take them apart with patterns, as they can
+/// with `Option` (ADR-0016, D-048). A linked list has no invariant to
+/// protect: every value built from these two variants is a valid list.
+/// The price is that the representation is part of the public API and
+/// cannot change without breaking other packages.
+///
+/// The empty variant is not called `Nil`, as in Lisp, because `Nil` is
+/// already the unit type and value of the prelude.
+pub exposed type LinkedList<T> {
+  /// The list with no items.
+  Empty,
+  /// A list whose first item is the `T`, followed by the rest of the
+  /// list.
+  Node(T, LinkedList<T>),
+}
+
+/// Returns an empty list.
+///
+/// Nothing in the arguments fixes `T`, so a caller whose context does
+/// not fix it either names it with a turbofish,
+/// `linked_list::new::<Int>()` (D-049).
+pub fn new<T>() -> LinkedList<T> {
+  Empty
+}
+
+/// Returns a list with the items of `values`, in the same order.
+pub fn from_list<T>(values: List<T>) -> LinkedList<T> {
+  // A linked list grows at the front, so the last value goes in first.
+  // `push` is generic. Passed as a value, it is instantiated for `T`.
+  list::fold(list::reverse(values), Empty, push)
+}
+
+/// Returns the items of `items` as a `List`, first item first.
+pub fn to_list<T>(items: LinkedList<T>) -> List<T> {
+  // Appending to a `List` is cheap, because it is a vector.
+  fold(items, [], fn(found, item) { [..found, item] })
+}
+
+/// Returns `items` with `item` added at the front. It takes constant
+/// time, because the new list is one `Node` that points at `items`.
+pub fn push<T>(items: LinkedList<T>, item: T) -> LinkedList<T> {
+  Node(item, items)
+}
+
+/// Returns the first item of `items`, or `None` if it is empty.
+pub fn head<T>(items: LinkedList<T>) -> Option<T> {
+  case items {
+    Empty => None
+    Node(first, _) => Some(first)
+  }
+}
+
+/// Removes the first item of `items`. Returns that item and the rest of
+/// the list, or `None` if `items` is empty. The rest is not a copy: it
+/// is the very list the first `Node` points at.
+pub fn pop<T>(items: LinkedList<T>) -> Option<(T, LinkedList<T>)> {
+  case items {
+    Empty => None
+    Node(first, rest) => Some((first, rest))
+  }
+}
+
+/// Combines the items of `items` into one value, first item first. It
+/// starts from `start` and calls `combine` with the value so far and
+/// each item in turn.
+///
+/// The recursive call is a tail call, so `fold` takes constant stack
+/// space on a list of any length. The other walks below are built on
+/// it, so they do too.
+pub fn fold<T, A>(items: LinkedList<T>, start: A, combine: fn(A, T) -> A) -> A {
+  case items {
+    Empty => start
+    Node(first, rest) => fold(rest, combine(start, first), combine)
+  }
+}
+
+/// Returns the number of items in `items`. A linked list does not store
+/// its length, so this walks the whole list.
+pub fn length<T>(items: LinkedList<T>) -> Int {
+  fold(items, 0, fn(counted, _item) { counted + 1 })
+}
+
+/// Returns the items of `items` in the opposite order.
+pub fn reverse<T>(items: LinkedList<T>) -> LinkedList<T> {
+  // Pushing each item in turn onto a new list puts the last item in
+  // front.
+  fold(items, Empty, push)
+}
+
+/// Returns the list of `transform` applied to each item of `items`, in
+/// the same order.
+pub fn map<T, U>(items: LinkedList<T>, transform: fn(T) -> U) -> LinkedList<U> {
+  // The first pass builds the result backwards, because a linked list
+  // grows at the front, and the second puts it right. Both are folds,
+  // so the stack does not grow. See the module documentation.
+  items
+  |> fold(_, Empty, fn(done, item) { Node(transform(item), done) })
+  |> reverse
+}
+
+/// Makes `LinkedList<T>` satisfy `Show` whenever `T` does (D-064), so a
+/// list of showable items can be interpolated as `{items}`. It shows as
+/// `[1 -> 2 -> 3]`, and the empty list as `[]`.
+///
+/// It is `pub` because `LinkedList` is. A function less visible than
+/// its type does not count toward an interface at all (D-164).
+pub fn show<T: Show>(items: LinkedList<T>) -> String {
+  // `T` is a type parameter, so its `show` is called through the
+  // interface (D-173).
+  let shown =
+    to_list(items)
+    |> list::map(_, fn(item) { Show::show(item) })
+    |> string::join(_, " -> ")
+  "[{shown}]"
+}
+
+test "from_list keeps the order of the items" {
+  assert from_list([1, 2, 3]) == Node(1, Node(2, Node(3, Empty)))
+  assert to_list(from_list(["a", "b", "c"])) == ["a", "b", "c"]
+  assert from_list::<Int>([]) == Empty
+}
+
+test "push adds at the front and shares the rest" {
+  let numbers = from_list([2, 3])
+  let longer = push(numbers, 1)
+  // The new list is one node in front of the old one, and the old one
+  // is unchanged.
+  assert longer == Node(1, numbers)
+  assert to_list(longer) == [1, 2, 3]
+  assert to_list(numbers) == [2, 3]
+}
+
+test "pop hands back the first item and the rest of the list" {
+  let numbers = from_list([1, 2, 3])
+  assert head(numbers) == Some(1)
+  assert pop(numbers) == Some((1, from_list([2, 3])))
+  assert pop(push(numbers, 0)) == Some((0, numbers))
+}
+
+test "an empty list has no head and nothing to pop" {
+  // Nothing else fixes the item type, so the turbofish names it.
+  let nothing = new::<Int>()
+  assert head(nothing) == None
+  assert pop(nothing) == None
+  assert length(nothing) == 0
+}
+
+test "fold visits the items from first to last" {
+  assert fold(from_list(["a", "b", "c"]), "", fn(joined, item) { joined + item }) == "abc"
+  assert fold(from_list([1, 2, 3, 4]), 0, fn(sum, n) { sum + n }) == 10
+}
+
+test "length counts the items" {
+  assert length(from_list([5, 6, 7])) == 3
+  assert length(push(new(), "only")) == 1
+}
+
+test "reverse puts the last item first" {
+  assert reverse(from_list([1, 2, 3])) == from_list([3, 2, 1])
+  assert reverse(new::<Int>()) == Empty
+}
+
+test "map transforms each item and keeps the order" {
+  assert map(from_list([1, 2, 3]), fn(n) { n * 10 }) == from_list([10, 20, 30])
+  assert map(from_list([1, 2]), fn(n) { "#{n}" }) == from_list(["#1", "#2"])
+}
+
+test "long lists are walked in constant stack space" {
+  // Builds 1, 2, ..., `n` with a tail call per item.
+  fn build(n, built) {
+    case n {
+      0 => built
+      _ => build(n - 1, push(built, n))
+    }
+  }
+  let long = build(1_000_000, Empty)
+  assert length(long) == 1_000_000
+  assert head(map(long, fn(n) { n * 2 })) == Some(2)
+  assert head(reverse(long)) == Some(1_000_000)
+}
+
+test "lists show their items with arrows between them" {
+  assert show(from_list([1, 2, 3])) == "[1 -> 2 -> 3]"
+  assert show(from_list(["solo"])) == "[solo]"
+  assert show(new::<Int>()) == "[]"
+}
