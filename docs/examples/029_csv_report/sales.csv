@@ -1,0 +1,15 @@
+date,region,product,quantity,unit_price
+2024-03-01,North,Keyboard,2,49.90
+2024-03-01,South,"Cable, 2 m",10,4.50
+2024-03-02,East,Monitor,1,189.00
+2024-03-02,North,Mouse,3,19.99
+2024-03-03,West,"Desk lamp ""Arc""",2,34.00
+2024-03-04,South,Monitor,2,189.00
+2024-03-04,East,"Cable, 2 m",5,4.5
+2024-03-05,North,Monitor,1,189
+2024-03-06,West,Keyboard,1,49.90
+2024-03-07,South,Mouse,4,19.99
+2024-03-08,East,Webcam,2,59.50
+2024-03-08,North,"Cable, 2 m",6,4.50
+2024-03-09,West,Monitor,1,189.00
+2024-03-10,East,Mouse,1,19.99

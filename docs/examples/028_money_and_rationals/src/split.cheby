@@ -1,0 +1,167 @@
+//! Splitting an amount of money fairly, to the cent.
+//!
+//! Splitting 100.00 three ways gives each person exactly 100/3 = 33.33...
+//! Nobody can pay a third of a cent, so the parts are rounded, and
+//! rounding each part on its own loses money: three times 33.33 is
+//! 99.99. This module rounds the parts so that they always add up to
+//! the total, by the largest remainder method:
+//!
+//! 1. Work out each exact part as a `Rational`, with no rounding.
+//! 2. Round every part down to whole cents.
+//! 3. The cents still missing go one each to the parts that lost the
+//!    most in step 2. Equal losses go to the earlier person, so the
+//!    result never depends on anything but the order of `weights`.
+//!
+//! Each part loses less than one cent in step 2, so fewer cents are
+//! missing than there are people, and nobody gets more than one extra.
+//!
+//! A `Float` would make step 1 inexact. Then the parts no longer add up
+//! to the total, and step 2 can round a part the wrong way: `73.10 *
+//! 1.15` in floating point is `84.06499999999998`, which rounds down to
+//! 84.06, while the exact `84.065` rounds up to 84.07.
+
+import std::fiber
+import std::int
+import std::list
+import money_and_rationals::rational
+import money_and_rationals::rational::{Rational}
+
+/// One person's part of an amount.
+type Part {
+  /// The exact part, in cents. Usually not a whole number.
+  exact: Rational,
+  /// The part rounded to whole cents. The rounded parts of one split
+  /// add up to its total.
+  cents: Int,
+}
+
+/// Splits `total` cents among people in proportion to `weights`, one
+/// weight per person, in the same order. Weights 2, 1 and 1 give the
+/// first person half and the others a quarter each.
+///
+/// Panics if `weights` is empty or a weight is below 1. Both are
+/// programming mistakes, like dividing by zero, not bad input to report.
+fn by_weight(total: Int, weights: List<Int>) -> List<Part> {
+  assert weights != [] as "a split needs at least one person"
+  assert !list::any(weights, fn(weight) { weight < 1 }) as "every weight must be at least 1"
+  let weight_sum = list::fold(weights, 0, fn(sum, weight) { sum + weight })
+  // Step 1. `weight_sum` is at least 1, so the fraction always exists.
+  // `*` on two `Rational`s calls `rational::mul`.
+  let exact_parts = list::map(weights, fn(weight) {
+    let assert Some(fraction) = rational::new(weight, weight_sum)
+    rational::from_int(total) * fraction
+  })
+  // Step 2.
+  let rounded_down = list::fold(exact_parts, 0, fn(sum, part) { sum + rational::floor(part) })
+  let missing = total - rounded_down
+  // Step 3. The positions of the people who get one more cent.
+  let lucky = exact_parts |> by_largest_remainder |> list::take(_, missing)
+  // `list::contains` looks through `lucky` for every person. That is
+  // fine for a table of diners, and a `Set` would do for a crowd.
+  fn build(rest, index, found) {
+    case rest {
+      [] => found
+      [exact, ..tail] => {
+        let extra = case list::contains(lucky, index) {
+          True => 1
+          False => 0
+        }
+        build(tail, index + 1, [..found, Part { exact, cents: rational::floor(exact) + extra }])
+      }
+    }
+  }
+  build(exact_parts, 0, [])
+}
+
+/// Returns the positions of `exact_parts`, ordered by what rounding
+/// down takes off each part, the largest first. Equal amounts keep
+/// their order.
+priv fn by_largest_remainder(exact_parts: List<Rational>) -> List<Int> {
+  // Pairs each part with its position and what rounding down takes off.
+  fn number(rest, index, found) {
+    case rest {
+      [] => found
+      [first, ..tail] => number(tail, index + 1, [..found, (index, remainder(first))])
+    }
+  }
+  exact_parts
+  |> number(_, 0, [])
+  |> list::sort(_, compare_remainders)
+  |> list::map(_, fn((index, _)) { index })
+}
+
+/// Orders two numbered remainders for `list::sort`: the larger
+/// remainder first, then the smaller position. Every tie is decided, so
+/// the order is the same however the sort works.
+priv fn compare_remainders(first: (Int, Rational), second: (Int, Rational)) -> Order {
+  let (first_index, first_remainder) = first
+  let (second_index, second_remainder) = second
+  // The remainders are compared the other way round, so the larger one
+  // comes first.
+  case rational::compare(second_remainder, first_remainder) {
+    Equal => int::compare(first_index, second_index)
+    decided => decided
+  }
+}
+
+/// Returns what rounding `value` down takes off it, from 0 up to, but
+/// not including, 1.
+priv fn remainder(value: Rational) -> Rational {
+  value - rational::from_int(rational::floor(value))
+}
+
+/// Returns the rounded cents of `parts`, for the tests below.
+priv fn cents_of(parts: List<Part>) -> List<Int> {
+  list::map(parts, fn(part: Part) { part.cents })
+}
+
+test "a total that divides evenly needs no rounding" {
+  assert cents_of(by_weight(900, [1, 1, 1])) == [300, 300, 300]
+  assert cents_of(by_weight(0, [1, 2])) == [0, 0]
+}
+
+test "the cent lost by rounding down goes to someone" {
+  let parts = by_weight(10_000, [1, 1, 1])
+  let assert Some(third) = rational::new(10_000, 3)
+  assert list::map(parts, fn(part: Part) { part.exact }) == [third, third, third]
+  // All three lose 1/3 of a cent, so the tie goes to the first person.
+  assert cents_of(parts) == [3_334, 3_333, 3_333]
+}
+
+test "the largest remainder gets the extra cent" {
+  // 100/3 and 200/3: the second loses 2/3 of a cent, the first 1/3.
+  assert cents_of(by_weight(100, [1, 2])) == [33, 67]
+  // 16814/5 loses 4/5, and the others 8407/5 lose 2/5 each. Two cents
+  // are missing, so the first person and the earliest of the rest get
+  // one each.
+  assert cents_of(by_weight(8_407, [2, 1, 1, 1])) == [3_363, 1_682, 1_681, 1_681]
+}
+
+test "ties go to the earlier people" {
+  assert cents_of(by_weight(5, [1, 1, 1, 1, 1, 1, 1])) == [1, 1, 1, 1, 1, 0, 0]
+}
+
+test "the parts always add up to the total" {
+  let cases = [
+    (10_000, [1, 1, 1]),
+    (8_407, [2, 1, 1, 1]),
+    (1, [3, 5, 7]),
+    (99_999, [7, 11, 13, 17]),
+    (12_345, [1]),
+  ]
+  list::each(cases, fn((total, weights)) {
+    let parts = by_weight(total, weights)
+    let rounded = list::fold(parts, 0, fn(sum, part: Part) { sum + part.cents })
+    let exact = list::fold(parts, rational::zero, fn(sum, part: Part) { sum + part.exact })
+    assert rounded == total
+    assert exact == rational::from_int(total)
+  })
+}
+
+test "a split without people panics" {
+  let outcome = {
+    use _scope <- fiber::scope()
+    by_weight(100, [])
+  }
+  let assert Err(_) = outcome
+}

@@ -1,0 +1,149 @@
+//! Splits a dinner bill with a tip among four people, to the cent:
+//!
+//! ```text
+//! subtotal 73.10, 15% tip 2193/2 cents
+//! exact total 16813/2 cents, rounded to 84.07
+//! Ana (2 shares): exactly 16814/5 cents, pays 33.63
+//! Ben (1 share): exactly 8407/5 cents, pays 16.82
+//! Cy (1 share): exactly 8407/5 cents, pays 16.81
+//! Dee (1 share): exactly 8407/5 cents, pays 16.81
+//! together 84.07
+//! ```
+//!
+//! Ana had two courses, so she pays two shares. The tip and the total
+//! are worked out exactly as fractions of a cent, and only the total is
+//! rounded, once, before it is split. `split::by_weight` then rounds
+//! the shares so that they add up to that total exactly, as the last
+//! line shows.
+//!
+//! With `Float` the same bill goes wrong already at the total: `73.10 *
+//! 1.15` is `84.06499999999998` in floating point, which rounds to
+//! 84.06, although the exact total is 84.065 and rounds to 84.07.
+
+import std::io
+import std::list
+import std::string
+import money_and_rationals::rational
+import money_and_rationals::split
+
+/// A dish or drink on the bill, with its price in cents.
+type Item = (String, Int)
+
+/// A person at the table and how many shares of the bill they pay.
+type Diner = (String, Int)
+
+/// What was ordered.
+const order: List<Item> = [
+  ("Soup", 1_450),
+  ("Salad", 1_200),
+  ("Bread", 950),
+  ("Fish", 3_100),
+  ("Water", 610),
+]
+
+/// Who pays, and how many shares each.
+const table: List<Diner> = [("Ana", 2), ("Ben", 1), ("Cy", 1), ("Dee", 1)]
+
+/// The tip, in percent of the subtotal.
+const tip_percent: Int = 15
+
+fn main() {
+  bill_lines(order, tip_percent, table) |> list::each(_, io::println)
+}
+
+/// Returns the lines `main` prints for a bill of `items` with a tip of
+/// `percent` percent, split among `diners`.
+fn bill_lines(items: List<Item>, percent: Int, diners: List<Diner>) -> List<String> {
+  let subtotal = list::fold(items, 0, fn(sum, (_, price)) { sum + price })
+  // `*` and `+` on two `Rational`s call `rational::mul` and
+  // `rational::add`, so nothing is rounded here.
+  let tip = rational::from_int(subtotal) * rational::from_percent(percent)
+  let exact_total = rational::from_int(subtotal) + tip
+  // Nobody pays a fraction of a cent, so the total is rounded once,
+  // here, and then split exactly.
+  let total = rational::round(exact_total)
+  let parts = split::by_weight(total, list::map(diners, fn((_, shares)) { shares }))
+  let together = list::fold(parts, 0, fn(sum, part: split::Part) { sum + part.cents })
+  // Pairs each diner with their part. `by_weight` returns one part per
+  // weight, in order, so the two lists have the same length.
+  fn describe(rest_diners, rest_parts, found) {
+    case rest_diners, rest_parts {
+      [(name, shares), ..more_diners], [part, ..more_parts] =>
+        describe(more_diners, more_parts, [..found, diner_line(name, shares, part)])
+      _, _ => found
+    }
+  }
+  // An interpolation holds a name, not a call, so each formatted
+  // amount gets a name first.
+  let shown_subtotal = format_cents(subtotal)
+  let shown_total = format_cents(total)
+  let shown_together = format_cents(together)
+  [
+    "subtotal {shown_subtotal}, {percent}% tip {tip} cents",
+    "exact total {exact_total} cents, rounded to {shown_total}",
+    ..describe(diners, parts, []),
+    "together {shown_together}",
+  ]
+}
+
+/// Describes what `name`, who pays `shares` shares, owes: the exact
+/// part and the rounded amount.
+fn diner_line(name: String, shares: Int, part: split::Part) -> String {
+  // `split::Part` is package-visible, so this module can read its
+  // fields (D-151).
+  let exact = part.exact
+  let paid = format_cents(part.cents)
+  let unit = case shares {
+    1 => "share"
+    _ => "shares"
+  }
+  "{name} ({shares} {unit}): exactly {exact} cents, pays {paid}"
+}
+
+/// Formats a number of cents that is not negative as units, a dot and
+/// two digits of cents: `33.63`, `0.05`.
+fn format_cents(cents: Int) -> String {
+  let units = cents / 100
+  let remainder = cents % 100
+  let padded = string::pad_start("{remainder}", 2, "0")
+  "{units}.{padded}"
+}
+
+test "the dinner bill splits to the cent" {
+  assert bill_lines(order, tip_percent, table) == [
+    "subtotal 73.10, 15% tip 2193/2 cents",
+    "exact total 16813/2 cents, rounded to 84.07",
+    "Ana (2 shares): exactly 16814/5 cents, pays 33.63",
+    "Ben (1 share): exactly 8407/5 cents, pays 16.82",
+    "Cy (1 share): exactly 8407/5 cents, pays 16.81",
+    "Dee (1 share): exactly 8407/5 cents, pays 16.81",
+    "together 84.07",
+  ]
+}
+
+test "a bill that splits unevenly still adds up" {
+  assert bill_lines([("Pizza", 10_000)], 0, [("Ann", 1), ("Bo", 1), ("Cas", 1)]) == [
+    "subtotal 100.00, 0% tip 0 cents",
+    "exact total 10000 cents, rounded to 100.00",
+    "Ann (1 share): exactly 10000/3 cents, pays 33.34",
+    "Bo (1 share): exactly 10000/3 cents, pays 33.33",
+    "Cas (1 share): exactly 10000/3 cents, pays 33.33",
+    "together 100.00",
+  ]
+}
+
+test "one person pays everything" {
+  assert bill_lines([("Tea", 250)], 10, [("Solo", 1)]) == [
+    "subtotal 2.50, 10% tip 25 cents",
+    "exact total 275 cents, rounded to 2.75",
+    "Solo (1 share): exactly 275 cents, pays 2.75",
+    "together 2.75",
+  ]
+}
+
+test "cents show with two digits after the dot" {
+  assert format_cents(3_363) == "33.63"
+  assert format_cents(5) == "0.05"
+  assert format_cents(0) == "0.00"
+  assert format_cents(100_000) == "1000.00"
+}

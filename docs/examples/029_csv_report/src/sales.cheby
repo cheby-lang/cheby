@@ -1,0 +1,464 @@
+//! Turns the records of a sales file into sales, sums them up by
+//! region, and formats the sums as a table.
+//!
+//! The file starts with the header
+//! `date,region,product,quantity,unit_price`, and every other line is
+//! one sale. The quantity is a
+//! whole number of at least 1. The unit price is units and up to two
+//! digits of cents, such as `12.50`, `12.5` or `12`. It is read into a
+//! whole number of cents by hand, because money is never a `Float`:
+//! `0.29 * 100.0` is not exactly `29.0` in binary floating point.
+
+import std::int
+import std::list
+import std::map
+import std::map::{Map}
+import std::result
+import std::string
+import csv_report::csv
+
+/// The header the file must start with, field by field.
+const header: List<String> = ["date", "region", "product", "quantity", "unit_price"]
+
+/// One line of the file, checked and converted.
+type Sale {
+  date: String,
+  region: String,
+  product: String,
+  /// How many units were sold, at least 1.
+  quantity: Int,
+  /// The price of one unit, in cents.
+  unit_price: Int,
+}
+
+/// The sales of one region, added up.
+type Summary {
+  region: String,
+  /// How many lines of the file are sales in this region.
+  orders: Int,
+  /// How many units those lines sold together.
+  units: Int,
+  /// The sum of quantity times unit price over those lines, in cents.
+  revenue: Int,
+}
+
+/// Why the records are not a valid sales file. Every error but the
+/// first has the number of the line it is about.
+type SalesError {
+  /// The file has no records at all, not even a header.
+  MissingHeader,
+  /// The first record, which is not the expected header.
+  BadHeader(Int, List<String>),
+  /// A line with this many fields, instead of one per heading.
+  WrongFieldCount(Int, Int),
+  /// A line whose region is empty.
+  MissingRegion(Int),
+  /// A quantity that is not a whole number of at least 1.
+  BadQuantity(Int, String),
+  /// A unit price that is not units and up to two digits of cents.
+  BadPrice(Int, String),
+}
+
+/// Which side of its column a text is aligned to.
+priv type Side { Left, Right }
+
+/// One column of the table: its heading, the side its text goes to,
+/// and how to get its text from a summary.
+priv type Column { heading: String, side: Side, text: fn(Summary) -> String }
+
+/// The text between two columns.
+const gap: String = "  "
+
+/// Checks the header and turns every record after it into a sale.
+///
+/// It stops at the first line with an error. Every step that can fail
+/// is a `use` on `result::try`, and `result::try` returns the first
+/// `Err` without calling the rest. A report built from part of a file
+/// would be wrong anyway, so one error is enough to stop, and the user
+/// fixes the lines one run at a time. Collecting every error would
+/// need a different loop, which keeps going after an `Err` and gathers
+/// the errors in a list next to the sales.
+fn read_sales(records: List<csv::Record>) -> Result<List<Sale>, SalesError> {
+  fn step(rest, converted) {
+    case rest {
+      [] => Ok(converted)
+      [record, ..tail] => {
+        // The call to `step` is the last thing the callback does, and
+        // `result::try` calls the callback in tail position, so a long
+        // file takes constant stack space (D-015).
+        use sale <- result::try(to_sale(record))
+        step(tail, [..converted, sale])
+      }
+    }
+  }
+  // Lists compare with the built-in structural `==`, element by
+  // element, so the whole header is checked at once.
+  case records {
+    [] => Err(MissingHeader)
+    [first, ..] when first.fields != header => Err(BadHeader(first.line, first.fields))
+    [_, ..rows] => step(rows, [])
+  }
+}
+
+/// Turns one record into a sale.
+fn to_sale(record: csv::Record) -> Result<Sale, SalesError> {
+  let line = record.line
+  // A list pattern with five elements matches exactly five fields, and
+  // the literal `""` in the first arm picks out an empty region.
+  case record.fields {
+    [_, "", _, _, _] => Err(MissingRegion(line))
+    [date, region, product, quantity_text, price_text] => {
+      // Each `use` stops this line at its first bad field.
+      use quantity <- result::try(parse_quantity(quantity_text, line))
+      use unit_price <- result::try(parse_price(price_text, line))
+      Ok(Sale { date, region, product, quantity, unit_price })
+    }
+    fields => Err(WrongFieldCount(line, list::length(fields)))
+  }
+}
+
+/// Reads the quantity `text`, on line `line`.
+priv fn parse_quantity(text: String, line: Int) -> Result<Int, SalesError> {
+  case int::parse(text) {
+    Ok(quantity) when quantity >= 1 => Ok(quantity)
+    _ => Err(BadQuantity(line, text))
+  }
+}
+
+/// Reads the unit price `text`, on line `line`, as a number of cents.
+fn parse_price(text: String, line: Int) -> Result<Int, SalesError> {
+  // The digits of the price in cents are the units followed by exactly
+  // two digits of cents, so `12.5` becomes `1250` and `189` becomes
+  // `18900`. The arms with the same patterns are told apart by their
+  // guards.
+  let spelled = case string::split(text, ".") {
+    [units] when units != "" => Some(units + "00")
+    [units, cents] when units != "" && string::length(cents) == 1 => Some(units + cents + "0")
+    [units, cents] when units != "" && string::length(cents) == 2 => Some(units + cents)
+    _ => None
+  }
+  // `int::parse` would accept a sign, as in `-1.50`, so the digits are
+  // checked first.
+  case spelled {
+    Some(digits) when is_digits(digits) => case int::parse(digits) {
+      Ok(cents) => Ok(cents)
+      // Only a price too large for an `Int` gets here.
+      Err(_) => Err(BadPrice(line, text))
+    }
+    _ => Err(BadPrice(line, text))
+  }
+}
+
+/// Tells whether `text` is one or more ASCII digits. Strings compare by
+/// their code points, so a range check works.
+priv fn is_digits(text: String) -> Bool {
+  let points = string::to_code_points(text)
+  points != [] && !list::any(points, fn(point) { point < "0" || point > "9" })
+}
+
+/// Adds up the sales of each region. The region with the highest
+/// revenue comes first, and regions with the same revenue come in
+/// alphabetical order.
+fn summarize(sales: List<Sale>) -> List<Summary> {
+  // The map groups the summaries by region while they are added up.
+  // It has no order of its own, and the order changes from run to run
+  // (D-093), so the sort decides every tie and the table comes out the
+  // same on every run.
+  sales
+  |> list::fold(_, map::new(), add_sale)
+  |> map::values
+  |> list::sort(_, by_revenue)
+}
+
+/// Adds `sale` to the summary of its region in `summaries`.
+priv fn add_sale(summaries: Map<String, Summary>, sale: Sale) -> Map<String, Summary> {
+  let amount = sale.quantity * sale.unit_price
+  // `map::upsert` passes the region's summary so far, if there is one,
+  // to the closure, and stores the summary it returns. A record update
+  // changes the three sums at once.
+  map::upsert(summaries, sale.region, fn(previous) {
+    let before = case previous {
+      Some(found) => found
+      None => Summary { region: sale.region, orders: 0, units: 0, revenue: 0 }
+    }
+    Summary {
+      ..before,
+      orders: before.orders + 1,
+      units: before.units + sale.quantity,
+      revenue: before.revenue + amount,
+    }
+  })
+}
+
+/// Orders summaries by revenue, highest first, then by region,
+/// alphabetically. `list::sort` calls it to compare two summaries:
+/// `Less` puts `first` before `second`.
+fn by_revenue(first: Summary, second: Summary) -> Order {
+  // The revenues are compared the other way round, so the higher one
+  // comes first. Only a tie falls through to the regions.
+  case int::compare(second.revenue, first.revenue) {
+    Equal => string::compare(first.region, second.region)
+    decided => decided
+  }
+}
+
+/// Adds up every summary into one, labelled `Total`. The total is a
+/// summary too, so the table formats it like the other rows.
+fn total(summaries: List<Summary>) -> Summary {
+  let start = Summary { region: "Total", orders: 0, units: 0, revenue: 0 }
+  list::fold(summaries, start, fn(sum, summary) {
+    Summary {
+      ..sum,
+      orders: sum.orders + summary.orders,
+      units: sum.units + summary.units,
+      revenue: sum.revenue + summary.revenue,
+    }
+  })
+}
+
+/// Formats `summaries` as a table: a heading line, a rule, a line per
+/// summary, another rule and the total. Each column is as wide as its
+/// widest text, heading included. Regions are aligned to the left and
+/// numbers to the right.
+fn format_table(summaries: List<Summary>) -> List<String> {
+  let footer = total(summaries)
+  let rows = [..summaries, footer]
+  // Every column is paired with its width once, before any line is
+  // formatted, because each line needs the widths of all the columns.
+  let placed = list::map(columns(), fn(column) { (column, width_of(column, rows)) })
+  let heading_line =
+    placed
+    |> list::map(_, fn((column, width)) { pad(column.heading, column.side, width) })
+    |> string::join(_, gap)
+  // Padding the empty string with `-` gives a run of dashes as wide as
+  // the column.
+  let rule =
+    placed
+    |> list::map(_, fn((_, width)) { string::pad_start("", width, "-") })
+    |> string::join(_, gap)
+  // `format_row(_, placed)` is a function capture, a function that
+  // takes a summary and formats it with these columns (D-202).
+  let row_line = format_row(_, placed)
+  [heading_line, rule, ..list::map(summaries, row_line), rule, row_line(footer)]
+}
+
+/// The columns of the table, from left to right.
+priv fn columns() -> List<Column> {
+  [
+    Column { heading: "Region", side: Left, text: fn(summary: Summary) { summary.region } },
+    Column { heading: "Orders", side: Right, text: fn(summary: Summary) { "{summary.orders}" } },
+    Column { heading: "Units", side: Right, text: fn(summary: Summary) { "{summary.units}" } },
+    Column { heading: "Revenue", side: Right, text: fn(summary: Summary) { format_cents(summary.revenue) } },
+  ]
+}
+
+/// Returns the width of `column`: the length of its widest text in
+/// `rows`, or of its heading if that is wider.
+priv fn width_of(column: Column, rows: List<Summary>) -> Int {
+  // A field that holds a function is read into a name first, then
+  // called, so the call does not look like a method call. Cheby has no
+  // methods: `column.text` is just the function stored in the field.
+  let text = column.text
+  list::fold(rows, string::length(column.heading), fn(widest, summary) {
+    let length = string::length(text(summary))
+    case {
+      length > widest => length
+      _ => widest
+    }
+  })
+}
+
+/// Formats the line of `summary`, with each column padded to its width.
+priv fn format_row(summary: Summary, placed: List<(Column, Int)>) -> String {
+  placed
+  |> list::map(_, fn((column, width)) {
+    let text = column.text
+    pad(text(summary), column.side, width)
+  })
+  |> string::join(_, gap)
+}
+
+/// Pads `text` with spaces to `width`, on the side away from `side`.
+priv fn pad(text: String, side: Side, width: Int) -> String {
+  case side {
+    Right => string::pad_start(text, width, " ")
+    // The spaces after the text are the empty string padded to the
+    // width that is left over.
+    Left => text + string::pad_start("", width - string::length(text), " ")
+  }
+}
+
+/// Formats a number of cents that is not negative as units and two
+/// digits of cents, such as `1536.12` or `0.05`.
+fn format_cents(cents: Int) -> String {
+  // Interpolation takes only names, not expressions, so the parts are
+  // bound to names first.
+  let units = cents / 100
+  let rest = cents % 100
+  let padded = string::pad_start("{rest}", 2, "0")
+  "{units}.{padded}"
+}
+
+/// Makes `SalesError` satisfy `Show`, so an error can be interpolated
+/// as a message.
+fn show(error: SalesError) -> String {
+  let expected = string::join(header, ",")
+  let wanted = list::length(header)
+  case error {
+    MissingHeader => "the file is empty, expected the header {expected}"
+    BadHeader(line, fields) => {
+      let found = string::join(fields, ",")
+      "line {line}: expected the header {expected}, found {found}"
+    }
+    WrongFieldCount(line, count) => "line {line}: expected {wanted} fields, found {count}"
+    MissingRegion(line) => "line {line}: the region is empty"
+    BadQuantity(line, text) => "line {line}: the quantity must be a whole number of at least 1, got \"{text}\""
+    BadPrice(line, text) => "line {line}: the unit price must look like 12.50, got \"{text}\""
+  }
+}
+
+test "a record becomes a sale, with the price in cents" {
+  let record = csv::Record { line: 2, fields: ["2024-03-01", "South", "Cable, 2 m", "10", "4.5"] }
+  assert to_sale(record) == Ok(Sale {
+    date: "2024-03-01",
+    region: "South",
+    product: "Cable, 2 m",
+    quantity: 10,
+    unit_price: 450,
+  })
+}
+
+test "a record with a bad field is an error with its line number" {
+  fn on_line_7(fields) {
+    to_sale(csv::Record { line: 7, fields })
+  }
+  assert on_line_7(["2024-03-07", "South", "Mouse", "four", "19.99"]) == Err(BadQuantity(7, "four"))
+  assert on_line_7(["2024-03-07", "South", "Mouse", "0", "19.99"]) == Err(BadQuantity(7, "0"))
+  assert on_line_7(["2024-03-07", "South", "Mouse", "4", "19,99"]) == Err(BadPrice(7, "19,99"))
+  assert on_line_7(["2024-03-07", "", "Mouse", "4", "19.99"]) == Err(MissingRegion(7))
+  assert on_line_7(["2024-03-07", "South", "Mouse", "4"]) == Err(WrongFieldCount(7, 4))
+}
+
+test "the first bad field of a line is the one reported" {
+  let record = csv::Record { line: 3, fields: ["2024-03-07", "South", "Mouse", "-1", "free"] }
+  assert to_sale(record) == Err(BadQuantity(3, "-1"))
+}
+
+test "prices are read to the cent" {
+  assert parse_price("12.50", 1) == Ok(1_250)
+  assert parse_price("12.5", 1) == Ok(1_250)
+  assert parse_price("189", 1) == Ok(18_900)
+  assert parse_price("0.99", 1) == Ok(99)
+  assert parse_price("0", 1) == Ok(0)
+}
+
+test "prices with a sign, a third digit of cents or no units are errors" {
+  assert parse_price("-1.50", 5) == Err(BadPrice(5, "-1.50"))
+  assert parse_price("+3", 5) == Err(BadPrice(5, "+3"))
+  assert parse_price("12.345", 5) == Err(BadPrice(5, "12.345"))
+  assert parse_price("12.", 5) == Err(BadPrice(5, "12."))
+  assert parse_price(".5", 5) == Err(BadPrice(5, ".5"))
+  assert parse_price("1.2.3", 5) == Err(BadPrice(5, "1.2.3"))
+  assert parse_price("", 5) == Err(BadPrice(5, ""))
+  assert parse_price("99999999999999999999", 5) == Err(BadPrice(5, "99999999999999999999"))
+}
+
+test "the header must come first, exactly as expected" {
+  assert read_sales([]) == Err(MissingHeader)
+  let wrong = csv::Record { line: 1, fields: ["date", "region", "item", "quantity", "unit_price"] }
+  assert read_sales([wrong]) == Err(BadHeader(1, ["date", "region", "item", "quantity", "unit_price"]))
+  let right = csv::Record { line: 1, fields: header }
+  assert read_sales([right]) == Ok([])
+}
+
+test "reading stops at the first line with an error" {
+  let records = [
+    csv::Record { line: 1, fields: header },
+    csv::Record { line: 2, fields: ["2024-03-01", "North", "Pen", "3", "1.50"] },
+    csv::Record { line: 3, fields: ["2024-03-01", "North", "Pen", "3", "1.5O"] },
+    csv::Record { line: 4, fields: ["2024-03-01", "North", "Pen", "three", "1.50"] },
+  ]
+  assert read_sales(records) == Err(BadPrice(3, "1.5O"))
+}
+
+test "sales are summed up by region, highest revenue first" {
+  fn sold(region, quantity, unit_price) {
+    Sale { date: "2024-03-01", region, product: "Pen", quantity, unit_price }
+  }
+  let sales = [sold("North", 3, 150), sold("South", 1, 1_200), sold("North", 2, 225)]
+  assert summarize(sales) == [
+    Summary { region: "South", orders: 1, units: 1, revenue: 1_200 },
+    Summary { region: "North", orders: 2, units: 5, revenue: 900 },
+  ]
+  assert summarize([]) == []
+}
+
+test "regions with the same revenue go alphabetically" {
+  let east = Summary { region: "East", orders: 1, units: 1, revenue: 500 }
+  let west = Summary { region: "West", orders: 3, units: 9, revenue: 500 }
+  let north = Summary { region: "North", orders: 1, units: 1, revenue: 700 }
+  assert by_revenue(east, west) == Less
+  assert by_revenue(west, east) == Greater
+  assert by_revenue(east, north) == Greater
+  assert list::sort([west, east, north], by_revenue) == [north, east, west]
+}
+
+test "the total adds up every column" {
+  let summaries = [
+    Summary { region: "South", orders: 1, units: 1, revenue: 1_200 },
+    Summary { region: "North", orders: 2, units: 5, revenue: 900 },
+  ]
+  assert total(summaries) == Summary { region: "Total", orders: 3, units: 6, revenue: 2_100 }
+  assert total([]) == Summary { region: "Total", orders: 0, units: 0, revenue: 0 }
+}
+
+test "cents format as units and two digits" {
+  assert format_cents(153_612) == "1536.12"
+  assert format_cents(900) == "9.00"
+  assert format_cents(5) == "0.05"
+  assert format_cents(0) == "0.00"
+}
+
+test "the table lines up its columns" {
+  let summaries = [
+    Summary { region: "South", orders: 1, units: 1, revenue: 1_200 },
+    Summary { region: "North", orders: 2, units: 5, revenue: 900 },
+  ]
+  assert format_table(summaries) == [
+    "Region  Orders  Units  Revenue",
+    "------  ------  -----  -------",
+    "South        1      1    12.00",
+    "North        2      5     9.00",
+    "------  ------  -----  -------",
+    "Total        3      6    21.00",
+  ]
+}
+
+test "a column grows to fit its widest text" {
+  let summaries = [Summary { region: "Northeast", orders: 120, units: 4_500, revenue: 12_345_678 }]
+  assert format_table(summaries) == [
+    "Region     Orders  Units    Revenue",
+    "---------  ------  -----  ---------",
+    "Northeast     120   4500  123456.78",
+    "---------  ------  -----  ---------",
+    "Total         120   4500  123456.78",
+  ]
+}
+
+test "a table without sales still has its total" {
+  assert format_table([]) == [
+    "Region  Orders  Units  Revenue",
+    "------  ------  -----  -------",
+    "------  ------  -----  -------",
+    "Total        0      0     0.00",
+  ]
+}
+
+test "sales errors show as messages with their line" {
+  let expected = "date,region,product,quantity,unit_price"
+  assert show(MissingHeader) == "the file is empty, expected the header " + expected
+  let found = ["day", "region"]
+  assert show(BadHeader(1, found)) == "line 1: expected the header " + expected + ", found day,region"
+  assert show(WrongFieldCount(4, 6)) == "line 4: expected 5 fields, found 6"
+  assert show(BadPrice(3, "1.5O")) == "line 3: the unit price must look like 12.50, got \"1.5O\""
+}

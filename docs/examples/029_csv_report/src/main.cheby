@@ -1,0 +1,162 @@
+//! Prints a sales report from a CSV file.
+//!
+//! Reads the file named by the only command-line argument. The file has
+//! the header `date,region,product,quantity,unit_price` and then one
+//! sale per line. The program groups the sales by region and prints,
+//! for each region, how many orders it had, how many units it sold and
+//! its revenue, with a total at the bottom. The region with the highest
+//! revenue comes first. `cheby run -- sales.csv`, with the `sales.csv`
+//! next to `cheby.toml`, prints:
+//!
+//! ```text
+//! Region  Orders  Units  Revenue
+//! ------  ------  -----  -------
+//! South        3     16   502.96
+//! North        4     12   375.77
+//! East         4      9   350.49
+//! West         3      4   306.90
+//! ------  ------  -----  -------
+//! Total       14     41  1536.12
+//! ```
+//!
+//! The work is split in two steps, each with its own module and its own
+//! error type. `csv` turns the text into records of fields and knows
+//! nothing about sales. `sales` checks the records, turns them into
+//! sales, adds them up and formats the table.
+//!
+//! With no argument or with more than one, if the file cannot be read,
+//! or if it is not valid CSV or not a valid sales file, `main` returns
+//! an error, which the runtime prints to standard error with `show`
+//! before exiting with status 1. The message names the file and the
+//! line, as in `sales.csv: line 5: the unit price must look like 12.50,
+//! got "3.405"`. The first error stops the program, and nothing is
+//! printed to standard output.
+
+import std::env
+import std::io
+import std::list
+import std::result
+import std::string
+import csv_report::csv
+import csv_report::sales
+
+fn main() -> Result<Nil, AppError> {
+  use path <- result::try(parse_args(env::args()))
+  use text <- result::try(result::map_error(io::read_file(path), ReadFailed(path, _)))
+  // The whole report is built before anything is printed, so a bad
+  // line near the end of the file does not leave half a table behind.
+  use lines <- result::try(report(path, text))
+  list::each(lines, io::println)
+  Ok(Nil)
+}
+
+/// Extracts the single file name from the arguments, which do not
+/// include the program name.
+fn parse_args(args: List<String>) -> Result<String, AppError> {
+  case args {
+    [] => Err(MissingPath)
+    [path] => Ok(path)
+    _ => Err(TooManyArguments(list::length(args)))
+  }
+}
+
+/// Returns the lines of the report for `text`, the contents of the file
+/// at `path`.
+fn report(path: String, text: String) -> Result<List<String>, AppError> {
+  // `result::try` never converts errors, so `result::map_error` first
+  // wraps each module's error in an `AppError`, together with the file
+  // name. `InvalidCsv(path, _)` is a function capture: a function that
+  // takes the error and builds an `InvalidCsv` with it.
+  use records <- result::try(result::map_error(csv::parse(text), InvalidCsv(path, _)))
+  use sold <- result::try(result::map_error(sales::read_sales(records), InvalidSales(path, _)))
+  // `summarize` and `format_table` take one argument each, so they are
+  // piped bare (D-244).
+  let table =
+    sold
+    |> sales::summarize
+    |> sales::format_table
+  Ok(table)
+}
+
+type AppError {
+  MissingPath,
+  TooManyArguments(Int),
+  ReadFailed(String, io::Error),
+  /// The file, and why it is not valid CSV.
+  InvalidCsv(String, csv::CsvError),
+  /// The file, and why its records are not valid sales.
+  InvalidSales(String, sales::SalesError),
+}
+
+/// Makes `AppError` satisfy `Show`, so an error from `main` prints as
+/// readable text instead of debug output.
+fn show(error: AppError) -> String {
+  // `csv::CsvError` and `sales::SalesError` satisfy `Show`, so
+  // `{reason}` uses the `show` declared next to each of them. The
+  // bindings are not called `csv` or `sales`, because those are the
+  // names of imported modules, and a binding cannot reuse them (D-062).
+  case error {
+    MissingPath => "usage: csv_report FILE"
+    TooManyArguments(count) => "expected one file name, got {count} arguments"
+    ReadFailed(path, reason) => "cannot read {path}: {reason:?}"
+    InvalidCsv(path, reason) => "{path}: {reason}"
+    InvalidSales(path, reason) => "{path}: {reason}"
+  }
+}
+
+test "parse_args takes exactly one file name" {
+  assert parse_args(["sales.csv"]) == Ok("sales.csv")
+  assert parse_args([]) == Err(MissingPath)
+  assert parse_args(["a.csv", "b.csv"]) == Err(TooManyArguments(2))
+}
+
+test "the report of the sample file is the table in the module docs" {
+  // The lines of `sales.csv`, joined as the file holds them, with a
+  // line break at the end. Raw strings keep the quotes as they are.
+  let lines = [
+    "date,region,product,quantity,unit_price",
+    "2024-03-01,North,Keyboard,2,49.90",
+    r#"2024-03-01,South,"Cable, 2 m",10,4.50"#,
+    "2024-03-02,East,Monitor,1,189.00",
+    "2024-03-02,North,Mouse,3,19.99",
+    r#"2024-03-03,West,"Desk lamp ""Arc""",2,34.00"#,
+    "2024-03-04,South,Monitor,2,189.00",
+    r#"2024-03-04,East,"Cable, 2 m",5,4.5"#,
+    "2024-03-05,North,Monitor,1,189",
+    "2024-03-06,West,Keyboard,1,49.90",
+    "2024-03-07,South,Mouse,4,19.99",
+    "2024-03-08,East,Webcam,2,59.50",
+    r#"2024-03-08,North,"Cable, 2 m",6,4.50"#,
+    "2024-03-09,West,Monitor,1,189.00",
+    "2024-03-10,East,Mouse,1,19.99",
+  ]
+  let text = string::join(lines, "\n") + "\n"
+  assert report("sales.csv", text) == Ok([
+    "Region  Orders  Units  Revenue",
+    "------  ------  -----  -------",
+    "South        3     16   502.96",
+    "North        4     12   375.77",
+    "East         4      9   350.49",
+    "West         3      4   306.90",
+    "------  ------  -----  -------",
+    "Total       14     41  1536.12",
+  ])
+}
+
+test "the report fails with the step and the line that went wrong" {
+  let header = "date,region,product,quantity,unit_price"
+  let unterminated = header + "\n2024-03-01,North,\"Pen,3,1.50\n"
+  let csv_reason = csv::CsvError { line: 2, column: 18, problem: csv::UnterminatedQuote }
+  assert report("s.csv", unterminated) == Err(InvalidCsv("s.csv", csv_reason))
+  let bad_price = header + "\n2024-03-01,North,Pen,3,1.50\n2024-03-02,South,Ink,1,3,40\n"
+  assert report("s.csv", bad_price) == Err(InvalidSales("s.csv", sales::WrongFieldCount(3, 6)))
+}
+
+test "errors show as messages for the user" {
+  assert show(MissingPath) == "usage: csv_report FILE"
+  assert show(TooManyArguments(3)) == "expected one file name, got 3 arguments"
+  let csv_reason = csv::CsvError { line: 4, column: 3, problem: csv::UnterminatedQuote }
+  assert show(InvalidCsv("s.csv", csv_reason)) == "s.csv: line 4, column 3: the quoted field that starts here has no closing quote"
+  let sales_reason = sales::BadPrice(5, "3.405")
+  assert show(InvalidSales("s.csv", sales_reason)) == "s.csv: line 5: the unit price must look like 12.50, got \"3.405\""
+}

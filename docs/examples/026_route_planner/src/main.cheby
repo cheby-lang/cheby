@@ -1,0 +1,269 @@
+//! Finds the shortest routes between cities in the Netherlands with
+//! Dijkstra's algorithm, and prints them:
+//!
+//! ```text
+//! Amsterdam -> Utrecht -> Arnhem: 109 km
+//! The Hague -> Rotterdam -> Utrecht -> Arnhem -> Nijmegen: 165 km
+//! Rotterdam -> Eindhoven: 110 km
+//! Amsterdam -> Utrecht -> Eindhoven: 137 km
+//! Amsterdam -> Groningen: no route
+//! ```
+//!
+//! The search keeps the routes still to try in a `heap::Heap`, so the
+//! shortest one is always taken next. The heap is generic, and all it
+//! needs from its items is that they satisfy `Compare`. Its items here
+//! are tuples, which satisfy `Compare` by a built-in rule (D-167).
+//!
+//! The road map is in `graph.cheby`, and the heap in `heap.cheby`.
+//! Each module is imported twice, as in `014_word_count`: once for the
+//! module, used as `heap::push`, and once for the type, so signatures
+//! can say `Graph`.
+
+import std::io
+import std::list
+import std::map
+import std::map::{Map}
+import std::set
+import std::string
+import route_planner::graph
+import route_planner::graph::{Graph}
+import route_planner::heap
+import route_planner::heap::{Heap}
+
+/// The roads of the map, with their lengths in km.
+///
+/// The road from Amsterdam to Arnhem is a slow one, longer than going
+/// through Utrecht. The map leaves out the roads to the north, so
+/// Groningen and Leeuwarden can be reached only from each other.
+const roads: List<(String, String, Int)> = [
+  ("Amsterdam", "Utrecht", 45),
+  ("Amsterdam", "The Hague", 60),
+  ("The Hague", "Rotterdam", 25),
+  ("Rotterdam", "Utrecht", 57),
+  ("Utrecht", "Arnhem", 64),
+  ("Utrecht", "Eindhoven", 92),
+  ("Rotterdam", "Eindhoven", 110),
+  ("Arnhem", "Nijmegen", 19),
+  ("Eindhoven", "Nijmegen", 75),
+  ("Amsterdam", "Arnhem", 120),
+  ("Groningen", "Leeuwarden", 60),
+]
+
+/// The road map. It is a constant, so the compiler builds the `Map`
+/// once (D-090). Its order is still random on every run (D-196), and
+/// nothing here depends on it.
+const netherlands: Graph = graph::from_roads(roads)
+
+/// The trips `main` plans, each from a city to a city.
+const trips: List<(String, String)> = [
+  ("Amsterdam", "Arnhem"),
+  ("The Hague", "Nijmegen"),
+  ("Rotterdam", "Eindhoven"),
+  ("Amsterdam", "Eindhoven"),
+  ("Amsterdam", "Groningen"),
+]
+
+/// A route: the cities on it, from the start to the end, and its total
+/// length in km.
+type Route { cities: List<String>, km: Int }
+
+/// A route still to try, as the heap holds it: the length so far in
+/// km, the city it reaches and the city just before that one.
+///
+/// Tuples compare item by item (D-136), so the heap hands out the
+/// shortest entry first. Entries of the same length come out in the
+/// alphabetical order of their cities, and then of the cities before
+/// them. The order of the entries is therefore fixed by their contents
+/// alone, so ties are always decided the same way, whatever order the
+/// roads were given in.
+type Entry = (Int, String, String)
+
+fn main() {
+  list::each(trips, fn((from, to)) {
+    io::println(describe(netherlands, from, to))
+  })
+}
+
+/// Returns a line that shows the shortest route from `from` to `to`, or
+/// says that there is none.
+fn describe(network: Graph, from: String, to: String) -> String {
+  case shortest_route(network, from, to) {
+    Some(route) => "{route}"
+    None => "{from} -> {to}: no route"
+  }
+}
+
+/// Returns the shortest route from `from` to `to` on `network`, or
+/// `None` if either city is not on the map or no roads connect them.
+///
+/// When several routes are equally short, the one whose last step comes
+/// from the city first in alphabetical order wins. Every road is longer
+/// than 0 km, so all the routes of that length to `to` are in the heap
+/// by the time the first of them comes out, and `Entry` orders them by
+/// that city.
+fn shortest_route(network: Graph, from: String, to: String) -> Option<Route> {
+  // The parameter is called `network`, because `graph` is the name of
+  // an imported module, and a binding cannot reuse it (D-062).
+  case graph::has_city(network, from) && graph::has_city(network, to) {
+    False => None
+    True => search(network, from, to)
+  }
+}
+
+/// Runs Dijkstra's algorithm from `from` until it reaches `to`.
+///
+/// `visited` holds the cities whose shortest distance is known, and
+/// `previous` the city just before each of them on its shortest route.
+/// Each step pops the shortest entry from the heap. If its city is
+/// visited already, a shorter route got there first, and the entry is
+/// dropped. Otherwise the entry is the shortest route to that city,
+/// because roads are never negative, so every other route to it is at
+/// least as long. If that city is `to`, the search is over. The city's legs then add new entries, one for each
+/// neighbour not yet visited.
+///
+/// A city can be in the heap several times, once for each road found
+/// to it. Dropping the longer entries later is simpler than updating
+/// an entry in place, which a persistent heap cannot do anyway.
+priv fn search(network: Graph, from: String, to: String) -> Option<Route> {
+  // Each recursive call is in tail position, so the search takes
+  // constant stack space however many cities it visits (ADR-0006).
+  fn step(
+    waiting: Heap<Entry>,
+    visited: set::Set<String>,
+    previous: Map<String, String>,
+  ) -> Option<Route> {
+    case heap::pop(waiting) {
+      None => None
+      Some(((km, city, via), rest)) => case {
+        set::contains(visited, city) => step(rest, visited, previous)
+        city == to => {
+          let cities = path_to(map::insert(previous, city, via), from, to)
+          Some(Route { cities, km })
+        }
+        _ => {
+          let next =
+            graph::legs(network, city)
+            |> list::fold(_, rest, fn(found, (neighbour, length)) {
+              case set::contains(visited, neighbour) {
+                True => found
+                False => heap::push(found, (km + length, neighbour, city))
+              }
+            })
+          step(next, set::insert(visited, city), map::insert(previous, city, via))
+        }
+      }
+    }
+  }
+  // The start is its own previous city, which is where `path_to`
+  // stops.
+  step(heap::push(heap::new(), (0, from, from)), set::from_list([]), map::new())
+}
+
+/// Returns the cities on the route from `from` to `to`, by following
+/// `previous` back from `to`.
+priv fn path_to(previous: Map<String, String>, from: String, to: String) -> List<String> {
+  // The route is found backwards, so each city goes in front of the
+  // ones found before it. The recursive call is a tail call.
+  fn walk(city, path) {
+    case city == from {
+      True => [city, ..path]
+      False => {
+        let assert Some(before) = map::get(previous, city) as "{city} was reached from nowhere"
+        walk(before, [city, ..path])
+      }
+    }
+  }
+  walk(to, [])
+}
+
+/// Makes `Route` satisfy `Show`, so a route can be interpolated as
+/// `{route}`. It shows as its cities with arrows between them, then its
+/// length.
+fn show(route: Route) -> String {
+  let stops = string::join(route.cities, " -> ")
+  "{stops}: {route.km} km"
+}
+
+test "main prints the shortest route of each trip" {
+  let lines = list::map(trips, fn((from, to)) { describe(netherlands, from, to) })
+  assert lines == [
+    "Amsterdam -> Utrecht -> Arnhem: 109 km",
+    "The Hague -> Rotterdam -> Utrecht -> Arnhem -> Nijmegen: 165 km",
+    "Rotterdam -> Eindhoven: 110 km",
+    "Amsterdam -> Utrecht -> Eindhoven: 137 km",
+    "Amsterdam -> Groningen: no route",
+  ]
+}
+
+test "the shortest route can pass through several cities" {
+  // Through Amsterdam it would be 60 + 45 + 64 + 19 = 188 km, and
+  // through Eindhoven 25 + 110 + 75 = 210 km.
+  assert shortest_route(netherlands, "The Hague", "Nijmegen") == Some(Route {
+    cities: ["The Hague", "Rotterdam", "Utrecht", "Arnhem", "Nijmegen"],
+    km: 25 + 57 + 64 + 19,
+  })
+}
+
+test "a detour wins over a longer direct road" {
+  // The direct road is 120 km, and through Utrecht it is 45 + 64.
+  assert shortest_route(netherlands, "Amsterdam", "Arnhem") == Some(Route {
+    cities: ["Amsterdam", "Utrecht", "Arnhem"],
+    km: 109,
+  })
+  // Roads go both ways, so the way back is as long.
+  assert shortest_route(netherlands, "Arnhem", "Amsterdam") == Some(Route {
+    cities: ["Arnhem", "Utrecht", "Amsterdam"],
+    km: 109,
+  })
+}
+
+test "a direct road wins over a longer detour" {
+  // Through Utrecht it would be 57 + 92 = 149 km.
+  assert shortest_route(netherlands, "Rotterdam", "Eindhoven") == Some(Route {
+    cities: ["Rotterdam", "Eindhoven"],
+    km: 110,
+  })
+}
+
+test "the route from a city to itself is that city, and 0 km" {
+  let assert Some(stay) = shortest_route(netherlands, "Utrecht", "Utrecht")
+  assert stay == Route { cities: ["Utrecht"], km: 0 }
+  assert show(stay) == "Utrecht: 0 km"
+}
+
+test "cities without roads between them have no route" {
+  assert shortest_route(netherlands, "Amsterdam", "Groningen") == None
+  assert shortest_route(netherlands, "Leeuwarden", "Nijmegen") == None
+  // Within the north, there is a road.
+  assert shortest_route(netherlands, "Groningen", "Leeuwarden") == Some(Route {
+    cities: ["Groningen", "Leeuwarden"],
+    km: 60,
+  })
+}
+
+test "a city that is not on the map has no route, not even to itself" {
+  assert shortest_route(netherlands, "Maastricht", "Utrecht") == None
+  assert shortest_route(netherlands, "Utrecht", "Maastricht") == None
+  assert shortest_route(netherlands, "Maastricht", "Maastricht") == None
+  assert describe(netherlands, "Utrecht", "Maastricht") == "Utrecht -> Maastricht: no route"
+}
+
+test "ties go to the city first in alphabetical order" {
+  // From Leiden to Gouda is 17 + 18 = 35 km through Alphen aan den
+  // Rijn, and 20 + 15 = 35 km through Zoetermeer. Both entries for
+  // Gouda are (35, "Gouda", ...), so the city before Gouda decides,
+  // and "Alphen aan den Rijn" comes before "Zoetermeer". The order of
+  // the roads does not matter.
+  let west = [
+    ("Leiden", "Alphen aan den Rijn", 17),
+    ("Alphen aan den Rijn", "Gouda", 18),
+    ("Leiden", "Zoetermeer", 20),
+    ("Zoetermeer", "Gouda", 15),
+  ]
+  let through_alphen = Some(Route {
+    cities: ["Leiden", "Alphen aan den Rijn", "Gouda"],
+    km: 35,
+  })
+  assert shortest_route(graph::from_roads(west), "Leiden", "Gouda") == through_alphen
+  assert shortest_route(graph::from_roads(list::reverse(west)), "Leiden", "Gouda") == through_alphen
+}

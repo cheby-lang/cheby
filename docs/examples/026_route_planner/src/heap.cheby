@@ -1,0 +1,305 @@
+//! A persistent min-heap, also called a priority queue: items go in in
+//! any order, and `pop` always takes out the smallest one.
+//!
+//! It is a leftist heap, a binary tree with two invariants:
+//!
+//! 1. **Heap order.** No item is smaller than the item of the node
+//!    above it, so the smallest item is at the root.
+//! 2. **Leftist shape.** Every node stores its rank, the number of
+//!    nodes on its right spine, the path that always goes right. The
+//!    rank of the left child is never smaller than the rank of the
+//!    right child.
+//!
+//! The second invariant keeps the right spine short. A node of rank `r`
+//! has at least `2^r - 1` nodes below and including it, so a heap of
+//! `n` items has a right spine of at most `log2(n + 1)` nodes. The left
+//! spine can be as long as the heap, and that is allowed.
+//!
+//! Everything is built on `merge`, which walks down the right spines of
+//! two heaps only, so it takes O(log n) time. `push` merges a heap of
+//! one item, and `pop` merges the two children of the root.
+//!
+//! Values are immutable, so `push` and `pop` return a new heap and the
+//! old one stays usable. The two share every node off the merged path.
+//!
+//! Only the functions that compare items have the bound `T: Compare`.
+//! `new`, `peek`, `is_empty` and `length` never compare, so they work
+//! for any `T`. Naming `Compare` in a bound is what needs the import
+//! from `std::ops` (D-169).
+
+import std::list
+import std::ops::{Compare}
+
+/// A min-heap of items of type `T`.
+///
+/// `Heap` is `pub` but not `exposed`, so it is opaque to other
+/// packages (ADR-0016, D-048). They can name the type and call the
+/// `pub` functions below, but they cannot build a `Node` by hand, so
+/// they cannot make a heap with a wrong rank or with a big item above
+/// a small one. Either would make `pop` return items out of order.
+///
+/// Type declarations have no bounds (§4.3), so `Heap<T>` exists for
+/// every `T`. The bounds are on the functions instead.
+pub type Heap<T> {
+  /// The heap with no items.
+  Empty,
+  /// An item with two smaller heaps below it.
+  Node {
+    /// The number of nodes on the right spine, this one included.
+    rank: Int,
+    /// The smallest item of this heap.
+    item: T,
+    /// The child whose rank is at least the rank of `right`.
+    left: Heap<T>,
+    right: Heap<T>,
+  },
+}
+
+/// Returns an empty heap.
+///
+/// Nothing in the arguments fixes `T`, so a caller whose context does
+/// not fix it either names it with a turbofish, `heap::new::<Int>()`
+/// (D-049).
+pub fn new<T>() -> Heap<T> {
+  Empty
+}
+
+/// Returns a heap holding `items`.
+pub fn from_list<T: Compare>(items: List<T>) -> Heap<T> {
+  // `push` is generic. Passed as a value, it is instantiated for this
+  // `T`, and the bound of `from_list` supplies the `Compare` that
+  // `push` needs. Pushing one item at a time takes O(n log n) time.
+  // Merging the items pairwise would take O(n), but the lists here are
+  // short.
+  list::fold(items, new(), push)
+}
+
+/// Returns `heap` with `item` added.
+pub fn push<T: Compare>(heap: Heap<T>, item: T) -> Heap<T> {
+  merge(heap, Node { rank: 1, item, left: Empty, right: Empty })
+}
+
+/// Returns the smallest item of `heap` without removing it, or `None`
+/// if `heap` is empty. By heap order, it is the item at the root.
+pub fn peek<T>(heap: Heap<T>) -> Option<T> {
+  case heap {
+    Empty => None
+    Node { item, .. } => Some(item)
+  }
+}
+
+/// Removes the smallest item of `heap`. Returns that item and the rest
+/// of the heap, or `None` if `heap` is empty. If several items are
+/// equally small, any one of them may come first.
+pub fn pop<T: Compare>(heap: Heap<T>) -> Option<(T, Heap<T>)> {
+  case heap {
+    Empty => None
+    Node { item, left, right, .. } => Some((item, merge(left, right)))
+  }
+}
+
+/// Tells whether `heap` holds no items.
+pub fn is_empty<T>(heap: Heap<T>) -> Bool {
+  case heap {
+    Empty => True
+    Node { .. } => False
+  }
+}
+
+/// Returns the number of items in `heap`. The heap does not store it,
+/// so this visits every node.
+pub fn length<T>(heap: Heap<T>) -> Int {
+  // The obvious `1 + length(left) + length(right)` is not a tail call,
+  // and the left spine can be as long as the heap, so a big heap could
+  // overflow the stack. `count` keeps the subtrees still to visit in a
+  // list instead, and its recursive calls are tail calls (ADR-0006).
+  fn count(waiting, counted) {
+    case waiting {
+      [] => counted
+      [Empty, ..rest] => count(rest, counted)
+      [Node { left, right, .. }, ..rest] => count([left, right, ..rest], counted + 1)
+    }
+  }
+  count([heap], 0)
+}
+
+/// Returns the items of `heap`, smallest first.
+pub fn to_sorted_list<T: Compare>(heap: Heap<T>) -> List<T> {
+  // Each step pops the smallest item and appends it, which is cheap on
+  // a `List` (D-039). The recursive call is a tail call.
+  fn drain(rest, sorted) {
+    case pop(rest) {
+      None => sorted
+      Some((smallest, others)) => drain(others, [..sorted, smallest])
+    }
+  }
+  drain(heap, [])
+}
+
+/// Returns a heap holding the items of both `a` and `b`.
+///
+/// The root with the smaller item becomes the new root. Its left child
+/// stays, and its right child is merged with the other heap. `make`
+/// then swaps the children if needed, to keep the larger rank on the
+/// left.
+///
+/// The recursive call on the right child is not a tail call, because
+/// `make` still has work to do when it returns. That is fine here. Each
+/// such call moves one node down the right spine of `a` or of `b`, so
+/// at most `rank(a) + rank(b)` calls wait at once. By the leftist
+/// shape, that is at most `2 * log2(n + 1)`, about 40 for a million
+/// items, so the stack stays small. The other recursive call, which
+/// swaps `a` and `b`, is a tail call and does not grow the stack at
+/// all (D-015).
+pub fn merge<T: Compare>(a: Heap<T>, b: Heap<T>) -> Heap<T> {
+  case a, b {
+    Empty, _ => b
+    _, Empty => a
+    Node { item: a_item, left: a_left, right: a_right, .. }, Node { item: b_item, .. } => {
+      // `T` is a type parameter, so its module cannot be named. Its
+      // `compare` is called through the interface, and the bound
+      // supplies it (D-173). `a_item > b_item` would make the same
+      // call (§5.4.4).
+      case Compare::compare(a_item, b_item) {
+        Greater => merge(b, a)
+        Less | Equal => make(a_item, a_left, merge(a_right, b))
+      }
+    }
+  }
+}
+
+/// Returns the rank of `heap`: 0 if it is empty, and otherwise the
+/// number of nodes on its right spine.
+priv fn rank_of<T>(heap: Heap<T>) -> Int {
+  case heap {
+    Empty => 0
+    Node { rank, .. } => rank
+  }
+}
+
+/// Builds a node holding `item` above the heaps `first` and `second`,
+/// with the higher-ranked one on the left. The right spine of the node
+/// is the node itself followed by the right spine of its right child,
+/// so its rank is one more than that child's.
+///
+/// `priv`, so the rest of the package builds heaps only through the
+/// functions above. The caller must make sure that `item` is not
+/// larger than any item of `first` and `second`.
+priv fn make<T>(item: T, first: Heap<T>, second: Heap<T>) -> Heap<T> {
+  let first_rank = rank_of(first)
+  let second_rank = rank_of(second)
+  case {
+    first_rank >= second_rank => Node { rank: second_rank + 1, item, left: first, right: second }
+    _ => Node { rank: first_rank + 1, item, left: second, right: first }
+  }
+}
+
+test "items come out smallest first" {
+  assert to_sorted_list(from_list([5, 1, 4, 2, 3])) == [1, 2, 3, 4, 5]
+  assert to_sorted_list(from_list(["pear", "apple", "fig"])) == ["apple", "fig", "pear"]
+}
+
+test "equal items all come out" {
+  let repeated = from_list([3, 1, 3, 2, 1])
+  assert length(repeated) == 5
+  assert to_sorted_list(repeated) == [1, 1, 2, 3, 3]
+}
+
+test "tuples are ordered by their first item, then their second" {
+  // Tuples have no module, so they satisfy `Compare` by a built-in
+  // rule when their items do, and compare lexicographically (D-136,
+  // D-167).
+  let entries = from_list([(2, "b"), (1, "z"), (2, "a")])
+  assert to_sorted_list(entries) == [(1, "z"), (2, "a"), (2, "b")]
+}
+
+test "an empty heap has nothing to peek at or pop" {
+  // Nothing else fixes the item type, so the turbofish names it.
+  let nothing = new::<Int>()
+  assert peek(nothing) == None
+  assert pop(nothing) == None
+  assert is_empty(nothing)
+  assert length(nothing) == 0
+  assert to_sorted_list(nothing) == []
+}
+
+test "peek and pop agree on the smallest item" {
+  let numbers = from_list([7, 4, 9])
+  let assert Some((smallest, rest)) = pop(numbers)
+  assert peek(numbers) == Some(4)
+  assert smallest == 4
+  assert to_sorted_list(rest) == [7, 9]
+  assert !is_empty(rest)
+}
+
+test "pushing and popping leave the original heap unchanged" {
+  let original = from_list([2, 1])
+  let pushed = push(original, 0)
+  let assert Some((_, popped)) = pop(original)
+  assert to_sorted_list(original) == [1, 2]
+  assert to_sorted_list(pushed) == [0, 1, 2]
+  assert to_sorted_list(popped) == [2]
+}
+
+test "merge combines two heaps" {
+  let merged = merge(from_list([1, 4, 6]), from_list([5, 2, 3]))
+  assert to_sorted_list(merged) == [1, 2, 3, 4, 5, 6]
+  assert to_sorted_list(merge(new(), from_list([8]))) == [8]
+}
+
+test "every heap keeps both invariants" {
+  // Tells whether `item` is not larger than the root of `child`.
+  fn not_above(item: Int, child: Heap<Int>) {
+    case child {
+      Empty => True
+      Node { item: below, .. } => item <= below
+    }
+  }
+  // Checks every node, with a list of subtrees still to visit, as in
+  // `length`. The last operand of `&&` is in tail position (D-120), so
+  // the recursive call is a tail call.
+  fn holds(waiting: List<Heap<Int>>) {
+    case waiting {
+      [] => True
+      [Empty, ..rest] => holds(rest)
+      [Node { rank, item, left, right }, ..rest] => rank == rank_of(right) + 1
+        && rank_of(left) >= rank_of(right)
+        && not_above(item, left)
+        && not_above(item, right)
+        && holds([left, right, ..rest])
+    }
+  }
+  let built = from_list([5, 3, 8, 1, 9, 2, 7, 6, 4])
+  let assert Some((_, once)) = pop(built)
+  let assert Some((_, twice)) = pop(once)
+  let refilled = once |> push(_, 0) |> push(_, 10) |> push(_, 3)
+  assert holds([built, once, twice, refilled])
+  // A hand-built heap with the larger item on top breaks heap order.
+  // Only this package can build one, because `Heap` is not `exposed`.
+  let broken = Node { rank: 1, item: 2, left: push(new(), 1), right: Empty }
+  assert !holds([broken])
+}
+
+test "the left spine can be long while the right spine stays short" {
+  // Pushes 100_000, then 99_999, and so on down to 1. Each new item is
+  // the smallest so far, so it becomes the root with the old heap as
+  // its only child, on the left.
+  fn build(next, built) {
+    case next {
+      0 => built
+      _ => build(next - 1, push(built, next))
+    }
+  }
+  fn left_depth(current, depth) {
+    case current {
+      Empty => depth
+      Node { left, .. } => left_depth(left, depth + 1)
+    }
+  }
+  let chain = build(100_000, new())
+  assert rank_of(chain) == 1
+  assert left_depth(chain, 0) == 100_000
+  // `length` does not recurse down the left spine, so it copes.
+  assert length(chain) == 100_000
+  assert list::take(to_sorted_list(chain), 3) == [1, 2, 3]
+}

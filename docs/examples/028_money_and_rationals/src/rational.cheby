@@ -1,0 +1,264 @@
+//! Exact fractions of whole numbers.
+//!
+//! A `Rational` is a numerator over a denominator, both `Int`s, so
+//! `1/3` is exactly one third and `1/10 + 2/10` is exactly `3/10`. A
+//! `Float` cannot hold either: in binary floating point `0.1 + 0.2` is
+//! `0.30000000000000004`.
+//!
+//! The important part of this module is one invariant:
+//!
+//! **A fraction is kept in lowest terms, with a positive denominator.**
+//!
+//! `==` is built-in structural equality, and no module can override it
+//! (D-047). It compares the fields, so without the invariant `2/4` and
+//! `1/2` would not be `==`, although they are the same number. Every
+//! number has exactly one fraction in lowest terms with a positive
+//! denominator, so with the invariant, `==` on fractions means "the same
+//! number". Every function that builds a `Rational` goes through
+//! `normalize`, which restores it.
+//!
+//! The module declares `add`, `sub`, `mul`, `div`, `neg` and `compare`
+//! with the signatures of the operator interfaces of `std::ops`, so
+//! `a + b`, `a / b`, `-a` and `a < b` work on fractions (§8.7, D-118).
+//! Like `Int` arithmetic, they panic if a numerator or denominator
+//! overflows (D-025), and division by zero panics (D-069).
+
+import std::fiber
+import std::int
+
+/// A fraction `numerator/denominator`.
+///
+/// `Rational` is `pub` but not `exposed`, so other packages cannot
+/// build one with braces (ADR-0016, D-048). They could otherwise write
+/// `Rational { numerator: 2, denominator: 4 }`, which breaks the
+/// invariant and with it `==`. They use `new`, `from_int` and the
+/// operators instead. The other modules of this package could still use
+/// the braces (D-151), and they keep to the functions too.
+pub type Rational {
+  /// Carries the sign of the fraction.
+  numerator: Int,
+  /// Always at least 1, and shares no factor with `numerator`.
+  denominator: Int,
+}
+
+/// The number 0, as `0/1`.
+pub const zero: Rational = Rational { numerator: 0, denominator: 1 }
+
+/// One half, used by `round`.
+priv const half: Rational = Rational { numerator: 1, denominator: 2 }
+
+/// Returns the fraction `numerator/denominator` in lowest terms, or
+/// `None` if `denominator` is 0, which makes no number.
+pub fn new(numerator: Int, denominator: Int) -> Option<Rational> {
+  case denominator {
+    0 => None
+    _ => Some(normalize(numerator, denominator))
+  }
+}
+
+/// Returns the whole number `value` as a fraction.
+pub fn from_int(value: Int) -> Rational {
+  Rational { numerator: value, denominator: 1 }
+}
+
+/// Returns `percent` percent as a fraction, so 15 gives `3/20`. Unlike
+/// `new`, it cannot fail, because the denominator is always 100.
+pub fn from_percent(percent: Int) -> Rational {
+  normalize(percent, 100)
+}
+
+/// Makes `Rational` satisfy `Add`, so `a + b` calls this function.
+pub fn add(a: Rational, b: Rational) -> Rational {
+  // Inside this function the fields are plain `Int`s, so these
+  // operators are the built-in ones.
+  normalize(a.numerator * b.denominator + b.numerator * a.denominator, a.denominator * b.denominator)
+}
+
+/// Makes `Rational` satisfy `Sub`, so `a - b` calls this function.
+pub fn sub(a: Rational, b: Rational) -> Rational {
+  normalize(a.numerator * b.denominator - b.numerator * a.denominator, a.denominator * b.denominator)
+}
+
+/// Makes `Rational` satisfy `Mul`, so `a * b` calls this function.
+pub fn mul(a: Rational, b: Rational) -> Rational {
+  normalize(a.numerator * b.numerator, a.denominator * b.denominator)
+}
+
+/// Makes `Rational` satisfy `Div`, so `a / b` calls this function.
+///
+/// `Div` requires `fn div(Self, Self) -> Self`, so dividing by zero
+/// cannot return an `Option`. It panics instead, as `Int` division
+/// does (D-069). A caller that may divide by zero checks first.
+pub fn div(a: Rational, b: Rational) -> Rational {
+  case b.numerator {
+    0 => panic as "cannot divide {a} by zero"
+    // `normalize` moves a negative sign from `b` to the numerator.
+    _ => normalize(a.numerator * b.denominator, a.denominator * b.numerator)
+  }
+}
+
+/// Makes `Rational` satisfy `Neg`, so `-a` calls this function. A
+/// fraction in lowest terms stays in lowest terms with its sign
+/// flipped, so it needs no `normalize`.
+pub fn neg(value: Rational) -> Rational {
+  Rational { numerator: -value.numerator, denominator: value.denominator }
+}
+
+/// Makes `Rational` satisfy `Compare`, so `a < b`, `a >= b` and the
+/// other comparisons work on fractions (§5.4.4).
+///
+/// `a/b < c/d` is the same as `a * d < c * b` when both denominators
+/// are positive, which the invariant promises, so no division is
+/// needed. Thanks to the invariant, `compare` returns `Equal` exactly
+/// when the fractions are `==`, which §8.7 asks of every `compare`.
+pub fn compare(a: Rational, b: Rational) -> Order {
+  int::compare(a.numerator * b.denominator, b.numerator * a.denominator)
+}
+
+/// Returns the largest whole number that is not more than `value`, so
+/// `7/2` gives 3 and `-7/2` gives -4.
+pub fn floor(value: Rational) -> Int {
+  // `/` on `Int` truncates toward zero (D-069), which rounds a negative
+  // fraction up, and then `%` is negative, because it takes the sign of
+  // the numerator (D-092). The denominator is positive, so that is the
+  // only case to correct.
+  let quotient = value.numerator / value.denominator
+  case {
+    value.numerator % value.denominator < 0 => quotient - 1
+    _ => quotient
+  }
+}
+
+/// Returns the whole number nearest to `value`. A value exactly halfway
+/// between two whole numbers rounds up, so `5/2` gives 3 and `-5/2`
+/// gives -2.
+pub fn round(value: Rational) -> Int {
+  // `value + half` calls `add` above, because `+` is resolved through
+  // the module of the operands' type.
+  floor(value + half)
+}
+
+/// Makes `Rational` satisfy `Show`, so a fraction can be interpolated
+/// as `{value}`. It shows as `3/4` or `-1/2`, and a whole number shows
+/// without a denominator, as `2`.
+pub fn show(value: Rational) -> String {
+  case value.denominator {
+    1 => "{value.numerator}"
+    _ => "{value.numerator}/{value.denominator}"
+  }
+}
+
+/// Builds a fraction and restores the invariant: the sign moves to the
+/// numerator, and both parts are divided by their greatest common
+/// divisor. `denominator` must not be 0, which every caller makes sure
+/// of. `priv`, so the rest of the package reaches it only through the
+/// functions above.
+priv fn normalize(numerator: Int, denominator: Int) -> Rational {
+  let sign = case {
+    denominator < 0 => -1
+    _ => 1
+  }
+  // The denominator is not 0, so the divisor is at least 1. For a
+  // numerator of 0 it is the denominator itself, which makes `0/1`.
+  let divisor = gcd(abs(numerator), abs(denominator))
+  Rational { numerator: sign * numerator / divisor, denominator: sign * denominator / divisor }
+}
+
+/// Returns the greatest common divisor of `a` and `b`, which must not
+/// be negative, by Euclid's algorithm. The recursive call is a tail
+/// call, and the numbers shrink quickly, so it takes few steps and no
+/// stack.
+priv fn gcd(a: Int, b: Int) -> Int {
+  case b {
+    0 => a
+    _ => gcd(b, a % b)
+  }
+}
+
+/// Returns `value` without its sign.
+priv fn abs(value: Int) -> Int {
+  case {
+    value < 0 => -value
+    _ => value
+  }
+}
+
+/// Returns the fraction `numerator/denominator`, for the tests below,
+/// whose denominators are never 0.
+priv fn ratio(numerator: Int, denominator: Int) -> Rational {
+  let assert Some(value) = new(numerator, denominator) as "a test used a zero denominator"
+  value
+}
+
+test "equal fractions are == because they are kept in lowest terms" {
+  assert new(2, 4) == new(1, 2)
+  assert new(-6, -8) == new(3, 4)
+  assert new(0, 7) == Some(zero)
+  assert from_percent(50) == ratio(1, 2)
+  assert from_percent(15) == ratio(3, 20)
+}
+
+test "the sign is kept in the numerator" {
+  assert new(1, -2) == new(-1, 2)
+  assert ratio(3, -4) == Rational { numerator: -3, denominator: 4 }
+}
+
+test "a zero denominator makes no fraction" {
+  assert new(1, 0) == None
+  assert new(0, 0) == None
+}
+
+test "a fraction built by hand can break ==" {
+  // Possible only inside this package. Other packages cannot write
+  // this, because `Rational` is not `exposed`.
+  let unreduced = Rational { numerator: 2, denominator: 4 }
+  assert unreduced != ratio(1, 2)
+  // `compare` still finds the same number, so `==` and `compare`
+  // disagree, which is the bug the invariant rules out.
+  assert compare(unreduced, ratio(1, 2)) == Equal
+}
+
+test "arithmetic is exact" {
+  assert ratio(1, 2) + ratio(1, 3) == ratio(5, 6)
+  assert ratio(1, 2) - ratio(3, 4) == ratio(-1, 4)
+  assert ratio(2, 3) * ratio(3, 4) == ratio(1, 2)
+  assert ratio(1, 2) / ratio(1, 4) == from_int(2)
+  assert ratio(1, 3) / ratio(-2, 3) == ratio(-1, 2)
+  assert -ratio(3, 5) == ratio(-3, 5)
+  // Unlike 0.1 + 0.2 in floating point.
+  assert ratio(1, 10) + ratio(2, 10) == ratio(3, 10)
+}
+
+test "dividing by zero panics, as it does for Int" {
+  // A panic ends only the fiber it happens in, and a scope turns it
+  // into an `Err`, so a test can check that it happens.
+  let outcome = {
+    use _scope <- fiber::scope()
+    from_int(1) / zero
+  }
+  let assert Err(_) = outcome
+}
+
+test "fractions compare by their value" {
+  assert ratio(1, 3) < ratio(1, 2)
+  assert ratio(-1, 2) < zero
+  assert ratio(2, 4) >= ratio(1, 2)
+  assert ratio(7, 3) > from_int(2)
+}
+
+test "floor rounds down and round goes to the nearest whole number" {
+  assert floor(ratio(7, 2)) == 3
+  assert floor(ratio(-7, 2)) == -4
+  assert floor(from_int(-4)) == -4
+  assert round(ratio(5, 2)) == 3
+  assert round(ratio(7, 3)) == 2
+  assert round(ratio(-5, 2)) == -2
+  assert round(ratio(16_813, 2)) == 8_407
+}
+
+test "fractions show in lowest terms, and whole numbers alone" {
+  assert show(ratio(3, 4)) == "3/4"
+  assert show(ratio(6, -8)) == "-3/4"
+  assert show(from_int(2)) == "2"
+  assert show(zero) == "0"
+}

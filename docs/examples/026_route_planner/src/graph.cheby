@@ -1,0 +1,99 @@
+//! A road map: cities and the roads between them.
+//!
+//! The map is a `Map` from each city to its legs. A leg is where a road
+//! leads and how long it is, in kilometres. Roads go both ways, so each
+//! road is stored twice, as a leg from each end. A city is on the map
+//! only if some road starts or ends there.
+//!
+//! A `Map` has no order, and its iteration order changes from run to
+//! run (D-093). Nothing here iterates over the map. Cities are only
+//! looked up by name, and the legs of a city are a `List`, kept in the
+//! order the roads were given. So a search over the map sees the same
+//! legs in the same order on every run.
+
+import std::list
+import std::map
+import std::map::{Map}
+
+/// A road between two cities, and its length in km. The order of the
+/// two cities does not matter.
+type Road = (String, String, Int)
+
+/// The city at the other end of a road, and the length of the road in
+/// km.
+type Leg = (String, Int)
+
+/// For each city, the legs that leave it.
+type Graph = Map<String, List<Leg>>
+
+/// Builds a road map from `roads`. Panics if a road is not longer than
+/// 0 km. The search in `main` is only right without negative roads, and
+/// it decides ties the way it says only without roads of 0 km.
+fn from_roads(roads: List<Road>) -> Graph {
+  // A closure parameter can be a tuple pattern, so each road is taken
+  // apart as it arrives (D-242).
+  list::fold(roads, map::new(), fn(built, (from, to, km)) {
+    assert km > 0 as "the road from {from} to {to} must be longer than 0 km"
+    built
+    |> add_leg(_, from, (to, km))
+    |> add_leg(_, to, (from, km))
+  })
+}
+
+/// Adds `leg` after the legs that `city` already has in `built`.
+priv fn add_leg(built: Graph, city: String, leg: Leg) -> Graph {
+  map::upsert(built, city, fn(known) {
+    case known {
+      Some(earlier) => [..earlier, leg]
+      None => [leg]
+    }
+  })
+}
+
+/// Tells whether `city` is on the map.
+fn has_city(network: Graph, city: String) -> Bool {
+  case map::get(network, city) {
+    Some(_) => True
+    None => False
+  }
+}
+
+/// Returns the legs that leave `city`, in the order the roads were
+/// given, or no legs if `city` is not on the map.
+fn legs(network: Graph, city: String) -> List<Leg> {
+  case map::get(network, city) {
+    Some(found) => found
+    None => []
+  }
+}
+
+test "every road can be taken both ways" {
+  let network = from_roads([("Breda", "Tilburg", 24)])
+  assert legs(network, "Breda") == [("Tilburg", 24)]
+  assert legs(network, "Tilburg") == [("Breda", 24)]
+}
+
+test "a city keeps its legs in the order the roads were given" {
+  let network = from_roads([
+    ("Zwolle", "Deventer", 38),
+    ("Apeldoorn", "Zwolle", 44),
+    ("Zwolle", "Assen", 74),
+  ])
+  assert legs(network, "Zwolle") == [("Deventer", 38), ("Apeldoorn", 44), ("Assen", 74)]
+  // `map::to_sorted_list` lists the cities by name, so the result does
+  // not depend on the order of the `Map`.
+  assert map::to_sorted_list(network) == [
+    ("Apeldoorn", [("Zwolle", 44)]),
+    ("Assen", [("Zwolle", 74)]),
+    ("Deventer", [("Zwolle", 38)]),
+    ("Zwolle", [("Deventer", 38), ("Apeldoorn", 44), ("Assen", 74)]),
+  ]
+}
+
+test "a city without roads is not on the map" {
+  let network = from_roads([("Breda", "Tilburg", 24)])
+  assert has_city(network, "Breda")
+  assert !has_city(network, "Eindhoven")
+  assert legs(network, "Eindhoven") == []
+  assert !has_city(from_roads([]), "Breda")
+}

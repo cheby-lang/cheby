@@ -1,0 +1,212 @@
+//! A small CSV reader, close to RFC 4180.
+//!
+//! Each line of the text is a record, and commas separate its fields.
+//! A field may be put in double quotes. A quoted field may hold commas,
+//! and two quotes in a row, `""`, stand for one quote in its text. A
+//! field without quotes, a bare field, must not hold a quote at all.
+//! Spaces belong to the field they are in, so ` "a"` is a bare field
+//! with a stray quote in it, which is an error.
+//!
+//! RFC 4180 allows line breaks inside quoted fields. This reader does
+//! not: it splits the text into lines first, and a quote still open at
+//! the end of its line is an error. That also catches the most common
+//! mistake, a forgotten closing quote, on the line where it happens
+//! instead of somewhere further down the file. Lines may end with CRLF
+//! as well as LF. Blank lines are skipped, so a line break at the end of
+//! the file does not make an empty record.
+//!
+//! Every record keeps its line number, counted from 1, and every error
+//! has a line and a column, so the caller can point at the mistake.
+//! Reading stops at the first error.
+//!
+//! Patterns cannot match the start of a string (D-113), so a line is
+//! read as a list of code points, and list patterns look at the first
+//! one or two of them.
+
+import std::result
+import std::string
+
+/// The fields of one line, and the number of that line.
+type Record { line: Int, fields: List<String> }
+
+/// Why a text is not valid CSV, and where. Lines and columns are
+/// counted from 1, and columns in code points.
+type CsvError { line: Int, column: Int, problem: Problem }
+
+/// What is wrong with the line.
+type Problem {
+  /// A quoted field that is still open at the end of its line. The
+  /// column is that of the opening quote.
+  UnterminatedQuote,
+  /// This code point follows the closing quote of a field, where only
+  /// a comma or the end of the line may.
+  TextAfterQuote(String),
+  /// A quote in a bare field.
+  StrayQuote,
+}
+
+/// Where `parse_line` is in a line: what it has read of the current
+/// field so far.
+priv type Mode {
+  /// Nothing yet, the field has just started.
+  Start,
+  /// A bare field.
+  Bare,
+  /// A quoted field, whose opening quote is at this column.
+  Quoted(Int),
+  /// The whole of a quoted field, up to its closing quote.
+  Closed,
+}
+
+/// Reads `text` as CSV, with one record for every line that is not
+/// blank.
+fn parse(text: String) -> Result<List<Record>, CsvError> {
+  // `number` is the line number of the first line in `rest`.
+  fn step(rest, number, records) {
+    case rest {
+      [] => Ok(records)
+      // `|` inside a pattern means "or". A line with only the CR of a
+      // CRLF is blank too.
+      ["" | "\r", ..tail] => step(tail, number + 1, records)
+      [line, ..tail] => {
+        // `use` stops at the first line with an error and returns it.
+        // Otherwise the rest of the block runs with the fields. The
+        // call to `step` is the last thing the callback does, and
+        // `result::try` calls the callback in tail position, so a long
+        // file takes constant stack space.
+        use fields <- result::try(parse_line(line, number))
+        step(tail, number + 1, [..records, Record { line: number, fields }])
+      }
+    }
+  }
+  step(string::split(text, "\n"), 1, [])
+}
+
+/// Splits one line into its fields. `number` is the line's number, for
+/// errors.
+fn parse_line(line: String, number: Int) -> Result<List<String>, CsvError> {
+  // `rest` holds the code points not read yet, and `column` is the
+  // column of the first of them. `current` is the text of the field
+  // being read, and `fields` the fields finished before it. A local
+  // function can only call itself (D-110), so the four kinds of place
+  // in a field are a `Mode` argument instead of four functions.
+  fn step(mode, rest, column, current, fields) {
+    case mode, rest {
+      // Inside quotes, a comma is text, and the field ends only at a
+      // single quote. Two quotes in a row are one quote of the text,
+      // which a pattern of two elements tells apart from the end.
+      Quoted(opened), [] | ["\r"] => {
+        Err(CsvError { line: number, column: opened, problem: UnterminatedQuote })
+      }
+      Quoted(_), ["\"", "\"", ..tail] => step(mode, tail, column + 2, current + "\"", fields)
+      Quoted(_), ["\"", ..tail] => step(Closed, tail, column + 1, current, fields)
+      Quoted(_), [first, ..tail] => step(mode, tail, column + 1, current + first, fields)
+      // Outside quotes, the end of the line ends the last field, and a
+      // comma ends the current one and starts the next.
+      _, [] | ["\r"] => Ok([..fields, current])
+      _, [",", ..tail] => step(Start, tail, column + 1, "", [..fields, current])
+      Start, ["\"", ..tail] => step(Quoted(column), tail, column + 1, "", fields)
+      Closed, [first, ..] => {
+        Err(CsvError { line: number, column, problem: TextAfterQuote(first) })
+      }
+      Bare, ["\"", ..] => Err(CsvError { line: number, column, problem: StrayQuote })
+      _, [first, ..tail] => step(Bare, tail, column + 1, current + first, fields)
+    }
+  }
+  step(Start, string::to_code_points(line), 1, "", [])
+}
+
+/// Makes `CsvError` satisfy `Show`, so an error can be interpolated as
+/// a message.
+fn show(error: CsvError) -> String {
+  let message = describe(error.problem)
+  "line {error.line}, column {error.column}: {message}"
+}
+
+/// Returns the message for `problem`. A module has one `show` (D-045),
+/// and here it is for `CsvError`, so this one has another name.
+priv fn describe(problem: Problem) -> String {
+  case problem {
+    UnterminatedQuote => "the quoted field that starts here has no closing quote"
+    // `:?` prints the code point in quotes, with escapes.
+    TextAfterQuote(found) => "expected a comma after the closing quote, found {found:?}"
+    StrayQuote => "a field with a quote in it must be quoted, with the quote doubled"
+  }
+}
+
+test "commas separate fields" {
+  assert parse_line("2024-03-01,North,Keyboard,2,49.90", 1) == Ok([
+    "2024-03-01",
+    "North",
+    "Keyboard",
+    "2",
+    "49.90",
+  ])
+  assert parse_line("solo", 1) == Ok(["solo"])
+}
+
+test "fields may be empty, at the start, in the middle and at the end" {
+  assert parse_line("a,,c,", 1) == Ok(["a", "", "c", ""])
+  assert parse_line(",", 1) == Ok(["", ""])
+  assert parse_line(r#""""#, 1) == Ok([""])
+}
+
+test "spaces belong to the field" {
+  assert parse_line(" a , b ", 1) == Ok([" a ", " b "])
+}
+
+test "a quoted field may hold commas" {
+  assert parse_line(r#"x,"Cable, 2 m",3"#, 1) == Ok(["x", "Cable, 2 m", "3"])
+}
+
+test "two quotes in a quoted field are one quote" {
+  // Raw strings keep the quotes as they are, which is easier to read
+  // than a `\"` for each one.
+  assert parse_line(r#""Desk lamp ""Arc""",2"#, 1) == Ok([r#"Desk lamp "Arc""#, "2"])
+  assert parse_line(r#""""""#, 1) == Ok(["\""])
+}
+
+test "a CR before the line break is not part of the last field" {
+  assert parse_line("a,b\r", 1) == Ok(["a", "b"])
+  assert parse_line("a,\"b\"\r", 1) == Ok(["a", "b"])
+}
+
+test "an unterminated quote is reported at the opening quote" {
+  assert parse_line(r#"a,"open"#, 4) == Err(CsvError { line: 4, column: 3, problem: UnterminatedQuote })
+  assert parse_line("\"open\r", 4) == Err(CsvError { line: 4, column: 1, problem: UnterminatedQuote })
+}
+
+test "only a comma may follow a closing quote" {
+  assert parse_line(r#""ab"c"#, 2) == Err(CsvError { line: 2, column: 5, problem: TextAfterQuote("c") })
+  assert parse_line(r#""ab" ,c"#, 2) == Err(CsvError { line: 2, column: 5, problem: TextAfterQuote(" ") })
+}
+
+test "a quote in a bare field is an error" {
+  assert parse_line(r#"ab"c"#, 3) == Err(CsvError { line: 3, column: 3, problem: StrayQuote })
+  assert parse_line(r#"a, "b""#, 3) == Err(CsvError { line: 3, column: 4, problem: StrayQuote })
+}
+
+test "records keep their line numbers, and blank lines are skipped" {
+  assert parse("a,b\n\nc,d\n") == Ok([
+    Record { line: 1, fields: ["a", "b"] },
+    Record { line: 3, fields: ["c", "d"] },
+  ])
+  assert parse("a,b\r\nc,d\r\n") == Ok([
+    Record { line: 1, fields: ["a", "b"] },
+    Record { line: 2, fields: ["c", "d"] },
+  ])
+  assert parse("") == Ok([])
+  assert parse("\n\n") == Ok([])
+}
+
+test "parsing stops at the first line with an error" {
+  let text = "a\nb,\"c\nd\"e\n"
+  assert parse(text) == Err(CsvError { line: 2, column: 3, problem: UnterminatedQuote })
+}
+
+test "csv errors show as messages with their place" {
+  let open = CsvError { line: 4, column: 3, problem: UnterminatedQuote }
+  assert show(open) == "line 4, column 3: the quoted field that starts here has no closing quote"
+  let after = CsvError { line: 2, column: 5, problem: TextAfterQuote("c") }
+  assert show(after) == "line 2, column 5: expected a comma after the closing quote, found \"c\""
+}

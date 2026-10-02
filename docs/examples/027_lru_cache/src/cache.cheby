@@ -1,0 +1,328 @@
+//! A size-limited cache that forgets the least recently used entry
+//! first.
+//!
+//! The usual LRU cache is built from mutable state: a hash map finds an
+//! entry, and a doubly linked list keeps the entries in order of use.
+//! Every lookup moves an entry to the front of the list, in place.
+//! Cheby has no mutable state at all (ADR-0007), so this cache is built
+//! from persistent values instead. Every `put` returns a new cache, and
+//! so does every `get` that finds its key, because a hit changes which
+//! entry is the least recently used. The old cache stays as it was, and
+//! the two share most of their structure. When the old one is no longer
+//! used, the update may even happen in place (ADR-0003).
+//!
+//! In place of the linked list, the cache keeps a clock. Each use of a
+//! key, by `put` or by a `get` that finds it, takes the next tick of
+//! the clock, so the least recently used key is the one with the
+//! smallest tick. Two maps hold the state: `entries` maps each key to
+//! its value and its tick, and `by_tick` maps each tick back to its
+//! key.
+//!
+//! A `Map` has no order (D-093), so it cannot be asked for its smallest
+//! key, and scanning all of it would make each eviction take time that
+//! grows with the size of the cache. The cache keeps a third number
+//! instead, `oldest`, which is never larger than a tick in use. Ticks
+//! only grow, so the smallest tick in use is found by counting up from
+//! `oldest` until `by_tick` has the tick, and after an eviction
+//! `oldest` moves past it. The ticks skipped belong to keys used again
+//! since, and each one is skipped once. So over many operations, an
+//! eviction takes constant time on average. As with the queue of
+//! `017_generic_containers`, the average holds only if each version of
+//! the cache is used once: evicting from the same old cache again and
+//! again repeats the same scan.
+//!
+//! The invariants, which every function keeps and the tests check:
+//!
+//! - `entries` and `by_tick` describe the same keys: a key has the tick
+//!   `t` in `entries` exactly when `by_tick` maps `t` to it.
+//! - No tick in use is smaller than `oldest` or as large as `clock`.
+//! - The cache holds at most `capacity` entries, and `capacity` is at
+//!   least 1.
+//!
+//! The key type needs no bound. A `Map` compares keys with the built-in
+//! structural `==` and hashes them with the built-in hash, which every
+//! type has (D-033). They panic on functions and handles, though, so a
+//! cache keyed by functions type-checks but panics on its first use
+//! (D-233).
+
+import std::int
+import std::list
+import std::map
+import std::map::{Map}
+
+/// A cache from keys of type `K` to values of type `V`.
+///
+/// `Cache` is `pub` but not `exposed`, so it is opaque to other
+/// packages (ADR-0016, D-048). They cannot build a cache with braces or
+/// change its fields, so they cannot break the invariants, for example
+/// with a tick in `entries` that `by_tick` does not know. The other
+/// module of this package could, because the package is the only
+/// opacity boundary (D-151), but it keeps to the functions below.
+pub type Cache<K, V> {
+  /// The most entries the cache holds, at least 1.
+  capacity: Int,
+  /// The tick the next use of a key takes. It only grows.
+  clock: Int,
+  /// No tick in use is smaller than this.
+  oldest: Int,
+  /// Each key, with its value and the tick of its last use.
+  entries: Map<K, (V, Int)>,
+  /// Each tick in use, with the key that took it.
+  by_tick: Map<Int, K>,
+}
+
+/// Returns an empty cache that holds at most `capacity` entries.
+///
+/// Panics if `capacity` is less than 1. A cache that can hold nothing
+/// would forget every value as soon as it was put in, and asking for
+/// one is a mistake in the program, not a condition to handle at run
+/// time.
+///
+/// Nothing in the argument fixes `K` and `V`, so a caller whose context
+/// does not fix them names them with a turbofish,
+/// `cache::new::<String, Int>(2)` (D-049).
+pub fn new<K, V>(capacity: Int) -> Cache<K, V> {
+  case {
+    capacity < 1 => panic as "a cache must hold at least 1 entry, not {capacity}"
+    _ => Cache {
+      capacity,
+      clock: 0,
+      oldest: 0,
+      entries: map::new(),
+      by_tick: map::new(),
+    }
+  }
+}
+
+/// Looks `key` up in `cache`. Returns its value, or `None`, and the
+/// cache to use from now on.
+///
+/// A hit makes `key` the most recently used key, so it comes back with
+/// a new cache, and a caller that drops it forgets that use. A miss
+/// changes nothing, and comes back with `cache` itself.
+pub fn get<K, V>(cache: Cache<K, V>, key: K) -> (Option<V>, Cache<K, V>) {
+  case map::get(cache.entries, key) {
+    None => (None, cache)
+    Some((value, last_used)) => (Some(value), refresh(cache, key, value, last_used))
+  }
+}
+
+/// Returns the value of `key` in `cache`, or `None`, without counting
+/// it as a use. So it does not change which key is evicted next, and
+/// it needs no new cache.
+pub fn peek<K, V>(cache: Cache<K, V>, key: K) -> Option<V> {
+  case map::get(cache.entries, key) {
+    None => None
+    Some((value, _)) => Some(value)
+  }
+}
+
+/// Returns `cache` with `value` stored under `key`, which becomes the
+/// most recently used key. If `key` is new and the cache is full, the
+/// least recently used entry is evicted to make room.
+pub fn put<K, V>(cache: Cache<K, V>, key: K, value: V) -> Cache<K, V> {
+  let (_, updated) = put_with_eviction(cache, key, value)
+  updated
+}
+
+/// Like `put`, but also returns the key it evicted, or `None` if it
+/// evicted nothing. Replacing the value of a key already in the cache
+/// never evicts, because the number of entries stays the same.
+pub fn put_with_eviction<K, V>(cache: Cache<K, V>, key: K, value: V) -> (Option<K>, Cache<K, V>) {
+  case map::get(cache.entries, key) {
+    Some((_, last_used)) => (None, refresh(cache, key, value, last_used))
+    None => case {
+      size(cache) < cache.capacity => (None, stamp(cache, key, value))
+      _ => {
+        let (evicted, room) = evict(cache)
+        (Some(evicted), stamp(room, key, value))
+      }
+    }
+  }
+}
+
+/// Returns the number of entries in `cache`, never more than its
+/// capacity.
+pub fn size<K, V>(cache: Cache<K, V>) -> Int {
+  map::size(cache.entries)
+}
+
+/// Returns the keys of `cache`, most recently used first. The last key
+/// is the one `put` would evict next.
+///
+/// It sorts every tick, so it takes more than linear time. It is for
+/// showing the cache and for tests, not for the cache's own work.
+pub fn keys_by_recency<K, V>(cache: Cache<K, V>) -> List<K> {
+  // The larger tick is the more recent use, so the ticks are compared
+  // the other way round.
+  cache.by_tick
+  |> map::to_list
+  |> list::sort(_, fn((first, _), (second, _)) { int::compare(second, first) })
+  |> list::map(_, fn((_, key)) { key })
+}
+
+/// Stores `value` under `key` with the next tick as its last use.
+///
+/// If `key` is already in `cache`, its old tick must already be gone
+/// from `by_tick`, as `refresh` sees to. `map::insert` replaces the old
+/// entry in `entries`.
+priv fn stamp<K, V>(cache: Cache<K, V>, key: K, value: V) -> Cache<K, V> {
+  let tick = cache.clock
+  Cache {
+    ..cache,
+    clock: tick + 1,
+    entries: map::insert(cache.entries, key, (value, tick)),
+    by_tick: map::insert(cache.by_tick, tick, key),
+  }
+}
+
+/// Records a new use of `key`, which is in `cache` with the tick
+/// `last_used`, and stores `value` under it.
+///
+/// The old tick is dropped from `by_tick`, and `oldest` stays where it
+/// is. It may now point at a tick nobody uses, which `least_recent`
+/// skips later. That is cheaper than finding the new smallest tick
+/// now.
+priv fn refresh<K, V>(cache: Cache<K, V>, key: K, value: V, last_used: Int) -> Cache<K, V> {
+  stamp(Cache { ..cache, by_tick: map::remove(cache.by_tick, last_used) }, key, value)
+}
+
+/// Removes the least recently used entry from `cache`. Returns its key
+/// and the smaller cache. `cache` must not be empty.
+priv fn evict<K, V>(cache: Cache<K, V>) -> (K, Cache<K, V>) {
+  let (tick, key) = least_recent(cache.by_tick, cache.oldest)
+  // `tick` was the smallest tick in use, so every tick left is larger,
+  // and `oldest` can move past it.
+  let smaller = Cache {
+    ..cache,
+    oldest: tick + 1,
+    entries: map::remove(cache.entries, key),
+    by_tick: map::remove(cache.by_tick, tick),
+  }
+  (key, smaller)
+}
+
+/// Returns the smallest tick in `by_tick` that is not smaller than
+/// `from`, and its key.
+///
+/// It counts up one tick at a time. The recursive call is a tail call,
+/// so a long run of skipped ticks takes constant stack space. It stops
+/// only if such a tick exists, which the invariants promise whenever
+/// the cache is not empty and `from` is its `oldest`.
+priv fn least_recent<K>(by_tick: Map<Int, K>, from: Int) -> (Int, K) {
+  case map::get(by_tick, from) {
+    Some(key) => (from, key)
+    None => least_recent(by_tick, from + 1)
+  }
+}
+
+/// Tells whether `cache` keeps every invariant of the module
+/// documentation. Only the tests use it.
+priv fn invariants_hold<K, V>(cache: Cache<K, V>) -> Bool {
+  // Each key's tick leads back to the key, so distinct keys have
+  // distinct ticks. With equal sizes, `by_tick` then holds no other
+  // ticks.
+  let same_size = map::size(cache.entries) == map::size(cache.by_tick)
+  let consistent =
+    cache.entries
+    |> map::to_list
+    |> list::all(_, fn((key, (_, tick))) {
+      map::get(cache.by_tick, tick) == Some(key) && tick >= cache.oldest && tick < cache.clock
+    })
+  same_size && consistent && size(cache) <= cache.capacity && cache.capacity >= 1
+}
+
+test "a cache returns what was put in it" {
+  let filled = new(2) |> put(_, "a", 1) |> put(_, "b", 2)
+  assert peek(filled, "a") == Some(1)
+  assert peek(filled, "b") == Some(2)
+  assert peek(filled, "z") == None
+  assert size(filled) == 2
+}
+
+test "the least recently used key is evicted first" {
+  let full = new(2) |> put(_, "a", 1) |> put(_, "b", 2)
+  let (evicted, after) = put_with_eviction(full, "c", 3)
+  assert evicted == Some("a")
+  assert peek(after, "a") == None
+  assert keys_by_recency(after) == ["c", "b"]
+  assert size(after) == 2
+}
+
+test "a hit refreshes recency, so another key is evicted" {
+  let full = new(2) |> put(_, "a", 1) |> put(_, "b", 2)
+  let (found, refreshed) = get(full, "a")
+  assert found == Some(1)
+  assert keys_by_recency(refreshed) == ["a", "b"]
+  let (evicted, after) = put_with_eviction(refreshed, "c", 3)
+  assert evicted == Some("b")
+  assert keys_by_recency(after) == ["c", "a"]
+  // "a" took ticks 0 and 2 and "b" took 1. The scan skipped the stale
+  // tick 0, found "b" at 1, and left `oldest` just past it.
+  assert after.oldest == 2
+}
+
+test "peek does not refresh recency" {
+  let full = new(2) |> put(_, "a", 1) |> put(_, "b", 2)
+  assert peek(full, "a") == Some(1)
+  let (evicted, after) = put_with_eviction(full, "c", 3)
+  assert evicted == Some("a")
+  assert keys_by_recency(after) == ["c", "b"]
+}
+
+test "overwriting a key that is in the cache evicts nothing" {
+  let full = new(2) |> put(_, "a", 1) |> put(_, "b", 2)
+  let (evicted, after) = put_with_eviction(full, "a", 10)
+  assert evicted == None
+  assert size(after) == 2
+  assert peek(after, "a") == Some(10)
+  assert keys_by_recency(after) == ["a", "b"]
+}
+
+test "a cache of capacity 1 keeps only the last key used" {
+  let one = put(new(1), "a", 1)
+  let (evicted, after) = put_with_eviction(one, "b", 2)
+  assert evicted == Some("a")
+  assert keys_by_recency(after) == ["b"]
+  let (found, again) = get(after, "b")
+  assert found == Some(2)
+  // "b" is already in, so replacing its value makes no room.
+  let (none_evicted, replaced) = put_with_eviction(again, "b", 3)
+  assert none_evicted == None
+  assert peek(replaced, "b") == Some(3)
+}
+
+test "a miss returns the same cache" {
+  let filled = new(2) |> put(_, "a", 1)
+  let (found, same) = get(filled, "z")
+  assert found == None
+  assert same == filled
+}
+
+test "getting and putting leave the original cache unchanged" {
+  let original = new(2) |> put(_, "a", 1) |> put(_, "b", 2)
+  let (_, after_get) = get(original, "a")
+  let after_put = put(original, "c", 3)
+  assert keys_by_recency(after_get) == ["a", "b"]
+  assert keys_by_recency(after_put) == ["c", "b"]
+  // Both new caches were built from `original`, which still holds
+  // what it held, in the same order of use.
+  assert keys_by_recency(original) == ["b", "a"]
+  assert peek(original, "a") == Some(1)
+  assert peek(original, "c") == None
+}
+
+test "the invariants hold after every step" {
+  // Each key is looked up, and put in on a miss, as a real cache would
+  // be used.
+  let keys = ["a", "b", "a", "c", "b", "d", "d", "a", "e", "c", "a"]
+  let last = list::fold(keys, new::<String, Int>(3), fn(current, key) {
+    let next = case get(current, key) {
+      (Some(_), refreshed) => refreshed
+      (None, _) => put(current, key, 0)
+    }
+    assert invariants_hold(next)
+    next
+  })
+  assert keys_by_recency(last) == ["a", "c", "e"]
+}

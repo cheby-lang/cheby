@@ -1,0 +1,208 @@
+//! Serves a day's price requests through a small cache and prints what
+//! happened to each one:
+//!
+//! ```text
+//! apple: 1.20 (miss)
+//! bread: 2.50 (miss)
+//! cheese: 4.80 (miss)
+//! apple: 1.20 (hit)
+//! dates: 3.90 (miss, evicted bread)
+//! apple: 1.20 (hit)
+//! cheese: 4.80 (hit)
+//! 7 requests: 3 hits, 4 misses, 1 eviction
+//! cached, most recent first: cheese, apple, dates
+//! ```
+//!
+//! The cache holds 3 prices. When `dates` arrives it is full, and
+//! `bread` goes, although `apple` was put in first: the hit on `apple`
+//! made it more recent than `bread`.
+//!
+//! The cache is a value like any other, so it does not live anywhere.
+//! It is threaded through the requests by `list::fold`, together with
+//! the counts and the lines so far, and each request hands the next one
+//! the cache that `cache::get` or `cache::put_with_eviction` returned.
+
+import std::io
+import std::list
+import std::string
+import lru_cache::cache
+
+/// How many prices the cache holds.
+const cache_capacity: Int = 3
+
+/// The products asked for today, in order.
+const requests: List<String> = [
+  "apple",
+  "bread",
+  "cheese",
+  "apple",
+  "dates",
+  "apple",
+  "cheese",
+]
+
+fn main() {
+  serve(requests, cache_capacity) |> list::each(_, io::println)
+}
+
+/// What `serve` carries from one request to the next.
+type Session {
+  /// The price of each product, or `None` for one the shop does not
+  /// sell, in cents.
+  prices: cache::Cache<String, Option<Int>>,
+  hits: Int,
+  misses: Int,
+  evictions: Int,
+  /// One line per request served so far.
+  lines: List<String>,
+}
+
+/// Serves `products` in order through a cache of `capacity` prices.
+/// Returns a line per request, then a summary and the cached products.
+fn serve(products: List<String>, capacity: Int) -> List<String> {
+  // The type of `prices` fixes the cache's key and value types, so
+  // `cache::new` needs no turbofish.
+  let start = Session {
+    prices: cache::new(capacity),
+    hits: 0,
+    misses: 0,
+    evictions: 0,
+    lines: [],
+  }
+  let done = list::fold(products, start, handle)
+  let served = counted(list::length(products), "request", "requests")
+  let hits = counted(done.hits, "hit", "hits")
+  let misses = counted(done.misses, "miss", "misses")
+  let evictions = counted(done.evictions, "eviction", "evictions")
+  let recent = done.prices |> cache::keys_by_recency |> string::join(_, ", ")
+  [
+    ..done.lines,
+    "{served}: {hits}, {misses}, {evictions}",
+    "cached, most recent first: {recent}",
+  ]
+}
+
+/// Serves one request for the price of `product`.
+///
+/// A hit answers from the cache, which comes back refreshed. A miss
+/// does the slow lookup and puts the answer in the cache, which may
+/// evict another product.
+priv fn handle(session: Session, product: String) -> Session {
+  case cache::get(session.prices, product) {
+    (Some(price), refreshed) => {
+      let shown = show_price(price)
+      Session {
+        ..session,
+        prices: refreshed,
+        hits: session.hits + 1,
+        lines: [..session.lines, "{product}: {shown} (hit)"],
+      }
+    }
+    // The cache that came back with a miss is the same one, so it is
+    // not needed.
+    (None, _) => {
+      let price = fetch_price(product)
+      let shown = show_price(price)
+      let (evicted, stored) = cache::put_with_eviction(session.prices, product, price)
+      let (line, newly_evicted) = case evicted {
+        None => ("{product}: {shown} (miss)", 0)
+        Some(gone) => ("{product}: {shown} (miss, evicted {gone})", 1)
+      }
+      Session {
+        ..session,
+        prices: stored,
+        misses: session.misses + 1,
+        evictions: session.evictions + newly_evicted,
+        lines: [..session.lines, line],
+      }
+    }
+  }
+}
+
+/// Returns the price of `product` in cents, or `None` if the shop does
+/// not sell it.
+///
+/// It stands in for a slow lookup, such as a call to a price service,
+/// which is what the cache saves. A `None` is cached too, so asking
+/// again for a product the shop does not sell is a hit.
+fn fetch_price(product: String) -> Option<Int> {
+  case product {
+    "apple" => Some(120)
+    "bread" => Some(250)
+    "cheese" => Some(480)
+    "dates" => Some(390)
+    _ => None
+  }
+}
+
+/// Formats a price in cents as units and two digits of cents, such as
+/// `1.20`, or says that there is none.
+fn show_price(price: Option<Int>) -> String {
+  case price {
+    None => "not sold"
+    Some(cents) => {
+      let units = cents / 100
+      // An interpolation holds a name, not an expression, so the
+      // remainder gets a name first.
+      let remainder = cents % 100
+      let padded = string::pad_start("{remainder}", 2, "0")
+      "{units}.{padded}"
+    }
+  }
+}
+
+/// Returns `n` followed by the singular or plural form of a word.
+priv fn counted(n: Int, singular: String, plural: String) -> String {
+  case n {
+    1 => "1 {singular}"
+    _ => "{n} {plural}"
+  }
+}
+
+test "the day's requests are served as the module documentation shows" {
+  assert serve(requests, cache_capacity) == [
+    "apple: 1.20 (miss)",
+    "bread: 2.50 (miss)",
+    "cheese: 4.80 (miss)",
+    "apple: 1.20 (hit)",
+    "dates: 3.90 (miss, evicted bread)",
+    "apple: 1.20 (hit)",
+    "cheese: 4.80 (hit)",
+    "7 requests: 3 hits, 4 misses, 1 eviction",
+    "cached, most recent first: cheese, apple, dates",
+  ]
+}
+
+test "a product the shop does not sell is cached as well" {
+  assert serve(["eggs", "eggs"], 2) == [
+    "eggs: not sold (miss)",
+    "eggs: not sold (hit)",
+    "2 requests: 1 hit, 1 miss, 0 evictions",
+    "cached, most recent first: eggs",
+  ]
+}
+
+test "a cache of one price misses whenever the product changes" {
+  assert serve(["apple", "bread", "bread", "apple"], 1) == [
+    "apple: 1.20 (miss)",
+    "bread: 2.50 (miss, evicted apple)",
+    "bread: 2.50 (hit)",
+    "apple: 1.20 (miss, evicted bread)",
+    "4 requests: 1 hit, 3 misses, 2 evictions",
+    "cached, most recent first: apple",
+  ]
+}
+
+test "no requests leave an empty cache" {
+  assert serve([], 3) == [
+    "0 requests: 0 hits, 0 misses, 0 evictions",
+    "cached, most recent first: ",
+  ]
+}
+
+test "prices show units and two digits of cents" {
+  assert show_price(Some(120)) == "1.20"
+  assert show_price(Some(5)) == "0.05"
+  assert show_price(Some(1000)) == "10.00"
+  assert show_price(None) == "not sold"
+}
