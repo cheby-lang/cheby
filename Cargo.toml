@@ -1,0 +1,70 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "bench/gen", "tests/support", "xtask"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.99"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/cheby-lang/cheby"
+
+[workspace.dependencies]
+# Internal crates.
+cheby_codegen_clif = { path = "crates/cheby_codegen_clif" }
+cheby_consteval = { path = "crates/cheby_consteval" }
+cheby_diag = { path = "crates/cheby_diag" }
+cheby_doc = { path = "crates/cheby_doc" }
+cheby_driver = { path = "crates/cheby_driver" }
+cheby_fmt = { path = "crates/cheby_fmt" }
+cheby_iface = { path = "crates/cheby_iface" }
+cheby_jit = { path = "crates/cheby_jit" }
+cheby_js = { path = "crates/cheby_js" }
+cheby_link = { path = "crates/cheby_link" }
+cheby_lsp = { path = "crates/cheby_lsp" }
+cheby_mir = { path = "crates/cheby_mir" }
+cheby_package = { path = "crates/cheby_package" }
+cheby_pkg = { path = "crates/cheby_pkg" }
+cheby_repl = { path = "crates/cheby_repl" }
+cheby_resolve = { path = "crates/cheby_resolve" }
+cheby_runtime = { path = "crates/cheby_runtime" }
+cheby_syntax = { path = "crates/cheby_syntax" }
+cheby_types = { path = "crates/cheby_types" }
+
+# Test and bench support.
+cheby_bench_gen = { path = "bench/gen" }
+cheby_test_support = { path = "tests/support" }
+
+# External crates.
+clap = { version = "4.6", features = ["derive"] }
+libtest-mimic = "0.8"
+serde_json = "1"
+toml = "1.1"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+indexing_slicing = "deny"
+arithmetic_side_effects = "deny"
+unreachable = "deny"
+unimplemented = "deny"
+unchecked_time_subtraction = "deny"
+todo = "deny"
+string_slice = "deny"
+panic_in_result_fn = "deny"
+panic = "deny"
+exit = "deny"
+as_conversions = "deny"
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"

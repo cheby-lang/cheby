@@ -1,0 +1,8 @@
+// @mode: parse-fail
+// @decisions: D-078
+//! There are no block comments, so `/*` is a syntax error.
+
+/* a block comment */
+fn main() {
+  Nil
+}

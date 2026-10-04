@@ -57,7 +57,7 @@ M5 is listed as a milestone so it has exit criteria, but its work starts as soon
 
 ## Plan decisions
 
-Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-plan):
+Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-plan), and D-284 onward in [M0 foundation](../decisions/LOG.md#2026-10-04-m0-foundation):
 
 | Decision | Summary                                                                                             |
 | -------- | --------------------------------------------------------------------------------------------------- |
@@ -75,6 +75,16 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-281    | Per-target hash behind one routine: SipHash-1-3 on native, a keyed 32-bit hash on JS                |
 | D-282    | New permanent `cheby check`; `cheby build` errors for a target until its backend exists             |
 | D-283    | Before unwinding, a REPL panic abandons the entry on its own stack and the session continues        |
+| D-284    | All 20 crates exist from M0 as skeletons, plus `bench/gen`, `tests/support` and `xtask`             |
+| D-285    | License holder is "The Cheby Project Developers"                                                    |
+| D-286    | `cheby` parses arguments with clap derive; program arguments of `cheby run` follow `--`             |
+| D-287    | Harnesses live under `tests/` but build as test targets of `cheby_cli`                              |
+| D-288    | `tests/milestone`: earlier milestones must pass, the current one is pending, later ones must fail   |
+| D-289    | UI tests are single `.cheby` files with `// @key: value` headers and goldens beside them            |
+| D-290    | The tree-sitter cross-check uses the commit pinned in `tests/tree-sitter-cheby.rev`                 |
+| D-291    | `bench/gen` is a deterministic library crate; CI checks its output until M1                         |
+| D-292    | Repository scripts are `cargo xtask` commands written in Rust                                       |
+| D-293    | Clippy `pedantic`, `nursery` and the no-panic lints are denied workspace-wide                       |
 
 ## Open questions
 

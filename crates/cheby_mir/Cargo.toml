@@ -1,0 +1,15 @@
+[package]
+name = "cheby_mir"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+cheby_diag.workspace = true
+cheby_types.workspace = true
+
+[lints]
+workspace = true

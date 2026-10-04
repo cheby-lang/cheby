@@ -1,0 +1,15 @@
+[package]
+name = "cheby_jit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+cheby_codegen_clif.workspace = true
+cheby_runtime.workspace = true
+
+[lints]
+workspace = true

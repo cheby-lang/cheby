@@ -1,0 +1,10 @@
+// @mode: run-pass
+// @decisions: D-073
+//! The smallest program: `main` prints one line and the program exits
+//! with status 0.
+
+import std::io
+
+fn main() {
+  io::println("hello")
+}

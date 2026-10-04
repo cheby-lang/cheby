@@ -1,0 +1,5 @@
+# Pinned stable toolchain (D-277). Bump deliberately, in its own change.
+[toolchain]
+channel = "1.99.0"
+components = ["clippy", "rustfmt"]
+profile = "minimal"

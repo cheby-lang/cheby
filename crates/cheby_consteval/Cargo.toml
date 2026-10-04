@@ -1,0 +1,15 @@
+[package]
+name = "cheby_consteval"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+cheby_mir.workspace = true
+cheby_jit.workspace = true
+
+[lints]
+workspace = true

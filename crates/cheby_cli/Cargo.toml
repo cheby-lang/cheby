@@ -1,0 +1,40 @@
+[package]
+name = "cheby_cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "cheby"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+cheby_doc.workspace = true
+cheby_driver.workspace = true
+cheby_fmt.workspace = true
+cheby_lsp.workspace = true
+cheby_pkg.workspace = true
+cheby_repl.workspace = true
+
+[dev-dependencies]
+cheby_test_support.workspace = true
+libtest-mimic.workspace = true
+
+# The harnesses live under tests/ at the repository root (docs/plan/testing.md),
+# but are test targets of this crate so that `cargo test` builds `cheby` first.
+[[test]]
+name = "conformance"
+path = "../../tests/conformance/main.rs"
+harness = false
+
+[[test]]
+name = "ui"
+path = "../../tests/ui_harness/main.rs"
+harness = false
+
+[lints]
+workspace = true

@@ -1,0 +1,114 @@
+# CI for the reference implementation (D-277, docs/plan/m0-foundation.md).
+#
+# - `test`: build, clippy and every test, including the conformance and UI
+#   harnesses, on the full platform matrix of D-074.
+# - `fmt`: rustfmt, once, because formatting does not depend on the platform.
+# - `cross-check`: parses examples and UI tests with tree-sitter-cheby at the
+#   commit pinned in tests/tree-sitter-cheby.rev (D-272).
+# - `bench`: generates benchmark projects and reports, never enforces, the
+#   results (D-247). From M1 it also times the compiler.
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  test:
+    name: test (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-x86_64, os: ubuntu-24.04 }
+          - { name: linux-aarch64, os: ubuntu-24.04-arm }
+          - { name: macos-x86_64, os: macos-15-intel }
+          - { name: macos-aarch64, os: macos-15 }
+          - { name: windows-x86_64, os: windows-2025 }
+          - { name: windows-aarch64, os: windows-11-arm }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.0"
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --workspace --all-targets --locked
+      - run: cargo clippy --workspace --all-targets --locked
+      - run: cargo test --workspace --locked
+      - name: D-number coverage
+        run: cargo xtask coverage
+
+  fmt:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.0"
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  cross-check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.0"
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - run: npm install --global tree-sitter-cli@0.27.0
+      - name: Parse examples and UI tests with tree-sitter-cheby
+        run: cargo xtask cross-check --summary "$GITHUB_STEP_SUMMARY"
+
+  bench:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.0"
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - run: npm install --global tree-sitter-cli@0.27.0
+      - run: cargo build --release --package xtask
+      - name: Generate a 1M-line project twice
+        run: |
+          echo "### Benchmark projects" >> "$GITHUB_STEP_SUMMARY"
+          cargo xtask gen-bench --lines 1000000 --shape wide --seed 1 \
+            --out target/bench/a/wide --summary "$GITHUB_STEP_SUMMARY"
+          cargo xtask gen-bench --lines 1000000 --shape wide --seed 1 \
+            --out target/bench/b/nested/wide
+          diff -r target/bench/a/wide target/bench/b/nested/wide
+          echo "- deterministic: yes" >> "$GITHUB_STEP_SUMMARY"
+      - name: Determinism of every shape
+        run: cargo xtask check-determinism
+      - name: Generated code parses with tree-sitter-cheby
+        run: |
+          for shape in small large deep wide generic; do
+            cargo xtask gen-bench --lines 50000 --shape "$shape" --seed 1 \
+              --out "target/bench/sample/$shape" --summary "$GITHUB_STEP_SUMMARY"
+          done
+          cargo xtask cross-check --summary "$GITHUB_STEP_SUMMARY" \
+            --also target/bench/sample/small --also target/bench/sample/large \
+            --also target/bench/sample/deep --also target/bench/sample/wide \
+            --also target/bench/sample/generic
