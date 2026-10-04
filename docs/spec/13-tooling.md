@@ -7,6 +7,7 @@ Cheby ships as one `cheby` binary that contains the compiler, runtime, REPL, tes
 | Command                                    | Purpose                                                       | Decisions           |
 | ------------------------------------------ | ------------------------------------------------------------- | ------------------- |
 | `cheby new <name>`                         | create a package                                              | D-097               |
+| `cheby check`                              | type-check the package without producing artifacts            | D-282               |
 | `cheby build`                              | compile the package, for `native` (AOT) or `js`               | D-006, D-007        |
 | `cheby run [module_path]`                  | compile with the JIT and run a module's `main`                | D-007, D-019, D-137 |
 | `cheby repl`                               | interactive session ([§13.5](#135-repl))                      | D-008, D-043, D-098 |
@@ -17,6 +18,8 @@ Cheby ships as one `cheby` binary that contains the compiler, runtime, REPL, tes
 | `cheby add`, `cheby update`, `cheby fetch` | manage dependencies ([§13.4](#134-dependencies-and-lockfile)) | D-044, D-097        |
 
 `cheby build --target native` produces an executable. Object files from Cranelift are linked with the system linker in early versions (`cc` or `link.exe`), and with a linker bundled in the `cheby` binary before 1.0 (D-088). `cheby build --target js` produces a directory of ES modules (D-074).
+
+`cheby check` parses and type-checks the package, including `test` blocks and the cross-target checks of [§12.6](12-targets-and-ffi.md#126-target-specific-code), and reports diagnostics like `cheby build`. It writes no output files, but may use the build cache ([§13.12.4](#13124-build-cache-and-standard-library)) (D-282).
 
 `cheby run` runs the `main` of the module named by its module path argument, for example `cheby run my_app::tools::migrate`. Without an argument it runs the root module's `main` (D-137). `main` may have any visibility, including `priv` (D-163).
 
