@@ -68,7 +68,7 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-274    | Collection and string kernels in the runtime (Rust and JS), combinators in Cheby, migrate later     |
 | D-275    | Golden files next to each example, plus `tests/ui/` for diagnostics and focused features            |
 | D-276    | The stdlib spec is a parallel workstream, each tier written before the milestone that needs it      |
-| D-277    | Pinned stable Rust (1.98, edition 2024), GitHub Actions with the full D-074 matrix on every PR      |
+| D-277    | Pinned stable Rust (1.99, edition 2024), GitHub Actions with the full D-074 matrix on every PR      |
 | D-278    | Tagged integers: low bit 1 is a 63-bit integer, low bit 0 a pointer; larger `Int`s boxed            |
 | D-279    | 8-byte object header: 32-bit count (sign = shared), 8-bit scan count, 24-bit layout id              |
 | D-280    | Event-based parser feeding a flat, arena-allocated CST written for Cheby, not `rowan`               |
