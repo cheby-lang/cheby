@@ -98,7 +98,7 @@ fn show(error: AppError) -> String {
   case error {
     MissingPath => "usage: csv_report FILE"
     TooManyArguments(count) => "expected one file name, got {count} arguments"
-    ReadFailed(path, reason) => "cannot read {path}: {reason:?}"
+    ReadFailed(path, reason) => "cannot read {path}: {reason}"
     InvalidCsv(path, reason) => "{path}: {reason}"
     InvalidSales(path, reason) => "{path}: {reason}"
   }

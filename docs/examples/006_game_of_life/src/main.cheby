@@ -41,7 +41,7 @@ const glider: List<(Int, Int)> = [(1, 0), (2, 1), (0, 2), (1, 2), (2, 2)]
 const start: Grid = from_cells(glider)
 
 /// The coordinates along one side of the board, from 0 to `size - 1`.
-const positions: List<Int> = range(0, size)
+const positions: List<Int> = list::range(0, size)
 
 /// The offsets from a cell to its eight neighbours.
 const offsets: List<(Int, Int)> = [
@@ -139,17 +139,6 @@ fn wrap(n: Int) -> Int {
   (n % size + size) % size
 }
 
-/// Returns the numbers from `from` up to, but not including, `to`.
-priv fn range(from: Int, to: Int) -> List<Int> {
-  fn collect(n, found) {
-    case {
-      n >= to => found
-      _ => collect(n + 1, [..found, n])
-    }
-  }
-  collect(from, [])
-}
-
 /// Makes `Grid` satisfy `Show`, so a grid can be interpolated as
 /// `{grid}`. Rows are separated by newlines.
 fn show(grid: Grid) -> String {
@@ -223,9 +212,7 @@ test "a glider crosses the edges and comes back to where it started" {
   assert advance(start, 4 * size) == start
 }
 
-test "range counts up to its end" {
-  assert range(2, 5) == [2, 3, 4]
-  assert range(3, 3) == []
+test "positions count up to the size" {
   assert positions == [0, 1, 2, 3, 4, 5, 6, 7]
 }
 

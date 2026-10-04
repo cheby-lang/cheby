@@ -104,8 +104,8 @@ fn show(error: AppError) -> String {
     MaxNotANumber(text) => "MAX must be a whole number, got \"{text}\""
     MaxOutOfRange(max) => "MAX must be from 1 to {max_limit}, got {max}"
     TooManyArguments(count) => "usage: guess_number [MAX], got {count} arguments"
-    // `:?` uses the built-in debug printing, which works for every type.
-    ReadFailed(reason) => "cannot read input: {reason:?}"
+    // `io::Error` satisfies `Show`, with the same message on every platform.
+    ReadFailed(reason) => "cannot read input: {reason}"
   }
 }
 

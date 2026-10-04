@@ -86,11 +86,11 @@ priv fn by_largest_remainder(exact_parts: List<Rational>) -> List<Int> {
   }
   exact_parts
   |> number(_, 0, [])
-  |> list::sort(_, compare_remainders)
+  |> list::sort_with(_, compare_remainders)
   |> list::map(_, fn((index, _)) { index })
 }
 
-/// Orders two numbered remainders for `list::sort`: the larger
+/// Orders two numbered remainders for `list::sort_with`: the larger
 /// remainder first, then the smaller position. Every tie is decided, so
 /// the order is the same however the sort works.
 priv fn compare_remainders(first: (Int, Rational), second: (Int, Rational)) -> Order {

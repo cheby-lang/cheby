@@ -51,7 +51,7 @@ These types are known to the compiler. The ones marked _prelude_ are in scope in
 
 ### 3.3.1 Int
 
-`Int` is a signed 64-bit integer (D-105). All arithmetic on `Int` is checked: a result that does not fit panics (D-025). Intentional wrapping uses explicit functions in `std::int`, such as `int::wrapping_add` (D-025).
+`Int` is a signed 64-bit integer (D-105). All arithmetic on `Int` is checked: a result that does not fit panics (D-025). Intentional wrapping uses explicit functions in `std::int`, such as `int::wrapping_add` (D-025). Arithmetic that reports overflow as a value uses the `checked_*` functions, such as `int::checked_add`, which return `Result<T, Nil>` (D-309).
 
 On the JS target, `Int` is a JS number, and every operation panics if its result leaves the safe-integer range −(2⁵³−1)…2⁵³−1 (D-037). A program therefore panics at the same points or earlier on JS, but never computes a different result ([§12.4](12-targets-and-ffi.md#124-semantic-differences-between-targets)).
 
@@ -106,11 +106,11 @@ let d = 1.5e3       // Float
 
 ### 3.3.5 Conversions
 
-There are no implicit numeric conversions (D-047). Explicit conversions are functions in the numeric modules (D-085):
+There are no implicit numeric conversions (D-047). Explicit conversions are functions in the numeric modules (D-085). Every pair of numeric types has one, named `target::from_source`, such as `int::from_u32` or `u8::from_int` (D-308):
 
 - A **widening** conversion, where every source value fits the target type, returns the target type directly, for example `i64::from_i32(x)`.
 - A **narrowing** conversion returns `Result<T, Nil>`, for example `u8::from_int(x) -> Result<U8, Nil>` (D-132).
-- `Float → Int` has explicit rounding functions such as `float::truncate` and `float::round`. They return `Result<Int, Nil>`, with `Err(Nil)` for NaN, infinities and values out of `Int`'s range (D-132).
+- `Float → Int` has explicit rounding functions such as `float::truncate` and `float::round`. They return `Result<Int, Nil>`, with `Err(Nil)` for NaN, infinities and values out of `Int`'s range (D-132). `float::round` rounds halfway cases away from zero, so `2.5` becomes `3` and `-2.5` becomes `-3`, on every target (D-314).
 - `Int ↔ I64` is a narrowing conversion in the `I64 → Int` direction, because it can fail on JS (ADR-0030).
 
 ### 3.3.6 Text of floats
@@ -121,6 +121,8 @@ There are no implicit numeric conversions (D-047). Explicit conversions are func
 - The text always contains a `.` or an exponent, so a float never looks like an integer: `2.0`, `0.1`, `-2.25`.
 - Very large and very small magnitudes use an exponent, written like a float literal ([§2.5.2](02-lexical-structure.md#252-float-literals)): `1.0e21`, `1.0e-7`.
 - The special values are written `NaN`, `inf`, `-inf` and `-0.0` (D-219).
+
+`float::parse` reads back every text that `show` produces as the same value (D-313).
 
 _Note:_ on JS, the compiler cannot use `String(x)` directly, because `String(2.0)` is `"2"`. The exact thresholds for switching to an exponent are fixed in the standard-library spec for `std::float` (D-204).
 
@@ -133,13 +135,14 @@ _Note:_ on JS, the compiler cannot use `String(x)` directly, because `String(2.0
 `String` is immutable Unicode text (D-038):
 
 - A string is a sequence of Unicode scalar values.
-- There is no integer indexing and no O(1) access by position. Strings are processed by grapheme or code point through `std::string`, or through explicit byte views.
+- There is no integer indexing and no O(1) access by position. Strings are processed through `std::string`, or through explicit byte views.
+- Every length, position and count in `std::string` is in code points (Unicode scalar values). Grapheme clusters are available only through separate functions, `string::to_graphemes` and `string::grapheme_length` (D-302, ADR-0050).
 - Converting a string to bytes always produces UTF-8, on every target.
 - Strings are concatenated with `+` ([§5.4.3](05-expressions.md#543-overloaded-arithmetic)) (D-067).
 
 The representation is UTF-8 on native targets and a JS string on JS (D-038). Because the API has no positional indexing, the two representations are not observable.
 
-`Bytes` (in `std::bytes`) is an immutable sequence of bytes, with builder and parsing functions in the standard library (D-095).
+`Bytes` (in `std::bytes`) is an immutable sequence of bytes (D-095). There is no separate builder type. `bytes::append` and the `bytes::push_*` functions update their first argument in place when it is uniquely referenced, as `List` does ([§9.3](09-memory-model.md#93-reuse)) (D-316). Multi-byte integers are read and written with functions that name their byte order, such as `bytes::read_u32_le` and `bytes::push_u16_be` (D-334).
 
 ## 3.6 Nil
 
@@ -164,16 +167,34 @@ A tuple has at least two elements. `(x)` is a parenthesized expression, and ther
 
 `List<T>` is the built-in sequence type. It is a persistent, immutable RRB-tree vector (D-039), not a linked list. All elements have the same type `T`.
 
-| Operation                 | Cost (informative)                   |
+| Operation                 | Cost (required, D-300)               |
 | ------------------------- | ------------------------------------ |
 | index, update at index    | O(log n), effectively constant       |
-| append at either end      | amortized O(1) to O(log n)           |
+| append at either end      | O(log n), amortized O(1) when unique |
 | concatenate, slice        | O(log n)                             |
 | `[first, ..rest]` pattern | O(1), `rest` is a slice view (D-053) |
 
 List literals and patterns are defined in [§5.13](05-expressions.md#513-list-literals) and [§6.6](06-patterns.md#66-list-patterns).
 
 `Map<K, V>` and `Set<T>` are persistent hash array mapped tries in `std::map` and `std::set` (D-039). Keys are compared with structural `==` and hashed with the built-in structural hash ([§3.13](#313-equality-hashing-and-debug-printing)). Iteration order depends on a per-process random seed and changes between runs (D-093). Two maps or sets are `==` when they contain the same entries, regardless of order (D-093).
+
+The standard library also provides these collections. They are ordinary standard-library types, not built-in ones (D-330, D-336):
+
+| Module                  | Iteration order                        | Key requirement | Decisions           |
+| ----------------------- | -------------------------------------- | --------------- | ------------------- |
+| `std::sorted_map`       | by key, using `compare`                | `Compare`       | D-331, D-337        |
+| `std::sorted_set`       | by element, using `compare`            | `Compare`       | D-333, D-337        |
+| `std::ordered_map`      | the order keys were first inserted     | none            | D-331, D-337, D-340 |
+| `std::ordered_set`      | the order elements were first inserted | none            | D-339, D-340        |
+| `std::multimap`         | random per process, like `Map`         | none            | D-332, D-338        |
+| `std::sorted_multimap`  | by key, using `compare`                | `Compare`       | D-332, D-338        |
+| `std::ordered_multimap` | the order keys were first inserted     | none            | D-332, D-338, D-340 |
+
+- A sorted collection is a persistent balanced tree with O(log n) lookup and update (D-331). It treats two keys as the same when `compare` returns `Equal`, and inserting such a key keeps the stored key and replaces only the value (D-341).
+- In an insertion-ordered collection, inserting a key that is already present keeps its position and replaces its value, and a key that is removed and inserted again moves to the end (D-340).
+- A multimap holds a `List<V>` under each key, in insertion order, with duplicates kept (D-332).
+
+Their equality, hashing and debug printing are defined in [§3.13](#313-equality-hashing-and-debug-printing).
 
 ## 3.9 Function types
 
@@ -271,7 +292,7 @@ fn total(items: List<Item>) -> Int {
 }
 
 fn sums(ps: List<Point>, qs: List<Point>) -> List<Float> {
-  list::zip_with(fn(a, b) { a.x + b.x }, ps, qs)   // the closure is checked after `ps` and `qs`
+  list::map(list::zip(ps, qs), fn((a, b)) { a.x + b.x })   // the closure is checked after `zip(ps, qs)`
 }
 ```
 
@@ -344,12 +365,13 @@ let empty = list::new::<Int>()
 
 ## 3.13 Equality, hashing and debug printing
 
-Every type has built-in debug printing. Every type also has built-in structural equality and hashing, except that they panic when they reach a function value or a [handle](09-memory-model.md#95-handles-and-drop-functions) (D-033, D-070, D-189, D-233). None of the three can be overridden (D-047).
+Every type has built-in debug printing. Every type also has built-in structural equality and hashing, except that they panic when they reach a function value or a [handle](09-memory-model.md#95-handles-and-drop-functions) (D-033, D-070, D-189, D-233). None of the three can be overridden by user code (D-047). A standard-library type may name Cheby functions that implement them instead, so that collections with several internal shapes for the same contents compare, hash and print by contents (D-342). This uses an attribute that only the standard library can write ([§4.8](04-declarations.md#48-attributes)). Those functions never suspend, and a panic inside them, for example from `==` reaching a function value, unwinds like any other panic.
 
 **Equality** (`==` and `!=`):
 
 - Two values of an ADT are equal when they have the same constructor and all fields are equal.
 - Tuples and lists are equal element by element. Maps and sets are equal when they have the same entries, regardless of order (D-093).
+- Sorted collections are equal when they have the same entries ([§3.8](#38-list-map-and-set)). Insertion-ordered collections are equal only when they have the same entries in the same order, and their hash covers the order (D-343).
 - Strings are equal when they have the same sequence of scalar values.
 - Floats use reflexive equality ([§3.3.2](#332-float)) (D-069).
 - Two `dyn I` values are equal when they hold values of the same type, including all type arguments, and those values are equal ([§8.6.1](08-interfaces.md#861-type-descriptors)) (D-236).
@@ -361,6 +383,12 @@ Every type has built-in debug printing. Every type also has built-in structural 
 **Debug printing** produces a textual representation of any value of any type (D-233), used by `{x:?}` interpolation ([§5.3.2](05-expressions.md#532-string-interpolation)) and by `assert` failure messages ([§11.5](11-errors-and-panics.md#115-assert)).
 
 The debug format is Rust-like (D-134): `Point { x: 1.0, y: 2.0 }`, `Some(3)`, `[1, 2]`, `"text"`. It shows the fields of opaque types from other packages too, because debug output is for developers (D-134).
+
+Some standard-library types print differently (D-342):
+
+- `Map`, `Set` and `multimap` values list their entries sorted by each entry's printed text, so the output is the same on every run despite the random iteration order (D-344).
+- Sorted and insertion-ordered collections list their entries in their own order, not their internal tree or list nodes (D-342).
+- `io::Error` prints the same text as its `show`, a fixed message for each kind the standard library knows, and never the operating system's internal fields (D-345).
 
 Values without printable structure print as fixed placeholders (D-233):
 
@@ -376,7 +404,7 @@ Placeholders never show identity, addresses or contents, so identity stays unobs
 
 `Order` is the built-in ADT `Less | Equal | Greater`. The comparison operators `< <= > >=` are defined through the `compare` function of the operand type ([§8.7](08-interfaces.md#87-operator-interfaces)) (D-047). The following built-in types have built-in `compare` functions:
 
-- The numeric types. On `Float` and `F32`, `compare` is a total order consistent with `==` ([§3.3.2](#332-float)): `-0.0` and `0.0` compare `Equal`, and all NaNs compare `Equal` to each other and `Greater` than every other float (D-135). This keeps sorting and ordered collections sound.
+- The numeric types. On `Float` and `F32`, `compare` is a total order consistent with `==` ([§3.3.2](#332-float)): `-0.0` and `0.0` compare `Equal`, and all NaNs compare `Equal` to each other and `Greater` than every other float (D-135). This keeps sorting and sorted collections sound.
 - `Bool`, with `False < True` (D-136).
 - `String`, ordered by Unicode scalar values on every target (D-136).
 - Tuples and `List`, ordered lexicographically when their elements are comparable (D-136).

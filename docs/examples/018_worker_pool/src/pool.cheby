@@ -124,7 +124,7 @@ priv fn work<A, B>(
 /// Puts tagged values in the order of their tags and drops the tags.
 priv fn in_order<T>(tagged: List<Tagged<T>>) -> List<T> {
   tagged
-  |> list::sort(_, fn((first, _), (second, _)) { int::compare(first, second) })
+  |> list::sort_with(_, fn((first, _), (second, _)) { int::compare(first, second) })
   |> list::map(_, fn((_, value)) { value })
 }
 
@@ -136,13 +136,7 @@ test "tagged values are put in the order of their tags" {
 test "results come back in the order of the inputs" {
   // The numbers from 1 to 200. With many workers, results arrive in no
   // particular order, and the answer must still match a plain map.
-  fn count_up(n, built) {
-    case n {
-      0 => built
-      _ => count_up(n - 1, [n, ..built])
-    }
-  }
-  let inputs = count_up(200, [])
+  let inputs = list::range(1, 201)
   let square = fn(n) { n * n }
   assert map(inputs, 8, square) == Ok(list::map(inputs, square))
 }

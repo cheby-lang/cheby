@@ -56,7 +56,7 @@ type AppError {
 fn show(error: AppError) -> String {
   case error {
     Usage => "usage: aoc_2024_day_1 INPUT"
-    ReadFailed(path, reason) => "cannot read {path}: {reason:?}"
+    ReadFailed(path, reason) => "cannot read {path}: {reason}"
     // `puzzle::ParseError` satisfies `Show` through the `show` in
     // `puzzle`.
     BadInput(path, reason) => "{path}: {reason}"

@@ -67,7 +67,7 @@ fn show(error: AppError) -> String {
     MissingPath => "usage: word_count FILE [COUNT]"
     TooManyArguments(given) => "expected a file name and at most one count, got {given} arguments"
     BadLimit(text) => "the count must be a whole number of at least 1, got \"{text}\""
-    ReadFailed(path, reason) => "cannot read {path}: {reason:?}"
+    ReadFailed(path, reason) => "cannot read {path}: {reason}"
   }
 }
 

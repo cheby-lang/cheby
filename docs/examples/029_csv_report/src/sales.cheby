@@ -167,7 +167,7 @@ fn summarize(sales: List<Sale>) -> List<Summary> {
   sales
   |> list::fold(_, map::new(), add_sale)
   |> map::values
-  |> list::sort(_, by_revenue)
+  |> list::sort_with(_, by_revenue)
 }
 
 /// Adds `sale` to the summary of its region in `summaries`.
@@ -191,7 +191,7 @@ priv fn add_sale(summaries: Map<String, Summary>, sale: Sale) -> Map<String, Sum
 }
 
 /// Orders summaries by revenue, highest first, then by region,
-/// alphabetically. `list::sort` calls it to compare two summaries:
+/// alphabetically. `list::sort_with` calls it to compare two summaries:
 /// `Less` puts `first` before `second`.
 fn by_revenue(first: Summary, second: Summary) -> Order {
   // The revenues are compared the other way round, so the higher one
@@ -400,7 +400,7 @@ test "regions with the same revenue go alphabetically" {
   assert by_revenue(east, west) == Less
   assert by_revenue(west, east) == Greater
   assert by_revenue(east, north) == Greater
-  assert list::sort([west, east, north], by_revenue) == [north, east, west]
+  assert list::sort_with([west, east, north], by_revenue) == [north, east, west]
 }
 
 test "the total adds up every column" {

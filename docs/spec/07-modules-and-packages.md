@@ -117,7 +117,7 @@ import my_app::web::router
 import json::decode as json_decode
 
 fn main() {
-  io::println(list::length([1, 2]) |> int::to_string)   // error: `int` is not imported
+  io::println(list::length([1, 2]) |> int::show)   // error: `int` is not imported
 }
 ```
 

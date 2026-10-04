@@ -174,6 +174,7 @@ The following are warnings (D-080 and the cited decisions):
 | `==` on a type statically known to contain a function or handle type    | D-070, D-233 |
 | use of a `@deprecated` item                                             | D-200        |
 | a written tuple type with a tuple element or with four or more elements | D-243        |
+| a negative integer literal passed as a standard-library count argument  | D-298, D-303 |
 
 Unused `pub` items are never reported (D-152). Warnings that need the whole package, such as unused package-visible items, are computed in a separate pass that does not delay `cheby run` (D-266). Bindings whose names start with `_` are not reported as unused ([§2.3](02-lexical-structure.md#23-identifiers)).
 

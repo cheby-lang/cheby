@@ -222,11 +222,8 @@ priv fn unescape(code: String) -> Option<String> {
 /// without leading zeros, an optional fraction and an optional exponent,
 /// as in `-12.5e3`. Each part is checked here, so that an error points
 /// at the code point that is wrong, and the text is then converted by
-/// `float::parse`.
-///
-/// The text given to `float::parse` always has a fraction, so that it is
-/// also a valid Cheby float literal: `42` is converted as `42.0`, and
-/// `1e3` as `1.0e3`.
+/// `float::parse`, which accepts every JSON number, including `42` and
+/// `1e3`, which have no fraction.
 priv fn parse_number(input: Input) -> Parsed<value::Value> {
   let (minus, unsigned) = case input.rest {
     ["-", ..rest] => ("-", advance(input, 1, rest))
@@ -235,13 +232,10 @@ priv fn parse_number(input: Input) -> Parsed<value::Value> {
   use (whole, after_whole) <- result::try(whole_part(unsigned))
   use (fraction, after_fraction) <- result::try(fraction_part(after_whole))
   use (exponent, after_exponent) <- result::try(exponent_part(after_fraction))
-  let fraction_or_zero = case fraction {
-    "" => ".0"
-    _ => fraction
-  }
-  case float::parse(minus + whole + fraction_or_zero + exponent) {
+  let text = minus + whole + fraction + exponent
+  case float::parse(text) {
     Ok(n) => Ok((value::Number(n), after_exponent))
-    Err(_) => fail(input, InvalidNumber(minus + whole + fraction + exponent))
+    Err(_) => fail(input, InvalidNumber(text))
   }
 }
 

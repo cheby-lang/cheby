@@ -239,7 +239,7 @@ The initializer is an ordinary expression, evaluated **at compile time** (D-090)
 - It may call ordinary Cheby functions, including functions from other modules and packages.
 - The compiler runs it with the JIT and embeds the resulting value in the program. It is never evaluated at run time.
 - If evaluation panics, it is a compile error that shows the panic.
-- If evaluation reaches an IO operation, a fiber or channel operation, or an `@external` function, it is a compile error (D-090). Effects are untracked (D-016), so this is detected during evaluation, not by the type checker.
+- If evaluation reaches an IO operation, a fiber or channel operation, or an `@external` function, it is a compile error (D-090). Effects are untracked (D-016), so this is detected during evaluation, not by the type checker. The exception is the effect-free kernels of `std::list`, `std::map`, `std::set`, `std::string` and `std::bytes`, which the compiler runs itself (D-360).
 - Implementations must limit the time and memory that evaluation may use and report a compile error when a limit is exceeded ([§13.9](13-tooling.md#139-compile-time-evaluation)).
 - When building for JS, an `Int` in the resulting value that is outside the JS safe-integer range is a compile error (D-037, ADR-0027).
 - Constants may refer to other constants, but not cyclically.
@@ -308,6 +308,8 @@ The set of attributes is fixed, and user-defined attributes do not exist (D-200,
 | `@deprecated("message")` | `pub` items                                             | using the item warns with the message | below                                                     |
 
 An unknown attribute name, a duplicated attribute (other than `@external` with different targets), or an attribute in a place it is not allowed is a compile error.
+
+The standard library also uses attributes that user code cannot write. One marks the count parameters that the standard library clamps, for the warning of [§13.8](13-tooling.md#138-diagnostics-and-warnings) (D-298, D-303). Another lets a standard-library type name the functions that implement its equality, hashing and debug printing ([§3.13](03-types.md#313-equality-hashing-and-debug-printing)) (D-342). Their spelling belongs to the toolchain, and writing them outside the standard library is a compile error like any unknown attribute.
 
 `@deprecated("message")` makes every use of the item from another module a warning that includes the message. It exists so that, under the compatibility promise, items can be discouraged without being removed (D-075, D-200).
 

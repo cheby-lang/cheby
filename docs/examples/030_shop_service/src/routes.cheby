@@ -140,78 +140,78 @@ fn failure_response(failure: Failure) -> http::Response {
 priv fn rejected_response(problem: checkout::CheckoutError) -> http::Response {
   case problem {
     checkout::UnknownProduct(id) =>
-      error_json(422, "no such product", [("product_id", json::int(id))])
+      error_json(422, "no such product", [("product_id", json::Int(id))])
     checkout::OutOfStock { product_id, requested, available } =>
       error_json(409, "not enough in stock", [
-        ("product_id", json::int(product_id)),
-        ("requested", json::int(requested)),
-        ("available", json::int(available)),
+        ("product_id", json::Int(product_id)),
+        ("requested", json::Int(requested)),
+        ("available", json::Int(available)),
       ])
     checkout::UnknownCode(code) =>
-      error_json(422, "no such discount code", [("discount", json::string(code))])
+      error_json(422, "no such discount code", [("discount", json::String(code))])
     checkout::BelowMinimum { code, minimum_cents } =>
       error_json(422, "the order is too small for this code", [
-        ("discount", json::string(code)),
-        ("minimum_cents", json::int(minimum_cents)),
+        ("discount", json::String(code)),
+        ("minimum_cents", json::Int(minimum_cents)),
       ])
   }
 }
 
 /// Builds an error response with `message` and some extra keys.
 priv fn error_json(status: Int, message: String, extra: List<(String, json::Value)>) -> http::Response {
-  http::json(status, json::object([("error", json::string(message)), ..extra]))
+  http::json(status, json::Object([("error", json::String(message)), ..extra]))
 }
 
 /// Encodes one invalid field.
 priv fn field_error_json(error: order::FieldError) -> json::Value {
-  json::object([("field", json::string(error.field)), ("problem", json::string(error.problem))])
+  json::Object([("field", json::String(error.field)), ("problem", json::String(error.problem))])
 }
 
 /// Encodes a product.
 fn product_json(product: Product) -> json::Value {
-  json::object([
-    ("id", json::int(product.id)),
-    ("name", json::string(product.name)),
-    ("price_cents", json::int(product.price_cents)),
-    ("in_stock", json::bool(product.stock > 0)),
+  json::Object([
+    ("id", json::Int(product.id)),
+    ("name", json::String(product.name)),
+    ("price_cents", json::Int(product.price_cents)),
+    ("in_stock", json::Bool(product.stock > 0)),
   ])
 }
 
 /// Encodes a list of products.
 priv fn products_json(products: List<Product>) -> json::Value {
-  json::object([("products", json::array(products, product_json))])
+  json::Object([("products", json::array(products, product_json))])
 }
 
 /// Encodes a newly placed order.
 fn placed_json(placed: store::Placed) -> json::Value {
   let quote = placed.quote
-  json::object([
-    ("id", json::int(placed.id)),
-    ("subtotal_cents", json::int(quote.subtotal_cents)),
-    ("discount_cents", json::int(quote.discount_cents)),
-    ("shipping_cents", json::int(quote.shipping_cents)),
-    ("total_cents", json::int(quote.total_cents)),
+  json::Object([
+    ("id", json::Int(placed.id)),
+    ("subtotal_cents", json::Int(quote.subtotal_cents)),
+    ("discount_cents", json::Int(quote.discount_cents)),
+    ("shipping_cents", json::Int(quote.shipping_cents)),
+    ("total_cents", json::Int(quote.total_cents)),
   ])
 }
 
 /// Encodes a saved order with its lines.
 priv fn stored_order_json(stored: store::StoredOrder) -> json::Value {
   let line_json = fn(line: store::StoredLine) {
-    json::object([
-      ("product_id", json::int(line.product_id)),
-      ("name", json::string(line.name)),
-      ("quantity", json::int(line.quantity)),
-      ("unit_cents", json::int(line.unit_cents)),
+    json::Object([
+      ("product_id", json::Int(line.product_id)),
+      ("name", json::String(line.name)),
+      ("quantity", json::Int(line.quantity)),
+      ("unit_cents", json::Int(line.unit_cents)),
     ])
   }
-  json::object([
-    ("id", json::int(stored.id)),
-    ("email", json::string(stored.email)),
+  json::Object([
+    ("id", json::Int(stored.id)),
+    ("email", json::String(stored.email)),
     ("lines", json::array(stored.lines, line_json)),
-    ("subtotal_cents", json::int(stored.subtotal_cents)),
-    ("discount_cents", json::int(stored.discount_cents)),
-    ("shipping_cents", json::int(stored.shipping_cents)),
-    ("total_cents", json::int(stored.total_cents)),
+    ("subtotal_cents", json::Int(stored.subtotal_cents)),
+    ("discount_cents", json::Int(stored.discount_cents)),
+    ("shipping_cents", json::Int(stored.shipping_cents)),
+    ("total_cents", json::Int(stored.total_cents)),
   ])
 }
 

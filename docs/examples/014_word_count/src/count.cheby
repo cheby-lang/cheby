@@ -32,7 +32,7 @@ fn top(text: String, limit: Int) -> List<Entry> {
   |> split_words
   |> tally
   |> map::to_list
-  |> list::sort(_, by_frequency)
+  |> list::sort_with(_, by_frequency)
   |> list::take(_, limit)
 }
 
@@ -91,7 +91,7 @@ priv fn bump(previous: Option<Int>) -> Int {
 }
 
 /// Orders entries by count, highest first, then by word, alphabetically.
-/// `list::sort` calls it to compare two entries: `Less` puts `first`
+/// `list::sort_with` calls it to compare two entries: `Less` puts `first`
 /// before `second`.
 fn by_frequency(first: Entry, second: Entry) -> Order {
   let (first_word, first_count) = first

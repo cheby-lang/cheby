@@ -255,8 +255,12 @@ pub interface Show {
 
 `Show` produces user-facing text. It is used by string interpolation `{x}` (D-067, D-086), and a type that does not satisfy it cannot be interpolated without `:?` ([§5.3.2](05-expressions.md#532-string-interpolation)).
 
-The built-in numeric types, `String` (whose `show` returns the string unchanged), `Bool` and `Nil` satisfy `Show`. `List`, `Option` and `Result` satisfy it conditionally on their element types (D-064), and tuples satisfy it by a built-in rule when all their element types do (D-167).
+The built-in numeric types, `String` (whose `show` returns the string unchanged), `Bool` and `Nil` satisfy `Show`. `List`, `Option` and `Result` satisfy it conditionally on their element types (D-064), and tuples satisfy it by a built-in rule when all their element types do (D-167). Their text uses the punctuation of debug printing with each element written by its own `show`, so `["a", "b"]` shows as `[a, b]` (D-355).
 
-Equality, hashing and debug printing are **not** interfaces. They are built in and cannot be customized. Debug printing works for all types, and equality and hashing work for all types but panic on functions and handles (D-033, D-233, [§3.13](03-types.md#313-equality-hashing-and-debug-printing)).
+`Map`, `Set` and `multimap` do not satisfy `Show`, because their iteration order changes between runs (D-093). A program picks an order itself, for example with `map::to_sorted_list`, or uses `{x:?}`, which prints them sorted ([§3.13](03-types.md#313-equality-hashing-and-debug-printing)). The sorted and insertion-ordered collections ([§3.8](03-types.md#38-list-map-and-set)) satisfy `Show` when their element types do, and show their entries in their own order (D-344).
+
+A type's text is produced only by its `show` function. The standard library has no `to_string` functions for this, so `int::show(n)` is the way to name the text of an `Int` (D-307).
+
+Equality, hashing and debug printing are **not** interfaces. They are built in and cannot be customized by user code (D-047). Only standard-library types may supply their own implementations (D-342). Debug printing works for all types, and equality and hashing work for all types but panic on functions and handles (D-033, D-233, [§3.13](03-types.md#313-equality-hashing-and-debug-printing)).
 
 Other standard interfaces (for example for iteration, hashing into custom structures or serialization) are standard-library API and are specified in the standard-library spec, [`../stdlib/`](../stdlib/) (D-204). JSON encoding and decoding live in `std::json` (D-210, ADR-0038). Because of the `Self` rule of [§8.1](#81-declaration), encoding can be an interface, but decoding uses decoder values (D-209).

@@ -28,6 +28,7 @@ This chapter is informative. It summarizes the language and points to the normat
 | Structural interfaces, satisfied implicitly by module functions         | [8](08-interfaces.md)                                 | D-020, D-061, D-063        |
 | Operator overloading through interfaces                                 | [8](08-interfaces.md)                                 | D-034, D-047, D-118        |
 | Persistent collections: RRB-tree `List`, HAMT `Map` and `Set`           | [3](03-types.md), [9](09-memory-model.md)             | D-039                      |
+| Sorted and insertion-ordered maps and sets in the standard library      | [3](03-types.md)                                      | D-331, D-336, D-337        |
 | Fibers on an M:N scheduler, structured concurrency, channels            | [10](10-concurrency.md)                               | D-003, D-012, D-040, D-054 |
 | Compile-time evaluated constants                                        | [4](04-declarations.md)                               | D-090                      |
 | Inline `test` blocks                                                    | [4](04-declarations.md), [13](13-tooling.md)          | D-055                      |

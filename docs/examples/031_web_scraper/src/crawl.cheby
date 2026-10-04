@@ -79,7 +79,7 @@ fn crawl(
       }
     }
   }
-  step([start], set::from_list([start]), 0, []) |> list::sort(_, by_path)
+  step([start], set::from_list([start]), 0, []) |> list::sort_with(_, by_path)
 }
 
 /// Fetches `path` within `deadline` and reports the visit on `done`.

@@ -35,14 +35,14 @@ pub type Book {
 /// as visible as `Book`, so `Book` satisfies `json::ToJson`. For a `pub`
 /// type, a less visible function would not count.
 pub fn to_json(book: Book) -> json::Value {
-  json::object([
-    ("title", json::string(book.title)),
+  json::Object([
+    ("title", json::String(book.title)),
     ("author", author::to_json(book.author)),
     // Edited by hand: the generator wrote "published", but the files
     // this program reads call the year of publication "year".
-    ("year", json::int(book.published)),
+    ("year", json::Int(book.published)),
     ("format", format::to_json(book.format)),
-    ("tags", json::array(book.tags, json::string)),
+    ("tags", json::array(book.tags, json::String)),
   ])
 }
 

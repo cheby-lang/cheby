@@ -63,8 +63,8 @@ fn show(error: AppError) -> String {
   case error {
     MissingPath => "usage: json FILE"
     TooManyArguments(count) => "expected one file name, got {count} arguments"
-    // `:?` uses the built-in debug printing, which works for every type.
-    ReadFailed(path, reason) => "cannot read {path}: {reason:?}"
+    // `io::Error` satisfies `Show`, with the same message on every platform.
+    ReadFailed(path, reason) => "cannot read {path}: {reason}"
     // `parser::ParseError` has its own `show`, so `{reason}` uses it.
     InvalidJson(path, reason) => "{path}: {reason}"
   }

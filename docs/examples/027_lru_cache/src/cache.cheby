@@ -157,7 +157,7 @@ pub fn keys_by_recency<K, V>(cache: Cache<K, V>) -> List<K> {
   // the other way round.
   cache.by_tick
   |> map::to_list
-  |> list::sort(_, fn((first, _), (second, _)) { int::compare(second, first) })
+  |> list::sort_with(_, fn((first, _), (second, _)) { int::compare(second, first) })
   |> list::map(_, fn((_, key)) { key })
 }
 

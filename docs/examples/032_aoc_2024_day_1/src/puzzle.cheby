@@ -67,8 +67,8 @@ fn total_distance(lefts: List<Int>, rights: List<Int>) -> Int {
       _, _ => total
     }
   }
-  let sorted_lefts = lefts |> list::sort(_, int::compare)
-  let sorted_rights = rights |> list::sort(_, int::compare)
+  let sorted_lefts = lefts |> list::sort
+  let sorted_rights = rights |> list::sort
   step(sorted_lefts, sorted_rights, 0)
 }
 

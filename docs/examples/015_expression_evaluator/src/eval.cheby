@@ -8,7 +8,7 @@
 //! Arithmetic on `Int` panics on overflow and on division by zero. A
 //! calculator should report both instead of crashing, so this module
 //! checks for zero itself and uses the checked functions of `std::int`,
-//! which return `None` instead of panicking.
+//! which return `Err(Nil)` instead of panicking.
 
 import std::int
 import std::map
@@ -60,9 +60,9 @@ fn evaluate(node: expr::Expr, env: Env) -> Result<Int, EvalError> {
   }
 }
 
-/// Applies `op` to `a` and `b`, or returns `None` if the result does not
-/// fit in an `Int`. Division truncates toward zero, like `/` on `Int`.
-priv fn apply(op: expr::Op, a: Int, b: Int) -> Option<Int> {
+/// Applies `op` to `a` and `b`, or returns `Err(Nil)` if the result does
+/// not fit in an `Int`. Division truncates toward zero, like `/` on `Int`.
+priv fn apply(op: expr::Op, a: Int, b: Int) -> Result<Int, Nil> {
   case op {
     expr::Add => int::checked_add(a, b)
     expr::Subtract => int::checked_sub(a, b)
@@ -71,13 +71,10 @@ priv fn apply(op: expr::Op, a: Int, b: Int) -> Option<Int> {
   }
 }
 
-/// Turns the result of `apply` into a `Result`, blaming `node` when
-/// there is none.
-priv fn checked(outcome: Option<Int>, node: expr::Expr) -> Result<Int, EvalError> {
-  case outcome {
-    Some(n) => Ok(n)
-    None => Err(Overflow(node))
-  }
+/// Turns an overflow reported by `apply` into an `EvalError` that
+/// blames `node`.
+priv fn checked(outcome: Result<Int, Nil>, node: expr::Expr) -> Result<Int, EvalError> {
+  result::map_error(outcome, fn(_) { Overflow(node) })
 }
 
 /// Makes `EvalError` satisfy `Show`. The expressions inside the errors

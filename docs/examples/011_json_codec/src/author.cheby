@@ -22,9 +22,9 @@ pub type Author { name: String, born: Option<Int> }
 /// Encodes `author` as a JSON object. An unknown year of birth is
 /// written as `null`.
 pub fn to_json(author: Author) -> json::Value {
-  json::object([
-    ("name", json::string(author.name)),
-    ("born", json::nullable(author.born, json::int)),
+  json::Object([
+    ("name", json::String(author.name)),
+    ("born", json::nullable(author.born, json::Int)),
   ])
 }
 

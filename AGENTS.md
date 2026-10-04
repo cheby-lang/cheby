@@ -40,7 +40,7 @@ Never change language behavior in the spec or the examples without a decision-lo
 - Grammar uses the EBNF notation described in `docs/spec/README.md`.
 - An unsettled gap is marked `> **Open (OQ-<chapter>-<n>):** … _Proposed:_ …` and is replaced by normative text that cites the settling decision.
 - When a decision lands, update every chapter it affects, the overview tables in `01-overview.md` and Appendix A in the same change.
-- Standard-library names (`fiber::spawn`, `map::upsert`, …) are provisional until `docs/stdlib/` specifies them (D-174, D-199). That directory does not exist yet.
+- Standard-library names are specified in `docs/stdlib/`, one file per module (D-220). Tier 1 is drafted, with open gaps marked `OQ-<module>-<n>` (D-352). Names of later tiers, such as `fiber::spawn`, stay provisional until their tier is written (D-174, D-199).
 
 ## Writing style
 

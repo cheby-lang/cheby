@@ -46,6 +46,7 @@ When the compiler can prove that a value is uniquely referenced at the point whe
 
 - a record update `T { ..base, field: v }` where `base` is not used afterwards,
 - inserting into a `List`, `Map` or `Set` that is not used afterwards,
+- appending to a `Bytes` value that is not used afterwards (D-316),
 - pattern-matching a value and constructing a new value of the same shape in the same arm.
 
 Reuse is an optimization. It never changes a program's result, because the old value is unreachable when it is reused. Implementations should reuse wherever they can, because Cheby has no mutable escape hatch and relies on reuse for performance (D-017, ADR-0007).

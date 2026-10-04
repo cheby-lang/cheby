@@ -214,4 +214,11 @@ A program runs a `main` function ([§4.2.1](04-declarations.md#421-main)) in a f
    - `1` if `main` returns `Err(e)`, after printing `e` to standard error (D-073, D-182). `e` is printed with `Show` if its type satisfies `Show` ([§8.8](08-interfaces.md#88-standard-interfaces)), and with debug printing otherwise ([§3.13](03-types.md#313-equality-hashing-and-debug-printing)) (D-182),
    - `101` if the root fiber panics, after printing the panic ([chapter 11](11-errors-and-panics.md)) (D-182).
 
-`main` takes no parameters. A program reads its command-line arguments and environment variables through the standard-library module `std::env`, which any module may use (D-183).
+`main` takes no parameters. A program reads its command-line arguments and environment variables through the standard-library module `std::env`, which any module may use (D-183). `env::args()` does not include the program name, which `env::program_name()` returns (D-347).
+
+Standard output and standard error behave the same way on every target:
+
+- Standard output is line-buffered. It is also flushed before the program reads standard input, so a prompt written without a newline appears in time (D-346).
+- Standard error is not buffered (D-346).
+- All buffered output is flushed when the program ends, whatever its exit status (D-346).
+- When a write or flush that does not return a `Result`, such as `io::println`, cannot complete, for example because the reader of a pipe has gone, the program ends at once with exit status `1` and prints nothing (D-306).

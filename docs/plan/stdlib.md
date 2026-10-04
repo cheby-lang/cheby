@@ -28,46 +28,46 @@ The tiers are seeded from what the examples use. The function lists are the exam
 
 ### Tier 1: before M1
 
-| Module                                      | Seeded from the examples                                                                                                                            |
-| ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `std::io`                                   | `println`, `eprintln`, `read_line`, `read_file`                                                                                                     |
-| `std::env`                                  | `args`, `get` (D-183)                                                                                                                               |
-| `std::list`                                 | `all`, `any`, `contains`, `each`, `filter`, `fold`, `get`, `is_empty`, `length`, `map`, `reverse`, `sort`, `take`, plus the kernels (`new`, `push`, ...) |
-| `std::map`                                  | `new`, `from_list`, `get`, `insert`, `remove`, `size`, `to_list`, `to_sorted_list`, `upsert`, `values`                                              |
-| `std::set`                                  | `from_list`, `contains`, `insert`, `remove`, `size`, `fold`, `filter` (no API exists yet, D-204)                                                    |
-| `std::string`                               | `compare`, `join`, `length`, `lowercase`, `uppercase`, `pad_start`, `pad_end`, `split`, `starts_with`, `to_code_points`, `trim`, `trim_end`        |
-| `std::bytes`                                | `from_list`, `from_string`, `to_list`, `fold`, the builder of D-095                                                                                 |
-| `std::int`                                  | `parse`, `compare`, `checked_add/sub/mul/div`, `from_u32` and other widenings, `wrapping_*` (D-025)                                                  |
-| `std::float`                                | `parse`, `truncate`, `round`, `from_u32` and other conversions (D-085), text of floats (§3.3.6)                                                     |
-| `std::i8` ... `std::u64`, `std::f32`        | `from_int` and the narrowing conversions (D-085)                                                                                                    |
-| `std::result`, `std::option`                | `try`, `map`, `map_error`, `unwrap_or`, ...                                                                                                         |
-| `std::ops`                                  | the operator interfaces (D-169, §8.7)                                                                                                               |
-| `std::json`                                 | `parse`, `to_string`, `decode` and the decoder and encoder API of example 011 (D-209, D-210)                                                        |
+Drafted in [`docs/stdlib/`](../stdlib/README.md) (D-294 to D-352). The drafts mark their remaining gaps as `OQ-<module>-<n>` (D-352), which are settled in one review round before M1 starts.
+
+| Module                                                                  | Spec file                                                                                                                                          |
+| ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `std::io`, `std::env`                                                   | [`io.md`](../stdlib/io.md), [`env.md`](../stdlib/env.md)                                                                                           |
+| `std::list`, `std::string`, `std::bytes`                                | [`list.md`](../stdlib/list.md), [`string.md`](../stdlib/string.md), [`bytes.md`](../stdlib/bytes.md)                                               |
+| `std::map`, `std::set`, `std::multimap`                                 | [`map.md`](../stdlib/map.md), [`set.md`](../stdlib/set.md), [`multimap.md`](../stdlib/multimap.md)                                                 |
+| `std::sorted_map`, `std::sorted_set`, `std::sorted_multimap` (D-337)    | [`sorted_map.md`](../stdlib/sorted_map.md), [`sorted_set.md`](../stdlib/sorted_set.md), [`sorted_multimap.md`](../stdlib/sorted_multimap.md)       |
+| `std::ordered_map`, `std::ordered_set`, `std::ordered_multimap` (D-337) | [`ordered_map.md`](../stdlib/ordered_map.md), [`ordered_set.md`](../stdlib/ordered_set.md), [`ordered_multimap.md`](../stdlib/ordered_multimap.md) |
+| `std::int`, `std::float`, `std::i8` ... `std::u64`, `std::f32`          | [`int.md`](../stdlib/int.md), [`float.md`](../stdlib/float.md), and one short file per sized type (D-350)                                          |
+| `std::bool`, `std::nil`, `std::order`, `std::ops`                       | [`bool.md`](../stdlib/bool.md), [`nil.md`](../stdlib/nil.md), [`order.md`](../stdlib/order.md), [`ops.md`](../stdlib/ops.md)                       |
+| `std::result`, `std::option`                                            | [`result.md`](../stdlib/result.md), [`option.md`](../stdlib/option.md)                                                                             |
+| `std::json`, `std::json::decode`                                        | [`json.md`](../stdlib/json.md), [`json/decode.md`](../stdlib/json/decode.md)                                                                       |
+
+The sorted, insertion-ordered and multimap collections are written in Cheby, with no runtime kernels (D-336, D-338). They are benchmarked against a Rust tree in M2 and M6.
 
 `std::json` is the largest module and the only one written almost entirely in Cheby. If its spec is late, example 011 moves to the M2 exit list rather than delaying M1.
 
 ### Tier 2: before M2
 
-| Module           | Seeded from the examples                                                                                 |
-| ---------------- | -------------------------------------------------------------------------------------------------------- |
-| `std::fiber`     | `scope`, `spawn`, `spawn_detached`, `join`, `timeout`, `message`, the `Scope`, `Fiber`, `Panic` and `Timeout` types (D-174, D-181, D-199) |
-| `std::channel`   | `new`, `send`, `receive`, `Sender`, `Receiver` (D-054, D-179)                                            |
-| `std::selector`  | `new`, `receive`, `after`, `select` (D-041, D-180)                                                        |
-| `std::duration`  | `Duration`, `seconds`, `milliseconds`                                                                    |
-| `std::random`    | `int_between`, `between`, seeding                                                                        |
-| `std::runtime`   | setting the number of scheduler threads (D-175)                                                          |
+| Module          | Seeded from the examples                                                                                                                  |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `std::fiber`    | `scope`, `spawn`, `spawn_detached`, `join`, `timeout`, `message`, the `Scope`, `Fiber`, `Panic` and `Timeout` types (D-174, D-181, D-199) |
+| `std::channel`  | `new`, `send`, `receive`, `Sender`, `Receiver` (D-054, D-179)                                                                             |
+| `std::selector` | `new`, `receive`, `after`, `select` (D-041, D-180)                                                                                        |
+| `std::duration` | `Duration`, `seconds`, `milliseconds`                                                                                                     |
+| `std::random`   | `int_between`, `between`, seeding                                                                                                         |
+| `std::runtime`  | setting the number of scheduler threads (D-175)                                                                                           |
 
 The tier-2 spec fixes the provisional names of D-174 and D-199. If it renames anything, spec chapter 10 and the examples are updated in the same change.
 
 ### Tier 3: before M3 and M4
 
-| Module                   | Purpose                                                                                     |
-| ------------------------ | ------------------------------------------------------------------------------------------- |
-| `std::file`              | file handles and `use f <- file::with_open(path)` (D-101)                                   |
-| `std::net`               | TCP sockets on the poller (D-042)                                                           |
-| `std::http`              | `get`, `serve`, `header`, `with_header`, `method_name`, `json`, used by examples 030 and 031 |
-| `std::time`              | wall clock and monotonic time                                                               |
-| `std::process`           | exit with a status, spawning processes if v1 needs it                                       |
+| Module         | Purpose                                                                                      |
+| -------------- | -------------------------------------------------------------------------------------------- |
+| `std::file`    | file handles and `use f <- file::with_open(path)` (D-101)                                    |
+| `std::net`     | TCP sockets on the poller (D-042)                                                            |
+| `std::http`    | `get`, `serve`, `header`, `with_header`, `method_name`, `json`, used by examples 030 and 031 |
+| `std::time`    | wall clock and monotonic time                                                                |
+| `std::process` | exit with a status, spawning processes if v1 needs it                                        |
 
 Tier 3 also covers the JS side of every earlier module: the `.mjs` kernels, and IO through the host's asynchronous APIs with `@async` (D-188).
 

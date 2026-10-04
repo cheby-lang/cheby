@@ -146,7 +146,7 @@ From highest to lowest (D-108):
 
 Comparison operators do not chain. `a < b < c` and `a == b == c` are compile errors that suggest `&&` (D-108).
 
-Because `|>` binds tighter than comparisons, `xs |> list::len == 3` means `(xs |> list::len) == 3` (D-108).
+Because `|>` binds tighter than comparisons, `xs |> list::length == 3` means `(xs |> list::length) == 3` (D-108).
 
 The operand type of an arithmetic, comparison or bitwise operator need not be known when the operator is checked. The choice between the built-in operation and the operand type's functions is made at the end of the body ([§3.12.4](03-types.md#3124-order-of-inference)) (D-234).
 
@@ -267,7 +267,7 @@ An anonymous function (closure) uses the Gleam form `fn(x) { … }` (D-036). Par
 ```cheby
 let double = fn(x) { x * 2 }
 let parse_all = fn(lines: List<String>) -> List<Int> {
-  list::filter_map(lines, int::parse)
+  list::filter_map(lines, fn(line) { result::to_option(int::parse(line)) })
 }
 let total = list::fold(entries, 0, fn(acc, (_, quantity)) { acc + quantity })
 ```
@@ -346,7 +346,7 @@ fn fizzbuzz(n: Int) -> String {
     0, 0 => "FizzBuzz"
     0, _ => "Fizz"
     _, 0 => "Buzz"
-    _, _ => int::to_string(n)
+    _, _ => int::show(n)
   }
 }
 ```
@@ -582,7 +582,7 @@ let names =
   users
   |> list::filter(_, is_active)
   |> list::map(_, fn(user) { user.name })
-  |> list::sort(_, string::compare)
+  |> list::sort
   |> string::join(_, ", ")
 
 let count = names |> list::length

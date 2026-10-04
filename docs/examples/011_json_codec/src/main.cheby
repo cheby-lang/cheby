@@ -19,25 +19,27 @@
 //! (D-210), so the package has no dependencies. The standard-library spec
 //! is still being written, so this example assumes the following API:
 //!
-//! - `json::Value` is an opaque JSON value. `json::null`, `json::bool`,
-//!   `json::int`, `json::float`, `json::string` and `json::object` build
-//!   values. `json::array(items, encode)` and
-//!   `json::nullable(option, encode)` encode lists and options with a
-//!   given function, and `json::to_string` prints a value as compact
-//!   JSON, with no spaces and the keys in the order given (D-218).
+//! - `json::Value` is an exposed type with the variants `Null`, `Bool`,
+//!   `Int`, `Float`, `String`, `Array` and `Object`, so values are built
+//!   with its constructors, such as `json::Int(1965)` (D-321). An
+//!   `Object` holds its key and value pairs in the order given (D-218).
+//!   `json::array(items, encode)` and `json::nullable(option, encode)`
+//!   encode lists and options with a given function, and
+//!   `json::to_string` prints a value as compact JSON, with no spaces.
 //!   Integers and floats stay apart, so `1965` reads back as an `Int`
 //!   (D-217).
 //! - `json::ToJson` is the interface `{ fn to_json(Self) -> Value }`, and
 //!   `json::list(items)` encodes a list of any type that satisfies it.
 //! - `json::parse(text, decoder)` parses `text` and decodes it, returning
-//!   a `json::Error`: `Syntax(Int)` with the position of invalid JSON,
-//!   or `Decode(List<decode::Error>)` with every value that did not fit.
+//!   a `json::Error`: `Syntax(Position)` with the line and column of
+//!   invalid JSON (D-324), or `Decode(List<decode::Error>)` with every
+//!   value that did not fit (D-322).
 //! - `json::decode::Decoder<T>` decodes a `T`. The module has decoders
 //!   for `string`, `int`, `float`, `bool`, `list` and `optional` (`null`
 //!   becomes `None`), and combines them with `field`, `optional_field`,
 //!   `then`, `success` and `failure`. A `decode::Error` records what was
 //!   `expected`, the kind of JSON value `found` (such as `"String"`,
-//!   `"Int"` or `"Null"`) and the `path` to it, with keys and list
+//!   `"Array"` or `"Null"`, D-323) and the `path` to it, with keys and list
 //!   indexes as strings, such as `["books", "1", "format"]`.
 
 import std::env
@@ -112,7 +114,7 @@ fn show(error: AppError) -> String {
   case error {
     MissingPath => "usage: json_codec FILE"
     TooManyArguments(count) => "expected one file name, got {count} arguments"
-    ReadFailed(path, reason) => "cannot read {path}: {reason:?}"
+    ReadFailed(path, reason) => "cannot read {path}: {reason}"
     // `json::Error` satisfies `Show`, so `{reason}` uses its `show`.
     InvalidLibrary(path, reason) => "{path}: {reason}"
   }
@@ -156,7 +158,7 @@ test "text that is not JSON is a syntax error" {
 test "errors show as messages for the user" {
   assert show(MissingPath) == "usage: json_codec FILE"
   assert show(TooManyArguments(3)) == "expected one file name, got 3 arguments"
-  let problem = json::Decode([decode::Error { expected: "List", found: "Null", path: ["books"] }])
+  let problem = json::Decode([decode::Error { expected: "Array", found: "Null", path: ["books"] }])
   // The wording of the problem itself comes from `json::Error`'s `show`,
   // and `show` only puts the file name in front of it.
   assert show(InvalidLibrary("books.json", problem)) == "books.json: {problem}"

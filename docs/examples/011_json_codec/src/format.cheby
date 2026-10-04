@@ -36,9 +36,9 @@ pub fn show(format: Format) -> String {
 /// Encodes `format` as a JSON string.
 pub fn to_json(format: Format) -> json::Value {
   case format {
-    Hardcover => json::string("hardcover")
-    Paperback => json::string("paperback")
-    Ebook => json::string("ebook")
+    Hardcover => json::String("hardcover")
+    Paperback => json::String("paperback")
+    Ebook => json::String("ebook")
   }
 }
 

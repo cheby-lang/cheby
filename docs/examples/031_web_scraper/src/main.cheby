@@ -14,11 +14,10 @@
 //!
 //! The crawl is in `crawl.cheby` and finding links in `html.cheby`.
 //!
-//! The standard-library spec is still being written (D-204), so this
-//! example assumes `http::get(url)`, which returns
-//! `Result<http::Response, http::Error>`, a response with the fields
-//! `status: Int` and `body: String`, as well as `string::starts_with`,
-//! `string::trim_end(text, suffix)`, `string::pad_end` and `set::size`.
+//! `std::http` belongs to a later tier of the standard library, which is
+//! not specified yet, so this example assumes `http::get(url)`, which
+//! returns `Result<http::Response, http::Error>`, a response with the
+//! fields `status: Int` and `body: String`.
 
 import std::duration
 import std::env
@@ -66,7 +65,7 @@ priv fn get(base: String, path: String) -> Result<crawl::Page, String> {
 fn parse_args(args: List<String>) -> Result<String, AppError> {
   case args {
     [base] => case string::starts_with(base, "http://") || string::starts_with(base, "https://") {
-      True => Ok(base |> string::trim_end(_, "/"))
+      True => Ok(base |> string::remove_suffix(_, "/"))
       False => Err(NotAUrl(base))
     }
     _ => Err(Usage)
