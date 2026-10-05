@@ -139,9 +139,21 @@ fn collect(root: &Path) -> Result<BTreeMap<PathBuf, Intent>, String> {
 
 /// Clones the grammar at `rev` into `target/tree-sitter-cheby`, or reuses
 /// the checkout if it is already there.
+///
+/// Every git command runs with `GIT_CEILING_DIRECTORIES` set to `target/`,
+/// so git never looks for a repository above the checkout. Without it, a
+/// checkout whose `.git` is incomplete, as a CI cache can restore it, makes
+/// git fall back to the `cheby` repository itself, and checking out the
+/// grammar's commit there replaces this repository's files.
 fn checkout(root: &Path, rev: &str) -> Result<PathBuf, String> {
-    let dir = root.join("target/tree-sitter-cheby");
-    if !dir.join(".git").exists() {
+    let ceiling = root.join("target");
+    let dir = ceiling.join("tree-sitter-cheby");
+    let git = |cwd: &Path, args: &[&str]| git(cwd, &ceiling, args);
+    if dir.exists() && git(&dir, &["rev-parse", "--git-dir"]).is_err() {
+        println!("removing a broken checkout in {}", dir.display());
+        std::fs::remove_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    }
+    if !dir.exists() {
         let sibling = root.join("../tree-sitter-cheby");
         let source = if sibling.join(".git").exists() {
             sibling.to_string_lossy().into_owned()
@@ -160,10 +172,11 @@ fn checkout(root: &Path, rev: &str) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-fn git(dir: &Path, args: &[&str]) -> Result<(), String> {
+fn git(dir: &Path, ceiling: &Path, args: &[&str]) -> Result<(), String> {
     let out = Command::new("git")
         .args(args)
         .current_dir(dir)
+        .env("GIT_CEILING_DIRECTORIES", ceiling)
         .output()
         .map_err(|e| format!("cannot run git: {e}"))?;
     if out.status.success() {
