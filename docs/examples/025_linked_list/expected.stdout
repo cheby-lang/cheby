@@ -1,0 +1,8 @@
+numbers: [1 -> 2 -> 3 -> 4]
+pushed 0: [0 -> 1 -> 2 -> 3 -> 4]
+popped 1, leaving [2 -> 3 -> 4]
+reversed: [4 -> 3 -> 2 -> 1]
+squared: [1 -> 4 -> 9 -> 16]
+length 4, sum 10
+opening: starts with 1 and 2
+numbers afterwards: [1 -> 2 -> 3 -> 4]

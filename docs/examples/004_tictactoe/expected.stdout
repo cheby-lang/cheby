@@ -1,0 +1,44 @@
+You are X. Enter a cell number from 1 to 9.
+
+ 1 | 2 | 3
+---+---+---
+ 4 | 5 | 6
+---+---+---
+ 7 | 8 | 9
+
+Your move:
+Enter the number of a free cell.
+Your move:
+The computer plays 1.
+
+ O | 2 | 3
+---+---+---
+ 4 | X | 6
+---+---+---
+ 7 | 8 | 9
+
+Your move:
+Enter the number of a free cell.
+Your move:
+Enter the number of a free cell.
+Your move:
+The computer plays 3.
+
+ O | 2 | O
+---+---+---
+ 4 | X | 6
+---+---+---
+ 7 | 8 | X
+
+Your move:
+Enter the number of a free cell.
+Your move:
+The computer plays 2.
+
+ O | O | O
+---+---+---
+ 4 | X | 6
+---+---+---
+ X | 8 | X
+
+The computer wins.

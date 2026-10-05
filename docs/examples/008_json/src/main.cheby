@@ -2,7 +2,8 @@
 //!
 //! Reads the file named by the only command-line argument, parses it and
 //! prints it again with every array element and object member on its own
-//! line, indented by two spaces per level. If there is not exactly one
+//! line, indented by two spaces per level. `cheby run -- data.json`,
+//! with the `data.json` next to `cheby.toml`, shows it. If there is not exactly one
 //! argument, the file cannot be read or it is not valid JSON, `main`
 //! returns an error, which the runtime prints to standard error with
 //! `show` before exiting with status 1.

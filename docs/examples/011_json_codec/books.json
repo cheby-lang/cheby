@@ -1,0 +1,31 @@
+{
+  "books": [
+    {
+      "title": "Dune",
+      "author": {"name": "Frank Herbert", "born": 1920},
+      "year": 1965,
+      "format": "paperback",
+      "tags": ["science fiction", "classic"]
+    },
+    {
+      "title": "Beloved",
+      "author": {"name": "Toni Morrison", "born": 1931},
+      "year": 1987,
+      "format": "hardcover"
+    },
+    {
+      "title": "The Odyssey",
+      "author": {"name": "Homer", "born": null},
+      "year": -700,
+      "format": "paperback",
+      "tags": ["epic"]
+    },
+    {
+      "title": "Snow Crash",
+      "author": {"name": "Neal Stephenson"},
+      "year": 1992,
+      "format": "ebook",
+      "tags": ["science fiction"]
+    }
+  ]
+}

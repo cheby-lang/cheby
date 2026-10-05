@@ -17,15 +17,19 @@
 //! eating and puts it down, so the dinner cannot deadlock.
 //!
 //! Thinking and eating take a random time, so the order in which the
-//! philosophers eat changes from run to run. Each of them eats a fixed
-//! number of meals and then leaves, and the program ends once the table
-//! is empty.
+//! philosophers eat changes from run to run. So they do not print as
+//! they go. They report every event on a log channel instead, and `main`
+//! checks the log, so that no fork is ever held by two philosophers at
+//! once. Each of them eats a fixed number of meals and then leaves, and
+//! once the table is empty `main` prints how many meals each one ate.
 
 import std::channel
 import std::duration
 import std::fiber
 import std::io
 import std::list
+import std::map
+import std::option
 import std::random
 import std::result
 import std::selector
@@ -62,9 +66,38 @@ type Event {
 fn main() -> Result<Nil, fiber::Panic> {
   let count = list::length(guests)
   io::println("{count} philosophers sit down to eat {meal_count} meals each.")
-  use _ <- result::try(dinner(guests, meal_count, max_pause_ms, announce))
+  use eaten <- result::try(observe(guests, meal_count, max_pause_ms))
+  // A `Map` has no order of its own (D-093), so the names come from
+  // `guests`, in their order around the table.
+  list::each(guests, fn(name) {
+    let meals = map::get(eaten, name) |> option::unwrap_or(_, 0)
+    io::println("{name} ate {meals} meals.")
+  })
+  let total = list::sum(map::values(eaten), 0)
+  io::println("{total} meals were eaten, and no fork was ever held twice.")
   io::println("Everyone has left, and the table is empty.")
   Ok(Nil)
+}
+
+/// Runs the dinner of `names`, `meals` meals each, while checking its
+/// log, and returns how many meals each philosopher started, by name.
+fn observe(names: List<String>, meals: Int, max_pause: Int) -> Result<map::Map<String, Int>, fiber::Panic> {
+  use scope <- fiber::scope()
+  // Capacity 0: a philosopher's `report` returns only once the event
+  // has been received. `StopsEating` is received before the forks go
+  // down, and `StartsEating` is sent after they are picked up, so the
+  // log sees every fork change hands in the order it happened.
+  let (log_tx, log_rx) = channel::new::<Event>(0)
+  let table = fiber::spawn(scope, fn() {
+    dinner(names, meals, max_pause, fn(event) { let assert Ok(Nil) = channel::send(log_tx, event) })
+  })
+  // When the dinner ends, the closure holding `log_tx` is dropped,
+  // which closes the log and ends `check_log`.
+  let eaten = check_log(log_rx, set::new(), map::new())
+  // The dinner has ended, so this does not wait. A failed dinner is a
+  // bug in this program, so it panics, and the scope returns the panic.
+  let assert Ok(Nil) = fiber::join(table)
+  eaten
 }
 
 /// Seats `names` around a table and lets each of them eat `meals`
@@ -168,34 +201,28 @@ fn pause(max_ms: Int) {
   |> selector::select
 }
 
-/// Prints an event. Philosophers print from their own fibers, so their
-/// lines interleave in whatever order they happen.
-fn announce(event: Event) {
-  case event {
-    StartsEating(eater, meal) =>
-      io::println("{eater.name} picks up forks {eater.first.number} and {eater.second.number} and eats meal {meal}.")
-    StopsEating(eater, meal) when meal == meal_count =>
-      io::println("{eater.name} puts the forks down and leaves.")
-    StopsEating(eater, _) => io::println("{eater.name} puts the forks down and thinks.")
-  }
-}
-
 /// Reads every event from `log` until the channel closes, checks that
 /// no fork is picked up while someone else holds it, and returns how
-/// many meals were started. `held` has the numbers of the forks in use.
-fn check_log(log: channel::Receiver<Event>, held: set::Set<Int>, started: Int) -> Int {
+/// many meals each philosopher started, added to `eaten`. `held` has
+/// the numbers of the forks in use.
+fn check_log(
+  log: channel::Receiver<Event>,
+  held: set::Set<Int>,
+  eaten: map::Map<String, Int>,
+) -> map::Map<String, Int> {
   case channel::receive(log) {
     Ok(StartsEating(eater, _)) => {
       assert !set::contains(held, eater.first.number) as "fork {eater.first.number} is held twice"
       assert !set::contains(held, eater.second.number) as "fork {eater.second.number} is held twice"
       let taken = held |> set::insert(_, eater.first.number) |> set::insert(_, eater.second.number)
-      check_log(log, taken, started + 1)
+      let counted = map::upsert(eaten, eater.name, fn(before) { option::unwrap_or(before, 0) + 1 })
+      check_log(log, taken, counted)
     }
     Ok(StopsEating(eater, _)) => {
       let freed = held |> set::remove(_, eater.first.number) |> set::remove(_, eater.second.number)
-      check_log(log, freed, started)
+      check_log(log, freed, eaten)
     }
-    Err(Nil) => started
+    Err(Nil) => eaten
   }
 }
 
@@ -209,21 +236,9 @@ test "the first and the last philosopher both reach for fork 0 first" {
 test "everyone eats every meal, and no fork is ever held twice" {
   // Without pauses the philosophers fight over the forks as hard as
   // they can. A deadlock would make the test time out instead of hang.
-  let outcome = fiber::timeout(duration::seconds(10), fn() {
-    use scope <- fiber::scope()
-    // Capacity 0: a philosopher's `report` returns only once the event
-    // has been received. `StopsEating` is received before the forks
-    // go down, and `StartsEating` is sent after they are picked up, so
-    // the log sees every fork change hands in the order it happened.
-    let (log_tx, log_rx) = channel::new::<Event>(0)
-    fiber::spawn(scope, fn() {
-      dinner(guests, 20, 0, fn(event) { let assert Ok(Nil) = channel::send(log_tx, event) })
-    })
-    // When the dinner ends, the closure holding `log_tx` is dropped,
-    // which closes the log and ends `check_log`.
-    check_log(log_rx, set::from_list([]), 0)
-  })
-  assert outcome == Ok(Ok(list::length(guests) * 20))
+  let outcome = fiber::timeout(duration::seconds(10), fn() { observe(guests, 20, 0) })
+  let everyone = guests |> list::map(_, fn(name) { (name, 20) }) |> map::from_list
+  assert outcome == Ok(Ok(everyone))
 }
 
 test "two philosophers share both forks without deadlock" {

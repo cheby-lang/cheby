@@ -24,5 +24,29 @@ Tasks 0.4 and 0.5 depend on 0.11: an example's expected output can only be writt
 
 ## Exit criteria
 
-- CI is green on the platform matrix and runs the conformance, UI, cross-check and bench jobs.
-- All tier-1 stdlib modules are specified.
+- [ ] CI is green on the platform matrix and runs the conformance, UI, cross-check and bench jobs.
+- [x] All tier-1 stdlib modules are specified.
+
+## Status
+
+In progress. The table records each task's state as of 2026-10-05.
+
+| #    | State   | Notes                                                                                                                                                                                                                                   |
+| ---- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0.1  | done    | `cargo build` and `cargo test` pass. All 20 crates exist as skeletons (D-284), licensed per D-285.                                                                                                                                      |
+| 0.2  | blocked | The `test` matrix and `fmt` pass on all six platforms on pushes to `main`. The `cross-check` and `bench` jobs fail, because `tree-sitter-cheby` is a private repository and the runner cannot clone it. Not yet seen on a pull request. |
+| 0.3  | done    | `cheby --help` lists every command of §13.1, and unimplemented ones name their milestone and exit with status 1 (D-286).                                                                                                                |
+| 0.4  | done    | The 29 runnable examples have `expected.stdout`. 020, 030 and 031 are `skip-run` with a reason. Inputs are in `args` and `stdin` files, and 008, 011 and 014 ship their input files (D-415).                                            |
+| 0.5  | done    | 010, 013, 018, 019 and 022 changed or got fixed inputs (D-411 to D-416).                                                                                                                                                                |
+| 0.6  | done    | The harness reports all 32 examples as expected-fail.                                                                                                                                                                                   |
+| 0.7  | done    | The UI harness runs two tests, expected-fail until the compiler exists in M1. `cargo xtask coverage` lists the 279 uncovered decisions.                                                                                                 |
+| 0.8  | blocked | `cargo xtask cross-check` passes locally (92 files, pinned commit `eeadced`) but fails in CI, as for 0.2.                                                                                                                               |
+| 0.9  | blocked | A 1M-line project is generated twice, byte for byte identical, in about a second. The CI job fails at its tree-sitter step, as for 0.2.                                                                                                 |
+| 0.10 | done    | `bless`, `gen-bench` and `check-determinism` run, and so do `coverage` and `cross-check` (D-292).                                                                                                                                       |
+| 0.11 | done    | 34 module files in `docs/stdlib/`, decisions D-294 to D-410, examples renamed to match.                                                                                                                                                 |
+
+Changes against the plan:
+
+- The goldens were written before any compiler existed, from throwaway ports of each example checked against its code and module comment (D-417). A golden found wrong in M1 is re-recorded with `cargo xtask bless`.
+- Making the output deterministic changed five examples rather than only their inputs: 013, 019 and 022 no longer print in an order that depends on scheduling, and 018 prints a panic's message instead of its debug text.
+- Open items from this work are in the decision log under [Example goldens](../decisions/LOG.md#2026-10-05-example-goldens): 010's golden never prints `Too low.` or `Too high.`, 018's golden assumes what `fiber::message` returns until tier 2 specifies it, and 019 takes about 1.85 s per run.

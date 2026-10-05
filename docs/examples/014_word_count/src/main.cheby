@@ -4,7 +4,9 @@
 //! its 10 most frequent words, or as many as the optional second
 //! argument says, one per line with its count. The most frequent word
 //! comes first, and words with the same count come in alphabetical
-//! order. The counting itself is in `count.cheby`.
+//! order. The counting itself is in `count.cheby`. `cheby run -- book.txt 5`,
+//! with the `book.txt` next to `cheby.toml`, prints its 5 most frequent
+//! words.
 //!
 //! With no argument, too many arguments or a count that is not a whole
 //! number of at least 1, or if the file cannot be read, `main` returns

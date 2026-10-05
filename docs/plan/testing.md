@@ -16,6 +16,7 @@ docs/examples/003_fizzbuzz/
   stdin                 optional input fed to the program
   args                  optional, one argument per line
   env                   optional, KEY=VALUE per line
+  data files            optional, read by the program and named in args (D-415)
   test.toml             optional: skip-run, targets, milestone, reason
 ```
 

@@ -1,0 +1,19 @@
+Morning:
+  sun: circle at (8.0, 2.0), radius 1.5
+  house: 4.0 by 3.0 rectangle at (1.0, 4.0)
+  bird: dot at (6.0, 1.0)
+
+The view pans left:
+  sun: circle at (10.0, 2.0), radius 1.5
+  house: 4.0 by 3.0 rectangle at (3.0, 4.0)
+  bird: dot at (8.0, 1.0)
+
+Sunset:
+  sun: circle at (10.0, 7.0), radius 2.25
+  house: 4.0 by 3.0 rectangle at (3.0, 4.0)
+  bird: dot at (8.0, 1.0)
+
+Night:
+  sun: circle at (10.0, 7.0), radius 2.25
+  house, lights on: 4.0 by 3.0 rectangle at (3.0, 4.0)
+  bird: dot at (8.0, 7.0)

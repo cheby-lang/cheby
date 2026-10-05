@@ -3,8 +3,9 @@
 //! Reads the file named by the only command-line argument. The file holds
 //! an object such as `{"books": [...]}`, and the `book` module describes
 //! how each book is written. The program prints one line per book, then
-//! the paperbacks as one line of compact JSON. If there is not exactly
-//! one argument, the file cannot be read or it does not hold a list of
+//! the paperbacks as one line of compact JSON. `cheby run -- books.json`,
+//! with the `books.json` next to `cheby.toml`, shows it. If there is not
+//! exactly one argument, the file cannot be read or it does not hold a list of
 //! books, `main` returns an error, which the
 //! runtime prints to standard error with `show` before exiting with
 //! status 1.

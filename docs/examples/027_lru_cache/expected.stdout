@@ -1,0 +1,9 @@
+apple: 1.20 (miss)
+bread: 2.50 (miss)
+cheese: 4.80 (miss)
+apple: 1.20 (hit)
+dates: 3.90 (miss, evicted bread)
+apple: 1.20 (hit)
+cheese: 4.80 (hit)
+7 requests: 3 hits, 4 misses, 1 eviction
+cached, most recent first: cheese, apple, dates

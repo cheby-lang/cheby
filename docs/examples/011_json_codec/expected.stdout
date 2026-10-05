@@ -1,0 +1,5 @@
+"Dune" by Frank Herbert (1965, paperback)
+"Beloved" by Toni Morrison (1987, hardcover)
+"The Odyssey" by Homer (-700, paperback)
+"Snow Crash" by Neal Stephenson (1992, ebook)
+[{"title":"Dune","author":{"name":"Frank Herbert","born":1920},"year":1965,"format":"paperback","tags":["science fiction","classic"]},{"title":"The Odyssey","author":{"name":"Homer","born":null},"year":-700,"format":"paperback","tags":["epic"]}]

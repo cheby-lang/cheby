@@ -8,11 +8,13 @@
 //! coordinated by the paying client (see `bank.cheby`).
 //!
 //! Some payments are refused for lack of money, and which ones depends
-//! on how the fibers happen to interleave, so the final balances change
-//! from run to run. What never changes is the total: a transfer only
-//! moves money, so once every client has finished, the bank holds
-//! exactly what the customers brought. `main` checks that with
-//! `assert`, which is also allowed outside tests.
+//! on how the fibers happen to interleave, so the number of refusals and
+//! the final balances change from run to run, and the program does not
+//! print them. What never changes is printed instead: every payment is
+//! either made or refused, and a transfer only moves money, so once
+//! every client has finished, the bank holds exactly what the customers
+//! brought. `main` checks both with `assert`, which is also allowed
+//! outside tests.
 
 import std::fiber
 import std::io
@@ -55,8 +57,12 @@ fn main() -> Result<Nil, fiber::Panic> {
   let brought = money::from_cents(opening_cents * count)
   io::println("{count} customers bring {brought} to the bank and pay each other {client_rounds} times each.")
   use ledger <- result::try(trade(owners, client_rounds))
-  io::println("{ledger.tally.moved} payments went through and {ledger.tally.refused} were refused.")
-  list::each(ledger.balances, fn((owner, closing)) { io::println("  {owner} leaves with {closing}") })
+  // How many payments went through depends on the interleaving, but
+  // their sum with the refused ones does not.
+  let attempted = ledger.tally.moved + ledger.tally.refused
+  let planned = count * client_rounds
+  assert attempted == planned as "{attempted} payments were tried, not {planned}"
+  io::println("{attempted} payments were made or refused, in an order that changes from run to run.")
   let held = list::fold(ledger.balances, money::zero, fn(sum, (_, closing)) { sum + closing })
   // Money that appears or disappears is a bug in this program, not
   // something a customer can cause, so it panics instead of returning

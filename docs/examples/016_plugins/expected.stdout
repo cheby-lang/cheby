@@ -1,0 +1,17 @@
+Notifiers: email to ops@example.com, text to +44 20 7946 0000, log ops, log audit
+
+Sending Lunch: Pizza at noon
+  sent: email to ops@example.com: Lunch: Pizza at noon
+  skipped by text to +44 20 7946 0000
+  sent: [ops] Lunch: Pizza at noon
+  sent: [audit] Lunch: Pizza at noon
+
+Sending [urgent] Disk full: /var is at 98%
+  sent: email to ops@example.com: [urgent] Disk full: /var is at 98%
+  sent: text to +44 20 7946 0000: Disk full
+  sent: [ops] [urgent] Disk full: /var is at 98%
+  sent: [audit] [urgent] Disk full: /var is at 98%
+
+Paging the on-call rota with [urgent] Site down: The shop returns 502
+  text to +44 20 7946 0001: Site down
+  text to +44 20 7946 0002: Site down

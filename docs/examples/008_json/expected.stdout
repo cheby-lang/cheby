@@ -1,0 +1,17 @@
+{
+  "name": "cheby",
+  "version": 0.1,
+  "tags": [
+    "fibers",
+    "immutable"
+  ],
+  "stable": false,
+  "license": null,
+  "authors": [
+    {
+      "name": "Ada",
+      "commits": 42
+    }
+  ],
+  "deps": {}
+}

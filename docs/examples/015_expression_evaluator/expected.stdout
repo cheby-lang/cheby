@@ -1,0 +1,8 @@
+Enter expressions or let lines, one per line.
+width = 6
+height = 7
+42
+error: division by zero: height - 7 is 0
+8
+error: expected a number, a name, "-" or "(", found end of line at column 4
+error: unknown variable who

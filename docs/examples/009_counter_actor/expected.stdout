@@ -1,0 +1,4 @@
+10 clients added 1, 100 times each: the count is 1000
+before a reset: the count is 42
+after a reset: the count is 0
+after stopping: the counter has stopped

@@ -8,8 +8,8 @@
 //! The second run has a start of 0 among the others, and the job for it
 //! panics. A panic ends only the fiber it happens in: the pool's scope
 //! cancels the other workers and turns the panic into a `fiber::Panic`
-//! value, which `main` prints like any other result before it returns
-//! normally.
+//! value, whose message `main` prints like any other result before it
+//! returns normally.
 
 import std::fiber
 import std::io
@@ -48,10 +48,12 @@ fn report(title: String, outcome: Result<List<(Int, Int)>, fiber::Panic>) {
     }
     // `fiber::Panic` holds the message and source location of the
     // first panic in the pool. The workers cancelled because of it are
-    // not reported (D-178). Debug printing works for every type.
+    // not reported (D-178). `fiber::message` gives just the message,
+    // which reads the same however the source files are edited.
     Err(failure) => {
+      let message = fiber::message(failure)
       io::println("{title}: the pool stopped because a job panicked.")
-      io::println("  {failure:?}")
+      io::println("  {message}")
     }
   }
 }

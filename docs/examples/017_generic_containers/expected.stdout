@@ -1,0 +1,15 @@
+Breadth first, with a queue:
+  visit Ada, waiting: queue [Ben, Cy]
+  visit Ben, waiting: queue [Cy, Dan, Eve]
+  visit Cy, waiting: queue [Dan, Eve, Fay]
+  visit Dan, waiting: queue [Eve, Fay]
+  visit Eve, waiting: queue [Fay]
+  visit Fay, waiting: queue []
+Depth first, with a stack:
+  visit Ada, waiting: stack [Ben, Cy]
+  visit Ben, waiting: stack [Dan, Eve, Cy]
+  visit Dan, waiting: stack [Eve, Cy]
+  visit Eve, waiting: stack [Cy]
+  visit Cy, waiting: stack [Fay]
+  visit Fay, waiting: stack []
+queue [1, 2] and queue [1, 2]: == is False, same_items is True

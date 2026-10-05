@@ -1,8 +1,8 @@
 //! A heartbeat and a supervisor, side by side.
 //!
 //! `main` first starts a heartbeat (see `heartbeat.cheby`), a detached
-//! fiber that prints `tick 1`, `tick 2` and so on in the background.
-//! Then it supervises two jobs (see `supervisor.cheby`):
+//! fiber that beats in the background and sends each beat number on a
+//! channel. Then it supervises two jobs (see `supervisor.cheby`):
 //!
 //! - fetching a report, which crashes on the first attempt, hangs past
 //!   its deadline on the second and succeeds on the third,
@@ -10,14 +10,15 @@
 //!   gives up once its restarts run out.
 //!
 //! Which attempt fails, and how, depends only on the attempt number,
-//! so the restarts and the results are the same on every run. The tick
-//! lines come from another fiber on a timer, so where they fall between
-//! the other lines depends on timing.
+//! so the restarts and the results are the same on every run. How many
+//! beats happen meanwhile depends on timing, so `main` prints only that
+//! the heartbeat kept beating, from the first beat it collects.
 //!
-//! `main` does not wait for the heartbeat. When the second job is
-//! over, `main` returns, and the program ends and kills the heartbeat
-//! mid-beat (D-073).
+//! `main` does not wait for the heartbeat to finish. When the second
+//! job is over, `main` returns, and the program ends and kills the
+//! heartbeat mid-beat (D-073).
 
+import std::channel
 import std::duration
 import std::io
 import supervisor::clock
@@ -40,7 +41,7 @@ const save_policy: supervisor::Policy = supervisor::Policy {
 }
 
 fn main() {
-  heartbeat::start(duration::milliseconds(200))
+  let beats = heartbeat::start(duration::milliseconds(200))
   io::println("Fetching the report.")
   case supervisor::supervise(fetch_policy, fetch_report, announce) {
     Ok(report) => io::println(report)
@@ -51,7 +52,12 @@ fn main() {
     Ok(Nil) => io::println("The report is saved.")
     Err(gave_up) => explain(gave_up)
   }
-  io::println("Done. The heartbeat stops with the program.")
+  // The jobs took well over one interval, so the first beat is already
+  // waiting in the channel, and this does not wait.
+  case channel::receive(beats) {
+    Ok(first) => io::println("Done. Beat {first} of the heartbeat came in, and the heartbeat stops with the program.")
+    Err(Nil) => io::println("Done. The heartbeat had stopped.")
+  }
 }
 
 /// Fetches a report, badly. `attempt` counts from 1.

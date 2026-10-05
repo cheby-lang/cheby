@@ -1,0 +1,14 @@
+coin 200
+select a1
+menu
+
+coin 30
+coin 50
+coin 100
+select b2
+select a2
+restock b2 2
+coin 200
+select b2
+dance
+coin 20

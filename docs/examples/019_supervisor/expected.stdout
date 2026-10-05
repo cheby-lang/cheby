@@ -1,0 +1,9 @@
+Fetching the report.
+Restart 1: the worker crashed: the connection dropped.
+Restart 2: the worker missed its deadline.
+The report arrived on attempt 3.
+Saving the report.
+Restart 1: the worker crashed: the disk is full.
+Restart 2: the worker crashed: the disk is full.
+Giving up after 2 restarts: the worker crashed: the disk is full.
+Done. Beat 1 of the heartbeat came in, and the heartbeat stops with the program.

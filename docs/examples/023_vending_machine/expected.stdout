@@ -1,0 +1,38 @@
+commands: coin CENTS, select CODE, cancel, restock CODE COUNT, menu
+Insert a coin, or type menu.
+credit 2.00
+Credit 2.00. Select an item, add coins or cancel.
+dispensed Cola
+returned 0.50
+Insert a coin, or type menu.
+A1  Cola  1.50  (4 left)
+A2  Water  1.00  (5 left)
+B1  Crisps  1.20  (3 left)
+B2  Chocolate  1.80  (0 left)
+Insert a coin, or type menu.
+commands: coin CENTS, select CODE, cancel, restock CODE COUNT, menu
+Insert a coin, or type menu.
+rejected 0.30, not a coin this machine takes
+Insert a coin, or type menu.
+credit 0.50
+Credit 0.50. Select an item, add coins or cancel.
+credit 1.50
+Credit 1.50. Select an item, add coins or cancel.
+Chocolate is sold out
+Credit 1.50. Select an item, add coins or cancel.
+dispensed Water
+returned 0.50
+Insert a coin, or type menu.
+B2  Chocolate  1.80  (2 left)
+Insert a coin, or type menu.
+credit 2.00
+Credit 2.00. Select an item, add coins or cancel.
+dispensed Chocolate
+returned 0.20
+Insert a coin, or type menu.
+unknown command "dance", commands: coin CENTS, select CODE, cancel, restock CODE COUNT, menu
+Insert a coin, or type menu.
+credit 0.20
+Credit 0.20. Select an item, add coins or cancel.
+returned 0.20
+Bye.

@@ -1,5 +1,5 @@
-//! A heartbeat: a fiber that prints "tick 1", "tick 2" and so on at a
-//! steady interval, for as long as the program runs.
+//! A heartbeat: a fiber that beats at a steady interval, for as long as
+//! the program runs, and reports each beat on a channel.
 //!
 //! The heartbeat is a detached fiber (D-040). No scope waits for
 //! it, so it can outlive the function that starts it, and it never has
@@ -9,34 +9,51 @@
 //! scope instead would keep that scope, and so the whole program,
 //! waiting for a loop that never ends.
 //!
+//! The heartbeat prints nothing. Lines printed from a timer would fall
+//! between the other lines of the program differently on every run, so
+//! it sends its beat numbers to whoever started it instead.
+//!
 //! Detaching also cuts the fiber off from failure handling. If the
 //! heartbeat panicked, the panic would be printed to standard error and
 //! the heartbeat would simply stop, with nothing cancelled and nobody
 //! told. Work that must be watched belongs in a scope, as in
 //! `supervisor.cheby`.
 
+import std::channel
 import std::duration
 import std::fiber
-import std::io
 import supervisor::clock
 
-/// Starts printing `tick N` every `interval`, from `tick 1` after the
-/// first interval, until the program exits. Returns at once.
-fn start(interval: duration::Duration) {
-  fiber::spawn_detached(fn() { beat(interval, 1) })
+/// Starts beating every `interval`, from beat 1 after the first
+/// interval, until the program exits. Returns at once, with the
+/// channel that the beat numbers arrive on.
+fn start(interval: duration::Duration) -> channel::Receiver<Int> {
+  // Capacity 1: the channel holds one beat nobody has collected yet.
+  // While it is full, the heartbeat waits in `send` for room.
+  let (beats_tx, beats_rx) = channel::new::<Int>(1)
+  fiber::spawn_detached(fn() { beat(beats_tx, interval, 1) })
+  beats_rx
 }
 
-/// Waits for `interval`, prints tick `count` and goes on with the next
-/// tick, forever. The return type `Never` records that it never
-/// returns, and the recursive call is a tail call, so ticking forever
+/// Waits for `interval`, sends beat `count` and goes on with the next
+/// beat, forever. The return type `Never` records that it never
+/// returns, and the recursive call is a tail call, so beating forever
 /// takes constant stack space.
-fn beat(interval: duration::Duration, count: Int) -> Never {
+fn beat(beats: channel::Sender<Int>, interval: duration::Duration, count: Int) -> Never {
   // The sleep is what lets this fiber share the thread. Native targets
   // could preempt a fiber that never waits, at its next function entry
   // (D-028), but JS cannot (D-185). There a heartbeat without the sleep
   // would never give the thread back, so `main` would never run again
   // and the program would never finish (D-232).
   clock::sleep(interval)
-  io::println("tick {count}")
-  beat(interval, count + 1)
+  // Once nobody holds the receiver any more, `send` returns the beat
+  // in an `Err`. Nobody listens, so the beat goes on regardless.
+  let _ = channel::send(beats, count)
+  beat(beats, interval, count + 1)
+}
+
+test "the first beat is beat 1" {
+  let beats = start(duration::milliseconds(1))
+  assert channel::receive(beats) == Ok(1)
+  assert channel::receive(beats) == Ok(2)
 }

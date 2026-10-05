@@ -1,0 +1,14 @@
+All starts are positive:
+  27 reaches 1 after 111 steps
+  97 reaches 1 after 118 steps
+  871 reaches 1 after 178 steps
+  6171 reaches 1 after 261 steps
+  77031 reaches 1 after 350 steps
+  837799 reaches 1 after 524 steps
+  9 reaches 1 after 19 steps
+  703 reaches 1 after 170 steps
+  7 reaches 1 after 16 steps
+  1 reaches 1 after 0 steps
+
+One start is 0: the pool stopped because a job panicked.
+  a Collatz sequence must start above 0, not at 0
