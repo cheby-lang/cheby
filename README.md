@@ -56,13 +56,14 @@ The [overview](docs/spec/01-overview.md) lists what Cheby has, what it deliberat
 
 ## Repository layout
 
-| Path                                             | Contents                                              |
-| ------------------------------------------------ | ----------------------------------------------------- |
-| [`docs/spec/`](docs/spec/README.md)              | The language specification                            |
-| [`docs/decisions/LOG.md`](docs/decisions/LOG.md) | The decision log (`D-NNN`), cited throughout the spec |
-| [`docs/adr/`](docs/adr/)                         | Architecture decision records for the major choices   |
-| [`docs/plan/`](docs/plan/README.md)              | Implementation plan, milestones M0-M6                 |
-| [`docs/examples/`](docs/examples/)               | 32 example programs, the future conformance suite     |
+| Path                                              | Contents                                              |
+| ------------------------------------------------- | ----------------------------------------------------- |
+| [`docs/spec/`](docs/spec/README.md)               | The language specification                            |
+| [`docs/decisions/LOG.md`](docs/decisions/LOG.md)  | The decision log (`D-NNN`), cited throughout the spec |
+| [`docs/adr/`](docs/adr/)                          | Architecture decision records for the major choices   |
+| [`docs/plan/`](docs/plan/README.md)               | Implementation plan, milestones M0-M6                 |
+| [`docs/examples/`](docs/examples/)                | 32 example programs, the future conformance suite     |
+| [`docs/diagnostics/`](docs/diagnostics/README.md) | Explanations of diagnostic codes, for `cheby explain` |
 
 ## Editor support
 

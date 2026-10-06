@@ -22,7 +22,7 @@ I measurement runs from the first end-to-end program
 
 | #   | Task                                                                                                                                                                                                                    | Spec                | Done when                                                       |
 | --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- | --------------------------------------------------------------- |
-| A1  | Source map, spans, diagnostic type and plain-text renderer with suggestions                                                                                                                                             | §13.8               | UI-test stderr format fixed                                     |
+| A1  | Source map, spans, diagnostic type and plain-text renderer with suggestions (D-418, D-421), code registry checked against `docs/diagnostics/` (D-419, D-420)                                                            | §13.8               | UI-test stderr format fixed                                     |
 | A2  | Lexer: identifiers, keywords including reserved `go` (D-240), numeric literals (D-084), strings with interpolation segments, `//`, `///`, `//!`, attributes, `NL` tokens (D-231)                                        | ch. 2               | lexer is lossless on all examples; fuzz target added            |
 | A3  | Syntax kinds, parser events and the flat arena tree builder (D-280)                                                                                                                                                     | -                   | CST round-trips any input; tree size and build time benchmarked |
 | A4  | Parser for items: `fn`, `type` with variants and shorthand, aliases, `const`, `interface`, `test`, `import`, attributes, visibility                                                                                     | ch. 4, App. A.1-A.2 | declaration corpus parses                                       |
@@ -105,16 +105,17 @@ I measurement runs from the first end-to-end program
 
 ## G. Driver and CLI (`cheby_driver`, `cheby_repl`, `cheby_cli`)
 
-| #   | Task                                                                                                                                       | Spec     | Done when                               |
-| --- | ------------------------------------------------------------------------------------------------------------------------------------------ | -------- | --------------------------------------- |
-| G1  | Build graph over modules in import order, parallel modules and parallel functions inside a module (D-263), deterministic output (D-264)    | §13.12.2 | results identical across thread counts  |
-| G2  | `std` compiled from source and kept in memory per process                                                                                  | -        | `import std::list` works                |
-| G3  | `cheby run [module_path]` (D-137), `main` of any visibility (D-163)                                                                        | §13.1    | M1 examples pass through the harness    |
-| G4  | `cheby test`: `test` blocks as separate units (D-265), `Nil` or `Result` bodies (D-140), filtering, sequential in M1                       | §13.6    | stdlib `test` blocks pass               |
-| G5  | `cheby repl`: expressions, `let`, declarations, imports, `:type`, `:module`, `:reload`, redefinition and stale types (D-043, D-098, D-193) | §13.5    | `tests/repl/` passes                    |
-| G5b | REPL panics: each entry on its own stack, a panic abandons the entry and the session continues (D-283)                                     | §13.5.4  | REPL test with a panicking entry passes |
-| G6  | `cheby check` with `--target` (D-282), and `cheby build` reporting that no backend exists yet                                              | §13.1    | CI uses `cheby check` on all examples   |
-| G7  | `--deny-warnings` (D-080)                                                                                                                  | §13.8    | UI test passes                          |
+| #   | Task                                                                                                                                       | Spec         | Done when                               |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------ | ------------ | --------------------------------------- |
+| G1  | Build graph over modules in import order, parallel modules and parallel functions inside a module (D-263), deterministic output (D-264)    | §13.12.2     | results identical across thread counts  |
+| G2  | `std` compiled from source and kept in memory per process                                                                                  | -            | `import std::list` works                |
+| G3  | `cheby run [module_path]` (D-137), `main` of any visibility (D-163)                                                                        | §13.1        | M1 examples pass through the harness    |
+| G4  | `cheby test`: `test` blocks as separate units (D-265), `Nil` or `Result` bodies (D-140), filtering, sequential in M1                       | §13.6        | stdlib `test` blocks pass               |
+| G5  | `cheby repl`: expressions, `let`, declarations, imports, `:type`, `:module`, `:reload`, redefinition and stale types (D-043, D-098, D-193) | §13.5        | `tests/repl/` passes                    |
+| G5b | REPL panics: each entry on its own stack, a panic abandons the entry and the session continues (D-283)                                     | §13.5.4      | REPL test with a panicking entry passes |
+| G6  | `cheby check` with `--target` (D-282), and `cheby build` reporting that no backend exists yet                                              | §13.1        | CI uses `cheby check` on all examples   |
+| G7  | `--deny-warnings` (D-080)                                                                                                                  | §13.8        | UI test passes                          |
+| G8  | `cheby explain <code>` printing the embedded file from `docs/diagnostics/` (D-420)                                                         | §13.1, §13.8 | every assigned code is explained        |
 
 ## H. Standard library, tier 1
 

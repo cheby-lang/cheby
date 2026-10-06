@@ -11,6 +11,7 @@ The home of the Cheby programming language. It is currently **docs only**, in th
 - `docs/spec/`: the language specification, one chapter per file, with the grammar in Appendix A.
 - `docs/plan/`: the implementation plan, milestones M0-M6.
 - `docs/examples/`: 32 example programs, `NNN_name/cheby.toml` plus `src/*.cheby`.
+- `docs/diagnostics/`: one explanation per diagnostic code, `E0001.md` onward (D-420).
 
 Sibling repositories, usually checked out next to this one:
 
