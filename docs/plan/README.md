@@ -57,34 +57,40 @@ M5 is listed as a milestone so it has exit criteria, but its work starts as soon
 
 ## Plan decisions
 
-Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-plan), and D-284 onward in [M0 foundation](../decisions/LOG.md#2026-10-04-m0-foundation):
+Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-plan), D-284 onward in [M0 foundation](../decisions/LOG.md#2026-10-04-m0-foundation), and D-418 onward in [Diagnostics](../decisions/LOG.md#2026-10-06-diagnostics):
 
-| Decision | Summary                                                                                             |
-| -------- | --------------------------------------------------------------------------------------------------- |
-| D-270    | The implementation is a Cargo workspace in this repository, next to `docs/`                         |
-| D-271    | The plan lives in `docs/plan/`, one file per milestone, with the full roadmap and M1 in task detail |
-| D-272    | Hand-written lexer and recursive-descent parser over a lossless CST, cross-checked with tree-sitter |
-| D-273    | MIR has explicit dup/drop from M1 (naive RC), and Perceus in M2 only optimizes it                   |
-| D-274    | Collection and string kernels in the runtime (Rust and JS), combinators in Cheby, migrate later     |
-| D-275    | Golden files next to each example, plus `tests/ui/` for diagnostics and focused features            |
-| D-276    | The stdlib spec is a parallel workstream, each tier written before the milestone that needs it      |
-| D-277    | Pinned stable Rust (1.99, edition 2024), GitHub Actions with the full D-074 matrix on every PR      |
-| D-278    | Tagged integers: low bit 1 is a 63-bit integer, low bit 0 a pointer; larger `Int`s boxed            |
-| D-279    | 8-byte object header: 32-bit count (sign = shared), 8-bit scan count, 24-bit layout id              |
-| D-280    | Event-based parser feeding a flat, arena-allocated CST written for Cheby, not `rowan`               |
-| D-281    | Per-target hash behind one routine: SipHash-1-3 on native, a keyed 32-bit hash on JS                |
-| D-282    | New permanent `cheby check`; `cheby build` errors for a target until its backend exists             |
-| D-283    | Before unwinding, a REPL panic abandons the entry on its own stack and the session continues        |
-| D-284    | All 20 crates exist from M0 as skeletons, plus `bench/gen`, `tests/support` and `xtask`             |
-| D-285    | License holder is "The Cheby Project Developers"                                                    |
-| D-286    | `cheby` parses arguments with clap derive; program arguments of `cheby run` follow `--`             |
-| D-287    | Harnesses live under `tests/` but build as test targets of `cheby_cli`                              |
-| D-288    | `tests/milestone`: earlier milestones must pass, the current one is pending, later ones must fail   |
-| D-289    | UI tests are single `.cheby` files with `// @key: value` headers and goldens beside them            |
-| D-290    | The tree-sitter cross-check uses the commit pinned in `tests/tree-sitter-cheby.rev`                 |
-| D-291    | `bench/gen` is a deterministic library crate; CI checks its output until M1                         |
-| D-292    | Repository scripts are `cargo xtask` commands written in Rust                                       |
-| D-293    | Clippy `pedantic`, `nursery` and the no-panic lints are denied workspace-wide                       |
+| Decision  | Summary                                                                                             |
+| --------- | --------------------------------------------------------------------------------------------------- |
+| D-270     | The implementation is a Cargo workspace in this repository, next to `docs/`                         |
+| D-271     | The plan lives in `docs/plan/`, one file per milestone, with the full roadmap and M1 in task detail |
+| D-272     | Hand-written lexer and recursive-descent parser over a lossless CST, cross-checked with tree-sitter |
+| D-273     | MIR has explicit dup/drop from M1 (naive RC), and Perceus in M2 only optimizes it                   |
+| D-274     | Collection and string kernels in the runtime (Rust and JS), combinators in Cheby, migrate later     |
+| D-275     | Golden files next to each example, plus `tests/ui/` for diagnostics and focused features            |
+| D-276     | The stdlib spec is a parallel workstream, each tier written before the milestone that needs it      |
+| D-277     | Pinned stable Rust (1.99, edition 2024), GitHub Actions with the full D-074 matrix on every PR      |
+| D-278     | Tagged integers: low bit 1 is a 63-bit integer, low bit 0 a pointer; larger `Int`s boxed            |
+| D-279     | 8-byte object header: 32-bit count (sign = shared), 8-bit scan count, 24-bit layout id              |
+| D-280     | Event-based parser feeding a flat, arena-allocated CST written for Cheby, not `rowan`               |
+| D-281     | Per-target hash behind one routine: SipHash-1-3 on native, a keyed 32-bit hash on JS                |
+| D-282     | New permanent `cheby check`; `cheby build` errors for a target until its backend exists             |
+| D-283     | Before unwinding, a REPL panic abandons the entry on its own stack and the session continues        |
+| D-284     | All 20 crates exist from M0 as skeletons, plus `bench/gen`, `tests/support` and `xtask`             |
+| D-285     | License holder is "The Cheby Project Developers"                                                    |
+| D-286     | `cheby` parses arguments with clap derive; program arguments of `cheby run` follow `--`             |
+| D-287     | Harnesses live under `tests/` but build as test targets of `cheby_cli`                              |
+| D-288     | `tests/milestone`: earlier milestones must pass, the current one is pending, later ones must fail   |
+| D-289     | UI tests are single `.cheby` files with `// @key: value` headers and goldens beside them            |
+| D-290     | The tree-sitter cross-check uses the commit pinned in `tests/tree-sitter-cheby.rev`                 |
+| D-291     | `bench/gen` is a deterministic library crate; CI checks its output until M1                         |
+| D-292     | Repository scripts are `cargo xtask` commands written in Rust                                       |
+| ~~D-293~~ | Superseded by D-423                                                                                 |
+| D-418     | Diagnostics are rendered like rustc: header with code, location, snippet, notes and help            |
+| D-419     | Codes `E0001` and `W0001` onward, assigned in order, never reused                                   |
+| D-420     | `cheby explain <code>`, with explanations in `docs/diagnostics/` embedded in the binary             |
+| D-421     | Locations are 1-based lines and code-point columns, paths package-relative with `/`                 |
+| D-422     | Lint exemptions are local `#[expect(…, reason)]` on the smallest function or module                 |
+| D-423     | Clippy `pedantic` and the no-panic lints are denied workspace-wide, `nursery` is not                |
 
 ## Open questions
 

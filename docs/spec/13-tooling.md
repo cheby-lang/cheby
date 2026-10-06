@@ -4,22 +4,25 @@ Cheby ships as one `cheby` binary that contains the compiler, runtime, REPL, tes
 
 ## 13.1 The cheby command
 
-| Command                                    | Purpose                                                       | Decisions           |
-| ------------------------------------------ | ------------------------------------------------------------- | ------------------- |
-| `cheby new <name>`                         | create a package                                              | D-097               |
-| `cheby check`                              | type-check the package without producing artifacts            | D-282               |
-| `cheby build`                              | compile the package, for `native` (AOT) or `js`               | D-006, D-007        |
-| `cheby run [module_path]`                  | compile with the JIT and run a module's `main`                | D-007, D-019, D-137 |
-| `cheby repl`                               | interactive session ([§13.5](#135-repl))                      | D-008, D-043, D-098 |
-| `cheby test`                               | run `test` blocks ([§13.6](#136-tests))                       | D-055               |
-| `cheby fmt`                                | format source files ([§13.7](#137-formatter))                 | D-079               |
-| `cheby lsp`                                | language server over stdio ([§13.11](#1311-language-server))  | D-031               |
-| `cheby doc`                                | generate HTML documentation ([§13.10](#1310-documentation))   | D-078               |
-| `cheby add`, `cheby update`, `cheby fetch` | manage dependencies ([§13.4](#134-dependencies-and-lockfile)) | D-044, D-097        |
+| Command                                    | Purpose                                                            | Decisions           |
+| ------------------------------------------ | ------------------------------------------------------------------ | ------------------- |
+| `cheby new <name>`                         | create a package                                                   | D-097               |
+| `cheby check`                              | type-check the package without producing artifacts                 | D-282               |
+| `cheby build`                              | compile the package, for `native` (AOT) or `js`                    | D-006, D-007        |
+| `cheby run [module_path]`                  | compile with the JIT and run a module's `main`                     | D-007, D-019, D-137 |
+| `cheby repl`                               | interactive session ([§13.5](#135-repl))                           | D-008, D-043, D-098 |
+| `cheby test`                               | run `test` blocks ([§13.6](#136-tests))                            | D-055               |
+| `cheby fmt`                                | format source files ([§13.7](#137-formatter))                      | D-079               |
+| `cheby lsp`                                | language server over stdio ([§13.11](#1311-language-server))       | D-031               |
+| `cheby doc`                                | generate HTML documentation ([§13.10](#1310-documentation))        | D-078               |
+| `cheby add`, `cheby update`, `cheby fetch` | manage dependencies ([§13.4](#134-dependencies-and-lockfile))      | D-044, D-097        |
+| `cheby explain <code>`                     | explain a diagnostic code ([§13.8](#138-diagnostics-and-warnings)) | D-420               |
 
 `cheby build --target native` produces an executable. Object files from Cranelift are linked with the system linker in early versions (`cc` or `link.exe`), and with a linker bundled in the `cheby` binary before 1.0 (D-088). `cheby build --target js` produces a directory of ES modules (D-074).
 
 `cheby check` parses and type-checks the package, including `test` blocks and the cross-target checks of [§12.6](12-targets-and-ffi.md#126-target-specific-code), and reports diagnostics like `cheby build`. It writes no output files, but may use the build cache ([§13.12.4](#13124-build-cache-and-standard-library)) (D-282).
+
+`cheby explain` prints the long explanation of a diagnostic code such as `E0012`, with examples and fixes ([§13.8](#138-diagnostics-and-warnings)) (D-420).
 
 `cheby run` runs the `main` of the module named by its module path argument, for example `cheby run my_app::tools::migrate`. Without an argument it runs the root module's `main` (D-137). `main` may have any visibility, including `priv` (D-163).
 
@@ -179,6 +182,28 @@ The following are warnings (D-080 and the cited decisions):
 Unused `pub` items are never reported (D-152). Warnings that need the whole package, such as unused package-visible items, are computed in a separate pass that does not delay `cheby run` (D-266). Bindings whose names start with `_` are not reported as unused ([§2.3](02-lexical-structure.md#23-identifiers)).
 
 The compiler should report errors with the source span, a short explanation, and a suggested fix where one exists, for example a new name for a shadowing binding (D-062) or `{x:?}` for a type without `Show` (D-086).
+
+Every diagnostic has a code: `E` and four digits for an error, `W` and four digits for a warning. Codes are assigned in order and never reused, and a code whose check is removed stays reserved (D-419). `cheby explain <code>` prints a code's long explanation (D-420).
+
+A diagnostic is rendered as plain text: a header with its kind, code and message, a location, a snippet of the source lines it is about, with `^` under the primary span and `-` under secondary spans, and then `note` and `help` lines. A suggested fix is a `help` line (D-418).
+
+A location is `path:line:column`. Lines and columns are counted from 1, and columns count Unicode code points. The path of a file in the package is relative to the package root and uses `/` on every platform (D-421).
+
+_Example:_
+
+```
+error[E0012]: `trimmed` is already bound
+ --> src/main.cheby:4:7
+  |
+3 |   let trimmed = string::trim(s)
+  |       ------- first bound here
+4 |   let trimmed = string::lowercase(trimmed)
+  |       ^^^^^^^ bound again here
+  |
+  = help: use a new name, such as `trimmed_2`
+```
+
+The code in the example is illustrative. Codes are listed with their explanations in [`docs/diagnostics/`](../diagnostics/README.md).
 
 ## 13.9 Compile-time evaluation
 

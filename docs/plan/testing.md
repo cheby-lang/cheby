@@ -40,7 +40,7 @@ tests/ui/06-patterns/exhaustiveness/missing_variant.cheby
 
 - A file starts with a header comment that says whether it must compile, fail with the expected diagnostics, or run with expected output (D-289). The format is described in [`tests/ui/README.md`](../../tests/ui/README.md).
 - Every "must" and every warning of [§13.8](../spec/13-tooling.md#138-diagnostics-and-warnings) gets at least one test. A coverage script, `cargo xtask coverage` (D-292), lists D-numbers cited in the spec that no UI test names in its header, and the list shrinks every milestone.
-- Diagnostics are rendered in a stable plain-text form for comparison, without colors or absolute paths.
+- Diagnostics are rendered in a stable plain-text form for comparison, without colors or absolute paths (D-418, D-421).
 
 ## 3. Unit and property tests
 

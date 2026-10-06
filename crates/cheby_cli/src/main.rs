@@ -57,6 +57,11 @@ enum Command {
     Update,
     /// Download what the lockfile names (§13.4)
     Fetch,
+    /// Explain a diagnostic code such as `E0012` (D-420)
+    Explain {
+        /// Diagnostic code, such as `E0012` or `W0003`
+        code: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -80,6 +85,7 @@ fn main() -> ExitCode {
         Command::Add => not_yet("add", "M5"),
         Command::Update => not_yet("update", "M5"),
         Command::Fetch => not_yet("fetch", "M5"),
+        Command::Explain { .. } => not_yet("explain", "M1"),
     }
 }
 
@@ -120,7 +126,7 @@ mod tests {
         let names: Vec<_> = cmd.get_subcommands().map(clap::Command::get_name).collect();
         for expected in [
             "new", "check", "build", "run", "repl", "test", "fmt", "lsp", "doc", "add", "update",
-            "fetch",
+            "fetch", "explain",
         ] {
             assert!(names.contains(&expected), "missing command `{expected}`");
         }
