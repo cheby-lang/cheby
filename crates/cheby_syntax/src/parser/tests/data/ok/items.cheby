@@ -1,0 +1,56 @@
+//! Every item form (App. A.1, A.2).
+@!target(native, js)
+import std::io
+import std::ops::{Add, Compare as Cmp, max as maximum,}
+import std::list as lists
+import std::map::{
+  Map,
+  new,
+}
+
+/// A documented function.
+@external(native, "c_name")
+@blocking
+pub fn external_one(path: String) -> Result<Db, String>
+
+@deprecated("use g")
+priv fn generic<A, B: Show + ops::Eq>(a: A, b: B,) -> (A, B) {
+  (a, b)
+}
+
+fn no_params() {}
+
+pub exposed type Shape {
+  /// A circle.
+  Circle { radius: Float },
+  Square(Float),
+  Dot,
+}
+
+type Point {
+  x: Float,
+  /// The y coordinate.
+  y: Float,
+}
+
+@external(js)
+type Handle
+
+priv type Pair<A, B> = (A, B)
+type Callback = fn(Int, String) -> Bool
+
+const limit: Int = 10
+pub const name: String = "cheby"
+
+pub interface Show {
+  /// Renders.
+  fn show(Self) -> String
+  fn debug(Self, Int)
+}
+
+interface Num: Add + ops::Mul
+interface Empty {}
+
+test "it works" {
+  assert 1 + 1 == 2 as "math"
+}

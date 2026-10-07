@@ -21,6 +21,7 @@ dyn_type    = "dyn" interface_ref ;                  (* interface_ref: §8.1 *)
 - Type arguments use angle brackets (D-049).
 - In `fn_type`, a missing `-> type` means `-> Nil` (D-083).
 - `dyn I` is the runtime-value form of an interface ([§8.6](08-interfaces.md#86-dyn-values)).
+- There is no parenthesized type. `(T)` is a tuple type with one element, which is a compile error ([§3.7](#37-tuples), D-436).
 
 ## 3.2 Built-in types
 
@@ -159,9 +160,9 @@ let (name, age) = person
 list::map(pairs, fn((key, value)) { key + "=" + value })
 ```
 
-A written type that contains a tuple with a tuple element, such as `((Int, Int), Bool)`, or a tuple with four or more elements, is a warning that suggests a named type instead ([§13.8](13-tooling.md#138-diagnostics-and-warnings)) (D-243).
+A written type that contains a tuple with a tuple element, such as `((Int, Int), Bool)`, or a tuple with four or more elements, is a warning that suggests a named type instead ([§13.8](13-tooling.md#138-diagnostics-and-warnings)) (D-243). The warning is reported once per written type, on the outermost tuple that has such a shape, so `(((A, B), C), D)` warns once (D-440).
 
-A tuple has at least two elements. `(x)` is a parenthesized expression, and there is no one-element tuple.
+A tuple has at least two elements. `(x)` is a parenthesized expression, and there is no one-element tuple. Types have no parentheses for grouping, so the type `(T)` is a one-element tuple and a compile error, like `()` and `(T,)` (D-436).
 
 ## 3.8 List, Map and Set
 

@@ -1,0 +1,61 @@
+SOURCE_FILE@0..113
+  COMMENT@0..13 "// Interfaces"
+  NEWLINE@13..14 "\n"
+  INTERFACE_DECL@14..77
+    VISIBILITY@14..17
+      PUB_KW@14..17 "pub"
+    WHITESPACE@17..18 " "
+    INTERFACE_KW@18..27 "interface"
+    WHITESPACE@27..28 " "
+    UPPER_IDENT@28..32 "Show"
+    WHITESPACE@32..33 " "
+    INTERFACE_BODY@33..77
+      L_BRACE@33..34 "{"
+      NEWLINE@34..35 "\n"
+      WHITESPACE@35..37 "  "
+      INTERFACE_FN@37..75
+        DOC_COMMENT@37..49 "/// Renders."
+        NEWLINE@49..50 "\n"
+        WHITESPACE@50..52 "  "
+        FN_KW@52..54 "fn"
+        WHITESPACE@54..55 " "
+        LOWER_IDENT@55..59 "show"
+        TYPE_LIST@59..65
+          L_PAREN@59..60 "("
+          PATH_TYPE@60..64
+            PATH@60..64
+              UPPER_IDENT@60..64 "Self"
+          R_PAREN@64..65 ")"
+        WHITESPACE@65..66 " "
+        RET_TYPE@66..75
+          THIN_ARROW@66..68 "->"
+          WHITESPACE@68..69 " "
+          PATH_TYPE@69..75
+            PATH@69..75
+              UPPER_IDENT@69..75 "String"
+      NEWLINE@75..76 "\n"
+      R_BRACE@76..77 "}"
+  NEWLINE@77..78 "\n"
+  NEWLINE@78..79 "\n"
+  INTERFACE_DECL@79..112
+    VISIBILITY@79..82
+      PUB_KW@79..82 "pub"
+    WHITESPACE@82..83 " "
+    INTERFACE_KW@83..92 "interface"
+    WHITESPACE@92..93 " "
+    UPPER_IDENT@93..96 "Num"
+    COLON@96..97 ":"
+    WHITESPACE@97..98 " "
+    BOUND_LIST@98..112
+      INTERFACE_REF@98..101
+        PATH@98..101
+          UPPER_IDENT@98..101 "Add"
+      WHITESPACE@101..102 " "
+      PLUS@102..103 "+"
+      WHITESPACE@103..104 " "
+      INTERFACE_REF@104..112
+        PATH@104..112
+          LOWER_IDENT@104..107 "ops"
+          COLON2@107..109 "::"
+          UPPER_IDENT@109..112 "Mul"
+  NEWLINE@112..113 "\n"

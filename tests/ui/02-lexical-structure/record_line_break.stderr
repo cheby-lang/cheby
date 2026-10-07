@@ -1,0 +1,14 @@
+error[E0014]: unexpected line break
+  --> tests/ui/02-lexical-structure/record_line_break.cheby:12:23
+   |
+12 |   let p = Point { x: 1
+   |                       ^ expected `,` or `}`
+   |
+   = note: a line continues only inside `(`, `[` or type `<…>`, after an operator, `,`, `=`, `=>`, `->` or `<-`, or before a line starting with `|>`, `&&` or `||`
+
+error[E0013]: expected an item, found `assert`
+  --> tests/ui/02-lexical-structure/record_line_break.cheby:14:3
+   |
+14 |   assert p.x == 1
+   |   ^^^^^^
+

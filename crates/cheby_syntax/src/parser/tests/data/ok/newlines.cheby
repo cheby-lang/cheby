@@ -1,0 +1,54 @@
+
+
+//! Newline continuation (§2.8, D-231). Blank lines at the start are ignored.
+fn continuation() {
+  let a =
+    1
+  let b = 1 +
+    2
+  let c = f(
+    1,
+    2,
+  )
+  let d = [
+    1,
+
+    2
+  ]
+  let e = list::fold(xs, 0, fn(acc, x) {
+    let y = acc + x
+
+    // a comment line between statements
+    y
+  })
+  let total =
+    orders
+    |> list::filter(_, is_paid)
+
+    // a comment between pipeline steps
+    |> list::sum
+  let ok = a
+    && b
+    || c
+  let g = case x {
+    Some(v) =>
+      v
+    None => 0
+  }
+  use x <-
+    f()
+  let neg = b
+  -c
+}
+
+fn arrow() ->
+  Int {
+  1
+}
+
+type Long = map::Map<
+  String,
+  Int,
+>
+type Short = Option<Int>
+const x: Int = 1

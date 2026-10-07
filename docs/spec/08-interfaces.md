@@ -5,7 +5,7 @@ Interfaces provide ad-hoc polymorphism. They are **structural**: a type satisfie
 ## 8.1 Declaration
 
 ```ebnf
-interface_decl = [ visibility ] "interface" UPPER [ ":" bound ] [ "{" [ NL ] { interface_fn NL } "}" ] ;
+interface_decl = [ visibility ] "interface" UPPER [ ":" bound ] [ "{" [ NL ] [ interface_fn { NL interface_fn } ] [ NL ] "}" ] ;   (* D-427 *)
 interface_fn   = { doc_comment NL } "fn" LOWER "(" [ type { "," type } [ "," ] ] ")" [ "->" type ] ;   (* doc comments: D-227 *)
 bound          = interface_ref { "+" interface_ref } ;
 interface_ref  = [ LOWER "::" ] UPPER ;

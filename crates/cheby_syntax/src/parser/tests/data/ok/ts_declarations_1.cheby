@@ -1,0 +1,4 @@
+//! Module docs.
+@!target(native)
+import std::ops::{Add, Compare as Cmp, max}
+import std::io as out

@@ -1,0 +1,199 @@
+SOURCE_FILE@0..160
+  FN_DECL@0..40
+    FN_KW@0..2 "fn"
+    WHITESPACE@2..3 " "
+    LOWER_IDENT@3..6 "add"
+    PARAM_LIST@6..21
+      L_PAREN@6..7 "("
+      PARAM@7..13
+        IDENT_PAT@7..8
+          LOWER_IDENT@7..8 "a"
+        COLON@8..9 ":"
+        WHITESPACE@9..10 " "
+        PATH_TYPE@10..13
+          PATH@10..13
+            UPPER_IDENT@10..13 "Int"
+      WHITESPACE@13..14 " "
+      PARAM@14..20
+        IDENT_PAT@14..15
+          LOWER_IDENT@14..15 "b"
+        COLON@15..16 ":"
+        WHITESPACE@16..17 " "
+        PATH_TYPE@17..20
+          PATH@17..20
+            UPPER_IDENT@17..20 "Int"
+      R_PAREN@20..21 ")"
+    WHITESPACE@21..22 " "
+    RET_TYPE@22..28
+      THIN_ARROW@22..24 "->"
+      WHITESPACE@24..25 " "
+      PATH_TYPE@25..28
+        PATH@25..28
+          UPPER_IDENT@25..28 "Int"
+    WHITESPACE@28..29 " "
+    BLOCK@29..40
+      L_BRACE@29..30 "{"
+      NEWLINE@30..31 "\n"
+      WHITESPACE@31..33 "  "
+      BIN_EXPR@33..38
+        PATH_EXPR@33..34
+          PATH@33..34
+            LOWER_IDENT@33..34 "a"
+        WHITESPACE@34..35 " "
+        PLUS@35..36 "+"
+        WHITESPACE@36..37 " "
+        PATH_EXPR@37..38
+          PATH@37..38
+            LOWER_IDENT@37..38 "b"
+      NEWLINE@38..39 "\n"
+      R_BRACE@39..40 "}"
+  NEWLINE@40..41 "\n"
+  FN_DECL@41..64
+    FN_KW@41..43 "fn"
+    WHITESPACE@43..44 " "
+    LOWER_IDENT@44..48 "path"
+    PARAM_LIST@48..50
+      L_PAREN@48..49 "("
+      R_PAREN@49..50 ")"
+    WHITESPACE@50..51 " "
+    BLOCK@51..64
+      L_BRACE@51..52 "{"
+      NEWLINE@52..53 "\n"
+      WHITESPACE@53..55 "  "
+      PATH_EXPR@55..62
+        PATH@55..62
+          LOWER_IDENT@55..56 "a"
+          COLON2@56..58 "::"
+          LOWER_IDENT@58..59 "b"
+          COLON2@59..61 "::"
+          LOWER_IDENT@61..62 "c"
+      NEWLINE@62..63 "\n"
+      R_BRACE@63..64 "}"
+  NEWLINE@64..65 "\n"
+  TEST_DECL@65..86
+    VISIBILITY@65..68
+      PUB_KW@65..68 "pub"
+    WHITESPACE@68..69 " "
+    TEST_KW@69..73 "test"
+    WHITESPACE@73..74 " "
+    STRING_LIT@74..83
+      STRING_START@74..75 "\""
+      STRING_TEXT@75..82 "visible"
+      STRING_END@82..83 "\""
+    WHITESPACE@83..84 " "
+    BLOCK@84..86
+      L_BRACE@84..85 "{"
+      R_BRACE@85..86 "}"
+  NEWLINE@86..87 "\n"
+  FN_DECL@87..129
+    FN_KW@87..89 "fn"
+    WHITESPACE@89..90 " "
+    LOWER_IDENT@90..102 "missing_name"
+    PARAM_LIST@102..104
+      L_PAREN@102..103 "("
+      R_PAREN@103..104 ")"
+    WHITESPACE@104..105 " "
+    BLOCK@105..129
+      L_BRACE@105..106 "{"
+      NEWLINE@106..107 "\n"
+      WHITESPACE@107..109 "  "
+      LET_STMT@109..116
+        LET_KW@109..112 "let"
+        WHITESPACE@112..113 " "
+        EQ@113..114 "="
+        WHITESPACE@114..115 " "
+        LITERAL@115..116
+          INT_NUMBER@115..116 "1"
+      NEWLINE@116..117 "\n"
+      WHITESPACE@117..119 "  "
+      CALL_EXPR@119..127
+        PATH_EXPR@119..122
+          PATH@119..122
+            LOWER_IDENT@119..122 "foo"
+        ARG_LIST@122..127
+          L_PAREN@122..123 "("
+          LITERAL@123..124
+            INT_NUMBER@123..124 "1"
+          WHITESPACE@124..125 " "
+          LITERAL@125..126
+            INT_NUMBER@125..126 "2"
+          R_PAREN@126..127 ")"
+      NEWLINE@127..128 "\n"
+      R_BRACE@128..129 "}"
+  NEWLINE@129..130 "\n"
+  FN_DECL@130..149
+    FN_KW@130..132 "fn"
+    WHITESPACE@132..133 " "
+    LOWER_IDENT@133..134 "f"
+    PARAM_LIST@134..136
+      L_PAREN@134..135 "("
+      R_PAREN@135..136 ")"
+    WHITESPACE@136..137 " "
+    RET_TYPE@137..143
+      THIN_ARROW@137..139 "->"
+      WHITESPACE@139..140 " "
+      PATH_TYPE@140..143
+        PATH@140..143
+          UPPER_IDENT@140..143 "Int"
+    WHITESPACE@143..144 " "
+    BLOCK@144..149
+      L_BRACE@144..145 "{"
+      WHITESPACE@145..146 " "
+      LITERAL@146..147
+        INT_NUMBER@146..147 "1"
+      WHITESPACE@147..148 " "
+      R_BRACE@148..149 "}"
+  WHITESPACE@149..150 " "
+  ERROR@150..159
+    FN_KW@150..152 "fn"
+    WHITESPACE@152..153 " "
+    LOWER_IDENT@153..154 "g"
+    L_PAREN@154..155 "("
+    R_PAREN@155..156 ")"
+    WHITESPACE@156..157 " "
+    L_BRACE@157..158 "{"
+    R_BRACE@158..159 "}"
+  NEWLINE@159..160 "\n"
+
+// errors
+
+error[E0013]: expected `,` or `)`, found identifier
+ --> err/e0013_syntax.cheby:1:15
+  |
+1 | fn add(a: Int b: Int) -> Int {
+  |               ^
+
+error[E0013]: a path has at most one module qualifier
+ --> err/e0013_syntax.cheby:5:7
+  |
+5 |   a::b::c
+  |       ^^
+  |
+  = help: import the inner module and qualify with its last name, such as `ops::Add`
+
+error[E0013]: a test has no visibility
+ --> err/e0013_syntax.cheby:7:1
+  |
+7 | pub test "visible" {}
+  | ^^^
+  |
+  = help: remove the visibility
+
+error[E0013]: expected a pattern, found `=`
+ --> err/e0013_syntax.cheby:9:7
+  |
+9 |   let = 1
+  |       ^
+
+error[E0013]: expected `,` or `)`, found integer
+  --> err/e0013_syntax.cheby:10:9
+   |
+10 |   foo(1 2)
+   |         ^
+
+error[E0013]: expected a line break after the item, found `fn`
+  --> err/e0013_syntax.cheby:12:21
+   |
+12 | fn f() -> Int { 1 } fn g() {}
+   |                     ^^
+

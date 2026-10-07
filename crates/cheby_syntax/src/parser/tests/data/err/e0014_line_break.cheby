@@ -1,0 +1,15 @@
+fn f() {
+  let sum
+    = 1 + 2
+  sum
+}
+fn g(x: Int) {
+  case x {
+    A |
+    B => 1
+  }
+}
+fn h()
+{
+  1
+}

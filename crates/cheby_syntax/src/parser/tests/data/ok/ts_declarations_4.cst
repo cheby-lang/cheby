@@ -1,0 +1,150 @@
+SOURCE_FILE@0..204
+  COMMENT@0..12 "// Functions"
+  NEWLINE@12..13 "\n"
+  FN_DECL@13..109
+    ATTR@13..51
+      AT@13..14 "@"
+      LOWER_IDENT@14..22 "external"
+      ATTR_ARG_LIST@22..51
+        L_PAREN@22..23 "("
+        LOWER_IDENT@23..29 "native"
+        COMMA@29..30 ","
+        WHITESPACE@30..31 " "
+        STRING_LIT@31..50
+          STRING_START@31..32 "\""
+          STRING_TEXT@32..49 "cheby_sqlite_open"
+          STRING_END@49..50 "\""
+        R_PAREN@50..51 ")"
+    NEWLINE@51..52 "\n"
+    ATTR@52..61
+      AT@52..53 "@"
+      LOWER_IDENT@53..61 "blocking"
+    NEWLINE@61..62 "\n"
+    VISIBILITY@62..65
+      PUB_KW@62..65 "pub"
+    WHITESPACE@65..66 " "
+    FN_KW@66..68 "fn"
+    WHITESPACE@68..69 " "
+    LOWER_IDENT@69..73 "open"
+    PARAM_LIST@73..87
+      L_PAREN@73..74 "("
+      PARAM@74..86
+        IDENT_PAT@74..78
+          LOWER_IDENT@74..78 "path"
+        COLON@78..79 ":"
+        WHITESPACE@79..80 " "
+        PATH_TYPE@80..86
+          PATH@80..86
+            UPPER_IDENT@80..86 "String"
+      R_PAREN@86..87 ")"
+    WHITESPACE@87..88 " "
+    RET_TYPE@88..109
+      THIN_ARROW@88..90 "->"
+      WHITESPACE@90..91 " "
+      PATH_TYPE@91..109
+        PATH@91..97
+          UPPER_IDENT@91..97 "Result"
+        TYPE_ARG_LIST@97..109
+          LT@97..98 "<"
+          PATH_TYPE@98..100
+            PATH@98..100
+              UPPER_IDENT@98..100 "Db"
+          COMMA@100..101 ","
+          WHITESPACE@101..102 " "
+          PATH_TYPE@102..108
+            PATH@102..108
+              UPPER_IDENT@102..108 "String"
+          GT@108..109 ">"
+  NEWLINE@109..110 "\n"
+  NEWLINE@110..111 "\n"
+  FN_DECL@111..203
+    VISIBILITY@111..115
+      PRIV_KW@111..115 "priv"
+    WHITESPACE@115..116 " "
+    FN_KW@116..118 "fn"
+    WHITESPACE@118..119 " "
+    LOWER_IDENT@119..127 "describe"
+    TYPE_PARAM_LIST@127..142
+      LT@127..128 "<"
+      TYPE_PARAM@128..141
+        UPPER_IDENT@128..129 "T"
+        COLON@129..130 ":"
+        WHITESPACE@130..131 " "
+        BOUND_LIST@131..141
+          INTERFACE_REF@131..135
+            PATH@131..135
+              UPPER_IDENT@131..135 "Show"
+          WHITESPACE@135..136 " "
+          PLUS@136..137 "+"
+          WHITESPACE@137..138 " "
+          INTERFACE_REF@138..141
+            PATH@138..141
+              UPPER_IDENT@138..141 "Any"
+      GT@141..142 ">"
+    PARAM_LIST@142..180
+      L_PAREN@142..143 "("
+      PARAM@143..157
+        IDENT_PAT@143..148
+          LOWER_IDENT@143..148 "items"
+        COLON@148..149 ":"
+        WHITESPACE@149..150 " "
+        PATH_TYPE@150..157
+          PATH@150..154
+            UPPER_IDENT@150..154 "List"
+          TYPE_ARG_LIST@154..157
+            LT@154..155 "<"
+            PATH_TYPE@155..156
+              PATH@155..156
+                UPPER_IDENT@155..156 "T"
+            GT@156..157 ">"
+      COMMA@157..158 ","
+      WHITESPACE@158..159 " "
+      PARAM@159..179
+        IDENT_PAT@159..160
+          LOWER_IDENT@159..160 "f"
+        COLON@160..161 ":"
+        WHITESPACE@161..162 " "
+        FN_TYPE@162..179
+          FN_KW@162..164 "fn"
+          TYPE_LIST@164..167
+            L_PAREN@164..165 "("
+            PATH_TYPE@165..166
+              PATH@165..166
+                UPPER_IDENT@165..166 "T"
+            R_PAREN@166..167 ")"
+          WHITESPACE@167..168 " "
+          RET_TYPE@168..179
+            THIN_ARROW@168..170 "->"
+            WHITESPACE@170..171 " "
+            DYN_TYPE@171..179
+              DYN_KW@171..174 "dyn"
+              WHITESPACE@174..175 " "
+              INTERFACE_REF@175..179
+                PATH@175..179
+                  UPPER_IDENT@175..179 "Show"
+      R_PAREN@179..180 ")"
+    WHITESPACE@180..181 " "
+    RET_TYPE@181..192
+      THIN_ARROW@181..183 "->"
+      WHITESPACE@183..184 " "
+      TUPLE_TYPE@184..192
+        L_PAREN@184..185 "("
+        PATH_TYPE@185..188
+          PATH@185..188
+            UPPER_IDENT@185..188 "Int"
+        COMMA@188..189 ","
+        WHITESPACE@189..190 " "
+        PATH_TYPE@190..191
+          PATH@190..191
+            UPPER_IDENT@190..191 "T"
+        R_PAREN@191..192 ")"
+    WHITESPACE@192..193 " "
+    BLOCK@193..203
+      L_BRACE@193..194 "{"
+      NEWLINE@194..195 "\n"
+      WHITESPACE@195..197 "  "
+      TODO_EXPR@197..201
+        TODO_KW@197..201 "todo"
+      NEWLINE@201..202 "\n"
+      R_BRACE@202..203 "}"
+  NEWLINE@203..204 "\n"

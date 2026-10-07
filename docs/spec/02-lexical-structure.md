@@ -22,7 +22,13 @@ There are three kinds of comments, and all run to the end of the line (D-078):
 
 There are no block comments (D-078). A comment does not affect newline handling: a line that ends with a comment ends where the comment starts.
 
-A `///` comment must be followed, possibly after more `///` lines and attributes, by a top-level declaration, a variant or field of a type declaration, or a function of an interface declaration (D-211, D-227). A `///` comment anywhere else is a compile error.
+The kind of a comment is decided by its first characters, as in Rust (D-428):
+
+- `///` followed by the end of the line or by any character other than `/` starts a doc comment.
+- Four or more slashes, `////…`, start an ordinary comment, so rows of slashes document nothing.
+- `//!` starts a module doc comment, whatever follows it, including `//!!`.
+
+A `///` comment must be followed, possibly after more `///` lines, by a top-level declaration, a variant or field of a type declaration, or a function of an interface declaration (D-211, D-227). The attributes of an item come after its doc comments, so a `///` comment between two attributes is misplaced (D-434). A `///` comment anywhere else is a compile error.
 
 ## 2.3 Identifiers
 
@@ -40,7 +46,7 @@ An identifier that starts with a lower-case letter but contains an upper-case le
 
 The single underscore `_` is not an identifier. It is the wildcard pattern and the function-capture placeholder. A `LOWER` identifier that starts with `_` (`_unused`) is a binding that suppresses the unused-variable warning (D-080).
 
-Identifiers are ASCII only (D-127). A non-ASCII letter in an identifier is a compile error. This keeps the case rules of D-059 unambiguous and avoids confusable identifiers.
+Identifiers are ASCII only (D-127). A non-ASCII letter in an identifier is a compile error. This keeps the case rules of D-059 unambiguous and avoids confusable identifiers. A word that starts with a non-ASCII letter, such as `été`, is read as one identifier with one error, not as a run of unexpected characters (D-432). Any other non-ASCII character outside string literals and comments is an error of its own.
 
 ## 2.4 Keywords
 
@@ -85,6 +91,8 @@ Octal literals `0o…` are allowed alongside the decimal, hex and binary literal
 
 A decimal literal must not have a leading zero unless it is `0`. This prevents confusion with C-style octal.
 
+A base prefix must be followed directly by a digit of its base. `0x`, `0b2`, `0x_` and `0x_1` are compile errors (D-433).
+
 ### 2.5.2 Float literals
 
 ```ebnf
@@ -103,10 +111,10 @@ RAW_STRING  = "r" { "#" } '"' { any character } '"' { "#" } ;   (* same number o
 escape      = "\n" | "\t" | "\r" | "\\" | '\"' | "\{" | "\u{" hex_digit { hex_digit } "}" ;
 ```
 
-- A string literal may span several lines. Line breaks inside it become part of the value, normalized to LF (D-114).
+- A string literal may span several lines. Line breaks inside it become part of the value, normalized to LF (D-114). This holds for raw strings too (D-431).
 - The escapes are exactly those listed (D-114). Any other `\` sequence is a compile error. A `\u{…}` escape must name a Unicode scalar value (not a surrogate) with 1 to 6 hex digits.
 - An unescaped `{` starts an interpolation ([§2.5.4](#254-string-interpolation)). An unescaped `}` outside an interpolation is an ordinary character.
-- A raw string `r"…"` has no escapes and no interpolation (D-114). All characters, including `\`, `{` and line breaks, are taken literally.
+- A raw string `r"…"` has no escapes and no interpolation (D-114). All other characters, including `\` and `{`, are taken literally, and a CRLF line break becomes LF as in other strings, so a value never depends on how the file was checked out (D-431).
 - A raw string may be delimited with hashes, `r#"…"#`, `r##"…"##` and so on (D-130). It ends at the first `"` followed by the same number of `#` as after the opening `r`, so `r#"say "hi""#` contains `"`. A raw string without hashes ends at the first `"`.
 
 There is no character literal and no `Char` type (D-114).
@@ -141,17 +149,17 @@ r#"a "quoted" word"#       // raw string containing quotes
 (   )   [   ]   {   }
 ```
 
-The lexer always produces the longest matching token. In type contexts the parser splits `>>` into two `>` tokens, so that `List<List<Int>>` parses.
+The lexer always produces the longest matching token. In type contexts the parser splits `>>` into two `>` tokens, so that `List<List<Int>>` parses, and `>=` into `>` and `=`, so that `const empty: List<Int>= []` parses (D-430).
 
 ## 2.7 Attributes
 
-An attribute is `@` followed immediately by a `LOWER` name and an optional parenthesized argument list. The set of attributes is fixed ([§4.8](04-declarations.md#48-attributes), D-200).
+An attribute is `@` followed immediately by a `LOWER` name and an optional parenthesized argument list. The set of attributes is fixed ([§4.8](04-declarations.md#48-attributes), D-200). An attribute name binds nothing, so it is not checked against the reserved words of [§2.4](#24-keywords) or the naming convention, and `@async` is valid although `async` is reserved (D-435). Keywords are still keywords there.
 
 ## 2.8 Newlines and statement separation
 
 Cheby has no semicolons. Newlines separate statements, `case` arms and top-level items (D-051, D-107). The lexer turns each line break (outside string literals and comments) into an `NL` token. The parser then decides, by the rules below, which `NL` tokens end something and which it ignores (D-231).
 
-The lexer merges consecutive `NL` tokens into one and drops `NL` tokens directly after `{` and directly before `}`. It does not decide continuation by itself.
+The lexer merges consecutive `NL` tokens into one and drops `NL` tokens directly after `{`, directly before `}`, at the start of the file and at its end. A file therefore need not end with a newline (D-426). The lexer does not decide continuation by itself.
 
 The parser ignores an `NL` token, so the line continues, if any of the following holds (D-107, D-231):
 

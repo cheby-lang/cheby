@@ -3,17 +3,20 @@
 //! next to it (D-275, docs/plan/testing.md §1).
 //!
 //! An example whose `test.toml` sets `skip-run` is only checked with
-//! `cheby check` (D-282). Expected-fail tracking follows `tests/milestone`
-//! (see `cheby_test_support::milestone`). With `CHEBY_BLESS=1`, set by
+//! `cheby check` (D-282). Its result is pending, never an unexpected
+//! pass, until its milestone (see [`check_only_expectation`]).
+//! Expected-fail tracking follows `tests/milestone` (see
+//! `cheby_test_support::milestone`). With `CHEBY_BLESS=1`, set by
 //! `cargo xtask bless`, goldens of examples at or before the milestone in
-//! progress are rewritten instead of compared.
+//! progress are rewritten instead of compared, unless the exit code
+//! changes (see `bless_example`).
 
 use std::path::Path;
 use std::process::{Command, ExitCode};
 use std::time::Duration;
 
 use cheby_test_support::example::{self, Example};
-use cheby_test_support::milestone::{self, Expectation, Verdicts};
+use cheby_test_support::milestone::{self, Expectation, Milestone, Verdicts};
 use cheby_test_support::{bless_enabled, golden, process, repo_root};
 use libtest_mimic::{Arguments, Trial};
 
@@ -37,7 +40,7 @@ fn main() -> ExitCode {
     let trials = examples
         .into_iter()
         .map(|ex| {
-            let expectation = Expectation::new(ex.config.milestone, current);
+            let expectation = check_only_expectation(&ex, current);
             let verdicts = verdicts.clone();
             let name = ex.name.clone();
             Trial::test(name.clone(), move || {
@@ -56,6 +59,19 @@ fn main() -> ExitCode {
     let conclusion = libtest_mimic::run(&args, trials);
     verdicts.report("examples");
     conclusion.exit_code()
+}
+
+/// What the harness expects of `ex`. A `skip-run` example is only
+/// checked, and its milestone names when its fixture arrives, not when
+/// `cheby check` can handle it. So `cheby check` passing on it before that
+/// milestone is reported as pending, not as an unexpected pass (D-445).
+/// An example with dependencies, such as 030, has milestone M5, when
+/// dependencies resolve (D-446).
+fn check_only_expectation(ex: &Example, current: Milestone) -> Expectation {
+    match Expectation::new(ex.config.milestone, current) {
+        Expectation::Fail if ex.config.skip_run => Expectation::Pending,
+        other => other,
+    }
 }
 
 /// Runs the example and compares the result with its goldens.
@@ -103,6 +119,17 @@ fn bless_example(ex: &Example) -> Result<(), String> {
     let exit = out
         .status
         .ok_or_else(|| format!("cannot bless: the example {}", out.describe_status()))?;
+    // An exit code that changes is almost always a toolchain failure, such
+    // as a command that is not implemented yet, not a new expected result.
+    // Blessing it would replace good goldens with an error message (D-445).
+    let expected_exit = goldens.exit.unwrap_or(0);
+    if exit != expected_exit {
+        return Err(format!(
+            "cannot bless: expected exit code {expected_exit}, got {exit}; \
+             edit expected.exit by hand if the change is intended\nstderr:\n{}",
+            out.stderr
+        ));
+    }
     golden::write(&ex.dir.join("expected.stdout"), &out.stdout, true)?;
     golden::write(&ex.dir.join("expected.stderr"), &out.stderr, false)?;
     let exit_text = if exit == 0 {

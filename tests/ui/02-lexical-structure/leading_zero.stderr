@@ -1,0 +1,17 @@
+error[E0008]: decimal literal `007` has a leading zero
+ --> tests/ui/02-lexical-structure/leading_zero.cheby:6:11
+  |
+6 |   let a = 007
+  |           ^^^
+  |
+  = note: octal literals start with `0o` (D-129)
+  = help: write `7`
+
+error[E0008]: `_` right after `0x`
+ --> tests/ui/02-lexical-structure/leading_zero.cheby:7:11
+  |
+7 |   let b = 0x_ff
+  |           ^^^^^
+  |
+  = help: write `0xff`
+

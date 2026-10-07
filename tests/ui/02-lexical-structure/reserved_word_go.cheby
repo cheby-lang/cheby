@@ -1,0 +1,18 @@
+// @mode: check-fail
+// @decisions: D-240
+//! `go` is reserved, so the usual name of a local recursive helper in Go
+//! style is an error.
+
+fn count(n: Int) -> Int {
+  fn go(i: Int, acc: Int) -> Int {
+    case i {
+      0 => acc
+      _ => go(i - 1, acc + 1)
+    }
+  }
+  go(n, 0)
+}
+
+fn main() {
+  assert count(3) == 3
+}

@@ -1,0 +1,15 @@
+// @mode: parse-fail
+// @decisions: D-231
+//! Inside `{ }` a line break does not continue the line, so fields of a
+//! record expression on separate lines need commas.
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+fn main() {
+  let p = Point { x: 1
+    y: 2 }
+  assert p.x == 1
+}

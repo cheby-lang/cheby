@@ -1,0 +1,4 @@
+pub exposed fn f() {}
+pub exposed type Alias = Int
+exposed const c: Int = 1
+pub exposed type Ok { x: Int }

@@ -1,0 +1,3 @@
+fn f() {
+  io::println("never closed)
+}

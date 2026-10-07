@@ -1,0 +1,125 @@
+SOURCE_FILE@0..204
+  COMMENT@0..38 "// Closing type argument ends the line"
+  NEWLINE@38..39 "\n"
+  ALIAS_DECL@39..73
+    TYPE_KW@39..43 "type"
+    WHITESPACE@43..44 " "
+    UPPER_IDENT@44..48 "Cell"
+    WHITESPACE@48..49 " "
+    EQ@49..50 "="
+    WHITESPACE@50..51 " "
+    PATH_TYPE@51..73
+      PATH@51..57
+        UPPER_IDENT@51..57 "Option"
+      TYPE_ARG_LIST@57..73
+        LT@57..58 "<"
+        PATH_TYPE@58..72
+          PATH@58..72
+            LOWER_IDENT@58..64 "player"
+            COLON2@64..66 "::"
+            UPPER_IDENT@66..72 "Player"
+        GT@72..73 ">"
+  NEWLINE@73..74 "\n"
+  ALIAS_DECL@74..102
+    TYPE_KW@74..78 "type"
+    WHITESPACE@78..79 " "
+    UPPER_IDENT@79..83 "Grid"
+    WHITESPACE@83..84 " "
+    EQ@84..85 "="
+    WHITESPACE@85..86 " "
+    PATH_TYPE@86..102
+      PATH@86..90
+        UPPER_IDENT@86..90 "List"
+      TYPE_ARG_LIST@90..102
+        LT@90..91 "<"
+        PATH_TYPE@91..101
+          PATH@91..95
+            UPPER_IDENT@91..95 "List"
+          TYPE_ARG_LIST@95..101
+            LT@95..96 "<"
+            PATH_TYPE@96..100
+              PATH@96..100
+                UPPER_IDENT@96..100 "Cell"
+            GT@100..101 ">"
+        GT@101..102 ">"
+  NEWLINE@102..103 "\n"
+  NEWLINE@103..104 "\n"
+  FN_DECL@104..203
+    FN_KW@104..106 "fn"
+    WHITESPACE@106..107 " "
+    LOWER_IDENT@107..112 "index"
+    PARAM_LIST@112..114
+      L_PAREN@112..113 "("
+      R_PAREN@113..114 ")"
+    WHITESPACE@114..115 " "
+    RET_TYPE@115..152
+      THIN_ARROW@115..117 "->"
+      WHITESPACE@117..118 " "
+      PATH_TYPE@118..152
+        PATH@118..126
+          LOWER_IDENT@118..121 "map"
+          COLON2@121..123 "::"
+          UPPER_IDENT@123..126 "Map"
+        TYPE_ARG_LIST@126..152
+          LT@126..127 "<"
+          NEWLINE@127..128 "\n"
+          WHITESPACE@128..130 "  "
+          PATH_TYPE@130..136
+            PATH@130..136
+              UPPER_IDENT@130..136 "String"
+          COMMA@136..137 ","
+          NEWLINE@137..138 "\n"
+          WHITESPACE@138..140 "  "
+          PATH_TYPE@140..149
+            PATH@140..144
+              UPPER_IDENT@140..144 "List"
+            TYPE_ARG_LIST@144..149
+              LT@144..145 "<"
+              PATH_TYPE@145..148
+                PATH@145..148
+                  UPPER_IDENT@145..148 "Int"
+              GT@148..149 ">"
+          COMMA@149..150 ","
+          NEWLINE@150..151 "\n"
+          GT@151..152 ">"
+    WHITESPACE@152..153 " "
+    BLOCK@153..203
+      L_BRACE@153..154 "{"
+      NEWLINE@154..155 "\n"
+      WHITESPACE@155..157 "  "
+      CALL_EXPR@157..201
+        PATH_EXPR@157..199
+          PATH@157..165
+            LOWER_IDENT@157..160 "map"
+            COLON2@160..162 "::"
+            LOWER_IDENT@162..165 "new"
+          COLON2@165..167 "::"
+          TYPE_ARG_LIST@167..199
+            LT@167..168 "<"
+            NEWLINE@168..169 "\n"
+            WHITESPACE@169..173 "    "
+            PATH_TYPE@173..179
+              PATH@173..179
+                UPPER_IDENT@173..179 "String"
+            COMMA@179..180 ","
+            NEWLINE@180..181 "\n"
+            WHITESPACE@181..185 "    "
+            PATH_TYPE@185..194
+              PATH@185..189
+                UPPER_IDENT@185..189 "List"
+              TYPE_ARG_LIST@189..194
+                LT@189..190 "<"
+                PATH_TYPE@190..193
+                  PATH@190..193
+                    UPPER_IDENT@190..193 "Int"
+                GT@193..194 ">"
+            COMMA@194..195 ","
+            NEWLINE@195..196 "\n"
+            WHITESPACE@196..198 "  "
+            GT@198..199 ">"
+        ARG_LIST@199..201
+          L_PAREN@199..200 "("
+          R_PAREN@200..201 ")"
+      NEWLINE@201..202 "\n"
+      R_BRACE@202..203 "}"
+  NEWLINE@203..204 "\n"

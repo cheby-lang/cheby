@@ -1,0 +1,8 @@
+error[E0025]: `_` is allowed only as a whole call argument
+  --> tests/ui/05-expressions/misplaced_hole.cheby:10:18
+   |
+10 |   let f = double(_ + 1)
+   |                  ^
+   |
+   = help: write a closure instead, such as `fn(x) { x + 1 }`
+

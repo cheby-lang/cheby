@@ -1,0 +1,96 @@
+SOURCE_FILE@0..82
+  FN_DECL@0..81
+    FN_KW@0..2 "fn"
+    WHITESPACE@2..3 " "
+    LOWER_IDENT@3..4 "f"
+    PARAM_LIST@4..24
+      L_PAREN@4..5 "("
+      PARAM@5..23
+        IDENT_PAT@5..12
+          LOWER_IDENT@5..12 "numbers"
+        COLON@12..13 ":"
+        WHITESPACE@13..14 " "
+        PATH_TYPE@14..23
+          PATH@14..18
+            UPPER_IDENT@14..18 "List"
+          TYPE_ARG_LIST@18..23
+            LT@18..19 "<"
+            PATH_TYPE@19..22
+              PATH@19..22
+                UPPER_IDENT@19..22 "Int"
+            GT@22..23 ">"
+      R_PAREN@23..24 ")"
+    WHITESPACE@24..25 " "
+    RET_TYPE@25..37
+      THIN_ARROW@25..27 "->"
+      WHITESPACE@27..28 " "
+      PATH_TYPE@28..37
+        PATH@28..32
+          UPPER_IDENT@28..32 "List"
+        TYPE_ARG_LIST@32..37
+          LT@32..33 "<"
+          PATH_TYPE@33..36
+            PATH@33..36
+              UPPER_IDENT@33..36 "Int"
+          GT@36..37 ">"
+    WHITESPACE@37..38 " "
+    BLOCK@38..81
+      L_BRACE@38..39 "{"
+      NEWLINE@39..40 "\n"
+      WHITESPACE@40..42 "  "
+      CALL_EXPR@42..67
+        PATH_EXPR@42..51
+          PATH@42..51
+            LOWER_IDENT@42..46 "list"
+            COLON2@46..48 "::"
+            LOWER_IDENT@48..51 "map"
+        ARG_LIST@51..67
+          L_PAREN@51..52 "("
+          PATH_EXPR@52..59
+            PATH@52..59
+              LOWER_IDENT@52..59 "numbers"
+          COMMA@59..60 ","
+          WHITESPACE@60..61 " "
+          BIN_EXPR@61..66
+            HOLE@61..62
+              UNDERSCORE@61..62 "_"
+            WHITESPACE@62..63 " "
+            PLUS@63..64 "+"
+            WHITESPACE@64..65 " "
+            LITERAL@65..66
+              INT_NUMBER@65..66 "1"
+          R_PAREN@66..67 ")"
+      NEWLINE@67..68 "\n"
+      WHITESPACE@68..70 "  "
+      LET_STMT@70..79
+        LET_KW@70..73 "let"
+        WHITESPACE@73..74 " "
+        IDENT_PAT@74..75
+          LOWER_IDENT@74..75 "x"
+        WHITESPACE@75..76 " "
+        EQ@76..77 "="
+        WHITESPACE@77..78 " "
+        HOLE@78..79
+          UNDERSCORE@78..79 "_"
+      NEWLINE@79..80 "\n"
+      R_BRACE@80..81 "}"
+  NEWLINE@81..82 "\n"
+
+// errors
+
+error[E0025]: `_` is allowed only as a whole call argument
+ --> err/e0025_hole.cheby:2:22
+  |
+2 |   list::map(numbers, _ + 1)
+  |                      ^
+  |
+  = help: write a closure instead, such as `fn(x) { x + 1 }`
+
+error[E0025]: `_` is allowed only as a whole call argument
+ --> err/e0025_hole.cheby:3:11
+  |
+3 |   let x = _
+  |           ^
+  |
+  = help: write a closure instead, such as `fn(x) { x + 1 }`
+

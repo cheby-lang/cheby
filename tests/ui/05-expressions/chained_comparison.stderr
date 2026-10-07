@@ -1,0 +1,10 @@
+error[E0029]: comparison operators cannot be chained
+ --> tests/ui/05-expressions/chained_comparison.cheby:7:16
+  |
+7 |   assert 1 < x < 3
+  |            -   ^
+  |            |
+  |            first comparison here
+  |
+  = help: combine the comparisons with `&&`, such as `a < b && b < c`
+

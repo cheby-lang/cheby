@@ -1,0 +1,5 @@
+// Empty comment at end of file
+fn f() -> Int {
+  1 //
+}
+//

@@ -1,0 +1,101 @@
+SOURCE_FILE@0..107
+  FN_DECL@0..21
+    VISIBILITY@0..3
+      PUB_KW@0..3 "pub"
+    WHITESPACE@3..4 " "
+    EXPOSED_KW@4..11 "exposed"
+    WHITESPACE@11..12 " "
+    FN_KW@12..14 "fn"
+    WHITESPACE@14..15 " "
+    LOWER_IDENT@15..16 "f"
+    PARAM_LIST@16..18
+      L_PAREN@16..17 "("
+      R_PAREN@17..18 ")"
+    WHITESPACE@18..19 " "
+    BLOCK@19..21
+      L_BRACE@19..20 "{"
+      R_BRACE@20..21 "}"
+  NEWLINE@21..22 "\n"
+  ALIAS_DECL@22..50
+    VISIBILITY@22..25
+      PUB_KW@22..25 "pub"
+    WHITESPACE@25..26 " "
+    EXPOSED_KW@26..33 "exposed"
+    WHITESPACE@33..34 " "
+    TYPE_KW@34..38 "type"
+    WHITESPACE@38..39 " "
+    UPPER_IDENT@39..44 "Alias"
+    WHITESPACE@44..45 " "
+    EQ@45..46 "="
+    WHITESPACE@46..47 " "
+    PATH_TYPE@47..50
+      PATH@47..50
+        UPPER_IDENT@47..50 "Int"
+  NEWLINE@50..51 "\n"
+  CONST_DECL@51..75
+    EXPOSED_KW@51..58 "exposed"
+    WHITESPACE@58..59 " "
+    CONST_KW@59..64 "const"
+    WHITESPACE@64..65 " "
+    LOWER_IDENT@65..66 "c"
+    COLON@66..67 ":"
+    WHITESPACE@67..68 " "
+    PATH_TYPE@68..71
+      PATH@68..71
+        UPPER_IDENT@68..71 "Int"
+    WHITESPACE@71..72 " "
+    EQ@72..73 "="
+    WHITESPACE@73..74 " "
+    LITERAL@74..75
+      INT_NUMBER@74..75 "1"
+  NEWLINE@75..76 "\n"
+  TYPE_DECL@76..106
+    VISIBILITY@76..79
+      PUB_KW@76..79 "pub"
+    WHITESPACE@79..80 " "
+    EXPOSED_KW@80..87 "exposed"
+    WHITESPACE@87..88 " "
+    TYPE_KW@88..92 "type"
+    WHITESPACE@92..93 " "
+    UPPER_IDENT@93..95 "Ok"
+    WHITESPACE@95..96 " "
+    RECORD_FIELD_LIST@96..106
+      L_BRACE@96..97 "{"
+      WHITESPACE@97..98 " "
+      RECORD_FIELD@98..104
+        LOWER_IDENT@98..99 "x"
+        COLON@99..100 ":"
+        WHITESPACE@100..101 " "
+        PATH_TYPE@101..104
+          PATH@101..104
+            UPPER_IDENT@101..104 "Int"
+      WHITESPACE@104..105 " "
+      R_BRACE@105..106 "}"
+  NEWLINE@106..107 "\n"
+
+// errors
+
+error[E0022]: `exposed` is not allowed on a function
+ --> err/e0022_exposed.cheby:1:5
+  |
+1 | pub exposed fn f() {}
+  |     ^^^^^^^
+  |
+  = help: `exposed` applies only to `pub` type declarations; remove it
+
+error[E0022]: `exposed` is not allowed on a type alias
+ --> err/e0022_exposed.cheby:2:5
+  |
+2 | pub exposed type Alias = Int
+  |     ^^^^^^^
+  |
+  = help: `exposed` applies only to `pub` type declarations; remove it
+
+error[E0022]: `exposed` is not allowed on a constant
+ --> err/e0022_exposed.cheby:3:1
+  |
+3 | exposed const c: Int = 1
+  | ^^^^^^^
+  |
+  = help: `exposed` applies only to `pub` type declarations; remove it
+

@@ -1,0 +1,513 @@
+error[E0006]: name `camelCase` is not in snake_case
+ --> permissive.cheby:3:4
+  |
+3 | fn camelCase(myValue: Int) -> My_Type { myValue }
+  |    ^^^^^^^^^
+  |
+  = help: write `camel_case`
+
+error[E0006]: name `myValue` is not in snake_case
+ --> permissive.cheby:3:14
+  |
+3 | fn camelCase(myValue: Int) -> My_Type { myValue }
+  |              ^^^^^^^
+  |
+  = help: write `my_value`
+
+error[E0006]: type name `My_Type` is not in PascalCase
+ --> permissive.cheby:3:31
+  |
+3 | fn camelCase(myValue: Int) -> My_Type { myValue }
+  |                               ^^^^^^^
+  |
+  = help: write `MyType`
+
+error[E0006]: name `myValue` is not in snake_case
+ --> permissive.cheby:3:41
+  |
+3 | fn camelCase(myValue: Int) -> My_Type { myValue }
+  |                                         ^^^^^^^
+  |
+  = help: write `my_value`
+
+error[E0021]: a top-level function parameter must be a name
+ --> permissive.cheby:4:13
+  |
+4 | fn patterns((a, b): (Int, Int), c) {}
+  |             ^^^^^^
+  |
+  = help: name the parameter and take it apart in the body with `let` (D-242)
+
+error[E0020]: parameter `c` has no type
+ --> permissive.cheby:4:33
+  |
+4 | fn patterns((a, b): (Int, Int), c) {}
+  |                                 ^
+  |
+  = help: write the type after a `:`; top-level functions need full signatures (D-011)
+
+error[E0020]: constant `untyped` has no type
+ --> permissive.cheby:5:7
+  |
+5 | const untyped = 1
+  |       ^^^^^^^
+  |
+  = help: write the type after the name, such as `const untyped: Int = …` (D-011)
+
+error[E0022]: `exposed` requires `pub`
+ --> permissive.cheby:6:1
+  |
+6 | exposed type NotPub { x: Int }
+  | ^^^^^^^
+  |
+  = help: make the type `pub` as well
+
+error[E0022]: `exposed` requires `pub`
+ --> permissive.cheby:7:6
+  |
+7 | priv exposed type PrivExposed { x: Int }
+  | ---- ^^^^^^^
+  | |
+  | this keeps the type inside its module
+  |
+  = help: make the type `pub`
+
+error[E0023]: bounds are not allowed on the type parameters of a type declaration
+ --> permissive.cheby:8:17
+  |
+8 | type Bounded<T: Show> { x: T }
+  |                 ^^^^
+  |
+  = help: put the bound on the functions that need it
+
+error[E0023]: an interface is named without type arguments
+ --> permissive.cheby:9:26
+  |
+9 | type BoundArgs = dyn Into<Int>
+  |                          ^^^^^
+  |
+  = help: remove the type arguments
+
+error[E0030]: `()` is not a type
+  --> permissive.cheby:10:13
+   |
+10 | type Unit = ()
+   |             ^^
+   |
+   = help: the type with no information is `Nil`
+
+error[E0030]: a tuple type has at least two elements
+  --> permissive.cheby:11:12
+   |
+11 | type One = (Int,)
+   |            ^^^^^^
+   |
+   = help: write the element type alone; there are no one-element tuples
+
+error[E0013]: a record type needs at least one field
+  --> permissive.cheby:12:12
+   |
+12 | type Empty {}
+   |            ^^
+   |
+   = help: for a type without fields, declare a unit variant, such as `type Empty { Empty }`
+
+error[E0013]: a variant's field list is empty
+  --> permissive.cheby:13:18
+   |
+13 | type Variants { A(), B {} }
+   |                  ^^
+   |
+   = help: for a variant without fields, remove the brackets
+
+error[E0013]: a variant's field list is empty
+  --> permissive.cheby:13:24
+   |
+13 | type Variants { A(), B {} }
+   |                        ^^
+   |
+   = help: for a variant without fields, remove the brackets
+
+warning[W0001]: tuple type with a tuple element
+  --> permissive.cheby:14:15
+   |
+14 | type Nested = ((Int, Int), Int)
+   |               ^^^^^^^^^^^^^^^^^
+   |
+   = help: use a record type with named fields instead (D-243)
+
+warning[W0001]: tuple type with 4 elements
+  --> permissive.cheby:15:13
+   |
+15 | type Wide = (Int, Int, Int, Int)
+   |             ^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: use a record type with named fields instead (D-243)
+
+error[E0023]: an interface is named without type arguments
+  --> permissive.cheby:16:20
+   |
+16 | interface Bad: From<Int>
+   |                    ^^^^^
+   |
+   = help: remove the type arguments
+
+error[E0018]: `import` after an item
+  --> permissive.cheby:17:1
+   |
+3  | fn camelCase(myValue: Int) -> My_Type { myValue }
+   | ------------ first item here
+...
+17 | import late
+   | ^^^^^^^^^^^
+   |
+   = help: move all imports before the first item (D-143)
+
+error[E0018]: inner attribute after an item
+  --> permissive.cheby:18:1
+   |
+3  | fn camelCase(myValue: Int) -> My_Type { myValue }
+   | ------------ first item here
+...
+18 | @!target(js)
+   | ^^^^^^^^^^^^
+   |
+   = help: move inner attributes to the top of the file, after the `//!` docs and before the imports (D-201)
+
+error[E0017]: doc comment documents nothing
+  --> permissive.cheby:20:3
+   |
+20 |   /// Not a doc comment here.
+   |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: a `///` comment documents the item, variant, field or interface function right after it
+   = help: use `//` for an ordinary comment
+
+error[E0027]: `_` is the only argument of the call
+  --> permissive.cheby:21:3
+   |
+21 |   f(_)
+   |   ^^^^
+   |
+   = note: `f(_)` means exactly `f` (D-245)
+   = help: write `f` instead
+
+error[E0026]: more than one `_` in one argument list
+  --> permissive.cheby:22:8
+   |
+22 |   f(_, _)
+   |     -  ^
+   |     |
+   |     first `_` here
+   |
+   = help: a capture has exactly one `_` (D-202); write a closure, such as `fn(a, b) { f(a, b) }`, or pass the function itself
+
+error[E0028]: pipe into a call without `_`
+  --> permissive.cheby:23:8
+   |
+23 |   x |> f(a)
+   |     -- ^^^^ this call has no `_` argument
+   |     |
+   |     the value piped in
+   |
+   = help: add `_` where the piped value goes
+
+error[E0028]: pipe into a call without `_`
+  --> permissive.cheby:24:8
+   |
+24 |   x |> f(a, g(_))
+   |     -- ^^^^^^^^^^ this call has no `_` argument
+   |     |
+   |     the value piped in
+   |
+   = note: the `_` in `g(…)` belongs to `g` (D-202)
+   = help: add `_` where the piped value goes
+
+error[E0027]: `_` is the only argument of the call
+  --> permissive.cheby:24:13
+   |
+24 |   x |> f(a, g(_))
+   |             ^^^^
+   |
+   = note: `g(_)` means exactly `g` (D-245)
+   = help: write `g` instead
+
+error[E0029]: comparison operators cannot be chained
+  --> permissive.cheby:25:9
+   |
+25 |   a < b < c
+   |     -   ^
+   |     |
+   |     first comparison here
+   |
+   = help: combine the comparisons with `&&`, such as `a < b && b < c`
+
+error[E0030]: a tuple has at least two elements
+  --> permissive.cheby:26:3
+   |
+26 |   (e,)
+   |   ^^^^
+   |
+   = help: write the value alone; `(e)` is just `e` in parentheses
+
+error[E0013]: a `let` with a message needs `assert`
+  --> permissive.cheby:27:13
+   |
+27 |   let m = 1 as "message"
+   |             ^^^^^^^^^^^^
+   |
+   = help: write `let assert` for a refutable pattern (D-159)
+
+error[E0013]: trailing comma after the `use` binders
+  --> permissive.cheby:28:8
+   |
+28 |   use a, <- f()
+   |        ^
+   |
+   = help: remove the comma
+
+error[E0013]: a `case` needs at least one arm
+  --> permissive.cheby:29:10
+   |
+29 |   case x {}
+   |          ^^
+
+error[E0035]: a subjectless `case` must end with a `_` arm
+  --> permissive.cheby:30:10
+   |
+30 |   case { a => 1 }
+   |          ^
+   |
+   = help: add a final arm `_ => …` for the remaining cases (D-109)
+
+error[E0035]: `_` must be the last arm of a subjectless `case`
+  --> permissive.cheby:32:5
+   |
+32 |     _ => 1
+   |     ^
+   |
+   = help: the arms after `_` can never be taken; remove them or move `_` last
+
+error[E0035]: a subjectless `case` must end with a `_` arm
+  --> permissive.cheby:33:5
+   |
+33 |     b => 2
+   |     ^
+   |
+   = help: add a final arm `_ => …` for the remaining cases (D-109)
+
+error[E0031]: `..base` must come first in a record update
+  --> permissive.cheby:35:17
+   |
+35 |   Point { x: 1, ..p, ..q }
+   |                 ^^^
+   |
+   = help: move the spread before the fields
+
+error[E0031]: a record update has only one `..base`
+  --> permissive.cheby:35:22
+   |
+35 |   Point { x: 1, ..p, ..q }
+   |                      ^^^
+   |
+   = help: remove the extra spread
+
+error[E0031]: a record update needs at least one field
+  --> permissive.cheby:36:3
+   |
+36 |   Point { ..p }
+   |   ^^^^^^^^^^^^^
+   |
+   = help: to copy a value unchanged, use it as it is
+
+error[E0013]: a local function has no visibility
+  --> permissive.cheby:38:3
+   |
+38 |   pub fn local<T>(x: T)
+   |   ^^^
+   |
+   = help: remove it
+
+error[E0013]: a local function needs a body
+  --> permissive.cheby:38:10
+   |
+38 |   pub fn local<T>(x: T)
+   |          ^^^^^
+   |
+   = help: write the body in `{ … }` after the parameters
+
+error[E0013]: a local function cannot have type parameters
+  --> permissive.cheby:38:15
+   |
+38 |   pub fn local<T>(x: T)
+   |               ^^^
+   |
+   = help: local functions are monomorphic (D-123); declare a top-level function to make it generic
+
+error[E0007]: `if` is a reserved word
+  --> permissive.cheby:39:3
+   |
+39 |   if
+   |   ^^ reserved, cannot be used as a name
+   |
+   = help: Cheby has no `if`; use `case`
+
+error[E0008]: `0x` is not followed by any hexadecimal digit
+  --> permissive.cheby:40:3
+   |
+40 |   0x_
+   |   ^^^ expected digits after `0x`
+
+error[E0008]: decimal literal `007` has a leading zero
+  --> permissive.cheby:41:3
+   |
+41 |   007
+   |   ^^^
+   |
+   = note: octal literals start with `0o` (D-129)
+   = help: write `7`
+
+error[E0011]: unknown escape `\q`
+  --> permissive.cheby:42:4
+   |
+42 |   "\q"
+   |    ^^
+   |
+   = help: the escapes are `\n`, `\t`, `\r`, `\\`, `\"`, `\{` and `\u{…}` (D-114)
+
+error[E0033]: float literal in a pattern
+  --> permissive.cheby:46:5
+   |
+46 |     1.5 => 1
+   |     ^^^
+   |
+   = help: compare in a guard, such as `x when x == 0.5 => …`, or in a subjectless `case` (D-113)
+
+error[E0034]: interpolation in a string pattern
+  --> permissive.cheby:47:7
+   |
+47 |     "a{b}" => 2
+   |       ^^^
+   |
+   = help: a string pattern matches fixed text; compare with `==` in a guard
+
+error[E0032]: a list pattern has at most one rest
+  --> permissive.cheby:48:11
+   |
+48 |     [..a, ..b] => 3
+   |      ---  ^^^
+   |      |
+   |      first rest here
+   |
+   = help: keep one `..`; fixed elements may stand on both sides of it (D-158)
+
+error[E0032]: `..` must come last in a field pattern list
+  --> permissive.cheby:49:13
+   |
+49 |     Point { .., x } => 4
+   |             ^^
+   |
+   = help: move `..` after the fields
+
+error[E0030]: `()` is not a pattern
+  --> permissive.cheby:50:5
+   |
+50 |     () => 5
+   |     ^^
+   |
+   = help: the value with no information is `Nil`; match it with `Nil`
+
+error[E0030]: a tuple pattern has at least two elements
+  --> permissive.cheby:51:5
+   |
+51 |     (p,) => 6
+   |     ^^^^
+   |
+   = help: write the pattern alone, or `(p)` without the comma
+
+error[E0013]: `as` in an alternative must be in parentheses
+  --> permissive.cheby:52:5
+   |
+52 |     A as x | B => 7
+   |     ^^^^^^
+   |
+   = help: write `(A as x) | B`, or put `as` after the last alternative to bind the whole pattern
+
+error[E0013]: a pattern has at most one `as` name
+  --> permissive.cheby:53:12
+   |
+53 |     a as b as c => 8
+   |            ^^
+   |
+   = help: bind the value once; use the first name
+
+error[E0013]: a constructor pattern's field list is empty
+  --> permissive.cheby:54:9
+   |
+54 |     Some() => 9
+   |         ^^
+   |
+   = help: for a constructor without fields, remove the parentheses
+
+error[E0018]: `import` after an item
+  --> permissive.cheby:57:1
+   |
+3  | fn camelCase(myValue: Int) -> My_Type { myValue }
+   | ------------ first item here
+...
+57 | import std::{io, list} as both
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: move all imports before the first item (D-143)
+
+error[E0013]: an import has either a list of names or an alias, not both
+  --> permissive.cheby:57:24
+   |
+57 | import std::{io, list} as both
+   |                        ^^^^^^^
+   |
+   = help: remove the alias
+
+error[E0018]: `import` after an item
+  --> permissive.cheby:58:1
+   |
+3  | fn camelCase(myValue: Int) -> My_Type { myValue }
+   | ------------ first item here
+...
+58 | import std::{Option as opt}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: move all imports before the first item (D-143)
+
+error[E0013]: `Option as opt` changes the case of the name
+  --> permissive.cheby:58:24
+   |
+58 | import std::{Option as opt}
+   |                        ^^^
+   |
+   = help: a type or variant is renamed to an upper-case name, a value to a lower-case one
+
+error[E0019]: space between `@` and the attribute name
+  --> permissive.cheby:59:2
+   |
+59 | @ inline
+   |  ^
+   |
+   = help: remove the space
+
+error[E0017]: module doc comment after the start of the module
+  --> permissive.cheby:61:1
+   |
+61 | //! Late module doc.
+   | ^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: move it to the top of the file, before the imports and items, or use `//` for an ordinary comment
+
+error[E0019]: attribute not followed by an item
+  --> permissive.cheby:62:1
+   |
+62 | @inline
+   | ^^^^^^^
+   |
+   = help: put the attribute on the line right before the item it applies to
+

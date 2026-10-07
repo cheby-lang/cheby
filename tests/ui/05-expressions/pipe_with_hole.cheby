@@ -1,0 +1,16 @@
+// @mode: check-pass
+// @decisions: D-244
+//! The two forms of a pipe: into a call with a `_`, in any position, or
+//! into a one-parameter function written bare.
+
+import std::list
+
+fn double(n: Int) -> Int {
+  n * 2
+}
+
+fn main() {
+  let xs = [1, 2, 3] |> list::map(_, double)
+  let count = xs |> list::length
+  assert count == 3
+}

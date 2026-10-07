@@ -1,0 +1,4 @@
+fn f(numbers: List<Int>) -> List<Int> {
+  list::map(numbers, _ + 1)
+  let x = _
+}

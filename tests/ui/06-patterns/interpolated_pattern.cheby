@@ -1,0 +1,15 @@
+// @mode: check-fail
+// @decisions: D-113
+//! A string literal pattern has no interpolation; compare with `==` in a
+//! guard.
+
+fn is_greeting(name: String, s: String) -> Bool {
+  case s {
+    "hi {name}" => True
+    _ => False
+  }
+}
+
+fn main() {
+  assert is_greeting("ann", "hi ann")
+}

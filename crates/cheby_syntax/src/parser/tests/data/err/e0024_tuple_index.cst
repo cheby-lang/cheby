@@ -1,0 +1,80 @@
+SOURCE_FILE@0..69
+  FN_DECL@0..68
+    FN_KW@0..2 "fn"
+    WHITESPACE@2..3 " "
+    LOWER_IDENT@3..8 "first"
+    PARAM_LIST@8..29
+      L_PAREN@8..9 "("
+      PARAM@9..28
+        IDENT_PAT@9..13
+          LOWER_IDENT@9..13 "pair"
+        COLON@13..14 ":"
+        WHITESPACE@14..15 " "
+        TUPLE_TYPE@15..28
+          L_PAREN@15..16 "("
+          PATH_TYPE@16..19
+            PATH@16..19
+              UPPER_IDENT@16..19 "Int"
+          COMMA@19..20 ","
+          WHITESPACE@20..21 " "
+          PATH_TYPE@21..27
+            PATH@21..27
+              UPPER_IDENT@21..27 "String"
+          R_PAREN@27..28 ")"
+      R_PAREN@28..29 ")"
+    WHITESPACE@29..30 " "
+    RET_TYPE@30..36
+      THIN_ARROW@30..32 "->"
+      WHITESPACE@32..33 " "
+      PATH_TYPE@33..36
+        PATH@33..36
+          UPPER_IDENT@33..36 "Int"
+    WHITESPACE@36..37 " "
+    BLOCK@37..68
+      L_BRACE@37..38 "{"
+      NEWLINE@38..39 "\n"
+      WHITESPACE@39..41 "  "
+      LET_STMT@41..55
+        LET_KW@41..44 "let"
+        WHITESPACE@44..45 " "
+        IDENT_PAT@45..46
+          LOWER_IDENT@45..46 "a"
+        WHITESPACE@46..47 " "
+        EQ@47..48 "="
+        WHITESPACE@48..49 " "
+        FIELD_EXPR@49..55
+          PATH_EXPR@49..53
+            PATH@49..53
+              LOWER_IDENT@49..53 "pair"
+          DOT@53..54 "."
+          INT_NUMBER@54..55 "0"
+      NEWLINE@55..56 "\n"
+      WHITESPACE@56..58 "  "
+      FIELD_EXPR@58..66
+        PATH_EXPR@58..62
+          PATH@58..62
+            LOWER_IDENT@58..62 "pair"
+        DOT@62..63 "."
+        FLOAT_NUMBER@63..66 "0.1"
+      NEWLINE@66..67 "\n"
+      R_BRACE@67..68 "}"
+  NEWLINE@68..69 "\n"
+
+// errors
+
+error[E0024]: positional access `.0` is not allowed
+ --> err/e0024_tuple_index.cheby:2:16
+  |
+2 |   let a = pair.0
+  |                ^
+  |
+  = help: read the tuple with a pattern, such as `let (first, second) = pair`
+
+error[E0024]: positional access `.0.1` is not allowed
+ --> err/e0024_tuple_index.cheby:3:8
+  |
+3 |   pair.0.1
+  |        ^^^
+  |
+  = help: read the tuple with a pattern, such as `let (first, second) = pair`
+

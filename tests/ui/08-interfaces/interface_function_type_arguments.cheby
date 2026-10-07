@@ -1,0 +1,11 @@
+// @mode: check-fail
+// @decisions: D-165
+//! Interface functions are not generic, so they take no type arguments.
+
+fn label(n: Int) -> String {
+  Show::show::<Int>(n)
+}
+
+fn main() {
+  assert label(1) == "1"
+}

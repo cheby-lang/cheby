@@ -1,0 +1,4 @@
+// Raw strings
+const a: String = r"^\d{3}$"
+const b: String = r#"a "quoted" word"#
+const c: String = r##"has "# inside"##

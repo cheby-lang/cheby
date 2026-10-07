@@ -10,5 +10,14 @@ publish = false
 [dependencies]
 cheby_diag.workspace = true
 
+[dev-dependencies]
+cheby_bench_gen.workspace = true
+cheby_test_support.workspace = true
+proptest.workspace = true
+
+[[bench]]
+name = "parse"
+harness = false
+
 [lints]
 workspace = true

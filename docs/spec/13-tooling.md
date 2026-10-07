@@ -71,11 +71,13 @@ Here `json` and `json_next` are majors 1 and 2 of one repository, which are two 
 
 - `name` is the package name, a `LOWER` identifier ([§7.1](07-modules-and-packages.md#71-packages)). It must not be `std`.
 - `version` is a semantic version (D-097).
-- `targets` is optional and lists the targets the package supports, `"native"` and/or `"js"`. It defaults to both. Cross-target checks ([§12.6](12-targets-and-ffi.md#126-target-specific-code)) cover only the declared targets (D-190).
+- `description` is a string, and `licences` is a list of strings.
+- `targets` is optional and lists the targets the package supports, `"native"` and/or `"js"`. It defaults to both. When present it must not be empty or name a target twice. Cross-target checks ([§12.6](12-targets-and-ffi.md#126-target-specific-code)) cover only the declared targets (D-190, D-444).
 - Each dependency is keyed by the name used in import paths: the key is the first segment of the dependency's module paths in this package, as in `import json_next::decode` (D-238). In v1 a dependency is a git URL plus a `tag` or a commit `rev` (D-044, D-097).
 - A key must be a `LOWER` identifier, must not be `std` and must differ from the package's own `name`. Keys are local to each manifest: two packages may use different keys for the same dependency, and the same key for different ones. Renaming a dependency is just choosing its key, so the dependency's own `name` never has to be unique in a build (D-192, D-238).
 - The dependency table is designed so that a later registry form, such as `json = "1.2"`, can be added without changing existing entries (D-044).
 - The optional compile-time evaluation limits ([§13.9](#139-compile-time-evaluation)) can be raised or lowered for the package (D-195).
+- The top-level keys are exactly `name`, `version`, `description`, `licences`, `targets`, `[dependencies]` and `[const-eval]`, and a dependency has only `git`, `tag` and `rev`. Any other key is a compile error, so a misspelled key such as `verison` is never ignored silently. The contents of `[const-eval]` are not checked until its spelling is settled (D-444).
 
 ## 13.4 Dependencies and lockfile
 
@@ -176,34 +178,49 @@ The following are warnings (D-080 and the cited decisions):
 | unreachable `case` arm                                                  | D-022        |
 | `==` on a type statically known to contain a function or handle type    | D-070, D-233 |
 | use of a `@deprecated` item                                             | D-200        |
-| a written tuple type with a tuple element or with four or more elements | D-243        |
+| a written tuple type with a tuple element or with four or more elements | D-243, D-440 |
 | a negative integer literal passed as a standard-library count argument  | D-298, D-303 |
 
 Unused `pub` items are never reported (D-152). Warnings that need the whole package, such as unused package-visible items, are computed in a separate pass that does not delay `cheby run` (D-266). Bindings whose names start with `_` are not reported as unused ([§2.3](02-lexical-structure.md#23-identifiers)).
 
 The compiler should report errors with the source span, a short explanation, and a suggested fix where one exists, for example a new name for a shadowing binding (D-062) or `{x:?}` for a type without `Show` (D-086).
 
-Every diagnostic has a code: `E` and four digits for an error, `W` and four digits for a warning. Codes are assigned in order and never reused, and a code whose check is removed stays reserved (D-419). `cheby explain <code>` prints a code's long explanation (D-420).
+Every diagnostic has a code: `E` and four digits for an error, `W` and four digits for a warning. Codes are assigned in order and never reused, and a code whose check is removed stays reserved (D-419). `cheby explain <code>` prints a code's long explanation (D-420). The first codes, `E0001` to `E0037` and `W0001`, cover the lexer, the parser, the syntax checks and the reading of the manifest and module files. A rule with its own decision gets its own code, and other syntax errors share `E0013` (D-442).
+
+Errors that are not about the program, such as an unreadable file, a missing `cheby.toml`, a misused command line or an unknown code given to `cheby explain`, have no code. They are printed as a plain `error: …` line (D-442).
 
 A diagnostic is rendered as plain text: a header with its kind, code and message, a location, a snippet of the source lines it is about, with `^` under the primary span and `-` under secondary spans, and then `note` and `help` lines. A suggested fix is a `help` line (D-418).
 
-A location is `path:line:column`. Lines and columns are counted from 1, and columns count Unicode code points. The path of a file in the package is relative to the package root and uses `/` on every platform (D-421).
+A location is `path:line:column`. Lines and columns are counted from 1, and columns count Unicode code points. A byte-order mark is not counted. The path of a file in the package is relative to the package root and uses `/` on every platform (D-421, D-443).
+
+The layout follows rustc in its details (D-443):
+
+- Line numbers are left-aligned in the gutter.
+- Several labels on one line share one row of markers. The label that ends last is written inline, and the others hang below it.
+- A span over several lines is drawn with a rail to the left of the text, from `_…^` on its first line to `|_…^` on its last.
+- A gap of one line between shown lines is printed, and a longer gap becomes `...`.
+- A tab shows as four spaces, other control characters as their Unicode control pictures, and markers follow the display width of the text.
+- Labels in another file get their own `::: path:line:col` section.
+- Notes come before helps.
+- An empty span at the end of a file that ends with a newline points at the empty last line.
+
+Diagnostics are separated by an empty line, and no summary line, such as a count of errors, follows them (D-443).
 
 _Example:_
 
 ```
-error[E0012]: `trimmed` is already bound
- --> src/main.cheby:4:7
+error[E0029]: comparison operators cannot be chained
+ --> src/main.cheby:7:16
   |
-3 |   let trimmed = string::trim(s)
-  |       ------- first bound here
-4 |   let trimmed = string::lowercase(trimmed)
-  |       ^^^^^^^ bound again here
+7 |   assert 1 < x < 3
+  |            -   ^
+  |            |
+  |            first comparison here
   |
-  = help: use a new name, such as `trimmed_2`
+  = help: combine the comparisons with `&&`, such as `a < b && b < c`
 ```
 
-The code in the example is illustrative. Codes are listed with their explanations in [`docs/diagnostics/`](../diagnostics/README.md).
+Codes are listed with their explanations in [`docs/diagnostics/`](../diagnostics/README.md).
 
 ## 13.9 Compile-time evaluation
 

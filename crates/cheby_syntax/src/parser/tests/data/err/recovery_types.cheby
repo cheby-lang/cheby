@@ -1,0 +1,5 @@
+fn f(x: int, y: List<>, z: (Int String)) -> Map<String, {
+  1
+}
+type T = 
+fn g() {}

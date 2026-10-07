@@ -1,0 +1,15 @@
+// @mode: check-fail
+// @decisions: D-245
+//! A call whose only argument is `_` is an error: write the function
+//! itself.
+
+import std::list
+
+fn double(n: Int) -> Int {
+  n * 2
+}
+
+fn main() {
+  let xs = list::map([1, 2], double(_))
+  assert xs == [2, 4]
+}

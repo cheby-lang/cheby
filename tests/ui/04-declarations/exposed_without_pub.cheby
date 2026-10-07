@@ -1,0 +1,14 @@
+// @mode: check-fail
+// @decisions: D-150
+//! `exposed` makes a public type's fields visible outside the package, so
+//! it needs `pub`.
+
+exposed type Point {
+  x: Int,
+  y: Int,
+}
+
+fn main() {
+  let p = Point { x: 1, y: 2 }
+  assert p.x + p.y == 3
+}

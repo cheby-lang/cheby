@@ -1,0 +1,66 @@
+SOURCE_FILE@0..128
+  COMMENT@0..38 "// Leading && and || continue the line"
+  NEWLINE@38..39 "\n"
+  FN_DECL@39..127
+    FN_KW@39..41 "fn"
+    WHITESPACE@41..42 " "
+    LOWER_IDENT@42..43 "f"
+    PARAM_LIST@43..45
+      L_PAREN@43..44 "("
+      R_PAREN@44..45 ")"
+    WHITESPACE@45..46 " "
+    BLOCK@46..127
+      L_BRACE@46..47 "{"
+      NEWLINE@47..48 "\n"
+      WHITESPACE@48..50 "  "
+      LET_STMT@50..125
+        LET_KW@50..53 "let"
+        WHITESPACE@53..54 " "
+        IDENT_PAT@54..56
+          LOWER_IDENT@54..56 "ok"
+        WHITESPACE@56..57 " "
+        EQ@57..58 "="
+        WHITESPACE@58..59 " "
+        BIN_EXPR@59..125
+          BIN_EXPR@59..98
+            CALL_EXPR@59..74
+              PATH_EXPR@59..67
+                PATH@59..67
+                  LOWER_IDENT@59..67 "is_valid"
+              ARG_LIST@67..74
+                L_PAREN@67..68 "("
+                PATH_EXPR@68..73
+                  PATH@68..73
+                    LOWER_IDENT@68..73 "order"
+                R_PAREN@73..74 ")"
+            NEWLINE@74..75 "\n"
+            WHITESPACE@75..79 "    "
+            AMP2@79..81 "&&"
+            WHITESPACE@81..82 " "
+            CALL_EXPR@82..98
+              PATH_EXPR@82..91
+                PATH@82..91
+                  LOWER_IDENT@82..91 "has_stock"
+              ARG_LIST@91..98
+                L_PAREN@91..92 "("
+                PATH_EXPR@92..97
+                  PATH@92..97
+                    LOWER_IDENT@92..97 "order"
+                R_PAREN@97..98 ")"
+          NEWLINE@98..99 "\n"
+          WHITESPACE@99..103 "    "
+          PIPE2@103..105 "||"
+          WHITESPACE@105..106 " "
+          CALL_EXPR@106..125
+            PATH_EXPR@106..118
+              PATH@106..118
+                LOWER_IDENT@106..118 "is_backorder"
+            ARG_LIST@118..125
+              L_PAREN@118..119 "("
+              PATH_EXPR@119..124
+                PATH@119..124
+                  LOWER_IDENT@119..124 "order"
+              R_PAREN@124..125 ")"
+      NEWLINE@125..126 "\n"
+      R_BRACE@126..127 "}"
+  NEWLINE@127..128 "\n"

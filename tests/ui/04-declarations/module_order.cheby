@@ -1,0 +1,12 @@
+// @mode: check-fail
+// @decisions: D-143
+//! Imports come before the items of a module.
+
+import std::io
+
+fn main() {
+  io::println("count")
+  assert list::length([1, 2]) == 2
+}
+
+import std::list

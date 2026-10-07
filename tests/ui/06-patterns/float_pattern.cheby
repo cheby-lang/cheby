@@ -1,0 +1,14 @@
+// @mode: check-fail
+// @decisions: D-113
+//! There are no `Float` literal patterns; compare with `==` in a guard.
+
+fn is_half(x: Float) -> Bool {
+  case x {
+    0.5 => True
+    _ => False
+  }
+}
+
+fn main() {
+  assert is_half(0.5)
+}

@@ -1,0 +1,14 @@
+error[E0003]: unexpected character `;`
+ --> tests/ui/02-lexical-structure/unexpected_character.cheby:7:12
+  |
+7 |   let x = 1;
+  |            ^
+  |
+  = help: statements are separated by line breaks, not `;`
+
+error[E0003]: unexpected character `$`
+ --> tests/ui/02-lexical-structure/unexpected_character.cheby:8:11
+  |
+8 |   let y = $x
+  |           ^
+

@@ -1,0 +1,8 @@
+error[E0015]: unclosed `(`
+  --> tests/ui/02-lexical-structure/unclosed_delimiter.cheby:11:3
+   |
+10 |   let x = add(1, 2
+   |              - this `(` is never closed
+11 |   assert x == 3
+   |   ^^^^^^ expected `)`
+

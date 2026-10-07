@@ -1,0 +1,11 @@
+// @mode: parse-fail
+// @decisions: D-150
+//! Only a type declaration can be `exposed`.
+
+pub exposed fn origin() -> Int {
+  0
+}
+
+fn main() {
+  assert origin() == 0
+}

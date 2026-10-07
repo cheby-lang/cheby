@@ -1,0 +1,14 @@
+// @mode: check-fail
+// @decisions: D-011
+//! Top-level functions and constants need full signatures: every
+//! parameter and every constant has a written type.
+
+const limit = 10
+
+fn double(n) -> Int {
+  n * 2
+}
+
+fn main() {
+  assert double(limit) == 20
+}

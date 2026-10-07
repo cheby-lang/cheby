@@ -24,5 +24,6 @@ Detail level: workstreams with the milestone each slice lands next to.
 - Every example and every `std` source is a fixed point of `cheby fmt`, and the formatter passes the idempotence and meaning-preservation tests ([testing.md](testing.md#3-unit-and-property-tests)).
 - The language server answers every request of §13.11 on all examples, and its diagnostics match `cheby build`.
 - A package with git dependencies on two majors of one repository builds from its lockfile, and a checksum mismatch fails the build.
+- 030 passes, with its git dependency served from a local fixture repository and its HTTP fixture started by the harness (D-446).
 - `cheby doc` output for `std` matches `docs/stdlib/` module by module (D-220).
 - All doc examples in `std` pass `cheby test`.

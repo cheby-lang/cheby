@@ -29,22 +29,22 @@ I measurement runs from the first end-to-end program
 | A5  | Parser for types and patterns                                                                                                                                                                                           | App. A.3, A.6       | pattern corpus parses                                           |
 | A6  | Parser for expressions: precedence (§5.4.1), `case` with subjects and guards, subjectless `case`, `use`, pipes, captures, closures with pattern parameters (D-242), local functions, records and updates, lists, tuples | ch. 5, App. A.4-A.5 | all examples parse                                              |
 | A7  | Newline continuation rules decided by the parser (D-231)                                                                                                                                                                | §2.8                | `newlines` corpus from tree-sitter passes                       |
-| A8  | Error recovery: synchronize on items and statements, never fail to produce a tree                                                                                                                                       | -                   | fuzzing finds no panics; partial trees for broken files         |
+| A8  | Error recovery: synchronize on items and statements, never fail to produce a tree, one nesting limit of 256 levels (D-441)                                                                                              | -                   | fuzzing finds no panics; partial trees for broken files         |
 | A9  | Typed AST views over the CST                                                                                                                                                                                            | -                   | later phases use only views, never raw nodes                    |
-| A10 | Syntax-level errors that are not grammar errors: `x.0` (D-241), `f(_)` (D-245), pipe without a hole (D-244), tuple-shape warning (D-243)                                                                                | §5.12, §5.16        | UI tests pass                                                   |
+| A10 | Syntax-level errors that are not grammar errors (D-424): `x.0` (D-241), `f(_)` (D-245), pipe without a hole (D-244), tuple-shape warning (D-243, D-440); only token-level checks on files with grammar errors (D-425)   | §5.12, §5.16        | UI tests pass                                                   |
 
 ## B. Packages, names and interfaces (`cheby_package`, `cheby_resolve`, `cheby_iface`)
 
-| #   | Task                                                                                                                | Spec         | Done when                                               |
-| --- | ------------------------------------------------------------------------------------------------------------------- | ------------ | ------------------------------------------------------- |
-| B1  | `cheby.toml` reading (name, version, targets; dependencies parsed but rejected until M5)                            | §13.3        | all example manifests load                              |
-| B2  | Module discovery from `src/`, root module rules (D-142), file naming rules, `.mjs` files exempt (D-208)             | §7.2         | module paths of all examples correct                    |
-| B3  | Import graph, cycle detection (D-145), `std` resolution                                                             | §7.5         | cycle UI test passes                                    |
-| B4  | Item collection per namespace, duplicate detection                                                                  | §4.1.2, §7.7 | UI tests pass                                           |
-| B5  | Visibility: `pub`, package-visible, `priv` (D-162), `exposed` (D-048), interface satisfaction visibility (ADR-0034) | §7.3, §7.4   | UI tests pass                                           |
-| B6  | Prelude and hiding with warning (D-112, D-146, D-212)                                                               | §7.6         | UI tests pass                                           |
-| B7  | Local name resolution, shadowing ban (D-051, D-062), naming conventions (D-059)                                     | §5.2.3, §2.3 | UI tests pass, with suggested names                     |
-| B8  | `ModuleInterface`: data model, stable hash, deterministic serialization (unused on disk until M3)                   | §13.12.1     | hash unchanged by body edits; serialization byte-stable |
+| #   | Task                                                                                                                    | Spec         | Done when                                               |
+| --- | ----------------------------------------------------------------------------------------------------------------------- | ------------ | ------------------------------------------------------- |
+| B1  | `cheby.toml` reading (name, version, targets; unknown keys rejected (D-444); dependencies parsed but rejected until M5) | §13.3        | all example manifests load                              |
+| B2  | Module discovery from `src/`, root module rules (D-142), file naming rules, `.mjs` files exempt (D-208)                 | §7.2         | module paths of all examples correct                    |
+| B3  | Import graph, cycle detection (D-145), `std` resolution                                                                 | §7.5         | cycle UI test passes                                    |
+| B4  | Item collection per namespace, duplicate detection                                                                      | §4.1.2, §7.7 | UI tests pass                                           |
+| B5  | Visibility: `pub`, package-visible, `priv` (D-162), `exposed` (D-048), interface satisfaction visibility (ADR-0034)     | §7.3, §7.4   | UI tests pass                                           |
+| B6  | Prelude and hiding with warning (D-112, D-146, D-212)                                                                   | §7.6         | UI tests pass                                           |
+| B7  | Local name resolution, shadowing ban (D-051, D-062), naming conventions (D-059)                                         | §5.2.3, §2.3 | UI tests pass, with suggested names                     |
+| B8  | `ModuleInterface`: data model, stable hash, deterministic serialization (unused on disk until M3)                       | §13.12.1     | hash unchanged by body edits; serialization byte-stable |
 
 ## C. Type checking (`cheby_types`)
 
@@ -137,7 +137,7 @@ I measurement runs from the first end-to-end program
 ## Exit criteria
 
 - These examples pass through `cheby run` with their goldens: 001, 002, 003, 004, 006, 007, 008, 010, 012, 014, 015, 016, 017, 021, 023, 024, 025, 026, 027, 029, 032, and 011 if H4 is done.
-- Every other example passes `cheby check` for both targets.
+- Every other example passes `cheby check` for both targets, except examples with dependencies, which are checked from M5 when dependencies resolve. 030 is the only one (D-446).
 - All tier-1 stdlib modules are implemented on native.
 - The leak counter reports zero live objects at exit for every passing example.
 - Every warning of §13.8 and every "must" of chapters 2 to 8 that M1 implements has a UI test.

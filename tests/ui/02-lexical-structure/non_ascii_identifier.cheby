@@ -1,0 +1,8 @@
+// @mode: parse-fail
+// @decisions: D-127
+//! Identifiers are ASCII only.
+
+fn main() {
+  let café = 1
+  assert café == 1
+}

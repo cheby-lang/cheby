@@ -1,0 +1,43 @@
+SOURCE_FILE@0..59
+  COMMENT@0..8 "// Tests"
+  NEWLINE@8..9 "\n"
+  TEST_DECL@9..58
+    TEST_KW@9..13 "test"
+    WHITESPACE@13..14 " "
+    STRING_LIT@14..24
+      STRING_START@14..15 "\""
+      STRING_TEXT@15..23 "it works"
+      STRING_END@23..24 "\""
+    WHITESPACE@24..25 " "
+    BLOCK@25..58
+      L_BRACE@25..26 "{"
+      NEWLINE@26..27 "\n"
+      WHITESPACE@27..29 "  "
+      ASSERT_STMT@29..56
+        ASSERT_KW@29..35 "assert"
+        WHITESPACE@35..36 " "
+        BIN_EXPR@36..46
+          BIN_EXPR@36..41
+            LITERAL@36..37
+              INT_NUMBER@36..37 "1"
+            WHITESPACE@37..38 " "
+            PLUS@38..39 "+"
+            WHITESPACE@39..40 " "
+            LITERAL@40..41
+              INT_NUMBER@40..41 "1"
+          WHITESPACE@41..42 " "
+          EQ2@42..44 "=="
+          WHITESPACE@44..45 " "
+          LITERAL@45..46
+            INT_NUMBER@45..46 "2"
+        WHITESPACE@46..47 " "
+        MESSAGE@47..56
+          AS_KW@47..49 "as"
+          WHITESPACE@49..50 " "
+          STRING_LIT@50..56
+            STRING_START@50..51 "\""
+            STRING_TEXT@51..55 "math"
+            STRING_END@55..56 "\""
+      NEWLINE@56..57 "\n"
+      R_BRACE@57..58 "}"
+  NEWLINE@58..59 "\n"

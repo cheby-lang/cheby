@@ -1,0 +1,8 @@
+// Leading pipe continues the line
+fn f() {
+  let total =
+    orders
+    |> list::filter(_, is_paid)
+    // a comment between pipeline steps
+    |> list::fold(_, 0, add)
+}

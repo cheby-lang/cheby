@@ -1,0 +1,7 @@
+// Closure body inside call arguments
+fn f() {
+  list::map(xs, fn(x) {
+    let y = x
+    y
+  })
+}

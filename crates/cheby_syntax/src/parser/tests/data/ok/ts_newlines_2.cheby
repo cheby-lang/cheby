@@ -1,0 +1,6 @@
+// Leading && and || continue the line
+fn f() {
+  let ok = is_valid(order)
+    && has_stock(order)
+    || is_backorder(order)
+}

@@ -1,0 +1,9 @@
+fn f(x: Int) {
+  case x {
+    Some( => 1
+    [1, 2 => 2
+    Point { x: } => 3
+    - => 4
+    good => 5
+  }
+}

@@ -1,0 +1,13 @@
+error[E0015]: unclosed `{`
+  --> tests/ui/02-lexical-structure/missing_closing_brace.cheby:11:1
+   |
+5  | fn sign(n: Int) -> Int {
+   |                        - this `{` is never closed
+6  |   case n {
+   |          - this `{` may be the one missing its `}`
+...
+11 | fn main() {
+   | ^^ expected `}`
+   |
+   = note: the `}` that closes it is indented differently from the line of the `{`
+

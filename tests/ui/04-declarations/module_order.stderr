@@ -1,0 +1,11 @@
+error[E0018]: `import` after an item
+  --> tests/ui/04-declarations/module_order.cheby:12:1
+   |
+7  | fn main() {
+   | ------- first item here
+...
+12 | import std::list
+   | ^^^^^^^^^^^^^^^^
+   |
+   = help: move all imports before the first item (D-143)
+

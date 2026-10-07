@@ -1,0 +1,16 @@
+warning[W0001]: tuple type with 4 elements
+ --> tests/ui/03-types/tuple_shape.cheby:6:20
+  |
+6 | fn quad(n: Int) -> (Int, Int, Int, Int) {
+  |                    ^^^^^^^^^^^^^^^^^^^^
+  |
+  = help: use a record type with named fields instead (D-243)
+
+warning[W0001]: tuple type with a tuple element
+  --> tests/ui/03-types/tuple_shape.cheby:10:18
+   |
+10 | fn first(nested: ((Int, Int), Int)) -> Int {
+   |                  ^^^^^^^^^^^^^^^^^
+   |
+   = help: use a record type with named fields instead (D-243)
+

@@ -1,0 +1,72 @@
+SOURCE_FILE@0..109
+  COMMENT@0..34 "// Closure with pattern parameters"
+  NEWLINE@34..35 "\n"
+  FN_DECL@35..108
+    FN_KW@35..37 "fn"
+    WHITESPACE@37..38 " "
+    LOWER_IDENT@38..39 "f"
+    PARAM_LIST@39..41
+      L_PAREN@39..40 "("
+      R_PAREN@40..41 ")"
+    WHITESPACE@41..42 " "
+    BLOCK@42..108
+      L_BRACE@42..43 "{"
+      NEWLINE@43..44 "\n"
+      WHITESPACE@44..46 "  "
+      CALL_EXPR@46..106
+        PATH_EXPR@46..56
+          PATH@46..56
+            LOWER_IDENT@46..50 "list"
+            COLON2@50..52 "::"
+            LOWER_IDENT@52..56 "fold"
+        ARG_LIST@56..106
+          L_PAREN@56..57 "("
+          PATH_EXPR@57..59
+            PATH@57..59
+              LOWER_IDENT@57..59 "xs"
+          COMMA@59..60 ","
+          WHITESPACE@60..61 " "
+          LITERAL@61..62
+            INT_NUMBER@61..62 "0"
+          COMMA@62..63 ","
+          WHITESPACE@63..64 " "
+          CLOSURE@64..105
+            FN_KW@64..66 "fn"
+            PARAM_LIST@66..86
+              L_PAREN@66..67 "("
+              PARAM@67..70
+                IDENT_PAT@67..70
+                  LOWER_IDENT@67..70 "acc"
+              COMMA@70..71 ","
+              WHITESPACE@71..72 " "
+              PARAM@72..85
+                TUPLE_PAT@72..85
+                  L_PAREN@72..73 "("
+                  WILDCARD_PAT@73..74
+                    UNDERSCORE@73..74 "_"
+                  COMMA@74..75 ","
+                  WHITESPACE@75..76 " "
+                  IDENT_PAT@76..84
+                    LOWER_IDENT@76..84 "quantity"
+                  R_PAREN@84..85 ")"
+              R_PAREN@85..86 ")"
+            WHITESPACE@86..87 " "
+            BLOCK@87..105
+              L_BRACE@87..88 "{"
+              WHITESPACE@88..89 " "
+              BIN_EXPR@89..103
+                PATH_EXPR@89..92
+                  PATH@89..92
+                    LOWER_IDENT@89..92 "acc"
+                WHITESPACE@92..93 " "
+                PLUS@93..94 "+"
+                WHITESPACE@94..95 " "
+                PATH_EXPR@95..103
+                  PATH@95..103
+                    LOWER_IDENT@95..103 "quantity"
+              WHITESPACE@103..104 " "
+              R_BRACE@104..105 "}"
+          R_PAREN@105..106 ")"
+      NEWLINE@106..107 "\n"
+      R_BRACE@107..108 "}"
+  NEWLINE@108..109 "\n"

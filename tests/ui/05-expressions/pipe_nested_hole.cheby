@@ -1,0 +1,17 @@
+// @mode: check-fail
+// @decisions: D-244, D-202
+//! A `_` belongs to the innermost call that has it as a whole argument,
+//! so it does not give the pipe's call a hole.
+
+fn add(a: Int, b: Int) -> Int {
+  a + b
+}
+
+fn apply(f: fn(Int) -> Int, x: Int) -> Int {
+  f(x)
+}
+
+fn main() {
+  let n = 1 |> apply(add(_, 1))
+  assert n == 2
+}

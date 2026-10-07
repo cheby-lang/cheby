@@ -233,7 +233,7 @@ list::map(numbers, int::add(1, _))
 list::map(numbers, fn(x) { int::add(1, x) })
 ```
 
-A `_` belongs to the innermost call that has it as a whole argument (D-202). A capture may itself be an argument of another call, which then receives the capture as an ordinary function value: `f(a, g(_))` means `f(a, fn(x) { g(x) })`.
+A `_` belongs to the innermost call that has it as a whole argument (D-202). A capture may itself be an argument of another call, which then receives the capture as an ordinary function value: `f(a, g(_, b))` means `f(a, fn(x) { g(x, b) })`.
 
 - At most one `_` may appear in one argument list. `f(_, _)` is a compile error.
 - A call whose only argument is `_` is a compile error, because `f(_)` means exactly `f`. Write `f` instead (D-245).
@@ -312,7 +312,7 @@ case_expr   = "case" subjects "{" [ NL ] case_arm { NL case_arm } [ NL ] "}"
             | "case" "{" [ NL ] cond_arm { NL cond_arm } [ NL ] "}" ;
 subjects    = subject_expr { "," subject_expr } ;   (* subject_expr: §5.9.6 *)
 case_arm    = pattern { "," pattern } [ "when" expr ] "=>" expr ;
-cond_arm    = ( expr | "_" ) "=>" expr ;
+cond_arm    = ( expr | "_" ) "=>" expr ;   (* "_" only as the last arm, D-109, D-439 *)
 ```
 
 ### 5.9.1 Matching
@@ -373,7 +373,7 @@ fn sign(n: Int) -> String {
 }
 ```
 
-- Each arm's left side is an expression of type `Bool`, except the last, which must be `_` (D-109).
+- Each arm's left side is an expression of type `Bool`, except the last, which must be `_` (D-109). A `_` arm anywhere else is a compile error, because `_` is not an expression (D-439).
 - The conditions are evaluated in order. The first arm whose condition is `True` is taken, and later conditions are not evaluated. If none is `True`, the `_` arm is taken.
 - Arm bodies follow the same rules as in [§5.9.1](#591-matching).
 
@@ -440,7 +440,7 @@ fn with_log(path: String) -> Result<Nil, io::Error> {
 
 ```ebnf
 constructor   = ctor_path "{" [ NL ] [ field_init { "," [ NL ] field_init } [ "," ] ] [ NL ] "}" ;
-record_update = UPPER "{" [ NL ] ".." expr { "," [ NL ] field_init } [ "," ] [ NL ] "}" ;
+record_update = ctor_path "{" [ NL ] ".." expr { "," [ NL ] field_init } [ "," ] [ NL ] "}" ;   (* the type name, D-156, D-429 *)
 ctor_path     = [ LOWER "::" ] UPPER ;
 (* a unit or positional constructor used as a value, `None`, `Some(1)` or `Some`, is a path_expr, §5.17 *)
 field_init  = LOWER [ ":" expr ] ;
@@ -459,7 +459,7 @@ Constructing a value of a `priv` type is possible only in its own module (D-151)
 
 ### 5.11.2 Record update
 
-`T { ..base, field: value, … }` produces a copy of `base` with the listed fields replaced (D-035). `T` is the **type name**, not a constructor name, and may be qualified with a module (D-156):
+`T { ..base, field: value, … }` produces a copy of `base` with the listed fields replaced (D-035). `T` is the **type name**, not a constructor name, and may be qualified with a module, as in `supervisor::Policy { ..policy, backoff_ms: 1 }` (D-156, D-429):
 
 - `base` is evaluated first, then the field values in the order written.
 - Every listed field must exist in the type and must be accessible under the rules of [§5.11.3](#5113-field-access). For a type with several variants, every variant must have each listed field with the same type (D-071).
@@ -573,7 +573,7 @@ pipe        = expr "|>" expr ;
 
 The hole may be in any position, including the first: `xs |> list::map(_, f)` means `list::map(xs, f)`. A function with more than one parameter is therefore always piped into with an explicit `_`, and a one-parameter function is written bare, `xs |> list::length`, never `xs |> list::length(_)` ([§5.6](#56-function-capture), D-245).
 
-Only a `_` that is a whole argument of the call on the right side counts as its hole. A `_` nested in another argument belongs to that inner call ([§5.6](#56-function-capture)), so `x |> f(a, g(_))` has no hole and is a compile error. It is written `x |> f(_, a, g(_))`, which means `f(x, a, fn(y) { g(y) })`. A `_` therefore means the same thing with or without a pipe in front.
+Only a `_` that is a whole argument of the call on the right side counts as its hole. A `_` nested in another argument belongs to that inner call ([§5.6](#56-function-capture)), so `x |> f(a, g(_, b))` has no hole and is a compile error. It is written `x |> f(_, a, g(_, b))`, which means `f(x, a, fn(y) { g(y, b) })`. A `_` therefore means the same thing with or without a pipe in front.
 
 `x` is evaluated before the rest of the right side ([§5.15.1](#5151-evaluation-order)). To pipe into a function returned by a call, parenthesize the call: `x |> (make_handler(config))`.
 

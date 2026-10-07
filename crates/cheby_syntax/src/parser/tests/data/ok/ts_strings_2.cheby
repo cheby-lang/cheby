@@ -1,0 +1,3 @@
+// Multi-line string
+const s: String = "one
+two"

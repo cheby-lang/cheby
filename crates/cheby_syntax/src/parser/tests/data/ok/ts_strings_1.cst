@@ -1,0 +1,44 @@
+SOURCE_FILE@0..106
+  COMMENT@0..28 "// Interpolation and escapes"
+  NEWLINE@28..29 "\n"
+  CONST_DECL@29..105
+    CONST_KW@29..34 "const"
+    WHITESPACE@34..35 " "
+    LOWER_IDENT@35..36 "s"
+    COLON@36..37 ":"
+    WHITESPACE@37..38 " "
+    PATH_TYPE@38..44
+      PATH@38..44
+        UPPER_IDENT@38..44 "String"
+    WHITESPACE@44..45 " "
+    EQ@45..46 "="
+    WHITESPACE@46..47 " "
+    STRING_LIT@47..105
+      STRING_START@47..48 "\""
+      STRING_TEXT@48..51 "at "
+      INTERPOLATION@51..60
+        INTERP_START@51..52 "{"
+        LOWER_IDENT@52..57 "point"
+        DOT@57..58 "."
+        LOWER_IDENT@58..59 "x"
+        INTERP_END@59..60 "}"
+      STRING_TEXT@60..62 ", "
+      INTERPOLATION@62..73
+        INTERP_START@62..63 "{"
+        LOWER_IDENT@63..67 "user"
+        DOT@67..68 "."
+        LOWER_IDENT@68..72 "name"
+        INTERP_END@72..73 "}"
+      STRING_TEXT@73..74 " "
+      INTERPOLATION@74..83
+        INTERP_START@74..75 "{"
+        LOWER_IDENT@75..80 "state"
+        COLON_QUESTION@80..82 ":?"
+        INTERP_END@82..83 "}"
+      STRING_TEXT@83..84 " "
+      STRING_ESCAPE@84..86 "\\{"
+      STRING_TEXT@86..93 "brace} "
+      STRING_ESCAPE@93..102 "\\u{1F600}"
+      STRING_ESCAPE@102..104 "\\n"
+      STRING_END@104..105 "\""
+  NEWLINE@105..106 "\n"

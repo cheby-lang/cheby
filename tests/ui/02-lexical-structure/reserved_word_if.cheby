@@ -1,0 +1,12 @@
+// @mode: parse-fail
+// @decisions: D-002, D-128
+//! `if` is a reserved word, and Cheby has no `if`: the reserved-word
+//! error explains the syntax error it causes.
+
+fn sign(n: Int) -> Int {
+  if n > 0 { 1 } else { 0 }
+}
+
+fn main() {
+  assert sign(1) == 1
+}

@@ -1,0 +1,22 @@
+// @mode: parse-fail
+// @decisions: D-051
+//! The parser recovers at the next statement and the next item, so one
+//! run reports every independent error.
+
+fn first() -> Int {
+  let = 1
+  2
+}
+
+fn second() -> Int {
+  let x = (1 +
+  x
+}
+
+fn third() -> Int {
+  3 4
+}
+
+fn main() {
+  assert first() + second() + third() == 9
+}

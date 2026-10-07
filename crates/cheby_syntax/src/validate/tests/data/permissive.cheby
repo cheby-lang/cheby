@@ -1,0 +1,62 @@
+//! Accepted by the parser and tree-sitter, rejected by validation (class V,
+//! D-424). None of these is a grammar error.
+fn camelCase(myValue: Int) -> My_Type { myValue }
+fn patterns((a, b): (Int, Int), c) {}
+const untyped = 1
+exposed type NotPub { x: Int }
+priv exposed type PrivExposed { x: Int }
+type Bounded<T: Show> { x: T }
+type BoundArgs = dyn Into<Int>
+type Unit = ()
+type One = (Int,)
+type Empty {}
+type Variants { A(), B {} }
+type Nested = ((Int, Int), Int)
+type Wide = (Int, Int, Int, Int)
+interface Bad: From<Int>
+import late
+@!target(js)
+fn holes() {
+  /// Not a doc comment here.
+  f(_)
+  f(_, _)
+  x |> f(a)
+  x |> f(a, g(_))
+  a < b < c
+  (e,)
+  let m = 1 as "message"
+  use a, <- f()
+  case x {}
+  case { a => 1 }
+  case {
+    _ => 1
+    b => 2
+  }
+  Point { x: 1, ..p, ..q }
+  Point { ..p }
+  [x] |> list::length
+  pub fn local<T>(x: T)
+  if
+  0x_
+  007
+  "\q"
+}
+fn pats() {
+  case x {
+    1.5 => 1
+    "a{b}" => 2
+    [..a, ..b] => 3
+    Point { .., x } => 4
+    () => 5
+    (p,) => 6
+    A as x | B => 7
+    a as b as c => 8
+    Some() => 9
+  }
+}
+import std::{io, list} as both
+import std::{Option as opt}
+@ inline
+fn spaced() {}
+//! Late module doc.
+@inline

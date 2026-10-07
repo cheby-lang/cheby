@@ -1,0 +1,6 @@
+SOURCE_FILE@0..21
+  NEWLINE@0..1 "\n"
+  NEWLINE@1..2 "\n"
+  COMMENT@2..19 "// only a comment"
+  NEWLINE@19..20 "\n"
+  NEWLINE@20..21 "\n"

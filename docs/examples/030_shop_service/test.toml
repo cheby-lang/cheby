@@ -1,3 +1,3 @@
-milestone = "M3"
+milestone = "M5"
 skip-run = true
-reason = "needs a loopback HTTP fixture started by the harness"
+reason = "needs its git dependency `sql`, which resolves only once fetching exists (D-446), and a loopback HTTP fixture started by the harness"

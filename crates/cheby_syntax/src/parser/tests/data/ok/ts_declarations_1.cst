@@ -1,0 +1,51 @@
+SOURCE_FILE@0..100
+  MODULE_DOC@0..16 "//! Module docs."
+  NEWLINE@16..17 "\n"
+  INNER_ATTR@17..33
+    AT_BANG@17..19 "@!"
+    LOWER_IDENT@19..25 "target"
+    ATTR_ARG_LIST@25..33
+      L_PAREN@25..26 "("
+      LOWER_IDENT@26..32 "native"
+      R_PAREN@32..33 ")"
+  NEWLINE@33..34 "\n"
+  IMPORT_DECL@34..77
+    IMPORT_KW@34..40 "import"
+    WHITESPACE@40..41 " "
+    MODULE_PATH@41..49
+      LOWER_IDENT@41..44 "std"
+      COLON2@44..46 "::"
+      LOWER_IDENT@46..49 "ops"
+    COLON2@49..51 "::"
+    IMPORT_LIST@51..77
+      L_BRACE@51..52 "{"
+      IMPORT_ITEM@52..55
+        UPPER_IDENT@52..55 "Add"
+      COMMA@55..56 ","
+      WHITESPACE@56..57 " "
+      IMPORT_ITEM@57..71
+        UPPER_IDENT@57..64 "Compare"
+        WHITESPACE@64..65 " "
+        RENAME@65..71
+          AS_KW@65..67 "as"
+          WHITESPACE@67..68 " "
+          UPPER_IDENT@68..71 "Cmp"
+      COMMA@71..72 ","
+      WHITESPACE@72..73 " "
+      IMPORT_ITEM@73..76
+        LOWER_IDENT@73..76 "max"
+      R_BRACE@76..77 "}"
+  NEWLINE@77..78 "\n"
+  IMPORT_DECL@78..99
+    IMPORT_KW@78..84 "import"
+    WHITESPACE@84..85 " "
+    MODULE_PATH@85..92
+      LOWER_IDENT@85..88 "std"
+      COLON2@88..90 "::"
+      LOWER_IDENT@90..92 "io"
+    WHITESPACE@92..93 " "
+    RENAME@93..99
+      AS_KW@93..95 "as"
+      WHITESPACE@95..96 " "
+      LOWER_IDENT@96..99 "out"
+  NEWLINE@99..100 "\n"

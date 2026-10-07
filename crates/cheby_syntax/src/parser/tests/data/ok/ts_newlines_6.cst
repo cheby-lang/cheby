@@ -1,0 +1,64 @@
+SOURCE_FILE@0..98
+  COMMENT@0..37 "// Closure body inside call arguments"
+  NEWLINE@37..38 "\n"
+  FN_DECL@38..97
+    FN_KW@38..40 "fn"
+    WHITESPACE@40..41 " "
+    LOWER_IDENT@41..42 "f"
+    PARAM_LIST@42..44
+      L_PAREN@42..43 "("
+      R_PAREN@43..44 ")"
+    WHITESPACE@44..45 " "
+    BLOCK@45..97
+      L_BRACE@45..46 "{"
+      NEWLINE@46..47 "\n"
+      WHITESPACE@47..49 "  "
+      CALL_EXPR@49..95
+        PATH_EXPR@49..58
+          PATH@49..58
+            LOWER_IDENT@49..53 "list"
+            COLON2@53..55 "::"
+            LOWER_IDENT@55..58 "map"
+        ARG_LIST@58..95
+          L_PAREN@58..59 "("
+          PATH_EXPR@59..61
+            PATH@59..61
+              LOWER_IDENT@59..61 "xs"
+          COMMA@61..62 ","
+          WHITESPACE@62..63 " "
+          CLOSURE@63..94
+            FN_KW@63..65 "fn"
+            PARAM_LIST@65..68
+              L_PAREN@65..66 "("
+              PARAM@66..67
+                IDENT_PAT@66..67
+                  LOWER_IDENT@66..67 "x"
+              R_PAREN@67..68 ")"
+            WHITESPACE@68..69 " "
+            BLOCK@69..94
+              L_BRACE@69..70 "{"
+              NEWLINE@70..71 "\n"
+              WHITESPACE@71..75 "    "
+              LET_STMT@75..84
+                LET_KW@75..78 "let"
+                WHITESPACE@78..79 " "
+                IDENT_PAT@79..80
+                  LOWER_IDENT@79..80 "y"
+                WHITESPACE@80..81 " "
+                EQ@81..82 "="
+                WHITESPACE@82..83 " "
+                PATH_EXPR@83..84
+                  PATH@83..84
+                    LOWER_IDENT@83..84 "x"
+              NEWLINE@84..85 "\n"
+              WHITESPACE@85..89 "    "
+              PATH_EXPR@89..90
+                PATH@89..90
+                  LOWER_IDENT@89..90 "y"
+              NEWLINE@90..91 "\n"
+              WHITESPACE@91..93 "  "
+              R_BRACE@93..94 "}"
+          R_PAREN@94..95 ")"
+      NEWLINE@95..96 "\n"
+      R_BRACE@96..97 "}"
+  NEWLINE@97..98 "\n"

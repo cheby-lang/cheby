@@ -1,0 +1,8 @@
+error[E0010]: unterminated string
+ --> tests/ui/02-lexical-structure/unterminated_string.cheby:8:11
+  |
+8 |   let s = "hello
+  |           ^ this string is never closed
+  |
+  = help: add a closing `"`
+

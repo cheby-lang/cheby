@@ -41,9 +41,9 @@ stdlib workstream: tier 1 before M1 ─► tier 2 before M2 ─► tier 3 before
 | M0 Foundation        | Workspace, CI, test and bench harnesses, golden files for all examples, tier-1 stdlib specs                                | none (harnesses run, examples are marked expected-fail)                                   |
 | M1 Single-fiber core | Parser, resolver, type checker, MIR with naive RC, Cranelift JIT, runtime kernels, `cheby check`, `run`, `test`, `repl`    | 001-004, 006-008, 010, 012, 014-017, 021, 023-027, 029, 032 (011 if `std::json` is ready) |
 | M2 Runtime           | Perceus (borrowing, reuse), shared marking, fiber stacks, M:N scheduler, scopes, channels, selectors, unwinding, IO poller | adds 005, 009, 013, 018, 019, 022, 028                                                    |
-| M3 AOT and cache     | Object output, linking, DWARF line tables, interface artifacts on disk, global cache, cached-code loader, precompiled std  | all of the above through `cheby build --target native`, plus 020, 030, 031                |
+| M3 AOT and cache     | Object output, linking, DWARF line tables, interface artifacts on disk, global cache, cached-code loader, precompiled std  | all of the above through `cheby build --target native`, plus 020 and 031                  |
 | M4 JS                | JS emitter, link-time suspension analysis, JS runtime, handle RC on JS, source maps                                        | every example on Node with the same goldens as native                                     |
-| M5 Tooling           | `cheby fmt`, `cheby lsp`, `cheby doc`, `cheby new/add/update/fetch`                                                        | every example is a `cheby fmt` fixed point, doc examples run as tests                     |
+| M5 Tooling           | `cheby fmt`, `cheby lsp`, `cheby doc`, `cheby new/add/update/fetch`                                                        | every example is a `cheby fmt` fixed point, doc examples run as tests, 030 passes (D-446) |
 | M6 v1                | Release profile, bundled lld, Windows, full platform matrix, budgets met                                                   | every example on every platform of D-074, in both profiles                                |
 
 M5 is listed as a milestone so it has exit criteria, but its work starts as soon as M1's parser exists and runs in parallel with M2-M4 (D-099). [m5-tooling.md](m5-tooling.md) says which slice of it lands next to which milestone.
@@ -57,7 +57,7 @@ M5 is listed as a milestone so it has exit criteria, but its work starts as soon
 
 ## Plan decisions
 
-Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-plan), D-284 onward in [M0 foundation](../decisions/LOG.md#2026-10-04-m0-foundation), and D-418 onward in [Diagnostics](../decisions/LOG.md#2026-10-06-diagnostics):
+Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-plan), D-284 onward in [M0 foundation](../decisions/LOG.md#2026-10-04-m0-foundation), D-418 onward in [Diagnostics](../decisions/LOG.md#2026-10-06-diagnostics), and the plan-level ones of [M1 syntax layer](../decisions/LOG.md#2026-10-07-m1-syntax-layer):
 
 | Decision  | Summary                                                                                             |
 | --------- | --------------------------------------------------------------------------------------------------- |
@@ -91,6 +91,11 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-421     | Locations are 1-based lines and code-point columns, paths package-relative with `/`                 |
 | D-422     | Lint exemptions are local `#[expect(…, reason)]` on the smallest function or module                 |
 | D-423     | Clippy `pedantic` and the no-panic lints are denied workspace-wide, `nursery` is not                |
+| D-441     | The parser bounds expression, pattern, type and block nesting with one counter, at 256 levels       |
+| D-442     | Codes `E0001` to `E0037` and `W0001` for the syntax layer; tool errors have no code                 |
+| D-443     | Rendering details follow rustc; diagnostics are separated by an empty line, with no summary line    |
+| D-445     | `skip-run` examples are only checked, pending before their milestone; bless keeps the exit code     |
+| D-446     | Example 030 moves to M5, and examples with dependencies are checked from M5                         |
 
 ## Open questions
 

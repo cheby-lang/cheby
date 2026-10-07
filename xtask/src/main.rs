@@ -7,7 +7,8 @@
 //!   from different paths (D-264).
 //! - `coverage`: lists decisions cited in the spec that no UI test names.
 //! - `cross-check`: parses examples and UI tests with `tree-sitter-cheby`
-//!   at the pinned commit (D-272).
+//!   at the pinned commit and with the compiler parser, and fails if they
+//!   disagree (D-272).
 
 mod cross_check;
 
@@ -59,7 +60,8 @@ enum Cmd {
     },
     /// List decisions cited in the spec that no UI test names
     Coverage,
-    /// Parse examples and UI tests with tree-sitter-cheby at the pinned commit
+    /// Parse examples and UI tests with tree-sitter-cheby at the pinned
+    /// commit and with the compiler parser, and compare
     CrossCheck(cross_check::Args),
 }
 

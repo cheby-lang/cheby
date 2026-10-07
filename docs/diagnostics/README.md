@@ -12,4 +12,4 @@ Every compiler diagnostic has a code: `E` and four digits for an error, `W` and 
 
 Each file starts with a heading that names the code and the diagnostic, then explains when it is reported and why, with a short example that triggers it and the fixed version. Examples are valid Cheby in `cheby fmt` form, and each cites the decisions behind the rule as `(D-NNN)`.
 
-No codes are assigned yet. The first ones arrive with the lexer and parser in M1.
+The compiler's registry of codes is `crates/cheby_diag/src/codes.rs`. A new code is a line there plus its file here, in the same change, and a unit test checks that the two sets match.

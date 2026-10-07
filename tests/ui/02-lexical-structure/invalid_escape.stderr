@@ -1,0 +1,24 @@
+error[E0011]: unknown escape `\q`
+ --> tests/ui/02-lexical-structure/invalid_escape.cheby:7:15
+  |
+7 |   let a = "tab\q"
+  |               ^^
+  |
+  = help: the escapes are `\n`, `\t`, `\r`, `\\`, `\"`, `\{` and `\u{…}` (D-114)
+
+error[E0011]: `\u{110000}` is not a Unicode scalar value
+ --> tests/ui/02-lexical-structure/invalid_escape.cheby:8:12
+  |
+8 |   let b = "\u{110000}"
+  |            ^^^^^^^^^^
+  |
+  = help: the escapes are `\n`, `\t`, `\r`, `\\`, `\"`, `\{` and `\u{…}` (D-114)
+
+error[E0011]: `\u{…}` needs 1 to 6 hex digits
+ --> tests/ui/02-lexical-structure/invalid_escape.cheby:9:12
+  |
+9 |   let c = "\u{}"
+  |            ^^^^
+  |
+  = help: the escapes are `\n`, `\t`, `\r`, `\\`, `\"`, `\{` and `\u{…}` (D-114)
+

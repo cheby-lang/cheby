@@ -1,0 +1,636 @@
+SOURCE_FILE@0..721
+  MODULE_DOC@0..24 "//! Patterns (App. A.6)."
+  NEWLINE@24..25 "\n"
+  FN_DECL@25..476
+    FN_KW@25..27 "fn"
+    WHITESPACE@27..28 " "
+    LOWER_IDENT@28..29 "f"
+    PARAM_LIST@29..37
+      L_PAREN@29..30 "("
+      PARAM@30..36
+        IDENT_PAT@30..31
+          LOWER_IDENT@30..31 "x"
+        COLON@31..32 ":"
+        WHITESPACE@32..33 " "
+        PATH_TYPE@33..36
+          PATH@33..36
+            UPPER_IDENT@33..36 "Int"
+      R_PAREN@36..37 ")"
+    WHITESPACE@37..38 " "
+    RET_TYPE@38..44
+      THIN_ARROW@38..40 "->"
+      WHITESPACE@40..41 " "
+      PATH_TYPE@41..44
+        PATH@41..44
+          UPPER_IDENT@41..44 "Int"
+    WHITESPACE@44..45 " "
+    BLOCK@45..476
+      L_BRACE@45..46 "{"
+      NEWLINE@46..47 "\n"
+      WHITESPACE@47..49 "  "
+      CASE_EXPR@49..474
+        CASE_KW@49..53 "case"
+        WHITESPACE@53..54 " "
+        PATH_EXPR@54..55
+          PATH@54..55
+            LOWER_IDENT@54..55 "x"
+        WHITESPACE@55..56 " "
+        CASE_BODY@56..474
+          L_BRACE@56..57 "{"
+          NEWLINE@57..58 "\n"
+          WHITESPACE@58..62 "    "
+          CASE_ARM@62..68
+            WILDCARD_PAT@62..63
+              UNDERSCORE@62..63 "_"
+            WHITESPACE@63..64 " "
+            FAT_ARROW@64..66 "=>"
+            WHITESPACE@66..67 " "
+            LITERAL@67..68
+              INT_NUMBER@67..68 "0"
+          NEWLINE@68..69 "\n"
+          WHITESPACE@69..73 "    "
+          CASE_ARM@73..79
+            IDENT_PAT@73..74
+              LOWER_IDENT@73..74 "n"
+            WHITESPACE@74..75 " "
+            FAT_ARROW@75..77 "=>"
+            WHITESPACE@77..78 " "
+            PATH_EXPR@78..79
+              PATH@78..79
+                LOWER_IDENT@78..79 "n"
+          NEWLINE@79..80 "\n"
+          WHITESPACE@80..84 "    "
+          CASE_ARM@84..99
+            OR_PAT@84..94
+              LITERAL_PAT@84..85
+                INT_NUMBER@84..85 "0"
+              WHITESPACE@85..86 " "
+              PIPE@86..87 "|"
+              WHITESPACE@87..88 " "
+              LITERAL_PAT@88..89
+                INT_NUMBER@88..89 "1"
+              WHITESPACE@89..90 " "
+              PIPE@90..91 "|"
+              WHITESPACE@91..92 " "
+              LITERAL_PAT@92..94
+                MINUS@92..93 "-"
+                INT_NUMBER@93..94 "2"
+            WHITESPACE@94..95 " "
+            FAT_ARROW@95..97 "=>"
+            WHITESPACE@97..98 " "
+            LITERAL@98..99
+              INT_NUMBER@98..99 "1"
+          NEWLINE@99..100 "\n"
+          WHITESPACE@100..104 "    "
+          CASE_ARM@104..135
+            OR_PAT@104..130
+              LITERAL_PAT@104..110
+                STRING_LIT@104..110
+                  STRING_START@104..105 "\""
+                  STRING_TEXT@105..109 "text"
+                  STRING_END@109..110 "\""
+              WHITESPACE@110..111 " "
+              PIPE@111..112 "|"
+              WHITESPACE@112..113 " "
+              LITERAL_PAT@113..119
+                RAW_STRING@113..119 "r\"raw\""
+              WHITESPACE@119..120 " "
+              PIPE@120..121 "|"
+              WHITESPACE@121..122 " "
+              LITERAL_PAT@122..130
+                RAW_STRING@122..130 "r#\"a\"b\"#"
+            WHITESPACE@130..131 " "
+            FAT_ARROW@131..133 "=>"
+            WHITESPACE@133..134 " "
+            LITERAL@134..135
+              INT_NUMBER@134..135 "2"
+          NEWLINE@135..136 "\n"
+          WHITESPACE@136..140 "    "
+          CASE_ARM@140..161
+            AS_PAT@140..156
+              CTOR_PAT@140..147
+                PATH@140..144
+                  UPPER_IDENT@140..144 "Some"
+                POS_PAT_LIST@144..147
+                  L_PAREN@144..145 "("
+                  IDENT_PAT@145..146
+                    LOWER_IDENT@145..146 "v"
+                  R_PAREN@146..147 ")"
+              WHITESPACE@147..148 " "
+              AS_KW@148..150 "as"
+              WHITESPACE@150..151 " "
+              LOWER_IDENT@151..156 "whole"
+            WHITESPACE@156..157 " "
+            FAT_ARROW@157..159 "=>"
+            WHITESPACE@159..160 " "
+            PATH_EXPR@160..161
+              PATH@160..161
+                LOWER_IDENT@160..161 "v"
+          NEWLINE@161..162 "\n"
+          WHITESPACE@162..166 "    "
+          CASE_ARM@166..199
+            CTOR_PAT@166..194
+              PATH@166..179
+                LOWER_IDENT@166..171 "shape"
+                COLON2@171..173 "::"
+                UPPER_IDENT@173..179 "Circle"
+              WHITESPACE@179..180 " "
+              FIELD_PAT_LIST@180..194
+                L_BRACE@180..181 "{"
+                WHITESPACE@181..182 " "
+                FIELD_PAT@182..188
+                  LOWER_IDENT@182..188 "radius"
+                COMMA@188..189 ","
+                WHITESPACE@189..190 " "
+                REST_PAT@190..192
+                  DOT2@190..192 ".."
+                WHITESPACE@192..193 " "
+                R_BRACE@193..194 "}"
+            WHITESPACE@194..195 " "
+            FAT_ARROW@195..197 "=>"
+            WHITESPACE@197..198 " "
+            LITERAL@198..199
+              INT_NUMBER@198..199 "3"
+          NEWLINE@199..200 "\n"
+          WHITESPACE@200..204 "    "
+          CASE_ARM@204..235
+            CTOR_PAT@204..230
+              PATH@204..209
+                UPPER_IDENT@204..209 "Point"
+              WHITESPACE@209..210 " "
+              FIELD_PAT_LIST@210..230
+                L_BRACE@210..211 "{"
+                WHITESPACE@211..212 " "
+                FIELD_PAT@212..216
+                  LOWER_IDENT@212..213 "x"
+                  COLON@213..214 ":"
+                  WHITESPACE@214..215 " "
+                  LITERAL_PAT@215..216
+                    INT_NUMBER@215..216 "0"
+                COMMA@216..217 ","
+                WHITESPACE@217..218 " "
+                FIELD_PAT@218..228
+                  LOWER_IDENT@218..219 "y"
+                  COLON@219..220 ":"
+                  WHITESPACE@220..221 " "
+                  CTOR_PAT@221..228
+                    PATH@221..225
+                      UPPER_IDENT@221..225 "Some"
+                    POS_PAT_LIST@225..228
+                      L_PAREN@225..226 "("
+                      IDENT_PAT@226..227
+                        LOWER_IDENT@226..227 "z"
+                      R_PAREN@227..228 ")"
+                WHITESPACE@228..229 " "
+                R_BRACE@229..230 "}"
+            WHITESPACE@230..231 " "
+            FAT_ARROW@231..233 "=>"
+            WHITESPACE@233..234 " "
+            PATH_EXPR@234..235
+              PATH@234..235
+                LOWER_IDENT@234..235 "z"
+          NEWLINE@235..236 "\n"
+          WHITESPACE@236..240 "    "
+          CASE_ARM@240..260
+            CTOR_PAT@240..255
+              PATH@240..245
+                UPPER_IDENT@240..245 "Point"
+              WHITESPACE@245..246 " "
+              FIELD_PAT_LIST@246..255
+                L_BRACE@246..247 "{"
+                WHITESPACE@247..248 " "
+                FIELD_PAT@248..249
+                  LOWER_IDENT@248..249 "x"
+                COMMA@249..250 ","
+                WHITESPACE@250..251 " "
+                FIELD_PAT@251..252
+                  LOWER_IDENT@251..252 "y"
+                COMMA@252..253 ","
+                WHITESPACE@253..254 " "
+                R_BRACE@254..255 "}"
+            WHITESPACE@255..256 " "
+            FAT_ARROW@256..258 "=>"
+            WHITESPACE@258..259 " "
+            PATH_EXPR@259..260
+              PATH@259..260
+                LOWER_IDENT@259..260 "x"
+          NEWLINE@260..261 "\n"
+          WHITESPACE@261..265 "    "
+          CASE_ARM@265..276
+            TUPLE_PAT@265..271
+              L_PAREN@265..266 "("
+              IDENT_PAT@266..267
+                LOWER_IDENT@266..267 "a"
+              COMMA@267..268 ","
+              WHITESPACE@268..269 " "
+              IDENT_PAT@269..270
+                LOWER_IDENT@269..270 "b"
+              R_PAREN@270..271 ")"
+            WHITESPACE@271..272 " "
+            FAT_ARROW@272..274 "=>"
+            WHITESPACE@274..275 " "
+            PATH_EXPR@275..276
+              PATH@275..276
+                LOWER_IDENT@275..276 "a"
+          NEWLINE@276..277 "\n"
+          WHITESPACE@277..281 "    "
+          CASE_ARM@281..289
+            PAREN_PAT@281..284
+              L_PAREN@281..282 "("
+              IDENT_PAT@282..283
+                LOWER_IDENT@282..283 "a"
+              R_PAREN@283..284 ")"
+            WHITESPACE@284..285 " "
+            FAT_ARROW@285..287 "=>"
+            WHITESPACE@287..288 " "
+            PATH_EXPR@288..289
+              PATH@288..289
+                LOWER_IDENT@288..289 "a"
+          NEWLINE@289..290 "\n"
+          WHITESPACE@290..294 "    "
+          CASE_ARM@294..301
+            LIST_PAT@294..296
+              L_BRACK@294..295 "["
+              R_BRACK@295..296 "]"
+            WHITESPACE@296..297 " "
+            FAT_ARROW@297..299 "=>"
+            WHITESPACE@299..300 " "
+            LITERAL@300..301
+              INT_NUMBER@300..301 "4"
+          NEWLINE@301..302 "\n"
+          WHITESPACE@302..306 "    "
+          CASE_ARM@306..326
+            LIST_PAT@306..317
+              L_BRACK@306..307 "["
+              IDENT_PAT@307..312
+                LOWER_IDENT@307..312 "first"
+              COMMA@312..313 ","
+              WHITESPACE@313..314 " "
+              REST_PAT@314..316
+                DOT2@314..316 ".."
+              R_BRACK@316..317 "]"
+            WHITESPACE@317..318 " "
+            FAT_ARROW@318..320 "=>"
+            WHITESPACE@320..321 " "
+            PATH_EXPR@321..326
+              PATH@321..326
+                LOWER_IDENT@321..326 "first"
+          NEWLINE@326..327 "\n"
+          WHITESPACE@327..331 "    "
+          CASE_ARM@331..360
+            LIST_PAT@331..352
+              L_BRACK@331..332 "["
+              IDENT_PAT@332..337
+                LOWER_IDENT@332..337 "first"
+              COMMA@337..338 ","
+              WHITESPACE@338..339 " "
+              REST_PAT@339..345
+                DOT2@339..341 ".."
+                LOWER_IDENT@341..345 "rest"
+              COMMA@345..346 ","
+              WHITESPACE@346..347 " "
+              IDENT_PAT@347..351
+                LOWER_IDENT@347..351 "last"
+              R_BRACK@351..352 "]"
+            WHITESPACE@352..353 " "
+            FAT_ARROW@353..355 "=>"
+            WHITESPACE@355..356 " "
+            PATH_EXPR@356..360
+              PATH@356..360
+                LOWER_IDENT@356..360 "last"
+          NEWLINE@360..361 "\n"
+          WHITESPACE@361..365 "    "
+          CASE_ARM@365..388
+            LIST_PAT@365..380
+              L_BRACK@365..366 "["
+              REST_PAT@366..372
+                DOT2@366..368 ".."
+                LOWER_IDENT@368..372 "init"
+              COMMA@372..373 ","
+              WHITESPACE@373..374 " "
+              IDENT_PAT@374..378
+                LOWER_IDENT@374..378 "last"
+              COMMA@378..379 ","
+              R_BRACK@379..380 "]"
+            WHITESPACE@380..381 " "
+            FAT_ARROW@381..383 "=>"
+            WHITESPACE@383..384 " "
+            PATH_EXPR@384..388
+              PATH@384..388
+                LOWER_IDENT@384..388 "last"
+          NEWLINE@388..389 "\n"
+          WHITESPACE@389..393 "    "
+          CASE_ARM@393..426
+            CTOR_PAT@393..421
+              PATH@393..397
+                UPPER_IDENT@393..397 "Node"
+              POS_PAT_LIST@397..421
+                L_PAREN@397..398 "("
+                IDENT_PAT@398..402
+                  LOWER_IDENT@398..402 "left"
+                COMMA@402..403 ","
+                WHITESPACE@403..404 " "
+                WILDCARD_PAT@404..405
+                  UNDERSCORE@404..405 "_"
+                COMMA@405..406 ","
+                WHITESPACE@406..407 " "
+                CTOR_PAT@407..420
+                  PATH@407..411
+                    UPPER_IDENT@407..411 "Node"
+                  POS_PAT_LIST@411..420
+                    L_PAREN@411..412 "("
+                    WILDCARD_PAT@412..413
+                      UNDERSCORE@412..413 "_"
+                    COMMA@413..414 ","
+                    WHITESPACE@414..415 " "
+                    IDENT_PAT@415..416
+                      LOWER_IDENT@415..416 "v"
+                    COMMA@416..417 ","
+                    WHITESPACE@417..418 " "
+                    WILDCARD_PAT@418..419
+                      UNDERSCORE@418..419 "_"
+                    R_PAREN@419..420 ")"
+                R_PAREN@420..421 ")"
+            WHITESPACE@421..422 " "
+            FAT_ARROW@422..424 "=>"
+            WHITESPACE@424..425 " "
+            PATH_EXPR@425..426
+              PATH@425..426
+                LOWER_IDENT@425..426 "v"
+          NEWLINE@426..427 "\n"
+          WHITESPACE@427..431 "    "
+          CASE_ARM@431..456
+            OR_PAT@431..451
+              CTOR_PAT@431..442
+                PATH@431..433
+                  UPPER_IDENT@431..433 "Ok"
+                POS_PAT_LIST@433..442
+                  L_PAREN@433..434 "("
+                  CTOR_PAT@434..441
+                    PATH@434..438
+                      UPPER_IDENT@434..438 "Some"
+                    POS_PAT_LIST@438..441
+                      L_PAREN@438..439 "("
+                      IDENT_PAT@439..440
+                        LOWER_IDENT@439..440 "x"
+                      R_PAREN@440..441 ")"
+                  R_PAREN@441..442 ")"
+              WHITESPACE@442..443 " "
+              PIPE@443..444 "|"
+              WHITESPACE@444..445 " "
+              CTOR_PAT@445..451
+                PATH@445..448
+                  UPPER_IDENT@445..448 "Err"
+                POS_PAT_LIST@448..451
+                  L_PAREN@448..449 "("
+                  IDENT_PAT@449..450
+                    LOWER_IDENT@449..450 "x"
+                  R_PAREN@450..451 ")"
+            WHITESPACE@451..452 " "
+            FAT_ARROW@452..454 "=>"
+            WHITESPACE@454..455 " "
+            PATH_EXPR@455..456
+              PATH@455..456
+                LOWER_IDENT@455..456 "x"
+          NEWLINE@456..457 "\n"
+          WHITESPACE@457..461 "    "
+          CASE_ARM@461..470
+            LITERAL_PAT@461..465
+              MINUS@461..462 "-"
+              FLOAT_NUMBER@462..465 "1.5"
+            WHITESPACE@465..466 " "
+            FAT_ARROW@466..468 "=>"
+            WHITESPACE@468..469 " "
+            LITERAL@469..470
+              INT_NUMBER@469..470 "5"
+          NEWLINE@470..471 "\n"
+          WHITESPACE@471..473 "  "
+          R_BRACE@473..474 "}"
+      NEWLINE@474..475 "\n"
+      R_BRACE@475..476 "}"
+  NEWLINE@476..477 "\n"
+  NEWLINE@477..478 "\n"
+  FN_DECL@478..720
+    FN_KW@478..480 "fn"
+    WHITESPACE@480..481 " "
+    LOWER_IDENT@481..482 "g"
+    PARAM_LIST@482..484
+      L_PAREN@482..483 "("
+      R_PAREN@483..484 ")"
+    WHITESPACE@484..485 " "
+    BLOCK@485..720
+      L_BRACE@485..486 "{"
+      NEWLINE@486..487 "\n"
+      WHITESPACE@487..489 "  "
+      LET_STMT@489..506
+        LET_KW@489..492 "let"
+        WHITESPACE@492..493 " "
+        TUPLE_PAT@493..499
+          L_PAREN@493..494 "("
+          IDENT_PAT@494..495
+            LOWER_IDENT@494..495 "a"
+          COMMA@495..496 ","
+          WHITESPACE@496..497 " "
+          IDENT_PAT@497..498
+            LOWER_IDENT@497..498 "b"
+          R_PAREN@498..499 ")"
+        WHITESPACE@499..500 " "
+        EQ@500..501 "="
+        WHITESPACE@501..502 " "
+        PATH_EXPR@502..506
+          PATH@502..506
+            LOWER_IDENT@502..506 "pair"
+      NEWLINE@506..507 "\n"
+      WHITESPACE@507..509 "  "
+      LET_STMT@509..535
+        LET_KW@509..512 "let"
+        WHITESPACE@512..513 " "
+        CTOR_PAT@513..527
+          PATH@513..518
+            UPPER_IDENT@513..518 "Point"
+          WHITESPACE@518..519 " "
+          FIELD_PAT_LIST@519..527
+            L_BRACE@519..520 "{"
+            WHITESPACE@520..521 " "
+            FIELD_PAT@521..522
+              LOWER_IDENT@521..522 "x"
+            COMMA@522..523 ","
+            WHITESPACE@523..524 " "
+            FIELD_PAT@524..525
+              LOWER_IDENT@524..525 "y"
+            WHITESPACE@525..526 " "
+            R_BRACE@526..527 "}"
+        WHITESPACE@527..528 " "
+        EQ@528..529 "="
+        WHITESPACE@529..530 " "
+        PATH_EXPR@530..535
+          PATH@530..535
+            LOWER_IDENT@530..535 "point"
+      NEWLINE@535..536 "\n"
+      WHITESPACE@536..538 "  "
+      LET_STMT@538..583
+        LET_KW@538..541 "let"
+        WHITESPACE@541..542 " "
+        ASSERT_KW@542..548 "assert"
+        WHITESPACE@548..549 " "
+        LIST_PAT@549..560
+          L_BRACK@549..550 "["
+          IDENT_PAT@550..555
+            LOWER_IDENT@550..555 "first"
+          COMMA@555..556 ","
+          WHITESPACE@556..557 " "
+          REST_PAT@557..559
+            DOT2@557..559 ".."
+          R_BRACK@559..560 "]"
+        WHITESPACE@560..561 " "
+        EQ@561..562 "="
+        WHITESPACE@562..563 " "
+        PATH_EXPR@563..568
+          PATH@563..568
+            LOWER_IDENT@563..568 "items"
+        WHITESPACE@568..569 " "
+        MESSAGE@569..583
+          AS_KW@569..571 "as"
+          WHITESPACE@571..572 " "
+          STRING_LIT@572..583
+            STRING_START@572..573 "\""
+            STRING_TEXT@573..582 "not empty"
+            STRING_END@582..583 "\""
+      NEWLINE@583..584 "\n"
+      WHITESPACE@584..586 "  "
+      LET_STMT@586..634
+        LET_KW@586..589 "let"
+        WHITESPACE@589..590 " "
+        ASSERT_KW@590..596 "assert"
+        WHITESPACE@596..597 " "
+        CTOR_PAT@597..602
+          PATH@597..599
+            UPPER_IDENT@597..599 "Ok"
+          POS_PAT_LIST@599..602
+            L_PAREN@599..600 "("
+            IDENT_PAT@600..601
+              LOWER_IDENT@600..601 "v"
+            R_PAREN@601..602 ")"
+        COLON@602..603 ":"
+        WHITESPACE@603..604 " "
+        PATH_TYPE@604..623
+          PATH@604..610
+            UPPER_IDENT@604..610 "Result"
+          TYPE_ARG_LIST@610..623
+            LT@610..611 "<"
+            PATH_TYPE@611..614
+              PATH@611..614
+                UPPER_IDENT@611..614 "Int"
+            COMMA@614..615 ","
+            WHITESPACE@615..616 " "
+            PATH_TYPE@616..622
+              PATH@616..622
+                UPPER_IDENT@616..622 "String"
+            GT@622..623 ">"
+        WHITESPACE@623..624 " "
+        EQ@624..625 "="
+        WHITESPACE@625..626 " "
+        CALL_EXPR@626..634
+          PATH_EXPR@626..631
+            PATH@626..631
+              LOWER_IDENT@626..631 "parse"
+          ARG_LIST@631..634
+            L_PAREN@631..632 "("
+            PATH_EXPR@632..633
+              PATH@632..633
+                LOWER_IDENT@632..633 "s"
+            R_PAREN@633..634 ")"
+      NEWLINE@634..635 "\n"
+      WHITESPACE@635..637 "  "
+      USE_STMT@637..675
+        USE_KW@637..640 "use"
+        WHITESPACE@640..641 " "
+        USE_BINDER@641..647
+          TUPLE_PAT@641..647
+            L_PAREN@641..642 "("
+            IDENT_PAT@642..643
+              LOWER_IDENT@642..643 "a"
+            COMMA@643..644 ","
+            WHITESPACE@644..645 " "
+            IDENT_PAT@645..646
+              LOWER_IDENT@645..646 "b"
+            R_PAREN@646..647 ")"
+        COMMA@647..648 ","
+        WHITESPACE@648..649 " "
+        USE_BINDER@649..659
+          CTOR_PAT@649..659
+            PATH@649..656
+              UPPER_IDENT@649..656 "Wrapper"
+            POS_PAT_LIST@656..659
+              L_PAREN@656..657 "("
+              IDENT_PAT@657..658
+                LOWER_IDENT@657..658 "c"
+              R_PAREN@658..659 ")"
+        WHITESPACE@659..660 " "
+        LEFT_ARROW@660..662 "<-"
+        WHITESPACE@662..663 " "
+        CALL_EXPR@663..675
+          PATH_EXPR@663..672
+            PATH@663..672
+              LOWER_IDENT@663..672 "with_pair"
+          ARG_LIST@672..675
+            L_PAREN@672..673 "("
+            PATH_EXPR@673..674
+              PATH@673..674
+                LOWER_IDENT@673..674 "p"
+            R_PAREN@674..675 ")"
+      NEWLINE@675..676 "\n"
+      WHITESPACE@676..678 "  "
+      CALL_EXPR@678..718
+        PATH_EXPR@678..687
+          PATH@678..687
+            LOWER_IDENT@678..682 "list"
+            COLON2@682..684 "::"
+            LOWER_IDENT@684..687 "map"
+        ARG_LIST@687..718
+          L_PAREN@687..688 "("
+          PATH_EXPR@688..690
+            PATH@688..690
+              LOWER_IDENT@688..690 "xs"
+          COMMA@690..691 ","
+          WHITESPACE@691..692 " "
+          CLOSURE@692..717
+            FN_KW@692..694 "fn"
+            PARAM_LIST@694..711
+              L_PAREN@694..695 "("
+              PARAM@695..701
+                TUPLE_PAT@695..701
+                  L_PAREN@695..696 "("
+                  IDENT_PAT@696..697
+                    LOWER_IDENT@696..697 "k"
+                  COMMA@697..698 ","
+                  WHITESPACE@698..699 " "
+                  IDENT_PAT@699..700
+                    LOWER_IDENT@699..700 "v"
+                  R_PAREN@700..701 ")"
+              COMMA@701..702 ","
+              WHITESPACE@702..703 " "
+              PARAM@703..710
+                LIST_PAT@703..710
+                  L_BRACK@703..704 "["
+                  IDENT_PAT@704..705
+                    LOWER_IDENT@704..705 "h"
+                  COMMA@705..706 ","
+                  WHITESPACE@706..707 " "
+                  REST_PAT@707..709
+                    DOT2@707..709 ".."
+                  R_BRACK@709..710 "]"
+              R_PAREN@710..711 ")"
+            WHITESPACE@711..712 " "
+            BLOCK@712..717
+              L_BRACE@712..713 "{"
+              WHITESPACE@713..714 " "
+              PATH_EXPR@714..715
+                PATH@714..715
+                  LOWER_IDENT@714..715 "k"
+              WHITESPACE@715..716 " "
+              R_BRACE@716..717 "}"
+          R_PAREN@717..718 ")"
+      NEWLINE@718..719 "\n"
+      R_BRACE@719..720 "}"
+  NEWLINE@720..721 "\n"

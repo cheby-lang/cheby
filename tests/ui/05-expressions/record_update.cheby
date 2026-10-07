@@ -1,0 +1,14 @@
+// @mode: check-fail
+// @decisions: D-035, D-156
+//! In a record update, the spread `..base` comes first.
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+fn main() {
+  let p = Point { x: 1, y: 2 }
+  let q = Point { x: 3, ..p }
+  assert q.y == 2
+}

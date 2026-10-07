@@ -1,0 +1,211 @@
+SOURCE_FILE@0..154
+  FN_DECL@0..113
+    FN_KW@0..2 "fn"
+    WHITESPACE@2..3 " "
+    LOWER_IDENT@3..4 "f"
+    PARAM_LIST@4..6
+      L_PAREN@4..5 "("
+      R_PAREN@5..6 ")"
+    WHITESPACE@6..7 " "
+    BLOCK@7..113
+      L_BRACE@7..8 "{"
+      NEWLINE@8..9 "\n"
+      WHITESPACE@9..11 "  "
+      LET_STMT@11..18
+        LET_KW@11..14 "let"
+        WHITESPACE@14..15 " "
+        IDENT_PAT@15..16
+          LOWER_IDENT@15..16 "a"
+        WHITESPACE@16..17 " "
+        EQ@17..18 "="
+      WHITESPACE@18..19 " "
+      ERROR@19..20
+        R_PAREN@19..20 ")"
+      NEWLINE@20..21 "\n"
+      WHITESPACE@21..23 "  "
+      LET_STMT@23..32
+        LET_KW@23..26 "let"
+        WHITESPACE@26..27 " "
+        IDENT_PAT@27..28
+          LOWER_IDENT@27..28 "b"
+        WHITESPACE@28..29 " "
+        EQ@29..30 "="
+        WHITESPACE@30..31 " "
+        LITERAL@31..32
+          INT_NUMBER@31..32 "2"
+      NEWLINE@32..33 "\n"
+      WHITESPACE@33..35 "  "
+      CALL_EXPR@35..46
+        PATH_EXPR@35..38
+          PATH@35..38
+            LOWER_IDENT@35..38 "foo"
+        ARG_LIST@38..46
+          L_PAREN@38..39 "("
+          LITERAL@39..40
+            INT_NUMBER@39..40 "1"
+          COMMA@40..41 ","
+          WHITESPACE@41..42 " "
+          COMMA@42..43 ","
+          WHITESPACE@43..44 " "
+          LITERAL@44..45
+            INT_NUMBER@44..45 "2"
+          R_PAREN@45..46 ")"
+      NEWLINE@46..47 "\n"
+      WHITESPACE@47..49 "  "
+      LET_STMT@49..67
+        LET_KW@49..52 "let"
+        WHITESPACE@52..53 " "
+        IDENT_PAT@53..54
+          LOWER_IDENT@53..54 "c"
+        WHITESPACE@54..55 " "
+        EQ@55..56 "="
+        WHITESPACE@56..57 " "
+        LIST_EXPR@57..67
+          L_BRACK@57..58 "["
+          LITERAL@58..59
+            INT_NUMBER@58..59 "1"
+          COMMA@59..60 ","
+          WHITESPACE@60..61 " "
+          LITERAL@61..62
+            INT_NUMBER@61..62 "2"
+          COMMA@62..63 ","
+          COMMA@63..64 ","
+          WHITESPACE@64..65 " "
+          LITERAL@65..66
+            INT_NUMBER@65..66 "3"
+          R_BRACK@66..67 "]"
+      NEWLINE@67..68 "\n"
+      WHITESPACE@68..70 "  "
+      LET_STMT@70..97
+        LET_KW@70..73 "let"
+        WHITESPACE@73..74 " "
+        IDENT_PAT@74..75
+          LOWER_IDENT@74..75 "d"
+        WHITESPACE@75..76 " "
+        EQ@76..77 "="
+        WHITESPACE@77..78 " "
+        RECORD_EXPR@78..97
+          PATH@78..83
+            UPPER_IDENT@78..83 "Point"
+          WHITESPACE@83..84 " "
+          L_BRACE@84..85 "{"
+          WHITESPACE@85..86 " "
+          FIELD_INIT@86..90
+            LOWER_IDENT@86..87 "x"
+            COLON@87..88 ":"
+            WHITESPACE@88..89 " "
+            LITERAL@89..90
+              INT_NUMBER@89..90 "1"
+          WHITESPACE@90..91 " "
+          FIELD_INIT@91..95
+            LOWER_IDENT@91..92 "y"
+            COLON@92..93 ":"
+            WHITESPACE@93..94 " "
+            LITERAL@94..95
+              INT_NUMBER@94..95 "2"
+          WHITESPACE@95..96 " "
+          R_BRACE@96..97 "}"
+      NEWLINE@97..98 "\n"
+      WHITESPACE@98..100 "  "
+      LET_STMT@100..111
+        LET_KW@100..103 "let"
+        WHITESPACE@103..104 " "
+        IDENT_PAT@104..105
+          LOWER_IDENT@104..105 "e"
+        WHITESPACE@105..106 " "
+        EQ@106..107 "="
+        WHITESPACE@107..108 " "
+        BIN_EXPR@108..111
+          LITERAL@108..109
+            INT_NUMBER@108..109 "3"
+          WHITESPACE@109..110 " "
+          PLUS@110..111 "+"
+      NEWLINE@111..112 "\n"
+      R_BRACE@112..113 "}"
+  NEWLINE@113..114 "\n"
+  FN_DECL@114..131
+    FN_KW@114..116 "fn"
+    WHITESPACE@116..117 " "
+    LOWER_IDENT@117..118 "g"
+    PARAM_LIST@118..120
+      L_PAREN@118..119 "("
+      R_PAREN@119..120 ")"
+    WHITESPACE@120..121 " "
+    BLOCK@121..131
+      L_BRACE@121..122 "{"
+      NEWLINE@122..123 "\n"
+      WHITESPACE@123..125 "  "
+      CALL_EXPR@125..129
+        PATH_EXPR@125..128
+          PATH@125..128
+            LOWER_IDENT@125..128 "bar"
+        ARG_LIST@128..129
+          L_PAREN@128..129 "("
+      NEWLINE@129..130 "\n"
+      R_BRACE@130..131 "}"
+  NEWLINE@131..132 "\n"
+  FN_DECL@132..153
+    FN_KW@132..134 "fn"
+    WHITESPACE@134..135 " "
+    LOWER_IDENT@135..136 "h"
+    PARAM_LIST@136..138
+      L_PAREN@136..137 "("
+      R_PAREN@137..138 ")"
+    WHITESPACE@138..139 " "
+    RET_TYPE@139..145
+      THIN_ARROW@139..141 "->"
+      WHITESPACE@141..142 " "
+      PATH_TYPE@142..145
+        PATH@142..145
+          UPPER_IDENT@142..145 "Int"
+    WHITESPACE@145..146 " "
+    BLOCK@146..153
+      L_BRACE@146..147 "{"
+      NEWLINE@147..148 "\n"
+      WHITESPACE@148..150 "  "
+      LITERAL@150..151
+        INT_NUMBER@150..151 "1"
+      NEWLINE@151..152 "\n"
+      R_BRACE@152..153 "}"
+  NEWLINE@153..154 "\n"
+
+// errors
+
+error[E0013]: expected an expression, found `)`
+ --> err/recovery_stmts.cheby:2:11
+  |
+2 |   let a = )
+  |           ^
+
+error[E0013]: expected an argument, found `,`
+ --> err/recovery_stmts.cheby:4:10
+  |
+4 |   foo(1, , 2)
+  |          ^
+
+error[E0013]: expected an expression, found `,`
+ --> err/recovery_stmts.cheby:5:17
+  |
+5 |   let c = [1, 2,, 3]
+  |                 ^
+
+error[E0013]: expected `,` or `}`, found identifier
+ --> err/recovery_stmts.cheby:6:24
+  |
+6 |   let d = Point { x: 1 y: 2 }
+  |                        ^
+
+error[E0013]: expected an expression, found `}`
+ --> err/recovery_stmts.cheby:8:1
+  |
+8 | }
+  | ^
+
+error[E0015]: unclosed `(`
+  --> err/recovery_stmts.cheby:11:1
+   |
+10 |   bar(
+   |      - this `(` is never closed
+11 | }
+   | ^ expected `)`
+

@@ -1,0 +1,12 @@
+error[E0008]: `0x` is not followed by any hexadecimal digit
+ --> tests/ui/02-lexical-structure/malformed_number.cheby:6:11
+  |
+6 |   let a = 0x
+  |           ^^ expected digits after `0x`
+
+error[E0008]: invalid digits `2` in a binary literal
+ --> tests/ui/02-lexical-structure/malformed_number.cheby:7:15
+  |
+7 |   let b = 0b102
+  |               ^ not binary digits
+

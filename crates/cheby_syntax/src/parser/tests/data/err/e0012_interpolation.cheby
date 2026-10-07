@@ -1,0 +1,5 @@
+const a: String = "next: {count + 1}"
+const b: String = "empty: {}"
+const c: String = "tuple: {pair.0}"
+const d: String = "open: {name"
+const e: String = "ok: {name} after"

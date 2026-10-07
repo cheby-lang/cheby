@@ -1,0 +1,8 @@
+error[E0032]: the rest of a field pattern list takes no name
+  --> tests/ui/06-patterns/named_rest_in_fields.cheby:12:20
+   |
+12 |   let Point { x, ..others } = p
+   |                    ^^^^^^
+   |
+   = help: write `..` alone; it ignores the remaining fields
+

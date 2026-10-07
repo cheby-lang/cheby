@@ -1,0 +1,82 @@
+SOURCE_FILE@0..61
+  FN_DECL@0..60
+    FN_KW@0..2 "fn"
+    WHITESPACE@2..3 " "
+    LOWER_IDENT@3..4 "f"
+    PARAM_LIST@4..6
+      L_PAREN@4..5 "("
+      R_PAREN@5..6 ")"
+    WHITESPACE@6..7 " "
+    BLOCK@7..60
+      L_BRACE@7..8 "{"
+      NEWLINE@8..9 "\n"
+      WHITESPACE@9..11 "  "
+      LET_STMT@11..20
+        LET_KW@11..14 "let"
+        WHITESPACE@14..15 " "
+        IDENT_PAT@15..16
+          LOWER_IDENT@15..16 "a"
+        WHITESPACE@16..17 " "
+        EQ@17..18 "="
+        WHITESPACE@18..19 " "
+        LITERAL@19..20
+          INT_NUMBER@19..20 "1"
+      ERROR@20..21
+        ERROR_TOKEN@20..21 ";"
+      NEWLINE@21..22 "\n"
+      WHITESPACE@22..24 "  "
+      LET_STMT@24..34
+        LET_KW@24..27 "let"
+        WHITESPACE@27..28 " "
+        IDENT_PAT@28..29
+          LOWER_IDENT@28..29 "b"
+        WHITESPACE@29..30 " "
+        EQ@30..31 "="
+        WHITESPACE@31..32 " "
+        ERROR@32..33
+          ERROR_TOKEN@32..33 "$"
+        PATH_EXPR@33..34
+          PATH@33..34
+            LOWER_IDENT@33..34 "x"
+      NEWLINE@34..35 "\n"
+      WHITESPACE@35..37 "  "
+      ERROR_TOKEN@37..48 "/* block */"
+      WHITESPACE@48..49 " "
+      LET_STMT@49..58
+        LET_KW@49..52 "let"
+        WHITESPACE@52..53 " "
+        IDENT_PAT@53..54
+          LOWER_IDENT@53..54 "c"
+        WHITESPACE@54..55 " "
+        EQ@55..56 "="
+        WHITESPACE@56..57 " "
+        LITERAL@57..58
+          INT_NUMBER@57..58 "2"
+      NEWLINE@58..59 "\n"
+      R_BRACE@59..60 "}"
+  NEWLINE@60..61 "\n"
+
+// errors
+
+error[E0003]: unexpected character `;`
+ --> err/recovery_lexer_errors.cheby:2:12
+  |
+2 |   let a = 1;
+  |            ^
+  |
+  = help: statements are separated by line breaks, not `;`
+
+error[E0003]: unexpected character `$`
+ --> err/recovery_lexer_errors.cheby:3:11
+  |
+3 |   let b = $x
+  |           ^
+
+error[E0004]: block comments are not supported
+ --> err/recovery_lexer_errors.cheby:4:3
+  |
+4 |   /* block */ let c = 2
+  |   ^^ block comment starts here
+  |
+  = help: start each line of the comment with `//` (D-078)
+

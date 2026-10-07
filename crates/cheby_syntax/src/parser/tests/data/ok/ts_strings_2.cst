@@ -1,0 +1,20 @@
+SOURCE_FILE@0..49
+  COMMENT@0..20 "// Multi-line string"
+  NEWLINE@20..21 "\n"
+  CONST_DECL@21..48
+    CONST_KW@21..26 "const"
+    WHITESPACE@26..27 " "
+    LOWER_IDENT@27..28 "s"
+    COLON@28..29 ":"
+    WHITESPACE@29..30 " "
+    PATH_TYPE@30..36
+      PATH@30..36
+        UPPER_IDENT@30..36 "String"
+    WHITESPACE@36..37 " "
+    EQ@37..38 "="
+    WHITESPACE@38..39 " "
+    STRING_LIT@39..48
+      STRING_START@39..40 "\""
+      STRING_TEXT@40..47 "one\ntwo"
+      STRING_END@47..48 "\""
+  NEWLINE@48..49 "\n"

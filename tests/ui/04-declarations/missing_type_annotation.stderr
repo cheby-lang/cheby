@@ -1,0 +1,16 @@
+error[E0020]: constant `limit` has no type
+ --> tests/ui/04-declarations/missing_type_annotation.cheby:6:7
+  |
+6 | const limit = 10
+  |       ^^^^^
+  |
+  = help: write the type after the name, such as `const limit: Int = …` (D-011)
+
+error[E0020]: parameter `n` has no type
+ --> tests/ui/04-declarations/missing_type_annotation.cheby:8:11
+  |
+8 | fn double(n) -> Int {
+  |           ^
+  |
+  = help: write the type after a `:`; top-level functions need full signatures (D-011)
+

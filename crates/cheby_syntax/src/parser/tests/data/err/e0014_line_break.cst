@@ -1,0 +1,132 @@
+SOURCE_FILE@0..105
+  FN_DECL@0..38
+    FN_KW@0..2 "fn"
+    WHITESPACE@2..3 " "
+    LOWER_IDENT@3..4 "f"
+    PARAM_LIST@4..6
+      L_PAREN@4..5 "("
+      R_PAREN@5..6 ")"
+    WHITESPACE@6..7 " "
+    BLOCK@7..38
+      L_BRACE@7..8 "{"
+      NEWLINE@8..9 "\n"
+      WHITESPACE@9..11 "  "
+      LET_STMT@11..18
+        LET_KW@11..14 "let"
+        WHITESPACE@14..15 " "
+        IDENT_PAT@15..18
+          LOWER_IDENT@15..18 "sum"
+      NEWLINE@18..19 "\n"
+      WHITESPACE@19..23 "    "
+      ERROR@23..30
+        EQ@23..24 "="
+        WHITESPACE@24..25 " "
+        INT_NUMBER@25..26 "1"
+        WHITESPACE@26..27 " "
+        PLUS@27..28 "+"
+        WHITESPACE@28..29 " "
+        INT_NUMBER@29..30 "2"
+      NEWLINE@30..31 "\n"
+      WHITESPACE@31..33 "  "
+      PATH_EXPR@33..36
+        PATH@33..36
+          LOWER_IDENT@33..36 "sum"
+      NEWLINE@36..37 "\n"
+      R_BRACE@37..38 "}"
+  NEWLINE@38..39 "\n"
+  FN_DECL@39..89
+    FN_KW@39..41 "fn"
+    WHITESPACE@41..42 " "
+    LOWER_IDENT@42..43 "g"
+    PARAM_LIST@43..51
+      L_PAREN@43..44 "("
+      PARAM@44..50
+        IDENT_PAT@44..45
+          LOWER_IDENT@44..45 "x"
+        COLON@45..46 ":"
+        WHITESPACE@46..47 " "
+        PATH_TYPE@47..50
+          PATH@47..50
+            UPPER_IDENT@47..50 "Int"
+      R_PAREN@50..51 ")"
+    WHITESPACE@51..52 " "
+    BLOCK@52..89
+      L_BRACE@52..53 "{"
+      NEWLINE@53..54 "\n"
+      WHITESPACE@54..56 "  "
+      CASE_EXPR@56..87
+        CASE_KW@56..60 "case"
+        WHITESPACE@60..61 " "
+        PATH_EXPR@61..62
+          PATH@61..62
+            LOWER_IDENT@61..62 "x"
+        WHITESPACE@62..63 " "
+        CASE_BODY@63..87
+          L_BRACE@63..64 "{"
+          NEWLINE@64..65 "\n"
+          WHITESPACE@65..69 "    "
+          CASE_ARM@69..72
+            OR_PAT@69..72
+              CTOR_PAT@69..70
+                PATH@69..70
+                  UPPER_IDENT@69..70 "A"
+              WHITESPACE@70..71 " "
+              PIPE@71..72 "|"
+          NEWLINE@72..73 "\n"
+          WHITESPACE@73..77 "    "
+          CASE_ARM@77..83
+            CTOR_PAT@77..78
+              PATH@77..78
+                UPPER_IDENT@77..78 "B"
+            WHITESPACE@78..79 " "
+            FAT_ARROW@79..81 "=>"
+            WHITESPACE@81..82 " "
+            LITERAL@82..83
+              INT_NUMBER@82..83 "1"
+          NEWLINE@83..84 "\n"
+          WHITESPACE@84..86 "  "
+          R_BRACE@86..87 "}"
+      NEWLINE@87..88 "\n"
+      R_BRACE@88..89 "}"
+  NEWLINE@89..90 "\n"
+  FN_DECL@90..96
+    FN_KW@90..92 "fn"
+    WHITESPACE@92..93 " "
+    LOWER_IDENT@93..94 "h"
+    PARAM_LIST@94..96
+      L_PAREN@94..95 "("
+      R_PAREN@95..96 ")"
+  NEWLINE@96..97 "\n"
+  ERROR@97..104
+    L_BRACE@97..98 "{"
+    NEWLINE@98..99 "\n"
+    WHITESPACE@99..101 "  "
+    INT_NUMBER@101..102 "1"
+    NEWLINE@102..103 "\n"
+    R_BRACE@103..104 "}"
+  NEWLINE@104..105 "\n"
+
+// errors
+
+error[E0014]: unexpected line break
+ --> err/e0014_line_break.cheby:2:10
+  |
+2 |   let sum
+  |          ^ expected `=`
+  |
+  = note: a line continues only inside `(`, `[` or type `<…>`, after an operator, `,`, `=`, `=>`, `->` or `<-`, or before a line starting with `|>`, `&&` or `||`
+
+error[E0014]: unexpected line break
+ --> err/e0014_line_break.cheby:8:8
+  |
+8 |     A |
+  |        ^ expected a pattern
+  |
+  = note: a line continues only inside `(`, `[` or type `<…>`, after an operator, `,`, `=`, `=>`, `->` or `<-`, or before a line starting with `|>`, `&&` or `||`
+
+error[E0013]: expected an item, found `{`
+  --> err/e0014_line_break.cheby:13:1
+   |
+13 | {
+   | ^
+

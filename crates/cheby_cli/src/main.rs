@@ -2,7 +2,13 @@
 //!
 //! Commands that are not implemented yet report the milestone that brings
 //! them and exit with status 1. Flag spellings are informative (§13).
+//!
+//! Diagnostics go to stderr in the layout of D-418. Errors that are not
+//! about the program, such as a missing `cheby.toml`, are plain `error:`
+//! lines without a code (D-442). Exit status: 0 on success, 1 on any
+//! error.
 
+use std::io::Write as _;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
@@ -74,7 +80,7 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
         Command::New { .. } => not_yet("new", "M5"),
-        Command::Check => not_yet("check", "M1"),
+        Command::Check => check(),
         Command::Build { target } => build(target),
         Command::Run { .. } => not_yet("run", "M1"),
         Command::Repl => not_yet("repl", "M1"),
@@ -85,8 +91,60 @@ fn main() -> ExitCode {
         Command::Add => not_yet("add", "M5"),
         Command::Update => not_yet("update", "M5"),
         Command::Fetch => not_yet("fetch", "M5"),
-        Command::Explain { .. } => not_yet("explain", "M1"),
+        Command::Explain { code } => explain(&code),
     }
+}
+
+/// `cheby check` (D-282): checks the package that holds the current
+/// directory and prints its diagnostics.
+fn check() -> ExitCode {
+    let cwd = match std::env::current_dir() {
+        Ok(cwd) => cwd,
+        Err(e) => return tool_error(&format!("cannot read the current directory: {e}")),
+    };
+    let Some(root) = cheby_driver::find_package_root(&cwd) else {
+        return tool_error("could not find `cheby.toml` in the current directory or any parent");
+    };
+    match cheby_driver::check(&root) {
+        Ok(out) => {
+            // A failed write to stderr cannot be reported anywhere else.
+            let _ = std::io::stderr().lock().write_all(out.render().as_bytes());
+            if out.has_errors() {
+                ExitCode::FAILURE
+            } else {
+                ExitCode::SUCCESS
+            }
+        }
+        Err(e) => tool_error(e.message()),
+    }
+}
+
+/// `cheby explain <code>` (D-420): prints the code's explanation, the
+/// text of `docs/diagnostics/<code>.md`.
+fn explain(code: &str) -> ExitCode {
+    let text = cheby_diag::Code::parse(code).and_then(cheby_diag::codes::explanation);
+    match text {
+        Some(text) => {
+            let mut stdout = std::io::stdout().lock();
+            let written = stdout.write_all(text.as_bytes());
+            let newline = if text.ends_with('\n') {
+                Ok(())
+            } else {
+                stdout.write_all(b"\n")
+            };
+            if written.and(newline).is_ok() {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            }
+        }
+        None => tool_error(&format!("no diagnostic has the code `{code}`")),
+    }
+}
+
+fn tool_error(message: &str) -> ExitCode {
+    eprintln!("error: {message}");
+    ExitCode::FAILURE
 }
 
 /// Until a backend exists, building for it is an error that points to

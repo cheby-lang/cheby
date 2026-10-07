@@ -1,0 +1,7 @@
+// Constructor subject is not a record
+fn f() {
+  case Red {
+    Red => 1
+    _ => 0
+  }
+}

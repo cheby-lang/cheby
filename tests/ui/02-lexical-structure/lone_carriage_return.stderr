@@ -1,0 +1,8 @@
+error[E0002]: carriage return without a line feed
+ --> tests/ui/02-lexical-structure/lone_carriage_return.cheby:6:10
+  |
+6 |   let x =␍ 1
+  |          ^
+  |
+  = help: save the file with LF or CRLF line endings
+

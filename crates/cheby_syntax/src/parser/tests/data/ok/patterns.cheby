@@ -1,0 +1,31 @@
+//! Patterns (App. A.6).
+fn f(x: Int) -> Int {
+  case x {
+    _ => 0
+    n => n
+    0 | 1 | -2 => 1
+    "text" | r"raw" | r#"a"b"# => 2
+    Some(v) as whole => v
+    shape::Circle { radius, .. } => 3
+    Point { x: 0, y: Some(z) } => z
+    Point { x, y, } => x
+    (a, b) => a
+    (a) => a
+    [] => 4
+    [first, ..] => first
+    [first, ..rest, last] => last
+    [..init, last,] => last
+    Node(left, _, Node(_, v, _)) => v
+    Ok(Some(x)) | Err(x) => x
+    -1.5 => 5
+  }
+}
+
+fn g() {
+  let (a, b) = pair
+  let Point { x, y } = point
+  let assert [first, ..] = items as "not empty"
+  let assert Ok(v): Result<Int, String> = parse(s)
+  use (a, b), Wrapper(c) <- with_pair(p)
+  list::map(xs, fn((k, v), [h, ..]) { k })
+}

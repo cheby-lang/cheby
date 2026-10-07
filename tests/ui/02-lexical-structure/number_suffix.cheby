@@ -1,0 +1,11 @@
+// @mode: parse-fail
+// @decisions: D-084
+//! Numeric literals have no type suffix; they take their type from
+//! context.
+
+fn main() {
+  let a = 1u8
+  let b = 2.5f
+  assert a == 1
+  assert b == 2.5
+}

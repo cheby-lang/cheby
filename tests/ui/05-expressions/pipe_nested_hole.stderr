@@ -1,0 +1,11 @@
+error[E0028]: pipe into a call without `_`
+  --> tests/ui/05-expressions/pipe_nested_hole.cheby:15:16
+   |
+15 |   let n = 1 |> apply(add(_, 1))
+   |             -- ^^^^^^^^^^^^^^^^ this call has no `_` argument
+   |             |
+   |             the value piped in
+   |
+   = note: the `_` in `add(…)` belongs to `add` (D-202)
+   = help: add `_` where the piped value goes
+

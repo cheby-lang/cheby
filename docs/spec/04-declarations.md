@@ -3,8 +3,8 @@
 A module ([chapter 7](07-modules-and-packages.md)) is a sequence of top-level declarations, also called **items**. This chapter defines each kind of item.
 
 ```ebnf
-module      = [ NL ] { module_doc NL } { inner_attribute NL } { import_decl NL } { item NL } ;   (* imports: §7.5, inner_attribute: §4.8 *)
-item        = { doc_comment NL } { attribute NL } item_body ;
+module      = { module_doc NL } { inner_attribute NL } { import_decl NL } { item NL } ;   (* imports: §7.5, inner_attribute: §4.8; end of file ends the last line, D-426 *)
+item        = { doc_comment NL } { attribute NL } item_body ;   (* doc comments before attributes, D-434 *)
 item_body   = fn_decl | type_decl | alias_decl | const_decl | interface_decl | test_decl ;
 ```
 
@@ -153,6 +153,8 @@ Field names must be distinct within a variant. The same field name may appear in
 
 A type declaration must have at least one variant. Variant names must be distinct within the module's value namespace.
 
+A positional variant has at least one type, and a named-field variant at least one field. `Foo()` and `Foo {}` are compile errors that suggest the unit variant `Foo` (D-437).
+
 ```cheby
 pub exposed type Shape {
   Circle { radius: Float },
@@ -262,7 +264,7 @@ Constants are never reference counted at run time and may be shared by all fiber
 ## 4.6 Interfaces
 
 ```ebnf
-interface_decl = [ visibility ] "interface" UPPER [ ":" bound ] [ "{" [ NL ] { interface_fn NL } "}" ] ;
+interface_decl = [ visibility ] "interface" UPPER [ ":" bound ] [ "{" [ NL ] [ interface_fn { NL interface_fn } ] [ NL ] "}" ] ;   (* D-427 *)
 interface_fn   = { doc_comment NL } "fn" LOWER "(" [ type { "," type } [ "," ] ] ")" [ "->" type ] ;
 ```
 
@@ -293,7 +295,7 @@ test "clamp keeps values in range" {
 ## 4.8 Attributes
 
 ```ebnf
-attribute   = "@" LOWER [ "(" [ attr_arg { "," attr_arg } [ "," ] ] ")" ] ;
+attribute   = "@" LOWER [ "(" [ attr_arg { "," attr_arg } [ "," ] ] ")" ] ;   (* the name may be a reserved word, D-435 *)
 attr_arg    = LOWER | STRING ;
 ```
 
@@ -308,6 +310,8 @@ The set of attributes is fixed, and user-defined attributes do not exist (D-200,
 | `@deprecated("message")` | `pub` items                                             | using the item warns with the message | below                                                     |
 
 An unknown attribute name, a duplicated attribute (other than `@external` with different targets), or an attribute in a place it is not allowed is a compile error.
+
+An attribute name binds nothing, so it is not checked against the reserved words or the naming convention of [§2.3](02-lexical-structure.md#23-identifiers) and [§2.4](02-lexical-structure.md#24-keywords). This is what lets `@async` exist although `async` is a reserved word. A name outside the table is an unknown attribute (D-435).
 
 The standard library also uses attributes that user code cannot write. One marks the count parameters that the standard library clamps, for the warning of [§13.8](13-tooling.md#138-diagnostics-and-warnings) (D-298, D-303). Another lets a standard-library type name the functions that implement its equality, hashing and debug printing ([§3.13](03-types.md#313-equality-hashing-and-debug-printing)) (D-342). Their spelling belongs to the toolchain, and writing them outside the standard library is a compile error like any unknown attribute.
 

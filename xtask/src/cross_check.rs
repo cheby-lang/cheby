@@ -1,9 +1,16 @@
 //! Parser cross-check (D-272, docs/plan/testing.md §5).
 //!
 //! Parses every example and every UI test with `tree-sitter-cheby` at the
-//! commit pinned in `tests/tree-sitter-cheby.rev`. Examples and UI tests
-//! must parse, except `parse-fail` UI tests, which must be rejected. Once
-//! the compiler parser exists (M1), its verdict is compared too.
+//! commit pinned in `tests/tree-sitter-cheby.rev` and with the compiler
+//! parser (`cheby_syntax`). Examples and UI tests must parse, except
+//! `parse-fail` UI tests, which must be rejected. Both parsers are held to
+//! that intent, so the check fails whenever they disagree on a file.
+//!
+//! The compiler rejects a file if it is not UTF-8 or if `parse` reports a
+//! grammar error. Validation errors (class V) are not consulted: they are
+//! rules that tree-sitter does not enforce, tested by `check-fail` UI
+//! tests (D-424). `--compiler-only` runs without a tree-sitter CLI, for
+//! machines that have none; CI runs both.
 //!
 //! The grammar is checked out under `target/tree-sitter-cheby`, cloned
 //! from a sibling `../tree-sitter-cheby` if there is one and from GitHub
@@ -15,6 +22,7 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use cheby_diag::{FileId, SourceMap};
 use cheby_test_support::{display_relative, example, ui};
 
 const UPSTREAM: &str = "https://github.com/cheby-lang/tree-sitter-cheby.git";
@@ -35,6 +43,9 @@ pub struct Args {
     /// Append a Markdown summary to this file, such as `$GITHUB_STEP_SUMMARY`
     #[arg(long)]
     summary: Option<PathBuf>,
+    /// Check only the compiler parser, without tree-sitter
+    #[arg(long)]
+    compiler_only: bool,
 }
 
 /// What a file is meant to do.
@@ -49,11 +60,6 @@ pub fn run(root: &Path, args: &Args) -> Result<(), String> {
         .map_err(|e| format!("tests/tree-sitter-cheby.rev: {e}"))?
         .trim()
         .to_owned();
-    let grammar = match &args.grammar {
-        Some(dir) => dir.clone(),
-        None => checkout(root, &rev)?,
-    };
-    let cli = find_cli(root, args.tree_sitter.as_deref())?;
 
     let mut files = collect(root)?;
     for dir in &args.also {
@@ -69,35 +75,62 @@ pub fn run(root: &Path, args: &Args) -> Result<(), String> {
             );
         }
     }
-    let verdicts = parse(&cli, &grammar, root, &files)?;
+
+    let tree_sitter = if args.compiler_only {
+        None
+    } else {
+        let grammar = match &args.grammar {
+            Some(dir) => dir.clone(),
+            None => checkout(root, &rev)?,
+        };
+        let cli = find_cli(root, args.tree_sitter.as_deref())?;
+        Some(parse(&cli, &grammar, root, &files)?)
+    };
 
     let mut mismatches = Vec::new();
+    let mut ts_ok: usize = 0;
+    let mut compiler_ok: usize = 0;
     for (path, intent) in &files {
-        let parsed = *verdicts.get(path).ok_or_else(|| {
-            format!(
-                "tree-sitter reported nothing for {}",
-                display_relative(path, root)
-            )
-        })?;
-        let ok = match intent {
-            Intent::Parse => parsed,
-            Intent::Reject => !parsed,
-        };
-        if !ok {
-            let what = match intent {
-                Intent::Parse => "must parse, but tree-sitter rejects it",
-                Intent::Reject => "is `parse-fail`, but tree-sitter accepts it",
-            };
-            mismatches.push(format!("{}: {what}", display_relative(path, root)));
+        let shown = display_relative(path, root);
+        if let Some(verdicts) = &tree_sitter {
+            let parsed = *verdicts
+                .get(path)
+                .ok_or_else(|| format!("tree-sitter reported nothing for {shown}"))?;
+            match (intent, parsed) {
+                (Intent::Parse, true) | (Intent::Reject, false) => {
+                    ts_ok = ts_ok.saturating_add(1);
+                }
+                (Intent::Parse, false) => {
+                    mismatches.push(format!("{shown}: must parse, but tree-sitter rejects it"));
+                }
+                (Intent::Reject, true) => mismatches.push(format!(
+                    "{shown}: is `parse-fail`, but tree-sitter accepts it"
+                )),
+            }
+        }
+        match (intent, compiler_verdict(path)?) {
+            (Intent::Parse, None) | (Intent::Reject, Some(_)) => {
+                compiler_ok = compiler_ok.saturating_add(1);
+            }
+            (Intent::Parse, Some(error)) => mismatches.push(format!(
+                "{shown}: must parse, but the compiler parser rejects it: {error}"
+            )),
+            (Intent::Reject, None) => mismatches.push(format!(
+                "{shown}: is `parse-fail`, but the compiler parser accepts it"
+            )),
         }
     }
 
     let short_rev = rev.get(..7).unwrap_or(&rev);
+    let ts_part = if tree_sitter.is_some() {
+        format!("tree-sitter-cheby {short_rev}: {ts_ok} as expected")
+    } else {
+        "tree-sitter-cheby: skipped (--compiler-only)".to_owned()
+    };
     let line = format!(
-        "tree-sitter-cheby {short_rev}: {} files, {} as expected, {} mismatches \
-         (compiler parser: not before M1)",
+        "parser cross-check: {} files; {ts_part}; compiler parser: {compiler_ok} as expected; \
+         {} mismatches",
         files.len(),
-        files.len().saturating_sub(mismatches.len()),
         mismatches.len()
     );
     println!("{line}");
@@ -116,6 +149,29 @@ pub fn run(root: &Path, args: &Args) -> Result<(), String> {
     } else {
         Err("parser cross-check failed".to_owned())
     }
+}
+
+/// The compiler parser's verdict on a file: `None` if it parses, or the
+/// first grammar error as `line:col: message`.
+fn compiler_verdict(path: &Path) -> Result<Option<String>, String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let Ok(text) = String::from_utf8(bytes) else {
+        return Ok(Some("the file is not valid UTF-8".to_owned()));
+    };
+    let mut sources = SourceMap::new();
+    let file = sources
+        .add_file("", text.as_str())
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    debug_assert_eq!(file, FileId::new(0));
+    let parse = cheby_syntax::parse(file, text.into());
+    Ok(parse.errors().first().map(|error| {
+        let at = error
+            .primary_span()
+            .and_then(|span| sources.location(span))
+            .map(|loc| format!("{}:{}: ", loc.line, loc.col))
+            .unwrap_or_default();
+        format!("{at}error[{}]: {}", error.code, error.message)
+    }))
 }
 
 /// Every file to check, with what it is meant to do, sorted by path.

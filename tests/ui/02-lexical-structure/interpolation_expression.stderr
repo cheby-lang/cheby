@@ -1,0 +1,8 @@
+error[E0012]: unexpected `+` in string interpolation
+ --> tests/ui/02-lexical-structure/interpolation_expression.cheby:8:20
+  |
+8 |   let s = "sum: {a + 1}"
+  |                    ^
+  |
+  = help: an interpolation holds a name, optionally with fields and `:?`, such as `{user.name}`; bind other values to a name first
+

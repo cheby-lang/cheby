@@ -69,7 +69,7 @@ fn http_reason(code: Int) -> String {
 A constructor pattern matches values built with that constructor:
 
 - A **unit** constructor pattern is the name alone: `None`, `Red`, `True`.
-- A **positional** constructor pattern has one sub-pattern per field, in order: `Some(x)`, `Node(left, value, right)`.
+- A **positional** constructor pattern has one sub-pattern per field, in order: `Some(x)`, `Node(left, value, right)`. Empty parentheses, as in `Some()`, are a compile error (D-437).
 - A **named-field** constructor pattern lists fields by name, in any order:
   - `field: pattern` matches the field against the pattern,
   - `field` alone is punning and binds the field to a variable of the same name (D-113),
@@ -148,6 +148,8 @@ Inside a pattern, `|` always means alternatives. It is never the bitwise-or oper
 ## 6.8 As bindings
 
 `pattern as name` matches `pattern` and additionally binds the whole matched value to `name` (D-113). `as` has the lowest precedence in patterns, so `A | B as x` binds `x` whichever alternative matched.
+
+`as` follows a whole list of alternatives and comes at most once there, so `A as x | B` and `p as a as b` are compile errors. An `as` pattern in parentheses may stand wherever a pattern may (D-438).
 
 ```cheby
 case items {

@@ -21,10 +21,11 @@ docs/examples/003_fizzbuzz/
 ```
 
 - The harness in `tests/conformance/` runs each example with `cheby run`, compares outputs and exit code, and from M3 and M4 also builds and runs it with `--target native` and `--target js`. The same goldens apply to every target (spec §1.1 principle 5).
-- Examples that need the network (030, 031) or a C library (020) run against local fixtures: a loopback HTTP server started by the harness, and a C fixture library linked once OQ-P9 is settled. Until then they are marked `skip-run` and only checked with `cheby check` (D-282).
+- Examples that need the network (030, 031) or a C library (020) run against local fixtures: a loopback HTTP server started by the harness, and a C fixture library linked once OQ-P9 is settled. Until then they are marked `skip-run` and only checked with `cheby check` (D-282). 030 also has a git dependency, so it waits for M5 (D-446).
+- A `skip-run` example's milestone names when its fixture arrives, not when `cheby check` can handle it. Before that milestone a passing check is pending, not an unexpected pass (D-445).
 - Examples whose output depends on randomness or `Map` iteration order (D-093) must make their output deterministic, for example by sorting or by a fixed seed passed through `args`. Where an example cannot, the decision log gets an entry and the example is changed, never the harness.
 - `test.toml` records the milestone in which an example is expected to pass. Before that it is expected-fail, and an unexpected pass fails the run, so the table in [README.md](README.md#milestones) stays accurate. `tests/milestone` names the milestone in progress: examples of earlier milestones must pass, examples of the milestone in progress are pending and only reported, and examples of later milestones must fail. Bumping the file at a milestone's exit makes its examples binding (D-288).
-- `cargo xtask bless` rewrites goldens (D-292). A blessed change is reviewed like code.
+- `cargo xtask bless` rewrites goldens (D-292). A blessed change is reviewed like code. It refuses to bless an example whose exit code differs from `expected.exit` (0 by default), so a toolchain error never replaces good goldens. An intended change of exit code is edited by hand (D-445).
 
 ## 2. UI tests
 
@@ -55,7 +56,7 @@ tests/ui/06-patterns/exhaustiveness/missing_variant.cheby
 
 ## 5. Parser cross-check
 
-CI parses every example and every UI test with both the compiler parser and `tree-sitter-cheby`, and fails if one accepts a file the other rejects (D-272). Files that test syntax errors on purpose must be rejected by both. The tree-sitter grammar is pulled in at the commit pinned in `tests/tree-sitter-cheby.rev`, and bumping it is a normal change (D-290).
+CI parses every example and every UI test with both the compiler parser and `tree-sitter-cheby`, and fails if one accepts a file the other rejects (D-272). Only grammar errors count. A rule that the spec enforces and tree-sitter does not is checked by a validation pass after parsing, so the compiler parser accepts the file too (D-424). Files that test syntax errors on purpose must be rejected by both, so a `parse-fail` UI test must contain a grammar error, and the other syntax rules are `check-fail` tests. Where the compiler reports a grammar error that tree-sitter does not, the decision log lists a grammar mismatch to fix in tree-sitter. The tree-sitter grammar is pulled in at the commit pinned in `tests/tree-sitter-cheby.rev`, and bumping it is a normal change (D-290).
 
 ## 6. Determinism
 

@@ -1,0 +1,2 @@
+// Identifier starting with r is not a raw string
+const rest: Int = rest_count
