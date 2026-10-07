@@ -1,0 +1,11 @@
+error[E0018]: inner attribute after an import
+ --> tests/ui/04-declarations/inner_attribute_after_import.cheby:7:1
+  |
+5 | import std::io
+  | -------------- first import here
+6 |
+7 | @!target(native)
+  | ^^^^^^^^^^^^^^^^
+  |
+  = help: move inner attributes to the top of the file, after the `//!` docs and before the imports (D-201)
+

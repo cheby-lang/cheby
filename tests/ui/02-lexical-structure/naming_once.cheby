@@ -1,0 +1,17 @@
+// @mode: check-fail
+// @decisions: D-059, D-469
+//! A badly spelled name is reported once, where it is bound, and its uses
+//! add nothing.
+
+import std::io
+
+fn greet(userName: String) {
+  io::println(userName)
+  io::println(userName)
+}
+
+fn main() {
+  let myGreeting = "hello"
+  greet(myGreeting)
+  io::println(myGreeting)
+}

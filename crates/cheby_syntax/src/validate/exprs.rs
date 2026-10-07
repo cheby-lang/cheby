@@ -1,7 +1,8 @@
 //! Checks of expressions: capture holes (E0026, E0027, D-202, D-245),
 //! pipes without a hole (E0028, D-244), chained comparisons (E0029,
 //! D-108), one-element tuples (E0030, D-076), record updates (E0031,
-//! D-035, D-156) and type arguments on interface functions (E0023, D-165).
+//! D-035, D-156), type arguments on interface functions (E0023, D-165)
+//! and negative literals with a space after the `-` (E0056, §5.3.1).
 //!
 //! All of these are decided by syntax alone. In particular D-244 makes a
 //! pipe into a call without a whole-argument `_` an error whatever the
@@ -9,10 +10,19 @@
 
 use cheby_diag::{Diagnostic, Span, TextRange, codes};
 
-use super::{empty_at, source};
+use super::{empty_at, source, spaced_negative_literal};
 use crate::ast::{
-    Arg, ArgList, AstNode, BinExpr, CallExpr, Expr, PathExpr, RecordEntry, RecordExpr, TupleExpr,
+    Arg, ArgList, AstNode, BinExpr, CallExpr, Expr, PathExpr, PrefixExpr, RecordEntry, RecordExpr,
+    TupleExpr,
 };
+
+/// E0056: `- 5`. A negative literal is `-` directly before the number
+/// (§5.3.1); `-(5)` negates a parenthesized expression and is fine.
+pub(super) fn prefix_expr(expr: PrefixExpr<'_>, out: &mut Vec<Diagnostic>) {
+    if let Some(gap) = expr.minus_gap() {
+        spaced_negative_literal(expr.syntax(), gap, out);
+    }
+}
 
 /// E0026 and E0027: one `_` per argument list, and not as the only
 /// argument (§5.6).

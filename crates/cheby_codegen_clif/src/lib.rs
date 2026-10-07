@@ -72,10 +72,27 @@ pub enum CallMode {
     Direct,
 }
 
+/// How generated code imports and calls an `@external(native, …)` symbol.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub enum ForeignImport {
+    /// Import the symbol's address, with no signature, and call it with
+    /// `call_indirect` and the C signature of each call site. One module
+    /// can then hold several C signatures for one symbol, which the REPL
+    /// needs: a redefinition may change a binding's C signature, and a
+    /// failed batch leaves its declarations behind. The JIT's mode.
+    #[default]
+    Address,
+    /// Import the symbol as a function with its C signature. A module
+    /// holds one signature per symbol, which D-455 guarantees within a
+    /// program (AOT, M3).
+    Function,
+}
+
 /// What code generation emits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct CodegenOptions {
     pub call_mode: CallMode,
+    pub foreign_import: ForeignImport,
     /// Emit the function-entry stack check (D-124).
     pub stack_check: bool,
     /// Keep the CLIF text of every translated function, for dumps and
@@ -87,6 +104,7 @@ impl Default for CodegenOptions {
     fn default() -> Self {
         Self {
             call_mode: CallMode::Indirect,
+            foreign_import: ForeignImport::Address,
             stack_check: true,
             capture_clif: false,
         }
@@ -115,16 +133,17 @@ impl std::fmt::Debug for CodegenCx<'_> {
 /// # Errors
 ///
 /// A [`CodegenError`] if a symbol is declared twice with different
-/// signatures, a unit is inconsistent, or a function key was already
-/// declared by an earlier batch.
+/// signatures (for foreign symbols, only under
+/// [`ForeignImport::Function`]), a unit is inconsistent, or a function key
+/// was already declared by an earlier batch.
 pub fn declare<M: Module>(
     module: &mut M,
     decls: &mut Decls,
     mirs: &[MirModule],
     _cx: &CodegenCx<'_>,
-    _opts: &CodegenOptions,
+    opts: &CodegenOptions,
 ) -> Result<(), CodegenError> {
-    decls.declare_units(module, mirs)
+    decls.declare_units(module, mirs, opts.foreign_import)
 }
 
 /// Defines the data objects declared by [`declare`] and every function of

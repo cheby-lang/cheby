@@ -619,7 +619,7 @@ fn examples_have_no_lexical_diagnostics() {
         let text = std::fs::read_to_string(&path).unwrap();
         let parse = super::super::parse(FileId::new(0), Arc::from(text.as_str()));
         assert_eq!(parse.errors(), [], "{}", path.display());
-        // Warnings are allowed: example 030 has a W0001 (D-243).
+        // Only errors are checked here; warnings belong to the corpus test.
         let mut diags = super::super::validate(parse.tree());
         diags.retain(cheby_diag::Diagnostic::is_error);
         assert_eq!(diags, [], "{}", path.display());

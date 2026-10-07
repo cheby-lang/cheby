@@ -59,7 +59,7 @@ Scopes nest. A fiber may open its own scopes, and a scope's fibers are cancelled
 
 `fiber::join(f)` waits for the fiber `f` and returns its value directly, not wrapped in a `Result` (D-177). If the joined fiber panics or is cancelled, its scope is failing, so the joining fiber is itself cancelled as part of that failure and `join` never returns (D-177).
 
-The error value of a failed scope, `fiber::Panic`, carries the message and source location of the **first** panic in the scope. Panics caused by the resulting cancellation are not reported (D-178).
+The error value of a failed scope, `fiber::Panic`, carries the message and source location of the **first** panic in the scope. Panics caused by the resulting cancellation are not reported (D-178). The message is exactly the message line of the panic report ([§11.6](11-errors-and-panics.md#116-panic-and-todo)), without the location or any prefix, and the location is held separately (D-473).
 
 A scope value must not escape the scope's callback: storing it or returning it and spawning into it after the scope has ended panics.
 
@@ -224,3 +224,4 @@ Standard output and standard error behave the same way on every target:
 - Standard error is not buffered (D-346).
 - All buffered output is flushed when the program ends, whatever its exit status (D-346).
 - When a write or flush that does not return a `Result`, such as `io::println`, cannot complete, for example because the reader of a pipe has gone, the program ends at once with exit status `1` and prints nothing (D-306).
+- A standard stream that is closed or missing when the program starts behaves as a null device: writes and flushes succeed and discard the text, and reads see the end of input. The previous rule applies only to streams that are open at start (D-474).

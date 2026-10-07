@@ -1,11 +1,15 @@
 //! Developer commands (docs/plan/m0-foundation.md, task 0.10):
 //!
 //! - `bless`: rewrites the goldens of examples and UI tests from the
-//!   current `cheby` binary.
+//!   current `cheby` binary, including the goldens beside package UI tests
+//!   (directories with their own `cheby.toml`). An example's `cheby test`
+//!   trial has no goldens, so blessing only runs it.
 //! - `gen-bench`: generates a synthetic benchmark project.
 //! - `check-determinism`: checks that outputs are the same byte for byte
 //!   from different paths (D-264).
-//! - `coverage`: lists decisions cited in the spec that no UI test names.
+//! - `coverage`: lists decisions cited in the spec that no UI test names,
+//!   reading `@decisions` from each test's header (`src/main.cheby` of a
+//!   package test).
 //! - `cross-check`: parses examples and UI tests with `tree-sitter-cheby`
 //!   at the pinned commit and with the compiler parser, and fails if they
 //!   disagree (D-272).

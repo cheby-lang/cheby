@@ -832,3 +832,213 @@ fn rc_placement_frees_every_object() {
         assert_eq!(live, 0);
     }
 }
+
+/// The memory the OS charges this process for: the physical footprint on
+/// Apple, the resident set on Linux, the commit charge on Windows. `None`
+/// elsewhere.
+#[cfg(target_vendor = "apple")]
+fn process_memory() -> Option<u64> {
+    // SAFETY: `rusage_info_v2` is plain data that `proc_pid_rusage` fills.
+    let mut info: libc::rusage_info_v2 = unsafe { std::mem::zeroed() };
+    // SAFETY: `info` is a writable `rusage_info_v2`, the flavor asked for.
+    let status = unsafe {
+        libc::proc_pid_rusage(libc::getpid(), libc::RUSAGE_INFO_V2, (&raw mut info).cast())
+    };
+    (status == 0).then_some(info.ri_phys_footprint)
+}
+
+#[cfg(target_os = "linux")]
+fn process_memory() -> Option<u64> {
+    let statm = std::fs::read_to_string("/proc/self/statm").ok()?;
+    let pages: u64 = statm.split_whitespace().nth(1)?.parse().ok()?;
+    // SAFETY: `sysconf` only reads a configuration value.
+    let page = u64::try_from(unsafe { libc::sysconf(libc::_SC_PAGESIZE) }).ok()?;
+    pages.checked_mul(page)
+}
+
+#[cfg(windows)]
+fn process_memory() -> Option<u64> {
+    use windows_sys::Win32::System::ProcessStatus::{
+        K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS_EX,
+    };
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+    // SAFETY: plain data that `K32GetProcessMemoryInfo` fills.
+    let mut counters: PROCESS_MEMORY_COUNTERS_EX = unsafe { std::mem::zeroed() };
+    let size = u32::try_from(std::mem::size_of::<PROCESS_MEMORY_COUNTERS_EX>()).ok()?;
+    counters.cb = size;
+    // SAFETY: `counters` is writable and `size` is its size.
+    let ok =
+        unsafe { K32GetProcessMemoryInfo(GetCurrentProcess(), (&raw mut counters).cast(), size) };
+    (ok != 0).then(|| u64::try_from(counters.PrivateUsage).ok())?
+}
+
+#[cfg(not(any(target_vendor = "apple", target_os = "linux", windows)))]
+fn process_memory() -> Option<u64> {
+    None
+}
+
+/// Many JITs alive at once each reserve 1 GiB of address space but commit
+/// only the pages their code and data use, so 64 of them cost megabytes,
+/// not 64 GiB; each runs its own code, and dropping one releases its
+/// reservation.
+#[test]
+fn jits_commit_only_what_they_use() {
+    const JITS: usize = 64;
+    let _guard = RUNNING
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let before = process_memory();
+    let f = def(1, 0);
+    let target = def(1, 1);
+    let mut jits = Vec::new();
+    for _ in 0..JITS {
+        let f_fn = function(
+            FnKey::Item(f),
+            Abi::Cheby,
+            &[],
+            &[],
+            Repr::Value,
+            vec![block(
+                Vec::new(),
+                Terminator::Return(Operand::Const(Const::Nil)),
+            )],
+            &[],
+        );
+        let callees = vec![CalleeDecl {
+            def: f,
+            sig: cheby_sig(&[]),
+        }];
+        let code = code_unit(
+            1,
+            "app",
+            vec![f_fn],
+            callees.clone(),
+            vec![name(f, "app", "f")],
+        );
+        let entries = entries_unit(
+            vec![const_thunk(target, f, Vec::new())],
+            callees,
+            vec![name(f, "app", "f"), name(target, "app", "VALUE")],
+        );
+        let mut jit = Jit::new().unwrap();
+        jit.compile(&[code, entries]).unwrap();
+        jits.push(jit);
+    }
+    for jit in &jits {
+        assert_eq!(run_const(jit, target), EntryOutcome::Returned(static_nil()));
+        let memory = jit.code_memory();
+        assert_eq!(memory.reserved, 1 << 30);
+        assert!(
+            memory.committed > 0 && memory.committed <= 1 << 20,
+            "{memory:?}"
+        );
+    }
+    if let (Some(before), Some(after)) = (before, process_memory()) {
+        let grown = after.saturating_sub(before);
+        assert!(grown < 256 << 20, "{JITS} JITs added {grown} bytes");
+    }
+    let usage: Vec<_> = jits.iter().map(|jit| Arc::clone(&jit.memory)).collect();
+    drop(jits);
+    for usage in usage {
+        assert_eq!((usage.reserved(), usage.committed()), (0, 0));
+    }
+}
+
+/// `g<index>()` returns `labs` of `args`, called with the C parameters
+/// `params`; then, if `missing`, calls a symbol nobody defines.
+fn labs_wrapper(index: u32, params: &[cheby_mir::CType], args: &[i64], missing: bool) -> Function {
+    let sized = |n: &i64| {
+        Operand::Const(Const::Sized {
+            repr: Repr::I64,
+            bits: u64::from_ne_bytes(n.to_ne_bytes()),
+        })
+    };
+    let mut stmts = vec![Stmt::Assign {
+        dst: local(0),
+        value: Rvalue::CallForeign {
+            symbol: "labs".into(),
+            sig: cheby_mir::ForeignSig {
+                params: params.to_vec(),
+                ret: cheby_mir::CType::I64,
+            },
+            args: args.iter().map(sized).collect(),
+        },
+    }];
+    if missing {
+        stmts.push(Stmt::Eval(Rvalue::CallForeign {
+            symbol: "cheby_no_such_symbol_anywhere".into(),
+            sig: cheby_mir::ForeignSig {
+                params: Vec::new(),
+                ret: cheby_mir::CType::Void,
+            },
+            args: Vec::new(),
+        }));
+    }
+    function(
+        FnKey::Item(def(1, index)),
+        Abi::Cheby,
+        &[],
+        &[Repr::Value],
+        Repr::Value,
+        vec![block(stmts, Terminator::Return(Operand::Local(local(0))))],
+        &[],
+    )
+}
+
+/// A batch of the wrapper `g<index>` and a constant entry calling it.
+fn labs_batch(index: u32, function: Function) -> [MirModule; 2] {
+    let g = def(1, index);
+    let target = def(1, index.saturating_add(100));
+    let callees = vec![CalleeDecl {
+        def: g,
+        sig: cheby_sig(&[]),
+    }];
+    let g_name = format!("g{index}");
+    let code = code_unit(
+        1,
+        "app",
+        vec![function],
+        callees.clone(),
+        vec![name(g, "app", &g_name)],
+    );
+    let entries = entries_unit(
+        vec![const_thunk(target, g, Vec::new())],
+        callees,
+        vec![
+            name(g, "app", &g_name),
+            name(target, "app", &format!("VALUE{index}")),
+        ],
+    );
+    [code, entries]
+}
+
+/// D-455 in the REPL counts only the session's current definitions, so a
+/// redefinition may bind a foreign symbol with another C signature, and a
+/// failed entry's signature does not count. The JIT imports foreign
+/// symbols by address, so each batch below compiles and runs, although
+/// they call `labs` with three different C signatures.
+#[cfg(unix)]
+#[test]
+fn batches_may_call_a_foreign_symbol_with_new_signatures() {
+    use cheby_mir::CType;
+    let _guard = RUNNING
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut jit = Jit::new().unwrap();
+    // A failed entry that binds `labs` as `int labs(int)`.
+    let failed = labs_batch(0, labs_wrapper(0, &[CType::I32], &[-3], true));
+    let err = jit.compile(&failed).unwrap_err();
+    assert!(matches!(err, JitError::UnresolvedSymbol(_)), "{err}");
+    // `long labs(long)`.
+    jit.compile(&labs_batch(1, labs_wrapper(1, &[CType::I64], &[-5], false)))
+        .unwrap();
+    assert_eq!(run_const(&jit, def(1, 101)), EntryOutcome::Returned(5));
+    // A redefinition with an extra parameter the callee ignores.
+    jit.compile(&labs_batch(
+        2,
+        labs_wrapper(2, &[CType::I64, CType::I64], &[-7, 0], false),
+    ))
+    .unwrap();
+    assert_eq!(run_const(&jit, def(1, 102)), EntryOutcome::Returned(7));
+    assert_eq!(run_const(&jit, def(1, 101)), EntryOutcome::Returned(5));
+}

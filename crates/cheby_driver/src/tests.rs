@@ -32,17 +32,15 @@ fn package(name: &str, files: &[(&str, &[u8])]) -> PathBuf {
 const MANIFEST: (&str, &[u8]) = ("cheby.toml", b"name = \"app\"\nversion = \"0.1.0\"\n");
 
 /// Every example passes the syntax layer. Example 030 has dependencies,
-/// which are rejected until M5, and a D-243 warning (W0001), which is an
-/// open issue in the example.
+/// which are rejected until M5.
 #[test]
 fn examples_pass_the_syntax_layer() {
     for dir in examples() {
         let out = check_syntax(&dir).unwrap();
         let rendered = out.render();
         if dir.ends_with("030_shop_service") {
-            assert_eq!(out.diagnostics.len(), 2, "{rendered}");
+            assert_eq!(out.diagnostics.len(), 1, "{rendered}");
             assert!(rendered.starts_with("error[E0036]: dependencies are not supported"));
-            assert!(rendered.contains("warning[W0001]"), "{rendered}");
         } else {
             assert_eq!(rendered, "", "{}", dir.display());
         }
@@ -50,9 +48,9 @@ fn examples_pass_the_syntax_layer() {
 }
 
 /// With every implemented phase, a valid example reports only constructs
-/// the compiler does not support yet (E0038) and the known W0001, so the
-/// support gate never hides a real error (D-451). 001 is clean, and
-/// 030 still stops after phase A.
+/// the compiler does not support yet (E0038), so the support gate never
+/// hides a real error (D-451). 001 is clean, and 030 still stops after
+/// phase A.
 #[test]
 fn examples_report_only_unsupported_constructs() {
     for dir in examples() {
@@ -62,10 +60,10 @@ fn examples_report_only_unsupported_constructs() {
         if dir.ends_with("001_hello_world") {
             assert_eq!(rendered, "", "{rendered}");
         } else if dir.ends_with("030_shop_service") {
-            assert_eq!(codes, ["E0036", "W0001"], "{rendered}");
+            assert_eq!(codes, ["E0036"], "{rendered}");
         } else {
             assert!(
-                codes.iter().all(|c| c == "E0038" || c == "W0001"),
+                codes.iter().all(|c| c == "E0038"),
                 "{}:\n{rendered}",
                 dir.display()
             );
@@ -421,20 +419,22 @@ fn validation_of_files_with_grammar_errors() {
     );
     let out = check(&dir).unwrap();
     let rendered = out.render();
-    assert!(rendered.contains("--> src/ok.cheby:2:7"), "{rendered}");
     assert!(
         rendered.contains("error[E0013]: expected an expression"),
         "{rendered}"
     );
-    // E0006 and E0011 are token-level, so they are reported.
-    assert!(rendered.contains("--> src/main.cheby:2:7"), "{rendered}");
+    // E0011 is token-level, so it is reported.
     assert!(rendered.contains("error[E0011]"), "{rendered}");
     // E0030 is a shape check, so it is not.
     assert!(!rendered.contains("E0030"), "{rendered}");
+    // Naming (E0006) is checked by name resolution, which a package with
+    // phase-A errors does not reach (D-452), in either file.
+    assert!(!rendered.contains("E0006"), "{rendered}");
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
-/// Reserved words that cause a grammar error get their own help (E0007).
+/// A reserved word that causes a grammar error explains it with a help on
+/// that error, not with an E0007 of its own.
 #[test]
 fn reserved_words_explain_grammar_errors() {
     let dir = package(
@@ -449,11 +449,34 @@ fn reserved_words_explain_grammar_errors() {
     );
     let out = check(&dir).unwrap();
     let rendered = out.render();
+    assert!(rendered.starts_with("error[E0013]"), "{rendered}");
     assert!(
-        rendered.contains("error[E0007]: `if` is a reserved word"),
+        rendered.contains("help: Cheby has no `if`; use `case`"),
         "{rendered}"
     );
-    assert!(rendered.contains("use `case`"), "{rendered}");
+    assert!(!rendered.contains("E0007"), "{rendered}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A file whose only problem is a badly spelled name reaches name
+/// resolution, which reports it once, where it is bound.
+#[test]
+fn naming_is_reported_by_resolution() {
+    let dir = package(
+        "naming",
+        &[
+            MANIFEST,
+            (
+                "src/main.cheby",
+                b"fn main() {\n  let myValue = main\n  let go = myValue\n}\n",
+            ),
+        ],
+    );
+    let out = check(&dir).unwrap();
+    let rendered = out.render();
+    assert_eq!(rendered.matches("error[E0006]").count(), 1, "{rendered}");
+    assert!(rendered.contains("--> src/main.cheby:2:7"), "{rendered}");
+    assert_eq!(rendered.matches("error[E0007]").count(), 1, "{rendered}");
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

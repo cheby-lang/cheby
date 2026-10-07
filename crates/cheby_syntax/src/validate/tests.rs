@@ -40,11 +40,6 @@ fn diags(text: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-/// The codes of the diagnostics of `text`.
-fn codes(text: &str) -> Vec<String> {
-    diags(text).into_iter().map(|(code, _)| code).collect()
-}
-
 /// Wraps `body` in a function.
 fn in_fn(body: &str) -> String {
     format!("fn f() {{\n{body}\n}}\n")
@@ -170,10 +165,12 @@ fn attributes_need_an_item() {
 }
 
 #[test]
-fn attribute_names_are_not_reserved_words() {
+fn names_are_checked_by_resolution() {
     // `async` is reserved (D-128) but `@async` is an attribute (§12.5.2).
+    // Reserved words and naming (E0006, E0007) are checked where a name is
+    // bound, by name resolution, so validation reports neither.
     ok("@external(js, \"f\")\n@async\nfn f() -> Int\n");
-    assert_eq!(codes(&in_fn("  let async = 1")), ["E0007"]);
+    ok(&in_fn("  let async = 1\n  let myValue = async"));
 }
 
 // ---- E0020, E0021 signatures ----
@@ -312,8 +309,9 @@ fn token_checks_skip_interpolations_with_grammar_errors() {
             )
         })
         .collect();
-    // Only the whitespace of the valid `{ c }`, and the name.
-    let expected = [("E0012", " "), ("E0012", " "), ("E0006", "badName")];
+    // Only the whitespace of the valid `{ c }`. The name `badName` is left
+    // to name resolution, which a file with grammar errors never reaches.
+    let expected = [("E0012", " "), ("E0012", " ")];
     let expected: Vec<(String, String)> = expected
         .iter()
         .map(|(c, t)| ((*c).to_owned(), (*t).to_owned()))
@@ -457,6 +455,24 @@ fn literal_patterns() {
         &in_fn("  case x {\n    \"hi {name}\" => 1\n  }"),
         &[("E0034", "{name}")],
     );
+}
+
+// ---- E0056 negative literals ----
+
+#[test]
+fn negative_literals_have_no_space() {
+    ok(&in_fn(
+        "  let a = -5\n  let b = -0.5\n  let c = -(5)\n  let d = a - 5\n  let e = - a\n  case a {\n    -1 => 1\n    _ => 0\n  }",
+    ));
+    reports(&in_fn("  let a = - 5"), &[("E0056", " ")]);
+    reports(&in_fn("  let a = -\t\t0.5"), &[("E0056", "\t\t")]);
+    reports(&in_fn("  let a = 1 + - 5 - 1"), &[("E0056", " ")]);
+    reports(
+        &in_fn("  case a {\n    -  1 => 1\n    _ => 0\n  }"),
+        &[("E0056", "  ")],
+    );
+    let fix = &rendered(&in_fn("  let a = - 5"));
+    assert!(fix.contains("help: remove the space"), "{fix}");
 }
 
 // ---- E0035 subjectless case ----

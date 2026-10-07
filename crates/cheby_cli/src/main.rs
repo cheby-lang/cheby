@@ -4,20 +4,39 @@
 //! them and exit with status 1. Flag spellings are informative (§13).
 //!
 //! Diagnostics go to stderr in the layout of D-418. Errors that are not
-//! about the program, such as a missing `cheby.toml`, are plain `error:`
-//! lines without a code (D-442). Exit status: 0 on success, 1 on any
+//! about the program, such as a missing `cheby.toml`, are `error:` lines
+//! without a code (D-442). Exit status: 0 on success, 1 on any
 //! error. `cheby run` exits with the program's status (§10.10, D-182): 0,
 //! 1 when `main` returns `Err`, 101 after a panic, and in debug builds of
 //! the toolchain 102 when objects leak (D-458).
+//!
+//! Diagnostics, tool errors and clap's help and usage errors are colored
+//! as the global `--color` flag and the environment decide ([`color`]).
+//! Color only adds escapes: the text is the same. Panic reports of a
+//! running program stay plain (D-449).
 
-use std::io::Write as _;
+mod color;
+
+use std::io::{IsTerminal as _, Write as _};
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand, ValueEnum};
+use cheby_diag::Colors;
+use clap::{CommandFactory as _, FromArgMatches as _, Parser, Subcommand, ValueEnum};
+
+use crate::color::ColorWhen;
 
 #[derive(Debug, Parser)]
 #[command(name = "cheby", version, about = "The Cheby toolchain")]
 struct Cli {
+    /// When to color diagnostics, errors and help
+    #[arg(
+        long,
+        global = true,
+        value_enum,
+        value_name = "WHEN",
+        default_value_t = ColorWhen::Auto
+    )]
+    color: ColorWhen,
     #[command(subcommand)]
     command: Command,
 }
@@ -79,56 +98,102 @@ enum Target {
 }
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    let env = |name: &str| std::env::var_os(name);
+    // clap prints help and usage errors while it parses, so its color is
+    // set from a scan of the raw arguments first.
+    let scanned = color::scan_flag(std::env::args_os()).unwrap_or_default();
+    let matches = Cli::command()
+        .color(color::clap_choice(color::forced(scanned, env)))
+        .get_matches();
+    let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
+    let colors = color::diagnostics(
+        color::forced(cli.color, env),
+        std::io::stderr().is_terminal(),
+    );
+    let out = Out { colors };
     match cli.command {
-        Command::New { .. } => not_yet("new", "M5"),
-        Command::Check => check(),
-        Command::Build { target } => build(target),
-        Command::Run { module_path, args } => run(module_path, args),
-        Command::Repl => not_yet("repl", "M1"),
-        Command::Test => not_yet("test", "M1"),
-        Command::Fmt { .. } => not_yet("fmt", "M5"),
-        Command::Lsp => not_yet("lsp", "M5"),
-        Command::Doc => not_yet("doc", "M5"),
-        Command::Add => not_yet("add", "M5"),
-        Command::Update => not_yet("update", "M5"),
-        Command::Fetch => not_yet("fetch", "M5"),
-        Command::Explain { code } => explain(&code),
+        Command::New { .. } => out.not_yet("new", "M5"),
+        Command::Check => check(out),
+        Command::Build { target } => build(out, target),
+        Command::Run { module_path, args } => run(out, module_path, args),
+        Command::Repl => out.not_yet("repl", "M1"),
+        Command::Test => out.not_yet("test", "M1"),
+        Command::Fmt { .. } => out.not_yet("fmt", "M5"),
+        Command::Lsp => out.not_yet("lsp", "M5"),
+        Command::Doc => out.not_yet("doc", "M5"),
+        Command::Add => out.not_yet("add", "M5"),
+        Command::Update => out.not_yet("update", "M5"),
+        Command::Fetch => out.not_yet("fetch", "M5"),
+        Command::Explain { code } => explain(out, &code),
+    }
+}
+
+/// Writes to stderr. A failed write to stderr cannot be reported anywhere
+/// else, so it is ignored.
+fn write_stderr(text: &str) {
+    let _ = std::io::stderr().lock().write_all(text.as_bytes());
+}
+
+/// How the toolchain's own messages are written to stderr: colored or not.
+#[derive(Clone, Copy)]
+struct Out {
+    colors: Colors,
+}
+
+impl Out {
+    /// Prints diagnostics in the layout of D-418.
+    fn diagnostics(self, out: &cheby_driver::CheckOutput) {
+        write_stderr(&cheby_diag::render_all_with(
+            &out.diagnostics,
+            &out.sources,
+            self.colors,
+        ));
+    }
+
+    /// Prints an `error:` line without a code (D-442) and returns status 1.
+    fn error(self, message: &str) -> ExitCode {
+        write_stderr(&cheby_diag::render_tool_error(message, self.colors));
+        ExitCode::FAILURE
+    }
+
+    /// Prints a `help:` line that follows a tool error.
+    fn help(self, message: &str) {
+        write_stderr(&cheby_diag::render_tool_help(message, self.colors));
+    }
+
+    fn not_yet(self, command: &str, milestone: &str) -> ExitCode {
+        self.error(&format!(
+            "`cheby {command}` is not implemented yet (planned for {milestone})"
+        ))
     }
 }
 
 /// The root of the package that holds the current directory.
-fn package_root() -> Result<std::path::PathBuf, ExitCode> {
+fn package_root(out: Out) -> Result<std::path::PathBuf, ExitCode> {
     let cwd = std::env::current_dir()
-        .map_err(|e| tool_error(&format!("cannot read the current directory: {e}")))?;
+        .map_err(|e| out.error(&format!("cannot read the current directory: {e}")))?;
     cheby_driver::find_package_root(&cwd).ok_or_else(|| {
-        tool_error("could not find `cheby.toml` in the current directory or any parent")
+        out.error("could not find `cheby.toml` in the current directory or any parent")
     })
-}
-
-/// Prints diagnostics to stderr. A failed write to stderr cannot be
-/// reported anywhere else.
-fn print_diagnostics(out: &cheby_driver::CheckOutput) {
-    let _ = std::io::stderr().lock().write_all(out.render().as_bytes());
 }
 
 /// `cheby check` (D-282): checks the package that holds the current
 /// directory with every implemented phase and prints its diagnostics.
-fn check() -> ExitCode {
-    let root = match package_root() {
+fn check(out: Out) -> ExitCode {
+    let root = match package_root(out) {
         Ok(root) => root,
         Err(code) => return code,
     };
     match cheby_driver::check(&root) {
-        Ok(out) => {
-            print_diagnostics(&out);
-            if out.has_errors() {
+        Ok(result) => {
+            out.diagnostics(&result);
+            if result.has_errors() {
                 ExitCode::FAILURE
             } else {
                 ExitCode::SUCCESS
             }
         }
-        Err(e) => tool_error(e.message()),
+        Err(e) => out.error(e.message()),
     }
 }
 
@@ -136,30 +201,30 @@ fn check() -> ExitCode {
 /// the package with the JIT, then runs the module's `main`. Compile errors
 /// are printed and exit with 1 before anything runs; warnings are printed
 /// before the program starts.
-fn run(module_path: Option<String>, args: Vec<String>) -> ExitCode {
-    let root = match package_root() {
+fn run(out: Out, module_path: Option<String>, args: Vec<String>) -> ExitCode {
+    let root = match package_root(out) {
         Ok(root) => root,
         Err(code) => return code,
     };
     let options = cheby_driver::RunOptions { module_path, args };
     let program = match cheby_driver::prepare_run(&root, options) {
         Ok(cheby_driver::Prepared::Ready(program)) => program,
-        Ok(cheby_driver::Prepared::CompileFailed(out)) => {
-            print_diagnostics(&out);
+        Ok(cheby_driver::Prepared::CompileFailed(result)) => {
+            out.diagnostics(&result);
             return ExitCode::FAILURE;
         }
-        Err(e) => return tool_error(e.message()),
+        Err(e) => return out.error(e.message()),
     };
-    print_diagnostics(program.output());
+    out.diagnostics(program.output());
     match program.run() {
         Ok(status) => ExitCode::from(u8::try_from(status).unwrap_or(1)),
-        Err(e) => tool_error(e.message()),
+        Err(e) => out.error(e.message()),
     }
 }
 
 /// `cheby explain <code>` (D-420): prints the code's explanation, the
-/// text of `docs/diagnostics/<code>.md`.
-fn explain(code: &str) -> ExitCode {
+/// text of `docs/diagnostics/<code>.md`, never colored.
+fn explain(out: Out, code: &str) -> ExitCode {
     let text = cheby_diag::Code::parse(code).and_then(cheby_diag::codes::explanation);
     match text {
         Some(text) => {
@@ -176,32 +241,22 @@ fn explain(code: &str) -> ExitCode {
                 ExitCode::FAILURE
             }
         }
-        None => tool_error(&format!("no diagnostic has the code `{code}`")),
+        None => out.error(&format!("no diagnostic has the code `{code}`")),
     }
-}
-
-fn tool_error(message: &str) -> ExitCode {
-    eprintln!("error: {message}");
-    ExitCode::FAILURE
 }
 
 /// Until a backend exists, building for it is an error that points to
 /// `cheby check` and `cheby run` (D-282).
-fn build(target: Option<Target>) -> ExitCode {
+fn build(out: Out, target: Option<Target>) -> ExitCode {
     let (name, milestone) = match target {
         None | Some(Target::Native) => ("native", "M3"),
         Some(Target::Js) => ("js", "M4"),
     };
-    eprintln!(
-        "error: `cheby build --target {name}` is not available yet (planned for {milestone})\n\
-         help: use `cheby check` to type-check the package, or `cheby run` to run it"
-    );
-    ExitCode::FAILURE
-}
-
-fn not_yet(command: &str, milestone: &str) -> ExitCode {
-    eprintln!("error: `cheby {command}` is not implemented yet (planned for {milestone})");
-    ExitCode::FAILURE
+    let code = out.error(&format!(
+        "`cheby build --target {name}` is not available yet (planned for {milestone})"
+    ));
+    out.help("use `cheby check` to type-check the package, or `cheby run` to run it");
+    code
 }
 
 #[cfg(test)]

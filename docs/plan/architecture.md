@@ -91,7 +91,7 @@ Per-module steps run once per module in import-graph order, with independent mod
 ### 2.2 Names and modules
 
 - `cheby_package` reads `cheby.toml` ([§13.3](../spec/13-tooling.md#133-manifest)), maps `src/` files to module paths ([§7.2](../spec/07-modules-and-packages.md#72-modules-and-files)) and builds the import graph, rejecting cycles (D-145).
-- `cheby_resolve` collects items per namespace ([§7.7](../spec/07-modules-and-packages.md#77-namespaces-and-name-resolution)), applies visibility (`pub`, package-visible, `priv`, D-162) and `exposed` (D-048), the prelude and its hiding warning (D-146), naming conventions (D-059) and the shadowing ban (D-051, D-062).
+- `cheby_resolve` collects items per namespace ([§7.7](../spec/07-modules-and-packages.md#77-namespaces-and-name-resolution)), applies visibility (`pub`, package-visible, `priv`, D-162) and `exposed` (D-048), the prelude and its hiding warning (D-146), naming conventions and reserved words at bindings and declarations (D-059, D-469) and the shadowing ban (D-051, D-062).
 - The prelude's items are declarations of a builtin module in `cheby_iface`, with no source. Each type records its home module in `std`, which re-exports it, and every module of the local package depends implicitly on the home modules the toolchain ships, so interface satisfaction for builtin types stays within its dependencies (D-447).
 
 ### 2.3 Module interfaces
@@ -145,6 +145,8 @@ A function with `@external(native, …)` lowers to a Cheby-ABI wrapper in its ow
 - Every top-level function is called through an indirection table in JIT code (D-043). The REPL redefines through it in M1, lazy compilation uses it in M3 (D-254). A slot is identified by the item's path and its ABI signature: a redefinition with the same signature repoints the slot, and one with another signature gets a new slot, so a slot never points at code of another signature (D-456).
 - Symbols are `cb$<kind>$<module path>$<item>…`, built from paths and names only, with the kind first: `fn`, `slot`, `shim`, `fnval`, `clo`, `cinit`, `const`, `test`, `entry`, `tramp`, `str`, `ctor`, `desc` and `layout`. A REPL redefinition with a new signature appends `$r<generation>` (D-456).
 - Native symbols are resolved against the runtime and the process before any code runs. A missing one is E0053 at its `@external` (D-455).
+- The JIT imports a native symbol without a signature, as a data import whose address the call site loads and calls indirectly with its own C signature, so REPL entries, including failed ones, may bind one symbol with different signatures (D-475). AOT objects may keep typed function imports, since a program gives each symbol one signature.
+- JIT code and data live in one address-space reservation of 1 GiB per JIT, so that every PC-relative relocation reaches on x86_64 and aarch64. Pages are committed per segment as they are allocated and made read-execute or read-only when finalized (`cheby_jit::memory`).
 - In M2, calls that may panic get `try_call` landing pads with cleanup blocks shared between calls (D-077, D-262).
 
 ### 2.7 Value representation

@@ -1,0 +1,8 @@
+error[E0007]: `return` is a reserved word
+  --> tests/ui/02-lexical-structure/reserved_word_use.cheby:10:3
+   |
+10 |   return("done")
+   |   ^^^^^^ reserved, cannot be used as a name
+   |
+   = help: Cheby has no `return`; a function returns the value of its body
+

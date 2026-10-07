@@ -1,6 +1,8 @@
 //! Views of expressions (App. A.5, ch. 5) and string literals (§2.5.3,
 //! §2.5.4).
 
+use cheby_diag::TextRange;
+
 use super::{
     AstChildren, AstNode, AstToken, AstTokens, Block, FloatLit, Ident, IntLit, Message, Param,
     ParamList, Pat, PathNode, RawStringLit, RetType, StringEscape, StringText, TypeArgList, child,
@@ -652,10 +654,20 @@ impl<'t> PrefixExpr<'t> {
         child(self.0)
     }
 
-    /// The number literal, if this is `-` applied directly to an integer
-    /// or float literal, which is one negative literal for typing (§5.3.1).
+    /// The number literal, if this is `-` directly before an integer or
+    /// float literal, with nothing between them: one negative literal for
+    /// typing (§5.3.1). `- 5` is not one; validation rejects it (E0056).
+    /// `-(5)` is not one either: it negates a parenthesized expression.
     #[must_use]
     pub fn negative_literal(self) -> Option<Literal<'t>> {
+        let literal = self.negated_number()?;
+        (self.minus_gap()?.is_empty()).then_some(literal)
+    }
+
+    /// The number literal, if this is `-` applied to an integer or float
+    /// literal operand, whatever lies between them.
+    #[must_use]
+    pub fn negated_number(self) -> Option<Literal<'t>> {
         if self.op()? != PrefixOp::Neg {
             return None;
         }
@@ -670,6 +682,16 @@ impl<'t> PrefixExpr<'t> {
             }
             _ => None,
         }
+    }
+
+    /// For `-` applied to a number literal, the range between the `-` and
+    /// the number: empty for `-5`, the space for `- 5`.
+    #[must_use]
+    pub fn minus_gap(self) -> Option<TextRange> {
+        let literal = self.negated_number()?;
+        let minus = self.op_token()?.text_range();
+        let number = literal.syntax().first_significant_token()?.text_range();
+        (minus.end() <= number.start()).then(|| TextRange::new(minus.end(), number.start()))
     }
 }
 

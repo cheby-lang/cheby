@@ -14,17 +14,22 @@
 //!   [`Entry`] borrows its [`Jit`], so safe code cannot run an entry after
 //!   its code is freed; [`Entry::run_main`] runs `main`'s thunk with the
 //!   exit-status policy of §10.10.
-//! - Dropping a [`Jit`] frees its code and data.
+//! - Code and data live in one reservation of 1 GiB of address space per
+//!   `Jit`, committed segment by segment as batches need it (see
+//!   `memory.rs`). Dropping a [`Jit`] frees it.
 //! - Runtime symbols resolve through `cheby_runtime::symbols()`; other
 //!   native symbols of `@external(native, …)` through the process's
 //!   dynamic symbol table, checked before finalizing so a missing symbol
-//!   is an error, never a panic.
+//!   is an error, never a panic. Foreign symbols are imported by address,
+//!   with no signature, and called indirectly with each call site's C
+//!   signature, so batches may bind one symbol with different signatures.
 
 use std::fmt;
 use std::marker::PhantomData;
 use std::mem::ManuallyDrop;
+use std::sync::Arc;
 
-use cranelift_jit::{ArenaMemoryProvider, JITBuilder, JITModule};
+use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::Module;
 use rustc_hash::FxHashMap;
 
@@ -36,12 +41,9 @@ use cheby_mir::{EntryKind, FnKey, LayoutDesc, LayoutRef, MirModule, Repr};
 use cheby_runtime::layout::{self as rt_layout, FieldKind, LayoutInfo};
 use cheby_runtime::{EntryConfig, EntryFn, EntryOutcome, RunConfig, RuntimeError};
 
+mod memory;
 #[cfg(test)]
 mod tests;
-
-/// The address range reserved for code and data. One arena keeps every
-/// relocation between JIT code and data in range on aarch64.
-const ARENA_SIZE: usize = 1 << 30;
 
 /// Why the JIT failed. None of these is a diagnostic about the program
 /// except [`JitError::UnresolvedSymbol`].
@@ -154,6 +156,15 @@ fn layout_info(desc: &LayoutDesc) -> Result<LayoutInfo, Ice> {
     }
 }
 
+/// The memory a [`Jit`] holds for code and data, in bytes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CodeMemory {
+    /// Address space reserved, none of it usable until committed.
+    pub reserved: usize,
+    /// Pages committed for the segments of compiled batches.
+    pub committed: usize,
+}
+
 /// A JIT session: the module, the declarations of every batch so far, and
 /// the registered layouts. Dropping it frees its code and data.
 pub struct Jit {
@@ -163,6 +174,8 @@ pub struct Jit {
     layouts: JitLayouts,
     options: CodegenOptions,
     clif: Vec<String>,
+    /// How much of the code arena is reserved and committed.
+    memory: Arc<memory::Usage>,
 }
 
 impl fmt::Debug for Jit {
@@ -186,7 +199,10 @@ impl Jit {
         Self::with_options(CodegenOptions::default())
     }
 
-    /// A JIT for the host with `options`.
+    /// A JIT for the host with `options`. Batches that bind one foreign
+    /// symbol with different C signatures (a REPL redefinition, or a retry
+    /// after a failed batch) need the default
+    /// [`ForeignImport::Address`](cheby_codegen_clif::ForeignImport::Address).
     ///
     /// # Errors
     ///
@@ -200,8 +216,9 @@ impl Jit {
             .map_err(|e| JitError::Host(e.to_string()))?;
         let mut builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
         builder.symbols(cheby_runtime::symbols());
-        let arena = ArenaMemoryProvider::new_with_size(ARENA_SIZE)
+        let arena = memory::ReservedArena::new(memory::ARENA_SIZE)
             .map_err(|e| JitError::Host(format!("cannot reserve memory for code: {e}")))?;
+        let usage = arena.usage();
         builder.memory_provider(Box::new(arena));
         let module = ManuallyDrop::new(JITModule::new(builder));
         let decls = Decls::new(module.isa())?;
@@ -211,6 +228,7 @@ impl Jit {
             layouts: JitLayouts::default(),
             options,
             clif: Vec::new(),
+            memory: usage,
         })
     }
 
@@ -259,6 +277,15 @@ impl Jit {
             .finalize_definitions()
             .map_err(|e| JitError::Codegen(CodegenError::Module(e.to_string())))?;
         Ok(())
+    }
+
+    /// How much memory this JIT holds for code and data.
+    #[must_use]
+    pub fn code_memory(&self) -> CodeMemory {
+        CodeMemory {
+            reserved: self.memory.reserved(),
+            committed: self.memory.committed(),
+        }
     }
 
     /// The CLIF text of every function compiled since the last call, when

@@ -20,7 +20,10 @@ const TIMEOUT: Duration = Duration::from_secs(60);
 )]
 fn cheby(dir: &Path, args: &[&str]) -> RunOutput {
     let mut cmd = Command::new(CHEBY);
-    cmd.args(args).current_dir(dir).env("NO_COLOR", "1");
+    cmd.arg("--color=never")
+        .args(args)
+        .current_dir(dir)
+        .env("NO_COLOR", "1");
     process::run(cmd, None, TIMEOUT).unwrap()
 }
 

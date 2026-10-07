@@ -1,0 +1,9 @@
+error[E0056]: space between `-` and the number of a negative literal
+ --> tests/ui/05-expressions/negative_literal_space_pattern.cheby:8:6
+  |
+8 |     - 1 => -1
+  |      ^
+  |
+  = note: a negative literal is written with the `-` directly before the digits
+  = help: remove the space
+

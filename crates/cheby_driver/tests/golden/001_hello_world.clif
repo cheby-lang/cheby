@@ -6,16 +6,16 @@
 ; userextname4 = cheby_rt_static_nil
 function u0:5(i64, i64) -> i64 tail {
     gv0 = symbol colocated userextname0
-    gv1 = symbol userextname4
+    gv1 = symbol userextname2
+    gv2 = symbol userextname4
     sig0 = (i64, i64) system_v
     sig1 = (i64) system_v
     sig2 = (i64) system_v
     fn0 = u0:4 sig0
-    fn1 = u0:11 sig1
-    fn2 = u0:2 sig2
+    fn1 = u0:2 sig2
 
 block1(v0: i64, v1: i64):
-    v8 -> v1
+    v9 -> v1
     v2 = get_stack_pointer.i64 
     v3 = load.i64 notrap aligned v0
     v4 = icmp ult v2, v3
@@ -24,13 +24,14 @@ block1(v0: i64, v1: i64):
 block2 cold:
     v5 = symbol_value.i64 gv0
     call fn0(v0, v5)
-    jump block0(v8)
+    jump block0(v9)
 
 block0(v6: i64):
-    call fn1(v6)
-    call fn2(v6)
     v7 = symbol_value.i64 gv1
-    return v7
+    call_indirect sig1, v7(v6)
+    call fn1(v6)
+    v8 = symbol_value.i64 gv2
+    return v8
 }
 
 ; cb$fn$std$io$println
@@ -41,16 +42,16 @@ block0(v6: i64):
 ; userextname4 = cheby_rt_static_nil
 function u0:6(i64, i64) -> i64 tail {
     gv0 = symbol colocated userextname0
-    gv1 = symbol userextname4
+    gv1 = symbol userextname2
+    gv2 = symbol userextname4
     sig0 = (i64, i64) system_v
     sig1 = (i64) system_v
     sig2 = (i64) system_v
     fn0 = u0:4 sig0
-    fn1 = u0:12 sig1
-    fn2 = u0:2 sig2
+    fn1 = u0:2 sig2
 
 block1(v0: i64, v1: i64):
-    v8 -> v1
+    v9 -> v1
     v2 = get_stack_pointer.i64 
     v3 = load.i64 notrap aligned v0
     v4 = icmp ult v2, v3
@@ -59,13 +60,14 @@ block1(v0: i64, v1: i64):
 block2 cold:
     v5 = symbol_value.i64 gv0
     call fn0(v0, v5)
-    jump block0(v8)
+    jump block0(v9)
 
 block0(v6: i64):
-    call fn1(v6)
-    call fn2(v6)
     v7 = symbol_value.i64 gv1
-    return v7
+    call_indirect sig1, v7(v6)
+    call fn1(v6)
+    v8 = symbol_value.i64 gv2
+    return v8
 }
 
 ; cb$fn$std$io$eprint
@@ -76,16 +78,16 @@ block0(v6: i64):
 ; userextname4 = cheby_rt_static_nil
 function u0:7(i64, i64) -> i64 tail {
     gv0 = symbol colocated userextname0
-    gv1 = symbol userextname4
+    gv1 = symbol userextname2
+    gv2 = symbol userextname4
     sig0 = (i64, i64) system_v
     sig1 = (i64) system_v
     sig2 = (i64) system_v
     fn0 = u0:4 sig0
-    fn1 = u0:13 sig1
-    fn2 = u0:2 sig2
+    fn1 = u0:2 sig2
 
 block1(v0: i64, v1: i64):
-    v8 -> v1
+    v9 -> v1
     v2 = get_stack_pointer.i64 
     v3 = load.i64 notrap aligned v0
     v4 = icmp ult v2, v3
@@ -94,13 +96,14 @@ block1(v0: i64, v1: i64):
 block2 cold:
     v5 = symbol_value.i64 gv0
     call fn0(v0, v5)
-    jump block0(v8)
+    jump block0(v9)
 
 block0(v6: i64):
-    call fn1(v6)
-    call fn2(v6)
     v7 = symbol_value.i64 gv1
-    return v7
+    call_indirect sig1, v7(v6)
+    call fn1(v6)
+    v8 = symbol_value.i64 gv2
+    return v8
 }
 
 ; cb$fn$std$io$eprintln
@@ -111,16 +114,16 @@ block0(v6: i64):
 ; userextname4 = cheby_rt_static_nil
 function u0:8(i64, i64) -> i64 tail {
     gv0 = symbol colocated userextname0
-    gv1 = symbol userextname4
+    gv1 = symbol userextname2
+    gv2 = symbol userextname4
     sig0 = (i64, i64) system_v
     sig1 = (i64) system_v
     sig2 = (i64) system_v
     fn0 = u0:4 sig0
-    fn1 = u0:14 sig1
-    fn2 = u0:2 sig2
+    fn1 = u0:2 sig2
 
 block1(v0: i64, v1: i64):
-    v8 -> v1
+    v9 -> v1
     v2 = get_stack_pointer.i64 
     v3 = load.i64 notrap aligned v0
     v4 = icmp ult v2, v3
@@ -129,13 +132,14 @@ block1(v0: i64, v1: i64):
 block2 cold:
     v5 = symbol_value.i64 gv0
     call fn0(v0, v5)
-    jump block0(v8)
+    jump block0(v9)
 
 block0(v6: i64):
-    call fn1(v6)
-    call fn2(v6)
     v7 = symbol_value.i64 gv1
-    return v7
+    call_indirect sig1, v7(v6)
+    call fn1(v6)
+    v8 = symbol_value.i64 gv2
+    return v8
 }
 
 ; cb$fn$hello_world$main

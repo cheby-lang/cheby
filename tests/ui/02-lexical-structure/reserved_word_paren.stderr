@@ -1,0 +1,24 @@
+error[E0013]: expected a line break or `}`, found `{`
+ --> tests/ui/02-lexical-structure/reserved_word_paren.cheby:8:14
+  |
+8 |   if (n > 0) {
+  |              ^
+  |
+  = help: Cheby has no `if`; use `case`
+
+error[E0013]: expected a line break or `}`, found `{`
+  --> tests/ui/02-lexical-structure/reserved_word_paren.cheby:16:17
+   |
+16 |   while (n > 0) {
+   |                 ^
+   |
+   = help: Cheby has no `while`; use recursion, often through a local `fn`
+
+error[E0013]: expected a line break or `}`, found `{`
+  --> tests/ui/02-lexical-structure/reserved_word_paren.cheby:22:13
+   |
+22 |   match (n) {
+   |             ^
+   |
+   = help: Cheby has no `match`; use `case`
+

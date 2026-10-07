@@ -254,9 +254,9 @@ impl<'a> Scanner<'a> {
 
     /// Identifiers and keywords (§2.3, §2.4). The token rules are
     /// permissive like tree-sitter's: `[a-z_][A-Za-z0-9_]*` and
-    /// `[A-Z][A-Za-z0-9_]*`. Spelling is checked by validation (E0006,
-    /// E0007). Non-ASCII letters join the identifier and are a grammar
-    /// error (E0005, D-127).
+    /// `[A-Z][A-Za-z0-9_]*`. Spelling is checked by name resolution where
+    /// a name is bound (E0006, E0007, [`crate::names`]). Non-ASCII letters
+    /// join the identifier and are a grammar error (E0005, D-127).
     fn ident(&mut self) {
         let pos = self.pos;
         let mut end = self.run_while(pos, is_word);

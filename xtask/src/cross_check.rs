@@ -3,7 +3,9 @@
 //! Parses every example and every UI test with `tree-sitter-cheby` at the
 //! commit pinned in `tests/tree-sitter-cheby.rev` and with the compiler
 //! parser (`cheby_syntax`). Examples and UI tests must parse, except
-//! `parse-fail` UI tests, which must be rejected. Both parsers are held to
+//! `parse-fail` UI tests, which must be rejected. Every `.cheby` file of a
+//! package UI test, a directory with its own `cheby.toml`, must parse,
+//! since a package test cannot be `parse-fail`. Both parsers are held to
 //! that intent, so the check fails whenever they disagree on a file.
 //!
 //! The compiler rejects a file if it is not UTF-8 or if `parse` reports a
@@ -183,12 +185,16 @@ fn collect(root: &Path) -> Result<BTreeMap<PathBuf, Intent>, String> {
         }
     }
     for test in ui::all(root)? {
+        // `ui::all` refuses a `parse-fail` package test, so only a
+        // single-file test can be meant as a syntax error.
         let intent = if test.header.mode.is_syntax_error() {
             Intent::Reject
         } else {
             Intent::Parse
         };
-        files.insert(test.path, intent);
+        for source in test.sources()? {
+            files.insert(source, intent);
+        }
     }
     Ok(files)
 }

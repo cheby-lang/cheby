@@ -1,6 +1,7 @@
 //! Checks of patterns: tuple patterns (E0030, D-076), rests (E0032,
-//! D-158), float and interpolated literals (E0033, D-113; E0034, §6.3)
-//! and the shapes App. A.6 does not have (E0013).
+//! D-158), float and interpolated literals (E0033, D-113; E0034, §6.3),
+//! negative literals with a space after the `-` (E0056, §5.3.1) and the
+//! shapes App. A.6 does not have (E0013).
 
 use cheby_diag::{Diagnostic, codes};
 
@@ -110,8 +111,11 @@ pub(super) fn pos_pat_list(list: PosPatList<'_>, out: &mut Vec<Diagnostic>) {
     );
 }
 
-/// E0033 and E0034 on literal patterns.
+/// E0033, E0034 and E0056 on literal patterns.
 pub(super) fn literal_pat(pat: LiteralPat<'_>, out: &mut Vec<Diagnostic>) {
+    if let Some(gap) = pat.minus_gap() {
+        super::spaced_negative_literal(pat.syntax(), gap, out);
+    }
     match pat.kind() {
         Some(LiteralPatKind::Float(_)) => out.push(
             Diagnostic::new(codes::FLOAT_PATTERN, "float literal in a pattern")

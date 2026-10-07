@@ -12,9 +12,11 @@
 //!   (E0023), and statement and declaration shapes (E0013).
 //! - [`exprs`]: holes (E0026, E0027), pipes (E0028), chained comparisons
 //!   (E0029), one-element tuples (E0030), record updates (E0031), type
-//!   arguments on interface functions (E0023).
+//!   arguments on interface functions (E0023), negative literals with a
+//!   space after the `-` (E0056).
 //! - [`patterns`]: tuple patterns (E0030), rests (E0032), float and
-//!   interpolated patterns (E0033, E0034), pattern shapes (E0013).
+//!   interpolated patterns (E0033, E0034), negative literals with a space
+//!   after the `-` (E0056), pattern shapes (E0013).
 //! - [`case`]: subjectless `case` (E0035) and empty `case` bodies (E0013).
 //! - [`types`]: tuple types (E0030) and the tuple-shape warning (W0001).
 
@@ -25,7 +27,7 @@ mod module;
 mod patterns;
 mod types;
 
-use cheby_diag::{Diagnostic, Span, TextRange};
+use cheby_diag::{Diagnostic, Span, TextRange, codes};
 
 use crate::ast::AstNode;
 use crate::lexer::checks;
@@ -70,6 +72,7 @@ fn check_node(node: SyntaxNode<'_>, out: &mut Vec<Diagnostic>) {
         SyntaxKind::ARG_LIST => run(node, exprs::arg_list, out),
         SyntaxKind::PATH_EXPR => run(node, exprs::path_expr, out),
         SyntaxKind::BIN_EXPR => run(node, exprs::bin_expr, out),
+        SyntaxKind::PREFIX_EXPR => run(node, exprs::prefix_expr, out),
         SyntaxKind::TUPLE_EXPR => run(node, exprs::tuple_expr, out),
         SyntaxKind::RECORD_EXPR => run(node, exprs::record_expr, out),
         SyntaxKind::CASE_EXPR => run(node, case::case_expr, out),
@@ -108,6 +111,39 @@ fn source<'t, N: AstNode<'t>>(view: N) -> &'t str {
 /// An empty span at `offset` in `node`'s file.
 fn empty_at(node: SyntaxNode<'_>, offset: u32) -> Span {
     Span::new(node.tree().file(), TextRange::empty(offset))
+}
+
+/// E0056: `- 5`, where a negative literal needs `-5` (§5.3.1). `gap` is
+/// the range between the `-` and the number; nothing is reported if it is
+/// empty.
+fn spaced_negative_literal(node: SyntaxNode<'_>, gap: TextRange, out: &mut Vec<Diagnostic>) {
+    if gap.is_empty() {
+        return;
+    }
+    let span = Span::new(node.tree().file(), gap);
+    let text = gap.slice(node.tree().text()).unwrap_or_default();
+    let explanation = "a negative literal is written with the `-` directly before the digits";
+    // Inside `(`, `[` and type `<…>` a line break is whitespace (§2.8), so
+    // the gap may also hold line breaks and comments. Deleting it would
+    // delete the comment, so only a gap of spaces and tabs gets a fix.
+    let diag = if text.chars().all(|c| c == ' ' || c == '\t') {
+        Diagnostic::new(
+            codes::SPACED_NEGATIVE_LITERAL,
+            "space between `-` and the number of a negative literal",
+        )
+        .with_primary(span, "")
+        .with_note(explanation)
+        .with_suggestion("remove the space", span, "")
+    } else {
+        Diagnostic::new(
+            codes::SPACED_NEGATIVE_LITERAL,
+            "whitespace or a comment between `-` and the number of a negative literal",
+        )
+        .with_primary(span, "")
+        .with_note(explanation)
+        .with_help("write the `-` directly before the number, and move any comment")
+    };
+    out.push(diag);
 }
 
 /// Whether `node` has an `ERROR` child, where the parser already reported

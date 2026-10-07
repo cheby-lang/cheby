@@ -24,6 +24,8 @@ Cheby ships as one `cheby` binary that contains the compiler, runtime, REPL, tes
 
 `cheby explain` prints the long explanation of a diagnostic code such as `E0012`, with examples and fixes ([§13.8](#138-diagnostics-and-warnings)) (D-420).
 
+Every command takes a global `--color=auto|always|never` flag, which says whether diagnostics and other errors are colored ([§13.8](#138-diagnostics-and-warnings)) (D-467).
+
 `cheby run` runs the `main` of the module named by its module path argument, for example `cheby run my_app::tools::migrate`. Without an argument it runs the root module's `main` (D-137). `main` may have any visibility, including `priv` (D-163). A module path that is malformed, names no module of the package, or names a module without `main` is a tool error (D-464). Compile errors are reported first, and then nothing runs. Warnings are printed to standard error before the program starts (D-464).
 
 `cheby run` and `cheby repl` produce no output files: they run code in memory with the JIT (D-007, D-019). Like every command, they may read and write the build cache ([§13.12.4](#13124-build-cache-and-standard-library)) (D-254, D-255).
@@ -91,6 +93,7 @@ Dependencies are fetched directly from their git URLs. There is no central regis
 - The version of a dependency is the `version` in its `cheby.toml` at the fetched tag or commit, and it is authoritative. A tag should spell the same version, such as `v1.2.0`. For a `rev`, the version at that commit is used for version selection. Two required commits of one identity that claim the same version, or a `rev` chosen by version selection while another requirement pins a different commit, are an error reported by `cheby update`, as is a `rev` whose `version` is not in the requested major (D-238).
 - Applications should commit `cheby.lock`.
 - The standard library is not a dependency. It is part of the toolchain and versioned with it (D-058).
+- A package's URL has a canonical form: without the scheme or a user name, with the host in lower case, without a trailing `.git` or `/`, and with an scp-style `git@host:path` written as `host/path`, as in `github.com/example/cheby-json`. Two URLs are one URL exactly when their canonical forms are equal ([§7.1](07-modules-and-packages.md#71-packages)), and a package identity is displayed, for example in diagnostics, by its canonical URL (D-468).
 
 A central registry may be added later. Its introduction must not break git dependencies (D-044).
 
@@ -116,6 +119,7 @@ Inside a package directory, the REPL loads all of the package's modules and depe
 In a module, names cannot be redefined. The REPL is the one exception, because it is a session rather than a scope:
 
 - **Functions** are late-bound (D-043). Redefining a function replaces it for every existing caller, through a JIT indirection table. If the signature changes, the REPL re-checks every definition that depends on it and reports each one that no longer type-checks. Until a caller is checked and compiled again, it keeps calling the old function, never code of another signature (D-456).
+- **Foreign functions** follow the same rule. The rule that every `@external(native, …)` naming one symbol gives it the same C signature ([§12.5](12-targets-and-ffi.md#125-foreign-functions)) applies to the session's current definitions only. Replaced definitions and entries that failed to compile do not count, so a redefinition may change a foreign symbol's C signature, while two live definitions with different C signatures are still an error (D-475).
 - **Types** can be redefined. Existing values keep the old type, which is now a different type from the new one, and the REPL marks it as stale when printing (D-043).
 - **`let` bindings** at the REPL prompt may be rebound with the same name, an explicit REPL exception to the no-shadowing rule, since forbidding it would make the REPL unusable (D-193). The no-shadowing rule ([§5.2.3](05-expressions.md#523-no-shadowing)) still applies inside every expression and declaration, but not between prompt entries.
 
@@ -185,7 +189,7 @@ Unused `pub` items are never reported (D-152). Warnings that need the whole pack
 
 The compiler should report errors with the source span, a short explanation, and a suggested fix where one exists, for example a new name for a shadowing binding (D-062) or `{x:?}` for a type without `Show` (D-086).
 
-Every diagnostic has a code: `E` and four digits for an error, `W` and four digits for a warning. Codes are assigned in order and never reused, and a code whose check is removed stays reserved (D-419). `cheby explain <code>` prints a code's long explanation (D-420). The first codes, `E0001` to `E0037` and `W0001`, cover the lexer, the parser, the syntax checks and the reading of the manifest and module files. A rule with its own decision gets its own code, and other syntax errors share `E0013` (D-442). The codes `E0038` to `E0055` cover imports and names, attributes, types, `main` and native symbols (D-466).
+Every diagnostic has a code: `E` and four digits for an error, `W` and four digits for a warning. Codes are assigned in order and never reused, and a code whose check is removed stays reserved (D-419). `cheby explain <code>` prints a code's long explanation (D-420). The first codes, `E0001` to `E0037` and `W0001`, cover the lexer, the parser, the syntax checks and the reading of the manifest and module files. A rule with its own decision gets its own code, and other syntax errors share `E0013` (D-442). The codes `E0038` to `E0055` cover imports and names, attributes, types, `main` and native symbols (D-466), and `E0056` whitespace or a comment between the `-` and the digits of a negative literal (D-470). Naming and reserved-word errors (`E0006`, `E0007`) are reported once, where a name is bound or declared (D-469).
 
 While the first implementation milestone (M1) is in progress, `E0038` reports a valid construct that the toolchain cannot check or run yet. A construct inside a function body leaves the function's signature checked and visible to other modules. The code is retired when M1 ends, and its explanation then says it is no longer emitted (D-451).
 
@@ -193,7 +197,9 @@ Errors that are not about the program, such as an unreadable file, a missing `ch
 
 A diagnostic is rendered as plain text: a header with its kind, code and message, a location, a snippet of the source lines it is about, with `^` under the primary span and `-` under secondary spans, and then `note` and `help` lines. A suggested fix is a `help` line (D-418).
 
-A location is `path:line:column`. Lines and columns are counted from 1, and columns count Unicode code points. A byte-order mark is not counted. The path of a file in the package is relative to the package root and uses `/` on every platform (D-421, D-443). A file of the standard library is shown as `std/` followed by its module path, such as `std/io.cheby` (D-450).
+Diagnostics and other errors written to a terminal are colored, unless the user turns color off. Color never changes the text: removing the escape sequences gives the plain rendering exactly, and that plain form is what tests compare. Control characters quoted from the source, in messages as in snippets, are shown as their Unicode control pictures, so a diagnostic never writes a terminal escape of its own. Panic reports ([§11.6](11-errors-and-panics.md#116-panic-and-todo)) and program output are never colored (D-467). _Note:_ the reference implementation colors when standard error is a terminal. It follows the `NO_COLOR`, `CLICOLOR_FORCE`, `CLICOLOR=0` and `TERM=dumb` conventions, in that order of precedence, and the global `--color` flag overrides them.
+
+A location is `path:line:column`. Lines and columns are counted from 1, and columns count Unicode code points. A byte-order mark is not counted. The path of a file in the package is relative to the package root and uses `/` on every platform (D-421, D-443). A file of the standard library is shown as `std/` followed by its module path, such as `std/io.cheby` (D-450). A file of a dependency is shown as its package's URL in the canonical form of [§13.4](#134-dependencies-and-lockfile), then `@` and the package's version, then the file's path relative to that package's root, such as `github.com/example/cheby-json@1.2.0/src/decode.cheby:4:7`. The version is the `version` in the dependency's own `cheby.toml` (D-468).
 
 A type in a diagnostic is written as users write it at that place: prelude types and the current module's own types by their bare names, such as `Option<Int>`, other types qualified with the last segment of their module path, such as `map::Map<String, Int>`, and type parameters by their names (D-463).
 

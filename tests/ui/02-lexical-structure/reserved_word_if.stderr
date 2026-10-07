@@ -1,22 +1,8 @@
-error[E0007]: `if` is a reserved word
- --> tests/ui/02-lexical-structure/reserved_word_if.cheby:7:3
-  |
-7 |   if n > 0 { 1 } else { 0 }
-  |   ^^ reserved, cannot be used as a name
-  |
-  = help: Cheby has no `if`; use `case`
-
 error[E0013]: expected a line break or `}`, found identifier
  --> tests/ui/02-lexical-structure/reserved_word_if.cheby:7:6
   |
 7 |   if n > 0 { 1 } else { 0 }
   |      ^
-
-error[E0007]: `else` is a reserved word
- --> tests/ui/02-lexical-structure/reserved_word_if.cheby:7:18
   |
-7 |   if n > 0 { 1 } else { 0 }
-  |                  ^^^^ reserved, cannot be used as a name
-  |
-  = help: Cheby has no `else`; use `case`
+  = help: Cheby has no `if`; use `case`
 

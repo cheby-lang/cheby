@@ -10,6 +10,14 @@
 //! `cargo xtask bless`, goldens of examples at or before the milestone in
 //! progress are rewritten instead of compared, unless the exit code
 //! changes (see `bless_example`).
+//!
+//! Each example also gets a second trial, `<name>::test`, that runs
+//! `cheby test` in its directory and requires exit code 0. It has no
+//! goldens, so blessing never writes anything for it. It follows the
+//! example's milestone like the run, except that a failure before the
+//! milestone is pending, never required, and that a `skip-run` example's
+//! trial stays pending until the harness can give `cheby test` the
+//! example's fixture (see [`test_expectation`]).
 
 use std::path::Path;
 use std::process::{Command, ExitCode};
@@ -39,11 +47,12 @@ fn main() -> ExitCode {
 
     let trials = examples
         .into_iter()
-        .map(|ex| {
+        .flat_map(|ex| {
             let expectation = check_only_expectation(&ex, current);
             let verdicts = verdicts.clone();
             let name = ex.name.clone();
-            Trial::test(name.clone(), move || {
+            let test_trial = test_trial(ex.clone(), current, verdicts.clone());
+            let run_trial = Trial::test(name.clone(), move || {
                 let result = if bless && expectation != Expectation::Fail {
                     bless_example(&ex)
                 } else {
@@ -52,7 +61,8 @@ fn main() -> ExitCode {
                 verdicts.judge(&name, ex.config.milestone, expectation, result)?;
                 Ok(())
             })
-            .with_kind(expectation.kind())
+            .with_kind(expectation.kind());
+            [run_trial, test_trial]
         })
         .collect();
 
@@ -72,6 +82,49 @@ fn check_only_expectation(ex: &Example, current: Milestone) -> Expectation {
         Expectation::Fail if ex.config.skip_run => Expectation::Pending,
         other => other,
     }
+}
+
+/// What the harness expects of the example's `test` blocks. An example
+/// whose `test` blocks pass before its milestone is not an error: its
+/// tests may need nothing of that milestone, or it may have none. So
+/// before the milestone a result is pending, as for a `skip-run` example
+/// (D-445). At the milestone it is pending too, and after it `cheby test`
+/// must pass (D-288).
+///
+/// A `skip-run` example's tests need its fixture as much as its run does:
+/// 020's tests call the C library's symbols, which must resolve when the
+/// program loads (D-455), and 030's modules import a git dependency that
+/// only the fixture repository serves. The harness has no way yet to give
+/// `cheby test` a fixture (OQ-P9), so that trial is always pending.
+fn test_expectation(ex: &Example, current: Milestone) -> Expectation {
+    if ex.config.skip_run {
+        return Expectation::Pending;
+    }
+    match Expectation::new(ex.config.milestone, current) {
+        Expectation::Fail => Expectation::Pending,
+        other => other,
+    }
+}
+
+/// The trial that runs `cheby test` in the example's directory, with no
+/// fixture (see [`test_expectation`]).
+fn test_trial(ex: Example, current: Milestone, verdicts: Verdicts) -> Trial {
+    let expectation = test_expectation(&ex, current);
+    let name = format!("{}::test", ex.name);
+    Trial::test(name.clone(), move || {
+        let result = cheby(&ex.dir, &["test"], &[], None).and_then(|out| match out.status {
+            Some(0) => Ok(()),
+            _ => Err(format!(
+                "`cheby test` failed ({})\nstdout:\n{}\nstderr:\n{}",
+                out.describe_status(),
+                out.stdout,
+                out.stderr
+            )),
+        });
+        verdicts.judge(&name, ex.config.milestone, expectation, result)?;
+        Ok(())
+    })
+    .with_kind(expectation.kind())
 }
 
 /// Runs the example and compares the result with its goldens.
@@ -163,7 +216,12 @@ fn cheby(
     stdin: Option<&[u8]>,
 ) -> Result<process::RunOutput, String> {
     let mut cmd = Command::new(CHEBY);
-    cmd.args(args).current_dir(dir).env("NO_COLOR", "1");
+    // `--color=never` keeps goldens plain even if the environment forces
+    // color (`CLICOLOR_FORCE`), and the example's own `env` cannot undo it.
+    cmd.arg("--color=never")
+        .args(args)
+        .current_dir(dir)
+        .env("NO_COLOR", "1");
     cmd.envs(env.iter().map(|(k, v)| (k, v)));
     process::run(cmd, stdin, TIMEOUT)
 }

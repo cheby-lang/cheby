@@ -1,7 +1,10 @@
 //! Renderer tests. Each pins the exact text, because UI-test goldens depend
 //! on it (D-418).
 
-use super::{render, render_all};
+use super::{
+    Colors, render, render_all, render_all_with, render_tool_error, render_tool_help, render_with,
+    strip_colors,
+};
 use crate::codes;
 use crate::diagnostic::Diagnostic;
 use crate::source::SourceMap;
@@ -480,4 +483,235 @@ error[E0013]: nested
   | |___^ outer
 "
     );
+}
+
+const RED: &str = "\x1b[1;91m";
+const YELLOW: &str = "\x1b[1;93m";
+const BLUE: &str = "\x1b[1;94m";
+const BOLD: &str = "\x1b[1m";
+const CYAN: &str = "\x1b[1;96m";
+const RESET: &str = "\x1b[0m";
+
+/// The colored form of the spec example pins the palette.
+#[test]
+fn colored_spec_example() {
+    let text = "fn process(s: String) -> Int {\n  let x = 1\n  let trimmed = string::trim(s)\n  let trimmed = string::lowercase(trimmed)\n  0\n}\n";
+    let (map, file) = one_file(text);
+    let diag = Diagnostic::new(codes::INVALID_INTERPOLATION, "`trimmed` is already bound")
+        .with_secondary(find(file, text, "trimmed", 0), "first bound here")
+        .with_primary(find(file, text, "trimmed", 1), "bound again here")
+        .with_help("use a new name, such as `trimmed_2`");
+    let expected = [
+        format!("{RED}error[E0012]{RESET}{BOLD}: `trimmed` is already bound{RESET}"),
+        format!("{BLUE} -->{RESET} src/main.cheby:4:7"),
+        format!("{BLUE}  |{RESET}"),
+        format!("{BLUE}3 |{RESET}   let trimmed = string::trim(s)"),
+        format!("{BLUE}  |{RESET}       {BLUE}-------{RESET} {BLUE}first bound here{RESET}"),
+        format!("{BLUE}4 |{RESET}   let trimmed = string::lowercase(trimmed)"),
+        format!("{BLUE}  |{RESET}       {RED}^^^^^^^{RESET} {RED}bound again here{RESET}"),
+        format!("{BLUE}  |{RESET}"),
+        format!("{BLUE}  ={RESET} {BOLD}help{RESET}: use a new name, such as `trimmed_2`"),
+    ];
+    let expected = expected.join("\n") + "\n";
+    assert_eq!(render_with(&diag, &map, Colors::On), expected);
+}
+
+#[test]
+fn warnings_are_yellow() {
+    let text = "fn f() -> ((Int, Int), Int) {\n  todo\n}\n";
+    let (map, file) = one_file(text);
+    let diag = Diagnostic::new(codes::TUPLE_SHAPE, "tuple with a tuple element")
+        .with_primary(find(file, text, "((Int, Int), Int)", 0), "");
+    let colored = render_with(&diag, &map, Colors::On);
+    assert!(
+        colored.starts_with(&format!("{YELLOW}warning[W0001]{RESET}")),
+        "{colored:?}"
+    );
+    assert!(
+        colored.ends_with(&format!(
+            "{BLUE}  |{RESET}           {YELLOW}^^^^^^^^^^^^^^^^^{RESET}\n"
+        )),
+        "{colored:?}"
+    );
+}
+
+/// Diagnostics of every shape the renderer draws, with their source maps.
+fn representative() -> Vec<(SourceMap, Vec<Diagnostic>)> {
+    let mut all = Vec::new();
+    let mut single = |text: &str, build: &dyn Fn(FileId, &str) -> Vec<Diagnostic>| {
+        let (map, file) = one_file(text);
+        let diags = build(file, text);
+        all.push((map, diags));
+    };
+    single("let x = f(a, b, c)\n", &|file, text| {
+        vec![
+            Diagnostic::new(codes::MULTIPLE_HOLES, "three labels")
+                .with_secondary(find(file, text, "a", 0), "first")
+                .with_secondary(find(file, text, "b", 0), "second")
+                .with_primary(find(file, text, "c", 0), "third"),
+            Diagnostic::new(codes::SYNTAX_ERROR, "overlap")
+                .with_secondary(at(file, 0, 7), "whole")
+                .with_primary(at(file, 4, 5), ""),
+            Diagnostic::new(codes::TUPLE_SHAPE, "trailing space in a label")
+                .with_primary(at(file, 0, 3), "ends with a space ")
+                .with_note("a note \nwith a second line \n"),
+        ]
+    });
+    single("a(\n  b(\n    c\n  )\n)\n", &|file, text| {
+        let inner_start = text.find("b(").unwrap();
+        let inner_end = text.find("  )").unwrap().saturating_add(3);
+        vec![
+            Diagnostic::new(codes::SYNTAX_ERROR, "nested")
+                .with_primary(at(file, 0, text.len().saturating_sub(1)), "outer")
+                .with_secondary(at(file, inner_start, inner_end), "inner")
+                .with_secondary(find(file, text, "c", 0), "leaf"),
+            Diagnostic::new(codes::TUPLE_SHAPE, "nested warning")
+                .with_secondary(at(file, 0, text.len().saturating_sub(1)), "outer")
+                .with_primary(at(file, inner_start, inner_end), "inner"),
+        ]
+    });
+    single("{\n  a\n  b\n  c\n  d\n  e\n}\n", &|file, text| {
+        vec![
+            Diagnostic::new(codes::UNCLOSED_DELIMITER, "block")
+                .with_primary(at(file, 0, text.len().saturating_sub(1)), "here")
+                .with_note("a note"),
+        ]
+    });
+    single("\tlet\tx = \"日本\" + é\u{301} \r\n", &|file, text| {
+        vec![
+            Diagnostic::new(codes::SYNTAX_ERROR, "wide")
+                .with_secondary(find(file, text, "日本", 0), "wide 日本")
+                .with_primary(find(file, text, "é", 0), "narrow")
+                .with_help("help one")
+                .with_suggestion("help two", at(file, 0, 1), "y"),
+        ]
+    });
+    single("fn f() {", &|file, text| {
+        vec![
+            Diagnostic::new(codes::UNCLOSED_DELIMITER, "eof")
+                .with_primary(at(file, text.len(), text.len()), "expected `}`")
+                .with_secondary(find(file, text, "{", 0), "unclosed"),
+        ]
+    });
+    single("a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk\n", &|file, text| {
+        vec![
+            Diagnostic::new(codes::SYNTAX_ERROR, "gaps")
+                .with_primary(find(file, text, "a", 0), "one")
+                .with_secondary(find(file, text, "c", 0), "two")
+                .with_secondary(find(file, text, "k", 0), "three"),
+        ]
+    });
+    single("let s = \"ab\x1b[31mcd\"\n", &|file, text| {
+        vec![
+            Diagnostic::new(codes::CONFLICTING_NATIVE_SYMBOL, "symbol `ab\x1b[31mcd`")
+                .with_primary(find(file, text, "\"", 0), "label `\x1b[2J`")
+                .with_note("note `\x1b]0;t\x07`")
+                .with_help("help `\x7f\r`"),
+        ]
+    });
+    let mut map = SourceMap::new();
+    let lib = map
+        .add_file("src/lib.cheby", "pub fn helper() {\n}\n")
+        .unwrap();
+    let main = map
+        .add_file("src/main.cheby", "fn main() {\n  helper(1)\n}\n")
+        .unwrap();
+    let diags = vec![
+        Diagnostic::new(codes::SYNTAX_ERROR, "two files")
+            .with_secondary(at(lib, 7, 13), "declared here")
+            .with_primary(at(main, 14, 23), "called here"),
+        Diagnostic::new(codes::INVALID_MANIFEST, "no package name")
+            .with_note("first line\nsecond line")
+            .with_help("add `name = \"my_app\"`"),
+    ];
+    all.push((map, diags));
+    all
+}
+
+/// Color only adds escapes: stripping them gives the plain text exactly.
+#[test]
+fn stripping_colors_gives_the_plain_text() {
+    for (map, diags) in representative() {
+        let plain = render_all(&diags, &map);
+        let colored = render_all_with(&diags, &map, Colors::On);
+        assert_ne!(colored, plain);
+        assert_eq!(strip_colors(&colored), plain);
+        for diag in &diags {
+            let one = render_with(diag, &map, Colors::On);
+            assert_eq!(strip_colors(&one), render(diag, &map));
+        }
+    }
+}
+
+/// Every style is closed before the end of its line.
+#[test]
+fn styles_end_with_their_line() {
+    for (map, diags) in representative() {
+        let colored = render_all_with(&diags, &map, Colors::On);
+        for line in colored.lines() {
+            let opened = line.matches("\x1b[1").count();
+            let closed = line.matches(RESET).count();
+            assert_eq!(opened, closed, "{line:?}");
+        }
+    }
+}
+
+#[test]
+fn off_is_plain() {
+    for (map, diags) in representative() {
+        assert_eq!(
+            render_all_with(&diags, &map, Colors::Off),
+            render_all(&diags, &map)
+        );
+    }
+}
+
+#[test]
+fn tool_messages() {
+    assert_eq!(
+        render_tool_error("no `cheby.toml`", Colors::Off),
+        "error: no `cheby.toml`\n"
+    );
+    assert_eq!(
+        render_tool_error("no `cheby.toml`", Colors::On),
+        format!("{RED}error{RESET}{BOLD}: no `cheby.toml`{RESET}\n")
+    );
+    assert_eq!(
+        render_tool_help("try this", Colors::Off),
+        "help: try this\n"
+    );
+    assert_eq!(
+        render_tool_help("try this", Colors::On),
+        format!("{CYAN}help{RESET}: try this\n")
+    );
+}
+
+#[test]
+fn strip_colors_keeps_other_escapes() {
+    assert_eq!(strip_colors("a\x1b[1;91mb\x1b[0mc"), "abc");
+    assert_eq!(strip_colors("\x1b[m"), "");
+    assert_eq!(strip_colors("\x1b[2J x \x1b[1"), "\x1b[2J x \x1b[1");
+    assert_eq!(strip_colors("\x1b]0;t\x07"), "\x1b]0;t\x07");
+}
+
+/// Control characters quoted from the source, in a message, a label, a
+/// note or a help, are shown as control pictures, so plain output never
+/// holds an escape and colored output holds only its own SGR escapes.
+#[test]
+fn quoted_control_characters_are_shown_as_pictures() {
+    let text = "let s = \"ab\x1b[31mcd\"\n";
+    let (map, file) = one_file(text);
+    let diag = Diagnostic::new(codes::CONFLICTING_NATIVE_SYMBOL, "symbol `ab\x1b[31mcd`")
+        .with_primary(find(file, text, "\"", 0), "label `\x1b[2J`")
+        .with_note("note `\x1b]0;t\x07`")
+        .with_help("help `\x7f\r`");
+    let plain = render(&diag, &map);
+    assert!(!plain.contains('\x1b'), "{plain}");
+    assert!(plain.contains("symbol `ab\u{241b}[31mcd`"), "{plain}");
+    assert!(plain.contains("label `\u{241b}[2J`"), "{plain}");
+    assert!(plain.contains("note `\u{241b}]0;t\u{2407}`"), "{plain}");
+    assert!(plain.contains("help `\u{2421}\u{240d}`"), "{plain}");
+    let colored = render_with(&diag, &map, Colors::On);
+    assert_eq!(strip_colors(&colored), plain);
+    assert!(!strip_colors(&colored).contains('\x1b'));
 }

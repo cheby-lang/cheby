@@ -1,0 +1,11 @@
+// @mode: check-fail
+// @decisions: D-128, D-469
+//! A reserved word that nothing binds is reported where it is used, with
+//! the word's help, instead of as a name that cannot be found.
+
+import std::io
+
+fn main() {
+  io::println("start")
+  return("done")
+}

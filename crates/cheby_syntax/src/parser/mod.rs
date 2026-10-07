@@ -16,9 +16,9 @@
 //!
 //! Where the spec rejects a shape that `tree-sitter-cheby` accepts, the
 //! parser accepts and validation reports (D-424). Line breaks (§2.8),
-//! lexical errors (§2.1, §2.5) and reserved keywords (§2.4) stay grammar
-//! errors even where `tree-sitter-cheby` accepts them; those cases are
-//! grammar mismatches.
+//! lexical errors (§2.1, §2.5) and reserved keywords (§2.4) are grammar
+//! errors in both parsers; `tree-sitter-cheby` rejects them too from the
+//! commit pinned in `tests/tree-sitter-cheby.rev`.
 
 mod grammar;
 mod input;
@@ -31,8 +31,8 @@ use cheby_diag::{Diagnostic, FileId, Span, TextRange, TextSize};
 
 use self::input::{Consumed, Input, NlMode};
 use crate::SyntaxKind::{
-    self, EOF, ERROR, ERROR_TOKEN, FN_KW, GE, GT, L_BRACE, L_BRACK, L_PAREN, LOWER_IDENT, LT,
-    NEWLINE, R_BRACE, R_BRACK, R_PAREN, SHR, WHITESPACE,
+    self, AT, AT_BANG, COMMENT, EOF, ERROR, ERROR_TOKEN, FN_KW, GE, GT, L_BRACE, L_BRACK, L_PAREN,
+    LOWER_IDENT, LT, NEWLINE, R_BRACE, R_BRACK, R_PAREN, SHR, WHITESPACE,
 };
 use crate::TokenSet;
 use crate::event::Event;
@@ -56,7 +56,86 @@ fn parse_with_fuel(file: FileId, lexed: &Lexed, text: &str) -> (Vec<Event>, Vec<
     let out_of_fuel = p.input.out_of_fuel();
     let mut errors = p.errors;
     errors.sort_by_key(|d| d.primary_span().map(|s| s.range.start()));
+    explain_reserved_words(lexed, text, &mut errors);
     (p.events, errors, out_of_fuel)
+}
+
+/// Adds the reserved word's help (§2.4, D-128) to a grammar error (E0013,
+/// E0014) at a reserved word, right after one on the same line, or right
+/// after a parenthesized group that follows one on the same line. `if` in
+/// `if n > 0 { … }` is a name, so the error is at `n`; in `if (n > 0) {`
+/// the parser reads a call, so the error is at `{`. Either way the help
+/// says that Cheby has no `if`. A reserved word where a name is bound is
+/// reported by name resolution (E0007), not here.
+fn explain_reserved_words(lexed: &Lexed, text: &str, errors: &mut [Diagnostic]) {
+    let tokens = lexed.tokens();
+    for diag in errors {
+        if diag.code != codes::SYNTAX_ERROR && diag.code != codes::UNEXPECTED_LINE_BREAK {
+            continue;
+        }
+        let Some(span) = diag.primary_span() else {
+            continue;
+        };
+        let at = span.range.start();
+        // The first token that starts at or after the error.
+        let next = tokens.partition_point(|t| t.start < at);
+        let here =
+            (lexed.kind(next) == LOWER_IDENT && lexed.range(next).start() == at).then_some(next);
+        let previous = next.checked_sub(1).and_then(|i| previous_on_line(lexed, i));
+        let before = previous.filter(|&i| lexed.kind(i) == LOWER_IDENT);
+        let before_group = previous
+            .filter(|&i| lexed.kind(i) == R_PAREN)
+            .and_then(|close| matching_open_paren(lexed, close))
+            .and_then(|open| open.checked_sub(1))
+            .and_then(|i| previous_on_line(lexed, i))
+            .filter(|&i| lexed.kind(i) == LOWER_IDENT);
+        let help = [here, before, before_group]
+            .into_iter()
+            .flatten()
+            .find_map(|i| {
+                let after_at = i
+                    .checked_sub(1)
+                    .is_some_and(|prev| matches!(lexed.kind(prev), AT | AT_BANG));
+                if after_at {
+                    return None; // An attribute name binds nothing (D-435).
+                }
+                crate::names::reserved_word_help(lexed.text(text, i))
+            });
+        if let Some(help) = help {
+            diag.helps.push(cheby_diag::Help {
+                message: help,
+                edits: Vec::new(),
+            });
+        }
+    }
+}
+
+/// The last token at or before raw index `i` that is not whitespace or a
+/// comment, if no line break comes first.
+fn previous_on_line(lexed: &Lexed, i: usize) -> Option<usize> {
+    (0..=i)
+        .rev()
+        .find(|&j| !matches!(lexed.kind(j), WHITESPACE | COMMENT))
+        .filter(|&j| lexed.kind(j) != NEWLINE)
+}
+
+/// The `(` that the `)` at raw index `close` closes, on the same line.
+fn matching_open_paren(lexed: &Lexed, close: usize) -> Option<usize> {
+    let mut depth = 0_usize;
+    for j in (0..=close).rev() {
+        match lexed.kind(j) {
+            R_PAREN => depth = depth.checked_add(1)?,
+            L_PAREN => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(j);
+                }
+            }
+            NEWLINE => return None,
+            _ => {}
+        }
+    }
+    None
 }
 
 pub(crate) struct Parser<'a> {

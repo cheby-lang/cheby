@@ -1,35 +1,3 @@
-error[E0006]: name `camelCase` is not in snake_case
- --> permissive.cheby:3:4
-  |
-3 | fn camelCase(myValue: Int) -> My_Type { myValue }
-  |    ^^^^^^^^^
-  |
-  = help: write `camel_case`
-
-error[E0006]: name `myValue` is not in snake_case
- --> permissive.cheby:3:14
-  |
-3 | fn camelCase(myValue: Int) -> My_Type { myValue }
-  |              ^^^^^^^
-  |
-  = help: write `my_value`
-
-error[E0006]: type name `My_Type` is not in PascalCase
- --> permissive.cheby:3:31
-  |
-3 | fn camelCase(myValue: Int) -> My_Type { myValue }
-  |                               ^^^^^^^
-  |
-  = help: write `MyType`
-
-error[E0006]: name `myValue` is not in snake_case
- --> permissive.cheby:3:41
-  |
-3 | fn camelCase(myValue: Int) -> My_Type { myValue }
-  |                                         ^^^^^^^
-  |
-  = help: write `my_value`
-
 error[E0021]: a top-level function parameter must be a name
  --> permissive.cheby:4:13
   |
@@ -343,14 +311,6 @@ error[E0013]: a local function cannot have type parameters
    |               ^^^
    |
    = help: local functions are monomorphic (D-123); declare a top-level function to make it generic
-
-error[E0007]: `if` is a reserved word
-  --> permissive.cheby:39:3
-   |
-39 |   if
-   |   ^^ reserved, cannot be used as a name
-   |
-   = help: Cheby has no `if`; use `case`
 
 error[E0008]: `0x` is not followed by any hexadecimal digit
   --> permissive.cheby:40:3

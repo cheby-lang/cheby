@@ -47,7 +47,7 @@ Because `UPPER` names are always constructors and `LOWER` names are always bindi
 
 ## 6.3 Literal patterns
 
-An integer literal pattern (optionally negative, [§5.3.1](05-expressions.md#531-negative-literals)) matches an integer of the subject's type that is equal to it. A string literal pattern matches an equal string. String literal patterns must not contain interpolation. Raw strings are allowed.
+An integer literal pattern (optionally negative, with the `-` directly before the digits, [§5.3.1](05-expressions.md#531-negative-literals), D-470) matches an integer of the subject's type that is equal to it. A string literal pattern matches an equal string. String literal patterns must not contain interpolation. Raw strings are allowed.
 
 `True` and `False` are constructor patterns, not literal patterns ([§3.4](03-types.md#34-bool)).
 

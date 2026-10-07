@@ -4,7 +4,8 @@
 //! - Examples parse with no grammar error and validate with no diagnostic.
 //! - UI tests parse with no grammar error, except `parse-fail` tests,
 //!   which must have at least one (D-424: `check-fail` tests hold only
-//!   validation or later errors).
+//!   validation or later errors). Every file of a package UI test must
+//!   parse, since a package test cannot be `parse-fail`.
 //! - Every tree prints back exactly its input.
 //!
 //! The tree shapes themselves are pinned by the parser's goldens in
@@ -48,13 +49,6 @@ fn check_file(path: &Path) -> Result<Checked, String> {
     })
 }
 
-/// Example files known to get a validation warning, with the code. Each
-/// is an open issue in the example, not in the compiler.
-const KNOWN_WARNINGS: &[(&str, &str)] = &[
-    // A `(Int, Int, Int, Int)` result type (D-243).
-    ("docs/examples/030_shop_service/src/checkout.cheby", "W0001"),
-];
-
 #[test]
 fn examples_parse_and_validate_cleanly() {
     let root = repo_root();
@@ -68,17 +62,7 @@ fn examples_parse_and_validate_cleanly() {
             } = check_file(&path).unwrap();
             assert!(lossless, "{}: not lossless", path.display());
             assert_eq!(errors, "", "{}", path.display());
-            let shown = display_relative(&path, &root);
-            match KNOWN_WARNINGS.iter().find(|(file, _)| *file == shown) {
-                Some((_, code)) => {
-                    assert!(
-                        validation.starts_with(&format!("warning[{code}]")),
-                        "{shown}: {validation}"
-                    );
-                    assert!(!validation.contains("error["), "{shown}: {validation}");
-                }
-                None => assert_eq!(validation, "", "{shown}"),
-            }
+            assert_eq!(validation, "", "{}", display_relative(&path, &root));
             count += 1;
         }
     }
@@ -91,22 +75,23 @@ fn ui_tests_follow_their_mode() {
     let tests = ui::all(&root).unwrap();
     assert!(!tests.is_empty());
     for test in tests {
-        let Checked {
-            lossless, errors, ..
-        } = check_file(&test.path).unwrap();
-        assert!(lossless, "{}: not lossless", test.name);
-        if test.header.mode.is_syntax_error() {
-            assert_ne!(
-                errors, "",
-                "{}: `parse-fail`, but the parser reports no grammar error",
-                test.name
-            );
-        } else {
-            assert_eq!(
-                errors, "",
-                "{}: grammar errors in a file that must parse",
-                test.name
-            );
+        for path in test.sources().unwrap() {
+            let shown = display_relative(&path, &root);
+            let Checked {
+                lossless, errors, ..
+            } = check_file(&path).unwrap();
+            assert!(lossless, "{shown}: not lossless");
+            if test.header.mode.is_syntax_error() {
+                assert_ne!(
+                    errors, "",
+                    "{shown}: `parse-fail`, but the parser reports no grammar error"
+                );
+            } else {
+                assert_eq!(
+                    errors, "",
+                    "{shown}: grammar errors in a file that must parse"
+                );
+            }
         }
     }
 }

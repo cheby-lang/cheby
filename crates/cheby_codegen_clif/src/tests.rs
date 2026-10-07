@@ -274,3 +274,116 @@ fn builtin_layout_ids() {
     );
     assert!(ids.id(&cheby_mir::LayoutRef::Ctor(def(1, 0))).is_err());
 }
+
+/// `g<index>() { call_foreign "labs"(params...) ; return Nil }`: a wrapper
+/// of `labs` with the C parameters `params`, as item `index` of `app`.
+fn labs_unit(index: u32, params: &[CType]) -> MirModule {
+    let g = def(1, index);
+    let block = Block {
+        params: Vec::new(),
+        stmts: vec![Stmt::Eval(cheby_mir::Rvalue::CallForeign {
+            symbol: "labs".into(),
+            sig: ForeignSig {
+                params: params.to_vec(),
+                ret: CType::Void,
+            },
+            args: params
+                .iter()
+                .map(|_| {
+                    Operand::Const(Const::Sized {
+                        repr: Repr::I64,
+                        bits: 0,
+                    })
+                })
+                .collect(),
+        })],
+        term: Terminator::Return(Operand::Const(Const::Nil)),
+    };
+    let item = format!("g{index}");
+    MirModule {
+        unit: UnitKind::Code(ModuleId::from_u32(1)),
+        path: "app".into(),
+        functions: vec![Function {
+            key: FnKey::Item(g),
+            abi: Abi::Cheby,
+            params: Vec::new(),
+            ret: Repr::Value,
+            locals: IndexVec::from_raw(Vec::new()).unwrap(),
+            blocks: IndexVec::from_raw(vec![block]).unwrap(),
+            span: Span::new(FileId::new(0), TextRange::new(0, 0)),
+            strings: IndexVec::from_raw(vec!["a.cheby:1:4".into()]).unwrap(),
+            entry_loc: Some(StrId::from_u32(0)),
+        }],
+        callees: vec![CalleeDecl {
+            def: g,
+            sig: AbiSig {
+                abi: Abi::Cheby,
+                params: Vec::new(),
+                ret: Repr::Value,
+            },
+        }],
+        layouts: Vec::new(),
+        names: vec![DefName {
+            def: g,
+            module: "app".into(),
+            item: item.as_str().into(),
+        }],
+    }
+}
+
+/// Under `ForeignImport::Address` (the JIT's mode) a foreign symbol is a
+/// signature-free data import called with `call_indirect`, so later
+/// batches may call it with another C signature, as a REPL redefinition
+/// may (D-455 counts only the current definitions). Under
+/// `ForeignImport::Function` a module keeps one signature per symbol.
+#[test]
+fn foreign_imports_by_address_allow_new_signatures() {
+    let cx = CodegenCx {
+        layouts: &BuiltinLayouts,
+    };
+    let jit = CodegenOptions {
+        capture_clif: true,
+        ..CodegenOptions::default()
+    };
+    assert_eq!(jit.foreign_import, ForeignImport::Address);
+    let mut m = module();
+    let mut decls = Decls::new(cranelift_module::Module::isa(&m)).unwrap();
+    for (index, params) in [(0, &[CType::I64][..]), (1, &[CType::I64, CType::I64][..])] {
+        let units = [labs_unit(index, params)];
+        declare(&mut m, &mut decls, &units, &cx, &jit).unwrap();
+        let clif = define(&mut m, &units, &mut decls, &cx, &jit).unwrap();
+        let text = clif.join("\n");
+        assert!(text.contains("= labs"), "{text}");
+        assert!(text.contains("symbol_value"), "{text}");
+        assert!(text.contains("call_indirect"), "{text}");
+    }
+    assert_eq!(decls.foreign_symbols(), vec!["labs"]);
+
+    let aot = CodegenOptions {
+        call_mode: CallMode::Direct,
+        foreign_import: ForeignImport::Function,
+        ..CodegenOptions::default()
+    };
+    let mut m = module();
+    let mut decls = Decls::new(cranelift_module::Module::isa(&m)).unwrap();
+    declare(
+        &mut m,
+        &mut decls,
+        &[labs_unit(0, &[CType::I64])],
+        &cx,
+        &aot,
+    )
+    .unwrap();
+    let err = declare(
+        &mut m,
+        &mut decls,
+        &[labs_unit(1, &[CType::I64, CType::I64])],
+        &cx,
+        &aot,
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string().contains("two different signatures"),
+        "{err}"
+    );
+}

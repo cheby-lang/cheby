@@ -32,7 +32,7 @@ A `///` comment must be followed, possibly after more `///` lines, by a top-leve
 
 ## 2.3 Identifiers
 
-There are two identifier classes. Their spelling is enforced by the lexer, which is how the naming conventions in D-059 are enforced:
+There are two identifier classes. Their spelling is how the naming conventions of D-059 are enforced:
 
 ```ebnf
 LOWER = ( "a"…"z" | "_" ) { "a"…"z" | "0"…"9" | "_" } ;   (* snake_case *)
@@ -42,7 +42,7 @@ UPPER = "A"…"Z" { "A"…"Z" | "a"…"z" | "0"…"9" } ;          (* PascalCase
 - `LOWER` names values, functions, constants, modules and packages. Every binding is a `LOWER` name.
 - `UPPER` names types, type parameters, constructors and interfaces.
 
-An identifier that starts with a lower-case letter but contains an upper-case letter (`myValue`), or starts with an upper-case letter and contains `_` (`My_Type`), is a compile error with a suggested spelling.
+An identifier that starts with a lower-case letter but contains an upper-case letter (`myValue`), or starts with an upper-case letter and contains `_` (`My_Type`), is a compile error with a suggested spelling. The error is reported once, where the name is bound or declared, and not at each use (D-469).
 
 The single underscore `_` is not an identifier. It is the wildcard pattern and the function-capture placeholder. A `LOWER` identifier that starts with `_` (`_unused`) is a binding that suppresses the unused-variable warning (D-080).
 
@@ -69,6 +69,8 @@ go
 
 They are reserved so the compiler can give targeted errors for constructs Cheby deliberately lacks (for example "Cheby has no `if`, use `case`", or "Cheby has no `go`, spawn a fiber in a scope" for Go's `go` statement), and so they stay free for later additions, since adding keywords after 1.0 would break code (D-075, D-128).
 
+A reserved word used as a name is a compile error, reported once where the name is bound or declared, or where it is used if nothing binds it. When a reserved word breaks the grammar instead, as `if` does in `if n > 0 { 1 }`, the syntax error carries the targeted help (D-469).
+
 `Self` is a reserved `UPPER` identifier, valid only inside interface declarations ([chapter 8](08-interfaces.md)).
 
 `True`, `False`, `Nil`, `Ok`, `Err`, `Some`, `None`, `Less`, `Equal` and `Greater` are not keywords. They are constructors from the prelude ([§7.6](07-modules-and-packages.md#76-prelude)).
@@ -85,7 +87,7 @@ BIN_INT  = "0b" bin_digit { bin_digit | "_" } ;
 OCT_INT  = "0o" oct_digit { oct_digit | "_" } ;
 ```
 
-Underscores are separators and carry no meaning. An integer literal has no sign: `-5` is unary minus applied to `5`, but see [§5.3](05-expressions.md#53-literals) for how negative literals are range-checked. There are no type suffixes (D-084). A literal's type comes from context ([§3.3.4](03-types.md#334-numeric-literals)).
+Underscores are separators and carry no meaning. An integer literal has no sign: `-5` is unary minus applied to `5`, written with no space between them, but see [§5.3](05-expressions.md#53-literals) for how negative literals are range-checked. There are no type suffixes (D-084). A literal's type comes from context ([§3.3.4](03-types.md#334-numeric-literals)).
 
 Octal literals `0o…` are allowed alongside the decimal, hex and binary literals of D-084 (D-129), since Unix permission bits are a common FFI need.
 

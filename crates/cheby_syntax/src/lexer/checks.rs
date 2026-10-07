@@ -2,10 +2,13 @@
 //! design).
 //!
 //! `tree-sitter-cheby` accepts these inputs, so the parser does too, and
-//! validation reports them: a lone CR (E0002), names that break the case
-//! conventions (E0006), reserved words used as names (E0007), leading zeros
-//! and `_` after a base prefix (E0008), invalid escapes (E0011) and
-//! whitespace inside interpolation braces (E0012).
+//! validation reports them: a lone CR (E0002), leading zeros and `_` after
+//! a base prefix (E0008), invalid escapes (E0011) and whitespace inside
+//! interpolation braces (E0012).
+//!
+//! Names that break the case conventions (E0006) and reserved words used
+//! as names (E0007) are not checked here: name resolution reports them
+//! once, where the name is bound or declared (see [`crate::names`]).
 
 use cheby_diag::{Diagnostic, Span, TextRange, TextSize, codes};
 
@@ -20,8 +23,6 @@ pub(crate) fn check_tokens(tree: &SyntaxTree, out: &mut Vec<Diagnostic>) {
     let mut in_interpolation = false;
     for token in tree.root().tokens() {
         match token.kind() {
-            SyntaxKind::LOWER_IDENT => lower_ident(token, out),
-            SyntaxKind::UPPER_IDENT => upper_ident(token, out),
             SyntaxKind::INT_NUMBER | SyntaxKind::FLOAT_NUMBER => number(token, out),
             SyntaxKind::STRING_ESCAPE => escape(token, out),
             SyntaxKind::INTERP_START => in_interpolation = true,
@@ -88,118 +89,6 @@ fn lone_carriage_returns(tree: &SyntaxTree, out: &mut Vec<Diagnostic>) {
             .with_help("save the file with LF or CRLF line endings"),
         );
     }
-}
-
-/// E0007 for reserved words, E0006 for `LOWER` names with upper-case
-/// letters (§2.3, §2.4, D-059, D-128, D-240).
-fn lower_ident(token: SyntaxToken<'_>, out: &mut Vec<Diagnostic>) {
-    let text = token.text();
-    if !text.is_ascii() {
-        return; // E0005 was reported by the lexer.
-    }
-    // An attribute's name is not a binding: `@async` is an attribute
-    // (§4.8, §12.5.2) although `async` is reserved.
-    if token
-        .parent()
-        .is_some_and(|p| matches!(p.kind(), SyntaxKind::ATTR | SyntaxKind::INNER_ATTR))
-    {
-        return;
-    }
-    if let Some(help) = reserved_word_help(text) {
-        out.push(
-            Diagnostic::new(codes::RESERVED_WORD, format!("`{text}` is a reserved word"))
-                .with_primary(token.span(), "reserved, cannot be used as a name")
-                .with_help(help),
-        );
-    } else if text.bytes().any(|b| b.is_ascii_uppercase()) {
-        let suggestion = to_snake_case(text);
-        out.push(
-            Diagnostic::new(
-                codes::NAMING_CONVENTION,
-                format!("name `{text}` is not in snake_case"),
-            )
-            .with_primary(token.span(), "")
-            .with_suggestion(format!("write `{suggestion}`"), token.span(), suggestion),
-        );
-    }
-}
-
-/// E0006 for `UPPER` names with `_` (§2.3, D-059).
-fn upper_ident(token: SyntaxToken<'_>, out: &mut Vec<Diagnostic>) {
-    let text = token.text();
-    if !text.is_ascii() || !text.contains('_') {
-        return;
-    }
-    let suggestion = to_pascal_case(text);
-    out.push(
-        Diagnostic::new(
-            codes::NAMING_CONVENTION,
-            format!("type name `{text}` is not in PascalCase"),
-        )
-        .with_primary(token.span(), "")
-        .with_suggestion(format!("write `{suggestion}`"), token.span(), suggestion),
-    );
-}
-
-/// The targeted help for a reserved word (§2.4, D-128, D-240), or `None`
-/// if `word` is not reserved.
-fn reserved_word_help(word: &str) -> Option<String> {
-    let help = match word {
-        "if" | "else" | "match" => format!("Cheby has no `{word}`; use `case`"),
-        "for" | "while" | "loop" | "break" | "continue" => {
-            format!("Cheby has no `{word}`; use recursion, often through a local `fn`")
-        }
-        "return" => "Cheby has no `return`; a function returns the value of its body".to_owned(),
-        "mut" => "values are immutable; bind a new name".to_owned(),
-        "impl" | "trait" => {
-            format!("Cheby has no `{word}`; use module functions and `interface`")
-        }
-        "struct" | "enum" => format!("Cheby has no `{word}`; use `type`"),
-        "go" => "Cheby has no `go`; spawn a fiber in a scope".to_owned(),
-        "async" | "await" | "macro" | "self" | "super" | "where" | "yield" => {
-            "this word is reserved for future use".to_owned()
-        }
-        _ => return None,
-    };
-    Some(help)
-}
-
-/// `myValue` → `my_value`, `parseHTTPRequest` → `parse_http_request`.
-fn to_snake_case(text: &str) -> String {
-    let mut out = String::with_capacity(text.len().saturating_add(4));
-    let mut chars = text.chars().peekable();
-    let mut prev: Option<char> = None;
-    while let Some(c) = chars.next() {
-        if c.is_ascii_uppercase() {
-            let next_lower = chars.peek().is_some_and(char::is_ascii_lowercase);
-            let boundary = prev.is_some_and(|p| {
-                p.is_ascii_lowercase()
-                    || p.is_ascii_digit()
-                    || (p.is_ascii_uppercase() && next_lower)
-            });
-            if boundary && !out.ends_with('_') {
-                out.push('_');
-            }
-            out.push(c.to_ascii_lowercase());
-        } else {
-            out.push(c);
-        }
-        prev = Some(c);
-    }
-    out
-}
-
-/// `My_Type` → `MyType`, `HTTP_server` → `HTTPServer`.
-fn to_pascal_case(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for part in text.split('_') {
-        let mut chars = part.chars();
-        if let Some(first) = chars.next() {
-            out.push(first.to_ascii_uppercase());
-            out.extend(chars);
-        }
-    }
-    out
 }
 
 /// E0008, validation cases: a decimal literal with a leading zero (§2.5.1)
@@ -319,7 +208,7 @@ mod tests {
 
     use cheby_diag::{Diagnostic, FileId};
 
-    use super::{check_tokens, to_pascal_case, to_snake_case};
+    use super::check_tokens;
     use crate::lexer::lex;
     use crate::{event::Event, tree};
 
@@ -341,55 +230,19 @@ mod tests {
     }
 
     #[test]
-    fn case_conversions() {
-        assert_eq!(to_snake_case("myValue"), "my_value");
-        assert_eq!(to_snake_case("parseHTTPRequest"), "parse_http_request");
-        assert_eq!(to_snake_case("x1Y"), "x1_y");
-        assert_eq!(to_snake_case("_privateThing"), "_private_thing");
-        assert_eq!(to_snake_case("a_B"), "a_b");
-        assert_eq!(to_pascal_case("My_Type"), "MyType");
-        assert_eq!(to_pascal_case("HTTP_server"), "HTTPServer");
-        assert_eq!(to_pascal_case("T_"), "T");
-    }
-
-    #[test]
     fn clean_code_has_no_diagnostics() {
         let text = "fn main() {\r\n  let _x1 = \"a {b.c:?} \\{ \\u{1F600}\"\r\n  0x1F + 0 + 0.5 + 10e3\r\n}\n";
         assert_eq!(codes(text), Vec::<String>::new());
     }
 
+    /// Naming (E0006) and reserved words (E0007) are left to name
+    /// resolution, which reports them once, where the name is bound.
     #[test]
-    fn naming_and_reserved() {
-        let diags = check("myValue My_Type if go self Self HTTPServer");
-        let shown: Vec<_> = diags
-            .iter()
-            .map(|d| (d.code.to_string(), d.message.as_str()))
-            .collect();
+    fn names_are_not_checked_per_token() {
         assert_eq!(
-            shown,
-            [
-                ("E0006".to_owned(), "name `myValue` is not in snake_case"),
-                (
-                    "E0006".to_owned(),
-                    "type name `My_Type` is not in PascalCase"
-                ),
-                ("E0007".to_owned(), "`if` is a reserved word"),
-                ("E0007".to_owned(), "`go` is a reserved word"),
-                ("E0007".to_owned(), "`self` is a reserved word"),
-            ]
+            codes("myValue My_Type if go self Self HTTPServer caféBar"),
+            Vec::<String>::new()
         );
-        assert_eq!(diags[0].helps[0].edits[0].replacement, "my_value");
-        assert_eq!(diags[1].helps[0].edits[0].replacement, "MyType");
-        assert_eq!(diags[2].helps[0].message, "Cheby has no `if`; use `case`");
-        assert_eq!(
-            diags[3].helps[0].message,
-            "Cheby has no `go`; spawn a fiber in a scope"
-        );
-    }
-
-    #[test]
-    fn non_ascii_names_are_left_to_the_lexer() {
-        assert_eq!(codes("caféBar"), Vec::<String>::new());
     }
 
     #[test]

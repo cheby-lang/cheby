@@ -16,6 +16,7 @@ use cheby_mir::{
 };
 use cheby_runtime::abi;
 
+use crate::decls::ForeignDecl;
 use crate::runtime::RuntimeFunc;
 use crate::sig::{self, WORD, repr_type};
 use crate::{CallMode, CodegenCx, CodegenError, CodegenOptions, Decls};
@@ -237,12 +238,33 @@ impl Translator<'_, '_> {
         match value {
             Rvalue::Use(op) => self.operand(op).map(Some),
             Rvalue::Call { callee, args } => self.call(callee, args, false),
-            Rvalue::CallForeign { symbol, args, .. } => {
-                let (id, signature) = self.decls.foreign(symbol)?;
-                let signature = signature.clone();
-                let f = self.func_ref(id, &signature, false);
+            Rvalue::CallForeign { symbol, sig, args } => {
                 let vals = self.operands(args)?;
-                let inst = self.b.ins().call(f, &vals);
+                let inst = match self.decls.foreign(symbol)?.clone() {
+                    ForeignDecl::Function(id, signature) => {
+                        let f = self.func_ref(id, &signature, false);
+                        self.b.ins().call(f, &vals)
+                    }
+                    // Signature-free imports: the call site's own C
+                    // signature (`ForeignImport::Address`).
+                    ForeignDecl::Data(id) => {
+                        let address = self.data_address(id, false);
+                        let s = self.b.import_signature(sig::foreign_signature(
+                            sig,
+                            self.decls.c_call_conv(),
+                        ));
+                        self.b.ins().call_indirect(s, address, &vals)
+                    }
+                    ForeignDecl::FunctionAddress(id, declared) => {
+                        let f = self.func_ref(id, &declared, false);
+                        let address = self.b.ins().func_addr(WORD, f);
+                        let s = self.b.import_signature(sig::foreign_signature(
+                            sig,
+                            self.decls.c_call_conv(),
+                        ));
+                        self.b.ins().call_indirect(s, address, &vals)
+                    }
+                };
                 Ok(self.b.inst_results(inst).first().copied())
             }
             Rvalue::CallRuntime { func, .. } => match *func {},

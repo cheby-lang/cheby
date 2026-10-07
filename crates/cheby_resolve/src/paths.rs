@@ -126,9 +126,13 @@ impl PathCx<'_> {
     }
 
     /// An unknown unqualified name, with a suggestion if a scope name is
-    /// close.
+    /// close. A reserved word is E0007 instead, with the word's help: it
+    /// cannot be bound anywhere, so "not found" would mislead (§2.4).
     pub(crate) fn unknown(&self, name: Name, span: Span, ns: Namespace, what: &str) -> Diagnostic {
         let text = self.text(name);
+        if let Some(diag) = cheby_syntax::names::reserved_word_error(text, span) {
+            return diag;
+        }
         let mut diag = Diagnostic::new(
             codes::UNRESOLVED_NAME,
             format!("cannot find {what} `{text}` in this scope"),

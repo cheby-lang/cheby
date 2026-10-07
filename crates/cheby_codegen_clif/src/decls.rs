@@ -4,17 +4,17 @@ use std::fmt::Write as _;
 
 use cranelift_codegen::ir::{self, Signature};
 use cranelift_codegen::isa::{CallConv, TargetFrontendConfig, TargetIsa};
-use cranelift_module::{DataId, FuncId, Linkage, Module};
+use cranelift_module::{DataId, FuncId, FuncOrDataId, Linkage, Module};
 use rustc_hash::FxHashMap;
 
 use cheby_iface::{DefId, ModuleId};
 use cheby_mir::{AbiSig, EntryKind, FnKey, Function, MirModule, Rvalue, Stmt, StrId, UnitKind};
 use cheby_runtime::abi;
 
-use crate::CodegenError;
 use crate::mangle::{self, Kind};
 use crate::runtime::{RuntimeFunc, STATIC_DATA};
 use crate::sig;
+use crate::{CodegenError, ForeignImport};
 
 /// A declared function of generated code.
 #[derive(Clone, Debug)]
@@ -36,6 +36,20 @@ pub struct FuncDecl {
 pub struct SlotKey {
     pub path: Box<str>,
     pub sig: AbiSig,
+}
+
+/// How a foreign symbol was imported ([`ForeignImport`]).
+#[derive(Clone, Debug)]
+pub(crate) enum ForeignDecl {
+    /// A function import with its one C signature.
+    Function(FuncId, Signature),
+    /// The symbol's address as a data import, called indirectly with each
+    /// call site's C signature.
+    Data(DataId),
+    /// The address of a symbol the module already imports as a function
+    /// (a runtime function), called indirectly with each call site's C
+    /// signature. The declared signature is only needed to name it.
+    FunctionAddress(FuncId, Signature),
 }
 
 /// A declared indirection slot (D-043).
@@ -64,7 +78,7 @@ pub struct Decls {
     strings: FxHashMap<(FnKey, StrId), DataId>,
     runtime: Vec<(FuncId, Signature)>,
     static_data: FxHashMap<&'static str, DataId>,
-    foreign: FxHashMap<Box<str>, (FuncId, Signature)>,
+    foreign: FxHashMap<Box<str>, ForeignDecl>,
     test_ordinals: FxHashMap<DefId, u32>,
     next_test: FxHashMap<ModuleId, u32>,
     /// Symbol of every declared function (namespace 0) and data object
@@ -179,10 +193,9 @@ impl Decls {
             .ok_or_else(|| CodegenError::ice(format!("`{symbol}` was not declared")))
     }
 
-    pub(crate) fn foreign(&self, symbol: &str) -> Result<(FuncId, &Signature), CodegenError> {
+    pub(crate) fn foreign(&self, symbol: &str) -> Result<&ForeignDecl, CodegenError> {
         self.foreign
             .get(symbol)
-            .map(|(id, s)| (*id, s))
             .ok_or_else(|| CodegenError::ice(format!("foreign `{symbol}` was not declared")))
     }
 
@@ -228,6 +241,7 @@ impl Decls {
         &mut self,
         module: &mut M,
         mirs: &[MirModule],
+        import: ForeignImport,
     ) -> Result<(), CodegenError> {
         self.declare_runtime(module)?;
         for unit in mirs {
@@ -237,7 +251,7 @@ impl Decls {
         }
         for unit in mirs {
             for function in &unit.functions {
-                self.declare_foreign(module, function)?;
+                self.declare_foreign(module, function, import)?;
             }
         }
         Ok(())
@@ -368,10 +382,16 @@ impl Decls {
         Ok(())
     }
 
+    /// Declares the foreign symbols `function` calls. Under
+    /// [`ForeignImport::Function`] a symbol has one C signature per module;
+    /// under [`ForeignImport::Address`] the import carries no signature, so
+    /// call sites of one symbol may use different ones (a REPL
+    /// redefinition, or a failed batch whose declarations stay).
     fn declare_foreign<M: Module>(
         &mut self,
         module: &mut M,
         function: &Function,
+        import: ForeignImport,
     ) -> Result<(), CodegenError> {
         for block in &function.blocks {
             for stmt in &block.stmts {
@@ -384,19 +404,40 @@ impl Decls {
                     continue;
                 };
                 let signature = sig::foreign_signature(sig, self.call_conv);
-                if let Some((_, existing)) = self.foreign.get(symbol) {
-                    if *existing != signature {
+                if let Some(existing) = self.foreign.get(symbol) {
+                    if let ForeignDecl::Function(_, existing) = existing
+                        && *existing != signature
+                    {
                         return Err(CodegenError::Module(format!(
                             "the native symbol `{symbol}` is declared with two different signatures"
                         )));
                     }
                     continue;
                 }
-                let id = module
-                    .declare_function(symbol, Linkage::Import, &signature)
-                    .map_err(|e| CodegenError::module(&e))?;
-                self.names.insert((0, id.as_u32()), symbol.to_string());
-                self.foreign.insert(symbol.clone(), (id, signature));
+                let decl = match import {
+                    ForeignImport::Function => {
+                        let id = module
+                            .declare_function(symbol, Linkage::Import, &signature)
+                            .map_err(|e| CodegenError::module(&e))?;
+                        self.names.insert((0, id.as_u32()), symbol.to_string());
+                        ForeignDecl::Function(id, signature)
+                    }
+                    ForeignImport::Address => {
+                        if let Some(FuncOrDataId::Func(id)) = module.get_name(symbol) {
+                            // Already a function import (a runtime function
+                            // such as `cheby_rt_alloc`): take its address.
+                            let declared = module.declarations().get_function_decl(id);
+                            ForeignDecl::FunctionAddress(id, declared.signature.clone())
+                        } else {
+                            let id = module
+                                .declare_data(symbol, Linkage::Import, false, false)
+                                .map_err(|e| CodegenError::module(&e))?;
+                            self.names.insert((1, id.as_u32()), symbol.to_string());
+                            ForeignDecl::Data(id)
+                        }
+                    }
+                };
+                self.foreign.insert(symbol.clone(), decl);
             }
         }
         Ok(())

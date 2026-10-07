@@ -6,19 +6,3 @@ error[E0007]: `go` is a reserved word
   |
   = help: Cheby has no `go`; spawn a fiber in a scope
 
-error[E0007]: `go` is a reserved word
-  --> tests/ui/02-lexical-structure/reserved_word_go.cheby:10:12
-   |
-10 |       _ => go(i - 1, acc + 1)
-   |            ^^ reserved, cannot be used as a name
-   |
-   = help: Cheby has no `go`; spawn a fiber in a scope
-
-error[E0007]: `go` is a reserved word
-  --> tests/ui/02-lexical-structure/reserved_word_go.cheby:13:3
-   |
-13 |   go(n, 0)
-   |   ^^ reserved, cannot be used as a name
-   |
-   = help: Cheby has no `go`; spawn a fiber in a scope
-

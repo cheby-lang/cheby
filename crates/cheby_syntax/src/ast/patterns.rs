@@ -1,8 +1,10 @@
 //! Views of patterns (App. A.6, ch. 6).
 
+use cheby_diag::TextRange;
+
 use super::{
-    AstChildren, AstNode, FloatLit, Ident, IntLit, PathNode, RawStringLit, StringLit, child,
-    child_token, children, token,
+    AstChildren, AstNode, AstToken, FloatLit, Ident, IntLit, PathNode, RawStringLit, StringLit,
+    child, child_token, children, token,
 };
 use crate::{SyntaxKind, SyntaxNode, SyntaxToken};
 
@@ -87,10 +89,26 @@ impl<'t> LiteralPat<'t> {
         token(self.0, SyntaxKind::MINUS)
     }
 
-    /// Whether the number is negative.
+    /// Whether the number is negative: whether it has a `-`. Only `-5`,
+    /// with the `-` directly before the number, is a valid negative
+    /// pattern; `- 5` is rejected by validation (E0056), so later phases
+    /// never see one.
     #[must_use]
     pub fn is_negative(self) -> bool {
         self.minus().is_some()
+    }
+
+    /// The range between the `-` and the number: empty for `-5`, the
+    /// space for `- 5`. `None` without a `-` or a number.
+    #[must_use]
+    pub fn minus_gap(self) -> Option<TextRange> {
+        let minus = self.minus()?.text_range();
+        let number = match self.kind()? {
+            LiteralPatKind::Int(int) => int.syntax().text_range(),
+            LiteralPatKind::Float(float) => float.syntax().text_range(),
+            LiteralPatKind::String(_) | LiteralPatKind::RawString(_) => return None,
+        };
+        (minus.end() <= number.start()).then(|| TextRange::new(minus.end(), number.start()))
     }
 }
 

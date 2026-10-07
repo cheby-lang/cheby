@@ -494,9 +494,9 @@ pub fn parse_file(
     // Validation assumes the shapes the grammar allows. On a tree with
     // grammar errors it reports noise next to the real error, such as a
     // short tuple for an unclosed `(`, so only its token-level checks run
-    // there (D-425). They do not depend on the tree's shape, and they
-    // explain words such as `if` and `return` that cause the grammar
-    // errors (E0007).
+    // there (D-425). They do not depend on the tree's shape. Words such as
+    // `if` and `return` that cause a grammar error are explained by a help
+    // on that error; names are checked later, by name resolution.
     if has_syntax_errors {
         diagnostics.extend(cheby_syntax::validate_tokens(&tree));
     } else {

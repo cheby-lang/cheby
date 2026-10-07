@@ -52,6 +52,10 @@ serde_json = "1"
 siphasher = "1"
 toml = { version = "1.1", features = ["preserve_order"] }
 unicode-width = "0.2"
+# The instruction-cache maintenance cranelift-jit itself uses; the version
+# follows cranelift (0.135 is Wasmtime 48).
+wasmtime-internal-jit-icache-coherence = "48"
+windows-sys = "0.61"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

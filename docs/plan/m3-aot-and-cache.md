@@ -16,6 +16,7 @@ Detail level: workstreams with outcomes. This file is refined into tasks when M3
 - DWARF line tables by default, full debug info opt-in (D-184, D-259), and panic backtraces from them.
 - Foreign code supplied by packages, per OQ-P9, and the `cheby.h` header for it (D-187).
 - `@external(native, …)` symbols resolved at link time instead of in the process.
+- An executable's entry that bypasses Rust's startup code reopens standard streams that are closed at start on the null device, so they behave as D-474 requires.
 
 ### 3.2 Interface artifacts and the global cache
 
@@ -43,6 +44,6 @@ Detail level: workstreams with outcomes. This file is refined into tasks when M3
 
 - Every example that passes on the JIT also passes as an executable from `cheby build --target native`.
 - 020 and 031 pass, against the harness's local fixtures. 030 needs its git dependency too, so it moves to M5 (D-446).
-- After a one-function edit in the 1M-line `bench/gen` project, `cheby run` reaches `main` within the D-247 budget, as revised by OQ-P10, on the CI reference machine.
+- After a one-function edit in the 1M-line `bench/gen` project, `cheby run` reaches `main` within the D-247 latency budget, as revised by OQ-P11, on the CI reference machine, and OQ-P11 is settled.
 - Two builds of the same inputs produce bit-identical artifacts and executables (D-264).
 - Editing a function body recompiles only its module, checked by a cache-hit test.

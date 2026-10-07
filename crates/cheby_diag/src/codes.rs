@@ -186,6 +186,8 @@ codes! {
     E0053 Error 53 UNRESOLVED_NATIVE_SYMBOL "native symbol of an `@external` that is not defined";
     E0054 Error 54 CONFLICTING_NATIVE_SYMBOL "native symbol bound with two different C signatures";
     E0055 Error 55 RESERVED_NATIVE_SYMBOL "native symbol reserved for the toolchain";
+    // Expressions and patterns (chapters 5 and 6).
+    E0056 Error 56 SPACED_NEGATIVE_LITERAL "space between `-` and the number of a negative literal";
     // Warnings.
     W0001 Warning 1 TUPLE_SHAPE "tuple type that hides meaning";
 }

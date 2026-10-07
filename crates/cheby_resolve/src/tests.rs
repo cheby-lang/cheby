@@ -799,6 +799,48 @@ fn lets_and_locals() {
     );
 }
 
+// ---- spelling of names (E0006, E0007) ---------------------------------------
+
+#[test]
+fn names_are_checked_once_where_bound() {
+    let b = build(&[(
+        "",
+        "import std::io as myIo\n\n@async\nfn countAll(maxValue: Int) -> Int {\n  let go = maxValue\n  go + maxValue + countAll(go)\n}\n\ntype Point_2d {\n  Point_2d,\n}\n\nfn main() {\n  let p = Point_2d\n}\n\nfn other(text: String) {\n  return(text)\n}\n",
+    )]);
+    let naming: Vec<String> = b
+        .messages()
+        .into_iter()
+        .filter(|m| m.starts_with("E0006") || m.starts_with("E0007"))
+        .collect();
+    assert_eq!(
+        naming,
+        [
+            // Each binding and declaration once, its uses never, and not
+            // the attribute `@async` (D-435). The type is gated (E0038) and
+            // still checked.
+            "E0006: name `countAll` is not in snake_case",
+            "E0006: name `maxValue` is not in snake_case",
+            "E0006: name `myIo` is not in snake_case",
+            "E0006: type name `Point_2d` is not in PascalCase",
+            "E0006: type name `Point_2d` is not in PascalCase",
+            "E0007: `go` is a reserved word",
+            // A reserved word that nothing binds, where it is used.
+            "E0007: `return` is a reserved word",
+        ]
+    );
+    let ret = b
+        .diags
+        .iter()
+        .find(|d| d.message.contains("`return`"))
+        .unwrap();
+    assert_eq!(ret.labels[0].message, "reserved, cannot be used as a name");
+    assert_eq!(
+        ret.helps[0].message,
+        "Cheby has no `return`; a function returns the value of its body"
+    );
+    assert!(!b.messages().iter().any(|m| m.contains("cannot find")));
+}
+
 // ---- the gate ---------------------------------------------------------------
 
 #[test]

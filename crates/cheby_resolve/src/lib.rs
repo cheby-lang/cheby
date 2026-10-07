@@ -8,6 +8,10 @@
 //!   from its items, its imports and the prelude (B5, B6), and resolves every
 //!   path in signatures and bodies (B7). It reads other modules only through
 //!   their interfaces in a [`DepView`] (D-246).
+//! - Names are checked where they are bound or declared: the case
+//!   conventions (E0006) and the reserved words (E0007). A use adds
+//!   nothing, except that a reserved word that nothing binds is E0007
+//!   where it is used.
 //! - The support gate reports `E0038` for constructs the compiler cannot
 //!   check and run yet. A hit in an item's declaration (its kind, type
 //!   parameters, attributes or signature) makes it
@@ -24,6 +28,7 @@ mod body;
 mod gate;
 mod imports;
 mod items;
+mod naming;
 mod paths;
 mod scope;
 
@@ -288,6 +293,7 @@ fn resolve_module_in(
         return Err(Ice::new("import targets do not match the imports"));
     }
     let mut diags = Vec::new();
+    naming::check_names(input.tree, &mut diags);
     let mut collected = items::collect(input, &mut diags)?;
     if mode == body::Mode::Slice {
         gate::gate_module(input, &mut collected, &mut diags)?;

@@ -19,7 +19,7 @@ pub fn map<T, U>(xs: List<T>, f: fn(T) -> U) -> List<U> {
 
 - Kernels follow the native FFI ownership convention (D-187), and update in place when the argument's count is one, so they reuse memory even before Perceus exists.
 - Kernels never grow the stack with the input size, on either target (D-094).
-- Once Perceus reuse (M2) and release-mode specialization (M6) are measured, each kernel is reviewed: those whose Cheby version is within an agreed factor of the Rust one move to Cheby. The review is a plan item of M6, and each move is a normal change, because the API does not change.
+- Once Perceus reuse (M2) and release-mode specialization (M6) are measured, each kernel is reviewed: those whose Cheby version is within an agreed factor of the Rust one move to Cheby. The factor is OQ-P13, settled with the M2 measurements. The review is a plan item of M6, and each move is a normal change, because the API does not change.
 - `std` may use private runtime intrinsics that user code cannot name, such as raw array access for kernels written in Cheby later. Their names and the mechanism that hides them are decided when the first one is needed.
 
 ## 2. Tiers
@@ -28,7 +28,7 @@ The tiers are seeded from what the examples use. The function lists are the exam
 
 ### Tier 1: before M1
 
-Drafted in [`docs/stdlib/`](../stdlib/README.md) (D-294 to D-352). The drafts mark their remaining gaps as `OQ-<module>-<n>` (D-352), which are settled in one review round before M1 starts.
+Drafted in [`docs/stdlib/`](../stdlib/README.md) (D-294 to D-352). The drafts marked their remaining gaps as `OQ-<module>-<n>` (D-352), settled by D-353 to D-409, except OQ-io-3 and OQ-env-1, which are deferred to tier 3 as OQ-P14.
 
 | Module                                                                  | Spec file                                                                                                                                          |
 | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -69,7 +69,7 @@ The tier-2 spec fixes the provisional names of D-174 and D-199. If it renames an
 | `std::time`    | wall clock and monotonic time                                                                |
 | `std::process` | exit with a status, spawning processes if v1 needs it                                        |
 
-Tier 3 also covers the JS side of every earlier module: the `.mjs` kernels, and IO through the host's asynchronous APIs with `@async` (D-188).
+Tier 3 also covers the JS side of every earlier module: the `.mjs` kernels, and IO through the host's asynchronous APIs with `@async` (D-188). What file IO, standard input and `std::env` do on JS hosts, including those without a process such as browsers, is OQ-P14 (OQ-io-3, OQ-env-1).
 
 ## 3. Done criteria for a module
 

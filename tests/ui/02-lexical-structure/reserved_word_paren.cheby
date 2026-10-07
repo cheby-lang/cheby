@@ -1,0 +1,29 @@
+// @mode: parse-fail
+// @decisions: D-002, D-128, D-469
+//! A condition in parentheses after a reserved word, as in C, parses as a
+//! call, so the syntax error is at the `{` after it. The error still
+//! carries the reserved word's help.
+
+fn sign(n: Int) -> Int {
+  if (n > 0) {
+    1
+  } else {
+    0
+  }
+}
+
+fn count(n: Int) -> Int {
+  while (n > 0) {
+    n - 1
+  }
+}
+
+fn pick(n: Int) -> Int {
+  match (n) {
+    0 => 1
+  }
+}
+
+fn main() {
+  assert sign(1) == 1
+}

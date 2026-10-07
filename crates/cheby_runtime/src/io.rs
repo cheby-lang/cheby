@@ -7,11 +7,23 @@
 //! nothing (D-306). Rust ignores `SIGPIPE`, so a closed pipe arrives here
 //! as an `EPIPE` error.
 //!
-//! A standard stream that was closed when the process started cannot be
-//! seen here: Rust's startup code reopens closed descriptors 0-2 on
-//! `/dev/null` before `main`, so writes to them succeed and the program
-//! exits 0, not 1. Detecting it needs a process entry that runs before
-//! Rust's, which the decision log lists as open.
+//! A standard stream that was closed when the program started behaves as a
+//! null device: writes succeed and are discarded, and reads see end of
+//! input. D-306 applies only to streams that were open at start. Two layers
+//! give this on native, with no code here:
+//!
+//! - On Unix, Rust's startup code (`sanitize_standard_fds`) reopens closed
+//!   descriptors 0-2 on `/dev/null` before `main`, so they are a real
+//!   null device.
+//! - Rust's `Stdout`, `Stderr` and `Stdin` turn `EBADF` (Unix) and
+//!   `ERROR_INVALID_HANDLE` (Windows, where a missing standard handle is
+//!   not reopened) into success: a write reports every byte written, a
+//!   flush succeeds, and a read returns 0 bytes, which is end of input.
+//!
+//! A process entry that bypasses Rust's startup (AOT, M3) keeps the second
+//! layer but must reopen closed descriptors 0-2 itself, or a file the
+//! program opens could take descriptor 1. Stdin kernels must read through
+//! `std::io::stdin()` to keep both layers.
 
 use std::io::{self, Write};
 

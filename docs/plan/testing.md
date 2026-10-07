@@ -21,6 +21,7 @@ docs/examples/003_fizzbuzz/
 ```
 
 - The harness in `tests/conformance/` runs each example with `cheby run`, compares outputs and exit code, and from M3 and M4 also builds and runs it with `--target native` and `--target js`. The same goldens apply to every target (spec §1.1 principle 5).
+- The harness also runs `cheby test` in each example's directory as a trial of its own, which passes when it exits with status 0 and has no goldens. It is pending until the example's milestone has ended and must pass after it. A `skip-run` example's trial stays pending until the harness gives `cheby test` the example's fixture, which its tests need as much as its run does (D-472).
 - Examples that need the network (030, 031) or a C library (020) run against local fixtures: a loopback HTTP server started by the harness, and a C fixture library linked once OQ-P9 is settled. Until then they are marked `skip-run` and only checked with `cheby check` (D-282). 030 also has a git dependency, so it waits for M5 (D-446).
 - A `skip-run` example's milestone names when its fixture arrives, not when `cheby check` can handle it. Before that milestone a passing check is pending, not an unexpected pass (D-445).
 - Examples whose output depends on randomness or `Map` iteration order (D-093) must make their output deterministic, for example by sorting or by a fixed seed passed through `args`. Where an example cannot, the decision log gets an entry and the example is changed, never the harness.
@@ -29,7 +30,7 @@ docs/examples/003_fizzbuzz/
 
 ## 2. UI tests
 
-`tests/ui/` holds small Cheby files, one rule each, grouped by spec chapter:
+`tests/ui/` holds small Cheby files, one rule each, grouped by spec chapter. A rule that needs several modules or its own manifest gets a package directory instead (D-471):
 
 ```
 tests/ui/05-expressions/shadowing/let_shadows_import.cheby
@@ -40,8 +41,10 @@ tests/ui/06-patterns/exhaustiveness/missing_variant.cheby
 ```
 
 - A file starts with a header comment that says whether it must compile, fail with the expected diagnostics, or run with expected output (D-289). The format is described in [`tests/ui/README.md`](../../tests/ui/README.md).
+- A package test is a directory `tests/ui/<chapter>/<name>/` with `cheby.toml` and `src/**`. Its header is in `src/main.cheby`, its goldens sit beside the directory as `<name>.stderr` and `<name>.stdout`, and it cannot be `parse-fail` (D-471).
+- Each example of a compile error in the spec gets a UI test once its check exists, and the golden pins the code (D-476).
 - Every "must" and every warning of [§13.8](../spec/13-tooling.md#138-diagnostics-and-warnings) gets at least one test. A coverage script, `cargo xtask coverage` (D-292), lists D-numbers cited in the spec that no UI test names in its header, and the list shrinks every milestone.
-- Diagnostics are rendered in a stable plain-text form for comparison, without colors or absolute paths (D-418, D-421).
+- Diagnostics are rendered in a stable plain-text form for comparison, without colors or absolute paths (D-418, D-421). The harnesses run `cheby --color=never` and set `NO_COLOR=1`, so no environment can color a golden (D-467).
 
 ## 3. Unit and property tests
 
@@ -56,7 +59,7 @@ tests/ui/06-patterns/exhaustiveness/missing_variant.cheby
 
 ## 5. Parser cross-check
 
-CI parses every example and every UI test with both the compiler parser and `tree-sitter-cheby`, and fails if one accepts a file the other rejects (D-272). Only grammar errors count. A rule that the spec enforces and tree-sitter does not is checked by a validation pass after parsing, so the compiler parser accepts the file too (D-424). Files that test syntax errors on purpose must be rejected by both, so a `parse-fail` UI test must contain a grammar error, and the other syntax rules are `check-fail` tests. Where the compiler reports a grammar error that tree-sitter does not, the decision log lists a grammar mismatch to fix in tree-sitter. The tree-sitter grammar is pulled in at the commit pinned in `tests/tree-sitter-cheby.rev`, and bumping it is a normal change (D-290).
+CI parses every example and every source file of every UI test, including each module of a package test (D-471), with both the compiler parser and `tree-sitter-cheby`, and fails if one accepts a file the other rejects (D-272). Only grammar errors count. A rule that the spec enforces and tree-sitter does not is checked by a validation pass after parsing, so the compiler parser accepts the file too (D-424). Files that test syntax errors on purpose must be rejected by both, so a `parse-fail` UI test must contain a grammar error, and the other syntax rules are `check-fail` tests. Where the compiler reports a grammar error that tree-sitter does not, the decision log lists a grammar mismatch to fix in tree-sitter. The tree-sitter grammar is pulled in at the commit pinned in `tests/tree-sitter-cheby.rev`, and bumping it is a normal change (D-290).
 
 ## 6. Determinism
 
@@ -65,8 +68,8 @@ CI builds the examples and the synthetic benchmark project twice, with different
 ## 7. Performance
 
 - `bench/gen` generates synthetic Cheby projects of a given size and shape: many small modules, few large modules, deep and wide import graphs, generic-heavy code. It is the input for the compile-speed budgets, and its output depends only on size, shape and seed (D-291).
-- CI reports, from M1 on, lines per second per core for a clean debug build, scaling with cores, the time from a one-function edit to `main` running, and from M6 the release-to-debug ratio (D-247, D-267). Until M6 they are reported, not enforced, so that OQ-P10 can revise them with real numbers.
-- Runtime benchmarks cover RC overhead, reuse hit rate (with the reuse report flag of D-170), fiber spawn and switch cost, channel throughput and collection kernels.
+- CI reports, from M1 on, lines per second per core for a clean debug build, scaling with cores, the time from a one-function edit to `main` running, and from M6 the release-to-debug ratio (D-247, D-267). Until M6 they are reported, not enforced, so that OQ-P10 (throughput), OQ-P11 (latency) and OQ-P12 (release ratio) can revise them with real numbers.
+- Runtime benchmarks cover RC overhead, reuse hit rate (with the reuse report flag of D-170), fiber spawn and switch cost, channel throughput and collection kernels, and from M2 the sorted collections against a Rust tree (OQ-P13).
 
 ## 8. Fuzzing
 

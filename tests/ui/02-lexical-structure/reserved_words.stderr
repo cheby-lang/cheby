@@ -22,27 +22,3 @@ error[E0007]: `impl` is a reserved word
   |
   = help: Cheby has no `impl`; use module functions and `interface`
 
-error[E0007]: `return` is a reserved word
-  --> tests/ui/02-lexical-structure/reserved_words.cheby:10:10
-   |
-10 |   assert return + loop + impl == 6
-   |          ^^^^^^ reserved, cannot be used as a name
-   |
-   = help: Cheby has no `return`; a function returns the value of its body
-
-error[E0007]: `loop` is a reserved word
-  --> tests/ui/02-lexical-structure/reserved_words.cheby:10:19
-   |
-10 |   assert return + loop + impl == 6
-   |                   ^^^^ reserved, cannot be used as a name
-   |
-   = help: Cheby has no `loop`; use recursion, often through a local `fn`
-
-error[E0007]: `impl` is a reserved word
-  --> tests/ui/02-lexical-structure/reserved_words.cheby:10:26
-   |
-10 |   assert return + loop + impl == 6
-   |                          ^^^^ reserved, cannot be used as a name
-   |
-   = help: Cheby has no `impl`; use module functions and `interface`
-

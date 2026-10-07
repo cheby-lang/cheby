@@ -1,10 +1,13 @@
-//! UI-test harness: runs every `.cheby` file under `tests/ui/` and checks
-//! it against its header and goldens (D-275, docs/plan/testing.md §2).
+//! UI-test harness: runs every UI test under `tests/ui/` and checks it
+//! against its header and goldens (D-275, docs/plan/testing.md §2).
 //!
-//! Each file is copied into a temporary package as `src/main.cheby`, so
-//! the real `cheby check` and `cheby run` are exercised. Paths in the
-//! output are rewritten to the test's own path, so goldens show
-//! `tests/ui/…/name.cheby` and no absolute paths.
+//! A single-file test is copied into a temporary package as
+//! `src/main.cheby`, with a generated `cheby.toml`. A package test, a
+//! directory with its own `cheby.toml`, is copied as it is. Either way the
+//! real `cheby check` and `cheby run` are exercised. Paths in the output
+//! are rewritten to the test's own files, so goldens show
+//! `tests/ui/…/name.cheby` or `tests/ui/…/name/src/….cheby` and no
+//! absolute paths.
 //!
 //! - `check-pass`: `cheby check` exits with 0, stderr matches `.stderr`
 //!   (empty if absent, so warnings need a golden).
@@ -20,7 +23,7 @@ use std::process::{Command, ExitCode};
 use std::time::Duration;
 
 use cheby_test_support::milestone::{self, Expectation, Verdicts};
-use cheby_test_support::ui::{self, Mode, UiTest};
+use cheby_test_support::ui::{self, Layout, Mode, UiTest};
 use cheby_test_support::{bless_enabled, golden, process, repo_root};
 use libtest_mimic::{Arguments, Trial};
 
@@ -67,15 +70,18 @@ fn main() -> ExitCode {
 }
 
 fn run_test(test: &UiTest, bless: bool) -> Result<(), String> {
-    let package = make_package(test)?;
+    let (package, files) = make_package(test)?;
     let mode = test.header.mode;
     let command = if mode.runs() { "run" } else { "check" };
     let mut cmd = Command::new(CHEBY);
-    cmd.arg(command).current_dir(&package).env("NO_COLOR", "1");
+    // `--color=never` and `NO_COLOR` keep goldens plain even if the
+    // developer's environment forces color (`CLICOLOR_FORCE`).
+    cmd.args(["--color=never", command])
+        .current_dir(&package)
+        .env("NO_COLOR", "1");
     let out = process::run(cmd, None, TIMEOUT)?;
-    let shown_path = format!("tests/ui/{}.cheby", test.name);
-    let stdout = rewrite_paths(&out.stdout, &package, &shown_path);
-    let stderr = rewrite_paths(&out.stderr, &package, &shown_path);
+    let stdout = rewrite_paths(&out.stdout, &package, &files);
+    let stderr = rewrite_paths(&out.stderr, &package, &files);
 
     let expected_exit = match mode {
         Mode::CheckPass | Mode::RunPass => 0,
@@ -107,30 +113,127 @@ fn run_test(test: &UiTest, bless: bool) -> Result<(), String> {
     golden::compare("stdout", &expected_stdout, &stdout)
 }
 
-/// Writes a one-module package holding the test file and returns its
-/// directory.
-fn make_package(test: &UiTest) -> Result<PathBuf, String> {
+/// A file of the temporary package, relative to it with `/` separators,
+/// and the path that goldens show for it.
+type ShownFile = (String, String);
+
+/// Writes the test's package into a fresh temporary directory and returns
+/// the directory, with the files whose paths are rewritten in the output.
+fn make_package(test: &UiTest) -> Result<(PathBuf, Vec<ShownFile>), String> {
     let dir = Path::new(TMP).join("ui").join(test.name.replace('/', "__"));
-    let src = dir.join("src");
     if dir.exists() {
         std::fs::remove_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }
-    std::fs::create_dir_all(&src).map_err(|e| format!("{}: {e}", src.display()))?;
-    std::fs::write(
-        dir.join("cheby.toml"),
-        "name = \"ui_test\"\nversion = \"0.0.0\"\n",
-    )
-    .map_err(|e| e.to_string())?;
-    std::fs::copy(&test.path, src.join("main.cheby"))
-        .map_err(|e| format!("{}: {e}", test.path.display()))?;
-    Ok(dir)
+    let files = match test.layout {
+        Layout::File => {
+            let src = dir.join("src");
+            std::fs::create_dir_all(&src).map_err(|e| format!("{}: {e}", src.display()))?;
+            std::fs::write(
+                dir.join("cheby.toml"),
+                "name = \"ui_test\"\nversion = \"0.0.0\"\n",
+            )
+            .map_err(|e| e.to_string())?;
+            std::fs::copy(&test.path, src.join("main.cheby"))
+                .map_err(|e| format!("{}: {e}", test.path.display()))?;
+            vec![(
+                "src/main.cheby".to_owned(),
+                format!("tests/ui/{}.cheby", test.name),
+            )]
+        }
+        Layout::Package => {
+            let mut copied = Vec::new();
+            copy_dir(&test.path, &dir, "", &mut copied)?;
+            copied
+                .into_iter()
+                .map(|relative| {
+                    let shown = format!("tests/ui/{}/{relative}", test.name);
+                    (relative, shown)
+                })
+                .collect()
+        }
+    };
+    Ok((dir, files))
 }
 
-/// Replaces the temporary package's paths with the test's path.
-fn rewrite_paths(text: &str, package: &Path, shown_path: &str) -> String {
+/// Copies the directory `from` to `to`, skipping hidden entries, and
+/// appends the copied files' paths below `prefix` to `copied`.
+fn copy_dir(from: &Path, to: &Path, prefix: &str, copied: &mut Vec<String>) -> Result<(), String> {
+    std::fs::create_dir_all(to).map_err(|e| format!("{}: {e}", to.display()))?;
+    let entries = std::fs::read_dir(from).map_err(|e| format!("{}: {e}", from.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("{}: {e}", from.display()))?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') {
+            continue;
+        }
+        let relative = format!("{prefix}{name}");
+        let (source, target) = (entry.path(), to.join(&name));
+        let is_dir = entry
+            .file_type()
+            .map_err(|e| format!("{}: {e}", source.display()))?
+            .is_dir();
+        if is_dir {
+            copy_dir(&source, &target, &format!("{relative}/"), copied)?;
+        } else {
+            std::fs::copy(&source, &target).map_err(|e| format!("{}: {e}", source.display()))?;
+            copied.push(relative);
+        }
+    }
+    Ok(())
+}
+
+/// Removes the temporary package's directory from paths in `text`, then
+/// replaces each of the package's files, written relative to it with `/`
+/// or `\`, by the path goldens show for it. A file's path is replaced
+/// only where a path starts, so `src/a.cheby` inside `lib/src/a.cheby` is
+/// left alone, and the replacement is never rewritten again. A path quoted
+/// in backticks is message text, such as "unknown key `colour` in
+/// `cheby.toml`", and is left alone too.
+fn rewrite_paths(text: &str, package: &Path, files: &[ShownFile]) -> String {
     let package = package.to_string_lossy();
-    text.replace(&format!("{package}/"), "")
-        .replace(&format!("{package}\\"), "")
-        .replace("src/main.cheby", shown_path)
-        .replace("src\\main.cheby", shown_path)
+    let text = text
+        .replace(&format!("{package}/"), "")
+        .replace(&format!("{package}\\"), "");
+    let mut patterns: Vec<(String, &str)> = files
+        .iter()
+        .flat_map(|(relative, shown)| {
+            [
+                (relative.clone(), shown.as_str()),
+                (relative.replace('/', "\\"), shown.as_str()),
+            ]
+        })
+        .collect();
+    // Longest first, so `src/a/b.cheby` wins over a shorter file that is
+    // a prefix of it.
+    patterns.sort_by(|a, b| b.0.len().cmp(&a.0.len()).then_with(|| a.0.cmp(&b.0)));
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text.as_str();
+    let mut previous: Option<char> = None;
+    while let Some(c) = rest.chars().next() {
+        let at_start = previous.is_none_or(|p| !is_path_char(p));
+        let matched = at_start
+            .then(|| {
+                patterns.iter().find(|(relative, _)| {
+                    rest.strip_prefix(relative.as_str())
+                        .is_some_and(|after| !(previous == Some('`') && after.starts_with('`')))
+                })
+            })
+            .flatten();
+        if let Some((relative, shown)) = matched {
+            out.push_str(shown);
+            previous = relative.chars().next_back();
+            rest = rest.get(relative.len()..).unwrap_or_default();
+        } else {
+            out.push(c);
+            previous = Some(c);
+            rest = rest.get(c.len_utf8()..).unwrap_or_default();
+        }
+    }
+    out
+}
+
+/// Whether `c` can be part of a relative path, so a file's path cannot
+/// start right after it.
+fn is_path_char(c: char) -> bool {
+    c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | '/' | '\\')
 }

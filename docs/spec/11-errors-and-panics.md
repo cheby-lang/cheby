@@ -82,7 +82,7 @@ let assert Ok(config) = load_config("app.toml")
 let assert [first, ..] = arguments
 ```
 
-The panic message includes the source location and the debug-printed value that failed to match.
+The panic report includes the source location, and its message the debug-printed value that failed to match.
 
 An optional custom message follows `as`. It is an expression of type `String`, evaluated only when the match fails, and it is included in the panic message (D-159):
 
@@ -141,7 +141,7 @@ fn area(shape: Shape) -> Float {
 }
 ```
 
-Every panic message includes the source location where the panic started. A panic is reported on standard error, after standard output has been flushed, as two lines in the form rustc uses: `panicked at path:line:column:`, with the path and position as in diagnostics ([§13.8](13-tooling.md#138-diagnostics-and-warnings)), then the message (D-449). For example, reaching the `todo` above in `src/main.cheby` prints:
+Every panic report includes the source location where the panic started. Its message is the text after the `panicked at …:` line, without the location, and it is what a `fiber::Panic` carries as its message (D-473). A panic is reported on standard error, after standard output has been flushed, as two lines in the form rustc uses: `panicked at path:line:column:`, with the path and position as in diagnostics ([§13.8](13-tooling.md#138-diagnostics-and-warnings)), then the message (D-449). For example, reaching the `todo` above in `src/main.cheby` prints:
 
 ```
 panicked at src/main.cheby:5:12:

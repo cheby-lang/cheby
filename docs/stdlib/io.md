@@ -12,7 +12,7 @@ pub type Error
 
 Text is always UTF-8 outside the program. Text read from the operating system that is not valid UTF-8 gives an error for which `is_invalid_data` holds, and is never silently changed (D-311).
 
-Output follows §10.10: standard output is line-buffered and flushed before the program reads standard input, standard error is not buffered, and all buffered output is flushed when the program ends, whatever its exit status (D-346). The functions that write without returning a `Result` end the program at once with exit status 1 and print nothing when they cannot write, for example because the reader of a pipe has gone (D-306). `write_stdout` and `write_stderr` return the failure instead.
+Output follows §10.10: standard output is line-buffered and flushed before the program reads standard input, standard error is not buffered, and all buffered output is flushed when the program ends, whatever its exit status (D-346). The functions that write without returning a `Result` end the program at once with exit status 1 and print nothing when they cannot write, for example because the reader of a pipe has gone (D-306). `write_stdout` and `write_stderr` return the failure instead. A stream that is already closed or missing when the program starts is not a failure: it behaves as a null device, so writes succeed and discard the text and reads see the end of input (D-474).
 
 The examples of the functions that write output, read standard input or need a file to exist are not `test` blocks, because their results depend on the environment. They are top-level functions marked _Example_. The functions that fail have tests that check only the failure, which is the same everywhere.
 
@@ -127,7 +127,7 @@ pub fn write_stderr(text: String) -> Result<Nil, Error>
 
 Writes `text` to standard error, with no line ending, and reports a failure instead of ending the program (D-306).
 
-- **Fails:** `Err` when the text cannot be written, for example because standard error has been closed.
+- **Fails:** `Err` when the text cannot be written, for example because standard error was closed while the program ran. A standard error closed before the program started discards the text without an error (D-474).
 - **Cost:** O(n) in the length of `text`, plus the write. Informative.
 
 _Example_, not a `test` because it writes to standard error:

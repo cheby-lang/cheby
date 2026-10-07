@@ -6,8 +6,10 @@
 //!
 //! The lexer reports only grammar errors, the ones `tree-sitter-cheby` also
 //! rejects (class G in the phase-A design). Lexical rules that tree-sitter
-//! does not enforce, such as naming conventions, reserved words and escape
-//! validity, are checked later by [`checks`], called from validation.
+//! does not enforce, such as number shapes and escape validity, are
+//! checked later by [`checks`], called from validation. Naming conventions
+//! and reserved words are checked by name resolution where a name is bound
+//! ([`crate::names`]).
 //!
 //! The lexer does not merge or drop line breaks: each one is a
 //! [`SyntaxKind::NEWLINE`] token, and the parser decides which ones end a

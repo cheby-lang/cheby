@@ -13,6 +13,7 @@
 pub mod ast;
 pub mod event;
 pub mod lexer;
+pub mod names;
 mod parser;
 mod syntax_kind;
 mod token_set;
@@ -78,8 +79,10 @@ pub fn validate(tree: &SyntaxTree) -> Vec<Diagnostic> {
 }
 
 /// The token-level part of [`validate`], sorted by position: lone carriage
-/// returns (E0002), naming (E0006), reserved words (E0007), number shapes
-/// (E0008), escapes (E0011) and whitespace in interpolations (E0012).
+/// returns (E0002), number shapes (E0008), escapes (E0011) and whitespace
+/// in interpolations (E0012). Naming (E0006) and reserved words (E0007)
+/// are not syntax checks: name resolution reports them where a name is
+/// bound (see [`names`]).
 ///
 /// These checks look at single tokens, not at the shape of the tree, so
 /// they are meaningful on a file with grammar errors, where the rest of

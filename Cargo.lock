@@ -229,6 +229,8 @@ dependencies = [
  "cranelift-native",
  "libc",
  "rustc-hash",
+ "wasmtime-internal-jit-icache-coherence",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

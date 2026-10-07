@@ -20,18 +20,18 @@ I measurement runs from the first end-to-end program
 
 ## A. Syntax (`cheby_syntax`, `cheby_diag`)
 
-| #   | Task                                                                                                                                                                                                                    | Spec                | Done when                                                       |
-| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- | --------------------------------------------------------------- |
-| A1  | Source map, spans, diagnostic type and plain-text renderer with suggestions (D-418, D-421), code registry checked against `docs/diagnostics/` (D-419, D-420)                                                            | §13.8               | UI-test stderr format fixed                                     |
-| A2  | Lexer: identifiers, keywords including reserved `go` (D-240), numeric literals (D-084), strings with interpolation segments, `//`, `///`, `//!`, attributes, `NL` tokens (D-231)                                        | ch. 2               | lexer is lossless on all examples; fuzz target added            |
-| A3  | Syntax kinds, parser events and the flat arena tree builder (D-280)                                                                                                                                                     | -                   | CST round-trips any input; tree size and build time benchmarked |
-| A4  | Parser for items: `fn`, `type` with variants and shorthand, aliases, `const`, `interface`, `test`, `import`, attributes, visibility                                                                                     | ch. 4, App. A.1-A.2 | declaration corpus parses                                       |
-| A5  | Parser for types and patterns                                                                                                                                                                                           | App. A.3, A.6       | pattern corpus parses                                           |
-| A6  | Parser for expressions: precedence (§5.4.1), `case` with subjects and guards, subjectless `case`, `use`, pipes, captures, closures with pattern parameters (D-242), local functions, records and updates, lists, tuples | ch. 5, App. A.4-A.5 | all examples parse                                              |
-| A7  | Newline continuation rules decided by the parser (D-231)                                                                                                                                                                | §2.8                | `newlines` corpus from tree-sitter passes                       |
-| A8  | Error recovery: synchronize on items and statements, never fail to produce a tree, one nesting limit of 256 levels (D-441)                                                                                              | -                   | fuzzing finds no panics; partial trees for broken files         |
-| A9  | Typed AST views over the CST                                                                                                                                                                                            | -                   | later phases use only views, never raw nodes                    |
-| A10 | Syntax-level errors that are not grammar errors (D-424): `x.0` (D-241), `f(_)` (D-245), pipe without a hole (D-244), tuple-shape warning (D-243, D-440); only token-level checks on files with grammar errors (D-425)   | §5.12, §5.16        | UI tests pass                                                   |
+| #   | Task                                                                                                                                                                                                                                                    | Spec                | Done when                                                       |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- | --------------------------------------------------------------- |
+| A1  | Source map, spans, diagnostic type and plain-text renderer with suggestions (D-418, D-421), terminal color (D-467), code registry checked against `docs/diagnostics/` (D-419, D-420)                                                                    | §13.8               | UI-test stderr format fixed                                     |
+| A2  | Lexer: identifiers, keywords including reserved `go` (D-240), numeric literals (D-084), strings with interpolation segments, `//`, `///`, `//!`, attributes, `NL` tokens (D-231)                                                                        | ch. 2               | lexer is lossless on all examples; fuzz target added            |
+| A3  | Syntax kinds, parser events and the flat arena tree builder (D-280)                                                                                                                                                                                     | -                   | CST round-trips any input; tree size and build time benchmarked |
+| A4  | Parser for items: `fn`, `type` with variants and shorthand, aliases, `const`, `interface`, `test`, `import`, attributes, visibility                                                                                                                     | ch. 4, App. A.1-A.2 | declaration corpus parses                                       |
+| A5  | Parser for types and patterns                                                                                                                                                                                                                           | App. A.3, A.6       | pattern corpus parses                                           |
+| A6  | Parser for expressions: precedence (§5.4.1), `case` with subjects and guards, subjectless `case`, `use`, pipes, captures, closures with pattern parameters (D-242), local functions, records and updates, lists, tuples                                 | ch. 5, App. A.4-A.5 | all examples parse                                              |
+| A7  | Newline continuation rules decided by the parser (D-231)                                                                                                                                                                                                | §2.8                | `newlines` corpus from tree-sitter passes                       |
+| A8  | Error recovery: synchronize on items and statements, never fail to produce a tree, one nesting limit of 256 levels (D-441)                                                                                                                              | -                   | fuzzing finds no panics; partial trees for broken files         |
+| A9  | Typed AST views over the CST                                                                                                                                                                                                                            | -                   | later phases use only views, never raw nodes                    |
+| A10 | Syntax-level errors that are not grammar errors (D-424): `x.0` (D-241), `f(_)` (D-245), pipe without a hole (D-244), tuple-shape warning (D-243, D-440), spaced negative literals (D-470); only token-level checks on files with grammar errors (D-425) | §5.12, §5.16        | UI tests pass                                                   |
 
 ## B. Packages, names and interfaces (`cheby_package`, `cheby_resolve`, `cheby_iface`)
 
@@ -43,7 +43,7 @@ I measurement runs from the first end-to-end program
 | B4  | Item collection per namespace, duplicate detection                                                                                                                   | §4.1.2, §7.7 | UI tests pass                                           |
 | B5  | Visibility: `pub`, package-visible, `priv` (D-162), `exposed` (D-048), interface satisfaction visibility (ADR-0034)                                                  | §7.3, §7.4   | UI tests pass                                           |
 | B6  | Prelude and hiding with warning (D-112, D-146, D-212), home modules re-exporting prelude types (D-447)                                                               | §7.6         | UI tests pass                                           |
-| B7  | Local name resolution, shadowing ban (D-051, D-062), naming conventions (D-059)                                                                                      | §5.2.3, §2.3 | UI tests pass, with suggested names                     |
+| B7  | Local name resolution, shadowing ban (D-051, D-062), naming conventions and reserved words where names are bound (D-059, D-469)                                      | §5.2.3, §2.3 | UI tests pass, with suggested names                     |
 | B8  | `ModuleInterface`: data model, stable hash referring to definitions by path and name (D-460), deterministic serialization (unused on disk until M3)                  | §13.12.1     | hash unchanged by body edits; serialization byte-stable |
 
 ## C. Type checking (`cheby_types`)
@@ -88,7 +88,7 @@ I measurement runs from the first end-to-end program
 | E2  | `tail` calling convention and `return_call` for every tail call, including indirect and mutual                                                                                                                             | D-015    | a ten-million-step mutual recursion runs in constant stack |
 | E3  | Entry stack-limit check against the limit in `ctx` (D-453, D-457), panicking on overflow (§11.8.1)                                                                                                                         | D-124    | deep non-tail recursion panics cleanly                     |
 | E4  | Indirection table for top-level functions, used by every call between top-level functions, slots identified by path and ABI signature (D-456)                                                                              | D-043    | REPL redefinition test passes                              |
-| E5  | `@external(native, …)` wrappers calling through the C ABI with the mapping of §12.5.1, symbols resolved in the process, E0053 to E0055 (D-455)                                                                             | D-030    | 010 runs on native                                         |
+| E5  | `@external(native, …)` wrappers calling through the C ABI with the mapping of §12.5.1, symbols resolved in the process and imported without a signature (D-475), E0053 to E0055 (D-455)                                    | D-030    | 010 runs on native                                         |
 | E6  | Constant evaluation with the JIT, also under `cheby check` (D-459), time and memory limits (D-195), derived hash seed (D-269), results as static objects (D-454)                                                           | D-090    | constants in examples evaluate; limit UI tests pass        |
 
 ## F. Runtime kernels (`cheby_runtime`)
@@ -105,17 +105,17 @@ I measurement runs from the first end-to-end program
 
 ## G. Driver and CLI (`cheby_driver`, `cheby_repl`, `cheby_cli`)
 
-| #   | Task                                                                                                                                        | Spec         | Done when                               |
-| --- | ------------------------------------------------------------------------------------------------------------------------------------------- | ------------ | --------------------------------------- |
-| G1  | Build graph over modules in import order, parallel modules and parallel functions inside a module (D-263), deterministic output (D-264)     | §13.12.2     | results identical across thread counts  |
-| G2  | `std` embedded in the binary, compiled from source and kept in memory per process (D-450)                                                   | -            | `import std::list` works                |
-| G3  | `cheby run [module_path]` (D-137), `main` of any visibility (D-163), tool errors for a bad module path (D-464)                              | §13.1        | M1 examples pass through the harness    |
-| G4  | `cheby test`: `test` blocks as separate units (D-265), `Nil` or `Result` bodies (D-140), filtering, sequential in M1                        | §13.6        | stdlib `test` blocks pass               |
-| G5  | `cheby repl`: expressions, `let`, declarations, imports, `:type`, `:module`, `:reload`, redefinition and stale types (D-043, D-098, D-193)  | §13.5        | `tests/repl/` passes                    |
-| G5b | REPL panics: each entry on its own stack, a panic abandons the entry and the session continues (D-283, D-457)                               | §13.5.4      | REPL test with a panicking entry passes |
-| G6  | `cheby check` with `--target` (D-282), phase-A errors stopping later phases (D-452), and `cheby build` reporting that no backend exists yet | §13.1        | CI uses `cheby check` on all examples   |
-| G7  | `--deny-warnings` (D-080)                                                                                                                   | §13.8        | UI test passes                          |
-| G8  | `cheby explain <code>` printing the embedded file from `docs/diagnostics/` (D-420)                                                          | §13.1, §13.8 | every assigned code is explained        |
+| #   | Task                                                                                                                                                                                               | Spec         | Done when                               |
+| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ | --------------------------------------- |
+| G1  | Build graph over modules in import order, parallel modules and parallel functions inside a module (D-263), deterministic output (D-264)                                                            | §13.12.2     | results identical across thread counts  |
+| G2  | `std` embedded in the binary, compiled from source and kept in memory per process (D-450)                                                                                                          | -            | `import std::list` works                |
+| G3  | `cheby run [module_path]` (D-137), `main` of any visibility (D-163), tool errors for a bad module path (D-464)                                                                                     | §13.1        | M1 examples pass through the harness    |
+| G4  | `cheby test`: `test` blocks as separate units (D-265), `Nil` or `Result` bodies (D-140), filtering, sequential in M1                                                                               | §13.6        | stdlib `test` blocks pass               |
+| G5  | `cheby repl`: expressions, `let`, declarations, imports, `:type`, `:module`, `:reload`, redefinition and stale types (D-043, D-098, D-193), `@external` redefined with another C signature (D-475) | §13.5        | `tests/repl/` passes                    |
+| G5b | REPL panics: each entry on its own stack, a panic abandons the entry and the session continues (D-283, D-457)                                                                                      | §13.5.4      | REPL test with a panicking entry passes |
+| G6  | `cheby check` with `--target` (D-282), phase-A errors stopping later phases (D-452), and `cheby build` reporting that no backend exists yet                                                        | §13.1        | CI uses `cheby check` on all examples   |
+| G7  | `--deny-warnings` (D-080)                                                                                                                                                                          | §13.8        | UI test passes                          |
+| G8  | `cheby explain <code>` printing the embedded file from `docs/diagnostics/` (D-420)                                                                                                                 | §13.1, §13.8 | every assigned code is explained        |
 
 ## H. Standard library, tier 1
 
@@ -128,11 +128,11 @@ I measurement runs from the first end-to-end program
 
 ## I. Measurement
 
-| #   | Task                                                                                        | Done when                               |
-| --- | ------------------------------------------------------------------------------------------- | --------------------------------------- |
-| I1  | Report lines per second per core on `bench/gen` projects of 10k, 100k and 1M lines (D-247)  | numbers published by CI on every merge  |
-| I2  | Profile the front end on the 1M-line project, fix the top hot spots                         | profile recorded in the milestone notes |
-| I3  | Settle OQ-P10: revise the D-247 and D-267 budgets through log entries if the numbers say so | log entry exists                        |
+| #   | Task                                                                                                                    | Done when                               |
+| --- | ----------------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
+| I1  | Report lines per second per core on `bench/gen` projects of 10k, 100k and 1M lines (D-247)                              | numbers published by CI on every merge  |
+| I2  | Profile the front end on the 1M-line project, fix the top hot spots                                                     | profile recorded in the milestone notes |
+| I3  | Settle OQ-P10: confirm or revise the D-247 throughput budget through a log entry; OQ-P11 and OQ-P12 follow in M3 and M6 | log entry exists                        |
 
 ## Exit criteria
 
@@ -143,5 +143,6 @@ I measurement runs from the first end-to-end program
 - E0038 is no longer emitted, and its explanation says so (D-451).
 - Every warning of §13.8 and every "must" of chapters 2 to 8 that M1 implements has a UI test.
 - The REPL test suite passes.
+- The `test` blocks of the examples above pass through `cheby test` in the conformance suite (D-472).
 - Builds are deterministic across thread counts.
-- Compile-speed numbers are reported, and OQ-P10 is settled.
+- Compile-speed numbers are reported, and OQ-P10, the throughput budget, is settled.

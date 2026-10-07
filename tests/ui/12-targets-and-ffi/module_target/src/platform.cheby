@@ -1,0 +1,7 @@
+//! Describes the platform. The module exists only on native.
+
+@!target(native)
+
+pub fn name() -> String {
+  "native"
+}

@@ -1,0 +1,21 @@
+// @mode: check-fail
+// @decisions: D-470
+//! A negative literal has its `-` directly before the digits. A space or a
+//! tab between them is an error; subtraction and `-(5)` are not affected.
+
+fn offsets(n: Int) -> Int {
+  let low = - 128
+  let high = -127
+  let shifted = n - 5
+  let negated = -(5)
+  low + high + shifted + negated
+}
+
+fn half() -> Float {
+  -	0.5
+}
+
+fn main() {
+  assert offsets(0) == -265
+  assert half() == -0.5
+}

@@ -6,7 +6,7 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use cheby_diag::FileId;
+use cheby_diag::{FileId, TextRange};
 
 use super::*;
 use crate::{Parse, SyntaxKind};
@@ -773,7 +773,7 @@ fn paths() {
 #[test]
 fn expressions() {
     let parsed = parse(
-        "fn f() {\n  a + b * c\n  -1\n  -x\n  !ok\n  g(x, _)\n  p.name\n  P { x, y: 1 }\n  P { ..p, x: 2 }\n  [1, ..xs]\n  (a, b)\n  (a)\n}\n",
+        "fn f() {\n  a + b * c\n  -1\n  -x\n  !ok\n  g(x, _)\n  p.name\n  P { x, y: 1 }\n  P { ..p, x: 2 }\n  [1, ..xs]\n  (a, b)\n  (a)\n  - 2\n  -(3)\n}\n",
     );
     let bins: Vec<BinExpr<'_>> = all(&parsed);
     assert_eq!(bins[0].op(), Some(BinOp::Add));
@@ -785,6 +785,14 @@ fn expressions() {
     assert!(prefixes[0].negative_literal().is_some());
     assert!(prefixes[1].negative_literal().is_none());
     assert_eq!(prefixes[2].op(), Some(PrefixOp::Not));
+    // `-1` has an empty gap. `- 2` negates a number but is not a negative
+    // literal (E0056), and `-(3)` negates a parenthesized expression.
+    assert!(prefixes[0].minus_gap().is_some_and(TextRange::is_empty));
+    assert!(prefixes[3].negative_literal().is_none());
+    assert!(prefixes[3].negated_number().is_some());
+    assert_eq!(prefixes[3].minus_gap().map(TextRange::len), Some(1));
+    assert!(prefixes[4].negated_number().is_none());
+    assert!(prefixes[4].minus_gap().is_none());
     let call: CallExpr<'_> = find(&parsed);
     let args: Vec<_> = call.args().collect();
     assert!(matches!(args[0], Arg::Expr(Expr::Path(_))));
@@ -879,10 +887,13 @@ fn statements_and_case() {
 #[test]
 fn patterns() {
     let parsed = parse(
-        "fn f() {\n  case x {\n    -1 => 1\n    \"s\" => 2\n    P { a, b: _, .. } => 3\n    [h, ..t] => 4\n    (a, b) as pair => 5\n    (p) => 6\n  }\n}\n",
+        "fn f() {\n  case x {\n    -1 => 1\n    \"s\" => 2\n    P { a, b: _, .. } => 3\n    [h, ..t] => 4\n    (a, b) as pair => 5\n    (p) => 6\n    - 7 => 7\n  }\n}\n",
     );
     let lits: Vec<LiteralPat<'_>> = all(&parsed);
     assert!(lits[0].is_negative());
+    assert!(lits[0].minus_gap().is_some_and(TextRange::is_empty));
+    assert!(lits[1].minus_gap().is_none());
+    assert_eq!(lits[2].minus_gap().map(TextRange::len), Some(1));
     assert!(matches!(lits[0].kind(), Some(LiteralPatKind::Int(_))));
     assert!(matches!(lits[1].kind(), Some(LiteralPatKind::String(_))));
     let ctor: CtorPat<'_> = find(&parsed);

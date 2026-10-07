@@ -57,7 +57,7 @@ M5 is listed as a milestone so it has exit criteria, but its work starts as soon
 
 ## Plan decisions
 
-Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-plan), D-284 onward in [M0 foundation](../decisions/LOG.md#2026-10-04-m0-foundation), D-418 onward in [Diagnostics](../decisions/LOG.md#2026-10-06-diagnostics), and the plan-level ones of [M1 syntax layer](../decisions/LOG.md#2026-10-07-m1-syntax-layer) and [M1 vertical slice](../decisions/LOG.md#2026-10-07-m1-vertical-slice):
+Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-plan), D-284 onward in [M0 foundation](../decisions/LOG.md#2026-10-04-m0-foundation), D-418 onward in [Diagnostics](../decisions/LOG.md#2026-10-06-diagnostics), and the plan-level ones of [M1 syntax layer](../decisions/LOG.md#2026-10-07-m1-syntax-layer), [M1 vertical slice](../decisions/LOG.md#2026-10-07-m1-vertical-slice) and [Open items](../decisions/LOG.md#2026-10-07-open-items):
 
 | Decision  | Summary                                                                                             |
 | --------- | --------------------------------------------------------------------------------------------------- |
@@ -105,6 +105,12 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-458     | Debug toolchains fail with exit status 102 when objects are live at exit                            |
 | D-465     | `cheby_resolve` depends on `cheby_iface`; codegen reads only the runtime's `abi` module             |
 | D-466     | Codes `E0038` to `E0055` for resolution, types, `main` and native symbols                           |
+| D-467     | Diagnostics are colored on a terminal, with `--color` and `NO_COLOR`; goldens hold the plain text   |
+| D-468     | A dependency file is shown as `<url>@<version>/<path>`, as in `github.com/x/y@1.2.0/src/a.cheby`    |
+| D-471     | A UI test may be a package directory with `cheby.toml` and `src/**`, its header in `src/main.cheby` |
+| D-472     | The conformance harness also runs each example's `cheby test`, pending until its milestone ends     |
+| D-475     | The JIT imports foreign symbols without a signature; the REPL checks E0054 over live definitions    |
+| D-476     | Spec examples of errors name no codes; each gets a UI test once its check exists                    |
 
 ## Open questions
 
@@ -121,4 +127,8 @@ Each open question is answered through a decision-log entry before the task that
 | OQ-P7  | Fiber context switch: own assembly per platform or a crate such as `corosensei`                                                        | M2        | open         |
 | OQ-P8  | IO poller: `mio`, a custom poller, and whether io_uring is used in v1                                                                  | M2        | open         |
 | OQ-P9  | How a package supplies native foreign code (C sources, static libraries, build scripts) to be linked, needed by example 020. Spec gap. | M3        | open         |
-| OQ-P10 | Whether the D-247/D-267 budgets hold, checked against M1 measurements (LOG open item)                                                  | M1 exit   | open         |
+| OQ-P10 | Whether the D-247 throughput budget holds, checked against M1 measurements                                                             | M1 exit   | open         |
+| OQ-P11 | Whether the D-247 latency budget, from a one-function edit to `main` running, holds with the M3 cache                                  | M3 exit   | open         |
+| OQ-P12 | Whether the release-to-debug ratio of D-267 holds                                                                                      | M6        | open         |
+| OQ-P13 | The factor by which a Cheby collection may be slower than a Rust kernel before it moves (D-274, D-336)                                 | M2 exit   | open         |
+| OQ-P14 | File IO, standard input and `std::env` on JS hosts, including hosts without a process such as browsers (OQ-io-3, OQ-env-1)             | M4 start  | open         |

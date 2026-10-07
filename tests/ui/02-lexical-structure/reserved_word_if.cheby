@@ -1,7 +1,7 @@
 // @mode: parse-fail
-// @decisions: D-002, D-128
-//! `if` is a reserved word, and Cheby has no `if`: the reserved-word
-//! error explains the syntax error it causes.
+// @decisions: D-002, D-128, D-469
+//! `if` is a reserved word, and Cheby has no `if`: the syntax error it
+//! causes carries the reserved word's help.
 
 fn sign(n: Int) -> Int {
   if n > 0 { 1 } else { 0 }

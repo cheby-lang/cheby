@@ -518,3 +518,41 @@ fn lexer_errors_do_not_cascade() {
     assert_eq!(codes_of(&in_fn("  /* c */ let c = 1")), ["E0004"]);
     assert_eq!(codes_of("fn f() {\n  g(\"open)\n}\n"), ["E0010"]);
 }
+
+/// The helps of the grammar errors of `text`, in order.
+fn helps_of(text: &str) -> Vec<String> {
+    let (_, _, errors) = parse_text("test.cheby", text);
+    errors
+        .iter()
+        .flat_map(|d| d.helps.iter().map(|h| h.message.clone()))
+        .collect()
+}
+
+/// A reserved word that causes a grammar error explains it, at the word
+/// or right after it on the same line (§2.4, D-128).
+#[test]
+fn reserved_words_explain_grammar_errors() {
+    assert_eq!(
+        helps_of(&in_fn("  if n > 0 { 1 } else { 0 }")),
+        ["Cheby has no `if`; use `case`"]
+    );
+    assert_eq!(
+        helps_of(&in_fn("  return n")),
+        ["Cheby has no `return`; a function returns the value of its body"]
+    );
+    assert_eq!(
+        helps_of(&in_fn("  let mut x = 1")),
+        ["values are immutable; bind a new name"]
+    );
+    assert_eq!(
+        helps_of("struct Point {\n  x: Int,\n}\n"),
+        ["Cheby has no `struct`; use `type`"]
+    );
+    // A word on the line before does not explain an error.
+    assert_eq!(helps_of(&in_fn("  go\n  )")), Vec::<String>::new());
+    // Nor does a word that is not reserved.
+    assert_eq!(helps_of(&in_fn("  foo n")), Vec::<String>::new());
+    // A reserved word that parses as a name is not a grammar error: name
+    // resolution reports it where it is bound (E0007).
+    assert_eq!(codes_of(&in_fn("  let go = 1\n  go")), Vec::<String>::new());
+}
