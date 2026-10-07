@@ -9,7 +9,9 @@ publish = false
 
 [dependencies]
 cheby_diag.workspace = true
-cheby_resolve.workspace = true
+cheby_package.workspace = true
+rustc-hash.workspace = true
+siphasher.workspace = true
 
 [lints]
 workspace = true

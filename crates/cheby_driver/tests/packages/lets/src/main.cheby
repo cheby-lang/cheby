@@ -1,0 +1,19 @@
+//! Prints a greeting several times.
+
+import std::io
+import app::greet
+
+fn main() {
+  let greeting = "hi"
+  io::println(greeting)
+  greet::shout(greeting)
+  shout(greeting)
+}
+
+fn shout(text: String) -> Nil {
+  let _ = io::print(text)
+  let unused = "never printed"
+  let again = text
+  io::println("!")
+  io::eprintln(again)
+}

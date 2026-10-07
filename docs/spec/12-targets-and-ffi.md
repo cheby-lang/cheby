@@ -104,6 +104,14 @@ pub fn open(path: String) -> Result<Db, String>
 
 - Compile-time constant evaluation cannot call foreign functions ([§4.5](04-declarations.md#45-constants)) (D-090).
 
+Native symbols follow three rules (D-455):
+
+- Every symbol named by `@external(native, …)` must be defined when the program is loaded or linked, by the Cheby runtime, a linked library or the process itself. Otherwise running or building the program is a compile error at the `@external`, even if the function is never called. `cheby check` does not report it, because which symbols exist is known only at load or link time.
+- All `@external(native, …)` attributes of a program that name the same symbol, in any module or package including the standard library, must give it the same C signature ([§12.5.1](#1251-native-abi)).
+- Symbols that start with `cheby_rt_` or `cb$` belong to the runtime and to generated code. Outside the standard library, an `@external(native, …)` must not name them.
+
+_Note:_ the reference implementation compiles each native external to an ordinary Cheby function that makes the foreign call, so callers call it like any other function, and whether a function is external is not part of its module's interface (D-455).
+
 ### 12.5.1 Native ABI
 
 On native targets, foreign functions use the C ABI of the platform (D-030). Parameter and return types are mapped as follows:

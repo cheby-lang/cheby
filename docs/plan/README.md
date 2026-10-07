@@ -57,7 +57,7 @@ M5 is listed as a milestone so it has exit criteria, but its work starts as soon
 
 ## Plan decisions
 
-Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-plan), D-284 onward in [M0 foundation](../decisions/LOG.md#2026-10-04-m0-foundation), D-418 onward in [Diagnostics](../decisions/LOG.md#2026-10-06-diagnostics), and the plan-level ones of [M1 syntax layer](../decisions/LOG.md#2026-10-07-m1-syntax-layer):
+Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-plan), D-284 onward in [M0 foundation](../decisions/LOG.md#2026-10-04-m0-foundation), D-418 onward in [Diagnostics](../decisions/LOG.md#2026-10-06-diagnostics), and the plan-level ones of [M1 syntax layer](../decisions/LOG.md#2026-10-07-m1-syntax-layer) and [M1 vertical slice](../decisions/LOG.md#2026-10-07-m1-vertical-slice):
 
 | Decision  | Summary                                                                                             |
 | --------- | --------------------------------------------------------------------------------------------------- |
@@ -96,6 +96,15 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-443     | Rendering details follow rustc; diagnostics are separated by an empty line, with no summary line    |
 | D-445     | `skip-run` examples are only checked, pending before their milestone; bless keeps the exit code     |
 | D-446     | Example 030 moves to M5, and examples with dependencies are checked from M5                         |
+| D-450     | `std` sources are embedded in the binary until M3 and shown as `std/<path>.cheby`                   |
+| D-451     | Temporary E0038 for constructs M1 does not support yet, retired at M1 exit                          |
+| D-453     | Hidden `ctx` first, uniform result word, one convention for unknown callees (ADR-0055)              |
+| D-454     | Static objects have count 0, nullary constructors are static, fixed layout ids 1-63                 |
+| D-456     | Symbols `cb$<kind>$<path>$<item>`; slots identified by path and ABI signature                       |
+| D-457     | Each entry runs on its own stack and a panic parks it; 64 MiB root, 256 KiB headroom                |
+| D-458     | Debug toolchains fail with exit status 102 when objects are live at exit                            |
+| D-465     | `cheby_resolve` depends on `cheby_iface`; codegen reads only the runtime's `abi` module             |
+| D-466     | Codes `E0038` to `E0055` for resolution, types, `main` and native symbols                           |
 
 ## Open questions
 

@@ -5,12 +5,15 @@
 //!   `E0036` diagnostics with a snippet of the manifest.
 //! - [`discover`] maps the files under `src/` to module paths (B2), and
 //!   reports invalid file and directory names as `E0037`.
+//! - [`graph`] orders modules by their imports and finds import cycles
+//!   (B3, D-145).
 //!
 //! Failures that are not about the package's contents, such as a
 //! directory that cannot be read, are [`PackageError`]s, which the
 //! command line prints as plain `error:` lines without a code (D-442).
 
 mod discover;
+pub mod graph;
 mod manifest;
 mod names;
 

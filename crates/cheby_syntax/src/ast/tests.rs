@@ -676,6 +676,42 @@ fn source_file_header_and_items() {
 }
 
 #[test]
+fn item_keywords() {
+    let parsed = parse(
+        "pub fn f() {}
+const x: Int = 1
+priv type T {
+  T,
+}
+type A = Int
+interface I {
+}
+test \"t\" {
+}
+",
+    );
+    let keywords: Vec<(String, u32)> = parsed
+        .source_file()
+        .items()
+        .map(|item| {
+            let keyword = item.keyword().unwrap();
+            (keyword.text().to_owned(), keyword.span().range.start())
+        })
+        .collect();
+    assert_eq!(
+        keywords,
+        [
+            ("fn".to_owned(), 4),
+            ("const".to_owned(), 14),
+            ("type".to_owned(), 36),
+            ("type".to_owned(), 52),
+            ("interface".to_owned(), 65),
+            ("test".to_owned(), 81),
+        ]
+    );
+}
+
+#[test]
 fn type_declarations() {
     let parsed = parse(
         "pub exposed type Shape<T> {\n  /// A dot.\n  Dot,\n  Circle(Float),\n  Rect { w: T },\n}\ntype P { x: Int }\ntype Ext\ntype A = (Int, B)\n",

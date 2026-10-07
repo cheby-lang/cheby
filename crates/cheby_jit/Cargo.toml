@@ -10,6 +10,19 @@ publish = false
 [dependencies]
 cheby_codegen_clif.workspace = true
 cheby_runtime.workspace = true
+cheby_mir.workspace = true
+cheby_iface.workspace = true
+cranelift-codegen.workspace = true
+cranelift-jit.workspace = true
+cranelift-module.workspace = true
+cranelift-native.workspace = true
+rustc-hash.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[dev-dependencies]
+cheby_diag.workspace = true
 
 [lints]
 workspace = true

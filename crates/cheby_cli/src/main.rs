@@ -6,7 +6,9 @@
 //! Diagnostics go to stderr in the layout of D-418. Errors that are not
 //! about the program, such as a missing `cheby.toml`, are plain `error:`
 //! lines without a code (D-442). Exit status: 0 on success, 1 on any
-//! error.
+//! error. `cheby run` exits with the program's status (§10.10, D-182): 0,
+//! 1 when `main` returns `Err`, 101 after a panic, and in debug builds of
+//! the toolchain 102 when objects leak (D-458).
 
 use std::io::Write as _;
 use std::process::ExitCode;
@@ -82,7 +84,7 @@ fn main() -> ExitCode {
         Command::New { .. } => not_yet("new", "M5"),
         Command::Check => check(),
         Command::Build { target } => build(target),
-        Command::Run { .. } => not_yet("run", "M1"),
+        Command::Run { module_path, args } => run(module_path, args),
         Command::Repl => not_yet("repl", "M1"),
         Command::Test => not_yet("test", "M1"),
         Command::Fmt { .. } => not_yet("fmt", "M5"),
@@ -95,26 +97,62 @@ fn main() -> ExitCode {
     }
 }
 
+/// The root of the package that holds the current directory.
+fn package_root() -> Result<std::path::PathBuf, ExitCode> {
+    let cwd = std::env::current_dir()
+        .map_err(|e| tool_error(&format!("cannot read the current directory: {e}")))?;
+    cheby_driver::find_package_root(&cwd).ok_or_else(|| {
+        tool_error("could not find `cheby.toml` in the current directory or any parent")
+    })
+}
+
+/// Prints diagnostics to stderr. A failed write to stderr cannot be
+/// reported anywhere else.
+fn print_diagnostics(out: &cheby_driver::CheckOutput) {
+    let _ = std::io::stderr().lock().write_all(out.render().as_bytes());
+}
+
 /// `cheby check` (D-282): checks the package that holds the current
-/// directory and prints its diagnostics.
+/// directory with every implemented phase and prints its diagnostics.
 fn check() -> ExitCode {
-    let cwd = match std::env::current_dir() {
-        Ok(cwd) => cwd,
-        Err(e) => return tool_error(&format!("cannot read the current directory: {e}")),
-    };
-    let Some(root) = cheby_driver::find_package_root(&cwd) else {
-        return tool_error("could not find `cheby.toml` in the current directory or any parent");
+    let root = match package_root() {
+        Ok(root) => root,
+        Err(code) => return code,
     };
     match cheby_driver::check(&root) {
         Ok(out) => {
-            // A failed write to stderr cannot be reported anywhere else.
-            let _ = std::io::stderr().lock().write_all(out.render().as_bytes());
+            print_diagnostics(&out);
             if out.has_errors() {
                 ExitCode::FAILURE
             } else {
                 ExitCode::SUCCESS
             }
         }
+        Err(e) => tool_error(e.message()),
+    }
+}
+
+/// `cheby run [module_path] [-- args]` (D-137, D-286): checks and compiles
+/// the package with the JIT, then runs the module's `main`. Compile errors
+/// are printed and exit with 1 before anything runs; warnings are printed
+/// before the program starts.
+fn run(module_path: Option<String>, args: Vec<String>) -> ExitCode {
+    let root = match package_root() {
+        Ok(root) => root,
+        Err(code) => return code,
+    };
+    let options = cheby_driver::RunOptions { module_path, args };
+    let program = match cheby_driver::prepare_run(&root, options) {
+        Ok(cheby_driver::Prepared::Ready(program)) => program,
+        Ok(cheby_driver::Prepared::CompileFailed(out)) => {
+            print_diagnostics(&out);
+            return ExitCode::FAILURE;
+        }
+        Err(e) => return tool_error(e.message()),
+    };
+    print_diagnostics(program.output());
+    match program.run() {
+        Ok(status) => ExitCode::from(u8::try_from(status).unwrap_or(1)),
         Err(e) => tool_error(e.message()),
     }
 }

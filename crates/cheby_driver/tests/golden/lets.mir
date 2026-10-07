@@ -1,0 +1,87 @@
+module std::io
+
+fn std::io::print(_0: value) -> value check str#0 {
+  str#0 = "std/io.cheby:7:8"
+bb0:
+  call_foreign "cheby_io_print"(borrow _0) -> void
+  drop _0
+  return const nil
+}
+
+fn std::io::println(_0: value) -> value check str#0 {
+  str#0 = "std/io.cheby:12:8"
+bb0:
+  call_foreign "cheby_io_println"(borrow _0) -> void
+  drop _0
+  return const nil
+}
+
+fn std::io::eprint(_0: value) -> value check str#0 {
+  str#0 = "std/io.cheby:17:8"
+bb0:
+  call_foreign "cheby_io_eprint"(borrow _0) -> void
+  drop _0
+  return const nil
+}
+
+fn std::io::eprintln(_0: value) -> value check str#0 {
+  str#0 = "std/io.cheby:22:8"
+bb0:
+  call_foreign "cheby_io_eprintln"(borrow _0) -> void
+  drop _0
+  return const nil
+}
+
+module app::greet
+
+fn app::greet::shout(_0: value) -> value check str#0 {
+  str#0 = "src/greet.cheby:5:8"
+  str#1 = "greet: "
+bb0:
+  _1: value = const str#1
+  _2: value = call std::io::print(_1)
+  drop _2
+  tail_call std::io::println(_0)
+}
+
+module app
+
+fn app::main() -> value check str#0 {
+  str#0 = "src/main.cheby:6:4"
+  str#1 = "hi"
+bb0:
+  _0: value = const str#1
+  dup _0
+  _1: value = call std::io::println(_0)
+  drop _1
+  dup _0
+  _2: value = call app::greet::shout(_0)
+  drop _2
+  tail_call app::shout(_0)
+}
+
+fn app::shout(_0: value) -> value check str#0 {
+  str#0 = "src/main.cheby:13:4"
+  str#1 = "never printed"
+  str#2 = "!"
+bb0:
+  dup _0
+  _1: value = call std::io::print(_0)
+  drop _1
+  _2: value = const str#1
+  drop _2
+  _3: value = _0
+  _4: value = const str#2
+  _5: value = call std::io::println(_4)
+  drop _5
+  tail_call std::io::eprintln(_3)
+}
+
+entries
+
+fn entry main(app::main) [c] () -> i64 {
+bb0:
+  _0: value = call app::main()
+  drop _0
+  return const i64 0
+}

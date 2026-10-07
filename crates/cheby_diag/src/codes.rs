@@ -162,6 +162,30 @@ codes! {
     // Packages (chapters 7 and 13).
     E0036 Error 36 INVALID_MANIFEST "invalid `cheby.toml`";
     E0037 Error 37 INVALID_MODULE_NAME "module file or directory name that is not a valid name";
+    // Support (M1 phases in progress).
+    E0038 Error 38 NOT_SUPPORTED_YET "construct the compiler does not support yet";
+    // Modules and names (chapter 7).
+    E0039 Error 39 UNRESOLVED_IMPORT "import of a module or package that does not exist";
+    E0040 Error 40 IMPORT_CYCLE "modules that import each other in a cycle";
+    E0041 Error 41 DUPLICATE_NAME "name declared or imported twice in one module";
+    E0042 Error 42 UNRESOLVED_NAME "name that does not refer to anything usable here";
+    E0043 Error 43 PRIVATE_ITEM "item that is not visible from this module";
+    E0044 Error 44 SHADOWED_NAME "binding that reuses a name already in scope";
+    E0045 Error 45 INVALID_ATTRIBUTE "unknown, malformed, duplicated or misplaced attribute";
+    E0046 Error 46 MISSING_BODY "function without a body or an `@external`";
+    // Types (chapter 3).
+    E0047 Error 47 TYPE_MISMATCH "mismatched types";
+    E0048 Error 48 WRONG_ARGUMENT_COUNT "call with the wrong number of arguments";
+    E0049 Error 49 NOT_A_FUNCTION "call of a value that is not a function";
+    // Declarations (chapter 4).
+    E0050 Error 50 INVALID_MAIN "`main` without the signature of an entry point";
+    // Types (chapter 3).
+    E0051 Error 51 WRONG_TYPE_ARGUMENT_COUNT "type with the wrong number of type arguments";
+    E0052 Error 52 NOT_A_TYPE "interface where a type is expected, or a type where an interface is expected";
+    // Foreign functions (chapter 12).
+    E0053 Error 53 UNRESOLVED_NATIVE_SYMBOL "native symbol of an `@external` that is not defined";
+    E0054 Error 54 CONFLICTING_NATIVE_SYMBOL "native symbol bound with two different C signatures";
+    E0055 Error 55 RESERVED_NATIVE_SYMBOL "native symbol reserved for the toolchain";
     // Warnings.
     W0001 Warning 1 TUPLE_SHAPE "tuple type that hides meaning";
 }

@@ -17,9 +17,11 @@ cheby_types.workspace = true
 cheby_mir.workspace = true
 cheby_codegen_clif.workspace = true
 cheby_jit.workspace = true
+cheby_runtime.workspace = true
 cheby_link.workspace = true
 cheby_js.workspace = true
 cheby_consteval.workspace = true
+rustc-hash.workspace = true
 
 [lints]
 workspace = true

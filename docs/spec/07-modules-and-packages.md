@@ -155,6 +155,8 @@ Every module implicitly imports the prelude. It contains only types, constructor
 
 Functions on these types come from their modules, which must be imported: `std::int`, `std::float`, `std::string`, `std::list`, `std::result`, `std::option` and so on. The operator interfaces live in `std::ops`, not in the prelude (D-169).
 
+Each prelude type except `Never` has a home module in the standard library, such as `std::option` for `Option`, where interface satisfaction looks for its functions ([§8.2](08-interfaces.md#82-satisfaction)). The home module re-exports the type and its constructors, so `option::Option` and `option::Some` are the prelude's `Option` and `Some`, not separate items. A module needs no import of a home module for its types to satisfy interfaces (D-447).
+
 A module may declare, or explicitly import, a type or constructor with the same name as a prelude item, for example a type called `Order` in a shop application. The local declaration or import hides the prelude item of the same name in that module, and doing so is a warning (D-146). Hiding is per namespace ([§7.7](#77-namespaces-and-name-resolution)) (D-212): a type hides only a prelude type, and a constructor only a prelude constructor. A constructor named `String` or `Bool`, as in `Value { String(String), Bool(Bool) }`, hides nothing and does not warn, because `String` and `Bool` are prelude types, not prelude constructors. A constructor named `Some` or `Ok` does hide a prelude constructor and warns. This is not shadowing in the sense of [§5.2.3](05-expressions.md#523-no-shadowing), which is about value bindings.
 
 ## 7.7 Namespaces and name resolution

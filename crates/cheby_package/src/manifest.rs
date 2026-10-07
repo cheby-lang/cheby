@@ -265,10 +265,39 @@ impl Targets {
         native: true,
         js: true,
     };
-    const NONE: Self = Self {
+    /// No target.
+    pub const NONE: Self = Self {
         native: false,
         js: false,
     };
+
+    /// Only `target`.
+    #[must_use]
+    pub const fn only(target: Target) -> Self {
+        Self::NONE.with(target)
+    }
+
+    /// This set with `target` added.
+    #[must_use]
+    pub const fn with(mut self, target: Target) -> Self {
+        self.insert(target);
+        self
+    }
+
+    /// The targets in both sets.
+    #[must_use]
+    pub const fn intersection(self, other: Self) -> Self {
+        Self {
+            native: self.native && other.native,
+            js: self.js && other.js,
+        }
+    }
+
+    /// Whether the set has no target.
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        !self.native && !self.js
+    }
 
     #[must_use]
     pub const fn contains(self, target: Target) -> bool {

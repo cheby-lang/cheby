@@ -35,9 +35,9 @@ const MANIFEST: (&str, &[u8]) = ("cheby.toml", b"name = \"app\"\nversion = \"0.1
 /// which are rejected until M5, and a D-243 warning (W0001), which is an
 /// open issue in the example.
 #[test]
-fn examples_check_cleanly() {
+fn examples_pass_the_syntax_layer() {
     for dir in examples() {
-        let out = check(&dir).unwrap();
+        let out = check_syntax(&dir).unwrap();
         let rendered = out.render();
         if dir.ends_with("030_shop_service") {
             assert_eq!(out.diagnostics.len(), 2, "{rendered}");
@@ -47,6 +47,256 @@ fn examples_check_cleanly() {
             assert_eq!(rendered, "", "{}", dir.display());
         }
     }
+}
+
+/// With every implemented phase, a valid example reports only constructs
+/// the compiler does not support yet (E0038) and the known W0001, so the
+/// support gate never hides a real error (D-451). 001 is clean, and
+/// 030 still stops after phase A.
+#[test]
+fn examples_report_only_unsupported_constructs() {
+    for dir in examples() {
+        let out = check(&dir).unwrap();
+        let rendered = out.render();
+        let codes: Vec<String> = out.diagnostics.iter().map(|d| d.code.to_string()).collect();
+        if dir.ends_with("001_hello_world") {
+            assert_eq!(rendered, "", "{rendered}");
+        } else if dir.ends_with("030_shop_service") {
+            assert_eq!(codes, ["E0036", "W0001"], "{rendered}");
+        } else {
+            assert!(
+                codes.iter().all(|c| c == "E0038" || c == "W0001"),
+                "{}:\n{rendered}",
+                dir.display()
+            );
+        }
+    }
+}
+
+/// Every shipped std module checks cleanly when a package imports it.
+#[test]
+fn std_checks_cleanly() {
+    for module in std_lib::STD_MODULES {
+        let source = format!(
+            "//! Imports a std module.\n\nimport std::{}\n\nfn main() {{\n  Nil\n}}\n",
+            module.path
+        );
+        let dir = package(
+            &format!("std_{}", module.path.replace("::", "_")),
+            &[MANIFEST, ("src/main.cheby", source.as_bytes())],
+        );
+        let out = check(&dir).unwrap();
+        assert_eq!(out.render(), "", "std::{}", module.path);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}
+
+/// Modules that import each other are one E0040, and modules on the cycle
+/// are not checked; others are.
+#[test]
+fn import_cycles_are_reported() {
+    let dir = package(
+        "cycle",
+        &[
+            MANIFEST,
+            (
+                "src/main.cheby",
+                b"//! Root.\n\nimport app::a\n\nfn main() {\n  Nil\n}\n",
+            ),
+            (
+                "src/a.cheby",
+                b"//! A.\n\nimport app::b\n\nfn f() {\n  Nil\n}\n",
+            ),
+            (
+                "src/b.cheby",
+                b"//! B.\n\nimport app::a\n\nfn g() {\n  Nil\n}\n",
+            ),
+            (
+                "src/c.cheby",
+                b"//! C, outside the cycle.\n\nfn h() -> String {\n  Nil\n}\n",
+            ),
+        ],
+    );
+    let out = check(&dir).unwrap();
+    let rendered = out.render();
+    assert!(
+        rendered.starts_with("error[E0040]: modules import each other in a cycle"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("app::a → app::b → app::a"), "{rendered}");
+    // `c` is still checked: its mismatch is reported.
+    assert!(rendered.contains("error[E0047]"), "{rendered}");
+    assert_eq!(out.diagnostics.len(), 2, "{rendered}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn missing_and_planned_std_modules() {
+    let dir = package(
+        "std_imports",
+        &[
+            MANIFEST,
+            (
+                "src/main.cheby",
+                b"//! Imports.\n\nimport std::list\nimport std::ioo\n\nfn main() {\n  Nil\n}\n",
+            ),
+        ],
+    );
+    let rendered = check(&dir).unwrap().render();
+    assert!(
+        rendered.contains("error[E0038]: the module `std::list` is not supported yet"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("error[E0039]: there is no module `std::ioo`"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("`std::io`"), "{rendered}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+fn golden(name: &str, actual: &str) {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/golden")
+        .join(name);
+    if std::env::var_os("CHEBY_BLESS").is_some() {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, actual).unwrap();
+        return;
+    }
+    let expected = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("{}: {e} (bless with CHEBY_BLESS=1)", path.display()));
+    assert_eq!(actual, expected, "{name} differs from {}", path.display());
+}
+
+fn example(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/examples")
+        .join(name)
+}
+
+fn test_package(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/packages")
+        .join(name)
+}
+
+/// The MIR of 001 after reference counting (D1), the same twice
+/// (D-264).
+#[test]
+fn mir_of_hello_world() {
+    let (out, mir) = dump_mir(&example("001_hello_world")).unwrap();
+    assert_eq!(out.render(), "");
+    golden("001_hello_world.mir", &mir);
+    assert_eq!(dump_mir(&example("001_hello_world")).unwrap().1, mir);
+}
+
+/// `let`, dups, drops, tail calls within and across modules.
+#[test]
+fn mir_of_lets_and_tail_calls() {
+    let (out, mir) = dump_mir(&test_package("lets")).unwrap();
+    assert_eq!(out.render(), "");
+    golden("lets.mir", &mir);
+}
+
+/// The C convention's name differs between hosts; goldens use `system_v`.
+fn normalize_clif(text: &str) -> String {
+    text.replace("apple_aarch64", "system_v")
+        .replace("windows_fastcall", "system_v")
+}
+
+/// The CLIF of 001 before Cranelift compiles it: the stack check, the slot
+/// loads, `return_call` for the tail call, the static strings. The same
+/// twice (D-264).
+#[test]
+fn clif_of_hello_world() {
+    let (out, clif) = dump_clif(&example("001_hello_world")).unwrap();
+    assert_eq!(out.render(), "");
+    let clif = normalize_clif(&clif);
+    golden("001_hello_world.clif", &clif);
+    let again = normalize_clif(&dump_clif(&example("001_hello_world")).unwrap().1);
+    assert_eq!(again, clif);
+}
+
+#[test]
+fn dumps_of_a_package_with_errors_are_empty() {
+    let dir = package(
+        "dump_errors",
+        &[
+            MANIFEST,
+            ("src/main.cheby", b"//! Bad.\n\nfn main() {\n  1 + 2\n}\n"),
+        ],
+    );
+    let (out, mir) = dump_mir(&dir).unwrap();
+    assert!(out.has_errors());
+    assert_eq!(mir, "");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Runs 001 in this process: status 0 and, in debug builds, no object
+/// left live (the leak check would give 102).
+#[test]
+fn hello_world_runs_without_leaks() {
+    let result = run(&example("001_hello_world"), RunOptions::default()).unwrap();
+    let RunResult::Ran { output, exit } = result else {
+        panic!("001 failed to compile");
+    };
+    assert_eq!(output.render(), "");
+    assert_eq!(exit, 0);
+    assert_eq!(cheby_runtime::live_objects(), 0);
+}
+
+#[test]
+fn run_tool_errors() {
+    let dir = package(
+        "run_errors",
+        &[
+            MANIFEST,
+            ("src/main.cheby", b"//! Root.\n\nfn main() {\n  Nil\n}\n"),
+            ("src/lib.cheby", b"//! No main.\n\nfn f() {\n  Nil\n}\n"),
+        ],
+    );
+    let missing = RunOptions {
+        module_path: Some("app::nope".to_owned()),
+        args: Vec::new(),
+    };
+    assert_eq!(
+        run(&dir, missing).unwrap_err().message(),
+        "there is no module `app::nope` in this package"
+    );
+    let no_main = RunOptions {
+        module_path: Some("app::lib".to_owned()),
+        args: Vec::new(),
+    };
+    assert_eq!(
+        run(&dir, no_main).unwrap_err().message(),
+        "module `app::lib` has no `main` function"
+    );
+    let bad = RunOptions {
+        module_path: Some("app::".to_owned()),
+        args: Vec::new(),
+    };
+    assert_eq!(
+        run(&dir, bad).unwrap_err().message(),
+        "`app::` is not a module path"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn compile_errors_stop_before_running() {
+    let dir = package(
+        "run_compile_error",
+        &[
+            MANIFEST,
+            ("src/main.cheby", b"//! Bad.\n\nfn main() {\n  nope()\n}\n"),
+        ],
+    );
+    let RunResult::CompileFailed(out) = run(&dir, RunOptions::default()).unwrap() else {
+        panic!("a package with errors ran");
+    };
+    assert!(out.render().contains("error[E0042]"), "{}", out.render());
+    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]

@@ -141,7 +141,14 @@ fn area(shape: Shape) -> Float {
 }
 ```
 
-Every panic message includes the source location where the panic started.
+Every panic message includes the source location where the panic started. A panic is reported on standard error, after standard output has been flushed, as two lines in the form rustc uses: `panicked at path:line:column:`, with the path and position as in diagnostics ([§13.8](13-tooling.md#138-diagnostics-and-warnings)), then the message (D-449). For example, reaching the `todo` above in `src/main.cheby` prints:
+
+```
+panicked at src/main.cheby:5:12:
+not implemented: area of a dot
+```
+
+`panic` without a message reports `explicit panic`, and a message given with `as` replaces it. `todo` reports `not implemented`, and `todo as m` reports `not implemented: m`. The runtime panics of [§11.8](#118-runtime-panics) report `integer overflow`, `division by zero`, `shift amount out of range`, `equality or hashing reached a function value or a handle` and `stack overflow`. Failed assertions report `assertion failed` and `` `let assert` pattern did not match ``, with the details of [§11.4](#114-let-assert) and [§11.5](#115-assert) (D-449).
 
 ## 11.7 Panics and fibers
 
@@ -193,3 +200,5 @@ Deep non-tail recursion can exhaust a fiber's stack. Exhausting it panics the fi
 Tail calls never grow the stack ([§5.15.3](05-expressions.md#5153-guaranteed-tail-calls)), and all standard-library functions are written so that their stack use does not depend on the size of their input (D-094).
 
 Foreign functions do not perform the entry check. The runtime must leave enough headroom below the limit for foreign calls, or run them on a separate stack (ADR-0032).
+
+_Note:_ the reference implementation gives the root fiber a 64 MiB stack and leaves 256 KiB of headroom below the limit (D-457).

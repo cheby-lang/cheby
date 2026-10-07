@@ -119,7 +119,7 @@ Local functions, declared inside a function body, are expressions and are covere
 
 An entry point is a function named `main` with no parameters, returning either `Nil` or `Result<Nil, E>` for some `E` (D-073). Its behavior is defined in [§10.10](10-concurrency.md#1010-program-entry-and-exit).
 
-Any module's `main` can be run by module path, for example `cheby run my_app::tools::migrate` (D-137). The default entry point is the `main` of the package's root module, `src/main.cheby` ([§7.2](07-modules-and-packages.md#72-modules-and-files)) (D-137, D-142).
+Any module's `main` can be run by module path, for example `cheby run my_app::tools::migrate` (D-137). Every top-level function named `main`, in any module, is therefore an entry point and must have this signature. A `main` with parameters or another return type is a compile error (D-448). The default entry point is the `main` of the package's root module, `src/main.cheby` ([§7.2](07-modules-and-packages.md#72-modules-and-files)) (D-137, D-142).
 
 `main` may have any visibility, including `priv`, because `cheby run` finds it by module path (D-163). It is usually written without a visibility prefix, `fn main()`, since `pub` would export it as part of the package's API.
 
@@ -303,13 +303,19 @@ The set of attributes is fixed, and user-defined attributes do not exist (D-200,
 
 | Attribute                | Allowed on                                              | Meaning                               | Defined in                                                |
 | ------------------------ | ------------------------------------------------------- | ------------------------------------- | --------------------------------------------------------- |
-| `@external(target, …)`   | functions, types                                        | foreign implementation for one target | [§12.5](12-targets-and-ffi.md#125-foreign-functions)      |
+| `@external(target, …)`   | functions, types without a body                         | foreign implementation for one target | [§12.5](12-targets-and-ffi.md#125-foreign-functions)      |
 | `@target(target)`        | functions, types, aliases, constants, interfaces, tests | item exists only on that target       | [§12.6](12-targets-and-ffi.md#126-target-specific-code)   |
 | `@blocking`              | `@external` functions                                   | the foreign call may block            | [§12.7](12-targets-and-ffi.md#127-blocking-foreign-calls) |
 | `@async`                 | functions with `@external(js, …)`                       | the JS function returns a `Promise`   | [§12.5.2](12-targets-and-ffi.md#1252-js-abi)              |
 | `@deprecated("message")` | `pub` items                                             | using the item warns with the message | below                                                     |
 
-An unknown attribute name, a duplicated attribute (other than `@external` with different targets), or an attribute in a place it is not allowed is a compile error.
+An unknown attribute name, a malformed attribute, a duplicated attribute (other than `@external` with different targets), or an attribute in a place it is not allowed is a compile error (D-461):
+
+- `@external` takes `native` and one symbol string, or `js` and two strings, the module and the export, none of them empty ([§12.5](12-targets-and-ffi.md#125-foreign-functions)). An item has at most one `@external` per target.
+- `@target` and `@!target` take exactly one target, `native` or `js`.
+- `@blocking` and `@async` take no arguments, and `@deprecated` takes one message string.
+- No attribute is allowed on a variant, a record field or an interface function.
+- Every attribute other than `@external` appears at most once on an item, and `@!target` at most once in a module.
 
 An attribute name binds nothing, so it is not checked against the reserved words or the naming convention of [§2.3](02-lexical-structure.md#23-identifiers) and [§2.4](02-lexical-structure.md#24-keywords). This is what lets `@async` exist although `async` is a reserved word. A name outside the table is an unknown attribute (D-435).
 

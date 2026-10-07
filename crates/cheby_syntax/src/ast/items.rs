@@ -332,6 +332,20 @@ impl<'t> Item<'t> {
         child(self.syntax())
     }
 
+    /// The keyword that introduces the item: `fn`, `type` (types and
+    /// aliases), `const`, `interface` or `test`.
+    #[must_use]
+    pub fn keyword(self) -> Option<SyntaxToken<'t>> {
+        let kind = match self {
+            Self::Fn(_) => SyntaxKind::FN_KW,
+            Self::Type(_) | Self::Alias(_) => SyntaxKind::TYPE_KW,
+            Self::Const(_) => SyntaxKind::CONST_KW,
+            Self::Interface(_) => SyntaxKind::INTERFACE_KW,
+            Self::Test(_) => SyntaxKind::TEST_KW,
+        };
+        token(self.syntax(), kind)
+    }
+
     /// The declared name: a [`Name`] for every item except a test, whose
     /// name is a string ([`TestDecl::name`]).
     #[must_use]

@@ -45,6 +45,15 @@ cheby/
 
 Crate boundaries enforce the locality rule (D-246): `cheby_types` checks a module given its own syntax and the `ModuleInterface` values of its dependencies, and has no API that returns another module's bodies. A feature that needs one would not compile against these crates, which is the point.
 
+The crates of the compiler depend on each other in pipeline order (D-284, D-465):
+
+- `cheby_diag` and `cheby_syntax` are at the bottom, with `cheby_package` above them.
+- `cheby_iface`, the interface model, depends only on `cheby_diag` and `cheby_package`. It is the shared vocabulary of every later phase.
+- `cheby_resolve` depends on `cheby_iface`, because name resolution reads the interfaces of dependencies. `cheby_types` depends on both.
+- `cheby_mir` depends on `cheby_types` and `cheby_iface`.
+- `cheby_codegen_clif` depends on `cheby_mir`, `cheby_iface`, `cheby_diag` and `cheby_runtime`. From the runtime it uses only the `abi` module, which has no state and no dependencies and is the single source of header bits, layout ids, context offsets and runtime symbol names.
+- `cheby_jit` depends on `cheby_codegen_clif`, `cheby_mir`, `cheby_iface` and `cheby_runtime`, and `cheby_driver` on all of the above.
+
 ## 2. Compiler pipeline
 
 ```
@@ -83,12 +92,13 @@ Per-module steps run once per module in import-graph order, with independent mod
 
 - `cheby_package` reads `cheby.toml` ([§13.3](../spec/13-tooling.md#133-manifest)), maps `src/` files to module paths ([§7.2](../spec/07-modules-and-packages.md#72-modules-and-files)) and builds the import graph, rejecting cycles (D-145).
 - `cheby_resolve` collects items per namespace ([§7.7](../spec/07-modules-and-packages.md#77-namespaces-and-name-resolution)), applies visibility (`pub`, package-visible, `priv`, D-162) and `exposed` (D-048), the prelude and its hiding warning (D-146), naming conventions (D-059) and the shadowing ban (D-051, D-062).
+- The prelude's items are declarations of a builtin module in `cheby_iface`, with no source. Each type records its home module in `std`, which re-exports it, and every module of the local package depends implicitly on the home modules the toolchain ships, so interface satisfaction for builtin types stays within its dependencies (D-447).
 
 ### 2.3 Module interfaces
 
 A `ModuleInterface` holds exactly what [§13.12.1](../spec/13-tooling.md#13121-the-locality-rule) lists: function signatures, types, interfaces, aliases and constant types. In M1 it lives in memory and is hashed. In M3 it is serialized to the cache as the interface artifact (D-249), and release builds add small inlinable bodies (D-251).
 
-Interface hashing is designed in M1, even though nothing uses it for caching yet, so that the REPL and the language server can already skip re-checking dependents whose inputs did not change.
+Interface hashing is designed in M1, even though nothing uses it for caching yet, so that the REPL and the language server can already skip re-checking dependents whose inputs did not change. The canonical encoding holds the items that are not `priv`, not tests and not replaced by a REPL redefinition, sorted by namespace and name, and refers to other definitions by module path and name, never by internal indexes. Its hash is SipHash-1-3 with a 128-bit result and zero keys (D-460).
 
 ### 2.4 Type checking
 
@@ -118,12 +128,23 @@ From M1, `dup` and `drop` already follow the last-use rule (D-205, ADR-0036): a 
 
 The MIR also carries what the JS backend needs: which calls are tail calls, which operations suspend directly, and which values may contain handles (D-172).
 
+Every machine signature comes from one module, `cheby_mir::abi`, used by both lowering and code generation, so a slot, a `return_call` and its callee never disagree (D-453, [ADR-0055](../adr/0055-native-calling-convention.md)):
+
+- A top-level function, or the wrapper of an `@external`, takes one uniform word per dictionary, then its parameters in the representation of their declared types, and returns one uniform word.
+- A closure, local function, function value, dictionary entry or `dyn` call uses the uniform convention: the owned closure object `self`, then uniform words, returning a uniform word. A local function refers to itself through `self`, and a function value of a top-level function is a closure whose code calls the function through its slot.
+- Entry thunks and one trampoline per arity use the platform C convention. They are the only way the runtime enters generated code.
+- The hidden `ctx` parameter is not part of MIR signatures. Code generation adds it first to every signature except foreign ones.
+
+A function with `@external(native, …)` lowers to a Cheby-ABI wrapper in its own module that makes the foreign call, so callers call it through its slot like any function (D-455).
+
 ### 2.6 Native code generation
 
 - One Cranelift lowering serves the JIT, the AOT object writer and the constant evaluator.
 - Tail calls use the `tail` calling convention and `return_call` (D-015, ADR-0006).
-- Every function starts with the combined yield and stack-limit check (D-028, D-124). In M1 it is only a stack-limit check against the main thread's stack.
-- Every top-level function is called through an indirection table in JIT code (D-043). The REPL redefines through it in M1, lazy compilation uses it in M3 (D-254).
+- Every Cheby function takes the hidden `ctx` pointer first and passes it on in every call (D-453). It starts with the combined yield and stack-limit check (D-028, D-124), which compares the stack pointer with the limit at offset 0 of `ctx`. Setting the limit to the highest address forces the next function entry into the runtime's slow path, which is how yields and the deadline of constant evaluation (D-195) will interrupt running code. In M1 it is only a stack-limit check against the entry's stack (D-457).
+- Every top-level function is called through an indirection table in JIT code (D-043). The REPL redefines through it in M1, lazy compilation uses it in M3 (D-254). A slot is identified by the item's path and its ABI signature: a redefinition with the same signature repoints the slot, and one with another signature gets a new slot, so a slot never points at code of another signature (D-456).
+- Symbols are `cb$<kind>$<module path>$<item>…`, built from paths and names only, with the kind first: `fn`, `slot`, `shim`, `fnval`, `clo`, `cinit`, `const`, `test`, `entry`, `tramp`, `str`, `ctor`, `desc` and `layout`. A REPL redefinition with a new signature appends `$r<generation>` (D-456).
+- Native symbols are resolved against the runtime and the process before any code runs. A missing one is E0053 at its `@external` (D-455).
 - In M2, calls that may panic get `try_call` landing pads with cleanup blocks shared between calls (D-077, D-262).
 
 ### 2.7 Value representation
@@ -136,14 +157,33 @@ Native values (D-278, D-279):
 - Every heap object starts with an 8-byte header:
 
   ```
-  bits 0-31   reference count   > 0 local, < 0 shared and atomic (D-072), one reserved value static (§9.7)
+  bits 0-31   reference count   n > 0 local, -n shared and atomic (D-072), 0 static (§9.7, D-454)
   bits 32-39  scan count        leading pointer fields visited when freeing, with an escape value for more
   bits 40-63  layout id         index into the global layout table
   ```
 
   For example, `Some(x)` is 16 bytes: the header with scan count 1 and the layout id of `Option.Some`, then `x`.
 
+  Only the 32-bit count is written after allocation, and never for a static object. A count that would overflow makes the object static (D-454).
+
+- Nullary constructors (`Nil`, `True`, `False`, `None`, `Less`, `Equal`, `Greater` and user unit variants) are static objects, so every uniform value is self-describing. `Bool` is unboxed, one byte, in monomorphic code (D-454).
+- A `String` is the header, `len: u64`, `cap: u64`, then the UTF-8 bytes. Literals are static, with `cap` equal to `len`. `Bytes` has the same shape (D-454).
+- A closure is the header, the code address stored as `addr | 1`, then its captures (D-453).
+- Constructor fields of type `Int`, `Float`, `Bool` or a sized number are stored unboxed, after the uniform fields, so freeing needs only the scan count.
+
 - The layout table gives each layout's type, constructor tag and field layout. One runtime routine walks it for equality, hashing and debug printing in debug builds (D-252), and the JS runtime uses the equivalent to find handles in flagged values (D-172). REPL type redefinitions (D-043) add new layouts.
+- Layout ids 1 to 63 are fixed (D-454):
+
+  ```
+  1 String     2 Bytes      3 boxed Int   4 boxed Float   5 boxed F32   6 closure   7 tuple   8 boxed U64
+  9-15         reserved for runtime objects (dictionaries, dyn values, type descriptors)
+  16 Nil       17 False     18 True       19 Less         20 Equal      21 Greater
+  22 Some      23 None      24 Ok         25 Err
+  26-63        reserved for collection nodes
+  ```
+
+  Constructor tags follow declaration order. User layouts get ids from 64 on, registered in build order before the code that uses them. Generated code never embeds a user layout id, because ids come from a process-wide table: it loads the header from a per-layout data symbol, `cb$layout$<module path>$<Ctor>`, which the JIT or loader fills in at registration. The static object of a user nullary constructor, `cb$ctor$…`, gets its header filled in the same way (D-454).
+
 - Hashing goes through one routine with a per-target hash function: keyed SipHash-1-3 on native, a keyed 32-bit hash on JS (D-281).
 
 ## 3. Runtime
@@ -165,16 +205,20 @@ Native values (D-278, D-279):
 
 Kernels check uniqueness at run time where Perceus cannot see inside them: an insert into a `List`, `Map` or `Set` whose count is one updates in place.
 
+Every entry (`main`, a test, a constant's initializer, a REPL input) runs on its own stack with a fresh execution context, the `ctx` of generated code (D-457). In M1 the stack is a dedicated thread of the requested size, at least 512 KiB, whose limit leaves 256 KiB of headroom for the runtime and foreign calls. `main` gets 64 MiB and other entries 8 MiB (D-125). A panic flushes standard output, prints its report (D-449), hands it to the host and parks the entry's thread forever. The host decides what follows: exit status 101, the next test, the next REPL input, or a compile error for a constant. OQ-P7 replaces the thread with a runtime-owned stack behind the same interface.
+
+Debug builds of the runtime count live objects. When `main` returns with status 0 or 1 and objects are still live, `cheby run` prints `error: leak check failed: …` and exits with 102, so goldens never record a leak (D-445, D-458). There is no check after a panic or in the REPL.
+
 The JS runtime in `runtime-js/` mirrors this split: JS kernels for collections and strings (D-274), a cooperative fiber scheduler, channels, selectors, timers and handle reference counting (D-100).
 
 ## 4. Driver, cache and processes
 
 - `cheby_driver` schedules modules over the import graph with a work-stealing pool, and functions inside a module in parallel (D-263).
-- `cheby check` runs the front end without code generation or output (D-282), and is the command CI and editors use for checking.
+- `cheby check` runs the front end and evaluates constants with the JIT, but generates no other code and writes no output (D-282, D-459). It is the command CI and editors use for checking. Errors of phase A (manifest, discovery, lexing, parsing, validation) stop the later phases (D-452).
 - In M1 every build is from scratch, in memory. M3 adds the global content-addressed cache (D-255), interface artifacts with early cutoff (D-249) and cached code for `cheby run` (D-254).
 - Every command is its own process, and the cache is the only shared state (D-268). The language server keeps its own in-memory state and may use queries internally (D-249).
 - Output is deterministic from M1 on: no iteration over unordered maps when producing output, no absolute paths, no time stamps, and results independent of thread count (D-264). CI checks it ([testing.md](testing.md#6-determinism)).
 
 ## 5. Standard library location
 
-`std/` holds the standard library sources: Cheby modules and the JS kernels. In M1 and M2 the toolchain compiles `std` from source on each build, with the result cached in memory. From M3 it ships precompiled (D-256). [stdlib.md](stdlib.md) describes the content.
+`std/` holds the standard library sources: Cheby modules and the JS kernels. In M1 and M2 the sources are embedded in the `cheby` binary, and each build parses and checks only the std modules its imports reach, with the result cached in memory. Std files are shown as `std/<module path>.cheby` in diagnostics and panic locations. Std modules may declare `@external(js, …)` bindings before their `.mjs` files exist, since nothing checks JS module files before M4 (D-450). From M3 `std` ships precompiled (D-256). [stdlib.md](stdlib.md) describes the content.

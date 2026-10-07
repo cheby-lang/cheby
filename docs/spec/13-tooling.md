@@ -7,7 +7,7 @@ Cheby ships as one `cheby` binary that contains the compiler, runtime, REPL, tes
 | Command                                    | Purpose                                                            | Decisions           |
 | ------------------------------------------ | ------------------------------------------------------------------ | ------------------- |
 | `cheby new <name>`                         | create a package                                                   | D-097               |
-| `cheby check`                              | type-check the package without producing artifacts                 | D-282               |
+| `cheby check`                              | type-check the package without producing artifacts                 | D-282, D-459        |
 | `cheby build`                              | compile the package, for `native` (AOT) or `js`                    | D-006, D-007        |
 | `cheby run [module_path]`                  | compile with the JIT and run a module's `main`                     | D-007, D-019, D-137 |
 | `cheby repl`                               | interactive session ([§13.5](#135-repl))                           | D-008, D-043, D-098 |
@@ -20,11 +20,11 @@ Cheby ships as one `cheby` binary that contains the compiler, runtime, REPL, tes
 
 `cheby build --target native` produces an executable. Object files from Cranelift are linked with the system linker in early versions (`cc` or `link.exe`), and with a linker bundled in the `cheby` binary before 1.0 (D-088). `cheby build --target js` produces a directory of ES modules (D-074).
 
-`cheby check` parses and type-checks the package, including `test` blocks and the cross-target checks of [§12.6](12-targets-and-ffi.md#126-target-specific-code), and reports diagnostics like `cheby build`. It writes no output files, but may use the build cache ([§13.12.4](#13124-build-cache-and-standard-library)) (D-282).
+`cheby check` parses and type-checks the package, including `test` blocks and the cross-target checks of [§12.6](12-targets-and-ffi.md#126-target-specific-code), and reports diagnostics like `cheby build`. Like `cheby build`, it evaluates constants ([§13.9](#139-compile-time-evaluation)) and reports their panics and exceeded limits (D-459). It writes no output files, but may use the build cache ([§13.12.4](#13124-build-cache-and-standard-library)) (D-282).
 
 `cheby explain` prints the long explanation of a diagnostic code such as `E0012`, with examples and fixes ([§13.8](#138-diagnostics-and-warnings)) (D-420).
 
-`cheby run` runs the `main` of the module named by its module path argument, for example `cheby run my_app::tools::migrate`. Without an argument it runs the root module's `main` (D-137). `main` may have any visibility, including `priv` (D-163).
+`cheby run` runs the `main` of the module named by its module path argument, for example `cheby run my_app::tools::migrate`. Without an argument it runs the root module's `main` (D-137). `main` may have any visibility, including `priv` (D-163). A module path that is malformed, names no module of the package, or names a module without `main` is a tool error (D-464). Compile errors are reported first, and then nothing runs. Warnings are printed to standard error before the program starts (D-464).
 
 `cheby run` and `cheby repl` produce no output files: they run code in memory with the JIT (D-007, D-019). Like every command, they may read and write the build cache ([§13.12.4](#13124-build-cache-and-standard-library)) (D-254, D-255).
 
@@ -115,7 +115,7 @@ Inside a package directory, the REPL loads all of the package's modules and depe
 
 In a module, names cannot be redefined. The REPL is the one exception, because it is a session rather than a scope:
 
-- **Functions** are late-bound (D-043). Redefining a function replaces it for every existing caller, through a JIT indirection table. If the signature changes, the REPL re-checks every definition that depends on it and reports each one that no longer type-checks.
+- **Functions** are late-bound (D-043). Redefining a function replaces it for every existing caller, through a JIT indirection table. If the signature changes, the REPL re-checks every definition that depends on it and reports each one that no longer type-checks. Until a caller is checked and compiled again, it keeps calling the old function, never code of another signature (D-456).
 - **Types** can be redefined. Existing values keep the old type, which is now a different type from the new one, and the REPL marks it as stale when printing (D-043).
 - **`let` bindings** at the REPL prompt may be rebound with the same name, an explicit REPL exception to the no-shadowing rule, since forbidding it would make the REPL unusable (D-193). The no-shadowing rule ([§5.2.3](05-expressions.md#523-no-shadowing)) still applies inside every expression and declaration, but not between prompt entries.
 
@@ -162,7 +162,7 @@ The style itself is defined by the formatter, not by this specification. Example
 
 ## 13.8 Diagnostics and warnings
 
-Compile errors stop compilation. Warnings do not, unless `--deny-warnings` is passed, which is intended for CI (D-080).
+Compile errors stop compilation. Warnings do not, unless `--deny-warnings` is passed, which is intended for CI (D-080). An error found while reading the manifest, discovering modules, lexing, parsing or checking syntax stops the later checks, such as name resolution and type checking, so their diagnostics never come from a broken file (D-452).
 
 The following are warnings (D-080 and the cited decisions):
 
@@ -185,13 +185,17 @@ Unused `pub` items are never reported (D-152). Warnings that need the whole pack
 
 The compiler should report errors with the source span, a short explanation, and a suggested fix where one exists, for example a new name for a shadowing binding (D-062) or `{x:?}` for a type without `Show` (D-086).
 
-Every diagnostic has a code: `E` and four digits for an error, `W` and four digits for a warning. Codes are assigned in order and never reused, and a code whose check is removed stays reserved (D-419). `cheby explain <code>` prints a code's long explanation (D-420). The first codes, `E0001` to `E0037` and `W0001`, cover the lexer, the parser, the syntax checks and the reading of the manifest and module files. A rule with its own decision gets its own code, and other syntax errors share `E0013` (D-442).
+Every diagnostic has a code: `E` and four digits for an error, `W` and four digits for a warning. Codes are assigned in order and never reused, and a code whose check is removed stays reserved (D-419). `cheby explain <code>` prints a code's long explanation (D-420). The first codes, `E0001` to `E0037` and `W0001`, cover the lexer, the parser, the syntax checks and the reading of the manifest and module files. A rule with its own decision gets its own code, and other syntax errors share `E0013` (D-442). The codes `E0038` to `E0055` cover imports and names, attributes, types, `main` and native symbols (D-466).
 
-Errors that are not about the program, such as an unreadable file, a missing `cheby.toml`, a misused command line or an unknown code given to `cheby explain`, have no code. They are printed as a plain `error: …` line (D-442).
+While the first implementation milestone (M1) is in progress, `E0038` reports a valid construct that the toolchain cannot check or run yet. A construct inside a function body leaves the function's signature checked and visible to other modules. The code is retired when M1 ends, and its explanation then says it is no longer emitted (D-451).
+
+Errors that are not about the program, such as an unreadable file, a missing `cheby.toml`, a misused command line or an unknown code given to `cheby explain`, have no code. They are printed as a plain `error: …` line (D-442). A broken invariant of the compiler itself is such an error too, printed as `error: internal compiler error: …` with exit status 1 (D-464).
 
 A diagnostic is rendered as plain text: a header with its kind, code and message, a location, a snippet of the source lines it is about, with `^` under the primary span and `-` under secondary spans, and then `note` and `help` lines. A suggested fix is a `help` line (D-418).
 
-A location is `path:line:column`. Lines and columns are counted from 1, and columns count Unicode code points. A byte-order mark is not counted. The path of a file in the package is relative to the package root and uses `/` on every platform (D-421, D-443).
+A location is `path:line:column`. Lines and columns are counted from 1, and columns count Unicode code points. A byte-order mark is not counted. The path of a file in the package is relative to the package root and uses `/` on every platform (D-421, D-443). A file of the standard library is shown as `std/` followed by its module path, such as `std/io.cheby` (D-450).
+
+A type in a diagnostic is written as users write it at that place: prelude types and the current module's own types by their bare names, such as `Option<Int>`, other types qualified with the last segment of their module path, such as `map::Map<String, Int>`, and type parameters by their names (D-463).
 
 The layout follows rustc in its details (D-443):
 
@@ -288,9 +292,11 @@ When a module needs a fact about a type from a module it does not import, for ex
 
 Test blocks and doc examples are compiled as separate units, outside interface artifacts and normal cached code (D-265).
 
+An interface's hash covers only what other modules can see: the items that are not `priv` and not tests. It refers to other definitions by module path and name, never by numbering internal to the compiler, so adding a private helper or a test changes no dependent's input (D-460).
+
 ### 13.12.4 Build cache and standard library
 
-Compiled artifacts are stored in one cache per machine, shared by all projects and addressed by the content hash of their inputs, the compiler version and the build flags (D-255). The toolchain ships `std` precompiled, with its interface artifacts, native code for every supported native platform and its JS output (D-256).
+Compiled artifacts are stored in one cache per machine, shared by all projects and addressed by the content hash of their inputs, the compiler version and the build flags (D-255). The toolchain ships `std` precompiled, with its interface artifacts, native code for every supported native platform and its JS output (D-256). Until that exists, the reference toolchain embeds the `std` sources and compiles the modules a build reaches (D-450).
 
 `cheby run` loads cached code for every unchanged module and compiles changed modules lazily with the JIT, each function on its first call, through the same indirection table the REPL uses for redefinition (D-254, ADR-0047, [§13.5.2](#1352-redefinition)).
 

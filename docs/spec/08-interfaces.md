@@ -26,7 +26,7 @@ pub interface Shape {
 
 - Each function has a name and parameter types. Parameter names are not written.
 - A missing return type means `Nil` (D-083).
-- `Self` may appear anywhere in parameter and return types, including nested (`List<Self>`, `fn(Self) -> Bool`), subject to the `dyn` restriction in [§8.6](#86-dyn-values).
+- `Self` may appear anywhere in parameter and return types, including nested (`List<Self>`, `fn(Self) -> Bool`), subject to the `dyn` restriction in [§8.6](#86-dyn-values). Outside an interface declaration, `Self` is not a type, and writing it is a compile error (D-462).
 - Every function must mention `Self` in at least one parameter, so that the satisfying type can be found from the arguments. A function with `Self` only in its return type, such as `fn default() -> Self` or `fn from_json(json::Value) -> Result<Self, E>`, is a compile error in v1 (D-209, ADR-0037). Constructing values of an unknown type is done with ordinary values instead, such as a decoder value (`std::json`).
 - Each function may have `///` doc comments (D-227).
 - Function names must be distinct within the interface, including functions inherited by embedding ([§8.3](#83-embedding)).
@@ -49,7 +49,7 @@ A type `T` **satisfies** an interface `I` when, for every function `fn f(P1, …
   Whether `T` satisfies `I` therefore has one answer wherever `T` can be named, independent of the module or package doing the check. A function that is less visible than its type is simply ignored for satisfaction. It can still be called directly where it is visible.
 
 - **Aliases.** For a type alias, the aliased type's module counts ([§4.4](04-declarations.md#44-type-aliases)).
-- **Built-in types** are treated as declared in their standard-library module: `Int` in `std::int`, `Float` in `std::float`, `String` in `std::string`, `List` in `std::list`, `U8` in `std::u8`, and so on (D-105).
+- **Built-in types** are treated as declared in their standard-library module: `Int` in `std::int`, `Float` in `std::float`, `String` in `std::string`, `List` in `std::list`, `U8` in `std::u8`, and so on (D-105, D-447).
 - **Tuples** are not declared in any module. By a built-in rule, a tuple type satisfies `Show` when all of its element types satisfy `Show`, and `Compare` when all of its element types satisfy `Compare` (comparison is lexicographic, D-136) (D-167). Tuples satisfy no other interface, apart from empty interfaces (D-166).
 - **Function types** are not declared in any module and satisfy no interface, apart from empty interfaces (D-166).
 

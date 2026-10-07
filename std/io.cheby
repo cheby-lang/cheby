@@ -1,0 +1,22 @@
+//! Standard input, standard output, standard error, and reading and
+//! writing whole files.
+
+/// Writes `text` to standard output, with no line ending.
+@external(native, "cheby_io_print")
+@external(js, "./io.mjs", "print")
+pub fn print(text: String)
+
+/// Writes `text` and a line ending to standard output.
+@external(native, "cheby_io_println")
+@external(js, "./io.mjs", "println")
+pub fn println(text: String)
+
+/// Writes `text` to standard error, with no line ending.
+@external(native, "cheby_io_eprint")
+@external(js, "./io.mjs", "eprint")
+pub fn eprint(text: String)
+
+/// Writes `text` and a line ending to standard error.
+@external(native, "cheby_io_eprintln")
+@external(js, "./io.mjs", "eprintln")
+pub fn eprintln(text: String)
