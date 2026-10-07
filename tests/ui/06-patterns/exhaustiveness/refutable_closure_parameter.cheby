@@ -1,0 +1,9 @@
+// @mode: check-fail
+// @decisions: D-242
+//! A closure parameter is a pattern that must match every value, and `[x]`
+//! matches only lists of one element.
+
+fn main() {
+  let first = fn([x]) { x }
+  assert first([1]) == 1
+}

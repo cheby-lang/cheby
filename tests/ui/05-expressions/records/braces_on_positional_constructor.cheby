@@ -1,0 +1,16 @@
+// @mode: check-fail
+// @decisions: D-138
+//! Only a named-field constructor is used with braces; a positional one is
+//! called like a function (§5.11.1).
+
+type Wrapper {
+  Wrapped(Int),
+}
+
+fn wrap(n: Int) -> Wrapper {
+  Wrapped { value: n }
+}
+
+fn main() {
+  assert wrap(1) == Wrapped(1)
+}

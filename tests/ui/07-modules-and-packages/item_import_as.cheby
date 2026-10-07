@@ -1,0 +1,9 @@
+// @mode: check-pass
+// @decisions: D-111
+//! `as` renames an imported item, keeping its case.
+
+import std::io::{println as say}
+
+fn main() {
+  say("Hello!")
+}

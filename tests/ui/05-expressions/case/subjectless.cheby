@@ -1,0 +1,17 @@
+// @mode: check-pass
+// @decisions: D-109, D-439
+//! `case { … }` without a subject takes the first arm whose `Bool`
+//! condition holds, and the final `_` arm otherwise (§5.9.5).
+
+fn sign(n: Int) -> String {
+  case {
+    n < 0 => "negative"
+    n == 0 => "zero"
+    _ => "positive"
+  }
+}
+
+fn main() {
+  assert sign(-2) == "negative"
+  assert sign(0) == "zero"
+}

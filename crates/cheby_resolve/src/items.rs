@@ -1,5 +1,13 @@
 //! Item collection (B4): every item in `DefIndex` order, duplicate names
-//! (E0041), attributes (E0045, §4.8) and functions without a body (E0046).
+//! per namespace (E0041, §4.1.2), attributes (E0045, §4.8, D-461) and
+//! functions without a body (E0046).
+//!
+//! The standard library may also write two attributes of its own
+//! (GAP(std-attributes), §4.8, D-298, D-303, D-342): `@std_clamped(param,
+//! …)` on a function names the count parameters it clamps, and
+//! `@std_hooks(equal_fn, hash_fn, debug_fn)` on a type names the functions
+//! of its module that implement its equality, hashing and debug printing.
+//! In any other package they are unknown attributes.
 
 use cheby_diag::{Diagnostic, Span, codes};
 use cheby_iface::{DefIndex, DefKind, Ice, IndexVec, Name, Namespace, PackageId, Vis};
@@ -18,11 +26,6 @@ pub(crate) struct Collected {
     pub items: IndexVec<DefIndex, ItemDef>,
     /// From `@!target`.
     pub module_targets: Targets,
-    /// Valid attributes the slice does not support yet: the item, the
-    /// attribute's span, and what to call it in E0038.
-    pub attr_gates: Vec<(DefIndex, Span, &'static str)>,
-    /// The same for inner attributes.
-    pub inner_gates: Vec<(Span, &'static str)>,
 }
 
 /// Where an attribute is written.
@@ -64,6 +67,13 @@ const RESERVED_SYMBOL_PREFIXES: [&str; 2] = ["cheby_rt_", "cb$"];
 const ATTRIBUTE_LIST: &str =
     "the attributes are `@external`, `@target`, `@blocking`, `@async` and `@deprecated`";
 
+/// The attributes every package may write (§4.8).
+const ATTRIBUTES: [&str; 5] = ["external", "target", "blocking", "async", "deprecated"];
+
+/// The attributes only the standard library may write
+/// (GAP(std-attributes)).
+const STD_ATTRIBUTES: [&str; 2] = ["std_clamped", "std_hooks"];
+
 pub(crate) fn collect(
     input: &ResolveInput<'_>,
     diags: &mut Vec<Diagnostic>,
@@ -72,7 +82,7 @@ pub(crate) fn collect(
         input,
         diags,
         items: IndexVec::new(),
-        attr_gates: Vec::new(),
+        params: Vec::new(),
         types: FxHashMap::default(),
         values: FxHashMap::default(),
         tests: FxHashMap::default(),
@@ -80,15 +90,14 @@ pub(crate) fn collect(
     let Some(file) = SourceFile::cast(input.tree.root()) else {
         return Err(Ice::new("the tree's root is not a source file"));
     };
-    let (module_targets, inner_gates) = cx.inner_attrs(file.inner_attrs());
+    let module_targets = cx.inner_attrs(file.inner_attrs());
     for item in file.items() {
         cx.item(item, module_targets)?;
     }
+    cx.check_hooks();
     Ok(Collected {
         items: cx.items,
         module_targets,
-        attr_gates: cx.attr_gates,
-        inner_gates,
     })
 }
 
@@ -96,7 +105,9 @@ struct Cx<'a, 'd> {
     input: &'a ResolveInput<'a>,
     diags: &'d mut Vec<Diagnostic>,
     items: IndexVec<DefIndex, ItemDef>,
-    attr_gates: Vec<(DefIndex, Span, &'static str)>,
+    /// The parameter names of the function whose attributes are being
+    /// checked, for `@std_clamped`.
+    params: Vec<Name>,
     types: FxHashMap<Name, Span>,
     values: FxHashMap<Name, Span>,
     tests: FxHashMap<Name, Span>,
@@ -114,8 +125,12 @@ impl Cx<'_, '_> {
             Item::Fn(f) => {
                 let Some(name) = f.name() else { return Ok(()) };
                 let has_body = f.body().is_some();
-                let index = self.next_index()?;
-                let attrs = self.attrs(index, f.attrs(), Placement::Fn { has_body }, vis);
+                self.params = f
+                    .params()
+                    .filter_map(cheby_syntax::ast::Param::name)
+                    .map(|n| self.intern(n.text()))
+                    .collect();
+                let attrs = self.attrs(f.attrs(), Placement::Fn { has_body }, vis);
                 let attrs = with_module_targets(attrs, module_targets);
                 if !has_body && attrs.externals.is_empty() {
                     self.diags.push(
@@ -143,12 +158,17 @@ impl Cx<'_, '_> {
             Item::Type(t) => {
                 let Some(name) = t.name() else { return Ok(()) };
                 let body = t.body();
-                let index = self.next_index()?;
                 let placement = Placement::Type {
                     external: body.is_none(),
                 };
-                let attrs = self.attrs(index, t.attrs(), placement, vis);
+                let attrs = self.attrs(t.attrs(), placement, vis);
                 let attrs = with_module_targets(attrs, module_targets);
+                // Constructors exist where their type does; the hooks
+                // belong to the type alone.
+                let member_attrs = ItemAttrs {
+                    hooks: None,
+                    ..attrs.clone()
+                };
                 let ty = self.push(
                     name.text(),
                     name.span(),
@@ -156,14 +176,13 @@ impl Cx<'_, '_> {
                     vis,
                     None,
                     t.syntax().id(),
-                    attrs.clone(),
+                    attrs,
                 )?;
                 match body {
                     Some(TypeBody::Variants(list)) => {
                         for variant in list.variants() {
                             let Some(ctor) = variant.name() else { continue };
-                            let index = self.next_index()?;
-                            self.member_attrs(index, variant.attrs());
+                            self.member_attrs(variant.attrs());
                             self.push(
                                 ctor.text(),
                                 ctor.span(),
@@ -171,13 +190,13 @@ impl Cx<'_, '_> {
                                 vis,
                                 Some(ty),
                                 variant.syntax().id(),
-                                attrs.clone(),
+                                member_attrs.clone(),
                             )?;
                             if let Some(cheby_syntax::ast::VariantFields::Record(fields)) =
                                 variant.fields()
                             {
                                 for field in fields.fields() {
-                                    self.member_attrs(index, field.attrs());
+                                    self.member_attrs(field.attrs());
                                 }
                             }
                         }
@@ -185,9 +204,8 @@ impl Cx<'_, '_> {
                     // The single-variant shorthand (§4.3.3): one constructor
                     // named like the type; its node is the field list.
                     Some(TypeBody::Record(fields)) => {
-                        let index = self.next_index()?;
                         for field in fields.fields() {
-                            self.member_attrs(index, field.attrs());
+                            self.member_attrs(field.attrs());
                         }
                         self.push(
                             name.text(),
@@ -196,7 +214,7 @@ impl Cx<'_, '_> {
                             vis,
                             Some(ty),
                             fields.syntax().id(),
-                            attrs,
+                            member_attrs,
                         )?;
                     }
                     None => {}
@@ -204,8 +222,7 @@ impl Cx<'_, '_> {
             }
             Item::Alias(a) => {
                 let Some(name) = a.name() else { return Ok(()) };
-                let index = self.next_index()?;
-                let attrs = self.attrs(index, a.attrs(), Placement::Alias, vis);
+                let attrs = self.attrs(a.attrs(), Placement::Alias, vis);
                 let attrs = with_module_targets(attrs, module_targets);
                 self.push(
                     name.text(),
@@ -219,8 +236,7 @@ impl Cx<'_, '_> {
             }
             Item::Const(c) => {
                 let Some(name) = c.name() else { return Ok(()) };
-                let index = self.next_index()?;
-                let attrs = self.attrs(index, c.attrs(), Placement::Const, vis);
+                let attrs = self.attrs(c.attrs(), Placement::Const, vis);
                 let attrs = with_module_targets(attrs, module_targets);
                 self.push(
                     name.text(),
@@ -234,8 +250,7 @@ impl Cx<'_, '_> {
             }
             Item::Interface(i) => {
                 let Some(name) = i.name() else { return Ok(()) };
-                let index = self.next_index()?;
-                let attrs = self.attrs(index, i.attrs(), Placement::Interface, vis);
+                let attrs = self.attrs(i.attrs(), Placement::Interface, vis);
                 let attrs = with_module_targets(attrs, module_targets);
                 let iface = self.push(
                     name.text(),
@@ -249,8 +264,7 @@ impl Cx<'_, '_> {
                 let mut seen: FxHashMap<Name, Span> = FxHashMap::default();
                 for f in i.fns() {
                     let Some(fname) = f.name() else { continue };
-                    let index = self.next_index()?;
-                    self.member_attrs(index, f.attrs());
+                    self.member_attrs(f.attrs());
                     let interned = self.intern(fname.text());
                     if let Some(&first) = seen.get(&interned) {
                         self.diags
@@ -273,8 +287,7 @@ impl Cx<'_, '_> {
                 let Some(name) = t.name() else { return Ok(()) };
                 let text = name.plain_value().unwrap_or_default();
                 let span = name.significant_span();
-                let index = self.next_index()?;
-                let attrs = self.attrs(index, t.attrs(), Placement::Test, vis);
+                let attrs = self.attrs(t.attrs(), Placement::Test, vis);
                 let attrs = with_module_targets(attrs, module_targets);
                 self.push(
                     &text,
@@ -288,12 +301,6 @@ impl Cx<'_, '_> {
             }
         }
         Ok(())
-    }
-
-    fn next_index(&self) -> Result<DefIndex, Ice> {
-        self.items
-            .next_index()
-            .ok_or_else(|| Ice::new("too many items in one module"))
     }
 
     #[expect(clippy::too_many_arguments, reason = "one call site per item kind")]
@@ -335,15 +342,14 @@ impl Cx<'_, '_> {
 
     /// Attributes on a variant, a record field or an interface function,
     /// where none is allowed.
-    fn member_attrs(&mut self, index: DefIndex, attrs: AstChildren<'_, Attr<'_>>) {
-        let _ = self.attrs(index, attrs, Placement::Member, Vis::Priv);
+    fn member_attrs(&mut self, attrs: AstChildren<'_, Attr<'_>>) {
+        let _ = self.attrs(attrs, Placement::Member, Vis::Priv);
     }
 
     /// Checks the attributes of an item and returns what they say.
     #[expect(clippy::too_many_lines, reason = "one branch per attribute")]
     fn attrs(
         &mut self,
-        index: DefIndex,
         attrs: AstChildren<'_, Attr<'_>>,
         placement: Placement,
         vis: Vis,
@@ -357,7 +363,7 @@ impl Cx<'_, '_> {
         for attr in attrs {
             let span = attr.significant_span();
             let Some(name) = attr.name() else { continue };
-            let Some(known) = known_attr(name.text()) else {
+            let Some(known) = self.known_attr(name.text()) else {
                 self.diags.push(
                     Diagnostic::new(
                         codes::INVALID_ATTRIBUTE,
@@ -419,7 +425,6 @@ impl Cx<'_, '_> {
                         continue;
                     }
                     target = Some(t);
-                    self.attr_gates.push((index, span, "`@target` attributes"));
                 }
                 "blocking" | "async" => {
                     if !args.is_empty() || attr.arg_list().is_some() {
@@ -469,8 +474,20 @@ impl Cx<'_, '_> {
                         continue;
                     }
                     out.deprecated = Some(message.into_boxed_str());
-                    self.attr_gates
-                        .push((index, span, "`@deprecated` attributes"));
+                }
+                "std_clamped" => {
+                    if !matches!(placement, Placement::Fn { .. }) {
+                        self.misplaced(span, known, placement, None);
+                        continue;
+                    }
+                    out.clamped = self.clamped(&args, span);
+                }
+                "std_hooks" => {
+                    if !matches!(placement, Placement::Type { .. }) {
+                        self.misplaced(span, known, placement, None);
+                        continue;
+                    }
+                    out.hooks = self.hooks(&args, span);
                 }
                 _ => {}
             }
@@ -481,8 +498,6 @@ impl Cx<'_, '_> {
         if let Some(span) = blocking {
             if is_fn && has_external {
                 out.blocking = true;
-                self.attr_gates
-                    .push((index, span, "`@blocking` attributes"));
             } else {
                 self.misplaced(
                     span,
@@ -495,7 +510,6 @@ impl Cx<'_, '_> {
         if let Some(span) = is_async {
             if is_fn && has_js {
                 out.is_async = true;
-                self.attr_gates.push((index, span, "`@async` attributes"));
             } else {
                 self.misplaced(
                     span,
@@ -631,12 +645,8 @@ impl Cx<'_, '_> {
     }
 
     /// `@!target(…)`, the only inner attribute (§4.8).
-    fn inner_attrs(
-        &mut self,
-        attrs: AstChildren<'_, InnerAttr<'_>>,
-    ) -> (Targets, Vec<(Span, &'static str)>) {
+    fn inner_attrs(&mut self, attrs: AstChildren<'_, InnerAttr<'_>>) -> Targets {
         let mut targets = Targets::ALL;
-        let mut gates = Vec::new();
         let mut first: Option<Span> = None;
         for attr in attrs {
             let span = attr.significant_span();
@@ -664,10 +674,143 @@ impl Cx<'_, '_> {
             let args: Vec<AttrArg<'_>> = attr.args().collect();
             if let Some(t) = self.target_arg(&args, span, "@!target") {
                 targets = Targets::only(t);
-                gates.push((span, "`@!target` attributes"));
             }
         }
-        (targets, gates)
+        targets
+    }
+
+    /// The name of a known attribute: one of §4.8, or in the standard
+    /// library one of its own (GAP(std-attributes)).
+    fn known_attr(&self, name: &str) -> Option<&'static str> {
+        let std_only = if self.input.package == PackageId::STD {
+            &STD_ATTRIBUTES[..]
+        } else {
+            &[]
+        };
+        ATTRIBUTES
+            .iter()
+            .chain(std_only)
+            .copied()
+            .find(|&known| known == name)
+    }
+
+    /// `@std_clamped(param, …)`: one or more distinct parameters of the
+    /// function.
+    fn clamped(&mut self, args: &[AttrArg<'_>], span: Span) -> Vec<(Name, Span)> {
+        let mut out: Vec<(Name, Span)> = Vec::new();
+        if args.is_empty() {
+            self.diags.push(
+                Diagnostic::new(
+                    codes::INVALID_ATTRIBUTE,
+                    "`@std_clamped` needs at least one parameter name",
+                )
+                .with_primary(span, "")
+                .with_help("write `@std_clamped(count)`"),
+            );
+        }
+        for arg in args {
+            let ident = match *arg {
+                AttrArg::Name(ident) => ident,
+                AttrArg::String(string) => {
+                    self.diags.push(
+                        Diagnostic::new(
+                            codes::INVALID_ATTRIBUTE,
+                            "`@std_clamped` takes parameter names",
+                        )
+                        .with_primary(string.significant_span(), "not a name"),
+                    );
+                    continue;
+                }
+            };
+            let name = self.intern(ident.text());
+            let arg_span = ident.span();
+            if !self.params.contains(&name) {
+                self.diags.push(
+                    Diagnostic::new(
+                        codes::INVALID_ATTRIBUTE,
+                        format!("the function has no parameter `{}`", ident.text()),
+                    )
+                    .with_primary(arg_span, "not a parameter")
+                    .with_note("`@std_clamped` names the count parameters the function clamps"),
+                );
+                continue;
+            }
+            if let Some(&(_, first)) = out.iter().find(|(n, _)| *n == name) {
+                self.diags.push(
+                    Diagnostic::new(
+                        codes::INVALID_ATTRIBUTE,
+                        format!("`{}` is named twice in `@std_clamped`", ident.text()),
+                    )
+                    .with_primary(arg_span, "")
+                    .with_secondary(first, "first named here"),
+                );
+                continue;
+            }
+            out.push((name, arg_span));
+        }
+        out
+    }
+
+    /// `@std_hooks(equal_fn, hash_fn, debug_fn)`: exactly three function
+    /// names. Whether they name functions of the module is checked once
+    /// every item is collected ([`Self::check_hooks`]).
+    fn hooks(&mut self, args: &[AttrArg<'_>], span: Span) -> Option<[(Name, Span); 3]> {
+        let names: Vec<(Name, Span)> = args
+            .iter()
+            .map_while(|arg| match arg {
+                AttrArg::Name(ident) => Some((self.intern(ident.text()), ident.span())),
+                AttrArg::String(_) => None,
+            })
+            .collect();
+        let hooks = match (names.len() == args.len(), names.as_slice()) {
+            (true, &[equal, hash, debug]) => Some([equal, hash, debug]),
+            _ => None,
+        };
+        if hooks.is_none() {
+            self.diags.push(
+                Diagnostic::new(codes::INVALID_ATTRIBUTE, "malformed `@std_hooks` attribute")
+                    .with_primary(span, "")
+                    .with_help(
+                        "write `@std_hooks(equal_fn, hash_fn, debug_fn)` with the names of three \
+                         functions of this module",
+                    ),
+            );
+        }
+        hooks
+    }
+
+    /// E0042 for an `@std_hooks` name that is not a function of the
+    /// module.
+    fn check_hooks(&mut self) {
+        let mut missing = Vec::new();
+        for item in &self.items {
+            let Some(hooks) = &item.attrs.hooks else {
+                continue;
+            };
+            if item.kind != DefKind::Type {
+                continue;
+            }
+            for &(name, span) in hooks {
+                let found = self
+                    .items
+                    .iter()
+                    .any(|f| f.kind == DefKind::Fn && f.name == name);
+                if !found {
+                    missing.push((name, span));
+                }
+            }
+        }
+        for (name, span) in missing {
+            let text = self.input.globals.names.get(name);
+            self.diags.push(
+                Diagnostic::new(
+                    codes::UNRESOLVED_NAME,
+                    format!("cannot find function `{text}` in this module"),
+                )
+                .with_primary(span, "not found")
+                .with_note("`@std_hooks` names functions declared in the type's own module"),
+            );
+        }
     }
 }
 
@@ -697,12 +840,6 @@ const fn external_target(external: &ExternalAttr) -> Target {
         ExternalAttr::Native { .. } => Target::Native,
         ExternalAttr::Js { .. } => Target::Js,
     }
-}
-
-fn known_attr(name: &str) -> Option<&'static str> {
-    ["external", "target", "blocking", "async", "deprecated"]
-        .into_iter()
-        .find(|&known| known == name)
 }
 
 fn parse_target(text: &str) -> Option<Target> {

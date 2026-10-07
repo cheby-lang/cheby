@@ -1,0 +1,12 @@
+// @mode: check-pass
+// @decisions: D-198
+//! A `pub` type without `exposed` hides its fields outside the package,
+//! so they may mention package-visible types (§4.1.3).
+
+type Inner { Inner(Int) }
+
+pub type Outer { Outer(Inner) }
+
+pub fn wrap(n: Int) -> Outer {
+  Outer(Inner(n))
+}

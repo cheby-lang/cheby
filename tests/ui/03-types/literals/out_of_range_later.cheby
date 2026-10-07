@@ -1,0 +1,9 @@
+// @mode: check-fail
+// @decisions: D-084, D-133
+//! The literal's type may be fixed after the literal; the range check uses
+//! its final type (§3.3.4).
+
+pub fn byte() -> U8 {
+  let x = 300
+  x
+}

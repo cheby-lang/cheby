@@ -1,0 +1,6 @@
+error[E0047]: mismatched types
+  --> tests/ui/05-expressions/records/field_value_type.cheby:11:14
+   |
+11 |   Point { x: "zero", y: 0 }
+   |              ^^^^^^ expected `Int`, found `String`
+

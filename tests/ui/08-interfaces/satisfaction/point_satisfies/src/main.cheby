@@ -1,0 +1,14 @@
+// @mode: check-pass
+// @decisions: D-020, D-061
+//! A type satisfies an interface through the functions of the module
+//! that declares it (§8.2).
+
+import app::geometry::point
+import std::io
+
+fn main() {
+  let a = point::Point { x: 1, y: 2 }
+  let b = point::Point { x: 3, y: 4 }
+  let sum = a + b
+  io::println("{sum}")
+}

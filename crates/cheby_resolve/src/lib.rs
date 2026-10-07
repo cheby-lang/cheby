@@ -11,15 +11,17 @@
 //! - Names are checked where they are bound or declared: the case
 //!   conventions (E0006) and the reserved words (E0007). A use adds
 //!   nothing, except that a reserved word that nothing binds is E0007
-//!   where it is used.
-//! - The support gate reports `E0038` for constructs the compiler cannot
-//!   check and run yet. A hit in an item's declaration (its kind, type
-//!   parameters, attributes or signature) makes it
-//!   [`ItemStatus::Unsupported`]: its name still resolves, and uses of it
-//!   are silent [`Res::Err`]. A hit in a function's body makes it
-//!   [`ItemStatus::BodyUnsupported`]: its signature is still published and
-//!   checked against, because an interface never depends on a body (D-246,
-//!   §13.12.3), but its body is neither checked nor lowered.
+//!   where it is used (D-469).
+//! - What is left of the support gate (D-451) reports `E0038` for imports
+//!   of planned standard-library modules, for names missing from a partly
+//!   shipped standard-library module, and for a function without a body
+//!   whose `@external`s do not cover every target of its module. A hit in
+//!   an item's declaration makes it [`ItemStatus::Unsupported`]: its name
+//!   still resolves, and uses of it are silent [`Res::Err`]. A hit in a
+//!   function's body makes it [`ItemStatus::BodyUnsupported`]: its
+//!   signature is still published and checked against, because an
+//!   interface never depends on a body (D-246, §13.12.3), but its body is
+//!   neither checked nor lowered.
 //!
 //! Later phases read syntax only through `cheby_syntax::ast` views, keyed
 //! by the `NodeId`s stored here.
@@ -142,10 +144,11 @@ pub struct ItemDef {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ItemStatus {
     Ok,
-    /// E0038 was reported for the item's declaration: its kind, type
-    /// parameters, attributes or a type in its signature. Its name
-    /// resolves, but its signature and body are not checked, and uses of
-    /// it are silent.
+    /// E0038 was reported for the item's declaration: a function without
+    /// a body that does not exist on every target of its module, or a
+    /// name in its signature that a partly shipped standard-library module
+    /// does not have yet (D-451). Its name resolves, but its signature and
+    /// body are not checked, and uses of it are silent.
     Unsupported,
     /// E0038 was reported for something in the function's body only. Its
     /// signature is checked and published as usual, so dependents and
@@ -160,11 +163,20 @@ pub struct ItemAttrs {
     /// At most one per target (E0045).
     pub externals: Vec<ExternalAttr>,
     /// Where the item exists: from `@target`, `@!target`, and the
-    /// externals of a function without a body (§12.5, §12.6).
+    /// externals of a function without a body (§12.5, §12.6, D-461). A
+    /// constructor and an interface function have their parent's.
     pub targets: Targets,
     pub blocking: bool,
     pub is_async: bool,
     pub deprecated: Option<Box<str>>,
+    /// The parameters named by the standard library's `@std_clamped(param,
+    /// …)` on a function, in written order (GAP(std-attributes), D-298,
+    /// D-303).
+    pub clamped: Vec<(Name, Span)>,
+    /// The functions named by the standard library's `@std_hooks(equal_fn,
+    /// hash_fn, debug_fn)` on a type, in that order (GAP(std-attributes),
+    /// D-342).
+    pub hooks: Option<[(Name, Span); 3]>,
 }
 
 impl Default for ItemAttrs {
@@ -175,6 +187,8 @@ impl Default for ItemAttrs {
             blocking: false,
             is_async: false,
             deprecated: None,
+            clamped: Vec::new(),
+            hooks: None,
         }
     }
 }
@@ -282,22 +296,13 @@ pub enum LocalKind {
 /// An [`Ice`] if an invariant is broken, such as `targets` and `imports`
 /// having different lengths.
 pub fn resolve_module(input: &ResolveInput<'_>) -> Result<(ResolvedModule, Vec<Diagnostic>), Ice> {
-    resolve_module_in(input, body::Mode::Slice)
-}
-
-fn resolve_module_in(
-    input: &ResolveInput<'_>,
-    mode: body::Mode,
-) -> Result<(ResolvedModule, Vec<Diagnostic>), Ice> {
     if input.imports.len() != input.targets.len() {
         return Err(Ice::new("import targets do not match the imports"));
     }
     let mut diags = Vec::new();
     naming::check_names(input.tree, &mut diags);
     let mut collected = items::collect(input, &mut diags)?;
-    if mode == body::Mode::Slice {
-        gate::gate_module(input, &mut collected, &mut diags)?;
-    }
+    gate::gate_module(input, &mut collected, &mut diags)?;
     let items = collected.items;
     let scope = scope::build(input, &items, &mut diags)?;
     let mut module = ResolvedModule {
@@ -309,7 +314,7 @@ fn resolve_module_in(
         generics: FxHashMap::default(),
         bodies: FxHashMap::default(),
     };
-    body::resolve_items(input, &mut module, &mut diags, mode)?;
+    body::resolve_items(input, &mut module, &mut diags)?;
     Ok((module, diags))
 }
 

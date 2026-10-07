@@ -1,0 +1,25 @@
+// @mode: check-pass
+// @decisions: D-113, D-438
+//! `pattern as name` also binds the whole matched value. `as` binds a whole
+//! list of alternatives, and a parenthesized `as` pattern may stand
+//! anywhere (§6.8).
+
+fn non_empty(items: List<Int>) -> List<Int> {
+  case items {
+    [_, ..] as all => all
+    [] => [0]
+  }
+}
+
+fn nested(value: Option<Option<Int>>) -> Option<Int> {
+  case value {
+    Some(None | Some(0) as inner) => inner
+    Some((Some(_) as inner)) => inner
+    None => None
+  }
+}
+
+fn main() {
+  assert non_empty([]) == [0]
+  assert nested(Some(Some(1))) == Some(1)
+}

@@ -1,0 +1,250 @@
+//! The built-in `Float`, an IEEE 754 binary64 number: constants,
+//! conversions, parsing and text, comparison, arithmetic, rounding to
+//! `Int`, special values and a few correctly rounded functions.
+//!
+//! `Float` itself is a builtin item whose home module is this one (D-447).
+//! `compare` is the total order of D-135, so `<` and `>` on floats follow it.
+
+// Constants
+
+/// Positive infinity, which shows as `inf`.
+pub const infinity: Float = 1.0 / 0.0
+
+/// Negative infinity, which shows as `-inf`.
+pub const neg_infinity: Float = -1.0 / 0.0
+
+/// A NaN, which shows as `NaN` and is `==` to every other NaN.
+pub const nan: Float = 0.0 / 0.0
+
+/// The `Float` closest to pi.
+pub const pi: Float = 3.141592653589793
+
+/// The `Float` closest to Euler's number e.
+pub const e: Float = 2.718281828459045
+
+/// The difference between 1.0 and the next larger `Float`, 2^-52.
+pub const epsilon: Float = 2.220446049250313e-16
+
+/// The largest finite `Float`.
+pub const max_value: Float = 1.7976931348623157e308
+
+/// The smallest finite `Float`, the negation of `max_value`.
+pub const min_value: Float = -1.7976931348623157e308
+
+// Conversions
+
+/// Returns `n` as a `Float`, rounded to the nearest value, ties to even (D-359).
+@external(native, "cheby_float_from_int")
+@external(js, "./float.mjs", "from_int")
+pub fn from_int(n: Int) -> Float
+
+/// Returns `n` as a `Float`. Every `I8` is exact.
+@external(native, "cheby_float_from_i8")
+@external(js, "./float.mjs", "from_i8")
+pub fn from_i8(n: I8) -> Float
+
+/// Returns `n` as a `Float`. Every `I16` is exact.
+@external(native, "cheby_float_from_i16")
+@external(js, "./float.mjs", "from_i16")
+pub fn from_i16(n: I16) -> Float
+
+/// Returns `n` as a `Float`. Every `I32` is exact.
+@external(native, "cheby_float_from_i32")
+@external(js, "./float.mjs", "from_i32")
+pub fn from_i32(n: I32) -> Float
+
+/// Returns `n` as a `Float`, rounded to the nearest value, ties to even (D-359).
+@external(native, "cheby_float_from_i64")
+@external(js, "./float.mjs", "from_i64")
+pub fn from_i64(n: I64) -> Float
+
+/// Returns `n` as a `Float`. Every `U8` is exact.
+@external(native, "cheby_float_from_u8")
+@external(js, "./float.mjs", "from_u8")
+pub fn from_u8(n: U8) -> Float
+
+/// Returns `n` as a `Float`. Every `U16` is exact.
+@external(native, "cheby_float_from_u16")
+@external(js, "./float.mjs", "from_u16")
+pub fn from_u16(n: U16) -> Float
+
+/// Returns `n` as a `Float`. Every `U32` is exact.
+@external(native, "cheby_float_from_u32")
+@external(js, "./float.mjs", "from_u32")
+pub fn from_u32(n: U32) -> Float
+
+/// Returns `n` as a `Float`, rounded to the nearest value, ties to even (D-359).
+@external(native, "cheby_float_from_u64")
+@external(js, "./float.mjs", "from_u64")
+pub fn from_u64(n: U64) -> Float
+
+/// Returns `n` as a `Float`. Every `F32` is exact.
+@external(native, "cheby_float_from_f32")
+@external(js, "./float.mjs", "from_f32")
+pub fn from_f32(n: F32) -> Float
+
+// Parsing and text
+
+/// Reads an `Float` written in decimal, or `NaN`, `inf` or `-inf` (D-313).
+@external(native, "cheby_float_parse")
+@external(js, "./float.mjs", "parse")
+pub fn parse(text: String) -> Result<Float, Nil>
+
+/// Returns the shortest text that reads back as `x` (§3.3.6). It makes `Float` satisfy `Show`.
+@external(native, "cheby_float_show")
+@external(js, "./float.mjs", "show")
+pub fn show(x: Float) -> String
+
+// Comparison
+
+/// Orders two `Float` values. It makes `Float` satisfy `Compare`.
+pub fn compare(a: Float, b: Float) -> Order {
+  case {
+    a < b => Less
+    a > b => Greater
+    _ => Equal
+  }
+}
+
+/// Returns the smaller of `a` and `b`, and `a` when they are `Equal`.
+pub fn min(a: Float, b: Float) -> Float {
+  case {
+    b < a => b
+    _ => a
+  }
+}
+
+/// Returns the larger of `a` and `b`, and `a` when they are `Equal`.
+pub fn max(a: Float, b: Float) -> Float {
+  case {
+    b > a => b
+    _ => a
+  }
+}
+
+/// Returns `x` limited to the range from `low` to `high` by `compare`.
+pub fn clamp(x: Float, low: Float, high: Float) -> Float {
+  max(min(x, high), low)
+}
+
+// Arithmetic
+
+/// Returns `a + b`. It makes `Float` satisfy `Add`.
+pub fn add(a: Float, b: Float) -> Float {
+  a + b
+}
+
+/// Returns `a - b`. It makes `Float` satisfy `Sub`.
+pub fn sub(a: Float, b: Float) -> Float {
+  a - b
+}
+
+/// Returns `a * b`. It makes `Float` satisfy `Mul`.
+pub fn mul(a: Float, b: Float) -> Float {
+  a * b
+}
+
+/// Returns `a / b` by IEEE 754. It makes `Float` satisfy `Div`.
+pub fn div(a: Float, b: Float) -> Float {
+  a / b
+}
+
+/// Returns `a % b`, with the sign of `a`, like C's `fmod`.
+pub fn rem(a: Float, b: Float) -> Float {
+  a % b
+}
+
+/// Returns `-x`, flipping the sign. It makes `Float` satisfy `Neg`.
+pub fn neg(x: Float) -> Float {
+  -x
+}
+
+/// Returns `x` without its sign, so `-0.0` becomes `0.0`.
+pub fn abs(x: Float) -> Float {
+  // `0.0 - x` turns `-0.0` into `0.0`, which `-x` would not.
+  case {
+    x <= 0.0 => 0.0 - x
+    _ => x
+  }
+}
+
+// Conversion to Int
+
+/// Returns `x` rounded toward zero, or `Err(Nil)` for NaN, the infinities and values outside `Int`.
+@external(native, "cheby_float_truncate")
+@external(js, "./float.mjs", "truncate")
+pub fn truncate(x: Float) -> Result<Int, Nil>
+
+/// Returns `x` rounded to the nearest whole number, halves away from zero (D-314), or `Err(Nil)`.
+@external(native, "cheby_float_round")
+@external(js, "./float.mjs", "round")
+pub fn round(x: Float) -> Result<Int, Nil>
+
+/// Returns the largest whole number not above `x`, or `Err(Nil)`.
+@external(native, "cheby_float_floor")
+@external(js, "./float.mjs", "floor")
+pub fn floor(x: Float) -> Result<Int, Nil>
+
+/// Returns the smallest whole number not below `x`, or `Err(Nil)`.
+@external(native, "cheby_float_ceil")
+@external(js, "./float.mjs", "ceil")
+pub fn ceil(x: Float) -> Result<Int, Nil>
+
+// Special values
+
+/// Tells whether `x` is a NaN. Every NaN is `==` to `nan` (D-069).
+pub fn is_nan(x: Float) -> Bool {
+  x == nan
+}
+
+/// Tells whether `x` is `inf` or `-inf`.
+pub fn is_infinite(x: Float) -> Bool {
+  x == infinity || x == neg_infinity
+}
+
+/// Tells whether `x` is neither a NaN nor an infinity.
+pub fn is_finite(x: Float) -> Bool {
+  !is_nan(x) && !is_infinite(x)
+}
+
+// Roots, powers, exponentials and trigonometry (correctly rounded, D-396)
+
+/// Returns the square root of `x`, and NaN for a negative `x`.
+@external(native, "cheby_float_sqrt")
+@external(js, "./float.mjs", "sqrt")
+pub fn sqrt(x: Float) -> Float
+
+/// Returns `x` raised to `exponent`, with the special cases of IEEE 754's `pow`.
+@external(native, "cheby_float_pow")
+@external(js, "./float.mjs", "pow")
+pub fn pow(x: Float, exponent: Float) -> Float
+
+/// Returns e raised to `x`.
+@external(native, "cheby_float_exp")
+@external(js, "./float.mjs", "exp")
+pub fn exp(x: Float) -> Float
+
+/// Returns the natural logarithm of `x`.
+@external(native, "cheby_float_ln")
+@external(js, "./float.mjs", "ln")
+pub fn ln(x: Float) -> Float
+
+/// Returns the sine of `x`, in radians.
+@external(native, "cheby_float_sin")
+@external(js, "./float.mjs", "sin")
+pub fn sin(x: Float) -> Float
+
+/// Returns the cosine of `x`, in radians.
+@external(native, "cheby_float_cos")
+@external(js, "./float.mjs", "cos")
+pub fn cos(x: Float) -> Float
+
+/// Returns the tangent of `x`, in radians.
+@external(native, "cheby_float_tan")
+@external(js, "./float.mjs", "tan")
+pub fn tan(x: Float) -> Float
+
+/// Returns the angle in radians between the positive x-axis and the point (`x`, `y`).
+@external(native, "cheby_float_atan2")
+@external(js, "./float.mjs", "atan2")
+pub fn atan2(y: Float, x: Float) -> Float

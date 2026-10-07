@@ -1,49 +1,61 @@
-//! Blocks and statements (§5.1, §5.2).
+//! Blocks and statements (§5.1, §5.2, §11.4, §11.5).
 
-use cheby_iface::{Ice, Ty, display};
-use cheby_syntax::ast::{AstNode, Block, LetStmt, Stmt};
+use cheby_diag::Span;
+use cheby_iface::{Ice, Ty};
+use cheby_syntax::ast::{AssertStmt, AstNode, Block, LetStmt, Message, Stmt};
 
-use super::{BodyCx, Expected};
-use crate::gate::{slice_type, unsupported_type};
-use crate::infer::{InferTy, contains_error};
-use crate::lower_ty::TyLowering;
+use super::expr::string_message;
+use super::{BodyCx, Expected, PatSite};
+use crate::infer::InferTy;
 use crate::thir::{self, ExprId, ExprKind};
 
 impl BodyCx<'_> {
     /// A block. Its value is its last statement when that is an
-    /// expression, checked against `expected`; otherwise `Nil` (§5.1).
+    /// expression, checked against `expected`, or the value of a `use`;
+    /// otherwise `Nil` (§5.1).
     pub(crate) fn block(
         &mut self,
         block: Block<'_>,
         expected: Option<&Expected>,
     ) -> Result<ExprId, Ice> {
         let stmts: Vec<Stmt<'_>> = block.stmts().collect();
-        let tail = match stmts.last() {
-            Some(Stmt::Expr(e)) => Some(*e),
-            _ => None,
-        };
-        let leading = if tail.is_some() {
-            stmts.len().saturating_sub(1)
-        } else {
-            stmts.len()
-        };
+        self.block_stmts(&stmts, block.significant_span(), expected)
+    }
+
+    /// The statements `stmts` of a block spanning `span`: a whole block,
+    /// or the rest of one after a `use`.
+    pub(crate) fn block_stmts<'a>(
+        &mut self,
+        stmts: &'a [Stmt<'a>],
+        span: Span,
+        expected: Option<&Expected>,
+    ) -> Result<ExprId, Ice> {
         let mut out = Vec::new();
-        for stmt in stmts.iter().take(leading) {
-            if let Some(stmt) = self.stmt(*stmt)? {
-                out.push(stmt);
+        let mut tail = None;
+        for (n, stmt) in stmts.iter().enumerate() {
+            let last = n.checked_add(1) == Some(stmts.len());
+            match *stmt {
+                // A `use` consumes the rest of its block (§5.10).
+                Stmt::Use(u) => {
+                    let rest = stmts.get(n.saturating_add(1)..).unwrap_or_default();
+                    let call = self.use_stmt(u, rest, expected)?;
+                    tail = Some(self.coerce_expr(call, expected)?);
+                    break;
+                }
+                Stmt::Expr(e) if last => tail = Some(self.check_expr(e, expected)?),
+                _ => {
+                    if let Some(stmt) = self.stmt(*stmt)? {
+                        out.push(stmt);
+                    }
+                }
             }
         }
-        let (tail, ty) = if let Some(e) = tail {
-            let id = self.check_expr(e, expected)?;
-            let ty = self.ty_of(id)?;
-            (Some(id), ty)
+        let ty = if let Some(id) = tail {
+            self.ty_of(id)?
         } else {
             // The value `Nil`, at the last statement or the empty block.
-            let span = stmts
-                .last()
-                .map_or_else(|| block.significant_span(), |s| s.significant_span());
-            let ty = self.coerce(&InferTy::NIL, expected, span)?;
-            (None, ty)
+            let at = stmts.last().map_or(span, |s| s.significant_span());
+            self.coerce(&InferTy::NIL, expected, at)?
         };
         self.push(
             ExprKind::Block {
@@ -51,56 +63,34 @@ impl BodyCx<'_> {
                 tail,
             },
             ty,
-            block.significant_span(),
+            span,
         )
     }
 
     /// A statement that is not a block's value. `None` if it was rejected.
     fn stmt(&mut self, stmt: Stmt<'_>) -> Result<Option<thir::Stmt>, Ice> {
-        let span = stmt.significant_span();
-        let what = match stmt {
-            Stmt::Let(l) if l.is_assert() => "`let assert` statements",
-            Stmt::Let(l) => return self.let_stmt(l),
+        match stmt {
+            Stmt::Let(l) => self.let_stmt(l),
             Stmt::Expr(e) => {
                 let id = self.check_expr(e, None)?;
-                return Ok(Some(thir::Stmt::Expr(id)));
+                Ok(Some(thir::Stmt::Expr(id)))
             }
-            Stmt::Use(_) => "`use` statements",
-            Stmt::Assert(_) => "`assert` statements",
-            Stmt::LocalFn(_) => "local functions",
-        };
-        self.unsupported(span, what)?;
-        Ok(None)
+            Stmt::Assert(a) => self.assert_stmt(a),
+            Stmt::LocalFn(f) => Ok(self.local_fn(f)?.map(thir::Stmt::Expr)),
+            Stmt::Use(_) => Err(Ice::new("a `use` statement outside a block's statements")),
+        }
     }
 
-    /// `let p = e` and `let p: T = e` (§5.2). The value is checked first,
-    /// against the annotation if there is one; then the pattern binds.
+    /// `let p = e`, `let p: T = e` (§5.2) and `let assert p = e as m`
+    /// (§11.4). The value is checked first, against the annotation if
+    /// there is one; then the pattern binds.
     fn let_stmt(&mut self, stmt: LetStmt<'_>) -> Result<Option<thir::Stmt>, Ice> {
         let annotation = match stmt.ty() {
             Some(written) => {
-                let lowering = TyLowering {
-                    input: self.input,
-                    paths: &self.res.paths,
-                };
-                let mut diags = Vec::new();
-                let ty = lowering.lower(written, &mut diags)?;
-                for diag in diags {
-                    self.report(diag);
-                }
                 let span = written.significant_span();
-                let ty = if contains_error(&self.input.globals.types, ty) {
-                    self.errored = true;
-                    Ty::ERROR
-                } else if slice_type(ty) {
-                    ty
-                } else {
-                    let cx = self.input.display_cx(self.own, Some(&self.generics));
-                    let shown = display(ty, &cx);
-                    self.report(unsupported_type(span, &shown));
-                    Ty::ERROR
-                };
+                let ty = self.lower_written_ty(written)?;
                 Some(Expected::new(
-                    InferTy::Known(ty),
+                    ty,
                     Some((span, "expected because of this annotation".to_owned())),
                 ))
             }
@@ -115,11 +105,40 @@ impl BodyCx<'_> {
             Some(expected) => expected.ty,
             None => self.ty_of(init)?,
         };
-        let Some(pat) = stmt.pattern() else {
+        let Some(pattern) = stmt.pattern() else {
             self.errored = true;
             return Ok(None);
         };
-        let pat = self.let_pattern(pat, ty)?;
-        Ok(pat.map(|pat| thir::Stmt::Let { pat, init }))
+        if !stmt.is_assert() {
+            let pat = self.check_pat(pattern, &ty, PatSite::Let)?;
+            return Ok(Some(thir::Stmt::Let { pat, init }));
+        }
+        let pat = self.check_pat(pattern, &ty, PatSite::LetAssert)?;
+        let message = self.message(stmt.message().and_then(Message::value))?;
+        Ok(Some(thir::Stmt::LetAssert { pat, init, message }))
+    }
+
+    /// `assert cond as message` (§11.5, D-096, D-160).
+    fn assert_stmt(&mut self, stmt: AssertStmt<'_>) -> Result<Option<thir::Stmt>, Ice> {
+        let Some(condition) = stmt.condition() else {
+            self.errored = true;
+            return Ok(None);
+        };
+        let bool_ty = Expected::plain(InferTy::Known(Ty::BOOL));
+        let cond = self.check_expr(condition, Some(&bool_ty))?;
+        let message = self.message(stmt.message().and_then(Message::value))?;
+        Ok(Some(thir::Stmt::Assert { cond, message }))
+    }
+
+    /// The `as` message of `assert`, `let assert`, `panic` or `todo`: a
+    /// `String` (D-159, D-160, D-161).
+    fn message(
+        &mut self,
+        value: Option<cheby_syntax::ast::Expr<'_>>,
+    ) -> Result<Option<ExprId>, Ice> {
+        match value {
+            Some(m) => Ok(Some(self.check_expr(m, Some(&string_message()))?)),
+            None => Ok(None),
+        }
     }
 }

@@ -1,0 +1,15 @@
+// @mode: check-fail
+// @decisions: D-438
+//! `as` follows a whole list of alternatives, at most once:
+//! `A as x | B` and `p as a as b` are errors (§6.8).
+
+fn first(value: Option<Int>) -> Option<Int> {
+  case value {
+    Some(_) as x | None => x
+    _ as a as b => b
+  }
+}
+
+fn main() {
+  assert first(None) == None
+}

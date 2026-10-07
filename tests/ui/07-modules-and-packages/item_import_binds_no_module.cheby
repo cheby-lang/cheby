@@ -1,0 +1,10 @@
+// @mode: check-fail
+// @decisions: D-144
+//! An item import binds only the listed items, not the module's name.
+
+import std::io::{println}
+
+fn main() {
+  println("Hello!")
+  io::println("again")
+}

@@ -1,0 +1,15 @@
+//! `Point` satisfies `Show` and `Add` with no declaration saying so
+//! (§8.2.1).
+
+pub type Point {
+  x: Int,
+  y: Int,
+}
+
+pub fn show(p: Point) -> String {
+  "({p.x:?}, {p.y:?})"
+}
+
+pub fn add(a: Point, b: Point) -> Point {
+  Point { x: a.x + b.x, y: a.y + b.y }
+}

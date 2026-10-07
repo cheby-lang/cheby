@@ -1,0 +1,22 @@
+error[E0059]: `Circle` has named fields, not positional ones
+  --> tests/ui/06-patterns/patterns/fields_by_the_wrong_form.cheby:13:5
+   |
+7  |   Circle { radius: Int },
+   |   ------ `Circle` is declared here
+...
+13 |     Circle(r) => r
+   |     ^^^^^^^^^ matched by position here
+   |
+   = help: match its fields by name: `Circle { radius, .. }`
+
+error[E0059]: `Square` has positional fields, not named ones
+  --> tests/ui/06-patterns/patterns/fields_by_the_wrong_form.cheby:14:5
+   |
+8  |   Square(Int),
+   |   ------ `Square` is declared here
+...
+14 |     Square { side } => side
+   |     ^^^^^^^^^^^^^^^ matched by name here
+   |
+   = help: match its fields by position: `Square(…)`
+

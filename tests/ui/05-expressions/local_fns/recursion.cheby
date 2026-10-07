@@ -1,0 +1,15 @@
+// @mode: check-pass
+// @decisions: D-110, D-123
+//! A local function may call itself, and its types are inferred
+//! (§5.8).
+
+pub fn count_positive(numbers: List<Int>) -> Int {
+  fn step(acc, rest) {
+    case rest {
+      [] => acc
+      [first, ..tail] when first > 0 => step(acc + 1, tail)
+      [_, ..tail] => step(acc, tail)
+    }
+  }
+  step(0, numbers)
+}

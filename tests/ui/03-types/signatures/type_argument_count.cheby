@@ -1,0 +1,14 @@
+// @mode: check-fail
+// @decisions: D-049, D-462
+//! A written type gives exactly one type argument per type parameter, and
+//! none to a type without parameters.
+
+pub fn count(items: List) -> Int {
+  let _ = items
+  0
+}
+
+pub fn first(items: Option<Int, Int>) -> String<Int> {
+  let _ = items
+  "first"
+}

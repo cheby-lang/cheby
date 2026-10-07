@@ -1,0 +1,32 @@
+// @mode: check-pass
+// @decisions: D-117
+//! Embedded interfaces may require the same function with the same
+//! signature, and the requirement counts once (§8.3).
+
+import std::io
+
+interface Labeled {
+  fn label(Self) -> String
+}
+
+interface Titled {
+  fn label(Self) -> String
+}
+
+interface Card: Labeled + Titled
+
+type Ticket {
+  code: String,
+}
+
+fn label(ticket: Ticket) -> String {
+  ticket.code
+}
+
+fn print_card<C: Card>(card: C) {
+  io::println(Labeled::label(card))
+}
+
+fn main() {
+  print_card(Ticket { code: "A-17" })
+}

@@ -1,0 +1,51 @@
+// @mode: check-pass
+// @decisions: D-113, D-138
+//! Constructor patterns: unit, positional with one sub-pattern per field,
+//! and named fields in any order, punned, with `..` ignoring the rest
+//! (§6.4).
+
+type Shape {
+  Circle { radius: Float },
+  Rect { width: Float, height: Float },
+  Dot,
+}
+
+type Event {
+  Click { x: Int, y: Int },
+  Key { code: Int, shift: Bool },
+}
+
+type Tree {
+  Leaf,
+  Node(Tree, Int, Tree),
+}
+
+fn area(shape: Shape) -> Float {
+  case shape {
+    Circle { radius } => radius * radius * 3.14159
+    Rect { height: h, width: w } => w * h
+    Dot => 0.0
+  }
+}
+
+fn describe(event: Event) -> String {
+  case event {
+    Click { x, .. } when x < 0 => "off-screen"
+    Click { .. } => "click"
+    Key { code: 27, .. } => "escape"
+    Key { .. } => "key"
+  }
+}
+
+fn root(tree: Tree) -> Option<Int> {
+  case tree {
+    Leaf => None
+    Node(_, value, _) => Some(value)
+  }
+}
+
+fn main() {
+  assert area(Dot) == 0.0
+  assert describe(Key { code: 27, shift: False }) == "escape"
+  assert root(Node(Leaf, 1, Leaf)) == Some(1)
+}

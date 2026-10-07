@@ -1,0 +1,13 @@
+// @mode: check-fail
+// @decisions: D-034, D-118
+//! `+` on a type calls its module's `add`; a type without one does not
+//! satisfy `Add` (§5.4.3, §8.7).
+
+pub type Point {
+  x: Int,
+  y: Int,
+}
+
+pub fn double(p: Point) -> Point {
+  p + p
+}

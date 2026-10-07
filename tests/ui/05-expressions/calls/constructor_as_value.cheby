@@ -1,0 +1,30 @@
+// @mode: check-pass
+// @decisions: D-138, D-233
+//! A positional constructor and an interface function may be used as
+//! function values (§3.9, §3.13).
+
+pub interface Shape {
+  fn area(Self) -> Float
+}
+
+pub type Circle {
+  radius: Float,
+}
+
+pub type Square {
+  side: Float,
+}
+
+pub fn area(circle: Circle) -> Float {
+  circle.radius * circle.radius * 3.0
+}
+
+pub fn apply<A, B>(f: fn(A) -> B, value: A) -> B {
+  f(value)
+}
+
+pub fn main() {
+  let some = apply(Some, 1)
+  let size = apply(Shape::area, Circle { radius: 1.0 })
+  assert some == Some(1) && size > 0.0
+}

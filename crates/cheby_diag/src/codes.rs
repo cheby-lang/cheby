@@ -188,8 +188,46 @@ codes! {
     E0055 Error 55 RESERVED_NATIVE_SYMBOL "native symbol reserved for the toolchain";
     // Expressions and patterns (chapters 5 and 6).
     E0056 Error 56 SPACED_NEGATIVE_LITERAL "space between `-` and the number of a negative literal";
+    // Types (chapter 3).
+    E0057 Error 57 TYPE_ANNOTATION_NEEDED "type that nothing in the body determines";
+    // Records and fields (chapter 5).
+    E0058 Error 58 UNKNOWN_FIELD "field that the type does not have, or that not every variant has with one type";
+    E0059 Error 59 INVALID_RECORD "record construction or update with missing, repeated or unknown fields, or a named-field constructor called positionally or used as a value";
+    // Patterns (chapter 6).
+    E0060 Error 60 REFUTABLE_PATTERN "refutable pattern where an irrefutable one is required";
+    E0061 Error 61 NON_EXHAUSTIVE_CASE "`case` that does not cover every value";
+    E0062 Error 62 ALTERNATIVE_BINDINGS "alternatives of a pattern that bind different names";
+    // Interfaces (chapter 8).
+    E0063 Error 63 UNSATISFIED_INTERFACE "type that does not satisfy a required interface";
+    E0064 Error 64 NOT_OBJECT_SAFE "`dyn I` where a function of `I` uses `Self` other than as its first parameter";
+    E0065 Error 65 DYN_NEEDS_BOUND "conversion to `dyn` of a value whose type mentions an unbounded type parameter";
+    E0066 Error 66 INVALID_INTERFACE "interface declaration that breaks a rule of interface declarations or embedding";
+    // Targets (chapter 12).
+    E0067 Error 67 TARGET_MISMATCH "use of an item that does not exist on every target the using code runs on";
+    // Declarations (chapter 4).
+    E0068 Error 68 INVALID_CONSTANT_TYPE "constant whose type contains a function, `dyn`, or an external or handle type";
+    E0069 Error 69 CONSTANT_CYCLE "constants that refer to each other in a cycle";
+    E0070 Error 70 INVALID_ALIAS "type alias that refers to itself or leaves a type parameter unused";
+    // Expressions (chapter 5).
+    E0071 Error 71 LITERAL_OUT_OF_RANGE "numeric literal that does not fit its type";
+    E0072 Error 72 INVALID_OPERAND "non-overloadable operator applied to a type it is not defined for";
+    // Declarations (chapter 4).
+    E0073 Error 73 INVALID_TEST_RESULT "test body whose type is neither `Nil` nor `Result<Nil, E>`";
+    E0074 Error 74 LESS_VISIBLE_IN_SIGNATURE "signature that mentions a type or interface less visible than its item";
     // Warnings.
     W0001 Warning 1 TUPLE_SHAPE "tuple type that hides meaning";
+    W0002 Warning 2 UNUSED_BINDING "unused local binding or parameter";
+    W0003 Warning 3 UNUSED_IMPORT "unused import";
+    W0004 Warning 4 UNUSED_PRIVATE_ITEM "unused `priv` item";
+    W0005 Warning 5 UNUSED_PACKAGE_ITEM "package-visible item that nothing in the package uses";
+    W0006 Warning 6 DISCARDED_RESULT "`Result` discarded in statement position";
+    W0007 Warning 7 HIDDEN_PRELUDE_NAME "local declaration or import that hides a prelude name";
+    W0008 Warning 8 IRREFUTABLE_LET_ASSERT "`let assert` with an irrefutable pattern";
+    W0009 Warning 9 TODO "`todo` in compiled code";
+    W0010 Warning 10 UNREACHABLE_ARM "`case` arm that can never match";
+    W0011 Warning 11 FUNCTION_EQUALITY "`==` or `!=` on a type statically known to contain a function or handle";
+    W0012 Warning 12 DEPRECATED "use of a `@deprecated` item";
+    W0013 Warning 13 NEGATIVE_COUNT "negative integer literal passed as a standard-library count argument";
 }
 
 #[cfg(test)]

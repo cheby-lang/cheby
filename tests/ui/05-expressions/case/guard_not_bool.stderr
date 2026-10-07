@@ -1,0 +1,6 @@
+error[E0047]: mismatched types
+ --> tests/ui/05-expressions/case/guard_not_bool.cheby:7:12
+  |
+7 |     x when x => "truthy"
+  |            ^ expected `Bool`, found `Int`
+

@@ -1,0 +1,11 @@
+// @mode: check-fail
+// @decisions: D-118
+//! The bitwise operators are defined on the integer types only (§5.4.6).
+
+pub fn both(a: Bool, b: Bool) -> Bool {
+  a & b
+}
+
+pub fn shifted(x: Float) -> Float {
+  x << 1.0
+}

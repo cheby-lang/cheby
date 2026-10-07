@@ -1,0 +1,119 @@
+//! The hashed set `Set<T>`, a persistent hash array mapped trie (§3.8,
+//! D-039).
+//!
+//! `Set` is a builtin item whose home module is this one
+//! (GAP(kernel-types), D-447), so it is not declared here. As in the spec's
+//! signatures, it is written unqualified in this module
+//! (GAP(home-type-in-scope)). Elements need no interface: they are compared
+//! with `==` and hashed with the built-in structural hash (§3.13).
+//! Iteration order depends on a per-process seed (D-093), so
+//! `to_sorted_list` gives an order that is the same on every run. The
+//! kernels are the functions set.md lists (D-274); the rest is written in
+//! Cheby over them.
+
+import std::list
+import std::ops::{Compare}
+
+// Building
+
+/// Returns an empty set.
+@external(native, "cheby_set_new")
+@external(js, "./set.mjs", "new")
+pub fn new<T>() -> Set<T>
+
+/// Returns a set with the elements of `items`, each once.
+@external(native, "cheby_set_from_list")
+@external(js, "./set.mjs", "from_list")
+pub fn from_list<T>(items: List<T>) -> Set<T>
+
+// Size
+
+/// Returns the number of elements (D-301).
+@external(native, "cheby_set_size")
+@external(js, "./set.mjs", "size")
+pub fn size<T>(s: Set<T>) -> Int
+
+/// Tells whether the set has no elements.
+@external(native, "cheby_set_is_empty")
+@external(js, "./set.mjs", "is_empty")
+pub fn is_empty<T>(s: Set<T>) -> Bool
+
+// Lookup
+
+/// Tells whether `item` is in the set.
+@external(native, "cheby_set_contains")
+@external(js, "./set.mjs", "contains")
+pub fn contains<T>(s: Set<T>, item: T) -> Bool
+
+// Updating
+
+/// Returns the set with `item` added, or unchanged when `item` is already in it.
+@external(native, "cheby_set_insert")
+@external(js, "./set.mjs", "insert")
+pub fn insert<T>(s: Set<T>, item: T) -> Set<T>
+
+/// Returns the set without `item`, or unchanged when `item` is not in it.
+@external(native, "cheby_set_remove")
+@external(js, "./set.mjs", "remove")
+pub fn remove<T>(s: Set<T>, item: T) -> Set<T>
+
+// Iterating
+
+/// Returns the elements, in the set's per-process order (D-093).
+@external(native, "cheby_set_to_list")
+@external(js, "./set.mjs", "to_list")
+pub fn to_list<T>(s: Set<T>) -> List<T>
+
+/// Returns the elements sorted by `compare`, the same on every run (D-093, D-344).
+pub fn to_sorted_list<T: Compare>(s: Set<T>) -> List<T> {
+  list::sort_with(to_list(s), fn(a, b) { Compare::compare(a, b) })
+}
+
+/// Combines the elements, starting from `initial`, in the set's per-process order (D-093).
+pub fn fold<T, A>(s: Set<T>, initial: A, f: fn(A, T) -> A) -> A {
+  list::fold(to_list(s), initial, f)
+}
+
+/// Calls `f` once per element, in the set's per-process order (D-093), for its effects.
+pub fn each<T>(s: Set<T>, f: fn(T)) {
+  list::each(to_list(s), f)
+}
+
+// Transforming
+
+/// Returns the elements for which `keep` returns `True`.
+pub fn filter<T>(s: Set<T>, keep: fn(T) -> Bool) -> Set<T> {
+  list::fold(to_list(s), s, fn(kept, item) {
+    case keep(item) {
+      True => kept
+      False => remove(kept, item)
+    }
+  })
+}
+
+/// Returns the set of the results of `f`, merging results that are `==`.
+pub fn map<T, U>(s: Set<T>, f: fn(T) -> U) -> Set<U> {
+  from_list(list::map(to_list(s), f))
+}
+
+// Combining
+
+/// Returns the elements that are in `s` or in `other`.
+pub fn union<T>(s: Set<T>, other: Set<T>) -> Set<T> {
+  list::fold(to_list(other), s, insert)
+}
+
+/// Returns the elements of `s` that are also in `other`.
+pub fn intersection<T>(s: Set<T>, other: Set<T>) -> Set<T> {
+  filter(s, fn(item) { contains(other, item) })
+}
+
+/// Returns the elements of `s` that are not in `other`.
+pub fn difference<T>(s: Set<T>, other: Set<T>) -> Set<T> {
+  filter(s, fn(item) { !contains(other, item) })
+}
+
+/// Tells whether every element of `s` is in `other`, stopping at the first that is not.
+pub fn is_subset<T>(s: Set<T>, other: Set<T>) -> Bool {
+  list::all(to_list(s), fn(item) { contains(other, item) })
+}

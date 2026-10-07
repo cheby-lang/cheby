@@ -1,0 +1,32 @@
+// @mode: check-pass
+// @decisions: D-117
+//! A bound whose interface embeds `Show` lets the body interpolate the
+//! value and call the embedded function (§8.3, §8.4).
+
+import std::io
+
+interface Named: Show {
+  fn name(Self) -> String
+}
+
+type City {
+  title: String,
+}
+
+fn name(city: City) -> String {
+  city.title
+}
+
+fn show(city: City) -> String {
+  city.title
+}
+
+fn introduce<T: Named>(item: T) {
+  io::println("this is {item}")
+  io::println(Named::name(item))
+  io::println(Show::show(item))
+}
+
+fn main() {
+  introduce(City { title: "Lisbon" })
+}

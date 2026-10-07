@@ -1,0 +1,18 @@
+error[E0058]: `(Int, Int)` has no field `first`
+  --> tests/ui/05-expressions/records/no_fields_on_tuples.cheby:11:8
+   |
+11 |   pair.first
+   |   ---- ^^^^^ unknown field
+   |   |
+   |   this has type `(Int, Int)`
+   |
+   = help: read tuple elements with a pattern: `let (a, b) = pair`
+
+error[E0058]: `Wrapper` has no field `value`
+  --> tests/ui/05-expressions/records/no_fields_on_tuples.cheby:15:5
+   |
+15 |   w.value
+   |     ^^^^^ unknown field
+   |
+   = note: `Wrapper` has no named fields; positional fields are read with a pattern (D-241)
+

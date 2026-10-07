@@ -1,0 +1,11 @@
+//! A generic type that satisfies `Show` when its element does (§8.2.2).
+
+pub type Boxed<T> {
+  Boxed(T),
+}
+
+pub fn show<T: Show>(b: Boxed<T>) -> String {
+  case b {
+    Boxed(inner) => "[{inner}]"
+  }
+}

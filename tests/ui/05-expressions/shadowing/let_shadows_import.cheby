@@ -1,0 +1,10 @@
+// @mode: check-fail
+// @decisions: D-062
+//! A local binding cannot use the name of an imported module.
+
+import std::io
+
+fn main() {
+  let io = "Hello!"
+  io::println(io)
+}

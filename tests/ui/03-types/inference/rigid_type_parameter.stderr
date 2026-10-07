@@ -1,0 +1,8 @@
+error[E0047]: mismatched types
+ --> tests/ui/03-types/inference/rigid_type_parameter.cheby:7:3
+  |
+6 | pub fn first<T>(x: T, y: T) -> Int {
+  |                                --- expected because of this return type
+7 |   x
+  |   ^ expected `Int`, found `T`
+

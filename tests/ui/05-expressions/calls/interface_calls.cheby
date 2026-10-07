@@ -1,0 +1,32 @@
+// @mode: check-pass
+// @decisions: D-173, D-234
+//! An interface function is called through its interface, resolved from
+//! the type of its `Self` argument at the end of the body (§8.5).
+
+pub interface Shape {
+  fn area(Self) -> Float
+}
+
+pub type Circle {
+  radius: Float,
+}
+
+pub type Square {
+  side: Float,
+}
+
+pub fn area(circle: Circle) -> Float {
+  circle.radius * circle.radius * 3.0
+}
+
+pub fn one(circle: Circle) -> Float {
+  Shape::area(circle)
+}
+
+pub fn generic<T: Shape>(shape: T) -> Float {
+  Shape::area(shape)
+}
+
+pub fn dynamic(shape: dyn Shape) -> Float {
+  Shape::area(shape)
+}

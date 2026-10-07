@@ -1,0 +1,12 @@
+// @mode: check-fail
+// @decisions: D-076
+//! A tuple pattern has as many elements as the tuple (§6.5).
+
+fn first(triple: (Int, Int, Int)) -> Int {
+  let (a, b) = triple
+  a + b
+}
+
+fn main() {
+  assert first((1, 2, 3)) == 3
+}

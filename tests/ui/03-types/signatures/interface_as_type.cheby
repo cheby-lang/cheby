@@ -1,0 +1,12 @@
+// @mode: check-fail
+// @decisions: D-063, D-462
+//! An interface is not a type. A value of any type that satisfies it is a
+//! `dyn` value, or a value of a bounded type parameter.
+
+pub interface Describe {
+  fn describe(Self) -> String
+}
+
+pub fn label(item: Describe) -> String {
+  Describe::describe(item)
+}

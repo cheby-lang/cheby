@@ -1,0 +1,14 @@
+// @mode: check-fail
+// @decisions: D-052
+//! A guard has type `Bool` (§5.9.3).
+
+fn describe(n: Int) -> String {
+  case n {
+    x when x => "truthy"
+    _ => "other"
+  }
+}
+
+fn main() {
+  assert describe(1) == "truthy"
+}

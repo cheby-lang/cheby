@@ -1,0 +1,31 @@
+// @mode: check-pass
+// @decisions: D-053, D-158
+//! List patterns match by length; one spread `..` or `..name` stands
+//! anywhere and binds the elements it matches as a `List` (§6.6).
+
+fn last_of(xs: List<Int>) -> Option<Int> {
+  case xs {
+    [] => None
+    [.., last] => Some(last)
+  }
+}
+
+fn middle(xs: List<Int>) -> List<Int> {
+  case xs {
+    [_, ..inner, _] => inner
+    _ => []
+  }
+}
+
+fn pair(xs: List<Int>) -> Bool {
+  case xs {
+    [_, _] => True
+    _ => False
+  }
+}
+
+fn main() {
+  assert last_of([1, 2]) == Some(2)
+  assert middle([1, 2, 3]) == [2]
+  assert pair([1, 2])
+}

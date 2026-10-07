@@ -1,0 +1,12 @@
+// @mode: check-fail
+// @decisions: D-148, D-198
+//! The fields of a `pub exposed` type are visible in every package, so
+//! they must mention only `pub` types (§4.1.3).
+
+type Inner { Inner(Int) }
+
+pub exposed type Outer { Outer(Inner) }
+
+pub fn make(n: Int) -> Outer {
+  Outer(Inner(n))
+}

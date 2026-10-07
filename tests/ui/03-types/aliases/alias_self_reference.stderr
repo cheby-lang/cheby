@@ -1,0 +1,8 @@
+error[E0070]: the type alias `Tree` refers to itself
+ --> tests/ui/03-types/aliases/alias_self_reference.cheby:6:10
+  |
+6 | pub type Tree = List<Tree>
+  |          ^^^^        ---- used in its own definition here
+  |
+  = help: an alias never finishes expanding if it contains itself; declare a type for a recursive structure (§4.4)
+

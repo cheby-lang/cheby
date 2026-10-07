@@ -1,0 +1,8 @@
+// @mode: check-fail
+// @decisions: D-011
+//! A closure's written return type is its body's expected type (§3.12.5).
+
+pub fn main() {
+  let show = fn(x: Int) -> String { x }
+  assert show(1) == "1"
+}

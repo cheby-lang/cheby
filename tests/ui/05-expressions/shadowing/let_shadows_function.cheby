@@ -1,0 +1,15 @@
+// @mode: check-fail
+// @decisions: D-062
+//! A local binding cannot use the name of a top-level function of its
+//! module, even one declared later.
+
+import std::io
+
+fn main() {
+  let greeting = greeting()
+  io::println(greeting)
+}
+
+fn greeting() -> String {
+  "Hello!"
+}

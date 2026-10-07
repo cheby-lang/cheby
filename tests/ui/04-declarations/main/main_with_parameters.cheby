@@ -1,0 +1,10 @@
+// @mode: check-fail
+// @decisions: D-073, D-448
+//! An entry point takes no parameters; program arguments come from
+//! `env::args()` (§4.2.1).
+
+import std::io
+
+fn main(name: String) {
+  io::println(name)
+}

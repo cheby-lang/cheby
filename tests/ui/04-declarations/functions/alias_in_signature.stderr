@@ -1,0 +1,12 @@
+error[E0074]: the `pub` function `first` mentions the package-visible type `Token`
+  --> tests/ui/04-declarations/functions/alias_in_signature.cheby:17:22
+   |
+9  | type Token { Token(String) }
+   |      ----- declared here
+...
+17 | pub fn first(tokens: Tokens) -> Int {
+   |                      ^^^^^^ `Tokens` stands for a type that mentions `Token`
+   |
+   = note: code that can use `first` could not name `Token` (D-148)
+   = help: make `Token` `pub`, or make `first` package-visible
+

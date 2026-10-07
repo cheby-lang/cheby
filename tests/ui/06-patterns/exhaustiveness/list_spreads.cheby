@@ -1,0 +1,24 @@
+// @mode: check-pass
+// @decisions: D-022, D-053, D-158
+//! `[]` and a pattern with a spread cover every list, wherever the spread
+//! stands.
+
+fn last(xs: List<Int>) -> Option<Int> {
+  case xs {
+    [] => None
+    [.., x] => Some(x)
+  }
+}
+
+fn ends(xs: List<Int>) -> Int {
+  case xs {
+    [first, .., final] => first + final
+    [only] => only
+    [] => 0
+  }
+}
+
+fn main() {
+  assert last([1, 2]) == Some(2)
+  assert ends([1, 2, 3]) == 4
+}

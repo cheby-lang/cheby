@@ -1,0 +1,16 @@
+// @mode: check-pass
+// @decisions: D-161, D-235
+//! An arm of type `Never`, such as `panic`, takes the type of the other
+//! arms, whichever arm comes first (§3.12.5, §5.9.1).
+
+fn unwrap(value: Option<String>) -> String {
+  let text = case value {
+    None => panic as "no value"
+    Some(inner) => inner
+  }
+  text
+}
+
+fn main() {
+  assert unwrap(Some("a")) == "a"
+}

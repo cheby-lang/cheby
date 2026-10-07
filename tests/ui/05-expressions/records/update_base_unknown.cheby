@@ -1,0 +1,15 @@
+// @mode: check-fail
+// @decisions: D-213, D-234
+//! The type of a record update's base must be known when the update is
+//! checked (§5.11.2), so a closure parameter used as a base needs an
+//! annotation.
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+fn main() {
+  let move_right = fn(p) { Point { ..p, x: 1 } }
+  assert move_right(Point { x: 0, y: 0 }).x == 1
+}

@@ -1,0 +1,15 @@
+// @mode: check-pass
+// @decisions: D-157
+//! A list literal may spread other lists anywhere (§5.13).
+
+pub fn around(xs: List<Int>, ys: List<Int>) -> List<Int> {
+  [0, ..xs, 99, ..ys]
+}
+
+pub fn last(xs: List<Int>) -> List<Int> {
+  [..xs, 99]
+}
+
+pub fn small() -> List<U8> {
+  [1, 2, 3]
+}

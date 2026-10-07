@@ -1,0 +1,17 @@
+// @mode: check-pass
+// @decisions: D-086, D-234
+//! `{x}` calls the `show` function of the value's type, found at the end
+//! of the body (§5.3.2).
+
+pub type Point {
+  x: Int,
+  y: Int,
+}
+
+pub fn show(p: Point) -> String {
+  "a point"
+}
+
+pub fn describe(p: Point, name: String, n: Int) -> String {
+  "{name}: {p} at {p.x}, {n}"
+}

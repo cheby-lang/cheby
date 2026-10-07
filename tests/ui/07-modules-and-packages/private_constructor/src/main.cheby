@@ -1,0 +1,12 @@
+// @mode: check-fail
+// @decisions: D-151
+//! `priv type` hides the type together with its constructors outside its
+//! module, also from the other modules of the package.
+
+import app::secret
+import std::io
+
+fn main() {
+  io::println(secret::reveal())
+  let _ = secret::Secret("forged")
+}

@@ -1,0 +1,32 @@
+// @mode: check-pass
+// @decisions: D-173
+//! An interface call on a concrete type goes through that type's module
+//! (§8.5).
+
+import std::io
+
+interface Area {
+  fn area(Self) -> Float
+}
+
+type Square {
+  side: Float,
+}
+
+fn area(square: Square) -> Float {
+  square.side * square.side
+}
+
+fn main() {
+  let square = Square { side: 3.0 }
+  assert Area::area(square) == 9.0
+  io::println(Show::show(Label { text: "done" }))
+}
+
+type Label {
+  text: String,
+}
+
+fn show(label: Label) -> String {
+  label.text
+}

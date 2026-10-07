@@ -5,8 +5,11 @@
 //! - [`repr`] and [`abi`]: value representations and the one source of
 //!   machine signatures (D-453, D-454).
 //! - [`layout`]: constructor layouts from interfaces (D-246, D-252).
+//! - [`reach`]: the items a run needs, from its entry
+//!   (GAP(backend-reachability)).
 //! - [`lower`]: THIR to MIR (D2), with tail-position marking (§5.15.2),
-//!   external wrappers and entry thunks.
+//!   external wrappers and entry thunks. What it cannot lower yet is
+//!   E0038 at the construct (plan §8), never an internal error.
 //! - [`rc`]: naive dup/drop placement by the last-use rule (D7, D-205).
 //! - [`validate`] and [`dump`]: the validator and the stable text form.
 
@@ -20,7 +23,10 @@ pub mod ir;
 pub mod layout;
 mod liveness;
 pub mod lower;
+#[cfg(test)]
+mod lower_tests;
 pub mod rc;
+pub mod reach;
 pub mod repr;
 #[cfg(test)]
 mod tests;
@@ -37,7 +43,11 @@ pub use ir::{
     Stmt, StrId, Terminator, UnitKind, UseKind,
 };
 pub use layout::{FieldDesc, LayoutDesc, ctor_layout};
-pub use lower::{EntryRequest, LowerCx, lower_entries, lower_fn, lower_module, lower_tests};
+pub use lower::{
+    EntryRequest, LowerCx, LowerError, Unsupported, lower_entries, lower_fn, lower_items,
+    lower_module, lower_tests,
+};
+pub use reach::{Program, Reach, Root, reachable};
 pub use repr::{CType, ForeignSig, Repr, ctype_of, foreign_sig, repr_of};
 pub use validate::{Stage, validate};
 

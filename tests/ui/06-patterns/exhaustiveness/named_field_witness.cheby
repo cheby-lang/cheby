@@ -1,0 +1,20 @@
+// @mode: check-fail
+// @decisions: D-022, D-113
+//! A missing named-field variant is listed as a pattern with `..`, and a
+//! field pattern with a literal leaves the field's other values uncovered.
+
+type Event {
+  Click { x: Int, y: Int },
+  Key { code: Int },
+}
+
+fn describe(event: Event) -> String {
+  case event {
+    Click { x: 0, .. } => "edge"
+    Key { code: 27 } => "escape"
+  }
+}
+
+fn main() {
+  assert describe(Key { code: 27 }) == "escape"
+}

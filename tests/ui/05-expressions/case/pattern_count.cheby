@@ -1,0 +1,16 @@
+// @mode: check-fail
+// @decisions: D-052
+//! Each arm has exactly as many patterns as the `case` has subjects
+//! (§5.9.1).
+
+fn both(a: Bool, b: Bool) -> Bool {
+  case a, b {
+    True, True => True
+    False => False
+    _, _ => False
+  }
+}
+
+fn main() {
+  assert both(True, True)
+}

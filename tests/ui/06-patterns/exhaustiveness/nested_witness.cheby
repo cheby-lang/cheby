@@ -1,0 +1,16 @@
+// @mode: check-fail
+// @decisions: D-022
+//! Values left uncovered inside other constructors are listed with their
+//! enclosing constructors.
+
+fn describe(value: Option<Option<Bool>>) -> String {
+  case value {
+    None => "none"
+    Some(None) => "inner none"
+    Some(Some(True)) => "true"
+  }
+}
+
+fn main() {
+  assert describe(None) == "none"
+}

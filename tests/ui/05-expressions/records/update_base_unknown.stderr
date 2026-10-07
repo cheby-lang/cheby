@@ -1,0 +1,11 @@
+error[E0057]: type annotation needed
+  --> tests/ui/05-expressions/records/update_base_unknown.cheby:13:38
+   |
+13 |   let move_right = fn(p) { Point { ..p, x: 1 } }
+   |                       -              ^ the type of `p` must be known here to update it
+   |                       |
+   |                       `p` is bound here
+   |
+   = note: field names are not unique across types, so the type must come from an annotation, a signature or a use checked earlier (D-213)
+   = help: annotate the parameter: `fn(p: Point)`
+

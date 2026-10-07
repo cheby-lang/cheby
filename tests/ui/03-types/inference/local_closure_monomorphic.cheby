@@ -1,0 +1,11 @@
+// @mode: check-fail
+// @decisions: D-123
+//! A closure bound with `let` has one type, fixed by its first use
+//! (§3.12.3).
+
+pub fn main() {
+  let wrap = fn(x) { [x] }
+  let a = wrap(1)
+  let b = wrap("hi")
+  assert a == [1] && b != []
+}

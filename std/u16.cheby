@@ -1,0 +1,199 @@
+//! The built-in `U16`, a unsigned 16-bit integer: constants, conversions,
+//! parsing and text, comparison, and checked and wrapping arithmetic
+//! (the integer families of `docs/stdlib/README.md`, D-350).
+//!
+//! `U16` itself is a builtin item whose home module is this one (D-447).
+
+// Constants
+
+/// The smallest `U16`.
+pub const min_value: U16 = 0
+
+/// The largest `U16`.
+pub const max_value: U16 = 65_535
+
+// Conversions
+
+/// Returns `n` as an `U16`, or `Err(Nil)` when it does not fit.
+@external(native, "cheby_u16_from_int")
+@external(js, "./u16.mjs", "from_int")
+pub fn from_int(n: Int) -> Result<U16, Nil>
+
+/// Returns `n` as an `U16`, or `Err(Nil)` when it does not fit.
+@external(native, "cheby_u16_from_i8")
+@external(js, "./u16.mjs", "from_i8")
+pub fn from_i8(n: I8) -> Result<U16, Nil>
+
+/// Returns `n` as an `U16`, or `Err(Nil)` when it does not fit.
+@external(native, "cheby_u16_from_i16")
+@external(js, "./u16.mjs", "from_i16")
+pub fn from_i16(n: I16) -> Result<U16, Nil>
+
+/// Returns `n` as an `U16`, or `Err(Nil)` when it does not fit.
+@external(native, "cheby_u16_from_i32")
+@external(js, "./u16.mjs", "from_i32")
+pub fn from_i32(n: I32) -> Result<U16, Nil>
+
+/// Returns `n` as an `U16`, or `Err(Nil)` when it does not fit.
+@external(native, "cheby_u16_from_i64")
+@external(js, "./u16.mjs", "from_i64")
+pub fn from_i64(n: I64) -> Result<U16, Nil>
+
+/// Returns `n` as an `U16`. Every `U8` fits.
+@external(native, "cheby_u16_from_u8")
+@external(js, "./u16.mjs", "from_u8")
+pub fn from_u8(n: U8) -> U16
+
+/// Returns `n` as an `U16`, or `Err(Nil)` when it does not fit.
+@external(native, "cheby_u16_from_u32")
+@external(js, "./u16.mjs", "from_u32")
+pub fn from_u32(n: U32) -> Result<U16, Nil>
+
+/// Returns `n` as an `U16`, or `Err(Nil)` when it does not fit.
+@external(native, "cheby_u16_from_u64")
+@external(js, "./u16.mjs", "from_u64")
+pub fn from_u64(n: U64) -> Result<U16, Nil>
+
+// Parsing and text
+
+/// Reads an `U16` written as an optional `-` and ASCII decimal digits (D-312).
+@external(native, "cheby_u16_parse")
+@external(js, "./u16.mjs", "parse")
+pub fn parse(text: String) -> Result<U16, Nil>
+
+/// Reads an `U16` written in `base`, from 2 to 36, as an optional `-` and digits.
+@external(native, "cheby_u16_parse_base")
+@external(js, "./u16.mjs", "parse_base")
+pub fn parse_base(text: String, base: Int) -> Result<U16, Nil>
+
+/// Returns `n` in decimal. It makes `U16` satisfy `Show`.
+@external(native, "cheby_u16_show")
+@external(js, "./u16.mjs", "show")
+pub fn show(n: U16) -> String
+
+// Comparison
+
+/// Orders two `U16` values. It makes `U16` satisfy `Compare`.
+pub fn compare(a: U16, b: U16) -> Order {
+  case {
+    a < b => Less
+    a > b => Greater
+    _ => Equal
+  }
+}
+
+/// Returns the smaller of `a` and `b`, and `a` when they are `Equal`.
+pub fn min(a: U16, b: U16) -> U16 {
+  case {
+    b < a => b
+    _ => a
+  }
+}
+
+/// Returns the larger of `a` and `b`, and `a` when they are `Equal`.
+pub fn max(a: U16, b: U16) -> U16 {
+  case {
+    b > a => b
+    _ => a
+  }
+}
+
+// Arithmetic
+
+/// Returns `a + b`, and panics when the result does not fit. It makes `U16` satisfy `Add`.
+pub fn add(a: U16, b: U16) -> U16 {
+  a + b
+}
+
+/// Returns `a - b`, and panics when the result does not fit. It makes `U16` satisfy `Sub`.
+pub fn sub(a: U16, b: U16) -> U16 {
+  a - b
+}
+
+/// Returns `a * b`, and panics when the result does not fit. It makes `U16` satisfy `Mul`.
+pub fn mul(a: U16, b: U16) -> U16 {
+  a * b
+}
+
+/// Returns `a / b` toward zero, panicking like `/`. It makes `U16` satisfy `Div`.
+pub fn div(a: U16, b: U16) -> U16 {
+  a / b
+}
+
+/// Returns `a % b`, with the sign of `a`, and panics on a zero divisor.
+pub fn rem(a: U16, b: U16) -> U16 {
+  a % b
+}
+
+/// Returns `-n`, and panics when it does not fit. It makes `U16` satisfy `Neg`.
+pub fn neg(n: U16) -> U16 {
+  -n
+}
+
+/// Returns `n`, since `U16` has no negative values.
+pub fn abs(n: U16) -> U16 {
+  n
+}
+
+// Checked arithmetic
+
+/// Returns `Ok(a + b)`, or `Err(Nil)` when the sum does not fit (D-309).
+@external(native, "cheby_u16_checked_add")
+@external(js, "./u16.mjs", "checked_add")
+pub fn checked_add(a: U16, b: U16) -> Result<U16, Nil>
+
+/// Returns `Ok(a - b)`, or `Err(Nil)` when the difference does not fit (D-309).
+@external(native, "cheby_u16_checked_sub")
+@external(js, "./u16.mjs", "checked_sub")
+pub fn checked_sub(a: U16, b: U16) -> Result<U16, Nil>
+
+/// Returns `Ok(a * b)`, or `Err(Nil)` when the product does not fit (D-309).
+@external(native, "cheby_u16_checked_mul")
+@external(js, "./u16.mjs", "checked_mul")
+pub fn checked_mul(a: U16, b: U16) -> Result<U16, Nil>
+
+/// Returns `Ok(a / b)`, or `Err(Nil)` for a zero divisor (D-356).
+pub fn checked_div(a: U16, b: U16) -> Result<U16, Nil> {
+  case b {
+    0 => Err(Nil)
+    _ => Ok(a / b)
+  }
+}
+
+/// Returns `Ok(a % b)`, or `Err(Nil)` for a zero divisor (D-356).
+pub fn checked_rem(a: U16, b: U16) -> Result<U16, Nil> {
+  case b {
+    0 => Err(Nil)
+    _ => Ok(a % b)
+  }
+}
+
+/// Returns `Ok(n)` for 0, the only value whose negation fits, and `Err(Nil)` otherwise (D-309).
+pub fn checked_neg(n: U16) -> Result<U16, Nil> {
+  case n {
+    0 => Ok(n)
+    _ => Err(Nil)
+  }
+}
+
+// Wrapping arithmetic
+
+/// Returns `a + b` modulo 2^16 (D-025).
+@external(native, "cheby_u16_wrapping_add")
+@external(js, "./u16.mjs", "wrapping_add")
+pub fn wrapping_add(a: U16, b: U16) -> U16
+
+/// Returns `a - b` modulo 2^16 (D-025).
+@external(native, "cheby_u16_wrapping_sub")
+@external(js, "./u16.mjs", "wrapping_sub")
+pub fn wrapping_sub(a: U16, b: U16) -> U16
+
+/// Returns `a * b` modulo 2^16 (D-025).
+@external(native, "cheby_u16_wrapping_mul")
+@external(js, "./u16.mjs", "wrapping_mul")
+pub fn wrapping_mul(a: U16, b: U16) -> U16
+
+/// Returns `-n` modulo 2^16 (D-025).
+@external(native, "cheby_u16_wrapping_neg")
+@external(js, "./u16.mjs", "wrapping_neg")
+pub fn wrapping_neg(n: U16) -> U16

@@ -1,0 +1,6 @@
+error[E0047]: mismatched types
+  --> tests/ui/05-expressions/use/callback_result.cheby:15:3
+   |
+15 |   x * 2
+   |   ^^^^^ expected `Result<Int, String>`, found `Int`
+

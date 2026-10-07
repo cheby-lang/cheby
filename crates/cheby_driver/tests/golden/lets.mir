@@ -16,14 +16,6 @@ bb0:
   return const nil
 }
 
-fn std::io::eprint(_0: value) -> value check str#0 {
-  str#0 = "std/io.cheby:17:8"
-bb0:
-  call_foreign "cheby_io_eprint"(borrow _0) -> void
-  drop _0
-  return const nil
-}
-
 fn std::io::eprintln(_0: value) -> value check str#0 {
   str#0 = "std/io.cheby:22:8"
 bb0:

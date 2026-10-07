@@ -1,0 +1,13 @@
+// @mode: check-fail
+// @decisions: D-235
+//! All arm bodies have the same type. Without an expected type, the first
+//! arm fixes it (§5.9.1).
+
+fn main() {
+  let flag = True
+  let answer = case flag {
+    True => "yes"
+    False => 0
+  }
+  assert answer == "yes"
+}

@@ -1,0 +1,29 @@
+// @mode: check-pass
+// @decisions: D-071, D-213, D-234
+//! `x.name` reads a named field. On a type with several variants, every
+//! variant must have it with one type. A closure parameter's type is
+//! known from the call's other arguments, which are checked first
+//! (§3.12.4, §5.11.3).
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+type Shape {
+  Circle { name: String, radius: Int },
+  Rect { name: String, width: Int, height: Int },
+}
+
+fn name(shape: Shape) -> String {
+  shape.name
+}
+
+fn apply(point: Point, f: fn(Point) -> Int) -> Int {
+  f(point)
+}
+
+fn main() {
+  assert name(Rect { name: "r", width: 1, height: 2 }) == "r"
+  assert apply(Point { x: 3, y: 4 }, fn(p) { p.y }) == 4
+}

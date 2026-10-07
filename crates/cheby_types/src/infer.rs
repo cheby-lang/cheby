@@ -181,6 +181,33 @@ impl<'g> InferCtxt<'g> {
         }
     }
 
+    /// The kind of `t` if it is an unbound variable, after following
+    /// bindings: `Some(VarKind::IntLit)` for a numeric literal whose type is
+    /// not fixed yet.
+    ///
+    /// # Errors
+    ///
+    /// An [`Ice`] for a variable of another body.
+    pub fn var_kind(&mut self, t: &InferTy) -> Result<Option<VarKind>, Ice> {
+        let InferTy::Var(vid) = self.shallow(t)? else {
+            return Ok(None);
+        };
+        Ok(match self.state(vid)? {
+            VarState::Unbound { kind, .. } => Some(*kind),
+            VarState::Bound(_) => None,
+        })
+    }
+
+    /// The root of `vid`'s tree: the variable that stands for all the
+    /// variables joined with it.
+    ///
+    /// # Errors
+    ///
+    /// An [`Ice`] for a variable of another body.
+    pub fn root_of(&self, vid: TyVid) -> Result<TyVid, Ice> {
+        self.root(vid)
+    }
+
     fn state(&self, vid: TyVid) -> Result<&VarState, Ice> {
         self.vars.try_get(vid, "type variable")
     }
@@ -369,10 +396,13 @@ impl<'g> InferCtxt<'g> {
         let Some(kind) = kx.meet(ky) else {
             return Ok(Err(Mismatch::Types));
         };
-        let (child, parent, origin, rank) = if rx < ry {
-            (x, y, oy, ry)
+        // The joined variable keeps the origin of the one created first,
+        // which E0057 points to: the expression that introduced the type.
+        let origin = if x < y { ox } else { oy };
+        let (child, parent, rank) = if rx < ry {
+            (x, y, ry)
         } else {
-            (y, x, ox, if rx == ry { rx.saturating_add(1) } else { rx })
+            (y, x, if rx == ry { rx.saturating_add(1) } else { rx })
         };
         self.write(child, VarState::Bound(InferTy::Var(parent)))?;
         self.write(parent, VarState::Unbound { origin, kind, rank })?;

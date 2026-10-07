@@ -1,0 +1,16 @@
+error[E0048]: the constructor `None` has no fields
+ --> tests/ui/06-patterns/patterns/fields_of_a_unit_constructor.cheby:8:5
+  |
+8 |     None(x) => x
+  |     ^^^^^^^ expected no fields
+  |
+  = help: write the constructor alone: `None`
+
+error[E0048]: the constructor `Some` has 1 field, but the pattern has none
+ --> tests/ui/06-patterns/patterns/fields_of_a_unit_constructor.cheby:9:5
+  |
+9 |     Some => 1
+  |     ^^^^ expected 1 field
+  |
+  = help: match the fields, or ignore them with `Some(_)`
+

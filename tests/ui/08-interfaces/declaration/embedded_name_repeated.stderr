@@ -1,0 +1,9 @@
+error[E0066]: `show` is already required by the embedded interface `Show`
+ --> tests/ui/08-interfaces/declaration/embedded_name_repeated.cheby:7:6
+  |
+7 |   fn show(Self) -> String
+  |      ^^^^ declared again here
+  |
+  = note: function names must be distinct within an interface, including the functions it inherits by embedding (§8.1)
+  = help: remove this function or rename it
+

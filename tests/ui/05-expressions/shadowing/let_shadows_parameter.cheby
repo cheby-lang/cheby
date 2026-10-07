@@ -1,0 +1,14 @@
+// @mode: check-fail
+// @decisions: D-051, D-062
+//! A `let` cannot reuse the name of a parameter of its function.
+
+import std::io
+
+fn greet(name: String) -> String {
+  let name = "everyone"
+  name
+}
+
+fn main() {
+  io::println(greet("you"))
+}

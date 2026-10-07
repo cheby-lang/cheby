@@ -1,0 +1,19 @@
+// @mode: check-pass
+// @decisions: D-052
+//! A record construction used as a subject is parenthesized, since the
+//! `{` after a subject opens the arms (§5.9.6).
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+fn origin_x() -> Int {
+  case (Point { x: 0, y: 1 }) {
+    Point { x, .. } => x
+  }
+}
+
+fn main() {
+  assert origin_x() == 0
+}

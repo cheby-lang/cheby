@@ -1,0 +1,8 @@
+error[E0047]: mismatched types
+ --> tests/ui/05-expressions/operators/equality_one_type.cheby:6:8
+  |
+6 |   a == b
+  |   -    ^ expected `Int`, found `String`
+  |   |
+  |   the left operand of `==` has type `Int`
+

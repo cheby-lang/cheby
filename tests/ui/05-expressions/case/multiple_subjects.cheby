@@ -1,0 +1,18 @@
+// @mode: check-pass
+// @decisions: D-052
+//! `case a, b` matches several subjects, one pattern per subject in each
+//! arm (§5.9.2).
+
+fn fizzbuzz(n: Int) -> String {
+  case n % 3, n % 5 {
+    0, 0 => "FizzBuzz"
+    0, _ => "Fizz"
+    _, 0 => "Buzz"
+    _, _ => "neither"
+  }
+}
+
+fn main() {
+  assert fizzbuzz(15) == "FizzBuzz"
+  assert fizzbuzz(7) == "neither"
+}

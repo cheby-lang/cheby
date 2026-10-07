@@ -1,0 +1,12 @@
+error[E0074]: the fields of the `pub` type `Holder` mention the `priv` type `Secret`
+ --> tests/ui/04-declarations/types/private_field_type.cheby:8:26
+  |
+6 | priv type Secret { Secret(String) }
+  |           ------ declared here
+7 |
+8 | pub type Holder { Holder(Secret) }
+  |                          ^^^^^^ `priv` type
+  |
+  = note: the fields of `Holder` are visible in every module of the package, where a `priv` type cannot be named (D-149)
+  = help: make `Secret` package-visible, or make `Holder` `priv`
+

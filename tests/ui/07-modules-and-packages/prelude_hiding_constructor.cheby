@@ -1,0 +1,22 @@
+// @mode: check-pass
+// @decisions: D-146, D-212
+//! A constructor named like a prelude constructor hides it in its module,
+//! with a warning. The type's own name hides nothing.
+
+import std::io
+
+type Lookup {
+  Some(String),
+  Missing,
+}
+
+fn label(lookup: Lookup) -> String {
+  case lookup {
+    Some(text) => text
+    Missing => "missing"
+  }
+}
+
+fn main() {
+  io::println(label(Some("found")))
+}

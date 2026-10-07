@@ -1,0 +1,12 @@
+// @mode: check-pass
+// @decisions: D-047, D-092, D-118
+//! Built-in arithmetic, comparisons, bitwise operators and logic on the
+//! built-in types (§5.4).
+
+pub fn arithmetic(a: Int, b: Float, c: U8) -> Bool {
+  let x = a + a * a - a / 2 % 3
+  let y = -b * 2.0
+  let z = c & c | c ^ c << 1 >> 1
+  let w = !(x < 0) && y >= 0.0 || z == 0
+  w != False
+}

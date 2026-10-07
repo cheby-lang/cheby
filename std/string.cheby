@@ -1,0 +1,173 @@
+//! The built-in `String`, immutable Unicode text: measuring, searching,
+//! splitting, building and changing text, and conversions.
+//!
+//! Every length, position and count is in code points (D-302).
+//! `String` itself is a builtin item whose home module is this one (D-447).
+
+import std::bytes
+
+// Measuring
+
+/// Returns the number of code points in `text` (D-302).
+@external(native, "cheby_string_length")
+@external(js, "./string.mjs", "length")
+pub fn length(text: String) -> Int
+
+/// Tells whether `text` is `""`.
+pub fn is_empty(text: String) -> Bool {
+  text == ""
+}
+
+/// Returns the number of extended grapheme clusters in `text` (D-302, D-310).
+@external(native, "cheby_string_grapheme_length")
+@external(js, "./string.mjs", "grapheme_length")
+pub fn grapheme_length(text: String) -> Int
+
+// Comparing and searching
+
+/// Orders strings by their code points (D-136). It makes `String` satisfy `Compare`.
+@external(native, "cheby_string_compare")
+@external(js, "./string.mjs", "compare")
+pub fn compare(a: String, b: String) -> Order
+
+/// Tells whether `text` begins with `prefix`.
+@external(native, "cheby_string_starts_with")
+@external(js, "./string.mjs", "starts_with")
+pub fn starts_with(text: String, prefix: String) -> Bool
+
+/// Tells whether `text` ends with `suffix`.
+@external(native, "cheby_string_ends_with")
+@external(js, "./string.mjs", "ends_with")
+pub fn ends_with(text: String, suffix: String) -> Bool
+
+/// Tells whether `part` occurs anywhere in `text`.
+@external(native, "cheby_string_contains")
+@external(js, "./string.mjs", "contains")
+pub fn contains(text: String, part: String) -> Bool
+
+// Splitting
+
+/// Splits `text` at every `separator`, and into code points when it is empty (D-315).
+@external(native, "cheby_string_split")
+@external(js, "./string.mjs", "split")
+pub fn split(text: String, separator: String) -> List<String>
+
+/// Splits `text` at the first occurrence of `separator`, or gives `None` (D-315).
+@external(native, "cheby_string_split_once")
+@external(js, "./string.mjs", "split_once")
+pub fn split_once(text: String, separator: String) -> Option<(String, String)>
+
+/// Splits `text` into its code points, each as a one-code-point string (D-302).
+@external(native, "cheby_string_to_code_points")
+@external(js, "./string.mjs", "to_code_points")
+pub fn to_code_points(text: String) -> List<String>
+
+/// Splits `text` into its extended grapheme clusters (D-302, D-310).
+@external(native, "cheby_string_to_graphemes")
+@external(js, "./string.mjs", "to_graphemes")
+pub fn to_graphemes(text: String) -> List<String>
+
+// Building
+
+/// Returns `a` followed by `b`. It makes `String` satisfy `Add`, so `+` concatenates.
+@external(native, "cheby_string_add")
+@external(js, "./string.mjs", "add")
+pub fn add(a: String, b: String) -> String
+
+/// Returns the elements of `parts` in order, with `separator` between each two.
+@external(native, "cheby_string_join")
+@external(js, "./string.mjs", "join")
+pub fn join(parts: List<String>, separator: String) -> String
+
+/// Returns `count` copies of `text`, one after another.
+@external(native, "cheby_string_repeat")
+@external(js, "./string.mjs", "repeat")
+@std_clamped(count)
+pub fn repeat(text: String, count: Int) -> String
+
+/// Returns `text` with copies of `pad` in front, so that it is `width` code points long.
+@external(native, "cheby_string_pad_start")
+@external(js, "./string.mjs", "pad_start")
+@std_clamped(width)
+pub fn pad_start(text: String, width: Int, pad: String) -> String
+
+/// Returns `text` with copies of `pad` after it, so that it is `width` code points long.
+@external(native, "cheby_string_pad_end")
+@external(js, "./string.mjs", "pad_end")
+@std_clamped(width)
+pub fn pad_end(text: String, width: Int, pad: String) -> String
+
+// Changing
+
+/// Removes Unicode `White_Space` from both ends of `text` (D-310).
+@external(native, "cheby_string_trim")
+@external(js, "./string.mjs", "trim")
+pub fn trim(text: String) -> String
+
+/// Removes Unicode `White_Space` from the start of `text` (D-373).
+@external(native, "cheby_string_trim_start")
+@external(js, "./string.mjs", "trim_start")
+pub fn trim_start(text: String) -> String
+
+/// Removes Unicode `White_Space` from the end of `text` (D-373).
+@external(native, "cheby_string_trim_end")
+@external(js, "./string.mjs", "trim_end")
+pub fn trim_end(text: String) -> String
+
+/// Removes one `prefix` from the start of `text`, if it is there (D-373).
+@external(native, "cheby_string_remove_prefix")
+@external(js, "./string.mjs", "remove_prefix")
+pub fn remove_prefix(text: String, prefix: String) -> String
+
+/// Removes one `suffix` from the end of `text`, if it is there (D-373).
+@external(native, "cheby_string_remove_suffix")
+@external(js, "./string.mjs", "remove_suffix")
+pub fn remove_suffix(text: String, suffix: String) -> String
+
+/// Replaces every occurrence of `pattern` in `text` with `replacement` (D-315, D-374).
+pub fn replace(text: String, pattern: String, replacement: String) -> String {
+  join(split(text, pattern), replacement)
+}
+
+/// Converts `text` to lower case with Unicode's full case mapping (D-310).
+@external(native, "cheby_string_lowercase")
+@external(js, "./string.mjs", "lowercase")
+pub fn lowercase(text: String) -> String
+
+/// Converts `text` to upper case with Unicode's full case mapping (D-310).
+@external(native, "cheby_string_uppercase")
+@external(js, "./string.mjs", "uppercase")
+pub fn uppercase(text: String) -> String
+
+/// Returns the code points of `text` in reverse order (D-302).
+@external(native, "cheby_string_reverse")
+@external(js, "./string.mjs", "reverse")
+pub fn reverse(text: String) -> String
+
+/// Returns the code points of `text` from `start` up to but not including `end` (D-319).
+@external(native, "cheby_string_slice")
+@external(js, "./string.mjs", "slice")
+@std_clamped(start, end)
+pub fn slice(text: String, start: Int, end: Int) -> String
+
+// Conversions
+
+/// Decodes `data` as UTF-8, or gives `Err(Nil)` when it is not valid UTF-8 (D-366).
+@external(native, "cheby_string_from_bytes")
+@external(js, "./string.mjs", "from_bytes")
+pub fn from_bytes(data: bytes::Bytes) -> Result<String, Nil>
+
+/// Returns the Unicode scalar value of each code point of `text`, in order.
+@external(native, "cheby_string_to_code_point_values")
+@external(js, "./string.mjs", "to_code_point_values")
+pub fn to_code_point_values(text: String) -> List<Int>
+
+/// Returns the string of the code points in `values`, or `Err(Nil)` for a non-scalar value.
+@external(native, "cheby_string_from_code_point_values")
+@external(js, "./string.mjs", "from_code_point_values")
+pub fn from_code_point_values(values: List<Int>) -> Result<String, Nil>
+
+/// Returns `text` unchanged. It makes `String` satisfy `Show`.
+pub fn show(text: String) -> String {
+  text
+}

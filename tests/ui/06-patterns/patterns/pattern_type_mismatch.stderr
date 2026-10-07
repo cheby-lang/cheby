@@ -1,0 +1,10 @@
+error[E0047]: mismatched types
+ --> tests/ui/06-patterns/patterns/pattern_type_mismatch.cheby:7:5
+  |
+6 |   case n {
+  |        - this subject has type `Int`
+7 |     Some(_) => "some"
+  |     ^^^^^^^ expected `Int`, found `Option<_>`
+  |
+  = note: a pattern matches values of the type of its subject
+

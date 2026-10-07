@@ -1,0 +1,12 @@
+error[E0042]: `Self` can be used only in interface declarations
+ --> tests/ui/03-types/signatures/self_outside_interface.cheby:5:20
+  |
+5 | pub fn same(value: Self) -> Self {
+  |                    ^^^^
+
+error[E0042]: `Self` can be used only in interface declarations
+ --> tests/ui/03-types/signatures/self_outside_interface.cheby:5:29
+  |
+5 | pub fn same(value: Self) -> Self {
+  |                             ^^^^
+

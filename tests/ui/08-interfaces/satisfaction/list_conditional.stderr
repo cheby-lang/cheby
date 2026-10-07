@@ -1,0 +1,10 @@
+error[E0063]: `List<fn() -> Nil>` does not satisfy `Show`
+  --> tests/ui/08-interfaces/satisfaction/list_conditional.cheby:10:17
+   |
+10 |   io::println("{actions}")
+   |                 ^^^^^^^ interpolated here
+   |
+   = note: `list::show` requires `T: Show`, and `fn() -> Nil` does not satisfy it (§8.2.2, D-064)
+   = note: function types satisfy only empty interfaces (§8.2, D-166)
+   = help: write `{actions:?}` to use debug printing instead (D-086)
+

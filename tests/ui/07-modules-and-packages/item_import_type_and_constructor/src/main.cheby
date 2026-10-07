@@ -1,0 +1,13 @@
+// @mode: check-pass
+// @decisions: D-111
+//! Importing an `UPPER` name brings in both the type and the constructor
+//! with that name.
+
+import app::greeting
+import app::greeting::{Greeting}
+import std::io
+
+fn main() {
+  let hello: Greeting = Greeting("Hello!")
+  io::println(greeting::words(hello))
+}

@@ -123,10 +123,8 @@ impl Function {
 
 #[cfg(test)]
 mod tests {
-    use cheby_iface::{GenericParam, Generics, IndexVec, ParamIdx, ParamSig, Ty, builtin, sym};
-    use cheby_package::Targets;
-
     use super::*;
+    use cheby_iface::{GenericParam, Generics, IndexVec, ParamIdx, ParamSig, Ty, builtin, sym};
 
     fn sig(generics: Generics, params: &[Ty], ret: Ty) -> FnSig {
         FnSig {
@@ -136,8 +134,7 @@ mod tests {
                 .map(|&ty| ParamSig { name: sym::T, ty })
                 .collect(),
             ret,
-            targets: Targets::NONE,
-            deprecated: None,
+            clamped: Box::new([]),
         }
     }
 

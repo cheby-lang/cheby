@@ -1,0 +1,11 @@
+// @mode: check-fail
+// @decisions: D-235
+//! All elements of a list have the same type (§5.13).
+
+pub fn mixed() -> Int {
+  let xs = [1, "a"]
+  case xs {
+    [] => 0
+    _ => 1
+  }
+}

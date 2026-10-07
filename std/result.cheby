@@ -1,0 +1,133 @@
+//! Helpers for the built-in `Result` type (D-317): chaining, defaults,
+//! tests, lists of results and conversions.
+//!
+//! `Result`, `Ok` and `Err` are builtin items whose home module is this one
+//! (D-447). Everything here is written in Cheby.
+
+import std::list
+
+// Chaining
+
+/// Calls `next` with the value of an `Ok`, and returns an `Err` unchanged.
+pub fn try<T, E, U>(r: Result<T, E>, next: fn(T) -> Result<U, E>) -> Result<U, E> {
+  case r {
+    Ok(value) => next(value)
+    Err(error) => Err(error)
+  }
+}
+
+/// Applies `f` to the value of an `Ok`, and returns an `Err` unchanged.
+pub fn map<T, E, U>(r: Result<T, E>, f: fn(T) -> U) -> Result<U, E> {
+  case r {
+    Ok(value) => Ok(f(value))
+    Err(error) => Err(error)
+  }
+}
+
+/// Applies `f` to the error of an `Err`, and returns an `Ok` unchanged.
+pub fn map_error<T, E, F>(r: Result<T, E>, f: fn(E) -> F) -> Result<T, F> {
+  case r {
+    Ok(value) => Ok(value)
+    Err(error) => Err(f(error))
+  }
+}
+
+/// Removes one level of nesting: `Ok(inner)` becomes `inner`.
+pub fn flatten<T, E>(r: Result<Result<T, E>, E>) -> Result<T, E> {
+  case r {
+    Ok(inner) => inner
+    Err(error) => Err(error)
+  }
+}
+
+// Defaults
+
+/// Returns the value of an `Ok`, or `default` for an `Err`.
+pub fn unwrap_or<T, E>(r: Result<T, E>, default: T) -> T {
+  case r {
+    Ok(value) => value
+    Err(_) => default
+  }
+}
+
+/// Returns the value of an `Ok`, or calls `default` for an `Err`.
+pub fn lazy_unwrap_or<T, E>(r: Result<T, E>, default: fn() -> T) -> T {
+  case r {
+    Ok(value) => value
+    Err(_) => default()
+  }
+}
+
+/// Returns `first` if it is `Ok`, and `second` otherwise.
+pub fn or<T, E>(first: Result<T, E>, second: Result<T, E>) -> Result<T, E> {
+  case first {
+    Ok(_) => first
+    Err(_) => second
+  }
+}
+
+// Tests
+
+/// Tells whether `r` is an `Ok`.
+pub fn is_ok<T, E>(r: Result<T, E>) -> Bool {
+  case r {
+    Ok(_) => True
+    Err(_) => False
+  }
+}
+
+/// Tells whether `r` is an `Err`.
+pub fn is_error<T, E>(r: Result<T, E>) -> Bool {
+  case r {
+    Ok(_) => False
+    Err(_) => True
+  }
+}
+
+// Lists of results
+
+/// Returns `Ok` with every value, in order, or the first `Err`.
+pub fn all<T, E>(results: List<Result<T, E>>) -> Result<List<T>, E> {
+  fn step(found: List<T>, rest: List<Result<T, E>>) -> Result<List<T>, E> {
+    case rest {
+      [] => Ok(found)
+      [Ok(value), ..tail] => step(list::push(found, value), tail)
+      [Err(error), ..] => Err(error)
+    }
+  }
+  step([], results)
+}
+
+/// Returns the values of the `Ok` elements, in order, and drops the errors.
+pub fn values<T, E>(results: List<Result<T, E>>) -> List<T> {
+  list::filter_map(results, to_option)
+}
+
+/// Splits the elements into the values of the `Ok`s and the errors of the `Err`s.
+pub fn partition<T, E>(results: List<Result<T, E>>) -> (List<T>, List<E>) {
+  list::fold(results, ([], []), fn((oks, errors), item) {
+    case item {
+      Ok(value) => (list::push(oks, value), errors)
+      Err(error) => (oks, list::push(errors, error))
+    }
+  })
+}
+
+// Conversions
+
+/// Returns `Some` with the value of an `Ok`, and `None` for an `Err`.
+pub fn to_option<T, E>(r: Result<T, E>) -> Option<T> {
+  case r {
+    Ok(value) => Some(value)
+    Err(_) => None
+  }
+}
+
+/// Writes `Ok(` or `Err(`, the `show` of the value or error, and `)` (D-355).
+/// It makes `Result<T, E>` satisfy `Show` when `T` and `E` do (D-064).
+pub fn show<T: Show, E: Show>(r: Result<T, E>) -> String {
+  case r {
+    Ok(value) => "Ok({value})"
+    Err(error) => "Err({error})"
+  }
+}

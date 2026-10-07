@@ -1,0 +1,7 @@
+// @mode: check-fail
+// @decisions: D-073, D-448
+//! In `Result<Nil, E>`, the success value of an entry point must be `Nil`.
+
+fn main() -> Result<Int, String> {
+  Ok(0)
+}

@@ -1,0 +1,15 @@
+// @mode: check-pass
+// @decisions: D-022, D-080
+//! An arm after alternatives that already cover every value can never
+//! match.
+
+fn describe(flag: Bool) -> String {
+  case flag {
+    True | False => "any"
+    _ => "never"
+  }
+}
+
+fn main() {
+  assert describe(True) == "any"
+}

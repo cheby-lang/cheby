@@ -1,0 +1,17 @@
+// @mode: check-fail
+// @decisions: D-113
+//! A named field pattern lists only fields the variant has (§6.4).
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+fn depth(p: Point) -> Int {
+  let Point { z, .. } = p
+  z
+}
+
+fn main() {
+  assert depth(Point { x: 0, y: 0 }) == 0
+}

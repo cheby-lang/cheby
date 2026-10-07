@@ -1,0 +1,8 @@
+error[E0059]: field `x` is listed twice
+  --> tests/ui/05-expressions/records/update_repeated_field.cheby:11:22
+   |
+11 |   Point { ..p, x: 1, x: 2 }
+   |                -     ^ listed again here
+   |                |
+   |                first listed here
+

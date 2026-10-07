@@ -10,7 +10,7 @@
 //! satisfaction looks for its functions. Observable behavior matches the
 //! spec.
 
-use cheby_package::ModulePath;
+use cheby_package::{ModulePath, Targets};
 
 use crate::{
     BuiltinType, CtorFields, CtorSig, DefId, DefIndex, DefKind, GenericParam, Generics, Globals,
@@ -56,9 +56,17 @@ pub const F32: DefId = def(28);
 pub const SHOW: DefId = def(29);
 /// `Show::show`.
 pub const SHOW_FN: DefId = def(30);
+/// `Map<K, V>`, not in the prelude: homed in `std::map`
+/// (GAP(kernel-types)).
+pub const MAP: DefId = def(31);
+/// `Set<T>`, not in the prelude: homed in `std::set` (GAP(kernel-types)).
+pub const SET: DefId = def(32);
+/// `Bytes`, not in the prelude: homed in `std::bytes`
+/// (GAP(kernel-types)).
+pub const BYTES: DefId = def(33);
 
 /// The number of builtin items.
-pub const LEN: u32 = 31;
+pub const LEN: u32 = 34;
 
 /// The home module of each builtin type that has one (§8.2, D-353), by
 /// item: `(item, last segment under std)`. `Never` has none, and the home
@@ -82,6 +90,9 @@ pub const HOMES: &[(DefId, &str)] = &[
     (U32, "u32"),
     (U64, "u64"),
     (F32, "f32"),
+    (MAP, "map"),
+    (SET, "set"),
+    (BYTES, "bytes"),
 ];
 
 /// The path of a home module, `std::<segment>`.
@@ -106,14 +117,29 @@ pub fn home_paths() -> impl Iterator<Item = ModulePath> {
     HOMES.iter().map(|(_, segment)| home_path(segment))
 }
 
+/// The number of builtin items in the prelude (§7.6): the first
+/// `PRELUDE_LEN` items. The items after them are builtin but reachable only
+/// through their home modules (GAP(kernel-types)).
+pub const PRELUDE_LEN: u32 = 31;
+
 /// Whether `def` is one of the builtin items.
 #[must_use]
 pub fn is_builtin(def: DefId) -> bool {
     def.module == ModuleId::BUILTIN && def.index.as_u32() < LEN
 }
 
-/// The interface of the builtin module. All items are `pub`, and the
-/// prelude (§7.6) is exactly its types, constructors and `Show`.
+/// Whether `def` is a builtin item of the prelude (§7.6), which name
+/// resolution adds to every module's scope. `Map`, `Set` and `Bytes` are
+/// builtin but not in the prelude (GAP(kernel-types)).
+#[must_use]
+pub fn is_prelude(def: DefId) -> bool {
+    def.module == ModuleId::BUILTIN && def.index.as_u32() < PRELUDE_LEN
+}
+
+/// The interface of the builtin module. All items are `pub`. The prelude
+/// (§7.6) is exactly its first [`PRELUDE_LEN`] items: the prelude types,
+/// their constructors and `Show`. `Map`, `Set` and `Bytes` follow, reachable
+/// only through their home modules (GAP(kernel-types)).
 #[must_use]
 pub fn interface(globals: &Globals) -> ModuleInterface {
     let types = &globals.types;
@@ -122,12 +148,17 @@ pub fn interface(globals: &Globals) -> ModuleInterface {
     let mut items = Vec::new();
     let home = |segment: &str| Some(home_path(segment));
     let builtin = |items: &mut Vec<IfaceItem>, name: Name, kind: BuiltinType, segment| {
-        let generics = if kind == BuiltinType::List {
-            generics(&[sym::T])
-        } else {
-            Generics::empty()
+        let params: &[Name] = match kind {
+            BuiltinType::List | BuiltinType::Set => &[sym::T],
+            BuiltinType::Map => &[sym::K, sym::V],
+            _ => &[],
         };
-        items.push(ty_item(name, generics, TypeDefKind::Builtin(kind), segment));
+        items.push(ty_item(
+            name,
+            generics(params),
+            TypeDefKind::Builtin(kind),
+            segment,
+        ));
     };
     builtin(&mut items, sym::INT, BuiltinType::Int, home("int"));
     builtin(&mut items, sym::FLOAT, BuiltinType::Float, home("float"));
@@ -195,6 +226,9 @@ pub fn interface(globals: &Globals) -> ModuleInterface {
             ret: Ty::STRING,
         }),
     ));
+    builtin(&mut items, sym::MAP, BuiltinType::Map, home("map"));
+    builtin(&mut items, sym::SET, BuiltinType::Set, home("set"));
+    builtin(&mut items, sym::BYTES, BuiltinType::Bytes, home("bytes"));
     // The table above is well formed (a unit test pins it), so neither
     // step can fail; an empty interface is the harmless fallback.
     IndexVec::from_raw(items)
@@ -221,6 +255,8 @@ const fn item(name: Name, kind: DefKind, parent: Option<DefIndex>, sig: ItemSig)
         vis: Vis::Pub,
         parent,
         span: None,
+        targets: Targets::ALL,
+        deprecated: None,
         sig,
     }
 }
@@ -241,6 +277,7 @@ fn ty_item(
             kind,
             exposed,
             home,
+            hooks: None,
         }),
     )
 }
@@ -326,7 +363,11 @@ mod tests {
             (F32, "F32", DefKind::Type),
             (SHOW, "Show", DefKind::Interface),
             (SHOW_FN, "show", DefKind::InterfaceFn),
+            (MAP, "Map", DefKind::Type),
+            (SET, "Set", DefKind::Type),
+            (BYTES, "Bytes", DefKind::Type),
         ];
+        assert_eq!(expected.len(), iface.items.len());
         for &(def, name, kind) in expected {
             let item = iface.item(def.index).unwrap();
             assert_eq!(globals.names.get(item.name), name, "{def:?}");
@@ -356,6 +397,45 @@ mod tests {
         assert_eq!(option.generics.len(), 1);
         assert!(option.exposed);
         assert_eq!(option.home, Some(home_path("option")));
+    }
+
+    #[test]
+    fn kernel_types_are_builtin_but_not_prelude() {
+        let globals = Globals::new();
+        let iface = interface(&globals);
+        assert_eq!(PRELUDE_LEN, 31);
+        assert_eq!(LEN, 34);
+        for index in 0..LEN {
+            let def = def(index);
+            assert!(is_builtin(def));
+            assert_eq!(is_prelude(def), index < PRELUDE_LEN, "{def:?}");
+        }
+        assert!(!is_prelude(def(LEN)));
+        assert!(!is_prelude(DefId::new(
+            ModuleId::from_u32(1),
+            DefIndex::from_u32(0)
+        )));
+        let expect = [
+            (MAP, BuiltinType::Map, &["K", "V"][..], "map"),
+            (SET, BuiltinType::Set, &["T"][..], "set"),
+            (BYTES, BuiltinType::Bytes, &[][..], "bytes"),
+        ];
+        for (def, kind, params, home) in expect {
+            let ItemSig::Type(ty) = &iface.item(def.index).unwrap().sig else {
+                panic!("{def:?} is a type");
+            };
+            assert_eq!(ty.kind, TypeDefKind::Builtin(kind));
+            let names: Vec<&str> = ty
+                .generics
+                .params
+                .iter()
+                .map(|p| globals.names.get(p.name))
+                .collect();
+            assert_eq!(names, params);
+            assert!(!ty.exposed);
+            assert_eq!(ty.home, Some(home_path(home)));
+            assert_eq!(homed_at(&home_path(home)), [def]);
+        }
     }
 
     #[test]

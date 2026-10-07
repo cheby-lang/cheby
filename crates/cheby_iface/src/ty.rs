@@ -322,7 +322,26 @@ fn write_def(out: &mut String, def: DefId, cx: &DisplayCx<'_>) {
         None => cx.deps.item(def),
     };
     let name = item.map_or("?", |item| cx.globals.names.get(item.name));
-    if own.is_none() && def.module != ModuleId::BUILTIN {
+    if def.module == ModuleId::BUILTIN {
+        // A builtin item outside the prelude, such as `Map`, is written
+        // through its home module, `map::Map`, except in the home module
+        // itself (D-463, GAP(kernel-types)).
+        if !builtin::is_prelude(def)
+            && let Some(segment) = builtin::HOMES
+                .iter()
+                .find(|(home_def, _)| *home_def == def)
+                .map(|&(_, segment)| segment)
+        {
+            let own_path = cx
+                .own
+                .and_then(|own| cx.modules.get(own.module))
+                .map(|info| &info.path);
+            if own_path != Some(&builtin::home_path(segment)) {
+                out.push_str(segment);
+                out.push_str("::");
+            }
+        }
+    } else if own.is_none() {
         let segment = cx
             .modules
             .get(def.module)
@@ -380,5 +399,11 @@ mod tests {
         assert_eq!(display(f, &cx), "fn(Option<Int>, (String, Bool)) -> Nil");
         assert_eq!(display(Ty::NEVER, &cx), "Never");
         assert_eq!(display(t.param(ParamIdx::from_u32(0)), &cx), "T0");
+        // Builtin types outside the prelude are written through their home
+        // module.
+        let map = t.named(builtin::MAP, [Ty::STRING, Ty::INT]);
+        assert_eq!(display(map, &cx), "map::Map<String, Int>");
+        let set = t.named(builtin::SET, [t.named(builtin::BYTES, [])]);
+        assert_eq!(display(set, &cx), "set::Set<bytes::Bytes>");
     }
 }

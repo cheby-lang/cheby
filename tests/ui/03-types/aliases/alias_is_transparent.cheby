@@ -1,0 +1,24 @@
+// @mode: check-pass
+// @decisions: D-081
+//! An alias is the same type as its definition, so values pass freely
+//! between the two names.
+
+pub type UserId = Int
+
+pub type Table<V> = List<(String, V)>
+
+pub fn next_id(id: UserId) -> Int {
+  id + 1
+}
+
+pub fn first_id() -> UserId {
+  next_id(0)
+}
+
+pub fn single(key: String, value: Int) -> Table<Int> {
+  [(key, value)]
+}
+
+pub fn entries(table: Table<UserId>) -> List<(String, Int)> {
+  table
+}

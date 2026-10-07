@@ -1,0 +1,20 @@
+// @mode: check-fail
+// @decisions: D-156
+//! The base of `T { ..base, … }` is a value of type `T`.
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+type Size {
+  x: Int,
+}
+
+fn widened(size: Size) -> Point {
+  Point { ..size, x: 1 }
+}
+
+fn main() {
+  assert widened(Size { x: 0 }).x == 1
+}

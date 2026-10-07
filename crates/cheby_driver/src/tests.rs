@@ -49,10 +49,23 @@ fn examples_pass_the_syntax_layer() {
 
 /// With every implemented phase, a valid example reports only constructs
 /// the compiler does not support yet (E0038), so the support gate never
-/// hides a real error (D-451). 001 is clean, and 030 still stops after
-/// phase A.
+/// hides a real error (D-451). As the front end grows, an example may
+/// report nothing; any other code on a valid example is a front-end bug.
+/// 001 is clean, and 030 still stops after phase A.
+///
+/// Until the std home modules ship (W3-L), a builtin type such as `Int`
+/// cannot satisfy `Show` or an operator interface, which is E0063 with a
+/// note that its home module is not supported yet (GAP(home-not-in-deps)).
+/// That E0063 is an unsupported construct too; any other E0063 is not.
 #[test]
 fn examples_report_only_unsupported_constructs() {
+    let unsupported = |d: &Diagnostic| {
+        d.code.to_string() == "E0038"
+            || (d.code.to_string() == "E0063"
+                && d.notes
+                    .iter()
+                    .any(|n| n.contains("which is not supported yet")))
+    };
     for dir in examples() {
         let out = check(&dir).unwrap();
         let rendered = out.render();
@@ -63,12 +76,166 @@ fn examples_report_only_unsupported_constructs() {
             assert_eq!(codes, ["E0036"], "{rendered}");
         } else {
             assert!(
-                codes.iter().all(|c| c == "E0038"),
+                out.diagnostics.iter().all(unsupported),
                 "{}:\n{rendered}",
                 dir.display()
             );
         }
     }
+}
+
+/// `cheby run` on every example compiles it or reports diagnostics, never
+/// an internal compiler error (D-464, plan §8). Nothing runs: 001 runs in
+/// `hello_world_runs_without_leaks`, and the others may read input.
+#[test]
+fn run_never_fails_internally_on_examples() {
+    let mut failures = Vec::new();
+    for dir in examples() {
+        let name = dir.file_name().unwrap().to_string_lossy().into_owned();
+        match prepare_run(&dir, RunOptions::default()) {
+            Ok(Prepared::Ready(program)) => {
+                assert!(!program.output().has_errors(), "{name}");
+            }
+            Ok(Prepared::CompileFailed(out)) => assert!(out.has_errors(), "{name}"),
+            Err(e) => failures.push(format!("{name}: {}", e.message())),
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// The same on every UI test source: a single file as `src/main.cheby` of
+/// a package, like the UI harness, or a package test as it is. Tool errors
+/// for a package without `main` are fine; an internal error is not.
+#[test]
+fn run_never_fails_internally_on_ui_tests() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/ui");
+    let mut cases = Vec::new();
+    collect_ui_tests(&root, &mut cases);
+    assert!(cases.len() > 50, "found only {} UI tests", cases.len());
+    let mut failures = Vec::new();
+    for (n, case) in cases.iter().enumerate() {
+        let dir = if case.is_dir() {
+            case.clone()
+        } else {
+            let source = std::fs::read(case).unwrap();
+            package(
+                &format!("ui_{n}"),
+                &[
+                    ("cheby.toml", b"name = \"ui_test\"\nversion = \"0.1.0\"\n"),
+                    ("src/main.cheby", &source),
+                ],
+            )
+        };
+        if let Err(e) = prepare_run(&dir, RunOptions::default())
+            && e.message().starts_with("internal compiler error")
+        {
+            failures.push(format!("{}: {}", case.display(), e.message()));
+        }
+        if !case.is_dir() {
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Single-file and package UI tests under `dir`, sorted.
+fn collect_ui_tests(dir: &Path, out: &mut Vec<PathBuf>) {
+    let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    entries.sort();
+    for path in entries {
+        if path.is_dir() {
+            if path.join(MANIFEST_FILE).is_file() {
+                out.push(path);
+            } else {
+                collect_ui_tests(&path, out);
+            }
+        } else if path.extension().is_some_and(|e| e == "cheby") {
+            out.push(path);
+        }
+    }
+}
+
+/// A package whose `main` calls a function with a construct the back end
+/// cannot lower, and a function with one that nothing calls.
+fn unsupported_package(name: &str, main_calls_it: bool) -> PathBuf {
+    let call = if main_calls_it {
+        "  let _ = pick(\"a\")\n"
+    } else {
+        ""
+    };
+    let source = format!(
+        "//! Back-end gate.\n\nimport std::io\n\nfn main() {{\n  io::println(\"start\")\n{call}}}\n\nfn pick(text: String) -> String {{\n  case text {{\n    \"a\" => \"first\"\n    _ => text\n  }}\n}}\n"
+    );
+    package(name, &[MANIFEST, ("src/main.cheby", source.as_bytes())])
+}
+
+/// A reachable `case` stops `cheby run` with E0038 at the `case`, before
+/// any code is generated, whichever phase reports it (the front end did
+/// until C5). `cheby check` reports nothing the back end would.
+#[test]
+fn reachable_unsupported_constructs_stop_the_run() {
+    let dir = unsupported_package("gate_reachable", true);
+    let RunResult::CompileFailed(out) = run(&dir, RunOptions::default()).unwrap() else {
+        panic!("a program with a reachable `case` ran");
+    };
+    let rendered = out.render();
+    assert!(
+        rendered.starts_with(
+            "error[E0038]: `case` expressions are not supported yet\n  --> src/main.cheby:11:3"
+        ),
+        "{rendered}"
+    );
+    let codes: Vec<String> = out.diagnostics.iter().map(|d| d.code.to_string()).collect();
+    assert!(codes.iter().all(|c| c == "E0038"), "{rendered}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// The same `case` in a function `main` never calls does not stop the run,
+/// once the front end checks `case` (C5); until then `cheby check` reports
+/// it and nothing more can be asserted.
+#[test]
+fn unreachable_unsupported_constructs_do_not_stop_the_run() {
+    let dir = unsupported_package("gate_unreachable", false);
+    let checked = check(&dir).unwrap();
+    if checked.has_errors() {
+        let codes: Vec<String> = checked
+            .diagnostics
+            .iter()
+            .map(|d| d.code.to_string())
+            .collect();
+        assert!(codes.iter().all(|c| c == "E0038"), "{}", checked.render());
+    } else {
+        let Prepared::Ready(program) = prepare_run(&dir, RunOptions::default()).unwrap() else {
+            panic!("an unreachable `case` stopped the run");
+        };
+        assert_eq!(program.output().render(), "");
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// The dumps show what running the root `main` compiles: the items it
+/// reaches. `cheby check` lowers nothing, so it reports no back-end E0038.
+#[test]
+fn dumps_follow_reachability() {
+    let (out, mir) = dump_mir(&test_package("lets")).unwrap();
+    assert_eq!(out.render(), "");
+    // `eprint` is never called.
+    assert!(!mir.contains("std::io::eprint("), "{mir}");
+    assert!(mir.contains("fn std::io::eprintln("), "{mir}");
+    let dir = package(
+        "dump_no_main",
+        &[
+            MANIFEST,
+            ("src/main.cheby", b"//! No main.\n\nfn f() {\n  Nil\n}\n"),
+        ],
+    );
+    let (out, mir) = dump_mir(&dir).unwrap();
+    assert_eq!(out.render(), "");
+    assert_eq!(mir, "");
+    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 /// Every shipped std module checks cleanly when a package imports it.

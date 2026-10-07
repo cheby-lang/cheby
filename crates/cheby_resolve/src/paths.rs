@@ -1,6 +1,7 @@
 //! Paths: unqualified names in the module scope, `m::x` through an
 //! imported module's interface, interface functions `I::f` and
-//! `m::I::f`, and visibility (§7.3, §7.7, D-173).
+//! `m::I::f` (D-173), visibility (§7.3, D-162) and the opacity of
+//! constructors (§4.3.4, D-048, D-151).
 
 use std::cell::Cell;
 
@@ -9,7 +10,7 @@ use cheby_iface::{
     DefId, DefIndex, DefKind, Ice, IndexVec, ItemSig, ModuleId, ModuleInterface, Name, Namespace,
     PackageId, ParamIdx, Vis, builtin,
 };
-use cheby_syntax::ast::{AstNode, AstToken, PathNode};
+use cheby_syntax::ast::{AstNode, AstToken, InterfaceDecl, PathNode};
 
 use crate::{ItemDef, ItemStatus, ModuleScope, Res, ResolveInput, closest_name};
 
@@ -217,8 +218,10 @@ impl PathCx<'_> {
             .ok_or_else(|| Ice::new(format!("the interface of {module:?} is not readable")))
     }
 
-    /// `x` in module `target`, checked for visibility (E0043) and for the
-    /// opacity of constructors (§4.3.4, D-048).
+    /// `x` in module `target`, checked for visibility (E0043, §7.3). The
+    /// opacity of a constructor is checked where it is used
+    /// ([`Self::check_structure`]), since an item import of a type brings
+    /// its constructor along (D-111).
     pub(crate) fn in_module(
         &self,
         target: ModuleId,
@@ -287,23 +290,6 @@ impl PathCx<'_> {
             diags.push(diag);
             return Ok(Res::Err);
         }
-        if item.kind == DefKind::Ctor && iface.package != self.input.package {
-            let exposed = item
-                .parent
-                .and_then(|p| iface.item(p))
-                .is_some_and(|ty| matches!(&ty.sig, ItemSig::Type(def) if def.exposed));
-            if !exposed {
-                diags.push(
-                    Diagnostic::new(
-                        codes::PRIVATE_ITEM,
-                        format!("the constructor `{text}` is not visible outside its package"),
-                    )
-                    .with_primary(span, "")
-                    .with_note("a `pub` type hides its constructors unless it is `pub exposed`"),
-                );
-                return Ok(Res::Err);
-            }
-        }
         if matches!(item.sig, ItemSig::Unsupported) {
             return Ok(Res::Err);
         }
@@ -338,7 +324,65 @@ impl PathCx<'_> {
         Ok(owner.filter(|o| homed.contains(o)).map(|_| def))
     }
 
-    /// `I::f` or `m::I::f`: the function `f` of interface `I` (D-173).
+    /// Whether the constructors, patterns, fields and record updates of
+    /// type `def`, or of the type of constructor `def`, are usable here
+    /// (§4.3.4, D-048, D-151). If not, reports E0043 at `span` and returns
+    /// `false`. Any other item passes.
+    pub(crate) fn check_structure(
+        &self,
+        def: DefId,
+        span: Span,
+        diags: &mut Vec<Diagnostic>,
+    ) -> Result<bool, Ice> {
+        if def.module == self.input.module || def.module == ModuleId::BUILTIN {
+            return Ok(true);
+        }
+        let iface = self.iface(def.module)?;
+        let Some(item) = iface.item(def.index) else {
+            return Err(Ice::new("a resolved item is missing from its interface"));
+        };
+        let ty_index = match item.kind {
+            DefKind::Ctor => item
+                .parent
+                .ok_or_else(|| Ice::new("a constructor without a type"))?,
+            DefKind::Type => def.index,
+            _ => return Ok(true),
+        };
+        let ty = iface
+            .item(ty_index)
+            .ok_or_else(|| Ice::new("a constructor's type is missing"))?;
+        if cheby_iface::structure_visible(
+            ty,
+            def.module,
+            iface.package,
+            self.input.module,
+            self.input.package,
+        ) {
+            return Ok(true);
+        }
+        let ty_text = self.text(ty.name);
+        let message = match item.kind {
+            DefKind::Ctor => format!(
+                "the constructor `{}` is not visible outside its package",
+                self.text(item.name)
+            ),
+            _ => format!("the fields of `{ty_text}` are not visible outside its package"),
+        };
+        let mut diag = Diagnostic::new(codes::PRIVATE_ITEM, message).with_primary(span, "");
+        diag = match ty.vis {
+            Vis::Priv => diag.with_note(format!(
+                "`{ty_text}` is `priv`, so its constructors and fields are usable only in its \
+                 own module"
+            )),
+            _ => diag.with_note("a `pub` type hides its constructors unless it is `pub exposed`"),
+        };
+        diags.push(diag);
+        Ok(false)
+    }
+
+    /// `I::f` or `m::I::f`: the function `f` of interface `I`, or of an
+    /// interface that `I` embeds, as the `InterfaceFn` item of the
+    /// interface that declares it (D-173, §8.3).
     pub(crate) fn interface_fn(
         &self,
         module: Option<(Name, Span)>,
@@ -367,40 +411,29 @@ impl PathCx<'_> {
         let Res::Def(iface_def) = iface_res else {
             return Ok(Res::Err);
         };
-        let found = if iface_def.module == self.input.module {
-            let parent = self
-                .items
-                .get(iface_def.index)
-                .ok_or_else(|| Ice::new("own interface missing"))?;
-            if parent.kind == DefKind::Interface {
-                self.items
-                    .iter_enumerated()
-                    .find(|(_, item)| item.parent == Some(iface_def.index) && item.name == name)
-                    .map(|(index, item)| (index, item.status == ItemStatus::Unsupported))
-            } else {
-                None
-            }
-        } else {
-            let iface = self.iface(iface_def.module)?;
-            match iface.item(iface_def.index).map(|item| &item.sig) {
-                Some(ItemSig::Interface(def)) => def
-                    .fns
-                    .iter()
-                    .find(|&&f| iface.item(f).is_some_and(|item| item.name == name))
-                    .map(|&f| (f, false)),
-                _ => None,
-            }
-        };
         let iface_text = self.text(iface_name);
-        let text = self.text(name);
-        match found {
-            Some((_, true)) => Ok(Res::Err),
-            Some((index, false)) => Ok(Res::Def(DefId::new(iface_def.module, index))),
-            None => {
+        if self.kind_of(iface_def)? != Some(DefKind::Interface) {
+            diags.push(
+                Diagnostic::new(
+                    codes::UNRESOLVED_NAME,
+                    format!("`{iface_text}` is not an interface"),
+                )
+                .with_primary(iface_span, "")
+                .with_note(
+                    "`Name::function` calls a function through an interface (§8.5); a module's \
+                     functions are called as `module::function`",
+                ),
+            );
+            return Ok(Res::Err);
+        }
+        match self.find_interface_fn(iface_def, name, &mut Vec::new())? {
+            Found::Fn(def) => Ok(Res::Def(def)),
+            Found::Silent => Ok(Res::Err),
+            Found::None => {
                 diags.push(
                     Diagnostic::new(
                         codes::UNRESOLVED_NAME,
-                        format!("`{iface_text}` has no function `{text}`"),
+                        format!("`{iface_text}` has no function `{}`", self.text(name)),
                     )
                     .with_primary(span, "not found"),
                 );
@@ -408,4 +441,101 @@ impl PathCx<'_> {
             }
         }
     }
+
+    /// The kind of item `def`, of this module or a dependency.
+    fn kind_of(&self, def: DefId) -> Result<Option<DefKind>, Ice> {
+        if def.module == self.input.module {
+            return Ok(self.items.get(def.index).map(|item| item.kind));
+        }
+        Ok(self
+            .iface(def.module)?
+            .item(def.index)
+            .map(|item| item.kind))
+    }
+
+    /// The function `name` of interface `iface`: its own first, then those
+    /// of the interfaces it embeds, depth first in written order (§8.3).
+    fn find_interface_fn(
+        &self,
+        iface: DefId,
+        name: Name,
+        visited: &mut Vec<DefId>,
+    ) -> Result<Found, Ice> {
+        if visited.contains(&iface) {
+            // A cycle of embedding, reported with the declarations.
+            return Ok(Found::None);
+        }
+        visited.push(iface);
+        let embeds: Vec<DefId> = if iface.module == self.input.module {
+            let parent = self
+                .items
+                .get(iface.index)
+                .ok_or_else(|| Ice::new("own interface missing"))?;
+            if parent.kind != DefKind::Interface {
+                return Ok(Found::None);
+            }
+            if let Some((index, item)) = self
+                .items
+                .iter_enumerated()
+                .find(|(_, item)| item.parent == Some(iface.index) && item.name == name)
+            {
+                return Ok(match item.status {
+                    ItemStatus::Unsupported => Found::Silent,
+                    _ => Found::Fn(DefId::new(iface.module, index)),
+                });
+            }
+            self.own_embeds(parent)?
+        } else {
+            let module = self.iface(iface.module)?;
+            match module.item(iface.index).map(|item| &item.sig) {
+                Some(ItemSig::Interface(def)) => {
+                    if let Some(&f) = def
+                        .fns
+                        .iter()
+                        .find(|&&f| module.item(f).is_some_and(|item| item.name == name))
+                    {
+                        return Ok(Found::Fn(DefId::new(iface.module, f)));
+                    }
+                    def.embeds.to_vec()
+                }
+                Some(ItemSig::Unsupported | ItemSig::Error) => return Ok(Found::Silent),
+                _ => return Ok(Found::None),
+            }
+        };
+        for embedded in embeds {
+            match self.find_interface_fn(embedded, name, visited)? {
+                Found::None => {}
+                found => return Ok(found),
+            }
+        }
+        Ok(Found::None)
+    }
+
+    /// The interfaces an interface of this module embeds, resolved from
+    /// its declaration. Errors in them are reported with the declaration.
+    fn own_embeds(&self, iface: &ItemDef) -> Result<Vec<DefId>, Ice> {
+        let decl = self
+            .input
+            .tree
+            .node(iface.node)
+            .and_then(InterfaceDecl::cast)
+            .ok_or_else(|| Ice::new("an interface's node is not an interface declaration"))?;
+        let mut scratch = Vec::new();
+        let mut out = Vec::new();
+        for bound in decl.bounds().iter().flat_map(|b| b.interfaces()) {
+            let Some(path) = bound.path() else { continue };
+            if let Res::Def(def) = self.type_path(path, &[], true, &mut scratch)? {
+                out.push(def);
+            }
+        }
+        Ok(out)
+    }
+}
+
+/// What [`PathCx::find_interface_fn`] found.
+enum Found {
+    Fn(DefId),
+    /// Something already reported is in the way.
+    Silent,
+    None,
 }

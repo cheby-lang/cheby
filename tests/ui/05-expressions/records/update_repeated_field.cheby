@@ -1,0 +1,16 @@
+// @mode: check-fail
+// @decisions: D-156
+//! A record update lists each field at most once.
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+fn moved(p: Point) -> Point {
+  Point { ..p, x: 1, x: 2 }
+}
+
+fn main() {
+  assert moved(Point { x: 0, y: 0 }).x == 2
+}

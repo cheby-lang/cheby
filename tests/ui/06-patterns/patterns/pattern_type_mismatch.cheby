@@ -1,0 +1,14 @@
+// @mode: check-fail
+// @decisions: D-113
+//! A pattern matches values of its subject's type.
+
+fn describe(n: Int) -> String {
+  case n {
+    Some(_) => "some"
+    _ => "other"
+  }
+}
+
+fn main() {
+  assert describe(1) == "other"
+}

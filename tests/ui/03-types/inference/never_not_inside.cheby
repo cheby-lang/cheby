@@ -1,0 +1,13 @@
+// @mode: check-fail
+// @decisions: D-235
+//! `Never` does not convert inside another type: a function returning
+//! `Never` is not a function returning `Int` (§3.10).
+
+pub fn unreachable(what: String) -> Never {
+  panic as what
+}
+
+pub fn convert() -> fn(String) -> Int {
+  let f: fn(String) -> Int = unreachable
+  f
+}

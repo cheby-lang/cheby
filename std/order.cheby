@@ -1,0 +1,44 @@
+//! The built-in `Order`, the result of every `compare` function: reversing
+//! and chaining comparisons, and the order and text of `Order` itself.
+//!
+//! `Order`, `Less`, `Equal` and `Greater` are builtin items whose home
+//! module is this one (D-447, D-353).
+
+/// Swaps `Less` and `Greater`, and keeps `Equal`.
+pub fn reverse(o: Order) -> Order {
+  case o {
+    Less => Greater
+    Equal => Equal
+    Greater => Less
+  }
+}
+
+/// Returns `first` unless it is `Equal`, in which case it calls `next`.
+pub fn then(first: Order, next: fn() -> Order) -> Order {
+  case first {
+    Equal => next()
+    _ => first
+  }
+}
+
+/// Orders `Less` before `Equal` before `Greater`. It makes `Order` satisfy `Compare`.
+pub fn compare(a: Order, b: Order) -> Order {
+  case a, b {
+    Less, Less => Equal
+    Less, _ => Less
+    Equal, Less => Greater
+    Equal, Equal => Equal
+    Equal, Greater => Less
+    Greater, Greater => Equal
+    Greater, _ => Greater
+  }
+}
+
+/// Returns `"Less"`, `"Equal"` or `"Greater"`. It makes `Order` satisfy `Show`.
+pub fn show(o: Order) -> String {
+  case o {
+    Less => "Less"
+    Equal => "Equal"
+    Greater => "Greater"
+  }
+}

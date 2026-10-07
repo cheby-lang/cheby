@@ -1,0 +1,17 @@
+// @mode: check-pass
+// @decisions: D-083
+//! Function types are written `fn(A, B) -> C`, and `fn(A)` is
+//! `fn(A) -> Nil` (§3.9).
+
+pub fn compose(
+  f: fn(Int) -> String,
+  g: fn(String) -> Bool,
+) -> fn(Int) -> Bool {
+  fn(x) { g(f(x)) }
+}
+
+pub fn ignore(f: fn(Int) -> String) -> fn(Int) {
+  fn(x) {
+    let _ = f(x)
+  }
+}

@@ -8,7 +8,7 @@ use cheby_types::thir::EntryInfo;
 use crate::abi::{abi_sig, entry_sig};
 use crate::builder::FunctionBuilder;
 use crate::ir::{Callee, Const, EntryKind, FnKey, Operand, Rvalue, Terminator, UnitKind};
-use crate::lower::{LowerCx, finish_unit};
+use crate::lower::{LowerCx, LowerError, Unsupported, finish_unit, not_supported};
 use crate::repr::Repr;
 use crate::{Abi, MirModule};
 
@@ -31,17 +31,22 @@ pub struct EntryRequest<'a> {
 ///
 /// # Errors
 ///
-/// An [`Ice`] for an entry outside the slice (`Result` mains, REPL
-/// entries) or one whose item is not readable through `cx`.
-pub fn lower_entries(entries: &[EntryRequest<'_>], cx: &LowerCx<'_>) -> Result<MirModule, Ice> {
+/// E0038 for a `main` or test returning `Result` (D-182 needs `Show`
+/// dictionaries and debug printing), and an [`Ice`] for a REPL entry
+/// (G5) or one whose item is not readable through `cx`.
+pub fn lower_entries(
+    entries: &[EntryRequest<'_>],
+    cx: &LowerCx<'_>,
+) -> Result<MirModule, LowerError> {
     let mut functions = Vec::with_capacity(entries.len());
+    let mut unsupported = Unsupported::default();
     for req in entries {
         let (def, callee) = match req.kind {
             EntryKind::Main(def) => (def, Callee::Direct(def)),
             EntryKind::Test(def) => (def, Callee::Code(FnKey::Test(def))),
             EntryKind::Const(def) => (def, Callee::Code(FnKey::ConstInit(def))),
             EntryKind::Repl(_) => {
-                return Err(Ice::new("REPL entries are not supported yet (G5)"));
+                return Err(Ice::new("REPL entries are not supported yet (G5)").into());
             }
         };
         let sig = entry_sig(req.kind);
@@ -52,9 +57,7 @@ pub fn lower_entries(entries: &[EntryRequest<'_>], cx: &LowerCx<'_>) -> Result<M
                 .params
                 .is_empty()
         {
-            return Err(Ice::new(
-                "an entry point with parameters reached MIR lowering",
-            ));
+            return Err(Ice::new("an entry point with parameters reached MIR lowering").into());
         }
         let result = b.assign(
             Repr::Value,
@@ -72,19 +75,24 @@ pub fn lower_entries(entries: &[EntryRequest<'_>], cx: &LowerCx<'_>) -> Result<M
                 })
             }
             (EntryKind::Main(_) | EntryKind::Test(_), Some(EntryInfo::Result { .. })) => {
-                return Err(Ice::new(
-                    "entry points returning `Result` are not supported yet (D-182)",
-                ));
+                let what = if matches!(req.kind, EntryKind::Main(_)) {
+                    "`main` functions that return `Result`"
+                } else {
+                    "tests that return `Result`"
+                };
+                unsupported.push(not_supported(span_of(def, cx)?, what));
+                continue;
             }
             (EntryKind::Main(_) | EntryKind::Test(_), None) => {
-                return Err(Ice::new("a `main` or test entry without its entry info"));
+                return Err(Ice::new("a `main` or test entry without its entry info").into());
             }
             (EntryKind::Const(_) | EntryKind::Repl(_), _) => Operand::Local(result),
         };
         b.terminate(Terminator::Return(ret))?;
         functions.push(b.finish()?);
     }
-    finish_unit(UnitKind::Entries, functions, Vec::new(), cx)
+    let unit = finish_unit(UnitKind::Entries, functions, Vec::new(), cx)?;
+    unsupported.finish(unit)
 }
 
 fn span_of(def: DefId, cx: &LowerCx<'_>) -> Result<cheby_diag::Span, Ice> {

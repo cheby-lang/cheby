@@ -8,9 +8,13 @@
 //!   name resolution and type checking over the package and the std
 //!   modules it reaches (G1, G2). [`check_syntax`] stops after phase A.
 //! - [`prepare_run`] and [`Program::run`] are `cheby run` (G3): the front
-//!   end, then MIR, the JIT and the program's `main` (D-137).
-//! - [`dump_mir`] and [`dump_clif`] print the MIR and CLIF of a package,
-//!   for goldens and the determinism checks.
+//!   end, then MIR of the items reachable from the program's `main`, the
+//!   JIT and `main` (D-137). Constructs the back end cannot lower yet are
+//!   E0038, reported like compile errors before any code is generated
+//!   (plan §8); `cheby check` never lowers MIR.
+//! - [`dump_mir`] and [`dump_clif`] print the MIR and CLIF that running
+//!   the root module's `main` compiles, for goldens and the determinism
+//!   checks.
 //!
 //! The build graph's parallel scheduling (D-263) and the build cache
 //! (D-255) plug in later behind the same API. Output is deterministic
@@ -157,7 +161,7 @@ pub fn find_package_root(start: &Path) -> Option<PathBuf> {
 /// unreadable file or an internal compiler error.
 pub fn check(root: &Path) -> Result<CheckOutput, Error> {
     let mut out = CheckOutput::default();
-    front_end(root, &mut out)?;
+    front_end(root, frontend::Mode::Check, &mut out)?;
     out.sources.sort(&mut out.diagnostics);
     Ok(out)
 }
@@ -179,6 +183,7 @@ pub fn check_syntax(root: &Path) -> Result<CheckOutput, Error> {
 /// checked package if the front end ran, with the package name.
 fn front_end(
     root: &Path,
+    mode: frontend::Mode,
     out: &mut CheckOutput,
 ) -> Result<Option<(frontend::Frontend, String)>, Error> {
     let package = load_package(root, &mut out.sources, &mut out.diagnostics)?;
@@ -189,7 +194,7 @@ fn front_end(
         return Ok(None);
     }
     let name = package.manifest.name.clone();
-    let front = frontend::run(package, &mut out.sources, &mut out.diagnostics)?;
+    let front = frontend::run(package, mode, &mut out.sources, &mut out.diagnostics)?;
     Ok(Some((front, name)))
 }
 
@@ -267,7 +272,7 @@ pub enum RunResult {
 /// internal failures.
 pub fn prepare_run(root: &Path, options: RunOptions) -> Result<Prepared, Error> {
     let mut out = CheckOutput::default();
-    let front = front_end(root, &mut out)?;
+    let front = front_end(root, frontend::Mode::Build, &mut out)?;
     out.sources.sort(&mut out.diagnostics);
     let Some((front, package)) = front.filter(|_| !out.has_errors()) else {
         return Ok(Prepared::CompileFailed(out));
@@ -283,8 +288,13 @@ pub fn prepare_run(root: &Path, options: RunOptions) -> Result<Prepared, Error> 
     let main = front
         .main_of(module)
         .ok_or_else(|| Error::new(format!("module `{path}` has no `main` function")))?;
-    let mut units = backend::lower_modules(&front, &out.sources)?;
-    units.push(backend::lower_main_entry(&front, &out.sources, main)?);
+    let units = match backend::lower_program(&front, &out.sources, main)? {
+        Ok(units) => units,
+        Err(unsupported) => {
+            report_unsupported(&mut out, unsupported);
+            return Ok(Prepared::CompileFailed(out));
+        }
+    };
     let jit = match backend::compile(&units, false) {
         Ok(jit) => jit,
         // A program error found only when loading, not a tool error
@@ -358,9 +368,12 @@ fn parse_module_path(text: &str) -> Option<ModulePath> {
     Some(path)
 }
 
-/// The MIR of every checked module after reference counting, in build
-/// order, then the entry unit of the root module's `main` if it has one
-/// (D1). Empty if the package has errors.
+/// The MIR that running the root module's `main` compiles, after
+/// reference counting (D1): the units of the modules it needs, in build
+/// order, with the items reachable from `main` (plan §8), then the entry
+/// unit. Empty if the package has errors, if the back end cannot lower
+/// something `main` needs (E0038 in the output), or if the root module has
+/// no `main`.
 ///
 /// # Errors
 ///
@@ -377,7 +390,7 @@ pub fn dump_mir(root: &Path) -> Result<(CheckOutput, String), Error> {
 
 /// The CLIF of every function [`dump_mir`] shows, before Cranelift's
 /// compilation, each preceded by its symbol and the symbols it references.
-/// Empty if the package has errors.
+/// Empty whenever [`dump_mir`] is.
 ///
 /// # Errors
 ///
@@ -393,19 +406,31 @@ pub fn dump_clif(root: &Path) -> Result<(CheckOutput, String), Error> {
 }
 
 fn units_for_dump(root: &Path, out: &mut CheckOutput) -> Result<Vec<cheby_mir::MirModule>, Error> {
-    let front = front_end(root, out)?;
+    let front = front_end(root, frontend::Mode::Build, out)?;
     out.sources.sort(&mut out.diagnostics);
     let Some((front, package)) = front.filter(|_| !out.has_errors()) else {
         return Ok(Vec::new());
     };
-    let mut units = backend::lower_modules(&front, &out.sources)?;
     let main = front
         .local_module(&ModulePath::root(&package))
         .and_then(|m| front.main_of(m));
-    if let Some(main) = main {
-        units.push(backend::lower_main_entry(&front, &out.sources, main)?);
+    let Some(main) = main else {
+        return Ok(Vec::new());
+    };
+    match backend::lower_program(&front, &out.sources, main)? {
+        Ok(units) => Ok(units),
+        Err(unsupported) => {
+            report_unsupported(out, unsupported);
+            Ok(Vec::new())
+        }
     }
-    Ok(units)
+}
+
+/// Adds the back end's E0038 diagnostics after the front end's, which are
+/// already sorted (warnings only, since errors stop before lowering).
+fn report_unsupported(out: &mut CheckOutput, mut unsupported: Vec<Diagnostic>) {
+    out.sources.sort(&mut unsupported);
+    out.diagnostics.extend(unsupported);
 }
 
 /// Reads the manifest, discovers the modules and parses each one. Every

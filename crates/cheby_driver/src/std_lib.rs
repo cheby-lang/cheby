@@ -20,6 +20,117 @@ pub const STD_MODULES: &[StdModule] = &[StdModule {
     source: include_str!("../../../std/io.cheby"),
 }];
 
+/// Modules written before the checker can check them (plan GAP(std-staging)):
+/// embedded so tests can run phase A on them, but never loaded. Each stays
+/// in [`PLANNED_STD_MODULES`], so importing one is still E0038 (D-451),
+/// until it is promoted to [`STD_MODULES`]. Sorted by path.
+pub const STAGED_STD_MODULES: &[StdModule] = &[
+    StdModule {
+        path: "bool",
+        source: include_str!("../../../std/bool.cheby"),
+    },
+    StdModule {
+        path: "bytes",
+        source: include_str!("../../../std/bytes.cheby"),
+    },
+    StdModule {
+        path: "env",
+        source: include_str!("../../../std/env.cheby"),
+    },
+    StdModule {
+        path: "f32",
+        source: include_str!("../../../std/f32.cheby"),
+    },
+    StdModule {
+        path: "float",
+        source: include_str!("../../../std/float.cheby"),
+    },
+    StdModule {
+        path: "i16",
+        source: include_str!("../../../std/i16.cheby"),
+    },
+    StdModule {
+        path: "i32",
+        source: include_str!("../../../std/i32.cheby"),
+    },
+    StdModule {
+        path: "i64",
+        source: include_str!("../../../std/i64.cheby"),
+    },
+    StdModule {
+        path: "i8",
+        source: include_str!("../../../std/i8.cheby"),
+    },
+    StdModule {
+        path: "int",
+        source: include_str!("../../../std/int.cheby"),
+    },
+    StdModule {
+        path: "json",
+        source: include_str!("../../../std/json.cheby"),
+    },
+    StdModule {
+        path: "json::decode",
+        source: include_str!("../../../std/json/decode.cheby"),
+    },
+    StdModule {
+        path: "json::tree",
+        source: include_str!("../../../std/json/tree.cheby"),
+    },
+    StdModule {
+        path: "list",
+        source: include_str!("../../../std/list.cheby"),
+    },
+    StdModule {
+        path: "map",
+        source: include_str!("../../../std/map.cheby"),
+    },
+    StdModule {
+        path: "nil",
+        source: include_str!("../../../std/nil.cheby"),
+    },
+    StdModule {
+        path: "ops",
+        source: include_str!("../../../std/ops.cheby"),
+    },
+    StdModule {
+        path: "option",
+        source: include_str!("../../../std/option.cheby"),
+    },
+    StdModule {
+        path: "order",
+        source: include_str!("../../../std/order.cheby"),
+    },
+    StdModule {
+        path: "result",
+        source: include_str!("../../../std/result.cheby"),
+    },
+    StdModule {
+        path: "set",
+        source: include_str!("../../../std/set.cheby"),
+    },
+    StdModule {
+        path: "string",
+        source: include_str!("../../../std/string.cheby"),
+    },
+    StdModule {
+        path: "u16",
+        source: include_str!("../../../std/u16.cheby"),
+    },
+    StdModule {
+        path: "u32",
+        source: include_str!("../../../std/u32.cheby"),
+    },
+    StdModule {
+        path: "u64",
+        source: include_str!("../../../std/u64.cheby"),
+    },
+    StdModule {
+        path: "u8",
+        source: include_str!("../../../std/u8.cheby"),
+    },
+];
+
 /// Modules the standard-library spec plans that `std/` does not ship yet:
 /// the rest of tier 1 (`docs/stdlib/`), tier 2 and tier 3
 /// (`docs/plan/stdlib.md`). Importing one is E0038, not E0039 (D-451).
@@ -42,6 +153,9 @@ pub const PLANNED_STD_MODULES: &[&str] = &[
     "int",
     "json",
     "json::decode",
+    // The internal module of D-361 that `json` and `json::decode` both
+    // import; its items are package-visible only (GAP(json-tree-module)).
+    "json::tree",
     "list",
     "map",
     "multimap",
@@ -110,6 +224,8 @@ pub fn display_path(path: &str) -> String {
 mod tests {
     use std::path::Path;
 
+    use cheby_diag::{SourceMap, render_all};
+
     use super::*;
 
     fn repo() -> &'static Path {
@@ -129,16 +245,64 @@ mod tests {
     }
 
     #[test]
-    fn std_modules_are_the_files_under_std() {
+    fn std_files_are_the_shipped_and_staged_modules() {
         let mut files = Vec::new();
         cheby_files(&repo().join("std"), "", &mut files);
         files.sort();
-        let listed: Vec<&str> = STD_MODULES.iter().map(|m| m.path).collect();
+        let mut listed: Vec<&str> = STD_MODULES
+            .iter()
+            .chain(STAGED_STD_MODULES)
+            .map(|m| m.path)
+            .collect();
+        listed.sort_unstable();
         assert_eq!(files, listed);
-        for module in STD_MODULES {
+        for module in STD_MODULES.iter().chain(STAGED_STD_MODULES) {
             let text = std::fs::read_to_string(repo().join(display_path(module.path))).unwrap();
-            assert_eq!(text, module.source);
+            assert_eq!(text, module.source, "{} is stale", module.path);
         }
+    }
+
+    #[test]
+    fn module_lists_are_sorted() {
+        for list in [STD_MODULES, STAGED_STD_MODULES] {
+            let paths: Vec<&str> = list.iter().map(|m| m.path).collect();
+            let mut sorted = paths.clone();
+            sorted.sort_unstable();
+            sorted.dedup();
+            assert_eq!(paths, sorted);
+        }
+    }
+
+    #[test]
+    fn staged_modules_are_planned_and_not_shipped() {
+        for module in STAGED_STD_MODULES {
+            assert!(is_planned(module.path), "{} is not planned", module.path);
+            assert!(find(module.path).is_none(), "{} is shipped", module.path);
+        }
+    }
+
+    /// Phase A, exactly as a build runs it on a std module: lexing,
+    /// parsing and syntax validation, with no diagnostics at all.
+    #[test]
+    fn staged_modules_pass_phase_a() {
+        let mut failures = String::new();
+        for module in STAGED_STD_MODULES {
+            let mut sources = SourceMap::new();
+            let mut diagnostics = Vec::new();
+            let path = display_path(module.path);
+            let parsed = crate::parse_file(
+                &mut sources,
+                &path,
+                module.source.as_bytes().to_vec(),
+                &mut diagnostics,
+            )
+            .unwrap();
+            assert!(parsed.syntax.is_some());
+            if !diagnostics.is_empty() || parsed.has_syntax_errors {
+                failures.push_str(&render_all(&diagnostics, &sources));
+            }
+        }
+        assert!(failures.is_empty(), "{failures}");
     }
 
     #[test]
@@ -162,6 +326,7 @@ mod tests {
             }
         }
         assert!(is_planned("json::decode"));
+        assert!(is_planned("json::tree"));
         for module in PARTIAL_STD_MODULES {
             assert!(find(module).is_some());
         }

@@ -2,7 +2,9 @@
 //! imports, and the prelude, per namespace.
 
 use cheby_diag::{Diagnostic, Span, codes};
-use cheby_iface::{DefId, DefIndex, Ice, IndexVec, ModuleId, Name, Namespace, builtin};
+use cheby_iface::{
+    DefId, DefIndex, DefKind, Ice, IndexVec, ModuleId, ModuleInterface, Name, Namespace, builtin,
+};
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -34,7 +36,8 @@ pub struct ScopeEntry {
 }
 
 /// The names visible everywhere in a module, per namespace. A module's own
-/// items and its imports never collide (E0041); both hide the prelude.
+/// items and its imports never collide (E0041); both hide the prelude
+/// (W0007, D-146, D-212).
 #[derive(Clone, Debug, Default)]
 pub struct ModuleScope {
     types: FxHashMap<Name, ScopeEntry>,
@@ -77,12 +80,16 @@ pub(crate) fn build(
     diags: &mut Vec<Diagnostic>,
 ) -> Result<ModuleScope, Ice> {
     let mut scope = ModuleScope::default();
+    let prelude = Prelude::new(input)?;
     // Own items. Duplicates were reported by item collection; the first
     // declaration wins.
     for (index, item) in items.iter_enumerated() {
         let Some(ns) = item.kind.namespace() else {
             continue;
         };
+        if scope.map(ns).contains_key(&item.name) {
+            continue;
+        }
         let res = match item.status {
             // A body-only hit leaves the signature usable (D-246).
             ItemStatus::Ok | ItemStatus::BodyUnsupported => {
@@ -90,11 +97,17 @@ pub(crate) fn build(
             }
             ItemStatus::Unsupported => Res::Err,
         };
-        scope.map_mut(ns).entry(item.name).or_insert(ScopeEntry {
-            res,
-            source: ScopeSource::Item,
-            span: Some(item.name_span),
-        });
+        if let Some(hidden) = prelude.get(ns, item.name) {
+            diags.push(prelude.hiding(input, hidden, item.name, item.name_span, false));
+        }
+        scope.map_mut(ns).insert(
+            item.name,
+            ScopeEntry {
+                res,
+                source: ScopeSource::Item,
+                span: Some(item.name_span),
+            },
+        );
     }
     // Module imports bind a name in the value namespace (§7.7); item
     // imports bind the listed items (§7.5.2).
@@ -107,8 +120,17 @@ pub(crate) fn build(
     for (n, (request, target)) in input.imports.iter().zip(input.targets).enumerate() {
         if let Some(list) = &request.items {
             for item in list {
-                for (ns, name, span, res) in item_import(&lookups, request, item, *target, diags)? {
-                    insert_import(&mut scope, input, (ns, name, span, res), n, diags);
+                for binding in item_import(&lookups, request, item, *target, diags)? {
+                    let (ns, name, span, res) = binding;
+                    // A name that is already taken is E0041 instead.
+                    if let Res::Def(def) = res
+                        && scope.get(ns, name).is_none()
+                        && let Some(hidden) = prelude.get(ns, name)
+                        && hidden != def
+                    {
+                        diags.push(prelude.hiding(input, hidden, name, span, true));
+                    }
+                    insert_import(&mut scope, input, binding, n, diags);
                 }
             }
             continue;
@@ -125,13 +147,89 @@ pub(crate) fn build(
             diags,
         );
     }
-    add_prelude(input, &mut scope)?;
+    add_prelude(input, &prelude, &mut scope)?;
     Ok(scope)
+}
+
+/// The prelude (§7.6, D-112): the builtin items with
+/// [`builtin::is_prelude`], by namespace and name.
+struct Prelude<'a> {
+    builtin: &'a ModuleInterface,
+}
+
+impl<'a> Prelude<'a> {
+    fn new(input: &ResolveInput<'a>) -> Result<Self, Ice> {
+        let builtin = input
+            .deps
+            .get(ModuleId::BUILTIN)
+            .ok_or_else(|| Ice::new("the builtin interface is not readable"))?;
+        Ok(Self { builtin })
+    }
+
+    /// The prelude item named `name` in namespace `ns`, if any.
+    fn get(&self, ns: Namespace, name: Name) -> Option<DefId> {
+        let index = self.builtin.lookup(ns, name)?;
+        let def = DefId::new(ModuleId::BUILTIN, index);
+        builtin::is_prelude(def).then_some(def)
+    }
+
+    /// W0007: a declaration or an item import that hides the prelude item
+    /// `hidden` of the same namespace (D-146, D-212).
+    fn hiding(
+        &self,
+        input: &ResolveInput<'_>,
+        hidden: DefId,
+        name: Name,
+        span: Span,
+        imported: bool,
+    ) -> Diagnostic {
+        let text = input.globals.names.get(name);
+        let item = self.builtin.item(hidden.index);
+        let kind = item.map_or("item", |item| match item.kind {
+            DefKind::Ctor => "constructor",
+            DefKind::Interface => "interface",
+            _ => "type",
+        });
+        let owner = item
+            .filter(|item| item.kind == DefKind::Ctor)
+            .and_then(|item| item.parent)
+            .map_or(hidden, |parent| DefId::new(ModuleId::BUILTIN, parent));
+        let home = builtin::HOMES
+            .iter()
+            .find(|(def, _)| *def == owner)
+            .map(|&(_, segment)| segment);
+        let (label, help) = if imported {
+            (
+                "imported here",
+                format!("if this is not intended, import it under another name: `{text} as …`"),
+            )
+        } else {
+            (
+                "declared here",
+                format!("if this is not intended, give the {kind} another name"),
+            )
+        };
+        let note = match home {
+            Some(home) => format!(
+                "in this module, `{text}` no longer means the prelude {kind}, which stays \
+                 reachable as `{home}::{text}` after `import std::{home}`"
+            ),
+            None => format!("in this module, `{text}` no longer means the prelude {kind}"),
+        };
+        Diagnostic::new(
+            codes::HIDDEN_PRELUDE_NAME,
+            format!("`{text}` hides the prelude {kind} `{text}`"),
+        )
+        .with_primary(span, label)
+        .with_note(note)
+        .with_help(help)
+    }
 }
 
 /// The bindings of one item of `import m::{x, Y as Z}`: a `LOWER` name
 /// is a function or constant, an `UPPER` name the type or interface and
-/// the constructor with that name (D-111).
+/// the constructor with that name (D-111). A name that is missing or not
+/// visible is reported once, whatever its namespaces.
 fn item_import(
     lookups: &PathCx<'_>,
     request: &ImportRequest,
@@ -148,11 +246,14 @@ fn item_import(
     } else {
         &[Namespace::Value]
     };
-    let Some(module) = target.module() else {
-        return Ok(namespaces
+    let failed = || {
+        namespaces
             .iter()
             .map(|&ns| (ns, bound, bound_span, Res::Err))
-            .collect());
+            .collect()
+    };
+    let Some(module) = target.module() else {
+        return Ok(failed());
     };
     let iface = input
         .deps
@@ -163,33 +264,58 @@ fn item_import(
         .get(ModuleId::BUILTIN)
         .ok_or_else(|| Ice::new("the builtin interface is not readable"))?;
     let path = &input.modules.try_get(module)?.path;
-    let homed = !builtin::homed_at(path).is_empty();
+    let homed = builtin::homed_at(path);
     let present: Vec<Namespace> = namespaces
         .iter()
         .copied()
         .filter(|&ns| {
             iface.lookup(ns, item.name).is_some()
-                || (homed && builtin_iface.lookup(ns, item.name).is_some())
+                || builtin_iface
+                    .lookup(ns, item.name)
+                    .is_some_and(|index| is_homed(builtin_iface, &homed, index))
         })
         .collect();
     if present.is_empty() {
         // Reports E0042, or E0038 for a partly shipped std module.
         let ns = namespaces.first().copied().unwrap_or(Namespace::Value);
         lookups.in_module(module, ns, (item.name, item.span), request.path_span, diags)?;
-        return Ok(namespaces
-            .iter()
-            .map(|&ns| (ns, bound, bound_span, Res::Err))
-            .collect());
+        return Ok(failed());
     }
     let mut out = Vec::new();
+    let mut reported = false;
     for ns in present {
-        let res =
-            lookups.in_module(module, ns, (item.name, item.span), request.path_span, diags)?;
+        let mut found = Vec::new();
+        let res = lookups.in_module(
+            module,
+            ns,
+            (item.name, item.span),
+            request.path_span,
+            &mut found,
+        )?;
+        // The type and the constructor of one name share their
+        // visibility: one error is enough.
+        if !reported {
+            reported = !found.is_empty();
+            diags.extend(found);
+        }
         out.push((ns, bound, bound_span, res));
     }
     Ok(out)
 }
 
+/// Whether builtin item `index` is re-exported by the home module whose
+/// homed items are `homed`: one of them, or a constructor of one.
+fn is_homed(builtin_iface: &ModuleInterface, homed: &[DefId], index: DefIndex) -> bool {
+    let def = DefId::new(ModuleId::BUILTIN, index);
+    let owner = match builtin_iface.item(index) {
+        Some(item) if item.kind == DefKind::Ctor => {
+            item.parent.map(|p| DefId::new(ModuleId::BUILTIN, p))
+        }
+        Some(_) => Some(def),
+        None => None,
+    };
+    owner.is_some_and(|owner| homed.contains(&owner))
+}
 /// Adds an import's binding, reporting E0041 if the name is taken.
 fn insert_import(
     scope: &mut ModuleScope,
@@ -240,13 +366,16 @@ fn insert_import(
     }
 }
 
-fn add_prelude(input: &ResolveInput<'_>, scope: &mut ModuleScope) -> Result<(), Ice> {
-    // The prelude and, in a home module, its re-exports. Both are hidden
-    // by own items and imports (D-146: the hiding warning lands later).
-    let builtin_iface = input
-        .deps
-        .get(ModuleId::BUILTIN)
-        .ok_or_else(|| Ice::new("the builtin interface is not readable"))?;
+fn add_prelude(
+    input: &ResolveInput<'_>,
+    prelude: &Prelude<'_>,
+    scope: &mut ModuleScope,
+) -> Result<(), Ice> {
+    // The prelude and, in a home module, the builtin items it re-exports,
+    // which include the kernel types `Map`, `Set` and `Bytes` that are not
+    // in the prelude (D-447, GAP(kernel-types)). Both are hidden by own
+    // items and imports (D-146, W0007).
+    let builtin_iface = prelude.builtin;
     let path = &input.modules.try_get(input.module)?.path;
     let homed = builtin::homed_at(path);
     for (index, item) in builtin_iface.items.iter_enumerated() {
@@ -254,15 +383,12 @@ fn add_prelude(input: &ResolveInput<'_>, scope: &mut ModuleScope) -> Result<(), 
             continue;
         };
         let def = DefId::new(ModuleId::BUILTIN, index);
-        let owner = if item.kind == cheby_iface::DefKind::Ctor {
-            item.parent.map(|p| DefId::new(ModuleId::BUILTIN, p))
-        } else {
-            Some(def)
-        };
-        let source = if owner.is_some_and(|owner| homed.contains(&owner)) {
+        let source = if is_homed(builtin_iface, &homed, index) {
             ScopeSource::HomeReexport
-        } else {
+        } else if builtin::is_prelude(def) {
             ScopeSource::Prelude
+        } else {
+            continue;
         };
         scope.map_mut(ns).entry(item.name).or_insert(ScopeEntry {
             res: Res::Def(def),

@@ -1,0 +1,8 @@
+error[E0042]: `io` is not imported
+ --> tests/ui/07-modules-and-packages/item_import_binds_no_module.cheby:9:3
+  |
+9 |   io::println("again")
+  |   ^^
+  |
+  = help: add `import std::io` at the top of the file
+

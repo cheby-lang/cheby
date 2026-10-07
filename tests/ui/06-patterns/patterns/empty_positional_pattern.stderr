@@ -1,0 +1,8 @@
+error[E0013]: a constructor pattern's field list is empty
+ --> tests/ui/06-patterns/patterns/empty_positional_pattern.cheby:8:9
+  |
+8 |     Some() => True
+  |         ^^
+  |
+  = help: for a constructor without fields, remove the parentheses
+

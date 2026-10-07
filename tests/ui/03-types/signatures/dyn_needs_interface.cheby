@@ -1,0 +1,9 @@
+// @mode: check-fail
+// @decisions: D-063, D-462
+//! Only an interface may follow `dyn`.
+
+pub type Point { x: Int, y: Int }
+
+pub fn boxed(point: Point) -> dyn Point {
+  point
+}

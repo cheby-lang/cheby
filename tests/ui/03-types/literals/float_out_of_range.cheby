@@ -1,0 +1,7 @@
+// @mode: check-fail
+// @decisions: D-084
+//! A float literal must fit its type too (§3.3.4).
+
+pub fn single() -> F32 {
+  1.0e39
+}

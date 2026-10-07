@@ -1,0 +1,15 @@
+// @mode: check-fail
+// @decisions: D-022, D-113
+//! Integer literal patterns never cover every `Int`, so a `case` on them
+//! needs a catch-all arm.
+
+fn reason(code: Int) -> String {
+  case code {
+    200 => "OK"
+    404 => "Not Found"
+  }
+}
+
+fn main() {
+  assert reason(200) == "OK"
+}

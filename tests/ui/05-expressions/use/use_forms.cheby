@@ -1,0 +1,42 @@
+// @mode: check-pass
+// @decisions: D-018, D-023
+//! `use` passes the rest of the block as a callback, as the last argument
+//! of a call, or alone to a function expression (§5.10).
+
+pub fn try(value: Result<Int, String>, next: fn(Int) -> Result<Int, String>) -> Result<Int, String> {
+  case value {
+    Ok(v) => next(v)
+    Err(e) => Err(e)
+  }
+}
+
+pub fn parse(text: String) -> Result<Int, String> {
+  case text == "1" {
+    True => Ok(1)
+    False => Err(text)
+  }
+}
+
+pub fn both(a: String, b: String) -> Result<Int, String> {
+  use x <- try(parse(a))
+  use y <- try(parse(b))
+  Ok(x + y)
+}
+
+pub fn run(f: fn() -> Int) -> Int {
+  f()
+}
+
+pub fn zero() -> Int {
+  use <- run
+  0
+}
+
+pub fn each(pair: (Int, Int), f: fn((Int, Int)) -> Int) -> Int {
+  f(pair)
+}
+
+pub fn sum() -> Int {
+  use (a, b) <- each((1, 2))
+  a + b
+}

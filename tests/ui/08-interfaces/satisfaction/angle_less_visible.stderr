@@ -1,0 +1,15 @@
+error[E0063]: `angle::Angle` does not satisfy `Show`
+  --> tests/ui/08-interfaces/satisfaction/angle_less_visible/src/main.cheby:12:17
+   |
+12 |   io::println("{right}")
+   |                 ^^^^^ interpolated here
+   |
+  ::: tests/ui/08-interfaces/satisfaction/angle_less_visible/src/geometry/angle.cheby:9:4
+   |
+9  | fn show(a: Angle) -> String {
+   |    ---- `angle::show` is package-visible, less visible than `angle::Angle`
+   |
+   = note: a function counts toward an interface only if it is at least as visible as the type (§8.2, D-164)
+   = help: make `show` `pub`, or make `angle::Angle` less visible
+   = help: write `{right:?}` to use debug printing instead (D-086)
+

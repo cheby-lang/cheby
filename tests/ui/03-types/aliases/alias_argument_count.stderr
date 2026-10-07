@@ -1,0 +1,12 @@
+error[E0051]: `Pair` takes 2 type arguments but 1 was given
+ --> tests/ui/03-types/aliases/alias_argument_count.cheby:8:19
+  |
+8 | pub fn swap(pair: Pair<Int>) -> Pair<Int, Int, Int> {
+  |                   ^^^^^^^^^ expected 2 type arguments
+
+error[E0051]: `Pair` takes 2 type arguments but 3 were given
+ --> tests/ui/03-types/aliases/alias_argument_count.cheby:8:33
+  |
+8 | pub fn swap(pair: Pair<Int>) -> Pair<Int, Int, Int> {
+  |                                 ^^^^^^^^^^^^^^^^^^^ expected 2 type arguments
+

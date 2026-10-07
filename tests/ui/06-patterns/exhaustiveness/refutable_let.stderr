@@ -1,0 +1,9 @@
+error[E0060]: refutable pattern in `let`
+ --> tests/ui/06-patterns/exhaustiveness/refutable_let.cheby:7:7
+  |
+7 |   let Some(x) = o
+  |       ^^^^^^^ `None` not covered
+  |
+  = note: this pattern must match every value of its type (§6.1)
+  = help: use `case` to handle `None` as well, or `let assert` to panic when the value does not match
+

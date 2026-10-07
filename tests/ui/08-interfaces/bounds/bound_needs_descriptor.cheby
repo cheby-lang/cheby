@@ -1,0 +1,19 @@
+// @mode: check-fail
+// @decisions: D-236
+//! A dictionary passed for a bound carries the descriptor of its type,
+//! and a type parameter's descriptor comes from one of its bounds, so an
+//! unbounded `T` cannot be passed where `Any` is required (§8.5.1).
+
+interface Any
+
+fn keep<A: Any>(value: A) -> A {
+  value
+}
+
+fn relay<T>(value: T) -> T {
+  keep(value)
+}
+
+fn main() {
+  assert relay(1) == 1
+}

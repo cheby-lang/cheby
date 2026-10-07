@@ -1,0 +1,10 @@
+// @mode: check-fail
+// @decisions: D-161
+//! The message of `panic` and `todo` is a `String` (§5.14).
+
+pub fn first(items: List<Int>) -> Int {
+  case items {
+    [x, ..] => x
+    [] => panic as 404
+  }
+}

@@ -1,0 +1,30 @@
+// @mode: check-pass
+// @decisions: D-034, D-047, D-169
+//! Operators on a user type call the functions of its module, without
+//! importing `std::ops` (§8.7).
+
+pub type Point {
+  x: Int,
+  y: Int,
+}
+
+pub fn add(a: Point, b: Point) -> Point {
+  Point { x: a.x + b.x, y: a.y + b.y }
+}
+
+pub fn neg(a: Point) -> Point {
+  Point { x: -a.x, y: -a.y }
+}
+
+pub fn compare(a: Point, b: Point) -> Order {
+  case a.x < b.x {
+    True => Less
+    False => Equal
+  }
+}
+
+pub fn main() {
+  let p = Point { x: 1, y: 2 }
+  let q = p + -p
+  assert q < p
+}

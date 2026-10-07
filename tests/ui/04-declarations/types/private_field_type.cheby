@@ -1,0 +1,12 @@
+// @mode: check-fail
+// @decisions: D-149, D-151
+//! The fields of a package-visible type are visible in every module of
+//! the package, so they must not mention a `priv` type (§4.1.3).
+
+priv type Secret { Secret(String) }
+
+pub type Holder { Holder(Secret) }
+
+pub fn hold(text: String) -> Holder {
+  Holder(Secret(text))
+}

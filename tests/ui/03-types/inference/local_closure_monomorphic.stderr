@@ -1,0 +1,8 @@
+error[E0047]: mismatched types
+ --> tests/ui/03-types/inference/local_closure_monomorphic.cheby:9:16
+  |
+9 |   let b = wrap("hi")
+  |           ---- ^^^^ expected `{integer}`, found `String`
+  |           |
+  |           arguments to this function are incorrect
+

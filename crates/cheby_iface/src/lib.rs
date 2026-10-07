@@ -31,7 +31,8 @@ pub use ids::{
 };
 pub use iface::{
     AliasDef, BuiltinType, ConstSig, CtorFields, CtorSig, FnSig, IfaceItem, InterfaceDef,
-    InterfaceFnSig, ItemSig, ModuleInterface, ParamSig, TypeDef, TypeDefKind,
+    InterfaceFnSig, ItemSig, ModuleInterface, ParamSig, TypeDef, TypeDefKind, TypeHooks,
+    interface_fns, structure_visible,
 };
 pub use index::{Idx, IndexVec};
 pub use name::{Interner, Name, sym};

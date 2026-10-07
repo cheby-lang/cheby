@@ -1,0 +1,22 @@
+// @mode: check-pass
+// @decisions: D-212
+//! Hiding is per namespace: a constructor named `String` or `Bool` hides
+//! no prelude constructor, so it does not warn.
+
+import std::io
+
+type Value {
+  String(String),
+  Bool(Bool),
+}
+
+fn describe(value: Value) -> String {
+  case value {
+    String(text) => text
+    Bool(_) => "a boolean"
+  }
+}
+
+fn main() {
+  io::println(describe(String("text")))
+}

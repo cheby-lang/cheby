@@ -1,0 +1,7 @@
+// @mode: check-fail
+// @decisions: D-033
+//! Both operands of `==` have the same type (§5.4.4).
+
+pub fn same(a: Int, b: String) -> Bool {
+  a == b
+}

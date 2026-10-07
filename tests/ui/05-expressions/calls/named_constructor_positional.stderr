@@ -1,0 +1,16 @@
+error[E0059]: `Point` has named fields and cannot be called positionally
+  --> tests/ui/05-expressions/calls/named_constructor_positional.cheby:12:3
+   |
+12 |   Point(0, 0)
+   |   ^^^^^
+   |
+   = help: build it with its field names: `Point { … }`
+
+error[E0059]: `Point` has named fields and cannot be used as a function
+  --> tests/ui/05-expressions/calls/named_constructor_positional.cheby:16:3
+   |
+16 |   Point
+   |   ^^^^^
+   |
+   = help: build it with its field names: `Point { … }`
+

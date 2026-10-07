@@ -1,0 +1,10 @@
+// @mode: check-fail
+// @decisions: D-081, D-462
+//! A generic alias takes one type argument per type parameter, like a
+//! type.
+
+pub type Pair<A, B> = (A, B)
+
+pub fn swap(pair: Pair<Int>) -> Pair<Int, Int, Int> {
+  pair
+}

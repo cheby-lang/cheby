@@ -1,0 +1,10 @@
+// @mode: check-pass
+// @decisions: D-073
+//! An entry point may return `Result<Nil, E>` for some `E` (§4.2.1).
+
+import std::io
+
+fn main() -> Result<Nil, String> {
+  io::println("ready")
+  Ok(Nil)
+}

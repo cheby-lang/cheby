@@ -1,0 +1,11 @@
+// @mode: check-fail
+// @decisions: D-137, D-448
+//! Every top-level `main`, in any module, can be run by module path, so
+//! each one must have an entry point's signature (§4.2.1).
+
+import app::tool
+import std::io
+
+fn main() {
+  io::println(tool::name())
+}

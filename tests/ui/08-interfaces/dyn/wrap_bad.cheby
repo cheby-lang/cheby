@@ -1,0 +1,17 @@
+// @mode: check-fail
+// @decisions: D-236, D-237
+//! Converting to `dyn` a value whose type mentions a type parameter
+//! without a bound is an error, and an empty interface is enough as a
+//! bound (§8.6.1).
+
+interface Any
+
+fn wrap<T: Any>(xs: List<T>) -> dyn Any {
+  xs
+}
+
+fn wrap_bad<T>(xs: List<T>) -> dyn Any {
+  xs
+}
+
+fn main() {}

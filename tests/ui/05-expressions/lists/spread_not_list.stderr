@@ -1,0 +1,6 @@
+error[E0047]: mismatched types
+ --> tests/ui/05-expressions/lists/spread_not_list.cheby:6:6
+  |
+6 |   [..n, 1]
+  |      ^ expected `List<Int>`, found `Int`
+

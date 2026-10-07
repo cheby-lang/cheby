@@ -1,0 +1,9 @@
+error[E0048]: the constructor `Pair` has 2 fields, but the pattern has 1
+  --> tests/ui/06-patterns/patterns/positional_field_count.cheby:10:11
+   |
+6  |   Pair(Int, Int),
+   |   ---- `Pair` is declared here
+...
+10 |   let Pair(a) = pair
+   |           ^^^ expected 2 fields
+

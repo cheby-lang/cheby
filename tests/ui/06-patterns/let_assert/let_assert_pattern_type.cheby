@@ -1,0 +1,9 @@
+// @mode: check-fail
+// @decisions: D-068
+//! The pattern of a `let assert` matches values of the bound expression's
+//! type.
+
+fn main() {
+  let assert Some(n) = 5
+  assert n == 5
+}

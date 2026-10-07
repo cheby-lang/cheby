@@ -1,0 +1,8 @@
+error[E0052]: `Point` is not an interface
+ --> tests/ui/03-types/signatures/dyn_needs_interface.cheby:7:35
+  |
+7 | pub fn boxed(point: Point) -> dyn Point {
+  |                                   ^^^^^ expected an interface
+  |
+  = note: only an interface may follow `dyn` (§8.6)
+

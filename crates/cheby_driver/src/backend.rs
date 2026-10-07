@@ -1,27 +1,48 @@
 //! MIR lowering, code generation and running (G3).
 //!
-//! Every checked module is lowered to its own MIR unit, the same whichever
-//! module is run; the entry thunk for the chosen `main` is a separate unit
-//! (D-453). The JIT compiles all units in one batch, in build order.
+//! A run lowers only what its entry needs (GAP(backend-reachability),
+//! plan §8): the items reachable from the `main` being run, across
+//! modules, with the constructor layouts of every module that reachable
+//! code uses. Each such module is lowered to its own MIR unit, in build
+//! order with items in `DefIndex` order, and the entry thunk is a separate
+//! unit (D-453). The JIT compiles all units in one batch.
+//!
+//! A reachable construct that the back end does not implement yet is
+//! E0038 at the construct; every reachable item is lowered first, so one
+//! run reports all of them, and nothing is compiled.
 
-use cheby_diag::SourceMap;
+use cheby_diag::{Diagnostic, SourceMap};
 use cheby_iface::{DepView, Ice, ModuleId};
 use cheby_jit::Jit;
 use cheby_mir::{
-    Defs, EntryKind, EntryRequest, LowerCx, MirModule, count_and_check, lower_entries, lower_module,
+    Defs, EntryKind, EntryRequest, LowerCx, MirModule, Program, Root, Unsupported, count_and_check,
+    lower_entries, lower_items, reachable,
 };
 use cheby_types::thir;
 
 use crate::frontend::Frontend;
 
-/// Every checked module's MIR after reference counting and validation, in
-/// build order.
-pub(crate) fn lower_modules(front: &Frontend, sources: &SourceMap) -> Result<Vec<MirModule>, Ice> {
-    let mut units = Vec::with_capacity(front.order.len());
+/// The MIR units that running `main` needs, after reference counting and
+/// validation: one per needed module in build order, then the entry unit.
+/// `Err` holds the E0038 diagnostics of the constructs the back end
+/// cannot lower yet, unsorted.
+pub(crate) fn lower_program(
+    front: &Frontend,
+    sources: &SourceMap,
+    main: &thir::FnDef,
+) -> Result<Result<Vec<MirModule>, Vec<Diagnostic>>, Ice> {
+    let mut program = Program::new();
     for &module in &front.order {
-        let checked = front
-            .checked(module)
-            .ok_or_else(|| Ice::new(format!("module {module:?} was not checked")))?;
+        program.insert(module, &checked(front, module)?.thir);
+    }
+    let reach = reachable(&program, &[Root::Fn(main)])?;
+    let mut units = Vec::new();
+    let mut unsupported = Unsupported::default();
+    for &module in &front.order {
+        if !reach.needs_module(module) {
+            continue;
+        }
+        let checked = checked(front, module)?;
         let own = front
             .set
             .get(module)
@@ -36,19 +57,34 @@ pub(crate) fn lower_modules(front: &Frontend, sources: &SourceMap) -> Result<Vec
             },
             sources,
         };
-        let mut unit = lower_module(&checked.thir, &cx)?;
-        count_and_check(&mut unit)?;
-        units.push(unit);
+        let lowered = lower_items(&checked.thir, &|def| reach.contains(def), &cx);
+        if let Some(mut unit) = unsupported.take(lowered)? {
+            count_and_check(&mut unit)?;
+            units.push(unit);
+        }
     }
-    Ok(units)
+    if let Some(entry) = unsupported.take(lower_main_entry(front, sources, main))? {
+        units.push(entry);
+    }
+    if unsupported.is_empty() {
+        Ok(Ok(units))
+    } else {
+        Ok(Err(unsupported.into_diagnostics()))
+    }
+}
+
+fn checked(front: &Frontend, module: ModuleId) -> Result<&crate::frontend::Checked, Ice> {
+    front
+        .checked(module)
+        .ok_or_else(|| Ice::new(format!("module {module:?} was not checked")))
 }
 
 /// The entry unit with the thunk of `main` (D-137).
-pub(crate) fn lower_main_entry(
+fn lower_main_entry(
     front: &Frontend,
     sources: &SourceMap,
     main: &thir::FnDef,
-) -> Result<MirModule, Ice> {
+) -> Result<MirModule, cheby_mir::LowerError> {
     let mut all: Vec<ModuleId> = front.order.clone();
     all.sort_unstable();
     let deps = DepView::new(&front.set, &all);

@@ -1,0 +1,36 @@
+//! The operator interfaces (§8.7, D-169). A type satisfies one when its
+//! module declares the function with the matching signature (§8.2).
+//!
+//! Operators work without importing this module. Only naming an interface,
+//! in a bound or in `dyn`, needs `import std::ops`. `Show` is in the
+//! prelude, not here (D-112).
+
+/// `a + b`.
+pub interface Add {
+  fn add(Self, Self) -> Self
+}
+
+/// `a - b`.
+pub interface Sub {
+  fn sub(Self, Self) -> Self
+}
+
+/// `a * b`.
+pub interface Mul {
+  fn mul(Self, Self) -> Self
+}
+
+/// `a / b`.
+pub interface Div {
+  fn div(Self, Self) -> Self
+}
+
+/// `-a`.
+pub interface Neg {
+  fn neg(Self) -> Self
+}
+
+/// `a < b`, `a <= b`, `a > b` and `a >= b`.
+pub interface Compare {
+  fn compare(Self, Self) -> Order
+}

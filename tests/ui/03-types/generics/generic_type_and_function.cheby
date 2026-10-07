@@ -1,0 +1,10 @@
+// @mode: check-pass
+// @decisions: D-049
+//! Top-level functions and type declarations may have type parameters
+//! (§3.12.1).
+
+pub type Pair<A, B> { first: A, second: B }
+
+pub fn swap<A, B>(pair: Pair<A, B>) -> Pair<B, A> {
+  Pair { first: pair.second, second: pair.first }
+}

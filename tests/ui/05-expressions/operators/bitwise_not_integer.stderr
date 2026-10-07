@@ -1,0 +1,17 @@
+error[E0072]: `&` cannot be applied to `Bool`
+ --> tests/ui/05-expressions/operators/bitwise_not_integer.cheby:6:3
+  |
+6 |   a & b
+  |   ^^^^^ `&` on `Bool`
+  |
+  = note: `&` is defined only on the integer types and cannot be overloaded
+  = help: for logical and, write `&&`
+
+error[E0072]: `<<` cannot be applied to `Float`
+  --> tests/ui/05-expressions/operators/bitwise_not_integer.cheby:10:3
+   |
+10 |   x << 1.0
+   |   ^^^^^^^^ `<<` on `Float`
+   |
+   = note: `<<` is defined only on the integer types and cannot be overloaded
+

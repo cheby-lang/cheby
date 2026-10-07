@@ -1,0 +1,15 @@
+// @mode: check-fail
+// @decisions: D-113
+//! A unit constructor pattern is the name alone, and a positional one has
+//! its fields (§6.4).
+
+fn describe(value: Option<Int>) -> Int {
+  case value {
+    None(x) => x
+    Some => 1
+  }
+}
+
+fn main() {
+  assert describe(None) == 0
+}

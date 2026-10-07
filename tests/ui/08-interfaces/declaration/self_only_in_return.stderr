@@ -1,0 +1,9 @@
+error[E0066]: interface function `default` must take `Self` in a parameter
+ --> tests/ui/08-interfaces/declaration/self_only_in_return.cheby:7:6
+  |
+7 |   fn default() -> Self
+  |      ^^^^^^^ `Self` appears in no parameter
+  |
+  = note: the type that satisfies the interface is found from the arguments, so a function with `Self` only in its result cannot be declared in v1 (§8.1, D-209)
+  = help: add a `Self` parameter, or construct values with an ordinary value such as a decoder
+

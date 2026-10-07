@@ -1,0 +1,14 @@
+// @mode: check-fail
+// @decisions: D-053
+//! A list pattern matches only lists.
+
+fn first(text: String) -> String {
+  case text {
+    [c, ..] => c
+    _ => ""
+  }
+}
+
+fn main() {
+  assert first("ab") == "a"
+}

@@ -14,6 +14,9 @@
 //! 5. Across the whole program, like a linker: every native symbol bound
 //!    by an `@external` has one C signature (E0054). The first binding of
 //!    each symbol is kept for E0053 when `cheby run` cannot resolve it.
+//! 6. For `cheby check` only, the whole-package warnings over every
+//!    checked module of the package (D-152, D-266). `cheby run` skips them
+//!    so the edit-run path stays local (GAP(package-warnings-in-run)).
 //!
 //! Every output is in a deterministic order (D-264).
 
@@ -35,7 +38,9 @@ use cheby_resolve::{
     collect_imports, cycle_diagnostic, resolve_import_targets, resolve_module,
 };
 use cheby_syntax::SyntaxTree;
-use cheby_types::{TypesInput, build_interface, check_bodies, thir};
+use cheby_types::{
+    PackageModule, TypesInput, build_interface, check_bodies, package_warnings, thir,
+};
 
 use crate::{Error, Package, parse_file, std_lib};
 
@@ -234,14 +239,25 @@ fn get<T>(v: &[T], module: ModuleId) -> Result<&T, Ice> {
         .ok_or_else(|| Ice::new(format!("no data for module {module:?}")))
 }
 
+/// Which command the front end runs for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Mode {
+    /// `cheby check`: every check, the whole-package warnings included.
+    Check,
+    /// Building to run or dump: the whole-package warnings are skipped
+    /// (D-266, GAP(package-warnings-in-run)).
+    Build,
+}
+
 /// Runs name resolution and type checking over `package`, which has no
 /// phase-A errors. Diagnostics are pushed unsorted.
 pub(crate) fn run(
     package: Package,
+    mode: Mode,
     sources: &mut SourceMap,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<Frontend, Error> {
-    run_inner(package, sources, diagnostics).map_err(Error::from)
+    run_inner(package, mode, sources, diagnostics).map_err(Error::from)
 }
 
 #[expect(
@@ -250,6 +266,7 @@ pub(crate) fn run(
 )]
 fn run_inner(
     package: Package,
+    mode: Mode,
     sources: &mut SourceMap,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<Frontend, Ice> {
@@ -402,6 +419,9 @@ fn run_inner(
     let mut checked: Vec<Option<Checked>> = (0..modules.len()).map(|_| None).collect();
     let mut built = Vec::new();
     let mut natives = BTreeMap::new();
+    // The resolutions of the package's modules, for the whole-package
+    // warnings of `cheby check`.
+    let mut local_resolved: Vec<(ModuleId, ResolvedModule)> = Vec::new();
     for node in order {
         let id = ModuleId::from_u32(node);
         if id == ModuleId::BUILTIN {
@@ -455,6 +475,37 @@ fn run_inner(
             *slot = Some(Checked { deps, thir });
         }
         built.push(id);
+        if mode == Mode::Check && info.package == PackageId::LOCAL {
+            local_resolved.push((id, resolved));
+        }
+    }
+    if mode == Mode::Check {
+        let mut package_modules = Vec::with_capacity(local_resolved.len());
+        for (id, resolved) in &local_resolved {
+            let module = get(&checked, *id)?
+                .as_ref()
+                .ok_or_else(|| Ice::new("a checked module without its bodies"))?;
+            let tree = get(&trees, *id)?
+                .as_ref()
+                .ok_or_else(|| Ice::new("a checked module without its syntax tree"))?;
+            let own = set
+                .get(*id)
+                .ok_or_else(|| Ice::new("a checked module without its interface"))?;
+            package_modules.push(PackageModule {
+                input: TypesInput {
+                    module: *id,
+                    package: PackageId::LOCAL,
+                    tree,
+                    resolved,
+                    deps: DepView::new(&set, &module.deps),
+                    modules: &modules,
+                    globals: &globals,
+                },
+                own,
+                thir: &module.thir,
+            });
+        }
+        diagnostics.extend(package_warnings(&package_modules)?);
     }
     Ok(Frontend {
         globals,

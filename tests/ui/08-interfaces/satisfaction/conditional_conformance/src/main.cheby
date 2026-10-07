@@ -1,0 +1,22 @@
+// @mode: check-fail
+// @decisions: D-064
+//! `Boxed<T>` satisfies `Show` exactly for the `T` that do, so
+//! `Boxed<Label>` is `Show` and `Boxed<fn() -> Nil>` is not (§8.2.2).
+
+import app::boxed
+import std::io
+
+type Label {
+  text: String,
+}
+
+fn show(label: Label) -> String {
+  label.text
+}
+
+fn main() {
+  let label = boxed::Boxed(Label { text: "ok" })
+  io::println("{label}")
+  let action = boxed::Boxed(fn() { Nil })
+  io::println("{action}")
+}

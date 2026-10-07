@@ -1,0 +1,15 @@
+// @mode: check-fail
+// @decisions: D-113
+//! Every alternative of a pattern must bind the same names.
+
+import std::io
+
+fn describe(result: Result<String, String>) -> String {
+  case result {
+    Ok(text) | Err(_) => text
+  }
+}
+
+fn main() {
+  io::println(describe(Ok("done")))
+}

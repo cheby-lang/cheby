@@ -1,0 +1,19 @@
+// @mode: check-pass
+// @decisions: D-063, D-117
+//! A type parameter of a function may have interface bounds, combined
+//! with `+` (§8.4).
+
+pub interface Describe {
+  fn describe(Self) -> String
+}
+
+pub interface Weigh {
+  fn weight(Self) -> Int
+}
+
+pub fn heavier<T: Describe + Weigh>(a: T, b: T) -> String {
+  case Weigh::weight(a) > Weigh::weight(b) {
+    True => Describe::describe(a)
+    False => Describe::describe(b)
+  }
+}

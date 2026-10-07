@@ -1,0 +1,11 @@
+//! An angle whose `show` is less visible than the type (§8.2).
+
+pub type Angle {
+  radians: Float,
+}
+
+/// Package-visible, so it does not count toward `Show` for the `pub`
+/// type `Angle`.
+fn show(a: Angle) -> String {
+  "{a.radians:?} rad"
+}

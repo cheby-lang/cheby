@@ -1,0 +1,6 @@
+error[E0047]: mismatched types
+ --> tests/ui/05-expressions/case/condition_not_bool.cheby:7:5
+  |
+7 |     n => "nonzero"
+  |     ^ expected `Bool`, found `Int`
+

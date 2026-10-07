@@ -1,0 +1,16 @@
+// @mode: check-fail
+// @decisions: D-071
+//! `x.name` reads only a field that the type declares.
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+fn depth(p: Point) -> Int {
+  p.z
+}
+
+fn main() {
+  assert depth(Point { x: 0, y: 0 }) == 0
+}

@@ -1,0 +1,10 @@
+error[E0063]: `Inner` does not satisfy `Show`
+  --> tests/ui/08-interfaces/show/field_path.cheby:18:24
+   |
+18 |   io::println("inner: {outer.inner}")
+   |                        ^^^^^^^^^^^ interpolated here
+   |
+   = note: this module declares `Inner` but has no function `show(Inner) -> String` (§8.2, D-061)
+   = help: add a function `show(Inner) -> String` to this module
+   = help: write `{outer.inner:?}` to use debug printing instead (D-086)
+

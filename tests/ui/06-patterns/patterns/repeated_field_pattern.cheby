@@ -1,0 +1,17 @@
+// @mode: check-fail
+// @decisions: D-113
+//! A named-field pattern lists each field at most once.
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+fn x_of(p: Point) -> Int {
+  let Point { x: a, x: b, .. } = p
+  a + b
+}
+
+fn main() {
+  assert x_of(Point { x: 1, y: 2 }) == 2
+}

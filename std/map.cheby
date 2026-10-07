@@ -1,0 +1,122 @@
+//! The hashed map `Map<K, V>`, a persistent hash array mapped trie (§3.8,
+//! D-039).
+//!
+//! `Map` is a builtin item whose home module is this one
+//! (GAP(kernel-types), D-447), so it is not declared here. As in the spec's
+//! signatures, it is written unqualified in this module
+//! (GAP(home-type-in-scope)). Keys need no interface: they are compared
+//! with `==` and hashed with the built-in structural hash (§3.13).
+//! Iteration order depends on a per-process seed (D-093), so
+//! `to_sorted_list` gives an order that is the same on every run. The
+//! kernels are the functions map.md lists (D-274); the rest is written in
+//! Cheby over them.
+
+import std::list
+import std::ops::{Compare}
+
+// Building
+
+/// Returns an empty map.
+@external(native, "cheby_map_new")
+@external(js, "./map.mjs", "new")
+pub fn new<K, V>() -> Map<K, V>
+
+/// Returns a map with the given pairs, the last value winning for a repeated key (D-329).
+@external(native, "cheby_map_from_list")
+@external(js, "./map.mjs", "from_list")
+pub fn from_list<K, V>(pairs: List<(K, V)>) -> Map<K, V>
+
+// Size
+
+/// Returns the number of keys (D-301).
+@external(native, "cheby_map_size")
+@external(js, "./map.mjs", "size")
+pub fn size<K, V>(m: Map<K, V>) -> Int
+
+/// Tells whether the map has no keys.
+@external(native, "cheby_map_is_empty")
+@external(js, "./map.mjs", "is_empty")
+pub fn is_empty<K, V>(m: Map<K, V>) -> Bool
+
+// Lookup
+
+/// Returns the value stored under `key`.
+@external(native, "cheby_map_get")
+@external(js, "./map.mjs", "get")
+pub fn get<K, V>(m: Map<K, V>, key: K) -> Option<V>
+
+/// Tells whether `key` is in the map.
+@external(native, "cheby_map_has_key")
+@external(js, "./map.mjs", "has_key")
+pub fn has_key<K, V>(m: Map<K, V>, key: K) -> Bool
+
+// Updating
+
+/// Returns the map with `value` stored under `key`, replacing any value already there.
+@external(native, "cheby_map_insert")
+@external(js, "./map.mjs", "insert")
+pub fn insert<K, V>(m: Map<K, V>, key: K, value: V) -> Map<K, V>
+
+/// Returns the map without `key`, or unchanged when `key` is not in it.
+@external(native, "cheby_map_remove")
+@external(js, "./map.mjs", "remove")
+pub fn remove<K, V>(m: Map<K, V>, key: K) -> Map<K, V>
+
+/// Calls `update` once with the value under `key`, if any, and stores its result there.
+@external(native, "cheby_map_upsert")
+@external(js, "./map.mjs", "upsert")
+pub fn upsert<K, V>(m: Map<K, V>, key: K, update: fn(Option<V>) -> V) -> Map<K, V>
+
+/// Returns the entries of both maps, the value from `other` winning on a shared key.
+pub fn merge<K, V>(m: Map<K, V>, other: Map<K, V>) -> Map<K, V> {
+  list::fold(to_list(other), m, fn(merged, (key, value)) { insert(merged, key, value) })
+}
+
+// Iterating
+
+/// Returns the keys, in the map's per-process order (D-093).
+@external(native, "cheby_map_keys")
+@external(js, "./map.mjs", "keys")
+pub fn keys<K, V>(m: Map<K, V>) -> List<K>
+
+/// Returns the values, in the same order as `keys` returns the keys.
+@external(native, "cheby_map_values")
+@external(js, "./map.mjs", "values")
+pub fn values<K, V>(m: Map<K, V>) -> List<V>
+
+/// Returns the entries as pairs, in the same order as `keys` returns the keys (D-093).
+@external(native, "cheby_map_to_list")
+@external(js, "./map.mjs", "to_list")
+pub fn to_list<K, V>(m: Map<K, V>) -> List<(K, V)>
+
+/// Returns the entries as pairs sorted by key, the same on every run (D-093, D-344).
+pub fn to_sorted_list<K: Compare, V>(m: Map<K, V>) -> List<(K, V)> {
+  list::sort_with(to_list(m), fn((a, _), (b, _)) { Compare::compare(a, b) })
+}
+
+/// Combines the entries, starting from `initial`, in the map's per-process order (D-093).
+pub fn fold<K, V, A>(m: Map<K, V>, initial: A, f: fn(A, K, V) -> A) -> A {
+  list::fold(to_list(m), initial, fn(found, (key, value)) { f(found, key, value) })
+}
+
+/// Calls `f` once per entry, in the map's per-process order (D-093), for its effects.
+pub fn each<K, V>(m: Map<K, V>, f: fn(K, V)) {
+  list::each(to_list(m), fn((key, value)) { f(key, value) })
+}
+
+// Transforming
+
+/// Returns a map with the same keys, each value replaced by `f` of its key and value.
+pub fn map_values<K, V, W>(m: Map<K, V>, f: fn(K, V) -> W) -> Map<K, W> {
+  list::fold(to_list(m), new(), fn(mapped, (key, value)) { insert(mapped, key, f(key, value)) })
+}
+
+/// Returns the entries for which `keep` returns `True`.
+pub fn filter<K, V>(m: Map<K, V>, keep: fn(K, V) -> Bool) -> Map<K, V> {
+  list::fold(to_list(m), m, fn(kept, (key, value)) {
+    case keep(key, value) {
+      True => kept
+      False => remove(kept, key)
+    }
+  })
+}

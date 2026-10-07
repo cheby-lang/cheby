@@ -1,0 +1,204 @@
+//! The built-in `I64`, a signed 64-bit integer: constants, conversions,
+//! parsing and text, comparison, and checked and wrapping arithmetic
+//! (the integer families of `docs/stdlib/README.md`, D-350).
+//!
+//! `I64` itself is a builtin item whose home module is this one (D-447).
+
+// Constants
+
+/// The smallest `I64`.
+pub const min_value: I64 = -9_223_372_036_854_775_808
+
+/// The largest `I64`.
+pub const max_value: I64 = 9_223_372_036_854_775_807
+
+// Conversions
+
+/// Returns `n` as an `I64`. Every `Int` fits.
+@external(native, "cheby_i64_from_int")
+@external(js, "./i64.mjs", "from_int")
+pub fn from_int(n: Int) -> I64
+
+/// Returns `n` as an `I64`. Every `I8` fits.
+@external(native, "cheby_i64_from_i8")
+@external(js, "./i64.mjs", "from_i8")
+pub fn from_i8(n: I8) -> I64
+
+/// Returns `n` as an `I64`. Every `I16` fits.
+@external(native, "cheby_i64_from_i16")
+@external(js, "./i64.mjs", "from_i16")
+pub fn from_i16(n: I16) -> I64
+
+/// Returns `n` as an `I64`. Every `I32` fits.
+@external(native, "cheby_i64_from_i32")
+@external(js, "./i64.mjs", "from_i32")
+pub fn from_i32(n: I32) -> I64
+
+/// Returns `n` as an `I64`. Every `U8` fits.
+@external(native, "cheby_i64_from_u8")
+@external(js, "./i64.mjs", "from_u8")
+pub fn from_u8(n: U8) -> I64
+
+/// Returns `n` as an `I64`. Every `U16` fits.
+@external(native, "cheby_i64_from_u16")
+@external(js, "./i64.mjs", "from_u16")
+pub fn from_u16(n: U16) -> I64
+
+/// Returns `n` as an `I64`. Every `U32` fits.
+@external(native, "cheby_i64_from_u32")
+@external(js, "./i64.mjs", "from_u32")
+pub fn from_u32(n: U32) -> I64
+
+/// Returns `n` as an `I64`, or `Err(Nil)` when it does not fit.
+@external(native, "cheby_i64_from_u64")
+@external(js, "./i64.mjs", "from_u64")
+pub fn from_u64(n: U64) -> Result<I64, Nil>
+
+// Parsing and text
+
+/// Reads an `I64` written as an optional `-` and ASCII decimal digits (D-312).
+@external(native, "cheby_i64_parse")
+@external(js, "./i64.mjs", "parse")
+pub fn parse(text: String) -> Result<I64, Nil>
+
+/// Reads an `I64` written in `base`, from 2 to 36, as an optional `-` and digits.
+@external(native, "cheby_i64_parse_base")
+@external(js, "./i64.mjs", "parse_base")
+pub fn parse_base(text: String, base: Int) -> Result<I64, Nil>
+
+/// Returns `n` in decimal. It makes `I64` satisfy `Show`.
+@external(native, "cheby_i64_show")
+@external(js, "./i64.mjs", "show")
+pub fn show(n: I64) -> String
+
+// Comparison
+
+/// Orders two `I64` values. It makes `I64` satisfy `Compare`.
+pub fn compare(a: I64, b: I64) -> Order {
+  case {
+    a < b => Less
+    a > b => Greater
+    _ => Equal
+  }
+}
+
+/// Returns the smaller of `a` and `b`, and `a` when they are `Equal`.
+pub fn min(a: I64, b: I64) -> I64 {
+  case {
+    b < a => b
+    _ => a
+  }
+}
+
+/// Returns the larger of `a` and `b`, and `a` when they are `Equal`.
+pub fn max(a: I64, b: I64) -> I64 {
+  case {
+    b > a => b
+    _ => a
+  }
+}
+
+// Arithmetic
+
+/// Returns `a + b`, and panics when the result does not fit. It makes `I64` satisfy `Add`.
+pub fn add(a: I64, b: I64) -> I64 {
+  a + b
+}
+
+/// Returns `a - b`, and panics when the result does not fit. It makes `I64` satisfy `Sub`.
+pub fn sub(a: I64, b: I64) -> I64 {
+  a - b
+}
+
+/// Returns `a * b`, and panics when the result does not fit. It makes `I64` satisfy `Mul`.
+pub fn mul(a: I64, b: I64) -> I64 {
+  a * b
+}
+
+/// Returns `a / b` toward zero, panicking like `/`. It makes `I64` satisfy `Div`.
+pub fn div(a: I64, b: I64) -> I64 {
+  a / b
+}
+
+/// Returns `a % b`, with the sign of `a`, and panics on a zero divisor.
+pub fn rem(a: I64, b: I64) -> I64 {
+  a % b
+}
+
+/// Returns `-n`, and panics when it does not fit. It makes `I64` satisfy `Neg`.
+pub fn neg(n: I64) -> I64 {
+  -n
+}
+
+/// Returns `n` without its sign, and panics for `min_value`, like `neg`.
+pub fn abs(n: I64) -> I64 {
+  case {
+    n < 0 => -n
+    _ => n
+  }
+}
+
+// Checked arithmetic
+
+/// Returns `Ok(a + b)`, or `Err(Nil)` when the sum does not fit (D-309).
+@external(native, "cheby_i64_checked_add")
+@external(js, "./i64.mjs", "checked_add")
+pub fn checked_add(a: I64, b: I64) -> Result<I64, Nil>
+
+/// Returns `Ok(a - b)`, or `Err(Nil)` when the difference does not fit (D-309).
+@external(native, "cheby_i64_checked_sub")
+@external(js, "./i64.mjs", "checked_sub")
+pub fn checked_sub(a: I64, b: I64) -> Result<I64, Nil>
+
+/// Returns `Ok(a * b)`, or `Err(Nil)` when the product does not fit (D-309).
+@external(native, "cheby_i64_checked_mul")
+@external(js, "./i64.mjs", "checked_mul")
+pub fn checked_mul(a: I64, b: I64) -> Result<I64, Nil>
+
+/// Returns `Ok(a / b)`, or `Err(Nil)` for a zero divisor and for `min_value / -1` (D-356).
+pub fn checked_div(a: I64, b: I64) -> Result<I64, Nil> {
+  // Dividing by -1 overflows exactly when negating does.
+  case b {
+    0 => Err(Nil)
+    -1 => checked_neg(a)
+    _ => Ok(a / b)
+  }
+}
+
+/// Returns `Ok(a % b)`, or `Err(Nil)` for a zero divisor (D-356).
+pub fn checked_rem(a: I64, b: I64) -> Result<I64, Nil> {
+  case b {
+    0 => Err(Nil)
+    _ => Ok(a % b)
+  }
+}
+
+/// Returns `Ok(-n)`, or `Err(Nil)` for `min_value` (D-309).
+pub fn checked_neg(n: I64) -> Result<I64, Nil> {
+  case {
+    n == min_value => Err(Nil)
+    _ => Ok(-n)
+  }
+}
+
+// Wrapping arithmetic
+
+/// Returns `a + b` modulo 2^64 (D-025).
+@external(native, "cheby_i64_wrapping_add")
+@external(js, "./i64.mjs", "wrapping_add")
+pub fn wrapping_add(a: I64, b: I64) -> I64
+
+/// Returns `a - b` modulo 2^64 (D-025).
+@external(native, "cheby_i64_wrapping_sub")
+@external(js, "./i64.mjs", "wrapping_sub")
+pub fn wrapping_sub(a: I64, b: I64) -> I64
+
+/// Returns `a * b` modulo 2^64 (D-025).
+@external(native, "cheby_i64_wrapping_mul")
+@external(js, "./i64.mjs", "wrapping_mul")
+pub fn wrapping_mul(a: I64, b: I64) -> I64
+
+/// Returns `-n` modulo 2^64 (D-025).
+@external(native, "cheby_i64_wrapping_neg")
+@external(js, "./i64.mjs", "wrapping_neg")
+pub fn wrapping_neg(n: I64) -> I64

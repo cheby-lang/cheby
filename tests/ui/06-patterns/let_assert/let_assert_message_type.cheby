@@ -1,0 +1,8 @@
+// @mode: check-fail
+// @decisions: D-159
+//! The message of a `let assert` is a `String` (§11.4).
+
+fn main() {
+  let assert Some(n) = Some(1) as 404
+  assert n == 1
+}

@@ -8,22 +8,36 @@
 //!   return [`thir`]. A body with an error is not returned, so MIR never
 //!   sees errors.
 //! - [`infer`] (C1) holds the body-local inference types and unification.
+//! - [`package_warnings`] (C14) is the whole-package warning pass, which
+//!   the driver runs after every local module is checked, for
+//!   `cheby check` only (D-266).
+//!
+//! Internal passes (plan §4.4): `decl` and `ifaces` check declarations at
+//! the end of [`build_interface`]; `exhaust` checks patterns of each body
+//! without errors; `targets`, `consts` and `warnings` run over the
+//! module's THIR at the end of [`check_bodies`].
 //!
 //! Locality (D-246): the checker of module M reads M's tree, M's
 //! resolution and the [`ModuleInterface`]s of M's dependencies through a
 //! [`DepView`], never another module's tree, resolution or bodies.
 //!
-//! The semantic support gate (D-451) reports E0038 for well-formed
-//! code the vertical slice cannot run: any type other than `String` and
-//! `Nil`.
+//! The front end checks every construct; what the back end cannot lower
+//! yet is reported by MIR lowering (E0038, D-451, plan §8).
 
 mod check;
-mod gate;
+mod consts;
+mod decl;
+mod exhaust;
+mod ifaces;
 pub mod infer;
 mod lower_ty;
 mod sig;
+mod targets;
 pub mod thir;
+mod warnings;
 
+#[cfg(test)]
+mod test_support;
 #[cfg(test)]
 mod tests;
 
@@ -37,6 +51,7 @@ use cheby_syntax::SyntaxTree;
 
 pub use check::{check_bodies, check_item};
 pub use sig::build_interface;
+pub use warnings::{PackageModule, package_warnings};
 
 /// What checking module M needs (D-246).
 #[derive(Clone, Copy, Debug)]

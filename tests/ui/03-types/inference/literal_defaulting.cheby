@@ -1,0 +1,20 @@
+// @mode: check-pass
+// @decisions: D-084, D-133
+//! An integer literal takes its type from a constraint later in the body;
+//! only what nothing fixes defaults to `Int` and `Float` (§3.3.4).
+
+pub fn small() -> U8 {
+  let x = 1
+  let y = 2
+  let total = x + y
+  total
+}
+
+pub fn defaults() -> Float {
+  let count = 3
+  let ratio = 1.5
+  case count > 2 {
+    True => ratio
+    False => 0.0
+  }
+}

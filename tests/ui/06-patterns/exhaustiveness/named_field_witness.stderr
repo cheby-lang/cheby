@@ -1,0 +1,8 @@
+error[E0061]: `case` does not cover every value
+  --> tests/ui/06-patterns/exhaustiveness/named_field_witness.cheby:12:8
+   |
+12 |   case event {
+   |        ^^^^^ `Click { .. }` and `Key { .. }` not covered
+   |
+   = help: add an arm for each missing value, or a `_` arm
+

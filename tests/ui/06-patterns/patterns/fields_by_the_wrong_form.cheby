@@ -1,0 +1,20 @@
+// @mode: check-fail
+// @decisions: D-113, D-138
+//! A named-field constructor is matched by field names, a positional one
+//! by position (§6.4).
+
+type Shape {
+  Circle { radius: Int },
+  Square(Int),
+}
+
+fn size(shape: Shape) -> Int {
+  case shape {
+    Circle(r) => r
+    Square { side } => side
+  }
+}
+
+fn main() {
+  assert size(Square(2)) == 2
+}

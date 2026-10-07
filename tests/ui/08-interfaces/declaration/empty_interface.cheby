@@ -1,0 +1,16 @@
+// @mode: check-pass
+// @decisions: D-166
+//! An interface with no functions is satisfied by every type, function
+//! types included (§8.1).
+
+interface Any
+
+fn keep<T: Any>(value: T) -> T {
+  value
+}
+
+fn main() {
+  let f = keep(fn(n: Int) { n })
+  let n = keep(f(2))
+  assert n == 2
+}

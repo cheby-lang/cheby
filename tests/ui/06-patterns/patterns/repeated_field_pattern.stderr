@@ -1,0 +1,8 @@
+error[E0059]: field `x` is listed twice in this pattern
+  --> tests/ui/06-patterns/patterns/repeated_field_pattern.cheby:11:21
+   |
+11 |   let Point { x: a, x: b, .. } = p
+   |               -     ^ listed again here
+   |               |
+   |               first listed here
+

@@ -129,6 +129,12 @@ pub fn def_path(
     if def.module != ModuleId::BUILTIN {
         out.push_str(&modules.try_get(def.module)?.path.to_string());
         out.push_str("::");
+    } else if !crate::builtin::is_prelude(def)
+        && let Some(&(_, segment)) = crate::builtin::HOMES.iter().find(|(d, _)| *d == def)
+    {
+        // `std::map::Map`: builtin, but named through its home module.
+        out.push_str(&crate::builtin::home_path(segment).to_string());
+        out.push_str("::");
     }
     if item.kind == DefKind::InterfaceFn {
         let parent = item
@@ -189,6 +195,10 @@ mod tests {
         assert_eq!(
             def_path(builtin::SHOW_FN, None, &view, &modules, &globals.names).unwrap(),
             "Show::show"
+        );
+        assert_eq!(
+            def_path(builtin::MAP, None, &view, &modules, &globals.names).unwrap(),
+            "std::map::Map"
         );
     }
 }

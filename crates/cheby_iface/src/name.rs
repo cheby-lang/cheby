@@ -88,6 +88,11 @@ symbols! {
     SELF_TY = 40 "Self";
     T = 41 "T";
     E = 42 "E";
+    K = 43 "K";
+    V = 44 "V";
+    MAP = 45 "Map";
+    SET = 46 "Set";
+    BYTES = 47 "Bytes";
 }
 
 /// An append-only, thread-safe string interner.

@@ -1,0 +1,14 @@
+// @mode: check-fail
+// @decisions: D-235
+//! Where the context expects a type, every arm is checked against it.
+
+fn answer(flag: Bool) -> String {
+  case flag {
+    True => "yes"
+    False => Nil
+  }
+}
+
+fn main() {
+  assert answer(True) == "yes"
+}

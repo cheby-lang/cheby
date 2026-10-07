@@ -1,0 +1,13 @@
+// @mode: check-pass
+// @decisions: D-076
+//! A tuple's elements are checked against an expected tuple type
+//! (§5.12).
+
+pub fn pair() -> (U8, String) {
+  (1, "one")
+}
+
+pub fn swap(p: (Int, String)) -> (String, Int) {
+  let (n, s) = p
+  (s, n)
+}

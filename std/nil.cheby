@@ -1,0 +1,10 @@
+//! The built-in `Nil`, the unit type: its text.
+//!
+//! `Nil` is a builtin item whose home module is this one (D-447, D-353).
+
+/// Returns `"Nil"`. It makes `Nil` satisfy `Show`.
+pub fn show(n: Nil) -> String {
+  case n {
+    Nil => "Nil"
+  }
+}

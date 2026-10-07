@@ -1,6 +1,8 @@
 //! Signatures and bodies (B7): every path, binding and local, the
-//! no-shadowing rule (E0044, §5.2.3, D-051, D-062), and the slice's
-//! resolution-level gate (functions as values, interface function paths).
+//! no-shadowing rule (E0044, §5.2.3, D-051, D-062), names bound twice in
+//! one pattern (E0044, §6.2), alternatives that bind different names
+//! (E0062, §6.7), and the opacity of constructors where they are used
+//! (E0043, §4.3.4).
 
 use cheby_diag::{Diagnostic, Span, codes};
 use cheby_iface::{DefId, DefIndex, DefKind, Ice, Name, Namespace, ParamIdx};
@@ -12,37 +14,20 @@ use cheby_syntax::ast::{
 };
 use rustc_hash::FxHashMap;
 
-use crate::gate::not_supported;
 use crate::paths::{PathCx, PathShape};
 use crate::{
     BodyRes, ItemStatus, LocalDecl, LocalId, LocalKind, Res, ResolveInput, ResolvedModule,
     ScopeSource,
 };
 
-/// Whether the slice's resolution-level gate is on. Unit tests turn it
-/// off to exercise the full resolver.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum Mode {
-    Slice,
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "only unit tests resolve without the gate")
-    )]
-    Full,
-}
-
 pub(crate) fn resolve_items(
     input: &ResolveInput<'_>,
     module: &mut ResolvedModule,
     diags: &mut Vec<Diagnostic>,
-    mode: Mode,
 ) -> Result<(), Ice> {
     let indexes: Vec<DefIndex> = module.items.indices().collect();
     for index in indexes {
         let item = module.items.try_get(index, "item")?;
-        // A function whose body the syntax gate rejected still has its
-        // signature resolved (D-246), but not its body.
-        let body_gated = item.status == ItemStatus::BodyUnsupported;
         if item.status == ItemStatus::Unsupported || item.parent.is_some() {
             continue;
         }
@@ -51,7 +36,7 @@ pub(crate) fn resolve_items(
             .node(item.node)
             .and_then(Item::cast)
             .ok_or_else(|| Ice::new("an item's node is not an item"))?;
-        let outcome = resolve_item(input, module, node, mode, !body_gated, diags)?;
+        let outcome = resolve_item(input, module, node, diags)?;
         if outcome.sig_unsupported {
             mark_unsupported(module, index);
             continue;
@@ -95,8 +80,6 @@ fn resolve_item(
     input: &ResolveInput<'_>,
     module: &ResolvedModule,
     item: Item<'_>,
-    mode: Mode,
-    with_body: bool,
     diags: &mut Vec<Diagnostic>,
 ) -> Result<Outcome, Ice> {
     let mut cx = Cx {
@@ -114,8 +97,8 @@ fn resolve_item(
         in_interface: false,
         sig_paths: FxHashMap::default(),
         in_sig: true,
-        mode,
         gated: Gated::default(),
+        later_fns: Vec::new(),
     };
     let mut has_body = false;
     match item {
@@ -127,7 +110,7 @@ fn resolve_item(
                 }
             }
             cx.ret(f.ret_type())?;
-            if let Some(body) = f.body().filter(|_| with_body) {
+            if let Some(body) = f.body() {
                 has_body = true;
                 cx.enter_body();
                 cx.push_scope();
@@ -144,16 +127,16 @@ fn resolve_item(
             if let Some(ty) = c.ty() {
                 cx.ty(ty)?;
             }
-            if let Some(value) = c.value().filter(|_| with_body) {
+            if let Some(value) = c.value() {
                 has_body = true;
                 cx.enter_body();
                 cx.push_scope();
-                cx.expr(value, false)?;
+                cx.expr(value)?;
                 cx.pop_scope();
             }
         }
         Item::Test(t) => {
-            if let Some(body) = t.body().filter(|_| with_body) {
+            if let Some(body) = t.body() {
                 has_body = true;
                 cx.enter_body();
                 cx.push_scope();
@@ -243,8 +226,22 @@ struct Cx<'a, 'd> {
     sig_paths: FxHashMap<NodeId, Res>,
     /// Whether types go to `sig_paths` rather than the body's paths.
     in_sig: bool,
-    mode: Mode,
     gated: Gated,
+    /// The local functions of the enclosing blocks that are not declared
+    /// yet, for the note on a use before the declaration (D-110).
+    later_fns: Vec<(Name, Span)>,
+}
+
+/// The names bound so far by one pattern, or by the patterns of one `case`
+/// arm, closure, local function or `use` (§6.2, §6.7).
+#[derive(Default)]
+struct PatState {
+    /// Every name bound, across alternatives, with its local: a name bound
+    /// in several alternatives is one local.
+    shared: FxHashMap<Name, LocalId>,
+    /// The names bound on the current path through the alternatives, with
+    /// where.
+    current: Vec<(Name, Span)>,
 }
 
 /// Where E0038 was reported for the item being resolved.
@@ -275,11 +272,6 @@ impl Cx<'_, '_> {
         self.paths.input.globals.names.get(name)
     }
 
-    fn gate(&mut self, span: Span, what: &str) {
-        self.diags.push(not_supported(span, what));
-        self.gated.set(self.in_sig);
-    }
-
     /// Moves a pending E0038 from path lookup (a name missing from a partly
     /// shipped std module) to the part being resolved.
     fn fold_path_gate(&mut self) {
@@ -297,19 +289,22 @@ impl Cx<'_, '_> {
     fn generics(&mut self, list: Option<TypeParamList<'_>>) -> Result<(), Ice> {
         let Some(list) = list else { return Ok(()) };
         let params: Vec<_> = list.params().collect();
+        let mut first: Vec<(Name, Span)> = Vec::new();
         for (n, param) in (0_u32..).zip(&params) {
             let Some(name) = param.name() else { continue };
             let interned = self.intern(name.text());
-            if self.generics.iter().any(|(g, _)| *g == interned) {
+            if let Some(&(_, earlier)) = first.iter().find(|(g, _)| *g == interned) {
                 self.diags.push(
                     Diagnostic::new(
                         codes::DUPLICATE_NAME,
                         format!("the type parameter `{}` is declared twice", name.text()),
                     )
-                    .with_primary(name.span(), ""),
+                    .with_primary(name.span(), "declared again here")
+                    .with_secondary(earlier, "first declared here"),
                 );
                 continue;
             }
+            first.push((interned, name.span()));
             self.generics.push((interned, ParamIdx::from_u32(n)));
         }
         for param in params {
@@ -512,51 +507,66 @@ impl Cx<'_, '_> {
 
     /// The statements of a block, in the current scope.
     fn block_contents(&mut self, block: Block<'_>) -> Result<(), Ice> {
+        let outer = self.later_fns.len();
         for stmt in block.stmts() {
-            self.stmt(stmt)?;
+            if let Stmt::LocalFn(f) = stmt
+                && let Some(name) = f.name()
+            {
+                let interned = self.intern(name.text());
+                self.later_fns.push((interned, name.span()));
+            }
         }
-        Ok(())
+        let result = block.stmts().try_for_each(|stmt| self.stmt(stmt));
+        self.later_fns.truncate(outer);
+        result
     }
 
     fn stmt(&mut self, stmt: Stmt<'_>) -> Result<(), Ice> {
         match stmt {
             Stmt::Let(s) => {
                 if let Some(value) = s.value() {
-                    self.expr(value, false)?;
+                    self.expr(value)?;
                 }
                 if let Some(ty) = s.ty() {
                     self.ty(ty)?;
                 }
                 if let Some(message) = s.message().and_then(cheby_syntax::ast::Message::value) {
-                    self.expr(message, false)?;
+                    self.expr(message)?;
                 }
                 if let Some(pat) = s.pattern() {
-                    self.pat(pat, LocalKind::Let, &mut None)?;
+                    self.pat(pat, LocalKind::Let, &mut PatState::default())?;
                 }
             }
             Stmt::Use(s) => {
                 if let Some(value) = s.value() {
-                    self.expr(value, false)?;
+                    self.expr(value)?;
                 }
+                let mut state = PatState::default();
                 for binder in s.binders() {
                     if let Some(ty) = binder.ty() {
                         self.ty(ty)?;
                     }
                     if let Some(pat) = binder.pattern() {
-                        self.pat(pat, LocalKind::UseBinder, &mut None)?;
+                        self.pat(pat, LocalKind::UseBinder, &mut state)?;
                     }
                 }
             }
             Stmt::Assert(s) => {
                 if let Some(cond) = s.condition() {
-                    self.expr(cond, false)?;
+                    self.expr(cond)?;
                 }
                 if let Some(message) = s.message().and_then(cheby_syntax::ast::Message::value) {
-                    self.expr(message, false)?;
+                    self.expr(message)?;
                 }
             }
             Stmt::LocalFn(f) => {
                 if let Some(name) = f.name() {
+                    // In scope from here on, and inside its own body
+                    // (D-110).
+                    let span = name.span();
+                    if let Some(pos) = self.later_fns.iter().rposition(|&(_, s)| s == span) {
+                        self.later_fns.remove(pos);
+                    }
                     self.bind(name, LocalKind::LocalFn, f.syntax().id())?;
                 }
                 self.push_scope();
@@ -567,28 +577,28 @@ impl Cx<'_, '_> {
                 }
                 self.pop_scope();
             }
-            Stmt::Expr(e) => self.expr(e, false)?,
+            Stmt::Expr(e) => self.expr(e)?,
         }
         Ok(())
     }
 
-    /// Closure and local-function parameters: patterns with optional types.
+    /// Closure and local-function parameters: irrefutable patterns with
+    /// optional types (D-242). A name bound twice among them is E0044.
     fn params<'t>(&mut self, params: impl Iterator<Item = Param<'t>>) -> Result<(), Ice> {
+        let mut state = PatState::default();
         for param in params {
             if let Some(ty) = param.ty() {
                 self.ty(ty)?;
             }
             if let Some(pat) = param.pattern() {
-                self.pat(pat, LocalKind::ClosureParam, &mut None)?;
-            } else if let Some(name) = param.name() {
-                self.bind(name, LocalKind::ClosureParam, param.syntax().id())?;
+                self.pat(pat, LocalKind::ClosureParam, &mut state)?;
             }
         }
         Ok(())
     }
 
     #[expect(clippy::too_many_lines, reason = "one arm per expression kind")]
-    fn expr(&mut self, expr: Expr<'_>, callee: bool) -> Result<(), Ice> {
+    fn expr(&mut self, expr: Expr<'_>) -> Result<(), Ice> {
         match expr {
             Expr::Literal(_) | Expr::Hole(_) => {}
             Expr::String(s) => {
@@ -596,7 +606,7 @@ impl Cx<'_, '_> {
                     if let StringPart::Interpolation(interp) = part
                         && let Some(root) = interp.root()
                     {
-                        let res = self.name_ref(root);
+                        let res = self.name_ref(root)?;
                         self.res.names.insert(interp.syntax().id(), res);
                     }
                 }
@@ -608,17 +618,23 @@ impl Cx<'_, '_> {
                     }
                 }
                 if let Some(path) = p.path() {
-                    let res = self.value_path(path, callee)?;
+                    let res = self.value_path(path)?;
                     self.record_path(path, res);
                 }
             }
             Expr::Record(r) => {
                 // A record update names the type, a construction the
-                // constructor (§5.11).
+                // constructor (§5.11). Either needs the type's structure
+                // to be visible here (§4.3.4).
                 if let Some(path) = r.path() {
                     let res = if r.is_update() {
-                        self.paths
-                            .type_path(path, &self.generics, self.in_interface, self.diags)?
+                        let res = self.paths.type_path(
+                            path,
+                            &self.generics,
+                            self.in_interface,
+                            self.diags,
+                        )?;
+                        self.structure(res, path.significant_span())?
                     } else {
                         self.ctor_path(path)?
                     };
@@ -627,17 +643,17 @@ impl Cx<'_, '_> {
                 for entry in r.entries() {
                     match entry {
                         RecordEntry::Field(field) => match field.value() {
-                            Some(value) => self.expr(value, false)?,
+                            Some(value) => self.expr(value)?,
                             None => {
                                 if let Some(name) = field.name() {
-                                    let res = self.name_ref(name);
+                                    let res = self.name_ref(name)?;
                                     self.res.names.insert(field.syntax().id(), res);
                                 }
                             }
                         },
                         RecordEntry::Spread(spread) => {
                             if let Some(value) = spread.value() {
-                                self.expr(value, false)?;
+                                self.expr(value)?;
                             }
                         }
                     }
@@ -645,21 +661,21 @@ impl Cx<'_, '_> {
             }
             Expr::Tuple(t) => {
                 for elem in t.elements() {
-                    self.expr(elem, false)?;
+                    self.expr(elem)?;
                 }
             }
             Expr::Paren(p) => {
                 if let Some(inner) = p.inner() {
-                    self.expr(inner, callee)?;
+                    self.expr(inner)?;
                 }
             }
             Expr::List(l) => {
                 for item in l.items() {
                     match item {
-                        ListItem::Expr(e) => self.expr(e, false)?,
+                        ListItem::Expr(e) => self.expr(e)?,
                         ListItem::Spread(s) => {
                             if let Some(value) = s.value() {
-                                self.expr(value, false)?;
+                                self.expr(value)?;
                             }
                         }
                     }
@@ -677,30 +693,31 @@ impl Cx<'_, '_> {
             }
             Expr::Case(c) => {
                 for subject in c.subjects() {
-                    self.expr(subject, false)?;
+                    self.expr(subject)?;
                 }
                 for arm in c.arms() {
                     self.push_scope();
                     match arm {
                         CaseArmKind::Case(arm) => {
+                            let mut state = PatState::default();
                             for pat in arm.patterns() {
-                                self.pat(pat, LocalKind::CaseArm, &mut None)?;
+                                self.pat(pat, LocalKind::CaseArm, &mut state)?;
                             }
                             if let Some(cond) =
                                 arm.guard().and_then(cheby_syntax::ast::Guard::condition)
                             {
-                                self.expr(cond, false)?;
+                                self.expr(cond)?;
                             }
                             if let Some(body) = arm.body() {
-                                self.expr(body, false)?;
+                                self.expr(body)?;
                             }
                         }
                         CaseArmKind::Cond(arm) => {
                             if let Some(cond) = arm.condition() {
-                                self.expr(cond, false)?;
+                                self.expr(cond)?;
                             }
                             if let Some(body) = arm.body() {
-                                self.expr(body, false)?;
+                                self.expr(body)?;
                             }
                         }
                     }
@@ -709,40 +726,40 @@ impl Cx<'_, '_> {
             }
             Expr::Panic(p) => {
                 if let Some(message) = p.message().and_then(cheby_syntax::ast::Message::value) {
-                    self.expr(message, false)?;
+                    self.expr(message)?;
                 }
             }
             Expr::Todo(t) => {
                 if let Some(message) = t.message().and_then(cheby_syntax::ast::Message::value) {
-                    self.expr(message, false)?;
+                    self.expr(message)?;
                 }
             }
             Expr::Binary(b) => {
                 if let Some(lhs) = b.lhs() {
-                    self.expr(lhs, false)?;
+                    self.expr(lhs)?;
                 }
                 if let Some(rhs) = b.rhs() {
-                    self.expr(rhs, false)?;
+                    self.expr(rhs)?;
                 }
             }
             Expr::Prefix(p) => {
                 if let Some(operand) = p.operand() {
-                    self.expr(operand, false)?;
+                    self.expr(operand)?;
                 }
             }
             Expr::Call(c) => {
                 if let Some(callee) = c.callee() {
-                    self.expr(callee, true)?;
+                    self.expr(callee)?;
                 }
                 for arg in c.args() {
                     if let Arg::Expr(e) = arg {
-                        self.expr(e, false)?;
+                        self.expr(e)?;
                     }
                 }
             }
             Expr::Field(f) => {
                 if let Some(receiver) = f.receiver() {
-                    self.expr(receiver, false)?;
+                    self.expr(receiver)?;
                 }
             }
         }
@@ -751,14 +768,14 @@ impl Cx<'_, '_> {
 
     /// A bare name used as a value: an interpolation root or a punned
     /// record field.
-    fn name_ref(&mut self, name: Ident<'_>) -> Res {
+    fn name_ref(&mut self, name: Ident<'_>) -> Result<Res, Ice> {
         let interned = self.intern(name.text());
-        self.unqualified_value(interned, name.span(), false)
+        self.unqualified_value(interned, name.span())
     }
 
-    fn unqualified_value(&mut self, name: Name, span: Span, callee: bool) -> Res {
+    fn unqualified_value(&mut self, name: Name, span: Span) -> Result<Res, Ice> {
         if let Some(local) = self.lookup_local(name) {
-            return Res::Local(local);
+            return Ok(Res::Local(local));
         }
         let Some(entry) = self.paths.scope.get(Namespace::Value, name).copied() else {
             let mut diag = self.paths.unknown(name, span, Namespace::Value, "value");
@@ -779,8 +796,14 @@ impl Cx<'_, '_> {
                     );
                 }
             }
+            if let Some(&(_, declared)) = self.later_fns.iter().rev().find(|(n, _)| *n == name) {
+                diag = diag.with_secondary(declared, "declared later").with_note(
+                    "a local function is in scope only after its declaration and inside its \
+                         own body, so it can call itself and the local functions before it (D-110)",
+                );
+            }
             self.diags.push(diag);
-            return Res::Err;
+            return Ok(Res::Err);
         };
         match entry.res {
             Res::Module(_) => {
@@ -793,24 +816,21 @@ impl Cx<'_, '_> {
                     .with_primary(span, "")
                     .with_help(format!("use one of its items, such as `{text}::name`")),
                 );
-                Res::Err
+                Ok(Res::Err)
             }
-            res => self.check_fn_value(res, span, callee),
+            res => self.structure(res, span),
         }
     }
 
-    /// The slice's gate on functions used as values.
-    fn check_fn_value(&mut self, res: Res, span: Span, callee: bool) -> Res {
-        if callee || self.mode != Mode::Slice {
-            return res;
-        }
+    /// `res`, or [`Res::Err`] if it is a constructor or type whose
+    /// structure is not visible here (E0043, §4.3.4, D-048, D-151).
+    fn structure(&mut self, res: Res, span: Span) -> Result<Res, Ice> {
         if let Res::Def(def) = res
-            && self.def_kind(def) == Some(DefKind::Fn)
+            && !self.paths.check_structure(def, span, self.diags)?
         {
-            self.gate(span, "functions used as values");
-            return Res::Err;
+            return Ok(Res::Err);
         }
-        res
+        Ok(res)
     }
 
     fn def_kind(&self, def: DefId) -> Option<DefKind> {
@@ -820,9 +840,9 @@ impl Cx<'_, '_> {
         self.paths.input.deps.item(def).map(|item| item.kind)
     }
 
-    fn value_path(&mut self, path: PathNode<'_>, callee: bool) -> Result<Res, Ice> {
+    fn value_path(&mut self, path: PathNode<'_>) -> Result<Res, Ice> {
         match self.paths.shape(path) {
-            PathShape::Name(name, span) => Ok(self.unqualified_value(name, span, callee)),
+            PathShape::Name(name, span) => self.unqualified_value(name, span),
             PathShape::Qualified { module, name } => {
                 let Some(target) = self.paths.module_qualifier(module, self.diags) else {
                     return Ok(Res::Err);
@@ -830,19 +850,13 @@ impl Cx<'_, '_> {
                 let res =
                     self.paths
                         .in_module(target, Namespace::Value, name, module.1, self.diags)?;
-                Ok(self.check_fn_value(res, path.significant_span(), callee))
+                self.structure(res, name.1)
             }
             PathShape::InterfaceFn {
                 module,
                 iface,
                 name,
-            } => {
-                if self.mode == Mode::Slice {
-                    self.gate(path.significant_span(), "interface function paths");
-                    return Ok(Res::Err);
-                }
-                self.paths.interface_fn(module, iface, name, self.diags)
-            }
+            } => self.paths.interface_fn(module, iface, name, self.diags),
             PathShape::Invalid => {
                 self.diags.push(invalid_path(path.significant_span()));
                 Ok(Res::Err)
@@ -888,23 +902,20 @@ impl Cx<'_, '_> {
             );
             return Ok(Res::Err);
         }
-        Ok(res)
+        let span = path.name().map_or(path.significant_span(), AstToken::span);
+        self.structure(res, span)
     }
 
-    /// Binds the names of a pattern. In an or-pattern, `alts` maps the
-    /// names the first alternative bound, and later alternatives reuse
-    /// them.
-    fn pat(
-        &mut self,
-        pat: Pat<'_>,
-        kind: LocalKind,
-        alts: &mut Option<FxHashMap<Name, LocalId>>,
-    ) -> Result<(), Ice> {
+    /// Binds the names of a pattern. A name bound in several alternatives
+    /// is one local; a name bound twice on one path through the pattern is
+    /// E0044 (§6.2); alternatives that bind different names are E0062
+    /// (§6.7).
+    fn pat(&mut self, pat: Pat<'_>, kind: LocalKind, state: &mut PatState) -> Result<(), Ice> {
         match pat {
             Pat::Wildcard(_) | Pat::Literal(_) => {}
             Pat::Ident(p) => {
                 if let Some(name) = p.name() {
-                    self.bind_pat(name, kind, p.syntax().id(), alts)?;
+                    self.bind_pat(name, kind, p.syntax().id(), state)?;
                 }
             }
             Pat::Ctor(p) => {
@@ -915,17 +926,17 @@ impl Cx<'_, '_> {
                 match p.fields() {
                     Some(CtorPatFields::Positional(list)) => {
                         for sub in list.patterns() {
-                            self.pat(sub, kind, alts)?;
+                            self.pat(sub, kind, state)?;
                         }
                     }
                     Some(CtorPatFields::Named(list)) => {
                         for entry in list.entries() {
                             if let FieldPatEntry::Field(field) = entry {
                                 match field.pattern() {
-                                    Some(sub) => self.pat(sub, kind, alts)?,
+                                    Some(sub) => self.pat(sub, kind, state)?,
                                     None => {
                                         if let Some(name) = field.name() {
-                                            self.bind_pat(name, kind, field.syntax().id(), alts)?;
+                                            self.bind_pat(name, kind, field.syntax().id(), state)?;
                                         }
                                     }
                                 }
@@ -937,16 +948,16 @@ impl Cx<'_, '_> {
             }
             Pat::Tuple(p) => {
                 for sub in p.elements() {
-                    self.pat(sub, kind, alts)?;
+                    self.pat(sub, kind, state)?;
                 }
             }
             Pat::List(p) => {
                 for item in p.items() {
                     match item {
-                        ListPatItem::Pat(sub) => self.pat(sub, kind, alts)?,
+                        ListPatItem::Pat(sub) => self.pat(sub, kind, state)?,
                         ListPatItem::Rest(rest) => {
                             if let Some(name) = rest.name() {
-                                self.bind_pat(name, kind, rest.syntax().id(), alts)?;
+                                self.bind_pat(name, kind, rest.syntax().id(), state)?;
                             }
                         }
                     }
@@ -954,39 +965,86 @@ impl Cx<'_, '_> {
             }
             Pat::Paren(p) => {
                 if let Some(inner) = p.inner() {
-                    self.pat(inner, kind, alts)?;
+                    self.pat(inner, kind, state)?;
                 }
             }
-            Pat::Or(p) => {
-                let outer = alts.take();
-                let mut first = true;
-                let mut names: Option<FxHashMap<Name, LocalId>> = outer.clone();
-                for alt in p.alternatives() {
-                    if first {
-                        // The first alternative binds; record what it bound.
-                        let before = self.res.locals.len();
-                        self.pat(alt, kind, &mut names)?;
-                        let map = names.get_or_insert_with(FxHashMap::default);
-                        for (local, decl) in self.res.locals.iter_enumerated().skip(before) {
-                            map.insert(decl.name, local);
-                        }
-                        first = false;
-                    } else {
-                        self.pat(alt, kind, &mut names)?;
-                    }
-                }
-                *alts = names.or(outer);
-            }
+            Pat::Or(p) => self.alternatives(p, kind, state)?,
             Pat::As(p) => {
                 if let Some(inner) = p.pattern() {
-                    self.pat(inner, kind, alts)?;
+                    self.pat(inner, kind, state)?;
                 }
                 if let Some(name) = p.name() {
-                    self.bind_pat(name, kind, p.syntax().id(), alts)?;
+                    self.bind_pat(name, kind, p.syntax().id(), state)?;
                 }
             }
         }
         Ok(())
+    }
+
+    /// `p1 | p2 | …`: each alternative starts from the names bound before
+    /// it, and every alternative must bind the same names (§6.7).
+    fn alternatives(
+        &mut self,
+        p: cheby_syntax::ast::OrPat<'_>,
+        kind: LocalKind,
+        state: &mut PatState,
+    ) -> Result<(), Ice> {
+        let before = state.current.len();
+        let mut per_alt: Vec<(Span, Vec<(Name, Span)>)> = Vec::new();
+        for alt in p.alternatives() {
+            state.current.truncate(before);
+            self.pat(alt, kind, state)?;
+            let bound = state.current.get(before..).unwrap_or_default().to_vec();
+            per_alt.push((alt.significant_span(), bound));
+        }
+        // Every name some alternative binds, at its first binding.
+        let mut union: Vec<(Name, Span)> = Vec::new();
+        for (_, bound) in &per_alt {
+            for &(name, span) in bound {
+                if !union.iter().any(|(n, _)| *n == name) {
+                    union.push((name, span));
+                }
+            }
+        }
+        for (alt_span, bound) in &per_alt {
+            let missing: Vec<(Name, Span)> = union
+                .iter()
+                .copied()
+                .filter(|(name, _)| !bound.iter().any(|(n, _)| n == name))
+                .collect();
+            if !missing.is_empty() {
+                self.diags.push(self.missing_bindings(*alt_span, &missing));
+            }
+        }
+        state.current.truncate(before);
+        state.current.extend(union);
+        Ok(())
+    }
+
+    /// E0062 for an alternative that does not bind `missing`.
+    fn missing_bindings(&self, alt: Span, missing: &[(Name, Span)]) -> Diagnostic {
+        let names: Vec<String> = missing
+            .iter()
+            .map(|&(name, _)| format!("`{}`", self.text(name)))
+            .collect();
+        let list = match names.as_slice() {
+            [] => String::new(),
+            [one] => one.clone(),
+            [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+        };
+        let mut diag = Diagnostic::new(
+            codes::ALTERNATIVE_BINDINGS,
+            format!("this alternative does not bind {list}"),
+        )
+        .with_primary(alt, format!("binds no {list}"));
+        for &(name, span) in missing {
+            diag = diag.with_secondary(span, format!("`{}` is bound here", self.text(name)));
+        }
+        diag.with_note("every alternative of a pattern must bind the same names (§6.7)")
+            .with_help(
+                "bind the same names in every alternative, or match the value with `_` where it \
+                 is not needed",
+            )
     }
 
     fn bind_pat(
@@ -994,14 +1052,36 @@ impl Cx<'_, '_> {
         name: Ident<'_>,
         kind: LocalKind,
         node: NodeId,
-        alts: &mut Option<FxHashMap<Name, LocalId>>,
+        state: &mut PatState,
     ) -> Result<(), Ice> {
         let interned = self.intern(name.text());
-        if let Some(local) = alts.as_ref().and_then(|map| map.get(&interned)).copied() {
-            self.res.bindings.insert(node, local);
+        let span = name.span();
+        if let Some(&(_, first)) = state.current.iter().find(|(n, _)| *n == interned) {
+            let text = name.text();
+            self.diags.push(
+                Diagnostic::new(
+                    codes::SHADOWED_NAME,
+                    format!("`{text}` is bound twice in this pattern"),
+                )
+                .with_primary(span, "bound again here")
+                .with_secondary(first, "first bound here")
+                .with_help(format!(
+                    "give one of them a new name, such as `{text}_2`, or match it with `_`"
+                )),
+            );
+            if let Some(&local) = state.shared.get(&interned) {
+                self.res.bindings.insert(node, local);
+            }
             return Ok(());
         }
-        self.bind(name, kind, node)?;
+        if let Some(&local) = state.shared.get(&interned) {
+            // Bound by an earlier alternative: the same local.
+            self.res.bindings.insert(node, local);
+        } else {
+            let local = self.bind(name, kind, node)?;
+            state.shared.insert(interned, local);
+        }
+        state.current.push((interned, span));
         Ok(())
     }
 }

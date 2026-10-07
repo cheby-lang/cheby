@@ -1,0 +1,8 @@
+error[E0052]: `Point` is not an interface
+ --> tests/ui/03-types/generics/bound_must_be_interface.cheby:7:16
+  |
+7 | pub fn keep<T: Point>(value: T) -> T {
+  |                ^^^^^ expected an interface
+  |
+  = note: a bound names interfaces the type parameter must satisfy (§8.4)
+

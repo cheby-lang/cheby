@@ -1,0 +1,16 @@
+// @mode: check-fail
+// @decisions: D-047, D-118
+//! `+` on a type whose module has no `add`, and `<` on one whose module
+//! has no `compare`, are errors (§8.7).
+
+type Vector {
+  x: Float,
+  y: Float,
+}
+
+fn main() {
+  let a = Vector { x: 1.0, y: 2.0 }
+  let b = Vector { x: 3.0, y: 4.0 }
+  assert a + b == b
+  assert a < b
+}

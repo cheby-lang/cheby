@@ -1,0 +1,282 @@
+//! JSON text as RFC 8259 defines it: parsing it, writing values as text,
+//! and the type `Value` that holds any JSON document (D-210, ADR-0038).
+//! Typed data is read with the decoders of `std::json::decode` (D-320) and
+//! written with encoding functions that return a `Value`.
+//!
+//! The module is written in Cheby over the kernels of `std::string`,
+//! `std::int` and `std::float` (D-274). Parsing and decoding share the raw
+//! tree of `std::json::tree`, because `std::json::decode` cannot import this
+//! module (D-361, ADR-0053). Neither parsing nor writing grows the stack
+//! with the nesting depth of a document (D-094, D-326).
+
+// The module has a function named `list`, so it imports `std::list` under
+// another name (§7.5.1, D-062).
+import std::float
+import std::int
+import std::json::decode
+import std::json::tree
+import std::list as lists
+import std::string
+
+/// Any JSON document (D-321, ADR-0052). An `Object` keeps its members in the
+/// order written, repeated keys included (D-218, D-223).
+pub exposed type Value {
+  Null,
+  Bool(Bool),
+  Int(Int),
+  Float(Float),
+  String(String),
+  Array(List<Value>),
+  Object(List<(String, Value)>),
+}
+
+/// A place in JSON text: the line and the column in code points, both
+/// counting from 1 (D-324).
+pub exposed type Position { line: Int, column: Int }
+
+/// Why `parse` failed: the text is not JSON, or the decoder did not accept
+/// it (D-304, ADR-0051).
+pub exposed type Error {
+  Syntax(Position),
+  Decode(List<decode::Error>),
+}
+
+/// A type that can be written as a JSON value (D-320).
+pub interface ToJson {
+  fn to_json(Self) -> Value
+}
+
+// Encoding
+
+/// Returns an `Array` holding `encode` applied to each element of `items` (D-321).
+pub fn array<T>(items: List<T>, encode: fn(T) -> Value) -> Value {
+  Array(lists::map(items, encode))
+}
+
+/// Returns `encode` applied to the value of a `Some`, and `Null` for `None` (D-321).
+pub fn nullable<T>(option: Option<T>, encode: fn(T) -> Value) -> Value {
+  case option {
+    Some(item) => encode(item)
+    None => Null
+  }
+}
+
+/// Returns an `Array` holding the `to_json` of each element of `items` (D-320).
+pub fn list<T: ToJson>(items: List<T>) -> Value {
+  Array(lists::map(items, fn(item) { ToJson::to_json(item) }))
+}
+
+/// Returns `value` as compact JSON text, with no whitespace between tokens
+/// (D-325, D-326, D-398).
+pub fn to_string(value: Value) -> String {
+  write(value, False)
+}
+
+/// Returns `value` as JSON text indented by two spaces, with `": "` after
+/// each key and no final line ending, as `JSON.stringify(value, null, 2)`
+/// writes it (D-327).
+pub fn to_pretty_string(value: Value) -> String {
+  write(value, True)
+}
+
+/// A step of writing a value: text to write, or a value to write at a depth
+/// of nesting.
+priv type Step {
+  Write(String),
+  Encode(Value, Int),
+}
+
+/// Writes `value` as text, indented when `pretty` is `True`. The steps still
+/// to take are a stack on the heap whose top is its last element.
+priv fn write(value: Value, pretty: Bool) -> String {
+  fn step(steps: List<Step>, parts: List<String>) -> String {
+    case steps {
+      [] => string::join(parts, "")
+      [..rest, Write(text)] => step(rest, lists::push(parts, text))
+      [..rest, Encode(Null, _)] => step(rest, lists::push(parts, "null"))
+      [..rest, Encode(Bool(True), _)] => step(rest, lists::push(parts, "true"))
+      [..rest, Encode(Bool(False), _)] => step(rest, lists::push(parts, "false"))
+      [..rest, Encode(Int(n), _)] => step(rest, lists::push(parts, int::show(n)))
+      [..rest, Encode(Float(x), _)] => step(rest, lists::push(parts, float_text(x)))
+      [..rest, Encode(String(text), _)] => step(rest, lists::push(parts, quote(text)))
+      [..rest, Encode(Array([]), _)] => step(rest, lists::push(parts, "[]"))
+      [..rest, Encode(Array(items), depth)] => {
+        step(array_steps(rest, items, depth, pretty), lists::push(parts, "["))
+      }
+      [..rest, Encode(Object([]), _)] => step(rest, lists::push(parts, "\{}"))
+      [..rest, Encode(Object(members), depth)] => {
+        step(object_steps(rest, members, depth, pretty), lists::push(parts, "\{"))
+      }
+    }
+  }
+  step([Encode(value, 0)], [])
+}
+
+/// Adds the steps that write the elements of an array at `depth`, after its
+/// `[`, and its `]`. They are added last first, so the first is on top.
+priv fn array_steps(steps: List<Step>, items: List<Value>, depth: Int, pretty: Bool) -> List<Step> {
+  let closing = lists::push(steps, Write(line_break(pretty, depth) + "]"))
+  lists::fold_right(lists::enumerate(items), closing, fn(pending, (index, item)) {
+    let encoded = lists::push(pending, Encode(item, depth + 1))
+    lists::push(encoded, Write(separator(index, pretty, depth + 1)))
+  })
+}
+
+/// Adds the steps that write the members of an object at `depth`, after its
+/// `{`, and its `}`. They are added last first, so the first is on top.
+priv fn object_steps(
+  steps: List<Step>,
+  members: List<(String, Value)>,
+  depth: Int,
+  pretty: Bool,
+) -> List<Step> {
+  let closing = lists::push(steps, Write(line_break(pretty, depth) + "}"))
+  let colon = case pretty {
+    True => ": "
+    False => ":"
+  }
+  lists::fold_right(lists::enumerate(members), closing, fn(pending, (index, (key, item))) {
+    let encoded = lists::push(pending, Encode(item, depth + 1))
+    let label = separator(index, pretty, depth + 1) + quote(key) + colon
+    lists::push(encoded, Write(label))
+  })
+}
+
+/// The text before the element or member at `index` of an array or object
+/// whose elements are at `depth`.
+priv fn separator(index: Int, pretty: Bool, depth: Int) -> String {
+  case index {
+    0 => line_break(pretty, depth)
+    _ => "," + line_break(pretty, depth)
+  }
+}
+
+/// A line ending and the indentation of `depth`, or nothing when the text is
+/// compact.
+priv fn line_break(pretty: Bool, depth: Int) -> String {
+  case pretty {
+    True => "\n" + string::repeat("  ", depth)
+    False => ""
+  }
+}
+
+/// Writes a finite float as `float::show` does, and `null` for NaN and the
+/// infinities, so encoding never fails (D-325).
+priv fn float_text(x: Float) -> String {
+  case float::is_finite(x) {
+    True => float::show(x)
+    False => "null"
+  }
+}
+
+/// Writes `text` between `"`, escaping `"`, `\` and the control characters
+/// U+0000 to U+001F, and nothing else (D-326, D-398).
+priv fn quote(text: String) -> String {
+  let points = lists::fold(string::to_code_point_values(text), [0x22], escape)
+  // The escapes are ASCII and every other code point is copied, so the code
+  // points always form a string.
+  let assert Ok(quoted) = string::from_code_point_values(lists::push(points, 0x22))
+  quoted
+}
+
+/// Adds `point` to `points`, escaped as JSON text needs.
+priv fn escape(points: List<Int>, point: Int) -> List<Int> {
+  case point {
+    // `"` and `\`
+    0x22 | 0x5C => [..points, 0x5C, point]
+    // `\b`, `\f`, `\n`, `\r` and `\t`
+    0x08 => [..points, 0x5C, 0x62]
+    0x0C => [..points, 0x5C, 0x66]
+    0x0A => [..points, 0x5C, 0x6E]
+    0x0D => [..points, 0x5C, 0x72]
+    0x09 => [..points, 0x5C, 0x74]
+    // `\u00` and two lower-case hex digits
+    _ when point < 0x20 => [..points, 0x5C, 0x75, 0x30, 0x30, hex(point / 16), hex(point % 16)]
+    _ => lists::push(points, point)
+  }
+}
+
+/// Returns the code point of the lower-case hex digit for `digit`, 0 to 15.
+priv fn hex(digit: Int) -> Int {
+  case digit < 10 {
+    True => 0x30 + digit
+    False => 0x57 + digit
+  }
+}
+
+// Parsing
+
+/// Parses `text` as `parse_value` does, then decodes the value with
+/// `decoder` as `decode_value` does (D-320). The decoder runs only on JSON
+/// text, and its errors come in the order it visited the values (D-322).
+pub fn parse<T>(text: String, decoder: decode::Decoder<T>) -> Result<T, Error> {
+  case tree::parse(text) {
+    Ok(document) => case decode::run(decoder, document) {
+      Ok(decoded) => Ok(decoded)
+      Err(errors) => Err(Decode(errors))
+    }
+    Err((line, column)) => Err(Syntax(Position { line, column }))
+  }
+}
+
+/// Parses `text` as one JSON value with optional whitespace around it, and
+/// returns it without decoding (D-321). A number without `.` or an exponent
+/// is an `Int` when it lies within ±(2⁵³−1), and every other number is a
+/// `Float` (D-217, D-222, D-394). A syntax error gives the position at
+/// which `text` stops being JSON (D-324, D-326).
+pub fn parse_value(text: String) -> Result<Value, Error> {
+  case tree::parse(text) {
+    Ok(document) => Ok(tree::rebuild(document, open_tree, Array, Object))
+    Err((line, column)) => Err(Syntax(Position { line, column }))
+  }
+}
+
+/// Runs `decoder` on a value already parsed or built in the program, with
+/// paths starting at `value` itself (D-361).
+pub fn decode_value<T>(
+  value: Value,
+  decoder: decode::Decoder<T>,
+) -> Result<T, List<decode::Error>> {
+  decode::run(decoder, tree::rebuild(value, open_value, tree::Array, tree::Object))
+}
+
+/// Takes a node of the raw tree apart, for `tree::rebuild`.
+priv fn open_tree(node: tree::Tree) -> tree::Children<tree::Tree, Value> {
+  case node {
+    tree::Null => tree::Leaf(Null)
+    tree::Bool(flag) => tree::Leaf(Bool(flag))
+    tree::Int(n) => tree::Leaf(Int(n))
+    tree::Float(x) => tree::Leaf(Float(x))
+    tree::String(text) => tree::Leaf(String(text))
+    tree::Array(items) => tree::Items(items)
+    tree::Object(members) => tree::Members(members)
+  }
+}
+
+/// Takes a `Value` apart, for `tree::rebuild`.
+priv fn open_value(node: Value) -> tree::Children<Value, tree::Tree> {
+  case node {
+    Null => tree::Leaf(tree::Null)
+    Bool(flag) => tree::Leaf(tree::Bool(flag))
+    Int(n) => tree::Leaf(tree::Int(n))
+    Float(x) => tree::Leaf(tree::Float(x))
+    String(text) => tree::Leaf(tree::String(text))
+    Array(items) => tree::Items(items)
+    Object(members) => tree::Members(members)
+  }
+}
+
+// Errors
+
+/// Writes `invalid JSON at line L, column C` for `Syntax`, and `unexpected
+/// JSON: ` followed by each decode error's `show`, separated by `; `, for
+/// `Decode` (D-400). It makes `Error` satisfy `Show`.
+pub fn show(error: Error) -> String {
+  case error {
+    Syntax(Position { line, column }) => "invalid JSON at line {line}, column {column}"
+    Decode(errors) => {
+      let joined = string::join(lists::map(errors, decode::show), "; ")
+      "unexpected JSON: {joined}"
+    }
+  }
+}

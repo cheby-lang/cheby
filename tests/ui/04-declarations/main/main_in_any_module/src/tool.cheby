@@ -1,0 +1,9 @@
+//! A helper module whose `main` is not an entry point.
+
+pub fn name() -> String {
+  "tool"
+}
+
+pub fn main() -> String {
+  name()
+}

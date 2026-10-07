@@ -1,0 +1,8 @@
+error[E0047]: mismatched types
+  --> tests/ui/03-types/aliases/distinct_type.cheby:13:10
+   |
+13 |   lookup(42)
+   |   ------ ^^ expected `UserId`, found `{integer}`
+   |   |
+   |   arguments to this function are incorrect
+

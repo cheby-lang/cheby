@@ -1,0 +1,115 @@
+//! Helpers for the built-in `Option` type (D-317): chaining, defaults,
+//! tests, lists of options and conversions.
+//!
+//! `Option`, `Some` and `None` are builtin items whose home module is this
+//! one (D-447). Everything here is written in Cheby.
+
+import std::list
+
+// Chaining
+
+/// Calls `next` with the value of a `Some`, and returns `None` otherwise (D-383).
+pub fn then<T, U>(o: Option<T>, next: fn(T) -> Option<U>) -> Option<U> {
+  case o {
+    Some(value) => next(value)
+    None => None
+  }
+}
+
+/// Applies `f` to the value of a `Some`, and returns `None` unchanged.
+pub fn map<T, U>(o: Option<T>, f: fn(T) -> U) -> Option<U> {
+  case o {
+    Some(value) => Some(f(value))
+    None => None
+  }
+}
+
+/// Removes one level of nesting: `Some(inner)` becomes `inner`.
+pub fn flatten<T>(o: Option<Option<T>>) -> Option<T> {
+  case o {
+    Some(inner) => inner
+    None => None
+  }
+}
+
+// Defaults
+
+/// Returns the value of a `Some`, or `default` for `None`.
+pub fn unwrap_or<T>(o: Option<T>, default: T) -> T {
+  case o {
+    Some(value) => value
+    None => default
+  }
+}
+
+/// Returns the value of a `Some`, or calls `default` for `None`.
+pub fn lazy_unwrap_or<T>(o: Option<T>, default: fn() -> T) -> T {
+  case o {
+    Some(value) => value
+    None => default()
+  }
+}
+
+/// Returns `first` if it is `Some`, and `second` otherwise.
+pub fn or<T>(first: Option<T>, second: Option<T>) -> Option<T> {
+  case first {
+    Some(_) => first
+    None => second
+  }
+}
+
+// Tests
+
+/// Tells whether `o` is a `Some`.
+pub fn is_some<T>(o: Option<T>) -> Bool {
+  case o {
+    Some(_) => True
+    None => False
+  }
+}
+
+/// Tells whether `o` is `None`.
+pub fn is_none<T>(o: Option<T>) -> Bool {
+  case o {
+    Some(_) => False
+    None => True
+  }
+}
+
+// Lists of options
+
+/// Returns `Some` with every value, in order, when every element is `Some`.
+pub fn all<T>(options: List<Option<T>>) -> Option<List<T>> {
+  fn step(found: List<T>, rest: List<Option<T>>) -> Option<List<T>> {
+    case rest {
+      [] => Some(found)
+      [Some(value), ..tail] => step(list::push(found, value), tail)
+      [None, ..] => None
+    }
+  }
+  step([], options)
+}
+
+/// Returns the values of the `Some` elements, in order.
+pub fn values<T>(options: List<Option<T>>) -> List<T> {
+  list::filter_map(options, fn(item) { item })
+}
+
+// Conversions
+
+/// Returns `Ok` with the value of a `Some`, and `Err(error)` for `None`.
+pub fn to_result<T, E>(o: Option<T>, error: E) -> Result<T, E> {
+  case o {
+    Some(value) => Ok(value)
+    None => Err(error)
+  }
+}
+
+/// Writes `Some(`, the `show` of the value and `)`, or `None` (D-355).
+/// It makes `Option<T>` satisfy `Show` when `T` does (D-064).
+pub fn show<T: Show>(o: Option<T>) -> String {
+  case o {
+    Some(value) => "Some({value})"
+    None => "None"
+  }
+}

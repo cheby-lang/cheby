@@ -1,0 +1,8 @@
+error[E0059]: field `x` is initialized twice
+  --> tests/ui/05-expressions/records/repeated_field.cheby:12:23
+   |
+12 |   Point { x: 0, y: 0, x: 1 }
+   |           -           ^ initialized again here
+   |           |
+   |           first initialized here
+

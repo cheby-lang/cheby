@@ -1,0 +1,8 @@
+error[E0057]: type annotation needed
+ --> tests/ui/03-types/inference/unknown_parameter_type.cheby:7:14
+  |
+7 |   let f = fn(a, b) { a + b }
+  |              ^ the type of `a` is not known
+  |
+  = help: give the parameter a type annotation: `a: <type>`
+

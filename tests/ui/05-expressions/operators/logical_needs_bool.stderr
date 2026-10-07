@@ -1,0 +1,16 @@
+error[E0047]: mismatched types
+ --> tests/ui/05-expressions/operators/logical_needs_bool.cheby:6:3
+  |
+6 |   a && b || !a
+  |   ^ -- `&&` takes `Bool` operands
+  |   |
+  |   expected `Bool`, found `Int`
+
+error[E0047]: mismatched types
+ --> tests/ui/05-expressions/operators/logical_needs_bool.cheby:6:14
+  |
+6 |   a && b || !a
+  |             -^ expected `Bool`, found `Int`
+  |             |
+  |             `!` takes a `Bool` operand
+

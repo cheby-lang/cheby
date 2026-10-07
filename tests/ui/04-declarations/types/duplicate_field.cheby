@@ -1,0 +1,10 @@
+// @mode: check-fail
+// @decisions: D-071
+//! Field names must be distinct within a variant (§4.3.1).
+
+pub type Shape {
+  Rect { width: Float, width: Float },
+  Circle { radius: Float },
+}
+
+pub type Point { x: Float, y: Float, x: Float }

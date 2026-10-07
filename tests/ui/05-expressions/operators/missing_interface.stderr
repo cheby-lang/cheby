@@ -1,0 +1,9 @@
+error[E0063]: `Point` does not satisfy `Add`
+  --> tests/ui/05-expressions/operators/missing_interface.cheby:12:3
+   |
+12 |   p + p
+   |   ^^^^^ `+` calls `add` of the operand type
+   |
+   = note: this module declares `Point` but has no function `add(Point, Point) -> Point` (§8.2, D-061)
+   = help: add a function `add(Point, Point) -> Point` to this module
+

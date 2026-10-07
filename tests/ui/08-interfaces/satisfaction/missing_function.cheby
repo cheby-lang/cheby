@@ -1,0 +1,15 @@
+// @mode: check-fail
+// @decisions: D-020, D-086
+//! A type without a `show` in its module does not satisfy `Show`.
+
+import std::io
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+fn main() {
+  let origin = Point { x: 0, y: 0 }
+  io::println("{origin}")
+}

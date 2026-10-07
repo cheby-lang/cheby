@@ -1,0 +1,34 @@
+// @mode: check-pass
+// @decisions: D-168, D-235, D-237
+//! A value converts to `dyn I` where `dyn I` is expected: a function's
+//! result, a list element, a constructor field, an annotation
+//! (§3.12.5).
+
+pub interface Shape {
+  fn area(Self) -> Float
+}
+
+pub type Circle {
+  radius: Float,
+}
+
+pub type Square {
+  side: Float,
+}
+
+pub fn area(circle: Circle) -> Float {
+  circle.radius * circle.radius * 3.0
+}
+
+pub fn as_shape(circle: Circle) -> dyn Shape {
+  circle
+}
+
+pub fn shapes(circle: Circle) -> List<dyn Shape> {
+  let maybe: Option<dyn Shape> = Some(circle)
+  let empty: List<dyn Shape> = []
+  case maybe {
+    Some(shape) => [shape, circle, ..empty]
+    None => empty
+  }
+}

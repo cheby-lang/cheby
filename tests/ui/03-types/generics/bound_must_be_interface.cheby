@@ -1,0 +1,9 @@
+// @mode: check-fail
+// @decisions: D-063, D-462
+//! A bound names interfaces, not types.
+
+pub type Point { x: Int, y: Int }
+
+pub fn keep<T: Point>(value: T) -> T {
+  value
+}

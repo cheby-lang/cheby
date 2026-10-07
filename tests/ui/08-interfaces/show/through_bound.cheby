@@ -1,0 +1,23 @@
+// @mode: check-pass
+// @decisions: D-063, D-086
+//! Inside a generic function, `{x}` on a type parameter bounded by `Show`
+//! calls through the bound (§8.4).
+
+import std::io
+
+type Badge {
+  text: String,
+}
+
+fn show(badge: Badge) -> String {
+  badge.text
+}
+
+fn announce<T: Show>(item: T) {
+  io::println("now showing: {item}")
+}
+
+fn main() {
+  announce(Badge { text: "gold" })
+  announce((Badge { text: "a" }, Badge { text: "b" }))
+}

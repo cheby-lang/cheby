@@ -1,0 +1,8 @@
+error[E0057]: type annotation needed
+  --> tests/ui/03-types/inference/type_argument_unknown.cheby:11:12
+   |
+11 |   let xs = empty()
+   |            ^^^^^ the type argument `T` of `empty` is not known
+   |
+   = help: give the type arguments after the name: `empty::<…>`
+

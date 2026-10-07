@@ -1,0 +1,16 @@
+// @mode: check-fail
+// @decisions: D-022, D-052
+//! An arm with a guard does not count toward exhaustiveness, even when
+//! the guards together cover every value.
+
+fn sign(n: Int) -> String {
+  case n {
+    0 => "zero"
+    _ when n > 0 => "positive"
+    _ when n < 0 => "negative"
+  }
+}
+
+fn main() {
+  assert sign(-3) == "negative"
+}

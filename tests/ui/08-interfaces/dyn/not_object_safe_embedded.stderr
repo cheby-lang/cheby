@@ -1,0 +1,13 @@
+error[E0064]: `dyn Item` is not allowed: `before` uses `Self` other than as its first parameter
+  --> tests/ui/08-interfaces/dyn/not_object_safe_embedded.cheby:13:19
+   |
+6  |   fn before(Self, Self) -> Bool
+   |      ------ `fn before(Self, Self) -> Bool`
+...
+13 | fn title_of(item: dyn Item) -> String {
+   |                   ^^^^^^^^ `dyn Item` written here
+   |
+   = note: `before` comes from `Ordered`, which `Item` embeds
+   = note: a `dyn` value can supply `Self` only as the first argument of each function, and nowhere else (§8.6, D-117)
+   = help: put the functions that `dyn` needs in an interface of their own
+

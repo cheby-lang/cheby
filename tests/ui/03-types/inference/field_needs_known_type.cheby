@@ -1,0 +1,16 @@
+// @mode: check-fail
+// @decisions: D-213, D-234
+//! `p.x` needs `p`'s type when it is checked, and the closure is checked
+//! before the call that would fix it (§3.12.4).
+
+pub type Point {
+  x: Int,
+  y: Int,
+}
+
+pub fn main() {
+  let origin = Point { x: 0, y: 0 }
+  let get_x = fn(p) { p.x }
+  let x = get_x(origin)
+  assert x == 0
+}

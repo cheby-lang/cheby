@@ -1,0 +1,212 @@
+//! `Bytes`, immutable byte sequences for binary data: creating, reading,
+//! building, and integers in a named byte order (D-095, D-334).
+//!
+//! `Bytes` itself is a builtin item whose home module is this one
+//! (D-447, GAP(kernel-types)), so it is not declared here. As in the
+//! spec's signatures, `Bytes` is written unqualified in this module
+//! (GAP(home-type-in-scope)). It does not satisfy `Show` (D-388).
+
+// Creating
+
+/// Returns an empty `Bytes`.
+@external(native, "cheby_bytes_new")
+@external(js, "./bytes.mjs", "new")
+pub fn new() -> Bytes
+
+/// Returns the bytes in `values`, in order.
+@external(native, "cheby_bytes_from_list")
+@external(js, "./bytes.mjs", "from_list")
+pub fn from_list(values: List<U8>) -> Bytes
+
+/// Returns the UTF-8 encoding of `text`, with no byte-order mark.
+@external(native, "cheby_bytes_from_string")
+@external(js, "./bytes.mjs", "from_string")
+pub fn from_string(text: String) -> Bytes
+
+// Reading
+
+/// Returns the number of bytes in `data` (D-301).
+@external(native, "cheby_bytes_length")
+@external(js, "./bytes.mjs", "length")
+pub fn length(data: Bytes) -> Int
+
+/// Tells whether `data` holds no bytes.
+pub fn is_empty(data: Bytes) -> Bool {
+  length(data) == 0
+}
+
+/// Returns the byte at `index`, or `None` outside `0` to `length - 1` (D-318).
+@external(native, "cheby_bytes_get")
+@external(js, "./bytes.mjs", "get")
+pub fn get(data: Bytes, index: Int) -> Option<U8>
+
+/// Returns the bytes of `data` from `start` up to but not including `end` (D-319).
+@external(native, "cheby_bytes_slice")
+@external(js, "./bytes.mjs", "slice")
+@std_clamped(start, end)
+pub fn slice(data: Bytes, start: Int, end: Int) -> Bytes
+
+/// Returns the bytes of `data` as a list, in order.
+@external(native, "cheby_bytes_to_list")
+@external(js, "./bytes.mjs", "to_list")
+pub fn to_list(data: Bytes) -> List<U8>
+
+/// Calls `f` with the result so far and each byte of `data`, front to back.
+pub fn fold<A>(data: Bytes, initial: A, f: fn(A, U8) -> A) -> A {
+  fn step(acc, index) {
+    case get(data, index) {
+      Some(byte) => step(f(acc, byte), index + 1)
+      None => acc
+    }
+  }
+  step(initial, 0)
+}
+
+// Building
+
+/// Returns `data` with `byte` added at the end, in place when it is not shared (D-316).
+@external(native, "cheby_bytes_push")
+@external(js, "./bytes.mjs", "push")
+pub fn push(data: Bytes, byte: U8) -> Bytes
+
+/// Returns the bytes of `data` followed by those of `other` (D-316).
+@external(native, "cheby_bytes_append")
+@external(js, "./bytes.mjs", "append")
+pub fn append(data: Bytes, other: Bytes) -> Bytes
+
+/// Returns the bytes of every element of `parts`, in order.
+@external(native, "cheby_bytes_concat")
+@external(js, "./bytes.mjs", "concat")
+pub fn concat(parts: List<Bytes>) -> Bytes
+
+// Integers in a byte order (D-334)
+
+/// Returns `data` with `value` added as one byte in two's complement.
+@external(native, "cheby_bytes_push_i8")
+@external(js, "./bytes.mjs", "push_i8")
+pub fn push_i8(data: Bytes, value: I8) -> Bytes
+
+/// Reads the byte at `offset` as an `I8` in two's complement.
+@external(native, "cheby_bytes_read_i8")
+@external(js, "./bytes.mjs", "read_i8")
+pub fn read_i8(data: Bytes, offset: Int) -> Option<I8>
+
+/// Returns `data` with `value` added as 2 bytes, big-endian.
+@external(native, "cheby_bytes_push_u16_be")
+@external(js, "./bytes.mjs", "push_u16_be")
+pub fn push_u16_be(data: Bytes, value: U16) -> Bytes
+
+/// Returns `data` with `value` added as 2 bytes, little-endian.
+@external(native, "cheby_bytes_push_u16_le")
+@external(js, "./bytes.mjs", "push_u16_le")
+pub fn push_u16_le(data: Bytes, value: U16) -> Bytes
+
+/// Returns `data` with `value` added as 2 bytes, big-endian.
+@external(native, "cheby_bytes_push_i16_be")
+@external(js, "./bytes.mjs", "push_i16_be")
+pub fn push_i16_be(data: Bytes, value: I16) -> Bytes
+
+/// Returns `data` with `value` added as 2 bytes, little-endian.
+@external(native, "cheby_bytes_push_i16_le")
+@external(js, "./bytes.mjs", "push_i16_le")
+pub fn push_i16_le(data: Bytes, value: I16) -> Bytes
+
+/// Reads the 2 bytes at `offset` as one `U16`, big-endian.
+@external(native, "cheby_bytes_read_u16_be")
+@external(js, "./bytes.mjs", "read_u16_be")
+pub fn read_u16_be(data: Bytes, offset: Int) -> Option<U16>
+
+/// Reads the 2 bytes at `offset` as one `U16`, little-endian.
+@external(native, "cheby_bytes_read_u16_le")
+@external(js, "./bytes.mjs", "read_u16_le")
+pub fn read_u16_le(data: Bytes, offset: Int) -> Option<U16>
+
+/// Reads the 2 bytes at `offset` as one `I16`, big-endian.
+@external(native, "cheby_bytes_read_i16_be")
+@external(js, "./bytes.mjs", "read_i16_be")
+pub fn read_i16_be(data: Bytes, offset: Int) -> Option<I16>
+
+/// Reads the 2 bytes at `offset` as one `I16`, little-endian.
+@external(native, "cheby_bytes_read_i16_le")
+@external(js, "./bytes.mjs", "read_i16_le")
+pub fn read_i16_le(data: Bytes, offset: Int) -> Option<I16>
+
+/// Returns `data` with `value` added as 4 bytes, big-endian.
+@external(native, "cheby_bytes_push_u32_be")
+@external(js, "./bytes.mjs", "push_u32_be")
+pub fn push_u32_be(data: Bytes, value: U32) -> Bytes
+
+/// Returns `data` with `value` added as 4 bytes, little-endian.
+@external(native, "cheby_bytes_push_u32_le")
+@external(js, "./bytes.mjs", "push_u32_le")
+pub fn push_u32_le(data: Bytes, value: U32) -> Bytes
+
+/// Returns `data` with `value` added as 4 bytes, big-endian.
+@external(native, "cheby_bytes_push_i32_be")
+@external(js, "./bytes.mjs", "push_i32_be")
+pub fn push_i32_be(data: Bytes, value: I32) -> Bytes
+
+/// Returns `data` with `value` added as 4 bytes, little-endian.
+@external(native, "cheby_bytes_push_i32_le")
+@external(js, "./bytes.mjs", "push_i32_le")
+pub fn push_i32_le(data: Bytes, value: I32) -> Bytes
+
+/// Reads the 4 bytes at `offset` as one `U32`, big-endian.
+@external(native, "cheby_bytes_read_u32_be")
+@external(js, "./bytes.mjs", "read_u32_be")
+pub fn read_u32_be(data: Bytes, offset: Int) -> Option<U32>
+
+/// Reads the 4 bytes at `offset` as one `U32`, little-endian.
+@external(native, "cheby_bytes_read_u32_le")
+@external(js, "./bytes.mjs", "read_u32_le")
+pub fn read_u32_le(data: Bytes, offset: Int) -> Option<U32>
+
+/// Reads the 4 bytes at `offset` as one `I32`, big-endian.
+@external(native, "cheby_bytes_read_i32_be")
+@external(js, "./bytes.mjs", "read_i32_be")
+pub fn read_i32_be(data: Bytes, offset: Int) -> Option<I32>
+
+/// Reads the 4 bytes at `offset` as one `I32`, little-endian.
+@external(native, "cheby_bytes_read_i32_le")
+@external(js, "./bytes.mjs", "read_i32_le")
+pub fn read_i32_le(data: Bytes, offset: Int) -> Option<I32>
+
+/// Returns `data` with `value` added as 8 bytes, big-endian.
+@external(native, "cheby_bytes_push_u64_be")
+@external(js, "./bytes.mjs", "push_u64_be")
+pub fn push_u64_be(data: Bytes, value: U64) -> Bytes
+
+/// Returns `data` with `value` added as 8 bytes, little-endian.
+@external(native, "cheby_bytes_push_u64_le")
+@external(js, "./bytes.mjs", "push_u64_le")
+pub fn push_u64_le(data: Bytes, value: U64) -> Bytes
+
+/// Returns `data` with `value` added as 8 bytes, big-endian.
+@external(native, "cheby_bytes_push_i64_be")
+@external(js, "./bytes.mjs", "push_i64_be")
+pub fn push_i64_be(data: Bytes, value: I64) -> Bytes
+
+/// Returns `data` with `value` added as 8 bytes, little-endian.
+@external(native, "cheby_bytes_push_i64_le")
+@external(js, "./bytes.mjs", "push_i64_le")
+pub fn push_i64_le(data: Bytes, value: I64) -> Bytes
+
+/// Reads the 8 bytes at `offset` as one `U64`, big-endian.
+@external(native, "cheby_bytes_read_u64_be")
+@external(js, "./bytes.mjs", "read_u64_be")
+pub fn read_u64_be(data: Bytes, offset: Int) -> Option<U64>
+
+/// Reads the 8 bytes at `offset` as one `U64`, little-endian.
+@external(native, "cheby_bytes_read_u64_le")
+@external(js, "./bytes.mjs", "read_u64_le")
+pub fn read_u64_le(data: Bytes, offset: Int) -> Option<U64>
+
+/// Reads the 8 bytes at `offset` as one `I64`, big-endian.
+@external(native, "cheby_bytes_read_i64_be")
+@external(js, "./bytes.mjs", "read_i64_be")
+pub fn read_i64_be(data: Bytes, offset: Int) -> Option<I64>
+
+/// Reads the 8 bytes at `offset` as one `I64`, little-endian.
+@external(native, "cheby_bytes_read_i64_le")
+@external(js, "./bytes.mjs", "read_i64_le")
+pub fn read_i64_le(data: Bytes, offset: Int) -> Option<I64>

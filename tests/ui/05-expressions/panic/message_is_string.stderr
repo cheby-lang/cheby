@@ -1,0 +1,6 @@
+error[E0047]: mismatched types
+ --> tests/ui/05-expressions/panic/message_is_string.cheby:8:20
+  |
+8 |     [] => panic as 404
+  |                    ^^^ expected `String`, found `{integer}`
+

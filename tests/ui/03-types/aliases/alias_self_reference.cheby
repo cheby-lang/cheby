@@ -1,0 +1,11 @@
+// @mode: check-fail
+// @decisions: D-081
+//! An alias must not refer to itself; a recursive structure needs a type
+//! declaration (§4.4).
+
+pub type Tree = List<Tree>
+
+pub fn leaves(tree: Tree) -> Int {
+  let _ = tree
+  0
+}

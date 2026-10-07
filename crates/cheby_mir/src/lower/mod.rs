@@ -3,22 +3,29 @@
 //! [`lower_fn`] is the parallel unit (D-263): it reads one item's THIR,
 //! the module's own interface and its dependencies' interfaces, and
 //! returns the item's function followed by its shims and closures, with
-//! function-local strings. [`lower_module`] runs it per item in `DefIndex`
-//! order and computes the unit's callee declarations, layouts and names.
-//! [`lower_tests`] and [`lower_entries`] produce the other two unit kinds.
+//! function-local strings. [`lower_items`] runs it per selected item in
+//! `DefIndex` order and computes the unit's callee declarations, layouts
+//! and names; [`lower_module`] selects every item. [`lower_tests`] and
+//! [`lower_entries`] produce the other two unit kinds.
 //!
-//! Lowering assumes input that passed the E0038 gates (D-451):
-//! anything outside the slice is an [`Ice`], never a diagnostic, so
-//! `cheby check` and `cheby run` agree.
+//! The front end no longer gates what the back end cannot run (D-451,
+//! plan §8): a construct, a value representation or an external
+//! signature that lowering does not implement yet is E0038 at the
+//! construct, once per outermost construct, never an [`Ice`]. Lowering
+//! goes on after one, so a run reports every such construct of the items
+//! it needs at once; an item with one produces no function. `cheby run`
+//! lowers only the items reachable from its entry ([`crate::reach`]), so
+//! `cheby check` never reports these.
 
 mod entry;
 mod expr;
 mod external;
 
 use std::collections::BTreeSet;
+use std::fmt;
 
-use cheby_diag::{SourceMap, Span};
-use cheby_iface::{DefId, Ice};
+use cheby_diag::{Diagnostic, SourceMap, Span, codes};
+use cheby_iface::{DefId, DisplayCx, Generics, Ice, Ty, display};
 use cheby_types::thir;
 
 pub use entry::{EntryRequest, lower_entries};
@@ -52,21 +59,150 @@ impl LowerCx<'_> {
             .map(|loc| loc.to_string())
             .ok_or_else(|| Ice::new(format!("no source file for span {span:?}")))
     }
+
+    /// `ty` as users write it (D-463), for diagnostics about the module
+    /// being lowered.
+    #[must_use]
+    pub fn show(&self, ty: Ty, generics: Option<&Generics>) -> String {
+        display(
+            ty,
+            &DisplayCx {
+                globals: self.defs.globals,
+                modules: self.defs.modules,
+                own: self.defs.own,
+                deps: self.defs.deps,
+                generics,
+            },
+        )
+    }
 }
 
-/// Lowers one module's functions and constant initializers into its code
-/// unit. The result has no reference counts yet ([`crate::count_and_check`]).
+/// Why lowering produced no MIR.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LowerError {
+    /// The items use constructs the back end does not implement yet:
+    /// E0038 diagnostics, one per outermost construct, unsorted.
+    Unsupported(Vec<Diagnostic>),
+    /// A broken invariant.
+    Ice(Ice),
+}
+
+impl From<Ice> for LowerError {
+    fn from(ice: Ice) -> Self {
+        Self::Ice(ice)
+    }
+}
+
+impl fmt::Display for LowerError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unsupported(diags) => {
+                let messages: Vec<&str> = diags.iter().map(|d| d.message.as_str()).collect();
+                write!(f, "unsupported: {}", messages.join("; "))
+            }
+            Self::Ice(ice) => f.write_str(ice.message()),
+        }
+    }
+}
+
+/// Collects the E0038 diagnostics of several items, so one run reports
+/// all of them; an [`Ice`] stops at once.
+#[derive(Debug, Default)]
+pub struct Unsupported {
+    diags: Vec<Diagnostic>,
+}
+
+impl Unsupported {
+    /// The value of `result`, or `None` after recording its diagnostics.
+    ///
+    /// # Errors
+    ///
+    /// The [`Ice`] of `result`.
+    pub fn take<T>(&mut self, result: Result<T, LowerError>) -> Result<Option<T>, Ice> {
+        match result {
+            Ok(value) => Ok(Some(value)),
+            Err(LowerError::Unsupported(diags)) => {
+                self.diags.extend(diags);
+                Ok(None)
+            }
+            Err(LowerError::Ice(ice)) => Err(ice),
+        }
+    }
+
+    /// Records one diagnostic.
+    pub fn push(&mut self, diag: Diagnostic) {
+        self.diags.push(diag);
+    }
+
+    /// Whether nothing was recorded.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.diags.is_empty()
+    }
+
+    /// The recorded diagnostics, in recording order.
+    #[must_use]
+    pub fn into_diagnostics(self) -> Vec<Diagnostic> {
+        self.diags
+    }
+
+    /// `value`, or the recorded diagnostics as the error.
+    ///
+    /// # Errors
+    ///
+    /// [`LowerError::Unsupported`] if anything was recorded.
+    pub fn finish<T>(self, value: T) -> Result<T, LowerError> {
+        if self.diags.is_empty() {
+            Ok(value)
+        } else {
+            Err(LowerError::Unsupported(self.diags))
+        }
+    }
+}
+
+/// E0038: "<what> are not supported yet", worded like the front end's old
+/// gates, with the primary label on the construct (D-451).
+pub(crate) fn not_supported(span: Span, what: &str) -> Diagnostic {
+    Diagnostic::new(
+        codes::NOT_SUPPORTED_YET,
+        format!("{what} are not supported yet"),
+    )
+    .with_primary(span, "")
+}
+
+/// Lowers every function and constant initializer of a module into its
+/// code unit. The result has no reference counts yet
+/// ([`crate::count_and_check`]).
 ///
 /// # Errors
 ///
-/// An [`Ice`] on input outside the slice or inconsistent with the
+/// [`LowerError::Unsupported`] for constructs the back end does not
+/// implement yet, and an [`Ice`] on input inconsistent with the
 /// interfaces.
-pub fn lower_module(module: &thir::Module, cx: &LowerCx<'_>) -> Result<MirModule, Ice> {
-    let mut fns: Vec<&thir::FnDef> = module.fns.iter().collect();
+pub fn lower_module(module: &thir::Module, cx: &LowerCx<'_>) -> Result<MirModule, LowerError> {
+    lower_items(module, &|_| true, cx)
+}
+
+/// Lowers the functions and constant initializers of `module` that
+/// `wanted` selects, in `DefIndex` order, with every constructor layout
+/// of the module, into its code unit. `cheby run` selects the items
+/// reachable from its entry ([`crate::reach`]).
+///
+/// # Errors
+///
+/// As [`lower_module`]: every selected item is lowered, so the error
+/// holds the diagnostics of all of them.
+pub fn lower_items(
+    module: &thir::Module,
+    wanted: &dyn Fn(DefId) -> bool,
+    cx: &LowerCx<'_>,
+) -> Result<MirModule, LowerError> {
+    let mut fns: Vec<&thir::FnDef> = module.fns.iter().filter(|f| wanted(f.def)).collect();
     fns.sort_by_key(|f| f.def);
-    let mut consts: Vec<&thir::ConstDef> = module.consts.iter().collect();
+    let mut consts: Vec<&thir::ConstDef> = module.consts.iter().filter(|c| wanted(c.def)).collect();
     consts.sort_by_key(|c| c.def);
     let mut functions = Vec::new();
+    let mut unsupported = Unsupported::default();
     // Items in `DefIndex` order: merge functions and constants.
     let mut fi = fns.into_iter().peekable();
     let mut ci = consts.into_iter().peekable();
@@ -78,21 +214,21 @@ pub fn lower_module(module: &thir::Module, cx: &LowerCx<'_>) -> Result<MirModule
             (None, None) => break,
         };
         if take_fn {
-            if let Some(f) = fi.next() {
-                functions.extend(lower_fn(f, cx)?);
+            if let Some(f) = fi.next()
+                && let Some(lowered) = unsupported.take(lower_fn(f, cx))?
+            {
+                functions.extend(lowered);
             }
         } else if let Some(c) = ci.next() {
-            functions.push(expr::lower_body(
-                FnKey::ConstInit(c.def),
-                c.span,
-                &c.body,
-                0,
-                cx,
-            )?);
+            let lowered = expr::lower_body(FnKey::ConstInit(c.def), c.span, &c.body, 0, cx);
+            if let Some(f) = unsupported.take(lowered)? {
+                functions.push(f);
+            }
         }
     }
     let layouts = module_layouts(module.module, &cx.defs)?;
-    finish_unit(UnitKind::Code(module.module), functions, layouts, cx)
+    let unit = finish_unit(UnitKind::Code(module.module), functions, layouts, cx)?;
+    unsupported.finish(unit)
 }
 
 /// Lowers one module's `test` blocks into its tests unit (D-265).
@@ -100,20 +236,19 @@ pub fn lower_module(module: &thir::Module, cx: &LowerCx<'_>) -> Result<MirModule
 /// # Errors
 ///
 /// As [`lower_module`].
-pub fn lower_tests(module: &thir::Module, cx: &LowerCx<'_>) -> Result<MirModule, Ice> {
+pub fn lower_tests(module: &thir::Module, cx: &LowerCx<'_>) -> Result<MirModule, LowerError> {
     let mut tests: Vec<&thir::TestDef> = module.tests.iter().collect();
     tests.sort_by_key(|t| t.def);
     let mut functions = Vec::new();
+    let mut unsupported = Unsupported::default();
     for t in tests {
-        functions.push(expr::lower_body(
-            FnKey::Test(t.def),
-            t.span,
-            &t.body,
-            0,
-            cx,
-        )?);
+        let lowered = expr::lower_body(FnKey::Test(t.def), t.span, &t.body, 0, cx);
+        if let Some(f) = unsupported.take(lowered)? {
+            functions.push(f);
+        }
     }
-    finish_unit(UnitKind::Tests(module.module), functions, Vec::new(), cx)
+    let unit = finish_unit(UnitKind::Tests(module.module), functions, Vec::new(), cx)?;
+    unsupported.finish(unit)
 }
 
 /// Lowers one top-level function: its body, or the Cheby-ABI wrapper of
@@ -122,7 +257,7 @@ pub fn lower_tests(module: &thir::Module, cx: &LowerCx<'_>) -> Result<MirModule,
 /// # Errors
 ///
 /// As [`lower_module`].
-pub fn lower_fn(f: &thir::FnDef, cx: &LowerCx<'_>) -> Result<Vec<Function>, Ice> {
+pub fn lower_fn(f: &thir::FnDef, cx: &LowerCx<'_>) -> Result<Vec<Function>, LowerError> {
     let sig = cx.defs.fn_sig(f.def)?;
     let dicts = sig
         .generics
@@ -141,10 +276,14 @@ pub fn lower_fn(f: &thir::FnDef, cx: &LowerCx<'_>) -> Result<Vec<Function>, Ice>
         )?]),
         (Some(_), Some(_)) => Err(Ice::new(
             "a function with both a body and a native external reached MIR lowering",
-        )),
-        (None, None) => Err(Ice::new(
-            "a function with neither a body nor a native external",
-        )),
+        )
+        .into()),
+        // Only a JS external: the function does not exist on native
+        // (§12.5), which only the cross-target check (C12) can reject.
+        (None, None) => Err(LowerError::Unsupported(vec![not_supported(
+            f.span,
+            "functions without an `@external(native, …)` implementation",
+        )])),
     }
 }
 

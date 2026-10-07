@@ -1,0 +1,16 @@
+// @mode: check-fail
+// @decisions: D-213, D-234
+//! `x.name` needs the type of `x` to be known at that point, and a later
+//! use does not count: annotate the parameter (§3.12.4, §5.11.3).
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+fn main() {
+  let origin = Point { x: 0, y: 0 }
+  let get_x = fn(p) { p.x }
+  let x = get_x(origin)
+  assert x == 0
+}

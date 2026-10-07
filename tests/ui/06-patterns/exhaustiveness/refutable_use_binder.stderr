@@ -1,0 +1,9 @@
+error[E0060]: refutable pattern in a `use` binder
+  --> tests/ui/06-patterns/exhaustiveness/refutable_use_binder.cheby:10:7
+   |
+10 |   use Some(x) <- with_value
+   |       ^^^^^^^ `None` not covered
+   |
+   = note: this pattern must match every value of its type (§6.1)
+   = help: bind a plain name and use `case` after the `use` to handle `None` as well, or `let assert` to panic when it does not match
+

@@ -1,0 +1,12 @@
+// @mode: check-fail
+// @decisions: D-244
+//! The piped value is an argument like any other (§5.16).
+
+pub fn double(n: Int) -> Int {
+  n * 2
+}
+
+pub fn main() {
+  let x = "two" |> double
+  assert x == 4
+}

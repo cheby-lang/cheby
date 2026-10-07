@@ -128,7 +128,7 @@ fn compile_errors_exit_with_one() {
             MANIFEST,
             (
                 "src/main.cheby",
-                "//! Unsupported.\n\nimport std::io\n\nfn main() {\n  io::println(\"never\")\n  1 + 2\n}\n",
+                "//! Unsupported.\n\nimport std::io\n\nfn main() {\n  io::println(\"never\")\n  let _ = 1 + 2\n}\n",
             ),
         ],
     );
@@ -137,6 +137,38 @@ fn compile_errors_exit_with_one() {
     assert!(
         out.stderr
             .starts_with("error[E0038]: operators are not supported yet"),
+        "{}",
+        out.stderr
+    );
+    assert_eq!(out.status, Some(1));
+}
+
+/// A construct that the compiler cannot run yet, in code that `main`
+/// reaches, is a compile error at the construct with status 1, never an
+/// internal error, whichever phase finds it (D-451, D-464, plan §8).
+#[test]
+fn unsupported_constructs_reached_from_main_exit_with_one() {
+    let dir = package(
+        "unsupported_reached",
+        &[
+            MANIFEST,
+            (
+                "src/main.cheby",
+                "//! Back-end gate.\n\nimport std::io\n\nfn main() {\n  io::println(\"never\")\n  let _ = pick(\"a\")\n}\n\nfn pick(text: String) -> String {\n  case text {\n    \"a\" => \"first\"\n    _ => text\n  }\n}\n",
+            ),
+        ],
+    );
+    let out = cheby(&dir, &["run"]);
+    assert_eq!(out.stdout, "");
+    assert!(
+        out.stderr.starts_with(
+            "error[E0038]: `case` expressions are not supported yet\n  --> src/main.cheby:11:3"
+        ),
+        "{}",
+        out.stderr
+    );
+    assert!(
+        !out.stderr.contains("internal compiler error"),
         "{}",
         out.stderr
     );

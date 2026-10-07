@@ -1,0 +1,12 @@
+error[E0051]: `empty` takes 1 type argument but 2 were given
+  --> tests/ui/03-types/inference/turbofish_count.cheby:14:19
+   |
+14 |   let xs = empty::<Int, String>()
+   |                   ^^^^^^^^^^^^^
+
+error[E0051]: `double` takes no type arguments
+  --> tests/ui/03-types/inference/turbofish_count.cheby:15:19
+   |
+15 |   let y = double::<Int>(1)
+   |                   ^^^^^
+

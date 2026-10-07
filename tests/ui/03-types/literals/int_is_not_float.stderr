@@ -1,0 +1,16 @@
+error[E0047]: mismatched types
+ --> tests/ui/03-types/literals/int_is_not_float.cheby:7:3
+  |
+6 | pub fn ratio() -> Float {
+  |                   ----- expected because of this return type
+7 |   1
+  |   ^ expected `Float`, found `{integer}`
+
+error[E0047]: mismatched types
+  --> tests/ui/03-types/literals/int_is_not_float.cheby:11:3
+   |
+10 | pub fn count() -> Int {
+   |                   --- expected because of this return type
+11 |   1.0
+   |   ^^^ expected `Int`, found `{float}`
+

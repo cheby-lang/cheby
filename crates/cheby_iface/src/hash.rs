@@ -17,7 +17,7 @@ use siphasher::sip128::{Hasher128, SipHasher13};
 
 use crate::{
     BuiltinType, CtorFields, DefId, DefIndex, DefKind, DepView, Generics, Globals, Ice, IfaceItem,
-    ItemSig, ModuleInterface, ModuleTable, Namespace, Ty, TyKind, TypeDefKind, Vis,
+    ItemSig, ModuleInterface, ModuleTable, Namespace, Ty, TyKind, TypeDef, TypeDefKind, Vis,
 };
 
 /// The format version, first in every encoding.
@@ -229,7 +229,53 @@ impl Encoder<'_> {
         out.byte(kind_tag(item.kind));
         out.byte(vis_tag(item.vis));
         self.name(out, item.name)?;
+        out.byte(targets_tag(item.targets));
+        match &item.deprecated {
+            Some(message) => {
+                out.byte(1);
+                out.str(message)?;
+            }
+            None => out.byte(0),
+        }
         self.sig(out, &item.sig)
+    }
+
+    fn type_def(&self, out: &mut Out, t: &TypeDef) -> Result<(), Ice> {
+        self.generics(out, &t.generics)?;
+        out.byte(u8::from(t.exposed));
+        match &t.home {
+            Some(home) => {
+                out.byte(1);
+                out.path(home);
+            }
+            None => out.byte(0),
+        }
+        match &t.hooks {
+            Some(hooks) => {
+                out.byte(1);
+                self.name(out, hooks.equal)?;
+                self.name(out, hooks.hash)?;
+                self.name(out, hooks.debug)?;
+            }
+            None => out.byte(0),
+        }
+        match &t.kind {
+            TypeDefKind::Builtin(b) => {
+                out.byte(0);
+                out.byte(builtin_tag(*b));
+            }
+            TypeDefKind::Adt { ctors } => {
+                out.byte(1);
+                out.len(ctors.len())?;
+                for &ctor in ctors {
+                    let item = self.iface.items.try_get(ctor, "constructor")?;
+                    self.name(out, item.name)?;
+                    self.sig(out, &item.sig)?;
+                }
+            }
+            TypeDefKind::External => out.byte(2),
+        }
+        Ok(())
     }
 
     fn sig(&self, out: &mut Out, sig: &ItemSig) -> Result<(), Ice> {
@@ -243,42 +289,14 @@ impl Encoder<'_> {
                     self.ty(out, param.ty)?;
                 }
                 self.ty(out, f.ret)?;
-                out.byte(targets_tag(f.targets));
-                match &f.deprecated {
-                    Some(message) => {
-                        out.byte(1);
-                        out.str(message)?;
-                    }
-                    None => out.byte(0),
+                out.len(f.clamped.len())?;
+                for &index in &f.clamped {
+                    out.u32(index);
                 }
             }
             ItemSig::Type(t) => {
                 out.byte(1);
-                self.generics(out, &t.generics)?;
-                out.byte(u8::from(t.exposed));
-                match &t.home {
-                    Some(home) => {
-                        out.byte(1);
-                        out.path(home);
-                    }
-                    None => out.byte(0),
-                }
-                match &t.kind {
-                    TypeDefKind::Builtin(b) => {
-                        out.byte(0);
-                        out.byte(builtin_tag(*b));
-                    }
-                    TypeDefKind::Adt { ctors } => {
-                        out.byte(1);
-                        out.len(ctors.len())?;
-                        for &ctor in ctors {
-                            let item = self.iface.items.try_get(ctor, "constructor")?;
-                            self.name(out, item.name)?;
-                            self.sig(out, &item.sig)?;
-                        }
-                    }
-                    TypeDefKind::External => out.byte(2),
-                }
+                self.type_def(out, t)?;
             }
             ItemSig::Ctor(c) => {
                 out.byte(2);
@@ -381,6 +399,9 @@ const fn builtin_tag(b: BuiltinType) -> u8 {
         BuiltinType::U32 => 11,
         BuiltinType::U64 => 12,
         BuiltinType::F32 => 13,
+        BuiltinType::Map => 14,
+        BuiltinType::Set => 15,
+        BuiltinType::Bytes => 16,
     }
 }
 
@@ -390,7 +411,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        FnSig, IndexVec, InterfaceSet, ModuleId, ModuleInfo, PackageId, ParamSig, builtin,
+        FnSig, IndexVec, InterfaceSet, ModuleId, ModuleInfo, PackageId, ParamSig, TypeHooks,
+        builtin,
     };
 
     struct Setup {
@@ -430,6 +452,8 @@ mod tests {
             vis,
             parent: None,
             span: Some(span(at)),
+            targets: Targets::ALL,
+            deprecated: None,
             sig: ItemSig::Fn(FnSig {
                 generics: Generics::empty(),
                 params: Box::new([ParamSig {
@@ -437,8 +461,26 @@ mod tests {
                     ty: param,
                 }]),
                 ret: Ty::NIL,
-                targets: Targets::ALL,
-                deprecated: None,
+                clamped: Box::new([]),
+            }),
+        }
+    }
+
+    fn ty_item(s: &Setup, name: &str, hooks: Option<TypeHooks>) -> IfaceItem {
+        IfaceItem {
+            name: s.globals.names.intern(name),
+            kind: DefKind::Type,
+            vis: Vis::Pub,
+            parent: None,
+            span: None,
+            targets: Targets::ALL,
+            deprecated: None,
+            sig: ItemSig::Type(TypeDef {
+                generics: Generics::empty(),
+                kind: TypeDefKind::External,
+                exposed: false,
+                home: None,
+                hooks,
             }),
         }
     }
@@ -483,6 +525,8 @@ mod tests {
             vis: Vis::Priv,
             parent: None,
             span: Some(span(0)),
+            targets: Targets::ALL,
+            deprecated: None,
             sig: ItemSig::Test,
         };
         let with_private = hash_of(
@@ -513,6 +557,77 @@ mod tests {
             ],
         );
         assert_ne!(base, vis);
+    }
+
+    #[test]
+    fn hash_covers_targets_deprecation_clamps_and_hooks() {
+        let s = setup();
+        let base_items = || vec![func(&s, "take", Vis::Pub, Ty::INT, 0)];
+        let base = hash_of(&s, base_items());
+        let with = |edit: &dyn Fn(&mut IfaceItem)| {
+            let mut items = base_items();
+            edit(&mut items[0]);
+            hash_of(&s, items)
+        };
+        let native = with(&|item| item.targets = Targets::only(Target::Native));
+        let js = with(&|item| item.targets = Targets::only(Target::Js));
+        assert_ne!(base, native);
+        assert_ne!(native, js);
+        let deprecated = with(&|item| item.deprecated = Some("use `drop`".into()));
+        let other_message = with(&|item| item.deprecated = Some("use `skip`".into()));
+        assert_ne!(base, deprecated);
+        assert_ne!(deprecated, other_message);
+        let clamped = with(&|item| {
+            if let ItemSig::Fn(f) = &mut item.sig {
+                f.clamped = Box::new([0]);
+            }
+        });
+        assert_ne!(base, clamped);
+        // The span is not part of the hash.
+        assert_eq!(base, with(&|item| item.span = Some(span(77))));
+
+        let names = &s.globals.names;
+        let hooks = |equal: &str| TypeHooks {
+            equal: names.intern(equal),
+            hash: names.intern("hash_error"),
+            debug: names.intern("debug_error"),
+        };
+        let plain = hash_of(&s, vec![ty_item(&s, "Error", None)]);
+        let hooked = hash_of(&s, vec![ty_item(&s, "Error", Some(hooks("equal_error")))]);
+        let other = hash_of(&s, vec![ty_item(&s, "Error", Some(hooks("same_error")))]);
+        assert_ne!(plain, hooked);
+        assert_ne!(hooked, other);
+    }
+
+    /// The same interface built in two fresh processes' tables, with names
+    /// and types interned in a different order, encodes to the same bytes.
+    #[test]
+    fn encoding_is_byte_stable_across_runs() {
+        let build = |warm_up: &[&str]| {
+            let s = setup();
+            for name in warm_up {
+                s.globals.names.intern(name);
+            }
+            let tuple = s
+                .globals
+                .types
+                .intern(TyKind::Tuple(Box::new([Ty::FLOAT, Ty::BOOL])));
+            let list = s.globals.types.named(builtin::LIST, [tuple]);
+            let items = vec![
+                func(&s, "zeta", Vis::Pub, list, 3),
+                func(&s, "alpha", Vis::Package, Ty::STRING, 9),
+            ];
+            let iface = ModuleInterface::new(
+                s.module,
+                PackageId::LOCAL,
+                IndexVec::from_raw(items).unwrap(),
+            )
+            .unwrap();
+            let allowed = [];
+            let deps = DepView::new(&s.set, &allowed);
+            encode(&iface, &deps, &s.modules, &s.globals).unwrap()
+        };
+        assert_eq!(build(&[]), build(&["alpha", "text", "x", "zeta"]));
     }
 
     #[test]

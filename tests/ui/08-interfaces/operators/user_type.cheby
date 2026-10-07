@@ -1,0 +1,39 @@
+// @mode: check-pass
+// @decisions: D-047, D-118
+//! Operators on a user type call the functions of its module: `+` calls
+//! `add`, unary `-` calls `neg`, and `<` and the other comparisons call
+//! `compare` (§5.4.3, §5.4.4, §8.7).
+
+type Money {
+  cents: Int,
+}
+
+fn add(a: Money, b: Money) -> Money {
+  Money { cents: a.cents + b.cents }
+}
+
+fn sub(a: Money, b: Money) -> Money {
+  Money { cents: a.cents - b.cents }
+}
+
+fn neg(m: Money) -> Money {
+  Money { cents: -m.cents }
+}
+
+fn compare(a: Money, b: Money) -> Order {
+  case {
+    a.cents < b.cents => Less
+    a.cents > b.cents => Greater
+    _ => Equal
+  }
+}
+
+fn main() {
+  let price = Money { cents: 250 }
+  let tip = Money { cents: 50 }
+  assert price + tip == Money { cents: 300 }
+  assert price - tip == Money { cents: 200 }
+  assert -tip == Money { cents: -50 }
+  assert tip < price
+  assert price >= tip
+}

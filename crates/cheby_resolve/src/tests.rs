@@ -15,7 +15,6 @@ use cheby_syntax::SyntaxTree;
 use cheby_syntax::ast::{AstNode, Item, PathNode, TypeDecl};
 use rustc_hash::FxHashMap;
 
-use crate::body::Mode;
 use crate::*;
 
 /// The slice's `std/io.cheby` (D-450).
@@ -43,8 +42,47 @@ pub fn eprint(text: String)
 pub fn eprintln(text: String)
 "#;
 
-/// A std module with a private and a package-visible item, for E0043.
-const STD_SECRET: &str = "//! Test module.\n\npub fn open() {\n  Nil\n}\n\npriv fn hidden() {\n  Nil\n}\n\nfn internal() {\n  Nil\n}\n";
+/// A std module, so another package: private, package-visible, opaque and
+/// exposed items, for E0043.
+const STD_SECRET: &str = r"//! Test module.
+
+pub fn open() {
+  Nil
+}
+
+priv fn hidden() {
+  Nil
+}
+
+fn internal() {
+  Nil
+}
+
+pub type Token {
+  Token(String),
+}
+
+pub exposed type Open {
+  Open(String),
+}
+
+pub type Pair { left: String, right: String }
+
+interface Internal
+
+pub interface Visible {
+  fn visible(Self) -> String
+}
+
+pub interface Wide: Visible {
+  fn wide(Self) -> String
+}
+";
+
+/// The home modules of `Option` and of the kernel type `Map` (D-447,
+/// GAP(kernel-types)): they do not declare the builtin types, but use them.
+const STD_OPTION: &str = "//! Options.\n\npub fn is_some<T>(option: Option<T>) -> Bool {\n  case option {\n    Some(_) => True\n    None => False\n  }\n}\n";
+const STD_MAP: &str = "//! Maps.\n\n@external(native, \"cheby_map_size\")\n@external(js, \"./map.mjs\", \"size\")\npub fn size<K, V>(map: Map<K, V>) -> Int\n";
 
 /// Standard-library modules the spec plans but the test std does not ship.
 fn planned() -> Vec<String> {
@@ -55,7 +93,7 @@ fn planned() -> Vec<String> {
             let name = e.unwrap().file_name().to_string_lossy().into_owned();
             name.strip_suffix(".md").map(str::to_owned)
         })
-        .filter(|n| n != "README" && n != "io")
+        .filter(|n| n != "README" && !SHIPPED.iter().any(|(p, _)| p == n))
         .collect();
     names.push("json::decode".to_owned());
     for tier2 in [
@@ -68,7 +106,59 @@ fn planned() -> Vec<String> {
     names
 }
 
-const SHIPPED: &[(&str, &str)] = &[("io", STD_IO), ("secret", STD_SECRET)];
+const SHIPPED: &[(&str, &str)] = &[
+    ("io", STD_IO),
+    ("secret", STD_SECRET),
+    ("option", STD_OPTION),
+    ("map", STD_MAP),
+    ("std_attrs", STD_ATTRS),
+];
+
+/// A std module with the std-only attributes (GAP(std-attributes)).
+const STD_ATTRS: &str = r#"//! Std-only attributes.
+
+@std_clamped(count)
+pub fn take(text: String, count: Int) -> String {
+  text
+}
+
+@std_clamped(count, nope, count)
+pub fn drop(text: String, count: Int) -> String {
+  text
+}
+
+@std_hooks(equal, hash, debug)
+pub type Handle {
+  Handle(String),
+}
+
+@std_hooks(equal, hash)
+pub type Broken {
+  Broken(String),
+}
+
+@std_hooks(equal, missing, debug)
+pub type Missing {
+  Missing(String),
+}
+
+@std_clamped(count)
+pub type Misplaced {
+  Misplaced(String),
+}
+
+fn equal(a: Handle, b: Handle) -> Bool {
+  True
+}
+
+fn hash(a: Handle) -> Int {
+  0
+}
+
+fn debug(a: Handle) -> String {
+  "handle"
+}
+"#;
 
 struct Lookup<'a> {
     package: &'a str,
@@ -213,18 +303,14 @@ fn parse(id: ModuleId, text: &str) -> (SyntaxTree, Vec<Diagnostic>) {
 /// Builds package `app` from `(module path under app, text)` pairs, `""`
 /// being the root module.
 fn build(local: &[(&str, &str)]) -> Build {
-    build_package("app", local, Mode::Slice)
-}
-
-fn build_full(local: &[(&str, &str)]) -> Build {
-    build_package("app", local, Mode::Full)
+    build_package("app", local)
 }
 
 #[expect(
     clippy::too_many_lines,
     reason = "the whole front end of a build, in order"
 )]
-fn build_package(package: &str, local: &[(&str, &str)], mode: Mode) -> Build {
+fn build_package(package: &str, local: &[(&str, &str)]) -> Build {
     let globals = Globals::new();
     let mut modules = ModuleTable::new();
     let mut trees = FxHashMap::default();
@@ -352,11 +438,11 @@ fn build_package(package: &str, local: &[(&str, &str)], mode: Mode) -> Build {
             globals: &globals,
             std: StdCatalog {
                 known: &std_refs,
-                partial: &["io"],
+                partial: &["io", "option", "map"],
             },
             package_targets: cheby_package::Targets::ALL,
         };
-        let (module, d) = resolve_module_in(&input, mode).unwrap();
+        let (module, d) = resolve_module(&input).unwrap();
         diags.extend(d);
         let iface = fake_interface(&module, &trees[&id], info.package);
         set.insert(Arc::new(iface)).unwrap();
@@ -389,7 +475,7 @@ fn fake_interface(
             let sig = match (item.status, item.kind) {
                 (ItemStatus::Unsupported, _) => ItemSig::Unsupported,
                 (_, DefKind::Interface) => ItemSig::Interface(cheby_iface::InterfaceDef {
-                    embeds: Box::new([]),
+                    embeds: embeds(module, tree, item),
                     fns: module
                         .items
                         .iter_enumerated()
@@ -409,6 +495,7 @@ fn fake_interface(
                         },
                         exposed,
                         home: None,
+                        hooks: None,
                     })
                 }
                 _ => ItemSig::Error,
@@ -419,11 +506,29 @@ fn fake_interface(
                 vis: item.vis,
                 parent: item.parent,
                 span: Some(item.name_span),
+                targets: item.attrs.targets,
+                deprecated: item.attrs.deprecated.clone(),
                 sig,
             }
         })
         .collect();
     ModuleInterface::new(module.module, package, IndexVec::from_raw(items).unwrap()).unwrap()
+}
+
+/// The interfaces an interface declaration embeds, as resolved.
+fn embeds(module: &ResolvedModule, tree: &SyntaxTree, item: &ItemDef) -> Box<[DefId]> {
+    let decl = tree
+        .node(item.node)
+        .and_then(cheby_syntax::ast::InterfaceDecl::cast)
+        .unwrap();
+    decl.bounds()
+        .iter()
+        .flat_map(|b| b.interfaces())
+        .filter_map(|i| match module.sig_paths.get(&i.path()?.syntax().id()) {
+            Some(Res::Def(def)) => Some(*def),
+            _ => None,
+        })
+        .collect()
 }
 
 // ---- 001 and imports ------------------------------------------------------
@@ -590,7 +695,6 @@ fn attributes() {
     assert_eq!(
         b.messages(),
         [
-            "E0038: constants are not supported yet",
             // `b` exists only on native, in a package built for both.
             "E0038: functions that exist only on some of the package's targets are not supported yet",
             "E0045: `@blocking` is not allowed on a function",
@@ -606,33 +710,143 @@ fn attributes() {
 }
 
 #[test]
-fn valid_attributes_are_gated_in_the_slice() {
+fn valid_attributes_are_recorded() {
     let b = build(&[(
         "",
-        "@target(native)\nfn a() {\n  Nil\n}\n\n@external(native, \"x\")\n@blocking\npub fn b()\n\n@external(js, \"./m.mjs\", \"c\")\n@async\n@deprecated(\"use b\")\npub fn c()\n",
+        "@target(native)\nfn a() {\n  Nil\n}\n\n@external(native, \"x\")\n@blocking\npub fn b()\n\n@external(js, \"./m.mjs\", \"c\")\n@async\n@deprecated(\"use b\")\npub fn c()\n\n@external(native, \"d\")\n@external(js, \"./m.mjs\", \"d\")\npub fn d()\n\n@external(native, \"e\")\nfn e() {\n  Nil\n}\n",
     )]);
+    // Only the bodiless functions that miss a target of the package are
+    // still E0038 (D-451); `@target`, `@blocking`, `@async` and
+    // `@deprecated` are accepted.
     assert_eq!(
         b.messages(),
         [
-            "E0038: `@async` attributes are not supported yet",
-            "E0038: `@blocking` attributes are not supported yet",
-            "E0038: `@deprecated` attributes are not supported yet",
-            "E0038: `@target` attributes are not supported yet",
-            "E0038: functions without an `@external(native, …)` implementation are not supported yet",
+            "E0038: functions that exist only on some of the package's targets are not supported yet",
+            "E0038: functions that exist only on some of the package's targets are not supported yet",
         ]
     );
     let app = b.resolved("app");
-    assert!(
-        app.items
-            .iter()
-            .all(|i| i.status == ItemStatus::Unsupported)
+    let status = |n: u32| app.items.get(DefIndex::from_u32(n)).unwrap();
+    assert_eq!(status(0).status, ItemStatus::Ok);
+    assert_eq!(
+        status(0).attrs.targets,
+        cheby_package::Targets::only(cheby_package::Target::Native)
     );
-    let c = app.items.get(DefIndex::from_u32(2)).unwrap();
+    assert!(status(1).attrs.blocking);
+    assert_eq!(status(1).status, ItemStatus::Unsupported);
+    let c = status(2);
     assert!(c.attrs.is_async);
     assert_eq!(c.attrs.deprecated.as_deref(), Some("use b"));
     assert_eq!(
         c.attrs.targets,
         cheby_package::Targets::only(cheby_package::Target::Js)
+    );
+    assert_eq!(status(3).status, ItemStatus::Ok);
+    assert_eq!(status(3).attrs.targets, cheby_package::Targets::ALL);
+    // A function with a body and an `@external` for one target exists on
+    // every target (D-207).
+    assert_eq!(status(4).status, ItemStatus::Ok);
+    assert_eq!(status(4).attrs.targets, cheby_package::Targets::ALL);
+    assert!(app.bodies.contains_key(&DefIndex::from_u32(4)));
+}
+
+#[test]
+fn targets_of_every_item_kind() {
+    use cheby_package::{Target, Targets};
+    let b = build(&[
+        (
+            "",
+            "@target(js)\ntype T {\n  A,\n}\n\n@target(native)\ntype Alias = String\n\n@target(js)\nconst c: String = \"c\"\n\n@target(native)\ninterface I {\n  fn f(Self)\n}\n\n@target(js)\ntest \"t\" {\n  Nil\n}\n\n@target(js)\n@external(native, \"n\")\n@external(js, \"./m.mjs\", \"n\")\nfn n()\n\nfn main() {\n  Nil\n}\n",
+        ),
+        (
+            "web",
+            "//! Only on JS.\n\n@!target(js)\n\ntype W {\n  W,\n}\n\n@target(js)\nfn on_js() {\n  Nil\n}\n\n@target(native)\nfn nowhere() {\n  Nil\n}\n\n@external(js, \"./w.mjs\", \"x\")\nfn x()\n",
+        ),
+    ]);
+    // `n` exists only on JS (narrowed by `@target`), so it is E0038 in a
+    // package for both targets; `web::x` exists on every target of its
+    // module.
+    assert_eq!(
+        b.messages(),
+        ["E0038: functions that exist only on some of the package's targets are not supported yet"]
+    );
+    let targets = |path: &str| -> Vec<(String, Targets)> {
+        b.resolved(path)
+            .items
+            .iter()
+            .map(|i| (b.globals.names.get(i.name).to_owned(), i.attrs.targets))
+            .collect()
+    };
+    let js = Targets::only(Target::Js);
+    let native = Targets::only(Target::Native);
+    assert_eq!(
+        targets("app"),
+        [
+            ("T".to_owned(), js),
+            ("A".to_owned(), js),
+            ("Alias".to_owned(), native),
+            ("c".to_owned(), js),
+            ("I".to_owned(), native),
+            ("f".to_owned(), native),
+            ("t".to_owned(), js),
+            ("n".to_owned(), js),
+            ("main".to_owned(), Targets::ALL),
+        ]
+    );
+    assert_eq!(b.resolved("app::web").targets, js);
+    assert_eq!(
+        targets("app::web"),
+        [
+            ("W".to_owned(), js),
+            ("W".to_owned(), js),
+            ("on_js".to_owned(), js),
+            ("nowhere".to_owned(), Targets::NONE),
+            ("x".to_owned(), js),
+        ]
+    );
+}
+
+#[test]
+fn std_only_attributes() {
+    let b = build(&[(
+        "",
+        "import std::std_attrs\n\n@std_clamped(count)\nfn take(count: Int) -> Int {\n  count\n}\n\n@std_hooks(a, b, c)\ntype T {\n  T,\n}\n\nfn main() {\n  Nil\n}\n",
+    )]);
+    assert_eq!(
+        b.messages(),
+        [
+            "E0042: cannot find function `missing` in this module",
+            "E0045: `@std_clamped` is not allowed on a type",
+            "E0045: `count` is named twice in `@std_clamped`",
+            "E0045: malformed `@std_hooks` attribute",
+            "E0045: the function has no parameter `nope`",
+            // Outside the standard library they are unknown (§4.8).
+            "E0045: unknown attribute `@std_clamped`",
+            "E0045: unknown attribute `@std_hooks`",
+        ]
+    );
+    let std = b.resolved("std::std_attrs");
+    let item = |name: &str| {
+        std.items
+            .iter()
+            .find(|i| b.globals.names.get(i.name) == name)
+            .unwrap()
+    };
+    let names = |list: &[(cheby_iface::Name, cheby_diag::Span)]| -> Vec<&str> {
+        list.iter().map(|(n, _)| b.globals.names.get(*n)).collect()
+    };
+    assert_eq!(names(&item("take").attrs.clamped), ["count"]);
+    assert_eq!(names(&item("drop").attrs.clamped), ["count"]);
+    assert_eq!(
+        names(&item("Handle").attrs.hooks.unwrap()),
+        ["equal", "hash", "debug"]
+    );
+    assert!(item("Broken").attrs.hooks.is_none());
+    let app = b.resolved("app");
+    assert!(
+        app.items
+            .iter()
+            .all(|i| i.attrs.clamped.is_empty() && i.attrs.hooks.is_none())
     );
 }
 
@@ -644,7 +858,7 @@ fn missing_body() {
 
 #[test]
 fn def_index_order_puts_members_after_their_parent() {
-    let b = build_full(&[(
+    let b = build(&[(
         "",
         "type Shape {\n  Circle(Float),\n  Square(Float),\n}\n\ntype Point { x: Int, y: Int }\n\ninterface Area {\n  fn area(Self) -> Float\n}\n\ntest \"t\" {\n  Nil\n}\n\nfn f() {\n  Nil\n}\n",
     )]);
@@ -676,24 +890,6 @@ fn def_index_order_puts_members_after_their_parent() {
     );
     assert!(b.diags.is_empty(), "{:?}", b.messages());
     assert!(app.items.iter().all(|i| i.status == ItemStatus::Ok));
-    // In the slice, the type, interface and test are gated with their
-    // members.
-    let b = build(&[(
-        "",
-        "type Shape {\n  Circle,\n}\n\ninterface Area {\n  fn area(Self) -> Float\n}\n\nfn f() {\n  Nil\n}\n",
-    )]);
-    let app = b.resolved("app");
-    let statuses: Vec<ItemStatus> = app.items.iter().map(|i| i.status).collect();
-    assert_eq!(
-        statuses,
-        [
-            ItemStatus::Unsupported,
-            ItemStatus::Unsupported,
-            ItemStatus::Unsupported,
-            ItemStatus::Unsupported,
-            ItemStatus::Ok
-        ]
-    );
 }
 
 // ---- names, privacy, shadowing ---------------------------------------------
@@ -841,99 +1037,447 @@ fn names_are_checked_once_where_bound() {
     assert!(!b.messages().iter().any(|m| m.contains("cannot find")));
 }
 
-// ---- the gate ---------------------------------------------------------------
+// ---- what is left of the gate (D-451) -----------------------------------
 
 #[test]
-fn gate_reports_outermost_constructs_once() {
+fn every_construct_resolves_without_e0038() {
     let b = build(&[(
         "",
-        "import std::io\nimport std::io::{println}\n\nfn main() {\n  let x = case 1 + 2 {\n    3 => [4]\n    _ => [5]\n  }\n  io::println(\"{x}\")\n  both(_, \"b\")\n  let f = main\n  let (a, b) = (1, 2)\n}\n\nfn ok() {\n  io::println(\"fine\")\n}\n\nfn generic<T>(x: T) -> T {\n  x\n}\n\ntype Unit {\n  Unit,\n}\n\nfn both(a: String, b: String) {\n  Nil\n}\n",
+        "import std::io\nimport std::io::{println}\n\ntype Unit {\n  Unit,\n}\n\ntype Pair = (String, String)\n\nconst greeting: String = \"hi\"\n\ninterface Named {\n  fn name(Self) -> String\n}\n\nfn main() {\n  let x = case 1 + 2 {\n    3 => [4]\n    _ => [5]\n  }\n  io::println(\"{x}\")\n  both(_, \"b\")\n  let f = main\n  let (a, b) = (1, 2)\n  let g = Named::name\n  println(greeting)\n}\n\nfn generic<T>(x: T) -> T {\n  x\n}\n\nfn both(a: String, b: String) {\n  Nil\n}\n\ntest \"unit\" {\n  assert Unit == Unit\n}\n",
     )]);
-    assert_eq!(
-        b.messages(),
-        [
-            "E0038: `case` expressions are not supported yet",
-            "E0038: function captures are not supported yet",
-            "E0038: interpolated strings are not supported yet",
-            "E0038: item imports are not supported yet",
-            "E0038: patterns other than a name or `_` in `let` are not supported yet",
-            "E0038: tuples are not supported yet",
-            "E0038: type declarations are not supported yet",
-            "E0038: type parameters are not supported yet",
-        ]
-    );
+    assert!(b.diags.is_empty(), "{:?}", b.messages());
     let app = b.resolved("app");
-    let status = |name: &str| {
-        app.items
-            .iter()
-            .find(|i| b.globals.names.get(i.name) == name)
-            .unwrap()
-            .status
-    };
-    // Hits in the body leave the signature in force (D-246); hits in the
-    // declaration do not.
-    assert_eq!(status("main"), ItemStatus::BodyUnsupported);
-    assert_eq!(status("ok"), ItemStatus::Ok);
-    assert_eq!(status("generic"), ItemStatus::Unsupported);
-    assert!(app.bodies.contains_key(&DefIndex::from_u32(1)));
-    assert!(!app.bodies.contains_key(&DefIndex::from_u32(0)));
+    assert!(app.items.iter().all(|i| i.status == ItemStatus::Ok));
+    let main = DefId::new(b.module("app"), DefIndex::from_u32(6));
+    let paths = b.body_paths("app", "main");
+    assert!(paths.contains(&("main".to_owned(), Res::Def(main))));
+    let named_fn = DefId::new(b.module("app"), DefIndex::from_u32(5));
+    assert!(paths.contains(&("Named::name".to_owned(), Res::Def(named_fn))));
+    let println = b.def("std::io", "println");
+    assert!(paths.contains(&("println".to_owned(), Res::Def(println))));
 }
 
 #[test]
-fn gate_function_values_and_uses_of_unsupported_items() {
+fn e0038_is_left_for_planned_and_partial_std_and_bodiless_functions() {
     let b = build(&[
         (
             "",
-            "import app::lib\n\nfn main() {\n  let f = helper\n}\n\nfn helper() {\n  Nil\n}\n\nfn other() {\n  lib::later()\n  later()\n  lib::generic()\n}\n\nfn later() {\n  let x = 1\n}\n",
+            "import std::list\nimport std::io\nimport std::io::{read_line}\n\nfn main() {\n  io::read_line()\n}\n\nfn later() -> String {\n  lib::later()\n}\n",
         ),
         (
             "lib",
-            "pub fn later() {\n  let x = 1\n}\n\npub fn generic<T>() {\n  Nil\n}\n",
+            "@external(js, \"./lib.mjs\", \"later\")\npub fn later() -> String\n",
         ),
     ]);
     assert_eq!(
         b.messages(),
         [
-            "E0038: functions used as values are not supported yet",
-            "E0038: numeric literals are not supported yet",
-            "E0038: numeric literals are not supported yet",
-            "E0038: type parameters are not supported yet",
+            "E0038: `std::io::read_line` is not supported yet",
+            "E0038: `std::io::read_line` is not supported yet",
+            "E0038: functions that exist only on some of the package's targets are not supported yet",
+            "E0038: the module `std::list` is not supported yet",
+            "E0042: `lib` is not imported",
         ]
     );
-    // A function whose body alone is unsupported keeps its signature, so
-    // calls of it resolve (D-246); uses of an item whose declaration is
-    // unsupported are silent errors.
-    let later = |module: &str| {
-        DefId::new(
-            b.module(module),
-            DefIndex::from_u32(match module {
-                "app" => 3,
-                _ => 0,
-            }),
-        )
+    let status = |name: &str| {
+        b.resolved("app")
+            .items
+            .iter()
+            .find(|i| b.globals.names.get(i.name) == name)
+            .unwrap()
+            .status
     };
+    // A hit in a body leaves the signature in force (D-246).
+    assert_eq!(status("main"), ItemStatus::BodyUnsupported);
+    assert_eq!(status("later"), ItemStatus::Ok);
+    let lib = b.resolved("app::lib");
     assert_eq!(
-        b.body_paths("app", "other"),
-        [
-            ("lib::later".to_owned(), Res::Def(later("app::lib"))),
-            ("later".to_owned(), Res::Def(later("app"))),
-            ("lib::generic".to_owned(), Res::Err),
-        ]
+        lib.items.get(DefIndex::from_u32(0)).unwrap().status,
+        ItemStatus::Unsupported
     );
-    let main_status = b
-        .resolved("app")
-        .items
-        .iter()
-        .find(|i| b.globals.names.get(i.name) == "main")
-        .map(|i| i.status);
-    assert_eq!(main_status, Some(ItemStatus::BodyUnsupported));
 }
 
-// ---- the full resolver (gate off) ---------------------------------------------
+#[test]
+fn uses_of_unsupported_items_are_silent() {
+    let b = build(&[
+        ("", "import app::lib\n\nfn main() {\n  lib::later()\n}\n"),
+        ("lib", "@external(native, \"later\")\npub fn later()\n"),
+    ]);
+    assert_eq!(
+        b.messages(),
+        ["E0038: functions that exist only on some of the package's targets are not supported yet"]
+    );
+    assert_eq!(
+        b.body_paths("app", "main"),
+        [("lib::later".to_owned(), Res::Err)]
+    );
+}
+
+// ---- prelude (B6) -----------------------------------------------------------
+
+#[test]
+fn kernel_types_are_reachable_only_through_their_home_modules() {
+    let b = build(&[(
+        "",
+        "import std::map\nimport std::map::{Map as Dict}\nimport std::option::{Option, Some}\n\nfn size(m: map::Map<String, Int>) -> Int {\n  map::size(m)\n}\n\nfn same(m: Dict<String, Int>) -> Option<Int> {\n  Some(map::size(m))\n}\n\nfn missing(s: Set<Int>, m: Map<Int, Int>, b: Bytes) {\n  Nil\n}\n",
+    )]);
+    assert_eq!(
+        b.messages(),
+        [
+            "E0042: cannot find type `Bytes` in this scope",
+            "E0042: cannot find type `Map` in this scope",
+            "E0042: cannot find type `Set` in this scope",
+        ]
+    );
+    let app = b.resolved("app");
+    let sig: Vec<Res> = {
+        let mut v: Vec<_> = app.sig_paths.values().copied().collect();
+        v.sort_by_key(|r| format!("{r:?}"));
+        v.dedup();
+        v
+    };
+    assert!(sig.contains(&Res::Def(builtin::MAP)));
+    assert!(sig.contains(&Res::Def(builtin::OPTION)));
+    // The home module itself sees `Map` without declaring it.
+    let std_map = b.resolved("std::map");
+    assert!(
+        std_map
+            .sig_paths
+            .values()
+            .any(|r| *r == Res::Def(builtin::MAP))
+    );
+    let map = b.globals.names.intern("Map");
+    assert_eq!(
+        std_map
+            .scope
+            .get(cheby_iface::Namespace::Type, map)
+            .unwrap()
+            .source,
+        ScopeSource::HomeReexport
+    );
+    assert!(app.scope.get(cheby_iface::Namespace::Type, map).is_none());
+    // An item import of a home re-export binds the builtin item and does
+    // not warn.
+    let some = b.globals.names.intern("Some");
+    let entry = app.scope.get(cheby_iface::Namespace::Value, some).unwrap();
+    assert_eq!(entry.res, Res::Def(builtin::SOME));
+    assert_eq!(entry.source, ScopeSource::Import(2));
+}
+
+#[test]
+fn hiding_prelude_names_warns_per_namespace() {
+    let b = build(&[
+        (
+            "",
+            "import app::shop::{Order}\n\ntype Option {\n  Some(String),\n  Nothing,\n}\n\ntype Value {\n  String(String),\n  Bool(Bool),\n}\n\ninterface Show\n\nfn main() {\n  let o = Some(\"x\")\n}\n",
+        ),
+        ("shop", "type Order {\n  Placed,\n}\n"),
+    ]);
+    assert_eq!(
+        b.messages(),
+        [
+            "W0007: `Option` hides the prelude type `Option`",
+            // In `shop`, where it is declared, and in the root, which
+            // imports it.
+            "W0007: `Order` hides the prelude type `Order`",
+            "W0007: `Order` hides the prelude type `Order`",
+            "W0007: `Show` hides the prelude interface `Show`",
+            "W0007: `Some` hides the prelude constructor `Some`",
+        ]
+    );
+    let some = b
+        .diags
+        .iter()
+        .find(|d| d.message.contains("`Some`"))
+        .unwrap();
+    assert_eq!(some.labels[0].message, "declared here");
+    assert_eq!(
+        some.notes,
+        [
+            "in this module, `Some` no longer means the prelude constructor, which stays reachable as `option::Some` after `import std::option`"
+        ]
+    );
+    assert_eq!(
+        some.helps[0].message,
+        "if this is not intended, give the constructor another name"
+    );
+    let labels: Vec<&str> = b
+        .diags
+        .iter()
+        .filter(|d| d.message.contains("`Order`"))
+        .map(|d| d.labels[0].message.as_str())
+        .collect();
+    assert!(labels.contains(&"imported here") && labels.contains(&"declared here"));
+    // The local `Some` wins in the module.
+    let own_some = DefId::new(b.module("app"), DefIndex::from_u32(1));
+    assert!(
+        b.body_paths("app", "main")
+            .contains(&("Some".to_owned(), Res::Def(own_some)))
+    );
+}
+
+// ---- visibility (B5) --------------------------------------------------------
+
+#[test]
+fn visibility_through_item_imports() {
+    let b = build(&[
+        (
+            "",
+            "import app::web::{shared, own, Page}\nimport std::secret::{open, internal, Token, Internal}\n\nfn main() {\n  shared()\n  open()\n}\n",
+        ),
+        (
+            "web",
+            "fn shared() {\n  Nil\n}\n\npriv fn own() {\n  Nil\n}\n\npriv type Page {\n  Page,\n}\n",
+        ),
+    ]);
+    // One error per name, also for a type and its constructor.
+    assert_eq!(
+        b.messages(),
+        [
+            "E0043: `Internal` is visible only inside its package",
+            "E0043: `Page` is private to module `app::web`",
+            "E0043: `internal` is visible only inside its package",
+            "E0043: `own` is private to module `app::web`",
+        ]
+    );
+}
+
+#[test]
+fn constructors_of_opaque_types() {
+    let b = build(&[
+        (
+            "",
+            "import app::shapes\nimport std::secret\nimport std::secret::{Token, Open, Pair}\n\nfn make() {\n  let t = secret::Token(\"a\")\n  let u = Token(\"b\")\n  let o = Open(\"c\")\n  let p = Pair { left: \"l\", right: \"r\" }\n  let s = shapes::Secret\n  let c = shapes::Circle\n}\n\nfn read(t: Token, o: secret::Open, p: Pair) {\n  let Token(x) = t\n  let secret::Open(y) = o\n  let q = Pair { ..p, left: \"l\" }\n  let r = secret::Pair { ..p, left: \"l\" }\n}\n",
+        ),
+        (
+            "shapes",
+            "priv type Hidden {\n  Secret,\n}\n\ntype Shape {\n  Circle,\n}\n",
+        ),
+    ]);
+    assert_eq!(
+        b.messages(),
+        [
+            "E0043: `Secret` is private to module `app::shapes`",
+            "E0043: the constructor `Pair` is not visible outside its package",
+            "E0043: the constructor `Token` is not visible outside its package",
+            "E0043: the constructor `Token` is not visible outside its package",
+            "E0043: the constructor `Token` is not visible outside its package",
+            "E0043: the fields of `Pair` are not visible outside its package",
+            "E0043: the fields of `Pair` are not visible outside its package",
+        ]
+    );
+    let d = b
+        .diags
+        .iter()
+        .find(|d| d.message.contains("constructor `Token`"))
+        .unwrap();
+    assert_eq!(
+        d.notes,
+        ["a `pub` type hides its constructors unless it is `pub exposed`"]
+    );
+    // The type name itself stays usable in signatures (§4.3.4).
+    let token_ty = b.def("std::secret", "Token");
+    assert!(
+        b.resolved("app")
+            .sig_paths
+            .values()
+            .any(|r| *r == Res::Def(token_ty))
+    );
+}
+
+#[test]
+fn interfaces_in_bounds_and_dyn_follow_item_visibility() {
+    let b = build(&[(
+        "",
+        "import std::secret\n\nfn a<T: secret::Internal>(x: T) {\n  Nil\n}\n\nfn b(x: dyn secret::Internal) {\n  Nil\n}\n\nfn c<T: secret::Visible>(x: T, y: dyn secret::Visible) {\n  Nil\n}\n",
+    )]);
+    assert_eq!(
+        b.messages(),
+        [
+            "E0043: `Internal` is visible only inside its package",
+            "E0043: `Internal` is visible only inside its package",
+        ]
+    );
+}
+
+// ---- items (B4) -------------------------------------------------------------
+
+#[test]
+fn duplicates_per_namespace() {
+    let b = build(&[(
+        "",
+        "type Point { x: Int, y: Int }\n\ninterface Point\n\ntype Pair<T, T> = (T, T)\n\nfn total() {\n  Nil\n}\n\nconst total: Int = 1\n\ntype A {\n  Same,\n}\n\ntype B {\n  Same,\n}\n\ntype Pair = Int\n\ninterface Area {\n  fn area(Self)\n  fn area(Self)\n}\n\ninterface Other {\n  fn area(Self)\n}\n\ntest \"t\" {\n  Nil\n}\n\ntest \"t\" {\n  Nil\n}\n",
+    )]);
+    assert_eq!(
+        b.messages(),
+        [
+            "E0041: `Pair` is declared twice in this module",
+            "E0041: `Point` is declared twice in this module",
+            "E0041: `Same` is declared twice in this module",
+            "E0041: `total` is declared twice in this module",
+            "E0041: the interface declares `area` twice",
+            "E0041: the type parameter `T` is declared twice",
+            "E0041: two tests are named \"t\"",
+        ]
+    );
+    // Every one has a secondary label on the first declaration.
+    assert!(b.diags.iter().all(|d| d.labels.len() == 2), "{:?}", b.diags);
+}
+
+#[test]
+fn interface_function_paths_follow_embedding() {
+    let b = build(&[(
+        "",
+        "import std::secret\n\ninterface Area {\n  fn area(Self) -> Float\n}\n\ninterface Both: Area + Show {\n  fn both(Self)\n}\n\ninterface Far: secret::Wide\n\ntype Point {\n  Point,\n}\n\nfn main() {\n  let a = Both::area\n  let s = Both::show\n  let b = Both::both\n  let v = Far::visible\n  let w = secret::Wide::visible\n  let x = Show::show\n  let n = Both::nope\n  let p = Point::area\n}\n",
+    )]);
+    assert_eq!(
+        b.messages(),
+        [
+            "E0042: `Both` has no function `nope`",
+            "E0042: `Point` is not an interface",
+        ]
+    );
+    let app = b.module("app");
+    let visible = b.def("std::secret", "visible");
+    assert_eq!(
+        b.body_paths("app", "main"),
+        [
+            (
+                "Both::area".to_owned(),
+                Res::Def(DefId::new(app, DefIndex::from_u32(1)))
+            ),
+            ("Both::show".to_owned(), Res::Def(builtin::SHOW_FN)),
+            (
+                "Both::both".to_owned(),
+                Res::Def(DefId::new(app, DefIndex::from_u32(3)))
+            ),
+            ("Far::visible".to_owned(), Res::Def(visible)),
+            ("secret::Wide::visible".to_owned(), Res::Def(visible)),
+            ("Show::show".to_owned(), Res::Def(builtin::SHOW_FN)),
+            ("Both::nope".to_owned(), Res::Err),
+            ("Point::area".to_owned(), Res::Err),
+        ]
+    );
+}
+
+// ---- patterns and locals (B7) -------------------------------------------------
+
+#[test]
+fn alternatives_must_bind_the_same_names() {
+    let b = build(&[(
+        "",
+        "fn f(pair: (Int, Int)) -> Int {\n  case pair {\n    (0, n) | (n, 0) => n\n    (a, 1) | (2, b) => 0\n    (c, d) | (d, c) | (c, _) => 0\n    _ => 0\n  }\n}\n",
+    )]);
+    assert_eq!(
+        b.messages(),
+        [
+            "E0062: this alternative does not bind `a`",
+            "E0062: this alternative does not bind `b`",
+            "E0062: this alternative does not bind `d`",
+        ]
+    );
+    let d = b.diags.iter().find(|d| d.message.ends_with("`d`")).unwrap();
+    assert_eq!(d.labels[0].message, "binds no `d`");
+    assert_eq!(d.labels[1].message, "`d` is bound here");
+    // Alternatives share their locals.
+    let app = b.resolved("app");
+    let body = &app.bodies[&DefIndex::from_u32(0)];
+    let names: Vec<&str> = body
+        .locals
+        .iter()
+        .map(|l| b.globals.names.get(l.name))
+        .collect();
+    assert_eq!(names, ["pair", "n", "a", "b", "c", "d"]);
+}
+
+#[test]
+fn names_bound_twice_in_one_pattern() {
+    let b = build(&[(
+        "",
+        "fn f(pair: (Int, Int), items: List<Int>) {\n  let (x, x) = pair\n  let [y, ..y] = items\n  let (z, _) as z = pair\n  let g = fn(a, a) { a }\n  case pair, pair {\n    (p, _), (p, _) => Nil\n    (q, _) | (_, q), _ => Nil\n  }\n}\n",
+    )]);
+    assert_eq!(
+        b.messages(),
+        [
+            "E0044: `a` is bound twice in this pattern",
+            "E0044: `p` is bound twice in this pattern",
+            "E0044: `x` is bound twice in this pattern",
+            "E0044: `y` is bound twice in this pattern",
+            "E0044: `z` is bound twice in this pattern",
+        ]
+    );
+    let d = b.diags.iter().find(|d| d.message.contains("`x`")).unwrap();
+    assert_eq!(d.labels.len(), 2);
+    assert!(d.helps[0].message.contains("x_2"));
+}
+
+#[test]
+fn shadowing_covers_every_binding_form() {
+    let b = build(&[(
+        "",
+        "import std::io\nimport std::io::{println}\n\nfn f(text: String, items: List<String>) {\n  use println <- each(items)\n  let g = fn((text, _)) { Nil }\n  fn h(f) {\n    Nil\n  }\n  case items {\n    [first, ..items] => Nil\n    [_, ..] as io => Nil\n    _ => Nil\n  }\n}\n\nfn each(items: List<String>, callback: fn(String) -> Nil) {\n  Nil\n}\n",
+    )]);
+    assert_eq!(
+        b.messages(),
+        [
+            "E0044: `f` is the name of a function in this module",
+            "E0044: `io` is the name of an imported module",
+            "E0044: `items` is already bound",
+            "E0044: `println` is imported into this module",
+            "E0044: `text` is already bound",
+        ]
+    );
+}
+
+#[test]
+fn naming_is_checked_at_every_binding_form() {
+    let b = build(&[(
+        "",
+        "fn f(items: List<String>) {\n  use itemA <- each(items)\n  let g = fn((textB, _)) { Nil }\n  fn localC(argD) {\n    Nil\n  }\n  case items {\n    [firstE, ..restF] as allG => Nil\n    _ => Nil\n  }\n}\n\nfn each(items: List<String>, f: fn(String) -> Nil) {\n  Nil\n}\n",
+    )]);
+    let naming: Vec<String> = b
+        .messages()
+        .into_iter()
+        .filter(|m| m.starts_with("E0006"))
+        .collect();
+    assert_eq!(naming.len(), 7, "{naming:?}");
+}
+
+#[test]
+fn local_functions_see_only_earlier_local_functions() {
+    let b = build(&[(
+        "",
+        "fn f() {\n  fn even(n) {\n    odd(n)\n  }\n  fn odd(n) {\n    even(n)\n  }\n  odd(1)\n}\n",
+    )]);
+    assert_eq!(
+        b.messages(),
+        ["E0042: cannot find value `odd` in this scope"]
+    );
+    let d = &b.diags[0];
+    assert_eq!(d.labels[1].message, "declared later");
+    assert!(d.notes[0].contains("D-110"));
+    let body = &b.resolved("app").bodies[&DefIndex::from_u32(0)];
+    let odd = body
+        .locals
+        .iter_enumerated()
+        .find(|(_, l)| b.globals.names.get(l.name) == "odd")
+        .map(|(id, _)| id)
+        .unwrap();
+    let paths = b.body_paths("app", "f");
+    assert_eq!(
+        paths
+            .iter()
+            .filter(|(t, r)| t == "odd" && *r == Res::Local(odd))
+            .count(),
+        1
+    );
+}
+
+// ---- bodies ------------------------------------------------------------------
 
 #[test]
 fn full_resolver_binds_patterns_closures_and_local_fns() {
-    let b = build_full(&[(
+    let b = build(&[(
         "",
         "import std::list\n\nfn count(numbers: List<Int>) -> Int {\n  fn step(acc, rest) {\n    case rest {\n      [] => acc\n      [first, ..tail] when first > 0 => step(acc + 1, tail)\n      [_, ..tail] => step(acc, tail)\n    }\n  }\n  let add = fn(a: Int, b) { a + b }\n  let Some(x) | Some(x) = Some(1)\n  use y <- list::each(numbers)\n  step(add(x, y), numbers)\n}\n",
     )]);
@@ -987,7 +1531,7 @@ fn full_resolver_binds_patterns_closures_and_local_fns() {
 
 #[test]
 fn full_resolver_reports_shadowing_in_nested_scopes() {
-    let b = build_full(&[(
+    let b = build(&[(
         "",
         "fn f(x: Int) -> Int {\n  let g = fn(x) { x }\n  case x {\n    y => y\n  }\n  case x {\n    y => y\n  }\n}\n",
     )]);
@@ -996,9 +1540,10 @@ fn full_resolver_reports_shadowing_in_nested_scopes() {
 
 // ---- every example ------------------------------------------------------------
 
-/// Every valid example resolves with only E0038 diagnostics
-/// (D-451), never an E0039-E0046 for a valid program and never a panic or
-/// an internal error. Examples with phase-A errors (030) stop before
+/// Every valid example resolves with only E0038 diagnostics (D-451), for
+/// planned std modules and names missing from partial ones, never an
+/// E0039-E0046, E0062 or W0007 for a valid program and never a panic or an
+/// internal error. Examples with phase-A errors (030) stop before
 /// resolution.
 #[test]
 fn examples_resolve_with_only_unsupported_constructs() {
@@ -1039,7 +1584,7 @@ fn examples_resolve_with_only_unsupported_constructs() {
             .iter()
             .map(|(p, t)| (p.as_str(), t.as_str()))
             .collect();
-        let b = build_package(&manifest.name, &local, Mode::Slice);
+        let b = build_package(&manifest.name, &local);
         let unexpected: Vec<String> = b
             .diags
             .iter()
@@ -1049,75 +1594,15 @@ fn examples_resolve_with_only_unsupported_constructs() {
         assert!(unexpected.is_empty(), "{}: {unexpected:#?}", dir.display());
         if dir.ends_with("001_hello_world") {
             assert!(b.diags.is_empty(), "{:?}", b.messages());
-        } else {
-            assert!(
-                !b.resolved.is_empty() || !b.diags.is_empty(),
-                "{}",
-                dir.display()
-            );
         }
         checked += 1;
-    }
-    assert!(checked >= 30, "only {checked} examples checked");
-}
-
-/// The same examples with the gates off: no false errors from the full
-/// resolver (B7), apart from E0038 for planned std modules.
-#[test]
-fn examples_resolve_cleanly_with_the_full_resolver() {
-    let mut checked = 0;
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples");
-    let mut dirs: Vec<_> = std::fs::read_dir(&root)
-        .unwrap()
-        .map(|e| e.unwrap().path())
-        .filter(|p| p.is_dir())
-        .collect();
-    dirs.sort();
-    for dir in dirs {
-        let mut sources = SourceMap::new();
-        let mut phase_a = Vec::new();
-        let Some(manifest) =
-            cheby_package::Manifest::load(&dir, &mut sources, &mut phase_a).unwrap()
-        else {
-            continue;
-        };
-        let files = cheby_package::discover(&dir, &manifest.name, &mut phase_a).unwrap();
-        let texts: Vec<(String, String)> = files
-            .iter()
-            .map(|f| {
-                let text = std::fs::read_to_string(dir.join(&f.file)).unwrap();
-                (f.path.segments()[1..].join("::"), text)
-            })
-            .collect();
-        let broken = texts.iter().any(|(_, text)| {
-            parse(ModuleId::from_u32(0), text)
-                .1
-                .iter()
-                .any(Diagnostic::is_error)
-        });
-        if broken || phase_a.iter().any(Diagnostic::is_error) {
-            continue;
-        }
-        let local: Vec<(&str, &str)> = texts
-            .iter()
-            .map(|(p, t)| (p.as_str(), t.as_str()))
-            .collect();
-        let b = build_package(&manifest.name, &local, Mode::Full);
-        checked += 1;
-        let unexpected: Vec<String> = b
-            .diags
-            .iter()
-            .filter(|d| d.code != cheby_diag::codes::NOT_SUPPORTED_YET)
-            .map(|d| format!("{}: {}", d.code, d.message))
-            .collect();
-        assert!(unexpected.is_empty(), "{}: {unexpected:#?}", dir.display());
     }
     assert!(checked >= 30, "only {checked} examples checked");
 }
 
 #[test]
 fn every_item_kind_has_a_node_view() {
-    let b = build_full(&[("", "type T {\n  A,\n}\n\nfn f() {\n  Nil\n}\n")]);
+    let b = build(&[("", "type T {\n  A,\n}\n\nfn f() {\n  Nil\n}\n")]);
     let app = b.resolved("app");
     let tree = &b.trees[&b.module("app")];
     for item in &app.items {

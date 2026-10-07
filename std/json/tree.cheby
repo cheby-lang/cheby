@@ -1,0 +1,518 @@
+//! The raw JSON tree that `std::json` and `std::json::decode` share, and
+//! the parser of JSON text into it (D-361, ADR-0053).
+//!
+//! `std::json` imports `std::json::decode`, so the decoders cannot name
+//! `json::Value` (D-145). Both modules import this one instead: the parser
+//! reads text into a `Tree`, the decoders run over a `Tree`, and
+//! `std::json` converts between `Tree` and `json::Value` with `rebuild`.
+//!
+//! GAP(json-tree-module): this is the internal module of D-361. Its items
+//! are package-visible, never `pub`, so no other package can use them.
+//!
+//! Nothing here grows the stack with the nesting depth of a document: the
+//! parser and `rebuild` keep the arrays and objects they are inside of in a
+//! list on the heap, and every other loop is a tail call (D-094, D-326).
+
+import std::float
+import std::int
+import std::list
+import std::string
+
+/// A JSON value as the parser reads it, with the shapes of `json::Value` (D-321).
+type Tree {
+  Null,
+  Bool(Bool),
+  Int(Int),
+  Float(Float),
+  String(String),
+  Array(List<Tree>),
+  Object(List<(String, Tree)>),
+}
+
+/// Returns the kind of `value` as `decode::Error` names it in `found` (D-323).
+fn kind(value: Tree) -> String {
+  case value {
+    Null => "Null"
+    Bool(_) => "Bool"
+    Int(_) => "Int"
+    Float(_) => "Float"
+    String(_) => "String"
+    Array(_) => "Array"
+    Object(_) => "Object"
+  }
+}
+
+/// Returns the value of the last member named `name`, as `decode::field` reads it (D-223).
+fn member(members: List<(String, Tree)>, name: String) -> Option<Tree> {
+  case members {
+    [] => None
+    [.., (key, value)] when key == name => Some(value)
+    [..front, _] => member(front, name)
+  }
+}
+
+// Converting
+
+/// What `rebuild` finds in one node of a document: a leaf already converted,
+/// or the children of an array or an object, still to be converted.
+type Children<A, B> {
+  Leaf(B),
+  Items(List<A>),
+  Members(List<(String, A)>),
+}
+
+/// A step of `rebuild`: a node to visit, or an array or object to build
+/// from the nodes converted last.
+priv type Task<A> {
+  Visit(A),
+  BuildArray(Int),
+  BuildObject(List<String>),
+}
+
+/// Converts a document from one tree type to another without growing the
+/// stack with its depth. `open` takes a node apart, and `array` and
+/// `object` build a converted array or object from converted children.
+fn rebuild<A, B>(
+  root: A,
+  open: fn(A) -> Children<A, B>,
+  array: fn(List<B>) -> B,
+  object: fn(List<(String, B)>) -> B,
+) -> B {
+  // `tasks` is a stack whose top is its last element. `done` holds the
+  // converted nodes whose array or object is not built yet, in order.
+  fn step(tasks: List<Task<A>>, done: List<B>) -> B {
+    case tasks {
+      [] => {
+        let assert [converted] = done
+        converted
+      }
+      [..rest, Visit(node)] => case open(node) {
+        Leaf(converted) => step(rest, list::push(done, converted))
+        Items(items) => {
+          let visits = list::reverse(list::map(items, Visit))
+          step(list::append(list::push(rest, BuildArray(list::length(items))), visits), done)
+        }
+        Members(members) => {
+          let keys = list::map(members, fn((key, _)) { key })
+          let visits = list::reverse(list::map(members, fn((_, child)) { Visit(child) }))
+          step(list::append(list::push(rest, BuildObject(keys)), visits), done)
+        }
+      }
+      [..rest, BuildArray(size)] => {
+        let (kept, items) = list::split_at(done, list::length(done) - size)
+        step(rest, list::push(kept, array(items)))
+      }
+      [..rest, BuildObject(keys)] => {
+        let (kept, values) = list::split_at(done, list::length(done) - list::length(keys))
+        step(rest, list::push(kept, object(list::zip(keys, values))))
+      }
+    }
+  }
+  step([Visit(root)], [])
+}
+
+// Parsing
+
+/// The code points not read yet, and the line and column of the first of
+/// them. A line ends at `\n`, and the column counts code points (D-302,
+/// D-324).
+priv type Input { rest: List<Int>, line: Int, column: Int }
+
+/// An array or object whose elements are still being read: the elements so
+/// far, and for an object the key of the member being read.
+priv type Frame {
+  InArray(List<Tree>),
+  InObject(List<(String, Tree)>, String),
+}
+
+/// What reading a document gives: the value, or the line and column of the
+/// syntax error.
+priv type Parsed = Result<Tree, (Int, Int)>
+
+/// What reading a string gives: the string and the input after its closing
+/// `"`, or the line and column of the syntax error.
+priv type ReadString = Result<(String, Input), (Int, Int)>
+
+/// Parses `text` as one JSON value (RFC 8259) with optional whitespace
+/// around it. A syntax error gives the line and the column, both counting
+/// from 1, of the first code point at which `text` stops being the start of
+/// a JSON text, or of the position just after its end when it ends too
+/// early (D-324).
+fn parse(text: String) -> Result<Tree, (Int, Int)> {
+  let input = Input { rest: string::to_code_point_values(text), line: 1, column: 1 }
+  read_value(skip_space(input), [])
+}
+
+/// The position of the next code point, or just after the end.
+priv fn here(input: Input) -> (Int, Int) {
+  (input.line, input.column)
+}
+
+/// Moves past one code point.
+priv fn advance(input: Input) -> Input {
+  case input.rest {
+    [] => input
+    [0x0A, ..rest] => Input { rest, line: input.line + 1, column: 1 }
+    [_, ..rest] => Input { rest, line: input.line, column: input.column + 1 }
+  }
+}
+
+/// Moves past spaces, tabs, line feeds and carriage returns, the only
+/// whitespace of RFC 8259.
+priv fn skip_space(input: Input) -> Input {
+  case input.rest {
+    [0x20, ..] | [0x09, ..] | [0x0A, ..] | [0x0D, ..] => skip_space(advance(input))
+    _ => input
+  }
+}
+
+/// Tells whether `point` is an ASCII digit.
+priv fn is_digit(point: Int) -> Bool {
+  point >= 0x30 && point <= 0x39
+}
+
+/// Reads one value starting at `input`, which is not whitespace, inside the
+/// arrays and objects of `stack`, the innermost last.
+priv fn read_value(input: Input, stack: List<Frame>) -> Parsed {
+  case input.rest {
+    // `{`
+    [0x7B, ..] => open_object(skip_space(advance(input)), stack)
+    // `[`
+    [0x5B, ..] => open_array(skip_space(advance(input)), stack)
+    // `"`
+    [0x22, ..] => case read_string(advance(input), []) {
+      Ok((text, after)) => close_value(String(text), skip_space(after), stack)
+      Err(position) => Err(position)
+    }
+    // `t`, `f` and `n` start `true`, `false` and `null`
+    [0x74, ..] => read_word(input, [0x74, 0x72, 0x75, 0x65], Bool(True), stack)
+    [0x66, ..] => read_word(input, [0x66, 0x61, 0x6C, 0x73, 0x65], Bool(False), stack)
+    [0x6E, ..] => read_word(input, [0x6E, 0x75, 0x6C, 0x6C], Null, stack)
+    // `-` or a digit
+    [point, ..] when point == 0x2D || is_digit(point) => read_number(input, stack)
+    _ => Err(here(input))
+  }
+}
+
+/// Matches the code points of `word` one by one, then closes `value`.
+priv fn read_word(input: Input, word: List<Int>, value: Tree, stack: List<Frame>) -> Parsed {
+  case word, input.rest {
+    [], _ => close_value(value, skip_space(input), stack)
+    [wanted, ..word_rest], [found, ..] when wanted == found => {
+      read_word(advance(input), word_rest, value, stack)
+    }
+    _, _ => Err(here(input))
+  }
+}
+
+/// Starts an array after its `[` and any whitespace.
+priv fn open_array(input: Input, stack: List<Frame>) -> Parsed {
+  case input.rest {
+    // `]`
+    [0x5D, ..] => close_value(Array([]), skip_space(advance(input)), stack)
+    _ => read_value(input, list::push(stack, InArray([])))
+  }
+}
+
+/// Starts an object after its `{` and any whitespace.
+priv fn open_object(input: Input, stack: List<Frame>) -> Parsed {
+  case input.rest {
+    // `}`
+    [0x7D, ..] => close_value(Object([]), skip_space(advance(input)), stack)
+    _ => read_key(input, [], stack)
+  }
+}
+
+/// Reads a member's key and its `:`, then its value, with the earlier
+/// members of the object in `members`.
+priv fn read_key(input: Input, members: List<(String, Tree)>, stack: List<Frame>) -> Parsed {
+  case input.rest {
+    // `"`
+    [0x22, ..] => case read_string(advance(input), []) {
+      Ok((key, after)) => {
+        let colon = skip_space(after)
+        case colon.rest {
+          // `:`
+          [0x3A, ..] => {
+            read_value(skip_space(advance(colon)), list::push(stack, InObject(members, key)))
+          }
+          _ => Err(here(colon))
+        }
+      }
+      Err(position) => Err(position)
+    }
+    _ => Err(here(input))
+  }
+}
+
+/// Adds the complete `value` to the innermost array or object, and reads
+/// what follows it at `input`, which is not whitespace.
+priv fn close_value(value: Tree, input: Input, stack: List<Frame>) -> Parsed {
+  case stack {
+    [] => case input.rest {
+      [] => Ok(value)
+      _ => Err(here(input))
+    }
+    [..below, InArray(items)] => {
+      let grown = list::push(items, value)
+      case input.rest {
+        // `,`
+        [0x2C, ..] => read_value(skip_space(advance(input)), list::push(below, InArray(grown)))
+        // `]`
+        [0x5D, ..] => close_value(Array(grown), skip_space(advance(input)), below)
+        _ => Err(here(input))
+      }
+    }
+    [..below, InObject(members, key)] => {
+      let grown = list::push(members, (key, value))
+      case input.rest {
+        // `,`
+        [0x2C, ..] => read_key(skip_space(advance(input)), grown, below)
+        // `}`
+        [0x7D, ..] => close_value(Object(grown), skip_space(advance(input)), below)
+        _ => Err(here(input))
+      }
+    }
+  }
+}
+
+// Strings
+
+/// Reads the rest of a string after its opening `"`, with the code points
+/// read so far in `points`.
+priv fn read_string(input: Input, points: List<Int>) -> ReadString {
+  case input.rest {
+    // `"`
+    [0x22, ..] => {
+      // Every code point in `points` is a scalar value, because surrogate
+      // escapes are accepted only in pairs (D-326).
+      let assert Ok(text) = string::from_code_point_values(points)
+      Ok((text, advance(input)))
+    }
+    // `\`
+    [0x5C, ..] => read_escape(advance(input), points)
+    // Control characters must be escaped.
+    [point, ..] when point >= 0x20 => read_string(advance(input), list::push(points, point))
+    _ => Err(here(input))
+  }
+}
+
+/// Reads an escape after its `\`.
+priv fn read_escape(input: Input, points: List<Int>) -> ReadString {
+  case input.rest {
+    // `u`
+    [0x75, ..] => read_unicode(advance(input), points)
+    [letter, ..] => case escaped(letter) {
+      Some(point) => read_string(advance(input), list::push(points, point))
+      None => Err(here(input))
+    }
+    [] => Err(here(input))
+  }
+}
+
+/// Returns the code point that a one-letter escape stands for.
+priv fn escaped(letter: Int) -> Option<Int> {
+  case letter {
+    // `"`, `\` and `/` stand for themselves.
+    0x22 | 0x5C | 0x2F => Some(letter)
+    // `b`, `f`, `n`, `r` and `t`
+    0x62 => Some(0x08)
+    0x66 => Some(0x0C)
+    0x6E => Some(0x0A)
+    0x72 => Some(0x0D)
+    0x74 => Some(0x09)
+    _ => None
+  }
+}
+
+/// Reads the four hex digits of a `\u` escape. A high surrogate must be
+/// followed by the escape of a low surrogate, and the pair is one code
+/// point. A low surrogate on its own is an error (D-326).
+priv fn read_unicode(input: Input, points: List<Int>) -> ReadString {
+  case read_hex(input, 0, 0, False) {
+    Ok((unit, after)) => case unit >= 0xD800 && unit <= 0xDBFF {
+      True => read_low_surrogate(after, unit, points)
+      False => read_string(after, list::push(points, unit))
+    }
+    Err(position) => Err(position)
+  }
+}
+
+/// Reads the `\u` escape of the low surrogate that must follow the high
+/// surrogate `high`.
+priv fn read_low_surrogate(input: Input, high: Int, points: List<Int>) -> ReadString {
+  case input.rest {
+    // `\u`
+    [0x5C, 0x75, ..] => case read_hex(advance(advance(input)), 0, 0, True) {
+      Ok((low, after)) => {
+        let point = 0x10000 + (high - 0xD800) * 0x400 + (low - 0xDC00)
+        read_string(after, list::push(points, point))
+      }
+      Err(position) => Err(position)
+    }
+    // `\` followed by something other than `u`
+    [0x5C, ..] => Err(here(advance(input)))
+    _ => Err(here(input))
+  }
+}
+
+/// Reads the hex digits of a `\u` escape from the one at `index`, with the
+/// value of the earlier ones in `value`. Each digit is checked as soon as
+/// it is read, so an error points at the first digit that no valid escape
+/// could have: one that is not hex, the second digit of a low surrogate
+/// that is not part of a pair, or, when `low` is `True`, a first or second
+/// digit that does not start a low surrogate.
+priv fn read_hex(
+  input: Input,
+  index: Int,
+  value: Int,
+  low: Bool,
+) -> Result<(Int, Input), (Int, Int)> {
+  case index, input.rest {
+    4, _ => Ok((value, input))
+    _, [point, ..] => case hex_digit(point) {
+      Some(digit) when hex_fits(index, value, digit, low) => {
+        read_hex(advance(input), index + 1, value * 16 + digit, low)
+      }
+      _ => Err(here(input))
+    }
+    _, [] => Err(here(input))
+  }
+}
+
+/// Tells whether `digit`, at `index` after the digits whose value is
+/// `before`, can still be part of a valid escape. Surrogates are
+/// `D800` to `DFFF`, and low ones `DC00` to `DFFF`.
+priv fn hex_fits(index: Int, before: Int, digit: Int, low: Bool) -> Bool {
+  case low, index {
+    True, 0 => digit == 0xD
+    True, 1 => digit >= 0xC
+    False, 1 => before != 0xD || digit < 0xC
+    _, _ => True
+  }
+}
+
+/// Returns the value of an ASCII hex digit, in either case.
+priv fn hex_digit(point: Int) -> Option<Int> {
+  case {
+    is_digit(point) => Some(point - 0x30)
+    point >= 0x41 && point <= 0x46 => Some(point - 0x37)
+    point >= 0x61 && point <= 0x66 => Some(point - 0x57)
+    _ => None
+  }
+}
+
+// Numbers
+
+/// Reads a number: an optional `-`, an integer part with no leading zeros,
+/// an optional fraction and an optional exponent.
+priv fn read_number(input: Input, stack: List<Frame>) -> Parsed {
+  let (unsigned, sign) = case input.rest {
+    // `-`
+    [0x2D, ..] => (advance(input), [0x2D])
+    _ => (input, [])
+  }
+  case unsigned.rest {
+    // `0` is the whole integer part.
+    [0x30, ..] => read_fraction(advance(unsigned), list::push(sign, 0x30), stack)
+    [point, ..] when is_digit(point) => {
+      let (after, digits) = take_digits(unsigned, sign)
+      read_fraction(after, digits, stack)
+    }
+    _ => Err(here(unsigned))
+  }
+}
+
+/// Reads an optional fraction, `.` and one or more digits.
+priv fn read_fraction(input: Input, digits: List<Int>, stack: List<Frame>) -> Parsed {
+  case input.rest {
+    // `.` and a digit
+    [0x2E, point, ..] when is_digit(point) => {
+      let (after, all_digits) = take_digits(advance(input), list::push(digits, 0x2E))
+      read_exponent(after, all_digits, False, stack)
+    }
+    [0x2E, ..] => Err(here(advance(input)))
+    _ => read_exponent(input, digits, True, stack)
+  }
+}
+
+/// Reads an optional exponent, `e` or `E`, an optional sign and one or more
+/// digits. `integral` tells whether the number had no fraction.
+priv fn read_exponent(
+  input: Input,
+  digits: List<Int>,
+  integral: Bool,
+  stack: List<Frame>,
+) -> Parsed {
+  case input.rest {
+    // `e` or `E`
+    [marker, ..] when marker == 0x65 || marker == 0x45 => {
+      let marked = advance(input)
+      let (unsigned, signed) = case marked.rest {
+        // `+` or `-`
+        [sign, ..] when sign == 0x2B || sign == 0x2D => {
+          (advance(marked), list::append(digits, [marker, sign]))
+        }
+        _ => (marked, list::push(digits, marker))
+      }
+      case unsigned.rest {
+        [point, ..] when is_digit(point) => {
+          let (after, all_digits) = take_digits(unsigned, signed)
+          close_number(after, all_digits, False, stack)
+        }
+        _ => Err(here(unsigned))
+      }
+    }
+    _ => close_number(input, digits, integral, stack)
+  }
+}
+
+/// Moves past a run of digits, adding them to `digits`.
+priv fn take_digits(input: Input, digits: List<Int>) -> (Input, List<Int>) {
+  case input.rest {
+    [point, ..] when is_digit(point) => take_digits(advance(input), list::push(digits, point))
+    _ => (input, digits)
+  }
+}
+
+/// Closes the number written by the code points `digits`.
+priv fn close_number(
+  input: Input,
+  digits: List<Int>,
+  integral: Bool,
+  stack: List<Frame>,
+) -> Parsed {
+  // The number's code points are ASCII, so they always form a string.
+  let assert Ok(text) = string::from_code_point_values(digits)
+  close_value(number(text, integral), skip_space(input), stack)
+}
+
+/// Returns the value of a number's text. One without a fraction or an
+/// exponent is an `Int` when it lies within ±(2⁵³−1), on every target, and
+/// every other number is the nearest `Float`, an infinity or a zero with
+/// its sign beyond `Float`'s range (D-217, D-222, D-394).
+priv fn number(text: String, integral: Bool) -> Tree {
+  case integral && is_safe_integer(text) {
+    True => {
+      let assert Ok(n) = int::parse(text)
+      Int(n)
+    }
+    False => {
+      let assert Ok(x) = float::parse(text)
+      Float(x)
+    }
+  }
+}
+
+/// Tells whether the integer `text`, which has no leading zeros, lies
+/// within ±(2⁵³−1). It compares digits, so it never builds an `Int` that
+/// would panic on JS (D-037).
+priv fn is_safe_integer(text: String) -> Bool {
+  let magnitude = string::remove_prefix(text, "-")
+  let size = string::length(magnitude)
+  case {
+    size < 16 => True
+    size == 16 => string::compare(magnitude, "9007199254740991") != Greater
+    _ => False
+  }
+}

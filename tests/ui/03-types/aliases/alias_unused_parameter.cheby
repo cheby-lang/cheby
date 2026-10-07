@@ -1,0 +1,5 @@
+// @mode: check-fail
+// @decisions: D-081
+//! Every type parameter of an alias must be used in its definition (§4.4).
+
+pub type Pair<A, B> = (A, A)

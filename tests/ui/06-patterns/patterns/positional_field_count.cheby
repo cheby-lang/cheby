@@ -1,0 +1,16 @@
+// @mode: check-fail
+// @decisions: D-113
+//! A positional constructor pattern has one sub-pattern per field (§6.4).
+
+type Pair {
+  Pair(Int, Int),
+}
+
+fn first(pair: Pair) -> Int {
+  let Pair(a) = pair
+  a
+}
+
+fn main() {
+  assert first(Pair(1, 2)) == 1
+}

@@ -1,0 +1,22 @@
+// @mode: check-fail
+// @decisions: D-084, D-470
+//! An integer literal pattern must fit the type of the values it matches.
+
+fn byte_name(n: U8) -> String {
+  case n {
+    256 => "too big"
+    _ => "byte"
+  }
+}
+
+fn count_name(n: U32) -> String {
+  case n {
+    -1 => "negative"
+    _ => "count"
+  }
+}
+
+fn main() {
+  assert byte_name(1) == "byte"
+  assert count_name(1) == "count"
+}

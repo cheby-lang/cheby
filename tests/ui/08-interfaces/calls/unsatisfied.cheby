@@ -1,0 +1,17 @@
+// @mode: check-fail
+// @decisions: D-173
+//! An interface call on a concrete type needs the type to satisfy the
+//! interface (§8.5).
+
+interface Area {
+  fn area(Self) -> Float
+}
+
+type Line {
+  length: Float,
+}
+
+fn main() {
+  let line = Line { length: 2.0 }
+  assert Area::area(line) == 0.0
+}

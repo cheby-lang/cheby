@@ -1,0 +1,11 @@
+error[E0057]: type annotation needed
+  --> tests/ui/05-expressions/records/field_access_type_unknown.cheby:13:23
+   |
+13 |   let get_x = fn(p) { p.x }
+   |                  -    ^ the type of `p` must be known here to read its field `x`
+   |                  |
+   |                  `p` is bound here
+   |
+   = note: field names are not unique across types, so the type must come from an annotation, a signature or a use checked earlier (D-213)
+   = help: annotate the parameter: `fn(p: Point)`
+

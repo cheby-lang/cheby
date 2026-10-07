@@ -1,0 +1,9 @@
+warning[W0007]: `Order` hides the prelude type `Order`
+ --> tests/ui/07-modules-and-packages/prelude_hiding_type.cheby:8:6
+  |
+8 | type Order {
+  |      ^^^^^ declared here
+  |
+  = note: in this module, `Order` no longer means the prelude type, which stays reachable as `order::Order` after `import std::order`
+  = help: if this is not intended, give the type another name
+

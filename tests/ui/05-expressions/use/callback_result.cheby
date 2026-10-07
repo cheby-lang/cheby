@@ -1,0 +1,16 @@
+// @mode: check-fail
+// @decisions: D-023
+//! The rest of the block is the callback's body, checked against the
+//! result type the called function expects (§5.10).
+
+pub fn try(value: Result<Int, String>, next: fn(Int) -> Result<Int, String>) -> Result<Int, String> {
+  case value {
+    Ok(v) => next(v)
+    Err(e) => Err(e)
+  }
+}
+
+pub fn twice(a: Result<Int, String>) -> Result<Int, String> {
+  use x <- try(a)
+  x * 2
+}

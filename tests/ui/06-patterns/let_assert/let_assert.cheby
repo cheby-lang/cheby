@@ -1,0 +1,26 @@
+// @mode: check-pass
+// @decisions: D-068, D-159
+//! `let assert` binds with a refutable pattern, optionally with a type
+//! annotation and a `String` message after `as` (§11.4).
+
+fn find_user(id: Int) -> Option<String> {
+  case id {
+    1 => Some("ada")
+    _ => None
+  }
+}
+
+fn first(arguments: List<String>) -> String {
+  let assert [head, ..] = arguments
+  head
+}
+
+fn user(id: Int) -> String {
+  let assert Some(name): Option<String> = find_user(id) as "the user must exist"
+  name
+}
+
+fn main() {
+  assert first(["a", "b"]) == "a"
+  assert user(1) == "ada"
+}

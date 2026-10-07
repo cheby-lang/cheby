@@ -1,0 +1,9 @@
+error[E0063]: `Line` does not satisfy `Area`
+  --> tests/ui/08-interfaces/calls/unsatisfied.cheby:16:10
+   |
+16 |   assert Area::area(line) == 0.0
+   |          ^^^^^^^^^^^^^^^^ `Area::area` is called with `Self` = `Line`
+   |
+   = note: this module declares `Line` but has no function `area(Line) -> Float` (§8.2, D-061)
+   = help: add a function `area(Line) -> Float` to this module
+

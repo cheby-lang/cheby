@@ -1,0 +1,18 @@
+error[E0051]: `List` takes 1 type argument but 0 were given
+ --> tests/ui/03-types/signatures/type_argument_count.cheby:6:21
+  |
+6 | pub fn count(items: List) -> Int {
+  |                     ^^^^ expected 1 type argument
+
+error[E0051]: `Option` takes 1 type argument but 2 were given
+  --> tests/ui/03-types/signatures/type_argument_count.cheby:11:21
+   |
+11 | pub fn first(items: Option<Int, Int>) -> String<Int> {
+   |                     ^^^^^^^^^^^^^^^^ expected 1 type argument
+
+error[E0051]: `String` takes no type arguments
+  --> tests/ui/03-types/signatures/type_argument_count.cheby:11:42
+   |
+11 | pub fn first(items: Option<Int, Int>) -> String<Int> {
+   |                                          ^^^^^^^^^^^ this type has no type parameters
+
