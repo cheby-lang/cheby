@@ -1,0 +1,8 @@
+error[E0075]: evaluating the constant `base` panicked
+ --> tests/ui/04-declarations/constants/eval/failed_dependency.cheby:6:7
+  |
+6 | const base: Int = first([])
+  |       ^^^^ its initializer panicked
+  |
+  = note: panicked at tests/ui/04-declarations/constants/eval/failed_dependency.cheby:15:11: no items
+

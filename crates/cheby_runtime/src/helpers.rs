@@ -77,7 +77,9 @@ pub unsafe extern "C" fn cheby_rt_str_eq(a: Word, b: Word) -> bool {
 /// `cheby_rt_equal(ctx, a, b, location)`: structural `==` of two borrowed
 /// uniform words (§3.13). Panics `EqualityOnFunction` at `location`, the
 /// `==`'s source location as a static `String`, when it reaches a function
-/// value (D-233, §11.6, D-556). A `location` of 0 is unknown.
+/// value or a handle (D-233, §11.6, D-556). A `location` of 0 is unknown.
+/// A type with `@std_hooks` compares through its `equal` hook, called on
+/// the running entry, whose context is `ctx` ([`crate::callback::call`]).
 ///
 /// # Safety
 ///
@@ -101,17 +103,18 @@ pub unsafe extern "C" fn cheby_rt_equal(
 }
 
 /// `cheby_rt_debug(ctx, value)`: the debug text (§3.13) of a borrowed
-/// uniform word, as an owned `String`.
+/// uniform word, written straight into a new `String`, owned. A type with
+/// `@std_hooks` prints through its `debug` hook, called on the running
+/// entry, whose context is `ctx`.
 ///
 /// # Safety
 ///
-/// `value` is a live uniform word.
+/// `value` is a live uniform word; `ctx` is the running entry's context.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_rt_debug(ctx: *mut ExecCtx, value: Word) -> Word {
     let _ = ctx;
     // SAFETY: forwarded from the caller.
-    let text = unsafe { generic::debug_string(value) };
-    string::new_string(&text)
+    unsafe { generic::debug_object(value) }
 }
 
 /// `cheby_rt_box_i64(ctx, value)`: the uniform word of an `Int` or `I64`.

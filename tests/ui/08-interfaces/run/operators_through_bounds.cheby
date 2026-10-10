@@ -1,0 +1,80 @@
+// @mode: run-pass
+// @decisions: D-034, D-047, D-118, D-503
+//! On a type parameter, an operator calls the function of the first
+//! bound that has it, also through an interface that embeds the operator
+//! interface (D-503); comparisons test the `Order` that `compare`
+//! returns (§5.4.4, §8.7). The same code runs on built-in and user types.
+
+import std::io
+import std::ops::{Add, Compare, Mul, Neg, Sub}
+
+interface Num: Add + Sub + Mul + Neg
+
+type Money {
+  Money(Int),
+}
+
+fn add(a: Money, b: Money) -> Money {
+  let Money(x) = a
+  let Money(y) = b
+  Money(x + y)
+}
+
+fn sub(a: Money, b: Money) -> Money {
+  let Money(x) = a
+  let Money(y) = b
+  Money(x - y)
+}
+
+fn mul(a: Money, b: Money) -> Money {
+  let Money(x) = a
+  let Money(y) = b
+  Money(x * y)
+}
+
+fn neg(a: Money) -> Money {
+  let Money(x) = a
+  Money(-x)
+}
+
+fn compare(a: Money, b: Money) -> Order {
+  let Money(x) = a
+  let Money(y) = b
+  Compare::compare(x, y)
+}
+
+fn show(m: Money) -> String {
+  let Money(x) = m
+  "${x}"
+}
+
+fn sum<T: Add>(xs: List<T>, zero: T) -> T {
+  case xs {
+    [] => zero
+    [x, ..rest] => sum(rest, zero + x)
+  }
+}
+
+fn poly<T: Num>(x: T, one: T) -> T {
+  -(x * x) + x - one
+}
+
+fn relations<T: Compare>(a: T, b: T) -> List<Bool> {
+  [a < b, a <= b, a > b, a >= b]
+}
+
+fn main() {
+  let ints = sum([1, 2, 3], 0)
+  let floats = sum([0.5, 0.25], 0.0)
+  let words = sum(["a", "b", "c"], "")
+  let total = sum([Money(5), Money(7)], Money(0))
+  io::println("{ints} {floats} {words} {total}")
+  let a = poly(3, 1)
+  let b = poly(1.5, 1.0)
+  let c = poly(Money(4), Money(1))
+  io::println("{a} {b} {c}")
+  let numbers = relations(1, 2)
+  let texts = relations("b", "a")
+  let money = relations(Money(3), Money(3))
+  io::println("{numbers} {texts} {money}")
+}

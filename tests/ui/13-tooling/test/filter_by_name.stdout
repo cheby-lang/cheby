@@ -1,0 +1,4 @@
+test ui_test "double of two" ... ok
+test ui_test "a negative double" ... ok
+
+test result: ok. 2 passed; 0 failed; 1 filtered out

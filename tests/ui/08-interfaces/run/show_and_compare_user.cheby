@@ -1,0 +1,57 @@
+// @mode: run-pass
+// @decisions: D-045, D-064, D-136, D-173
+//! A user type satisfies `Show` and `Compare` through its module's
+//! functions, and generic code reaches them through its bounds: in
+//! interpolation, in `list::sort` and in `list::compare`, also when the
+//! type sits inside a `List` (§8.2, §8.5), and `show` inside an `Option`.
+
+import std::io
+import std::list
+import std::ops::{Compare}
+
+type Version {
+  Version { major: Int, minor: Int },
+}
+
+fn show(v: Version) -> String {
+  "v{v.major}.{v.minor}"
+}
+
+fn compare(a: Version, b: Version) -> Order {
+  case Compare::compare(a.major, b.major) {
+    Equal => Compare::compare(a.minor, b.minor)
+    other => other
+  }
+}
+
+fn largest<T: Compare>(first: T, rest: List<T>) -> T {
+  case rest {
+    [] => first
+    [next, ..others] => {
+      let bigger = case first < next {
+        True => next
+        False => first
+      }
+      largest(bigger, others)
+    }
+  }
+}
+
+fn describe<T: Show + Compare>(xs: List<T>) -> String {
+  let sorted = list::sort(xs)
+  "{xs} sorted is {sorted}"
+}
+
+fn main() {
+  let a = Version { major: 1, minor: 4 }
+  let b = Version { major: 0, minor: 9 }
+  let c = Version { major: 1, minor: 10 }
+  io::println(describe([a, b, c]))
+  let top = largest(a, [b, c])
+  io::println("largest: {top}")
+  let maybe = [Some(c), None, Some(b)]
+  io::println("maybe: {maybe}")
+  io::println(describe([[a, b], [b], [a]]))
+  let checks = [a < c, c <= b, b > a, a >= a]
+  io::println("{checks}")
+}

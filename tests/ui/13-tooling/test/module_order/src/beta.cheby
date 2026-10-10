@@ -1,0 +1,5 @@
+//! The last module by path.
+
+test "beta" {
+  assert True
+}

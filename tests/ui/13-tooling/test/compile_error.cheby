@@ -1,0 +1,15 @@
+// @mode: run-fail
+// @exit: 1
+// @command: test
+// @decisions: D-541, D-543
+//! A compile error in a test stops `cheby test` before any test runs, with
+//! status 1.
+
+test "runs" {
+  assert 1 == 1
+}
+
+test "does not compile" {
+  let n: Int = "one"
+  assert n == 1
+}

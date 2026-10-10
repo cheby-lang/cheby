@@ -49,6 +49,7 @@ pub(super) fn lower_body(
         diags: Vec::new(),
         poisoned: FxHashSet::default(),
         pending,
+        dict_params: Vec::new(),
     };
     let lowered = lx.run(dicts);
     // A broken invariant after an unsupported construct is most likely
@@ -77,12 +78,18 @@ pub(super) struct BodyCx<'a, 'cx> {
     pub(super) poisoned: FxHashSet<Local>,
     /// What the unit needs besides this body's function.
     pub(super) pending: &'a mut Pending,
+    /// The local holding each dictionary of the enclosing item's bounds,
+    /// in (type parameter, bound) order (D-453): the item's leading
+    /// parameters in its own body, the closure's captures in a closure
+    /// that uses them, `None` for one a closure does not capture.
+    pub(super) dict_params: Vec<Option<Local>>,
 }
 
 impl<'a> BodyCx<'a, '_> {
     fn run(&mut self, dicts: usize) -> Result<(), Ice> {
         for _ in 0..dicts {
-            self.b.add_param(Repr::Value, None, None)?;
+            let local = self.b.add_param(Repr::Value, None, None)?;
+            self.dict_params.push(Some(local));
         }
         let body = self.body;
         for &p in &body.params {

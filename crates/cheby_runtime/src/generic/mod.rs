@@ -7,24 +7,34 @@
 //! ([`crate::layout::CustomKind`]) take part through their functions,
 //! which schedule their children on the same worklists.
 //!
-//! What wave 1 covers: tagged and boxed numbers, strings, `Bytes`, tuples,
-//! closures (`<fn>`, and `EqualityOnFunction` for `==` and hashing, D-233),
-//! builtin and user constructors by layout, `dyn` values in debug text, and
-//! runtime-defined kinds. Extension points, marked in the code: collections
-//! with order-independent equality and sorted debug text (W3-B, W3-C),
-//! `@std_hooks` (W3-B), `dyn` equality and hashing (W4-A), external types
-//! (W3-B).
+//! Every kind of value takes part:
+//!
+//! - tagged and boxed numbers, with reflexive float equality (§3.3.2);
+//! - `String` and `Bytes`, printed with the literal escapes (D-531, D-557)
+//!   and as `bytes::from_list([0x66])` (D-388);
+//! - tuples, and builtin and user constructors by their layouts, hashing
+//!   their type key and tag, never a layout id (D-538, D-559);
+//! - lists, through the list root's kind ([`crate::list`]);
+//! - maps and sets: equality and hashing through their kinds
+//!   ([`crate::hamt`], order-independent, D-538), and debug text sorted by
+//!   each entry's text (D-344, D-382);
+//! - types with `@std_hooks`, through their hook closures (D-342, D-482);
+//! - closures and values of external types: `<fn>` and `<Db>`, and
+//!   [`Reached::Function`] for `==` and hashing (D-233);
+//! - `dyn` values and type descriptors, compared by structure (D-530).
 
 mod debug;
 mod equal;
 mod hash;
+mod hooks;
 mod raw;
 
 use std::hash::{BuildHasher, Hasher as _};
 use std::sync::OnceLock;
 
-pub use debug::{Printer, debug, debug_string};
+pub use debug::{Printer, SortItem, debug, debug_object, debug_string};
 pub use equal::{Cx, equal};
+pub(crate) use hash::mark;
 pub use hash::{Hasher, hash, hash_with_seed};
 
 /// What made equality or hashing stop without an answer.

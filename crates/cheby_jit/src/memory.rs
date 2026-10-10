@@ -532,6 +532,8 @@ mod tests {
         let usage = arena.usage();
         let page = arena.page;
         let mut code = Vec::new();
+        // The most the code allocations can take, padding included.
+        let mut code_bytes = 0;
         for align_log2 in 0..8_u32 {
             let align = 1_u64 << align_log2;
             for size in 1..64 {
@@ -540,6 +542,7 @@ mod tests {
                     .unwrap();
                 assert_eq!(p.addr() % usize::try_from(align).unwrap(), 0);
                 code.push(p);
+                code_bytes += size + usize::try_from(align).unwrap() - 1;
             }
         }
         let data = arena.allocate(100, 8, JITMemoryKind::Writable).unwrap();
@@ -552,10 +555,14 @@ mod tests {
             data.write_bytes(7, 100);
             rodata.write_bytes(9, 3 * page);
         }
+        // Whole pages: the code's, one for the data and three for the
+        // read-only bytes. The page is 16 KiB on macOS arm64 and 4 KiB on
+        // most Linux systems, so the bound is computed, not fixed.
         let committed = usage.committed();
+        let bound = align_up(code_bytes, page).unwrap() + 4 * page;
         assert!(
-            committed.is_multiple_of(page) && committed <= 8 * page,
-            "{committed}"
+            committed.is_multiple_of(page) && committed <= bound,
+            "{committed} bytes committed, at most {bound} expected"
         );
         arena.finalize(BranchProtection::None).unwrap();
         // SAFETY: still mapped: data stays read-write, read-only is readable.

@@ -1,0 +1,11 @@
+// @mode: run-fail
+// @exit: 1
+// @command: test
+// @flags: --module ui_test::missing
+// @decisions: D-541, D-543
+//! `--module` must name a module of the package, like `cheby run`'s module
+//! path (D-464).
+
+test "one" {
+  assert 1 == 1
+}

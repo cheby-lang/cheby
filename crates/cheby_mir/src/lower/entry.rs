@@ -2,11 +2,21 @@
 //! `main`, a test, a constant initializer or a REPL entry. They form their
 //! own unit, so a module's code never depends on which entry runs it.
 //!
-//! A `main` or test that returns `Nil` exits with status 0. One that
-//! returns `Result<Nil, E>` exits with 0 on `Ok`; on `Err(e)` it writes the
-//! text of `e` and a newline to standard error, by `E`'s `show` when `E`
+//! A `main` that returns `Nil` exits with status 0. One that returns
+//! `Result<Nil, E>` exits with 0 on `Ok`; on `Err(e)` it writes the text
+//! of `e` and a newline to standard error, by `E`'s `show` when `E`
 //! satisfies `Show` and by debug printing otherwise, with no prefix, and
 //! exits with status 1 (§10.10, D-140, D-182, D-529).
+//!
+//! A test thunk prints nothing: it returns the static `Nil` when the test
+//! passed, and on `Err(e)` the text of `e` as an owned `String`, made as
+//! for `main`, which `cheby test` shows in the test's failure block
+//! (D-541). GAP(test-err-thunk).
+//!
+//! An error type whose `show` needs dictionaries (`List<E>`, a tuple, a
+//! generic user type, D-064, D-167) is called through its static
+//! dictionary (D-524), whose symbol carries the entry item's module
+//! (the entries unit has none). GAP(static-dict-names).
 
 use std::collections::BTreeSet;
 
@@ -19,18 +29,19 @@ use crate::ir::{
     Callee, CmpOp, Const, EntryKind, FnKey, Function, LayoutRef, Local, Operand, RuntimeFn, Rvalue,
     Stmt, TagType, Terminator, UnitKind,
 };
+use crate::lower::dict::{IfaceShape, Statics, dict_closed, dict_iface, dict_mentions_dyn};
 use crate::lower::{
     LowerCx, LowerError, Pending, Unsupported, closure, finish_unit, not_supported,
 };
 use crate::repr::{CType, ForeignSig, Repr};
 use crate::{Abi, MirModule};
 
-/// The exit status of a `main` or test that returned normally
+/// The exit status of a `main` that returned normally
 /// (`cheby_runtime::abi::status::SUCCESS`; MIR does not depend on the
 /// runtime).
 const STATUS_SUCCESS: u64 = 0;
 
-/// The exit status of a `main` or test that returned `Err`
+/// The exit status of a `main` that returned `Err`
 /// (`cheby_runtime::abi::status::ERR`, D-182).
 const STATUS_ERR: u64 = 1;
 
@@ -56,17 +67,18 @@ pub struct EntryRequest<'a> {
 ///
 /// # Errors
 ///
-/// E0038 for a `main` or test returning `Result` whose error type's
-/// `show` needs dictionaries (W3-A), and an [`Ice`] for a REPL entry
-/// (G5) or one whose item is not readable through `cx`.
+/// E0038 for a `main` or test returning `Result` whose error type
+/// mentions `dyn` (W4-A), and an [`Ice`] for a REPL entry (G5) or one
+/// whose item is not readable through `cx`.
 pub fn lower_entries(
     entries: &[EntryRequest<'_>],
     cx: &LowerCx<'_>,
 ) -> Result<MirModule, LowerError> {
     let mut functions = Vec::with_capacity(entries.len());
     let mut unsupported = Unsupported::default();
+    let mut pending = Pending::default();
     for req in entries {
-        if let Some(f) = unsupported.take(entry_thunk(*req, cx))? {
+        if let Some(f) = unsupported.take(entry_thunk(*req, cx, &mut pending))? {
             functions.push(f);
         }
     }
@@ -75,18 +87,17 @@ pub fn lower_entries(
     // arity the runtime supports; the JIT defines each once (D-561).
     let arities: BTreeSet<u32> = (0..=MAX_TRAMPOLINE_ARITY).collect();
     functions.extend(closure::trampolines(&arities)?);
-    let unit = finish_unit(
-        UnitKind::Entries,
-        functions,
-        Vec::new(),
-        Pending::default(),
-        cx,
-    )?;
+    let unit = finish_unit(UnitKind::Entries, functions, Vec::new(), pending, cx)?;
     unsupported.finish(unit)
 }
 
-/// The thunk of one entry.
-fn entry_thunk(req: EntryRequest<'_>, cx: &LowerCx<'_>) -> Result<Function, LowerError> {
+/// The thunk of one entry; the static dictionaries it needs go to
+/// `pending`.
+fn entry_thunk(
+    req: EntryRequest<'_>,
+    cx: &LowerCx<'_>,
+    pending: &mut Pending,
+) -> Result<Function, LowerError> {
     let (def, callee) = match req.kind {
         EntryKind::Main(def) => (def, Callee::Direct(def)),
         EntryKind::Test(def) => (def, Callee::Code(FnKey::Test(def))),
@@ -111,13 +122,15 @@ fn entry_thunk(req: EntryRequest<'_>, cx: &LowerCx<'_>) -> Result<Function, Lowe
             args: Vec::new(),
         },
     )?;
+    let is_test = matches!(req.kind, EntryKind::Test(_));
     match (req.kind, req.info) {
         (EntryKind::Main(_) | EntryKind::Test(_), Some(EntryInfo::Nil)) => {
             // The `Nil` result is dropped by the RC pass.
-            b.terminate(Terminator::Return(status(STATUS_SUCCESS)))?;
+            b.terminate(Terminator::Return(passed(is_test)))?;
         }
         (EntryKind::Main(_) | EntryKind::Test(_), Some(EntryInfo::Result { show, .. })) => {
-            report_result(&mut b, result, show.as_ref(), def, cx)?;
+            let show = show_call(show.as_ref(), def, cx, pending)?;
+            report_result(&mut b, result, &show, is_test, cx)?;
         }
         (EntryKind::Main(_) | EntryKind::Test(_), None) => {
             return Err(Ice::new("a `main` or test entry without its entry info").into());
@@ -129,25 +142,82 @@ fn entry_thunk(req: EntryRequest<'_>, cx: &LowerCx<'_>) -> Result<Function, Lowe
     Ok(b.finish()?)
 }
 
-/// Ends the thunk for a body that returned the `Result` `result`: status
-/// 0 on `Ok`; on `Err(e)` the text of `e` on standard error, then status
-/// 1 (D-140, D-182, D-529).
-fn report_result(
-    b: &mut FunctionBuilder,
-    result: Local,
+/// What a `main` or test returns when it passed: status 0 for `main`, the
+/// static `Nil` for a test (GAP(test-err-thunk)).
+const fn passed(is_test: bool) -> Operand {
+    if is_test {
+        Operand::Const(Const::Nil)
+    } else {
+        status(STATUS_SUCCESS)
+    }
+}
+
+/// How the text of an `Err` value is made.
+enum ShowCall {
+    /// Debug printing: the error type does not satisfy `Show`.
+    Debug,
+    /// A direct call of a `show` that needs no dictionaries.
+    Direct(DefId),
+    /// A call of the closure in `field` of the static dictionary `dict`
+    /// (of layout `layout`).
+    Dict {
+        dict: Const,
+        layout: LayoutRef,
+        field: u32,
+    },
+}
+
+/// The `show` to call for the error type, decided before any code is
+/// built; its static dictionary goes to `pending`.
+fn show_call(
     show: Option<&Dict>,
     def: DefId,
     cx: &LowerCx<'_>,
-) -> Result<(), LowerError> {
-    // The `show` to call, decided before any code is built.
-    let show_fn = match show {
-        None => None,
-        Some(Dict::Impl { fns, .. }) => match fns.as_ref() {
-            [f] if f.dicts.is_empty() => Some(f.def),
-            _ => return Err(unsupported_show(def, cx)?),
-        },
-        Some(_) => return Err(unsupported_show(def, cx)?),
+    pending: &mut Pending,
+) -> Result<ShowCall, LowerError> {
+    let Some(dict) = show else {
+        return Ok(ShowCall::Debug);
     };
+    if let Dict::Impl { fns, .. } = dict
+        && let [f] = fns.as_ref()
+        && f.dicts.is_empty()
+    {
+        return Ok(ShowCall::Direct(f.def));
+    }
+    if dict_mentions_dyn(cx, dict) || !dict_closed(cx, dict) {
+        // A `main` or test has no type parameters, so only a `dyn`
+        // error type gets here (W4-A).
+        return Err(LowerError::Unsupported(vec![not_supported(
+            span_of(def, cx)?,
+            "errors whose `show` needs the dictionary of a `dyn` value",
+        )]));
+    }
+    let module = cx.defs.name(def)?.module;
+    let mut statics = Statics {
+        cx,
+        pending,
+        module: &module,
+    };
+    let static_dict = statics.dict(dict)?;
+    let shape = IfaceShape::of(cx, dict_iface(dict, None)?)?;
+    Ok(ShowCall::Dict {
+        dict: static_dict,
+        layout: shape.layout()?,
+        field: shape.fn_field(cx, builtin::SHOW_FN)?,
+    })
+}
+
+/// Ends the thunk for a body that returned the `Result` `result`: passed
+/// on `Ok`; on `Err(e)` the text of `e`, which `main` writes on standard
+/// error before returning status 1 and a test returns (D-140, D-182,
+/// D-529, D-541).
+fn report_result(
+    b: &mut FunctionBuilder,
+    result: Local,
+    show: &ShowCall,
+    is_test: bool,
+    cx: &LowerCx<'_>,
+) -> Result<(), LowerError> {
     let tag = b.assign(
         Repr::Int,
         Rvalue::ReadTag {
@@ -172,7 +242,7 @@ fn report_result(
         else_: err,
     })?;
     b.switch_to(ok)?;
-    b.terminate(Terminator::Return(status(STATUS_SUCCESS)))?;
+    b.terminate(Terminator::Return(passed(is_test)))?;
     b.switch_to(err)?;
     let e = b.assign(
         Repr::Value,
@@ -182,9 +252,9 @@ fn report_result(
             field: 0,
         },
     )?;
-    let text = match show_fn {
-        Some(show) => {
-            let want = abi_sig(cx.defs.fn_sig(show)?, cx.defs.globals);
+    let text = match show {
+        ShowCall::Direct(show) => {
+            let want = abi_sig(cx.defs.fn_sig(*show)?, cx.defs.globals);
             let [repr] = want.params.as_slice() else {
                 return Err(Ice::new(format!("`show` {show:?} without one parameter")).into());
             };
@@ -202,15 +272,42 @@ fn report_result(
             b.assign(
                 Repr::Value,
                 Rvalue::Call {
-                    callee: Callee::Direct(show),
+                    callee: Callee::Direct(*show),
                     args: vec![arg],
                 },
             )?
         }
-        None => b
+        ShowCall::Dict {
+            dict,
+            layout,
+            field,
+        } => {
+            let d = b.assign(Repr::Value, Rvalue::Use(Operand::Const(dict.clone())))?;
+            let f = b.assign(
+                Repr::Value,
+                Rvalue::Field {
+                    base: d,
+                    layout: *layout,
+                    field: *field,
+                },
+            )?;
+            b.assign(
+                Repr::Value,
+                Rvalue::Call {
+                    callee: Callee::Indirect(f),
+                    args: vec![Operand::Local(e)],
+                },
+            )?
+        }
+        ShowCall::Debug => b
             .call_runtime(RuntimeFn::Debug, vec![Operand::Local(e)])?
             .ok_or_else(|| Ice::new("`debug` without a result"))?,
     };
+    if is_test {
+        // The host shows the text in the test's failure block (D-541).
+        b.terminate(Terminator::Return(Operand::Local(text)))?;
+        return Ok(());
+    }
     b.push(Stmt::Eval(Rvalue::CallForeign {
         symbol: EPRINTLN.into(),
         sig: ForeignSig {
@@ -221,15 +318,6 @@ fn report_result(
     }))?;
     b.terminate(Terminator::Return(status(STATUS_ERR)))?;
     Ok(())
-}
-
-/// E0038 at the entry's item for an error type whose `show` needs
-/// dictionaries, which come with interface calls (W3-A).
-fn unsupported_show(def: DefId, cx: &LowerCx<'_>) -> Result<LowerError, Ice> {
-    Ok(LowerError::Unsupported(vec![not_supported(
-        span_of(def, cx)?,
-        "errors whose `show` needs interface dictionaries",
-    )]))
 }
 
 /// The exit status `code` as the thunk's `i64` result.

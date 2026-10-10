@@ -2,14 +2,18 @@
 
 One test per rule, grouped by spec chapter (D-275, [testing.md](../../docs/plan/testing.md#2-ui-tests)). A test is a single `.cheby` file, or a directory holding a whole package when the rule needs several modules or its own `cheby.toml`. Each test starts with `// @key: value` directives:
 
-| Directive    | Meaning                                                                                    |
-| ------------ | ------------------------------------------------------------------------------------------ |
-| `@mode`      | `check-pass`, `check-fail`, `parse-fail`, `run-pass` or `run-fail` (required)              |
-| `@decisions` | decision-log entries the test pins, such as `D-244, D-245`, read by `cargo xtask coverage` |
-| `@milestone` | milestone in which the test must pass, `M1` by default                                     |
-| `@exit`      | expected exit code of a `run-fail` test, `101` by default                                  |
+| Directive    | Meaning                                                                                                            |
+| ------------ | ------------------------------------------------------------------------------------------------------------------ |
+| `@mode`      | `check-pass`, `check-fail`, `parse-fail`, `run-pass` or `run-fail` (required)                                      |
+| `@decisions` | decision-log entries the test pins, such as `D-244, D-245`, read by `cargo xtask coverage`                         |
+| `@milestone` | milestone in which the test must pass, `M1` by default                                                             |
+| `@exit`      | expected exit code of a `run-fail` test, `101` by default                                                          |
+| `@command`   | `test` makes a `run-pass` or `run-fail` test run `cheby test` instead of `cheby run` (D-543); `run` is the default |
+| `@flags`     | words added after the subcommand, split at whitespace, such as `--module ui_test::util` or `--deny-warnings`       |
 
 Goldens sit next to the test: `.stderr` for diagnostics (required for `check-fail` and `parse-fail`) and `.stdout` for program output. `parse-fail` files must also be rejected by `tree-sitter-cheby` (`cargo xtask cross-check`). Record goldens with `cargo xtask bless`.
+
+With `// @command: test`, the goldens hold the output of `cheby test` (D-541): its report on standard output, and warnings or compile errors on standard error. A test that fails makes `cheby test` exit with 1, so such a UI test is `run-fail` with `// @exit: 1`; a compile error also exits with 1. A `name.stdin` file works as for `cheby run`; `cheby test` takes no program arguments, so a `name.args` file beside such a test is an error.
 
 ## Input of run tests
 

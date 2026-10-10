@@ -1,0 +1,18 @@
+// @mode: run-pass
+// @decisions: D-523, D-524
+//! Two interfaces with the same name in modules `app::m` and
+//! `app::app::m`, each satisfied by `t::T` and used from a different
+//! module, get distinct static dictionaries: each call reaches its own
+//! interface's function (§8.5.1).
+
+import app::app
+import app::app::m
+import app::t
+import std::io
+
+fn main() {
+  let inner = m::call(t::T)
+  let outer = app::via_m()
+  io::println("app::app::m::call: {inner}")
+  io::println("app::m::call: {outer}")
+}

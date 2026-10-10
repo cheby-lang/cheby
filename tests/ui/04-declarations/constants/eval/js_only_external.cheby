@@ -1,0 +1,17 @@
+// @mode: check-fail
+// @decisions: D-090, D-512, D-533, D-537
+//! A constant's initializer runs on the host at compile time even when the
+//! constant exists only on `js`, so one that calls a function with only a
+//! JS implementation is E0077 at the constant's name (§4.5, §12.6).
+
+import std::io
+
+@external(js, "./thing.mjs", "thing")
+fn js_thing() -> Int
+
+@target(js)
+pub const js_value: Int = js_thing() + 1
+
+fn main() {
+  io::println("main does not run")
+}

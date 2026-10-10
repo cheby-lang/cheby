@@ -196,6 +196,56 @@ pub unsafe fn forget(word: Word) {
     }
 }
 
+/// Makes `word` and every object it reaches static in place (D-539): each
+/// gets count 0 and leaves the current domain once, so it is never freed
+/// and never counted as a leak. Objects that are already static, and what
+/// they reach, are left alone. Used for the results of constant evaluation
+/// before code reads them. The walk is a worklist on the heap, so a
+/// million-deep value freezes without deep Rust recursion (plan §0).
+///
+/// # Safety
+///
+/// `word` is a tagged integer, 0, or a live object; no other thread uses
+/// the objects it reaches; and the current domain is the one they were
+/// charged to.
+pub unsafe fn freeze(word: Word) {
+    let mut list = vec![word];
+    while let Some(word) = list.pop() {
+        if abi::is_tagged_int(word) || word == 0 {
+            continue;
+        }
+        // SAFETY: every word on the list is a live object reached from the
+        // caller's value. In poisoning mode, a freed one ends the process.
+        unsafe { check_live(word, "freezing") };
+        let obj = word_to_ptr(word);
+        // SAFETY: as above.
+        if unsafe { load_rc(obj) } == abi::RC_STATIC {
+            continue;
+        }
+        // SAFETY: a live heap object.
+        let shape = unsafe { shape_of(obj) };
+        match shape.children {
+            Children::Fields { first, count } => {
+                let mut offset = first;
+                for _ in 0..count {
+                    // SAFETY: the shape lies within the object.
+                    list.push(unsafe { read_field(obj, offset) });
+                    offset = offset.saturating_add(to_usize(abi::FIELD_SIZE));
+                }
+            }
+            Children::Custom(kind) => {
+                let mut visit = |child: Word| list.push(child);
+                // SAFETY: a live object of this kind.
+                unsafe { (kind.children)(word, &mut visit) };
+            }
+        }
+        // SAFETY: a live heap object; its count is written only by this
+        // thread in M1. It leaves the domain with its allocation's size.
+        unsafe { store_rc(obj, abi::RC_STATIC) };
+        charge(-1, to_u64(object_layout(shape.size).size()));
+    }
+}
+
 /// Removes an object that just became static from the current domain.
 ///
 /// # Safety
@@ -204,7 +254,8 @@ pub unsafe fn forget(word: Word) {
 pub(crate) unsafe fn leave_domain(obj: *mut u8) {
     // SAFETY: forwarded from the caller.
     let shape = unsafe { shape_of(obj) };
-    charge(-1, shape.size);
+    // The allocation's size, as `alloc_object` charged it.
+    charge(-1, to_u64(object_layout(shape.size).size()));
 }
 
 /// Allocates an object for generated code: `size` bytes including the
@@ -902,6 +953,48 @@ pub(crate) mod tests {
             }
             assert_eq!((domain.live_objects(), domain.live_bytes()), (0, 0));
         });
+    }
+
+    /// Freezing a constant's result (D-539): a million-deep chain freezes
+    /// without deep recursion, shared parts once, statics untouched, and
+    /// the whole graph leaves the domain.
+    #[test]
+    fn freezing_makes_deep_and_shared_values_static() {
+        let domain = Domain::new();
+        let handle = std::thread::Builder::new()
+            // A small stack: a recursive walk would overflow it.
+            .stack_size(256 << 10)
+            .spawn({
+                let domain = Arc::clone(&domain);
+                move || {
+                    with_domain(Arc::clone(&domain), || {
+                        let shared = tuple(&[abi::tag_int(1).unwrap()]);
+                        let mut chain = tuple(&[]);
+                        for _ in 0..1_000_000 {
+                            chain = tuple(&[chain]);
+                        }
+                        // SAFETY: live objects; the pair takes a second
+                        // reference to `shared`.
+                        unsafe { rc::dup(shared) };
+                        let both = tuple(&[chain, shared, shared, crate::object::nil()]);
+                        assert_eq!(domain.live_objects(), 1_000_003);
+                        // SAFETY: live objects only this thread uses,
+                        // charged to the current domain.
+                        unsafe {
+                            freeze(both);
+                            assert_eq!(object::load_rc(word_to_ptr(both)), abi::RC_STATIC);
+                            assert_eq!(object::load_rc(word_to_ptr(shared)), abi::RC_STATIC);
+                            // Counting a static value changes nothing.
+                            rc::dup(both);
+                            rc::drop(both);
+                            freeze(both);
+                        }
+                        assert_eq!((domain.live_objects(), domain.live_bytes()), (0, 0));
+                    });
+                }
+            })
+            .unwrap();
+        handle.join().unwrap();
     }
 
     #[test]

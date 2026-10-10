@@ -4,6 +4,7 @@
 //! one position twice.
 
 use std::collections::BTreeSet;
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use crate::golden_tests::check_golden;
@@ -563,10 +564,17 @@ fn main() {
 // --- No position tested twice -------------------------------------------
 
 /// What a path through `decision` does twice, as messages: a position
-/// tested twice, or a guard of one arm run twice (D-571).
+/// tested twice, or a guard of one arm run twice (D-571). A list matched
+/// one element at a time tests its length once per element, against a
+/// different length each time (one `Len` case and a default); only the
+/// same length twice, or another test of a position tested that way, is
+/// a repeat.
 fn tested_twice(decision: &Decision) -> Vec<String> {
+    /// The positions tested on a path, with the length of an element-wise
+    /// list test.
+    type Seen = BTreeSet<(OccId, Option<u64>)>;
     let mut out = Vec::new();
-    let mut work: Vec<(&Tree, BTreeSet<OccId>, BTreeSet<usize>)> =
+    let mut work: Vec<(&Tree, Seen, BTreeSet<usize>)> =
         vec![(&decision.tree, BTreeSet::new(), BTreeSet::new())];
     while let Some((tree, seen, guards)) = work.pop() {
         match tree {
@@ -582,12 +590,20 @@ fn tested_twice(decision: &Decision) -> Vec<String> {
             }
             Tree::Test {
                 occ,
+                test,
                 cases,
                 default,
-                ..
             } => {
                 let mut seen = seen;
-                if !seen.insert(*occ) {
+                let length = match (test, cases.as_slice()) {
+                    (Test::Len, [(Key::Len(n), _)]) if default.is_some() => Some(*n),
+                    _ => None,
+                };
+                let repeated = match length {
+                    Some(_) => seen.contains(&(*occ, None)),
+                    None => seen.iter().any(|(o, _)| o == occ),
+                };
+                if repeated || !seen.insert((*occ, length)) {
                     out.push(format!("{occ:?} ({:?})", decision.occs[occ.index()]));
                 }
                 for (_, t) in cases {
@@ -774,4 +790,58 @@ fn the_check_finds_a_repeated_test() {
         },
     };
     assert_eq!(tested_twice(&decision).len(), 1);
+}
+
+/// A column of spreads with growing prefixes is matched one element at a
+/// time, so its tree grows linearly with the arms (the gate-2 review's
+/// R2-2); one switch over every length
+/// would read N(N+1)/2 elements.
+#[test]
+fn growing_list_prefixes_compile_in_linear_size() {
+    // The compiler recurses once per tested position; `cheby` lowers on
+    // its main thread, whose stack is 8 MiB, larger than a test thread's.
+    std::thread::Builder::new()
+        .stack_size(8 << 20)
+        .spawn(growing_list_prefixes)
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+fn growing_list_prefixes() {
+    const ARMS: usize = 120;
+    let mut src =
+        String::from("//! Growing prefixes.\n\nfn depth(xs: List<Int>) -> Int {\n  case xs {\n");
+    for k in (1..=ARMS).rev() {
+        let prefix: Vec<String> = (0..k).map(|i| i.to_string()).collect();
+        writeln!(src, "    [{}, ..] => {k}", prefix.join(", ")).unwrap();
+    }
+    src.push_str("    _ => 0\n  }\n}\n\nfn main() {\n  let _ = depth([0, 1])\n}\n");
+    RECORDED.with(|r| r.borrow_mut().clear());
+    let lowered = lower(&src);
+    let decisions = RECORDED.with(|r| std::mem::take(&mut *r.borrow_mut()));
+    let [decision] = decisions.as_slice() else {
+        panic!("expected one decision, got {}", decisions.len());
+    };
+    assert_eq!(tested_twice(decision), Vec::<String>::new());
+    // One length test and one element test per prefix element.
+    let tests = count_tests(&decision.tree);
+    assert!(tests <= 2 * ARMS + 2, "{tests} tests for {ARMS} arms");
+    let depth = lowered.function("app", "app::depth");
+    let reads = count(&depth, "call_runtime list_get");
+    assert!(reads <= ARMS + 1, "{reads} element reads for {ARMS} arms");
+}
+
+/// Few lengths keep one switch over the lengths.
+#[test]
+fn few_list_lengths_keep_one_switch() {
+    let src = "//! Short lists.\n\nfn f(xs: List<Int>) -> Int {\n  case xs {\n    [] => 0\n    \
+               [a] => a\n    [a, b, ..] => a + b\n  }\n}\n\nfn main() {\n  let _ = f([1])\n}\n";
+    RECORDED.with(|r| r.borrow_mut().clear());
+    let _ = lower(src);
+    let decisions = RECORDED.with(|r| std::mem::take(&mut *r.borrow_mut()));
+    let [decision] = decisions.as_slice() else {
+        panic!("expected one decision, got {}", decisions.len());
+    };
+    assert_eq!(count_tests(&decision.tree), 1);
 }

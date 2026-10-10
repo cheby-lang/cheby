@@ -56,14 +56,15 @@ pub fn uniform_sig(arity: u32) -> AbiSig {
     }
 }
 
-/// The signature of an entry thunk: C ABI, only `ctx`. `Main` and `Test`
-/// thunks return the exit status as an `i64`; `Const` and `Repl` thunks
-/// return the owned value.
+/// The signature of an entry thunk: C ABI, only `ctx`. `Main` thunks
+/// return the exit status as an `i64`; `Test` thunks return the static
+/// `Nil` when the test passed and the owned text of its `Err` otherwise
+/// (D-541); `Const` and `Repl` thunks return the owned value.
 #[must_use]
 pub const fn entry_sig(kind: EntryKind) -> AbiSig {
     let ret = match kind {
-        EntryKind::Main(_) | EntryKind::Test(_) => Repr::I64,
-        EntryKind::Const(_) | EntryKind::Repl(_) => Repr::Value,
+        EntryKind::Main(_) => Repr::I64,
+        EntryKind::Test(_) | EntryKind::Const(_) | EntryKind::Repl(_) => Repr::Value,
     };
     AbiSig {
         abi: Abi::C,

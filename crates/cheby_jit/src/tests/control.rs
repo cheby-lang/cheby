@@ -370,12 +370,8 @@ fn read_layout_gives_the_header_id() {
 }
 
 /// `Const::BuiltinDesc` imports the runtime's `cheby_rt_desc_<name>`
-/// object (D-523). The runtime defines none of them before W3-B, and a
-/// missing runtime object is a compiler bug, not a program error, so the
-/// batch fails with an internal error that names the symbol.
-///
-/// W3-B: once the descriptors exist, change this test to run `desc` and
-/// check that it returns the address of `cheby_rt_desc_int`.
+/// object (D-523): running `desc` returns the address of
+/// `cheby_rt_desc_int`, a static nominal descriptor that prints as `Int`.
 #[test]
 fn builtin_descriptors_are_runtime_objects() {
     let mut p = Prog::default();
@@ -391,18 +387,23 @@ fn builtin_descriptors_are_runtime_objects() {
         )],
         &[],
     );
-    p.call(desc, Vec::new());
+    let entry = p.call(desc, Vec::new());
     let units = validated(p);
     let symbol = format!("{}{}", abi::sym::DESC_PREFIX, BuiltinDesc::Int.name());
-    let defined = cheby_runtime::symbols()
-        .iter()
-        .any(|(name, _)| *name == symbol);
-    let mut jit = Jit::new().unwrap();
-    match jit.compile(&units) {
-        Ok(()) => assert!(defined, "`{symbol}` resolved but the runtime lacks it"),
-        Err(e) => {
-            assert!(!defined, "`{symbol}` is defined, yet: {e}");
-            assert!(e.to_string().contains(&symbol), "{e}");
-        }
-    }
+    assert_eq!(
+        abi::sym::desc_symbol(BuiltinDesc::Int.name()),
+        Some(&*symbol)
+    );
+    assert!(
+        cheby_runtime::symbols()
+            .iter()
+            .any(|(name, _)| *name == symbol),
+        "the runtime lacks `{symbol}`"
+    );
+    let jit = compile(&units);
+    // The generated code returns the address of the runtime's static.
+    let word = returned(run_const(&jit, entry));
+    assert_eq!(Some(word), cheby_runtime::desc::builtin("int"));
+    // SAFETY: `word` is the static nominal descriptor of `Int`.
+    assert_eq!(unsafe { cheby_runtime::generic::debug_string(word) }, "Int");
 }

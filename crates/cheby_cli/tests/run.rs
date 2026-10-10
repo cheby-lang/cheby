@@ -359,3 +359,34 @@ fn later_unreported_stdout_failures_exit_with_one() {
     assert!(stderr.contains("failed after 0 writes"), "{stderr}");
     assert_eq!(status, Some(1), "{stderr}");
 }
+
+/// A `case` with ten list patterns of about 2,000 elements each, longest
+/// first, compiles and runs: the decision tree recurses per tested
+/// element, and the compiler runs on a thread whose stack is large enough
+/// for it (GAP(compiler-stack-size)). The source is generated, one line
+/// per element as the formatter writes long lists.
+#[test]
+fn long_list_patterns_do_not_overflow_the_compiler() {
+    let mut main = String::from(
+        "//! Ten long list patterns.\n\nimport std::io\nimport std::list\n\n\
+         fn f(xs: List<Int>) -> Int {\n  case xs {\n",
+    );
+    for arm in 0..10_usize {
+        main.push_str("    [\n");
+        for _ in 0..2_000 - arm {
+            main.push_str("      0,\n");
+        }
+        main.push_str("    ] => ");
+        main.push_str(&arm.to_string());
+        main.push('\n');
+    }
+    main.push_str(
+        "    _ => 99\n  }\n}\n\nfn main() {\n  let n = f(list::repeat(0, 1_997))\n  \
+         io::println(\"{n}\")\n}\n",
+    );
+    let dir = package("long_list_patterns", &[MANIFEST, ("src/main.cheby", &main)]);
+    let out = cheby(&dir, &["run"]);
+    assert_eq!(out.stderr, "");
+    assert_eq!(out.stdout, "3\n");
+    assert_eq!(out.status, Some(0));
+}

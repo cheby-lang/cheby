@@ -1,0 +1,12 @@
+-42 -128 255 18446744073709551615 -9223372036854775807
+[1.0, 0.1, -0.0, 2.5e-8, 1.0e21, NaN, inf, -inf]
+0.1 0.033333335
+"quote \" backslash \\ brace \{ tab\tnew\nline\r é ✓ \u{1b}\u{7f}\u{0}"
+""
+(True, False, Nil)
+[Less, Equal, Greater]
+[Some(Some(1)), Some(None), None]
+[Ok(1), Err("no")]
+([1, 2], [], [[Nil]])
+[]
+(1, <fn>, [<fn>]) <fn>

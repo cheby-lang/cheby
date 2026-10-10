@@ -8,11 +8,15 @@
 //! call, so the kernel updates the root in place, dups it and returns it,
 //! and the wrapper's drop leaves it at count one (plan §6, D-522).
 
+use std::collections::HashMap;
+
 use super::node::{Root, dup_word, register};
 use super::ops;
-use crate::abi::Word;
+use crate::abi::{PanicKind, Word};
 use crate::ctx::ExecCtx;
-use crate::panic::fatal;
+use crate::entry;
+use crate::generic::{self, Reached};
+use crate::panic::{fatal, panic_current};
 use crate::values;
 
 /// The root behind a list word from generated code.
@@ -282,13 +286,65 @@ pub unsafe extern "C" fn cheby_list_split_at(xs: u64, count: i64) -> u64 {
     values::tuple(&[front, back])
 }
 
-/// The kernels, with their std symbols. `unique` comes with W3-B's
-/// hashing.
+/// `list::unique`: `xs` without repeated elements, keeping the first of
+/// each group of `==` elements, in order. Elements are hashed like `Set`
+/// elements (§3.13) with the running entry's seed, so an element that
+/// holds a function value or a handle panics `EqualityOnFunction` at an
+/// unknown location (D-233, D-556). O(n) expected. When no element repeats,
+/// the result is `xs` itself with one more reference, as D-577 does for
+/// string kernels (GAP(unique-shares-result)).
+///
+/// # Safety
+///
+/// `xs` is a live list, on an entry's thread when its elements may hold a
+/// type with `@std_hooks`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cheby_list_unique(xs: u64) -> u64 {
+    fn reached<T>(_: Reached) -> T {
+        panic_current(PanicKind::EqualityOnFunction, None)
+    }
+    register();
+    let seed = entry::current_seed();
+    // Elements are borrowed from `xs`, which the caller keeps alive.
+    let mut buckets: HashMap<u64, Vec<Word>> = HashMap::new();
+    let mut kept = Vec::new();
+    let mut repeated = false;
+    // SAFETY: forwarded from the caller.
+    for item in unsafe { super::iter(xs) } {
+        // SAFETY: a live element of a live list.
+        let hash = unsafe { generic::hash_with_seed(item, seed) }.unwrap_or_else(reached);
+        let bucket = buckets.entry(hash).or_default();
+        let mut found = false;
+        for &other in bucket.iter() {
+            // SAFETY: live elements of one type.
+            if unsafe { generic::equal(other, item) }.unwrap_or_else(reached) {
+                found = true;
+                break;
+            }
+        }
+        if found {
+            repeated = true;
+        } else {
+            bucket.push(item);
+            kept.push(item);
+        }
+    }
+    if !repeated {
+        dup_word(xs);
+        return xs;
+    }
+    for &item in &kept {
+        dup_word(item);
+    }
+    super::from_iter(kept)
+}
+
+/// The kernels, with their std symbols.
 #[expect(
     clippy::as_conversions,
     reason = "taking the address of a function needs an `as` cast"
 )]
-pub(super) fn all() -> [(&'static str, *const u8); 10] {
+pub(super) fn all() -> [(&'static str, *const u8); 11] {
     [
         ("cheby_list_length", cheby_list_length as *const u8),
         ("cheby_list_get", cheby_list_get as *const u8),
@@ -300,5 +356,6 @@ pub(super) fn all() -> [(&'static str, *const u8); 10] {
         ("cheby_list_take", cheby_list_take as *const u8),
         ("cheby_list_drop", cheby_list_drop as *const u8),
         ("cheby_list_split_at", cheby_list_split_at as *const u8),
+        ("cheby_list_unique", cheby_list_unique as *const u8),
     ]
 }

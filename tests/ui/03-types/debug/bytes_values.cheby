@@ -1,0 +1,29 @@
+// @mode: run-pass
+// @decisions: D-033, D-388
+//! `Bytes` prints as `bytes::from_list([0x66, 0x6f])`, each byte as two
+//! lower-case hex digits, and compares and hashes by its bytes (§3.13).
+//! The values come from files this test writes in its working directory.
+
+import std::bytes
+import std::io
+import std::list
+
+fn read(path: String, text: String) -> bytes::Bytes {
+  let assert Ok(_) = io::write_file(path, text)
+  let assert Ok(data) = io::read_file_bytes(path)
+  data
+}
+
+fn main() {
+  let first = read("first.bin", "fo\u{0}\u{ff}")
+  let again = read("again.bin", "fo\u{0}\u{ff}")
+  let other = read("other.bin", "fo")
+  let empty = read("empty.bin", "")
+  io::println("{first:?}")
+  io::println("{other:?} {empty:?}")
+  let same = first == again
+  let different = first != other
+  io::println("equal: {same}, different: {different}")
+  let kept = list::length(list::unique([first, again, other, empty, other]))
+  io::println("distinct: {kept}")
+}

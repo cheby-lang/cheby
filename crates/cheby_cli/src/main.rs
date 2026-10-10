@@ -66,8 +66,14 @@ enum Command {
     },
     /// Start an interactive session (§13.5)
     Repl,
-    /// Run `test` blocks (§13.6)
-    Test,
+    /// Run `test` blocks (§13.6, D-541)
+    Test {
+        /// Only run tests whose full name, `<module path> "<test name>"`, contains this text
+        filter: Option<String>,
+        /// Only run the tests of this module and its submodules, such as `my_app::util`
+        #[arg(long, value_name = "PATH")]
+        module: Option<String>,
+    },
     /// Format source files (§13.7)
     Fmt {
         /// Exit non-zero if any file would change, without writing
@@ -97,7 +103,31 @@ enum Target {
     Js,
 }
 
+/// The stack of the thread that runs the command. Parts of the compiler
+/// recurse over the source's structure, such as the decision trees of long
+/// list patterns (about six frames per tested element), so the 8 MiB main
+/// thread limits valid programs; this moves the limit far beyond realistic
+/// sources. Only address space is reserved up front
+/// (GAP(compiler-stack-size)).
+const COMMAND_STACK_SIZE: usize = 256 << 20;
+
 fn main() -> ExitCode {
+    let command = std::thread::Builder::new()
+        .name("cheby".to_owned())
+        .stack_size(COMMAND_STACK_SIZE)
+        .spawn(run_command);
+    match command.map(std::thread::JoinHandle::join) {
+        Ok(Ok(code)) => code,
+        // The command thread panicked; the panic hook printed the report.
+        Ok(Err(_)) => ExitCode::from(101),
+        Err(e) => {
+            eprintln!("error: cannot start the compiler's thread: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run_command() -> ExitCode {
     let env = |name: &str| std::env::var_os(name);
     // clap prints help and usage errors while it parses, so its color is
     // set from a scan of the raw arguments first.
@@ -116,8 +146,8 @@ fn main() -> ExitCode {
         Command::Check => check(out),
         Command::Build { target } => build(out, target),
         Command::Run { module_path, args } => run(out, module_path, args),
-        Command::Repl => out.not_yet("repl", "M1"),
-        Command::Test => out.not_yet("test", "M1"),
+        Command::Repl => cheby_repl::run(cheby_repl::ReplOptions::default()),
+        Command::Test { filter, module } => test(out, filter, module),
         Command::Fmt { .. } => out.not_yet("fmt", "M5"),
         Command::Lsp => out.not_yet("lsp", "M5"),
         Command::Doc => out.not_yet("doc", "M5"),
@@ -218,6 +248,37 @@ fn run(out: Out, module_path: Option<String>, args: Vec<String>) -> ExitCode {
     out.diagnostics(program.output());
     match program.run() {
         Ok(status) => ExitCode::from(u8::try_from(status).unwrap_or(1)),
+        Err(e) => out.error(e.message()),
+    }
+}
+
+/// `cheby test [FILTER] [--module PATH]` (§13.6, D-541): checks and
+/// compiles the package's selected tests, then runs them one after
+/// another and prints a line per test, a block per failure and a summary
+/// to stdout. Compile errors are printed and exit with 1 before any test
+/// runs; warnings are printed first. Exits with 0 when every selected test
+/// passes, 1 otherwise.
+fn test(out: Out, filter: Option<String>, module: Option<String>) -> ExitCode {
+    let root = match package_root(out) {
+        Ok(root) => root,
+        Err(code) => return code,
+    };
+    let options = cheby_driver::TestOptions { filter, module };
+    let program = match cheby_driver::prepare_test(&root, &options) {
+        Ok(cheby_driver::PreparedTests::Ready(program)) => program,
+        Ok(cheby_driver::PreparedTests::CompileFailed(result)) => {
+            out.diagnostics(&result);
+            return ExitCode::FAILURE;
+        }
+        Err(e) => return out.error(e.message()),
+    };
+    out.diagnostics(program.output());
+    // Each line is written through the process's stdout, without holding
+    // its lock, so the tests' own output (written from their entries'
+    // threads) appears in order between the lines.
+    match program.run(&mut std::io::stdout()) {
+        Ok(report) if report.success() => ExitCode::SUCCESS,
+        Ok(_) => ExitCode::FAILURE,
         Err(e) => out.error(e.message()),
     }
 }

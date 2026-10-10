@@ -5,8 +5,11 @@
 # - `fmt`: rustfmt, once, because formatting does not depend on the platform.
 # - `cross-check`: parses examples and UI tests with tree-sitter-cheby at the
 #   commit pinned in tests/tree-sitter-cheby.rev (D-272).
+# - `std-tests`: checks and runs the standard library's own tests, one module
+#   at a time (D-479, D-542).
 # - `bench`: generates benchmark projects and reports, never enforces, the
-#   results (D-247). From M1 it also times the compiler.
+#   results (D-247), and times the compiler on them (I1): checking, checking
+#   with code generation, and the edit-to-run latency, in the step summary.
 
 name: CI
 
@@ -78,6 +81,21 @@ jobs:
       - name: Parse examples and UI tests with tree-sitter-cheby
         run: cargo xtask cross-check --summary "$GITHUB_STEP_SUMMARY"
 
+  std-tests:
+    runs-on: ubuntu-24.04
+    # Until M1's exit (gate 5 of the back-end plan), std modules that reach
+    # kernels of a later wave do not build yet, so the report is not
+    # binding. Remove this line when `cargo xtask test-std` passes.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.0"
+      - uses: Swatinem/rust-cache@v2
+      - name: Run the standard library's tests
+        run: cargo xtask test-std
+
   bench:
     runs-on: ubuntu-24.04
     steps:
@@ -115,3 +133,9 @@ jobs:
             --also target/bench/sample/small --also target/bench/sample/large \
             --also target/bench/sample/deep --also target/bench/sample/wide \
             --also target/bench/sample/generic
+      - name: Compile speed on every merge
+        if: github.event_name == 'push'
+        run: cargo xtask bench-compile --summary "$GITHUB_STEP_SUMMARY"
+      - name: Compile speed (10k lines) on pull requests
+        if: github.event_name != 'push'
+        run: cargo xtask bench-compile --quick --summary "$GITHUB_STEP_SUMMARY"

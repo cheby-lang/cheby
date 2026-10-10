@@ -1,0 +1,7 @@
+map::from_list([(10, "ten"), (9, "nine")]) True
+set::from_list(["apple", "pear"])
+map::from_list([]) set::from_list([])
+map::from_list([("a", []), ("b", [2, 1]), ("c", [3])])
+set::from_list([(1, 1), (1, 2), (2, 1)])
+set::from_list([map::from_list([(10, "ten"), (9, "nine")]), map::from_list([])]) 2
+map::from_list([(Some(set::from_list(["apple", "pear"])), 1)])

@@ -57,8 +57,9 @@ pub struct MirModule {
     /// `Entries`.
     pub path: Box<str>,
     /// In order: items by `DefIndex`, each followed by its closures in
-    /// creation order, then the value shims the unit needs by `DefId`;
-    /// entry thunks in the order given.
+    /// creation order, then the value shims the unit needs by `DefId`,
+    /// then the tuple dictionary functions by interface function and
+    /// arity; entry thunks in the order given.
     pub functions: Vec<Function>,
     /// Every [`Callee::Direct`] target, own module or not, sorted by
     /// `DefId`, with its signature from [`crate::abi::abi_sig`]. The
@@ -164,12 +165,13 @@ pub struct StaticObject {
     /// Its position in [`MirModule::statics`].
     pub id: StaticId,
     pub kind: StaticKind,
-    /// The module path of its symbol, `cb$<kind>$<module>$<name>`: the
-    /// unit's own for a dictionary or a function value, the type's for a
-    /// nominal descriptor (`cb$desc$<module path>$<Type>`), and the
-    /// interface's for the type `dyn I` (`cb$desc$<module path of
-    /// I>$dyn$<I>`, D-523). A unit may define a static of another module;
-    /// the JIT defines each symbol once per process.
+    /// The module path of its symbol, `cb$<kind>$<module>$$<name>`
+    /// (D-523, GAP(static-symbol-boundary)): the unit's own for a
+    /// dictionary or a function value, the type's for a nominal descriptor
+    /// (`cb$desc$<module path>$$<Type>`), and the interface's for the type
+    /// `dyn I` (`cb$desc$<module path of I>$$dyn$<I>`). A unit may define a
+    /// static of another module; the JIT defines each symbol once per
+    /// process.
     pub module: Box<str>,
     /// Unique with `module` and `kind` within the unit, and stable: built
     /// from paths and names, never from ids (D-264, D-523).
@@ -197,7 +199,11 @@ pub enum StaticKind {
     Dict,
     /// A type descriptor: `cb$desc$…`.
     Desc,
-    /// A closure with no captures: `cb$fnval$…`.
+    /// A closure whose captures, if any, are static objects too:
+    /// `cb$fnval$…`. A top-level function's value has none; a function of
+    /// a static dictionary that needs dictionaries holds them (D-064,
+    /// D-524), and a tuple dictionary's function holds the element
+    /// dictionaries (D-167).
     FnValue,
 }
 

@@ -117,16 +117,19 @@ pub fn item(kind: Kind, name: &DefName) -> String {
     )
 }
 
-/// `cb$<kind>$<module path>$<name>`: a static object of a unit (D-523),
+/// `cb$<kind>$<module path>$$<name>`: a static object of a unit (D-523),
 /// whose `name` MIR built from paths and names, unique in the unit.
+///
+/// The name is free text with paths in it (`app::m::I$app::t::T`), so it
+/// is kept as it is, and `$$` ends the module path: a module path joined
+/// with `$` never holds `$$`, so the first `$$` is always the boundary and
+/// statics of different units never share a symbol
+/// (GAP(static-symbol-boundary)). Joining the name's paths with `$` too
+/// would make `app::app` with `app::m::I$…` and `app` with
+/// `app::app::m::I$…` the same symbol.
 #[must_use]
 pub fn static_object(kind: Kind, unit_path: &str, name: &str) -> String {
-    format!(
-        "{PREFIX}{}${}${}",
-        kind.word(),
-        path_part(unit_path),
-        path_part(name)
-    )
+    format!("{PREFIX}{}${}$${name}", kind.word(), path_part(unit_path))
 }
 
 /// `cb$clo$<module path>$<owner>$<n>`.

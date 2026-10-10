@@ -1,13 +1,14 @@
 //! Panics (F7, §11.6, §11.8) and the stack-limit slow path (§11.8.1).
 //!
 //! A panic flushes standard output, prints its report to standard error
-//! (except during constant evaluation, which captures it), and then
-//! abandons the entry: it hands the report to the host waiting in
-//! `run_entry` and parks the entry's thread forever. It never returns and
-//! never unwinds (D-283; unwinding is M2). What happens next is the host's
-//! policy: `cheby run` exits with 101 (D-182), `cheby test` records a
-//! failure, the REPL continues, and constant evaluation reports a compile
-//! error.
+//! (except in a test or during constant evaluation, whose hosts capture
+//! it), and then abandons the entry: it hands the report to the host
+//! waiting in `run_entry` and parks the entry's thread forever. It never
+//! returns and never unwinds (D-283; unwinding is M2). What happens next is
+//! the host's policy: `cheby run` exits with 101 (D-182), `cheby test`
+//! records a failure and prints the report in its failure block (D-541),
+//! the REPL continues, and constant evaluation reports a compile error
+//! with the report's message and location in a note (D-449, D-533).
 //!
 //! Report format (D-449), as rustc prints panics:
 //!
@@ -166,7 +167,8 @@ unsafe fn location_text(location: Word) -> String {
 }
 
 /// Ends the entry with a panic: flushes standard output, prints the report
-/// unless the entry captures it, hands it to the host and parks forever.
+/// unless the entry captures it (tests and constant evaluation), hands it
+/// to the host and parks forever.
 ///
 /// # Safety
 ///
@@ -177,8 +179,12 @@ unsafe fn abandon(ctx: *mut ExecCtx, report: PanicReport) -> ! {
     }
     // SAFETY: forwarded from the caller.
     let context = unsafe { ctx.as_ref() };
-    let captured =
-        context.is_some_and(|context| matches!(context.entry_mode(), EntryMode::ConstEval(_)));
+    let captured = context.is_some_and(|context| {
+        matches!(
+            context.entry_mode(),
+            EntryMode::ConstEval(_) | EntryMode::Test
+        )
+    });
     if !captured {
         io::write_stderr(&report.to_string());
     }

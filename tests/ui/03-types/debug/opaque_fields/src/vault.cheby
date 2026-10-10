@@ -1,0 +1,11 @@
+//! A type whose structure only this module sees.
+
+/// A sealed number: other modules cannot build or match it.
+pub type Sealed {
+  Sealed { code: Int, note: String },
+}
+
+/// Seals `code`.
+pub fn seal(code: Int) -> Sealed {
+  Sealed { code, note: "hidden" }
+}

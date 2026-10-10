@@ -1,0 +1,2 @@
+panicked at <unknown location>:
+equality or hashing reached a function value or a handle

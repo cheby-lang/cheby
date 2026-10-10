@@ -84,7 +84,17 @@ fn mangled_names_do_not_collide() {
     );
     assert_eq!(
         mangle::static_object(Kind::Dict, "app::shapes", "Show$Point"),
-        "cb$dict$app$shapes$Show$Point"
+        "cb$dict$app$shapes$$Show$Point"
+    );
+    // `$$` ends the unit's module path, and the name keeps its own paths,
+    // so statics of different units never share a symbol.
+    assert_ne!(
+        mangle::static_object(Kind::Dict, "app::app", "app::m::I$app::t::T"),
+        mangle::static_object(Kind::Dict, "app", "app::app::m::I$app::t::T")
+    );
+    assert_eq!(
+        mangle::static_object(Kind::Desc, "app", "List<app::t::T>"),
+        "cb$desc$app$$List<app::t::T>"
     );
     assert_eq!(
         mangle::tuple_fn(&name("std::fmt", "Show::show"), 2),

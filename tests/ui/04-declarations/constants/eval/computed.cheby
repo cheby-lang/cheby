@@ -1,0 +1,60 @@
+// @mode: run-pass
+// @decisions: D-090, D-535, D-539
+//! Constants are evaluated at compile time, in the dependency order of
+//! their initializers, and `main` reads their values: literals and
+//! computed values of `Int`, `String`, `List` and records, constants that
+//! call functions, and constants declared after the ones that read them
+//! (§4.5, §13.9).
+
+import std::io
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+const answer: Int = 42
+
+const doubled: Int = double(answer)
+
+const name: String = "cheby"
+
+const greeting: String = "hello, " + name
+
+const primes: List<Int> = sieve(30)
+
+const origin: Point = Point { x: 0, y: 0 }
+
+const corner: Point = Point { ..origin, y: height }
+
+const height: Int = doubled + 1
+
+fn double(n: Int) -> Int {
+  n * 2
+}
+
+/// The primes below `limit`, by trial division.
+fn sieve(limit: Int) -> List<Int> {
+  fn is_prime(n, d) {
+    case {
+      d * d > n => True
+      n % d == 0 => False
+      _ => is_prime(n, d + 1)
+    }
+  }
+  fn collect(n, found) {
+    case {
+      n >= limit => found
+      is_prime(n, 2) => collect(n + 1, [..found, n])
+      _ => collect(n + 1, found)
+    }
+  }
+  collect(2, [])
+}
+
+fn main() {
+  io::println("{answer} {doubled} {height}")
+  io::println(greeting)
+  io::println("{primes:?}")
+  io::println("{origin:?} {corner:?}")
+}

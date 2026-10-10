@@ -518,7 +518,9 @@ fn rejects_misplaced_c_abi_and_tail_calls() {
         &unit(UnitKind::Entries, vec![b.finish().unwrap()]),
         Stage::Lowered,
     );
-    assert!(text.contains("an entries unit holds only entry thunks and trampolines"));
+    assert!(text.contains(
+        "an entries unit holds only entry thunks, trampolines, value shims and tuple functions"
+    ));
     assert!(text.contains("needs its entry-check location"));
 }
 

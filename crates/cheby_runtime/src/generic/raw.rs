@@ -3,6 +3,7 @@
 
 use crate::abi::{self, Word};
 use crate::alloc;
+use crate::desc;
 use crate::layout::{self, CustomKind, FieldKind, LayoutInfo, LayoutKind};
 use crate::object::{read_field, scan_and_layout, word_to_ptr};
 use crate::panic::fatal;
@@ -30,12 +31,22 @@ pub(super) enum View<'a> {
     Closure,
     /// A constructor value and its layout.
     Ctor(&'static LayoutInfo),
-    /// A `dyn` value: the value inside.
-    Dyn(Word),
+    /// A `dyn` value: its type's descriptor (field 0 of its dictionary)
+    /// and the value inside.
+    Dyn {
+        /// The descriptor of the value's type.
+        desc: Word,
+        /// The value.
+        value: Word,
+    },
+    /// A value of an external type (§12.5.3), with its type's layout.
+    External(&'static LayoutInfo),
+    /// A type descriptor or a nominal descriptor, read into its parts.
+    Desc(desc::Parts),
     /// A runtime-defined kind.
     Custom(&'static CustomKind),
-    /// A dictionary or a descriptor, which values never contain where
-    /// equality, hashing or printing can reach them.
+    /// A dictionary, which values never contain where equality, hashing or
+    /// printing can reach them.
     Internal(&'static LayoutInfo),
 }
 
@@ -91,10 +102,23 @@ pub(super) unsafe fn view<'a>(word: Word, what: &str) -> View<'a> {
         }
         LayoutKind::Closure => View::Closure,
         LayoutKind::Ctor { .. } => View::Ctor(info),
-        // SAFETY: a live `dyn` value holds its value at offset 16.
-        LayoutKind::Dyn => View::Dyn(unsafe { read_field(obj, 16) }),
+        LayoutKind::Dyn => {
+            // SAFETY: a live `dyn` value holds its dictionary at offset 8
+            // and its value at 16 (D-524); a live dictionary holds its
+            // type's descriptor at offset 8, escaped or not (D-555).
+            let (dict, value) = unsafe { (read_field(obj, 8), read_field(obj, 16)) };
+            // SAFETY: as above.
+            let desc = unsafe { read_field(word_to_ptr(dict), 8) };
+            View::Dyn { desc, value }
+        }
+        LayoutKind::Custom(_) if info.is_external() => View::External(info),
         LayoutKind::Custom(kind) => View::Custom(kind),
-        LayoutKind::Dict | LayoutKind::Desc | LayoutKind::DescNominal => View::Internal(info),
+        // SAFETY: a live descriptor.
+        LayoutKind::Desc | LayoutKind::DescNominal => match unsafe { desc::parts(word) } {
+            Some(parts) => View::Desc(parts),
+            None => View::Internal(info),
+        },
+        LayoutKind::Dict => View::Internal(info),
     }
 }
 

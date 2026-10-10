@@ -1,0 +1,7 @@
+test ui_test "leaks a string" ... FAILED
+test ui_test "leaks nothing" ... ok
+
+---- ui_test "leaks a string" ----
+error: leak check failed: 1 object is still live at exit
+
+test result: FAILED. 1 passed; 1 failed; 0 filtered out

@@ -1,0 +1,29 @@
+// @mode: run-pass
+// @decisions: D-344, D-382
+//! Entries of maps and sets nested in each other sort by their whole debug
+//! text, nested text included, compared code point by code point: `[1, 2]`
+//! before `[10]` before `[1]` before `[]`, because `,` < `0` < `]` (§3.13).
+
+import std::io
+import std::map
+import std::set
+
+fn main() {
+  let sets = set::from_list([
+    set::from_list([]),
+    set::from_list([1]),
+    set::from_list([10]),
+    set::from_list([1, 2]),
+  ])
+  io::println("{sets:?}")
+  let deeper = set::from_list([
+    set::from_list([sets]),
+    set::from_list([set::from_list([set::from_list([1])])]),
+  ])
+  io::println("{deeper:?}")
+  let by_name = map::from_list([
+    ("b", map::from_list([(set::from_list(["y", "x"]), 2)])),
+    ("a", map::from_list([(set::from_list(["z"]), 1), (set::new(), 0)])),
+  ])
+  io::println("{by_name:?}")
+}

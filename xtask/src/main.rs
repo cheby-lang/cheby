@@ -13,7 +13,12 @@
 //! - `cross-check`: parses examples and UI tests with `tree-sitter-cheby`
 //!   at the pinned commit and with the compiler parser, and fails if they
 //!   disagree (D-272).
+//! - `test-std`: checks every shipped std module with its `test` blocks
+//!   and runs them, one batch per module (D-479, D-542).
+//! - `bench-compile`: compile-speed numbers on generated projects (I1,
+//!   D-247, plan §8.5).
 
+mod bench;
 mod cross_check;
 
 use std::path::{Path, PathBuf};
@@ -67,6 +72,21 @@ enum Cmd {
     /// Parse examples and UI tests with tree-sitter-cheby at the pinned
     /// commit and with the compiler parser, and compare
     CrossCheck(cross_check::Args),
+    /// Check and run the standard library's own tests, one module at a time
+    TestStd {
+        /// Only run tests whose full name, `std::<module> "<name>"`, contains this text
+        filter: Option<String>,
+    },
+    /// Measure compile speed on generated projects (D-247)
+    BenchCompile {
+        /// Only the 10k-line projects
+        #[arg(long)]
+        quick: bool,
+        /// Append the Markdown table to this file, such as
+        /// `$GITHUB_STEP_SUMMARY`
+        #[arg(long)]
+        summary: Option<PathBuf>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -84,6 +104,8 @@ fn main() -> ExitCode {
         Cmd::CheckDeterminism { lines } => check_determinism(&root, lines),
         Cmd::Coverage => coverage(&root),
         Cmd::CrossCheck(args) => cross_check::run(&root, &args),
+        Cmd::TestStd { filter } => test_std(filter.as_deref()),
+        Cmd::BenchCompile { quick, summary } => bench::run(&root, quick, summary.as_deref()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -118,6 +140,24 @@ fn bless(root: &Path, filter: Option<&str>) -> Result<(), String> {
         Ok(())
     } else {
         Err("blessing failed; see the test output above".to_owned())
+    }
+}
+
+/// Tests the standard library (D-542) and prints the report: a line per
+/// test, the modules and tests that did not build with their codes, a
+/// block per failure, and the counts per module and in total. Fails when a
+/// test failed or did not build.
+fn test_std(filter: Option<&str>) -> Result<(), String> {
+    let report = cheby_driver::test_std(filter).map_err(|e| e.message().to_owned())?;
+    print!("{}", report.render());
+    if report.success() {
+        Ok(())
+    } else {
+        let counts = report.counts();
+        Err(format!(
+            "{} std tests failed and {} did not build",
+            counts.failed, counts.not_built
+        ))
     }
 }
 

@@ -1,0 +1,47 @@
+// @mode: run-pass
+// @decisions: D-064, D-136, D-355, D-499
+//! `Show` and `Compare` through bounds on built-in types: numbers,
+//! strings, `Bool`, `Nil`, and the containers that satisfy them when
+//! their elements do, whose dictionaries hold their elements'
+//! dictionaries (§8.2.2, §8.8, D-355).
+
+import std::io
+import std::ops::{Compare}
+
+fn shown<T: Show>(x: T) -> String {
+  "<{x}>"
+}
+
+fn order<T: Compare>(a: T, b: T) -> String {
+  case Compare::compare(a, b) {
+    Less => "less"
+    Equal => "equal"
+    Greater => "greater"
+  }
+}
+
+fn main() {
+  io::println(shown(42))
+  io::println(shown(-1.5))
+  io::println(shown("text"))
+  io::println(shown(True))
+  io::println(shown(Nil))
+  let small: U8 = 200
+  io::println(shown(small))
+  io::println(shown([1, 2, 3]))
+  io::println(shown(["a", "b"]))
+  io::println(shown([[1], [], [2, 3]]))
+  io::println(shown(Some("x")))
+  let nothing: Option<Int> = None
+  io::println(shown(nothing))
+  let ok: Result<Int, String> = Ok(1)
+  let failed: Result<Int, String> = Err("bad")
+  io::println(shown(ok))
+  io::println(shown(failed))
+  io::println(order(1, 2))
+  io::println(order(2.5, 2.5))
+  io::println(order("b", "a"))
+  io::println(order(False, True))
+  io::println(order([1, 2], [1, 2, 0]))
+  io::println(order([[2]], [[1, 5]]))
+}

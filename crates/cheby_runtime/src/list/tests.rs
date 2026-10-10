@@ -559,13 +559,11 @@ fn kernels_are_registered_with_their_std_symbols() {
             "cheby_list_take",
             "cheby_list_drop",
             "cheby_list_split_at",
+            "cheby_list_unique",
         ]
     );
     assert!(table.iter().all(|(_, address)| !address.is_null()));
-    assert!(
-        super::COMPLETE.is_empty(),
-        "`list` is complete only with `unique` (W3-B)"
-    );
+    assert_eq!(super::COMPLETE, ["list"]);
 }
 
 // ---------------------------------------------------------------------
@@ -931,4 +929,137 @@ fn trees_can_be_cut_and_joined_directly() {
         release(r);
         release(xs);
     });
+}
+
+// ---------------------------------------------------------------------
+// `list::unique`, and equality, hashing and debug text of lists (W3-B)
+
+/// The model of `unique`: the first of each group of equal values, in
+/// order.
+fn unique_model(model: &[i64]) -> Vec<i64> {
+    let mut seen = std::collections::HashSet::new();
+    model.iter().copied().filter(|v| seen.insert(*v)).collect()
+}
+
+#[test]
+fn unique_keeps_the_first_of_each_element() {
+    balanced(|| {
+        let xs = list(&[3, 1, 3, 2, 1]);
+        // SAFETY: the kernel borrows its list.
+        let unique = root(unsafe { cheby_list_unique(xs.word()) });
+        check(unique, &[3, 1, 2]);
+        release(unique);
+        // Without repeats, the result is the list itself.
+        let distinct = list(&[1, 2, 3]);
+        // SAFETY: as above.
+        let same = unsafe { cheby_list_unique(distinct.word()) };
+        assert_eq!(same, distinct.word());
+        drop_word(same);
+        // SAFETY: as above.
+        let empty_result = unsafe { cheby_list_unique(empty()) };
+        assert_eq!(empty_result, empty());
+        // Strings equal by contents are repeats, whatever their objects.
+        let texts = root(from_iter(["a", "b", "a"].map(new_string)));
+        // SAFETY: as above.
+        let unique_texts = root(unsafe { cheby_list_unique(texts.word()) });
+        // SAFETY: a live list of strings.
+        let read: Vec<String> = unsafe { iter(unique_texts.word()) }
+            // SAFETY: live strings.
+            .map(|word| unsafe { to_rust_string(word) }.unwrap())
+            .collect();
+        assert_eq!(read, ["a", "b"]);
+        for list in [xs, distinct, texts, unique_texts] {
+            release(list);
+        }
+    });
+}
+
+#[test]
+fn unique_of_a_view_reads_only_the_view() {
+    balanced(|| {
+        let model: Vec<i64> = (0..200).map(|v| v % 7).collect();
+        let xs = list(&model);
+        // SAFETY: the kernels borrow their lists.
+        let view = root(unsafe { cheby_list_slice(xs.word(), 50, 120) });
+        // SAFETY: as above.
+        let unique = root(unsafe { cheby_list_unique(view.word()) });
+        check(unique, &unique_model(&model[50..120]));
+        for list in [xs, view, unique] {
+            release(list);
+        }
+    });
+}
+
+/// `unique` of a list holding a function value panics `EqualityOnFunction`
+/// (D-233) on the running entry.
+unsafe extern "C" fn unique_of_functions(_: *mut crate::ctx::ExecCtx) -> u64 {
+    let f = crate::generic::tests::closure(&[]);
+    let xs = from_iter([f]);
+    // SAFETY: the kernel borrows its list; it panics, so nothing returns.
+    unsafe { cheby_list_unique(xs) }
+}
+
+#[test]
+fn unique_panics_on_function_values() {
+    let config = crate::entry::EntryConfig::new(crate::entry::EntryMode::Test);
+    // SAFETY: a test thunk with the `EntryFn` ABI.
+    let outcome = unsafe { crate::entry::run_entry(unique_of_functions, &config) }.unwrap();
+    let crate::entry::EntryOutcome::Panicked(report) = outcome else {
+        panic!("expected a panic, got {outcome:?}");
+    };
+    assert_eq!(report.kind, abi::PanicKind::EqualityOnFunction);
+}
+
+#[test]
+fn lists_compare_hash_and_print_through_their_root_kind() {
+    balanced(|| {
+        let model: Vec<i64> = (0..1_000).collect();
+        let pushed = list(&model);
+        let mut prepended = root(empty());
+        for &v in model.iter().rev() {
+            prepended = ops::prepend(prepended, elem(v));
+        }
+        // SAFETY: live lists of one type.
+        unsafe {
+            assert_eq!(
+                crate::generic::equal(pushed.word(), prepended.word()),
+                Ok(true)
+            );
+            assert_eq!(
+                crate::generic::hash_with_seed(pushed.word(), 7),
+                crate::generic::hash_with_seed(prepended.word(), 7)
+            );
+            let text = crate::generic::debug_string(pushed.word());
+            assert!(text.starts_with("[\"0\", 1, 2, \"3\", "), "{text}");
+            assert!(text.ends_with(", 998, \"999\"]"), "{text}");
+        }
+        let shorter = list(&model[..999]);
+        // SAFETY: as above.
+        unsafe {
+            assert_eq!(
+                crate::generic::equal(pushed.word(), shorter.word()),
+                Ok(false)
+            );
+            assert_eq!(crate::generic::debug_string(empty()), "[]");
+        }
+        for list in [pushed, prepended, shorter] {
+            release(list);
+        }
+    });
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+
+    #[test]
+    fn unique_matches_the_model(model in prop::collection::vec(0_i64..40, 0..300)) {
+        balanced(|| {
+            let xs = list(&model);
+            // SAFETY: the kernel borrows its list.
+            let unique = root(unsafe { cheby_list_unique(xs.word()) });
+            check(unique, &unique_model(&model));
+            release(unique);
+            release(xs);
+        });
+    }
 }

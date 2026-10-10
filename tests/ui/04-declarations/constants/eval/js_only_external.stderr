@@ -1,0 +1,8 @@
+error[E0077]: evaluating the constant `js_value` reached an effect
+  --> tests/ui/04-declarations/constants/eval/js_only_external.cheby:13:11
+   |
+13 | pub const js_value: Int = js_thing() + 1
+   |           ^^^^^^^^ this constant is computed at compile time
+   |
+   = note: it reached the external function `ui_test::js_thing`; only the kernels of `std::list`, `std::map`, `std::set`, `std::string`, `std::bytes` and the numeric modules run at compile time
+

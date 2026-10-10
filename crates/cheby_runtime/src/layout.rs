@@ -10,7 +10,8 @@
 //! - User constructors are registered from id 64 on, in call order, before
 //!   any code that uses them is defined (D-454). The constructors of one
 //!   type are registered together with [`register_consecutive`], so their
-//!   ids are consecutive in tag order (D-522).
+//!   ids are consecutive in tag order (D-522). The values of each external
+//!   type get a layout of their own there too ([`register_external`]).
 //!
 //! The table is append-only: 4096 chunks of 4096 slots behind `AtomicPtr`s,
 //! 2^24 ids in all. Registering takes a lock; [`get`] takes none, because
@@ -680,6 +681,75 @@ pub fn register_builtin(id: LayoutId, info: LayoutInfo) -> Result<(), LayoutErro
             existing.name
         ))),
     }
+}
+
+/// The size of an external handle object: the header and the handle.
+const EXTERNAL_SIZE: u64 = 16;
+
+unsafe fn external_size(_: Word) -> u64 {
+    EXTERNAL_SIZE
+}
+
+unsafe fn external_children(_: Word, _: &mut dyn FnMut(Word)) {}
+
+/// The kind of every value of an external type (§12.5.3): the header, then
+/// the foreign handle as a raw word at offset 8 (GAP(external-handle-layout)). Each external type has
+/// its own layout of this kind ([`register_external`]), whose
+/// [`LayoutInfo::type_name`] is the type's name, so a value debug-prints
+/// as `<Db>`, and `==` and hashing stop on it like on a function value
+/// (D-189, D-233). The generic routines recognize the kind by identity
+/// ([`LayoutInfo::is_external`]); its own functions are never called.
+///
+/// Calling the type's drop function when the last reference goes away
+/// (D-101, §9.5) is not implemented yet: M1 builds no external values,
+/// because a native host library comes with M3 (OQ-P9).
+pub static EXTERNAL_HANDLE: CustomKind = CustomKind {
+    name: "external handle",
+    size: external_size,
+    children: external_children,
+    equal: None,
+    hash: None,
+    debug: None,
+};
+
+impl LayoutInfo {
+    /// Whether this is the layout of an external type's values.
+    #[must_use]
+    pub fn is_external(&self) -> bool {
+        matches!(self.kind, LayoutKind::Custom(kind) if ptr::eq(kind, ptr::from_ref(&EXTERNAL_HANDLE)))
+    }
+}
+
+/// Registers the layout of the values of the external type `type_name`
+/// (§12.5.3), whose key is `type_key` ([`type_key`] of its module path and
+/// name), at the next user id, and returns the id. The layout is a
+/// [`LayoutKind::Custom`] of [`EXTERNAL_HANDLE`].
+///
+/// # Errors
+///
+/// [`LayoutError::TableFull`] once all 2^24 ids are taken.
+pub fn register_external(type_name: &str, type_key: u64) -> Result<LayoutId, LayoutError> {
+    let info = LayoutInfo {
+        name: type_name.into(),
+        type_name: type_name.into(),
+        ctor_name: type_name.into(),
+        record: false,
+        type_key,
+        tag: 0,
+        kind: LayoutKind::Custom(&EXTERNAL_HANDLE),
+        value_fields: 0,
+        raw_fields: 1,
+        fields: Box::new([]),
+        hooks: OnceLock::new(),
+    };
+    let mut next = lock_next();
+    let id = *next;
+    if id > abi::LAYOUT_MAX {
+        return Err(LayoutError::TableFull);
+    }
+    store_user(id, info)?;
+    *next = id.saturating_add(1);
+    Ok(id)
 }
 
 /// Sets the `@std_hooks` closures (equal, hash, debug) of a constructor

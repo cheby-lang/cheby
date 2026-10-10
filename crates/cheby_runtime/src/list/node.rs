@@ -39,6 +39,7 @@ use std::sync::Once;
 
 use crate::abi::{self, LayoutId, Word};
 use crate::alloc;
+use crate::generic;
 use crate::layout::{self, CustomKind, LayoutInfo};
 use crate::object::{self, ptr_to_word, read_field, to_u64, to_usize, word_to_ptr, write_field};
 use crate::panic::fatal;
@@ -148,15 +149,57 @@ unsafe fn branch_children(word: Word, visit: &mut dyn FnMut(Word)) {
     }
 }
 
-/// The list root kind. Equality, hashing and debug text come with W3-B,
-/// through [`super::iter`].
+/// Equality of two lists (§3.13): the same length, and equal elements in
+/// order, which the walk compares after this call.
+///
+/// Safety: `a` and `b` are live list roots.
+unsafe fn root_equal(a: Word, b: Word, cx: &mut generic::Cx) -> bool {
+    // SAFETY: forwarded from the caller.
+    let (xs, ys) = unsafe { (super::iter(a), super::iter(b)) };
+    if xs.len() != ys.len() {
+        return false;
+    }
+    // The elements stay valid after the iterators release their references:
+    // the walk borrows both lists for its whole run.
+    for (x, y) in xs.zip(ys) {
+        cx.push(x, y);
+    }
+    true
+}
+
+/// Hashing of a list: its length, then its elements in order.
+///
+/// Safety: `list` is a live list root.
+unsafe fn root_hash(list: Word, h: &mut generic::Hasher) {
+    // SAFETY: forwarded from the caller.
+    let items = unsafe { super::iter(list) };
+    h.write_u8(generic::mark::LIST);
+    h.write_u64(to_u64(items.len()));
+    for item in items {
+        h.push(item);
+    }
+}
+
+/// Debug text of a list: `[1, 2, 3]` (§3.13).
+///
+/// Safety: `list` is a live list root.
+unsafe fn root_debug(list: Word, p: &mut generic::Printer) {
+    // SAFETY: forwarded from the caller.
+    let items = unsafe { super::iter(list) };
+    p.text("[");
+    p.separated(items);
+    p.text("]");
+}
+
+/// The list root kind: a list value, compared, hashed and printed element
+/// by element through [`super::iter`].
 static ROOT_KIND: CustomKind = CustomKind {
     name: "List",
     size: root_size,
     children: root_children,
-    equal: None,
-    hash: None,
-    debug: None,
+    equal: Some(root_equal),
+    hash: Some(root_hash),
+    debug: Some(root_debug),
 };
 
 /// The leaf kind: never a value of its own.

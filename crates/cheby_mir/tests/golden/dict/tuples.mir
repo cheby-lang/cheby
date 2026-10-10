@@ -1,0 +1,98 @@
+fn app::pairs(_0: value, _1: value, _2: value) -> value check str#0 {
+  str#0 = "src/main.cheby:12:4"
+bb0:
+  _3: value = field _0.0 of dict/1+0
+  dup _3
+  _4: value = alloc desc/2(const builtin_desc tuple, _3, const builtin_desc int)
+  _5: value = alloc closure/2(const code <tuple_dict_fn std::ops::Compare::compare/2>, _0, const static#0)
+  _6: value = alloc dict/1+0(_4, _5)
+  _7: value = box int const int 1
+  _8: value = alloc tuple/2(_1, _7)
+  _9: value = box int const int 2
+  _10: value = alloc tuple/2(_2, _9)
+  tail_call app::smaller(_6, _8, _10)
+}
+
+static#0 dict app$std::ops::Compare$Int = dict/1+0(builtin_desc int, fn std::int::compare)
+static#1 dict app$std::ops::Compare$String = dict/1+0(builtin_desc string, fn std::string::compare)
+static#2 desc app$(Int, String) = desc/2(builtin_desc tuple, builtin_desc int, builtin_desc string)
+static#3 fnval app$std::ops::Compare$(Int, String)$0 = closure/2(code <tuple_dict_fn std::ops::Compare::compare/2>, static#0, static#1)
+static#4 dict app$std::ops::Compare$(Int, String) = dict/1+0(static#2, static#3)
+static#5 dict app$Show$Int = dict/1+0(builtin_desc int, fn std::int::show)
+static#6 dict app$Show$String = dict/1+0(builtin_desc string, fn std::string::show)
+static#7 fnval app$Show$(Int, String)$0 = closure/2(code <tuple_dict_fn Show::show/2>, static#5, static#6)
+static#8 dict app$Show$(Int, String) = dict/1+0(static#2, static#7)
+static#9 dict app$std::ops::Compare$Float = dict/1+0(builtin_desc float, fn std::float::compare)
+
+fn tuple_dict_fn Show::show/2(_0: value, _1: value) -> value check str#0 {
+  str#0 = "<builtin>"
+  str#1 = "("
+  str#2 = ", "
+  str#3 = ")"
+bb0:
+  _2: value = call_runtime str_with_capacity(borrow const int 34)
+  _3: value = call_runtime str_append(_2, borrow const str#1)
+  _4: value = field _1.0 of tuple/2
+  dup _4
+  _5: value = field _0.1 of closure/2
+  dup _5
+  _6: value = field _5.1 of dict/1+0
+  dup _6
+  drop _5
+  _7: value = call _6(_4)
+  _8: value = call_runtime str_append(_3, borrow _7)
+  drop _7
+  _9: value = call_runtime str_append(_8, borrow const str#2)
+  _10: value = field _1.1 of tuple/2
+  dup _10
+  drop _1
+  _11: value = field _0.2 of closure/2
+  dup _11
+  drop _0
+  _12: value = field _11.1 of dict/1+0
+  dup _12
+  drop _11
+  _13: value = call _12(_10)
+  _14: value = call_runtime str_append(_9, borrow _13)
+  drop _13
+  _15: value = call_runtime str_append(_14, borrow const str#3)
+  return _15
+}
+
+fn tuple_dict_fn std::ops::Compare::compare/2(_0: value, _1: value, _2: value) -> value check str#0 {
+  str#0 = "std/ops.cheby:35:6"
+bb0:
+  _3: value = field _1.0 of tuple/2
+  dup _3
+  _4: value = field _2.0 of tuple/2
+  dup _4
+  _5: value = field _0.1 of closure/2
+  dup _5
+  _6: value = field _5.1 of dict/1+0
+  dup _6
+  drop _5
+  _7: value = call _6(_3, _4)
+  _8: int = read_tag _7 of order
+  _9: bool = compare eq int _8, const int 1
+  branch _9, bb1, bb2
+bb1:
+  drop _7
+  _10: value = field _1.1 of tuple/2
+  dup _10
+  drop _1
+  _11: value = field _2.1 of tuple/2
+  dup _11
+  drop _2
+  _12: value = field _0.2 of closure/2
+  dup _12
+  drop _0
+  _13: value = field _12.1 of dict/1+0
+  dup _13
+  drop _12
+  tail_call _13(_10, _11)
+bb2:
+  drop _0
+  drop _1
+  drop _2
+  return _7
+}

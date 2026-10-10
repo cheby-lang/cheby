@@ -883,3 +883,164 @@ fn warnings_alone_do_not_fail() {
         .push(Diagnostic::new(codes::SYNTAX_ERROR, "an error"));
     assert!(out.has_errors());
 }
+
+/// `code: message` of each diagnostic.
+fn codes_of(out: &CheckOutput) -> Vec<String> {
+    out.diagnostics
+        .iter()
+        .map(|d| format!("{}: {}", d.code, d.message))
+        .collect()
+}
+
+/// `cheby check` evaluates the package's constants only after a front end
+/// without errors (D-459, D-534): a panicking initializer is E0075 in a
+/// clean package, and nothing beyond the type error in a package with one.
+#[test]
+fn check_evaluates_constants_only_without_front_end_errors() {
+    let clean = package(
+        "check_consts_clean",
+        &[
+            MANIFEST,
+            (
+                "src/main.cheby",
+                b"//! Root.\n\nconst boom: Int = 1 / zero()\n\nfn zero() -> Int {\n  0\n}\n\n\
+                  fn main() {\n  let _ = boom\n}\n",
+            ),
+        ],
+    );
+    let found = codes_of(&check(&clean).unwrap());
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].starts_with("E0075"), "{found:?}");
+    std::fs::remove_dir_all(&clean).unwrap();
+
+    let broken = package(
+        "check_consts_broken",
+        &[
+            MANIFEST,
+            (
+                "src/main.cheby",
+                b"//! Root.\n\nconst boom: Int = 1 / zero()\n\nfn zero() -> Int {\n  0\n}\n\n\
+                  fn main() {\n  let n: Int = \"one\"\n  let _ = boom + n\n}\n",
+            ),
+        ],
+    );
+    let found = codes_of(&check(&broken).unwrap());
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].starts_with("E0047"), "{found:?}");
+    std::fs::remove_dir_all(&broken).unwrap();
+}
+
+/// A package with two modules of tests: the selection by filter and by
+/// module, and the report's counts (D-541).
+#[test]
+fn tests_are_selected_and_counted() {
+    let dir = package(
+        "test_selection",
+        &[
+            MANIFEST,
+            (
+                "src/main.cheby",
+                b"//! Root.\n\ntest \"root passes\" {\n  assert 1 == 1\n}\n",
+            ),
+            (
+                "src/util.cheby",
+                b"//! Util.\n\ntest \"util passes\" {\n  assert 2 == 2\n}\n\n\
+                  test \"util fails\" {\n  assert 2 == 3\n}\n",
+            ),
+        ],
+    );
+    let run = |options: &TestOptions| -> (TestReport, String) {
+        let PreparedTests::Ready(program) = prepare_test(&dir, options).unwrap() else {
+            panic!("the package does not compile");
+        };
+        let mut out = Vec::new();
+        let report = program.run(&mut out).unwrap();
+        (report, String::from_utf8(out).unwrap())
+    };
+    let (report, text) = run(&TestOptions::default());
+    assert_eq!(
+        report.counts(),
+        TestCounts {
+            passed: 2,
+            failed: 1,
+            not_built: 0
+        }
+    );
+    assert!(!report.success());
+    assert_eq!(report.exit_status(), 1);
+    assert!(text.starts_with(
+        "test app \"root passes\" ... ok\ntest app::util \"util passes\" ... ok\n\
+         test app::util \"util fails\" ... FAILED\n\n---- app::util \"util fails\" ----\n"
+    ));
+    assert!(text.ends_with("\ntest result: FAILED. 2 passed; 1 failed; 0 filtered out\n"));
+
+    let (report, text) = run(&TestOptions {
+        filter: Some("passes".to_owned()),
+        module: None,
+    });
+    assert!(report.success());
+    assert_eq!(report.filtered_out, 1);
+    assert!(text.ends_with("test result: ok. 2 passed; 0 failed; 1 filtered out\n"));
+
+    let (report, _) = run(&TestOptions {
+        filter: None,
+        module: Some("app::util".to_owned()),
+    });
+    assert_eq!(report.modules.len(), 1);
+    assert_eq!(report.modules[0].path, "app::util");
+    assert_eq!(report.filtered_out, 1);
+
+    for (module, message) in [
+        ("app::", "`app::` is not a module path"),
+        (
+            "app::nope",
+            "there is no module `app::nope` in this package",
+        ),
+    ] {
+        let options = TestOptions {
+            filter: None,
+            module: Some(module.to_owned()),
+        };
+        assert_eq!(prepare_test(&dir, &options).unwrap_err().message(), message);
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// The std self-test runs a filtered selection, one batch per module, and
+/// renders the counts per module (D-542).
+#[test]
+fn std_self_test_runs_a_selection() {
+    let report = test_std(Some("std::bool ")).unwrap();
+    assert!(report.success(), "{}", report.render());
+    assert_eq!(report.modules.len(), 1, "{}", report.render());
+    assert_eq!(report.modules[0].path, "std::bool");
+    assert!(report.counts().passed >= 1);
+    assert!(report.filtered_out > 300);
+    let text = report.render();
+    assert!(
+        text.contains("\ncounts per module:\n  std::bool: "),
+        "{text}"
+    );
+    assert!(text.ends_with(" filtered out\n"), "{text}");
+}
+
+/// The modules whose tests reach kernels of later waves are reported as
+/// not built, with their codes, and the other modules still run (D-542).
+#[test]
+fn std_modules_that_do_not_build_are_counted() {
+    let report = test_std(Some("std::bytes ")).unwrap();
+    let text = report.render();
+    match report.modules.as_slice() {
+        [bytes] if bytes.not_built.is_some() => {
+            assert!(
+                text.starts_with("module std::bytes did not build: "),
+                "{text}"
+            );
+            assert!(!report.success());
+            assert_eq!(report.counts().not_built, bytes.tests.len());
+        }
+        // Once the `Bytes` kernels land (W4-D), the module builds.
+        [bytes] => assert_eq!(bytes.path, "std::bytes"),
+        other => panic!("unexpected modules: {other:?}"),
+    }
+}

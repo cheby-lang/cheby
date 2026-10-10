@@ -1,0 +1,18 @@
+// @mode: run-fail
+// @decisions: D-233, D-449, D-556
+//! Looking a function value up as a `Map` key panics, even in an empty
+//! map: the key is hashed before the map is searched (§3.13).
+
+import std::io
+import std::map
+
+fn double(n: Int) -> Int {
+  n * 2
+}
+
+fn main() {
+  let handlers: map::Map<fn(Int) -> Int, Int> = map::new()
+  io::println("looking up a function")
+  let _ = map::get(handlers, double)
+  io::println("never printed")
+}

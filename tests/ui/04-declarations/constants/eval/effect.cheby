@@ -1,0 +1,17 @@
+// @mode: check-fail
+// @decisions: D-090, D-360, D-533, D-537
+//! A constant whose evaluation reaches `io::println` is E0077 at the
+//! constant's name; `main` does not run (§4.5).
+
+import std::io
+
+const loud: String = announce("hello")
+
+fn announce(text: String) -> String {
+  io::println(text)
+  text
+}
+
+fn main() {
+  io::println("main ran: {loud}")
+}

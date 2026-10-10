@@ -1,0 +1,19 @@
+// @mode: run-fail
+// @decisions: D-070, D-233, D-449, D-556, D-570
+//! `==` that reaches a function value panics at the start of the
+//! comparison, with status 101, after comparing what comes before it
+//! (§3.13, §11.6). A difference found first decides without a panic.
+
+import std::io
+
+fn compare<T>(a: T, b: T) -> Bool {
+  a == b
+}
+
+fn main() {
+  let double = fn(n: Int) { n * 2 }
+  let first = compare((1, double), (2, double))
+  io::println("first difference decides: {first}")
+  let _ = compare((1, double), (1, double))
+  io::println("never printed")
+}

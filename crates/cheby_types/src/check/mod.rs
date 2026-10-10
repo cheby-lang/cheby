@@ -265,9 +265,19 @@ fn check_fn(
             }
         }
     };
-    if !sig_ok || has_error(&diags) || (body.is_none() && native_external.is_none()) {
-        // A function with neither a body nor a native implementation was
-        // reported by the resolver (E0046).
+    // A function with only `@external(js, …)` stays in THIR with neither a
+    // body nor a native external: native code never runs it (the
+    // cross-target check rejects such uses), but a constant's initializer,
+    // which is not target-checked (§12.6, D-512), may reach it, and the
+    // back end gives it a body that reports the effect (E0077, D-533).
+    let js_only = item
+        .attrs
+        .externals
+        .iter()
+        .any(|e| matches!(e, cheby_resolve::ExternalAttr::Js { .. }));
+    if !sig_ok || has_error(&diags) || (body.is_none() && native_external.is_none() && !js_only) {
+        // A function with neither a body nor any external was reported by
+        // the resolver (E0046).
         return Ok((None, diags));
     }
     let entry = match entry_kind {

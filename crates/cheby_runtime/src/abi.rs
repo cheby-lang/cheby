@@ -509,11 +509,53 @@ pub mod sym {
         "string", "bytes", "list", "map", "set", "option", "result", "order", "tuple", "fn",
     ];
 
+    /// Data: the builtin nominal descriptors (D-523, D-524), one per
+    /// [`DESC_NAMES`] entry in the same order: [`DESC_PREFIX`] followed by
+    /// the name. Each is a static object of layout
+    /// [`layout::DESC_NOMINAL`] holding the type's printed name and its
+    /// module path (empty for builtin types, D-559) as static `String`s.
+    pub const DESC_SYMBOLS: [&str; 23] = [
+        "cheby_rt_desc_int",
+        "cheby_rt_desc_float",
+        "cheby_rt_desc_f32",
+        "cheby_rt_desc_i8",
+        "cheby_rt_desc_i16",
+        "cheby_rt_desc_i32",
+        "cheby_rt_desc_i64",
+        "cheby_rt_desc_u8",
+        "cheby_rt_desc_u16",
+        "cheby_rt_desc_u32",
+        "cheby_rt_desc_u64",
+        "cheby_rt_desc_bool",
+        "cheby_rt_desc_nil",
+        "cheby_rt_desc_string",
+        "cheby_rt_desc_bytes",
+        "cheby_rt_desc_list",
+        "cheby_rt_desc_map",
+        "cheby_rt_desc_set",
+        "cheby_rt_desc_option",
+        "cheby_rt_desc_result",
+        "cheby_rt_desc_order",
+        "cheby_rt_desc_tuple",
+        "cheby_rt_desc_fn",
+    ];
+
+    /// The symbol `cheby_rt_desc_<name>` of the builtin nominal descriptor
+    /// `name` (one of [`DESC_NAMES`]), or `None` for another name.
+    #[must_use]
+    pub fn desc_symbol(name: &str) -> Option<&'static str> {
+        DESC_SYMBOLS
+            .iter()
+            .find(|symbol| symbol.strip_prefix(DESC_PREFIX) == Some(name))
+            .copied()
+    }
+
     /// Every runtime symbol that is not a kernel (the `cheby_rt_*` helpers
-    /// and static objects), in the order `symbols()` lists them first.
-    /// Kernels (`cheby_<module>_<function>`) follow in `symbols()`; they
-    /// come from each kernel module's registration (plan §4.3.3).
-    pub const ALL: [&str; 32] = [
+    /// and static objects, the builtin nominal descriptors last), in the
+    /// order `symbols()` lists them first. Kernels
+    /// (`cheby_<module>_<function>`) follow in `symbols()`; they come from
+    /// each kernel module's registration (plan §4.3.3).
+    pub const ALL: [&str; 55] = [
         ALLOC,
         DUP,
         DROP,
@@ -546,6 +588,29 @@ pub mod sym {
         FMOD_F32,
         CONST_MISSING,
         UNRESOLVED,
+        DESC_SYMBOLS[0],
+        DESC_SYMBOLS[1],
+        DESC_SYMBOLS[2],
+        DESC_SYMBOLS[3],
+        DESC_SYMBOLS[4],
+        DESC_SYMBOLS[5],
+        DESC_SYMBOLS[6],
+        DESC_SYMBOLS[7],
+        DESC_SYMBOLS[8],
+        DESC_SYMBOLS[9],
+        DESC_SYMBOLS[10],
+        DESC_SYMBOLS[11],
+        DESC_SYMBOLS[12],
+        DESC_SYMBOLS[13],
+        DESC_SYMBOLS[14],
+        DESC_SYMBOLS[15],
+        DESC_SYMBOLS[16],
+        DESC_SYMBOLS[17],
+        DESC_SYMBOLS[18],
+        DESC_SYMBOLS[19],
+        DESC_SYMBOLS[20],
+        DESC_SYMBOLS[21],
+        DESC_SYMBOLS[22],
     ];
 
     /// The data symbol of the static object of a builtin nullary
@@ -705,6 +770,12 @@ mod tests {
         assert_eq!(layout::CUSTOM_FIRST, 26);
         assert_eq!(sym::DESC_NAMES.len(), 23);
         assert!(sym::ALL.iter().all(|name| name.starts_with("cheby_rt_")));
+        for (name, symbol) in sym::DESC_NAMES.iter().zip(sym::DESC_SYMBOLS) {
+            assert_eq!(format!("{}{name}", sym::DESC_PREFIX), symbol);
+            assert_eq!(sym::desc_symbol(name), Some(symbol));
+        }
+        assert_eq!(sym::desc_symbol("dyn"), None);
+        assert_eq!(sym::ALL.get(32..), Some(&sym::DESC_SYMBOLS[..]));
     }
 
     #[test]

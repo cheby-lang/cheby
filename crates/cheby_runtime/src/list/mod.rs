@@ -31,8 +31,8 @@ mod tests;
 pub use kernels::{
     cheby_list_append, cheby_list_drop, cheby_list_get, cheby_list_length, cheby_list_prepend,
     cheby_list_push, cheby_list_set, cheby_list_slice, cheby_list_split_at, cheby_list_take,
-    cheby_rt_list_append, cheby_rt_list_get, cheby_rt_list_length, cheby_rt_list_push,
-    cheby_rt_list_slice,
+    cheby_list_unique, cheby_rt_list_append, cheby_rt_list_get, cheby_rt_list_length,
+    cheby_rt_list_push, cheby_rt_list_slice,
 };
 pub use node::{StaticList, cheby_rt_static_empty_list};
 pub(crate) use ops::Iter;
@@ -52,8 +52,7 @@ pub(crate) fn kernels(out: &mut Vec<(&'static str, *const u8)>) {
 }
 
 /// The std module paths whose kernels this module registers completely.
-/// `std::list` joins once `unique` lands (W3-B).
-pub(crate) const COMPLETE: &[&str] = &[];
+pub(crate) const COMPLETE: &[&str] = &["list"];
 
 /// The elements of a borrowed list, in order, each borrowed: valid while
 /// the iterator lives (it holds a reference to the list). O(1) amortized

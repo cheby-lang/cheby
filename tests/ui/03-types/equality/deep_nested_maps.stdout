@@ -1,0 +1,7 @@
+equal: True, other equal: False
+distinct trees: 2
+in the set: True, sets equal: True
+by key: Some("deep")
+35888900 characters: Branch(map::from_list([(1, Branch(map::from_ … )])))])))]))
+bags equal: True, differ: False, distinct: 2
+50005 characters: Holds(set::from_list([Holds(set …

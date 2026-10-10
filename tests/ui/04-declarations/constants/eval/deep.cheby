@@ -1,0 +1,34 @@
+// @mode: run-pass
+// @decisions: D-454, D-539
+//! A constant's value becomes static in place, however deep it is: a chain
+//! of a million constructors is frozen without exhausting the compiler's
+//! stack, and `main` reads it without counting references or leaking
+//! (§4.5, §9.7).
+
+import std::io
+
+type Chain {
+  End,
+  Link(Int, Chain),
+}
+
+const long_chain: Chain = build(1_000_000, End)
+
+fn build(n: Int, tail: Chain) -> Chain {
+  case n {
+    0 => tail
+    _ => build(n - 1, Link(n, tail))
+  }
+}
+
+fn total(link: Chain, acc: Int) -> Int {
+  case link {
+    End => acc
+    Link(n, rest) => total(rest, acc + n)
+  }
+}
+
+fn main() {
+  let sum = total(long_chain, 0)
+  io::println("{sum}")
+}

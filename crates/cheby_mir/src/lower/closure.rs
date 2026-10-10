@@ -4,9 +4,12 @@
 //! Shapes (plan §4.1, §5.4):
 //!
 //! - A closure object is `Alloc Closure(n)`: the code word
-//!   [`Const::Code`]`(FnKey::Closure { owner, index })`, then its `n`
-//!   captures as uniform words, in first-use order ([`free::free_locals`]).
-//!   Closures with no captures are allocated too.
+//!   [`Const::Code`]`(FnKey::Closure { owner, index })`, then its
+//!   captured locals as uniform words, in first-use order
+//!   ([`free::free_locals`]), then the dictionaries of the enclosing
+//!   item's bounds that its body uses, in (type parameter, bound) order
+//!   (`BodyCx::dict_params_used`, D-453). Closures with no captures are
+//!   allocated too.
 //! - The code of a closure or local function is a function with the
 //!   uniform signature (D-453): the owned `self`, then one uniform word per
 //!   parameter, returning a uniform word. It reads each capture with
@@ -50,7 +53,7 @@ use crate::lower::LowerCx;
 use crate::lower::body::BodyCx;
 use crate::repr::Repr;
 
-pub(crate) use free::free_locals;
+pub(crate) use free::{free_locals, subtree};
 
 impl BodyCx<'_, '_> {
     /// An anonymous function of type `ty`, also the result of desugaring
@@ -181,15 +184,24 @@ impl BodyCx<'_, '_> {
         span: Span,
     ) -> Result<Option<Operand>, Ice> {
         let captures = free_locals(self.body, params, body, own)?;
+        // The enclosing item's dictionaries the closure needs follow the
+        // captured locals (D-453).
+        let dicts = self.dict_params_used(body)?;
         let owner = owner_of(self.b.key())?;
         let key = self.pending.closure_key(owner)?;
-        let layout = LayoutRef::Closure(count(captures.len())?);
-        let Some(code) = self.closure_function(key, layout, own, &captures, params, body, span)?
-        else {
+        let layout = LayoutRef::Closure(count(captures.len().saturating_add(dicts.len()))?);
+        let shape = Captures {
+            layout,
+            own,
+            locals: &captures,
+            dicts: &dicts,
+        };
+        let Some(code) = self.closure_function(key, &shape, params, body, span)? else {
             return self.placeholder(Repr::Value).map(Some);
         };
         self.pending.add_function(code);
-        let mut fields = Vec::with_capacity(captures.len().saturating_add(1));
+        let mut fields =
+            Vec::with_capacity(captures.len().saturating_add(dicts.len()).saturating_add(1));
         fields.push(Operand::Const(Const::Code(key)));
         for &l in &captures {
             let ty = self
@@ -200,22 +212,19 @@ impl BodyCx<'_, '_> {
             let value = self.lookup(l, ty)?;
             fields.push(self.to_uniform(value, ty)?);
         }
+        for &n in &dicts {
+            fields.push(Operand::Local(self.dict_param_at(n)?));
+        }
         let closure = self.define(Repr::Value, Rvalue::Alloc { layout, fields })?;
         Ok(Some(Operand::Local(closure)))
     }
 
     /// Lowers the code of a closure into a new function with key `key`;
     /// `None` after recording its E0038 in this body.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "one closure's whole description; a struct would only rename the fields"
-    )]
     fn closure_function(
         &mut self,
         key: FnKey,
-        layout: LayoutRef,
-        own: Option<LocalId>,
-        captures: &[LocalId],
+        shape: &Captures<'_>,
         params: &[Param],
         body: ExprId,
         span: Span,
@@ -231,8 +240,9 @@ impl BodyCx<'_, '_> {
             diags: Vec::new(),
             poisoned: FxHashSet::default(),
             pending: &mut *self.pending,
+            dict_params: vec![None; self.dict_params.len()],
         };
-        let lowered = inner.closure_body(layout, own, captures, params, body);
+        let lowered = inner.closure_body(shape, params, body);
         let diags = std::mem::take(&mut inner.diags);
         let b = inner.b;
         if !diags.is_empty() {
@@ -245,20 +255,41 @@ impl BodyCx<'_, '_> {
         b.finish().map(Some)
     }
 
-    /// The body of a closure's code: captures from `self`, parameters,
-    /// then the body in tail position, returning a uniform word.
+    /// The body of a closure's code: captures from `self` (locals, then
+    /// dictionaries), parameters, then the body in tail position,
+    /// returning a uniform word.
     fn closure_body(
         &mut self,
-        layout: LayoutRef,
-        own: Option<LocalId>,
-        captures: &[LocalId],
+        shape: &Captures<'_>,
         params: &[Param],
         body: ExprId,
     ) -> Result<(), Ice> {
+        let Captures {
+            layout,
+            own,
+            locals: captures,
+            dicts,
+        } = *shape;
         let this = self.b.add_param(Repr::Value, None, None)?;
         let mut args = Vec::with_capacity(params.len());
         for _ in params {
             args.push(self.b.add_param(Repr::Value, None, None)?);
+        }
+        for (k, &n) in dicts.iter().enumerate() {
+            let field = count(captures.len().saturating_add(k).saturating_add(1))?;
+            let dict = self.define(
+                Repr::Value,
+                Rvalue::Field {
+                    base: this,
+                    layout,
+                    field,
+                },
+            )?;
+            let slot = self
+                .dict_params
+                .get_mut(n)
+                .ok_or_else(|| Ice::new("a captured dictionary outside the item's bounds"))?;
+            *slot = Some(dict);
         }
         for (n, &l) in captures.iter().enumerate() {
             let decl = self
@@ -297,6 +328,21 @@ impl BodyCx<'_, '_> {
         }
         Ok(())
     }
+}
+
+/// What a closure object holds besides its code word.
+#[derive(Clone, Copy)]
+struct Captures<'c> {
+    /// `Closure(locals + dicts)`.
+    layout: LayoutRef,
+    /// The local function's own name, if it is one.
+    own: Option<LocalId>,
+    /// The captured locals, fields `1..=locals.len()`.
+    locals: &'c [LocalId],
+    /// The captured dictionaries of the enclosing item's bounds, by
+    /// their index in [`BodyCx::dict_params`], in the fields after the
+    /// locals.
+    dicts: &'c [usize],
 }
 
 /// The item that owns the closures of a body with key `key`: the item,

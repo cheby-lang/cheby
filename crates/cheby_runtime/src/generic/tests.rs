@@ -15,6 +15,8 @@ use crate::values::{
     u64_word,
 };
 
+mod kinds;
+
 /// A closure whose code word is a dummy address and whose captures are
 /// `captures` (owned).
 pub(crate) fn closure(captures: &[Word]) -> Word {

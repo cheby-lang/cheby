@@ -35,14 +35,15 @@ use crate::object::{
 };
 use crate::panic::{cheby_rt_panic, cheby_rt_stack_slow};
 use crate::rc::{cheby_rt_drop, cheby_rt_dup};
-use crate::{bytes, consteval, env, hamt, io, list, num, text};
+use crate::{bytes, consteval, desc, env, hamt, io, list, num, text};
 
 /// The address of a static object.
 fn data<T>(object: &'static T) -> *const u8 {
     ptr::from_ref(object).cast::<u8>()
 }
 
-/// The runtime's own symbols, in the order of [`sym::ALL`].
+/// The runtime's helpers and static objects, in the order of [`sym::ALL`]
+/// up to the builtin nominal descriptors, which [`desc::symbols`] lists.
 #[expect(
     clippy::as_conversions,
     reason = "taking the address of a function needs an `as` cast"
@@ -92,6 +93,7 @@ fn runtime_symbols() -> [(&'static str, *const u8); 32] {
 #[must_use]
 pub fn symbols() -> Vec<(&'static str, *const u8)> {
     let mut out = runtime_symbols().to_vec();
+    out.extend(desc::symbols());
     io::kernels(&mut out);
     num::kernels(&mut out);
     list::kernels(&mut out);

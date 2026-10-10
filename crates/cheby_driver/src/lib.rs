@@ -7,14 +7,20 @@
 //!   (D-282): phase A, then, if it reported no error, the import graph,
 //!   name resolution and type checking over the package and the std
 //!   modules it reaches (G1, G2). [`check_syntax`] stops after phase A.
+//!   Without front-end errors it then evaluates every constant of the
+//!   package (D-459, D-534).
 //! - [`prepare_run`] and [`Program::run`] are `cheby run` (G3): the front
 //!   end, then MIR of the items reachable from the program's `main`, the
-//!   JIT and `main` (D-137). Constructs the back end cannot lower yet are
-//!   E0038, reported like compile errors before any code is generated
-//!   (D-510); `cheby check` never lowers MIR.
+//!   JIT, the constants `main` reaches, and `main` (D-137). Constructs the
+//!   back end cannot lower yet are E0038, reported like compile errors
+//!   before any code is generated (D-510).
+//! - [`prepare_test`] and [`TestProgram::run`] are `cheby test` (G4,
+//!   D-541), and [`test_std`] tests the standard library itself (D-542).
 //! - [`dump_mir`] and [`dump_clif`] print the MIR and CLIF that running
 //!   the root module's `main` compiles, for goldens and the determinism
 //!   checks.
+//! - [`bench_build`] times checking and code generation for
+//!   `cargo xtask bench-compile` (I1).
 //!
 //! The build graph's parallel scheduling (D-263) and the build cache
 //! (D-255) plug in later behind the same API. Output is deterministic
@@ -24,6 +30,7 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use cheby_diag::{Diagnostic, FileId, SourceMap, Span, TextRange, TextSize, codes, render_all};
 use cheby_iface::Ice;
@@ -34,7 +41,14 @@ use cheby_syntax::SyntaxTree;
 
 mod backend;
 mod frontend;
+pub mod session;
 pub mod std_lib;
+mod test;
+
+pub use test::{
+    ModuleTests, PreparedTests, TestCounts, TestOptions, TestOutcome, TestProgram, TestReport,
+    TestResult, prepare_test, test_std,
+};
 
 /// A failure that is not a diagnostic about the program, such as an I/O
 /// error. It is printed as a plain `error:` line without a code
@@ -161,8 +175,18 @@ pub fn find_package_root(start: &Path) -> Option<PathBuf> {
 /// unreadable file or an internal compiler error.
 pub fn check(root: &Path) -> Result<CheckOutput, Error> {
     let mut out = CheckOutput::default();
-    front_end(root, frontend::Mode::Check, &mut out)?;
+    let front = front_end(root, frontend::Mode::Check, &mut out)?;
     out.sources.sort(&mut out.diagnostics);
+    // Every constant of the package is evaluated (D-459, D-534), but only
+    // when the front end reported no error, so constant evaluation never
+    // sees an ill-typed program. Unresolved native symbols are not
+    // reported (D-532); a constant that calls one is E0077.
+    if let Some((front, _)) = front.filter(|_| !out.has_errors())
+        && let Err(diagnostics) =
+            backend::build(&front, &out.sources, backend::Roots::Constants, false)?
+    {
+        report_unsupported(&mut out, diagnostics);
+    }
     Ok(out)
 }
 
@@ -288,42 +312,15 @@ pub fn prepare_run(root: &Path, options: RunOptions) -> Result<Prepared, Error> 
     let main = front
         .main_of(module)
         .ok_or_else(|| Error::new(format!("module `{path}` has no `main` function")))?;
-    let units = match backend::lower_program(&front, &out.sources, main)? {
-        Ok(units) => units,
-        Err(unsupported) => {
-            report_unsupported(&mut out, unsupported);
+    // E0038 for what the back end cannot lower yet, E0053 for a native
+    // symbol nothing defines (D-532), and the constant-evaluation errors
+    // of the constants `main` reaches (D-535) stop the run.
+    let jit = match backend::build(&front, &out.sources, backend::Roots::Main(main), false)? {
+        Ok(built) => built.jit,
+        Err(diagnostics) => {
+            report_unsupported(&mut out, diagnostics);
             return Ok(Prepared::CompileFailed(out));
         }
-    };
-    let jit = match backend::compile(&units, false) {
-        Ok(jit) => jit,
-        // A program error found only when loading, not a tool error
-        // (D-442): one E0053 at the `@external` that names each symbol,
-        // sorted by position (D-532).
-        Err(JitError::UnresolvedSymbols(symbols)) => {
-            for symbol in symbols {
-                let span = front
-                    .natives
-                    .get(symbol.as_str())
-                    .map(|binding| binding.span)
-                    .ok_or_else(|| {
-                        Ice::new(format!("the native symbol `{symbol}` has no `@external`"))
-                    })?;
-                out.diagnostics.push(
-                    Diagnostic::new(
-                        codes::UNRESOLVED_NATIVE_SYMBOL,
-                        format!("the native symbol `{symbol}` is not defined"),
-                    )
-                    .with_primary(span, "nothing defines this symbol")
-                    .with_note(
-                        "the symbol must be defined by the Cheby runtime or the running process",
-                    ),
-                );
-            }
-            out.sources.sort(&mut out.diagnostics);
-            return Ok(Prepared::CompileFailed(out));
-        }
-        Err(e) => return Err(e.into()),
     };
     let entry = cheby_mir::EntryKind::Main(main.def);
     // Fails now, before anything runs, if the thunk was not compiled.
@@ -359,6 +356,53 @@ pub fn run(root: &Path, options: RunOptions) -> Result<RunResult, Error> {
             Ok(RunResult::Ran { output, exit })
         }
     }
+}
+
+/// The times of [`bench_build`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BenchTimings {
+    /// Loading, parsing and checking the package and the std modules it
+    /// reaches.
+    pub front_end: Duration,
+    /// Lowering every function of the package to MIR and compiling it with
+    /// the JIT.
+    pub back_end: Duration,
+}
+
+/// Checks the package at `dir` and generates code for every function of
+/// it, running nothing (D-247 "checks and generates code"; I1, plan
+/// §8.5). A hidden entry for `cargo xtask bench-compile`.
+///
+/// # Errors
+///
+/// An [`Error`] when the package has errors, the back end cannot build
+/// it (with the codes), or for internal failures.
+pub fn bench_build(dir: &Path) -> Result<BenchTimings, Error> {
+    let start = Instant::now();
+    let mut out = CheckOutput::default();
+    let front = front_end(dir, frontend::Mode::Build, &mut out)?;
+    let front_end_time = start.elapsed();
+    out.sources.sort(&mut out.diagnostics);
+    let Some((front, _)) = front.filter(|_| !out.has_errors()) else {
+        return Err(Error::new(format!(
+            "the benchmark project has errors:\n{}",
+            out.render()
+        )));
+    };
+    let start = Instant::now();
+    let built = backend::build(&front, &out.sources, backend::Roots::AllFunctions, false)?;
+    let back_end = start.elapsed();
+    if let Err(diagnostics) = built {
+        out.diagnostics = diagnostics;
+        return Err(Error::new(format!(
+            "the back end cannot build the benchmark project:\n{}",
+            out.render()
+        )));
+    }
+    Ok(BenchTimings {
+        front_end: front_end_time,
+        back_end,
+    })
 }
 
 /// `a::b::c` as a module path, if every segment is non-empty.
@@ -404,12 +448,24 @@ pub fn dump_mir(root: &Path) -> Result<(CheckOutput, String), Error> {
 /// An [`Error`] for internal failures.
 pub fn dump_clif(root: &Path) -> Result<(CheckOutput, String), Error> {
     let mut out = CheckOutput::default();
-    let units = units_for_dump(root, &mut out)?;
-    if units.is_empty() {
+    let front = front_end(root, frontend::Mode::Build, &mut out)?;
+    out.sources.sort(&mut out.diagnostics);
+    let Some((front, package)) = front.filter(|_| !out.has_errors()) else {
         return Ok((out, String::new()));
+    };
+    let Some(main) = front
+        .local_module(&ModulePath::root(&package))
+        .and_then(|m| front.main_of(m))
+    else {
+        return Ok((out, String::new()));
+    };
+    match backend::build(&front, &out.sources, backend::Roots::Main(main), true)? {
+        Ok(mut built) => Ok((out, built.jit.take_clif().join("\n"))),
+        Err(diagnostics) => {
+            report_unsupported(&mut out, diagnostics);
+            Ok((out, String::new()))
+        }
     }
-    let mut jit = backend::compile(&units, true)?;
-    Ok((out, jit.take_clif().join("\n")))
 }
 
 fn units_for_dump(root: &Path, out: &mut CheckOutput) -> Result<Vec<cheby_mir::MirModule>, Error> {
@@ -433,8 +489,9 @@ fn units_for_dump(root: &Path, out: &mut CheckOutput) -> Result<Vec<cheby_mir::M
     }
 }
 
-/// Adds the back end's E0038 diagnostics after the front end's, which are
-/// already sorted (warnings only, since errors stop before lowering).
+/// Adds the back end's diagnostics (E0038, E0053, the constant-evaluation
+/// errors) after the front end's, which are already sorted (warnings
+/// only, since errors stop before the back end).
 fn report_unsupported(out: &mut CheckOutput, mut unsupported: Vec<Diagnostic>) {
     out.sources.sort(&mut unsupported);
     out.diagnostics.extend(unsupported);

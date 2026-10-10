@@ -1,0 +1,24 @@
+// @mode: run-fail
+// @decisions: D-449, D-484, D-526
+//! A panic inside the function `map::upsert` calls is reported like any
+//! other panic: the function runs through the runtime's trampoline, so
+//! its location is the panic's (§11).
+
+import std::io
+import std::map
+
+fn share(total: Int, previous: Option<Int>) -> Int {
+  case previous {
+    Some(parts) => total / parts
+    None => total
+  }
+}
+
+fn main() {
+  let parts = map::from_list([("cake", 4), ("pie", 0)])
+  let cake = map::upsert(parts, "cake", fn(seen) { share(12, seen) })
+  let slice = map::get(cake, "cake")
+  io::println("cake: {slice:?}")
+  let _ = map::upsert(cake, "pie", fn(seen) { share(12, seen) })
+  io::println("not reached")
+}

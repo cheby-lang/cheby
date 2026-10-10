@@ -379,6 +379,42 @@ impl Jit {
             .finalize_definitions()
             .map_err(|e| JitError::Codegen(CodegenError::Module(e.to_string())))?;
         self.callbacks = self.find_callbacks();
+        self.register_hooks(mirs)?;
+        Ok(())
+    }
+
+    /// Registers the `@std_hooks(equal, hash, debug)` functions of the
+    /// batch's types with the runtime's layout table, for every
+    /// constructor of each such type (D-482): the words are the hooks'
+    /// static function values `cb$fnval$…`, which the runtime calls through
+    /// the trampolines. A type whose hooks have no function value (no value
+    /// shim was lowered) keeps structural equality and printing.
+    fn register_hooks(&self, mirs: &[MirModule]) -> Result<(), JitError> {
+        for unit in mirs {
+            for desc in &unit.layouts {
+                let Some(hooks) = desc.hooks else {
+                    continue;
+                };
+                let mut words = [0_u64; 3];
+                let mut complete = true;
+                for (word, def) in words.iter_mut().zip(hooks) {
+                    let Some(id) = self.decls.fn_value(unit, def)? else {
+                        complete = false;
+                        break;
+                    };
+                    let (address, _) = self.module.get_finalized_data(id);
+                    *word = u64::try_from(address.expose_provenance())
+                        .map_err(|_| JitError::ice("an address does not fit in a word"))?;
+                }
+                if !complete {
+                    continue;
+                }
+                let id = self.layouts.id(&desc.layout)?;
+                rt_layout::set_hooks(id, words).map_err(|e| {
+                    JitError::ice(format!("cannot register the hooks of `{}`: {e}", desc.name))
+                })?;
+            }
+        }
         Ok(())
     }
 
@@ -660,6 +696,14 @@ impl fmt::Debug for Entry<'_> {
 }
 
 impl Entry<'_> {
+    /// The entry's thunk, for a host that calls it on an entry it already
+    /// runs: constant evaluation registers each constant's thunk for lazy
+    /// forcing (D-535). It is valid only while the [`Jit`] lives.
+    #[must_use]
+    pub fn thunk(&self) -> EntryFn {
+        self.thunk
+    }
+
     /// Runs the entry on its own stack and reports how it ended, with the
     /// JIT's trampolines and accounting domain in place of `config`'s. A
     /// returned word may point into the `Jit`'s data (a static string or

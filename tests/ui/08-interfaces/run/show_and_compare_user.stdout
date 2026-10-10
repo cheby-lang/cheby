@@ -1,0 +1,5 @@
+[v1.4, v0.9, v1.10] sorted is [v0.9, v1.4, v1.10]
+largest: v1.10
+maybe: [Some(v1.10), None, Some(v0.9)]
+[[v1.4, v0.9], [v0.9], [v1.4]] sorted is [[v0.9], [v1.4], [v1.4, v0.9]]
+[True, False, False, True]

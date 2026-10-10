@@ -1,0 +1,20 @@
+Int: == True, != True
+I64 beyond 62 bits: == True, != True
+I8: == True, != True
+U64: == True, != True
+Float NaN: == True, != True
+Float zeros: == True, != True
+F32: == True, != True
+F32 NaN: == True, != False
+Bool: == True, != True
+Nil: == True, != False
+String: == True, != True
+Order: == True, != True
+Option: == True, != True
+Result: == True, != True
+tuple: == True, != True
+List shapes: == True, != False
+List view: == True, != False
+nested List: == True, != True
+empty List: == True, != False
+direct: True False True

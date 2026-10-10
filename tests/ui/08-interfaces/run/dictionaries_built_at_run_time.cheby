@@ -1,0 +1,57 @@
+// @mode: run-pass
+// @decisions: D-064, D-236, D-499, D-524
+//! Inside a generic function, the dictionary of a generic type such as
+//! `Chain<T>` or `List<T>` depends on `T`'s dictionary, so it is built
+//! at run time, and its descriptor from `T`'s (§8.5.1). It behaves like
+//! the static dictionary of the same type built outside, also nested and
+//! through closures.
+
+import std::io
+import std::list
+import std::string
+
+type Chain<T> {
+  Link(T, Chain<T>),
+  End,
+}
+
+fn show<T: Show>(chain: Chain<T>) -> String {
+  "[" + string::join(items(chain, []), " -> ") + "]"
+}
+
+fn items<T: Show>(chain: Chain<T>, acc: List<String>) -> List<String> {
+  case chain {
+    End => acc
+    Link(head, tail) => items(tail, [..acc, Show::show(head)])
+  }
+}
+
+fn from_list<T>(xs: List<T>) -> Chain<T> {
+  list::fold_right(xs, End, fn(rest, x) { Link(x, rest) })
+}
+
+fn framed<T: Show>(x: T) -> String {
+  "<{x}>"
+}
+
+fn chain_of<T: Show>(xs: List<T>) -> String {
+  framed(from_list(xs))
+}
+
+fn nested<T: Show>(xs: List<T>) -> String {
+  let chains = [from_list(xs), End, from_list([..xs, ..xs])]
+  framed(from_list(chains))
+}
+
+fn each_framed<T: Show>(xs: List<T>) -> List<String> {
+  list::map(xs, fn(x) { framed([x]) })
+}
+
+fn main() {
+  io::println(framed(from_list([1, 2, 3])))
+  io::println(chain_of([1, 2, 3]))
+  io::println(chain_of(["a", "b"]))
+  io::println(chain_of([[1], [2, 3]]))
+  io::println(nested([True]))
+  io::println(string::join(each_framed([4, 5]), " "))
+}

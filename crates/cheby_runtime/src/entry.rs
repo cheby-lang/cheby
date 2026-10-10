@@ -28,6 +28,7 @@ use std::time::Instant;
 
 use crate::abi::status;
 use crate::alloc::{self, Domain, LEAK_CHECK_ENABLED};
+use crate::consteval::ConstTable;
 use crate::ctx::ExecCtx;
 use crate::generic;
 use crate::io;
@@ -129,6 +130,9 @@ pub struct EntryConfig {
     pub callbacks: Callbacks,
     /// The accounting domain the entry charges (plan §4.3.4): the build's.
     pub domain: Arc<Domain>,
+    /// The build's constants, for lazy forcing during constant evaluation
+    /// (D-535): `None` outside constant evaluation.
+    pub consts: Option<Arc<ConstTable>>,
 }
 
 impl EntryConfig {
@@ -141,6 +145,7 @@ impl EntryConfig {
             mode,
             callbacks: Callbacks::default(),
             domain: alloc::current_domain(),
+            consts: None,
         }
     }
 }
@@ -203,6 +208,9 @@ struct Current {
     ctx: *mut ExecCtx,
     seed: u64,
     callbacks: Callbacks,
+    /// The entry's [`EntryConfig::consts`], or null. The entry's thread
+    /// holds the `Arc` for as long as it runs.
+    consts: *const ConstTable,
 }
 
 thread_local! {
@@ -232,6 +240,17 @@ pub fn current_seed() -> u64 {
 #[must_use]
 pub fn callbacks() -> Option<Callbacks> {
     current().map(|current| current.callbacks)
+}
+
+/// The constants of the build whose constant the running entry evaluates
+/// (D-535), or `None` outside constant evaluation. The table stays alive
+/// while the entry runs; do not keep the reference past the entry.
+pub(crate) fn current_consts<'a>() -> Option<&'a ConstTable> {
+    let consts = current()?.consts;
+    // SAFETY: a non-null pointer was taken from the `Arc` that the entry's
+    // thread holds until it ends or parks forever; the caller runs on that
+    // thread, inside the entry.
+    unsafe { consts.as_ref() }
 }
 
 /// Runs `f` with `seed` as the entry's hash seed, then restores the
@@ -305,6 +324,7 @@ pub unsafe fn run_entry(
     let mode = config.mode.clone();
     let callbacks = config.callbacks;
     let domain = Arc::clone(&config.domain);
+    let consts = config.consts.clone();
     let (sender, receiver) = mpsc::channel();
     let thread = std::thread::Builder::new()
         .name("cheby-entry".to_owned())
@@ -327,6 +347,7 @@ pub unsafe fn run_entry(
                         ctx: &raw mut ctx,
                         seed,
                         callbacks,
+                        consts: consts.as_ref().map_or(std::ptr::null(), Arc::as_ptr),
                     }));
                 })
                 .ok();
@@ -337,6 +358,7 @@ pub unsafe fn run_entry(
             // panic parks this thread forever, keeping the frame alive.
             let word = unsafe { entry(&raw mut ctx) };
             CURRENT.try_with(|cell| cell.set(None)).ok();
+            drop(consts);
             sender.send(EntryOutcome::Returned(word)).ok();
         })
         .map_err(RuntimeError::Spawn)?;
@@ -409,6 +431,7 @@ pub unsafe fn run_main(entry: EntryFn, config: RunConfig) -> Result<i32, Runtime
         mode: EntryMode::Run,
         callbacks: config.callbacks,
         domain: Arc::clone(&domain),
+        consts: None,
     };
     // SAFETY: the caller guarantees `run_entry`'s preconditions for
     // `entry`, which this function passes on unchanged.

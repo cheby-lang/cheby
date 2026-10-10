@@ -1,0 +1,65 @@
+// @mode: run-pass
+// @decisions: D-033, D-069, D-252, D-521
+//! `==` and `!=` on every builtin type, through the runtime's structural
+//! equality: values in a generic function, in tuples, in options and in
+//! lists of different shapes compare by contents (§3.13). Floats are
+//! reflexive: `NaN == NaN` and `-0.0 == 0.0` (§3.3.2).
+
+import std::io
+import std::list
+
+/// `==` on values the function knows nothing about: always the runtime's
+/// structural equality.
+fn same<T>(a: T, b: T) -> Bool {
+  a == b
+}
+
+/// `!=` the same way.
+fn differ<T>(a: T, b: T) -> Bool {
+  a != b
+}
+
+fn report(label: String, equal: Bool, unequal: Bool) {
+  io::println("{label}: == {equal}, != {unequal}")
+}
+
+fn main() {
+  report("Int", same(7, 7), differ(7, -7))
+  let wide: I64 = -9223372036854775807
+  let high: I64 = 4611686018427387904
+  report("I64 beyond 62 bits", same(wide, wide + 0), differ(high, high - 1))
+  let small: I8 = -128
+  let other: I8 = 127
+  report("I8", same(small, small), differ(small, other))
+  let big: U64 = 18446744073709551615
+  let smaller: U64 = 18446744073709551614
+  report("U64", same(big, big), differ(big, smaller))
+  let nan = 0.0 / 0.0
+  report("Float NaN", same(nan, nan), differ(nan, 1.0))
+  report("Float zeros", same(-0.0, 0.0), differ(0.5, 0.25))
+  let narrow: F32 = 0.1
+  let narrow_nan = narrow / 0.0 - narrow / 0.0
+  report("F32", same(narrow, 0.1), differ(narrow_nan, narrow))
+  report("F32 NaN", same(narrow_nan, narrow_nan), differ(narrow_nan, narrow_nan))
+  report("Bool", same(True, True), differ(True, False))
+  report("Nil", same(Nil, Nil), differ(Nil, Nil))
+  report("String", same("héllo", "hé" + "llo"), differ("a", "b"))
+  report("Order", same(Less, Less), differ(Less, Greater))
+  report("Option", same(Some(nan), Some(nan)), differ(Some(1), None))
+  let ok: Result<Int, String> = Ok(1)
+  let err: Result<Int, String> = Err("bad")
+  report("Result", same(ok, Ok(1)), differ(ok, err))
+  let tuple = (1, "a", (2.5, True))
+  report("tuple", same(tuple, (1, "a", (2.5, True))), differ((1, "a"), (1, "b")))
+  let built = list::push(list::push([1], 2), 3)
+  let sliced = list::slice([0, 1, 2, 3, 4], 1, 4)
+  report("List shapes", same(built, [1, 2, 3]), differ(sliced, [1, 2, 3]))
+  let mapped = [1, 2, 3, 4] |> list::take(_, 3) |> list::map(_, fn(n) { n - 1 })
+  report("List view", same(sliced, list::map(built, fn(n) { n })), differ(mapped, [0, 1, 2]))
+  report("nested List", same([[1], [], [2, 3]], [[1], [], [2, 3]]), differ([[1]], [[2]]))
+  report("empty List", same(list::new::<Int>(), []), differ([[nan]], [[nan]]))
+  let lists = [1, 2] == [1, 2]
+  let options = Some("x") != Some("x")
+  let pairs = (1, 2.5) == (1, 2.5)
+  io::println("direct: {lists} {options} {pairs}")
+}

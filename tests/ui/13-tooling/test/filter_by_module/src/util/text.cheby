@@ -1,0 +1,5 @@
+//! Text utilities.
+
+test "text" {
+  assert "a" == "a"
+}

@@ -1,0 +1,75 @@
+// @mode: run-pass
+// @decisions: D-117, D-503, D-505, D-524
+//! A bound of an interface that embeds others gives the embedded
+//! interfaces' functions too, and passes their dictionaries on to
+//! functions bounded by an embedded interface, also two levels deep and
+//! when two embedded interfaces require the same function (§8.3, §8.4).
+
+import std::io
+
+interface Named {
+  fn name(Self) -> String
+}
+
+interface Aged {
+  fn age(Self) -> Int
+  fn name(Self) -> String
+}
+
+interface Person: Named + Aged {
+  fn greeting(Self) -> String
+}
+
+interface Member: Person {
+  fn club(Self) -> String
+}
+
+type Swimmer {
+  Swimmer { name: String, age: Int },
+}
+
+fn name(s: Swimmer) -> String {
+  s.name
+}
+
+fn age(s: Swimmer) -> Int {
+  s.age
+}
+
+fn greeting(s: Swimmer) -> String {
+  "hi, I am {s.name}"
+}
+
+fn club(_s: Swimmer) -> String {
+  "dolphins"
+}
+
+fn label<T: Named>(x: T) -> String {
+  Named::name(x)
+}
+
+fn years<T: Aged>(x: T) -> String {
+  let n = Aged::name(x)
+  let a = Aged::age(x)
+  "{n} is {a}"
+}
+
+fn introduce<T: Person>(x: T) -> String {
+  let g = Person::greeting(x)
+  let l = label(x)
+  let y = years(x)
+  "{g} ({l}; {y})"
+}
+
+fn enrol<T: Member>(x: T) -> String {
+  let intro = introduce(x)
+  let l = label(x)
+  let c = Member::club(x)
+  "{intro}; {l} joins {c}"
+}
+
+fn main() {
+  let mia = Swimmer { name: "Mia", age: 9 }
+  io::println(introduce(mia))
+  io::println(enrol(mia))
+}

@@ -195,8 +195,12 @@ dependencies = [
 name = "cheby_consteval"
 version = "0.0.0"
 dependencies = [
+ "cheby_diag",
+ "cheby_iface",
  "cheby_jit",
  "cheby_mir",
+ "cheby_package",
+ "cheby_runtime",
 ]
 
 [[package]]
@@ -1383,6 +1387,7 @@ version = "0.0.0"
 dependencies = [
  "cheby_bench_gen",
  "cheby_diag",
+ "cheby_driver",
  "cheby_syntax",
  "cheby_test_support",
  "clap",

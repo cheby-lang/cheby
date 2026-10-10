@@ -1,0 +1,11 @@
+// @mode: run-pass
+// @command: test
+// @flags: --module app::util
+// @decisions: D-541, D-543
+//! `--module PATH` runs the tests of that module and its submodules, by
+//! module path and then in source order. The root module's and `app::other`'s
+//! tests are filtered out.
+
+test "in the root" {
+  assert True
+}

@@ -517,8 +517,8 @@ fn closures_call_their_code_with_self() {
 
 /// `const_slot` and `set_const`: a `LoadConst` reads the slot
 /// `cb$const$app$LIMIT` once it is filled; an empty slot calls
-/// `cheby_rt_const_missing` (here its wave-1 stub, which ends the process,
-/// so that path runs in a child process).
+/// `cheby_rt_const_missing`, which outside constant evaluation ends the
+/// process, so that path runs in a child process.
 #[test]
 fn load_const_reads_the_slot() {
     let constant = def(1, 70);
@@ -561,7 +561,10 @@ fn load_const_reads_the_slot() {
     jit.set_const(constant, seven).unwrap();
     assert_eq!(returned(run_const(&jit, target)), seven);
     let stderr = run_child("tests::objects::load_const_reads_the_slot", &[]);
-    assert!(stderr.contains("cheby_rt_const_missing"), "{stderr}");
+    assert!(
+        stderr.contains("is empty outside constant evaluation"),
+        "{stderr}"
+    );
 }
 
 /// The environment variable that makes a test run its child half.

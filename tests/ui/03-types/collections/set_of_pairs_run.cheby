@@ -1,0 +1,66 @@
+// @mode: run-pass
+// @decisions: D-039, D-093, D-538
+//! `Set<(Int, Int)>`: the cells a walk visits, membership, inserting an
+//! element twice, removal, and `==` that ignores order (§3.8, §3.13).
+
+import std::int
+import std::io
+import std::list
+import std::set
+import std::set::{Set}
+import std::string
+
+fn walk(steps: List<(Int, Int)>) -> Set<(Int, Int)> {
+  let start = set::insert(set::new(), (0, 0))
+  let (_, visited) = list::fold(steps, ((0, 0), start), fn(((x, y), seen), (dx, dy)) {
+    let next = (x + dx, y + dy)
+    (next, set::insert(seen, next))
+  })
+  visited
+}
+
+fn by_cell(a: (Int, Int), b: (Int, Int)) -> Order {
+  let (ax, ay) = a
+  let (bx, by) = b
+  case int::compare(ax, bx) {
+    Equal => int::compare(ay, by)
+    other => other
+  }
+}
+
+fn show(cells: Set<(Int, Int)>) -> String {
+  let sorted = list::sort_with(set::to_list(cells), by_cell)
+  string::join(list::map(sorted, fn((x, y)) { "({x}, {y})" }), " ")
+}
+
+fn main() {
+  let square = [(1, 0), (0, 1), (-1, 0), (0, -1), (1, 0), (1, 0)]
+  let visited = walk(square)
+  io::println(show(visited))
+  let size = set::size(visited)
+  let back_home = set::contains(visited, (0, 0))
+  let far = set::contains(visited, (5, 5))
+  io::println("size: {size}, home: {back_home}, far: {far}")
+
+  let again = set::insert(visited, (1, 1))
+  let fewer = set::remove(visited, (0, 0))
+  let same_size = set::size(again)
+  io::println(show(again))
+  io::println(show(fewer))
+  io::println("size after inserting a visited cell: {same_size}")
+
+  let listed = set::from_list([(2, 0), (1, 1), (0, 1), (0, 0), (1, 0), (2, 0), (1, 1)])
+  let equal = visited == listed
+  let unequal = visited == fewer
+  io::println("equal: {equal}, unequal: {unequal}")
+
+  // A 200 by 200 grid, then its diagonal removed.
+  let side = list::range(0, 200)
+  let grid = set::from_list(list::flat_map(side, fn(x) { list::map(side, fn(y) { (x, y) }) }))
+  let cut = list::fold(side, grid, fn(cells, n) { set::remove(cells, (n, n)) })
+  let grid_size = set::size(grid)
+  let cut_size = set::size(cut)
+  let corner = set::contains(cut, (199, 0))
+  let diagonal = set::contains(cut, (7, 7))
+  io::println("grid: {grid_size}, cut: {cut_size}, corner: {corner}, diagonal: {diagonal}")
+}

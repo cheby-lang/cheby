@@ -176,7 +176,7 @@ fn check_static(m: &MirModule, n: usize, s: &StaticObject, errors: &mut Vec<Stri
                 StaticKind::Desc,
                 LayoutRef::Desc { .. } | LayoutRef::DescNominal
             )
-            | (StaticKind::FnValue, LayoutRef::Closure(0))
+            | (StaticKind::FnValue, LayoutRef::Closure(_))
     );
     if !fits {
         errors.push(format!(
@@ -252,13 +252,19 @@ impl FnCx<'_> {
             (FnKey::Entry(_), Abi::C) if !entries => {
                 self.err("entry thunks belong in an entries unit");
             }
-            (FnKey::Entry(_) | FnKey::Trampoline(_), Abi::C) => {}
+            // In an entries unit, the static dictionary of an error
+            // type's `show` brings value shims and tuple functions, which
+            // depend on nothing but their key (D-523).
+            (FnKey::Entry(_) | FnKey::Trampoline(_), Abi::C)
+            | (FnKey::ValueShim(_) | FnKey::TupleDictFn { .. }, Abi::Cheby) => {}
             (FnKey::Entry(_) | FnKey::Trampoline(_), Abi::Cheby) => {
                 self.err("entry thunks and trampolines use the C ABI");
             }
             (_, Abi::C) => self.err("only entry thunks and trampolines use the C ABI"),
             (_, Abi::Cheby) if entries => {
-                self.err("an entries unit holds only entry thunks and trampolines");
+                self.err(
+                    "an entries unit holds only entry thunks, trampolines, value shims and tuple functions",
+                );
             }
             (_, Abi::Cheby) => {}
         }

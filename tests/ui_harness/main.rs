@@ -20,7 +20,10 @@
 //!
 //! A run test's `<name>.stdin` is its standard input, which is null
 //! without one, and `<name>.args` its arguments, one per line, passed
-//! after `--` (D-543).
+//! after `--` (D-543). With `// @command: test`, a run test runs
+//! `cheby test` instead of `cheby run`, and its goldens hold that
+//! command's output, and `// @flags: …` adds words after the subcommand
+//! (D-543).
 //!
 //! Strict runs (D-544): `CHEBY_MILESTONE` overrides `tests/milestone`,
 //! `CHEBY_PENDING=require` makes a failing pending test a failure unless
@@ -102,7 +105,11 @@ fn check_package(
     files: &[ShownFile],
 ) -> Result<(), String> {
     let mode = test.header.mode;
-    let command = if mode.runs() { "run" } else { "check" };
+    let command = if mode.runs() {
+        test.header.command.name()
+    } else {
+        "check"
+    };
     let input = test.input()?;
     let mut cmd = Command::new(CHEBY);
     // `--color=never` and `NO_COLOR` keep goldens plain even if the
@@ -110,6 +117,7 @@ fn check_package(
     // objects are poisoned, so a reference-count mistake stops the program
     // where it happens (D-544).
     cmd.args(["--color=never", command])
+        .args(&test.header.flags)
         .current_dir(package)
         .env("NO_COLOR", "1")
         .env(POISON_ENV, "1");

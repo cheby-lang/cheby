@@ -6,7 +6,7 @@
 
 use std::hash::Hasher as _;
 
-use cheby_iface::{CtorFields, DefId, Ice, ItemSig, ModuleId, TypeDefKind};
+use cheby_iface::{CtorFields, DefId, Ice, ItemSig, ModuleId, Namespace, TypeDefKind};
 use siphasher::sip::SipHasher13;
 
 use crate::defs::Defs;
@@ -55,8 +55,13 @@ pub struct LayoutDesc {
     pub ctor_name: Box<str>,
     /// Whether the constructor has named fields (`Point { x: 1 }`).
     pub record: bool,
-    /// The type's `@std_hooks(equal, hash, debug)` functions (D-482).
-    /// Always `None` for now; W3-B fills it.
+    /// The type's `@std_hooks(equal, hash, debug)` functions (D-342,
+    /// D-482), in that order: top-level functions of the type's own
+    /// module, read from its interface. `None` for every type without the
+    /// attribute (every type outside `std`). The JIT registers their
+    /// function values as the layout's hooks, which the runtime's
+    /// equality, hashing and debug printing call instead of walking the
+    /// fields (§3.13).
     pub hooks: Option<[DefId; 3]>,
     /// [`type_key`] of the type's module path and name, which the runtime
     /// hashes instead of a layout id (D-264, plan §4.3.2).
@@ -140,8 +145,47 @@ pub fn ctor_layout(ctor: DefId, defs: &Defs<'_>) -> Result<LayoutDesc, Ice> {
         type_name: type_path.item,
         ctor_name: ctor_path.item,
         record: matches!(sig.fields, CtorFields::Named(_)),
-        hooks: None,
+        hooks: type_hooks(type_def, defs)?,
     })
+}
+
+/// The `@std_hooks(equal, hash, debug)` functions of the type `ty` (D-342,
+/// D-482), looked up by name in the interface of `ty`'s module, which
+/// lists private items too (the hooks of `std::io::Error` are private).
+/// `None` when the type has no such attribute.
+///
+/// # Errors
+///
+/// An [`Ice`] if `ty` is not a readable type, or a named hook is not a
+/// function of its module (the front end checks both, E0045).
+pub fn type_hooks(ty: DefId, defs: &Defs<'_>) -> Result<Option<[DefId; 3]>, Ice> {
+    let ItemSig::Type(t) = &defs.item(ty)?.sig else {
+        return Err(Ice::new(format!("{ty:?} is not a type")));
+    };
+    let Some(hooks) = t.hooks else {
+        return Ok(None);
+    };
+    let iface = match defs.own {
+        Some(own) if own.module == ty.module => Some(own),
+        _ => defs.deps.get(ty.module),
+    }
+    .ok_or_else(|| Ice::new(format!("MIR lowering cannot see the module of {ty:?}")))?;
+    let find = |name| -> Result<DefId, Ice> {
+        let index = iface.lookup(Namespace::Value, name).ok_or_else(|| {
+            Ice::new(format!(
+                "the `@std_hooks` function `{}` of {ty:?} is not in its module",
+                defs.globals.names.get(name)
+            ))
+        })?;
+        let def = DefId::new(ty.module, index);
+        defs.fn_sig(def)?;
+        Ok(def)
+    };
+    Ok(Some([
+        find(hooks.equal)?,
+        find(hooks.hash)?,
+        find(hooks.debug)?,
+    ]))
 }
 
 /// The layouts of every constructor of the ADT `ty`, in tag order, read
@@ -188,4 +232,74 @@ pub fn module_layouts(module: ModuleId, defs: &Defs<'_>) -> Result<Vec<LayoutDes
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::test_support::lower_source;
+
+    /// `std::io::Error` names its private `equal`, `hash` and `debug` in
+    /// `@std_hooks` (D-342, D-482); every other type has no hooks. Names,
+    /// the record flag and the key come from the interface too.
+    #[test]
+    fn layouts_carry_names_keys_and_std_hooks() {
+        let lowered = lower_source(&[(
+            "",
+            r#"//! Reads a line, so `std::io` and its `Error` are lowered.
+
+import std::io
+
+type Pair {
+  Pair(Int, String),
+}
+
+type Point {
+  x: Int,
+}
+
+fn main() {
+  let _ = io::read_line()
+  let _ = Pair(1, "a")
+  let _ = Point { x: 1 }
+}
+"#,
+        )]);
+        let io = lowered.unit("std::io");
+        let error = io
+            .layouts
+            .iter()
+            .find(|desc| &*desc.type_name == "Error")
+            .expect("std::io::Error has a layout");
+        assert_eq!(&*error.ctor_name, "Error");
+        assert!(error.record);
+        assert_eq!(error.type_key, super::type_key("std::io", "Error"));
+        let hooks = error.hooks.expect("std::io::Error has hooks");
+        assert!(hooks.iter().all(|def| def.module == error.type_def.module));
+        let [equal, hash, debug] = hooks;
+        assert!(equal != hash && hash != debug && equal != debug);
+        for desc in io.layouts.iter().filter(|desc| &*desc.type_name == "Kind") {
+            assert_eq!(desc.hooks, None);
+        }
+        let app = lowered.unit("app");
+        let names: Vec<_> = app
+            .layouts
+            .iter()
+            .map(|desc| {
+                (
+                    &*desc.type_name,
+                    &*desc.ctor_name,
+                    desc.record,
+                    desc.hooks,
+                    desc.type_key == super::type_key("app", &desc.type_name),
+                )
+            })
+            .collect();
+        assert_eq!(
+            names,
+            [
+                ("Pair", "Pair", false, None, true),
+                ("Point", "Point", true, None, true)
+            ]
+        );
+    }
 }

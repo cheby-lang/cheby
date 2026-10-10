@@ -1,0 +1,10 @@
+error[E0075]: evaluating the constant `checked` panicked
+ --> tests/ui/04-declarations/constants/eval/panic_run.cheby:9:7
+  |
+9 | const checked: Int = must_be_positive(-3)
+  |       ^^^^^^^ its initializer panicked
+  |
+  = note: panicked at tests/ui/04-declarations/constants/eval/panic_run.cheby:12:10: assertion failed: a size must be positive
+            left: -3
+           right: 0
+

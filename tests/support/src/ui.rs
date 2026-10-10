@@ -18,6 +18,11 @@
 //! - `@decisions`: the decision-log entries the test pins, for coverage.
 //! - `@milestone`: the milestone in which the test must pass, M1 by default.
 //! - `@exit`: the expected exit code of `run-fail`, 101 by default.
+//! - `@command`: `test` makes a `run-pass` or `run-fail` test run
+//!   `cheby test` instead of `cheby run`, and its goldens hold that
+//!   command's output (D-543). `run` is the default.
+//! - `@flags`: command-line words added after the subcommand, split at
+//!   whitespace, such as `--module app::util` (D-543).
 //!
 //! A directory `tests/ui/<chapter>/<name>/` that holds a `cheby.toml` is
 //! one package test ([`Layout::Package`]). Its `cheby.toml` and `src/**`
@@ -87,12 +92,45 @@ impl Mode {
     }
 }
 
+/// The command a run test runs (D-543).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RunCommand {
+    /// `cheby run`.
+    #[default]
+    Run,
+    /// `cheby test`.
+    Test,
+}
+
+impl RunCommand {
+    fn parse(s: &str) -> Result<Self, String> {
+        match s {
+            "run" => Ok(Self::Run),
+            "test" => Ok(Self::Test),
+            other => Err(format!("unknown command `{other}`, expected run or test")),
+        }
+    }
+
+    /// The `cheby` subcommand.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Run => "run",
+            Self::Test => "test",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Header {
     pub mode: Mode,
     pub decisions: BTreeSet<u32>,
     pub milestone: Milestone,
     pub exit: Option<i32>,
+    /// What a run test runs; always [`RunCommand::Run`] for other modes.
+    pub command: RunCommand,
+    /// Words added after the subcommand (`@flags`).
+    pub flags: Vec<String>,
 }
 
 impl Header {
@@ -101,12 +139,15 @@ impl Header {
     /// # Errors
     ///
     /// Returns a message for a malformed or unknown directive, a missing
-    /// `@mode`, or `@exit` without `@mode: run-fail`.
+    /// `@mode`, `@exit` without `@mode: run-fail`, or `@command` without a
+    /// run mode.
     pub fn parse(source: &str) -> Result<Self, String> {
         let mut mode = None;
         let mut decisions = BTreeSet::new();
         let mut milestone = Milestone::M1;
         let mut exit = None;
+        let mut command = None;
+        let mut flags = Vec::new();
         for line in source.lines() {
             let Some(directive) = line.strip_prefix("// @") else {
                 break;
@@ -124,6 +165,8 @@ impl Header {
                 }
                 "milestone" => milestone = value.parse()?,
                 "exit" => exit = Some(value.parse().map_err(|e| format!("@exit: {e}"))?),
+                "command" => command = Some(RunCommand::parse(value)?),
+                "flags" => flags.extend(value.split_whitespace().map(str::to_owned)),
                 other => return Err(format!("unknown directive `@{other}`")),
             }
         }
@@ -131,11 +174,18 @@ impl Header {
         if exit.is_some() && mode != Mode::RunFail {
             return Err("`@exit` is only allowed with `@mode: run-fail`".to_owned());
         }
+        if command.is_some() && !mode.runs() {
+            return Err(
+                "`@command` is only allowed with `@mode: run-pass` or `run-fail`".to_owned(),
+            );
+        }
         Ok(Self {
             mode,
             decisions,
             milestone,
             exit,
+            command: command.unwrap_or_default(),
+            flags,
         })
     }
 }
@@ -315,6 +365,12 @@ fn read_test(root: &Path, dir: &Path, path: PathBuf, layout: Layout) -> Result<U
         layout,
         header,
     };
+    if test.header.command == RunCommand::Test && test.golden("args").exists() {
+        return Err(format!(
+            "{}: `cheby test` takes no program arguments",
+            shown(&test.golden("args"))
+        ));
+    }
     if !test.header.mode.runs() {
         for ext in INPUT_EXTENSIONS {
             let input = test.golden(ext);
@@ -372,6 +428,24 @@ mod tests {
         assert!(Header::parse("//! no mode\n").is_err());
         assert!(Header::parse("// @mode: check-pass\n// @colour: red\n").is_err());
         assert!(Header::parse("// @mode: check-pass\n// @exit: 1\n").is_err());
+        assert!(Header::parse("// @mode: check-pass\n// @command: test\n").is_err());
+        assert!(Header::parse("// @mode: run-pass\n// @command: bench\n").is_err());
+    }
+
+    #[test]
+    fn parses_the_command() {
+        let run = Header::parse("// @mode: run-pass\n").unwrap();
+        assert_eq!(run.command, RunCommand::Run);
+        let test = Header::parse("// @mode: run-fail\n// @command: test\n// @exit: 1\n").unwrap();
+        assert_eq!(test.command, RunCommand::Test);
+        assert_eq!(test.command.name(), "test");
+        assert_eq!(test.flags, Vec::<String>::new());
+    }
+
+    #[test]
+    fn parses_flags() {
+        let h = Header::parse("// @mode: run-pass\n// @flags: --module app::util  adds\n").unwrap();
+        assert_eq!(h.flags, ["--module", "app::util", "adds"]);
     }
 
     /// A scratch `tests/ui` tree under the system's temporary directory.

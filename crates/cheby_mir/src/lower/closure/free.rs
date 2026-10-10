@@ -66,7 +66,7 @@ pub(crate) fn free_locals(
 /// The expressions of the tree rooted at `root` in pre-order, children in
 /// evaluation order, nested closure bodies included. An explicit stack
 /// keeps deep expressions off the Rust stack.
-fn subtree(body: &thir::Body, root: ExprId) -> Result<Vec<ExprId>, Ice> {
+pub(crate) fn subtree(body: &thir::Body, root: ExprId) -> Result<Vec<ExprId>, Ice> {
     let mut out = Vec::new();
     let mut stack = vec![root];
     while let Some(id) = stack.pop() {

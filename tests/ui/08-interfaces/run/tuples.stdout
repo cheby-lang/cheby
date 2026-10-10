@@ -1,0 +1,7 @@
+(1, one)
+<(True, 2.5, Nil)>
+<((1, 2), [(a, grade 3)])>
+[(1, a), (1, z), (2, a), (2, b)]
+[(grade 2, 2), (grade 1, 0), (grade 1, 1)]
+[(x, 0), (y, 0)]
+True False

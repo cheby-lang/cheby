@@ -1,0 +1,14 @@
+// @mode: run-pass
+// @command: test
+// @decisions: D-541, D-543
+//! Tests run by module path, the root module first and a module before its
+//! submodules, and in source order within a module. Files are discovered in
+//! a different order, so the order is the command's own.
+
+test "root second" {
+  assert True
+}
+
+test "root first" {
+  assert True
+}

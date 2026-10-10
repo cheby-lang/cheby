@@ -41,7 +41,11 @@
 //! names, and each length below the longest fixed part of a spread
 //! pattern, is its own case where every element has a fixed index; the
 //! default holds the remaining lengths, where only spread patterns
-//! match, and their suffix elements are counted from the end.
+//! match, and their suffix elements are counted from the end. A column
+//! whose switch would need more than [`MAX_LENGTH_CASES`] lengths, and
+//! whose patterns have no suffix, is matched one element at a time
+//! instead: "exactly `k` elements, or more?", then element `k`, so its
+//! size grows linearly with its patterns.
 //! Alternatives become one row each (left to right, §6.7), with the same
 //! arm, so their names join where the arm's body starts.
 
@@ -243,7 +247,8 @@ pub(crate) fn decide(input: Input<'_>, defs: &Defs<'_>) -> Result<Decision, Ice>
             .collect();
         rows.push(Row { cells, arm, binds });
     }
-    let tree = c.compile(Matrix { cols, rows })?;
+    let bounds = vec![0; cols.len()];
+    let tree = c.compile(Matrix { cols, bounds, rows })?;
     let decision = Decision { occs: c.occs, tree };
     #[cfg(test)]
     record(&decision);
@@ -273,8 +278,30 @@ struct Row<'p> {
 
 struct Matrix<'p> {
     cols: Vec<OccId>,
+    /// Per column: the length a list column is known to have at least,
+    /// with its first that many prefix elements already taken apart (see
+    /// [`Compiler::split_list_elementwise`]); 0 for every other column.
+    bounds: Vec<u32>,
     rows: Vec<Row<'p>>,
 }
+
+/// What one step of element-wise list matching found.
+enum ElementStep<'p> {
+    /// Every row has a wildcard in the list column now.
+    Done(Matrix<'p>),
+    /// Test the length against `lb`.
+    Test {
+        lb: u32,
+        exact: Matrix<'p>,
+        longer: Matrix<'p>,
+    },
+}
+
+/// A list column whose length switch would need more cases than this is
+/// matched one element at a time instead. The choice is the compiler's
+/// own: every arm is tried in order either way (§6.6), and only the size
+/// of the code differs.
+const MAX_LENGTH_CASES: usize = 8;
 
 /// What a column holds, from the first cell that is not a wildcard.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -442,6 +469,7 @@ impl<'p> Compiler<'_, '_> {
         Ok(match self.column_kind(m, c)? {
             Some(Kind::Tuple(_)) => true,
             Some(Kind::Ctor { count, .. }) => count == 1,
+            Some(Kind::List) if m.bounds.get(c).is_some_and(|&b| b > 0) => false,
             Some(Kind::List) => m.rows.iter().all(|r| match r.cells.get(c) {
                 Some(Some(p)) => {
                     matches!(list_parts(head(p)), Some((pre, Some(_), suf)) if pre.is_empty() && suf.is_empty())
@@ -470,6 +498,7 @@ impl<'p> Compiler<'_, '_> {
                 // not tried.
                 let rest = Matrix {
                     cols: m.cols,
+                    bounds: m.bounds,
                     rows: m.rows.into_iter().filter(|r| r.arm != arm).collect(),
                 };
                 Some(Box::new(self.compile(rest)?))
@@ -509,7 +538,7 @@ impl<'p> Compiler<'_, '_> {
 
     /// Replaces alternatives in column `c` by one row per branch.
     fn expand_or(m: Matrix<'p>, c: usize) -> Result<Matrix<'p>, Ice> {
-        let Matrix { cols, rows } = m;
+        let Matrix { cols, bounds, rows } = m;
         let occ = *cols.get(c).ok_or_else(|| Ice::new("no such column"))?;
         let mut out = Vec::with_capacity(rows.len());
         let mut work: Vec<Row<'p>> = rows.into_iter().rev().collect();
@@ -538,7 +567,11 @@ impl<'p> Compiler<'_, '_> {
             // Pushed in reverse, so the first branch is handled next.
             work.extend(expanded.into_iter().rev());
         }
-        Ok(Matrix { cols, rows: out })
+        Ok(Matrix {
+            cols,
+            bounds,
+            rows: out,
+        })
     }
 
     /// Tests (or takes apart) column `c`.
@@ -549,94 +582,245 @@ impl<'p> Compiler<'_, '_> {
             // Only wildcards are left after the alternatives.
             return self.compile(m);
         };
+        // Each kind is split in a function of its own, so this frame, which
+        // recurses once per tested position, stays small.
         match kind {
-            Kind::Tuple(arity) => {
-                let sub = self.specialize(&m, c, |p| match &p.kind {
-                    PatKind::Tuple(ps) => ps
-                        .iter()
-                        .enumerate()
-                        .map(|(i, p)| {
-                            Ok((
-                                Step::Tuple {
-                                    arity,
-                                    index: len_u32(i)?,
-                                },
-                                p,
-                            ))
-                        })
-                        .collect::<Result<Vec<_>, Ice>>()
-                        .map(Some),
-                    _ => Err(Ice::new("a tuple column with another pattern")),
-                })?;
-                self.compile(sub)
-            }
-            Kind::Ctor { ty, count } => {
-                let all = self.ctors_of(ty)?;
-                if all.len() != count {
-                    return Err(Ice::new("a type's constructor count changed"));
-                }
-                let present: Vec<DefId> = all
-                    .iter()
-                    .copied()
-                    .filter(|&ctor| {
-                        m.rows.iter().any(|r| {
-                            matches!(r.cells.get(c), Some(Some(p)) if matches!(p.kind, PatKind::Ctor { ctor: k, .. } if k == ctor))
-                        })
-                    })
-                    .collect();
-                let mut cases = Vec::with_capacity(present.len());
-                for &ctor in &present {
-                    let sub = self.specialize(&m, c, |p| match &p.kind {
-                        PatKind::Ctor { ctor: k, fields } if *k == ctor => Ok(Some(
-                            fields
-                                .iter()
-                                .map(|(field, p)| {
-                                    (
-                                        Step::Field {
-                                            ctor,
-                                            field: *field,
-                                        },
-                                        p,
-                                    )
-                                })
-                                .collect(),
-                        )),
-                        PatKind::Ctor { .. } => Ok(None),
-                        _ => Err(Ice::new("a constructor column with another pattern")),
-                    })?;
-                    if count == 1 {
-                        return self.compile(sub);
-                    }
-                    let (_, tag, _) = self.ctor_info(ctor)?;
-                    let key = if ty == builtin::BOOL {
-                        Key::Bool(ctor == builtin::TRUE)
-                    } else {
-                        Key::Ctor { ctor, tag }
-                    };
-                    cases.push((key, self.compile(sub)?));
-                }
-                let default = if present.len() < count {
-                    Some(Box::new(self.compile(default_matrix(&m, c))?))
-                } else {
-                    None
-                };
-                let test = match ty {
-                    t if t == builtin::BOOL => Test::Bool,
-                    t if t == builtin::OPTION => Test::Tag(TagType::Option),
-                    t if t == builtin::RESULT => Test::Tag(TagType::Result),
-                    t if t == builtin::ORDER => Test::Tag(TagType::Order),
-                    t => Test::Tag(TagType::Adt(t)),
-                };
-                Ok(Tree::Test {
-                    occ,
-                    test,
-                    cases,
-                    default,
-                })
-            }
+            Kind::Tuple(arity) => self.split_tuple(&m, c, arity),
+            Kind::Ctor { ty, count } => self.split_ctor(&m, c, occ, ty, count),
             Kind::Int | Kind::Str => self.split_literals(&m, c, occ, kind),
+            Kind::List if elementwise(&m, c)? => self.split_list_elementwise(m, c, occ),
             Kind::List => self.split_list(&m, c, occ),
         }
+    }
+
+    /// Takes apart tuple column `c`.
+    fn split_tuple(&mut self, m: &Matrix<'p>, c: usize, arity: u32) -> Result<Tree, Ice> {
+        let sub = self.specialize(m, c, |p| match &p.kind {
+            PatKind::Tuple(ps) => ps
+                .iter()
+                .enumerate()
+                .map(|(i, p)| {
+                    Ok((
+                        Step::Tuple {
+                            arity,
+                            index: len_u32(i)?,
+                        },
+                        p,
+                    ))
+                })
+                .collect::<Result<Vec<_>, Ice>>()
+                .map(Some),
+            _ => Err(Ice::new("a tuple column with another pattern")),
+        })?;
+        self.compile(sub)
+    }
+
+    /// Tests (or takes apart, for a single constructor) constructor column
+    /// `c` of type `ty`, which has `count` constructors.
+    fn split_ctor(
+        &mut self,
+        m: &Matrix<'p>,
+        c: usize,
+        occ: OccId,
+        ty: DefId,
+        count: usize,
+    ) -> Result<Tree, Ice> {
+        let all = self.ctors_of(ty)?;
+        if all.len() != count {
+            return Err(Ice::new("a type's constructor count changed"));
+        }
+        let present: Vec<DefId> = all
+            .iter()
+            .copied()
+            .filter(|&ctor| {
+                m.rows.iter().any(|r| {
+                    matches!(r.cells.get(c), Some(Some(p)) if matches!(p.kind, PatKind::Ctor { ctor: k, .. } if k == ctor))
+                })
+            })
+            .collect();
+        let mut cases = Vec::with_capacity(present.len());
+        for &ctor in &present {
+            let sub = self.specialize(m, c, |p| match &p.kind {
+                PatKind::Ctor { ctor: k, fields } if *k == ctor => Ok(Some(
+                    fields
+                        .iter()
+                        .map(|(field, p)| {
+                            (
+                                Step::Field {
+                                    ctor,
+                                    field: *field,
+                                },
+                                p,
+                            )
+                        })
+                        .collect(),
+                )),
+                PatKind::Ctor { .. } => Ok(None),
+                _ => Err(Ice::new("a constructor column with another pattern")),
+            })?;
+            if count == 1 {
+                return self.compile(sub);
+            }
+            let (_, tag, _) = self.ctor_info(ctor)?;
+            let key = if ty == builtin::BOOL {
+                Key::Bool(ctor == builtin::TRUE)
+            } else {
+                Key::Ctor { ctor, tag }
+            };
+            cases.push((key, self.compile(sub)?));
+        }
+        let default = if present.len() < count {
+            Some(Box::new(self.compile(default_matrix(m, c))?))
+        } else {
+            None
+        };
+        let test = match ty {
+            t if t == builtin::BOOL => Test::Bool,
+            t if t == builtin::OPTION => Test::Tag(TagType::Option),
+            t if t == builtin::RESULT => Test::Tag(TagType::Result),
+            t if t == builtin::ORDER => Test::Tag(TagType::Order),
+            t => Test::Tag(TagType::Adt(t)),
+        };
+        Ok(Tree::Test {
+            occ,
+            test,
+            cases,
+            default,
+        })
+    }
+
+    /// Tests one more element of list column `c`, whose first `lb`
+    /// elements are taken apart already (`m.bounds`): the list is known to
+    /// have at least `lb` elements. A row whose spread starts at or before
+    /// `lb` matches every longer list, so its cell becomes a wildcard that
+    /// binds the rest. Then the length is tested against `lb`: equal, the
+    /// rows that match exactly `lb` elements go on; longer, element `lb`
+    /// becomes a column of its own and the bound grows by one.
+    ///
+    /// Each list pattern is visited once per element, so a column of
+    /// spreads with growing prefixes compiles in linear size, where one
+    /// switch over every length would read N(N+1)/2 elements
+    /// (the gate-2 review's R2-2). The compiler recurses once per tested
+    /// position, so a list pattern of several hundred elements needs a
+    /// deep stack.
+    fn split_list_elementwise(&mut self, m: Matrix<'p>, c: usize, occ: OccId) -> Result<Tree, Ice> {
+        // The matrices are built in a function of their own, so the frame
+        // that recurses once per element stays small.
+        match self.element_step(m, c, occ)? {
+            ElementStep::Done(m) => self.compile(m),
+            ElementStep::Test { lb, exact, longer } => Ok(Tree::Test {
+                occ,
+                test: Test::Len,
+                cases: vec![(Key::Len(u64::from(lb)), self.compile(exact)?)],
+                default: Some(Box::new(self.compile(longer)?)),
+            }),
+        }
+    }
+
+    /// One step of [`Self::split_list_elementwise`]: the matrix when the
+    /// list column needs no more tests, or the bound and the matrices for
+    /// a list of exactly that many elements and for a longer one.
+    #[inline(never)]
+    fn element_step(
+        &mut self,
+        mut m: Matrix<'p>,
+        c: usize,
+        occ: OccId,
+    ) -> Result<ElementStep<'p>, Ice> {
+        let lb = *m.bounds.get(c).ok_or_else(|| Ice::new("no such column"))?;
+        let lb_len = usize::try_from(lb).map_err(|_| Ice::new("a list bound out of range"))?;
+        // Spreads that start at or before the bound match from here on.
+        for row in &mut m.rows {
+            let Some(slot) = row.cells.get_mut(c) else {
+                continue;
+            };
+            let Some(p) = *slot else {
+                continue;
+            };
+            let (pre, rest, _) =
+                list_parts(p).ok_or_else(|| Ice::new("a list column with another pattern"))?;
+            if let Some(r) = rest
+                && pre.len() <= lb_len
+            {
+                let start = len_u32(pre.len())?;
+                let slice = self.occ(Some(occ), Step::Slice { start, from_end: 0 }, r.ty)?;
+                if normalize(r, slice, &mut row.binds).is_some() {
+                    return Err(Ice::new("a spread with a pattern in a list column"));
+                }
+                *slot = None;
+            }
+        }
+        if m.rows.iter().all(|r| matches!(r.cells.get(c), Some(None))) {
+            return Ok(ElementStep::Done(m));
+        }
+        // The rows for a list of exactly `lb` elements: the wildcards, and
+        // the exact patterns of that length, all of whose elements are
+        // taken apart already.
+        let mut exact_rows = Vec::new();
+        for row in &m.rows {
+            match row.cells.get(c) {
+                Some(Some(p)) => {
+                    let (pre, rest, _) = list_parts(p)
+                        .ok_or_else(|| Ice::new("a list column with another pattern"))?;
+                    if rest.is_none() && pre.len() == lb_len {
+                        let mut row = row.clone();
+                        if let Some(slot) = row.cells.get_mut(c) {
+                            *slot = None;
+                        }
+                        exact_rows.push(row);
+                    }
+                }
+                _ => exact_rows.push(row.clone()),
+            }
+        }
+        let exact = Matrix {
+            cols: m.cols.clone(),
+            bounds: m.bounds.clone(),
+            rows: exact_rows,
+        };
+        // The rows for a longer list, with element `lb` as a new column
+        // to the left of the list.
+        let mut element_ty = None;
+        let mut longer_rows = Vec::with_capacity(m.rows.len());
+        let mut element_cells = Vec::with_capacity(m.rows.len());
+        for row in &m.rows {
+            match row.cells.get(c) {
+                Some(Some(p)) => {
+                    let (pre, _, _) = list_parts(p)
+                        .ok_or_else(|| Ice::new("a list column with another pattern"))?;
+                    let Some(element) = pre.get(lb_len) else {
+                        // An exact pattern of `lb` elements, or fewer.
+                        continue;
+                    };
+                    element_ty.get_or_insert(element.ty);
+                    element_cells.push(Some(element));
+                }
+                _ => element_cells.push(None),
+            }
+            longer_rows.push(row.clone());
+        }
+        let mut cols = m.cols;
+        let mut bounds = m.bounds;
+        let mut rows = longer_rows;
+        if let Some(ty) = element_ty {
+            let element = self.occ(Some(occ), Step::Index(lb), ty)?;
+            cols.insert(c, element);
+            bounds.insert(c, 0);
+            if let Some(b) = bounds.get_mut(c.saturating_add(1)) {
+                *b = lb.saturating_add(1);
+            }
+            for (row, cell) in rows.iter_mut().zip(element_cells) {
+                let cell = cell.and_then(|p| normalize(p, element, &mut row.binds));
+                row.cells.insert(c, cell);
+            }
+        } else if let Some(b) = bounds.get_mut(c) {
+            *b = lb.saturating_add(1);
+        }
+        Ok(ElementStep::Test {
+            lb,
+            exact,
+            longer: Matrix { cols, bounds, rows },
+        })
     }
 
     fn split_literals(
@@ -775,6 +959,8 @@ impl<'p> Compiler<'_, '_> {
         }
         let mut cols = m.cols.clone();
         cols.splice(c..=c, new_occs.iter().copied());
+        let mut bounds = m.bounds.clone();
+        bounds.splice(c..=c, new_occs.iter().map(|_| 0));
         let mut rows = Vec::with_capacity(kept.len());
         for (row, cells) in kept {
             let mut binds = row.binds.clone();
@@ -794,7 +980,7 @@ impl<'p> Compiler<'_, '_> {
                 binds,
             });
         }
-        Ok(Matrix { cols, rows })
+        Ok(Matrix { cols, bounds, rows })
     }
 }
 
@@ -860,11 +1046,47 @@ fn cells_beyond(p: &Pat) -> Result<Option<SubCells<'_>>, Ice> {
     Ok(Some(cells))
 }
 
+/// Whether list column `c` is matched one element at a time
+/// ([`Compiler::split_list_elementwise`]): it already is (its bound is
+/// above 0), or its patterns have no suffix and no pattern after a
+/// spread, and one switch over the lengths would need more than
+/// [`MAX_LENGTH_CASES`] cases.
+fn elementwise(m: &Matrix<'_>, c: usize) -> Result<bool, Ice> {
+    if m.bounds.get(c).is_some_and(|&b| b > 0) {
+        return Ok(true);
+    }
+    let mut lengths: Vec<usize> = Vec::new();
+    let mut longest_spread: usize = 0;
+    for row in &m.rows {
+        let Some(Some(p)) = row.cells.get(c) else {
+            continue;
+        };
+        let (pre, rest, suf) =
+            list_parts(p).ok_or_else(|| Ice::new("a list column with another pattern"))?;
+        if !suf.is_empty() {
+            return Ok(false);
+        }
+        match rest {
+            None => lengths.push(pre.len()),
+            Some(r) if is_catch_all(r) => longest_spread = longest_spread.max(pre.len()),
+            Some(_) => return Ok(false),
+        }
+    }
+    lengths.extend(0..longest_spread);
+    lengths.sort_unstable();
+    lengths.dedup();
+    Ok(lengths.len() > MAX_LENGTH_CASES)
+}
+
 /// The rows with a wildcard in column `c`, without that column.
 fn default_matrix<'p>(m: &Matrix<'p>, c: usize) -> Matrix<'p> {
     let mut cols = m.cols.clone();
     if c < cols.len() {
         cols.remove(c);
+    }
+    let mut bounds = m.bounds.clone();
+    if c < bounds.len() {
+        bounds.remove(c);
     }
     let rows = m
         .rows
@@ -878,7 +1100,7 @@ fn default_matrix<'p>(m: &Matrix<'p>, c: usize) -> Matrix<'p> {
             r
         })
         .collect();
-    Matrix { cols, rows }
+    Matrix { cols, bounds, rows }
 }
 
 /// Removes the columns where every row has a wildcard.
@@ -902,6 +1124,7 @@ fn drop_wild_columns(m: Matrix<'_>) -> Matrix<'_> {
     }
     Matrix {
         cols: pick(m.cols, &keep),
+        bounds: pick(m.bounds, &keep),
         rows: m
             .rows
             .into_iter()

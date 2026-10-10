@@ -1,0 +1,18 @@
+// @mode: check-fail
+// @decisions: D-090, D-449, D-459, D-533
+//! A constant whose initializer panics is a compile error at its name,
+//! with the panic's message and location in a note; `cheby check` reports
+//! it without running `main`, and never prints the panic report itself
+//! (§4.5, §13.9).
+
+import std::io
+
+const ratio: Int = 100 / parts()
+
+fn parts() -> Int {
+  0
+}
+
+fn main() {
+  io::println("main ran: {ratio}")
+}

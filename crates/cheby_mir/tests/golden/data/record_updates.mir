@@ -2,7 +2,9 @@ module app
 
 fn app::first() -> value check str#0 {
   str#0 = "src/main.cheby:22:4"
+  str#1 = "first"
 bb0:
+  call_runtime effect_check(borrow const str#1)
   _0: int = call_foreign "first"() -> i64
   _1: value = box int _0
   return _1

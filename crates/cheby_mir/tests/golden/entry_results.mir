@@ -19,14 +19,14 @@ bb2:
   return const i64 1
 }
 
-fn entry test(app::returns nil) [c] () -> i64 {
+fn entry test(app::returns nil) [c] () -> value {
 bb0:
   _0: value = call <test app::returns nil>()
   drop _0
-  return const i64 0
+  return const nil
 }
 
-fn entry test(app::returns ok) [c] () -> i64 {
+fn entry test(app::returns ok) [c] () -> value {
 bb0:
   _0: value = call <test app::returns ok>()
   _1: int = read_tag _0 of result
@@ -34,18 +34,16 @@ bb0:
   branch _2, bb1, bb2
 bb1:
   drop _0
-  return const i64 0
+  return const nil
 bb2:
   _3: value = field _0.0 of ctor Err
   dup _3
   drop _0
   _4: value = call std::string::show(_3)
-  call_foreign "cheby_io_eprintln"(borrow _4) -> void
-  drop _4
-  return const i64 1
+  return _4
 }
 
-fn entry test(app::returns an error without show) [c] () -> i64 {
+fn entry test(app::returns an error without show) [c] () -> value {
 bb0:
   _0: value = call <test app::returns an error without show>()
   _1: int = read_tag _0 of result
@@ -53,16 +51,14 @@ bb0:
   branch _2, bb1, bb2
 bb1:
   drop _0
-  return const i64 0
+  return const nil
 bb2:
   _3: value = field _0.0 of ctor Err
   dup _3
   drop _0
   _4: value = call_runtime debug(borrow _3)
   drop _3
-  call_foreign "cheby_io_eprintln"(borrow _4) -> void
-  drop _4
-  return const i64 1
+  return _4
 }
 
 fn trampoline 0 [c] (_0: value) -> value {

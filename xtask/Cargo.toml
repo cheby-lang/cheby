@@ -10,6 +10,7 @@ publish = false
 [dependencies]
 cheby_bench_gen.workspace = true
 cheby_diag.workspace = true
+cheby_driver.workspace = true
 cheby_syntax.workspace = true
 cheby_test_support.workspace = true
 clap.workspace = true

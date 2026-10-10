@@ -10,7 +10,8 @@
 //!   runtime-defined kinds).
 //! - Values: [`values`] (building and reading uniform words), [`string`]
 //!   (`String` and `Bytes` objects), [`generic`] (structural equality,
-//!   hashing and debug text).
+//!   hashing and debug text), [`desc`] (type descriptors and the builtin
+//!   nominal descriptors).
 //! - Running code: [`panic`](mod@panic), [`ctx`], [`entry`] (entries, the
 //!   current entry, exit statuses), [`callback`] (kernels calling
 //!   closures), [`consteval`] (constant evaluation's runtime side).
@@ -28,6 +29,7 @@ pub mod callback;
 #[doc(hidden)]
 pub mod consteval;
 pub mod ctx;
+pub mod desc;
 pub mod entry;
 mod env;
 pub mod generic;

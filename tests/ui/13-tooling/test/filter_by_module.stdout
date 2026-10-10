@@ -1,0 +1,5 @@
+test app::util "util first" ... ok
+test app::util "util second" ... ok
+test app::util::text "text" ... ok
+
+test result: ok. 3 passed; 0 failed; 2 filtered out

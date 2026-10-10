@@ -1,0 +1,16 @@
+// @mode: check-fail
+// @decisions: D-511, D-533, D-535
+//! A cycle through a function call is found while constants are
+//! evaluated: the constant that needs its own value is E0069 (§4.5).
+
+import std::io
+
+const limit: Int = twice_limit() / 2
+
+fn twice_limit() -> Int {
+  limit * 2
+}
+
+fn main() {
+  io::println("main ran: {limit}")
+}

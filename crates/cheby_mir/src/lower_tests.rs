@@ -578,10 +578,11 @@ fn reachability_follows_dictionaries_constants_and_operators() {
     );
 }
 
-/// A `Result` main whose error's `show` needs dictionaries waits for
-/// W3-A (E0038 at `main`); one printed by debug text has its thunk.
+/// A `Result` main whose error's `show` needs the dictionary of a `dyn`
+/// value waits for W4-A (E0038 at `main`); one printed by debug text has
+/// its thunk. (Closed dictionaries are static: `dict::tests`.)
 #[test]
-fn result_mains_with_dictionaries_are_unsupported() {
+fn result_mains_with_dyn_dictionaries_are_unsupported() {
     let f = fixture();
     let deps_list = [MODULE];
     let mut set = InterfaceSet::new(builtin::interface(&f.globals));
@@ -625,7 +626,8 @@ fn result_mains_with_dictionaries_are_unsupported() {
     assert_eq!(
         got,
         [(
-            "errors whose `show` needs interface dictionaries are not supported yet".to_owned(),
+            "errors whose `show` needs the dictionary of a `dyn` value are not supported yet"
+                .to_owned(),
             sp(f.file(), MAIN)
         )]
     );
@@ -875,7 +877,9 @@ fn external_wrappers_box_scalar_results() {
             lowered.function("app", &format!("app::{name}")),
             format!(
                 "fn app::{name}() -> value check str#0 {{\n  \
-                 str#0 = \"src/main.cheby:{line}:4\"\nbb0:\n  \
+                 str#0 = \"src/main.cheby:{line}:4\"\n  \
+                 str#1 = \"{name}\"\nbb0:\n  \
+                 call_runtime effect_check(borrow const str#1)\n  \
                  _0: {repr} = call_foreign \"{name}\"() -> {ctype}\n  \
                  _1: value = box {repr} _0\n  return _1\n}}\n"
             )
@@ -885,7 +889,9 @@ fn external_wrappers_box_scalar_results() {
         lowered.function("app", "app::say"),
         r#"fn app::say(_0: value) -> value check str#0 {
   str#0 = "src/main.cheby:44:4"
+  str#1 = "say"
 bb0:
+  call_runtime effect_check(borrow const str#1)
   call_foreign "say"(borrow _0) -> void
   drop _0
   return const nil

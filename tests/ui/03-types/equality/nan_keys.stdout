@@ -1,0 +1,5 @@
+[NaN, 0.0, 1.5]
+[(NaN, "a"), (NaN, "b"), (-0.0, "a")]
+[Reading { sensor: "s", value: NaN }, Reading { sensor: "t", value: NaN }]
+[NaN, -0.0]
+map::from_list([(0.0, 3), (NaN, 2)]) [Some(2), Some(3)]

@@ -214,6 +214,11 @@ codes! {
     // Declarations (chapter 4).
     E0073 Error 73 INVALID_TEST_RESULT "test body whose type is neither `Nil` nor `Result<Nil, E>`";
     E0074 Error 74 LESS_VISIBLE_IN_SIGNATURE "signature that mentions a type or interface less visible than its item";
+    // Constant evaluation (§4.5, §13.9, D-533).
+    E0075 Error 75 CONSTANT_PANICKED "constant whose initializer panicked during evaluation";
+    E0076 Error 76 CONSTANT_LIMIT "constant whose evaluation exceeded its time or memory limit";
+    E0077 Error 77 CONSTANT_EFFECT "constant whose evaluation reached an external function or effect it may not use";
+    E0078 Error 78 CONSTANT_OUT_OF_JS_RANGE "constant that exists on `js` and holds an `Int` outside the JS safe range";
     // Warnings.
     W0001 Warning 1 TUPLE_SHAPE "tuple type that hides meaning";
     W0002 Warning 2 UNUSED_BINDING "unused local binding or parameter";

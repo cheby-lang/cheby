@@ -569,8 +569,9 @@ fn result_main_prints_errors_by_show() {
     assert!(main.contains("return const i64 0"), "{main}");
 }
 
-/// A test returning `Nil` exits 0; one returning `Result` reports an
-/// `Err` like `main`, by debug text without `Show`.
+/// A test that passes returns the static `Nil`; one returning `Result`
+/// returns the text of an `Err`, made like `main`'s (by debug text
+/// without `Show`), and prints nothing (D-541, GAP(test-err-thunk)).
 #[test]
 fn test_entries_by_result() {
     let l = entries();
@@ -581,19 +582,18 @@ fn test_entries_by_result() {
         .collect();
     assert_eq!(tests.len(), 3, "{dump}");
     assert!(!tests[0].contains("read_tag"), "{}", tests[0]);
-    assert!(tests[0].contains("return const i64 0"), "{}", tests[0]);
+    assert!(tests[0].contains("-> value"), "{}", tests[0]);
+    assert!(tests[0].contains("return const nil"), "{}", tests[0]);
     assert!(tests[1].contains("read_tag _0 of result"), "{}", tests[1]);
     assert!(tests[1].contains("call std::string::show("), "{}", tests[1]);
+    assert!(tests[1].contains("return const nil"), "{}", tests[1]);
+    assert!(tests[1].contains("return _4"), "{}", tests[1]);
     assert!(
         tests[2].contains("call_runtime debug(borrow _3)"),
         "{}",
         tests[2]
     );
-    assert!(
-        tests[2].contains("call_foreign \"cheby_io_eprintln\""),
-        "{}",
-        tests[2]
-    );
+    assert!(!tests[2].contains("cheby_io_eprintln"), "{}", tests[2]);
     // Every entries unit carries trampolines 0-4 (plan §4.3.4).
     for n in 0..=4 {
         assert!(dump.contains(&format!("fn trampoline {n} [c] (")), "{dump}");

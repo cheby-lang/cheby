@@ -1,0 +1,18 @@
+// @mode: run-pass
+// @command: test
+// @decisions: D-056, D-541
+//! A test marked `@target(js)` exists only on `js`, so `cheby test` on
+//! native neither runs it nor counts it as filtered out, even though it
+//! calls a function that has only a JS implementation (§12.6).
+
+@external(js, "./clock.mjs", "now")
+fn js_now() -> Int
+
+@target(js)
+test "only on js" {
+  assert js_now() >= 0
+}
+
+test "on native" {
+  assert 1 + 1 == 2
+}

@@ -1,0 +1,83 @@
+// @mode: run-pass
+// @decisions: D-033, D-047, D-252, D-538
+//! `==` and `!=` on user types: two values are equal when they have the
+//! same constructor and equal fields (§3.13). Records, positional and unit
+//! constructors, raw `Int`, `Float` and `Bool` fields, generic fields and
+//! recursive types all compare by contents, never by identity.
+
+import std::io
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+type Shape {
+  Circle { center: Point, radius: Float },
+  Square(Point, Float),
+  Empty,
+}
+
+type Pair<A, B> {
+  Pair(A, B),
+}
+
+type Tree<T> {
+  Leaf,
+  Node(Tree<T>, T, Tree<T>),
+}
+
+type Flags {
+  visible: Bool,
+  ratio: Float,
+  label: String,
+}
+
+fn same<T>(a: T, b: T) -> Bool {
+  a == b
+}
+
+fn insert(tree: Tree<Int>, value: Int) -> Tree<Int> {
+  case tree {
+    Leaf => Node(Leaf, value, Leaf)
+    Node(left, here, right) when value < here => Node(insert(left, value), here, right)
+    Node(left, here, right) => Node(left, here, insert(right, value))
+  }
+}
+
+fn main() {
+  let origin = Point { x: 0, y: 0 }
+  let also_origin = Point { y: 0, x: 0 }
+  let moved = Point { ..origin, x: 1 }
+  let records = origin == also_origin
+  let differs = origin != moved
+  io::println("records: {records} {differs}")
+  let circle = Circle { center: origin, radius: 1.0 }
+  let square = Square(origin, 1.0)
+  let variants = [
+    circle == Circle { center: also_origin, radius: 1.0 },
+    circle == square,
+  ]
+  io::println("variants: {variants:?}")
+  let units = [Empty == Empty, Empty != square]
+  io::println("units: {units:?}")
+  let nan = 0.0 / 0.0
+  let flags = Flags { visible: True, ratio: nan, label: "f" }
+  let raw = [
+    same(flags, Flags { visible: True, ratio: nan, label: "f" }),
+    same(flags, Flags { ..flags, visible: False }),
+  ]
+  io::println("raw fields: {raw:?}")
+  let pair: Pair<Option<Int>, List<String>> = Pair(Some(1), ["a"])
+  let generic = [
+    pair == Pair(Some(1), ["a"]),
+    pair == Pair(None, ["a"]),
+    pair != Pair(Some(1), []),
+  ]
+  io::println("generic: {generic:?}")
+  let left = insert(insert(insert(Leaf, 2), 1), 3)
+  let right = insert(insert(insert(Leaf, 2), 3), 1)
+  let other = insert(insert(insert(Leaf, 1), 2), 3)
+  let trees = [left == right, left == other]
+  io::println("recursive: {trees:?}")
+}

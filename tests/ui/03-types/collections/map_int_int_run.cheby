@@ -1,0 +1,70 @@
+// @mode: run-pass
+// @decisions: D-039, D-093, D-329, D-484, D-538
+//! `Map<Int, Int>`: building, lookups, updates that leave older versions
+//! alone, removal down to the empty map, `upsert`, and `==` that ignores
+//! the order of entries (§3.8, §3.13). Output is sorted, since the order
+//! of entries changes between runs (D-093).
+
+import std::int
+import std::io
+import std::list
+import std::map
+import std::map::{Map}
+import std::string
+
+fn show(m: Map<Int, Int>) -> String {
+  let pairs = list::sort_with(map::to_list(m), fn((a, _), (b, _)) { int::compare(a, b) })
+  string::join(list::map(pairs, fn((key, value)) { "{key}={value}" }), ", ")
+}
+
+fn bump(previous: Option<Int>) -> Int {
+  case previous {
+    Some(n) => n + 1
+    None => 1
+  }
+}
+
+fn main() {
+  let squares = map::from_list(list::map(list::range(0, 8), fn(n) { (n, n * n) }))
+  io::println(show(squares))
+  let seven = map::get(squares, 7)
+  let missing = map::get(squares, 70)
+  let has_three = map::has_key(squares, 3)
+  io::println("get 7: {seven:?}, get 70: {missing:?}, has 3: {has_three}")
+
+  // Older versions stay as they were.
+  let bigger = map::insert(squares, 8, 64)
+  let replaced = map::insert(squares, 2, -4)
+  let smaller = map::remove(squares, 0)
+  io::println(show(bigger))
+  io::println(show(replaced))
+  io::println(show(smaller))
+  io::println(show(squares))
+
+  // The last value wins for a repeated key (D-329).
+  let repeated = map::from_list([(1, 10), (2, 20), (1, 11)])
+  io::println(show(repeated))
+
+  // `==` ignores order; sizes and values must match.
+  let backwards = map::from_list(list::reverse(map::to_list(squares)))
+  let same = squares == backwards
+  let differs = squares == replaced
+  let longer = squares == bigger
+  io::println("equal: {same}, value differs: {differs}, size differs: {longer}")
+
+  // `upsert` calls its function once per call (D-484).
+  let counts = list::fold(list::range(0, 1000), map::new(), fn(found, n) {
+    map::upsert(found, n % 7, bump)
+  })
+  io::println(show(counts))
+
+  // Many entries, then every one removed again.
+  let big = list::fold(list::range(0, 100000), map::new(), fn(m, n) { map::insert(m, n * 7919, n) })
+  let size = map::size(big)
+  let total = map::fold(big, 0, fn(sum, _, value) { sum + value })
+  let found = map::get(big, 99999 * 7919)
+  let emptied = list::fold(list::range(0, 100000), big, fn(m, n) { map::remove(m, n * 7919) })
+  let empty = map::is_empty(emptied)
+  let none_left = emptied == map::new()
+  io::println("size: {size}, total: {total}, last: {found:?}, emptied: {empty} {none_left}")
+}

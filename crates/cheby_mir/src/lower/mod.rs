@@ -189,10 +189,6 @@ impl Unsupported {
 /// of top-level functions used as values, static objects and the
 /// trampoline arities that kernels calling back into Cheby need.
 #[derive(Debug, Default)]
-#[expect(
-    dead_code,
-    reason = "closures and trampolines come with W2-C and W2-A (plan §4.2); the wave-2 IR steward removes this"
-)]
 pub(crate) struct Pending {
     /// Functions made while lowering the current item, in creation
     /// order; [`lower_items`] puts them right after the item.
@@ -201,16 +197,15 @@ pub(crate) struct Pending {
     closures: BTreeMap<DefId, u32>,
     /// Top-level functions whose [`FnKey::ValueShim`] the unit defines.
     shims: BTreeSet<DefId>,
+    /// The [`FnKey::TupleDictFn`] codes the unit defines, by interface
+    /// function and arity (D-167).
+    tuple_fns: BTreeSet<(DefId, u32)>,
     /// In [`StaticId`] order.
     statics: Vec<StaticObject>,
     /// Arities of the trampolines the program needs (plan §4.3.4).
     trampolines: BTreeSet<u32>,
 }
 
-#[expect(
-    dead_code,
-    reason = "the API of plan §4.2 for wave 2 and 3's lowering files; the IR steward removes this once all are used"
-)]
 impl Pending {
     /// Adds a function made while lowering the current item, such as a
     /// closure body.
@@ -235,6 +230,12 @@ impl Pending {
     /// Asks for the [`FnKey::ValueShim`] of `def` in this unit (D-453).
     pub(crate) fn request_shim(&mut self, def: DefId) {
         self.shims.insert(def);
+    }
+
+    /// Asks for the [`FnKey::TupleDictFn`] of `iface_fn` for tuples of
+    /// `arity` elements in this unit (D-167).
+    pub(crate) fn request_tuple_fn(&mut self, iface_fn: DefId, arity: u32) {
+        self.tuple_fns.insert((iface_fn, arity));
     }
 
     /// Adds a static object and returns its id (its `id` field is
@@ -274,11 +275,19 @@ impl Pending {
 
     /// Records that a kernel may call a closure of `arity` arguments back
     /// through a trampoline (plan §4.3.4).
+    #[expect(
+        dead_code,
+        reason = "entries carry trampolines 0-4 (D-561); kept for a unit that records its own"
+    )]
     pub(crate) fn need_trampoline(&mut self, arity: u32) {
         self.trampolines.insert(arity);
     }
 
     /// The trampoline arities recorded so far.
+    #[expect(
+        dead_code,
+        reason = "entries carry trampolines 0-4 (D-561); kept for a unit that records its own"
+    )]
     pub(crate) const fn trampolines(&self) -> &BTreeSet<u32> {
         &self.trampolines
     }
@@ -435,11 +444,8 @@ fn lower_item(
             body::lower_body(FnKey::Item(f.def), f.span, body, dicts, cx, pending)
         }
         // Only a JS external: the function does not exist on native
-        // (§12.5), which only the cross-target check (C12) can reject.
-        (None, None) => Err(LowerError::Unsupported(vec![not_supported(
-            f.span,
-            "functions without an `@external(native, …)` implementation",
-        )])),
+        // (§12.5). Only a constant's initializer can reach it here.
+        (None, None) => external::lower_js_only(f, sig, cx),
     }
 }
 
@@ -464,14 +470,27 @@ fn finish_unit(
     unit: UnitKind,
     mut functions: Vec<Function>,
     layouts: Vec<LayoutDesc>,
-    pending: Pending,
+    mut pending: Pending,
     cx: &LowerCx<'_>,
 ) -> Result<MirModule, Ice> {
     if !pending.functions.is_empty() {
         return Err(Ice::new("pending functions outside of an item"));
     }
+    // The runtime calls a type's `@std_hooks` through their static
+    // function values, which the type's own unit defines (D-482), when
+    // the hooks are lowered (reachability adds them, D-510).
+    for hooks in layouts.iter().filter_map(|l| l.hooks) {
+        for def in hooks {
+            if functions.iter().any(|f| f.key == FnKey::Item(def)) {
+                pending.shims.insert(def);
+            }
+        }
+    }
     for &def in &pending.shims {
         functions.push(closure::value_shim(def, cx)?);
+    }
+    for &(iface_fn, arity) in &pending.tuple_fns {
+        functions.push(dict::tuple_fn(iface_fn, arity, cx)?);
     }
     let statics = pending.statics;
     let mut m = Mentions::default();

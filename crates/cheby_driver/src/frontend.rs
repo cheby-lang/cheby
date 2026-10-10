@@ -42,7 +42,7 @@ use cheby_resolve::{
 };
 use cheby_syntax::SyntaxTree;
 use cheby_types::{
-    PackageModule, TypesInput, build_interface, check_bodies, package_warnings, thir,
+    PackageModule, Tests, TypesInput, build_interface, check_bodies_with, package_warnings, thir,
 };
 
 use crate::{Error, Package, parse_file, std_lib};
@@ -58,6 +58,9 @@ pub(crate) struct Frontend {
     pub order: Vec<ModuleId>,
     /// The first binding of each native symbol, in build order.
     pub natives: BTreeMap<Box<str>, NativeBinding>,
+    /// The local package's `targets` (§13.3), which narrow the targets of
+    /// every local item (D-190); std items exist on every target.
+    pub package_targets: Targets,
 }
 
 /// An `@external(native, "symbol")` binding of a symbol.
@@ -250,6 +253,9 @@ pub(crate) enum Mode {
     /// Building to run or dump: the whole-package warnings are skipped
     /// (D-266, D-516).
     Build,
+    /// Testing the standard library itself (D-479, D-542): like `Build`,
+    /// and the `test` blocks of std modules are checked and kept in THIR.
+    StdTests,
 }
 
 /// Runs name resolution and type checking over `package`, which has no
@@ -468,7 +474,12 @@ fn run_inner(
         let (iface, diags) = build_interface(&types)?;
         diagnostics.extend(diags);
         bind_natives(&resolved, &iface, &globals, &mut natives, diagnostics);
-        let (thir, diags) = check_bodies(&types, &iface)?;
+        let tests = if mode == Mode::StdTests {
+            Tests::All
+        } else {
+            Tests::SkipStd
+        };
+        let (thir, diags) = check_bodies_with(&types, &iface, tests)?;
         diagnostics.extend(diags);
         set.insert(Arc::new(iface))?;
         if let Some(slot) = checked.get_mut(index(id)?) {
@@ -521,6 +532,7 @@ fn run_inner(
         checked,
         order: built,
         natives,
+        package_targets: local_targets,
     })
 }
 

@@ -122,6 +122,10 @@ pub struct Decls {
     /// function values. Defined once; a later unit naming the same symbol
     /// uses the existing object.
     statics: FxHashMap<String, DataId>,
+    /// What each static object of a unit was defined with, by symbol
+    /// ([`static_print`]), so a later unit that names the symbol with other
+    /// contents is an internal error rather than a silent reuse.
+    static_prints: FxHashMap<String, String>,
     /// The runtime's builtin nominal descriptors `cheby_rt_desc_<name>`
     /// imported so far (D-523), by symbol.
     builtin_descs: FxHashMap<BuiltinDesc, DataId>,
@@ -148,6 +152,31 @@ impl std::fmt::Debug for Decls {
             .field("statics", &self.statics.len())
             .finish_non_exhaustive()
     }
+}
+
+/// The contents of a static object in a form that does not depend on its
+/// unit: its layout, strings and fields, with a reference to another static
+/// of the unit written as that static's symbol. Two units that define one
+/// symbol must give it the same print (D-523).
+fn static_print(unit: &MirModule, object: &StaticObject) -> String {
+    let mut print = format!("{:?} {:?} [", object.layout, object.strings);
+    for field in &object.fields {
+        match field {
+            Const::Static(id) => match unit.static_object(*id) {
+                Some(other) => {
+                    let _ = write!(print, "{}, ", Decls::static_symbol(other));
+                }
+                None => {
+                    let _ = write!(print, "{field:?}, ");
+                }
+            },
+            other => {
+                let _ = write!(print, "{other:?}, ");
+            }
+        }
+    }
+    print.push(']');
+    print
 }
 
 /// Whether a second unit may declare `key` again: the functions that
@@ -246,6 +275,7 @@ impl Decls {
             layouts: FxHashMap::default(),
             consts: FxHashMap::default(),
             statics: FxHashMap::default(),
+            static_prints: FxHashMap::default(),
             builtin_descs: FxHashMap::default(),
             names: FxHashMap::default(),
             pending_strings: Vec::new(),
@@ -299,6 +329,17 @@ impl Decls {
     #[must_use]
     pub fn const_slot(&self, def: DefId) -> Option<DataId> {
         self.consts.get(&def).copied()
+    }
+
+    /// The static function value `cb$fnval$…` of `def` (D-523), if a
+    /// compiled unit declared it; `unit` names `def`.
+    ///
+    /// # Errors
+    ///
+    /// An ICE if `unit` does not name `def`.
+    pub fn fn_value(&self, unit: &MirModule, def: DefId) -> Result<Option<DataId>, CodegenError> {
+        let symbol = mangle::item(Kind::FnVal, unit.name(def)?);
+        Ok(self.statics.get(&symbol).copied())
     }
 
     pub(crate) fn string(&self, key: FnKey, id: StrId) -> Result<DataId, CodegenError> {
@@ -698,6 +739,17 @@ impl Decls {
         for def in defs {
             self.declare_fn_value(module, unit, def)?;
         }
+        // The `@std_hooks` functions of the unit's own types, which the
+        // JIT registers with the runtime's layout table (D-482). Their
+        // value shims come from lowering; a hook without one is skipped,
+        // and its type then compares and prints structurally.
+        for desc in &unit.layouts {
+            for def in desc.hooks.into_iter().flatten() {
+                if self.funcs.contains_key(&FnKey::ValueShim(def)) {
+                    self.declare_fn_value(module, unit, def)?;
+                }
+            }
+        }
         for desc in descs {
             if !self.builtin_descs.contains_key(&desc) {
                 let id = self.data(module, &builtin_desc_symbol(desc), Linkage::Import, false)?;
@@ -752,6 +804,19 @@ impl Decls {
         let mut ids = Vec::with_capacity(unit.statics.len());
         for object in &unit.statics {
             let symbol = Self::static_symbol(object);
+            let print = static_print(unit, object);
+            match self.static_prints.get(&symbol) {
+                Some(earlier) if *earlier != print => {
+                    return Err(CodegenError::ice(format!(
+                        "the static `{symbol}` is defined twice with different contents: \
+                         {earlier} and {print}"
+                    )));
+                }
+                Some(_) => {}
+                None => {
+                    self.static_prints.insert(symbol.clone(), print);
+                }
+            }
             let id = if let Some(&id) = self.statics.get(&symbol) {
                 id
             } else {

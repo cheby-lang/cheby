@@ -1,0 +1,31 @@
+// @mode: run-pass
+// @decisions: D-093, D-538, D-539
+//! A constant may hash and compare values that nest maps a hundred
+//! thousand levels deep: constant evaluation walks them on worklists, so
+//! the compiler's stack never limits how deep a constant's data is
+//! (§3.13, §4.5).
+
+import std::io
+import std::list
+import std::map
+import std::map::{Map}
+
+type Tree {
+  Leaf,
+  Branch(Map<Int, Tree>),
+}
+
+fn build(n: Int, acc: Tree) -> Tree {
+  case n {
+    0 => acc
+    _ => build(n - 1, Branch(map::from_list([(n, acc)])))
+  }
+}
+
+const distinct: Int = list::length(list::unique([build(100_000, Leaf), build(100_000, Leaf)]))
+
+const same: Bool = build(100_000, Leaf) == build(100_000, Leaf)
+
+fn main() {
+  io::println("distinct: {distinct}, equal: {same}")
+}

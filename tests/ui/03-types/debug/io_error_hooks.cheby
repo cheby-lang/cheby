@@ -1,0 +1,27 @@
+// @mode: run-pass
+// @decisions: D-342, D-345, D-368, D-482
+//! `io::Error` compares, hashes and prints through its `@std_hooks`:
+//! two "not found" errors are `==` and hash equally, and `{e:?}` shows
+//! the text of its `show`, never its internal fields (§3.13, D-345).
+
+import std::io
+import std::list
+
+fn error_of(path: String) -> io::Error {
+  let assert Err(error) = io::read_file(path)
+  error
+}
+
+fn main() {
+  let first = error_of("no/such/file.txt")
+  let second = error_of("another/missing/file.txt")
+  io::println("{first:?}")
+  let same = first == second
+  io::println("equal: {same}")
+  let result: Result<String, io::Error> = Err(first)
+  io::println("{result:?}")
+  let pair = (second, 1)
+  io::println("{pair:?}")
+  let kept = list::length(list::unique([first, second, first]))
+  io::println("distinct errors: {kept}")
+}
