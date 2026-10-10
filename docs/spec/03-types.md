@@ -381,15 +381,17 @@ Every type has built-in debug printing. Every type also has built-in structural 
 - Sorted collections are equal when they have the same entries ([§3.8](#38-list-map-and-set)). Insertion-ordered collections are equal only when they have the same entries in the same order, and their hash covers the order (D-343).
 - Strings are equal when they have the same sequence of scalar values.
 - Floats use reflexive equality ([§3.3.2](#332-float)) (D-069).
-- Two `dyn I` values are equal when they hold values of the same type, including all type arguments, and those values are equal ([§8.6.1](08-interfaces.md#861-type-descriptors)) (D-236).
+- Two `dyn I` values are equal when they hold values of the same type, including all type arguments, and those values are equal ([§8.6.1](08-interfaces.md#861-type-descriptors)) (D-236). Their descriptors are compared by structure, never by address (D-530).
 - Both operands must have the same type. Comparing values of different types is a compile error.
 - If a comparison reaches a function value or a handle (a `Sender`, `Receiver`, fiber or scope value, or a value of an external type), it panics (D-070, D-189, D-233). Identity is never compared ([§9.1](09-memory-model.md#91-values-and-sharing)). When the compiler knows statically that a compared type contains a function type or a handle type, it emits a warning (D-070, D-233). It looks through tuples, built-in collections and the fields of every constructor of a named type, with the type arguments in place. It stops at type parameters of the enclosing item, at `dyn` values and at standard-library types that compare through their own functions, and it handles recursive types (D-518).
 
-**Hashing** is consistent with equality: equal values hash equally. A `dyn` value's hash covers its type as well as its value (D-236). Hashes are seeded per process (D-093), so hash values are not stable across runs and are not exposed as a stable API. Hashing panics on the same values as equality, so a value that contains a function or a handle cannot be a `Map` key or a `Set` element: inserting or looking it up panics (D-233).
+**Hashing** is consistent with equality: equal values hash equally. A `dyn` value's hash combines the hash of its descriptor with the hash of its value (D-236, D-530). A map or set hashes its entries independently of their order, and two maps or sets built with different seeds, such as one from a constant and one built at run time, compare and hash by their entries alone (D-538). Hashes are seeded per process (D-093), so hash values are not stable across runs and are not exposed as a stable API. Hashing panics on the same values as equality, so a value that contains a function or a handle cannot be a `Map` key or a `Set` element: inserting or looking it up panics (D-233).
 
 **Debug printing** produces a textual representation of any value of any type (D-233), used by `{x:?}` interpolation ([§5.3.2](05-expressions.md#532-string-interpolation)) and by `assert` failure messages ([§11.5](11-errors-and-panics.md#115-assert)).
 
 The debug format is Rust-like (D-134): `Point { x: 1.0, y: 2.0 }`, `Some(3)`, `[1, 2]`, `"text"`. It shows the fields of opaque types from other packages too, because debug output is for developers (D-134).
+
+A `String` prints in double quotes with exactly the escapes that a string literal ([§2.5.3](02-lexical-structure.md#253-string-literals)) needs to read back as the same text: `\"`, `\\`, `\n`, `\t`, `\r`, `\{` for `{`, and `\u{…}` for every other control character. Every other character is written as itself (D-531). Debug text of a string can therefore be pasted into a test as a literal.
 
 Some standard-library types print differently (D-342):
 
@@ -411,7 +413,7 @@ Placeholders never show identity, addresses or contents, so identity stays unobs
 
 `Order` is the built-in ADT `Less | Equal | Greater`. The comparison operators `< <= > >=` are defined through the `compare` function of the operand type ([§8.7](08-interfaces.md#87-operator-interfaces)) (D-047). The following built-in types have built-in `compare` functions:
 
-- The numeric types. On `Float` and `F32`, `compare` is a total order consistent with `==` ([§3.3.2](#332-float)): `-0.0` and `0.0` compare `Equal`, and all NaNs compare `Equal` to each other and `Greater` than every other float (D-135). This keeps sorting and sorted collections sound.
+- The numeric types. On `Float` and `F32`, `compare` is a total order consistent with `==` ([§3.3.2](#332-float)): `-0.0` and `0.0` compare `Equal`, and all NaNs compare `Equal` to each other and `Greater` than every other float (D-135). This keeps sorting and sorted collections sound. The comparison operators follow this order too, not IEEE comparison, so `1.0 < x` is `True` when `x` is a NaN (D-527).
 - `Bool`, with `False < True` (D-136).
 - `String`, ordered by Unicode scalar values on every target (D-136).
 - Tuples and `List`, ordered lexicographically when their elements are comparable (D-136).

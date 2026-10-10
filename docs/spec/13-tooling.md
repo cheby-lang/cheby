@@ -7,11 +7,11 @@ Cheby ships as one `cheby` binary that contains the compiler, runtime, REPL, tes
 | Command                                    | Purpose                                                            | Decisions           |
 | ------------------------------------------ | ------------------------------------------------------------------ | ------------------- |
 | `cheby new <name>`                         | create a package                                                   | D-097               |
-| `cheby check`                              | type-check the package without producing artifacts                 | D-282, D-459        |
+| `cheby check`                              | type-check the package without producing artifacts                 | D-282, D-459, D-550 |
 | `cheby build`                              | compile the package, for `native` (AOT) or `js`                    | D-006, D-007        |
 | `cheby run [module_path]`                  | compile with the JIT and run a module's `main`                     | D-007, D-019, D-137 |
 | `cheby repl`                               | interactive session ([§13.5](#135-repl))                           | D-008, D-043, D-098 |
-| `cheby test`                               | run `test` blocks ([§13.6](#136-tests))                            | D-055               |
+| `cheby test`                               | run `test` blocks ([§13.6](#136-tests))                            | D-055, D-541        |
 | `cheby fmt`                                | format source files ([§13.7](#137-formatter))                      | D-079               |
 | `cheby lsp`                                | language server over stdio ([§13.11](#1311-language-server))       | D-031               |
 | `cheby doc`                                | generate HTML documentation ([§13.10](#1310-documentation))        | D-078               |
@@ -20,11 +20,17 @@ Cheby ships as one `cheby` binary that contains the compiler, runtime, REPL, tes
 
 `cheby build --target native` produces an executable. Object files from Cranelift are linked with the system linker in early versions (`cc` or `link.exe`), and with a linker bundled in the `cheby` binary before 1.0 (D-088). `cheby build --target js` produces a directory of ES modules (D-074).
 
-`cheby check` parses and type-checks the package, including `test` blocks and the cross-target checks of [§12.6](12-targets-and-ffi.md#126-target-specific-code), and reports diagnostics like `cheby build`. Like `cheby build`, it evaluates constants ([§13.9](#139-compile-time-evaluation)) and reports their panics and exceeded limits (D-459). Until the toolchain can evaluate constants, it checks them without evaluating them ([§13.8](#138-diagnostics-and-warnings)) (D-478). It writes no output files, but may use the build cache ([§13.12.4](#13124-build-cache-and-standard-library)) (D-282).
+`cheby check` parses and type-checks the package, including `test` blocks and the cross-target checks of [§12.6](12-targets-and-ffi.md#126-target-specific-code), and reports diagnostics like `cheby build`. Like `cheby build`, it evaluates constants ([§13.9](#139-compile-time-evaluation)) and reports their panics and exceeded limits (D-459). It evaluates every constant of the local package, and none when an earlier check reported an error (D-534). Until the toolchain can evaluate constants, it checks them without evaluating them ([§13.8](#138-diagnostics-and-warnings)) (D-478). It writes no output files, but may use the build cache ([§13.12.4](#13124-build-cache-and-standard-library)) (D-282).
+
+`cheby check --target native` or `cheby check --target js` checks the code as it runs on that target only, so the cross-target check of [§12.6](12-targets-and-ffi.md#126-target-specific-code) reports only uses that would fail there. A target that the manifest's `targets` leaves out is a tool error, such as "the package does not target `js`" (D-550).
 
 `cheby explain` prints the long explanation of a diagnostic code such as `E0012`, with examples and fixes ([§13.8](#138-diagnostics-and-warnings)) (D-420).
 
 Every command takes a global `--color=auto|always|never` flag, which says whether diagnostics and other errors are colored ([§13.8](#138-diagnostics-and-warnings)) (D-467).
+
+`cheby check`, `cheby run`, `cheby test` and `cheby repl` accept `--deny-warnings`, which turns warnings into errors ([§13.8](#138-diagnostics-and-warnings)) (D-080, D-549).
+
+`-j N` or `--jobs N` sets the number of worker threads for the build graph and code generation. The default is the available parallelism. Output never depends on it ([§13.12.6](#13126-deterministic-builds)) (D-264, D-551).
 
 `cheby run` runs the `main` of the module named by its module path argument, for example `cheby run my_app::tools::migrate`. Without an argument it runs the root module's `main` (D-137). `main` may have any visibility, including `priv` (D-163). A module path that is malformed, names no module of the package, or names a module without `main` is a tool error (D-464). Compile errors are reported first, and then nothing runs. Warnings are printed to standard error before the program starts (D-464).
 
@@ -69,7 +75,7 @@ time-limit = "10s"
 memory-limit = "1GiB"
 ```
 
-Here `json` and `json_next` are majors 1 and 2 of one repository, which are two different packages, and `other_json` is a different repository and so a different package, whatever its own name is ([§7.1](07-modules-and-packages.md#71-packages), D-238). The spelling of the `[const-eval]` table is illustrative.
+Here `json` and `json_next` are majors 1 and 2 of one repository, which are two different packages, and `other_json` is a different repository and so a different package, whatever its own name is ([§7.1](07-modules-and-packages.md#71-packages), D-238).
 
 - `name` is the package name, a `LOWER` identifier ([§7.1](07-modules-and-packages.md#71-packages)). It must not be `std`.
 - `version` is a semantic version (D-097).
@@ -78,8 +84,8 @@ Here `json` and `json_next` are majors 1 and 2 of one repository, which are two 
 - Each dependency is keyed by the name used in import paths: the key is the first segment of the dependency's module paths in this package, as in `import json_next::decode` (D-238). In v1 a dependency is a git URL plus a `tag` or a commit `rev` (D-044, D-097).
 - A key must be a `LOWER` identifier, must not be `std` and must differ from the package's own `name`. Keys are local to each manifest: two packages may use different keys for the same dependency, and the same key for different ones. Renaming a dependency is just choosing its key, so the dependency's own `name` never has to be unique in a build (D-192, D-238).
 - The dependency table is designed so that a later registry form, such as `json = "1.2"`, can be added without changing existing entries (D-044).
-- The optional compile-time evaluation limits ([§13.9](#139-compile-time-evaluation)) can be raised or lowered for the package (D-195).
-- The top-level keys are exactly `name`, `version`, `description`, `licences`, `targets`, `[dependencies]` and `[const-eval]`, and a dependency has only `git`, `tag` and `rev`. Any other key is a compile error, so a misspelled key such as `verison` is never ignored silently. The contents of `[const-eval]` are not checked until its spelling is settled (D-444).
+- The optional `[const-eval]` table raises or lowers the compile-time evaluation limits of [§13.9](#139-compile-time-evaluation) for the package (D-195). `time-limit` is an integer followed by `ms` or `s`, such as `"10s"`, and `memory-limit` is an integer followed by `KiB`, `MiB` or `GiB`, such as `"1GiB"` (D-536).
+- The top-level keys are exactly `name`, `version`, `description`, `licences`, `targets`, `[dependencies]` and `[const-eval]`, a dependency has only `git`, `tag` and `rev`, and `[const-eval]` has only `time-limit` and `memory-limit`. Any other key is a compile error, so a misspelled key such as `verison` is never ignored silently (D-444, D-536). A value of the wrong form in `[const-eval]` is a compile error too (D-536).
 
 ## 13.4 Dependencies and lockfile
 
@@ -106,7 +112,7 @@ A central registry may be added later. Its introduction must not break git depen
 The REPL accepts (D-098):
 
 - expressions, whose value is printed with its type,
-- `let` and `let assert` statements, whose bindings stay available for the rest of the session,
+- `let` and `let assert` statements, which are evaluated once and whose bindings stay available as session values for the rest of the session (D-547),
 - declarations: `fn`, `type`, type aliases, `interface` and `const`,
 - `import` statements.
 
@@ -121,6 +127,9 @@ In a module, names cannot be redefined. The REPL is the one exception, because i
 - **Functions** are late-bound (D-043). Redefining a function replaces it for every existing caller, through a JIT indirection table. If the signature changes, the REPL re-checks every definition that depends on it and reports each one that no longer type-checks. Until a caller is checked and compiled again, it keeps calling the old function, never code of another signature (D-456).
 - **Foreign functions** follow the same rule. The rule that every `@external(native, …)` naming one symbol gives it the same C signature ([§12.5](12-targets-and-ffi.md#125-foreign-functions)) applies to the session's current definitions only. Replaced definitions and entries that failed to compile do not count, so a redefinition may change a foreign symbol's C signature, while two live definitions with different C signatures are still an error (D-475).
 - **Types** can be redefined. Existing values keep the old type, which is now a different type from the new one, and the REPL marks it as stale when printing (D-043).
+- **Interfaces** are redefined like types. The old interface and its implementations stay with the old values, and the new interface is a different interface (D-547).
+- **Constants** are redefined like functions without parameters. With the same type, readers see the new value. With another type, the definitions that depend on the constant are checked again (D-547).
+- **Type aliases** are replaced for later entries. Definitions already checked keep what they were checked against (D-547).
 - **`let` bindings** at the REPL prompt may be rebound with the same name, an explicit REPL exception to the no-shadowing rule, since forbidding it would make the REPL unusable (D-193). The no-shadowing rule ([§5.2.3](05-expressions.md#523-no-shadowing)) still applies inside every expression and declaration, but not between prompt entries.
 
 ### 13.5.3 Commands
@@ -132,6 +141,8 @@ In a module, names cannot be redefined. The REPL is the one exception, because i
 | `:module path`   | enter a module, so its `priv` items are visible and its imports are in scope (D-098) |
 | `:help`, `:quit` | informative                                                                          |
 
+`:type expr` prints `<expr text> : <type>`, with the type written as in diagnostics (D-546).
+
 Entering a module with `:module` makes the REPL behave as if the input were written at the end of that module: its `priv` items are accessible, package-visible items of its package are accessible (D-162), and the package boundary for `exposed` is that module's package (D-098).
 
 ### 13.5.4 Fibers in the REPL
@@ -140,6 +151,31 @@ Each REPL entry runs in its own root scope, as if it were the body of `main` ([�
 
 Detached fibers ([§10.4](10-concurrency.md#104-detached-fibers)) started from the REPL keep running after their entry finishes, until the session ends or `:reload` is used, so servers and background work can be tried interactively (D-194).
 
+### 13.5.5 Prompt, output and standard streams
+
+The REPL shows its session as follows (D-546):
+
+- The prompt is `> `, and `. ` while a bracket or a block is open.
+- An expression's value prints as `<debug text> : <type>`, with the type written as in diagnostics ([§13.8](#138-diagnostics-and-warnings)). A `Nil` value prints nothing. A value whose type a redefinition replaced prints its type followed by ` (stale)`.
+- Declarations and imports print nothing when they succeed.
+- A location in an entry is shown as `<repl:N>:line:col` in diagnostics and panic reports, with entries counted from 1.
+- On a terminal the REPL has line editing. When standard input is not a terminal, there is no line editing, and each input line is echoed after its prompt, so the output of a session reads as a transcript.
+- There is no leak check ([§10.10](10-concurrency.md#1010-program-entry-and-exit)) (D-458).
+
+_Example:_
+
+```
+> import std::list
+> list::length([1, 2, 3])
+3 : Int
+> :type list::reverse([1, 2])
+list::reverse([1, 2]) : List<Int>
+```
+
+The REPL reads its input lines through the same buffered reader of standard input as `io::read_line`. An entry that reads standard input therefore consumes the next lines of a piped session in order, and those lines are not echoed as input. On a terminal, the line editor reads the prompt lines and an entry reads the terminal directly. The REPL flushes standard output before it writes a diagnostic or a panic report to standard error, so earlier output stays ahead of the report (D-548).
+
+_Note:_ the reference implementation tests the REPL with transcripts in `tests/repl/`, in which lines that start with `> ` or `. ` are input and every other line is expected output, with standard output and standard error merged in the order of writes (D-546, D-548).
+
 ## 13.6 Tests
 
 `cheby test` compiles the package with its `test` blocks and runs them (D-055):
@@ -147,13 +183,17 @@ Detached fibers ([§10.4](10-concurrency.md#104-detached-fibers)) started from t
 - Every test runs in its own fiber, in its own scope. A test body has type `Nil` or `Result<Nil, E>`. A test passes if its body finishes without panicking and, for a `Result` body, returns `Ok` ([§4.7](04-declarations.md#47-tests)) (D-140).
 - Code examples in doc comments are compiled and run as tests ([§13.10](#1310-documentation)) (D-197).
 - Tests may run in parallel. They cannot interfere through shared state, because there is none (D-004).
-- Test output reports each failure with its panic message, which for `assert` includes both sides of a failing comparison (D-096).
-- Tests can be filtered by name and by module.
+- Test output reports each failure with its panic message, which for `assert` includes both sides of a failing comparison (D-096). A test whose body returns `Err(e)` shows `e` as `main` prints it ([§10.10](10-concurrency.md#1010-program-entry-and-exit)) (D-529).
+- Tests can be filtered by name and by module: `cheby test [FILTER] [--module PATH]`. A test's full name is `<module path> "<test name>"`. `FILTER` selects the tests whose full name contains it, and `--module` selects the tests of that module and its submodules (D-541).
 - Test blocks are not compiled into any other build (D-055). They and doc examples are compiled as separate units per module, outside the module's interface artifact and normal cached code, so editing a test never rebuilds other modules ([§13.12.3](#13123-interface-artifacts-and-recompilation)) (D-265).
 
 Test blocks are type-checked by `cheby build` as well, so a broken test is caught even when tests are not run.
 
-The standard library's `test` blocks sit next to the code they test, in its source files. A build of a user package neither checks them nor compiles them, and the warnings of [§13.8](#138-diagnostics-and-warnings) ignore them. They are checked and run when the standard library itself is tested (D-479).
+`cheby test` writes to standard output one line per test, `test <module path> "<name>" ... ok` or `... FAILED`. For each failure, a block follows that starts with `---- <module path> "<name>" ----` and holds the panic report or the `Err` text. A summary ends the output, such as `test result: ok. 3 passed; 0 failed; 1 filtered out`, with `FAILED` in place of `ok` when a test failed. The program's own output is not captured and appears as it is written. The exit status is 0 when every selected test passes, also when none is selected, and 1 when one fails. A compile error stops the command with status 1 before any test runs (D-541).
+
+_Note:_ in M1 the reference implementation runs tests one after another, by module path and then in source order. A toolchain with debug assertions counts the live objects before and after each passing test, and a difference fails that test with the message of the leak check ([§10.10](10-concurrency.md#1010-program-entry-and-exit)) (D-458, D-541).
+
+The standard library's `test` blocks sit next to the code they test, in its source files. A build of a user package neither checks them nor compiles them, and the warnings of [§13.8](#138-diagnostics-and-warnings) ignore them. They are checked and run when the standard library itself is tested (D-479). `cheby` has no flag for this. _Note:_ the reference implementation tests the standard library with `cargo xtask test-std`, one module at a time, so a module that does not build does not hide the results of the others (D-542).
 
 ## 13.7 Formatter
 
@@ -168,7 +208,7 @@ The style itself is defined by the formatter, not by this specification. Example
 
 ## 13.8 Diagnostics and warnings
 
-Compile errors stop compilation. Warnings do not, unless `--deny-warnings` is passed, which is intended for CI (D-080). An error found while reading the manifest, discovering modules, lexing, parsing or checking syntax stops the later checks, such as name resolution and type checking, so their diagnostics never come from a broken file (D-452).
+Compile errors stop compilation. Warnings do not, unless `--deny-warnings` is passed, which is intended for CI (D-080). With it, each warning is rendered as an error with its own code, as in `error[W0002]: unused binding …`, and the first one has the note "warnings are denied by `--deny-warnings`". The command then fails with exit status 1, and `cheby run` and `cheby test` run nothing (D-549). An error found while reading the manifest, discovering modules, lexing, parsing or checking syntax stops the later checks, such as name resolution and type checking, so their diagnostics never come from a broken file (D-452).
 
 The following are warnings (D-080 and the cited decisions):
 
@@ -199,9 +239,9 @@ Warnings that need the whole package, such as unused package-visible items, are 
 
 The compiler should report errors with the source span, a short explanation, and a suggested fix where one exists, for example a new name for a shadowing binding (D-062) or `{x:?}` for a type without `Show` (D-086).
 
-Every diagnostic has a code: `E` and four digits for an error, `W` and four digits for a warning. Codes are assigned in order and never reused, and a code whose check is removed stays reserved (D-419). `cheby explain <code>` prints a code's long explanation (D-420). The first codes, `E0001` to `E0037` and `W0001`, cover the lexer, the parser, the syntax checks and the reading of the manifest and module files. A rule with its own decision gets its own code, and other syntax errors share `E0013` (D-442). The codes `E0038` to `E0055` cover imports and names, attributes, types, `main` and native symbols (D-466), and `E0056` whitespace or a comment between the `-` and the digits of a negative literal (D-470). The codes `E0057` to `E0074` and `W0002` to `W0013` cover type checking, patterns, interfaces, targets and constants, and the warnings of this section (D-486). Naming and reserved-word errors (`E0006`, `E0007`) are reported once, where a name is bound or declared (D-469).
+Every diagnostic has a code: `E` and four digits for an error, `W` and four digits for a warning. Codes are assigned in order and never reused, and a code whose check is removed stays reserved (D-419). `cheby explain <code>` prints a code's long explanation (D-420). The first codes, `E0001` to `E0037` and `W0001`, cover the lexer, the parser, the syntax checks and the reading of the manifest and module files. A rule with its own decision gets its own code, and other syntax errors share `E0013` (D-442). The codes `E0038` to `E0055` cover imports and names, attributes, types, `main` and native symbols (D-466), and `E0056` whitespace or a comment between the `-` and the digits of a negative literal (D-470). The codes `E0057` to `E0074` and `W0002` to `W0013` cover type checking, patterns, interfaces, targets and constants, and the warnings of this section (D-486). The codes `E0075` to `E0078` cover the evaluation of constants (D-533). Naming and reserved-word errors (`E0006`, `E0007`) are reported once, where a name is bound or declared (D-469).
 
-While the toolchain is being built, `E0038` reports a valid construct that it cannot check or run yet (D-451). From the end of M1, the front end supports every construct, and reports `E0038` only for an import of a standard-library module that is specified or planned but not shipped, such as `std::fiber`. Paths through such an import report nothing more (D-480). The back end reports `E0038` for each construct it cannot compile yet. It compiles only what the `main` being run reaches, so code that `main` never reaches reports nothing, and it reports all its `E0038`s before compiling anything, after the front end's diagnostics (D-510). Until constants are evaluated at compile time, `cheby check` checks a constant's type, its restrictions and cycles of direct references between constants, but not its value, and `cheby run` reports `E0038` at each constant that `main` reaches (D-478). The code is retired when the toolchain ships every planned module and compiles every construct, and its explanation then says it is no longer emitted (D-480).
+While the toolchain is being built, `E0038` reports a valid construct that it cannot check or run yet (D-451). From the end of M1, the front end supports every construct, and reports `E0038` only for an import of a standard-library module that is specified or planned but not shipped, such as `std::fiber`. Paths through such an import report nothing more (D-480). The back end reports `E0038` for each construct it cannot compile yet. It compiles only what the `main` being run reaches, so code that `main` never reaches reports nothing, and it reports all its `E0038`s before compiling anything, after the front end's diagnostics (D-510). From the end of M1, the back end reports no `E0038`, and a construct it cannot compile is an internal compiler error (D-554). Until constants are evaluated at compile time, `cheby check` checks a constant's type, its restrictions and cycles of direct references between constants, but not its value, and `cheby run` reports `E0038` at each constant that `main` reaches (D-478). The code is retired when the toolchain ships every planned module and compiles every construct, and its explanation then says it is no longer emitted (D-480).
 
 Errors that are not about the program, such as an unreadable file, a missing `cheby.toml`, a misused command line or an unknown code given to `cheby explain`, have no code. They are printed as a plain `error: …` line (D-442). A broken invariant of the compiler itself is such an error too, printed as `error: internal compiler error: …` with exit status 1 (D-464).
 
@@ -247,11 +287,20 @@ Codes are listed with their explanations in [`docs/diagnostics/`](../diagnostics
 Constant initializers ([§4.5](04-declarations.md#45-constants)) are run by the compiler with the JIT (D-090). Because the language server compiles code continuously, evaluation must be bounded (ADR-0027):
 
 - Each constant's evaluation is limited to 10 seconds and 1 GiB by default. The limits can be adjusted for a package in `cheby.toml` ([§13.3](#133-manifest)). Exceeding a limit is a compile error on that constant (D-195).
+- The time limit is wall-clock time for one evaluation of a constant at the top level, including the constants it forces. It stops a loop at its next function entry or tail call, so a single long call into a standard-library kernel cannot be interrupted. The memory limit is the peak number of heap bytes live in the build while the constant is evaluated, including what kernels allocate, so a constant that builds and drops large temporaries can finish (D-536).
 - Evaluation is deterministic: it must not depend on the time, the environment, the file system or randomness, and any attempt to use them is an error (D-090).
 - The hash seed used during evaluation is not random. It is derived from the constant's identity (package, module path and name) and the content hash of what it depends on, so a constant that depends on `Map` or `Set` iteration order gets the same value on every build of the same inputs, but may get a different one when the code it depends on changes (D-269, [§13.12.6](#13126-deterministic-builds)).
 - Results are cached, so a constant is re-evaluated only when something it depends on changes.
 
-Hash-based collections (`Map`, `Set`) may appear in constants, even though the hash seed is random per process (D-093) and the constant is built in the compiler's process. The runtime rebuilds or re-seeds such maps and sets at program start, so their iteration order is still randomized per run (D-196).
+Each command evaluates the constants it needs: `cheby run` those that `main` reaches, `cheby test` those that the selected tests reach, and `cheby check` every constant of the local package. Constants of the standard library are evaluated when they are reached (D-534).
+
+Constants are evaluated in the dependency order of their initializers, with ties broken by module order and then by name. An initializer that reads a constant not yet evaluated evaluates that constant first, under that constant's own hash seed, and then goes on under its own seed. A constant that needs its own value while it is computed is a cycle ([§4.5](04-declarations.md#45-constants)). Each constant is therefore evaluated exactly once, and its value never depends on which constant reached it first (D-535).
+
+The seed of a constant is SipHash-1-3 with a zero key over the package name, the module path and the constant's name, followed by, for each module that the initializer reaches, sorted by module path and including standard-library modules, the module path and a hash of its source files. A map or set keeps the seed it was built with, so a constant may read and extend another constant's map. A constant therefore gets the same value under `cheby check`, `cheby run`, `cheby test`, the REPL and any number of threads (D-538). _Note:_ the build cache may replace the hash of the source files with the hash of the interface (D-538).
+
+A constant that fails to evaluate is a compile error at the constant's name. When an initializer panics, the error shows the panic's message and location in a note, and evaluation never prints a panic report of its own (D-533).
+
+Hash-based collections (`Map`, `Set`) may appear in constants, even though the hash seed is random per process (D-093) and the constant is built with its own seed. Before a program, a test or a REPL entry runs, every `Map` and `Set` in the values of the constants is rebuilt with the per-process seed, so their iteration order is still randomized per run (D-196). The rebuild is one pass over all constants together, so a collection that two constants share stays one collection. `cheby check` runs no program, so it skips the rebuild (D-539).
 
 ## 13.10 Documentation
 

@@ -57,7 +57,7 @@ M5 is listed as a milestone so it has exit criteria, but its work starts as soon
 
 ## Plan decisions
 
-Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-plan), D-284 onward in [M0 foundation](../decisions/LOG.md#2026-10-04-m0-foundation), D-418 onward in [Diagnostics](../decisions/LOG.md#2026-10-06-diagnostics), and the plan-level ones of [M1 syntax layer](../decisions/LOG.md#2026-10-07-m1-syntax-layer), [M1 vertical slice](../decisions/LOG.md#2026-10-07-m1-vertical-slice), [Open items](../decisions/LOG.md#2026-10-07-open-items) and [M1 front end](../decisions/LOG.md#2026-10-10-m1-front-end):
+Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-plan), D-284 onward in [M0 foundation](../decisions/LOG.md#2026-10-04-m0-foundation), D-418 onward in [Diagnostics](../decisions/LOG.md#2026-10-06-diagnostics), and the plan-level ones of [M1 syntax layer](../decisions/LOG.md#2026-10-07-m1-syntax-layer), [M1 vertical slice](../decisions/LOG.md#2026-10-07-m1-vertical-slice), [Open items](../decisions/LOG.md#2026-10-07-open-items), [M1 front end](../decisions/LOG.md#2026-10-10-m1-front-end) and [M1 back-end plan](../decisions/LOG.md#2026-10-10-m1-back-end-plan):
 
 | Decision  | Summary                                                                                             |
 | --------- | --------------------------------------------------------------------------------------------------- |
@@ -120,6 +120,21 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-486     | Codes `E0057` to `E0074` and `W0002` to `W0013`; std modules staged until the checker handles them  |
 | D-510     | The back end lowers only what `main` reaches and reports all its E0038s before compiling            |
 | D-519     | Operator, pipe, call, field and `use` chains count toward the nesting limit of D-441                |
+| D-520     | Generated code calls fixed `cheby_rt_` helpers for strings, lists, equality, boxing and `fmod`      |
+| D-521     | Each number type has one canonical uniform shape; `U64` above 2⁶² − 1 is boxed                      |
+| D-522     | A constructor's tag is its layout id minus that of its type's first constructor                     |
+| D-523     | Static dictionaries, descriptors and function values; the new symbol kind `dict`                    |
+| D-524     | Layout ids 9-12 for dictionaries, `dyn` values and descriptors; their object shapes                 |
+| D-525     | A kernel may update a unique argument in place, `dup` it and return it                              |
+| D-526     | Kernels call Cheby closures through per-arity trampolines of the running entry                      |
+| D-542     | `cargo xtask test-std` tests std one module at a time                                               |
+| D-543     | UI tests take `.stdin` and `.args` files and the `@command` and `@flags` directives                 |
+| D-544     | Strict harness runs with `CHEBY_MILESTONE` and `CHEBY_PENDING=require`; `CHEBY_RT_POISON=1`         |
+| D-545     | M1 is judged on Linux and macOS; Windows CI builds and runs unit tests only until M6                |
+| D-551     | `-j`/`--jobs`, and `cargo xtask check-determinism` across thread counts and paths                   |
+| D-552     | Native case mapping and grapheme segmentation follow one Unicode version, checked by a test         |
+| D-553     | Correctly rounded math from a pure-Rust CORE-MATH port, verified against 200-bit references         |
+| D-554     | Bounds on foreign type parameters are checked by the front end; MIR reports no E0038 at M1 exit     |
 
 ## Open questions
 

@@ -163,7 +163,7 @@ For the built-in numeric types, both operands must have the **same type**, and t
 | `a % b`                   | remainder with the sign of `a`, panics on zero divisor (D-092)    | IEEE `fmod` (D-154) |
 | `-a`                      | checked negation, panics on overflow                              | IEEE 754 negation   |
 
-`%` on `Float` and `F32` has IEEE `fmod` semantics: the result has the sign of the dividend `a`, as for integers (D-154).
+`%` on `Float` and `F32` is `fmod`: the exact remainder of the division truncated toward zero, with the sign of the dividend `a`, as for integers (D-154, D-527). Unary `-` on a float flips its sign, so it turns `0.0` into `-0.0` and a NaN into a NaN (D-527). Float arithmetic never panics (D-069).
 
 On the JS target, every `Int` result is additionally checked against the safe-integer range ([§3.3.1](03-types.md#331-int)) (D-037).
 
@@ -188,6 +188,8 @@ let full = first + " " + last
 | `a <= b`   | `Compare::compare(a, b) != Greater` |
 | `a > b`    | `Compare::compare(a, b) == Greater` |
 | `a >= b`   | `Compare::compare(a, b) != Less`    |
+
+On `Float` and `F32`, the comparison operators therefore follow the total order of `compare` ([§3.14](03-types.md#314-ordering)), not IEEE comparison. NaNs are equal to each other and greater than every other float, and `-0.0` and `0.0` are equal, so `1.0 < x` is `True` when `x` is a NaN (D-135, D-527).
 
 ### 5.4.5 Logical operators
 

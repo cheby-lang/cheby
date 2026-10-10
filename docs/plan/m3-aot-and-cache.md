@@ -23,7 +23,7 @@ Detail level: workstreams with outcomes. This file is refined into tasks when M3
 - `ModuleInterface` (M1, B8) written to disk as the interface artifact (D-249, ADR-0044).
 - One content-addressed cache per machine, keyed by input hashes, compiler version and flags (D-255).
 - Early cutoff: a dependent is recompiled only when the hash of an interface it uses changes. Hidden dependencies of D-260 are recorded.
-- Constant values linked in as data, only their types in the interface (D-257).
+- Constant values linked in as data, only their types in the interface (D-257). A serialized image of the evaluated constants replaces M1's results made static in place (D-539), and a constant's seed may use the interface hash instead of the source hash (D-538).
 - Cache safety under concurrent `cheby` processes, since every command is its own process (D-268).
 
 ### 3.3 Cached code for `cheby run`

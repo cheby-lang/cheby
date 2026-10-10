@@ -40,7 +40,7 @@ cheby/
     repl/                 scripted REPL sessions
   bench/                  synthetic project generator and runtime benchmarks
   fuzz/                   cargo-fuzz targets: lex, parse and check
-  xtask/                  developer commands: bless, gen-bench, check-determinism
+  xtask/                  developer commands: bless, gen-bench, check-determinism, test-std, bench-compile
   docs/                   spec, ADRs, decision log, examples, plan, stdlib spec
 ```
 
@@ -148,8 +148,10 @@ A function with `@external(native, …)` lowers to a Cheby-ABI wrapper in its ow
 - Tail calls use the `tail` calling convention and `return_call` (D-015, ADR-0006).
 - Every Cheby function takes the hidden `ctx` pointer first and passes it on in every call (D-453). It starts with the combined yield and stack-limit check (D-028, D-124), which compares the stack pointer with the limit at offset 0 of `ctx`. Setting the limit to the highest address forces the next function entry into the runtime's slow path, which is how yields and the deadline of constant evaluation (D-195) will interrupt running code. In M1 it is only a stack-limit check against the entry's stack (D-457).
 - Every top-level function is called through an indirection table in JIT code (D-043). The REPL redefines through it in M1, lazy compilation uses it in M3 (D-254). A slot is identified by the item's path and its ABI signature: a redefinition with the same signature repoints the slot, and one with another signature gets a new slot, so a slot never points at code of another signature (D-456).
-- Symbols are `cb$<kind>$<module path>$<item>…`, built from paths and names only, with the kind first: `fn`, `slot`, `shim`, `fnval`, `clo`, `cinit`, `const`, `test`, `entry`, `tramp`, `str`, `ctor`, `desc` and `layout`. A REPL redefinition with a new signature appends `$r<generation>` (D-456).
-- Native symbols are resolved against the runtime and the process before any code runs. A missing one is E0053 at its `@external` (D-455).
+- Symbols are `cb$<kind>$<module path>$<item>…`, built from paths and names only, with the kind first: `fn`, `slot`, `shim`, `fnval`, `clo`, `cinit`, `const`, `test`, `entry`, `tramp`, `str`, `ctor`, `desc`, `dict` and `layout`. A REPL redefinition with a new signature appends `$r<generation>` (D-456). Every symbol of a redefined item, not only its slot, carries the item's generation when it is above 0, and `:reload` gives every item of a changed module a new generation (D-547).
+- Dictionaries, type descriptors and function values that need nothing from their caller are static objects with count 0, emitted by code generation: `cb$dict$<module path>$<name>`, `cb$desc$<module path>$<Type>` for a nominal descriptor, `cb$desc$<module path of I>$dyn$<I>` for `dyn I`, and `cb$fnval$<module path>$<item>`, a closure whose code is the shim `cb$shim$<module path>$<item>`. Builtin types have the runtime statics `cheby_rt_desc_<name>`. A static is defined once per process, and a later JIT unit that names it imports it (D-523).
+- Besides kernels, generated code calls a fixed set of runtime helpers through the C ABI: string building and equality, list pushes, appends, lengths, indexing and slices, structural equality, debug text, the effect check of constant evaluation, boxing outside the tagged range, float `%` (`fmod`) and the forcing of a constant (D-520). A helper takes `ctx` first when it allocates, may panic or may call back into Cheby code. Tagging, untagging, unboxing and the fast paths of boxing are inline.
+- Native symbols are resolved against the runtime and the process before any code runs. Every missing one is E0053 at its `@external`, sorted by position (D-455, D-532). Under `cheby check`, which compiles code only to evaluate constants, a missing symbol is bound to the stub `cheby_rt_unresolved`, and only a constant that calls it is an error (D-532).
 - The JIT imports a native symbol without a signature, as a data import whose address the call site loads and calls indirectly with its own C signature, so REPL entries, including failed ones, may bind one symbol with different signatures (D-475). AOT objects may keep typed function imports, since a program gives each symbol one signature.
 - JIT code and data live in one address-space reservation of 1 GiB per JIT, so that every PC-relative relocation reaches on x86_64 and aarch64. Pages are committed per segment as they are allocated and made read-execute or read-only when finalized (`cheby_jit::memory`).
 - In M2, calls that may panic get `try_call` landing pads with cleanup blocks shared between calls (D-077, D-262).
@@ -160,6 +162,7 @@ Native values (D-278, D-279):
 
 - A value is one 64-bit word in the uniform representation (D-021). A word with low bit 1 is a 63-bit tagged integer. A word with low bit 0 is a pointer to a heap object, or to a static object for constants (D-090).
 - Monomorphic code keeps `Int`, `Float` and sized numbers unboxed in registers, and boxes them only when they flow into the uniform representation. An `Int` outside the 63-bit range is boxed there, and a boxed `Float` is a heap object.
+- Every number has exactly one uniform shape (D-521). `Int` and `I64` are tagged when they fit in 63 bits and a boxed `Int` otherwise. `I8` to `I32` and `U8` to `U32` are always tagged, sign-extended for the signed types. `U64` is tagged up to 2⁶² − 1 and a boxed `U64` above. `Float` and `F32` are always boxed, and `Bool` is the static `True` or `False`. Word equality therefore decides `==` for tagged values.
 - `dup` and `drop` skip tagged integers with one bit test.
 - Every heap object starts with an 8-byte header:
 
@@ -183,15 +186,17 @@ Native values (D-278, D-279):
 
   ```
   1 String     2 Bytes      3 boxed Int   4 boxed Float   5 boxed F32   6 closure   7 tuple   8 boxed U64
-  9-15         reserved for runtime objects (dictionaries, dyn values, type descriptors)
+  9 dictionary 10 dyn value 11 descriptor 12 nominal descriptor         13-15 reserved
   16 Nil       17 False     18 True       19 Less         20 Equal      21 Greater
   22 Some      23 None      24 Ok         25 Err
-  26-63        reserved for collection nodes
+  26-31        list nodes   32-39         map and set nodes             40-63 reserved
   ```
 
-  Constructor tags follow declaration order. User layouts get ids from 64 on, registered in build order before the code that uses them. Generated code never embeds a user layout id, because ids come from a process-wide table: it loads the header from a per-layout data symbol, `cb$layout$<module path>$<Ctor>`, which the JIT or loader fills in at registration. The static object of a user nullary constructor, `cb$ctor$…`, gets its header filled in the same way (D-454).
+  Layout ids 9 to 12 and the collection ranges are assigned by D-524. A dictionary holds the header, its type's descriptor, one closure per function of the interface, embedded interfaces' functions first, then the dictionaries of the directly embedded interfaces. A `dyn` value holds the header, its dictionary and the value. A descriptor holds the header, a nominal descriptor and the descriptors of its type arguments, and a nominal descriptor, one static per type, holds the type's printed name and module path (D-524).
 
-- Hashing goes through one routine with a per-target hash function: keyed SipHash-1-3 on native, a keyed 32-bit hash on JS (D-281).
+  Constructor tags follow declaration order. User layouts get ids from 64 on, registered in build order before the code that uses them. Generated code never embeds a user layout id, because ids come from a process-wide table: it loads the header from a per-layout data symbol, `cb$layout$<module path>$<Ctor>`, which the JIT or loader fills in at registration. The static object of a user nullary constructor, `cb$ctor$…`, gets its header filled in the same way (D-454). The constructors of one type are registered consecutively, so a value's tag is its layout id minus the id in the `cb$layout$` word of the type's first constructor. For `Option`, `Result` and `Order` it is the layout id minus 22, 24 or 19 (D-522).
+
+- Hashing goes through one routine with a per-target hash function: keyed SipHash-1-3 on native, a keyed 32-bit hash on JS (D-281). Every non-empty map or set records the seed it was built with, a constant's own seed during constant evaluation and the per-process seed otherwise, and hashing never uses layout ids (D-538).
 
 ## 3. Runtime
 
@@ -210,11 +215,13 @@ Native values (D-278, D-279):
 | IO                     | M2        | poller, timers, blocking pool (D-042)                                                    |
 | FFI support            | M3        | `cheby.h` for foreign code (D-187)                                                       |
 
-Kernels check uniqueness at run time where Perceus cannot see inside them: an insert into a `List`, `Map` or `Set` whose count is one updates in place.
+Kernels check uniqueness at run time where Perceus cannot see inside them: an insert into a `List`, `Map` or `Set` whose count is one updates in place. The Cheby wrapper of a kernel owns its arguments and drops them after the call, and the kernel borrows them, so a kernel that sees an argument with count one may update it in place, `dup` it and return it (D-525).
+
+A kernel that calls a Cheby closure, such as `map::upsert`, does so through the runtime, which keeps a thread-local record of the running entry: its `ctx` and the trampolines that the JIT passes with the entry, one for each arity from 0 to 4. A call with more arguments is a fatal runtime error (D-526).
 
 Every entry (`main`, a test, a constant's initializer, a REPL input) runs on its own stack with a fresh execution context, the `ctx` of generated code (D-457). In M1 the stack is a dedicated thread of the requested size, at least 512 KiB, whose limit leaves 256 KiB of headroom for the runtime and foreign calls. `main` gets 64 MiB and other entries 8 MiB (D-125). A panic flushes standard output, prints its report (D-449), hands it to the host and parks the entry's thread forever. The host decides what follows: exit status 101, the next test, the next REPL input, or a compile error for a constant. OQ-P7 replaces the thread with a runtime-owned stack behind the same interface.
 
-Debug builds of the runtime count live objects. When `main` returns with status 0 or 1 and objects are still live, `cheby run` prints `error: leak check failed: …` and exits with 102, so goldens never record a leak (D-445, D-458). There is no check after a panic or in the REPL.
+Debug builds of the runtime count live objects. When `main` returns with status 0 or 1 and objects are still live, `cheby run` prints `error: leak check failed: …` and exits with 102, so goldens never record a leak (D-445, D-458). There is no check after a panic or in the REPL. `cheby test` checks each passing test the same way (D-541), and with `CHEBY_RT_POISON=1` a debug runtime poisons freed objects and stops with a fatal error when one is used again (D-544).
 
 The JS runtime in `runtime-js/` mirrors this split: JS kernels for collections and strings (D-274), a cooperative fiber scheduler, channels, selectors, timers and handle reference counting (D-100).
 

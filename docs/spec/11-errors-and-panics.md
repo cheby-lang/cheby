@@ -82,12 +82,19 @@ let assert Ok(config) = load_config("app.toml")
 let assert [first, ..] = arguments
 ```
 
-The panic report includes the source location, and its message the debug-printed value that failed to match.
+The panic report includes the source location. Its message is `` `let assert` pattern did not match ``, followed by the line `value: <debug text>`, indented by two spaces, with the debug-printed value that failed to match (D-528).
 
-An optional custom message follows `as`. It is an expression of type `String`, evaluated only when the match fails, and it is included in the panic message (D-159):
+An optional custom message follows `as`. It is an expression of type `String`, evaluated only when the match fails. The first line of the panic message is then `` `let assert` pattern did not match: `` followed by the custom message, and the value line still follows (D-159, D-528):
 
 ```cheby
 let assert Some(user) = find_user(id) as "user {id} must exist"
+```
+
+_Example:_ when `id` is `7` and `find_user` returns `None`, the panic message is:
+
+```
+`let assert` pattern did not match: user 7 must exist
+  value: None
 ```
 
 A `let assert` whose pattern is irrefutable is a warning, since a plain `let` would do (D-159). Irrefutability follows the syntactic list of [§6.1](06-patterns.md#61-pattern-syntax), so `let assert True | False = b` does not warn (D-509).
@@ -100,13 +107,23 @@ assert_stmt = "assert" expr [ "as" expr ] ;
 
 `assert expr` evaluates an expression of type `Bool` and panics if it is `False` (D-096). It may be used anywhere a statement may appear, not only in tests (D-096).
 
-When the asserted expression is a comparison (`==`, `!=`, `<`, `<=`, `>`, `>=`), the panic message shows the debug-printed values of both operands (D-096). Otherwise it shows the source text of the expression.
+A failed `assert e` has the panic message `assertion failed: <source text of e>`. When `e` is a comparison (`==`, `!=`, `<`, `<=`, `>`, `>=`), two more lines follow with the debug-printed values of both operands, labelled `left:` and `right:`. The labels are right-aligned, so `left:` is indented by two spaces and `right:` by one (D-096, D-528).
 
-An optional custom message follows `as`. It is an expression of type `String`, evaluated only when the assertion fails, and it is shown alongside the automatically printed operands of a failing comparison (D-160):
+An optional custom message follows `as`. It is an expression of type `String`, evaluated only when the assertion fails. It replaces the source text in the first line, and the operand lines of a failing comparison still follow (D-160, D-528):
 
 ```cheby
 assert list::length(items) == 3 as "expected one item per slot"
 ```
+
+_Example:_ when `items` has two elements, the panic message is:
+
+```
+assertion failed: expected one item per slot
+  left: 2
+ right: 3
+```
+
+Without the custom message, its first line is `assertion failed: list::length(items) == 3`.
 
 ```cheby
 test "parse numbers" {
@@ -148,7 +165,7 @@ panicked at src/main.cheby:5:12:
 not implemented: area of a dot
 ```
 
-`panic` without a message reports `explicit panic`, and a message given with `as` replaces it. `todo` reports `not implemented`, and `todo as m` reports `not implemented: m`. The runtime panics of [§11.8](#118-runtime-panics) report `integer overflow`, `division by zero`, `shift amount out of range`, `equality or hashing reached a function value or a handle` and `stack overflow`. Failed assertions report `assertion failed` and `` `let assert` pattern did not match ``, with the details of [§11.4](#114-let-assert) and [§11.5](#115-assert) (D-449).
+`panic` without a message reports `explicit panic`, and a message given with `as` replaces it. `todo` reports `not implemented`, and `todo as m` reports `not implemented: m`. The runtime panics of [§11.8](#118-runtime-panics) report `integer overflow`, `division by zero`, `shift amount out of range`, `equality or hashing reached a function value or a handle` and `stack overflow`. Failed assertions report `assertion failed` and `` `let assert` pattern did not match ``, with the details of [§11.4](#114-let-assert) and [§11.5](#115-assert) (D-449, D-528).
 
 ## 11.7 Panics and fibers
 

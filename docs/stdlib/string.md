@@ -8,7 +8,7 @@ pub type String
 
 String literals, `+` and interpolation are part of the language (§2.5, §5.3.2, D-067). This module is how text is measured, searched, split and changed, since a string has no indexing (§3.5).
 
-Every length, position and count in this module is in code points, and grapheme clusters appear only in `to_graphemes` and `grapheme_length` (README "Text", D-302, ADR-0050). The Unicode tables that `lowercase`, `uppercase`, `trim` and the grapheme functions need come from the one Unicode version the toolchain fixes (D-310).
+Every length, position and count in this module is in code points, and grapheme clusters appear only in `to_graphemes` and `grapheme_length` (README "Text", D-302, ADR-0050). The Unicode tables that `lowercase`, `uppercase`, `trim` and the grapheme functions need come from the one Unicode version the toolchain fixes (D-310). On native, case mapping uses the Rust standard library's tables and grapheme segmentation the `unicode-segmentation` crate, and a test asserts that both follow the same version, which is recorded here once the native runtime ships them (D-552).
 
 `String` satisfies `Add` through `add`, `Compare` through `compare` and `Show` through `show` (§8.7, §8.8).
 
@@ -592,7 +592,7 @@ There is no `from_code_points`, because joining one-code-point strings is `strin
 pub fn show(text: String) -> String
 ```
 
-Returns `text` unchanged. This makes `String` satisfy `Show`, so `"{name}"` inserts the text without quotes (§8.8). Debug printing with `{name:?}` writes it in quotes with escapes instead (§3.13).
+Returns `text` unchanged. This makes `String` satisfy `Show`, so `"{name}"` inserts the text without quotes (§8.8). Debug printing with `{name:?}` writes it in quotes instead, with the escapes a string literal needs to read back as the same text (§3.13, D-531).
 
 - **Cost:** O(1), required.
 

@@ -100,13 +100,13 @@ pub fn open(path: String) -> Result<Db, String>
 - A relative module path in `@external(js, "./…", …)` names a file next to the source, usually under `src/`. Such files are not modules and are exempt from the file naming rule, and a JS build copies each of them into its output at the same location relative to the compiled module ([§7.2](07-modules-and-packages.md#72-modules-and-files)) (D-208).
 - The declared Cheby signature is trusted. The compiler cannot check it against the foreign code, so a wrong signature is undefined behavior on native.
 - Foreign functions may be generic, as in Gleam. Values cross the boundary in the uniform representation, so values whose type is a type parameter are passed as opaque references (D-186).
-- In v1, the type parameters of a foreign function must not have bounds, because function packages and type descriptors have no foreign ABI. This also applies to a function that has a body and an `@external` for some targets (D-207), because the foreign implementation receives the same arguments. Foreign code cannot build or inspect `dyn` values: they cross the boundary only as opaque values ([§12.5.1](#1251-native-abi), [§12.5.2](#1252-js-abi)) (D-237).
+- In v1, the type parameters of a foreign function must not have bounds, because function packages and type descriptors have no foreign ABI. This also applies to a function that has a body and an `@external` for some targets (D-207), because the foreign implementation receives the same arguments. Such a bound is a compile error at the bound (D-554). Foreign code cannot build or inspect `dyn` values: they cross the boundary only as opaque values ([§12.5.1](#1251-native-abi), [§12.5.2](#1252-js-abi)) (D-237).
 
-- Compile-time constant evaluation cannot call foreign functions ([§4.5](04-declarations.md#45-constants)) (D-090).
+- Compile-time constant evaluation cannot call foreign functions, except the standard-library kernels that [§4.5](04-declarations.md#45-constants) lists (D-090, D-360, D-537).
 
 Native symbols follow three rules (D-455):
 
-- Every symbol named by `@external(native, …)` must be defined when the program is loaded or linked, by the Cheby runtime, a linked library or the process itself. Otherwise running or building the program is a compile error at the `@external`, even if the function is never called. `cheby check` does not report it, because which symbols exist is known only at load or link time.
+- Every symbol named by `@external(native, …)` must be defined when the program is loaded or linked, by the Cheby runtime, a linked library or the process itself. Otherwise running or building the program is a compile error at the `@external`, even if the function is never called. Every missing symbol is reported, one error each, in the order of the `@external`s that name them (D-532). `cheby check` does not report it, because which symbols exist is known only at load or link time. When `cheby check` evaluates constants, a missing symbol is bound to a stub, and only a constant whose evaluation calls the stub is an error, like any forbidden effect during evaluation ([§4.5](04-declarations.md#45-constants)) (D-532).
 - All `@external(native, …)` attributes of a program that name the same symbol, in any module or package including the standard library, must give it the same C signature ([§12.5.1](#1251-native-abi)). In the REPL, the program is the session's current definitions ([§13.5.2](13-tooling.md#1352-redefinition)) (D-475).
 - Symbols that start with `cheby_rt_` or `cb$` belong to the runtime and to generated code. Outside the standard library, an `@external(native, …)` must not name them.
 
@@ -202,7 +202,7 @@ priv fn js_random() -> Float
 
 - A whole module is restricted to a target with the inner attribute `@!target(t)`, written before the module's first item. It applies `@target(t)` to every item of the module (D-141).
 
-A package may declare the targets it supports with the optional `targets` field in `cheby.toml` ([§13.3](13-tooling.md#133-manifest)), which defaults to both targets. The cross-target check of the second bullet covers only the declared targets, so a package that supports only `native` gets no errors for uses that would fail on `js` (D-190).
+A package may declare the targets it supports with the optional `targets` field in `cheby.toml` ([§13.3](13-tooling.md#133-manifest)), which defaults to both targets. The cross-target check of the second bullet covers only the declared targets, so a package that supports only `native` gets no errors for uses that would fail on `js` (D-190). `cheby check --target t` narrows it further to the one target `t` ([§13.1](13-tooling.md#131-the-cheby-command)) (D-550).
 
 ## 12.7 Blocking foreign calls
 

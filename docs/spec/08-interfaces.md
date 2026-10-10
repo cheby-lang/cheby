@@ -161,7 +161,7 @@ For a concrete type, the type's module function can always be called directly, f
 
 Bounds are resolved by dictionary passing: a generic function with bounds receives, for each bound, a record of the satisfying type's functions (D-046). Each such function package also carries the type descriptor of the type it was built for, which `dyn` conversions inside the function use ([§8.6](#86-dyn-values)) (D-236). A type parameter's descriptor comes from the package of its first bound (D-499). A type parameter without bounds receives nothing. With the uniform representation (D-021), each generic function is compiled once. An implementation may specialize generic functions for known types as an optimization. Debug builds do not specialize across modules, and release builds may do so only within a size budget ([§13.12.5](13-tooling.md#13125-build-profiles)) (D-251).
 
-Descriptors of generic types such as `List<T>` are built at run time from the descriptors of their type arguments. An implementation may cache or intern them.
+Descriptors of generic types such as `List<T>` are built at run time from the descriptors of their type arguments. An implementation may cache or intern them. The reference implementation makes a function package or descriptor that depends on no package passed for a bound a static object, so it costs nothing at run time, and builds the others at run time (D-524).
 
 ## 8.6 dyn values
 
@@ -186,7 +186,8 @@ A value becomes a `dyn I` implicitly: a value of a type satisfying `I` is packag
 Every `dyn` value carries, next to its packaged functions, a runtime **type descriptor** of its underlying value's full type, including all type arguments (D-236). Descriptors identify nominal types exactly: two declarations with the same shape, or types with the same name in different modules or packages, including different major versions of the same package ([§7.1](07-modules-and-packages.md#71-packages)), have different descriptors ([§3.11](03-types.md#311-user-defined-types-and-aliases)). An alias has the descriptor of the aliased type, and a type redefined in the REPL gets a new descriptor ([§13.5.2](13-tooling.md#1352-redefinition)) (D-043).
 
 - Two `dyn I` values are equal under `==` when their descriptors are equal and their underlying values are structurally equal. Values of different types are never equal, even when they print the same.
-- Hashing a `dyn` value hashes its descriptor together with its value, so equal `dyn` values hash equally, and `dyn` values can be `Map` keys and `Set` elements.
+- Descriptors are equal when they name the same nominal type with equal argument descriptors. They are compared by structure, never by address, so a descriptor built at run time equals a static one for the same type (D-530).
+- Hashing a `dyn` value combines the hash of its descriptor with the hash of its value (D-530), so equal `dyn` values hash equally, and `dyn` values can be `Map` keys and `Set` elements.
 - If the comparison or the hash reaches a function value or a handle inside the value, it panics, as for any other value ([§3.13](03-types.md#313-equality-hashing-and-debug-printing)) (D-233).
 
 ```cheby
