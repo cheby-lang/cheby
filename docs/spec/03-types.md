@@ -391,7 +391,7 @@ Every type has built-in debug printing. Every type also has built-in structural 
 
 The debug format is Rust-like (D-134): `Point { x: 1.0, y: 2.0 }`, `Some(3)`, `[1, 2]`, `"text"`. It shows the fields of opaque types from other packages too, because debug output is for developers (D-134).
 
-A `String` prints in double quotes with exactly the escapes that a string literal ([§2.5.3](02-lexical-structure.md#253-string-literals)) needs to read back as the same text: `\"`, `\\`, `\n`, `\t`, `\r`, `\{` for `{`, and `\u{…}` for every other control character. Every other character is written as itself (D-531). Debug text of a string can therefore be pasted into a test as a literal.
+A `String` prints in double quotes with exactly the escapes that a string literal ([§2.5.3](02-lexical-structure.md#253-string-literals)) needs to read back as the same text: `\"`, `\\`, `\n`, `\t`, `\r`, `\{` for `{`, and `\u{…}` for every other control character. The digits of `\u{…}` are lower-case hex without leading zeros, such as `\u{0}`, `\u{1b}` and `\u{7f}` (D-557). Every other character is written as itself (D-531). Debug text of a string can therefore be pasted into a test as a literal.
 
 Some standard-library types print differently (D-342):
 

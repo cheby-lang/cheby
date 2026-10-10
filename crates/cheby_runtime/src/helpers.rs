@@ -77,8 +77,7 @@ pub unsafe extern "C" fn cheby_rt_str_eq(a: Word, b: Word) -> bool {
 /// `cheby_rt_equal(ctx, a, b, location)`: structural `==` of two borrowed
 /// uniform words (§3.13). Panics `EqualityOnFunction` at `location`, the
 /// `==`'s source location as a static `String`, when it reaches a function
-/// value (D-233, §11.6), GAP(equal-panic-location). A `location` of 0 is
-/// unknown.
+/// value (D-233, §11.6, D-556). A `location` of 0 is unknown.
 ///
 /// # Safety
 ///

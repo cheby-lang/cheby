@@ -99,11 +99,11 @@ Until E6 lands, `cheby check` checks a constant's declared type, its restriction
 | --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ | --------------------------------- |
 | F1  | Allocator, 8-byte object header (D-279) with static count 0 and fixed builtin layout ids (D-454), global layout table, `dup`/`drop` skipping tagged integers, recursive free by scan count without stack growth, debug leak counter (D-458) | D-005        | unit tests                        |
 | F2  | `String` (UTF-8, grapheme and code-point iteration, no indexing) and `Bytes`, both with `len` and `cap` (D-454), one Unicode version for every table (D-552), kernels updating unique arguments in place (D-525)                            | D-038, D-095 | property tests                    |
-| F3  | RRB `List` with O(1) slices for list patterns (D-053), in-place updates at count one                                                                                                                                                        | D-039        | property tests against `Vec`      |
+| F3  | RRB `List` with O(1) slices for list patterns (D-053), in-place updates at count one, node shapes and concatenation of D-563                                                                                                                | D-039        | property tests against `Vec`      |
 | F4  | HAMT `Map` and `Set`, keyed SipHash-1-3 with a per-process seed (D-093, D-281), order-independent `==`, a seed recorded per collection (D-538), kernels that call closures (D-526)                                                          | D-039        | property tests against `BTreeMap` |
-| F5  | Generic equality, hashing and debug printing driven by layout tables, `dyn` values (D-530), string escapes (D-531)                                                                                                                          | D-252, D-233 | output matches §3.13 examples     |
-| F6  | Float text (§3.3.6), integer and float parsing, correctly rounded math from a verified port of CORE-MATH (D-553)                                                                                                                            | -            | unit tests                        |
-| F7  | Process entry, `main` result to exit code (§10.10) and the text of its `Err` (D-529), panic printing (D-449), entries on their own stacks (D-457), leak check at exit (D-458), stdout and stdin buffering                                   | D-073, D-182 | exit-code UI tests pass           |
+| F5  | Generic equality, hashing and debug printing driven by layout tables, `dyn` values (D-530), string escapes (D-531, D-557), type keys (D-559), escaped scan counts (D-555)                                                                   | D-252, D-233 | output matches §3.13 examples     |
+| F6  | Float text (§3.3.6), integer and float parsing (D-558), correctly rounded math in Rust with double-double evaluation and Ziv's rounding test, verified as D-553 requires (D-568)                                                            | -            | unit tests                        |
+| F7  | Process entry, `main` result to exit code (§10.10) and the text of its `Err` (D-529), panic printing (D-449), entries on their own stacks (D-457), leak check at exit per accounting domain (D-458, D-564), stdout and stdin buffering      | D-073, D-182 | exit-code UI tests pass           |
 
 ## G. Driver and CLI (`cheby_driver`, `cheby_repl`, `cheby_cli`)
 
@@ -194,4 +194,10 @@ Changes against the plan:
 
 ### Back end
 
-The back end starts from a plan whose spec gaps are settled by D-520 to D-554, logged in the [M1 back-end plan](../decisions/LOG.md#2026-10-10-m1-back-end-plan) session before its first wave. Codes E0075 to E0078 are added for constant evaluation (D-533). OQ-P10 and the fallback for correctly rounded math are open items of that session.
+The back end starts from a plan whose spec gaps are settled by D-520 to D-554, logged in the [M1 back-end plan](../decisions/LOG.md#2026-10-10-m1-back-end-plan) session before its first wave. Codes E0075 to E0078 are added for constant evaluation (D-533). OQ-P10 is an open item of that session.
+
+Wave 1 (MIR contracts, the runtime ABI, code generation for every MIR form, numbers and lists) is done at commit `c029c49`. The gaps it found are settled by D-555 to D-568, logged in the [M1 back end, wave 1](../decisions/LOG.md#2026-10-10-m1-back-end-wave-1) session. Changes against the plan:
+
+- `cheby_rt_equal` takes the location of the `==` or `!=` as a fourth argument, so a panic on a function value reports where the comparison is written (D-556).
+- No pure-Rust port of CORE-MATH passed D-553's verification, so `float::pow`, `exp`, `ln`, `sin`, `cos`, `tan` and `atan2` are written in Rust with double-double evaluation and Ziv's rounding test, by tasks W4-D and W5-D, with no C compiler in the build (D-568). Until each one passes the verification, it is not registered.
+- Running `Const::BuiltinDesc` waits for the runtime's `cheby_rt_desc_*` objects in wave 3.

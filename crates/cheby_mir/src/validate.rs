@@ -659,8 +659,7 @@ impl FnCx<'_> {
         for (arg, &(want, _)) in args.iter().zip(params) {
             self.expect_repr(arg, want, "runtime argument");
         }
-        // The location of a structural `==` is a static string
-        // (GAP(equal-panic-location)).
+        // The location of a structural `==` is a static string (D-556).
         if func == RuntimeFn::Equal
             && let Some(location) = args.get(2)
             && !matches!(location, Operand::Const(Const::Str(_)))

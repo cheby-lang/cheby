@@ -936,9 +936,9 @@ fn returns_capture(owner: DefId, captures: u32, capture: u32) -> Function {
 /// puts them, since freeing reads them from the layout table. An escaped
 /// closure, dictionary or descriptor keeps its first field at offset 8 and
 /// holds the number of its other fields as a tagged integer at offset 16,
-/// then those fields, GAP(escaped-scan-count). Each is allocated, read
-/// back, called where it is a closure, printed or freed with the domain
-/// balanced; static dictionaries and descriptors use the same shape.
+/// then those fields (D-555). Each is allocated, read back, called where
+/// it is a closure, printed or freed with the domain balanced; static
+/// dictionaries and descriptors use the same shape.
 #[test]
 #[expect(clippy::too_many_lines, reason = "one hand-built MIR program")]
 fn wide_objects_escape_the_scan_count() {

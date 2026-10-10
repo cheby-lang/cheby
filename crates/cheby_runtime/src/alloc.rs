@@ -404,7 +404,7 @@ unsafe fn shape_of(obj: *mut u8) -> Shape {
         LayoutKind::Closure | LayoutKind::Dict | LayoutKind::Desc => {
             // SAFETY: an escaped closure, dictionary or descriptor keeps its
             // first field at offset 8 and the tagged count of the fields
-            // after the count at offset 16 (D-279, GAP(escaped-scan-count)).
+            // after the count at offset 16 (D-279, D-555).
             // The count word is tagged, so visiting it releases nothing.
             let count = abi::untag_int(unsafe { read_field(obj, first.saturating_add(8)) });
             u64::try_from(count)
@@ -670,8 +670,8 @@ pub(crate) mod tests {
 
     /// An escaped closure, dictionary or descriptor: its first field at
     /// offset 8, the tagged count of the rest at offset 16, then the rest
-    /// (GAP(escaped-scan-count)). Freeing releases the first field and the
-    /// rest, and charges the whole size back.
+    /// (D-555). Freeing releases the first field and the rest, and charges
+    /// the whole size back.
     #[test]
     fn freeing_escaped_closures_dicts_and_descs() {
         let domain = Domain::new();

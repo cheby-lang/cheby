@@ -988,8 +988,7 @@ pub enum RuntimeFn {
     /// `(a borrowed, b borrowed, location: String borrowed) -> Bool`:
     /// structural `==` (§3.13). Panics `EqualityOnFunction` (D-233) at
     /// `location`, the static `Const::Str` of the `==`'s source location
-    /// (§11.6, D-449), GAP(equal-panic-location); may call `@std_hooks`
-    /// functions (D-482).
+    /// (§11.6, D-449, D-556); may call `@std_hooks` functions (D-482).
     Equal,
     /// `(value borrowed) -> String`: debug text (§3.13, D-531). Result
     /// owned.

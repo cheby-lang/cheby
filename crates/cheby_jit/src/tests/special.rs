@@ -511,7 +511,7 @@ fn runtime_helpers() {
 }
 
 /// The arguments of a comparison helper: `equal` also takes its
-/// location, `str#5` in `runtime_helpers` (GAP(equal-panic-location)).
+/// location, `str#5` in `runtime_helpers` (D-556).
 fn two_and_location(func: RuntimeFn, a: Operand, b: Operand) -> Vec<Operand> {
     if func == RuntimeFn::Equal {
         vec![a, b, s(5)]
@@ -521,8 +521,7 @@ fn two_and_location(func: RuntimeFn, a: Operand, b: Operand) -> Vec<Operand> {
 }
 
 /// A structural `==` that reaches a function value panics at the `==`'s
-/// location (§11.6, D-449), not at `<unknown location>`
-/// (GAP(equal-panic-location)).
+/// location (§11.6, D-449, D-556), not at `<unknown location>`.
 #[test]
 fn equality_on_functions_panics_at_its_location() {
     let mut p = Prog::default();

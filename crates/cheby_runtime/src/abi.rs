@@ -44,7 +44,7 @@ pub const RC_UNIQUE: i32 = 1;
 /// closure, dictionary or descriptor keeps its first field (code word,
 /// type descriptor or nominal descriptor) at offset 8 and holds the number
 /// of the fields after the count as a tagged integer at offset 16, then
-/// those fields, GAP(escaped-scan-count).
+/// those fields (D-555).
 pub const SCAN_ESCAPE: u8 = 255;
 
 /// The largest scan count stored directly in the header.
@@ -452,7 +452,7 @@ pub mod sym {
     /// `bool cheby_rt_equal(ExecCtx *ctx, uint64_t a, uint64_t b, uint64_t location)`:
     /// structural `==` (§3.13) of two borrowed uniform words; panics
     /// `EqualityOnFunction` (D-233) at `location`, a static `String` or 0
-    /// for unknown, GAP(equal-panic-location).
+    /// for unknown (D-556).
     pub const EQUAL: &str = "cheby_rt_equal";
     /// `uint64_t cheby_rt_debug(ExecCtx *ctx, uint64_t value)`: the debug
     /// text (§3.13) of a borrowed uniform word, as an owned `String`.

@@ -157,7 +157,7 @@ impl Translator<'_, '_> {
     /// than a scan count holds (D-279): the escape value as its scan count,
     /// and the tagged count of the fields after it at the index that
     /// [`escaped_count_index`] names; the fields before and after it keep
-    /// their order, GAP(escaped-scan-count).
+    /// their order (D-555).
     fn escaped_shape(layout: LayoutRef) -> Result<Shape, CodegenError> {
         let first = i64::from(abi::FIRST_FIELD_OFFSET);
         let count = layout

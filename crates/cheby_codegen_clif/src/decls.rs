@@ -182,7 +182,7 @@ pub(crate) fn header(rc: i32, value_fields: u64, layout: u32) -> Result<u64, Cod
 /// its scan count above [`abi::SCAN_MAX`] value fields. The fields stay
 /// where the layout puts them: freeing, equality, hashing and debug text
 /// read a constructor's fields from the layout table, never from the scan
-/// count, GAP(escaped-scan-count).
+/// count (D-555).
 pub(crate) fn ctor_header(rc: i32, value_fields: u64, layout: u32) -> u64 {
     let scan = u8::try_from(value_fields)
         .ok()
@@ -200,7 +200,7 @@ pub(crate) fn ctor_header(rc: i32, value_fields: u64, layout: u32) -> u64 {
 /// a tuple at index 0 (offset 8), and a closure, dictionary or descriptor
 /// at index 1 (offset 16), after its code word, type descriptor or
 /// nominal descriptor, which stays at offset 8 so indirect calls and
-/// readers of the first field need no check, GAP(escaped-scan-count).
+/// readers of the first field need no check (D-555).
 pub(crate) fn escaped_count_index(layout: LayoutRef, count: u64) -> Option<usize> {
     if count <= u64::from(abi::SCAN_MAX) {
         return None;

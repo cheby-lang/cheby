@@ -42,8 +42,8 @@
 //! - `cb$dict$…`, `cb$desc$…`, `cb$fnval$…`: static objects with count 0,
 //!   with their own strings `cb$str$<static>$<n>`; a function value's code
 //!   word is its shim's address `| 1`. Each symbol, like each shim, tuple
-//!   function, `dyn` forwarder and trampoline, is defined once per module:
-//!   a later unit or batch that names it uses the first definition.
+//!   function, `dyn` forwarder and trampoline, is defined once per JIT
+//!   (D-561): a later unit or batch that names it uses the first definition.
 //!
 //! Scalars (D-521, D-527): `Box`/`Unbox` tag and untag inline and call
 //! `cheby_rt_box_*` only outside the tagged range or for floats; checked

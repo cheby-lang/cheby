@@ -171,7 +171,7 @@ fn write_display(out: &mut String, value: impl std::fmt::Display) {
 /// A `String` in double quotes with exactly the escapes a string literal
 /// needs to read back as the same text (D-531): `\"`, `\\`, `\n`, `\t`,
 /// `\r`, `\{`, and `\u{…}` for every other control character, in
-/// lower-case hex without leading zeros (GAP(debug-text-hex)).
+/// lower-case hex without leading zeros (D-557).
 pub(super) fn write_string(out: &mut String, text: &str) {
     out.push('"');
     for c in text.chars() {

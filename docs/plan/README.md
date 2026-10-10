@@ -57,7 +57,7 @@ M5 is listed as a milestone so it has exit criteria, but its work starts as soon
 
 ## Plan decisions
 
-Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-plan), D-284 onward in [M0 foundation](../decisions/LOG.md#2026-10-04-m0-foundation), D-418 onward in [Diagnostics](../decisions/LOG.md#2026-10-06-diagnostics), and the plan-level ones of [M1 syntax layer](../decisions/LOG.md#2026-10-07-m1-syntax-layer), [M1 vertical slice](../decisions/LOG.md#2026-10-07-m1-vertical-slice), [Open items](../decisions/LOG.md#2026-10-07-open-items), [M1 front end](../decisions/LOG.md#2026-10-10-m1-front-end) and [M1 back-end plan](../decisions/LOG.md#2026-10-10-m1-back-end-plan):
+Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-plan), D-284 onward in [M0 foundation](../decisions/LOG.md#2026-10-04-m0-foundation), D-418 onward in [Diagnostics](../decisions/LOG.md#2026-10-06-diagnostics), and the plan-level ones of [M1 syntax layer](../decisions/LOG.md#2026-10-07-m1-syntax-layer), [M1 vertical slice](../decisions/LOG.md#2026-10-07-m1-vertical-slice), [Open items](../decisions/LOG.md#2026-10-07-open-items), [M1 front end](../decisions/LOG.md#2026-10-10-m1-front-end), [M1 back-end plan](../decisions/LOG.md#2026-10-10-m1-back-end-plan) and [M1 back end, wave 1](../decisions/LOG.md#2026-10-10-m1-back-end-wave-1):
 
 | Decision  | Summary                                                                                             |
 | --------- | --------------------------------------------------------------------------------------------------- |
@@ -135,6 +135,18 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-552     | Native case mapping and grapheme segmentation follow one Unicode version, checked by a test         |
 | D-553     | Correctly rounded math from a pure-Rust CORE-MATH port, verified against 200-bit references         |
 | D-554     | Bounds on foreign type parameters are checked by the front end; MIR reports no E0038 at M1 exit     |
+| D-555     | Where objects with the escaped scan count 255 keep their fields and their real count                |
+| D-556     | `cheby_rt_equal` takes the location of the `==` as a fourth argument, for the panic report          |
+| D-559     | A constructor hashes by its type key, SipHash of module path, `0xff` and name, and its tag          |
+| D-560     | Symbol kinds `tfn` for built-in tuple functions and `dynfwd` for `dyn` forwarders                   |
+| D-561     | Statics, shims, tuple functions, forwarders and trampolines are defined once per JIT                |
+| D-562     | A raw constructor field fills its 8-byte slot, sign- or zero-extended by type                       |
+| D-563     | List roots, leaves and branches have layout ids 26-28; concatenation and in-place rules             |
+| D-564     | Live objects and bytes are counted per accounting domain, one per JIT                               |
+| D-565     | CLIF dumps ignore `CHEBY_RT_POISON` and always use the inline fast paths                            |
+| D-566     | A strict run requires only pending tests of the milestone in progress, not those of later ones      |
+| D-567     | Accepted values of the strict-run variables and the syntax of the allow file                        |
+| D-568     | The seven correctly rounded functions are written in Rust with double-double and Ziv's test         |
 
 ## Open questions
 

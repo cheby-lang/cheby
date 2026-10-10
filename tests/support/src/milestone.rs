@@ -21,7 +21,7 @@
 //! made strict ([`Expectation::Pending`]). A test that is pending by a
 //! rule that holds at every milestone, such as a `skip-run` example's
 //! `cheby test` trial (D-445, D-472), stays report-only
-//! ([`Expectation::Tolerated`]), GAP(strict-pending-scope). So does a test
+//! ([`Expectation::Tolerated`], D-566). So does a test
 //! of a milestone later than `tests/milestone` that the override made
 //! pending: `CHEBY_MILESTONE=M2` requires every M1 test, not the M2 ones
 //! ([`Setting::expectation`]).
@@ -129,7 +129,7 @@ impl Setting {
     /// [`Expectation::Tolerated`]: the override makes every test of the
     /// file's milestone required (D-544) and says nothing about the tests
     /// of the next one, which may still fail at the exit of the file's
-    /// milestone, GAP(strict-pending-scope).
+    /// milestone (D-566).
     #[must_use]
     pub fn expectation(self, test: Milestone) -> Expectation {
         match Expectation::new(test, self.current) {

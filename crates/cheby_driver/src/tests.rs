@@ -572,7 +572,7 @@ fn hello_world_runs_without_leaks() {
 /// A type with a constructor of 255 value fields, more than a header's
 /// scan count holds (D-279): building only its nullary sibling registers
 /// the whole type's layouts, and the run succeeds with no internal error
-/// and no leak (GAP(escaped-scan-count)).
+/// and no leak (D-555).
 #[test]
 fn wide_constructors_escape_the_scan_count() {
     let fields: String = (0..255).map(|_| "    String,\n").collect();

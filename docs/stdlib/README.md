@@ -161,7 +161,7 @@ pub fn parse(text: String) -> Result<T, Nil>
 pub fn show(n: T) -> String
 ```
 
-- `parse` for an integer type accepts an optional `-` followed by one or more ASCII decimal digits, and nothing else. A value out of range is `Err(Nil)` (D-312). Integer types also have `parse_base(text: String, base: Int) -> Result<T, Nil>`.
+- `parse` for an integer type accepts an optional `-` followed by one or more ASCII decimal digits, and nothing else. A value out of range is `Err(Nil)` (D-312). Integer types also have `parse_base(text: String, base: Int) -> Result<T, Nil>`. Unsigned types accept the `-` too in `parse` and `parse_base`, because only the value's range is checked: `u8::parse("-0")` is `Ok(0)`, and `u8::parse("-1")` is `Err(Nil)` (D-558).
 - `parse` for a float type accepts an optional `-`, decimal digits, an optional fraction of `.` followed by digits, and an optional exponent, as well as `NaN`, `inf` and `-inf`. `_`, `.5`, `1.`, a leading `+` and whitespace are rejected. Every text that `show` gives parses back to the same value (D-313).
 - `show` for an integer type gives the decimal digits, with `-` for negative values. `show` for a float type follows §3.3.6 (D-203, D-219, D-228).
 

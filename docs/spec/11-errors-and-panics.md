@@ -167,6 +167,8 @@ not implemented: area of a dot
 
 `panic` without a message reports `explicit panic`, and a message given with `as` replaces it. `todo` reports `not implemented`, and `todo as m` reports `not implemented: m`. The runtime panics of [§11.8](#118-runtime-panics) report `integer overflow`, `division by zero`, `shift amount out of range`, `equality or hashing reached a function value or a handle` and `stack overflow`. Failed assertions report `assertion failed` and `` `let assert` pattern did not match ``, with the details of [§11.4](#114-let-assert) and [§11.5](#115-assert) (D-449, D-528).
 
+When `==` or `!=` reaches a function value or a handle, the panic's location is that of the operator (D-556). _Note:_ when the standard library compares or hashes values inside a runtime kernel, as a `Map` lookup does, the reference implementation knows no Cheby location and prints `<unknown location>` in its place (D-449, D-556).
+
 ## 11.7 Panics and fibers
 
 A panic affects only the fiber in which it happens (D-018):

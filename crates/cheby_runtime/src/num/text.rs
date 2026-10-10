@@ -262,9 +262,9 @@ pub(crate) fn parse_int<T: TryFrom<i128>>(text: &[u8], base: i64) -> Option<T> {
             .checked_add(u128::from(digit))?;
     }
     let magnitude = i128::try_from(magnitude).ok()?;
-    // GAP(unsigned-minus-zero): `-0` is the value 0, which every integer
-    // type holds, so it parses on the unsigned types too (D-312 checks the
-    // value's range, not the sign's presence).
+    // `-0` is the value 0, which every integer type holds, so it parses on
+    // the unsigned types too: D-312 checks the value's range, not the
+    // sign's presence (D-558).
     let value = if negative {
         magnitude.checked_neg()?
     } else {

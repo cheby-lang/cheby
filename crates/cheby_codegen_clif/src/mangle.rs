@@ -45,11 +45,9 @@ pub enum Kind {
     Dict,
     /// The header word of a user constructor's layout (D-454).
     Layout,
-    /// The code of a built-in tuple `Show`/`Compare` function
-    /// (GAP(tuple-fn-symbols)).
+    /// The code of a built-in tuple `Show`/`Compare` function (D-560).
     TupleFn,
-    /// The code of a `dyn` dictionary's forwarding entry
-    /// (GAP(tuple-fn-symbols)).
+    /// The code of a `dyn` dictionary's forwarding entry (D-560).
     DynFwd,
 }
 
@@ -179,14 +177,14 @@ pub fn trampoline(arity: u32) -> String {
 
 /// `cb$tfn$<module path>$<interface function>$<arity>`: the built-in
 /// tuple function `iface_fn` for tuples of `arity` elements (D-167).
-/// GAP(tuple-fn-symbols): D-456 and D-523 name no kind for it.
+/// The kind `tfn` is D-560's, which extends D-456 and D-523.
 #[must_use]
 pub fn tuple_fn(iface_fn: &DefName, arity: u32) -> String {
     format!("{}${arity}", item(Kind::TupleFn, iface_fn))
 }
 
 /// `cb$dynfwd$<module path>$<interface function>`: the forwarding entry of
-/// `iface_fn` in `dyn` dictionaries. GAP(tuple-fn-symbols).
+/// `iface_fn` in `dyn` dictionaries (D-560).
 #[must_use]
 pub fn dyn_forward(iface_fn: &DefName) -> String {
     item(Kind::DynFwd, iface_fn)
