@@ -1,0 +1,57 @@
+// @mode: run-pass
+// @decisions: D-053, D-158
+//! List patterns match exact lengths, and a spread matches any number of
+//! elements in any position, with fixed elements before and after it
+//! (§6.6). A named spread binds the elements it matched.
+
+import std::int
+import std::io
+import std::list
+
+fn shape(xs: List<Int>) -> String {
+  case xs {
+    [] => "empty"
+    [x] => "one: {x}"
+    [x, y] => "two: {x} {y}"
+    [first, .., last] => "many: {first} .. {last}"
+  }
+}
+
+fn sum(xs: List<Int>) -> Int {
+  case xs {
+    [] => 0
+    [first, ..rest] => first + sum(rest)
+  }
+}
+
+fn middle(xs: List<Int>) -> String {
+  case xs {
+    [_, ..inner, _] => {
+      let count = list::length(inner)
+      "{count} inside"
+    }
+    _ => "too short"
+  }
+}
+
+fn last_two(xs: List<String>) -> String {
+  case xs {
+    [.., a, b] => "{a}{b}"
+    [only] => only
+    [] => "-"
+  }
+}
+
+fn main() {
+  io::println(shape([]))
+  io::println(shape([1]))
+  io::println(shape([1, 2]))
+  io::println(shape([1, 2, 3, 4]))
+  io::println(int::show(sum([1, 2, 3, 4, 5])))
+  io::println(middle([1, 2, 3, 4]))
+  io::println(middle([1, 2]))
+  io::println(middle([1]))
+  io::println(last_two(["a", "b", "c"]))
+  io::println(last_two(["x"]))
+  io::println(last_two([]))
+}

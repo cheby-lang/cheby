@@ -11,10 +11,14 @@
 //! tail-calls, each counted local is consumed exactly once more than it is
 //! duplicated.
 
+mod dom;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 use cheby_iface::{Ice, Idx};
+
+use self::dom::Dominance;
 
 use crate::abi::{AbiSig, fixed_sig, is_uniform_sig};
 use crate::ir::{
@@ -369,13 +373,13 @@ impl FnCx<'_> {
 
     fn check_dominance(&mut self, defs: &BTreeMap<Local, DefSite>) -> Result<(), Ice> {
         let f = self.f;
-        let doms = dominators(f)?;
+        let dom = Dominance::new(f)?;
         for (id, block) in f.blocks.iter_enumerated() {
             // Unreachable blocks have no dominators; their uses are not
             // checked.
-            let Some(block_doms) = doms.get(&id) else {
+            if !dom.is_reachable(id) {
                 continue;
-            };
+            }
             let check = |cx: &mut Self, l: Local, at: Option<usize>| {
                 let Some(&(def_block, def_pos)) = defs.get(&l) else {
                     cx.err(format!("_{} is used but never defined", l.as_u32()));
@@ -387,7 +391,7 @@ impl FnCx<'_> {
                         (None, _) | (Some(_), None) => true,
                     }
                 } else {
-                    block_doms.contains(&def_block)
+                    dom.dominates(def_block, id)
                 };
                 if !ok {
                     cx.err(format!(
@@ -1103,56 +1107,4 @@ fn stmt_locals(stmt: &Stmt) -> Vec<Local> {
         }
         Stmt::Dup(l) | Stmt::Drop(l) => vec![*l],
     }
-}
-
-/// The dominators of every block reachable from `bb0`, itself included.
-fn dominators(f: &Function) -> Result<BTreeMap<BlockId, BTreeSet<BlockId>>, Ice> {
-    let entry = BlockId::from_u32(0);
-    let mut reachable = BTreeSet::new();
-    let mut stack = vec![entry];
-    let mut preds: BTreeMap<BlockId, BTreeSet<BlockId>> = BTreeMap::new();
-    while let Some(b) = stack.pop() {
-        if !reachable.insert(b) {
-            continue;
-        }
-        for s in f.block(b)?.term.successors() {
-            preds.entry(s).or_default().insert(b);
-            stack.push(s);
-        }
-    }
-    let all: BTreeSet<BlockId> = reachable.clone();
-    let mut doms: BTreeMap<BlockId, BTreeSet<BlockId>> = reachable
-        .iter()
-        .map(|&b| {
-            if b == entry {
-                (b, BTreeSet::from([entry]))
-            } else {
-                (b, all.clone())
-            }
-        })
-        .collect();
-    let mut changed = true;
-    while changed {
-        changed = false;
-        for &b in &reachable {
-            if b == entry {
-                continue;
-            }
-            let mut new: Option<BTreeSet<BlockId>> = None;
-            for p in preds.get(&b).into_iter().flatten() {
-                let Some(pd) = doms.get(p) else { continue };
-                new = Some(match new {
-                    None => pd.clone(),
-                    Some(acc) => acc.intersection(pd).copied().collect(),
-                });
-            }
-            let mut new = new.unwrap_or_default();
-            new.insert(b);
-            if doms.get(&b) != Some(&new) {
-                doms.insert(b, new);
-                changed = true;
-            }
-        }
-    }
-    Ok(doms)
 }

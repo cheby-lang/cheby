@@ -1,0 +1,19 @@
+// @mode: run-pass
+// @decisions: D-096, D-160
+//! A passing `assert` does nothing, and its `as` message is not evaluated
+//! (§11.5).
+
+import std::io
+
+fn loud(text: String) -> String {
+  io::println("message evaluated")
+  text
+}
+
+fn main() {
+  let n = 2
+  assert n == 2
+  assert n + 1 > n as loud("never")
+  assert "a" != "b" as loud("never")
+  io::println("ok")
+}

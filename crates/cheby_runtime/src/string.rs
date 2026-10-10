@@ -161,6 +161,24 @@ pub unsafe fn as_str<'a>(word: Word) -> Option<&'a str> {
     }
 }
 
+/// The text of a string object as a `&str` without validating it, or
+/// `None` if `word` is not a string. O(1), for kernels whose required cost
+/// is below the length of the text (`starts_with` is O(m) in the prefix,
+/// D-300).
+///
+/// # Safety
+///
+/// As for [`bytes`]. Every `String` object holds UTF-8: the runtime builds
+/// strings only from `&str`, code generation's literals come from `&str`,
+/// appending two strings keeps UTF-8, and `string::from_bytes` validates.
+#[must_use]
+pub unsafe fn as_str_unchecked<'a>(word: Word) -> Option<&'a str> {
+    // SAFETY: forwarded from the caller.
+    let bytes = unsafe { bytes(word) }?;
+    // SAFETY: a `String` object holds UTF-8 (see above).
+    Some(unsafe { std::str::from_utf8_unchecked(bytes) })
+}
+
 /// The text of a string object as a Rust string, with any invalid UTF-8
 /// replaced, or `None` if `word` is not a string.
 ///
@@ -249,6 +267,105 @@ pub unsafe fn append(text: Word, piece: &[u8]) -> Word {
         );
     }
     text
+}
+
+/// A unique text object with the contents of a borrowed `text` and room
+/// for at least `extra` more bytes, and whether it is `text` itself.
+///
+/// It is `text` itself when `reuse` holds, `text` is unique and it has
+/// room, so the caller may append in place (D-525): the caller then
+/// appends ([`append`] stays in place) and only afterwards adds the
+/// reference it returns with `rc::dup`. Otherwise it is a new unique object
+/// of capacity `max(len + extra, 2 * cap)` that the caller owns, so a chain
+/// of appends to a unique result grows by doubling. `text` keeps its
+/// reference either way. Ends the process if `text` is not a text object
+/// or the size overflows.
+///
+/// The caller passes `reuse` false when another argument of its kernel is
+/// the same object (D-563's alias rule).
+///
+/// # Safety
+///
+/// `text` points to a live `String` or `Bytes`, borrowed for the call.
+#[must_use]
+pub unsafe fn with_room(text: Word, extra: u64, reuse: bool) -> (Word, bool) {
+    // SAFETY: forwarded from the caller.
+    let Some(layout) = (unsafe { text_layout(text) }) else {
+        fatal(format_args!("{text:#x} is not a text object"));
+    };
+    let obj = word_to_ptr(text);
+    // SAFETY: a live text object.
+    let (len, cap) = unsafe {
+        (
+            read_field(obj, abi_offset(LEN)),
+            read_field(obj, abi_offset(CAP)),
+        )
+    };
+    let Some(need) = len.checked_add(extra) else {
+        fatal(format_args!("a text of {len} + {extra} bytes is too large"));
+    };
+    // SAFETY: a live object.
+    if reuse && need <= cap && unsafe { rc::is_unique(text) } {
+        return (text, true);
+    }
+    let new = alloc_text(need.max(cap.saturating_mul(2)), layout);
+    // SAFETY: both are live; the new object has room for `len` bytes and
+    // does not overlap the old one.
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            obj.add(abi_offset(BYTES)),
+            new.add(abi_offset(BYTES)),
+            to_usize(len),
+        );
+        write_field(new, abi_offset(LEN), len);
+    }
+    (object::ptr_to_word(new), false)
+}
+
+/// The bytes `range` of a borrowed text object as a text object of the
+/// same layout, owned by the caller: `text` itself (one more reference)
+/// when the range is the whole text; `text` changed in place when `reuse`
+/// holds and it is unique (D-525), with its capacity kept; otherwise a new
+/// object. A range outside the contents ends the process. The caller keeps
+/// `String` ranges on character boundaries.
+///
+/// # Safety
+///
+/// `text` points to a live `String` or `Bytes`, borrowed for the call.
+#[must_use]
+pub unsafe fn keep_range(text: Word, range: std::ops::Range<usize>, reuse: bool) -> Word {
+    // SAFETY: forwarded from the caller.
+    let Some(layout) = (unsafe { text_layout(text) }) else {
+        fatal(format_args!("{text:#x} is not a text object"));
+    };
+    // SAFETY: a live text object, read before any change.
+    let contents = unsafe { contents(text) };
+    let Some(part) = contents.get(range.clone()) else {
+        fatal(format_args!(
+            "the range {range:?} is outside a text of {} bytes",
+            contents.len()
+        ));
+    };
+    let kept = part.len();
+    if kept == contents.len() {
+        // SAFETY: a live object; the caller gets a reference of its own.
+        unsafe { rc::dup(text) };
+        return text;
+    }
+    // SAFETY: a live object.
+    if reuse && unsafe { rc::is_unique(text) } {
+        let obj = word_to_ptr(text);
+        // SAFETY: the range lies inside the object's contents, `ptr::copy`
+        // allows overlap, and nobody else holds the object.
+        unsafe {
+            let start = obj.add(abi_offset(BYTES));
+            std::ptr::copy(start.add(range.start), start, kept);
+            write_field(obj, abi_offset(LEN), to_u64(kept));
+            rc::dup(text);
+        }
+        return text;
+    }
+    new_text(part, layout)
 }
 
 /// The capacity of a text object, for tests of growth.

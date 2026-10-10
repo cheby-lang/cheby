@@ -1,0 +1,22 @@
+// @mode: run-pass
+// @decisions: D-069, D-092
+//! `MIN % -1` is 0 on `Int` and each signed sized type, without a panic:
+//! the remainder exists even though the quotient `MIN / -1` overflows
+//! (§3.3.1, §5.4.2).
+
+import std::io
+
+fn main() {
+  let max = (1 << 62) - 1 + (1 << 62)
+  let min = -max - 1
+  assert min % -1 == 0
+  let min8: I8 = -128
+  assert min8 % -1 == 0
+  let min16: I16 = -32768
+  assert min16 % -1 == 0
+  let min32: I32 = -2147483648
+  assert min32 % -1 == 0
+  let min64: I64 = -9223372036854775808
+  assert min64 % -1 == 0
+  io::println("ok")
+}

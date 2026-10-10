@@ -1,0 +1,18 @@
+// @mode: run-pass
+// @decisions: D-306, D-365
+//! `io::write_stdout` and `io::write_stderr` return `Ok(Nil)` when the
+//! text is written.
+
+import std::io
+
+fn main() {
+  io::print("buffered, ")
+  case io::write_stdout("flushed\n") {
+    Ok(_) => io::println("ok")
+    Err(reason) => io::println(io::show(reason))
+  }
+  case io::write_stderr("to standard error\n") {
+    Ok(_) => io::println("ok")
+    Err(reason) => io::println(io::show(reason))
+  }
+}

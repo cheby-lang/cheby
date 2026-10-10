@@ -328,9 +328,12 @@ pub fn prepare_run(root: &Path, options: RunOptions) -> Result<Prepared, Error> 
     let entry = cheby_mir::EntryKind::Main(main.def);
     // Fails now, before anything runs, if the thunk was not compiled.
     jit.entry(entry)?;
+    // `env::program_name()` is the package's name under `cheby run`, so
+    // usage messages are the same on every machine and for every module
+    // path that is run (D-369).
     let config = RunConfig {
         args: options.args,
-        program_name: path.to_string(),
+        program_name: package,
         ..RunConfig::default()
     };
     Ok(Prepared::Ready(Box::new(Program {

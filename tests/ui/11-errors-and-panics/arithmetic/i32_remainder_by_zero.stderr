@@ -1,0 +1,2 @@
+panicked at tests/ui/11-errors-and-panics/arithmetic/i32_remainder_by_zero.cheby:8:11:
+division by zero

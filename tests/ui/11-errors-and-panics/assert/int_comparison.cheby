@@ -1,0 +1,9 @@
+// @mode: run-fail
+// @decisions: D-096, D-528
+//! A failed comparison prints its source text, then both operands'
+//! debug text, labelled `left:` and `right:` (§11.5).
+
+fn main() {
+  let items = 2
+  assert items + 0 == 3
+}

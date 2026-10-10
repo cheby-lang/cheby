@@ -113,13 +113,21 @@ impl BodyB {
         )
     }
 
-    fn case(&mut self, at: u32) -> ExprId {
+    /// A construct the back end does not lower yet: a conversion to `dyn`
+    /// (W4-A), of a string literal at the same position, which is never
+    /// lowered. It reaches nothing (D-510).
+    fn unsupported(&mut self, at: u32) -> ExprId {
+        let value = self.expr(ExprKind::Lit(Lit::Str("u".into())), Ty::STRING, at);
         self.expr(
-            ExprKind::Case {
-                subjects: Box::new([]),
-                arms: Box::new([]),
+            ExprKind::DynCoerce {
+                value,
+                iface: builtin::SHOW,
+                dict: Dict::Dyn {
+                    iface: builtin::SHOW,
+                    ty: Ty::STRING,
+                },
             },
-            Ty::NIL,
+            Ty::STRING,
             at,
         )
     }
@@ -235,13 +243,14 @@ fn fixture() -> Fixture {
         103,
     );
     fns.push(fn_def(MAIN, file, b.finish(block, Ty::NIL)));
-    // with_case: a `case` (E0038 at 110).
+    // with_case: an unsupported construct (E0038 at 110). It was a `case`
+    // until W2-B lowered them.
     let mut b = BodyB::new(file);
-    let case = b.case(110);
+    let case = b.unsupported(110);
     fns.push(fn_def(WITH_CASE, file, b.finish(case, Ty::NIL)));
-    // unused: a `case` too, never reached.
+    // unused: one too, never reached.
     let mut b = BodyB::new(file);
-    let case = b.case(120);
+    let case = b.unsupported(120);
     fns.push(fn_def(UNUSED, file, b.finish(case, Ty::NIL)));
     // shown: returns its parameter.
     let mut b = BodyB::new(file);
@@ -274,18 +283,20 @@ fn fixture() -> Fixture {
         body: None,
         entry: None,
     });
-    // many: `let x = (case)`, `let (y, z) = …`, a tuple statement holding a
-    // `case`, then `say(x)` and `say(y)` with the placeholders.
+    // many: `let x = (unsupported)`, `let (y, z) = …`, a tuple statement
+    // holding an unsupported construct, then `say(x)` and `say(y)` with the
+    // placeholders.
     let mut b = BodyB::new(file);
     let x = b.local(Ty::STRING, 160);
     let y = b.local(Ty::STRING, 161);
     let z = b.local(Ty::STRING, 162);
-    let case_x = b.case(163);
+    let case_x = b.unsupported(163);
     let lit = b.expr(ExprKind::Lit(Lit::Str("s".into())), Ty::STRING, 164);
-    let inner_case = b.case(165);
-    let tuple_ty = globals
-        .types
-        .intern(cheby_iface::TyKind::Tuple(Box::new([Ty::NIL, Ty::STRING])));
+    let inner_case = b.unsupported(165);
+    let tuple_ty = globals.types.intern(cheby_iface::TyKind::Tuple(Box::new([
+        Ty::STRING,
+        Ty::STRING,
+    ])));
     let tuple = b.expr(ExprKind::Tuple(Box::new([inner_case, lit])), tuple_ty, 166);
     let use_x = b.expr(ExprKind::Local(x), Ty::STRING, 167);
     let say_x = b.call(SAY, vec![use_x], Ty::NIL, 168);
@@ -299,7 +310,9 @@ fn fixture() -> Fixture {
         Ty::STRING,
     ])));
     let pair = b.pat(PatKind::Tuple(Box::new([bind_y, bind_z])), pair_ty, 174);
-    let lit2 = b.expr(ExprKind::Lit(Lit::Str("t".into())), Ty::STRING, 175);
+    let first = b.expr(ExprKind::Lit(Lit::Str("t".into())), Ty::STRING, 175);
+    let second = b.expr(ExprKind::Lit(Lit::Str("u".into())), Ty::STRING, 177);
+    let lit2 = b.expr(ExprKind::Tuple(Box::new([first, second])), pair_ty, 178);
     let block = b.expr(
         ExprKind::Block {
             stmts: Box::new([
@@ -414,7 +427,7 @@ fn reachability_follows_calls_only() {
 }
 
 #[test]
-fn reachable_case_is_unsupported_at_the_case() {
+fn reachable_unsupported_construct_is_reported_at_it() {
     let f = fixture();
     let file = f.file();
     let reach = reachable(&f.program(), &[Root::Fn(f.fn_def(MAIN))]).unwrap();
@@ -422,7 +435,7 @@ fn reachable_case_is_unsupported_at_the_case() {
     assert_eq!(
         f.unsupported(&wanted),
         [(
-            "`case` expressions are not supported yet".to_owned(),
+            "conversions to `dyn` are not supported yet".to_owned(),
             sp(file, 110)
         )]
     );
@@ -451,14 +464,13 @@ fn every_outermost_construct_is_reported_once() {
         f.unsupported(&[MANY]),
         [
             (
-                "`case` expressions are not supported yet".to_owned(),
+                "conversions to `dyn` are not supported yet".to_owned(),
                 sp(file, 163)
             ),
             (
-                "patterns other than a name or `_` in `let` are not supported yet".to_owned(),
-                sp(file, 174)
+                "conversions to `dyn` are not supported yet".to_owned(),
+                sp(file, 165)
             ),
-            ("tuples are not supported yet".to_owned(), sp(file, 166)),
         ]
     );
 }
@@ -492,8 +504,8 @@ fn diagnostics_of_several_items_are_collected() {
     assert_eq!(
         messages,
         [
-            "`case` expressions are not supported yet",
-            "`case` expressions are not supported yet",
+            "conversions to `dyn` are not supported yet",
+            "conversions to `dyn` are not supported yet",
         ]
     );
 }
@@ -566,8 +578,10 @@ fn reachability_follows_dictionaries_constants_and_operators() {
     );
 }
 
+/// A `Result` main whose error's `show` needs dictionaries waits for
+/// W3-A (E0038 at `main`); one printed by debug text has its thunk.
 #[test]
-fn result_mains_are_unsupported() {
+fn result_mains_with_dictionaries_are_unsupported() {
     let f = fixture();
     let deps_list = [MODULE];
     let mut set = InterfaceSet::new(builtin::interface(&f.globals));
@@ -584,7 +598,18 @@ fn result_mains_are_unsupported() {
     };
     let info = EntryInfo::Result {
         err_ty: Ty::STRING,
-        show: None,
+        show: Some(Dict::Impl {
+            iface: builtin::SHOW,
+            ty: Ty::STRING,
+            fns: Box::new([DictFn {
+                def: def(SHOWN),
+                ty_args: Box::new([]),
+                dicts: Box::new([Dict::Dyn {
+                    iface: builtin::SHOW,
+                    ty: Ty::STRING,
+                }]),
+            }]),
+        }),
     };
     let result = lower_entries(
         &[EntryRequest {
@@ -600,11 +625,27 @@ fn result_mains_are_unsupported() {
     assert_eq!(
         got,
         [(
-            "`main` functions that return `Result` are not supported yet".to_owned(),
+            "errors whose `show` needs interface dictionaries are not supported yet".to_owned(),
             sp(f.file(), MAIN)
         )]
     );
-    // A `Nil` main has its thunk.
+    // Debug printing needs no dictionary; a `Nil` main has its thunk too.
+    let debug = EntryInfo::Result {
+        err_ty: Ty::STRING,
+        show: None,
+    };
+    let unit = lower_entries(
+        &[EntryRequest {
+            kind: EntryKind::Main(def(MAIN)),
+            info: Some(&debug),
+        }],
+        &cx,
+    )
+    .unwrap();
+    assert!(
+        crate::dump(&unit).unwrap().contains("call_runtime debug("),
+        "{unit:?}"
+    );
     let unit = lower_entries(
         &[EntryRequest {
             kind: EntryKind::Main(def(MAIN)),
@@ -613,7 +654,8 @@ fn result_mains_are_unsupported() {
         &cx,
     )
     .unwrap();
-    assert_eq!(unit.functions.len(), 1);
+    // The thunk, then the trampolines of arities 0-4.
+    assert_eq!(unit.functions.len(), 6);
 }
 
 /// A function with a native external and a body runs the external on

@@ -135,6 +135,20 @@ pub fn closure(owner: &DefName, index: u32) -> String {
     format!("{}${index}", item(Kind::Clo, owner))
 }
 
+/// `cb$clo$test$<module path>$<ordinal>$<n>`: closure `n` of the test with
+/// that ordinal in its module. A test's name is free text, so its closures
+/// are named by the ordinal, like the test itself (D-456,
+/// GAP(test-closure-symbols)); an item name never starts with a digit, so
+/// this never equals [`closure`]'s name.
+#[must_use]
+pub fn test_closure(module: &str, ordinal: u32, index: u32) -> String {
+    format!(
+        "{PREFIX}{}$test${}${ordinal}${index}",
+        Kind::Clo.word(),
+        path_part(module)
+    )
+}
+
 /// `cb$test$<module path>$<n>`, `n` being the test's ordinal in its module.
 #[must_use]
 pub fn test(module: &str, ordinal: u32) -> String {

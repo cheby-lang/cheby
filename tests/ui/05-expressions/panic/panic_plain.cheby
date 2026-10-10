@@ -1,0 +1,11 @@
+// @mode: run-fail
+// @decisions: D-068, D-161, D-449
+//! `panic` without a message reports `explicit panic` at its location,
+//! after the output written before it (§11.6).
+
+import std::io
+
+fn main() {
+  io::println("before")
+  panic
+}

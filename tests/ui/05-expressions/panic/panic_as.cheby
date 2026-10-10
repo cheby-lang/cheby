@@ -1,0 +1,11 @@
+// @mode: run-fail
+// @decisions: D-161, D-449
+//! `panic as m` reports `m` as its message (§11.6).
+
+fn fail(reason: String) -> Int {
+  panic as "computation failed: " + reason
+}
+
+fn main() {
+  let _ = fail("no input")
+}

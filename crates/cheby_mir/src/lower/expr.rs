@@ -59,7 +59,7 @@ impl BodyCx<'_, '_> {
                 self.binary(*op, *lhs, *rhs, imp, ty, span, tail)
             }
             ExprKind::Not(operand) => self.not(*operand, ty, span),
-            ExprKind::Neg { operand, imp } => self.neg(*operand, imp, ty, span),
+            ExprKind::Neg { operand, imp } => self.neg(*operand, imp, ty, span, tail),
             ExprKind::Interpolate { parts } => self.interpolate(parts, ty, span),
             ExprKind::Panic { kind, message } => self.panic_expr(*kind, *message, ty, span),
             ExprKind::DynCoerce { value, iface, dict } => {
@@ -96,18 +96,10 @@ impl BodyCx<'_, '_> {
             ThirCallee::Fn { def, dicts, .. } => {
                 // Dictionaries first (D-453); they are not expressions, so
                 // evaluation order is unchanged (§5.15.1).
-                let mut dict_ops = Vec::with_capacity(dicts.len());
-                for d in dicts {
-                    let Some(op) = self.dict(d, span)? else {
-                        return Ok(None);
-                    };
-                    if self.is_poisoned(&op) {
-                        // Reported at the call; the arguments are not
-                        // lowered, so nothing inside them is reported.
-                        return self.placeholder(self.repr_of(ty)).map(Some);
-                    }
-                    dict_ops.push(op);
-                }
+                let dict_ops = match self.call_dicts(dicts, ty, span)? {
+                    Ok(ops) => ops,
+                    Err(early) => return Ok(early),
+                };
                 let sig = abi_sig(self.cx.defs.fn_sig(*def)?, self.cx.defs.globals);
                 let want = sig.params.get(dicts.len()..).unwrap_or_default();
                 if want.len() != args.len() {
@@ -136,6 +128,30 @@ impl BodyCx<'_, '_> {
             ThirCallee::Value(callee) => self.call_value(*callee, args, ty, span, tail),
             _ => self.unsupported(span, "this kind of call", ty),
         }
+    }
+
+    /// The dictionary objects of a call at `span` whose result has type
+    /// `ty` (D-453), or `Err` with what the call evaluates to instead:
+    /// `None` if a dictionary diverged, a placeholder if one is not
+    /// lowered (reported at the call, so the arguments are not lowered
+    /// and nothing inside them is reported).
+    pub(super) fn call_dicts(
+        &mut self,
+        dicts: &[thir::Dict],
+        ty: cheby_iface::Ty,
+        span: cheby_diag::Span,
+    ) -> Result<Result<Vec<Operand>, Option<Operand>>, Ice> {
+        let mut ops = Vec::with_capacity(dicts.len());
+        for d in dicts {
+            let Some(op) = self.dict(d, span)? else {
+                return Ok(Err(None));
+            };
+            if self.is_poisoned(&op) {
+                return Ok(Err(Some(self.placeholder(self.repr_of(ty))?)));
+            }
+            ops.push(op);
+        }
+        Ok(Ok(ops))
     }
 
     /// A direct call of the top-level function `def` (through its slot,

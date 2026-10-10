@@ -1,0 +1,43 @@
+// @mode: run-pass
+// @decisions: D-018, D-023
+//! `use` chains through `result::try` and a function of one's own: each
+//! callback runs only when the step before it succeeds (§5.10).
+
+import std::int
+import std::io
+import std::result
+
+fn parse(text: String) -> Result<Int, String> {
+  case int::parse(text) {
+    Ok(n) => Ok(n)
+    Err(Nil) => Err("not a number: {text}")
+  }
+}
+
+fn sum(a: String, b: String, c: String) -> Result<Int, String> {
+  use x <- result::try(parse(a))
+  use y <- result::try(parse(b))
+  use z <- result::try(parse(c))
+  Ok(x + y + z)
+}
+
+fn logged(label: String, next: fn() -> Int) -> Int {
+  io::println("enter {label}")
+  let value = next()
+  io::println("leave {label}")
+  value
+}
+
+fn nested() -> Int {
+  use <- logged("outer")
+  use <- logged("inner")
+  42
+}
+
+fn main() {
+  let good = sum("1", "2", "3")
+  let bad = sum("1", "two", "3")
+  io::println("{good:?} {bad:?}")
+  let n = nested()
+  io::println("{n}")
+}

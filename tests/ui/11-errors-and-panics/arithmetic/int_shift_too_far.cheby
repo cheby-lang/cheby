@@ -1,0 +1,8 @@
+// @mode: run-fail
+// @decisions: D-092, D-449
+//! A shift by the type's width or more panics (§5.4.6).
+
+fn main() {
+  let n = 64
+  let _ = 1 << n
+}

@@ -63,13 +63,6 @@ pub(crate) const COMPLETE: &[&str] = &[];
 /// # Safety
 ///
 /// `list` is a live list value.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "for other runtime modules from W3-B on; tests use it now"
-    )
-)]
 pub(crate) unsafe fn iter(list: Word) -> Iter {
     node::register();
     // SAFETY: forwarded from the caller.
@@ -96,13 +89,6 @@ pub(crate) unsafe fn length(list: Word) -> usize {
 /// A list of the given owned elements, in order; the result is owned.
 /// Pushes in place, so the cost is O(n) with amortized O(1) allocation per
 /// element.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "for other runtime modules from W3-B on; tests use it now"
-    )
-)]
 pub(crate) fn from_iter(items: impl IntoIterator<Item = Word>) -> Word {
     node::register();
     ops::from_iter(items).word()

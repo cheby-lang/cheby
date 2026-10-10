@@ -54,6 +54,7 @@ ryu = "1"
 serde_json = "1"
 siphasher = "1"
 toml = { version = "1.1", features = ["preserve_order"] }
+unicode-segmentation = "1.13.3"
 unicode-width = "0.2"
 # The instruction-cache maintenance cranelift-jit itself uses; the version
 # follows cranelift (0.135 is Wasmtime 48).

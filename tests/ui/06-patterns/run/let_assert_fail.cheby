@@ -1,0 +1,19 @@
+// @mode: run-fail
+// @decisions: D-159, D-449, D-528
+//! A `let assert` whose pattern does not match panics with the debug text
+//! of the value, at the pattern (§11.4).
+
+import std::io
+
+fn parse(text: String) -> Result<Int, String> {
+  case text {
+    "3" => Ok(3)
+    _ => Err(text)
+  }
+}
+
+fn main() {
+  io::println("before")
+  let assert Ok(n) = parse("seven")
+  io::println("{n}")
+}

@@ -1,0 +1,46 @@
+// @mode: run-pass
+// @decisions: D-120, D-157
+//! List literals run: elements in order, and spreads at the start, in
+//! the middle and at the end, any number of times; items are evaluated
+//! from left to right (§5.13).
+
+import std::io
+import std::list
+
+fn trace(label: String, n: Int) -> Int {
+  io::println("evaluating {label}")
+  n
+}
+
+fn traced(label: String, xs: List<Int>) -> List<Int> {
+  io::println("evaluating {label}")
+  xs
+}
+
+/// The length and the first six slots of `xs`.
+fn items(xs: List<Int>) -> String {
+  let n = list::length(xs)
+  let a = list::get(xs, 0)
+  let b = list::get(xs, 1)
+  let c = list::get(xs, 2)
+  let d = list::get(xs, 3)
+  let e = list::get(xs, 4)
+  let f = list::get(xs, 5)
+  "{n}: {a:?} {b:?} {c:?} {d:?} {e:?} {f:?}"
+}
+
+fn main() {
+  let empty: List<Int> = []
+  io::println(items(empty))
+  let xs = [1, 2]
+  let ys = [3]
+  io::println(items(xs))
+  io::println(items([..xs, 9]))
+  io::println(items([0, ..xs, 9]))
+  io::println(items([0, ..xs]))
+  io::println(items([0, ..xs, 99, ..ys]))
+  io::println(items([..xs, ..ys, ..xs]))
+  io::println(items([..empty]))
+  let ordered = [trace("a", 1), ..traced("b", ys), trace("c", 2)]
+  io::println(items(ordered))
+}

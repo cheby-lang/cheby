@@ -1,0 +1,50 @@
+// @mode: run-pass
+// @decisions: D-071, D-454
+//! Field access runs: on a single-constructor record, on a generic field,
+//! and on a field that every constructor of a type holds, whether or not
+//! it sits at the same place in each (§5.11.3).
+
+import std::io
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+type Labeled<T> {
+  value: T,
+  label: String,
+}
+
+type Shape {
+  Circle { name: String, radius: Int },
+  Rect { width: Int, height: Int, name: String },
+}
+
+type Item {
+  Book { title: String, pages: Int },
+  Disc { label: String, title: String, minutes: Int, pages: Int },
+}
+
+fn describe(item: Item) -> String {
+  "{item.title}: {item.pages} pages"
+}
+
+fn shape_name(shape: Shape) -> String {
+  shape.name
+}
+
+fn main() {
+  let point = Point { x: 1, y: 2 }
+  io::println("{point.x} {point.y}")
+  let labeled = Labeled { value: 2.5, label: "ratio" }
+  io::println("{labeled.label} = {labeled.value}")
+  let circle = Circle { name: "circle", radius: 1 }
+  let rect = Rect { width: 2, height: 3, name: "rect" }
+  io::println(shape_name(circle))
+  io::println(shape_name(rect))
+  let book = Book { title: "Dune", pages: 412 }
+  let disc = Disc { label: "Blue", title: "Kind of Blue", minutes: 46, pages: 4 }
+  io::println(describe(book))
+  io::println(describe(disc))
+}

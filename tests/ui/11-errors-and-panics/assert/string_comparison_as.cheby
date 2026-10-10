@@ -1,0 +1,8 @@
+// @mode: run-fail
+// @decisions: D-160, D-528
+//! The `as` message is evaluated only when the assertion fails (§11.5).
+
+fn main() {
+  let name = "Ada"
+  assert name != "Ada" as "name must differ from " + name
+}

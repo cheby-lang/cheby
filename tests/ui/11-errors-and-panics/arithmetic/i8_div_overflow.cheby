@@ -1,0 +1,8 @@
+// @mode: run-fail
+// @decisions: D-069, D-449
+//! `MIN / -1` on `I8` overflows and panics (§3.3.3).
+
+fn main() {
+  let x: I8 = -128
+  let _ = x / -1
+}

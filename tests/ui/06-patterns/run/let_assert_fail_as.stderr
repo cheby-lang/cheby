@@ -1,0 +1,3 @@
+panicked at tests/ui/06-patterns/run/let_assert_fail_as.cheby:15:14:
+`let assert` pattern did not match: user 7 must exist
+  value: None

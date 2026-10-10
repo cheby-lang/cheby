@@ -1,0 +1,16 @@
+// @mode: run-pass
+// @decisions: D-034, D-047, D-067
+//! On `String`, `+` calls `add`, and `<`, `<=`, `>` and `>=` call
+//! `compare` and test the `Order` it returns (§5.4.3, §5.4.4).
+
+import std::io
+
+fn main() {
+  let first = "Ada"
+  let full = first + " " + "Lovelace"
+  io::println(full)
+  assert full == "Ada Lovelace"
+  assert "apple" < "banana" && "apple" <= "apple"
+  assert "b" > "a" && "b" >= "b"
+  assert !("b" < "a") && !("a" > "b")
+}

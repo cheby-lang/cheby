@@ -39,12 +39,26 @@ pub fn int_value(text: &str) -> Option<u128> {
 /// checks belong to type checking.
 #[must_use]
 pub fn float_value(text: &str) -> Option<f64> {
+    float_text(text)?.parse().ok()
+}
+
+/// The value of a float literal as an `F32`, rounded once, straight from
+/// the decimal text to the nearest `F32` (§3.3.4, D-496). Going through
+/// [`float_value`] first would round twice and can give the wrong `F32`
+/// (D-313 says the same of `f32::parse`). Out-of-range values round to
+/// infinity.
+#[must_use]
+pub fn float_value_f32(text: &str) -> Option<f32> {
+    float_text(text)?.parse().ok()
+}
+
+/// The text of a well-formed decimal float literal without `_`.
+fn float_text(text: &str) -> Option<String> {
     let scan = scan_number(text.as_bytes());
     if scan.error.is_some() || scan.len != text.len() || scan.base != Base::Dec {
         return None;
     }
-    let cleaned: String = text.chars().filter(|&c| c != '_').collect();
-    cleaned.parse().ok()
+    Some(text.chars().filter(|&c| c != '_').collect())
 }
 
 /// Why an escape sequence is invalid (D-114).
@@ -157,7 +171,8 @@ fn normalize_line_breaks(text: &str) -> Cow<'_, str> {
 #[cfg(test)]
 mod tests {
     use super::{
-        EscapeError, escape_value, float_value, int_value, raw_string_value, string_value,
+        EscapeError, escape_value, float_value, float_value_f32, int_value, raw_string_value,
+        string_value,
     };
     use crate::SyntaxKind::{INTERP_START, LOWER_IDENT, STRING_ESCAPE, STRING_TEXT};
 
@@ -191,6 +206,30 @@ mod tests {
         for bad in ["", "0x1", "1.5f", "1.", "inf", "NaN"] {
             assert_eq!(float_value(bad), None, "{bad}");
         }
+    }
+
+    /// An `F32` literal rounds once, from its decimal text (D-496).
+    #[test]
+    fn f32_floats_round_once() {
+        // 1 + 2^-24 + 1e-29 lies just above the midpoint between 1 and
+        // 1 + 2^-23. Through `f64` it becomes the exact midpoint, which
+        // rounds to even: 1.0, the wrong answer.
+        let text = "1.00000005960464477539062500001";
+        assert_eq!(float_value_f32(text), Some(1.000_000_1));
+        // 1 + 2^-24 exactly.
+        assert_eq!(
+            float_value(text),
+            Some(f64::from_bits(0x3ff0_0000_1000_0000))
+        );
+        // Just below the overflow midpoint 2^128 - 2^103: `F32::MAX`,
+        // although its `f64` rounding is the midpoint itself.
+        assert_eq!(float_value_f32("3.4028235677973366e38"), Some(f32::MAX));
+        assert_eq!(
+            float_value_f32("3.4028235677973367e38"),
+            Some(f32::INFINITY)
+        );
+        assert_eq!(float_value_f32("1_0.2_5"), Some(10.25));
+        assert_eq!(float_value_f32("1.5f"), None);
     }
 
     #[test]

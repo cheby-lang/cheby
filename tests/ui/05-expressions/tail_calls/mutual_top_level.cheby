@@ -1,0 +1,26 @@
+// @mode: run-pass
+// @decisions: D-015, D-043
+//! Ten million mutual tail calls between top-level functions run in
+//! constant stack (§5.15.3, E2).
+
+import std::io
+
+fn is_even(n: Int) -> Bool {
+  case {
+    n == 0 => True
+    _ => is_odd(n - 1)
+  }
+}
+
+fn is_odd(n: Int) -> Bool {
+  case {
+    n == 0 => False
+    _ => is_even(n - 1)
+  }
+}
+
+fn main() {
+  let even = is_even(10_000_000)
+  let odd = is_odd(10_000_001)
+  io::println("{even} {odd}")
+}

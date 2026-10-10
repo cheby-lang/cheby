@@ -81,6 +81,13 @@ impl FloatLit<'_> {
     pub fn value(self) -> Option<f64> {
         literal::float_value(self.text())
     }
+
+    /// The value rounded once to the nearest `F32`, `None` if the literal
+    /// is malformed.
+    #[must_use]
+    pub fn value_f32(self) -> Option<f32> {
+        literal::float_value_f32(self.text())
+    }
 }
 
 impl<'t> RawStringLit<'t> {

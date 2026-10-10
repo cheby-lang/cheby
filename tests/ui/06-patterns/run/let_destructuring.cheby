@@ -1,0 +1,21 @@
+// @mode: run-pass
+// @decisions: D-076, D-113
+//! `let` takes values apart with irrefutable patterns: tuples, records of
+//! single-variant types, and nested combinations of them (§5.2, §6.1).
+
+import std::io
+
+type Person {
+  Person { name: String, age: Int },
+}
+
+fn main() {
+  let (greeting, target) = ("hello", "world")
+  io::println("{greeting}, {target}")
+  let Person { name, age } = Person { name: "Ada", age: 36 }
+  io::println("{name} is {age}")
+  let (label, Person { name: other, .. }) = ("next", Person { name: "Bo", age: 3 })
+  io::println("{label}: {other}")
+  let (first, _) = (1, "ignored")
+  io::println("{first}")
+}

@@ -12,7 +12,7 @@ use cheby_syntax::ast::{
 use super::constraints::placeholder_dict;
 use super::{BodyCx, Deferred, Expected, VarNote};
 use crate::infer::{InferTy, VarKind, instantiate};
-use crate::thir::{BinOpKind, Dict, ExprId, ExprKind, ListItem, Lit, OpImpl, PanicKind};
+use crate::thir::{BinOpKind, Dict, ExprId, ExprKind, FloatLit, ListItem, Lit, OpImpl, PanicKind};
 
 /// An item used at a path, with its type arguments: the turbofish's
 /// (D-049), or fresh variables.
@@ -112,10 +112,19 @@ impl BodyCx<'_> {
                 self.push(ExprKind::Lit(Lit::Int(value)), ty, span)
             }
             Some(LiteralKind::Float(float)) => {
-                let Some(value) = float.value() else {
+                let (Some(wide), Some(narrow)) = (float.value(), float.value_f32()) else {
                     return self.error_expr(span);
                 };
-                let value = if negative.is_some() { -value } else { value };
+                // Negation is exact, so negating each rounded value is the
+                // same as rounding the negative literal.
+                let value = if negative.is_some() {
+                    FloatLit {
+                        wide: -wide,
+                        narrow: -narrow,
+                    }
+                } else {
+                    FloatLit { wide, narrow }
+                };
                 let ty = self.infcx.new_var(span, VarKind::FloatLit)?;
                 self.push(ExprKind::Lit(Lit::Float(value)), ty, span)
             }

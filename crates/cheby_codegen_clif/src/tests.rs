@@ -90,6 +90,17 @@ fn mangled_names_do_not_collide() {
         mangle::tuple_fn(&name("std::fmt", "Show::show"), 2),
         "cb$tfn$std$fmt$Show$show$2"
     );
+    // Closures: by the owner's name, or by a test's ordinal, since a
+    // test's name is free text that may equal a function's (D-456).
+    assert_eq!(
+        mangle::closure(&name("app", "spin"), 1),
+        "cb$clo$app$spin$1"
+    );
+    assert_eq!(mangle::test_closure("app", 3, 1), "cb$clo$test$app$3$1");
+    assert_ne!(
+        mangle::test_closure("app", 0, 0),
+        mangle::closure(&name("app", "test"), 0)
+    );
 }
 
 /// The C signatures of every runtime helper (plan §4.3.1): `ctx` first for

@@ -1,0 +1,2 @@
+panicked at tests/ui/11-errors-and-panics/assert/plain.cheby:8:10:
+assertion failed: ready && True

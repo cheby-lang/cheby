@@ -18,6 +18,10 @@
 //! - `run-fail`: like `run-pass`, with the exit code of `@exit`, 101 (a
 //!   panic) by default.
 //!
+//! A run test's `<name>.stdin` is its standard input, which is null
+//! without one, and `<name>.args` its arguments, one per line, passed
+//! after `--` (D-543).
+//!
 //! Strict runs (D-544): `CHEBY_MILESTONE` overrides `tests/milestone`,
 //! `CHEBY_PENDING=require` makes a failing pending test a failure unless
 //! the file `CHEBY_PENDING_ALLOW` names lists it, and every `cheby` runs
@@ -69,26 +73,52 @@ fn main() -> ExitCode {
         .collect();
 
     let conclusion = libtest_mimic::run(&args, trials);
+    // Each test removes its own package; the empty directory goes last.
+    let _ = std::fs::remove_dir(packages_dir());
     verdicts.report("UI tests");
     conclusion.exit_code()
 }
 
 fn run_test(test: &UiTest, bless: bool) -> Result<(), String> {
     let (package, files) = make_package(test)?;
+    let result = check_package(test, bless, &package, &files);
+    // Best effort: a leftover package only costs disk space, and the
+    // directory is this process's own (see `packages_dir`).
+    let _ = std::fs::remove_dir_all(&package);
+    result
+}
+
+/// This process's directory for the temporary packages. It is unique per
+/// process, so concurrent runs of the harness on one checkout never
+/// delete each other's packages mid-run.
+fn packages_dir() -> PathBuf {
+    Path::new(TMP).join(format!("ui-{}", std::process::id()))
+}
+
+fn check_package(
+    test: &UiTest,
+    bless: bool,
+    package: &Path,
+    files: &[ShownFile],
+) -> Result<(), String> {
     let mode = test.header.mode;
     let command = if mode.runs() { "run" } else { "check" };
+    let input = test.input()?;
     let mut cmd = Command::new(CHEBY);
     // `--color=never` and `NO_COLOR` keep goldens plain even if the
     // developer's environment forces color (`CLICOLOR_FORCE`). Freed
     // objects are poisoned, so a reference-count mistake stops the program
     // where it happens (D-544).
     cmd.args(["--color=never", command])
-        .current_dir(&package)
+        .current_dir(package)
         .env("NO_COLOR", "1")
         .env(POISON_ENV, "1");
-    let out = process::run(cmd, None, TIMEOUT)?;
-    let stdout = rewrite_paths(&out.stdout, &package, &files);
-    let stderr = rewrite_paths(&out.stderr, &package, &files);
+    if !input.args.is_empty() {
+        cmd.arg("--").args(&input.args);
+    }
+    let out = process::run(cmd, input.stdin.as_deref(), TIMEOUT)?;
+    let stdout = rewrite_paths(&out.stdout, package, files);
+    let stderr = rewrite_paths(&out.stderr, package, files);
 
     let expected_exit = match mode {
         Mode::CheckPass | Mode::RunPass => 0,
@@ -127,7 +157,7 @@ type ShownFile = (String, String);
 /// Writes the test's package into a fresh temporary directory and returns
 /// the directory, with the files whose paths are rewritten in the output.
 fn make_package(test: &UiTest) -> Result<(PathBuf, Vec<ShownFile>), String> {
-    let dir = Path::new(TMP).join("ui").join(test.name.replace('/', "__"));
+    let dir = packages_dir().join(test.name.replace('/', "__"));
     if dir.exists() {
         std::fs::remove_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }

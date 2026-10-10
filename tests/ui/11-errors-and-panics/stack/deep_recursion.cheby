@@ -1,0 +1,12 @@
+// @mode: run-fail
+// @decisions: D-094, D-125, D-457
+//! Deep non-tail recursion exhausts the stack and panics with
+//! `stack overflow` instead of crashing (§11.8.1).
+
+fn deep(n: Int) -> Bool {
+  n == 0 || !deep(n - 1)
+}
+
+fn main() {
+  let _ = deep(1_000_000_000)
+}

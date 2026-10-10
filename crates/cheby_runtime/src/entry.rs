@@ -459,12 +459,24 @@ static PROGRAM: RwLock<Program> = RwLock::new(Program {
     name: String::new(),
 });
 
-fn set_program(args: Vec<String>, name: String) {
+/// Sets the running program's arguments, without the program name, and
+/// its name (D-347), which `std::env` reads. `run_main` calls it with its
+/// `RunConfig`; a host that runs other entries as a program, such as
+/// `cheby test` (D-369) or the REPL, calls it before they run. An empty
+/// name means "not set": `env::program_name` then gives the process's
+/// first argument.
+pub fn set_program(args: Vec<String>, name: String) {
     *PROGRAM.write().unwrap_or_else(PoisonError::into_inner) = Program { args, name };
 }
 
-/// The running program's arguments, without the program name (D-347).
-/// Read by `std::env` (later).
+/// The running program's name, or `None` when no host has set one.
+#[must_use]
+pub fn program_name_if_set() -> Option<String> {
+    Some(program_name()).filter(|name| !name.is_empty())
+}
+
+/// The running program's arguments, without the program name (D-347),
+/// read by `std::env`.
 #[must_use]
 pub fn program_args() -> Vec<String> {
     PROGRAM

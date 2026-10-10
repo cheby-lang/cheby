@@ -1,29 +1,79 @@
 //! Patterns (D3): `case`, `let`, `let assert` and parameter patterns, as
-//! decision trees.
+//! decision trees (chapter 6, §5.9, §11.4).
 //!
-//! W2-B fills this file (plan §4.2). Today `let` with a name or `_`
-//! lowers; every other pattern is E0038.
+//! Each construct evaluates its subjects into locals, compiles its
+//! patterns into a decision tree ([`tree`], which documents the column
+//! heuristic) and lowers the tree ([`emit`]):
+//!
+//! - `case`: one row per arm; the arms' bodies join with the `case`'s
+//!   value, and inherit its tail position (§5.15.2). A value no arm
+//!   matches is impossible after the exhaustiveness check (§6.9) and is
+//!   `unreachable`, never a panic.
+//! - `let` and parameters (D-242): one irrefutable row; the names are
+//!   bound for what follows.
+//! - `let assert`: one row; a value it does not match panics with
+//!   `` `let assert` pattern did not match `` (`: m` with `as m`) and a
+//!   `  value: <debug text>` line (D-528), located at the pattern.
+
+mod emit;
+#[cfg(test)]
+mod tests;
+pub(crate) mod tree;
 
 use cheby_diag::Span;
 use cheby_iface::{Ice, Ty};
 use cheby_types::thir::{self, Arm, ExprId, PatKind};
 
-use crate::ir::Operand;
+use crate::ir::{Local, Operand};
 use crate::lower::body::BodyCx;
-use crate::lower::not_supported;
+use crate::lower::pat::emit::{ArmPlan, OnFail, Then};
+use crate::lower::pat::tree::{Input, bound_locals, decide};
 
 impl BodyCx<'_, '_> {
     /// `case subjects { arms }` of type `ty`; `tail` marks §5.15.2 tail
     /// position, which the arms' bodies inherit.
     pub(super) fn case(
         &mut self,
-        _subjects: &[ExprId],
-        _arms: &[Arm],
+        subjects: &[ExprId],
+        arms: &[Arm],
         ty: Ty,
         span: Span,
-        _tail: bool,
+        tail: bool,
     ) -> Result<Option<Operand>, Ice> {
-        self.unsupported(span, "`case` expressions", ty)
+        // Subjects left to right (§5.9.1).
+        let mut locals = Vec::with_capacity(subjects.len());
+        let mut tys = Vec::with_capacity(subjects.len());
+        for &s in subjects {
+            let Some(op) = self.expr(s, false)? else {
+                return Ok(None);
+            };
+            let sty = self.ty(s)?;
+            locals.push(self.as_local(op, self.repr_of(sty))?);
+            tys.push(sty);
+        }
+        let input = Input {
+            subjects: tys,
+            rows: arms
+                .iter()
+                .enumerate()
+                .map(|(i, a)| (a.pats.iter().collect(), i))
+                .collect(),
+            guarded: arms.iter().map(|a| a.guard.is_some()).collect(),
+        };
+        let decision = decide(input, &self.cx.defs)?;
+        let plans = arms
+            .iter()
+            .map(|a| ArmPlan {
+                guard: a.guard,
+                then: Then::Body {
+                    body: a.body,
+                    tail,
+                    ty,
+                },
+                locals: bound_locals(a.pats.iter()),
+            })
+            .collect();
+        self.emit_decision(&decision, &locals, plans, OnFail::Unreachable, span)
     }
 
     /// `let pat = init`. `None` means `init` diverged.
@@ -31,28 +81,21 @@ impl BodyCx<'_, '_> {
         let Some(op) = self.expr(init, false)? else {
             return Ok(None);
         };
+        let init_ty = self.ty(init)?;
         match &pat.kind {
             PatKind::Bind(id) => {
-                let decl = self
-                    .body
-                    .local(*id)
-                    .ok_or_else(|| Ice::new("a `let` without its local"))?;
-                let (name, ty) = (decl.name, decl.ty);
-                let init_ty = self.ty(init)?;
+                let ty = self.local_ty(*id)?;
                 let op = self.to_repr(op, self.repr_of(init_ty), self.repr_of(ty), init_ty)?;
-                self.bind_name(*id, name, ty, op)?;
+                self.bind_local(*id, op)?;
+                Ok(Some(()))
             }
             // The value is unused; the RC pass drops it.
-            PatKind::Wild => {}
+            PatKind::Wild => Ok(Some(())),
             _ => {
-                self.diags.push(not_supported(
-                    pat.span,
-                    "patterns other than a name or `_` in `let`",
-                ));
-                self.bind_pattern(pat)?;
+                let value = self.as_local(op, self.repr_of(init_ty))?;
+                self.destructure(pat, value, init_ty, OnFail::Unreachable)
             }
         }
-        Ok(Some(()))
     }
 
     /// `let assert pat = init as message` (§11.4). `None` means it
@@ -60,41 +103,68 @@ impl BodyCx<'_, '_> {
     pub(super) fn let_assert(
         &mut self,
         pat: &thir::Pat,
-        _init: ExprId,
-        _message: Option<ExprId>,
+        init: ExprId,
+        message: Option<ExprId>,
     ) -> Result<Option<()>, Ice> {
-        self.diags
-            .push(not_supported(pat.span, "`let assert` statements"));
-        self.bind_pattern(pat)?;
-        Ok(Some(()))
+        let Some(op) = self.expr(init, false)? else {
+            return Ok(None);
+        };
+        let ty = self.ty(init)?;
+        let value = self.as_local(op, self.repr_of(ty))?;
+        // GAP(let-assert-location): the report's location is the start of
+        // the pattern that did not match.
+        let on_fail = OnFail::LetAssert {
+            value,
+            ty,
+            message,
+            at: pat.span,
+        };
+        self.destructure(pat, value, ty, on_fail)
     }
 
     /// Binds a closure, local-function, `use`, capture or pipe parameter
     /// pattern (irrefutable, D-242) to `value`, a uniform word (D-453).
-    #[expect(
-        dead_code,
-        reason = "called by closure lowering, which W2-C adds (plan §4.2)"
-    )]
     pub(super) fn bind_param(&mut self, pat: &thir::Pat, value: Operand) -> Result<(), Ice> {
+        let op = self.from_uniform(value, pat.ty)?;
         match &pat.kind {
-            PatKind::Bind(id) => {
-                let decl = self
-                    .body
-                    .local(*id)
-                    .ok_or_else(|| Ice::new("a parameter without its local"))?;
-                let (name, ty) = (decl.name, decl.ty);
-                let op = self.from_uniform(value, ty)?;
-                self.bind_name(*id, name, ty, op)
-            }
+            PatKind::Bind(id) => self.bind_local(*id, op),
             // The RC pass drops the unused value.
             PatKind::Wild => Ok(()),
             _ => {
-                self.diags.push(not_supported(
-                    pat.span,
-                    "patterns other than a name or `_` in parameters",
-                ));
-                self.bind_pattern(pat)
+                let value = self.as_local(op, self.repr_of(pat.ty))?;
+                self.destructure(pat, value, pat.ty, OnFail::Unreachable)?
+                    .ok_or_else(|| Ice::new("an irrefutable parameter pattern diverged"))
             }
         }
+    }
+
+    /// Matches `value` (of type `ty`) against `pat` and binds its names
+    /// for what follows. `None` means no path goes on.
+    fn destructure(
+        &mut self,
+        pat: &thir::Pat,
+        value: Local,
+        ty: Ty,
+        on_fail: OnFail,
+    ) -> Result<Option<()>, Ice> {
+        if self.is_poisoned(&Operand::Local(value)) {
+            // The value stands for a construct reported as E0038: its
+            // names become placeholders too, and nothing is matched.
+            self.bind_pattern(pat)?;
+            return Ok(Some(()));
+        }
+        let input = Input {
+            subjects: vec![ty],
+            rows: vec![(vec![pat], 0)],
+            guarded: vec![false],
+        };
+        let decision = decide(input, &self.cx.defs)?;
+        let plan = ArmPlan {
+            guard: None,
+            then: Then::Continue,
+            locals: bound_locals([pat]),
+        };
+        let done = self.emit_decision(&decision, &[value], vec![plan], on_fail, pat.span)?;
+        Ok(done.map(|_| ()))
     }
 }

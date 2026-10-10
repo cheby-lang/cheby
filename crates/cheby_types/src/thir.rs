@@ -457,9 +457,21 @@ pub enum Lit {
     /// An integer of any integer type, possibly negative (D-470).
     Int(i128),
     /// A `Float` or `F32`.
-    Float(f64),
+    Float(FloatLit),
     /// A string. Escapes decoded, line breaks as LF (D-114).
     Str(Box<str>),
+}
+
+/// A float literal's value, rounded once from its decimal text to each
+/// float type (§3.3.4, D-496). The `F32` value is not the `Float` value
+/// narrowed: that would round twice and can be off by one ulp
+/// (GAP(f32-literal-rounding)).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FloatLit {
+    /// The nearest `Float`.
+    pub wide: f64,
+    /// The nearest `F32`.
+    pub narrow: f32,
 }
 
 /// What a call calls.

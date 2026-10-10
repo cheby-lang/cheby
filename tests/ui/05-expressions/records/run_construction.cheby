@@ -1,0 +1,54 @@
+// @mode: run-pass
+// @decisions: D-022, D-113, D-120, D-138, D-454
+//! Constructors run: field initializers are evaluated in the order
+//! written, fields are stored in declaration order, raw `Int`, `Float`
+//! and `Bool` fields and generic fields hold their values, and builtin
+//! and user constructors print as written (§5.11.1, §5.15.1).
+
+import std::io
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+type Mixed {
+  count: Int,
+  name: String,
+  ratio: Float,
+  flag: Bool,
+}
+
+type Pair<T> {
+  Pair(T, Int),
+}
+
+type Shape {
+  Circle(Float),
+  Dot,
+}
+
+fn trace(label: String, n: Int) -> Int {
+  io::println("evaluating {label}")
+  n
+}
+
+fn main() {
+  let point = Point { y: trace("y", 2), x: trace("x", 1) }
+  io::println("{point:?}")
+  let count = 3
+  let mixed = Mixed { flag: True, ratio: 0.5, name: "m", count }
+  io::println("{mixed:?}")
+  let pair = Pair(trace("first", 7), trace("second", 8))
+  io::println("{pair:?}")
+  let wide: Pair<I64> = Pair(-9223372036854775807, 3)
+  io::println("{wide:?}")
+  let circle = Circle(2.5)
+  let dot = Dot
+  io::println("{circle:?} {dot:?}")
+  let some = Some(point)
+  let ok: Result<String, Int> = Ok("yes")
+  let err: Result<String, Int> = Err(-1)
+  let none: Option<Int> = None
+  io::println("{some:?} {ok:?} {err:?} {none:?}")
+}

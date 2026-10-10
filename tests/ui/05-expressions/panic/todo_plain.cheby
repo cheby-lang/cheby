@@ -1,0 +1,12 @@
+// @mode: run-fail
+// @decisions: D-068, D-449
+//! Reaching `todo` reports `not implemented` (§11.6); the compiler warns
+//! about every `todo` it compiles.
+
+fn area(_size: Int) -> Int {
+  todo
+}
+
+fn main() {
+  let _ = area(3)
+}

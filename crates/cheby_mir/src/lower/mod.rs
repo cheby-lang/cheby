@@ -41,6 +41,8 @@ mod list;
 mod panic;
 mod pat;
 mod scalar;
+#[cfg(test)]
+mod scalar_tests;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;

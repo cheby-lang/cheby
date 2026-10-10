@@ -1,0 +1,31 @@
+// @mode: run-pass
+// @decisions: D-305, D-346, D-543
+//! `io::read_line` returns each line without `\n` or `\r\n`, the last
+//! line without an ending too, then `None` at the end of input, and again
+//! on every later call.
+
+import std::int
+import std::io
+
+fn echo(count: Int) -> Int {
+  case io::read_line() {
+    Ok(Some(line)) => {
+      io::print("[")
+      io::print(line)
+      io::println("]")
+      echo(count + 1)
+    }
+    Ok(None) => count
+    Err(_) => -1
+  }
+}
+
+fn main() {
+  io::print("lines? ")
+  let count = echo(0)
+  io::println(int::show(count))
+  case io::read_line() {
+    Ok(None) => io::println("still at the end")
+    _ => io::println("unexpected")
+  }
+}

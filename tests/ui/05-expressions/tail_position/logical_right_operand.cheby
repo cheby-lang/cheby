@@ -1,0 +1,21 @@
+// @mode: run-pass
+// @decisions: D-015, D-120
+//! The right operand of `&&` and `||` is in tail position when the whole
+//! expression is (§5.15.2), so a loop through it runs in constant stack:
+//! ten million steps here (§5.15.3).
+
+import std::io
+
+fn down(n: Int) -> Bool {
+  n <= 0 || n > 0 && down(n - 1)
+}
+
+fn all_even(n: Int) -> Bool {
+  n == 0 || n % 2 == 0 && all_even(n - 2)
+}
+
+fn main() {
+  assert down(10_000_000)
+  assert all_even(10_000_000)
+  io::println("done")
+}

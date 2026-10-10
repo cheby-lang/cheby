@@ -1,0 +1,20 @@
+// @mode: run-fail
+// @exit: 1
+// @decisions: D-182, D-529
+//! `main` returning `Err(e)` writes `e`'s `show` text and a newline to
+//! standard error, with no prefix, and exits with status 1 (§10.10).
+
+import std::io
+
+type Problem {
+  Problem,
+}
+
+fn show(_problem: Problem) -> String {
+  "the input is empty"
+}
+
+fn main() -> Result<Nil, Problem> {
+  io::println("checking")
+  Err(Problem)
+}

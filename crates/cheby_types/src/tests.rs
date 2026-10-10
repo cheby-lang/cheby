@@ -1644,6 +1644,17 @@ fn f32_literals_fit_when_they_round_to_a_finite_value() {
         Vec::<String>::new()
     );
     assert_eq!(errors("const big: F32 = 3.5e38\n"), ["E0071"]);
+    // Just below the midpoint 2^128 - 2^103: it rounds to `F32::MAX`,
+    // although its `Float` rounding is the midpoint itself
+    // (GAP(f32-literal-rounding)). Just above, it rounds to infinity.
+    assert_eq!(
+        errors("const edge: F32 = 3.4028235677973366e38\n"),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        errors("const over: F32 = -3.4028235677973367e38\n"),
+        ["E0071"]
+    );
 }
 
 /// `Never` converts to a literal's type variable: the closure's `panic`

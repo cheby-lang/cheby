@@ -128,15 +128,17 @@ fn compile_errors_exit_with_one() {
             MANIFEST,
             (
                 "src/main.cheby",
-                "//! Unsupported.\n\nimport std::io\n\nfn main() {\n  io::println(\"never\")\n  let _ = 1 + 2\n}\n",
+                "//! Unsupported.\n\nimport std::io\n\nfn main() {\n  io::println(\"never\")\n  let shown: dyn Show = \"text\"\n  io::println(Show::show(shown))\n}\n",
             ),
         ],
     );
     let out = cheby(&dir, &["run"]);
     assert_eq!(out.stdout, "");
+    // A conversion to `dyn` stays E0038 until W4-A; switch to another
+    // unsupported construct then (D-554).
     assert!(
         out.stderr
-            .starts_with("error[E0038]: operators are not supported yet"),
+            .starts_with("error[E0038]: conversions to `dyn` are not supported yet"),
         "{}",
         out.stderr
     );
@@ -154,15 +156,17 @@ fn unsupported_constructs_reached_from_main_exit_with_one() {
             MANIFEST,
             (
                 "src/main.cheby",
-                "//! Back-end gate.\n\nimport std::io\n\nfn main() {\n  io::println(\"never\")\n  let _ = pick(\"a\")\n}\n\nfn pick(text: String) -> String {\n  case text {\n    \"a\" => \"first\"\n    _ => text\n  }\n}\n",
+                "//! Back-end gate.\n\nimport std::io\n\nfn main() {\n  io::println(\"never\")\n  let _ = pick(\"a\")\n}\n\nfn pick(text: String) -> String {\n  let shown: dyn Show = text\n  Show::show(shown)\n}\n",
             ),
         ],
     );
     let out = cheby(&dir, &["run"]);
     assert_eq!(out.stdout, "");
+    // A conversion to `dyn` stays E0038 until W4-A; switch to another
+    // unsupported construct then (D-554).
     assert!(
         out.stderr.starts_with(
-            "error[E0038]: `case` expressions are not supported yet\n  --> src/main.cheby:11:3"
+            "error[E0038]: conversions to `dyn` are not supported yet\n  --> src/main.cheby:11:"
         ),
         "{}",
         out.stderr
@@ -297,4 +301,61 @@ fn native_symbol_errors_are_diagnostics() {
         out.stderr
     );
     assert_eq!(out.status, Some(1));
+}
+
+/// Runs `main_body` (after a `read_line`, so the reader of standard output
+/// is gone before the program writes) with standard output closed, and
+/// returns the status and standard error.
+#[expect(
+    clippy::unwrap_used,
+    reason = "a test helper: failing to spawn or talk to `cheby` fails the test"
+)]
+fn run_with_closed_stdout(name: &str, main_body: &str) -> (Option<i32>, String) {
+    use std::io::Write as _;
+    use std::process::Stdio;
+
+    let source = format!(
+        "//! Writes to a closed standard output.\n\nimport std::io\n\nfn until_err(n: Int) -> Int {{\n  case io::write_stdout(\"line\\n\") {{\n    Ok(_) => until_err(n + 1)\n    Err(_) => n\n  }}\n}}\n\nfn main() {{\n  let _ = io::read_line()\n  let n = until_err(0)\n  io::eprintln(\"failed after {{n}} writes\")\n{main_body}  io::eprintln(\"main returns\")\n}}\n"
+    );
+    let dir = package(name, &[MANIFEST, ("src/main.cheby", &source)]);
+    let mut child = Command::new(CHEBY)
+        .args(["--color=never", "run"])
+        .current_dir(&dir)
+        .env("NO_COLOR", "1")
+        .env("CHEBY_RT_POISON", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    // Close the reading end first, then let the program go on.
+    drop(child.stdout.take());
+    let mut stdin = child.stdin.take().unwrap();
+    stdin.write_all(b"go\n").unwrap();
+    drop(stdin);
+    let out = child.wait_with_output().unwrap();
+    (
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+/// Once `io::write_stdout` has returned `Err`, the text it reported may
+/// stay unwritten without ending the program (GAP(stdout-reported-failure)).
+#[test]
+fn a_reported_stdout_failure_keeps_the_exit_status() {
+    let (status, stderr) = run_with_closed_stdout("stdout_reported", "");
+    assert!(stderr.contains("failed after 0 writes"), "{stderr}");
+    assert!(stderr.contains("main returns"), "{stderr}");
+    assert_eq!(status, Some(0), "{stderr}");
+}
+
+/// Text written after the reported failure, without a `Result`, that
+/// cannot be written still ends the program with status 1 (D-306, D-346):
+/// the excuse covers only the text the `Err` reported.
+#[test]
+fn later_unreported_stdout_failures_exit_with_one() {
+    let (status, stderr) = run_with_closed_stdout("stdout_unreported", "  io::print(\"lost\")\n");
+    assert!(stderr.contains("failed after 0 writes"), "{stderr}");
+    assert_eq!(status, Some(1), "{stderr}");
 }

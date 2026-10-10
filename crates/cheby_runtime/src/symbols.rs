@@ -266,6 +266,112 @@ mod tests {
         assert!(errors.is_empty(), "{}", errors.join("\n"));
     }
 
+    /// The C type of a Cheby type at the kernel boundary (§12.5.1, plan
+    /// §6); `()` for a missing or `Nil` result.
+    fn c_type(cheby: &str) -> &'static str {
+        match cheby {
+            "Int" | "I64" => "i64",
+            "Bool" => "bool",
+            "Float" => "f64",
+            "" | "Nil" => "()",
+            _ => "Word",
+        }
+    }
+
+    /// The C signature of the function declared on `line` (`fn name(…) ->
+    /// T` or `pub fn …`), or `None` if the line declares none.
+    fn c_signature(line: &str) -> Option<(Vec<&'static str>, &'static str)> {
+        let line = line.trim();
+        let rest = line
+            .strip_prefix("pub fn ")
+            .or_else(|| line.strip_prefix("fn "))?;
+        let (_, rest) = rest.split_once('(')?;
+        let mut depth = 0_u32;
+        let close = rest.char_indices().find_map(|(i, c)| match c {
+            '(' => {
+                depth = depth.saturating_add(1);
+                None
+            }
+            ')' if depth == 0 => Some(i),
+            ')' => {
+                depth = depth.saturating_sub(1);
+                None
+            }
+            _ => None,
+        })?;
+        let (params, result) = rest.split_at(close);
+        let params = params
+            .split(',')
+            .map(str::trim)
+            .filter(|param| !param.is_empty())
+            .map(|param| c_type(param.split_once(':').unwrap().1.trim()))
+            .collect();
+        let result = result
+            .get(1..)?
+            .trim()
+            .strip_prefix("->")
+            .unwrap_or("")
+            .trim();
+        let result = result.strip_suffix('{').unwrap_or(result).trim();
+        Some((params, c_type(result)))
+    }
+
+    /// Every kernel of `std::string`, `std::io` and `std::env` has the C
+    /// signature of its `@external` declaration in `std/` (plan §6). The
+    /// numeric modules check theirs in `num`'s tests.
+    #[test]
+    fn text_io_and_env_kernels_match_their_declarations() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std");
+        let mut declared = BTreeMap::new();
+        for module in ["string", "io", "env"] {
+            let source = std::fs::read_to_string(root.join(format!("{module}.cheby"))).unwrap();
+            let mut pending: Option<String> = None;
+            for line in source.lines() {
+                if let Some(symbol) = native_symbols(line).pop() {
+                    pending = Some(symbol);
+                    continue;
+                }
+                if pending.is_some()
+                    && let Some(signature) = c_signature(line)
+                    && let Some(symbol) = pending.take()
+                {
+                    declared.insert(symbol, signature);
+                }
+            }
+        }
+        let mut registered = BTreeMap::new();
+        for (name, params, result) in [text::signatures(), io::signatures(), env::signatures()]
+            .into_iter()
+            .flatten()
+        {
+            assert!(
+                registered
+                    .insert(name.to_owned(), (params.to_vec(), result))
+                    .is_none(),
+                "{name} twice"
+            );
+        }
+        assert_eq!(registered, declared);
+        assert_eq!(registered.len(), 27 + 11 + 3);
+    }
+
+    #[test]
+    fn signatures_are_read_from_declarations() {
+        assert_eq!(
+            c_signature("fn sys_read_line() -> Result<Option<String>, (Int, String)>"),
+            Some((vec![], "Word"))
+        );
+        assert_eq!(
+            c_signature("pub fn slice(text: String, start: Int, end: Int) -> String"),
+            Some((vec!["Word", "i64", "i64"], "Word"))
+        );
+        assert_eq!(
+            c_signature("pub fn print(text: String)"),
+            Some((vec!["Word"], "()"))
+        );
+        assert_eq!(c_signature("pub type Error {"), None);
+    }
+
     #[test]
     fn native_symbols_are_found_in_attributes() {
         let source = "@external(native, \"cheby_a_b\")\n@external(js, \"./a.mjs\", \"b\")\n\

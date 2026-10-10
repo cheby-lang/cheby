@@ -30,6 +30,24 @@ impl BodyCx<'_, '_> {
         self.unsupported(span, "calls of interface functions", ret_ty)
     }
 
+    /// A call of the interface function `iface_fn` through `dict` on
+    /// arguments already evaluated, each in the representation of its
+    /// type (`repr_of(ty)`), giving a value of type `ret_ty`. Operators
+    /// implemented by interface functions use it (`scalar.rs`): their
+    /// operands are evaluated first, so a failed `assert` can print them
+    /// (D-528).
+    pub(super) fn call_iface_ops(
+        &mut self,
+        _iface_fn: DefId,
+        _dict: &Dict,
+        _args: Vec<(Operand, Ty)>,
+        ret_ty: Ty,
+        span: Span,
+        _tail: bool,
+    ) -> Result<Option<Operand>, Ice> {
+        self.unsupported(span, "calls of interface functions", ret_ty)
+    }
+
     /// A call of the interface function `iface_fn` on the `dyn` value
     /// `args[0]` (D-117).
     pub(super) fn call_dyn(

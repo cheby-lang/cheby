@@ -1,0 +1,48 @@
+// @mode: run-pass
+// @decisions: D-025, D-069, D-092
+//! Arithmetic on `Int` (§3.3.1, §5.4.2, §5.4.6): `/` truncates toward
+//! zero, `%` has the sign of the dividend, `>>` is arithmetic, and the
+//! bitwise operators work on the two's-complement bits. The extremes of
+//! `Int` are computed at run time, because their literals do not fit
+//! `Int` on JS (§3.3.4).
+
+import std::int
+import std::io
+
+fn put(label: String, n: Int) {
+  io::print(label)
+  io::print(" = ")
+  io::println(int::show(n))
+}
+
+fn main() {
+  let a = 17
+  let b = -5
+  put("a + b", a + b)
+  put("a - b", a - b)
+  put("a * b", a * b)
+  put("a / b", a / b)
+  put("a % b", a % b)
+  put("b / 2", b / 2)
+  put("b % 2", b % 2)
+  put("-a", -a)
+  put("-b", -b)
+  put("a << 3", a << 3)
+  put("a >> 2", a >> 2)
+  put("b >> 1", b >> 1)
+  put("a & b", a & b)
+  put("a | b", a | b)
+  put("a ^ b", a ^ b)
+  let max = (1 << 62) - 1 + (1 << 62)
+  let min = -max - 1
+  put("max", max)
+  put("min", min)
+  put("min / 2", min / 2)
+  put("max % 10", max % 10)
+  put("min >> 63", min >> 63)
+  assert min < max
+  assert max > 0 && min < 0
+  assert min <= min && max >= max
+  assert min + max == -1
+  assert a * b == -85 && a != b
+}

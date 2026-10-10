@@ -1,0 +1,6 @@
+Ok(6) Err("not a number: two")
+enter outer
+enter inner
+leave inner
+leave outer
+42

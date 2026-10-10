@@ -30,6 +30,12 @@
 //! diagnostics, `.stdout` for the output of `run-*` tests, such as
 //! `tests/ui/07-modules-and-packages/private_in_sibling.stderr` for the
 //! directory `tests/ui/07-modules-and-packages/private_in_sibling/`.
+//!
+//! A run test may also have input beside it (D-543, [`RunInput`]):
+//! `<name>.stdin` is fed to `cheby run` as standard input, byte for byte
+//! (without it standard input is null), and `<name>.args` holds the
+//! program's arguments, one per line, passed after `--`. Other modes may
+//! not have them.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -193,6 +199,40 @@ impl UiTest {
     }
 }
 
+/// The input of a run test (D-543): standard input and arguments.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RunInput {
+    /// The bytes of `<name>.stdin`, fed as standard input, or `None` for
+    /// a null standard input.
+    pub stdin: Option<Vec<u8>>,
+    /// The lines of `<name>.args`, passed after `--`.
+    pub args: Vec<String>,
+}
+
+impl UiTest {
+    /// The test's standard input and arguments, read from `<name>.stdin`
+    /// and `<name>.args` beside it (D-543).
+    ///
+    /// # Errors
+    ///
+    /// Returns a message if a file exists but cannot be read.
+    pub fn input(&self) -> Result<RunInput, String> {
+        let stdin_path = self.golden("stdin");
+        let stdin = match std::fs::read(&stdin_path) {
+            Ok(bytes) => Some(bytes),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(format!("{}: {e}", stdin_path.display())),
+        };
+        let args = crate::golden::read(&self.golden("args"))?
+            .map(|text| text.lines().map(str::to_owned).collect())
+            .unwrap_or_default();
+        Ok(RunInput { stdin, args })
+    }
+}
+
+/// The extensions of the input files of a run test (D-543).
+pub const INPUT_EXTENSIONS: [&str; 2] = ["stdin", "args"];
+
 /// The root module of a package test, which holds the header.
 pub const ROOT_MODULE: &str = "src/main.cheby";
 /// The manifest that makes a directory under `tests/ui` a package test.
@@ -275,6 +315,17 @@ fn read_test(root: &Path, dir: &Path, path: PathBuf, layout: Layout) -> Result<U
         layout,
         header,
     };
+    if !test.header.mode.runs() {
+        for ext in INPUT_EXTENSIONS {
+            let input = test.golden(ext);
+            if input.exists() {
+                return Err(format!(
+                    "{}: only `run-pass` and `run-fail` tests take `.{ext}` input",
+                    shown(&input)
+                ));
+            }
+        }
+    }
     if layout == Layout::Package {
         if test.header.mode == Mode::ParseFail {
             return Err(format!(
@@ -369,6 +420,47 @@ mod tests {
             root.join("tests/ui/07-b/pkg/src/main.cheby")
         );
         assert_eq!(pkg.sources().unwrap().len(), 2);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn reads_run_input() {
+        let root = scratch(
+            "input",
+            &[
+                ("c/reads.cheby", "// @mode: run-pass\n"),
+                ("c/reads.stdin", "line one\r\nline two"),
+                ("c/reads.args", "a\n\nb c\n"),
+                ("c/plain.cheby", "// @mode: run-fail\n"),
+                ("c/pkg/cheby.toml", ""),
+                ("c/pkg/src/main.cheby", "// @mode: run-pass\n"),
+                ("c/pkg.args", "x\n"),
+            ],
+        );
+        let tests = all(&root).unwrap();
+        let input = |name: &str| {
+            tests
+                .iter()
+                .find(|t| t.name == name)
+                .unwrap()
+                .input()
+                .unwrap()
+        };
+        assert_eq!(
+            input("c/reads"),
+            RunInput {
+                stdin: Some(b"line one\r\nline two".to_vec()),
+                args: vec!["a".to_owned(), String::new(), "b c".to_owned()],
+            }
+        );
+        assert_eq!(input("c/plain"), RunInput::default());
+        assert_eq!(input("c/pkg").args, ["x"]);
+        std::fs::remove_dir_all(&root).unwrap();
+        let root = scratch(
+            "input-on-check",
+            &[("c/t.cheby", "// @mode: check-pass\n"), ("c/t.stdin", "x")],
+        );
+        assert!(all(&root).is_err());
         std::fs::remove_dir_all(&root).unwrap();
     }
 

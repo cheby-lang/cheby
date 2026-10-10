@@ -174,6 +174,17 @@ impl Translator<'_, '_> {
             let var = self.var(local)?;
             self.b.def_var(var, value);
         }
+        if let FnKey::Trampoline(_) = self.func.key {
+            // D-526: the runtime lends a trampoline its closure, but MIR
+            // parameters are owned, and the trampoline's call consumes
+            // the closure as `self`. One more reference here keeps the
+            // caller's.
+            let closure = rest
+                .first()
+                .copied()
+                .ok_or_else(|| CodegenError::ice("a trampoline without its closure"))?;
+            self.dup(closure)?;
+        }
         let first = self.block(BlockId::from_u32(0))?;
         if self.func.abi == Abi::Cheby && self.opts.stack_check {
             // D-124: one compare on the fast path; the runtime's slow path

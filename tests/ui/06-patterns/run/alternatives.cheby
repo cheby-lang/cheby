@@ -1,0 +1,59 @@
+// @mode: run-pass
+// @decisions: D-113, D-506
+//! Alternatives are tried left to right, and every alternative binds the
+//! same names, so the arm's body sees whichever matched (§6.7).
+
+import std::int
+import std::io
+
+type Day {
+  Monday,
+  Tuesday,
+  Saturday,
+  Sunday,
+}
+
+fn kind(day: Day) -> String {
+  case day {
+    Saturday | Sunday => "weekend"
+    _ => "weekday"
+  }
+}
+
+fn other(pair: (Int, Int)) -> Int {
+  case pair {
+    (0, n) | (n, 0) => n
+    (a, b) => a * b
+  }
+}
+
+fn payload(value: Result<Int, Int>) -> Int {
+  case value {
+    Ok(n) | Err(n) => n
+  }
+}
+
+fn size(value: Option<Int>) -> String {
+  case value {
+    Some(1 | 2) => "small"
+    Some(3 | 4 as n) => "medium {n}"
+    Some(_) | None => "other"
+  }
+}
+
+fn main() {
+  io::println(kind(Monday))
+  io::println(kind(Tuesday))
+  io::println(kind(Saturday))
+  io::println(kind(Sunday))
+  io::println(int::show(other((0, 7))))
+  io::println(int::show(other((8, 0))))
+  io::println(int::show(other((0, 0))))
+  io::println(int::show(other((2, 3))))
+  io::println(int::show(payload(Ok(1))))
+  io::println(int::show(payload(Err(2))))
+  io::println(size(Some(2)))
+  io::println(size(Some(4)))
+  io::println(size(Some(9)))
+  io::println(size(None))
+}

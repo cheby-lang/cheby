@@ -76,4 +76,34 @@ bb0:
   return const i64 0
 }
 
+fn trampoline 0 [c] (_0: value) -> value {
+bb0:
+  _1: value = call _0()
+  return _1
+}
+
+fn trampoline 1 [c] (_0: value, _1: value) -> value {
+bb0:
+  _2: value = call _0(_1)
+  return _2
+}
+
+fn trampoline 2 [c] (_0: value, _1: value, _2: value) -> value {
+bb0:
+  _3: value = call _0(_1, _2)
+  return _3
+}
+
+fn trampoline 3 [c] (_0: value, _1: value, _2: value, _3: value) -> value {
+bb0:
+  _4: value = call _0(_1, _2, _3)
+  return _4
+}
+
+fn trampoline 4 [c] (_0: value, _1: value, _2: value, _3: value, _4: value) -> value {
+bb0:
+  _5: value = call _0(_1, _2, _3, _4)
+  return _5
+}
+
 callee app::main() -> value

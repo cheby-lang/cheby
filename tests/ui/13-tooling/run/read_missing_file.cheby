@@ -1,0 +1,23 @@
+// @mode: run-pass
+// @decisions: D-345, D-484
+//! Reading a missing file returns `Err` for which `io::is_not_found`
+//! holds, and its text is the same on every platform.
+
+import std::io
+
+fn main() {
+  case io::read_file("no/such/directory/file.txt") {
+    Ok(_) => io::println("read")
+    Err(reason) => {
+      io::println(io::show(reason))
+      case io::is_not_found(reason) {
+        True => io::println("is not found")
+        False => io::println("is something else")
+      }
+    }
+  }
+  case io::read_file_bytes("no/such/directory/file.bin") {
+    Ok(_) => io::println("read")
+    Err(reason) => io::println(io::show(reason))
+  }
+}

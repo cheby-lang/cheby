@@ -245,7 +245,7 @@ fn collect_ui_tests(dir: &Path, out: &mut Vec<PathBuf>) {
 }
 
 /// A package whose `main` calls a function with a construct the back end
-/// cannot lower, and a function with one that nothing calls.
+/// cannot lower yet, a conversion to `dyn` (W4-A), or does not call it.
 fn unsupported_package(name: &str, main_calls_it: bool) -> PathBuf {
     let call = if main_calls_it {
         "  let _ = pick(\"a\")\n"
@@ -253,24 +253,25 @@ fn unsupported_package(name: &str, main_calls_it: bool) -> PathBuf {
         ""
     };
     let source = format!(
-        "//! Back-end gate.\n\nimport std::io\n\nfn main() {{\n  io::println(\"start\")\n{call}}}\n\nfn pick(text: String) -> String {{\n  case text {{\n    \"a\" => \"first\"\n    _ => text\n  }}\n}}\n"
+        "//! Back-end gate.\n\nimport std::io\n\nfn main() {{\n  io::println(\"start\")\n{call}}}\n\nfn pick(text: String) -> String {{\n  let shown: dyn Show = text\n  Show::show(shown)\n}}\n"
     );
     package(name, &[MANIFEST, ("src/main.cheby", source.as_bytes())])
 }
 
-/// A reachable `case` stops `cheby run` with E0038 at the `case`, before
-/// any code is generated, whichever phase reports it (the front end did
-/// until C5). `cheby check` reports nothing the back end would.
+/// A reachable construct the back end cannot lower yet stops `cheby run`
+/// with E0038 at it, before any code is generated. `cheby check` reports
+/// nothing the back end would. (The construct was `case` until W2-B; it is
+/// a conversion to `dyn` until W4-A.)
 #[test]
 fn reachable_unsupported_constructs_stop_the_run() {
     let dir = unsupported_package("gate_reachable", true);
     let RunResult::CompileFailed(out) = run(&dir, RunOptions::default()).unwrap() else {
-        panic!("a program with a reachable `case` ran");
+        panic!("a program with a reachable conversion to `dyn` ran");
     };
     let rendered = out.render();
     assert!(
         rendered.starts_with(
-            "error[E0038]: `case` expressions are not supported yet\n  --> src/main.cheby:11:3"
+            "error[E0038]: conversions to `dyn` are not supported yet\n  --> src/main.cheby:11:"
         ),
         "{rendered}"
     );
@@ -279,9 +280,8 @@ fn reachable_unsupported_constructs_stop_the_run() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
-/// The same `case` in a function `main` never calls does not stop the run,
-/// once the front end checks `case` (C5); until then `cheby check` reports
-/// it and nothing more can be asserted.
+/// The same construct in a function `main` never calls does not stop the
+/// run.
 #[test]
 fn unreachable_unsupported_constructs_do_not_stop_the_run() {
     let dir = unsupported_package("gate_unreachable", false);
@@ -295,7 +295,7 @@ fn unreachable_unsupported_constructs_do_not_stop_the_run() {
         assert!(codes.iter().all(|c| c == "E0038"), "{}", checked.render());
     } else {
         let Prepared::Ready(program) = prepare_run(&dir, RunOptions::default()).unwrap() else {
-            panic!("an unreachable `case` stopped the run");
+            panic!("an unreachable conversion to `dyn` stopped the run");
         };
         assert_eq!(program.output().render(), "");
     }
@@ -589,6 +589,34 @@ fn wide_constructors_escape_the_scan_count() {
     };
     assert_eq!(output.render(), "");
     assert_eq!(exit, 0);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// D-369: under `cheby run`, `env::program_name()` is the package's name
+/// from `cheby.toml`, also when another module's `main` runs, and the
+/// arguments after `--` are `env::args()`.
+#[test]
+fn program_name_is_the_package_name() {
+    let tools = b"//! A tool with its own `main`.\n\nimport std::env\nimport std::io\nimport std::string\n\nfn main() {\n  io::println(env::program_name())\n  io::println(string::join(env::args(), \",\"))\n}\n";
+    let dir = package(
+        "program_name",
+        &[
+            MANIFEST,
+            ("src/main.cheby", b"//! The root module.\n\nfn main() {}\n"),
+            ("src/tools.cheby", tools),
+        ],
+    );
+    let options = RunOptions {
+        module_path: Some("app::tools".to_owned()),
+        args: vec!["a".to_owned(), "b c".to_owned()],
+    };
+    let Prepared::Ready(program) = prepare_run(&dir, options).unwrap() else {
+        panic!("the program failed to compile");
+    };
+    assert_eq!(program.config.program_name, "app");
+    assert_eq!(program.config.args, ["a", "b c"]);
+    assert_eq!(program.output().render(), "");
+    assert_eq!(program.run().unwrap(), 0);
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

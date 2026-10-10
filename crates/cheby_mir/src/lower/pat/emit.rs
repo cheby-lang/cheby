@@ -1,0 +1,725 @@
+//! Lowering a [`Decision`] to MIR blocks.
+//!
+//! Positions are read lazily: the first node on a path that needs a
+//! position emits its access (`field`, a list `get` or `slice`) in the
+//! current block, which dominates the rest of the path, and the value is
+//! remembered for that path only ([`Env`]). Each read converts the value
+//! to its type's representation, so a uniform field holding an `Int` is
+//! unboxed once (D6).
+//!
+//! An arm reached from one leaf has its body lowered right there. An arm
+//! reached from several leaves (alternatives, or rows copied into several
+//! cases) gets one block whose parameters are its names; each leaf jumps
+//! there with its values, so the body is lowered once. A guard is lowered
+//! at each leaf, since what happens when it is `False` depends on the
+//! leaf. Bindings an arm does not use are dropped at its start by the RC
+//! pass (D-205).
+
+use cheby_diag::Span;
+use cheby_iface::{Ice, Ty, TyKind};
+use cheby_resolve::LocalId;
+use cheby_types::thir::ExprId;
+
+use crate::ir::{
+    ArithOp, BlockId, Const, LayoutRef, Local, Operand, PanicKind, RuntimeFn, Rvalue, Terminator,
+};
+use crate::layout::ctor_layout;
+use crate::lower::body::BodyCx;
+use crate::lower::pat::tree::{Decision, Key, OccId, Step, Test, Tree};
+use crate::repr::Repr;
+
+/// The text of a failed `let assert` before its value (D-528).
+const LET_ASSERT: &str = "`let assert` pattern did not match";
+
+/// What happens when no arm matches.
+#[derive(Clone, Copy)]
+pub(super) enum OnFail {
+    /// Impossible: the front end proved the match exhaustive (§6.9) or
+    /// the pattern irrefutable (D-242).
+    Unreachable,
+    /// `let assert` (§11.4): panic with the value's debug text and the
+    /// optional `as` message, at `at`.
+    LetAssert {
+        value: Local,
+        ty: Ty,
+        message: Option<ExprId>,
+        at: Span,
+    },
+}
+
+/// What a matched arm does.
+#[derive(Clone, Copy)]
+pub(super) enum Then {
+    /// A `case` arm: lower its body, with `tail` (§5.15.2), and join with
+    /// a value of type `ty`.
+    Body { body: ExprId, tail: bool, ty: Ty },
+    /// `let`, `let assert` or a parameter: bind the names and go on after
+    /// the match.
+    Continue,
+}
+
+/// One arm of a match.
+pub(super) struct ArmPlan {
+    pub guard: Option<ExprId>,
+    pub then: Then,
+    /// The names it binds, sorted by id.
+    pub locals: Vec<LocalId>,
+}
+
+/// The state of lowering one decision.
+struct Match<'t> {
+    decision: &'t Decision,
+    arms: Vec<ArmPlan>,
+    /// How many leaves name each arm.
+    leaves: Vec<usize>,
+    /// The shared entry block of each arm reached from several leaves,
+    /// with one parameter per name.
+    shared: Vec<Option<(BlockId, Vec<Local>)>>,
+    /// Where the names of a `Continue` arm reached from one leaf are bound.
+    inline_continue: Option<BlockId>,
+    on_fail: OnFail,
+    fail_block: Option<BlockId>,
+    /// The block after a `case` and the parameter holding its value.
+    join: Option<(BlockId, Local)>,
+    /// The match's span, the location of its index arithmetic.
+    span: Span,
+}
+
+/// The values of the positions read on the current path.
+#[derive(Clone)]
+struct Env {
+    vals: Vec<Option<Local>>,
+    /// A list position's length: its local and, inside a length case, its
+    /// known value.
+    lens: Vec<Option<(Local, Option<u64>)>>,
+}
+
+impl BodyCx<'_, '_> {
+    /// Lowers `decision` over the subjects `subjects` (locals in their
+    /// types' representations). Returns `None` when no path goes on after
+    /// the match (every arm diverged); otherwise the current block is the
+    /// one after it, with the names of a `Continue` arm bound, and the
+    /// value is the `case`'s.
+    pub(super) fn emit_decision(
+        &mut self,
+        decision: &Decision,
+        subjects: &[Local],
+        arms: Vec<ArmPlan>,
+        on_fail: OnFail,
+        span: Span,
+    ) -> Result<Option<Operand>, Ice> {
+        let mut env = Env {
+            vals: vec![None; decision.occs.len()],
+            lens: vec![None; decision.occs.len()],
+        };
+        for (slot, &l) in env.vals.iter_mut().zip(subjects) {
+            *slot = Some(l);
+        }
+        let leaves = decision.tree.leaf_counts(arms.len());
+        let mut m = Match {
+            decision,
+            shared: arms.iter().map(|_| None).collect(),
+            arms,
+            leaves,
+            inline_continue: None,
+            on_fail,
+            fail_block: None,
+            join: None,
+            span,
+        };
+        self.emit_tree(&mut m, &decision.tree, env)?;
+        // Shared arm bodies, in arm order.
+        for arm in 0..m.arms.len() {
+            let Some((block, params)) = m.shared.get(arm).cloned().flatten() else {
+                continue;
+            };
+            self.switch_to(block)?;
+            let locals = m
+                .arms
+                .get(arm)
+                .map(|a| a.locals.clone())
+                .unwrap_or_default();
+            for (&id, &param) in locals.iter().zip(&params) {
+                self.bind_local(id, Operand::Local(param))?;
+            }
+            self.finish_arm(&mut m, arm)?;
+        }
+        if let Some(block) = m.fail_block {
+            self.switch_to(block)?;
+            self.emit_fail_panic(m.on_fail)?;
+        }
+        if let Some(block) = m.inline_continue {
+            self.switch_to(block)?;
+            return Ok(Some(Operand::Const(Const::Nil)));
+        }
+        if let Some((block, value)) = m.join {
+            self.switch_to(block)?;
+            return Ok(Some(Operand::Local(value)));
+        }
+        Ok(None)
+    }
+
+    fn emit_tree(&mut self, m: &mut Match<'_>, tree: &Tree, env: Env) -> Result<(), Ice> {
+        match tree {
+            Tree::Fail => match m.on_fail {
+                OnFail::Unreachable => self.terminate(Terminator::Unreachable),
+                OnFail::LetAssert { .. } => {
+                    let block = if let Some(b) = m.fail_block {
+                        b
+                    } else {
+                        let b = self.new_block()?;
+                        m.fail_block = Some(b);
+                        b
+                    };
+                    self.goto(block, Vec::new())
+                }
+            },
+            Tree::Leaf {
+                arm,
+                bindings,
+                otherwise,
+            } => self.emit_leaf(m, *arm, bindings, otherwise.as_deref(), env),
+            Tree::Test {
+                occ,
+                test,
+                cases,
+                default,
+            } => self.emit_test(m, *occ, test, cases, default.as_deref(), env),
+        }
+    }
+
+    fn emit_leaf(
+        &mut self,
+        m: &mut Match<'_>,
+        arm: usize,
+        bindings: &[(LocalId, OccId)],
+        otherwise: Option<&Tree>,
+        mut env: Env,
+    ) -> Result<(), Ice> {
+        let plan = m
+            .arms
+            .get(arm)
+            .ok_or_else(|| Ice::new("a leaf for an unknown arm"))?;
+        let (guard, locals) = (plan.guard, plan.locals.clone());
+        let mut values = Vec::with_capacity(locals.len());
+        for id in &locals {
+            let occ = bindings
+                .iter()
+                .find(|(l, _)| l == id)
+                .map(|&(_, o)| o)
+                .ok_or_else(|| Ice::new("an alternative that does not bind every name"))?;
+            let v = self.occ_value(m, occ, &mut env)?;
+            let occ_ty = m.decision.occ(occ)?.ty;
+            let ty = self.local_ty(*id)?;
+            let v = self.to_repr(
+                Operand::Local(v),
+                self.repr_of(occ_ty),
+                self.repr_of(ty),
+                ty,
+            )?;
+            values.push(v);
+        }
+        let inline = m.leaves.get(arm).copied().unwrap_or(0) == 1;
+        if let Some(guard) = guard {
+            for (&id, v) in locals.iter().zip(&values) {
+                self.bind_local(id, v.clone())?;
+            }
+            let Some(cond) = self.expr_as(guard, Repr::Bool)? else {
+                return Ok(());
+            };
+            let (yes, no) = (self.new_block()?, self.new_block()?);
+            self.terminate(Terminator::Branch {
+                cond,
+                then_: yes,
+                else_: no,
+            })?;
+            self.switch_to(yes)?;
+            if inline {
+                self.finish_arm(m, arm)?;
+            } else {
+                let values = locals
+                    .iter()
+                    .map(|&id| self.lookup(id, Ty::ERROR))
+                    .collect::<Result<Vec<_>, Ice>>()?;
+                self.jump_to_arm(m, arm, values)?;
+            }
+            self.switch_to(no)?;
+            return match otherwise {
+                Some(t) => self.emit_tree(m, t, env),
+                None => self.emit_tree(m, &Tree::Fail, env),
+            };
+        }
+        if inline {
+            for (&id, v) in locals.iter().zip(values) {
+                self.bind_local(id, v)?;
+            }
+            self.finish_arm(m, arm)
+        } else {
+            self.jump_to_arm(m, arm, values)
+        }
+    }
+
+    /// Ends the current block with a jump to the shared block of `arm`.
+    fn jump_to_arm(
+        &mut self,
+        m: &mut Match<'_>,
+        arm: usize,
+        values: Vec<Operand>,
+    ) -> Result<(), Ice> {
+        let slot = m
+            .shared
+            .get_mut(arm)
+            .ok_or_else(|| Ice::new("a jump to an unknown arm"))?;
+        let block = if let Some((b, _)) = slot {
+            *b
+        } else {
+            let locals = m
+                .arms
+                .get(arm)
+                .map(|a| a.locals.clone())
+                .unwrap_or_default();
+            let b = self.new_block()?;
+            let mut params = Vec::with_capacity(locals.len());
+            for id in locals {
+                let ty = self.local_ty(id)?;
+                params.push(self.block_param(b, self.repr_of(ty))?);
+            }
+            if let Some(slot) = m.shared.get_mut(arm) {
+                *slot = Some((b, params));
+            }
+            b
+        };
+        self.goto(block, values)
+    }
+
+    /// Lowers what `arm` does once its names are bound in the current
+    /// block.
+    fn finish_arm(&mut self, m: &mut Match<'_>, arm: usize) -> Result<(), Ice> {
+        let then = m
+            .arms
+            .get(arm)
+            .map(|a| a.then)
+            .ok_or_else(|| Ice::new("an unknown arm"))?;
+        match then {
+            Then::Continue => {
+                if m.inline_continue.is_some() {
+                    return Err(Ice::new("a `let` pattern continued twice"));
+                }
+                m.inline_continue = Some(self.b.current());
+                Ok(())
+            }
+            Then::Body { body, tail, ty } => {
+                let Some(value) = self.expr(body, tail)? else {
+                    return Ok(());
+                };
+                let body_ty = self.ty(body)?;
+                if matches!(self.cx.defs.globals.types.kind(body_ty), TyKind::Never) {
+                    // A call of a function returning `Never` (§3.10).
+                    return self.terminate(Terminator::Unreachable);
+                }
+                let repr = self.repr_of(ty);
+                let value = self.to_repr(value, self.repr_of(body_ty), repr, ty)?;
+                let join = if let Some((b, _)) = m.join {
+                    b
+                } else {
+                    let b = self.new_block()?;
+                    let p = self.block_param(b, repr)?;
+                    m.join = Some((b, p));
+                    b
+                };
+                self.goto(join, vec![value])
+            }
+        }
+    }
+
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one arm per kind of test, each short"
+    )]
+    fn emit_test(
+        &mut self,
+        m: &mut Match<'_>,
+        occ: OccId,
+        test: &Test,
+        cases: &[(Key, Tree)],
+        default: Option<&Tree>,
+        mut env: Env,
+    ) -> Result<(), Ice> {
+        let value = self.occ_value(m, occ, &mut env)?;
+        // When the cases cover every value, the last one is the default.
+        let (cases, default) = match (default, cases.split_last()) {
+            (Some(d), _) => (cases, d),
+            (None, Some(((_, last), rest))) => (rest, last),
+            (None, None) => return self.emit_tree(m, &Tree::Fail, env),
+        };
+        match test {
+            Test::Bool => {
+                let (yes, no) = (self.new_block()?, self.new_block()?);
+                self.terminate(Terminator::Branch {
+                    cond: Operand::Local(value),
+                    then_: yes,
+                    else_: no,
+                })?;
+                let pick = |want: bool| {
+                    cases
+                        .iter()
+                        .find(|(k, _)| *k == Key::Bool(want))
+                        .map_or(default, |(_, t)| t)
+                };
+                let (t, f) = (pick(true), pick(false));
+                self.switch_to(yes)?;
+                self.emit_tree(m, t, env.clone())?;
+                self.switch_to(no)?;
+                self.emit_tree(m, f, env)
+            }
+            Test::Str => {
+                for (key, sub) in cases {
+                    let Key::Str(literal) = key else {
+                        return Err(Ice::new("a string test with another key"));
+                    };
+                    let lit = self.string_const(literal)?;
+                    let eq = self.define(
+                        Repr::Bool,
+                        Rvalue::CallRuntime {
+                            func: RuntimeFn::StrEq,
+                            args: vec![Operand::Local(value), lit],
+                        },
+                    )?;
+                    let (yes, no) = (self.new_block()?, self.new_block()?);
+                    self.terminate(Terminator::Branch {
+                        cond: Operand::Local(eq),
+                        then_: yes,
+                        else_: no,
+                    })?;
+                    self.switch_to(yes)?;
+                    self.emit_tree(m, sub, env.clone())?;
+                    self.switch_to(no)?;
+                }
+                self.emit_tree(m, default, env)
+            }
+            Test::Tag(_) | Test::Int(_) | Test::Len => {
+                let (on, len) = match test {
+                    Test::Tag(ty) => {
+                        let tag = self.define(
+                            Repr::Int,
+                            Rvalue::ReadTag {
+                                base: Operand::Local(value),
+                                ty: *ty,
+                            },
+                        )?;
+                        (tag, None)
+                    }
+                    Test::Len => {
+                        let len = self.list_len(occ, value, &mut env)?;
+                        (len, Some(len))
+                    }
+                    _ => (value, None),
+                };
+                let repr = match test {
+                    Test::Int(r) => *r,
+                    _ => Repr::Int,
+                };
+                let mut blocks = Vec::with_capacity(cases.len());
+                let mut targets = Vec::with_capacity(cases.len());
+                for (key, _) in cases {
+                    let block = self.new_block()?;
+                    blocks.push(block);
+                    match key {
+                        Key::Ctor { tag, .. } => targets.push((u64::from(*tag), block)),
+                        Key::Len(n) => targets.push((*n, block)),
+                        Key::Lens(ns) => targets.extend(ns.iter().map(|&n| (n, block))),
+                        Key::Int(v) => targets.push((int_bits(*v, repr)?, block)),
+                        Key::Bool(_) | Key::Str(_) => {
+                            return Err(Ice::new("a switch with a non-integer key"));
+                        }
+                    }
+                }
+                let otherwise = self.new_block()?;
+                self.terminate(Terminator::Switch {
+                    on: Operand::Local(on),
+                    cases: targets,
+                    default: Some(otherwise),
+                })?;
+                for ((key, sub), block) in cases.iter().zip(blocks) {
+                    self.switch_to(block)?;
+                    let mut env = env.clone();
+                    if let (Some(len), Key::Len(n)) = (len, key)
+                        && let Some(slot) = env.lens.get_mut(occ.index())
+                    {
+                        *slot = Some((len, Some(*n)));
+                    }
+                    self.emit_tree(m, sub, env)?;
+                }
+                self.switch_to(otherwise)?;
+                self.emit_tree(m, default, env)
+            }
+        }
+    }
+
+    /// The length of the list at `occ` (whose value is `list`), read once
+    /// per path.
+    fn list_len(&mut self, occ: OccId, list: Local, env: &mut Env) -> Result<Local, Ice> {
+        if let Some(Some((len, _))) = env.lens.get(occ.index()) {
+            return Ok(*len);
+        }
+        let len = self.define(
+            Repr::Int,
+            Rvalue::CallRuntime {
+                func: RuntimeFn::ListLength,
+                args: vec![Operand::Local(list)],
+            },
+        )?;
+        if let Some(slot) = env.lens.get_mut(occ.index()) {
+            *slot = Some((len, None));
+        }
+        Ok(len)
+    }
+
+    /// `len - n` as an operand: a constant when the length is known.
+    fn len_minus(
+        &mut self,
+        occ: OccId,
+        list: Local,
+        n: u32,
+        env: &mut Env,
+        span: Span,
+    ) -> Result<Operand, Ice> {
+        if let Some(Some((_, Some(known)))) = env.lens.get(occ.index()) {
+            let v = known
+                .checked_sub(u64::from(n))
+                .and_then(|v| i64::try_from(v).ok())
+                .ok_or_else(|| Ice::new("a list index outside its known length"))?;
+            return Ok(Operand::Const(Const::Int(v)));
+        }
+        let len = self.list_len(occ, list, env)?;
+        if n == 0 {
+            return Ok(Operand::Local(len));
+        }
+        let loc = self.location_id(span)?;
+        let at = self.define(
+            Repr::Int,
+            Rvalue::Checked {
+                op: ArithOp::Sub,
+                lhs: Operand::Local(len),
+                rhs: Operand::Const(Const::Int(i64::from(n))),
+                repr: Repr::Int,
+                loc,
+            },
+        )?;
+        Ok(Operand::Local(at))
+    }
+
+    /// The value at `occ` on this path, in its type's representation,
+    /// reading it (and its parents) in the current block if needed.
+    fn occ_value(&mut self, m: &Match<'_>, occ: OccId, env: &mut Env) -> Result<Local, Ice> {
+        if let Some(Some(l)) = env.vals.get(occ.index()) {
+            return Ok(*l);
+        }
+        let data = m.decision.occ(occ)?.clone();
+        let parent = data
+            .parent
+            .ok_or_else(|| Ice::new("a subject without its value"))?;
+        let base = self.occ_value(m, parent, env)?;
+        let want = self.repr_of(data.ty);
+        let (read, repr) = match data.step {
+            Step::Subject(_) => return Err(Ice::new("a subject below another position")),
+            Step::Field { ctor, field } => {
+                let layout = ctor_layout(ctor, &self.cx.defs)?;
+                let repr = usize::try_from(field)
+                    .ok()
+                    .and_then(|i| layout.fields.get(i))
+                    .map(|f| f.repr)
+                    .ok_or_else(|| Ice::new("a field pattern outside its constructor"))?;
+                let l = self.define(
+                    repr,
+                    Rvalue::Field {
+                        base,
+                        layout: LayoutRef::Ctor(ctor),
+                        field,
+                    },
+                )?;
+                (l, repr)
+            }
+            Step::Tuple { arity, index } => {
+                let l = self.define(
+                    Repr::Value,
+                    Rvalue::Field {
+                        base,
+                        layout: LayoutRef::Tuple(arity),
+                        field: index,
+                    },
+                )?;
+                (l, Repr::Value)
+            }
+            Step::Index(i) => {
+                let l = self.list_get(base, Operand::Const(Const::Int(i64::from(i))))?;
+                (l, Repr::Value)
+            }
+            Step::FromEnd(n) => {
+                let at = self.len_minus(parent, base, n, env, m.span)?;
+                let l = self.list_get(base, at)?;
+                (l, Repr::Value)
+            }
+            Step::Slice { start, from_end } => {
+                let end = self.len_minus(parent, base, from_end, env, m.span)?;
+                let l = self.define(
+                    Repr::Value,
+                    Rvalue::CallRuntime {
+                        func: RuntimeFn::ListSlice,
+                        args: vec![
+                            Operand::Local(base),
+                            Operand::Const(Const::Int(i64::from(start))),
+                            end,
+                        ],
+                    },
+                )?;
+                (l, Repr::Value)
+            }
+        };
+        let value = self.to_repr(Operand::Local(read), repr, want, data.ty)?;
+        let local = self.as_local(value, want)?;
+        if let Some(slot) = env.vals.get_mut(occ.index()) {
+            *slot = Some(local);
+        }
+        Ok(local)
+    }
+
+    fn list_get(&mut self, list: Local, index: Operand) -> Result<Local, Ice> {
+        self.define(
+            Repr::Value,
+            Rvalue::CallRuntime {
+                func: RuntimeFn::ListGet,
+                args: vec![Operand::Local(list), index],
+            },
+        )
+    }
+
+    /// `op` as a local of `repr` (constants are moved into one).
+    pub(super) fn as_local(&mut self, op: Operand, repr: Repr) -> Result<Local, Ice> {
+        match op {
+            Operand::Local(l) => Ok(l),
+            op @ Operand::Const(_) => self.define(repr, Rvalue::Use(op)),
+        }
+    }
+
+    /// The type of the THIR local `id`.
+    pub(super) fn local_ty(&self, id: LocalId) -> Result<Ty, Ice> {
+        self.body
+            .local(id)
+            .map(|d| d.ty)
+            .ok_or_else(|| Ice::new("a pattern name without its local"))
+    }
+
+    /// Binds the THIR local `id` to `op` (in its type's representation).
+    pub(super) fn bind_local(&mut self, id: LocalId, op: Operand) -> Result<(), Ice> {
+        let decl = self
+            .body
+            .local(id)
+            .ok_or_else(|| Ice::new("a pattern name without its local"))?;
+        let (name, ty) = (decl.name, decl.ty);
+        self.bind_name(id, name, ty, op)
+    }
+
+    /// The panic of a failed `let assert` (§11.4, D-528):
+    /// `` `let assert` pattern did not match[: m] `` and
+    /// `  value: <debug text>`.
+    fn emit_fail_panic(&mut self, on_fail: OnFail) -> Result<(), Ice> {
+        let OnFail::LetAssert {
+            value,
+            ty,
+            message,
+            at,
+        } = on_fail
+        else {
+            return self.terminate(Terminator::Unreachable);
+        };
+        let mut acc = self.define(
+            Repr::Value,
+            Rvalue::CallRuntime {
+                func: RuntimeFn::StrWithCapacity,
+                args: vec![Operand::Const(Const::Int(64))],
+            },
+        )?;
+        match message {
+            Some(m) => {
+                acc = self.append_str(acc, &format!("{LET_ASSERT}: "))?;
+                let Some(text) = self.expr_as(m, Repr::Value)? else {
+                    return Ok(());
+                };
+                acc = self.append_op(acc, text)?;
+                acc = self.append_str(acc, "\n  value: ")?;
+            }
+            None => acc = self.append_str(acc, &format!("{LET_ASSERT}\n  value: "))?,
+        }
+        let uniform = self.to_uniform(Operand::Local(value), ty)?;
+        let debug = self.define(
+            Repr::Value,
+            Rvalue::CallRuntime {
+                func: RuntimeFn::Debug,
+                args: vec![uniform],
+            },
+        )?;
+        acc = self.append_op(acc, Operand::Local(debug))?;
+        let loc = self.location_id(at)?;
+        self.terminate(Terminator::Panic {
+            kind: PanicKind::LetAssert,
+            message: Some(Operand::Local(acc)),
+            loc,
+        })
+    }
+
+    fn append_op(&mut self, acc: Local, piece: Operand) -> Result<Local, Ice> {
+        self.define(
+            Repr::Value,
+            Rvalue::CallRuntime {
+                func: RuntimeFn::StrAppend,
+                args: vec![Operand::Local(acc), piece],
+            },
+        )
+    }
+
+    fn append_str(&mut self, acc: Local, text: &str) -> Result<Local, Ice> {
+        let piece = self.string_const(text)?;
+        self.append_op(acc, piece)
+    }
+}
+
+/// The switch bits of the integer literal `v` in `repr` (plan §4.1): the
+/// two's-complement value truncated to the representation's width.
+fn int_bits(v: i128, repr: Repr) -> Result<u64, Ice> {
+    let width: u32 = match repr {
+        Repr::I8 | Repr::U8 => 8,
+        Repr::I16 | Repr::U16 => 16,
+        Repr::I32 | Repr::U32 => 32,
+        Repr::Int | Repr::I64 | Repr::U64 => 64,
+        _ => return Err(Ice::new(format!("an integer literal pattern of {repr}"))),
+    };
+    let bits = if repr.is_unsigned_int() {
+        u64::try_from(v).ok()
+    } else {
+        i64::try_from(v).ok().map(i64::cast_unsigned)
+    }
+    .ok_or_else(|| Ice::new("an integer literal pattern outside its type"))?;
+    Ok(if width >= 64 {
+        bits
+    } else {
+        bits & 1_u64
+            .checked_shl(width)
+            .map_or(u64::MAX, |b| b.wrapping_sub(1))
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn literal_bits_truncate_to_the_width() {
+        assert_eq!(int_bits(-1, Repr::I8).unwrap(), 0xff);
+        assert_eq!(int_bits(-1, Repr::Int).unwrap(), u64::MAX);
+        assert_eq!(int_bits(200, Repr::U8).unwrap(), 200);
+        assert_eq!(int_bits(-2, Repr::I32).unwrap(), 0xffff_fffe);
+        assert_eq!(int_bits(i128::from(u64::MAX), Repr::U64).unwrap(), u64::MAX);
+        assert!(int_bits(-1, Repr::U8).is_err());
+    }
+}

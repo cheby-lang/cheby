@@ -1,0 +1,13 @@
+// @mode: run-pass
+// @decisions: D-347, D-369, D-543
+//! The lines of `.args` reach `env::args` in order, an empty line as an
+//! empty argument, and `env::program_name` is the package's name.
+
+import std::env
+import std::io
+import std::string
+
+fn main() {
+  io::println(env::program_name())
+  io::println(string::join(env::args(), "|"))
+}

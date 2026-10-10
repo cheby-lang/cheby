@@ -245,9 +245,11 @@ unsafe extern "C" fn cheby_test_apply(closure: u64, argument: u64) -> u64 {
     }
 }
 
-/// `cb$tramp$1` as W2-C will generate it (plan §4.3.4): C ABI, `ctx`, the
-/// borrowed closure and one owned word; dups the closure, which the
-/// uniform call consumes, and returns the owned result.
+/// `cb$tramp$1` as `closure::trampolines` lowers it (plan §4.3.4): C ABI,
+/// `ctx`, the closure and one owned word; the uniform call consumes the
+/// closure, and returns the owned result. The runtime lends the closure
+/// (D-526), so code generation adds the reference the call consumes at
+/// the trampoline's entry; the MIR has no `dup`.
 fn trampoline_1() -> Function {
     function(
         FnKey::Trampoline(1),
@@ -256,16 +258,13 @@ fn trampoline_1() -> Function {
         &[Repr::Value],
         Repr::Value,
         straight(
-            vec![
-                Stmt::Dup(local(0)),
-                assign(
-                    2,
-                    Rvalue::Call {
-                        callee: Callee::Indirect(local(0)),
-                        args: vec![op(1)],
-                    },
-                ),
-            ],
+            vec![assign(
+                2,
+                Rvalue::Call {
+                    callee: Callee::Indirect(local(0)),
+                    args: vec![op(1)],
+                },
+            )],
             2,
         ),
         &[],
@@ -761,4 +760,97 @@ fn count_operations_are_inline_unless_checked() {
     assert!(!checked.contains("store notrap aligned"), "{checked}");
     assert!(checked.contains("= cheby_rt_dup"), "{checked}");
     assert!(checked.contains("= cheby_rt_drop"), "{checked}");
+}
+
+/// `f(self) { drop self; return nil }`: a closure body of `owner`.
+fn nil_closure(owner: DefId) -> Function {
+    function(
+        FnKey::Closure { owner, index: 0 },
+        Abi::Cheby,
+        &[Repr::Value],
+        &[],
+        Repr::Value,
+        vec![block(
+            vec![Stmt::Drop(local(0))],
+            Terminator::Return(Operand::Const(Const::Nil)),
+        )],
+        &[],
+    )
+}
+
+/// `k = alloc closure/0(code); r = call k(); return r`.
+fn calls_closure(key: FnKey, owner: DefId) -> Function {
+    function(
+        key,
+        Abi::Cheby,
+        &[],
+        &[Repr::Value, Repr::Value],
+        Repr::Value,
+        straight(
+            vec![
+                assign(
+                    0,
+                    Rvalue::Alloc {
+                        layout: LayoutRef::Closure(0),
+                        fields: vec![Operand::Const(Const::Code(FnKey::Closure {
+                            owner,
+                            index: 0,
+                        }))],
+                    },
+                ),
+                assign(
+                    1,
+                    Rvalue::Call {
+                        callee: Callee::Indirect(local(0)),
+                        args: Vec::new(),
+                    },
+                ),
+            ],
+            1,
+        ),
+        &[],
+    )
+}
+
+/// A test's name is free text and may equal a function's: the closures of
+/// a test named `spin` and of a function `spin` of the same module get
+/// different symbols (the test's by its ordinal, D-456), so one batch
+/// compiles both, and the function's closure runs.
+#[test]
+fn closures_of_a_test_and_a_function_of_the_same_name() {
+    let mut p = Prog::default();
+    let spin = def(1, 0);
+    let test = def(1, 1);
+    p.functions.push(calls_closure(FnKey::Item(spin), spin));
+    p.functions.push(nil_closure(spin));
+    p.callees.push(CalleeDecl {
+        def: spin,
+        sig: cheby_sig(&[]),
+    });
+    p.names.push(name(spin, "app", "spin"));
+    let target = p.call(spin, Vec::new());
+    let [code, entries] = p.units();
+    let tests = MirModule {
+        unit: UnitKind::Tests(ModuleId::from_u32(1)),
+        path: "app".into(),
+        functions: vec![calls_closure(FnKey::Test(test), test), nil_closure(test)],
+        callees: Vec::new(),
+        layouts: Vec::new(),
+        foreign_layouts: Vec::new(),
+        statics: Vec::new(),
+        names: vec![name(test, "app", "spin")],
+    };
+    let mut jit = Jit::configured(
+        CodegenOptions {
+            capture_clif: true,
+            ..CodegenOptions::default()
+        },
+        JitOptions::default(),
+    )
+    .unwrap();
+    jit.compile(&[code, tests, entries]).unwrap();
+    assert_eq!(returned(run_const(&jit, target)), static_nil());
+    if cheby_runtime::LEAK_CHECK_ENABLED {
+        assert_eq!(jit.domain().live_objects(), 0);
+    }
 }

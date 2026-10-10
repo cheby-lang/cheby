@@ -1,0 +1,10 @@
+Ada "the first"
+-42
+name Ada "the first", count -42, big 9223372036854775807, ratio 0.1, whole 3.0
+showing a point
+(1, -2) then 1 and -2
+debug: Point { x: 1, y: -2 } "Ada \"the first\"" 0.1 -42
+showing a point
+Some(Point { x: 1, y: -2 }) is {not} (1, -2)
+Ada "the first"Ada "the first"Ada "the first"Ada "the first"Ada "the first"Ada "the first"Ada "the first"Ada "the first"Ada "the first"Ada "the first"Ada "the first"Ada "the first"
+unicode: Ada "the first" → ✓ -42

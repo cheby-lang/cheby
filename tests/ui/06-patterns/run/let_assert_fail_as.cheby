@@ -1,0 +1,17 @@
+// @mode: run-fail
+// @decisions: D-159, D-449, D-528
+//! With `as`, the message follows the first line after a colon, and the
+//! value line still follows (§11.4).
+
+fn find(id: Int) -> Option<String> {
+  case id {
+    1 => Some("ada")
+    _ => None
+  }
+}
+
+fn main() {
+  let id = 7
+  let assert Some(user) = find(id) as "user {id} must exist"
+  assert user == "ada"
+}

@@ -135,3 +135,263 @@ block6:
     v13 = iconst.i64 0
     return v13  ; v13 = 0
 }
+
+; cb$tramp$0
+; userextname0 = cheby_rt_dup
+function u0:26(i64, i64) -> i64 system_v {
+    sig0 = (i64) system_v
+    sig1 = (i64, i64) -> i64 tail
+    fn0 = u0:1 sig0
+
+block1(v0: i64, v1: i64):
+    v19 -> v1
+    v2 = iconst.i64 1
+    v3 = band v1, v2  ; v2 = 1
+    brif v3, block5(v1), block2
+
+block2:
+    v4 = load.i32 notrap aligned v1
+    v5 = iconst.i32 -1
+    v6 = iadd v4, v5  ; v5 = -1
+    v7 = iconst.i32 0x7fff_fffe
+    v8 = icmp ult v6, v7  ; v7 = 0x7fff_fffe
+    v9 = iconst.i32 0
+    v10 = icmp eq v4, v9  ; v9 = 0
+    brif v8, block3, block6
+
+block6:
+    brif.i8 v10, block5(v19), block4
+
+block3:
+    v11 = iconst.i32 1
+    v12 = iadd.i32 v4, v11  ; v11 = 1
+    store notrap aligned v12, v1
+    jump block5(v1)
+
+block4 cold:
+    call fn0(v1)
+    jump block5(v19)
+
+block5(v18: i64):
+    v13 -> v18
+    jump block0
+
+block0:
+    v14 = load.i64 notrap aligned v13+8
+    v15 = iconst.i64 -2
+    v16 = band v14, v15  ; v15 = -2
+    v17 = call_indirect sig1, v16(v0, v13)
+    return v17
+}
+
+; cb$tramp$1
+; userextname0 = cheby_rt_dup
+function u0:27(i64, i64, i64) -> i64 system_v {
+    sig0 = (i64) system_v
+    sig1 = (i64, i64, i64) -> i64 tail
+    fn0 = u0:1 sig0
+
+block1(v0: i64, v1: i64, v2: i64):
+    v22 -> v1
+    v23 -> v2
+    v3 = iconst.i64 1
+    v4 = band v1, v3  ; v3 = 1
+    brif v4, block5(v1, v2), block2
+
+block2:
+    v5 = load.i32 notrap aligned v1
+    v6 = iconst.i32 -1
+    v7 = iadd v5, v6  ; v6 = -1
+    v8 = iconst.i32 0x7fff_fffe
+    v9 = icmp ult v7, v8  ; v8 = 0x7fff_fffe
+    v10 = iconst.i32 0
+    v11 = icmp eq v5, v10  ; v10 = 0
+    brif v9, block3, block6
+
+block6:
+    brif.i8 v11, block5(v22, v23), block4
+
+block3:
+    v12 = iconst.i32 1
+    v13 = iadd.i32 v5, v12  ; v12 = 1
+    store notrap aligned v13, v1
+    jump block5(v1, v2)
+
+block4 cold:
+    call fn0(v1)
+    jump block5(v22, v23)
+
+block5(v20: i64, v21: i64):
+    v14 -> v20
+    v18 -> v21
+    jump block0
+
+block0:
+    v15 = load.i64 notrap aligned v14+8
+    v16 = iconst.i64 -2
+    v17 = band v15, v16  ; v16 = -2
+    v19 = call_indirect sig1, v17(v0, v14, v18)
+    return v19
+}
+
+; cb$tramp$2
+; userextname0 = cheby_rt_dup
+function u0:28(i64, i64, i64, i64) -> i64 system_v {
+    sig0 = (i64) system_v
+    sig1 = (i64, i64, i64, i64) -> i64 tail
+    fn0 = u0:1 sig0
+
+block1(v0: i64, v1: i64, v2: i64, v3: i64):
+    v25 -> v1
+    v26 -> v2
+    v27 -> v3
+    v4 = iconst.i64 1
+    v5 = band v1, v4  ; v4 = 1
+    brif v5, block5(v1, v2, v3), block2
+
+block2:
+    v6 = load.i32 notrap aligned v1
+    v7 = iconst.i32 -1
+    v8 = iadd v6, v7  ; v7 = -1
+    v9 = iconst.i32 0x7fff_fffe
+    v10 = icmp ult v8, v9  ; v9 = 0x7fff_fffe
+    v11 = iconst.i32 0
+    v12 = icmp eq v6, v11  ; v11 = 0
+    brif v10, block3, block6
+
+block6:
+    brif.i8 v12, block5(v25, v26, v27), block4
+
+block3:
+    v13 = iconst.i32 1
+    v14 = iadd.i32 v6, v13  ; v13 = 1
+    store notrap aligned v14, v1
+    jump block5(v1, v2, v3)
+
+block4 cold:
+    call fn0(v1)
+    jump block5(v25, v26, v27)
+
+block5(v22: i64, v23: i64, v24: i64):
+    v15 -> v22
+    v19 -> v23
+    v20 -> v24
+    jump block0
+
+block0:
+    v16 = load.i64 notrap aligned v15+8
+    v17 = iconst.i64 -2
+    v18 = band v16, v17  ; v17 = -2
+    v21 = call_indirect sig1, v18(v0, v15, v19, v20)
+    return v21
+}
+
+; cb$tramp$3
+; userextname0 = cheby_rt_dup
+function u0:29(i64, i64, i64, i64, i64) -> i64 system_v {
+    sig0 = (i64) system_v
+    sig1 = (i64, i64, i64, i64, i64) -> i64 tail
+    fn0 = u0:1 sig0
+
+block1(v0: i64, v1: i64, v2: i64, v3: i64, v4: i64):
+    v28 -> v1
+    v29 -> v2
+    v30 -> v3
+    v31 -> v4
+    v5 = iconst.i64 1
+    v6 = band v1, v5  ; v5 = 1
+    brif v6, block5(v1, v2, v3, v4), block2
+
+block2:
+    v7 = load.i32 notrap aligned v1
+    v8 = iconst.i32 -1
+    v9 = iadd v7, v8  ; v8 = -1
+    v10 = iconst.i32 0x7fff_fffe
+    v11 = icmp ult v9, v10  ; v10 = 0x7fff_fffe
+    v12 = iconst.i32 0
+    v13 = icmp eq v7, v12  ; v12 = 0
+    brif v11, block3, block6
+
+block6:
+    brif.i8 v13, block5(v28, v29, v30, v31), block4
+
+block3:
+    v14 = iconst.i32 1
+    v15 = iadd.i32 v7, v14  ; v14 = 1
+    store notrap aligned v15, v1
+    jump block5(v1, v2, v3, v4)
+
+block4 cold:
+    call fn0(v1)
+    jump block5(v28, v29, v30, v31)
+
+block5(v24: i64, v25: i64, v26: i64, v27: i64):
+    v16 -> v24
+    v20 -> v25
+    v21 -> v26
+    v22 -> v27
+    jump block0
+
+block0:
+    v17 = load.i64 notrap aligned v16+8
+    v18 = iconst.i64 -2
+    v19 = band v17, v18  ; v18 = -2
+    v23 = call_indirect sig1, v19(v0, v16, v20, v21, v22)
+    return v23
+}
+
+; cb$tramp$4
+; userextname0 = cheby_rt_dup
+function u0:30(i64, i64, i64, i64, i64, i64) -> i64 system_v {
+    sig0 = (i64) system_v
+    sig1 = (i64, i64, i64, i64, i64, i64) -> i64 tail
+    fn0 = u0:1 sig0
+
+block1(v0: i64, v1: i64, v2: i64, v3: i64, v4: i64, v5: i64):
+    v31 -> v1
+    v32 -> v2
+    v33 -> v3
+    v34 -> v4
+    v35 -> v5
+    v6 = iconst.i64 1
+    v7 = band v1, v6  ; v6 = 1
+    brif v7, block5(v1, v2, v3, v4, v5), block2
+
+block2:
+    v8 = load.i32 notrap aligned v1
+    v9 = iconst.i32 -1
+    v10 = iadd v8, v9  ; v9 = -1
+    v11 = iconst.i32 0x7fff_fffe
+    v12 = icmp ult v10, v11  ; v11 = 0x7fff_fffe
+    v13 = iconst.i32 0
+    v14 = icmp eq v8, v13  ; v13 = 0
+    brif v12, block3, block6
+
+block6:
+    brif.i8 v14, block5(v31, v32, v33, v34, v35), block4
+
+block3:
+    v15 = iconst.i32 1
+    v16 = iadd.i32 v8, v15  ; v15 = 1
+    store notrap aligned v16, v1
+    jump block5(v1, v2, v3, v4, v5)
+
+block4 cold:
+    call fn0(v1)
+    jump block5(v31, v32, v33, v34, v35)
+
+block5(v26: i64, v27: i64, v28: i64, v29: i64, v30: i64):
+    v17 -> v26
+    v21 -> v27
+    v22 -> v28
+    v23 -> v29
+    v24 -> v30
+    jump block0
+
+block0:
+    v18 = load.i64 notrap aligned v17+8
+    v19 = iconst.i64 -2
+    v20 = band v18, v19  ; v19 = -2
+    v25 = call_indirect sig1, v20(v0, v17, v21, v22, v23, v24)
+    return v25
+}

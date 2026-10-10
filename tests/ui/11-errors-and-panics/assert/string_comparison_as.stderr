@@ -1,0 +1,4 @@
+panicked at tests/ui/11-errors-and-panics/assert/string_comparison_as.cheby:7:10:
+assertion failed: name must differ from Ada
+  left: "Ada"
+ right: "Ada"

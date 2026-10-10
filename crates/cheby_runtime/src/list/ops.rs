@@ -203,13 +203,6 @@ pub(crate) fn clamp(n: i64, len: usize) -> usize {
 /// stay valid while it lives; a caller that keeps an element longer must
 /// dup it. O(1) amortized per element: it walks the tree with an explicit
 /// stack, never recursion.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "used through `list::iter` and `list::from_iter` from W3-B on"
-    )
-)]
 #[derive(Debug)]
 pub(crate) struct Iter {
     root: Word,
@@ -221,13 +214,6 @@ pub(crate) struct Iter {
     remaining: usize,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "used through `list::iter` and `list::from_iter` from W3-B on"
-    )
-)]
 impl Iter {
     /// Iterates over a borrowed list.
     pub(crate) fn new(list: Root) -> Self {
@@ -302,13 +288,6 @@ impl Drop for Iter {
 
 /// A list of the given owned elements, in order. Pushes in place, so the
 /// cost is amortized O(1) allocation per element.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "used through `list::iter` and `list::from_iter` from W3-B on"
-    )
-)]
 pub(crate) fn from_iter(items: impl IntoIterator<Item = Word>) -> Root {
     // SAFETY: the static empty list is a live list.
     let empty = unsafe { Root::from_word(empty()) };

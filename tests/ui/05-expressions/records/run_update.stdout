@@ -1,0 +1,8 @@
+evaluating base
+evaluating y
+evaluating x
+Point { x: 1, y: 2 }
+Point { x: 5, y: 6 } Point { x: 5, y: 7 }
+Labeled { value: 1, label: "one" } Labeled { value: 2, label: "one" }
+Circle { name: "c2", radius: 1 }
+Rect { width: 2, height: 3, name: "r2" }

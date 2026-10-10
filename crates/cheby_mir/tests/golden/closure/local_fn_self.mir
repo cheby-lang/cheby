@@ -1,0 +1,36 @@
+fn app::spinner(_0: int) -> value check str#0 {
+  str#0 = "src/main.cheby:2:4"
+bb0:
+  _1: value = alloc closure/0(const code <closure app::spinner#0>)
+  _2: value = box int _0
+  tail_call _1(_2)
+}
+
+fn closure app::spinner#0(_0: value, _1: value) -> value check str#0 {
+  str#0 = "src/main.cheby:3:3"
+bb0:
+  _2: int = unbox int _1
+  drop _1
+  _3: value = box int _2
+  dup _0
+  _4: value = alloc closure/2(const code <closure app::spinner#1>, _0, _3)
+  _5: value = call _4()
+  _6: int = unbox int _5
+  drop _5
+  _7: value = box int _2
+  tail_call _0(_7)
+}
+
+fn closure app::spinner#1(_0: value) -> value check str#0 {
+  str#0 = "src/main.cheby:4:17"
+bb0:
+  _1: value = field _0.1 of closure/2
+  dup _1
+  _2: value = field _0.2 of closure/2
+  dup _2
+  drop _0
+  _3: int = unbox int _2
+  drop _2
+  _4: value = box int _3
+  tail_call _1(_4)
+}

@@ -1,0 +1,39 @@
+// @mode: run-pass
+// @decisions: D-052
+//! A guard runs after its arm's patterns matched, with their names in
+//! scope; when it is `False`, matching goes on with the next arms
+//! (§5.9.1, §5.9.3).
+
+import std::int
+import std::io
+
+fn classify(value: Option<Int>) -> String {
+  case value {
+    Some(n) when n < 0 => "negative"
+    Some(0) => "zero"
+    Some(n) when n > 100 => "large"
+    Some(n) => "small {n}"
+    None => "none"
+  }
+}
+
+fn bucket(pair: (Int, Int)) -> Int {
+  case pair {
+    (a, b) when a == b => 0
+    (a, _) when a > 10 => 1
+    (_, b) when b > 10 => 2
+    _ => 3
+  }
+}
+
+fn main() {
+  io::println(classify(Some(-5)))
+  io::println(classify(Some(0)))
+  io::println(classify(Some(500)))
+  io::println(classify(Some(7)))
+  io::println(classify(None))
+  io::println(int::show(bucket((4, 4))))
+  io::println(int::show(bucket((11, 1))))
+  io::println(int::show(bucket((1, 11))))
+  io::println(int::show(bucket((1, 2))))
+}

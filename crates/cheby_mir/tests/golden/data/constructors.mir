@@ -1,0 +1,129 @@
+module app
+
+fn app::first() -> value check str#0 {
+  str#0 = "src/main.cheby:26:4"
+bb0:
+  _0: int = call_foreign "first"() -> i64
+  _1: value = box int _0
+  return _1
+}
+
+fn app::second() -> value check str#0 {
+  str#0 = "src/main.cheby:30:4"
+bb0:
+  _0: int = call_foreign "second"() -> i64
+  _1: value = box int _0
+  return _1
+}
+
+fn app::point() -> value check str#0 {
+  str#0 = "src/main.cheby:32:4"
+bb0:
+  _0: value = call app::second()
+  _1: int = unbox int _0
+  drop _0
+  _2: value = call app::first()
+  _3: int = unbox int _2
+  drop _2
+  _4: value = alloc ctor app::Point(_3, _1)
+  return _4
+}
+
+fn app::mixed(_0: value) -> value check str#0 {
+  str#0 = "src/main.cheby:36:4"
+bb0:
+  _1: value = alloc ctor app::Mixed(const int 3, _0, const float 0.5, const bool true)
+  return _1
+}
+
+fn app::pair(_0: int) -> value check str#0 {
+  str#0 = "src/main.cheby:40:4"
+bb0:
+  _1: value = box int _0
+  _2: value = call app::second()
+  _3: int = unbox int _2
+  drop _2
+  _4: value = alloc ctor app::Pair(_1, _3)
+  return _4
+}
+
+fn app::circle() -> value check str#0 {
+  str#0 = "src/main.cheby:44:4"
+bb0:
+  _0: value = alloc ctor app::Circle(const float 2.5)
+  return _0
+}
+
+fn app::dot() -> value check str#0 {
+  str#0 = "src/main.cheby:48:4"
+bb0:
+  return const ctor app::Dot
+}
+
+fn app::some(_0: int) -> value check str#0 {
+  str#0 = "src/main.cheby:52:4"
+bb0:
+  _1: value = box int _0
+  _2: value = alloc ctor Some(_1)
+  return _2
+}
+
+fn app::ok(_0: value) -> value check str#0 {
+  str#0 = "src/main.cheby:56:4"
+bb0:
+  _1: value = alloc ctor Ok(_0)
+  return _1
+}
+
+fn app::err(_0: int) -> value check str#0 {
+  str#0 = "src/main.cheby:60:4"
+bb0:
+  _1: value = box int _0
+  _2: value = alloc ctor Err(_1)
+  return _2
+}
+
+fn app::main() -> value check str#0 {
+  str#0 = "src/main.cheby:64:4"
+  str#1 = "m"
+  str#2 = "yes"
+bb0:
+  _0: value = call app::point()
+  drop _0
+  _1: value = const str#1
+  _2: value = call app::mixed(_1)
+  drop _2
+  _3: value = call app::pair(const int 1)
+  drop _3
+  _4: value = call app::circle()
+  drop _4
+  _5: value = call app::dot()
+  drop _5
+  _6: value = call app::some(const int 1)
+  drop _6
+  _7: value = const str#2
+  _8: value = call app::ok(_7)
+  drop _8
+  _9: value = call app::err(const int 2)
+  drop _9
+  return const nil
+}
+
+layout ctor app::Point: Point.Point tag 0 key ec11cf523cf6d065 record [x: int @8, y: int @16]
+layout ctor app::Mixed: Mixed.Mixed tag 0 key 0f4185e83a06d2c1 record [count: int @16, name: value @8, ratio: float @24, flag: bool @32]
+layout ctor app::Pair: Pair.Pair tag 0 key 19cbab82faaba9f7 [value @8, int @16]
+layout ctor app::Circle: Shape.Circle tag 0 key 057c1db0258c1332 [float @8]
+layout ctor app::Dot: Shape.Dot tag 1 key 057c1db0258c1332 []
+foreign_layout ctor Ok: Result.Ok tag 0 key 0b7d6449ba7cbef5 [value @8]
+foreign_layout ctor Err: Result.Err tag 1 key 0b7d6449ba7cbef5 [value @8]
+foreign_layout ctor Some: Option.Some tag 0 key af80d07f7bb18e70 [value @8]
+callee app::first() -> value
+callee app::second() -> value
+callee app::point() -> value
+callee app::mixed(value) -> value
+callee app::pair(int) -> value
+callee app::circle() -> value
+callee app::dot() -> value
+callee app::some(int) -> value
+callee app::ok(value) -> value
+callee app::err(int) -> value

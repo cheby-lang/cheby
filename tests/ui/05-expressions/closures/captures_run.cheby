@@ -1,0 +1,32 @@
+// @mode: run-pass
+// @decisions: D-453
+//! A closure captures the values of the bindings it uses, of every type,
+//! when it is made; closures nest, and one returned from a function
+//! keeps its captures after the function returns (§5.7).
+
+import std::io
+import std::string
+
+fn describe(n: Int, x: Float, b: Bool, s: String, small: U8, wide: I64) -> fn(Int) -> String {
+  fn(k) { "{n} {x} {b} {s} {small} {wide} {k}" }
+}
+
+fn nest(a: Int) -> fn(Int) -> fn(Int) -> fn(Int) -> Int {
+  fn(b) { fn(c) { fn(d) { a * 1000 + b * 100 + c * 10 + d } } }
+}
+
+fn main() {
+  let f = describe(1, 2.5, True, "four", 5, -6)
+  io::println(f(7))
+  io::println(f(8))
+  let one = nest(1)
+  let two = one(2)
+  let three = two(3)
+  let all = three(4)
+  let other = three(9)
+  io::println("{all} {other}")
+  let names = ["a", "b"]
+  let list_names = fn() { names }
+  let again = list_names()
+  io::println(string::join(again, ", "))
+}

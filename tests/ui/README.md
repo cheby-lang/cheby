@@ -11,6 +11,17 @@ One test per rule, grouped by spec chapter (D-275, [testing.md](../../docs/plan/
 
 Goldens sit next to the test: `.stderr` for diagnostics (required for `check-fail` and `parse-fail`) and `.stdout` for program output. `parse-fail` files must also be rejected by `tree-sitter-cheby` (`cargo xtask cross-check`). Record goldens with `cargo xtask bless`.
 
+## Input of run tests
+
+A `run-pass` or `run-fail` test may have input files next to it, named like its goldens (D-543):
+
+| File         | Meaning                                                                                                |
+| ------------ | ------------------------------------------------------------------------------------------------------ |
+| `name.stdin` | fed to `cheby run` as standard input, byte for byte; without it, standard input is null (end of input) |
+| `name.args`  | the program's arguments, one per line (an empty line is an empty argument), passed after `--`          |
+
+Input is data, so it sits beside the test like a golden, and `cargo xtask bless` never writes it. A test of another mode with an input file is an error. For a package test the files sit beside the directory, as `name.stdin` and `name.args`.
+
 ## Single-file tests
 
 The harness copies `name.cheby` into a temporary package as `src/main.cheby`, with a generated `cheby.toml` named `ui_test`. Goldens are `name.stderr` and `name.stdout`, and they show the file as `tests/ui/<chapter>/name.cheby`.

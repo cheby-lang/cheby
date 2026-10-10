@@ -945,10 +945,13 @@ impl<'a> BodyCx<'a> {
                 // type, so `3.4028235e38` is the largest `F32` (D-496).
                 // Below half an ulp past `f32::MAX` it rounds down to it;
                 // at the midpoint it rounds to even, which is the infinity.
+                // The `F32` value is rounded once from the decimal text,
+                // so a literal just below the midpoint fits even when its
+                // `Float` rounding is the midpoint (GAP(f32-literal-rounding)).
                 let fits = if ty == Ty::F32 {
-                    value.abs() < f64::from(f32::MAX) + 2f64.powi(103)
+                    value.narrow.is_finite()
                 } else if ty == Ty::FLOAT {
-                    value.is_finite()
+                    value.wide.is_finite()
                 } else {
                     true
                 };

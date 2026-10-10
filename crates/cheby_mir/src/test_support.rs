@@ -30,7 +30,7 @@ use cheby_types::{Tests, TypesInput, build_interface, check_bodies_with, thir};
 
 use crate::{
     Defs, EntryKind, EntryRequest, LowerCx, MirModule, Program, Root, Unsupported, count_and_check,
-    dump, dump_function, lower_entries, lower_items, reachable,
+    dump, dump_function, lower_entries, lower_items, lower_tests, reachable,
 };
 
 /// What [`lower_source`] produced.
@@ -75,6 +75,23 @@ impl Lowered {
                     .is_some_and(|rest| rest.starts_with(&format!("{key}(")))
             })
             .unwrap_or_else(|| panic!("no function `{key}` in:\n{}", dump(unit).unwrap()))
+    }
+
+    /// The dump of the function whose key prints as `key` (`entry
+    /// main(app::main)`, `test app::…`) in any unit.
+    pub fn any_function(&self, key: &str) -> String {
+        self.units
+            .iter()
+            .flat_map(|u| {
+                u.functions
+                    .iter()
+                    .map(move |f| dump_function(u, f).unwrap())
+            })
+            .find(|text| {
+                text.strip_prefix("fn ")
+                    .is_some_and(|rest| rest.starts_with(&format!("{key}(")))
+            })
+            .unwrap_or_else(|| panic!("no function `{key}` in:\n{}", self.dump()))
     }
 
     /// Every E0038 as `message @ path:line:col`, sorted.
@@ -222,6 +239,19 @@ pub(crate) fn lower_source(files: &[(&str, &str)]) -> Lowered {
 
 /// [`lower_source`] for a package named `package`; the front end's errors
 /// are `Err`, rendered as the CLI prints them.
+pub(crate) fn lower_package(package: &str, files: &[(&str, &str)]) -> Result<Lowered, String> {
+    lower_package_with(package, files, false)
+}
+
+/// [`lower_source`] that also lowers the `test` blocks of package `app`
+/// (D-265): what they reach, a tests unit after each module's code unit,
+/// and a test thunk per test after `main`'s in the entries unit, as
+/// `cheby test` builds them (G4).
+pub(crate) fn lower_source_with_tests(files: &[(&str, &str)]) -> Lowered {
+    lower_package_with("app", files, true)
+        .unwrap_or_else(|errors| panic!("front-end errors: {errors}"))
+}
+
 #[expect(
     clippy::too_many_lines,
     reason = "the whole front end and back end of a build, in order"
@@ -230,7 +260,11 @@ pub(crate) fn lower_source(files: &[(&str, &str)]) -> Lowered {
     clippy::panic_in_result_fn,
     reason = "a test helper: only the front end's errors are `Err`, an internal error panics"
 )]
-pub(crate) fn lower_package(package: &str, files: &[(&str, &str)]) -> Result<Lowered, String> {
+fn lower_package_with(
+    package: &str,
+    files: &[(&str, &str)],
+    with_tests: bool,
+) -> Result<Lowered, String> {
     let globals = Globals::new();
     let mut modules = ModuleTable::new();
     let mut sources = SourceMap::new();
@@ -379,7 +413,28 @@ pub(crate) fn lower_package(package: &str, files: &[(&str, &str)]) -> Result<Low
         .expect("the root module has a `main`")
         .clone();
     let program: Program<'_> = checked.iter().map(|(&m, (t, _))| (m, t)).collect();
-    let reach = reachable(&program, &[Root::Fn(&main)]).unwrap();
+    // The local package's tests, by module path and then in source order.
+    let mut tests: Vec<(ModuleId, &thir::TestDef)> = Vec::new();
+    if with_tests {
+        let mut local: Vec<ModuleId> = order
+            .iter()
+            .copied()
+            .filter(|&m| {
+                modules
+                    .get(m)
+                    .is_some_and(|i| i.package == PackageId::LOCAL)
+            })
+            .collect();
+        local.sort_by_key(|&m| modules.get(m).map(|i| i.path.to_string()));
+        for m in local {
+            let mut ts: Vec<&thir::TestDef> = checked[&m].0.tests.iter().collect();
+            ts.sort_by_key(|t| t.def);
+            tests.extend(ts.into_iter().map(|t| (m, t)));
+        }
+    }
+    let mut roots = vec![Root::Fn(&main)];
+    roots.extend(tests.iter().map(|&(_, t)| Root::Test(t)));
+    let reach = reachable(&program, &roots).unwrap();
     let mut units = Vec::new();
     let mut unsupported = Unsupported::default();
     for &id in &order {
@@ -404,6 +459,15 @@ pub(crate) fn lower_package(package: &str, files: &[(&str, &str)]) -> Result<Low
             }
             units.push(unit);
         }
+        if tests.iter().any(|&(m, _)| m == id) {
+            let lowered = lower_tests(thir, &cx);
+            if let Some(mut unit) = unsupported.take(lowered).unwrap() {
+                if let Err(ice) = count_and_check(&mut unit) {
+                    panic!("{ice}\n{}", dump(&unit).unwrap_or_default());
+                }
+                units.push(unit);
+            }
+        }
     }
     let mut all: Vec<ModuleId> = order.clone();
     all.sort_unstable();
@@ -417,15 +481,19 @@ pub(crate) fn lower_package(package: &str, files: &[(&str, &str)]) -> Result<Low
         },
         sources: &sources,
     };
-    let entries = lower_entries(
-        &[EntryRequest {
-            kind: EntryKind::Main(main.def),
-            info: main.entry.as_ref(),
-        }],
-        &cx,
-    );
+    let mut requests = vec![EntryRequest {
+        kind: EntryKind::Main(main.def),
+        info: main.entry.as_ref(),
+    }];
+    requests.extend(tests.iter().map(|&(_, t)| EntryRequest {
+        kind: EntryKind::Test(t.def),
+        info: Some(&t.entry),
+    }));
+    let entries = lower_entries(&requests, &cx);
     if let Some(mut unit) = unsupported.take(entries).unwrap() {
-        count_and_check(&mut unit).unwrap();
+        if let Err(ice) = count_and_check(&mut unit) {
+            panic!("{ice}\n{}", dump(&unit).unwrap_or_default());
+        }
         units.push(unit);
     }
     diags.extend(unsupported.into_diagnostics());

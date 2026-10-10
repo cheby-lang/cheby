@@ -478,7 +478,12 @@ impl Decls {
         Ok(match key {
             FnKey::Item(def) => mangle::item(Kind::Fn, name(def)?),
             FnKey::ValueShim(def) => mangle::item(Kind::Shim, name(def)?),
-            FnKey::Closure { owner, index } => mangle::closure(name(owner)?, index),
+            // A test's name is free text that may equal a function's, so
+            // a test's closures go by its ordinal, like the test (D-456).
+            FnKey::Closure { owner, index } => match self.test_ordinals.get(&owner) {
+                Some(&ordinal) => mangle::test_closure(&name(owner)?.module, ordinal, index),
+                None => mangle::closure(name(owner)?, index),
+            },
             FnKey::ConstInit(def) => mangle::item(Kind::Cinit, name(def)?),
             FnKey::Test(def) => {
                 let UnitKind::Tests(module) = unit.unit else {
