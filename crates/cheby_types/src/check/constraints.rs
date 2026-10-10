@@ -57,8 +57,8 @@ pub(crate) enum Deferred {
     },
     /// Bound `iface` of a generic callee's type parameter, instantiated to
     /// `ty`: dictionary `slot` of the [`Callee::Fn`] of the call `expr`,
-    /// or of the [`ExprKind::FnRef`] `expr` (plan §4.3 order: for each
-    /// type parameter, for each of its bounds).
+    /// or of the [`ExprKind::FnRef`] `expr` (in order: for each type
+    /// parameter, for each of its bounds).
     Bound {
         expr: ExprId,
         slot: usize,
@@ -157,9 +157,9 @@ impl BodyCx<'_> {
             } else {
                 is_integer(ty)
             };
-            // GAP(never-operands): `Never` is not numeric, so it gets
-            // E0072 like any other type, as it gets E0063 for the
-            // overloadable operators below (GAP(never-satisfaction)).
+            // `Never` is not numeric, so it gets E0072 like any other type,
+            // as it gets E0063 for the overloadable operators below
+            // (D-492).
             if !defined {
                 let diag = self.invalid_operand(op, ty, span);
                 self.report(diag);
@@ -201,8 +201,8 @@ impl BodyCx<'_> {
             return Ok(());
         };
         let span = exprs.try_get(expr, "negation")?.span;
-        // GAP(never-operands): a `Never` operand goes through `Neg` like
-        // any other type that is not numeric.
+        // A `Never` operand goes through `Neg` like any other type that
+        // is not numeric (D-492).
         let imp = if is_integer(ty) || is_float(ty) {
             OpImpl::Builtin
         } else {

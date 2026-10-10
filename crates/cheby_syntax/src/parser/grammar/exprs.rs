@@ -93,8 +93,7 @@ fn expr_bp(p: &mut Parser<'_>, min_bp: u8, r: Restrictions) -> Option<CompletedM
     // deeper (`a + b + c` is `(a + b) + c`), and later passes recurse
     // along the chain, so a finished operation counts as a level for the
     // rest of the chain (D-441). Its own right operand is parsed before
-    // it counts, so right-nested code costs no more than before.
-    // GAP(chain-depth).
+    // it counts, so right-nested code costs no more than before (D-519).
     let mut levels = 0_u32;
     while let Some(bp) = infix_bp(p.current()) {
         if bp < min_bp {
@@ -139,7 +138,7 @@ fn unary(p: &mut Parser<'_>, r: Restrictions) -> Option<CompletedMarker> {
     let mut lhs = primary(p, r)?;
     // Like an operator chain, each call or field access nests the
     // expression before it one level deeper, and counts for the rest of
-    // the chain once it is finished (D-441, GAP(chain-depth)).
+    // the chain once it is finished (D-441, D-519).
     let mut levels = 0_u32;
     while matches!(p.current(), L_PAREN | DOT) {
         let m = lhs.precede(p);

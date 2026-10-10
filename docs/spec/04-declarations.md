@@ -45,9 +45,9 @@ Package visibility is the default, like Rust's `pub(package)`. `pub` makes an it
 
 `pub` and `priv` may appear on functions, types, aliases, constants and interfaces. Tests can be neither `pub` nor `priv` ([§4.7](#47-tests)).
 
-An item's signature must not mention a type less visible than the item itself (D-148, D-149), because code that can see the item could not name the type. So a `pub` item must not mention a type that is not `pub` (for example `pub fn make() -> Secret` where `Secret` is package-visible), and a package-visible item must not mention a `priv` type. Either is a compile error. The signature of a function is its parameter and return types and bounds, the signature of an alias is its definition, and the signature of a constant is its declared type. The fields of a type count as its signature only where they are visible ([§4.3.4](#434-opacity-and-exposed)): a `pub exposed` type's fields must mention only `pub` types, a package-visible type's fields must not mention `priv` types, and a `pub` type without `exposed` may have fields of package-visible types, since its representation is hidden outside the package (D-198). Making such a type `exposed` later requires those field types to become `pub`.
+An item's signature must not mention a type less visible than the item itself (D-148, D-149), because code that can see the item could not name the type. So a `pub` item must not mention a type that is not `pub` (for example `pub fn make() -> Secret` where `Secret` is package-visible), and a package-visible item must not mention a `priv` type. Either is a compile error. The signature of a function is its parameter and return types and bounds, the signature of an alias is its definition, the signature of a constant is its declared type, and the signature of an interface is its embedded interfaces and its functions. Interfaces named in a signature, in bounds, `dyn` types and embeddings, count like types (D-488). An alias is transparent ([§4.4](#44-type-aliases)), so a signature that names an alias mentions the types the alias stands for, and the alias's own visibility does not matter: a `pub` function may use a `priv` alias of `Int` (D-488). The fields of a type count as its signature only where they are visible ([§4.3.4](#434-opacity-and-exposed)): a `pub exposed` type's fields must mention only `pub` types, a package-visible type's fields must not mention `priv` types, and a `pub` type without `exposed` may have fields of package-visible types, since its representation is hidden outside the package (D-198). Making such a type `exposed` later requires those field types to become `pub`.
 
-Unused items warn according to their visibility (D-152, D-080): an unused `priv` item always warns, an unused package-visible item warns when nothing in the package uses it, and a `pub` item never warns.
+Unused items warn according to their visibility (D-152, D-080): an unused `priv` item always warns, an unused package-visible item warns when nothing in the package uses it, and a `pub` item never warns. What counts as a use is defined in [§13.8](13-tooling.md#138-diagnostics-and-warnings) (D-516).
 
 ### 4.1.4 Doc comments
 
@@ -119,7 +119,7 @@ Local functions, declared inside a function body, are expressions and are covere
 
 An entry point is a function named `main` with no parameters, returning either `Nil` or `Result<Nil, E>` for some `E` (D-073). Its behavior is defined in [§10.10](10-concurrency.md#1010-program-entry-and-exit).
 
-Any module's `main` can be run by module path, for example `cheby run my_app::tools::migrate` (D-137). Every top-level function named `main`, in any module, is therefore an entry point and must have this signature. A `main` with parameters or another return type is a compile error (D-448). The default entry point is the `main` of the package's root module, `src/main.cheby` ([§7.2](07-modules-and-packages.md#72-modules-and-files)) (D-137, D-142).
+Any module's `main` can be run by module path, for example `cheby run my_app::tools::migrate` (D-137). Every top-level function named `main`, in any module, is therefore an entry point and must have this signature. A `main` with parameters, type parameters or another return type is a compile error (D-448, D-491). `cheby run` could not choose type arguments for `main` or pass function packages for its bounds. The default entry point is the `main` of the package's root module, `src/main.cheby` ([§7.2](07-modules-and-packages.md#72-modules-and-files)) (D-137, D-142).
 
 `main` may have any visibility, including `priv`, because `cheby run` finds it by module path (D-163). It is usually written without a visibility prefix, `fn main()`, since `pub` would export it as part of the package's API.
 
@@ -140,6 +140,8 @@ field       = { doc_comment NL } LOWER ":" type ;   (* D-211 *)
 Every user-defined data type is an algebraic data type: a set of variants, each with its own fields (D-022). There is no `struct` or `enum` keyword. A record is a type with one variant ([§4.3.3](#433-single-variant-shorthand)).
 
 Type parameters of a type declaration have no bounds.
+
+A type declaration without a body declares an external type, whether or not it has an `@external` attribute ([§12.5.3](12-targets-and-ffi.md#1253-external-types)) (D-491).
 
 ### 4.3.1 Variants
 
@@ -201,7 +203,7 @@ Types are opaque outside their package by default (D-035, D-048). The package is
 | `pub type T`               | in any module of any package | only in modules of package `p`           |
 | `pub exposed type T`       | in any module of any package | in any module of any package             |
 
-"Constructors, patterns and fields" means constructing values with the type's constructors, matching on them in patterns, reading fields with `.field`, and record update (D-048). `priv type T` hides the type together with its constructors and fields outside its module, and a package-visible type is fully transparent inside its package (D-151). `exposed` requires `pub` (D-121, D-150), since it only matters across packages.
+"Constructors, patterns and fields" means constructing values with the type's constructors, matching on them in patterns, reading fields with `.field`, and record update (D-048). `priv type T` hides the type together with its constructors and fields outside its module, and a package-visible type is fully transparent inside its package (D-151). `exposed` requires `pub` (D-121, D-150), since it only matters across packages. A use of an opaque type's constructors or fields from another package is a compile error reported at the use, which is the code its author can change (D-487).
 
 Code outside package `p` can still pass values of an opaque type around, compare them with `==`, hash them and debug-print them ([§3.13](03-types.md#313-equality-hashing-and-debug-printing)), with the same panics on functions and handles as any other value (D-233), and use any `pub` functions the package provides.
 
@@ -243,12 +245,12 @@ The initializer is an ordinary expression, evaluated **at compile time** (D-090)
 - If evaluation panics, it is a compile error that shows the panic.
 - If evaluation reaches an IO operation, a fiber or channel operation, or an `@external` function, it is a compile error (D-090). Effects are untracked (D-016), so this is detected during evaluation, not by the type checker. The exception is the effect-free kernels of `std::list`, `std::map`, `std::set`, `std::string` and `std::bytes`, which the compiler runs itself (D-360).
 - Implementations must limit the time and memory that evaluation may use and report a compile error when a limit is exceeded ([§13.9](13-tooling.md#139-compile-time-evaluation)).
-- When building for JS, an `Int` in the resulting value that is outside the JS safe-integer range is a compile error (D-037, ADR-0027).
-- Constants may refer to other constants, but not cyclically.
+- When building for JS, an `Int` in the resulting value that is outside the JS safe-integer range is a compile error (D-037, ADR-0027). The initializer's own `Int` literals are not checked against that range, because it runs on the host (D-511).
+- Constants may refer to other constants, but not cyclically. A cycle of constants that name each other directly in their initializers is found by the type checker, and a cycle through a function call when the constants are evaluated. Imports are acyclic, so no cycle crosses modules (D-511).
 
 There are no comptime parameters and types are not values (D-090, D-057).
 
-A constant's value must not contain function values (including references to top-level functions), channels, fibers or external/handle types (D-139). Baking these into a binary is either impossible or meaningless. The type checker rejects a declared type that contains them, and evaluation rejects any such value it produces.
+A constant's value must not contain function values (including references to top-level functions), channels, fibers or external/handle types (D-139). Baking these into a binary is either impossible or meaningless. The type checker rejects a declared type that contains them, and evaluation rejects any such value it produces. A type contains what its tuples, built-in collections and the fields of every constructor of its named types contain, transitively and with the type arguments in place, so `Option<Db>` and a record with a function field are rejected like `Db` and `fn() -> Int`. A type argument that no field uses holds no value and is not looked at (D-511).
 
 In v1 a constant's value must not contain `dyn` values either, because a `dyn` value carries a function table and a type descriptor ([§8.6](08-interfaces.md#86-dyn-values)). The type checker rejects a declared type that contains `dyn`. Allowing it later breaks no program (D-237).
 
@@ -281,6 +283,7 @@ A `test` item declares a named test (D-055):
 - The name is a string literal without interpolation. Names must be distinct within a module.
 - The body is a block, type-checked like a function body. It can use every item of the module, including `priv` ones (D-055, D-162).
 - The body has type `Nil` or `Result<Nil, E>` for some `E` (D-140). A test passes if its body completes without panicking and, for a `Result` body, returns `Ok(Nil)`. An `Err` fails the test, so `use x <- result::try(…)` works directly in tests. Assertions use `assert` and `let assert` ([chapter 11](11-errors-and-panics.md)).
+- A body of type `Never`, such as one that ends in `panic` or `todo`, counts as `Nil`, so the test is valid and fails when it runs. A body whose type nothing has determined at its end has type `Nil`. In a `Result` body, the body must determine the error type `E`, like any other type in a body (D-493).
 - Tests are compiled only by `cheby test` (and the REPL and LSP). They are removed from all other builds (D-055).
 - A test cannot be `pub` or `priv` and cannot be referred to by name.
 
@@ -314,14 +317,20 @@ An unknown attribute name, a malformed attribute, a duplicated attribute (other 
 - `@external` takes `native` and one symbol string, or `js` and two strings, the module and the export, none of them empty ([§12.5](12-targets-and-ffi.md#125-foreign-functions)). An item has at most one `@external` per target.
 - `@target` and `@!target` take exactly one target, `native` or `js`.
 - `@blocking` and `@async` take no arguments, and `@deprecated` takes one message string.
-- No attribute is allowed on a variant, a record field or an interface function.
+- No attribute is allowed on a variant, a record field or an interface function. A run of attributes there is one error, and the member after it is still read (D-514).
 - Every attribute other than `@external` appears at most once on an item, and `@!target` at most once in a module.
+- An item must exist on at least one target ([§12.6](12-targets-and-ffi.md#126-target-specific-code)) (D-513).
 
 An attribute name binds nothing, so it is not checked against the reserved words or the naming convention of [§2.3](02-lexical-structure.md#23-identifiers) and [§2.4](02-lexical-structure.md#24-keywords). This is what lets `@async` exist although `async` is a reserved word. A name outside the table is an unknown attribute (D-435).
 
-The standard library also uses attributes that user code cannot write. One marks the count parameters that the standard library clamps, for the warning of [§13.8](13-tooling.md#138-diagnostics-and-warnings) (D-298, D-303). Another lets a standard-library type name the functions that implement its equality, hashing and debug printing ([§3.13](03-types.md#313-equality-hashing-and-debug-printing)) (D-342). Their spelling belongs to the toolchain, and writing them outside the standard library is a compile error like any unknown attribute.
+The standard library also uses two attributes that user code cannot write (D-482):
 
-`@deprecated("message")` makes every use of the item from another module a warning that includes the message. It exists so that, under the compatibility promise, items can be discouraged without being removed (D-075, D-200).
+- `@std_clamped(param, …)` on a function names one or more distinct parameters of the function, which it clamps (D-298). A negative integer literal written for one of them is a warning ([§13.8](13-tooling.md#138-diagnostics-and-warnings)) (D-303). The warning also covers a literal that a capture such as `list::take(_, -1)` moves into its closure, and it does not look through constants or other expressions (D-518).
+- `@std_hooks(equal_fn, hash_fn, debug_fn)` on a type names three functions of the type's module that implement its equality, hashing and debug printing ([§3.13](03-types.md#313-equality-hashing-and-debug-printing)) (D-342). Their shapes are `equal_fn(a: T, b: T) -> Bool`, `hash_fn(value: T) -> K` for any `K`, and `debug_fn(value: T) -> String`, where `T` is the type and no type parameter has a bound. The runtime hashes the `K` that `hash_fn` returns with the built-in structural hash, so a hook may return a canonical value such as a sorted list of entries.
+
+Only package `std` may write them. Outside it they are unknown attributes, and inside it a misplaced one or one that breaks these rules is a compile error like any other attribute error.
+
+`@deprecated("message")` makes every use of the item from another module a warning that includes the message. It exists so that, under the compatibility promise, items can be discouraged without being removed (D-075, D-200). Every written name that refers to a deprecated item of another module warns, and so does a constructor of a deprecated type or a function of a deprecated interface. An item import of a deprecated item does not warn, but each use of the name it binds does. Uses in the item's own module and implicit uses, such as a deprecated `show` that an interpolation calls, do not warn (D-517).
 
 A whole module is restricted to one target with the inner attribute `@!target(…)`, for example `@!target(js)`, placed after the `//!` module docs and before the imports (D-141, D-201, D-056). It mirrors `//!` and applies to every item in the file.
 

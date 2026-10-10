@@ -216,7 +216,7 @@ A program runs a `main` function ([§4.2.1](04-declarations.md#421-main)) in a f
 
 _Note:_ a toolchain built with debug assertions also checks, when `main` returns with status `0` or `1`, that no objects are still live. If some are, it prints `error: leak check failed: N objects are still live at exit` to standard error and exits with status `102`. There is no check after a panic (D-458).
 
-`main` takes no parameters. A program reads its command-line arguments and environment variables through the standard-library module `std::env`, which any module may use (D-183). `env::args()` does not include the program name, which `env::program_name()` returns (D-347).
+`main` takes no parameters and no type parameters ([§4.2.1](04-declarations.md#421-main)) (D-491). A program reads its command-line arguments and environment variables through the standard-library module `std::env`, which any module may use (D-183). `env::args()` does not include the program name, which `env::program_name()` returns (D-347).
 
 Standard output and standard error behave the same way on every target:
 

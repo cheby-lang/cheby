@@ -1,4 +1,4 @@
-//! Which items a program needs (GAP(backend-reachability)).
+//! Which items a program needs (D-510).
 //!
 //! `cheby run` lowers only the items reachable from the entry it runs,
 //! like a linker that drops unused code. While the back end is partial,

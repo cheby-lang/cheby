@@ -1,9 +1,8 @@
 //! MIR lowering, code generation and running (G3).
 //!
-//! A run lowers only what its entry needs (GAP(backend-reachability),
-//! plan §8): the items reachable from the `main` being run, across
-//! modules, with the constructor layouts of every module that reachable
-//! code uses. Each such module is lowered to its own MIR unit, in build
+//! A run lowers only what its entry needs (D-510): the items reachable
+//! from the `main` being run, across modules, with the constructor
+//! layouts of every module that reachable code uses. Each such module is lowered to its own MIR unit, in build
 //! order with items in `DefIndex` order, and the entry thunk is a separate
 //! unit (D-453). The JIT compiles all units in one batch.
 //!

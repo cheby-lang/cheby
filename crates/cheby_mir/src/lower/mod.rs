@@ -8,8 +8,8 @@
 //! and names; [`lower_module`] selects every item. [`lower_tests`] and
 //! [`lower_entries`] produce the other two unit kinds.
 //!
-//! The front end no longer gates what the back end cannot run (D-451,
-//! plan §8): a construct, a value representation or an external
+//! The front end no longer gates what the back end cannot run (D-480,
+//! D-510): a construct, a value representation or an external
 //! signature that lowering does not implement yet is E0038 at the
 //! construct, once per outermost construct, never an [`Ice`]. Lowering
 //! goes on after one, so a run reports every such construct of the items
@@ -266,8 +266,7 @@ pub fn lower_fn(f: &thir::FnDef, cx: &LowerCx<'_>) -> Result<Vec<Function>, Lowe
         .map(|p| p.bounds.len())
         .sum::<usize>();
     match (&f.native_external, &f.body) {
-        // With a body too, the body is for the other targets (D-207,
-        // GAP(native-external-over-body-in-mir)).
+        // With a body too, the body is for the other targets (D-207, D-510).
         (Some(ext), _) => Ok(vec![external::lower_wrapper(f, ext, sig, cx)?]),
         (None, Some(body)) => Ok(vec![expr::lower_body(
             FnKey::Item(f.def),

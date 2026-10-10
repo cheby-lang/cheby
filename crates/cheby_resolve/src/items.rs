@@ -2,20 +2,20 @@
 //! per namespace (E0041, §4.1.2), attributes (E0045, §4.8, D-461) and
 //! functions without a body (E0046).
 //!
-//! Every rule of D-461 is an E0045 here: `@external` only on functions and
+//! The rules of D-461 are E0045 here: `@external` only on functions and
 //! bodiless types, at most once per target, in one of its two forms with
 //! non-empty strings; `@target` and `@!target` with exactly one target,
 //! `@target` on every top-level item kind; `@blocking` and `@async`
 //! without arguments, on functions with an `@external` (a JS one for
 //! `@async`); `@deprecated` with one message string, on `pub` items only;
-//! no attribute on a variant, a record field or an interface function; no
-//! attribute but `@external` twice on an item; `@!target` at most once.
+//! no attribute but `@external` twice on an item; `@!target` at most once.
 //! Attributes that leave an item on no target at all are E0045 too
-//! (GAP(item-on-no-target)).
+//! (D-513). Attributes on a variant, a record field or an interface
+//! function are the parser's E0045, so they never reach this pass (D-514).
 //!
 //! The standard library may also write two attributes of its own
-//! (GAP(std-attributes), §4.8, D-298, D-303, D-342): `@std_clamped(param,
-//! …)` on a function names the count parameters it clamps, and
+//! (§4.8, D-298, D-303, D-342, D-482): `@std_clamped(param, …)` on a
+//! function names the count parameters it clamps, and
 //! `@std_hooks(equal_fn, hash_fn, debug_fn)` on a type names the functions
 //! of its module that implement its equality, hashing and debug printing.
 //! In any other package they are unknown attributes.
@@ -45,18 +45,12 @@ pub(crate) struct Collected {
 /// Where an attribute is written.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Placement {
-    Fn {
-        has_body: bool,
-    },
-    Type {
-        external: bool,
-    },
+    Fn { has_body: bool },
+    Type { external: bool },
     Alias,
     Const,
     Interface,
     Test,
-    /// A variant, a record field or an interface function.
-    Member,
 }
 
 impl Placement {
@@ -69,7 +63,6 @@ impl Placement {
             Self::Const => "a constant",
             Self::Interface => "an interface",
             Self::Test => "a test",
-            Self::Member => "a part of a declaration",
         }
     }
 }
@@ -84,8 +77,7 @@ const ATTRIBUTE_LIST: &str =
 /// The attributes every package may write (§4.8).
 const ATTRIBUTES: [&str; 5] = ["external", "target", "blocking", "async", "deprecated"];
 
-/// The attributes only the standard library may write
-/// (GAP(std-attributes)).
+/// The attributes only the standard library may write (D-482).
 const STD_ATTRIBUTES: [&str; 2] = ["std_clamped", "std_hooks"];
 
 /// Why a function without a body can end up on no target.
@@ -216,7 +208,6 @@ impl Cx<'_, '_> {
                     Some(TypeBody::Variants(list)) => {
                         for variant in list.variants() {
                             let Some(ctor) = variant.name() else { continue };
-                            self.member_attrs(variant.attrs());
                             self.push(
                                 ctor.text(),
                                 ctor.span(),
@@ -226,21 +217,11 @@ impl Cx<'_, '_> {
                                 variant.syntax().id(),
                                 member_attrs.clone(),
                             )?;
-                            if let Some(cheby_syntax::ast::VariantFields::Record(fields)) =
-                                variant.fields()
-                            {
-                                for field in fields.fields() {
-                                    self.member_attrs(field.attrs());
-                                }
-                            }
                         }
                     }
                     // The single-variant shorthand (§4.3.3): one constructor
                     // named like the type; its node is the field list.
                     Some(TypeBody::Record(fields)) => {
-                        for field in fields.fields() {
-                            self.member_attrs(field.attrs());
-                        }
                         self.push(
                             name.text(),
                             name.span(),
@@ -313,7 +294,6 @@ impl Cx<'_, '_> {
                 let mut seen: FxHashMap<Name, Span> = FxHashMap::default();
                 for f in i.fns() {
                     let Some(fname) = f.name() else { continue };
-                    self.member_attrs(f.attrs());
                     let interned = self.intern(fname.text());
                     if let Some(&first) = seen.get(&interned) {
                         self.diags
@@ -387,12 +367,6 @@ impl Cx<'_, '_> {
             node,
             attrs,
         })
-    }
-
-    /// Attributes on a variant, a record field or an interface function,
-    /// where none is allowed.
-    fn member_attrs(&mut self, attrs: AstChildren<'_, Attr<'_>>) {
-        let _ = self.attrs(attrs, Placement::Member, Vis::Priv);
     }
 
     /// Checks the attributes of an item and returns what they say.
@@ -470,10 +444,6 @@ impl Cx<'_, '_> {
                     let Some(t) = self.target_arg(&args, span, "@target") else {
                         continue;
                     };
-                    if matches!(placement, Placement::Member) {
-                        self.misplaced(span, known, placement, None);
-                        continue;
-                    }
                     target = Some(t);
                     self.item_target = Some((t, span));
                 }
@@ -510,7 +480,7 @@ impl Cx<'_, '_> {
                         );
                         continue;
                     };
-                    if vis != Vis::Pub || matches!(placement, Placement::Member | Placement::Test) {
+                    if vis != Vis::Pub || matches!(placement, Placement::Test) {
                         self.diags.push(
                             Diagnostic::new(
                                 codes::INVALID_ATTRIBUTE,
@@ -583,12 +553,11 @@ impl Cx<'_, '_> {
     }
 
     /// Narrows an item's targets by its module's `@!target`, and reports
-    /// E0045 when its attributes leave it on no target at all
-    /// (GAP(item-on-no-target)): `@target` against the module's
-    /// `@!target`, or a function without a body whose `@external`s miss
-    /// the only target its `@target` or module allows. Such an item could
-    /// never be compiled, which is never what was meant. `what` names the
-    /// item: "`f`" or "the test \"t\"".
+    /// E0045 when its attributes leave it on no target at all (D-513):
+    /// `@target` against the module's `@!target`, or a function without a
+    /// body whose `@external`s miss the only target its `@target` or module
+    /// allows. Such an item could never be compiled, which is never what was
+    /// meant. `what` names the item: "`f`" or "the test \"t\"".
     fn narrow(&mut self, attrs: ItemAttrs, module: Targets, what: &str, name: Span) -> ItemAttrs {
         let attrs = with_module_targets(attrs, module);
         if !attrs.targets.is_empty() {
@@ -775,7 +744,7 @@ impl Cx<'_, '_> {
     }
 
     /// The name of a known attribute: one of §4.8, or in the standard
-    /// library one of its own (GAP(std-attributes)).
+    /// library one of its own (D-482).
     fn known_attr(&self, name: &str) -> Option<&'static str> {
         let std_only = if self.input.package == PackageId::STD {
             &STD_ATTRIBUTES[..]
@@ -1157,9 +1126,9 @@ mod tests {
     }
 
     // No attribute on a variant, a record field or an interface function
-    // (D-461): the grammar has no place for one (App. A.2), so it is a
-    // syntax error before resolution. `Placement::Member` covers trees
-    // that carry one anyway.
+    // (D-461): the grammar has no place for one (App. A.2), so the parser
+    // reports it and keeps it out of the member's node (D-514). Resolution
+    // never sees one.
 
     #[test]
     fn attributes_other_than_external_appear_once() {

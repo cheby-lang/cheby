@@ -24,7 +24,7 @@
 //! only `_` or a binding covers it (§6.4, §6.9), like `Int`, `String`,
 //! `Float`, functions, `dyn`, type parameters and external types.
 //!
-//! GAP(never-exhaustiveness): `Never` is treated like an opaque type. A
+//! `Never` is treated like an opaque type (D-492). A
 //! `case` over a `Never` subject therefore needs a `_` or binding arm,
 //! which is the only pattern that type-checks against `Never` anyway
 //! (§3.10), and `Option<Never>` needs a `Some(_)` arm. Treating `Never`
@@ -351,8 +351,7 @@ impl TyCx<'_> {
     /// a type in its signature may: an unknown type, or a wrong number of
     /// type arguments, already reported where the signature is checked.
     /// Matching over such a type is not checked at all, so that no E0060,
-    /// E0061, W0008 or W0010 follows from that error
-    /// (GAP(pattern-under-error)).
+    /// E0061, W0008 or W0010 follows from that error (D-494).
     fn erroneous(&self, ty: Ty) -> bool {
         contains_error(&self.globals.types, ty)
     }
@@ -410,8 +409,7 @@ impl TyCx<'_> {
     }
 
     /// A constructor's name as users write it here (D-463): prelude and
-    /// own constructors bare, others as `<module>::Name`.
-    /// GAP(witness-format).
+    /// own constructors bare, others as `<module>::Name` (D-507).
     fn ctor_name(&self, ctor: DefId) -> Result<String, Ice> {
         let name = self.globals.names.get(self.item(ctor)?.name);
         if ctor.module == ModuleId::BUILTIN || ctor.module == self.module {
@@ -471,7 +469,7 @@ impl TyCx<'_> {
     /// The engine pattern of a THIR pattern.
     ///
     /// A pattern at the error type lowers to a wildcard, since that type
-    /// has no constructors to split (GAP(pattern-under-error)). The
+    /// has no constructors to split (D-494). The
     /// callers skip such columns already; this keeps the engine safe.
     fn lower(&self, pat: &thir::Pat) -> Result<Pat, Ice> {
         if matches!(self.kind(pat.ty), TyKind::Error) {

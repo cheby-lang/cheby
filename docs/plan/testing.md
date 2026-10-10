@@ -25,7 +25,7 @@ docs/examples/003_fizzbuzz/
 - Examples that need the network (030, 031) or a C library (020) run against local fixtures: a loopback HTTP server started by the harness, and a C fixture library linked once OQ-P9 is settled. Until then they are marked `skip-run` and only checked with `cheby check` (D-282). 030 also has a git dependency, so it waits for M5 (D-446).
 - A `skip-run` example's milestone names when its fixture arrives, not when `cheby check` can handle it. Before that milestone a passing check is pending, not an unexpected pass (D-445).
 - Examples whose output depends on randomness or `Map` iteration order (D-093) must make their output deterministic, for example by sorting or by a fixed seed passed through `args`. Where an example cannot, the decision log gets an entry and the example is changed, never the harness.
-- `test.toml` records the milestone in which an example is expected to pass. Before that it is expected-fail, and an unexpected pass fails the run, so the table in [README.md](README.md#milestones) stays accurate. `tests/milestone` names the milestone in progress: examples of earlier milestones must pass, examples of the milestone in progress are pending and only reported, and examples of later milestones must fail. Bumping the file at a milestone's exit makes its examples binding (D-288).
+- `test.toml` records the milestone in which an example is expected to pass. Before that it is expected-fail, and an unexpected pass fails the run, so the table in [README.md](README.md#milestones) stays accurate. `tests/milestone` names the milestone in progress: examples of earlier milestones must pass, examples of the milestone in progress are pending and only reported, and examples of later milestones must fail. Bumping the file at a milestone's exit makes its examples binding (D-288). An example that imports standard-library modules of a later tier is checked as well as run from the milestone that ships those modules, which its `test.toml` names, and until then it reports only E0038 for those imports (D-477).
 - `cargo xtask bless` rewrites goldens (D-292). A blessed change is reviewed like code. It refuses to bless an example whose exit code differs from `expected.exit` (0 by default), so a toolchain error never replaces good goldens. An intended change of exit code is edited by hand (D-445).
 
 ## 2. UI tests
@@ -52,6 +52,7 @@ tests/ui/06-patterns/exhaustiveness/missing_variant.cheby
 - Runtime kernels (RRB, HAMT, strings) are property-tested against simple reference models (`Vec`, `BTreeMap`), including reuse paths with a count of one.
 - The parser is property-tested for losslessness: printing the CST reproduces the input exactly, for any input, including invalid input.
 - From M5, the formatter is tested for idempotence and for meaning preservation: formatted output parses to the same AST.
+- The standard library's `test` blocks sit in `std/`, next to the code they test. User builds skip them, and testing std itself checks and runs them, from G4 on (D-479). Until then only driver unit tests that use stand-in std modules check how std tests are handled, and the real ones are checked by no test.
 
 ## 4. REPL tests
 
@@ -73,7 +74,7 @@ CI builds the examples and the synthetic benchmark project twice, with different
 
 ## 8. Fuzzing
 
-From M1, `cargo fuzz` targets the lexer and parser (no panics, losslessness) and the type checker (no panics on any parsed input). From M2, a differential fuzzer generates well-typed, terminating programs and compares JIT output with expected values computed by a reference evaluator in the test crate. From M4 it compares native with JS output.
+From M1, `cargo fuzz` targets the lexer and parser (no panics, losslessness) and the whole front end (no panics on any input). The targets are `fuzz/fuzz_targets/lex.rs`, `parse.rs` and `check.rs`. `cargo-fuzz` needs a nightly toolchain, so CI does not run them yet, and `check` has had only short local runs. From M2, a differential fuzzer generates well-typed, terminating programs and compares JIT output with expected values computed by a reference evaluator in the test crate. From M4 it compares native with JS output.
 
 ## 9. Sanitizers and leak checks
 

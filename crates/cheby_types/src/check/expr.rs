@@ -149,7 +149,7 @@ impl BodyCx<'_> {
                 let ty = self.local_ty(local)?;
                 // Inside its own body, closures nested there included, a
                 // local function's name is a self reference, never a
-                // capture (D-110, D-453, GAP(self-ref-in-nested-closures)).
+                // capture (D-110, D-453, D-499).
                 let kind = if self.local_fns.contains(&local) {
                     ExprKind::SelfRef { local }
                 } else {
@@ -213,7 +213,7 @@ impl BodyCx<'_> {
     /// An item used as a value: a function ([`ExprKind::FnRef`]), a
     /// constant ([`ExprKind::ConstRef`]), a unit constructor
     /// ([`ExprKind::Ctor`]), or a positional constructor or interface
-    /// function, which become closures (GAP(interface-fn-value)).
+    /// function, which become closures (D-500).
     pub(crate) fn def_value(
         &mut self,
         def: DefId,
@@ -303,7 +303,7 @@ impl BodyCx<'_> {
     }
 
     /// Records the type arguments of the generic use `id` of `def`, and a
-    /// deferred constraint for each bound (plan §4.3 order).
+    /// deferred constraint for each bound, in the order of [`bounds_of`].
     pub(crate) fn record_instance(
         &mut self,
         id: ExprId,
@@ -587,8 +587,7 @@ impl BodyCx<'_> {
         if matches!(op, BinOpKind::And | BinOpKind::Or) {
             // `&&` and `||` take and return `Bool` (§5.4.5). Another
             // operand type is a plain mismatch, E0047; E0072 is for `%`,
-            // the bitwise operators and the shifts only
-            // (GAP(logical-operand-code)).
+            // the bitwise operators and the shifts only (D-495).
             let operand = Expected::new(
                 InferTy::Known(Ty::BOOL),
                 b.op_token().map(|t| {
@@ -742,7 +741,8 @@ pub(crate) fn item_params(generics: &cheby_iface::Generics) -> Vec<(ParamIdx, ch
 }
 
 /// For each type parameter of `generics` in order, for each of its bounds
-/// in written order: the instantiated type and the interface (plan §4.3).
+/// in written order: the instantiated type and the interface. This is the
+/// order of a callee's dictionaries.
 pub(crate) fn bounds_of(
     generics: &cheby_iface::Generics,
     args: &[InferTy],

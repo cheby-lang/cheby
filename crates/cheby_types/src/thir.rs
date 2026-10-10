@@ -6,7 +6,7 @@
 //! never infers types or searches interfaces. `use`, pipes, captures,
 //! holes and parenthesized expressions are already desugared (C7); a
 //! positional constructor or an interface function used as a value is a
-//! [`ExprKind::Closure`] (GAP(interface-fn-value)). Tail position is not
+//! [`ExprKind::Closure`] (D-500). Tail position is not
 //! marked here; MIR lowering marks it (§5.15.2).
 //!
 //! Rules that go with the shape:
@@ -22,7 +22,7 @@
 //!   generics order.
 //! - A type parameter's type descriptor, for `dyn` conversions and
 //!   dictionaries, comes from its first bound: `Dict::Param { param,
-//!   bound: 0 }` (D-236, GAP(dict-param-descriptor)).
+//!   bound: 0 }` (D-236, D-499).
 //! - Operators on built-in numeric types use [`OpImpl::Builtin`] (§8.7).
 //!   `==` and `!=` are always [`OpImpl::Builtin`].
 //! - The shape is additive: later phases may add variants and fields, so

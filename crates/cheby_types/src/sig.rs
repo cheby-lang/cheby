@@ -16,11 +16,10 @@
 //!   embeddings and functions, whose `Self` is `ParamIdx` 0 (D-063).
 //!
 //! A function, alias or constant whose written types have an error becomes
-//! [`ItemSig::Error`], so its uses are silent (GAP(signature-error-shape)),
-//! and so does a function whose bound fails to lower
-//! (GAP(failed-bound-signature)). A constructor or an
-//! interface function keeps its shape, with [`Ty::ERROR`] in place of the
-//! erroneous types.
+//! [`ItemSig::Error`], so its uses are silent, and so does a function
+//! whose bound fails to lower. A constructor or an interface function
+//! keeps its shape, with [`Ty::ERROR`] in place of the erroneous types
+//! (D-490).
 //!
 //! The module-wide checks run at the end: object safety of every `dyn I`
 //! written in a signature (E0064), declaration checks (`decl`) and
@@ -452,7 +451,7 @@ fn clamped_params(params: &[ParamSig], item: &ItemDef) -> Box<[u32]> {
 ///
 /// A `main` with type parameters is rejected too: `cheby run` has no way
 /// to choose its type arguments or pass dictionaries for its bounds
-/// (GAP(main-type-params)).
+/// (D-491).
 fn main_ok(
     input: &TypesInput<'_>,
     sig: &LoweredFnSig,

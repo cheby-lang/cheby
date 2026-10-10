@@ -6,8 +6,7 @@
 //! A local is used when a path or a name of the body resolves to it. A
 //! local function's uses inside its own body (THIR's `SelfRef`, D-110) do
 //! not count, so a local function that only calls itself is unused
-//! (GAP(unused-self-use)). A name that starts with `_`
-//! is never reported (§2.3). Functions without a body have no locals.
+//! (D-516). A name that starts with `_` is never reported (§2.3). Functions without a body have no locals.
 
 use cheby_diag::{Diagnostic, TextRange, codes};
 use cheby_iface::{DefIndex, DefKind, Ice, PackageId};

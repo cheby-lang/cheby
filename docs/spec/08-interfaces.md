@@ -29,7 +29,7 @@ pub interface Shape {
 - `Self` may appear anywhere in parameter and return types, including nested (`List<Self>`, `fn(Self) -> Bool`), subject to the `dyn` restriction in [§8.6](#86-dyn-values). Outside an interface declaration, `Self` is not a type, and writing it is a compile error (D-462).
 - Every function must mention `Self` in at least one parameter, so that the satisfying type can be found from the arguments. A function with `Self` only in its return type, such as `fn default() -> Self` or `fn from_json(json::Value) -> Result<Self, E>`, is a compile error in v1 (D-209, ADR-0037). Constructing values of an unknown type is done with ordinary values instead, such as a decoder value (`std::json`).
 - Each function may have `///` doc comments (D-227).
-- Function names must be distinct within the interface, including functions inherited by embedding ([§8.3](#83-embedding)).
+- Function names must be distinct within the interface, including functions inherited by embedding ([§8.3](#83-embedding)). An own function with the name of an inherited one is an error even when the two signatures are identical (D-505).
 - There are no default implementations (D-117).
 - Interfaces have no type parameters, and interface functions are not generic: an interface function has no type parameter list of its own, and `interface Into<T> { fn into(Self) -> T }` is a compile error (D-165).
 - An interface may have no functions, written `interface Any` or `interface Any {}`. Such an interface is satisfied by every type, including tuples and function types, and `dyn` of it is a universal box that can hold any value, except that a type parameter in the value's type needs a bound ([§8.6.1](#861-type-descriptors)) (D-166, D-237). The requirement that every function mention `Self` is vacuously met.
@@ -49,7 +49,8 @@ A type `T` **satisfies** an interface `I` when, for every function `fn f(P1, …
   Whether `T` satisfies `I` therefore has one answer wherever `T` can be named, independent of the module or package doing the check. A function that is less visible than its type is simply ignored for satisfaction. It can still be called directly where it is visible.
 
 - **Aliases.** For a type alias, the aliased type's module counts ([§4.4](04-declarations.md#44-type-aliases)).
-- **Built-in types** are treated as declared in their standard-library module: `Int` in `std::int`, `Float` in `std::float`, `String` in `std::string`, `List` in `std::list`, `U8` in `std::u8`, and so on (D-105, D-447).
+- **Built-in types** are treated as declared in their standard-library module: `Int` in `std::int`, `Float` in `std::float`, `String` in `std::string`, `List` in `std::list`, `U8` in `std::u8`, `Map` in `std::map`, and so on (D-105, D-447, D-481). A module of the standard library depends only on the modules it imports, so there a built-in type gets its functions from its home module only when the module imports it (D-447, D-489).
+- **`Never`** is declared in no module and satisfies no interface, apart from empty interfaces (D-492).
 - **Tuples** are not declared in any module. By a built-in rule, a tuple type satisfies `Show` when all of its element types satisfy `Show`, and `Compare` when all of its element types satisfy `Compare` (comparison is lexicographic, D-136) (D-167). Tuples satisfy no other interface, apart from empty interfaces (D-166).
 - **Function types** are not declared in any module and satisfy no interface, apart from empty interfaces (D-166).
 
@@ -98,6 +99,8 @@ pub fn show<T: Show>(xs: List<T>) -> String { … }
 
 The function's signature must still match the interface after substituting `Self` with the generic type applied to the function's own type parameters: `show(List<T>) -> String` matches `fn show(Self) -> String` with `Self = List<T>`.
 
+Precisely, a function counts toward an interface for a type when matching its `Self` parameter one way against the type determines every type parameter of the function, and every parameter and the result then equal those the interface requires (D-504). A type parameter that this leaves undetermined makes the function not count, because nothing could supply its type or function packages. A function `show(b: Box<Int>) -> String` without type parameters makes only `Box<Int>` satisfy `Show`, not `Box<String>`.
+
 ## 8.3 Embedding
 
 `interface I: A + B { … }` embeds the interfaces `A` and `B` (D-117). `I` requires all functions of `A`, all functions of `B`, and its own. A type satisfies `I` exactly when it satisfies `A`, `B` and `I`'s own functions.
@@ -108,7 +111,7 @@ import std::ops::{Add, Div, Mul, Sub}
 pub interface Num: Add + Sub + Mul + Div
 ```
 
-If two embedded interfaces require a function with the same name, the signatures must be identical, and the requirement is counted once. Otherwise the declaration is a compile error. Embedding must not be cyclic.
+If two embedded interfaces require a function with the same name, the signatures must be identical, and the requirement is counted once. Otherwise the declaration is a compile error. An interface's own function must not have the name of a function that an embedded interface requires, even with an identical signature, since an own copy adds nothing ([§8.1](#81-declaration)) (D-505). Embedding must not be cyclic.
 
 ## 8.4 Bounds
 
@@ -124,7 +127,9 @@ pub fn sum_and_show<T: Add + Show>(xs: List<T>, zero: T) -> String { … }
 
 - A call to a bounded generic function type-checks only if every type argument satisfies its bounds. The error reports which function the type's module is missing, or which function is too little visible to count ([§8.2](#82-satisfaction)).
 - Inside the function body, a bounded type parameter may be used with the interfaces' functions and with any operator sugar they provide ([§8.7](#87-operator-interfaces)) and interpolation (`Show`).
+- An operator on a type parameter is provided by the first of its bounds, in written order and with what each embeds, that has a function with the operator's name and signature, whether or not it is an interface of `std::ops`. So `T: Num`, where `interface Num: ops::Add + ops::Sub`, allows `+` (D-503).
 - A bound also supplies the type's descriptor for conversions to `dyn` ([§8.6](#86-dyn-values)), so a type parameter that appears in the type of a value converted to `dyn` needs a bound. An empty interface suffices (D-236).
+- For the same reason, a type that mentions a type parameter without a bound cannot satisfy an interface where a function package is built for a bound, since the package carries the type's descriptor. Calling `list::compare` on a `List<Box<T>>` in a function whose `T` has no bound is therefore a compile error. An operator, interpolation or interface call applied to such a value directly needs no package and is allowed (D-502).
 - Type parameters of type declarations have no bounds ([§4.3](04-declarations.md#43-type-declarations)).
 - A type parameter may be bounded only in the function's type parameter list. There is no `where` clause.
 
@@ -142,6 +147,8 @@ The argument's type need not be known when the call is checked. The call is reso
 
 This form adds no names to the scope (D-062), and it disambiguates bounds that require functions with the same name: with `T: A + B`, `A::f(x)` and `B::f(x)` are distinct calls. Operators ([§8.7](#87-operator-interfaces)) and `Show` interpolation remain sugar for these calls.
 
+An interface function may also be used as a value, as in `list::map(xs, Show::show)`. The value is a function that resolves each call from the type of its `Self` argument in the same way ([§5.17](05-expressions.md#517-paths)) (D-500).
+
 ```cheby
 pub fn total_area<T: Shape>(shapes: List<T>) -> Float {
   list::fold(shapes, 0.0, fn(acc, s) { acc + Shape::area(s) })
@@ -152,7 +159,7 @@ For a concrete type, the type's module function can always be called directly, f
 
 ### 8.5.1 Implementation (informative)
 
-Bounds are resolved by dictionary passing: a generic function with bounds receives, for each bound, a record of the satisfying type's functions (D-046). Each such function package also carries the type descriptor of the type it was built for, which `dyn` conversions inside the function use ([§8.6](#86-dyn-values)) (D-236). A type parameter without bounds receives nothing. With the uniform representation (D-021), each generic function is compiled once. An implementation may specialize generic functions for known types as an optimization. Debug builds do not specialize across modules, and release builds may do so only within a size budget ([§13.12.5](13-tooling.md#13125-build-profiles)) (D-251).
+Bounds are resolved by dictionary passing: a generic function with bounds receives, for each bound, a record of the satisfying type's functions (D-046). Each such function package also carries the type descriptor of the type it was built for, which `dyn` conversions inside the function use ([§8.6](#86-dyn-values)) (D-236). A type parameter's descriptor comes from the package of its first bound (D-499). A type parameter without bounds receives nothing. With the uniform representation (D-021), each generic function is compiled once. An implementation may specialize generic functions for known types as an optimization. Debug builds do not specialize across modules, and release builds may do so only within a size budget ([§13.12.5](13-tooling.md#13125-build-profiles)) (D-251).
 
 Descriptors of generic types such as `List<T>` are built at run time from the descriptors of their type arguments. An implementation may cache or intern them.
 
@@ -167,7 +174,7 @@ let areas = list::map(shapes, fn(s) { Shape::area(s) })
 
 - `dyn I` is allowed only if every function of `I`, including embedded ones, uses `Self` only as its **first parameter**, and nowhere else: not in other parameters, not in the return type, not nested inside other types (D-117). Otherwise `dyn I` is a compile error that names the offending function.
 - `dyn I` satisfies `I` itself, calling through to the packaged functions.
-- `dyn I` satisfies every interface embedded in `I`, and no others.
+- `dyn I` satisfies every interface embedded in `I` and every empty interface, and no others (D-502).
 - Two `dyn I` values are equal under `==` when their underlying values have the same type and are structurally equal, which is decided with type descriptors ([§8.6.1](#861-type-descriptors)) (D-033, D-236).
 
 A value becomes a `dyn I` implicitly: a value of a type satisfying `I` is packaged with its type's functions for `I` where `dyn I` is the expected type when the value is checked, such as an annotated `let`, a function argument, a list element when the list type is expected, or a constructor field ([§3.12.5](03-types.md#3125-expected-types-and-conversions)) (D-168, D-235). There is no explicit syntax for this conversion. It applies one level only, at the value itself, and never inside another type: `List<Circle>` is never a `List<dyn Shape>`, and `fn() -> Circle` is never a `fn() -> dyn Shape`. Each conversion is packaging, O(1) in the size of the value, with no hidden traversal. Building the descriptor of a generic type such as `List<T>` from its arguments' descriptors takes time proportional to the size of the type, not of the value, and may be cached (D-237). A whole list is converted with `list::map(circles, fn(c) -> dyn Shape { c })`. Where no expected type is known, nothing converts, so `let mixed = [circle, square]` is a type mismatch. There is no conversion from `dyn I` back to the underlying type, and no downcasting in v1 (D-168).
@@ -191,7 +198,7 @@ let d: dyn Show = list::new::<String>()
 c == d        // False: List<Int> and List<String> are different types
 ```
 
-For a type known at the conversion, the compiler supplies the descriptor statically. When the type of the converted value mentions a type parameter `T` of the enclosing top-level function, `T`'s descriptor comes from one of `T`'s bounds ([§8.4](#84-bounds)): every function package passed for a bound carries the descriptor of the type it was built for ([§8.5.1](#851-implementation-informative)). Converting to `dyn` a value whose type mentions a type parameter without any bound is a compile error, and the diagnostic suggests adding a bound. An empty interface works as such a bound, because every type satisfies it, so adding it never breaks a caller (D-166, D-236). A value that is already a `dyn` value keeps its descriptor, so `circle` converted to `dyn Any` equals `circle` converted first to `dyn Shape` and then to `dyn Any`.
+For a type known at the conversion, the compiler supplies the descriptor statically. When the type of the converted value mentions a type parameter `T` of the enclosing top-level function, `T`'s descriptor comes from one of `T`'s bounds ([§8.4](#84-bounds)): every function package passed for a bound carries the descriptor of the type it was built for ([§8.5.1](#851-implementation-informative)). Converting to `dyn` a value whose type mentions a type parameter without any bound is a compile error, and so is passing such a type where a bound needs a function package ([§8.4](#84-bounds)) (D-502). The diagnostic suggests adding a bound. An empty interface works as such a bound, because every type satisfies it, so adding it never breaks a caller (D-166, D-236). A value that is already a `dyn` value keeps its descriptor, so `circle` converted to `dyn Any` equals `circle` converted first to `dyn Shape` and then to `dyn Any` (D-502).
 
 ```cheby
 interface Any
@@ -228,6 +235,7 @@ Rules:
 - `a < b` and the other comparisons desugar to `compare` as defined in [§5.4.4](05-expressions.md#544-comparison) (D-047).
 - `==` and `!=` are always built-in structural equality and cannot be overloaded (D-047). A `compare` that returns `Equal` for values that are not `==` is legal but is a program bug that sorted collections may expose.
 - `%`, `&`, `|`, `^`, `<<`, `>>`, `&&`, `||` and `!` cannot be overloaded (D-118).
+- A `Never` operand converts to the other operand's type, and `Never` itself provides no operator ([§3.10](03-types.md#310-never)) (D-492).
 - There are no compound assignment operators, since there is no assignment.
 
 Built-in types satisfy the operator interfaces through their standard-library modules:

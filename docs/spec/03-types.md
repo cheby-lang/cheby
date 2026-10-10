@@ -48,6 +48,8 @@ These types are known to the compiler. The ones marked _prelude_ are in scope in
 
 `Never` is in the prelude (D-131), because it is a writable return type ([§3.10](#310-never)).
 
+`Map`, `Set` and `Bytes` are known to the compiler like the prelude types, but they are not in the prelude (D-112, D-481). Each is named through its home module, `std::map`, `std::set` or `std::bytes`: `map::Map<K, V>` after `import std::map`, or `Map<K, V>` after `import std::map::{Map}`. Inside its home module the type is in scope unqualified ([§7.6](07-modules-and-packages.md#76-prelude)).
+
 ## 3.3 Numeric types
 
 ### 3.3.1 Int
@@ -96,7 +98,8 @@ A numeric literal has no type of its own. Its type is taken from the expected ty
 - A float literal may have type `Float` or `F32`. If the context does not fix one, it is `Float`.
 - Defaulting happens only after the whole function body has been inferred (D-133). A constraint that appears later in the body still fixes the literal's type, so `let x = 1` followed by a use of `x` as a `U8` makes `x` a `U8`. Operators and interface calls are resolved after defaulting ([§3.12.4](#3124-order-of-inference)).
 - An integer literal is never implicitly a float, and a float literal is never an integer.
-- A literal whose value does not fit its type is a compile error (D-084), for example `let b: U8 = 256`. On the JS target, an `Int` literal outside the safe-integer range is also a compile error.
+- A literal whose value does not fit its type is a compile error (D-084), for example `let b: U8 = 256`. On the JS target, an `Int` literal outside the safe-integer range is also a compile error. A constant's initializer is exempt from this JS check, because it runs at compile time, and the value it produces is checked instead ([§4.5](04-declarations.md#45-constants)) (D-511).
+- A float literal fits its type when it rounds to a finite value of that type (D-496). A `Float` literal must be finite as a 64-bit float. An `F32` literal must be smaller in magnitude than the largest finite `F32` plus half a unit in the last place, so `3.4028235e38` is the largest `F32` literal, and the midpoint above it rounds to infinity and is an error.
 
 ```cheby
 let a = 10          // Int
@@ -217,6 +220,8 @@ fn unreachable(what: String) -> Never {
 
 `Never` is not a subtype of other types, and the conversion does not reach inside other types (D-235). The function `unreachable` has type `fn(String) -> Never` and does not fit where `fn(String) -> Int` is expected. Instead, write a closure such as `fn(s) { unreachable(s) }`, whose body converts. Likewise, a `List<Never>` does not fit `List<Int>`.
 
+A `Never` operand of a binary operator converts to the other operand's type, like any `Never` expression with an expected type (D-235, D-492). Otherwise `Never` has no special case. It is declared in no module, so it satisfies only empty interfaces ([§8.2](08-interfaces.md#82-satisfaction)). An overloadable operator, unary `-`, interpolation, an interface call or a bound on a `Never` value is therefore a compile error, as in `x < x` after `let x = panic`, and so are `%`, the bitwise operators and the shifts. Exhaustiveness treats `Never` as an opaque type, so a `case` on a `Never` subject needs a `_` or binding arm ([§6.9](06-patterns.md#69-exhaustiveness-and-reachability)) (D-492).
+
 ## 3.11 User-defined types and aliases
 
 User-defined types are declared with `type` ([§4.3](04-declarations.md#43-type-declarations)). Each declaration introduces a new nominal type: two declarations with the same shape are different types.
@@ -263,9 +268,10 @@ fn main() {
 
 ### 3.12.4 Order of inference
 
-Within a body, statements are checked in order, and within an expression, subexpressions are checked from left to right, with one exception (D-234):
+Within a body, statements are checked in order, and within an expression, subexpressions are checked from left to right, with two exceptions (D-234, D-497):
 
 - **Closures last.** In a call, including the call that a `|>` or a `use` desugars to and a constructor call, the arguments that are not closures or function captures are checked first, from left to right. Then the closure and capture arguments are checked, from left to right. Their expected parameter types come from the callee's signature, as instantiated by the other arguments. The position of a closure among the arguments therefore does not matter for inference. A local named function is checked where it is declared, like any other statement.
+- **Result before arguments.** In a call of a generic function or constructor that has an expected type, the callee's result type is unified with the expected type before the arguments are checked, so the expectation reaches the arguments. A failed unification binds nothing, and the mismatch is reported on the result. A `dyn` expected type is not unified, and the result converts to it instead ([§3.12.5](#3125-expected-types-and-conversions)) (D-497).
 
 This order concerns type checking only. Evaluation is always strictly left to right ([§5.15.1](05-expressions.md#5151-evaluation-order)) (D-120).
 
@@ -326,9 +332,9 @@ An expected type passes into the result of a block and into every arm body of a 
 The two conversions are:
 
 - **`Never`.** An expression of type `Never` takes the expected type when there is one. Otherwise its type is `Never`, and as a `case` arm it does not constrain the type of the `case` ([§3.10](#310-never)).
-- **`dyn`.** A value whose type satisfies `I` converts to `dyn I` where `dyn I` is the expected type when the value is checked ([§8.6](08-interfaces.md#86-dyn-values)). The conversion packages the value in O(1) in the size of the value, with no hidden traversal. Only the descriptor of a generic type such as `List<T>` is built from its arguments' descriptors, in time proportional to the size of the type ([§8.6](08-interfaces.md#86-dyn-values)) (D-237). A value of type `dyn I` where `dyn I` is expected is not packaged again. A value of type `dyn I` where `dyn J` is expected and `I` embeds `J` converts, because `dyn I` satisfies `J`. Otherwise the value's type is unified with the expected type as usual, so a type that is still unknown becomes `dyn I`, and `let shapes: List<dyn Shape> = []` is fine. If the value's type mentions a type parameter of the enclosing top-level function, that parameter must have a bound, which supplies its type descriptor ([§8.6.1](08-interfaces.md#861-type-descriptors)) (D-236). The check that the type satisfies `I` and the choice of package and descriptor are made at the end of the body ([§3.12.4](#3124-order-of-inference)), so `let x = 1` followed by `let d: dyn Show = x` and a use of `x` as a `U8` packages a `U8`. The type of a numeric literal is already known to be numeric, so it converts rather than becoming `dyn I`, and its concrete type is still fixed later or defaulted ([§3.3.4](#334-numeric-literals)) (D-237). If the value's type is still not fully known at the end, as in `let a: dyn Any = []` with nothing fixing the element type, it is a compile error that asks for an annotation (D-237).
+- **`dyn`.** A value whose type satisfies `I` converts to `dyn I` where `dyn I` is the expected type when the value is checked ([§8.6](08-interfaces.md#86-dyn-values)). The conversion packages the value in O(1) in the size of the value, with no hidden traversal. Only the descriptor of a generic type such as `List<T>` is built from its arguments' descriptors, in time proportional to the size of the type ([§8.6](08-interfaces.md#86-dyn-values)) (D-237). A value of type `dyn I` where `dyn I` is expected is not packaged again. A value of type `dyn I` where `dyn J` is expected and `I` embeds `J` converts, because `dyn I` satisfies `J`, and so does one where `dyn` of an empty interface is expected, keeping its own descriptor (D-502). Otherwise the value's type is unified with the expected type as usual, so a type that is still unknown becomes `dyn I`, and `let shapes: List<dyn Shape> = []` is fine. If the value's type mentions a type parameter of the enclosing top-level function, that parameter must have a bound, which supplies its type descriptor ([§8.6.1](08-interfaces.md#861-type-descriptors)) (D-236). The check that the type satisfies `I` and the choice of package and descriptor are made at the end of the body ([§3.12.4](#3124-order-of-inference)), so `let x = 1` followed by `let d: dyn Show = x` and a use of `x` as a `U8` packages a `U8`. The type of a numeric literal is already known to be numeric, so it converts rather than becoming `dyn I`, and its concrete type is still fixed later or defaulted ([§3.3.4](#334-numeric-literals)) (D-237). If the value's type is still not fully known at the end, as in `let a: dyn Any = []` with nothing fixing the element type, it is a compile error that asks for an annotation (D-237).
 
-Nothing converts inside another type. `List<Circle>` never becomes `List<dyn Shape>`, `fn() -> Circle` never becomes `fn() -> dyn Shape`, and an already-built `Option<Circle>` never becomes `Option<dyn Shape>`. `Some(circle)` checked against `Option<dyn Shape>` works, because the expected type of its field is `dyn Shape`. A whole list is converted with `list::map`, and a function with a closure.
+Nothing converts inside another type. `List<Circle>` never becomes `List<dyn Shape>`, `fn() -> Circle` never becomes `fn() -> dyn Shape`, and an already-built `Option<Circle>` never becomes `Option<dyn Shape>`. `Some(circle)` checked against `Option<dyn Shape>` works, because the result of `Some` meets the expected type first, which makes the expected type of its field `dyn Shape` ([§3.12.4](#3124-order-of-inference)) (D-497). A whole list is converted with `list::map`, and a function with a closure.
 
 Where no expected type is known, nothing converts. `let mixed = [circle, square]` is a type mismatch between `Circle` and `Square`, and the diagnostic suggests an annotation such as `List<dyn Shape>`.
 
@@ -366,7 +372,7 @@ let empty = list::new::<Int>()
 
 ## 3.13 Equality, hashing and debug printing
 
-Every type has built-in debug printing. Every type also has built-in structural equality and hashing, except that they panic when they reach a function value or a [handle](09-memory-model.md#95-handles-and-drop-functions) (D-033, D-070, D-189, D-233). None of the three can be overridden by user code (D-047). A standard-library type may name Cheby functions that implement them instead, so that collections with several internal shapes for the same contents compare, hash and print by contents (D-342). This uses an attribute that only the standard library can write ([§4.8](04-declarations.md#48-attributes)). Those functions never suspend, and a panic inside them, for example from `==` reaching a function value, unwinds like any other panic.
+Every type has built-in debug printing. Every type also has built-in structural equality and hashing, except that they panic when they reach a function value or a [handle](09-memory-model.md#95-handles-and-drop-functions) (D-033, D-070, D-189, D-233). None of the three can be overridden by user code (D-047). A standard-library type may name Cheby functions that implement them instead, so that collections with several internal shapes for the same contents compare, hash and print by contents (D-342). This uses `@std_hooks`, an attribute that only the standard library can write ([§4.8](04-declarations.md#48-attributes)) (D-482). Those functions never suspend, and a panic inside them, for example from `==` reaching a function value, unwinds like any other panic.
 
 **Equality** (`==` and `!=`):
 
@@ -377,7 +383,7 @@ Every type has built-in debug printing. Every type also has built-in structural 
 - Floats use reflexive equality ([§3.3.2](#332-float)) (D-069).
 - Two `dyn I` values are equal when they hold values of the same type, including all type arguments, and those values are equal ([§8.6.1](08-interfaces.md#861-type-descriptors)) (D-236).
 - Both operands must have the same type. Comparing values of different types is a compile error.
-- If a comparison reaches a function value or a handle (a `Sender`, `Receiver`, fiber or scope value, or a value of an external type), it panics (D-070, D-189, D-233). Identity is never compared ([§9.1](09-memory-model.md#91-values-and-sharing)). When the compiler knows statically that a compared type contains a function type or a handle type, it emits a warning (D-070, D-233).
+- If a comparison reaches a function value or a handle (a `Sender`, `Receiver`, fiber or scope value, or a value of an external type), it panics (D-070, D-189, D-233). Identity is never compared ([§9.1](09-memory-model.md#91-values-and-sharing)). When the compiler knows statically that a compared type contains a function type or a handle type, it emits a warning (D-070, D-233). It looks through tuples, built-in collections and the fields of every constructor of a named type, with the type arguments in place. It stops at type parameters of the enclosing item, at `dyn` values and at standard-library types that compare through their own functions, and it handles recursive types (D-518).
 
 **Hashing** is consistent with equality: equal values hash equally. A `dyn` value's hash covers its type as well as its value (D-236). Hashes are seeded per process (D-093), so hash values are not stable across runs and are not exposed as a stable API. Hashing panics on the same values as equality, so a value that contains a function or a handle cannot be a `Map` key or a `Set` element: inserting or looking it up panics (D-233).
 

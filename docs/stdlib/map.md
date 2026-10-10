@@ -1,6 +1,6 @@
 # `std::map`
 
-The hashed map `Map<K, V>` (§3.8, D-039). `Map` is not in the prelude: `import std::map` brings in the module and `import std::map::{Map}` the type (§3.2). This module is where the type is declared (§8.2):
+The hashed map `Map<K, V>` (§3.8, D-039). `Map` is a built-in type outside the prelude, and this module is its home module (§3.2, §7.6, D-481). The module does not declare the type again. Inside it the type is written `Map`, and other modules write `map::Map` after `import std::map`, or `Map` after `import std::map::{Map}`. Interface satisfaction treats the type as declared here (§8.2). In the form `cheby doc` prints:
 
 ```cheby
 pub type Map<K, V>

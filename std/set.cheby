@@ -2,9 +2,9 @@
 //! D-039).
 //!
 //! `Set` is a builtin item whose home module is this one
-//! (GAP(kernel-types), D-447), so it is not declared here. As in the spec's
+//! (D-447, D-481), so it is not declared here. As in the spec's
 //! signatures, it is written unqualified in this module
-//! (GAP(home-type-in-scope)). Elements need no interface: they are compared
+//! (D-481). Elements need no interface: they are compared
 //! with `==` and hashed with the built-in structural hash (§3.13).
 //! Iteration order depends on a per-process seed (D-093), so
 //! `to_sorted_list` gives an order that is the same on every run. The

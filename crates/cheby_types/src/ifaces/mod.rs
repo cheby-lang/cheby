@@ -9,8 +9,7 @@
 //! look in their home module (D-447), tuples follow the built-in rule
 //! (D-167), and `dyn J` satisfies `J` and the interfaces it embeds (§8.6).
 //! A builtin type's home module that the checked module cannot read gives
-//! E0063 with a note naming the module to import
-//! (GAP(home-not-in-deps)).
+//! E0063 with a note naming the module to import (D-489).
 //!
 //! The checker calls these functions at the end of a top-level body, when
 //! types are closed (D-234). Conventions:
@@ -23,7 +22,7 @@
 //!   satisfying function or interface function whose signature had an
 //!   error.
 //! - **`Never`.** `Never` is declared in no module, so, like a function
-//!   type, it satisfies only empty interfaces (GAP(never-satisfaction)).
+//!   type, it satisfies only empty interfaces (D-492).
 //!   Where an expected type exists, a `Never` expression has already
 //!   taken it (§3.12.5), so this matters only for `Never`-typed values
 //!   with no expected type, such as `"{panic}"`.
@@ -39,7 +38,7 @@
 //!   type parameter's descriptor comes from one of its bounds, so a
 //!   dictionary for a type that mentions an unbounded parameter cannot be
 //!   built: E0065, for conversions to `dyn` as the spec says, and also
-//!   for dictionaries passed for bounds (GAP(bound-needs-descriptor)).
+//!   for dictionaries passed for bounds (D-502).
 //!   The top-level callee of an operator, interpolation or interface call
 //!   is not a dictionary and needs no descriptor.
 
@@ -171,7 +170,7 @@ pub(crate) enum Reason {
         actual: Ty,
     },
     /// The home module `std::<home>` of a builtin type is not readable
-    /// from the checked module (D-447, GAP(home-not-in-deps)).
+    /// from the checked module (D-447, D-489).
     HomeNotInDeps { home: &'static str },
     /// The type is declared in no module: a tuple (for interfaces other
     /// than `Show` and `Compare`), a function type, `Never`, or a `dyn`
@@ -195,7 +194,7 @@ pub(crate) enum Reason {
     },
     /// The satisfying function `found` has the type parameter `param`,
     /// which matching its `Self` parameter against the type leaves
-    /// undetermined (GAP(satisfaction-instance-matching)).
+    /// undetermined (D-504).
     Undetermined {
         found: DefId,
         param: ParamIdx,
@@ -226,7 +225,7 @@ pub(crate) enum Need {
 }
 
 /// Whether `ty` satisfies `iface`, with the dictionary that proves it: a
-/// bound of a called function (one dictionary per bound, plan §4.3), and
+/// bound of a called function (one dictionary per bound), and
 /// the `Show` of an entry point's error type, which is optional there
 /// (D-182), so it never needs a diagnostic.
 ///

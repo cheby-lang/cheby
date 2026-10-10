@@ -14,7 +14,7 @@
 //!
 //! Interfaces in bounds, `dyn` and embeddings count like types. An alias
 //! is transparent (D-081), so the alias's own visibility does not matter:
-//! the types it stands for do (GAP(alias-visibility-in-signature)). Each
+//! the types it stands for do (D-488). Each
 //! offending type is reported once per item, at its first mention.
 
 use cheby_diag::{Diagnostic, Span, codes};

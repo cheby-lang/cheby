@@ -62,9 +62,9 @@ const LATER_EXAMPLES: [&str; 8] = [
 ];
 
 /// Every example of the M1 exit criterion, and 020, checks with no
-/// diagnostics at all, warnings included. The cross-target check covers
-/// every target the manifest declares, so this is the check for both
-/// targets (plan §1 item 4).
+/// diagnostics at all, warnings included (D-477). The cross-target check
+/// covers every target the manifest declares, so this is the check for
+/// both targets (D-512).
 #[test]
 fn examples_check_cleanly() {
     let mut checked = 0;
@@ -171,7 +171,7 @@ fn the_front_end_is_deterministic() {
 }
 
 /// `cheby run` on every example compiles it or reports diagnostics, never
-/// an internal compiler error (D-464, plan §8). Nothing runs: 001 runs in
+/// an internal compiler error (D-464, D-510). Nothing runs: 001 runs in
 /// `hello_world_runs_without_leaks`, and the others may read input.
 #[test]
 fn run_never_fails_internally_on_examples() {

@@ -250,7 +250,7 @@ fn nesting_above_the_limit_is_e0016() {
         nested("fn() { ", "1", " }", depth),
         nested("case x { _ => ", "1", " }", depth),
         nested("Point { x: ", "1", " }", depth),
-        // Chains nest their left operand (GAP(chain-depth)).
+        // Chains nest their left operand (D-519).
         nested("", "1", " + 1", depth),
         nested("", "1", " && True", depth),
         nested("", "1", " |> f(_, 1)", depth),
@@ -302,8 +302,7 @@ fn deeply_nested_beyond_any_stack() {
 #[test]
 fn long_flat_input() {
     // Long chains are loops, not recursion, in the parser. Later passes
-    // recurse along them, so past the limit they are one E0016
-    // (GAP(chain-depth)).
+    // recurse along them, so past the limit they are one E0016 (D-519).
     let text = format!("const x: Int = {}1\n", "a + ".repeat(50_000));
     assert_eq!(robust(&text), 1);
     let text = format!("const x: Int = {}a\n", "f(1).".repeat(20_000));

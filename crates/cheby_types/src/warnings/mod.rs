@@ -2,7 +2,7 @@
 //! module's check, and the whole-package pass for package-visible items
 //! that nothing in the package uses (D-152, D-266), which `cheby check`
 //! runs after every local module is checked and `cheby run` skips
-//! (GAP(package-warnings-in-run)).
+//! (D-516).
 //!
 //! | Code  | Warning                                      | File            |
 //! | ----- | -------------------------------------------- | --------------- |
@@ -26,12 +26,11 @@
 //! interpolation, `dyn` conversions and dictionaries). Since a body with
 //! a type error is not in THIR, unused imports and items (W0003-W0005)
 //! are reported only when every body of the module (of the package, for
-//! W0005) checked; unused locals need only the resolution
-//! (GAP(unused-needs-checked-bodies)).
+//! W0005) checked; unused locals need only the resolution (D-516).
 //!
 //! The tests of a std module are skipped in user builds (they are checked
 //! when std itself is tested), so nothing in them is reported here
-//! (GAP(std-tests-skipped)).
+//! (D-479).
 //!
 //! Locality (D-246): the module pass reads only the module's tree,
 //! resolution and THIR and its dependencies' interfaces. The package pass

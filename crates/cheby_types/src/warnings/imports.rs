@@ -10,8 +10,7 @@
 //! module's functions count without one (D-447, §7.6), and a type's
 //! satisfying functions count wherever the type is visible (§8.2). So an
 //! import that brings in a module whose `show` an interpolation calls,
-//! but that nothing names, is unused like any other
-//! (GAP(imports-used-by-name)).
+//! but that nothing names, is unused like any other (D-515).
 
 use cheby_diag::{Diagnostic, Span, codes};
 use cheby_iface::{ModuleInterface, Name, Namespace};

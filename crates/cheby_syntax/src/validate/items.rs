@@ -13,8 +13,8 @@ use crate::ast::{
 use crate::{SyntaxElement, SyntaxKind};
 
 /// E0012: a test's name is a string literal without interpolation (§4.7,
-/// D-055). GAP(test-name-interpolation-code): the spec names no code, and
-/// E0012 is the code of a string interpolation that is not allowed.
+/// D-055). E0012 is the code of a string interpolation that is not
+/// allowed (D-495).
 pub(super) fn test_decl(decl: TestDecl<'_>, out: &mut Vec<Diagnostic>) {
     let Some(name) = decl.name() else {
         return;

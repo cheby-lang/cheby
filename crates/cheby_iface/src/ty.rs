@@ -325,7 +325,7 @@ fn write_def(out: &mut String, def: DefId, cx: &DisplayCx<'_>) {
     if def.module == ModuleId::BUILTIN {
         // A builtin item outside the prelude, such as `Map`, is written
         // through its home module, `map::Map`, except in the home module
-        // itself (D-463, GAP(kernel-types)).
+        // itself (D-463, D-481).
         if !builtin::is_prelude(def)
             && let Some(segment) = builtin::HOMES
                 .iter()

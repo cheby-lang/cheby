@@ -12,9 +12,9 @@ use crate::infer::InferTy;
 use crate::thir::{self, ExprId, ExprKind};
 
 /// The type of a `case` as its arms are checked (§5.9.1, §3.12.5).
-/// GAP(case-arm-type): without a known expected type, the first arm that
-/// is not `Never` fixes the type and later arms are checked against it;
-/// a `case` whose arms all diverge has type `Never`.
+/// Without a known expected type, the first arm that is not `Never`
+/// fixes the type and later arms are checked against it; a `case` whose
+/// arms all diverge has type `Never` (D-497).
 enum ArmTy {
     /// The context's expected type: every arm is checked against it.
     Expected(Expected),

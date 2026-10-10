@@ -1,9 +1,9 @@
 // @mode: check-fail
-// @decisions: D-064
+// @decisions: D-064, D-504
 //! A satisfying function's type arguments come from its `Self`
 //! parameter. A type parameter that the parameter does not determine
 //! leaves the function unusable for the interface
-//! (GAP(satisfaction-instance-matching)).
+//! (D-504).
 
 type Box<T> {
   value: T,

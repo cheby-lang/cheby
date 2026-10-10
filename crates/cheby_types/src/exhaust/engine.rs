@@ -20,7 +20,7 @@
 //!   then the missing values) spends at most a fixed budget of steps.
 //!   When reachability runs out, the remaining arms are reported as
 //!   reachable. When the missing values run out, the `case` is reported
-//!   as missing `_` (GAP(exhaustiveness-budget)). A `case` with an
+//!   as missing `_` (D-508). A `case` with an
 //!   unguarded arm of wildcards is exhaustive without any search, so the
 //!   fallback never reports a `case` that has one.
 //! - Variants and literals are disjoint, so the rows of a matrix are

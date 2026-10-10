@@ -2,9 +2,9 @@
 //! building, and integers in a named byte order (D-095, D-334).
 //!
 //! `Bytes` itself is a builtin item whose home module is this one
-//! (D-447, GAP(kernel-types)), so it is not declared here. As in the
+//! (D-447, D-481), so it is not declared here. As in the
 //! spec's signatures, `Bytes` is written unqualified in this module
-//! (GAP(home-type-in-scope)). It does not satisfy `Show` (D-388).
+//! (D-481). It does not satisfy `Show` (D-388).
 
 import std::u32
 

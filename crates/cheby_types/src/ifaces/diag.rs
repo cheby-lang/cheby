@@ -396,7 +396,7 @@ impl Writer<'_, '_> {
     }
 
     /// `found` would count, but its type parameter `param` is not
-    /// determined by the type (GAP(satisfaction-instance-matching)).
+    /// determined by the type (D-504).
     fn undetermined(
         &self,
         diag: Diagnostic,

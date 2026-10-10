@@ -52,7 +52,7 @@ An item that is not visible to a module cannot be named there, whether qualified
 
 `main` may have any visibility, including `priv`, because `cheby run` targets it by module path (D-163).
 
-Unused items are warned about according to their visibility: an unused `priv` item always warns, an unused package-visible item warns when nothing in the package uses it, and `pub` items never warn (D-152).
+Unused items are warned about according to their visibility: an unused `priv` item always warns, an unused package-visible item warns when nothing in the package uses it, and `pub` items never warn (D-152). What counts as a use is defined in [§13.8](13-tooling.md#138-diagnostics-and-warnings) (D-516).
 
 ```cheby
 // src/web/session.cheby, package my_app
@@ -71,10 +71,12 @@ pub fn new_id(token: String) -> SessionId {
 
 ## 7.4 Visibility of types
 
-An item's signature must not mention a type that is less visible than the item itself (D-148, D-149). "Signature" means a function's parameter and return types, a constant's type, an alias's right-hand side, a type's field types and an interface's function signatures. Violations are compile errors:
+An item's signature must not mention a type that is less visible than the item itself (D-148, D-149). "Signature" means a function's parameter and return types and its bounds, a constant's type, an alias's right-hand side, a type's field types where they are visible ([§4.3.4](04-declarations.md#434-opacity-and-exposed)), and an interface's embedded interfaces and function signatures. Interfaces named there count like types (D-488). Violations are compile errors:
 
 - a `pub` item must not mention a type that is not `pub` (D-148),
 - a package-visible item must not mention a `priv` type (D-149).
+
+An alias is transparent (D-081), so only the types it stands for count, and the alias's own visibility does not matter. A `pub` function may use a `priv` alias of `Int`, because every caller can write `Int` instead (D-488).
 
 ```cheby
 priv type Secret { Secret(String) }
@@ -138,7 +140,7 @@ Every path must be imported before use. `std::list::map(xs, f)` without `import 
 
 Modules must not import each other cyclically, directly or through other modules. An import cycle is a compile error that lists the modules on the cycle (D-145). This keeps the evaluation order of compile-time constants ([§4.5](04-declarations.md#45-constants)), REPL reloading and incremental builds simple.
 
-An unused import is a warning (D-080).
+An unused import is a warning (D-080). An import is used only through names written in the module: a module import when a written path starts with the name it binds, and an item import when a name it binds is written, in either namespace. Implicit uses, such as the `show` that an interpolation calls or the function behind an operator, never use an import, because satisfaction needs none ([§7.6](#76-prelude), [§8.2](08-interfaces.md#82-satisfaction)) (D-515).
 
 ## 7.6 Prelude
 
@@ -157,7 +159,9 @@ Functions on these types come from their modules, which must be imported: `std::
 
 Each prelude type except `Never` has a home module in the standard library, such as `std::option` for `Option`, where interface satisfaction looks for its functions ([§8.2](08-interfaces.md#82-satisfaction)). The home module re-exports the type and its constructors, so `option::Option` and `option::Some` are the prelude's `Option` and `Some`, not separate items. A module needs no import of a home module for its types to satisfy interfaces (D-447).
 
-A module may declare, or explicitly import, a type or constructor with the same name as a prelude item, for example a type called `Order` in a shop application. The local declaration or import hides the prelude item of the same name in that module, and doing so is a warning (D-146). Hiding is per namespace ([§7.7](#77-namespaces-and-name-resolution)) (D-212): a type hides only a prelude type, and a constructor only a prelude constructor. A constructor named `String` or `Bool`, as in `Value { String(String), Bool(Bool) }`, hides nothing and does not warn, because `String` and `Bool` are prelude types, not prelude constructors. A constructor named `Some` or `Ok` does hide a prelude constructor and warns. This is not shadowing in the sense of [§5.2.3](05-expressions.md#523-no-shadowing), which is about value bindings.
+`Map`, `Set` and `Bytes` are built-in types too, but they are not in the prelude ([§3.2](03-types.md#32-built-in-types)) (D-112, D-481). Their home modules are `std::map`, `std::set` and `std::bytes`, which do not declare them again. Inside its home module the type is in scope unqualified. Every other module names it through an import of its home module: `map::Map`, `m::Map` after `import std::map as m`, or `Map` after `import std::map::{Map}`. Written unqualified without such an import, it is an error whose help suggests the import. Diagnostics write it with the last segment of its home module's path, as in `map::Map<String, Int>`, whatever alias the import uses, and bare inside the home module ([§13.8](13-tooling.md#138-diagnostics-and-warnings)) (D-463, D-481).
+
+A module may declare, or explicitly import, a type or constructor with the same name as a prelude item, for example a type called `Order` in a shop application. The local declaration or import hides the prelude item of the same name in that module, and doing so is a warning (D-146). The warning is reported once, where the item is declared or imported, and the prelude item stays reachable through its home module, as `option::Some` after `import std::option` (D-487). Hiding is per namespace ([§7.7](#77-namespaces-and-name-resolution)) (D-212): a type hides only a prelude type, and a constructor only a prelude constructor. A constructor named `String` or `Bool`, as in `Value { String(String), Bool(Bool) }`, hides nothing and does not warn, because `String` and `Bool` are prelude types, not prelude constructors. A constructor named `Some` or `Ok` does hide a prelude constructor and warns. This is not shadowing in the sense of [§5.2.3](05-expressions.md#523-no-shadowing), which is about value bindings.
 
 ## 7.7 Namespaces and name resolution
 
@@ -177,6 +181,6 @@ An unqualified name in an expression resolves to, in order:
 
 Because the no-shadowing rule forbids a name from being bound twice in overlapping scopes, the first three sources never disagree: a conflict between them is reported where the second name is introduced. Only the prelude can be hidden (D-146).
 
-An unqualified name in a type resolves to a type parameter in scope, a type of the current module, an imported type, or a prelude type, in that order.
+An unqualified name in a type resolves to a type parameter in scope, a type of the current module, an imported type, or a prelude type, in that order. In the home module of `Map`, `Set` or `Bytes`, that type is found like a type of the current module ([§7.6](#76-prelude)) (D-481).
 
 A qualified name `m::x` resolves `m` to an imported module and `x` to an item of it that is visible to the current module ([§7.3](#73-visibility)): a package-visible or `pub` item if `m` is in the same package, only a `pub` item otherwise, and never a `priv` item. A qualified constructor or type uses the same form: `shape::Circle`, `map::Map<K, V>`.

@@ -6,7 +6,7 @@ Functions for the built-in `List<T>` (§3.8). `List` is in the prelude (§3.2), 
 pub type List<T>
 ```
 
-A `List` is a persistent, immutable RRB-tree vector, not a linked list (D-039, ADR-0018). Reading or updating at an index, adding at either end, concatenating and slicing all take O(log n) at most (§3.8). The kernels, the functions that build, read or cut the tree, are implemented in the runtime, and the other functions are written in Cheby over them (D-274). The kernels' costs are required and the others' informative (D-300).
+A `List` is a persistent, immutable RRB-tree vector, not a linked list (D-039, ADR-0018). Reading or updating at an index, adding at either end, concatenating and slicing all take O(log n) at most (§3.8). The kernels, the functions that build, read or cut the tree, are implemented in the runtime, and the other functions are written in Cheby over them (D-274). The kernels are `length`, `get`, `push`, `prepend`, `append`, `set`, `slice`, `take`, `drop`, `split_at` and `unique` (D-484). The kernels' costs are required and the others' informative (D-300).
 
 The kernels have no effects, so compile-time evaluation runs them, and they may be called while a constant is computed (D-360, §4.5).
 

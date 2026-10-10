@@ -9,19 +9,19 @@
 //! `dyn` conversions and dictionaries (satisfying functions). An item's
 //! uses of itself, such as recursion, do not count.
 //!
-//! GAP(unused-item-granularity): a type counts as used when its name or
-//! any of its constructors is used, in an expression or a pattern, and an
-//! interface when its name or any of its functions is; constructors and
-//! interface functions are not reported on their own (D-152 speaks of
-//! items). A type uses the functions its `@std_hooks` names (D-342).
+//! A type counts as used when its name or any of its constructors is
+//! used, in an expression or a pattern, and an interface when its name or
+//! any of its functions is; constructors and interface functions are not
+//! reported on their own, since D-152 speaks of items (D-516). A type uses
+//! the functions its `@std_hooks` names (D-342).
 //!
-//! GAP(unused-self-use): uses of an item from its own signature or body
-//! (recursion, a recursive type) do not make it used, so an item that only
-//! refers to itself is reported. An item used only by another unused item
-//! is not reported: there is no transitive dead-code analysis.
+//! Uses of an item from its own signature or body (recursion, a recursive
+//! type) do not make it used, so an item that only refers to itself is
+//! reported (D-516). An item used only by another unused item is not
+//! reported: there is no transitive dead-code analysis.
 //!
-//! GAP(unused-item-underscore): §2.3 exempts bindings whose names start
-//! with `_`, not items, so such items are reported like others.
+//! §2.3 exempts bindings whose names start with `_`, not items, so such
+//! items are reported like others (D-516).
 
 use cheby_diag::{Diagnostic, codes};
 use cheby_iface::{DefIndex, DefKind, ItemSig, ModuleId, ModuleInterface, PackageId, Vis};

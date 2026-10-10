@@ -57,7 +57,7 @@ M5 is listed as a milestone so it has exit criteria, but its work starts as soon
 
 ## Plan decisions
 
-Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-plan), D-284 onward in [M0 foundation](../decisions/LOG.md#2026-10-04-m0-foundation), D-418 onward in [Diagnostics](../decisions/LOG.md#2026-10-06-diagnostics), and the plan-level ones of [M1 syntax layer](../decisions/LOG.md#2026-10-07-m1-syntax-layer), [M1 vertical slice](../decisions/LOG.md#2026-10-07-m1-vertical-slice) and [Open items](../decisions/LOG.md#2026-10-07-open-items):
+Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-plan), D-284 onward in [M0 foundation](../decisions/LOG.md#2026-10-04-m0-foundation), D-418 onward in [Diagnostics](../decisions/LOG.md#2026-10-06-diagnostics), and the plan-level ones of [M1 syntax layer](../decisions/LOG.md#2026-10-07-m1-syntax-layer), [M1 vertical slice](../decisions/LOG.md#2026-10-07-m1-vertical-slice), [Open items](../decisions/LOG.md#2026-10-07-open-items) and [M1 front end](../decisions/LOG.md#2026-10-10-m1-front-end):
 
 | Decision  | Summary                                                                                             |
 | --------- | --------------------------------------------------------------------------------------------------- |
@@ -97,7 +97,7 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-445     | `skip-run` examples are only checked, pending before their milestone; bless keeps the exit code     |
 | D-446     | Example 030 moves to M5, and examples with dependencies are checked from M5                         |
 | D-450     | `std` sources are embedded in the binary until M3 and shown as `std/<path>.cheby`                   |
-| D-451     | Temporary E0038 for constructs M1 does not support yet, retired at M1 exit                          |
+| D-451     | Temporary E0038 for constructs M1 does not support yet, narrowed at M1 exit by D-480                |
 | D-453     | Hidden `ctx` first, uniform result word, one convention for unknown callees (ADR-0055)              |
 | D-454     | Static objects have count 0, nullary constructors are static, fixed layout ids 1-63                 |
 | D-456     | Symbols `cb$<kind>$<path>$<item>`; slots identified by path and ABI signature                       |
@@ -111,6 +111,15 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-472     | The conformance harness also runs each example's `cheby test`, pending until its milestone ends     |
 | D-475     | The JIT imports foreign symbols without a signature; the REPL checks E0054 over live definitions    |
 | D-476     | Spec examples of errors name no codes; each gets a UI test once its check exists                    |
+| D-477     | Examples that import tier-2 or tier-3 modules are checked from the milestone that ships them        |
+| D-478     | Until E6, `cheby check` does not evaluate constants, and `cheby run` gives E0038 at them            |
+| D-479     | Std `test` blocks live in `std/`; user builds skip them, and testing std runs them                  |
+| D-480     | After M1, E0038 only for imports of unshipped std modules, and in the back end until it is done     |
+| D-483     | Std layout: the package-visible `std::json::tree`, and `std::string` above `std::bytes`             |
+| D-484     | Per-type numeric kernels, fixed `std::list` kernels, callbacks only in `map::upsert`, fixed names   |
+| D-486     | Codes `E0057` to `E0074` and `W0002` to `W0013`; std modules staged until the checker handles them  |
+| D-510     | The back end lowers only what `main` reaches and reports all its E0038s before compiling            |
+| D-519     | Operator, pipe, call, field and `use` chains count toward the nesting limit of D-441                |
 
 ## Open questions
 

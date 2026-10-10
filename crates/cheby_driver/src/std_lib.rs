@@ -5,7 +5,7 @@
 //! deterministic. M3 replaces this with precompiled std (D-256).
 //! Std modules are parsed and checked lazily, when a build reaches them.
 //! A user build skips their `test` blocks, which only testing std itself
-//! checks and runs (GAP(std-tests-skipped)).
+//! checks and runs (D-479).
 
 /// One shipped standard-library module.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -71,7 +71,7 @@ pub const STD_MODULES: &[StdModule] = &[
         source: include_str!("../../../std/json/decode.cheby"),
     },
     // The internal module of D-361 that `json` and `json::decode` both
-    // import; its items are package-visible only (GAP(json-tree-module)).
+    // import; its items are package-visible only (D-483).
     StdModule {
         path: "json::tree",
         source: include_str!("../../../std/json/tree.cheby"),
@@ -130,7 +130,7 @@ pub const STD_MODULES: &[StdModule] = &[
     },
 ];
 
-/// Modules written before the checker can check them (plan GAP(std-staging)):
+/// Modules written before the checker can check them (D-486):
 /// embedded so tests can run phase A on them, but never loaded. Each stays
 /// in [`PLANNED_STD_MODULES`], so importing one is still E0038 (D-451),
 /// until it is promoted to [`STD_MODULES`]. Sorted by path. Empty: every

@@ -1,4 +1,4 @@
-//! Desugaring (C7) into the THIR of plan §4.3, while checking:
+//! Desugaring (C7) into THIR, while checking:
 //!
 //! - `use p1, p2 <- f(a)` and the rest of the block: a call of `f` whose
 //!   last argument is a closure with [`ParamOrigin::Use`] parameters, the
@@ -9,7 +9,7 @@
 //!   effect, so `x` is evaluated first (§5.15.1, D-244). `x |> g` calls
 //!   `g` with `x` alone (D-245).
 //! - A positional constructor or an interface function used as a value:
-//!   a closure that calls it (GAP(interface-fn-value)).
+//!   a closure that calls it (D-500).
 //!
 //! Captures `f(a, _)` are in `call.rs` (D-155), parenthesized expressions
 //! leave no node (`expr.rs`). No `use`, pipe, hole or parenthesized
@@ -175,7 +175,7 @@ impl BodyCx<'_> {
 
     /// E0047 for a `use` with `given` binders whose callback must take
     /// `wanted` parameters (§5.10); the callback is checked without
-    /// expectations, for its own errors (GAP(use-binder-count)).
+    /// expectations, for its own errors (D-495).
     fn binder_count(
         &mut self,
         cb: Callback<'_>,
@@ -312,8 +312,7 @@ impl BodyCx<'_> {
         self.expect_result(&sig, expected)?;
         let mut ids = self.check_args(&sig.params, args, spans)?;
         // `x` is evaluated before the rest of the right side (§5.15.1):
-        // bind it first unless nothing comes before it
-        // (GAP(pipe-binding)).
+        // bind it first unless nothing comes before it (D-498).
         let mut stmts = Vec::new();
         let first = hole == 0 && !matches!(sig.target, Target::Value(_));
         if !first && let Some(slot) = ids.get_mut(hole) {
@@ -389,7 +388,7 @@ impl BodyCx<'_> {
 
     /// An interface function used as a value, `Show::show`: the closure
     /// `fn(a) { Show::show(a) }`, whose call is resolved at the end of the
-    /// body like any interface call (GAP(interface-fn-value)).
+    /// body like any interface call (D-500).
     pub(crate) fn iface_fn_closure(&mut self, def: DefId, span: Span) -> Result<ExprId, Ice> {
         let ItemSig::InterfaceFn(isig) = &self.input.item(self.own, def)?.sig else {
             return Err(Ice::new("an interface function without its signature"));

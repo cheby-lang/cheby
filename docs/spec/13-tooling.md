@@ -20,7 +20,7 @@ Cheby ships as one `cheby` binary that contains the compiler, runtime, REPL, tes
 
 `cheby build --target native` produces an executable. Object files from Cranelift are linked with the system linker in early versions (`cc` or `link.exe`), and with a linker bundled in the `cheby` binary before 1.0 (D-088). `cheby build --target js` produces a directory of ES modules (D-074).
 
-`cheby check` parses and type-checks the package, including `test` blocks and the cross-target checks of [§12.6](12-targets-and-ffi.md#126-target-specific-code), and reports diagnostics like `cheby build`. Like `cheby build`, it evaluates constants ([§13.9](#139-compile-time-evaluation)) and reports their panics and exceeded limits (D-459). It writes no output files, but may use the build cache ([§13.12.4](#13124-build-cache-and-standard-library)) (D-282).
+`cheby check` parses and type-checks the package, including `test` blocks and the cross-target checks of [§12.6](12-targets-and-ffi.md#126-target-specific-code), and reports diagnostics like `cheby build`. Like `cheby build`, it evaluates constants ([§13.9](#139-compile-time-evaluation)) and reports their panics and exceeded limits (D-459). Until the toolchain can evaluate constants, it checks them without evaluating them ([§13.8](#138-diagnostics-and-warnings)) (D-478). It writes no output files, but may use the build cache ([§13.12.4](#13124-build-cache-and-standard-library)) (D-282).
 
 `cheby explain` prints the long explanation of a diagnostic code such as `E0012`, with examples and fixes ([§13.8](#138-diagnostics-and-warnings)) (D-420).
 
@@ -153,6 +153,8 @@ Detached fibers ([§10.4](10-concurrency.md#104-detached-fibers)) started from t
 
 Test blocks are type-checked by `cheby build` as well, so a broken test is caught even when tests are not run.
 
+The standard library's `test` blocks sit next to the code they test, in its source files. A build of a user package neither checks them nor compiles them, and the warnings of [§13.8](#138-diagnostics-and-warnings) ignore them. They are checked and run when the standard library itself is tested (D-479).
+
 ## 13.7 Formatter
 
 `cheby fmt` rewrites source files into the one canonical style. It has no configuration options (D-079).
@@ -170,28 +172,36 @@ Compile errors stop compilation. Warnings do not, unless `--deny-warnings` is pa
 
 The following are warnings (D-080 and the cited decisions):
 
-| Warning                                                                 | Decision     |
-| ----------------------------------------------------------------------- | ------------ |
-| unused local binding, parameter or import                               | D-080        |
-| unused `priv` item                                                      | D-080, D-152 |
-| unused package-visible item, when nothing in the package uses it        | D-080, D-152 |
-| discarding a `Result` in statement position (silenced with `let _ = …`) | D-153        |
-| a local declaration or import that hides a prelude name                 | D-146        |
-| `let assert` with an irrefutable pattern                                | D-159        |
-| `todo` in compiled code                                                 | D-068        |
-| unreachable `case` arm                                                  | D-022        |
-| `==` on a type statically known to contain a function or handle type    | D-070, D-233 |
-| use of a `@deprecated` item                                             | D-200        |
-| a written tuple type with a tuple element or with four or more elements | D-243, D-440 |
-| a negative integer literal passed as a standard-library count argument  | D-298, D-303 |
+| Warning                                                                 | Decision            |
+| ----------------------------------------------------------------------- | ------------------- |
+| unused local binding, parameter or import                               | D-080, D-515        |
+| unused `priv` item                                                      | D-080, D-152, D-516 |
+| unused package-visible item, when nothing in the package uses it        | D-080, D-152, D-516 |
+| discarding a `Result` in statement position (silenced with `let _ = …`) | D-153               |
+| a local declaration or import that hides a prelude name                 | D-146, D-487        |
+| `let assert` with an irrefutable pattern                                | D-159, D-509        |
+| `todo` in compiled code                                                 | D-068               |
+| unreachable `case` arm                                                  | D-022               |
+| `==` on a type statically known to contain a function or handle type    | D-070, D-233, D-518 |
+| use of a `@deprecated` item                                             | D-200, D-517        |
+| a written tuple type with a tuple element or with four or more elements | D-243, D-440        |
+| a negative integer literal passed as a standard-library count argument  | D-298, D-303, D-518 |
 
-Unused `pub` items are never reported (D-152). Warnings that need the whole package, such as unused package-visible items, are computed in a separate pass that does not delay `cheby run` (D-266). Bindings whose names start with `_` are not reported as unused ([§2.3](02-lexical-structure.md#23-identifiers)).
+Unused `pub` items are never reported (D-152). What counts as a use is fixed as follows (D-515, D-516):
+
+- An import is used only through names written in the module ([§7.5](07-modules-and-packages.md#75-imports)) (D-515).
+- A type is used when its name or any of its constructors is used, in an expression or a pattern, and an interface when its name or any of its functions is used. Constructors and interface functions are never reported on their own. A standard-library type uses the functions that its `@std_hooks` names ([§4.8](04-declarations.md#48-attributes)).
+- An item's uses of itself, as in recursion or a recursive type, and a local function's calls in its own body, do not make it used. An item that only another unused item uses is not reported, because there is no transitive dead-code analysis.
+- Bindings whose names start with `_` are not reported as unused ([§2.3](02-lexical-structure.md#23-identifiers)). The exemption covers bindings only, so an unused item named `_helper` is reported.
+- Unused items and imports are reported only when every body of the module type-checked, or of the package for package-visible items, since the uses inside a body with an error are not known. Unused bindings need only name resolution.
+
+Warnings that need the whole package, such as unused package-visible items, are computed in a separate pass (D-266). It runs once per `cheby check`, after every module of the package is checked, and never in `cheby run` (D-516).
 
 The compiler should report errors with the source span, a short explanation, and a suggested fix where one exists, for example a new name for a shadowing binding (D-062) or `{x:?}` for a type without `Show` (D-086).
 
-Every diagnostic has a code: `E` and four digits for an error, `W` and four digits for a warning. Codes are assigned in order and never reused, and a code whose check is removed stays reserved (D-419). `cheby explain <code>` prints a code's long explanation (D-420). The first codes, `E0001` to `E0037` and `W0001`, cover the lexer, the parser, the syntax checks and the reading of the manifest and module files. A rule with its own decision gets its own code, and other syntax errors share `E0013` (D-442). The codes `E0038` to `E0055` cover imports and names, attributes, types, `main` and native symbols (D-466), and `E0056` whitespace or a comment between the `-` and the digits of a negative literal (D-470). Naming and reserved-word errors (`E0006`, `E0007`) are reported once, where a name is bound or declared (D-469).
+Every diagnostic has a code: `E` and four digits for an error, `W` and four digits for a warning. Codes are assigned in order and never reused, and a code whose check is removed stays reserved (D-419). `cheby explain <code>` prints a code's long explanation (D-420). The first codes, `E0001` to `E0037` and `W0001`, cover the lexer, the parser, the syntax checks and the reading of the manifest and module files. A rule with its own decision gets its own code, and other syntax errors share `E0013` (D-442). The codes `E0038` to `E0055` cover imports and names, attributes, types, `main` and native symbols (D-466), and `E0056` whitespace or a comment between the `-` and the digits of a negative literal (D-470). The codes `E0057` to `E0074` and `W0002` to `W0013` cover type checking, patterns, interfaces, targets and constants, and the warnings of this section (D-486). Naming and reserved-word errors (`E0006`, `E0007`) are reported once, where a name is bound or declared (D-469).
 
-While the first implementation milestone (M1) is in progress, `E0038` reports a valid construct that the toolchain cannot check or run yet. A construct inside a function body leaves the function's signature checked and visible to other modules. The code is retired when M1 ends, and its explanation then says it is no longer emitted (D-451).
+While the toolchain is being built, `E0038` reports a valid construct that it cannot check or run yet (D-451). From the end of M1, the front end supports every construct, and reports `E0038` only for an import of a standard-library module that is specified or planned but not shipped, such as `std::fiber`. Paths through such an import report nothing more (D-480). The back end reports `E0038` for each construct it cannot compile yet. It compiles only what the `main` being run reaches, so code that `main` never reaches reports nothing, and it reports all its `E0038`s before compiling anything, after the front end's diagnostics (D-510). Until constants are evaluated at compile time, `cheby check` checks a constant's type, its restrictions and cycles of direct references between constants, but not its value, and `cheby run` reports `E0038` at each constant that `main` reaches (D-478). The code is retired when the toolchain ships every planned module and compiles every construct, and its explanation then says it is no longer emitted (D-480).
 
 Errors that are not about the program, such as an unreadable file, a missing `cheby.toml`, a misused command line or an unknown code given to `cheby explain`, have no code. They are printed as a plain `error: …` line (D-442). A broken invariant of the compiler itself is such an error too, printed as `error: internal compiler error: …` with exit status 1 (D-464).
 

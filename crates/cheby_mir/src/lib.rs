@@ -5,11 +5,10 @@
 //! - [`repr`] and [`abi`]: value representations and the one source of
 //!   machine signatures (D-453, D-454).
 //! - [`layout`]: constructor layouts from interfaces (D-246, D-252).
-//! - [`reach`]: the items a run needs, from its entry
-//!   (GAP(backend-reachability)).
+//! - [`reach`]: the items a run needs, from its entry (D-510).
 //! - [`lower`]: THIR to MIR (D2), with tail-position marking (§5.15.2),
 //!   external wrappers and entry thunks. What it cannot lower yet is
-//!   E0038 at the construct (plan §8), never an internal error.
+//!   E0038 at the construct (D-480, D-510), never an internal error.
 //! - [`rc`]: naive dup/drop placement by the last-use rule (D7, D-205).
 //! - [`validate`] and [`dump`]: the validator and the stable text form.
 

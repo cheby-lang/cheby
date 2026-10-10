@@ -11,7 +11,7 @@
 //!   end, then MIR of the items reachable from the program's `main`, the
 //!   JIT and `main` (D-137). Constructs the back end cannot lower yet are
 //!   E0038, reported like compile errors before any code is generated
-//!   (plan §8); `cheby check` never lowers MIR.
+//!   (D-510); `cheby check` never lowers MIR.
 //! - [`dump_mir`] and [`dump_clif`] print the MIR and CLIF that running
 //!   the root module's `main` compiles, for goldens and the determinism
 //!   checks.
@@ -370,7 +370,7 @@ fn parse_module_path(text: &str) -> Option<ModulePath> {
 
 /// The MIR that running the root module's `main` compiles, after
 /// reference counting (D1): the units of the modules it needs, in build
-/// order, with the items reachable from `main` (plan §8), then the entry
+/// order, with the items reachable from `main` (D-510), then the entry
 /// unit. Empty if the package has errors, if the back end cannot lower
 /// something `main` needs (E0038 in the output), or if the root module has
 /// no `main`.

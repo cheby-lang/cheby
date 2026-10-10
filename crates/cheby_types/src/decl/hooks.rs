@@ -1,7 +1,7 @@
 //! The functions named by the standard library's `@std_hooks(equal_fn,
-//! hash_fn, debug_fn)` on a type (D-342, GAP(std-attributes)). The runtime
+//! hash_fn, debug_fn)` on a type (D-342, D-482). The runtime
 //! routine of D-252 calls them with no function packages, so each must
-//! have the shape below and no bounds (GAP(std-hook-signatures)):
+//! have the shape below and no bounds (D-482):
 //!
 //! - `equal_fn(a: T, b: T) -> Bool`;
 //! - `hash_fn(value: T) -> K`, for any `K`: the runtime hashes the `K`

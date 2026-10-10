@@ -1,6 +1,6 @@
 # `std::bytes`
 
-`Bytes`, an immutable sequence of bytes, for binary data such as file contents and network formats (§3.5, D-095). `Bytes` is not in the prelude, so it is written `bytes::Bytes` after `import std::bytes` (§3.2). This module is where the type is declared (§8.2):
+`Bytes`, an immutable sequence of bytes, for binary data such as file contents and network formats (§3.5, D-095). `Bytes` is a built-in type outside the prelude, and this module is its home module (§3.2, §7.6, D-481). The module does not declare the type again. Inside it the type is written `Bytes`, and other modules write `bytes::Bytes` after `import std::bytes`, or `Bytes` after `import std::bytes::{Bytes}`. Interface satisfaction treats the type as declared here (§8.2). In the form `cheby doc` prints:
 
 ```cheby
 pub type Bytes
@@ -14,7 +14,7 @@ Multi-byte integers are read and written by functions that name their byte order
 
 Text becomes bytes with `bytes::from_string`, which always encodes UTF-8 (§3.5). Bytes become text with [`string::from_bytes`](string.md#from_bytes), which can fail, because decoding is a conversion to `String` and lives in `std::string` (D-308). There is no `bytes::to_string`: decoding can fail, and the library has no `to_string` functions, since a type's text comes only from `show` (D-307).
 
-Every cost in this module is **required** (D-300). `n` is the length of the first argument in bytes, unless the entry says otherwise.
+Every cost in this module is **required** (D-300). `n` is the length of the first argument in bytes, unless the entry says otherwise. A function that takes a callback, such as `fold`, is written in Cheby over the runtime's kernels, such as `get`, because only kernels that the stdlib requires to take a callback, which is `map::upsert` alone, call back into Cheby (D-484).
 
 ## Creating
 

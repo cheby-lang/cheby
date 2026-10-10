@@ -98,7 +98,7 @@ pub interface Wide: Visible {
 ";
 
 /// The home modules of `Option` and of the kernel type `Map` (D-447,
-/// GAP(kernel-types)): they do not declare the builtin types, but use them.
+/// D-481): they do not declare the builtin types, but use them.
 const STD_OPTION: &str = "//! Options.\n\npub fn is_some<T>(option: Option<T>) -> Bool {\n  case option {\n    Some(_) => True\n    None => False\n  }\n}\n";
 const STD_MAP: &str = "//! Maps.\n\n@external(native, \"cheby_map_size\")\n@external(js, \"./map.mjs\", \"size\")\npub fn size<K, V>(map: Map<K, V>) -> Int\n";
 
@@ -132,7 +132,7 @@ const SHIPPED: &[(&str, &str)] = &[
     ("std_attrs", STD_ATTRS),
 ];
 
-/// A std module with the std-only attributes (GAP(std-attributes)).
+/// A std module with the std-only attributes (D-482).
 const STD_ATTRS: &str = r#"//! Std-only attributes.
 
 @std_clamped(count)

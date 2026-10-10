@@ -202,7 +202,7 @@ pub fn field<T, U>(name: String, decoder: Decoder<T>, next: fn(T) -> Decoder<U>)
 
 Decodes the member `name` of a JSON object with `decoder`, then calls `next` with the result and decodes the same object with the decoder `next` returns. `decoder`'s errors have `name` added to the front of their paths. When `name` occurs more than once, the last occurrence is used (D-223). Members the decoders do not ask for are ignored (D-323). With `use`, the rest of the block is `next` (§5.10).
 
-- **Fails:** `expected: "Field"`, `found: "Nothing"` and `path: [name]` when the object has no member `name`. `decoder`'s errors when it does not accept the member. `expected: "Object"` when the value is not an object. In each case `next` is called with the placeholder (D-401) and its errors are reported after these.
+- **Fails:** `expected: "Field"`, `found: "Nothing"` and `path: [name]` when the object has no member `name`. `decoder`'s errors when it does not accept the member. `expected: "Object"`, the kind found and the value's own path when the value is not an object. In each case `next` is called with `decoder`'s placeholder (D-401, D-485) and its errors are reported after these.
 - **Cost:** O(m) in the number of members of the object, plus running `decoder` and the decoder from `next`. Informative.
 
 ```cheby
@@ -248,7 +248,7 @@ pub fn optional_field<T, U>(name: String, default: T, decoder: Decoder<T>, next:
 
 Like `field`, but when the object has no member `name`, it calls `next` with `default` and records no error. When the member is present, `decoder` decodes it, even when its value is `null`. So `optional_field` handles only a missing key, and `null` is `decoder`'s concern: for a field that may be missing or `null`, as generated code writes for an `Option` field, pass `None` as `default` and wrap the decoder in `optional`.
 
-- **Fails:** `decoder`'s errors when the member is present and `decoder` does not accept it, and `expected: "Object"` when the value is not an object. `next` is then called with the placeholder.
+- **Fails:** `decoder`'s errors when the member is present and `decoder` does not accept it. `next` is then called with `decoder`'s placeholder. When the value is not an object, `expected: "Object"`, the kind found and the value's own path, and `next` is called with `default`, since a value that is not an object has no members (D-485).
 - **Cost:** O(m) in the number of members of the object, plus running `decoder` and the decoder from `next`. Informative.
 
 ```cheby

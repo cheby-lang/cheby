@@ -11,13 +11,12 @@
 //!   nominal type, with type arguments in place (§3.13, D-070, D-233). A
 //!   type parameter of the enclosing item is not known, and neither is the
 //!   value inside a `dyn`. A type with `@std_hooks` compares through its
-//!   hook, so its fields are not looked into (D-342)
-//!   (GAP(equality-static-contents)).
+//!   hook, so its fields are not looked into (D-342, D-518).
 //! - W0013: a negative integer literal written as the argument of a
 //!   parameter that a standard-library function clamps (`@std_clamped`,
 //!   D-298, D-303). Only a literal counts, including one that a capture
 //!   moved into a synthetic local (`list::take(_, -1)`,
-//!   GAP(negative-count-captures)); constants and other expressions are
+//!   D-518)); constants and other expressions are
 //!   not looked through.
 
 use cheby_diag::{Diagnostic, codes};

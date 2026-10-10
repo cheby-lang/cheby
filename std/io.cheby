@@ -7,7 +7,7 @@
 //!
 //! The kernels report a failure as a pair of a kind code and the operating
 //! system's message, and `Error` is built from it here, so its
-//! representation stays private to this module (GAP(io-kernel-errors)).
+//! representation stays private to this module (D-484).
 
 import std::bytes
 

@@ -40,8 +40,8 @@ pub struct FnSig {
     /// `Ty::NIL` when the return type is omitted (D-083).
     pub ret: Ty,
     /// Indexes of the parameters marked by the std-only attribute
-    /// `@std_clamped(name, …)`, sorted (D-298, D-303,
-    /// GAP(std-attributes)). Always empty outside `std`.
+    /// `@std_clamped(name, …)`, sorted (D-298, D-303, D-482). Always
+    /// empty outside `std`.
     pub clamped: Box<[u32]>,
 }
 
@@ -56,8 +56,8 @@ pub struct TypeDef {
     /// type and holds its functions (§8.2, D-353), such as `std::option`.
     pub home: Option<ModulePath>,
     /// The functions given by the std-only attribute
-    /// `@std_hooks(equal_fn, hash_fn, debug_fn)` (D-342,
-    /// GAP(std-attributes)). The front end only stores them.
+    /// `@std_hooks(equal_fn, hash_fn, debug_fn)` (D-342, D-482). The
+    /// front end only stores them.
     pub hooks: Option<TypeHooks>,
 }
 
@@ -97,11 +97,11 @@ pub enum BuiltinType {
     U32,
     U64,
     F32,
-    /// `Map<K, V>`, homed in `std::map` (GAP(kernel-types)).
+    /// `Map<K, V>`, homed in `std::map` (D-481).
     Map,
-    /// `Set<T>`, homed in `std::set` (GAP(kernel-types)).
+    /// `Set<T>`, homed in `std::set` (D-481).
     Set,
-    /// `Bytes`, homed in `std::bytes` (GAP(kernel-types)).
+    /// `Bytes`, homed in `std::bytes` (D-481).
     Bytes,
 }
 

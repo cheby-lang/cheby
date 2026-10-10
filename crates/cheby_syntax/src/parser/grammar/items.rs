@@ -328,7 +328,7 @@ fn interface_rest(p: &mut Parser<'_>) {
     if p.at(LT) {
         // D-165: interfaces are not generic. The list is parsed so that
         // the body after it still parses, and the error is one targeted
-        // E0013 (GAP(generic-interface-diagnostic)).
+        // E0013 (D-495).
         let start = p.current_range().start();
         type_params(p);
         let range = TextRange::new(start, p.prev_end().max(start));
@@ -378,7 +378,7 @@ fn interface_fn(p: &mut Parser<'_>) {
 /// Attributes before a variant, a record field or an interface function.
 /// Only items take attributes (App. A.2, D-461), so these are one E0045
 /// for the run of them, kept in an `ERROR` node, and the member after
-/// them still parses (GAP(member-attributes-syntax)).
+/// them still parses (D-514).
 fn member_attrs(p: &mut Parser<'_>, what: &str) {
     let start = p.current_range().start();
     let mut end = start;

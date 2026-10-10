@@ -90,7 +90,7 @@ An optional custom message follows `as`. It is an expression of type `String`, e
 let assert Some(user) = find_user(id) as "user {id} must exist"
 ```
 
-A `let assert` whose pattern is irrefutable is a warning, since a plain `let` would do (D-159).
+A `let assert` whose pattern is irrefutable is a warning, since a plain `let` would do (D-159). Irrefutability follows the syntactic list of [§6.1](06-patterns.md#61-pattern-syntax), so `let assert True | False = b` does not warn (D-509).
 
 ## 11.5 assert
 

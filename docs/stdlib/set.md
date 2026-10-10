@@ -1,6 +1,6 @@
 # `std::set`
 
-The hashed set `Set<T>` (§3.8, D-039). `Set` is not in the prelude: `import std::set` brings in the module and `import std::set::{Set}` the type (§3.2). This module is where the type is declared (§8.2):
+The hashed set `Set<T>` (§3.8, D-039). `Set` is a built-in type outside the prelude, and this module is its home module (§3.2, §7.6, D-481). The module does not declare the type again. Inside it the type is written `Set`, and other modules write `set::Set` after `import std::set`, or `Set` after `import std::set::{Set}`. Interface satisfaction treats the type as declared here (§8.2). In the form `cheby doc` prints:
 
 ```cheby
 pub type Set<T>

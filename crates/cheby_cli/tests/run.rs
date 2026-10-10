@@ -145,7 +145,7 @@ fn compile_errors_exit_with_one() {
 
 /// A construct that the compiler cannot run yet, in code that `main`
 /// reaches, is a compile error at the construct with status 1, never an
-/// internal error, whichever phase finds it (D-451, D-464, plan §8).
+/// internal error, whichever phase finds it (D-464, D-480, D-510).
 #[test]
 fn unsupported_constructs_reached_from_main_exit_with_one() {
     let dir = package(

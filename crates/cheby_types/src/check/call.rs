@@ -325,7 +325,7 @@ impl BodyCx<'_> {
     /// Unifies a generic callee's result type with the expected type when
     /// they fit, so the expectation reaches the arguments. A `dyn`
     /// expectation is left to the conversion of the result
-    /// (GAP(expected-result-before-args)).
+    /// (D-497).
     pub(crate) fn expect_result(
         &mut self,
         sig: &Signature,
@@ -577,9 +577,8 @@ impl BodyCx<'_> {
         stmts: &mut Vec<thir::Stmt>,
         name: &str,
     ) -> Result<ExprId, Ice> {
-        // GAP(capture-pure-args): an argument or callee without effects
-        // is used in place; anything else is bound once, in written order
-        // (D-155).
+        // An argument or callee without effects is used in place; anything
+        // else is bound once, in written order (D-155, D-498).
         let pure = matches!(
             self.exprs.try_get(id, "expression")?.kind,
             ExprKind::Lit(_)

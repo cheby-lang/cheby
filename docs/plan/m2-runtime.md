@@ -65,7 +65,7 @@ Detail level: workstreams with outcomes. This file is refined into tasks when M2
 
 ## Exit criteria
 
-- 005, 009, 013, 018, 019, 022 and 028 pass on the JIT, in addition to the M1 examples.
+- 005, 009, 013, 018, 019, 022 and 028 pass `cheby check` and run on the JIT, in addition to the M1 examples. They import tier-2 modules, so they are checked from this milestone (D-477).
 - Every example passes with 1, 2 and the default number of scheduler threads.
 - ThreadSanitizer and AddressSanitizer jobs are clean on the conformance suite.
 - Reuse is reported for the record-update and kernel cases of §9.3 in the examples.

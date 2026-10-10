@@ -39,6 +39,7 @@ cheby/
     conformance/          harness that runs docs/examples against goldens
     repl/                 scripted REPL sessions
   bench/                  synthetic project generator and runtime benchmarks
+  fuzz/                   cargo-fuzz targets: lex, parse and check
   xtask/                  developer commands: bless, gen-bench, check-determinism
   docs/                   spec, ADRs, decision log, examples, plan, stdlib spec
 ```
@@ -92,7 +93,7 @@ Per-module steps run once per module in import-graph order, with independent mod
 
 - `cheby_package` reads `cheby.toml` ([§13.3](../spec/13-tooling.md#133-manifest)), maps `src/` files to module paths ([§7.2](../spec/07-modules-and-packages.md#72-modules-and-files)) and builds the import graph, rejecting cycles (D-145).
 - `cheby_resolve` collects items per namespace ([§7.7](../spec/07-modules-and-packages.md#77-namespaces-and-name-resolution)), applies visibility (`pub`, package-visible, `priv`, D-162) and `exposed` (D-048), the prelude and its hiding warning (D-146), naming conventions and reserved words at bindings and declarations (D-059, D-469) and the shadowing ban (D-051, D-062).
-- The prelude's items are declarations of a builtin module in `cheby_iface`, with no source. Each type records its home module in `std`, which re-exports it, and every module of the local package depends implicitly on the home modules the toolchain ships, so interface satisfaction for builtin types stays within its dependencies (D-447).
+- The prelude's items are declarations of a builtin module in `cheby_iface`, with no source. Each type records its home module in `std`, which re-exports it, and every module of the local package depends implicitly on the home modules the toolchain ships, so interface satisfaction for builtin types stays within its dependencies (D-447). `Map`, `Set` and `Bytes` are items of the same builtin module that are not in the prelude, named through their home modules `std::map`, `std::set` and `std::bytes`, which do not declare them again (D-481).
 
 ### 2.3 Module interfaces
 
@@ -106,9 +107,11 @@ Interface hashing is designed in M1, even though nothing uses it for caching yet
 - Bidirectional checking supplies expected types ([§3.12.5](../spec/03-types.md#3125-expected-types-and-conversions)), which is also where implicit `dyn` conversion happens (D-168, D-235).
 - Deferred constraints (operators, interface calls, `dyn` conversions) are solved at the end of the body after numeric literals are defaulted.
 - Interface satisfaction looks up same-named functions in the type's own module, one type per interface per module (D-045), with conditional conformance (D-064) and embedding.
-- Exhaustiveness and reachability use a usefulness algorithm (Maranget) over constructors, literals, list patterns and multiple subjects ([§6.9](../spec/06-patterns.md#69-exhaustiveness-and-reachability)).
+- Exhaustiveness and reachability use a usefulness algorithm (Maranget) over constructors, literals, list patterns and multiple subjects ([§6.9](../spec/06-patterns.md#69-exhaustiveness-and-reachability)). Each pass has a fixed step budget, and rows are grouped by their first constructor or literal (D-508).
 - `use`, pipes (D-244, D-245) and captures are desugared during checking, so later stages see only calls and closures.
 - Cross-target checks of `@target` (D-056, D-190) run on every build, whatever the selected target.
+- The output is THIR, typed bodies that MIR lowering reads without inference or interface search. Inside a local function's body every reference to its own name is a self reference, never a capture. A `dyn I` type is closed during inference, and every dictionary carries its type's descriptor, a type parameter's coming from the dictionary of its first bound (D-499).
+- The warnings of [§13.8](../spec/13-tooling.md#138-diagnostics-and-warnings) that need only one module run per module after checking. The whole-package pass for unused package-visible items runs once per `cheby check` (D-266, D-516).
 
 ### 2.5 MIR
 
@@ -135,7 +138,9 @@ Every machine signature comes from one module, `cheby_mir::abi`, used by both lo
 - Entry thunks and one trampoline per arity use the platform C convention. They are the only way the runtime enters generated code.
 - The hidden `ctx` parameter is not part of MIR signatures. Code generation adds it first to every signature except foreign ones.
 
-A function with `@external(native, …)` lowers to a Cheby-ABI wrapper in its own module that makes the foreign call, so callers call it through its slot like any function (D-455).
+A function with `@external(native, …)` lowers to a Cheby-ABI wrapper in its own module that makes the foreign call, so callers call it through its slot like any function (D-455). On native, a function with such an attribute and a body lowers to the wrapper only, and its body, which is for the other targets, is not lowered (D-510).
+
+`cheby run` and the driver's MIR and CLIF dumps lower only the items reachable from the `main` being run, across modules, with the constructor layouts of every module that reachable code uses. Every reachable item is lowered before anything is compiled, so one run reports every E0038 of a back end that cannot compile a construct yet, after the front end's diagnostics (D-510).
 
 ### 2.6 Native code generation
 
@@ -216,11 +221,11 @@ The JS runtime in `runtime-js/` mirrors this split: JS kernels for collections a
 ## 4. Driver, cache and processes
 
 - `cheby_driver` schedules modules over the import graph with a work-stealing pool, and functions inside a module in parallel (D-263).
-- `cheby check` runs the front end and evaluates constants with the JIT, but generates no other code and writes no output (D-282, D-459). It is the command CI and editors use for checking. Errors of phase A (manifest, discovery, lexing, parsing, validation) stop the later phases (D-452).
+- `cheby check` runs the front end and evaluates constants with the JIT, but generates no other code and writes no output (D-282, D-459). Until E6 lands it checks constants without evaluating them (D-478). It is the command CI and editors use for checking. Errors of phase A (manifest, discovery, lexing, parsing, validation) stop the later phases (D-452).
 - In M1 every build is from scratch, in memory. M3 adds the global content-addressed cache (D-255), interface artifacts with early cutoff (D-249) and cached code for `cheby run` (D-254).
 - Every command is its own process, and the cache is the only shared state (D-268). The language server keeps its own in-memory state and may use queries internally (D-249).
 - Output is deterministic from M1 on: no iteration over unordered maps when producing output, no absolute paths, no time stamps, and results independent of thread count (D-264). CI checks it ([testing.md](testing.md#6-determinism)).
 
 ## 5. Standard library location
 
-`std/` holds the standard library sources: Cheby modules and the JS kernels. In M1 and M2 the sources are embedded in the `cheby` binary, and each build parses and checks only the std modules its imports reach, with the result cached in memory. Std files are shown as `std/<module path>.cheby` in diagnostics and panic locations. Std modules may declare `@external(js, …)` bindings before their `.mjs` files exist, since nothing checks JS module files before M4 (D-450). From M3 `std` ships precompiled (D-256). [stdlib.md](stdlib.md) describes the content.
+`std/` holds the standard library sources: Cheby modules and the JS kernels. In M1 and M2 the sources are embedded in the `cheby` binary, and each build parses and checks only the std modules its imports reach and the shipped home modules (D-447), with the result cached in memory. A user build neither checks nor lowers the `test` blocks of std modules, which are checked and run only when std itself is tested (D-479). Std files are shown as `std/<module path>.cheby` in diagnostics and panic locations. Std modules may declare `@external(js, …)` bindings before their `.mjs` files exist, since nothing checks JS module files before M4 (D-450). Every kernel is bound as `@external(native, "cheby_<module>_<function>")` and `@external(js, "./<module>.mjs", "<function>")`, and a kernel never calls a Cheby closure (D-484). A std module written before the checker can check it is listed in `STAGED_STD_MODULES` of `cheby_driver`: it is embedded and parsed in tests but never loaded, and importing it stays E0038 until it moves to `STD_MODULES` (D-486). From M3 `std` ships precompiled (D-256). [stdlib.md](stdlib.md) describes the content.

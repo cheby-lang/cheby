@@ -187,8 +187,8 @@ pub fn optional_field<T, U>(
   next: fn(T) -> Decoder<U>,
 ) -> Decoder<U> {
   Decoder(fn(value, path) {
-    // GAP(decode-not-object-placeholder): for a value that is not an object,
-    // `next` gets `default`, since such a value has no member `name`.
+    // For a value that is not an object, `next` gets `default`, since
+    // such a value has no member `name` (D-485).
     let (decoded, errors) = case value {
       tree::Object(members) => case tree::member(members, name) {
         Some(member) => apply(decoder, member, lists::push(path, name))

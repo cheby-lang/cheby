@@ -73,11 +73,13 @@ Notes:
 
 - An item without `pub` or `priv` is visible to every module of its package. `pub` makes it visible to other packages, and `priv` restricts it to its own module (D-162).
 
-- A `type_decl` without a body is an external type and requires an `@external` attribute ([§12.5.3](12-targets-and-ffi.md#1253-external-types)).
+- A `type_decl` without a body is an external type ([§12.5.3](12-targets-and-ffi.md#1253-external-types)). It may have an `@external` attribute, which names its drop function, and needs none (D-491).
 - An `fn_decl` without a block requires an `@external` attribute ([§12.5](12-targets-and-ffi.md#125-foreign-functions)).
 - The two `type_body` forms are told apart by the first token after any doc comments: `UPPER` starts variants, `LOWER ":"` starts fields.
 - Newlines inside `{ … }` of type bodies are allowed only where the rules show `[ NL ]`, so variants and fields may be written one per line with commas.
 - A positional variant has at least one type and a named-field variant at least one field. `Foo()` and `Foo {}` are compile errors, and a variant without fields is written `Foo` (D-437).
+- No attribute may come before a `variant`, a `field` or an `interface_fn`. A run of attributes there is one compile error, and the member after it still parses (D-461, D-514).
+- An `interface_decl` has no type parameters. A `<…>` list after its name is one compile error, and the rest of the declaration still parses (D-165, D-495).
 
 ## A.3 Types
 

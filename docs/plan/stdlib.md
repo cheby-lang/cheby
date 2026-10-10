@@ -17,6 +17,7 @@ pub fn map<T, U>(xs: List<T>, f: fn(T) -> U) -> List<U> {
 }
 ```
 
+- Every kernel is bound as `@external(native, "cheby_<module>_<function>")` and `@external(js, "./<module>.mjs", "<function>")`. Each numeric module has its own kernels, one symbol per type. A kernel calls a Cheby closure only where the stdlib spec makes it a kernel, which is `map::upsert` alone, so every other function that takes one is written in Cheby over kernels. `std::io`'s kernels return errors as a kind code and the operating system's message, from which `std::io` builds its opaque `Error` (D-484).
 - Kernels follow the native FFI ownership convention (D-187), and update in place when the argument's count is one, so they reuse memory even before Perceus exists.
 - Kernels never grow the stack with the input size, on either target (D-094).
 - Once Perceus reuse (M2) and release-mode specialization (M6) are measured, each kernel is reviewed: those whose Cheby version is within an agreed factor of the Rust one move to Cheby. The factor is OQ-P13, settled with the M2 measurements. The review is a plan item of M6, and each move is a normal change, because the API does not change.
@@ -42,7 +43,7 @@ Drafted in [`docs/stdlib/`](../stdlib/README.md) (D-294 to D-352). The drafts ma
 | `std::result`, `std::option`                                            | [`result.md`](../stdlib/result.md), [`option.md`](../stdlib/option.md)                                                                             |
 | `std::json`, `std::json::decode`                                        | [`json.md`](../stdlib/json.md), [`json/decode.md`](../stdlib/json/decode.md)                                                                       |
 
-The sorted, insertion-ordered and multimap collections are written in Cheby, with no runtime kernels (D-336, D-338). They are benchmarked against a Rust tree in M2 and M6.
+The sorted, insertion-ordered and multimap collections are written in Cheby, with no runtime kernels (D-336, D-338). They are benchmarked against a Rust tree in M2 and M6. They are not shipped at M1 exit, so importing them is E0038 until they are (D-480).
 
 `std::json` is the largest module and the only one written almost entirely in Cheby. If its spec is late, example 011 moves to the M2 exit list rather than delaying M1.
 
@@ -78,5 +79,5 @@ A module is done when:
 1. its spec file in `docs/stdlib/` is reviewed and its decisions are in the log,
 2. it is implemented on every target whose milestone has started,
 3. every function has a doc comment with at least one example, which `cheby test` runs from M5 on (D-197),
-4. it has unit tests in `test` blocks, and kernel property tests where it has kernels ([testing.md](testing.md#3-unit-and-property-tests)),
+4. it has unit tests in `test` blocks next to its code in `std/`, which user builds skip (D-479), and kernel property tests where it has kernels ([testing.md](testing.md#3-unit-and-property-tests)),
 5. `cheby doc` output matches the spec file module by module (D-220), checked from M5 on.

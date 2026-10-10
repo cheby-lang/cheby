@@ -1,14 +1,13 @@
 //! Constant restrictions and cycles (§4.5, C13): a constant's declared
 //! type contains no function, `dyn`, external or handle type (E0068,
 //! D-139, D-237), and constants do not refer to each other in a cycle
-//! through direct references (E0069, GAP(const-cycle-scope)).
+//! through direct references (E0069, D-511).
 //!
 //! "Contains" looks through tuples, the elements of the builtin
 //! collections and the fields of every constructor of the types it meets,
 //! transitively, so `Option<Db>` and a record with a function field are
 //! rejected like `Db` and `fn() -> Int`. A type argument that no field
-//! uses holds no value, so it is not looked at
-//! (GAP(const-type-containment)).
+//! uses holds no value, so it is not looked at (D-511).
 //! Handle types other than external types (channels, fibers) arrive with
 //! the tier-2 standard library and join the check then.
 //!
@@ -17,7 +16,7 @@
 //! (§7.3). A cycle through a function call, such as `const a: Int = f()`
 //! where `f` reads `a`, is found when constants are evaluated (E6).
 //!
-//! Constants are not evaluated until E6 (GAP(const-eval-interim), D-459):
+//! Constants are not evaluated until E6 (D-459, D-478):
 //! until then `cheby check` checks their types, restrictions and direct
 //! cycles only, and `cheby run` reports E0038 for a reachable constant.
 

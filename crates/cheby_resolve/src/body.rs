@@ -928,7 +928,7 @@ impl Cx<'_, '_> {
     /// `p1 | p2 | …`: each alternative starts from the names bound before
     /// it, and every alternative must bind the same names (§6.7). One
     /// E0062 per alternative that lacks names, naming all of them
-    /// (GAP(alternative-bindings-report)).
+    /// (D-506).
     fn alternatives(
         &mut self,
         p: cheby_syntax::ast::OrPat<'_>,

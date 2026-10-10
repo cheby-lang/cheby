@@ -56,13 +56,11 @@ pub const F32: DefId = def(28);
 pub const SHOW: DefId = def(29);
 /// `Show::show`.
 pub const SHOW_FN: DefId = def(30);
-/// `Map<K, V>`, not in the prelude: homed in `std::map`
-/// (GAP(kernel-types)).
+/// `Map<K, V>`, not in the prelude: homed in `std::map` (D-481).
 pub const MAP: DefId = def(31);
-/// `Set<T>`, not in the prelude: homed in `std::set` (GAP(kernel-types)).
+/// `Set<T>`, not in the prelude: homed in `std::set` (D-481).
 pub const SET: DefId = def(32);
-/// `Bytes`, not in the prelude: homed in `std::bytes`
-/// (GAP(kernel-types)).
+/// `Bytes`, not in the prelude: homed in `std::bytes` (D-481).
 pub const BYTES: DefId = def(33);
 
 /// The number of builtin items.
@@ -119,7 +117,7 @@ pub fn home_paths() -> impl Iterator<Item = ModulePath> {
 
 /// The number of builtin items in the prelude (§7.6): the first
 /// `PRELUDE_LEN` items. The items after them are builtin but reachable only
-/// through their home modules (GAP(kernel-types)).
+/// through their home modules (D-481).
 pub const PRELUDE_LEN: u32 = 31;
 
 /// Whether `def` is one of the builtin items.
@@ -130,7 +128,7 @@ pub fn is_builtin(def: DefId) -> bool {
 
 /// Whether `def` is a builtin item of the prelude (§7.6), which name
 /// resolution adds to every module's scope. `Map`, `Set` and `Bytes` are
-/// builtin but not in the prelude (GAP(kernel-types)).
+/// builtin but not in the prelude (D-481).
 #[must_use]
 pub fn is_prelude(def: DefId) -> bool {
     def.module == ModuleId::BUILTIN && def.index.as_u32() < PRELUDE_LEN
@@ -139,7 +137,7 @@ pub fn is_prelude(def: DefId) -> bool {
 /// The interface of the builtin module. All items are `pub`. The prelude
 /// (§7.6) is exactly its first [`PRELUDE_LEN`] items: the prelude types,
 /// their constructors and `Show`. `Map`, `Set` and `Bytes` follow, reachable
-/// only through their home modules (GAP(kernel-types)).
+/// only through their home modules (D-481).
 #[must_use]
 pub fn interface(globals: &Globals) -> ModuleInterface {
     let types = &globals.types;

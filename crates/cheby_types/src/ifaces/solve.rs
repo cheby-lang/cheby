@@ -189,8 +189,8 @@ impl<'a> IfaceCx<'a> {
             };
             return Ok(match module {
                 Some(module) => Ok(TypeHome { module, ty_item }),
-                // GAP(home-not-in-deps): a std module that does not import
-                // the home module cannot use its functions.
+                // A std module that does not import the home module cannot
+                // use its functions (D-489).
                 None => Err(Reason::HomeNotInDeps { home }),
             });
         }
@@ -270,11 +270,10 @@ impl<'a> IfaceCx<'a> {
         if sig.params.len() != want_params.len() {
             return Ok(Err(mismatch));
         }
-        // GAP(satisfaction-instance-matching): the function's type
-        // arguments come from matching its `Self` parameter one way
-        // against the type. Every type parameter must be determined
-        // there; one that is not makes the function not count, with a
-        // reason of its own.
+        // The function's type arguments come from matching its `Self`
+        // parameter one way against the type. Every type parameter must
+        // be determined there; one that is not makes the function not
+        // count, with a reason of its own (D-504).
         let mut bound = vec![None; sig.generics.len()];
         if !match_ty(types, pattern.ty, target, &mut bound)? {
             return Ok(Err(mismatch));
@@ -417,7 +416,7 @@ impl<'a> IfaceCx<'a> {
     }
 
     /// `dict`, a dictionary built for `ty`, if `ty`'s descriptor can be
-    /// built here (GAP(bound-needs-descriptor), D-236).
+    /// built here (D-236, D-502).
     fn with_descriptor(
         &self,
         ty: Ty,
@@ -462,8 +461,7 @@ impl<'a> IfaceCx<'a> {
                     Ok(Ok(Dict::Dyn { iface, ty }))
                 } else if fns.is_empty() {
                     // Any value converts to `dyn` of an empty interface; a
-                    // `dyn` value keeps its own descriptor (§8.6.1,
-                    // GAP(dyn-to-empty-interface)).
+                    // `dyn` value keeps its own descriptor (§8.6.1, D-502).
                     Ok(Ok(empty))
                 } else {
                     fail(Reason::Dyn { has: *has })
@@ -611,10 +609,10 @@ impl<'a> IfaceCx<'a> {
                     Err(reason) => fail(reason),
                 }
             }
-            // GAP(operator-through-any-bound): the first bound, in written
-            // order and with what it embeds, that has a function of the
-            // operator's name and signature provides it, whether or not
-            // it is std::ops' own interface (D-169).
+            // The first bound, in written order and with what it embeds,
+            // that has a function of the operator's name and signature
+            // provides it, whether or not it is std::ops' own interface
+            // (D-169, D-503).
             TyKind::Param(param) => {
                 for &bound in self.bounds(*param)? {
                     for f in self.interface_fns(bound)? {

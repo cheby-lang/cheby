@@ -1,5 +1,5 @@
-//! Multi-module builds for unit tests (plan §4.6): the whole front end as
-//! the driver runs it (G1), over sources given as strings.
+//! Multi-module builds for unit tests: the whole front end as the driver
+//! runs it (G1), over sources given as strings.
 //!
 //! - [`build`] checks package `app` against a small `std::io`.
 //! - [`build_with_std`] also loads fake standard-library modules, given as

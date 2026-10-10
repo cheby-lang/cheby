@@ -1,4 +1,4 @@
-//! Reachability and the back-end gate (plan §8) on hand-built THIR, so
+//! Reachability and the back-end gate (D-510) on hand-built THIR, so
 //! they do not depend on what the front end accepts yet.
 
 use std::sync::Arc;

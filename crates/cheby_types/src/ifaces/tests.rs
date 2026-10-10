@@ -984,8 +984,7 @@ fn dyn_conversions_need_a_descriptor() {
     });
 }
 
-/// GAP(bound-needs-descriptor): a dictionary passed for a bound carries a
-/// descriptor too.
+/// A dictionary passed for a bound carries a descriptor too (D-502).
 #[test]
 fn a_bound_dictionary_needs_a_descriptor() {
     let p = probe(PROBE);
@@ -1216,8 +1215,8 @@ fn operators_on_type_parameters_need_a_bound() {
     });
 }
 
-/// GAP(home-not-in-deps): a std module that does not import `std::int`
-/// cannot use `Int`'s functions.
+/// A std module that does not import `std::int` cannot use `Int`'s
+/// functions (D-489).
 #[test]
 fn a_home_module_must_be_readable() {
     let p = probe_with(PackageId::STD, Some(&["std::ops"]), PROBE);

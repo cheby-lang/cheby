@@ -12,8 +12,8 @@
 //!   the driver runs after every local module is checked, for
 //!   `cheby check` only (D-266).
 //!
-//! Internal passes (plan §4.4): `decl` and `ifaces` check declarations at
-//! the end of [`build_interface`]; `exhaust` checks patterns of each body
+//! Internal passes: `decl` and `ifaces` check declarations at the end of
+//! [`build_interface`]; `exhaust` checks patterns of each body
 //! without errors; `targets`, `consts` and `warnings` run over the
 //! module's THIR at the end of [`check_bodies`].
 //!
@@ -22,7 +22,7 @@
 //! [`DepView`], never another module's tree, resolution or bodies.
 //!
 //! The front end checks every construct; what the back end cannot lower
-//! yet is reported by MIR lowering (E0038, D-451, plan §8).
+//! yet is reported by MIR lowering (E0038, D-480, D-510).
 
 mod check;
 mod consts;

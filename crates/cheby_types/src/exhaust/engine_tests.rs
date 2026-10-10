@@ -379,9 +379,9 @@ fn budget_falls_back_to_wildcard() {
 
 #[test]
 fn a_wildcard_arm_is_exhaustive_whatever_the_budget() {
-    // GAP(exhaustiveness-budget): running out never turns a `case` with
-    // an unguarded `_, _` arm into a missing `_`; reachability that runs
-    // out reports the remaining arms as reachable.
+    // Running out never turns a `case` with an unguarded `_, _` arm into
+    // a missing `_`; reachability that runs out reports the remaining arms
+    // as reachable (D-508).
     let tys = [T::Bool, T::Bool];
     let arms = [
         (vec![tru(), tru()], false),

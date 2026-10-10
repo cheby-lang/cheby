@@ -78,7 +78,7 @@ pub(super) fn line_body(
     };
     // A `use` nests the rest of its block in a callback (§5.10), and later
     // passes recurse into it, so it counts as a level of nesting until the
-    // end of the block (D-441, GAP(chain-depth)).
+    // end of the block (D-441, D-519).
     let mut uses = 0_u32;
     loop {
         while p.eat(NEWLINE) {}

@@ -517,11 +517,11 @@ test "min finds the smallest element" {
   assert min(empty) == None
 }
 
-// GAP(std-param-shadowing): list.md names the comparison parameter of
-// `max_with`, `min_with` and `sort_with` `compare`, which is also the name of
-// this module's `compare` function, so a body could not bind it (§5.2.3,
-// D-062). These three functions have Cheby bodies, so the parameter is
-// called `by` here. `take`, `drop` and `split_at` keep their parameter
+// list.md names the comparison parameter of `max_with`, `min_with` and
+// `sort_with` `compare`, which is also the name of this module's
+// `compare` function, so a body could not bind it (§5.2.3, D-062).
+// These three functions have Cheby bodies, so the parameter is called
+// `by` here (D-483). `take`, `drop` and `split_at` keep their parameter
 // `count`, the name of `list::count`, because kernels have no body that
 // would bind it.
 

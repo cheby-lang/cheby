@@ -480,9 +480,9 @@ impl BodyCx<'_> {
 
     /// `T { ..base, x: 1 }` (§5.11.2, D-156, D-071).
     ///
-    /// GAP(update-type-args): the result has the base's type, and each
-    /// listed value is checked against its field's type under the base's
-    /// type arguments, so an update never changes a type argument.
+    /// The result has the base's type, and each listed value is checked
+    /// against its field's type under the base's type arguments, so an
+    /// update never changes a type argument (D-501).
     fn record_update(&mut self, rec: ast::RecordExpr<'_>) -> Result<ExprId, Ice> {
         let span = rec.significant_span();
         let (Some(path), Some(base)) = (rec.path(), rec.spread().and_then(ast::Spread::value))
@@ -612,8 +612,8 @@ impl BodyCx<'_> {
     /// The type a record update's path names: the type itself, or the
     /// named type an alias stands for. An alias is interchangeable with its
     /// definition everywhere (§4.4, D-081), so `T { ..base, … }` works
-    /// through one. GAP(update-through-alias). `None` for an alias of
-    /// something else, reported here.
+    /// through one (D-501). `None` for an alias of something else,
+    /// reported here.
     fn update_type(&mut self, def: DefId, path_span: Span) -> Result<Option<DefId>, Ice> {
         let ItemSig::Alias(alias) = &self.input.item(self.own, def)?.sig else {
             return Ok(Some(def));

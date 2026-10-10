@@ -423,11 +423,11 @@ impl BodyCx<'_> {
 
     /// E0048 or E0059 for a constructor pattern whose shape does not match
     /// the constructor's: fields on a unit constructor, none on one with
-    /// fields, positional for named or the reverse.
-    /// GAP(pattern-shape-codes): a count of fields that differs (none on a
-    /// positional constructor, some on a unit one) is E0048, like the
-    /// arity of a positional pattern; matching fields by the wrong form is
-    /// E0059, like a named-field constructor called positionally (D-138).
+    /// fields, positional for named or the reverse. A count of fields that
+    /// differs (none on a positional constructor, some on a unit one) is
+    /// E0048, like the arity of a positional pattern; matching fields by
+    /// the wrong form is E0059, like a named-field constructor called
+    /// positionally (D-138, D-495).
     fn ctor_shape_error(
         &mut self,
         info: &CtorInfo,

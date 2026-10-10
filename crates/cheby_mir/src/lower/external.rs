@@ -10,7 +10,7 @@
 //!
 //! Boxing a result of type `Int`, `Float`, `Bool` or a sized number is
 //! not implemented yet (D6), so such an external is E0038 at its
-//! `@external` when a run needs it (plan §8).
+//! `@external` when a run needs it (D-510).
 
 use cheby_iface::FnSig;
 use cheby_types::thir;

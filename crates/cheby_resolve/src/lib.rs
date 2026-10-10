@@ -143,12 +143,10 @@ pub struct ItemAttrs {
     pub is_async: bool,
     pub deprecated: Option<Box<str>>,
     /// The parameters named by the standard library's `@std_clamped(param,
-    /// …)` on a function, in written order (GAP(std-attributes), D-298,
-    /// D-303).
+    /// …)` on a function, in written order (D-298, D-303, D-482).
     pub clamped: Vec<(Name, Span)>,
     /// The functions named by the standard library's `@std_hooks(equal_fn,
-    /// hash_fn, debug_fn)` on a type, in that order (GAP(std-attributes),
-    /// D-342).
+    /// hash_fn, debug_fn)` on a type, in that order (D-342, D-482).
     pub hooks: Option<[(Name, Span); 3]>,
 }
 

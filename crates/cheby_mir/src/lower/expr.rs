@@ -7,7 +7,7 @@
 //! blocks, `let` with a name or `_`, and expression statements, with
 //! values in the representation of their types where no conversion
 //! between an unboxed and the uniform representation is needed (D6).
-//! Everything else is E0038 at the outermost construct (plan §8): the
+//! Everything else is E0038 at the outermost construct (D-510): the
 //! construct is not lowered, its value is a placeholder local, and the
 //! function is dropped at the end, so the rest of the body is still
 //! checked for other such constructs.
@@ -425,7 +425,7 @@ impl<'a> BodyCx<'a, '_> {
 
 /// What to call an expression the back end does not lower yet, in E0038
 /// (the front end's old wording, D-451). A kind added to THIR later is
-/// reported too, so additions never break the build (plan §4.3).
+/// reported too, so additions never break the build.
 fn unsupported_expr(kind: &ExprKind) -> &'static str {
     match kind {
         ExprKind::Lit(Lit::Int(_) | Lit::Float(_)) => "numeric literals",

@@ -25,7 +25,7 @@ cheby_iface::newtype_index! {
 ///
 /// There is no variant for `dyn`: interfaces have no type parameters
 /// (D-165), so a `dyn I` type never holds a variable and is `Known`
-/// (GAP(infer-dyn-not-needed)).
+/// (D-499).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum InferTy {
     /// A closed type: no variables inside.
@@ -438,7 +438,7 @@ impl<'g> InferCtxt<'g> {
 
     /// Binds every unbound variable inside `t` to [`Ty::ERROR`]: a type
     /// unified with an error learns nothing, so whatever its variables
-    /// stand for is silent too (one error per root cause, plan §7).
+    /// stand for is silent too (one error per root cause).
     fn poison(&mut self, t: &InferTy) -> Result<(), Ice> {
         match self.shallow(t)? {
             InferTy::Known(_) => Ok(()),

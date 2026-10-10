@@ -1,9 +1,9 @@
 // @mode: check-fail
-// @decisions: D-161
+// @decisions: D-161, D-492
 //! A value of type `Never` satisfies only empty interfaces, so operators
 //! on it are errors like interpolation is: `<` needs `Compare`, unary `-`
 //! needs `Neg`, and `%` is defined only on the numeric types
-//! (GAP(never-operands)).
+//! (D-492).
 
 fn less() -> Bool {
   let x = panic

@@ -18,7 +18,7 @@
 //!    checked module of the package (D-152, D-266), once, after every
 //!    module is checked, and only when every module of the package was
 //!    checked (an import cycle leaves some unchecked). `cheby run` skips
-//!    them so the edit-run path stays local (GAP(package-warnings-in-run)).
+//!    them so the edit-run path stays local (D-516).
 //!    The caller sorts every diagnostic, warnings included, by position.
 //!
 //! Every output is in a deterministic order (D-264).
@@ -248,7 +248,7 @@ pub(crate) enum Mode {
     /// `cheby check`: every check, the whole-package warnings included.
     Check,
     /// Building to run or dump: the whole-package warnings are skipped
-    /// (D-266, GAP(package-warnings-in-run)).
+    /// (D-266, D-516).
     Build,
 }
 

@@ -160,7 +160,7 @@ impl PathCx<'_> {
     }
 
     /// Where an unknown type name may come from: a builtin type outside
-    /// the prelude (D-447, GAP(kernel-types)), an operator interface of
+    /// the prelude (D-447, D-481), an operator interface of
     /// `std::ops` (§8.7), or a constructor written where its type belongs,
     /// as in a record update (§5.11.2).
     fn type_hint(&self, name: Name, text: &str) -> Option<String> {

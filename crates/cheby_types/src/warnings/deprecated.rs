@@ -5,7 +5,7 @@
 //! message. A constructor or an interface function is deprecated with its
 //! type or interface. Uses in the item's own module are not reported, and
 //! neither are implicit uses that nobody wrote, such as a deprecated
-//! `show` called by an interpolation (GAP(deprecated-use-sites)). Item
+//! `show` called by an interpolation (D-517). Item
 //! imports of a deprecated item do not warn either: the uses of the name
 //! they bind do, so each use is reported once.
 

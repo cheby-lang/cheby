@@ -22,15 +22,13 @@
 //! used by one item of this module is reported once, at its first use
 //! (the signature's before the body's): a type and its constructors, or
 //! an interface and its functions, are one root cause
-//! (GAP(e0067-granularity)). A constant's initializer runs at compile
-//! time, so only the constant's type is checked against its targets
-//! (GAP(const-initializer-targets)).
+//! (D-512). A constant's initializer runs at compile time, so only the
+//! constant's type is checked against its targets (D-512).
 //!
 //! The same pass checks `Int` literals in code that runs on JS against the
 //! JS safe-integer range (§3.3.4, D-037, E0071). A constant's initializer
 //! is evaluated at compile time and never runs on JS, so its literals are
-//! not checked here; the evaluated value is (§4.5, E6,
-//! GAP(js-literal-in-constants)).
+//! not checked here; the evaluated value is (§4.5, E6, D-511).
 
 use std::fmt;
 

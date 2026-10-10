@@ -6,8 +6,8 @@
 //! reads text into a `Tree`, the decoders run over a `Tree`, and
 //! `std::json` converts between `Tree` and `json::Value` with `rebuild`.
 //!
-//! GAP(json-tree-module): this is the internal module of D-361. Its items
-//! are package-visible, never `pub`, so no other package can use them.
+//! This is the internal module of D-361 (D-483). Its items are
+//! package-visible, never `pub`, so no other package can use them.
 //!
 //! Nothing here grows the stack with the nesting depth of a document: the
 //! parser and `rebuild` keep the arrays and objects they are inside of in a

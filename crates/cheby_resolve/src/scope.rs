@@ -364,7 +364,7 @@ fn add_prelude(
 ) -> Result<(), Ice> {
     // The prelude and, in a home module, the builtin items it re-exports,
     // which include the kernel types `Map`, `Set` and `Bytes` that are not
-    // in the prelude (D-447, GAP(kernel-types)). Both are hidden by own
+    // in the prelude (D-447, D-481). Both are hidden by own
     // items and imports (D-146, W0007).
     let builtin_iface = prelude.builtin;
     let path = &input.modules.try_get(input.module)?.path;

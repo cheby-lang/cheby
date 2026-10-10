@@ -1198,7 +1198,7 @@ fn items_as_values() {
     };
     assert_eq!(&ty_args[..], [Ty::INT]);
     assert!(matches!(&dicts[..], [Dict::Impl { .. }]), "{dicts:?}");
-    // `Some` and `Show::show` are closures (GAP(interface-fn-value)).
+    // `Some` and `Show::show` are closures (D-500).
     let closures = exprs(body, |k| matches!(k, ExprKind::Closure { .. }));
     assert_eq!(closures.len(), 2);
     let units = exprs(body, |k| matches!(k, ExprKind::Ctor { .. }));

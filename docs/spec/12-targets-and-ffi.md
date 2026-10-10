@@ -156,7 +156,7 @@ fn fetch_text(url: String) -> String
 
 ### 12.5.3 External types
 
-A type declaration with no body declares an **external type**, whose values are foreign handles:
+A type declaration with no body declares an **external type**, whose values are foreign handles. It needs no `@external` attribute (D-491):
 
 ```cheby
 @external(native, "cheby_sqlite_close")
@@ -180,6 +180,9 @@ pub fn read_file(path: String) -> Result<String, io::Error> { … }
 
 - An item with `@target(t)` is type-checked on every build, but compiled only for target `t`.
 - Code that uses a target-specific item must itself be restricted to the same target, directly or through its callers. The compiler checks this and reports any use that would fail on some target, even when building for a target where it would work (D-056).
+- The check reports each pair of a using item and a used top-level item once, at the first use, with uses in the signature before uses in the body. A use of a constructor counts as a use of its type, and a use of an interface function as a use of its interface (D-512).
+- A constant's declared type is checked against the constant's targets. Its initializer is not, because it runs at compile time on the host ([§4.5](04-declarations.md#45-constants)) (D-090, D-512).
+- Every item must exist on at least one target. An item whose `@target(t)` contradicts its module's `@!target`, and a function without a body that `@target(t)` or its module's `@!target(t)` restricts to a target `t` for which it has no `@external`, are compile errors (D-513).
 - The body of a function that has an `@external` for some targets counts as restricted to the remaining targets, because it only runs there (D-207). This is how a function is written as "foreign code on one target, Cheby on the other":
 
 ```cheby

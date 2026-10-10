@@ -14,8 +14,8 @@
 //! subexpressions left to right, closure and capture arguments of a call
 //! last (D-234).
 //!
-//! The files of this directory (plan §4.4): `mod.rs` holds [`BodyCx`], the
-//! items and the end of a body; `expr`, `call`, `stmt`, `closure`,
+//! The files of this directory: `mod.rs` holds [`BodyCx`], the items and
+//! the end of a body; `expr`, `call`, `stmt`, `closure`,
 //! `desugar`, `coerce`, `constraints` and `interp` the expression core;
 //! `pat`, `case` and `record` patterns, `case` and records.
 
@@ -80,7 +80,7 @@ pub enum Tests {
     All,
     /// A user build: the tests of standard-library modules are neither
     /// checked nor in the THIR, because only testing std runs them. The
-    /// module's other passes see no tests either (GAP(std-tests-skipped)).
+    /// module's other passes see no tests either (D-479).
     SkipStd,
 }
 
@@ -464,7 +464,7 @@ pub(crate) enum VarNote {
 /// The state of checking one top-level body, nested closures and local
 /// functions included (§3.12.4).
 ///
-/// The members are the contract between the checker's files (plan §4.5):
+/// The members are the contract between the checker's files:
 /// `pat.rs`, `case.rs` and `record.rs` use them without editing this file.
 pub(crate) struct BodyCx<'a> {
     pub input: &'a TypesInput<'a>,
@@ -566,7 +566,7 @@ impl<'a> BodyCx<'a> {
     /// The kind of result of a test body `value` (D-140): `Nil` (a body
     /// of type `Never` too, and a body whose type is still unknown), or
     /// `Result<Nil, E>`. Anything else is E0073 and gives `None`
-    /// (GAP(test-body-never)).
+    /// (D-493).
     fn test_result(&mut self, value: ExprId) -> Result<Option<EntryKind>, Ice> {
         let ty = self.ty_of(value)?;
         match self.infcx.resolve(&ty)? {
@@ -828,7 +828,7 @@ impl<'a> BodyCx<'a> {
     /// E0057 for every type variable nothing determined, at the
     /// expression that introduced it, unless the body already has an
     /// error, which such a type usually follows from
-    /// (GAP(e0057-after-errors)).
+    /// (D-494).
     fn report_unresolved(&mut self, mut unresolved: Vec<TyVid>) -> Result<(), Ice> {
         if unresolved.is_empty() {
             return Ok(());
@@ -942,10 +942,9 @@ impl<'a> BodyCx<'a> {
             }
             Lit::Float(value) => {
                 // A literal fits when it rounds to a finite value of its
-                // type, so `3.4028235e38` is the largest `F32`
-                // (GAP(float-literal-range)). Below half
-                // an ulp past `f32::MAX` it rounds down to it; at the
-                // midpoint it rounds to even, which is the infinity.
+                // type, so `3.4028235e38` is the largest `F32` (D-496).
+                // Below half an ulp past `f32::MAX` it rounds down to it;
+                // at the midpoint it rounds to even, which is the infinity.
                 let fits = if ty == Ty::F32 {
                     value.abs() < f64::from(f32::MAX) + 2f64.powi(103)
                 } else if ty == Ty::FLOAT {
