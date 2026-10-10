@@ -463,11 +463,11 @@ impl<'p> Compiler<'_, '_> {
             let bindings = first.binds.clone();
             let guarded = self.guarded.get(arm).copied().unwrap_or(false);
             let otherwise = if guarded {
-                // GAP(guard-alternatives): the guard runs once, with the
-                // names of the first alternative that matches (§5.9.1,
-                // §6.7: "trying them from left to right"; §5.15.1: guards
-                // in arm order). When it is `False` the arm is skipped,
-                // so its later alternatives are not tried.
+                // D-571: the guard runs once, with the names of the first
+                // alternative that matches (§5.9.1, §6.7: "trying them from
+                // left to right"; §5.15.1: guards in arm order). When it is
+                // `False` the arm is skipped, so its later alternatives are
+                // not tried.
                 let rest = Matrix {
                     cols: m.cols,
                     rows: m.rows.into_iter().filter(|r| r.arm != arm).collect(),

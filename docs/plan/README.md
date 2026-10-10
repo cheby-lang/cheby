@@ -147,6 +147,13 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-566     | A strict run requires only pending tests of the milestone in progress, not those of later ones      |
 | D-567     | Accepted values of the strict-run variables and the syntax of the allow file                        |
 | D-568     | The seven correctly rounded functions are written in Rust with double-double and Ziv's test         |
+| D-569     | A float literal is rounded once to each float type, and THIR holds both values                      |
+| D-572     | Closures inside a test are `cb$clo$test$<path>$<ordinal>$<n>`                                       |
+| D-573     | `std::io` kernels report kinds 0 to 3 and messages without Rust's `(os error N)` suffix             |
+| D-575     | `read_input_line` reads REPL lines, replacing invalid UTF-8; a read error ends the input            |
+| D-576     | UI tests feed `.stdin` byte for byte and read `.args` as text, one argument per line                |
+| D-577     | Which `std::string` kernels update a unique argument in place or return it unchanged                |
+| D-578     | `run_main` or `entry::set_program` sets the program's name and arguments for each host              |
 
 ## Open questions
 

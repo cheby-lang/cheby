@@ -398,7 +398,7 @@ fn let_assert_matches_or_panics_with_the_value() {
     );
     assert!(plain.contains("call_runtime debug(borrow _0)"), "{plain}");
     assert!(plain.contains("panic let_assert"), "{plain}");
-    // The location is the pattern's (GAP(let-assert-location)).
+    // The location is the pattern's (D-570).
     assert!(plain.contains(r#""src/main.cheby:128:14""#), "{plain}");
     let with = lowered.function("app", "app::asserting_with");
     assert!(
@@ -563,7 +563,7 @@ fn main() {
 // --- No position tested twice -------------------------------------------
 
 /// What a path through `decision` does twice, as messages: a position
-/// tested twice, or a guard of one arm run twice (GAP(guard-alternatives)).
+/// tested twice, or a guard of one arm run twice (D-571).
 fn tested_twice(decision: &Decision) -> Vec<String> {
     let mut out = Vec::new();
     let mut work: Vec<(&Tree, BTreeSet<OccId>, BTreeSet<usize>)> =

@@ -341,7 +341,7 @@ fn run_with_closed_stdout(name: &str, main_body: &str) -> (Option<i32>, String) 
 }
 
 /// Once `io::write_stdout` has returned `Err`, the text it reported may
-/// stay unwritten without ending the program (GAP(stdout-reported-failure)).
+/// stay unwritten without ending the program (D-574).
 #[test]
 fn a_reported_stdout_failure_keeps_the_exit_status() {
     let (status, stderr) = run_with_closed_stdout("stdout_reported", "");

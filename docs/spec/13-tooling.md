@@ -174,6 +174,8 @@ list::reverse([1, 2]) : List<Int>
 
 The REPL reads its input lines through the same buffered reader of standard input as `io::read_line`. An entry that reads standard input therefore consumes the next lines of a piped session in order, and those lines are not echoed as input. On a terminal, the line editor reads the prompt lines and an entry reads the terminal directly. The REPL flushes standard output before it writes a diagnostic or a panic report to standard error, so earlier output stays ahead of the report (D-548).
 
+Before it reads an input line, the REPL flushes standard output, and a failed flush ends it with exit status 1 (D-306). It removes the line's final `\n` or `\r\n` (D-305) and replaces invalid UTF-8 with U+FFFD, as `env::args` does (D-311), because it has no `Result` to report it through. A standard input that cannot be read ends the session as the end of input does (D-575).
+
 _Note:_ the reference implementation tests the REPL with transcripts in `tests/repl/`, in which lines that start with `> ` or `. ` are input and every other line is expected output, with standard output and standard error merged in the order of writes (D-546, D-548).
 
 ## 13.6 Tests

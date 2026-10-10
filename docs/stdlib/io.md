@@ -119,6 +119,8 @@ fn print_all(lines: List<String>) -> Result<Nil, io::Error> {
 
 `write_stdout` writes through the same buffer as `print` and then flushes it, so its `Result` covers everything written to standard output so far (D-365).
 
+After an `Err`, the text that could not be written may stay in the buffer. A later flush that fails, at exit, before a panic report or before standard input is read, then does not end the program, because the `Err` has already reported that text. So a program that handles the `Err` and returns keeps its exit status. This ends when `print` or `println` adds text to standard output or a later `write_stdout` succeeds, and from then on a failing flush ends the program with status 1 again (§10.10, D-306, D-574).
+
 ### `write_stderr`
 
 ```cheby

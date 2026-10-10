@@ -100,6 +100,7 @@ A numeric literal has no type of its own. Its type is taken from the expected ty
 - An integer literal is never implicitly a float, and a float literal is never an integer.
 - A literal whose value does not fit its type is a compile error (D-084), for example `let b: U8 = 256`. On the JS target, an `Int` literal outside the safe-integer range is also a compile error. A constant's initializer is exempt from this JS check, because it runs at compile time, and the value it produces is checked instead ([§4.5](04-declarations.md#45-constants)) (D-511).
 - A float literal fits its type when it rounds to a finite value of that type (D-496). A `Float` literal must be finite as a 64-bit float. An `F32` literal must be smaller in magnitude than the largest finite `F32` plus half a unit in the last place, so `3.4028235e38` is the largest `F32` literal, and the midpoint above it rounds to infinity and is an error.
+- A float literal's value is its decimal text rounded once, directly to the nearest value of its type (D-569). An `F32` literal is never rounded to a `Float` first, because rounding twice can land one unit in the last place away. A literal therefore has the same value as `float::parse` or `f32::parse` of its text (D-313). For example, `1.00000005960464477539062500001` as an `F32` is `1.0000001`, not `1.0`, and `3.4028235677973366e38`, just below the midpoint, is the largest finite `F32`. An `F32` literal is an error exactly when this value is infinite.
 
 ```cheby
 let a = 10          // Int

@@ -82,7 +82,7 @@ let assert Ok(config) = load_config("app.toml")
 let assert [first, ..] = arguments
 ```
 
-The panic report includes the source location. Its message is `` `let assert` pattern did not match ``, followed by the line `value: <debug text>`, indented by two spaces, with the debug-printed value that failed to match (D-528).
+The panic report includes the source location, which is the start of the pattern (D-570). Its message is `` `let assert` pattern did not match ``, followed by the line `value: <debug text>`, indented by two spaces, with the debug-printed value that failed to match (D-528).
 
 An optional custom message follows `as`. It is an expression of type `String`, evaluated only when the match fails. The first line of the panic message is then `` `let assert` pattern did not match: `` followed by the custom message, and the value line still follows (D-159, D-528):
 
@@ -107,7 +107,7 @@ assert_stmt = "assert" expr [ "as" expr ] ;
 
 `assert expr` evaluates an expression of type `Bool` and panics if it is `False` (D-096). It may be used anywhere a statement may appear, not only in tests (D-096).
 
-A failed `assert e` has the panic message `assertion failed: <source text of e>`. When `e` is a comparison (`==`, `!=`, `<`, `<=`, `>`, `>=`), two more lines follow with the debug-printed values of both operands, labelled `left:` and `right:`. The labels are right-aligned, so `left:` is indented by two spaces and `right:` by one (D-096, D-528).
+A failed `assert e` has the panic message `assertion failed: <source text of e>`. When `e` is a comparison (`==`, `!=`, `<`, `<=`, `>`, `>=`), two more lines follow with the debug-printed values of both operands, labelled `left:` and `right:`. The labels are right-aligned, so `left:` is indented by two spaces and `right:` by one (D-096, D-528). The panic is located at the start of `e`, not at the `assert` keyword (D-570).
 
 An optional custom message follows `as`. It is an expression of type `String`, evaluated only when the assertion fails. It replaces the source text in the first line, and the operand lines of a failing comparison still follow (D-160, D-528):
 
@@ -167,7 +167,7 @@ not implemented: area of a dot
 
 `panic` without a message reports `explicit panic`, and a message given with `as` replaces it. `todo` reports `not implemented`, and `todo as m` reports `not implemented: m`. The runtime panics of [§11.8](#118-runtime-panics) report `integer overflow`, `division by zero`, `shift amount out of range`, `equality or hashing reached a function value or a handle` and `stack overflow`. Failed assertions report `assertion failed` and `` `let assert` pattern did not match ``, with the details of [§11.4](#114-let-assert) and [§11.5](#115-assert) (D-449, D-528).
 
-When `==` or `!=` reaches a function value or a handle, the panic's location is that of the operator (D-556). _Note:_ when the standard library compares or hashes values inside a runtime kernel, as a `Map` lookup does, the reference implementation knows no Cheby location and prints `<unknown location>` in its place (D-449, D-556).
+A panic of a built-in operator is located at the start of the whole operator expression: the start of the left operand of a binary operator, and the `-` of a negation (D-570). This covers integer overflow, division by zero, a shift amount out of range, and a `==` or `!=` that reaches a function value or a handle (D-556). In `a + b * c`, an overflow of `*` is located at the start of `b`. A failed `assert e`, with or without `as`, is located at the start of its condition `e`, not at the `assert` keyword, and a failed `let assert` at the start of its pattern (D-570). _Note:_ when the standard library compares or hashes values inside a runtime kernel, as a `Map` lookup does, the reference implementation knows no Cheby location and prints `<unknown location>` in its place (D-449, D-556).
 
 ## 11.7 Panics and fibers
 

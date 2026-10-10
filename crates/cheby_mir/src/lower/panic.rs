@@ -10,7 +10,7 @@
 //! failure, and `m` is evaluated only then (D-160).
 //!
 //! THIR keeps no span for the `assert` statement itself, so a failed
-//! assertion reports the location of its condition, GAP(assert-location).
+//! assertion reports the location of its condition (D-570).
 
 use cheby_diag::Span;
 use cheby_iface::{Ice, Ty};

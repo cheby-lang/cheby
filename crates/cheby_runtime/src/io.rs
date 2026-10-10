@@ -35,7 +35,7 @@
 //! IO failure: they return `Err((kind, message))` (D-484), with kind 1 not
 //! found, 2 permission denied, 3 invalid UTF-8 and 0 every other failure,
 //! and the operating system's message without Rust's ` (os error N)`
-//! suffix (GAP(io-error-pair)).
+//! suffix (D-573).
 
 use std::io::{self, BufRead, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -135,7 +135,7 @@ fn kind_code(error: &io::Error) -> i64 {
 }
 
 /// The operating system's message of an IO error, without the
-/// ` (os error N)` that Rust appends to it (GAP(io-error-pair)).
+/// ` (os error N)` that Rust appends to it (D-573).
 fn os_message(error: &io::Error) -> String {
     let text = error.to_string();
     match error.raw_os_error() {
@@ -390,8 +390,7 @@ unsafe fn write_kernel(stream: Stream, text: Word, newline: bool) {
             let mut out = io::stdout().lock();
             // This text has no `Result`: if it is lost, a later failing
             // flush ends the program again (D-306, D-346). The excuse of
-            // GAP(stdout-reported-failure) covers only text already
-            // reported.
+            // D-574 covers only text already reported.
             STDOUT_FAILURE_REPORTED.store(false, Ordering::Relaxed);
             write_text(&mut out, bytes, newline)
         }
@@ -421,9 +420,9 @@ static STDOUT_FAILURE_REPORTED: AtomicBool = AtomicBool::new(false);
 /// Right after `io::write_stdout` has reported a failure to the program, a
 /// failing flush is not an error: the text left in the buffer is the text
 /// whose failure that `Err` already reported (D-365), so a program that
-/// handles it and returns normally keeps its exit status
-/// (GAP(stdout-reported-failure)). Once `print` or `println` adds text,
-/// the excuse ends, and a failing flush is an error again (D-306).
+/// handles it and returns normally keeps its exit status (D-574). Once
+/// `print` or `println` adds text, the excuse ends, and a failing flush is
+/// an error again (D-306).
 ///
 /// # Errors
 ///
@@ -471,7 +470,7 @@ fn strip_line_ending(mut line: Vec<u8>) -> Vec<u8> {
 /// output (ending the program with status 1 when that fails, D-306). The
 /// line has no ending (D-305), invalid UTF-8 is replaced with U+FFFD, and
 /// the result is `None` at the end of input or when standard input cannot
-/// be read (GAP(repl-input-line)).
+/// be read (D-575).
 #[must_use]
 pub fn read_input_line() -> Option<String> {
     read_raw_line()

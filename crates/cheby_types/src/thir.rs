@@ -465,7 +465,7 @@ pub enum Lit {
 /// A float literal's value, rounded once from its decimal text to each
 /// float type (§3.3.4, D-496). The `F32` value is not the `Float` value
 /// narrowed: that would round twice and can be off by one ulp
-/// (GAP(f32-literal-rounding)).
+/// (D-569).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FloatLit {
     /// The nearest `Float`.

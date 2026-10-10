@@ -111,8 +111,8 @@ impl BodyCx<'_, '_> {
         };
         let ty = self.ty(init)?;
         let value = self.as_local(op, self.repr_of(ty))?;
-        // GAP(let-assert-location): the report's location is the start of
-        // the pattern that did not match.
+        // The report's location is the start of the pattern that did not
+        // match (D-570).
         let on_fail = OnFail::LetAssert {
             value,
             ty,

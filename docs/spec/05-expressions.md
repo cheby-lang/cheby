@@ -167,6 +167,8 @@ For the built-in numeric types, both operands must have the **same type**, and t
 
 On the JS target, every `Int` result is additionally checked against the safe-integer range ([§3.3.1](03-types.md#331-int)) (D-037).
 
+The panic of a failing operator is located at the start of the whole operator expression, the start of `a` or the `-` of `-a`, as [§11.6](11-errors-and-panics.md#116-panic-and-todo) describes (D-570).
+
 ### 5.4.3 Overloaded arithmetic
 
 For other types, `+ - * /` and unary `-` call the `add`, `sub`, `mul`, `div` and `neg` functions of the operand type through the operator interfaces ([§8.7](08-interfaces.md#87-operator-interfaces)) (D-034, D-047, D-118). Both operands must have the same type.
@@ -362,6 +364,19 @@ fn fizzbuzz(n: Int) -> String {
 
 A guard `when expr` follows the patterns of an arm (D-052). The guard must have type `Bool` and may use the arm's bindings. Guards are not considered by exhaustiveness checking ([§6.9](06-patterns.md#69-exhaustiveness-and-reachability)).
 
+A guard runs at most once each time its arm is tried (D-571). When the arm's pattern has alternatives ([§6.7](06-patterns.md#67-alternatives)), the guard runs with the bindings of the first alternative that matches. If it is `False`, the whole arm is skipped: its later alternatives are not tried, and matching goes on with the next arm. A guard can have effects, so running it again for another alternative would be observable.
+
+```cheby
+fn pick(pair: (Int, Int)) -> String {
+  case pair {
+    (0, n) | (n, _) when n < 5 => "small {n}"
+    _ => "other"
+  }
+}
+```
+
+_Example:_ `pick((0, 9))` returns `"other"`. The first alternative binds `n` to `9`, the guard is `False`, and `(n, _)` is not tried, although it would bind `n` to `0`.
+
 ### 5.9.4 Exhaustiveness
 
 A `case` with subjects must be exhaustive: every possible combination of subject values must be matched by some arm, ignoring guards (D-022). A non-exhaustive `case` is a compile error that lists missing patterns. An arm that can never match is a warning ([§6.9](06-patterns.md#69-exhaustiveness-and-reachability)).
@@ -547,7 +562,7 @@ Evaluation is strict and left to right (D-120):
 - In a binary operator, the left operand, then the right, except for the short-circuit rules of `&&` and `||`.
 - In tuples, lists, constructors and record updates, items in the order written.
 - In `x |> f(_, a)`, `x` first, then `a`.
-- In `case`, the subjects in order, then guards in arm order.
+- In `case`, the subjects in order, then guards in arm order, each at most once per arm (D-571).
 
 ### 5.15.2 Tail position
 

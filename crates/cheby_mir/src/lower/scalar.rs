@@ -17,9 +17,8 @@
 //!
 //! The location of a failed operator is the start of the operator
 //! expression, which is the start of its left operand for a binary
-//! operator and the `-` for a negation (D-449), GAP(operator-location):
-//! THIR keeps no span for the operator token, and rustc reports the
-//! expression's start too.
+//! operator and the `-` for a negation (D-449, D-570): THIR keeps no span
+//! for the operator token, and rustc reports the expression's start too.
 
 use cheby_diag::Span;
 use cheby_iface::{Ice, Ty};
@@ -533,7 +532,7 @@ fn int_const(v: i128, repr: Repr) -> Option<Const> {
 
 /// The float literal `v` as a constant of `repr` (`Float` or `F32`). An
 /// `F32` literal is the nearest `F32` to its decimal text, rounded once by
-/// the front end (§3.3.4, D-496, GAP(f32-literal-rounding)).
+/// the front end (§3.3.4, D-496, D-569).
 fn float_const(v: FloatLit, repr: Repr) -> Option<Const> {
     match repr {
         Repr::Float => Some(Const::Float(v.wide.to_bits())),

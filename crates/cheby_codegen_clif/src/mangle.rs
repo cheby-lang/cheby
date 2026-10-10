@@ -137,9 +137,8 @@ pub fn closure(owner: &DefName, index: u32) -> String {
 
 /// `cb$clo$test$<module path>$<ordinal>$<n>`: closure `n` of the test with
 /// that ordinal in its module. A test's name is free text, so its closures
-/// are named by the ordinal, like the test itself (D-456,
-/// GAP(test-closure-symbols)); an item name never starts with a digit, so
-/// this never equals [`closure`]'s name.
+/// are named by the ordinal, like the test itself (D-456, D-572); an item
+/// name never starts with a digit, so this never equals [`closure`]'s name.
 #[must_use]
 pub fn test_closure(module: &str, ordinal: u32, index: u32) -> String {
     format!(

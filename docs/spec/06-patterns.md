@@ -133,7 +133,7 @@ fn last_of(xs: List<Int>) -> Option<Int> {
 
 ## 6.7 Alternatives
 
-`p1 | p2 | …` matches if any alternative matches, trying them from left to right (D-113). Every alternative must bind exactly the same set of names, each with the same type in every alternative. An alternative that lacks names bound by another is one error that names all of them, and a name bound twice on one path through a pattern is only the error of [§6.2](#62-wildcards-and-bindings) (D-506).
+`p1 | p2 | …` matches if any alternative matches, trying them from left to right (D-113). Every alternative must bind exactly the same set of names, each with the same type in every alternative. An alternative that lacks names bound by another is one error that names all of them, and a name bound twice on one path through a pattern is only the error of [§6.2](#62-wildcards-and-bindings) (D-506). In a `case` arm with a guard, the bindings are those of the first alternative that matches, and a `False` guard skips the whole arm without trying the later alternatives ([§5.9.3](05-expressions.md#593-guards), D-571).
 
 ```cheby
 case day {

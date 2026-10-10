@@ -947,7 +947,7 @@ impl<'a> BodyCx<'a> {
                 // at the midpoint it rounds to even, which is the infinity.
                 // The `F32` value is rounded once from the decimal text,
                 // so a literal just below the midpoint fits even when its
-                // `Float` rounding is the midpoint (GAP(f32-literal-rounding)).
+                // `Float` rounding is the midpoint (D-569).
                 let fits = if ty == Ty::F32 {
                     value.narrow.is_finite()
                 } else if ty == Ty::FLOAT {

@@ -54,6 +54,8 @@ fn usage() -> String {
 
 Under `cheby run` and `cheby test`, `program_name` returns the package's name from `cheby.toml`, so usage messages are the same on every machine. Otherwise it returns the first argument as the operating system passes it, with invalid UTF-8 replaced (D-311, D-369). What it returns on JS hosts is specified in tier 3.
 
+_Note:_ in the reference implementation, the command that runs entries as the program, `cheby run`, `cheby test` or the REPL, sets the arguments and the name before any of them runs, and a name left empty selects the fallback above (D-578). What `program_name` and `args` return in a REPL session is not settled yet.
+
 ### `get`
 
 ```cheby
