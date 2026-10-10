@@ -10,7 +10,7 @@
 //! equally whatever seeds they were built with.
 //!
 //! Neither nests a walk per entry (plan §0, deep data;
-//! GAP(nested-collection-walks)):
+//! D-586):
 //!
 //! - hashing schedules the entries as an unordered group on the caller's
 //!   own stack ([`Hasher::push_unordered`]);

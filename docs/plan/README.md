@@ -57,7 +57,7 @@ M5 is listed as a milestone so it has exit criteria, but its work starts as soon
 
 ## Plan decisions
 
-Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-plan), D-284 onward in [M0 foundation](../decisions/LOG.md#2026-10-04-m0-foundation), D-418 onward in [Diagnostics](../decisions/LOG.md#2026-10-06-diagnostics), and the plan-level ones of [M1 syntax layer](../decisions/LOG.md#2026-10-07-m1-syntax-layer), [M1 vertical slice](../decisions/LOG.md#2026-10-07-m1-vertical-slice), [Open items](../decisions/LOG.md#2026-10-07-open-items), [M1 front end](../decisions/LOG.md#2026-10-10-m1-front-end), [M1 back-end plan](../decisions/LOG.md#2026-10-10-m1-back-end-plan) and [M1 back end, wave 1](../decisions/LOG.md#2026-10-10-m1-back-end-wave-1):
+Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-plan), D-284 onward in [M0 foundation](../decisions/LOG.md#2026-10-04-m0-foundation), D-418 onward in [Diagnostics](../decisions/LOG.md#2026-10-06-diagnostics), and the plan-level ones of [M1 syntax layer](../decisions/LOG.md#2026-10-07-m1-syntax-layer), [M1 vertical slice](../decisions/LOG.md#2026-10-07-m1-vertical-slice), [Open items](../decisions/LOG.md#2026-10-07-open-items), [M1 front end](../decisions/LOG.md#2026-10-10-m1-front-end), [M1 back-end plan](../decisions/LOG.md#2026-10-10-m1-back-end-plan), [M1 back end, wave 1](../decisions/LOG.md#2026-10-10-m1-back-end-wave-1), [M1 back end, wave 2](../decisions/LOG.md#2026-10-10-m1-back-end-wave-2) and [M1 back end, wave 3](../decisions/LOG.md#2026-10-10-m1-back-end-wave-3):
 
 | Decision  | Summary                                                                                             |
 | --------- | --------------------------------------------------------------------------------------------------- |
@@ -154,6 +154,20 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-576     | UI tests feed `.stdin` byte for byte and read `.args` as text, one argument per line                |
 | D-577     | Which `std::string` kernels update a unique argument in place or return it unchanged                |
 | D-578     | `run_main` or `entry::set_program` sets the program's name and arguments for each host              |
+| D-579     | Static symbols are `cb$<kind>$<module path>$$<name>`; one defined again differently is an error     |
+| D-580     | Static names use fully qualified types; static closures capture static dictionaries                 |
+| D-581     | A type without arguments is its nominal descriptor; builtin nominal descriptors and their names     |
+| D-583     | Built-in tuple `show` code is located at `<builtin>`                                                |
+| D-585     | Every `@std_hooks` hook of a module with a code unit is compiled and registered                     |
+| D-586     | Nested maps and sets compare, hash and print on the walk's worklist, never the Rust stack           |
+| D-590     | A value of an external type is the header and a raw handle, with a layout of its own                |
+| D-591     | A JS-only function stays in the native program, and a constant that reaches it gets E0077           |
+| D-595     | A test thunk returns `Nil` or its `Err` text; the host prints a test's panic report                 |
+| D-596     | Each test runs on a 64 MiB stack, like `main`                                                       |
+| D-598     | When `cheby test` writes its lines and blocks, and the layout of the std self-test report           |
+| D-599     | The std self-test checks std through the in-memory package `std_self_test`                          |
+| D-600     | `@flags` is split at whitespace into words, appended in order, with no quoting                      |
+| D-601     | The `cheby` command runs its subcommand on a 256 MiB thread, a stopgap for deep recursion           |
 
 ## Open questions
 

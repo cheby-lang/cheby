@@ -103,6 +103,7 @@ pub fn open(path: String) -> Result<Db, String>
 - In v1, the type parameters of a foreign function must not have bounds, because function packages and type descriptors have no foreign ABI. This also applies to a function that has a body and an `@external` for some targets (D-207), because the foreign implementation receives the same arguments. Such a bound is a compile error at the bound (D-554). Foreign code cannot build or inspect `dyn` values: they cross the boundary only as opaque values ([§12.5.1](#1251-native-abi), [§12.5.2](#1252-js-abi)) (D-237).
 
 - Compile-time constant evaluation cannot call foreign functions, except the standard-library kernels that [§4.5](04-declarations.md#45-constants) lists (D-090, D-360, D-537).
+- A constant's initializer is not target-checked and runs on the host, so a constant that exists on `js` may reach a function whose only implementation is `@external(js, …)`. On the native host this is the same compile error as reaching any other foreign function, and its note names the function's path. Checked native code never reaches such a function, because the cross-target check keeps it from calling it (D-591).
 
 Native symbols follow three rules (D-455):
 

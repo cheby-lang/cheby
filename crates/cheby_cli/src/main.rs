@@ -107,8 +107,7 @@ enum Target {
 /// recurse over the source's structure, such as the decision trees of long
 /// list patterns (about six frames per tested element), so the 8 MiB main
 /// thread limits valid programs; this moves the limit far beyond realistic
-/// sources. Only address space is reserved up front
-/// (GAP(compiler-stack-size)).
+/// sources. Only address space is reserved up front (D-601).
 const COMMAND_STACK_SIZE: usize = 256 << 20;
 
 fn main() -> ExitCode {

@@ -21,11 +21,10 @@
 //!
 //! Builtin printed names are the types' names (`Int`, `List`, `Option`),
 //! `Tuple` for tuples and `Fn` for function types, with an empty module
-//! path: GAP(builtin-desc-names).
+//! path (D-581).
 //!
-//! GAP(nominal-desc-identity): two descriptors are equal when their
-//! nominal descriptors are the same object and their arguments are equal
-//! (D-530). Each type has exactly one
+//! Two descriptors are equal when their nominal descriptors are the same
+//! object and their arguments are equal (D-530, D-582). Each type has exactly one
 //! nominal descriptor per JIT (D-561), so identity of nominal descriptors
 //! is identity of nominal types: a type redefined in the REPL, or a type
 //! of another major version of a package, has another one (§8.6.1). Hashing

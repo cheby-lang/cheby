@@ -373,7 +373,7 @@ let empty = list::new::<Int>()
 
 ## 3.13 Equality, hashing and debug printing
 
-Every type has built-in debug printing. Every type also has built-in structural equality and hashing, except that they panic when they reach a function value or a [handle](09-memory-model.md#95-handles-and-drop-functions) (D-033, D-070, D-189, D-233). None of the three can be overridden by user code (D-047). A standard-library type may name Cheby functions that implement them instead, so that collections with several internal shapes for the same contents compare, hash and print by contents (D-342). This uses `@std_hooks`, an attribute that only the standard library can write ([§4.8](04-declarations.md#48-attributes)) (D-482). Those functions never suspend, and a panic inside them, for example from `==` reaching a function value, unwinds like any other panic.
+Every type has built-in debug printing. Every type also has built-in structural equality and hashing, except that they panic when they reach a function value or a [handle](09-memory-model.md#95-handles-and-drop-functions) (D-033, D-070, D-189, D-233). None of the three can be overridden by user code (D-047). A standard-library type may name Cheby functions that implement them instead, so that collections with several internal shapes for the same contents compare, hash and print by contents (D-342). This uses `@std_hooks`, an attribute that only the standard library can write ([§4.8](04-declarations.md#48-attributes)) (D-482). Two values of such a type are equal when its equality function says so, whatever their internal constructors. A value hashes as the value that its hash function returns, never by its constructor, and it prints as the text of its debug function, without quotes, wherever it appears (D-584). Those functions never suspend, and a panic inside them, for example from `==` reaching a function value, unwinds like any other panic.
 
 **Equality** (`==` and `!=`):
 
@@ -382,7 +382,7 @@ Every type has built-in debug printing. Every type also has built-in structural 
 - Sorted collections are equal when they have the same entries ([§3.8](#38-list-map-and-set)). Insertion-ordered collections are equal only when they have the same entries in the same order, and their hash covers the order (D-343).
 - Strings are equal when they have the same sequence of scalar values.
 - Floats use reflexive equality ([§3.3.2](#332-float)) (D-069).
-- Two `dyn I` values are equal when they hold values of the same type, including all type arguments, and those values are equal ([§8.6.1](08-interfaces.md#861-type-descriptors)) (D-236). Their descriptors are compared by structure, never by address (D-530).
+- Two `dyn I` values are equal when they hold values of the same type, including all type arguments, and those values are equal ([§8.6.1](08-interfaces.md#861-type-descriptors)) (D-236). Their descriptors are compared by structure, never by address (D-530), and each nominal type in them by its declaration, not by its name (D-582).
 - Both operands must have the same type. Comparing values of different types is a compile error.
 - If a comparison reaches a function value or a handle (a `Sender`, `Receiver`, fiber or scope value, or a value of an external type), it panics (D-070, D-189, D-233). Identity is never compared ([§9.1](09-memory-model.md#91-values-and-sharing)). When the compiler knows statically that a compared type contains a function type or a handle type, it emits a warning (D-070, D-233). It looks through tuples, built-in collections and the fields of every constructor of a named type, with the type arguments in place. It stops at type parameters of the enclosing item, at `dyn` values and at standard-library types that compare through their own functions, and it handles recursive types (D-518).
 
@@ -396,7 +396,7 @@ A `String` prints in double quotes with exactly the escapes that a string litera
 
 Some standard-library types print differently (D-342):
 
-- `Map`, `Set` and `multimap` values list their entries sorted by each entry's printed text, so the output is the same on every run despite the random iteration order (D-344).
+- `Map`, `Set` and `multimap` values list their entries sorted by each entry's printed text, so the output is the same on every run despite the random iteration order (D-344). The texts are compared as UTF-8 bytes, which is the order of scalar values and of `String`'s `compare`, so `10` comes before `9`. A map entry's text is that of the pair `(key, value)`, and a nested collection counts with its own sorted text (D-587).
 - Sorted and insertion-ordered collections list their entries in their own order, not their internal tree or list nodes (D-342).
 - `io::Error` prints the same text as its `show`, a fixed message for each kind the standard library knows, and never the operating system's internal fields (D-345).
 

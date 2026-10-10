@@ -185,7 +185,7 @@ fn failure(
     let find = |slot: *mut u64| by_slot.get(&slot.addr()).copied();
     if report.kind == PanicKind::ConstCycle {
         // A reader of a constant that already failed is not reported
-        // again (GAP(const-failure-site)).
+        // again (D-592).
         if abandoned.failed.is_some() {
             return None;
         }
@@ -203,7 +203,7 @@ fn failure(
     }
     // The constant whose initializer panicked: the innermost one in
     // progress, which may be a constant the top-level one forced
-    // (GAP(const-failure-site)).
+    // (D-592).
     let culprit = abandoned
         .stack
         .last()

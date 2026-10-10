@@ -124,7 +124,7 @@ pub fn item(kind: Kind, name: &DefName) -> String {
 /// is kept as it is, and `$$` ends the module path: a module path joined
 /// with `$` never holds `$$`, so the first `$$` is always the boundary and
 /// statics of different units never share a symbol
-/// (GAP(static-symbol-boundary)). Joining the name's paths with `$` too
+/// (D-579). Joining the name's paths with `$` too
 /// would make `app::app` with `app::m::I$…` and `app` with
 /// `app::app::m::I$…` the same symbol.
 #[must_use]

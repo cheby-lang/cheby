@@ -116,7 +116,7 @@ A function that visits elements calls its callback exactly once per element, fro
 
 - `List`, `Map`, `Set` and every collection in this library compare with `==` by contents. Insertion-ordered collections also compare their order (D-343).
 - The sorted, insertion-ordered and multimap collections are written in Cheby (D-336), and supply their own equality, hashing and debug printing through the standard-library-only attribute `@std_hooks` (D-342, D-482, §3.13, §4.8).
-- Debug printing of `Map`, `Set` and `multimap` lists entries sorted by their printed text (D-344). These three types do not satisfy `Show`. The sorted and insertion-ordered collections satisfy `Show` when their elements do (D-344).
+- Debug printing of `Map`, `Set` and `multimap` lists entries sorted by their printed text, compared as UTF-8 bytes (D-344, D-587). These three types do not satisfy `Show`. The sorted and insertion-ordered collections satisfy `Show` when their elements do (D-344).
 
 `show` of `List`, `Option`, `Result`, tuples and the sorted and insertion-ordered collections uses the punctuation of debug printing (D-134), with each element written by its own `show`, so strings inside appear without quotes: `[1, 2]`, `[a, b]` for `["a", "b"]`, `Some(3)`, `Err(not found)`, `(1, a)`, and `sorted_map::from_list([(a, 1), (b, 2)])` (D-355).
 

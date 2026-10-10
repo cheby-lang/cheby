@@ -292,7 +292,7 @@ pub unsafe extern "C" fn cheby_list_split_at(xs: u64, count: i64) -> u64 {
 /// holds a function value or a handle panics `EqualityOnFunction` at an
 /// unknown location (D-233, D-556). O(n) expected. When no element repeats,
 /// the result is `xs` itself with one more reference, as D-577 does for
-/// string kernels (GAP(unique-shares-result)).
+/// string kernels (D-589).
 ///
 /// # Safety
 ///

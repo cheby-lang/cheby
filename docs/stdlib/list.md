@@ -552,9 +552,11 @@ test "reverse flips the order" {
 pub fn unique<T>(xs: List<T>) -> List<T>
 ```
 
-Returns `xs` without repeated elements, keeping the first of each group of `==` elements, in order. Elements are hashed, like `Set` elements (§3.13).
+Returns `xs` without repeated elements, keeping the first of each group of `==` elements, in order. Elements are hashed, like `Set` elements (§3.13), so an element that holds a function value or a handle panics (D-233).
 
 - **Cost:** O(n log n), effectively O(n). Informative.
+
+_Note:_ when no element repeats, the reference implementation returns `xs` itself instead of a copy (D-589).
 
 ```cheby
 test "unique keeps the first of each element" {

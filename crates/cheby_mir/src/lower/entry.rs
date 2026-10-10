@@ -11,12 +11,12 @@
 //! A test thunk prints nothing: it returns the static `Nil` when the test
 //! passed, and on `Err(e)` the text of `e` as an owned `String`, made as
 //! for `main`, which `cheby test` shows in the test's failure block
-//! (D-541). GAP(test-err-thunk).
+//! (D-541, D-595).
 //!
 //! An error type whose `show` needs dictionaries (`List<E>`, a tuple, a
 //! generic user type, D-064, D-167) is called through its static
 //! dictionary (D-524), whose symbol carries the entry item's module
-//! (the entries unit has none). GAP(static-dict-names).
+//! (the entries unit has none, D-580).
 
 use std::collections::BTreeSet;
 
@@ -143,7 +143,7 @@ fn entry_thunk(
 }
 
 /// What a `main` or test returns when it passed: status 0 for `main`, the
-/// static `Nil` for a test (GAP(test-err-thunk)).
+/// static `Nil` for a test (D-595).
 const fn passed(is_test: bool) -> Operand {
     if is_test {
         Operand::Const(Const::Nil)

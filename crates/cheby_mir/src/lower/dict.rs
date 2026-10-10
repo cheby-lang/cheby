@@ -23,7 +23,7 @@
 //!   builtin type, `cb$desc$<module path>$$<Type>` for a user type. Any
 //!   other type is a `Desc { args }` (layout 11): the nominal descriptor,
 //!   then the descriptors of its arguments (a tuple's elements; a function
-//!   type's parameters, then its result). GAP(desc-canonical-form).
+//!   type's parameters, then its result; D-581).
 //! - A dictionary or descriptor that needs no dictionary of the enclosing
 //!   item is a static object of the unit ([`statics`]), named from paths
 //!   and printed types (D-523); any other is built with `Alloc` where it

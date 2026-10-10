@@ -276,7 +276,7 @@ fn failure_block(module: &str, name: &str, text: &str) -> String {
 /// include its module's `@!target`, narrowed by the package's `targets`
 /// for a local test (D-190), contain `native`. A test that exists only on
 /// `js` is not part of a native build (§12.6), so it is neither run nor
-/// counted as filtered out (GAP(test-targets)).
+/// counted as filtered out (D-597).
 fn on_native(front: &Frontend, test: &thir::TestDef) -> bool {
     let native = cheby_package::Target::Native;
     let local = front
@@ -300,7 +300,7 @@ fn on_native(front: &Frontend, test: &thir::TestDef) -> bool {
 /// # Errors
 ///
 /// A tool error if `--module` is not a module path or names no module of
-/// the package (GAP(test-module-errors)), and an [`Error`] for internal
+/// the package (D-597), and an [`Error`] for internal
 /// failures.
 pub fn prepare_test(root: &Path, options: &TestOptions) -> Result<PreparedTests, Error> {
     let mut out = CheckOutput::default();
@@ -309,8 +309,8 @@ pub fn prepare_test(root: &Path, options: &TestOptions) -> Result<PreparedTests,
     let Some((front, package)) = front.filter(|_| !out.has_errors()) else {
         return Ok(PreparedTests::CompileFailed(out));
     };
-    // GAP(test-module-errors): `--module` is checked like `cheby run`'s
-    // module path (D-464).
+    // `--module` is checked like `cheby run`'s module path (D-464,
+    // D-597).
     let scope = match &options.module {
         Some(text) => {
             let path = parse_module_path(text)
@@ -470,9 +470,9 @@ fn matches_filter(module: &str, name: &str, filter: Option<&str>) -> bool {
 fn run_one(jit: &Jit, def: DefId) -> Result<TestOutcome, Error> {
     let domain = jit.domain();
     let before = domain.live_objects();
-    // GAP(test-stack-size): a test runs on a stack as large as the root
-    // fiber that runs `main` (D-125), so a test behaves like the same code
-    // run from `main`.
+    // A test runs on a stack as large as the root fiber that runs `main`
+    // (D-125, D-596), so a test behaves like the same code run from
+    // `main`.
     let config = EntryConfig {
         stack_size: DEFAULT_ROOT_STACK_SIZE,
         ..EntryConfig::new(EntryMode::Test)
@@ -480,7 +480,7 @@ fn run_one(jit: &Jit, def: DefId) -> Result<TestOutcome, Error> {
     let outcome = jit.entry(EntryKind::Test(def))?.run(&config)?;
     // A test thunk returns the static `Nil` when the test passed, and the
     // text of the `Err` it returned as an owned `String` otherwise
-    // (GAP(test-err-thunk), D-529).
+    // (D-529, D-595).
     Ok(match outcome {
         EntryOutcome::Panicked(report) => TestOutcome::Failed(report.to_string()),
         EntryOutcome::Returned(word) if word == cheby_runtime::values::nil() => {

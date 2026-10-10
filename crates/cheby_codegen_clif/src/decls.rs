@@ -780,7 +780,7 @@ impl Decls {
         Ok(id)
     }
 
-    /// The symbol of a static object (D-523): `cb$<kind>$<module>$<name>`,
+    /// The symbol of a static object (D-523, D-579): `cb$<kind>$<module>$$<name>`,
     /// with the module MIR chose (the unit's, or the type's or interface's
     /// for a descriptor).
     pub(crate) fn static_symbol(object: &StaticObject) -> String {
@@ -794,7 +794,8 @@ impl Decls {
 
     /// Declares the unit's static objects (D-523), with their own strings:
     /// each is defined once per JIT, so a symbol an earlier unit or batch
-    /// defined is reused.
+    /// defined is reused when its contents are the same, and is an
+    /// internal error otherwise (D-579).
     fn declare_statics<M: Module>(
         &mut self,
         module: &mut M,

@@ -77,7 +77,7 @@ pub(super) enum Candidate {
 /// Finds the [`Candidate`] for `hash` below `top`. Equality of whole maps
 /// and sets uses it to put each key pair on the caller's worklist instead
 /// of comparing keys in a nested walk (plan §0, deep data;
-/// GAP(nested-collection-walks)).
+/// D-586).
 pub(super) fn candidate(top: Bitmap, coll: Collection, hash: u64) -> Candidate {
     let stride = coll.stride();
     let mut node = top.0;
@@ -435,7 +435,7 @@ fn merge(
 /// owned. Keeps the stored key on a replacement, so of two `==` keys that
 /// print differently (`0.0` and `-0.0`) the first one stays, and
 /// `from_list` keeps the first key with the last value
-/// (GAP(map-insert-keeps-key)); a set returns itself when the key is
+/// (D-588); a set returns itself when the key is
 /// present.
 pub(super) fn insert(root: Root, coll: Collection, key: Word, value: Option<Word>) -> Root {
     dup_word(key);

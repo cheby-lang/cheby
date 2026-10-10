@@ -693,7 +693,7 @@ unsafe fn external_size(_: Word) -> u64 {
 unsafe fn external_children(_: Word, _: &mut dyn FnMut(Word)) {}
 
 /// The kind of every value of an external type (§12.5.3): the header, then
-/// the foreign handle as a raw word at offset 8 (GAP(external-handle-layout)). Each external type has
+/// the foreign handle as a raw word at offset 8 (D-590). Each external type has
 /// its own layout of this kind ([`register_external`]), whose
 /// [`LayoutInfo::type_name`] is the type's name, so a value debug-prints
 /// as `<Db>`, and `==` and hashing stop on it like on a function value

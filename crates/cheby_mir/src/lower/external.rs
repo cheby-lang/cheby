@@ -92,7 +92,7 @@ pub(super) fn lower_wrapper(
 /// So the body is the effect check, which makes constant evaluation report
 /// E0077 naming the function (D-533, D-537), then a panic that says the
 /// function exists only on `js`, which nothing reaches in a checked
-/// program (GAP(js-only-externals-on-native)).
+/// program (D-591).
 pub(super) fn lower_js_only(
     f: &thir::FnDef,
     sig: &FnSig,

@@ -571,7 +571,7 @@ fn result_main_prints_errors_by_show() {
 
 /// A test that passes returns the static `Nil`; one returning `Result`
 /// returns the text of an `Err`, made like `main`'s (by debug text
-/// without `Show`), and prints nothing (D-541, GAP(test-err-thunk)).
+/// without `Show`), and prints nothing (D-541, D-595).
 #[test]
 fn test_entries_by_result() {
     let l = entries();

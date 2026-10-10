@@ -14,16 +14,15 @@
 //!
 //! Code generation joins the module path with `$` and ends it with `$$`,
 //! and keeps the name as it is, paths included, so the boundary between
-//! the two is never ambiguous (GAP(static-symbol-boundary)).
+//! the two is never ambiguous (D-579).
 //!
 //! `<type>` is the type printed with full module paths ([`type_text`]):
-//! `List<app::shapes::Circle>`, `(Int, String)`, `fn(Int) -> Bool`.
-//! GAP(static-dict-names).
+//! `List<app::shapes::Circle>`, `(Int, String)`, `fn(Int) -> Bool`
+//! (D-580).
 //!
 //! A closure in a static dictionary is a static too, of kind `fnval`, whose
 //! captures are static objects: the dictionaries its function needs
-//! (D-064) or a tuple's element dictionaries (D-167).
-//! GAP(static-closures).
+//! (D-064) or a tuple's element dictionaries (D-167, D-580).
 
 use cheby_iface::{DefId, Ice, IndexVec, ModuleId, Ty, TyKind, builtin};
 use cheby_types::thir::{Dict, DictFn};

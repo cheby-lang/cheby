@@ -81,7 +81,7 @@ impl Printer {
     /// Emits the items separated by `, `, sorted by each item's whole debug
     /// text (D-344, D-382), compared as UTF-8 bytes, which is code point
     /// order; a `Map` entry's text is that of the tuple `(key, value)`
-    /// (GAP(hashed-debug-order)). Items with the same text keep their
+    /// (D-587). Items with the same text keep their
     /// order, which cannot show, since their text is the same.
     pub fn sorted(&mut self, items: impl IntoIterator<Item = SortItem>) {
         self.pending.push(Piece::SortedStart);
@@ -210,7 +210,7 @@ enum Seg {
 }
 
 /// The text of the items of sorted groups, kept so that each character is
-/// written once (GAP(nested-collection-walks)).
+/// written once (D-586).
 ///
 /// An item's text is a list of segments: ranges of one shared arena and
 /// the sorted groups nested in it, by reference. A finished group is never

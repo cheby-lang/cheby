@@ -80,7 +80,7 @@ enum Saved {
 /// explicit stack: each entry in a fresh state whose hash goes into the
 /// group's sum, so values that nest maps and sets inside each other,
 /// through keys or values, never deepen the Rust stack (plan §0, deep
-/// data; GAP(nested-collection-walks)).
+/// data; D-586).
 #[derive(Debug)]
 pub struct Hasher {
     sip: SipHasher13,
@@ -346,8 +346,7 @@ unsafe fn step(word: Word, h: &mut Hasher) -> Result<(), Reached> {
             h.write_u64(info.type_key);
             if let Some(hooks) = info.hooks() {
                 // A type with hooks hashes its key and the `K` its `hash`
-                // hook returns, never its tag (D-482,
-                // GAP(std-hooks-dispatch)), so values its `equal` hook
+                // hook returns, never its tag (D-482, D-584), so values its `equal` hook
                 // equates, whatever their constructors, hash equally.
                 // SAFETY: a live value of a type with these hooks.
                 let key = unsafe { hooks::hash_key(hooks, word) };

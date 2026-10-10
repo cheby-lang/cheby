@@ -157,21 +157,21 @@ impl MirModule {
 }
 
 /// A static object that code generation emits (D-523): count 0, never
-/// written, defined once per process (a later unit that names the same
-/// symbol imports it). Its symbol is `cb$<kind>$<module path>$<name>`
-/// (plan §4.4), where the module path is the unit's.
+/// written, defined once per JIT (a later unit that names the same
+/// symbol reuses it, D-561). Its symbol is `cb$<kind>$<module>$$<name>`
+/// (plan §4.4, D-579), with the module path of [`StaticObject::module`].
 #[derive(Clone, PartialEq, Debug)]
 pub struct StaticObject {
     /// Its position in [`MirModule::statics`].
     pub id: StaticId,
     pub kind: StaticKind,
     /// The module path of its symbol, `cb$<kind>$<module>$$<name>`
-    /// (D-523, GAP(static-symbol-boundary)): the unit's own for a
+    /// (D-523, D-579): the unit's own for a
     /// dictionary or a function value, the type's for a nominal descriptor
     /// (`cb$desc$<module path>$$<Type>`), and the interface's for the type
     /// `dyn I` (`cb$desc$<module path of I>$$dyn$<I>`). A unit may define a
-    /// static of another module; the JIT defines each symbol once per
-    /// process.
+    /// static of another module; the JIT defines each symbol once
+    /// (D-561).
     pub module: Box<str>,
     /// Unique with `module` and `kind` within the unit, and stable: built
     /// from paths and names, never from ids (D-264, D-523).

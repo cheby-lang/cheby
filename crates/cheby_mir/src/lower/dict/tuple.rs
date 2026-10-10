@@ -61,7 +61,7 @@ pub(in crate::lower) fn tuple_fn(
         )));
     }
     // `Show::show` is builtin and has no source; its tuple code reports
-    // a stack overflow at `<builtin>`. GAP(builtin-code-location).
+    // a stack overflow at `<builtin>` (D-583).
     let (span, location) = match item.span {
         Some(span) => (span, cx.location(span)?),
         None => (

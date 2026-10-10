@@ -918,7 +918,7 @@ fn hashing_deeply_nested_collections_uses_no_stack() {
     // A map's entries are hashed as an unordered group on the caller's
     // stack, and a key's equality puts the key pair on the caller's
     // worklist, so neither values nor keys that hold collections nest Rust
-    // frames (GAP(nested-collection-walks)).
+    // frames (D-586).
     let handle = std::thread::Builder::new()
         .stack_size(256 * 1024)
         .spawn(|| {

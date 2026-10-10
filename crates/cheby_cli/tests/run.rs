@@ -363,7 +363,7 @@ fn later_unreported_stdout_failures_exit_with_one() {
 /// A `case` with ten list patterns of about 2,000 elements each, longest
 /// first, compiles and runs: the decision tree recurses per tested
 /// element, and the compiler runs on a thread whose stack is large enough
-/// for it (GAP(compiler-stack-size)). The source is generated, one line
+/// for it (D-601). The source is generated, one line
 /// per element as the formatter writes long lists.
 #[test]
 fn long_list_patterns_do_not_overflow_the_compiler() {

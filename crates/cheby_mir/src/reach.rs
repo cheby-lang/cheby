@@ -269,7 +269,7 @@ impl Reach {
     /// The modules whose functions, constants or constructors the
     /// initializer of `root` reaches, transitively and through the
     /// initializers of the constants it reads, `root`'s own module
-    /// included: what its value depends on (D-538, GAP(const-seed-modules):
+    /// included: what its value depends on (D-538, D-593:
     /// constructors' modules and the initializers of read constants count).
     /// Sorted by module id; the hash seed sorts them by module path.
     #[must_use]
@@ -585,7 +585,7 @@ impl Walk<'_, '_> {
 
     /// `module` gets a code unit, which registers the layouts of every type
     /// it declares, so those types' hooks are reachable
-    /// (GAP(std-hooks-reach)).
+    /// (D-585).
     fn module(&mut self, module: ModuleId) {
         if !self.reach.modules.insert(module) {
             return;

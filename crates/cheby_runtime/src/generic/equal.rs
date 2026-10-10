@@ -105,7 +105,7 @@ unsafe fn step(a: Word, b: Word, later: &mut Vec<Task>, cx: &mut Cx) -> Result<b
                 return Ok(false);
             }
             // A type with hooks compares through its `equal` hook alone,
-            // whatever the two constructors (GAP(std-hooks-dispatch)).
+            // whatever the two constructors (D-584).
             if let Some(hooks) = x.hooks().or_else(|| y.hooks()) {
                 // SAFETY: two live values of one type with these hooks.
                 return Ok(unsafe { hooks::equal(hooks, a, b) });
