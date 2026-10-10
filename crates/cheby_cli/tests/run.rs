@@ -128,17 +128,17 @@ fn compile_errors_exit_with_one() {
             MANIFEST,
             (
                 "src/main.cheby",
-                "//! Unsupported.\n\nimport std::io\n\nfn main() {\n  io::println(\"never\")\n  let shown: dyn Show = \"text\"\n  io::println(Show::show(shown))\n}\n",
+                "//! Unsupported.\n\nimport std::fiber\nimport std::io\n\nfn main() {\n  io::println(\"never\")\n}\n",
             ),
         ],
     );
     let out = cheby(&dir, &["run"]);
     assert_eq!(out.stdout, "");
-    // A conversion to `dyn` stays E0038 until W4-A; switch to another
-    // unsupported construct then (D-554).
+    // MIR lowering reports no E0038 since `dyn` lowers (D-554); an import
+    // of an unshipped std module stays E0038 (D-480).
     assert!(
         out.stderr
-            .starts_with("error[E0038]: conversions to `dyn` are not supported yet"),
+            .starts_with("error[E0038]: the module `std::fiber` is not supported yet"),
         "{}",
         out.stderr
     );
@@ -156,17 +156,22 @@ fn unsupported_constructs_reached_from_main_exit_with_one() {
             MANIFEST,
             (
                 "src/main.cheby",
-                "//! Back-end gate.\n\nimport std::io\n\nfn main() {\n  io::println(\"never\")\n  let _ = pick(\"a\")\n}\n\nfn pick(text: String) -> String {\n  let shown: dyn Show = text\n  Show::show(shown)\n}\n",
+                "//! Back-end gate.\n\nimport app::pick\nimport std::io\n\nfn main() {\n  io::println(\"never\")\n  let _ = pick::pick(\"a\")\n}\n",
+            ),
+            (
+                "src/pick.cheby",
+                "//! Reaches an unshipped module.\n\nimport std::fiber\n\npub fn pick(text: String) -> String {\n  text\n}\n",
             ),
         ],
     );
     let out = cheby(&dir, &["run"]);
     assert_eq!(out.stdout, "");
-    // A conversion to `dyn` stays E0038 until W4-A; switch to another
-    // unsupported construct then (D-554).
+    // MIR lowering reports no E0038 since `dyn` lowers (D-554); an import
+    // of an unshipped std module in a module `main` reaches stays E0038
+    // (D-480).
     assert!(
         out.stderr.starts_with(
-            "error[E0038]: conversions to `dyn` are not supported yet\n  --> src/main.cheby:11:"
+            "error[E0038]: the module `std::fiber` is not supported yet\n --> src/pick.cheby:3:8\n"
         ),
         "{}",
         out.stderr
@@ -388,5 +393,31 @@ fn long_list_patterns_do_not_overflow_the_compiler() {
     let out = cheby(&dir, &["run"]);
     assert_eq!(out.stderr, "");
     assert_eq!(out.stdout, "3\n");
+    assert_eq!(out.status, Some(0));
+}
+
+/// An entry that the end of piped input leaves open is checked, so its
+/// syntax error is reported instead of the entry vanishing (D-546).
+#[test]
+fn an_unfinished_repl_entry_is_reported_at_the_end_of_input() {
+    let dir = Path::new(TMP).join(format!("repl-unfinished-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut cmd = Command::new(CHEBY);
+    cmd.args(["--color=never", "repl"])
+        .current_dir(&dir)
+        .env("NO_COLOR", "1");
+    let out = process::run(cmd, Some(b"1 + 1\nfn f() -> Int {\n"), TIMEOUT).unwrap();
+    std::fs::remove_dir_all(&dir).ok();
+    assert_eq!(
+        out.stdout, "> 1 + 1\n2 : Int\n> fn f() -> Int {\n. \n",
+        "{}",
+        out.stderr
+    );
+    assert!(
+        out.stderr
+            .starts_with("error[E0015]: unclosed `{`\n --> <repl:2>:1:16\n"),
+        "{}",
+        out.stderr
+    );
     assert_eq!(out.status, Some(0));
 }

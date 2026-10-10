@@ -8,6 +8,13 @@
 //! since a package test cannot be `parse-fail`. Both parsers are held to
 //! that intent, so the check fails whenever they disagree on a file.
 //!
+//! REPL transcripts (`tests/repl/**/*.repl`, plan §8.3, D-546): each input
+//! entry (a `> ` line and its `. ` continuation lines; the expression of
+//! `:type`; other commands are skipped) is parsed as items, as a module
+//! would hold them, and as statements, inside a function body, which
+//! covers expressions. The two parsers must agree on whether some form
+//! parses. The `.cheby` files of REPL package directories must parse.
+//!
 //! The compiler rejects a file if it is not UTF-8 or if `parse` reports a
 //! grammar error. Validation errors (class V) are not consulted: they are
 //! rules that tree-sitter does not enforce, tested by `check-fail` UI
@@ -55,6 +62,16 @@ pub struct Args {
 enum Intent {
     Parse,
     Reject,
+    /// One form of a REPL entry: judged with the entry's other form.
+    ReplForm,
+}
+
+/// One input entry of a REPL transcript, written out in both forms.
+struct ReplEntry {
+    /// `tests/repl/<name>.repl:<line>`.
+    shown: String,
+    /// The entry as items, and as statements in a function body.
+    forms: [PathBuf; 2],
 }
 
 pub fn run(root: &Path, args: &Args) -> Result<(), String> {
@@ -64,19 +81,13 @@ pub fn run(root: &Path, args: &Args) -> Result<(), String> {
         .to_owned();
 
     let mut files = collect(root)?;
-    for dir in &args.also {
-        let extra = cheby_test_support::files_with_extension(dir, "cheby")
-            .map_err(|e| format!("{}: {e}", dir.display()))?;
-        if extra.is_empty() {
-            return Err(format!("{} holds no .cheby files", dir.display()));
-        }
-        for path in extra {
-            files.insert(
-                std::path::absolute(&path).map_err(|e| e.to_string())?,
-                Intent::Parse,
-            );
+    let entries = repl_entries(root)?;
+    for entry in &entries {
+        for form in &entry.forms {
+            files.insert(form.clone(), Intent::ReplForm);
         }
     }
+    add_also(&args.also, &mut files)?;
 
     let tree_sitter = if args.compiler_only {
         None
@@ -93,6 +104,9 @@ pub fn run(root: &Path, args: &Args) -> Result<(), String> {
     let mut ts_ok: usize = 0;
     let mut compiler_ok: usize = 0;
     for (path, intent) in &files {
+        if *intent == Intent::ReplForm {
+            continue;
+        }
         let shown = display_relative(path, root);
         if let Some(verdicts) = &tree_sitter {
             let parsed = *verdicts
@@ -108,6 +122,7 @@ pub fn run(root: &Path, args: &Args) -> Result<(), String> {
                 (Intent::Reject, true) => mismatches.push(format!(
                     "{shown}: is `parse-fail`, but tree-sitter accepts it"
                 )),
+                (Intent::ReplForm, _) => {}
             }
         }
         match (intent, compiler_verdict(path)?) {
@@ -120,8 +135,10 @@ pub fn run(root: &Path, args: &Args) -> Result<(), String> {
             (Intent::Reject, None) => mismatches.push(format!(
                 "{shown}: is `parse-fail`, but the compiler parser accepts it"
             )),
+            (Intent::ReplForm, _) => {}
         }
     }
+    let repl_ok = judge_repl(&entries, tree_sitter.as_ref(), &mut mismatches)?;
 
     let short_rev = rev.get(..7).unwrap_or(&rev);
     let ts_part = if tree_sitter.is_some() {
@@ -130,9 +147,13 @@ pub fn run(root: &Path, args: &Args) -> Result<(), String> {
         "tree-sitter-cheby: skipped (--compiler-only)".to_owned()
     };
     let line = format!(
-        "parser cross-check: {} files; {ts_part}; compiler parser: {compiler_ok} as expected; \
-         {} mismatches",
-        files.len(),
+        "parser cross-check: {} files and {} REPL inputs; {ts_part}; compiler parser: \
+         {compiler_ok} as expected; REPL inputs: {repl_ok} as expected; {} mismatches",
+        files
+            .values()
+            .filter(|&&intent| intent != Intent::ReplForm)
+            .count(),
+        entries.len(),
         mismatches.len()
     );
     println!("{line}");
@@ -184,6 +205,14 @@ fn collect(root: &Path) -> Result<BTreeMap<PathBuf, Intent>, String> {
             files.insert(source, Intent::Parse);
         }
     }
+    let repl = root.join("tests/repl");
+    if repl.exists() {
+        for source in cheby_test_support::files_with_extension(&repl, "cheby")
+            .map_err(|e| format!("{}: {e}", repl.display()))?
+        {
+            files.insert(source, Intent::Parse);
+        }
+    }
     for test in ui::all(root)? {
         // `ui::all` refuses a `parse-fail` package test, so only a
         // single-file test can be meant as a syntax error.
@@ -197,6 +226,135 @@ fn collect(root: &Path) -> Result<BTreeMap<PathBuf, Intent>, String> {
         }
     }
     Ok(files)
+}
+
+/// Adds every `.cheby` file under the `--also` directories, which must
+/// parse.
+fn add_also(dirs: &[PathBuf], files: &mut BTreeMap<PathBuf, Intent>) -> Result<(), String> {
+    for dir in dirs {
+        let extra = cheby_test_support::files_with_extension(dir, "cheby")
+            .map_err(|e| format!("{}: {e}", dir.display()))?;
+        if extra.is_empty() {
+            return Err(format!("{} holds no .cheby files", dir.display()));
+        }
+        for path in extra {
+            files.insert(
+                std::path::absolute(&path).map_err(|e| e.to_string())?,
+                Intent::Parse,
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Compares the parsers on each REPL entry and returns how many agree. An
+/// input both parsers reject is a syntax error on purpose, whose
+/// diagnostic the transcript shows; only a disagreement is a mismatch.
+fn judge_repl(
+    entries: &[ReplEntry],
+    tree_sitter: Option<&BTreeMap<PathBuf, bool>>,
+    mismatches: &mut Vec<String>,
+) -> Result<usize, String> {
+    let mut agree: usize = 0;
+    for entry in entries {
+        let mut compiler = false;
+        let mut ts = false;
+        for form in &entry.forms {
+            compiler |= compiler_verdict(form)?.is_none();
+            if let Some(verdicts) = tree_sitter {
+                ts |= verdicts.get(form).copied().ok_or_else(|| {
+                    format!("tree-sitter reported nothing for {}", form.display())
+                })?;
+            }
+        }
+        if tree_sitter.is_none() || compiler == ts {
+            agree = agree.saturating_add(1);
+        } else if compiler {
+            mismatches.push(format!(
+                "{}: the compiler parser accepts the input, but tree-sitter rejects it",
+                entry.shown
+            ));
+        } else {
+            mismatches.push(format!(
+                "{}: tree-sitter accepts the input, but the compiler parser rejects it",
+                entry.shown
+            ));
+        }
+    }
+    Ok(agree)
+}
+
+/// The input entries of every REPL transcript under `tests/repl`, each
+/// written to `target/cross-check-repl` as items and as statements, and
+/// the `.cheby` files of REPL package directories added to `files`.
+fn repl_entries(root: &Path) -> Result<Vec<ReplEntry>, String> {
+    let dir = root.join("tests/repl");
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+    let out = root.join("target/cross-check-repl");
+    if out.exists() {
+        std::fs::remove_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
+    }
+    let transcripts = cheby_test_support::files_with_extension(&dir, "repl")
+        .map_err(|e| format!("{}: {e}", dir.display()))?;
+    let mut entries = Vec::new();
+    for (n, transcript) in transcripts.iter().enumerate() {
+        let text = std::fs::read_to_string(transcript)
+            .map_err(|e| format!("{}: {e}", transcript.display()))?;
+        let shown = display_relative(transcript, root);
+        for (k, (line, input)) in transcript_inputs(&text).into_iter().enumerate() {
+            let base = out.join(format!("{n}-{k}"));
+            let forms = [
+                base.with_extension("item.cheby"),
+                base.with_extension("stmt.cheby"),
+            ];
+            let [item, stmt] = &forms;
+            std::fs::create_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
+            std::fs::write(item, format!("{input}\n"))
+                .map_err(|e| format!("{}: {e}", item.display()))?;
+            std::fs::write(stmt, format!("fn repl_entry() {{\n{input}\n}}\n"))
+                .map_err(|e| format!("{}: {e}", stmt.display()))?;
+            entries.push(ReplEntry {
+                shown: format!("{shown}:{line}"),
+                forms,
+            });
+        }
+    }
+    Ok(entries)
+}
+
+/// The Cheby inputs of a transcript with the line each starts on: a `> `
+/// line and the `. ` lines after it. Of the REPL commands only `:type`
+/// holds Cheby, its expression.
+fn transcript_inputs(text: &str) -> Vec<(usize, String)> {
+    let mut inputs: Vec<(usize, String)> = Vec::new();
+    let mut current: Option<(usize, String)> = None;
+    for (n, line) in text.lines().enumerate() {
+        let first = line.strip_prefix("> ").or((line == ">").then_some(""));
+        let more = line.strip_prefix(". ").or((line == ".").then_some(""));
+        if let Some(rest) = first {
+            inputs.extend(current.take());
+            current = Some((n.saturating_add(1), rest.to_owned()));
+        } else if let (Some(rest), Some((_, entry))) = (more, current.as_mut()) {
+            entry.push('\n');
+            entry.push_str(rest);
+        } else {
+            inputs.extend(current.take());
+        }
+    }
+    inputs.extend(current);
+    inputs
+        .into_iter()
+        .filter_map(|(line, input)| {
+            let trimmed = input.trim_start();
+            if let Some(command) = trimmed.strip_prefix(':') {
+                let expr = command.strip_prefix("type")?.trim_start();
+                return (!expr.is_empty()).then(|| (line, expr.to_owned()));
+            }
+            (!trimmed.is_empty()).then_some((line, input))
+        })
+        .collect()
 }
 
 /// Clones the grammar at `rev` into `target/tree-sitter-cheby`, or reuses
@@ -333,4 +491,37 @@ fn parse(
             Ok((PathBuf::from(file), ok))
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::transcript_inputs;
+
+    #[test]
+    fn transcript_inputs_are_entries_with_continuations() {
+        let text = "> let x = 1\n\
+                    > fn double(n: Int) -> Int {\n\
+                    .   n * 2\n\
+                    . }\n\
+                    > double(x)\n\
+                    2 : Int\n\
+                    > :type double\n\
+                    double : fn(Int) -> Int\n\
+                    > :help\n\
+                    commands: ...\n\
+                    >\n\
+                    > io::read_line()\n\
+                    a line read by the entry\n";
+        let inputs = transcript_inputs(text);
+        assert_eq!(
+            inputs,
+            [
+                (1, "let x = 1".to_owned()),
+                (2, "fn double(n: Int) -> Int {\n  n * 2\n}".to_owned()),
+                (5, "double(x)".to_owned()),
+                (7, "double".to_owned()),
+                (12, "io::read_line()".to_owned()),
+            ]
+        );
+    }
 }

@@ -1,0 +1,24 @@
+error[E0036]: `10` is not a valid `time-limit`
+ --> tests/ui/13-tooling/manifest/const_eval_errors/cheby.toml:5:14
+  |
+5 | time-limit = "10"
+  |              ^^^^
+  |
+  = help: write an integer followed by `ms` or `s`, such as `"10s"`
+
+error[E0036]: `2 GiB` is not a valid `memory-limit`
+ --> tests/ui/13-tooling/manifest/const_eval_errors/cheby.toml:6:16
+  |
+6 | memory-limit = "2 GiB"
+  |                ^^^^^^^
+  |
+  = help: write an integer followed by `KiB`, `MiB` or `GiB`, such as `"1GiB"`
+
+error[E0036]: unknown key `stack-limit` in `[const-eval]`
+ --> tests/ui/13-tooling/manifest/const_eval_errors/cheby.toml:7:1
+  |
+7 | stack-limit = "8MiB"
+  | ^^^^^^^^^^^ unknown key
+  |
+  = help: the keys are `time-limit` and `memory-limit`
+

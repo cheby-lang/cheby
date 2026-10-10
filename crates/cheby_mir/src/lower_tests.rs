@@ -113,20 +113,13 @@ impl BodyB {
         )
     }
 
-    /// A construct the back end does not lower yet: a conversion to `dyn`
-    /// (W4-A), of a string literal at the same position, which is never
-    /// lowered. It reaches nothing (D-510).
+    /// A construct the back end does not lower: every THIR construct
+    /// lowers now (W4-A lowered the last, conversions to `dyn`), so the
+    /// test-only literal [`crate::lower::TEST_UNSUPPORTED`] stands for
+    /// one. It reaches nothing (D-510).
     fn unsupported(&mut self, at: u32) -> ExprId {
-        let value = self.expr(ExprKind::Lit(Lit::Str("u".into())), Ty::STRING, at);
         self.expr(
-            ExprKind::DynCoerce {
-                value,
-                iface: builtin::SHOW,
-                dict: Dict::Dyn {
-                    iface: builtin::SHOW,
-                    ty: Ty::STRING,
-                },
-            },
+            ExprKind::Lit(Lit::Str(crate::lower::TEST_UNSUPPORTED.into())),
             Ty::STRING,
             at,
         )
@@ -435,7 +428,7 @@ fn reachable_unsupported_construct_is_reported_at_it() {
     assert_eq!(
         f.unsupported(&wanted),
         [(
-            "conversions to `dyn` are not supported yet".to_owned(),
+            "test-only constructs are not supported yet".to_owned(),
             sp(file, 110)
         )]
     );
@@ -464,11 +457,11 @@ fn every_outermost_construct_is_reported_once() {
         f.unsupported(&[MANY]),
         [
             (
-                "conversions to `dyn` are not supported yet".to_owned(),
+                "test-only constructs are not supported yet".to_owned(),
                 sp(file, 163)
             ),
             (
-                "conversions to `dyn` are not supported yet".to_owned(),
+                "test-only constructs are not supported yet".to_owned(),
                 sp(file, 165)
             ),
         ]
@@ -504,8 +497,8 @@ fn diagnostics_of_several_items_are_collected() {
     assert_eq!(
         messages,
         [
-            "conversions to `dyn` are not supported yet",
-            "conversions to `dyn` are not supported yet",
+            "test-only constructs are not supported yet",
+            "test-only constructs are not supported yet",
         ]
     );
 }
@@ -578,11 +571,12 @@ fn reachability_follows_dictionaries_constants_and_operators() {
     );
 }
 
-/// A `Result` main whose error's `show` needs the dictionary of a `dyn`
-/// value waits for W4-A (E0038 at `main`); one printed by debug text has
-/// its thunk. (Closed dictionaries are static: `dict::tests`.)
+/// A `Result` main whose error is a `dyn Show` shows it through the
+/// static forwarding dictionary of `Show` for `dyn Show`, so the entries
+/// unit defines the forwarder; one printed by debug text has its thunk.
+/// (Closed dictionaries are static: `dict::tests`.)
 #[test]
-fn result_mains_with_dyn_dictionaries_are_unsupported() {
+fn result_mains_show_dyn_errors_through_forwarding_dictionaries() {
     let f = fixture();
     let deps_list = [MODULE];
     let mut set = InterfaceSet::new(builtin::interface(&f.globals));
@@ -597,40 +591,38 @@ fn result_mains_with_dyn_dictionaries_are_unsupported() {
         },
         sources: &f.sources,
     };
+    let dyn_show = f.globals.types.intern(cheby_iface::TyKind::Dyn {
+        iface: builtin::SHOW,
+        args: Box::new([]),
+    });
     let info = EntryInfo::Result {
-        err_ty: Ty::STRING,
-        show: Some(Dict::Impl {
+        err_ty: dyn_show,
+        show: Some(Dict::Dyn {
             iface: builtin::SHOW,
-            ty: Ty::STRING,
-            fns: Box::new([DictFn {
-                def: def(SHOWN),
-                ty_args: Box::new([]),
-                dicts: Box::new([Dict::Dyn {
-                    iface: builtin::SHOW,
-                    ty: Ty::STRING,
-                }]),
-            }]),
+            ty: dyn_show,
         }),
     };
-    let result = lower_entries(
+    let unit = lower_entries(
         &[EntryRequest {
             kind: EntryKind::Main(def(MAIN)),
             info: Some(&info),
         }],
         &cx,
+    )
+    .unwrap();
+    let text = crate::dump(&unit).unwrap();
+    assert!(
+        text.contains("fn dyn_forward Show::show for dyn Show("),
+        "{text}"
     );
-    let Err(LowerError::Unsupported(diags)) = result else {
-        panic!("expected E0038, got {result:?}");
-    };
-    let got: Vec<(String, Span)> = diags.iter().map(summary).collect();
-    assert_eq!(
-        got,
-        [(
-            "errors whose `show` needs the dictionary of a `dyn` value are not supported yet"
-                .to_owned(),
-            sp(f.file(), MAIN)
-        )]
+    assert!(text.contains("desc $dyn$Show = desc_nominal("), "{text}");
+    assert!(
+        text.contains(
+            "fnval app$Show$dyn Show$0 = closure/0(code <dyn_forward Show::show for dyn Show>)"
+        ),
+        "{text}"
     );
+    crate::validate::validate(&unit, crate::validate::Stage::Lowered).unwrap();
     // Debug printing needs no dictionary; a `Nil` main has its thunk too.
     let debug = EntryInfo::Result {
         err_ty: Ty::STRING,

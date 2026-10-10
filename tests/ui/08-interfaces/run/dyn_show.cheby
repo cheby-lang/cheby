@@ -1,0 +1,41 @@
+// @mode: run-pass
+// @decisions: D-086, D-168, D-233, D-502, D-530
+//! `dyn Show` values of builtin and user types print through their own
+//! `show`, by interpolation and by `Show::show`; debug printing writes
+//! the value inside (§3.13). A `dyn Labeled` value, whose interface
+//! embeds `Show`, is shown directly and after converting to `dyn Show`.
+
+import std::io
+import std::list
+
+interface Labeled: Show {
+  fn label(Self) -> String
+}
+
+type Tag {
+  Tag { name: String, weight: Int }
+}
+
+fn show(t: Tag) -> String {
+  "#{t.name}"
+}
+
+fn label(t: Tag) -> String {
+  "tag {t.name} ({t.weight})"
+}
+
+fn values() -> List<dyn Show> {
+  [1, "two", 2.5, True, [1, 2], (3, "four"), Tag { name: "x", weight: 9 }]
+}
+
+fn main() {
+  list::each(values(), fn(v) {
+    let shown = Show::show(v)
+    io::println("{v} | {shown} | {v:?}")
+  })
+  let tag: dyn Labeled = Tag { name: "y", weight: 1 }
+  let text = Labeled::label(tag)
+  io::println("{tag}: {text}")
+  let plain: dyn Show = tag
+  io::println("as dyn Show: {plain} {plain:?}")
+}

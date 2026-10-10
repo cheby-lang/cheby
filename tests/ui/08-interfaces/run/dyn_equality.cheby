@@ -1,0 +1,67 @@
+// @mode: run-pass
+// @decisions: D-033, D-236, D-502, D-530, D-582
+//! Two `dyn` values are equal when their values have the same type and
+//! are equal, decided with type descriptors; hashing agrees, so `dyn`
+//! values work as set elements (§8.6.1). A `dyn` value converted to
+//! `dyn` of an empty interface keeps its descriptor, also through a
+//! bounded function whose type argument is a `dyn` type.
+
+import std::io
+import std::set
+
+interface Any
+
+type Meters {
+  Meters(Int)
+}
+
+type Feet {
+  Feet(Int)
+}
+
+fn boxed<T: Any>(x: T) -> dyn Any {
+  x
+}
+
+fn report(label: String, same: Bool) {
+  io::println("{label}: {same}")
+}
+
+fn main() {
+  let a: dyn Any = Meters(3)
+  let b: dyn Any = Meters(3)
+  let c: dyn Any = Meters(4)
+  let d: dyn Any = Feet(3)
+  report("Meters(3) == Meters(3)", a == b)
+  report("Meters(3) == Meters(4)", a == c)
+  report("Meters(3) == Feet(3)", a == d)
+  report("Meters(3) != Feet(3)", a != d)
+  let one: dyn Any = 1
+  let w: I64 = 1
+  let wide: dyn Any = w
+  report("1 == 1 as I64", one == wide)
+  let ints: dyn Any = list_of_ints()
+  let strings: dyn Any = list_of_strings()
+  report("[]: List<Int> == []: List<String>", ints == strings)
+  let more_ints: dyn Any = list_of_ints()
+  report("[]: List<Int> == []: List<Int>", ints == more_ints)
+  let shown: dyn Show = 7
+  let kept: dyn Any = shown
+  let direct: dyn Any = 7
+  report("7 via dyn Show == 7", kept == direct)
+  report("boxed(dyn Show 7) == 7", boxed(shown) == direct)
+  report("boxed(7) == 7", boxed(7) == direct)
+  let distinct = set::from_list([a, b, c, d, one, wide, kept, direct, boxed(shown)])
+  let size = set::size(distinct)
+  io::println("distinct values: {size}")
+  report("contains Feet(3)", set::contains(distinct, boxed(Feet(3))))
+  report("contains Feet(4)", set::contains(distinct, boxed(Feet(4))))
+}
+
+fn list_of_ints() -> List<Int> {
+  []
+}
+
+fn list_of_strings() -> List<String> {
+  []
+}

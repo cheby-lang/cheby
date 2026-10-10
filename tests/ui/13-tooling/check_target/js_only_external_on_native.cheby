@@ -1,0 +1,15 @@
+// @mode: check-fail
+// @flags: --target native
+// @decisions: D-030, D-056, D-550
+//! `cheby check --target native` reports E0067 for native only: the call
+//! of a function that exists only on JS.
+
+import std::io
+
+@external(js, "./clock.mjs", "now")
+fn js_now() -> Int
+
+fn main() {
+  let _ = js_now()
+  io::println("done")
+}

@@ -159,7 +159,10 @@ fn check_static(m: &MirModule, n: usize, s: &StaticObject, errors: &mut Vec<Stri
     if s.id.index() != n {
         errors.push(format!("{label}: has id {}", s.id.as_u32()));
     }
-    if s.name.is_empty() || s.module.is_empty() {
+    // The descriptor of `dyn Show` carries the builtin `Show`'s empty
+    // module path (GAP(dyn-desc-symbol)).
+    let builtin_dyn = s.kind == StaticKind::Desc && s.name.starts_with("dyn$");
+    if s.name.is_empty() || (s.module.is_empty() && !builtin_dyn) {
         errors.push(format!("{label}: needs a module path and a name"));
     }
     if m.statics
@@ -253,17 +256,20 @@ impl FnCx<'_> {
                 self.err("entry thunks belong in an entries unit");
             }
             // In an entries unit, the static dictionary of an error
-            // type's `show` brings value shims and tuple functions, which
-            // depend on nothing but their key (D-523).
+            // type's `show` brings value shims, tuple functions and `dyn`
+            // forwarders, which depend on nothing but their key (D-523).
             (FnKey::Entry(_) | FnKey::Trampoline(_), Abi::C)
-            | (FnKey::ValueShim(_) | FnKey::TupleDictFn { .. }, Abi::Cheby) => {}
+            | (
+                FnKey::ValueShim(_) | FnKey::TupleDictFn { .. } | FnKey::DynForward { .. },
+                Abi::Cheby,
+            ) => {}
             (FnKey::Entry(_) | FnKey::Trampoline(_), Abi::Cheby) => {
                 self.err("entry thunks and trampolines use the C ABI");
             }
             (_, Abi::C) => self.err("only entry thunks and trampolines use the C ABI"),
             (_, Abi::Cheby) if entries => {
                 self.err(
-                    "an entries unit holds only entry thunks, trampolines, value shims and tuple functions",
+                    "an entries unit holds only entry thunks, trampolines, value shims, tuple functions and `dyn` forwarders",
                 );
             }
             (_, Abi::Cheby) => {}

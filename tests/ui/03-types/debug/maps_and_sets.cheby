@@ -1,5 +1,5 @@
 // @mode: run-pass
-// @decisions: D-093, D-344, D-382, D-538
+// @decisions: D-093, D-344, D-382, D-538, D-587
 //! Maps and sets compare by contents, whatever their insertion order, and
 //! print as `map::from_list([…])` and `set::from_list([…])` with their
 //! entries sorted by each entry's whole debug text, so `10` comes before

@@ -36,6 +36,7 @@ pub(crate) fn define_pending<M: Module>(
     decls: &mut Decls,
     cx: &CodegenCx<'_>,
 ) -> Result<(), CodegenError> {
+    check_pending(decls)?;
     for (id, image) in std::mem::take(&mut decls.pending_strings) {
         let mut desc = DataDescription::new();
         desc.define(image.into_boxed_slice());
@@ -104,6 +105,37 @@ pub(crate) fn define_pending<M: Module>(
             .define_data(object.id, &desc)
             .map_err(|e| CodegenError::module(&e))?;
     }
+    Ok(())
+}
+
+/// Fails, before anything is defined, if a pending data object was defined
+/// already or is pending twice: a module keeps what a failed batch defined,
+/// and the next finalize would resolve its relocations against symbols that
+/// were never defined. Records the pending objects as defined.
+fn check_pending(decls: &mut Decls) -> Result<(), CodegenError> {
+    let ids = decls
+        .pending_strings
+        .iter()
+        .map(|&(id, _)| id)
+        .chain(decls.pending_slots.iter().map(|&(id, _)| id))
+        .chain(
+            decls
+                .pending_layouts
+                .iter()
+                .flat_map(|(_, decl, _)| std::iter::once(decl.word).chain(decl.ctor)),
+        )
+        .chain(decls.pending_consts.iter().copied())
+        .chain(decls.pending_statics.iter().map(|object| object.id));
+    let mut seen = rustc_hash::FxHashSet::default();
+    for id in ids {
+        if decls.defined_data.contains(&id) || !seen.insert(id) {
+            return Err(CodegenError::ice(format!(
+                "the data object `{}` is defined twice",
+                decls.data_name(id)
+            )));
+        }
+    }
+    decls.defined_data.extend(seen);
     Ok(())
 }
 

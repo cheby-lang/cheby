@@ -1,0 +1,24 @@
+// @mode: run-pass
+// @decisions: D-358, D-540
+//! A package that targets both `native` and `js` may use
+//! `int::max_value` from native-only code and declare its own
+//! `@target(native)` constant outside the JS safe range: neither exists on
+//! `js`, so neither is E0078, and `main`, native-only too, reads both
+//! (§4.5, §12.6).
+
+import std::int
+import std::io
+
+@target(native)
+const huge: Int = int::max_value - 1
+
+@target(native)
+fn widest() -> Int {
+  int::max_value
+}
+
+@target(native)
+fn main() {
+  let max = widest()
+  io::println("{huge} {max}")
+}

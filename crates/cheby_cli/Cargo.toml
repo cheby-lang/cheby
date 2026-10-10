@@ -37,5 +37,11 @@ name = "ui"
 path = "../../tests/ui_harness/main.rs"
 harness = false
 
+# REPL transcripts under tests/repl/ (plan §8.3, D-546).
+[[test]]
+name = "repl"
+path = "../../tests/repl_harness/main.rs"
+harness = false
+
 [lints]
 workspace = true

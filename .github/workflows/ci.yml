@@ -7,6 +7,11 @@
 #   commit pinned in tests/tree-sitter-cheby.rev (D-272).
 # - `std-tests`: checks and runs the standard library's own tests, one module
 #   at a time (D-479, D-542).
+# - `examples`: `cheby check` in every example directory, with the expected
+#   outcome of each (G6), and the determinism check: every example and the
+#   benchmark projects built with `--jobs 1` and the default from two paths,
+#   their interfaces, MIR, CLIF and constants compared byte for byte (D-264,
+#   D-551), on Linux and macOS.
 # - `bench`: generates benchmark projects and reports, never enforces, the
 #   results (D-247), and times the compiler on them (I1): checking, checking
 #   with code generation, and the edit-to-run latency, in the step summary.
@@ -96,6 +101,26 @@ jobs:
       - name: Run the standard library's tests
         run: cargo xtask test-std
 
+  examples:
+    name: examples (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-x86_64, os: ubuntu-24.04 }
+          - { name: macos-aarch64, os: macos-15 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.0"
+      - uses: Swatinem/rust-cache@v2
+      - name: cheby check in every example
+        run: cargo xtask check-examples
+      - name: Deterministic builds across thread counts and paths
+        run: cargo xtask check-determinism
+
   bench:
     runs-on: ubuntu-24.04
     steps:
@@ -121,8 +146,6 @@ jobs:
             --out target/bench/b/nested/wide
           diff -r target/bench/a/wide target/bench/b/nested/wide
           echo "- deterministic: yes" >> "$GITHUB_STEP_SUMMARY"
-      - name: Determinism of every shape
-        run: cargo xtask check-determinism
       - name: Generated code parses with tree-sitter-cheby
         run: |
           for shape in small large deep wide generic; do

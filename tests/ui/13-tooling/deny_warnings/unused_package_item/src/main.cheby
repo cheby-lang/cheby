@@ -1,0 +1,11 @@
+// @mode: check-fail
+// @flags: --deny-warnings
+// @decisions: D-080, D-266, D-549
+//! W0005, the whole-package warning of `cheby check`, is denied like any
+//! other warning: an error with its own code, and the note on the first.
+
+import app::geometry
+
+fn main() {
+  assert geometry::square_area(2.0) == 4.0
+}

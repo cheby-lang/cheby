@@ -1,0 +1,55 @@
+> 1 +
+error[E0013]: expected an expression, found the end of the entry
+ --> <repl:1>:1:4
+  |
+1 | 1 +
+  |    ^
+
+> 1 + 1
+2 : Int
+> undefined_name
+error[E0042]: cannot find value `undefined_name` in this scope
+ --> <repl:3>:1:1
+  |
+1 | undefined_name
+  | ^^^^^^^^^^^^^^ not found
+
+> let s: String = 1
+error[E0047]: mismatched types
+ --> <repl:4>:1:17
+  |
+1 | let s: String = 1
+  |        ------   ^ expected `String`, found `{integer}`
+  |        |
+  |        expected because of this annotation
+
+> s
+error[E0042]: cannot find value `s` in this scope
+ --> <repl:5>:1:1
+  |
+1 | s
+  | ^ not found
+
+> fn bad() -> Int {
+.   "not an int"
+. }
+error[E0047]: mismatched types
+ --> <repl:6>:2:3
+  |
+1 | fn bad() -> Int {
+  |             --- expected because of this return type
+2 |   "not an int"
+  |   ^^^^^^^^^^^^ expected `Int`, found `String`
+
+> bad()
+error[E0042]: cannot find value `bad` in this scope
+ --> <repl:7>:1:1
+  |
+1 | bad()
+  | ^^^ not found
+
+> fn bad() -> Int {
+.   1
+. }
+> bad()
+1 : Int

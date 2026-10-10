@@ -8,7 +8,10 @@
 //!   name resolution and type checking over the package and the std
 //!   modules it reaches (G1, G2). [`check_syntax`] stops after phase A.
 //!   Without front-end errors it then evaluates every constant of the
-//!   package (D-459, D-534).
+//!   package (D-459, D-534). [`check_with`] takes `--target` (D-550) and
+//!   `--deny-warnings` (D-549).
+//! - [`configure_jobs`] sizes the worker pool of the build graph and code
+//!   generation for `-j`/`--jobs` (D-551).
 //! - [`prepare_run`] and [`Program::run`] are `cheby run` (G3): the front
 //!   end, then MIR of the items reachable from the program's `main`, the
 //!   JIT, the constants `main` reaches, and `main` (D-137). Constructs the
@@ -22,20 +25,29 @@
 //! - [`bench_build`] times checking and code generation for
 //!   `cargo xtask bench-compile` (I1).
 //!
-//! The build graph's parallel scheduling (D-263) and the build cache
-//! (D-255) plug in later behind the same API. Output is deterministic
-//! (D-264): modules are processed in a fixed order and diagnostics are
-//! sorted by [`SourceMap::sort`].
+//! The build graph runs on rayon's global pool (D-263), which
+//! [`configure_jobs`] builds; the build cache (D-255) plugs in later
+//! behind the same API. Output is deterministic (D-264): results are
+//! merged in a fixed order whatever the number of threads, and
+//! diagnostics are sorted by [`SourceMap::sort`].
+//!
+//! With `--deny-warnings` (D-549) a [`CheckOutput`] counts its warnings
+//! as errors: [`CheckOutput::has_errors`] is true when there is one, so
+//! nothing after the front end runs, and [`CheckOutput::render_with`]
+//! renders each as `error[W…]`, the first with a note naming the flag.
 
 use std::fmt;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use cheby_diag::{Diagnostic, FileId, SourceMap, Span, TextRange, TextSize, codes, render_all};
+use cheby_diag::{
+    Colors, Diagnostic, FileId, Severity, SourceMap, Span, TextRange, TextSize, codes, render_with,
+};
 use cheby_iface::Ice;
 use cheby_jit::{Jit, JitError};
-use cheby_package::{MANIFEST_FILE, Manifest, ModulePath, PackageError};
+use cheby_package::{MANIFEST_FILE, Manifest, ModulePath, PackageError, Targets};
 use cheby_runtime::RunConfig;
 use cheby_syntax::SyntaxTree;
 
@@ -45,6 +57,7 @@ pub mod session;
 pub mod std_lib;
 mod test;
 
+pub use cheby_package::Target;
 pub use test::{
     ModuleTests, PreparedTests, TestCounts, TestOptions, TestOutcome, TestProgram, TestReport,
     TestResult, prepare_test, test_std,
@@ -136,22 +149,138 @@ pub struct ParsedFile {
 pub struct CheckOutput {
     pub sources: SourceMap,
     pub diagnostics: Vec<Diagnostic>,
+    /// `--deny-warnings` (D-549): every warning counts and is rendered as
+    /// an error.
+    pub deny_warnings: bool,
 }
+
+/// The note on the first warning that `--deny-warnings` turns into an
+/// error (D-549).
+pub const DENIED_NOTE: &str = "warnings are denied by `--deny-warnings`";
 
 impl CheckOutput {
     /// Whether any diagnostic is an error. Warnings alone do not fail a
-    /// check (D-080).
+    /// check (D-080), unless they are denied (D-549).
     #[must_use]
     pub fn has_errors(&self) -> bool {
-        self.diagnostics.iter().any(Diagnostic::is_error)
+        self.diagnostics
+            .iter()
+            .any(|d| d.is_error() || self.deny_warnings)
     }
 
     /// The diagnostics in the layout of D-418, each followed by an empty
     /// line, with no summary (D-443).
     #[must_use]
     pub fn render(&self) -> String {
-        render_all(&self.diagnostics, &self.sources)
+        self.render_with(Colors::Off)
     }
+
+    /// Like [`CheckOutput::render`], with color escapes if `colors` is
+    /// [`Colors::On`]. With `--deny-warnings` each warning is rendered as
+    /// an error with its own code, `error[W0002]: …`, and the first one
+    /// has the note [`DENIED_NOTE`] (D-549).
+    #[must_use]
+    pub fn render_with(&self, colors: Colors) -> String {
+        render_diagnostics(&self.diagnostics, &self.sources, colors, self.deny_warnings)
+    }
+}
+
+/// Renders `diagnostics` in the layout of D-418, each followed by an
+/// empty line. With `deny_warnings`, each warning is rendered as an error
+/// with its own code and the first one gets the note [`DENIED_NOTE`]
+/// (D-549). The REPL renders its entries' diagnostics with it too.
+#[must_use]
+pub fn render_diagnostics(
+    diagnostics: &[Diagnostic],
+    sources: &SourceMap,
+    colors: Colors,
+    deny_warnings: bool,
+) -> String {
+    let mut out = String::new();
+    let mut noted = false;
+    for diagnostic in diagnostics {
+        if deny_warnings && diagnostic.severity() == Severity::Warning {
+            let mut denied = diagnostic.clone();
+            if !noted {
+                denied.notes.push(DENIED_NOTE.to_owned());
+                noted = true;
+            }
+            out.push_str(&as_error(&render_with(&denied, sources, colors)));
+        } else {
+            out.push_str(&render_with(diagnostic, sources, colors));
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// A rendered warning as an error with the same code (D-549): its header
+/// `warning[W…]` becomes `error[W…]`, and with colors the warning's style
+/// becomes the error's (the header and the primary labels). Rendered text
+/// never holds an escape of its own (control characters are shown as
+/// pictures), so the style sequences are the renderer's.
+fn as_error(rendered: &str) -> String {
+    /// The renderer's SGR sequences for the two severities.
+    const WARNING_STYLE: &str = "\x1b[1;93m";
+    const ERROR_STYLE: &str = "\x1b[1;91m";
+    let (style, rest) = match rendered.strip_prefix(WARNING_STYLE) {
+        Some(rest) => (ERROR_STYLE, rest),
+        None => ("", rendered),
+    };
+    let body = rest.strip_prefix(Severity::Warning.as_str()).map_or_else(
+        || rest.to_owned(),
+        |after| format!("{}{after}", Severity::Error.as_str()),
+    );
+    format!("{style}{body}").replace(WARNING_STYLE, ERROR_STYLE)
+}
+
+/// What `cheby check` checks (D-282).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CheckOptions {
+    /// `--target`: check the code as it runs on this target only, so the
+    /// cross-target check reports E0067 only for it (D-550). `None` checks
+    /// every target of the manifest.
+    pub target: Option<Target>,
+    /// `--deny-warnings`: warnings are errors (D-549).
+    pub deny_warnings: bool,
+}
+
+/// The stack of each worker thread of the build: as large as the command
+/// thread's (D-601), since a worker runs the same recursive passes. Only
+/// address space is reserved up front.
+const WORKER_STACK_SIZE: usize = 256 << 20;
+
+/// Builds the worker pool that the build graph and code generation run on
+/// (rayon's global pool, D-263), with `jobs` threads, or the available
+/// parallelism when `None` (`-j`/`--jobs`, D-551). Called once per
+/// process, before any build; output never depends on the number of
+/// threads (D-264). A second call with the same number of threads is a
+/// no-op.
+///
+/// # Errors
+///
+/// A tool error when the pool cannot be built, or when it already exists
+/// with another number of threads.
+pub fn configure_jobs(jobs: Option<NonZeroUsize>) -> Result<(), Error> {
+    let threads = jobs.map_or_else(available_parallelism, NonZeroUsize::get);
+    let built = rayon::ThreadPoolBuilder::new()
+        .num_threads(threads)
+        .stack_size(WORKER_STACK_SIZE)
+        .thread_name(|index| format!("cheby-worker-{index}"))
+        .build_global();
+    match built {
+        Ok(()) => Ok(()),
+        Err(_) if rayon::current_num_threads() == threads => Ok(()),
+        Err(e) => Err(Error::new(format!(
+            "cannot start {threads} worker threads: {e} (the pool has {})",
+            rayon::current_num_threads()
+        ))),
+    }
+}
+
+/// The number of threads the system can run in parallel, 1 if unknown.
+fn available_parallelism() -> usize {
+    std::thread::available_parallelism().map_or(1, NonZeroUsize::get)
 }
 
 /// The package root for a command run in `start`: `start` itself or the
@@ -174,8 +303,23 @@ pub fn find_package_root(start: &Path) -> Option<PathBuf> {
 /// Returns an [`Error`] for failures that are not diagnostics, such as an
 /// unreadable file or an internal compiler error.
 pub fn check(root: &Path) -> Result<CheckOutput, Error> {
-    let mut out = CheckOutput::default();
-    let front = front_end(root, frontend::Mode::Check, &mut out)?;
+    check_with(root, &CheckOptions::default())
+}
+
+/// [`check`] with the options of `cheby check`: `--target` narrows the
+/// package's targets to one (D-550), and `--deny-warnings` makes warnings
+/// errors, so constants are not evaluated after one (D-549).
+///
+/// # Errors
+///
+/// As [`check`], and a tool error "the package does not target `js`"
+/// when the manifest's `targets` lack the selected target (D-550).
+pub fn check_with(root: &Path, options: &CheckOptions) -> Result<CheckOutput, Error> {
+    let mut out = CheckOutput {
+        deny_warnings: options.deny_warnings,
+        ..CheckOutput::default()
+    };
+    let front = front_end_for(root, frontend::Mode::Check, options.target, &mut out)?;
     out.sources.sort(&mut out.diagnostics);
     // Every constant of the package is evaluated (D-459, D-534), but only
     // when the front end reported no error, so constant evaluation never
@@ -210,11 +354,35 @@ fn front_end(
     mode: frontend::Mode,
     out: &mut CheckOutput,
 ) -> Result<Option<(frontend::Frontend, String)>, Error> {
+    front_end_for(root, mode, None, out)
+}
+
+/// [`front_end`] for one target of the package, or for all of them
+/// (D-550): the selected target replaces the manifest's `targets`, so the
+/// cross-target check and the constants' target sets see only it.
+fn front_end_for(
+    root: &Path,
+    mode: frontend::Mode,
+    target: Option<Target>,
+    out: &mut CheckOutput,
+) -> Result<Option<(frontend::Frontend, String)>, Error> {
     let package = load_package(root, &mut out.sources, &mut out.diagnostics)?;
-    let Some(package) = package else {
+    let Some(mut package) = package else {
         return Ok(None);
     };
-    if out.has_errors() {
+    if let Some(target) = target {
+        if !package.manifest.targets.contains(target) {
+            return Err(Error::new(format!(
+                "the package does not target `{target}`"
+            )));
+        }
+        package.manifest.targets = Targets::only(target);
+    }
+    // Only phase-A errors stop the front end (D-452); a phase-A warning
+    // denied by `--deny-warnings` does not, so the later phases still
+    // report theirs, and the command fails after them
+    // (GAP(deny-warnings-phase-a)).
+    if out.diagnostics.iter().any(Diagnostic::is_error) {
         return Ok(None);
     }
     let name = package.manifest.name.clone();
@@ -230,6 +398,9 @@ pub struct RunOptions {
     pub module_path: Option<String>,
     /// The program's arguments (D-347).
     pub args: Vec<String>,
+    /// `--deny-warnings`: a warning stops the run before anything is
+    /// compiled (D-549).
+    pub deny_warnings: bool,
 }
 
 /// The outcome of [`prepare_run`].
@@ -295,7 +466,10 @@ pub enum RunResult {
 /// of the package, or names a module without `main`, and an [`Error`] for
 /// internal failures.
 pub fn prepare_run(root: &Path, options: RunOptions) -> Result<Prepared, Error> {
-    let mut out = CheckOutput::default();
+    let mut out = CheckOutput {
+        deny_warnings: options.deny_warnings,
+        ..CheckOutput::default()
+    };
     let front = front_end(root, frontend::Mode::Build, &mut out)?;
     out.sources.sort(&mut out.diagnostics);
     let Some((front, package)) = front.filter(|_| !out.has_errors()) else {
@@ -514,16 +688,9 @@ pub fn load_package(
         return Ok(None);
     };
     let files = cheby_package::discover(root, &manifest.name, diagnostics)?;
-    let mut modules = Vec::with_capacity(files.len());
-    for file in files {
-        let bytes = std::fs::read(root.join(&file.file))
-            .map_err(|e| Error::new(format!("{}: {e}", file.display)))?;
-        let source = parse_file(sources, &file.display, bytes, diagnostics)?;
-        modules.push(Module {
-            path: file.path,
-            source,
-        });
-    }
+    // Read, parsed and validated in parallel (D-263); file ids and
+    // diagnostics follow the order of `files` (D-264).
+    let modules = frontend::read_modules(root, files, sources, diagnostics)?;
     Ok(Some(Package {
         root: root.to_path_buf(),
         manifest,

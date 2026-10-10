@@ -8,8 +8,12 @@
 //! - `version`: a semantic version (D-097).
 //! - `targets`: optional, a non-empty list of `"native"` and `"js"`,
 //!   both by default (D-190).
-//! - `description` (a string), `licences` (a list of strings) and the
-//!   `[const-eval]` table (D-195) are accepted and not used yet.
+//! - `description` (a string) and `licences` (a list of strings) are
+//!   accepted and not used yet.
+//! - `[const-eval]`: the limits of constant evaluation (D-195, D-536),
+//!   `time-limit = "10s"` (an integer followed by `ms` or `s`) and
+//!   `memory-limit = "1GiB"` (an integer followed by `KiB`, `MiB` or
+//!   `GiB`). Any other key or value is E0036.
 //! - `[dependencies]`: each entry is checked, and then the table is
 //!   rejected, because dependencies arrive in M5 (§13.4).
 //!
@@ -19,6 +23,7 @@ use std::borrow::Cow;
 use std::fmt;
 use std::ops::Range;
 use std::path::Path;
+use std::time::Duration;
 
 use cheby_diag::{Diagnostic, FileId, SourceMap, Span, TextRange, TextSize, codes};
 use toml::Spanned;
@@ -43,6 +48,14 @@ pub struct Manifest {
     /// The dependencies as written. A manifest that has any is reported as
     /// an error until M5, but its entries are still read.
     pub dependencies: Vec<Dependency>,
+    /// `[const-eval] time-limit`: the wall-clock time one constant's
+    /// evaluation may take (D-536); [`Manifest::DEFAULT_TIME_LIMIT`] when
+    /// not given.
+    pub const_eval_time_limit: Duration,
+    /// `[const-eval] memory-limit`: the most heap bytes that a constant's
+    /// evaluation may keep live at once (D-536, GAP(const-limit-baseline));
+    /// [`Manifest::DEFAULT_MEMORY_LIMIT`] when not given.
+    pub const_eval_memory_limit: u64,
     /// The `cheby.toml` file in the source map, for diagnostics about the
     /// package as a whole.
     pub file: FileId,
@@ -94,6 +107,14 @@ pub enum GitReference {
 }
 
 impl Manifest {
+    /// The time limit of one constant's evaluation when `[const-eval]`
+    /// sets none (D-195, D-536).
+    pub const DEFAULT_TIME_LIMIT: Duration = Duration::from_secs(10);
+
+    /// The memory limit of one constant's evaluation when `[const-eval]`
+    /// sets none (D-195, D-536): 1 GiB.
+    pub const DEFAULT_MEMORY_LIMIT: u64 = 1 << 30;
+
     /// Reads `cheby.toml` in `root`, adds it to `sources` as `cheby.toml`,
     /// and checks it. Problems with the manifest are pushed to
     /// `diagnostics`. Returns `None` if the manifest cannot be used:
@@ -343,6 +364,14 @@ struct Reader<'d> {
     diagnostics: &'d mut Vec<Diagnostic>,
 }
 
+/// The units of `[const-eval] time-limit`, with their factors to
+/// milliseconds (D-536).
+const TIME_UNITS: &[(&str, u64)] = &[("ms", 1), ("s", 1000)];
+
+/// The units of `[const-eval] memory-limit`, with their factors to bytes
+/// (D-536).
+const MEMORY_UNITS: &[(&str, u64)] = &[("KiB", 1 << 10), ("MiB", 1 << 20), ("GiB", 1 << 30)];
+
 /// The top-level keys, in the order §13.3 lists them, for help lines.
 const KNOWN_KEYS: &str =
     "`name`, `version`, `description`, `licences`, `targets`, `[dependencies]` and `[const-eval]`";
@@ -364,6 +393,8 @@ impl Reader<'_> {
         let mut licences = Vec::new();
         let mut dependencies = Vec::new();
         let mut dependency_keys = Vec::new();
+        let mut time_limit = Manifest::DEFAULT_TIME_LIMIT;
+        let mut memory_limit = Manifest::DEFAULT_MEMORY_LIMIT;
         for (key, value) in table {
             match key.get_ref().as_ref() {
                 "name" => name = self.name(value),
@@ -371,11 +402,7 @@ impl Reader<'_> {
                 "targets" => targets = self.targets(value).unwrap_or(Targets::ALL),
                 "description" => description = self.string(value, "`description`"),
                 "licences" => licences = self.licences(value),
-                "const-eval" => {
-                    if !value.get_ref().is_table() {
-                        self.wrong_type(value, "`const-eval`", "a table");
-                    }
-                }
+                "const-eval" => self.const_eval(value, &mut time_limit, &mut memory_limit),
                 "dependencies" => {
                     (dependencies, dependency_keys) = self.dependencies(key, value);
                 }
@@ -415,16 +442,119 @@ impl Reader<'_> {
             description,
             licences,
             dependencies,
+            const_eval_time_limit: time_limit,
+            const_eval_memory_limit: memory_limit,
             file: self.file,
         })
     }
 
+    /// Reads `[const-eval]` (D-536, GAP(const-eval-limit-zero)): sets the
+    /// limits it gives and reports every other key and every bad value.
+    fn const_eval(
+        &mut self,
+        value: &Spanned<DeValue<'_>>,
+        time_limit: &mut Duration,
+        memory_limit: &mut u64,
+    ) {
+        let Some(table) = value.get_ref().as_table() else {
+            self.wrong_type(value, "`const-eval`", "a table");
+            return;
+        };
+        for (key, value) in table {
+            match key.get_ref().as_ref() {
+                "time-limit" => {
+                    if let Some(limit) = self.limit(value, "`time-limit`", TIME_UNITS, "10s") {
+                        *time_limit = Duration::from_millis(limit);
+                    }
+                }
+                "memory-limit" => {
+                    if let Some(limit) = self.limit(value, "`memory-limit`", MEMORY_UNITS, "1GiB") {
+                        *memory_limit = limit;
+                    }
+                }
+                other => {
+                    let diag = self
+                        .diag(
+                            format!("unknown key `{other}` in `[const-eval]`"),
+                            key.span(),
+                            "unknown key",
+                        )
+                        .with_help("the keys are `time-limit` and `memory-limit`");
+                    self.push(diag);
+                }
+            }
+        }
+    }
+
+    /// A limit written as a string: a positive integer followed by one of
+    /// `units`, converted with the unit's factor. Reports E0036, with
+    /// `example` in the help, and returns `None` for anything else.
+    fn limit(
+        &mut self,
+        value: &Spanned<DeValue<'_>>,
+        what: &str,
+        units: &[(&str, u64)],
+        example: &str,
+    ) -> Option<u64> {
+        let text = self.string(value, what)?;
+        let spelled = units
+            .iter()
+            .map(|(unit, _)| format!("`{unit}`"))
+            .collect::<Vec<_>>();
+        let unit_list = match spelled.split_last() {
+            Some((last, [])) => last.clone(),
+            Some((last, rest)) => format!("{} or {last}", rest.join(", ")),
+            None => String::new(),
+        };
+        let digits = text.bytes().take_while(u8::is_ascii_digit).count();
+        let (number, unit) = text.split_at(digits);
+        let factor = units
+            .iter()
+            .find(|(name, _)| *name == unit)
+            .map(|(_, factor)| *factor);
+        let (Some(factor), false) = (factor, number.is_empty()) else {
+            let diag = self
+                .diag(format!("`{text}` is not a valid {what}"), value.span(), "")
+                .with_help(format!(
+                    "write an integer followed by {unit_list}, such as `\"{example}\"`"
+                ));
+            self.push(diag);
+            return None;
+        };
+        let limit = number
+            .parse::<u64>()
+            .ok()
+            .and_then(|n| n.checked_mul(factor));
+        match limit {
+            Some(0) => {
+                let diag = self.diag(
+                    format!("{what} must be greater than zero"),
+                    value.span(),
+                    "",
+                );
+                self.push(diag);
+                None
+            }
+            Some(limit) => Some(limit),
+            None => {
+                let diag = self.diag(format!("{what} `{text}` is too large"), value.span(), "");
+                self.push(diag);
+                None
+            }
+        }
+    }
+
     fn wrong_type(&mut self, value: &Spanned<DeValue<'_>>, what: &str, expected: &str) {
         let found = value.get_ref().type_str();
+        let article = if found.starts_with(['a', 'e', 'i', 'o', 'u']) {
+            "an"
+        } else {
+            "a"
+        };
         let diag = self.diag(
             format!("{what} must be {expected}"),
             value.span(),
-            &format!("this is a {found}"),
+            &format!("this is {article} {found}"),
         );
         self.push(diag);
     }

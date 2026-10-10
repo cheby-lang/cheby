@@ -1,0 +1,47 @@
+// @mode: run-pass
+// @decisions: D-396, D-568
+//! The correctly rounded functions of `std::float` (D-396): each result
+//! is the `Float` nearest to the exact value. The inputs include hard
+//! cases, where a result accurate to one ulp would round the wrong way,
+//! huge arguments of `sin`, `cos` and `tan`, subnormal results and the
+//! special values of C99.
+
+import std::float
+import std::io
+
+fn put(label: String, x: Float) {
+  io::println("{label} = {x}")
+}
+
+fn main() {
+  put("exp(1)", float::exp(1.0))
+  put("exp(-745.1332191019411)", float::exp(-745.1332191019411))
+  put("exp(709.782712893384)", float::exp(709.782712893384))
+  put("exp(-726.0575699859534)", float::exp(-726.0575699859534))
+  put("exp(1e-300)", float::exp(1.0e-300))
+  put("ln(10)", float::ln(10.0))
+  put("ln(0.5)", float::ln(0.5))
+  put("ln(5e-324)", float::ln(5.0e-324))
+  put("sin(1e22)", float::sin(1.0e22))
+  put("sin(pi)", float::sin(float::pi))
+  put("cos(pi)", float::cos(float::pi))
+  put("cos(1e300)", float::cos(1.0e300))
+  put("tan(1)", float::tan(1.0))
+  put("tan(pi / 2)", float::tan(float::pi / 2.0))
+  put("atan2(1, 1)", float::atan2(1.0, 1.0))
+  put("atan2(-1e-300, -1)", float::atan2(-1.0e-300, -1.0))
+  put("atan2(1e-310, 1e10)", float::atan2(1.0e-310, 1.0e10))
+  put("pow(2, 0.5)", float::pow(2.0, 0.5))
+  put("pow(10, -2)", float::pow(10.0, -2.0))
+  put("pow(-2, 3)", float::pow(-2.0, 3.0))
+  put("pow(0.75, 2000)", float::pow(0.75, 2000.0))
+  put("pow(262143 * 262143, 1.5)", float::pow(68718952449.0, 1.5))
+  put("pow(-0, pi)", float::pow(-0.0, float::pi))
+  put("pow(nan, 0)", float::pow(float::nan, 0.0))
+  put("pow(1, nan)", float::pow(1.0, float::nan))
+  put("pow(-8, 1 / 3)", float::pow(-8.0, 1.0 / 3.0))
+  put("exp(inf)", float::exp(float::infinity))
+  put("ln(-1)", float::ln(-1.0))
+  put("sin(-inf)", float::sin(float::neg_infinity))
+  put("atan2(inf, -inf)", float::atan2(float::infinity, float::neg_infinity))
+}

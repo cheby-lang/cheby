@@ -1,9 +1,8 @@
 //! Dictionaries, interface calls, `dyn` calls, conversions to `dyn` and
 //! type descriptors (D5, D-236, D-453, D-499, D-523, D-524).
 //!
-//! W3-A fills the dictionary and descriptor parts; the `dyn` parts
-//! ([`BodyCx::call_dyn`], [`BodyCx::dyn_coerce`] and `Dict::Dyn`) are
-//! W4-A's and still E0038 (plan §4.2).
+//! W3-A wrote the dictionary and descriptor parts, W4-A the `dyn` parts
+//! ([`BodyCx::call_dyn`], [`BodyCx::dyn_coerce`] and `Dict::Dyn`).
 //!
 //! Shapes (D-524, plan §5.4):
 //!
@@ -37,7 +36,24 @@
 //! - An interface call loads the function's closure from the dictionary
 //!   and calls it with uniform arguments (`Callee::Indirect`, D-453), as a
 //!   tail call in tail position (D-015).
+//! - A `dyn I` value is `Dyn` (layout 10): the dictionary of `I` for the
+//!   value's type, then the value as a uniform word (D-524). A
+//!   conversion allocates one ([`BodyCx::dyn_coerce`]); a `dyn J` value
+//!   converted to `dyn I` for an `I` that `J` embeds takes the embedded
+//!   dictionary and keeps the value, and converted to `dyn` of an empty
+//!   interface keeps its descriptor (D-502). A call on a `dyn` value
+//!   ([`BodyCx::call_dyn`]) loads the closure from the value's dictionary
+//!   and passes the value inside as `Self` (D-117).
+//! - The type `dyn J` has the nominal descriptor
+//!   `cb$desc$<module path of J>$$dyn$<J>`. Where a `dyn J` value
+//!   satisfies a bound (`Dict::Dyn`), its dictionary is a static
+//!   forwarding dictionary per interface and `J`, whose closures run the
+//!   [`FnKey::DynForward`] code ([`forward`]): unwrap the receiver and
+//!   call through the dictionary it carries.
 
+#[cfg(test)]
+mod dyn_tests;
+mod forward;
 mod statics;
 #[cfg(test)]
 mod tests;
@@ -49,6 +65,7 @@ use cheby_diag::Span;
 use cheby_iface::{DefId, Generics, Ice, ItemSig, ParamIdx, Ty, TyKind, interface_fns};
 use cheby_types::thir::{Callee, Dict, DictFn, ExprId, ExprKind, InterpPart, OpImpl};
 
+pub(super) use forward::dyn_forward;
 pub(super) use statics::{Statics, unit_module};
 pub(super) use tuple::tuple_fn;
 
@@ -186,23 +203,6 @@ fn ty_closed(cx: &LowerCx<'_>, ty: Ty) -> bool {
     closed
 }
 
-/// Whether `ty` mentions a `dyn` type.
-fn ty_mentions_dyn(cx: &LowerCx<'_>, ty: Ty) -> bool {
-    let mut stack = vec![ty];
-    while let Some(t) = stack.pop() {
-        match cx.defs.globals.types.kind(t) {
-            TyKind::Dyn { .. } => return true,
-            TyKind::Named { args, .. } | TyKind::Tuple(args) => stack.extend(args.iter().copied()),
-            TyKind::Fn { params, ret } => {
-                stack.extend(params.iter().copied());
-                stack.push(*ret);
-            }
-            TyKind::Param(_) | TyKind::Error | TyKind::Never => {}
-        }
-    }
-    false
-}
-
 /// Whether `dict` needs no dictionary of the enclosing item, so it is a
 /// static object (D-524).
 pub(super) fn dict_closed(cx: &LowerCx<'_>, dict: &Dict) -> bool {
@@ -213,29 +213,13 @@ pub(super) fn dict_closed(cx: &LowerCx<'_>, dict: &Dict) -> bool {
                     .iter()
                     .all(|f| f.dicts.iter().all(|d| dict_closed(cx, d)))
         }
-        Dict::Param { .. } | Dict::Dyn { .. } => false,
+        Dict::Param { .. } => false,
+        // A `dyn` type mentions no type parameter (D-499): its forwarding
+        // dictionary is static.
+        Dict::Dyn { .. } => true,
         Dict::Embedded { of, .. } => dict_closed(cx, of),
         Dict::Tuple { ty, elems, .. } => {
             ty_closed(cx, *ty) && elems.iter().all(|d| dict_closed(cx, d))
-        }
-    }
-}
-
-/// Whether `dict` is or holds a `dyn` value's dictionary, or describes a
-/// type that mentions `dyn` (W4-A).
-pub(super) fn dict_mentions_dyn(cx: &LowerCx<'_>, dict: &Dict) -> bool {
-    match dict {
-        Dict::Dyn { .. } => true,
-        Dict::Impl { ty, fns, .. } => {
-            ty_mentions_dyn(cx, *ty)
-                || fns
-                    .iter()
-                    .any(|f| f.dicts.iter().any(|d| dict_mentions_dyn(cx, d)))
-        }
-        Dict::Param { .. } => false,
-        Dict::Embedded { of, .. } => dict_mentions_dyn(cx, of),
-        Dict::Tuple { ty, elems, .. } => {
-            ty_mentions_dyn(cx, *ty) || elems.iter().any(|d| dict_mentions_dyn(cx, d))
         }
     }
 }
@@ -284,6 +268,9 @@ pub(super) fn normalize(cx: &LowerCx<'_>, dict: &Dict) -> Result<Dict, Ice> {
         return Ok(dict.clone());
     };
     match normalize(cx, of)? {
+        // A `dyn J` value satisfies every interface `J` embeds the same
+        // way (§8.6).
+        Dict::Dyn { ty, .. } => Ok(Dict::Dyn { iface: *iface, ty }),
         Dict::Impl {
             iface: from,
             ty,
@@ -360,12 +347,7 @@ impl BodyCx<'_, '_> {
     /// The dictionary object for `dict`, used by the call at `span`, as
     /// an owned uniform word: a static object when it needs no
     /// dictionary of the enclosing item, built here otherwise.
-    pub(super) fn dict(&mut self, dict: &Dict, span: Span) -> Result<Option<Operand>, Ice> {
-        if dict_mentions_dyn(self.cx, dict) {
-            // W4-A: dictionaries carried by `dyn` values and descriptors
-            // of `dyn` types.
-            return self.unsupported(span, "interface dictionaries of `dyn` types", Ty::ERROR);
-        }
+    pub(super) fn dict(&mut self, dict: &Dict, _span: Span) -> Result<Option<Operand>, Ice> {
         self.dict_op(dict).map(Some)
     }
 
@@ -398,7 +380,7 @@ impl BodyCx<'_, '_> {
                 }
                 Ok(Operand::Local(cur))
             }
-            Dict::Dyn { .. } => Err(Ice::new("a `dyn` dictionary reached MIR lowering")),
+            Dict::Dyn { .. } => Err(Ice::new("a `dyn` dictionary that is not static")),
         }
     }
 
@@ -718,27 +700,197 @@ impl BodyCx<'_, '_> {
     }
 
     /// A call of the interface function `iface_fn` on the `dyn` value
-    /// `args[0]` (D-117).
+    /// `args[0]` (D-117): the arguments left to right (§5.15.1), then the
+    /// function's closure from the dictionary the value carries, called
+    /// with the value inside in place of the receiver (D-524).
     pub(super) fn call_dyn(
         &mut self,
-        _iface_fn: DefId,
-        _args: &[ExprId],
+        iface_fn: DefId,
+        args: &[ExprId],
         ret_ty: Ty,
-        span: Span,
-        _tail: bool,
+        _span: Span,
+        tail: bool,
     ) -> Result<Option<Operand>, Ice> {
-        self.unsupported(span, "calls through `dyn` values", ret_ty)
+        let (&receiver, _) = args
+            .split_first()
+            .ok_or_else(|| Ice::new("a `dyn` call without its receiver"))?;
+        let dyn_iface = self.dyn_iface(self.ty(receiver)?)?;
+        let mut ops = Vec::with_capacity(args.len());
+        for &arg in args {
+            let Some(op) = self.expr(arg, false)? else {
+                return Ok(None);
+            };
+            let ty = self.ty(arg)?;
+            ops.push(self.to_uniform(op, ty)?);
+        }
+        let mut ops = ops.into_iter();
+        let Some(recv) = ops.next() else {
+            return Err(Ice::new("a `dyn` call without its receiver"));
+        };
+        if self.is_poisoned(&recv) {
+            return self.placeholder(self.repr_of(ret_ty)).map(Some);
+        }
+        let recv = self.dict_local(recv)?;
+        let (dict, inner) = self.dyn_parts(recv)?;
+        let shape = IfaceShape::of(self.cx, dyn_iface)?;
+        let f = self.define(
+            Repr::Value,
+            Rvalue::Field {
+                base: dict,
+                layout: shape.layout()?,
+                field: shape.fn_field(self.cx, iface_fn)?,
+            },
+        )?;
+        let mut call_args = Vec::with_capacity(args.len());
+        call_args.push(Operand::Local(inner));
+        call_args.extend(ops);
+        self.call_closure(f, call_args, ret_ty, tail)
     }
 
-    /// `value` converted to `dyn iface`, of type `ty` (C10).
+    /// The interface `J` of the type `dyn J`.
+    fn dyn_iface(&self, ty: Ty) -> Result<DefId, Ice> {
+        match self.cx.defs.globals.types.kind(ty) {
+            TyKind::Dyn { iface, .. } => Ok(*iface),
+            other => Err(Ice::new(format!("a `dyn` value of type {other:?}"))),
+        }
+    }
+
+    /// The dictionary and the value inside the `dyn` value `v`, both
+    /// borrowed from it (D-524).
+    fn dyn_parts(&mut self, v: Local) -> Result<(Local, Local), Ice> {
+        let dict = self.define(
+            Repr::Value,
+            Rvalue::Field {
+                base: v,
+                layout: LayoutRef::Dyn,
+                field: 0,
+            },
+        )?;
+        let inner = self.define(
+            Repr::Value,
+            Rvalue::Field {
+                base: v,
+                layout: LayoutRef::Dyn,
+                field: 1,
+            },
+        )?;
+        Ok((dict, inner))
+    }
+
+    /// A new `dyn` value of the dictionary `dict` and the uniform `value`.
+    fn alloc_dyn(&mut self, dict: Operand, value: Operand) -> Result<Operand, Ice> {
+        Ok(Operand::Local(self.define(
+            Repr::Value,
+            Rvalue::Alloc {
+                layout: LayoutRef::Dyn,
+                fields: vec![dict, value],
+            },
+        )?))
+    }
+
+    /// `value` converted to `dyn iface`, of type `ty` (§8.6, D-168): a new
+    /// `dyn` value of `dict` and the value as a uniform word. A `dyn J`
+    /// value is not packaged again (D-502): converted to `dyn` of an
+    /// interface `J` embeds, it gets the embedded dictionary from its own;
+    /// converted to `dyn` of an empty interface, it keeps its descriptor.
     pub(super) fn dyn_coerce(
         &mut self,
-        _value: ExprId,
-        _iface: DefId,
-        _dict: &Dict,
+        value: ExprId,
+        iface: DefId,
+        dict: &Dict,
         ty: Ty,
         span: Span,
     ) -> Result<Option<Operand>, Ice> {
-        self.unsupported(span, "conversions to `dyn`", ty)
+        let from = self.ty(value)?;
+        let Some(v) = self.expr(value, false)? else {
+            return Ok(None);
+        };
+        if self.is_poisoned(&v) {
+            return self.placeholder(self.repr_of(ty)).map(Some);
+        }
+        if let TyKind::Dyn { iface: has, .. } = self.cx.defs.globals.types.kind(from) {
+            let has = *has;
+            return self.dyn_to_dyn(v, has, iface, dict).map(Some);
+        }
+        let v = self.to_uniform(v, from)?;
+        let Some(d) = self.dict(dict, span)? else {
+            return Ok(None);
+        };
+        if self.is_poisoned(&d) {
+            return self.placeholder(self.repr_of(ty)).map(Some);
+        }
+        self.alloc_dyn(d, v).map(Some)
+    }
+
+    /// The `dyn has` value `v` converted to `dyn iface` (D-502).
+    fn dyn_to_dyn(
+        &mut self,
+        v: Operand,
+        has: DefId,
+        iface: DefId,
+        dict: &Dict,
+    ) -> Result<Operand, Ice> {
+        if has == iface {
+            return Ok(v);
+        }
+        let v = self.dict_local(v)?;
+        let (inner_dict, inner) = self.dyn_parts(v)?;
+        if let Some(path) = embed_path(self.cx, has, iface)? {
+            // `has` embeds `iface`: its dictionary holds `iface`'s.
+            if !matches!(dict, Dict::Dyn { .. }) {
+                return Err(Ice::new(format!(
+                    "a `dyn` value converted to an interface it embeds with {dict:?}"
+                )));
+            }
+            let mut cur = inner_dict;
+            for (layout, field) in path {
+                cur = self.define(
+                    Repr::Value,
+                    Rvalue::Field {
+                        base: cur,
+                        layout,
+                        field,
+                    },
+                )?;
+            }
+            return self.alloc_dyn(Operand::Local(cur), Operand::Local(inner));
+        }
+        // An empty interface: a dictionary of no functions that keeps the
+        // descriptor the value carries (§8.6.1).
+        let shape = IfaceShape::of(self.cx, has)?;
+        let desc = self.define(
+            Repr::Value,
+            Rvalue::Field {
+                base: inner_dict,
+                layout: shape.layout()?,
+                field: 0,
+            },
+        )?;
+        let empty = self.empty_dict(iface, desc)?;
+        self.alloc_dyn(empty, Operand::Local(inner))
+    }
+
+    /// A dictionary of the empty interface `iface` for the type `desc`
+    /// describes, built here: the descriptor, then the dictionaries of
+    /// the (empty) interfaces it embeds.
+    fn empty_dict(&mut self, iface: DefId, desc: Local) -> Result<Operand, Ice> {
+        let shape = IfaceShape::of(self.cx, iface)?;
+        if !shape.fns.is_empty() {
+            return Err(Ice::new(format!(
+                "a `dyn` value converted to {iface:?}, which it does not embed"
+            )));
+        }
+        let mut fields = Vec::with_capacity(shape.embeds.len().saturating_add(1));
+        fields.push(Operand::Local(desc));
+        for &j in &shape.embeds {
+            fields.push(self.empty_dict(j, desc)?);
+        }
+        Ok(Operand::Local(self.define(
+            Repr::Value,
+            Rvalue::Alloc {
+                layout: shape.layout()?,
+                fields,
+            },
+        )?))
     }
 }

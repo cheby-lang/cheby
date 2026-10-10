@@ -1,0 +1,13 @@
+Meters(3) == Meters(3): True
+Meters(3) == Meters(4): False
+Meters(3) == Feet(3): False
+Meters(3) != Feet(3): True
+1 == 1 as I64: False
+[]: List<Int> == []: List<String>: False
+[]: List<Int> == []: List<Int>: True
+7 via dyn Show == 7: True
+boxed(dyn Show 7) == 7: True
+boxed(7) == 7: True
+distinct values: 6
+contains Feet(3): True
+contains Feet(4): False

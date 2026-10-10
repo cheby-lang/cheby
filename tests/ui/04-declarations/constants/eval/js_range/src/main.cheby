@@ -1,0 +1,26 @@
+// @mode: check-fail
+// @decisions: D-037, D-511, D-540
+//! A constant of a package that targets `js` must not hold an `Int` that
+//! JavaScript cannot represent exactly, wherever it sits in the value: a
+//! computed `Int`, or one inside a record in a list, is E0078. `I64` is
+//! exact on `js` and a value at the edge of the safe range is fine (§4.5,
+//! §12.4).
+
+import std::io
+
+type Limit { name: String, value: Int }
+
+const edge: Int = 9_007_199_254_740_991
+
+const past_edge: Int = edge + 2
+
+const limits: List<Limit> = [
+  Limit { name: "low", value: -edge },
+  Limit { name: "high", value: edge * 4 },
+]
+
+const wide: I64 = 9_223_372_036_854_775_807
+
+fn main() {
+  io::println("{edge} {past_edge} {wide} {limits:?}")
+}

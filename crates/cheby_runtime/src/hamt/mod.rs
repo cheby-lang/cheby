@@ -20,8 +20,9 @@
 //! §7.5). The empty map and set are statics with no seed.
 //!
 //! **For other runtime modules and hosts**: [`for_each_entry`] (W3-B's
-//! sorted printing, W4-C's rebuild and range walk), [`rebuild_with_seed`]
-//! (W4-C, D-196), [`seed_of`], [`collection_of`] and [`size`].
+//! sorted printing, W4-C's range walk), [`rebuild_with_seed`],
+//! [`reseed_in_place`] (constant evaluation's rebuild, D-196, D-539),
+//! [`seed_of`], [`collection_of`] and [`size`].
 //!
 //! [`entry::current_seed`]: crate::entry::current_seed
 
@@ -121,6 +122,50 @@ pub unsafe fn rebuild_with_seed(map: Word, seed: u64) -> Word {
     let rebuilt = ops::build(coll, seed, entries);
     drop_word(map);
     rebuilt.word()
+}
+
+/// Rebuilds a borrowed map or set under `seed` in place (D-196, D-539):
+/// a new trie of the same entries, each gaining a reference, replaces the
+/// root's trie, and the old trie is released, so every reference to the
+/// root, shared or not, now sees the rebuilt collection. Nothing changes
+/// when it is empty, static or already has that seed. Runs no Cheby code
+/// unless a key's hashing reaches `@std_hooks`. O(n).
+///
+/// # Safety
+///
+/// `map` is a live map or set that no other thread uses and that nobody
+/// iterates during the call.
+pub unsafe fn reseed_in_place(map: Word, seed: u64) {
+    // SAFETY: forwarded from the caller.
+    let (root, coll) = unsafe { any_root(map) };
+    let Some(old_node) = root.node() else {
+        return;
+    };
+    if root.count() == 0 || root.seed() == seed {
+        return;
+    }
+    let entries = Entries::new(root, coll).map(|(key, value)| {
+        node::dup_word(key);
+        if let Some(value) = value {
+            node::dup_word(value);
+        }
+        (key, value)
+    });
+    let rebuilt = ops::build(coll, seed, entries);
+    let (Some(new_node), true) = (rebuilt.node(), rebuilt.count() == root.count()) else {
+        fatal(format_args!(
+            "rebuilding a {coll:?} of {} entries gave {}",
+            root.count(),
+            rebuilt.count()
+        ));
+    };
+    let old_seed = root.seed();
+    root.put_node(new_node);
+    root.set_seed(seed);
+    // The fresh root, unique, now owns the old trie, which goes with it.
+    rebuilt.put_node(old_node);
+    rebuilt.set_seed(old_seed);
+    drop_word(rebuilt.word());
 }
 
 /// The seed a borrowed map or set was built with; `None` when it is empty.

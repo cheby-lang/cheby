@@ -9,9 +9,11 @@ One test per rule, grouped by spec chapter (D-275, [testing.md](../../docs/plan/
 | `@milestone` | milestone in which the test must pass, `M1` by default                                                             |
 | `@exit`      | expected exit code of a `run-fail` test, `101` by default                                                          |
 | `@command`   | `test` makes a `run-pass` or `run-fail` test run `cheby test` instead of `cheby run` (D-543); `run` is the default |
-| `@flags`     | words added after the subcommand, split at whitespace, such as `--module ui_test::util` or `--deny-warnings`       |
+| `@flags`     | words added after the subcommand in every mode, split at whitespace, such as `--deny-warnings` or `--target js`    |
 
 Goldens sit next to the test: `.stderr` for diagnostics (required for `check-fail` and `parse-fail`) and `.stdout` for program output. `parse-fail` files must also be rejected by `tree-sitter-cheby` (`cargo xtask cross-check`). Record goldens with `cargo xtask bless`.
+
+`// @flags: …` exercises the command-line flags of D-549, D-550 and D-543: `// @flags: --deny-warnings` turns every warning into an error, so a `check-fail` test's `.stderr` shows `error[W…]`, and a run test that warns is `run-fail` with `// @exit: 1` and no `.stdout`; `// @flags: --target js` checks for one target only (`check` modes); `// @flags: --module ui_test::util` selects tests (with `@command: test`). The flags follow the subcommand and come before the program's arguments of a `name.args` file, which are passed after `--`.
 
 With `// @command: test`, the goldens hold the output of `cheby test` (D-541): its report on standard output, and warnings or compile errors on standard error. A test that fails makes `cheby test` exit with 1, so such a UI test is `run-fail` with `// @exit: 1`; a compile error also exits with 1. A `name.stdin` file works as for `cheby run`; `cheby test` takes no program arguments, so a `name.args` file beside such a test is an error.
 

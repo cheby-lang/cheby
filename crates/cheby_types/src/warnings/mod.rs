@@ -47,7 +47,9 @@ mod uses;
 mod tests;
 
 use cheby_diag::Diagnostic;
-use cheby_iface::{Ice, ModuleInterface, PackageId};
+use cheby_iface::{Ice, ModuleId, ModuleInterface, PackageId};
+use rayon::prelude::*;
+use rustc_hash::FxHashMap;
 
 use crate::TypesInput;
 use crate::thir;
@@ -110,17 +112,33 @@ pub fn package_warnings(modules: &[PackageModule<'_>]) -> Result<Vec<Diagnostic>
     {
         return Ok(Vec::new());
     }
-    let mut refs = Vec::new();
-    for m in &local {
-        let paths = uses::path_uses(&m.input)?;
-        let thir_refs = uses::thir_refs(m.thir);
-        let hooks = uses::hook_refs(m.own, m.input.module);
-        refs.extend(items::item_refs(&m.input, &paths, &thir_refs, &hooks));
+    // Each module's references, collected in parallel (D-263) and kept in
+    // module order, then grouped by the module they refer to, so each
+    // module's pass reads only the references to its own items instead
+    // of every reference of the package.
+    let per_module: Vec<Result<Vec<items::ItemRef>, Ice>> = local
+        .par_iter()
+        .map(|m| {
+            let paths = uses::path_uses(&m.input)?;
+            let thir_refs = uses::thir_refs(m.thir);
+            let hooks = uses::hook_refs(m.own, m.input.module);
+            Ok(items::item_refs(&m.input, &paths, &thir_refs, &hooks))
+        })
+        .collect();
+    let mut refs_to: FxHashMap<ModuleId, Vec<items::ItemRef>> = FxHashMap::default();
+    for refs in per_module {
+        for r in refs? {
+            refs_to.entry(r.def.module).or_default().push(r);
+        }
     }
-    let mut out = Vec::new();
-    for m in &local {
-        out.extend(items::unused_in_package(&m.input, m.own, &refs));
-    }
+    let found: Vec<Vec<Diagnostic>> = local
+        .par_iter()
+        .map(|m| {
+            let refs = refs_to.get(&m.input.module).map_or(&[][..], Vec::as_slice);
+            items::unused_in_package(&m.input, m.own, refs)
+        })
+        .collect();
+    let mut out: Vec<Diagnostic> = found.into_iter().flatten().collect();
     sort(&mut out);
     Ok(out)
 }

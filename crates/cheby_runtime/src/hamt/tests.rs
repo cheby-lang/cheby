@@ -27,7 +27,7 @@ use super::compare::HASH_MASK;
 use super::kernels::*;
 use super::node::{BITS, Bitmap, Collection, Collision, MAX_SHIFT, Root, drop_word, dup_word};
 use super::ops;
-use super::{collection_of, for_each_entry, rebuild_with_seed, seed_of, size};
+use super::{collection_of, for_each_entry, rebuild_with_seed, reseed_in_place, seed_of, size};
 use crate::abi::{self, Word, layout as ids};
 use crate::alloc::{self, Domain, live};
 use crate::ctx::ExecCtx;
@@ -1047,6 +1047,49 @@ fn a_map_built_under_one_seed_is_read_extended_and_compared_under_another() {
                 drop_word(word);
             }
         }
+    });
+}
+
+/// D-196, D-539: rebuilding in place keeps the root's address, so every
+/// reference sees the new seed and the same entries, and the old trie is
+/// released (nothing leaks, nothing is freed twice).
+#[test]
+fn reseeding_in_place_keeps_the_root_and_its_entries() {
+    balanced(|| {
+        let model: BTreeMap<Key, i64> = (0..200).map(|i| (nth_key(i as usize % 3, i), i)).collect();
+        let m = map_of(0xA, &model);
+        // A second reference to the same root, and a map sharing its trie.
+        dup_word(m);
+        let shared = m;
+        // SAFETY: live words.
+        unsafe {
+            let extended = cheby_map_insert(m, key_word(&Key::Int(-1)), int(1));
+            reseed_in_place(m, 0xB);
+            assert_eq!(seed_of(shared), Some(0xB));
+            check_trie(m, Collection::Map);
+            check_map(m, &model);
+            // The map that shared the old trie is unchanged.
+            assert_eq!(seed_of(extended), Some(0xA));
+            assert_eq!(size(extended), 201);
+            check_trie(extended, Collection::Map);
+            // The same seed, an empty or a static collection: nothing.
+            reseed_in_place(m, 0xB);
+            assert_eq!(seed_of(m), Some(0xB));
+            let empty = cheby_map_new();
+            reseed_in_place(empty, 0xC);
+            assert_eq!(seed_of(empty), None);
+            for word in [m, shared, extended] {
+                drop_word(word);
+            }
+        }
+        let set = set_of(1, &(0..50).map(Key::Int).collect());
+        // SAFETY: a live set.
+        unsafe {
+            reseed_in_place(set, 2);
+            assert_eq!(seed_of(set), Some(2));
+            check_set(set, &(0..50).map(Key::Int).collect());
+        }
+        drop_word(set);
     });
 }
 

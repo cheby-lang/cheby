@@ -11,6 +11,8 @@
 //! - [`package_warnings`] (C14) is the whole-package warning pass, which
 //!   the driver runs after every local module is checked, for
 //!   `cheby check` only (D-266).
+//! - [`repl::ReplSession`] checks REPL entries against their session and
+//!   keeps the session's names, redefinitions and stale types (§13.5).
 //!
 //! Internal passes: `decl` and `ifaces` check declarations at the end of
 //! [`build_interface`]; `exhaust` checks patterns of each body
@@ -31,6 +33,7 @@ mod exhaust;
 mod ifaces;
 pub mod infer;
 mod lower_ty;
+pub mod repl;
 mod sig;
 mod targets;
 pub mod thir;

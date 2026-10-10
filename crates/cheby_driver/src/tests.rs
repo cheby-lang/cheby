@@ -244,11 +244,11 @@ fn collect_ui_tests(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// A package whose `main` calls a function with a construct the back end
-/// cannot lower yet, a conversion to `dyn` (W4-A), or does not call it.
-fn unsupported_package(name: &str, main_calls_it: bool) -> PathBuf {
+/// A package whose `main` converts a `String` to `dyn Show`, or does not
+/// call the function that does.
+fn dyn_package(name: &str, main_calls_it: bool) -> PathBuf {
     let call = if main_calls_it {
-        "  let _ = pick(\"a\")\n"
+        "  io::println(pick(\"a\"))\n"
     } else {
         ""
     };
@@ -258,48 +258,33 @@ fn unsupported_package(name: &str, main_calls_it: bool) -> PathBuf {
     package(name, &[MANIFEST, ("src/main.cheby", source.as_bytes())])
 }
 
-/// A reachable construct the back end cannot lower yet stops `cheby run`
-/// with E0038 at it, before any code is generated. `cheby check` reports
-/// nothing the back end would. (The construct was `case` until W2-B; it is
-/// a conversion to `dyn` until W4-A.)
+/// Conversions to `dyn` were the last construct whose E0038 stopped `cheby
+/// run` before any code was generated (D-510); since W4-A they compile,
+/// reachable or not, and the program runs without leaks.
 #[test]
-fn reachable_unsupported_constructs_stop_the_run() {
-    let dir = unsupported_package("gate_reachable", true);
-    let RunResult::CompileFailed(out) = run(&dir, RunOptions::default()).unwrap() else {
-        panic!("a program with a reachable conversion to `dyn` ran");
-    };
-    let rendered = out.render();
-    assert!(
-        rendered.starts_with(
-            "error[E0038]: conversions to `dyn` are not supported yet\n  --> src/main.cheby:11:"
-        ),
-        "{rendered}"
-    );
-    let codes: Vec<String> = out.diagnostics.iter().map(|d| d.code.to_string()).collect();
-    assert!(codes.iter().all(|c| c == "E0038"), "{rendered}");
-    std::fs::remove_dir_all(&dir).unwrap();
-}
-
-/// The same construct in a function `main` never calls does not stop the
-/// run.
-#[test]
-fn unreachable_unsupported_constructs_do_not_stop_the_run() {
-    let dir = unsupported_package("gate_unreachable", false);
-    let checked = check(&dir).unwrap();
-    if checked.has_errors() {
+fn conversions_to_dyn_compile_and_run() {
+    for (name, calls) in [("dyn_reachable", true), ("dyn_unreachable", false)] {
+        let dir = dyn_package(name, calls);
+        let checked = check(&dir).unwrap();
         let codes: Vec<String> = checked
             .diagnostics
             .iter()
             .map(|d| d.code.to_string())
             .collect();
-        assert!(codes.iter().all(|c| c == "E0038"), "{}", checked.render());
-    } else {
-        let Prepared::Ready(program) = prepare_run(&dir, RunOptions::default()).unwrap() else {
-            panic!("an unreachable conversion to `dyn` stopped the run");
+        // An uncalled `pick` is W0005 under `cheby check` only (D-266).
+        let unused = if calls {
+            vec![]
+        } else {
+            vec!["W0005".to_owned()]
         };
-        assert_eq!(program.output().render(), "");
+        assert_eq!(codes, unused, "{name}");
+        let RunResult::Ran { output, exit } = run(&dir, RunOptions::default()).unwrap() else {
+            panic!("{name} did not compile");
+        };
+        assert_eq!(output.render(), "", "{name}");
+        assert_eq!(exit, 0, "{name}");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 /// The dumps show what running the root `main` compiles: the items it
@@ -609,6 +594,7 @@ fn program_name_is_the_package_name() {
     let options = RunOptions {
         module_path: Some("app::tools".to_owned()),
         args: vec!["a".to_owned(), "b c".to_owned()],
+        ..RunOptions::default()
     };
     let Prepared::Ready(program) = prepare_run(&dir, options).unwrap() else {
         panic!("the program failed to compile");
@@ -632,7 +618,7 @@ fn run_tool_errors() {
     );
     let missing = RunOptions {
         module_path: Some("app::nope".to_owned()),
-        args: Vec::new(),
+        ..RunOptions::default()
     };
     assert_eq!(
         run(&dir, missing).unwrap_err().message(),
@@ -640,7 +626,7 @@ fn run_tool_errors() {
     );
     let no_main = RunOptions {
         module_path: Some("app::lib".to_owned()),
-        args: Vec::new(),
+        ..RunOptions::default()
     };
     assert_eq!(
         run(&dir, no_main).unwrap_err().message(),
@@ -648,7 +634,7 @@ fn run_tool_errors() {
     );
     let bad = RunOptions {
         module_path: Some("app::".to_owned()),
-        args: Vec::new(),
+        ..RunOptions::default()
     };
     assert_eq!(
         run(&dir, bad).unwrap_err().message(),
@@ -743,7 +729,7 @@ fn invalid_utf8_is_reported_and_not_parsed() {
     assert!(module.source.syntax.is_none());
     assert!(module.source.has_syntax_errors);
     assert_eq!(
-        render_all(&diags, &sources),
+        cheby_diag::render_all(&diags, &sources),
         "\
 error[E0001]: source file is not valid UTF-8
  --> src/main.cheby:2:7
@@ -976,15 +962,15 @@ fn tests_are_selected_and_counted() {
 
     let (report, text) = run(&TestOptions {
         filter: Some("passes".to_owned()),
-        module: None,
+        ..TestOptions::default()
     });
     assert!(report.success());
     assert_eq!(report.filtered_out, 1);
     assert!(text.ends_with("test result: ok. 2 passed; 0 failed; 1 filtered out\n"));
 
     let (report, _) = run(&TestOptions {
-        filter: None,
         module: Some("app::util".to_owned()),
+        ..TestOptions::default()
     });
     assert_eq!(report.modules.len(), 1);
     assert_eq!(report.modules[0].path, "app::util");
@@ -998,8 +984,8 @@ fn tests_are_selected_and_counted() {
         ),
     ] {
         let options = TestOptions {
-            filter: None,
             module: Some(module.to_owned()),
+            ..TestOptions::default()
         };
         assert_eq!(prepare_test(&dir, &options).unwrap_err().message(), message);
     }
@@ -1024,23 +1010,235 @@ fn std_self_test_runs_a_selection() {
     assert!(text.ends_with(" filtered out\n"), "{text}");
 }
 
-/// The modules whose tests reach kernels of later waves are reported as
-/// not built, with their codes, and the other modules still run (D-542).
+/// `std::bytes` builds and passes now that its kernels are registered
+/// (F2), and the report counts it per module (D-542).
 #[test]
-fn std_modules_that_do_not_build_are_counted() {
+fn std_bytes_builds_and_passes() {
     let report = test_std(Some("std::bytes ")).unwrap();
     let text = report.render();
     match report.modules.as_slice() {
-        [bytes] if bytes.not_built.is_some() => {
-            assert!(
-                text.starts_with("module std::bytes did not build: "),
-                "{text}"
-            );
-            assert!(!report.success());
-            assert_eq!(report.counts().not_built, bytes.tests.len());
+        [bytes] => {
+            assert_eq!(bytes.path, "std::bytes");
+            assert!(bytes.not_built.is_none(), "{text}");
         }
-        // Once the `Bytes` kernels land (W4-D), the module builds.
-        [bytes] => assert_eq!(bytes.path, "std::bytes"),
         other => panic!("unexpected modules: {other:?}"),
     }
+    assert!(report.success(), "{text}");
+    assert!(report.counts().passed >= 19, "{text}");
+    assert!(text.contains("  std::bytes: "), "{text}");
+}
+
+// ---------------------------------------------------------------------
+// Command-line flags (plan §8.4)
+
+/// A package whose `main` has two unused bindings (W0002).
+fn warning_package(name: &str) -> PathBuf {
+    package(
+        name,
+        &[
+            MANIFEST,
+            (
+                "src/main.cheby",
+                b"fn main() {\n  let unused = 1\n  let other = 2\n}\n",
+            ),
+        ],
+    )
+}
+
+/// D-549: `--deny-warnings` renders each warning as an error with its own
+/// code, the first with a note, and the output then has errors, so `run`
+/// and `test` compile and run nothing.
+#[test]
+fn denied_warnings_are_errors_with_their_own_codes() {
+    let dir = warning_package("deny_warnings");
+    let allowed = check(&dir).unwrap();
+    assert!(!allowed.has_errors());
+    let text = allowed.render();
+    assert!(
+        text.starts_with("warning[W0002]: unused binding `unused`"),
+        "{text}"
+    );
+    assert!(!text.contains(DENIED_NOTE), "{text}");
+
+    let options = CheckOptions {
+        deny_warnings: true,
+        ..CheckOptions::default()
+    };
+    let denied = check_with(&dir, &options).unwrap();
+    assert!(denied.has_errors());
+    let text = denied.render();
+    assert!(
+        text.starts_with("error[W0002]: unused binding `unused`"),
+        "{text}"
+    );
+    assert!(
+        text.contains("error[W0002]: unused binding `other`"),
+        "{text}"
+    );
+    assert!(!text.contains("warning["), "{text}");
+    assert_eq!(text.matches(DENIED_NOTE).count(), 1, "{text}");
+    let first = text.split("\n\n").next().unwrap();
+    assert!(
+        first.contains(DENIED_NOTE),
+        "the note is on the first: {text}"
+    );
+    // In color, the header and the labels take the error's style.
+    let colored = denied.render_with(Colors::On);
+    assert!(colored.starts_with("\x1b[1;91merror[W0002]"), "{colored:?}");
+    assert!(!colored.contains("\x1b[1;93m"), "{colored:?}");
+
+    let run = RunOptions {
+        deny_warnings: true,
+        ..RunOptions::default()
+    };
+    let Prepared::CompileFailed(out) = prepare_run(&dir, run).unwrap() else {
+        panic!("a denied warning stops `cheby run`");
+    };
+    assert_eq!(out.render(), text);
+    let tests = TestOptions {
+        deny_warnings: true,
+        ..TestOptions::default()
+    };
+    let PreparedTests::CompileFailed(out) = prepare_test(&dir, &tests).unwrap() else {
+        panic!("a denied warning stops `cheby test`");
+    };
+    assert_eq!(out.render(), text);
+    // Without warnings the flag changes nothing.
+    let Prepared::Ready(_) = prepare_run(
+        &example("001_hello_world"),
+        RunOptions {
+            deny_warnings: true,
+            ..RunOptions::default()
+        },
+    )
+    .unwrap() else {
+        panic!("001 has no warnings");
+    };
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn rendered_warnings_become_errors() {
+    assert_eq!(as_error("warning[W0002]: x\n"), "error[W0002]: x\n");
+    assert_eq!(
+        as_error("\x1b[1;93mwarning[W0002]\x1b[0m: x\n  \x1b[1;93m^^\x1b[0m\n"),
+        "\x1b[1;91merror[W0002]\x1b[0m: x\n  \x1b[1;91m^^\x1b[0m\n"
+    );
+}
+
+/// A module whose `main` calls a function that exists only on JS.
+const JS_ONLY_MAIN: &[u8] = b"import std::io\n\n\
+@external(js, \"./clock.mjs\", \"now\")\nfn js_now() -> Int\n\n\
+fn main() {\n  let _ = js_now()\n  io::println(\"done\")\n}\n";
+
+/// D-550: `cheby check --target` checks the code as it runs on that
+/// target only, and a target the manifest does not declare is a tool
+/// error.
+#[test]
+fn check_target_narrows_the_cross_target_check() {
+    let dir = package(
+        "check_target",
+        &[MANIFEST, ("src/main.cheby", JS_ONLY_MAIN)],
+    );
+    let codes = |target| {
+        let options = CheckOptions {
+            target,
+            deny_warnings: false,
+        };
+        let out = check_with(&dir, &options).unwrap();
+        out.diagnostics
+            .iter()
+            .map(|d| d.code.to_string())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(codes(None), ["E0067"]);
+    assert_eq!(codes(Some(Target::Native)), ["E0067"]);
+    assert_eq!(codes(Some(Target::Js)), Vec::<String>::new());
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    let dir = package(
+        "check_target_native",
+        &[
+            (
+                "cheby.toml",
+                b"name = \"app\"\nversion = \"0.1.0\"\ntargets = [\"native\"]\n",
+            ),
+            ("src/main.cheby", b"fn main() {}\n"),
+        ],
+    );
+    let options = CheckOptions {
+        target: Some(Target::Js),
+        deny_warnings: false,
+    };
+    assert_eq!(
+        check_with(&dir, &options).unwrap_err().message(),
+        "the package does not target `js`"
+    );
+    let options = CheckOptions {
+        target: Some(Target::Native),
+        deny_warnings: false,
+    };
+    assert_eq!(check_with(&dir, &options).unwrap().render(), "");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Everything a build prints or dumps for `dir`: diagnostics, the MIR
+/// and the CLIF of `main`.
+fn build_outputs(dir: &Path) -> (String, String, String) {
+    let checked = check(dir).unwrap().render();
+    let (_, mir) = dump_mir(dir).unwrap();
+    let (_, clif) = dump_clif(dir).unwrap();
+    (checked, mir, clif)
+}
+
+/// D-551, D-264: the number of worker threads never changes the output.
+/// Each build runs inside a pool of its own size (`install`), which the
+/// build graph uses as it would use the global pool `configure_jobs`
+/// builds.
+#[test]
+fn the_number_of_jobs_does_not_change_the_output() {
+    let warnings = warning_package("jobs");
+    let dirs = [
+        example("014_word_count"),
+        example("021_base64"),
+        example("024_two_sum"),
+        warnings.clone(),
+    ];
+    let with_threads = |threads: usize| {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .stack_size(WORKER_STACK_SIZE)
+            .build()
+            .unwrap();
+        pool.install(|| {
+            dirs.iter()
+                .map(|dir| build_outputs(dir))
+                .collect::<Vec<_>>()
+        })
+    };
+    let one = with_threads(1);
+    let four = with_threads(4);
+    assert_eq!(one, four);
+    assert!(
+        one.iter()
+            .take(3)
+            .all(|(_, mir, clif)| !mir.is_empty() && !clif.is_empty()),
+        "the examples compile"
+    );
+    std::fs::remove_dir_all(&warnings).unwrap();
+}
+
+/// D-551: `configure_jobs` builds the global pool once; asking again for
+/// the same size is fine, another size is a tool error.
+#[test]
+fn configure_jobs_builds_the_global_pool_once() {
+    configure_jobs(None).unwrap();
+    configure_jobs(None).unwrap();
+    let threads = rayon::current_num_threads();
+    assert_eq!(threads, available_parallelism());
+    let same = NonZeroUsize::new(threads).unwrap();
+    configure_jobs(Some(same)).unwrap();
+    let other = NonZeroUsize::new(threads + 1).unwrap();
+    let error = configure_jobs(Some(other)).unwrap_err();
+    assert!(error.message().starts_with("cannot start"), "{error}");
 }

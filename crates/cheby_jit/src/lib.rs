@@ -10,7 +10,15 @@
 //!   one batch; constant evaluation (E6) and the REPL (G5) compile one per
 //!   step.
 //! - Every call of a top-level function loads the callee's slot, a
-//!   writable data object holding its address (D-043).
+//!   writable data object holding its address (D-043). The REPL (E4)
+//!   registers its items' session names first ([`Jit::set_session_names`]):
+//!   their symbols carry `$r<generation>` (D-547), and a redefinition that
+//!   takes over an earlier definition repoints that slot once its batch is
+//!   finalized, so existing callers reach the new code
+//!   ([`Jit::revert_repoints`] undoes it for a rejected entry); one with
+//!   another signature gets a new slot (D-456). [`Jit::slot`] and
+//!   [`Jit::repoint`] do the same by hand, and [`Jit::bind_values`] stores
+//!   the session values of prompt-level `let`s in constant slots.
 //! - The host never calls `tail`-convention code: it calls C-ABI entry
 //!   thunks ([`Jit::entry`]), which call the Cheby functions (D-453). An
 //!   [`Entry`] borrows its [`Jit`], so safe code cannot run an entry after
@@ -37,10 +45,10 @@ use cranelift_module::Module;
 use rustc_hash::FxHashMap;
 
 use cheby_codegen_clif::{
-    CodegenCx, CodegenError, CodegenOptions, Decls, LayoutIds, builtin_layout_id,
+    CodegenCx, CodegenError, CodegenOptions, Decls, LayoutIds, SessionName, builtin_layout_id,
 };
 use cheby_iface::{DefId, Ice};
-use cheby_mir::{EntryKind, FnKey, LayoutDesc, LayoutRef, MirModule, Repr};
+use cheby_mir::{AbiSig, EntryKind, FnKey, LayoutDesc, LayoutRef, MirModule, Repr};
 use cheby_runtime::abi::sym;
 use cheby_runtime::alloc::Domain;
 use cheby_runtime::entry::{Tramp0, Tramp1, Tramp2, Tramp3, Tramp4};
@@ -234,6 +242,16 @@ pub struct Jit {
     domain: Arc<Domain>,
     /// The trampolines compiled so far (D-526).
     callbacks: Callbacks,
+    /// The slots the last batch repointed, with the words they held
+    /// before ([`Jit::revert_repoints`]).
+    repointed: Vec<(cranelift_module::DataId, u64)>,
+}
+
+/// An indirection slot of a [`Jit`] (D-043): a writable word holding the
+/// address of a top-level function's code.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SlotHandle {
+    data: cranelift_module::DataId,
 }
 
 impl fmt::Debug for Jit {
@@ -317,6 +335,7 @@ impl Jit {
             symbols,
             domain: Domain::new(),
             callbacks: Callbacks::default(),
+            repointed: Vec::new(),
         })
     }
 
@@ -378,8 +397,150 @@ impl Jit {
         self.module
             .finalize_definitions()
             .map_err(|e| JitError::Codegen(CodegenError::Module(e.to_string())))?;
+        self.apply_repoints()?;
         self.callbacks = self.find_callbacks();
         self.register_hooks(mirs)?;
+        Ok(())
+    }
+
+    /// Points the slots that the batch's REPL redefinitions take over at
+    /// their new code (D-043), remembering what they held.
+    fn apply_repoints(&mut self) -> Result<(), JitError> {
+        self.repointed.clear();
+        for (slot, func) in self.decls.take_repoints() {
+            let code = self.module.get_finalized_function(func);
+            let word = u64::try_from(code.expose_provenance())
+                .map_err(|_| JitError::ice("an address does not fit in a word"))?;
+            let old = self.write_slot(slot, word)?;
+            self.repointed.push((slot, old));
+        }
+        Ok(())
+    }
+
+    /// Writes `word` into the slot `slot` and returns what it held.
+    fn write_slot(&mut self, slot: cranelift_module::DataId, word: u64) -> Result<u64, JitError> {
+        let (address, size) = self.module.get_finalized_data(slot);
+        if address.is_null() || size < 8 {
+            return Err(JitError::ice("a slot without its word"));
+        }
+        #[expect(
+            clippy::cast_ptr_alignment,
+            reason = "code generation defines every data object with alignment 8"
+        )]
+        let pointer = address.cast_mut().cast::<u64>();
+        // SAFETY: the slot is an 8-aligned, writable 8-byte data object of
+        // this JIT's module (declared writable and finalized), and `&mut
+        // self` keeps any entry of this JIT from running meanwhile.
+        let old = unsafe { pointer.replace(word) };
+        Ok(old)
+    }
+
+    /// Registers how a REPL session names items (D-547, E4): their symbols
+    /// use `<repl>` and carry their generations, and a name whose
+    /// [`SessionName::reuse`] is set takes over that definition's slot when
+    /// its batch compiles. A new generation of an item that is already
+    /// compiled forgets the old declarations of its functions, constructor
+    /// layouts and constant slot, which the next batch declares anew
+    /// ([`Decls::set_session_name`]).
+    pub fn set_session_names(&mut self, names: impl IntoIterator<Item = (DefId, SessionName)>) {
+        for (def, name) in names {
+            self.decls.set_session_name(def, name);
+            let layout = LayoutRef::Ctor(def);
+            if !self.decls.has_layout(layout) {
+                self.layouts.ids.remove(&layout);
+            }
+        }
+    }
+
+    /// Undoes the repointing of the last compiled batch: the REPL calls it
+    /// when an entry whose code compiled is rejected afterwards, so that
+    /// existing callers keep the old code (all or nothing).
+    ///
+    /// # Errors
+    ///
+    /// An ICE if a slot's word cannot be written.
+    pub fn revert_repoints(&mut self) -> Result<(), JitError> {
+        for (slot, old) in std::mem::take(&mut self.repointed) {
+            self.write_slot(slot, old)?;
+        }
+        Ok(())
+    }
+
+    /// The slot the top-level function `def` was last compiled into, if
+    /// that slot has the ABI signature `sig` (D-456).
+    #[must_use]
+    pub fn slot(&self, def: DefId, sig: &AbiSig) -> Option<SlotHandle> {
+        let decl = self.decls.slot_of(def)?;
+        (self.decls.slot_sig(decl.id) == Some(sig)).then_some(SlotHandle { data: decl.id })
+    }
+
+    /// The address a slot holds now.
+    #[must_use]
+    pub fn slot_target(&self, slot: SlotHandle) -> Option<*const u8> {
+        let (address, size) = self.module.get_finalized_data(slot.data);
+        if address.is_null() || size < 8 {
+            return None;
+        }
+        #[expect(
+            clippy::cast_ptr_alignment,
+            reason = "code generation defines every data object with alignment 8"
+        )]
+        let pointer = address.cast::<u64>();
+        // SAFETY: a finalized, 8-aligned data object of at least 8 bytes.
+        let word = unsafe { pointer.read() };
+        Some(std::ptr::with_exposed_provenance(
+            usize::try_from(word).ok()?,
+        ))
+    }
+
+    /// Points `slot` at the compiled code of the top-level function `code`
+    /// (D-043): every caller that loads the slot reaches it from now on.
+    ///
+    /// # Errors
+    ///
+    /// An ICE if `code` was not compiled or its ABI signature is not the
+    /// slot's.
+    pub fn repoint(&mut self, slot: SlotHandle, code: DefId) -> Result<(), JitError> {
+        let decl = self.decls.func(FnKey::Item(code))?;
+        if !decl.defined {
+            return Err(JitError::ice(format!("{code:?} was not compiled")));
+        }
+        if self.decls.slot_sig(slot.data) != Some(&decl.abi) {
+            return Err(JitError::ice(
+                "a slot cannot point at code of another signature",
+            ));
+        }
+        let address = self.module.get_finalized_function(decl.id);
+        let word = u64::try_from(address.expose_provenance())
+            .map_err(|_| JitError::ice("an address does not fit in a word"))?;
+        self.write_slot(slot.data, word)?;
+        Ok(())
+    }
+
+    /// Stores the values of REPL session values (a prompt-level `let`,
+    /// D-547) in their constant slots `cb$const$…`, declaring and defining
+    /// the slots no compiled unit declared. A value whose
+    /// [`SessionName::reuse`] names an earlier session value goes in that
+    /// value's slot, so code that reads it sees the new value. Each word is
+    /// a reference the slot holds for as long as code can read it.
+    ///
+    /// # Errors
+    ///
+    /// An ICE if a value has no session name.
+    pub fn bind_values(&mut self, values: &[(DefId, u64)]) -> Result<(), JitError> {
+        for &(def, _) in values {
+            self.decls.declare_session_const(&mut *self.module, def)?;
+        }
+        let cx = CodegenCx {
+            layouts: &self.layouts,
+        };
+        cheby_codegen_clif::define_data(&mut *self.module, &mut self.decls, &cx)?;
+        self.module
+            .finalize_definitions()
+            .map_err(|e| JitError::Codegen(CodegenError::Module(e.to_string())))?;
+        for &(def, word) in values {
+            self.set_const(def, word)?;
+        }
         Ok(())
     }
 

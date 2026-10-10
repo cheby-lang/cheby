@@ -1082,5 +1082,6 @@ fn compile_speed_probe() {
 
 mod control;
 mod objects;
+mod repl;
 mod scalars;
 mod special;

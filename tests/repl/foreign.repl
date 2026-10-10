@@ -1,0 +1,27 @@
+> @external(native, "cheby_io_println")
+. fn say(text: String)
+> fn greet() {
+.   say("hello")
+. }
+> greet()
+hello
+> import std::io
+> fn say(text: String) {
+.   io::println("<{text}>")
+. }
+> greet()
+<hello>
+> @external(native, "cheby_io_println")
+. fn say(text: String)
+> greet()
+hello
+> @external(native, "no_such_symbol_anywhere")
+. fn missing() -> Int
+error[E0053]: the native symbol `no_such_symbol_anywhere` is not defined
+ --> <repl:9>:1:19
+  |
+1 | @external(native, "no_such_symbol_anywhere")
+  |                   ^^^^^^^^^^^^^^^^^^^^^^^^^ nothing defines this symbol
+  |
+  = note: the symbol must be defined by the Cheby runtime or the running process
+

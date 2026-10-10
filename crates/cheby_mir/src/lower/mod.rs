@@ -200,6 +200,9 @@ pub(crate) struct Pending {
     /// The [`FnKey::TupleDictFn`] codes the unit defines, by interface
     /// function and arity (D-167).
     tuple_fns: BTreeSet<(DefId, u32)>,
+    /// The [`FnKey::DynForward`] codes the unit defines, by interface
+    /// function and the interface of the `dyn` receiver (§8.6).
+    dyn_forwards: BTreeSet<(DefId, DefId)>,
     /// In [`StaticId`] order.
     statics: Vec<StaticObject>,
     /// Arities of the trampolines the program needs (plan §4.3.4).
@@ -236,6 +239,12 @@ impl Pending {
     /// `arity` elements in this unit (D-167).
     pub(crate) fn request_tuple_fn(&mut self, iface_fn: DefId, arity: u32) {
         self.tuple_fns.insert((iface_fn, arity));
+    }
+
+    /// Asks for the [`FnKey::DynForward`] of `iface_fn` for receivers of
+    /// type `dyn dyn_iface` in this unit (§8.6).
+    pub(crate) fn request_dyn_forward(&mut self, iface_fn: DefId, dyn_iface: DefId) {
+        self.dyn_forwards.insert((iface_fn, dyn_iface));
     }
 
     /// Adds a static object and returns its id (its `id` field is
@@ -292,6 +301,12 @@ impl Pending {
         &self.trampolines
     }
 }
+
+/// The text of a string literal that test THIR uses for a construct MIR
+/// does not lower (E0038), to test reporting and placeholders now that
+/// every THIR construct lowers.
+#[cfg(test)]
+pub(crate) const TEST_UNSUPPORTED: &str = "\u{0}unsupported";
 
 /// E0038: "<what> are not supported yet", worded like the front end's old
 /// gates, with the primary label on the construct (D-451).
@@ -492,6 +507,9 @@ fn finish_unit(
     for &(iface_fn, arity) in &pending.tuple_fns {
         functions.push(dict::tuple_fn(iface_fn, arity, cx)?);
     }
+    for &(iface_fn, dyn_iface) in &pending.dyn_forwards {
+        functions.push(dict::dyn_forward(iface_fn, dyn_iface, cx)?);
+    }
     let statics = pending.statics;
     let mut m = Mentions::default();
     for f in &functions {
@@ -662,9 +680,15 @@ fn key_defs(key: FnKey, out: &mut BTreeSet<DefId>) {
         | FnKey::ConstInit(d)
         | FnKey::Test(d)
         | FnKey::TupleDictFn { iface_fn: d, .. }
-        | FnKey::DynForward { iface_fn: d }
         | FnKey::Entry(EntryKind::Main(d) | EntryKind::Test(d) | EntryKind::Const(d)) => {
             out.insert(d);
+        }
+        FnKey::DynForward {
+            iface_fn,
+            dyn_iface,
+        } => {
+            out.insert(iface_fn);
+            out.insert(dyn_iface);
         }
         FnKey::Entry(EntryKind::Repl(_)) | FnKey::Trampoline(_) => {}
     }

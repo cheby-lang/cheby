@@ -252,6 +252,37 @@ impl ModuleInterface {
         Ok(index)
     }
 
+    /// Replaces the signature of item `index`, which keeps its name, kind
+    /// and place in the name maps: the REPL gives an entry's body, a `test`
+    /// item, its inferred signature `fn() -> (…)` (plan §8.3).
+    ///
+    /// # Errors
+    ///
+    /// An [`Ice`] if there is no such item.
+    pub fn set_sig(&mut self, index: DefIndex, sig: ItemSig) -> Result<(), Ice> {
+        let item = self
+            .items
+            .get_mut(index)
+            .ok_or_else(|| Ice::new("setting the signature of a missing item"))?;
+        item.sig = sig;
+        Ok(())
+    }
+
+    /// Replaces the span of item `index`: the REPL moves the spans of an
+    /// entry it parsed inside a wrapper to the entry's own text.
+    ///
+    /// # Errors
+    ///
+    /// An [`Ice`] if there is no such item.
+    pub fn set_span(&mut self, index: DefIndex, span: Option<Span>) -> Result<(), Ice> {
+        let item = self
+            .items
+            .get_mut(index)
+            .ok_or_else(|| Ice::new("setting the span of a missing item"))?;
+        item.span = span;
+        Ok(())
+    }
+
     fn check_parent(index: DefIndex, item: &IfaceItem) -> Result<(), Ice> {
         match item.parent {
             Some(parent) if parent >= index => {
@@ -583,5 +614,36 @@ mod tests {
                 .push(item(&g, "X", DefKind::Ctor, Vis::Pub, Some(9)))
                 .is_err()
         );
+    }
+
+    /// The REPL gives an entry's body its inferred signature and moves its
+    /// spans; the name maps do not change.
+    #[test]
+    fn signatures_and_spans_can_be_replaced() {
+        let g = Globals::new();
+        let items = IndexVec::from_raw(vec![
+            item(&g, "<repl>", DefKind::Test, Vis::Package, None),
+            item(&g, "x", DefKind::Const, Vis::Package, None),
+        ])
+        .unwrap();
+        let mut iface =
+            ModuleInterface::new(ModuleId::from_u32(4), PackageId::LOCAL, items).unwrap();
+        let body = DefIndex::from_u32(0);
+        let sig = ItemSig::Const(crate::ConstSig { ty: crate::Ty::INT });
+        iface.set_sig(body, sig.clone()).unwrap();
+        assert_eq!(iface.item(body).unwrap().sig, sig);
+        let span = Span::new(cheby_diag::FileId::new(2), cheby_diag::TextRange::new(1, 3));
+        iface.set_span(DefIndex::from_u32(1), Some(span)).unwrap();
+        assert_eq!(iface.item(DefIndex::from_u32(1)).unwrap().span, Some(span));
+        assert_eq!(
+            iface.lookup(Namespace::Value, g.names.intern("x")),
+            Some(DefIndex::from_u32(1))
+        );
+        assert!(
+            iface
+                .set_sig(DefIndex::from_u32(7), ItemSig::Error)
+                .is_err()
+        );
+        assert!(iface.set_span(DefIndex::from_u32(7), None).is_err());
     }
 }

@@ -23,12 +23,19 @@
 //!   `cheby check` build (D-532); panics `ForbiddenEffect`.
 //! - [`const_seed`] and [`source_hash`]: a constant's D-269 seed (D-538).
 //!
-//! Freezing results in place is [`crate::alloc::freeze`] (D-539). W4-C adds
-//! the limits (D-536) and the rebuild of maps and sets (D-196).
+//! - The limits (D-536): an entry that runs out of time or memory records
+//!   its [`Limit`] in the table before it is abandoned
+//!   ([`Abandoned::limit`]), so the host reports E0076 rather than a panic.
+//! - [`rebuild_collections`]: the rebuild of every `Map` and `Set` in the
+//!   results with the per-process seed before code runs (D-196, D-539).
+//! - [`find_out_of_js_range`]: the JS range check of a result (E0078,
+//!   D-540), walking the value by its type.
+//!
+//! Freezing results in place is [`crate::alloc::freeze`] (D-539).
 //!
 //! [`EntryConfig::consts`]: crate::entry::EntryConfig::consts
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::Hasher as _;
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -37,7 +44,10 @@ use siphasher::sip::SipHasher13;
 use crate::abi::{self, PanicKind, Word};
 use crate::ctx::ExecCtx;
 use crate::entry::{self, EntryFn};
+use crate::layout::{self, FieldKind, LayoutKind};
+use crate::object::{load_rc, read_field, word_to_ptr};
 use crate::panic::{cheby_rt_panic, fatal, panic_current};
+use crate::{alloc, hamt, list, values};
 
 /// The kernels this module registers: none.
 pub(crate) fn kernels(out: &mut Vec<(&'static str, *const u8)>) {
@@ -80,6 +90,30 @@ struct Table {
     cycle: Option<usize>,
     /// The failed constant a reader met, until [`ConstTable::abandon`].
     failed: Option<usize>,
+    /// The limit that ended the running entry, until
+    /// [`ConstTable::abandon`].
+    limit: Option<Limit>,
+}
+
+/// A limit of constant evaluation (D-195, D-536), reported as E0076.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Limit {
+    /// The wall-clock time of one top-level evaluation.
+    Time,
+    /// The live bytes of the build while a constant is evaluated.
+    Memory,
+}
+
+impl Limit {
+    /// The message of the (captured, never printed) panic report that
+    /// abandons the entry.
+    #[must_use]
+    pub const fn message(self) -> &'static str {
+        match self {
+            Self::Time => "constant evaluation exceeded its time limit",
+            Self::Memory => "constant evaluation exceeded its memory limit",
+        }
+    }
 }
 
 /// What a panicked evaluation left in progress ([`ConstTable::abandon`]).
@@ -93,6 +127,8 @@ pub struct Abandoned {
     /// The already failed constant a reader met: the panic only ends the
     /// reader, and is not reported again.
     pub failed: Option<*mut u64>,
+    /// The limit that ended the entry (E0076), if one did.
+    pub limit: Option<Limit>,
 }
 
 /// The constants of one build, shared by the host and the constant
@@ -188,7 +224,13 @@ impl ConstTable {
                 .failed
                 .take()
                 .map(std::ptr::with_exposed_provenance_mut),
+            limit: table.limit.take(),
         }
+    }
+
+    /// Records that `limit` ends the running entry.
+    fn exceed(&self, limit: Limit) {
+        self.lock().limit = Some(limit);
     }
 
     /// Starts forcing the constant at `slot`: its thunk and seed if it is
@@ -216,6 +258,18 @@ impl ConstTable {
             ConstState::Done => Forced::Done,
         }
     }
+}
+
+/// Ends the constant evaluation running on this thread because it
+/// exceeded `limit` (D-536): records the limit in the build's table, then
+/// abandons the entry like a panic, whose report the host never prints.
+/// Called by the stack check's slow path (time) and by allocation
+/// (memory).
+pub(crate) fn limit_exceeded(limit: Limit) -> ! {
+    if let Some(table) = entry::current_consts() {
+        table.exceed(limit);
+    }
+    panic_current(PanicKind::Explicit, Some(limit.message()))
 }
 
 /// What [`ConstTable::force`] found.
@@ -316,6 +370,184 @@ pub const UNRESOLVED_MESSAGE: &str =
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_rt_unresolved() -> Word {
     panic_current(PanicKind::ForbiddenEffect, Some(UNRESOLVED_MESSAGE))
+}
+
+/// Rebuilds every `Map` and `Set` that `roots` reach with `seed`, the
+/// per-process seed, before code reads them (D-196, D-539).
+///
+/// One memoized walk covers all roots together: each object is visited
+/// once, whichever roots share it, and a collection is rebuilt after
+/// everything it holds (post-order), so a `Set` used as a `Map` key is
+/// rebuilt before the map. Each collection is rebuilt in place
+/// ([`hamt::reseed_in_place`]): its root object keeps its address and
+/// gets the new trie, so every parent field and slot that pointed to it
+/// points to the rebuilt collection, with no count to adjust. Static
+/// objects (frozen results of earlier batches, constructor statics) are
+/// skipped. The walk is a worklist on the heap (plan §0, deep data).
+///
+/// Run it on an entry ([`entry::run_task`]): hashing a key may call a
+/// type's `@std_hooks` closure.
+///
+/// # Safety
+///
+/// Every root is a tagged integer, 0 or a live object; no other thread
+/// uses the objects they reach; and the current domain is the one they
+/// are charged to.
+pub unsafe fn rebuild_collections(roots: &[Word], seed: u64) {
+    let mut work: Vec<(Word, bool)> = roots.iter().map(|&word| (word, false)).collect();
+    work.reverse();
+    let mut visited: HashSet<Word> = HashSet::new();
+    while let Some((word, children_done)) = work.pop() {
+        if children_done {
+            // SAFETY: a live object reached from the roots, visited once.
+            if unsafe { hamt::collection_of(word) }.is_some() {
+                // SAFETY: as above; no other reference is in use.
+                unsafe { hamt::reseed_in_place(word, seed) };
+            }
+            continue;
+        }
+        if abi::is_tagged_int(word) || word == 0 {
+            continue;
+        }
+        // SAFETY: a live object reached from the roots. In poisoning mode,
+        // a freed one ends the process.
+        unsafe { alloc::check_live(word, "rebuilding a constant") };
+        // SAFETY: as above.
+        if unsafe { load_rc(word_to_ptr(word)) } == abi::RC_STATIC || !visited.insert(word) {
+            continue;
+        }
+        work.push((word, true));
+        let first_child = work.len();
+        // SAFETY: as above.
+        unsafe { alloc::for_each_child(word, &mut |child| work.push((child, false))) };
+        // Children in their own order, first child on top.
+        if let Some(children) = work.get_mut(first_child..) {
+            children.reverse();
+        }
+    }
+}
+
+/// The largest `Int` magnitude JS represents exactly, 2^53 - 1 (D-037).
+pub const JS_MAX_SAFE_INT: i64 = (1 << 53) - 1;
+
+/// A type as the JS range check of constants sees it (E0078, D-540): only
+/// what may hold an `Int` matters. Nodes refer to each other by index into
+/// one slice, so recursive types stay finite.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RangeNode {
+    /// Holds no `Int`: other scalars, strings, bytes, `Nil`, `Bool`.
+    Opaque,
+    /// `Int` (never `I64`, which JS represents exactly as a `BigInt`).
+    Int,
+    /// A tuple, by element.
+    Tuple(Box<[usize]>),
+    /// `List<T>`.
+    List(usize),
+    /// `Map<K, V>`.
+    Map(usize, usize),
+    /// `Set<T>`.
+    Set(usize),
+    /// A type with constructors: for each constructor, by tag, the nodes of
+    /// its fields in declaration order (with the type's arguments in
+    /// place).
+    Adt(Box<[Box<[usize]>]>),
+}
+
+/// The first `Int` outside ±[`JS_MAX_SAFE_INT`] in `value`, a value of the
+/// type `nodes[root]`, or `None`. Raw `Int` fields of constructors are
+/// checked through the layout table, whose field kinds tell `Int` from the
+/// sized integers. Each (object, type) pair is visited once, with a
+/// worklist on the heap (plan §0, deep data).
+///
+/// # Safety
+///
+/// `value` is a live value of the type `nodes` describes (a constant's
+/// evaluated result), not changed during the call.
+#[must_use]
+pub unsafe fn find_out_of_js_range(value: Word, nodes: &[RangeNode], root: usize) -> Option<i64> {
+    let out = |n: i64| n.unsigned_abs() > JS_MAX_SAFE_INT.unsigned_abs();
+    let mut work: Vec<(Word, usize)> = vec![(value, root)];
+    let mut seen: HashSet<(Word, usize)> = HashSet::new();
+    while let Some((word, node)) = work.pop() {
+        let Some(node_kind) = nodes.get(node) else {
+            fatal(format_args!("the range node {node} does not exist"));
+        };
+        if matches!(node_kind, RangeNode::Opaque) {
+            continue;
+        }
+        if let RangeNode::Int = node_kind {
+            // SAFETY: an `Int` of the caller's value.
+            let n = unsafe { values::word_to_i64(word) };
+            if out(n) {
+                return Some(n);
+            }
+            continue;
+        }
+        if abi::is_tagged_int(word) || word == 0 || !seen.insert((word, node)) {
+            continue;
+        }
+        match node_kind {
+            RangeNode::Opaque | RangeNode::Int => {}
+            RangeNode::Tuple(parts) => {
+                // SAFETY: a tuple of the caller's value.
+                let elements = unsafe { values::read_tuple(word) };
+                work.extend(elements.into_iter().zip(parts.iter().copied()));
+            }
+            RangeNode::List(element) => {
+                // SAFETY: a list of the caller's value; the elements stay
+                // alive with it.
+                for item in unsafe { list::iter(word) } {
+                    work.push((item, *element));
+                }
+            }
+            RangeNode::Map(key, value) => {
+                // SAFETY: a map of the caller's value.
+                unsafe {
+                    hamt::for_each_entry(word, &mut |k, v| {
+                        work.push((k, *key));
+                        if let Some(v) = v {
+                            work.push((v, *value));
+                        }
+                    });
+                }
+            }
+            RangeNode::Set(element) => {
+                // SAFETY: a set of the caller's value.
+                unsafe { hamt::for_each_entry(word, &mut |k, _| work.push((k, *element))) };
+            }
+            RangeNode::Adt(ctors) => {
+                // SAFETY: a constructor value of the caller's value.
+                let id = unsafe { values::layout_of(word) };
+                let Some(info) = id.and_then(layout::get) else {
+                    fatal(format_args!("{word:#x} is not a constructor value"));
+                };
+                let LayoutKind::Ctor { tag, .. } = info.kind else {
+                    fatal(format_args!("{word:#x} is not a constructor value"));
+                };
+                let fields = usize::try_from(tag).ok().and_then(|tag| ctors.get(tag));
+                let Some(fields) = fields else {
+                    fatal(format_args!("the constructor {tag} has no range nodes"));
+                };
+                let obj = word_to_ptr(word);
+                for (field, &field_node) in info.fields.iter().zip(fields.iter()) {
+                    let offset = usize::try_from(field.offset).unwrap_or(usize::MAX);
+                    // SAFETY: the layout's field lies within the object.
+                    let raw = unsafe { read_field(obj, offset) };
+                    match field.kind {
+                        FieldKind::Value => work.push((raw, field_node)),
+                        FieldKind::Int => {
+                            let n = raw.cast_signed();
+                            if out(n) {
+                                return Some(n);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 /// The SipHash-1-3 with a zero key of a module's source bytes, its part of
@@ -488,6 +720,157 @@ mod tests {
         assert_eq!(abandoned.stack, [slot(&SLOT_C)]);
         assert_eq!(abandoned.cycle, Some(slot(&SLOT_C)));
         assert_eq!(table.state(slot(&SLOT_C)), Some(ConstState::Failed));
+    }
+
+    fn set_of(items: &[i64], seed: u64) -> Word {
+        let mut set = hamt::cheby_set_new();
+        for &item in items {
+            // SAFETY: a live set, replaced by the kernel's owned result.
+            let next = unsafe { hamt::cheby_set_insert(set, values::int_word(item)) };
+            // SAFETY: the previous version, owned here.
+            unsafe { crate::rc::drop(set) };
+            set = next;
+        }
+        // SAFETY: an owned set, given up for the rebuilt one.
+        unsafe { hamt::rebuild_with_seed(set, seed) }
+    }
+
+    /// D-196, D-539: one walk over all results rebuilds each collection
+    /// once, inner ones first, in place, so two constants sharing a map of
+    /// sets both see it rebuilt and lookups by value still work.
+    #[test]
+    fn rebuilding_reseeds_shared_and_nested_collections_once() {
+        let domain = alloc::Domain::new();
+        alloc::with_domain(Arc::clone(&domain), || {
+            let key = set_of(&[1, 2, 3], 0xA);
+            let mut map = hamt::cheby_map_new();
+            for (k, v) in [(key, 10), (set_of(&[4], 0xA), 20)] {
+                // SAFETY: live words; the kernel dups what it keeps.
+                let next = unsafe { hamt::cheby_map_insert(map, k, values::int_word(v)) };
+                // SAFETY: owned words given up.
+                unsafe {
+                    crate::rc::drop(map);
+                    crate::rc::drop(k);
+                }
+                map = next;
+            }
+            // SAFETY: an owned map, given up for the rebuilt one.
+            map = unsafe { hamt::rebuild_with_seed(map, 0xA) };
+            // Two "constants": a tuple holding the map, and the map itself.
+            // SAFETY: a live map, shared.
+            unsafe { crate::rc::dup(map) };
+            let first = values::tuple(&[map, values::int_word(1)]);
+            let second = map;
+            let live = domain.live_objects();
+            // SAFETY: live results of this thread.
+            unsafe {
+                rebuild_collections(&[first, second, abi::tag_int(5).unwrap_or(0)], 0xB);
+                assert_eq!(hamt::seed_of(second), Some(0xB));
+                assert_eq!(values::read_tuple(first).first().copied(), Some(second));
+                let mut keys = Vec::new();
+                hamt::for_each_entry(second, &mut |k, _| keys.push(k));
+                for k in keys {
+                    assert_eq!(hamt::seed_of(k), Some(0xB));
+                }
+                let probe = set_of(&[3, 2, 1], 0xC);
+                let found = hamt::cheby_map_get(second, probe);
+                assert_eq!(values::read_option(found), Some(values::int_word(10)));
+                crate::rc::drop(found);
+                crate::rc::drop(probe);
+                // The old tries were freed: the same number of objects.
+                assert_eq!(domain.live_objects(), live);
+                crate::rc::drop(first);
+                crate::rc::drop(second);
+            }
+            assert_eq!(domain.live_objects(), 0);
+        });
+    }
+
+    /// Plan §0 (deep data): a million-deep result is rebuilt, range-checked
+    /// and frozen on a small stack.
+    #[test]
+    fn deep_results_need_no_deep_stack() {
+        let worker = std::thread::Builder::new()
+            .stack_size(256 << 10)
+            .spawn(|| {
+                let domain = alloc::Domain::new();
+                alloc::with_domain(Arc::clone(&domain), || {
+                    // (((… (big, set) …, 1), 1), 1): a node is a tuple of a
+                    // node and an `Int`; the bottom holds a set and an
+                    // `Int` outside the JS range.
+                    let set = set_of(&[1, 2], 0xA);
+                    let mut chain = values::tuple(&[set, values::int_word(1 << 60)]);
+                    for _ in 0..1_000_000 {
+                        chain = values::tuple(&[chain, values::int_word(1)]);
+                    }
+                    let nodes = [RangeNode::Tuple(Box::new([0, 1])), RangeNode::Int];
+                    // SAFETY: live values of this thread.
+                    unsafe {
+                        rebuild_collections(&[chain], 0xB);
+                        assert_eq!(hamt::seed_of(set), Some(0xB));
+                        assert_eq!(find_out_of_js_range(chain, &nodes, 0), Some(1 << 60));
+                        alloc::freeze(chain);
+                    }
+                    assert_eq!(domain.live_objects(), 0);
+                });
+            })
+            .unwrap();
+        worker.join().unwrap();
+    }
+
+    /// E0078, D-540: only `Int`s are checked, wherever the type puts them:
+    /// raw constructor fields, tuples, lists, map keys and values, set
+    /// elements; `I64` and other words are not.
+    #[test]
+    fn the_range_walk_follows_the_type() {
+        let big = (1_i64 << 53) + 1;
+        let domain = alloc::Domain::new();
+        alloc::with_domain(Arc::clone(&domain), || {
+            // SAFETY: live values of this thread.
+            unsafe {
+                // Nodes: 0 Int, 1 Opaque, 2 List<Int>, 3 Map<Int, Int>,
+                // 4 Set<Int>, 5 (Int, Int), 6 Option<Int>.
+                let nodes = [
+                    RangeNode::Int,
+                    RangeNode::Opaque,
+                    RangeNode::List(0),
+                    RangeNode::Map(0, 0),
+                    RangeNode::Set(0),
+                    RangeNode::Tuple(Box::new([1, 0])),
+                    // `Some` is tag 0, `None` tag 1.
+                    RangeNode::Adt(Box::new([Box::new([0]), Box::new([])])),
+                ];
+                let safe = values::int_word(JS_MAX_SAFE_INT);
+                let unsafe_word = values::int_word(-big);
+                assert_eq!(find_out_of_js_range(safe, &nodes, 0), None);
+                assert_eq!(
+                    find_out_of_js_range(values::int_word(-JS_MAX_SAFE_INT), &nodes, 0),
+                    None
+                );
+                assert_eq!(find_out_of_js_range(unsafe_word, &nodes, 0), Some(-big));
+                assert_eq!(find_out_of_js_range(unsafe_word, &nodes, 1), None);
+                let list = list::from_iter([values::int_word(1), values::int_word(big)]);
+                assert_eq!(find_out_of_js_range(list, &nodes, 2), Some(big));
+                let set = set_of(&[3, big], 1);
+                assert_eq!(find_out_of_js_range(set, &nodes, 4), Some(big));
+                let map = hamt::cheby_map_insert(
+                    hamt::cheby_map_new(),
+                    values::int_word(1),
+                    values::int_word(big),
+                );
+                assert_eq!(find_out_of_js_range(map, &nodes, 3), Some(big));
+                // The first element is not an `Int` (say an `I64`).
+                let pair = values::tuple(&[values::int_word(big), values::int_word(2)]);
+                assert_eq!(find_out_of_js_range(pair, &nodes, 5), None);
+                let some = values::some(values::int_word(big));
+                assert_eq!(find_out_of_js_range(some, &nodes, 6), Some(big));
+                assert_eq!(find_out_of_js_range(values::none(), &nodes, 6), None);
+                for word in [unsafe_word, list, set, map, pair, some] {
+                    crate::rc::drop(word);
+                }
+            }
+            assert_eq!(domain.live_objects(), 0);
+        });
     }
 
     #[test]

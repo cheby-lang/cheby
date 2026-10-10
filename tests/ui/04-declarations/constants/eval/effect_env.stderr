@@ -1,0 +1,8 @@
+error[E0077]: evaluating the constant `argument_count` reached an effect
+  --> tests/ui/04-declarations/constants/eval/effect_env.cheby:10:7
+   |
+10 | const argument_count: Int = list::length(env::args())
+   |       ^^^^^^^^^^^^^^ this constant is computed at compile time
+   |
+   = note: it reached the external function `cheby_env_args`; only the kernels of `std::list`, `std::map`, `std::set`, `std::string`, `std::bytes` and the numeric modules run at compile time
+

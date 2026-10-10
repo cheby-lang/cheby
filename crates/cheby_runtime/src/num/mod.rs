@@ -11,8 +11,10 @@
 //! - `float`: `std::float` and `std::f32`: conversions (D-359), parsing and
 //!   text, `truncate`, `round`, `floor` and `ceil` (D-132, D-314) and
 //!   `float::sqrt`.
-//! - [`math`]: the correctly rounded functions of D-396. None is registered
-//!   yet: the pure-Rust candidate failed the evaluation (see that module).
+//! - [`math`]: the correctly rounded functions of D-396 (`pow`, `exp`,
+//!   `ln`, `sin`, `cos`, `tan`, `atan2`), in Rust with double-double
+//!   evaluation and Ziv's rounding test (D-568), verified as D-553
+//!   requires.
 //!
 //! Kernels follow plan §6: `Int` and `I64` are `i64`, the sized types their
 //! C types, `Float` `f64`, `F32` `f32`, and every other value a borrowed
@@ -63,11 +65,11 @@ pub(crate) fn kernels(out: &mut Vec<(&'static str, *const u8)>) {
     );
 }
 
-/// The std modules whose every kernel is registered here. `float` joins
-/// them when [`math`] registers the seven correctly rounded functions
-/// (D-396, plan §11 Q3).
+/// The std modules whose every kernel is registered here; `float` since
+/// [`math`] registers the seven correctly rounded functions (D-396,
+/// D-568).
 pub(crate) const COMPLETE: &[&str] = &[
-    "int", "f32", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64",
+    "int", "float", "f32", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64",
 ];
 
 /// A value that a kernel returns inside a uniform word (plan §5.1).

@@ -17,10 +17,18 @@
 //! generic user type, D-064, D-167) is called through its static
 //! dictionary (D-524), whose symbol carries the entry item's module
 //! (the entries unit has none, D-580).
+//!
+//! A REPL entry's thunk (`cb$entry$repl$<n>`, G5, plan §8.3) is lowered
+//! with the entry module's interface as `own`: it calls the entry's body,
+//! the module's one `test` item, whose signature the session made
+//! `fn() -> (shown, b1, …)` (`cheby_types::repl`), and returns the owned
+//! pair `(debug text of shown, the body's tuple)`. The debug text is made
+//! on the entry's thread, where the hooks of std types can run (D-482); the
+//! session prints it with the value's type and stores the bindings.
 
 use std::collections::BTreeSet;
 
-use cheby_iface::{DefId, Ice, builtin};
+use cheby_iface::{DefId, DefKind, Ice, ItemSig, TyKind, builtin};
 use cheby_types::thir::{Dict, EntryInfo};
 
 use crate::abi::{abi_sig, entry_sig};
@@ -29,10 +37,8 @@ use crate::ir::{
     Callee, CmpOp, Const, EntryKind, FnKey, Function, LayoutRef, Local, Operand, RuntimeFn, Rvalue,
     Stmt, TagType, Terminator, UnitKind,
 };
-use crate::lower::dict::{IfaceShape, Statics, dict_closed, dict_iface, dict_mentions_dyn};
-use crate::lower::{
-    LowerCx, LowerError, Pending, Unsupported, closure, finish_unit, not_supported,
-};
+use crate::lower::dict::{IfaceShape, Statics, dict_closed, dict_iface};
+use crate::lower::{LowerCx, LowerError, Pending, Unsupported, closure, finish_unit};
 use crate::repr::{CType, ForeignSig, Repr};
 use crate::{Abi, MirModule};
 
@@ -67,9 +73,8 @@ pub struct EntryRequest<'a> {
 ///
 /// # Errors
 ///
-/// E0038 for a `main` or test returning `Result` whose error type
-/// mentions `dyn` (W4-A), and an [`Ice`] for a REPL entry (G5) or one
-/// whose item is not readable through `cx`.
+/// An [`Ice`] for an entry whose item is not readable through `cx` (a
+/// REPL entry needs its module's interface as `cx.defs.own`).
 pub fn lower_entries(
     entries: &[EntryRequest<'_>],
     cx: &LowerCx<'_>,
@@ -102,9 +107,7 @@ fn entry_thunk(
         EntryKind::Main(def) => (def, Callee::Direct(def)),
         EntryKind::Test(def) => (def, Callee::Code(FnKey::Test(def))),
         EntryKind::Const(def) => (def, Callee::Code(FnKey::ConstInit(def))),
-        EntryKind::Repl(_) => {
-            return Err(Ice::new("REPL entries are not supported yet (G5)").into());
-        }
+        EntryKind::Repl(_) => return repl_thunk(req.kind, cx),
     };
     let sig = entry_sig(req.kind);
     let mut b = FunctionBuilder::new(FnKey::Entry(req.kind), Abi::C, sig.ret, span_of(def, cx)?)?;
@@ -139,6 +142,62 @@ fn entry_thunk(
             b.terminate(Terminator::Return(Operand::Local(result)))?;
         }
     }
+    Ok(b.finish()?)
+}
+
+/// The thunk of the REPL entry `kind`: `cx.defs.own` is the entry
+/// module's interface, whose one `test` item is the entry's body.
+fn repl_thunk(kind: EntryKind, cx: &LowerCx<'_>) -> Result<Function, LowerError> {
+    let own = cx
+        .defs
+        .own
+        .ok_or_else(|| Ice::new("a REPL entry thunk without its entry's interface"))?;
+    let (index, item) = own
+        .items
+        .iter_enumerated()
+        .find(|(_, item)| item.kind == DefKind::Test)
+        .ok_or_else(|| Ice::new("a REPL entry without its body"))?;
+    let body = DefId::new(own.module, index);
+    let ItemSig::Fn(sig) = &item.sig else {
+        return Err(Ice::new("a REPL entry's body without its signature").into());
+    };
+    let TyKind::Tuple(elems) = cx.defs.globals.types.kind(sig.ret) else {
+        return Err(Ice::new("a REPL entry's body does not return a tuple").into());
+    };
+    let arity = u32::try_from(elems.len())
+        .ok()
+        .filter(|&n| n >= 2)
+        .ok_or_else(|| Ice::new("a REPL entry's body returns a tuple of the wrong size"))?;
+    let span = item
+        .span
+        .ok_or_else(|| Ice::new("a REPL entry's body has no span"))?;
+    let mut b = FunctionBuilder::new(FnKey::Entry(kind), Abi::C, entry_sig(kind).ret, span)?;
+    let result = b.assign(
+        Repr::Value,
+        Rvalue::Call {
+            callee: Callee::Code(FnKey::Test(body)),
+            args: Vec::new(),
+        },
+    )?;
+    let shown = b.assign(
+        Repr::Value,
+        Rvalue::Field {
+            base: result,
+            layout: LayoutRef::Tuple(arity),
+            field: 0,
+        },
+    )?;
+    let text = b
+        .call_runtime(RuntimeFn::Debug, vec![Operand::Local(shown)])?
+        .ok_or_else(|| Ice::new("`debug` without a result"))?;
+    let pair = b.assign(
+        Repr::Value,
+        Rvalue::Alloc {
+            layout: LayoutRef::Tuple(2),
+            fields: vec![Operand::Local(text), Operand::Local(result)],
+        },
+    )?;
+    b.terminate(Terminator::Return(Operand::Local(pair)))?;
     Ok(b.finish()?)
 }
 
@@ -184,13 +243,11 @@ fn show_call(
     {
         return Ok(ShowCall::Direct(f.def));
     }
-    if dict_mentions_dyn(cx, dict) || !dict_closed(cx, dict) {
-        // A `main` or test has no type parameters, so only a `dyn`
-        // error type gets here (W4-A).
-        return Err(LowerError::Unsupported(vec![not_supported(
-            span_of(def, cx)?,
-            "errors whose `show` needs the dictionary of a `dyn` value",
-        )]));
+    if !dict_closed(cx, dict) {
+        // A `main` or test has no type parameters, and a `dyn` error type
+        // has a static forwarding dictionary (D-499), so every dictionary
+        // here is closed.
+        return Err(Ice::new("an entry's `show` dictionary mentions a type parameter").into());
     }
     let module = cx.defs.name(def)?.module;
     let mut statics = Statics {

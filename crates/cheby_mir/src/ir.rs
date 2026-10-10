@@ -272,10 +272,12 @@ pub enum FnKey {
     /// for tuples of `arity` elements (D-167), the entry of a tuple
     /// dictionary. Uniform signature ([`crate::abi::uniform_sig`]).
     TupleDictFn { iface_fn: DefId, arity: u32 },
-    /// The code of a dictionary entry for `dyn I` that forwards the call
-    /// of `iface_fn` to the dictionary the `dyn` value carries (§8.6).
-    /// Uniform signature.
-    DynForward { iface_fn: DefId },
+    /// The code of a dictionary entry through which a `dyn J` value
+    /// satisfies a bound (§8.6): it forwards the call of `iface_fn` to the
+    /// dictionary the receiver carries, a dictionary of `dyn_iface` (`J`),
+    /// where the function's field depends on `J` (D-524,
+    /// GAP(dyn-forward-key)). Uniform signature.
+    DynForward { iface_fn: DefId, dyn_iface: DefId },
 }
 
 impl FnKey {

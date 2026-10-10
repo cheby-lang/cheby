@@ -1,0 +1,10 @@
+> import std::io
+> let line = io::read_line()
+< a line for the program
+> line
+Ok(Some("a line for the program")) : Result<Option<String>, io::Error>
+> io::read_line()
+< second line
+Ok(Some("second line")) : Result<Option<String>, io::Error>
+> io::read_line()
+Ok(None) : Result<Option<String>, io::Error>

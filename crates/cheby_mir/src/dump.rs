@@ -25,7 +25,7 @@
 //!   `const_init <path>`, `test <path>`, `entry main(<path>)`,
 //!   `entry test(<path>)`, `entry const(<path>)`, `entry repl(<n>)`,
 //!   `trampoline <n>`, `tuple_dict_fn <iface fn>/<arity>`,
-//!   `dyn_forward <iface fn>`.
+//!   `dyn_forward <iface fn> for dyn <interface>`.
 //! - Constants: `int N`, `float F`, `bool B`, `<sized repr> N`, `str#N`,
 //!   `nil`, `ctor <path>`, `fn <path>`, `code <key>`, `empty_list`,
 //!   `static#N`, `builtin_desc <name>`.
@@ -258,7 +258,14 @@ fn key_text(m: &MirModule, key: FnKey) -> Result<String, Ice> {
         FnKey::TupleDictFn { iface_fn, arity } => {
             format!("tuple_dict_fn {}/{arity}", def(m, iface_fn)?)
         }
-        FnKey::DynForward { iface_fn } => format!("dyn_forward {}", def(m, iface_fn)?),
+        FnKey::DynForward {
+            iface_fn,
+            dyn_iface,
+        } => format!(
+            "dyn_forward {} for dyn {}",
+            def(m, iface_fn)?,
+            def(m, dyn_iface)?
+        ),
     })
 }
 

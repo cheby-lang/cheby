@@ -1,0 +1,31 @@
+// @mode: run-fail
+// @exit: 1
+// @decisions: D-182, D-502, D-560
+//! An `Err` from `main` whose type is `dyn Problem` is written by the
+//! `show` of the value inside, found through the forwarding dictionary
+//! of `Show` for `dyn Problem`, since `Problem` embeds `Show` (§10.10).
+
+import std::io
+
+interface Problem: Show {
+  fn code(Self) -> Int
+}
+
+type Outage {
+  Outage { service: String, minutes: Int }
+}
+
+fn show(o: Outage) -> String {
+  "{o.service} down for {o.minutes} minutes"
+}
+
+fn code(o: Outage) -> Int {
+  o.minutes
+}
+
+fn main() -> Result<Nil, dyn Problem> {
+  let problem: dyn Problem = Outage { service: "mail", minutes: 5 }
+  let number = Problem::code(problem)
+  io::println("code {number}")
+  Err(problem)
+}

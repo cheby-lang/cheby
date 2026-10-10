@@ -1,0 +1,8 @@
+error[E0077]: evaluating the constant `distance` reached an effect
+  --> tests/ui/04-declarations/constants/eval/effect_user_external/src/main.cheby:13:7
+   |
+13 | const distance: I64 = absolute(-42)
+   |       ^^^^^^^^ this constant is computed at compile time
+   |
+   = note: it reached the external function `labs`; only the kernels of `std::list`, `std::map`, `std::set`, `std::string`, `std::bytes` and the numeric modules run at compile time
+

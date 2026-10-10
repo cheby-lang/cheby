@@ -615,7 +615,10 @@ fn uniform_keys_have_the_uniform_signature() {
             iface_fn: other(0),
             arity: 2,
         },
-        FnKey::DynForward { iface_fn: other(0) },
+        FnKey::DynForward {
+            iface_fn: other(0),
+            dyn_iface: other(1),
+        },
     ];
     for key in keys {
         // `self` and two words.

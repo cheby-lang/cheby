@@ -16,9 +16,9 @@
 //! ```
 //!
 //! (`CHEBY_MATH_EVAL_ALL=1` also lists every failure as bits.) The
-//! candidate is `pxfm` 0.1.30, which fails (see `num::math`). When an
-//! implementation is registered (plan §11 Q3), `candidate` returns it and
-//! the test then requires every function to verify.
+//! candidate is the runtime's own implementation (D-568); the test
+//! requires the verdict to equal `num::math::VERIFIED`. (The first
+//! candidate, `pxfm` 0.1.30, failed on every function, D-553.)
 
 #![expect(
     clippy::arithmetic_side_effects,
@@ -120,16 +120,17 @@ impl Func {
     }
 }
 
-/// The implementation under evaluation: one function per [`Func`].
+/// The implementation under evaluation: one function per [`Func`], the
+/// runtime's own (D-568).
 fn candidate(func: Func, a: f64, b: f64) -> f64 {
     match func {
-        Func::Pow => pxfm::f_pow(a, b),
-        Func::Exp => pxfm::f_exp(a),
-        Func::Ln => pxfm::f_log(a),
-        Func::Sin => pxfm::f_sin(a),
-        Func::Cos => pxfm::f_cos(a),
-        Func::Tan => pxfm::f_tan(a),
-        Func::Atan2 => pxfm::f_atan2(a, b),
+        Func::Pow => super::pow(a, b),
+        Func::Exp => super::exp(a),
+        Func::Ln => super::ln(a),
+        Func::Sin => super::trig(super::Trig::Sin, a),
+        Func::Cos => super::trig(super::Trig::Cos, a),
+        Func::Tan => super::trig(super::Trig::Tan, a),
+        Func::Atan2 => super::atan2(a, b),
     }
 }
 

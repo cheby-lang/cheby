@@ -9,14 +9,15 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use cheby_iface::{DefId, ModuleId};
 use cheby_mir::{
-    AbiSig, BuiltinDesc, Const, EntryKind, FnKey, Function, LayoutDesc, LayoutRef, MirModule,
-    Operand, Rvalue, StaticKind, StaticObject, Stmt, StrId, Terminator, UnitKind,
+    AbiSig, BuiltinDesc, Const, DefName, EntryKind, FnKey, Function, LayoutDesc, LayoutRef,
+    MirModule, Operand, Rvalue, StaticKind, StaticObject, Stmt, StrId, Terminator, UnitKind,
 };
 use cheby_runtime::abi;
 
 use crate::layout::builtin_layout_id;
 use crate::mangle::{self, Kind};
 use crate::runtime::{RuntimeFunc, STATIC_DATA};
+use crate::session::{SessionName, SessionNames};
 use crate::sig;
 use crate::{CodegenError, ForeignImport};
 
@@ -132,12 +133,27 @@ pub struct Decls {
     /// Symbol of every declared function (namespace 0) and data object
     /// (namespace 1), for CLIF legends.
     names: FxHashMap<(u32, u32), String>,
+    /// The names of REPL session items (D-547, E4).
+    session: SessionNames,
+    /// The slot each top-level function's code was last put in.
+    def_slots: FxHashMap<DefId, SlotKey>,
+    /// The ABI signature of every slot, including slots a newer one of the
+    /// same path replaced in `slots`.
+    slot_sigs: FxHashMap<DataId, AbiSig>,
     pub(crate) pending_strings: Vec<(DataId, Vec<u8>)>,
     pub(crate) pending_slots: Vec<(DataId, FuncId)>,
+    /// Existing slots to point at new code once the batch is finalized: a
+    /// REPL redefinition with the same signature (D-043).
+    pub(crate) pending_repoints: Vec<(DataId, FuncId)>,
     /// `(layout, its declaration, value fields)` of layouts to define.
     pub(crate) pending_layouts: Vec<(LayoutRef, LayoutDecl, u32)>,
     pub(crate) pending_consts: Vec<DataId>,
     pub(crate) pending_statics: Vec<PendingStatic>,
+    /// Every data object and function defined in the module so far, so a
+    /// batch that would define one again fails before it defines anything
+    /// (the JIT's all-or-nothing batches).
+    pub(crate) defined_data: FxHashSet<DataId>,
+    pub(crate) defined_funcs: FxHashSet<FuncId>,
 }
 
 impl std::fmt::Debug for Decls {
@@ -158,13 +174,13 @@ impl std::fmt::Debug for Decls {
 /// unit: its layout, strings and fields, with a reference to another static
 /// of the unit written as that static's symbol. Two units that define one
 /// symbol must give it the same print (D-523).
-fn static_print(unit: &MirModule, object: &StaticObject) -> String {
+fn static_print(decls: &Decls, unit: &MirModule, object: &StaticObject) -> String {
     let mut print = format!("{:?} {:?} [", object.layout, object.strings);
     for field in &object.fields {
         match field {
             Const::Static(id) => match unit.static_object(*id) {
                 Some(other) => {
-                    let _ = write!(print, "{}, ", Decls::static_symbol(other));
+                    let _ = write!(print, "{}, ", decls.static_symbol(other));
                 }
                 None => {
                     let _ = write!(print, "{field:?}, ");
@@ -177,6 +193,19 @@ fn static_print(unit: &MirModule, object: &StaticObject) -> String {
     }
     print.push(']');
     print
+}
+
+/// The item whose redefinition replaces the function `key`: its own code,
+/// its value shim, its closures, its constant initializer and their entry.
+const fn owner_of(key: FnKey) -> Option<DefId> {
+    match key {
+        FnKey::Item(def)
+        | FnKey::ValueShim(def)
+        | FnKey::ConstInit(def)
+        | FnKey::Closure { owner: def, .. }
+        | FnKey::Entry(EntryKind::Const(def)) => Some(def),
+        _ => None,
+    }
 }
 
 /// Whether a second unit may declare `key` again: the functions that
@@ -278,11 +307,17 @@ impl Decls {
             static_prints: FxHashMap::default(),
             builtin_descs: FxHashMap::default(),
             names: FxHashMap::default(),
+            session: SessionNames::default(),
+            def_slots: FxHashMap::default(),
+            slot_sigs: FxHashMap::default(),
             pending_strings: Vec::new(),
             pending_slots: Vec::new(),
+            pending_repoints: Vec::new(),
             pending_layouts: Vec::new(),
             pending_consts: Vec::new(),
             pending_statics: Vec::new(),
+            defined_data: FxHashSet::default(),
+            defined_funcs: FxHashSet::default(),
         })
     }
 
@@ -338,8 +373,121 @@ impl Decls {
     ///
     /// An ICE if `unit` does not name `def`.
     pub fn fn_value(&self, unit: &MirModule, def: DefId) -> Result<Option<DataId>, CodegenError> {
-        let symbol = mangle::item(Kind::FnVal, unit.name(def)?);
+        let symbol = mangle::item(Kind::FnVal, &self.def_name(unit, def)?);
         Ok(self.statics.get(&symbol).copied())
+    }
+
+    /// Registers how a REPL session names `def` (D-547, E4): its symbols
+    /// use the module `<repl>` and carry its generation, and
+    /// [`SessionName::reuse`] makes it take over an earlier definition's
+    /// slot. Registering a new generation for a def that is already
+    /// declared (a module compiled again, `:reload`) forgets the def's old
+    /// declarations, so its functions, layouts and constant slot are
+    /// declared anew; slots stay, keyed by path and signature.
+    pub fn set_session_name(&mut self, def: DefId, name: SessionName) {
+        let generation = name.generation;
+        let keeps_const = name.reuse == Some(def);
+        let previous = self.session.insert(def, name);
+        let changed = previous.map_or(generation > 0, |p| p.generation != generation);
+        if changed {
+            self.funcs.retain(|key, _| owner_of(*key) != Some(def));
+            self.layouts.remove(&LayoutRef::Ctor(def));
+            if !keeps_const {
+                self.consts.remove(&def);
+            }
+        }
+    }
+
+    /// Every symbol declared so far, sorted: for tests and dumps.
+    #[must_use]
+    pub fn symbols(&self) -> Vec<&str> {
+        let mut out: Vec<&str> = self.names.values().map(String::as_str).collect();
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
+    /// Whether the data objects of the user constructor layout `layout`
+    /// are declared.
+    #[must_use]
+    pub fn has_layout(&self, layout: LayoutRef) -> bool {
+        self.layouts.contains_key(&layout)
+    }
+
+    /// The session name of `def`, if it is a REPL session item.
+    #[must_use]
+    pub fn session_name(&self, def: DefId) -> Option<&SessionName> {
+        self.session.get(def)
+    }
+
+    /// The name symbols of `def` are built from: its session name, or the
+    /// path `unit` records.
+    pub(crate) fn def_name(&self, unit: &MirModule, def: DefId) -> Result<DefName, CodegenError> {
+        match self.session.get(def) {
+            Some(name) => Ok(name.def_name(def)),
+            None => Ok(unit.name(def)?.clone()),
+        }
+    }
+
+    /// The path that identifies `def`'s slot (D-456): its session path
+    /// without generation, or its own path.
+    pub(crate) fn slot_path(&self, unit: &MirModule, def: DefId) -> Result<String, CodegenError> {
+        match self.session.get(def) {
+            Some(name) => Ok(name.slot_path()),
+            None => Ok(unit.name(def)?.path()),
+        }
+    }
+
+    /// The slots to point at new code now that their batch is finalized,
+    /// with that code: REPL redefinitions that take over a slot (D-043).
+    pub fn take_repoints(&mut self) -> Vec<(DataId, FuncId)> {
+        std::mem::take(&mut self.pending_repoints)
+    }
+
+    /// The ABI signature of the code the slot `slot` holds.
+    #[must_use]
+    pub fn slot_sig(&self, slot: DataId) -> Option<&AbiSig> {
+        self.slot_sigs.get(&slot)
+    }
+
+    /// The slot the top-level function `def` was last compiled into.
+    #[must_use]
+    pub fn slot_of(&self, def: DefId) -> Option<&SlotDecl> {
+        self.slots.get(self.def_slots.get(&def)?)
+    }
+
+    /// Declares the slot `cb$const$…` of the session value `def` if no
+    /// compiled unit did (a value made by a prompt-level `let`, D-547): the
+    /// slot of the definition it takes over, or a new one, defined by
+    /// the next [`crate::define_data`].
+    ///
+    /// # Errors
+    ///
+    /// An ICE if `def` has no session name.
+    pub fn declare_session_const<M: Module>(
+        &mut self,
+        module: &mut M,
+        def: DefId,
+    ) -> Result<DataId, CodegenError> {
+        if let Some(id) = self.const_slot(def) {
+            return Ok(id);
+        }
+        let name = self
+            .session
+            .get(def)
+            .ok_or_else(|| CodegenError::ice(format!("the session value {def:?} has no name")))?
+            .clone();
+        if let Some(old) = name.reuse
+            && let Some(id) = self.const_slot(old)
+        {
+            self.consts.insert(def, id);
+            return Ok(id);
+        }
+        let symbol = mangle::item(Kind::Const, &name.def_name(def));
+        let id = self.data(module, &symbol, Linkage::Local, true)?;
+        self.pending_consts.push(id);
+        self.consts.insert(def, id);
+        Ok(id)
     }
 
     pub(crate) fn string(&self, key: FnKey, id: StrId) -> Result<DataId, CodegenError> {
@@ -425,6 +573,20 @@ impl Decls {
             .ok_or_else(|| CodegenError::ice(format!("function {key:?} was not declared")))?;
         decl.defined = true;
         Ok(())
+    }
+
+    /// The symbol of the data object `id`, for messages.
+    pub(crate) fn data_name(&self, id: DataId) -> &str {
+        self.names
+            .get(&(1, id.as_u32()))
+            .map_or("?", String::as_str)
+    }
+
+    /// The symbol of the function `id`, for messages.
+    pub(crate) fn func_name(&self, id: FuncId) -> &str {
+        self.names
+            .get(&(0, id.as_u32()))
+            .map_or("?", String::as_str)
     }
 
     /// The CLIF text of `func`, preceded by its symbol and a legend that
@@ -515,39 +677,52 @@ impl Decls {
     }
 
     fn symbol(&mut self, unit: &MirModule, key: FnKey) -> Result<String, CodegenError> {
-        let name = |def| unit.name(def).map_err(CodegenError::from);
         Ok(match key {
-            FnKey::Item(def) => mangle::item(Kind::Fn, name(def)?),
-            FnKey::ValueShim(def) => mangle::item(Kind::Shim, name(def)?),
+            FnKey::Item(def) => mangle::item(Kind::Fn, &self.def_name(unit, def)?),
+            FnKey::ValueShim(def) => mangle::item(Kind::Shim, &self.def_name(unit, def)?),
             // A test's name is free text that may equal a function's, so
             // a test's closures go by its ordinal, like the test (D-456).
-            FnKey::Closure { owner, index } => match self.test_ordinals.get(&owner) {
-                Some(&ordinal) => mangle::test_closure(&name(owner)?.module, ordinal, index),
-                None => mangle::closure(name(owner)?, index),
-            },
-            FnKey::ConstInit(def) => mangle::item(Kind::Cinit, name(def)?),
+            FnKey::Closure { owner, index } => {
+                let name = self.def_name(unit, owner)?;
+                match self.test_ordinals.get(&owner) {
+                    Some(&ordinal) => mangle::test_closure(&name.module, ordinal, index),
+                    None => mangle::closure(&name, index),
+                }
+            }
+            FnKey::ConstInit(def) => mangle::item(Kind::Cinit, &self.def_name(unit, def)?),
             FnKey::Test(def) => {
                 let UnitKind::Tests(module) = unit.unit else {
                     return Err(CodegenError::ice("a test body outside a tests unit"));
                 };
+                let name = self.def_name(unit, def)?;
                 let next = self.next_test.entry(module).or_insert(0);
                 let ordinal = *next;
                 *next = next.saturating_add(1);
                 self.test_ordinals.insert(def, ordinal);
-                mangle::test(&name(def)?.module, ordinal)
+                mangle::test(&name.module, ordinal)
             }
-            FnKey::Entry(EntryKind::Main(def)) => mangle::entry_main(&name(def)?.module),
+            FnKey::Entry(EntryKind::Main(def)) => {
+                mangle::entry_main(&self.def_name(unit, def)?.module)
+            }
             FnKey::Entry(EntryKind::Test(def)) => {
                 let ordinal = self.test_ordinals.get(&def).copied().ok_or_else(|| {
                     CodegenError::ice("a test entry before its test body was declared")
                 })?;
-                mangle::entry_test(&name(def)?.module, ordinal)
+                mangle::entry_test(&self.def_name(unit, def)?.module, ordinal)
             }
-            FnKey::Entry(EntryKind::Const(def)) => mangle::entry_const(name(def)?),
+            FnKey::Entry(EntryKind::Const(def)) => mangle::entry_const(&self.def_name(unit, def)?),
             FnKey::Entry(EntryKind::Repl(n)) => mangle::entry_repl(n),
             FnKey::Trampoline(arity) => mangle::trampoline(arity),
-            FnKey::TupleDictFn { iface_fn, arity } => mangle::tuple_fn(name(iface_fn)?, arity),
-            FnKey::DynForward { iface_fn } => mangle::dyn_forward(name(iface_fn)?),
+            FnKey::TupleDictFn { iface_fn, arity } => {
+                mangle::tuple_fn(&self.def_name(unit, iface_fn)?, arity)
+            }
+            FnKey::DynForward {
+                iface_fn,
+                dyn_iface,
+            } => mangle::dyn_forward(
+                &self.def_name(unit, iface_fn)?,
+                &self.def_name(unit, dyn_iface)?,
+            ),
         })
     }
 
@@ -564,8 +739,9 @@ impl Decls {
                 // Defined once per JIT: this unit uses the first copy.
                 return Ok(());
             }
-            // A REPL redefinition gets a new key generation (D-456);
-            // until then a second declaration is a bug.
+            // A REPL redefinition of the same item first registers its new
+            // generation ([`Decls::set_session_name`]), which forgets this
+            // declaration; anything else is a bug.
             return Err(CodegenError::ice(format!(
                 "function {key:?} is declared twice"
             )));
@@ -585,21 +761,7 @@ impl Decls {
             .map_err(|e| CodegenError::module(&e))?;
         self.names.insert((0, id.as_u32()), symbol.clone());
         if let FnKey::Item(def) = key {
-            let name = unit.name(def)?;
-            let slot_symbol = mangle::item(Kind::Slot, name);
-            let slot = self.data(module, &slot_symbol, Linkage::Local, true)?;
-            self.pending_slots.push((slot, id));
-            self.slots.insert(
-                SlotKey {
-                    path: name.path().into(),
-                    sig: abi_sig.clone(),
-                },
-                SlotDecl {
-                    id: slot,
-                    symbol: slot_symbol,
-                    func: id,
-                },
-            );
+            self.declare_slot(module, unit, def, &abi_sig, id)?;
         }
         for (sid, text) in function.strings.iter_enumerated() {
             let string_symbol = mangle::string(&symbol, sid);
@@ -621,6 +783,47 @@ impl Decls {
         Ok(())
     }
 
+    /// Puts the code `id` of the top-level function `def` in its slot
+    /// (D-043, D-456): the slot identified by its path and ABI signature
+    /// when the session says it takes over an earlier definition, which is
+    /// then repointed once the batch is finalized; otherwise a new slot,
+    /// `cb$slot$<path>` with the generation of a session item, which
+    /// becomes the one later callers of that path and signature load.
+    fn declare_slot<M: Module>(
+        &mut self,
+        module: &mut M,
+        unit: &MirModule,
+        def: DefId,
+        abi_sig: &AbiSig,
+        id: FuncId,
+    ) -> Result<(), CodegenError> {
+        let key = SlotKey {
+            path: self.slot_path(unit, def)?.into(),
+            sig: abi_sig.clone(),
+        };
+        let takes_over = self.session.get(def).is_some_and(|n| n.reuse.is_some());
+        if takes_over && let Some(slot) = self.slots.get_mut(&key) {
+            slot.func = id;
+            self.pending_repoints.push((slot.id, id));
+            self.def_slots.insert(def, key);
+            return Ok(());
+        }
+        let slot_symbol = mangle::item(Kind::Slot, &self.def_name(unit, def)?);
+        let slot = self.data(module, &slot_symbol, Linkage::Local, true)?;
+        self.pending_slots.push((slot, id));
+        self.slot_sigs.insert(slot, abi_sig.clone());
+        self.slots.insert(
+            key.clone(),
+            SlotDecl {
+                id: slot,
+                symbol: slot_symbol,
+                func: id,
+            },
+        );
+        self.def_slots.insert(def, key);
+        Ok(())
+    }
+
     /// Declares the `cb$layout$` word of a user constructor and, for a
     /// nullary one, its `cb$ctor$` static (D-454). A layout registered by
     /// an earlier batch keeps its objects.
@@ -639,17 +842,17 @@ impl Decls {
         if self.layouts.contains_key(&desc.layout) || builtin_layout_id(&desc.layout).is_some() {
             return Ok(());
         }
-        let name = unit.name(def)?;
+        let name = self.def_name(unit, def)?;
         let word = self.data(
             module,
-            &mangle::item(Kind::Layout, name),
+            &mangle::item(Kind::Layout, &name),
             Linkage::Local,
             true,
         )?;
         let ctor = if desc.fields.is_empty() {
             Some(self.data(
                 module,
-                &mangle::item(Kind::Ctor, name),
+                &mangle::item(Kind::Ctor, &name),
                 Linkage::Local,
                 false,
             )?)
@@ -692,7 +895,15 @@ impl Decls {
             if self.consts.contains_key(&def) {
                 continue;
             }
-            let symbol = mangle::item(Kind::Const, unit.name(def)?);
+            // A REPL constant with the type of the one it replaces shares
+            // its slot, so readers see the new value (D-547).
+            if let Some(old) = self.session.get(def).and_then(|n| n.reuse)
+                && let Some(&id) = self.consts.get(&old)
+            {
+                self.consts.insert(def, id);
+                continue;
+            }
+            let symbol = mangle::item(Kind::Const, &self.def_name(unit, def)?);
             let id = self.data(module, &symbol, Linkage::Local, true)?;
             self.pending_consts.push(id);
             self.consts.insert(def, id);
@@ -765,7 +976,7 @@ impl Decls {
         unit: &MirModule,
         def: DefId,
     ) -> Result<DataId, CodegenError> {
-        let symbol = mangle::item(Kind::FnVal, unit.name(def)?);
+        let symbol = mangle::item(Kind::FnVal, &self.def_name(unit, def)?);
         if let Some(&id) = self.statics.get(&symbol) {
             return Ok(id);
         }
@@ -782,14 +993,21 @@ impl Decls {
 
     /// The symbol of a static object (D-523, D-579): `cb$<kind>$<module>$$<name>`,
     /// with the module MIR chose (the unit's, or the type's or interface's
-    /// for a descriptor).
-    pub(crate) fn static_symbol(object: &StaticObject) -> String {
+    /// for a descriptor), and the paths of REPL session items written with
+    /// their generations (D-547, `crate::session`).
+    pub(crate) fn static_symbol(&self, object: &StaticObject) -> String {
         let kind = match object.kind {
             StaticKind::Dict => Kind::Dict,
             StaticKind::Desc => Kind::Desc,
             StaticKind::FnValue => Kind::FnVal,
         };
-        mangle::static_object(kind, &object.module, &object.name)
+        match self
+            .session
+            .static_parts(kind == Kind::Desc, &object.module, &object.name)
+        {
+            Some((module, name)) => mangle::static_object(kind, &module, &name),
+            None => mangle::static_object(kind, &object.module, &object.name),
+        }
     }
 
     /// Declares the unit's static objects (D-523), with their own strings:
@@ -804,8 +1022,8 @@ impl Decls {
         let mut new = FxHashSet::default();
         let mut ids = Vec::with_capacity(unit.statics.len());
         for object in &unit.statics {
-            let symbol = Self::static_symbol(object);
-            let print = static_print(unit, object);
+            let symbol = self.static_symbol(object);
+            let print = static_print(self, unit, object);
             match self.static_prints.get(&symbol) {
                 Some(earlier) if *earlier != print => {
                     return Err(CodegenError::ice(format!(
@@ -832,7 +1050,7 @@ impl Decls {
             if !new.contains(&id) {
                 continue;
             }
-            let symbol = Self::static_symbol(object);
+            let symbol = self.static_symbol(object);
             let mut strings = Vec::with_capacity(object.strings.len());
             for (sid, text) in object.strings.iter_enumerated() {
                 let data =
@@ -889,9 +1107,9 @@ impl Decls {
             Const::Nil => StaticWord::Data(self.static_data(abi::sym::STATIC_NIL)?),
             Const::EmptyList => StaticWord::Data(self.static_data(abi::sym::STATIC_EMPTY_LIST)?),
             Const::StaticCtor(def) => StaticWord::Data(self.ctor_object(*def)?),
-            Const::FnValue(def) => {
-                StaticWord::Data(self.static_object(&mangle::item(Kind::FnVal, unit.name(*def)?))?)
-            }
+            Const::FnValue(def) => StaticWord::Data(
+                self.static_object(&mangle::item(Kind::FnVal, &self.def_name(unit, *def)?))?,
+            ),
             Const::Static(id) => StaticWord::Data(nth(statics, id.as_u32(), "static")?),
             Const::Str(id) => StaticWord::Data(nth(strings, id.as_u32(), "string")?),
             Const::BuiltinDesc(desc) => StaticWord::Data(self.builtin_desc(*desc)?),

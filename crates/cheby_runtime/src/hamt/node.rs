@@ -417,6 +417,12 @@ impl Root {
         unsafe { write_field(self.ptr(), ROOT_COUNT, to_u64(count)) };
     }
 
+    /// Replaces the seed of a heap root (D-196's rebuild in place).
+    pub(super) fn set_seed(self, seed: u64) {
+        // SAFETY: a live heap root (the statics are never passed here).
+        unsafe { write_field(self.ptr(), ROOT_SEED, seed) };
+    }
+
     /// Replaces the top node without releasing the old one.
     pub(super) fn put_node(self, node: Bitmap) {
         // SAFETY: as above.

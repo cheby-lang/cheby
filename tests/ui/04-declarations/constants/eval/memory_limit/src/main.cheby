@@ -1,0 +1,26 @@
+// @mode: check-fail
+// @decisions: D-195, D-536
+//! A constant that holds more heap bytes than the memory limit of
+//! `[const-eval]` is stopped and reported as E0076. Bytes that a kernel
+//! allocates count too, and only live bytes count, so `small` builds and
+//! drops more than the limit in total and still evaluates (§4.5, §13.9).
+
+import std::io
+import std::list
+import std::string
+
+const small: Int = churn(50, 0)
+
+const wide: String = string::repeat("ab", 1_000_000)
+
+fn churn(n: Int, acc: Int) -> Int {
+  case n {
+    0 => acc
+    _ => churn(n - 1, acc + list::length(list::range(0, 10_000)))
+  }
+}
+
+fn main() {
+  let size = string::length(wide)
+  io::println("{small} {size}")
+}

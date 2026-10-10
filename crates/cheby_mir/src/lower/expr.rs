@@ -22,6 +22,14 @@ impl BodyCx<'_, '_> {
     pub(super) fn expr(&mut self, id: ExprId, tail: bool) -> Result<Option<Operand>, Ice> {
         let e = self.expr_data(id)?;
         let (ty, span) = (e.ty, e.span);
+        // Every THIR construct lowers now; tests of the E0038 machinery
+        // (reporting, placeholders) mark a construct as one MIR cannot
+        // lower with this string literal.
+        #[cfg(test)]
+        if matches!(&e.kind, ExprKind::Lit(cheby_types::thir::Lit::Str(s)) if **s == *crate::lower::TEST_UNSUPPORTED)
+        {
+            return self.unsupported(span, "test-only constructs", ty);
+        }
         match &e.kind {
             ExprKind::Lit(lit) => self.lit(lit, ty, span),
             ExprKind::Local(l) => self.lookup(*l, ty).map(Some),

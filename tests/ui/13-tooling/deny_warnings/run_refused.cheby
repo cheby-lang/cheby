@@ -1,0 +1,13 @@
+// @mode: run-fail
+// @exit: 1
+// @flags: --deny-warnings
+// @decisions: D-080, D-464, D-549
+//! With `--deny-warnings`, a warning stops `cheby run` like an error:
+//! the program never starts, so nothing reaches standard output.
+
+import std::io
+
+fn main() {
+  let unused = 1
+  io::println("this line is never printed")
+}

@@ -1,0 +1,11 @@
+// @mode: check-fail
+// @decisions: D-444, D-536
+//! `[const-eval]` accepts only `time-limit` (an integer followed by `ms`
+//! or `s`) and `memory-limit` (an integer followed by `KiB`, `MiB` or
+//! `GiB`); any other key or value is E0036 (§13.3).
+
+import std::io
+
+fn main() {
+  io::println("hello")
+}

@@ -1,5 +1,5 @@
 // @mode: check-fail
-// @decisions: D-090, D-512, D-533, D-537
+// @decisions: D-090, D-512, D-533, D-537, D-591
 //! A constant's initializer runs on the host at compile time even when the
 //! constant exists only on `js`, so one that calls a function with only a
 //! JS implementation is E0077 at the constant's name (§4.5, §12.6).

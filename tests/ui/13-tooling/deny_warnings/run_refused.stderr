@@ -1,0 +1,9 @@
+error[W0002]: unused binding `unused`
+  --> tests/ui/13-tooling/deny_warnings/run_refused.cheby:11:7
+   |
+11 |   let unused = 1
+   |       ^^^^^^ never used
+   |
+   = note: warnings are denied by `--deny-warnings`
+   = help: if this is intentional, start the name with an underscore: `_unused`
+

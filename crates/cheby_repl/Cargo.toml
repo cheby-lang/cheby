@@ -8,8 +8,10 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+cheby_diag.workspace = true
 cheby_driver.workspace = true
-cheby_jit.workspace = true
+cheby_runtime.workspace = true
+rustyline.workspace = true
 
 [lints]
 workspace = true

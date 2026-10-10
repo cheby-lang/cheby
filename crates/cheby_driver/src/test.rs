@@ -59,6 +59,9 @@ pub struct TestOptions {
     pub filter: Option<String>,
     /// Selects the tests of this module and its submodules.
     pub module: Option<String>,
+    /// `--deny-warnings`: a warning stops the command before any test is
+    /// compiled (D-549).
+    pub deny_warnings: bool,
 }
 
 /// The outcome of [`prepare_test`].
@@ -303,7 +306,10 @@ fn on_native(front: &Frontend, test: &thir::TestDef) -> bool {
 /// the package (D-597), and an [`Error`] for internal
 /// failures.
 pub fn prepare_test(root: &Path, options: &TestOptions) -> Result<PreparedTests, Error> {
-    let mut out = CheckOutput::default();
+    let mut out = CheckOutput {
+        deny_warnings: options.deny_warnings,
+        ..CheckOutput::default()
+    };
     let front = front_end(root, frontend::Mode::Build, &mut out)?;
     out.sources.sort(&mut out.diagnostics);
     let Some((front, package)) = front.filter(|_| !out.has_errors()) else {

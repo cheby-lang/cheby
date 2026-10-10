@@ -1,0 +1,19 @@
+//! Squares, which satisfy `shape::Shape`.
+
+pub type Square {
+  Square(Int)
+}
+
+pub fn area(s: Square) -> Int {
+  let Square(side) = s
+  side * side
+}
+
+pub fn scaled(s: Square, k: Int) -> Int {
+  k * area(s)
+}
+
+pub fn show(s: Square) -> String {
+  let Square(side) = s
+  "square {side}"
+}

@@ -1,15 +1,21 @@
 //! The interfaces of a build and what each module may read of them.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use crate::{
     DefId, DefKind, Ice, IfaceItem, IndexVec, Interner, ModuleId, ModuleInterface, ModuleTable,
 };
 
 /// Every published interface of the build, by module.
+///
+/// Each module's slot is written once. [`InterfaceSet::publish`] writes
+/// through a shared reference, so modules checked in parallel publish
+/// their interfaces while others read theirs (D-263). A reader sees only
+/// the modules its [`DepView`] allows, and those are published before it
+/// starts, so what it reads never depends on the schedule.
 #[derive(Clone, Debug)]
 pub struct InterfaceSet {
-    ifaces: IndexVec<ModuleId, Option<Arc<ModuleInterface>>>,
+    ifaces: IndexVec<ModuleId, OnceLock<Arc<ModuleInterface>>>,
 }
 
 impl InterfaceSet {
@@ -18,8 +24,21 @@ impl InterfaceSet {
     pub fn new(builtin: ModuleInterface) -> Self {
         let mut ifaces = IndexVec::new();
         // An empty vector always has room for one element.
-        let _ = ifaces.push(Some(Arc::new(builtin)));
+        let _ = ifaces.push(OnceLock::from(Arc::new(builtin)));
         Self { ifaces }
+    }
+
+    /// Makes room for the modules with ids below `count`, so that
+    /// [`InterfaceSet::publish`] can fill their slots.
+    ///
+    /// # Errors
+    ///
+    /// An [`Ice`] if `count` is beyond the id space.
+    pub fn reserve_modules(&mut self, count: usize) -> Result<(), Ice> {
+        while self.ifaces.len() < count {
+            self.ifaces.push(OnceLock::new())?;
+        }
+        Ok(())
     }
 
     /// Publishes a module's interface.
@@ -28,30 +47,36 @@ impl InterfaceSet {
     ///
     /// An [`Ice`] if the module already has one.
     pub fn insert(&mut self, iface: Arc<ModuleInterface>) -> Result<(), Ice> {
+        self.reserve_modules(crate::Idx::index(iface.module).saturating_add(1))?;
+        self.publish(iface)
+    }
+
+    /// Publishes a module's interface through a shared reference. The
+    /// module's slot must have been made with
+    /// [`InterfaceSet::reserve_modules`].
+    ///
+    /// # Errors
+    ///
+    /// An [`Ice`] if the module has no slot or already has an interface.
+    pub fn publish(&self, iface: Arc<ModuleInterface>) -> Result<(), Ice> {
         let module = iface.module;
-        while self.ifaces.len() <= crate::Idx::index(module) {
-            self.ifaces.push(None)?;
-        }
         let slot = self
             .ifaces
-            .get_mut(module)
-            .ok_or_else(|| Ice::new("interface slot missing"))?;
-        if slot.is_some() {
-            return Err(Ice::new(format!("interface of {module:?} published twice")));
-        }
-        *slot = Some(iface);
-        Ok(())
+            .get(module)
+            .ok_or_else(|| Ice::new(format!("no interface slot for {module:?}")))?;
+        slot.set(iface)
+            .map_err(|_| Ice::new(format!("interface of {module:?} published twice")))
     }
 
     #[must_use]
     pub fn get(&self, module: ModuleId) -> Option<&ModuleInterface> {
-        self.ifaces.get(module).and_then(Option::as_deref)
+        self.get_arc(module).map(Arc::as_ref)
     }
 
     /// The shared handle of a module's interface.
     #[must_use]
     pub fn get_arc(&self, module: ModuleId) -> Option<&Arc<ModuleInterface>> {
-        self.ifaces.get(module).and_then(Option::as_ref)
+        self.ifaces.get(module).and_then(OnceLock::get)
     }
 }
 

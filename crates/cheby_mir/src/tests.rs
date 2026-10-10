@@ -519,7 +519,7 @@ fn rejects_misplaced_c_abi_and_tail_calls() {
         Stage::Lowered,
     );
     assert!(text.contains(
-        "an entries unit holds only entry thunks, trampolines, value shims and tuple functions"
+        "an entries unit holds only entry thunks, trampolines, value shims, tuple functions and `dyn` forwarders"
     ));
     assert!(text.contains("needs its entry-check location"));
 }

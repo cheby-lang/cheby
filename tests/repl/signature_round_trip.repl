@@ -1,0 +1,67 @@
+> fn scale(n: Int) -> Int {
+.   n
+. }
+> fn twice(n: Int) -> Int {
+.   scale(n) * 2
+. }
+> twice(1)
+2 : Int
+> fn scale(_n: Int) -> String {
+.   "no"
+. }
+error[E0047]: mismatched types
+ --> <repl:2>:2:14
+  |
+2 |   scale(n) * 2
+  |   --------   ^ expected `String`, found `{integer}`
+  |   |
+  |   the left operand of `*` has type `String`
+  |
+  = note: `twice` was checked again because a definition it uses changed its signature; it keeps its old definition
+
+> fn scale(n: Int) -> Int {
+.   n * 10
+. }
+> twice(1)
+20 : Int
+> fn scale(n: Int) -> Int {
+.   n * 100
+. }
+> twice(1)
+200 : Int
+> const k: Int = 1
+> fn read_k() -> Int {
+.   k + 100
+. }
+> const k: String = "s"
+error[E0047]: mismatched types
+ --> <repl:10>:2:7
+  |
+2 |   k + 100
+  |   -   ^^^ expected `String`, found `{integer}`
+  |   |
+  |   the left operand of `+` has type `String`
+  |
+  = note: `read_k` was checked again because a definition it uses changed its signature; it keeps its old definition
+
+> const k: Int = 2
+> read_k()
+102 : Int
+> let v = 1
+> fn read_v() -> Int {
+.   v + 100
+. }
+> let v = "s"
+error[E0047]: mismatched types
+ --> <repl:15>:2:7
+  |
+2 |   v + 100
+  |   -   ^^^ expected `String`, found `{integer}`
+  |   |
+  |   the left operand of `+` has type `String`
+  |
+  = note: `read_v` was checked again because a definition it uses changed its signature; it keeps its old definition
+
+> let v = 2
+> read_v()
+102 : Int

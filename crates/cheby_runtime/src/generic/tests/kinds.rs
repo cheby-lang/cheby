@@ -384,6 +384,85 @@ fn dyn_values_compare_their_types_then_their_values() {
     assert_eq!(domain.live_objects(), 0);
 }
 
+static APP: StaticText<3> = StaticText::new(b"app");
+static DYN_ANY: StaticText<7> = StaticText::new(b"dyn Any");
+/// The nominal descriptor of the type `dyn app::Any`.
+static DYN_ANY_DESC: StaticNominal = StaticNominal::new(
+    std::ptr::from_ref(&DYN_ANY).cast::<u8>(),
+    std::ptr::from_ref(&APP).cast::<u8>(),
+);
+
+#[test]
+fn a_dyn_value_inside_a_dyn_value_is_that_value() {
+    // Generic code with `T = dyn Shape` converting to `dyn Any` wraps the
+    // `dyn Shape` value again, with the descriptor of `dyn Shape`; it is
+    // the same value as a direct conversion, which keeps the inner
+    // descriptor (D-502, GAP(dyn-nested)).
+    let domain = Domain::new();
+    alloc::with_domain(Arc::clone(&domain), || {
+        let point = POINT_DESC.word();
+        let direct = dyn_value(point, int_word(7));
+        let inner = dyn_value(point, int_word(7));
+        let wrapped = dyn_value(DYN_ANY_DESC.word(), inner);
+        let twice = dyn_value(
+            DYN_ANY_DESC.word(),
+            dyn_value(DYN_ANY_DESC.word(), dyn_value(point, int_word(7))),
+        );
+        let other = dyn_value(DYN_ANY_DESC.word(), dyn_value(point, int_word(8)));
+        let as_any = dyn_value(DYN_ANY_DESC.word(), int_word(7));
+        assert_eq!(eq(direct, wrapped), Ok(true));
+        assert_eq!(eq(wrapped, twice), Ok(true));
+        assert_eq!(hashed(direct), hashed(wrapped));
+        assert_eq!(hashed(direct), hashed(twice));
+        assert_eq!(eq(wrapped, other), Ok(false));
+        // An `Int` is not a `Point`, even with the same number inside.
+        assert_eq!(eq(as_any, direct), Ok(false));
+        assert_eq!(text(twice), "7");
+        release([direct, wrapped, twice, other, as_any]);
+    });
+    assert_eq!(domain.live_objects(), 0);
+}
+
+/// `dyn (n, <next>)` nested `DEPTH` deep around `Nil`: every tuple is
+/// inside a `dyn` value whose descriptor is `(Int, dyn Any)` (`Nil` for
+/// the innermost).
+fn dyn_chain() -> Word {
+    let mut chain = dyn_value(builtin("nil"), nil());
+    for n in 0..super::DEPTH {
+        let desc = applied(builtin("tuple"), &[builtin("int"), DYN_ANY_DESC.word()]);
+        chain = dyn_value(desc, tuple(&[int_word(n), chain]));
+    }
+    chain
+}
+
+unsafe extern "C" fn deep_dyn_values(_: *mut ExecCtx) -> u64 {
+    let (a, b) = (dyn_chain(), dyn_chain());
+    // A different innermost value, under the same descriptors.
+    let mut c = dyn_value(builtin("nil"), int_word(0));
+    for n in 0..super::DEPTH {
+        let desc = applied(builtin("tuple"), &[builtin("int"), DYN_ANY_DESC.word()]);
+        c = dyn_value(desc, tuple(&[int_word(n), c]));
+    }
+    let differs = eq(a, c) == Ok(false);
+    release([c]);
+    let checks = super::deep_checks(a, b, "(999999, (999998, ", "(1, (0, Nil)))", ")))");
+    checks | (u64::from(differs) << 3)
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "a million-deep value")]
+fn deep_chains_through_dyn_values_compare_hash_and_print_on_an_entry_stack() {
+    let domain = Domain::new();
+    let config = EntryConfig {
+        domain: Arc::clone(&domain),
+        ..EntryConfig::new(EntryMode::Test)
+    };
+    // SAFETY: a test thunk with the `EntryFn` ABI and static code.
+    let outcome = unsafe { run_entry(deep_dyn_values, &config) }.unwrap();
+    assert_eq!(outcome, EntryOutcome::Returned(15));
+    assert_eq!(domain.live_objects(), 0);
+}
+
 // ---------------------------------------------------------------------
 // Sorted groups (D-344, D-382), through a test kind that prints like a
 // map: `table([(k, v), …])`.

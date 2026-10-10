@@ -21,27 +21,37 @@
 //!    The constants that the failed one was computing for are not
 //!    reported again, and those that read a failed constant later stop
 //!    without a report of their own.
-//! 4. Every result is frozen in place (count 0, out of the build's
+//!    A top-level evaluation that runs out of time or memory (D-536) is
+//!    E0076 at that constant: the host's watchdog interrupts it at its next
+//!    function entry or tail call once its deadline passes, and an
+//!    allocation that takes the build's live bytes past the budget ends
+//!    it.
+//! 4. When everything evaluated, each constant that exists on `js` is
+//!    walked by its type for an `Int` outside ±(2⁵³ − 1) (E0078, D-540),
+//!    if the caller passed the types ([`evaluate_with`]).
+//! 5. When code runs afterwards ([`ConstMode::Run`]) and nothing failed,
+//!    every `Map` and `Set` in the results is rebuilt with the per-process
+//!    seed in one memoized, inner-first pass (D-196, D-539).
+//! 6. Every result is frozen in place (count 0, out of the build's
 //!    accounting domain, D-539, D-564), so code reads constants without
 //!    counting and they never show up as leaks.
-//!
-//! W4-C adds, at the hooks marked below: the time and memory limits
-//! (E0076, D-536), the rebuild of maps and sets with the per-process seed
-//! before freezing when code runs afterwards (D-196, D-539), and the JS
-//! range check (E0078, D-540).
+
+mod range;
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use cheby_diag::{Diagnostic, Span, codes};
-use cheby_iface::{DefId, Ice};
+use cheby_iface::{DefId, Ice, ItemSig};
 use cheby_jit::{Jit, JitError};
 use cheby_mir::EntryKind;
-use cheby_package::Targets;
+use cheby_package::{Target, Targets};
 use cheby_runtime::abi::PanicKind;
-use cheby_runtime::consteval::{Abandoned, ConstTable, UNRESOLVED_MESSAGE};
+use cheby_runtime::consteval::{Abandoned, ConstTable, Limit, UNRESOLVED_MESSAGE};
 use cheby_runtime::{ConstEvalLimits, EntryConfig, EntryMode, EntryOutcome, PanicReport};
+
+pub use range::ConstTypes;
 
 /// Which command evaluates: `cheby check` skips the D-196 rebuild of maps
 /// and sets (D-539).
@@ -80,9 +90,11 @@ pub struct ConstInfo {
 }
 
 /// Evaluates `order` (from `Reach::constant_order`) in `jit`, storing each
-/// result in its slot; returns the diagnostics (E0069, E0075-E0078). Every
+/// result in its slot; returns the diagnostics (E0069, E0075-E0077). Every
 /// constant of `order` must have its slot and its constant entry thunk in
-/// `jit`. `Check` skips the D-196 rebuild (plan §7.6).
+/// `jit`. `Check` skips the D-196 rebuild (plan §7.6). Without the types
+/// of [`evaluate_with`] there is no JS range check (E0078): a REPL session
+/// runs only on native.
 ///
 /// # Errors
 ///
@@ -92,6 +104,22 @@ pub fn evaluate(
     jit: &mut Jit,
     order: &[ConstInfo],
     config: &ConstEvalConfig,
+) -> Result<Vec<Diagnostic>, Ice> {
+    evaluate_with(jit, order, config, None)
+}
+
+/// [`evaluate`], and with `types` the JS range check of the constants that
+/// exist on `js` when the package targets `js` (E0078, D-540).
+///
+/// # Errors
+///
+/// As for [`evaluate`], and an [`Ice`] if a constant's type names an item
+/// `types` cannot see.
+pub fn evaluate_with(
+    jit: &mut Jit,
+    order: &[ConstInfo],
+    config: &ConstEvalConfig,
+    types: Option<&ConstTypes<'_>>,
 ) -> Result<Vec<Diagnostic>, Ice> {
     let table = ConstTable::new();
     let mut slots = Vec::with_capacity(order.len());
@@ -114,12 +142,12 @@ pub fn evaluate(
         if !table.begin(slot) {
             continue;
         }
+        // The deadline starts now; the runtime's watchdog and memory budget
+        // enforce both limits (D-536).
         let entry_config = EntryConfig {
             consts: Some(Arc::clone(&table)),
             ..EntryConfig::new(EntryMode::ConstEval(limits(info, config)))
         };
-        // Hook for W4-C: the watchdog of the time limit and the memory
-        // budget wrap this run (D-536), and their outcomes become E0076.
         let outcome = jit
             .entry(EntryKind::Const(info.def))
             .map_err(ice)?
@@ -132,18 +160,231 @@ pub fn evaluate(
             }
             EntryOutcome::Panicked(report) => {
                 let abandoned = table.abandon();
-                if let Some(d) = failure(&report, &abandoned, info, &by_slot) {
-                    diagnostics.push(d);
-                }
+                let diagnostic = match abandoned.limit {
+                    Some(limit) => Some(over_limit(limit, &abandoned, info, &by_slot, config)),
+                    None => failure(&report, &abandoned, info, &by_slot),
+                };
+                diagnostics.extend(diagnostic);
             }
         }
     }
-    // Hook for W4-C: when `config.mode` is `Run` and nothing failed, the
-    // D-196 rebuild of every `Map` and `Set` in the results goes here,
-    // before freezing; the E0078 range walk of the constants that exist on
-    // `js` too (D-539, D-540).
+    if diagnostics.is_empty()
+        && let Some(types) = types
+        && config.targets.contains(Target::Js)
+    {
+        for (info, &slot) in order.iter().zip(&slots) {
+            if info.on_js {
+                diagnostics.extend(js_range(types, info, slot)?);
+            }
+        }
+    }
+    if diagnostics.is_empty() && config.mode == ConstMode::Run {
+        rebuild(jit, &slots)?;
+    }
     freeze(jit, &slots);
     Ok(diagnostics)
+}
+
+/// The debug text (§3.13) of each evaluated constant's value, in the order
+/// of `defs`; `None` for a constant that has no value. Runs on an entry,
+/// since printing may call a type's `@std_hooks` closure.
+///
+/// # Errors
+///
+/// An [`Ice`] if a constant has no slot, or printing panics or cannot run.
+pub fn debug_texts(jit: &Jit, defs: &[DefId]) -> Result<Vec<Option<String>>, Ice> {
+    let mut words = Vec::with_capacity(defs.len());
+    for &def in defs {
+        let slot = jit
+            .const_slot(def)
+            .ok_or_else(|| Ice::new(format!("the constant {def:?} has no slot")))?;
+        // SAFETY: a constant's slot in `jit`, 8-aligned and readable; no
+        // entry runs meanwhile.
+        words.push(unsafe { slot.read() });
+    }
+    let texts: Arc<Mutex<Vec<Option<String>>>> = Arc::default();
+    let out = Arc::clone(&texts);
+    let task = move || {
+        let printed = words
+            .iter()
+            .map(|&word| {
+                // SAFETY: an evaluated constant's frozen value, or 0.
+                (word != 0).then(|| unsafe { cheby_runtime::generic::debug_string(word) })
+            })
+            .collect();
+        *out.lock().unwrap_or_else(PoisonError::into_inner) = printed;
+        0
+    };
+    let config = EntryConfig {
+        callbacks: jit.callbacks(),
+        domain: jit.domain(),
+        ..EntryConfig::new(EntryMode::Test)
+    };
+    // SAFETY: the trampolines are `jit`'s, and the words its frozen
+    // constants, valid while `jit` lives, which outlives the call.
+    match unsafe { cheby_runtime::entry::run_task(&config, task) } {
+        Ok(EntryOutcome::Returned(_)) => Ok(std::mem::take(
+            &mut *texts.lock().unwrap_or_else(PoisonError::into_inner),
+        )),
+        Ok(EntryOutcome::Panicked(report)) => Err(Ice::new(format!(
+            "printing a constant panicked: {}",
+            report.message
+        ))),
+        Err(e) => Err(Ice::new(format!("printing constants: {e}"))),
+    }
+}
+
+/// E0078 for `info`'s value if it holds an `Int` that JS cannot represent
+/// exactly (D-540).
+fn js_range(
+    types: &ConstTypes<'_>,
+    info: &ConstInfo,
+    slot: *mut u64,
+) -> Result<Option<Diagnostic>, Ice> {
+    let item = (types.item)(info.def).ok_or_else(|| {
+        Ice::new(format!(
+            "the constant `{}` has no interface item",
+            info.name
+        ))
+    })?;
+    let ItemSig::Const(sig) = &item.sig else {
+        return Ok(None);
+    };
+    let Some(nodes) = range::range_graph(types, sig.ty)? else {
+        return Ok(None);
+    };
+    // SAFETY: the slot of an evaluated constant holds its live value,
+    // which no entry changes meanwhile; `nodes` describes its type.
+    let found = unsafe {
+        let word = slot.read();
+        cheby_runtime::consteval::find_out_of_js_range(word, &nodes, 0)
+    };
+    Ok(found.map(|n| {
+        Diagnostic::new(
+            codes::CONSTANT_OUT_OF_JS_RANGE,
+            format!(
+                "the constant `{}` holds an `Int` that JavaScript cannot represent exactly",
+                info.name
+            ),
+        )
+        .with_primary(info.name_span, "this constant exists on `js`")
+        .with_note(format!(
+            "it holds `{n}`, outside ±(2^53 - 1), the range of integers JavaScript represents exactly"
+        ))
+        .with_help(
+            "keep its `Int`s between `int::min_safe` and `int::max_safe`, or mark the constant \
+             `@target(native)`",
+        )
+    }))
+}
+
+/// Rebuilds every `Map` and `Set` in the results with the per-process seed
+/// (D-196, D-539), on an entry with the JIT's trampolines, since hashing a
+/// key may call a type's `@std_hooks` closure.
+fn rebuild(jit: &Jit, slots: &[*mut u64]) -> Result<(), Ice> {
+    // SAFETY: each slot is a constant's slot in `jit`, readable; it holds
+    // 0 or this evaluation's value. No entry runs meanwhile.
+    let words: Vec<u64> = slots.iter().map(|&slot| unsafe { slot.read() }).collect();
+    let seed = cheby_runtime::generic::process_seed();
+    let config = EntryConfig {
+        callbacks: jit.callbacks(),
+        domain: jit.domain(),
+        ..EntryConfig::new(EntryMode::ConstEval(ConstEvalLimits {
+            seed,
+            ..ConstEvalLimits::default()
+        }))
+    };
+    let task = move || {
+        // SAFETY: the evaluated values, live and charged to the JIT's
+        // domain, which is the entry's; nothing else uses them meanwhile.
+        unsafe { cheby_runtime::consteval::rebuild_collections(&words, seed) };
+        0
+    };
+    // SAFETY: the trampolines are `jit`'s, valid while `jit` lives, which
+    // outlives the call.
+    match unsafe { cheby_runtime::entry::run_task(&config, task) } {
+        Ok(EntryOutcome::Returned(_)) => Ok(()),
+        // Hashing ran the same code when the constants were evaluated, so
+        // it cannot panic now.
+        Ok(EntryOutcome::Panicked(report)) => Err(Ice::new(format!(
+            "rebuilding the maps and sets of constants panicked: {}",
+            report.message
+        ))),
+        Err(e) => Err(Ice::new(format!("rebuilding constants: {e}"))),
+    }
+}
+
+/// E0076 for a top-level evaluation of `top` that ran out of time or
+/// memory (D-536). The limit belongs to the top-level evaluation, which
+/// includes the constants it forced, so the diagnostic is at `top`; a note
+/// names the forced constant it was computing, if any
+/// (GAP(const-limit-report-site)).
+fn over_limit(
+    limit: Limit,
+    abandoned: &Abandoned,
+    top: &ConstInfo,
+    by_slot: &BTreeMap<usize, &ConstInfo>,
+    config: &ConstEvalConfig,
+) -> Diagnostic {
+    let name = &top.name;
+    let (message, note, help) = match limit {
+        Limit::Time => (
+            format!(
+                "evaluating the constant `{name}` took longer than the time limit of {}",
+                duration_text(config.time_limit)
+            ),
+            "constant evaluation stops an initializer that runs past the limit".to_owned(),
+            "compute less at compile time, or raise `time-limit` in the `[const-eval]` table of \
+             `cheby.toml`",
+        ),
+        Limit::Memory => (
+            format!(
+                "evaluating the constant `{name}` used more than the memory limit of {}",
+                bytes_text(config.memory_limit)
+            ),
+            "the limit counts the heap bytes that the evaluation keeps live at once".to_owned(),
+            "compute less at compile time, or raise `memory-limit` in the `[const-eval]` table \
+             of `cheby.toml`",
+        ),
+    };
+    let mut diagnostic = Diagnostic::new(codes::CONSTANT_LIMIT, message)
+        .with_primary(top.name_span, "this constant is computed at compile time")
+        .with_note(note);
+    let inner = abandoned
+        .stack
+        .last()
+        .and_then(|slot| by_slot.get(&slot.addr()))
+        .filter(|inner| inner.def != top.def);
+    if let Some(inner) = inner {
+        diagnostic = diagnostic.with_note(format!(
+            "it was computing the constant `{}`, which it reads",
+            inner.name
+        ));
+    }
+    diagnostic.with_help(help)
+}
+
+/// A time limit as `[const-eval]` spells it: `10s`, `250ms`.
+fn duration_text(limit: Duration) -> String {
+    let millis = limit.as_millis();
+    if !limit.subsec_nanos().is_multiple_of(1_000_000) {
+        format!("{limit:?}")
+    } else if millis.is_multiple_of(1000) {
+        format!("{}s", limit.as_secs())
+    } else {
+        format!("{millis}ms")
+    }
+}
+
+/// A memory limit as `[const-eval]` spells it: `1GiB`, `64KiB`, or bytes.
+fn bytes_text(limit: u64) -> String {
+    for (unit, shift) in [("GiB", 30), ("MiB", 20), ("KiB", 10)] {
+        let units = limit >> shift;
+        if units > 0 && units << shift == limit {
+            return format!("{units}{unit}");
+        }
+    }
+    format!("{limit} bytes")
 }
 
 /// The limits of one top-level evaluation and its seed (D-536, D-538).

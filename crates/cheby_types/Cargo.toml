@@ -12,6 +12,7 @@ cheby_diag.workspace = true
 cheby_syntax.workspace = true
 cheby_resolve.workspace = true
 cheby_iface.workspace = true
+rayon.workspace = true
 rustc-hash.workspace = true
 
 [dev-dependencies]

@@ -1,8 +1,10 @@
 //! Interned identifiers.
 //!
-//! [`Name`] is deliberately not `Ord`: its number is interning order, which
-//! depends on which thread interned a string first once phases run in
-//! parallel (D-263). Code that sorts by name sorts by the string.
+//! [`Name`] is deliberately not `Ord`: its number depends on interning
+//! order, which depends on which thread interned a string first when
+//! phases run in parallel (D-263). Code that sorts by name sorts by the
+//! string, and nothing that is output may iterate a hash map keyed by
+//! names.
 
 use std::fmt;
 use std::sync::{PoisonError, RwLock};
@@ -95,19 +97,50 @@ symbols! {
     BYTES = 47 "Bytes";
 }
 
+/// The number of shards of an [`Interner`], a power of two.
+const SHARDS: u32 = 64;
+/// The low bits of a name's number (past the pre-interned ones) that pick
+/// its shard.
+const SHARD_MASK: u32 = SHARDS - 1;
+const SHARD_BITS: u32 = SHARDS.trailing_zeros();
+
 /// An append-only, thread-safe string interner.
 ///
 /// Interned strings are leaked so that [`Interner::get`] returns
 /// `&'static str`. Every command is its own process (D-268), and the
 /// language server's growth is bounded by the distinct identifiers it sees.
+///
+/// The table is split into [`SHARDS`] shards by the string's hash, each
+/// behind its own lock, so modules and bodies checked in parallel (D-263)
+/// rarely wait for each other (I2). A name past the [`sym`] names numbers
+/// its shard in its low bits and its place in the shard above them; the
+/// [`sym`] names keep their constant numbers and are read without a lock.
 pub struct Interner {
-    inner: RwLock<Inner>,
+    shards: Box<[RwLock<Shard>]>,
 }
 
 #[derive(Default)]
-struct Inner {
+struct Shard {
+    /// Every name whose text hashes to this shard, the [`sym`] names
+    /// included.
     map: FxHashMap<&'static str, Name>,
+    /// The texts of this shard's names past the [`sym`] names, by place.
     strings: Vec<&'static str>,
+}
+
+/// How many names are pre-interned: the [`sym`] names.
+fn preinterned() -> u32 {
+    u32::try_from(sym::ALL.len()).unwrap_or(u32::MAX)
+}
+
+/// The shard of `text`.
+fn shard_of(text: &str) -> u32 {
+    use std::hash::BuildHasher as _;
+    let hash = rustc_hash::FxBuildHasher.hash_one(text);
+    // Middle bits: the shard's own map indexes buckets by the low bits and
+    // tags them with the top ones, which must still vary inside a shard.
+    // The mask keeps the value below `SHARDS`.
+    u32::try_from((hash >> 32) & u64::from(SHARD_MASK)).unwrap_or(0)
 }
 
 impl Interner {
@@ -116,18 +149,30 @@ impl Interner {
     #[must_use]
     pub fn new() -> Self {
         let interner = Self {
-            inner: RwLock::new(Inner::default()),
+            shards: (0..SHARDS).map(|_| RwLock::default()).collect(),
         };
-        for &(_, text) in sym::ALL {
-            interner.intern(text);
+        for &(name, text) in sym::ALL {
+            if let Some(shard) = interner.shard(text) {
+                shard
+                    .write()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .map
+                    .insert(text, name);
+            }
         }
         interner
     }
 
+    fn shard(&self, text: &str) -> Option<&RwLock<Shard>> {
+        self.shards.get(usize::try_from(shard_of(text)).ok()?)
+    }
+
     /// The name of `text`, interning it on first use.
     pub fn intern(&self, text: &str) -> Name {
-        if let Some(&name) = self
-            .inner
+        let Some(shard) = self.shard(text) else {
+            return Name(u32::MAX);
+        };
+        if let Some(&name) = shard
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .map
@@ -135,23 +180,29 @@ impl Interner {
         {
             return name;
         }
-        let mut inner = self.inner.write().unwrap_or_else(PoisonError::into_inner);
-        if let Some(&name) = inner.map.get(text) {
+        let mut shard_data = shard.write().unwrap_or_else(PoisonError::into_inner);
+        if let Some(&name) = shard_data.map.get(text) {
             return name;
         }
         // More than `u32::MAX` distinct names cannot fit in memory next to
         // their text, so the saturation never happens in practice.
-        let name = Name(u32::try_from(inner.strings.len()).unwrap_or(u32::MAX));
+        let number = u32::try_from(shard_data.strings.len())
+            .ok()
+            .and_then(|place| place.checked_shl(SHARD_BITS))
+            .map(|high| high | shard_of(text))
+            .and_then(|n| n.checked_add(preinterned()))
+            .unwrap_or(u32::MAX);
+        let name = Name(number);
         let leaked: &'static str = Box::leak(text.to_owned().into_boxed_str());
-        inner.strings.push(leaked);
-        inner.map.insert(leaked, name);
+        shard_data.strings.push(leaked);
+        shard_data.map.insert(leaked, name);
         name
     }
 
     /// The name of `text` if it was interned.
     #[must_use]
     pub fn lookup(&self, text: &str) -> Option<Name> {
-        self.inner
+        self.shard(text)?
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .map
@@ -163,12 +214,25 @@ impl Interner {
     /// text, and an unknown name gives `""`.
     #[must_use]
     pub fn get(&self, name: Name) -> &'static str {
-        let inner = self.inner.read().unwrap_or_else(PoisonError::into_inner);
-        usize::try_from(name.0)
-            .ok()
-            .and_then(|n| inner.strings.get(n))
-            .copied()
-            .unwrap_or("")
+        let Some(number) = name.0.checked_sub(preinterned()) else {
+            return usize::try_from(name.0)
+                .ok()
+                .and_then(|n| sym::ALL.get(n))
+                .map_or("", |&(_, text)| text);
+        };
+        let shard = usize::try_from(number & SHARD_MASK).unwrap_or(0);
+        let Ok(place) = usize::try_from(number >> SHARD_BITS) else {
+            return "";
+        };
+        self.shards.get(shard).map_or("", |shard| {
+            shard
+                .read()
+                .unwrap_or_else(PoisonError::into_inner)
+                .strings
+                .get(place)
+                .copied()
+                .unwrap_or("")
+        })
     }
 }
 
@@ -181,11 +245,17 @@ impl Default for Interner {
 impl fmt::Debug for Interner {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let len = self
-            .inner
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .strings
-            .len();
+            .shards
+            .iter()
+            .map(|shard| {
+                shard
+                    .read()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .strings
+                    .len()
+            })
+            .sum::<usize>()
+            .saturating_add(sym::ALL.len());
         f.debug_struct("Interner").field("len", &len).finish()
     }
 }
@@ -223,16 +293,48 @@ mod tests {
     #[test]
     fn interning_is_thread_safe() {
         let interner = Interner::new();
-        std::thread::scope(|s| {
-            for _ in 0..4 {
-                s.spawn(|| {
-                    for n in 0..100 {
-                        let text = format!("x{n}");
-                        let name = interner.intern(&text);
-                        assert_eq!(interner.get(name), text);
-                    }
-                });
-            }
+        let names: Vec<Vec<Name>> = std::thread::scope(|s| {
+            let handles: Vec<_> = (0..4)
+                .map(|_| {
+                    s.spawn(|| {
+                        (0..2000)
+                            .map(|n| {
+                                let text = format!("x{n}");
+                                let name = interner.intern(&text);
+                                assert_eq!(interner.get(name), text);
+                                name
+                            })
+                            .collect::<Vec<Name>>()
+                    })
+                })
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
         });
+        // Every thread got the same name for each text, and the names are
+        // distinct.
+        for other in &names[1..] {
+            assert_eq!(other, &names[0]);
+        }
+        let distinct: std::collections::HashSet<Name> = names[0].iter().copied().collect();
+        assert_eq!(distinct.len(), 2000);
+    }
+
+    #[test]
+    fn many_names_round_trip_through_every_shard() {
+        let interner = Interner::new();
+        let names: Vec<(Name, String)> = (0..20_000)
+            .map(|n| {
+                let text = format!("name_{n}");
+                (interner.intern(&text), text)
+            })
+            .collect();
+        for (name, text) in &names {
+            assert!(name.as_u32() >= u32::try_from(sym::ALL.len()).unwrap());
+            assert_eq!(interner.get(*name), text);
+            assert_eq!(interner.lookup(text), Some(*name));
+        }
+        for &(name, text) in sym::ALL {
+            assert_eq!(interner.lookup(text), Some(name));
+        }
     }
 }

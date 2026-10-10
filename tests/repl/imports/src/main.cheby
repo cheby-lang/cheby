@@ -1,0 +1,7 @@
+//! The shop.
+
+import shop::prices
+
+fn main() {
+  let _ = prices::total([1])
+}

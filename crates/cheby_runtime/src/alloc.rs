@@ -158,6 +158,45 @@ pub fn live() -> i64 {
         .unwrap_or(0)
 }
 
+/// The bytes live in the current thread's domain, which the memory limit
+/// of constant evaluation checks after every allocation (D-536).
+pub(crate) fn current_live_bytes() -> i64 {
+    DOMAIN
+        .try_with(|domain| domain.borrow().live_bytes())
+        .unwrap_or(0)
+}
+
+/// Calls `f` with every reference the object `word` owns (its value
+/// fields, or a runtime-defined kind's children), tagged integers and 0
+/// included; nothing for a tagged integer or 0. Constant evaluation's
+/// rebuild walks results with it (D-539).
+///
+/// # Safety
+///
+/// `word` is a tagged integer, 0, or a live object.
+pub(crate) unsafe fn for_each_child(word: Word, f: &mut dyn FnMut(Word)) {
+    if abi::is_tagged_int(word) || word == 0 {
+        return;
+    }
+    // SAFETY: forwarded from the caller.
+    unsafe { check_live(word, "walking a value") };
+    let obj = word_to_ptr(word);
+    // SAFETY: a live heap object.
+    let shape = unsafe { shape_of(obj) };
+    match shape.children {
+        Children::Fields { first, count } => {
+            let mut offset = first;
+            for _ in 0..count {
+                // SAFETY: the shape lies within the object.
+                f(unsafe { read_field(obj, offset) });
+                offset = offset.saturating_add(to_usize(abi::FIELD_SIZE));
+            }
+        }
+        // SAFETY: a live object of this kind.
+        Children::Custom(kind) => unsafe { (kind.children)(word, f) },
+    }
+}
+
 /// The number of heap objects live in the current thread's domain: allocated
 /// and not yet freed, not counting objects that became static. The same as
 /// [`live`].
@@ -280,9 +319,16 @@ pub unsafe extern "C" fn cheby_rt_alloc(ctx: *mut ExecCtx, size: u64, header: u6
 
 /// Allocates an object of `size` bytes (rounded up to 8) with the given
 /// header and uninitialized fields, and charges it to the current domain.
-/// Ends the process on allocation failure.
+/// Ends the process on allocation failure. During constant evaluation, a
+/// request that would pass the memory budget abandons the entry with the
+/// memory limit before anything is allocated (D-536).
 #[must_use]
 pub fn alloc_object(size: u64, header: u64) -> *mut u8 {
+    crate::entry::check_budget(
+        size.max(abi::HEADER_SIZE)
+            .checked_next_multiple_of(abi::OBJECT_ALIGN)
+            .unwrap_or(u64::MAX),
+    );
     let layout = object_layout(size);
     // SAFETY: `object_layout` never returns a zero-sized layout.
     let ptr = unsafe { std::alloc::alloc(layout) };
@@ -292,7 +338,6 @@ pub fn alloc_object(size: u64, header: u64) -> *mut u8 {
     // SAFETY: the allocation is at least 8 bytes and 8-aligned.
     unsafe { object::write_field(ptr, 0, header) };
     charge(1, to_u64(layout.size()));
-    crate::entry::charge_budget(to_u64(layout.size()));
     ptr
 }
 

@@ -1,0 +1,9 @@
+//! Areas of shapes.
+
+fn unit_area() -> Float {
+  1.0
+}
+
+fn square_area(side: Float) -> Float {
+  side * side
+}

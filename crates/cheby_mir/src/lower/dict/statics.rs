@@ -10,7 +10,14 @@
 //!   dictionaries, or a tuple function): `cb$fnval$<unit
 //!   module>$$<dictionary name>$<n>`, `n` being the function's position;
 //! - a user type's nominal descriptor: `cb$desc$<module path>$$<Type>`;
-//! - an applied type's descriptor: `cb$desc$<unit module>$$<type>`.
+//! - the nominal descriptor of `dyn I`: `cb$desc$<module path of
+//!   I>$$dyn$<I>`, holding the name `dyn <I>` (empty module path for the
+//!   builtin `Show`);
+//! - an applied type's descriptor: `cb$desc$<unit module>$$<type>`;
+//! - the forwarding dictionary through which a `dyn J` value satisfies
+//!   `I` (`J` or an interface `J` embeds): `cb$dict$<unit
+//!   module>$$<I path>$dyn <J path>`, whose closures are statics
+//!   `<dictionary name>$<n>` of [`FnKey::DynForward`] code.
 //!
 //! Code generation joins the module path with `$` and ends it with `$$`,
 //! and keeps the name as it is, paths included, so the boundary between
@@ -156,6 +163,7 @@ impl Statics<'_, '_> {
         match normalize(self.cx, dict)? {
             Dict::Impl { iface, ty, fns } => self.impl_dict(iface, ty, &fns),
             Dict::Tuple { iface, ty, elems } => self.tuple_dict(iface, ty, &elems),
+            Dict::Dyn { iface, ty } => self.dyn_dict(iface, ty),
             other => Err(Ice::new(format!(
                 "a static dictionary for {other:?}, which is not closed"
             ))),
@@ -252,6 +260,55 @@ impl Statics<'_, '_> {
         )
     }
 
+    /// The forwarding dictionary through which a `dyn J` value (`ty`)
+    /// satisfies `iface`, `J` itself or an interface `J` embeds (§8.6,
+    /// D-502): the descriptor of the type `dyn J`, then for each function
+    /// a static closure of its forwarder ([`super::dyn_forward`]), then
+    /// the forwarding dictionaries of `iface`'s embedded interfaces for
+    /// the same `dyn J`.
+    fn dyn_dict(&mut self, iface: DefId, ty: Ty) -> Result<Const, Ice> {
+        let TyKind::Dyn {
+            iface: dyn_iface, ..
+        } = self.cx.defs.globals.types.kind(ty)
+        else {
+            return Err(Ice::new(format!(
+                "a `dyn` dictionary of {iface:?} for the type {:?}",
+                self.cx.defs.globals.types.kind(ty)
+            )));
+        };
+        let dyn_iface = *dyn_iface;
+        let shape = IfaceShape::of(self.cx, iface)?;
+        let name = self.dict_name(iface, ty)?;
+        let mut fields = Vec::with_capacity(
+            shape
+                .fns
+                .len()
+                .saturating_add(shape.embeds.len())
+                .saturating_add(1),
+        );
+        fields.push(self.desc(ty)?);
+        for (n, &f) in shape.fns.iter().enumerate() {
+            self.pending.request_dyn_forward(f, dyn_iface);
+            let code = Const::Code(FnKey::DynForward {
+                iface_fn: f,
+                dyn_iface,
+            });
+            fields.push(self.closure(&name, n, vec![code])?);
+        }
+        for &j in &shape.embeds {
+            fields.push(self.dict(&Dict::Dyn { iface: j, ty })?);
+        }
+        let module = self.module.to_owned();
+        self.add(
+            StaticKind::Dict,
+            module,
+            name,
+            shape.layout()?,
+            fields,
+            IndexVec::new(),
+        )
+    }
+
     /// The static closure of the `n`th function of the dictionary `dict`:
     /// its code word, then its captures, all constants.
     fn closure(&mut self, dict: &str, n: usize, fields: Vec<Const>) -> Result<Const, Ice> {
@@ -275,6 +332,9 @@ impl Statics<'_, '_> {
     pub(in crate::lower) fn desc(&mut self, ty: Ty) -> Result<Const, Ice> {
         let (head, args): (Const, Vec<Ty>) = match self.cx.defs.globals.types.kind(ty) {
             TyKind::Named { def, args } if args.is_empty() => return self.nominal(*def),
+            // Interfaces have no type parameters (D-165), so `dyn I` is a
+            // nominal type of its own.
+            TyKind::Dyn { iface, .. } => return self.dyn_nominal(*iface),
             TyKind::Named { def, args } => (self.nominal(*def)?, args.to_vec()),
             TyKind::Tuple(elems) => (Const::BuiltinDesc(BuiltinDesc::Tuple), elems.to_vec()),
             TyKind::Fn { params, ret } => {
@@ -330,6 +390,32 @@ impl Statics<'_, '_> {
             StaticKind::Desc,
             name.module.to_string(),
             name.item.to_string(),
+            LayoutRef::DescNominal,
+            vec![Const::Str(type_name), Const::Str(module_path)],
+            strings,
+        )
+    }
+
+    /// The nominal descriptor of the type `dyn iface`:
+    /// `cb$desc$<module path of iface>$$dyn$<iface>` (D-523, D-579),
+    /// holding the printed name `dyn <iface>` and the interface's module
+    /// path. One object per JIT (D-561), so `dyn I` is one nominal type
+    /// (D-582). The builtin `Show` has an empty module path, giving
+    /// `cb$desc$$$dyn$Show` (GAP(dyn-desc-symbol)): the first `$$` still
+    /// ends the module path (D-579).
+    ///
+    /// # Errors
+    ///
+    /// An [`Ice`] for a def that is not readable.
+    pub(in crate::lower) fn dyn_nominal(&mut self, iface: DefId) -> Result<Const, Ice> {
+        let name = self.cx.defs.name(iface)?;
+        let mut strings: IndexVec<StrId, Box<str>> = IndexVec::new();
+        let type_name = strings.push(format!("dyn {}", name.item).into())?;
+        let module_path = strings.push(name.module.clone())?;
+        self.add(
+            StaticKind::Desc,
+            name.module.to_string(),
+            format!("dyn${}", name.item),
             LayoutRef::DescNominal,
             vec![Const::Str(type_name), Const::Str(module_path)],
             strings,

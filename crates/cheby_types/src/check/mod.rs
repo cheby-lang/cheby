@@ -41,6 +41,7 @@ use cheby_iface::{
 };
 use cheby_resolve::{BodyRes, ItemDef, LocalId, Res};
 use cheby_syntax::ast::{self, AstNode, Block, ConstDecl, FnDecl, RetType, TestDecl, Type};
+use rayon::prelude::*;
 
 use crate::ifaces::{self, IfaceCx};
 use crate::infer::{InferCtxt, InferTy, TyVid, VarKind, contains_error};
@@ -102,14 +103,26 @@ pub fn check_bodies_with(
         tests: Vec::new(),
     };
     let mut diags = Vec::new();
-    for (index, item) in input.resolved.items.iter_enumerated() {
-        if item.parent.is_some()
-            || !matches!(item.kind, DefKind::Fn | DefKind::Const | DefKind::Test)
-            || (skip_tests && item.kind == DefKind::Test)
-        {
-            continue;
-        }
-        let (checked, found) = check_item(input, own, index)?;
+    let bodies: Vec<DefIndex> = input
+        .resolved
+        .items
+        .iter_enumerated()
+        .filter(|(_, item)| {
+            item.parent.is_none()
+                && matches!(item.kind, DefKind::Fn | DefKind::Const | DefKind::Test)
+                && !(skip_tests && item.kind == DefKind::Test)
+        })
+        .map(|(index, _)| index)
+        .collect();
+    // Bodies check in parallel on rayon's global pool (D-263): inference
+    // is local to one body (D-011), and `collect` keeps `DefIndex` order,
+    // so the result never depends on the schedule.
+    let checked_items: Vec<_> = bodies
+        .par_iter()
+        .map(|&index| check_item(input, own, index))
+        .collect();
+    for result in checked_items {
+        let (checked, found) = result?;
         diags.extend(found);
         match checked {
             Some(thir::Item::Fn(f)) => module.fns.push(f),

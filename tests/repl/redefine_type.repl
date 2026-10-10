@@ -1,0 +1,21 @@
+> type Shape {
+.   Circle(Float),
+.   Square(Float),
+. }
+> let c = Circle(1.0)
+> c
+Circle(1.0) : Shape
+> type Shape {
+.   Triangle(Float),
+. }
+> Triangle(2.0)
+Triangle(2.0) : Shape
+> Circle(1.0)
+error[E0042]: cannot find value `Circle` in this scope
+ --> <repl:6>:1:1
+  |
+1 | Circle(1.0)
+  | ^^^^^^ not found
+
+> c
+Circle(1.0) : Shape

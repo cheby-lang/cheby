@@ -12,6 +12,8 @@
 //!   conventions (E0006) and the reserved words (E0007). A use adds
 //!   nothing, except that a reserved word that nothing binds is E0007
 //!   where it is used (D-469).
+//! - [`repl::SessionScope`] resolves a REPL entry, a module of its own,
+//!   with the names of its session (§13.5, D-547).
 //! - The only part of the support gate (D-451) left in the front end is
 //!   E0038 for an import of a standard-library module that the spec plans
 //!   but the toolchain does not ship yet (tier 2 and 3, and the tier-1
@@ -26,6 +28,7 @@ mod imports;
 mod items;
 mod naming;
 mod paths;
+pub mod repl;
 mod scope;
 
 use cheby_diag::{Diagnostic, Span};

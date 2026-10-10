@@ -1,0 +1,9 @@
+error[E0071]: literal out of range for `Int` on the `js` target
+  --> tests/ui/13-tooling/check_target/js_range_literal_on_js.cheby:11:13
+   |
+11 |   let big = 9_007_199_254_740_993
+   |             ^^^^^^^^^^^^^^^^^^^^^ `9007199254740993` does not fit in `Int` on JS
+   |
+   = note: on JS, `Int` holds -9007199254740991 to 9007199254740991, the safe-integer range
+   = help: use an `I64`, which holds every 64-bit value on both targets
+

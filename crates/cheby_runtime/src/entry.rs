@@ -19,16 +19,42 @@
 //! entry's accounting domain the thread's current one. Generated code
 //! still passes `ctx` explicitly (ADR-0055). M2's fiber switching must
 //! update the record when it switches fibers.
+//!
+//! # Limits of constant evaluation
+//!
+//! An entry in [`EntryMode::ConstEval`] runs under the limits of its
+//! [`ConstEvalLimits`] (D-195, D-536):
+//!
+//! - **Time.** The host waiting in [`run_entry`] is the watchdog: when the
+//!   deadline passes it calls [`ExecCtx::request_interrupt`] on the
+//!   entry's context, so the next function entry or tail call takes the
+//!   slow path of the stack check, which abandons the entry with
+//!   [`Limit::Time`]. A long single kernel call is not interrupted.
+//! - **Memory.** The budget is the live bytes of the entry's accounting
+//!   domain when the entry starts plus the limit, so only what this
+//!   evaluation keeps live counts: earlier constants, the objects of an
+//!   abandoned evaluation and REPL session values do not
+//!   (GAP(const-limit-baseline)). Every allocation checks it before it
+//!   asks the system for memory ([`check_budget`]), so the peak never
+//!   passes it and a single huge request is E0076, not an abort; kernels
+//!   allocate through the same path. Exceeding it abandons the entry with
+//!   [`Limit::Memory`].
+//!
+//! The host learns which limit ended an entry from the build's
+//! [`ConstTable`] ([`crate::consteval::Abandoned::limit`]).
+//!
+//! [`Limit::Time`]: crate::consteval::Limit::Time
+//! [`Limit::Memory`]: crate::consteval::Limit::Memory
 
 use std::cell::Cell;
 use std::fmt;
 use std::sync::mpsc;
-use std::sync::{Arc, PoisonError, RwLock};
-use std::time::Instant;
+use std::sync::{Arc, Mutex, PoisonError, RwLock};
+use std::time::{Duration, Instant};
 
 use crate::abi::status;
 use crate::alloc::{self, Domain, LEAK_CHECK_ENABLED};
-use crate::consteval::ConstTable;
+use crate::consteval::{self, ConstTable, Limit};
 use crate::ctx::ExecCtx;
 use crate::generic;
 use crate::io;
@@ -106,13 +132,16 @@ pub enum EntryMode {
     ConstEval(ConstEvalLimits),
 }
 
-/// The limits of a constant evaluation (D-195, D-269). Carried from the
-/// slice on; enforced from E6.
+/// The limits of a constant evaluation (D-195, D-536) and its seed
+/// (D-269, D-538). `None` is no limit.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ConstEvalLimits {
-    /// When the evaluation must stop.
+    /// When the evaluation must stop: checked at function entries and tail
+    /// calls once the host's watchdog interrupts the entry.
     pub deadline: Option<Instant>,
-    /// The most bytes it may allocate.
+    /// The most bytes the evaluation may add to the live bytes of the
+    /// entry's accounting domain at once (kernels included), counted from
+    /// what was live when the entry started.
     pub memory: Option<u64>,
     /// The hash seed it runs with (D-538).
     pub seed: u64,
@@ -215,6 +244,75 @@ struct Current {
 
 thread_local! {
     static CURRENT: Cell<Option<Current>> = const { Cell::new(None) };
+    /// The memory budget of the constant evaluation running on this thread
+    /// (D-536): the most live bytes its domain may hold, that is the live
+    /// bytes when the entry started plus the limit, or `u64::MAX` for none. Kept apart from [`CURRENT`] so the
+    /// allocation path reads one word.
+    static BUDGET: Cell<u64> = const { Cell::new(u64::MAX) };
+    /// The stack position where the entry running on this thread started,
+    /// or 0 outside any entry.
+    static STACK_TOP: Cell<usize> = const { Cell::new(0) };
+}
+
+/// The memory kept between the frames a release leaves alone and the
+/// pages it gives back: a multiple of every page size in use.
+const RELEASE_MARGIN: usize = 64 << 10;
+
+/// Gives the operating system back the memory of the frames a panicked
+/// entry abandoned, called on the entry's thread right before it parks
+/// forever. The frames between the panic and the entry's first frame are
+/// never resumed or read again, but a stack overflow touched all of them,
+/// so a REPL session that keeps parking such threads would otherwise keep
+/// tens of MiB per panic resident (D-457). The pages stay mapped and read
+/// as zero if anything touches them; nothing does. The current frames, below the panic, and a
+/// margin on each side, which includes the thread's own bookkeeping above
+/// the entry's first frame, are kept.
+pub(crate) fn release_abandoned_stack() {
+    let top = STACK_TOP.try_with(Cell::get).unwrap_or(0);
+    let here = stack_position();
+    if top == 0 || here >= top {
+        return;
+    }
+    let Some(start) = here
+        .checked_add(RELEASE_MARGIN)
+        .and_then(|at| at.checked_next_multiple_of(RELEASE_MARGIN))
+    else {
+        return;
+    };
+    let end = top.saturating_sub(RELEASE_MARGIN);
+    let end = end.saturating_sub(end % RELEASE_MARGIN);
+    if end <= start {
+        return;
+    }
+    release_pages(start, end.saturating_sub(start));
+}
+
+#[cfg(unix)]
+fn release_pages(start: usize, len: usize) {
+    let address = std::ptr::without_provenance_mut::<libc::c_void>(start);
+    // SAFETY: `[start, start + len)` is page-aligned and lies within this
+    // thread's stack, strictly between the current frame and the entry's
+    // first frame: the frames of the abandoned entry, which nothing reads
+    // or resumes, since the thread parks forever and no reference into
+    // them is used after the panic. A fresh private anonymous mapping
+    // with the stack's protection replaces them, which frees their memory
+    // at once on every Unix (`madvise` frees it only lazily on macOS). A
+    // failure leaves the old pages mapped.
+    unsafe {
+        libc::mmap(
+            address,
+            len,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_PRIVATE | libc::MAP_ANON | libc::MAP_FIXED,
+            -1,
+            0,
+        )
+    };
+}
+
+#[cfg(not(unix))]
+fn release_pages(start: usize, len: usize) {
+    let _ = (start, len);
 }
 
 fn current() -> Option<Current> {
@@ -277,12 +375,58 @@ pub fn with_seed<R>(seed: u64, f: impl FnOnce() -> R) -> R {
     result
 }
 
-/// The allocation budget of constant evaluation (plan §7.3, D-536): called
-/// with every allocation's size. A documented no-op in wave 1; the memory
-/// limit is enforced by W4-C from the domain's peak bytes.
+/// The memory limit of constant evaluation (D-536): called before every
+/// allocation of `bytes` bytes, so a request over the budget never reaches
+/// the system allocator. When a budget is set and the domain's live bytes
+/// plus `bytes` would exceed it, the entry is abandoned with
+/// [`Limit::Memory`]. Outside constant evaluation it reads one
+/// thread-local word.
 #[inline]
-pub(crate) fn charge_budget(bytes: u64) {
-    let _ = bytes;
+pub(crate) fn check_budget(bytes: u64) {
+    let budget = BUDGET.try_with(Cell::get).unwrap_or(u64::MAX);
+    if budget == u64::MAX {
+        return;
+    }
+    let live = u64::try_from(alloc::current_live_bytes()).unwrap_or(0);
+    if live.saturating_add(bytes) > budget {
+        // No further check while the entry is abandoned.
+        BUDGET.try_with(|cell| cell.set(u64::MAX)).ok();
+        consteval::limit_exceeded(Limit::Memory);
+    }
+}
+
+/// The address of a running entry's context, for the host's watchdog: set
+/// once the context exists and cleared, under the same lock, before it is
+/// dropped. A panicked entry's context lives forever (its thread parks),
+/// so the address stays valid.
+#[derive(Debug, Default)]
+struct Interrupter {
+    ctx: Mutex<usize>,
+}
+
+impl Interrupter {
+    fn set(&self, ctx: *const ExecCtx) {
+        *self.ctx.lock().unwrap_or_else(PoisonError::into_inner) = ctx.expose_provenance();
+    }
+
+    fn clear(&self) {
+        *self.ctx.lock().unwrap_or_else(PoisonError::into_inner) = 0;
+    }
+
+    /// Asks the entry to enter the runtime at its next function entry, if
+    /// it still runs.
+    fn interrupt(&self) {
+        let guard = self.ctx.lock().unwrap_or_else(PoisonError::into_inner);
+        let ctx: *const ExecCtx = std::ptr::with_exposed_provenance(*guard);
+        // SAFETY: a non-zero address is a live context: the entry's thread
+        // clears it under this lock before the context is dropped, and a
+        // panicked entry's context is never dropped. Only the atomic stack
+        // limit is written, which any thread may do.
+        if let Some(ctx) = unsafe { ctx.as_ref() } {
+            ctx.request_interrupt();
+        }
+        drop(guard);
+    }
 }
 
 /// Runs one entry thunk on its own stack with a fresh [`ExecCtx`], and
@@ -315,6 +459,52 @@ pub unsafe fn run_entry(
     entry: EntryFn,
     config: &EntryConfig,
 ) -> Result<EntryOutcome, RuntimeError> {
+    let body = move |ctx| {
+        // SAFETY: the caller guarantees that `entry` is an entry thunk with
+        // the `EntryFn` ABI whose code stays valid until `run_entry`
+        // returns, which is after this call returns (the host waits for
+        // the outcome); `ctx` is the entry's fresh context.
+        unsafe { entry(ctx) }
+    };
+    // SAFETY: as above, which is all `spawn_entry` needs of the body.
+    unsafe { spawn_entry(config, body) }
+}
+
+/// Runs a host task on an entry of its own, as [`run_entry`] runs a
+/// thunk: with a fresh context, `config`'s domain, seed, constants and
+/// trampolines recorded for kernels, its limits enforced, and panics
+/// reported as an [`EntryOutcome::Panicked`]. Constant evaluation runs its
+/// rebuild of maps and sets this way (D-539), since hashing a key may call
+/// a type's `@std_hooks` closure through a trampoline.
+///
+/// # Errors
+///
+/// As for [`run_entry`].
+///
+/// # Safety
+///
+/// - The trampolines in `config.callbacks`, and whatever code `task`
+///   reaches through them or through the words it handles, must stay
+///   valid until this function returns.
+/// - `task` follows the runtime's conventions for the words it handles.
+pub unsafe fn run_task(
+    config: &EntryConfig,
+    task: impl FnOnce() -> u64 + Send + 'static,
+) -> Result<EntryOutcome, RuntimeError> {
+    // SAFETY: forwarded from the caller.
+    unsafe { spawn_entry(config, move |_| task()) }
+}
+
+/// The body of [`run_entry`] and [`run_task`].
+///
+/// # Safety
+///
+/// `body` may run code that must stay valid until this returns; see
+/// [`run_entry`].
+unsafe fn spawn_entry(
+    config: &EntryConfig,
+    body: impl FnOnce(*mut ExecCtx) -> u64 + Send + 'static,
+) -> Result<EntryOutcome, RuntimeError> {
     let stack_size = config.stack_size;
     if stack_size < MIN_STACK_SIZE {
         return Err(RuntimeError::StackTooSmall {
@@ -325,6 +515,12 @@ pub unsafe fn run_entry(
     let callbacks = config.callbacks;
     let domain = Arc::clone(&config.domain);
     let consts = config.consts.clone();
+    let (deadline, memory_limit) = match &mode {
+        EntryMode::ConstEval(limits) => (limits.deadline, limits.memory),
+        EntryMode::Run | EntryMode::Test | EntryMode::Repl => (None, None),
+    };
+    let interrupter = Arc::new(Interrupter::default());
+    let entry_interrupter = Arc::clone(&interrupter);
     let (sender, receiver) = mpsc::channel();
     let thread = std::thread::Builder::new()
         .name("cheby-entry".to_owned())
@@ -332,37 +528,53 @@ pub unsafe fn run_entry(
         .spawn(move || {
             // The first frame is within a few KiB of the top of the stack;
             // the headroom covers that distance.
-            let limit = stack_position()
+            let top = stack_position();
+            let limit = top
                 .saturating_sub(stack_size)
                 .saturating_add(STACK_HEADROOM);
+            STACK_TOP.try_with(|cell| cell.set(top)).ok();
             let seed = match &mode {
                 EntryMode::ConstEval(limits) => limits.seed,
                 EntryMode::Run | EntryMode::Test | EntryMode::Repl => generic::process_seed(),
             };
             alloc::set_current_domain(domain);
+            // GAP(const-limit-baseline): the limit counts what this
+            // evaluation adds to the domain, not what was live before it.
+            let budget = memory_limit.map_or(u64::MAX, |limit| {
+                u64::try_from(alloc::current_live_bytes())
+                    .unwrap_or(0)
+                    .saturating_add(limit)
+                    .min(u64::MAX - 1)
+            });
             let mut ctx = ExecCtx::new(limit, mode, Some(sender.clone()));
+            // One pointer for every user of the context, so none
+            // invalidates another.
+            let ctx_ptr = &raw mut ctx;
+            entry_interrupter.set(ctx_ptr.cast_const());
+            BUDGET.try_with(|cell| cell.set(budget)).ok();
             CURRENT
                 .try_with(|cell| {
                     cell.set(Some(Current {
-                        ctx: &raw mut ctx,
+                        ctx: ctx_ptr,
                         seed,
                         callbacks,
                         consts: consts.as_ref().map_or(std::ptr::null(), Arc::as_ptr),
                     }));
                 })
                 .ok();
-            // SAFETY: the caller of `run_entry` guarantees that `entry` is
-            // an entry thunk with the `EntryFn` ABI whose code stays valid
-            // until `run_entry` returns, which is after this call returns
-            // (the host waits on the channel). `ctx` outlives the call: a
-            // panic parks this thread forever, keeping the frame alive.
-            let word = unsafe { entry(&raw mut ctx) };
+            // `ctx` outlives the call: a panic parks this thread forever,
+            // keeping the frame alive. The caller of `spawn_entry` keeps
+            // the code `body` runs valid until the host stops waiting,
+            // which is after this call returns.
+            let word = body(ctx_ptr);
+            entry_interrupter.clear();
+            BUDGET.try_with(|cell| cell.set(u64::MAX)).ok();
             CURRENT.try_with(|cell| cell.set(None)).ok();
             drop(consts);
             sender.send(EntryOutcome::Returned(word)).ok();
         })
         .map_err(RuntimeError::Spawn)?;
-    match receiver.recv() {
+    match wait(&receiver, deadline, &interrupter) {
         Ok(outcome @ EntryOutcome::Returned(_)) => {
             thread.join().map_err(|_| RuntimeError::EntryLost)?;
             Ok(outcome)
@@ -372,6 +584,38 @@ pub unsafe fn run_entry(
         Err(mpsc::RecvError) => {
             thread.join().ok();
             Err(RuntimeError::EntryLost)
+        }
+    }
+}
+
+/// How often the watchdog repeats its interrupt after the deadline, in
+/// case the entry was inside a kernel the first time.
+const REINTERRUPT: Duration = Duration::from_millis(10);
+
+/// Waits for an entry's outcome. With a deadline the host is the
+/// watchdog of D-536: once the deadline passes it interrupts the entry,
+/// whose next function entry or tail call ends it with the time limit,
+/// and repeats the request until the entry ends.
+fn wait(
+    receiver: &mpsc::Receiver<EntryOutcome>,
+    deadline: Option<Instant>,
+    interrupter: &Interrupter,
+) -> Result<EntryOutcome, mpsc::RecvError> {
+    let Some(deadline) = deadline else {
+        return receiver.recv();
+    };
+    loop {
+        let now = Instant::now();
+        let timeout = if now >= deadline {
+            interrupter.interrupt();
+            REINTERRUPT
+        } else {
+            deadline.saturating_duration_since(now)
+        };
+        match receiver.recv_timeout(timeout) {
+            Ok(outcome) => return Ok(outcome),
+            Err(mpsc::RecvTimeoutError::Disconnected) => return Err(mpsc::RecvError),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
     }
 }
@@ -815,6 +1059,219 @@ mod tests {
         assert_eq!(current_seed(), generic::process_seed());
         assert_eq!(with_seed(5, current_seed), generic::process_seed());
         assert!(callbacks().is_none());
+    }
+
+    unsafe extern "C" fn spins(ctx: *mut ExecCtx) -> u64 {
+        // A loop of calls: every iteration passes a function entry.
+        loop {
+            // SAFETY: `ctx` is the running entry's.
+            unsafe { entry_check(ctx) };
+            std::hint::spin_loop();
+        }
+    }
+
+    fn limited(table: &Arc<ConstTable>, limits: ConstEvalLimits) -> EntryConfig {
+        EntryConfig {
+            consts: Some(Arc::clone(table)),
+            domain: Domain::new(),
+            ..EntryConfig::new(EntryMode::ConstEval(limits))
+        }
+    }
+
+    /// D-536: the host's watchdog interrupts a constant evaluation that
+    /// passes its deadline at its next function entry, which ends it with
+    /// the time limit.
+    #[test]
+    #[cfg_attr(miri, ignore = "parks a thread forever")]
+    fn the_deadline_interrupts_at_the_next_function_entry() {
+        let table = ConstTable::new();
+        let started = Instant::now();
+        let config = limited(
+            &table,
+            ConstEvalLimits {
+                deadline: started.checked_add(Duration::from_millis(50)),
+                ..ConstEvalLimits::default()
+            },
+        );
+        let EntryOutcome::Panicked(report) = run_entry(spins, &config).unwrap() else {
+            panic!("the loop returned");
+        };
+        assert!(started.elapsed() >= Duration::from_millis(50));
+        assert_eq!(report.message, Limit::Time.message());
+        assert_eq!(table.abandon().limit, Some(Limit::Time));
+        // Without a deadline nothing interrupts: an entry that returns is
+        // not affected by an earlier one's limit.
+        let EntryOutcome::Returned(7) =
+            run_entry(returns_seven, &limited(&table, ConstEvalLimits::default())).unwrap()
+        else {
+            panic!("the entry did not return");
+        };
+        assert_eq!(table.abandon().limit, None);
+    }
+
+    unsafe extern "C" fn grows(_: *mut ExecCtx) -> u64 {
+        let mut chain = tuple(&[]);
+        loop {
+            chain = tuple(&[chain]);
+        }
+    }
+
+    /// D-536: the memory limit counts the live bytes of the entry's domain,
+    /// and the allocation that passes it ends the entry.
+    #[test]
+    #[cfg_attr(miri, ignore = "parks a thread forever")]
+    fn the_memory_budget_ends_an_entry_that_holds_too_much() {
+        let table = ConstTable::new();
+        let config = limited(
+            &table,
+            ConstEvalLimits {
+                memory: Some(64 << 10),
+                ..ConstEvalLimits::default()
+            },
+        );
+        let EntryOutcome::Panicked(report) = run_entry(grows, &config).unwrap() else {
+            panic!("the loop returned");
+        };
+        assert_eq!(report.message, Limit::Memory.message());
+        assert_eq!(table.abandon().limit, Some(Limit::Memory));
+        // The allocation that would pass the budget is refused, so the
+        // peak stays within one allocation below it.
+        let peak = config.domain.peak_bytes();
+        assert!(peak > (64 << 10) - 16 && peak <= 64 << 10, "{peak}");
+        // The abandoned chain stays live in that domain, but a later
+        // evaluation in it counts only what it adds
+        // (GAP(const-limit-baseline)).
+        let again = EntryConfig {
+            domain: Arc::clone(&config.domain),
+            ..limited(
+                &table,
+                ConstEvalLimits {
+                    memory: Some(64),
+                    ..ConstEvalLimits::default()
+                },
+            )
+        };
+        let EntryOutcome::Returned(0) = run_entry(allocates_and_frees, &again).unwrap() else {
+            panic!("an evaluation after an abandoned one was charged for its objects");
+        };
+        // In a fresh domain, freeing what is allocated keeps an entry under
+        // the budget: only live bytes count.
+        let config = limited(
+            &table,
+            ConstEvalLimits {
+                memory: Some(64),
+                ..ConstEvalLimits::default()
+            },
+        );
+        let EntryOutcome::Returned(0) = run_entry(allocates_and_frees, &config).unwrap() else {
+            panic!("the entry did not return");
+        };
+    }
+
+    /// The stack positions of [`touches_its_stack_then_panics`]: where it
+    /// started and where it panicked.
+    static TOUCHED: [std::sync::atomic::AtomicUsize; 2] = [
+        std::sync::atomic::AtomicUsize::new(0),
+        std::sync::atomic::AtomicUsize::new(0),
+    ];
+
+    fn touch(ctx: *mut ExecCtx, depth: u32) -> u64 {
+        #[expect(
+            clippy::large_stack_arrays,
+            reason = "the test fills the entry's stack on purpose"
+        )]
+        let mut frame = [0_u8; 32 << 10];
+        std::hint::black_box(&mut frame);
+        if depth == 0 {
+            TOUCHED[1].store(stack_position(), Ordering::SeqCst);
+            // SAFETY: `ctx` is the running entry's; no message or location.
+            unsafe { cheby_rt_panic(ctx, PanicKind::DivisionByZero.code(), 0, 0) }
+        }
+        touch(ctx, depth.saturating_sub(1)).wrapping_add(u64::from(std::hint::black_box(frame[0])))
+    }
+
+    unsafe extern "C" fn touches_its_stack_then_panics(ctx: *mut ExecCtx) -> u64 {
+        TOUCHED[0].store(STACK_TOP.with(Cell::get), Ordering::SeqCst);
+        touch(ctx, 256)
+    }
+
+    /// The number of resident pages in `[start, end)`.
+    #[cfg(unix)]
+    fn resident_pages(start: usize, end: usize) -> usize {
+        // SAFETY: `sysconf` only reads a configuration value.
+        let page = usize::try_from(unsafe { libc::sysconf(libc::_SC_PAGESIZE) }).unwrap();
+        let start = start.next_multiple_of(page);
+        let end = end.saturating_sub(end.checked_rem(page).unwrap());
+        let len = end.saturating_sub(start);
+        let mut pages = vec![0_u8; len.div_ceil(page)];
+        // SAFETY: the range is page-aligned and mapped (the parked
+        // thread's stack, which is never unmapped); `pages` has one byte
+        // per page.
+        let status = unsafe {
+            libc::mincore(
+                std::ptr::without_provenance_mut(start),
+                len,
+                pages.as_mut_ptr().cast(),
+            )
+        };
+        assert_eq!(status, 0);
+        pages.iter().filter(|&&p| p & 1 != 0).count()
+    }
+
+    /// D-457: a panicked entry's thread parks forever, but the stack its
+    /// abandoned frames touched is given back, so a REPL session that keeps
+    /// panicking does not keep the memory of every stack overflow.
+    #[test]
+    #[cfg(unix)]
+    #[cfg_attr(miri, ignore = "parks a thread forever")]
+    fn a_parked_entry_gives_back_its_abandoned_stack() {
+        let config = EntryConfig {
+            stack_size: 32 << 20,
+            ..EntryConfig::new(EntryMode::Test)
+        };
+        let outcome = run_entry(touches_its_stack_then_panics, &config).unwrap();
+        assert!(matches!(outcome, EntryOutcome::Panicked(_)));
+        let top = TOUCHED[0].load(Ordering::SeqCst);
+        let deep = TOUCHED[1].load(Ordering::SeqCst);
+        assert!(top > deep + (6 << 20), "{top:#x} {deep:#x}");
+        // The middle of the abandoned frames, well away from both ends.
+        let (start, end) = (deep + (1 << 20), top - (1 << 20));
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let resident = resident_pages(start, end);
+            if resident == 0 {
+                break;
+            }
+            assert!(Instant::now() < deadline, "{resident} pages still resident");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    unsafe extern "C" fn allocates_too_much(_: *mut ExecCtx) -> u64 {
+        let _ = alloc::alloc_object(1 << 50, 0);
+        1
+    }
+
+    /// D-536: a single request over the budget ends the entry with the
+    /// memory limit before anything is allocated, rather than aborting the
+    /// process when the system cannot provide it.
+    #[test]
+    #[cfg_attr(miri, ignore = "parks a thread forever")]
+    fn a_single_request_over_the_budget_is_refused_before_allocating() {
+        let table = ConstTable::new();
+        let config = limited(
+            &table,
+            ConstEvalLimits {
+                memory: Some(1 << 30),
+                ..ConstEvalLimits::default()
+            },
+        );
+        let EntryOutcome::Panicked(report) = run_entry(allocates_too_much, &config).unwrap() else {
+            panic!("the allocation returned");
+        };
+        assert_eq!(report.message, Limit::Memory.message());
+        assert_eq!(table.abandon().limit, Some(Limit::Memory));
+        assert_eq!(config.domain.peak_bytes(), 0);
     }
 
     #[test]

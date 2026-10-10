@@ -1,0 +1,37 @@
+// @mode: run-pass
+// @decisions: D-196, D-539, D-540
+//! A constant a million constructors deep, with a `Set` at the bottom, is
+//! walked for the JS range check, its set rebuilt with the program's seed
+//! and its value frozen, all without exhausting the compiler's stack
+//! (§4.5).
+
+import std::io
+import std::set
+
+type Chain {
+  End(set::Set<Int>),
+  Link(Int, Chain),
+}
+
+const long_chain: Chain = build(1_000_000, End(set::from_list([7, 11, 13])))
+
+fn build(n: Int, tail: Chain) -> Chain {
+  case n {
+    0 => tail
+    _ => build(n - 1, Link(n, tail))
+  }
+}
+
+fn bottom(link: Chain, acc: Int) -> (Int, set::Set<Int>) {
+  case link {
+    End(items) => (acc, items)
+    Link(n, rest) => bottom(rest, acc + n)
+  }
+}
+
+fn main() {
+  let (sum, items) = bottom(long_chain, 0)
+  let found = set::contains(items, 11)
+  let missing = set::contains(items, 12)
+  io::println("{sum} {found} {missing}")
+}

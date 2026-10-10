@@ -1,0 +1,14 @@
+// @mode: check-fail
+// @decisions: D-360, D-533, D-537
+//! The kernels of `std::env` are effects: a constant that reads the
+//! program's arguments is E0077, like one that prints (§4.5).
+
+import std::env
+import std::io
+import std::list
+
+const argument_count: Int = list::length(env::args())
+
+fn main() {
+  io::println("{argument_count}")
+}

@@ -30,6 +30,12 @@
 //! code. Every Cheby-ABI function starts with the stack-limit check of
 //! D-124, whose slow path is `cheby_rt_stack_slow(ctx, location)`.
 //!
+//! REPL session items (E4, D-547) are registered with
+//! [`Decls::set_session_name`]: their symbols use the module `<repl>` and
+//! carry `$r<generation>`, and a redefinition that takes over an earlier
+//! definition repoints that definition's slot once its batch is finalized
+//! ([`Decls::take_repoints`]); see `session.rs`.
+//!
 //! Data objects (D-454, D-523), all named from paths and names:
 //!
 //! - `cb$layout$<module>$<Ctor>`: a user constructor's header word (count
@@ -63,6 +69,7 @@ pub mod isa;
 mod layout;
 pub mod mangle;
 pub mod runtime;
+mod session;
 pub mod sig;
 mod values;
 
@@ -76,10 +83,11 @@ use cranelift_module::{Module, ModuleReloc};
 
 use cheby_mir::MirModule;
 
-pub use decls::{Decls, FuncDecl, SlotKey};
+pub use decls::{Decls, FuncDecl, SlotDecl, SlotKey};
 pub use error::CodegenError;
 pub use func::translate;
 pub use layout::{BuiltinLayouts, LayoutIds, builtin_ctor_layout, builtin_layout_id};
+pub use session::{SESSION_MODULE, SessionName};
 
 /// The alignment every function is defined with. Bit 0 of a code address
 /// must be clear so a closure's code word `addr | 1` reads as a tagged
@@ -219,7 +227,20 @@ pub fn define<M: Module>(
             ));
         }
     }
+    // A function defined twice would fail after the data are defined,
+    // which the module keeps: check first, so a failed batch defines
+    // nothing.
+    let mut ids = rustc_hash::FxHashSet::default();
+    for &(_, id, _) in &compiled {
+        if decls.defined_funcs.contains(&id) || !ids.insert(id) {
+            return Err(CodegenError::ice(format!(
+                "the function `{}` is defined twice",
+                decls.func_name(id)
+            )));
+        }
+    }
     data::define_pending(module, decls, cx)?;
+    decls.defined_funcs.extend(ids);
     for (key, id, code) in compiled {
         module
             .define_function_bytes(id, code.align, &code.bytes, &code.relocs)
@@ -227,6 +248,21 @@ pub fn define<M: Module>(
         decls.mark_defined(key)?;
     }
     Ok(clif)
+}
+
+/// Defines the data objects declared since the last [`define`] outside any
+/// batch: the slots of REPL session values
+/// ([`Decls::declare_session_const`]).
+///
+/// # Errors
+///
+/// A [`CodegenError`] if a definition fails.
+pub fn define_data<M: Module>(
+    module: &mut M,
+    decls: &mut Decls,
+    cx: &CodegenCx<'_>,
+) -> Result<(), CodegenError> {
+    data::define_pending(module, decls, cx)
 }
 
 /// The machine code of one function, ready for `define_function_bytes`.

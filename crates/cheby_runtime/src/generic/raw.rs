@@ -104,10 +104,20 @@ pub(super) unsafe fn view<'a>(word: Word, what: &str) -> View<'a> {
         LayoutKind::Ctor { .. } => View::Ctor(info),
         LayoutKind::Dyn => {
             // SAFETY: a live `dyn` value holds its dictionary at offset 8
-            // and its value at 16 (D-524); a live dictionary holds its
-            // type's descriptor at offset 8, escaped or not (D-555).
-            let (dict, value) = unsafe { (read_field(obj, 8), read_field(obj, 16)) };
-            // SAFETY: as above.
+            // and its value at 16 (D-524).
+            let (mut dict, mut value) = unsafe { (read_field(obj, 8), read_field(obj, 16)) };
+            // GAP(dyn-nested): a `dyn` value whose value is itself a `dyn`
+            // value is that inner value. Generic code builds one when it
+            // converts a value of a type parameter instantiated with a
+            // `dyn` type; a direct conversion keeps the inner descriptor
+            // (D-502), and so does the generic one through this rule.
+            // SAFETY: `value` is borrowed from a live object.
+            while let Some((inner_dict, inner)) = unsafe { dyn_parts(value, what) } {
+                dict = inner_dict;
+                value = inner;
+            }
+            // SAFETY: a live dictionary holds its type's descriptor at
+            // offset 8, escaped or not (D-555).
             let desc = unsafe { read_field(word_to_ptr(dict), 8) };
             View::Dyn { desc, value }
         }
@@ -120,6 +130,27 @@ pub(super) unsafe fn view<'a>(word: Word, what: &str) -> View<'a> {
         },
         LayoutKind::Dict => View::Internal(info),
     }
+}
+
+/// The dictionary and the value of `word` if it is a `dyn` value.
+///
+/// # Safety
+///
+/// `word` is a tagged integer or a live object.
+unsafe fn dyn_parts(word: Word, what: &str) -> Option<(Word, Word)> {
+    if abi::is_tagged_int(word) || word == 0 {
+        return None;
+    }
+    // SAFETY: forwarded from the caller.
+    unsafe { alloc::check_live(word, what) };
+    let obj = word_to_ptr(word);
+    // SAFETY: a live object.
+    let (_, id) = unsafe { scan_and_layout(obj) };
+    if id != abi::layout::DYN {
+        return None;
+    }
+    // SAFETY: a live `dyn` value: its dictionary at 8, its value at 16.
+    Some(unsafe { (read_field(obj, 8), read_field(obj, 16)) })
 }
 
 /// The contents of a live text object.

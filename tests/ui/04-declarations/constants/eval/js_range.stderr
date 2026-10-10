@@ -1,0 +1,18 @@
+error[E0078]: the constant `past_edge` holds an `Int` that JavaScript cannot represent exactly
+  --> tests/ui/04-declarations/constants/eval/js_range/src/main.cheby:15:7
+   |
+15 | const past_edge: Int = edge + 2
+   |       ^^^^^^^^^ this constant exists on `js`
+   |
+   = note: it holds `9007199254740993`, outside ±(2^53 - 1), the range of integers JavaScript represents exactly
+   = help: keep its `Int`s between `int::min_safe` and `int::max_safe`, or mark the constant `@target(native)`
+
+error[E0078]: the constant `limits` holds an `Int` that JavaScript cannot represent exactly
+  --> tests/ui/04-declarations/constants/eval/js_range/src/main.cheby:17:7
+   |
+17 | const limits: List<Limit> = [
+   |       ^^^^^^ this constant exists on `js`
+   |
+   = note: it holds `36028797018963964`, outside ±(2^53 - 1), the range of integers JavaScript represents exactly
+   = help: keep its `Int`s between `int::min_safe` and `int::max_safe`, or mark the constant `@target(native)`
+

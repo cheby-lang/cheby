@@ -295,6 +295,144 @@ fn a_full_manifest() {
     assert_eq!(manifest.root_module().to_string(), "my_app");
     assert_eq!(manifest.dependencies, []);
     assert_eq!(manifest.file, FileId::new(0));
+    assert_eq!(
+        manifest.const_eval_time_limit,
+        std::time::Duration::from_secs(10)
+    );
+    assert_eq!(
+        manifest.const_eval_memory_limit,
+        Manifest::DEFAULT_MEMORY_LIMIT
+    );
+}
+
+/// D-536: `[const-eval]` sets the limits of constant evaluation; without
+/// it they are 10 s and 1 GiB.
+#[test]
+fn const_eval_limits_parse() {
+    let base = "name = \"app\"\nversion = \"0.1.0\"\n";
+    let (manifest, rendered) = parse(base);
+    assert_eq!(rendered, "");
+    let manifest = manifest.unwrap();
+    assert_eq!(manifest.const_eval_time_limit, Manifest::DEFAULT_TIME_LIMIT);
+    assert_eq!(
+        Manifest::DEFAULT_TIME_LIMIT,
+        std::time::Duration::from_secs(10)
+    );
+    assert_eq!(manifest.const_eval_memory_limit, 1 << 30);
+    for (time, millis) in [("250ms", 250), ("3s", 3000), ("0010s", 10_000)] {
+        for (memory, bytes) in [("64KiB", 64 << 10), ("5MiB", 5 << 20), ("2GiB", 2 << 30)] {
+            let (manifest, rendered) = parse(&format!(
+                "{base}[const-eval]\ntime-limit = \"{time}\"\nmemory-limit = \"{memory}\"\n"
+            ));
+            assert_eq!(rendered, "");
+            let manifest = manifest.unwrap();
+            assert_eq!(
+                manifest.const_eval_time_limit,
+                std::time::Duration::from_millis(millis)
+            );
+            assert_eq!(manifest.const_eval_memory_limit, bytes);
+        }
+    }
+    // One key alone leaves the other at its default.
+    let (manifest, _) = parse(&format!("{base}[const-eval]\nmemory-limit = \"1MiB\"\n"));
+    let manifest = manifest.unwrap();
+    assert_eq!(manifest.const_eval_time_limit, Manifest::DEFAULT_TIME_LIMIT);
+    assert_eq!(manifest.const_eval_memory_limit, 1 << 20);
+}
+
+/// D-536: any other key or value in `[const-eval]` is E0036, and the
+/// manifest is still usable, with the defaults for the bad values.
+#[test]
+fn const_eval_errors() {
+    let (manifest, rendered) = parse(
+        "name = \"app\"\nversion = \"0.1.0\"\n\n[const-eval]\ntime-limit = \"10\"\n\
+         memory-limit = 1024\nstack-limit = \"1MiB\"\n",
+    );
+    let manifest = manifest.unwrap();
+    assert_eq!(manifest.const_eval_time_limit, Manifest::DEFAULT_TIME_LIMIT);
+    assert_eq!(
+        manifest.const_eval_memory_limit,
+        Manifest::DEFAULT_MEMORY_LIMIT
+    );
+    assert_eq!(
+        rendered,
+        "\
+error[E0036]: `10` is not a valid `time-limit`
+ --> cheby.toml:5:14
+  |
+5 | time-limit = \"10\"
+  |              ^^^^
+  |
+  = help: write an integer followed by `ms` or `s`, such as `\"10s\"`
+
+error[E0036]: `memory-limit` must be a string
+ --> cheby.toml:6:16
+  |
+6 | memory-limit = 1024
+  |                ^^^^ this is an integer
+
+error[E0036]: unknown key `stack-limit` in `[const-eval]`
+ --> cheby.toml:7:1
+  |
+7 | stack-limit = \"1MiB\"
+  | ^^^^^^^^^^^ unknown key
+  |
+  = help: the keys are `time-limit` and `memory-limit`
+
+"
+    );
+    for (bad, expected) in [
+        (
+            "time-limit = \"10 s\"",
+            "`10 s` is not a valid `time-limit`",
+        ),
+        ("time-limit = \"s\"", "`s` is not a valid `time-limit`"),
+        ("time-limit = \"-5s\"", "`-5s` is not a valid `time-limit`"),
+        (
+            "time-limit = \"1.5s\"",
+            "`1.5s` is not a valid `time-limit`",
+        ),
+        ("time-limit = \"10m\"", "`10m` is not a valid `time-limit`"),
+        (
+            "time-limit = \"0ms\"",
+            "`time-limit` must be greater than zero",
+        ),
+        (
+            "time-limit = \"99999999999999999999s\"",
+            "`time-limit` `99999999999999999999s` is too large",
+        ),
+        (
+            "memory-limit = \"1GB\"",
+            "`1GB` is not a valid `memory-limit`",
+        ),
+        (
+            "memory-limit = \"1gib\"",
+            "`1gib` is not a valid `memory-limit`",
+        ),
+        (
+            "memory-limit = \"0KiB\"",
+            "`memory-limit` must be greater than zero",
+        ),
+        (
+            "memory-limit = \"17179869184GiB\"",
+            "`memory-limit` `17179869184GiB` is too large",
+        ),
+    ] {
+        let (manifest, rendered) = parse(&format!(
+            "name = \"app\"\nversion = \"0.1.0\"\n[const-eval]\n{bad}\n"
+        ));
+        assert!(manifest.is_some());
+        assert!(
+            rendered.contains(&format!("error[E0036]: {expected}\n")),
+            "{bad}: {rendered}"
+        );
+        assert_eq!(rendered.matches("error[").count(), 1, "{rendered}");
+    }
+    let (_, rendered) = parse("name = \"app\"\nversion = \"0.1.0\"\nconst-eval = 3\n");
+    assert!(
+        rendered.contains("error[E0036]: `const-eval` must be a table"),
+        "{rendered}"
+    );
 }
 
 #[test]

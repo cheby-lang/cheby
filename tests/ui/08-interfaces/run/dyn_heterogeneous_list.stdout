@@ -1,0 +1,7 @@
+square 2: area 4, doubled 8
+rect 2x3: area 6, doubled 12
+square 5: area 25, doubled 50
+total area: 35
+through the bound: [4, 6, 25]
+shapes: square 2, rect 2x3, square 5
+count: 3

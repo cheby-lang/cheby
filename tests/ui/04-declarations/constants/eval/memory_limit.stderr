@@ -1,0 +1,9 @@
+error[E0076]: evaluating the constant `wide` used more than the memory limit of 1MiB
+  --> tests/ui/04-declarations/constants/eval/memory_limit/src/main.cheby:14:7
+   |
+14 | const wide: String = string::repeat("ab", 1_000_000)
+   |       ^^^^ this constant is computed at compile time
+   |
+   = note: the limit counts the heap bytes that the evaluation keeps live at once
+   = help: compute less at compile time, or raise `memory-limit` in the `[const-eval]` table of `cheby.toml`
+

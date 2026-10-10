@@ -1,0 +1,15 @@
+// @mode: check-fail
+// @flags: --deny-warnings
+// @decisions: D-080, D-549
+//! With `--deny-warnings`, `cheby check` renders every warning as an
+//! error that keeps its own code, adds a note naming the flag to the
+//! first one only, and fails with status 1.
+
+import std::io
+import std::list
+
+fn main() {
+  let unused = 1
+  let also_unused = 2
+  io::println("done")
+}

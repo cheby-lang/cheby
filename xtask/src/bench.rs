@@ -11,14 +11,20 @@
 //! - the edit-to-run latency: one function body is changed, then
 //!   `cheby run` is timed until `main` has run (a full rebuild in M1).
 //!
+//! Checking and checking with code generation run twice: with `--jobs 1`,
+//! which gives the lines per second per core, and with the default
+//! number of threads (the available parallelism), which gives the scaling
+//! with cores (D-247, D-263). `bench_build` runs in a child process
+//! (`xtask bench-build`), since rayon's global pool is sized once per
+//! process.
+//!
 //! The numbers come from an optimized toolchain: the command re-runs
 //! itself with `--release` when it was built without optimizations, and
 //! runs the release `cheby`. Each measurement is the fastest of a few
-//! runs. The front end and code generation are single-threaded until G1
-//! lands (W4-E, W5-C), so "per core" is per thread used, 1.
+//! runs.
 
 use std::fmt::Write as _;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
@@ -49,9 +55,11 @@ struct Row {
     lines: usize,
     shape: Shape,
     modules: usize,
-    check: Duration,
-    front_end: Duration,
-    back_end: Duration,
+    /// `cheby check` with `--jobs 1` and with the default.
+    check: [Duration; 2],
+    /// `bench_build`'s front end and back end, with `--jobs 1` and with
+    /// the default.
+    build: [(Duration, Duration); 2],
     edit_to_run: Option<Duration>,
 }
 
@@ -59,7 +67,8 @@ pub fn run(root: &Path, quick: bool, summary: Option<&Path>) -> Result<(), Strin
     if cfg!(debug_assertions) && std::env::var_os(RERUN_ENV).is_none() {
         return rerun_optimized(root, quick, summary);
     }
-    let cheby = build_cheby(root)?;
+    let cheby = crate::build_cheby(root)?;
+    let xtask = std::env::current_exe().map_err(|e| format!("cannot find xtask itself: {e}"))?;
     let base = root.join("target/bench-compile");
     if base.exists() {
         std::fs::remove_dir_all(&base).map_err(|e| format!("{}: {e}", base.display()))?;
@@ -81,15 +90,20 @@ pub fn run(root: &Path, quick: bool, summary: Option<&Path>) -> Result<(), Strin
                 .write(&dir)
                 .map_err(|e| format!("{}: {e}", dir.display()))?;
             eprintln!("bench-compile: {lines} lines, shape `{}`", shape.name());
-            let check = fastest(runs, || time_cheby(&cheby, &dir, "check"))?;
-            let (front_end, back_end) = fastest_pair(runs, || {
-                let t = cheby_driver::bench_build(&dir).map_err(|e| e.message().to_owned())?;
-                Ok((t.front_end, t.back_end))
-            })?;
+            let mut check = [Duration::ZERO; 2];
+            let mut build = [(Duration::ZERO, Duration::ZERO); 2];
+            for (n, jobs) in [Some(1), None].into_iter().enumerate() {
+                let time = fastest(runs, || time_cheby(&cheby, &dir, jobs, "check"))?;
+                let pair = fastest_pair(runs, || bench_build(&xtask, &dir, jobs))?;
+                if let (Some(c), Some(b)) = (check.get_mut(n), build.get_mut(n)) {
+                    *c = time;
+                    *b = pair;
+                }
+            }
             let edit_to_run = if shape == Shape::Wide {
                 Some(fastest(runs, || {
                     edit_one_body(&dir)?;
-                    time_cheby(&cheby, &dir, "run")
+                    time_cheby(&cheby, &dir, None, "run")
                 })?)
             } else {
                 None
@@ -99,8 +113,7 @@ pub fn run(root: &Path, quick: bool, summary: Option<&Path>) -> Result<(), Strin
                 shape,
                 modules: project.modules(),
                 check,
-                front_end,
-                back_end,
+                build,
                 edit_to_run,
             });
         }
@@ -138,25 +151,19 @@ fn rerun_optimized(root: &Path, quick: bool, summary: Option<&Path>) -> Result<(
     }
 }
 
-/// Builds the release `cheby` and returns its path.
-fn build_cheby(root: &Path) -> Result<PathBuf, String> {
-    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
-    let status = Command::new(cargo)
-        .current_dir(root)
-        .args(["build", "--quiet", "--release", "--package", "cheby_cli"])
-        .status()
-        .map_err(|e| format!("cannot run cargo: {e}"))?;
-    if !status.success() {
-        return Err("cannot build the release `cheby`".to_owned());
+/// Times `cheby [--jobs N] <command>` in `dir`; it must succeed.
+fn time_cheby(
+    cheby: &Path,
+    dir: &Path,
+    jobs: Option<usize>,
+    command: &str,
+) -> Result<Duration, String> {
+    let mut cmd = Command::new(cheby);
+    if let Some(n) = jobs {
+        cmd.args(["--jobs", &n.to_string()]);
     }
-    let name = format!("cheby{}", std::env::consts::EXE_SUFFIX);
-    Ok(root.join("target/release").join(name))
-}
-
-/// Times `cheby <command>` in `dir`; it must succeed.
-fn time_cheby(cheby: &Path, dir: &Path, command: &str) -> Result<Duration, String> {
     let start = Instant::now();
-    let out = Command::new(cheby)
+    let out = cmd
         .args(["--color=never", command])
         .current_dir(dir)
         .output()
@@ -171,6 +178,40 @@ fn time_cheby(cheby: &Path, dir: &Path, command: &str) -> Result<Duration, Strin
         ));
     }
     Ok(elapsed)
+}
+
+/// The front end's and the back end's times of `xtask bench-build
+/// [--jobs N] <dir>`, which builds in a process of its own.
+fn bench_build(
+    xtask: &Path,
+    dir: &Path,
+    jobs: Option<usize>,
+) -> Result<(Duration, Duration), String> {
+    let mut cmd = Command::new(xtask);
+    cmd.arg("bench-build");
+    if let Some(n) = jobs {
+        cmd.args(["--jobs", &n.to_string()]);
+    }
+    let out = cmd
+        .arg(dir)
+        .output()
+        .map_err(|e| format!("cannot run {}: {e}", xtask.display()))?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    if !out.status.success() {
+        return Err(format!(
+            "`xtask bench-build` failed in {} ({})\n{}",
+            dir.display(),
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+    let mut times = stdout.split_whitespace().map(str::parse::<u64>);
+    match (times.next(), times.next()) {
+        (Some(Ok(front)), Some(Ok(back))) => {
+            Ok((Duration::from_nanos(front), Duration::from_nanos(back)))
+        }
+        _ => Err(format!("`xtask bench-build` printed `{}`", stdout.trim())),
+    }
 }
 
 /// Changes one function body: the counter of the first `step(0, …)` call
@@ -241,35 +282,63 @@ fn rate(lines: usize, time: Duration) -> String {
     format!("{:.0}k", per_second / 1000.0)
 }
 
+/// How many times faster the second time is than the first, as `2.4x`.
+fn speedup(one: Duration, many: Duration) -> String {
+    let many = many.as_secs_f64();
+    if many <= 0.0 {
+        return "-".to_owned();
+    }
+    format!("{:.1}x", one.as_secs_f64() / many)
+}
+
 fn render(rows: &[Row]) -> String {
+    let threads = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
     let mut out = String::new();
-    out.push_str(
-        "| Project | Modules | `cheby check` | Check lines/s/core | Front end | Code generation | Check + codegen lines/s/core | Edit to run |\n\
-         | ------- | ------- | ------------- | ------------------ | --------- | --------------- | ---------------------------- | ----------- |\n",
+    let _ = writeln!(
+        out,
+        "| Project | Modules | Check, 1 thread | Check lines/s/core | Check, {threads} threads | Check speedup | \
+         Front end, 1 / {threads} threads | Code generation, 1 / {threads} threads | \
+         Check + codegen lines/s/core | Check + codegen speedup | Edit to run |"
     );
+    out.push_str(
+        "| ------- | ------- | --------------- | ------------------ | ------------- | ------------- | \
+         ------------------- | ------------------------- | ---------------------------- | \
+         ----------------------- | ----------- |\n",
+    );
+    let secs = |d: Duration| format!("{:.3} s", d.as_secs_f64());
     for row in rows {
-        let both = row.front_end.saturating_add(row.back_end);
-        let latency = row
-            .edit_to_run
-            .map_or_else(|| "-".to_owned(), |t| format!("{:.3} s", t.as_secs_f64()));
+        let [check_one, check_many] = row.check;
+        let [(front_one, back_one), (front_many, back_many)] = row.build;
+        let both_one = front_one.saturating_add(back_one);
+        let both_many = front_many.saturating_add(back_many);
+        let latency = row.edit_to_run.map_or_else(|| "-".to_owned(), secs);
         let _ = writeln!(
             out,
-            "| {} lines, `{}` | {} | {:.3} s | {} | {:.3} s | {:.3} s | {} | {} |",
+            "| {} lines, `{}` | {} | {} | {} | {} | {} | {} / {} | {} / {} | {} | {} | {} |",
             row.lines,
             row.shape.name(),
             row.modules,
-            row.check.as_secs_f64(),
-            rate(row.lines, row.check),
-            row.front_end.as_secs_f64(),
-            row.back_end.as_secs_f64(),
-            rate(row.lines, both),
+            secs(check_one),
+            rate(row.lines, check_one),
+            secs(check_many),
+            speedup(check_one, check_many),
+            secs(front_one),
+            secs(front_many),
+            secs(back_one),
+            secs(back_many),
+            rate(row.lines, both_one),
+            speedup(both_one, both_many),
             latency,
         );
     }
-    out.push_str(
-        "\nOne thread (G1's parallel front end and code generation are later work). Budgets (D-247): \
-         check and generate code for 100k lines/s per core; edit to run under 500 ms at 1M lines. \
-         Reported, never enforced.\n",
+    let _ = write!(
+        out,
+        "\nRates are per core, from the 1-thread runs; the speedups compare them with {threads} \
+         threads (`--jobs` default, the available parallelism). The front end runs modules and \
+         function bodies in parallel (G1); code generation is one batch until W5-C. Edit to run \
+         uses the default threads. Budgets (D-247): check and generate code for 100k lines/s per \
+         core and scale with cores; edit to run under 500 ms at 1M lines. Reported, never \
+         enforced.\n"
     );
     out
 }

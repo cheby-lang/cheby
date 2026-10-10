@@ -21,6 +21,7 @@ cheby_runtime.workspace = true
 cheby_link.workspace = true
 cheby_js.workspace = true
 cheby_consteval.workspace = true
+rayon.workspace = true
 rustc-hash.workspace = true
 
 [lints]

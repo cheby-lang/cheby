@@ -3,6 +3,14 @@
 //! Commands that are not implemented yet report the milestone that brings
 //! them and exit with status 1. Flag spellings are informative (§13).
 //!
+//! - `--deny-warnings` on `check`, `run`, `test` and `repl` renders every
+//!   warning as an error with its own code and fails the command with
+//!   status 1; `run` and `test` then run nothing (D-549).
+//! - `cheby check --target native|js` checks the code as it runs on that
+//!   target only (D-550).
+//! - `-j N`/`--jobs N`, global, sets the number of worker threads of the
+//!   build, by default the available parallelism (D-551).
+//!
 //! Diagnostics go to stderr in the layout of D-418. Errors that are not
 //! about the program, such as a missing `cheby.toml`, are `error:` lines
 //! without a code (D-442). Exit status: 0 on success, 1 on any
@@ -18,6 +26,7 @@
 mod color;
 
 use std::io::{IsTerminal as _, Write as _};
+use std::num::NonZeroUsize;
 use std::process::ExitCode;
 
 use cheby_diag::Colors;
@@ -37,6 +46,9 @@ struct Cli {
         default_value_t = ColorWhen::Auto
     )]
     color: ColorWhen,
+    /// Number of worker threads for the build; defaults to the available parallelism
+    #[arg(short = 'j', long, global = true, value_name = "N")]
+    jobs: Option<NonZeroUsize>,
     #[command(subcommand)]
     command: Command,
 }
@@ -49,7 +61,14 @@ enum Command {
         name: String,
     },
     /// Type-check the package without producing artifacts (D-282)
-    Check,
+    Check {
+        /// Check the code as it runs on this target only (D-550)
+        #[arg(long, value_enum)]
+        target: Option<Target>,
+        /// Treat every warning as an error (D-549)
+        #[arg(long)]
+        deny_warnings: bool,
+    },
     /// Compile the package for `native` (AOT) or `js` (D-006, D-007)
     Build {
         /// Target to build for
@@ -60,12 +79,19 @@ enum Command {
     Run {
         /// Module path, such as `my_app::tools::migrate`; defaults to the root module
         module_path: Option<String>,
+        /// Treat every warning as an error and run nothing after one (D-549)
+        #[arg(long)]
+        deny_warnings: bool,
         /// Arguments passed to the program, after `--`
         #[arg(last = true)]
         args: Vec<String>,
     },
     /// Start an interactive session (§13.5)
-    Repl,
+    Repl {
+        /// Treat every warning as an error (D-549)
+        #[arg(long)]
+        deny_warnings: bool,
+    },
     /// Run `test` blocks (§13.6, D-541)
     Test {
         /// Only run tests whose full name, `<module path> "<test name>"`, contains this text
@@ -73,6 +99,9 @@ enum Command {
         /// Only run the tests of this module and its submodules, such as `my_app::util`
         #[arg(long, value_name = "PATH")]
         module: Option<String>,
+        /// Treat every warning as an error and run no test after one (D-549)
+        #[arg(long)]
+        deny_warnings: bool,
     },
     /// Format source files (§13.7)
     Fmt {
@@ -101,6 +130,15 @@ enum Command {
 enum Target {
     Native,
     Js,
+}
+
+impl From<Target> for cheby_driver::Target {
+    fn from(target: Target) -> Self {
+        match target {
+            Target::Native => Self::Native,
+            Target::Js => Self::Js,
+        }
+    }
 }
 
 /// The stack of the thread that runs the command. Parts of the compiler
@@ -140,13 +178,56 @@ fn run_command() -> ExitCode {
         std::io::stderr().is_terminal(),
     );
     let out = Out { colors };
+    // The commands that build start the worker pool first (D-551). `-j`
+    // is global, and the commands that build nothing ignore it
+    // (GAP(jobs-global)).
+    let builds = matches!(
+        cli.command,
+        Command::Check { .. } | Command::Run { .. } | Command::Repl { .. } | Command::Test { .. }
+    );
+    if builds && let Err(e) = cheby_driver::configure_jobs(cli.jobs) {
+        return out.error(e.message());
+    }
     match cli.command {
         Command::New { .. } => out.not_yet("new", "M5"),
-        Command::Check => check(out),
+        Command::Check {
+            target,
+            deny_warnings,
+        } => check(
+            out,
+            cheby_driver::CheckOptions {
+                target: target.map(Into::into),
+                deny_warnings,
+            },
+        ),
         Command::Build { target } => build(out, target),
-        Command::Run { module_path, args } => run(out, module_path, args),
-        Command::Repl => cheby_repl::run(cheby_repl::ReplOptions::default()),
-        Command::Test { filter, module } => test(out, filter, module),
+        Command::Run {
+            module_path,
+            deny_warnings,
+            args,
+        } => run(
+            out,
+            cheby_driver::RunOptions {
+                module_path,
+                args,
+                deny_warnings,
+            },
+        ),
+        Command::Repl { deny_warnings } => {
+            cheby_repl::run(cheby_repl::ReplOptions { deny_warnings })
+        }
+        Command::Test {
+            filter,
+            module,
+            deny_warnings,
+        } => test(
+            out,
+            &cheby_driver::TestOptions {
+                filter,
+                module,
+                deny_warnings,
+            },
+        ),
         Command::Fmt { .. } => out.not_yet("fmt", "M5"),
         Command::Lsp => out.not_yet("lsp", "M5"),
         Command::Doc => out.not_yet("doc", "M5"),
@@ -170,13 +251,10 @@ struct Out {
 }
 
 impl Out {
-    /// Prints diagnostics in the layout of D-418.
+    /// Prints diagnostics in the layout of D-418, warnings as errors
+    /// under `--deny-warnings` (D-549).
     fn diagnostics(self, out: &cheby_driver::CheckOutput) {
-        write_stderr(&cheby_diag::render_all_with(
-            &out.diagnostics,
-            &out.sources,
-            self.colors,
-        ));
+        write_stderr(&out.render_with(self.colors));
     }
 
     /// Prints an `error:` line without a code (D-442) and returns status 1.
@@ -206,14 +284,15 @@ fn package_root(out: Out) -> Result<std::path::PathBuf, ExitCode> {
     })
 }
 
-/// `cheby check` (D-282): checks the package that holds the current
-/// directory with every implemented phase and prints its diagnostics.
-fn check(out: Out) -> ExitCode {
+/// `cheby check [--target T] [--deny-warnings]` (D-282, D-549, D-550):
+/// checks the package that holds the current directory with every
+/// implemented phase and prints its diagnostics.
+fn check(out: Out, options: cheby_driver::CheckOptions) -> ExitCode {
     let root = match package_root(out) {
         Ok(root) => root,
         Err(code) => return code,
     };
-    match cheby_driver::check(&root) {
+    match cheby_driver::check_with(&root, &options) {
         Ok(result) => {
             out.diagnostics(&result);
             if result.has_errors() {
@@ -229,13 +308,13 @@ fn check(out: Out) -> ExitCode {
 /// `cheby run [module_path] [-- args]` (D-137, D-286): checks and compiles
 /// the package with the JIT, then runs the module's `main`. Compile errors
 /// are printed and exit with 1 before anything runs; warnings are printed
-/// before the program starts.
-fn run(out: Out, module_path: Option<String>, args: Vec<String>) -> ExitCode {
+/// before the program starts, or, with `--deny-warnings`, stop it like
+/// errors (D-549).
+fn run(out: Out, options: cheby_driver::RunOptions) -> ExitCode {
     let root = match package_root(out) {
         Ok(root) => root,
         Err(code) => return code,
     };
-    let options = cheby_driver::RunOptions { module_path, args };
     let program = match cheby_driver::prepare_run(&root, options) {
         Ok(cheby_driver::Prepared::Ready(program)) => program,
         Ok(cheby_driver::Prepared::CompileFailed(result)) => {
@@ -255,15 +334,15 @@ fn run(out: Out, module_path: Option<String>, args: Vec<String>) -> ExitCode {
 /// compiles the package's selected tests, then runs them one after
 /// another and prints a line per test, a block per failure and a summary
 /// to stdout. Compile errors are printed and exit with 1 before any test
-/// runs; warnings are printed first. Exits with 0 when every selected test
-/// passes, 1 otherwise.
-fn test(out: Out, filter: Option<String>, module: Option<String>) -> ExitCode {
+/// runs; warnings are printed first, or, with `--deny-warnings`, stop it
+/// like errors (D-549). Exits with 0 when every selected test passes, 1
+/// otherwise.
+fn test(out: Out, options: &cheby_driver::TestOptions) -> ExitCode {
     let root = match package_root(out) {
         Ok(root) => root,
         Err(code) => return code,
     };
-    let options = cheby_driver::TestOptions { filter, module };
-    let program = match cheby_driver::prepare_test(&root, &options) {
+    let program = match cheby_driver::prepare_test(&root, options) {
         Ok(cheby_driver::PreparedTests::Ready(program)) => program,
         Ok(cheby_driver::PreparedTests::CompileFailed(result)) => {
             out.diagnostics(&result);
@@ -321,9 +400,9 @@ fn build(out: Out, target: Option<Target>) -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use clap::CommandFactory;
+    use clap::{CommandFactory, Parser as _};
 
-    use super::Cli;
+    use super::{Cli, Command, Target};
 
     #[test]
     fn cli_is_well_formed() {
@@ -341,5 +420,63 @@ mod tests {
         ] {
             assert!(names.contains(&expected), "missing command `{expected}`");
         }
+    }
+
+    /// `--deny-warnings` on `check`, `run`, `test` and `repl` (D-549),
+    /// `check --target` (D-550) and the global `-j`/`--jobs` (D-551).
+    #[test]
+    fn parses_the_build_flags() {
+        let cli =
+            Cli::try_parse_from(["cheby", "check", "--target", "js", "--deny-warnings"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Check {
+                target: Some(Target::Js),
+                deny_warnings: true
+            }
+        ));
+        assert_eq!(cli.jobs, None);
+        let cli = Cli::try_parse_from([
+            "cheby",
+            "-j",
+            "3",
+            "run",
+            "--deny-warnings",
+            "--",
+            "-j",
+            "x",
+        ])
+        .unwrap();
+        assert_eq!(cli.jobs.map(std::num::NonZeroUsize::get), Some(3));
+        let Command::Run {
+            deny_warnings,
+            args,
+            ..
+        } = cli.command
+        else {
+            panic!("not run");
+        };
+        assert!(deny_warnings);
+        assert_eq!(args, ["-j", "x"]);
+        let cli = Cli::try_parse_from(["cheby", "test", "--jobs", "1", "--deny-warnings", "adds"])
+            .unwrap();
+        assert_eq!(cli.jobs.map(std::num::NonZeroUsize::get), Some(1));
+        assert!(matches!(
+            cli.command,
+            Command::Test {
+                deny_warnings: true,
+                ..
+            }
+        ));
+        let cli = Cli::try_parse_from(["cheby", "repl", "--deny-warnings"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Repl {
+                deny_warnings: true
+            }
+        ));
+        assert!(Cli::try_parse_from(["cheby", "-j", "0", "check"]).is_err());
+        assert!(Cli::try_parse_from(["cheby", "check", "--target", "wasm"]).is_err());
+        assert!(Cli::try_parse_from(["cheby", "fmt", "--deny-warnings"]).is_err());
     }
 }

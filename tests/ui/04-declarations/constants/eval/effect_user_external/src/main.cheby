@@ -1,0 +1,17 @@
+// @mode: check-fail
+// @decisions: D-360, D-533, D-537
+//! A constant may not call the package's own `@external(native, …)`
+//! functions, even one whose symbol the process defines: only the std
+//! kernels of D-360 and D-537 run at compile time, so this is E0077,
+//! naming the symbol (§4.5, §12.5).
+
+import std::io
+
+@external(native, "labs")
+fn absolute(n: I64) -> I64
+
+const distance: I64 = absolute(-42)
+
+fn main() {
+  io::println("{distance}")
+}

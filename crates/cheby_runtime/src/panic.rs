@@ -133,9 +133,18 @@ pub unsafe extern "C" fn cheby_rt_stack_slow(ctx: *mut ExecCtx, location: Word) 
             "a stack check ran without an execution context"
         ));
     };
-    // The interrupt handlers go here: the constant-evaluation deadline
-    // (D-195, E6) and the scheduler's yield (D-028, M2).
-    let _ = context.take_interrupt();
+    // The interrupt handlers: the constant-evaluation deadline (D-195,
+    // D-536), and later the scheduler's yield (D-028, M2). A request that
+    // finds the deadline not passed yet is ignored; the watchdog repeats
+    // it.
+    if context.take_interrupt()
+        && let EntryMode::ConstEval(limits) = context.entry_mode()
+        && limits
+            .deadline
+            .is_some_and(|deadline| std::time::Instant::now() >= deadline)
+    {
+        crate::consteval::limit_exceeded(crate::consteval::Limit::Time);
+    }
     if stack_position() < context.real_stack_limit() {
         // SAFETY: forwarded from the caller.
         let location = unsafe { location_text(location) };
@@ -193,6 +202,7 @@ unsafe fn abandon(ctx: *mut ExecCtx, report: PanicReport) -> ! {
     };
     // If the host has gone there is nobody to tell; park anyway.
     outcome.send(EntryOutcome::Panicked(report)).ok();
+    crate::entry::release_abandoned_stack();
     loop {
         std::thread::park();
     }

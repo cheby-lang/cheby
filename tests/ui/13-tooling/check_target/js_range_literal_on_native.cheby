@@ -1,0 +1,13 @@
+// @mode: check-pass
+// @flags: --target native
+// @decisions: D-037, D-550
+//! An `Int` literal outside JS's safe range is an error only in code that
+//! runs on JS (E0071); checking for native alone accepts it.
+
+import std::int
+import std::io
+
+fn main() {
+  let big = 9_007_199_254_740_993
+  io::println(int::show(big))
+}

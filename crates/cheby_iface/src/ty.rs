@@ -99,37 +99,83 @@ preinterned_types! {
 
 static ERROR_KIND: TyKind = TyKind::Error;
 
+/// The number of shards of a [`TyInterner`], a power of two.
+const SHARDS: u32 = 64;
+/// The low bits of a handle's number (past the pre-interned ones) that
+/// pick its shard.
+const SHARD_MASK: u32 = SHARDS - 1;
+const SHARD_BITS: u32 = SHARDS.trailing_zeros();
+
 /// The process-wide type table. Append-only.
 ///
-/// The slice keeps one lock; I1/I2 may replace it with a chunked arena
-/// with lock-free reads behind the same API.
+/// The table is split into [`SHARDS`] shards by the kind's hash, each
+/// behind its own lock, so bodies checked in parallel (D-263) rarely wait
+/// for each other (I2). A handle past the `Ty::*` constants numbers its
+/// shard in its low bits and its place in the shard above them; the
+/// constants are read without a lock.
 pub struct TyInterner {
-    inner: RwLock<TyInner>,
+    /// The kinds of the `Ty::*` constants, by number.
+    pre: Box<[&'static TyKind]>,
+    shards: Box<[RwLock<TyShard>]>,
 }
 
 #[derive(Default)]
-struct TyInner {
+struct TyShard {
+    /// Every kind that hashes to this shard, the constants included.
     map: FxHashMap<&'static TyKind, Ty>,
+    /// The kinds of this shard's handles past the constants, by place.
     kinds: Vec<&'static TyKind>,
+}
+
+/// The shard of `kind`.
+fn shard_of(kind: &TyKind) -> u32 {
+    use std::hash::BuildHasher as _;
+    let hash = rustc_hash::FxBuildHasher.hash_one(kind);
+    // Middle bits: the shard's own map indexes buckets by the low bits and
+    // tags them with the top ones, which must still vary inside a shard.
+    // The mask keeps the value below `SHARDS`.
+    u32::try_from((hash >> 32) & u64::from(SHARD_MASK)).unwrap_or(0)
 }
 
 impl TyInterner {
     /// A table holding exactly the `Ty::*` constants.
     #[must_use]
     pub fn new() -> Self {
+        let pre: Vec<(Ty, &'static TyKind)> = preinterned()
+            .into_iter()
+            .map(|(ty, kind)| (ty, &*Box::leak(Box::new(kind))))
+            .collect();
         let interner = Self {
-            inner: RwLock::new(TyInner::default()),
+            pre: pre.iter().map(|&(_, kind)| kind).collect(),
+            shards: (0..SHARDS).map(|_| RwLock::default()).collect(),
         };
-        for (_, kind) in preinterned() {
-            interner.intern(kind);
+        for (ty, kind) in pre {
+            if let Some(shard) = interner.shard(kind) {
+                shard
+                    .write()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .map
+                    .insert(kind, ty);
+            }
         }
         interner
     }
 
+    fn shard(&self, kind: &TyKind) -> Option<&RwLock<TyShard>> {
+        self.shards.get(usize::try_from(shard_of(kind)).ok()?)
+    }
+
+    /// How many handles are pre-interned: the `Ty::*` constants.
+    fn preinterned(&self) -> u32 {
+        u32::try_from(self.pre.len()).unwrap_or(u32::MAX)
+    }
+
     /// The handle of `kind`, interning it on first use.
     pub fn intern(&self, kind: TyKind) -> Ty {
-        if let Some(&ty) = self
-            .inner
+        let Some(shard) = self.shard(&kind) else {
+            return Ty::ERROR;
+        };
+        if let Some(&ty) = shard
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .map
@@ -137,14 +183,22 @@ impl TyInterner {
         {
             return ty;
         }
-        let mut inner = self.inner.write().unwrap_or_else(PoisonError::into_inner);
-        if let Some(&ty) = inner.map.get(&kind) {
+        let number = shard_of(&kind);
+        let mut shard_data = shard.write().unwrap_or_else(PoisonError::into_inner);
+        if let Some(&ty) = shard_data.map.get(&kind) {
             return ty;
         }
-        let ty = Ty(u32::try_from(inner.kinds.len()).unwrap_or(u32::MAX));
+        // More than `u32::MAX` distinct types cannot fit in memory, so the
+        // saturation never happens in practice.
+        let ty = Ty(u32::try_from(shard_data.kinds.len())
+            .ok()
+            .and_then(|place| place.checked_shl(SHARD_BITS))
+            .map(|high| high | number)
+            .and_then(|n| n.checked_add(self.preinterned()))
+            .unwrap_or(u32::MAX));
         let leaked: &'static TyKind = Box::leak(Box::new(kind));
-        inner.kinds.push(leaked);
-        inner.map.insert(leaked, ty);
+        shard_data.kinds.push(leaked);
+        shard_data.map.insert(leaked, ty);
         ty
     }
 
@@ -152,11 +206,27 @@ impl TyInterner {
     /// wrong kind; an unknown handle gives [`TyKind::Error`].
     #[must_use]
     pub fn kind(&self, ty: Ty) -> &'static TyKind {
-        let inner = self.inner.read().unwrap_or_else(PoisonError::into_inner);
-        usize::try_from(ty.0)
+        let Some(number) = ty.0.checked_sub(self.preinterned()) else {
+            return usize::try_from(ty.0)
+                .ok()
+                .and_then(|n| self.pre.get(n))
+                .copied()
+                .unwrap_or(&ERROR_KIND);
+        };
+        let Ok(place) = usize::try_from(number >> SHARD_BITS) else {
+            return &ERROR_KIND;
+        };
+        usize::try_from(number & SHARD_MASK)
             .ok()
-            .and_then(|n| inner.kinds.get(n))
-            .copied()
+            .and_then(|shard| self.shards.get(shard))
+            .and_then(|shard| {
+                shard
+                    .read()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .kinds
+                    .get(place)
+                    .copied()
+            })
             .unwrap_or(&ERROR_KIND)
     }
 
@@ -177,6 +247,7 @@ impl TyInterner {
     }
 
     /// The type parameter `param`.
+    #[must_use]
     pub fn param(&self, param: ParamIdx) -> Ty {
         self.intern(TyKind::Param(param))
     }
@@ -191,11 +262,17 @@ impl Default for TyInterner {
 impl fmt::Debug for TyInterner {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let len = self
-            .inner
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .kinds
-            .len();
+            .shards
+            .iter()
+            .map(|shard| {
+                shard
+                    .read()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .kinds
+                    .len()
+            })
+            .sum::<usize>()
+            .saturating_add(self.pre.len());
         f.debug_struct("TyInterner").field("len", &len).finish()
     }
 }
@@ -376,6 +453,35 @@ mod tests {
         assert_ne!(types.named(builtin::LIST, [Ty::STRING]), list_int);
         let f = types.func([list_int], Ty::NIL);
         assert_eq!(types.func([list_int], Ty::NIL), f);
+    }
+
+    #[test]
+    fn interning_from_many_threads_agrees() {
+        let types = TyInterner::new();
+        let handles: Vec<Vec<Ty>> = std::thread::scope(|s| {
+            let workers: Vec<_> = (0..4)
+                .map(|_| {
+                    s.spawn(|| {
+                        (0..3000u32)
+                            .map(|n| {
+                                let ty = types.param(ParamIdx::from_u32(n));
+                                assert_eq!(types.kind(ty), &TyKind::Param(ParamIdx::from_u32(n)));
+                                ty
+                            })
+                            .collect::<Vec<Ty>>()
+                    })
+                })
+                .collect();
+            workers.into_iter().map(|w| w.join().unwrap()).collect()
+        });
+        for other in &handles[1..] {
+            assert_eq!(other, &handles[0]);
+        }
+        let distinct: std::collections::HashSet<Ty> = handles[0].iter().copied().collect();
+        assert_eq!(distinct.len(), 3000);
+        for (ty, kind) in preinterned() {
+            assert_eq!(types.intern(kind), ty);
+        }
     }
 
     #[test]

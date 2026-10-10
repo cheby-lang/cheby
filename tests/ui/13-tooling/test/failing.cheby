@@ -1,7 +1,7 @@
 // @mode: run-fail
 // @exit: 1
 // @command: test
-// @decisions: D-140, D-529, D-541, D-543
+// @decisions: D-140, D-529, D-541, D-543, D-595, D-598
 //! A failing `assert`, a panic and an `Err` result each fail their test.
 //! Every test still runs, and each failure gets a block with the panic
 //! report or the error's text after the test lines.

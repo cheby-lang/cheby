@@ -408,7 +408,7 @@ impl Translator<'_, '_> {
                 self.data_address(data, local)
             }
             Const::FnValue(def) => {
-                let symbol = mangle::item(Kind::FnVal, self.unit.name(*def)?);
+                let symbol = mangle::item(Kind::FnVal, &self.decls.def_name(self.unit, *def)?);
                 let data = self.decls.static_object(&symbol)?;
                 self.data_address(data, true)
             }
@@ -417,7 +417,9 @@ impl Translator<'_, '_> {
                     .unit
                     .static_object(*id)
                     .ok_or_else(|| CodegenError::ice(format!("unknown static {id:?}")))?;
-                let data = self.decls.static_object(&Decls::static_symbol(object))?;
+                let data = self
+                    .decls
+                    .static_object(&self.decls.static_symbol(object))?;
                 self.data_address(data, true)
             }
             Const::Code(key) => {
@@ -535,7 +537,7 @@ impl Translator<'_, '_> {
                     CallMode::Indirect => {
                         // D-043: every call of a top-level function loads
                         // its slot, which is writable (no `readonly`).
-                        let path = self.unit.name(*def)?.path();
+                        let path = self.decls.slot_path(self.unit, *def)?;
                         let slot = self.decls.slot(&path, &abi_sig)?.id;
                         let address = self.data_address(slot, true);
                         let code = self.b.ins().load(WORD, MemFlagsData::trusted(), address, 0);

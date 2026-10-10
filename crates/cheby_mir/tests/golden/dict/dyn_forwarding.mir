@@ -1,0 +1,43 @@
+fn dyn_forward Show::show for dyn app::shape::Shape(_0: value, _1: value) -> value check str#0 {
+  str#0 = "<builtin>"
+bb0:
+  drop _0
+  _2: value = field _1.0 of dyn
+  dup _2
+  _3: value = field _2.1 of dict/2+1
+  dup _3
+  drop _2
+  _4: value = field _1.1 of dyn
+  dup _4
+  drop _1
+  tail_call _3(_4)
+}
+
+fn dyn_forward app::shape::Shape::area for dyn app::shape::Shape(_0: value, _1: value) -> value check str#0 {
+  str#0 = "src/shape.cheby:4:6"
+bb0:
+  drop _0
+  _2: value = field _1.0 of dyn
+  dup _2
+  _3: value = field _2.2 of dict/2+1
+  dup _3
+  drop _2
+  _4: value = field _1.1 of dyn
+  dup _4
+  drop _1
+  tail_call _3(_4)
+}
+
+static#0 desc app::circle$Circle = desc_nominal(str#0, str#1) str#0 = "Circle" str#1 = "app::circle"
+static#1 dict app$Show$app::circle::Circle = dict/1+0(static#0, fn app::circle::show)
+static#2 dict app$app::shape::Shape$app::circle::Circle = dict/2+1(static#0, fn app::circle::show, fn app::circle::area, static#1)
+static#3 desc app::square$Square = desc_nominal(str#0, str#1) str#0 = "Square" str#1 = "app::square"
+static#4 dict app$Show$app::square::Square = dict/1+0(static#3, fn app::square::show)
+static#5 dict app$app::shape::Shape$app::square::Square = dict/2+1(static#3, fn app::square::show, fn app::square::area, static#4)
+static#6 desc app::shape$dyn$Shape = desc_nominal(str#0, str#1) str#0 = "dyn Shape" str#1 = "app::shape"
+static#7 fnval app$app::shape::Shape$dyn app::shape::Shape$0 = closure/0(code <dyn_forward Show::show for dyn app::shape::Shape>)
+static#8 fnval app$app::shape::Shape$dyn app::shape::Shape$1 = closure/0(code <dyn_forward app::shape::Shape::area for dyn app::shape::Shape>)
+static#9 fnval app$Show$dyn app::shape::Shape$0 = closure/0(code <dyn_forward Show::show for dyn app::shape::Shape>)
+static#10 dict app$Show$dyn app::shape::Shape = dict/1+0(static#6, static#9)
+static#11 dict app$app::shape::Shape$dyn app::shape::Shape = dict/2+1(static#6, static#7, static#8, static#10)
+static#12 dict app$app::Any$dyn app::shape::Shape = dict/0+0(static#6)

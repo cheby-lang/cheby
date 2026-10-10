@@ -273,6 +273,13 @@ mod tests {
     fn c_type(cheby: &str) -> &'static str {
         match cheby {
             "Int" | "I64" => "i64",
+            "I8" => "i8",
+            "I16" => "i16",
+            "I32" => "i32",
+            "U8" => "u8",
+            "U16" => "u16",
+            "U32" => "u32",
+            "U64" => "u64",
             "Bool" => "bool",
             "Float" => "f64",
             "" | "Nil" => "()",
@@ -318,14 +325,14 @@ mod tests {
         Some((params, c_type(result)))
     }
 
-    /// Every kernel of `std::string`, `std::io` and `std::env` has the C
-    /// signature of its `@external` declaration in `std/` (plan §6). The
-    /// numeric modules check theirs in `num`'s tests.
+    /// Every kernel of `std::string`, `std::bytes`, `std::io` and
+    /// `std::env` has the C signature of its `@external` declaration in
+    /// `std/` (plan §6). The numeric modules check theirs in `num`'s tests.
     #[test]
-    fn text_io_and_env_kernels_match_their_declarations() {
+    fn text_bytes_io_and_env_kernels_match_their_declarations() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std");
         let mut declared = BTreeMap::new();
-        for module in ["string", "io", "env"] {
+        for module in ["string", "bytes", "io", "env"] {
             let source = std::fs::read_to_string(root.join(format!("{module}.cheby"))).unwrap();
             let mut pending: Option<String> = None;
             for line in source.lines() {
@@ -342,9 +349,14 @@ mod tests {
             }
         }
         let mut registered = BTreeMap::new();
-        for (name, params, result) in [text::signatures(), io::signatures(), env::signatures()]
-            .into_iter()
-            .flatten()
+        for (name, params, result) in [
+            text::signatures(),
+            bytes::signatures(),
+            io::signatures(),
+            env::signatures(),
+        ]
+        .into_iter()
+        .flatten()
         {
             assert!(
                 registered
@@ -354,7 +366,7 @@ mod tests {
             );
         }
         assert_eq!(registered, declared);
-        assert_eq!(registered.len(), 27 + 11 + 3);
+        assert_eq!(registered.len(), 27 + 36 + 11 + 3);
     }
 
     #[test]

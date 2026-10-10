@@ -199,11 +199,20 @@ pub fn tuple_fn(iface_fn: &DefName, arity: u32) -> String {
     format!("{}${arity}", item(Kind::TupleFn, iface_fn))
 }
 
-/// `cb$dynfwd$<module path>$<interface function>`: the forwarding entry of
-/// `iface_fn` in `dyn` dictionaries (D-560).
+/// `cb$dynfwd$<module path>$<interface function>$$<module path of J>$<J>`:
+/// the forwarding entry of `iface_fn` in the dictionaries of `dyn J`
+/// (D-560). Its field in a `J` dictionary depends on `J`, so `J` is part of
+/// the name; an interface function's item is always `Iface$fn`, so the first
+/// `$$` after it ends it, even when a module path is empty (GAP(dyn-forward-key),
+/// W4-A).
 #[must_use]
-pub fn dyn_forward(iface_fn: &DefName) -> String {
-    item(Kind::DynFwd, iface_fn)
+pub fn dyn_forward(iface_fn: &DefName, dyn_iface: &DefName) -> String {
+    format!(
+        "{}$${}${}",
+        item(Kind::DynFwd, iface_fn),
+        path_part(&dyn_iface.module),
+        path_part(&dyn_iface.item)
+    )
 }
 
 /// `cb$str$<owner without cb$>$<n>`: string `n` of the function whose
