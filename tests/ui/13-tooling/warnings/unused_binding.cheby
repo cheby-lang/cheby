@@ -1,0 +1,26 @@
+// @mode: check-pass
+// @decisions: D-080, D-242
+//! Every kind of local binding that is never used warns: a parameter, a
+//! `let` binding, a binding in a `case` arm, a `use` binder, a closure
+//! parameter and a local function, also one that only calls itself.
+
+fn with_twice(n: Int, k: fn(Int) -> Int) -> Int {
+  k(n * 2)
+}
+
+fn describe(size: Int, unused: Int) -> Int {
+  let total = size + 1
+  let add = fn(a: Int, b: Int) { b }
+  fn again(n: Int) -> Int {
+    again(n)
+  }
+  use doubled <- with_twice(size)
+  case Some(size) {
+    Some(value) => add(1, 2)
+    None => 0
+  }
+}
+
+fn main() {
+  assert describe(1, 2) == 2
+}

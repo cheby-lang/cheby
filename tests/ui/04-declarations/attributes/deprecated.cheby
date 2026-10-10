@@ -1,0 +1,33 @@
+// @mode: check-fail
+// @decisions: D-200, D-461
+//! `@deprecated` takes one message string and is allowed only on `pub`
+//! items.
+
+@deprecated("use `fresh` instead")
+pub fn stale() -> Int {
+  1
+}
+
+@deprecated("internal")
+fn hidden() -> Int {
+  2
+}
+
+@deprecated
+pub fn bare() -> Int {
+  3
+}
+
+@deprecated("one", "two")
+pub fn twice() -> Int {
+  4
+}
+
+@deprecated("not for tests")
+test "old" {
+  Nil
+}
+
+pub fn fresh() -> Int {
+  hidden()
+}

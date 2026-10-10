@@ -1,0 +1,14 @@
+// @mode: check-pass
+// @decisions: D-298, D-303
+//! Only a literal written in the call warns: computed counts and
+//! non-negative literals do not.
+
+import std::list
+
+fn main() {
+  let xs = [1, 2, 3]
+  let back = 0 - 1
+  assert list::take(xs, back) == []
+  assert list::take(xs, list::length(xs) - 1) == [1, 2]
+  assert list::take(xs, 0) == []
+}

@@ -1,0 +1,21 @@
+// @mode: check-pass
+// @decisions: D-065
+//! `Bool` is a built-in ADT with the constructors `True` and `False`,
+//! matched with `case` like any other ADT, and `Nil` is both the unit type
+//! and its only value (§3.4, §3.6).
+
+fn flip(value: Bool) -> Bool {
+  case value {
+    True => False
+    False => True
+  }
+}
+
+fn nothing() -> Nil {
+  Nil
+}
+
+fn main() {
+  assert flip(True) == False
+  assert nothing() == Nil
+}

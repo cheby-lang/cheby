@@ -4,6 +4,8 @@
 //!
 //! `I8` itself is a builtin item whose home module is this one (D-447).
 
+import std::int
+
 // Constants
 
 /// The smallest `I8`.
@@ -202,3 +204,68 @@ pub fn wrapping_mul(a: I8, b: I8) -> I8
 @external(native, "cheby_i8_wrapping_neg")
 @external(js, "./i8.mjs", "wrapping_neg")
 pub fn wrapping_neg(n: I8) -> I8
+
+// Examples
+
+test "the i8 range" {
+  assert min_value == -128
+  assert max_value == 127
+}
+
+test "conversions to i8" {
+  assert from_int(-128) == Ok(-128)
+  assert from_int(128) == Err(Nil)
+  assert from_i32(-5) == Ok(-5)
+  assert from_u8(200) == Err(Nil)
+}
+
+test "i8 parses and shows decimal digits" {
+  let small: I8 = -5
+  assert parse("-128") == Ok(-128)
+  assert parse("128") == Err(Nil)
+  assert parse("+1") == Err(Nil)
+  assert parse_base("7f", 16) == Ok(127)
+  assert show(-128) == "-128"
+  assert "{small}" == "-5"
+}
+
+test "comparing i8 values" {
+  assert compare(-1, 1) == Less
+  assert compare(3, 3) == Equal
+  assert min(-100, 7) == -100
+  assert max(-100, 7) == 7
+}
+
+test "i8 operators as functions" {
+  assert add(100, 27) == 127
+  assert sub(-100, 28) == -128
+  assert mul(-4, 5) == -20
+  assert div(-7, 2) == -3
+  assert rem(-7, 2) == -1
+  assert neg(127) == -127
+  assert abs(-127) == 127
+}
+
+test "i8 checked arithmetic reports overflow" {
+  assert checked_add(100, 27) == Ok(127)
+  assert checked_add(max_value, 1) == Err(Nil)
+  assert checked_sub(min_value, 1) == Err(Nil)
+  assert checked_mul(max_value, 2) == Err(Nil)
+  assert checked_div(min_value, -1) == Err(Nil)
+  assert checked_rem(7, 0) == Err(Nil)
+  assert checked_neg(min_value) == Err(Nil)
+}
+
+test "i8 wrapping arithmetic wraps around" {
+  assert wrapping_add(max_value, 1) == min_value
+  assert wrapping_sub(min_value, 1) == max_value
+  assert wrapping_mul(max_value, 2) == -2
+  assert wrapping_neg(min_value) == min_value
+}
+
+// Tests of `std::int` that need this module.
+
+test "from_i8 widens" {
+  assert int::from_i8(-128) == -128
+  assert int::from_i8(max_value) == 127
+}

@@ -1,0 +1,12 @@
+// @mode: parse-fail
+// @decisions: D-060
+//! A qualified path in an expression starts with exactly one module
+//! segment, so a module is imported before use, never named by its full
+//! path (§7.5.2).
+
+import std::io
+
+fn main() {
+  std::io::println("hi")
+  io::println("hi")
+}

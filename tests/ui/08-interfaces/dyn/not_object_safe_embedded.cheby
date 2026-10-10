@@ -2,15 +2,15 @@
 // @decisions: D-117
 //! The rule covers embedded functions too (§8.6).
 
-interface Ordered {
+pub interface Ordered {
   fn before(Self, Self) -> Bool
 }
 
-interface Item: Ordered {
+pub interface Item: Ordered {
   fn title(Self) -> String
 }
 
-fn title_of(item: dyn Item) -> String {
+pub fn title_of(item: dyn Item) -> String {
   Item::title(item)
 }
 

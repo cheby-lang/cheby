@@ -180,7 +180,7 @@ impl BodyCx<'_> {
         let named = Some((self.input.name_of(self.own, def).to_owned(), item.span));
         let types = &self.input.globals.types;
         Ok(Some(match &item.sig {
-            ItemSig::Unsupported | ItemSig::Error => {
+            ItemSig::Error => {
                 self.errored = true;
                 Signature::error()
             }
@@ -324,7 +324,8 @@ impl BodyCx<'_> {
 
     /// Unifies a generic callee's result type with the expected type when
     /// they fit, so the expectation reaches the arguments. A `dyn`
-    /// expectation is left to the conversion of the result.
+    /// expectation is left to the conversion of the result
+    /// (GAP(expected-result-before-args)).
     pub(crate) fn expect_result(
         &mut self,
         sig: &Signature,
@@ -576,6 +577,9 @@ impl BodyCx<'_> {
         stmts: &mut Vec<thir::Stmt>,
         name: &str,
     ) -> Result<ExprId, Ice> {
+        // GAP(capture-pure-args): an argument or callee without effects
+        // is used in place; anything else is bound once, in written order
+        // (D-155).
         let pure = matches!(
             self.exprs.try_get(id, "expression")?.kind,
             ExprKind::Lit(_)

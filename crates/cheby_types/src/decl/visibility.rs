@@ -19,7 +19,7 @@
 
 use cheby_diag::{Diagnostic, Span, codes};
 use cheby_iface::{DefId, DefKind, Ice, IfaceItem, ItemSig, ModuleInterface, Ty, TyKind, Vis};
-use cheby_resolve::{ItemDef, ItemStatus, Res};
+use cheby_resolve::{ItemDef, Res};
 use cheby_syntax::ast::{
     AstNode, BoundList, InterfaceRef, Item, PathNode, RetType, Type, TypeArgList, TypeBody,
     TypeList, VariantFields,
@@ -35,7 +35,7 @@ pub(super) fn check(
     diags: &mut Vec<Diagnostic>,
 ) -> Result<(), Ice> {
     for item in &input.resolved.items {
-        if item.parent.is_some() || item.status == ItemStatus::Unsupported {
+        if item.parent.is_some() {
             continue;
         }
         let node = input

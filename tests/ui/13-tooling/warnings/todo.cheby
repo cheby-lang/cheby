@@ -1,0 +1,14 @@
+// @mode: check-pass
+// @decisions: D-068
+//! Every `todo` warns, whether or not it can be reached.
+
+fn circle_area(radius: Float) -> Float {
+  case radius {
+    _ => todo as "area of a circle"
+  }
+}
+
+fn main() {
+  let area = circle_area(1.0)
+  assert area == area
+}

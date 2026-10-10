@@ -1,0 +1,18 @@
+// @mode: check-pass
+// @decisions: D-153
+//! A `Result` in statement position, other than the last statement of
+//! its block, throws a possible error away.
+
+import std::io
+
+fn save(name: String) -> Result<Nil, String> {
+  case name {
+    "" => Err("empty name")
+    _ => Ok(Nil)
+  }
+}
+
+fn main() {
+  save("report")
+  io::println("saved")
+}

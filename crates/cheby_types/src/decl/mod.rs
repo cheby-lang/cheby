@@ -7,7 +7,10 @@
 //! - Field names must be distinct within a variant (§4.3.1, E0041).
 //! - A signature must not mention a type or interface less visible than
 //!   its item (§4.1.3, §7.4, D-148, D-149, D-198): see [`visibility`].
+//! - The functions of a standard-library type's `@std_hooks` have the
+//!   hooks' shapes (D-342): see [`hooks`].
 
+mod hooks;
 mod visibility;
 
 #[cfg(test)]
@@ -33,6 +36,7 @@ pub(crate) fn check_decls(
     let mut diags = Vec::new();
     duplicate_fields(input, &mut diags)?;
     visibility::check(input, own, &mut diags)?;
+    hooks::check(input, own, &mut diags);
     Ok(diags)
 }
 

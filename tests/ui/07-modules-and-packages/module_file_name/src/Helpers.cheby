@@ -1,0 +1,5 @@
+//! A module whose file name is not a valid module name.
+
+pub fn one() -> Int {
+  1
+}

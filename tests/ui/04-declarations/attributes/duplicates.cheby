@@ -1,0 +1,21 @@
+// @mode: check-fail
+// @decisions: D-461
+//! Every attribute other than `@external` appears at most once on an
+//! item.
+
+@target(native)
+@target(native)
+pub fn twice() -> Int {
+  1
+}
+
+@external(js, "./m.mjs", "fetch")
+@async
+@async
+pub fn fetch()
+
+@deprecated("old")
+@deprecated("older")
+pub fn old() -> Int {
+  2
+}

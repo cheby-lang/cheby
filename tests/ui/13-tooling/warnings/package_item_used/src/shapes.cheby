@@ -1,0 +1,21 @@
+//! Shapes.
+
+type Shape {
+  Square(Float),
+}
+
+interface Named {
+  fn name(Self) -> String
+}
+
+const default_side: Float = 2.0
+
+fn area(shape: Shape) -> Float {
+  let Square(side) = shape
+  side * side
+}
+
+fn name(shape: Shape) -> String {
+  let Square(_) = shape
+  "square"
+}

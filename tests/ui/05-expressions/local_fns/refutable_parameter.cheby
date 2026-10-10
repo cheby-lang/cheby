@@ -1,0 +1,11 @@
+// @mode: check-fail
+// @decisions: D-242
+//! The parameters of a local function are irrefutable patterns, as for
+//! closures (§5.8).
+
+fn main() {
+  fn first(Some(x)) {
+    x
+  }
+  assert first(Some(1)) == 1
+}

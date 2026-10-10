@@ -1,0 +1,8 @@
+error[E0013]: a test has no visibility
+ --> tests/ui/04-declarations/tests/test_visibility.cheby:9:1
+  |
+9 | pub test "doubling" {
+  | ^^^
+  |
+  = help: remove the visibility
+

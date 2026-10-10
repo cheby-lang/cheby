@@ -1,0 +1,16 @@
+// @mode: check-fail
+// @decisions: D-023, D-062
+//! A `use` binder follows the no-shadowing rule (§5.10).
+
+fn with_value(value: Int, f: fn(Int) -> Int) -> Int {
+  f(value)
+}
+
+fn main() {
+  let n = 1
+  let total = {
+    use n <- with_value(n + 1)
+    n + 1
+  }
+  assert total == 3
+}

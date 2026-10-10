@@ -1,16 +1,19 @@
 //! Multi-module builds for unit tests (plan §4.6): the whole front end as
 //! the driver runs it (G1), over sources given as strings.
 //!
-//! - [`build`] checks package `app` against the slice's `std::io`.
+//! - [`build`] checks package `app` against a small `std::io`.
 //! - [`build_with_std`] also loads fake standard-library modules, given as
 //!   `(path under std, source)` pairs such as `("int", "…")` or
 //!   `("json::decode", "…")`, as [`PackageId::STD`] modules. A given `io`
-//!   replaces the slice's. Every local module depends on each loaded home
+//!   replaces the small one. Every local module depends on each loaded home
 //!   module of a builtin type, such as `std::int`, as in the driver
 //!   (D-447).
 //!
 //! [`Build`] gives the diagnostics (also rendered, as the CLI prints
 //! them), each module's interface and each module's THIR.
+//!
+//! Std modules' `test` blocks are checked, as when testing std itself
+//! ([`Tests::All`]); a user build skips them.
 //!
 //! Phase-A errors in a test source are a bug in the test and panic.
 
@@ -32,9 +35,11 @@ use cheby_resolve::{
 use cheby_syntax::SyntaxTree;
 
 use crate::thir;
-use crate::{TypesInput, build_interface, check_bodies};
+use crate::{Tests, TypesInput, build_interface, check_bodies_with};
 
-/// The slice's `std/io.cheby` (D-450).
+/// A small `std::io` with the four printing functions, `Error`, `read_line`
+/// and `read_file`, so builds that need nothing else from std stay small
+/// (the real one imports `std::bytes`).
 pub(crate) const STD_IO: &str = r#"//! Standard input, standard output, standard error, and reading and
 //! writing whole files.
 
@@ -57,6 +62,23 @@ pub fn eprint(text: String)
 @external(native, "cheby_io_eprintln")
 @external(js, "./io.mjs", "eprintln")
 pub fn eprintln(text: String)
+
+/// An input or output error. The real one is a record with a kind and a
+/// message; tests only need the type.
+pub type Error {
+  Error(String),
+}
+
+/// Reads the next line from standard input, without its line ending, or
+/// `None` at the end of input.
+@external(native, "cheby_io_read_line")
+@external(js, "./io.mjs", "read_line")
+pub fn read_line() -> Result<Option<String>, Error>
+
+/// Reads the whole file at `path` as UTF-8 text.
+@external(native, "cheby_io_read_file")
+@external(js, "./io.mjs", "read_file")
+pub fn read_file(path: String) -> Result<String, Error>
 "#;
 
 /// Standard-library modules the spec plans, by path under `std`.
@@ -255,7 +277,7 @@ pub(crate) fn has_syntax_errors(text: &str) -> bool {
 }
 
 /// Builds package `app` from `(module path under app, text)` pairs, `""`
-/// being the root module, with the slice's `std::io`.
+/// being the root module, with the small `std::io`.
 pub(crate) fn build(local: &[(&str, &str)]) -> Build {
     build_package("app", &[], local)
 }
@@ -283,8 +305,7 @@ pub(crate) fn build_package(package: &str, std: &[(&str, &str)], local: &[(&str,
         .iter()
         .map(|&(p, t)| (p.to_owned(), t.to_owned()))
         .collect();
-    let io_is_partial = !shipped.iter().any(|(p, _)| p == "io");
-    if io_is_partial {
+    if !shipped.iter().any(|(p, _)| p == "io") {
         shipped.push(("io".to_owned(), STD_IO.to_owned()));
     }
     let planned: Vec<String> = planned()
@@ -380,7 +401,6 @@ pub(crate) fn build_package(package: &str, std: &[(&str, &str)], local: &[(&str,
         .chain(shipped.iter().map(|(p, _)| p.clone()))
         .collect();
     let known_refs: Vec<&str> = known.iter().map(String::as_str).collect();
-    let partial: &[&str] = if io_is_partial { &["io"] } else { &[] };
     let mut set = InterfaceSet::new(builtin::interface(&globals));
     let mut thir = BTreeMap::new();
     for node in order {
@@ -402,10 +422,7 @@ pub(crate) fn build_package(package: &str, std: &[(&str, &str)], local: &[(&str,
             deps: DepView::new(&set, &deps),
             modules: &modules,
             globals: &globals,
-            std: StdCatalog {
-                known: &known_refs,
-                partial,
-            },
+            std: StdCatalog { known: &known_refs },
             package_targets: cheby_package::Targets::ALL,
         };
         let (resolved, d) = resolve_module(&input).unwrap();
@@ -421,7 +438,7 @@ pub(crate) fn build_package(package: &str, std: &[(&str, &str)], local: &[(&str,
         };
         let (iface, d) = build_interface(&types).unwrap();
         diags.extend(d);
-        let (module, d) = check_bodies(&types, &iface).unwrap();
+        let (module, d) = check_bodies_with(&types, &iface, Tests::All).unwrap();
         diags.extend(d);
         thir.insert(id, module);
         set.insert(Arc::new(iface)).unwrap();
@@ -433,5 +450,43 @@ pub(crate) fn build_package(package: &str, std: &[(&str, &str)], local: &[(&str,
         sources,
         thir,
         diags,
+    }
+}
+
+/// The same builds without the lint warnings of §13.8 that the module and
+/// package warning passes add (unused code, discarded results, `todo`,
+/// function equality, deprecation, negative counts), for tests about
+/// other rules whose sources trigger them in passing. Resolver and
+/// exhaustiveness warnings (W0001, W0007, W0008, W0010) stay.
+pub(crate) mod quiet {
+    use super::Build;
+
+    const LINTS: [&str; 9] = [
+        "W0002", "W0003", "W0004", "W0005", "W0006", "W0009", "W0011", "W0012", "W0013",
+    ];
+
+    fn strip(mut b: Build) -> Build {
+        b.diags
+            .retain(|d| !LINTS.contains(&d.code.to_string().as_str()));
+        b
+    }
+
+    /// [`super::build`] without lint warnings.
+    pub(crate) fn build(local: &[(&str, &str)]) -> Build {
+        strip(super::build(local))
+    }
+
+    /// [`super::build_with_std`] without lint warnings.
+    pub(crate) fn build_with_std(std: &[(&str, &str)], local: &[(&str, &str)]) -> Build {
+        strip(super::build_with_std(std, local))
+    }
+
+    /// [`super::build_package`] without lint warnings.
+    pub(crate) fn build_package(
+        package: &str,
+        std: &[(&str, &str)],
+        local: &[(&str, &str)],
+    ) -> Build {
+        strip(super::build_package(package, std, local))
     }
 }

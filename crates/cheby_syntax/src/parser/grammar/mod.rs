@@ -126,7 +126,11 @@ pub(super) fn list_rest(
                 p.expected(&format!("`,` or {close_text}"));
                 break;
             }
-            if p.at_close(&delim) || p.at(EOF) || p.at_ts(stop) || p.at_item_recovery() {
+            if p.at_close(&delim)
+                || p.at(EOF)
+                || p.at_ts(stop)
+                || (p.at_item_recovery() && !p.at_member_attr(list.first))
+            {
                 break;
             }
             if !p.eat(COMMA) {
@@ -140,7 +144,10 @@ pub(super) fn list_rest(
                 }
             }
         }
-        if p.at_close(&delim) || p.at(EOF) || p.at_item_recovery() {
+        if p.at_close(&delim)
+            || p.at(EOF)
+            || (p.at_item_recovery() && !p.at_member_attr(list.first))
+        {
             break;
         }
         let before = p.position();

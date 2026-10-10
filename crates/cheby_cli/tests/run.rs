@@ -191,9 +191,9 @@ fn check_reports_resolution_errors() {
 }
 
 /// A bodiless function with only a native external exists only on native
-/// (§12.5), and the cross-target check (§12.6, C12) does not exist yet:
-/// in a package built for both targets it is rejected, never run. In a
-/// native-only package it is fine.
+/// (§12.5). In a package built for both targets the cross-target check
+/// (§12.6, C12) rejects its use from `main` with E0067, and nothing runs.
+/// In a native-only package it is fine.
 #[test]
 fn native_only_externals_need_a_native_only_package() {
     let source = (
@@ -205,7 +205,7 @@ fn native_only_externals_need_a_native_only_package() {
     assert_eq!(out.stdout, "");
     assert!(
         out.stderr.starts_with(
-            "error[E0038]: functions that exist only on some of the package's targets are not supported yet"
+            "error[E0067]: `say` exists only on `native`, but `main` also runs on `js`"
         ),
         "{}",
         out.stderr

@@ -11,15 +11,37 @@
 @target(native)
 pub const min_value: Int = -9_223_372_036_854_775_808
 
+@target(native)
+test "min_value is the smallest Int" {
+  assert min_value == -max_value - 1
+  assert checked_sub(min_value, 1) == Err(Nil)
+}
+
 /// The largest `Int`, 2^63-1. It exists only on native (D-358).
 @target(native)
 pub const max_value: Int = 9_223_372_036_854_775_807
 
+@target(native)
+test "max_value is the largest Int" {
+  assert max_value == pow(2, 62) - 1 + pow(2, 62)
+  assert min_value + max_value == -1
+}
+
 /// The smallest `Int` that works on every target, -(2^53-1) (D-037).
 pub const min_safe: Int = -9_007_199_254_740_991
 
+test "min_safe is the negated max_safe" {
+  assert min_safe == -9_007_199_254_740_991
+  assert min_safe == -max_safe
+}
+
 /// The largest `Int` that works on every target, 2^53-1 (D-037).
 pub const max_safe: Int = 9_007_199_254_740_991
+
+test "max_safe is the largest portable Int" {
+  assert max_safe == 9_007_199_254_740_991
+  assert checked_sub(max_safe, 1) == Ok(9_007_199_254_740_990)
+}
 
 // Conversions
 
@@ -33,6 +55,10 @@ pub fn from_i8(n: I8) -> Int
 @external(js, "./int.mjs", "from_i16")
 pub fn from_i16(n: I16) -> Int
 
+test "from_i16 widens" {
+  assert from_i16(-32768) == -32768
+}
+
 /// Returns `n` as an `Int`. Every `I32` fits.
 @external(native, "cheby_int_from_i32")
 @external(js, "./int.mjs", "from_i32")
@@ -43,10 +69,18 @@ pub fn from_i32(n: I32) -> Int
 @external(js, "./int.mjs", "from_i64")
 pub fn from_i64(n: I64) -> Result<Int, Nil>
 
+test "from_i64 converts a small value on every target" {
+  assert from_i64(-42) == Ok(-42)
+}
+
 /// Returns `n` as an `Int`. Every `U8` fits.
 @external(native, "cheby_int_from_u8")
 @external(js, "./int.mjs", "from_u8")
 pub fn from_u8(n: U8) -> Int
+
+test "from_u8 widens" {
+  assert from_u8(255) == 255
+}
 
 /// Returns `n` as an `Int`. Every `U16` fits.
 @external(native, "cheby_int_from_u16")
@@ -70,20 +104,59 @@ pub fn from_u64(n: U64) -> Result<Int, Nil>
 @external(js, "./int.mjs", "parse")
 pub fn parse(text: String) -> Result<Int, Nil>
 
+test "parse reads an optional minus and decimal digits" {
+  assert parse("42") == Ok(42)
+  assert parse("-007") == Ok(-7)
+  assert parse("+42") == Err(Nil)
+  assert parse(" 42") == Err(Nil)
+  assert parse("1_000") == Err(Nil)
+  assert parse("0x2A") == Err(Nil)
+  assert parse("-") == Err(Nil)
+  assert parse("") == Err(Nil)
+  assert parse("9223372036854775808") == Err(Nil)
+}
+
 /// Reads an `Int` written in `base`, from 2 to 36, as an optional `-` and digits.
 @external(native, "cheby_int_parse_base")
 @external(js, "./int.mjs", "parse_base")
 pub fn parse_base(text: String, base: Int) -> Result<Int, Nil>
+
+test "parse_base reads other bases" {
+  assert parse_base("ff", 16) == Ok(255)
+  assert parse_base("FF", 16) == Ok(255)
+  assert parse_base("-101", 2) == Ok(-5)
+  assert parse_base("z", 36) == Ok(35)
+  assert parse_base("12", 2) == Err(Nil)
+  assert parse_base("0xff", 16) == Err(Nil)
+  assert parse_base("1", 37) == Err(Nil)
+}
 
 /// Returns `n` in decimal. It makes `Int` satisfy `Show`.
 @external(native, "cheby_int_show")
 @external(js, "./int.mjs", "show")
 pub fn show(n: Int) -> String
 
+test "show writes decimal digits" {
+  let count = 3
+  assert show(-42) == "-42"
+  assert show(0) == "0"
+  assert "{count} items" == "3 items"
+  assert parse(show(-1234)) == Ok(-1234)
+}
+
 /// Returns `n` written in `base`, from 2 to 36, in lowercase digits (D-390).
 @external(native, "cheby_int_to_base")
 @external(js, "./int.mjs", "to_base")
 pub fn to_base(n: Int, base: Int) -> Result<String, Nil>
+
+test "to_base writes other bases" {
+  assert to_base(255, 16) == Ok("ff")
+  assert to_base(-5, 2) == Ok("-101")
+  assert to_base(0, 8) == Ok("0")
+  assert to_base(10, 1) == Err(Nil)
+  assert parse_base("7b", 16) == Ok(123)
+  assert to_base(123, 16) == Ok("7b")
+}
 
 // Comparison
 
@@ -104,6 +177,11 @@ pub fn min(a: Int, b: Int) -> Int {
   }
 }
 
+test "min picks the smaller" {
+  assert min(3, 7) == 3
+  assert min(-3, -7) == -7
+}
+
 /// Returns the larger of `a` and `b`, and `a` when they are `Equal`.
 pub fn max(a: Int, b: Int) -> Int {
   case {
@@ -115,6 +193,13 @@ pub fn max(a: Int, b: Int) -> Int {
 /// Returns `n` limited to `low` to `high`, and `low` when `low` is above `high`.
 pub fn clamp(n: Int, low: Int, high: Int) -> Int {
   max(min(n, high), low)
+}
+
+test "clamp limits to a range" {
+  assert clamp(15, 0, 10) == 10
+  assert clamp(-3, 0, 10) == 0
+  assert clamp(4, 0, 10) == 4
+  assert clamp(4, 10, 0) == 10
 }
 
 // Arithmetic
@@ -129,6 +214,10 @@ pub fn sub(a: Int, b: Int) -> Int {
   a - b
 }
 
+test "sub is minus as a function" {
+  assert sub(2, 3) == -1
+}
+
 /// Returns `a * b`, and panics when the result does not fit. It makes `Int` satisfy `Mul`.
 pub fn mul(a: Int, b: Int) -> Int {
   a * b
@@ -139,14 +228,31 @@ pub fn div(a: Int, b: Int) -> Int {
   a / b
 }
 
+test "div truncates toward zero" {
+  assert div(7, 2) == 3
+  assert div(-7, 2) == -3
+}
+
 /// Returns `a % b`, with the sign of `a`, and panics on a zero divisor.
 pub fn rem(a: Int, b: Int) -> Int {
   a % b
 }
 
+test "rem keeps the sign of the dividend" {
+  assert rem(7, 2) == 1
+  assert rem(-7, 2) == -1
+  assert rem(7, -2) == 1
+}
+
 /// Returns `-n`, and panics when it does not fit. It makes `Int` satisfy `Neg`.
 pub fn neg(n: Int) -> Int {
   -n
+}
+
+test "neg flips the sign" {
+  assert neg(5) == -5
+  assert neg(-5) == 5
+  assert neg(0) == 0
 }
 
 /// Returns `n` without its sign, and panics for `min_value`, like `neg`.
@@ -155,6 +261,11 @@ pub fn abs(n: Int) -> Int {
     n < 0 => -n
     _ => n
   }
+}
+
+test "abs drops the sign" {
+  assert abs(-5) == 5
+  assert abs(5) == 5
 }
 
 /// Returns `n` to the power `exponent`, and panics when the result does not fit.
@@ -173,6 +284,14 @@ pub fn pow(n: Int, exponent: Int) -> Int {
   step(n, exponent, 1)
 }
 
+test "pow multiplies repeatedly" {
+  let below_zero = -2
+  assert pow(2, 10) == 1024
+  assert pow(-3, 3) == -27
+  assert pow(0, 0) == 1
+  assert pow(10, below_zero) == 1
+}
+
 // Checked arithmetic
 
 /// Returns `Ok(a + b)`, or `Err(Nil)` when the sum does not fit (D-309).
@@ -180,15 +299,43 @@ pub fn pow(n: Int, exponent: Int) -> Int {
 @external(js, "./int.mjs", "checked_add")
 pub fn checked_add(a: Int, b: Int) -> Result<Int, Nil>
 
+test "checked_add returns a sum that fits" {
+  assert checked_add(1, 2) == Ok(3)
+}
+
+@target(native)
+test "checked_add reports overflow" {
+  assert checked_add(max_value, 1) == Err(Nil)
+  assert checked_add(min_value, -1) == Err(Nil)
+}
+
 /// Returns `Ok(a - b)`, or `Err(Nil)` when the difference does not fit (D-309).
 @external(native, "cheby_int_checked_sub")
 @external(js, "./int.mjs", "checked_sub")
 pub fn checked_sub(a: Int, b: Int) -> Result<Int, Nil>
 
+test "checked_sub returns a difference that fits" {
+  assert checked_sub(1, 3) == Ok(-2)
+}
+
+@target(native)
+test "checked_sub reports overflow" {
+  assert checked_sub(min_value, 1) == Err(Nil)
+}
+
 /// Returns `Ok(a * b)`, or `Err(Nil)` when the product does not fit (D-309).
 @external(native, "cheby_int_checked_mul")
 @external(js, "./int.mjs", "checked_mul")
 pub fn checked_mul(a: Int, b: Int) -> Result<Int, Nil>
+
+test "checked_mul returns a product that fits" {
+  assert checked_mul(-4, 5) == Ok(-20)
+}
+
+@target(native)
+test "checked_mul reports overflow" {
+  assert checked_mul(max_value, 2) == Err(Nil)
+}
 
 /// Returns `Ok(a / b)`, or `Err(Nil)` for a zero divisor and for `min_value / -1` (D-356).
 pub fn checked_div(a: Int, b: Int) -> Result<Int, Nil> {
@@ -200,12 +347,28 @@ pub fn checked_div(a: Int, b: Int) -> Result<Int, Nil> {
   }
 }
 
+test "checked_div reports a zero divisor" {
+  assert checked_div(7, 2) == Ok(3)
+  assert checked_div(-7, 2) == Ok(-3)
+  assert checked_div(7, 0) == Err(Nil)
+}
+
+@target(native)
+test "checked_div reports overflow" {
+  assert checked_div(min_value, -1) == Err(Nil)
+}
+
 /// Returns `Ok(a % b)`, or `Err(Nil)` for a zero divisor (D-356).
 pub fn checked_rem(a: Int, b: Int) -> Result<Int, Nil> {
   case b {
     0 => Err(Nil)
     _ => Ok(a % b)
   }
+}
+
+test "checked_rem reports a zero divisor" {
+  assert checked_rem(-7, 2) == Ok(-1)
+  assert checked_rem(7, 0) == Err(Nil)
 }
 
 // `min_value` exists only on native, so `checked_neg` cannot test for it
@@ -218,11 +381,30 @@ pub fn checked_rem(a: Int, b: Int) -> Result<Int, Nil> {
 @external(js, "./int.mjs", "checked_neg")
 pub fn checked_neg(n: Int) -> Result<Int, Nil>
 
+test "checked_neg negates" {
+  assert checked_neg(5) == Ok(-5)
+}
+
+@target(native)
+test "checked_neg reports overflow" {
+  assert checked_neg(min_value) == Err(Nil)
+}
+
 /// Returns `Ok(pow(n, exponent))`, or `Err(Nil)` when the result does not fit (D-392).
 @external(native, "cheby_int_checked_pow")
 @external(js, "./int.mjs", "checked_pow")
 @std_clamped(exponent)
 pub fn checked_pow(n: Int, exponent: Int) -> Result<Int, Nil>
+
+test "checked_pow returns a power that fits" {
+  assert checked_pow(2, 10) == Ok(1024)
+}
+
+@target(native)
+test "checked_pow reports overflow" {
+  assert checked_pow(2, 62) == Ok(max_value / 2 + 1)
+  assert checked_pow(2, 63) == Err(Nil)
+}
 
 // Wrapping arithmetic
 
@@ -231,17 +413,41 @@ pub fn checked_pow(n: Int, exponent: Int) -> Result<Int, Nil>
 @external(js, "./int.mjs", "wrapping_add")
 pub fn wrapping_add(a: Int, b: Int) -> Int
 
+@target(native)
+test "wrapping_add wraps around" {
+  assert wrapping_add(2, 3) == 5
+  assert wrapping_add(max_value, 1) == min_value
+}
+
 /// Returns `a - b` modulo 2^64 (D-025).
 @external(native, "cheby_int_wrapping_sub")
 @external(js, "./int.mjs", "wrapping_sub")
 pub fn wrapping_sub(a: Int, b: Int) -> Int
+
+@target(native)
+test "wrapping_sub wraps around" {
+  assert wrapping_sub(2, 3) == -1
+  assert wrapping_sub(min_value, 1) == max_value
+}
 
 /// Returns `a * b` modulo 2^64 (D-025).
 @external(native, "cheby_int_wrapping_mul")
 @external(js, "./int.mjs", "wrapping_mul")
 pub fn wrapping_mul(a: Int, b: Int) -> Int
 
+@target(native)
+test "wrapping_mul wraps around" {
+  assert wrapping_mul(-4, 5) == -20
+  assert wrapping_mul(max_value, 2) == -2
+}
+
 /// Returns `-n` modulo 2^64 (D-025).
 @external(native, "cheby_int_wrapping_neg")
 @external(js, "./int.mjs", "wrapping_neg")
 pub fn wrapping_neg(n: Int) -> Int
+
+@target(native)
+test "wrapping_neg wraps around" {
+  assert wrapping_neg(5) == -5
+  assert wrapping_neg(min_value) == min_value
+}

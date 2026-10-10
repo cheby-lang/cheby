@@ -3,5 +3,5 @@
 //! A block that ends in `let` has the value `Nil` (§5.1).
 
 pub fn name() -> String {
-  let text = "a"
+  let _ = "a"
 }

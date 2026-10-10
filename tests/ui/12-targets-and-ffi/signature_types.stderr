@@ -1,0 +1,36 @@
+error[E0067]: `Paths` exists only on `native`, but `first` also exists on `js`
+  --> tests/ui/12-targets-and-ffi/signature_types.cheby:19:21
+   |
+12 | pub type Paths = List<Path>
+   |          ----- `Paths` is declared here
+...
+19 | pub fn first(paths: Paths) -> Option<Path> {
+   |                     ^^^^^ not available on `js`
+   |
+   = help: restrict `first` to `native` with `@target(native)`, or the whole module with `@!target(native)`
+   = help: if the package supports only `native`, declare `targets = ["native"]` in `cheby.toml`
+
+error[E0067]: `Path` exists only on `native`, but `first` also exists on `js`
+  --> tests/ui/12-targets-and-ffi/signature_types.cheby:19:38
+   |
+7  | pub type Path {
+   |          ---- `Path` is declared here
+...
+19 | pub fn first(paths: Paths) -> Option<Path> {
+   |                                      ^^^^ not available on `js`
+   |
+   = help: restrict `first` to `native` with `@target(native)`, or the whole module with `@!target(native)`
+   = help: if the package supports only `native`, declare `targets = ["native"]` in `cheby.toml`
+
+error[E0067]: `Named` exists only on `native`, but `label` also exists on `js`
+  --> tests/ui/12-targets-and-ffi/signature_types.cheby:26:17
+   |
+15 | pub interface Named {
+   |               ----- `Named` is declared here
+...
+26 | pub fn label<T: Named>(x: T) -> String {
+   |                 ^^^^^ not available on `js`
+   |
+   = help: restrict `label` to `native` with `@target(native)`, or the whole module with `@!target(native)`
+   = help: if the package supports only `native`, declare `targets = ["native"]` in `cheby.toml`
+

@@ -1,10 +1,8 @@
 //! The spelling of names where they are bound or declared: the case
 //! conventions (E0006, §2.3) and the reserved words (E0007, §2.4).
 //!
-//! Each binding and declaration of the module is checked once, whether or
-//! not the slice supports the item it is in, so a badly spelled name is
-//! reported even in a body the gate skips (E0038). A use of such a name
-//! adds nothing. A reserved word used as a name that nothing binds is
+//! Each binding and declaration of the module is checked once. A use of
+//! such a name adds nothing. A reserved word used as a name that nothing binds is
 //! reported where it is used, instead of "cannot find value" (E0007, see
 //! [`crate::paths`]).
 

@@ -22,6 +22,10 @@ cheby_iface::newtype_index! {
 }
 
 /// A type during inference.
+///
+/// There is no variant for `dyn`: interfaces have no type parameters
+/// (D-165), so a `dyn I` type never holds a variable and is `Known`
+/// (GAP(infer-dyn-not-needed)).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum InferTy {
     /// A closed type: no variables inside.
@@ -333,7 +337,10 @@ impl<'g> InferCtxt<'g> {
             (InferTy::Var(x), InferTy::Var(y)) => self.union(*x, *y),
             (InferTy::Var(x), t) | (t, InferTy::Var(x)) => self.bind(*x, t),
             (InferTy::Known(x), InferTy::Known(y)) if x == y => Ok(Ok(())),
-            (InferTy::Known(Ty::ERROR), _) | (_, InferTy::Known(Ty::ERROR)) => Ok(Ok(())),
+            (InferTy::Known(Ty::ERROR), other) | (other, InferTy::Known(Ty::ERROR)) => {
+                self.poison(other)?;
+                Ok(Ok(()))
+            }
             _ => {
                 let a = self.expand(&a);
                 let b = self.expand(&b);
@@ -427,6 +434,31 @@ impl<'g> InferCtxt<'g> {
         }
         self.write(x, VarState::Bound(t.clone()))?;
         Ok(Ok(()))
+    }
+
+    /// Binds every unbound variable inside `t` to [`Ty::ERROR`]: a type
+    /// unified with an error learns nothing, so whatever its variables
+    /// stand for is silent too (one error per root cause, plan §7).
+    fn poison(&mut self, t: &InferTy) -> Result<(), Ice> {
+        match self.shallow(t)? {
+            InferTy::Known(_) => Ok(()),
+            InferTy::Var(v) => {
+                let root = self.find(v)?;
+                self.write(root, VarState::Bound(InferTy::ERROR))
+            }
+            InferTy::Named { args: parts, .. } | InferTy::Tuple(parts) => {
+                for part in &parts {
+                    self.poison(part)?;
+                }
+                Ok(())
+            }
+            InferTy::Fn { params, ret } => {
+                for part in &params {
+                    self.poison(part)?;
+                }
+                self.poison(&ret)
+            }
+        }
     }
 
     /// Whether the root `x` occurs in `t`.
@@ -770,6 +802,21 @@ mod tests {
             ret: Box::new(w.clone()),
         };
         assert_eq!(cx.unify(&f, &v).unwrap(), Err(Mismatch::Occurs));
+    }
+
+    #[test]
+    fn an_error_poisons_the_variables_it_meets() {
+        let g = Globals::new();
+        let mut cx = InferCtxt::new(&g);
+        let a = cx.new_var(span(), VarKind::General).unwrap();
+        let b = cx.new_var(span(), VarKind::IntLit).unwrap();
+        let shape = InferTy::Fn {
+            params: Box::new([list(&g, a.clone())]),
+            ret: Box::new(InferTy::Tuple(Box::new([b.clone(), InferTy::STRING]))),
+        };
+        assert_eq!(cx.unify(&InferTy::ERROR, &shape).unwrap(), Ok(()));
+        assert_eq!(cx.shallow(&a).unwrap(), InferTy::ERROR);
+        assert_eq!(cx.shallow(&b).unwrap(), InferTy::ERROR);
     }
 
     #[test]

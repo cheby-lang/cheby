@@ -461,6 +461,15 @@ impl<'a> Parser<'a> {
 
     /// Whether the current token is the first character of its line, where
     /// `cheby fmt` puts items and never local functions.
+    /// Whether an `@` here starts attributes of an entry of a list or
+    /// body whose entries start with `first` (variants, record fields,
+    /// interface functions), rather than the next item after a missing
+    /// `}`. Items are in column 1, where `cheby fmt` puts them, and
+    /// entries are indented.
+    pub(crate) fn at_member_attr(&self, first: TokenSet) -> bool {
+        self.at(AT) && first.contains(AT) && !self.at_column_one()
+    }
+
     pub(crate) fn at_column_one(&self) -> bool {
         let raw = self.input.current().raw;
         raw.checked_sub(1)
@@ -582,6 +591,11 @@ impl<'a> Parser<'a> {
     /// The span of `range` in this file.
     pub(crate) const fn span(&self, range: TextRange) -> Span {
         Span::new(self.file, range)
+    }
+
+    /// The end of the last significant token consumed.
+    pub(crate) const fn prev_end(&self) -> TextSize {
+        self.prev_end
     }
 
     /// The range of the current token.

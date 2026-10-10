@@ -3,16 +3,17 @@
 //! `m::I::f` (D-173), visibility (§7.3, D-162) and the opacity of
 //! constructors (§4.3.4, D-048, D-151).
 
-use std::cell::Cell;
-
 use cheby_diag::{Diagnostic, Span, codes};
 use cheby_iface::{
     DefId, DefIndex, DefKind, Ice, IndexVec, ItemSig, ModuleId, ModuleInterface, Name, Namespace,
-    PackageId, ParamIdx, Vis, builtin,
+    ParamIdx, Vis, builtin,
 };
 use cheby_syntax::ast::{AstNode, AstToken, InterfaceDecl, PathNode};
 
-use crate::{ItemDef, ItemStatus, ModuleScope, Res, ResolveInput, closest_name};
+use crate::{ItemDef, ModuleScope, Res, ResolveInput, closest_name};
+
+/// The interfaces of `std::ops` that operators dispatch to (§8.7).
+const OPERATOR_INTERFACES: [&str; 6] = ["Add", "Sub", "Mul", "Div", "Neg", "Compare"];
 
 /// The segments of a path, classified.
 pub(crate) enum PathShape {
@@ -37,9 +38,6 @@ pub(crate) struct PathCx<'a> {
     pub input: &'a ResolveInput<'a>,
     pub items: &'a IndexVec<DefIndex, ItemDef>,
     pub scope: &'a ModuleScope,
-    /// Set when a lookup reported E0038, so that the item containing the
-    /// path becomes unsupported.
-    pub gated: Cell<bool>,
 }
 
 impl PathCx<'_> {
@@ -153,7 +151,51 @@ impl PathCx<'_> {
                 close,
             );
         }
+        if ns == Namespace::Type
+            && let Some(help) = self.type_hint(name, text)
+        {
+            diag = diag.with_help(help);
+        }
         diag
+    }
+
+    /// Where an unknown type name may come from: a builtin type outside
+    /// the prelude (D-447, GAP(kernel-types)), an operator interface of
+    /// `std::ops` (§8.7), or a constructor written where its type belongs,
+    /// as in a record update (§5.11.2).
+    fn type_hint(&self, name: Name, text: &str) -> Option<String> {
+        if let Ok(builtin_iface) = self.iface(ModuleId::BUILTIN)
+            && let Some(index) = builtin_iface.lookup(Namespace::Type, name)
+            && let Some(&(_, home)) = builtin::HOMES
+                .iter()
+                .find(|(def, _)| *def == DefId::new(ModuleId::BUILTIN, index))
+            && !builtin::is_prelude(DefId::new(ModuleId::BUILTIN, index))
+        {
+            return Some(format!(
+                "`{text}` is not in the prelude: add `import std::{home}` and write `{home}::{text}`"
+            ));
+        }
+        if OPERATOR_INTERFACES.contains(&text) && self.input.std.known.contains(&"ops") {
+            return Some(format!(
+                "the operator interfaces are in `std::ops`: add `import std::ops` and write `ops::{text}`"
+            ));
+        }
+        let Res::Def(ctor) = self.scope.get(Namespace::Value, name)?.res else {
+            return None;
+        };
+        let parent = if ctor.module == self.input.module {
+            let item = self.items.get(ctor.index)?;
+            (item.kind == DefKind::Ctor).then_some(())?;
+            self.text(self.items.get(item.parent?)?.name)
+        } else {
+            let iface = self.iface(ctor.module).ok()?;
+            let item = iface.item(ctor.index)?;
+            (item.kind == DefKind::Ctor).then_some(())?;
+            self.text(iface.item(item.parent?)?.name)
+        };
+        Some(format!(
+            "`{text}` is a constructor of the type `{parent}`; name the type here"
+        ))
     }
 
     /// The module named by the qualifier `m` of `m::x`. `None` if it is
@@ -237,23 +279,6 @@ impl PathCx<'_> {
             if let Some(def) = self.home_lookup(target, ns, name)? {
                 return Ok(Res::Def(def));
             }
-            let info = self.input.modules.try_get(target)?;
-            let segments = info.path.segments();
-            let under_std = segments.get(1..).unwrap_or_default().join("::");
-            if info.package == PackageId::STD
-                && self.input.std.partial.contains(&under_std.as_str())
-            {
-                diags.push(
-                    Diagnostic::new(
-                        codes::NOT_SUPPORTED_YET,
-                        format!("`{path}::{text}` is not supported yet"),
-                    )
-                    .with_primary(span, "")
-                    .with_note(format!("the toolchain ships only part of `{path}` so far")),
-                );
-                self.gated.set(true);
-                return Ok(Res::Err);
-            }
             let mut diag = Diagnostic::new(
                 codes::UNRESOLVED_NAME,
                 format!("there is no {} `{text}` in module `{path}`", ns.describe()),
@@ -288,9 +313,6 @@ impl PathCx<'_> {
                 diag = diag.with_secondary(decl, "declared here");
             }
             diags.push(diag);
-            return Ok(Res::Err);
-        }
-        if matches!(item.sig, ItemSig::Unsupported) {
             return Ok(Res::Err);
         }
         Ok(Res::Def(DefId::new(target, index)))
@@ -374,7 +396,13 @@ impl PathCx<'_> {
                 "`{ty_text}` is `priv`, so its constructors and fields are usable only in its \
                  own module"
             )),
-            _ => diag.with_note("a `pub` type hides its constructors unless it is `pub exposed`"),
+            _ if item.kind == DefKind::Ctor => {
+                diag.with_note("a `pub` type hides its constructors unless it is `pub exposed`")
+            }
+            // The same note as for field access in a body.
+            _ => diag.with_note(
+                "a `pub` type hides its constructors and fields unless it is `pub exposed`",
+            ),
         };
         diags.push(diag);
         Ok(false)
@@ -474,15 +502,12 @@ impl PathCx<'_> {
             if parent.kind != DefKind::Interface {
                 return Ok(Found::None);
             }
-            if let Some((index, item)) = self
+            if let Some((index, _)) = self
                 .items
                 .iter_enumerated()
                 .find(|(_, item)| item.parent == Some(iface.index) && item.name == name)
             {
-                return Ok(match item.status {
-                    ItemStatus::Unsupported => Found::Silent,
-                    _ => Found::Fn(DefId::new(iface.module, index)),
-                });
+                return Ok(Found::Fn(DefId::new(iface.module, index)));
             }
             self.own_embeds(parent)?
         } else {
@@ -498,7 +523,7 @@ impl PathCx<'_> {
                     }
                     def.embeds.to_vec()
                 }
-                Some(ItemSig::Unsupported | ItemSig::Error) => return Ok(Found::Silent),
+                Some(ItemSig::Error) => return Ok(Found::Silent),
                 _ => return Ok(Found::None),
             }
         };

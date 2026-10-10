@@ -619,3 +619,24 @@ fn result_mains_are_unsupported() {
     .unwrap();
     assert_eq!(unit.functions.len(), 1);
 }
+
+/// A function with a native external and a body runs the external on
+/// native; the body is for the other targets (D-207). Its body is neither
+/// walked nor lowered.
+#[test]
+fn a_native_external_wins_over_a_body() {
+    let mut f = fixture();
+    let file = f.file();
+    let mut b = BodyB::new(file);
+    let p = b.local(Ty::STRING, 185);
+    b.params.push(p);
+    let unused = b.call(UNUSED, vec![], Ty::NIL, 186);
+    let body = b.finish(unused, Ty::NIL);
+    let say = f.thir.fns.iter_mut().find(|d| d.def == def(SAY)).unwrap();
+    say.body = Some(body);
+    let reach = reachable(&f.program(), &[Root::Fn(f.fn_def(SAY))]).unwrap();
+    let items: Vec<DefId> = reach.items().collect();
+    assert_eq!(items, [def(SAY)]);
+    let unit = f.lower(&[SAY]).unwrap();
+    assert_eq!(unit.functions.len(), 1);
+}

@@ -1,0 +1,8 @@
+error[E0047]: mismatched types
+ --> tests/ui/04-declarations/functions/body_type_mismatch.cheby:7:3
+  |
+6 | fn count() -> Int {
+  |               --- expected because of this return type
+7 |   "three"
+  |   ^^^^^^^ expected `Int`, found `String`
+

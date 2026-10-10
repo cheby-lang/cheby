@@ -1,3 +1,11 @@
+warning[W0002]: unused binding `f`
+ --> tests/ui/03-types/inference/unknown_parameter_type.cheby:7:7
+  |
+7 |   let f = fn(a, b) { a + b }
+  |       ^ never used
+  |
+  = help: if this is intentional, start the name with an underscore: `_f`
+
 error[E0057]: type annotation needed
  --> tests/ui/03-types/inference/unknown_parameter_type.cheby:7:14
   |

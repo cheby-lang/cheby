@@ -124,7 +124,9 @@ pub fn reachable(program: &Program<'_>, roots: &[Root<'_>]) -> Result<Reach, Ice
     while let Some(def) = walk.queue.pop() {
         match walk.index.get(&def).copied() {
             Some(ItemRef::Fn(f)) => {
-                if let Some(body) = &f.body {
+                // On native, a function with a native external runs the
+                // external and never its body (D-207).
+                if let (None, Some(body)) = (&f.native_external, &f.body) {
                     walk.body(body)?;
                 }
             }

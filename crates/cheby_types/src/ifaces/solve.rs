@@ -2,8 +2,8 @@
 //! matching their signatures, and building dictionaries.
 
 use cheby_iface::{
-    DefId, DefKind, Ice, IfaceItem, InterfaceDef, ItemSig, ModuleId, ModuleInterface, Name,
-    Namespace, ParamIdx, Ty, TyKind, Vis, builtin, interface_fns,
+    DefId, DefKind, Generics, Ice, IfaceItem, InterfaceDef, ItemSig, ModuleId, ModuleInterface,
+    Name, Namespace, ParamIdx, Ty, TyKind, Vis, builtin, interface_fns,
 };
 
 use super::tyutil::{match_ty, mentions, params_of, subst};
@@ -29,6 +29,20 @@ pub(super) struct Required {
 struct TypeHome<'a> {
     module: &'a ModuleInterface,
     ty_item: &'a IfaceItem,
+}
+
+/// The type arguments that matching a satisfying function's `Self`
+/// parameter bound, or its first type parameter the match left unbound.
+fn determined(bound: Vec<Option<Ty>>) -> Result<Result<Vec<Ty>, ParamIdx>, Ice> {
+    let mut out = Vec::with_capacity(bound.len());
+    for (index, ty) in bound.into_iter().enumerate() {
+        let Some(ty) = ty else {
+            let index = u32::try_from(index).map_err(|_| Ice::new("too many type parameters"))?;
+            return Ok(Err(ParamIdx::from_u32(index)));
+        };
+        out.push(ty);
+    }
+    Ok(Ok(out))
 }
 
 /// The dictionary used where a type contains an error (already reported).
@@ -256,13 +270,24 @@ impl<'a> IfaceCx<'a> {
         if sig.params.len() != want_params.len() {
             return Ok(Err(mismatch));
         }
+        // GAP(satisfaction-instance-matching): the function's type
+        // arguments come from matching its `Self` parameter one way
+        // against the type. Every type parameter must be determined
+        // there; one that is not makes the function not count, with a
+        // reason of its own.
         let mut bound = vec![None; sig.generics.len()];
         if !match_ty(types, pattern.ty, target, &mut bound)? {
             return Ok(Err(mismatch));
         }
-        let Some(ty_args) = bound.into_iter().collect::<Option<Vec<Ty>>>() else {
-            // A type parameter the `Self` parameter does not determine.
-            return Ok(Err(mismatch));
+        let ty_args = match determined(bound)? {
+            Ok(ty_args) => ty_args,
+            Err(param) => {
+                return Ok(Err(Reason::Undetermined {
+                    found,
+                    param,
+                    actual,
+                }));
+            }
         };
         for (param, &want) in sig.params.iter().zip(&want_params) {
             if subst(types, param.ty, &ty_args)? != want {
@@ -279,8 +304,28 @@ impl<'a> IfaceCx<'a> {
                 type_vis: home.ty_item.vis,
             }));
         }
+        let dicts = match self.bound_dicts(found, &sig.generics, &ty_args, depth)? {
+            Ok(dicts) => dicts,
+            Err(reason) => return Ok(Err(reason)),
+        };
+        Ok(Ok(DictFn {
+            def: found,
+            ty_args: ty_args.into(),
+            dicts: dicts.into(),
+        }))
+    }
+
+    /// The dictionaries of the bounds of the satisfying function `found`,
+    /// whose type parameters `generics` are `ty_args` (D-064).
+    fn bound_dicts(
+        &self,
+        found: DefId,
+        generics: &Generics,
+        ty_args: &[Ty],
+        depth: u32,
+    ) -> Result<Result<Vec<Dict>, Reason>, Ice> {
         let mut dicts = Vec::new();
-        for (param, generic) in sig.generics.params.iter_enumerated() {
+        for (param, generic) in generics.params.iter_enumerated() {
             let arg = ty_args
                 .get(usize::try_from(param.as_u32()).unwrap_or(usize::MAX))
                 .copied()
@@ -298,11 +343,7 @@ impl<'a> IfaceCx<'a> {
                 }
             }
         }
-        Ok(Ok(DictFn {
-            def: found,
-            ty_args: ty_args.into(),
-            dicts: dicts.into(),
-        }))
+        Ok(Ok(dicts))
     }
 
     /// The satisfying functions of nominal type `ty` (declared as `def`)
@@ -421,7 +462,8 @@ impl<'a> IfaceCx<'a> {
                     Ok(Ok(Dict::Dyn { iface, ty }))
                 } else if fns.is_empty() {
                     // Any value converts to `dyn` of an empty interface; a
-                    // `dyn` value keeps its own descriptor (§8.6.1).
+                    // `dyn` value keeps its own descriptor (§8.6.1,
+                    // GAP(dyn-to-empty-interface)).
                     Ok(Ok(empty))
                 } else {
                     fail(Reason::Dyn { has: *has })
@@ -569,6 +611,10 @@ impl<'a> IfaceCx<'a> {
                     Err(reason) => fail(reason),
                 }
             }
+            // GAP(operator-through-any-bound): the first bound, in written
+            // order and with what it embeds, that has a function of the
+            // operator's name and signature provides it, whether or not
+            // it is std::ops' own interface (D-169).
             TyKind::Param(param) => {
                 for &bound in self.bounds(*param)? {
                     for f in self.interface_fns(bound)? {

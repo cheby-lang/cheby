@@ -3,6 +3,6 @@ error[E0047]: mismatched types
   |
 5 | pub fn name() -> String {
   |                  ------ expected because of this return type
-6 |   let text = "a"
-  |   ^^^^^^^^^^^^^^ expected `String`, found `Nil`
+6 |   let _ = "a"
+  |   ^^^^^^^^^^^ expected `String`, found `Nil`
 

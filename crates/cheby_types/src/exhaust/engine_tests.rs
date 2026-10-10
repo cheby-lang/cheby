@@ -370,11 +370,52 @@ fn witness_cap() {
 #[test]
 fn budget_falls_back_to_wildcard() {
     let tys = [T::Bool, T::Bool];
-    let arms = [(vec![tru(), tru()], false), (vec![W, W], false)];
+    let arms = [(vec![tru(), tru()], false), (vec![tru(), W], false)];
     let r = run_with(&tys, &arms, 3);
     assert!(r.too_complex);
     assert_eq!(missing(&r), ["_, _"]);
     assert_eq!(r.unreachable, NO_ARM);
+}
+
+#[test]
+fn a_wildcard_arm_is_exhaustive_whatever_the_budget() {
+    // GAP(exhaustiveness-budget): running out never turns a `case` with
+    // an unguarded `_, _` arm into a missing `_`; reachability that runs
+    // out reports the remaining arms as reachable.
+    let tys = [T::Bool, T::Bool];
+    let arms = [
+        (vec![tru(), tru()], false),
+        (vec![tru(), W], false),
+        (vec![W, W], false),
+        (vec![tru(), tru()], false),
+    ];
+    let r = run_with(&tys, &arms, 3);
+    assert!(!r.too_complex);
+    assert_eq!(missing(&r), NOTHING);
+    assert_eq!(r.unreachable, NO_ARM);
+    let r = run(&tys, &arms);
+    assert_eq!(r.unreachable, [3]);
+}
+
+#[test]
+fn large_literal_tables_stay_cheap() {
+    // 3000 literal arms and `_`: every arm is reachable, nothing is
+    // missing, and the default budget is enough for both passes.
+    let mut arms: Vec<(Vec<Pat>, bool)> = (0..3000).map(|n| (vec![int(n)], false)).collect();
+    arms.push((vec![W], false));
+    let r = run(&[T::Int], &arms);
+    assert!(!r.too_complex);
+    assert_eq!(r.unreachable, NO_ARM);
+    assert_eq!(missing(&r), NOTHING);
+    // Without `_`, only a wildcard is missing.
+    arms.pop();
+    let r = run(&[T::Int], &arms);
+    assert!(!r.too_complex);
+    assert_eq!(missing(&r), ["_"]);
+    // A repeated literal is unreachable however far from the first.
+    arms.push((vec![int(5)], false));
+    let r = run(&[T::Int], &arms);
+    assert_eq!(r.unreachable, [3000]);
 }
 
 #[test]

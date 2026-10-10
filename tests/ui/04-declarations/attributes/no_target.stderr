@@ -1,0 +1,23 @@
+error[E0045]: `native_name` exists on no target
+ --> tests/ui/04-declarations/attributes/no_target.cheby:9:1
+  |
+7 | @!target(js)
+  | ------------ but the module exists only on `js`
+8 |
+9 | @target(native)
+  | ^^^^^^^^^^^^^^^ only on `native` here
+  |
+  = help: remove `@target(native)`, or move the item to a module for `native`
+
+error[E0045]: `now` exists on no target
+  --> tests/ui/04-declarations/attributes/no_target.cheby:15:8
+   |
+7  | @!target(js)
+   | ------------ the module exists only on `js`
+...
+15 | pub fn now() -> Int
+   |        ^^^
+   |
+   = note: a function without a body exists only on the targets of its `@external` attributes, and `now` has no `@external` for `js`
+   = help: add an `@external(js, …)` attribute
+

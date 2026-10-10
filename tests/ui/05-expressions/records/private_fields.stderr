@@ -1,0 +1,31 @@
+error[E0043]: `Token` is private to module `app::secret`
+  --> tests/ui/05-expressions/records/private_fields/src/main.cheby:11:22
+   |
+11 |   let copy = secret::Token { ..token, value: "other" }
+   |                      ^^^^^
+   |
+  ::: tests/ui/05-expressions/records/private_fields/src/secret.cheby:3:11
+   |
+3  | priv type Token { value: String }
+   |           ----- declared here
+
+error[E0043]: the fields of `Token` are not visible outside its module
+  --> tests/ui/05-expressions/records/private_fields/src/main.cheby:12:16
+   |
+12 |   assert token.value == copy.value
+   |                ^^^^^
+   |
+   = note: `Token` is `priv`, so its constructors and fields are usable only in its own module
+
+error[E0074]: the package-visible function `make` mentions the `priv` type `Token`
+ --> tests/ui/05-expressions/records/private_fields/src/secret.cheby:5:14
+  |
+3 | priv type Token { value: String }
+  |           ----- declared here
+4 |
+5 | fn make() -> Token {
+  |              ^^^^^ `priv` type
+  |
+  = note: code that can use `make` could not name `Token` (D-149)
+  = help: make `Token` package-visible, or make `make` `priv`
+

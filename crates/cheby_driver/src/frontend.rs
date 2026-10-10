@@ -15,8 +15,11 @@
 //!    by an `@external` has one C signature (E0054). The first binding of
 //!    each symbol is kept for E0053 when `cheby run` cannot resolve it.
 //! 6. For `cheby check` only, the whole-package warnings over every
-//!    checked module of the package (D-152, D-266). `cheby run` skips them
-//!    so the edit-run path stays local (GAP(package-warnings-in-run)).
+//!    checked module of the package (D-152, D-266), once, after every
+//!    module is checked, and only when every module of the package was
+//!    checked (an import cycle leaves some unchecked). `cheby run` skips
+//!    them so the edit-run path stays local (GAP(package-warnings-in-run)).
+//!    The caller sorts every diagnostic, warnings included, by position.
 //!
 //! Every output is in a deterministic order (D-264).
 
@@ -444,10 +447,7 @@ fn run_inner(
             deps: DepView::new(&set, &deps),
             modules: &modules,
             globals: &globals,
-            std: StdCatalog {
-                known: &known,
-                partial: std_lib::PARTIAL_STD_MODULES,
-            },
+            std: StdCatalog { known: &known },
             package_targets: if info.package == PackageId::LOCAL {
                 local_targets
             } else {
@@ -479,7 +479,14 @@ fn run_inner(
             local_resolved.push((id, resolved));
         }
     }
-    if mode == Mode::Check {
+    // The whole-package pass needs every module of the package: a module
+    // on or above an import cycle was not checked, and its uses are
+    // unknown (E0040 is reported).
+    let every_local_checked = modules
+        .iter()
+        .filter(|(_, info)| info.package == PackageId::LOCAL)
+        .all(|(id, _)| local_resolved.iter().any(|(checked, _)| *checked == id));
+    if mode == Mode::Check && every_local_checked {
         let mut package_modules = Vec::with_capacity(local_resolved.len());
         for (id, resolved) in &local_resolved {
             let module = get(&checked, *id)?
@@ -515,4 +522,127 @@ fn run_inner(
         order: built,
         natives,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    //! The whole-package warnings (W0005) and when they run.
+
+    use std::path::PathBuf;
+
+    use crate::{Prepared, RunOptions, check, prepare_run};
+
+    /// A package `app` in a fresh temporary directory with these modules
+    /// (paths under `src/`).
+    fn package(name: &str, modules: &[(&str, &str)]) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("cheby_frontend_{}_{name}", std::process::id()));
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(
+            dir.join("cheby.toml"),
+            "name = \"app\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        for (path, text) in modules {
+            let path = dir.join("src").join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        }
+        dir
+    }
+
+    /// `code: message` of every diagnostic of `cheby check`, in output
+    /// order.
+    fn checked(dir: &std::path::Path) -> Vec<String> {
+        check(dir)
+            .unwrap()
+            .diagnostics
+            .iter()
+            .map(|d| format!("{}: {}", d.code, d.message))
+            .collect()
+    }
+
+    const MAIN: &str = "//! Root.\n\nimport app::shapes\n\n\
+                        fn main() {\n  let _ = shapes::area(shapes::Square(2))\n}\n";
+
+    const SHAPES: &str = "//! Shapes.\n\n\
+        type Shape {\n  Square(Int),\n  Dot,\n}\n\n\
+        fn area(shape: Shape) -> Int {\n  case shape {\n    Square(side) => side * side\n    Dot => 0\n  }\n}\n\n\
+        fn perimeter(shape: Shape) -> Int {\n  case shape {\n    Square(side) => 4 * side\n    Dot => 0\n  }\n}\n\n\
+        fn only_itself(n: Int) -> Int {\n  only_itself(n)\n}\n\n\
+        fn used_by_test() -> Int {\n  1\n}\n\n\
+        type Unused {\n  Unused,\n}\n\n\
+        pub fn public() -> Int {\n  1\n}\n\n\
+        test \"used by a test\" {\n  assert used_by_test() == 1\n}\n";
+
+    #[test]
+    fn package_visible_items_that_nothing_uses_warn() {
+        let dir = package("unused", &[("main.cheby", MAIN), ("shapes.cheby", SHAPES)]);
+        assert_eq!(
+            checked(&dir),
+            [
+                "W0005: the function `perimeter` is never used in this package",
+                "W0005: the function `only_itself` is never used in this package",
+                "W0005: the type `Unused` is never used in this package",
+            ]
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn cheby_run_skips_the_package_pass() {
+        let dir = package("run", &[("main.cheby", MAIN), ("shapes.cheby", SHAPES)]);
+        let output = match prepare_run(&dir, RunOptions::default()).unwrap() {
+            Prepared::Ready(program) => program.output().diagnostics.clone(),
+            Prepared::CompileFailed(out) => out.diagnostics,
+        };
+        assert!(
+            output.iter().all(|d| d.code.to_string() != "W0005"),
+            "{output:?}"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn module_local_warnings_also_come_in_cheby_run() {
+        let main = "//! Root.\n\nfn main() {\n  let unused = 1\n}\n";
+        let dir = package("local_in_run", &[("main.cheby", main)]);
+        let output = match prepare_run(&dir, RunOptions::default()).unwrap() {
+            Prepared::Ready(program) => program.output().diagnostics.clone(),
+            Prepared::CompileFailed(out) => out.diagnostics,
+        };
+        let codes: Vec<String> = output.iter().map(|d| d.code.to_string()).collect();
+        assert!(codes.contains(&"W0002".to_owned()), "{codes:?}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn uses_across_modules_count() {
+        let util = "//! Util.\n\nfn helper() -> Int {\n  1\n}\n\nconst limit: Int = 2\n\n\
+                    type Point {\n  Point(Int),\n}\n";
+        let main = "//! Root.\n\nimport app::util\n\n\
+                    fn main() {\n  let util::Point(n) = util::Point(util::helper())\n  \
+                    let _ = n + util::limit\n}\n";
+        let dir = package("across", &[("main.cheby", main), ("util.cheby", util)]);
+        assert_eq!(checked(&dir), Vec::<String>::new());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn modules_left_unchecked_by_a_cycle_stop_the_package_pass() {
+        let a = "//! A.\n\nimport app::b\n\nfn f() -> Int {\n  b::g()\n}\n";
+        let b = "//! B.\n\nimport app::a\n\nfn g() -> Int {\n  a::f()\n}\n";
+        let main = "//! Root.\n\nfn main() {\n  Nil\n}\n\nfn lonely() -> Int {\n  1\n}\n";
+        let dir = package(
+            "cycle",
+            &[("main.cheby", main), ("a.cheby", a), ("b.cheby", b)],
+        );
+        let found = checked(&dir);
+        assert!(found.iter().any(|d| d.starts_with("E0040")), "{found:?}");
+        assert!(found.iter().all(|d| !d.starts_with("W0005")), "{found:?}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }

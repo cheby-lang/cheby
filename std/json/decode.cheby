@@ -252,3 +252,10 @@ pub fn show(error: Error) -> String {
     }
   }
 }
+
+test "a decode error shows what was expected, found and where" {
+  let nested = Error { expected: "Format", found: "String", path: ["books", "1", "format"] }
+  assert show(nested) == "expected Format, found String at books.1.format"
+  let top = Error { expected: "Array", found: "Null", path: [] }
+  assert "{top}" == "expected Array, found Null"
+}

@@ -213,6 +213,12 @@ fn nesting_below_the_limit_parses() {
         nested("fn() { ", "1", " }", depth / 2),
         nested("case x { _ => ", "1", " }", depth / 2),
         nested("Some(", "1", ")", depth),
+        nested("1 + (", "1", ")", depth / 2),
+        nested("", "1", " + 1", depth),
+        nested("", "x", ".f", depth),
+        nested("", "f", "()", depth),
+        nested("", "1", " |> f(_, 1)", depth),
+        format!("fn f() {{\n{}  x\n}}\n", "  use x <- f()\n".repeat(depth)),
         format!(
             "fn f(x: {}Int{}) {{}}\n",
             "List<".repeat(depth),
@@ -244,6 +250,14 @@ fn nesting_above_the_limit_is_e0016() {
         nested("fn() { ", "1", " }", depth),
         nested("case x { _ => ", "1", " }", depth),
         nested("Point { x: ", "1", " }", depth),
+        // Chains nest their left operand (GAP(chain-depth)).
+        nested("", "1", " + 1", depth),
+        nested("", "1", " && True", depth),
+        nested("", "1", " |> f(_, 1)", depth),
+        nested("", "x", ".f", depth),
+        nested("", "f", "()", depth),
+        nested("", "f", "(1).g", depth),
+        format!("fn f() {{\n{}  x\n}}\n", "  use x <- f()\n".repeat(depth)),
         // Indented: in column 1, `fn g` with no `}` to close the body
         // ends it (an item boundary).
         format!("fn f() {{\n{}\n}}\n", "  fn g() {\n".repeat(depth)),
@@ -287,10 +301,14 @@ fn deeply_nested_beyond_any_stack() {
 
 #[test]
 fn long_flat_input() {
-    // Long chains are loops, not recursion.
+    // Long chains are loops, not recursion, in the parser. Later passes
+    // recurse along them, so past the limit they are one E0016
+    // (GAP(chain-depth)).
     let text = format!("const x: Int = {}1\n", "a + ".repeat(50_000));
-    assert_eq!(robust(&text), 0);
+    assert_eq!(robust(&text), 1);
     let text = format!("const x: Int = {}a\n", "f(1).".repeat(20_000));
+    assert_eq!(robust(&text), 1);
+    let text = format!("const x: Int = {}1\n", "a + ".repeat(200));
     assert_eq!(robust(&text), 0);
     let text = "fn f() {}\n".repeat(20_000);
     assert_eq!(robust(&text), 0);

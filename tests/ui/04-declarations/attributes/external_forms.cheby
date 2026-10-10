@@ -1,0 +1,23 @@
+// @mode: check-fail
+// @decisions: D-030, D-461
+//! `@external` takes `native` and one symbol, or `js`, a module and an
+//! export, none of them empty.
+
+@external(native)
+pub fn a() -> Int
+
+@external(native, "")
+pub fn b() -> Int
+
+@external(js, "./m.mjs")
+pub fn c() -> Int
+
+@external(js, "./m.mjs", "")
+pub fn d() -> Int
+
+@external(wasm, "e")
+pub fn e() -> Int
+
+@external(native, "app_f")
+@external(js, "./m.mjs", "f")
+pub fn f() -> Int

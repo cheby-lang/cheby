@@ -12,22 +12,16 @@
 //!   conventions (E0006) and the reserved words (E0007). A use adds
 //!   nothing, except that a reserved word that nothing binds is E0007
 //!   where it is used (D-469).
-//! - What is left of the support gate (D-451) reports `E0038` for imports
-//!   of planned standard-library modules, for names missing from a partly
-//!   shipped standard-library module, and for a function without a body
-//!   whose `@external`s do not cover every target of its module. A hit in
-//!   an item's declaration makes it [`ItemStatus::Unsupported`]: its name
-//!   still resolves, and uses of it are silent [`Res::Err`]. A hit in a
-//!   function's body makes it [`ItemStatus::BodyUnsupported`]: its
-//!   signature is still published and checked against, because an
-//!   interface never depends on a body (D-246, §13.12.3), but its body is
-//!   neither checked nor lowered.
+//! - The only part of the support gate (D-451) left in the front end is
+//!   E0038 for an import of a standard-library module that the spec plans
+//!   but the toolchain does not ship yet (tier 2 and 3, and the tier-1
+//!   `multimap`, `sorted_*` and `ordered_*`). Paths through such an import
+//!   are silent [`Res::Err`]. Every item and every construct resolves.
 //!
 //! Later phases read syntax only through `cheby_syntax::ast` views, keyed
 //! by the `NodeId`s stored here.
 
 mod body;
-mod gate;
 mod imports;
 mod items;
 mod naming;
@@ -85,29 +79,26 @@ pub struct StdCatalog<'a> {
     /// Every module the spec defines, shipped or not, for the help line of
     /// "`list` is not imported".
     pub known: &'a [&'a str],
-    /// Shipped modules that do not have every item of their spec yet. A
-    /// name missing from one is E0038 ("not supported yet"), not E0042,
-    /// until the module is complete (D-451).
-    pub partial: &'a [&'a str],
 }
 
 /// The result of resolving one module.
 #[derive(Clone, Debug)]
 pub struct ResolvedModule {
     pub module: ModuleId,
-    /// Every item, supported or not, in `DefIndex` order: source order,
+    /// Every item, in `DefIndex` order: source order,
     /// with a type's constructors right after it and an interface's
     /// functions right after it.
     pub items: IndexVec<DefIndex, ItemDef>,
     pub scope: ModuleScope,
-    /// The targets of the whole module, from `@!target` (§4.8).
+    /// Where the module's code is built: the package's targets
+    /// intersected with the module's `@!target` (§4.8, §12.6).
     pub targets: Targets,
-    /// Resolutions of paths in the signatures of supported items, keyed by
+    /// Resolutions of paths in the signatures of the items, keyed by
     /// the `PATH` node.
     pub sig_paths: FxHashMap<NodeId, Res>,
-    /// The type parameters of each supported generic item, by name.
+    /// The type parameters of each generic item, by name.
     pub generics: FxHashMap<DefIndex, Vec<(Name, ParamIdx)>>,
-    /// One per supported `Fn`, `Const` or `Test` item with a body.
+    /// One per `Fn`, `Const` or `Test` item with a body.
     pub bodies: FxHashMap<DefIndex, BodyRes>,
 }
 
@@ -137,24 +128,6 @@ pub struct ItemDef {
     /// `INTERFACE_FN`, …), for `AstId::get` through the typed views.
     pub node: NodeId,
     pub attrs: ItemAttrs,
-    pub status: ItemStatus,
-}
-
-/// Whether later phases handle an item.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum ItemStatus {
-    Ok,
-    /// E0038 was reported for the item's declaration: a function without
-    /// a body that does not exist on every target of its module, or a
-    /// name in its signature that a partly shipped standard-library module
-    /// does not have yet (D-451). Its name resolves, but its signature and
-    /// body are not checked, and uses of it are silent.
-    Unsupported,
-    /// E0038 was reported for something in the function's body only. Its
-    /// signature is checked and published as usual, so dependents and
-    /// interface hashes never depend on the body (D-246, §13.12.3, B8), but
-    /// the body is not checked further and never reaches MIR.
-    BodyUnsupported,
 }
 
 /// The attributes of an item (§4.8), checked.
@@ -244,8 +217,8 @@ pub enum Res {
     TyParam(ParamIdx),
     /// `Self` in an interface declaration (C8).
     SelfTy,
-    /// Already reported, or refers to an unsupported item: silent from here
-    /// on.
+    /// Already reported, or a path through an import of an unshipped std
+    /// module (E0038): silent from here on.
     Err,
 }
 
@@ -301,8 +274,7 @@ pub fn resolve_module(input: &ResolveInput<'_>) -> Result<(ResolvedModule, Vec<D
     }
     let mut diags = Vec::new();
     naming::check_names(input.tree, &mut diags);
-    let mut collected = items::collect(input, &mut diags)?;
-    gate::gate_module(input, &mut collected, &mut diags)?;
+    let collected = items::collect(input, &mut diags)?;
     let items = collected.items;
     let scope = scope::build(input, &items, &mut diags)?;
     let mut module = ResolvedModule {

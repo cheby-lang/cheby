@@ -1,0 +1,12 @@
+error[E0067]: `Handle` exists only on `native`, but `keep` also exists on `js`
+  --> tests/ui/12-targets-and-ffi/external_type_one_target.cheby:14:21
+   |
+8  | pub type Handle
+   |          ------ `Handle` is declared here
+...
+14 | pub fn keep(handle: Handle) -> Handle {
+   |                     ^^^^^^ not available on `js`
+   |
+   = help: restrict `keep` to `native` with `@target(native)`, or the whole module with `@!target(native)`
+   = help: if the package supports only `native`, declare `targets = ["native"]` in `cheby.toml`
+

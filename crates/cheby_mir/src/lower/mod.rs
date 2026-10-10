@@ -266,7 +266,9 @@ pub fn lower_fn(f: &thir::FnDef, cx: &LowerCx<'_>) -> Result<Vec<Function>, Lowe
         .map(|p| p.bounds.len())
         .sum::<usize>();
     match (&f.native_external, &f.body) {
-        (Some(ext), None) => Ok(vec![external::lower_wrapper(f, ext, sig, cx)?]),
+        // With a body too, the body is for the other targets (D-207,
+        // GAP(native-external-over-body-in-mir)).
+        (Some(ext), _) => Ok(vec![external::lower_wrapper(f, ext, sig, cx)?]),
         (None, Some(body)) => Ok(vec![expr::lower_body(
             FnKey::Item(f.def),
             f.span,
@@ -274,10 +276,6 @@ pub fn lower_fn(f: &thir::FnDef, cx: &LowerCx<'_>) -> Result<Vec<Function>, Lowe
             dicts,
             cx,
         )?]),
-        (Some(_), Some(_)) => Err(Ice::new(
-            "a function with both a body and a native external reached MIR lowering",
-        )
-        .into()),
         // Only a JS external: the function does not exist on native
         // (§12.5), which only the cross-target check (C12) can reject.
         (None, None) => Err(LowerError::Unsupported(vec![not_supported(

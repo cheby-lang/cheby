@@ -1,0 +1,24 @@
+error[E0030]: a tuple type has at least two elements
+ --> tests/ui/03-types/tuples/one_element_tuple_type.cheby:6:17
+  |
+6 | fn first(value: (Int)) -> () {
+  |                 ^^^^^
+  |
+  = help: write the element type alone; there are no one-element tuples
+
+error[E0030]: `()` is not a type
+ --> tests/ui/03-types/tuples/one_element_tuple_type.cheby:6:27
+  |
+6 | fn first(value: (Int)) -> () {
+  |                           ^^
+  |
+  = help: the type with no information is `Nil`
+
+error[E0030]: a tuple type has at least two elements
+  --> tests/ui/03-types/tuples/one_element_tuple_type.cheby:10:18
+   |
+10 | fn second(value: (Int,)) -> Int {
+   |                  ^^^^^^
+   |
+   = help: write the element type alone; there are no one-element tuples
+

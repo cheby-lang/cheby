@@ -1,7 +1,7 @@
 error[E0047]: mismatched types
  --> tests/ui/06-patterns/patterns/alternative_binding_types.cheby:7:15
   |
-7 |     (0, n) | (n, "") => 1
+7 |     (0, n) | (n, "") => "{n:?}"
   |         -     ^ `n` is `Int` here
   |         |
   |         `n` is `String` in an earlier alternative

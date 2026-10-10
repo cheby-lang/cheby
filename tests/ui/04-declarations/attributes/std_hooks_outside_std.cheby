@@ -1,0 +1,24 @@
+// @mode: check-fail
+// @decisions: D-057, D-342
+//! Only the standard library may name the functions behind a type's
+//! equality, hashing and debug printing. User code cannot override them,
+//! and the attribute is unknown outside std (§3.13, §4.8).
+
+@std_hooks(same, digest, describe)
+pub type Pair {
+  Pair(Int, Int),
+}
+
+pub fn same(a: Pair, b: Pair) -> Bool {
+  a == b
+}
+
+pub fn digest(pair: Pair) -> Int {
+  let Pair(a, b) = pair
+  a + b
+}
+
+pub fn describe(pair: Pair) -> String {
+  let Pair(a, b) = pair
+  "{a}, {b}"
+}

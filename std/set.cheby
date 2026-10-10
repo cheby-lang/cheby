@@ -11,7 +11,9 @@
 //! kernels are the functions set.md lists (D-274); the rest is written in
 //! Cheby over them.
 
+import std::int
 import std::list
+import std::map as maps
 import std::ops::{Compare}
 
 // Building
@@ -21,10 +23,22 @@ import std::ops::{Compare}
 @external(js, "./set.mjs", "new")
 pub fn new<T>() -> Set<T>
 
+test "new is empty" {
+  let empty = new::<Int>()
+  assert is_empty(empty)
+  assert empty == from_list([])
+}
+
 /// Returns a set with the elements of `items`, each once.
 @external(native, "cheby_set_from_list")
 @external(js, "./set.mjs", "from_list")
 pub fn from_list<T>(items: List<T>) -> Set<T>
+
+test "from_list drops repeats" {
+  let digits = from_list([3, 1, 3, 2])
+  assert size(digits) == 3
+  assert to_sorted_list(digits) == [1, 2, 3]
+}
 
 // Size
 
@@ -33,10 +47,20 @@ pub fn from_list<T>(items: List<T>) -> Set<T>
 @external(js, "./set.mjs", "size")
 pub fn size<T>(s: Set<T>) -> Int
 
+test "size counts elements" {
+  assert size(from_list(["a", "b", "a"])) == 2
+  assert size(new::<String>()) == 0
+}
+
 /// Tells whether the set has no elements.
 @external(native, "cheby_set_is_empty")
 @external(js, "./set.mjs", "is_empty")
 pub fn is_empty<T>(s: Set<T>) -> Bool
+
+test "is_empty tells an empty set" {
+  assert is_empty(new::<Int>())
+  assert !is_empty(from_list([0]))
+}
 
 // Lookup
 
@@ -45,6 +69,12 @@ pub fn is_empty<T>(s: Set<T>) -> Bool
 @external(js, "./set.mjs", "contains")
 pub fn contains<T>(s: Set<T>, item: T) -> Bool
 
+test "contains looks an element up" {
+  let seen = from_list(["/", "/a"])
+  assert contains(seen, "/a")
+  assert !contains(seen, "/b")
+}
+
 // Updating
 
 /// Returns the set with `item` added, or unchanged when `item` is already in it.
@@ -52,10 +82,24 @@ pub fn contains<T>(s: Set<T>, item: T) -> Bool
 @external(js, "./set.mjs", "insert")
 pub fn insert<T>(s: Set<T>, item: T) -> Set<T>
 
+test "insert adds an element once" {
+  let start = from_list([1])
+  let grown = insert(insert(start, 2), 2)
+  assert grown == from_list([1, 2])
+  assert start == from_list([1])
+  assert list::fold([3, 4, 3], start, insert) == from_list([1, 3, 4])
+}
+
 /// Returns the set without `item`, or unchanged when `item` is not in it.
 @external(native, "cheby_set_remove")
 @external(js, "./set.mjs", "remove")
 pub fn remove<T>(s: Set<T>, item: T) -> Set<T>
+
+test "remove drops an element and ignores a missing one" {
+  let held = from_list([1, 2])
+  assert remove(held, 1) == from_list([2])
+  assert remove(held, 5) == held
+}
 
 // Iterating
 
@@ -64,9 +108,20 @@ pub fn remove<T>(s: Set<T>, item: T) -> Set<T>
 @external(js, "./set.mjs", "to_list")
 pub fn to_list<T>(s: Set<T>) -> List<T>
 
+test "to_list gives every element once" {
+  let digits = from_list([2, 1, 2])
+  assert list::sort(to_list(digits)) == [1, 2]
+  assert from_list(to_list(digits)) == digits
+}
+
 /// Returns the elements sorted by `compare`, the same on every run (D-093, D-344).
 pub fn to_sorted_list<T: Compare>(s: Set<T>) -> List<T> {
   list::sort_with(to_list(s), fn(a, b) { Compare::compare(a, b) })
+}
+
+test "to_sorted_list orders the elements" {
+  assert to_sorted_list(from_list(["b", "c", "a"])) == ["a", "b", "c"]
+  assert to_sorted_list(new::<Int>()) == []
 }
 
 /// Combines the elements, starting from `initial`, in the set's per-process order (D-093).
@@ -74,9 +129,20 @@ pub fn fold<T, A>(s: Set<T>, initial: A, f: fn(A, T) -> A) -> A {
   list::fold(to_list(s), initial, f)
 }
 
+test "fold visits every element once" {
+  let digits = from_list([1, 2, 3])
+  assert fold(digits, 0, int::add) == 6
+  let grown = fold(digits, digits, fn(found, n) { insert(found, n * 10) })
+  assert grown == from_list([1, 2, 3, 10, 20, 30])
+}
+
 /// Calls `f` once per element, in the set's per-process order (D-093), for its effects.
 pub fn each<T>(s: Set<T>, f: fn(T)) {
   list::each(to_list(s), f)
+}
+
+test "each calls the function once per element" {
+  each(from_list([1, 2, 3]), fn(n) { assert n > 0 })
 }
 
 // Transforming
@@ -91,9 +157,19 @@ pub fn filter<T>(s: Set<T>, keep: fn(T) -> Bool) -> Set<T> {
   })
 }
 
+test "filter keeps the matching elements" {
+  let digits = from_list([1, 2, 3, 4])
+  assert filter(digits, fn(n) { n % 2 == 0 }) == from_list([2, 4])
+}
+
 /// Returns the set of the results of `f`, merging results that are `==`.
 pub fn map<T, U>(s: Set<T>, f: fn(T) -> U) -> Set<U> {
   from_list(list::map(to_list(s), f))
+}
+
+test "map can merge elements" {
+  let digits = from_list([1, 2, 3, 4])
+  assert map(digits, fn(n) { n / 2 }) == from_list([0, 1, 2])
 }
 
 // Combining
@@ -103,9 +179,21 @@ pub fn union<T>(s: Set<T>, other: Set<T>) -> Set<T> {
   list::fold(to_list(other), s, insert)
 }
 
+test "union joins two sets" {
+  let low = from_list([1, 2, 3])
+  let high = from_list([3, 4])
+  assert union(low, high) == from_list([1, 2, 3, 4])
+}
+
 /// Returns the elements of `s` that are also in `other`.
 pub fn intersection<T>(s: Set<T>, other: Set<T>) -> Set<T> {
   filter(s, fn(item) { contains(other, item) })
+}
+
+test "intersection keeps the shared elements" {
+  let low = from_list([1, 2, 3])
+  let high = from_list([2, 3, 4])
+  assert intersection(low, high) == from_list([2, 3])
 }
 
 /// Returns the elements of `s` that are not in `other`.
@@ -113,7 +201,38 @@ pub fn difference<T>(s: Set<T>, other: Set<T>) -> Set<T> {
   filter(s, fn(item) { !contains(other, item) })
 }
 
+test "difference removes the elements of the second set" {
+  let low = from_list([1, 2, 3])
+  let high = from_list([2, 3, 4])
+  assert difference(low, high) == from_list([1])
+}
+
 /// Tells whether every element of `s` is in `other`, stopping at the first that is not.
 pub fn is_subset<T>(s: Set<T>, other: Set<T>) -> Bool {
   list::all(to_list(s), fn(item) { contains(other, item) })
+}
+
+test "is_subset checks every element" {
+  let small = from_list([1, 2])
+  let large = from_list([1, 2, 3])
+  assert is_subset(small, large)
+  assert !is_subset(large, small)
+  assert is_subset(new(), small)
+}
+
+// Tests of `std::map` that need this module.
+
+test "maps compare by contents and print sorted" {
+  let numbers = maps::from_list([(10, "ten"), (9, "nine")])
+  assert numbers == maps::from_list([(9, "nine"), (10, "ten")])
+  assert size(from_list([numbers, maps::insert(maps::new(), 9, "nine")])) == 2
+  assert "{numbers:?}" == "map::from_list([(10, \"ten\"), (9, \"nine\")])"
+}
+
+// Examples
+
+test "sets compare by contents and print sorted" {
+  let words = from_list(["pear", "apple", "pear"])
+  assert words == from_list(["apple", "pear"])
+  assert "{words:?}" == "set::from_list([\"apple\", \"pear\"])"
 }

@@ -5,6 +5,7 @@
 import std::io::{println}
 
 fn main() {
+  println("Hi!")
   let println = "Hello!"
-  Nil
+  assert println != ""
 }

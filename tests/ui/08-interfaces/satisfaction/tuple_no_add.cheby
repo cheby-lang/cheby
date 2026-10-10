@@ -1,0 +1,12 @@
+// @mode: check-fail
+// @decisions: D-167
+//! By the built-in rule, tuples satisfy `Show` and `Compare` and no other
+//! interface, so `+` is not defined on them (§8.2).
+
+fn add_pairs(a: (Int, Int), b: (Int, Int)) -> (Int, Int) {
+  a + b
+}
+
+fn main() {
+  assert add_pairs((1, 2), (3, 4)) == (4, 6)
+}

@@ -21,9 +21,6 @@ pub enum ItemSig {
     Interface(InterfaceDef),
     InterfaceFn(InterfaceFnSig),
     Test,
-    /// The declaration was rejected with E0038; uses of it are silent
-    /// errors.
-    Unsupported,
     /// The signature had errors (already reported); uses get `Ty::ERROR`.
     Error,
 }

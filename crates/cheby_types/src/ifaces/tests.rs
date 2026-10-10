@@ -22,7 +22,8 @@ use cheby_resolve::{
 use cheby_syntax::SyntaxTree;
 
 use super::*;
-use crate::test_support::{Build, build_with_std};
+use crate::test_support::Build;
+use crate::test_support::quiet::build_with_std;
 use crate::thir::{BinOpKind, Callee, Dict, DictFn, OpImpl};
 use crate::{TypesInput, build_interface};
 
@@ -1112,7 +1113,6 @@ fn interface_calls_resolve_by_the_self_type() {
             text.contains("`shapes::Area::area` is called with `Self` = `angle::Angle`"),
             "{text}"
         );
-        assert_eq!(self_param(cx.input, cx.own, area_fn).unwrap(), Some(0));
     });
 }
 

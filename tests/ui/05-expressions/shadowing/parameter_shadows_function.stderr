@@ -1,0 +1,11 @@
+error[E0044]: `scale` is the name of a function in this module
+  --> tests/ui/05-expressions/shadowing/parameter_shadows_function.cheby:10:21
+   |
+6  | fn scale(n: Int) -> Int {
+   |    ----- declared here
+...
+10 | fn area(width: Int, scale: Int) -> Int {
+   |                     ^^^^^ bound again here
+   |
+   = help: give this binding a new name, such as `scale_2`; names cannot be shadowed (§5.2.3)
+

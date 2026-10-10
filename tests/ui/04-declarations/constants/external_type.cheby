@@ -1,0 +1,16 @@
+// @mode: check-fail
+// @decisions: D-139
+//! A constant's value must not contain values of external types, which
+//! are foreign handles.
+
+@external(native, "app_db_close")
+@external(js, "./db.mjs", "close")
+pub type Db
+
+@external(native, "app_db_open")
+@external(js, "./db.mjs", "open")
+pub fn open() -> Db
+
+pub const db: Db = open()
+
+pub const maybe: Option<Db> = None

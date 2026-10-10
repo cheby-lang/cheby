@@ -157,15 +157,17 @@ impl BodyCx<'_> {
             } else {
                 is_integer(ty)
             };
-            if !defined && ty != Ty::NEVER {
+            // GAP(never-operands): `Never` is not numeric, so it gets
+            // E0072 like any other type, as it gets E0063 for the
+            // overloadable operators below (GAP(never-satisfaction)).
+            if !defined {
                 let diag = self.invalid_operand(op, ty, span);
                 self.report(diag);
                 return Ok(());
             }
             OpImpl::Builtin
-        } else if is_integer(ty) || is_float(ty) || ty == Ty::NEVER {
-            // The built-in numeric operations, and `Never` operands, which
-            // never produce a value.
+        } else if is_integer(ty) || is_float(ty) {
+            // The built-in numeric operations.
             OpImpl::Builtin
         } else {
             let cx = IfaceCx {
@@ -199,7 +201,9 @@ impl BodyCx<'_> {
             return Ok(());
         };
         let span = exprs.try_get(expr, "negation")?.span;
-        let imp = if is_integer(ty) || is_float(ty) || ty == Ty::NEVER {
+        // GAP(never-operands): a `Never` operand goes through `Neg` like
+        // any other type that is not numeric.
+        let imp = if is_integer(ty) || is_float(ty) {
             OpImpl::Builtin
         } else {
             let cx = IfaceCx {

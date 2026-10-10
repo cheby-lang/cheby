@@ -40,7 +40,7 @@ use cheby_iface::{
 };
 
 use crate::TypesInput;
-use crate::infer::substitute;
+use crate::infer::{contains_error, substitute};
 use crate::thir::{self, ExprId, ExprKind, Lit, ParamOrigin, PatKind, Stmt};
 use engine::{Ctor, ListLen, LitKey, Pat, Shape, Space, Types};
 
@@ -116,6 +116,27 @@ enum Site {
     UseBinder,
 }
 
+impl Site {
+    const fn message(self) -> &'static str {
+        match self {
+            Self::Let => "refutable pattern in `let`",
+            Self::Param => "refutable pattern in a parameter",
+            Self::UseBinder => "refutable pattern in a `use` binder",
+        }
+    }
+
+    /// The help for alternatives that cover every value only together.
+    const fn alternatives_help(self) -> &'static str {
+        match self {
+            Self::Let => "match the value with `case`, with one arm per alternative",
+            Self::Param => {
+                "take the parameter as a plain name and match it with `case` in the body"
+            }
+            Self::UseBinder => "bind a plain name and match it with `case` after the `use`",
+        }
+    }
+}
+
 fn check_case(
     cx: &TyCx<'_>,
     body: &thir::Body,
@@ -129,6 +150,9 @@ fn check_case(
         let expr = body.exprs.try_get(subject, "case subject")?;
         tys.push(expr.ty);
         spans.push(expr.span);
+    }
+    if tys.iter().any(|&ty| cx.erroneous(ty)) {
+        return Ok(());
     }
     let mut lowered = Vec::with_capacity(arms.len());
     for arm in arms {
@@ -204,11 +228,13 @@ fn check_irrefutable(
     site: Site,
     diags: &mut Vec<Diagnostic>,
 ) -> Result<(), Ice> {
-    let lowered = cx.lower(pat)?;
-    if matches!(lowered, Pat::Wild) {
+    if cx.erroneous(pat.ty) {
         return Ok(());
     }
-    let pats = [lowered];
+    if cx.irrefutable(pat)? {
+        return Ok(());
+    }
+    let pats = [cx.lower(pat)?];
     let report = engine::check(
         cx,
         &[pat.ty],
@@ -218,6 +244,17 @@ fn check_irrefutable(
         }],
     )?;
     let Some(first) = report.missing.first() else {
+        // The alternatives cover every value together, but none of them
+        // does alone, so §6.1 calls the pattern refutable.
+        diags.push(
+            Diagnostic::new(codes::REFUTABLE_PATTERN, site.message())
+                .with_primary(pat.span, "its alternatives match every value only together")
+                .with_note(
+                    "alternatives make a pattern irrefutable only when one of them is \
+                     irrefutable on its own (§6.1)",
+                )
+                .with_help(site.alternatives_help()),
+        );
         return Ok(());
     };
     let shown = report
@@ -226,27 +263,19 @@ fn check_irrefutable(
         .map(|row| engine::render_row(cx, row))
         .collect::<Result<Vec<_>, Ice>>()?;
     let example = engine::render_row(cx, first)?;
-    let (message, help) = match site {
-        Site::Let => (
-            "refutable pattern in `let`",
-            format!(
-                "use `case` to handle `{example}` as well, or `let assert` to panic when the \
-                 value does not match"
-            ),
+    let message = site.message();
+    let help = match site {
+        Site::Let => format!(
+            "use `case` to handle `{example}` as well, or `let assert` to panic when the \
+             value does not match"
         ),
-        Site::Param => (
-            "refutable pattern in a parameter",
-            format!(
-                "take the parameter as a plain name and use `case` in the body to handle \
-                 `{example}` as well, or `let assert` to panic when it does not match"
-            ),
+        Site::Param => format!(
+            "take the parameter as a plain name and use `case` in the body to handle \
+             `{example}` as well, or `let assert` to panic when it does not match"
         ),
-        Site::UseBinder => (
-            "refutable pattern in a `use` binder",
-            format!(
-                "bind a plain name and use `case` after the `use` to handle `{example}` as \
-                 well, or `let assert` to panic when it does not match"
-            ),
+        Site::UseBinder => format!(
+            "bind a plain name and use `case` after the `use` to handle `{example}` as \
+             well, or `let assert` to panic when it does not match"
         ),
     };
     diags.push(
@@ -266,16 +295,10 @@ fn check_let_assert(
     pat: &thir::Pat,
     diags: &mut Vec<Diagnostic>,
 ) -> Result<(), Ice> {
-    let pats = [cx.lower(pat)?];
-    let report = engine::check(
-        cx,
-        &[pat.ty],
-        &[engine::Arm {
-            pats: &pats,
-            guarded: false,
-        }],
-    )?;
-    if report.missing.is_empty() {
+    if cx.erroneous(pat.ty) {
+        return Ok(());
+    }
+    if cx.irrefutable(pat)? {
         diags.push(
             Diagnostic::new(
                 codes::IRREFUTABLE_LET_ASSERT,
@@ -322,6 +345,16 @@ struct TyCx<'a> {
 impl TyCx<'_> {
     fn kind(&self, ty: Ty) -> &'static TyKind {
         self.globals.types.kind(ty)
+    }
+
+    /// Whether `ty` contains the error type. The body has no errors, but
+    /// a type in its signature may: an unknown type, or a wrong number of
+    /// type arguments, already reported where the signature is checked.
+    /// Matching over such a type is not checked at all, so that no E0060,
+    /// E0061, W0008 or W0010 follows from that error
+    /// (GAP(pattern-under-error)).
+    fn erroneous(&self, ty: Ty) -> bool {
+        contains_error(&self.globals.types, ty)
     }
 
     fn item(&self, def: DefId) -> Result<&IfaceItem, Ice> {
@@ -389,8 +422,61 @@ impl TyCx<'_> {
         Ok(format!("{segment}::{name}"))
     }
 
+    /// Whether `pat` is irrefutable by the rules of §6.1: `_` and
+    /// bindings, a constructor of a type with exactly one variant with
+    /// irrefutable fields, a tuple of irrefutable patterns, `[..]` and
+    /// `[..rest]`, alternatives with at least one irrefutable
+    /// alternative, and `p as x` with `p` irrefutable. Alternatives that
+    /// cover every value only together (`True | False`) do not count.
+    fn irrefutable(&self, pat: &thir::Pat) -> Result<bool, Ice> {
+        Ok(match &pat.kind {
+            PatKind::Wild | PatKind::Bind(_) => true,
+            PatKind::Lit(_) => false,
+            PatKind::Ctor { fields, .. } => {
+                let TyKind::Named { def, .. } = self.kind(pat.ty) else {
+                    return Err(Ice::new(
+                        "exhaustiveness: a constructor at a type without it",
+                    ));
+                };
+                let one = self.ctors(*def)?.is_some_and(|ctors| ctors.len() == 1);
+                one && self.all_irrefutable(fields.iter().map(|(_, p)| p))?
+            }
+            PatKind::Tuple(elems) => self.all_irrefutable(elems.iter())?,
+            PatKind::List {
+                prefix,
+                rest,
+                suffix,
+            } => rest.is_some() && prefix.is_empty() && suffix.is_empty(),
+            PatKind::Or(alts) => {
+                for alt in alts {
+                    if self.irrefutable(alt)? {
+                        return Ok(true);
+                    }
+                }
+                false
+            }
+            PatKind::As { pat, .. } => self.irrefutable(pat)?,
+        })
+    }
+
+    fn all_irrefutable<'p>(&self, pats: impl Iterator<Item = &'p thir::Pat>) -> Result<bool, Ice> {
+        for pat in pats {
+            if !self.irrefutable(pat)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     /// The engine pattern of a THIR pattern.
+    ///
+    /// A pattern at the error type lowers to a wildcard, since that type
+    /// has no constructors to split (GAP(pattern-under-error)). The
+    /// callers skip such columns already; this keeps the engine safe.
     fn lower(&self, pat: &thir::Pat) -> Result<Pat, Ice> {
+        if matches!(self.kind(pat.ty), TyKind::Error) {
+            return Ok(Pat::Wild);
+        }
         Ok(match &pat.kind {
             PatKind::Wild | PatKind::Bind(_) => Pat::Wild,
             PatKind::Lit(Lit::Int(n)) => Pat::Ctor(Ctor::Lit(LitKey::Int(*n)), Vec::new()),

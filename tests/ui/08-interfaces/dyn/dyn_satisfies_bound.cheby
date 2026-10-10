@@ -14,7 +14,7 @@ type Pager {
 }
 
 fn notify(pager: Pager, text: String) -> String {
-  text
+  pager.number + ": " + text
 }
 
 fn show(pager: Pager) -> String {

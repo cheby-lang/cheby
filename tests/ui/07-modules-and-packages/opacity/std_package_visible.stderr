@@ -1,0 +1,11 @@
+error[E0043]: `run` is visible only inside its package
+  --> tests/ui/07-modules-and-packages/opacity/std_package_visible.cheby:11:18
+   |
+11 |   assert decode::run(decode::int(), value) == Ok(1)
+   |                  ^^^
+   |
+  ::: std/json/decode.cheby:45:4
+   |
+45 | fn run<T>(decoder: Decoder<T>, value: tree::Tree) -> Result<T, List<Error>> {
+   |    --- declared here
+

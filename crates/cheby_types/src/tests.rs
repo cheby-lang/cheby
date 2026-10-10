@@ -1,7 +1,6 @@
 //! Signature and body checking over small multi-module builds, the THIR
 //! of 001, the check of every example, and the expression core of
-//! `check/` (C3, C7, C11, C13, C15), one section per item of the W2-E1
-//! package: inference, order, expected types and conversions, calls,
+//! `check/` (C3, C7, C11, C13, C15), one section per area: inference, order, expected types and conversions, calls,
 //! values, operators, interpolation, desugaring, statements, `panic`,
 //! items and the end of a body.
 
@@ -10,7 +9,8 @@ use std::path::Path;
 use cheby_diag::{Diagnostic, SourceMap};
 use cheby_iface::{DefId, ItemSig, Ty, TyKind, builtin};
 
-use crate::test_support::{Build, build, build_package, build_with_std, has_syntax_errors};
+use crate::test_support::quiet::{build, build_package, build_with_std};
+use crate::test_support::{Build, has_syntax_errors};
 use crate::thir::{
     BinOpKind, Body, Callee, Dict, EntryInfo, Expr, ExprKind, InterpPart, Lit, OpImpl, PanicKind,
     ParamOrigin, PatKind, Stmt,
@@ -182,7 +182,7 @@ fn hello_world_checks_into_thir() {
         Some("cheby_io_println")
     );
     assert_eq!(external.entry, None);
-    assert_eq!(b.thir[&b.module("std::io")].fns.len(), 4);
+    assert_eq!(b.thir[&b.module("std::io")].fns.len(), 6);
     // `main`: an entry returning `Nil`, whose body calls `io::println`.
     let main = b.thir_fn("app", "main").unwrap();
     assert_eq!(main.entry, Some(EntryInfo::Nil));
@@ -534,12 +534,14 @@ fn checking_is_deterministic() {
 
 // ---- every example -----------------------------------------------------
 
-/// Every valid example goes through the whole front end without an
-/// internal error or a panic, and 001 checks cleanly. Until the standard
-/// library ships (W3-L), examples may report E0038 for planned modules
-/// and E0063 where a builtin type's home module is missing; any other
-/// error is a checker bug. Examples with phase-A errors (030) stop before
-/// resolution.
+/// Error recovery: every valid example goes through the whole front end
+/// with no standard library but `std::io`, without an internal error or a
+/// panic, and 001 checks cleanly. Each missing module is one E0038 at its
+/// import, and each builtin type whose home module is missing is E0063
+/// where it needs an interface; any other error is a cascade, so a
+/// checker bug. With the real std every example checks cleanly
+/// (`cheby_driver`'s `examples_check_cleanly`). Examples with phase-A
+/// errors (030) stop before resolution.
 #[test]
 fn examples_check_without_internal_errors() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples");
@@ -1623,4 +1625,87 @@ fn every_type_is_closed_in_thir() {
     for (_, p) in body.pats() {
         p.walk(&mut |p| assert!(!crate::infer::contains_error(types, p.ty), "{p:?}"));
     }
+}
+
+/// An argument in error poisons the callee's type variables, so a
+/// callback's parameter is silent instead of E0057 (examples 022, 031).
+#[test]
+fn an_argument_in_error_silences_callback_parameters() {
+    let src = "import std::result\n\nfn f() -> Result<Int, String> {\n  use p <- result::try(nope())\n  Ok(p.x + p.y)\n}\n";
+    assert_eq!(errors(src), ["E0042"]);
+}
+
+/// An `F32` literal fits when it rounds to a finite `F32`: the largest
+/// finite `F32` written as `3.4028235e38` fits, `3.5e38` does not.
+#[test]
+fn f32_literals_fit_when_they_round_to_a_finite_value() {
+    assert_eq!(
+        errors("const big: F32 = 3.4028235e38\n\nconst small: F32 = -3.4028235e38\n"),
+        Vec::<String>::new()
+    );
+    assert_eq!(errors("const big: F32 = 3.5e38\n"), ["E0071"]);
+}
+
+/// `Never` converts to a literal's type variable: the closure's `panic`
+/// fits the `{integer}` its callee's type parameter stands for.
+#[test]
+fn never_converts_to_a_literal_variable() {
+    let src = "fn or_else<T>(value: Option<T>, fallback: fn() -> T) -> T {\n  case value {\n    Some(v) => v\n    None => fallback()\n  }\n}\n\nfn f() -> Int {\n  or_else(Some(5), fn() { panic as \"not called\" })\n}\n";
+    assert_eq!(errors(src), Vec::<String>::new());
+}
+
+// ---- the real standard library --------------------------------------------
+
+/// Every `.cheby` file under `std/`, as `(path under std, text)`.
+fn real_std() -> Vec<(String, String)> {
+    fn walk(dir: &Path, prefix: &str, out: &mut Vec<(String, String)>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            if path.is_dir() {
+                walk(&path, &format!("{prefix}{name}::"), out);
+            } else if let Some(stem) = name.strip_suffix(".cheby") {
+                out.push((
+                    format!("{prefix}{stem}"),
+                    std::fs::read_to_string(&path).unwrap(),
+                ));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std"),
+        "",
+        &mut out,
+    );
+    out.sort();
+    out
+}
+
+/// The real `std/` sources, tests included, check with no diagnostics
+/// when a package imports every public module.
+#[test]
+fn the_real_std_checks_cleanly() {
+    let std = real_std();
+    let refs: Vec<(&str, &str)> = std.iter().map(|(p, t)| (p.as_str(), t.as_str())).collect();
+    let imports: String = std
+        .iter()
+        .filter(|(p, _)| p != "json::tree")
+        .fold(String::new(), |text, (p, _)| {
+            text + "import std::" + p + "\n"
+        });
+    let main = format!("//! Imports all of std.\n\n{imports}\nfn main() {{\n  Nil\n}}\n");
+    // With every warning: std must not have any.
+    let mut b = crate::test_support::build_with_std(&refs, &[("", &main)]);
+    // The imports of `main` are unused on purpose.
+    let main_file = b.modules.get(b.module("app")).unwrap().file.unwrap();
+    b.diags.retain(|d| {
+        !(d.code.to_string() == "W0003" && d.labels.iter().all(|l| l.span.file == main_file))
+    });
+    assert!(b.diags.is_empty(), "{}", b.rendered());
+    let tests: usize = std
+        .iter()
+        .map(|(path, _)| b.thir_of(&format!("std::{path}")).tests.len())
+        .sum();
+    assert!(tests > 300, "{tests} std tests");
 }

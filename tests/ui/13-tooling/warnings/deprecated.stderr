@@ -1,0 +1,18 @@
+warning[W0012]: use of deprecated function `text::yell`: use `shout` instead
+  --> tests/ui/13-tooling/warnings/deprecated/src/main.cheby:10:10
+   |
+10 |   assert text::yell("a") == text::shout("a")
+   |          ^^^^^^^^^^ deprecated
+
+warning[W0012]: use of deprecated constructor `text::Loud`: volumes are going away
+  --> tests/ui/13-tooling/warnings/deprecated/src/main.cheby:11:10
+   |
+11 |   assert text::Loud != text::Quiet
+   |          ^^^^^^^^^^ deprecated
+
+warning[W0012]: use of deprecated constructor `text::Quiet`: volumes are going away
+  --> tests/ui/13-tooling/warnings/deprecated/src/main.cheby:11:24
+   |
+11 |   assert text::Loud != text::Quiet
+   |                        ^^^^^^^^^^^ deprecated
+

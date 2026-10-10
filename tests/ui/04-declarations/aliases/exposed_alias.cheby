@@ -1,0 +1,10 @@
+// @mode: parse-fail
+// @decisions: D-081, D-150
+//! `exposed` is not allowed on aliases (§4.4).
+
+pub exposed type Id = Int
+
+fn main() {
+  let id: Id = 1
+  assert id == 1
+}

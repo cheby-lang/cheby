@@ -1,0 +1,5 @@
+// @mode: check-fail
+// @decisions: D-058
+//! The package name `std` is reserved for the standard library (§7.1).
+
+fn main() {}

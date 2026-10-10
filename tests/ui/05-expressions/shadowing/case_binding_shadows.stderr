@@ -1,0 +1,11 @@
+error[E0044]: `n` is already bound
+ --> tests/ui/05-expressions/shadowing/case_binding_shadows.cheby:9:10
+  |
+7 |   let n = 1
+  |       - first bound here
+8 |   case value {
+9 |     Some(n) => n
+  |          ^ bound again here
+  |
+  = help: give this binding a new name, such as `n_2`; names cannot be shadowed (§5.2.3)
+

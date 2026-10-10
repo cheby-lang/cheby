@@ -1,0 +1,22 @@
+// @mode: check-fail
+// @decisions: D-062, D-113
+//! A name bound twice in one pattern is one error, even when the two
+//! bindings have different types: they are not alternatives (§6.2, §6.7).
+
+fn outer(o: Option<Int>) -> Int {
+  case o {
+    Some(x) as x => x
+    None => 0
+  }
+}
+
+fn spread(xs: List<Int>) -> Int {
+  case xs {
+    [x, ..x] => x
+    _ => 0
+  }
+}
+
+fn main() {
+  assert outer(None) + spread([]) == 0
+}

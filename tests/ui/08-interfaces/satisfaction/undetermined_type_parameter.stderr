@@ -1,0 +1,13 @@
+error[E0063]: `Box<Int>` does not satisfy `Show`
+  --> tests/ui/08-interfaces/satisfaction/undetermined_type_parameter.cheby:18:12
+   |
+12 | fn show<T: Show, U: Show>(b: Box<T>) -> String {
+   |    ---- `show` has the signature `show(Box<T>) -> String`
+...
+18 |   assert "{b}" == "box 1"
+   |            ^ interpolated here
+   |
+   = note: for `Box<Int>`, nothing determines the type parameter `U` of `show`, so it does not count toward `Show` (§8.2)
+   = help: remove the type parameter `U` from `show`
+   = help: write `{b:?}` to use debug printing instead (D-086)
+

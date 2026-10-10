@@ -37,9 +37,9 @@ pub(crate) use pat::PatSite;
 use cheby_diag::{Diagnostic, Span, codes};
 use cheby_iface::{
     DefId, DefIndex, DefKind, Generics, Ice, IfaceItem, IndexVec, ItemSig, ModuleInterface, Name,
-    Ty, TyKind, builtin, sym,
+    PackageId, Ty, TyKind, builtin, sym,
 };
-use cheby_resolve::{BodyRes, ItemDef, ItemStatus, LocalId, Res};
+use cheby_resolve::{BodyRes, ItemDef, LocalId, Res};
 use cheby_syntax::ast::{self, AstNode, Block, ConstDecl, FnDecl, RetType, TestDecl, Type};
 
 use crate::ifaces::{self, IfaceCx};
@@ -60,6 +60,9 @@ use crate::{TypesInput, consts, exhaust, has_error, targets, warnings};
 /// constant restrictions and cycles (C13), and the module-local warnings
 /// (C14).
 ///
+/// This is a user build: the `test` blocks of standard-library modules are
+/// skipped ([`Tests::SkipStd`]).
+///
 /// # Errors
 ///
 /// An [`Ice`] if the resolution, the tree and `own` disagree.
@@ -67,6 +70,31 @@ pub fn check_bodies(
     input: &TypesInput<'_>,
     own: &ModuleInterface,
 ) -> Result<(thir::Module, Vec<Diagnostic>), Ice> {
+    check_bodies_with(input, own, Tests::SkipStd)
+}
+
+/// Which `test` blocks [`check_bodies_with`] checks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tests {
+    /// Every module's tests: testing the standard library itself (G4).
+    All,
+    /// A user build: the tests of standard-library modules are neither
+    /// checked nor in the THIR, because only testing std runs them. The
+    /// module's other passes see no tests either (GAP(std-tests-skipped)).
+    SkipStd,
+}
+
+/// [`check_bodies`], with the `test` blocks chosen by `tests`.
+///
+/// # Errors
+///
+/// An [`Ice`] if the resolution, the tree and `own` disagree.
+pub fn check_bodies_with(
+    input: &TypesInput<'_>,
+    own: &ModuleInterface,
+    tests: Tests,
+) -> Result<(thir::Module, Vec<Diagnostic>), Ice> {
+    let skip_tests = tests == Tests::SkipStd && input.package == PackageId::STD;
     let mut module = thir::Module {
         module: input.module,
         fns: Vec::new(),
@@ -77,6 +105,7 @@ pub fn check_bodies(
     for (index, item) in input.resolved.items.iter_enumerated() {
         if item.parent.is_some()
             || !matches!(item.kind, DefKind::Fn | DefKind::Const | DefKind::Test)
+            || (skip_tests && item.kind == DefKind::Test)
         {
             continue;
         }
@@ -96,8 +125,8 @@ pub fn check_bodies(
 }
 
 /// Checks one body: a function, a constant's initializer or a test.
-/// `None` for an item without a checked body: an unsupported or erroneous
-/// item, or a body with errors.
+/// `None` for an item without a checked body: an erroneous item, or a
+/// body with errors.
 ///
 /// # Errors
 ///
@@ -114,10 +143,6 @@ pub fn check_item(
     let iface_item = own
         .item(def)
         .ok_or_else(|| Ice::new("an item is missing from its own interface"))?;
-    if item.status == ItemStatus::Unsupported || matches!(iface_item.sig, ItemSig::Unsupported) {
-        // Reported where it was rejected; uses of it are silent.
-        return Ok((None, Vec::new()));
-    }
     match item.kind {
         DefKind::Fn => check_fn(input, own, def, item, iface_item),
         DefKind::Const => check_const(input, own, def, item, iface_item),
@@ -127,22 +152,12 @@ pub fn check_item(
     }
 }
 
-/// The resolution of item `index`'s body, `None` when the resolver
-/// rejected something in it (E0038 for a partial standard-library module,
-/// already reported).
-fn body_res<'a>(
-    input: &'a TypesInput<'_>,
-    index: DefIndex,
-    item: &ItemDef,
-) -> Result<Option<&'a BodyRes>, Ice> {
-    if item.status == ItemStatus::BodyUnsupported {
-        return Ok(None);
-    }
+/// The resolution of item `index`'s body.
+fn body_res<'a>(input: &'a TypesInput<'_>, index: DefIndex) -> Result<&'a BodyRes, Ice> {
     input
         .resolved
         .bodies
         .get(&index)
-        .map(Some)
         .ok_or_else(|| Ice::new("a body was not resolved"))
 }
 
@@ -233,9 +248,7 @@ fn check_fn(
     let body = match decl.body() {
         None => None,
         Some(block) => {
-            let Some(res) = body_res(input, index, item)? else {
-                return Ok((None, diags));
-            };
+            let res = body_res(input, index)?;
             let origin = match ret_span(decl) {
                 Some(span) => (span, "expected because of this return type".to_owned()),
                 None => (
@@ -254,7 +267,7 @@ fn check_fn(
     };
     if !sig_ok || has_error(&diags) || (body.is_none() && native_external.is_none()) {
         // A function with neither a body nor a native implementation was
-        // reported by the resolver (E0046 or E0038).
+        // reported by the resolver (E0046).
         return Ok((None, diags));
     }
     let entry = match entry_kind {
@@ -328,9 +341,7 @@ fn check_const(
     let Some(value) = decl.value() else {
         return Ok((None, Vec::new()));
     };
-    let Some(res) = body_res(input, index, item)? else {
-        return Ok((None, Vec::new()));
-    };
+    let res = body_res(input, index)?;
     let mut cx = BodyCx::new(input, own, res, Generics::empty())?;
     let origin = decl.ty().map(|t| {
         (
@@ -378,9 +389,7 @@ fn check_test(
     let (Some(block), Some(name)) = (decl.body(), decl.name()) else {
         return Ok((None, Vec::new()));
     };
-    let Some(res) = body_res(input, index, item)? else {
-        return Ok((None, Vec::new()));
-    };
+    let res = body_res(input, index)?;
     // An interpolated test name is a syntax error.
     let name_text = name.plain_value().unwrap_or_default();
     let mut cx = BodyCx::new(input, own, res, Generics::empty())?;
@@ -493,12 +502,10 @@ pub(crate) struct BodyCx<'a> {
     pub local_fns: Vec<LocalId>,
     /// The constants the body reads directly ([`thir::ConstDef::deps`]).
     pub const_deps: Vec<DefId>,
-    /// State of the pattern checker (`pat.rs`).
-    #[expect(dead_code, reason = "plan §4.5: W2-E2 adds state here")]
-    pub pats: pat::PatState,
-    /// State of the record checker (`record.rs`).
-    #[expect(dead_code, reason = "plan §4.5: W2-E2 adds state here")]
-    pub records: record::RecordState,
+    /// The locals bound so far on the current path through the pattern
+    /// being checked: alternatives each start from what was bound before
+    /// them (§6.7).
+    pub pat_path: Vec<LocalId>,
     pub diags: Vec<Diagnostic>,
     /// Whether the body has an error, reported here or before (a silent
     /// [`cheby_resolve::Res::Err`] or an erroneous signature).
@@ -506,10 +513,6 @@ pub(crate) struct BodyCx<'a> {
 }
 
 impl<'a> BodyCx<'a> {
-    #[expect(
-        clippy::default_constructed_unit_structs,
-        reason = "W2-E2 may add fields to the pattern and record states"
-    )]
     fn new(
         input: &'a TypesInput<'a>,
         own: &'a ModuleInterface,
@@ -534,8 +537,7 @@ impl<'a> BodyCx<'a> {
             var_notes: Vec::new(),
             local_fns: Vec::new(),
             const_deps: Vec::new(),
-            pats: pat::PatState::default(),
-            records: record::RecordState::default(),
+            pat_path: Vec::new(),
             diags: Vec::new(),
             errored: false,
         })
@@ -562,8 +564,9 @@ impl<'a> BodyCx<'a> {
     }
 
     /// The kind of result of a test body `value` (D-140): `Nil` (a body
-    /// of type `Never` too), or `Result<Nil, E>`. Anything else is E0073
-    /// and gives `None`.
+    /// of type `Never` too, and a body whose type is still unknown), or
+    /// `Result<Nil, E>`. Anything else is E0073 and gives `None`
+    /// (GAP(test-body-never)).
     fn test_result(&mut self, value: ExprId) -> Result<Option<EntryKind>, Ice> {
         let ty = self.ty_of(value)?;
         match self.infcx.resolve(&ty)? {
@@ -824,7 +827,8 @@ impl<'a> BodyCx<'a> {
 
     /// E0057 for every type variable nothing determined, at the
     /// expression that introduced it, unless the body already has an
-    /// error, which such a type usually follows from.
+    /// error, which such a type usually follows from
+    /// (GAP(e0057-after-errors)).
     fn report_unresolved(&mut self, mut unresolved: Vec<TyVid>) -> Result<(), Ice> {
         if unresolved.is_empty() {
             return Ok(());
@@ -937,8 +941,13 @@ impl<'a> BodyCx<'a> {
                 )
             }
             Lit::Float(value) => {
+                // A literal fits when it rounds to a finite value of its
+                // type, so `3.4028235e38` is the largest `F32`
+                // (GAP(float-literal-range)). Below half
+                // an ulp past `f32::MAX` it rounds down to it; at the
+                // midpoint it rounds to even, which is the infinity.
                 let fits = if ty == Ty::F32 {
-                    value.abs() <= f64::from(f32::MAX)
+                    value.abs() < f64::from(f32::MAX) + 2f64.powi(103)
                 } else if ty == Ty::FLOAT {
                     value.is_finite()
                 } else {

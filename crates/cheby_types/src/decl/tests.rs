@@ -19,12 +19,11 @@ fn one(body: &str) -> Build {
     build(&[("", &module(body))])
 }
 
-/// The diagnostics' codes, without E0038 (bodies the checker does not
-/// handle yet) and without warnings.
+/// The diagnostics' codes, without warnings.
 fn errors(b: &Build) -> Vec<String> {
     b.codes()
         .into_iter()
-        .filter(|c| c.starts_with('E') && c != "E0038")
+        .filter(|c| c.starts_with('E'))
         .collect()
 }
 
@@ -484,6 +483,38 @@ fn std_attributes_reach_the_interface() {
         panic!("take has no signature");
     };
     assert_eq!(&*take.clamped, [0, 2]);
+}
+
+/// The functions of `@std_hooks` must have the hooks' shapes (D-342):
+/// E0045 for each one that does not.
+#[test]
+fn std_hooks_need_their_shapes() {
+    let lib = "//! A fake std module.\n\n\
+               @std_hooks(equal, hash, debug)\npub type Bag<T> {\n  Bag(List<T>),\n}\n\n\
+               pub fn equal<T>(a: Bag<T>, b: List<T>) -> Bool {\n  todo\n}\n\n\
+               pub fn hash<T: Show>(bag: Bag<T>) -> List<T> {\n  todo\n}\n\n\
+               pub fn debug<T>(bag: Bag<T>) -> Bool {\n  todo\n}\n\n\
+               @std_hooks(same, key, text)\npub type Good<T> {\n  Good(T),\n}\n\n\
+               pub fn same<T>(a: Good<T>, b: Good<T>) -> Bool {\n  todo\n}\n\n\
+               pub fn key<T>(good: Good<T>) -> (Int, List<T>) {\n  todo\n}\n\n\
+               pub fn text<T>(good: Good<T>) -> String {\n  todo\n}\n";
+    let b = build_with_std(
+        &[("bag", lib)],
+        &[(
+            "",
+            &module("import std::bag\n\npub fn f(b: bag::Bag<Int>) -> bag::Bag<Int> {\n  b\n}\n"),
+        )],
+    );
+    assert_eq!(
+        messages(&b, "E0045"),
+        [
+            "E0045: `debug` cannot be the debug hook of `Bag` [\"named here\"]",
+            "E0045: `equal` cannot be the equality hook of `Bag` [\"named here\"]",
+            "E0045: `hash` cannot be the hash hook of `Bag` [\"named here\"]",
+        ],
+        "{}",
+        b.rendered()
+    );
 }
 
 /// Editing bodies, initializers and tests never changes the interface or

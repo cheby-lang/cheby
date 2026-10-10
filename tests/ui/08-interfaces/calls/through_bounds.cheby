@@ -5,15 +5,15 @@
 
 import std::io
 
-interface Formal {
+pub interface Formal {
   fn greeting(Self) -> String
 }
 
-interface Casual {
+pub interface Casual {
   fn greeting(Self) -> String
 }
 
-fn both<T: Formal + Casual>(person: T) -> String {
+pub fn both<T: Formal + Casual>(person: T) -> String {
   let formal = Formal::greeting(person)
   io::println(formal)
   Casual::greeting(person)

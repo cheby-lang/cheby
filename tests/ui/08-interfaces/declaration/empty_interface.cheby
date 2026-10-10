@@ -1,5 +1,5 @@
 // @mode: check-pass
-// @decisions: D-166
+// @decisions: D-166, D-427
 //! An interface with no functions is satisfied by every type, function
 //! types included (§8.1).
 

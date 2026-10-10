@@ -60,6 +60,7 @@ fn check_node(node: SyntaxNode<'_>, out: &mut Vec<Diagnostic>) {
         SyntaxKind::INNER_ATTR => run(node, module::inner_attr, out),
         SyntaxKind::FN_DECL => run(node, items::fn_decl, out),
         SyntaxKind::CONST_DECL => run(node, items::const_decl, out),
+        SyntaxKind::TEST_DECL => run(node, items::test_decl, out),
         SyntaxKind::TYPE_DECL => run(node, items::type_decl, out),
         SyntaxKind::ALIAS_DECL => run(node, items::alias_decl, out),
         SyntaxKind::INTERFACE_REF => run(node, items::interface_ref, out),

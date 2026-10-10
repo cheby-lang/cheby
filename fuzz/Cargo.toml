@@ -1,12 +1,16 @@
-# Fuzz targets for the syntax layer (docs/plan/testing.md §8, A2, A8).
+# Fuzz targets for the syntax layer (docs/plan/testing.md §8, A2, A8) and
+# the type checker (§8: no panics on any parsed input).
 #
 # Excluded from the workspace, because cargo-fuzz needs a nightly toolchain:
 #
 #   cargo +nightly fuzz run lex
 #   cargo +nightly fuzz run parse
+#   cargo +nightly fuzz run check
 #
-# Both targets check that lexing and parsing never panic, terminate, and
-# keep every byte of the input (the tree prints back the input exactly).
+# `lex` and `parse` check that lexing and parsing never panic, terminate,
+# and keep every byte of the input (the tree prints back the input
+# exactly). `check` runs the whole front end on a one-module package and
+# fails on an internal compiler error, a panic or a stack overflow.
 
 [package]
 name = "cheby_fuzz"
@@ -20,6 +24,7 @@ cargo-fuzz = true
 
 [dependencies]
 cheby_diag = { path = "../crates/cheby_diag" }
+cheby_driver = { path = "../crates/cheby_driver" }
 cheby_syntax = { path = "../crates/cheby_syntax" }
 libfuzzer-sys = "0.4"
 
@@ -33,6 +38,13 @@ bench = false
 [[bin]]
 name = "parse"
 path = "fuzz_targets/parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "check"
+path = "fuzz_targets/check.rs"
 test = false
 doc = false
 bench = false

@@ -556,3 +556,13 @@ fn reserved_words_explain_grammar_errors() {
     // resolution reports it where it is bound (E0007).
     assert_eq!(codes_of(&in_fn("  let go = 1\n  go")), Vec::<String>::new());
 }
+
+#[test]
+fn generic_interface_is_one_error() {
+    // D-165: the type parameters are reported once and the body still
+    // parses.
+    let text = "interface Into<T> {\n  fn into(Self) -> T\n}\n\nfn main() {}\n";
+    assert_eq!(codes_of(text), ["E0013"]);
+    assert_eq!(top_level(text), [INTERFACE_DECL, FN_DECL]);
+    assert_eq!(count(text, INTERFACE_FN), 1);
+}

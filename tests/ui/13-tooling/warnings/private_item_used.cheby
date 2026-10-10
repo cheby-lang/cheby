@@ -1,0 +1,35 @@
+// @mode: check-pass
+// @decisions: D-080, D-152, D-086
+//! A `priv` item is used by any other item of its module, tests included.
+//! A type is used through its constructors, and a satisfying function
+//! through the interpolation that calls it.
+
+import std::io
+
+priv type Color {
+  Red,
+  Green,
+}
+
+priv fn show(color: Color) -> String {
+  case color {
+    Red => "red"
+    Green => "green"
+  }
+}
+
+priv fn twice(n: Int) -> Int {
+  n * 2
+}
+
+priv const limit: Int = 10
+
+fn main() {
+  let color = Red
+  io::println("{color}")
+  assert twice(2) == 4
+}
+
+test "the limit" {
+  assert limit == 10
+}

@@ -1,0 +1,25 @@
+// @mode: check-pass
+// @decisions: D-153
+//! `let _ = …` discards a `Result` on purpose, other values may be
+//! discarded silently, and the last statement of a block is its value.
+
+import std::io
+
+fn save(name: String) -> Result<Nil, String> {
+  case name {
+    "" => Err("empty name")
+    _ => Ok(Nil)
+  }
+}
+
+fn save_both() -> Result<Nil, String> {
+  let _ = save("first")
+  1 + 2
+  save("second")
+}
+
+fn main() {
+  let _ = save("report")
+  let _ = save_both()
+  io::println("saved")
+}

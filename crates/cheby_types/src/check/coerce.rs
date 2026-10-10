@@ -37,10 +37,15 @@ impl BodyCx<'_> {
         let Some(expected) = expected else {
             return Ok(found.clone());
         };
-        if self.infcx.shallow(found)? == InferTy::NEVER
-            && !matches!(self.infcx.shallow(&expected.ty)?, InferTy::Var(_))
-        {
-            return Ok(expected.ty.clone());
+        if self.infcx.shallow(found)? == InferTy::NEVER {
+            let want = self.infcx.shallow(&expected.ty)?;
+            // A general variable learns `Never`; a literal's variable is
+            // numeric whatever it becomes, and `Never` converts to it.
+            let general = matches!(want, InferTy::Var(_))
+                && self.infcx.var_kind(&want)? == Some(VarKind::General);
+            if !general {
+                return Ok(expected.ty.clone());
+            }
         }
         match self.infcx.unify(&expected.ty, found)? {
             Ok(()) => Ok(found.clone()),

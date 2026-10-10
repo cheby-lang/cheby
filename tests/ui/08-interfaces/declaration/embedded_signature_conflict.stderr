@@ -1,5 +1,5 @@
 error[E0066]: `Tagged` inherits two different functions named `name`
-  --> tests/ui/08-interfaces/declaration/embedded_signature_conflict.cheby:14:11
+  --> tests/ui/08-interfaces/declaration/embedded_signature_conflict.cheby:14:15
    |
 7  |   fn name(Self) -> String
    |      ---- `Named::name` is `fn name(Self) -> String`
@@ -7,8 +7,8 @@ error[E0066]: `Tagged` inherits two different functions named `name`
 11 |   fn name(Self) -> Int
    |      ---- `Numbered::name` is `fn name(Self) -> Int`
 ...
-14 | interface Tagged: Named + Numbered
-   |           ^^^^^^ embeds both
+14 | pub interface Tagged: Named + Numbered
+   |               ^^^^^^ embeds both
    |
    = note: embedded interfaces may require the same function only with identical signatures, so no type could satisfy this interface (§8.3)
    = help: rename one of the functions

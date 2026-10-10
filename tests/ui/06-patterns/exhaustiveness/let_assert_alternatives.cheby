@@ -1,0 +1,13 @@
+// @mode: check-pass
+// @decisions: D-159
+//! `let assert` with alternatives that cover every value only together
+//! is not a warning, since §6.1 calls such a pattern refutable.
+
+fn check(b: Bool) -> Bool {
+  let assert True | False = b
+  b
+}
+
+fn main() {
+  assert check(True)
+}

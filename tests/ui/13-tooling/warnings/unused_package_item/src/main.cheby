@@ -1,0 +1,11 @@
+// @mode: check-pass
+// @decisions: D-080, D-152, D-266
+//! A package-visible item that no module of the package uses warns, in
+//! `cheby check` only. `pub` items never warn, and an item used only by
+//! itself or by a test of its module is handled like any other use.
+
+import app::geometry
+
+fn main() {
+  assert geometry::square_area(2.0) == 4.0
+}

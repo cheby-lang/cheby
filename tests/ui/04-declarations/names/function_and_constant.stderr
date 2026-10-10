@@ -1,0 +1,9 @@
+error[E0041]: `limit` is declared twice in this module
+ --> tests/ui/04-declarations/names/function_and_constant.cheby:8:8
+  |
+6 | const limit: Int = 10
+  |       ----- first declared here
+7 |
+8 | pub fn limit() -> Int {
+  |        ^^^^^ declared again here
+

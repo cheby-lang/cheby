@@ -1,0 +1,19 @@
+// @mode: check-fail
+// @decisions: D-055
+//! Test names are distinct within a module (§4.7).
+
+fn double(n: Int) -> Int {
+  n * 2
+}
+
+test "doubling" {
+  assert double(2) == 4
+}
+
+test "doubling" {
+  assert double(3) == 6
+}
+
+fn main() {
+  assert double(1) == 2
+}

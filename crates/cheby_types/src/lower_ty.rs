@@ -47,7 +47,7 @@ use cheby_iface::{
     AliasDef, DefId, DefIndex, DefKind, GenericParam, Generics, Ice, IfaceItem, IndexVec, ItemSig,
     ModuleInterface, ParamIdx, Ty, TyInterner, TyKind, builtin, sym,
 };
-use cheby_resolve::{ItemStatus, Res};
+use cheby_resolve::Res;
 use cheby_syntax::NodeId;
 use cheby_syntax::ast::{
     AliasDecl, AstNode, AstToken, InterfaceRef, Item, PathNode, RetType, Type, TypeParamList,
@@ -94,7 +94,7 @@ enum Named {
     /// An alias of this module, expanded from the tree.
     OwnAlias(DefIndex),
     Interface,
-    /// An unsupported or erroneous item: silent.
+    /// An erroneous item: silent.
     Error,
     Other(&'static str),
 }
@@ -180,26 +180,6 @@ impl TyLowering<'_> {
     ) -> Result<Ty, Ice> {
         let mut dyns = Vec::new();
         let lowered = self.lower_sig(ty, diags, &mut dyns)?;
-        self.check_dyns(own, lowered, &dyns, diags)
-    }
-
-    /// A return type written in a body, such as a closure's: the written
-    /// type, or `Nil` when it is omitted (D-083), with the checks of
-    /// [`Self::lower_in_body`].
-    ///
-    /// # Errors
-    ///
-    /// An [`Ice`] if a path was not resolved, or an interface cannot be
-    /// read.
-    #[expect(dead_code, reason = "W2-E1 calls it for closure return types")]
-    pub fn ret_in_body(
-        &self,
-        own: &ModuleInterface,
-        ret: Option<RetType<'_>>,
-        diags: &mut Vec<Diagnostic>,
-    ) -> Result<Ty, Ice> {
-        let mut dyns = Vec::new();
-        let lowered = self.ret_sig(ret, diags, &mut dyns)?;
         self.check_dyns(own, lowered, &dyns, diags)
     }
 
@@ -671,9 +651,6 @@ impl TyLowering<'_> {
                 .resolved
                 .item(def.index)
                 .ok_or_else(|| Ice::new("a type path resolved to a missing item"))?;
-            if item.status == ItemStatus::Unsupported {
-                return Ok(Named::Error);
-            }
             return Ok(match item.kind {
                 DefKind::Type => Named::Type {
                     arity: own_arity(self.input, def.index)?,
@@ -689,7 +666,7 @@ impl TyLowering<'_> {
             .item(def)
             .ok_or_else(|| Ice::new(format!("no interface item for {def:?}")))?;
         Ok(match (&item.sig, item.kind) {
-            (ItemSig::Unsupported | ItemSig::Error, _) => Named::Error,
+            (ItemSig::Error, _) => Named::Error,
             (ItemSig::Type(ty), _) => Named::Type {
                 arity: ty.generics.len(),
             },

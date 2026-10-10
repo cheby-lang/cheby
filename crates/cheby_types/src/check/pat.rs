@@ -50,10 +50,6 @@ impl PatSite {
     }
 }
 
-/// The pattern checker's state in a body. W2-E2 may add fields.
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct PatState;
-
 /// How one pattern is being checked.
 #[derive(Clone, Debug)]
 struct PatCx {
@@ -106,7 +102,10 @@ impl BodyCx<'_> {
             origin,
             root: true,
         };
-        self.pat(pat, expected, &cx)
+        let mark = self.pat_path.len();
+        let checked = self.pat(pat, expected, &cx);
+        self.pat_path.truncate(mark);
+        checked
     }
 
     fn pat(&mut self, pat: ast::Pat<'_>, expected: &InferTy, cx: &PatCx) -> Result<thir::Pat, Ice> {
@@ -131,7 +130,9 @@ impl BodyCx<'_> {
                 // against the same type, and a name bound in several of
                 // them is one local, unified in `bind_node`.
                 let mut alts = Vec::new();
+                let before = self.pat_path.len();
                 for alt in p.alternatives() {
+                    self.pat_path.truncate(before);
                     alts.push(self.pat(alt, expected, cx)?);
                 }
                 PatKind::Or(alts.into())
@@ -179,6 +180,14 @@ impl BodyCx<'_> {
             .get(&node)
             .copied()
             .ok_or_else(|| Ice::new("a pattern binding was not resolved"))?;
+        if self.pat_path.contains(&local) {
+            // Bound twice on one path through the pattern: E0044 from the
+            // resolver, which gave both bindings one local. Their types
+            // are not compared, since they are not alternatives (§6.2).
+            self.errored = true;
+            return Ok(local);
+        }
+        self.pat_path.push(local);
         let previous = self.locals.try_get(local, "local")?.clone();
         match previous {
             None => self.set_local(local, ty.clone())?,

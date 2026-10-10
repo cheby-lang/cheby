@@ -1,0 +1,22 @@
+// @mode: check-pass
+// @decisions: D-070, D-233
+//! A type parameter is not known statically, so `==` on it does not
+//! warn, and neither does `==` on types without functions.
+
+type Handler {
+  name: String,
+  run: fn(Int) -> Int,
+}
+
+fn same<T>(a: T, b: T) -> Bool {
+  a == b
+}
+
+fn same_name(a: Handler, b: Handler) -> Bool {
+  a.name == b.name
+}
+
+fn main() {
+  let h = Handler { name: "double", run: fn(n: Int) { n * 2 } }
+  assert same(1, 1) && same_name(h, h) && [(1, "a")] == [(1, "a")]
+}

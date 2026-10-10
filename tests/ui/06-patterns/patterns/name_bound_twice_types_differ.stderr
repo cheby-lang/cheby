@@ -1,0 +1,20 @@
+error[E0044]: `x` is bound twice in this pattern
+ --> tests/ui/06-patterns/patterns/name_bound_twice_types_differ.cheby:8:16
+  |
+8 |     Some(x) as x => x
+  |          -     ^ bound again here
+  |          |
+  |          first bound here
+  |
+  = help: give one of them a new name, such as `x_2`, or match it with `_`
+
+error[E0044]: `x` is bound twice in this pattern
+  --> tests/ui/06-patterns/patterns/name_bound_twice_types_differ.cheby:15:11
+   |
+15 |     [x, ..x] => x
+   |      -    ^ bound again here
+   |      |
+   |      first bound here
+   |
+   = help: give one of them a new name, such as `x_2`, or match it with `_`
+

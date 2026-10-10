@@ -1,0 +1,36 @@
+warning[W0005]: the type `Shape` is never used in this package
+ --> tests/ui/13-tooling/warnings/unused_package_item/src/geometry.cheby:3:6
+  |
+3 | type Shape {
+  |      ^^^^^ no module of the package uses it
+  |
+  = note: without `pub`, only modules of this package can use the type
+  = help: remove the type, use it, or make it `pub` if other packages should use it
+
+warning[W0005]: the function `unit_area` is never used in this package
+ --> tests/ui/13-tooling/warnings/unused_package_item/src/geometry.cheby:8:4
+  |
+8 | fn unit_area() -> Float {
+  |    ^^^^^^^^^ no module of the package uses it
+  |
+  = note: without `pub`, only modules of this package can use the function
+  = help: remove the function, use it, or make it `pub` if other packages should use it
+
+warning[W0005]: the function `halve_forever` is never used in this package
+  --> tests/ui/13-tooling/warnings/unused_package_item/src/geometry.cheby:12:4
+   |
+12 | fn halve_forever(x: Float) -> Float {
+   |    ^^^^^^^^^^^^^ no module of the package uses it
+   |
+   = note: without `pub`, only modules of this package can use the function
+   = help: remove the function, use it, or make it `pub` if other packages should use it
+
+warning[W0005]: the constant `sides` is never used in this package
+  --> tests/ui/13-tooling/warnings/unused_package_item/src/geometry.cheby:16:7
+   |
+16 | const sides: Int = 4
+   |       ^^^^^ no module of the package uses it
+   |
+   = note: without `pub`, only modules of this package can use the constant
+   = help: remove the constant, use it, or make it `pub` if other packages should use it
+

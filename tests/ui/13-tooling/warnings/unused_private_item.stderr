@@ -1,0 +1,36 @@
+warning[W0004]: the `priv` function `twice` is never used
+ --> tests/ui/13-tooling/warnings/unused_private_item.cheby:6:9
+  |
+6 | priv fn twice(n: Int) -> Int {
+  |         ^^^^^ never used in this module
+  |
+  = note: a `priv` item is visible only in its own module
+  = help: remove the function, or use it
+
+warning[W0004]: the `priv` function `countdown` is never used
+  --> tests/ui/13-tooling/warnings/unused_private_item.cheby:10:9
+   |
+10 | priv fn countdown(n: Int) -> Int {
+   |         ^^^^^^^^^ never used in this module
+   |
+   = note: a `priv` item is visible only in its own module
+   = help: remove the function, or use it
+
+warning[W0004]: the `priv` constant `limit` is never used
+  --> tests/ui/13-tooling/warnings/unused_private_item.cheby:17:12
+   |
+17 | priv const limit: Int = 10
+   |            ^^^^^ never used in this module
+   |
+   = note: a `priv` item is visible only in its own module
+   = help: remove the constant, or use it
+
+warning[W0004]: the `priv` type `Color` is never used
+  --> tests/ui/13-tooling/warnings/unused_private_item.cheby:19:11
+   |
+19 | priv type Color {
+   |           ^^^^^ never used in this module
+   |
+   = note: a `priv` item is visible only in its own module
+   = help: remove the type, or use it
+

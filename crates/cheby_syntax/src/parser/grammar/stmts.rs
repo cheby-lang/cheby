@@ -71,11 +71,15 @@ pub(super) fn line_body(
     let ends = |p: &Parser<'_>| {
         p.at(R_BRACE)
             || p.at(EOF)
-            || at_block_break(p)
+            || (at_block_break(p) && !p.at_member_attr(first))
             || p.at_enclosing_closer()
             || (p.at_item_recovery()
                 && (kind == CASE_BODY || (p.at_column_one() && p.never_closed(&delim))))
     };
+    // A `use` nests the rest of its block in a callback (§5.10), and later
+    // passes recurse into it, so it counts as a level of nesting until the
+    // end of the block (D-441, GAP(chain-depth)).
+    let mut uses = 0_u32;
     loop {
         while p.eat(NEWLINE) {}
         if ends(p) {
@@ -83,7 +87,11 @@ pub(super) fn line_body(
         }
         let before = p.position();
         if starts(p) {
+            let is_use = kind == BLOCK && p.at(USE_KW);
             entry(p);
+            if is_use && p.enter() {
+                uses = uses.saturating_add(1);
+            }
         } else {
             p.expected(what);
             p.skip_until(STMT_STOP, true);
@@ -120,6 +128,9 @@ pub(super) fn line_body(
         if p.position() == before {
             p.bump_error();
         }
+    }
+    for _ in 0..uses {
+        p.leave();
     }
     p.close_delim(delim);
     m.complete(p, kind)

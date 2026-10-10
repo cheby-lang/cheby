@@ -1,0 +1,16 @@
+error[E0043]: the constructor `Decoder` is not visible outside its package
+  --> tests/ui/07-modules-and-packages/opacity/opaque_constructor.cheby:10:11
+   |
+10 |   decode::Decoder(fn(_, _) { (1, []) })
+   |           ^^^^^^^
+   |
+   = note: a `pub` type hides its constructors unless it is `pub exposed`
+
+error[E0043]: the constructor `Decoder` is not visible outside its package
+  --> tests/ui/07-modules-and-packages/opacity/opaque_constructor.cheby:15:13
+   |
+15 |     decode::Decoder(_) => 1
+   |             ^^^^^^^
+   |
+   = note: a `pub` type hides its constructors unless it is `pub exposed`
+

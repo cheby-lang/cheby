@@ -1,0 +1,12 @@
+// @mode: check-fail
+// @decisions: D-148, D-149
+//! The signature of a constant is its declared type, so a package-visible
+//! constant must not have a `priv` type (§4.1.3).
+
+priv type Level { Level(Int) }
+
+const start: Level = Level(1)
+
+fn main() {
+  assert start == Level(1)
+}

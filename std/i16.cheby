@@ -202,3 +202,61 @@ pub fn wrapping_mul(a: I16, b: I16) -> I16
 @external(native, "cheby_i16_wrapping_neg")
 @external(js, "./i16.mjs", "wrapping_neg")
 pub fn wrapping_neg(n: I16) -> I16
+
+// Examples
+
+test "the i16 range" {
+  assert min_value == -32_768
+  assert max_value == 32_767
+}
+
+test "conversions to i16" {
+  assert from_i8(-128) == -128
+  assert from_u8(255) == 255
+  assert from_int(32768) == Err(Nil)
+  assert from_i32(-32768) == Ok(-32768)
+  assert from_u16(65535) == Err(Nil)
+}
+
+test "i16 parses and shows decimal digits" {
+  let small: I16 = -5
+  assert parse("-32768") == Ok(-32768)
+  assert parse("32768") == Err(Nil)
+  assert parse_base("-1010", 2) == Ok(-10)
+  assert show(min_value) == "-32768"
+  assert "{small}" == "-5"
+}
+
+test "comparing i16 values" {
+  assert compare(-1, 1) == Less
+  assert compare(3, 3) == Equal
+  assert min(-100, 7) == -100
+  assert max(-100, 7) == 7
+}
+
+test "i16 operators as functions" {
+  assert add(100, 27) == 127
+  assert sub(-100, 28) == -128
+  assert mul(-4, 5) == -20
+  assert div(-7, 2) == -3
+  assert rem(-7, 2) == -1
+  assert neg(127) == -127
+  assert abs(-127) == 127
+}
+
+test "i16 checked arithmetic reports overflow" {
+  assert checked_add(100, 27) == Ok(127)
+  assert checked_add(max_value, 1) == Err(Nil)
+  assert checked_sub(min_value, 1) == Err(Nil)
+  assert checked_mul(max_value, 2) == Err(Nil)
+  assert checked_div(min_value, -1) == Err(Nil)
+  assert checked_rem(7, 0) == Err(Nil)
+  assert checked_neg(min_value) == Err(Nil)
+}
+
+test "i16 wrapping arithmetic wraps around" {
+  assert wrapping_add(max_value, 1) == min_value
+  assert wrapping_sub(min_value, 1) == max_value
+  assert wrapping_mul(max_value, 2) == -2
+  assert wrapping_neg(min_value) == min_value
+}

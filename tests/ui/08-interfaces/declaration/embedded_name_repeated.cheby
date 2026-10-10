@@ -3,7 +3,7 @@
 //! Function names are distinct within an interface, including the
 //! functions it inherits by embedding (§8.1).
 
-interface Describe: Show {
+pub interface Describe: Show {
   fn show(Self) -> String
   fn describe(Self) -> String
 }

@@ -181,10 +181,7 @@ fn build(package: &str, main: &str) -> String {
             deps: DepView::new(&set, &deps),
             modules: &modules.table,
             globals: &globals,
-            std: StdCatalog {
-                known: &["io"],
-                partial: &["io"],
-            },
+            std: StdCatalog { known: &["io"] },
             package_targets: cheby_package::Targets::ALL,
         };
         let (resolved, d) = resolve_module(&input).unwrap();
@@ -202,7 +199,11 @@ fn build(package: &str, main: &str) -> String {
         diags.extend(d);
         let (thir, d) = check_bodies(&types, &iface).unwrap();
         diags.extend(d);
-        assert!(diags.is_empty(), "diagnostics: {diags:#?}");
+        // Warnings such as an unused `let` are fine: MIR sees no errors.
+        assert!(
+            !diags.iter().any(cheby_diag::Diagnostic::is_error),
+            "diagnostics: {diags:#?}"
+        );
         let view = DepView::new(&set, &deps);
         let cx = LowerCx {
             defs: Defs {

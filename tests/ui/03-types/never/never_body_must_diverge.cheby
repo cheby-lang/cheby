@@ -1,0 +1,12 @@
+// @mode: check-fail
+// @decisions: D-161
+//! A function declared `-> Never` must not return normally, so its body
+//! must have type `Never` (§3.10).
+
+fn stop() -> Never {
+  Nil
+}
+
+fn main() {
+  stop()
+}

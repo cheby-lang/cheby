@@ -1,0 +1,13 @@
+// @mode: check-pass
+// @decisions: D-243, D-440
+//! The tuple-shape warning is reported once per written type, on the
+//! outermost tuple with such a shape (§3.7).
+
+fn deepest(value: (((Int, Int), Int), Int)) -> Int {
+  let (((a, _), _), _) = value
+  a
+}
+
+fn main() {
+  assert deepest((((1, 2), 3), 4)) == 1
+}

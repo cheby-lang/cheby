@@ -1,0 +1,16 @@
+error[E0045]: unknown attribute `@inline`
+ --> tests/ui/04-declarations/attributes/unknown.cheby:6:1
+  |
+6 | @inline
+  | ^^^^^^^
+  |
+  = help: the attributes are `@external`, `@target`, `@blocking`, `@async` and `@deprecated`
+
+error[E0045]: unknown attribute `@std_clamped`
+  --> tests/ui/04-declarations/attributes/unknown.cheby:11:1
+   |
+11 | @std_clamped(count)
+   | ^^^^^^^^^^^^^^^^^^^
+   |
+   = help: the attributes are `@external`, `@target`, `@blocking`, `@async` and `@deprecated`
+

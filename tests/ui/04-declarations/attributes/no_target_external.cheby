@@ -1,0 +1,8 @@
+// @mode: check-fail
+// @decisions: D-056, D-461
+//! A function without a body exists only on the targets of its
+//! `@external` attributes, narrowed by `@target`. Here nothing is left.
+
+@target(js)
+@external(native, "app_now")
+pub fn now() -> Int

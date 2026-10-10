@@ -1,0 +1,34 @@
+// @mode: check-fail
+// @decisions: D-242
+//! Alternatives make a pattern irrefutable only when one of them is
+//! irrefutable on its own (§6.1). These alternatives cover every value
+//! only together, so `let` and closure parameters reject them.
+
+import std::list
+
+type Pair {
+  Pair(Bool, Int),
+}
+
+fn flag(b: Bool) -> Int {
+  let True | False = b
+  1
+}
+
+fn either(r: Result<Int, Int>) -> Int {
+  let Ok(v) | Err(v) = r
+  v
+}
+
+fn nested(p: Pair) -> Int {
+  let Pair(True | False, n) = p
+  n
+}
+
+fn total(rs: List<Result<Int, Int>>) -> Int {
+  list::fold(rs, 0, fn(acc, Ok(v) | Err(v)) { acc + v })
+}
+
+fn main() {
+  assert flag(True) + either(Ok(1)) + nested(Pair(True, 1)) + total([]) == 3
+}

@@ -49,7 +49,7 @@ use cheby_iface::{
 use cheby_resolve::ResolvedModule;
 use cheby_syntax::SyntaxTree;
 
-pub use check::{check_bodies, check_item};
+pub use check::{Tests, check_bodies, check_bodies_with, check_item};
 pub use sig::build_interface;
 pub use warnings::{PackageModule, package_warnings};
 

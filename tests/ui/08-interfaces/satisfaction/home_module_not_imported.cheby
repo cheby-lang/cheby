@@ -1,0 +1,12 @@
+// @mode: check-pass
+// @decisions: D-105, D-447
+//! Built-in types satisfy interfaces through their home modules, and a
+//! module needs no import of a home module for that (§7.6, §8.2).
+
+fn describe(n: Int, ratio: Float, flag: Bool, items: List<Int>, maybe: Option<String>) -> String {
+  "{n} {ratio} {flag} {items} {maybe}"
+}
+
+fn main() {
+  assert describe(1, 1.5, True, [1], None) != ""
+}

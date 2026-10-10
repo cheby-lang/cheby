@@ -1,0 +1,16 @@
+// @mode: check-pass
+// @decisions: D-447
+//! A home module re-exports its prelude type and constructors, so
+//! `option::Option` and `option::Some` are the prelude's `Option` and `Some`
+//! (§7.6).
+
+import std::option
+
+fn wrap(n: Int) -> option::Option<Int> {
+  option::Some(n)
+}
+
+fn main() {
+  let plain: Option<Int> = wrap(1)
+  assert plain == Some(1)
+}

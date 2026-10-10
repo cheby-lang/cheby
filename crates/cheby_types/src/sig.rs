@@ -16,7 +16,9 @@
 //!   embeddings and functions, whose `Self` is `ParamIdx` 0 (D-063).
 //!
 //! A function, alias or constant whose written types have an error becomes
-//! [`ItemSig::Error`], so its uses are silent. A constructor or an
+//! [`ItemSig::Error`], so its uses are silent (GAP(signature-error-shape)),
+//! and so does a function whose bound fails to lower
+//! (GAP(failed-bound-signature)). A constructor or an
 //! interface function keeps its shape, with [`Ty::ERROR`] in place of the
 //! erroneous types.
 //!
@@ -30,7 +32,7 @@ use cheby_iface::{
     IfaceItem, IndexVec, InterfaceDef, InterfaceFnSig, ItemSig, ModuleInterface, Name, ParamIdx,
     ParamSig, Ty, TyKind, TypeDef, TypeDefKind, TypeHooks, builtin, interface_hash, sym,
 };
-use cheby_resolve::{ItemDef, ItemStatus};
+use cheby_resolve::ItemDef;
 use cheby_syntax::ast::{
     AstNode, AstToken, FnDecl, InterfaceFn, Item, RecordFieldList, RetType, Type, Variant,
     VariantFields,
@@ -121,9 +123,6 @@ struct SigCx<'a> {
 
 impl<'a> SigCx<'a> {
     fn item_sig(&mut self, index: DefIndex, item: &ItemDef) -> Result<ItemSig, Ice> {
-        if item.status == ItemStatus::Unsupported {
-            return Ok(ItemSig::Unsupported);
-        }
         match item.kind {
             DefKind::Fn => self.fn_sig(item),
             DefKind::Test => Ok(ItemSig::Test),

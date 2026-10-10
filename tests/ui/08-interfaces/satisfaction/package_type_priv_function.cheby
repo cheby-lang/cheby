@@ -1,0 +1,19 @@
+// @mode: check-fail
+// @decisions: D-164
+//! For a package-visible type, a `priv` function is less visible than the
+//! type and does not count toward an interface (§8.2).
+
+type Label { Label(String) }
+
+priv fn show(label: Label) -> String {
+  let Label(text) = label
+  text
+}
+
+fn describe<T: Show>(value: T) -> String {
+  Show::show(value)
+}
+
+fn main() {
+  assert describe(Label("a")) == "a"
+}

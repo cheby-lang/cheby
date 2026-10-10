@@ -16,10 +16,20 @@
 //!   and infinite spaces (literals of `Int`, the sized integers and
 //!   `String`, and opaque types), which only a wildcard covers.
 //! - The work is bounded. A `case` collects at most [`WITNESS_LIMIT`]
-//!   witnesses, and the whole check spends at most a fixed budget of
-//!   steps. A check that runs out reports the arms as reachable and the
-//!   `case` as missing `_` (GAP(exhaustiveness-budget)).
+//!   witnesses, and each of the two passes (reachability of the arms,
+//!   then the missing values) spends at most a fixed budget of steps.
+//!   When reachability runs out, the remaining arms are reported as
+//!   reachable. When the missing values run out, the `case` is reported
+//!   as missing `_` (GAP(exhaustiveness-budget)). A `case` with an
+//!   unguarded arm of wildcards is exhaustive without any search, so the
+//!   fallback never reports a `case` that has one.
+//! - Variants and literals are disjoint, so the rows of a matrix are
+//!   grouped by the constructor their first pattern starts with
+//!   ([`Groups`]), and specializing to one constructor looks only at its
+//!   group and the rows that start with a wildcard. A large table of
+//!   literal or variant arms is therefore checked in about linear time.
 
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 
 use cheby_iface::Ice;
@@ -32,14 +42,14 @@ pub(crate) const WITNESS_LIMIT: usize = 64;
 const BUDGET: u64 = 2_000_000;
 
 /// The value of a literal pattern.
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum LitKey {
     Int(i128),
     Str(Box<str>),
 }
 
 /// The lengths a list constructor matches.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum ListLen {
     /// Exactly this many elements, with one field per element.
     Fixed(u32),
@@ -59,7 +69,7 @@ impl ListLen {
 }
 
 /// A constructor.
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum Ctor {
     /// The variant with this tag of a [`Space::Variants`] type. A tuple
     /// is the single variant 0.
@@ -175,7 +185,7 @@ pub(crate) fn check<C: Types>(
     check_budgeted(cx, tys, arms, BUDGET)
 }
 
-/// [`check`] with a budget of `budget` steps.
+/// [`check`] with a budget of `budget` steps for each pass.
 fn check_budgeted<C: Types>(
     cx: &C,
     tys: &[C::Ty],
@@ -183,9 +193,11 @@ fn check_budgeted<C: Types>(
     budget: u64,
 ) -> Result<Report<C::Ty>, Ice> {
     let mut engine = Engine { cx, budget };
-    let mut too_complex = false;
     let mut matrix: Vec<Row<'_>> = Vec::new();
+    // The rows of `matrix` by the constructor of their first pattern.
+    let mut groups = Groups::default();
     let mut unreachable = Vec::new();
+    let mut reach_exhausted = false;
     for (index, arm) in arms.iter().enumerate() {
         if arm.pats.len() != tys.len() {
             return Err(Ice::new(
@@ -193,18 +205,44 @@ fn check_budgeted<C: Types>(
             ));
         }
         let row: Row<'_> = arm.pats.iter().collect();
-        match engine.useful(&matrix, &row, tys, 1) {
-            Ok(found) if found.is_empty() => unreachable.push(index),
-            Ok(_) => {}
-            Err(Stop::Budget) => too_complex = true,
-            Err(Stop::Ice(ice)) => return Err(ice),
+        if !reach_exhausted {
+            // Only the rows whose first pattern can match what this arm's
+            // first pattern matches can make it unreachable.
+            let rows = match row.first() {
+                Some(&head) => groups.compatible(&matrix, head),
+                None => matrix.iter().collect(),
+            };
+            match engine.useful(&rows, &row, tys, 1) {
+                Ok(found) if found.is_empty() => unreachable.push(index),
+                Ok(_) => {}
+                Err(Stop::Budget) => reach_exhausted = true,
+                Err(Stop::Ice(ice)) => return Err(ice),
+            }
         }
         if !arm.guarded {
+            if let Some(&head) = row.first() {
+                groups.add(matrix.len(), head);
+            }
             matrix.push(row);
         }
     }
+    // An unguarded arm of wildcards matches every value.
+    if matrix
+        .iter()
+        .any(|row| row.iter().all(|pat| matches_all(pat)))
+    {
+        return Ok(Report {
+            unreachable,
+            missing: Vec::new(),
+            more: false,
+            too_complex: false,
+        });
+    }
+    let mut engine = Engine { cx, budget };
+    let mut too_complex = false;
+    let rows: Vec<&Row<'_>> = matrix.iter().collect();
     let wild_row: Row<'_> = tys.iter().map(|_| &WILD).collect();
-    let (missing, more) = match engine.useful(&matrix, &wild_row, tys, WITNESS_LIMIT + 1) {
+    let (missing, more) = match engine.useful(&rows, &wild_row, tys, WITNESS_LIMIT + 1) {
         Ok(mut found) => {
             let more = found.len() > WITNESS_LIMIT;
             found.truncate(WITNESS_LIMIT);
@@ -401,7 +439,7 @@ impl<C: Types> Engine<'_, C> {
     /// no row of `matrix`. Empty when `v` is not useful.
     fn useful<'p>(
         &mut self,
-        matrix: &[Row<'p>],
+        matrix: &[&Row<'p>],
         v: &[&'p Pat],
         tys: &[C::Ty],
         want: usize,
@@ -431,7 +469,7 @@ impl<C: Types> Engine<'_, C> {
                     out.extend(self.useful(matrix, &row, tys, left)?);
                 }
             }
-            Pat::Ctor(ctor, _) => {
+            Pat::Ctor(ctor @ Ctor::List(_), _) => {
                 let split = self.split(ty, matrix, Some(ctor))?;
                 for (c, _) in split.ctors.iter().filter(|(c, _)| covers(ctor, c)) {
                     let left = want.saturating_sub(out.len());
@@ -441,8 +479,14 @@ impl<C: Types> Engine<'_, C> {
                     out.extend(self.specialized(matrix, v, tys, c, left)?);
                 }
             }
+            Pat::Ctor(ctor, _) => {
+                // Variants and literals are disjoint, so `ctor` is itself
+                // the one split constructor it covers.
+                out.extend(self.specialized(matrix, v, tys, ctor, want)?);
+            }
             Pat::Wild => {
                 let split = self.split(ty, matrix, None)?;
+                let groups = Groups::of(matrix);
                 let mut default: Option<Found<C::Ty>> = None;
                 let incomplete = split.rest || split.ctors.iter().any(|(_, present)| !present);
                 if incomplete {
@@ -471,7 +515,12 @@ impl<C: Types> Engine<'_, C> {
                         break;
                     }
                     if *present {
-                        out.extend(self.specialized(matrix, v, tys, c, left)?);
+                        let rows: Vec<&Row<'p>> = groups
+                            .rows_for(c)
+                            .into_iter()
+                            .filter_map(|i| matrix.get(i).copied())
+                            .collect();
+                        out.extend(self.specialized(&rows, v, tys, c, left)?);
                         continue;
                     }
                     let missing = self.missing_witness(ty, c)?;
@@ -512,7 +561,7 @@ impl<C: Types> Engine<'_, C> {
     fn default_found<'d, 'p>(
         &mut self,
         cache: &'d mut Option<Found<C::Ty>>,
-        matrix: &[Row<'p>],
+        matrix: &[&Row<'p>],
         v: &[&'p Pat],
         tys: &[C::Ty],
         want: usize,
@@ -522,8 +571,9 @@ impl<C: Types> Engine<'_, C> {
             for row in matrix {
                 default_rows(row, &mut rows);
             }
+            let refs: Vec<&Row<'p>> = rows.iter().collect();
             let found = self.useful(
-                &rows,
+                &refs,
                 v.get(1..).unwrap_or(&[]),
                 tys.get(1..).unwrap_or(&[]),
                 want,
@@ -539,7 +589,7 @@ impl<C: Types> Engine<'_, C> {
     /// column, with the witnesses rebuilt around `c`.
     fn specialized<'p>(
         &mut self,
-        matrix: &[Row<'p>],
+        matrix: &[&Row<'p>],
         v: &[&'p Pat],
         tys: &[C::Ty],
         c: &Ctor,
@@ -560,7 +610,8 @@ impl<C: Types> Engine<'_, C> {
             return Err(Ice::new("exhaustiveness: the row does not specialize to one row").into());
         };
         let tys: Vec<C::Ty> = field_tys.iter().chain(rest_tys).copied().collect();
-        let found = self.useful(&rows, v, &tys, want)?;
+        let refs: Vec<&Row<'p>> = rows.iter().collect();
+        let found = self.useful(&refs, v, &tys, want)?;
         found
             .into_iter()
             .map(|mut w| {
@@ -580,14 +631,13 @@ impl<C: Types> Engine<'_, C> {
     /// The constructors to try for a column of type `ty`, given the
     /// constructors that start the rows of `matrix` and, when the row
     /// being tested starts with a constructor, that one.
-    fn split(&self, ty: C::Ty, matrix: &[Row<'_>], own: Option<&Ctor>) -> Result<Split, Ice> {
+    fn split(&self, ty: C::Ty, matrix: &[&Row<'_>], own: Option<&Ctor>) -> Result<Split, Ice> {
         let mut heads: Vec<&Ctor> = Vec::new();
         for row in matrix {
             if let Some(head) = row.first() {
                 head_ctors(head, &mut heads);
             }
         }
-        let present = |c: &Ctor| heads.iter().any(|h| covers(h, c));
         match self.cx.space(ty)? {
             Space::Variants(n) => {
                 if heads.is_empty() && own.is_none() {
@@ -596,10 +646,11 @@ impl<C: Types> Engine<'_, C> {
                         rest: true,
                     });
                 }
+                let present: HashSet<&Ctor> = heads.iter().copied().collect();
                 let ctors = (0..n)
                     .map(|tag| {
                         let c = Ctor::Variant(tag);
-                        let p = present(&c);
+                        let p = present.contains(&c);
                         (c, p)
                     })
                     .collect();
@@ -625,27 +676,153 @@ impl<C: Types> Engine<'_, C> {
                     .into_iter()
                     .map(|len| {
                         let c = Ctor::List(len);
-                        let p = present(&c);
+                        let p = heads.iter().any(|h| covers(h, &c));
                         (c, p)
                     })
                     .collect();
                 Ok(Split { ctors, rest: false })
             }
             Space::Infinite => {
+                // In the order the rows first name them, for stable
+                // witnesses.
+                let mut seen: HashSet<&Ctor> = HashSet::new();
                 let mut ctors: Vec<(Ctor, bool)> = Vec::new();
                 for c in heads.iter().copied() {
-                    if !ctors.iter().any(|(seen, _)| seen == c) {
+                    if seen.insert(c) {
                         ctors.push((c.clone(), true));
                     }
                 }
                 if let Some(c) = own
-                    && !ctors.iter().any(|(seen, _)| seen == c)
+                    && !seen.contains(c)
                 {
                     ctors.push((c.clone(), false));
                 }
                 Ok(Split { ctors, rest: true })
             }
         }
+    }
+}
+
+/// The rows of a matrix by the variant or literal their first pattern
+/// starts with, as row indexes in order. A row whose first pattern may
+/// start with anything else (a wildcard, a list pattern, or alternatives
+/// with one of those) is *open*: it may match any constructor. Since
+/// variants and literals are disjoint, the rows that can match a value
+/// of the constructor `c` are exactly `c`'s group and the open rows.
+#[derive(Default)]
+struct Groups<'p> {
+    by_ctor: HashMap<&'p Ctor, Vec<usize>>,
+    open: Vec<usize>,
+    len: usize,
+}
+
+impl<'p> Groups<'p> {
+    fn of(matrix: &[&Row<'p>]) -> Self {
+        let mut groups = Self::default();
+        for (index, row) in matrix.iter().enumerate() {
+            if let Some(&head) = row.first() {
+                groups.add(index, head);
+            } else {
+                groups.open.push(index);
+                groups.len = index.saturating_add(1);
+            }
+        }
+        groups
+    }
+
+    /// Adds row `index`, which starts with `head`. Rows are added in
+    /// order.
+    fn add(&mut self, index: usize, head: &'p Pat) {
+        let mut keys = Vec::new();
+        if keyed_heads(head, &mut keys) {
+            for key in keys {
+                let group = self.by_ctor.entry(key).or_default();
+                if group.last() != Some(&index) {
+                    group.push(index);
+                }
+            }
+        } else {
+            self.open.push(index);
+        }
+        self.len = index.saturating_add(1);
+    }
+
+    /// The indexes, in order, of the rows that may match a value of the
+    /// variant or literal `c`; every row for a list constructor.
+    fn rows_for(&self, c: &Ctor) -> Vec<usize> {
+        if matches!(c, Ctor::List(_)) {
+            return (0..self.len).collect();
+        }
+        merge(
+            self.by_ctor.get(c).map_or(&[][..], Vec::as_slice),
+            &self.open,
+        )
+    }
+
+    /// The rows of `matrix` that may match some value that `head`
+    /// matches, in order.
+    fn compatible<'m>(&self, matrix: &'m [Row<'p>], head: &'p Pat) -> Vec<&'m Row<'p>> {
+        let mut keys = Vec::new();
+        let indexes = if keyed_heads(head, &mut keys) {
+            let mut all = self.open.clone();
+            for key in keys {
+                if let Some(group) = self.by_ctor.get(key) {
+                    all.extend_from_slice(group);
+                }
+            }
+            all.sort_unstable();
+            all.dedup();
+            all
+        } else {
+            (0..self.len).collect()
+        };
+        indexes.into_iter().filter_map(|i| matrix.get(i)).collect()
+    }
+}
+
+/// Collects the variants and literals `pat` starts with into `keys`, and
+/// whether it starts with nothing else.
+fn keyed_heads<'p>(pat: &'p Pat, keys: &mut Vec<&'p Ctor>) -> bool {
+    match pat {
+        Pat::Wild | Pat::Ctor(Ctor::List(_), _) => false,
+        Pat::Ctor(c, _) => {
+            if !keys.contains(&c) {
+                keys.push(c);
+            }
+            true
+        }
+        Pat::Or(alts) => alts.iter().all(|alt| keyed_heads(alt, keys)),
+    }
+}
+
+/// The union of two ascending lists, ascending.
+fn merge(a: &[usize], b: &[usize]) -> Vec<usize> {
+    let mut out = Vec::with_capacity(a.len().saturating_add(b.len()));
+    let (mut i, mut j) = (0, 0);
+    while let (Some(&x), Some(&y)) = (a.get(i), b.get(j)) {
+        if x <= y {
+            out.push(x);
+            i = i.saturating_add(1);
+            if x == y {
+                j = j.saturating_add(1);
+            }
+        } else {
+            out.push(y);
+            j = j.saturating_add(1);
+        }
+    }
+    out.extend_from_slice(a.get(i..).unwrap_or(&[]));
+    out.extend_from_slice(b.get(j..).unwrap_or(&[]));
+    out
+}
+
+/// Whether `pat` matches every value without looking at it: a wildcard,
+/// or alternatives with one.
+fn matches_all(pat: &Pat) -> bool {
+    match pat {
+        Pat::Wild => true,
+        Pat::Ctor(..) => false,
+        Pat::Or(alts) => alts.iter().any(matches_all),
     }
 }
 

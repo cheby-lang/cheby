@@ -13,15 +13,33 @@ import std::bytes
 @external(js, "./string.mjs", "length")
 pub fn length(text: String) -> Int
 
+test "length counts code points" {
+  assert length("") == 0
+  assert length("café") == 4
+  assert length("e\u{301}") == 2
+  assert length("🇳🇱") == 2
+}
+
 /// Tells whether `text` is `""`.
 pub fn is_empty(text: String) -> Bool {
   text == ""
+}
+
+test "is_empty is true only for the empty string" {
+  assert is_empty("")
+  assert !is_empty(" ")
 }
 
 /// Returns the number of extended grapheme clusters in `text` (D-302, D-310).
 @external(native, "cheby_string_grapheme_length")
 @external(js, "./string.mjs", "grapheme_length")
 pub fn grapheme_length(text: String) -> Int
+
+test "grapheme_length counts what a reader sees" {
+  assert grapheme_length("café") == 4
+  assert grapheme_length("e\u{301}") == 1
+  assert grapheme_length("🇳🇱") == 1
+}
 
 // Comparing and searching
 
@@ -35,15 +53,33 @@ pub fn compare(a: String, b: String) -> Order
 @external(js, "./string.mjs", "starts_with")
 pub fn starts_with(text: String, prefix: String) -> Bool
 
+test "starts_with checks the beginning" {
+  assert starts_with("https://example.com", "https://")
+  assert !starts_with("http", "https")
+  assert starts_with("text", "")
+}
+
 /// Tells whether `text` ends with `suffix`.
 @external(native, "cheby_string_ends_with")
 @external(js, "./string.mjs", "ends_with")
 pub fn ends_with(text: String, suffix: String) -> Bool
 
+test "ends_with checks the end" {
+  assert ends_with("report.csv", ".csv")
+  assert !ends_with("report.csv", ".json")
+  assert ends_with("text", "")
+}
+
 /// Tells whether `part` occurs anywhere in `text`.
 @external(native, "cheby_string_contains")
 @external(js, "./string.mjs", "contains")
 pub fn contains(text: String, part: String) -> Bool
+
+test "contains finds a part anywhere" {
+  assert contains("hello world", "o w")
+  assert !contains("hello", "world")
+  assert contains("", "")
+}
 
 // Splitting
 
@@ -52,20 +88,50 @@ pub fn contains(text: String, part: String) -> Bool
 @external(js, "./string.mjs", "split")
 pub fn split(text: String, separator: String) -> List<String>
 
+test "split keeps empty parts" {
+  assert split("a,b,,c", ",") == ["a", "b", "", "c"]
+  assert split("a,b,", ",") == ["a", "b", ""]
+  assert split("", ",") == [""]
+  assert split("abc", "-") == ["abc"]
+}
+
+test "split on an empty separator gives code points" {
+  assert split("abc", "") == ["a", "b", "c"]
+  assert split("", "") == []
+}
+
 /// Splits `text` at the first occurrence of `separator`, or gives `None` (D-315).
 @external(native, "cheby_string_split_once")
 @external(js, "./string.mjs", "split_once")
 pub fn split_once(text: String, separator: String) -> Option<(String, String)>
+
+test "split_once splits at the first separator" {
+  assert split_once("key=value=1", "=") == Some(("key", "value=1"))
+  assert split_once("key", "=") == None
+  assert split_once("abc", "") == Some(("a", "bc"))
+}
 
 /// Splits `text` into its code points, each as a one-code-point string (D-302).
 @external(native, "cheby_string_to_code_points")
 @external(js, "./string.mjs", "to_code_points")
 pub fn to_code_points(text: String) -> List<String>
 
+test "to_code_points splits into scalar values" {
+  assert to_code_points("abc") == ["a", "b", "c"]
+  assert to_code_points("e\u{301}") == ["e", "\u{301}"]
+  assert to_code_points("") == []
+}
+
 /// Splits `text` into its extended grapheme clusters (D-302, D-310).
 @external(native, "cheby_string_to_graphemes")
 @external(js, "./string.mjs", "to_graphemes")
 pub fn to_graphemes(text: String) -> List<String>
+
+test "to_graphemes keeps clusters together" {
+  assert to_graphemes("e\u{301}a") == ["e\u{301}", "a"]
+  assert to_graphemes("🇳🇱!") == ["🇳🇱", "!"]
+  assert to_graphemes("") == []
+}
 
 // Building
 
@@ -74,10 +140,23 @@ pub fn to_graphemes(text: String) -> List<String>
 @external(js, "./string.mjs", "add")
 pub fn add(a: String, b: String) -> String
 
+test "add concatenates" {
+  let first = "Ada"
+  assert add("con", "cat") == "concat"
+  assert first + " " + "Lovelace" == "Ada Lovelace"
+}
+
 /// Returns the elements of `parts` in order, with `separator` between each two.
 @external(native, "cheby_string_join")
 @external(js, "./string.mjs", "join")
 pub fn join(parts: List<String>, separator: String) -> String
+
+test "join puts the separator between parts" {
+  assert join(["a", "b", "c"], ", ") == "a, b, c"
+  assert join(["only"], ", ") == "only"
+  assert join([], ", ") == ""
+  assert ["x", "y"] |> join(_, "") == "xy"
+}
 
 /// Returns `count` copies of `text`, one after another.
 @external(native, "cheby_string_repeat")
@@ -85,17 +164,40 @@ pub fn join(parts: List<String>, separator: String) -> String
 @std_clamped(count)
 pub fn repeat(text: String, count: Int) -> String
 
+test "repeat copies the text" {
+  let negative = -2
+  assert repeat("ab", 3) == "ababab"
+  assert repeat("ab", 0) == ""
+  assert repeat("ab", negative) == ""
+}
+
 /// Returns `text` with copies of `pad` in front, so that it is `width` code points long.
 @external(native, "cheby_string_pad_start")
 @external(js, "./string.mjs", "pad_start")
 @std_clamped(width)
 pub fn pad_start(text: String, width: Int, pad: String) -> String
 
+test "pad_start pads on the left" {
+  let negative = -3
+  assert pad_start("7", 3, "0") == "007"
+  assert pad_start("121", 6, "ab") == "aba121"
+  assert pad_start("", 3, "-") == "---"
+  assert pad_start("é", 3, " ") == "  é"
+  assert pad_start("long", 2, " ") == "long"
+  assert pad_start("text", negative, " ") == "text"
+}
+
 /// Returns `text` with copies of `pad` after it, so that it is `width` code points long.
 @external(native, "cheby_string_pad_end")
 @external(js, "./string.mjs", "pad_end")
 @std_clamped(width)
 pub fn pad_end(text: String, width: Int, pad: String) -> String
+
+test "pad_end pads on the right" {
+  assert pad_end("200", 8, " ") == "200     "
+  assert pad_end("121", 6, "ab") == "121aba"
+  assert pad_end("long", 2, " ") == "long"
+}
 
 // Changing
 
@@ -104,29 +206,64 @@ pub fn pad_end(text: String, width: Int, pad: String) -> String
 @external(js, "./string.mjs", "trim")
 pub fn trim(text: String) -> String
 
+test "trim removes whitespace at both ends" {
+  assert trim("  hi there \n") == "hi there"
+  assert trim("\t\r\n") == ""
+  assert trim("\u{3000}x") == "x"
+}
+
 /// Removes Unicode `White_Space` from the start of `text` (D-373).
 @external(native, "cheby_string_trim_start")
 @external(js, "./string.mjs", "trim_start")
 pub fn trim_start(text: String) -> String
+
+test "trim_start removes whitespace at the start" {
+  assert trim_start("  hi ") == "hi "
+  assert trim_start("\t\nx") == "x"
+}
 
 /// Removes Unicode `White_Space` from the end of `text` (D-373).
 @external(native, "cheby_string_trim_end")
 @external(js, "./string.mjs", "trim_end")
 pub fn trim_end(text: String) -> String
 
+test "trim_end removes whitespace at the end" {
+  assert trim_end(" hi  ") == " hi"
+  assert trim_end("line\r\n") == "line"
+}
+
 /// Removes one `prefix` from the start of `text`, if it is there (D-373).
 @external(native, "cheby_string_remove_prefix")
 @external(js, "./string.mjs", "remove_prefix")
 pub fn remove_prefix(text: String, prefix: String) -> String
+
+test "remove_prefix removes one occurrence" {
+  assert remove_prefix("https://example.com", "https://") == "example.com"
+  assert remove_prefix("0042", "0") == "042"
+  assert remove_prefix("text", "x") == "text"
+}
 
 /// Removes one `suffix` from the end of `text`, if it is there (D-373).
 @external(native, "cheby_string_remove_suffix")
 @external(js, "./string.mjs", "remove_suffix")
 pub fn remove_suffix(text: String, suffix: String) -> String
 
+test "remove_suffix removes one occurrence" {
+  assert remove_suffix("https://example.com/", "/") == "https://example.com"
+  assert remove_suffix("a//", "/") == "a/"
+  assert remove_suffix("text", "") == "text"
+}
+
 /// Replaces every occurrence of `pattern` in `text` with `replacement` (D-315, D-374).
 pub fn replace(text: String, pattern: String, replacement: String) -> String {
   join(split(text, pattern), replacement)
+}
+
+test "replace changes every occurrence" {
+  assert replace("a-b-c", "-", "+") == "a+b+c"
+  assert replace("aaa", "aa", "b") == "ba"
+  assert replace("abc", "x", "y") == "abc"
+  assert replace("abc", "", "-") == "a-b-c"
 }
 
 /// Converts `text` to lower case with Unicode's full case mapping (D-310).
@@ -134,21 +271,47 @@ pub fn replace(text: String, pattern: String, replacement: String) -> String {
 @external(js, "./string.mjs", "lowercase")
 pub fn lowercase(text: String) -> String
 
+test "lowercase applies Unicode case mapping" {
+  assert lowercase("Hello, World") == "hello, world"
+  assert lowercase("ÉCOLE") == "école"
+  assert lowercase("I") == "i"
+}
+
 /// Converts `text` to upper case with Unicode's full case mapping (D-310).
 @external(native, "cheby_string_uppercase")
 @external(js, "./string.mjs", "uppercase")
 pub fn uppercase(text: String) -> String
+
+test "uppercase applies Unicode case mapping" {
+  assert uppercase("a1b2") == "A1B2"
+  assert uppercase("straße") == "STRASSE"
+  assert uppercase("i") == "I"
+}
 
 /// Returns the code points of `text` in reverse order (D-302).
 @external(native, "cheby_string_reverse")
 @external(js, "./string.mjs", "reverse")
 pub fn reverse(text: String) -> String
 
+test "reverse reverses code points" {
+  assert reverse("stressed") == "desserts"
+  assert reverse("e\u{301}x") == "x\u{301}e"
+  assert reverse("") == ""
+}
+
 /// Returns the code points of `text` from `start` up to but not including `end` (D-319).
 @external(native, "cheby_string_slice")
 @external(js, "./string.mjs", "slice")
 @std_clamped(start, end)
 pub fn slice(text: String, start: Int, end: Int) -> String
+
+test "slice takes code points by position" {
+  let negative = -5
+  assert slice("héllo", 1, 3) == "él"
+  assert slice("abc", 1, 10) == "bc"
+  assert slice("abc", negative, 1) == "a"
+  assert slice("abc", 2, 1) == ""
+}
 
 // Conversions
 
@@ -157,17 +320,56 @@ pub fn slice(text: String, start: Int, end: Int) -> String
 @external(js, "./string.mjs", "from_bytes")
 pub fn from_bytes(data: bytes::Bytes) -> Result<String, Nil>
 
+test "from_bytes decodes UTF-8" {
+  assert from_bytes(bytes::from_list([0x63, 0x61, 0x66, 0xC3, 0xA9])) == Ok("café")
+  assert from_bytes(bytes::from_string("round trip")) == Ok("round trip")
+  assert from_bytes(bytes::new()) == Ok("")
+}
+
+test "from_bytes rejects invalid UTF-8" {
+  assert from_bytes(bytes::from_list([0xFF])) == Err(Nil)
+  assert from_bytes(bytes::from_list([0xC3])) == Err(Nil)
+  assert from_bytes(bytes::from_list([0xED, 0xA0, 0x80])) == Err(Nil)
+}
+
 /// Returns the Unicode scalar value of each code point of `text`, in order.
 @external(native, "cheby_string_to_code_point_values")
 @external(js, "./string.mjs", "to_code_point_values")
 pub fn to_code_point_values(text: String) -> List<Int>
+
+test "to_code_point_values gives scalar values" {
+  assert to_code_point_values("aé") == [97, 233]
+  assert to_code_point_values("") == []
+}
 
 /// Returns the string of the code points in `values`, or `Err(Nil)` for a non-scalar value.
 @external(native, "cheby_string_from_code_point_values")
 @external(js, "./string.mjs", "from_code_point_values")
 pub fn from_code_point_values(values: List<Int>) -> Result<String, Nil>
 
+test "from_code_point_values builds text" {
+  assert from_code_point_values([104, 105]) == Ok("hi")
+  assert from_code_point_values([0x1F600]) == Ok("\u{1F600}")
+  assert from_code_point_values([0xD800]) == Err(Nil)
+  assert from_code_point_values([0x110000]) == Err(Nil)
+}
+
 /// Returns `text` unchanged. It makes `String` satisfy `Show`.
 pub fn show(text: String) -> String {
   text
+}
+
+test "a string shows as itself" {
+  let name = "Ada \"the first\""
+  assert show("plain") == "plain"
+  assert "{name}" == "Ada \"the first\""
+}
+
+// Tests of `std::bytes` that need this module.
+
+test "from_string encodes UTF-8" {
+  assert bytes::to_list(bytes::from_string("hi")) == [0x68, 0x69]
+  assert bytes::length(bytes::from_string("café")) == 5
+  assert from_bytes(bytes::from_string("café")) == Ok("café")
+  assert bytes::from_string("") == bytes::new()
 }

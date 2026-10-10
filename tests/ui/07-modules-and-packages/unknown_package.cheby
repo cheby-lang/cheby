@@ -1,0 +1,10 @@
+// @mode: check-fail
+// @decisions: D-060, D-238
+//! The first segment of an imported path is the package's own name, a
+//! dependency key or `std` (§7.5).
+
+import nowhere::thing
+
+fn main() {
+  thing::run()
+}

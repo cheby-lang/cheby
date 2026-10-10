@@ -1,0 +1,33 @@
+error[E0063]: `Never` does not satisfy `Compare`
+  --> tests/ui/03-types/never/never_operands.cheby:10:3
+   |
+10 |   x < x
+   |   ^^^^^ `<` calls `compare` of the operand type
+   |
+   = note: `Never` is declared in no module, so it satisfies only empty interfaces
+
+error[E0072]: `%` cannot be applied to `Never`
+  --> tests/ui/03-types/never/never_operands.cheby:15:3
+   |
+15 |   x % x
+   |   ^^^^^ `%` on `Never`
+   |
+   = note: `%` is defined only on the numeric types and cannot be overloaded
+
+error[E0063]: `Never` does not satisfy `Neg`
+  --> tests/ui/03-types/never/never_operands.cheby:20:3
+   |
+20 |   -x
+   |   ^^ unary `-` calls `neg` of the operand type
+   |
+   = note: `Never` is declared in no module, so it satisfies only empty interfaces
+
+error[E0063]: `Never` does not satisfy `Show`
+  --> tests/ui/03-types/never/never_operands.cheby:25:5
+   |
+25 |   "{x}"
+   |     ^ interpolated here
+   |
+   = note: `Never` is declared in no module, so it satisfies only empty interfaces
+   = help: write `{x:?}` to use debug printing instead (D-086)
+

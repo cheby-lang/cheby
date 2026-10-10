@@ -1,0 +1,8 @@
+error[E0045]: duplicate `@!target` attribute
+ --> tests/ui/04-declarations/attributes/inner_target_twice.cheby:6:1
+  |
+5 | @!target(native)
+  | ---------------- first written here
+6 | @!target(native)
+  | ^^^^^^^^^^^^^^^^
+

@@ -1,0 +1,13 @@
+// @mode: check-fail
+// @decisions: D-062, D-113
+//! A name must not be bound twice in the same pattern, except across
+//! alternatives (§6.2).
+
+fn same(pair: (Int, Int)) -> Int {
+  let (x, x) = pair
+  x
+}
+
+fn main() {
+  assert same((1, 1)) == 1
+}

@@ -1,0 +1,32 @@
+error[E0045]: `@deprecated` is allowed only on `pub` items
+  --> tests/ui/04-declarations/attributes/deprecated.cheby:11:1
+   |
+11 | @deprecated("internal")
+   | ^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: it warns about uses from other modules, so it applies to the public API
+
+error[E0045]: `@deprecated` takes one message string
+  --> tests/ui/04-declarations/attributes/deprecated.cheby:16:1
+   |
+16 | @deprecated
+   | ^^^^^^^^^^^
+   |
+   = help: write it as `@deprecated("use `other` instead")`
+
+error[E0045]: `@deprecated` takes one message string
+  --> tests/ui/04-declarations/attributes/deprecated.cheby:21:1
+   |
+21 | @deprecated("one", "two")
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: write it as `@deprecated("use `other` instead")`
+
+error[E0045]: `@deprecated` is allowed only on `pub` items
+  --> tests/ui/04-declarations/attributes/deprecated.cheby:26:1
+   |
+26 | @deprecated("not for tests")
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: it warns about uses from other modules, so it applies to the public API
+

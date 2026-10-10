@@ -1,0 +1,8 @@
+error[E0063]: `fn() -> Nil` does not satisfy `Show`
+  --> tests/ui/08-interfaces/satisfaction/function_type.cheby:12:10
+   |
+12 |   assert describe(f) == ""
+   |          ^^^^^^^^^^^ required by a bound of `describe`
+   |
+   = note: function types satisfy only empty interfaces (§8.2, D-166)
+

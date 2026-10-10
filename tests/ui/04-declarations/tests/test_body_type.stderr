@@ -1,0 +1,6 @@
+error[E0073]: a test body must have type `Nil` or `Result<Nil, E>`, found `Int`
+  --> tests/ui/04-declarations/tests/test_body_type.cheby:10:3
+   |
+10 |   double(2)
+   |   ^^^^^^^^^ this has type `Int`
+

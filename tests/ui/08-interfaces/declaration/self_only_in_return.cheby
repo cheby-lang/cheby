@@ -3,7 +3,7 @@
 //! Every interface function must mention `Self` in a parameter, so the
 //! satisfying type can be found from the arguments (§8.1).
 
-interface Default {
+pub interface Default {
   fn default() -> Self
 }
 

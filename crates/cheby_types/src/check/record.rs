@@ -18,10 +18,6 @@ use super::{BodyCx, Expected};
 use crate::infer::{InferTy, VarKind, instantiate};
 use crate::thir::{ExprId, ExprKind, UpdateField};
 
-/// The record checker's state in a body. W2-E2 may add fields.
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct RecordState;
-
 /// A constructor whose signature and type checked, as the pattern and
 /// record checkers see it.
 #[derive(Clone, Debug)]
@@ -733,7 +729,13 @@ impl BodyCx<'_> {
             return None;
         }
         if let Some(&(other, _, other_ty)) = found.iter().find(|(_, _, t)| *t != first_ty) {
-            let cx = self.input.display_cx(self.own, Some(&self.generics));
+            // The declared field types use the type's own parameters, so
+            // they are shown with the type's names (`A`, `B`).
+            let ty_generics = match self.input.item(self.own, ty_def).map(|item| &item.sig) {
+                Ok(ItemSig::Type(def)) => &def.generics,
+                _ => &self.generics,
+            };
+            let cx = self.input.display_cx(self.own, Some(ty_generics));
             let first_name = found
                 .first()
                 .map_or("?", |&(def, _, _)| self.input.name_of(self.own, def));

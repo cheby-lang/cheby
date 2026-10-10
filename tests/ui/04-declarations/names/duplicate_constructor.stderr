@@ -1,0 +1,9 @@
+error[E0041]: `Red` is declared twice in this module
+  --> tests/ui/04-declarations/names/duplicate_constructor.cheby:12:3
+   |
+7  |   Red,
+   |   --- first declared here
+...
+12 |   Red,
+   |   ^^^ declared again here
+

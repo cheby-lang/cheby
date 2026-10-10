@@ -1,0 +1,16 @@
+// @mode: check-fail
+// @decisions: D-061
+//! Only functions of the module that declares a type count toward its
+//! interfaces, so a `show` in another module does not make it `Show`
+//! (§8.2).
+
+import app::label
+
+pub fn show(l: label::Label) -> String {
+  label::text(l)
+}
+
+fn main() {
+  let l = label::make()
+  assert "{l}" == show(l)
+}

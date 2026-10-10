@@ -47,41 +47,127 @@ fn examples_pass_the_syntax_layer() {
     }
 }
 
-/// With every implemented phase, a valid example reports only constructs
-/// the compiler does not support yet (E0038), so the support gate never
-/// hides a real error (D-451). As the front end grows, an example may
-/// report nothing; any other code on a valid example is a front-end bug.
-/// 001 is clean, and 030 still stops after phase A.
-///
-/// Until the std home modules ship (W3-L), a builtin type such as `Int`
-/// cannot satisfy `Show` or an operator interface, which is E0063 with a
-/// note that its home module is not supported yet (GAP(home-not-in-deps)).
-/// That E0063 is an unsupported construct too; any other E0063 is not.
+/// The examples that need tier-2 or tier-3 std modules move to the
+/// milestone that ships those modules: their imports of them are E0038
+/// (D-451).
+const LATER_EXAMPLES: [&str; 8] = [
+    "005_prime_sieve",
+    "009_counter_actor",
+    "013_dining_philosophers",
+    "018_worker_pool",
+    "019_supervisor",
+    "022_bank_accounts",
+    "028_money_and_rationals",
+    "031_web_scraper",
+];
+
+/// Every example of the M1 exit criterion, and 020, checks with no
+/// diagnostics at all, warnings included. The cross-target check covers
+/// every target the manifest declares, so this is the check for both
+/// targets (plan §1 item 4).
 #[test]
-fn examples_report_only_unsupported_constructs() {
-    let unsupported = |d: &Diagnostic| {
-        d.code.to_string() == "E0038"
-            || (d.code.to_string() == "E0063"
-                && d.notes
-                    .iter()
-                    .any(|n| n.contains("which is not supported yet")))
-    };
+fn examples_check_cleanly() {
+    let mut checked = 0;
     for dir in examples() {
+        let name = dir.file_name().unwrap().to_string_lossy().into_owned();
+        if name == "030_shop_service" || LATER_EXAMPLES.contains(&name.as_str()) {
+            continue;
+        }
+        let out = check(&dir).unwrap();
+        assert_eq!(out.render(), "", "{name}");
+        checked += 1;
+    }
+    assert_eq!(checked, 23);
+}
+
+/// An example that needs a std module of a later tier reports E0038 at
+/// each import of one, and nothing else: paths through such an import are
+/// silent, and its other code checks. 022 keeps its deliberate `todo`
+/// (W0009, D-068). 030 still stops after phase A (D-446).
+#[test]
+fn later_examples_report_only_unshipped_modules() {
+    for dir in examples() {
+        let name = dir.file_name().unwrap().to_string_lossy().into_owned();
         let out = check(&dir).unwrap();
         let rendered = out.render();
-        let codes: Vec<String> = out.diagnostics.iter().map(|d| d.code.to_string()).collect();
-        if dir.ends_with("001_hello_world") {
-            assert_eq!(rendered, "", "{rendered}");
-        } else if dir.ends_with("030_shop_service") {
+        if name == "030_shop_service" {
+            let codes: Vec<String> = out.diagnostics.iter().map(|d| d.code.to_string()).collect();
             assert_eq!(codes, ["E0036"], "{rendered}");
-        } else {
+            continue;
+        }
+        if !LATER_EXAMPLES.contains(&name.as_str()) {
+            continue;
+        }
+        let mut imports = 0;
+        for d in &out.diagnostics {
+            let code = d.code.to_string();
+            if code == "W0009" && name == "022_bank_accounts" {
+                continue;
+            }
+            let module = d
+                .message
+                .strip_prefix("the module `std::")
+                .and_then(|m| m.strip_suffix("` is not supported yet"));
             assert!(
-                out.diagnostics.iter().all(unsupported),
-                "{}:\n{rendered}",
-                dir.display()
+                code == "E0038"
+                    && module.is_some_and(|m| std_lib::PLANNED_STD_MODULES.contains(&m)),
+                "{name}:\n{rendered}"
             );
+            imports += 1;
+        }
+        assert!(imports > 0, "{name}");
+        let todos = out
+            .diagnostics
+            .iter()
+            .filter(|d| d.code.to_string() == "W0009")
+            .count();
+        assert_eq!(todos, usize::from(name == "022_bank_accounts"), "{name}");
+    }
+}
+
+/// What one front-end run over a package produces, by module path: the
+/// rendered diagnostics, and each checked module's canonical interface
+/// encoding and hash.
+fn front_end_output(dir: &Path) -> (String, Vec<(String, Vec<u8>, String)>) {
+    let mut out = CheckOutput::default();
+    let front = front_end(dir, frontend::Mode::Check, &mut out).unwrap();
+    out.sources.sort(&mut out.diagnostics);
+    let mut ifaces = Vec::new();
+    if let Some((front, _)) = front {
+        for &id in &front.order {
+            let Some(checked) = front.checked(id) else {
+                continue;
+            };
+            let iface = front.set.get(id).unwrap();
+            let deps = cheby_iface::DepView::new(&front.set, &checked.deps);
+            let bytes = cheby_iface::encode(iface, &deps, &front.modules, &front.globals).unwrap();
+            let hash =
+                cheby_iface::interface_hash(iface, &deps, &front.modules, &front.globals).unwrap();
+            let path = front.modules.get(id).unwrap().path.to_string();
+            ifaces.push((path, bytes, format!("{hash:?}")));
         }
     }
+    ifaces.sort();
+    (out.render(), ifaces)
+}
+
+/// Determinism (D-264): two front-end runs over every example give
+/// byte-identical rendered diagnostics, interface encodings and interface
+/// hashes, std modules included.
+#[test]
+fn the_front_end_is_deterministic() {
+    let mut modules = 0;
+    for dir in examples() {
+        let first = front_end_output(&dir);
+        let second = front_end_output(&dir);
+        assert_eq!(first.0, second.0, "{}", dir.display());
+        assert_eq!(first.1.len(), second.1.len(), "{}", dir.display());
+        for (a, b) in first.1.iter().zip(&second.1) {
+            assert_eq!(a, b, "{}: {}", dir.display(), a.0);
+        }
+        modules += first.1.len();
+    }
+    assert!(modules > 300, "{modules}");
 }
 
 /// `cheby run` on every example compiles it or reports diagnostics, never
@@ -221,7 +307,7 @@ fn unreachable_unsupported_constructs_do_not_stop_the_run() {
 #[test]
 fn dumps_follow_reachability() {
     let (out, mir) = dump_mir(&test_package("lets")).unwrap();
-    assert_eq!(out.render(), "");
+    assert!(!out.has_errors(), "{}", out.render());
     // `eprint` is never called.
     assert!(!mir.contains("std::io::eprint("), "{mir}");
     assert!(mir.contains("fn std::io::eprintln("), "{mir}");
@@ -250,10 +336,41 @@ fn std_checks_cleanly() {
             &format!("std_{}", module.path.replace("::", "_")),
             &[MANIFEST, ("src/main.cheby", source.as_bytes())],
         );
-        let out = check(&dir).unwrap();
+        let mut out = check(&dir).unwrap();
+        // The import itself is unused on purpose.
+        let sources = &out.sources;
+        let in_main = |d: &Diagnostic| {
+            d.labels.iter().all(|l| {
+                sources
+                    .file(l.span.file)
+                    .is_some_and(|f| f.path() == "src/main.cheby")
+            })
+        };
+        out.diagnostics
+            .retain(|d| !(d.code.to_string() == "W0003" && in_main(d)));
         assert_eq!(out.render(), "", "std::{}", module.path);
         std::fs::remove_dir_all(&dir).unwrap();
     }
+}
+
+/// A user build skips the `test` blocks of std modules: they are checked
+/// and run only when testing std itself (G4).
+#[test]
+fn user_builds_skip_std_tests() {
+    assert!(std_lib::find("io").unwrap().source.contains("\ntest \""));
+    let mut out = CheckOutput::default();
+    let (front, _) = front_end(&example("001_hello_world"), frontend::Mode::Check, &mut out)
+        .unwrap()
+        .unwrap();
+    assert_eq!(out.render(), "");
+    let mut std_modules = 0;
+    for &id in &front.order {
+        if front.modules.get(id).unwrap().package == cheby_iface::PackageId::STD {
+            std_modules += 1;
+            assert_eq!(front.checked(id).unwrap().thir.tests.len(), 0);
+        }
+    }
+    assert!(std_modules > 1, "{std_modules}");
 }
 
 /// Modules that import each other are one E0040, and modules on the cycle
@@ -303,13 +420,13 @@ fn missing_and_planned_std_modules() {
             MANIFEST,
             (
                 "src/main.cheby",
-                b"//! Imports.\n\nimport std::list\nimport std::ioo\n\nfn main() {\n  Nil\n}\n",
+                b"//! Imports.\n\nimport std::fiber\nimport std::ioo\n\nfn main() {\n  Nil\n}\n",
             ),
         ],
     );
     let rendered = check(&dir).unwrap().render();
     assert!(
-        rendered.contains("error[E0038]: the module `std::list` is not supported yet"),
+        rendered.contains("error[E0038]: the module `std::fiber` is not supported yet"),
         "{rendered}"
     );
     assert!(
@@ -359,8 +476,9 @@ fn mir_of_hello_world() {
 /// `let`, dups, drops, tail calls within and across modules.
 #[test]
 fn mir_of_lets_and_tail_calls() {
+    // `unused` is unused on purpose (W0002): its value is dropped.
     let (out, mir) = dump_mir(&test_package("lets")).unwrap();
-    assert_eq!(out.render(), "");
+    assert!(!out.has_errors(), "{}", out.render());
     golden("lets.mir", &mir);
 }
 

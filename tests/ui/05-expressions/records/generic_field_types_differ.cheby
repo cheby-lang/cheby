@@ -1,0 +1,21 @@
+// @mode: check-fail
+// @decisions: D-071
+//! A field declared with different type parameters in two variants does
+//! not have one type, and the message names the type's own parameters.
+
+type Either<A, B> {
+  Left { v: A },
+  Right { v: B },
+}
+
+fn read(e: Either<Int, String>) -> Int {
+  e.v
+}
+
+fn write(e: Either<Int, String>) -> Either<Int, String> {
+  Either { ..e, v: 3 }
+}
+
+fn main() {
+  assert read(write(Left { v: 1 })) == 3
+}

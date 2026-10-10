@@ -268,6 +268,11 @@ impl Writer<'_, '_> {
                 ));
                 self.explain(diag, inner, false)
             }
+            Reason::Undetermined {
+                found,
+                param,
+                actual,
+            } => self.undetermined(diag, err, *found, *param, *actual),
             Reason::Descriptor { param } => diag.with_note(format!(
                 "`{ty}` mentions the type parameter `{}`, which has no bound (D-236)",
                 self.param_name(*param)
@@ -388,6 +393,39 @@ impl Writer<'_, '_> {
                 ));
         }
         self.embedded_note(diag, err.want, func)
+    }
+
+    /// `found` would count, but its type parameter `param` is not
+    /// determined by the type (GAP(satisfaction-instance-matching)).
+    fn undetermined(
+        &self,
+        diag: Diagnostic,
+        err: &Unsatisfied,
+        found: DefId,
+        param: ParamIdx,
+        actual: Ty,
+    ) -> Diagnostic {
+        let ty = self.ty(err.ty);
+        let found_name = self.name(found);
+        let param_name = self.generic_name(found, param);
+        let label = format!(
+            "`{}` has the signature `{}`",
+            self.func(found),
+            sig(found_name, &self.ty_in(actual, found))
+        );
+        let diag = match self.item(found).and_then(|item| item.span) {
+            Some(span) => diag.with_secondary(span, label),
+            None => diag.with_note(label),
+        };
+        diag.with_note(format!(
+            "for `{ty}`, nothing determines the type parameter `{param_name}` of `{}`, so it \
+             does not count toward `{}` (§8.2)",
+            self.func(found),
+            self.want(err.want)
+        ))
+        .with_help(format!(
+            "remove the type parameter `{param_name}` from `{found_name}`"
+        ))
     }
 
     /// A type parameter none of whose bounds gives the requirement.

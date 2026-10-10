@@ -1,0 +1,14 @@
+// @mode: check-fail
+// @decisions: D-111
+//! Types and interfaces share the type namespace, so they cannot have the
+//! same name (§4.1.2).
+
+type Shape { Circle(Float) }
+
+pub interface Shape {
+  fn area(Self) -> Float
+}
+
+fn main() {
+  assert Circle(1.0) == Circle(1.0)
+}

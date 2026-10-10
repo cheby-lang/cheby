@@ -1,0 +1,12 @@
+// @mode: check-pass
+// @decisions: D-156, D-429
+//! The type name of a record update may be qualified with its module
+//! (§5.11.2).
+
+import app::policy
+
+fn main() {
+  let base = policy::default()
+  let faster = policy::Policy { ..base, backoff_ms: 1 }
+  assert faster.retries == base.retries && faster.backoff_ms == 1
+}

@@ -1,0 +1,37 @@
+// @mode: check-pass
+// @decisions: D-063
+//! `Self` may appear anywhere in an interface function's parameter and
+//! return types, nested ones included (§8.1).
+
+pub interface Merge {
+  fn merge(Self, List<Self>) -> Self
+  fn pick(Self, fn(Self) -> Bool) -> Option<Self>
+}
+
+pub type Total { Total(Int) }
+
+pub fn merge(first: Total, rest: List<Total>) -> Total {
+  case rest {
+    [] => first
+    [Total(n), ..tail] => {
+      let Total(m) = first
+      merge(Total(m + n), tail)
+    }
+  }
+}
+
+pub fn pick(total: Total, keep: fn(Total) -> Bool) -> Option<Total> {
+  case keep(total) {
+    True => Some(total)
+    False => None
+  }
+}
+
+fn combine<T: Merge>(first: T, rest: List<T>) -> T {
+  Merge::merge(first, rest)
+}
+
+fn main() {
+  assert combine(Total(1), [Total(2)]) == Total(3)
+  assert pick(Total(1), fn(_) { True }) == Some(Total(1))
+}

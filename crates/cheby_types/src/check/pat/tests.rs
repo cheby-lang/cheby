@@ -1,6 +1,7 @@
 //! Tests of `pat.rs`: every pattern form and its errors (chapter 6).
 
-use crate::test_support::{Build, build};
+use crate::test_support::Build;
+use crate::test_support::quiet::build;
 use crate::thir::{ExprKind, Lit, Pat, PatKind, Stmt};
 
 /// Builds a one-module package from `items`, which follow a module doc.

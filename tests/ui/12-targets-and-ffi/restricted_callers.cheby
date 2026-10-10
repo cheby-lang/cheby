@@ -1,0 +1,29 @@
+// @mode: check-pass
+// @decisions: D-056, D-451
+//! A function without a body that exists only on native is an ordinary
+//! item: code restricted to native may call it, directly or through a
+//! constant, a test or a type of the same target.
+
+@external(native, "app_clock_now")
+fn native_now() -> Int
+
+@target(native)
+pub fn now() -> Int {
+  native_now()
+}
+
+@target(native)
+pub type Stamp {
+  Stamp(Int),
+}
+
+@target(native)
+pub fn stamp() -> Stamp {
+  Stamp(now())
+}
+
+@target(native)
+test "the clock moves forward" {
+  let Stamp(a) = stamp()
+  assert native_now() >= a
+}

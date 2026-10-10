@@ -1,0 +1,16 @@
+// @mode: check-fail
+// @decisions: D-056, D-141
+//! A type marked `@target(native)` exists only on native, so the
+//! signature of a function that exists on both targets cannot name it.
+
+@target(native)
+@external(native, "app_handle_close")
+pub type Handle
+
+@target(native)
+@external(native, "app_handle_open")
+pub fn open() -> Handle
+
+pub fn keep(handle: Handle) -> Handle {
+  handle
+}

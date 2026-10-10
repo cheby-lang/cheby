@@ -1,0 +1,8 @@
+error[E0047]: mismatched types
+  --> tests/ui/03-types/nominal/same_shape_distinct.cheby:11:3
+   |
+10 | fn to_feet(length: Meters) -> Feet {
+   |                               ---- expected because of this return type
+11 |   length
+   |   ^^^^^^ expected `Feet`, found `Meters`
+

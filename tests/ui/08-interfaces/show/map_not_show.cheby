@@ -1,0 +1,15 @@
+// @mode: check-fail
+// @decisions: D-093
+//! `Map` does not satisfy `Show`, because its iteration order changes
+//! between runs; `{x:?}` prints it sorted (§8.8).
+
+import std::map
+
+fn describe(counts: map::Map<String, Int>) -> String {
+  "{counts}"
+}
+
+fn main() {
+  let counts = map::insert(map::new(), "a", 1)
+  assert describe(counts) == "{counts:?}"
+}

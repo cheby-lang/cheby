@@ -1,0 +1,8 @@
+error[E0039]: there is no package named `nowhere`
+ --> tests/ui/07-modules-and-packages/unknown_package.cheby:6:8
+  |
+6 | import nowhere::thing
+  |        ^^^^^^^ unknown package
+  |
+  = note: an import starts with this package's name, `std`, or a dependency declared in `cheby.toml`
+

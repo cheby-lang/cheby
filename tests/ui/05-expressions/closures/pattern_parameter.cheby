@@ -8,6 +8,11 @@ pub fn apply(f: fn((Int, Int)) -> Int, pair: (Int, Int)) -> Int {
 
 pub fn main() {
   let sum = apply(fn((a, b)) { a + b }, (1, 2))
-  let typed = fn((key, value): (String, Int)) { value }
-  assert sum == 3 && typed(("k", 4)) == 4
+  let typed = fn((key, value): (String, Int)) {
+    case key {
+      "" => 0
+      _ => value + 1
+    }
+  }
+  assert sum == 3 && typed(("k", 4)) == 5
 }

@@ -1,0 +1,11 @@
+error[E0042]: cannot find value `is_odd` in this scope
+  --> tests/ui/05-expressions/local_fns/later_local_fn.cheby:10:12
+   |
+10 |       _ => is_odd(n - 1)
+   |            ^^^^^^ not found
+...
+13 |   fn is_odd(n) {
+   |      ------ declared later
+   |
+   = note: a local function is in scope only after its declaration and inside its own body, so it can call itself and the local functions before it (D-110)
+

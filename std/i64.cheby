@@ -4,6 +4,8 @@
 //!
 //! `I64` itself is a builtin item whose home module is this one (D-447).
 
+import std::int
+
 // Constants
 
 /// The smallest `I64`.
@@ -202,3 +204,60 @@ pub fn wrapping_mul(a: I64, b: I64) -> I64
 @external(native, "cheby_i64_wrapping_neg")
 @external(js, "./i64.mjs", "wrapping_neg")
 pub fn wrapping_neg(n: I64) -> I64
+
+// Examples
+
+test "the i64 range" {
+  assert min_value == -9_223_372_036_854_775_808
+  assert max_value == 9_223_372_036_854_775_807
+}
+
+test "i64 parses and shows decimal digits" {
+  let small: I64 = -5
+  assert parse("-9223372036854775808") == Ok(min_value)
+  assert parse("9223372036854775808") == Err(Nil)
+  assert parse_base("7fffffffffffffff", 16) == Ok(max_value)
+  assert show(max_value) == "9223372036854775807"
+  assert "{small}" == "-5"
+}
+
+test "comparing i64 values" {
+  assert compare(-1, 1) == Less
+  assert compare(3, 3) == Equal
+  assert min(-100, 7) == -100
+  assert max(-100, 7) == 7
+}
+
+test "i64 operators as functions" {
+  assert add(100, 27) == 127
+  assert sub(-100, 28) == -128
+  assert mul(-4, 5) == -20
+  assert div(-7, 2) == -3
+  assert rem(-7, 2) == -1
+  assert neg(127) == -127
+  assert abs(-127) == 127
+}
+
+test "i64 checked arithmetic reports overflow" {
+  assert checked_add(100, 27) == Ok(127)
+  assert checked_add(max_value, 1) == Err(Nil)
+  assert checked_sub(min_value, 1) == Err(Nil)
+  assert checked_mul(max_value, 2) == Err(Nil)
+  assert checked_div(min_value, -1) == Err(Nil)
+  assert checked_rem(7, 0) == Err(Nil)
+  assert checked_neg(min_value) == Err(Nil)
+}
+
+test "i64 wrapping arithmetic wraps around" {
+  assert wrapping_add(max_value, 1) == min_value
+  assert wrapping_sub(min_value, 1) == max_value
+  assert wrapping_mul(max_value, 2) == -2
+  assert wrapping_neg(min_value) == min_value
+}
+
+// Tests of `std::int` that need this module.
+
+@target(native)
+test "from_i64 keeps every I64 on native" {
+  assert int::from_i64(max_value) == Ok(int::max_value)
+}

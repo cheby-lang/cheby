@@ -1,0 +1,8 @@
+error[E0031]: a record update needs at least one field
+  --> tests/ui/05-expressions/records/update_without_fields.cheby:12:11
+   |
+12 |   let q = Point { ..p }
+   |           ^^^^^^^^^^^^^
+   |
+   = help: to copy a value unchanged, use it as it is
+

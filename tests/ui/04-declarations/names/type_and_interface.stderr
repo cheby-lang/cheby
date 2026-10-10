@@ -1,0 +1,9 @@
+error[E0041]: `Shape` is declared twice in this module
+ --> tests/ui/04-declarations/names/type_and_interface.cheby:8:15
+  |
+6 | type Shape { Circle(Float) }
+  |      ----- first declared here
+7 |
+8 | pub interface Shape {
+  |               ^^^^^ declared again here
+

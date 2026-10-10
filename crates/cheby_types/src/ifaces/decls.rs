@@ -345,7 +345,8 @@ fn cycle_diag(r: &Reader<'_, '_>, cycle: &[DefId], span: Option<Span>) -> Option
 
 /// Functions with the same name from two embedded interfaces with
 /// different signatures, and own functions with the name of an embedded
-/// one (§8.1, §8.3).
+/// one, even with the same signature (§8.1, §8.3,
+/// GAP(own-and-embedded-name)).
 fn embedding_conflicts(
     r: &Reader<'_, '_>,
     iface: DefId,

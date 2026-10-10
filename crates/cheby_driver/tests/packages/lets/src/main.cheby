@@ -12,7 +12,7 @@ fn main() {
 
 fn shout(text: String) -> Nil {
   let _ = io::print(text)
-  let unused = "never printed"
+  let _unused = "never printed"
   let again = text
   io::println("!")
   io::eprintln(again)

@@ -1,0 +1,18 @@
+// @mode: check-fail
+// @decisions: D-111
+//! Constructors live in the module's value namespace, so two types of one
+//! module cannot have variants with the same name (§4.3.1).
+
+type Light {
+  Red,
+  Green,
+}
+
+type Paint {
+  Red,
+  Blue,
+}
+
+fn main() {
+  assert Green != Green && Blue == Blue
+}

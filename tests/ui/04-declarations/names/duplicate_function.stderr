@@ -1,0 +1,9 @@
+error[E0041]: `size` is declared twice in this module
+  --> tests/ui/04-declarations/names/duplicate_function.cheby:10:8
+   |
+6  | pub fn size() -> Int {
+   |        ---- first declared here
+...
+10 | pub fn size() -> Int {
+   |        ^^^^ declared again here
+

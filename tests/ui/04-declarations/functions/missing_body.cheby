@@ -1,0 +1,10 @@
+// @mode: check-fail
+// @decisions: D-030, D-466
+//! A function without a body is allowed only with an `@external`
+//! attribute that names its foreign implementation (§4.2).
+
+fn answer() -> Int
+
+fn main() {
+  assert answer() == 42
+}

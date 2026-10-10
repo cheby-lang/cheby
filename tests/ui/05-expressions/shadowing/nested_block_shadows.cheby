@@ -1,0 +1,13 @@
+// @mode: check-fail
+// @decisions: D-051, D-062
+//! The names of enclosing blocks are in scope in a nested block, so it
+//! cannot bind them again (§5.2.3).
+
+fn main() {
+  let x = 1
+  let y = {
+    let x = 2
+    x
+  }
+  assert x + y == 3
+}

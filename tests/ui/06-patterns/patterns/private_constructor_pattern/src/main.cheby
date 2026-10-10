@@ -1,0 +1,15 @@
+// @mode: check-fail
+// @decisions: D-151
+//! Matching on the constructors of a `priv` type is possible only in its
+//! own module (§6.4). A value of the type can only leave its module through
+//! a signature that is itself an error (§4.1.3).
+
+import app::secret
+
+fn main() {
+  let key = secret::make()
+  let text = case key {
+    secret::Key(inner) => inner
+  }
+  assert text == "hidden"
+}

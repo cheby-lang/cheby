@@ -1,0 +1,8 @@
+error[E0017]: doc comment documents nothing
+ --> tests/ui/02-lexical-structure/doc_comment_between_attributes.cheby:7:1
+  |
+7 | /// Reads a number.
+  | ^^^^^^^^^^^^^^^^^^^
+  |
+  = help: doc comments come before the attributes; move it above them
+

@@ -1,0 +1,18 @@
+error[E0058]: the field `v` does not have one type in every variant of `Either`
+  --> tests/ui/05-expressions/records/generic_field_types_differ.cheby:12:5
+   |
+12 |   e.v
+   |     ^ `v` is `A` in `Left` and `B` in `Right`
+   |
+   = note: a field can be read without `case` only if every variant has it with the same type (D-071)
+   = help: use `case` to handle each variant
+
+error[E0058]: the field `v` does not have one type in every variant of `Either`
+  --> tests/ui/05-expressions/records/generic_field_types_differ.cheby:16:17
+   |
+16 |   Either { ..e, v: 3 }
+   |                 ^ `v` is `A` in `Left` and `B` in `Right`
+   |
+   = note: a field can be updated without `case` only if every variant has it with the same type (D-071)
+   = help: use `case` to handle each variant
+

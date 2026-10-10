@@ -345,7 +345,8 @@ impl Encoder<'_> {
                 self.ty(out, f.ret)?;
             }
             ItemSig::Test => out.byte(7),
-            ItemSig::Unsupported => out.byte(8),
+            // Tag 8 was `Unsupported` (E0038 at a declaration) until the
+            // support gate left the front end (D-451); it is not reused.
             ItemSig::Error => out.byte(9),
         }
         Ok(())

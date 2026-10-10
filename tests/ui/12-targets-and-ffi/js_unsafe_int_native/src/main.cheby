@@ -1,0 +1,7 @@
+// @mode: check-pass
+// @decisions: D-037, D-190
+//! A package that targets only native may write any 64-bit `Int` literal.
+
+pub fn largest() -> Int {
+  9223372036854775807
+}

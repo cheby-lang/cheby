@@ -1,0 +1,48 @@
+warning[W0002]: unused parameter `unused`
+  --> tests/ui/13-tooling/warnings/unused_binding.cheby:11:24
+   |
+11 | fn describe(size: Int, unused: Int) -> Int {
+   |                        ^^^^^^ never used
+   |
+   = help: if this is intentional, start the name with an underscore: `_unused`
+
+warning[W0002]: unused binding `total`
+  --> tests/ui/13-tooling/warnings/unused_binding.cheby:12:7
+   |
+12 |   let total = size + 1
+   |       ^^^^^ never used
+   |
+   = help: if this is intentional, start the name with an underscore: `_total`
+
+warning[W0002]: unused parameter `a`
+  --> tests/ui/13-tooling/warnings/unused_binding.cheby:13:16
+   |
+13 |   let add = fn(a: Int, b: Int) { b }
+   |                ^ never used
+   |
+   = help: if this is intentional, start the name with an underscore: `_a`
+
+warning[W0002]: unused local function `again`
+  --> tests/ui/13-tooling/warnings/unused_binding.cheby:14:6
+   |
+14 |   fn again(n: Int) -> Int {
+   |      ^^^^^ used only inside its own body
+   |
+   = help: if this is intentional, start the name with an underscore: `_again`
+
+warning[W0002]: unused binding `doubled`
+  --> tests/ui/13-tooling/warnings/unused_binding.cheby:17:7
+   |
+17 |   use doubled <- with_twice(size)
+   |       ^^^^^^^ never used
+   |
+   = help: if this is intentional, start the name with an underscore: `_doubled`
+
+warning[W0002]: unused binding `value`
+  --> tests/ui/13-tooling/warnings/unused_binding.cheby:19:10
+   |
+19 |     Some(value) => add(1, 2)
+   |          ^^^^^ never used
+   |
+   = help: if this is intentional, start the name with an underscore: `_value`
+

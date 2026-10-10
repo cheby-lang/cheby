@@ -17,7 +17,7 @@ use crate::SyntaxKind::{
     self, ALIAS_DECL, AS_KW, AT, COLON, COLON2, CONST_DECL, CONST_KW, EOF, EQ, ERROR, EXPOSED_KW,
     FN_DECL, FN_KW, IMPORT_DECL, IMPORT_ITEM, IMPORT_KW, IMPORT_LIST, INTERFACE_BODY,
     INTERFACE_DECL, INTERFACE_FN, INTERFACE_KW, L_BRACE, L_PAREN, LOWER_IDENT, LT, MODULE_PATH,
-    NEWLINE, PARAM, PARAM_LIST, POS_FIELD_LIST, PRIV_KW, PUB_KW, RAW_STRING, RECORD_FIELD,
+    NEWLINE, PARAM, PARAM_LIST, POS_FIELD_LIST, PRIV_KW, PUB_KW, R_PAREN, RAW_STRING, RECORD_FIELD,
     RECORD_FIELD_LIST, RENAME, RET_TYPE, STRING_START, TEST_DECL, TEST_KW, THIN_ARROW, TYPE_DECL,
     TYPE_KW, TYPE_PARAM, TYPE_PARAM_LIST, UPPER_IDENT, VARIANT, VARIANT_LIST, VISIBILITY,
 };
@@ -212,8 +212,9 @@ fn type_rest(p: &mut Parser<'_>) -> SyntaxKind {
     }
     if p.at(L_BRACE) {
         // After the doc comments, a type name starts the variants and
-        // anything else the record shorthand (App. A.2 notes).
-        if p.nth_at(1, UPPER_IDENT) {
+        // anything else the record shorthand (App. A.2 notes). Attributes
+        // before the first member are skipped to decide (E0045 later).
+        if p.nth_at(first_member(p), UPPER_IDENT) {
             variant_list(p);
         } else {
             record_field_list(p);
@@ -222,15 +223,46 @@ fn type_rest(p: &mut Parser<'_>) -> SyntaxKind {
     TYPE_DECL
 }
 
+/// The lookahead index of the first member of the `{` at the current
+/// token, past any attributes before it: `@name`, its arguments in
+/// parentheses, and the line break after them.
+fn first_member(p: &Parser<'_>) -> usize {
+    let mut n = 1_usize;
+    while p.nth_at(n, AT) {
+        n = n.saturating_add(1);
+        if p.nth_at(n, LOWER_IDENT) {
+            n = n.saturating_add(1);
+        }
+        if p.nth_at(n, L_PAREN) {
+            while !matches!(p.nth(n), R_PAREN | NEWLINE | EOF) {
+                n = n.saturating_add(1);
+            }
+            if p.nth_at(n, R_PAREN) {
+                n = n.saturating_add(1);
+            }
+        }
+        if p.nth_at(n, NEWLINE) {
+            n = n.saturating_add(1);
+        }
+    }
+    n
+}
+
 fn variant_list(p: &mut Parser<'_>) {
     let list = List {
         open: L_BRACE,
         kind: VARIANT_LIST,
-        first: TokenSet::new(&[UPPER_IDENT]),
+        first: TokenSet::new(&[UPPER_IDENT, AT]),
         what: "a variant",
         non_empty: true,
     };
     comma_list(p, &list, |p| {
+        if p.at(AT) {
+            member_attrs(p, "a variant");
+            if !p.at(UPPER_IDENT) {
+                return;
+            }
+        }
         let m = p.start();
         p.bump(UPPER_IDENT);
         if p.at(L_PAREN) {
@@ -257,11 +289,17 @@ fn record_field_list(p: &mut Parser<'_>) {
     let list = List {
         open: L_BRACE,
         kind: RECORD_FIELD_LIST,
-        first: TokenSet::new(&[LOWER_IDENT]),
+        first: TokenSet::new(&[LOWER_IDENT, AT]),
         what: "a field",
         non_empty: false,
     };
     comma_list(p, &list, |p| {
+        if p.at(AT) {
+            member_attrs(p, "a record field");
+            if !p.at(LOWER_IDENT) {
+                return;
+            }
+        }
         let m = p.start();
         p.bump(LOWER_IDENT);
         if p.expect(COLON) || p.at_ts(TYPE_FIRST) {
@@ -287,6 +325,19 @@ fn const_rest(p: &mut Parser<'_>) {
 fn interface_rest(p: &mut Parser<'_>) {
     p.bump(INTERFACE_KW);
     name(p, UPPER_IDENT, "an interface name");
+    if p.at(LT) {
+        // D-165: interfaces are not generic. The list is parsed so that
+        // the body after it still parses, and the error is one targeted
+        // E0013 (GAP(generic-interface-diagnostic)).
+        let start = p.current_range().start();
+        type_params(p);
+        let range = TextRange::new(start, p.prev_end().max(start));
+        let diag = Diagnostic::new(codes::SYNTAX_ERROR, "an interface has no type parameters")
+            .with_primary(p.span(range), "")
+            .with_note("interfaces are not generic (D-165)")
+            .with_help("remove the type parameters");
+        p.report(diag);
+    }
     if p.eat(COLON) {
         bound_list(p);
     }
@@ -295,7 +346,7 @@ fn interface_rest(p: &mut Parser<'_>) {
         line_body(
             p,
             INTERFACE_BODY,
-            TokenSet::new(&[FN_KW]),
+            TokenSet::new(&[FN_KW, AT]),
             "an interface function",
             interface_fn,
         );
@@ -304,6 +355,12 @@ fn interface_rest(p: &mut Parser<'_>) {
 
 /// `fn name(Type, …) -> Type` in an interface body.
 fn interface_fn(p: &mut Parser<'_>) {
+    if p.at(AT) {
+        member_attrs(p, "an interface function");
+        if !p.at(FN_KW) {
+            return;
+        }
+    }
     let m = p.start();
     p.bump(FN_KW);
     name(p, LOWER_IDENT, "a function name");
@@ -316,6 +373,30 @@ fn interface_fn(p: &mut Parser<'_>) {
         ret_type(p);
     }
     m.complete(p, INTERFACE_FN);
+}
+
+/// Attributes before a variant, a record field or an interface function.
+/// Only items take attributes (App. A.2, D-461), so these are one E0045
+/// for the run of them, kept in an `ERROR` node, and the member after
+/// them still parses (GAP(member-attributes-syntax)).
+fn member_attrs(p: &mut Parser<'_>, what: &str) {
+    let start = p.current_range().start();
+    let mut end = start;
+    let m = p.start();
+    while p.at(AT) {
+        attrs::attr(p);
+        end = p.prev_end().max(end);
+        p.eat(NEWLINE);
+    }
+    m.complete(p, ERROR);
+    let diag = Diagnostic::new(
+        codes::INVALID_ATTRIBUTE,
+        format!("attributes are not allowed on {what}"),
+    )
+    .with_primary(p.span(TextRange::new(start, end)), "")
+    .with_note("only items take attributes (D-461)")
+    .with_help("remove the attribute");
+    p.report(diag);
 }
 
 /// `test "name" { … }`.

@@ -89,6 +89,13 @@ fn expr_bp(p: &mut Parser<'_>, min_bp: u8, r: Restrictions) -> Option<CompletedM
         p.leave();
         return None;
     };
+    // Each operator of a chain nests the expression before it one level
+    // deeper (`a + b + c` is `(a + b) + c`), and later passes recurse
+    // along the chain, so a finished operation counts as a level for the
+    // rest of the chain (D-441). Its own right operand is parsed before
+    // it counts, so right-nested code costs no more than before.
+    // GAP(chain-depth).
+    let mut levels = 0_u32;
     while let Some(bp) = infix_bp(p.current()) {
         if bp < min_bp {
             break;
@@ -97,6 +104,13 @@ fn expr_bp(p: &mut Parser<'_>, min_bp: u8, r: Restrictions) -> Option<CompletedM
         p.bump_binop();
         expr_bp(p, bp.saturating_add(1), r);
         lhs = m.complete(p, BIN_EXPR);
+        if !p.enter() {
+            break;
+        }
+        levels = levels.saturating_add(1);
+    }
+    for _ in 0..levels {
+        p.leave();
     }
     p.leave();
     Some(lhs)
@@ -123,22 +137,29 @@ fn unary(p: &mut Parser<'_>, r: Restrictions) -> Option<CompletedMarker> {
         return None;
     }
     let mut lhs = primary(p, r)?;
-    loop {
-        match p.current() {
-            L_PAREN => {
-                let m = lhs.precede(p);
-                arg_list(p);
-                lhs = m.complete(p, CALL_EXPR);
-            }
-            DOT => {
-                let m = lhs.precede(p);
-                p.bump(DOT);
-                field_name(p);
-                lhs = m.complete(p, FIELD_EXPR);
-            }
-            _ => return Some(lhs),
+    // Like an operator chain, each call or field access nests the
+    // expression before it one level deeper, and counts for the rest of
+    // the chain once it is finished (D-441, GAP(chain-depth)).
+    let mut levels = 0_u32;
+    while matches!(p.current(), L_PAREN | DOT) {
+        let m = lhs.precede(p);
+        if p.at(L_PAREN) {
+            arg_list(p);
+            lhs = m.complete(p, CALL_EXPR);
+        } else {
+            p.bump(DOT);
+            field_name(p);
+            lhs = m.complete(p, FIELD_EXPR);
         }
+        if !p.enter() {
+            break;
+        }
+        levels = levels.saturating_add(1);
     }
+    for _ in 0..levels {
+        p.leave();
+    }
+    Some(lhs)
 }
 
 /// The name after `.`. A number there is positional access, which Cheby

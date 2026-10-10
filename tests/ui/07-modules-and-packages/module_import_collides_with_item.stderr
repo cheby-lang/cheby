@@ -1,0 +1,11 @@
+error[E0041]: `io` is both imported and declared in this module
+ --> tests/ui/07-modules-and-packages/module_import_collides_with_item.cheby:8:4
+  |
+6 | import std::io
+  |             -- imported here
+7 |
+8 | fn io() -> Int {
+  |    ^^ declared here
+  |
+  = help: give the import another name with `as`
+

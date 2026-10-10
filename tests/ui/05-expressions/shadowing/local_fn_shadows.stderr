@@ -1,0 +1,11 @@
+error[E0044]: `step` is already bound
+ --> tests/ui/05-expressions/shadowing/local_fn_shadows.cheby:9:6
+  |
+7 |   let step = 1
+  |       ---- first bound here
+8 |   let start = step + 1
+9 |   fn step(n) {
+  |      ^^^^ bound again here
+  |
+  = help: give this binding a new name, such as `step_2`; names cannot be shadowed (§5.2.3)
+

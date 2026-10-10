@@ -1,0 +1,12 @@
+error[E0063]: `Label` does not satisfy `Show`
+  --> tests/ui/08-interfaces/satisfaction/package_type_priv_function.cheby:18:10
+   |
+8  | priv fn show(label: Label) -> String {
+   |         ---- `show` is `priv`, less visible than `Label`
+...
+18 |   assert describe(Label("a")) == "a"
+   |          ^^^^^^^^^^^^^^^^^^^^ required by a bound of `describe`
+   |
+   = note: a function counts toward an interface only if it is at least as visible as the type (§8.2, D-164)
+   = help: make `show` package-visible or `pub`, or make `Label` less visible
+

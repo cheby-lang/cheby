@@ -193,6 +193,14 @@ pub(crate) enum Reason {
         param: ParamIdx,
         inner: Box<Unsatisfied>,
     },
+    /// The satisfying function `found` has the type parameter `param`,
+    /// which matching its `Self` parameter against the type leaves
+    /// undetermined (GAP(satisfaction-instance-matching)).
+    Undetermined {
+        found: DefId,
+        param: ParamIdx,
+        actual: Ty,
+    },
     /// The type mentions the type parameter `param`, which has no bound to
     /// supply its descriptor (D-236): E0065.
     Descriptor { param: ParamIdx },
@@ -313,40 +321,6 @@ pub(crate) fn dyn_coerce(
     iface: DefId,
 ) -> Result<Result<Dict, Unsatisfied>, Ice> {
     cx.satisfy_ty(from, iface, 0)
-}
-
-/// The index of the first parameter of interface function `iface_fn`
-/// whose type mentions `Self`: the argument whose type gives `Self` in an
-/// interface call (D-173). `None` for a function without `Self` in a
-/// parameter (E0066) or whose signature had an error.
-///
-/// # Errors
-///
-/// An [`Ice`] if `iface_fn` cannot be read or is not an interface
-/// function.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "for W2-E1: the `Self` argument of an interface call"
-    )
-)]
-pub(crate) fn self_param(
-    input: &TypesInput<'_>,
-    own: &cheby_iface::ModuleInterface,
-    iface_fn: DefId,
-) -> Result<Option<usize>, Ice> {
-    let item = input.item(own, iface_fn)?;
-    match &item.sig {
-        cheby_iface::ItemSig::InterfaceFn(sig) => Ok(sig
-            .params
-            .iter()
-            .position(|&p| tyutil::mentions(&input.globals.types, p, SELF))),
-        cheby_iface::ItemSig::Error | cheby_iface::ItemSig::Unsupported => Ok(None),
-        _ => Err(Ice::new(format!(
-            "{iface_fn:?} is not an interface function"
-        ))),
-    }
 }
 
 /// `Self` in interface signatures.

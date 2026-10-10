@@ -1,0 +1,16 @@
+error[E0035]: `_` must be the last arm of a subjectless `case`
+ --> tests/ui/05-expressions/case/wildcard_not_last.cheby:8:5
+  |
+8 |     _ => 0
+  |     ^
+  |
+  = help: the arms after `_` can never be taken; remove them or move `_` last
+
+error[E0035]: a subjectless `case` must end with a `_` arm
+ --> tests/ui/05-expressions/case/wildcard_not_last.cheby:9:5
+  |
+9 |     n < 0 => -1
+  |     ^^^^^
+  |
+  = help: add a final arm `_ => …` for the remaining cases (D-109)
+

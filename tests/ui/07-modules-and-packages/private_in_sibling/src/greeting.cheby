@@ -3,3 +3,7 @@
 priv fn text() -> String {
   "Hello from a sibling module!"
 }
+
+pub fn greet() -> String {
+  text()
+}

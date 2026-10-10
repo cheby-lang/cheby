@@ -1,0 +1,24 @@
+// @mode: check-fail
+// @decisions: D-461
+//! `@external` is allowed only on functions and on types without a body.
+
+@external(native, "app_point")
+pub type Point {
+  Point(Int, Int),
+}
+
+@external(native, "app_count")
+pub type Count = Int
+
+@external(native, "app_limit")
+pub const limit: Int = 3
+
+@external(native, "app_named")
+pub interface Named {
+  fn name(Self) -> String
+}
+
+@external(native, "app_test")
+test "nothing" {
+  Nil
+}

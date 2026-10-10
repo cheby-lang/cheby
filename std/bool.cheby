@@ -20,3 +20,9 @@ pub fn show(b: Bool) -> String {
     False => "False"
   }
 }
+
+test "a bool shows as its constructor" {
+  let yes = True
+  assert show(False) == "False"
+  assert "{yes}" == "True"
+}

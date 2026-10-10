@@ -1,0 +1,13 @@
+// @mode: check-fail
+// @decisions: D-151
+//! The fields of a `priv` type can be read and updated only in its own
+//! module (§5.11.2, §5.11.3). A value of the type can only leave its module
+//! through a signature that is itself an error (§4.1.3).
+
+import app::secret
+
+fn main() {
+  let token = secret::make()
+  let copy = secret::Token { ..token, value: "other" }
+  assert token.value == copy.value
+}

@@ -1,0 +1,14 @@
+// @mode: check-fail
+// @decisions: D-051, D-062
+//! A `let` cannot reuse the name of an earlier binding of its block; there
+//! is no shadowing (§5.2.3).
+
+fn process(input: String) -> String {
+  let trimmed = input
+  let trimmed = trimmed + "!"
+  trimmed
+}
+
+fn main() {
+  assert process("a") == "a!"
+}

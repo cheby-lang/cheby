@@ -4,6 +4,8 @@
 //! toolchain (D-450), so `cheby` works from any directory and builds are
 //! deterministic. M3 replaces this with precompiled std (D-256).
 //! Std modules are parsed and checked lazily, when a build reaches them.
+//! A user build skips their `test` blocks, which only testing std itself
+//! checks and runs (GAP(std-tests-skipped)).
 
 /// One shipped standard-library module.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -15,16 +17,7 @@ pub struct StdModule {
 
 /// The shipped modules, sorted by path. Exactly the `.cheby` files under
 /// `std/` (a test checks it).
-pub const STD_MODULES: &[StdModule] = &[StdModule {
-    path: "io",
-    source: include_str!("../../../std/io.cheby"),
-}];
-
-/// Modules written before the checker can check them (plan GAP(std-staging)):
-/// embedded so tests can run phase A on them, but never loaded. Each stays
-/// in [`PLANNED_STD_MODULES`], so importing one is still E0038 (D-451),
-/// until it is promoted to [`STD_MODULES`]. Sorted by path.
-pub const STAGED_STD_MODULES: &[StdModule] = &[
+pub const STD_MODULES: &[StdModule] = &[
     StdModule {
         path: "bool",
         source: include_str!("../../../std/bool.cheby"),
@@ -66,6 +59,10 @@ pub const STAGED_STD_MODULES: &[StdModule] = &[
         source: include_str!("../../../std/int.cheby"),
     },
     StdModule {
+        path: "io",
+        source: include_str!("../../../std/io.cheby"),
+    },
+    StdModule {
         path: "json",
         source: include_str!("../../../std/json.cheby"),
     },
@@ -73,6 +70,8 @@ pub const STAGED_STD_MODULES: &[StdModule] = &[
         path: "json::decode",
         source: include_str!("../../../std/json/decode.cheby"),
     },
+    // The internal module of D-361 that `json` and `json::decode` both
+    // import; its items are package-visible only (GAP(json-tree-module)).
     StdModule {
         path: "json::tree",
         source: include_str!("../../../std/json/tree.cheby"),
@@ -131,63 +130,37 @@ pub const STAGED_STD_MODULES: &[StdModule] = &[
     },
 ];
 
+/// Modules written before the checker can check them (plan GAP(std-staging)):
+/// embedded so tests can run phase A on them, but never loaded. Each stays
+/// in [`PLANNED_STD_MODULES`], so importing one is still E0038 (D-451),
+/// until it is promoted to [`STD_MODULES`]. Sorted by path. Empty: every
+/// M1 module is promoted; later tiers may stage modules here again.
+pub const STAGED_STD_MODULES: &[StdModule] = &[];
+
 /// Modules the standard-library spec plans that `std/` does not ship yet:
 /// the rest of tier 1 (`docs/stdlib/`), tier 2 and tier 3
 /// (`docs/plan/stdlib.md`). Importing one is E0038, not E0039 (D-451).
 /// Sorted.
 pub const PLANNED_STD_MODULES: &[&str] = &[
-    "bool",
-    "bytes",
     "channel",
     "duration",
-    "env",
-    "f32",
     "fiber",
     "file",
-    "float",
     "http",
-    "i16",
-    "i32",
-    "i64",
-    "i8",
-    "int",
-    "json",
-    "json::decode",
-    // The internal module of D-361 that `json` and `json::decode` both
-    // import; its items are package-visible only (GAP(json-tree-module)).
-    "json::tree",
-    "list",
-    "map",
     "multimap",
     "net",
-    "nil",
-    "ops",
-    "option",
-    "order",
     "ordered_map",
     "ordered_multimap",
     "ordered_set",
     "process",
     "random",
-    "result",
     "runtime",
     "selector",
-    "set",
     "sorted_map",
     "sorted_multimap",
     "sorted_set",
-    "string",
     "time",
-    "u16",
-    "u32",
-    "u64",
-    "u8",
 ];
-
-/// Shipped modules that do not have all of their spec yet. A name the spec
-/// defines but the source lacks is E0038, not E0042 (D-451):
-/// `std/io.cheby` has only the four printing functions in the slice.
-pub const PARTIAL_STD_MODULES: &[&str] = &["io"];
 
 /// The shipped module at `path` (under `std`).
 #[must_use]
@@ -325,11 +298,50 @@ mod tests {
                 );
             }
         }
-        assert!(is_planned("json::decode"));
-        assert!(is_planned("json::tree"));
-        for module in PARTIAL_STD_MODULES {
-            assert!(find(module).is_some());
+        assert!(find("json::decode").is_some());
+        assert!(find("json::tree").is_some());
+    }
+
+    /// Every M1 module ships: tier 1 except `multimap`, `sorted_*` and
+    /// `ordered_*` (D-451), every home module of a builtin type among them
+    /// (D-447).
+    #[test]
+    fn m1_modules_ship() {
+        for path in [
+            "bool",
+            "bytes",
+            "env",
+            "f32",
+            "float",
+            "i8",
+            "i16",
+            "i32",
+            "i64",
+            "int",
+            "io",
+            "json",
+            "json::decode",
+            "json::tree",
+            "list",
+            "map",
+            "nil",
+            "ops",
+            "option",
+            "order",
+            "result",
+            "set",
+            "string",
+            "u8",
+            "u16",
+            "u32",
+            "u64",
+        ] {
+            assert!(find(path).is_some(), "std::{path} is not shipped");
         }
+        for (_, home) in cheby_iface::builtin::HOMES {
+            assert!(find(home).is_some(), "std::{home} is not shipped");
+        }
+        assert_eq!(STAGED_STD_MODULES, &[]);
     }
 
     #[test]

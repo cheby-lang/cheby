@@ -1,0 +1,10 @@
+error[E0041]: `format` is imported twice
+ --> tests/ui/07-modules-and-packages/module_import_collision/src/main.cheby:7:19
+  |
+6 | import app::numbers::format
+  |                      ------ first imported here
+7 | import app::text::format
+  |                   ^^^^^^ imported here
+  |
+  = help: give the import another name with `as`
+

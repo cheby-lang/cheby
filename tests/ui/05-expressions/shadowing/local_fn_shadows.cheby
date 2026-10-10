@@ -1,0 +1,13 @@
+// @mode: check-fail
+// @decisions: D-062, D-110
+//! A local function's name is a binding and follows the no-shadowing rule
+//! (§5.8).
+
+fn main() {
+  let step = 1
+  let start = step + 1
+  fn step(n) {
+    n + 1
+  }
+  assert step(start) == 3
+}

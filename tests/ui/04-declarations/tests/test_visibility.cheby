@@ -1,0 +1,15 @@
+// @mode: parse-fail
+// @decisions: D-055
+//! A test can be neither `pub` nor `priv` (§4.7).
+
+fn double(n: Int) -> Int {
+  n * 2
+}
+
+pub test "doubling" {
+  assert double(2) == 4
+}
+
+fn main() {
+  assert double(1) == 2
+}

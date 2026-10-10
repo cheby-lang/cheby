@@ -9,9 +9,7 @@ use cheby_iface::{
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::paths::PathCx;
-use crate::{
-    ImportItemRequest, ImportRequest, ImportTarget, ItemDef, ItemStatus, Res, ResolveInput,
-};
+use crate::{ImportItemRequest, ImportRequest, ImportTarget, ItemDef, Res, ResolveInput};
 
 /// Where a module-scope name comes from.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -90,13 +88,7 @@ pub(crate) fn build(
         if scope.map(ns).contains_key(&item.name) {
             continue;
         }
-        let res = match item.status {
-            // A body-only hit leaves the signature usable (D-246).
-            ItemStatus::Ok | ItemStatus::BodyUnsupported => {
-                Res::Def(DefId::new(input.module, index))
-            }
-            ItemStatus::Unsupported => Res::Err,
-        };
+        let res = Res::Def(DefId::new(input.module, index));
         if let Some(hidden) = prelude.get(ns, item.name) {
             diags.push(prelude.hiding(input, hidden, item.name, item.name_span, false));
         }
@@ -115,7 +107,6 @@ pub(crate) fn build(
         input,
         items,
         scope: &ModuleScope::default(),
-        gated: std::cell::Cell::new(false),
     };
     for (n, (request, target)) in input.imports.iter().zip(input.targets).enumerate() {
         if let Some(list) = &request.items {
@@ -276,7 +267,7 @@ fn item_import(
         })
         .collect();
     if present.is_empty() {
-        // Reports E0042, or E0038 for a partly shipped std module.
+        // Reports E0042.
         let ns = namespaces.first().copied().unwrap_or(Namespace::Value);
         lookups.in_module(module, ns, (item.name, item.span), request.path_span, diags)?;
         return Ok(failed());

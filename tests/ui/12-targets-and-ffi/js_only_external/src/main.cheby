@@ -1,0 +1,15 @@
+// @mode: check-fail
+// @decisions: D-030, D-056, D-190
+//! A function with only an `@external(js, …)` exists only on JS (§12.5).
+//! The package declares both targets, so `main`, which runs on both,
+//! cannot call it.
+
+import std::io
+
+@external(js, "./clock.mjs", "now")
+fn js_now() -> Int
+
+fn main() {
+  let _ = js_now()
+  io::println("done")
+}

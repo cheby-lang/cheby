@@ -1,0 +1,27 @@
+// @mode: check-pass
+// @decisions: D-090, D-121, D-139
+//! A constant may hold numbers, strings, lists, tuples and values of
+//! user types, may call functions, and may refer to constants declared
+//! later in the module.
+
+pub type Point {
+  Point { x: Int, y: Int },
+}
+
+pub const greeting: String = "hello, " + default_name
+
+pub const default_name: String = "world"
+
+pub const origin: Point = Point { x: 0, y: 0 }
+
+pub const corners: List<Point> = [origin, Point { x: 1, y: 1 }]
+
+pub const limits: (Int, Option<Float>) = (1024, None)
+
+pub const area: Int = square(side)
+
+pub const side: Int = 12
+
+pub fn square(n: Int) -> Int {
+  n * n
+}

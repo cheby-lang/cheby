@@ -1,0 +1,8 @@
+warning[W0009]: `todo` left in the code
+ --> tests/ui/13-tooling/warnings/todo.cheby:7:10
+  |
+7 |     _ => todo as "area of a circle"
+  |          ^^^^^^^^^^^^^^^^^^^^^^^^^^ this panics when it is reached
+  |
+  = help: write the missing code in place of the `todo`
+

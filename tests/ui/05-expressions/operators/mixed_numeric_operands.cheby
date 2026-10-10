@@ -1,0 +1,12 @@
+// @mode: check-fail
+// @decisions: D-047, D-118
+//! Both operands of built-in arithmetic have the same type; there are no
+//! implicit conversions (§5.4.2).
+
+fn total(count: Int, extra: I32) -> Int {
+  count + extra
+}
+
+fn main() {
+  assert total(1, 2) == 3
+}

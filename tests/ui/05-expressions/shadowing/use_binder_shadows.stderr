@@ -1,0 +1,11 @@
+error[E0044]: `n` is already bound
+  --> tests/ui/05-expressions/shadowing/use_binder_shadows.cheby:12:9
+   |
+10 |   let n = 1
+   |       - first bound here
+11 |   let total = {
+12 |     use n <- with_value(n + 1)
+   |         ^ bound again here
+   |
+   = help: give this binding a new name, such as `n_2`; names cannot be shadowed (§5.2.3)
+

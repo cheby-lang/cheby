@@ -1,0 +1,20 @@
+// @mode: check-fail
+// @decisions: D-056, D-141, D-461
+//! Attributes that leave an item on no target are an error: `@target`
+//! against the module's `@!target`, or a function without a body whose
+//! `@external`s miss the only target left to it.
+
+@!target(js)
+
+@target(native)
+pub fn native_name() -> String {
+  "native"
+}
+
+@external(native, "app_now")
+pub fn now() -> Int
+
+@target(js)
+pub fn name() -> String {
+  "js"
+}

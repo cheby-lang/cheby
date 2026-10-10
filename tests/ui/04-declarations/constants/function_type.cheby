@@ -1,0 +1,18 @@
+// @mode: check-fail
+// @decisions: D-139
+//! A constant's value must not contain functions, including references
+//! to top-level functions, directly or inside another type.
+
+pub fn double(n: Int) -> Int {
+  n * 2
+}
+
+pub type Handler {
+  Handler { run: fn(Int) -> Int },
+}
+
+pub const step: fn(Int) -> Int = double
+
+pub const steps: List<fn(Int) -> Int> = [double]
+
+pub const handler: Handler = Handler { run: double }

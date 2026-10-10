@@ -16,6 +16,7 @@ import std::int
 import std::json::decode
 import std::json::tree
 import std::list as lists
+import std::result
 import std::string
 
 /// Any JSON document (D-321, ADR-0052). An `Object` keeps its members in the
@@ -53,12 +54,22 @@ pub fn array<T>(items: List<T>, encode: fn(T) -> Value) -> Value {
   Array(lists::map(items, encode))
 }
 
+test "array encodes each element with the given function" {
+  assert array(["a", "b"], String) == Array([String("a"), String("b")])
+  assert to_string(array([1, 2], Int)) == "[1,2]"
+}
+
 /// Returns `encode` applied to the value of a `Some`, and `Null` for `None` (D-321).
 pub fn nullable<T>(option: Option<T>, encode: fn(T) -> Value) -> Value {
   case option {
     Some(item) => encode(item)
     None => Null
   }
+}
+
+test "nullable writes null for None" {
+  assert nullable(Some(1920), Int) == Int(1920)
+  assert nullable(None, Int) == Null
 }
 
 /// Returns an `Array` holding the `to_json` of each element of `items` (D-320).
@@ -72,11 +83,59 @@ pub fn to_string(value: Value) -> String {
   write(value, False)
 }
 
+test "to_string writes compact JSON" {
+  let value = Object([
+    ("title", String("Dune")),
+    ("year", Int(1965)),
+    ("rating", Float(4.0)),
+    ("tags", Array([String("classic"), Null])),
+    ("read", Bool(False)),
+  ])
+  let text = to_string(value)
+  assert text == r#"{"title":"Dune","year":1965,"rating":4.0,"tags":["classic",null],"read":false}"#
+  assert parse_value(text) == Ok(value)
+}
+
+test "to_string writes floats as show does, and non-finite ones as null" {
+  assert to_string(Float(1.0e21)) == "1.0e21"
+  assert to_string(Float(-0.0)) == "-0.0"
+  assert to_string(Float(float::nan)) == "null"
+  assert to_string(Float(float::infinity)) == "null"
+}
+
+test "to_string escapes only quotes, backslashes and control characters" {
+  assert to_string(String("say \"hi\"\n")) == r#""say \"hi\"\n""#
+  assert to_string(String("a\\b/c")) == r#""a\\b/c""#
+  assert to_string(String("\u{1}é\u{1F600}")) == "\"\\u0001é\u{1F600}\""
+}
+
 /// Returns `value` as JSON text indented by two spaces, with `": "` after
 /// each key and no final line ending, as `JSON.stringify(value, null, 2)`
 /// writes it (D-327).
 pub fn to_pretty_string(value: Value) -> String {
   write(value, True)
+}
+
+test "to_pretty_string indents by two spaces" {
+  let value = Object([
+    ("title", String("Dune")),
+    ("tags", Array([String("classic"), Int(1)])),
+    ("extra", Object([])),
+    ("none", Array([])),
+  ])
+  let expected = string::join([
+    r"{",
+    r#"  "title": "Dune","#,
+    r#"  "tags": ["#,
+    r#"    "classic","#,
+    "    1",
+    "  ],",
+    r#"  "extra": {},"#,
+    r#"  "none": []"#,
+    r"}",
+  ], "\n")
+  assert to_pretty_string(value) == expected
+  assert to_pretty_string(Int(1)) == "1"
 }
 
 /// A step of writing a value: text to write, or a value to write at a depth
@@ -219,6 +278,19 @@ pub fn parse<T>(text: String, decoder: decode::Decoder<T>) -> Result<T, Error> {
   }
 }
 
+test "parse decodes a document in one step" {
+  fn point() -> decode::Decoder<(Int, Int)> {
+    use x <- decode::field("x", decode::int())
+    use y <- decode::field("y", decode::int())
+    decode::success((x, y))
+  }
+  assert parse(r#"{"x": 1, "y": 2}"#, point()) == Ok((1, 2))
+  let x_problem = decode::Error { expected: "Int", found: "String", path: ["x"] }
+  let y_problem = decode::Error { expected: "Int", found: "Null", path: ["y"] }
+  assert parse(r#"{"x": "1", "y": null}"#, point()) == Err(Decode([x_problem, y_problem]))
+  assert parse(r#"{"x": 1"#, point()) == Err(Syntax(Position { line: 1, column: 8 }))
+}
+
 /// Parses `text` as one JSON value with optional whitespace around it, and
 /// returns it without decoding (D-321). A number without `.` or an exponent
 /// is an `Int` when it lies within ±(2⁵³−1), and every other number is a
@@ -231,6 +303,55 @@ pub fn parse_value(text: String) -> Result<Value, Error> {
   }
 }
 
+test "parse_value keeps integers and floats apart" {
+  assert parse_value("1965") == Ok(Int(1965))
+  assert parse_value("-0") == Ok(Int(0))
+  assert parse_value("2.0") == Ok(Float(2.0))
+  assert parse_value("1e3") == Ok(Float(1000.0))
+  assert parse_value("9007199254740991") == Ok(Int(9007199254740991))
+  assert parse_value("9007199254740992") == Ok(Float(9007199254740992.0))
+  assert Int(1) != Float(1.0)
+}
+
+test "parse_value keeps object members in order, repeated keys too" {
+  let assert Ok(first) = parse_value(r#"{"b": 1, "a": [true, null]}"#)
+  assert first == Object([
+    ("b", Int(1)),
+    ("a", Array([Bool(True), Null])),
+  ])
+  let assert Ok(reordered) = parse_value(r#"{"a": [true, null], "b": 1}"#)
+  assert first != reordered
+  let twice = Object([("a", Int(1)), ("a", Int(2))])
+  assert parse_value(r#"{"a": 1, "a": 2}"#) == Ok(twice)
+}
+
+test "parse_value reads escapes and rejects unpaired surrogates" {
+  assert parse_value(r#""tab\t\u00e9 \ud83d\ude00""#) == Ok(String("tab\té \u{1F600}"))
+  assert parse_value(r#""\ud800""#) == Err(Syntax(Position { line: 1, column: 8 }))
+}
+
+test "a syntax error gives the line and the column in code points" {
+  let lf = string::join([r#"{"a": 1,"#, r#" "b" 2}"#], "\n")
+  let crlf = string::join([r#"{"a": 1,"#, r#" "b" 2}"#], "\r\n")
+  let colon_missing = Syntax(Position { line: 2, column: 6 })
+  assert parse_value(lf) == Err(colon_missing)
+  assert parse_value(crlf) == Err(colon_missing)
+  assert parse_value(r#"["é", x]"#) == Err(Syntax(Position { line: 1, column: 7 }))
+  assert parse_value("[1, 2,]") == Err(Syntax(Position { line: 1, column: 7 }))
+  assert parse_value("1 2") == Err(Syntax(Position { line: 1, column: 3 }))
+  assert parse_value("") == Err(Syntax(Position { line: 1, column: 1 }))
+}
+
+test "parse_value accepts any nesting depth" {
+  let deep = string::repeat("[", 100000) + string::repeat("]", 100000)
+  assert result::is_ok(parse_value(deep))
+}
+
+test "parse_value rounds numbers beyond the range of Float" {
+  assert parse_value("1e400") == Ok(Float(float::infinity))
+  assert parse_value("-1e400") == Ok(Float(float::neg_infinity))
+}
+
 /// Runs `decoder` on a value already parsed or built in the program, with
 /// paths starting at `value` itself (D-361).
 pub fn decode_value<T>(
@@ -238,6 +359,16 @@ pub fn decode_value<T>(
   decoder: decode::Decoder<T>,
 ) -> Result<T, List<decode::Error>> {
   decode::run(decoder, tree::rebuild(value, open_value, tree::Array, tree::Object))
+}
+
+test "decode_value decodes a value built in the program" {
+  fn year() -> decode::Decoder<Int> {
+    use found <- decode::field("year", decode::int())
+    decode::success(found)
+  }
+  assert decode_value(Object([("year", Int(1965))]), year()) == Ok(1965)
+  let problem = decode::Error { expected: "Int", found: "Float", path: ["year"] }
+  assert decode_value(Object([("year", Float(1965.0))]), year()) == Err([problem])
 }
 
 /// Takes a node of the raw tree apart, for `tree::rebuild`.
@@ -279,4 +410,172 @@ pub fn show(error: Error) -> String {
       "unexpected JSON: {joined}"
     }
   }
+}
+
+test "a json error shows as a message" {
+  let syntax = Syntax(Position { line: 2, column: 6 })
+  assert show(syntax) == "invalid JSON at line 2, column 6"
+  let year = decode::Error { expected: "Int", found: "String", path: ["year"] }
+  let edition = decode::Error { expected: "Format", found: "String", path: ["books", "1", "format"] }
+  let wrong = Decode([year, edition])
+  assert "{wrong}" == "unexpected JSON: expected Int, found String at year; expected Format, found String at books.1.format"
+}
+
+// Tests of `std::json::decode` that need this module.
+
+test "every value that does not fit is reported, in the order visited" {
+  fn pair() -> decode::Decoder<(String, Int)> {
+    use name <- decode::field("name", decode::string())
+    use year <- decode::field("year", decode::int())
+    decode::success((name, year))
+  }
+  let name_problem = decode::Error { expected: "String", found: "Int", path: ["name"] }
+  let year_problem = decode::Error { expected: "Field", found: "Nothing", path: ["year"] }
+  let text = r#"{"year_of_birth": 1920, "name": 42}"#
+  assert parse(text, pair()) == Err(Decode([name_problem, year_problem]))
+}
+
+test "string accepts only a JSON string" {
+  assert parse(r#""Dune""#, decode::string()) == Ok("Dune")
+  let problem = decode::Error { expected: "String", found: "Null", path: [] }
+  assert parse("null", decode::string()) == Err(Decode([problem]))
+}
+
+test "int accepts only numbers read as integers" {
+  assert parse("1965", decode::int()) == Ok(1965)
+  let float_problem = decode::Error { expected: "Int", found: "Float", path: [] }
+  assert parse("1965.0", decode::int()) == Err(Decode([float_problem]))
+  assert parse("1e3", decode::int()) == Err(Decode([float_problem]))
+  assert parse("9007199254740992", decode::int()) == Err(Decode([float_problem]))
+}
+
+test "float accepts any JSON number" {
+  assert parse("2.5", decode::float()) == Ok(2.5)
+  assert parse("2", decode::float()) == Ok(2.0)
+  let problem = decode::Error { expected: "Float", found: "String", path: [] }
+  assert parse(r#""2.5""#, decode::float()) == Err(Decode([problem]))
+}
+
+test "bool accepts only true and false" {
+  assert parse("true", decode::bool()) == Ok(True)
+  let problem = decode::Error { expected: "Bool", found: "Int", path: [] }
+  assert parse("1", decode::bool()) == Err(Decode([problem]))
+}
+
+test "list decodes every element and reports each that does not fit" {
+  assert parse("[1, 2, 3]", decode::list(decode::int())) == Ok([1, 2, 3])
+  let second = decode::Error { expected: "Int", found: "String", path: ["1"] }
+  let fourth = decode::Error { expected: "Int", found: "Null", path: ["3"] }
+  let text = r#"[1, "two", 3, null]"#
+  assert parse(text, decode::list(decode::int())) == Err(Decode([second, fourth]))
+  let not_array = decode::Error { expected: "Array", found: "Object", path: [] }
+  assert parse(r"{}", decode::list(decode::int())) == Err(Decode([not_array]))
+}
+
+test "optional turns null into None" {
+  assert parse("null", decode::optional(decode::int())) == Ok(None)
+  assert parse("5", decode::optional(decode::int())) == Ok(Some(5))
+  let problem = decode::Error { expected: "Int", found: "String", path: [] }
+  assert parse(r#""5""#, decode::optional(decode::int())) == Err(Decode([problem]))
+}
+
+test "pairs decodes an object with any keys, in order" {
+  let text = r#"{"en": "one", "fr": "un", "en": "uno"}"#
+  let words = [("en", "one"), ("fr", "un"), ("en", "uno")]
+  assert parse(text, decode::pairs(decode::string())) == Ok(words)
+  let problem = decode::Error { expected: "String", found: "Int", path: ["fr"] }
+  let wrong = r#"{"en": "one", "fr": 1}"#
+  assert parse(wrong, decode::pairs(decode::string())) == Err(Decode([problem]))
+}
+
+test "field reads a member and passes it on" {
+  fn year() -> decode::Decoder<Int> {
+    use found <- decode::field("year", decode::int())
+    decode::success(found)
+  }
+  assert parse(r#"{"title": "Dune", "year": 1965}"#, year()) == Ok(1965)
+  assert parse(r#"{"year": 1, "year": 2}"#, year()) == Ok(2)
+  let missing = decode::Error { expected: "Field", found: "Nothing", path: ["year"] }
+  assert parse(r#"{"title": "Dune"}"#, year()) == Err(Decode([missing]))
+}
+
+test "fields of nested objects add to the path" {
+  fn author_name() -> decode::Decoder<String> {
+    use name <- decode::field("author", decode::field("name", decode::string(), decode::success))
+    decode::success(name)
+  }
+  assert parse(r#"{"author": {"name": "Toni Morrison"}}"#, author_name()) == Ok("Toni Morrison")
+  let problem = decode::Error { expected: "String", found: "Int", path: ["author", "name"] }
+  assert parse(r#"{"author": {"name": 42}}"#, author_name()) == Err(Decode([problem]))
+}
+
+test "a value that is not an object is reported once" {
+  fn point() -> decode::Decoder<(Int, Int)> {
+    use x <- decode::field("x", decode::int())
+    use y <- decode::field("y", decode::int())
+    decode::success((x, y))
+  }
+  let problem = decode::Error { expected: "Object", found: "Array", path: [] }
+  assert parse("[1, 2]", point()) == Err(Decode([problem]))
+}
+
+test "optional_field handles a missing key, and optional handles null" {
+  fn born() -> decode::Decoder<Option<Int>> {
+    use year <- decode::optional_field("born", None, decode::optional(decode::int()))
+    decode::success(year)
+  }
+  assert parse(r#"{"name": "Homer"}"#, born()) == Ok(None)
+  assert parse(r#"{"name": "Homer", "born": null}"#, born()) == Ok(None)
+  assert parse(r#"{"name": "Frank Herbert", "born": 1920}"#, born()) == Ok(Some(1920))
+}
+
+test "optional_field passes null to its decoder" {
+  fn tags() -> decode::Decoder<List<String>> {
+    use found <- decode::optional_field("tags", [], decode::list(decode::string()))
+    decode::success(found)
+  }
+  assert parse(r"{}", tags()) == Ok([])
+  let problem = decode::Error { expected: "Array", found: "Null", path: ["tags"] }
+  assert parse(r#"{"tags": null}"#, tags()) == Err(Decode([problem]))
+}
+
+test "then chooses the next decoder from a decoded value" {
+  fn shape() -> decode::Decoder<Float> {
+    use kind <- decode::then(decode::field("type", decode::string(), decode::success))
+    case kind {
+      "circle" => decode::field("radius", decode::float(), decode::success)
+      "square" => decode::field("side", decode::float(), decode::success)
+      _ => decode::failure(0.0, "Shape")
+    }
+  }
+  assert parse(r#"{"type": "circle", "radius": 1.5}"#, shape()) == Ok(1.5)
+  let unknown = decode::Error { expected: "Shape", found: "Object", path: [] }
+  assert parse(r#"{"type": "star"}"#, shape()) == Err(Decode([unknown]))
+  let not_string = decode::Error { expected: "String", found: "Int", path: ["type"] }
+  assert parse(r#"{"type": 3}"#, shape()) == Err(Decode([not_string]))
+}
+
+test "map changes the decoded value" {
+  let length = decode::map(decode::string(), string::length)
+  assert parse(r#""Dune""#, length) == Ok(4)
+  let problem = decode::Error { expected: "String", found: "Bool", path: [] }
+  assert parse("false", length) == Err(Decode([problem]))
+}
+
+test "success gives its value whatever the input" {
+  assert parse("null", decode::success(7)) == Ok(7)
+  assert parse(r#"{"a": [1]}"#, decode::success("done")) == Ok("done")
+}
+
+test "failure reports what was expected" {
+  fn even() -> decode::Decoder<Int> {
+    use n <- decode::then(decode::int())
+    case n % 2 {
+      0 => decode::success(n)
+      _ => decode::failure(0, "EvenInt")
+    }
+  }
+  assert parse("[2, 4]", decode::list(even())) == Ok([2, 4])
+  let problem = decode::Error { expected: "EvenInt", found: "Int", path: ["1"] }
+  assert parse("[2, 3]", decode::list(even())) == Err(Decode([problem]))
 }

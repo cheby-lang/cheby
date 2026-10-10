@@ -1,0 +1,8 @@
+error[E0042]: cannot find type `Compare` in this scope
+ --> tests/ui/08-interfaces/operators/naming_needs_import.cheby:6:15
+  |
+6 | fn largest<T: Compare>(a: T, b: T) -> T {
+  |               ^^^^^^^ not found
+  |
+  = help: the operator interfaces are in `std::ops`: add `import std::ops` and write `ops::Compare`
+

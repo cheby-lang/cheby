@@ -8,3 +8,7 @@ pub fn show(n: Nil) -> String {
     Nil => "Nil"
   }
 }
+
+test "Nil shows as Nil" {
+  assert show(Nil) == "Nil"
+}

@@ -1,0 +1,9 @@
+// @mode: check-fail
+// @decisions: D-090
+//! Constants may refer to other constants, but not cyclically (§4.5).
+
+pub const width: Int = height * 2
+
+pub const height: Int = width / 2
+
+pub const side: Int = 10

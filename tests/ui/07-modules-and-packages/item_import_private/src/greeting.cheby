@@ -1,0 +1,9 @@
+//! Holds a greeting that only this module may use.
+
+priv fn text() -> String {
+  "hi"
+}
+
+pub fn greet() -> String {
+  text()
+}

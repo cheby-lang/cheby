@@ -1,0 +1,8 @@
+error[E0045]: unknown attribute `@std_hooks`
+ --> tests/ui/04-declarations/attributes/std_hooks_outside_std.cheby:7:1
+  |
+7 | @std_hooks(same, digest, describe)
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = help: the attributes are `@external`, `@target`, `@blocking`, `@async` and `@deprecated`
+

@@ -3,12 +3,12 @@
 //! `dyn I` is allowed only if every function of `I` uses `Self` only as
 //! its first parameter (§8.6).
 
-interface Shape {
+pub interface Shape {
   fn area(Self) -> Float
   fn scale(Self, Float) -> Self
 }
 
-fn area_of(shape: dyn Shape) -> Float {
+pub fn area_of(shape: dyn Shape) -> Float {
   Shape::area(shape)
 }
 

@@ -16,8 +16,7 @@ use rustc_hash::FxHashMap;
 
 use crate::paths::{PathCx, PathShape};
 use crate::{
-    BodyRes, ItemStatus, LocalDecl, LocalId, LocalKind, Res, ResolveInput, ResolvedModule,
-    ScopeSource,
+    BodyRes, LocalDecl, LocalId, LocalKind, Res, ResolveInput, ResolvedModule, ScopeSource,
 };
 
 pub(crate) fn resolve_items(
@@ -28,7 +27,7 @@ pub(crate) fn resolve_items(
     let indexes: Vec<DefIndex> = module.items.indices().collect();
     for index in indexes {
         let item = module.items.try_get(index, "item")?;
-        if item.status == ItemStatus::Unsupported || item.parent.is_some() {
+        if item.parent.is_some() {
             continue;
         }
         let node = input
@@ -37,42 +36,21 @@ pub(crate) fn resolve_items(
             .and_then(Item::cast)
             .ok_or_else(|| Ice::new("an item's node is not an item"))?;
         let outcome = resolve_item(input, module, node, diags)?;
-        if outcome.sig_unsupported {
-            mark_unsupported(module, index);
-            continue;
-        }
         module.sig_paths.extend(outcome.sig_paths);
         if !outcome.generics.is_empty() {
             module.generics.insert(index, outcome.generics);
         }
-        if outcome.body_unsupported {
-            crate::gate::mark_body(&mut module.items, index)?;
-        } else if let Some(body) = outcome.body {
+        if let Some(body) = outcome.body {
             module.bodies.insert(index, body);
         }
     }
     Ok(())
 }
 
-fn mark_unsupported(module: &mut ResolvedModule, index: DefIndex) {
-    for item in &mut module.items {
-        if item.parent == Some(index) {
-            item.status = ItemStatus::Unsupported;
-        }
-    }
-    if let Some(item) = module.items.get_mut(index) {
-        item.status = ItemStatus::Unsupported;
-    }
-}
-
 struct Outcome {
     sig_paths: FxHashMap<NodeId, Res>,
     generics: Vec<(Name, ParamIdx)>,
     body: Option<BodyRes>,
-    /// E0038 in the declaration: the item becomes `Unsupported`.
-    sig_unsupported: bool,
-    /// E0038 in the body only: the item becomes `BodyUnsupported`.
-    body_unsupported: bool,
 }
 
 #[expect(clippy::too_many_lines, reason = "one arm per item kind")]
@@ -87,7 +65,6 @@ fn resolve_item(
             input,
             items: &module.items,
             scope: &module.scope,
-            gated: std::cell::Cell::new(false),
         },
         diags,
         res: BodyRes::default(),
@@ -97,7 +74,6 @@ fn resolve_item(
         in_interface: false,
         sig_paths: FxHashMap::default(),
         in_sig: true,
-        gated: Gated::default(),
         later_fns: Vec::new(),
     };
     let mut has_body = false;
@@ -199,7 +175,6 @@ fn resolve_item(
             }
         }
     }
-    cx.fold_path_gate();
     let sig_paths = std::mem::take(&mut cx.sig_paths);
     let generics = std::mem::take(&mut cx.generics);
     let body = has_body.then(|| std::mem::take(&mut cx.res));
@@ -207,8 +182,6 @@ fn resolve_item(
         sig_paths,
         generics,
         body,
-        sig_unsupported: cx.gated.sig,
-        body_unsupported: cx.gated.body,
     })
 }
 
@@ -226,7 +199,6 @@ struct Cx<'a, 'd> {
     sig_paths: FxHashMap<NodeId, Res>,
     /// Whether types go to `sig_paths` rather than the body's paths.
     in_sig: bool,
-    gated: Gated,
     /// The local functions of the enclosing blocks that are not declared
     /// yet, for the note on a use before the declaration (D-110).
     later_fns: Vec<(Name, Span)>,
@@ -244,25 +216,6 @@ struct PatState {
     current: Vec<(Name, Span)>,
 }
 
-/// Where E0038 was reported for the item being resolved.
-#[derive(Clone, Copy, Default)]
-struct Gated {
-    /// In its signature: the item becomes `Unsupported`.
-    sig: bool,
-    /// In its body: the item becomes `BodyUnsupported`.
-    body: bool,
-}
-
-impl Gated {
-    const fn set(&mut self, in_sig: bool) {
-        if in_sig {
-            self.sig = true;
-        } else {
-            self.body = true;
-        }
-    }
-}
-
 impl Cx<'_, '_> {
     fn intern(&self, text: &str) -> Name {
         self.paths.input.globals.names.intern(text)
@@ -272,17 +225,8 @@ impl Cx<'_, '_> {
         self.paths.input.globals.names.get(name)
     }
 
-    /// Moves a pending E0038 from path lookup (a name missing from a partly
-    /// shipped std module) to the part being resolved.
-    fn fold_path_gate(&mut self) {
-        if self.paths.gated.replace(false) {
-            self.gated.set(self.in_sig);
-        }
-    }
-
     /// Ends the signature: what follows is the item's body.
     fn enter_body(&mut self) {
-        self.fold_path_gate();
         self.in_sig = false;
     }
 
@@ -982,7 +926,9 @@ impl Cx<'_, '_> {
     }
 
     /// `p1 | p2 | …`: each alternative starts from the names bound before
-    /// it, and every alternative must bind the same names (§6.7).
+    /// it, and every alternative must bind the same names (§6.7). One
+    /// E0062 per alternative that lacks names, naming all of them
+    /// (GAP(alternative-bindings-report)).
     fn alternatives(
         &mut self,
         p: cheby_syntax::ast::OrPat<'_>,

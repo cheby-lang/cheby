@@ -1,0 +1,12 @@
+// @mode: check-pass
+// @decisions: D-080, D-253
+//! A module import that no path goes through, and an item import whose
+//! name nothing uses, are warnings.
+
+import std::io
+import std::list
+import std::string::{length, trim}
+
+fn main() {
+  io::println(trim(" hello "))
+}

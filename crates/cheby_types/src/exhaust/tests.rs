@@ -917,3 +917,101 @@ fn witness_lists() {
     assert_eq!(super::list(&shown, false), "`A`, `B`, `C` and 2 more");
     assert_eq!(super::list(&shown, true), "`A`, `B`, `C` and more");
 }
+
+#[test]
+fn patterns_over_the_error_type_are_not_checked() {
+    // `fn f(x: Result<Int>)`: the signature's error leaves `x` at the
+    // error type, and its constructor patterns must not be split.
+    let world = World::new();
+    let src = "case x { Some(_) => 1  None => 0 } let (a, b) = x";
+    let mut bld = B::new(src);
+    let subject = bld.local(Ty::ERROR, "x", 0);
+    let wild = bld.pat(PatKind::Wild, Ty::ERROR, "_", 0);
+    let some = bld.pat(
+        PatKind::Ctor {
+            ctor: builtin::SOME,
+            fields: Box::new([(0, wild)]),
+        },
+        Ty::ERROR,
+        "Some(_)",
+        0,
+    );
+    let none = bld.pat(unit(builtin::NONE), Ty::ERROR, "None", 0);
+    let one = bld.int(1, 0);
+    let zero = bld.int(0, 0);
+    let case = bld.expr(
+        ExprKind::Case {
+            subjects: Box::new([subject]),
+            arms: Box::new([arm(vec![some], None, one), arm(vec![none], None, zero)]),
+        },
+        Ty::INT,
+        "case",
+        0,
+    );
+    let a = bld.pat(bind(), Ty::ERROR, "a", 0);
+    let b = bld.pat(bind(), Ty::ERROR, "b", 0);
+    let pat = bld.pat(PatKind::Tuple(Box::new([a, b])), Ty::ERROR, "(a, b)", 0);
+    let init = bld.local(Ty::ERROR, "x", 1);
+    let block = bld.expr(
+        ExprKind::Block {
+            stmts: Box::new([Stmt::Let { pat, init }]),
+            tail: Some(case),
+        },
+        Ty::INT,
+        "let",
+        0,
+    );
+    assert_eq!(world.check(src, &bld.body(block)), "");
+}
+
+#[test]
+fn alternatives_that_cover_only_together_are_refutable() {
+    // §6.1: `Red | Green | Blue` covers `Color`, but no alternative does
+    // alone, so `let` rejects it and `let assert` does not warn.
+    let world = World::new();
+    let src = "let Red | Green | Blue = c; let assert Red | Green | Blue = c";
+    let color = world.color();
+    let mut stmts = Vec::new();
+    let mut bld = B::new(src);
+    for (nth, assert) in [(0, false), (1, true)] {
+        let alts: Vec<Pat> = [("Red", 1), ("Green", 2), ("Blue", 3)]
+            .into_iter()
+            .map(|(name, index)| bld.pat(ctor(world.app, index), color, name, nth))
+            .collect();
+        let pat = bld.pat(PatKind::Or(alts.into()), color, "Red | Green | Blue", nth);
+        let init = bld.local(color, "c", nth);
+        stmts.push(if assert {
+            Stmt::LetAssert {
+                pat,
+                init,
+                message: None,
+            }
+        } else {
+            Stmt::Let { pat, init }
+        });
+    }
+    let block = bld.expr(
+        ExprKind::Block {
+            stmts: stmts.into(),
+            tail: None,
+        },
+        Ty::NIL,
+        "let",
+        0,
+    );
+    let out = world.check(src, &bld.body(block));
+    assert_eq!(
+        out,
+        "\
+error[E0060]: refutable pattern in `let`
+ --> src/app.cheby:1:5
+  |
+1 | let Red | Green | Blue = c; let assert Red | Green | Blue = c
+  |     ^^^^^^^^^^^^^^^^^^ its alternatives match every value only together
+  |
+  = note: alternatives make a pattern irrefutable only when one of them is irrefutable on its own (§6.1)
+  = help: match the value with `case`, with one arm per alternative
+
+"
+    );
+}

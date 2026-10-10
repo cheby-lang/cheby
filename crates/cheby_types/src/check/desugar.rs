@@ -175,7 +175,7 @@ impl BodyCx<'_> {
 
     /// E0047 for a `use` with `given` binders whose callback must take
     /// `wanted` parameters (§5.10); the callback is checked without
-    /// expectations, for its own errors.
+    /// expectations, for its own errors (GAP(use-binder-count)).
     fn binder_count(
         &mut self,
         cb: Callback<'_>,
@@ -312,7 +312,8 @@ impl BodyCx<'_> {
         self.expect_result(&sig, expected)?;
         let mut ids = self.check_args(&sig.params, args, spans)?;
         // `x` is evaluated before the rest of the right side (§5.15.1):
-        // bind it first unless nothing comes before it.
+        // bind it first unless nothing comes before it
+        // (GAP(pipe-binding)).
         let mut stmts = Vec::new();
         let first = hole == 0 && !matches!(sig.target, Target::Value(_));
         if !first && let Some(slot) = ids.get_mut(hole) {

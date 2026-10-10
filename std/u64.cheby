@@ -4,6 +4,9 @@
 //!
 //! `U64` itself is a builtin item whose home module is this one (D-447).
 
+import std::i64
+import std::int
+
 // Constants
 
 /// The smallest `U64`.
@@ -197,3 +200,78 @@ pub fn wrapping_mul(a: U64, b: U64) -> U64
 @external(native, "cheby_u64_wrapping_neg")
 @external(js, "./u64.mjs", "wrapping_neg")
 pub fn wrapping_neg(n: U64) -> U64
+
+// Tests of `std::i64` that need this module.
+
+test "conversions to i64" {
+  assert i64::from_int(-42) == -42
+  assert i64::from_u32(4_294_967_295) == 4_294_967_295
+  assert i64::from_u64(42) == Ok(42)
+  assert i64::from_u64(max_value) == Err(Nil)
+  assert int::from_i64(i64::from_int(-42)) == Ok(-42)
+}
+
+// Tests of `std::int` that need this module.
+
+test "from_u64 fails above Int's range" {
+  assert int::from_u64(42) == Ok(42)
+  assert int::from_u64(max_value) == Err(Nil)
+}
+
+// Examples
+
+test "the u64 range" {
+  assert min_value == 0
+  assert max_value == 18_446_744_073_709_551_615
+}
+
+test "conversions to u64" {
+  assert from_u32(4_294_967_295) == 4_294_967_295
+  assert from_int(42) == Ok(42)
+  assert from_int(-1) == Err(Nil)
+  assert from_i64(i64::max_value) == Ok(9_223_372_036_854_775_807)
+}
+
+test "u64 parses and shows decimal digits" {
+  let small: U64 = 7
+  assert parse("18446744073709551615") == Ok(max_value)
+  assert parse("18446744073709551616") == Err(Nil)
+  assert parse_base("ffffffffffffffff", 16) == Ok(max_value)
+  assert show(max_value) == "18446744073709551615"
+  assert "{small}" == "7"
+}
+
+test "comparing u64 values" {
+  assert compare(1, 2) == Less
+  assert compare(3, 3) == Equal
+  assert min(100, 7) == 7
+  assert max(100, 7) == 100
+}
+
+test "u64 operators as functions" {
+  assert add(200, 55) == 255
+  assert sub(7, 2) == 5
+  assert mul(15, 17) == 255
+  assert div(7, 2) == 3
+  assert rem(7, 2) == 1
+  assert neg(0) == 0
+  assert abs(7) == 7
+}
+
+test "u64 checked arithmetic reports overflow" {
+  assert checked_add(200, 55) == Ok(255)
+  assert checked_add(max_value, 1) == Err(Nil)
+  assert checked_sub(0, 1) == Err(Nil)
+  assert checked_mul(max_value, 2) == Err(Nil)
+  assert checked_div(7, 0) == Err(Nil)
+  assert checked_rem(7, 2) == Ok(1)
+  assert checked_neg(0) == Ok(0)
+  assert checked_neg(1) == Err(Nil)
+}
+
+test "u64 wrapping arithmetic wraps around" {
+  assert wrapping_add(max_value, 1) == 0
+  assert wrapping_sub(0, 1) == max_value
+  assert wrapping_mul(max_value, 2) == max_value - 1
+  assert wrapping_neg(1) == max_value
+}

@@ -1,0 +1,32 @@
+//! Areas of shapes.
+
+type Shape {
+  Square(Float),
+  Dot,
+}
+
+fn unit_area() -> Float {
+  1.0
+}
+
+fn halve_forever(x: Float) -> Float {
+  halve_forever(x / 2.0)
+}
+
+const sides: Int = 4
+
+fn used_by_test() -> Int {
+  1
+}
+
+pub fn public_area() -> Float {
+  0.0
+}
+
+fn square_area(side: Float) -> Float {
+  side * side
+}
+
+test "a test uses an item" {
+  assert used_by_test() == 1
+}

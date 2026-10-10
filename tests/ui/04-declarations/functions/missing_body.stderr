@@ -1,0 +1,8 @@
+error[E0046]: the function `answer` has no body
+ --> tests/ui/04-declarations/functions/missing_body.cheby:6:4
+  |
+6 | fn answer() -> Int
+  |    ^^^^^^
+  |
+  = help: add a body, or an `@external` attribute that names its foreign implementation
+

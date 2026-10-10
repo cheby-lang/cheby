@@ -1,0 +1,33 @@
+// @mode: check-fail
+// @decisions: D-037, D-084
+//! On JS, `Int` is limited to the safe-integer range, so an `Int` literal
+//! outside it is an error in code that runs on JS (§3.3.4). `I64` holds
+//! every 64-bit value on both targets.
+
+pub fn largest() -> Int {
+  9007199254740991
+}
+
+pub fn too_large() -> Int {
+  9007199254740992
+}
+
+pub fn too_small() -> Int {
+  -9007199254740992
+}
+
+pub fn wide() -> I64 {
+  9223372036854775807
+}
+
+@target(native)
+pub fn native_only() -> Int {
+  9223372036854775807
+}
+
+pub fn is_huge(n: Int) -> Bool {
+  case n {
+    9007199254740993 => True
+    _ => False
+  }
+}

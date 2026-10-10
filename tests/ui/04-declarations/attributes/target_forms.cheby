@@ -1,0 +1,18 @@
+// @mode: check-fail
+// @decisions: D-056, D-461
+//! `@target` takes exactly one target, `native` or `js`.
+
+@target(native, js)
+pub fn both() -> Int {
+  1
+}
+
+@target
+pub fn none() -> Int {
+  2
+}
+
+@target(wasm)
+pub fn other() -> Int {
+  3
+}

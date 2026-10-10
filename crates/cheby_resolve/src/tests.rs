@@ -17,7 +17,8 @@ use rustc_hash::FxHashMap;
 
 use crate::*;
 
-/// The slice's `std/io.cheby` (D-450).
+/// A small `std/io.cheby`: the slice's four printing functions (D-450),
+/// `Error`, `read_line` and `read_file`.
 const STD_IO: &str = r#"//! Standard input, standard output, standard error, and reading and
 //! writing whole files.
 
@@ -40,6 +41,23 @@ pub fn eprint(text: String)
 @external(native, "cheby_io_eprintln")
 @external(js, "./io.mjs", "eprintln")
 pub fn eprintln(text: String)
+
+/// An input or output error. The real one is a record with a kind and a
+/// message; tests only need the type.
+pub type Error {
+  Error(String),
+}
+
+/// Reads the next line from standard input, without its line ending, or
+/// `None` at the end of input.
+@external(native, "cheby_io_read_line")
+@external(js, "./io.mjs", "read_line")
+pub fn read_line() -> Result<Option<String>, Error>
+
+/// Reads the whole file at `path` as UTF-8 text.
+@external(native, "cheby_io_read_file")
+@external(js, "./io.mjs", "read_file")
+pub fn read_file(path: String) -> Result<String, Error>
 "#;
 
 /// A std module, so another package: private, package-visible, opaque and
@@ -436,10 +454,7 @@ fn build_package(package: &str, local: &[(&str, &str)]) -> Build {
             deps: DepView::new(&set, &deps),
             modules: &modules,
             globals: &globals,
-            std: StdCatalog {
-                known: &std_refs,
-                partial: &["io", "option", "map"],
-            },
+            std: StdCatalog { known: &std_refs },
             package_targets: cheby_package::Targets::ALL,
         };
         let (module, d) = resolve_module(&input).unwrap();
@@ -461,8 +476,7 @@ fn build_package(package: &str, local: &[(&str, &str)]) -> Build {
 }
 
 /// What resolution of dependents needs from an interface: names, kinds,
-/// visibility, `exposed`, and which items are unsupported. The real one is
-/// built by `cheby_types`.
+/// visibility and `exposed`. The real one is built by `cheby_types`.
 fn fake_interface(
     module: &ResolvedModule,
     tree: &SyntaxTree,
@@ -472,9 +486,8 @@ fn fake_interface(
         .items
         .iter_enumerated()
         .map(|(index, item)| {
-            let sig = match (item.status, item.kind) {
-                (ItemStatus::Unsupported, _) => ItemSig::Unsupported,
-                (_, DefKind::Interface) => ItemSig::Interface(cheby_iface::InterfaceDef {
+            let sig = match item.kind {
+                DefKind::Interface => ItemSig::Interface(cheby_iface::InterfaceDef {
                     embeds: embeds(module, tree, item),
                     fns: module
                         .items
@@ -483,7 +496,7 @@ fn fake_interface(
                         .map(|(f, _)| f)
                         .collect(),
                 }),
-                (_, DefKind::Type) => {
+                DefKind::Type => {
                     let exposed = tree
                         .node(item.node)
                         .and_then(TypeDecl::cast)
@@ -542,7 +555,6 @@ fn hello_world_resolves() {
     let app = b.resolved("app");
     let main = app.items.get(DefIndex::from_u32(0)).unwrap();
     assert_eq!(b.globals.names.get(main.name), "main");
-    assert_eq!(main.status, ItemStatus::Ok);
     assert_eq!(main.vis, cheby_iface::Vis::Package);
     let println = b.def("std::io", "println");
     assert_eq!(
@@ -556,7 +568,6 @@ fn hello_world_resolves() {
         Some("cheby_io_println")
     );
     assert_eq!(item.attrs.externals.len(), 2);
-    assert_eq!(item.status, ItemStatus::Ok);
     assert!(std_io.bodies.is_empty());
     // `String` in the signature resolves to the prelude type.
     let strings: Vec<_> = std_io
@@ -564,7 +575,7 @@ fn hello_world_resolves() {
         .values()
         .filter(|r| **r == Res::Def(builtin::STRING))
         .collect();
-    assert_eq!(strings.len(), 4);
+    assert_eq!(strings.len(), 8);
     // The import scope entry.
     let io = b.globals.names.intern("io");
     let entry = app.scope.get(cheby_iface::Namespace::Value, io).unwrap();
@@ -695,8 +706,6 @@ fn attributes() {
     assert_eq!(
         b.messages(),
         [
-            // `b` exists only on native, in a package built for both.
-            "E0038: functions that exist only on some of the package's targets are not supported yet",
             "E0045: `@blocking` is not allowed on a function",
             "E0045: `@deprecated` is allowed only on `pub` items",
             "E0045: `@external` is not allowed on a constant",
@@ -715,25 +724,17 @@ fn valid_attributes_are_recorded() {
         "",
         "@target(native)\nfn a() {\n  Nil\n}\n\n@external(native, \"x\")\n@blocking\npub fn b()\n\n@external(js, \"./m.mjs\", \"c\")\n@async\n@deprecated(\"use b\")\npub fn c()\n\n@external(native, \"d\")\n@external(js, \"./m.mjs\", \"d\")\npub fn d()\n\n@external(native, \"e\")\nfn e() {\n  Nil\n}\n",
     )]);
-    // Only the bodiless functions that miss a target of the package are
-    // still E0038 (D-451); `@target`, `@blocking`, `@async` and
-    // `@deprecated` are accepted.
-    assert_eq!(
-        b.messages(),
-        [
-            "E0038: functions that exist only on some of the package's targets are not supported yet",
-            "E0038: functions that exist only on some of the package's targets are not supported yet",
-        ]
-    );
+    // `@target`, `@blocking`, `@async` and `@deprecated` are accepted. A
+    // bodiless function that misses a target of the package resolves; the
+    // cross-target check (C12) reports its uses.
+    assert_eq!(b.messages(), Vec::<String>::new());
     let app = b.resolved("app");
     let status = |n: u32| app.items.get(DefIndex::from_u32(n)).unwrap();
-    assert_eq!(status(0).status, ItemStatus::Ok);
     assert_eq!(
         status(0).attrs.targets,
         cheby_package::Targets::only(cheby_package::Target::Native)
     );
     assert!(status(1).attrs.blocking);
-    assert_eq!(status(1).status, ItemStatus::Unsupported);
     let c = status(2);
     assert!(c.attrs.is_async);
     assert_eq!(c.attrs.deprecated.as_deref(), Some("use b"));
@@ -741,11 +742,9 @@ fn valid_attributes_are_recorded() {
         c.attrs.targets,
         cheby_package::Targets::only(cheby_package::Target::Js)
     );
-    assert_eq!(status(3).status, ItemStatus::Ok);
     assert_eq!(status(3).attrs.targets, cheby_package::Targets::ALL);
     // A function with a body and an `@external` for one target exists on
     // every target (D-207).
-    assert_eq!(status(4).status, ItemStatus::Ok);
     assert_eq!(status(4).attrs.targets, cheby_package::Targets::ALL);
     assert!(app.bodies.contains_key(&DefIndex::from_u32(4)));
 }
@@ -763,13 +762,10 @@ fn targets_of_every_item_kind() {
             "//! Only on JS.\n\n@!target(js)\n\ntype W {\n  W,\n}\n\n@target(js)\nfn on_js() {\n  Nil\n}\n\n@target(native)\nfn nowhere() {\n  Nil\n}\n\n@external(js, \"./w.mjs\", \"x\")\nfn x()\n",
         ),
     ]);
-    // `n` exists only on JS (narrowed by `@target`), so it is E0038 in a
-    // package for both targets; `web::x` exists on every target of its
-    // module.
-    assert_eq!(
-        b.messages(),
-        ["E0038: functions that exist only on some of the package's targets are not supported yet"]
-    );
+    // `n` exists only on JS (narrowed by `@target`), which the cross-target
+    // check (C12) handles at its uses. `web::nowhere` is native-only in a
+    // JS-only module, so it exists on no target.
+    assert_eq!(b.messages(), ["E0045: `nowhere` exists on no target"]);
     let targets = |path: &str| -> Vec<(String, Targets)> {
         b.resolved(path)
             .items
@@ -889,7 +885,6 @@ fn def_index_order_puts_members_after_their_parent() {
         ]
     );
     assert!(b.diags.is_empty(), "{:?}", b.messages());
-    assert!(app.items.iter().all(|i| i.status == ItemStatus::Ok));
 }
 
 // ---- names, privacy, shadowing ---------------------------------------------
@@ -898,18 +893,17 @@ fn def_index_order_puts_members_after_their_parent() {
 fn unresolved_names() {
     let b = build(&[(
         "",
-        "import std::io\nimport std::secret\n\nfn main() {\n  let message = \"hi\"\n  io::println(mesage)\n  io(\"x\")\n  list::length(\"x\")\n  secret::nope(\"x\")\n  io::read_line()\n  greet()\n}\n\nfn great() {\n  Nil\n}\n",
+        "import std::io\nimport std::secret\n\nfn main() {\n  let message = \"hi\"\n  io::println(mesage)\n  io(\"x\")\n  list::length(\"x\")\n  secret::nope(\"x\")\n  io::read_all()\n  greet()\n}\n\nfn great() {\n  Nil\n}\n",
     )]);
     assert_eq!(
         b.messages(),
         [
-            // `std::io` is partly shipped, so a missing name is E0038.
-            "E0038: `std::io::read_line` is not supported yet",
             "E0042: `io` is a module, not a value",
             "E0042: `list` is not imported",
             "E0042: cannot find value `greet` in this scope",
             "E0042: cannot find value `mesage` in this scope",
             "E0042: there is no value `nope` in module `std::secret`",
+            "E0042: there is no value `read_all` in module `std::io`",
         ]
     );
     let helps: Vec<&str> = b
@@ -1012,8 +1006,7 @@ fn names_are_checked_once_where_bound() {
         naming,
         [
             // Each binding and declaration once, its uses never, and not
-            // the attribute `@async` (D-435). The type is gated (E0038) and
-            // still checked.
+            // the attribute `@async` (D-435).
             "E0006: name `countAll` is not in snake_case",
             "E0006: name `maxValue` is not in snake_case",
             "E0006: name `myIo` is not in snake_case",
@@ -1046,8 +1039,6 @@ fn every_construct_resolves_without_e0038() {
         "import std::io\nimport std::io::{println}\n\ntype Unit {\n  Unit,\n}\n\ntype Pair = (String, String)\n\nconst greeting: String = \"hi\"\n\ninterface Named {\n  fn name(Self) -> String\n}\n\nfn main() {\n  let x = case 1 + 2 {\n    3 => [4]\n    _ => [5]\n  }\n  io::println(\"{x}\")\n  both(_, \"b\")\n  let f = main\n  let (a, b) = (1, 2)\n  let g = Named::name\n  println(greeting)\n}\n\nfn generic<T>(x: T) -> T {\n  x\n}\n\nfn both(a: String, b: String) {\n  Nil\n}\n\ntest \"unit\" {\n  assert Unit == Unit\n}\n",
     )]);
     assert!(b.diags.is_empty(), "{:?}", b.messages());
-    let app = b.resolved("app");
-    assert!(app.items.iter().all(|i| i.status == ItemStatus::Ok));
     let main = DefId::new(b.module("app"), DefIndex::from_u32(6));
     let paths = b.body_paths("app", "main");
     assert!(paths.contains(&("main".to_owned(), Res::Def(main))));
@@ -1058,62 +1049,71 @@ fn every_construct_resolves_without_e0038() {
 }
 
 #[test]
-fn e0038_is_left_for_planned_and_partial_std_and_bodiless_functions() {
+fn e0038_is_left_for_planned_std_modules() {
     let b = build(&[
         (
             "",
-            "import std::list\nimport std::io\nimport std::io::{read_line}\n\nfn main() {\n  io::read_line()\n}\n\nfn later() -> String {\n  lib::later()\n}\n",
+            "import std::list\nimport std::io\n\nfn main() {\n  io::println(list::reverse(\"x\"))\n}\n\nfn later() -> String {\n  lib::later()\n}\n",
         ),
         (
             "lib",
             "@external(js, \"./lib.mjs\", \"later\")\npub fn later() -> String\n",
         ),
     ]);
+    // Paths through the failed import are silent; nothing else is E0038,
+    // and a JS-only function is the cross-target check's (C12).
     assert_eq!(
         b.messages(),
         [
-            "E0038: `std::io::read_line` is not supported yet",
-            "E0038: `std::io::read_line` is not supported yet",
-            "E0038: functions that exist only on some of the package's targets are not supported yet",
             "E0038: the module `std::list` is not supported yet",
             "E0042: `lib` is not imported",
         ]
     );
-    let status = |name: &str| {
-        b.resolved("app")
-            .items
-            .iter()
-            .find(|i| b.globals.names.get(i.name) == name)
-            .unwrap()
-            .status
-    };
-    // A hit in a body leaves the signature in force (D-246).
-    assert_eq!(status("main"), ItemStatus::BodyUnsupported);
-    assert_eq!(status("later"), ItemStatus::Ok);
-    let lib = b.resolved("app::lib");
-    assert_eq!(
-        lib.items.get(DefIndex::from_u32(0)).unwrap().status,
-        ItemStatus::Unsupported
+    let paths = b.body_paths("app", "main");
+    assert!(
+        paths.contains(&("list::reverse".to_owned(), Res::Err)),
+        "{paths:?}"
     );
 }
 
 #[test]
-fn uses_of_unsupported_items_are_silent() {
+fn functions_on_one_target_resolve() {
     let b = build(&[
         ("", "import app::lib\n\nfn main() {\n  lib::later()\n}\n"),
         ("lib", "@external(native, \"later\")\npub fn later()\n"),
     ]);
-    assert_eq!(
-        b.messages(),
-        ["E0038: functions that exist only on some of the package's targets are not supported yet"]
-    );
+    // Whether `main` may call it is the cross-target check's (C12).
+    assert_eq!(b.messages(), Vec::<String>::new());
+    let later = b.def("app::lib", "later");
     assert_eq!(
         b.body_paths("app", "main"),
-        [("lib::later".to_owned(), Res::Err)]
+        [("lib::later".to_owned(), Res::Def(later))]
     );
 }
 
 // ---- prelude (B6) -----------------------------------------------------------
+
+#[test]
+fn unknown_types_get_hints() {
+    let b = build(&[(
+        "",
+        "type Shape {\n  Circle { radius: Int },\n}\n\nfn grow(shape: Shape) -> Shape {\n  Circle { ..shape, radius: 2 }\n}\n\nfn largest<T: Compare>(a: T) -> T {\n  a\n}\n",
+    )]);
+    let helps: Vec<String> = b
+        .diags
+        .iter()
+        .flat_map(|d| d.helps.iter().map(|h| h.message.clone()))
+        .collect();
+    assert_eq!(
+        helps,
+        [
+            "`Circle` is a constructor of the type `Shape`; name the type here",
+            "the operator interfaces are in `std::ops`: add `import std::ops` and write `ops::Compare`",
+        ],
+        "{:?}",
+        b.messages()
+    );
+}
 
 #[test]
 fn kernel_types_are_reachable_only_through_their_home_modules() {
@@ -1128,6 +1128,14 @@ fn kernel_types_are_reachable_only_through_their_home_modules() {
             "E0042: cannot find type `Map` in this scope",
             "E0042: cannot find type `Set` in this scope",
         ]
+    );
+    let helps: Vec<&str> = b
+        .diags
+        .iter()
+        .flat_map(|d| d.helps.iter().map(|h| h.message.as_str()))
+        .collect();
+    assert!(
+        helps.contains(&"`Set` is not in the prelude: add `import std::set` and write `set::Set`")
     );
     let app = b.resolved("app");
     let sig: Vec<Res> = {
@@ -1541,12 +1549,14 @@ fn full_resolver_reports_shadowing_in_nested_scopes() {
 // ---- every example ------------------------------------------------------------
 
 /// Every valid example resolves with only E0038 diagnostics (D-451), for
-/// planned std modules and names missing from partial ones, never an
-/// E0039-E0046, E0062 or W0007 for a valid program and never a panic or an
-/// internal error. Examples with phase-A errors (030) stop before
-/// resolution.
+/// std modules this test's small std does not ship, and E0042 for names
+/// its small `std::option` and `std::map` lack, never another E0039-E0046,
+/// E0062 or W0007 for a valid program and never a panic or an internal
+/// error. Examples with phase-A errors (030) stop before resolution. With
+/// the real std every example checks cleanly (`cheby_driver`'s
+/// `examples_check_cleanly`).
 #[test]
-fn examples_resolve_with_only_unsupported_constructs() {
+fn examples_resolve_with_only_unshipped_modules() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples");
     let mut dirs: Vec<_> = std::fs::read_dir(&root)
         .unwrap()
@@ -1589,6 +1599,12 @@ fn examples_resolve_with_only_unsupported_constructs() {
             .diags
             .iter()
             .filter(|d| d.code != cheby_diag::codes::NOT_SUPPORTED_YET)
+            .filter(|d| {
+                !(d.code == cheby_diag::codes::UNRESOLVED_NAME
+                    && ["`std::option`", "`std::map`"]
+                        .iter()
+                        .any(|m| d.message.ends_with(&format!("in module {m}"))))
+            })
             .map(|d| format!("{}: {}", d.code, d.message))
             .collect();
         assert!(unexpected.is_empty(), "{}: {unexpected:#?}", dir.display());

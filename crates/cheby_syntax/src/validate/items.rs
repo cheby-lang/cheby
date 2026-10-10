@@ -7,10 +7,26 @@ use cheby_diag::{Diagnostic, Span, TextRange, codes};
 use super::{empty_at, has_error_child};
 use crate::ast::{
     AliasDecl, AstNode, AstToken, ConstDecl, FnDecl, ImportDecl, ImportItem, InterfaceRef, LetStmt,
-    LocalFn, Pat, Rename, TypeBody, TypeDecl, TypeParamList, UseStmt, Variant, VariantFields,
-    Visibility,
+    LocalFn, Pat, Rename, TestDecl, TypeBody, TypeDecl, TypeParamList, UseStmt, Variant,
+    VariantFields, Visibility,
 };
 use crate::{SyntaxElement, SyntaxKind};
+
+/// E0012: a test's name is a string literal without interpolation (§4.7,
+/// D-055). GAP(test-name-interpolation-code): the spec names no code, and
+/// E0012 is the code of a string interpolation that is not allowed.
+pub(super) fn test_decl(decl: TestDecl<'_>, out: &mut Vec<Diagnostic>) {
+    let Some(name) = decl.name() else {
+        return;
+    };
+    for interpolation in name.interpolations() {
+        out.push(
+            Diagnostic::new(codes::INVALID_INTERPOLATION, "interpolation in a test name")
+                .with_primary(interpolation.significant_span(), "")
+                .with_help("a test name is fixed text; write it out, or escape the brace as `\\{`"),
+        );
+    }
+}
 
 /// E0020 and E0021: a top-level function's parameters are plain names
 /// with types (D-011, D-242).

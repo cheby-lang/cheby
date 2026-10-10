@@ -1,0 +1,8 @@
+error[E0013]: a record type needs at least one field
+ --> tests/ui/04-declarations/types/empty_type.cheby:5:12
+  |
+5 | type Empty {}
+  |            ^^
+  |
+  = help: for a type without fields, declare a unit variant, such as `type Empty { Empty }`
+

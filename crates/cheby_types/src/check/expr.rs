@@ -147,6 +147,9 @@ impl BodyCx<'_> {
                     return self.error_expr(span);
                 }
                 let ty = self.local_ty(local)?;
+                // Inside its own body, closures nested there included, a
+                // local function's name is a self reference, never a
+                // capture (D-110, D-453, GAP(self-ref-in-nested-closures)).
                 let kind = if self.local_fns.contains(&local) {
                     ExprKind::SelfRef { local }
                 } else {
@@ -219,7 +222,7 @@ impl BodyCx<'_> {
     ) -> Result<ExprId, Ice> {
         let item = self.input.item(self.own, def)?;
         match (&item.sig, item.kind) {
-            (ItemSig::Unsupported | ItemSig::Error, _) => self.error_expr(span),
+            (ItemSig::Error, _) => self.error_expr(span),
             (ItemSig::Fn(sig), _) => {
                 let params = item_params(&sig.generics);
                 let Some(inst) = self.instance(def, &params, type_args, span)? else {
@@ -582,7 +585,10 @@ impl BodyCx<'_> {
             return self.error_expr(span);
         };
         if matches!(op, BinOpKind::And | BinOpKind::Or) {
-            // `&&` and `||` take and return `Bool` (§5.4.5).
+            // `&&` and `||` take and return `Bool` (§5.4.5). Another
+            // operand type is a plain mismatch, E0047; E0072 is for `%`,
+            // the bitwise operators and the shifts only
+            // (GAP(logical-operand-code)).
             let operand = Expected::new(
                 InferTy::Known(Ty::BOOL),
                 b.op_token().map(|t| {

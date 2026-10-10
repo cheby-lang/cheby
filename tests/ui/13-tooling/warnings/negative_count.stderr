@@ -1,0 +1,27 @@
+warning[W0013]: negative `count` passed to `take`
+  --> tests/ui/13-tooling/warnings/negative_count.cheby:11:25
+   |
+11 |   assert list::take(xs, -1) == []
+   |                         ^^ this `count` is negative
+   |
+   = note: `take` clamps a `count` that is out of range, so a negative one acts like the smallest useful value
+   = help: pass the `count` you mean
+
+warning[W0013]: negative `count` passed to `drop`
+  --> tests/ui/13-tooling/warnings/negative_count.cheby:12:33
+   |
+12 |   let drop_none = list::drop(_, -2)
+   |                                 ^^ this `count` is negative
+   |
+   = note: `drop` clamps a `count` that is out of range, so a negative one acts like the smallest useful value
+   = help: pass the `count` you mean
+
+warning[W0013]: negative `count` passed to `repeat`
+  --> tests/ui/13-tooling/warnings/negative_count.cheby:14:31
+   |
+14 |   assert string::repeat("ab", -3) == ""
+   |                               ^^ this `count` is negative
+   |
+   = note: `repeat` clamps a `count` that is out of range, so a negative one acts like the smallest useful value
+   = help: pass the `count` you mean
+

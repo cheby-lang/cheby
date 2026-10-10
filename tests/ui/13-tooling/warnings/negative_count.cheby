@@ -1,0 +1,15 @@
+// @mode: check-pass
+// @decisions: D-298, D-303
+//! A negative integer literal written for a count that the standard
+//! library clamps warns, also through a capture.
+
+import std::list
+import std::string
+
+fn main() {
+  let xs = [1, 2, 3]
+  assert list::take(xs, -1) == []
+  let drop_none = list::drop(_, -2)
+  assert drop_none(xs) == xs
+  assert string::repeat("ab", -3) == ""
+}

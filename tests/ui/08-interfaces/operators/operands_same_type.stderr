@@ -1,0 +1,8 @@
+error[E0047]: mismatched types
+  --> tests/ui/08-interfaces/operators/operands_same_type.cheby:17:14
+   |
+17 |   assert v * 2.0 == v * v
+   |          -   ^^^ expected `Vector`, found `{float}`
+   |          |
+   |          the left operand of `*` has type `Vector`
+

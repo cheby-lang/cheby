@@ -1,0 +1,10 @@
+error[E0045]: two `@external` attributes for the `native` target
+ --> tests/ui/04-declarations/attributes/external_per_target.cheby:6:1
+  |
+5 | @external(native, "app_first")
+  | ------------------------------ the first one
+6 | @external(native, "app_second")
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: an item may have at most one `@external` per target
+

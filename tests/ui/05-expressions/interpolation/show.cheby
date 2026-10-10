@@ -9,7 +9,10 @@ pub type Point {
 }
 
 pub fn show(p: Point) -> String {
-  "a point"
+  case p.x == p.y {
+    True => "a diagonal point"
+    False => "a point"
+  }
 }
 
 pub fn describe(p: Point, name: String, n: Int) -> String {

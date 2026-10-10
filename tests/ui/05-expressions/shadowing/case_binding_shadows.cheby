@@ -1,0 +1,16 @@
+// @mode: check-fail
+// @decisions: D-062
+//! A name bound by a `case` arm pattern follows the no-shadowing rule
+//! (§5.2.3).
+
+fn value_or(value: Option<Int>) -> Int {
+  let n = 1
+  case value {
+    Some(n) => n
+    None => n
+  }
+}
+
+fn main() {
+  assert value_or(None) == 1
+}

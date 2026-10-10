@@ -4,6 +4,8 @@
 //!
 //! `I32` itself is a builtin item whose home module is this one (D-447).
 
+import std::int
+
 // Constants
 
 /// The smallest `I32`.
@@ -202,3 +204,67 @@ pub fn wrapping_mul(a: I32, b: I32) -> I32
 @external(native, "cheby_i32_wrapping_neg")
 @external(js, "./i32.mjs", "wrapping_neg")
 pub fn wrapping_neg(n: I32) -> I32
+
+// Examples
+
+test "the i32 range" {
+  assert min_value == -2_147_483_648
+  assert max_value == 2_147_483_647
+}
+
+test "conversions to i32" {
+  assert from_i16(-32768) == -32768
+  assert from_u16(65535) == 65535
+  assert from_int(-2_147_483_649) == Err(Nil)
+  assert from_i64(-1) == Ok(-1)
+  assert from_u32(4_294_967_295) == Err(Nil)
+}
+
+test "i32 parses and shows decimal digits" {
+  let small: I32 = -5
+  assert parse("2147483647") == Ok(2_147_483_647)
+  assert parse("2147483648") == Err(Nil)
+  assert parse_base("-80000000", 16) == Ok(-2_147_483_648)
+  assert show(max_value) == "2147483647"
+  assert "{small}" == "-5"
+}
+
+test "comparing i32 values" {
+  assert compare(-1, 1) == Less
+  assert compare(3, 3) == Equal
+  assert min(-100, 7) == -100
+  assert max(-100, 7) == 7
+}
+
+test "i32 operators as functions" {
+  assert add(100, 27) == 127
+  assert sub(-100, 28) == -128
+  assert mul(-4, 5) == -20
+  assert div(-7, 2) == -3
+  assert rem(-7, 2) == -1
+  assert neg(127) == -127
+  assert abs(-127) == 127
+}
+
+test "i32 checked arithmetic reports overflow" {
+  assert checked_add(100, 27) == Ok(127)
+  assert checked_add(max_value, 1) == Err(Nil)
+  assert checked_sub(min_value, 1) == Err(Nil)
+  assert checked_mul(max_value, 2) == Err(Nil)
+  assert checked_div(min_value, -1) == Err(Nil)
+  assert checked_rem(7, 0) == Err(Nil)
+  assert checked_neg(min_value) == Err(Nil)
+}
+
+test "i32 wrapping arithmetic wraps around" {
+  assert wrapping_add(max_value, 1) == min_value
+  assert wrapping_sub(min_value, 1) == max_value
+  assert wrapping_mul(max_value, 2) == -2
+  assert wrapping_neg(min_value) == min_value
+}
+
+// Tests of `std::int` that need this module.
+
+test "from_i32 widens" {
+  assert int::from_i32(max_value) == 2_147_483_647
+}

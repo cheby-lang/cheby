@@ -1,7 +1,7 @@
 module std::io
 
 fn std::io::print(_0: value) -> value check str#0 {
-  str#0 = "std/io.cheby:7:8"
+  str#0 = "std/io.cheby:81:8"
 bb0:
   call_foreign "cheby_io_print"(borrow _0) -> void
   drop _0
@@ -9,7 +9,7 @@ bb0:
 }
 
 fn std::io::println(_0: value) -> value check str#0 {
-  str#0 = "std/io.cheby:12:8"
+  str#0 = "std/io.cheby:86:8"
 bb0:
   call_foreign "cheby_io_println"(borrow _0) -> void
   drop _0
@@ -17,7 +17,7 @@ bb0:
 }
 
 fn std::io::eprintln(_0: value) -> value check str#0 {
-  str#0 = "std/io.cheby:22:8"
+  str#0 = "std/io.cheby:96:8"
 bb0:
   call_foreign "cheby_io_eprintln"(borrow _0) -> void
   drop _0

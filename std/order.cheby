@@ -34,6 +34,11 @@ pub fn compare(a: Order, b: Order) -> Order {
   }
 }
 
+test "orders compare in declaration order" {
+  assert compare(Less, Greater) == Less
+  assert compare(Greater, Equal) == Greater
+}
+
 /// Returns `"Less"`, `"Equal"` or `"Greater"`. It makes `Order` satisfy `Show`.
 pub fn show(o: Order) -> String {
   case o {
@@ -41,4 +46,9 @@ pub fn show(o: Order) -> String {
     Equal => "Equal"
     Greater => "Greater"
   }
+}
+
+test "an order shows as its constructor" {
+  assert show(Less) == "Less"
+  assert show(Greater) == "Greater"
 }

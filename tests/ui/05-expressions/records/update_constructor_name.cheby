@@ -1,0 +1,17 @@
+// @mode: check-fail
+// @decisions: D-156, D-429
+//! A record update names the type, not a constructor (§5.11.2).
+
+type Shape {
+  Circle { radius: Float, label: String },
+  Square { side: Float, label: String },
+}
+
+fn rename(shape: Shape) -> Shape {
+  Circle { ..shape, label: "renamed" }
+}
+
+fn main() {
+  let s = rename(Square { side: 1.0, label: "a" })
+  assert s.label == "renamed"
+}

@@ -1,0 +1,8 @@
+error[E0047]: mismatched types
+  --> tests/ui/08-interfaces/dyn/no_downcast.cheby:18:19
+   |
+18 |   let c: Circle = s
+   |          ------   ^ expected `Circle`, found `dyn Shape`
+   |          |
+   |          expected because of this annotation
+

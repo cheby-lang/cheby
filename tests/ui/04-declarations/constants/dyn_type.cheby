@@ -1,0 +1,9 @@
+// @mode: check-fail
+// @decisions: D-237
+//! A constant's value must not contain `dyn` values in v1.
+
+pub interface Named {
+  fn name(Self) -> String
+}
+
+pub const anything: List<dyn Named> = []

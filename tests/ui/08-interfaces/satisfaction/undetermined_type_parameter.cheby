@@ -1,0 +1,19 @@
+// @mode: check-fail
+// @decisions: D-064
+//! A satisfying function's type arguments come from its `Self`
+//! parameter. A type parameter that the parameter does not determine
+//! leaves the function unusable for the interface
+//! (GAP(satisfaction-instance-matching)).
+
+type Box<T> {
+  value: T,
+}
+
+fn show<T: Show, U: Show>(b: Box<T>) -> String {
+  "box {b.value}"
+}
+
+fn main() {
+  let b = Box { value: 1 }
+  assert "{b}" == "box 1"
+}
