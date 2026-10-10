@@ -8,7 +8,7 @@
 //! - a line that starts with `< ` is a line of standard input that an
 //!   entry reads (`io::read_line`): it is fed after the input line before
 //!   it and is not echoed, so it is not part of the output
-//!   (GAP(repl-transcript-stdin));
+//!   (D-614);
 //! - every other line is expected output, standard output and standard
 //!   error merged in the order of writes: the harness gives `cheby repl`
 //!   one pipe for both streams.

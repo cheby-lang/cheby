@@ -397,7 +397,7 @@ fn a_dyn_value_inside_a_dyn_value_is_that_value() {
     // Generic code with `T = dyn Shape` converting to `dyn Any` wraps the
     // `dyn Shape` value again, with the descriptor of `dyn Shape`; it is
     // the same value as a direct conversion, which keeps the inner
-    // descriptor (D-502, GAP(dyn-nested)).
+    // descriptor (D-502, D-604).
     let domain = Domain::new();
     alloc::with_domain(Arc::clone(&domain), || {
         let point = POINT_DESC.word();

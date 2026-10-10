@@ -275,8 +275,8 @@ pub enum FnKey {
     /// The code of a dictionary entry through which a `dyn J` value
     /// satisfies a bound (§8.6): it forwards the call of `iface_fn` to the
     /// dictionary the receiver carries, a dictionary of `dyn_iface` (`J`),
-    /// where the function's field depends on `J` (D-524,
-    /// GAP(dyn-forward-key)). Uniform signature.
+    /// where the function's field depends on `J` (D-524, D-602). Uniform
+    /// signature.
     DynForward { iface_fn: DefId, dyn_iface: DefId },
 }
 

@@ -34,7 +34,7 @@
 //!   domain when the entry starts plus the limit, so only what this
 //!   evaluation keeps live counts: earlier constants, the objects of an
 //!   abandoned evaluation and REPL session values do not
-//!   (GAP(const-limit-baseline)). Every allocation checks it before it
+//!   (D-617). Every allocation checks it before it
 //!   asks the system for memory ([`check_budget`]), so the peak never
 //!   passes it and a single huge request is E0076, not an abort; kernels
 //!   allocate through the same path. Exceeding it abandons the entry with
@@ -538,7 +538,7 @@ unsafe fn spawn_entry(
                 EntryMode::Run | EntryMode::Test | EntryMode::Repl => generic::process_seed(),
             };
             alloc::set_current_domain(domain);
-            // GAP(const-limit-baseline): the limit counts what this
+            // D-617: the limit counts what this
             // evaluation adds to the domain, not what was live before it.
             let budget = memory_limit.map_or(u64::MAX, |limit| {
                 u64::try_from(alloc::current_live_bytes())
@@ -1139,8 +1139,7 @@ mod tests {
         let peak = config.domain.peak_bytes();
         assert!(peak > (64 << 10) - 16 && peak <= 64 << 10, "{peak}");
         // The abandoned chain stays live in that domain, but a later
-        // evaluation in it counts only what it adds
-        // (GAP(const-limit-baseline)).
+        // evaluation in it counts only what it adds (D-617).
         let again = EntryConfig {
             domain: Arc::clone(&config.domain),
             ..limited(

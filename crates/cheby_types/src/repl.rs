@@ -213,7 +213,7 @@ pub struct ReplSession {
     /// Per item text (`Red`, `I::f`), the generation after the last one
     /// compiled: two constructors `Red` of different types share the
     /// symbol path `<repl>::Red`, so the second needs a later generation
-    /// (GAP(repl-redefinition-symbols)).
+    /// (D-611).
     text_generations: FxHashMap<Box<str>, u32>,
     /// Types and interfaces that a redefinition replaced.
     stale: BTreeSet<DefId>,

@@ -289,7 +289,7 @@ fn an_item_is_declared_again_for_its_redefinition() {
 }
 
 /// Every symbol of a redefined item carries its generation
-/// (GAP(repl-redefinition-symbols), D-547): function, slot, shim, function
+/// (D-547, D-611): function, slot, shim, function
 /// value, layout words, a nullary constructor's static, a constant's slot,
 /// and the descriptor and dictionary statics of entry modules.
 #[test]

@@ -66,17 +66,21 @@ tests/ui/06-patterns/exhaustiveness/missing_variant.cheby
 
 ## 4. REPL tests
 
-`tests/repl/` holds scripted sessions: inputs and expected outputs, covering redefinition (D-043), stale types, `let` rebinding (D-193), `:type`, `:module` and `:reload` (D-098).
+`tests/repl/` holds scripted sessions: inputs and expected outputs, covering redefinition (D-043), stale types, `let` rebinding (D-193, D-608), `:type`, `:module` and `:reload` (D-098).
 
-A session is a transcript `tests/repl/<name>.repl`. Lines that start with `> ` or `. ` are input, and every other line is expected output. A directory `tests/repl/<name>/` with a `cheby.toml` runs its session inside that package (D-546). The harness gives `cheby repl` one pipe for standard output and standard error, so the expected output is both streams merged in the order of writes (D-548).
+A session is a transcript `tests/repl/<name>.repl`. Lines that start with `> ` or `. ` are input, and every other line is expected output. A directory `tests/repl/<name>/` with a `cheby.toml` runs its session inside that package (D-546). A line that starts with `< ` is a line of standard input that an entry reads, for example with `io::read_line`. It is fed right after the input line before it and is not echoed, so it is not expected output, and blessing keeps it after the same input lines (D-614). The harness gives `cheby repl` one pipe for standard output and standard error, so the expected output is both streams merged in the order of writes (D-548).
 
 ## 5. Parser cross-check
 
 CI parses every example and every source file of every UI test, including each module of a package test (D-471), with both the compiler parser and `tree-sitter-cheby`, and fails if one accepts a file the other rejects (D-272). Only grammar errors count. A rule that the spec enforces and tree-sitter does not is checked by a validation pass after parsing, so the compiler parser accepts the file too (D-424). Files that test syntax errors on purpose must be rejected by both, so a `parse-fail` UI test must contain a grammar error, and the other syntax rules are `check-fail` tests. Where the compiler reports a grammar error that tree-sitter does not, the decision log lists a grammar mismatch to fix in tree-sitter. The tree-sitter grammar is pulled in at the commit pinned in `tests/tree-sitter-cheby.rev`, and bumping it is a normal change (D-290).
 
+The cross-check also parses each input of a REPL transcript, a `> ` line with its `. ` lines, in two forms: as it is, as the items of a module, and inside `fn repl_entry() { … }`, as statements, which covers expressions. Of the commands, only the expression of `:type` is parsed. The two parsers must agree on whether at least one form parses, so an input that both reject is a syntax error on purpose, not a mismatch. The `.cheby` files of a transcript's package directory must parse (D-615).
+
 ## 6. Determinism
 
 CI builds the examples and the synthetic benchmark project twice, with different thread counts and from different absolute paths, and compares all artifacts bit for bit (D-264). In M1 the artifacts are the serialized interfaces and the Cranelift IR dumps. `cargo xtask check-determinism` builds every example and the benchmark projects with `--jobs 1` and with the default, from two different absolute paths, and compares their interface encodings, MIR dumps, CLIF dumps and evaluated constant values byte for byte (D-551). From M3 they are the interface artifacts, objects and executables, and from M4 the JS output.
+
+In M1 the dumps come from `CHEBY_DUMP_DIR`. When it names a directory, every build writes there, overwriting earlier files: `iface/<module path>.iface`, with the segments joined by `.`, for each checked module's canonical interface encoding; `mir/<module path>.mir`, `mir/<module path>.tests.mir` and `mir/entries.mir` as `cheby_mir::dump` prints them; `clif.txt`, the CLIF of every compiled function in compile order, unless the caller captures it; and `consts.txt`, one line `<module path>::<name> = <debug text>` per evaluated constant, sorted. The command first generates each benchmark shape into two directories and compares the trees. Then it copies every example and a generated project of each shape, 20,000 lines by default and at least 40,000 for `large`, under two absolute paths, and builds each copy with `--jobs 1` and with the default, through `cheby check`, which evaluates the constants, and `xtask bench-build`, which compiles every function. The dump trees must be identical, and so must each command's exit status and standard error and the standard output of `cheby check`. The standard output of `bench-build` holds timings and is not compared (D-620).
 
 ## 7. Performance
 

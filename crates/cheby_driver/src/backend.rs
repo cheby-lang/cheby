@@ -22,8 +22,7 @@
 //! and, when the build runs code, their maps and sets are rebuilt with the
 //! per-process seed (D-539).
 //!
-//! **Dumps for determinism checks** (plan §4.5, D-551,
-//! GAP(const-dump-layout)): when the
+//! **Dumps for determinism checks** (plan §4.5, D-551, D-620): when the
 //! environment variable `CHEBY_DUMP_DIR` names a directory, every build
 //! writes there, overwriting earlier files:
 //!

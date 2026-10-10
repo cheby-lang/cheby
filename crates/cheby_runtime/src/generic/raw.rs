@@ -106,8 +106,8 @@ pub(super) unsafe fn view<'a>(word: Word, what: &str) -> View<'a> {
             // SAFETY: a live `dyn` value holds its dictionary at offset 8
             // and its value at 16 (D-524).
             let (mut dict, mut value) = unsafe { (read_field(obj, 8), read_field(obj, 16)) };
-            // GAP(dyn-nested): a `dyn` value whose value is itself a `dyn`
-            // value is that inner value. Generic code builds one when it
+            // D-604: a `dyn` value whose value is itself a `dyn` value is
+            // that inner value. Generic code builds one when it
             // converts a value of a type parameter instantiated with a
             // `dyn` type; a direct conversion keeps the inner descriptor
             // (D-502), and so does the generic one through this rule.

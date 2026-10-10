@@ -401,7 +401,7 @@ impl Statics<'_, '_> {
     /// holding the printed name `dyn <iface>` and the interface's module
     /// path. One object per JIT (D-561), so `dyn I` is one nominal type
     /// (D-582). The builtin `Show` has an empty module path, giving
-    /// `cb$desc$$$dyn$Show` (GAP(dyn-desc-symbol)): the first `$$` still
+    /// `cb$desc$$$dyn$Show` (D-603): the first `$$` still
     /// ends the module path (D-579).
     ///
     /// # Errors

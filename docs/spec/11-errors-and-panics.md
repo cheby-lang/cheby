@@ -220,4 +220,4 @@ Tail calls never grow the stack ([§5.15.3](05-expressions.md#5153-guaranteed-ta
 
 Foreign functions do not perform the entry check. The runtime must leave enough headroom below the limit for foreign calls, or run them on a separate stack (ADR-0032).
 
-_Note:_ the reference implementation gives the root fiber a 64 MiB stack and leaves 256 KiB of headroom below the limit (D-457). Each test gets a 64 MiB stack too, so deep recursion that works under `cheby run` also works in a test (D-596).
+_Note:_ the reference implementation gives the root fiber a 64 MiB stack and leaves 256 KiB of headroom below the limit (D-457). Each test gets a 64 MiB stack too, so deep recursion that works under `cheby run` also works in a test (D-596), and so does the body of each REPL entry (D-613).

@@ -179,8 +179,7 @@ fn run_command() -> ExitCode {
     );
     let out = Out { colors };
     // The commands that build start the worker pool first (D-551). `-j`
-    // is global, and the commands that build nothing ignore it
-    // (GAP(jobs-global)).
+    // is global, and the commands that build nothing ignore it (D-622).
     let builds = matches!(
         cli.command,
         Command::Check { .. } | Command::Run { .. } | Command::Repl { .. } | Command::Test { .. }

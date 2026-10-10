@@ -380,8 +380,7 @@ fn front_end_for(
     }
     // Only phase-A errors stop the front end (D-452); a phase-A warning
     // denied by `--deny-warnings` does not, so the later phases still
-    // report theirs, and the command fails after them
-    // (GAP(deny-warnings-phase-a)).
+    // report theirs, and the command fails after them (D-621).
     if out.diagnostics.iter().any(Diagnostic::is_error) {
         return Ok(None);
     }

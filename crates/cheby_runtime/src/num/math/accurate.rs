@@ -53,7 +53,7 @@ pub(super) fn ziv(f: impl Fn(usize) -> Big) -> f64 {
     // Not reached for any binary64 input the evaluation found: a value
     // within 2^-1984 relative of a midpoint would be exact, and the callers
     // handle exact results before they get here. The value at 2048 bits
-    // is rounded as it is (GAP(ziv-precision-cap)).
+    // is rounded as it is (D-623).
     last.round_f64(i64::MAX).unwrap_or(f64::NAN)
 }
 

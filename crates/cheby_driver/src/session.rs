@@ -202,7 +202,7 @@ impl Session {
         }
         let warnings = render(&mut diagnostics, &sources);
         // `env::program_name()` is the package's name, as under `cheby
-        // run`, and `env::args()` is empty (D-578, GAP(repl-program)).
+        // run`, and `env::args()` is empty (D-578, D-612).
         cheby_runtime::entry::set_program(Vec::new(), front.package_name.clone());
         let jit = Jit::configured(
             cheby_codegen_clif::CodegenOptions::default(),
@@ -384,7 +384,7 @@ impl Session {
             std: StdCatalog { known: &self.known },
             // The session runs natively (§13.5, the JIT): an entry is
             // checked for `native` only, so a native-only item of the
-            // package is usable (GAP(repl-targets)).
+            // package is usable (D-606).
             package_targets: self
                 .front
                 .package_targets

@@ -203,8 +203,7 @@ pub fn tuple_fn(iface_fn: &DefName, arity: u32) -> String {
 /// the forwarding entry of `iface_fn` in the dictionaries of `dyn J`
 /// (D-560). Its field in a `J` dictionary depends on `J`, so `J` is part of
 /// the name; an interface function's item is always `Iface$fn`, so the first
-/// `$$` after it ends it, even when a module path is empty (GAP(dyn-forward-key),
-/// W4-A).
+/// `$$` after it ends it, even when a module path is empty (D-602).
 #[must_use]
 pub fn dyn_forward(iface_fn: &DefName, dyn_iface: &DefName) -> String {
     format!(

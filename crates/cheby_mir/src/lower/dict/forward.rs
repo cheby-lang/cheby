@@ -10,7 +10,7 @@
 //! interface function from that dictionary, and tail-calls it with the
 //! value inside in place of the receiver. Where the function sits in a
 //! dictionary of `J` depends on `J` (D-524 puts embedded interfaces'
-//! functions first), so the key names `J` too (GAP(dyn-forward-key)).
+//! functions first), so the key names `J` too (D-602).
 
 use cheby_diag::{FileId, Span, TextRange};
 use cheby_iface::{DefId, Ice, ItemSig};

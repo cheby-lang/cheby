@@ -24,8 +24,8 @@
 //!    A top-level evaluation that runs out of time or memory (D-536) is
 //!    E0076 at that constant: the host's watchdog interrupts it at its next
 //!    function entry or tail call once its deadline passes, and an
-//!    allocation that takes the build's live bytes past the budget ends
-//!    it.
+//!    allocation that would take the bytes this evaluation keeps live past
+//!    the memory limit ends it before memory is requested (D-617).
 //! 4. When everything evaluated, each constant that exists on `js` is
 //!    walked by its type for an `Int` outside ±(2⁵³ − 1) (E0078, D-540),
 //!    if the caller passed the types ([`evaluate_with`]).
@@ -317,8 +317,7 @@ fn rebuild(jit: &Jit, slots: &[*mut u64]) -> Result<(), Ice> {
 /// E0076 for a top-level evaluation of `top` that ran out of time or
 /// memory (D-536). The limit belongs to the top-level evaluation, which
 /// includes the constants it forced, so the diagnostic is at `top`; a note
-/// names the forced constant it was computing, if any
-/// (GAP(const-limit-report-site)).
+/// names the forced constant it was computing, if any (D-618).
 fn over_limit(
     limit: Limit,
     abandoned: &Abandoned,

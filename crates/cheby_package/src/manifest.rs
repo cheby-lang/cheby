@@ -53,7 +53,7 @@ pub struct Manifest {
     /// not given.
     pub const_eval_time_limit: Duration,
     /// `[const-eval] memory-limit`: the most heap bytes that a constant's
-    /// evaluation may keep live at once (D-536, GAP(const-limit-baseline));
+    /// evaluation may keep live at once (D-536, D-617);
     /// [`Manifest::DEFAULT_MEMORY_LIMIT`] when not given.
     pub const_eval_memory_limit: u64,
     /// The `cheby.toml` file in the source map, for diagnostics about the
@@ -448,7 +448,7 @@ impl Reader<'_> {
         })
     }
 
-    /// Reads `[const-eval]` (D-536, GAP(const-eval-limit-zero)): sets the
+    /// Reads `[const-eval]` (D-536, D-616): sets the
     /// limits it gives and reports every other key and every bad value.
     fn const_eval(
         &mut self,

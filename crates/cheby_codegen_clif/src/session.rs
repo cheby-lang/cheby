@@ -5,8 +5,7 @@
 //! item's generation, `$r<gen>` appended when it is above 0, as
 //! `cb$fn$<repl>$f$r1` or `cb$layout$<repl>$Circle$r2`. The generation counts
 //! the definitions of the name compiled before this one, so a redefinition
-//! never collides with what it replaces (GAP(repl-redefinition-symbols),
-//! D-547).
+//! never collides with what it replaces (D-547, D-611).
 //!
 //! An indirection slot is identified by the item's session path (`<repl>::f`)
 //! and its ABI signature (D-456). A redefinition the session marks as

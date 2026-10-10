@@ -30,7 +30,7 @@ Every command takes a global `--color=auto|always|never` flag, which says whethe
 
 `cheby check`, `cheby run`, `cheby test` and `cheby repl` accept `--deny-warnings`, which turns warnings into errors ([§13.8](#138-diagnostics-and-warnings)) (D-080, D-549).
 
-`-j N` or `--jobs N` sets the number of worker threads for the build graph and code generation. The default is the available parallelism. Output never depends on it ([§13.12.6](#13126-deterministic-builds)) (D-264, D-551).
+`-j N` or `--jobs N` sets the number of worker threads for the build graph and code generation. The default is the available parallelism. Output never depends on it ([§13.12.6](#13126-deterministic-builds)) (D-264, D-551). It is a global option, accepted before or after the subcommand, so scripts may pass it to every command. `cheby check`, `cheby run`, `cheby test` and `cheby repl` use it, and the other commands ignore it. `N` must be greater than zero, and `-j 0` is a usage error (D-622).
 
 `cheby run` runs the `main` of the module named by its module path argument, for example `cheby run my_app::tools::migrate`. Without an argument it runs the root module's `main` (D-137). `main` may have any visibility, including `priv` (D-163). A module path that is malformed, names no module of the package, or names a module without `main` is a tool error (D-464). Compile errors are reported first, and then nothing runs. Warnings are printed to standard error before the program starts (D-464).
 
@@ -84,7 +84,7 @@ Here `json` and `json_next` are majors 1 and 2 of one repository, which are two 
 - Each dependency is keyed by the name used in import paths: the key is the first segment of the dependency's module paths in this package, as in `import json_next::decode` (D-238). In v1 a dependency is a git URL plus a `tag` or a commit `rev` (D-044, D-097).
 - A key must be a `LOWER` identifier, must not be `std` and must differ from the package's own `name`. Keys are local to each manifest: two packages may use different keys for the same dependency, and the same key for different ones. Renaming a dependency is just choosing its key, so the dependency's own `name` never has to be unique in a build (D-192, D-238).
 - The dependency table is designed so that a later registry form, such as `json = "1.2"`, can be added without changing existing entries (D-044).
-- The optional `[const-eval]` table raises or lowers the compile-time evaluation limits of [§13.9](#139-compile-time-evaluation) for the package (D-195). `time-limit` is an integer followed by `ms` or `s`, such as `"10s"`, and `memory-limit` is an integer followed by `KiB`, `MiB` or `GiB`, such as `"1GiB"` (D-536).
+- The optional `[const-eval]` table raises or lowers the compile-time evaluation limits of [§13.9](#139-compile-time-evaluation) for the package (D-195). `time-limit` is an integer followed by `ms` or `s`, such as `"10s"`, and `memory-limit` is an integer followed by `KiB`, `MiB` or `GiB`, such as `"1GiB"` (D-536). The integer is written in decimal digits and may have leading zeros. It must be greater than zero, because a zero limit would fail every constant and no value means "no limit", and the limit in milliseconds or bytes must fit in 64 bits (D-616).
 - The top-level keys are exactly `name`, `version`, `description`, `licences`, `targets`, `[dependencies]` and `[const-eval]`, a dependency has only `git`, `tag` and `rev`, and `[const-eval]` has only `time-limit` and `memory-limit`. Any other key is a compile error, so a misspelled key such as `verison` is never ignored silently (D-444, D-536). A value of the wrong form in `[const-eval]` is a compile error too (D-536).
 
 ## 13.4 Dependencies and lockfile
@@ -118,19 +118,61 @@ The REPL accepts (D-098):
 
 Top-level `fn` declarations in the REPL need full signatures, as in a module (D-011). Declarations are type-checked one by one, which the signature rule makes possible (D-011).
 
-Inside a package directory, the REPL loads all of the package's modules and dependencies, and they can be imported (D-098).
+The REPL reads one entry at a time (D-605):
+
+- An entry goes on to the next line while a bracket, a block, a string, a raw string or an interpolation is open, or while its last non-blank line starts with `@` or `///`, which an item must follow. Text inside `//` comments and strings does not count, except the code of an interpolation.
+- A closing bracket that matches nothing ends the entry, and the checker reports it. At the end of input, an unfinished entry is still checked, so its error is reported.
+- Text of only blanks and comments is not an entry and takes no number.
+- An entry is declarations and imports when its first line that is neither blank nor a `//` comment starts with `@`, `///` or `//!`, or with one of the words `fn` not followed by `(`, `pub`, `priv`, `type`, `interface`, `const`, `import` or `test`. It is checked as a module.
+- Any other entry is statements, checked as the body of a block. When its last statement is an expression whose type is not `Never`, its value is shown ([§13.5.5](#1355-prompt-output-and-standard-streams)). The names bound by its top-level `let` and `let assert` statements become session values.
+- A shown `Result` is not a discarded result, and a session value is not an unused binding ([§13.8](#138-diagnostics-and-warnings)).
+- An entry with an error binds nothing, and its unused-binding warnings are not shown.
+
+Inside a package directory, the REPL loads all of the package's modules and dependencies, and they can be imported (D-098). Each entry is checked as a module `<repl:N>` of the local package, so the package's package-visible items are usable at the prompt after an import, without `:module` (D-606). Outside a package, the session's package is `repl`, version `0.0.0`, with no modules. Every shipped standard-library module can be imported. A `priv` item of an entry is visible only inside that entry, because it never becomes a session name. Types and diagnostics write session items without a `<repl:N>::` qualifier, as in `Point`, while locations keep `<repl:N>:line:col` (D-606).
+
+Entries are checked for the `native` target only, meaning the package's targets intersected with `native`, because the session runs on the native JIT. So a native-only item of the package and an `@external(native, …)` entered at the prompt are usable (D-606).
+
+In a session, `env::program_name()` returns the package's name, or `repl` outside a package, and `env::args()` is empty, so transcripts are deterministic (D-612).
 
 ### 13.5.2 Redefinition
 
 In a module, names cannot be redefined. The REPL is the one exception, because it is a session rather than a scope:
 
-- **Functions** are late-bound (D-043). Redefining a function replaces it for every existing caller, through a JIT indirection table. If the signature changes, the REPL re-checks every definition that depends on it and reports each one that no longer type-checks. Until a caller is checked and compiled again, it keeps calling the old function, never code of another signature (D-456).
+- **Functions** are late-bound (D-043). Redefining a function with an equal type signature replaces it for every existing caller, through a JIT indirection table. Signatures are equal when they have the same generics, parameter types, clamped parameters and result, whatever the parameter names (D-607). If the signature changes, the new function replaces the old one for later entries, and the REPL re-checks every definition that depends on it and reports each one that no longer type-checks. Until a caller is checked and compiled again, it keeps calling the old function, never code of another signature (D-456, D-607).
 - **Foreign functions** follow the same rule. The rule that every `@external(native, …)` naming one symbol gives it the same C signature ([§12.5](12-targets-and-ffi.md#125-foreign-functions)) applies to the session's current definitions only. Replaced definitions and entries that failed to compile do not count, so a redefinition may change a foreign symbol's C signature, while two live definitions with different C signatures are still an error (D-475).
 - **Types** can be redefined. Existing values keep the old type, which is now a different type from the new one, and the REPL marks it as stale when printing (D-043).
 - **Interfaces** are redefined like types. The old interface and its implementations stay with the old values, and the new interface is a different interface (D-547).
-- **Constants** are redefined like functions without parameters. With the same type, readers see the new value. With another type, the definitions that depend on the constant are checked again (D-547).
+- **Constants** are redefined like functions without parameters. With the same type, readers see the new value. With another type, the definitions that depend on the constant are checked again (D-547, D-607).
 - **Type aliases** are replaced for later entries. Definitions already checked keep what they were checked against (D-547).
 - **`let` bindings** at the REPL prompt may be rebound with the same name, an explicit REPL exception to the no-shadowing rule, since forbidding it would make the REPL unusable (D-193). The no-shadowing rule ([§5.2.3](05-expressions.md#523-no-shadowing)) still applies inside every expression and declaration, but not between prompt entries.
+
+A prompt-level `let` rebinding shadows. Each `let` or `let assert` creates a new session value, whatever its type, and later entries read the new one. Functions, closures and constants checked or evaluated before the rebinding keep reading the binding they were checked against, so a value never changes once it is shown. A `let` rebinding never checks other definitions again (D-608):
+
+```
+> let x = 1
+> let f = fn() -> Int { x }
+> fn read_x() -> Int { x }
+> let x = 2
+> f()
+1 : Int
+> read_x()
+1 : Int
+> x
+2 : Int
+```
+
+When a function or constant is redefined with another signature or type, every current function and constant whose signature or body names it is checked again from its own text, in the order the definitions entered the session. That includes those that named an earlier definition of the name, and those that relied on the function for interface satisfaction. Each one that checks is compiled again and replaces itself. Each one that fails keeps its old definition, and each of its errors gets the note "`f` was checked again because a definition it uses changed its signature; it keeps its old definition". A redefinition with the same signature or type checks nothing again, and neither does a `let` rebinding or a redefined type, interface or alias. Definitions already checked keep the old type, interface or alias, and their values of an old type are stale (D-609).
+
+An entry that is rejected, because evaluating one of its constants failed or its body panicked, changes nothing in the session: the definitions it replaced are restored (D-607).
+
+For interface satisfaction ([§8.2](08-interfaces.md#82-satisfaction)), the prompt entries of a session count as one module (D-610):
+
+- A type entered at the prompt satisfies an interface through the session's current functions, whichever entries declared them. After `type Cat { Cat(Int) }` and, in a later entry, `fn show(c: Cat) -> String`, `Cat` satisfies `Show` in every entry after the one with `show`. Definitions checked before keep what they were checked against.
+- The visibility rule of [§8.2](08-interfaces.md#82-satisfaction) applies unchanged, and a `priv` function counts only in its own entry.
+- Redefining `show` with the same signature replaces the implementation for code checked earlier too. With another signature, the new function counts for later entries, and the definitions that relied on the old one are checked again.
+- A session name means one function, so the session satisfies an interface for one type at a time, as a module does (D-045). Entering `fn show(d: Dog) -> String` after `Cat`'s `show` replaces it: later entries see `Dog` satisfy `Show`, and `Cat` no longer.
+- A redefined type is a new type. A function that names the old type satisfies the interface for the old type only, and the new type satisfies it once a function that names the new type is entered.
+- For types of the package and of the standard library, the rule of [§8.2](08-interfaces.md#82-satisfaction) is unchanged, and functions entered at the prompt never count for them.
 
 ### 13.5.3 Commands
 
@@ -147,7 +189,7 @@ Entering a module with `:module` makes the REPL behave as if the input were writ
 
 ### 13.5.4 Fibers in the REPL
 
-Each REPL entry runs in its own root scope, as if it were the body of `main` ([§10.10](10-concurrency.md#1010-program-entry-and-exit)). A panic in an entry is printed and does not end the session.
+Each REPL entry runs in its own root scope, as if it were the body of `main` ([§10.10](10-concurrency.md#1010-program-entry-and-exit)). A panic in an entry is printed and does not end the session. _Note:_ the reference implementation runs the body of each entry on a 64 MiB stack, as it runs `main` and tests, and evaluates constants entered at the prompt on the 8 MiB stack of other entries (D-613).
 
 Detached fibers ([§10.4](10-concurrency.md#104-detached-fibers)) started from the REPL keep running after their entry finishes, until the session ends or `:reload` is used, so servers and background work can be tried interactively (D-194).
 
@@ -155,7 +197,7 @@ Detached fibers ([§10.4](10-concurrency.md#104-detached-fibers)) started from t
 
 The REPL shows its session as follows (D-546):
 
-- The prompt is `> `, and `. ` while a bracket or a block is open.
+- The prompt is `> `, and `. ` while an entry goes on to the next line ([§13.5.1](#1351-inputs)) (D-605).
 - An expression's value prints as `<debug text> : <type>`, with the type written as in diagnostics ([§13.8](#138-diagnostics-and-warnings)). A `Nil` value prints nothing. A value whose type a redefinition replaced prints its type followed by ` (stale)`.
 - Declarations and imports print nothing when they succeed.
 - A location in an entry is shown as `<repl:N>:line:col` in diagnostics and panic reports, with entries counted from 1.
@@ -176,7 +218,7 @@ The REPL reads its input lines through the same buffered reader of standard inpu
 
 Before it reads an input line, the REPL flushes standard output, and a failed flush ends it with exit status 1 (D-306). It removes the line's final `\n` or `\r\n` (D-305) and replaces invalid UTF-8 with U+FFFD, as `env::args` does (D-311), because it has no `Result` to report it through. A standard input that cannot be read ends the session as the end of input does (D-575).
 
-_Note:_ the reference implementation tests the REPL with transcripts in `tests/repl/`, in which lines that start with `> ` or `. ` are input and every other line is expected output, with standard output and standard error merged in the order of writes (D-546, D-548).
+_Note:_ the reference implementation tests the REPL with transcripts in `tests/repl/`, in which lines that start with `> ` or `. ` are input and every other line is expected output, with standard output and standard error merged in the order of writes (D-546, D-548). A line that starts with `< ` is a line of standard input that an entry reads. It is fed right after the input line before it and is not echoed, so it is not expected output (D-614).
 
 ## 13.6 Tests
 
@@ -211,7 +253,7 @@ The style itself is defined by the formatter, not by this specification. Example
 
 ## 13.8 Diagnostics and warnings
 
-Compile errors stop compilation. Warnings do not, unless `--deny-warnings` is passed, which is intended for CI (D-080). With it, each warning is rendered as an error with its own code, as in `error[W0002]: unused binding …`, and the first one has the note "warnings are denied by `--deny-warnings`". The command then fails with exit status 1, and `cheby run` and `cheby test` run nothing (D-549). An error found while reading the manifest, discovering modules, lexing, parsing or checking syntax stops the later checks, such as name resolution and type checking, so their diagnostics never come from a broken file (D-452).
+Compile errors stop compilation. Warnings do not, unless `--deny-warnings` is passed, which is intended for CI (D-080). With it, each warning is rendered as an error with its own code, as in `error[W0002]: unused binding …`, and the first one has the note "warnings are denied by `--deny-warnings`". The command then fails with exit status 1, and `cheby run` and `cheby test` run nothing (D-549). An error found while reading the manifest, discovering modules, lexing, parsing or checking syntax stops the later checks, such as name resolution and type checking, so their diagnostics never come from a broken file (D-452). A denied warning of those phases, such as one about the manifest, is rendered as an error but does not stop the later checks, because a warning never comes from a broken file. The command still fails with status 1 after them, `cheby check` evaluates no constants, and `cheby run` and `cheby test` compile and run nothing (D-621).
 
 The following are warnings (D-080 and the cited decisions):
 
@@ -290,7 +332,8 @@ Codes are listed with their explanations in [`docs/diagnostics/`](../diagnostics
 Constant initializers ([§4.5](04-declarations.md#45-constants)) are run by the compiler with the JIT (D-090). Because the language server compiles code continuously, evaluation must be bounded (ADR-0027):
 
 - Each constant's evaluation is limited to 10 seconds and 1 GiB by default. The limits can be adjusted for a package in `cheby.toml` ([§13.3](#133-manifest)). Exceeding a limit is a compile error on that constant (D-195).
-- The time limit is wall-clock time for one evaluation of a constant at the top level, including the constants it forces. It stops a loop at its next function entry or tail call, so a single long call into a standard-library kernel cannot be interrupted. The memory limit is the peak number of heap bytes live in the build while the constant is evaluated, including what kernels allocate, so a constant that builds and drops large temporaries can finish (D-536).
+- The time limit is wall-clock time for one evaluation of a constant at the top level, including the constants it forces. It stops a loop at its next function entry or tail call, so a single long call into a standard-library kernel cannot be interrupted. The memory limit is the peak number of heap bytes that the evaluation keeps live at once, including the constants it forces and what kernels allocate, so a constant that builds and drops large temporaries can finish (D-536). Constants evaluated earlier and REPL session values do not count, so a constant's verdict never depends on what was evaluated before it. Every allocation is checked against the limit before memory is requested, so a single request over the limit exceeds it too (D-617).
+- An exceeded limit is reported at the constant whose evaluation started at the top level, also when the limit ran out in a constant that it forced, which a note then names. The message names the limit and its value as `[const-eval]` spells it (D-618).
 - Evaluation is deterministic: it must not depend on the time, the environment, the file system or randomness, and any attempt to use them is an error (D-090).
 - The hash seed used during evaluation is not random. It is derived from the constant's identity (package, module path and name) and the content hash of what it depends on, so a constant that depends on `Map` or `Set` iteration order gets the same value on every build of the same inputs, but may get a different one when the code it depends on changes (D-269, [§13.12.6](#13126-deterministic-builds)).
 - Results are cached, so a constant is re-evaluated only when something it depends on changes.

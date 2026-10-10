@@ -57,7 +57,7 @@ M5 is listed as a milestone so it has exit criteria, but its work starts as soon
 
 ## Plan decisions
 
-Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-plan), D-284 onward in [M0 foundation](../decisions/LOG.md#2026-10-04-m0-foundation), D-418 onward in [Diagnostics](../decisions/LOG.md#2026-10-06-diagnostics), and the plan-level ones of [M1 syntax layer](../decisions/LOG.md#2026-10-07-m1-syntax-layer), [M1 vertical slice](../decisions/LOG.md#2026-10-07-m1-vertical-slice), [Open items](../decisions/LOG.md#2026-10-07-open-items), [M1 front end](../decisions/LOG.md#2026-10-10-m1-front-end), [M1 back-end plan](../decisions/LOG.md#2026-10-10-m1-back-end-plan), [M1 back end, wave 1](../decisions/LOG.md#2026-10-10-m1-back-end-wave-1), [M1 back end, wave 2](../decisions/LOG.md#2026-10-10-m1-back-end-wave-2) and [M1 back end, wave 3](../decisions/LOG.md#2026-10-10-m1-back-end-wave-3):
+Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-plan), D-284 onward in [M0 foundation](../decisions/LOG.md#2026-10-04-m0-foundation), D-418 onward in [Diagnostics](../decisions/LOG.md#2026-10-06-diagnostics), and the plan-level ones of [M1 syntax layer](../decisions/LOG.md#2026-10-07-m1-syntax-layer), [M1 vertical slice](../decisions/LOG.md#2026-10-07-m1-vertical-slice), [Open items](../decisions/LOG.md#2026-10-07-open-items), [M1 front end](../decisions/LOG.md#2026-10-10-m1-front-end), [M1 back-end plan](../decisions/LOG.md#2026-10-10-m1-back-end-plan), [M1 back end, wave 1](../decisions/LOG.md#2026-10-10-m1-back-end-wave-1), [M1 back end, wave 2](../decisions/LOG.md#2026-10-10-m1-back-end-wave-2), [M1 back end, wave 3](../decisions/LOG.md#2026-10-10-m1-back-end-wave-3) and [M1 back end, wave 4](../decisions/LOG.md#2026-10-11-m1-back-end-wave-4):
 
 | Decision  | Summary                                                                                             |
 | --------- | --------------------------------------------------------------------------------------------------- |
@@ -168,6 +168,18 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-599     | The std self-test checks std through the in-memory package `std_self_test`                          |
 | D-600     | `@flags` is split at whitespace into words, appended in order, with no quoting                      |
 | D-601     | The `cheby` command runs its subcommand on a 256 MiB thread, a stopgap for deep recursion           |
+| D-602     | A `dyn` forwarder is keyed by the interface function and the receiver's interface                   |
+| D-603     | The descriptor of `dyn` of a builtin interface keeps the general symbol, with an empty module path  |
+| D-607     | A REPL redefinition takes over a slot only with an equal type signature, undone if rejected         |
+| D-611     | REPL items and entry statics use the module path `<repl>`, with generations per name and text       |
+| D-613     | The body of a REPL entry runs on a 64 MiB stack, its constants on 8 MiB                             |
+| D-614     | `< ` lines of a REPL transcript are standard input, fed after the input line before them            |
+| D-615     | `cargo xtask cross-check` parses each REPL input as module items and as statements                  |
+| D-617     | The constant memory limit counts one evaluation's live bytes, checked before each allocation        |
+| D-619     | The JS range check walks a type graph of at most 65,536 nodes                                       |
+| D-620     | `CHEBY_DUMP_DIR` dump files, and the builds and outputs that `check-determinism` compares           |
+| D-622     | `-j` is global and sizes rayon's pool of workers with 256 MiB stacks                                |
+| D-623     | Ziv's loop stops at 2048 bits, and the fast phase reads generated tables                            |
 
 ## Open questions
 

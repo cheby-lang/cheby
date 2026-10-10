@@ -89,8 +89,8 @@ impl Builder<'_, '_> {
         }
         let index = self.nodes.len();
         if index >= MAX_NODES {
-            // GAP(const-js-range-growing-types): a type that grows without
-            // bound as it unfolds is not checked past this point.
+            // D-619: a type that grows without bound as it unfolds is not
+            // checked past this point.
             self.nodes.push(RangeNode::Opaque);
             return Ok(index);
         }

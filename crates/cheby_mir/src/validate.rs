@@ -160,7 +160,7 @@ fn check_static(m: &MirModule, n: usize, s: &StaticObject, errors: &mut Vec<Stri
         errors.push(format!("{label}: has id {}", s.id.as_u32()));
     }
     // The descriptor of `dyn Show` carries the builtin `Show`'s empty
-    // module path (GAP(dyn-desc-symbol)).
+    // module path (D-603).
     let builtin_dyn = s.kind == StaticKind::Desc && s.name.starts_with("dyn$");
     if s.name.is_empty() || (s.module.is_empty() && !builtin_dyn) {
         errors.push(format!("{label}: needs a module path and a name"));
