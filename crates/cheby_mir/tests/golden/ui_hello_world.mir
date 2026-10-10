@@ -42,6 +42,8 @@ bb0:
   tail_call std::io::println(_0)
 }
 
+callee std::io::println(value) -> value
+
 entries
 
 fn entry main(hello_world::main) [c] () -> i64 {
@@ -50,3 +52,5 @@ bb0:
   drop _0
   return const i64 0
 }
+
+callee hello_world::main() -> value

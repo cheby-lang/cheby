@@ -38,8 +38,13 @@ pub const RC_STATIC: i32 = 0;
 /// The reference count of a freshly allocated, uniquely owned object.
 pub const RC_UNIQUE: i32 = 1;
 
-/// The scan count meaning "the scan count does not fit, see the layout
-/// table" (or, for tuples, the field count stored at offset 8).
+/// The scan count meaning "the scan count does not fit" (D-279). A
+/// constructor's fields are then read from the layout table. A tuple holds
+/// its arity as a tagged integer at offset 8, then its elements. A
+/// closure, dictionary or descriptor keeps its first field (code word,
+/// type descriptor or nominal descriptor) at offset 8 and holds the number
+/// of the fields after the count as a tagged integer at offset 16, then
+/// those fields, GAP(escaped-scan-count).
 pub const SCAN_ESCAPE: u8 = 255;
 
 /// The largest scan count stored directly in the header.
@@ -167,8 +172,18 @@ pub mod layout {
     pub const TUPLE: LayoutId = 7;
     /// A boxed `U64` outside 63 bits: one raw `u64`.
     pub const BOXED_U64: LayoutId = 8;
-    /// The last id reserved for runtime kinds (dictionaries, `dyn`
-    /// packages, type descriptors, ...).
+    /// A dictionary (D-524): header, the type's descriptor, one closure
+    /// per interface function, then the embedded interfaces' dictionaries.
+    pub const DICT: LayoutId = 9;
+    /// A `dyn` value (D-524): header, the dictionary, the value.
+    pub const DYN: LayoutId = 10;
+    /// A type descriptor (D-524): header, the nominal descriptor, then the
+    /// argument descriptors.
+    pub const DESC: LayoutId = 11;
+    /// A nominal descriptor (D-524): a static object per type with its
+    /// printed name and module path as static strings.
+    pub const DESC_NOMINAL: LayoutId = 12;
+    /// The last id reserved for runtime kinds; 13 to 15 are unassigned.
     pub const RUNTIME_RESERVED_END: LayoutId = 15;
     /// `Nil`.
     pub const NIL: LayoutId = 16;
@@ -190,6 +205,19 @@ pub mod layout {
     pub const OK: LayoutId = 24;
     /// `Err(error)`.
     pub const ERR: LayoutId = 25;
+    /// The first id of list nodes (F3, D-524); the list runtime chooses
+    /// within [`LIST_FIRST`]..=[`LIST_LAST`].
+    pub const LIST_FIRST: LayoutId = 26;
+    /// The last id of list nodes.
+    pub const LIST_LAST: LayoutId = 31;
+    /// The first id of map and set nodes (F4, D-524).
+    pub const MAP_FIRST: LayoutId = 32;
+    /// The last id of map and set nodes.
+    pub const MAP_LAST: LayoutId = 39;
+    /// The first id of the runtime-defined kinds registered with
+    /// `layout::register_builtin` (list and map nodes, then 40 to 63
+    /// reserved).
+    pub const CUSTOM_FIRST: LayoutId = LIST_FIRST;
     /// The last id reserved for builtin collection nodes (F3, F4).
     pub const BUILTIN_RESERVED_END: LayoutId = 63;
     /// The first id handed out to user constructors.
@@ -291,11 +319,18 @@ pub enum PanicKind {
     EqualityOnFunction = 7,
     /// A shift by a negative amount or by the width or more (D-092).
     ShiftOutOfRange = 8,
+    /// Constant evaluation needed a constant whose initializer is running
+    /// (D-535). Internal: constant evaluation reports it as E0069, never
+    /// with this message.
+    ConstCycle = 9,
+    /// Constant evaluation reached an external function or effect it may
+    /// not use (D-537, D-532). Internal: reported as E0077.
+    ForbiddenEffect = 10,
 }
 
 impl PanicKind {
     /// Every kind, in numbering order.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 11] = [
         Self::Explicit,
         Self::Todo,
         Self::Overflow,
@@ -305,6 +340,8 @@ impl PanicKind {
         Self::StackOverflow,
         Self::EqualityOnFunction,
         Self::ShiftOutOfRange,
+        Self::ConstCycle,
+        Self::ForbiddenEffect,
     ];
 
     /// The number passed at the ABI.
@@ -330,6 +367,8 @@ impl PanicKind {
             6 => Some(Self::StackOverflow),
             7 => Some(Self::EqualityOnFunction),
             8 => Some(Self::ShiftOutOfRange),
+            9 => Some(Self::ConstCycle),
+            10 => Some(Self::ForbiddenEffect),
             _ => None,
         }
     }
@@ -347,6 +386,8 @@ impl PanicKind {
             Self::StackOverflow => "stack overflow",
             Self::EqualityOnFunction => "equality or hashing reached a function value or a handle",
             Self::ShiftOutOfRange => "shift amount out of range",
+            Self::ConstCycle => "constant depends on itself",
+            Self::ForbiddenEffect => "constant evaluation reached an effect",
         }
     }
 }
@@ -381,6 +422,71 @@ pub mod sym {
     pub const STATIC_GREATER: &str = "cheby_rt_static_greater";
     /// Data: the static `None` object.
     pub const STATIC_NONE: &str = "cheby_rt_static_none";
+    /// `uint64_t cheby_rt_str_with_capacity(ExecCtx *ctx, int64_t cap)`:
+    /// an empty unique `String` with room for `cap` bytes (a negative
+    /// `cap` counts as 0). Result owned (D-520).
+    pub const STR_WITH_CAPACITY: &str = "cheby_rt_str_with_capacity";
+    /// `uint64_t cheby_rt_str_append(ExecCtx *ctx, uint64_t acc, uint64_t piece)`:
+    /// `acc` followed by `piece`. Consumes `acc` (updated in place when it
+    /// is unique and has room, D-316), borrows `piece`; result owned.
+    pub const STR_APPEND: &str = "cheby_rt_str_append";
+    /// `bool cheby_rt_str_eq(uint64_t a, uint64_t b)`: byte equality of two
+    /// borrowed `String`s.
+    pub const STR_EQ: &str = "cheby_rt_str_eq";
+    /// `uint64_t cheby_rt_list_push(ExecCtx *ctx, uint64_t list, uint64_t elem)`:
+    /// consumes both, in place when the list is unique (W1-E).
+    pub const LIST_PUSH: &str = "cheby_rt_list_push";
+    /// `uint64_t cheby_rt_list_append(ExecCtx *ctx, uint64_t a, uint64_t b)`:
+    /// consumes `a`, borrows `b` (W1-E).
+    pub const LIST_APPEND: &str = "cheby_rt_list_append";
+    /// `int64_t cheby_rt_list_length(uint64_t list)`, borrowed (W1-E).
+    pub const LIST_LENGTH: &str = "cheby_rt_list_length";
+    /// `uint64_t cheby_rt_list_get(uint64_t list, int64_t index)`: the
+    /// element, dup'd; the index is in range (W1-E).
+    pub const LIST_GET: &str = "cheby_rt_list_get";
+    /// `uint64_t cheby_rt_list_slice(ExecCtx *ctx, uint64_t list, int64_t start, int64_t end)`:
+    /// an O(1) view, list borrowed, result owned (W1-E).
+    pub const LIST_SLICE: &str = "cheby_rt_list_slice";
+    /// Data: the static empty list (W1-E).
+    pub const STATIC_EMPTY_LIST: &str = "cheby_rt_static_empty_list";
+    /// `bool cheby_rt_equal(ExecCtx *ctx, uint64_t a, uint64_t b, uint64_t location)`:
+    /// structural `==` (§3.13) of two borrowed uniform words; panics
+    /// `EqualityOnFunction` (D-233) at `location`, a static `String` or 0
+    /// for unknown, GAP(equal-panic-location).
+    pub const EQUAL: &str = "cheby_rt_equal";
+    /// `uint64_t cheby_rt_debug(ExecCtx *ctx, uint64_t value)`: the debug
+    /// text (§3.13) of a borrowed uniform word, as an owned `String`.
+    pub const DEBUG: &str = "cheby_rt_debug";
+    /// `void cheby_rt_effect_check(ExecCtx *ctx, uint64_t symbol)`: panics
+    /// `ForbiddenEffect` when the entry evaluates a constant and the
+    /// borrowed `String` names a forbidden native symbol (W3-D).
+    pub const EFFECT_CHECK: &str = "cheby_rt_effect_check";
+    /// `uint64_t cheby_rt_box_i64(ExecCtx *ctx, int64_t value)`: the
+    /// uniform word of an `Int`/`I64` (a `BoxedInt` outside 63 bits).
+    pub const BOX_I64: &str = "cheby_rt_box_i64";
+    /// `uint64_t cheby_rt_box_u64(ExecCtx *ctx, uint64_t value)`: the
+    /// uniform word of a `U64` (a `BoxedU64` above 2^62 - 1).
+    pub const BOX_U64: &str = "cheby_rt_box_u64";
+    /// `uint64_t cheby_rt_box_f64(ExecCtx *ctx, double value)`: a
+    /// `BoxedFloat`, owned.
+    pub const BOX_F64: &str = "cheby_rt_box_f64";
+    /// `uint64_t cheby_rt_box_f32(ExecCtx *ctx, float value)`: a
+    /// `BoxedF32`, owned.
+    pub const BOX_F32: &str = "cheby_rt_box_f32";
+    /// `double cheby_rt_fmod_f64(double a, double b)`: `a % b` with the
+    /// sign of `a` (D-527).
+    pub const FMOD_F64: &str = "cheby_rt_fmod_f64";
+    /// `float cheby_rt_fmod_f32(float a, float b)`: `a % b` with the sign
+    /// of `a` (D-527).
+    pub const FMOD_F32: &str = "cheby_rt_fmod_f32";
+    /// `uint64_t cheby_rt_const_missing(ExecCtx *ctx, uint64_t slot_address)`:
+    /// called by a `LoadConst` that found an empty slot; returns the
+    /// constant's value, borrowed like the slot's (W3-D).
+    pub const CONST_MISSING: &str = "cheby_rt_const_missing";
+    /// Code bound to every unresolved native symbol of a `cheby check`
+    /// build (D-532): takes no `ctx` and panics `ForbiddenEffect` through
+    /// the current entry.
+    pub const UNRESOLVED: &str = "cheby_rt_unresolved";
     /// `void cheby_io_print(uint64_t text)`, `text` borrowed.
     pub const IO_PRINT: &str = "cheby_io_print";
     /// `void cheby_io_println(uint64_t text)`, `text` borrowed.
@@ -390,8 +496,24 @@ pub mod sym {
     /// `void cheby_io_eprintln(uint64_t text)`, `text` borrowed.
     pub const IO_EPRINTLN: &str = "cheby_io_eprintln";
 
-    /// Every symbol, in the order `symbols()` lists them.
-    pub const ALL: [&str; 16] = [
+    /// The prefix of the builtin nominal descriptors `cheby_rt_desc_<name>`
+    /// (D-523), defined by W3-B.
+    pub const DESC_PREFIX: &str = "cheby_rt_desc_";
+
+    /// The `<name>` of every builtin nominal descriptor
+    /// `cheby_rt_desc_<name>` (plan §4.3.2). `tuple` takes its arity from
+    /// its `Desc` arguments, and `fn` takes the parameter types, then the
+    /// result.
+    pub const DESC_NAMES: [&str; 23] = [
+        "int", "float", "f32", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "bool", "nil",
+        "string", "bytes", "list", "map", "set", "option", "result", "order", "tuple", "fn",
+    ];
+
+    /// Every runtime symbol that is not a kernel (the `cheby_rt_*` helpers
+    /// and static objects), in the order `symbols()` lists them first.
+    /// Kernels (`cheby_<module>_<function>`) follow in `symbols()`; they
+    /// come from each kernel module's registration (plan §4.3.3).
+    pub const ALL: [&str; 32] = [
         ALLOC,
         DUP,
         DROP,
@@ -404,10 +526,26 @@ pub mod sym {
         STATIC_EQUAL,
         STATIC_GREATER,
         STATIC_NONE,
-        IO_PRINT,
-        IO_PRINTLN,
-        IO_EPRINT,
-        IO_EPRINTLN,
+        STR_WITH_CAPACITY,
+        STR_APPEND,
+        STR_EQ,
+        LIST_PUSH,
+        LIST_APPEND,
+        LIST_LENGTH,
+        LIST_GET,
+        LIST_SLICE,
+        STATIC_EMPTY_LIST,
+        EQUAL,
+        DEBUG,
+        EFFECT_CHECK,
+        BOX_I64,
+        BOX_U64,
+        BOX_F64,
+        BOX_F32,
+        FMOD_F64,
+        FMOD_F32,
+        CONST_MISSING,
+        UNRESOLVED,
     ];
 
     /// The data symbol of the static object of a builtin nullary
@@ -503,7 +641,15 @@ mod tests {
             assert_eq!(usize::try_from(kind.code()).ok(), Some(index));
             assert_eq!(PanicKind::from_code(kind.code()), Some(kind));
         }
-        assert_eq!(PanicKind::from_code(9), None);
+        assert_eq!(PanicKind::from_code(11), None);
+        assert_eq!(
+            PanicKind::ConstCycle.default_message(),
+            "constant depends on itself"
+        );
+        assert_eq!(
+            PanicKind::ForbiddenEffect.default_message(),
+            "constant evaluation reached an effect"
+        );
     }
 
     #[test]
@@ -541,6 +687,24 @@ mod tests {
         assert_eq!(string::alloc_size(8), Some(32));
         assert_eq!(string::alloc_size(u64::MAX), None);
         assert_eq!(string::alloc_size(u64::MAX - 30), None);
+    }
+
+    #[test]
+    fn layout_ids_follow_the_plan() {
+        assert_eq!(
+            [
+                layout::DICT,
+                layout::DYN,
+                layout::DESC,
+                layout::DESC_NOMINAL
+            ],
+            [9, 10, 11, 12]
+        );
+        assert_eq!((layout::LIST_FIRST, layout::LIST_LAST), (26, 31));
+        assert_eq!((layout::MAP_FIRST, layout::MAP_LAST), (32, 39));
+        assert_eq!(layout::CUSTOM_FIRST, 26);
+        assert_eq!(sym::DESC_NAMES.len(), 23);
+        assert!(sym::ALL.iter().all(|name| name.starts_with("cheby_rt_")));
     }
 
     #[test]

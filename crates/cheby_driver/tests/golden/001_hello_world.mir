@@ -8,6 +8,12 @@ bb0:
   return const nil
 }
 
+layout ctor std::io::Error: Error.Error tag 0 key f8879bc7f612847b record [kind: value @8, message: value @16]
+layout ctor std::io::NotFound: Kind.NotFound tag 0 key 5565b57f5c6dbf52 []
+layout ctor std::io::PermissionDenied: Kind.PermissionDenied tag 1 key 5565b57f5c6dbf52 []
+layout ctor std::io::InvalidData: Kind.InvalidData tag 2 key 5565b57f5c6dbf52 []
+layout ctor std::io::Other: Kind.Other tag 3 key 5565b57f5c6dbf52 []
+
 module hello_world
 
 fn hello_world::main() -> value check str#0 {
@@ -18,6 +24,8 @@ bb0:
   tail_call std::io::println(_0)
 }
 
+callee std::io::println(value) -> value
+
 entries
 
 fn entry main(hello_world::main) [c] () -> i64 {
@@ -26,3 +34,5 @@ bb0:
   drop _0
   return const i64 0
 }
+
+callee hello_world::main() -> value

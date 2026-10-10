@@ -35,3 +35,32 @@ tests/ui/07-modules-and-packages/
 - A file and a directory with the same name are an error, since they would share goldens.
 
 Run with `cargo test --test ui`.
+
+## Milestones and strict runs
+
+`tests/milestone` names the milestone in progress (D-288). A test of an earlier milestone must pass, a test of the milestone in progress is pending and only reported, and a test of a later milestone must fail. Both harnesses, this one and the conformance harness (`cargo test --test conformance`), read three environment variables, and CI sets none of them (D-544):
+
+| Variable                     | Effect                                                                                                                  |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `CHEBY_MILESTONE=<Mn>`       | overrides `tests/milestone` for this run, so with `M2` every M1 test is required                                        |
+| `CHEBY_PENDING=require`      | a failing pending test is a failure, unless the allow list names it; `report` or no value keeps D-288's behavior        |
+| `CHEBY_PENDING_ALLOW=<file>` | the allow list of a strict run: one glob per line, the first word of the line, with `#` comments and free text after it |
+
+Every `cheby` the harnesses start runs with `CHEBY_RT_POISON=1`, so a toolchain with debug assertions poisons freed objects and stops with a fatal "use after free" error when one is used again.
+
+In an allow-list pattern, `*` matches any run of characters (`/` and `:` included), `?` matches one character, and every other character matches itself. The rest of the line is a note, such as the reason a test is carried and the gate it must pass by:
+
+```text
+# Carried tests.
+05-expressions/case/*      # W2-B: decision trees, gate 2
+024_two_sum::test          needs dictionaries (W3-A), gate 3
+```
+
+Only a test pending because its milestone is the one in progress is made strict. The conformance trials that are pending at every milestone stay report-only: a `skip-run` example's check before its milestone (D-445), and an example's `::test` trial before its milestone or without its fixture (D-472). A test of a milestone later than `tests/milestone` that `CHEBY_MILESTONE` made pending also stays report-only: `CHEBY_MILESTONE=M2` requires every M1 test, while the M2 tests may still fail at M1's exit. The allow list never excuses a test that must pass or must fail.
+
+At the end of a run each harness prints how many pending tests passed, then lists them by outcome: `passed`, `allowed failure` (with the pattern that allowed it), `required, failed` (strict runs only) and `still failing` (report-only). A passing test that is still on the allow list can be removed from it.
+
+```sh
+CHEBY_PENDING=require CHEBY_PENDING_ALLOW=carried.txt cargo test -p cheby_cli --test ui --test conformance
+CHEBY_MILESTONE=M2 cargo test -p cheby_cli --test conformance
+```

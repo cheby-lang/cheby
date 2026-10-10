@@ -12,7 +12,7 @@
 
 use cheby_diag::{Diagnostic, SourceMap};
 use cheby_iface::{DepView, Ice, ModuleId};
-use cheby_jit::Jit;
+use cheby_jit::{Jit, JitOptions};
 use cheby_mir::{
     Defs, EntryKind, EntryRequest, LowerCx, MirModule, Program, Root, Unsupported, count_and_check,
     lower_entries, lower_items, reachable,
@@ -107,12 +107,23 @@ fn lower_main_entry(
     Ok(unit)
 }
 
-/// Compiles `units` in one batch.
+/// Compiles `units` in one batch. A run takes its JIT options from the
+/// environment (checked counting under `CHEBY_RT_POISON=1`, plan §4.3.4);
+/// a CLIF dump (`capture_clif`) always uses the default options, so dumps
+/// do not depend on the environment (D-264).
 pub(crate) fn compile(units: &[MirModule], capture_clif: bool) -> Result<Jit, cheby_jit::JitError> {
-    let mut jit = Jit::with_options(cheby_codegen_clif::CodegenOptions {
-        capture_clif,
-        ..cheby_codegen_clif::CodegenOptions::default()
-    })?;
+    let options = if capture_clif {
+        JitOptions::default()
+    } else {
+        JitOptions::from_env()
+    };
+    let mut jit = Jit::configured(
+        cheby_codegen_clif::CodegenOptions {
+            capture_clif,
+            ..cheby_codegen_clif::CodegenOptions::default()
+        },
+        options,
+    )?;
     jit.compile(units)?;
     Ok(jit)
 }

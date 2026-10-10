@@ -77,6 +77,50 @@ fn mangled_names_do_not_collide() {
         "cb$str$fn$std$io$println$0"
     );
     assert_eq!(mangle::trampoline(2), "cb$tramp$2");
+    // D-454's layout words, D-523's statics.
+    assert_eq!(
+        mangle::item(Kind::Layout, &name("geo", "Circle")),
+        "cb$layout$geo$Circle"
+    );
+    assert_eq!(
+        mangle::static_object(Kind::Dict, "app::shapes", "Show$Point"),
+        "cb$dict$app$shapes$Show$Point"
+    );
+    assert_eq!(
+        mangle::tuple_fn(&name("std::fmt", "Show::show"), 2),
+        "cb$tfn$std$fmt$Show$show$2"
+    );
+}
+
+/// The C signatures of every runtime helper (plan §4.3.1): `ctx` first for
+/// those that allocate, may panic or call back, `bool` results
+/// zero-extended, floats in float registers.
+#[test]
+fn runtime_helper_signatures() {
+    use cheby_mir::RuntimeFn;
+    use runtime::RuntimeFunc;
+    for helper in RuntimeFn::ALL {
+        let (f, takes_ctx) = RuntimeFunc::of(helper);
+        let (params, ret) = f.ctypes();
+        let ctx = usize::from(takes_ctx);
+        assert_eq!(params.len(), helper.params().len() + ctx, "{helper:?}");
+        assert_eq!(ret == CType::Void, helper.ret().is_none(), "{helper:?}");
+    }
+    assert_eq!(
+        RuntimeFunc::ALL
+            .iter()
+            .enumerate()
+            .filter(|(n, f)| f.index() != *n)
+            .count(),
+        0
+    );
+    let fmod = sig::c_signature(
+        RuntimeFunc::FmodF32.ctypes().0,
+        RuntimeFunc::FmodF32.ctypes().1,
+        CallConv::SystemV,
+    );
+    assert_eq!(fmod.params[0].value_type, types::F32);
+    assert_eq!(fmod.returns[0].value_type, types::F32);
 }
 
 /// Every Cheby signature starts with `ctx` and uses the tail convention;
@@ -209,6 +253,8 @@ fn unit() -> MirModule {
             },
         }],
         layouts: Vec::new(),
+        foreign_layouts: Vec::new(),
+        statics: Vec::new(),
         names: vec![DefName {
             def: f,
             module: "app".into(),
@@ -323,6 +369,8 @@ fn labs_unit(index: u32, params: &[CType]) -> MirModule {
             },
         }],
         layouts: Vec::new(),
+        foreign_layouts: Vec::new(),
+        statics: Vec::new(),
         names: vec![DefName {
             def: g,
             module: "app".into(),

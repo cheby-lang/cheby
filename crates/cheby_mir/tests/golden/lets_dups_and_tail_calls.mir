@@ -62,6 +62,11 @@ bb0:
   tail_call std::io::eprintln(_3)
 }
 
+callee app::shout(value) -> value
+callee std::io::print(value) -> value
+callee std::io::println(value) -> value
+callee std::io::eprintln(value) -> value
+
 entries
 
 fn entry main(app::main) [c] () -> i64 {
@@ -70,3 +75,5 @@ bb0:
   drop _0
   return const i64 0
 }
+
+callee app::main() -> value

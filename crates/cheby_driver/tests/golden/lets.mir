@@ -24,6 +24,12 @@ bb0:
   return const nil
 }
 
+layout ctor std::io::Error: Error.Error tag 0 key f8879bc7f612847b record [kind: value @8, message: value @16]
+layout ctor std::io::NotFound: Kind.NotFound tag 0 key 5565b57f5c6dbf52 []
+layout ctor std::io::PermissionDenied: Kind.PermissionDenied tag 1 key 5565b57f5c6dbf52 []
+layout ctor std::io::InvalidData: Kind.InvalidData tag 2 key 5565b57f5c6dbf52 []
+layout ctor std::io::Other: Kind.Other tag 3 key 5565b57f5c6dbf52 []
+
 module app::greet
 
 fn app::greet::shout(_0: value) -> value check str#0 {
@@ -35,6 +41,9 @@ bb0:
   drop _2
   tail_call std::io::println(_0)
 }
+
+callee std::io::print(value) -> value
+callee std::io::println(value) -> value
 
 module app
 
@@ -69,6 +78,12 @@ bb0:
   tail_call std::io::eprintln(_3)
 }
 
+callee app::greet::shout(value) -> value
+callee app::shout(value) -> value
+callee std::io::print(value) -> value
+callee std::io::println(value) -> value
+callee std::io::eprintln(value) -> value
+
 entries
 
 fn entry main(app::main) [c] () -> i64 {
@@ -77,3 +92,5 @@ bb0:
   drop _0
   return const i64 0
 }
+
+callee app::main() -> value

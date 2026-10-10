@@ -298,25 +298,29 @@ pub fn prepare_run(root: &Path, options: RunOptions) -> Result<Prepared, Error> 
     let jit = match backend::compile(&units, false) {
         Ok(jit) => jit,
         // A program error found only when loading, not a tool error
-        // (D-442): E0053 at the `@external` that names the symbol.
-        Err(JitError::UnresolvedSymbol(symbol)) => {
-            let span = front
-                .natives
-                .get(symbol.as_str())
-                .map(|binding| binding.span)
-                .ok_or_else(|| {
-                    Ice::new(format!("the native symbol `{symbol}` has no `@external`"))
-                })?;
-            out.diagnostics.push(
-                Diagnostic::new(
-                    codes::UNRESOLVED_NATIVE_SYMBOL,
-                    format!("the native symbol `{symbol}` is not defined"),
-                )
-                .with_primary(span, "nothing defines this symbol")
-                .with_note(
-                    "the symbol must be defined by the Cheby runtime or the running process",
-                ),
-            );
+        // (D-442): one E0053 at the `@external` that names each symbol,
+        // sorted by position (D-532).
+        Err(JitError::UnresolvedSymbols(symbols)) => {
+            for symbol in symbols {
+                let span = front
+                    .natives
+                    .get(symbol.as_str())
+                    .map(|binding| binding.span)
+                    .ok_or_else(|| {
+                        Ice::new(format!("the native symbol `{symbol}` has no `@external`"))
+                    })?;
+                out.diagnostics.push(
+                    Diagnostic::new(
+                        codes::UNRESOLVED_NATIVE_SYMBOL,
+                        format!("the native symbol `{symbol}` is not defined"),
+                    )
+                    .with_primary(span, "nothing defines this symbol")
+                    .with_note(
+                        "the symbol must be defined by the Cheby runtime or the running process",
+                    ),
+                );
+            }
+            out.sources.sort(&mut out.diagnostics);
             return Ok(Prepared::CompileFailed(out));
         }
         Err(e) => return Err(e.into()),

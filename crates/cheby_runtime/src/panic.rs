@@ -99,6 +99,22 @@ pub unsafe extern "C" fn cheby_rt_panic(
     unsafe { abandon(ctx, report) }
 }
 
+/// Panics the entry running on this thread, for runtime code that has no
+/// `ctx` of its own: kernels (D-453) and the stub bound to unresolved
+/// symbols (D-532). The location is unknown. Ends the process if no entry
+/// runs on this thread.
+pub fn panic_current(kind: PanicKind, message: Option<&str>) -> ! {
+    let Some(ctx) = crate::entry::current_ctx() else {
+        fatal(format_args!(
+            "a `{kind:?}` panic happened outside of any entry"
+        ));
+    };
+    let report = PanicReport::new(kind, message, UNKNOWN_LOCATION);
+    // SAFETY: `ctx` is the context of the entry running on this thread,
+    // recorded by `run_entry` and alive while the entry runs.
+    unsafe { abandon(ctx, report) }
+}
+
 /// The slow path of the function-entry stack check: called when the stack
 /// pointer is below `ctx.stack_limit`. Handles a pending interrupt and
 /// returns, or panics with [`PanicKind::StackOverflow`] if the real limit

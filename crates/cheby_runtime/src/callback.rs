@@ -1,0 +1,146 @@
+//! Calling Cheby closures from kernels (D-526, kernel-reentry).
+//!
+//! Kernels take no `ctx` (D-453). A kernel that must call a closure, such
+//! as `map::upsert` or a caller of `@std_hooks` (D-484), calls [`call`],
+//! which reaches the closure through the running entry's trampoline of the
+//! right arity (`cb$tramp$<n>`, C ABI: `u64 (ctx*, u64 closure, u64 a0,
+//! …)`) with the entry's context. A panic inside the closure parks the
+//! entry's thread like any other panic (D-457): no Rust frame of the kernel
+//! ever runs again, so a kernel must not hold anything that needs dropping
+//! for correctness across the call, except memory that the abandoned entry
+//! leaks anyway.
+
+use crate::abi::Word;
+use crate::entry;
+use crate::panic::fatal;
+
+/// The most arguments a closure called from a kernel may take (D-526).
+pub const MAX_ARITY: usize = 4;
+
+/// Calls `closure` with `args` and returns its result: the closure is
+/// borrowed, the arguments are owned (given to the closure), the result is
+/// owned. Ends the process if no entry runs on this thread, if the entry
+/// has no trampoline of this arity, or if there are more than four
+/// arguments.
+///
+/// # Safety
+///
+/// Called on an entry's thread whose trampolines are valid; `closure` is a
+/// live closure of exactly `args.len()` parameters, and each argument is a
+/// uniform word of its parameter's type.
+#[must_use]
+pub unsafe fn call(closure: Word, args: &[Word]) -> Word {
+    let (Some(ctx), Some(callbacks)) = (entry::current_ctx(), entry::callbacks()) else {
+        fatal(format_args!(
+            "a kernel called a closure outside of any entry"
+        ));
+    };
+    let missing = || -> ! {
+        fatal(format_args!(
+            "the running entry has no trampoline for a closure of {} arguments",
+            args.len()
+        ))
+    };
+    // SAFETY: the trampolines come from the entry's configuration, whose
+    // ABI the host guarantees (`run_entry`'s contract); `ctx` is the running
+    // entry's; the closure and arguments are as the caller guarantees.
+    unsafe {
+        match *args {
+            [] => callbacks.t0.unwrap_or_else(|| missing())(ctx, closure),
+            [a0] => callbacks.t1.unwrap_or_else(|| missing())(ctx, closure, a0),
+            [a0, a1] => callbacks.t2.unwrap_or_else(|| missing())(ctx, closure, a0, a1),
+            [a0, a1, a2] => callbacks.t3.unwrap_or_else(|| missing())(ctx, closure, a0, a1, a2),
+            [a0, a1, a2, a3] => {
+                callbacks.t4.unwrap_or_else(|| missing())(ctx, closure, a0, a1, a2, a3)
+            }
+            _ => fatal(format_args!(
+                "a kernel called a closure with {} arguments; at most {MAX_ARITY} are supported",
+                args.len()
+            )),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ctx::ExecCtx;
+    use crate::entry::{Callbacks, EntryConfig, EntryMode, EntryOutcome, run_entry};
+    use crate::generic::tests::closure;
+    use crate::rc;
+    use crate::values;
+
+    /// The sum of a closure's captures (tagged ints) and its arguments,
+    /// read the way a trampoline would enter generated code.
+    fn sum(closure: Word, args: &[Word]) -> u64 {
+        // SAFETY: a live closure built by the test.
+        let captures = unsafe { crate::generic::tests::captures(closure) };
+        let total = captures
+            .iter()
+            .chain(args)
+            .map(|word| abi_value(*word))
+            .fold(0_i64, i64::wrapping_add);
+        for arg in args {
+            // SAFETY: the trampoline owns its arguments.
+            unsafe { rc::drop(*arg) };
+        }
+        values::int_word(total)
+    }
+
+    fn abi_value(word: Word) -> i64 {
+        // SAFETY: tagged or boxed ints only.
+        unsafe { values::word_to_i64(word) }
+    }
+
+    unsafe extern "C" fn t0(_: *mut ExecCtx, c: u64) -> u64 {
+        sum(c, &[])
+    }
+    unsafe extern "C" fn t1(_: *mut ExecCtx, c: u64, a0: u64) -> u64 {
+        sum(c, &[a0])
+    }
+    unsafe extern "C" fn t2(_: *mut ExecCtx, c: u64, a0: u64, a1: u64) -> u64 {
+        sum(c, &[a0, a1])
+    }
+    unsafe extern "C" fn t3(_: *mut ExecCtx, c: u64, a0: u64, a1: u64, a2: u64) -> u64 {
+        sum(c, &[a0, a1, a2])
+    }
+    unsafe extern "C" fn t4(_: *mut ExecCtx, c: u64, a0: u64, a1: u64, a2: u64, a3: u64) -> u64 {
+        sum(c, &[a0, a1, a2, a3])
+    }
+
+    /// A "kernel" that calls closures of every arity 0-4.
+    unsafe extern "C" fn calls_every_arity(_: *mut ExecCtx) -> u64 {
+        let base = closure(&[values::int_word(100)]);
+        let mut total = 0_i64;
+        for arity in 0..=4_i64 {
+            let args: Vec<Word> = (1..=arity).map(values::int_word).collect();
+            // SAFETY: on an entry's thread with every trampoline; the
+            // closure is live and the arguments are given away.
+            let result = unsafe { call(base, &args) };
+            total = total.wrapping_add(abi_value(result));
+        }
+        // SAFETY: the test's reference.
+        unsafe { rc::drop(base) };
+        // 100 * 5 + (0 + 1 + 3 + 6 + 10)
+        u64::try_from(total).unwrap_or(0)
+    }
+
+    #[test]
+    fn kernels_call_closures_through_the_entrys_trampolines() {
+        let config = EntryConfig {
+            callbacks: Callbacks {
+                t0: Some(t0),
+                t1: Some(t1),
+                t2: Some(t2),
+                t3: Some(t3),
+                t4: Some(t4),
+            },
+            ..EntryConfig::new(EntryMode::Test)
+        };
+        // SAFETY: a test thunk with the `EntryFn` ABI and static code, and
+        // trampolines with their declared ABI.
+        let outcome = unsafe { run_entry(calls_every_arity, &config) }.unwrap();
+        assert_eq!(outcome, EntryOutcome::Returned(520));
+        assert_eq!(config.domain.live_objects(), 0);
+    }
+}

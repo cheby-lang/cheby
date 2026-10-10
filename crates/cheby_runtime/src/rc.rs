@@ -45,6 +45,8 @@ pub unsafe fn dup(value: Word) {
     if abi::is_tagged_int(value) || value == 0 {
         return;
     }
+    // SAFETY: forwarded from the caller.
+    unsafe { alloc::check_live(value, "`dup`") };
     let obj = word_to_ptr(value);
     // SAFETY: `obj` is a live object.
     let rc = unsafe { load_rc(obj) };
@@ -56,8 +58,10 @@ pub unsafe fn dup(value: Word) {
             // The count cannot grow further: the object becomes static and
             // is never freed (D-454).
             // SAFETY: as above.
-            unsafe { store_rc(obj, abi::RC_STATIC) };
-            alloc::forget_one();
+            unsafe {
+                store_rc(obj, abi::RC_STATIC);
+                alloc::leave_domain(obj);
+            }
         }
     } else if rc < 0 {
         // SAFETY: a negative count marks a live shared heap object.
@@ -73,7 +77,8 @@ pub unsafe fn dup(value: Word) {
             },
         );
         if update == Ok(i32::MIN) {
-            alloc::forget_one();
+            // SAFETY: the object just became static.
+            unsafe { alloc::leave_domain(obj) };
         }
     }
 }
@@ -88,12 +93,32 @@ pub unsafe fn drop(value: Word) {
     if abi::is_tagged_int(value) || value == 0 {
         return;
     }
+    // SAFETY: forwarded from the caller.
+    unsafe { alloc::check_live(value, "`drop`") };
     let obj = word_to_ptr(value);
     // SAFETY: `obj` is a live object and the caller gives up a reference.
     if unsafe { release(obj) } {
         // SAFETY: that was the last reference.
         unsafe { alloc::free(obj) };
     }
+}
+
+/// Whether `value` is a heap object with exactly one reference (a local
+/// count of 1), so its owner may update it in place (D-316, D-525). Never
+/// true for tagged integers, 0, static objects or shared objects.
+///
+/// # Safety
+///
+/// `value` is a tagged integer, 0, or a word pointing to a live object.
+#[must_use]
+pub unsafe fn is_unique(value: Word) -> bool {
+    if abi::is_tagged_int(value) || value == 0 {
+        return false;
+    }
+    // SAFETY: forwarded from the caller.
+    unsafe { alloc::check_live(value, "a uniqueness check") };
+    // SAFETY: as above.
+    unsafe { load_rc(word_to_ptr(value)) == abi::RC_UNIQUE }
 }
 
 /// Removes one reference from an object, and returns whether that was the
@@ -189,6 +214,28 @@ mod tests {
             cheby_rt_drop(word);
         }
         assert_eq!(live_objects(), before);
+    }
+
+    #[test]
+    fn uniqueness_is_a_count_of_exactly_one() {
+        let word = tuple(&[]);
+        let image = StaticImage::new("static");
+        // SAFETY: live objects and a tagged integer.
+        unsafe {
+            assert!(is_unique(word));
+            dup(word);
+            assert!(!is_unique(word));
+            drop(word);
+            assert!(is_unique(word));
+            assert!(!is_unique(abi::tag_int(1).unwrap()));
+            assert!(!is_unique(0));
+            assert!(!is_unique(cheby_rt_static_true.word()));
+            assert!(!is_unique(image.word()));
+            store_rc(word_to_ptr(word), -1);
+            assert!(!is_unique(word));
+            store_rc(word_to_ptr(word), 1);
+            drop(word);
+        }
     }
 
     #[test]

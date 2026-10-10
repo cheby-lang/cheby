@@ -1,20 +1,35 @@
 //! The global layout table (D-279, D-252): for every layout id, the type,
-//! the constructor tag and the field layout.
+//! the constructor and the field layout.
 //!
-//! Ids 1-63 are fixed builtins ([`abi::layout`]); user constructors are
-//! registered from id 64 on, in call order, before any code that uses
-//! them is defined (D-454).
+//! - Ids 1-25 are fixed builtins ([`abi::layout`]): strings, boxed
+//!   numbers, closures, tuples, dictionaries, `dyn` values, descriptors
+//!   and the builtin constructors.
+//! - Ids 26-63 are runtime-defined kinds ([`LayoutKind::Custom`]), such as
+//!   list and map nodes, registered by their modules with
+//!   [`register_builtin`] before first use (plan §4.3.2).
+//! - User constructors are registered from id 64 on, in call order, before
+//!   any code that uses them is defined (D-454). The constructors of one
+//!   type are registered together with [`register_consecutive`], so their
+//!   ids are consecutive in tag order (D-522).
 //!
 //! The table is append-only: 4096 chunks of 4096 slots behind `AtomicPtr`s,
 //! 2^24 ids in all. Registering takes a lock; [`get`] takes none, because
 //! freeing reads the table to find an object's size.
+//!
+//! Hashing never uses a layout id (D-538): ids depend on registration
+//! order. It uses [`LayoutInfo::type_key`] and [`LayoutInfo::tag`].
 
 use std::fmt;
+use std::hash::Hasher as _;
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::{Mutex, OnceLock, PoisonError};
 
-use crate::abi::{self, LayoutId, layout};
+use siphasher::sip::SipHasher13;
+
+use crate::abi::{self, LayoutId, Word, layout};
+use crate::generic;
+use crate::object::{to_u64, to_usize};
 
 /// What kind of object a layout describes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,12 +47,26 @@ pub enum LayoutKind {
     /// A boxed `F32`.
     BoxedF32,
     /// A closure: the code word at offset 8, then captures; every field is
-    /// a uniform value and the scan count is the field count.
+    /// a uniform value and the scan count is the field count, or
+    /// [`abi::SCAN_ESCAPE`] with the escaped form described there.
     Closure,
     /// A tuple of uniform values; the arity is the scan count, or the
     /// tagged count at offset 8 when the scan count is
     /// [`abi::SCAN_ESCAPE`].
     Tuple,
+    /// A dictionary (D-524): every field is a uniform word, the scan count
+    /// is the field count, or [`abi::SCAN_ESCAPE`] with the escaped form
+    /// described there.
+    Dict,
+    /// A `dyn` value (D-524): the dictionary, then the value.
+    Dyn,
+    /// A type descriptor (D-524): the nominal descriptor, then the
+    /// argument descriptors; the scan count is the field count, or
+    /// [`abi::SCAN_ESCAPE`] with the escaped form described there.
+    Desc,
+    /// A nominal descriptor (D-524): a static object holding the type's
+    /// printed name and module path as static strings.
+    DescNominal,
     /// A constructor of an ADT: its tag (declaration order within the type)
     /// and whether it is a unit constructor (a static object).
     Ctor {
@@ -46,7 +75,72 @@ pub enum LayoutKind {
         /// A constructor with no fields, represented as a static object.
         unit: bool,
     },
+    /// A runtime-defined object (ids 26-63), described by its functions.
+    Custom(&'static CustomKind),
 }
+
+/// A runtime-defined object kind (plan §4.3.2), such as a list or map
+/// node. The runtime frees, compares, hashes and prints such objects only
+/// through these functions.
+///
+/// Each function receives the object's word and may assume it points to a
+/// live object of this kind. None of them may recurse into child values:
+/// they hand children to the caller (`children`'s visitor, or the
+/// [`generic::Cx`], [`generic::Hasher`] and [`generic::Printer`] worklists),
+/// so walking a million-deep value never deepens the Rust stack (plan §0,
+/// deep data).
+pub struct CustomKind {
+    /// The kind's name, for diagnostics.
+    pub name: &'static str,
+    /// The object's size in bytes, header included, exactly as it was
+    /// allocated (the size passed to `alloc_object`).
+    ///
+    /// Safety: called only with a live object of this kind.
+    pub size: unsafe fn(Word) -> u64,
+    /// Calls the visitor once for every reference the object owns (uniform
+    /// words; tagged integers and 0 may be passed and are skipped). Freeing
+    /// releases each one through the allocator's worklist, never
+    /// recursively.
+    ///
+    /// Safety: called only with a live object of this kind, whose count
+    /// may have reached zero.
+    pub children: unsafe fn(Word, &mut dyn FnMut(Word)),
+    /// Structural equality of two objects of this kind: returns `false` if
+    /// they differ at this level, and otherwise schedules every pair of
+    /// children that must also be equal with [`generic::Cx::push`].
+    /// `None`: the generic routine reports the kind as not comparable yet.
+    ///
+    /// Safety: called only with live objects of this kind.
+    pub equal: Option<unsafe fn(Word, Word, &mut generic::Cx) -> bool>,
+    /// Hashing: writes this level's data to the hasher and schedules the
+    /// children with [`generic::Hasher::push`]. `None`: not hashable yet.
+    ///
+    /// Safety: called only with a live object of this kind.
+    pub hash: Option<unsafe fn(Word, &mut generic::Hasher)>,
+    /// Debug printing: emits text and child values, in order, with
+    /// [`generic::Printer::text`] and [`generic::Printer::value`]. `None`:
+    /// printed as `<name>`.
+    ///
+    /// Safety: called only with a live object of this kind.
+    pub debug: Option<unsafe fn(Word, &mut generic::Printer)>,
+}
+
+impl fmt::Debug for CustomKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CustomKind")
+            .field("name", &self.name)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Kinds are compared by identity: each kind is one `static`.
+impl PartialEq for CustomKind {
+    fn eq(&self, other: &Self) -> bool {
+        ptr::eq(self, other)
+    }
+}
+
+impl Eq for CustomKind {}
 
 /// How a field is stored.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,8 +188,22 @@ pub struct FieldInfo {
 /// One entry of the layout table.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LayoutInfo {
-    /// The name shown by debug printing, such as `Option.Some` or `String`.
+    /// The constructor's full name, such as `Option.Some`, for
+    /// diagnostics.
     pub name: Box<str>,
+    /// The type's name as debug printing shows it (`Option`, `Shape`).
+    pub type_name: Box<str>,
+    /// The constructor's name as debug printing shows it (`Some`,
+    /// `Circle`); for other kinds, the kind's name.
+    pub ctor_name: Box<str>,
+    /// Whether the constructor has named fields, printed as
+    /// `Point { x: 1, y: 2 }` rather than `Point(1, 2)`.
+    pub record: bool,
+    /// The type's stable key ([`type_key`] of its module path and name),
+    /// which hashing uses instead of the layout id (D-538).
+    pub type_key: u64,
+    /// The constructor's tag (declaration order); 0 for other kinds.
+    pub tag: u32,
     /// What the layout describes.
     pub kind: LayoutKind,
     /// The number of uniform fields, which come first in memory. Equal to
@@ -108,12 +216,34 @@ pub struct LayoutInfo {
     /// whatever the memory order is (D-233, D-252). Empty for the kinds
     /// whose shape is not a fixed field list (strings, closures, tuples).
     pub fields: Box<[FieldInfo]>,
+    /// The type's `@std_hooks` (equal, hash, debug) closures (D-482),
+    /// set once with [`set_hooks`] (W3-B).
+    hooks: OnceLock<[Word; 3]>,
+}
+
+/// The stable key of a type for hashing (D-538): SipHash-1-3 with a zero
+/// key of the module path's UTF-8 bytes (empty for builtin types), one
+/// `0xff` byte, then the type name's bytes. The same function as
+/// `cheby_mir::layout::type_key`, so builtin and user keys never collide
+/// by construction.
+#[must_use]
+pub fn type_key(module_path: &str, type_name: &str) -> u64 {
+    let mut h = SipHasher13::new_with_keys(0, 0);
+    h.write(module_path.as_bytes());
+    h.write(&[0xff]);
+    h.write(type_name.as_bytes());
+    h.finish()
 }
 
 impl LayoutInfo {
     /// A constructor layout whose fields are given in declaration order;
     /// value fields are laid out first, then raw fields, each in
     /// declaration order.
+    ///
+    /// `name` is `Type.Ctor`; the type and constructor names are split at
+    /// its last `.`, `record` is whether any field has a name, and the type
+    /// key is that of a builtin type with the type's name. Generated code's
+    /// layouts set the real values with [`LayoutInfo::named`].
     #[must_use]
     pub fn ctor(name: &str, tag: u32, fields: &[(FieldKind, Option<&str>)]) -> Self {
         let mut value_offset = abi::HEADER_SIZE;
@@ -121,8 +251,8 @@ impl LayoutInfo {
             .iter()
             .filter(|(kind, _)| *kind == FieldKind::Value)
             .count();
-        let mut raw_offset = abi::HEADER_SIZE
-            .saturating_add(abi::FIELD_SIZE.saturating_mul(crate::object::to_u64(value_count)));
+        let mut raw_offset =
+            abi::HEADER_SIZE.saturating_add(abi::FIELD_SIZE.saturating_mul(to_u64(value_count)));
         let infos = fields
             .iter()
             .map(|(kind, field_name)| {
@@ -143,8 +273,14 @@ impl LayoutInfo {
         let value_fields = u32::try_from(value_count).unwrap_or(u32::MAX);
         let raw_fields =
             u32::try_from(fields.len().saturating_sub(value_count)).unwrap_or(u32::MAX);
+        let (type_name, ctor_name) = name.rsplit_once('.').unwrap_or((name, name));
         Self {
             name: name.into(),
+            type_name: type_name.into(),
+            ctor_name: ctor_name.into(),
+            record: fields.iter().any(|(_, field_name)| field_name.is_some()),
+            type_key: type_key("", type_name),
+            tag,
             kind: LayoutKind::Ctor {
                 tag,
                 unit: fields.is_empty(),
@@ -152,6 +288,39 @@ impl LayoutInfo {
             value_fields,
             raw_fields,
             fields: infos,
+            hooks: OnceLock::new(),
+        }
+    }
+
+    /// The same layout with the names and key that MIR's `LayoutDesc`
+    /// carries (plan §4.1): the type's name, the constructor's name,
+    /// whether it has named fields, and the type key.
+    #[must_use]
+    pub fn named(self, type_name: &str, ctor_name: &str, record: bool, type_key: u64) -> Self {
+        Self {
+            type_name: type_name.into(),
+            ctor_name: ctor_name.into(),
+            record,
+            type_key,
+            ..self
+        }
+    }
+
+    /// The layout of a runtime-defined kind, for [`register_builtin`].
+    #[must_use]
+    pub fn custom(kind: &'static CustomKind) -> Self {
+        Self {
+            name: kind.name.into(),
+            type_name: kind.name.into(),
+            ctor_name: kind.name.into(),
+            record: false,
+            type_key: type_key("", kind.name),
+            tag: 0,
+            kind: LayoutKind::Custom(kind),
+            value_fields: 0,
+            raw_fields: 0,
+            fields: Box::new([]),
+            hooks: OnceLock::new(),
         }
     }
 
@@ -159,11 +328,23 @@ impl LayoutInfo {
     fn shaped(name: &str, kind: LayoutKind, value_fields: u32, raw_fields: u32) -> Self {
         Self {
             name: name.into(),
+            type_name: name.into(),
+            ctor_name: name.into(),
+            record: false,
+            type_key: type_key("", name),
+            tag: 0,
             kind,
             value_fields,
             raw_fields,
             fields: Box::new([]),
+            hooks: OnceLock::new(),
         }
+    }
+
+    /// The type's `@std_hooks` closures (equal, hash, debug), if set.
+    #[must_use]
+    pub fn hooks(&self) -> Option<[Word; 3]> {
+        self.hooks.get().copied()
     }
 
     /// The scan count the header of an object of this layout carries.
@@ -176,18 +357,24 @@ impl LayoutInfo {
     }
 
     /// The size in bytes of an object of a fixed-size layout (constructors
-    /// and boxed numbers); `None` for strings, bytes, closures and tuples,
-    /// whose size depends on the object.
+    /// and boxed numbers); `None` for the kinds whose size depends on the
+    /// object.
     #[must_use]
     pub fn fixed_size(&self) -> Option<u64> {
         match self.kind {
-            LayoutKind::String | LayoutKind::Bytes | LayoutKind::Closure | LayoutKind::Tuple => {
-                None
-            }
+            LayoutKind::String
+            | LayoutKind::Bytes
+            | LayoutKind::Closure
+            | LayoutKind::Tuple
+            | LayoutKind::Dict
+            | LayoutKind::Desc
+            | LayoutKind::Custom(_) => None,
             LayoutKind::BoxedInt
             | LayoutKind::BoxedU64
             | LayoutKind::BoxedFloat
             | LayoutKind::BoxedF32
+            | LayoutKind::Dyn
+            | LayoutKind::DescNominal
             | LayoutKind::Ctor { .. } => {
                 let fields =
                     u64::from(self.value_fields).checked_add(u64::from(self.raw_fields))?;
@@ -199,13 +386,19 @@ impl LayoutInfo {
     }
 
     fn validate(&self) -> Result<(), LayoutError> {
-        let LayoutKind::Ctor { unit, .. } = self.kind else {
+        let LayoutKind::Ctor { unit, tag } = self.kind else {
             return Err(LayoutError::Invalid(
-                "only constructor layouts are registered".into(),
+                "only constructor layouts are registered as user layouts".into(),
             ));
         };
+        if tag != self.tag {
+            return Err(LayoutError::Invalid(format!(
+                "`{}` has two different tags",
+                self.name
+            )));
+        }
         let total = u64::from(self.value_fields).saturating_add(u64::from(self.raw_fields));
-        if crate::object::to_u64(self.fields.len()) != total {
+        if to_u64(self.fields.len()) != total {
             return Err(LayoutError::Invalid(format!(
                 "`{}` lists {} fields but counts {total}",
                 self.name,
@@ -230,8 +423,7 @@ impl LayoutInfo {
                 (value_end, end)
             };
             let in_range = offset >= start && offset < limit && offset % abi::FIELD_SIZE == 0;
-            let index =
-                crate::object::to_usize(offset.saturating_sub(abi::HEADER_SIZE) / abi::FIELD_SIZE);
+            let index = to_usize(offset.saturating_sub(abi::HEADER_SIZE) / abi::FIELD_SIZE);
             let fresh = seen
                 .get_mut(index)
                 .is_some_and(|slot| !std::mem::replace(slot, true));
@@ -276,18 +468,39 @@ type Slot = AtomicPtr<LayoutInfo>;
 static CHUNKS: [AtomicPtr<Slot>; CHUNK_COUNT] =
     [const { AtomicPtr::new(ptr::null_mut()) }; CHUNK_COUNT];
 
-/// The next user id to hand out. Registration is serialized by this lock.
+/// The number of runtime-defined ids, 26-63.
+const CUSTOM_COUNT: usize = 38;
+const _: () = assert!(
+    layout::BUILTIN_RESERVED_END - layout::CUSTOM_FIRST + 1 == 38,
+    "CUSTOM_COUNT matches the reserved range"
+);
+
+/// The runtime-defined kinds, ids 26-63, each set once.
+static CUSTOM: [Slot; CUSTOM_COUNT] = [const { AtomicPtr::new(ptr::null_mut()) }; CUSTOM_COUNT];
+
+/// The next user id to hand out. Every registration is serialized by this
+/// lock.
 static NEXT_ID: Mutex<LayoutId> = Mutex::new(layout::FIRST_USER);
 
 static BUILTINS: OnceLock<Box<[Option<LayoutInfo>]>> = OnceLock::new();
 
+/// A builtin constructor layout: no module path, the type's key.
+fn builtin_ctor(type_name: &str, ctor_name: &str, tag: u32, fields: usize) -> LayoutInfo {
+    let field_list = vec![(FieldKind::Value, None); fields];
+    LayoutInfo::ctor(&format!("{type_name}.{ctor_name}"), tag, &field_list).named(
+        type_name,
+        ctor_name,
+        false,
+        type_key("", type_name),
+    )
+}
+
 fn builtins() -> &'static [Option<LayoutInfo>] {
     BUILTINS.get_or_init(|| {
-        let value = |name: Option<&'static str>| (FieldKind::Value, name);
         let mut table: Vec<Option<LayoutInfo>> =
-            vec![None; crate::object::to_usize(u64::from(layout::FIRST_USER))];
+            vec![None; to_usize(u64::from(layout::LIST_FIRST))];
         let mut set = |id: LayoutId, info: LayoutInfo| {
-            if let Some(slot) = table.get_mut(crate::object::to_usize(u64::from(id))) {
+            if let Some(slot) = table.get_mut(to_usize(u64::from(id))) {
                 *slot = Some(info);
             }
         };
@@ -323,47 +536,54 @@ fn builtins() -> &'static [Option<LayoutInfo>] {
             layout::BOXED_U64,
             LayoutInfo::shaped("U64", LayoutKind::BoxedU64, 0, 1),
         );
-        set(layout::NIL, LayoutInfo::ctor("Nil", 0, &[]));
-        set(layout::FALSE, LayoutInfo::ctor("Bool.False", 0, &[]));
-        set(layout::TRUE, LayoutInfo::ctor("Bool.True", 1, &[]));
-        set(layout::LESS, LayoutInfo::ctor("Order.Less", 0, &[]));
-        set(layout::EQUAL, LayoutInfo::ctor("Order.Equal", 1, &[]));
-        set(layout::GREATER, LayoutInfo::ctor("Order.Greater", 2, &[]));
         set(
-            layout::SOME,
-            LayoutInfo::ctor("Option.Some", 0, &[value(None)]),
+            layout::DICT,
+            LayoutInfo::shaped("dictionary", LayoutKind::Dict, 0, 0),
         );
-        set(layout::NONE, LayoutInfo::ctor("Option.None", 1, &[]));
-        set(layout::OK, LayoutInfo::ctor("Result.Ok", 0, &[value(None)]));
         set(
-            layout::ERR,
-            LayoutInfo::ctor("Result.Err", 1, &[value(None)]),
+            layout::DYN,
+            LayoutInfo::shaped("dyn", LayoutKind::Dyn, 2, 0),
         );
+        set(
+            layout::DESC,
+            LayoutInfo::shaped("descriptor", LayoutKind::Desc, 0, 0),
+        );
+        set(
+            layout::DESC_NOMINAL,
+            LayoutInfo::shaped("nominal descriptor", LayoutKind::DescNominal, 2, 0),
+        );
+        set(layout::NIL, builtin_ctor("Nil", "Nil", 0, 0));
+        set(layout::FALSE, builtin_ctor("Bool", "False", 0, 0));
+        set(layout::TRUE, builtin_ctor("Bool", "True", 1, 0));
+        set(layout::LESS, builtin_ctor("Order", "Less", 0, 0));
+        set(layout::EQUAL, builtin_ctor("Order", "Equal", 1, 0));
+        set(layout::GREATER, builtin_ctor("Order", "Greater", 2, 0));
+        set(layout::SOME, builtin_ctor("Option", "Some", 0, 1));
+        set(layout::NONE, builtin_ctor("Option", "None", 1, 0));
+        set(layout::OK, builtin_ctor("Result", "Ok", 0, 1));
+        set(layout::ERR, builtin_ctor("Result", "Err", 1, 1));
         table.into_boxed_slice()
     })
 }
 
 /// Splits a user id into its chunk and slot indices.
 fn split(id: LayoutId) -> (usize, usize) {
-    let id = crate::object::to_usize(u64::from(id));
+    let id = to_usize(u64::from(id));
     (id >> CHUNK_BITS, id & (CHUNK_SIZE - 1))
 }
 
-/// Registers a constructor layout and returns its id, from
-/// [`layout::FIRST_USER`] on in call order.
-///
-/// # Errors
-///
-/// [`LayoutError::Invalid`] if the layout is not a well-formed constructor
-/// layout (field count and offsets), and [`LayoutError::TableFull`] once
-/// all 2^24 ids are taken.
-pub fn register(info: LayoutInfo) -> Result<LayoutId, LayoutError> {
-    info.validate()?;
-    let mut next = NEXT_ID.lock().unwrap_or_else(PoisonError::into_inner);
-    let id = *next;
-    if id > abi::LAYOUT_MAX {
-        return Err(LayoutError::TableFull);
-    }
+/// The slot of a runtime-defined id, or `None` outside 26-63.
+fn custom_slot(id: LayoutId) -> Option<&'static Slot> {
+    let index = id.checked_sub(layout::CUSTOM_FIRST)?;
+    CUSTOM.get(to_usize(u64::from(index)))
+}
+
+fn lock_next() -> std::sync::MutexGuard<'static, LayoutId> {
+    NEXT_ID.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Stores `info` at user id `id`, which must not be taken yet.
+fn store_user(id: LayoutId, info: LayoutInfo) -> Result<(), LayoutError> {
     let (chunk_index, slot_index) = split(id);
     let Some(chunk_cell) = CHUNKS.get(chunk_index) else {
         return Err(LayoutError::TableFull);
@@ -380,29 +600,132 @@ pub fn register(info: LayoutInfo) -> Result<LayoutId, LayoutError> {
     // freed, and `slot_index < CHUNK_SIZE`.
     let slot = unsafe { &*chunk.add(slot_index) };
     slot.store(Box::into_raw(Box::new(info)), Ordering::Release);
-    *next = id.saturating_add(1);
-    Ok(id)
+    Ok(())
+}
+
+/// Registers a constructor layout and returns its id, from
+/// [`layout::FIRST_USER`] on in call order.
+///
+/// # Errors
+///
+/// [`LayoutError::Invalid`] if the layout is not a well-formed constructor
+/// layout (field count and offsets), and [`LayoutError::TableFull`] once
+/// all 2^24 ids are taken.
+pub fn register(info: LayoutInfo) -> Result<LayoutId, LayoutError> {
+    register_consecutive(vec![info])
+}
+
+/// Registers the constructor layouts `infos` with consecutive ids, in
+/// order, under one lock, and returns the id of the first (D-522: the
+/// constructors of one type, in tag order). All or nothing: on an error
+/// nothing is registered. An empty list registers nothing and returns the
+/// next free id.
+///
+/// # Errors
+///
+/// As for [`register`].
+pub fn register_consecutive(infos: Vec<LayoutInfo>) -> Result<LayoutId, LayoutError> {
+    for info in &infos {
+        info.validate()?;
+    }
+    let mut next = lock_next();
+    let first = *next;
+    let count = u32::try_from(infos.len()).map_err(|_| LayoutError::TableFull)?;
+    let end = first.checked_add(count).ok_or(LayoutError::TableFull)?;
+    if end > abi::LAYOUT_MAX.saturating_add(1) {
+        return Err(LayoutError::TableFull);
+    }
+    let mut id = first;
+    for info in infos {
+        store_user(id, info)?;
+        id = id.saturating_add(1);
+    }
+    *next = end;
+    Ok(first)
+}
+
+/// Registers a runtime-defined kind at a fixed id in 26-63 (list nodes
+/// 26-31, map and set nodes 32-39). Idempotent: registering the same
+/// [`CustomKind`] at the same id again does nothing, so modules may call
+/// it before every first use.
+///
+/// # Errors
+///
+/// [`LayoutError::Invalid`] if `id` is outside 26-63, `info` is not a
+/// [`LayoutKind::Custom`] layout, or a different kind holds the id.
+pub fn register_builtin(id: LayoutId, info: LayoutInfo) -> Result<(), LayoutError> {
+    let LayoutKind::Custom(kind) = info.kind else {
+        return Err(LayoutError::Invalid(format!(
+            "`{}` is not a runtime-defined kind",
+            info.name
+        )));
+    };
+    let Some(slot) = custom_slot(id).filter(|_| id <= layout::BUILTIN_RESERVED_END) else {
+        return Err(LayoutError::Invalid(format!(
+            "id {id} is not reserved for runtime-defined kinds"
+        )));
+    };
+    let _guard = lock_next();
+    let current = slot.load(Ordering::Acquire);
+    if current.is_null() {
+        slot.store(Box::into_raw(Box::new(info)), Ordering::Release);
+        return Ok(());
+    }
+    // SAFETY: a non-null slot holds a leaked `Box<LayoutInfo>`, never freed.
+    let existing = unsafe { &*current };
+    match existing.kind {
+        LayoutKind::Custom(other) if ptr::eq(other, kind) => Ok(()),
+        _ => Err(LayoutError::Invalid(format!(
+            "id {id} already holds `{}`",
+            existing.name
+        ))),
+    }
+}
+
+/// Sets the `@std_hooks` closures (equal, hash, debug) of a constructor
+/// layout (D-482, W3-B). The table keeps the three words forever, so they
+/// must be static closures or references the caller gives up.
+///
+/// # Errors
+///
+/// [`LayoutError::Invalid`] if `id` is not a registered layout or its
+/// hooks are already set to other words.
+pub fn set_hooks(id: LayoutId, hooks: [Word; 3]) -> Result<(), LayoutError> {
+    let Some(info) = get(id) else {
+        return Err(LayoutError::Invalid(format!("no layout has id {id}")));
+    };
+    let stored = info.hooks.get_or_init(|| hooks);
+    if *stored == hooks {
+        Ok(())
+    } else {
+        Err(LayoutError::Invalid(format!(
+            "`{}` already has other hooks",
+            info.name
+        )))
+    }
 }
 
 /// The layout with the given id, or `None` for an id that is not a builtin
 /// and has not been registered. Takes no lock.
 #[must_use]
 pub fn get(id: LayoutId) -> Option<&'static LayoutInfo> {
-    if id < layout::FIRST_USER {
-        return builtins()
-            .get(crate::object::to_usize(u64::from(id)))?
-            .as_ref();
+    if id < layout::CUSTOM_FIRST {
+        return builtins().get(to_usize(u64::from(id)))?.as_ref();
     }
-    let (chunk_index, slot_index) = split(id);
-    let chunk = CHUNKS.get(chunk_index)?.load(Ordering::Acquire);
-    if chunk.is_null() {
-        return None;
-    }
-    // SAFETY: as in `register`: a leaked chunk of `CHUNK_SIZE` slots.
-    let slot = unsafe { &*chunk.add(slot_index) };
+    let slot = if id < layout::FIRST_USER {
+        custom_slot(id)?
+    } else {
+        let (chunk_index, slot_index) = split(id);
+        let chunk = CHUNKS.get(chunk_index)?.load(Ordering::Acquire);
+        if chunk.is_null() {
+            return None;
+        }
+        // SAFETY: as in `store_user`: a leaked chunk of `CHUNK_SIZE` slots.
+        unsafe { &*chunk.add(slot_index) }
+    };
     let info = slot.load(Ordering::Acquire);
     // SAFETY: a non-null slot holds a leaked `Box<LayoutInfo>`, published
-    // with release ordering and never freed or changed again.
+    // with release ordering and never freed or replaced.
     (!info.is_null()).then(|| unsafe { &*info })
 }
 
@@ -425,9 +748,17 @@ mod tests {
             get(layout::BOXED_U64).map(|info| info.kind),
             Some(LayoutKind::BoxedU64)
         );
-        assert!(get(9).is_none());
+        assert_eq!(
+            get(layout::DICT).map(|info| info.kind),
+            Some(LayoutKind::Dict)
+        );
+        assert_eq!(get(layout::DYN).and_then(LayoutInfo::fixed_size), Some(24));
+        assert_eq!(
+            get(layout::DESC).map(|info| info.kind),
+            Some(LayoutKind::Desc)
+        );
+        assert!(get(13).is_none());
         assert!(get(layout::RUNTIME_RESERVED_END).is_none());
-        assert!(get(layout::BUILTIN_RESERVED_END).is_none());
         let some = get(layout::SOME);
         assert_eq!(
             some.map(|info| info.kind),
@@ -437,15 +768,36 @@ mod tests {
             })
         );
         assert_eq!(some.and_then(LayoutInfo::fixed_size), Some(16));
+        assert_eq!(some.map(|info| &*info.ctor_name), Some("Some"));
+        assert_eq!(some.map(|info| &*info.type_name), Some("Option"));
         assert_eq!(
             get(layout::NONE).map(|info| info.kind),
             Some(LayoutKind::Ctor { tag: 1, unit: true })
         );
         assert_eq!(get(layout::TRUE).map(|info| &*info.name), Some("Bool.True"));
+        assert_eq!(get(layout::TRUE).map(|info| info.tag), Some(1));
         assert_eq!(
             get(layout::BOXED_FLOAT).and_then(LayoutInfo::fixed_size),
             Some(16)
         );
+        assert_eq!(
+            get(layout::OK).map(|info| info.type_key),
+            get(layout::ERR).map(|info| info.type_key)
+        );
+        assert_ne!(
+            get(layout::OK).map(|info| info.type_key),
+            get(layout::SOME).map(|info| info.type_key)
+        );
+    }
+
+    #[test]
+    fn type_keys_match_mirs_encoding() {
+        let mut h = SipHasher13::new_with_keys(0, 0);
+        h.write(b"geo");
+        h.write(&[0xff]);
+        h.write(b"Point");
+        assert_eq!(type_key("geo", "Point"), h.finish());
+        assert_ne!(type_key("geo", "Point"), type_key("ge", "oPoint"));
     }
 
     #[test]
@@ -479,6 +831,10 @@ mod tests {
             info.fields.first().and_then(|field| field.name.as_deref()),
             Some("x")
         );
+        assert!(info.record);
+        assert_eq!((&*info.type_name, &*info.ctor_name), ("geo", "Point"));
+        let named = info.named("Point", "Point", true, 7);
+        assert_eq!((&*named.type_name, named.type_key), ("Point", 7));
     }
 
     #[test]
@@ -491,6 +847,41 @@ mod tests {
         assert_eq!(get(second).map(|info| &*info.name), Some("t.B"));
         assert!(get(abi::LAYOUT_MAX).is_none());
         assert!(get(u32::MAX).is_none());
+    }
+
+    #[test]
+    fn consecutive_registration_is_atomic_across_threads() {
+        let threads: Vec<_> = (0..4)
+            .map(|n| {
+                std::thread::spawn(move || {
+                    (0..50)
+                        .map(|_| {
+                            let infos = (0..3)
+                                .map(|tag| LayoutInfo::ctor(&format!("t{n}.C"), tag, &[]))
+                                .collect();
+                            register_consecutive(infos).unwrap()
+                        })
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        for thread in threads {
+            for first in thread.join().unwrap() {
+                for tag in 0..3_u32 {
+                    let info = get(first.wrapping_add(tag)).unwrap();
+                    assert_eq!(info.tag, tag);
+                    assert_eq!(get(first).unwrap().name, info.name);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_failed_consecutive_registration_registers_nothing() {
+        let mut bad = LayoutInfo::ctor("t.Bad", 1, &[(FieldKind::Value, None)]);
+        bad.value_fields = 2;
+        let good = LayoutInfo::ctor("t.Good", 0, &[]);
+        assert!(register_consecutive(vec![good, bad]).is_err());
     }
 
     #[test]
@@ -519,5 +910,57 @@ mod tests {
         let info = LayoutInfo::ctor("t.Wide", 0, &fields);
         assert_eq!(info.scan_count(), abi::SCAN_ESCAPE);
         assert_eq!(info.fixed_size(), Some(8 + 8 * 300));
+    }
+
+    unsafe fn no_size(_: Word) -> u64 {
+        8
+    }
+
+    unsafe fn no_children(_: Word, _: &mut dyn FnMut(Word)) {}
+
+    static KIND_A: CustomKind = CustomKind {
+        name: "test node a",
+        size: no_size,
+        children: no_children,
+        equal: None,
+        hash: None,
+        debug: None,
+    };
+
+    static KIND_B: CustomKind = CustomKind {
+        name: "test node b",
+        size: no_size,
+        children: no_children,
+        equal: None,
+        hash: None,
+        debug: None,
+    };
+
+    #[test]
+    fn builtin_kinds_register_once_at_their_id() {
+        // 63 is reserved and unused by every runtime module.
+        let id = layout::BUILTIN_RESERVED_END;
+        register_builtin(id, LayoutInfo::custom(&KIND_A)).unwrap();
+        register_builtin(id, LayoutInfo::custom(&KIND_A)).unwrap();
+        assert!(register_builtin(id, LayoutInfo::custom(&KIND_B)).is_err());
+        assert_eq!(
+            get(id).map(|info| info.kind),
+            Some(LayoutKind::Custom(&KIND_A))
+        );
+        assert!(register_builtin(layout::FIRST_USER, LayoutInfo::custom(&KIND_B)).is_err());
+        assert!(register_builtin(layout::STRING, LayoutInfo::custom(&KIND_B)).is_err());
+        let ctor = LayoutInfo::ctor("t.C", 0, &[]);
+        assert!(register_builtin(62, ctor).is_err());
+    }
+
+    #[test]
+    fn hooks_are_set_once() {
+        let id = register(LayoutInfo::ctor("t.Hooked", 0, &[])).unwrap();
+        assert_eq!(get(id).and_then(LayoutInfo::hooks), None);
+        set_hooks(id, [8, 16, 24]).unwrap();
+        set_hooks(id, [8, 16, 24]).unwrap();
+        assert!(set_hooks(id, [8, 16, 32]).is_err());
+        assert_eq!(get(id).and_then(LayoutInfo::hooks), Some([8, 16, 24]));
+        assert!(set_hooks(abi::LAYOUT_MAX, [0; 3]).is_err());
     }
 }

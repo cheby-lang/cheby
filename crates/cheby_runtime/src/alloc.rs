@@ -1,57 +1,210 @@
-//! Allocation, freeing and the debug leak counter (F1).
+//! Allocation, freeing, accounting domains and the poisoning mode (F1).
 //!
 //! Every heap object is allocated 8-aligned through the global allocator.
 //! Its size is not stored: freeing recomputes it from the layout table, or
-//! from `cap` for strings and bytes, exactly as allocation computed it.
+//! from `cap` for strings and bytes, or from a runtime-defined kind's
+//! `size` function, exactly as allocation computed it.
 //!
-//! Freeing an object visits its leading value fields (the scan count) and
-//! releases each one. It is iterative, with an explicit worklist, so
-//! freeing a list of a million cells uses no more stack than freeing one
-//! (F1, D-094).
+//! Freeing an object visits the references it owns (its leading value
+//! fields, or a runtime-defined kind's `children`) and releases each one.
+//! It is iterative, with an explicit worklist, so freeing a list of a
+//! million cells uses no more stack than freeing one (F1, D-094).
+//!
+//! # Accounting domains
+//!
+//! Live objects and bytes are counted per [`Domain`] (plan §4.3.4), not
+//! per process. Each thread has a current domain: `run_entry` sets it from
+//! `EntryConfig::domain`, and a thread without one gets a fresh domain of
+//! its own, so tests on parallel threads never see each other's objects.
+//! Allocation, freeing and [`forget`] charge the current thread's domain.
+//! An object freed on another thread than the one that allocated it is
+//! charged to the freeing thread's domain; in M1 objects never cross
+//! threads except between a host and the entries it runs with its own
+//! domain.
+//!
+//! # Poisoning
+//!
+//! With `CHEBY_RT_POISON=1` in a build with debug assertions (and always in
+//! this crate's own unit tests), freeing overwrites an object's header
+//! with [`POISON_HEADER`] and keeps the block in a bounded per-thread
+//! quarantine instead of returning it to the allocator. `cheby_rt_dup`,
+//! `cheby_rt_drop`, the readers of [`crate::values`] and the generic
+//! routines check the header first and end the process with
+//! `use after free: …` on a poisoned or impossible one.
 
 use std::alloc::Layout;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
+use std::sync::Arc;
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicI64, Ordering};
 
 use crate::abi::{self, Word};
 use crate::ctx::ExecCtx;
-use crate::layout::{self, LayoutKind};
-use crate::object::{self, read_field, scan_and_layout, to_u64, to_usize, word_to_ptr};
+use crate::layout::{self, CustomKind, LayoutKind};
+use crate::object::{
+    self, load_rc, read_field, scan_and_layout, store_rc, to_u64, to_usize, word_to_ptr,
+};
 use crate::panic::fatal;
 use crate::rc;
 
-#[cfg(debug_assertions)]
-static LIVE: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
-
-/// Whether this build counts live objects (debug builds only).
+/// Whether this build checks for leaks at exit (debug builds only, D-458).
+/// Accounting itself is always on: constant evaluation's memory limit
+/// reads it in every build (D-536).
 pub const LEAK_CHECK_ENABLED: bool = cfg!(debug_assertions);
 
-/// The number of heap objects allocated and not yet freed, not counting
-/// objects that became static. Always 0 when [`LEAK_CHECK_ENABLED`] is
-/// false.
+/// An accounting domain: the live objects and bytes, and the peak of live
+/// bytes, of everything allocated while it was some thread's current
+/// domain (plan §4.3.4). One build shares one domain across its constant
+/// entries and its `main` or test entries.
+#[derive(Debug, Default)]
+pub struct Domain {
+    objects: AtomicI64,
+    bytes: AtomicI64,
+    peak: AtomicI64,
+}
+
+impl Domain {
+    /// A fresh domain with nothing live.
+    #[must_use]
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+
+    /// Objects allocated and not yet freed or forgotten.
+    #[must_use]
+    pub fn live_objects(&self) -> i64 {
+        self.objects.load(Ordering::Relaxed)
+    }
+
+    /// Bytes of those objects.
+    #[must_use]
+    pub fn live_bytes(&self) -> i64 {
+        self.bytes.load(Ordering::Relaxed)
+    }
+
+    /// The most bytes live at once since the domain was created or
+    /// [`Domain::reset_peak`] was last called.
+    #[must_use]
+    pub fn peak_bytes(&self) -> i64 {
+        self.peak.load(Ordering::Relaxed)
+    }
+
+    /// Restarts the peak at the current live bytes, for measuring one
+    /// evaluation (D-536).
+    pub fn reset_peak(&self) {
+        self.peak.store(self.live_bytes(), Ordering::Relaxed);
+    }
+
+    fn charge(&self, objects: i64, bytes: i64) {
+        self.objects.fetch_add(objects, Ordering::Relaxed);
+        let before = self.bytes.fetch_add(bytes, Ordering::Relaxed);
+        if bytes > 0 {
+            self.peak
+                .fetch_max(before.saturating_add(bytes), Ordering::Relaxed);
+        }
+    }
+}
+
+thread_local! {
+    /// The current thread's accounting domain.
+    static DOMAIN: RefCell<Arc<Domain>> = RefCell::new(Domain::new());
+}
+
+/// The current thread's accounting domain.
+#[must_use]
+pub fn current_domain() -> Arc<Domain> {
+    DOMAIN
+        .try_with(|domain| Arc::clone(&domain.borrow()))
+        .unwrap_or_else(|_| Domain::new())
+}
+
+/// Makes `domain` the current thread's accounting domain and returns the
+/// previous one.
+pub fn set_current_domain(domain: Arc<Domain>) -> Arc<Domain> {
+    DOMAIN
+        .try_with(|current| current.replace(Arc::clone(&domain)))
+        .unwrap_or(domain)
+}
+
+/// Runs `f` with `domain` as the current thread's domain, then restores
+/// the previous one.
+pub fn with_domain<R>(domain: Arc<Domain>, f: impl FnOnce() -> R) -> R {
+    let previous = set_current_domain(domain);
+    let result = f();
+    set_current_domain(previous);
+    result
+}
+
+/// Charges the current thread's domain. During thread teardown, when the
+/// domain is gone, nothing is charged.
+fn charge(objects: i64, bytes: u64) {
+    let bytes = i64::try_from(bytes).unwrap_or(i64::MAX);
+    let bytes = if objects < 0 {
+        bytes.saturating_neg()
+    } else {
+        bytes
+    };
+    DOMAIN
+        .try_with(|domain| domain.borrow().charge(objects, bytes))
+        .ok();
+}
+
+/// The number of objects live in the current thread's domain.
+#[must_use]
+pub fn live() -> i64 {
+    DOMAIN
+        .try_with(|domain| domain.borrow().live_objects())
+        .unwrap_or(0)
+}
+
+/// The number of heap objects live in the current thread's domain: allocated
+/// and not yet freed, not counting objects that became static. The same as
+/// [`live`].
 #[must_use]
 pub fn live_objects() -> i64 {
-    #[cfg(debug_assertions)]
-    {
-        LIVE.load(std::sync::atomic::Ordering::Relaxed)
+    live()
+}
+
+/// Makes a heap object static, so it is never freed, and removes it from
+/// the current domain. The object leaves the domain once: forgetting an
+/// object that is already static (count 0) does nothing. Constant
+/// evaluation's freezing (E6) calls this for every object of a result; the
+/// object's children are the caller's to forget.
+///
+/// # Safety
+///
+/// `word` is a tagged integer or points to a live object, and no other
+/// thread uses it.
+pub unsafe fn forget(word: Word) {
+    if abi::is_tagged_int(word) || word == 0 {
+        return;
     }
-    #[cfg(not(debug_assertions))]
-    {
-        0
+    // SAFETY: forwarded from the caller. In poisoning mode, a freed object
+    // ends the process here, before its header is written.
+    unsafe { check_live(word, "freezing") };
+    let obj = word_to_ptr(word);
+    // SAFETY: forwarded from the caller.
+    if unsafe { load_rc(obj) } == abi::RC_STATIC {
+        return;
+    }
+    // SAFETY: as above; a heap object's count is written only by its
+    // owning thread in M1.
+    unsafe {
+        store_rc(obj, abi::RC_STATIC);
+        leave_domain(obj);
     }
 }
 
-fn count_live(delta: i64) {
-    #[cfg(debug_assertions)]
-    LIVE.fetch_add(delta, std::sync::atomic::Ordering::Relaxed);
-    #[cfg(not(debug_assertions))]
-    let _ = delta;
-}
-
-/// Removes one object from the leak count without freeing it: an object
-/// whose count overflowed and that became static (D-454). E6's
-/// `freeze` uses this for constants.
-pub(crate) fn forget_one() {
-    count_live(-1);
+/// Removes an object that just became static from the current domain.
+///
+/// # Safety
+///
+/// `obj` points to a live heap object that has just been made static.
+pub(crate) unsafe fn leave_domain(obj: *mut u8) {
+    // SAFETY: forwarded from the caller.
+    let shape = unsafe { shape_of(obj) };
+    charge(-1, shape.size);
 }
 
 /// Allocates an object for generated code: `size` bytes including the
@@ -59,9 +212,9 @@ pub(crate) fn forget_one() {
 /// left uninitialized for the caller to write. Ends the process on
 /// allocation failure.
 ///
-/// `ctx` is the running entry's execution context. It will carry the
-/// memory budget of constant evaluation (D-195); it is unused in M1 and
-/// may be null.
+/// `ctx` is the running entry's execution context, unused in M1 (the
+/// memory limit of constant evaluation reads the domain, D-536); it may be
+/// null.
 ///
 /// # Safety
 ///
@@ -75,8 +228,8 @@ pub unsafe extern "C" fn cheby_rt_alloc(ctx: *mut ExecCtx, size: u64, header: u6
 }
 
 /// Allocates an object of `size` bytes (rounded up to 8) with the given
-/// header and uninitialized fields, and counts it as live. Ends the process
-/// on allocation failure.
+/// header and uninitialized fields, and charges it to the current domain.
+/// Ends the process on allocation failure.
 #[must_use]
 pub fn alloc_object(size: u64, header: u64) -> *mut u8 {
     let layout = object_layout(size);
@@ -87,7 +240,8 @@ pub fn alloc_object(size: u64, header: u64) -> *mut u8 {
     }
     // SAFETY: the allocation is at least 8 bytes and 8-aligned.
     unsafe { object::write_field(ptr, 0, header) };
-    count_live(1);
+    charge(1, to_u64(layout.size()));
+    crate::entry::charge_budget(to_u64(layout.size()));
     ptr
 }
 
@@ -134,6 +288,25 @@ pub(crate) unsafe fn free(obj: *mut u8) {
     }
 }
 
+/// Releases one reference held by a dying object, queueing the child when
+/// that was its last reference.
+///
+/// # Safety
+///
+/// `child` is a tagged integer, 0, or a live object the dying object holds
+/// a reference to.
+unsafe fn release_child(child: Word, list: &mut Vec<Word>) {
+    if abi::is_tagged_int(child) || child == 0 {
+        return;
+    }
+    // SAFETY: forwarded from the caller.
+    unsafe { check_live(child, "freeing an object") };
+    // SAFETY: the dying object owned this reference to a live object.
+    if unsafe { rc::release(word_to_ptr(child)) } {
+        list.push(child);
+    }
+}
+
 /// Frees every object on the worklist and, transitively, the fields whose
 /// count reaches zero.
 ///
@@ -145,32 +318,46 @@ unsafe fn drain(list: &mut Vec<Word>) {
         let obj = word_to_ptr(word);
         // SAFETY: `obj` is a live object with no references left.
         let shape = unsafe { shape_of(obj) };
-        let mut offset = shape.first_value;
-        for _ in 0..shape.value_fields {
-            // SAFETY: the shape lies within the object.
-            let child = unsafe { read_field(obj, offset) };
-            offset = offset.saturating_add(to_usize(abi::FIELD_SIZE));
-            if abi::is_tagged_int(child) || child == 0 {
-                continue;
+        match shape.children {
+            Children::Fields { first, count } => {
+                let mut offset = first;
+                for _ in 0..count {
+                    // SAFETY: the shape lies within the object.
+                    let child = unsafe { read_field(obj, offset) };
+                    offset = offset.saturating_add(to_usize(abi::FIELD_SIZE));
+                    // SAFETY: a value field holds an owned reference.
+                    unsafe { release_child(child, list) };
+                }
             }
-            let child_ptr = word_to_ptr(child);
-            // SAFETY: a value field holds an owned reference to a live
-            // object, which this object no longer needs.
-            if unsafe { rc::release(child_ptr) } {
-                list.push(child);
+            Children::Custom(kind) => {
+                let mut visit = |child: Word| {
+                    // SAFETY: every word the kind visits is a reference the
+                    // dying object owns.
+                    unsafe { release_child(child, list) };
+                };
+                // SAFETY: a live object of this kind.
+                unsafe { (kind.children)(word, &mut visit) };
             }
         }
+        let layout = object_layout(shape.size);
+        charge(-1, to_u64(layout.size()));
         // SAFETY: allocated by `alloc_object` with this size, which
-        // `shape_of` recomputes exactly.
-        unsafe { std::alloc::dealloc(obj, object_layout(shape.size)) };
-        count_live(-1);
+        // `shape_of` recomputes exactly, and no reference remains.
+        unsafe { release_block(obj, layout) };
     }
 }
 
-/// Where an object's value fields are and how big it is.
+/// Where the references an object owns are.
+enum Children {
+    /// `count` uniform fields from byte offset `first`.
+    Fields { first: usize, count: u64 },
+    /// A runtime-defined kind's `children` function.
+    Custom(&'static CustomKind),
+}
+
+/// The references an object owns and its size.
 struct Shape {
-    first_value: usize,
-    value_fields: u64,
+    children: Children,
     size: u64,
 }
 
@@ -186,11 +373,10 @@ unsafe fn shape_of(obj: *mut u8) -> Shape {
         fatal(format_args!("freeing an object with unknown layout {id}"));
     };
     let first = to_usize(abi::HEADER_SIZE);
-    let uniform = |count: u64, first_value: usize| {
-        let fields_end = to_u64(first_value).checked_add(abi::FIELD_SIZE.checked_mul(count)?)?;
+    let uniform = |count: u64, first: usize| {
+        let fields_end = to_u64(first).checked_add(abi::FIELD_SIZE.checked_mul(count)?)?;
         Some(Shape {
-            first_value,
-            value_fields: count,
+            children: Children::Fields { first, count },
             size: fields_end,
         })
     };
@@ -199,8 +385,7 @@ unsafe fn shape_of(obj: *mut u8) -> Shape {
             // SAFETY: strings and bytes have `cap` at this offset.
             let cap = unsafe { read_field(obj, object::abi_offset(abi::string::CAP_OFFSET)) };
             abi::string::alloc_size(cap).map(|size| Shape {
-                first_value: first,
-                value_fields: 0,
+                children: Children::Fields { first, count: 0 },
                 size,
             })
         }
@@ -211,21 +396,166 @@ unsafe fn shape_of(obj: *mut u8) -> Shape {
                 .ok()
                 .and_then(|count| uniform(count, first.saturating_add(8)))
         }
-        LayoutKind::Tuple | LayoutKind::Closure if scan != abi::SCAN_ESCAPE => {
+        LayoutKind::Tuple | LayoutKind::Closure | LayoutKind::Dict | LayoutKind::Desc
+            if scan != abi::SCAN_ESCAPE =>
+        {
             uniform(u64::from(scan), first)
         }
-        LayoutKind::Tuple | LayoutKind::Closure => None,
+        LayoutKind::Closure | LayoutKind::Dict | LayoutKind::Desc => {
+            // SAFETY: an escaped closure, dictionary or descriptor keeps its
+            // first field at offset 8 and the tagged count of the fields
+            // after the count at offset 16 (D-279, GAP(escaped-scan-count)).
+            // The count word is tagged, so visiting it releases nothing.
+            let count = abi::untag_int(unsafe { read_field(obj, first.saturating_add(8)) });
+            u64::try_from(count)
+                .ok()
+                .and_then(|count| count.checked_add(2))
+                .and_then(|count| uniform(count, first))
+        }
+        // Both forms of a tuple are matched above.
+        LayoutKind::Tuple => None,
+        LayoutKind::Custom(kind) => Some(Shape {
+            children: Children::Custom(kind),
+            // SAFETY: a live object of this kind.
+            size: unsafe { (kind.size)(object::ptr_to_word(obj)) },
+        }),
         LayoutKind::BoxedInt
         | LayoutKind::BoxedU64
         | LayoutKind::BoxedFloat
         | LayoutKind::BoxedF32
+        | LayoutKind::Dyn
+        | LayoutKind::DescNominal
         | LayoutKind::Ctor { .. } => info.fixed_size().map(|size| Shape {
-            first_value: first,
-            value_fields: u64::from(info.value_fields),
+            children: Children::Fields {
+                first,
+                count: u64::from(info.value_fields),
+            },
             size,
         }),
     };
     shape.unwrap_or_else(|| fatal(format_args!("freeing a malformed `{}` object", info.name)))
+}
+
+// Poisoning ---------------------------------------------------------------
+
+/// The header a freed object carries in poisoning mode: layout 0, which no
+/// live object has, so every check recognizes it.
+pub const POISON_HEADER: u64 = 0x0000_00EE_DEAD_BEEF;
+
+/// The most blocks one thread's quarantine keeps.
+pub const QUARANTINE_BLOCKS: usize = 4096;
+
+/// The most bytes one thread's quarantine keeps.
+pub const QUARANTINE_BYTES: usize = 16 << 20;
+
+/// Whether poisoning mode is on: `CHEBY_RT_POISON=1` in a build with debug
+/// assertions, read once per process, and always in this crate's unit
+/// tests. Code generation emits calls to the checked `cheby_rt_dup` and
+/// `cheby_rt_drop` instead of inline fast paths when it is on.
+#[must_use]
+pub fn poison_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    cfg!(debug_assertions)
+        && *ENABLED.get_or_init(|| {
+            cfg!(test) || std::env::var_os("CHEBY_RT_POISON").is_some_and(|value| value == "1")
+        })
+}
+
+/// Freed blocks kept out of the allocator, oldest first.
+#[derive(Default)]
+struct Quarantine {
+    blocks: VecDeque<(*mut u8, Layout)>,
+    bytes: usize,
+}
+
+impl Quarantine {
+    /// Keeps a poisoned block, returning the oldest ones to the allocator
+    /// beyond the bounds.
+    fn keep(&mut self, obj: *mut u8, layout: Layout) {
+        self.blocks.push_back((obj, layout));
+        self.bytes = self.bytes.saturating_add(layout.size());
+        while self.blocks.len() > QUARANTINE_BLOCKS || self.bytes > QUARANTINE_BYTES {
+            let Some((old, old_layout)) = self.blocks.pop_front() else {
+                break;
+            };
+            self.bytes = self.bytes.saturating_sub(old_layout.size());
+            // SAFETY: a block allocated with this layout, freed and no
+            // longer referenced by anything that may run correctly.
+            unsafe { std::alloc::dealloc(old, old_layout) };
+        }
+    }
+}
+
+impl Drop for Quarantine {
+    fn drop(&mut self) {
+        for (obj, layout) in self.blocks.drain(..) {
+            // SAFETY: as in `keep`.
+            unsafe { std::alloc::dealloc(obj, layout) };
+        }
+    }
+}
+
+thread_local! {
+    static QUARANTINE: RefCell<Quarantine> = RefCell::new(Quarantine::default());
+}
+
+/// The number of blocks in the current thread's quarantine.
+#[doc(hidden)]
+#[must_use]
+pub fn quarantine_len() -> usize {
+    QUARANTINE
+        .try_with(|quarantine| quarantine.borrow().blocks.len())
+        .unwrap_or(0)
+}
+
+/// Returns a freed block to the allocator, or poisons and quarantines it.
+///
+/// # Safety
+///
+/// `obj` was allocated by `alloc_object` with `layout` and no reference to
+/// it remains.
+unsafe fn release_block(obj: *mut u8, layout: Layout) {
+    if poison_enabled() {
+        // SAFETY: the block is still allocated and nothing else uses it.
+        unsafe { object::write_field(obj, 0, POISON_HEADER) };
+        let kept = QUARANTINE
+            .try_with(|quarantine| quarantine.borrow_mut().keep(obj, layout))
+            .is_ok();
+        if kept {
+            return;
+        }
+    }
+    // SAFETY: forwarded from the caller.
+    unsafe { std::alloc::dealloc(obj, layout) };
+}
+
+/// In poisoning mode, ends the process if `word` points to a freed
+/// (poisoned) object or one whose header is impossible. `what` names the
+/// operation for the message. Does nothing otherwise, and for tagged
+/// integers and 0.
+///
+/// # Safety
+///
+/// `word` is a tagged integer, 0, or points to memory that was allocated
+/// as an object (live, static or quarantined).
+pub unsafe fn check_live(word: Word, what: &str) {
+    if !poison_enabled() || abi::is_tagged_int(word) || word == 0 {
+        return;
+    }
+    let obj = word_to_ptr(word);
+    // SAFETY: forwarded from the caller; the header is readable.
+    let (rc, (scan, id)) = unsafe { (load_rc(obj), scan_and_layout(obj)) };
+    let header = abi::header(rc, scan, id);
+    if header == POISON_HEADER {
+        fatal(format_args!(
+            "use after free: {what} reached the freed object {word:#x}"
+        ));
+    }
+    if layout::get(id).is_none() {
+        fatal(format_args!(
+            "use after free: {what} reached {word:#x}, whose header {header:#x} is impossible"
+        ));
+    }
 }
 
 #[cfg(test)]
@@ -236,7 +566,9 @@ pub(crate) mod tests {
     use crate::abi::layout as ids;
     use crate::object::write_field;
 
-    /// Serializes the tests that look at the global leak counter.
+    /// Serializes the old tests that looked at the process-wide leak
+    /// counter. Accounting domains make it unnecessary; new tests do not
+    /// take it.
     pub(crate) fn serial() -> MutexGuard<'static, ()> {
         static LOCK: Mutex<()> = Mutex::new(());
         LOCK.lock().unwrap_or_else(PoisonError::into_inner)
@@ -263,6 +595,7 @@ pub(crate) mod tests {
     fn alloc_writes_the_header_and_counts_the_object() {
         let _guard = serial();
         let before = live_objects();
+        let bytes = current_domain().live_bytes();
         let word = tuple(&[abi::tag_int(7).unwrap()]);
         assert_eq!(word % 8, 0);
         // SAFETY: a live tuple.
@@ -270,12 +603,12 @@ pub(crate) mod tests {
             assert_eq!(object::load_rc(word_to_ptr(word)), 1);
             assert_eq!(scan_and_layout(word_to_ptr(word)), (1, ids::TUPLE));
         }
-        if LEAK_CHECK_ENABLED {
-            assert_eq!(live_objects(), before.wrapping_add(1));
-        }
+        assert_eq!(live_objects(), before.wrapping_add(1));
+        assert_eq!(current_domain().live_bytes(), bytes.wrapping_add(16));
         // SAFETY: the only reference.
         unsafe { rc::drop(word) };
         assert_eq!(live_objects(), before);
+        assert_eq!(current_domain().live_bytes(), bytes);
     }
 
     #[test]
@@ -287,10 +620,7 @@ pub(crate) mod tests {
         // SAFETY: a live object; the second reference goes into `outer`.
         unsafe { rc::dup(shared) };
         let outer = tuple(&[inner, shared, abi::tag_int(-3).unwrap(), object::nil()]);
-        assert_eq!(
-            live_objects().wrapping_sub(before),
-            if LEAK_CHECK_ENABLED { 3 } else { 0 }
-        );
+        assert_eq!(live_objects().wrapping_sub(before), 3);
         // SAFETY: the only reference to `outer`.
         unsafe { rc::drop(outer) };
         assert_eq!(live_objects(), before);
@@ -299,7 +629,6 @@ pub(crate) mod tests {
     #[test]
     fn freeing_a_long_chain_uses_no_stack() {
         let _guard = serial();
-        let before = live_objects();
         let length = if cfg!(miri) { 1_000 } else { 1_000_000 };
         // A small stack: recursion per cell would overflow it quickly.
         let handle = std::thread::Builder::new()
@@ -312,16 +641,17 @@ pub(crate) mod tests {
                 // SAFETY: the only reference to the head; each cell owns
                 // the next.
                 unsafe { rc::drop(head) };
+                live_objects()
             })
             .unwrap();
-        handle.join().unwrap();
-        assert_eq!(live_objects(), before);
+        assert_eq!(handle.join().unwrap(), 0);
     }
 
     #[test]
     fn freeing_a_wide_tuple_with_an_escaped_scan_count() {
         let _guard = serial();
         let before = live_objects();
+        let bytes = current_domain().live_bytes();
         let count = 300_usize;
         let children: Vec<Word> = (0..count).map(|_| tuple(&[])).collect();
         let size = to_u64(field_offset(count.wrapping_add(1)));
@@ -335,6 +665,38 @@ pub(crate) mod tests {
             rc::drop(object::ptr_to_word(obj));
         }
         assert_eq!(live_objects(), before);
+        assert_eq!(current_domain().live_bytes(), bytes);
+    }
+
+    /// An escaped closure, dictionary or descriptor: its first field at
+    /// offset 8, the tagged count of the rest at offset 16, then the rest
+    /// (GAP(escaped-scan-count)). Freeing releases the first field and the
+    /// rest, and charges the whole size back.
+    #[test]
+    fn freeing_escaped_closures_dicts_and_descs() {
+        let domain = Domain::new();
+        with_domain(Arc::clone(&domain), || {
+            for (id, first_is_code) in
+                [(ids::CLOSURE, true), (ids::DICT, false), (ids::DESC, false)]
+            {
+                let rest = 300_usize;
+                let first = if first_is_code { 0x1001 } else { tuple(&[]) };
+                let children: Vec<Word> = (0..rest).map(|_| tuple(&[])).collect();
+                let size = to_u64(field_offset(rest.wrapping_add(2)));
+                let obj = alloc_object(size, abi::header(1, abi::SCAN_ESCAPE, id));
+                // SAFETY: initializing a fresh object, then dropping its
+                // only reference.
+                unsafe {
+                    write_field(obj, 8, first);
+                    write_field(obj, 16, abi::tag_int(i64::try_from(rest).unwrap()).unwrap());
+                    for (index, child) in children.iter().enumerate() {
+                        write_field(obj, field_offset(index.wrapping_add(2)), *child);
+                    }
+                    rc::drop(object::ptr_to_word(obj));
+                }
+                assert_eq!((domain.live_objects(), domain.live_bytes()), (0, 0));
+            }
+        });
     }
 
     #[test]
@@ -381,5 +743,236 @@ pub(crate) mod tests {
             }
         }
         assert_eq!(live_objects(), before);
+    }
+
+    #[test]
+    fn dictionaries_dyn_values_and_descriptors_free_their_fields() {
+        let before = live_objects();
+        for (id, fields) in [(ids::DICT, 3_u8), (ids::DESC, 2), (ids::DYN, 2)] {
+            let obj = alloc_object(
+                to_u64(field_offset(usize::from(fields))),
+                abi::header(1, fields, id),
+            );
+            for index in 0..usize::from(fields) {
+                // SAFETY: initializing a fresh object's uniform fields.
+                unsafe { write_field(obj, field_offset(index), tuple(&[])) };
+            }
+            // SAFETY: the only reference.
+            unsafe { rc::drop(object::ptr_to_word(obj)) };
+        }
+        assert_eq!(live_objects(), before);
+    }
+
+    /// A test node: header, `len`, then `len` owned uniform words.
+    unsafe fn node_size(word: Word) -> u64 {
+        // SAFETY: a live node.
+        let len = unsafe { read_field(word_to_ptr(word), 8) };
+        16_u64.saturating_add(len.saturating_mul(8))
+    }
+
+    unsafe fn node_children(word: Word, visit: &mut dyn FnMut(Word)) {
+        let obj = word_to_ptr(word);
+        // SAFETY: a live node.
+        let len = unsafe { read_field(obj, 8) };
+        for index in 0..to_usize(len) {
+            // SAFETY: within the node.
+            visit(unsafe { read_field(obj, field_offset(index.wrapping_add(1))) });
+        }
+    }
+
+    pub(crate) static TEST_NODE: CustomKind = CustomKind {
+        name: "test node",
+        size: node_size,
+        children: node_children,
+        equal: None,
+        hash: None,
+        debug: None,
+    };
+
+    /// The id the test node registers at (unused by every runtime module).
+    pub(crate) const TEST_NODE_ID: abi::LayoutId = 40;
+
+    /// A test node owning `children`.
+    pub(crate) fn node(children: &[Word]) -> Word {
+        layout::register_builtin(TEST_NODE_ID, layout::LayoutInfo::custom(&TEST_NODE)).unwrap();
+        let len = to_u64(children.len());
+        let obj = alloc_object(
+            16_u64.saturating_add(len.saturating_mul(8)),
+            abi::header(1, 0, TEST_NODE_ID),
+        );
+        // SAFETY: initializing a fresh node.
+        unsafe {
+            write_field(obj, 8, len);
+            for (index, child) in children.iter().enumerate() {
+                write_field(obj, field_offset(index.wrapping_add(1)), *child);
+            }
+        }
+        object::ptr_to_word(obj)
+    }
+
+    #[test]
+    fn custom_kinds_free_through_the_worklist() {
+        let before = live_objects();
+        let bytes = current_domain().live_bytes();
+        // A million-deep chain of nodes on a 64 KiB stack.
+        let handle = std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(|| {
+                let mut head = node(&[]);
+                for n in 0..1_000_000 {
+                    head = node(&[abi::tag_int(n).unwrap(), head, tuple(&[])]);
+                }
+                // SAFETY: the only reference.
+                unsafe { rc::drop(head) };
+                (live_objects(), current_domain().live_bytes())
+            })
+            .unwrap();
+        assert_eq!(handle.join().unwrap(), (0, 0));
+        let shared = tuple(&[]);
+        // SAFETY: two more references, both owned by the node.
+        unsafe {
+            rc::dup(shared);
+            rc::dup(shared);
+        }
+        let parent = node(&[shared, shared]);
+        // SAFETY: the node's own reference; then the test's.
+        unsafe {
+            rc::drop(parent);
+            assert_eq!(object::load_rc(word_to_ptr(shared)), 1);
+            rc::drop(shared);
+        }
+        assert_eq!(
+            (live_objects(), current_domain().live_bytes()),
+            (before, bytes)
+        );
+    }
+
+    #[test]
+    fn threads_see_only_their_own_objects() {
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let threads: Vec<_> = [10_usize, 25]
+            .into_iter()
+            .map(|count| {
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    let words: Vec<Word> = (0..count).map(|_| tuple(&[])).collect();
+                    barrier.wait();
+                    let seen = live_objects();
+                    barrier.wait();
+                    for word in words {
+                        // SAFETY: the only reference.
+                        unsafe { rc::drop(word) };
+                    }
+                    (seen, live_objects())
+                })
+            })
+            .collect();
+        let results: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+        assert_eq!(results, [(10, 0), (25, 0)]);
+    }
+
+    #[test]
+    fn domains_track_bytes_and_peaks() {
+        let domain = Domain::new();
+        let (peak, live) = with_domain(Arc::clone(&domain), || {
+            let a = tuple(&[tuple(&[])]);
+            // SAFETY: the only reference.
+            unsafe { rc::drop(a) };
+            (current_domain().peak_bytes(), live_objects())
+        });
+        assert_eq!((peak, live), (24, 0));
+        assert_eq!(domain.live_bytes(), 0);
+        domain.reset_peak();
+        assert_eq!(domain.peak_bytes(), 0);
+    }
+
+    #[test]
+    fn forget_leaves_the_domain_once() {
+        let domain = Domain::new();
+        with_domain(Arc::clone(&domain), || {
+            let word = tuple(&[]);
+            assert_eq!(domain.live_objects(), 1);
+            // SAFETY: a live object only this thread uses.
+            unsafe {
+                forget(word);
+                assert_eq!(object::load_rc(word_to_ptr(word)), abi::RC_STATIC);
+                forget(word);
+                rc::dup(word);
+                rc::drop(word);
+            }
+            assert_eq!((domain.live_objects(), domain.live_bytes()), (0, 0));
+        });
+    }
+
+    #[test]
+    fn the_quarantine_is_bounded() {
+        assert!(poison_enabled());
+        let handle = std::thread::spawn(|| {
+            for _ in 0..QUARANTINE_BLOCKS.saturating_mul(2) {
+                // SAFETY: the only reference.
+                unsafe { rc::drop(tuple(&[])) };
+            }
+            quarantine_len()
+        });
+        assert_eq!(handle.join().unwrap(), QUARANTINE_BLOCKS);
+    }
+
+    /// Runs this test binary's `child` test in a child process with the
+    /// given `CHEBY_RT_TEST_UAF` operation, and returns its standard error
+    /// and whether it succeeded.
+    fn run_child(operation: &str) -> (String, bool) {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "alloc::tests::use_after_free_child",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env("CHEBY_RT_POISON", "1")
+            .env("CHEBY_RT_TEST_UAF", operation)
+            .output()
+            .unwrap();
+        (
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+            output.status.success(),
+        )
+    }
+
+    /// The child side of `use_after_free_is_fatal`: does nothing unless
+    /// `CHEBY_RT_TEST_UAF` names an operation.
+    #[test]
+    fn use_after_free_child() {
+        let Ok(operation) = std::env::var("CHEBY_RT_TEST_UAF") else {
+            return;
+        };
+        let word = crate::values::int_word(i64::MAX);
+        // SAFETY: the only reference: the object is freed (and poisoned).
+        unsafe { rc::cheby_rt_drop(word) };
+        // SAFETY: deliberately not: each operation reaches a freed object,
+        // which the poisoning mode must catch before touching it.
+        unsafe {
+            match operation.as_str() {
+                "dup" => rc::cheby_rt_dup(word),
+                "drop" => rc::cheby_rt_drop(word),
+                "read" => {
+                    let _ = crate::values::word_to_i64(word);
+                }
+                "forget" => forget(word),
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "starts a process")]
+    fn use_after_free_is_fatal() {
+        for operation in ["dup", "drop", "read", "forget"] {
+            let (stderr, success) = run_child(operation);
+            assert!(!success, "{operation}: the child succeeded");
+            assert!(
+                stderr.contains("fatal runtime error: use after free: "),
+                "{operation}: {stderr}"
+            );
+        }
     }
 }

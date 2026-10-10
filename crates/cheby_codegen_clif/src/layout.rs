@@ -32,11 +32,17 @@ pub fn builtin_layout_id(layout_ref: &LayoutRef) -> Option<u32> {
         }),
         LayoutRef::Tuple(_) => Some(layout::TUPLE),
         LayoutRef::Closure(_) => Some(layout::CLOSURE),
+        LayoutRef::Dict { .. } => Some(layout::DICT),
+        LayoutRef::Dyn => Some(layout::DYN),
+        LayoutRef::Desc { .. } => Some(layout::DESC),
+        LayoutRef::DescNominal => Some(layout::DESC_NOMINAL),
         LayoutRef::Ctor(def) => builtin_ctor_layout(def),
     }
 }
 
-fn builtin_ctor_layout(def: DefId) -> Option<u32> {
+/// The fixed layout id of a builtin constructor, `None` for a user one.
+#[must_use]
+pub fn builtin_ctor_layout(def: DefId) -> Option<u32> {
     let table = [
         (builtin::NIL, layout::NIL),
         (builtin::FALSE, layout::FALSE),

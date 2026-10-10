@@ -8,7 +8,7 @@ use cheby_types::thir::EntryInfo;
 use crate::abi::{abi_sig, entry_sig};
 use crate::builder::FunctionBuilder;
 use crate::ir::{Callee, Const, EntryKind, FnKey, Operand, Rvalue, Terminator, UnitKind};
-use crate::lower::{LowerCx, LowerError, Unsupported, finish_unit, not_supported};
+use crate::lower::{LowerCx, LowerError, Pending, Unsupported, finish_unit, not_supported};
 use crate::repr::Repr;
 use crate::{Abi, MirModule};
 
@@ -91,7 +91,13 @@ pub fn lower_entries(
         b.terminate(Terminator::Return(ret))?;
         functions.push(b.finish()?);
     }
-    let unit = finish_unit(UnitKind::Entries, functions, Vec::new(), cx)?;
+    let unit = finish_unit(
+        UnitKind::Entries,
+        functions,
+        Vec::new(),
+        Pending::default(),
+        cx,
+    )?;
     unsupported.finish(unit)
 }
 

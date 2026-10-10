@@ -9,7 +9,7 @@
 //! interfaces.
 
 use cheby_diag::Span;
-use cheby_iface::{DefId, Ice, IndexVec, ModuleId, Name, Ty};
+use cheby_iface::{DefId, Ice, Idx, IndexVec, ModuleId, Name, Ty};
 
 use crate::abi::AbiSig;
 use crate::layout::LayoutDesc;
@@ -28,6 +28,12 @@ cheby_iface::newtype_index! {
 cheby_iface::newtype_index! {
     /// A basic block of one function. Dumps as `bbN`; `bb0` is the entry.
     pub struct BlockId;
+}
+
+cheby_iface::newtype_index! {
+    /// A static object of one unit ([`MirModule::statics`]). Dumps as
+    /// `static#N`.
+    pub struct StaticId;
 }
 
 /// What a unit of MIR holds. A unit never mixes kinds.
@@ -50,8 +56,9 @@ pub struct MirModule {
     /// The module's path (`std::io`) for `Code` and `Tests`; empty for
     /// `Entries`.
     pub path: Box<str>,
-    /// In order: items by `DefIndex`, each followed by its shims and
-    /// closures in creation order; entry thunks in the order given.
+    /// In order: items by `DefIndex`, each followed by its closures in
+    /// creation order, then the value shims the unit needs by `DefId`;
+    /// entry thunks in the order given.
     pub functions: Vec<Function>,
     /// Every [`Callee::Direct`] target, own module or not, sorted by
     /// `DefId`, with its signature from [`crate::abi::abi_sig`]. The
@@ -62,8 +69,20 @@ pub struct MirModule {
     /// `DefIndex` order (D-252, D-263). Registered before any of the
     /// unit's code is defined (D-454).
     pub layouts: Vec<LayoutDesc>,
+    /// Layouts of constructors that other modules declare, builtin ones
+    /// included, which this unit's code allocates, reads fields of, uses
+    /// as static objects or reads tags of: for a [`TagType::Adt`], every
+    /// constructor of the type. Sorted by [`LayoutRef`], without
+    /// duplicates. Computed from interfaces only (D-246), so the
+    /// validator and codegen find field offsets without the other unit.
+    /// Never registered from here: their own unit registers them, and
+    /// builtin ones have fixed ids (D-454).
+    pub foreign_layouts: Vec<LayoutDesc>,
+    /// The unit's static objects (D-523), in [`StaticId`] order: element
+    /// `n` has id `n`.
+    pub statics: Vec<StaticObject>,
     /// The path of every def this unit mentions (function keys, callees,
-    /// constructors, constants, layouts), sorted by `DefId`.
+    /// constructors, constants, layouts, tag types), sorted by `DefId`.
     pub names: Vec<DefName>,
 }
 
@@ -103,6 +122,94 @@ impl MirModule {
     #[must_use]
     pub fn function(&self, key: FnKey) -> Option<&Function> {
         self.functions.iter().find(|f| f.key == key)
+    }
+
+    /// The layout of a constructor `layout`, from [`MirModule::layouts`]
+    /// or [`MirModule::foreign_layouts`].
+    #[must_use]
+    pub fn layout(&self, layout: LayoutRef) -> Option<&LayoutDesc> {
+        self.layouts
+            .iter()
+            .chain(&self.foreign_layouts)
+            .find(|d| d.layout == layout)
+    }
+
+    /// The layouts this unit knows of the constructors of type `ty`, in
+    /// tag order.
+    #[must_use]
+    pub fn type_layouts(&self, ty: DefId) -> Vec<&LayoutDesc> {
+        let mut out: Vec<&LayoutDesc> = self
+            .layouts
+            .iter()
+            .chain(&self.foreign_layouts)
+            .filter(|d| d.type_def == ty)
+            .collect();
+        out.sort_by_key(|d| d.tag);
+        out
+    }
+
+    /// The static object `id`.
+    #[must_use]
+    pub fn static_object(&self, id: StaticId) -> Option<&StaticObject> {
+        self.statics.get(id.index())
+    }
+}
+
+/// A static object that code generation emits (D-523): count 0, never
+/// written, defined once per process (a later unit that names the same
+/// symbol imports it). Its symbol is `cb$<kind>$<module path>$<name>`
+/// (plan §4.4), where the module path is the unit's.
+#[derive(Clone, PartialEq, Debug)]
+pub struct StaticObject {
+    /// Its position in [`MirModule::statics`].
+    pub id: StaticId,
+    pub kind: StaticKind,
+    /// The module path of its symbol, `cb$<kind>$<module>$<name>`: the
+    /// unit's own for a dictionary or a function value, the type's for a
+    /// nominal descriptor (`cb$desc$<module path>$<Type>`), and the
+    /// interface's for the type `dyn I` (`cb$desc$<module path of
+    /// I>$dyn$<I>`, D-523). A unit may define a static of another module;
+    /// the JIT defines each symbol once per process.
+    pub module: Box<str>,
+    /// Unique with `module` and `kind` within the unit, and stable: built
+    /// from paths and names, never from ids (D-264, D-523).
+    pub name: Box<str>,
+    /// [`LayoutRef::Dict`] for a dictionary, [`LayoutRef::Desc`] or
+    /// [`LayoutRef::DescNominal`] for a descriptor, [`LayoutRef::Closure`]
+    /// of no captures for a function value.
+    pub layout: LayoutRef,
+    /// The fields in declaration order (plan §5.4): constants only, so a
+    /// static never points at anything that is not static. A function
+    /// value's first field is its [`Const::Code`]. A [`Const::Str`] here
+    /// indexes [`StaticObject::strings`].
+    pub fields: Box<[Const]>,
+    /// The static's own string table, such as a nominal descriptor's
+    /// printed name and module path (D-524). Codegen emits them as
+    /// `cb$str$<the static's symbol without cb$>$<n>` (D-456).
+    pub strings: IndexVec<StrId, Box<str>>,
+}
+
+/// What a [`StaticObject`] is, which picks its symbol kind (D-523).
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub enum StaticKind {
+    /// A dictionary that needs no dictionary of its caller:
+    /// `cb$dict$…`.
+    Dict,
+    /// A type descriptor: `cb$desc$…`.
+    Desc,
+    /// A closure with no captures: `cb$fnval$…`.
+    FnValue,
+}
+
+impl StaticKind {
+    /// The name used in dumps and in the symbol kind.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Dict => "dict",
+            Self::Desc => "desc",
+            Self::FnValue => "fnval",
+        }
     }
 }
 
@@ -155,6 +262,29 @@ pub enum FnKey {
     /// A C-ABI trampoline into the uniform convention, by arity: how the
     /// runtime calls a closure (D-453).
     Trampoline(u32),
+    /// The code of the built-in `Show` or `Compare` function `iface_fn`
+    /// for tuples of `arity` elements (D-167), the entry of a tuple
+    /// dictionary. Uniform signature ([`crate::abi::uniform_sig`]).
+    TupleDictFn { iface_fn: DefId, arity: u32 },
+    /// The code of a dictionary entry for `dyn I` that forwards the call
+    /// of `iface_fn` to the dictionary the `dyn` value carries (§8.6).
+    /// Uniform signature.
+    DynForward { iface_fn: DefId },
+}
+
+impl FnKey {
+    /// Whether functions with this key use the uniform convention for
+    /// unknown callees: the owned `self`, then uniform words (D-453).
+    #[must_use]
+    pub const fn is_uniform(self) -> bool {
+        matches!(
+            self,
+            Self::ValueShim(_)
+                | Self::Closure { .. }
+                | Self::TupleDictFn { .. }
+                | Self::DynForward { .. }
+        )
+    }
 }
 
 /// What an entry thunk runs.
@@ -262,7 +392,8 @@ pub enum Stmt {
         dst: Local,
         value: Rvalue,
     },
-    /// A call whose result is `void` (a foreign function returning `Nil`).
+    /// A call whose result is `void`: a foreign function returning `Nil`,
+    /// or a runtime helper without a result ([`RuntimeFn::ret`]).
     Eval(Rvalue),
     /// One more reference. A no-op at run time for tagged integers and
     /// static objects.
@@ -307,13 +438,87 @@ pub enum Const {
     Str(StrId),
     /// The static `Nil` object.
     Nil,
-    /// The static object of a nullary constructor.
+    /// The static object of a nullary constructor: the runtime's for a
+    /// builtin one, `cb$ctor$…` for a user one (D-454).
     StaticCtor(DefId),
-    /// The static closure of a non-generic top-level function (D-453).
+    /// The static closure `cb$fnval$…` of a top-level function without
+    /// dictionaries, whose code is its [`FnKey::ValueShim`] (D-453,
+    /// D-523).
     FnValue(DefId),
     /// The code word `addr | 1` of a function, only as the first field of
-    /// a closure [`Rvalue::Alloc`].
+    /// a closure [`Rvalue::Alloc`] or of a function-value static.
     Code(FnKey),
+    /// The runtime's static empty list (`cheby_rt_static_empty_list`).
+    EmptyList,
+    /// A static object of this unit ([`MirModule::statics`]).
+    Static(StaticId),
+    /// The runtime's nominal descriptor of a builtin type,
+    /// `cheby_rt_desc_<name>` (D-523).
+    BuiltinDesc(BuiltinDesc),
+}
+
+/// The builtin types with a runtime nominal descriptor
+/// `cheby_rt_desc_<name>` (D-523, plan §4.3.2).
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub enum BuiltinDesc {
+    Int,
+    Float,
+    F32,
+    I8,
+    I16,
+    I32,
+    I64,
+    U8,
+    U16,
+    U32,
+    U64,
+    Bool,
+    Nil,
+    String,
+    Bytes,
+    List,
+    Map,
+    Set,
+    Option,
+    Result,
+    Order,
+    /// Every tuple; the arity comes from the descriptor's arguments.
+    Tuple,
+    /// Every function type; the arguments are the parameter types, then
+    /// the result.
+    Fn,
+}
+
+impl BuiltinDesc {
+    /// The `<name>` of `cheby_rt_desc_<name>`, also used in dumps.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Int => "int",
+            Self::Float => "float",
+            Self::F32 => "f32",
+            Self::I8 => "i8",
+            Self::I16 => "i16",
+            Self::I32 => "i32",
+            Self::I64 => "i64",
+            Self::U8 => "u8",
+            Self::U16 => "u16",
+            Self::U32 => "u32",
+            Self::U64 => "u64",
+            Self::Bool => "bool",
+            Self::Nil => "nil",
+            Self::String => "string",
+            Self::Bytes => "bytes",
+            Self::List => "list",
+            Self::Map => "map",
+            Self::Set => "set",
+            Self::Option => "option",
+            Self::Result => "result",
+            Self::Order => "order",
+            Self::Tuple => "tuple",
+            Self::Fn => "fn",
+        }
+    }
 }
 
 impl Const {
@@ -325,9 +530,14 @@ impl Const {
             Self::Float(_) => Repr::Float,
             Self::Bool(_) => Repr::Bool,
             Self::Sized { repr, .. } => *repr,
-            Self::Str(_) | Self::Nil | Self::StaticCtor(_) | Self::FnValue(_) | Self::Code(_) => {
-                Repr::Value
-            }
+            Self::Str(_)
+            | Self::Nil
+            | Self::StaticCtor(_)
+            | Self::FnValue(_)
+            | Self::Code(_)
+            | Self::EmptyList
+            | Self::Static(_)
+            | Self::BuiltinDesc(_) => Repr::Value,
         }
     }
 }
@@ -367,13 +577,16 @@ pub enum Rvalue {
     /// The value in a constant's slot, borrowed from the slot (the RC pass
     /// dups it).
     LoadConst(DefId),
-    /// A raw value in `from` boxed into a uniform word (canonical boxing,
-    /// D-278).
+    /// A raw value in `from` boxed into a uniform word, canonically
+    /// (D-278, D-521): tagged when it fits, else a boxed number; a `Bool`
+    /// as the static `True` or `False`. The result is owned.
     Box { value: Operand, from: Repr },
-    /// A uniform word (borrowed) unboxed into `to`.
+    /// A uniform word (borrowed) unboxed into `to` (D-521).
     Unbox { value: Operand, to: Repr },
-    /// Arithmetic that panics on overflow or a zero divisor (D-025,
-    /// D-069) at `loc`.
+    /// Integer arithmetic on `Int` or a sized integer (`I8` … `U64`) that
+    /// panics at `loc`: `Overflow` on overflow (`<<` included, §5.4.6),
+    /// `DivisionByZero` on a zero divisor, `ShiftOutOfRange` on a shift
+    /// count outside the width (§3.3, D-025, D-069). `MIN % -1` is 0.
     Checked {
         op: ArithOp,
         lhs: Operand,
@@ -381,13 +594,79 @@ pub enum Rvalue {
         repr: Repr,
         loc: StrId,
     },
-    /// A comparison of two raw values of `repr`, giving a [`Repr::Bool`].
+    /// A comparison of two raw values of `repr`, giving a [`Repr::Bool`]:
+    /// integers, `Bool` (`Eq` and `Ne` only) and floats. On `Float` and
+    /// `F32`, `Eq`/`Ne` follow §3.3.2 (NaN equals NaN, `-0.0 == 0.0`) and
+    /// `Lt Le Gt Ge` the total order of `compare` (§3.14, D-527). Never on
+    /// uniform values: structural `==` is [`RuntimeFn::Equal`].
     Compare {
         op: CmpOp,
         lhs: Operand,
         rhs: Operand,
         repr: Repr,
     },
+    /// IEEE arithmetic on `Float`/`F32`: `Add`, `Sub`, `Mul`, `Div`,
+    /// `Rem`. Never panics (§3.3.2). `Rem` has the sign of the dividend
+    /// (§3.3.1, D-527, Rust's `%` on floats).
+    FloatArith {
+        op: ArithOp,
+        lhs: Operand,
+        rhs: Operand,
+        repr: Repr,
+    },
+    /// `&`, `|`, `^` on `Int` and the sized integers (§5.4.6). Never
+    /// panics.
+    Bitwise {
+        op: BitOp,
+        lhs: Operand,
+        rhs: Operand,
+        repr: Repr,
+    },
+    /// Sign flip of a `Float`/`F32` (built-in unary `-`, D-118, D-527):
+    /// `-0.0` for `0.0`.
+    FloatNeg { value: Operand, repr: Repr },
+    /// `!` on an unboxed `Bool`.
+    Not(Operand),
+    /// The constructor tag (declaration order) of `base` (borrowed), a
+    /// value of an ADT with more than one constructor, as an
+    /// [`Repr::Int`], without embedding a user layout id (D-454, D-522).
+    ReadTag { base: Operand, ty: TagType },
+}
+
+/// Bitwise operators ([`Rvalue::Bitwise`]).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum BitOp {
+    And,
+    Or,
+    Xor,
+}
+
+impl BitOp {
+    /// The name used in dumps.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::And => "and",
+            Self::Or => "or",
+            Self::Xor => "xor",
+        }
+    }
+}
+
+/// The type whose tag [`Rvalue::ReadTag`] reads (D-522).
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub enum TagType {
+    /// `Option`: the layout id minus 22.
+    Option,
+    /// `Result`: the layout id minus 24.
+    Result,
+    /// `Order`: the layout id minus 19.
+    Order,
+    /// A user ADT with more than one constructor, by the type's `DefId`:
+    /// the layout id minus the id in its first constructor's
+    /// `cb$layout$` word. Its constructors' layouts are in the unit
+    /// ([`MirModule::type_layouts`]).
+    Adt(DefId),
 }
 
 /// How an instruction uses a local (D7).
@@ -418,20 +697,65 @@ impl Rvalue {
                 operand_uses(args, UseKind::Owned, &mut out);
             }
             Self::CallForeign { args, .. } => operand_uses(args, UseKind::Borrowed, &mut out),
-            Self::CallRuntime { func, .. } => match *func {},
+            Self::CallRuntime { func, args } => {
+                let params = func.params();
+                for (n, arg) in args.iter().enumerate() {
+                    // An argument beyond the helper's parameters is a
+                    // validator error; it counts as owned meanwhile.
+                    let kind = params.get(n).map_or(UseKind::Owned, |&(_, k)| k);
+                    operand_uses(std::slice::from_ref(arg), kind, &mut out);
+                }
+            }
             Self::Alloc { fields, .. } => operand_uses(fields, UseKind::Owned, &mut out),
             Self::Field { base, .. } | Self::ReadLayout { base } => {
                 out.push((*base, UseKind::Borrowed));
             }
             Self::LoadConst(_) => {}
-            Self::Box { value, .. } | Self::Unbox { value, .. } => {
+            Self::Box { value, .. }
+            | Self::Unbox { value, .. }
+            | Self::FloatNeg { value, .. }
+            | Self::Not(value)
+            | Self::ReadTag { base: value, .. } => {
                 operand_uses(std::slice::from_ref(value), UseKind::Borrowed, &mut out);
             }
-            Self::Checked { lhs, rhs, .. } | Self::Compare { lhs, rhs, .. } => {
+            Self::Checked { lhs, rhs, .. }
+            | Self::Compare { lhs, rhs, .. }
+            | Self::FloatArith { lhs, rhs, .. }
+            | Self::Bitwise { lhs, rhs, .. } => {
                 operand_uses(&[lhs.clone(), rhs.clone()], UseKind::Borrowed, &mut out);
             }
         }
         out
+    }
+
+    /// The operands the rvalue reads, in order (the base of `field` and
+    /// `read_layout` included).
+    #[must_use]
+    pub fn operands(&self) -> Vec<Operand> {
+        match self {
+            Self::Use(op)
+            | Self::Box { value: op, .. }
+            | Self::Unbox { value: op, .. }
+            | Self::FloatNeg { value: op, .. }
+            | Self::Not(op)
+            | Self::ReadTag { base: op, .. } => vec![op.clone()],
+            Self::Call { callee, args } => {
+                let mut out = Vec::with_capacity(args.len().saturating_add(1));
+                if let Callee::Indirect(f) = callee {
+                    out.push(Operand::Local(*f));
+                }
+                out.extend(args.iter().cloned());
+                out
+            }
+            Self::CallForeign { args, .. } | Self::CallRuntime { args, .. } => args.clone(),
+            Self::Alloc { fields, .. } => fields.clone(),
+            Self::Field { base, .. } | Self::ReadLayout { base } => vec![Operand::Local(*base)],
+            Self::LoadConst(_) => Vec::new(),
+            Self::Checked { lhs, rhs, .. }
+            | Self::Compare { lhs, rhs, .. }
+            | Self::FloatArith { lhs, rhs, .. }
+            | Self::Bitwise { lhs, rhs, .. } => vec![lhs.clone(), rhs.clone()],
+        }
     }
 
     /// Whether a [`Repr::Value`] result is borrowed (from a base object or
@@ -581,6 +905,40 @@ pub enum LayoutRef {
     Tuple(u32),
     /// A closure with the given number of captures, after the code word.
     Closure(u32),
+    /// A dictionary (layout id 9, D-524): the type descriptor, `fns`
+    /// closures in interface-function order, then `embedded` dictionaries
+    /// of the directly embedded interfaces in written order. Every field
+    /// is a uniform value.
+    Dict { fns: u32, embedded: u32 },
+    /// A `dyn` value (layout id 10, D-524): the dictionary of its
+    /// interface for the underlying type, then the underlying value.
+    Dyn,
+    /// A type descriptor (layout id 11, D-524): the nominal descriptor,
+    /// then `args` descriptors of the type arguments.
+    Desc { args: u32 },
+    /// A nominal descriptor (layout id 12, D-524): the type's printed
+    /// name and its module path, both static `String`s. Only static.
+    DescNominal,
+}
+
+impl LayoutRef {
+    /// The number of fields of a layout whose fields are all uniform
+    /// values, the closure's code word included; `None` for constructors
+    /// and runtime-defined kinds, whose fields come from elsewhere.
+    #[must_use]
+    pub fn uniform_fields(self) -> Option<u64> {
+        match self {
+            Self::Tuple(n) => Some(u64::from(n)),
+            Self::Closure(n) | Self::Desc { args: n } => Some(u64::from(n).saturating_add(1)),
+            Self::Dict { fns, embedded } => Some(
+                u64::from(fns)
+                    .saturating_add(u64::from(embedded))
+                    .saturating_add(1),
+            ),
+            Self::Dyn | Self::DescNominal => Some(2),
+            Self::Builtin(_) | Self::Ctor(_) => None,
+        }
+    }
 }
 
 /// The runtime-defined object kinds that are not constructors or tuples.
@@ -594,11 +952,124 @@ pub enum BuiltinLayout {
     BoxedU64,
 }
 
-/// A runtime helper called from generated code (F2-F7). Each variant
-/// documents the ownership of its arguments and result. None exist in the
-/// slice; the enum grows with the runtime.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub enum RuntimeFn {}
+/// A runtime helper called from generated code (D-520, plan §4.1). Each
+/// variant documents the ownership of its arguments and result, which
+/// [`RuntimeFn::params`] states for the RC pass and the validator. Every
+/// [`Repr::Value`] result is owned. The symbol and C signature are the
+/// runtime's (`cheby_runtime::abi::sym`); codegen passes `ctx` where the
+/// helper takes it.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub enum RuntimeFn {
+    /// `(capacity: Int) -> String`: an empty unique `String` with that
+    /// capacity. Result owned.
+    StrWithCapacity,
+    /// `(acc: String owned, piece: String borrowed) -> String`: appends
+    /// in place when `acc` is unique (count 1), copies otherwise. Result
+    /// owned.
+    StrAppend,
+    /// `(a: String borrowed, b: String borrowed) -> Bool`: byte equality
+    /// (string literal patterns).
+    StrEq,
+    /// `(list owned, elem owned) -> List`: appends `elem`, in place when
+    /// the list is unique (F3). Result owned.
+    ListPush,
+    /// `(a owned, b borrowed) -> List`: `a` followed by `b`'s elements
+    /// (spreads, `[..a, ..b]`). Result owned.
+    ListAppend,
+    /// `(list borrowed) -> Int`: the length (list patterns).
+    ListLength,
+    /// `(list borrowed, index: Int) -> T`: the element at `index`, which
+    /// lowering has checked is in range; the element is dup'd, so the
+    /// result is owned.
+    ListGet,
+    /// `(list borrowed, start: Int, end: Int) -> List`: an O(1) view of
+    /// `start..end` (D-053), for `..rest`. Result owned.
+    ListSlice,
+    /// `(a borrowed, b borrowed, location: String borrowed) -> Bool`:
+    /// structural `==` (§3.13). Panics `EqualityOnFunction` (D-233) at
+    /// `location`, the static `Const::Str` of the `==`'s source location
+    /// (§11.6, D-449), GAP(equal-panic-location); may call `@std_hooks`
+    /// functions (D-482).
+    Equal,
+    /// `(value borrowed) -> String`: debug text (§3.13, D-531). Result
+    /// owned.
+    Debug,
+    /// `(symbol: String borrowed) -> void`: panics `ForbiddenEffect` when
+    /// the running entry evaluates a constant (plan §7.4); a no-op
+    /// otherwise. Evaluated for effect ([`Stmt::Eval`]).
+    EffectCheck,
+}
+
+impl RuntimeFn {
+    /// Every helper, in declaration order.
+    pub const ALL: [Self; 11] = [
+        Self::StrWithCapacity,
+        Self::StrAppend,
+        Self::StrEq,
+        Self::ListPush,
+        Self::ListAppend,
+        Self::ListLength,
+        Self::ListGet,
+        Self::ListSlice,
+        Self::Equal,
+        Self::Debug,
+        Self::EffectCheck,
+    ];
+
+    /// The parameters: each one's representation and whether the helper
+    /// consumes it ([`UseKind::Owned`]) or only reads it.
+    #[must_use]
+    pub const fn params(self) -> &'static [(Repr, UseKind)] {
+        use Repr::{Int, Value};
+        use UseKind::{Borrowed, Owned};
+        match self {
+            Self::StrWithCapacity => &[(Int, Borrowed)],
+            Self::StrAppend | Self::ListAppend => &[(Value, Owned), (Value, Borrowed)],
+            Self::StrEq => &[(Value, Borrowed), (Value, Borrowed)],
+            Self::Equal => &[(Value, Borrowed), (Value, Borrowed), (Value, Borrowed)],
+            Self::ListPush => &[(Value, Owned), (Value, Owned)],
+            Self::ListLength | Self::Debug | Self::EffectCheck => &[(Value, Borrowed)],
+            Self::ListGet => &[(Value, Borrowed), (Int, Borrowed)],
+            Self::ListSlice => &[(Value, Borrowed), (Int, Borrowed), (Int, Borrowed)],
+        }
+    }
+
+    /// The result's representation; `None` for a helper returning
+    /// nothing, which is evaluated for effect.
+    #[must_use]
+    pub const fn ret(self) -> Option<Repr> {
+        match self {
+            Self::StrWithCapacity
+            | Self::StrAppend
+            | Self::ListPush
+            | Self::ListAppend
+            | Self::ListGet
+            | Self::ListSlice
+            | Self::Debug => Some(Repr::Value),
+            Self::StrEq | Self::Equal => Some(Repr::Bool),
+            Self::ListLength => Some(Repr::Int),
+            Self::EffectCheck => None,
+        }
+    }
+
+    /// The name used in dumps.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::StrWithCapacity => "str_with_capacity",
+            Self::StrAppend => "str_append",
+            Self::StrEq => "str_eq",
+            Self::ListPush => "list_push",
+            Self::ListAppend => "list_append",
+            Self::ListLength => "list_length",
+            Self::ListGet => "list_get",
+            Self::ListSlice => "list_slice",
+            Self::Equal => "equal",
+            Self::Debug => "debug",
+            Self::EffectCheck => "effect_check",
+        }
+    }
+}
 
 /// Checked arithmetic operators.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -668,11 +1139,17 @@ pub enum PanicKind {
     StackOverflow,
     EqualityOnFunction,
     ShiftOutOfRange,
+    /// A constant's evaluation needed its own value (D-511); constant
+    /// evaluation reports it as E0069, never to users directly.
+    ConstCycle,
+    /// Constant evaluation reached an effect it may not use (§4.5,
+    /// D-360); reported as E0077, never to users directly.
+    ForbiddenEffect,
 }
 
 impl PanicKind {
     /// Every kind, in numbering order.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 11] = [
         Self::Explicit,
         Self::Todo,
         Self::Overflow,
@@ -682,6 +1159,8 @@ impl PanicKind {
         Self::StackOverflow,
         Self::EqualityOnFunction,
         Self::ShiftOutOfRange,
+        Self::ConstCycle,
+        Self::ForbiddenEffect,
     ];
 
     /// The number passed to `cheby_rt_panic`.
@@ -697,6 +1176,8 @@ impl PanicKind {
             Self::StackOverflow => 6,
             Self::EqualityOnFunction => 7,
             Self::ShiftOutOfRange => 8,
+            Self::ConstCycle => 9,
+            Self::ForbiddenEffect => 10,
         }
     }
 
@@ -713,6 +1194,8 @@ impl PanicKind {
             Self::StackOverflow => "stack_overflow",
             Self::EqualityOnFunction => "equality_on_function",
             Self::ShiftOutOfRange => "shift_out_of_range",
+            Self::ConstCycle => "const_cycle",
+            Self::ForbiddenEffect => "forbidden_effect",
         }
     }
 }

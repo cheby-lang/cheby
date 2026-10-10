@@ -1,21 +1,30 @@
 //! Compiling and running hand-built MIR.
+//!
+//! Every test's JIT has its own accounting domain, so tests run in
+//! parallel and each checks only its own objects. The layout table is
+//! process-wide, but registration gives each type consecutive ids under
+//! one lock (D-522).
 
 use std::sync::Mutex;
 
 use cheby_diag::{FileId, Span, TextRange};
-use cheby_iface::{DefId, DefIndex, IndexVec, ModuleId};
+use cheby_iface::{DefId, DefIndex, IndexVec, ModuleId, builtin};
 use cheby_mir::{
-    Abi, AbiSig, Block, Callee, CalleeDecl, Const, DefName, EntryKind, FnKey, Function, LocalDecl,
-    MirModule, Operand, PanicKind, Repr, Rvalue, Stmt, Terminator, UnitKind,
+    Abi, AbiSig, ArithOp, BitOp, Block, BlockId, Callee, CalleeDecl, CmpOp, Const, DefName,
+    EntryKind, FieldDesc, FnKey, Function, LayoutDesc, LocalDecl, MirModule, Operand, PanicKind,
+    Repr, RuntimeFn, Rvalue, StaticId, StaticKind, StaticObject, Stmt, StrId, TagType, Terminator,
+    UnitKind,
 };
-use cheby_runtime::abi::sym;
+use cheby_runtime::abi::{self, sym};
 use cheby_runtime::{EntryConfig, EntryMode, EntryOutcome};
 
 use super::*;
 
-/// The leak counter and the layout table are process-wide; tests that run
-/// generated code take turns.
-static RUNNING: Mutex<()> = Mutex::new(());
+/// The process's memory is measured by one test; it runs alone.
+static MEMORY: Mutex<()> = Mutex::new(());
+
+/// The location every checked operation of these tests reports.
+const LOC: &str = "src/ops.cheby:7:9";
 
 fn span() -> Span {
     Span::new(FileId::new(0), TextRange::new(0, 0))
@@ -34,7 +43,7 @@ fn name(def: DefId, module: &str, item: &str) -> DefName {
 }
 
 /// A function with the given locals and blocks. Cheby functions get a
-/// location string `str#0` for their entry check.
+/// location string `str#0` for their entry check; `strings` follow.
 fn function(
     key: FnKey,
     abi: Abi,
@@ -68,12 +77,20 @@ fn function(
         blocks: IndexVec::from_raw(blocks).unwrap(),
         span: span(),
         strings: IndexVec::from_raw(table).unwrap(),
-        entry_loc: (abi == Abi::Cheby).then(|| cheby_mir::StrId::from_u32(0)),
+        entry_loc: (abi == Abi::Cheby).then(|| StrId::from_u32(0)),
     }
 }
 
 fn local(n: u32) -> cheby_mir::Local {
     cheby_mir::Local::from_u32(n)
+}
+
+fn op(n: u32) -> Operand {
+    Operand::Local(local(n))
+}
+
+fn bb(n: u32) -> BlockId {
+    BlockId::from_u32(n)
 }
 
 fn block(stmts: Vec<Stmt>, term: Terminator) -> Block {
@@ -82,6 +99,17 @@ fn block(stmts: Vec<Stmt>, term: Terminator) -> Block {
         stmts,
         term,
     }
+}
+
+fn assign(dst: u32, value: Rvalue) -> Stmt {
+    Stmt::Assign {
+        dst: local(dst),
+        value,
+    }
+}
+
+fn ret(n: u32) -> Terminator {
+    Terminator::Return(op(n))
 }
 
 fn cheby_sig(params: &[Repr]) -> AbiSig {
@@ -107,6 +135,8 @@ fn code_unit(
         functions,
         callees,
         layouts: Vec::new(),
+        foreign_layouts: Vec::new(),
+        statics: Vec::new(),
         names,
     }
 }
@@ -114,14 +144,18 @@ fn code_unit(
 fn entries_unit(
     functions: Vec<Function>,
     callees: Vec<CalleeDecl>,
-    names: Vec<DefName>,
+    mut names: Vec<DefName>,
 ) -> MirModule {
+    names.sort_by_key(|n| n.def);
+    names.dedup_by_key(|n| n.def);
     MirModule {
         unit: UnitKind::Entries,
         path: "".into(),
         functions,
         callees,
         layouts: Vec::new(),
+        foreign_layouts: Vec::new(),
+        statics: Vec::new(),
         names,
     }
 }
@@ -136,26 +170,190 @@ fn const_thunk(target: DefId, callee: DefId, args: Vec<Operand>) -> Function {
         &[Repr::Value],
         Repr::Value,
         vec![block(
-            vec![Stmt::Assign {
-                dst: local(0),
-                value: Rvalue::Call {
+            vec![assign(
+                0,
+                Rvalue::Call {
                     callee: Callee::Direct(callee),
                     args,
                 },
-            }],
-            Terminator::Return(Operand::Local(local(0))),
+            )],
+            ret(0),
         )],
         &[],
     )
 }
 
 fn run_const(jit: &Jit, target: DefId) -> EntryOutcome {
+    run_with_stack(jit, target, cheby_runtime::entry::MIN_STACK_SIZE)
+}
+
+fn run_with_stack(jit: &Jit, target: DefId, stack_size: usize) -> EntryOutcome {
     let entry = jit.entry(EntryKind::Const(target)).unwrap();
-    entry.run(&EntryConfig::new(EntryMode::Test)).unwrap()
+    let config = EntryConfig {
+        stack_size,
+        ..EntryConfig::new(EntryMode::Test)
+    };
+    entry.run(&config).unwrap()
+}
+
+fn returned(outcome: EntryOutcome) -> u64 {
+    match outcome {
+        EntryOutcome::Returned(word) => word,
+        EntryOutcome::Panicked(report) => panic!("the entry panicked: {report:?}"),
+    }
 }
 
 fn static_nil() -> u64 {
     cheby_runtime::object::nil()
+}
+
+fn static_word(id: u32) -> u64 {
+    cheby_runtime::object::static_ctor(id).unwrap().word()
+}
+
+/// The word at byte `offset` of the object `word`.
+fn read_word(word: u64, offset: usize) -> u64 {
+    let address = usize::try_from(word).unwrap().checked_add(offset).unwrap();
+    // SAFETY: tests read only live or static objects their JIT returned,
+    // within the object.
+    unsafe { std::ptr::with_exposed_provenance::<u64>(address).read() }
+}
+
+fn layout_of(word: u64) -> u32 {
+    abi::header_layout(read_word(word, 0))
+}
+
+fn rc_of(word: u64) -> i32 {
+    abi::header_rc(read_word(word, 0))
+}
+
+/// The integer a uniform word of an integer type holds.
+fn int_of(word: u64) -> i128 {
+    if abi::is_tagged_int(word) {
+        return i128::from(abi::untag_int(word));
+    }
+    match layout_of(word) {
+        abi::layout::BOXED_INT => i128::from(read_word(word, 8).cast_signed()),
+        abi::layout::BOXED_U64 => i128::from(read_word(word, 8)),
+        other => panic!("not an integer word: layout {other}"),
+    }
+}
+
+/// Gives up the reference to `word` that the host holds, charging `jit`'s
+/// domain.
+fn release(jit: &Jit, word: u64) {
+    cheby_runtime::alloc::with_domain(jit.domain(), || {
+        // SAFETY: `word` is a live value the entry returned, owned here.
+        unsafe { cheby_runtime::rc::drop(word) };
+    });
+}
+
+/// The text of a `String` word.
+fn text_of(word: u64) -> String {
+    // SAFETY: the word is a live `String` object.
+    unsafe { cheby_runtime::string::to_rust_string(word) }.unwrap()
+}
+
+/// One module `app` of top-level functions, and an entries unit with one
+/// constant thunk per call.
+#[derive(Default)]
+struct Prog {
+    functions: Vec<Function>,
+    callees: Vec<CalleeDecl>,
+    names: Vec<DefName>,
+    layouts: Vec<LayoutDesc>,
+    foreign_layouts: Vec<LayoutDesc>,
+    statics: Vec<StaticObject>,
+    thunks: Vec<Function>,
+    thunk_callees: Vec<CalleeDecl>,
+    thunk_names: Vec<DefName>,
+    /// Added to the index of each thunk's target, so batches of one JIT
+    /// can use different targets.
+    thunk_base: u32,
+}
+
+impl Prog {
+    /// Adds `app::<item>` with index `index`, its body `blocks`; returns
+    /// its def.
+    fn item(
+        &mut self,
+        index: u32,
+        item: &str,
+        params: &[Repr],
+        locals: &[Repr],
+        blocks: Vec<Block>,
+        strings: &[&str],
+    ) -> DefId {
+        let f = def(1, index);
+        self.functions.push(function(
+            FnKey::Item(f),
+            Abi::Cheby,
+            params,
+            locals,
+            Repr::Value,
+            blocks,
+            strings,
+        ));
+        self.declare(f, item, params);
+        f
+    }
+
+    /// Declares `app::<item>` as a callee without a body in this unit.
+    fn declare(&mut self, f: DefId, item: &str, params: &[Repr]) {
+        self.callees.push(CalleeDecl {
+            def: f,
+            sig: cheby_sig(params),
+        });
+        self.names.push(name(f, "app", item));
+    }
+
+    /// A thunk calling `callee` with `args`; returns the thunk's target.
+    fn call(&mut self, callee: DefId, args: Vec<Operand>) -> DefId {
+        let n = u32::try_from(self.thunks.len()).unwrap();
+        let base = 10_000_u32.checked_add(self.thunk_base).unwrap();
+        let target = def(1, base.checked_add(n).unwrap());
+        self.thunks.push(const_thunk(target, callee, args));
+        let decl = self
+            .callees
+            .iter()
+            .find(|c| c.def == callee)
+            .unwrap()
+            .clone();
+        if !self.thunk_callees.iter().any(|c| c.def == callee) {
+            self.thunk_callees.push(decl);
+        }
+        let callee_name = self.names.iter().find(|n| n.def == callee).unwrap().clone();
+        self.thunk_names.push(callee_name);
+        self.thunk_names.push(name(
+            target,
+            "app",
+            &format!("VALUE{}", target.index.as_u32()),
+        ));
+        target
+    }
+
+    fn units(mut self) -> [MirModule; 2] {
+        self.callees.sort_by_key(|c| c.def);
+        self.thunk_callees.sort_by_key(|c| c.def);
+        let mut code = code_unit(1, "app", self.functions, self.callees, self.names);
+        code.layouts = self.layouts;
+        code.foreign_layouts = self.foreign_layouts;
+        code.statics = self.statics;
+        let entries = entries_unit(self.thunks, self.thunk_callees, self.thunk_names);
+        [code, entries]
+    }
+
+    fn compile(self) -> Jit {
+        let mut jit = Jit::new().unwrap();
+        jit.compile(&self.units()).unwrap();
+        jit
+    }
+}
+
+/// A function of `params` whose single block runs `stmts` and returns
+/// local `result`.
+fn straight(stmts: Vec<Stmt>, result: u32) -> Vec<Block> {
+    vec![block(stmts, ret(result))]
 }
 
 #[test]
@@ -184,14 +382,12 @@ fn every_imported_runtime_symbol_is_registered() {
         assert!(registered.contains(&symbol), "`{symbol}` is not registered");
     }
     assert!(registered.contains(&sym::IO_PRINTLN));
+    assert!(registered.contains(&sym::UNRESOLVED));
 }
 
 /// A `main` thunk returning status 0 without calling anything.
 #[test]
 fn an_entry_returns_a_constant() {
-    let _guard = RUNNING
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let main = def(1, 0);
     let thunk = function(
         FnKey::Entry(EntryKind::Main(main)),
@@ -226,67 +422,35 @@ fn an_entry_returns_a_constant() {
 /// thunk. The result is the static `Nil` passed in.
 #[test]
 fn tail_calls_between_different_signatures() {
-    let _guard = RUNNING
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let f = def(1, 0);
+    let mut p = Prog::default();
     let g = def(1, 1);
-    let target = def(1, 2);
-    let f_fn = function(
-        FnKey::Item(f),
-        Abi::Cheby,
+    p.item(
+        0,
+        "f",
         &[Repr::Int, Repr::Value],
         &[],
-        Repr::Value,
         vec![block(
             Vec::new(),
             Terminator::TailCall {
                 callee: Callee::Direct(g),
-                args: vec![Operand::Local(local(1))],
+                args: vec![op(1)],
             },
         )],
         &[],
     );
-    let g_fn = function(
-        FnKey::Item(g),
-        Abi::Cheby,
+    p.item(
+        1,
+        "g",
         &[Repr::Value],
         &[],
-        Repr::Value,
-        vec![block(
-            Vec::new(),
-            Terminator::Return(Operand::Local(local(0))),
-        )],
+        vec![block(Vec::new(), ret(0))],
         &[],
     );
-    let f_sig = cheby_sig(&[Repr::Int, Repr::Value]);
-    let g_sig = cheby_sig(&[Repr::Value]);
-    let names = vec![name(f, "app", "f"), name(g, "app", "g")];
-    let code = code_unit(
-        1,
-        "app",
-        vec![f_fn, g_fn],
-        vec![
-            CalleeDecl {
-                def: f,
-                sig: f_sig.clone(),
-            },
-            CalleeDecl { def: g, sig: g_sig },
-        ],
-        names.clone(),
-    );
-    let thunk = const_thunk(
-        target,
-        f,
+    let target = p.call(
+        def(1, 0),
         vec![Operand::Const(Const::Int(7)), Operand::Const(Const::Nil)],
     );
-    let entries = entries_unit(
-        vec![thunk],
-        vec![CalleeDecl { def: f, sig: f_sig }],
-        vec![name(f, "app", "f"), name(target, "app", "VALUE")],
-    );
-    let mut jit = Jit::new().unwrap();
-    jit.compile(&[code, entries]).unwrap();
+    let jit = p.compile();
     assert_eq!(
         run_const(&jit, target),
         EntryOutcome::Returned(static_nil())
@@ -296,9 +460,6 @@ fn tail_calls_between_different_signatures() {
 /// A second batch calls a function of the first through its slot.
 #[test]
 fn a_later_batch_calls_an_earlier_one() {
-    let _guard = RUNNING
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let g = def(1, 0);
     let h = def(2, 0);
     let target = def(2, 1);
@@ -311,9 +472,7 @@ fn a_later_batch_calls_an_earlier_one() {
         Repr::Value,
         vec![block(
             Vec::new(),
-            Terminator::Return(Operand::Const(Const::StaticCtor(
-                cheby_iface::builtin::TRUE,
-            ))),
+            Terminator::Return(Operand::Const(Const::StaticCtor(builtin::TRUE))),
         )],
         &[],
     );
@@ -325,10 +484,7 @@ fn a_later_batch_calls_an_earlier_one() {
             def: g,
             sig: g_sig.clone(),
         }],
-        vec![
-            name(g, "app::a", "g"),
-            name(cheby_iface::builtin::TRUE, "", "True"),
-        ],
+        vec![name(g, "app::a", "g"), name(builtin::TRUE, "", "True")],
     );
     let mut jit = Jit::new().unwrap();
     jit.compile(&[first]).unwrap();
@@ -370,107 +526,55 @@ fn a_later_batch_calls_an_earlier_one() {
         vec![name(h, "app::b", "h"), name(target, "app::b", "VALUE")],
     );
     jit.compile(&[second, entries]).unwrap();
-    let truth = cheby_runtime::object::static_ctor(cheby_runtime::abi::layout::TRUE)
-        .unwrap()
-        .word();
-    assert_eq!(run_const(&jit, target), EntryOutcome::Returned(truth));
+    assert_eq!(
+        run_const(&jit, target),
+        EntryOutcome::Returned(static_word(abi::layout::TRUE))
+    );
 }
 
 /// A string literal is a static `String` object with count 0.
 #[test]
 fn string_literals_are_static_strings() {
-    let _guard = RUNNING
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let f = def(1, 0);
-    let target = def(1, 1);
-    let f_fn = function(
-        FnKey::Item(f),
-        Abi::Cheby,
+    let mut p = Prog::default();
+    let f = p.item(
+        0,
+        "f",
         &[],
         &[],
-        Repr::Value,
         vec![block(
             Vec::new(),
-            Terminator::Return(Operand::Const(Const::Str(cheby_mir::StrId::from_u32(1)))),
+            Terminator::Return(Operand::Const(Const::Str(StrId::from_u32(1)))),
         )],
         &["héllo, wörld"],
     );
-    let sig = cheby_sig(&[]);
-    let code = code_unit(
-        1,
-        "app",
-        vec![f_fn],
-        vec![CalleeDecl {
-            def: f,
-            sig: sig.clone(),
-        }],
-        vec![name(f, "app", "f")],
-    );
-    let entries = entries_unit(
-        vec![const_thunk(target, f, Vec::new())],
-        vec![CalleeDecl { def: f, sig }],
-        vec![name(f, "app", "f"), name(target, "app", "VALUE")],
-    );
-    let mut jit = Jit::new().unwrap();
-    jit.compile(&[code, entries]).unwrap();
-    let EntryOutcome::Returned(word) = run_const(&jit, target) else {
-        panic!("the entry panicked");
-    };
-    // SAFETY: the word is a static `String` object built by codegen.
-    let text = unsafe { cheby_runtime::string::to_rust_string(word) };
-    assert_eq!(text.as_deref(), Some("héllo, wörld"));
-    // SAFETY: a static object is 8-aligned and readable.
-    let header =
-        unsafe { std::ptr::with_exposed_provenance::<u64>(usize::try_from(word).unwrap()).read() };
-    assert_eq!(
-        cheby_runtime::abi::header_rc(header),
-        cheby_runtime::abi::RC_STATIC
-    );
+    let target = p.call(f, Vec::new());
+    let jit = p.compile();
+    let word = returned(run_const(&jit, target));
+    assert_eq!(text_of(word), "héllo, wörld");
+    assert_eq!(rc_of(word), abi::RC_STATIC);
 }
 
 /// A panic terminator reaches the runtime with its kind and location.
 #[test]
 fn panics_report_kind_and_location() {
-    let _guard = RUNNING
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let f = def(1, 0);
-    let target = def(1, 1);
-    let f_fn = function(
-        FnKey::Item(f),
-        Abi::Cheby,
+    let mut p = Prog::default();
+    let f = p.item(
+        0,
+        "f",
         &[],
         &[],
-        Repr::Value,
         vec![block(
             Vec::new(),
             Terminator::Panic {
                 kind: PanicKind::Todo,
                 message: None,
-                loc: cheby_mir::StrId::from_u32(1),
+                loc: StrId::from_u32(1),
             },
         )],
         &["src/main.cheby:3:5"],
     );
-    let sig = cheby_sig(&[]);
-    let code = code_unit(
-        1,
-        "app",
-        vec![f_fn],
-        vec![CalleeDecl {
-            def: f,
-            sig: sig.clone(),
-        }],
-        vec![name(f, "app", "f")],
-    );
-    let entries = entries_unit(
-        vec![const_thunk(target, f, Vec::new())],
-        vec![CalleeDecl { def: f, sig }],
-        vec![name(f, "app", "f"), name(target, "app", "VALUE")],
-    );
-    let mut jit = Jit::new().unwrap();
-    jit.compile(&[code, entries]).unwrap();
+    let target = p.call(f, Vec::new());
+    let jit = p.compile();
     let EntryOutcome::Panicked(report) = run_const(&jit, target) else {
         panic!("the entry returned");
     };
@@ -479,139 +583,85 @@ fn panics_report_kind_and_location() {
 }
 
 /// Unbounded non-tail recursion reaches the entry check's slow path and
-/// panics with a stack overflow instead of hitting the guard page.
+/// panics with a stack overflow instead of hitting the guard page (E3).
 #[test]
 fn the_entry_check_catches_stack_overflow() {
-    let _guard = RUNNING
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut p = Prog::default();
     let f = def(1, 0);
-    let target = def(1, 1);
-    let sig = cheby_sig(&[]);
-    let f_fn = function(
-        FnKey::Item(f),
-        Abi::Cheby,
+    p.item(
+        0,
+        "loop",
         &[],
         &[Repr::Value],
-        Repr::Value,
-        vec![block(
-            vec![Stmt::Assign {
-                dst: local(0),
-                value: Rvalue::Call {
+        straight(
+            vec![assign(
+                0,
+                Rvalue::Call {
                     callee: Callee::Direct(f),
                     args: Vec::new(),
                 },
-            }],
-            Terminator::Return(Operand::Local(local(0))),
-        )],
+            )],
+            0,
+        ),
         &[],
     );
-    let code = code_unit(
-        1,
-        "app",
-        vec![f_fn],
-        vec![CalleeDecl {
-            def: f,
-            sig: sig.clone(),
-        }],
-        vec![name(f, "app", "loop")],
-    );
-    let entries = entries_unit(
-        vec![const_thunk(target, f, Vec::new())],
-        vec![CalleeDecl { def: f, sig }],
-        vec![name(f, "app", "loop"), name(target, "app", "VALUE")],
-    );
-    let mut jit = Jit::new().unwrap();
-    jit.compile(&[code, entries]).unwrap();
-    let entry = jit.entry(EntryKind::Const(target)).unwrap();
-    let config = EntryConfig {
-        stack_size: 1 << 20,
-        mode: EntryMode::Test,
-    };
-    let EntryOutcome::Panicked(report) = entry.run(&config).unwrap() else {
+    let target = p.call(f, Vec::new());
+    let jit = p.compile();
+    let EntryOutcome::Panicked(report) = run_with_stack(&jit, target, 1 << 20) else {
         panic!("the recursion returned");
     };
     assert_eq!(report.kind, cheby_runtime::abi::PanicKind::StackOverflow);
     assert_eq!(report.location, "test.cheby:1:1");
 }
 
-/// An `@external` symbol nobody defines is an error before finalizing,
-/// not a panic inside Cranelift.
-#[test]
-fn a_missing_native_symbol_is_an_error() {
-    let f = def(1, 0);
-    let f_fn = function(
-        FnKey::Item(f),
-        Abi::Cheby,
-        &[],
-        &[],
-        Repr::Value,
-        vec![block(
-            vec![Stmt::Eval(Rvalue::CallForeign {
-                symbol: "cheby_no_such_symbol_anywhere".into(),
+/// A function calling the native symbols `symbols` in order, then
+/// returning `Nil`.
+fn calls_natives(symbols: &[&str]) -> Prog {
+    let mut p = Prog::default();
+    let stmts = symbols
+        .iter()
+        .map(|symbol| {
+            Stmt::Eval(Rvalue::CallForeign {
+                symbol: (*symbol).into(),
                 sig: cheby_mir::ForeignSig {
                     params: Vec::new(),
                     ret: cheby_mir::CType::Void,
                 },
                 args: Vec::new(),
-            })],
-            Terminator::Return(Operand::Const(Const::Nil)),
-        )],
+            })
+        })
+        .collect();
+    p.item(
+        0,
+        "f",
+        &[],
+        &[],
+        vec![block(stmts, Terminator::Return(Operand::Const(Const::Nil)))],
         &[],
     );
-    let code = code_unit(
-        1,
-        "app",
-        vec![f_fn],
-        vec![CalleeDecl {
-            def: f,
-            sig: cheby_sig(&[]),
-        }],
-        vec![name(f, "app", "f")],
-    );
+    p
+}
+
+/// `@external` symbols nobody defines are an error before finalizing, not
+/// a panic inside Cranelift, and every one of them is reported (D-532).
+#[test]
+fn missing_native_symbols_are_all_reported() {
+    let missing = ["cheby_test_missing_b", "cheby_test_missing_a"];
     let mut jit = Jit::new().unwrap();
-    let err = jit.compile(&[code]).unwrap_err();
-    assert!(
-        matches!(&err, JitError::UnresolvedSymbol(s) if s == "cheby_no_such_symbol_anywhere"),
-        "{err}"
+    let err = jit.compile(&calls_natives(&missing).units()).unwrap_err();
+    let JitError::UnresolvedSymbols(symbols) = &err else {
+        panic!("{err}");
+    };
+    assert_eq!(symbols, &["cheby_test_missing_a", "cheby_test_missing_b"]);
+    assert_eq!(
+        err.to_string(),
+        "the native symbols `cheby_test_missing_a`, `cheby_test_missing_b` are not defined"
     );
     // A failed batch leaves nothing behind: the corrected batch declares
     // the same item again, compiles and runs.
-    let _guard = RUNNING
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let fixed = function(
-        FnKey::Item(f),
-        Abi::Cheby,
-        &[],
-        &[],
-        Repr::Value,
-        vec![block(
-            Vec::new(),
-            Terminator::Return(Operand::Const(Const::Nil)),
-        )],
-        &[],
-    );
-    let target = def(1, 1);
-    let code = code_unit(
-        1,
-        "app",
-        vec![fixed],
-        vec![CalleeDecl {
-            def: f,
-            sig: cheby_sig(&[]),
-        }],
-        vec![name(f, "app", "f")],
-    );
-    let entries = entries_unit(
-        vec![const_thunk(target, f, Vec::new())],
-        vec![CalleeDecl {
-            def: f,
-            sig: cheby_sig(&[]),
-        }],
-        vec![name(f, "app", "f"), name(target, "app", "VALUE")],
-    );
-    jit.compile(&[code, entries]).unwrap();
+    let mut fixed = calls_natives(&[]);
+    let target = fixed.call(def(1, 0), Vec::new());
+    jit.compile(&fixed.units()).unwrap();
     assert_eq!(jit.decls.foreign_symbols(), Vec::<&str>::new());
     assert_eq!(
         run_const(&jit, target),
@@ -619,38 +669,49 @@ fn a_missing_native_symbol_is_an_error() {
     );
 }
 
+/// With `stub_unresolved` (`cheby check`), the same batch builds, both
+/// symbols are bound to `cheby_rt_unresolved`, and calling one panics with
+/// `ForbiddenEffect` (D-532).
+#[test]
+fn unresolved_symbols_can_be_stubbed() {
+    let mut p = calls_natives(&["cheby_test_missing_b", "cheby_test_missing_a"]);
+    let target = p.call(def(1, 0), Vec::new());
+    let mut jit = Jit::configured(
+        CodegenOptions::default(),
+        JitOptions {
+            stub_unresolved: true,
+            ..JitOptions::from_env()
+        },
+    )
+    .unwrap();
+    jit.compile(&p.units()).unwrap();
+    let EntryOutcome::Panicked(report) = run_const(&jit, target) else {
+        panic!("a stub returned");
+    };
+    assert_eq!(report.kind, cheby_runtime::abi::PanicKind::ForbiddenEffect);
+}
+
 #[test]
 fn clif_is_deterministic() {
     let build = || {
-        let f = def(1, 0);
-        let f_fn = function(
-            FnKey::Item(f),
-            Abi::Cheby,
+        let mut p = Prog::default();
+        p.item(
+            0,
+            "f",
             &[Repr::Value],
             &[],
-            Repr::Value,
             vec![block(
                 vec![Stmt::Drop(local(0))],
                 Terminator::Return(Operand::Const(Const::Nil)),
             )],
             &[],
         );
-        let code = code_unit(
-            1,
-            "app",
-            vec![f_fn],
-            vec![CalleeDecl {
-                def: f,
-                sig: cheby_sig(&[Repr::Value]),
-            }],
-            vec![name(f, "app", "f")],
-        );
         let mut jit = Jit::with_options(CodegenOptions {
             capture_clif: true,
             ..CodegenOptions::default()
         })
         .unwrap();
-        jit.compile(&[code]).unwrap();
+        jit.compile(&p.units()).unwrap();
         jit.take_clif().join("\n")
     };
     let first = build();
@@ -659,14 +720,11 @@ fn clif_is_deterministic() {
     assert_eq!(first, build());
 }
 
-/// `run` applies `cheby run`'s policy: status 0 from the thunk, and in
-/// debug builds 102 when an object is still live at exit (D-458), which is
-/// what makes 001's status 0 a leak check.
+/// `run_main` applies `cheby run`'s policy: status 0 from the thunk, and in
+/// debug builds 102 when an object of the JIT's domain is still live at
+/// exit (D-458), which is what makes 001's status 0 a leak check.
 #[test]
 fn run_reports_leaks_in_debug_builds() {
-    let _guard = RUNNING
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let main = def(1, 0);
     let thunk = function(
         FnKey::Entry(EntryKind::Main(main)),
@@ -692,10 +750,11 @@ fn run_reports_leaks_in_debug_builds() {
     .unwrap();
     let entry = jit.entry(EntryKind::Main(main)).unwrap();
     assert_eq!(entry.run_main(RunConfig::default()).unwrap(), 0);
-    let leaked = cheby_runtime::string::new_string("leaked");
+    let leaked = cheby_runtime::alloc::with_domain(jit.domain(), || {
+        cheby_runtime::string::new_string("leaked")
+    });
     let status = entry.run_main(RunConfig::default()).unwrap();
-    // SAFETY: `leaked` is a live heap string this test owns.
-    unsafe { cheby_runtime::rc::drop(leaked) };
+    release(&jit, leaked);
     let expected = if cheby_runtime::LEAK_CHECK_ENABLED {
         cheby_runtime::abi::status::LEAK_CHECK
     } else {
@@ -712,124 +771,73 @@ fn run_reports_leaks_in_debug_builds() {
 /// object live; a misplaced one frees it twice, which the runtime aborts
 /// on.)
 #[test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "one hand-built MIR program of three functions"
-)]
 fn rc_placement_frees_every_object() {
-    let _guard = RUNNING
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let leaked = || -> i64 {
-        let (mk, keep, user, target) = (def(1, 0), def(1, 1), def(1, 2), def(1, 3));
-        let sized = |bits| {
-            Operand::Const(Const::Sized {
-                repr: Repr::I64,
-                bits,
-            })
-        };
-        let header = cheby_runtime::abi::header(1, 0, cheby_runtime::abi::layout::TUPLE);
-        // An empty tuple, allocated the way `Alloc` will be (no context
-        // needed in M1).
-        let mk_fn = function(
-            FnKey::Item(mk),
-            Abi::Cheby,
-            &[],
-            &[Repr::Value],
-            Repr::Value,
-            vec![block(
-                vec![Stmt::Assign {
-                    dst: local(0),
-                    value: Rvalue::CallForeign {
-                        symbol: sym::ALLOC.into(),
-                        sig: cheby_mir::ForeignSig {
-                            params: vec![cheby_mir::CType::I64; 3],
-                            ret: cheby_mir::CType::Ptr,
-                        },
-                        args: vec![sized(0), sized(8), sized(header)],
-                    },
-                }],
-                Terminator::Return(Operand::Local(local(0))),
+    let (mk, keep, user) = (def(1, 0), def(1, 1), def(1, 2));
+    let mut p = Prog::default();
+    p.item(
+        0,
+        "mk",
+        &[],
+        &[Repr::Value],
+        straight(
+            vec![assign(
+                0,
+                Rvalue::Alloc {
+                    layout: LayoutRef::Tuple(0),
+                    fields: Vec::new(),
+                },
             )],
-            &[],
-        );
-        let keep_fn = function(
-            FnKey::Item(keep),
-            Abi::Cheby,
-            &[Repr::Value],
-            &[],
-            Repr::Value,
-            vec![block(
-                Vec::new(),
-                Terminator::Return(Operand::Const(Const::Nil)),
-            )],
-            &[],
-        );
-        let call = |dst, callee, args| Stmt::Assign {
-            dst: local(dst),
-            value: Rvalue::Call {
+            0,
+        ),
+        &[],
+    );
+    p.item(
+        1,
+        "keep",
+        &[Repr::Value],
+        &[],
+        vec![block(
+            Vec::new(),
+            Terminator::Return(Operand::Const(Const::Nil)),
+        )],
+        &[],
+    );
+    let call = |dst, callee, args| {
+        assign(
+            dst,
+            Rvalue::Call {
                 callee: Callee::Direct(callee),
                 args,
             },
-        };
-        let user_fn = function(
-            FnKey::Item(user),
-            Abi::Cheby,
-            &[],
-            &[Repr::Value; 3],
-            Repr::Value,
-            vec![block(
-                vec![
-                    call(0, mk, Vec::new()),
-                    call(1, keep, vec![Operand::Local(local(0))]),
-                    call(2, keep, vec![Operand::Local(local(0))]),
-                ],
-                Terminator::Return(Operand::Const(Const::Nil)),
-            )],
-            &[],
-        );
-        let callees = vec![
-            CalleeDecl {
-                def: mk,
-                sig: cheby_sig(&[]),
-            },
-            CalleeDecl {
-                def: keep,
-                sig: cheby_sig(&[Repr::Value]),
-            },
-            CalleeDecl {
-                def: user,
-                sig: cheby_sig(&[]),
-            },
-        ];
-        let names = vec![
-            name(mk, "app", "mk"),
-            name(keep, "app", "keep"),
-            name(user, "app", "user"),
-        ];
-        let mut code = code_unit(1, "app", vec![mk_fn, keep_fn, user_fn], callees, names);
-        let mut entries = entries_unit(
-            vec![const_thunk(target, user, Vec::new())],
-            vec![CalleeDecl {
-                def: user,
-                sig: cheby_sig(&[]),
-            }],
-            vec![name(user, "app", "user"), name(target, "app", "VALUE")],
-        );
-        cheby_mir::count_and_check(&mut code).unwrap();
-        cheby_mir::count_and_check(&mut entries).unwrap();
-        let mut jit = Jit::new().unwrap();
-        jit.compile(&[code, entries]).unwrap();
-        let before = cheby_runtime::live_objects();
-        assert_eq!(
-            run_const(&jit, target),
-            EntryOutcome::Returned(static_nil())
-        );
-        cheby_runtime::live_objects() - before
+        )
     };
-    let live = leaked();
+    p.item(
+        2,
+        "user",
+        &[],
+        &[Repr::Value; 3],
+        vec![block(
+            vec![
+                call(0, mk, Vec::new()),
+                call(1, keep, vec![op(0)]),
+                call(2, keep, vec![op(0)]),
+            ],
+            Terminator::Return(Operand::Const(Const::Nil)),
+        )],
+        &[],
+    );
+    let target = p.call(user, Vec::new());
+    let [mut code, mut entries] = p.units();
+    cheby_mir::count_and_check(&mut code).unwrap();
+    cheby_mir::count_and_check(&mut entries).unwrap();
+    let mut jit = Jit::new().unwrap();
+    jit.compile(&[code, entries]).unwrap();
+    assert_eq!(
+        run_const(&jit, target),
+        EntryOutcome::Returned(static_nil())
+    );
     if cheby_runtime::LEAK_CHECK_ENABLED {
-        assert_eq!(live, 0);
+        assert_eq!(jit.domain().live_objects(), 0);
     }
 }
 
@@ -884,45 +892,27 @@ fn process_memory() -> Option<u64> {
 #[test]
 fn jits_commit_only_what_they_use() {
     const JITS: usize = 64;
-    let _guard = RUNNING
+    let _guard = MEMORY
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let before = process_memory();
-    let f = def(1, 0);
-    let target = def(1, 1);
     let mut jits = Vec::new();
+    let mut target = def(1, 0);
     for _ in 0..JITS {
-        let f_fn = function(
-            FnKey::Item(f),
-            Abi::Cheby,
+        let mut p = Prog::default();
+        let f = p.item(
+            0,
+            "f",
             &[],
             &[],
-            Repr::Value,
             vec![block(
                 Vec::new(),
                 Terminator::Return(Operand::Const(Const::Nil)),
             )],
             &[],
         );
-        let callees = vec![CalleeDecl {
-            def: f,
-            sig: cheby_sig(&[]),
-        }];
-        let code = code_unit(
-            1,
-            "app",
-            vec![f_fn],
-            callees.clone(),
-            vec![name(f, "app", "f")],
-        );
-        let entries = entries_unit(
-            vec![const_thunk(target, f, Vec::new())],
-            callees,
-            vec![name(f, "app", "f"), name(target, "app", "VALUE")],
-        );
-        let mut jit = Jit::new().unwrap();
-        jit.compile(&[code, entries]).unwrap();
-        jits.push(jit);
+        target = p.call(f, Vec::new());
+        jits.push(p.compile());
     }
     for jit in &jits {
         assert_eq!(run_const(jit, target), EntryOutcome::Returned(static_nil()));
@@ -950,12 +940,12 @@ fn labs_wrapper(index: u32, params: &[cheby_mir::CType], args: &[i64], missing: 
     let sized = |n: &i64| {
         Operand::Const(Const::Sized {
             repr: Repr::I64,
-            bits: u64::from_ne_bytes(n.to_ne_bytes()),
+            bits: n.cast_unsigned(),
         })
     };
-    let mut stmts = vec![Stmt::Assign {
-        dst: local(0),
-        value: Rvalue::CallForeign {
+    let mut stmts = vec![assign(
+        0,
+        Rvalue::CallForeign {
             symbol: "labs".into(),
             sig: cheby_mir::ForeignSig {
                 params: params.to_vec(),
@@ -963,7 +953,7 @@ fn labs_wrapper(index: u32, params: &[cheby_mir::CType], args: &[i64], missing: 
             },
             args: args.iter().map(sized).collect(),
         },
-    }];
+    )];
     if missing {
         stmts.push(Stmt::Eval(Rvalue::CallForeign {
             symbol: "cheby_no_such_symbol_anywhere".into(),
@@ -980,7 +970,7 @@ fn labs_wrapper(index: u32, params: &[cheby_mir::CType], args: &[i64], missing: 
         &[],
         &[Repr::Value],
         Repr::Value,
-        vec![block(stmts, Terminator::Return(Operand::Local(local(0))))],
+        vec![block(stmts, ret(0))],
         &[],
     )
 }
@@ -1021,14 +1011,11 @@ fn labs_batch(index: u32, function: Function) -> [MirModule; 2] {
 #[test]
 fn batches_may_call_a_foreign_symbol_with_new_signatures() {
     use cheby_mir::CType;
-    let _guard = RUNNING
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut jit = Jit::new().unwrap();
     // A failed entry that binds `labs` as `int labs(int)`.
     let failed = labs_batch(0, labs_wrapper(0, &[CType::I32], &[-3], true));
     let err = jit.compile(&failed).unwrap_err();
-    assert!(matches!(err, JitError::UnresolvedSymbol(_)), "{err}");
+    assert!(matches!(err, JitError::UnresolvedSymbols(_)), "{err}");
     // `long labs(long)`.
     jit.compile(&labs_batch(1, labs_wrapper(1, &[CType::I64], &[-5], false)))
         .unwrap();
@@ -1042,3 +1029,58 @@ fn batches_may_call_a_foreign_symbol_with_new_signatures() {
     assert_eq!(run_const(&jit, def(1, 102)), EntryOutcome::Returned(7));
     assert_eq!(run_const(&jit, def(1, 101)), EntryOutcome::Returned(5));
 }
+
+/// Compile speed of the debug toolchain (plan §4.4): translates and
+/// compiles 400 functions of 40 blocks each and prints the time. Run with
+/// `cargo test -p cheby_jit -- --ignored compile_speed_probe --nocapture`.
+#[test]
+#[ignore = "a timing probe, not a check"]
+fn compile_speed_probe() {
+    const FUNCTIONS: u32 = 400;
+    const BLOCKS: u32 = 40;
+    let mut p = Prog::default();
+    for n in 0..FUNCTIONS {
+        let next = def(1, n.checked_add(1).unwrap() % FUNCTIONS);
+        let blocks = (0..BLOCKS)
+            .map(|b| {
+                let term = if b.checked_add(1) == Some(BLOCKS) {
+                    Terminator::TailCall {
+                        callee: Callee::Direct(next),
+                        args: vec![op(0)],
+                    }
+                } else {
+                    Terminator::Switch {
+                        on: op(1),
+                        cases: vec![(0, bb(b.checked_add(1).unwrap()))],
+                        default: Some(bb(BLOCKS.checked_sub(1).unwrap())),
+                    }
+                };
+                block(
+                    vec![assign(
+                        1,
+                        Rvalue::Use(Operand::Const(Const::Int(i64::from(b)))),
+                    )],
+                    term,
+                )
+            })
+            .collect();
+        p.item(
+            n,
+            &format!("f{n}"),
+            &[Repr::Value],
+            &[Repr::Int],
+            blocks,
+            &[],
+        );
+    }
+    let units = p.units();
+    let start = std::time::Instant::now();
+    let mut jit = Jit::new().unwrap();
+    jit.compile(&units).unwrap();
+    println!("compile_speed_probe: {:?}", start.elapsed());
+}
+
+mod control;
+mod objects;
+mod scalars;
+mod special;

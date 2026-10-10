@@ -5,29 +5,32 @@
 //! - [`Jit::compile`] is incremental: each batch registers its layouts,
 //!   declares its functions (extending the persistent declaration table),
 //!   defines them and finalizes. Later batches call earlier code through
-//!   the existing slots. `cheby run` compiles one batch; constant
-//!   evaluation (E6) and the REPL (G5) compile one per step.
+//!   the existing slots, and use the static objects, layout words and
+//!   constant slots earlier batches defined (D-523). `cheby run` compiles
+//!   one batch; constant evaluation (E6) and the REPL (G5) compile one per
+//!   step.
 //! - Every call of a top-level function loads the callee's slot, a
 //!   writable data object holding its address (D-043).
 //! - The host never calls `tail`-convention code: it calls C-ABI entry
 //!   thunks ([`Jit::entry`]), which call the Cheby functions (D-453). An
 //!   [`Entry`] borrows its [`Jit`], so safe code cannot run an entry after
 //!   its code is freed; [`Entry::run_main`] runs `main`'s thunk with the
-//!   exit-status policy of §10.10.
+//!   exit-status policy of §10.10. Every run gets the JIT's trampolines
+//!   ([`Jit::callbacks`], D-526) and its accounting domain ([`Jit::domain`]).
 //! - Code and data live in one reservation of 1 GiB of address space per
 //!   `Jit`, committed segment by segment as batches need it (see
 //!   `memory.rs`). Dropping a [`Jit`] frees it.
 //! - Runtime symbols resolve through `cheby_runtime::symbols()`; other
-//!   native symbols of `@external(native, …)` through the process's
-//!   dynamic symbol table, checked before finalizing so a missing symbol
-//!   is an error, never a panic. Foreign symbols are imported by address,
-//!   with no signature, and called indirectly with each call site's C
+//!   native symbols of `@external(native, …)` through the symbols defined
+//!   with [`Jit::define_symbol`] and then the process's dynamic symbol
+//!   table, checked before finalizing so a missing symbol is an error,
+//!   never a panic (D-532). Foreign symbols are imported by address, with
+//!   no signature, and called indirectly with each call site's C
 //!   signature, so batches may bind one symbol with different signatures.
 
 use std::fmt;
-use std::marker::PhantomData;
 use std::mem::ManuallyDrop;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::Module;
@@ -36,25 +39,29 @@ use rustc_hash::FxHashMap;
 use cheby_codegen_clif::{
     CodegenCx, CodegenError, CodegenOptions, Decls, LayoutIds, builtin_layout_id,
 };
-use cheby_iface::Ice;
+use cheby_iface::{DefId, Ice};
 use cheby_mir::{EntryKind, FnKey, LayoutDesc, LayoutRef, MirModule, Repr};
+use cheby_runtime::abi::sym;
+use cheby_runtime::alloc::Domain;
+use cheby_runtime::entry::{Tramp0, Tramp1, Tramp2, Tramp3, Tramp4};
 use cheby_runtime::layout::{self as rt_layout, FieldKind, LayoutInfo};
-use cheby_runtime::{EntryConfig, EntryFn, EntryOutcome, RunConfig, RuntimeError};
+use cheby_runtime::{Callbacks, EntryConfig, EntryFn, EntryOutcome, RunConfig, RuntimeError};
 
 mod memory;
 #[cfg(test)]
 mod tests;
 
 /// Why the JIT failed. None of these is a diagnostic about the program
-/// except [`JitError::UnresolvedSymbol`].
+/// except [`JitError::UnresolvedSymbols`].
 #[derive(Debug)]
 pub enum JitError {
     Codegen(CodegenError),
     /// The host cannot run generated code.
     Host(String),
-    /// An `@external(native, …)` symbol that neither the runtime nor the
-    /// process defines.
-    UnresolvedSymbol(String),
+    /// Every `@external(native, …)` symbol of the batch that neither the
+    /// runtime, [`Jit::define_symbol`] nor the process defines, sorted
+    /// (D-532). The driver reports one E0053 each.
+    UnresolvedSymbols(Vec<String>),
     /// Running the entry failed in the runtime.
     Runtime(RuntimeError),
 }
@@ -82,8 +89,13 @@ impl fmt::Display for JitError {
         match self {
             Self::Codegen(e) => write!(f, "{e}"),
             Self::Host(message) => write!(f, "cannot run generated code on this host: {message}"),
-            Self::UnresolvedSymbol(symbol) => {
-                write!(f, "the native symbol `{symbol}` is not defined")
+            Self::UnresolvedSymbols(symbols) => {
+                let list: Vec<String> = symbols.iter().map(|s| format!("`{s}`")).collect();
+                if let [one] = list.as_slice() {
+                    write!(f, "the native symbol {one} is not defined")
+                } else {
+                    write!(f, "the native symbols {} are not defined", list.join(", "))
+                }
             }
             Self::Runtime(e) => write!(f, "{e}"),
         }
@@ -91,6 +103,34 @@ impl fmt::Display for JitError {
 }
 
 impl std::error::Error for JitError {}
+
+/// What a [`Jit`] does beyond code generation's options (plan §4.4).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct JitOptions {
+    /// Every count operation calls the runtime's `cheby_rt_dup` and
+    /// `cheby_rt_drop`, which check headers in poisoning mode, instead of
+    /// the inline fast paths ([`CodegenOptions::checked_rc`]). On when
+    /// `CHEBY_RT_POISON=1` ([`JitOptions::from_env`]).
+    pub checked_rc: bool,
+    /// Binds every unresolved native symbol to `cheby_rt_unresolved`,
+    /// which panics `ForbiddenEffect`, instead of failing the batch: the
+    /// batches of `cheby check`, which compile code only to evaluate
+    /// constants (D-532).
+    pub stub_unresolved: bool,
+}
+
+impl JitOptions {
+    /// The options of a JIT that runs programs: `checked_rc` when the
+    /// runtime's poisoning mode is on (`CHEBY_RT_POISON=1` in a debug
+    /// build), no stubs.
+    #[must_use]
+    pub fn from_env() -> Self {
+        Self {
+            checked_rc: cheby_runtime::alloc::poison_enabled(),
+            stub_unresolved: false,
+        }
+    }
+}
 
 /// Runtime layout ids of the layouts registered so far: the fixed builtin
 /// ids, plus user constructors registered per batch before any of its
@@ -137,7 +177,12 @@ fn layout_info(desc: &LayoutDesc) -> Result<LayoutInfo, Ice> {
         .iter()
         .map(|f| (field_kind(f.repr), f.name.as_deref()))
         .collect();
-    let info = LayoutInfo::ctor(&desc.name, desc.tag, &fields);
+    let info = LayoutInfo::ctor(&desc.name, desc.tag, &fields).named(
+        &desc.type_name,
+        &desc.ctor_name,
+        desc.record,
+        desc.type_key,
+    );
     let agree = info.value_fields == desc.value_fields
         && info.raw_fields == desc.raw_fields
         && info.fields.len() == desc.fields.len()
@@ -165,6 +210,12 @@ pub struct CodeMemory {
     pub committed: usize,
 }
 
+/// Symbols the JIT resolves itself, before the process: those defined
+/// with [`Jit::define_symbol`] and, with [`JitOptions::stub_unresolved`],
+/// the stubbed ones. Addresses are kept as integers so the table is
+/// `Send` for Cranelift's lookup function.
+type SymbolTable = Arc<Mutex<FxHashMap<Box<str>, usize>>>;
+
 /// A JIT session: the module, the declarations of every batch so far, and
 /// the registered layouts. Dropping it frees its code and data.
 pub struct Jit {
@@ -172,10 +223,17 @@ pub struct Jit {
     module: ManuallyDrop<JITModule>,
     decls: Decls,
     layouts: JitLayouts,
-    options: CodegenOptions,
+    codegen: CodegenOptions,
+    options: JitOptions,
     clif: Vec<String>,
     /// How much of the code arena is reserved and committed.
     memory: Arc<memory::Usage>,
+    symbols: SymbolTable,
+    /// The accounting domain every entry of this JIT charges (plan
+    /// §4.3.4): one build, one domain.
+    domain: Arc<Domain>,
+    /// The trampolines compiled so far (D-526).
+    callbacks: Callbacks,
 }
 
 impl fmt::Debug for Jit {
@@ -183,25 +241,26 @@ impl fmt::Debug for Jit {
         f.debug_struct("Jit")
             .field("decls", &self.decls)
             .field("layouts", &self.layouts)
+            .field("codegen", &self.codegen)
             .field("options", &self.options)
             .finish_non_exhaustive()
     }
 }
 
 impl Jit {
-    /// A JIT for the host with the default options: calls through slots,
-    /// stack checks on.
+    /// A JIT for the host with the default code generation options (calls
+    /// through slots, stack checks on) and [`JitOptions::from_env`].
     ///
     /// # Errors
     ///
     /// [`JitError::Host`] if the host is not supported.
     pub fn new() -> Result<Self, JitError> {
-        Self::with_options(CodegenOptions::default())
+        Self::configured(CodegenOptions::default(), JitOptions::from_env())
     }
 
-    /// A JIT for the host with `options`. Batches that bind one foreign
-    /// symbol with different C signatures (a REPL redefinition, or a retry
-    /// after a failed batch) need the default
+    /// A JIT for the host with `options` and [`JitOptions::from_env`].
+    /// Batches that bind one foreign symbol with different C signatures (a
+    /// REPL redefinition, or a retry after a failed batch) need the default
     /// [`ForeignImport::Address`](cheby_codegen_clif::ForeignImport::Address).
     ///
     /// # Errors
@@ -209,6 +268,21 @@ impl Jit {
     /// [`JitError::Host`] if the host is not supported or the code arena
     /// cannot be reserved.
     pub fn with_options(options: CodegenOptions) -> Result<Self, JitError> {
+        Self::configured(options, JitOptions::from_env())
+    }
+
+    /// A JIT for the host with code generation `options` and JIT options
+    /// `jit`; `jit.checked_rc` overrides `options.checked_rc`.
+    ///
+    /// # Errors
+    ///
+    /// [`JitError::Host`] if the host is not supported or the code arena
+    /// cannot be reserved.
+    pub fn configured(options: CodegenOptions, jit: JitOptions) -> Result<Self, JitError> {
+        let options = CodegenOptions {
+            checked_rc: jit.checked_rc,
+            ..options
+        };
         let flags = cheby_codegen_clif::isa::flags()?;
         let isa = cranelift_native::builder()
             .map_err(|message| JitError::Host(message.to_owned()))?
@@ -216,6 +290,16 @@ impl Jit {
             .map_err(|e| JitError::Host(e.to_string()))?;
         let mut builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
         builder.symbols(cheby_runtime::symbols());
+        let symbols: SymbolTable = Arc::default();
+        let table = Arc::clone(&symbols);
+        // Tried before the process's symbols (Cranelift asks the last
+        // lookup function first); the runtime's registry comes before both.
+        builder.symbol_lookup_fn(Box::new(move |name| {
+            let table = table.lock().unwrap_or_else(PoisonError::into_inner);
+            table
+                .get(name)
+                .map(|&address| std::ptr::with_exposed_provenance::<u8>(address))
+        }));
         let arena = memory::ReservedArena::new(memory::ARENA_SIZE)
             .map_err(|e| JitError::Host(format!("cannot reserve memory for code: {e}")))?;
         let usage = arena.usage();
@@ -226,15 +310,33 @@ impl Jit {
             module,
             decls,
             layouts: JitLayouts::default(),
-            options,
+            codegen: options,
+            options: jit,
             clif: Vec::new(),
             memory: usage,
+            symbols,
+            domain: Domain::new(),
+            callbacks: Callbacks::default(),
         })
     }
 
+    /// Makes the native symbol `name` resolve to `address` in later
+    /// batches, before the process's own symbols (tests, and kernels the
+    /// host provides).
+    ///
+    /// # Safety
+    ///
+    /// `address` must stay valid for as long as this JIT's code can run,
+    /// and be a function with the C signature of every `@external` that
+    /// names `name` (or a data object, for a data import).
+    pub unsafe fn define_symbol(&mut self, name: &str, address: *const u8) {
+        let mut table = self.symbols.lock().unwrap_or_else(PoisonError::into_inner);
+        table.insert(name.into(), address.expose_provenance());
+    }
+
     /// Compiles a batch of units, in order: registers their layouts,
-    /// declares and defines their functions, and finalizes. Units may call
-    /// functions of earlier batches.
+    /// declares and defines their functions and data, and finalizes. Units
+    /// may call functions of earlier batches.
     ///
     /// A batch is all or nothing: if it fails, the JIT is as it was before
     /// it, so a corrected batch with the same items can be compiled next
@@ -242,8 +344,8 @@ impl Jit {
     ///
     /// # Errors
     ///
-    /// A [`JitError`] if code generation fails or a native symbol is
-    /// missing.
+    /// A [`JitError`] if code generation fails or native symbols are
+    /// missing ([`JitError::UnresolvedSymbols`], all of them).
     pub fn compile(&mut self, mirs: &[MirModule]) -> Result<(), JitError> {
         let decls = self.decls.clone();
         let layouts = self.layouts.ids.clone();
@@ -263,19 +365,20 @@ impl Jit {
         let cx = CodegenCx {
             layouts: &self.layouts,
         };
-        cheby_codegen_clif::declare(&mut *self.module, &mut self.decls, mirs, &cx, &self.options)?;
+        cheby_codegen_clif::declare(&mut *self.module, &mut self.decls, mirs, &cx, &self.codegen)?;
         self.check_symbols()?;
         let clif = cheby_codegen_clif::define(
             &mut *self.module,
             mirs,
             &mut self.decls,
             &cx,
-            &self.options,
+            &self.codegen,
         )?;
         self.clif.extend(clif);
         self.module
             .finalize_definitions()
             .map_err(|e| JitError::Codegen(CodegenError::Module(e.to_string())))?;
+        self.callbacks = self.find_callbacks();
         Ok(())
     }
 
@@ -292,6 +395,83 @@ impl Jit {
     /// the options capture it.
     pub fn take_clif(&mut self) -> Vec<String> {
         std::mem::take(&mut self.clif)
+    }
+
+    /// The accounting domain every entry of this JIT charges: one build,
+    /// one domain (plan §4.3.4). Its live objects after a run are what the
+    /// run leaked.
+    #[must_use]
+    pub fn domain(&self) -> Arc<Domain> {
+        Arc::clone(&self.domain)
+    }
+
+    /// The trampolines `cb$tramp$0` to `cb$tramp$4` compiled so far
+    /// (D-526), which every [`Entry`] passes to the runtime so kernels can
+    /// call closures.
+    #[must_use]
+    pub const fn callbacks(&self) -> Callbacks {
+        self.callbacks
+    }
+
+    fn trampoline(&self, arity: u32) -> Option<*const u8> {
+        let decl = self.decls.func(FnKey::Trampoline(arity)).ok()?;
+        if !decl.defined {
+            return None;
+        }
+        let address = self.module.get_finalized_function(decl.id);
+        (!address.is_null()).then_some(address)
+    }
+
+    fn find_callbacks(&self) -> Callbacks {
+        let [t0, t1, t2, t3, t4] = [0, 1, 2, 3, 4].map(|n| self.trampoline(n));
+        // SAFETY: a `FnKey::Trampoline(n)` function is declared with
+        // `cheby_mir::trampoline_sig(n)`: the platform C convention, `ctx`,
+        // the closure and `n` words, returning one word, which is exactly
+        // `TrampN`. It is finalized, so executable, and the `Callbacks` are
+        // used only by entries that borrow this JIT, so the code outlives
+        // every call.
+        unsafe {
+            Callbacks {
+                t0: t0.map(|a| std::mem::transmute::<*const u8, Tramp0>(a)),
+                t1: t1.map(|a| std::mem::transmute::<*const u8, Tramp1>(a)),
+                t2: t2.map(|a| std::mem::transmute::<*const u8, Tramp2>(a)),
+                t3: t3.map(|a| std::mem::transmute::<*const u8, Tramp3>(a)),
+                t4: t4.map(|a| std::mem::transmute::<*const u8, Tramp4>(a)),
+            }
+        }
+    }
+
+    /// The address of the slot `cb$const$…` of the constant `def` (E6), if
+    /// a compiled batch declared it: 0 until the constant is evaluated.
+    #[must_use]
+    pub fn const_slot(&self, def: DefId) -> Option<*mut u64> {
+        let id = self.decls.const_slot(def)?;
+        let (address, size) = self.module.get_finalized_data(id);
+        #[expect(
+            clippy::cast_ptr_alignment,
+            reason = "code generation defines every data object with alignment 8"
+        )]
+        let slot = address.cast_mut().cast::<u64>();
+        (!address.is_null() && size >= 8).then_some(slot)
+    }
+
+    /// Stores `word` in the slot of the constant `def`: the constant's
+    /// evaluated value, which code reads borrowed (E6). The slot holds the
+    /// reference; a value stored there must be static (frozen, D-539) or
+    /// stay alive for as long as code can read it.
+    ///
+    /// # Errors
+    ///
+    /// An ICE if no compiled batch declared the slot.
+    pub fn set_const(&mut self, def: DefId, word: u64) -> Result<(), JitError> {
+        let slot = self
+            .const_slot(def)
+            .ok_or_else(|| JitError::ice(format!("the constant {def:?} has no slot")))?;
+        // SAFETY: the slot is an 8-aligned, writable 8-byte data object of
+        // this JIT's module (declared writable and finalized), and `&mut
+        // self` keeps any entry of this JIT from running meanwhile.
+        unsafe { slot.write(word) };
+        Ok(())
     }
 
     /// The compiled entry thunk of `kind`, which borrows this JIT so that
@@ -316,32 +496,62 @@ impl Jit {
         // `self.module` lives, which the returned `Entry`'s borrow of
         // `self` guarantees for every use of it.
         let thunk = unsafe { std::mem::transmute::<*const u8, EntryFn>(address) };
-        Ok(Entry {
-            thunk,
-            _jit: PhantomData,
-        })
+        Ok(Entry { thunk, jit: self })
     }
 
     /// Registers the constructor layouts of `mirs`, units in order and
-    /// layouts in `DefIndex` order, so ids do not depend on scheduling.
+    /// types in `DefIndex` order of their first constructor, so ids do not
+    /// depend on scheduling. The constructors of one type get consecutive
+    /// ids in tag order (D-522), so a tag is a layout id minus the first
+    /// constructor's.
     ///
     /// The ids come from the runtime's process-wide table, so they also
     /// depend on what earlier `Jit`s in the process registered. Generated
-    /// code must therefore never embed one (D-264): it loads the header
-    /// from the layout's `cb$layout$…` data symbol, which is filled in here
-    /// at registration (D-454). No generated code needs a user layout id
-    /// yet, because `Alloc` and static user constructors are rejected
-    /// before codegen.
+    /// code therefore never embeds one (D-264): it loads the header from
+    /// the layout's `cb$layout$…` data symbol, which code generation fills
+    /// from these ids (D-454).
     fn register_layouts(&mut self, mirs: &[MirModule]) -> Result<(), JitError> {
         for unit in mirs {
+            let mut types: Vec<DefId> = Vec::new();
             for desc in &unit.layouts {
-                if self.layouts.ids.contains_key(&desc.layout) {
+                if !types.contains(&desc.type_def) {
+                    types.push(desc.type_def);
+                }
+            }
+            for ty in types {
+                let mut ctors: Vec<&LayoutDesc> =
+                    unit.layouts.iter().filter(|d| d.type_def == ty).collect();
+                ctors.sort_by_key(|d| d.tag);
+                let known = ctors
+                    .iter()
+                    .filter(|d| self.layouts.ids.contains_key(&d.layout))
+                    .count();
+                if known == ctors.len() {
                     continue;
                 }
-                let info = layout_info(desc)?;
-                let id = rt_layout::register(info)
+                if known != 0 {
+                    return Err(JitError::ice(format!(
+                        "some constructors of the type {ty:?} are registered and some are not"
+                    )));
+                }
+                let in_order = ctors
+                    .iter()
+                    .enumerate()
+                    .all(|(n, d)| usize::try_from(d.tag).is_ok_and(|tag| tag == n));
+                if !in_order {
+                    return Err(JitError::ice(format!(
+                        "the constructors of the type {ty:?} do not have the tags 0, 1, …"
+                    )));
+                }
+                let infos = ctors
+                    .iter()
+                    .map(|d| layout_info(d))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let first = rt_layout::register_consecutive(infos)
                     .map_err(|e| JitError::ice(format!("cannot register a layout: {e}")))?;
-                self.layouts.ids.insert(desc.layout, id);
+                for (desc, id) in ctors.iter().zip(first..) {
+                    self.layouts.ids.insert(desc.layout, id);
+                }
             }
         }
         Ok(())
@@ -349,18 +559,46 @@ impl Jit {
 
     /// Checks that every native symbol resolves, because Cranelift's JIT
     /// panics on a missing one when finalizing. `cheby check` cannot know
-    /// which symbols the process will have, so the driver reports this
-    /// only when running, as E0053 at the `@external` that names the
-    /// symbol (D-455).
+    /// which symbols the process will have, so the driver reports these
+    /// only when running, as E0053 at the `@external` that names each
+    /// symbol (D-455, D-532); with [`JitOptions::stub_unresolved`] they
+    /// are bound to `cheby_rt_unresolved` instead.
     fn check_symbols(&self) -> Result<(), JitError> {
-        let runtime: Vec<&str> = cheby_runtime::symbols()
-            .into_iter()
-            .map(|(name, _)| name)
-            .collect();
-        for symbol in self.decls.foreign_symbols() {
-            if !runtime.contains(&symbol) && !process_defines(symbol) {
-                return Err(JitError::UnresolvedSymbol(symbol.to_owned()));
+        let runtime = cheby_runtime::symbols();
+        // Runtime objects later packages define (the builtin nominal
+        // descriptors, W3-B): a missing one is a bug, not a program error.
+        for symbol in self.decls.runtime_data_symbols() {
+            if !runtime.iter().any(|(name, _)| *name == symbol) {
+                return Err(JitError::ice(format!(
+                    "the runtime does not define `{symbol}`"
+                )));
             }
+        }
+        let mut table = self.symbols.lock().unwrap_or_else(PoisonError::into_inner);
+        let missing: Vec<String> = self
+            .decls
+            .foreign_symbols()
+            .into_iter()
+            .filter(|symbol| {
+                !runtime.iter().any(|(name, _)| name == symbol)
+                    && !table.contains_key(*symbol)
+                    && !process_defines(symbol)
+            })
+            .map(str::to_owned)
+            .collect();
+        if missing.is_empty() {
+            return Ok(());
+        }
+        if !self.options.stub_unresolved {
+            return Err(JitError::UnresolvedSymbols(missing));
+        }
+        let stub = runtime
+            .iter()
+            .find(|(name, _)| *name == sym::UNRESOLVED)
+            .map(|&(_, address)| address)
+            .ok_or_else(|| JitError::ice("the runtime does not define `cheby_rt_unresolved`"))?;
+        for symbol in missing {
+            table.insert(symbol.into(), stub.expose_provenance());
         }
         Ok(())
     }
@@ -412,7 +650,7 @@ impl Drop for Jit {
 #[derive(Clone, Copy)]
 pub struct Entry<'jit> {
     thunk: EntryFn,
-    _jit: PhantomData<&'jit Jit>,
+    jit: &'jit Jit,
 }
 
 impl fmt::Debug for Entry<'_> {
@@ -422,7 +660,8 @@ impl fmt::Debug for Entry<'_> {
 }
 
 impl Entry<'_> {
-    /// Runs the entry on its own stack and reports how it ended. A
+    /// Runs the entry on its own stack and reports how it ended, with the
+    /// JIT's trampolines and accounting domain in place of `config`'s. A
     /// returned word may point into the `Jit`'s data (a static string or
     /// constructor) and is valid only while the `Jit` lives.
     ///
@@ -430,20 +669,32 @@ impl Entry<'_> {
     ///
     /// [`JitError::Runtime`] if the entry cannot run.
     pub fn run(self, config: &EntryConfig) -> Result<EntryOutcome, JitError> {
+        let config = EntryConfig {
+            callbacks: self.jit.callbacks(),
+            domain: self.jit.domain(),
+            ..config.clone()
+        };
         // SAFETY: `thunk` is an entry thunk with the `EntryFn` ABI built by
         // the JIT (see `Jit::entry`), and the borrow of the `Jit` keeps its
         // code and data alive until this returns.
-        unsafe { cheby_runtime::run_entry(self.thunk, config) }.map_err(JitError::Runtime)
+        unsafe { cheby_runtime::run_entry(self.thunk, &config) }.map_err(JitError::Runtime)
     }
 
     /// Runs `main`'s entry thunk under `cheby run`'s policy (§10.10,
-    /// D-182) and returns the exit status: 0 or 1 from the program, 101
-    /// after a panic, 102 in debug builds when objects leak (D-458).
+    /// D-182), with the JIT's trampolines and accounting domain in place
+    /// of `config`'s, and returns the exit status: 0 or 1 from the program,
+    /// 101 after a panic, 102 in debug builds when objects of the domain
+    /// leak (D-458).
     ///
     /// # Errors
     ///
     /// [`JitError::Runtime`] if the entry cannot run.
     pub fn run_main(self, config: RunConfig) -> Result<i32, JitError> {
+        let config = RunConfig {
+            callbacks: self.jit.callbacks(),
+            domain: self.jit.domain(),
+            ..config
+        };
         // SAFETY: as in `run`.
         unsafe { cheby_runtime::run_main(self.thunk, config) }.map_err(JitError::Runtime)
     }

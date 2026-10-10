@@ -17,12 +17,17 @@
 //!   and `.stderr` (empty if absent).
 //! - `run-fail`: like `run-pass`, with the exit code of `@exit`, 101 (a
 //!   panic) by default.
+//!
+//! Strict runs (D-544): `CHEBY_MILESTONE` overrides `tests/milestone`,
+//! `CHEBY_PENDING=require` makes a failing pending test a failure unless
+//! the file `CHEBY_PENDING_ALLOW` names lists it, and every `cheby` runs
+//! with `CHEBY_RT_POISON=1` (see `cheby_test_support::milestone`).
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::time::Duration;
 
-use cheby_test_support::milestone::{self, Expectation, Verdicts};
+use cheby_test_support::milestone::{Expectation, POISON_ENV, Setting, Verdicts};
 use cheby_test_support::ui::{self, Layout, Mode, UiTest};
 use cheby_test_support::{bless_enabled, golden, process, repo_root};
 use libtest_mimic::{Arguments, Trial};
@@ -38,21 +43,20 @@ const PANIC_EXIT: i32 = 101;
 fn main() -> ExitCode {
     let args = Arguments::from_args();
     let root = repo_root();
-    let setup = milestone::current(&root).and_then(|m| Ok((m, ui::all(&root)?)));
-    let (current, tests) = match setup {
+    let setup = Setting::read(&root).and_then(|m| Ok((m, ui::all(&root)?, Verdicts::from_env()?)));
+    let (current, tests, verdicts) = match setup {
         Ok(setup) => setup,
         Err(message) => {
             eprintln!("UI harness: {message}");
             return ExitCode::from(2);
         }
     };
-    let verdicts = Verdicts::default();
     let bless = bless_enabled();
 
     let trials = tests
         .into_iter()
         .map(|test| {
-            let expectation = Expectation::new(test.header.milestone, current);
+            let expectation = current.expectation(test.header.milestone);
             let verdicts = verdicts.clone();
             let name = test.name.clone();
             Trial::test(name.clone(), move || {
@@ -75,10 +79,13 @@ fn run_test(test: &UiTest, bless: bool) -> Result<(), String> {
     let command = if mode.runs() { "run" } else { "check" };
     let mut cmd = Command::new(CHEBY);
     // `--color=never` and `NO_COLOR` keep goldens plain even if the
-    // developer's environment forces color (`CLICOLOR_FORCE`).
+    // developer's environment forces color (`CLICOLOR_FORCE`). Freed
+    // objects are poisoned, so a reference-count mistake stops the program
+    // where it happens (D-544).
     cmd.args(["--color=never", command])
         .current_dir(&package)
-        .env("NO_COLOR", "1");
+        .env("NO_COLOR", "1")
+        .env(POISON_ENV, "1");
     let out = process::run(cmd, None, TIMEOUT)?;
     let stdout = rewrite_paths(&out.stdout, &package, &files);
     let stderr = rewrite_paths(&out.stderr, &package, &files);

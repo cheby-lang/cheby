@@ -7,15 +7,29 @@
 //! thread forever, abandoning its stack and live objects, which is D-283's
 //! behavior without a stack-switching library. OQ-P7 replaces the thread
 //! with a runtime-owned stack behind the same API.
+//!
+//! # The current entry
+//!
+//! Kernels take no `ctx` (D-453), yet some need the running entry: a kernel
+//! that calls a Cheby closure ([`crate::callback`], D-526), maps and sets
+//! that take the entry's hash seed (D-538), and the stub bound to
+//! unresolved symbols (D-532). `run_entry` therefore records, on the
+//! entry's thread, the entry's context, its hash seed and its trampolines
+//! ([`current_ctx`], [`current_seed`], [`callbacks`]), and makes the
+//! entry's accounting domain the thread's current one. Generated code
+//! still passes `ctx` explicitly (ADR-0055). M2's fiber switching must
+//! update the record when it switches fibers.
 
+use std::cell::Cell;
 use std::fmt;
 use std::sync::mpsc;
-use std::sync::{PoisonError, RwLock};
+use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Instant;
 
 use crate::abi::status;
-use crate::alloc::{LEAK_CHECK_ENABLED, live_objects};
+use crate::alloc::{self, Domain, LEAK_CHECK_ENABLED};
 use crate::ctx::ExecCtx;
+use crate::generic;
 use crate::io;
 use crate::panic::{PanicReport, stack_position};
 
@@ -23,6 +37,44 @@ use crate::panic::{PanicReport, stack_position};
 /// takes the context and returns a raw `i64` status (`main`, tests) or an
 /// owned value word (constants, REPL entries).
 pub type EntryFn = unsafe extern "C" fn(ctx: *mut ExecCtx) -> u64;
+
+/// A trampoline of arity 0 (`cb$tramp$0`, D-526): C ABI, the context, the
+/// closure (borrowed); returns the owned result.
+pub type Tramp0 = unsafe extern "C" fn(ctx: *mut ExecCtx, closure: u64) -> u64;
+/// A trampoline of arity 1: the context, the closure (borrowed), one owned
+/// uniform argument; returns the owned result.
+pub type Tramp1 = unsafe extern "C" fn(ctx: *mut ExecCtx, closure: u64, a0: u64) -> u64;
+/// A trampoline of arity 2.
+pub type Tramp2 = unsafe extern "C" fn(ctx: *mut ExecCtx, closure: u64, a0: u64, a1: u64) -> u64;
+/// A trampoline of arity 3.
+pub type Tramp3 =
+    unsafe extern "C" fn(ctx: *mut ExecCtx, closure: u64, a0: u64, a1: u64, a2: u64) -> u64;
+/// A trampoline of arity 4.
+pub type Tramp4 = unsafe extern "C" fn(
+    ctx: *mut ExecCtx,
+    closure: u64,
+    a0: u64,
+    a1: u64,
+    a2: u64,
+    a3: u64,
+) -> u64;
+
+/// The trampolines an entry's kernels may call closures through (D-526),
+/// one per arity, each matching `cheby_mir::abi::trampoline_sig(n)`. The
+/// JIT fills those its batches compiled.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Callbacks {
+    /// Arity 0.
+    pub t0: Option<Tramp0>,
+    /// Arity 1.
+    pub t1: Option<Tramp1>,
+    /// Arity 2.
+    pub t2: Option<Tramp2>,
+    /// Arity 3.
+    pub t3: Option<Tramp3>,
+    /// Arity 4.
+    pub t4: Option<Tramp4>,
+}
 
 /// The default stack of a fiber (D-125).
 pub const DEFAULT_STACK_SIZE: usize = 8 << 20;
@@ -61,26 +113,34 @@ pub struct ConstEvalLimits {
     pub deadline: Option<Instant>,
     /// The most bytes it may allocate.
     pub memory: Option<u64>,
-    /// The hash seed it runs with.
+    /// The hash seed it runs with (D-538).
     pub seed: u64,
 }
 
 /// How to run an entry.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct EntryConfig {
     /// The size of the entry's stack in bytes, at least [`MIN_STACK_SIZE`].
     pub stack_size: usize,
     /// What kind of entry it is.
     pub mode: EntryMode,
+    /// The trampolines the entry's kernels may call closures through
+    /// (D-526).
+    pub callbacks: Callbacks,
+    /// The accounting domain the entry charges (plan §4.3.4): the build's.
+    pub domain: Arc<Domain>,
 }
 
 impl EntryConfig {
-    /// An entry of the given mode with the default fiber stack.
+    /// An entry of the given mode with the default fiber stack, no
+    /// trampolines, and the calling thread's current accounting domain.
     #[must_use]
     pub fn new(mode: EntryMode) -> Self {
         Self {
             stack_size: DEFAULT_STACK_SIZE,
             mode,
+            callbacks: Callbacks::default(),
+            domain: alloc::current_domain(),
         }
     }
 }
@@ -137,9 +197,83 @@ impl std::error::Error for RuntimeError {
     }
 }
 
+/// The record of the entry running on this thread.
+#[derive(Debug, Clone, Copy)]
+struct Current {
+    ctx: *mut ExecCtx,
+    seed: u64,
+    callbacks: Callbacks,
+}
+
+thread_local! {
+    static CURRENT: Cell<Option<Current>> = const { Cell::new(None) };
+}
+
+fn current() -> Option<Current> {
+    CURRENT.try_with(Cell::get).ok().flatten()
+}
+
+/// The execution context of the entry running on this thread, or `None`
+/// outside any entry.
+#[must_use]
+pub fn current_ctx() -> Option<*mut ExecCtx> {
+    current().map(|current| current.ctx)
+}
+
+/// The hash seed new maps and sets take (D-538): the running constant's
+/// seed during constant evaluation, the per-process seed otherwise.
+#[must_use]
+pub fn current_seed() -> u64 {
+    current().map_or_else(generic::process_seed, |current| current.seed)
+}
+
+/// The trampolines of the entry running on this thread, or `None` outside
+/// any entry.
+#[must_use]
+pub fn callbacks() -> Option<Callbacks> {
+    current().map(|current| current.callbacks)
+}
+
+/// Runs `f` with `seed` as the entry's hash seed, then restores the
+/// previous one: lazy forcing of a constant evaluates it under its own
+/// seed (plan §7.2). Outside any entry, `f` just runs.
+pub fn with_seed<R>(seed: u64, f: impl FnOnce() -> R) -> R {
+    let Some(saved) = current() else {
+        return f();
+    };
+    CURRENT
+        .try_with(|cell| cell.set(Some(Current { seed, ..saved })))
+        .ok();
+    let result = f();
+    CURRENT
+        .try_with(|cell| {
+            if let Some(now) = cell.get() {
+                cell.set(Some(Current {
+                    seed: saved.seed,
+                    ..now
+                }));
+            }
+        })
+        .ok();
+    result
+}
+
+/// The allocation budget of constant evaluation (plan §7.3, D-536): called
+/// with every allocation's size. A documented no-op in wave 1; the memory
+/// limit is enforced by W4-C from the domain's peak bytes.
+#[inline]
+pub(crate) fn charge_budget(bytes: u64) {
+    let _ = bytes;
+}
+
 /// Runs one entry thunk on its own stack with a fresh [`ExecCtx`], and
 /// returns when it returns or panics. The building block of `run`, `test`,
 /// the REPL and constant evaluation.
+///
+/// The entry's thread charges `config.domain`, and records the entry for
+/// kernels: its context, its seed (the constant's under
+/// [`EntryMode::ConstEval`], the per-process seed otherwise) and
+/// `config.callbacks`.
 ///
 /// # Errors
 ///
@@ -156,6 +290,8 @@ impl std::error::Error for RuntimeError {
 ///   compiled into, must stay valid until this function returns. After a
 ///   panic the entry's thread is parked forever inside the runtime and
 ///   never runs that code again, so nothing is required after the return.
+/// - The trampolines in `config.callbacks` must have their declared ABI
+///   and stay valid as long as `entry`'s code.
 pub unsafe fn run_entry(
     entry: EntryFn,
     config: &EntryConfig,
@@ -167,6 +303,8 @@ pub unsafe fn run_entry(
         });
     }
     let mode = config.mode.clone();
+    let callbacks = config.callbacks;
+    let domain = Arc::clone(&config.domain);
     let (sender, receiver) = mpsc::channel();
     let thread = std::thread::Builder::new()
         .name("cheby-entry".to_owned())
@@ -177,13 +315,28 @@ pub unsafe fn run_entry(
             let limit = stack_position()
                 .saturating_sub(stack_size)
                 .saturating_add(STACK_HEADROOM);
+            let seed = match &mode {
+                EntryMode::ConstEval(limits) => limits.seed,
+                EntryMode::Run | EntryMode::Test | EntryMode::Repl => generic::process_seed(),
+            };
+            alloc::set_current_domain(domain);
             let mut ctx = ExecCtx::new(limit, mode, Some(sender.clone()));
+            CURRENT
+                .try_with(|cell| {
+                    cell.set(Some(Current {
+                        ctx: &raw mut ctx,
+                        seed,
+                        callbacks,
+                    }));
+                })
+                .ok();
             // SAFETY: the caller of `run_entry` guarantees that `entry` is
             // an entry thunk with the `EntryFn` ABI whose code stays valid
             // until `run_entry` returns, which is after this call returns
             // (the host waits on the channel). `ctx` outlives the call: a
             // panic parks this thread forever, keeping the frame alive.
             let word = unsafe { entry(&raw mut ctx) };
+            CURRENT.try_with(|cell| cell.set(None)).ok();
             sender.send(EntryOutcome::Returned(word)).ok();
         })
         .map_err(RuntimeError::Spawn)?;
@@ -202,7 +355,7 @@ pub unsafe fn run_entry(
 }
 
 /// How `cheby run` runs `main`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct RunConfig {
     /// The program's arguments, without the program name (D-347).
     pub args: Vec<String>,
@@ -210,14 +363,22 @@ pub struct RunConfig {
     pub program_name: String,
     /// The root fiber's stack (D-125).
     pub root_stack_size: usize,
+    /// The trampolines `main`'s kernels may call closures through (D-526).
+    pub callbacks: Callbacks,
+    /// The build's accounting domain, which the leak check reads.
+    pub domain: Arc<Domain>,
 }
 
 impl Default for RunConfig {
+    /// No arguments, the default root stack, no trampolines, and the
+    /// calling thread's current accounting domain.
     fn default() -> Self {
         Self {
             args: Vec::new(),
             program_name: String::new(),
             root_stack_size: DEFAULT_ROOT_STACK_SIZE,
+            callbacks: Callbacks::default(),
+            domain: alloc::current_domain(),
         }
     }
 }
@@ -228,8 +389,9 @@ impl Default for RunConfig {
 ///   after printing `e`), after flushing standard output. A failed flush
 ///   gives 1 (D-306, D-346).
 /// - 101 after a panic, which has already flushed and printed.
-/// - In debug builds, 102 if objects are still live when the status is 0
-///   or 1 (D-458).
+/// - In debug builds, 102 if objects of the build's domain are still live
+///   when the status is 0 or 1 (D-458). Constants frozen before `main`
+///   have left the domain, so every live object is a leak.
 ///
 /// # Errors
 ///
@@ -241,9 +403,12 @@ impl Default for RunConfig {
 /// [`EntryFn`] ABI, and its code must stay valid until this returns.
 pub unsafe fn run_main(entry: EntryFn, config: RunConfig) -> Result<i32, RuntimeError> {
     set_program(config.args, config.program_name);
+    let domain = config.domain;
     let entry_config = EntryConfig {
         stack_size: config.root_stack_size,
         mode: EntryMode::Run,
+        callbacks: config.callbacks,
+        domain: Arc::clone(&domain),
     };
     // SAFETY: the caller guarantees `run_entry`'s preconditions for
     // `entry`, which this function passes on unchanged.
@@ -258,7 +423,7 @@ pub unsafe fn run_main(entry: EntryFn, config: RunConfig) -> Result<i32, Runtime
                 1 => status::ERR,
                 other => return Err(RuntimeError::InvalidStatus(other)),
             };
-            match leak_report(live_objects()) {
+            match leak_report(domain.live_objects()) {
                 Some(report) => {
                     io::write_stderr(&report);
                     Ok(status::LEAK_CHECK)
@@ -362,7 +527,7 @@ mod tests {
     fn small_stacks_are_refused() {
         let config = EntryConfig {
             stack_size: 4096,
-            mode: EntryMode::Test,
+            ..EntryConfig::new(EntryMode::Test)
         };
         assert!(matches!(
             run_entry(returns_seven, &config),
@@ -498,10 +663,14 @@ mod tests {
 
     #[test]
     fn run_main_maps_outcomes_to_statuses() {
+        // `run_main` sets the program's arguments, which the other
+        // `run_main` test also sets.
         let _guard = serial();
+        let domain = Domain::new();
         let config = || RunConfig {
             args: vec!["a".to_owned()],
             program_name: "p".to_owned(),
+            domain: Arc::clone(&domain),
             ..RunConfig::default()
         };
         assert_eq!(
@@ -517,23 +686,100 @@ mod tests {
         let leaked = run_main(leaks_one, config()).unwrap();
         if LEAK_CHECK_ENABLED {
             assert_eq!(leaked, status::LEAK_CHECK);
-            // Account for the leaked tuple so later tests see a clean count.
-            crate::alloc::forget_one();
         } else {
             assert_eq!(leaked, status::ERR);
         }
+        // The leak was charged to the build's domain, not to this thread.
+        assert_eq!(domain.live_objects(), 1);
+        assert_eq!(alloc::live_objects(), 0);
         assert_eq!(abi::status::PANIC, 101);
     }
 
     #[test]
     #[cfg_attr(miri, ignore = "parks a thread forever")]
     fn run_main_exits_101_after_a_panic() {
-        // `run_main` sets the program's arguments, which the other
-        // `run_main` test reads.
         let _guard = serial();
         // Prints the panic report to the test's standard error.
         let status = run_main(panics_with_a_message, RunConfig::default()).unwrap();
         assert_eq!(status, abi::status::PANIC);
+    }
+
+    unsafe extern "C" fn allocates_two(_: *mut ExecCtx) -> u64 {
+        tuple(&[tuple(&[])])
+    }
+
+    #[test]
+    fn entries_charge_their_configured_domain() {
+        let domain = Domain::new();
+        let config = EntryConfig {
+            domain: Arc::clone(&domain),
+            ..EntryConfig::new(EntryMode::Test)
+        };
+        let EntryOutcome::Returned(word) = run_entry(allocates_two, &config).unwrap() else {
+            panic!("the entry panicked");
+        };
+        assert_eq!(domain.live_objects(), 2);
+        assert_eq!(alloc::live_objects(), 0);
+        // Freed on this thread with the build's domain current.
+        alloc::with_domain(Arc::clone(&domain), || {
+            // SAFETY: the entry returned its only reference.
+            unsafe { rc::drop(word) };
+        });
+        assert_eq!(domain.live_objects(), 0);
+        // By default an entry charges the calling thread's domain.
+        let EntryOutcome::Returned(word) =
+            run_entry(allocates_two, &EntryConfig::new(EntryMode::Test)).unwrap()
+        else {
+            panic!("the entry panicked");
+        };
+        assert_eq!(alloc::live_objects(), 2);
+        // SAFETY: as above.
+        unsafe { rc::drop(word) };
+        assert_eq!(alloc::live_objects(), 0);
+    }
+
+    unsafe extern "C" fn reports_its_record(ctx: *mut ExecCtx) -> u64 {
+        let same_ctx = current_ctx() == Some(ctx);
+        let outer = current_seed();
+        let inner = with_seed(99, current_seed);
+        let restored = current_seed() == outer;
+        let has_t1 = callbacks().is_some_and(|callbacks| callbacks.t1.is_some());
+        u64::from(same_ctx && restored && inner == 99 && has_t1).wrapping_add(outer.wrapping_mul(2))
+    }
+
+    unsafe extern "C" fn identity(_: *mut ExecCtx, _: u64, a0: u64) -> u64 {
+        a0
+    }
+
+    #[test]
+    fn entries_record_their_context_seed_and_callbacks() {
+        let config = EntryConfig {
+            callbacks: Callbacks {
+                t1: Some(identity),
+                ..Callbacks::default()
+            },
+            ..EntryConfig::new(EntryMode::ConstEval(ConstEvalLimits {
+                seed: 21,
+                ..ConstEvalLimits::default()
+            }))
+        };
+        assert_eq!(
+            run_entry(reports_its_record, &config).unwrap(),
+            EntryOutcome::Returned(43)
+        );
+        let run = EntryConfig {
+            callbacks: config.callbacks,
+            ..EntryConfig::new(EntryMode::Run)
+        };
+        assert_eq!(
+            run_entry(reports_its_record, &run).unwrap(),
+            EntryOutcome::Returned(generic::process_seed().wrapping_mul(2).wrapping_add(1))
+        );
+        // Outside any entry.
+        assert_eq!(current_ctx(), None);
+        assert_eq!(current_seed(), generic::process_seed());
+        assert_eq!(with_seed(5, current_seed), generic::process_seed());
+        assert!(callbacks().is_none());
     }
 
     #[test]

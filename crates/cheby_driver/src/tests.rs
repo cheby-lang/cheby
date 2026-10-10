@@ -516,6 +516,46 @@ fn dumps_of_a_package_with_errors_are_empty() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// `cheby run` reports every native symbol it cannot resolve, one E0053
+/// each at the `@external` that names it, sorted by position, before
+/// anything runs (D-532); `cheby check` reports none of them (D-455).
+#[test]
+fn every_missing_native_symbol_is_reported() {
+    let main = b"//! Two missing natives.\n\n\
+        @external(native, \"cheby_test_missing_second\")\n\
+        fn second()\n\n\
+        @external(native, \"cheby_test_missing_first\")\n\
+        fn first()\n\n\
+        fn main() {\n  first()\n  second()\n}\n";
+    let dir = package(
+        "missing_natives",
+        &[
+            (
+                "cheby.toml",
+                b"name = \"app\"\nversion = \"0.1.0\"\ntargets = [\"native\"]\n",
+            ),
+            ("src/main.cheby", main),
+        ],
+    );
+    assert_eq!(check(&dir).unwrap().render(), "");
+    let RunResult::CompileFailed(out) = run(&dir, RunOptions::default()).unwrap() else {
+        panic!("a program with missing natives ran");
+    };
+    let codes: Vec<String> = out.diagnostics.iter().map(|d| d.code.to_string()).collect();
+    assert_eq!(codes, ["E0053", "E0053"], "{}", out.render());
+    let rendered = out.render();
+    let second = rendered
+        .find("`cheby_test_missing_second` is not defined")
+        .unwrap();
+    let first = rendered
+        .find("`cheby_test_missing_first` is not defined")
+        .unwrap();
+    assert!(second < first, "not sorted by position:\n{rendered}");
+    assert!(rendered.contains("--> src/main.cheby:3:1"), "{rendered}");
+    assert!(rendered.contains("--> src/main.cheby:6:1"), "{rendered}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 /// Runs 001 in this process: status 0 and, in debug builds, no object
 /// left live (the leak check would give 102).
 #[test]
@@ -527,6 +567,29 @@ fn hello_world_runs_without_leaks() {
     assert_eq!(output.render(), "");
     assert_eq!(exit, 0);
     assert_eq!(cheby_runtime::live_objects(), 0);
+}
+
+/// A type with a constructor of 255 value fields, more than a header's
+/// scan count holds (D-279): building only its nullary sibling registers
+/// the whole type's layouts, and the run succeeds with no internal error
+/// and no leak (GAP(escaped-scan-count)).
+#[test]
+fn wide_constructors_escape_the_scan_count() {
+    let fields: String = (0..255).map(|_| "    String,\n").collect();
+    let source = format!(
+        "//! A constructor with 255 value fields.\n\nimport std::io\n\npub type Big {{\n  Wide(\n{fields}  ),\n  Small,\n}}\n\npub fn small() -> Big {{\n  Small\n}}\n\nfn main() {{\n  let _b = small()\n  io::println(\"ok\")\n}}\n"
+    );
+    let dir = package(
+        "wide_ctor",
+        &[MANIFEST, ("src/main.cheby", source.as_bytes())],
+    );
+    let result = run(&dir, RunOptions::default()).unwrap();
+    let RunResult::Ran { output, exit } = result else {
+        panic!("the program failed to compile");
+    };
+    assert_eq!(output.render(), "");
+    assert_eq!(exit, 0);
+    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]

@@ -4,13 +4,11 @@
 //! Callers in every module call the wrapper like any function, through its
 //! slot, so externality is not part of the interface. The wrapper's body
 //! is one foreign call with borrowed arguments (D-187), then the result
-//! boxed into the uniform return. Foreign calls are never tail calls
-//! (§12.8). E6 adds the "no externals during constant evaluation" check
-//! here (§4.5).
-//!
-//! Boxing a result of type `Int`, `Float`, `Bool` or a sized number is
-//! not implemented yet (D6), so such an external is E0038 at its
-//! `@external` when a run needs it (D-510).
+//! boxed into the uniform return (D-453, D-521): a `Nil` result is the
+//! static `Nil`, a scalar result (`Int`, `Float`, `Bool`, a sized number)
+//! is boxed, and a uniform word is returned as it is. Foreign calls are
+//! never tail calls (§12.8). W3-D adds the "no externals during constant
+//! evaluation" check here (§4.5, plan §7.4).
 
 use cheby_iface::FnSig;
 use cheby_types::thir;
@@ -27,20 +25,16 @@ pub(super) fn lower_wrapper(
     cx: &LowerCx<'_>,
 ) -> Result<Function, LowerError> {
     let globals = cx.defs.globals;
-    let unsupported = |what: &str| LowerError::Unsupported(vec![not_supported(ext.span, what)]);
     if sig.generics.params.iter().any(|p| !p.bounds.is_empty()) {
-        // Dictionaries cannot cross the C ABI (§12.5).
-        return Err(unsupported(
+        // Dictionaries cannot cross the C ABI (§12.5). The front end
+        // reports this as E0045 at the bound (D-554); until it does, the
+        // wrapper is not lowered.
+        return Err(LowerError::Unsupported(vec![not_supported(
+            ext.span,
             "external functions with bounded type parameters",
-        ));
+        )]));
     }
     let ret_repr = repr_of(sig.ret, globals);
-    if sig.ret != cheby_iface::Ty::NIL && ret_repr != Repr::Value {
-        return Err(unsupported(&format!(
-            "external functions that return `{}`",
-            cx.show(sig.ret, Some(&sig.generics))
-        )));
-    }
     let mut b = FunctionBuilder::new(FnKey::Item(f.def), Abi::Cheby, Repr::Value, f.span)?;
     b.set_entry_loc(&cx.location(f.span)?)?;
     let fsig = foreign_sig(sig, globals);
@@ -58,8 +52,20 @@ pub(super) fn lower_wrapper(
         b.push(Stmt::Eval(call))?;
         Operand::Const(Const::Nil)
     } else {
-        // A uniform word already: checked above.
-        Operand::Local(b.assign(ret_repr, call)?)
+        let raw = b.assign(ret_repr, call)?;
+        if ret_repr == Repr::Value {
+            Operand::Local(raw)
+        } else {
+            // The uniform return (D-453): boxed canonically (D-521).
+            let boxed = b.assign(
+                Repr::Value,
+                Rvalue::Box {
+                    value: Operand::Local(raw),
+                    from: ret_repr,
+                },
+            )?;
+            Operand::Local(boxed)
+        }
     };
     b.terminate(Terminator::Return(result))?;
     Ok(b.finish()?)

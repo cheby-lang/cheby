@@ -1,4 +1,9 @@
 //! One MIR function to Cranelift IR (E1, D-453).
+//!
+//! This file holds the translator, calls, constants, statements and
+//! terminators; `arith.rs` lowers the scalar operations and `values.rs`
+//! the objects (boxing, allocation, fields, tags, constants' slots,
+//! runtime helpers and count operations).
 
 use cranelift_codegen::ir::condcodes::IntCC;
 use cranelift_codegen::ir::immediates::{Ieee32, Ieee64, Imm64};
@@ -11,15 +16,16 @@ use cranelift_module::{DataId, FuncId};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use cheby_mir::{
-    Abi, AbiSig, BlockId, Callee, Const, FnKey, Function, LayoutRef, Local, MirModule, Operand,
+    Abi, AbiSig, BlockId, Callee, Const, FnKey, Function, Local, MirModule, Operand, PanicKind,
     Repr, Rvalue, Stmt, StrId, Terminator, uniform_sig,
 };
 use cheby_runtime::abi;
 
-use crate::decls::ForeignDecl;
+use crate::decls::{Decls, ForeignDecl};
+use crate::mangle::{self, Kind};
 use crate::runtime::RuntimeFunc;
 use crate::sig::{self, WORD, repr_type};
-use crate::{CallMode, CodegenCx, CodegenError, CodegenOptions, Decls};
+use crate::{CallMode, CodegenCx, CodegenError, CodegenOptions};
 
 /// The trap after a call that does not return (`cheby_rt_panic`).
 const TRAP_NORETURN: u8 = 1;
@@ -32,14 +38,17 @@ const TRAP_UNREACHABLE: u8 = 2;
 ///
 /// # Errors
 ///
-/// An ICE if the MIR uses something code generation does not support yet
-/// (the front end's E0038 gates should have rejected it) or breaks an
-/// invariant the validator checks.
+/// An ICE if the MIR uses something code generation does not support or
+/// breaks an invariant the validator checks.
+///
+/// Translation reads no layout id: code loads user headers from their
+/// `cb$layout$` words (D-454), so `_cx` is only needed by [`crate::define`]
+/// for the data objects.
 pub fn translate(
     unit: &MirModule,
     func: &Function,
     decls: &Decls,
-    cx: &CodegenCx<'_>,
+    _cx: &CodegenCx<'_>,
     opts: &CodegenOptions,
 ) -> Result<ir::Function, CodegenError> {
     let decl = decls.func(func.key)?;
@@ -54,7 +63,6 @@ pub fn translate(
         unit,
         func,
         decls,
-        cx,
         opts,
         vars: Vec::new(),
         blocks: Vec::new(),
@@ -62,6 +70,7 @@ pub fn translate(
         func_refs: FxHashMap::default(),
         data: FxHashMap::default(),
         sigs: FxHashMap::default(),
+        panics: Vec::new(),
     };
     t.run()?;
     t.b.seal_all_blocks();
@@ -69,19 +78,22 @@ pub fn translate(
     Ok(clif)
 }
 
-struct Translator<'a, 'f> {
-    b: FunctionBuilder<'f>,
-    unit: &'a MirModule,
-    func: &'a Function,
-    decls: &'a Decls,
-    cx: &'a CodegenCx<'a>,
-    opts: &'a CodegenOptions,
+pub(crate) struct Translator<'a, 'f> {
+    pub(crate) b: FunctionBuilder<'f>,
+    pub(crate) unit: &'a MirModule,
+    pub(crate) func: &'a Function,
+    pub(crate) decls: &'a Decls,
+    pub(crate) opts: &'a CodegenOptions,
     vars: Vec<Variable>,
     blocks: Vec<ir::Block>,
     ctx: Option<Value>,
     func_refs: FxHashMap<FuncId, FuncRef>,
     data: FxHashMap<DataId, GlobalValue>,
     sigs: FxHashMap<AbiSig, SigRef>,
+    /// The cold blocks that panic with a kind at a location, created by
+    /// checked operations and filled after the function's blocks, one per
+    /// kind and location.
+    panics: Vec<(PanicKind, StrId, ir::Block)>,
 }
 
 /// Where a call goes: a known function, or an address with a signature.
@@ -90,8 +102,8 @@ enum Target {
     Indirect(SigRef, Value),
 }
 
-fn unsupported(what: &str) -> CodegenError {
-    CodegenError::ice(format!("code generation does not support {what} yet"))
+pub(crate) fn unsupported(what: &str) -> CodegenError {
+    CodegenError::ice(format!("code generation does not support {what}"))
 }
 
 fn trap(code: u8) -> Result<TrapCode, CodegenError> {
@@ -100,7 +112,7 @@ fn trap(code: u8) -> Result<TrapCode, CodegenError> {
 
 /// `bits` truncated to the width of `ty`, as Cranelift wants an `iconst`
 /// immediate of a narrow type.
-fn truncate(bits: u64, ty: ir::Type) -> i64 {
+pub(crate) fn truncate(bits: u64, ty: ir::Type) -> i64 {
     let width = ty.bits();
     let masked = if width >= 64 {
         bits
@@ -134,6 +146,10 @@ impl Translator<'_, '_> {
                 self.stmt(stmt)?;
             }
             self.terminator(&block.term)?;
+        }
+        for (kind, loc, block) in std::mem::take(&mut self.panics) {
+            self.b.switch_to_block(block);
+            self.panic(kind, None, loc)?;
         }
         Ok(())
     }
@@ -185,12 +201,12 @@ impl Translator<'_, '_> {
         Ok(())
     }
 
-    fn ctx(&self) -> Result<Value, CodegenError> {
+    pub(crate) fn ctx(&self) -> Result<Value, CodegenError> {
         self.ctx
             .ok_or_else(|| CodegenError::ice("`ctx` used before the entry block"))
     }
 
-    fn var(&self, local: Local) -> Result<Variable, CodegenError> {
+    pub(crate) fn var(&self, local: Local) -> Result<Variable, CodegenError> {
         usize::try_from(local.as_u32())
             .ok()
             .and_then(|n| self.vars.get(n))
@@ -204,6 +220,26 @@ impl Translator<'_, '_> {
             .and_then(|n| self.blocks.get(n))
             .copied()
             .ok_or_else(|| CodegenError::ice(format!("unknown MIR block {block:?}")))
+    }
+
+    /// The cold block that panics with `kind` at `loc`.
+    pub(crate) fn panic_block(&mut self, kind: PanicKind, loc: StrId) -> ir::Block {
+        if let Some(&(_, _, block)) = self.panics.iter().find(|&&(k, l, _)| k == kind && l == loc) {
+            return block;
+        }
+        let block = self.b.create_block();
+        self.b.set_cold_block(block);
+        self.panics.push((kind, loc, block));
+        block
+    }
+
+    /// Branches to the panic block of `kind` at `loc` when `cond` is
+    /// non-zero, and continues in a new block otherwise.
+    pub(crate) fn panic_if(&mut self, cond: Value, kind: PanicKind, loc: StrId) {
+        let panic = self.panic_block(kind, loc);
+        let ok = self.b.create_block();
+        self.b.ins().brif(cond, panic, &[], ok, &[]);
+        self.b.switch_to_block(ok);
     }
 
     fn stmt(&mut self, stmt: &Stmt) -> Result<(), CodegenError> {
@@ -220,24 +256,24 @@ impl Translator<'_, '_> {
                     return Err(CodegenError::ice("`eval` of a call with a result"));
                 }
             }
-            Stmt::Dup(local) | Stmt::Drop(local) => {
+            Stmt::Dup(local) => {
                 let var = self.var(*local)?;
                 let v = self.b.use_var(var);
-                let f = if matches!(stmt, Stmt::Dup(_)) {
-                    RuntimeFunc::Dup
-                } else {
-                    RuntimeFunc::Drop
-                };
-                self.runtime_call(f, &[v])?;
+                self.dup(v)?;
+            }
+            Stmt::Drop(local) => {
+                let var = self.var(*local)?;
+                let v = self.b.use_var(var);
+                self.drop_value(v)?;
             }
         }
         Ok(())
     }
 
     fn rvalue(&mut self, value: &Rvalue) -> Result<Option<Value>, CodegenError> {
-        match value {
-            Rvalue::Use(op) => self.operand(op).map(Some),
-            Rvalue::Call { callee, args } => self.call(callee, args, false),
+        Ok(Some(match value {
+            Rvalue::Use(op) => self.operand(op)?,
+            Rvalue::Call { callee, args } => return self.call(callee, args, false),
             Rvalue::CallForeign { symbol, sig, args } => {
                 let vals = self.operands(args)?;
                 let inst = match self.decls.foreign(symbol)?.clone() {
@@ -265,35 +301,61 @@ impl Translator<'_, '_> {
                         self.b.ins().call_indirect(s, address, &vals)
                     }
                 };
-                Ok(self.b.inst_results(inst).first().copied())
+                return Ok(self.b.inst_results(inst).first().copied());
             }
-            Rvalue::CallRuntime { func, .. } => match *func {},
+            Rvalue::CallRuntime { func, args } => return self.call_helper(*func, args),
             Rvalue::ReadLayout { base } => {
                 let var = self.var(*base)?;
                 let base = self.b.use_var(var);
-                let header = self
-                    .b
-                    .ins()
-                    .load(types::I64, MemFlagsData::trusted(), base, 0);
-                let shift = i64::from(abi::HEADER_LAYOUT_SHIFT);
-                let id = self.b.ins().ushr_imm_u(header, shift);
-                Ok(Some(self.b.ins().ireduce(types::I32, id)))
+                let id = self.layout_id(base);
+                self.b.ins().ireduce(types::I32, id)
             }
-            Rvalue::Alloc { .. } => Err(unsupported("`alloc`")),
-            Rvalue::Field { .. } => Err(unsupported("`field`")),
-            Rvalue::LoadConst(_) => Err(unsupported("`load_const`")),
-            Rvalue::Box { .. } => Err(unsupported("`box`")),
-            Rvalue::Unbox { .. } => Err(unsupported("`unbox`")),
-            Rvalue::Checked { .. } => Err(unsupported("`checked`")),
-            Rvalue::Compare { .. } => Err(unsupported("`compare`")),
-        }
+            Rvalue::Alloc { layout, fields } => self.alloc(*layout, fields)?,
+            Rvalue::Field {
+                base,
+                layout,
+                field,
+            } => self.field(*base, *layout, *field)?,
+            Rvalue::LoadConst(def) => self.load_const(*def)?,
+            Rvalue::Box { value, from } => self.box_value(value, *from)?,
+            Rvalue::Unbox { value, to } => self.unbox(value, *to)?,
+            Rvalue::Checked {
+                op,
+                lhs,
+                rhs,
+                repr,
+                loc,
+            } => self.checked(*op, lhs, rhs, *repr, *loc)?,
+            Rvalue::Compare { op, lhs, rhs, repr } => self.compare(*op, lhs, rhs, *repr)?,
+            Rvalue::FloatArith { op, lhs, rhs, repr } => self.float_arith(*op, lhs, rhs, *repr)?,
+            Rvalue::Bitwise { op, lhs, rhs, repr } => self.bitwise(*op, lhs, rhs, *repr)?,
+            Rvalue::FloatNeg { value, .. } => {
+                let v = self.operand(value)?;
+                self.b.ins().fneg(v)
+            }
+            Rvalue::Not(value) => {
+                let v = self.operand(value)?;
+                self.b.ins().bxor_imm_u(v, 1)
+            }
+            Rvalue::ReadTag { base, ty } => self.read_tag(base, *ty)?,
+        }))
     }
 
-    fn operands(&mut self, ops: &[Operand]) -> Result<Vec<Value>, CodegenError> {
+    /// The layout id in the header of the object `base`, as an `i64`.
+    pub(crate) fn layout_id(&mut self, base: Value) -> Value {
+        let header = self
+            .b
+            .ins()
+            .load(types::I64, MemFlagsData::trusted(), base, 0);
+        let shift = i64::from(abi::HEADER_LAYOUT_SHIFT);
+        self.b.ins().ushr_imm_u(header, shift)
+    }
+
+    pub(crate) fn operands(&mut self, ops: &[Operand]) -> Result<Vec<Value>, CodegenError> {
         ops.iter().map(|op| self.operand(op)).collect()
     }
 
-    fn operand(&mut self, op: &Operand) -> Result<Value, CodegenError> {
+    pub(crate) fn operand(&mut self, op: &Operand) -> Result<Value, CodegenError> {
         match op {
             Operand::Local(local) => {
                 let var = self.var(*local)?;
@@ -324,29 +386,53 @@ impl Translator<'_, '_> {
             }
             Const::Str(id) => self.string(*id)?,
             Const::Nil => self.static_object(abi::sym::STATIC_NIL)?,
-            Const::StaticCtor(def) => {
-                let id = self.cx.layouts.id(&LayoutRef::Ctor(*def))?;
-                let symbol = abi::sym::static_ctor(id)
-                    .ok_or_else(|| unsupported("static objects of user constructors"))?;
-                self.static_object(symbol)?
+            Const::EmptyList => self.static_object(abi::sym::STATIC_EMPTY_LIST)?,
+            Const::BuiltinDesc(desc) => {
+                let data = self.decls.builtin_desc(*desc)?;
+                self.data_address(data, false)
             }
-            Const::FnValue(_) => return Err(unsupported("function values")),
-            Const::Code(_) => return Err(unsupported("closures")),
+            Const::StaticCtor(def) => {
+                let data = self.decls.ctor_object(*def)?;
+                let local = crate::layout::builtin_ctor_layout(*def).is_none();
+                self.data_address(data, local)
+            }
+            Const::FnValue(def) => {
+                let symbol = mangle::item(Kind::FnVal, self.unit.name(*def)?);
+                let data = self.decls.static_object(&symbol)?;
+                self.data_address(data, true)
+            }
+            Const::Static(id) => {
+                let object = self
+                    .unit
+                    .static_object(*id)
+                    .ok_or_else(|| CodegenError::ice(format!("unknown static {id:?}")))?;
+                let data = self.decls.static_object(&Decls::static_symbol(object))?;
+                self.data_address(data, true)
+            }
+            Const::Code(key) => {
+                // D-453: a code word is `address | 1`, so freeing skips it
+                // like a tagged integer; functions are aligned to 16.
+                let decl = self.decls.func(*key)?;
+                let (id, signature) = (decl.id, decl.sig.clone());
+                let f = self.func_ref(id, &signature, true);
+                let address = self.b.ins().func_addr(WORD, f);
+                self.b.ins().bor_imm_u(address, 1)
+            }
         })
     }
 
     /// The address of string `id` of this function: a static `String`.
-    fn string(&mut self, id: StrId) -> Result<Value, CodegenError> {
+    pub(crate) fn string(&mut self, id: StrId) -> Result<Value, CodegenError> {
         let data = self.decls.string(self.func.key, id)?;
         Ok(self.data_address(data, true))
     }
 
-    fn static_object(&mut self, symbol: &str) -> Result<Value, CodegenError> {
+    pub(crate) fn static_object(&mut self, symbol: &str) -> Result<Value, CodegenError> {
         let data = self.decls.static_data(symbol)?;
         Ok(self.data_address(data, false))
     }
 
-    fn data_address(&mut self, data: DataId, colocated: bool) -> Value {
+    pub(crate) fn data_address(&mut self, data: DataId, colocated: bool) -> Value {
         let gv = if let Some(&gv) = self.data.get(&data) {
             gv
         } else {
@@ -395,12 +481,27 @@ impl Translator<'_, '_> {
         s
     }
 
-    fn runtime_call(&mut self, f: RuntimeFunc, args: &[Value]) -> Result<(), CodegenError> {
+    /// Calls a runtime function and returns its result, if it has one.
+    pub(crate) fn runtime_call(
+        &mut self,
+        f: RuntimeFunc,
+        args: &[Value],
+    ) -> Result<Option<Value>, CodegenError> {
         let (id, signature) = self.decls.runtime(f)?;
         let signature = signature.clone();
         let f = self.func_ref(id, &signature, false);
-        self.b.ins().call(f, args);
-        Ok(())
+        let inst = self.b.ins().call(f, args);
+        Ok(self.b.inst_results(inst).first().copied())
+    }
+
+    /// Calls a runtime function that has a result.
+    pub(crate) fn runtime_value(
+        &mut self,
+        f: RuntimeFunc,
+        args: &[Value],
+    ) -> Result<Value, CodegenError> {
+        self.runtime_call(f, args)?
+            .ok_or_else(|| CodegenError::ice(format!("the runtime function {f:?} returns nothing")))
     }
 
     /// A Cheby-ABI call; with `tail`, a `return_call` (D-015) that ends
@@ -480,6 +581,26 @@ impl Translator<'_, '_> {
             .collect())
     }
 
+    /// Calls `cheby_rt_panic(ctx, kind, message or 0, loc)`, which does not
+    /// return, and traps after it.
+    fn panic(
+        &mut self,
+        kind: PanicKind,
+        message: Option<&Operand>,
+        loc: StrId,
+    ) -> Result<(), CodegenError> {
+        let ctx = self.ctx()?;
+        let kind = self.b.ins().iconst(types::I32, i64::from(kind.code()));
+        let message = match message {
+            Some(m) => self.operand(m)?,
+            None => self.b.ins().iconst(WORD, 0),
+        };
+        let loc = self.string(loc)?;
+        self.runtime_call(RuntimeFunc::Panic, &[ctx, kind, message, loc])?;
+        self.b.ins().trap(trap(TRAP_NORETURN)?);
+        Ok(())
+    }
+
     fn terminator(&mut self, term: &Terminator) -> Result<(), CodegenError> {
         match term {
             Terminator::Return(op) => {
@@ -502,15 +623,7 @@ impl Translator<'_, '_> {
             }
             Terminator::Switch { on, cases, default } => self.switch(on, cases, *default)?,
             Terminator::Panic { kind, message, loc } => {
-                let ctx = self.ctx()?;
-                let kind = self.b.ins().iconst(types::I32, i64::from(kind.code()));
-                let message = match message {
-                    Some(m) => self.operand(m)?,
-                    None => self.b.ins().iconst(WORD, 0),
-                };
-                let loc = self.string(*loc)?;
-                self.runtime_call(RuntimeFunc::Panic, &[ctx, kind, message, loc])?;
-                self.b.ins().trap(trap(TRAP_NORETURN)?);
+                self.panic(*kind, message.as_ref(), *loc)?;
             }
             Terminator::Unreachable => {
                 self.b.ins().trap(trap(TRAP_UNREACHABLE)?);

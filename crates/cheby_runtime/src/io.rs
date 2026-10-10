@@ -27,9 +27,28 @@
 
 use std::io::{self, Write};
 
-use crate::abi::{self, Word};
+use crate::abi::{self, Word, sym};
 use crate::panic::fatal;
 use crate::string;
+
+/// Appends the `std::io` kernels this module implements, with their
+/// addresses, to `out` (plan §4.3.3).
+#[expect(
+    clippy::as_conversions,
+    reason = "taking the address of a function needs an `as` cast"
+)]
+pub(crate) fn kernels(out: &mut Vec<(&'static str, *const u8)>) {
+    out.extend([
+        (sym::IO_PRINT, cheby_io_print as *const u8),
+        (sym::IO_PRINTLN, cheby_io_println as *const u8),
+        (sym::IO_EPRINT, cheby_io_eprint as *const u8),
+        (sym::IO_EPRINTLN, cheby_io_eprintln as *const u8),
+    ]);
+}
+
+/// The std modules whose every kernel is registered here: none yet
+/// (`std::io`'s `sys_*` kernels come with W2-E).
+pub(crate) const COMPLETE: &[&str] = &[];
 
 /// `io::print(text)`: writes `text` to standard output.
 ///

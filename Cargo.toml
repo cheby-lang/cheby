@@ -38,6 +38,7 @@ cheby_bench_gen = { path = "bench/gen" }
 cheby_test_support = { path = "tests/support" }
 
 # External crates.
+astro-float = "0.9.6"
 clap = { version = "4.6", features = ["derive"] }
 cranelift-codegen = "0.135"
 cranelift-frontend = "0.135"
@@ -47,7 +48,9 @@ cranelift-native = "0.135"
 libc = "0.2"
 libtest-mimic = "0.8"
 proptest = "1.11"
+pxfm = "0.1.30"
 rustc-hash = "2.1"
+ryu = "1"
 serde_json = "1"
 siphasher = "1"
 toml = { version = "1.1", features = ["preserve_order"] }
@@ -80,6 +83,46 @@ as_conversions = "deny"
 
 [profile.dev]
 debug = "line-tables-only"
+
+# The debug toolchain compiles Cheby code with an optimized Cranelift and
+# runs it on an optimized runtime (plan §4.4); `debug-assertions` stay on,
+# so the leak check and poisoning still work. D-259 governs the generated
+# code, not how the compiler is built.
+[profile.dev.package.cranelift-assembler-x64]
+opt-level = 3
+
+[profile.dev.package.cranelift-bforest]
+opt-level = 3
+
+[profile.dev.package.cranelift-bitset]
+opt-level = 3
+
+[profile.dev.package.cranelift-codegen]
+opt-level = 3
+
+[profile.dev.package.cranelift-control]
+opt-level = 3
+
+[profile.dev.package.cranelift-entity]
+opt-level = 3
+
+[profile.dev.package.cranelift-frontend]
+opt-level = 3
+
+[profile.dev.package.cranelift-jit]
+opt-level = 3
+
+[profile.dev.package.cranelift-module]
+opt-level = 3
+
+[profile.dev.package.cranelift-native]
+opt-level = 3
+
+[profile.dev.package.regalloc2]
+opt-level = 3
+
+[profile.dev.package.cheby_runtime]
+opt-level = 2
 
 [profile.release]
 codegen-units = 1

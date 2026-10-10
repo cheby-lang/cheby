@@ -14,13 +14,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
-use cheby_iface::Ice;
+use cheby_iface::{Ice, Idx};
 
-use crate::abi::{AbiSig, fixed_sig};
+use crate::abi::{AbiSig, fixed_sig, is_uniform_sig};
 use crate::ir::{
-    Abi, BlockId, Callee, Const, FnKey, Function, LayoutRef, Local, MirModule, Operand, Rvalue,
-    Stmt, Terminator, UnitKind, UseKind,
+    Abi, ArithOp, BlockId, BuiltinLayout, Callee, CmpOp, Const, FnKey, Function, LayoutRef, Local,
+    MirModule, Operand, RuntimeFn, Rvalue, StaticKind, StaticObject, Stmt, TagType, Terminator,
+    UnitKind, UseKind,
 };
+use crate::layout::LayoutDesc;
 use crate::repr::{CType, Repr};
 
 /// Which invariants hold at this point of the pipeline.
@@ -79,6 +81,10 @@ fn check_module(m: &MirModule, errors: &mut Vec<String>) {
     {
         errors.push("names are not sorted by def without duplicates".to_owned());
     }
+    check_layouts(m, errors);
+    for (n, s) in m.statics.iter().enumerate() {
+        check_static(m, n, s, errors);
+    }
     let mut keys = BTreeSet::new();
     for f in &m.functions {
         if !keys.insert(f.key) {
@@ -96,6 +102,110 @@ fn check_module(m: &MirModule, errors: &mut Vec<String>) {
                 )),
                 Err(ice) => errors.push(format!("{}: internal: {ice}", key_label(f.key))),
             }
+        }
+    }
+}
+
+/// Own layouts are constructors, listed once; foreign ones are sorted,
+/// listed once and not own; every layout's counts match its fields.
+fn check_layouts(m: &MirModule, errors: &mut Vec<String>) {
+    let mut own = BTreeSet::new();
+    for d in &m.layouts {
+        if !own.insert(d.layout) {
+            errors.push(format!("layout {:?} is listed twice", d.layout));
+        }
+    }
+    if !m
+        .foreign_layouts
+        .windows(2)
+        .all(|w| matches!(w, [a, b] if a.layout < b.layout))
+    {
+        errors.push("foreign layouts are not sorted without duplicates".to_owned());
+    }
+    for d in &m.foreign_layouts {
+        if own.contains(&d.layout) {
+            errors.push(format!("layout {:?} is both own and foreign", d.layout));
+        }
+    }
+    for d in m.layouts.iter().chain(&m.foreign_layouts) {
+        check_layout_desc(d, errors);
+    }
+}
+
+fn check_layout_desc(d: &LayoutDesc, errors: &mut Vec<String>) {
+    if !matches!(d.layout, LayoutRef::Ctor(_)) {
+        errors.push(format!("layout {:?} is not a constructor", d.layout));
+    }
+    let values = d.fields.iter().filter(|f| f.repr == Repr::Value).count();
+    let raws = d.fields.len().saturating_sub(values);
+    if usize::try_from(d.value_fields).ok() != Some(values)
+        || usize::try_from(d.raw_fields).ok() != Some(raws)
+    {
+        errors.push(format!(
+            "layout {:?} counts {} value and {} raw fields, but has {values} and {raws}",
+            d.layout, d.value_fields, d.raw_fields
+        ));
+    }
+}
+
+/// A static's id is its position, its name is unique, its layout fits
+/// its kind, and its fields are uniform constants (D-523, plan §5.4).
+fn check_static(m: &MirModule, n: usize, s: &StaticObject, errors: &mut Vec<String>) {
+    let label = format!("static#{n}");
+    if s.id.index() != n {
+        errors.push(format!("{label}: has id {}", s.id.as_u32()));
+    }
+    if s.name.is_empty() || s.module.is_empty() {
+        errors.push(format!("{label}: needs a module path and a name"));
+    }
+    if m.statics
+        .iter()
+        .take(n)
+        .any(|o| o.kind == s.kind && o.module == s.module && o.name == s.name)
+    {
+        errors.push(format!("{label}: {}${} is defined twice", s.module, s.name));
+    }
+    let fits = matches!(
+        (s.kind, s.layout),
+        (StaticKind::Dict, LayoutRef::Dict { .. })
+            | (
+                StaticKind::Desc,
+                LayoutRef::Desc { .. } | LayoutRef::DescNominal
+            )
+            | (StaticKind::FnValue, LayoutRef::Closure(0))
+    );
+    if !fits {
+        errors.push(format!(
+            "{label}: a {} static with layout {:?}",
+            s.kind.name(),
+            s.layout
+        ));
+    }
+    let want = s.layout.uniform_fields().unwrap_or(0);
+    if u64::try_from(s.fields.len()).ok() != Some(want) {
+        errors.push(format!(
+            "{label}: {} fields, its layout has {want}",
+            s.fields.len()
+        ));
+    }
+    for (i, c) in s.fields.iter().enumerate() {
+        let code_slot = i == 0 && s.kind == StaticKind::FnValue;
+        match c {
+            Const::Code(key) if code_slot && key.is_uniform() => {}
+            Const::Code(key) => {
+                errors.push(format!("{label}: code {key:?} as field {i}"));
+            }
+            _ if code_slot => errors.push(format!("{label}: a function value without its code")),
+            Const::Static(id) if id.index() == n || m.static_object(*id).is_none() => {
+                errors.push(format!("{label}: field {i} is static#{}", id.as_u32()));
+            }
+            Const::Str(id) if s.strings.get(*id).is_none() => {
+                errors.push(format!("{label}: unknown string str#{}", id.as_u32()));
+            }
+            c if c.repr() != Repr::Value => {
+                errors.push(format!("{label}: field {i} is a raw {}", c.repr()));
+            }
+            _ => {}
         }
     }
 }
@@ -172,6 +282,14 @@ impl FnCx<'_> {
             let sig = f.sig()?;
             if sig != fixed {
                 self.err(format!("signature {sig:?}, expected {fixed:?}"));
+            }
+        }
+        if f.key.is_uniform() {
+            let sig = f.sig()?;
+            if !is_uniform_sig(&sig) {
+                self.err(format!(
+                    "signature {sig:?}, expected the uniform convention (D-453)"
+                ));
             }
         }
         Ok(())
@@ -319,6 +437,9 @@ impl FnCx<'_> {
             Operand::Const(Const::Sized { repr, .. }) if !repr.is_sized() => {
                 self.err(format!("a sized constant of representation {repr}"));
             }
+            Operand::Const(Const::Static(id)) if self.module.static_object(*id).is_none() => {
+                self.err(format!("unknown static#{}", id.as_u32()));
+            }
             _ => {}
         }
     }
@@ -411,16 +532,18 @@ impl FnCx<'_> {
                 }
                 sig.ret.repr()
             }
-            Rvalue::CallRuntime { func, .. } => match *func {},
+            Rvalue::CallRuntime { func, args } => self.check_runtime(*func, args),
             Rvalue::Alloc { layout, fields } => {
                 self.check_alloc(*layout, fields);
                 Some(Repr::Value)
             }
-            Rvalue::Field { base, .. } => {
+            Rvalue::Field {
+                base,
+                layout,
+                field,
+            } => {
                 self.expect_repr(&Operand::Local(*base), Repr::Value, "field base");
-                // The field's representation comes from the layout, which
-                // codegen resolves; the destination's is trusted here.
-                None
+                self.field_repr(*layout, *field)
             }
             Rvalue::ReadLayout { base } => {
                 self.expect_repr(&Operand::Local(*base), Repr::Value, "read_layout base");
@@ -441,6 +564,26 @@ impl FnCx<'_> {
                 self.expect_repr(value, Repr::Value, "unbox operand");
                 Some(*to)
             }
+            Rvalue::ReadTag { base, ty } => {
+                self.expect_repr(base, Repr::Value, "read_tag base");
+                self.check_tag_type(*ty);
+                Some(Repr::Int)
+            }
+            Rvalue::Checked { .. }
+            | Rvalue::Compare { .. }
+            | Rvalue::FloatArith { .. }
+            | Rvalue::Bitwise { .. }
+            | Rvalue::FloatNeg { .. }
+            | Rvalue::Not(_) => self.check_arith(value),
+        }
+    }
+
+    /// Arithmetic, comparisons and the other operators on raw values
+    /// (plan §4.1).
+    fn check_arith(&mut self, value: &Rvalue) -> Option<Repr> {
+        let integer = |r: Repr| r.is_signed_int() || r.is_unsigned_int();
+        let float = |r: Repr| matches!(r, Repr::Float | Repr::F32);
+        match value {
             Rvalue::Checked {
                 op,
                 lhs,
@@ -451,20 +594,147 @@ impl FnCx<'_> {
                 if self.f.strings.get(*loc).is_none() {
                     self.err(format!("unknown string str#{}", loc.as_u32()));
                 }
-                if *repr == Repr::Value || *repr == Repr::Bool {
+                if !integer(*repr) {
                     self.err(format!("checked {} on {repr}", op.name()));
                 }
                 self.expect_repr(lhs, *repr, "checked operand");
                 self.expect_repr(rhs, *repr, "checked operand");
                 Some(*repr)
             }
-            Rvalue::Compare { lhs, rhs, repr, .. } => {
+            Rvalue::Compare { op, lhs, rhs, repr } => {
                 if *repr == Repr::Value {
                     self.err("compare on uniform values");
+                }
+                if *repr == Repr::Bool && !matches!(op, CmpOp::Eq | CmpOp::Ne) {
+                    self.err(format!("compare {} on bool", op.name()));
                 }
                 self.expect_repr(lhs, *repr, "compare operand");
                 self.expect_repr(rhs, *repr, "compare operand");
                 Some(Repr::Bool)
+            }
+            Rvalue::FloatArith { op, lhs, rhs, repr } => {
+                if !float(*repr) {
+                    self.err(format!("float_arith {} on {repr}", op.name()));
+                }
+                if matches!(op, ArithOp::Shl | ArithOp::Shr) {
+                    self.err(format!("float_arith {}", op.name()));
+                }
+                self.expect_repr(lhs, *repr, "float operand");
+                self.expect_repr(rhs, *repr, "float operand");
+                Some(*repr)
+            }
+            Rvalue::Bitwise { op, lhs, rhs, repr } => {
+                if !integer(*repr) {
+                    self.err(format!("bitwise {} on {repr}", op.name()));
+                }
+                self.expect_repr(lhs, *repr, "bitwise operand");
+                self.expect_repr(rhs, *repr, "bitwise operand");
+                Some(*repr)
+            }
+            Rvalue::FloatNeg { value, repr } => {
+                if !float(*repr) {
+                    self.err(format!("float_neg on {repr}"));
+                }
+                self.expect_repr(value, *repr, "float_neg operand");
+                Some(*repr)
+            }
+            Rvalue::Not(value) => {
+                self.expect_repr(value, Repr::Bool, "not operand");
+                Some(Repr::Bool)
+            }
+            _ => None,
+        }
+    }
+
+    fn check_runtime(&mut self, func: RuntimeFn, args: &[Operand]) -> Option<Repr> {
+        let params = func.params();
+        if params.len() != args.len() {
+            self.err(format!(
+                "call_runtime {} with {} arguments, expected {}",
+                func.name(),
+                args.len(),
+                params.len()
+            ));
+        }
+        for (arg, &(want, _)) in args.iter().zip(params) {
+            self.expect_repr(arg, want, "runtime argument");
+        }
+        // The location of a structural `==` is a static string
+        // (GAP(equal-panic-location)).
+        if func == RuntimeFn::Equal
+            && let Some(location) = args.get(2)
+            && !matches!(location, Operand::Const(Const::Str(_)))
+        {
+            self.err("call_runtime equal: the location is not a string constant".to_owned());
+        }
+        func.ret()
+    }
+
+    /// A tag is read only from a type with several constructors (D-522),
+    /// whose layouts the unit holds in tag order.
+    fn check_tag_type(&mut self, ty: TagType) {
+        let TagType::Adt(def) = ty else {
+            return;
+        };
+        let tags: Vec<u32> = self
+            .module
+            .type_layouts(def)
+            .iter()
+            .map(|d| d.tag)
+            .collect();
+        if tags.len() < 2 {
+            self.err(format!(
+                "read_tag of {def:?}, which has {} known constructor(s)",
+                tags.len()
+            ));
+        } else if !tags
+            .iter()
+            .copied()
+            .eq(0..u32::try_from(tags.len()).unwrap_or(0))
+        {
+            self.err(format!("read_tag of {def:?} without all its constructors"));
+        }
+    }
+
+    /// The representation of field `field` of `layout`.
+    fn field_repr(&mut self, layout: LayoutRef, field: u32) -> Option<Repr> {
+        match layout {
+            LayoutRef::Ctor(def) => {
+                let Some(desc) = self.module.layout(layout) else {
+                    self.err(format!("no layout for constructor {def:?}"));
+                    return None;
+                };
+                let found = usize::try_from(field)
+                    .ok()
+                    .and_then(|n| desc.fields.get(n))
+                    .map(|f| f.repr);
+                if found.is_none() {
+                    self.err(format!(
+                        "field {field} of {def:?}, which has {}",
+                        desc.fields.len()
+                    ));
+                }
+                found
+            }
+            LayoutRef::Closure(_) if field == 0 => {
+                self.err("field 0 of a closure is its code word, not a value");
+                None
+            }
+            LayoutRef::Builtin(_) => {
+                self.err(format!("field of a runtime-defined object {layout:?}"));
+                None
+            }
+            LayoutRef::Tuple(_)
+            | LayoutRef::Closure(_)
+            | LayoutRef::Dict { .. }
+            | LayoutRef::Dyn
+            | LayoutRef::Desc { .. }
+            | LayoutRef::DescNominal => {
+                let count = layout.uniform_fields().unwrap_or(0);
+                if u64::from(field) >= count {
+                    self.err(format!("field {field} of {layout:?}, which has {count}"));
+                }
+                Some(Repr::Value)
             }
         }
     }
@@ -476,8 +746,12 @@ impl FnCx<'_> {
                     self.err("a closure needs its code word");
                     return;
                 };
-                if !matches!(code, Operand::Const(Const::Code(_))) {
-                    self.err("a closure's first field is its code word");
+                match code {
+                    Operand::Const(Const::Code(key)) if key.is_uniform() => {}
+                    Operand::Const(Const::Code(key)) => {
+                        self.err(format!("a closure's code {key:?} is not uniform"));
+                    }
+                    _ => self.err("a closure's first field is its code word"),
                 }
                 if usize::try_from(n).ok() != Some(captures.len()) {
                     self.err("closure capture count differs from its layout");
@@ -486,18 +760,62 @@ impl FnCx<'_> {
                     self.expect_repr(c, Repr::Value, "closure capture");
                 }
             }
-            LayoutRef::Tuple(n) => {
-                if usize::try_from(n).ok() != Some(fields.len()) {
-                    self.err("tuple arity differs from its layout");
+            LayoutRef::Tuple(_)
+            | LayoutRef::Dict { .. }
+            | LayoutRef::Dyn
+            | LayoutRef::Desc { .. } => {
+                let want = layout.uniform_fields().unwrap_or(0);
+                if u64::try_from(fields.len()).ok() != Some(want) {
+                    self.err(format!(
+                        "alloc {layout:?} with {} fields, expected {want}",
+                        fields.len()
+                    ));
                 }
                 for c in fields {
-                    self.expect_repr(c, Repr::Value, "tuple field");
+                    self.expect_repr(c, Repr::Value, "field");
                 }
             }
-            LayoutRef::Ctor(_) | LayoutRef::Builtin(_) => {
+            LayoutRef::DescNominal => {
+                self.err("a nominal descriptor is only a static object (D-524)");
+            }
+            LayoutRef::Ctor(def) => {
+                let Some(desc) = self.module.layout(layout) else {
+                    self.err(format!("no layout for constructor {def:?}"));
+                    return;
+                };
+                let want: Vec<Repr> = desc.fields.iter().map(|f| f.repr).collect();
+                if want.is_empty() {
+                    self.err(format!(
+                        "alloc of the unit constructor {def:?}, which is a static object"
+                    ));
+                }
+                if want.len() != fields.len() {
+                    self.err(format!(
+                        "alloc of {def:?} with {} fields, expected {}",
+                        fields.len(),
+                        want.len()
+                    ));
+                }
+                for (c, r) in fields.iter().zip(want) {
+                    self.expect_repr(c, r, "constructor field");
+                }
+            }
+            LayoutRef::Builtin(b) => {
+                let want = match b {
+                    BuiltinLayout::BoxedInt => Repr::Int,
+                    BuiltinLayout::BoxedFloat => Repr::Float,
+                    BuiltinLayout::BoxedF32 => Repr::F32,
+                    BuiltinLayout::BoxedU64 => Repr::U64,
+                    BuiltinLayout::String | BuiltinLayout::Bytes => {
+                        self.err(format!("alloc of {b:?}, which the runtime builds"));
+                        return;
+                    }
+                };
+                if fields.len() != 1 {
+                    self.err(format!("alloc of {b:?} with {} fields", fields.len()));
+                }
                 for c in fields {
-                    self.check_const(c, false);
-                    self.repr(c);
+                    self.expect_repr(c, want, "boxed number");
                 }
             }
         }
@@ -509,10 +827,8 @@ impl FnCx<'_> {
             for stmt in &block.stmts {
                 match stmt {
                     Stmt::Assign { dst, value } => {
-                        if let Rvalue::CallForeign { sig, .. } = value
-                            && sig.ret == CType::Void
-                        {
-                            self.err("a void foreign call cannot define a local");
+                        if is_void_call(value) {
+                            self.err("a void call cannot define a local");
                         }
                         let dst_repr = f.local(*dst)?.repr;
                         if let Some(r) = self.check_rvalue(value)
@@ -526,12 +842,8 @@ impl FnCx<'_> {
                         }
                     }
                     Stmt::Eval(value) => {
-                        let void_call = matches!(
-                            value,
-                            Rvalue::CallForeign { sig, .. } if sig.ret == CType::Void
-                        );
-                        if !void_call {
-                            self.err("only a void foreign call is evaluated for effect");
+                        if !is_void_call(value) {
+                            self.err("only a void call is evaluated for effect");
                         }
                         self.check_rvalue(value);
                     }
@@ -767,6 +1079,16 @@ struct Counts {
     held: BTreeMap<Local, i64>,
     /// Locals defined by `field` (with their base) or `load_const`.
     borrowed_from: BTreeMap<Local, Option<Local>>,
+}
+
+/// Whether `value` is a call without a result: a foreign function
+/// returning `void` or a runtime helper returning nothing.
+fn is_void_call(value: &Rvalue) -> bool {
+    match value {
+        Rvalue::CallForeign { sig, .. } => sig.ret == CType::Void,
+        Rvalue::CallRuntime { func, .. } => func.ret().is_none(),
+        _ => false,
+    }
 }
 
 /// Whether a foreign `int64_t` result lands in an `I64` local.

@@ -13,10 +13,44 @@
 //! }
 //! ```
 //!
-//! Grammar: `fn <key>[ [c] ](<params>) -> <repr>[ check str#K] {`, then the
-//! string table, then blocks `bbN(<params>):` with statements
-//! `_N: <repr> = <rvalue>`, `dup _N`, `drop _N` and one terminator. The
-//! hidden `ctx` parameter is not printed.
+//! Grammar:
+//!
+//! - The header: `module <path>`, `tests <path>` or `entries`.
+//! - Each function: `fn <key>[ [c] ](<params>) -> <repr>[ check str#K] {`,
+//!   then the string table `str#N = "<text>"`, then blocks
+//!   `bbN(<params>):` with statements `_N: <repr> = <rvalue>`,
+//!   `<rvalue>` (evaluated for effect), `dup _N`, `drop _N` and one
+//!   terminator, then `}`. The hidden `ctx` parameter is not printed.
+//! - Keys: `<item path>`, `shim <path>`, `closure <owner>#<n>`,
+//!   `const_init <path>`, `test <path>`, `entry main(<path>)`,
+//!   `entry test(<path>)`, `entry const(<path>)`, `entry repl(<n>)`,
+//!   `trampoline <n>`, `tuple_dict_fn <iface fn>/<arity>`,
+//!   `dyn_forward <iface fn>`.
+//! - Constants: `int N`, `float F`, `bool B`, `<sized repr> N`, `str#N`,
+//!   `nil`, `ctor <path>`, `fn <path>`, `code <key>`, `empty_list`,
+//!   `static#N`, `builtin_desc <name>`.
+//! - Layouts: `string`, `bytes`, `boxed_int`, `boxed_float`, `boxed_f32`,
+//!   `boxed_u64`, `ctor <path>`, `tuple/N`, `closure/N`,
+//!   `dict/<fns>+<embedded>`, `dyn`, `desc/N`, `desc_nominal`.
+//! - Rvalues: `<operand>`, `call <callee>(<args>)`,
+//!   `call_foreign "<symbol>"(borrow <args>) -> <ctype>`,
+//!   `call_runtime <helper>(<args>)` with `borrow ` before each borrowed
+//!   argument, `alloc <layout>(<fields>)`, `field _N.<i> of <layout>`,
+//!   `read_layout _N`, `load_const <path>`, `box <repr> <op>`,
+//!   `unbox <repr> <op>`, `checked <op> <repr> <a>, <b> at str#K`,
+//!   `compare <op> <repr> <a>, <b>`, `float_arith <op> <repr> <a>, <b>`,
+//!   `bitwise <op> <repr> <a>, <b>`, `float_neg <repr> <op>`, `not <op>`,
+//!   `read_tag <op> of <option|result|order|type path>`.
+//! - After the functions, in this order and each line once:
+//!   `layout <layout>: <Type>.<Ctor> tag <n> key <hex>[ record]
+//!   [<fields>]` per own layout in unit order, the same with
+//!   `foreign_layout` per foreign layout in [`crate::LayoutRef`] order
+//!   (fields `[name: ]<repr> @<offset>`, then ` hooks(<eq>, <hash>,
+//!   <debug>)` when set), `callee <path>(<reprs>) -> <repr>` per direct
+//!   callee by `DefId`, and `static#N <kind> <module>$<name> =
+//!   <layout>(<consts>)` followed by ` str#K = "<text>"` per string of
+//!   its own table, per static in id order. A blank line separates them
+//!   from the functions when there are any.
 
 use std::fmt::Write as _;
 
@@ -24,8 +58,9 @@ use cheby_iface::Ice;
 
 use crate::ir::{
     Abi, BuiltinLayout, Callee, Const, EntryKind, FnKey, Function, LayoutRef, Local, MirModule,
-    Operand, Rvalue, Stmt, Terminator, UnitKind,
+    Operand, Rvalue, Stmt, TagType, Terminator, UnitKind, UseKind,
 };
+use crate::layout::LayoutDesc;
 use crate::repr::Repr;
 
 /// The text of a unit.
@@ -49,7 +84,82 @@ pub fn dump(module: &MirModule) -> Result<String, Ice> {
         out.push('\n');
         dump_function_into(&mut out, module, f)?;
     }
+    let mut tail = String::new();
+    for desc in &module.layouts {
+        layout_line(&mut tail, module, "layout", desc)?;
+    }
+    for desc in &module.foreign_layouts {
+        layout_line(&mut tail, module, "foreign_layout", desc)?;
+    }
+    for decl in &module.callees {
+        let params: Vec<&str> = decl.sig.params.iter().map(|r| r.name()).collect();
+        let _ = writeln!(
+            tail,
+            "callee {}({}) -> {}",
+            def(module, decl.def)?,
+            params.join(", "),
+            decl.sig.ret
+        );
+    }
+    for s in &module.statics {
+        let fields = s
+            .fields
+            .iter()
+            .map(|c| constant(module, c))
+            .collect::<Result<Vec<_>, Ice>>()?
+            .join(", ");
+        let _ = write!(
+            tail,
+            "static#{} {} {}${} = {}({fields})",
+            s.id.as_u32(),
+            s.kind.name(),
+            s.module,
+            s.name,
+            layout(module, s.layout)?
+        );
+        for (id, text) in s.strings.iter_enumerated() {
+            let _ = write!(tail, " str#{} = \"{}\"", id.as_u32(), text.escape_debug());
+        }
+        tail.push('\n');
+    }
+    if !tail.is_empty() {
+        out.push('\n');
+        out.push_str(&tail);
+    }
     Ok(out)
+}
+
+fn layout_line(out: &mut String, m: &MirModule, what: &str, desc: &LayoutDesc) -> Result<(), Ice> {
+    let fields: Vec<String> = desc
+        .fields
+        .iter()
+        .map(|f| match &f.name {
+            Some(name) => format!("{name}: {} @{}", f.repr, f.offset),
+            None => format!("{} @{}", f.repr, f.offset),
+        })
+        .collect();
+    let _ = write!(
+        out,
+        "{what} {}: {}.{} tag {} key {:016x}{} [{}]",
+        layout(m, desc.layout)?,
+        desc.type_name,
+        desc.ctor_name,
+        desc.tag,
+        desc.type_key,
+        if desc.record { " record" } else { "" },
+        fields.join(", ")
+    );
+    if let Some([eq, hash, debug]) = desc.hooks {
+        let _ = write!(
+            out,
+            " hooks({}, {}, {})",
+            def(m, eq)?,
+            def(m, hash)?,
+            def(m, debug)?
+        );
+    }
+    out.push('\n');
+    Ok(())
 }
 
 /// The text of one function of `module`.
@@ -145,6 +255,10 @@ fn key_text(m: &MirModule, key: FnKey) -> Result<String, Ice> {
         FnKey::Entry(EntryKind::Const(d)) => format!("entry const({})", def(m, d)?),
         FnKey::Entry(EntryKind::Repl(n)) => format!("entry repl({n})"),
         FnKey::Trampoline(n) => format!("trampoline {n}"),
+        FnKey::TupleDictFn { iface_fn, arity } => {
+            format!("tuple_dict_fn {}/{arity}", def(m, iface_fn)?)
+        }
+        FnKey::DynForward { iface_fn } => format!("dyn_forward {}", def(m, iface_fn)?),
     })
 }
 
@@ -159,6 +273,9 @@ fn constant(m: &MirModule, c: &Const) -> Result<String, Ice> {
         Const::StaticCtor(d) => format!("ctor {}", def(m, *d)?),
         Const::FnValue(d) => format!("fn {}", def(m, *d)?),
         Const::Code(key) => format!("code <{}>", key_text(m, *key)?),
+        Const::EmptyList => "empty_list".to_owned(),
+        Const::Static(id) => format!("static#{}", id.as_u32()),
+        Const::BuiltinDesc(d) => format!("builtin_desc {}", d.name()),
     })
 }
 
@@ -212,6 +329,10 @@ fn layout(m: &MirModule, l: LayoutRef) -> Result<String, Ice> {
         LayoutRef::Ctor(d) => format!("ctor {}", def(m, d)?),
         LayoutRef::Tuple(n) => format!("tuple/{n}"),
         LayoutRef::Closure(n) => format!("closure/{n}"),
+        LayoutRef::Dict { fns, embedded } => format!("dict/{fns}+{embedded}"),
+        LayoutRef::Dyn => "dyn".to_owned(),
+        LayoutRef::Desc { args } => format!("desc/{args}"),
+        LayoutRef::DescNominal => "desc_nominal".to_owned(),
     })
 }
 
@@ -227,7 +348,20 @@ fn rvalue(m: &MirModule, value: &Rvalue) -> Result<String, Ice> {
             operands(m, args, "borrow ")?,
             sig.ret
         ),
-        Rvalue::CallRuntime { func, .. } => match *func {},
+        Rvalue::CallRuntime { func, args } => {
+            let params = func.params();
+            let args = args
+                .iter()
+                .enumerate()
+                .map(|(n, op)| {
+                    let borrowed = matches!(params.get(n), Some((_, UseKind::Borrowed)));
+                    let prefix = if borrowed { "borrow " } else { "" };
+                    Ok(format!("{prefix}{}", operand(m, op)?))
+                })
+                .collect::<Result<Vec<_>, Ice>>()?
+                .join(", ");
+            format!("call_runtime {}({args})", func.name())
+        }
         Rvalue::Alloc { layout: l, fields } => {
             format!("alloc {}({})", layout(m, *l)?, operands(m, fields, "")?)
         }
@@ -259,6 +393,29 @@ fn rvalue(m: &MirModule, value: &Rvalue) -> Result<String, Ice> {
             operand(m, lhs)?,
             operand(m, rhs)?
         ),
+        Rvalue::FloatArith { op, lhs, rhs, repr } => format!(
+            "float_arith {} {repr} {}, {}",
+            op.name(),
+            operand(m, lhs)?,
+            operand(m, rhs)?
+        ),
+        Rvalue::Bitwise { op, lhs, rhs, repr } => format!(
+            "bitwise {} {repr} {}, {}",
+            op.name(),
+            operand(m, lhs)?,
+            operand(m, rhs)?
+        ),
+        Rvalue::FloatNeg { value, repr } => format!("float_neg {repr} {}", operand(m, value)?),
+        Rvalue::Not(value) => format!("not {}", operand(m, value)?),
+        Rvalue::ReadTag { base, ty } => {
+            let ty = match ty {
+                TagType::Option => "option".to_owned(),
+                TagType::Result => "result".to_owned(),
+                TagType::Order => "order".to_owned(),
+                TagType::Adt(d) => def(m, *d)?,
+            };
+            format!("read_tag {} of {ty}", operand(m, base)?)
+        }
     })
 }
 

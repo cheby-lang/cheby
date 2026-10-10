@@ -18,13 +18,22 @@
 //! milestone is pending, never required, and that a `skip-run` example's
 //! trial stays pending until the harness can give `cheby test` the
 //! example's fixture (see [`test_expectation`]).
+//!
+//! Strict runs (D-544): `CHEBY_MILESTONE` overrides `tests/milestone`,
+//! `CHEBY_PENDING=require` makes a failing pending trial a failure unless
+//! the file `CHEBY_PENDING_ALLOW` names lists it, and every `cheby` runs
+//! with `CHEBY_RT_POISON=1` (see `cheby_test_support::milestone`). The
+//! trials that D-445 and D-472 keep pending at every milestone are
+//! [`Expectation::Tolerated`] and stay report-only, and so are the trials
+//! of a milestone later than `tests/milestone` that the override made
+//! pending (`Setting::expectation`).
 
 use std::path::Path;
 use std::process::{Command, ExitCode};
 use std::time::Duration;
 
 use cheby_test_support::example::{self, Example};
-use cheby_test_support::milestone::{self, Expectation, Milestone, Verdicts};
+use cheby_test_support::milestone::{Expectation, POISON_ENV, Setting, Verdicts};
 use cheby_test_support::{bless_enabled, golden, process, repo_root};
 use libtest_mimic::{Arguments, Trial};
 
@@ -34,15 +43,15 @@ const TIMEOUT: Duration = Duration::from_secs(60);
 fn main() -> ExitCode {
     let args = Arguments::from_args();
     let root = repo_root();
-    let setup = milestone::current(&root).and_then(|m| Ok((m, example::all(&root)?)));
-    let (current, examples) = match setup {
+    let setup =
+        Setting::read(&root).and_then(|m| Ok((m, example::all(&root)?, Verdicts::from_env()?)));
+    let (current, examples, verdicts) = match setup {
         Ok(setup) => setup,
         Err(message) => {
             eprintln!("conformance harness: {message}");
             return ExitCode::from(2);
         }
     };
-    let verdicts = Verdicts::default();
     let bless = bless_enabled();
 
     let trials = examples
@@ -76,10 +85,11 @@ fn main() -> ExitCode {
 /// `cheby check` can handle it. So `cheby check` passing on it before that
 /// milestone is reported as pending, not as an unexpected pass (D-445).
 /// An example with dependencies, such as 030, has milestone M5, when
-/// dependencies resolve (D-446).
-fn check_only_expectation(ex: &Example, current: Milestone) -> Expectation {
-    match Expectation::new(ex.config.milestone, current) {
-        Expectation::Fail if ex.config.skip_run => Expectation::Pending,
+/// dependencies resolve (D-446). That check is tolerated: a strict run
+/// does not require it before the milestone.
+fn check_only_expectation(ex: &Example, current: Setting) -> Expectation {
+    match current.expectation(ex.config.milestone) {
+        Expectation::Fail if ex.config.skip_run => Expectation::Tolerated,
         other => other,
     }
 }
@@ -96,19 +106,22 @@ fn check_only_expectation(ex: &Example, current: Milestone) -> Expectation {
 /// program loads (D-455), and 030's modules import a git dependency that
 /// only the fixture repository serves. The harness has no way yet to give
 /// `cheby test` a fixture (OQ-P9), so that trial is always pending.
-fn test_expectation(ex: &Example, current: Milestone) -> Expectation {
+///
+/// Both kinds of "pending before the milestone" are tolerated: a strict run
+/// (D-544) requires the trial only at its milestone and after it.
+fn test_expectation(ex: &Example, current: Setting) -> Expectation {
     if ex.config.skip_run {
-        return Expectation::Pending;
+        return Expectation::Tolerated;
     }
-    match Expectation::new(ex.config.milestone, current) {
-        Expectation::Fail => Expectation::Pending,
+    match current.expectation(ex.config.milestone) {
+        Expectation::Fail => Expectation::Tolerated,
         other => other,
     }
 }
 
 /// The trial that runs `cheby test` in the example's directory, with no
 /// fixture (see [`test_expectation`]).
-fn test_trial(ex: Example, current: Milestone, verdicts: Verdicts) -> Trial {
+fn test_trial(ex: Example, current: Setting, verdicts: Verdicts) -> Trial {
     let expectation = test_expectation(&ex, current);
     let name = format!("{}::test", ex.name);
     Trial::test(name.clone(), move || {
@@ -218,10 +231,14 @@ fn cheby(
     let mut cmd = Command::new(CHEBY);
     // `--color=never` keeps goldens plain even if the environment forces
     // color (`CLICOLOR_FORCE`), and the example's own `env` cannot undo it.
+    // Freed objects are poisoned, so a reference-count mistake stops the
+    // program where it happens (D-544); the example's `env` cannot undo that
+    // either.
     cmd.arg("--color=never")
         .args(args)
         .current_dir(dir)
         .env("NO_COLOR", "1");
     cmd.envs(env.iter().map(|(k, v)| (k, v)));
+    cmd.env(POISON_ENV, "1");
     process::run(cmd, stdin, TIMEOUT)
 }

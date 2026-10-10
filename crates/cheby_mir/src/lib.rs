@@ -28,20 +28,25 @@ pub mod rc;
 pub mod reach;
 pub mod repr;
 #[cfg(test)]
+mod test_support;
+#[cfg(test)]
 mod tests;
 pub mod validate;
+#[cfg(test)]
+mod validate_tests;
 
-pub use abi::{AbiSig, abi_sig, entry_sig, fixed_sig, trampoline_sig, uniform_sig};
+pub use abi::{AbiSig, abi_sig, entry_sig, fixed_sig, is_uniform_sig, trampoline_sig, uniform_sig};
 pub use builder::FunctionBuilder;
 pub use defs::Defs;
 pub use dump::{dump, dump_function};
 pub use ir::LayoutRef;
 pub use ir::{
-    Abi, ArithOp, Block, BlockId, BuiltinLayout, Callee, CalleeDecl, CmpOp, Const, DefName,
-    EntryKind, FnKey, Function, Local, LocalDecl, MirModule, Operand, PanicKind, RuntimeFn, Rvalue,
-    Stmt, StrId, Terminator, UnitKind, UseKind,
+    Abi, ArithOp, BitOp, Block, BlockId, BuiltinDesc, BuiltinLayout, Callee, CalleeDecl, CmpOp,
+    Const, DefName, EntryKind, FnKey, Function, Local, LocalDecl, MirModule, Operand, PanicKind,
+    RuntimeFn, Rvalue, StaticId, StaticKind, StaticObject, Stmt, StrId, TagType, Terminator,
+    UnitKind, UseKind,
 };
-pub use layout::{FieldDesc, LayoutDesc, ctor_layout};
+pub use layout::{FieldDesc, LayoutDesc, ctor_layout, type_key, type_layouts};
 pub use lower::{
     EntryRequest, LowerCx, LowerError, Unsupported, lower_entries, lower_fn, lower_items,
     lower_module, lower_tests,

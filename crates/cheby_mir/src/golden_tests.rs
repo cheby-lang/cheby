@@ -257,7 +257,9 @@ fn repo() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
-fn check_golden(name: &str, actual: &str) {
+/// Compares `actual` with `tests/golden/<name>.mir`; `name` may hold a
+/// subdirectory, such as `pat/or_patterns`. `CHEBY_BLESS=1` rewrites it.
+pub(crate) fn check_golden(name: &str, actual: &str) {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/golden")
         .join(format!("{name}.mir"));
@@ -316,4 +318,40 @@ fn shout(text: String) -> Nil {
 }
 "#;
     check_golden("lets_dups_and_tail_calls", &build("app", src));
+}
+
+/// Constructor layouts (value fields first, then raw ones), a user unit
+/// constructor as a static object, and boxing at a generic boundary
+/// (D-454, D6).
+#[test]
+fn layouts_static_constructors_and_boxing() {
+    let src = r#"//! Shapes.
+
+import std::io
+
+type Shape {
+  Dot,
+  Circle(Float),
+  Rect { w: Int, h: Int, label: String },
+}
+
+fn id<T>(x: T) -> T {
+  x
+}
+
+fn dot() -> Shape {
+  Dot
+}
+
+fn same(flag: Bool) -> Bool {
+  id(flag)
+}
+
+fn main() {
+  let _ = dot()
+  let _ = same(True)
+  io::println("shapes")
+}
+"#;
+    check_golden("layouts_static_constructors_and_boxing", &build("app", src));
 }

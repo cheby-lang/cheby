@@ -41,11 +41,21 @@ pub enum Kind {
     Ctor,
     /// A type descriptor (D5).
     Desc,
+    /// A static dictionary (D-523).
+    Dict,
+    /// The header word of a user constructor's layout (D-454).
+    Layout,
+    /// The code of a built-in tuple `Show`/`Compare` function
+    /// (GAP(tuple-fn-symbols)).
+    TupleFn,
+    /// The code of a `dyn` dictionary's forwarding entry
+    /// (GAP(tuple-fn-symbols)).
+    DynFwd,
 }
 
 impl Kind {
     /// Every kind.
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 17] = [
         Self::Fn,
         Self::Slot,
         Self::Shim,
@@ -59,6 +69,10 @@ impl Kind {
         Self::Str,
         Self::Ctor,
         Self::Desc,
+        Self::Dict,
+        Self::Layout,
+        Self::TupleFn,
+        Self::DynFwd,
     ];
 
     /// The word in the symbol.
@@ -78,6 +92,10 @@ impl Kind {
             Self::Str => "str",
             Self::Ctor => "ctor",
             Self::Desc => "desc",
+            Self::Dict => "dict",
+            Self::Layout => "layout",
+            Self::TupleFn => "tfn",
+            Self::DynFwd => "dynfwd",
         }
     }
 }
@@ -89,7 +107,8 @@ pub fn path_part(module: &str) -> String {
 }
 
 /// `cb$<kind>$<module path>$<item>`, for a kind named by an item: `Fn`,
-/// `Slot`, `Shim`, `FnVal`, `Cinit`, `Const`, `Ctor` and `Desc`.
+/// `Slot`, `Shim`, `FnVal`, `Cinit`, `Const`, `Ctor`, `Layout`, `Desc` and
+/// `Dict`.
 #[must_use]
 pub fn item(kind: Kind, name: &DefName) -> String {
     format!(
@@ -97,6 +116,18 @@ pub fn item(kind: Kind, name: &DefName) -> String {
         kind.word(),
         path_part(&name.module),
         path_part(&name.item)
+    )
+}
+
+/// `cb$<kind>$<module path>$<name>`: a static object of a unit (D-523),
+/// whose `name` MIR built from paths and names, unique in the unit.
+#[must_use]
+pub fn static_object(kind: Kind, unit_path: &str, name: &str) -> String {
+    format!(
+        "{PREFIX}{}${}${}",
+        kind.word(),
+        path_part(unit_path),
+        path_part(name)
     )
 }
 
@@ -144,6 +175,21 @@ pub fn entry_repl(index: u32) -> String {
 #[must_use]
 pub fn trampoline(arity: u32) -> String {
     format!("{PREFIX}tramp${arity}")
+}
+
+/// `cb$tfn$<module path>$<interface function>$<arity>`: the built-in
+/// tuple function `iface_fn` for tuples of `arity` elements (D-167).
+/// GAP(tuple-fn-symbols): D-456 and D-523 name no kind for it.
+#[must_use]
+pub fn tuple_fn(iface_fn: &DefName, arity: u32) -> String {
+    format!("{}${arity}", item(Kind::TupleFn, iface_fn))
+}
+
+/// `cb$dynfwd$<module path>$<interface function>`: the forwarding entry of
+/// `iface_fn` in `dyn` dictionaries. GAP(tuple-fn-symbols).
+#[must_use]
+pub fn dyn_forward(iface_fn: &DefName) -> String {
+    item(Kind::DynFwd, iface_fn)
 }
 
 /// `cb$str$<owner without cb$>$<n>`: string `n` of the function whose

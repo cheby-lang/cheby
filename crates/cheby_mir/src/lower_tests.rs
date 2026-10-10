@@ -463,23 +463,20 @@ fn every_outermost_construct_is_reported_once() {
     );
 }
 
+/// Returning an unboxed `Bool` boxes it, and an external returning `Int`
+/// boxes its result (D6); neither is E0038 any more.
 #[test]
-fn boxing_is_unsupported_where_it_is_needed() {
+fn boxing_is_lowered_where_it_is_needed() {
     let f = fixture();
-    let file = f.file();
-    assert_eq!(
-        f.unsupported(&[SAME_BOOL]),
-        [(
-            "values of type `Bool` are not supported yet".to_owned(),
-            sp(file, 141)
-        )]
+    let unit = f.lower(&[SAME_BOOL, EXT_INT]).unwrap();
+    let text = crate::dump(&unit).unwrap();
+    assert!(
+        text.contains("_1: value = box bool _0\n  return _1"),
+        "{text}"
     );
-    assert_eq!(
-        f.unsupported(&[EXT_INT]),
-        [(
-            "external functions that return `Int` are not supported yet".to_owned(),
-            sp(file, 150)
-        )]
+    assert!(
+        text.contains("_0: int = call_foreign \"ext_int\"() -> i64\n  _1: value = box int _0"),
+        "{text}"
     );
 }
 
@@ -497,7 +494,6 @@ fn diagnostics_of_several_items_are_collected() {
         [
             "`case` expressions are not supported yet",
             "`case` expressions are not supported yet",
-            "values of type `Bool` are not supported yet",
         ]
     );
 }
@@ -639,4 +635,384 @@ fn a_native_external_wins_over_a_body() {
     assert_eq!(items, [def(SAY)]);
     let unit = f.lower(&[SAY]).unwrap();
     assert_eq!(unit.functions.len(), 1);
+}
+
+// D6 from source (plan §5.1, D-453, D-521), through
+// `test_support::lower_source`.
+
+const D6_SOURCE: &str = r#"//! Boxing at generic boundaries (D6).
+
+import std::io
+
+type Color {
+  Red,
+  Green,
+}
+
+@external(native, "get_int")
+@external(js, "./ffi.mjs", "get_int")
+fn get_int() -> Int
+
+@external(native, "get_i64")
+@external(js, "./ffi.mjs", "get_i64")
+fn get_i64() -> I64
+
+@external(native, "get_u8")
+@external(js, "./ffi.mjs", "get_u8")
+fn get_u8() -> U8
+
+@external(native, "get_u32")
+@external(js, "./ffi.mjs", "get_u32")
+fn get_u32() -> U32
+
+@external(native, "get_u64")
+@external(js, "./ffi.mjs", "get_u64")
+fn get_u64() -> U64
+
+@external(native, "get_float")
+@external(js, "./ffi.mjs", "get_float")
+fn get_float() -> Float
+
+@external(native, "get_f32")
+@external(js, "./ffi.mjs", "get_f32")
+fn get_f32() -> F32
+
+@external(native, "get_bool")
+@external(js, "./ffi.mjs", "get_bool")
+fn get_bool() -> Bool
+
+@external(native, "say")
+@external(js, "./ffi.mjs", "say")
+fn say(text: String)
+
+fn id<T>(x: T) -> T {
+  x
+}
+
+fn ints(n: Int) -> Int {
+  id(n)
+}
+
+fn i64s(n: I64) -> I64 {
+  id(n)
+}
+
+fn u8s(n: U8) -> U8 {
+  id(n)
+}
+
+fn u64s(n: U64) -> U64 {
+  id(n)
+}
+
+fn floats(x: Float) -> Float {
+  id(x)
+}
+
+fn f32s(x: F32) -> F32 {
+  id(x)
+}
+
+fn bools(b: Bool) -> Bool {
+  id(b)
+}
+
+fn round_trip(n: Int, b: Bool) -> Bool {
+  let m = id(n)
+  let _ = ints(m)
+  id(b)
+}
+
+fn yes() -> Bool {
+  id(True)
+}
+
+fn red() -> Color {
+  Red
+}
+
+fn main() {
+  let _ = ints(get_int())
+  let _ = i64s(get_i64())
+  let _ = u8s(get_u8())
+  let _ = get_u32()
+  let _ = u64s(get_u64())
+  let _ = floats(get_float())
+  let _ = f32s(get_f32())
+  let _ = bools(get_bool())
+  let _ = round_trip(get_int(), get_bool())
+  let _ = yes()
+  let _ = red()
+  say("done")
+  io::println("done")
+}
+"#;
+
+fn d6() -> crate::test_support::Lowered {
+    let lowered = crate::test_support::lower_source(&[("", D6_SOURCE)]);
+    assert_eq!(lowered.unsupported(), Vec::<String>::new());
+    lowered
+}
+
+/// A value of each unboxed type is boxed where it is passed to a generic
+/// parameter, and unboxed where it comes back from a generic callee; a
+/// tail call needs neither (D-453).
+#[test]
+fn values_are_boxed_and_unboxed_at_generic_boundaries() {
+    let lowered = d6();
+    for (name, repr, line) in [
+        ("ints", "int", 50),
+        ("i64s", "i64", 54),
+        ("u8s", "u8", 58),
+        ("u64s", "u64", 62),
+        ("floats", "float", 66),
+        ("f32s", "f32", 70),
+        ("bools", "bool", 74),
+    ] {
+        assert_eq!(
+            lowered.function("app", &format!("app::{name}")),
+            format!(
+                "fn app::{name}(_0: {repr}) -> value check str#0 {{\n  \
+                 str#0 = \"src/main.cheby:{line}:4\"\nbb0:\n  \
+                 _1: value = box {repr} _0\n  tail_call app::id(_1)\n}}\n"
+            )
+        );
+    }
+    assert_eq!(
+        lowered.function("app", "app::round_trip"),
+        r#"fn app::round_trip(_0: int, _1: bool) -> value check str#0 {
+  str#0 = "src/main.cheby:78:4"
+bb0:
+  _2: value = box int _0
+  _3: value = call app::id(_2)
+  _4: int = unbox int _3
+  drop _3
+  _5: value = call app::ints(_4)
+  _6: int = unbox int _5
+  drop _5
+  _7: value = box bool _1
+  tail_call app::id(_7)
+}
+"#
+    );
+    let main = lowered.function("app", "app::main");
+    for repr in ["int", "i64", "u8", "u32", "u64", "float", "f32", "bool"] {
+        assert!(
+            main.contains(&format!(": {repr} = unbox {repr} _")),
+            "{main}"
+        );
+    }
+}
+
+/// `True` passed to a generic parameter is the static `True` (D-454).
+#[test]
+fn bool_constants_in_uniform_positions_are_static_objects() {
+    assert_eq!(
+        d6().function("app", "app::yes"),
+        r#"fn app::yes() -> value check str#0 {
+  str#0 = "src/main.cheby:84:4"
+bb0:
+  tail_call app::id(const ctor True)
+}
+"#
+    );
+}
+
+/// An external's scalar result is boxed into the uniform return; a `Nil`
+/// result is the static `Nil` (D-455, D-521).
+#[test]
+fn external_wrappers_box_scalar_results() {
+    let lowered = d6();
+    for (name, repr, ctype, line) in [
+        ("get_int", "int", "i64", 12),
+        ("get_bool", "bool", "bool", 40),
+        ("get_u32", "u32", "u32", 24),
+        ("get_float", "float", "f64", 32),
+    ] {
+        assert_eq!(
+            lowered.function("app", &format!("app::{name}")),
+            format!(
+                "fn app::{name}() -> value check str#0 {{\n  \
+                 str#0 = \"src/main.cheby:{line}:4\"\nbb0:\n  \
+                 _0: {repr} = call_foreign \"{name}\"() -> {ctype}\n  \
+                 _1: value = box {repr} _0\n  return _1\n}}\n"
+            )
+        );
+    }
+    assert_eq!(
+        lowered.function("app", "app::say"),
+        r#"fn app::say(_0: value) -> value check str#0 {
+  str#0 = "src/main.cheby:44:4"
+bb0:
+  call_foreign "say"(borrow _0) -> void
+  drop _0
+  return const nil
+}
+"#
+    );
+}
+
+/// A user unit constructor is its static object `cb$ctor$…` (D-454),
+/// and its layout is in the unit.
+#[test]
+fn user_unit_constructors_are_static_objects() {
+    let lowered = d6();
+    assert_eq!(
+        lowered.function("app", "app::red"),
+        r#"fn app::red() -> value check str#0 {
+  str#0 = "src/main.cheby:88:4"
+bb0:
+  return const ctor app::Red
+}
+"#
+    );
+    let dump = crate::dump(lowered.unit("app")).unwrap();
+    let key = crate::type_key("app", "Color");
+    assert!(
+        dump.contains(&format!(
+            "layout ctor app::Red: Color.Red tag 0 key {key:016x} []\n\
+             layout ctor app::Green: Color.Green tag 1 key {key:016x} []\n"
+        )),
+        "{dump}"
+    );
+}
+
+/// Two builds of one source give the same MIR, std units included
+/// (D-264).
+#[test]
+fn lowering_from_source_is_deterministic() {
+    let first = d6().dump();
+    assert!(first.contains("module std::io"), "{first}");
+    assert_eq!(first, d6().dump());
+}
+
+/// The `.cheby` files of an example as `(module path under the package,
+/// text)`, and the package name from its manifest.
+fn example_sources(dir: &std::path::Path) -> (String, Vec<(String, String)>) {
+    fn walk(dir: &std::path::Path, prefix: &str, out: &mut Vec<(String, String)>) {
+        let mut entries: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        entries.sort();
+        for path in entries {
+            let stem = path.file_stem().unwrap().to_string_lossy().into_owned();
+            let module = match (prefix, stem.as_str()) {
+                ("", "main") => String::new(),
+                ("", _) => stem.clone(),
+                _ => format!("{prefix}::{stem}"),
+            };
+            if path.is_dir() {
+                walk(&path, &module, out);
+            } else if path.extension().is_some_and(|e| e == "cheby") {
+                out.push((module, std::fs::read_to_string(&path).unwrap()));
+            }
+        }
+    }
+    let manifest = std::fs::read_to_string(dir.join("cheby.toml")).unwrap();
+    let name = manifest
+        .lines()
+        .find_map(|l| l.strip_prefix("name = \""))
+        .and_then(|l| l.strip_suffix('"'))
+        .unwrap()
+        .to_owned();
+    let mut files = Vec::new();
+    walk(&dir.join("src"), "", &mut files);
+    (name, files)
+}
+
+/// Every example the front end accepts lowers without an internal error,
+/// and no E0038 about representations remains (D6): values crossing
+/// generic boundaries are boxed, and externals with scalar results are
+/// wrapped.
+#[test]
+fn examples_lower_without_representation_errors() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples");
+    let mut dirs: Vec<_> = std::fs::read_dir(&root)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.join("cheby.toml").exists())
+        .collect();
+    dirs.sort();
+    assert!(dirs.len() >= 32, "{dirs:?}");
+    let mut lowered_any = false;
+    for dir in dirs {
+        let (name, files) = example_sources(&dir);
+        let refs: Vec<(&str, &str)> = files
+            .iter()
+            .map(|(p, t)| (p.as_str(), t.as_str()))
+            .collect();
+        let Ok(lowered) = crate::test_support::lower_package(&name, &refs) else {
+            // Unshipped std modules or dependencies (D-477, D-446).
+            continue;
+        };
+        lowered_any = true;
+        for message in lowered.unsupported() {
+            assert!(
+                !message.starts_with("values of type")
+                    && !message.starts_with("external functions that return"),
+                "{}: {message}",
+                dir.display()
+            );
+        }
+        if std::env::var_os("CHEBY_SHOW_E0038").is_some() {
+            println!("== {}", dir.display());
+            for message in lowered.unsupported() {
+                println!("{message}");
+            }
+        }
+    }
+    assert!(lowered_any);
+}
+
+/// A module whose constructor reachable code only names gets a unit with
+/// its layouts and no functions, and the naming unit carries the
+/// constructor's layout as a foreign one (D-454, D-510).
+#[test]
+fn modules_of_named_constructors_register_their_layouts() {
+    let lowered = crate::test_support::lower_source(&[
+        (
+            "",
+            r"//! Names a constructor of another module.
+
+import app::colors
+
+fn keep(color: colors::Color) -> colors::Color {
+  color
+}
+
+fn main() {
+  let _ = keep(colors::Green)
+}
+",
+        ),
+        (
+            "colors",
+            r"//! Colors.
+
+/// A color.
+pub type Color {
+  Red,
+  Green,
+}
+",
+        ),
+    ]);
+    assert_eq!(lowered.unsupported(), Vec::<String>::new());
+    let key = crate::type_key("app::colors", "Color");
+    assert_eq!(
+        crate::dump(lowered.unit("app::colors")).unwrap(),
+        format!(
+            "module app::colors\n\n\
+             layout ctor app::colors::Red: Color.Red tag 0 key {key:016x} []\n\
+             layout ctor app::colors::Green: Color.Green tag 1 key {key:016x} []\n"
+        )
+    );
+    let app = crate::dump(lowered.unit("app")).unwrap();
+    assert!(
+        app.contains(&format!(
+            "\nforeign_layout ctor app::colors::Green: Color.Green tag 1 key {key:016x} []\n"
+        )),
+        "{app}"
+    );
 }

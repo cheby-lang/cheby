@@ -1,0 +1,86 @@
+module std::io
+
+fn std::io::print(_0: value) -> value check str#0 {
+  str#0 = "std/io.cheby:7:8"
+bb0:
+  call_foreign "cheby_io_print"(borrow _0) -> void
+  drop _0
+  return const nil
+}
+
+fn std::io::println(_0: value) -> value check str#0 {
+  str#0 = "std/io.cheby:12:8"
+bb0:
+  call_foreign "cheby_io_println"(borrow _0) -> void
+  drop _0
+  return const nil
+}
+
+fn std::io::eprint(_0: value) -> value check str#0 {
+  str#0 = "std/io.cheby:17:8"
+bb0:
+  call_foreign "cheby_io_eprint"(borrow _0) -> void
+  drop _0
+  return const nil
+}
+
+fn std::io::eprintln(_0: value) -> value check str#0 {
+  str#0 = "std/io.cheby:22:8"
+bb0:
+  call_foreign "cheby_io_eprintln"(borrow _0) -> void
+  drop _0
+  return const nil
+}
+
+module app
+
+fn app::id(_0: value) -> value check str#0 {
+  str#0 = "src/main.cheby:11:4"
+bb0:
+  return _0
+}
+
+fn app::dot() -> value check str#0 {
+  str#0 = "src/main.cheby:15:4"
+bb0:
+  return const ctor app::Dot
+}
+
+fn app::same(_0: bool) -> value check str#0 {
+  str#0 = "src/main.cheby:19:4"
+bb0:
+  _1: value = box bool _0
+  tail_call app::id(_1)
+}
+
+fn app::main() -> value check str#0 {
+  str#0 = "src/main.cheby:23:4"
+  str#1 = "shapes"
+bb0:
+  _0: value = call app::dot()
+  drop _0
+  _1: value = call app::same(const bool true)
+  _2: bool = unbox bool _1
+  drop _1
+  _3: value = const str#1
+  tail_call std::io::println(_3)
+}
+
+layout ctor app::Dot: Shape.Dot tag 0 key 057c1db0258c1332 []
+layout ctor app::Circle: Shape.Circle tag 1 key 057c1db0258c1332 [float @8]
+layout ctor app::Rect: Shape.Rect tag 2 key 057c1db0258c1332 record [w: int @16, h: int @24, label: value @8]
+callee app::id(value) -> value
+callee app::dot() -> value
+callee app::same(bool) -> value
+callee std::io::println(value) -> value
+
+entries
+
+fn entry main(app::main) [c] () -> i64 {
+bb0:
+  _0: value = call app::main()
+  drop _0
+  return const i64 0
+}
+
+callee app::main() -> value

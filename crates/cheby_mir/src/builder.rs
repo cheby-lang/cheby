@@ -5,7 +5,8 @@ use cheby_iface::{Ice, IndexVec, Name, Ty};
 use rustc_hash::FxHashMap;
 
 use crate::ir::{
-    Abi, Block, BlockId, FnKey, Function, Local, LocalDecl, Rvalue, Stmt, StrId, Terminator,
+    Abi, Block, BlockId, FnKey, Function, Local, LocalDecl, Operand, RuntimeFn, Rvalue, Stmt,
+    StrId, Terminator,
 };
 use crate::repr::Repr;
 
@@ -214,6 +215,25 @@ impl FunctionBuilder {
         let dst = self.new_local(repr, None, None)?;
         self.push(Stmt::Assign { dst, value })?;
         Ok(dst)
+    }
+
+    /// Calls the runtime helper `func` in the current block: a new local
+    /// of its result representation, or `None` for a helper without a
+    /// result, which is evaluated for effect ([`RuntimeFn::ret`]).
+    ///
+    /// # Errors
+    ///
+    /// An [`Ice`] if the current block is terminated.
+    pub fn call_runtime(
+        &mut self,
+        func: RuntimeFn,
+        args: Vec<Operand>,
+    ) -> Result<Option<Local>, Ice> {
+        let value = Rvalue::CallRuntime { func, args };
+        match func.ret() {
+            Some(repr) => self.assign(repr, value).map(Some),
+            None => self.push(Stmt::Eval(value)).map(|()| None),
+        }
     }
 
     /// Ends the current block.

@@ -85,8 +85,10 @@ pub fn trampoline_sig(arity: u32) -> AbiSig {
 /// The signature of a key whose signature does not depend on any item's
 /// declaration: constant initializers and test bodies take nothing and
 /// return a uniform word; entries and trampolines as above. `None` for
-/// items, shims and closures, whose signatures come from their
-/// declarations.
+/// items, whose signatures come from their declarations, and for the
+/// uniform keys ([`FnKey::is_uniform`]: shims, closures, tuple dictionary
+/// functions and `dyn` forwarders), whose arity the key does not hold;
+/// the validator checks that they have [`uniform_sig`] of some arity.
 #[must_use]
 pub fn fixed_sig(key: FnKey) -> Option<AbiSig> {
     match key {
@@ -97,8 +99,22 @@ pub fn fixed_sig(key: FnKey) -> Option<AbiSig> {
         }),
         FnKey::Entry(kind) => Some(entry_sig(kind)),
         FnKey::Trampoline(arity) => Some(trampoline_sig(arity)),
-        FnKey::Item(_) | FnKey::ValueShim(_) | FnKey::Closure { .. } => None,
+        FnKey::Item(_)
+        | FnKey::ValueShim(_)
+        | FnKey::Closure { .. }
+        | FnKey::TupleDictFn { .. }
+        | FnKey::DynForward { .. } => None,
     }
+}
+
+/// Whether `sig` is [`uniform_sig`] of some arity: the Cheby ABI, at least
+/// the `self` parameter, and only uniform words.
+#[must_use]
+pub fn is_uniform_sig(sig: &AbiSig) -> bool {
+    sig.abi == Abi::Cheby
+        && !sig.params.is_empty()
+        && sig.params.iter().all(|&r| r == Repr::Value)
+        && sig.ret == Repr::Value
 }
 
 impl Function {

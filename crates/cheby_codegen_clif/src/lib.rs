@@ -29,7 +29,32 @@
 //! platform C convention and are the only way the host enters generated
 //! code. Every Cheby-ABI function starts with the stack-limit check of
 //! D-124, whose slow path is `cheby_rt_stack_slow(ctx, location)`.
+//!
+//! Data objects (D-454, D-523), all named from paths and names:
+//!
+//! - `cb$layout$<module>$<Ctor>`: a user constructor's header word (count
+//!   1, scan count, layout id), filled from the id the JIT registered; code
+//!   allocates with it and reads tags against the first constructor's
+//!   (D-522), so no code embeds a user layout id. A nullary constructor
+//!   also gets its static object `cb$ctor$<module>$<Ctor>` (count 0).
+//! - `cb$const$<module>$<name>`: a constant's slot, 0 until evaluated;
+//!   `LoadConst` calls `cheby_rt_const_missing` on 0 (E6).
+//! - `cb$dict$…`, `cb$desc$…`, `cb$fnval$…`: static objects with count 0,
+//!   with their own strings `cb$str$<static>$<n>`; a function value's code
+//!   word is its shim's address `| 1`. Each symbol, like each shim, tuple
+//!   function, `dyn` forwarder and trampoline, is defined once per module:
+//!   a later unit or batch that names it uses the first definition.
+//!
+//! Scalars (D-521, D-527): `Box`/`Unbox` tag and untag inline and call
+//! `cheby_rt_box_*` only outside the tagged range or for floats; checked
+//! integer operations branch to cold blocks that call `cheby_rt_panic` with
+//! the operation's location; float `<`, `<=`, `>`, `>=` follow `compare`'s
+//! total order and `==` §3.3.2; float `%` calls `cheby_rt_fmod_*`. Count
+//! operations are inline (tag test, static test, local count update) and
+//! call the runtime only on the slow paths, unless
+//! [`CodegenOptions::checked_rc`] asks for the checked runtime calls.
 
+mod arith;
 mod data;
 mod decls;
 mod error;
@@ -39,6 +64,7 @@ mod layout;
 pub mod mangle;
 pub mod runtime;
 pub mod sig;
+mod values;
 
 #[cfg(test)]
 mod tests;
@@ -53,7 +79,7 @@ use cheby_mir::MirModule;
 pub use decls::{Decls, FuncDecl, SlotKey};
 pub use error::CodegenError;
 pub use func::translate;
-pub use layout::{BuiltinLayouts, LayoutIds, builtin_layout_id};
+pub use layout::{BuiltinLayouts, LayoutIds, builtin_ctor_layout, builtin_layout_id};
 
 /// The alignment every function is defined with. Bit 0 of a code address
 /// must be clear so a closure's code word `addr | 1` reads as a tagged
@@ -98,6 +124,11 @@ pub struct CodegenOptions {
     /// Keep the CLIF text of every translated function, for dumps and
     /// tests.
     pub capture_clif: bool,
+    /// Call the runtime's `cheby_rt_dup` and `cheby_rt_drop` for every
+    /// count operation, which check the header in the runtime's poisoning
+    /// mode (plan §4.3.4), instead of the inline fast paths that skip
+    /// tagged integers and static objects and update the count in place.
+    pub checked_rc: bool,
 }
 
 impl Default for CodegenOptions {
@@ -107,6 +138,7 @@ impl Default for CodegenOptions {
             foreign_import: ForeignImport::Address,
             stack_check: true,
             capture_clif: false,
+            checked_rc: false,
         }
     }
 }
@@ -166,9 +198,16 @@ pub fn define<M: Module>(
 ) -> Result<Vec<String>, CodegenError> {
     let mut clif = Vec::new();
     let mut compiled = Vec::new();
+    let mut seen = rustc_hash::FxHashSet::default();
     for unit in mirs {
         for function in &unit.functions {
-            let id = decls.func(function.key)?.id;
+            let decl = decls.func(function.key)?;
+            // A shim, tuple function, `dyn` forwarder or trampoline that an
+            // earlier unit or batch defined is not defined again (D-523).
+            if decl.defined || !seen.insert(function.key) {
+                continue;
+            }
+            let id = decl.id;
             let translated = translate(unit, function, decls, cx, opts)?;
             if opts.capture_clif {
                 clif.push(decls.describe(&translated));
@@ -180,7 +219,7 @@ pub fn define<M: Module>(
             ));
         }
     }
-    data::define_pending(module, decls)?;
+    data::define_pending(module, decls, cx)?;
     for (key, id, code) in compiled {
         module
             .define_function_bytes(id, code.align, &code.bytes, &code.relocs)

@@ -4,7 +4,10 @@
 //! A module that builds or matches `geo::Point` computes the same offsets
 //! as `geo` itself, from `geo`'s interface and never its bodies.
 
+use std::hash::Hasher as _;
+
 use cheby_iface::{CtorFields, DefId, Ice, ItemSig, ModuleId, TypeDefKind};
+use siphasher::sip::SipHasher13;
 
 use crate::defs::Defs;
 use crate::ir::LayoutRef;
@@ -35,7 +38,7 @@ pub struct FieldDesc {
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct LayoutDesc {
     pub layout: LayoutRef,
-    /// The constructor's path, for debug printing and diagnostics.
+    /// The constructor's path, for diagnostics and symbols.
     pub name: Box<str>,
     /// The constructor's position among its type's constructors.
     pub tag: u32,
@@ -43,6 +46,35 @@ pub struct LayoutDesc {
     pub fields: Vec<FieldDesc>,
     pub value_fields: u32,
     pub raw_fields: u32,
+    /// The type the constructor builds.
+    pub type_def: DefId,
+    /// The type's name as D-463 prints it inside its own module (`Shape`),
+    /// for debug printing.
+    pub type_name: Box<str>,
+    /// The constructor's name (`Circle`), for debug printing (§3.13).
+    pub ctor_name: Box<str>,
+    /// Whether the constructor has named fields (`Point { x: 1 }`).
+    pub record: bool,
+    /// The type's `@std_hooks(equal, hash, debug)` functions (D-482).
+    /// Always `None` for now; W3-B fills it.
+    pub hooks: Option<[DefId; 3]>,
+    /// [`type_key`] of the type's module path and name, which the runtime
+    /// hashes instead of a layout id (D-264, plan §4.3.2).
+    pub type_key: u64,
+}
+
+/// The stable key of a type for hashing: SipHash-1-3 with a zero key of
+/// the module path's UTF-8 bytes (`std::io`, empty for the builtin
+/// module), one `0xff` byte (which UTF-8 never contains), then the type
+/// name's bytes (`Shape`). It depends only on paths and names, never on
+/// layout ids or build order (D-264).
+#[must_use]
+pub fn type_key(module_path: &str, type_name: &str) -> u64 {
+    let mut h = SipHasher13::new_with_keys(0, 0);
+    h.write(module_path.as_bytes());
+    h.write(&[0xff]);
+    h.write(type_name.as_bytes());
+    h.finish()
 }
 
 /// The layout of constructor `ctor`. A field whose declared type is `Int`,
@@ -93,14 +125,43 @@ pub fn ctor_layout(ctor: DefId, defs: &Defs<'_>) -> Result<LayoutDesc, Ice> {
     let value_fields = u32::try_from(value_count).map_err(|_| Ice::new("constructor too large"))?;
     let raw_fields = u32::try_from(fields.len().saturating_sub(value_count))
         .map_err(|_| Ice::new("constructor too large"))?;
+    let type_def = DefId::new(ctor.module, sig.ty);
+    let type_path = defs.name(type_def)?;
+    let ctor_path = defs.name(ctor)?;
     Ok(LayoutDesc {
         layout: LayoutRef::Ctor(ctor),
-        name: defs.name(ctor)?.path().into(),
+        name: ctor_path.path().into(),
         tag: sig.tag,
         fields,
         value_fields,
         raw_fields,
+        type_def,
+        type_key: type_key(&type_path.module, &type_path.item),
+        type_name: type_path.item,
+        ctor_name: ctor_path.item,
+        record: matches!(sig.fields, CtorFields::Named(_)),
+        hooks: None,
     })
+}
+
+/// The layouts of every constructor of the ADT `ty`, in tag order, read
+/// from the interface of `ty`'s module (D-246).
+///
+/// # Errors
+///
+/// An [`Ice`] if `ty` is not a readable ADT.
+pub fn type_layouts(ty: DefId, defs: &Defs<'_>) -> Result<Vec<LayoutDesc>, Ice> {
+    let item = defs.item(ty)?;
+    let ItemSig::Type(t) = &item.sig else {
+        return Err(Ice::new(format!("{ty:?} is not a type")));
+    };
+    let TypeDefKind::Adt { ctors } = &t.kind else {
+        return Err(Ice::new(format!("{ty:?} is not a type with constructors")));
+    };
+    ctors
+        .iter()
+        .map(|&index| ctor_layout(DefId::new(ty.module, index), defs))
+        .collect()
 }
 
 /// The layouts of the constructors module `module` declares, in

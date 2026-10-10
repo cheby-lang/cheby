@@ -1,31 +1,52 @@
 //! THIR to MIR (D2).
 //!
-//! [`lower_fn`] is the parallel unit (D-263): it reads one item's THIR,
-//! the module's own interface and its dependencies' interfaces, and
-//! returns the item's function followed by its shims and closures, with
-//! function-local strings. [`lower_items`] runs it per selected item in
-//! `DefIndex` order and computes the unit's callee declarations, layouts
+//! [`lower_fn`] lowers one item: it reads the item's THIR, the module's
+//! own interface and its dependencies' interfaces (D-246), and returns
+//! the item's function followed by its closures, with function-local
+//! strings. [`lower_items`] lowers the selected items in `DefIndex` order
+//! with one [`Pending`] per unit, which collects what the unit needs
+//! besides its items (value shims, static objects, trampoline arities),
+//! and computes the unit's callee declarations, layouts, foreign layouts
 //! and names; [`lower_module`] selects every item. [`lower_tests`] and
 //! [`lower_entries`] produce the other two unit kinds.
 //!
+//! Files (plan §4.2), each owning one part of [`body::BodyCx`]:
+//! `body.rs` (state, helpers, statements), `expr.rs` (dispatch, blocks,
+//! direct calls), `coerce.rs` (boxing, D6), `scalar.rs` (literals and
+//! operators), `panic.rs`, `pat.rs` (patterns), `closure.rs` (closures,
+//! function values, shims, trampolines), `data.rs` (constructors,
+//! records, fields, tuples), `list.rs`, `interp.rs`, `dict.rs`
+//! (dictionaries and `dyn`), `consts.rs`, `external.rs` and `entry.rs`.
+//!
 //! The front end no longer gates what the back end cannot run (D-480,
-//! D-510): a construct, a value representation or an external
-//! signature that lowering does not implement yet is E0038 at the
-//! construct, once per outermost construct, never an [`Ice`]. Lowering
-//! goes on after one, so a run reports every such construct of the items
-//! it needs at once; an item with one produces no function. `cheby run`
-//! lowers only the items reachable from its entry ([`crate::reach`]), so
-//! `cheby check` never reports these.
+//! D-510): a construct that lowering does not implement yet is E0038 at
+//! the construct, once per outermost construct, never an [`Ice`].
+//! Lowering goes on after one, so a run reports every such construct of
+//! the items it needs at once; an item with one produces no function.
+//! `cheby run` lowers only the items reachable from its entry
+//! ([`crate::reach`]), so `cheby check` never reports these. At M1 exit
+//! lowering reports no E0038 at all (D-554).
 
+mod body;
+mod closure;
+mod coerce;
+mod consts;
+mod data;
+mod dict;
 mod entry;
 mod expr;
 mod external;
+mod interp;
+mod list;
+mod panic;
+mod pat;
+mod scalar;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use cheby_diag::{Diagnostic, SourceMap, Span, codes};
-use cheby_iface::{DefId, DisplayCx, Generics, Ice, Ty, display};
+use cheby_iface::{DefId, DisplayCx, Generics, Ice, ModuleId, Ty, display};
 use cheby_types::thir;
 
 pub use entry::{EntryRequest, lower_entries};
@@ -34,9 +55,9 @@ use crate::abi::abi_sig;
 use crate::defs::Defs;
 use crate::ir::{
     Callee, CalleeDecl, Const, EntryKind, FnKey, Function, LayoutRef, MirModule, Operand, Rvalue,
-    Stmt, Terminator, UnitKind,
+    StaticId, StaticObject, Stmt, TagType, Terminator, UnitKind,
 };
-use crate::layout::{LayoutDesc, module_layouts};
+use crate::layout::{LayoutDesc, ctor_layout, module_layouts, type_layouts};
 
 /// What lowering reads besides THIR.
 #[derive(Clone, Copy, Debug)]
@@ -160,6 +181,107 @@ impl Unsupported {
     }
 }
 
+/// What a unit needs besides its items' functions, collected while its
+/// items are lowered in `DefIndex` order, so ids and order never depend
+/// on scheduling (D-264): closures and local functions, the value shims
+/// of top-level functions used as values, static objects and the
+/// trampoline arities that kernels calling back into Cheby need.
+#[derive(Debug, Default)]
+#[expect(
+    dead_code,
+    reason = "closures and trampolines come with W2-C and W2-A (plan §4.2); the wave-2 IR steward removes this"
+)]
+pub(crate) struct Pending {
+    /// Functions made while lowering the current item, in creation
+    /// order; [`lower_items`] puts them right after the item.
+    functions: Vec<Function>,
+    /// The next closure index per owner.
+    closures: BTreeMap<DefId, u32>,
+    /// Top-level functions whose [`FnKey::ValueShim`] the unit defines.
+    shims: BTreeSet<DefId>,
+    /// In [`StaticId`] order.
+    statics: Vec<StaticObject>,
+    /// Arities of the trampolines the program needs (plan §4.3.4).
+    trampolines: BTreeSet<u32>,
+}
+
+#[expect(
+    dead_code,
+    reason = "the API of plan §4.2 for wave 2 and 3's lowering files; the IR steward removes this once all are used"
+)]
+impl Pending {
+    /// Adds a function made while lowering the current item, such as a
+    /// closure body.
+    pub(crate) fn add_function(&mut self, f: Function) {
+        self.functions.push(f);
+    }
+
+    /// A new closure key of `owner`, numbered in lowering order.
+    ///
+    /// # Errors
+    ///
+    /// An [`Ice`] if `owner` has too many closures.
+    pub(crate) fn closure_key(&mut self, owner: DefId) -> Result<FnKey, Ice> {
+        let next = self.closures.entry(owner).or_insert(0);
+        let index = *next;
+        *next = next
+            .checked_add(1)
+            .ok_or_else(|| Ice::new("too many closures"))?;
+        Ok(FnKey::Closure { owner, index })
+    }
+
+    /// Asks for the [`FnKey::ValueShim`] of `def` in this unit (D-453).
+    pub(crate) fn request_shim(&mut self, def: DefId) {
+        self.shims.insert(def);
+    }
+
+    /// Adds a static object and returns its id (its `id` field is
+    /// ignored). A static whose kind, module and name the unit already has
+    /// is the same object (names are built from paths and names, D-523),
+    /// and its first id is returned.
+    ///
+    /// # Errors
+    ///
+    /// An [`Ice`] if a static of the same symbol differs, or there are
+    /// too many statics.
+    pub(crate) fn add_static(&mut self, mut object: StaticObject) -> Result<StaticId, Ice> {
+        if let Some(existing) = self
+            .statics
+            .iter()
+            .find(|s| s.kind == object.kind && s.module == object.module && s.name == object.name)
+        {
+            let same = existing.layout == object.layout
+                && existing.fields == object.fields
+                && existing.strings == object.strings;
+            return if same {
+                Ok(existing.id)
+            } else {
+                Err(Ice::new(format!(
+                    "two different statics named {:?}",
+                    object.name
+                )))
+            };
+        }
+        let id = StaticId::from_u32(
+            u32::try_from(self.statics.len()).map_err(|_| Ice::new("too many statics"))?,
+        );
+        object.id = id;
+        self.statics.push(object);
+        Ok(id)
+    }
+
+    /// Records that a kernel may call a closure of `arity` arguments back
+    /// through a trampoline (plan §4.3.4).
+    pub(crate) fn need_trampoline(&mut self, arity: u32) {
+        self.trampolines.insert(arity);
+    }
+
+    /// The trampoline arities recorded so far.
+    pub(crate) const fn trampolines(&self) -> &BTreeSet<u32> {
+        &self.trampolines
+    }
+}
+
 /// E0038: "<what> are not supported yet", worded like the front end's old
 /// gates, with the primary label on the construct (D-451).
 pub(crate) fn not_supported(span: Span, what: &str) -> Diagnostic {
@@ -202,6 +324,7 @@ pub fn lower_items(
     let mut consts: Vec<&thir::ConstDef> = module.consts.iter().filter(|c| wanted(c.def)).collect();
     consts.sort_by_key(|c| c.def);
     let mut functions = Vec::new();
+    let mut pending = Pending::default();
     let mut unsupported = Unsupported::default();
     // Items in `DefIndex` order: merge functions and constants.
     let mut fi = fns.into_iter().peekable();
@@ -213,21 +336,35 @@ pub fn lower_items(
             (None, Some(_)) => false,
             (None, None) => break,
         };
-        if take_fn {
-            if let Some(f) = fi.next()
-                && let Some(lowered) = unsupported.take(lower_fn(f, cx))?
-            {
-                functions.extend(lowered);
-            }
-        } else if let Some(c) = ci.next() {
-            let lowered = expr::lower_body(FnKey::ConstInit(c.def), c.span, &c.body, 0, cx);
-            if let Some(f) = unsupported.take(lowered)? {
-                functions.push(f);
-            }
+        let lowered = if take_fn {
+            let Some(f) = fi.next() else { break };
+            lower_item(f, cx, &mut pending)
+        } else {
+            let Some(c) = ci.next() else { break };
+            body::lower_body(
+                FnKey::ConstInit(c.def),
+                c.span,
+                &c.body,
+                0,
+                cx,
+                &mut pending,
+            )
+        };
+        // Each item is followed by the closures it made.
+        let made = std::mem::take(&mut pending.functions);
+        if let Some(f) = unsupported.take(lowered)? {
+            functions.push(f);
+            functions.extend(made);
         }
     }
     let layouts = module_layouts(module.module, &cx.defs)?;
-    let unit = finish_unit(UnitKind::Code(module.module), functions, layouts, cx)?;
+    let unit = finish_unit(
+        UnitKind::Code(module.module),
+        functions,
+        layouts,
+        pending,
+        cx,
+    )?;
     unsupported.finish(unit)
 }
 
@@ -240,24 +377,48 @@ pub fn lower_tests(module: &thir::Module, cx: &LowerCx<'_>) -> Result<MirModule,
     let mut tests: Vec<&thir::TestDef> = module.tests.iter().collect();
     tests.sort_by_key(|t| t.def);
     let mut functions = Vec::new();
+    let mut pending = Pending::default();
     let mut unsupported = Unsupported::default();
     for t in tests {
-        let lowered = expr::lower_body(FnKey::Test(t.def), t.span, &t.body, 0, cx);
+        let lowered = body::lower_body(FnKey::Test(t.def), t.span, &t.body, 0, cx, &mut pending);
+        let made = std::mem::take(&mut pending.functions);
         if let Some(f) = unsupported.take(lowered)? {
             functions.push(f);
+            functions.extend(made);
         }
     }
-    let unit = finish_unit(UnitKind::Tests(module.module), functions, Vec::new(), cx)?;
+    let unit = finish_unit(
+        UnitKind::Tests(module.module),
+        functions,
+        Vec::new(),
+        pending,
+        cx,
+    )?;
     unsupported.finish(unit)
 }
 
 /// Lowers one top-level function: its body, or the Cheby-ABI wrapper of
-/// its `@external(native, …)` (D-455).
+/// its `@external(native, …)` (D-455), followed by the closures it made.
+/// What the function needs at the unit level (value shims, statics,
+/// trampolines) is kept only by [`lower_items`].
 ///
 /// # Errors
 ///
 /// As [`lower_module`].
 pub fn lower_fn(f: &thir::FnDef, cx: &LowerCx<'_>) -> Result<Vec<Function>, LowerError> {
+    let mut pending = Pending::default();
+    let item = lower_item(f, cx, &mut pending)?;
+    let mut out = vec![item];
+    out.append(&mut pending.functions);
+    Ok(out)
+}
+
+/// The function of one top-level function; closures go to `pending`.
+fn lower_item(
+    f: &thir::FnDef,
+    cx: &LowerCx<'_>,
+    pending: &mut Pending,
+) -> Result<Function, LowerError> {
     let sig = cx.defs.fn_sig(f.def)?;
     let dicts = sig
         .generics
@@ -267,14 +428,10 @@ pub fn lower_fn(f: &thir::FnDef, cx: &LowerCx<'_>) -> Result<Vec<Function>, Lowe
         .sum::<usize>();
     match (&f.native_external, &f.body) {
         // With a body too, the body is for the other targets (D-207, D-510).
-        (Some(ext), _) => Ok(vec![external::lower_wrapper(f, ext, sig, cx)?]),
-        (None, Some(body)) => Ok(vec![expr::lower_body(
-            FnKey::Item(f.def),
-            f.span,
-            body,
-            dicts,
-            cx,
-        )?]),
+        (Some(ext), _) => external::lower_wrapper(f, ext, sig, cx),
+        (None, Some(body)) => {
+            body::lower_body(FnKey::Item(f.def), f.span, body, dicts, cx, pending)
+        }
         // Only a JS external: the function does not exist on native
         // (§12.5), which only the cross-target check (C12) can reject.
         (None, None) => Err(LowerError::Unsupported(vec![not_supported(
@@ -284,23 +441,76 @@ pub fn lower_fn(f: &thir::FnDef, cx: &LowerCx<'_>) -> Result<Vec<Function>, Lowe
     }
 }
 
-/// Builds a unit from its functions: callee declarations, names, path.
+/// What a unit's functions and statics refer to.
+#[derive(Default)]
+struct Mentions {
+    /// [`Callee::Direct`] targets.
+    direct: BTreeSet<DefId>,
+    /// Every def that needs a name.
+    defs: BTreeSet<DefId>,
+    /// Constructors whose layouts the code needs: allocated, read, or
+    /// used as user static objects.
+    ctors: BTreeSet<DefId>,
+    /// Types whose tags the code reads.
+    tag_types: BTreeSet<DefId>,
+}
+
+/// Builds a unit from its items' functions and what they need: the value
+/// shims `pending` asks for (by `DefId`, after every item) and its
+/// statics, then callee declarations, foreign layouts, names and path.
 fn finish_unit(
     unit: UnitKind,
-    functions: Vec<Function>,
+    mut functions: Vec<Function>,
     layouts: Vec<LayoutDesc>,
+    pending: Pending,
     cx: &LowerCx<'_>,
 ) -> Result<MirModule, Ice> {
-    let mut direct = BTreeSet::new();
-    let mut mentioned = BTreeSet::new();
-    for f in &functions {
-        collect_defs(f, &mut direct, &mut mentioned);
+    if !pending.functions.is_empty() {
+        return Err(Ice::new("pending functions outside of an item"));
     }
-    for l in &layouts {
+    for &def in &pending.shims {
+        functions.push(closure::value_shim(def, cx)?);
+    }
+    let statics = pending.statics;
+    let mut m = Mentions::default();
+    for f in &functions {
+        collect_defs(f, &mut m);
+    }
+    for s in &statics {
+        if let LayoutRef::Ctor(d) = s.layout {
+            m.ctors.insert(d);
+        }
+        for c in &s.fields {
+            const_defs(c, &mut m);
+        }
+    }
+    let own: BTreeSet<LayoutRef> = layouts.iter().map(|l| l.layout).collect();
+    let mut foreign: Vec<LayoutDesc> = Vec::new();
+    for &ctor in &m.ctors {
+        if !own.contains(&LayoutRef::Ctor(ctor)) {
+            foreign.push(ctor_layout(ctor, &cx.defs)?);
+        }
+    }
+    for &ty in &m.tag_types {
+        foreign.extend(
+            type_layouts(ty, &cx.defs)?
+                .into_iter()
+                .filter(|d| !own.contains(&d.layout)),
+        );
+        m.defs.insert(ty);
+    }
+    foreign.sort_by_key(|d| d.layout);
+    foreign.dedup_by_key(|d| d.layout);
+    let mut mentioned = std::mem::take(&mut m.defs);
+    for l in layouts.iter().chain(&foreign) {
         if let LayoutRef::Ctor(d) = l.layout {
             mentioned.insert(d);
         }
+        if let Some(hooks) = l.hooks {
+            mentioned.extend(hooks);
+        }
     }
+    let direct = m.direct;
     let callees = direct
         .iter()
         .map(|&def| {
@@ -325,97 +535,101 @@ fn finish_unit(
         functions,
         callees,
         layouts,
+        foreign_layouts: foreign,
+        statics,
         names,
     })
 }
 
-/// The direct callees of `f`, and every other def it mentions.
-fn collect_defs(f: &Function, direct: &mut BTreeSet<DefId>, mentioned: &mut BTreeSet<DefId>) {
-    key_defs(f.key, mentioned);
-    let operand = |op: &Operand, mentioned: &mut BTreeSet<DefId>| {
-        if let Operand::Const(c) = op {
-            match c {
-                Const::StaticCtor(d) | Const::FnValue(d) => {
-                    mentioned.insert(*d);
-                }
-                Const::Code(key) => key_defs(*key, mentioned),
-                Const::Int(_)
-                | Const::Float(_)
-                | Const::Bool(_)
-                | Const::Sized { .. }
-                | Const::Str(_)
-                | Const::Nil => {}
-            }
-        }
-    };
-    let callee = |c: &Callee, direct: &mut BTreeSet<DefId>, mentioned: &mut BTreeSet<DefId>| match c
-    {
+/// The direct callees of `f`, and every other def, constructor layout and
+/// tag type it mentions.
+fn collect_defs(f: &Function, m: &mut Mentions) {
+    key_defs(f.key, &mut m.defs);
+    let callee = |c: &Callee, m: &mut Mentions| match c {
         Callee::Direct(d) => {
-            direct.insert(*d);
+            m.direct.insert(*d);
         }
-        Callee::Code(key) => key_defs(*key, mentioned),
+        Callee::Code(key) => key_defs(*key, &mut m.defs),
         Callee::Indirect(_) => {}
+    };
+    let operand = |op: &Operand, m: &mut Mentions| {
+        if let Operand::Const(c) = op {
+            const_defs(c, m);
+        }
     };
     for block in &f.blocks {
         for stmt in &block.stmts {
             let (Stmt::Assign { value, .. } | Stmt::Eval(value)) = stmt else {
                 continue;
             };
+            for op in value.operands() {
+                operand(&op, m);
+            }
             match value {
-                Rvalue::Use(op)
-                | Rvalue::Box { value: op, .. }
-                | Rvalue::Unbox { value: op, .. } => {
-                    operand(op, mentioned);
-                }
-                Rvalue::Call { callee: c, args } => {
-                    callee(c, direct, mentioned);
-                    for a in args {
-                        operand(a, mentioned);
-                    }
-                }
-                Rvalue::CallForeign { args, .. } => args.iter().for_each(|a| operand(a, mentioned)),
-                Rvalue::CallRuntime { func, .. } => match *func {},
-                Rvalue::Alloc { layout, fields } => {
+                Rvalue::Call { callee: c, .. } => callee(c, m),
+                Rvalue::Alloc { layout, .. } | Rvalue::Field { layout, .. } => {
                     if let LayoutRef::Ctor(d) = layout {
-                        mentioned.insert(*d);
-                    }
-                    for a in fields {
-                        operand(a, mentioned);
-                    }
-                }
-                Rvalue::Field { layout, .. } => {
-                    if let LayoutRef::Ctor(d) = layout {
-                        mentioned.insert(*d);
+                        m.ctors.insert(*d);
                     }
                 }
                 Rvalue::LoadConst(d) => {
-                    mentioned.insert(*d);
+                    m.defs.insert(*d);
                 }
-                Rvalue::ReadLayout { .. } => {}
-                Rvalue::Checked { lhs, rhs, .. } | Rvalue::Compare { lhs, rhs, .. } => {
-                    operand(lhs, mentioned);
-                    operand(rhs, mentioned);
+                Rvalue::ReadTag {
+                    ty: TagType::Adt(ty),
+                    ..
+                } => {
+                    m.tag_types.insert(*ty);
                 }
+                // A kind of rvalue added later mentions nothing but its
+                // operands unless listed here.
+                _ => {}
             }
         }
         match &block.term {
-            Terminator::Return(op) => operand(op, mentioned),
+            Terminator::Return(op) => operand(op, m),
             Terminator::TailCall { callee: c, args } => {
-                callee(c, direct, mentioned);
+                callee(c, m);
                 for a in args {
-                    operand(a, mentioned);
+                    operand(a, m);
                 }
             }
-            Terminator::Goto { args, .. } => args.iter().for_each(|a| operand(a, mentioned)),
-            Terminator::Branch { cond, .. } => operand(cond, mentioned),
-            Terminator::Switch { on, .. } => operand(on, mentioned),
+            Terminator::Goto { args, .. } => args.iter().for_each(|a| operand(a, m)),
+            Terminator::Branch { cond, .. } => operand(cond, m),
+            Terminator::Switch { on, .. } => operand(on, m),
             Terminator::Panic { message, .. } => {
-                if let Some(m) = message {
-                    operand(m, mentioned);
+                if let Some(msg) = message {
+                    operand(msg, m);
                 }
             }
             Terminator::Unreachable => {}
         }
+    }
+}
+
+/// What a constant refers to: a user unit constructor's static object
+/// needs its layout (D-454); builtin ones are the runtime's.
+fn const_defs(c: &Const, m: &mut Mentions) {
+    match c {
+        Const::StaticCtor(d) => {
+            m.defs.insert(*d);
+            if d.module != ModuleId::BUILTIN {
+                m.ctors.insert(*d);
+            }
+        }
+        Const::FnValue(d) => {
+            m.defs.insert(*d);
+        }
+        Const::Code(key) => key_defs(*key, &mut m.defs),
+        Const::Int(_)
+        | Const::Float(_)
+        | Const::Bool(_)
+        | Const::Sized { .. }
+        | Const::Str(_)
+        | Const::Nil
+        | Const::EmptyList
+        | Const::Static(_)
+        | Const::BuiltinDesc(_) => {}
     }
 }
 
@@ -426,6 +640,8 @@ fn key_defs(key: FnKey, out: &mut BTreeSet<DefId>) {
         | FnKey::Closure { owner: d, .. }
         | FnKey::ConstInit(d)
         | FnKey::Test(d)
+        | FnKey::TupleDictFn { iface_fn: d, .. }
+        | FnKey::DynForward { iface_fn: d }
         | FnKey::Entry(EntryKind::Main(d) | EntryKind::Test(d) | EntryKind::Const(d)) => {
             out.insert(d);
         }

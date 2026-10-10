@@ -38,6 +38,8 @@ fn unit(unit: UnitKind, functions: Vec<Function>) -> MirModule {
             },
         }],
         layouts: Vec::new(),
+        foreign_layouts: Vec::new(),
+        statics: Vec::new(),
         names: (0..3)
             .map(|n| DefName {
                 def: def(n),
@@ -767,6 +769,8 @@ bb4:
 bb5:
   goto bb3(const nil)
 }
+
+callee app::f1(value) -> value
 "#;
     assert_eq!(dump(&m).unwrap(), expected);
 }
@@ -798,6 +802,7 @@ fn dump_escapes_strings_and_names_keys() {
     )
     .unwrap();
     b.set_entry_loc("a \"quoted\"\npath").unwrap();
+    let this = b.add_param(Repr::Value, None, None).unwrap();
     let s = b.string("tab\there").unwrap();
     let t = b
         .assign(
@@ -811,18 +816,19 @@ fn dump_escapes_strings_and_names_keys() {
             },
         )
         .unwrap();
+    let _ = this;
     b.terminate(Terminator::Return(local(t))).unwrap();
     let m = code(vec![b.finish().unwrap()]);
     validate(&m, Stage::Lowered).unwrap();
     let text = dump(&m).unwrap();
     assert!(
-        text.contains("fn closure app::f0#2() -> value check str#0 {"),
+        text.contains("fn closure app::f0#2(_0: value) -> value check str#0 {"),
         "{text}"
     );
     assert!(text.contains(r#"str#0 = "a \"quoted\"\npath""#), "{text}");
     assert!(text.contains(r#"str#1 = "tab\there""#), "{text}");
     assert!(
-        text.contains("_0: value = alloc closure/1(const code <shim app::f1>, const str#1)"),
+        text.contains("_1: value = alloc closure/1(const code <shim app::f1>, const str#1)"),
         "{text}"
     );
 }
@@ -830,5 +836,5 @@ fn dump_escapes_strings_and_names_keys() {
 #[test]
 fn panic_kinds_follow_the_runtime_numbering() {
     let codes: Vec<u32> = PanicKind::ALL.iter().map(|k| k.code()).collect();
-    assert_eq!(codes, (0..9).collect::<Vec<u32>>());
+    assert_eq!(codes, (0..11).collect::<Vec<u32>>());
 }
