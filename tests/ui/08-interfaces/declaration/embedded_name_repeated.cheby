@@ -1,5 +1,5 @@
 // @mode: check-fail
-// @decisions: D-117
+// @decisions: D-117, D-505
 //! Function names are distinct within an interface, including the
 //! functions it inherits by embedding (§8.1).
 

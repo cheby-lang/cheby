@@ -27,7 +27,7 @@
 //! [`entry::current_seed`]: crate::entry::current_seed
 
 mod compare;
-mod kernels;
+pub(crate) mod kernels;
 mod node;
 mod ops;
 

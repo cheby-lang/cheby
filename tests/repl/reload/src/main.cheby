@@ -1,0 +1,10 @@
+//! A store, for the `reload` transcript, which changes `prices.cheby` in a
+//! copy of this package and reloads it.
+
+import std::io
+import store::prices
+
+fn main() {
+  let total = prices::total([prices::Item(1)])
+  io::println("{total}")
+}

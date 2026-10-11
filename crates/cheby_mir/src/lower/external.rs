@@ -22,7 +22,7 @@ use crate::builder::FunctionBuilder;
 use crate::ir::{
     Abi, Const, FnKey, Function, Operand, PanicKind, RuntimeFn, Rvalue, Stmt, Terminator,
 };
-use crate::lower::{LowerCx, LowerError, not_supported};
+use crate::lower::{LowerCx, LowerError};
 use crate::repr::{CType, Repr, foreign_sig, repr_of};
 
 pub(super) fn lower_wrapper(
@@ -33,13 +33,13 @@ pub(super) fn lower_wrapper(
 ) -> Result<Function, LowerError> {
     let globals = cx.defs.globals;
     if sig.generics.params.iter().any(|p| !p.bounds.is_empty()) {
-        // Dictionaries cannot cross the C ABI (§12.5). The front end
-        // reports this as E0045 at the bound (D-554); until it does, the
-        // wrapper is not lowered.
-        return Err(LowerError::Unsupported(vec![not_supported(
-            ext.span,
-            "external functions with bounded type parameters",
-        )]));
+        // Dictionaries cannot cross the C ABI (§12.5): the front end
+        // reports E0045 at the bound and stops before MIR (D-554).
+        return Err(LowerError::Ice(Ice::new(format!(
+            "an external function with a bounded type parameter reached MIR at {:?}; \
+             the front end reports E0045 (D-554)",
+            ext.span
+        ))));
     }
     let ret_repr = repr_of(sig.ret, globals);
     let mut b = FunctionBuilder::new(FnKey::Item(f.def), Abi::Cheby, Repr::Value, f.span)?;

@@ -757,10 +757,16 @@ fn counted(f: Function) -> Vec<String> {
 fn runtime_helpers_follow_their_ownership() {
     for func in RuntimeFn::ALL {
         let lines = counted(runtime_call(func));
+        // A slice of a list used for the last time consumes the list
+        // instead of borrowing and dropping it (rc.rs).
+        let func = match func {
+            RuntimeFn::ListSlice => RuntimeFn::ListSliceOwned,
+            other => other,
+        };
         let call = lines
             .iter()
-            .position(|l| l.contains("call_runtime"))
-            .unwrap();
+            .position(|l| l.contains(&format!("call_runtime {}(", func.name())))
+            .unwrap_or_else(|| panic!("{}: {lines:#?}", func.name()));
         for (n, &(repr, kind)) in func.params().iter().enumerate() {
             // `equal`'s location is a string constant, not parameter `_2`.
             if repr != Repr::Value || (func == RuntimeFn::Equal && n == 2) {
@@ -814,6 +820,54 @@ fn runtime_helpers_follow_their_ownership() {
             "_3: value = call_runtime str_append(_2, borrow _0)",
             "drop _0",
             "return _3",
+        ]
+    );
+}
+
+/// A `list_slice` consumes its list when that is the list's last use, and
+/// borrows it when the list is used again (rc.rs).
+#[test]
+fn list_slices_consume_a_list_used_for_the_last_time() {
+    let slice_then = |use_again: bool| {
+        let mut b = builder();
+        let list = b.add_param(Repr::Value, None, None).unwrap();
+        let rest = b
+            .assign(
+                Repr::Value,
+                Rvalue::CallRuntime {
+                    func: RuntimeFn::ListSlice,
+                    args: vec![local(list), int(1), int(2)],
+                },
+            )
+            .unwrap();
+        if use_again {
+            let _len = b
+                .assign(
+                    Repr::Int,
+                    Rvalue::CallRuntime {
+                        func: RuntimeFn::ListLength,
+                        args: vec![local(list)],
+                    },
+                )
+                .unwrap();
+        }
+        b.terminate(Terminator::Return(local(rest))).unwrap();
+        counted(b.finish().unwrap())
+    };
+    assert_eq!(
+        slice_then(false),
+        [
+            "_1: value = call_runtime list_slice_owned(_0, borrow const int 1, borrow const int 2)",
+            "return _1",
+        ]
+    );
+    assert_eq!(
+        slice_then(true),
+        [
+            "_1: value = call_runtime list_slice(borrow _0, borrow const int 1, borrow const int 2)",
+            "_2: int = call_runtime list_length(borrow _0)",
+            "drop _0",
+            "return _1",
         ]
     );
 }

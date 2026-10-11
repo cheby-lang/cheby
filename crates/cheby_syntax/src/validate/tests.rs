@@ -488,7 +488,11 @@ fn subjectless_case_ends_with_default() {
     );
     reports(
         &in_fn("  case {\n    _ => 1\n    b => 2\n  }"),
-        &[("E0035", "_"), ("E0035", "b")],
+        &[("E0035", "_")],
+    );
+    reports(
+        &in_fn("  case {\n    a => 1\n    _ => 2\n    b => 3\n  }"),
+        &[("E0035", "_")],
     );
 }
 

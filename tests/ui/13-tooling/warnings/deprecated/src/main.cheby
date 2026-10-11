@@ -1,5 +1,5 @@
 // @mode: check-pass
-// @decisions: D-075, D-200
+// @decisions: D-075, D-200, D-517
 //! Using a `@deprecated` item from another module warns with its message,
 //! also for a constructor of a deprecated type. Uses inside the item's
 //! own module do not warn.

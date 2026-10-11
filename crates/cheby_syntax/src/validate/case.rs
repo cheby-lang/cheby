@@ -34,8 +34,12 @@ pub(super) fn case_expr(case: CaseExpr<'_>, out: &mut Vec<Diagnostic>) {
     let Some((last, rest)) = cond_arms.split_last() else {
         return;
     };
+    // An earlier `_` already says to move it last, so a missing final `_`
+    // is not reported on top of it (one error for one mistake).
+    let mut misplaced = false;
     for arm in rest {
         if let Some(underscore) = arm.default_token() {
+            misplaced = true;
             out.push(
                 Diagnostic::new(
                     codes::SUBJECTLESS_CASE_DEFAULT,
@@ -46,7 +50,7 @@ pub(super) fn case_expr(case: CaseExpr<'_>, out: &mut Vec<Diagnostic>) {
             );
         }
     }
-    if !last.is_default() {
+    if !last.is_default() && !misplaced {
         let span = last
             .condition()
             .map_or_else(|| last.significant_span(), AstNode::significant_span);

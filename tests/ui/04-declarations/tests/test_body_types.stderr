@@ -1,0 +1,16 @@
+error[E0073]: a test body must have type `Nil` or `Result<Nil, E>`, found `Bool`
+  --> tests/ui/04-declarations/tests/test_body_types.cheby:26:3
+   |
+26 |   double(2) == 4
+   |   ^^^^^^^^^^^^^^ this has type `Bool`
+   |
+   = help: to check the condition, write `assert` before it
+
+error[E0057]: type annotation needed
+  --> tests/ui/04-declarations/tests/test_body_types.cheby:31:3
+   |
+31 |   Ok(Nil)
+   |   ^^ the type argument `E` of `Result` is not known
+   |
+   = help: give the type arguments after the name: `Result::<…>`
+

@@ -738,6 +738,24 @@ test "mul is times as a function" {
   assert fold([1, 2, 3, 4], 1, int::mul) == 24
 }
 
+// Tests of `std::ops` that need this module. The function exists for the
+// test, and the module has a function named `first`, so its first
+// parameter is named `head` (D-483).
+
+priv fn largest<T: Compare>(head: T, rest: List<T>) -> T {
+  fold(rest, head, fn(best, x) {
+    case {
+      x > best => x
+      _ => best
+    }
+  })
+}
+
+test "a bound names an operator interface" {
+  assert largest(3, [7, 2]) == 7
+  assert largest("pear", ["apple", "fig"]) == "pear"
+}
+
 // Tests of `std::order` that need this module.
 
 test "reverse flips a comparison" {

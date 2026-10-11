@@ -1,0 +1,9 @@
+//! A package for `js` only, for the `js_targets` transcript: entries are
+//! checked for `native`, the target the REPL runs on.
+
+import web::page
+
+fn main() {
+  let _ = page::title("home")
+  page::alert("hello")
+}

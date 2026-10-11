@@ -1,5 +1,5 @@
 // @mode: run-pass
-// @decisions: D-052, D-113
+// @decisions: D-052, D-113, D-571
 //! A guard runs at most once per arm, with the names of the first
 //! alternative that matches; when it is `False`, the arm's later
 //! alternatives are not tried and matching goes on with the next arm

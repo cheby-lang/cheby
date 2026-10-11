@@ -1,0 +1,18 @@
+// @mode: check-pass
+// @decisions: D-146, D-487
+//! An item import that binds a prelude name hides the prelude item in the
+//! importing module, with a warning where it is imported.
+
+import app::lookup::{Lookup, Missing, Some}
+import std::io
+
+fn label(found: Lookup) -> String {
+  case found {
+    Some(text) => text
+    Missing => "missing"
+  }
+}
+
+fn main() {
+  io::println(label(Some("found")))
+}

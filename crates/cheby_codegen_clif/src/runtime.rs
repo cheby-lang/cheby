@@ -54,11 +54,13 @@ pub enum RuntimeFunc {
     Debug,
     /// `void cheby_rt_effect_check(ExecCtx *ctx, uint64_t symbol)`.
     EffectCheck,
+    /// `uint64_t cheby_rt_list_slice_owned(ExecCtx *ctx, uint64_t list, int64_t start, int64_t end)`.
+    ListSliceOwned,
 }
 
 impl RuntimeFunc {
     /// Every runtime function, in declaration order ([`Self::index`]).
-    pub const ALL: [Self; 23] = [
+    pub const ALL: [Self; 24] = [
         Self::Alloc,
         Self::Dup,
         Self::Drop,
@@ -82,6 +84,7 @@ impl RuntimeFunc {
         Self::Equal,
         Self::Debug,
         Self::EffectCheck,
+        Self::ListSliceOwned,
     ];
 
     /// The symbol.
@@ -111,6 +114,7 @@ impl RuntimeFunc {
             Self::Equal => sym::EQUAL,
             Self::Debug => sym::DEBUG,
             Self::EffectCheck => sym::EFFECT_CHECK,
+            Self::ListSliceOwned => sym::LIST_SLICE_OWNED,
         }
     }
 
@@ -136,7 +140,7 @@ impl RuntimeFunc {
             Self::Equal => (&[Ptr, U64, U64, U64], Bool),
             Self::ListLength => (&[U64], I64),
             Self::ListGet => (&[U64, I64], U64),
-            Self::ListSlice => (&[Ptr, U64, I64, I64], U64),
+            Self::ListSlice | Self::ListSliceOwned => (&[Ptr, U64, I64, I64], U64),
         }
     }
 
@@ -167,6 +171,7 @@ impl RuntimeFunc {
             Self::Equal => 20,
             Self::Debug => 21,
             Self::EffectCheck => 22,
+            Self::ListSliceOwned => 23,
         }
     }
 
@@ -184,6 +189,7 @@ impl RuntimeFunc {
             RuntimeFn::ListLength => (Self::ListLength, false),
             RuntimeFn::ListGet => (Self::ListGet, false),
             RuntimeFn::ListSlice => (Self::ListSlice, true),
+            RuntimeFn::ListSliceOwned => (Self::ListSliceOwned, true),
             RuntimeFn::Equal => (Self::Equal, true),
             RuntimeFn::Debug => (Self::Debug, true),
             RuntimeFn::EffectCheck => (Self::EffectCheck, true),

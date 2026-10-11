@@ -6,6 +6,7 @@
 
 import std::int
 import std::list
+import std::nil
 import std::string
 
 // Chaining
@@ -225,4 +226,13 @@ test "a result shows its value or error" {
 test "filter_map keeps the Some results" {
   assert list::filter_map([0, 2, 5], list::get(["a", "b", "c"], _)) == ["a", "c"]
   assert list::filter_map(["1", "x", "3"], fn(text) { to_option(int::parse(text)) }) == [1, 3]
+}
+
+// Tests of `std::nil` that need this module: `std::nil` imports nothing,
+// so it cannot show a `Result` or a `String`.
+
+test "Nil shows as Nil" {
+  let done: Result<Nil, String> = Ok(Nil)
+  assert nil::show(Nil) == "Nil"
+  assert "{done}" == "Ok(Nil)"
 }

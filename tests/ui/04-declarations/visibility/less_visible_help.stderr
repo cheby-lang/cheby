@@ -1,0 +1,48 @@
+error[E0074]: the `pub` function `reveal` mentions the `priv` type `Secret`
+  --> tests/ui/04-declarations/visibility/less_visible_help.cheby:16:32
+   |
+8  | priv type Secret {
+   |           ------ declared here
+...
+16 | pub fn reveal(text: String) -> Secret {
+   |                                ^^^^^^ `priv` type
+   |
+   = note: code that can use `reveal` could not name `Secret` (D-148)
+   = help: make `Secret` `pub`, or make `reveal` `priv`
+
+error[E0074]: the `pub` function `share` mentions the package-visible type `Shared`
+  --> tests/ui/04-declarations/visibility/less_visible_help.cheby:20:25
+   |
+12 | type Shared {
+   |      ------ declared here
+...
+20 | pub fn share(n: Int) -> Shared {
+   |                         ^^^^^^ package-visible type
+   |
+   = note: code that can use `share` could not name `Shared` (D-148)
+   = help: make `Shared` `pub`, or make `share` package-visible
+
+error[E0074]: the fields of the `pub exposed` type `Envelope` mention the `priv` type `Secret`
+  --> tests/ui/04-declarations/visibility/less_visible_help.cheby:25:12
+   |
+8  | priv type Secret {
+   |           ------ declared here
+...
+25 |   Envelope(Secret),
+   |            ^^^^^^ `priv` type
+   |
+   = note: the fields of a `pub exposed` type are visible in every package, so their types must be `pub` (D-198)
+   = help: make `Secret` `pub`, or make `Envelope` `priv`
+
+error[E0074]: the fields of the `pub exposed` type `Parcel` mention the package-visible type `Shared`
+  --> tests/ui/04-declarations/visibility/less_visible_help.cheby:29:10
+   |
+12 | type Shared {
+   |      ------ declared here
+...
+29 |   Parcel(Shared),
+   |          ^^^^^^ package-visible type
+   |
+   = note: the fields of a `pub exposed` type are visible in every package, so their types must be `pub` (D-198)
+   = help: make `Shared` `pub`, or remove `exposed` from `Parcel`
+

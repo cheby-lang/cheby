@@ -1,0 +1,8 @@
+// @mode: check-fail
+// @decisions: D-536, D-616
+//! A `[const-eval]` limit may have leading zeros, but a limit of zero is
+//! an error, not "no limit", since it would fail every constant.
+
+fn main() {
+  assert 1 == 1
+}

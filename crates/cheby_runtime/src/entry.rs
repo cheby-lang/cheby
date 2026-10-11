@@ -59,6 +59,7 @@ use crate::ctx::ExecCtx;
 use crate::generic;
 use crate::io;
 use crate::panic::{PanicReport, stack_position};
+use crate::stats;
 
 /// An entry thunk: generated with the platform C calling convention, it
 /// takes the context and returns a raw `i64` status (`main`, tests) or an
@@ -522,6 +523,8 @@ unsafe fn spawn_entry(
     let interrupter = Arc::new(Interrupter::default());
     let entry_interrupter = Arc::clone(&interrupter);
     let (sender, receiver) = mpsc::channel();
+    let started = Instant::now();
+    let stats_domain = Arc::clone(&config.domain);
     let thread = std::thread::Builder::new()
         .name("cheby-entry".to_owned())
         .stack_size(stack_size)
@@ -574,7 +577,7 @@ unsafe fn spawn_entry(
             sender.send(EntryOutcome::Returned(word)).ok();
         })
         .map_err(RuntimeError::Spawn)?;
-    match wait(&receiver, deadline, &interrupter) {
+    let result = match wait(&receiver, deadline, &interrupter) {
         Ok(outcome @ EntryOutcome::Returned(_)) => {
             thread.join().map_err(|_| RuntimeError::EntryLost)?;
             Ok(outcome)
@@ -585,7 +588,9 @@ unsafe fn spawn_entry(
             thread.join().ok();
             Err(RuntimeError::EntryLost)
         }
-    }
+    };
+    stats_domain.stats().add_entry(started.elapsed());
+    result
 }
 
 /// How often the watchdog repeats its interrupt after the deadline, in
@@ -659,6 +664,9 @@ impl Default for RunConfig {
 ///   when the status is 0 or 1 (D-458). Constants frozen before `main`
 ///   have left the domain, so every live object is a leak.
 ///
+/// With `CHEBY_RT_STATS=1` it first prints `main`'s wall time and the
+/// domain's counters to standard error ([`stats::report`]).
+///
 /// # Errors
 ///
 /// [`RuntimeError`] if the entry cannot run or returns an invalid status.
@@ -677,10 +685,18 @@ pub unsafe fn run_main(entry: EntryFn, config: RunConfig) -> Result<i32, Runtime
         domain: Arc::clone(&domain),
         consts: None,
     };
+    let started = Instant::now();
     // SAFETY: the caller guarantees `run_entry`'s preconditions for
     // `entry`, which this function passes on unchanged.
     let outcome = unsafe { run_entry(entry, &entry_config) }?;
     let flushed = io::flush_stdout().is_ok();
+    if stats::enabled() {
+        io::write_stderr(&stats::report(
+            started.elapsed(),
+            domain.peak_bytes(),
+            domain.stats(),
+        ));
+    }
     match outcome {
         EntryOutcome::Panicked(_) => Ok(status::PANIC),
         EntryOutcome::Returned(_) if !flushed => Ok(status::ERR),

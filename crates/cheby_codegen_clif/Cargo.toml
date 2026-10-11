@@ -15,6 +15,7 @@ cheby_runtime.workspace = true
 cranelift-codegen.workspace = true
 cranelift-frontend.workspace = true
 cranelift-module.workspace = true
+rayon.workspace = true
 rustc-hash.workspace = true
 
 [dev-dependencies]

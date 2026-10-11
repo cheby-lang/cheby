@@ -80,6 +80,14 @@ pub(crate) struct Frontend {
     pub const_eval_time_limit: std::time::Duration,
     /// The local package's `[const-eval] memory-limit` in bytes (D-536).
     pub const_eval_memory_limit: u64,
+    /// Per module id: its imports, as written. For the REPL's `:module`,
+    /// which puts a module's imports in scope (§13.5.3).
+    pub imports: Vec<Vec<ImportRequest>>,
+    /// Per module id: the targets of its imports, in the same order.
+    pub import_targets: Vec<Vec<ImportTarget>>,
+    /// Per module id: the native symbols its functions bind, in item order,
+    /// so the REPL's `:reload` can recompute [`Frontend::natives`].
+    pub module_natives: Vec<Vec<(Box<str>, NativeBinding)>>,
 }
 
 /// An `@external(native, "symbol")` binding of a symbol.
@@ -91,7 +99,7 @@ pub(crate) struct NativeBinding {
 }
 
 /// The native symbols bound by `resolved`'s functions, in item order.
-fn native_bindings(
+pub(crate) fn native_bindings(
     resolved: &ResolvedModule,
     iface: &ModuleInterface,
     globals: &Globals,
@@ -114,7 +122,7 @@ fn native_bindings(
 /// reporting E0054 for a symbol already bound with another C signature
 /// (§12.5.1). Modules are merged in the topological order, so the first
 /// binding kept is the same on every schedule.
-fn bind_natives(
+pub(crate) fn bind_natives(
     bindings: Vec<(Box<str>, NativeBinding)>,
     natives: &mut BTreeMap<Box<str>, NativeBinding>,
     diagnostics: &mut Vec<Diagnostic>,
@@ -185,6 +193,31 @@ impl Frontend {
             .fns
             .iter()
             .find(|f| f.entry.is_some())
+    }
+
+    /// Drops the results [`check_reloaded`] added for `modules`, the
+    /// versions of a `:reload` that was rejected: they leave the build
+    /// order, so nothing compiles, imports or binds natives through them
+    /// (GAP(repl-reload)). Their ids and published interfaces stay, unused.
+    pub fn forget_reloaded(&mut self, modules: &[ModuleId]) {
+        self.order.retain(|m| !modules.contains(m));
+        for &module in modules {
+            let Ok(at) = usize::try_from(module.as_u32()) else {
+                continue;
+            };
+            if let Some(slot) = self.checked.get_mut(at) {
+                *slot = None;
+            }
+            if let Some(slot) = self.imports.get_mut(at) {
+                slot.clear();
+            }
+            if let Some(slot) = self.import_targets.get_mut(at) {
+                slot.clear();
+            }
+            if let Some(slot) = self.module_natives.get_mut(at) {
+                slot.clear();
+            }
+        }
     }
 }
 
@@ -433,6 +466,117 @@ pub(crate) fn check_extra_module(
         interface: Arc::new(iface),
         warnings: diags,
     }))
+}
+
+/// A new version of a package module that the REPL's `:reload` checks on
+/// top of a finished [`Frontend`] (§13.5.3).
+pub(crate) struct ReloadedModule<'a> {
+    /// Its id, already in `front.modules`, after every module it imports.
+    pub id: ModuleId,
+    pub tree: &'a SyntaxTree,
+    pub imports: Vec<ImportRequest>,
+    /// The targets of `imports`, the new versions of reloaded modules
+    /// included.
+    pub targets: Vec<ImportTarget>,
+}
+
+/// Resolves and checks a reloaded module (§13.5.3, GAP(repl-reload)), as
+/// the build checks a package module, publishes its interface, and adds
+/// its results to `front` (`checked`, `order`, its imports and native
+/// bindings); [`Frontend::natives`] does not change. `display` is the
+/// table diagnostics name modules with. Returns its diagnostics, unsorted;
+/// when one is an error, the caller must not use the module.
+///
+/// # Errors
+///
+/// An [`Ice`] if the module's id is not the next free slot of `front`'s
+/// results or a phase fails.
+pub(crate) fn check_reloaded(
+    front: &mut Frontend,
+    display: &ModuleTable,
+    module: ReloadedModule<'_>,
+) -> Result<Vec<Diagnostic>, Ice> {
+    let id = module.id;
+    // What it may read: its imports and the shipped home modules of
+    // prelude types (D-447), with their transitive dependencies (D-246).
+    let mut direct: Vec<ModuleId> = module.targets.iter().filter_map(|t| t.module()).collect();
+    for (_, segment) in builtin::HOMES {
+        if std_lib::find(segment).is_some()
+            && let Some(home) = front.modules.find(&ModulePath::root("std").child(segment))
+        {
+            direct.push(home);
+        }
+    }
+    let mut deps = Vec::new();
+    for dep in direct {
+        deps.push(dep);
+        if let Some(checked) = front.checked(dep) {
+            deps.extend(checked.deps.iter().copied());
+        }
+    }
+    deps.sort_unstable();
+    deps.dedup();
+    deps.retain(|&m| m != id && m != ModuleId::BUILTIN);
+    front.set.reserve_modules(front.modules.len())?;
+    let known = std_lib::known();
+    let input = ResolveInput {
+        module: id,
+        package: PackageId::LOCAL,
+        tree: module.tree,
+        imports: &module.imports,
+        targets: &module.targets,
+        deps: DepView::new(&front.set, &deps),
+        modules: display,
+        globals: &front.globals,
+        std: StdCatalog { known: &known },
+        package_targets: front.package_targets,
+    };
+    let (resolved, mut diags) = resolve_module(&input)?;
+    let types = TypesInput {
+        module: id,
+        package: PackageId::LOCAL,
+        tree: module.tree,
+        resolved: &resolved,
+        deps: DepView::new(&front.set, &deps),
+        modules: display,
+        globals: &front.globals,
+    };
+    let (iface, found) = build_interface(&types)?;
+    diags.extend(found);
+    let natives = native_bindings(&resolved, &iface, &front.globals);
+    let iface = Arc::new(iface);
+    front.set.publish(Arc::clone(&iface))?;
+    let (thir, found) = check_bodies_with(&types, &iface, Tests::SkipStd)?;
+    diags.extend(found);
+    let at = index(id)?;
+    while front.checked.len() <= at {
+        front.checked.push(None);
+        front.imports.push(Vec::new());
+        front.import_targets.push(Vec::new());
+        front.module_natives.push(Vec::new());
+    }
+    let ok = !diags.iter().any(Diagnostic::is_error);
+    if ok {
+        if let Some(slot) = front.checked.get_mut(at) {
+            *slot = Some(Checked {
+                deps,
+                thir,
+                interface: iface,
+                warnings: Vec::new(),
+            });
+        }
+        if let Some(slot) = front.imports.get_mut(at) {
+            *slot = module.imports;
+        }
+        if let Some(slot) = front.import_targets.get_mut(at) {
+            *slot = module.targets;
+        }
+        if let Some(slot) = front.module_natives.get_mut(at) {
+            *slot = natives;
+        }
+        front.order.push(id);
+    }
+    Ok(diags)
 }
 
 /// The module table and the interfaces an extra module sees, and its id
@@ -1090,6 +1234,8 @@ fn run_inner(
 
     // The results, merged in the topological order (D-264).
     let mut checked: Vec<Option<Checked>> = (0..modules.len()).map(|_| None).collect();
+    let mut module_natives: Vec<Vec<(Box<str>, NativeBinding)>> =
+        (0..modules.len()).map(|_| Vec::new()).collect();
     let mut built = Vec::new();
     let mut natives = BTreeMap::new();
     // The resolutions of the package's modules, for the whole-package
@@ -1105,6 +1251,9 @@ fn run_inner(
             .and_then(Option::take)
             .ok_or_else(|| Ice::new(format!("module {id:?} was never checked")))??;
         diagnostics.extend(output.early);
+        if let Some(slot) = module_natives.get_mut(index(id)?) {
+            slot.clone_from(&output.natives);
+        }
         bind_natives(output.natives, &mut natives, diagnostics);
         diagnostics.extend(output.late);
         if let Some(slot) = checked.get_mut(index(id)?) {
@@ -1161,6 +1310,9 @@ fn run_inner(
         package_name,
         const_eval_time_limit,
         const_eval_memory_limit,
+        imports,
+        import_targets: targets,
+        module_natives,
     })
 }
 

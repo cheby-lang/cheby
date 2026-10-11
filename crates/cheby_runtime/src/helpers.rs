@@ -10,6 +10,7 @@ use crate::ctx::ExecCtx;
 use crate::generic::{self, Reached};
 use crate::object;
 use crate::panic::{cheby_rt_panic, fatal};
+use crate::stats::{self, Event};
 use crate::string;
 use crate::values;
 
@@ -44,6 +45,17 @@ pub unsafe extern "C" fn cheby_rt_str_append(ctx: *mut ExecCtx, acc: Word, piece
             "`cheby_rt_str_append` got a piece that is not a String"
         ));
     };
+    // SAFETY: `acc` is live (the caller's contract) and checked to be a
+    // text object before its fields are read.
+    if unsafe { string::bytes(acc) }.is_some() {
+        // SAFETY: as above.
+        let path = unsafe { string::growth(acc, object::to_u64(bytes.len()), true) };
+        stats::record(match path {
+            string::Growth::InPlace => Event::StrAppendInPlace,
+            string::Growth::Grown => Event::StrAppendGrown,
+            string::Growth::Copied => Event::StrAppendCopied,
+        });
+    }
     if acc == piece {
         // The piece aliases the accumulator, which this call may grow or
         // free: copy it first. (The caller owns two references, so the

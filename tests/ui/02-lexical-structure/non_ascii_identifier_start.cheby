@@ -1,0 +1,9 @@
+// @mode: parse-fail
+// @decisions: D-127, D-432
+//! A word that starts with a non-ASCII letter is read as one identifier
+//! and reported once, not once per character (§2.3).
+
+fn main() {
+  let été = 1
+  assert été == 1
+}

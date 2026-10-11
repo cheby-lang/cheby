@@ -202,6 +202,9 @@ unsafe fn abandon(ctx: *mut ExecCtx, report: PanicReport) -> ! {
     };
     // If the host has gone there is nobody to tell; park anyway.
     outcome.send(EntryOutcome::Panicked(report)).ok();
+    // The parked thread never allocates again: its cached free blocks go
+    // back to the system, like its stack.
+    crate::alloc::release_block_cache();
     crate::entry::release_abandoned_stack();
     loop {
         std::thread::park();

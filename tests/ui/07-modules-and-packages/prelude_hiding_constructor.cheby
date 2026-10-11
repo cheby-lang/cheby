@@ -1,5 +1,5 @@
 // @mode: check-pass
-// @decisions: D-146, D-212
+// @decisions: D-146, D-212, D-487
 //! A constructor named like a prelude constructor hides it in its module,
 //! with a warning. The type's own name hides nothing.
 

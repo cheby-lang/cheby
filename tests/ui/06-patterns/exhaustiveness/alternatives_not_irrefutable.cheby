@@ -1,5 +1,5 @@
 // @mode: check-fail
-// @decisions: D-242
+// @decisions: D-242, D-509
 //! Alternatives make a pattern irrefutable only when one of them is
 //! irrefutable on its own (§6.1). These alternatives cover every value
 //! only together, so `let` and closure parameters reject them.

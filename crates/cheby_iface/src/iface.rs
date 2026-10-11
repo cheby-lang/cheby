@@ -283,6 +283,17 @@ impl ModuleInterface {
         Ok(())
     }
 
+    /// Makes `name` in `ns` refer to nothing if it refers to item `index`;
+    /// the item itself stays. The REPL retires a function through which a
+    /// session type satisfied interfaces once the session's name means
+    /// another function (D-610).
+    pub fn unbind(&mut self, ns: Namespace, name: Name, index: DefIndex) {
+        let map = self.map_mut(ns);
+        if map.get(&name) == Some(&index) {
+            map.remove(&name);
+        }
+    }
+
     fn check_parent(index: DefIndex, item: &IfaceItem) -> Result<(), Ice> {
         match item.parent {
             Some(parent) if parent >= index => {
@@ -614,6 +625,20 @@ mod tests {
                 .push(item(&g, "X", DefKind::Ctor, Vis::Pub, Some(9)))
                 .is_err()
         );
+        // Unbinding forgets the name only while it means that item.
+        let show = g.names.intern("show");
+        let first = iface
+            .push(item(&g, "show", DefKind::Fn, Vis::Pub, None))
+            .unwrap();
+        let second = iface
+            .push(item(&g, "show", DefKind::Fn, Vis::Pub, None))
+            .unwrap();
+        iface.unbind(Namespace::Value, show, first);
+        assert_eq!(iface.lookup(Namespace::Value, show), Some(second));
+        iface.unbind(Namespace::Value, show, second);
+        assert_eq!(iface.lookup(Namespace::Value, show), None);
+        assert!(iface.item(second).is_some());
+        assert!(!iface.is_current(second));
     }
 
     /// The REPL gives an entry's body its inferred signature and moves its

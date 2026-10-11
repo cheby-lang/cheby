@@ -4,5 +4,5 @@ error[E0013]: a path has at most one module qualifier
 10 |   std::io::println("hi")
    |          ^^
    |
-   = help: import the inner module and qualify with its last name, such as `ops::Add`
+   = help: import the inner module and qualify with its last name: `import std::io` and `io::println`
 

@@ -8,7 +8,7 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use crate::golden_tests::check_golden;
-use crate::lower::pat::tree::{Decision, Key, Occ, OccId, RECORDED, Step, Test, Tree};
+use crate::lower::pat::tree::{Decision, Key, Occ, OccId, RECORDED, RECORDING, Step, Test, Tree};
 use crate::test_support::{Lowered, lower_package, lower_source};
 
 /// Every pattern form, each in a function of its own.
@@ -306,9 +306,10 @@ fn list_patterns_use_length_get_and_slice() {
     // `last` is counted from the end in the default (two or more).
     assert!(lists.contains("checked sub int _1, const int 1"), "{lists}");
     let rests = lowered.function("app", "app::rests");
-    // An O(1) slice from 1 to the length (D-053).
+    // An O(1) slice from 1 to the length (D-053), which consumes the list,
+    // used for the last time there (rc.rs).
     assert!(
-        rests.contains("call_runtime list_slice(borrow _0, borrow const int 1, borrow _1)"),
+        rests.contains("call_runtime list_slice_owned(_0, borrow const int 1, borrow _1)"),
         "{rests}"
     );
     let suffix = lowered.function("app", "app::suffix");
@@ -830,6 +831,33 @@ fn growing_list_prefixes() {
     let depth = lowered.function("app", "app::depth");
     let reads = count(&depth, "call_runtime list_get");
     assert!(reads <= ARMS + 1, "{reads} element reads for {ARMS} arms");
+}
+
+/// A list pattern of 3,000 elements gives a tree about 6,000 tests deep;
+/// compiling, lowering and freeing it work on a 1 MiB stack, since none
+/// of them recurses per tested position (D-601). The front end checks the
+/// program first, on the test's own thread and rayon's default workers,
+/// whose exhaustiveness search uses an explicit stack too.
+#[test]
+fn long_list_patterns_lower_on_a_small_stack() {
+    const ELEMENTS: usize = 3_000;
+    let zeros = vec!["0"; ELEMENTS].join(", ");
+    let src = format!(
+        "//! A long list pattern.\n\nfn f(xs: List<Int>) -> Int {{\n  case xs {{\n    \
+         [{zeros}] => 1\n    [{zeros}, ..] => 2\n    _ => 0\n  }}\n}}\n\n\
+         fn main() {{\n  let _ = f([0])\n}}\n"
+    );
+    let lowered =
+        crate::test_support::lower_source_on_stack(&[("", src.as_str())], 1 << 20, || {
+            RECORDING.with(|r| r.set(false));
+        });
+    let f = lowered.function("app", "app::f");
+    // One length test and one element read per element.
+    let reads = count(&f, "call_runtime list_get");
+    assert!(
+        (ELEMENTS..=ELEMENTS + 2).contains(&reads),
+        "{reads} element reads"
+    );
 }
 
 /// Few lengths keep one switch over the lengths.

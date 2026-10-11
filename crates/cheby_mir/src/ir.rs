@@ -993,6 +993,11 @@ pub enum RuntimeFn {
     /// `(list borrowed, start: Int, end: Int) -> List`: an O(1) view of
     /// `start..end` (D-053), for `..rest`. Result owned.
     ListSlice,
+    /// `(list owned, start: Int, end: Int) -> List`: [`Self::ListSlice`]
+    /// of a list used for the last time, which it consumes: a unique
+    /// list's root becomes the view in place. Only the RC pass emits it,
+    /// for a `ListSlice` whose list it would drop right after.
+    ListSliceOwned,
     /// `(a borrowed, b borrowed, location: String borrowed) -> Bool`:
     /// structural `==` (§3.13). Panics `EqualityOnFunction` (D-233) at
     /// `location`, the static `Const::Str` of the `==`'s source location
@@ -1009,7 +1014,7 @@ pub enum RuntimeFn {
 
 impl RuntimeFn {
     /// Every helper, in declaration order.
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 12] = [
         Self::StrWithCapacity,
         Self::StrAppend,
         Self::StrEq,
@@ -1018,6 +1023,7 @@ impl RuntimeFn {
         Self::ListLength,
         Self::ListGet,
         Self::ListSlice,
+        Self::ListSliceOwned,
         Self::Equal,
         Self::Debug,
         Self::EffectCheck,
@@ -1038,6 +1044,7 @@ impl RuntimeFn {
             Self::ListLength | Self::Debug | Self::EffectCheck => &[(Value, Borrowed)],
             Self::ListGet => &[(Value, Borrowed), (Int, Borrowed)],
             Self::ListSlice => &[(Value, Borrowed), (Int, Borrowed), (Int, Borrowed)],
+            Self::ListSliceOwned => &[(Value, Owned), (Int, Borrowed), (Int, Borrowed)],
         }
     }
 
@@ -1052,6 +1059,7 @@ impl RuntimeFn {
             | Self::ListAppend
             | Self::ListGet
             | Self::ListSlice
+            | Self::ListSliceOwned
             | Self::Debug => Some(Repr::Value),
             Self::StrEq | Self::Equal => Some(Repr::Bool),
             Self::ListLength => Some(Repr::Int),
@@ -1071,6 +1079,7 @@ impl RuntimeFn {
             Self::ListLength => "list_length",
             Self::ListGet => "list_get",
             Self::ListSlice => "list_slice",
+            Self::ListSliceOwned => "list_slice_owned",
             Self::Equal => "equal",
             Self::Debug => "debug",
             Self::EffectCheck => "effect_check",

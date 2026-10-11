@@ -1,5 +1,5 @@
 // @mode: check-fail
-// @decisions: D-039, D-112
+// @decisions: D-039, D-112, D-481
 //! `Map` and `Set` are built-in types but not in the prelude: they are
 //! named through `std::map` and `std::set` (§3.2).
 

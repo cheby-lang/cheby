@@ -211,6 +211,29 @@ fn environment_and_flag_precedence() {
     assert!(colored(&["--color=never", "check", "--color=always"], &[]));
 }
 
+/// The REPL's diagnostics and tool errors follow `--color` too.
+#[test]
+fn repl_follows_the_flag() {
+    let dir = Path::new(TMP);
+    let input: &[u8] = b"let x: Int = \"a\"\n:bogus\n:quit\n";
+    let session = |flag: &str| {
+        let mut cmd = Command::new(CHEBY);
+        cmd.args([flag, "repl"]).current_dir(dir);
+        for var in COLOR_VARS {
+            cmd.env_remove(var);
+        }
+        process::run(cmd, Some(input), TIMEOUT).unwrap()
+    };
+    let plain = session("--color=never");
+    let colored = session("--color=always");
+    assert!(plain.stderr.contains("error[E0047]"), "{}", plain.stderr);
+    assert!(!plain.stderr.contains('\x1b'), "{:?}", plain.stderr);
+    assert!(colored.stderr.contains('\x1b'), "{:?}", colored.stderr);
+    assert_eq!(strip_colors(&colored.stderr), plain.stderr);
+    assert_eq!(colored.stdout, plain.stdout);
+    assert_eq!(colored.status, plain.status);
+}
+
 /// Tool errors without a code follow the same choice, and clap's usage
 /// errors do too.
 #[test]

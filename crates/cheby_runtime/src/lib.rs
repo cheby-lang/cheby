@@ -14,7 +14,8 @@
 //!   nominal descriptors).
 //! - Running code: [`panic`](mod@panic), [`ctx`], [`entry`] (entries, the
 //!   current entry, exit statuses), [`callback`] (kernels calling
-//!   closures), [`consteval`] (constant evaluation's runtime side).
+//!   closures), [`consteval`] (constant evaluation's runtime side),
+//!   [`stats`] (counters of allocations and in-place updates).
 //! - Kernels, by std module: [`io`], and the private modules `num`, `list`,
 //!   `text`, `bytes`, `env` and [`hamt`], each registering its symbols in
 //!   [`symbols`] (plan §4.3.3).
@@ -44,6 +45,7 @@ mod num;
 pub mod object;
 pub mod panic;
 pub mod rc;
+pub mod stats;
 pub mod string;
 mod symbols;
 mod text;

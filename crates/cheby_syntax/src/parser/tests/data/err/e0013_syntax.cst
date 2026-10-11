@@ -169,7 +169,7 @@ error[E0013]: a path has at most one module qualifier
 5 |   a::b::c
   |       ^^
   |
-  = help: import the inner module and qualify with its last name, such as `ops::Add`
+  = help: import the inner module and qualify with its last name: `import a::b` and `b::c`
 
 error[E0013]: a test has no visibility
  --> err/e0013_syntax.cheby:7:1

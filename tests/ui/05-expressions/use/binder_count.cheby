@@ -1,5 +1,5 @@
 // @mode: check-fail
-// @decisions: D-023
+// @decisions: D-023, D-495
 //! The binders of a `use` are the callback's parameters, so their number
 //! must match (§5.10).
 

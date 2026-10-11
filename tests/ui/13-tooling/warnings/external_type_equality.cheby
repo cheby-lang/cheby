@@ -1,0 +1,21 @@
+// @mode: check-pass
+// @decisions: D-189, D-518
+//! `==` on an external type panics at run time, as on functions, since
+//! identity differs between targets. So `==` on a type known to contain
+//! an external type warns, also through a field.
+
+@external(native, "app_db_close")
+@external(js, "./db.mjs", "close")
+pub type Db
+
+pub type Session {
+  Session(Db, String),
+}
+
+pub fn same_db(a: Db, b: Db) -> Bool {
+  a == b
+}
+
+pub fn same_session(a: Session, b: Session) -> Bool {
+  a != b
+}

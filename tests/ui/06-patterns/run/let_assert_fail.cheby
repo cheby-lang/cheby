@@ -1,5 +1,5 @@
 // @mode: run-fail
-// @decisions: D-159, D-449, D-528
+// @decisions: D-159, D-449, D-528, D-570
 //! A `let assert` whose pattern does not match panics with the debug text
 //! of the value, at the pattern (§11.4).
 

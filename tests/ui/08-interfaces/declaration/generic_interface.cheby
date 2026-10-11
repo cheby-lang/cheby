@@ -1,5 +1,5 @@
 // @mode: parse-fail
-// @decisions: D-165
+// @decisions: D-165, D-495
 //! Interfaces have no type parameters: `interface Into<T>` is an error
 //! (§8.1).
 

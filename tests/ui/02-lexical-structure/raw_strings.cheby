@@ -1,0 +1,13 @@
+// @mode: run-pass
+// @decisions: D-114, D-130
+//! A raw string ends at a `"` followed by as many `#` as it started with,
+//! so it can hold quotes, and nothing in it is an escape or an
+//! interpolation (§2.5.3).
+
+import std::io
+
+fn main() {
+  io::println(r#"say "hi" to {name}"#)
+  io::println(r##"a "# inside"##)
+  io::println(r"back\slash \n")
+}

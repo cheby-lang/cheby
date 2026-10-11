@@ -1,5 +1,5 @@
 // @mode: check-fail
-// @decisions: D-048
+// @decisions: D-048, D-487
 //! The constructors of a `pub` type from another package are usable only
 //! if the type is `exposed`, so a `json::decode::Decoder` cannot be built or
 //! matched here (§4.3.4, §6.4).

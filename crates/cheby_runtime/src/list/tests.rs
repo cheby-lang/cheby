@@ -436,6 +436,69 @@ fn helpers_follow_the_ownership_of_plan_4_1() {
     });
 }
 
+/// `cheby_rt_list_slice_owned` changes a unique root in place and leaves a
+/// shared one alone; the stats counters see which path each update took.
+#[test]
+fn owned_slices_reuse_a_unique_root() {
+    use crate::stats::Event;
+    balanced(|| {
+        let domain = crate::alloc::current_domain();
+        let count = |event| domain.stats().count(event);
+        let null = std::ptr::null_mut();
+        let xs = list(&[1, 2, 3, 4]);
+        let (in_place, copied) = (
+            count(Event::ListUpdateInPlace),
+            count(Event::ListUpdateCopied),
+        );
+        // SAFETY: a live list, given up.
+        let rest = unsafe { cheby_rt_list_slice_owned(null, xs.word(), 1, 4) };
+        assert_eq!(rest, xs.word(), "a unique root is reused");
+        check(root(rest), &[2, 3, 4]);
+        assert_eq!(count(Event::ListUpdateInPlace), in_place + 1);
+        // A shared list keeps its view; the slice is a new root.
+        dup_word(rest);
+        // SAFETY: as above; the test keeps its other reference.
+        let tail = unsafe { cheby_rt_list_slice_owned(null, rest, 2, 9) };
+        assert_ne!(tail, rest);
+        check(root(tail), &[4]);
+        check(root(rest), &[2, 3, 4]);
+        assert_eq!(count(Event::ListUpdateCopied), copied + 1);
+        // The whole list is passed through; an empty slice is the static
+        // empty list.
+        // SAFETY: as above.
+        let same = unsafe { cheby_rt_list_slice_owned(null, tail, 0, 1) };
+        assert_eq!(same, tail);
+        // SAFETY: as above.
+        let none = unsafe { cheby_rt_list_slice_owned(null, same, 1, 1) };
+        assert_eq!(none, empty());
+        // SAFETY: as above.
+        let none = unsafe { cheby_rt_list_slice_owned(null, rest, 2, 1) };
+        assert_eq!(none, empty());
+    });
+}
+
+/// A push onto a unique list is counted as in place, onto a shared one as
+/// copied, and onto the empty list as neither.
+#[test]
+fn pushes_are_counted_by_path() {
+    use crate::stats::Event;
+    balanced(|| {
+        let domain = crate::alloc::current_domain();
+        let count = |event| domain.stats().count(event);
+        let (in_place, copied) = (count(Event::ListPushInPlace), count(Event::ListPushCopied));
+        let xs = ops::push(root(empty()), elem(1));
+        let xs = ops::push(xs, elem(2));
+        assert_eq!(count(Event::ListPushInPlace), in_place + 1);
+        dup_word(xs.word());
+        let ys = ops::push(xs, elem(3));
+        assert_eq!(count(Event::ListPushCopied), copied + 1);
+        check(xs, &[1, 2]);
+        check(ys, &[1, 2, 3]);
+        release(xs);
+        release(ys);
+    });
+}
+
 #[test]
 fn kernels_borrow_and_update_in_place_at_count_one() {
     balanced(|| {
@@ -677,6 +740,7 @@ enum Op {
     Set(usize, i64),
     Append(usize),
     Slice(usize, usize),
+    SliceOwned(usize, usize),
     Take(i64),
     Drop(i64),
     SplitAt(i64, bool),
@@ -689,6 +753,7 @@ fn op() -> impl Strategy<Value = Op> {
         3 => (any::<usize>(), any::<i64>()).prop_map(|(i, v)| Op::Set(i, v % 1_000_000)),
         2 => prop_oneof![0..40_usize, 0..3_000_usize].prop_map(Op::Append),
         2 => (any::<usize>(), any::<usize>()).prop_map(|(a, b)| Op::Slice(a, b)),
+        2 => (any::<usize>(), any::<usize>()).prop_map(|(a, b)| Op::SliceOwned(a, b)),
         1 => (-5..200_000_i64).prop_map(Op::Take),
         1 => (-5..200_000_i64).prop_map(Op::Drop),
         1 => ((-5..200_000_i64), any::<bool>()).prop_map(|(n, front)| Op::SplitAt(n, front)),
@@ -746,6 +811,18 @@ fn apply(xs: Root, model: &mut Vec<i64>, op: &Op, shared: bool) -> Root {
             as_wrapper(xs, |w| unsafe {
                 cheby_list_slice(w, start as i64, end as i64)
             })
+        }
+        Op::SliceOwned(start, end) => {
+            let (start, end) = (start % (len + 2), end % (len + 2));
+            let (from, to) = (start.min(len), end.min(len));
+            *model = if from < to {
+                model[from..to].to_vec()
+            } else {
+                Vec::new()
+            };
+            let null = std::ptr::null_mut();
+            // SAFETY: a live list, given up.
+            root(unsafe { cheby_rt_list_slice_owned(null, xs.word(), start as i64, end as i64) })
         }
         Op::Take(n) => {
             let k = n.clamp(0, len as i64) as usize;
@@ -820,6 +897,9 @@ enum Step {
     Set(usize, usize, i64),
     /// A slice of version `i` (borrowed) becomes a new version.
     Slice(usize, usize, usize),
+    /// Version `i` (owned) is replaced by its slice (`[x, ..rest]` on a
+    /// list that dies at the match).
+    SliceOwned(usize, usize, usize),
     /// Version `i` (owned) followed by version `j` (borrowed).
     Append(usize, usize),
 }
@@ -833,6 +913,8 @@ fn step() -> impl Strategy<Value = Step> {
             .prop_map(|(i, k, v)| Step::Set(i, k, v)),
         3 => (any::<usize>(), any::<usize>(), any::<usize>())
             .prop_map(|(i, a, b)| Step::Slice(i, a, b)),
+        2 => (any::<usize>(), any::<usize>(), any::<usize>())
+            .prop_map(|(i, a, b)| Step::SliceOwned(i, a, b)),
         2 => (any::<usize>(), any::<usize>()).prop_map(|(i, j)| Step::Append(i, j)),
     ]
 }
@@ -889,6 +971,14 @@ proptest! {
                         let sliced = ops::slice(*xs, from, to);
                         let part = model[from..to].to_vec();
                         versions.push((sliced, part));
+                    }
+                    Step::SliceOwned(i, a, b) => {
+                        let (xs, model) = &mut versions[i % n];
+                        let len = model.len();
+                        let (a, b) = (a % (len + 1), b % (len + 1));
+                        let (from, to) = (a.min(b), a.max(b));
+                        *model = model[from..to].to_vec();
+                        *xs = ops::slice_owned(*xs, from, to);
                     }
                     Step::Append(i, j) => {
                         let (other, other_model) = versions[j % n].clone();

@@ -1,0 +1,35 @@
+// @mode: run-pass
+// @decisions: D-502, D-530, D-604
+//! A `dyn` value converted to `dyn` again through a type parameter counts
+//! as the value inside it for `==` and debug text, so it compares like a
+//! direct conversion (§8.6).
+
+import std::io
+
+pub interface Any
+
+pub interface Shape {
+  fn area(Self) -> Int
+}
+
+pub type Square {
+  Square(Int),
+}
+
+pub fn area(square: Square) -> Int {
+  let Square(side) = square
+  side * side
+}
+
+fn boxed<T: Any>(value: T) -> dyn Any {
+  value
+}
+
+fn main() {
+  let shape: dyn Shape = Square(3)
+  let through_bound = boxed(shape)
+  let direct: dyn Any = shape
+  assert through_bound == direct
+  io::println("{through_bound:?}")
+  io::println("{direct:?}")
+}

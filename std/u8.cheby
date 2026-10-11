@@ -217,6 +217,7 @@ test "u8 parses and shows decimal digits" {
   assert parse("255") == Ok(255)
   assert parse("256") == Err(Nil)
   assert parse("-1") == Err(Nil)
+  assert parse("-0") == Ok(0)
   assert parse_base("ff", 16) == Ok(255)
   assert show(255) == "255"
   assert "{small}" == "7"

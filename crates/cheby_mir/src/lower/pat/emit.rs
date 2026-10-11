@@ -85,6 +85,27 @@ struct Match<'t> {
     span: Span,
 }
 
+/// What [`BodyCx::emit_tree`] lowers next, on its explicit stack.
+enum Emit<'t> {
+    /// `tree` with the positions of `env`, after switching to `block` if
+    /// there is one (otherwise in the current block).
+    Tree {
+        tree: &'t Tree,
+        env: Env,
+        block: Option<BlockId>,
+    },
+    /// The rest of a `String` test, in `block`, where the previous
+    /// literal did not match: the next comparison of `value` with the
+    /// first of `cases`, or `default` when none is left.
+    Str {
+        value: Local,
+        cases: &'t [(Key, Tree)],
+        default: &'t Tree,
+        env: Env,
+        block: BlockId,
+    },
+}
+
 /// The values of the positions read on the current path.
 #[derive(Clone)]
 struct Env {
@@ -159,42 +180,98 @@ impl BodyCx<'_, '_> {
         Ok(None)
     }
 
-    fn emit_tree(&mut self, m: &mut Match<'_>, tree: &Tree, env: Env) -> Result<(), Ice> {
-        match tree {
-            Tree::Fail => match m.on_fail {
-                OnFail::Unreachable => self.terminate(Terminator::Unreachable),
-                OnFail::LetAssert { .. } => {
-                    let block = if let Some(b) = m.fail_block {
-                        b
-                    } else {
-                        let b = self.new_block()?;
-                        m.fail_block = Some(b);
-                        b
-                    };
-                    self.goto(block, Vec::new())
+    /// Lowers `tree`, depth first, on an explicit stack ([`Emit`]), so a
+    /// deep tree (a long list pattern) needs no deep Rust stack (D-601).
+    /// Siblings are lowered in order, each subtree completely before the
+    /// next, as a recursive walk would.
+    fn emit_tree<'t>(&mut self, m: &mut Match<'t>, tree: &'t Tree, env: Env) -> Result<(), Ice> {
+        let mut work = vec![Emit::Tree {
+            tree,
+            env,
+            block: None,
+        }];
+        while let Some(item) = work.pop() {
+            match item {
+                Emit::Tree { tree, env, block } => {
+                    if let Some(block) = block {
+                        self.switch_to(block)?;
+                    }
+                    match tree {
+                        Tree::Fail => self.emit_fail(m)?,
+                        Tree::Leaf {
+                            arm,
+                            bindings,
+                            otherwise,
+                        } => {
+                            self.emit_leaf(
+                                m,
+                                *arm,
+                                bindings,
+                                otherwise.as_deref(),
+                                env,
+                                &mut work,
+                            )?;
+                        }
+                        Tree::Test {
+                            occ,
+                            test,
+                            cases,
+                            default,
+                        } => {
+                            self.emit_test(
+                                m,
+                                *occ,
+                                test,
+                                cases,
+                                default.as_deref(),
+                                env,
+                                &mut work,
+                            )?;
+                        }
+                    }
                 }
-            },
-            Tree::Leaf {
-                arm,
-                bindings,
-                otherwise,
-            } => self.emit_leaf(m, *arm, bindings, otherwise.as_deref(), env),
-            Tree::Test {
-                occ,
-                test,
-                cases,
-                default,
-            } => self.emit_test(m, *occ, test, cases, default.as_deref(), env),
+                Emit::Str {
+                    value,
+                    cases,
+                    default,
+                    env,
+                    block,
+                } => {
+                    self.switch_to(block)?;
+                    self.emit_str_case(value, cases, default, env, &mut work)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Ends the current block where no arm matches.
+    fn emit_fail(&mut self, m: &mut Match<'_>) -> Result<(), Ice> {
+        match m.on_fail {
+            OnFail::Unreachable => self.terminate(Terminator::Unreachable),
+            OnFail::LetAssert { .. } => {
+                let block = if let Some(b) = m.fail_block {
+                    b
+                } else {
+                    let b = self.new_block()?;
+                    m.fail_block = Some(b);
+                    b
+                };
+                self.goto(block, Vec::new())
+            }
         }
     }
 
-    fn emit_leaf(
+    /// Lowers a leaf; the tree taken when its guard is `False` goes on
+    /// `work`.
+    fn emit_leaf<'t>(
         &mut self,
-        m: &mut Match<'_>,
+        m: &mut Match<'t>,
         arm: usize,
         bindings: &[(LocalId, OccId)],
-        otherwise: Option<&Tree>,
+        otherwise: Option<&'t Tree>,
         mut env: Env,
+        work: &mut Vec<Emit<'t>>,
     ) -> Result<(), Ice> {
         let plan = m
             .arms
@@ -243,11 +320,16 @@ impl BodyCx<'_, '_> {
                     .collect::<Result<Vec<_>, Ice>>()?;
                 self.jump_to_arm(m, arm, values)?;
             }
+            if let Some(tree) = otherwise {
+                work.push(Emit::Tree {
+                    tree,
+                    env,
+                    block: Some(no),
+                });
+                return Ok(());
+            }
             self.switch_to(no)?;
-            return match otherwise {
-                Some(t) => self.emit_tree(m, t, env),
-                None => self.emit_tree(m, &Tree::Fail, env),
-            };
+            return self.emit_fail(m);
         }
         if inline {
             for (&id, v) in locals.iter().zip(values) {
@@ -332,25 +414,27 @@ impl BodyCx<'_, '_> {
         }
     }
 
+    /// Lowers a test; its subtrees go on `work`, the first case on top.
     #[expect(
-        clippy::too_many_lines,
-        reason = "one arm per kind of test, each short"
+        clippy::too_many_arguments,
+        reason = "the parts of a `Tree::Test`, the state and the work stack"
     )]
-    fn emit_test(
+    fn emit_test<'t>(
         &mut self,
-        m: &mut Match<'_>,
+        m: &mut Match<'t>,
         occ: OccId,
-        test: &Test,
-        cases: &[(Key, Tree)],
-        default: Option<&Tree>,
+        test: &'t Test,
+        cases: &'t [(Key, Tree)],
+        default: Option<&'t Tree>,
         mut env: Env,
+        work: &mut Vec<Emit<'t>>,
     ) -> Result<(), Ice> {
         let value = self.occ_value(m, occ, &mut env)?;
         // When the cases cover every value, the last one is the default.
         let (cases, default) = match (default, cases.split_last()) {
             (Some(d), _) => (cases, d),
             (None, Some(((_, last), rest))) => (rest, last),
-            (None, None) => return self.emit_tree(m, &Tree::Fail, env),
+            (None, None) => return self.emit_fail(m),
         };
         match test {
             Test::Bool => {
@@ -367,36 +451,19 @@ impl BodyCx<'_, '_> {
                         .map_or(default, |(_, t)| t)
                 };
                 let (t, f) = (pick(true), pick(false));
-                self.switch_to(yes)?;
-                self.emit_tree(m, t, env.clone())?;
-                self.switch_to(no)?;
-                self.emit_tree(m, f, env)
+                work.push(Emit::Tree {
+                    tree: f,
+                    env: env.clone(),
+                    block: Some(no),
+                });
+                work.push(Emit::Tree {
+                    tree: t,
+                    env,
+                    block: Some(yes),
+                });
+                Ok(())
             }
-            Test::Str => {
-                for (key, sub) in cases {
-                    let Key::Str(literal) = key else {
-                        return Err(Ice::new("a string test with another key"));
-                    };
-                    let lit = self.string_const(literal)?;
-                    let eq = self.define(
-                        Repr::Bool,
-                        Rvalue::CallRuntime {
-                            func: RuntimeFn::StrEq,
-                            args: vec![Operand::Local(value), lit],
-                        },
-                    )?;
-                    let (yes, no) = (self.new_block()?, self.new_block()?);
-                    self.terminate(Terminator::Branch {
-                        cond: Operand::Local(eq),
-                        then_: yes,
-                        else_: no,
-                    })?;
-                    self.switch_to(yes)?;
-                    self.emit_tree(m, sub, env.clone())?;
-                    self.switch_to(no)?;
-                }
-                self.emit_tree(m, default, env)
-            }
+            Test::Str => self.emit_str_case(value, cases, default, env, work),
             Test::Tag(_) | Test::Int(_) | Test::Len => {
                 let (on, len) = match test {
                     Test::Tag(ty) => {
@@ -440,20 +507,82 @@ impl BodyCx<'_, '_> {
                     cases: targets,
                     default: Some(otherwise),
                 })?;
+                // Pushed in reverse: the first case is lowered first, the
+                // default last.
+                let mut items = Vec::with_capacity(cases.len().saturating_add(1));
                 for ((key, sub), block) in cases.iter().zip(blocks) {
-                    self.switch_to(block)?;
                     let mut env = env.clone();
                     if let (Some(len), Key::Len(n)) = (len, key)
                         && let Some(slot) = env.lens.get_mut(occ.index())
                     {
                         *slot = Some((len, Some(*n)));
                     }
-                    self.emit_tree(m, sub, env)?;
+                    items.push(Emit::Tree {
+                        tree: sub,
+                        env,
+                        block: Some(block),
+                    });
                 }
-                self.switch_to(otherwise)?;
-                self.emit_tree(m, default, env)
+                work.push(Emit::Tree {
+                    tree: default,
+                    env,
+                    block: Some(otherwise),
+                });
+                work.extend(items.into_iter().rev());
+                Ok(())
             }
         }
+    }
+
+    /// Compares the `String` `value` with the first literal of `cases` in
+    /// the current block: equal, its subtree goes on; different, the next
+    /// comparison, or `default` after the last one. Both go on `work`.
+    fn emit_str_case<'t>(
+        &mut self,
+        value: Local,
+        cases: &'t [(Key, Tree)],
+        default: &'t Tree,
+        env: Env,
+        work: &mut Vec<Emit<'t>>,
+    ) -> Result<(), Ice> {
+        let Some(((key, sub), rest)) = cases.split_first() else {
+            work.push(Emit::Tree {
+                tree: default,
+                env,
+                block: None,
+            });
+            return Ok(());
+        };
+        let Key::Str(literal) = key else {
+            return Err(Ice::new("a string test with another key"));
+        };
+        let lit = self.string_const(literal)?;
+        let eq = self.define(
+            Repr::Bool,
+            Rvalue::CallRuntime {
+                func: RuntimeFn::StrEq,
+                args: vec![Operand::Local(value), lit],
+            },
+        )?;
+        let (yes, no) = (self.new_block()?, self.new_block()?);
+        self.terminate(Terminator::Branch {
+            cond: Operand::Local(eq),
+            then_: yes,
+            else_: no,
+        })?;
+        work.push(Emit::Str {
+            value,
+            cases: rest,
+            default,
+            env: env.clone(),
+            block: no,
+        });
+        work.push(Emit::Tree {
+            tree: sub,
+            env,
+            block: Some(yes),
+        });
+        Ok(())
     }
 
     /// The length of the list at `occ` (whose value is `list`), read once

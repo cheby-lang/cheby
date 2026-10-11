@@ -1,0 +1,30 @@
+// @mode: check-fail
+// @decisions: D-148, D-149, D-198, D-488
+//! The help of E0074 offers two fixes that each work alone: make the type
+//! as visible as the item, or make the item as visible as the type. A
+//! `pub` item that mentions a `priv` type must become `priv`, since a
+//! package-visible one still could not mention it (§4.1.3).
+
+priv type Secret {
+  Secret(String),
+}
+
+type Shared {
+  Shared(Int),
+}
+
+pub fn reveal(text: String) -> Secret {
+  Secret(text)
+}
+
+pub fn share(n: Int) -> Shared {
+  Shared(n)
+}
+
+pub exposed type Envelope {
+  Envelope(Secret),
+}
+
+pub exposed type Parcel {
+  Parcel(Shared),
+}

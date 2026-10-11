@@ -479,6 +479,68 @@ mod tests {
         assert_eq!(Some(pow(0.75, 2000.0)), exact);
         assert_eq!(pow(0.75, -3.0), 64.0 / 27.0);
     }
+
+    /// Every D-396 kernel, called through the address the registry gives
+    /// for its symbol, computes its own function.
+    #[test]
+    fn registered_kernels_call_their_functions() {
+        type One = extern "C" fn(f64) -> f64;
+        type Two = extern "C" fn(f64, f64) -> f64;
+        let mut table = Vec::new();
+        super::table(&mut table);
+        assert_eq!(table.len(), 7);
+        let address = |name: &str| {
+            table
+                .iter()
+                .find(|kernel| kernel.name == name)
+                .map(|kernel| kernel.address)
+                .unwrap()
+        };
+        // SAFETY: the registry lists each kernel with its own C signature,
+        // which `every_kernel_matches_its_std_declaration` checks.
+        let one = |name: &str| unsafe { std::mem::transmute::<*const u8, One>(address(name)) };
+        // SAFETY: as above.
+        let two = |name: &str| unsafe { std::mem::transmute::<*const u8, Two>(address(name)) };
+        for x in [0.5, 1.0, 2.5, -3.75, 1e-3, 700.0] {
+            assert_eq!(one("cheby_float_exp")(x).to_bits(), exp(x).to_bits());
+            assert_eq!(one("cheby_float_ln")(x).to_bits(), ln(x).to_bits());
+            assert_eq!(
+                one("cheby_float_sin")(x).to_bits(),
+                trig(Trig::Sin, x).to_bits()
+            );
+            assert_eq!(
+                one("cheby_float_cos")(x).to_bits(),
+                trig(Trig::Cos, x).to_bits()
+            );
+            assert_eq!(
+                one("cheby_float_tan")(x).to_bits(),
+                trig(Trig::Tan, x).to_bits()
+            );
+            assert_eq!(
+                two("cheby_float_pow")(x, 1.5).to_bits(),
+                pow(x, 1.5).to_bits()
+            );
+            assert_eq!(
+                two("cheby_float_atan2")(x, -2.0).to_bits(),
+                atan2(x, -2.0).to_bits()
+            );
+        }
+        assert_eq!(one("cheby_float_exp")(0.0), 1.0);
+        assert_eq!(one("cheby_float_ln")(1.0), 0.0);
+        assert_eq!(one("cheby_float_sin")(0.0), 0.0);
+        assert_eq!(one("cheby_float_cos")(0.0), 1.0);
+        assert_eq!(one("cheby_float_tan")(0.0), 0.0);
+        assert_eq!(two("cheby_float_pow")(2.0, 10.0), 1024.0);
+        assert_eq!(two("cheby_float_atan2")(0.0, 1.0), 0.0);
+        // The direct calls as well, so each wrapper is exercised by name.
+        assert_eq!(pow_kernel(3.0, 2.0), 9.0);
+        assert_eq!(exp_kernel(0.0), 1.0);
+        assert_eq!(ln_kernel(1.0), 0.0);
+        assert_eq!(sin_kernel(0.0), 0.0);
+        assert_eq!(cos_kernel(0.0), 1.0);
+        assert_eq!(tan_kernel(0.0), 0.0);
+        assert_eq!(atan2_kernel(0.0, 1.0), 0.0);
+    }
 }
 
 #[cfg(test)]

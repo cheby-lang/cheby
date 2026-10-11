@@ -1,0 +1,21 @@
+// @mode: check-pass
+// @decisions: D-078, D-428
+//!! A module doc comment may start with `//!!`.
+//! Four or more slashes make an ordinary comment, so `////` documents
+//! nothing and may stand where a doc comment could not (§2.2).
+
+import std::io
+
+//// ---------------------------------------------------------------------
+
+/// Says hello.
+pub fn hello() -> String {
+  //// a separator inside a body is just a comment
+  "hello"
+}
+
+fn main() {
+  io::println(hello())
+}
+
+//// end of the module

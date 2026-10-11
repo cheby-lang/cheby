@@ -1,0 +1,14 @@
+// @mode: run-pass
+// @flags: --jobs 1
+// @decisions: D-551, D-622
+//! `-j N` and `--jobs N` are global options, accepted after the
+//! subcommand too, and the output never depends on the number of worker
+//! threads.
+
+import std::io
+import std::list
+
+fn main() {
+  let squares = list::map(list::range(1, 6), fn(n) { n * n })
+  io::println("{squares}")
+}

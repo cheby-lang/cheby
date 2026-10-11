@@ -1,0 +1,252 @@
+module two_sum
+
+fn two_sum::main() -> value check str#0 {
+  str#0 = "src/main.cheby:16:4"
+bb0:
+  _0: value = box int const int 2
+  _1: value = call_runtime list_push(const empty_list, _0)
+  _2: value = box int const int 7
+  _3: value = call_runtime list_push(_1, _2)
+  _4: value = box int const int 11
+  _5: value = call_runtime list_push(_3, _4)
+  _6: value = box int const int 15
+  _7: value = call_runtime list_push(_5, _6)
+  _8: value = box int const int 9
+  _9: value = alloc tuple/2(_7, _8)
+  _10: value = call_runtime list_push(const empty_list, _9)
+  _11: value = box int const int 3
+  _12: value = call_runtime list_push(const empty_list, _11)
+  _13: value = box int const int 2
+  _14: value = call_runtime list_push(_12, _13)
+  _15: value = box int const int 4
+  _16: value = call_runtime list_push(_14, _15)
+  _17: value = box int const int 6
+  _18: value = alloc tuple/2(_16, _17)
+  _19: value = call_runtime list_push(_10, _18)
+  _20: value = box int const int 3
+  _21: value = call_runtime list_push(const empty_list, _20)
+  _22: value = box int const int 3
+  _23: value = call_runtime list_push(_21, _22)
+  _24: value = box int const int 6
+  _25: value = alloc tuple/2(_23, _24)
+  _26: value = call_runtime list_push(_19, _25)
+  _27: value = box int const int 1
+  _28: value = call_runtime list_push(const empty_list, _27)
+  _29: value = box int const int 2
+  _30: value = call_runtime list_push(_28, _29)
+  _31: value = box int const int 3
+  _32: value = call_runtime list_push(_30, _31)
+  _33: value = box int const int 7
+  _34: value = alloc tuple/2(_32, _33)
+  _35: value = call_runtime list_push(_26, _34)
+  _36: value = alloc closure/0(const code <closure two_sum::main#0>)
+  tail_call std::list::each(_35, _36)
+}
+
+fn closure two_sum::main#0(_0: value, _1: value) -> value check str#0 {
+  str#0 = "src/main.cheby:24:24"
+bb0:
+  drop _0
+  _2: value = field _1.0 of tuple/2
+  dup _2
+  _3: value = field _1.1 of tuple/2
+  dup _3
+  drop _1
+  _4: int = unbox int _3
+  drop _3
+  _5: value = call two_sum::describe(_2, _4)
+  tail_call std::io::println(_5)
+}
+
+fn two_sum::two_sum(_0: value, _1: int) -> value check str#0 {
+  str#0 = "src/main.cheby:34:4"
+bb0:
+  _2: value = box int _1
+  _3: value = alloc closure/1(const code <closure two_sum::two_sum#0>, _2)
+  _4: value = box int const int 0
+  _5: value = call std::map::new()
+  tail_call _3(_0, _4, _5)
+}
+
+fn closure two_sum::two_sum#0(_0: value, _1: value, _2: value, _3: value) -> value check str#0 {
+  str#0 = "src/main.cheby:39:3"
+  str#1 = "src/main.cheby:42:47"
+  str#2 = "src/main.cheby:44:28"
+bb0:
+  _4: value = field _0.1 of closure/1
+  dup _4
+  _5: int = unbox int _4
+  drop _4
+  _6: int = unbox int _2
+  drop _2
+  _7: int = call_runtime list_length(borrow _1)
+  switch _7 [0 => bb1, _ => bb2]
+bb1:
+  drop _0
+  drop _1
+  drop _3
+  goto bb3(const ctor None)
+bb2:
+  _9: value = call_runtime list_get(borrow _1, borrow const int 0)
+  _10: int = unbox int _9
+  drop _9
+  _11: value = call_runtime list_slice_owned(_1, borrow const int 1, borrow _7)
+  _12: int = checked sub int _5, _10 at str#1
+  _13: value = box int _12
+  dup _3
+  _14: value = call std::map::get(_3, _13)
+  _15: int = read_tag _14 of option
+  switch _15 [0 => bb4, _ => bb5]
+bb3(_8: value):
+  return _8
+bb4:
+  drop _0
+  drop _3
+  drop _11
+  _16: value = field _14.0 of ctor Some
+  dup _16
+  drop _14
+  _17: int = unbox int _16
+  drop _16
+  _18: value = box int _17
+  _19: value = box int _6
+  _20: value = alloc tuple/2(_18, _19)
+  _21: value = alloc ctor Some(_20)
+  goto bb6(_21)
+bb5:
+  drop _14
+  _23: int = checked add int _6, const int 1 at str#2
+  _24: value = box int _23
+  _25: value = box int _10
+  _26: value = box int _6
+  _27: value = call std::map::insert(_3, _25, _26)
+  tail_call _0(_11, _24, _27)
+bb6(_22: value):
+  goto bb3(_22)
+}
+
+fn two_sum::describe(_0: value, _1: int) -> value check str#0 {
+  str#0 = "src/main.cheby:53:4"
+  str#1 = ", "
+  str#2 = "["
+  str#3 = "] and "
+  str#4 = ": indices "
+  str#5 = " and "
+  str#6 = ": no two numbers add up"
+bb0:
+  _2: value = alloc closure/0(const code <closure two_sum::describe#0>)
+  dup _0
+  _3: value = call std::list::map(_0, _2)
+  _4: value = const str#1
+  _5: value = call std::string::join(_3, _4)
+  _6: value = call two_sum::two_sum(_0, _1)
+  _7: int = read_tag _6 of option
+  switch _7 [0 => bb1, _ => bb2]
+bb1:
+  _8: value = field _6.0 of ctor Some
+  dup _8
+  drop _6
+  _9: value = field _8.0 of tuple/2
+  dup _9
+  _10: int = unbox int _9
+  drop _9
+  _11: value = field _8.1 of tuple/2
+  dup _11
+  drop _8
+  _12: int = unbox int _11
+  drop _11
+  _13: value = call_runtime str_with_capacity(borrow const int 86)
+  _14: value = call_runtime str_append(_13, borrow const str#2)
+  _15: value = call_runtime str_append(_14, borrow _5)
+  drop _5
+  _16: value = call_runtime str_append(_15, borrow const str#3)
+  _17: value = call std::int::show(_1)
+  _18: value = call_runtime str_append(_16, borrow _17)
+  drop _17
+  _19: value = call_runtime str_append(_18, borrow const str#4)
+  _20: value = call std::int::show(_10)
+  _21: value = call_runtime str_append(_19, borrow _20)
+  drop _20
+  _22: value = call_runtime str_append(_21, borrow const str#5)
+  _23: value = call std::int::show(_12)
+  _24: value = call_runtime str_append(_22, borrow _23)
+  drop _23
+  goto bb3(_24)
+bb2:
+  drop _6
+  _26: value = call_runtime str_with_capacity(borrow const int 62)
+  _27: value = call_runtime str_append(_26, borrow const str#2)
+  _28: value = call_runtime str_append(_27, borrow _5)
+  drop _5
+  _29: value = call_runtime str_append(_28, borrow const str#3)
+  _30: value = call std::int::show(_1)
+  _31: value = call_runtime str_append(_29, borrow _30)
+  drop _30
+  _32: value = call_runtime str_append(_31, borrow const str#6)
+  goto bb3(_32)
+bb3(_25: value):
+  return _25
+}
+
+fn closure two_sum::describe#0(_0: value, _1: value) -> value check str#0 {
+  str#0 = "src/main.cheby:54:39"
+bb0:
+  drop _0
+  _2: int = unbox int _1
+  drop _1
+  _3: value = call std::int::show(_2)
+  return _3
+}
+
+foreign_layout ctor Some: Option.Some tag 0 key af80d07f7bb18e70 [value @8]
+callee two_sum::two_sum(value, int) -> value
+callee two_sum::describe(value, int) -> value
+callee std::io::println(value) -> value
+callee std::list::map(value, value) -> value
+callee std::list::each(value, value) -> value
+callee std::map::new() -> value
+callee std::map::get(value, value) -> value
+callee std::map::insert(value, value, value) -> value
+callee std::string::join(value, value) -> value
+callee std::int::show(int) -> value
+
+entries
+
+fn entry main(two_sum::main) [c] () -> i64 {
+bb0:
+  _0: value = call two_sum::main()
+  drop _0
+  return const i64 0
+}
+
+fn trampoline 0 [c] (_0: value) -> value {
+bb0:
+  _1: value = call _0()
+  return _1
+}
+
+fn trampoline 1 [c] (_0: value, _1: value) -> value {
+bb0:
+  _2: value = call _0(_1)
+  return _2
+}
+
+fn trampoline 2 [c] (_0: value, _1: value, _2: value) -> value {
+bb0:
+  _3: value = call _0(_1, _2)
+  return _3
+}
+
+fn trampoline 3 [c] (_0: value, _1: value, _2: value, _3: value) -> value {
+bb0:
+  _4: value = call _0(_1, _2, _3)
+  return _4
+}
+
+fn trampoline 4 [c] (_0: value, _1: value, _2: value, _3: value, _4: value) -> value {
+bb0:
+  _5: value = call _0(_1, _2, _3, _4)
+  return _5
+}
+
+callee two_sum::main() -> value

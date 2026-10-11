@@ -72,7 +72,7 @@ error[E0030]: a tuple type has at least two elements
    |
    = help: write the element type alone; there are no one-element tuples
 
-error[E0013]: a record type needs at least one field
+error[E0013]: a type declaration needs at least one variant
   --> permissive.cheby:12:12
    |
 12 | type Empty {}
@@ -255,14 +255,6 @@ error[E0035]: `_` must be the last arm of a subjectless `case`
    |     ^
    |
    = help: the arms after `_` can never be taken; remove them or move `_` last
-
-error[E0035]: a subjectless `case` must end with a `_` arm
-  --> permissive.cheby:33:5
-   |
-33 |     b => 2
-   |     ^
-   |
-   = help: add a final arm `_ => …` for the remaining cases (D-109)
 
 error[E0031]: `..base` must come first in a record update
   --> permissive.cheby:35:17

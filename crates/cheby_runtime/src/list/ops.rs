@@ -8,6 +8,7 @@
 use super::node::{Node, Root, View, drop_word, dup_word, empty};
 use super::tree;
 use crate::abi::Word;
+use crate::stats::{self, Event};
 
 /// The number of elements of a borrowed list.
 pub(crate) fn len(list: Root) -> usize {
@@ -51,6 +52,7 @@ fn trimmed(view: View) -> Option<Node> {
 /// empty); a shared root gives up one reference and a new root is made.
 fn update(list: Root, change: impl FnOnce(View) -> View) -> Root {
     if list.is_unique() {
+        stats::record(Event::ListUpdateInPlace);
         let view = list.view();
         let tree = list.take_tree();
         let changed = change(View { tree, ..view });
@@ -65,6 +67,9 @@ fn update(list: Root, change: impl FnOnce(View) -> View) -> Root {
     if let Some(tree) = view.tree {
         tree.dup();
     }
+    if view.len > 0 {
+        stats::record(Event::ListUpdateCopied);
+    }
     drop_word(list.word());
     Root::new(change(view))
 }
@@ -72,6 +77,12 @@ fn update(list: Root, change: impl FnOnce(View) -> View) -> Root {
 /// `list` (owned) with the owned `elem` added at the end. In place when the
 /// list is unique: amortized O(1) allocation per element, O(log n) time.
 pub(crate) fn push(list: Root, elem: Word) -> Root {
+    // A push onto an empty list builds a new root either way.
+    if list.is_unique() {
+        stats::record(Event::ListPushInPlace);
+    } else if list.len() > 0 {
+        stats::record(Event::ListPushCopied);
+    }
     update(list, |view| {
         let Some(tree) = view.tree else {
             return View {
@@ -187,6 +198,30 @@ pub(crate) fn slice(list: Root, start: usize, end: usize) -> Root {
         tree: view.tree,
         offset: view.offset.saturating_add(start),
         len: end.saturating_sub(start),
+    })
+}
+
+/// Elements `start..end` of an owned list, which is consumed: the same view
+/// as [`slice`], but a unique root is changed in place instead of a new
+/// one being allocated (and the old one freed). O(1).
+pub(crate) fn slice_owned(list: Root, start: usize, end: usize) -> Root {
+    let len = list.len();
+    let end = end.min(len);
+    let start = start.min(end);
+    if start == 0 && end == len {
+        return list;
+    }
+    update(list, |view| {
+        let len = end.saturating_sub(start);
+        View {
+            tree: view.tree,
+            offset: if len == 0 {
+                0
+            } else {
+                view.offset.saturating_add(start)
+            },
+            len,
+        }
     })
 }
 

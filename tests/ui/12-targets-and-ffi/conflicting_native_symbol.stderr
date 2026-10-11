@@ -1,0 +1,11 @@
+error[E0054]: the native symbol `app_store_open` is bound with two different C signatures
+  --> tests/ui/12-targets-and-ffi/conflicting_native_symbol.cheby:12:19
+   |
+9  | @external(native, "app_store_open")
+   |                   ---------------- first bound here
+...
+12 | @external(native, "app_store_open")
+   |                   ^^^^^^^^^^^^^^^^ bound here with another signature
+   |
+   = note: every `@external` of one symbol must give it the same C signature
+

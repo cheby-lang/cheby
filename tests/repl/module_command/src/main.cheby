@@ -1,0 +1,7 @@
+//! A bakery, for the `module_command` transcript.
+
+import bakery::oven
+
+fn main() {
+  let _ = oven::bake(2)
+}

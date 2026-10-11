@@ -847,6 +847,25 @@ fn std_only_attributes() {
 }
 
 #[test]
+fn external_functions_take_no_bounds() {
+    // One E0045 per bounded type parameter of a function with an
+    // `@external`, with or without a body (§12.5, D-207, D-554). Unbounded
+    // type parameters (D-186) and bounds on other functions are fine.
+    let b = build(&[(
+        "",
+        "@external(native, \"a\")\npub fn a<T: Show, U, V: Show + Show>(t: T, u: U, v: V) -> Int\n\n@external(native, \"b\")\npub fn b<T: Show>(t: T) -> Int {\n  0\n}\n\n@external(native, \"c\")\npub fn c<T>(t: T) -> T\n\npub fn d<T: Show>(t: T) -> T {\n  t\n}\n",
+    )]);
+    assert_eq!(
+        b.messages(),
+        [
+            "E0045: the type parameter `T` of `a` has a bound, but `a` has an `@external` attribute",
+            "E0045: the type parameter `T` of `b` has a bound, but `b` has an `@external` attribute",
+            "E0045: the type parameter `V` of `a` has a bound, but `a` has an `@external` attribute",
+        ]
+    );
+}
+
+#[test]
 fn missing_body() {
     let b = build(&[("", "pub fn now() -> Int\n")]);
     assert_eq!(b.messages(), ["E0046: the function `now` has no body"]);

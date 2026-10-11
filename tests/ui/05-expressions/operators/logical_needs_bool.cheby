@@ -1,5 +1,5 @@
 // @mode: check-fail
-// @decisions: D-092
+// @decisions: D-092, D-495
 //! `&&`, `||` and `!` take `Bool` operands (§5.4.5).
 
 pub fn both(a: Int, b: Bool) -> Bool {

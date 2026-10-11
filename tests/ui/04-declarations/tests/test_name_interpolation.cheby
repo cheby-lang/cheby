@@ -1,5 +1,5 @@
 // @mode: check-fail
-// @decisions: D-055
+// @decisions: D-055, D-495
 //! A test name is a string literal without interpolation (§4.7).
 
 const subject: String = "doubling"

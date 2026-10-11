@@ -1,5 +1,5 @@
 // @mode: check-fail
-// @decisions: D-195, D-536
+// @decisions: D-195, D-536, D-617
 //! One kernel call that asks for far more than the memory limit is
 //! stopped before the memory is allocated and reported as E0076, so the
 //! compiler never fails to allocate it (§13.9).

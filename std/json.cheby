@@ -77,6 +77,21 @@ pub fn list<T: ToJson>(items: List<T>) -> Value {
   Array(lists::map(items, fn(item) { ToJson::to_json(item) }))
 }
 
+// A type for the test of `list`. Its `to_json` makes it satisfy `ToJson`.
+// User builds skip std tests, and satisfaction is not a written use, so the
+// test also names `to_json`, or it would be reported unused (D-479, D-516).
+priv type Point { x: Int, y: Int }
+
+priv fn to_json(point: Point) -> Value {
+  Object([("x", Int(point.x)), ("y", Int(point.y))])
+}
+
+test "list encodes each element with its type's to_json" {
+  let points = [Point { x: 1, y: 2 }, Point { x: 3, y: 4 }]
+  assert to_string(list(points)) == r#"[{"x":1,"y":2},{"x":3,"y":4}]"#
+  assert list(points) == array(points, to_json)
+}
+
 /// Returns `value` as compact JSON text, with no whitespace between tokens
 /// (D-325, D-326, D-398).
 pub fn to_string(value: Value) -> String {

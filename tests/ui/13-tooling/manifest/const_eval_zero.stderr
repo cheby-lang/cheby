@@ -1,0 +1,6 @@
+error[E0036]: `memory-limit` must be greater than zero
+ --> tests/ui/13-tooling/manifest/const_eval_zero/cheby.toml:6:16
+  |
+6 | memory-limit = "0KiB"
+  |                ^^^^^^
+

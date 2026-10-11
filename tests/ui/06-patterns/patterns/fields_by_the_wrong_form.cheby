@@ -1,5 +1,5 @@
 // @mode: check-fail
-// @decisions: D-113, D-138
+// @decisions: D-113, D-138, D-495
 //! A named-field constructor is matched by field names, a positional one
 //! by position (§6.4).
 

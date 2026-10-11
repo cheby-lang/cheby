@@ -1,0 +1,16 @@
+error[E0055]: the native symbol `cheby_rt_alloc` is reserved for the toolchain
+ --> tests/ui/12-targets-and-ffi/reserved_native_symbol.cheby:7:19
+  |
+7 | @external(native, "cheby_rt_alloc")
+  |                   ^^^^^^^^^^^^^^^^
+  |
+  = note: symbols starting with `cheby_rt_` belong to the Cheby runtime and generated code
+
+error[E0055]: the native symbol `cb$fn$app$main` is reserved for the toolchain
+  --> tests/ui/12-targets-and-ffi/reserved_native_symbol.cheby:10:19
+   |
+10 | @external(native, "cb$fn$app$main")
+   |                   ^^^^^^^^^^^^^^^^
+   |
+   = note: symbols starting with `cb$` belong to the Cheby runtime and generated code
+

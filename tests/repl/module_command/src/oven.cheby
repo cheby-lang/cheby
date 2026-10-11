@@ -1,0 +1,27 @@
+//! The oven: a module with private items and imports of its own.
+
+import std::list
+
+/// A tray of loaves.
+pub type Tray {
+  Tray(List<Int>),
+}
+
+/// Bakes `n` loaves.
+pub fn bake(n: Int) -> Tray {
+  Tray(list::map(list::range(0, n), heat))
+}
+
+/// The heat of loaf `k`.
+priv fn heat(k: Int) -> Int {
+  k * 10 + temperature
+}
+
+/// The oven's temperature.
+priv const temperature: Int = 180
+
+/// A package-visible helper.
+fn count(tray: Tray) -> Int {
+  let Tray(loaves) = tray
+  list::length(loaves)
+}

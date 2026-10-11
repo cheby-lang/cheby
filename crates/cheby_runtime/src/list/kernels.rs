@@ -137,6 +137,27 @@ pub unsafe extern "C" fn cheby_rt_list_slice(
     ops::slice(list, ops::clamp(start, len), ops::clamp(end, len)).word()
 }
 
+/// `ListSlice` on a list that dies at the match: `list` owned; the O(1)
+/// view of [`cheby_rt_list_slice`], with the root changed in place when
+/// the list's count is one.
+///
+/// # Safety
+///
+/// `list` is a live list owned by the caller and given up.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cheby_rt_list_slice_owned(
+    ctx: *mut ExecCtx,
+    list: u64,
+    start: i64,
+    end: i64,
+) -> u64 {
+    let _ = ctx;
+    // SAFETY: forwarded from the caller.
+    let list = unsafe { root(list) };
+    let len = ops::len(list);
+    ops::slice_owned(list, ops::clamp(start, len), ops::clamp(end, len)).word()
+}
+
 // ---------------------------------------------------------------------
 // `std::list` kernels (D-484): arguments borrowed, results owned
 

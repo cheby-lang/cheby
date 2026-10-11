@@ -1,0 +1,73 @@
+> heat(1)
+error[E0042]: cannot find value `heat` in this scope
+ --> <repl:1>:1:1
+  |
+1 | heat(1)
+  | ^^^^ not found
+
+> import bakery::oven
+> oven::count(oven::bake(2))
+2 : Int
+> oven::heat(1)
+error[E0043]: `heat` is private to module `bakery::oven`
+  --> <repl:4>:1:7
+   |
+1  | oven::heat(1)
+   |       ^^^^
+   |
+  ::: src/oven.cheby:16:9
+   |
+16 | priv fn heat(k: Int) -> Int {
+   |         ---- declared here
+
+> :module bakery::oven
+> heat(1)
+190 : Int
+> temperature
+180 : Int
+> count(bake(3))
+3 : Int
+> list::length([1, 2])
+2 : Int
+> bake(1)
+Tray([180]) : oven::Tray
+> fn hotter(k: Int) -> Int {
+.   heat(k) + 1
+. }
+> hotter(2)
+201 : Int
+> fn heat(k: Int) -> Int {
+.   k
+. }
+> heat(5)
+5 : Int
+> :module
+> heat(1)
+1 : Int
+> hotter(2)
+201 : Int
+> list::length([1])
+error[E0042]: `list` is not imported
+ --> <repl:16>:1:1
+  |
+1 | list::length([1])
+  | ^^^^
+  |
+  = help: add `import std::list` at the top of the file
+
+> :module bakery::pantry
+error: there is no module `bakery::pantry`
+> :module bakery
+> oven::bake(1)
+Tray([180]) : oven::Tray
+> :module std::list
+> largest(1, [5, 3])
+5 : Int
+> :module
+> largest(1, [5, 3])
+error[E0042]: cannot find value `largest` in this scope
+ --> <repl:19>:1:1
+  |
+1 | largest(1, [5, 3])
+  | ^^^^^^^ not found
+

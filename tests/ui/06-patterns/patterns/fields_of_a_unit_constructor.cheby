@@ -1,5 +1,5 @@
 // @mode: check-fail
-// @decisions: D-113
+// @decisions: D-113, D-495
 //! A unit constructor pattern is the name alone, and a positional one has
 //! its fields (§6.4).
 

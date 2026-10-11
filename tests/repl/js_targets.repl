@@ -1,0 +1,23 @@
+> import web::page
+> page::title("home")
+"<home>" : String
+> page::alert("hi")
+error[E0067]: `alert` exists only on `js`, but the entry runs on `native`
+  --> <repl:3>:1:1
+   |
+1  | page::alert("hi")
+   | ^^^^^^^^^^^ not available on `native`
+   |
+  ::: src/page.cheby:10:8
+   |
+10 | pub fn alert(text: String)
+   |        ----- `alert` is declared here
+
+> import std::list
+> list::length([1, 2])
+2 : Int
+> fn greet() -> String {
+.   page::title("greeting")
+. }
+> greet()
+"<greeting>" : String

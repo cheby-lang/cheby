@@ -1,5 +1,5 @@
 // @mode: check-fail
-// @decisions: D-056, D-141, D-461
+// @decisions: D-056, D-141, D-461, D-513
 //! Attributes that leave an item on no target are an error: `@target`
 //! against the module's `@!target`, or a function without a body whose
 //! `@external`s miss the only target left to it.

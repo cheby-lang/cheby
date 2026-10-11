@@ -36,11 +36,13 @@ pub unsafe extern "C" fn cheby_rt_drop(value: Word) {
     unsafe { drop(value) };
 }
 
-/// Adds a reference to `value`. See [`cheby_rt_dup`].
+/// Adds a reference to `value`. See [`cheby_rt_dup`]. The common case, a
+/// local count below the maximum, is inlined; the rest is `dup_slow`.
 ///
 /// # Safety
 ///
 /// As for [`cheby_rt_dup`].
+#[inline]
 pub unsafe fn dup(value: Word) {
     if abi::is_tagged_int(value) || value == 0 {
         return;
@@ -50,18 +52,31 @@ pub unsafe fn dup(value: Word) {
     let obj = word_to_ptr(value);
     // SAFETY: `obj` is a live object.
     let rc = unsafe { load_rc(obj) };
+    if let Some(next) = rc.checked_add(1).filter(|_| rc > 0) {
+        // SAFETY: a positive count is local to this thread.
+        unsafe { store_rc(obj, next) };
+        return;
+    }
+    // SAFETY: as above.
+    unsafe { dup_slow(obj, rc) };
+}
+
+/// [`dup`] of an object whose count `rc` is static, shared or at its
+/// maximum.
+///
+/// # Safety
+///
+/// `obj` points to a live object whose count is `rc`.
+#[inline(never)]
+unsafe fn dup_slow(obj: *mut u8, rc: i32) {
     if rc > 0 {
-        if let Some(next) = rc.checked_add(1) {
-            // SAFETY: a positive count is local to this thread.
-            unsafe { store_rc(obj, next) };
-        } else {
-            // The count cannot grow further: the object becomes static and
-            // is never freed (D-454).
-            // SAFETY: as above.
-            unsafe {
-                store_rc(obj, abi::RC_STATIC);
-                alloc::leave_domain(obj);
-            }
+        // The count cannot grow further: the object becomes static and is
+        // never freed (D-454).
+        // SAFETY: a live object whose positive count is local to this
+        // thread.
+        unsafe {
+            store_rc(obj, abi::RC_STATIC);
+            alloc::leave_domain(obj);
         }
     } else if rc < 0 {
         // SAFETY: a negative count marks a live shared heap object.
@@ -89,6 +104,7 @@ pub unsafe fn dup(value: Word) {
 /// # Safety
 ///
 /// As for [`cheby_rt_drop`].
+#[inline]
 pub unsafe fn drop(value: Word) {
     if abi::is_tagged_int(value) || value == 0 {
         return;
@@ -128,6 +144,7 @@ pub unsafe fn is_unique(value: Word) -> bool {
 ///
 /// `obj` points to a live object and the caller gives up a reference it
 /// owns.
+#[inline]
 pub(crate) unsafe fn release(obj: *mut u8) -> bool {
     // SAFETY: forwarded from the caller.
     let rc = unsafe { load_rc(obj) };

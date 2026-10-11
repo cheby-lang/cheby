@@ -1,5 +1,5 @@
 // @mode: check-fail
-// @decisions: D-533, D-535
+// @decisions: D-533, D-535, D-592
 //! A constant that reads a constant whose initializer panicked is not
 //! reported again: the error is at the constant that panicked (§13.9).
 

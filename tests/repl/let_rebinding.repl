@@ -1,32 +1,31 @@
 > let x = 1
-> x
-1 : Int
-> let x = x + 1
-> x
-2 : Int
+> let f = fn() -> Int { x }
 > fn read_x() -> Int {
 .   x
 . }
+> let x = 2
+> f()
+1 : Int
 > read_x()
+1 : Int
+> x
 2 : Int
-> let x = 10
-> read_x()
-10 : Int
+> let x = x + 1
+> x
+3 : Int
 > let x = "now a string"
-error[E0047]: mismatched types
- --> <repl:5>:2:3
-  |
-1 | fn read_x() -> Int {
-  |                --- expected because of this return type
-2 |   x
-  |   ^ expected `Int`, found `String`
-  |
-  = note: `read_x` was checked again because a definition it uses changed its signature; it keeps its old definition
-
 > x
 "now a string" : String
 > read_x()
-10 : Int
+1 : Int
+> f()
+1 : Int
+> fn read_x_again() -> String {
+.   x
+. }
+> let x = 5
+> read_x_again()
+"now a string" : String
 > let (a, b) = (1, "b")
 > b
 "b" : String
@@ -39,7 +38,7 @@ error[E0047]: mismatched types
 .   y
 . }
 error[E0044]: `y` is already bound
- --> <repl:16>:3:7
+ --> <repl:21>:3:7
   |
 2 |   let y = 1
   |       - first bound here

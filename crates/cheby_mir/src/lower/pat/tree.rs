@@ -24,6 +24,11 @@
 //! Since a tested column is removed and positions below it are new
 //! columns, no path through a tree tests one position twice.
 //!
+//! The compiler works depth first on an explicit stack of nodes waiting
+//! for their subtrees, not by recursion, and trees are freed and lowered
+//! with explicit stacks too, so a list pattern of thousands of elements
+//! (a tree about twice as deep) needs no deep Rust stack (D-601).
+//!
 //! **Column heuristic.** First, the leftmost column that needs no test is
 //! taken apart: tuples, constructors of single-constructor types, and
 //! lists matched only by `[..]`/`[..rest]` patterns. Then, among the
@@ -191,6 +196,31 @@ impl Tree {
         }
         counts
     }
+
+    /// Moves the subtrees of `self` to `out`, leaving it without any.
+    fn take_children(&mut self, out: &mut Vec<Self>) {
+        match self {
+            Self::Fail => {}
+            Self::Leaf { otherwise, .. } => out.extend(otherwise.take().map(|t| *t)),
+            Self::Test { cases, default, .. } => {
+                out.extend(std::mem::take(cases).into_iter().map(|(_, t)| t));
+                out.extend(default.take().map(|t| *t));
+            }
+        }
+    }
+}
+
+/// Frees a tree with an explicit stack: a list pattern of N elements
+/// gives a tree about 2N deep, which recursive drop glue would walk with
+/// as many Rust frames.
+impl Drop for Tree {
+    fn drop(&mut self) {
+        let mut work = Vec::new();
+        self.take_children(&mut work);
+        while let Some(mut tree) = work.pop() {
+            tree.take_children(&mut work);
+        }
+    }
 }
 
 /// A compiled match: the positions and the tree over them.
@@ -261,11 +291,16 @@ thread_local! {
     /// `tests.rs` (no position tested twice on a path).
     pub(crate) static RECORDED: std::cell::RefCell<Vec<Decision>> =
         const { std::cell::RefCell::new(Vec::new()) };
+    /// Whether [`RECORDED`] records on this thread. A test of very deep
+    /// trees turns it off: cloning a tree recurses.
+    pub(crate) static RECORDING: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
 }
 
 #[cfg(test)]
 fn record(decision: &Decision) {
-    RECORDED.with(|r| r.borrow_mut().push(decision.clone()));
+    if RECORDING.with(std::cell::Cell::get) {
+        RECORDED.with(|r| r.borrow_mut().push(decision.clone()));
+    }
 }
 
 #[derive(Clone)]
@@ -295,6 +330,156 @@ enum ElementStep<'p> {
         exact: Matrix<'p>,
         longer: Matrix<'p>,
     },
+}
+
+/// What [`Compiler::compile`] does next.
+enum Next<'p> {
+    /// Compile this matrix.
+    Matrix(Matrix<'p>),
+    /// This subtree is compiled: hand it to the node waiting for it.
+    Tree(Tree),
+}
+
+/// A node whose subtrees are compiled one at a time, depth first, on
+/// [`Compiler::compile`]'s explicit stack. A subtree's matrix is built
+/// only when its turn comes, so positions are interned in the order a
+/// recursive compiler would intern them.
+enum Pending<'p> {
+    /// A guarded leaf, waiting for the tree taken when its guard is
+    /// `False`.
+    Guarded {
+        arm: usize,
+        bindings: Vec<(LocalId, OccId)>,
+    },
+    Ctor(CtorNode<'p>),
+    Literals(LiteralNode<'p>),
+    List(ListNode<'p>),
+    /// One step of element-wise list matching: the tree for exactly `lb`
+    /// elements first, then the one for longer lists.
+    Element {
+        occ: OccId,
+        lb: u32,
+        longer: Option<Matrix<'p>>,
+        exact: Option<Tree>,
+    },
+}
+
+/// A constructor test in progress.
+struct CtorNode<'p> {
+    m: Matrix<'p>,
+    c: usize,
+    occ: OccId,
+    ty: DefId,
+    count: usize,
+    /// The constructors some row names, in tag order.
+    present: Vec<DefId>,
+    /// The index in `present` of the next case.
+    next: usize,
+    cases: Vec<(Key, Tree)>,
+    default_started: bool,
+    /// The key of the case being compiled; `None` while the default is.
+    waiting: Option<Key>,
+    default: Option<Tree>,
+}
+
+/// An `Int` or `String` literal test in progress.
+struct LiteralNode<'p> {
+    m: Matrix<'p>,
+    c: usize,
+    occ: OccId,
+    kind: Kind,
+    /// The literals the rows name, in row order.
+    keys: Vec<Key>,
+    next: usize,
+    cases: Vec<(Key, Tree)>,
+    /// The key of the case being compiled; `None` while the default is.
+    waiting: Option<Key>,
+    default: Option<Tree>,
+}
+
+/// A switch over a list's length in progress.
+struct ListNode<'p> {
+    m: Matrix<'p>,
+    c: usize,
+    occ: OccId,
+    /// Every length that gets a case of its own, increasing.
+    lengths: Vec<u32>,
+    next: usize,
+    cases: Vec<(Key, Tree)>,
+    /// The lengths so far that no row matches.
+    unmatched: Vec<u64>,
+    waiting: Option<ListWait>,
+}
+
+/// The subtree a [`ListNode`] waits for.
+enum ListWait {
+    /// The case of one length.
+    Len(u32),
+    /// The case of the lengths no row matches.
+    Lens(Vec<u64>),
+    /// Every other length: the default.
+    Beyond,
+}
+
+/// The node that tests literal column `c` (of `kind`).
+fn literal_node(m: Matrix<'_>, c: usize, occ: OccId, kind: Kind) -> Result<LiteralNode<'_>, Ice> {
+    let mut keys: Vec<Key> = Vec::new();
+    for row in &m.rows {
+        let key = match row.cells.get(c) {
+            Some(Some(p)) => match &p.kind {
+                PatKind::Lit(Lit::Int(v)) => Key::Int(*v),
+                PatKind::Lit(Lit::Str(s)) => Key::Str(s.clone()),
+                _ => return Err(Ice::new("a literal column with another pattern")),
+            },
+            _ => continue,
+        };
+        if !keys.contains(&key) {
+            keys.push(key);
+        }
+    }
+    Ok(LiteralNode {
+        cases: Vec::with_capacity(keys.len()),
+        m,
+        c,
+        occ,
+        kind,
+        keys,
+        next: 0,
+        waiting: None,
+        default: None,
+    })
+}
+
+/// The node that switches on the length of list column `c`: the exact
+/// lengths and every length below the longest fixed part of a spread
+/// pattern.
+fn list_node(m: Matrix<'_>, c: usize, occ: OccId) -> Result<ListNode<'_>, Ice> {
+    let mut exact: Vec<u32> = Vec::new();
+    let mut max_min: u32 = 0;
+    for row in &m.rows {
+        if let Some(Some(p)) = row.cells.get(c) {
+            let (pre, rest, suf) =
+                list_parts(p).ok_or_else(|| Ice::new("a list column with another pattern"))?;
+            let n = len_u32(pre.len().saturating_add(suf.len()))?;
+            match rest {
+                None => exact.push(n),
+                Some(_) => max_min = max_min.max(n),
+            }
+        }
+    }
+    let mut lengths: Vec<u32> = (0..max_min).chain(exact).collect();
+    lengths.sort_unstable();
+    lengths.dedup();
+    Ok(ListNode {
+        cases: Vec::with_capacity(lengths.len()),
+        m,
+        c,
+        occ,
+        lengths,
+        next: 0,
+        unmatched: Vec::new(),
+        waiting: None,
+    })
 }
 
 /// A list column whose length switch would need more cases than this is
@@ -481,39 +666,138 @@ impl<'p> Compiler<'_, '_> {
         })
     }
 
+    /// Compiles `m` into a tree, depth first, on an explicit stack of the
+    /// nodes whose subtrees are still being compiled ([`Pending`]), so a
+    /// long list pattern or a deeply nested one needs no deep Rust stack
+    /// (D-601).
     fn compile(&mut self, m: Matrix<'p>) -> Result<Tree, Ice> {
+        let mut stack: Vec<Pending<'p>> = Vec::new();
+        let mut next = Next::Matrix(m);
+        loop {
+            next = match next {
+                Next::Matrix(m) => self.start(m, &mut stack)?,
+                Next::Tree(tree) => match stack.pop() {
+                    None => return Ok(tree),
+                    Some(node) => self.resume(node, tree, &mut stack)?,
+                },
+            };
+        }
+    }
+
+    /// Hands `tree`, the subtree `node` was waiting for, to `node`, and
+    /// goes on with it.
+    fn resume(
+        &mut self,
+        node: Pending<'p>,
+        tree: Tree,
+        stack: &mut Vec<Pending<'p>>,
+    ) -> Result<Next<'p>, Ice> {
+        match node {
+            Pending::Guarded { arm, bindings } => Ok(Next::Tree(Tree::Leaf {
+                arm,
+                bindings,
+                otherwise: Some(Box::new(tree)),
+            })),
+            Pending::Ctor(mut node) => {
+                match node.waiting.take() {
+                    Some(key) => node.cases.push((key, tree)),
+                    None => node.default = Some(tree),
+                }
+                self.advance_ctor(node, stack)
+            }
+            Pending::Literals(mut node) => {
+                match node.waiting.take() {
+                    Some(key) => node.cases.push((key, tree)),
+                    None => node.default = Some(tree),
+                }
+                self.advance_literals(node, stack)
+            }
+            Pending::List(mut node) => match node.waiting.take() {
+                Some(ListWait::Len(len)) => {
+                    node.cases.push((Key::Len(u64::from(len)), tree));
+                    self.advance_list(node, stack)
+                }
+                Some(ListWait::Lens(lens)) => {
+                    node.cases.push((Key::Lens(lens), tree));
+                    self.advance_list(node, stack)
+                }
+                Some(ListWait::Beyond) if node.lengths.is_empty() => {
+                    // `[..]` and `[..rest]` only: nothing to test.
+                    Ok(Next::Tree(tree))
+                }
+                Some(ListWait::Beyond) => Ok(Next::Tree(Tree::Test {
+                    occ: node.occ,
+                    test: Test::Len,
+                    cases: node.cases,
+                    default: Some(Box::new(tree)),
+                })),
+                None => Err(Ice::new(
+                    "a list test resumed without a subtree to wait for",
+                )),
+            },
+            Pending::Element {
+                occ,
+                lb,
+                longer,
+                exact: None,
+            } => {
+                let longer =
+                    longer.ok_or_else(|| Ice::new("an element test without its longer rows"))?;
+                stack.push(Pending::Element {
+                    occ,
+                    lb,
+                    longer: None,
+                    exact: Some(tree),
+                });
+                Ok(Next::Matrix(longer))
+            }
+            Pending::Element {
+                occ,
+                lb,
+                exact: Some(exact),
+                ..
+            } => Ok(Next::Tree(Tree::Test {
+                occ,
+                test: Test::Len,
+                cases: vec![(Key::Len(u64::from(lb)), exact)],
+                default: Some(Box::new(tree)),
+            })),
+        }
+    }
+
+    /// The first step of compiling `m`: a finished tree, or the matrix to
+    /// compile next with the node that waits for it pushed on `stack`.
+    fn start(&mut self, m: Matrix<'p>, stack: &mut Vec<Pending<'p>>) -> Result<Next<'p>, Ice> {
         let m = drop_wild_columns(m);
         let Some(first) = m.rows.first() else {
-            return Ok(Tree::Fail);
+            return Ok(Next::Tree(Tree::Fail));
         };
         if first.cells.iter().all(Option::is_none) {
             let arm = first.arm;
             let bindings = first.binds.clone();
-            let guarded = self.guarded.get(arm).copied().unwrap_or(false);
-            let otherwise = if guarded {
-                // D-571: the guard runs once, with the names of the first
-                // alternative that matches (§5.9.1, §6.7: "trying them from
-                // left to right"; §5.15.1: guards in arm order). When it is
-                // `False` the arm is skipped, so its later alternatives are
-                // not tried.
-                let rest = Matrix {
-                    cols: m.cols,
-                    bounds: m.bounds,
-                    rows: m.rows.into_iter().filter(|r| r.arm != arm).collect(),
-                };
-                Some(Box::new(self.compile(rest)?))
-            } else {
-                None
+            if !self.guarded.get(arm).copied().unwrap_or(false) {
+                return Ok(Next::Tree(Tree::Leaf {
+                    arm,
+                    bindings,
+                    otherwise: None,
+                }));
+            }
+            // D-571: the guard runs once, with the names of the first
+            // alternative that matches (§5.9.1, §6.7: "trying them from
+            // left to right"; §5.15.1: guards in arm order). When it is
+            // `False` the arm is skipped, so its later alternatives are
+            // not tried.
+            let rest = Matrix {
+                cols: m.cols,
+                bounds: m.bounds,
+                rows: m.rows.into_iter().filter(|r| r.arm != arm).collect(),
             };
-            return Ok(Tree::Leaf {
-                arm,
-                bindings,
-                otherwise,
-            });
+            stack.push(Pending::Guarded { arm, bindings });
+            return Ok(Next::Matrix(rest));
         }
         for c in 0..m.cols.len() {
             if self.is_structural(&m, c)? {
-                return self.split(m, c);
+                return self.split(m, c, stack);
             }
         }
         let mut best: Option<(usize, usize, usize)> = None;
@@ -533,7 +817,7 @@ impl<'p> Compiler<'_, '_> {
             }
         }
         let (c, _, _) = best.ok_or_else(|| Ice::new("no column to test"))?;
-        self.split(m, c)
+        self.split(m, c, stack)
     }
 
     /// Replaces alternatives in column `c` by one row per branch.
@@ -575,27 +859,40 @@ impl<'p> Compiler<'_, '_> {
     }
 
     /// Tests (or takes apart) column `c`.
-    fn split(&mut self, m: Matrix<'p>, c: usize) -> Result<Tree, Ice> {
+    fn split(
+        &mut self,
+        m: Matrix<'p>,
+        c: usize,
+        stack: &mut Vec<Pending<'p>>,
+    ) -> Result<Next<'p>, Ice> {
         let m = Self::expand_or(m, c)?;
         let occ = *m.cols.get(c).ok_or_else(|| Ice::new("no such column"))?;
         let Some(kind) = self.column_kind(&m, c)? else {
             // Only wildcards are left after the alternatives.
-            return self.compile(m);
+            return Ok(Next::Matrix(m));
         };
-        // Each kind is split in a function of its own, so this frame, which
-        // recurses once per tested position, stays small.
         match kind {
-            Kind::Tuple(arity) => self.split_tuple(&m, c, arity),
-            Kind::Ctor { ty, count } => self.split_ctor(&m, c, occ, ty, count),
-            Kind::Int | Kind::Str => self.split_literals(&m, c, occ, kind),
-            Kind::List if elementwise(&m, c)? => self.split_list_elementwise(m, c, occ),
-            Kind::List => self.split_list(&m, c, occ),
+            Kind::Tuple(arity) => self.tuple_matrix(&m, c, arity).map(Next::Matrix),
+            Kind::Ctor { ty, count } => {
+                let node = self.ctor_node(m, c, occ, ty, count)?;
+                self.advance_ctor(node, stack)
+            }
+            Kind::Int | Kind::Str => {
+                let node = literal_node(m, c, occ, kind)?;
+                self.advance_literals(node, stack)
+            }
+            Kind::List if elementwise(&m, c)? => self.split_list_elementwise(m, c, occ, stack),
+            Kind::List => {
+                let node = list_node(m, c, occ)?;
+                self.advance_list(node, stack)
+            }
         }
     }
 
-    /// Takes apart tuple column `c`.
-    fn split_tuple(&mut self, m: &Matrix<'p>, c: usize, arity: u32) -> Result<Tree, Ice> {
-        let sub = self.specialize(m, c, |p| match &p.kind {
+    /// Takes apart tuple column `c`: the matrix with its elements as
+    /// columns.
+    fn tuple_matrix(&mut self, m: &Matrix<'p>, c: usize, arity: u32) -> Result<Matrix<'p>, Ice> {
+        self.specialize(m, c, |p| match &p.kind {
             PatKind::Tuple(ps) => ps
                 .iter()
                 .enumerate()
@@ -611,20 +908,20 @@ impl<'p> Compiler<'_, '_> {
                 .collect::<Result<Vec<_>, Ice>>()
                 .map(Some),
             _ => Err(Ice::new("a tuple column with another pattern")),
-        })?;
-        self.compile(sub)
+        })
     }
 
-    /// Tests (or takes apart, for a single constructor) constructor column
-    /// `c` of type `ty`, which has `count` constructors.
-    fn split_ctor(
-        &mut self,
-        m: &Matrix<'p>,
+    /// The node that tests (or takes apart, for a single constructor)
+    /// constructor column `c` of type `ty`, which has `count`
+    /// constructors.
+    fn ctor_node(
+        &self,
+        m: Matrix<'p>,
         c: usize,
         occ: OccId,
         ty: DefId,
         count: usize,
-    ) -> Result<Tree, Ice> {
+    ) -> Result<CtorNode<'p>, Ice> {
         let all = self.ctors_of(ty)?;
         if all.len() != count {
             return Err(Ice::new("a type's constructor count changed"));
@@ -638,9 +935,33 @@ impl<'p> Compiler<'_, '_> {
                 })
             })
             .collect();
-        let mut cases = Vec::with_capacity(present.len());
-        for &ctor in &present {
-            let sub = self.specialize(m, c, |p| match &p.kind {
+        Ok(CtorNode {
+            cases: Vec::with_capacity(present.len()),
+            m,
+            c,
+            occ,
+            ty,
+            count,
+            present,
+            next: 0,
+            default_started: false,
+            waiting: None,
+            default: None,
+        })
+    }
+
+    /// The next subtree of a constructor test: one case per constructor
+    /// present, in tag order, then the default when some constructor is
+    /// missing; then the test itself. A single constructor is taken apart
+    /// with no test.
+    fn advance_ctor(
+        &mut self,
+        mut node: CtorNode<'p>,
+        stack: &mut Vec<Pending<'p>>,
+    ) -> Result<Next<'p>, Ice> {
+        if let Some(&ctor) = node.present.get(node.next) {
+            node.next = node.next.saturating_add(1);
+            let sub = self.specialize(&node.m, node.c, |p| match &p.kind {
                 PatKind::Ctor { ctor: k, fields } if *k == ctor => Ok(Some(
                     fields
                         .iter()
@@ -658,35 +979,38 @@ impl<'p> Compiler<'_, '_> {
                 PatKind::Ctor { .. } => Ok(None),
                 _ => Err(Ice::new("a constructor column with another pattern")),
             })?;
-            if count == 1 {
-                return self.compile(sub);
+            if node.count == 1 {
+                return Ok(Next::Matrix(sub));
             }
             let (_, tag, _) = self.ctor_info(ctor)?;
-            let key = if ty == builtin::BOOL {
+            let key = if node.ty == builtin::BOOL {
                 Key::Bool(ctor == builtin::TRUE)
             } else {
                 Key::Ctor { ctor, tag }
             };
-            cases.push((key, self.compile(sub)?));
+            node.waiting = Some(key);
+            stack.push(Pending::Ctor(node));
+            return Ok(Next::Matrix(sub));
         }
-        let default = if present.len() < count {
-            Some(Box::new(self.compile(default_matrix(m, c))?))
-        } else {
-            None
-        };
-        let test = match ty {
+        if node.present.len() < node.count && !node.default_started {
+            node.default_started = true;
+            let default = default_matrix(&node.m, node.c);
+            stack.push(Pending::Ctor(node));
+            return Ok(Next::Matrix(default));
+        }
+        let test = match node.ty {
             t if t == builtin::BOOL => Test::Bool,
             t if t == builtin::OPTION => Test::Tag(TagType::Option),
             t if t == builtin::RESULT => Test::Tag(TagType::Result),
             t if t == builtin::ORDER => Test::Tag(TagType::Order),
             t => Test::Tag(TagType::Adt(t)),
         };
-        Ok(Tree::Test {
-            occ,
+        Ok(Next::Tree(Tree::Test {
+            occ: node.occ,
             test,
-            cases,
-            default,
-        })
+            cases: node.cases,
+            default: node.default.map(Box::new),
+        }))
     }
 
     /// Tests one more element of list column `c`, whose first `lb`
@@ -700,27 +1024,33 @@ impl<'p> Compiler<'_, '_> {
     /// Each list pattern is visited once per element, so a column of
     /// spreads with growing prefixes compiles in linear size, where one
     /// switch over every length would read N(N+1)/2 elements
-    /// (the gate-2 review's R2-2). The compiler recurses once per tested
-    /// position, so a list pattern of several hundred elements needs a
-    /// deep stack.
-    fn split_list_elementwise(&mut self, m: Matrix<'p>, c: usize, occ: OccId) -> Result<Tree, Ice> {
-        // The matrices are built in a function of their own, so the frame
-        // that recurses once per element stays small.
+    /// (the gate-2 review's R2-2). The tree is one test deeper per element,
+    /// which [`Self::compile`]'s explicit stack handles without recursion.
+    fn split_list_elementwise(
+        &mut self,
+        m: Matrix<'p>,
+        c: usize,
+        occ: OccId,
+        stack: &mut Vec<Pending<'p>>,
+    ) -> Result<Next<'p>, Ice> {
         match self.element_step(m, c, occ)? {
-            ElementStep::Done(m) => self.compile(m),
-            ElementStep::Test { lb, exact, longer } => Ok(Tree::Test {
-                occ,
-                test: Test::Len,
-                cases: vec![(Key::Len(u64::from(lb)), self.compile(exact)?)],
-                default: Some(Box::new(self.compile(longer)?)),
-            }),
+            ElementStep::Done(m) => Ok(Next::Matrix(m)),
+            ElementStep::Test { lb, exact, longer } => {
+                // The exact case first, then the longer lists.
+                stack.push(Pending::Element {
+                    occ,
+                    lb,
+                    longer: Some(longer),
+                    exact: None,
+                });
+                Ok(Next::Matrix(exact))
+            }
         }
     }
 
     /// One step of [`Self::split_list_elementwise`]: the matrix when the
     /// list column needs no more tests, or the bound and the matrices for
     /// a list of exactly that many elements and for a longer one.
-    #[inline(never)]
     fn element_step(
         &mut self,
         mut m: Matrix<'p>,
@@ -823,30 +1153,16 @@ impl<'p> Compiler<'_, '_> {
         })
     }
 
-    fn split_literals(
+    /// The next subtree of a literal test: one case per literal, in the
+    /// order of the rows, then the default; then the test itself.
+    fn advance_literals(
         &mut self,
-        m: &Matrix<'p>,
-        c: usize,
-        occ: OccId,
-        kind: Kind,
-    ) -> Result<Tree, Ice> {
-        let mut keys: Vec<Key> = Vec::new();
-        for row in &m.rows {
-            let key = match row.cells.get(c) {
-                Some(Some(p)) => match &p.kind {
-                    PatKind::Lit(Lit::Int(v)) => Key::Int(*v),
-                    PatKind::Lit(Lit::Str(s)) => Key::Str(s.clone()),
-                    _ => return Err(Ice::new("a literal column with another pattern")),
-                },
-                _ => continue,
-            };
-            if !keys.contains(&key) {
-                keys.push(key);
-            }
-        }
-        let mut cases = Vec::with_capacity(keys.len());
-        for key in keys {
-            let sub = self.specialize(m, c, |p| {
+        mut node: LiteralNode<'p>,
+        stack: &mut Vec<Pending<'p>>,
+    ) -> Result<Next<'p>, Ice> {
+        if let Some(key) = node.keys.get(node.next).cloned() {
+            node.next = node.next.saturating_add(1);
+            let sub = self.specialize(&node.m, node.c, |p| {
                 let same = match (&p.kind, &key) {
                     (PatKind::Lit(Lit::Int(v)), Key::Int(k)) => v == k,
                     (PatKind::Lit(Lit::Str(s)), Key::Str(k)) => s == k,
@@ -854,73 +1170,66 @@ impl<'p> Compiler<'_, '_> {
                 };
                 Ok(same.then(Vec::new))
             })?;
-            cases.push((key, self.compile(sub)?));
+            node.waiting = Some(key);
+            stack.push(Pending::Literals(node));
+            return Ok(Next::Matrix(sub));
         }
-        let ty = self.occs.get(occ.index()).map(|o| o.ty);
-        let test = match kind {
+        let Some(default) = node.default.take() else {
+            let default = default_matrix(&node.m, node.c);
+            node.waiting = None;
+            stack.push(Pending::Literals(node));
+            return Ok(Next::Matrix(default));
+        };
+        let ty = self.occs.get(node.occ.index()).map(|o| o.ty);
+        let test = match node.kind {
             Kind::Int => Test::Int(ty.map_or(Repr::Int, |t| repr_of(t, self.defs.globals))),
             _ => Test::Str,
         };
-        let default = Some(Box::new(self.compile(default_matrix(m, c))?));
-        Ok(Tree::Test {
-            occ,
+        Ok(Next::Tree(Tree::Test {
+            occ: node.occ,
             test,
-            cases,
-            default,
-        })
+            cases: node.cases,
+            default: Some(Box::new(default)),
+        }))
     }
 
-    fn split_list(&mut self, m: &Matrix<'p>, c: usize, occ: OccId) -> Result<Tree, Ice> {
-        // Exact lengths and the longest fixed part of a spread pattern.
-        let mut exact: Vec<u32> = Vec::new();
-        let mut max_min: u32 = 0;
-        for row in &m.rows {
-            if let Some(Some(p)) = row.cells.get(c) {
-                let (pre, rest, suf) =
-                    list_parts(p).ok_or_else(|| Ice::new("a list column with another pattern"))?;
-                let n = len_u32(pre.len().saturating_add(suf.len()))?;
-                match rest {
-                    None => exact.push(n),
-                    Some(_) => max_min = max_min.max(n),
-                }
-            }
-        }
-        let mut lengths: Vec<u32> = (0..max_min).chain(exact).collect();
-        lengths.sort_unstable();
-        lengths.dedup();
-        let mut cases = Vec::with_capacity(lengths.len());
-        let mut unmatched = Vec::new();
-        for &len in &lengths {
+    /// The next subtree of a length switch: one case per length some
+    /// pattern matches exactly, one case for the lengths none matches, and
+    /// the default for every other length, where only spread patterns
+    /// match and their suffix counts from the end.
+    fn advance_list(
+        &mut self,
+        mut node: ListNode<'p>,
+        stack: &mut Vec<Pending<'p>>,
+    ) -> Result<Next<'p>, Ice> {
+        while let Some(&len) = node.lengths.get(node.next) {
+            node.next = node.next.saturating_add(1);
             let mut matched = false;
-            for row in &m.rows {
-                if let Some(Some(p)) = row.cells.get(c) {
+            for row in &node.m.rows {
+                if let Some(Some(p)) = row.cells.get(node.c) {
                     matched |= cells_at_length(p, len)?.is_some();
                 }
             }
             if !matched {
-                unmatched.push(u64::from(len));
+                node.unmatched.push(u64::from(len));
                 continue;
             }
-            let sub = self.specialize(m, c, |p| cells_at_length(p, len))?;
-            cases.push((Key::Len(u64::from(len)), self.compile(sub)?));
+            let sub = self.specialize(&node.m, node.c, |p| cells_at_length(p, len))?;
+            node.waiting = Some(ListWait::Len(len));
+            stack.push(Pending::List(node));
+            return Ok(Next::Matrix(sub));
         }
-        if !unmatched.is_empty() {
-            cases.push((Key::Lens(unmatched), self.compile(default_matrix(m, c))?));
+        if !node.unmatched.is_empty() {
+            let lens = std::mem::take(&mut node.unmatched);
+            let default = default_matrix(&node.m, node.c);
+            node.waiting = Some(ListWait::Lens(lens));
+            stack.push(Pending::List(node));
+            return Ok(Next::Matrix(default));
         }
-        // Every other length: only spread patterns match, and the suffix
-        // counts from the end.
-        let sub = self.specialize(m, c, cells_beyond)?;
-        let default = self.compile(sub)?;
-        if lengths.is_empty() {
-            // `[..]` and `[..rest]` only: nothing to test.
-            return Ok(default);
-        }
-        Ok(Tree::Test {
-            occ,
-            test: Test::Len,
-            cases,
-            default: Some(Box::new(default)),
-        })
+        let sub = self.specialize(&node.m, node.c, cells_beyond)?;
+        node.waiting = Some(ListWait::Beyond);
+        stack.push(Pending::List(node));
+        Ok(Next::Matrix(sub))
     }
 
     /// The matrix of the rows whose cell in column `c` fits a case:

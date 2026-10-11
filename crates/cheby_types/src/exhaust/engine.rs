@@ -31,6 +31,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
+use std::rc::Rc;
 
 use cheby_iface::Ice;
 
@@ -428,6 +429,161 @@ struct Engine<'c, C> {
     budget: u64,
 }
 
+/// A matrix that calls of the search own, shared by the calls that look
+/// at the same rows.
+type Matrix<'p> = Rc<Vec<Row<'p>>>;
+
+/// One call of the search: the witnesses, at most `want` of them, of
+/// values that match `v` and no row of `matrix`.
+struct Call<'p, T> {
+    matrix: Matrix<'p>,
+    v: Row<'p>,
+    tys: Vec<T>,
+    want: usize,
+}
+
+/// A specialized call, with the frame that rebuilds its witnesses.
+type Specialized<'p, T> = (Frame<'p, T>, Call<'p, T>);
+
+/// What a call does next.
+enum Flow<'p, T> {
+    /// It finished with these witnesses.
+    Done(Found<T>),
+    /// It waits, on the stack, for the witnesses of this nested call.
+    Descend(Call<'p, T>),
+}
+
+/// A call that waits for the witnesses of a nested call.
+enum Frame<'p, T> {
+    /// Trying the alternatives of the first pattern from `next` on.
+    Or {
+        call: Call<'p, T>,
+        alts: &'p [Pat],
+        next: usize,
+        out: Found<T>,
+    },
+    /// Trying the split list constructors that the first pattern covers,
+    /// from `next` on.
+    List {
+        call: Call<'p, T>,
+        ctors: Vec<Ctor>,
+        next: usize,
+        out: Found<T>,
+    },
+    /// Rebuilding the nested call's witnesses around the constructor
+    /// `ctor` of `ty`, which has `arity` fields.
+    Rebuild { ty: T, ctor: Ctor, arity: usize },
+    /// A call whose first pattern is a wildcard.
+    Wild(Box<WildFrame<'p, T>>),
+}
+
+/// The state of a call whose first pattern is a wildcard.
+struct WildFrame<'p, T> {
+    call: Call<'p, T>,
+    ty: T,
+    split: Split,
+    groups: Groups<'p>,
+    /// The witnesses of the default matrix, once computed.
+    default: Option<Found<T>>,
+    /// The next constructor of `split` to try.
+    next: usize,
+    out: Found<T>,
+    wait: Wait<T>,
+}
+
+/// What a [`WildFrame`] waits for.
+enum Wait<T> {
+    /// The default matrix, computed first because the split is
+    /// incomplete.
+    FirstDefault,
+    /// The specialization to the constructor `split.ctors[next]`.
+    Ctor,
+    /// The default matrix, for the missing constructor
+    /// `split.ctors[next]`, whose witness starts with this.
+    MissingDefault(Witness<T>),
+    /// The default matrix, for the values that no constructor covers.
+    RestDefault,
+}
+
+/// Tries the alternative `next` of the first pattern, until `want`
+/// witnesses are found.
+fn or_step<'p, T: Copy>(
+    call: Call<'p, T>,
+    alts: &'p [Pat],
+    next: usize,
+    out: Found<T>,
+    stack: &mut Vec<Frame<'p, T>>,
+) -> Flow<'p, T> {
+    let left = call.want.saturating_sub(out.len());
+    let Some(alt) = alts.get(next) else {
+        return Flow::Done(out);
+    };
+    if left == 0 {
+        return Flow::Done(out);
+    }
+    let v: Row<'p> = std::iter::once(alt)
+        .chain(call.v.iter().skip(1).copied())
+        .collect();
+    let nested = Call {
+        matrix: Rc::clone(&call.matrix),
+        v,
+        tys: call.tys.clone(),
+        want: left,
+    };
+    stack.push(Frame::Or {
+        call,
+        alts,
+        next: next.saturating_add(1),
+        out,
+    });
+    Flow::Descend(nested)
+}
+
+/// Pushes `frame`, waiting as `wait` for the witnesses of the columns
+/// after the first, against the rows whose first pattern is a wildcard,
+/// and returns that call.
+fn wait_default<'p, T: Copy>(
+    mut frame: Box<WildFrame<'p, T>>,
+    wait: Wait<T>,
+    stack: &mut Vec<Frame<'p, T>>,
+) -> Flow<'p, T> {
+    let mut rows = Vec::new();
+    for row in frame.call.matrix.iter() {
+        default_rows(row, &mut rows);
+    }
+    let nested = Call {
+        matrix: Rc::new(rows),
+        v: frame.call.v.get(1..).unwrap_or(&[]).to_vec(),
+        tys: frame.call.tys.get(1..).unwrap_or(&[]).to_vec(),
+        want: frame.call.want,
+    };
+    frame.wait = wait;
+    stack.push(Frame::Wild(frame));
+    Flow::Descend(nested)
+}
+
+/// The witnesses of a specialized call, each rebuilt with the
+/// constructor `ctor` of `ty` around its first `arity` patterns.
+fn rebuild<T>(ty: T, ctor: &Ctor, arity: usize, found: Found<T>) -> Result<Found<T>, Stop>
+where
+    T: Copy,
+{
+    found
+        .into_iter()
+        .map(|mut w| {
+            if w.len() < arity {
+                return Err(Ice::new("exhaustiveness: a witness is too short").into());
+            }
+            let rest = w.split_off(arity);
+            let head = Witness {
+                ty,
+                kind: WitnessKind::Ctor(ctor.clone(), w),
+            };
+            Ok(std::iter::once(head).chain(rest).collect())
+        })
+        .collect()
+}
+
 impl<C: Types> Engine<'_, C> {
     fn spend(&mut self, rows: usize) -> Result<(), Stop> {
         let cost = u64::try_from(rows).unwrap_or(u64::MAX).saturating_add(1);
@@ -444,102 +600,282 @@ impl<C: Types> Engine<'_, C> {
         tys: &[C::Ty],
         want: usize,
     ) -> Result<Found<C::Ty>, Stop> {
-        self.spend(matrix.len())?;
-        let (Some((&head, rest)), Some((&ty, _))) = (v.split_first(), tys.split_first()) else {
-            if v.len() != tys.len() {
+        let call = Call {
+            matrix: Rc::new(matrix.iter().map(|row| (*row).clone()).collect()),
+            v: v.to_vec(),
+            tys: tys.to_vec(),
+            want,
+        };
+        self.search(call)
+    }
+
+    /// Runs the recursion of Maranget's algorithm for `call` with an
+    /// explicit stack of the calls that wait for a nested one. A list
+    /// pattern adds a level per element, so a recursion on the thread's
+    /// own stack overflowed a 2 MiB worker on a few thousand elements. The
+    /// calls run in the same order as a recursion would, so the budget and
+    /// the witnesses are the same (D-508).
+    fn search<'p>(&mut self, call: Call<'p, C::Ty>) -> Result<Found<C::Ty>, Stop> {
+        let mut stack: Vec<Frame<'p, C::Ty>> = Vec::new();
+        let mut flow = self.enter(call, &mut stack)?;
+        loop {
+            flow = match flow {
+                Flow::Descend(call) => self.enter(call, &mut stack)?,
+                Flow::Done(found) => match stack.pop() {
+                    None => return Ok(found),
+                    Some(frame) => self.resume(frame, found, &mut stack)?,
+                },
+            };
+        }
+    }
+
+    /// Starts `call`: finishes it at once, or pushes what it waits for
+    /// and returns the nested call to run first.
+    fn enter<'p>(
+        &mut self,
+        call: Call<'p, C::Ty>,
+        stack: &mut Vec<Frame<'p, C::Ty>>,
+    ) -> Result<Flow<'p, C::Ty>, Stop> {
+        self.spend(call.matrix.len())?;
+        let (Some(&head), Some(&ty)) = (call.v.first(), call.tys.first()) else {
+            if call.v.len() != call.tys.len() {
                 return Err(
                     Ice::new("exhaustiveness: a row and its types differ in length").into(),
                 );
             }
-            return Ok(if matrix.is_empty() {
+            return Ok(Flow::Done(if call.matrix.is_empty() {
                 vec![Vec::new()]
             } else {
                 Vec::new()
-            });
+            }));
         };
-        let mut out = Vec::new();
         match head {
-            Pat::Or(alts) => {
-                for alt in alts {
-                    let left = want.saturating_sub(out.len());
-                    if left == 0 {
-                        break;
-                    }
-                    let row: Row<'p> = std::iter::once(alt).chain(rest.iter().copied()).collect();
-                    out.extend(self.useful(matrix, &row, tys, left)?);
-                }
-            }
+            Pat::Or(alts) => Ok(or_step(call, alts, 0, Vec::new(), stack)),
             Pat::Ctor(ctor @ Ctor::List(_), _) => {
-                let split = self.split(ty, matrix, Some(ctor))?;
-                for (c, _) in split.ctors.iter().filter(|(c, _)| covers(ctor, c)) {
-                    let left = want.saturating_sub(out.len());
-                    if left == 0 {
-                        break;
-                    }
-                    out.extend(self.specialized(matrix, v, tys, c, left)?);
-                }
+                let split = {
+                    let rows: Vec<&Row<'p>> = call.matrix.iter().collect();
+                    self.split(ty, &rows, Some(ctor))?
+                };
+                let ctors = split
+                    .ctors
+                    .into_iter()
+                    .map(|(c, _)| c)
+                    .filter(|c| covers(ctor, c))
+                    .collect();
+                self.list_step(call, ctors, 0, Vec::new(), stack)
             }
             Pat::Ctor(ctor, _) => {
                 // Variants and literals are disjoint, so `ctor` is itself
                 // the one split constructor it covers.
-                out.extend(self.specialized(matrix, v, tys, ctor, want)?);
+                let (rebuild, nested) = {
+                    let rows: Vec<&Row<'p>> = call.matrix.iter().collect();
+                    self.specialize_call(&rows, &call.v, &call.tys, ctor, call.want)?
+                };
+                stack.push(rebuild);
+                Ok(Flow::Descend(nested))
             }
-            Pat::Wild => {
-                let split = self.split(ty, matrix, None)?;
-                let groups = Groups::of(matrix);
-                let mut default: Option<Found<C::Ty>> = None;
-                let incomplete = split.rest || split.ctors.iter().any(|(_, present)| !present);
-                if incomplete {
-                    // Every specialized matrix holds the default rows, so
-                    // when the default matrix leaves nothing, neither does
-                    // any constructor (Maranget's incomplete case). When it
-                    // leaves something and one witness is enough, the
-                    // default's witness will do: the present constructors
-                    // are explored only to list more witnesses.
-                    let found = self.default_found(&mut default, matrix, v, tys, want)?;
+            Pat::Wild => self.wild_start(call, ty, stack),
+        }
+    }
+
+    /// Continues the frame that waited for `found`, the witnesses of its
+    /// nested call.
+    fn resume<'p>(
+        &mut self,
+        frame: Frame<'p, C::Ty>,
+        found: Found<C::Ty>,
+        stack: &mut Vec<Frame<'p, C::Ty>>,
+    ) -> Result<Flow<'p, C::Ty>, Stop> {
+        match frame {
+            Frame::Or {
+                call,
+                alts,
+                next,
+                mut out,
+            } => {
+                out.extend(found);
+                Ok(or_step(call, alts, next, out, stack))
+            }
+            Frame::List {
+                call,
+                ctors,
+                next,
+                mut out,
+            } => {
+                out.extend(found);
+                self.list_step(call, ctors, next, out, stack)
+            }
+            Frame::Rebuild { ty, ctor, arity } => Ok(Flow::Done(rebuild(ty, &ctor, arity, found)?)),
+            Frame::Wild(mut frame) => match std::mem::replace(&mut frame.wait, Wait::Ctor) {
+                Wait::FirstDefault => {
                     if found.is_empty() {
-                        return Ok(out);
+                        // Every specialized matrix holds the default rows,
+                        // so when the default matrix leaves nothing,
+                        // neither does any constructor (Maranget's
+                        // incomplete case).
+                        return Ok(Flow::Done(frame.out));
                     }
-                    if want == 1 {
-                        let head = match split.ctors.iter().find(|(_, present)| !present) {
-                            Some((c, _)) => self.missing_witness(ty, c)?,
-                            None => Witness::wild(ty),
+                    if frame.call.want == 1 {
+                        // One witness is enough, and the default's will do:
+                        // the present constructors are explored only to
+                        // list more witnesses.
+                        let head = match frame.split.ctors.iter().find(|(_, present)| !present) {
+                            Some((c, _)) => self.missing_witness(frame.ty, c)?,
+                            None => Witness::wild(frame.ty),
                         };
-                        out.extend(found.iter().take(1).map(|w| prepend(head.clone(), w)));
-                        return Ok(out);
+                        frame
+                            .out
+                            .extend(found.iter().take(1).map(|w| prepend(head.clone(), w)));
+                        return Ok(Flow::Done(frame.out));
                     }
+                    frame.default = Some(found);
+                    self.wild_step(frame, stack)
                 }
-                for (c, present) in &split.ctors {
-                    let left = want.saturating_sub(out.len());
-                    if left == 0 {
-                        break;
-                    }
-                    if *present {
-                        let rows: Vec<&Row<'p>> = groups
-                            .rows_for(c)
-                            .into_iter()
-                            .filter_map(|i| matrix.get(i).copied())
-                            .collect();
-                        out.extend(self.specialized(&rows, v, tys, c, left)?);
-                        continue;
-                    }
-                    let missing = self.missing_witness(ty, c)?;
-                    let found = self.default_found(&mut default, matrix, v, tys, want)?;
-                    out.extend(found.iter().take(left).map(|w| prepend(missing.clone(), w)));
+                Wait::Ctor => {
+                    frame.out.extend(found);
+                    frame.next = frame.next.saturating_add(1);
+                    self.wild_step(frame, stack)
                 }
-                let left = want.saturating_sub(out.len());
-                if split.rest && left > 0 {
-                    let found = self.default_found(&mut default, matrix, v, tys, want)?;
-                    out.extend(
+                Wait::MissingDefault(missing) => {
+                    let left = frame.call.want.saturating_sub(frame.out.len());
+                    frame
+                        .out
+                        .extend(found.iter().take(left).map(|w| prepend(missing.clone(), w)));
+                    frame.default = Some(found);
+                    frame.next = frame.next.saturating_add(1);
+                    self.wild_step(frame, stack)
+                }
+                Wait::RestDefault => {
+                    let left = frame.call.want.saturating_sub(frame.out.len());
+                    let ty = frame.ty;
+                    frame.out.extend(
                         found
                             .iter()
                             .take(left)
                             .map(|w| prepend(Witness::wild(ty), w)),
                     );
+                    Ok(Flow::Done(frame.out))
                 }
-            }
+            },
         }
-        Ok(out)
+    }
+
+    /// Tries the next split list constructor that the first pattern
+    /// covers, until `want` witnesses are found.
+    fn list_step<'p>(
+        &mut self,
+        call: Call<'p, C::Ty>,
+        ctors: Vec<Ctor>,
+        next: usize,
+        out: Found<C::Ty>,
+        stack: &mut Vec<Frame<'p, C::Ty>>,
+    ) -> Result<Flow<'p, C::Ty>, Stop> {
+        let left = call.want.saturating_sub(out.len());
+        let Some(c) = ctors.get(next) else {
+            return Ok(Flow::Done(out));
+        };
+        if left == 0 {
+            return Ok(Flow::Done(out));
+        }
+        let (rebuild, nested) = {
+            let rows: Vec<&Row<'p>> = call.matrix.iter().collect();
+            self.specialize_call(&rows, &call.v, &call.tys, c, left)?
+        };
+        stack.push(Frame::List {
+            call,
+            ctors,
+            next: next.saturating_add(1),
+            out,
+        });
+        stack.push(rebuild);
+        Ok(Flow::Descend(nested))
+    }
+
+    /// Starts a call whose first pattern is a wildcard: splits the column,
+    /// and computes the default matrix first when the split is incomplete.
+    fn wild_start<'p>(
+        &mut self,
+        call: Call<'p, C::Ty>,
+        ty: C::Ty,
+        stack: &mut Vec<Frame<'p, C::Ty>>,
+    ) -> Result<Flow<'p, C::Ty>, Stop> {
+        let (split, groups) = {
+            let rows: Vec<&Row<'p>> = call.matrix.iter().collect();
+            (self.split(ty, &rows, None)?, Groups::of(&rows))
+        };
+        let incomplete = split.rest || split.ctors.iter().any(|(_, present)| !present);
+        let frame = Box::new(WildFrame {
+            call,
+            ty,
+            split,
+            groups,
+            default: None,
+            next: 0,
+            out: Vec::new(),
+            wait: Wait::Ctor,
+        });
+        if incomplete {
+            return Ok(wait_default(frame, Wait::FirstDefault, stack));
+        }
+        self.wild_step(frame, stack)
+    }
+
+    /// Tries the split constructors of a wildcard column from `next` on,
+    /// then the values none of them covers.
+    fn wild_step<'p>(
+        &mut self,
+        mut frame: Box<WildFrame<'p, C::Ty>>,
+        stack: &mut Vec<Frame<'p, C::Ty>>,
+    ) -> Result<Flow<'p, C::Ty>, Stop> {
+        loop {
+            let left = frame.call.want.saturating_sub(frame.out.len());
+            let Some((c, present)) = frame.split.ctors.get(frame.next) else {
+                break;
+            };
+            if left == 0 {
+                break;
+            }
+            if *present {
+                let (rebuild, nested) = {
+                    let rows: Vec<&Row<'p>> = frame
+                        .groups
+                        .rows_for(c)
+                        .into_iter()
+                        .filter_map(|i| frame.call.matrix.get(i))
+                        .collect();
+                    self.specialize_call(&rows, &frame.call.v, &frame.call.tys, c, left)?
+                };
+                frame.wait = Wait::Ctor;
+                stack.push(Frame::Wild(frame));
+                stack.push(rebuild);
+                return Ok(Flow::Descend(nested));
+            }
+            let missing = self.missing_witness(frame.ty, c)?;
+            let Some(found) = &frame.default else {
+                return Ok(wait_default(frame, Wait::MissingDefault(missing), stack));
+            };
+            let extra: Found<C::Ty> = found
+                .iter()
+                .take(left)
+                .map(|w| prepend(missing.clone(), w))
+                .collect();
+            frame.out.extend(extra);
+            frame.next = frame.next.saturating_add(1);
+        }
+        let left = frame.call.want.saturating_sub(frame.out.len());
+        if frame.split.rest && left > 0 {
+            let Some(found) = &frame.default else {
+                return Ok(wait_default(frame, Wait::RestDefault, stack));
+            };
+            let ty = frame.ty;
+            let extra: Found<C::Ty> = found
+                .iter()
+                .take(left)
+                .map(|w| prepend(Witness::wild(ty), w))
+                .collect();
+            frame.out.extend(extra);
+        }
+        Ok(Flow::Done(frame.out))
     }
 
     /// `c(_, …, _)` at `ty`.
@@ -556,45 +892,17 @@ impl<C: Types> Engine<'_, C> {
         })
     }
 
-    /// The witnesses for the columns after the first, against the rows
-    /// whose first pattern is a wildcard, computed once per column.
-    fn default_found<'d, 'p>(
-        &mut self,
-        cache: &'d mut Option<Found<C::Ty>>,
-        matrix: &[&Row<'p>],
-        v: &[&'p Pat],
-        tys: &[C::Ty],
-        want: usize,
-    ) -> Result<&'d Found<C::Ty>, Stop> {
-        if cache.is_none() {
-            let mut rows = Vec::new();
-            for row in matrix {
-                default_rows(row, &mut rows);
-            }
-            let refs: Vec<&Row<'p>> = rows.iter().collect();
-            let found = self.useful(
-                &refs,
-                v.get(1..).unwrap_or(&[]),
-                tys.get(1..).unwrap_or(&[]),
-                want,
-            )?;
-            *cache = Some(found);
-        }
-        cache
-            .as_ref()
-            .ok_or_else(|| Stop::Ice(Ice::new("exhaustiveness: default not computed")))
-    }
-
-    /// Usefulness of `v` specialized to the constructor `c` of its first
-    /// column, with the witnesses rebuilt around `c`.
-    fn specialized<'p>(
-        &mut self,
+    /// The call that specializes `v` against `matrix` to the constructor
+    /// `c` of its first column, with the frame that rebuilds its witnesses
+    /// around `c`.
+    fn specialize_call<'p>(
+        &self,
         matrix: &[&Row<'p>],
         v: &[&'p Pat],
         tys: &[C::Ty],
         c: &Ctor,
         want: usize,
-    ) -> Result<Found<C::Ty>, Stop> {
+    ) -> Result<Specialized<'p, C::Ty>, Stop> {
         let (Some(&ty), Some(rest_tys)) = (tys.first(), tys.get(1..)) else {
             return Err(Ice::new("exhaustiveness: specializing an empty row").into());
         };
@@ -606,26 +914,26 @@ impl<C: Types> Engine<'_, C> {
         }
         let mut vs = Vec::new();
         specialize(v, c, arity, &mut vs)?;
-        let [v] = vs.as_slice() else {
+        let mut vs = vs.into_iter();
+        let (Some(v), None) = (vs.next(), vs.next()) else {
             return Err(Ice::new("exhaustiveness: the row does not specialize to one row").into());
         };
-        let tys: Vec<C::Ty> = field_tys.iter().chain(rest_tys).copied().collect();
-        let refs: Vec<&Row<'p>> = rows.iter().collect();
-        let found = self.useful(&refs, v, &tys, want)?;
-        found
+        let tys = field_tys
             .into_iter()
-            .map(|mut w| {
-                if w.len() < arity {
-                    return Err(Ice::new("exhaustiveness: a witness is too short").into());
-                }
-                let rest = w.split_off(arity);
-                let head = Witness {
-                    ty,
-                    kind: WitnessKind::Ctor(c.clone(), w),
-                };
-                Ok(std::iter::once(head).chain(rest).collect())
-            })
-            .collect()
+            .chain(rest_tys.iter().copied())
+            .collect();
+        let rebuild = Frame::Rebuild {
+            ty,
+            ctor: c.clone(),
+            arity,
+        };
+        let call = Call {
+            matrix: Rc::new(rows),
+            v,
+            tys,
+            want,
+        };
+        Ok((rebuild, call))
     }
 
     /// The constructors to try for a column of type `ty`, given the

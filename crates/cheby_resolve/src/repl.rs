@@ -9,7 +9,13 @@
 //!
 //! - one import per earlier entry module, listing the names whose newest
 //!   definition is there;
-//! - each earlier `import` again, narrowed to the names it still binds.
+//! - each earlier `import` again, narrowed to the names it still binds;
+//! - while a module is entered with `:module` ([`Entered`], §13.5.3), its
+//!   items and then its own imports, placed among the session's names by
+//!   when it was entered, so a name the session defines later wins.
+//!
+//! `:reload` points earlier imports of a replaced module at its new
+//! version ([`SessionScope::retarget`]).
 //!
 //! The entry's own imports come first, and names the entry declares or
 //! imports itself are left out, so a redefinition never collides with the
@@ -47,6 +53,28 @@ struct Bound {
     stamp: u32,
 }
 
+/// Where a group of synthetic imports comes from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum GroupKind {
+    /// Items of an earlier entry module.
+    Entry,
+    /// Names an earlier `import` bound.
+    Import,
+    /// Items of the module entered with `:module`.
+    Entered,
+    /// Names an `import` of the entered module binds.
+    EnteredImport,
+}
+
+/// One synthetic import of [`SessionScope::imports_for`] before it is
+/// built: `stamp` orders the groups, newest first.
+struct Group {
+    stamp: (u32, u8),
+    kind: GroupKind,
+    key: usize,
+    list: Vec<Name>,
+}
+
 /// An `import` an earlier entry wrote, with its target.
 #[derive(Clone, Debug)]
 struct UserImport {
@@ -54,11 +82,28 @@ struct UserImport {
     target: ImportTarget,
 }
 
+/// A module entered with `:module` (§13.5.3, D-098): later entries see its
+/// items and its imports, as if they were written at the end of it.
+#[derive(Clone, Debug)]
+pub struct Entered {
+    /// The module.
+    pub module: ModuleId,
+    /// The names of its items, in every namespace.
+    pub items: Vec<Name>,
+    /// Its own imports, with their targets.
+    pub imports: Vec<(ImportRequest, ImportTarget)>,
+    /// How many entries the session had committed when the module was
+    /// entered: names the session defines later win over the module's.
+    pub stamp: u32,
+}
+
 /// The names of a REPL session, per namespace, that later entries see.
 #[derive(Clone, Debug)]
 pub struct SessionScope {
     names: FxHashMap<(Namespace, Name), Bound>,
     imports: Vec<UserImport>,
+    /// The module entered with `:module`, if any.
+    entered: Option<Entered>,
     /// The span every synthetic import points at: an empty file of the
     /// session, so diagnostics about synthetic imports are recognized and
     /// dropped.
@@ -76,8 +121,32 @@ impl SessionScope {
         Self {
             names: FxHashMap::default(),
             imports: Vec::new(),
+            entered: None,
             synthetic,
             ast,
+        }
+    }
+
+    /// Enters a module (`:module path`), or leaves the one entered with
+    /// `None` (§13.5.3, D-098).
+    pub fn enter(&mut self, entered: Option<Entered>) {
+        self.entered = entered;
+    }
+
+    /// The module entered with `:module`, if any.
+    #[must_use]
+    pub const fn entered(&self) -> Option<&Entered> {
+        self.entered.as_ref()
+    }
+
+    /// Makes the earlier imports of module `old` import `new` instead:
+    /// `:reload` replaced the module (§13.5.3). Later entries resolve
+    /// through the new version.
+    pub fn retarget(&mut self, old: ModuleId, new: ModuleId) {
+        for import in &mut self.imports {
+            if import.target.module() == Some(old) {
+                import.target = ImportTarget::Module(new);
+            }
         }
     }
 
@@ -197,34 +266,103 @@ impl SessionScope {
                 list.push(name);
             }
         }
-        // Newest first; then by module or import number, so the order never
-        // depends on hashing (D-264).
-        let mut groups: Vec<(u32, u8, usize, Vec<Name>)> = Vec::new();
+        // Newest first, a module entered with `:module` after the entries
+        // committed before it; then entry modules before imports, the
+        // entered module's items before its imports, and by module or
+        // import number, so the order never depends on hashing (D-264).
+        let mut groups: Vec<Group> = Vec::new();
         for (module, (stamp, list)) in by_module {
-            groups.push((stamp, 0, cheby_iface::Idx::index(module), list));
+            groups.push(Group {
+                stamp: (stamp, 0),
+                kind: GroupKind::Entry,
+                key: cheby_iface::Idx::index(module),
+                list,
+            });
         }
         for (index, (stamp, list)) in by_import {
-            groups.push((stamp, 1, index, list));
+            groups.push(Group {
+                stamp: (stamp, 0),
+                kind: GroupKind::Import,
+                key: index,
+                list,
+            });
         }
-        groups.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
+        groups.extend(self.entered_groups(&excluded, names));
+        groups.sort_by(|a, b| {
+            b.stamp
+                .cmp(&a.stamp)
+                .then(a.kind.cmp(&b.kind))
+                .then(a.key.cmp(&b.key))
+        });
         let mut requests: Vec<ImportRequest> = own.to_vec();
         let mut targets: Vec<ImportTarget> = own_targets.to_vec();
-        for (_, kind, key, mut list) in groups {
+        for group in groups {
+            let mut list = group.list;
             list.sort_by_key(|&n| names.get(n));
-            if kind == 0 {
-                let module = ModuleId::from_u32(
-                    u32::try_from(key).map_err(|_| Ice::new("module id overflow"))?,
-                );
-                requests.push(self.item_import(module, &list, modules, names)?);
-                targets.push(ImportTarget::Module(module));
-            } else if let Some(import) = self.imports.get(key)
-                && let Some(request) = narrowed(&import.request, &list)
-            {
-                requests.push(request);
-                targets.push(import.target);
+            list.dedup();
+            match group.kind {
+                GroupKind::Entry | GroupKind::Entered => {
+                    if list.is_empty() {
+                        continue;
+                    }
+                    let module = ModuleId::from_u32(
+                        u32::try_from(group.key).map_err(|_| Ice::new("module id overflow"))?,
+                    );
+                    requests.push(self.item_import(module, &list, modules, names)?);
+                    targets.push(ImportTarget::Module(module));
+                }
+                GroupKind::Import => {
+                    if let Some(import) = self.imports.get(group.key)
+                        && let Some(request) = narrowed(&import.request, &list)
+                    {
+                        requests.push(request);
+                        targets.push(import.target);
+                    }
+                }
+                GroupKind::EnteredImport => {
+                    if let Some((request, target)) =
+                        self.entered.as_ref().and_then(|e| e.imports.get(group.key))
+                        && let Some(request) = narrowed(request, &list)
+                    {
+                        requests.push(request);
+                        targets.push(*target);
+                    }
+                }
             }
         }
         Ok((requests, targets))
+    }
+
+    /// The synthetic imports of the module entered with `:module`: its
+    /// items, then each of its imports, without the names in `excluded`.
+    fn entered_groups(&self, excluded: &FxHashSet<Name>, names: &Interner) -> Vec<Group> {
+        let Some(entered) = &self.entered else {
+            return Vec::new();
+        };
+        let mut groups = vec![Group {
+            stamp: (entered.stamp, 1),
+            kind: GroupKind::Entered,
+            key: cheby_iface::Idx::index(entered.module),
+            list: entered
+                .items
+                .iter()
+                .copied()
+                .filter(|n| !excluded.contains(n))
+                .collect(),
+        }];
+        for (index, (request, _)) in entered.imports.iter().enumerate() {
+            groups.push(Group {
+                stamp: (entered.stamp, 1),
+                kind: GroupKind::EnteredImport,
+                key: index,
+                list: import_bindings(request, names)
+                    .into_iter()
+                    .map(|(_, n)| n)
+                    .filter(|n| !excluded.contains(n))
+                    .collect(),
+            });
+        }
+        groups
     }
 
     /// `import <module>::{names}`, pointing at the synthetic span.
@@ -503,6 +641,64 @@ mod tests {
             s.get(Namespace::Value, names.intern("filter")),
             Some(SessionBinding::Import(0))
         );
+    }
+
+    /// A module entered with `:module` comes after the session names
+    /// defined later and before those defined earlier; its imports follow
+    /// its items, and names the entry declares are left out (§13.5.3).
+    #[test]
+    fn an_entered_module_is_seen_after_newer_session_names() {
+        let globals = Globals::new();
+        let names = &globals.names;
+        let mut s = scope(&globals);
+        let (helper, list, other) = (
+            names.intern("helper"),
+            names.intern("list"),
+            names.intern("other"),
+        );
+        s.define(Namespace::Value, helper, def(1, 0), 1);
+        let (tree, _) =
+            cheby_syntax::parse(FileId::new(1), Arc::from("import std::list\n")).into_parts();
+        let requests = collect_imports(&tree, names);
+        let module = ModuleId::from_u32(5);
+        s.enter(Some(Entered {
+            module,
+            items: vec![helper, other],
+            imports: vec![(
+                requests[0].clone(),
+                ImportTarget::Module(ModuleId::from_u32(6)),
+            )],
+            stamp: 1,
+        }));
+        let (out, targets) = s.imports_for(&[], &[], &[], &table(5), names).unwrap();
+        let modules: Vec<_> = targets.iter().map(|t| t.module().unwrap()).collect();
+        assert_eq!(
+            modules,
+            vec![module, ModuleId::from_u32(6), ModuleId::from_u32(1)]
+        );
+        assert_eq!(listed(&out[0], &globals), vec!["helper", "other"]);
+        assert_eq!(out[1].module_binding().map(|(n, _)| n), Some(list));
+        // A later definition wins over the entered module's item.
+        s.define(Namespace::Value, helper, def(2, 0), 2);
+        let (_, targets) = s.imports_for(&[], &[], &[], &table(5), names).unwrap();
+        assert_eq!(targets[0], ImportTarget::Module(ModuleId::from_u32(2)));
+        // An entry that declares `other` does not see the module's.
+        let (out, _) = s.imports_for(&[], &[], &[other], &table(5), names).unwrap();
+        assert!(out.iter().all(|r| !listed(r, &globals).contains(&"other")));
+        // `:reload` points earlier imports at the new version.
+        s.add_import(
+            &requests[0],
+            ImportTarget::Module(ModuleId::from_u32(6)),
+            3,
+            names,
+        );
+        s.retarget(ModuleId::from_u32(6), ModuleId::from_u32(9));
+        assert_eq!(
+            s.import_request(0).map(|(_, t)| t),
+            Some(ImportTarget::Module(ModuleId::from_u32(9)))
+        );
+        s.enter(None);
+        assert!(s.entered().is_none());
     }
 
     #[test]

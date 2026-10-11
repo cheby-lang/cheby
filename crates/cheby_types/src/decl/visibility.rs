@@ -316,22 +316,34 @@ impl VisCx<'_, '_> {
         if let Some(declared) = named.span {
             diag = diag.with_secondary(declared, "declared here");
         }
-        let (note, help) = self.advice(owner_name, name);
+        let (note, help) = self.advice(owner_name, name, named.vis);
         self.diags.push(diag.with_note(note).with_help(help));
     }
 
-    fn advice(&self, owner: &str, name: &str) -> (String, String) {
+    /// The note and help of E0074. The help offers two fixes that each
+    /// work alone: raising the mentioned type to what the owner needs, or
+    /// lowering the owner to the mentioned type's visibility, so a `pub`
+    /// function that mentions a `priv` type is told to become `priv`, not
+    /// package-visible, which D-149 still forbids.
+    fn advice(&self, owner: &str, name: &str, mentioned: Vis) -> (String, String) {
         let raise = match self.owner.required {
             Vis::Pub => "`pub`",
             _ => "package-visible",
         };
         if self.owner.fields {
             if self.owner.exposed {
+                // Without `exposed` the fields still need package-visible
+                // types (D-198), so that fix works only for those.
+                let help = if mentioned == Vis::Priv {
+                    format!("make `{name}` `pub`, or make `{owner}` `priv`")
+                } else {
+                    format!("make `{name}` `pub`, or remove `exposed` from `{owner}`")
+                };
                 return (
                     "the fields of a `pub exposed` type are visible in every package, so \
                      their types must be `pub` (D-198)"
                         .to_owned(),
-                    format!("make `{name}` `pub`, or remove `exposed` from `{owner}`"),
+                    help,
                 );
             }
             return (
@@ -342,10 +354,11 @@ impl VisCx<'_, '_> {
                 format!("make `{name}` package-visible, or make `{owner}` `priv`"),
             );
         }
-        let (decision, lower) = match self.owner.required {
-            Vis::Pub => ("D-148", "package-visible"),
-            _ => ("D-149", "`priv`"),
+        let decision = match self.owner.required {
+            Vis::Pub => "D-148",
+            _ => "D-149",
         };
+        let lower = vis_word(mentioned);
         (
             format!("code that can use `{owner}` could not name `{name}` ({decision})"),
             format!("make `{name}` {raise}, or make `{owner}` {lower}"),

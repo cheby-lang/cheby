@@ -240,7 +240,16 @@ pub(crate) fn lower_source(files: &[(&str, &str)]) -> Lowered {
 /// [`lower_source`] for a package named `package`; the front end's errors
 /// are `Err`, rendered as the CLI prints them.
 pub(crate) fn lower_package(package: &str, files: &[(&str, &str)]) -> Result<Lowered, String> {
-    lower_package_with(package, files, false)
+    lower_package_with(package, files, false, None)
+}
+
+/// [`lower_source`] whose back end (lowering, reference counting and
+/// validation) runs on a thread of its own with a stack of `stack` bytes,
+/// after running `setup` there; the front end runs on the caller's
+/// thread. For tests that the back end needs no deep stack.
+pub(crate) fn lower_source_on_stack(files: &[(&str, &str)], stack: usize, setup: fn()) -> Lowered {
+    lower_package_with("app", files, false, Some((stack, setup)))
+        .unwrap_or_else(|errors| panic!("front-end errors: {errors}"))
 }
 
 /// [`lower_source`] that also lowers the `test` blocks of package `app`
@@ -248,22 +257,19 @@ pub(crate) fn lower_package(package: &str, files: &[(&str, &str)]) -> Result<Low
 /// and a test thunk per test after `main`'s in the entries unit, as
 /// `cheby test` builds them (G4).
 pub(crate) fn lower_source_with_tests(files: &[(&str, &str)]) -> Lowered {
-    lower_package_with("app", files, true)
+    lower_package_with("app", files, true, None)
         .unwrap_or_else(|errors| panic!("front-end errors: {errors}"))
 }
 
 #[expect(
     clippy::too_many_lines,
-    reason = "the whole front end and back end of a build, in order"
-)]
-#[expect(
-    clippy::panic_in_result_fn,
-    reason = "a test helper: only the front end's errors are `Err`, an internal error panics"
+    reason = "the whole front end of a build, in order"
 )]
 fn lower_package_with(
     package: &str,
     files: &[(&str, &str)],
     with_tests: bool,
+    back_end_thread: Option<(usize, fn())>,
 ) -> Result<Lowered, String> {
     let globals = Globals::new();
     let mut modules = ModuleTable::new();
@@ -404,6 +410,49 @@ fn lower_package_with(
     }
 
     // The back end, as `cheby run` does it (D-510).
+    let back_end = || {
+        back_end(
+            package, &modules, &checked, &order, &set, &globals, &sources, with_tests,
+        )
+    };
+    let (units, unsupported) = match back_end_thread {
+        None => back_end(),
+        Some((stack, setup)) => std::thread::scope(|scope| {
+            std::thread::Builder::new()
+                .name("back end".to_owned())
+                .stack_size(stack)
+                .spawn_scoped(scope, || {
+                    setup();
+                    back_end()
+                })
+                .unwrap()
+                .join()
+                .unwrap()
+        }),
+    };
+    diags.extend(unsupported);
+    Ok(Lowered {
+        diags,
+        units,
+        sources,
+    })
+}
+
+/// The back end of [`lower_package_with`]: the units, then E0038.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "what the front end of a test build produced"
+)]
+fn back_end(
+    package: &str,
+    modules: &ModuleTable,
+    checked: &BTreeMap<ModuleId, (thir::Module, Vec<ModuleId>)>,
+    order: &[ModuleId],
+    set: &InterfaceSet,
+    globals: &Globals,
+    sources: &SourceMap,
+    with_tests: bool,
+) -> (Vec<MirModule>, Vec<Diagnostic>) {
     let root = modules.find(&ModulePath::root(package)).unwrap();
     let main = checked[&root]
         .0
@@ -437,20 +486,20 @@ fn lower_package_with(
     let reach = reachable(&program, &roots).unwrap();
     let mut units = Vec::new();
     let mut unsupported = Unsupported::default();
-    for &id in &order {
+    for &id in order {
         if !reach.needs_module(id) {
             continue;
         }
         let (thir, deps) = &checked[&id];
-        let view = DepView::new(&set, deps);
+        let view = DepView::new(set, deps);
         let cx = LowerCx {
             defs: Defs {
                 own: set.get(id),
                 deps: &view,
-                modules: &modules,
-                globals: &globals,
+                modules,
+                globals,
             },
-            sources: &sources,
+            sources,
         };
         let lowered = lower_items(thir, &|def| reach.contains(def), &cx);
         if let Some(mut unit) = unsupported.take(lowered).unwrap() {
@@ -469,17 +518,17 @@ fn lower_package_with(
             }
         }
     }
-    let mut all: Vec<ModuleId> = order.clone();
+    let mut all: Vec<ModuleId> = order.to_vec();
     all.sort_unstable();
-    let view = DepView::new(&set, &all);
+    let view = DepView::new(set, &all);
     let cx = LowerCx {
         defs: Defs {
             own: None,
             deps: &view,
-            modules: &modules,
-            globals: &globals,
+            modules,
+            globals,
         },
-        sources: &sources,
+        sources,
     };
     let mut requests = vec![EntryRequest {
         kind: EntryKind::Main(main.def),
@@ -496,10 +545,5 @@ fn lower_package_with(
         }
         units.push(unit);
     }
-    diags.extend(unsupported.into_diagnostics());
-    Ok(Lowered {
-        diags,
-        units,
-        sources,
-    })
+    (units, unsupported.into_diagnostics())
 }

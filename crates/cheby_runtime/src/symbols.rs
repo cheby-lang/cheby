@@ -27,7 +27,7 @@ use crate::helpers::{
 };
 use crate::list::{
     cheby_rt_list_append, cheby_rt_list_get, cheby_rt_list_length, cheby_rt_list_push,
-    cheby_rt_list_slice, cheby_rt_static_empty_list,
+    cheby_rt_list_slice, cheby_rt_list_slice_owned, cheby_rt_static_empty_list,
 };
 use crate::object::{
     cheby_rt_static_equal, cheby_rt_static_false, cheby_rt_static_greater, cheby_rt_static_less,
@@ -48,7 +48,7 @@ fn data<T>(object: &'static T) -> *const u8 {
     clippy::as_conversions,
     reason = "taking the address of a function needs an `as` cast"
 )]
-fn runtime_symbols() -> [(&'static str, *const u8); 32] {
+fn runtime_symbols() -> [(&'static str, *const u8); 33] {
     [
         (sym::ALLOC, cheby_rt_alloc as *const u8),
         (sym::DUP, cheby_rt_dup as *const u8),
@@ -85,6 +85,10 @@ fn runtime_symbols() -> [(&'static str, *const u8); 32] {
         (sym::FMOD_F32, cheby_rt_fmod_f32 as *const u8),
         (sym::CONST_MISSING, cheby_rt_const_missing as *const u8),
         (sym::UNRESOLVED, cheby_rt_unresolved as *const u8),
+        (
+            sym::LIST_SLICE_OWNED,
+            cheby_rt_list_slice_owned as *const u8,
+        ),
     ]
 }
 
@@ -250,6 +254,11 @@ mod tests {
                     "std::{module} is listed as complete but misses {}",
                     missing.join(", ")
                 ));
+            }
+            // M1's exit (plan §1, item 4): every std module with kernels is
+            // complete.
+            if !complete.contains(&module.as_str()) {
+                errors.push(format!("std::{module} is in no kernel module's COMPLETE"));
             }
         }
         for module in &complete {

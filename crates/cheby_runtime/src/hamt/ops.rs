@@ -15,6 +15,7 @@ use super::node::{
     BITS, Bitmap, Collection, Collision, HOLE, MAX_SHIFT, Root, drop_word, dup_word,
 };
 use crate::abi::Word;
+use crate::stats::{self, Event};
 
 /// The bit of `hash` at the level of `shift`.
 fn bit_at(hash: u64, shift: u32) -> u32 {
@@ -279,12 +280,14 @@ impl Path {
 /// node. The argument must not be empty.
 fn writable_root(root: Root, coll: Collection) -> Root {
     if root.is_unique() {
+        stats::record(Event::MapUpdateInPlace);
         dup_word(root.word());
         return root;
     }
     let Some(node) = root.node() else {
         return root;
     };
+    stats::record(Event::MapUpdateCopied);
     dup_word(node.0);
     Root::alloc(coll, root.count(), root.seed(), node)
 }

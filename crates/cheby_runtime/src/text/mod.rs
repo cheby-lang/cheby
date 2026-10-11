@@ -29,7 +29,7 @@
 //! holds UTF-8), so `starts_with`, `ends_with`, `remove_prefix` and
 //! `remove_suffix` are O(m) in the part they look for.
 
-mod kernels;
+pub(crate) mod kernels;
 mod ops;
 
 #[cfg(test)]

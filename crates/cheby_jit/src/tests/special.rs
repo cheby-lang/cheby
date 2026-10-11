@@ -675,6 +675,98 @@ fn list_helpers() {
     }
 }
 
+/// `list_slice_owned` (W5-D's `cheby_rt_list_slice_owned`), which the RC
+/// pass emits for a slice of a list used for the last time: a unique list
+/// becomes its own slice, and a shared one stays as it was.
+#[test]
+fn owned_list_slices() {
+    let mut p = Prog::default();
+    // `list() { a = [7, 8, 9]; s = slice_owned(a, 1, 3); n = length(s);
+    // x = get(s, 0); b = [1]; dup b; e = slice_owned(b, 1, 1);
+    // m = length(b); k = length(e); … return (n, x, m, k) }`.
+    let boxed = |n| Rvalue::Box {
+        value: int(n),
+        from: Repr::Int,
+    };
+    let boxed_local = |n| Rvalue::Box {
+        value: op(n),
+        from: Repr::Int,
+    };
+    let mut reprs = vec![Repr::Value; 18];
+    for n in [7, 12, 13] {
+        reprs[n] = Repr::Int;
+    }
+    let f = p.item(
+        0,
+        "list",
+        &[],
+        &reprs,
+        straight(
+            vec![
+                assign(0, boxed(7)),
+                assign(
+                    1,
+                    helper(
+                        RuntimeFn::ListPush,
+                        vec![Operand::Const(Const::EmptyList), op(0)],
+                    ),
+                ),
+                assign(2, boxed(8)),
+                assign(3, helper(RuntimeFn::ListPush, vec![op(1), op(2)])),
+                assign(4, boxed(9)),
+                assign(5, helper(RuntimeFn::ListPush, vec![op(3), op(4)])),
+                assign(
+                    6,
+                    helper(RuntimeFn::ListSliceOwned, vec![op(5), int(1), int(3)]),
+                ),
+                assign(7, helper(RuntimeFn::ListLength, vec![op(6)])),
+                assign(8, helper(RuntimeFn::ListGet, vec![op(6), int(0)])),
+                assign(9, boxed(1)),
+                assign(
+                    10,
+                    helper(
+                        RuntimeFn::ListPush,
+                        vec![Operand::Const(Const::EmptyList), op(9)],
+                    ),
+                ),
+                Stmt::Dup(local(10)),
+                assign(
+                    11,
+                    helper(RuntimeFn::ListSliceOwned, vec![op(10), int(1), int(1)]),
+                ),
+                assign(12, helper(RuntimeFn::ListLength, vec![op(10)])),
+                assign(13, helper(RuntimeFn::ListLength, vec![op(11)])),
+                Stmt::Drop(local(6)),
+                Stmt::Drop(local(10)),
+                Stmt::Drop(local(11)),
+                assign(14, boxed_local(7)),
+                assign(15, boxed_local(12)),
+                assign(16, boxed_local(13)),
+                assign(
+                    17,
+                    Rvalue::Alloc {
+                        layout: LayoutRef::Tuple(4),
+                        fields: vec![op(14), op(8), op(15), op(16)],
+                    },
+                ),
+            ],
+            17,
+        ),
+        &[],
+    );
+    let target = p.call(f, Vec::new());
+    let jit = p.compile();
+    let tuple = returned(run_const(&jit, target));
+    assert_eq!(int_of(read_word(tuple, 8)), 2, "length of the slice");
+    assert_eq!(int_of(read_word(tuple, 16)), 8, "its first element");
+    assert_eq!(int_of(read_word(tuple, 24)), 1, "the shared list is intact");
+    assert_eq!(int_of(read_word(tuple, 32)), 0, "an empty slice");
+    release(&jit, tuple);
+    if cheby_runtime::LEAK_CHECK_ENABLED {
+        assert_eq!(jit.domain().live_objects(), 0);
+    }
+}
+
 /// `JitOptions::checked_rc` (on under `CHEBY_RT_POISON=1`) makes every
 /// count operation call the runtime's checked `cheby_rt_dup`: a tuple
 /// freed and then dup'd ends the process with the use-after-free message.

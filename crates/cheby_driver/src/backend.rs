@@ -50,6 +50,7 @@ use cheby_mir::{
 };
 use cheby_package::Target;
 use cheby_types::thir;
+use rayon::prelude::*;
 
 use crate::frontend::Frontend;
 
@@ -352,46 +353,26 @@ fn lower(
             });
         }
     }
+    // Lowering a module reads only its THIR and the interfaces (D-246), so
+    // the modules are lowered, counted and checked in parallel on rayon's
+    // global pool (G1, D-263). The results are taken in build order, so
+    // the units, the E0038 order and the error reported do not depend on
+    // the thread count (D-264).
+    let jobs: Vec<(ModuleId, Option<&Vec<&thir::TestDef>>)> = front
+        .order
+        .iter()
+        .map(|&module| (module, tests.get(&module)))
+        .filter(|&(module, selected)| reach.needs_module(module) || selected.is_some())
+        .collect();
+    let lowered: Vec<Result<ModuleUnits, Ice>> = jobs
+        .par_iter()
+        .map(|&(module, selected)| lower_module(front, sources, &reach, module, selected))
+        .collect();
     let mut units = Vec::new();
     let mut unsupported = Unsupported::default();
-    for &module in &front.order {
-        let selected = tests.get(&module);
-        if !reach.needs_module(module) && selected.is_none() {
-            continue;
-        }
-        let checked = checked(front, module)?;
-        let own = front
-            .set
-            .get(module)
-            .ok_or_else(|| Ice::new(format!("module {module:?} has no interface")))?;
-        let deps = DepView::new(&front.set, &checked.deps);
-        let cx = LowerCx {
-            defs: Defs {
-                own: Some(own),
-                deps: &deps,
-                modules: &front.modules,
-                globals: &front.globals,
-            },
-            sources,
-        };
-        if reach.needs_module(module) {
-            let lowered = lower_items(&checked.thir, &|def| reach.contains(def), &cx);
-            if let Some(mut unit) = unsupported.take(lowered)? {
-                count_and_check(&mut unit)?;
-                units.push(unit);
-            }
-        }
-        if let Some(selected) = selected {
-            // Only the selected tests: the others may reach items this
-            // build does not lower.
-            let only = thir::Module {
-                module,
-                fns: Vec::new(),
-                consts: Vec::new(),
-                tests: selected.iter().map(|&t| t.clone()).collect(),
-            };
-            if let Some(mut unit) = unsupported.take(lower_tests(&only, &cx))? {
-                count_and_check(&mut unit)?;
+    for result in lowered {
+        for unit in result?.into_iter().flatten() {
+            if let Some(unit) = unsupported.take(unit)? {
                 units.push(unit);
             }
         }
@@ -406,6 +387,57 @@ fn lower(
     } else {
         Ok(Err(unsupported.into_diagnostics()))
     }
+}
+
+/// The code unit and the tests unit of one module, each counted and
+/// checked, or E0038; `None` where the build needs no such unit.
+type ModuleUnits = [Option<Result<MirModule, cheby_mir::LowerError>>; 2];
+
+/// Lowers `module`: its items that `reach` contains into its code unit,
+/// and its `selected` tests into its tests unit.
+fn lower_module(
+    front: &Frontend,
+    sources: &SourceMap,
+    reach: &Reach,
+    module: ModuleId,
+    selected: Option<&Vec<&thir::TestDef>>,
+) -> Result<ModuleUnits, Ice> {
+    let checked = checked(front, module)?;
+    let own = front
+        .set
+        .get(module)
+        .ok_or_else(|| Ice::new(format!("module {module:?} has no interface")))?;
+    let deps = DepView::new(&front.set, &checked.deps);
+    let cx = LowerCx {
+        defs: Defs {
+            own: Some(own),
+            deps: &deps,
+            modules: &front.modules,
+            globals: &front.globals,
+        },
+        sources,
+    };
+    let counted = |lowered: Result<MirModule, cheby_mir::LowerError>| {
+        lowered.and_then(|mut unit| {
+            count_and_check(&mut unit)?;
+            Ok(unit)
+        })
+    };
+    let code = reach
+        .needs_module(module)
+        .then(|| counted(lower_items(&checked.thir, &|def| reach.contains(def), &cx)));
+    let tests = selected.map(|selected| {
+        // Only the selected tests: the others may reach items this build
+        // does not lower.
+        let only = thir::Module {
+            module,
+            fns: Vec::new(),
+            consts: Vec::new(),
+            tests: selected.iter().map(|&t| t.clone()).collect(),
+        };
+        counted(lower_tests(&only, &cx))
+    });
+    Ok([code, tests])
 }
 
 /// The modules of the local package, in build order.

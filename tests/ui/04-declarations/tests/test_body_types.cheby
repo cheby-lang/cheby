@@ -1,0 +1,44 @@
+// @mode: check-fail
+// @decisions: D-140, D-493
+//! A test body that ends in a panic counts as `Nil`, and one whose type
+//! nothing determines becomes `Nil`. A `Bool` body is an error with a
+//! hint to write `assert`, and a `Result` body must determine its error
+//! type (§4.7).
+
+fn double(n: Int) -> Int {
+  n * 2
+}
+
+fn anything<T>() -> T {
+  panic as "never returns"
+}
+
+test "a test may end in a panic" {
+  assert double(1) == 2
+  panic as "not finished"
+}
+
+test "an undetermined body is Nil" {
+  anything()
+}
+
+test "a comparison is not an assertion" {
+  double(2) == 4
+}
+
+test "the error type is unknown" {
+  assert double(0) == 0
+  Ok(Nil)
+}
+
+test "the error type is known" {
+  assert double(3) == 6
+  case double(1) {
+    2 => Ok(Nil)
+    _ => Err("wrong")
+  }
+}
+
+fn main() {
+  assert double(1) == 2
+}

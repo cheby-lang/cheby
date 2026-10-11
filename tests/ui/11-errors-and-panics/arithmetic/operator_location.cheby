@@ -1,0 +1,11 @@
+// @mode: run-fail
+// @decisions: D-025, D-449, D-570
+//! An overflow is reported at the start of the operator expression that
+//! failed: in `a + b * c`, an overflow of `*` points at `b`.
+
+fn main() {
+  let a = 1
+  let b = 1 << 62
+  let c = 4
+  let _ = a + b * c
+}

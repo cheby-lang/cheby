@@ -1,5 +1,5 @@
 // @mode: parse-fail
-// @decisions: D-461
+// @decisions: D-461, D-514
 //! Only items take attributes: one on a variant, a record field or an
 //! interface function is an error, and the declaration around it still
 //! parses.

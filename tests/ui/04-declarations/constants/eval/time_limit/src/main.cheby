@@ -1,5 +1,5 @@
 // @mode: check-fail
-// @decisions: D-195, D-536
+// @decisions: D-195, D-536, D-618
 //! A constant whose initializer never finishes is stopped at the time
 //! limit that `[const-eval]` sets, at its next tail call, and reported
 //! as E0076; the constant that reads it is not reported again (§4.5,

@@ -1,0 +1,13 @@
+// @mode: check-fail
+// @decisions: D-084, D-433
+//! A base prefix is followed directly by a digit of its base, so an
+//! underscore right after `0x`, `0o` or `0b` is a malformed number
+//! (§2.5.1). Underscores between digits are fine.
+
+fn main() {
+  let a = 0x_ff
+  let b = 0o__7
+  let c = 0b_1
+  let d = 0xff_ff
+  assert a + b + c < d
+}

@@ -16,6 +16,7 @@ use crate::object::{
 };
 use crate::panic::fatal;
 use crate::rc;
+use crate::stats::{self, Event};
 
 const LEN: i32 = abi::string::LEN_OFFSET;
 const CAP: i32 = abi::string::CAP_OFFSET;
@@ -305,7 +306,13 @@ pub unsafe fn with_room(text: Word, extra: u64, reuse: bool) -> (Word, bool) {
         fatal(format_args!("a text of {len} + {extra} bytes is too large"));
     };
     // SAFETY: a live object.
-    if reuse && need <= cap && unsafe { rc::is_unique(text) } {
+    let path = unsafe { growth(text, extra, reuse) };
+    stats::record(match path {
+        Growth::InPlace => Event::TextKernelInPlace,
+        Growth::Grown => Event::TextKernelGrown,
+        Growth::Copied => Event::TextKernelCopied,
+    });
+    if path == Growth::InPlace {
         return (text, true);
     }
     let new = alloc_text(need.max(cap.saturating_mul(2)), layout);
@@ -366,6 +373,43 @@ pub unsafe fn keep_range(text: Word, range: std::ops::Range<usize>, reuse: bool)
         return text;
     }
     new_text(part, layout)
+}
+
+/// Which path adding bytes to a text object takes ([`crate::stats`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Growth {
+    /// Unique with room: written in place.
+    InPlace,
+    /// Unique but out of room: moved to a new object of doubled capacity.
+    Grown,
+    /// Shared or static: copied.
+    Copied,
+}
+
+/// The path adding `extra` bytes to `text` takes when `reuse` holds (see
+/// [`with_room`]); [`Growth::Copied`] when it does not.
+///
+/// # Safety
+///
+/// `text` points to a live text object.
+pub(crate) unsafe fn growth(text: Word, extra: u64, reuse: bool) -> Growth {
+    // SAFETY: forwarded from the caller.
+    if !reuse || !unsafe { rc::is_unique(text) } {
+        return Growth::Copied;
+    }
+    let obj = word_to_ptr(text);
+    // SAFETY: a live text object.
+    let (len, cap) = unsafe {
+        (
+            read_field(obj, abi_offset(LEN)),
+            read_field(obj, abi_offset(CAP)),
+        )
+    };
+    if len.checked_add(extra).is_some_and(|need| need <= cap) {
+        Growth::InPlace
+    } else {
+        Growth::Grown
+    }
 }
 
 /// The capacity of a text object, for tests of growth.

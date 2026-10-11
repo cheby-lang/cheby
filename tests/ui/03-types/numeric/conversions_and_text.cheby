@@ -1,0 +1,44 @@
+// @mode: run-pass
+// @decisions: D-085, D-132, D-203, D-219, D-228, D-307, D-308, D-309, D-314
+//! Numeric conversions are named `target::from_source`: widening returns
+//! the target type, and narrowing a `Result<T, Nil>`. `Float` to `Int`
+//! is explicit and fails on NaN, the infinities and values out of range,
+//! and `round` takes halfway cases away from zero. Checked arithmetic
+//! returns `Result`. `show` prints the shortest text that reads back as
+//! the same value, with fixed spellings for the special values.
+
+import std::f32
+import std::float
+import std::int
+import std::io
+import std::u8
+
+fn main() {
+  let wide = int::from_u8(200)
+  io::println(int::show(wide))
+  let fits = u8::from_int(255)
+  let too_big = u8::from_int(256)
+  let negative = u8::from_int(-1)
+  io::println("{fits:?} {too_big:?} {negative:?}")
+  let up = float::round(2.5)
+  let down = float::round(-2.5)
+  let cut = float::truncate(-2.7)
+  io::println("{up:?} {down:?} {cut:?}")
+  let not_a_number = float::truncate(float::nan)
+  let endless = float::round(float::infinity)
+  let huge = float::floor(1.0e19)
+  io::println("{not_a_number:?} {endless:?} {huge:?}")
+  let sum = int::checked_add(9_007_199_254_740_991, 9_007_199_254_740_991)
+  let product = int::checked_mul(3_037_000_500, 3_037_000_500)
+  io::println("{sum:?} {product:?}")
+  io::println(float::show(2.0))
+  io::println(float::show(0.1))
+  io::println(float::show(1.0e21))
+  io::println(float::show(float::nan))
+  io::println(float::show(float::infinity))
+  io::println(float::show(float::neg_infinity))
+  io::println(float::show(-0.0))
+  let third: F32 = 1.0 / 3.0
+  io::println(f32::show(third))
+  io::println(float::show(float::from_f32(third)))
+}

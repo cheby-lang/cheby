@@ -6,7 +6,8 @@
 //! `parse-fail` UI tests, which must be rejected. Every `.cheby` file of a
 //! package UI test, a directory with its own `cheby.toml`, must parse,
 //! since a package test cannot be `parse-fail`. Both parsers are held to
-//! that intent, so the check fails whenever they disagree on a file.
+//! that intent, so the check fails whenever they disagree on a file. The
+//! standard library's sources (`std/**/*.cheby`) must parse too (plan §0).
 //!
 //! REPL transcripts (`tests/repl/**/*.repl`, plan §8.3, D-546): each input
 //! entry (a `> ` line and its `. ` continuation lines; the expression of
@@ -205,12 +206,15 @@ fn collect(root: &Path) -> Result<BTreeMap<PathBuf, Intent>, String> {
             files.insert(source, Intent::Parse);
         }
     }
-    let repl = root.join("tests/repl");
-    if repl.exists() {
-        for source in cheby_test_support::files_with_extension(&repl, "cheby")
-            .map_err(|e| format!("{}: {e}", repl.display()))?
-        {
-            files.insert(source, Intent::Parse);
+    // The standard library's sources and the `.cheby` files of REPL
+    // package directories must parse.
+    for dir in [root.join("std"), root.join("tests/repl")] {
+        if dir.exists() {
+            for source in cheby_test_support::files_with_extension(&dir, "cheby")
+                .map_err(|e| format!("{}: {e}", dir.display()))?
+            {
+                files.insert(source, Intent::Parse);
+            }
         }
     }
     for test in ui::all(root)? {

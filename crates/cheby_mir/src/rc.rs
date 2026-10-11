@@ -14,6 +14,9 @@
 //!    successor (D-205); an edge into a block with other predecessors is
 //!    split first.
 //!
+//! A `list_slice` whose list rule 2 would drop right after consumes the
+//! list instead (`list_slice_owned`), so a unique list is sliced in place.
+//!
 //! Every counted local is therefore consumed exactly once on every path
 //! that returns or tail-calls, so nothing is pending at a tail call.
 //! Paths ending in `panic` leak their live locals in M1 (no unwinding).
@@ -22,7 +25,10 @@ use std::collections::BTreeMap;
 
 use cheby_iface::{Ice, Idx};
 
-use crate::ir::{Block, BlockId, Function, Local, MirModule, Stmt, Terminator, UseKind};
+use crate::ir::{
+    Block, BlockId, Function, Local, MirModule, Operand, RuntimeFn, Rvalue, Stmt, Terminator,
+    UseKind,
+};
 use crate::liveness::{Liveness, LocalSet, counted, stmt_def};
 
 /// Inserts `dup` and `drop` into every function of `module`.
@@ -76,7 +82,7 @@ pub fn insert(f: &mut Function) -> Result<(), Ice> {
             };
             let (before, mut post) = place(f, &uses, after)?;
             stmts.extend(before);
-            stmts.push(stmt.clone());
+            stmts.push(own_dying_list(stmt, &mut post));
             if let (Some(dst), Stmt::Assign { value, .. }) = (stmt_def(stmt), stmt)
                 && counted(f, dst)?
             {
@@ -124,6 +130,27 @@ pub fn insert(f: &mut Function) -> Result<(), Ice> {
         });
     }
     place_edge_drops(f, new_blocks, edge_drops)
+}
+
+/// `stmt`, except that a `list_slice` whose list `post` drops right after
+/// (its last use) becomes `list_slice_owned`, which consumes the list
+/// instead, and that drop goes: a unique list then becomes its own slice
+/// in place, so walking a list with `[x, ..rest]` allocates nothing per
+/// element.
+fn own_dying_list(stmt: &Stmt, post: &mut Vec<Stmt>) -> Stmt {
+    let mut stmt = stmt.clone();
+    if let Stmt::Assign {
+        value: Rvalue::CallRuntime { func, args },
+        ..
+    } = &mut stmt
+        && *func == RuntimeFn::ListSlice
+        && let Some(&Operand::Local(list)) = args.first()
+        && let Some(at) = post.iter().position(|s| *s == Stmt::Drop(list))
+    {
+        post.remove(at);
+        *func = RuntimeFn::ListSliceOwned;
+    }
+    stmt
 }
 
 /// The statements to put before and after one instruction with `uses`,

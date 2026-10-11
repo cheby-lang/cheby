@@ -496,6 +496,7 @@ fn builtin_ctor(type_name: &str, ctor_name: &str, tag: u32, fields: usize) -> La
     )
 }
 
+#[inline]
 fn builtins() -> &'static [Option<LayoutInfo>] {
     BUILTINS.get_or_init(|| {
         let mut table: Vec<Option<LayoutInfo>> =
@@ -778,6 +779,7 @@ pub fn set_hooks(id: LayoutId, hooks: [Word; 3]) -> Result<(), LayoutError> {
 /// The layout with the given id, or `None` for an id that is not a builtin
 /// and has not been registered. Takes no lock.
 #[must_use]
+#[inline]
 pub fn get(id: LayoutId) -> Option<&'static LayoutInfo> {
     if id < layout::CUSTOM_FIRST {
         return builtins().get(to_usize(u64::from(id)))?.as_ref();

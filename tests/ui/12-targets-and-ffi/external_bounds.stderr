@@ -1,0 +1,23 @@
+error[E0045]: the type parameter `T` of `put` has a bound, but `put` has an `@external` attribute
+  --> tests/ui/12-targets-and-ffi/external_bounds.cheby:13:15
+   |
+11 | @external(native, "app_store_put")
+   | ---------------------------------- the foreign implementation is named here
+12 | @external(js, "./store.mjs", "put")
+13 | pub fn put<T: Show>(key: String, value: T) -> Bool
+   |               ^^^^ bounds are not allowed here
+   |
+   = note: a bound passes a function package and a type descriptor, which have no foreign ABI
+   = help: remove the bound from `T`, and call `put` from a Cheby function that uses the bound
+
+error[E0045]: the type parameter `V` of `larger` has a bound, but `larger` has an `@external` attribute
+  --> tests/ui/12-targets-and-ffi/external_bounds.cheby:16:21
+   |
+15 | @external(native, "app_store_larger")
+   | ------------------------------------- the foreign implementation is named here
+16 | pub fn larger<K, V: ops::Compare + Show>(left: V, right: V, key: K) -> V {
+   |                     ^^^^^^^^^^^^^^^^^^^ bounds are not allowed here
+   |
+   = note: a bound passes a function package and a type descriptor, which have no foreign ABI
+   = help: remove the bound from `V`, and call `larger` from a Cheby function that uses the bound
+

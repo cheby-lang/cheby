@@ -1,0 +1,18 @@
+warning[W0011]: `==` on a type that contains a handle
+  --> tests/ui/13-tooling/warnings/external_type_equality.cheby:16:3
+   |
+16 |   a == b
+   |   ^^^^^^ `Db` is an external type
+   |
+   = note: `==` and `!=` panic when they reach a handle value at run time
+   = help: compare the parts that can be compared
+
+warning[W0011]: `!=` on a type that contains a handle
+  --> tests/ui/13-tooling/warnings/external_type_equality.cheby:20:3
+   |
+20 |   a != b
+   |   ^^^^^^ `Session` contains the external type `Db`
+   |
+   = note: `==` and `!=` panic when they reach a handle value at run time
+   = help: compare the parts that can be compared
+

@@ -1,0 +1,16 @@
+// @mode: run-pass
+// @decisions: D-114, D-431
+//! A raw string keeps every character as written, except that a CRLF
+//! line break in it is read as LF, so its value does not depend on how
+//! the file was checked out. This file uses CRLF line breaks.
+
+import std::io
+import std::string
+
+fn main() {
+  let text = r"first
+second"
+  io::println(text)
+  assert string::length(text) == 12
+  assert string::contains(text, "\n")
+}

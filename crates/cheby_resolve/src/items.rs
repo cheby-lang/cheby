@@ -10,8 +10,10 @@
 //! `@async`); `@deprecated` with one message string, on `pub` items only;
 //! no attribute but `@external` twice on an item; `@!target` at most once.
 //! Attributes that leave an item on no target at all are E0045 too
-//! (D-513). Attributes on a variant, a record field or an interface
-//! function are the parser's E0045, so they never reach this pass (D-514).
+//! (D-513), and so is a bound on a type parameter of a function with an
+//! `@external` (§12.5, D-554). Attributes on a variant, a record field or
+//! an interface function are the parser's E0045, so they never reach this
+//! pass (D-514).
 //!
 //! The standard library may also write two attributes of its own
 //! (§4.8, D-298, D-303, D-342, D-482): `@std_clamped(param, …)` on a
@@ -25,8 +27,8 @@ use cheby_iface::{DefIndex, DefKind, Ice, IndexVec, Name, Namespace, PackageId, 
 use cheby_package::{Target, Targets};
 use cheby_syntax::NodeId;
 use cheby_syntax::ast::{
-    AstChildren, AstNode, AstToken, Attr, AttrArg, InnerAttr, Item, SourceFile, TypeBody,
-    Visibility, VisibilityKind,
+    AstChildren, AstNode, AstToken, Attr, AttrArg, FnDecl, InnerAttr, Item, SourceFile, TypeBody,
+    TypeParamList, Visibility, VisibilityKind,
 };
 use rustc_hash::FxHashMap;
 
@@ -153,6 +155,9 @@ impl Cx<'_, '_> {
                     &format!("`{}`", name.text()),
                     name.span(),
                 );
+                if let Some(external) = attrs.externals.first() {
+                    self.external_bounds(f, name.text(), external_span(external));
+                }
                 if !has_body && attrs.externals.is_empty() {
                     self.diags.push(
                         Diagnostic::new(
@@ -594,6 +599,39 @@ impl Cx<'_, '_> {
         attrs
     }
 
+    /// E0045 at each bound on a type parameter of a function with an
+    /// `@external`, with or without a body (§12.5, D-207, D-554): a bound
+    /// passes a function package and a type descriptor, and neither has a
+    /// foreign ABI.
+    fn external_bounds(&mut self, f: FnDecl<'_>, name: &str, external: Span) {
+        let params = f.type_params().into_iter().flat_map(TypeParamList::params);
+        for param in params {
+            let Some(bounds) = param.bounds() else {
+                continue;
+            };
+            let param_name = param.name().map_or("", |n| n.text());
+            self.diags.push(
+                Diagnostic::new(
+                    codes::INVALID_ATTRIBUTE,
+                    format!(
+                        "the type parameter `{param_name}` of `{name}` has a bound, but `{name}` \
+                         has an `@external` attribute"
+                    ),
+                )
+                .with_primary(bounds.significant_span(), "bounds are not allowed here")
+                .with_secondary(external, "the foreign implementation is named here")
+                .with_note(
+                    "a bound passes a function package and a type descriptor, which have no \
+                     foreign ABI",
+                )
+                .with_help(format!(
+                    "remove the bound from `{param_name}`, and call `{name}` from a Cheby \
+                     function that uses the bound"
+                )),
+            );
+        }
+    }
+
     fn misplaced(
         &mut self,
         span: Span,
@@ -896,6 +934,12 @@ const fn external_help(placement: Placement) -> &'static str {
              body"
         }
         _ => "`@external` applies to functions and external types",
+    }
+}
+
+const fn external_span(external: &ExternalAttr) -> Span {
+    match external {
+        ExternalAttr::Native { span, .. } | ExternalAttr::Js { span, .. } => *span,
     }
 }
 

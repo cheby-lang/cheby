@@ -7,7 +7,7 @@
 ; userextname5 = cheby_rt_box_i64
 ; userextname6 = cb$str$fn$std$io$hash$1
 ; userextname7 = cheby_rt_alloc
-function u0:23(i64, i64) -> i64 tail {
+function u0:24(i64, i64) -> i64 tail {
     gv0 = symbol colocated userextname0
     gv1 = symbol colocated userextname3
     gv2 = symbol colocated userextname6
@@ -361,7 +361,7 @@ block5(v151: i64):
 ; userextname5 = cheby_rt_drop
 ; userextname6 = cheby_rt_static_true
 ; userextname7 = cheby_rt_static_false
-function u0:24(i64, i64, i64) -> i64 tail {
+function u0:25(i64, i64, i64) -> i64 tail {
     gv0 = symbol colocated userextname0
     gv1 = symbol colocated userextname2
     gv2 = symbol colocated userextname3
@@ -462,7 +462,7 @@ block12:
 ; userextname0 = cb$str$fn$std$io$debug$0
 ; userextname1 = cheby_rt_stack_slow
 ; userextname2 = cb$slot$std$io$show
-function u0:25(i64, i64) -> i64 tail {
+function u0:26(i64, i64) -> i64 tail {
     gv0 = symbol colocated userextname0
     gv1 = symbol colocated userextname2
     sig0 = (i64, i64) system_v
@@ -495,7 +495,7 @@ block0(v8: i64):
 ; userextname4 = cheby_io_println
 ; userextname5 = cheby_rt_drop
 ; userextname6 = cheby_rt_static_nil
-function u0:26(i64, i64) -> i64 tail {
+function u0:27(i64, i64) -> i64 tail {
     gv0 = symbol colocated userextname0
     gv1 = symbol colocated userextname2
     gv2 = symbol userextname4
@@ -564,7 +564,7 @@ block7:
 ; userextname5 = cb$str$fn$std$io$show$1
 ; userextname6 = cb$str$fn$std$io$show$2
 ; userextname7 = cb$str$fn$std$io$show$3
-function u0:27(i64, i64) -> i64 tail {
+function u0:28(i64, i64) -> i64 tail {
     gv0 = symbol colocated userextname0
     gv1 = symbol colocated userextname3
     gv2 = symbol colocated userextname5
@@ -829,7 +829,7 @@ block5(v98: i64):
 ; userextname1 = cheby_rt_stack_slow
 ; userextname2 = cheby_rt_drop
 ; userextname3 = cb$slot$std$io$hash
-function u0:28(i64, i64, i64) -> i64 tail {
+function u0:29(i64, i64, i64) -> i64 tail {
     gv0 = symbol colocated userextname0
     gv1 = symbol colocated userextname3
     sig0 = (i64, i64) system_v
@@ -889,7 +889,7 @@ block7:
 ; userextname1 = cheby_rt_stack_slow
 ; userextname2 = cheby_rt_drop
 ; userextname3 = cb$slot$std$io$equal
-function u0:29(i64, i64, i64, i64) -> i64 tail {
+function u0:30(i64, i64, i64, i64) -> i64 tail {
     gv0 = symbol colocated userextname0
     gv1 = symbol colocated userextname3
     sig0 = (i64, i64) system_v
@@ -951,7 +951,7 @@ block7:
 ; userextname1 = cheby_rt_stack_slow
 ; userextname2 = cheby_rt_drop
 ; userextname3 = cb$slot$std$io$debug
-function u0:30(i64, i64, i64) -> i64 tail {
+function u0:31(i64, i64, i64) -> i64 tail {
     gv0 = symbol colocated userextname0
     gv1 = symbol colocated userextname3
     sig0 = (i64, i64) system_v
@@ -1011,7 +1011,7 @@ block7:
 ; userextname1 = cheby_rt_stack_slow
 ; userextname2 = cb$str$fn$hello_world$main$1
 ; userextname3 = cb$slot$std$io$println
-function u0:31(i64) -> i64 tail {
+function u0:32(i64) -> i64 tail {
     gv0 = symbol colocated userextname0
     gv1 = symbol colocated userextname2
     gv2 = symbol colocated userextname3
@@ -1040,7 +1040,7 @@ block0:
 ; cb$entry$main$hello_world
 ; userextname0 = cb$slot$hello_world$main
 ; userextname1 = cheby_rt_drop
-function u0:32(i64) -> i64 system_v {
+function u0:33(i64) -> i64 system_v {
     gv0 = symbol colocated userextname0
     sig0 = (i64) -> i64 tail
     sig1 = (i64) system_v
@@ -1085,7 +1085,7 @@ block6:
 
 ; cb$tramp$0
 ; userextname0 = cheby_rt_dup
-function u0:33(i64, i64) -> i64 system_v {
+function u0:34(i64, i64) -> i64 system_v {
     sig0 = (i64) system_v
     sig1 = (i64, i64) -> i64 tail
     fn0 = u0:1 sig0
@@ -1133,7 +1133,7 @@ block0:
 
 ; cb$tramp$1
 ; userextname0 = cheby_rt_dup
-function u0:34(i64, i64, i64) -> i64 system_v {
+function u0:35(i64, i64, i64) -> i64 system_v {
     sig0 = (i64) system_v
     sig1 = (i64, i64, i64) -> i64 tail
     fn0 = u0:1 sig0
@@ -1183,7 +1183,7 @@ block0:
 
 ; cb$tramp$2
 ; userextname0 = cheby_rt_dup
-function u0:35(i64, i64, i64, i64) -> i64 system_v {
+function u0:36(i64, i64, i64, i64) -> i64 system_v {
     sig0 = (i64) system_v
     sig1 = (i64, i64, i64, i64) -> i64 tail
     fn0 = u0:1 sig0
@@ -1235,7 +1235,7 @@ block0:
 
 ; cb$tramp$3
 ; userextname0 = cheby_rt_dup
-function u0:36(i64, i64, i64, i64, i64) -> i64 system_v {
+function u0:37(i64, i64, i64, i64, i64) -> i64 system_v {
     sig0 = (i64) system_v
     sig1 = (i64, i64, i64, i64, i64) -> i64 tail
     fn0 = u0:1 sig0
@@ -1289,7 +1289,7 @@ block0:
 
 ; cb$tramp$4
 ; userextname0 = cheby_rt_dup
-function u0:37(i64, i64, i64, i64, i64, i64) -> i64 system_v {
+function u0:38(i64, i64, i64, i64, i64, i64) -> i64 system_v {
     sig0 = (i64) system_v
     sig1 = (i64, i64, i64, i64, i64, i64) -> i64 tail
     fn0 = u0:1 sig0

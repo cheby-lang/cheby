@@ -1,0 +1,28 @@
+// @mode: run-pass
+// @decisions: D-091, D-112
+//! `Result` and `Option` use Rust's names for their constructors: `Ok`
+//! and `Err`, `Some` and `None`, all in the prelude (§3.2).
+
+import std::io
+
+fn half(n: Int) -> Result<Int, String> {
+  case n % 2 {
+    0 => Ok(n / 2)
+    _ => Err("odd")
+  }
+}
+
+fn first(items: List<Int>) -> Option<Int> {
+  case items {
+    [head, ..] => Some(head)
+    [] => None
+  }
+}
+
+fn main() {
+  let even = half(4)
+  let odd = half(3)
+  let found = first([7, 8])
+  let missing = first([])
+  io::println("{even:?} {odd:?} {found:?} {missing:?}")
+}

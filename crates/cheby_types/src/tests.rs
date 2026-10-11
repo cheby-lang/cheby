@@ -85,10 +85,12 @@ pub fn fold<A, B>(items: List<A>, initial: B, f: fn(B, A) -> B) -> B
 @external(js, "./list.mjs", "zip")
 pub fn zip<A, B>(left: List<A>, right: List<B>) -> List<(A, B)>
 
-/// The elements' texts.
-@external(native, "cheby_list_show")
-@external(js, "./list.mjs", "show")
-pub fn show<T: Show>(items: List<T>) -> String
+/// The elements' texts. A foreign function cannot have bounds (D-554),
+/// so this one has a body.
+pub fn show<T: Show>(items: List<T>) -> String {
+  let _ = map(items, fn(item) { Show::show(item) })
+  "[…]"
+}
 "#;
 
 const STD_RESULT: &str = r#"//! Results.
@@ -1719,4 +1721,16 @@ fn the_real_std_checks_cleanly() {
         .map(|(path, _)| b.thir_of(&format!("std::{path}")).tests.len())
         .sum();
     assert!(tests > 300, "{tests} std tests");
+}
+
+#[test]
+fn long_list_patterns_check_on_default_worker_stacks() {
+    // The exhaustiveness search walks one level per element of a list
+    // pattern on a heap stack, so the checker needs no large thread stack
+    // for it: here it runs on rayon's default 2 MiB workers (W5-C-1).
+    let elements: Vec<String> = (0..3000).map(|n| n.to_string()).collect();
+    clean(&format!(
+        "pub fn first_run(xs: List<Int>) -> Int {{\n  case xs {{\n    [{}] => 1\n    _ => 0\n  }}\n}}\n",
+        elements.join(", ")
+    ));
 }

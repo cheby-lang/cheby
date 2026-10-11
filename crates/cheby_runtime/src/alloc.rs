@@ -47,6 +47,7 @@ use crate::object::{
 };
 use crate::panic::fatal;
 use crate::rc;
+use crate::stats::{Event, Stats};
 
 /// Whether this build checks for leaks at exit (debug builds only, D-458).
 /// Accounting itself is always on: constant evaluation's memory limit
@@ -62,6 +63,7 @@ pub struct Domain {
     objects: AtomicI64,
     bytes: AtomicI64,
     peak: AtomicI64,
+    stats: Stats,
 }
 
 impl Domain {
@@ -96,12 +98,19 @@ impl Domain {
         self.peak.store(self.live_bytes(), Ordering::Relaxed);
     }
 
+    /// The domain's runtime counters ([`crate::stats`]).
+    #[must_use]
+    pub fn stats(&self) -> &Stats {
+        &self.stats
+    }
+
     fn charge(&self, objects: i64, bytes: i64) {
         self.objects.fetch_add(objects, Ordering::Relaxed);
         let before = self.bytes.fetch_add(bytes, Ordering::Relaxed);
-        if bytes > 0 {
-            self.peak
-                .fetch_max(before.saturating_add(bytes), Ordering::Relaxed);
+        let now = before.saturating_add(bytes);
+        // Most allocations stay under the peak: a load, not a write.
+        if bytes > 0 && now > self.peak.load(Ordering::Relaxed) {
+            self.peak.fetch_max(now, Ordering::Relaxed);
         }
     }
 }
@@ -148,6 +157,12 @@ fn charge(objects: i64, bytes: u64) {
     DOMAIN
         .try_with(|domain| domain.borrow().charge(objects, bytes))
         .ok();
+}
+
+/// Calls `f` with the counters of the current thread's domain; during
+/// thread teardown, when the domain is gone, does nothing.
+pub(crate) fn with_current_stats(f: impl FnOnce(&Stats)) {
+    DOMAIN.try_with(|domain| f(&domain.borrow().stats)).ok();
 }
 
 /// The number of objects live in the current thread's domain.
@@ -330,14 +345,24 @@ pub fn alloc_object(size: u64, header: u64) -> *mut u8 {
             .unwrap_or(u64::MAX),
     );
     let layout = object_layout(size);
-    // SAFETY: `object_layout` never returns a zero-sized layout.
-    let ptr = unsafe { std::alloc::alloc(layout) };
-    if ptr.is_null() {
-        std::alloc::handle_alloc_error(layout);
-    }
+    let ptr = cached_block(layout).unwrap_or_else(|| {
+        // SAFETY: `object_layout` never returns a zero-sized layout.
+        let ptr = unsafe { std::alloc::alloc(layout) };
+        if ptr.is_null() {
+            std::alloc::handle_alloc_error(layout);
+        }
+        ptr
+    });
     // SAFETY: the allocation is at least 8 bytes and 8-aligned.
     unsafe { object::write_field(ptr, 0, header) };
-    charge(1, to_u64(layout.size()));
+    let bytes = i64::try_from(layout.size()).unwrap_or(i64::MAX);
+    DOMAIN
+        .try_with(|domain| {
+            let domain = domain.borrow();
+            domain.charge(1, bytes);
+            domain.stats.record(Event::Alloc);
+        })
+        .ok();
     ptr
 }
 
@@ -404,12 +429,14 @@ unsafe fn release_child(child: Word, list: &mut Vec<Word>) {
 }
 
 /// Frees every object on the worklist and, transitively, the fields whose
-/// count reaches zero.
+/// count reaches zero. The current domain is charged once, at the end.
 ///
 /// # Safety
 ///
 /// Every word on `list` is a heap object whose count has reached zero.
 unsafe fn drain(list: &mut Vec<Word>) {
+    let mut objects: i64 = 0;
+    let mut bytes: u64 = 0;
     while let Some(word) = list.pop() {
         let obj = word_to_ptr(word);
         // SAFETY: `obj` is a live object with no references left.
@@ -436,11 +463,13 @@ unsafe fn drain(list: &mut Vec<Word>) {
             }
         }
         let layout = object_layout(shape.size);
-        charge(-1, to_u64(layout.size()));
+        objects = objects.saturating_sub(1);
+        bytes = bytes.saturating_add(to_u64(layout.size()));
         // SAFETY: allocated by `alloc_object` with this size, which
         // `shape_of` recomputes exactly, and no reference remains.
         unsafe { release_block(obj, layout) };
     }
+    charge(objects, bytes);
 }
 
 /// Where the references an object owns are.
@@ -545,15 +574,20 @@ pub const QUARANTINE_BLOCKS: usize = 4096;
 pub const QUARANTINE_BYTES: usize = 16 << 20;
 
 /// Whether poisoning mode is on: `CHEBY_RT_POISON=1` in a build with debug
-/// assertions, read once per process, and always in this crate's unit
-/// tests. Code generation emits calls to the checked `cheby_rt_dup` and
-/// `cheby_rt_drop` instead of inline fast paths when it is on.
+/// assertions, read once per process, and in this crate's unit tests
+/// unless `CHEBY_RT_POISON=0` turns it off (which runs them on the block
+/// cache instead). Code generation emits calls to the checked
+/// `cheby_rt_dup` and `cheby_rt_drop` instead of inline fast paths when it
+/// is on.
 #[must_use]
+#[inline]
 pub fn poison_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     cfg!(debug_assertions)
-        && *ENABLED.get_or_init(|| {
-            cfg!(test) || std::env::var_os("CHEBY_RT_POISON").is_some_and(|value| value == "1")
+        && *ENABLED.get_or_init(|| match std::env::var_os("CHEBY_RT_POISON") {
+            Some(value) if value == "1" => true,
+            Some(value) if value == "0" => false,
+            _ => cfg!(test),
         })
 }
 
@@ -604,7 +638,118 @@ pub fn quarantine_len() -> usize {
         .unwrap_or(0)
 }
 
-/// Returns a freed block to the allocator, or poisons and quarantines it.
+/// The size classes of the block cache: allocations of 8 to 256 bytes, in
+/// steps of 8 bytes.
+const CACHE_CLASSES: usize = 32;
+
+/// The most free blocks the cache keeps per size class and thread.
+pub const CACHE_BLOCKS: usize = 512;
+
+/// Freed blocks of small objects kept per thread for the next allocation
+/// of the same size, so that the short-lived objects of a running program
+/// do not go to the system allocator each time (W5-D: freeing and
+/// allocating were most of 004's run time). Bypassed in poisoning mode,
+/// whose quarantine must keep freed blocks out of use.
+struct BlockCache {
+    classes: [Vec<*mut u8>; CACHE_CLASSES],
+}
+
+impl BlockCache {
+    const fn new() -> Self {
+        Self {
+            classes: [const { Vec::new() }; CACHE_CLASSES],
+        }
+    }
+
+    /// Returns every cached block to the system allocator.
+    fn release(&mut self) {
+        for (class, blocks) in self.classes.iter_mut().enumerate() {
+            let Some(layout) = class_layout(class) else {
+                continue;
+            };
+            for block in blocks.drain(..) {
+                // SAFETY: the cache holds only blocks allocated with their
+                // class's layout that nothing references.
+                unsafe { std::alloc::dealloc(block, layout) };
+            }
+        }
+    }
+}
+
+impl Drop for BlockCache {
+    fn drop(&mut self) {
+        self.release();
+    }
+}
+
+thread_local! {
+    static CACHE: RefCell<BlockCache> = const { RefCell::new(BlockCache::new()) };
+}
+
+/// The block cache's size class of an allocation layout, if it has one.
+fn size_class(layout: Layout) -> Option<usize> {
+    let size = layout.size();
+    let step = to_usize(abi::OBJECT_ALIGN);
+    if !size.is_multiple_of(step) {
+        return None;
+    }
+    size.checked_div(step)?
+        .checked_sub(1)
+        .filter(|class| *class < CACHE_CLASSES)
+}
+
+/// The allocation layout of a size class.
+fn class_layout(class: usize) -> Option<Layout> {
+    let step = to_usize(abi::OBJECT_ALIGN);
+    Layout::from_size_align(class.checked_add(1)?.checked_mul(step)?, step).ok()
+}
+
+/// A cached free block for `layout`, if the current thread has one.
+fn cached_block(layout: Layout) -> Option<*mut u8> {
+    let class = size_class(layout)?;
+    CACHE
+        .try_with(|cache| cache.borrow_mut().classes.get_mut(class)?.pop())
+        .ok()
+        .flatten()
+}
+
+/// Keeps a free block of `layout` in the current thread's cache; false
+/// when the cache is full, has no class for it, or is gone (thread
+/// teardown).
+fn cache_block(obj: *mut u8, layout: Layout) -> bool {
+    let Some(class) = size_class(layout) else {
+        return false;
+    };
+    CACHE
+        .try_with(|cache| {
+            let mut cache = cache.borrow_mut();
+            match cache.classes.get_mut(class) {
+                Some(blocks) if blocks.len() < CACHE_BLOCKS => {
+                    blocks.push(obj);
+                    true
+                }
+                _ => false,
+            }
+        })
+        .unwrap_or(false)
+}
+
+/// Returns the current thread's cached free blocks to the system allocator,
+/// for a thread that will not allocate again (a panicked entry parks).
+pub(crate) fn release_block_cache() {
+    CACHE.try_with(|cache| cache.borrow_mut().release()).ok();
+}
+
+/// The number of blocks in the current thread's cache, for tests.
+#[cfg(test)]
+fn cached_blocks() -> usize {
+    CACHE
+        .try_with(|cache| cache.borrow().classes.iter().map(Vec::len).sum())
+        .unwrap_or(0)
+}
+
+/// Returns a freed block to the block cache or the allocator, or poisons
+/// and quarantines it.
 ///
 /// # Safety
 ///
@@ -620,6 +765,8 @@ unsafe fn release_block(obj: *mut u8, layout: Layout) {
         if kept {
             return;
         }
+    } else if cache_block(obj, layout) {
+        return;
     }
     // SAFETY: forwarded from the caller.
     unsafe { std::alloc::dealloc(obj, layout) };
@@ -634,10 +781,23 @@ unsafe fn release_block(obj: *mut u8, layout: Layout) {
 ///
 /// `word` is a tagged integer, 0, or points to memory that was allocated
 /// as an object (live, static or quarantined).
+#[inline]
 pub unsafe fn check_live(word: Word, what: &str) {
     if !poison_enabled() || abi::is_tagged_int(word) || word == 0 {
         return;
     }
+    // SAFETY: forwarded from the caller.
+    unsafe { check_header(word, what) };
+}
+
+/// The poisoning mode's check of [`check_live`], out of line so that the
+/// inlined check costs one test when the mode is off.
+///
+/// # Safety
+///
+/// As for [`check_live`], and `word` is not a tagged integer or 0.
+#[inline(never)]
+unsafe fn check_header(word: Word, what: &str) {
     let obj = word_to_ptr(word);
     // SAFETY: forwarded from the caller; the header is readable.
     let (rc, (scan, id)) = unsafe { (load_rc(obj), scan_and_layout(obj)) };
@@ -1043,8 +1203,85 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn size_classes_cover_small_objects() {
+        let layout = |size| Layout::from_size_align(size, 8).unwrap();
+        assert_eq!(size_class(layout(8)), Some(0));
+        assert_eq!(size_class(layout(24)), Some(2));
+        assert_eq!(size_class(layout(256)), Some(CACHE_CLASSES - 1));
+        assert_eq!(size_class(layout(264)), None);
+        assert_eq!(size_class(layout(12)), None);
+        for class in 0..CACHE_CLASSES {
+            assert_eq!(class_layout(class).and_then(size_class), Some(class));
+        }
+    }
+
+    /// Without poisoning, freed small blocks go to the thread's cache, up to
+    /// its bound, and the next allocation of their size reuses them; with
+    /// poisoning the cache stays empty. Accounting is the same either way.
+    #[test]
+    fn the_block_cache_reuses_and_bounds_blocks() {
+        let handle = std::thread::spawn(|| {
+            let objects: Vec<Word> = (0..CACHE_BLOCKS.saturating_mul(2))
+                .map(|_| tuple(&[abi::tag_int(1).unwrap()]))
+                .collect();
+            let addresses: std::collections::BTreeSet<Word> = objects.iter().copied().collect();
+            for object in objects {
+                // SAFETY: the only reference.
+                unsafe { rc::drop(object) };
+            }
+            assert_eq!(live(), 0);
+            if poison_enabled() {
+                assert_eq!(cached_blocks(), 0);
+                return;
+            }
+            assert_eq!(cached_blocks(), CACHE_BLOCKS);
+            let again = tuple(&[abi::tag_int(2).unwrap()]);
+            assert!(addresses.contains(&again), "the block was not reused");
+            assert_eq!(cached_blocks(), CACHE_BLOCKS - 1);
+            assert_eq!(live(), 1);
+            // SAFETY: the only reference.
+            unsafe { rc::drop(again) };
+            assert_eq!(live(), 0);
+            // A panicked entry gives its cached blocks back before parking.
+            release_block_cache();
+            assert_eq!(cached_blocks(), 0);
+        });
+        handle.join().unwrap();
+    }
+
+    /// Runs the block-cache test and the list, string and map tests in a
+    /// child process with poisoning off, so the cache's path is tested in
+    /// every run (this crate's tests poison by default).
+    #[test]
+    #[cfg_attr(miri, ignore = "starts a process")]
+    fn the_block_cache_works_without_poisoning() {
+        for filter in [
+            "alloc::tests::the_block_cache_reuses_and_bounds_blocks",
+            "list::tests::",
+            "hamt::tests::",
+            "text::tests::",
+            "string::tests::",
+        ] {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([filter, "--test-threads=4"])
+                .env("CHEBY_RT_POISON", "0")
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                output.status.success(),
+                "{filter}: {stdout}{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(!stdout.contains("running 0 tests"), "{filter}: {stdout}");
+        }
+    }
+
+    #[test]
     fn the_quarantine_is_bounded() {
-        assert!(poison_enabled());
+        if !poison_enabled() {
+            return;
+        }
         let handle = std::thread::spawn(|| {
             for _ in 0..QUARANTINE_BLOCKS.saturating_mul(2) {
                 // SAFETY: the only reference.

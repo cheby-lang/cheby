@@ -727,4 +727,75 @@ mod tests {
         assert_eq!(outcome(result, is_nil), Ok(true));
         assert_eq!(live(), before);
     }
+
+    /// The child side of `stream_kernels_write_and_read_the_standard_streams`:
+    /// does nothing unless `CHEBY_RT_TEST_IO` is set. It writes through the
+    /// four print kernels and reads standard input to its end through
+    /// `cheby_io_sys_read_line`, checking each line.
+    #[test]
+    fn stream_kernels_child() {
+        if std::env::var_os("CHEBY_RT_TEST_IO").is_none() {
+            return;
+        }
+        let before = live();
+        let print = |kernel: unsafe extern "C" fn(Word), text: &str| {
+            let word = values::string(text);
+            // SAFETY: a live string, borrowed by the kernel.
+            unsafe {
+                kernel(word);
+                rc::drop(word);
+            }
+        };
+        print(cheby_io_print, "<<out:");
+        print(cheby_io_println, "line>>");
+        print(cheby_io_eprint, "<<err:");
+        print(cheby_io_eprintln, "line>>");
+        let mut lines = Vec::new();
+        loop {
+            match outcome(cheby_io_sys_read_line(), |option| {
+                // SAFETY: a live `Option<String>`.
+                unsafe { values::read_option(option) }.map(text)
+            }) {
+                Ok(Some(line)) => lines.push(line),
+                Ok(None) => break,
+                Err(error) => panic!("read_line failed: {error:?}"),
+            }
+        }
+        assert_eq!(lines, ["first", "", "second\r", "last"]);
+        assert_eq!(live(), before);
+    }
+
+    /// `io::print`, `println`, `eprint`, `eprintln` and `read_line` on real
+    /// standard streams, in a child process (this test binary's
+    /// `stream_kernels_child`).
+    #[test]
+    #[cfg_attr(miri, ignore = "starts a process")]
+    fn stream_kernels_write_and_read_the_standard_streams() {
+        use std::process::{Command, Stdio};
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "io::tests::stream_kernels_child",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env("CHEBY_RT_TEST_IO", "1")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(b"first\n\r\nsecond\r\r\nlast")
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{stdout}{stderr}");
+        assert!(stdout.contains("<<out:line>>\n"), "{stdout}");
+        assert!(stderr.contains("<<err:line>>\n"), "{stderr}");
+    }
 }

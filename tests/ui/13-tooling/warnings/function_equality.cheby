@@ -1,5 +1,5 @@
 // @mode: check-pass
-// @decisions: D-070, D-233
+// @decisions: D-070, D-233, D-518
 //! `==` and `!=` on a type known to contain a function type warn, through
 //! fields, lists and tuples, since the comparison panics when it reaches
 //! a function value.

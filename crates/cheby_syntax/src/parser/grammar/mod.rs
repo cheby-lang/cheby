@@ -201,19 +201,25 @@ pub(super) enum PathEnd {
 /// more segments are kept in the path and reported (E0013).
 pub(super) fn path(p: &mut Parser<'_>, interface: bool) -> PathEnd {
     let m = p.start();
+    // The text of each segment, for the help of E0013.
+    let mut segments: Vec<&str> = Vec::new();
     if p.at(LOWER_IDENT) && p.nth_at(1, COLON2) && matches!(p.nth(2), LOWER_IDENT | UPPER_IDENT) {
+        segments.push(p.current_text());
         p.bump(LOWER_IDENT);
         p.bump(COLON2);
     }
     let mut end = match p.current() {
         LOWER_IDENT => {
+            segments.push(p.current_text());
             p.bump(LOWER_IDENT);
             PathEnd::Lower
         }
         UPPER_IDENT => {
+            segments.push(p.current_text());
             p.bump(UPPER_IDENT);
             if interface && p.at(COLON2) && p.nth_at(1, LOWER_IDENT) {
                 p.bump(COLON2);
+                segments.push(p.current_text());
                 p.bump(LOWER_IDENT);
                 PathEnd::Interface
             } else {
@@ -226,13 +232,7 @@ pub(super) fn path(p: &mut Parser<'_>, interface: bool) -> PathEnd {
         }
     };
     if end != PathEnd::Missing && p.at(COLON2) && matches!(p.nth(1), LOWER_IDENT | UPPER_IDENT) {
-        let diag = cheby_diag::Diagnostic::new(
-            codes::SYNTAX_ERROR,
-            "a path has at most one module qualifier",
-        )
-        .with_primary(p.current_span(), "")
-        .with_help("import the inner module and qualify with its last name, such as `ops::Add`");
-        p.report(diag);
+        let span = p.current_span();
         while p.at(COLON2) && matches!(p.nth(1), LOWER_IDENT | UPPER_IDENT) {
             p.bump(COLON2);
             end = if p.at(LOWER_IDENT) {
@@ -240,11 +240,42 @@ pub(super) fn path(p: &mut Parser<'_>, interface: bool) -> PathEnd {
             } else {
                 PathEnd::Upper
             };
+            segments.push(p.current_text());
             p.bump_any();
         }
+        let diag = cheby_diag::Diagnostic::new(
+            codes::SYNTAX_ERROR,
+            "a path has at most one module qualifier",
+        )
+        .with_primary(span, "")
+        .with_help(long_path_help(&segments));
+        p.report(diag);
     }
     m.complete(p, PATH);
     end
+}
+
+/// The help of E0013 for a path with more than one module qualifier,
+/// such as `std::io::println`: import the modules before the item and
+/// qualify with the last one, `import std::io` and `io::println`. The
+/// modules are the lowercase segments before the first capitalized one,
+/// leaving at least the last segment as the item.
+fn long_path_help(segments: &[&str]) -> String {
+    let item_start = segments
+        .iter()
+        .position(|s| s.starts_with(|c: char| c.is_ascii_uppercase()))
+        .unwrap_or(segments.len().saturating_sub(1))
+        .min(segments.len().saturating_sub(1));
+    match segments.split_at_checked(item_start) {
+        Some((modules @ [_, .., last], item)) if !item.is_empty() => format!(
+            "import the inner module and qualify with its last name: `import {}` and `{last}::{}`",
+            modules.join("::"),
+            item.join("::")
+        ),
+        _ => {
+            "import the inner module and qualify with its last name, such as `ops::Add`".to_owned()
+        }
+    }
 }
 
 /// Consumes a name of kind `kind` (`LOWER_IDENT` or `UPPER_IDENT`). A name

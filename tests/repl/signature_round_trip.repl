@@ -52,16 +52,6 @@ error[E0047]: mismatched types
 .   v + 100
 . }
 > let v = "s"
-error[E0047]: mismatched types
- --> <repl:15>:2:7
-  |
-2 |   v + 100
-  |   -   ^^^ expected `String`, found `{integer}`
-  |   |
-  |   the left operand of `+` has type `String`
-  |
-  = note: `read_v` was checked again because a definition it uses changed its signature; it keeps its old definition
-
 > let v = 2
 > read_v()
-102 : Int
+101 : Int

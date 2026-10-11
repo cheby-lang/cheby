@@ -1,0 +1,26 @@
+// @mode: check-fail
+// @decisions: D-084, D-496, D-569
+//! A float literal must be finite in its type after rounding once to it
+//! (§3.3.4). The `F32` overflow midpoint is 2^128 - 2^103, about
+//! 3.40282356779733661e38: a literal below it rounds to the largest
+//! finite `F32`, and one above it rounds to infinity.
+
+pub fn huge() -> Float {
+  1.0e309
+}
+
+pub fn largest_float() -> Float {
+  1.7976931348623157e308
+}
+
+pub fn below_midpoint() -> F32 {
+  3.4028235677973366e38
+}
+
+pub fn above_midpoint() -> F32 {
+  3.4028235677973367e38
+}
+
+pub fn negative_above() -> F32 {
+  -3.4028236e38
+}

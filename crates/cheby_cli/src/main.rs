@@ -213,7 +213,7 @@ fn run_command() -> ExitCode {
             },
         ),
         Command::Repl { deny_warnings } => {
-            cheby_repl::run(cheby_repl::ReplOptions { deny_warnings })
+            cheby_repl::run_colored(&cheby_repl::ReplOptions { deny_warnings }, colors)
         }
         Command::Test {
             filter,

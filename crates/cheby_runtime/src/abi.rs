@@ -447,6 +447,11 @@ pub mod sym {
     /// `uint64_t cheby_rt_list_slice(ExecCtx *ctx, uint64_t list, int64_t start, int64_t end)`:
     /// an O(1) view, list borrowed, result owned (W1-E).
     pub const LIST_SLICE: &str = "cheby_rt_list_slice";
+    /// `uint64_t cheby_rt_list_slice_owned(ExecCtx *ctx, uint64_t list, int64_t start, int64_t end)`:
+    /// the view of `LIST_SLICE`, but the list is consumed and, when its
+    /// count is one, its root is changed in place instead of allocating a
+    /// new one (W5-D: `[x, ..rest]` on a list that dies at the match).
+    pub const LIST_SLICE_OWNED: &str = "cheby_rt_list_slice_owned";
     /// Data: the static empty list (W1-E).
     pub const STATIC_EMPTY_LIST: &str = "cheby_rt_static_empty_list";
     /// `bool cheby_rt_equal(ExecCtx *ctx, uint64_t a, uint64_t b, uint64_t location)`:
@@ -555,7 +560,7 @@ pub mod sym {
     /// order `symbols()` lists them first. Kernels
     /// (`cheby_<module>_<function>`) follow in `symbols()`; they come from
     /// each kernel module's registration (plan §4.3.3).
-    pub const ALL: [&str; 55] = [
+    pub const ALL: [&str; 56] = [
         ALLOC,
         DUP,
         DROP,
@@ -588,6 +593,7 @@ pub mod sym {
         FMOD_F32,
         CONST_MISSING,
         UNRESOLVED,
+        LIST_SLICE_OWNED,
         DESC_SYMBOLS[0],
         DESC_SYMBOLS[1],
         DESC_SYMBOLS[2],
@@ -775,7 +781,7 @@ mod tests {
             assert_eq!(sym::desc_symbol(name), Some(symbol));
         }
         assert_eq!(sym::desc_symbol("dyn"), None);
-        assert_eq!(sym::ALL.get(32..), Some(&sym::DESC_SYMBOLS[..]));
+        assert_eq!(sym::ALL.get(33..), Some(&sym::DESC_SYMBOLS[..]));
     }
 
     #[test]

@@ -1,0 +1,36 @@
+// @mode: check-fail
+// @decisions: D-207, D-554
+//! The type parameters of a foreign function must not have bounds, since
+//! a bound passes a function package and a type descriptor, which have
+//! no foreign ABI (§12.5). The rule also covers a function with a body
+//! and an `@external` for one target, and the error is at the bound.
+
+import std::io
+import std::ops
+
+@external(native, "app_store_put")
+@external(js, "./store.mjs", "put")
+pub fn put<T: Show>(key: String, value: T) -> Bool
+
+@external(native, "app_store_larger")
+pub fn larger<K, V: ops::Compare + Show>(left: V, right: V, key: K) -> V {
+  let _ = key
+  case left > right {
+    True => left
+    False => right
+  }
+}
+
+@external(native, "app_store_keep")
+@external(js, "./store.mjs", "keep")
+pub fn keep<T>(value: T) -> T
+
+/// A Cheby function may use the bound and call an unbounded foreign one.
+pub fn keep_shown<T: Show>(value: T) -> String {
+  let kept = keep(value)
+  "{kept}"
+}
+
+fn main() {
+  io::println(keep_shown(1))
+}

@@ -1,0 +1,15 @@
+// @mode: check-fail
+// @flags: --deny-warnings
+// @decisions: D-549, D-621
+//! A denied warning of the syntax layer is rendered as an error, but it
+//! does not stop the front end the way a syntax error does, so the type
+//! error is reported too.
+
+pub fn corners() -> List<(Int, Int, Int, Int)> {
+  []
+}
+
+fn main() {
+  let n: Int = "three"
+  assert n == 3
+}

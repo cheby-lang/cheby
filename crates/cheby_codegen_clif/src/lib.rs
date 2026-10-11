@@ -12,11 +12,13 @@
 //!    compilation add code that must find the existing slots.
 //! 2. [`define`]: each function is translated ([`translate`], which needs
 //!    no `&mut Module`, so it is the parallel unit, D-263) and compiled
-//!    ([`compile_function`]); only when every function of the batch has
-//!    compiled are the data objects defined and the functions installed
-//!    with `define_function_bytes` in declaration order, with an explicit
-//!    alignment of 16 (D-453). A batch that fails therefore defines
-//!    nothing, and a caller that restores its [`Decls`] can retry it.
+//!    ([`compile_function`]), in parallel on rayon's global pool and
+//!    collected in declaration order (G1); only when every function of
+//!    the batch has compiled are the data objects defined and the
+//!    functions installed with `define_function_bytes` in declaration
+//!    order, with an explicit alignment of 16 (D-453). A batch that fails
+//!    therefore defines nothing, and a caller that restores its [`Decls`]
+//!    can retry it.
 //!
 //! The ABI comes from two single sources: [`cheby_mir::abi`] for every
 //! signature, and `cheby_runtime::abi` for object headers, string images,
@@ -194,6 +196,13 @@ pub fn declare<M: Module>(
 /// so a translation or compilation error leaves `module` without any
 /// definition from this batch.
 ///
+/// Functions are translated and compiled in parallel on rayon's global
+/// pool (G1, D-263); each reads only the batch's MIR and `decls`. The
+/// results are collected in declaration order, and the functions are
+/// defined in that order, so the module, the CLIF text and the error
+/// reported (the first failing function in declaration order) do not
+/// depend on the number of threads (D-264).
+///
 /// # Errors
 ///
 /// A [`CodegenError`] if translation or compilation fails.
@@ -204,8 +213,10 @@ pub fn define<M: Module>(
     cx: &CodegenCx<'_>,
     opts: &CodegenOptions,
 ) -> Result<Vec<String>, CodegenError> {
-    let mut clif = Vec::new();
-    let mut compiled = Vec::new();
+    use rayon::prelude::*;
+
+    // The functions to define, each once, in declaration order.
+    let mut todo = Vec::new();
     let mut seen = rustc_hash::FxHashSet::default();
     for unit in mirs {
         for function in &unit.functions {
@@ -215,17 +226,26 @@ pub fn define<M: Module>(
             if decl.defined || !seen.insert(function.key) {
                 continue;
             }
-            let id = decl.id;
-            let translated = translate(unit, function, decls, cx, opts)?;
-            if opts.capture_clif {
-                clif.push(decls.describe(&translated));
-            }
-            compiled.push((
-                function.key,
-                id,
-                compile_function(module.isa(), translated)?,
-            ));
+            todo.push((unit, function, decl.id));
         }
+    }
+    let isa = module.isa();
+    let shared: &Decls = decls;
+    // `collect` keeps the order of `todo` whatever the thread count.
+    let results: Vec<Result<(Option<String>, CompiledFunction), CodegenError>> = todo
+        .par_iter()
+        .map(|&(unit, function, _)| {
+            let translated = translate(unit, function, shared, cx, opts)?;
+            let text = opts.capture_clif.then(|| shared.describe(&translated));
+            Ok((text, compile_function(isa, translated)?))
+        })
+        .collect();
+    let mut clif = Vec::new();
+    let mut compiled = Vec::with_capacity(results.len());
+    for ((_, function, id), result) in todo.iter().zip(results) {
+        let (text, code) = result?;
+        clif.extend(text);
+        compiled.push((function.key, *id, code));
     }
     // A function defined twice would fail after the data are defined,
     // which the module keeps: check first, so a failed batch defines

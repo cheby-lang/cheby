@@ -16,8 +16,9 @@
 //! The session ends at the end of input; the final prompt it prints then
 //! is not part of the transcript. `cheby repl` must exit with 0. Without a
 //! package, the session runs in an empty directory; with a directory
-//! `tests/repl/<name>/` that holds a `cheby.toml`, it runs inside that
-//! package.
+//! `tests/repl/<name>/` that holds a `cheby.toml`, it runs inside a copy of
+//! that package in a scratch directory, so an entry may change its files
+//! for `:reload` (§13.5.3).
 //!
 //! `CHEBY_BLESS=1` rewrites each transcript with the actual output, its
 //! `< ` lines kept after the same input lines. Every `cheby` runs with
@@ -102,17 +103,16 @@ fn parse(text: &str) -> Transcript {
 fn run_transcript(path: &Path, bless: bool) -> Result<(), String> {
     let text = golden::read(path)?.ok_or_else(|| format!("{} is missing", path.display()))?;
     let transcript = parse(&text);
+    // The session runs in a scratch directory: a copy of the transcript's
+    // package, if it has one, so an entry may write files there (`:reload`
+    // reads changed modules) without touching the repository.
     let package = path.with_extension("");
-    let (cwd, scratch) = if package.join("cheby.toml").is_file() {
-        (package, None)
-    } else {
-        let scratch = scratch_dir(path)?;
-        (scratch.clone(), Some(scratch))
-    };
-    let result = run_repl(&cwd, &transcript.input);
-    if let Some(scratch) = scratch {
-        let _ = std::fs::remove_dir_all(scratch);
+    let scratch = scratch_dir(path)?;
+    if package.join("cheby.toml").is_file() {
+        copy_dir(&package, &scratch)?;
     }
+    let result = run_repl(&scratch, &transcript.input);
+    let _ = std::fs::remove_dir_all(&scratch);
     let (status, output) = result?;
     // The prompt printed when the input ended.
     let output = output
@@ -174,6 +174,27 @@ fn scratch_dir(path: &Path) -> Result<PathBuf, String> {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     Ok(dir)
+}
+
+/// Copies the files under `from` into `to`, keeping relative paths.
+fn copy_dir(from: &Path, to: &Path) -> Result<(), String> {
+    let mut work = vec![(from.to_path_buf(), to.to_path_buf())];
+    while let Some((from, to)) = work.pop() {
+        std::fs::create_dir_all(&to).map_err(|e| format!("{}: {e}", to.display()))?;
+        let entries = std::fs::read_dir(&from).map_err(|e| format!("{}: {e}", from.display()))?;
+        for entry in entries {
+            let entry = entry.map_err(|e| format!("{}: {e}", from.display()))?;
+            let source = entry.path();
+            let target = to.join(entry.file_name());
+            if source.is_dir() {
+                work.push((source, target));
+            } else {
+                std::fs::copy(&source, &target)
+                    .map_err(|e| format!("{}: {e}", source.display()))?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Runs `cheby repl` in `cwd` with `input` on standard input and one pipe

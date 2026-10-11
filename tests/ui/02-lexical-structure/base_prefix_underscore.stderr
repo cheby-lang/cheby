@@ -1,0 +1,24 @@
+error[E0008]: `_` right after `0x`
+ --> tests/ui/02-lexical-structure/base_prefix_underscore.cheby:8:11
+  |
+8 |   let a = 0x_ff
+  |           ^^^^^
+  |
+  = help: write `0xff`
+
+error[E0008]: `_` right after `0o`
+ --> tests/ui/02-lexical-structure/base_prefix_underscore.cheby:9:11
+  |
+9 |   let b = 0o__7
+  |           ^^^^^
+  |
+  = help: write `0o7`
+
+error[E0008]: `_` right after `0b`
+  --> tests/ui/02-lexical-structure/base_prefix_underscore.cheby:10:11
+   |
+10 |   let c = 0b_1
+   |           ^^^^
+   |
+   = help: write `0b1`
+

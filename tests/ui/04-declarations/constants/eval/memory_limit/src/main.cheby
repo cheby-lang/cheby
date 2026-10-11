@@ -1,5 +1,5 @@
 // @mode: check-fail
-// @decisions: D-195, D-536
+// @decisions: D-195, D-536, D-617, D-618
 //! A constant that holds more heap bytes than the memory limit of
 //! `[const-eval]` is stopped and reported as E0076. Bytes that a kernel
 //! allocates count too, and only live bytes count, so `small` builds and

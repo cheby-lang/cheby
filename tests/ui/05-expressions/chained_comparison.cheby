@@ -1,5 +1,5 @@
 // @mode: check-fail
-// @decisions: D-108
+// @decisions: D-108, D-424
 //! Comparisons do not chain; combine them with `&&`.
 
 fn main() {

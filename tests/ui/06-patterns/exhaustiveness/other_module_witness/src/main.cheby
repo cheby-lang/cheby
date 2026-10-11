@@ -1,5 +1,5 @@
 // @mode: check-fail
-// @decisions: D-022, D-463
+// @decisions: D-022, D-463, D-507
 //! A missing constructor of another module is written with its module,
 //! as code here would name it.
 

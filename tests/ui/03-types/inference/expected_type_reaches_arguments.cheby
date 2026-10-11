@@ -1,0 +1,44 @@
+// @mode: check-pass
+// @decisions: D-234, D-235, D-497
+//! In a call with an expected type, the callee's result is unified with
+//! it before the arguments are checked, so `Some(circle)` against
+//! `Option<dyn Shape>` converts its argument. A `case` without an expected
+//! type takes its type from the first arm that does not diverge.
+
+import std::io
+
+pub interface Shape {
+  fn area(Self) -> Int
+}
+
+pub type Circle {
+  Circle(Int),
+}
+
+pub fn area(circle: Circle) -> Int {
+  let Circle(r) = circle
+  3 * r * r
+}
+
+fn largest(flag: Bool) -> Option<dyn Shape> {
+  let circle = Circle(2)
+  case flag {
+    True => Some(circle)
+    False => None
+  }
+}
+
+fn size(n: Int) -> Int {
+  let doubled = case n {
+    0 => panic as "zero"
+    _ => n * 2
+  }
+  doubled + 1
+}
+
+fn main() {
+  let shapes: List<Option<dyn Shape>> = [largest(True), Some(Circle(1))]
+  let _ = shapes
+  let total = size(2)
+  io::println("{total}")
+}

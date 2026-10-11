@@ -28,7 +28,21 @@
 //! 6. The definitions that used something the entry redefined with another
 //!    signature are checked again from their own text; those that still
 //!    check are compiled again and take over their slots, and the others
-//!    are reported and keep their old code (D-043, §13.5.2).
+//!    are reported and keep their old code (D-043, §13.5.2, D-609).
+//!
+//! Besides that:
+//!
+//! - Interface satisfaction counts the prompt entries as one module
+//!   (D-610): after each commit, forwarders are added to session types'
+//!   entry modules ([`cheby_types::repl::ReplSession::satisfaction`]).
+//! - Two live bindings of one native symbol with different C signatures
+//!   are E0054 (D-475); replaced definitions and failed entries do not
+//!   count.
+//! - Values and diagnostics write a type that a redefinition or `:reload`
+//!   replaced with ` (stale)` after it (§13.5.5).
+//! - The commands (§13.5.3): [`Session::type_of`] (`:type`),
+//!   [`Session::enter_module`] (`:module`) and [`Session::reload`]
+//!   (`:reload`).
 //!
 //! The session's front end loads every shipped std module (a synthetic
 //! package module imports them all), so any std import resolves without
@@ -37,34 +51,37 @@
 //! (D-548).
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use cheby_codegen_clif::SessionName;
 use cheby_consteval::{ConstEvalConfig, ConstInfo, ConstMode};
 use cheby_diag::{Colors, Diagnostic, FileId, SourceMap, Span, TextRange, codes};
 use cheby_iface::{
-    DefId, DepView, DisplayCx, Ice, ModuleId, ModuleInfo, ModuleInterface, Name, PackageId,
+    DefId, DefIndex, DepView, DisplayCx, Ice, InterfaceSet, ItemSig, ModuleId, ModuleInfo,
+    ModuleInterface, Name, Namespace, PackageId, Vis,
 };
 use cheby_jit::{Jit, JitError, JitOptions};
 use cheby_mir::reach::{Reach, Root, reachable_with_hooks};
 use cheby_mir::{
     Defs, EntryKind, EntryRequest, LowerCx, MirModule, Program, Unsupported, count_and_check,
-    lower_entries, lower_items, lower_tests,
+    foreign_sig, lower_entries, lower_items, lower_tests,
 };
 use cheby_package::{Manifest, ModulePath, Target, Targets};
-use cheby_resolve::repl::SessionScope;
+use cheby_resolve::repl::{Entered, SessionScope};
 use cheby_resolve::{
-    Lookup, ModuleLookup, ResolveInput, StdCatalog, closest_name, collect_imports,
-    resolve_import_targets,
+    Lookup, ModuleLookup, ResolveInput, ResolvedModule, StdCatalog, closest_name, collect_imports,
+    cycle_diagnostic, resolve_import_targets,
 };
 use cheby_runtime::{EntryConfig, EntryMode, EntryOutcome};
 use cheby_syntax::SyntaxTree;
 use cheby_syntax::ast::{AstNode, SourceFile};
-use cheby_types::repl::{CheckedEntry, EntryShape, Redefinition, ReplSession};
+use cheby_types::repl::{
+    CheckedEntry, EntryShape, Redefinition, ReplSession, SatisfactionPlan, forwarder_fn,
+};
 use cheby_types::thir;
 
-use crate::frontend::{self, Frontend};
+use crate::frontend::{self, Frontend, NativeBinding};
 use crate::{
     Error, Package, ParsedFile, find_package_root, parse_file, render_diagnostics, std_lib,
 };
@@ -145,6 +162,25 @@ pub struct Session {
     kept: Vec<u64>,
     /// While a definition is checked again: the note its errors get.
     again_note: Option<String>,
+    /// The package's root directory; `None` outside a package.
+    root: Option<PathBuf>,
+    /// The native symbols that session items bind (D-475).
+    natives: Vec<SessionNative>,
+    /// Modules `:reload` replaced, with the module that replaced each.
+    replaced: BTreeMap<ModuleId, ModuleId>,
+    /// How many times `:reload` changed something: the generation of its
+    /// modules (D-547).
+    reloads: u32,
+}
+
+/// A native symbol that an `@external(native, …)` of a session item
+/// binds: live while the item is the session's definition of its name
+/// (D-475).
+struct SessionNative {
+    def: DefId,
+    name: Name,
+    symbol: Box<str>,
+    binding: NativeBinding,
 }
 
 impl std::fmt::Debug for Session {
@@ -153,6 +189,17 @@ impl std::fmt::Debug for Session {
             .field("count", &self.count)
             .finish_non_exhaustive()
     }
+}
+
+/// An entry read and parsed, before it is checked.
+struct ReadEntry {
+    /// `<repl:N>`.
+    name: String,
+    number: u32,
+    parsed: ParsedFile,
+    shape: EntryShape,
+    /// Its grammar and validation diagnostics.
+    diagnostics: Vec<Diagnostic>,
 }
 
 /// What checking an entry gave.
@@ -174,8 +221,9 @@ impl Session {
     pub fn start(dir: &Path, options: SessionOptions) -> Result<Start, Error> {
         let mut sources = SourceMap::new();
         let mut diagnostics = Vec::new();
-        let package = match find_package_root(dir) {
-            Some(root) => crate::load_package(&root, &mut sources, &mut diagnostics)?,
+        let root = find_package_root(dir);
+        let package = match &root {
+            Some(root) => crate::load_package(root, &mut sources, &mut diagnostics)?,
             None => Some(no_package(dir, &mut sources, &mut diagnostics)?),
         };
         let render = |diagnostics: &mut Vec<Diagnostic>, sources: &SourceMap| {
@@ -223,6 +271,10 @@ impl Session {
             known: std_lib::known(),
             kept: Vec::new(),
             again_note: None,
+            root,
+            natives: Vec::new(),
+            replaced: BTreeMap::new(),
+            reloads: 0,
         };
         Ok(Start::Ready(Box::new(session), warnings))
     }
@@ -247,6 +299,182 @@ impl Session {
         let Some(decls) = entry_kind(text) else {
             return Ok(());
         };
+        let read = self.read_entry(text, decls)?;
+        let entry = self.check(
+            &read.name,
+            read.number,
+            &read.parsed,
+            read.shape,
+            read.diagnostics,
+            out,
+        )?;
+        let Some(entry) = entry else {
+            return Ok(());
+        };
+        let changed: Vec<Redefinition> = entry.checked.redefinitions().collect();
+        if !self.build_and_run(&entry, out)? {
+            return Ok(());
+        }
+        self.commit(entry)?;
+        self.check_again(&changed, out)
+    }
+
+    /// `:type expr` (§13.5.3, D-546): checks `expr` as the next entry,
+    /// without running or keeping anything, and prints `<expr> : <type>`,
+    /// the type of its final expression, as diagnostics write types. It
+    /// takes an entry number, so its diagnostics have a place of their
+    /// own (GAP(repl-commands)). Only errors are shown.
+    ///
+    /// # Errors
+    ///
+    /// An [`Error`] for an internal compiler error.
+    pub fn type_of(&mut self, expr: &str, out: &mut dyn Output) -> Result<(), Error> {
+        let expr = expr.trim();
+        if entry_kind(expr) != Some(false) {
+            out.stderr(&self.tool_error("`:type` needs an expression, as in `:type 1 + 2`"));
+            return Ok(());
+        }
+        let read = self.read_entry(expr, false)?;
+        let module = self.add_entry_module(&read)?;
+        let mut diagnostics = read.diagnostics;
+        let mut checked = None;
+        read.shape
+            .move_diagnostics(read.parsed.file, &mut diagnostics);
+        if let (Some(tree), false) = (&read.parsed.syntax, read.parsed.has_syntax_errors)
+            && !diagnostics.iter().any(Diagnostic::is_error)
+        {
+            match self.check_tree(module, tree, read.shape)? {
+                Ok(entry) => checked = Some(entry),
+                Err(found) => diagnostics.extend(found),
+            }
+        }
+        diagnostics.retain(Diagnostic::is_error);
+        if !diagnostics.is_empty() {
+            self.report(&mut diagnostics, out);
+            return Ok(());
+        }
+        let Some(entry) = checked else {
+            return Ok(());
+        };
+        match entry.body.as_ref().and_then(|body| body.last) {
+            Some(ty) => {
+                let shown = self.show_ty(ty, &entry.iface)?;
+                out.stdout(&format!("{expr} : {shown}\n"));
+            }
+            None => {
+                out.stderr(&self.tool_error(
+                    "`:type` needs an expression, and the last statement here is not one",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// `:module path` (§13.5.3, D-098): later entries are checked as if they
+    /// were written at the end of that module of the package or the
+    /// standard library, so its `priv` items and its imports are in scope,
+    /// and its package's package-visible items are usable. `:module` alone
+    /// leaves it. Prints nothing when it succeeds (GAP(repl-commands)).
+    ///
+    /// # Errors
+    ///
+    /// An [`Error`] for an internal compiler error.
+    pub fn enter_module(&mut self, path: &str, out: &mut dyn Output) -> Result<(), Error> {
+        let path = path.trim();
+        if path.is_empty() {
+            self.repl.enter(None);
+            return Ok(());
+        }
+        let Some(module) = self.module_at(path)? else {
+            out.stderr(&self.tool_error(&format!("there is no module `{path}`")));
+            return Ok(());
+        };
+        let entered = self.entered(module)?;
+        self.repl.enter(Some(entered));
+        Ok(())
+    }
+
+    /// The module of the package or std at `path`, written as in an
+    /// import, in its newest version (`:reload`).
+    fn module_at(&self, path: &str) -> Result<Option<ModuleId>, Error> {
+        let segments: Vec<&str> = path.split("::").map(str::trim).collect();
+        if segments
+            .iter()
+            .any(|s| s.is_empty() || !s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+        {
+            return Ok(None);
+        }
+        let mut lookup = SessionLookup {
+            package: &self.front.package_name,
+            front: &self.front,
+            replaced: &self.replaced,
+        };
+        let module = match lookup.lookup(PackageId::LOCAL, &segments)? {
+            Lookup::Found(id) => Some(id),
+            Lookup::RootByMainSegment => self
+                .front
+                .local_module(&ModulePath::root(&self.front.package_name))
+                .map(|id| newest(&self.replaced, id)),
+            _ => None,
+        };
+        Ok(module)
+    }
+
+    /// What a session sees of module `module` entered with `:module`: its
+    /// items and its imports.
+    fn entered(&self, module: ModuleId) -> Result<Entered, Error> {
+        let iface = self
+            .front
+            .set
+            .get(module)
+            .ok_or_else(|| Ice::new(format!("module {module:?} has no interface")))?;
+        let mut items: Vec<Name> = Vec::new();
+        for item in &iface.items {
+            if item.kind.namespace().is_some() && !items.contains(&item.name) {
+                items.push(item.name);
+            }
+        }
+        let at = usize::try_from(module.as_u32()).map_err(|_| Ice::new("a module id"))?;
+        let requests = self.front.imports.get(at).cloned().unwrap_or_default();
+        let targets = self
+            .front
+            .import_targets
+            .get(at)
+            .cloned()
+            .unwrap_or_default();
+        let imports = requests
+            .into_iter()
+            .zip(targets)
+            .map(|(request, target)| {
+                let target = match target.module() {
+                    Some(m) => cheby_resolve::ImportTarget::Module(newest(&self.replaced, m)),
+                    None => target,
+                };
+                (request, target)
+            })
+            .collect();
+        Ok(Entered {
+            module,
+            items,
+            imports,
+            stamp: u32::try_from(self.repl.modules().len())
+                .map_err(|_| Ice::new("too many entries"))?,
+        })
+    }
+
+    /// A tool error (D-464), rendered as the session renders diagnostics.
+    fn tool_error(&self, message: &str) -> String {
+        cheby_diag::render_tool_error(message, self.options.colors)
+    }
+
+    /// How the session renders diagnostics.
+    #[must_use]
+    pub const fn colors(&self) -> Colors {
+        self.options.colors
+    }
+
+    /// The parts of an entry before it is checked.
+    fn read_entry(&mut self, text: &str, decls: bool) -> Result<ReadEntry, Error> {
         self.count = self.count.saturating_add(1);
         let number = self.count;
         let name = format!("<repl:{number}>");
@@ -297,16 +525,22 @@ impl Session {
                 EntryShape::Body { display, shift }
             }
         };
-        let entry = self.check(&name, number, &parsed, shape, diagnostics, out)?;
-        let Some(entry) = entry else {
-            return Ok(());
-        };
-        let changed: Vec<Redefinition> = entry.checked.redefinitions().collect();
-        if !self.build_and_run(&entry, out)? {
-            return Ok(());
-        }
-        self.commit(entry)?;
-        self.check_again(&changed, out)
+        Ok(ReadEntry {
+            name,
+            number,
+            parsed,
+            shape,
+            diagnostics,
+        })
+    }
+
+    /// Registers the module of a read entry.
+    fn add_entry_module(&mut self, read: &ReadEntry) -> Result<ModuleId, Error> {
+        Ok(self.front.modules.add(ModuleInfo {
+            path: ModulePath::root(&read.name),
+            package: PackageId::LOCAL,
+            file: Some(display_file(read.shape, read.parsed.file)),
+        })?)
     }
 
     /// Parses and checks an entry; prints its diagnostics. `None` when it
@@ -335,7 +569,14 @@ impl Session {
             match self.check_tree(module, tree, shape)? {
                 Ok(entry) => {
                     diagnostics.extend(entry.warnings.iter().cloned());
-                    checked = Some(entry);
+                    // Two live bindings of one native symbol with
+                    // different C signatures (D-475).
+                    let conflicts = self.native_conflicts(&entry);
+                    if conflicts.is_empty() {
+                        checked = Some(entry);
+                    } else {
+                        diagnostics.extend(conflicts);
+                    }
                 }
                 Err(found) => diagnostics.extend(found),
             }
@@ -368,27 +609,34 @@ impl Session {
         let mut lookup = SessionLookup {
             package: &self.front.package_name,
             front: &self.front,
+            replaced: &self.replaced,
         };
         let (targets, mut import_diags) =
             resolve_import_targets(&imports, PackageId::LOCAL, &mut lookup, names)?;
         let deps = self.all_modules();
+        // Diagnostics name stale types with ` (stale)` and reloaded
+        // modules by their own paths; a module entered with `:module`
+        // opens its private items (§13.5.3).
+        let display = self.repl.display_table(&self.front.modules)?;
+        let opened = self.opened_set()?;
+        let set = opened.as_ref().unwrap_or(&self.front.set);
         let input = ResolveInput {
             module,
             package: PackageId::LOCAL,
             tree,
             imports: &imports,
             targets: &targets,
-            deps: DepView::new(&self.front.set, &deps),
-            modules: &self.front.modules,
+            deps: DepView::new(set, &deps),
+            modules: &display,
             globals: &self.front.globals,
             std: StdCatalog { known: &self.known },
             // The session runs natively (§13.5, the JIT): an entry is
             // checked for `native` only, so a native-only item of the
-            // package is usable (D-606).
-            package_targets: self
-                .front
-                .package_targets
-                .intersection(Targets::only(Target::Native)),
+            // package is usable (D-606). That is also so in a package
+            // whose targets lack `native`: its own items do not exist on
+            // `native` and are E0067 at the prompt, while std and the
+            // session's definitions are usable (GAP(repl-targets)).
+            package_targets: Targets::only(Target::Native),
         };
         let checked = self.repl.check_entry(&input, shape)?;
         shape.move_diagnostics(tree.file(), &mut import_diags);
@@ -524,24 +772,117 @@ impl Session {
         if body.shown != cheby_iface::Ty::NIL {
             // SAFETY: the first element of the pair is a `String` object.
             let debug = unsafe { cheby_runtime::values::str_of(text) }.to_owned();
-            let ty = self.show_ty(body.shown, &checked.iface);
+            let ty = self.show_ty(body.shown, &checked.iface)?;
             out.stdout(&format!("{debug} : {ty}\n"));
         }
         Ok(true)
     }
 
-    /// A type as the REPL prints it (D-463, D-546).
-    fn show_ty(&self, ty: cheby_iface::Ty, own: &ModuleInterface) -> String {
+    /// A type as the REPL prints it (D-463, D-546), with ` (stale)` after a
+    /// type a redefinition or `:reload` replaced (§13.5.5).
+    fn show_ty(&self, ty: cheby_iface::Ty, own: &ModuleInterface) -> Result<String, Error> {
         let all = self.all_modules();
         let deps = DepView::new(&self.front.set, &all);
+        let display = self.repl.display_table(&self.front.modules)?;
         let cx = DisplayCx {
             globals: &self.front.globals,
-            modules: &self.front.modules,
+            modules: &display,
             own: Some(own),
             deps: &deps,
             generics: None,
         };
-        self.repl.show_ty(ty, &cx)
+        Ok(self.repl.show_ty(ty, &cx))
+    }
+
+    /// The interfaces an entry is checked against while a module is
+    /// entered with `:module` (§13.5.3, GAP(repl-commands)): that module's
+    /// `priv` items are visible to the entry, which is a module of the
+    /// local package (D-606). For a module of another package, the
+    /// standard library, its package's package-visible items become
+    /// visible too, and the structure of its types usable, since the
+    /// package boundary is that module's package (D-098). `None` when no
+    /// module is entered. Only checking reads these; code is generated
+    /// from the real interfaces.
+    fn opened_set(&self) -> Result<Option<InterfaceSet>, Error> {
+        let Some(entered) = self.repl.scope().entered() else {
+            return Ok(None);
+        };
+        let module = entered.module;
+        let package = self.front.modules.try_get(module)?.package;
+        let mut opened = Vec::new();
+        for (id, info) in self.front.modules.iter() {
+            let own = id == module;
+            if !own && (package == PackageId::LOCAL || info.package != package) {
+                continue;
+            }
+            let Some(iface) = self.front.set.get(id) else {
+                continue;
+            };
+            let mut items = iface.items.clone();
+            for item in &mut items {
+                item.vis = match (item.vis, package == PackageId::LOCAL) {
+                    (Vis::Priv, true) if own => Vis::Package,
+                    (Vis::Priv, false) if own => Vis::Pub,
+                    (Vis::Package, false) => Vis::Pub,
+                    (vis, _) => vis,
+                };
+                if package != PackageId::LOCAL
+                    && let ItemSig::Type(def) = &mut item.sig
+                {
+                    def.exposed = true;
+                }
+            }
+            opened.push(Arc::new(ModuleInterface::new(id, iface.package, items)?));
+        }
+        Ok(Some(replace_interfaces(
+            &self.front.set,
+            self.front.modules.len(),
+            opened,
+        )?))
+    }
+
+    /// E0054 for each native symbol `entry` binds that a live binding binds
+    /// with another C signature (D-475): a binding of the package or the
+    /// standard library, or of a session item that is still the session's
+    /// definition of its name and that the entry does not replace.
+    /// Replaced definitions and entries that failed do not count.
+    fn native_conflicts(&self, entry: &CheckedEntry) -> Vec<Diagnostic> {
+        let replaced: Vec<DefId> = entry.redefinitions().map(|r| r.old).collect();
+        let mut out = Vec::new();
+        for (_, symbol, binding) in
+            entry_natives(&entry.resolved, &entry.iface, &self.front.globals)
+        {
+            let live = self.front.natives.get(&symbol).or_else(|| {
+                self.natives
+                    .iter()
+                    .filter(|n| {
+                        n.symbol == symbol
+                            && !replaced.contains(&n.def)
+                            && self.repl.current(Namespace::Value, n.name) == Some(n.def)
+                    })
+                    .map(|n| &n.binding)
+                    .find(|b| b.sig != binding.sig)
+            });
+            if let Some(first) = live
+                && first.sig != binding.sig
+            {
+                out.push(
+                    Diagnostic::new(
+                        codes::CONFLICTING_NATIVE_SYMBOL,
+                        format!(
+                            "the native symbol `{symbol}` is bound with two different C signatures"
+                        ),
+                    )
+                    .with_primary(binding.span, "bound here with another signature")
+                    .with_secondary(first.span, "first bound here")
+                    .with_note(
+                        "every `@external` of one symbol must give it the same C signature; \
+                         in the REPL, only the session's current definitions count",
+                    ),
+                );
+            }
+        }
+        out
     }
 
     /// One E0053 per native symbol nothing defines, at the entry's
@@ -577,9 +918,96 @@ impl Session {
     /// later entries, and its bodies for later reachability.
     fn commit(&mut self, entry: Entry) -> Result<(), Error> {
         let Entry { checked, .. } = entry;
+        for (index, symbol, binding) in
+            entry_natives(&checked.resolved, &checked.iface, &self.front.globals)
+        {
+            if let Some(item) = checked.iface.item(index) {
+                self.natives.push(SessionNative {
+                    def: DefId::new(checked.module, index),
+                    name: item.name,
+                    symbol,
+                    binding,
+                });
+            }
+        }
         self.repl.commit(&checked, &self.front.globals.names);
-        self.front.set.insert(Arc::new(checked.iface))?;
+        self.front.set.insert(Arc::new(checked.iface.clone()))?;
+        let set = &self.front.set;
+        let read = |def: DefId| set.get(def.module).and_then(|iface| iface.item(def.index));
+        let plan = self
+            .repl
+            .satisfaction(&checked, &read, &self.front.globals)?;
         self.entries.insert(checked.module, checked.thir);
+        self.apply_satisfaction(&plan)
+    }
+
+    /// Adds the forwarders of `plan` to their types' entry modules, with
+    /// their bodies and symbol names, and retires the ones it retires
+    /// (D-610).
+    fn apply_satisfaction(&mut self, plan: &SatisfactionPlan) -> Result<(), Error> {
+        if plan.add.is_empty() && plan.retire.is_empty() {
+            return Ok(());
+        }
+        let mut changed: BTreeMap<ModuleId, ModuleInterface> = BTreeMap::new();
+        let mut added = Vec::with_capacity(plan.add.len());
+        let mut names = Vec::with_capacity(plan.add.len());
+        for new in &plan.add {
+            let module = new.ty.module;
+            let iface = match changed.entry(module) {
+                std::collections::btree_map::Entry::Occupied(e) => e.into_mut(),
+                std::collections::btree_map::Entry::Vacant(e) => e.insert(
+                    self.front
+                        .set
+                        .get(module)
+                        .ok_or_else(|| Ice::new("a session type's module has no interface"))?
+                        .clone(),
+                ),
+            };
+            let index = iface.push(new.item.clone())?;
+            let def = DefId::new(module, index);
+            let (ItemSig::Fn(sig), Some(span)) = (&new.item.sig, new.item.span) else {
+                return Err(Ice::new("a forwarder without a function signature").into());
+            };
+            let body = forwarder_fn(def, new.target, sig, span, &self.front.globals)?;
+            self.entries
+                .get_mut(&module)
+                .ok_or_else(|| Ice::new("a session type's module has no bodies"))?
+                .fns
+                .push(body);
+            let path = self.front.modules.try_get(module)?.path.to_string();
+            names.push((
+                def,
+                SessionName {
+                    module: path.into(),
+                    item: new.text.clone(),
+                    generation: new.generation,
+                    reuse: None,
+                },
+            ));
+            added.push(def);
+        }
+        for &def in &plan.retire {
+            let iface = match changed.entry(def.module) {
+                std::collections::btree_map::Entry::Occupied(e) => e.into_mut(),
+                std::collections::btree_map::Entry::Vacant(e) => e.insert(
+                    self.front
+                        .set
+                        .get(def.module)
+                        .ok_or_else(|| Ice::new("a forwarder's module has no interface"))?
+                        .clone(),
+                ),
+            };
+            if let Some(name) = iface.item(def.index).map(|item| item.name) {
+                iface.unbind(Namespace::Value, name, def.index);
+            }
+        }
+        self.front.set = replace_interfaces(
+            &self.front.set,
+            self.front.modules.len(),
+            changed.into_values().map(Arc::new).collect(),
+        )?;
+        self.jit.set_session_names(names);
+        self.repl.apply_satisfaction(plan, &added);
         Ok(())
     }
 
@@ -589,49 +1017,593 @@ impl Session {
     /// old one (taking over its slot), and one that does not is reported
     /// and keeps its old code.
     fn check_again(&mut self, changed: &[Redefinition], out: &mut dyn Output) -> Result<(), Error> {
-        let dependents: Vec<(DefId, Name, Span)> = self
+        let dependents: Vec<Again> = self
             .repl
             .dependents(changed)
             .iter()
-            .filter_map(|item| Some((item.def, item.name, item.source?)))
+            .filter_map(|item| {
+                Some(Again {
+                    name: item.name,
+                    source: item.source?,
+                    inside: item.inside,
+                })
+            })
             .collect();
-        for (_, name, source) in dependents {
-            let Some(file) = self.sources.file(source.file) else {
-                continue;
+        self.recheck(
+            dependents,
+            "a definition it uses changed its signature",
+            out,
+        )
+    }
+
+    /// Checks `items` again from their own text, in order, each in the
+    /// module it was entered in: one that checks is compiled again and
+    /// replaces itself, and the errors of one that does not get the note
+    /// "`f` was checked again because {why}; it keeps its old definition".
+    fn recheck(&mut self, items: Vec<Again>, why: &str, out: &mut dyn Output) -> Result<(), Error> {
+        let saved = self.repl.scope().entered().cloned();
+        for item in items {
+            let inside = match item.inside {
+                Some(module) => Some(self.entered(newest(&self.replaced, module))?),
+                None => None,
             };
-            let path = file.path().to_owned();
-            let masked = mask(file.text(), source.range);
-            self.again = self.again.saturating_add(1);
-            let module_name = format!("{}:{}>", path.trim_end_matches('>'), self.again);
-            let mut diagnostics = Vec::new();
-            let parsed = parse_file(
-                &mut self.sources,
-                &path,
-                masked.into_bytes(),
-                &mut diagnostics,
-            )?;
-            let shape = EntryShape::Again {
-                display: source.file,
-            };
-            let text = self.front.globals.names.get(name);
-            self.again_note = Some(format!(
-                "`{text}` was checked again because a definition it uses changed its \
-                 signature; it keeps its old definition"
-            ));
-            let entry = self.check(&module_name, 0, &parsed, shape, diagnostics, out);
-            let result = match entry {
-                Ok(Some(entry)) => match self.build_and_run(&entry, out) {
-                    Ok(true) => self.commit(entry),
-                    Ok(false) => Ok(()),
-                    Err(e) => Err(e),
-                },
-                Ok(None) => Ok(()),
-                Err(e) => Err(e),
-            };
+            self.repl.enter(inside);
+            let result = self.recheck_one(item.name, item.source, why, out);
             self.again_note = None;
+            self.repl.enter(saved.clone());
             result?;
         }
         Ok(())
+    }
+
+    fn recheck_one(
+        &mut self,
+        name: Name,
+        source: Span,
+        why: &str,
+        out: &mut dyn Output,
+    ) -> Result<(), Error> {
+        let Some(file) = self.sources.file(source.file) else {
+            return Ok(());
+        };
+        let path = file.path().to_owned();
+        let masked = mask(file.text(), source.range);
+        self.again = self.again.saturating_add(1);
+        let module_name = format!("{}:{}>", path.trim_end_matches('>'), self.again);
+        let mut diagnostics = Vec::new();
+        let parsed = parse_file(
+            &mut self.sources,
+            &path,
+            masked.into_bytes(),
+            &mut diagnostics,
+        )?;
+        let shape = EntryShape::Again {
+            display: source.file,
+        };
+        let text = self.front.globals.names.get(name);
+        self.again_note = Some(format!(
+            "`{text}` was checked again because {why}; it keeps its old definition"
+        ));
+        let entry = self.check(&module_name, 0, &parsed, shape, diagnostics, out)?;
+        if let Some(entry) = entry
+            && self.build_and_run(&entry, out)?
+        {
+            self.commit(entry)?;
+        }
+        Ok(())
+    }
+
+    /// `:reload` (§13.5.3, D-098, D-547, GAP(repl-reload)): reads the
+    /// package's module files again. Each module whose text changed, each
+    /// new module, and each module of the package that imports one of them
+    /// is checked again as a new module, all or nothing; its items get new
+    /// symbols, because its module path carries the reload's generation.
+    /// If every one checks, later entries and imports see the new versions,
+    /// values of their old types are stale, each new version is listed as
+    /// "reloaded `path`", and the session's definitions that used an old
+    /// version are checked again, also those that an earlier `:reload`
+    /// broke and that still run an older version: those that still check
+    /// are compiled again, and the others are reported and keep their old
+    /// code. A reload that fails changes nothing, not even how values
+    /// print. What package discovery reports is shown even when no module
+    /// changed, and an error there refuses the reload. A module whose file
+    /// is gone stays loaded, and `cheby.toml` is not read again.
+    ///
+    /// # Errors
+    ///
+    /// An [`Error`] for an internal compiler error.
+    pub fn reload(&mut self, out: &mut dyn Output) -> Result<(), Error> {
+        let Some(root) = self.root.clone() else {
+            out.stderr(&self.tool_error(
+                "`:reload` reloads the modules of the package, and this session has no package",
+            ));
+            return Ok(());
+        };
+        let mut diagnostics = Vec::new();
+        let files = match cheby_package::discover(&root, &self.front.package_name, &mut diagnostics)
+        {
+            Ok(files) => files,
+            Err(e) => {
+                out.stderr(&self.tool_error(&e.to_string()));
+                return Ok(());
+            }
+        };
+        // The modules whose text changed, and the new ones.
+        let mut reloaded: Vec<Reloaded> = Vec::new();
+        for file in files {
+            let bytes = match std::fs::read(root.join(&file.file)) {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    out.stderr(&self.tool_error(&format!("{}: {e}", file.display)));
+                    return Ok(());
+                }
+            };
+            let old = self
+                .front
+                .local_module(&file.path)
+                .map(|id| newest(&self.replaced, id));
+            let same = old
+                .and_then(|id| self.front.modules.get(id))
+                .and_then(|info| info.file)
+                .and_then(|f| self.sources.file(f))
+                .is_some_and(|f| f.text().as_bytes() == bytes.as_slice());
+            if !same {
+                reloaded.push(Reloaded {
+                    path: file.path,
+                    display: file.display,
+                    bytes,
+                    old,
+                });
+            }
+        }
+        self.add_importers(&mut reloaded)?;
+        if reloaded.is_empty() {
+            // What discovery found is reported even when no text changed,
+            // as `cheby check` reports it; an error refuses the reload
+            // (review R5-ROB-4).
+            let refused = diagnostics.iter().any(Diagnostic::is_error)
+                || (self.options.deny_warnings && !diagnostics.is_empty());
+            if !diagnostics.is_empty() {
+                self.report(&mut diagnostics, out);
+            }
+            if !refused {
+                out.stdout("no module changed\n");
+            }
+            return Ok(());
+        }
+        self.reloads = self.reloads.saturating_add(1);
+        match self.check_reloaded(reloaded, diagnostics, out)? {
+            Some(done) => self.finish_reload(&done, out),
+            None => Ok(()),
+        }
+    }
+
+    /// Adds to `reloaded` the modules of the package that import a
+    /// reloaded one, again with the text they have.
+    fn add_importers(&self, reloaded: &mut Vec<Reloaded>) -> Result<(), Error> {
+        loop {
+            let ids: Vec<ModuleId> = reloaded.iter().filter_map(|r| r.old).collect();
+            let paths: Vec<&ModulePath> = reloaded.iter().map(|r| &r.path).collect();
+            let mut more = Vec::new();
+            for &id in &self.front.order {
+                let Ok(info) = self.front.modules.try_get(id) else {
+                    continue;
+                };
+                if info.package != PackageId::LOCAL
+                    || self.replaced.contains_key(&id)
+                    || paths.contains(&&self.original_path(id)?)
+                    || info
+                        .path
+                        .segments()
+                        .last()
+                        .is_some_and(|s| s == SESSION_FILE)
+                {
+                    continue;
+                }
+                let imports_one = self
+                    .front
+                    .import_targets
+                    .get(usize::try_from(id.as_u32()).unwrap_or(usize::MAX))
+                    .is_some_and(|targets| {
+                        targets.iter().filter_map(|t| t.module()).any(|m| {
+                            let m = newest(&self.replaced, m);
+                            ids.contains(&m)
+                                || self.original_path(m).is_ok_and(|p| paths.contains(&&p))
+                        })
+                    });
+                if !imports_one {
+                    continue;
+                }
+                let Some(file) = info.file.and_then(|f| self.sources.file(f)) else {
+                    continue;
+                };
+                more.push(Reloaded {
+                    path: self.original_path(id)?,
+                    display: file.path().to_owned(),
+                    bytes: file.text().as_bytes().to_vec(),
+                    old: Some(id),
+                });
+            }
+            if more.is_empty() {
+                return Ok(());
+            }
+            reloaded.extend(more);
+        }
+    }
+
+    /// The path a module of the package is imported by: its own, or that
+    /// of the module a `:reload` version stands for.
+    fn original_path(&self, module: ModuleId) -> Result<ModulePath, Error> {
+        let info = self.front.modules.try_get(module)?;
+        Ok(self.repl.shown_path(module, info).path.clone())
+    }
+
+    /// Parses and checks the modules of a `:reload`, in import order;
+    /// `None` after reporting their errors.
+    fn check_reloaded(
+        &mut self,
+        reloaded: Vec<Reloaded>,
+        mut diagnostics: Vec<Diagnostic>,
+        out: &mut dyn Output,
+    ) -> Result<Option<Vec<(Reloaded, ModuleId)>>, Error> {
+        let pending = self.parse_reloaded(reloaded, &mut diagnostics)?;
+        let ids: Vec<ModuleId> = pending.iter().map(|p| p.id).collect();
+        let done = self.check_parsed(pending, diagnostics, out)?;
+        if done.is_none() {
+            // A rejected reload changes nothing: its versions leave the
+            // build and stop showing the paths of the live modules, which
+            // would otherwise print as stale (review R5-ROB-1).
+            self.front.forget_reloaded(&ids);
+            self.repl.forget_shown(&ids);
+        }
+        Ok(done)
+    }
+
+    /// Checks the parsed modules of a `:reload`, in import order; `None`
+    /// after reporting their errors.
+    fn check_parsed(
+        &mut self,
+        pending: Vec<PendingModule>,
+        mut diagnostics: Vec<Diagnostic>,
+        out: &mut dyn Output,
+    ) -> Result<Option<Vec<(Reloaded, ModuleId)>>, Error> {
+        if diagnostics.iter().any(Diagnostic::is_error)
+            || pending.iter().any(|p| p.source.has_syntax_errors)
+        {
+            self.report(&mut diagnostics, out);
+            return Ok(None);
+        }
+        let Some(order) = self.reload_order(&pending, &mut diagnostics)? else {
+            self.report(&mut diagnostics, out);
+            return Ok(None);
+        };
+        let mut slots: Vec<Option<PendingModule>> = pending.into_iter().map(Some).collect();
+        let mut done = Vec::new();
+        // A module that imports one that failed is not checked: its errors
+        // would only repeat.
+        let mut failed: Vec<ModuleId> = Vec::new();
+        for node in order {
+            let Some(pending) = slots
+                .get_mut(usize::try_from(node).map_err(|_| Ice::new("a node"))?)
+                .and_then(Option::take)
+            else {
+                continue;
+            };
+            let id = pending.id;
+            if pending
+                .targets
+                .iter()
+                .any(|t| t.module().is_some_and(|m| failed.contains(&m)))
+            {
+                failed.push(id);
+                continue;
+            }
+            let tree = pending
+                .source
+                .syntax
+                .as_ref()
+                .ok_or_else(|| Ice::new("a reloaded module without its tree"))?;
+            let display = self.repl.display_table(&self.front.modules)?;
+            let found = frontend::check_reloaded(
+                &mut self.front,
+                &display,
+                frontend::ReloadedModule {
+                    id,
+                    tree,
+                    imports: pending.requests,
+                    targets: pending.targets,
+                },
+            )?;
+            if found.iter().any(Diagnostic::is_error) {
+                failed.push(id);
+            }
+            diagnostics.extend(found);
+            done.push((pending.module, id));
+        }
+        let olds: Vec<ModuleId> = done.iter().filter_map(|(m, _)| m.old).collect();
+        let natives = self.reload_natives(&olds, &mut diagnostics);
+        // With `--deny-warnings`, a warning refuses the reload as it refuses
+        // an entry (D-549).
+        let rejected = !failed.is_empty()
+            || diagnostics.iter().any(Diagnostic::is_error)
+            || (self.options.deny_warnings && !diagnostics.is_empty());
+        if !diagnostics.is_empty() {
+            self.report(&mut diagnostics, out);
+        }
+        if rejected {
+            return Ok(None);
+        }
+        self.front.natives = natives;
+        Ok(Some(done))
+    }
+
+    /// Parses the modules of a `:reload`, gives each a new module id,
+    /// whose path carries the reload's generation while diagnostics show
+    /// the module's own, and maps its imports to modules, the new versions
+    /// of the others included.
+    fn parse_reloaded(
+        &mut self,
+        reloaded: Vec<Reloaded>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) -> Result<Vec<PendingModule>, Error> {
+        let mut parsed = Vec::with_capacity(reloaded.len());
+        let mut overrides: BTreeMap<ModulePath, ModuleId> = BTreeMap::new();
+        for module in reloaded {
+            let source = parse_file(
+                &mut self.sources,
+                &module.display,
+                module.bytes.clone(),
+                diagnostics,
+            )?;
+            let id = self.front.modules.add(ModuleInfo {
+                path: reload_path(&module.path, self.reloads),
+                package: PackageId::LOCAL,
+                file: Some(source.file),
+            })?;
+            self.repl.show_as(
+                id,
+                ModuleInfo {
+                    path: module.path.clone(),
+                    package: PackageId::LOCAL,
+                    file: Some(source.file),
+                },
+            );
+            overrides.insert(module.path.clone(), id);
+            parsed.push((module, id, source));
+        }
+        let mut pending = Vec::with_capacity(parsed.len());
+        for (module, id, source) in parsed {
+            let (requests, targets) = match &source.syntax {
+                Some(tree) => {
+                    let requests = collect_imports(tree, &self.front.globals.names);
+                    let mut lookup = SessionLookup {
+                        package: &self.front.package_name,
+                        front: &self.front,
+                        replaced: &self.replaced,
+                    };
+                    let mut lookup = ReloadLookup {
+                        inner: &mut lookup,
+                        package: &self.front.package_name,
+                        overrides: &overrides,
+                    };
+                    let (targets, found) = resolve_import_targets(
+                        &requests,
+                        PackageId::LOCAL,
+                        &mut lookup,
+                        &self.front.globals.names,
+                    )?;
+                    diagnostics.extend(found);
+                    (requests, targets)
+                }
+                None => (Vec::new(), Vec::new()),
+            };
+            pending.push(PendingModule {
+                module,
+                id,
+                source,
+                requests,
+                targets,
+            });
+        }
+        Ok(pending)
+    }
+
+    /// The order in which the modules of a `:reload` are checked: each
+    /// after the reloaded modules it imports. `None` after pushing E0040
+    /// for each import cycle among them.
+    fn reload_order(
+        &self,
+        pending: &[PendingModule],
+        diagnostics: &mut Vec<Diagnostic>,
+    ) -> Result<Option<Vec<u32>>, Error> {
+        let node = |n: usize| u32::try_from(n).map_err(|_| Ice::new("too many modules"));
+        let ids: Vec<ModuleId> = pending.iter().map(|p| p.id).collect();
+        let mut graph = cheby_package::graph::Graph::new(pending.len());
+        for (from, p) in pending.iter().enumerate() {
+            for to in p.targets.iter().filter_map(|t| t.module()) {
+                if let Some(to) = ids.iter().position(|&id| id == to) {
+                    graph.add_edge(node(from)?, node(to)?);
+                }
+            }
+        }
+        let cycles = match cheby_package::graph::topological_order(&graph) {
+            Ok(order) => return Ok(Some(order)),
+            Err(cycles) => cycles,
+        };
+        let display = self.repl.display_table(&self.front.modules)?;
+        for cycle in &cycles {
+            let mut with_spans = Vec::new();
+            for (n, &at) in cycle.nodes.iter().enumerate() {
+                let next = cycle
+                    .nodes
+                    .get(n.saturating_add(1))
+                    .or_else(|| cycle.nodes.first())
+                    .copied()
+                    .ok_or_else(|| Ice::new("an empty cycle"))?;
+                let index = |n: u32| usize::try_from(n).map_err(|_| Ice::new("a node"));
+                let to = ids.get(index(next)?).copied();
+                let from = pending.get(index(at)?).ok_or_else(|| Ice::new("a node"))?;
+                let span = from
+                    .targets
+                    .iter()
+                    .position(|t| t.module() == to)
+                    .and_then(|k| from.requests.get(k))
+                    .map(|r| r.span)
+                    .ok_or_else(|| Ice::new("a cycle edge without its import"))?;
+                with_spans.push((from.id, span));
+            }
+            diagnostics.push(cycle_diagnostic(&with_spans, &display)?);
+        }
+        Ok(None)
+    }
+
+    /// The first binding of each native symbol across the package's and
+    /// std's current modules once `olds` are replaced, pushing E0054 for a
+    /// symbol bound with two C signatures (§12.5.1).
+    fn reload_natives(
+        &self,
+        olds: &[ModuleId],
+        diagnostics: &mut Vec<Diagnostic>,
+    ) -> BTreeMap<Box<str>, NativeBinding> {
+        let mut natives = BTreeMap::new();
+        for &id in &self.front.order {
+            if self.replaced.contains_key(&id) || olds.contains(&id) {
+                continue;
+            }
+            let bindings = self
+                .front
+                .module_natives
+                .get(usize::try_from(id.as_u32()).unwrap_or(usize::MAX))
+                .cloned()
+                .unwrap_or_default();
+            frontend::bind_natives(bindings, &mut natives, diagnostics);
+        }
+        natives
+    }
+
+    /// Makes the modules of a `:reload` the session's, lists them, and
+    /// checks again the session's definitions that used the old versions.
+    fn finish_reload(
+        &mut self,
+        done: &[(Reloaded, ModuleId)],
+        out: &mut dyn Output,
+    ) -> Result<(), Error> {
+        let mut olds = Vec::new();
+        for (module, new) in done {
+            if let Some(old) = module.old {
+                let shown = self.front.modules.try_get(old)?;
+                let shown = ModuleInfo {
+                    path: self.repl.shown_path(old, shown).path.clone(),
+                    package: PackageId::LOCAL,
+                    file: shown.file,
+                };
+                self.replaced.insert(old, *new);
+                self.repl.replace_module(old, *new, shown);
+                olds.push(old);
+            }
+            out.stdout(&format!("reloaded `{}`\n", module.path));
+        }
+        // A module entered with `:module` is entered in its new version.
+        if let Some(entered) = self.repl.scope().entered()
+            && self.replaced.contains_key(&entered.module)
+        {
+            let module = newest(&self.replaced, entered.module);
+            let entered = self.entered(module)?;
+            self.repl.enter(Some(entered));
+        }
+        // Every earlier version of a reloaded module, not only the one just
+        // replaced: a definition that an earlier `:reload` broke still runs
+        // code compiled against an older version, and the new one may fit
+        // it again, as with a function redefined twice (D-609, review
+        // R5-ROB-3).
+        let news: Vec<ModuleId> = done.iter().map(|&(_, new)| new).collect();
+        for &old in self.replaced.keys() {
+            if !olds.contains(&old) && news.contains(&newest(&self.replaced, old)) {
+                olds.push(old);
+            }
+        }
+        let dependents: Vec<Again> = self
+            .repl
+            .reload_dependents(&olds)
+            .iter()
+            .filter_map(|item| {
+                Some(Again {
+                    name: item.name,
+                    source: item.source?,
+                    inside: item.inside,
+                })
+            })
+            .collect();
+        self.recheck(dependents, "`:reload` changed a module it uses", out)
+    }
+}
+
+/// A module that `:reload` checks again.
+struct Reloaded {
+    /// The module's path, as imports write it.
+    path: ModulePath,
+    /// Its file as diagnostics show it.
+    display: String,
+    /// Its text.
+    bytes: Vec<u8>,
+    /// The version it replaces, if it was loaded.
+    old: Option<ModuleId>,
+}
+
+/// A module of a `:reload`, parsed, with its new id and its imports.
+struct PendingModule {
+    module: Reloaded,
+    id: ModuleId,
+    source: ParsedFile,
+    requests: Vec<cheby_resolve::ImportRequest>,
+    targets: Vec<cheby_resolve::ImportTarget>,
+}
+
+/// A definition checked again.
+struct Again {
+    name: Name,
+    source: Span,
+    inside: Option<ModuleId>,
+}
+
+/// The path of the new version of a module that `:reload` makes:
+/// `app::prices` becomes `app::prices<r1>`, which no import can name, so
+/// its symbols never collide with the old version's (D-547,
+/// GAP(repl-reload)).
+fn reload_path(path: &ModulePath, generation: u32) -> ModulePath {
+    let segments = path.segments();
+    let mark = |segment: &str| format!("{segment}<r{generation}>");
+    match segments.split_last() {
+        None => ModulePath::root(&mark("")),
+        Some((last, [])) => ModulePath::root(&mark(last)),
+        Some((last, [first, middle @ ..])) => middle
+            .iter()
+            .fold(ModulePath::root(first), |p, s| p.child(s))
+            .child(&mark(last)),
+    }
+}
+
+/// The lookup of `:reload`: a reloaded module's imports find the new
+/// versions of the modules reloaded with it.
+struct ReloadLookup<'a, 'b> {
+    inner: &'a mut SessionLookup<'b>,
+    package: &'a str,
+    overrides: &'a BTreeMap<ModulePath, ModuleId>,
+}
+
+impl ModuleLookup for ReloadLookup<'_, '_> {
+    fn lookup(&mut self, from: PackageId, path: &[&str]) -> Result<Lookup, Ice> {
+        if let Some((&first, rest)) = path.split_first()
+            && first == self.package
+        {
+            let module_path = rest
+                .iter()
+                .fold(ModulePath::root(first), |p, segment| p.child(segment));
+            if let Some(&id) = self.overrides.get(&module_path) {
+                return Ok(Lookup::Found(id));
+            }
+        }
+        self.inner.lookup(from, path)
     }
 }
 
@@ -974,6 +1946,71 @@ fn entry_kind(text: &str) -> Option<bool> {
     None
 }
 
+/// The newest version of module `module`, following the replacements of
+/// `:reload`.
+fn newest(replaced: &BTreeMap<ModuleId, ModuleId>, module: ModuleId) -> ModuleId {
+    let mut at = module;
+    // Each replacement makes a module with a higher id, so this ends.
+    while let Some(&next) = replaced.get(&at) {
+        if next <= at {
+            break;
+        }
+        at = next;
+    }
+    at
+}
+
+/// A copy of `set` (whose modules have ids below `len`) in which each
+/// interface of `replace` takes the place of its module's.
+fn replace_interfaces(
+    set: &InterfaceSet,
+    len: usize,
+    replace: Vec<Arc<ModuleInterface>>,
+) -> Result<InterfaceSet, Ice> {
+    let builtin = set
+        .get(ModuleId::BUILTIN)
+        .ok_or_else(|| Ice::new("the builtin module has no interface"))?
+        .clone();
+    let mut out = InterfaceSet::new(builtin);
+    out.reserve_modules(len)?;
+    let mut replace: BTreeMap<ModuleId, Arc<ModuleInterface>> =
+        replace.into_iter().map(|i| (i.module, i)).collect();
+    for n in 1..len {
+        let id = ModuleId::from_u32(u32::try_from(n).map_err(|_| Ice::new("too many modules"))?);
+        if let Some(iface) = replace.remove(&id).or_else(|| set.get_arc(id).cloned()) {
+            out.publish(iface)?;
+        }
+    }
+    Ok(out)
+}
+
+/// The native symbols the functions of a session entry bind, with their
+/// items, in item order (§12.5.1, D-475).
+fn entry_natives(
+    resolved: &ResolvedModule,
+    iface: &ModuleInterface,
+    globals: &cheby_iface::Globals,
+) -> Vec<(DefIndex, Box<str>, NativeBinding)> {
+    let mut out = Vec::new();
+    for (index, item) in resolved.items.iter_enumerated() {
+        let Some((symbol, span)) = item.attrs.native_symbol() else {
+            continue;
+        };
+        let Some(ItemSig::Fn(sig)) = iface.item(index).map(|i| &i.sig) else {
+            continue;
+        };
+        out.push((
+            index,
+            symbol.into(),
+            NativeBinding {
+                sig: foreign_sig(sig, globals),
+                span,
+            },
+        ));
+    }
+    out
+}
+
 /// The file whose text an entry's spans end up in.
 const fn display_file(shape: EntryShape, parsed: FileId) -> FileId {
     match shape {
@@ -1062,6 +2099,8 @@ fn synthetic_import(
 struct SessionLookup<'a> {
     package: &'a str,
     front: &'a Frontend,
+    /// The modules `:reload` replaced: an import finds the newest version.
+    replaced: &'a BTreeMap<ModuleId, ModuleId>,
 }
 
 impl ModuleLookup for SessionLookup<'_> {
@@ -1079,9 +2118,11 @@ impl ModuleLookup for SessionLookup<'_> {
             if let Some(id) = self.front.local_module(&module_path)
                 && rest.last() != Some(&SESSION_FILE)
             {
-                return Ok(Lookup::Found(id));
+                return Ok(Lookup::Found(newest(self.replaced, id)));
             }
             let text = module_path.to_string();
+            // Modules a user can import: not the session's own, and not
+            // the new versions `:reload` made, whose paths are marked.
             let candidates: Vec<String> = self
                 .front
                 .modules
@@ -1089,11 +2130,7 @@ impl ModuleLookup for SessionLookup<'_> {
                 .filter(|(_, info)| {
                     info.package == PackageId::LOCAL
                         && info.path.package() == self.package
-                        && info
-                            .path
-                            .segments()
-                            .last()
-                            .is_none_or(|s| s != SESSION_FILE)
+                        && info.path.segments().iter().all(|s| !s.contains('<'))
                 })
                 .map(|(_, info)| info.path.to_string())
                 .collect();
@@ -1252,6 +2289,73 @@ mod tests {
         );
         assert_eq!(entry_source("import std::io").unwrap(), "import std::io");
         assert_eq!(entry_source("// nothing"), None);
+    }
+
+    /// `:type` checks without running or keeping anything, and E0054
+    /// counts only live bindings (§13.5.3, D-475).
+    #[test]
+    fn types_and_live_native_bindings() {
+        let printed = std::thread::Builder::new()
+            .stack_size(256 << 20)
+            .spawn(|| {
+                let dir = std::env::temp_dir();
+                let Start::Ready(mut session, _) =
+                    Session::start(&dir, SessionOptions::default()).unwrap()
+                else {
+                    panic!("the session did not start");
+                };
+                let mut out = Buffer::default();
+                session.type_of("1 / 0", &mut out).unwrap();
+                session.type_of("let x = 1", &mut out).unwrap();
+                for entry in [
+                    "x",
+                    "@external(native, \"abs\")\nfn m(n: I32) -> I32",
+                    "@external(native, \"abs\")\nfn w(n: Int) -> Int",
+                    "@external(native, \"abs\")\nfn m(n: Int) -> Int",
+                    "@external(native, \"abs\")\nfn w(n: Int) -> Int",
+                ] {
+                    session.eval(entry, &mut out).unwrap();
+                }
+                session.enter_module("nowhere", &mut out).unwrap();
+                session.reload(&mut out).unwrap();
+                out.text
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        assert!(printed.starts_with("1 / 0 : Int\n"), "{printed}");
+        assert!(printed.contains("`:type` needs an expression"), "{printed}");
+        // `:type let x = 1` bound nothing.
+        assert!(printed.contains("error[E0042]"), "{printed}");
+        // `w` conflicts with the live `m`; after `m` is redefined with the
+        // same C signature as `w`, `w` is accepted.
+        assert_eq!(printed.matches("error[E0054]").count(), 1, "{printed}");
+        assert!(
+            printed.contains("there is no module `nowhere`"),
+            "{printed}"
+        );
+        assert!(printed.contains("this session has no package"), "{printed}");
+    }
+
+    #[test]
+    fn reloaded_modules_get_marked_paths() {
+        let path = ModulePath::root("store").child("prices");
+        assert_eq!(reload_path(&path, 2).to_string(), "store::prices<r2>");
+        assert_eq!(
+            reload_path(&ModulePath::root("store"), 1).to_string(),
+            "store<r1>"
+        );
+        let mut replaced = BTreeMap::new();
+        replaced.insert(ModuleId::from_u32(3), ModuleId::from_u32(7));
+        replaced.insert(ModuleId::from_u32(7), ModuleId::from_u32(9));
+        assert_eq!(
+            newest(&replaced, ModuleId::from_u32(3)),
+            ModuleId::from_u32(9)
+        );
+        assert_eq!(
+            newest(&replaced, ModuleId::from_u32(4)),
+            ModuleId::from_u32(4)
+        );
     }
 
     #[test]

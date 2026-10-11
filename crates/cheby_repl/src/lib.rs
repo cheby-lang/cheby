@@ -17,9 +17,9 @@
 //! - Standard output is flushed before anything is written to standard
 //!   error (D-548), and a failed write ends the REPL with status 1 (D-306).
 //!
-//! The commands (`:type`, `:module`, `:reload`, `:help`, `:quit`) are W5-A's:
-//! a line that starts with `:` goes to `command`, which reports that it
-//! is not available yet.
+//! An entry that starts with `:` is a command (§13.5.3, [`HELP`]): `:type
+//! expr`, `:module path` (`:module` alone leaves the module), `:reload`,
+//! `:help` and `:quit`. An unknown command is a tool error (D-464).
 
 use std::io::{IsTerminal as _, Write as _};
 use std::process::ExitCode;
@@ -32,6 +32,21 @@ pub const PROMPT: &str = "> ";
 
 /// The prompt of a line that continues an entry.
 pub const CONTINUATION: &str = ". ";
+
+/// What `:help` prints (§13.5.3, GAP(repl-commands)).
+pub const HELP: &str = "\
+Enter an expression to see its value and type, `let` or `let assert` to bind names \
+for later entries, a declaration (`fn`, `type`, a type alias, `interface`, `const`), \
+or an `import`. A name may be defined again (§13.5.2).
+
+Commands:
+  :type <expr>     show the type of an expression without evaluating it
+  :module <path>   enter a module, so its `priv` items and its imports are in scope
+  :module          leave the module entered with `:module`
+  :reload          check and compile again the modules of the package that changed
+  :help            show this text
+  :quit            end the session, as the end of input does
+";
 
 /// How `cheby repl` runs.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -49,17 +64,28 @@ pub struct ReplOptions {
     reason = "plan §4.5 fixes the signature"
 )]
 pub fn run(options: ReplOptions) -> ExitCode {
+    run_colored(&options, Colors::Off)
+}
+
+/// [`run`], with diagnostics and tool errors colored as `colors` says: the
+/// global `--color` option and the environment decide, as for the other
+/// commands (D-467).
+#[must_use]
+pub fn run_colored(options: &ReplOptions, colors: Colors) -> ExitCode {
     let mut streams = Streams;
     let dir = match std::env::current_dir() {
         Ok(dir) => dir,
         Err(e) => {
-            streams.stderr(&format!("error: cannot read the current directory: {e}\n"));
+            streams.stderr(&cheby_diag::render_tool_error(
+                &format!("cannot read the current directory: {e}"),
+                colors,
+            ));
             return ExitCode::FAILURE;
         }
     };
     let session_options = SessionOptions {
         deny_warnings: options.deny_warnings,
-        colors: Colors::Off,
+        colors,
     };
     let (mut session, warnings) = match Session::start(&dir, session_options) {
         Ok(Start::Ready(session, warnings)) => (session, warnings),
@@ -68,7 +94,7 @@ pub fn run(options: ReplOptions) -> ExitCode {
             return ExitCode::FAILURE;
         }
         Err(e) => {
-            streams.stderr(&format!("error: {e}\n"));
+            streams.stderr(&cheby_diag::render_tool_error(&e.to_string(), colors));
             return ExitCode::FAILURE;
         }
     };
@@ -173,22 +199,49 @@ fn evaluate(session: &mut Session, text: &str, streams: &mut Streams) -> bool {
         return command(session, rest, streams);
     }
     if let Err(e) = session.eval(text, streams) {
-        streams.stderr(&format!("error: {e}\n\n"));
+        streams.stderr(&cheby_diag::render_tool_error(
+            &e.to_string(),
+            session.colors(),
+        ));
     }
     true
 }
 
-/// A REPL command (§13.5.3). Hook for W5-A: `:quit` ends the session; the
-/// others are not implemented yet.
+/// A REPL command (§13.5.3), the text after its `:`; `false` when the
+/// session ends.
 fn command(session: &mut Session, text: &str, streams: &mut Streams) -> bool {
-    let _ = session;
-    let name = text.split_whitespace().next().unwrap_or("");
-    if name == "quit" {
-        return false;
+    let text = text.trim();
+    let (name, rest) = text
+        .split_once(char::is_whitespace)
+        .map_or((text, ""), |(name, rest)| (name, rest.trim()));
+    let colors = session.colors();
+    let result = match name {
+        "quit" | "help" | "reload" if !rest.is_empty() => {
+            streams.stderr(&cheby_diag::render_tool_error(
+                &format!("`:{name}` takes no argument"),
+                colors,
+            ));
+            Ok(())
+        }
+        "quit" => return false,
+        "help" => {
+            streams.stdout(HELP);
+            Ok(())
+        }
+        "type" => session.type_of(rest, streams),
+        "module" => session.enter_module(rest, streams),
+        "reload" => session.reload(streams),
+        _ => {
+            streams.stderr(&cheby_diag::render_tool_error(
+                &format!("there is no command `:{name}`; `:help` lists the commands"),
+                colors,
+            ));
+            Ok(())
+        }
+    };
+    if let Err(e) = result {
+        streams.stderr(&cheby_diag::render_tool_error(&e.to_string(), colors));
     }
-    streams.stderr(&format!(
-        "error: the command `:{name}` is not available yet\n\n"
-    ));
     true
 }
 

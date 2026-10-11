@@ -1,5 +1,5 @@
 // @mode: check-pass
-// @decisions: D-080, D-152
+// @decisions: D-080, D-152, D-516
 //! A `priv` item that no other item of its module uses warns. Calls of an
 //! item from its own body do not count.
 

@@ -39,8 +39,7 @@ bb1:
   drop _0
   goto bb3(const empty_list)
 bb2:
-  _3: value = call_runtime list_slice(borrow _0, borrow const int 1, borrow _1)
-  drop _0
+  _3: value = call_runtime list_slice_owned(_0, borrow const int 1, borrow _1)
   goto bb3(_3)
 bb3(_2: value):
   return _2

@@ -334,8 +334,8 @@ fn render(rows: &[Row]) -> String {
     let _ = write!(
         out,
         "\nRates are per core, from the 1-thread runs; the speedups compare them with {threads} \
-         threads (`--jobs` default, the available parallelism). The front end runs modules and \
-         function bodies in parallel (G1); code generation is one batch until W5-C. Edit to run \
+         threads (`--jobs` default, the available parallelism). The front end, MIR lowering and \
+         code generation run modules and functions in parallel (G1). Edit to run \
          uses the default threads. Budgets (D-247): check and generate code for 100k lines/s per \
          core and scale with cores; edit to run under 500 ms at 1M lines. Reported, never \
          enforced.\n"

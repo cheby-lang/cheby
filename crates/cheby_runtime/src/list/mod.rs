@@ -32,7 +32,7 @@ pub use kernels::{
     cheby_list_append, cheby_list_drop, cheby_list_get, cheby_list_length, cheby_list_prepend,
     cheby_list_push, cheby_list_set, cheby_list_slice, cheby_list_split_at, cheby_list_take,
     cheby_list_unique, cheby_rt_list_append, cheby_rt_list_get, cheby_rt_list_length,
-    cheby_rt_list_push, cheby_rt_list_slice,
+    cheby_rt_list_push, cheby_rt_list_slice, cheby_rt_list_slice_owned,
 };
 pub use node::{StaticList, cheby_rt_static_empty_list};
 pub(crate) use ops::Iter;

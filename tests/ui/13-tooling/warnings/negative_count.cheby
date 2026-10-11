@@ -1,5 +1,5 @@
 // @mode: check-pass
-// @decisions: D-298, D-303
+// @decisions: D-298, D-303, D-518
 //! A negative integer literal written for a count that the standard
 //! library clamps warns, also through a capture.
 

@@ -1,0 +1,24 @@
+error[E0071]: literal out of range for `Float`
+ --> tests/ui/03-types/literals/float_literal_limits.cheby:9:3
+  |
+9 |   1.0e309
+  |   ^^^^^^^ this is too large for `Float`
+  |
+  = note: the largest finite `Float` is about 1.8e308
+
+error[E0071]: literal out of range for `F32`
+  --> tests/ui/03-types/literals/float_literal_limits.cheby:21:3
+   |
+21 |   3.4028235677973367e38
+   |   ^^^^^^^^^^^^^^^^^^^^^ this is too large for `F32`
+   |
+   = note: the largest finite `F32` is about 3.4e38
+
+error[E0071]: literal out of range for `F32`
+  --> tests/ui/03-types/literals/float_literal_limits.cheby:25:3
+   |
+25 |   -3.4028236e38
+   |   ^^^^^^^^^^^^^ this is too large for `F32`
+   |
+   = note: the largest finite `F32` is about 3.4e38
+

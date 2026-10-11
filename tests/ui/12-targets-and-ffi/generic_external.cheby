@@ -1,0 +1,23 @@
+// @mode: check-pass
+// @decisions: D-186
+//! A foreign function may be generic. Its values cross the boundary in
+//! the uniform representation, so it needs no bound (§12.5).
+
+import std::io
+
+@external(native, "app_box_wrap")
+@external(js, "./box.mjs", "wrap")
+pub fn wrap<T>(value: T) -> List<T>
+
+@external(native, "app_box_pick")
+@external(js, "./box.mjs", "pick")
+pub fn pick<A, B>(first: A, second: B, take_first: Bool) -> (A, B)
+
+pub fn labels() -> List<String> {
+  wrap("one")
+}
+
+fn main() {
+  let _ = pick(1, "two", True)
+  io::println("built")
+}

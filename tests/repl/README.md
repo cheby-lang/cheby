@@ -15,7 +15,9 @@ replays and compares:
 
 The session ends at the end of input, and `cheby repl` must then exit with status 0. A session
 runs in an empty directory, unless a directory `<name>/` next to the transcript holds a
-`cheby.toml`: then it runs inside that package, whose modules it can import.
+`cheby.toml`: then it runs inside a copy of that package in a scratch directory, whose
+modules it can import. An entry may change the copy's files, as `reload.repl` does before
+`:reload`.
 
 `CHEBY_BLESS=1 cargo test -p cheby_cli --test repl` rewrites every transcript with the actual
 output, keeping its `< ` lines; read each diff before keeping it. `cargo xtask cross-check`

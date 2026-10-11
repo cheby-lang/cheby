@@ -355,3 +355,64 @@ fn main() {
 "#;
     check_golden("layouts_static_constructors_and_boxing", &build("app", src));
 }
+
+/// The `.cheby` files of the example package in `dir` as `(module path
+/// under the package, text)`, and the package name from its manifest.
+fn example_sources(dir: &Path) -> (String, Vec<(String, String)>) {
+    fn walk(dir: &Path, prefix: &str, out: &mut Vec<(String, String)>) {
+        let mut entries: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        entries.sort();
+        for path in entries {
+            let stem = path.file_stem().unwrap().to_string_lossy().into_owned();
+            let module = match (prefix, stem.as_str()) {
+                ("", "main") => String::new(),
+                ("", _) => stem.clone(),
+                _ => format!("{prefix}::{stem}"),
+            };
+            if path.is_dir() {
+                walk(&path, &module, out);
+            } else if path.extension().is_some_and(|e| e == "cheby") {
+                out.push((module, std::fs::read_to_string(&path).unwrap()));
+            }
+        }
+    }
+    let manifest = std::fs::read_to_string(dir.join("cheby.toml")).unwrap();
+    let name = manifest
+        .lines()
+        .find_map(|l| l.strip_prefix("name = \""))
+        .and_then(|l| l.strip_suffix('"'))
+        .unwrap()
+        .to_owned();
+    let mut files = Vec::new();
+    walk(&dir.join("src"), "", &mut files);
+    (name, files)
+}
+
+/// The MIR that `cheby run` compiles for examples 003, 024 and 025 (D2,
+/// reviewed by W5-C): the package's own units and the entry unit, after
+/// reference counting and validation. The units of `std` modules are left
+/// out, so a change to `std` does not move these goldens.
+#[test]
+fn example_goldens() {
+    for example in ["003_fizzbuzz", "024_two_sum", "025_linked_list"] {
+        let (name, files) = example_sources(&repo().join("docs/examples").join(example));
+        let refs: Vec<(&str, &str)> = files
+            .iter()
+            .map(|(p, t)| (p.as_str(), t.as_str()))
+            .collect();
+        let lowered = crate::test_support::lower_package(&name, &refs)
+            .unwrap_or_else(|errors| panic!("{example}: {errors}"));
+        assert_eq!(lowered.unsupported(), Vec::<String>::new(), "{example}");
+        let text = lowered
+            .units
+            .iter()
+            .filter(|u| &*u.path != "std" && !u.path.starts_with("std::"))
+            .map(|u| dump(u).unwrap())
+            .collect::<Vec<_>>()
+            .join("\n");
+        check_golden(&format!("examples/{example}"), &text);
+    }
+}

@@ -1,5 +1,5 @@
 // @mode: run-fail
-// @decisions: D-096, D-528
+// @decisions: D-096, D-528, D-570
 //! A failed comparison prints its source text, then both operands'
 //! debug text, labelled `left:` and `right:` (§11.5).
 

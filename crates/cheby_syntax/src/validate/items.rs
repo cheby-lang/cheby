@@ -97,7 +97,7 @@ pub(super) fn type_decl(decl: TypeDecl<'_>, out: &mut Vec<Diagnostic>) {
         out.push(
             Diagnostic::new(
                 codes::SYNTAX_ERROR,
-                "a record type needs at least one field",
+                "a type declaration needs at least one variant",
             )
             .with_primary(fields.significant_span(), "")
             .with_help(format!(

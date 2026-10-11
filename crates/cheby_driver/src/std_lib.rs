@@ -205,13 +205,15 @@ mod tests {
         Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
     }
 
-    fn cheby_files(dir: &Path, prefix: &str, out: &mut Vec<String>) {
+    /// The module paths of the files under `dir` whose names end with
+    /// `suffix`: `io`, `json::decode`.
+    fn module_files(dir: &Path, prefix: &str, suffix: &str, out: &mut Vec<String>) {
         for entry in std::fs::read_dir(dir).unwrap() {
             let path = entry.unwrap().path();
             let name = path.file_name().unwrap().to_string_lossy().into_owned();
             if path.is_dir() {
-                cheby_files(&path, &format!("{prefix}{name}::"), out);
-            } else if let Some(stem) = name.strip_suffix(".cheby") {
+                module_files(&path, &format!("{prefix}{name}::"), suffix, out);
+            } else if let Some(stem) = name.strip_suffix(suffix) {
                 out.push(format!("{prefix}{stem}"));
             }
         }
@@ -220,7 +222,7 @@ mod tests {
     #[test]
     fn std_files_are_the_shipped_and_staged_modules() {
         let mut files = Vec::new();
-        cheby_files(&repo().join("std"), "", &mut files);
+        module_files(&repo().join("std"), "", ".cheby", &mut files);
         files.sort();
         let mut listed: Vec<&str> = STD_MODULES
             .iter()
@@ -342,6 +344,63 @@ mod tests {
             assert!(find(home).is_some(), "std::{home} is not shipped");
         }
         assert_eq!(STAGED_STD_MODULES, &[]);
+    }
+
+    /// The `test "name"` lines of a source or a stdlib-spec page.
+    fn test_names(text: &str) -> Vec<&str> {
+        text.lines()
+            .filter_map(|line| line.strip_prefix("test \"")?.split_once("\" {"))
+            .map(|(name, _)| name)
+            .collect()
+    }
+
+    /// Every test of the stdlib spec for a shipped module is in `std/`
+    /// (H3, D-479). A test that needs a module which imports the tested
+    /// one lives in that module (D-145), and two of them are renamed there,
+    /// because `std::list` holds both and test names are unique in a
+    /// module.
+    #[test]
+    fn stdlib_spec_tests_are_in_std() {
+        const RENAMED: &[(&str, &str, &str)] = &[
+            (
+                "float",
+                "add is plus as a function",
+                "float add is plus as a function",
+            ),
+            (
+                "int",
+                "add is plus as a function",
+                "int add is plus as a function",
+            ),
+        ];
+        let mut spec_pages = Vec::new();
+        module_files(&repo().join("docs/stdlib"), "", ".md", &mut spec_pages);
+        let mut missing = Vec::new();
+        let mut checked = 0;
+        for module in spec_pages {
+            if find(&module).is_none() {
+                continue;
+            }
+            let page = std::fs::read_to_string(
+                repo().join(format!("docs/stdlib/{}.md", module.replace("::", "/"))),
+            )
+            .unwrap();
+            for name in test_names(&page) {
+                let wanted = RENAMED
+                    .iter()
+                    .find(|(m, n, _)| *m == module && *n == name)
+                    .map_or(name, |(_, _, renamed)| *renamed);
+                checked += 1;
+                if !STD_MODULES
+                    .iter()
+                    .any(|m| test_names(m.source).contains(&wanted))
+                {
+                    missing.push(format!("std::{module} \"{name}\""));
+                }
+            }
+        }
+        assert!(missing.is_empty(), "missing from std/: {missing:#?}");
+        assert!(checked > 300, "{checked} spec tests");
     }
 
     #[test]
