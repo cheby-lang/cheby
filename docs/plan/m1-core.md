@@ -149,11 +149,11 @@ M1 is judged on Linux and macOS. On Windows, CI builds every test but runs only 
 - The REPL test suite passes.
 - The `test` blocks of the examples above pass through `cheby test` in the conformance suite (D-472).
 - Builds are deterministic across thread counts.
-- Compile-speed numbers are reported, and OQ-P10, the throughput budget, is settled (D-640).
+- Compile-speed numbers are reported, and OQ-P10, the throughput budget, is settled (D-644).
 
 ## Status
 
-Exit criteria met, at commit `9efadd2`. The syntax layer, the vertical slice, the front end and the back end are done. The back end runs 22 examples with their goldens: the 21 of the exit list, and 011. The other 10 examples are only checked until a later milestone. The JS kernels do not exist yet (M4). Every exit criterion passes with `CHEBY_MILESTONE=M2`, and OQ-P10 is settled by D-640. The milestone moves to M2 when the user approves the exit, and `tests/milestone` is bumped then (D-288).
+Done. The exit criteria were met at commit `9efadd2`, the user approved the exit, and `tests/milestone` names M2 (D-288). The syntax layer, the vertical slice, the front end and the back end are done. The back end runs 22 examples with their goldens: the 21 of the exit list, and 011. The other 10 examples are only checked until a later milestone. The JS kernels do not exist yet (M4). Every exit criterion passes with `CHEBY_MILESTONE=M2`, and OQ-P10 is settled by D-644.
 
 ### Front end
 
@@ -194,7 +194,7 @@ Changes against the plan:
 
 ### Back end
 
-The back end starts from a plan whose spec gaps are settled by D-520 to D-554, logged in the [M1 back-end plan](../decisions/LOG.md#2026-10-10-m1-back-end-plan) session before its first wave. Codes E0075 to E0078 are added for constant evaluation (D-533). OQ-P10 was an open item of that session, and D-640 settles it at the exit.
+The back end starts from a plan whose spec gaps are settled by D-520 to D-554, logged in the [M1 back-end plan](../decisions/LOG.md#2026-10-10-m1-back-end-plan) session before its first wave. Codes E0075 to E0078 are added for constant evaluation (D-533). OQ-P10 was an open item of that session, and D-644 settles it at the exit.
 
 Wave 1 (MIR contracts, the runtime ABI, code generation for every MIR form, numbers and lists) is done at commit `c029c49`. The gaps it found are settled by D-555 to D-568, logged in the [M1 back end, wave 1](../decisions/LOG.md#2026-10-10-m1-back-end-wave-1) session. Changes against the plan:
 
@@ -252,7 +252,7 @@ Wave 7, the exit verification at commit `dc0ef73`, found no failing criterion. T
 - The strict run, with `CHEBY_MILESTONE=M2`, `CHEBY_PENDING=require` and `CHEBY_RT_POISON=1`, passes 678 of 678 UI tests and 64 of 64 conformance trials, so every M1 trial is required and passes.
 - The REPL suite passes, 26 of 26. `cargo xtask test-std` reports 371 passed and 0 failed, and `cargo xtask check-examples` gives 32 of 32 as expected.
 - `cargo xtask check-determinism` finds all 37 projects identical. `cargo xtask cross-check` reports 0 mismatches over 845 files and 334 REPL inputs.
-- `cargo xtask coverage` finds 122 decisions cited in the spec uncovered, as at wave 6, none of them in a "must" of chapters 2 to 8. With the exit's entries it finds 123: the spec now cites D-640, a compile-speed budget that no UI test can pin, and the two `out_of_memory` UI tests name D-642.
+- `cargo xtask coverage` finds 122 decisions cited in the spec uncovered, as at wave 6, none of them in a "must" of chapters 2 to 8. With the exit's entries it finds 123: the spec now cites D-644, a compile-speed budget that no UI test can pin, and the two `out_of_memory` UI tests name D-642.
 - The examples' output under `cheby run` and `cheby test` is identical to gate 6's.
 
 The measurements (I1 to I3) were taken at commit `dc0ef73` on an Apple M3 with 4 performance and 4 efficiency cores, with a release-built compiler and debug code generation (D-259):
@@ -261,11 +261,12 @@ The measurements (I1 to I3) were taken at commit `dc0ef73` on an Apple M3 with 4
 - Checking with code generation runs at 95k to 97k lines per second per core on 100k and 1M lines, and 85k to 88k on 10k lines. It scales 3.6x to 3.7x at 8 threads. The back end takes 87% of the time, and over 80% of that is inside Cranelift, mostly register allocation and code emission.
 - Editing one function of the 1M-line project and running it takes 0.49 s to 0.53 s, against D-247's 500 ms. OQ-P11 settles this budget in M3.
 - The front end's profile (I2, 1M lines) showed W0005's package pass taking 48% of `cheby check`. Grouping it by module, sharding the interners and parsing files in parallel halved `cheby check` on one thread and brought it to 0.51 s to 0.61 s at 8 threads, with no function above 5%.
-- OQ-P10 is settled by D-640, the user's choice of the measured baseline: until M3's exit the throughput budget is 95k lines per second per core on projects of 100k lines or more, with at least 3.5x at 8 threads, and D-247's 100k is the target at M3's exit (I3).
+- After D-643, two runs of `cargo xtask bench-compile` at commit `731dac1` measured checking with code generation at 104k to 107k lines per second per core on 100k and 1M lines, and 89k to 94k on 10k lines (117k to 118k for the `generic` shape). It scales 3.5x to 3.7x at 8 threads on 100k lines or more, except 3.3x on the 6-module 100k-line `large` project. Edit to run on 1M lines took 0.484 s and 0.489 s.
+- OQ-P10 is settled by D-644, the user's choice: D-247's throughput budget holds and stays as written, with no numeric floor for the scaling (I3). It supersedes D-640, which set a 95k baseline from the measurements before D-643.
 
-The gaps the exit found are settled by D-640 to D-643, logged in the [M1 exit](../decisions/LOG.md#2026-10-11-m1-exit) session. Changes against the plan:
+The gaps the exit found are settled by D-641 to D-644, logged in the [M1 exit](../decisions/LOG.md#2026-10-11-m1-exit) session. Changes against the plan:
 
 - On Windows, CI runs only the tests that execute no generated code. The JIT's own test modules are not built there, and every test that builds or runs a JIT is ignored, including the check tests that evaluate constants and every conformance trial (D-641). This replaces wave 6's state, in which those tests still ran on Windows unchecked.
 - An allocation that cannot be served panics with `out of memory` instead of aborting with exit 134, so `cheby run` exits with 101, a test fails and a REPL session continues. In constant evaluation, a request over the memory limit is E0076, and one under it that the system refuses is E0075. The runtime's scratch buffers count toward the limit, and a 4 MiB reserve lets even complete exhaustion end as the panic (D-642).
 - Code generation binds MIR locals to CLIF values directly, with no `cranelift_frontend` variables, and boxes constant `Int`s at compile time. A list literal of constant elements now compiles in linear time, 100k elements in 0.75 s under `cheby run`. Literals of computed elements still compile in superlinear time inside regalloc2, an open item of the exit session for M2. The CLIF text changed, and its golden was blessed again (D-643).
-- Windows has not run in CI yet, because nothing is pushed before the exit, and the throughput numbers predate D-643's change.
+- Windows has not run in CI yet, because nothing is pushed before the exit.

@@ -459,7 +459,7 @@ The reference compiler tracks these budgets in CI from its first milestone (D-24
 
 The budgets are estimates and will be revised against measurements.
 
-_Note:_ the throughput budget was revised against M1's measurements. Until M3's exit, the reference compiler's budget is 95,000 lines per second per core on projects of 100,000 lines or more, with a speedup of at least 3.5x at 8 threads. The 100,000 lines per second per core above is the target at M3's exit. The budgets are reported, not enforced, until M6 (D-640).
+_Note:_ M1's measurements confirmed the throughput budget as written: the reference compiler checks and generates code for 104,000 to 107,000 lines per second per core on projects of 100,000 lines or more. The budgets are reported, not enforced, until M6 (D-644).
 
 Unused imports remain warnings ([§13.8](#138-diagnostics-and-warnings)) (D-253), and AOT builds use the system linker, then a bundled lld before 1.0 (D-088, D-261).
 
