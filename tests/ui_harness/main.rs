@@ -48,7 +48,10 @@ use libtest_mimic::{Arguments, Trial};
 
 const CHEBY: &str = env!("CARGO_BIN_EXE_cheby");
 const TMP: &str = env!("CARGO_TARGET_TMPDIR");
-const TIMEOUT: Duration = Duration::from_secs(60);
+/// Generous, because `03-types/equality/deep_nested_maps` peaks at 2.3 GB
+/// and, run beside the other tests, took over 60 s on CI's Intel macOS
+/// runner. A test that hangs still fails, just later.
+const TIMEOUT: Duration = Duration::from_secs(180);
 /// Exit code of `cheby check` when the package has errors.
 const COMPILE_ERROR_EXIT: i32 = 1;
 /// Exit code of a program whose root fiber panics (D-182).
