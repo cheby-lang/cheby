@@ -1,4 +1,4 @@
-//! The header of a REPL transcript, GAP(repl-transcript-header).
+//! The header of a REPL transcript (D-638).
 //!
 //! A transcript `tests/repl/<name>.repl` may start with directive lines
 //! `// @key: value`, before its first input line, as a UI test does. They

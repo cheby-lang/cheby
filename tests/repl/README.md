@@ -16,8 +16,7 @@ replays and compares:
 A transcript may start with a header of `// @decisions: D-NNN, …` lines, before its first input
 line, naming the decisions the session pins, as a UI test's header does. The header is not part
 of the session: it is neither fed nor expected, blessing keeps it, and `cargo xtask coverage`
-counts its decisions (GAP(repl-transcript-header)). On Windows the harness ignores every
-transcript until M6 (D-545).
+counts its decisions (D-638). On Windows the harness ignores every transcript until M6 (D-545).
 
 The session ends at the end of input, and `cheby repl` must then exit with status 0. A session
 runs in an empty directory, unless a directory `<name>/` next to the transcript holds a

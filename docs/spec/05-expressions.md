@@ -403,11 +403,19 @@ _Rationale:_ this avoids nested `case b { True => … False => case … }` chain
 
 ### 5.9.6 Parsing subjects
 
-In the subject position of a `case`, an `UPPER` name followed by `{` is never parsed as a record construction, because the `{` opens the arms. A record construction or record update used as a subject must be parenthesized. A `{` right after `case` always starts a subjectless `case`, so a block used as a subject must be parenthesized too.
+Every subject of a `case` is a `subject_expr`, which restricts `expr` in two ways. The restrictions apply to each subject, not only the first (D-639).
+
+- An `UPPER` name followed by `{` is never parsed as a record construction or record update, because the `{` opens the arms. This holds anywhere in the subject outside brackets, also in an operand, a call or a field access. A record construction or record update used as a subject must be parenthesized.
+- A subject cannot start with `{`. A `{` right after `case` always starts a subjectless `case`, so a block used as a subject must be parenthesized too. A block later inside a subject, as in `case a + { 1 } { … }`, is valid.
+
+Subjects are separated by commas and, unlike arguments, take no trailing comma (D-107, D-639).
 
 ```cheby
 case (Point { x: 0.0, y: 0.0 }) { … }
+case n, ({ 1 }) { … }
 ```
+
+_Note:_ after a `,`, a `{` could be a block used as a subject or the arms after a trailing comma. Both are syntax errors, and the parser picks one to report. It finds the `}` that closes the `{` by counting braces and looks at the next token, where a line break counts as a token. If that token is anything but a line break, the end of the file, `}`, `)` or `]`, the `{` is taken for a block subject, as in `case n, { 1 } { … }`. Otherwise, and when no `}` closes it, the `{` is taken for the arms, as in `case n, m, {` followed by the arms on the next lines (D-639).
 
 ## 5.10 Use
 

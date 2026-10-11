@@ -186,7 +186,7 @@ Notes:
 - A unit or positional constructor used as a value (`None`, `Some(1)`, `Some`) parses as `path_expr` followed by an optional `call_suffix`.
 - An interface function call (`Show::show(x)`, `shape::Shape::area(x)`) parses as the interface-function form of `path_expr` followed by a `call_suffix` (D-173). After `UPPER "::"`, a `LOWER` token selects this form and `<` selects `type_args`.
 - The message after `as` in `panic_expr`, `todo_expr`, `assert_stmt` and `let_assert_stmt` is a `String` expression (D-159, D-160, D-161).
-- `subject_expr` is `expr` with two restrictions ([§5.9.6](05-expressions.md#596-parsing-subjects)): an `UPPER` path followed by `{` ends the subject instead of starting a `constructor` or `record_update`, and a subject cannot start with `{`. Parenthesize to use either form.
+- `subject_expr` is `expr` with two restrictions ([§5.9.6](05-expressions.md#596-parsing-subjects)): an `UPPER` path followed by `{` ends the subject instead of starting a `constructor` or `record_update`, and a subject cannot start with `{`. Both restrictions apply to every subject, not only the first. Parenthesize to use either form. `subjects` has no trailing comma (D-639).
 - `-` written directly before an `INT` or `FLOAT` literal is treated as a negative literal for typing ([§5.3.1](05-expressions.md#531-negative-literals)). Whitespace or a comment between a unary `-` and an `INT` or `FLOAT` is a compile error, here and in `literal_pat` (D-470).
 - In `cmp_expr`, a second comparison operator is a compile error with a suggestion, not a parse of a different expression.
 

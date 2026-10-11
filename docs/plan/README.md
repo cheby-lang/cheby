@@ -187,6 +187,7 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-633     | No compiler pass recurses per element of a list pattern                                             |
 | D-634     | `cheby_rt_list_slice_owned` consumes a list at its last use and slices a unique one in place        |
 | D-635     | `CHEBY_RT_STATS` prints the runtime's counters, and `CHEBY_RT_POISON=0` turns off unit-test poison  |
+| D-638     | REPL transcripts may start with a `// @decisions:` header, which `cargo xtask coverage` counts      |
 
 ## Open questions
 

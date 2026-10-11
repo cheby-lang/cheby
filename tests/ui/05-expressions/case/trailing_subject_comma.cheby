@@ -1,5 +1,5 @@
 // @mode: parse-fail
-// @decisions: D-052
+// @decisions: D-052, D-639
 //! `case` subjects take no trailing comma (A.5), so in `case n, m, {` the
 //! `{` opens the arms. The one error says to remove the comma, and the arms
 //! still parse as the body.

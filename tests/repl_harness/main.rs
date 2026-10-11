@@ -3,8 +3,7 @@
 //!
 //! A transcript `tests/repl/<name>.repl` is what a piped session prints,
 //! after an optional header of `// @decisions: …` lines that name the
-//! decisions it pins (`cheby_test_support::repl`,
-//! GAP(repl-transcript-header)):
+//! decisions it pins (`cheby_test_support::repl`, D-638):
 //!
 //! - a line that starts with `> ` or `. ` is an input line after its
 //!   prompt, which the REPL echoes;

@@ -10,7 +10,7 @@
 //! - `coverage`: lists decisions cited in the spec that no UI test or REPL
 //!   transcript names, reading `@decisions` from each test's header
 //!   (`src/main.cheby` of a package test) and from each transcript's
-//!   header (GAP(repl-transcript-header)).
+//!   header (D-638).
 //! - `cross-check`: parses examples and UI tests with `tree-sitter-cheby`
 //!   at the pinned commit and with the compiler parser, and fails if they
 //!   disagree (D-272).
@@ -293,8 +293,7 @@ fn coverage(root: &Path) -> Result<(), String> {
     for test in ui::all(root)? {
         covered.extend(test.header.decisions);
     }
-    // REPL transcripts pin decisions through their header too
-    // (GAP(repl-transcript-header)).
+    // REPL transcripts pin decisions through their header too (D-638).
     let transcripts = root.join("tests/repl");
     for path in cheby_test_support::files_with_extension(&transcripts, "repl")
         .map_err(|e| format!("{}: {e}", transcripts.display()))?

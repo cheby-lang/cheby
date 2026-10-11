@@ -1,5 +1,5 @@
 // @mode: parse-fail
-// @decisions: D-052
+// @decisions: D-052, D-639
 //! No `case` subject may start with `{`, not only the first, so a block
 //! used as a later subject must be parenthesized too (§5.9.6, A.5).
 
