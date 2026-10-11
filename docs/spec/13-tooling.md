@@ -128,9 +128,9 @@ The REPL reads one entry at a time (D-605):
 - A shown `Result` is not a discarded result, and a session value is not an unused binding ([§13.8](#138-diagnostics-and-warnings)).
 - An entry with an error binds nothing, and its unused-binding warnings are not shown.
 
-Inside a package directory, the REPL loads all of the package's modules and dependencies, and they can be imported (D-098). Each entry is checked as a module `<repl:N>` of the local package, so the package's package-visible items are usable at the prompt after an import, without `:module` (D-606). Outside a package, the session's package is `repl`, version `0.0.0`, with no modules. Every shipped standard-library module can be imported. A `priv` item of an entry is visible only inside that entry, because it never becomes a session name. Types and diagnostics write session items without a `<repl:N>::` qualifier, as in `Point`, while locations keep `<repl:N>:line:col` (D-606).
+Inside a package directory, the REPL loads all of the package's modules and dependencies, and they can be imported (D-098). Each entry is checked as a module `<repl:N>` of the local package, so the package's package-visible items are usable at the prompt after an import, without `:module` (D-606). Outside a package, the session's package is `repl`, version `0.0.0`, with no modules. Every shipped standard-library module can be imported. A `priv` item of an entry is visible only inside that entry, because it never becomes a session name. Types and diagnostics write session items without a `<repl:N>::` qualifier, as in `Point`, while locations keep `<repl:N>:line:col` (D-606). Diagnostics call a statements entry "the entry", and an entry module named on its own "the session", as in "the session has no function `show(Cat) -> String`", because users never write the wrapper of an entry or a module `<repl:N>`, and the entries count as one module for satisfaction (D-629).
 
-Entries are checked for the `native` target only, meaning the package's targets intersected with `native`, because the session runs on the native JIT. So a native-only item of the package and an `@external(native, …)` entered at the prompt are usable (D-606).
+Entries are checked for the `native` target only, because the session runs on the native JIT. So a native-only item of the package and an `@external(native, …)` entered at the prompt are usable (D-606). This holds whatever targets the package declares, also when they lack `native`. A package's targets narrow where its code is checked, not whether its items exist (D-190), so in a package for `js` only, its portable items, the standard library and the session's own definitions are usable, while an item that exists only on `js`, such as a function with only an `@external(js, …)`, is E0067 at the prompt: "`alert` exists only on `js`, but the entry runs on `native`" (D-628).
 
 In a session, `env::program_name()` returns the package's name, or `repl` outside a package, and `env::args()` is empty, so transcripts are deterministic (D-612).
 
@@ -161,7 +161,7 @@ A prompt-level `let` rebinding shadows. Each `let` or `let assert` creates a new
 2 : Int
 ```
 
-When a function or constant is redefined with another signature or type, every current function and constant whose signature or body names it is checked again from its own text, in the order the definitions entered the session. That includes those that named an earlier definition of the name, and those that relied on the function for interface satisfaction. Each one that checks is compiled again and replaces itself. Each one that fails keeps its old definition, and each of its errors gets the note "`f` was checked again because a definition it uses changed its signature; it keeps its old definition". A redefinition with the same signature or type checks nothing again, and neither does a `let` rebinding or a redefined type, interface or alias. Definitions already checked keep the old type, interface or alias, and their values of an old type are stale (D-609).
+When a function or constant is redefined with another signature or type, every current function and constant whose signature or body names it is checked again from its own text, in the order the definitions entered the session. That includes those that named an earlier definition of the name, and those that relied on the function for interface satisfaction. Each one that checks is compiled again and replaces itself. Each one that fails keeps its old definition, and each of its errors gets the note "`f` was checked again because a definition it uses changed its signature; it keeps its old definition". A redefinition with the same signature or type checks nothing again, and neither does a `let` rebinding or a redefined type, interface or alias. Definitions already checked keep the old type, interface or alias, and their values of an old type are stale (D-609). `:reload` checks definitions again in the same way when it replaces a module they use ([§13.5.3](#1353-commands)) (D-625).
 
 An entry that is rejected, because evaluating one of its constants failed or its body panicked, changes nothing in the session: the definitions it replaced are restored (D-607).
 
@@ -176,16 +176,33 @@ For interface satisfaction ([§8.2](08-interfaces.md#82-satisfaction)), the prom
 
 ### 13.5.3 Commands
 
-| Command          | Meaning                                                                              |
-| ---------------- | ------------------------------------------------------------------------------------ |
-| `:type expr`     | show the type of an expression without evaluating it (D-098)                         |
-| `:reload`        | recompile changed modules of the package (D-098)                                     |
-| `:module path`   | enter a module, so its `priv` items are visible and its imports are in scope (D-098) |
-| `:help`, `:quit` | informative                                                                          |
+| Command        | Meaning                                                                                     |
+| -------------- | ------------------------------------------------------------------------------------------- |
+| `:type expr`   | show the type of an expression without evaluating it (D-098, D-624)                         |
+| `:reload`      | recompile changed modules of the package (D-098, D-625)                                     |
+| `:module path` | enter a module, so its `priv` items are visible and its imports are in scope (D-098, D-624) |
+| `:module`      | leave the entered module (D-624)                                                            |
+| `:help`        | list the commands (D-624)                                                                   |
+| `:quit`        | end the session, as the end of input does (D-624)                                           |
 
-`:type expr` prints `<expr text> : <type>`, with the type written as in diagnostics (D-546).
+A command that succeeds prints nothing, except `:type`, `:help` and the report of `:reload`. An unknown command is the tool error "there is no command `:name`; `:help` lists the commands", and an argument given to `:quit`, `:help` or `:reload` is the tool error "`:name` takes no argument" (D-464, D-624).
 
-Entering a module with `:module` makes the REPL behave as if the input were written at the end of that module: its `priv` items are accessible, package-visible items of its package are accessible (D-162), and the package boundary for `exposed` is that module's package (D-098).
+`:type expr` checks `expr` as the next entry `<repl:N>`, so it uses up an entry number and its diagnostics have a location of their own. It runs nothing, keeps nothing and shows only errors. On success it prints `<expr text> : <type>`, the type of the final expression written as in diagnostics, also when it is `Never`. Since nothing runs, `:type 1 / 0` prints `1 / 0 : Int` (D-546, D-624). Empty text or a declaration is the tool error "`:type` needs an expression, as in `:type 1 + 2`", and statements whose last one is not an expression, such as `:type let y = 1`, are the tool error "`:type` needs an expression, and the last statement here is not one" (D-624).
+
+`:module path` enters a module of the package or of the standard library, written as in an import, such as `bakery::oven`, `bakery` or `std::list`, and `:module` alone leaves it. A path that names no module is the tool error "there is no module `path`". The prompt stays `> ` (D-624).
+
+Entering a module with `:module` makes the REPL behave as if the input were written at the end of that module: its `priv` items are accessible, package-visible items of its package are accessible (D-162), and the package boundary for `exposed` is that module's package (D-098). For a module of the standard library, every package-visible item of the standard library is visible and every type of it is `exposed`. Only checking changes. Later entries are still modules of the local package ([§13.5.1](#1351-inputs)), but they see the entered module's items, `priv` ones included, and its imports. These names rank as if the session had defined them when the module was entered, so a name the session defines later wins. A definition entered inside a module is checked again inside it ([§13.5.2](#1352-redefinition)) (D-624). _Note:_ the reference implementation checks entries against interfaces in which the entered module's `priv` items are package-visible, and generates code from the real interfaces (D-624).
+
+`:reload` runs package discovery again and compares the text of each module file with the loaded version (D-098, D-625):
+
+- Each module whose text changed, each new module, and each module of the package that imports one of them, transitively, is checked again as a new version, in import order, all or nothing. A module that imports one that failed is not checked, since its errors would only repeat.
+- The reload is rejected when a module has a syntax or type error, when the reloaded modules import each other in a cycle (E0040), when package discovery reports an error, or when there is any warning under `--deny-warnings` (D-549). A rejected reload reports its diagnostics and changes nothing, not even how values print.
+- When it succeeds, the REPL prints "reloaded `path`" for each new version, in check order. Imports then reach the new versions, including the session's earlier imports and the module entered with `:module`. The types of the old versions are stale ([§13.5.5](#1355-prompt-output-and-standard-streams)), and E0054 is checked again over the current modules (D-475).
+- Every current session definition that refers to any earlier version of a reloaded module is checked again from its text, in the order the definitions entered the session, as after a redefinition ([§13.5.2](#1352-redefinition)) (D-609). This includes a definition that an earlier `:reload` broke, which still runs code compiled against an older version. Each one that checks is compiled again. Each error of the others gets the note "`f` was checked again because `:reload` changed a module it uses; it keeps its old definition", so a definition that stays broken is reported again at every later `:reload` of the module it uses.
+- Package-discovery diagnostics, such as E0037 for a bad file name, are shown even when no module text changed, and an error among them rejects the reload. When no text changed and nothing rejected the reload, `:reload` prints "no module changed".
+- Outside a package, `:reload` is the tool error "`:reload` reloads the modules of the package, and this session has no package". A module file that cannot be read is a tool error that changes nothing.
+
+The old versions stay loaded, because session values and compiled code still refer to their items (D-547). Two limits hold in M1: a module whose file was deleted stays loaded, and `cheby.toml` is not read again (D-625). _Note:_ the reference implementation gives a new version an internal module path whose last segment carries the reload's generation, as in `store::prices<r1>`. No import can name it, so the new version's symbols never collide with the old version's. The generation counts the `:reload` commands that found a change, and diagnostics show the original path (D-547, D-625).
 
 ### 13.5.4 Fibers in the REPL
 
@@ -198,11 +215,13 @@ Detached fibers ([§10.4](10-concurrency.md#104-detached-fibers)) started from t
 The REPL shows its session as follows (D-546):
 
 - The prompt is `> `, and `. ` while an entry goes on to the next line ([§13.5.1](#1351-inputs)) (D-605).
-- An expression's value prints as `<debug text> : <type>`, with the type written as in diagnostics ([§13.8](#138-diagnostics-and-warnings)). A `Nil` value prints nothing. A value whose type a redefinition replaced prints its type followed by ` (stale)`.
+- An expression's value prints as `<debug text> : <type>`, with the type written as in diagnostics ([§13.8](#138-diagnostics-and-warnings)). A `Nil` value prints nothing. A value whose type is stale prints its type followed by ` (stale)`, as described below.
 - Declarations and imports print nothing when they succeed.
 - A location in an entry is shown as `<repl:N>:line:col` in diagnostics and panic reports, with entries counted from 1.
 - On a terminal the REPL has line editing. When standard input is not a terminal, there is no line editing, and each input line is echoed after its prompt, so the output of a session reads as a transcript.
 - There is no leak check ([§10.10](10-concurrency.md#1010-program-entry-and-exit)) (D-458).
+
+A type is stale when a later entry redefined it, when it is a `dyn` type whose interface a later entry redefined, or when it belongs to a module of the package that `:reload` replaced ([§13.5.3](#1353-commands)). Wherever a stale type is written, in a value's type, in the output of `:type` and in diagnostics, ` (stale)` follows it, after its type arguments: `Shape (stale)`, `prices::Item<Int> (stale)`, `dyn Named (stale)`. A type that holds a stale type is not stale itself, as in `Holder<Shape (stale)>` and `List<prices::Item (stale)>`. Old and new types share a name, so the marker is what tells them apart. Mixing an old type with its new version is an ordinary type error, such as "expected `List<prices::Item>`, found `List<prices::Item (stale)>`" (D-626).
 
 _Example:_
 
@@ -238,7 +257,7 @@ Test blocks are type-checked by `cheby build` as well, so a broken test is caugh
 
 _Note:_ in M1 the reference implementation runs tests one after another, by module path and then in source order, each on a 64 MiB stack like `main` (D-596). A toolchain with debug assertions counts the live objects before and after each passing test, and a difference fails that test with the message of the leak check ([§10.10](10-concurrency.md#1010-program-entry-and-exit)) (D-458, D-541).
 
-The standard library's `test` blocks sit next to the code they test, in its source files. A build of a user package neither checks them nor compiles them, and the warnings of [§13.8](#138-diagnostics-and-warnings) ignore them. They are checked and run when the standard library itself is tested (D-479). `cheby` has no flag for this. _Note:_ the reference implementation tests the standard library with `cargo xtask test-std`, one module at a time, so a module that does not build does not hide the results of the others (D-542). It checks the standard library through an in-memory package `std_self_test` whose root module imports every shipped std module, and while its tests run `env::program_name()` returns `std_self_test` (D-599).
+The standard library's `test` blocks sit next to the code they test, in its source files. A build of a user package neither checks them nor compiles them, and the warnings of [§13.8](#138-diagnostics-and-warnings) ignore them. They are checked and run when the standard library itself is tested (D-479). `cheby` has no flag for this. _Note:_ the reference implementation tests the standard library with `cargo xtask test-std`, one module at a time, so a module that does not build does not hide the results of the others (D-542). It checks the standard library through an in-memory package `std_self_test` whose root module imports every shipped std module, and while its tests run `env::program_name()` returns `std_self_test` (D-599). Where its std tests live and how their helper items count as used is in the [stdlib README](../stdlib/README.md) (D-630, D-631).
 
 ## 13.7 Formatter
 
@@ -296,7 +315,7 @@ Diagnostics and other errors written to a terminal are colored, unless the user 
 
 A location is `path:line:column`. Lines and columns are counted from 1, and columns count Unicode code points. A byte-order mark is not counted. The path of a file in the package is relative to the package root and uses `/` on every platform (D-421, D-443). A file of the standard library is shown as `std/` followed by its module path, such as `std/io.cheby` (D-450). A file of a dependency is shown as its package's URL in the canonical form of [§13.4](#134-dependencies-and-lockfile), then `@` and the package's version, then the file's path relative to that package's root, such as `github.com/example/cheby-json@1.2.0/src/decode.cheby:4:7`. The version is the `version` in the dependency's own `cheby.toml` (D-468).
 
-A type in a diagnostic is written as users write it at that place: prelude types and the current module's own types by their bare names, such as `Option<Int>`, other types qualified with the last segment of their module path, such as `map::Map<String, Int>`, and type parameters by their names (D-463).
+A type in a diagnostic is written as users write it at that place: prelude types and the current module's own types by their bare names, such as `Option<Int>`, other types qualified with the last segment of their module path, such as `map::Map<String, Int>`, and type parameters by their names (D-463). In the REPL, a stale type is followed by ` (stale)` ([§13.5.5](#1355-prompt-output-and-standard-streams)) (D-626).
 
 The layout follows rustc in its details (D-443):
 
@@ -387,7 +406,7 @@ Type-checking a module needs only the interfaces of the modules it depends on, n
 
 ### 13.12.2 Units of compilation
 
-The module, one source file, is the unit of compilation, caching and parallelism (D-248). Modules are compiled in the order of the import graph, and independent modules in parallel. Within a module, type-checking and code generation run per function, in parallel, apart from a few per-module steps such as borrowing inference and per-type layout tables (D-263).
+The module, one source file, is the unit of compilation, caching and parallelism (D-248). Modules are compiled in the order of the import graph, and independent modules in parallel. Within a module, type-checking and code generation run per function, in parallel, apart from a few per-module steps such as borrowing inference and per-type layout tables (D-263). Results are taken in a fixed order, so diagnostics and generated code are the same for any number of threads (D-264). _Note:_ in M1 the reference implementation lowers each module to MIR in parallel and then compiles the functions of each batch in parallel, taking the results in build order and declaration order. When several fail, it reports the error of the first one in that order (D-632).
 
 ### 13.12.3 Interface artifacts and recompilation
 

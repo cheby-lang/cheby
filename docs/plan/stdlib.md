@@ -79,5 +79,5 @@ A module is done when:
 1. its spec file in `docs/stdlib/` is reviewed and its decisions are in the log,
 2. it is implemented on every target whose milestone has started,
 3. every function has a doc comment with at least one example, which `cheby test` runs from M5 on (D-197),
-4. it has unit tests in `test` blocks next to its code in `std/`, which user builds skip (D-479) and `cargo xtask test-std` runs (D-542), and kernel property tests where it has kernels ([testing.md](testing.md#3-unit-and-property-tests)),
+4. it has unit tests in `test` blocks next to its code in `std/`, which user builds skip (D-479) and `cargo xtask test-std` runs (D-542), among them every test of its spec file, in its own module or in one that imports it, with every helper item named by a written path (D-630, D-631), and kernel property tests where it has kernels ([testing.md](testing.md#3-unit-and-property-tests)),
 5. `cheby doc` output matches the spec file module by module (D-220), checked from M5 on.

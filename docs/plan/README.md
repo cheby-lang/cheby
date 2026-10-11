@@ -57,7 +57,7 @@ M5 is listed as a milestone so it has exit criteria, but its work starts as soon
 
 ## Plan decisions
 
-Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-plan), D-284 onward in [M0 foundation](../decisions/LOG.md#2026-10-04-m0-foundation), D-418 onward in [Diagnostics](../decisions/LOG.md#2026-10-06-diagnostics), and the plan-level ones of [M1 syntax layer](../decisions/LOG.md#2026-10-07-m1-syntax-layer), [M1 vertical slice](../decisions/LOG.md#2026-10-07-m1-vertical-slice), [Open items](../decisions/LOG.md#2026-10-07-open-items), [M1 front end](../decisions/LOG.md#2026-10-10-m1-front-end), [M1 back-end plan](../decisions/LOG.md#2026-10-10-m1-back-end-plan), [M1 back end, wave 1](../decisions/LOG.md#2026-10-10-m1-back-end-wave-1), [M1 back end, wave 2](../decisions/LOG.md#2026-10-10-m1-back-end-wave-2), [M1 back end, wave 3](../decisions/LOG.md#2026-10-10-m1-back-end-wave-3) and [M1 back end, wave 4](../decisions/LOG.md#2026-10-11-m1-back-end-wave-4):
+Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-plan), D-284 onward in [M0 foundation](../decisions/LOG.md#2026-10-04-m0-foundation), D-418 onward in [Diagnostics](../decisions/LOG.md#2026-10-06-diagnostics), and the plan-level ones of [M1 syntax layer](../decisions/LOG.md#2026-10-07-m1-syntax-layer), [M1 vertical slice](../decisions/LOG.md#2026-10-07-m1-vertical-slice), [Open items](../decisions/LOG.md#2026-10-07-open-items), [M1 front end](../decisions/LOG.md#2026-10-10-m1-front-end), [M1 back-end plan](../decisions/LOG.md#2026-10-10-m1-back-end-plan), [M1 back end, wave 1](../decisions/LOG.md#2026-10-10-m1-back-end-wave-1), [M1 back end, wave 2](../decisions/LOG.md#2026-10-10-m1-back-end-wave-2), [M1 back end, wave 3](../decisions/LOG.md#2026-10-10-m1-back-end-wave-3), [M1 back end, wave 4](../decisions/LOG.md#2026-10-11-m1-back-end-wave-4) and [M1 back end, wave 5](../decisions/LOG.md#2026-10-11-m1-back-end-wave-5):
 
 | Decision  | Summary                                                                                             |
 | --------- | --------------------------------------------------------------------------------------------------- |
@@ -180,6 +180,13 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-620     | `CHEBY_DUMP_DIR` dump files, and the builds and outputs that `check-determinism` compares           |
 | D-622     | `-j` is global and sizes rayon's pool of workers with 256 MiB stacks                                |
 | D-623     | Ziv's loop stops at 2048 bits, and the fast phase reads generated tables                            |
+| D-627     | Session functions satisfy interfaces for session types through forwarders                           |
+| D-630     | A std spec test that needs a module importing its own lives in that module                          |
+| D-631     | Helper items of std tests are named by a written path in a test                                     |
+| D-632     | MIR lowering and code generation run in parallel and take results in a fixed order                  |
+| D-633     | No compiler pass recurses per element of a list pattern                                             |
+| D-634     | `cheby_rt_list_slice_owned` consumes a list at its last use and slices a unique one in place        |
+| D-635     | `CHEBY_RT_STATS` prints the runtime's counters, and `CHEBY_RT_POISON=0` turns off unit-test poison  |
 
 ## Open questions
 

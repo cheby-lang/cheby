@@ -323,7 +323,7 @@ impl Session {
     /// without running or keeping anything, and prints `<expr> : <type>`,
     /// the type of its final expression, as diagnostics write types. It
     /// takes an entry number, so its diagnostics have a place of their
-    /// own (GAP(repl-commands)). Only errors are shown.
+    /// own (D-624). Only errors are shown.
     ///
     /// # Errors
     ///
@@ -374,7 +374,7 @@ impl Session {
     /// were written at the end of that module of the package or the
     /// standard library, so its `priv` items and its imports are in scope,
     /// and its package's package-visible items are usable. `:module` alone
-    /// leaves it. Prints nothing when it succeeds (GAP(repl-commands)).
+    /// leaves it. Prints nothing when it succeeds (D-624).
     ///
     /// # Errors
     ///
@@ -633,9 +633,9 @@ impl Session {
             // The session runs natively (§13.5, the JIT): an entry is
             // checked for `native` only, so a native-only item of the
             // package is usable (D-606). That is also so in a package
-            // whose targets lack `native`: its own items do not exist on
-            // `native` and are E0067 at the prompt, while std and the
-            // session's definitions are usable (GAP(repl-targets)).
+            // whose targets lack `native`: its items that exist only on
+            // `js` are E0067 at the prompt, while its portable items, std
+            // and the session's definitions are usable (D-628).
             package_targets: Targets::only(Target::Native),
         };
         let checked = self.repl.check_entry(&input, shape)?;
@@ -795,7 +795,7 @@ impl Session {
     }
 
     /// The interfaces an entry is checked against while a module is
-    /// entered with `:module` (§13.5.3, GAP(repl-commands)): that module's
+    /// entered with `:module` (§13.5.3, D-624): that module's
     /// `priv` items are visible to the entry, which is a module of the
     /// local package (D-606). For a module of another package, the
     /// standard library, its package's package-visible items become
@@ -1093,7 +1093,7 @@ impl Session {
         Ok(())
     }
 
-    /// `:reload` (§13.5.3, D-098, D-547, GAP(repl-reload)): reads the
+    /// `:reload` (§13.5.3, D-098, D-547, D-625): reads the
     /// package's module files again. Each module whose text changed, each
     /// new module, and each module of the package that imports one of them
     /// is checked again as a new module, all or nothing; its items get new
@@ -1569,7 +1569,7 @@ struct Again {
 /// The path of the new version of a module that `:reload` makes:
 /// `app::prices` becomes `app::prices<r1>`, which no import can name, so
 /// its symbols never collide with the old version's (D-547,
-/// GAP(repl-reload)).
+/// D-625).
 fn reload_path(path: &ModulePath, generation: u32) -> ModulePath {
     let segments = path.segments();
     let mark = |segment: &str| format!("{segment}<r{generation}>");

@@ -73,7 +73,10 @@ test "get reads by position" {
 
 Fields that do not apply are left out. Every `cheby` block in this directory must parse with the tree-sitter grammar, as the examples do.
 
-The implementation keeps its `test` blocks in the standard library's source files, next to the code they test. A build of a user package neither checks nor runs them, and testing the standard library itself checks and runs them (§13.6, D-479).
+The implementation keeps its `test` blocks in the standard library's source files, next to the code they test. A build of a user package neither checks nor runs them, and testing the standard library itself checks and runs them (§13.6, D-479). Every test of this specification is among them (D-542):
+
+- A test of `std::M` that needs a module `N` which imports `M` lives in `N`, since imports between std modules must be acyclic (D-145). It goes under the comment "Tests of `std::M` that need this module." and keeps its name and body, with module prefixes adjusted. When two moved tests would share a name in `N`, each gets its module's name in front, as "int add is plus as a function" and "float add is plus as a function" in `std::list`. A test that needs `N` only to show or compare a builtin type goes to a module that already depends on that type's home module, so `nil.md`'s "Nil shows as Nil" lives in `std::result` (D-630).
+- A helper item of a test, such as a `priv` type, function or import, is named by a written path in a test. User builds skip the tests but still resolve their written paths, which count as uses, while a use through satisfaction does not count. So a helper used only through satisfaction is also named once, as `std::json`'s test "list encodes each element with its type's to_json" does with an extra `assert list(points) == array(points, to_json)`. Otherwise a user package that imports the module would get W0003 or W0004 in std (D-631).
 
 ## Conventions
 

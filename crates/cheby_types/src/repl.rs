@@ -233,7 +233,7 @@ pub struct SessionItem {
 
 /// A function of a session type's entry module through which the type
 /// satisfies interfaces with a session function of another entry (D-610,
-/// GAP(repl-satisfaction-forwarders)): §8.2 looks for a type's functions
+/// D-627): §8.2 looks for a type's functions
 /// in the module that declares it, and the prompt entries count as one
 /// module there. It has the target's signature and calls the target
 /// through its slot, so a redefinition with the same signature reaches it
@@ -954,7 +954,7 @@ fn stale_path(info: &ModuleInfo, id: ModuleId) -> ModuleInfo {
 
 /// `text` with every marked type of [`stale_path`] written with ` (stale)`
 /// after it (its type arguments included), as in `Shape (stale)` or
-/// `prices::Item<Int> (stale)` (§13.5.5, GAP(repl-stale-marker)), and the
+/// `prices::Item<Int> (stale)` (§13.5.5, D-626), and the
 /// marks removed elsewhere.
 fn mark_stale(text: &str) -> String {
     const MARK: usize = STALE_MARK.len_utf8();
@@ -1050,7 +1050,7 @@ fn ident_len(text: &str) -> usize {
 pub fn strip_session_paths(text: &str) -> String {
     const OPEN: &str = "<repl:";
     // A statements entry is checked as the body of a wrapper test; the
-    // diagnostics call it what it is (GAP(repl-diagnostic-names)).
+    // diagnostics call it what it is (D-629).
     let wrapper = format!("the test \"{BODY_TEST_NAME}\"");
     let marked = mark_stale(text).replace(&wrapper, "the entry");
     let text = marked.as_str();
@@ -1061,7 +1061,7 @@ pub fn strip_session_paths(text: &str) -> String {
         out.push_str(before);
         // An entry module named on its own, as in "`<repl:9>` has no
         // function": the entries count as one module, the session (D-610,
-        // GAP(repl-diagnostic-names)).
+        // D-629).
         if let Some(close) = from.find('>')
             && out.ends_with('`')
             && from

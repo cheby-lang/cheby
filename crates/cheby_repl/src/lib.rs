@@ -33,7 +33,7 @@ pub const PROMPT: &str = "> ";
 /// The prompt of a line that continues an entry.
 pub const CONTINUATION: &str = ". ";
 
-/// What `:help` prints (§13.5.3, GAP(repl-commands)).
+/// What `:help` prints (§13.5.3, D-624).
 pub const HELP: &str = "\
 Enter an expression to see its value and type, `let` or `let assert` to bind names \
 for later entries, a declaration (`fn`, `type`, a type alias, `interface`, `const`), \

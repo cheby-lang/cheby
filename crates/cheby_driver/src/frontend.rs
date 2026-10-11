@@ -198,7 +198,7 @@ impl Frontend {
     /// Drops the results [`check_reloaded`] added for `modules`, the
     /// versions of a `:reload` that was rejected: they leave the build
     /// order, so nothing compiles, imports or binds natives through them
-    /// (GAP(repl-reload)). Their ids and published interfaces stay, unused.
+    /// (D-625). Their ids and published interfaces stay, unused.
     pub fn forget_reloaded(&mut self, modules: &[ModuleId]) {
         self.order.retain(|m| !modules.contains(m));
         for &module in modules {
@@ -480,7 +480,7 @@ pub(crate) struct ReloadedModule<'a> {
     pub targets: Vec<ImportTarget>,
 }
 
-/// Resolves and checks a reloaded module (§13.5.3, GAP(repl-reload)), as
+/// Resolves and checks a reloaded module (§13.5.3, D-625), as
 /// the build checks a package module, publishes its interface, and adds
 /// its results to `front` (`checked`, `order`, its imports and native
 /// bindings); [`Frontend::natives`] does not change. `display` is the
