@@ -35,9 +35,12 @@
 //! IO failure: they return `Err((kind, message))` (D-484), with kind 1 not
 //! found, 2 permission denied, 3 invalid UTF-8 and 0 every other failure,
 //! and the operating system's message without Rust's ` (os error N)`
-//! suffix (D-573).
+//! suffix (D-573). A path that names a directory is kind 0 on every
+//! platform, although Windows refuses to open one with "access denied"
+//! (`docs/stdlib/io.md`).
 
 use std::io::{self, BufRead, Write};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::abi::{self, Word, sym};
@@ -159,6 +162,27 @@ fn io_err(error: &io::Error) -> Word {
     err_pair(kind_code(error), &os_message(error))
 }
 
+/// The `Err` pair of a failed operation on the file at `path`. Windows
+/// refuses to open a directory as a file with "access denied", but naming
+/// a directory is another failure, not `io::is_permission_denied`, on
+/// every platform (`docs/stdlib/io.md`).
+fn file_err(path: &str, error: &io::Error) -> Word {
+    let kind = match kind_code(error) {
+        KIND_PERMISSION_DENIED if Path::new(path).is_dir() => KIND_OTHER,
+        kind => kind,
+    };
+    err_pair(kind, &os_message(error))
+}
+
+/// `Ok(value)` for a successful operation on the file at `path`, the
+/// `Err` pair otherwise.
+fn lift_file(path: &str, outcome: io::Result<Word>) -> Word {
+    match outcome {
+        Ok(value) => values::ok(value),
+        Err(error) => file_err(path, &error),
+    }
+}
+
 /// `Ok(value)` for a successful operation, the `Err` pair otherwise.
 fn lift(outcome: io::Result<Word>) -> Word {
     match outcome {
@@ -248,9 +272,10 @@ pub extern "C" fn cheby_io_sys_read_line() -> Word {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_io_sys_read_file(path: Word) -> Word {
     // SAFETY: forwarded from the caller.
-    match std::fs::read(unsafe { str_arg(path) }) {
+    let path = unsafe { str_arg(path) };
+    match std::fs::read(path) {
         Ok(data) => text_result(&data, |text| text),
-        Err(error) => io_err(&error),
+        Err(error) => file_err(path, &error),
     }
 }
 
@@ -262,7 +287,8 @@ pub unsafe extern "C" fn cheby_io_sys_read_file(path: Word) -> Word {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_io_sys_read_file_bytes(path: Word) -> Word {
     // SAFETY: forwarded from the caller.
-    lift(std::fs::read(unsafe { str_arg(path) }).map(|data| values::bytes(&data)))
+    let path = unsafe { str_arg(path) };
+    lift_file(path, std::fs::read(path).map(|data| values::bytes(&data)))
 }
 
 /// `io::write_file`'s kernel: creates or replaces the file with `text`
@@ -275,7 +301,7 @@ pub unsafe extern "C" fn cheby_io_sys_read_file_bytes(path: Word) -> Word {
 pub unsafe extern "C" fn cheby_io_sys_write_file(path: Word, text: Word) -> Word {
     // SAFETY: forwarded from the caller.
     let (path, text) = unsafe { (str_arg(path), str_arg(text)) };
-    lift(std::fs::write(path, text).map(|()| values::nil()))
+    lift_file(path, std::fs::write(path, text).map(|()| values::nil()))
 }
 
 /// `io::write_file_bytes`'s kernel: creates or replaces the file with
@@ -288,7 +314,7 @@ pub unsafe extern "C" fn cheby_io_sys_write_file(path: Word, text: Word) -> Word
 pub unsafe extern "C" fn cheby_io_sys_write_file_bytes(path: Word, data: Word) -> Word {
     // SAFETY: forwarded from the caller.
     let (path, data) = unsafe { (str_arg(path), values::bytes_of(data)) };
-    lift(std::fs::write(path, data).map(|()| values::nil()))
+    lift_file(path, std::fs::write(path, data).map(|()| values::nil()))
 }
 
 /// One kernel: symbol, address, C parameter types and C result type.
@@ -664,13 +690,21 @@ mod tests {
         let bad = bad.to_str().unwrap();
         assert_eq!(read_file(bad).map_err(|e| e.0), Err(KIND_INVALID_DATA));
         assert_eq!(read_file_bytes(bad), Ok(b"f\xFF".to_vec()));
-        // A directory is another kind, with the OS's message and no
+        // A directory is another kind on every platform, although Windows
+        // says "access denied", with the OS's message and no
         // ` (os error N)`.
-        let (kind, message) = read_file(dir.to_str().unwrap()).unwrap_err();
+        let dir_path = dir.to_str().unwrap();
+        let (kind, message) = read_file(dir_path).unwrap_err();
         assert_eq!(kind, KIND_OTHER);
         assert!(
             !message.is_empty() && !message.contains("os error"),
             "{message}"
+        );
+        assert_eq!(read_file_bytes(dir_path).map_err(|e| e.0), Err(KIND_OTHER));
+        assert_eq!(write_file(dir_path, "x").map_err(|e| e.0), Err(KIND_OTHER));
+        assert_eq!(
+            write_file_bytes(dir_path, b"x").map_err(|e| e.0),
+            Err(KIND_OTHER)
         );
         // A path with U+0000 cannot name a file: another kind.
         assert_eq!(read_file("a\0b").map_err(|e| e.0), Err(KIND_OTHER));

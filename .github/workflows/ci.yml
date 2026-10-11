@@ -72,7 +72,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --workspace --all-targets --locked
       - run: cargo clippy --workspace --all-targets --locked
-      - run: cargo test --workspace --locked
+      - run: cargo test --workspace --locked --no-fail-fast
       - name: D-number coverage
         run: cargo xtask coverage
 
