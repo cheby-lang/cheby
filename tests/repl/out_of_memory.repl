@@ -1,0 +1,21 @@
+// @decisions: D-457, D-617
+> import std::string
+> const big: String = string::repeat("abc", 9_000_000_000_000_000_000)
+error[E0076]: evaluating the constant `big` used more than the memory limit of 1GiB
+ --> <repl:2>:1:7
+  |
+1 | const big: String = string::repeat("abc", 9_000_000_000_000_000_000)
+  |       ^^^ this constant is computed at compile time
+  |
+  = note: the limit counts the heap bytes that the evaluation keeps live at once
+  = help: compute less at compile time, or raise `memory-limit` in the `[const-eval]` table of `cheby.toml`
+
+> let count = 9_000_000_000_000_000_000
+> string::repeat("abc", count)
+panicked at <unknown location>:
+out of memory
+> string::pad_end("x", count, "😀")
+panicked at <unknown location>:
+out of memory
+> string::repeat("abc", 2)
+"abcabc" : String

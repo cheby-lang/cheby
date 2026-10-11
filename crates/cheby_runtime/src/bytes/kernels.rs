@@ -6,9 +6,9 @@
 //! place.
 
 use crate::abi::Word;
-use crate::object::to_u64;
+use crate::object::{ptr_to_word, to_u64};
 use crate::panic::fatal;
-use crate::{list, rc, string, values};
+use crate::{alloc, list, rc, string, values};
 
 /// The bytes of a borrowed `Bytes` argument.
 ///
@@ -99,10 +99,26 @@ pub extern "C" fn cheby_bytes_new() -> Word {
 pub unsafe extern "C" fn cheby_bytes_from_list(values: Word) -> Word {
     // SAFETY: a live list, borrowed for the call; its elements are `U8`
     // words, always tagged.
-    let data: Vec<u8> = unsafe { list::iter(values) }
-        .map(values::word_to_u8)
-        .collect();
-    string::new_bytes(&data)
+    let elements = unsafe { list::iter(values) };
+    // The result is written straight into its object, in chunks of a fixed
+    // size, so no Rust-side copy of it is ever held (D-617).
+    let mut out = ptr_to_word(string::alloc_bytes(to_u64(elements.len())));
+    let mut chunk = [0_u8; 1024];
+    let mut used = 0_usize;
+    for byte in elements.map(values::word_to_u8) {
+        if used == chunk.len() {
+            // SAFETY: `out` is the unique `Bytes` built here; the chunk
+            // lies outside it.
+            out = unsafe { string::append(out, &chunk) };
+            used = 0;
+        }
+        if let Some(slot) = chunk.get_mut(used) {
+            *slot = byte;
+        }
+        used = used.saturating_add(1);
+    }
+    // SAFETY: as above.
+    unsafe { string::append(out, chunk.get(..used).unwrap_or_default()) }
 }
 
 /// `bytes::from_string`: the UTF-8 encoding of `text`, with no byte-order
@@ -240,7 +256,7 @@ pub unsafe extern "C" fn cheby_bytes_concat(parts: Word) -> Word {
             to_u64(piece.len())
         })
         .try_fold(0_u64, u64::checked_add)
-        .unwrap_or_else(|| fatal(format_args!("a `Bytes` would be too large to allocate")));
+        .unwrap_or_else(|| alloc::out_of_memory(u64::MAX));
     if count == 1
         && let Some((only, _)) = pieces().next()
     {

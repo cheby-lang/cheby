@@ -11,7 +11,7 @@ use cranelift_codegen::ir::{
     self, BlockArg, ExtFuncData, ExternalName, FuncRef, GlobalValue, GlobalValueData, InstBuilder,
     MemFlagsData, SigRef, Signature, TrapCode, UserExternalName, Value, types,
 };
-use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Switch, Variable};
+use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Switch};
 use cranelift_module::{DataId, FuncId};
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -64,13 +64,14 @@ pub fn translate(
         func,
         decls,
         opts,
-        vars: Vec::new(),
+        values: Vec::new(),
         blocks: Vec::new(),
         ctx: None,
         func_refs: FxHashMap::default(),
         data: FxHashMap::default(),
         sigs: FxHashMap::default(),
         panics: Vec::new(),
+        panic_blocks: FxHashMap::default(),
     };
     t.run()?;
     t.b.seal_all_blocks();
@@ -84,7 +85,15 @@ pub(crate) struct Translator<'a, 'f> {
     pub(crate) func: &'a Function,
     pub(crate) decls: &'a Decls,
     pub(crate) opts: &'a CodegenOptions,
-    vars: Vec<Variable>,
+    /// Each MIR local's CLIF value, set where the local is defined. MIR is
+    /// SSA with block parameters (every local defined once, every use
+    /// dominated by its definition), so a local is one CLIF value and
+    /// translation needs no `Variable`s: Cranelift's SSA construction
+    /// costs memory per variable and block, which made a function of `n`
+    /// locals spread over `n` blocks quadratic (a list literal of `n`
+    /// elements).
+    values: Vec<Option<Value>>,
+    /// Each MIR block's CLIF block, by MIR block index.
     blocks: Vec<ir::Block>,
     ctx: Option<Value>,
     func_refs: FxHashMap<FuncId, FuncRef>,
@@ -94,6 +103,9 @@ pub(crate) struct Translator<'a, 'f> {
     /// checked operations and filled after the function's blocks, one per
     /// kind and location.
     panics: Vec<(PanicKind, StrId, ir::Block)>,
+    /// The block of each entry of `panics`, by kind and location, so a
+    /// function with many checked operations finds them in constant time.
+    panic_blocks: FxHashMap<(PanicKind, StrId), ir::Block>,
 }
 
 /// Where a call goes: a known function, or an address with a signature.
@@ -110,6 +122,40 @@ fn trap(code: u8) -> Result<TrapCode, CodegenError> {
     TrapCode::user(code).ok_or_else(|| CodegenError::ice("invalid trap code"))
 }
 
+/// The blocks reachable from `bb0`, in reverse postorder: every block
+/// after its dominators. Successors are visited last to first, so the
+/// order follows the source (a branch's `then` before its `else`).
+/// Iterative, as a long function nests deeply.
+fn reverse_postorder(func: &Function) -> Result<Vec<BlockId>, CodegenError> {
+    let count = func.blocks.len();
+    let mut visited = vec![false; count];
+    let mut post = Vec::with_capacity(count);
+    // Each frame: a block and its successors not yet visited; `pop`
+    // takes the last one first.
+    let mut stack: Vec<(BlockId, Vec<BlockId>)> = Vec::new();
+    let mut enter = |id: BlockId, stack: &mut Vec<(BlockId, Vec<BlockId>)>| {
+        let seen = usize::try_from(id.as_u32())
+            .ok()
+            .and_then(|n| visited.get_mut(n))
+            .ok_or_else(|| CodegenError::ice(format!("unknown MIR block {id:?}")))?;
+        if !std::mem::replace(seen, true) {
+            stack.push((id, func.block(id)?.term.successors()));
+        }
+        Ok::<_, CodegenError>(())
+    };
+    enter(BlockId::from_u32(0), &mut stack)?;
+    while let Some((id, succs)) = stack.last_mut() {
+        if let Some(next) = succs.pop() {
+            enter(next, &mut stack)?;
+        } else {
+            post.push(*id);
+            stack.pop();
+        }
+    }
+    post.reverse();
+    Ok(post)
+}
+
 /// `bits` truncated to the width of `ty`, as Cranelift wants an `iconst`
 /// immediate of a narrow type.
 pub(crate) fn truncate(bits: u64, ty: ir::Type) -> i64 {
@@ -124,24 +170,28 @@ pub(crate) fn truncate(bits: u64, ty: ir::Type) -> i64 {
 
 impl Translator<'_, '_> {
     fn run(&mut self) -> Result<(), CodegenError> {
-        for decl in &self.func.locals {
-            let var = self.b.declare_var(repr_type(decl.repr));
-            self.vars.push(var);
-        }
-        for _ in &self.func.blocks {
-            let block = self.b.create_block();
-            self.blocks.push(block);
-        }
-        self.entry()?;
-        for (id, block) in self.func.blocks.iter_enumerated() {
-            let cl = self.block(id)?;
-            self.b.switch_to_block(cl);
+        self.values = vec![None; self.func.locals.len()];
+        // CLIF block `n` is MIR block `n`, its parameters created up front
+        // so a jump may precede its target's translation.
+        for block in &self.func.blocks {
+            let cl = self.b.create_block();
             for &param in &block.params {
                 let ty = repr_type(self.func.local(param)?.repr);
                 let value = self.b.append_block_param(cl, ty);
-                let var = self.var(param)?;
-                self.b.def_var(var, value);
+                self.bind(param, value)?;
             }
+            self.blocks.push(cl);
+        }
+        self.entry()?;
+        // Reverse postorder translates a definition before its uses, as a
+        // block's dominators come before it. Unreachable blocks are never
+        // translated (their CLIF blocks stay out of the layout): no
+        // reachable block jumps to one, and their uses need not be
+        // dominated.
+        for id in reverse_postorder(self.func)? {
+            let block = self.func.block(id)?;
+            let cl = self.block(id)?;
+            self.b.switch_to_block(cl);
             for stmt in &block.stmts {
                 self.stmt(stmt)?;
             }
@@ -171,8 +221,7 @@ impl Translator<'_, '_> {
         }
         self.ctx = Some(ctx);
         for (&local, &value) in self.func.params.iter().zip(rest) {
-            let var = self.var(local)?;
-            self.b.def_var(var, value);
+            self.bind(local, value)?;
         }
         if let FnKey::Trampoline(_) = self.func.key {
             // D-526: the runtime lends a trampoline its closure, but MIR
@@ -217,12 +266,38 @@ impl Translator<'_, '_> {
             .ok_or_else(|| CodegenError::ice("`ctx` used before the entry block"))
     }
 
-    pub(crate) fn var(&self, local: Local) -> Result<Variable, CodegenError> {
+    /// The value of `local`, defined by a block already translated.
+    pub(crate) fn local(&self, local: Local) -> Result<Value, CodegenError> {
         usize::try_from(local.as_u32())
             .ok()
-            .and_then(|n| self.vars.get(n))
-            .copied()
-            .ok_or_else(|| CodegenError::ice(format!("unknown MIR local {local:?}")))
+            .and_then(|n| self.values.get(n))
+            .ok_or_else(|| CodegenError::ice(format!("unknown MIR local {local:?}")))?
+            .ok_or_else(|| {
+                CodegenError::ice(format!(
+                    "MIR local {local:?} used where its definition does not dominate"
+                ))
+            })
+    }
+
+    /// Makes `value` the value of `local`, which has no value yet and is
+    /// declared with `value`'s type.
+    fn bind(&mut self, local: Local, value: Value) -> Result<(), CodegenError> {
+        let ty = repr_type(self.func.local(local)?.repr);
+        if self.b.func.dfg.value_type(value) != ty {
+            return Err(CodegenError::ice(format!(
+                "MIR local {local:?} of type {ty} defined by a value of another type"
+            )));
+        }
+        let slot = usize::try_from(local.as_u32())
+            .ok()
+            .and_then(|n| self.values.get_mut(n))
+            .ok_or_else(|| CodegenError::ice(format!("unknown MIR local {local:?}")))?;
+        if slot.replace(value).is_some() {
+            return Err(CodegenError::ice(format!(
+                "MIR local {local:?} is defined more than once"
+            )));
+        }
+        Ok(())
     }
 
     fn block(&self, block: BlockId) -> Result<ir::Block, CodegenError> {
@@ -235,12 +310,13 @@ impl Translator<'_, '_> {
 
     /// The cold block that panics with `kind` at `loc`.
     pub(crate) fn panic_block(&mut self, kind: PanicKind, loc: StrId) -> ir::Block {
-        if let Some(&(_, _, block)) = self.panics.iter().find(|&&(k, l, _)| k == kind && l == loc) {
+        if let Some(&block) = self.panic_blocks.get(&(kind, loc)) {
             return block;
         }
         let block = self.b.create_block();
         self.b.set_cold_block(block);
         self.panics.push((kind, loc, block));
+        self.panic_blocks.insert((kind, loc), block);
         block
     }
 
@@ -259,8 +335,7 @@ impl Translator<'_, '_> {
                 let v = self
                     .rvalue(value)?
                     .ok_or_else(|| CodegenError::ice("a void call assigned to a local"))?;
-                let var = self.var(*dst)?;
-                self.b.def_var(var, v);
+                self.bind(*dst, v)?;
             }
             Stmt::Eval(value) => {
                 if self.rvalue(value)?.is_some() {
@@ -268,13 +343,11 @@ impl Translator<'_, '_> {
                 }
             }
             Stmt::Dup(local) => {
-                let var = self.var(*local)?;
-                let v = self.b.use_var(var);
+                let v = self.local(*local)?;
                 self.dup(v)?;
             }
             Stmt::Drop(local) => {
-                let var = self.var(*local)?;
-                let v = self.b.use_var(var);
+                let v = self.local(*local)?;
                 self.drop_value(v)?;
             }
         }
@@ -316,8 +389,7 @@ impl Translator<'_, '_> {
             }
             Rvalue::CallRuntime { func, args } => return self.call_helper(*func, args),
             Rvalue::ReadLayout { base } => {
-                let var = self.var(*base)?;
-                let base = self.b.use_var(var);
+                let base = self.local(*base)?;
                 let id = self.layout_id(base);
                 self.b.ins().ireduce(types::I32, id)
             }
@@ -368,10 +440,7 @@ impl Translator<'_, '_> {
 
     pub(crate) fn operand(&mut self, op: &Operand) -> Result<Value, CodegenError> {
         match op {
-            Operand::Local(local) => {
-                let var = self.var(*local)?;
-                Ok(self.b.use_var(var))
-            }
+            Operand::Local(local) => self.local(*local),
             Operand::Const(c) => self.constant(c),
         }
     }
@@ -558,8 +627,7 @@ impl Translator<'_, '_> {
             Callee::Indirect(closure) => {
                 // The uniform convention (D-453): the code word
                 // `addr | 1` at offset 8, the closure itself as `self`.
-                let var = self.var(*closure)?;
-                let closure = self.b.use_var(var);
+                let closure = self.local(*closure)?;
                 let word = self.b.ins().load(
                     WORD,
                     MemFlagsData::trusted(),

@@ -30,9 +30,11 @@
 //!
 //! On Windows the run trials and the `::test` trials are ignored until M6
 //! (D-545, `cheby_test_support::platform`): M1 is judged on Linux and
-//! macOS. A `skip-run` example's trial only runs `cheby check`, which
-//! D-545 does not name, so it stays; its result is report-only before its
-//! milestone anyway.
+//! macOS. So is every `skip-run` example's trial, which only runs `cheby
+//! check`: `cheby check` evaluates the package's constants with the JIT
+//! once the front end reports no error, and 020 passes the front end. 030
+//! and 031 stop in the front end and build no JIT, but are ignored with
+//! it: their result is report-only before their milestone anyway.
 
 use std::path::Path;
 use std::process::{Command, ExitCode};
@@ -60,7 +62,7 @@ fn main() -> ExitCode {
     };
     let bless = bless_enabled();
     if let Some(reason) = platform::run_skip_reason() {
-        eprintln!("conformance harness: runs are ignored: {reason}");
+        eprintln!("conformance harness: runs and checks are ignored: {reason}");
     }
 
     let trials = examples
@@ -69,9 +71,10 @@ fn main() -> ExitCode {
             let expectation = check_only_expectation(&ex, current);
             let verdicts = verdicts.clone();
             let name = ex.name.clone();
-            // D-545: a run is skipped where programs do not run; a
-            // `skip-run` example's trial only checks.
-            let skipped = platform::runs_skipped() && !ex.config.skip_run;
+            // D-545: a run is skipped where programs do not run, and so is
+            // a `skip-run` example's check, which builds a JIT for its
+            // constants.
+            let skipped = platform::runs_skipped();
             let test_trial = test_trial(ex.clone(), current, verdicts.clone());
             let run_trial = Trial::test(name.clone(), move || {
                 let result = if bless && expectation != Expectation::Fail {

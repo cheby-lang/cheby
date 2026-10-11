@@ -1371,6 +1371,10 @@ mod tests {
         test \"used by a test\" {\n  assert used_by_test() == 1\n}\n";
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+    )]
     fn package_visible_items_that_nothing_uses_warn() {
         let dir = package("unused", &[("main.cheby", MAIN), ("shapes.cheby", SHAPES)]);
         assert_eq!(
@@ -1385,6 +1389,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+    )]
     fn cheby_run_skips_the_package_pass() {
         let dir = package("run", &[("main.cheby", MAIN), ("shapes.cheby", SHAPES)]);
         let output = match prepare_run(&dir, RunOptions::default()).unwrap() {
@@ -1399,6 +1407,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+    )]
     fn module_local_warnings_also_come_in_cheby_run() {
         let main = "//! Root.\n\nfn main() {\n  let unused = 1\n}\n";
         let dir = package("local_in_run", &[("main.cheby", main)]);
@@ -1412,6 +1424,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+    )]
     fn uses_across_modules_count() {
         let util = "//! Util.\n\nfn helper() -> Int {\n  1\n}\n\nconst limit: Int = 2\n\n\
                     type Point {\n  Point(Int),\n}\n";

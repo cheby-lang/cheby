@@ -6,24 +6,39 @@
 //! each entry's whole debug text (D-344, D-382): an entry's text is
 //! collected in a buffer of its own, and the sorted group is written when
 //! its last entry is done, still without recursion.
+//!
+//! The walk holds no Rust-side copy of the text that grows with the data
+//! (D-617): `String` and `Bytes` values are escaped into the output in
+//! chunks of a fixed size, and the worklists and the text of sorted groups
+//! are scratch buffers ([`crate::alloc::scratch`]), which constant
+//! evaluation's memory limit counts and whose growth the system may refuse
+//! without ending the process.
 
 use std::borrow::Cow;
-use std::fmt::Write as _;
+use std::fmt;
 
 use super::hooks;
 use super::raw::{Raw, View, view};
 use crate::abi::Word;
+use crate::alloc::scratch::{ScratchString, ScratchVec};
 use crate::desc::{self, Shape};
 use crate::hamt::{self, Collection};
 use crate::layout::{FieldKind, LayoutInfo};
 use crate::object::{ptr_to_word, read_field, to_usize, word_to_ptr};
-use crate::string;
+use crate::{rc, string};
 
 /// One piece of output still to write.
 #[derive(Debug)]
 enum Piece {
     Text(Cow<'static, str>),
     Value(Word),
+    /// A borrowed `String`, written in double quotes with its escapes.
+    Quoted(Word),
+    /// A borrowed `Bytes`, written as `bytes::from_list([…])`.
+    ByteList(Word),
+    /// An owned `String` written as it is, then released: the text a
+    /// `debug` hook returned.
+    Owned(Word),
     /// Starts a group of items written in the order of their text.
     SortedStart,
     /// Starts one item of the innermost sorted group.
@@ -49,7 +64,7 @@ pub enum SortItem {
 /// `debug` function emits its text and its children, in order.
 #[derive(Debug, Default)]
 pub struct Printer {
-    pending: Vec<Piece>,
+    pending: ScratchVec<Piece>,
 }
 
 impl Printer {
@@ -81,8 +96,8 @@ impl Printer {
     /// Emits the items separated by `, `, sorted by each item's whole debug
     /// text (D-344, D-382), compared as UTF-8 bytes, which is code point
     /// order; a `Map` entry's text is that of the tuple `(key, value)`
-    /// (D-587). Items with the same text keep their
-    /// order, which cannot show, since their text is the same.
+    /// (D-587). Items with the same text may come in any order, which
+    /// cannot show, since their text is the same.
     pub fn sorted(&mut self, items: impl IntoIterator<Item = SortItem>) {
         self.pending.push(Piece::SortedStart);
         for item in items {
@@ -110,7 +125,54 @@ trait Sink {
 
 impl Sink for String {
     fn put(&mut self, text: &str) {
+        // The host's own text, outside any memory limit; a growth the
+        // system refuses still ends as any allocation that cannot be
+        // served.
+        if self.try_reserve(text.len()).is_err() {
+            crate::alloc::out_of_memory(u64::try_from(text.len()).unwrap_or(u64::MAX));
+        }
         self.push_str(text);
+    }
+}
+
+/// Text written to a sink in chunks of at most [`Chunked::SIZE`] bytes,
+/// through a buffer of that fixed size: the escaped text of a long
+/// `String` or `Bytes` is never held whole.
+struct Chunked<'a> {
+    buffer: String,
+    flush: &'a mut dyn FnMut(&str),
+}
+
+impl<'a> Chunked<'a> {
+    /// The size of a chunk, in bytes.
+    const SIZE: usize = 1024;
+
+    fn new(flush: &'a mut dyn FnMut(&str)) -> Self {
+        Self {
+            buffer: String::with_capacity(Self::SIZE),
+            flush,
+        }
+    }
+
+    /// Writes what is left.
+    fn finish(mut self) {
+        if !self.buffer.is_empty() {
+            (self.flush)(&self.buffer);
+            self.buffer.clear();
+        }
+    }
+}
+
+impl fmt::Write for Chunked<'_> {
+    fn write_str(&mut self, text: &str) -> fmt::Result {
+        // Every piece written here is a few bytes: one code point or one
+        // escape.
+        if self.buffer.len().saturating_add(text.len()) > Self::SIZE {
+            (self.flush)(&self.buffer);
+            self.buffer.clear();
+        }
+        self.buffer.push_str(text);
+        Ok(())
     }
 }
 
@@ -173,7 +235,7 @@ pub unsafe fn debug_object(word: Word) -> Word {
 ///
 /// As for [`debug`].
 unsafe fn walk(word: Word, out: &mut dyn Sink) {
-    let mut stack = vec![Piece::Value(word)];
+    let mut stack = ScratchVec::of(Piece::Value(word));
     let mut printer = Printer::default();
     let mut ropes = Ropes::default();
     while let Some(piece) = stack.pop() {
@@ -182,12 +244,38 @@ unsafe fn walk(word: Word, out: &mut dyn Sink) {
             Piece::Value(word) => {
                 // SAFETY: every word on the stack is borrowed from `word`.
                 unsafe { step(word, &mut printer) };
-                stack.extend(printer.pending.drain(..).rev());
+                stack.push_reversed(&mut printer.pending);
             }
-            Piece::SortedStart => ropes.open_groups.push(Vec::new()),
+            Piece::Quoted(text) => {
+                // SAFETY: a live `String` borrowed from `word`, which
+                // holds UTF-8.
+                let text = unsafe { string::as_str_unchecked(text) }.unwrap_or_default();
+                let mut put = |chunk: &str| ropes.put(out, chunk);
+                let mut chunked = Chunked::new(&mut put);
+                write_string(&mut chunked, text);
+                chunked.finish();
+            }
+            Piece::ByteList(data) => {
+                // SAFETY: a live `Bytes` borrowed from `word`.
+                let data = unsafe { string::text_bytes(data) }.unwrap_or_default();
+                let mut put = |chunk: &str| ropes.put(out, chunk);
+                let mut chunked = Chunked::new(&mut put);
+                write_bytes(&mut chunked, data);
+                chunked.finish();
+            }
+            Piece::Owned(text) => {
+                // SAFETY: the walk owns this live `String`; it is released
+                // once written and never read again.
+                unsafe {
+                    let bytes = string::text_bytes(text).unwrap_or_default();
+                    ropes.put(out, &String::from_utf8_lossy(bytes));
+                    rc::drop(text);
+                }
+            }
+            Piece::SortedStart => ropes.open_groups.push(ScratchVec::new()),
             Piece::ItemStart => {
                 ropes.open_items.push(ropes.items.len());
-                ropes.items.push(Vec::new());
+                ropes.items.push(ScratchVec::new());
             }
             Piece::ItemEnd => {
                 if let (Some(item), Some(group)) =
@@ -220,15 +308,15 @@ enum Seg {
 /// plus the sorting, whatever the nesting depth (plan §0, deep data).
 #[derive(Debug, Default)]
 struct Ropes {
-    arena: String,
+    arena: ScratchString,
     /// The segments of every item, open or finished.
-    items: Vec<Vec<Seg>>,
+    items: ScratchVec<ScratchVec<Seg>>,
     /// The items of every finished group, sorted.
-    groups: Vec<Vec<usize>>,
+    groups: ScratchVec<ScratchVec<usize>>,
     /// The items being printed, innermost last.
-    open_items: Vec<usize>,
+    open_items: ScratchVec<usize>,
     /// The finished items of each open group, innermost last.
-    open_groups: Vec<Vec<usize>>,
+    open_groups: ScratchVec<ScratchVec<usize>>,
 }
 
 impl Ropes {
@@ -243,6 +331,9 @@ impl Ropes {
             return;
         };
         let start = self.arena.len();
+        // The arena holds the text of sorted groups before it reaches
+        // `out`, outside the objects the domain counts: a scratch buffer,
+        // which the memory limit counts (D-617).
         self.arena.push_str(text);
         let end = self.arena.len();
         match segs.last_mut() {
@@ -255,7 +346,9 @@ impl Ropes {
     /// adds it to the innermost open item, or writes it to `out`.
     fn end_group(&mut self, out: &mut dyn Sink) {
         let mut members = self.open_groups.pop().unwrap_or_default();
-        members.sort_by(|&a, &b| self.compare(a, b));
+        // An unstable sort needs no buffer; items with the same text may
+        // swap, which cannot show.
+        members.sort_unstable_by(|&a, &b| self.compare(a, b));
         let group = self.groups.len();
         self.groups.push(members);
         if let Some(segs) = self
@@ -404,16 +497,9 @@ unsafe fn step(word: Word, p: &mut Printer) {
         View::U64(value) => p.text_owned(value.to_string()),
         View::Float(value) => p.text_owned(float_text(value)),
         View::F32(value) => p.text_owned(f32_text(value)),
-        View::String(bytes) => {
-            let mut text = String::with_capacity(bytes.len().saturating_add(2));
-            write_string(&mut text, &String::from_utf8_lossy(bytes));
-            p.text_owned(text);
-        }
-        View::Bytes(bytes) => {
-            let mut text = String::with_capacity(bytes.len().saturating_mul(6));
-            write_bytes(&mut text, bytes);
-            p.text_owned(text);
-        }
+        // Escaped as they are written, in chunks (D-617).
+        View::String(_) => p.pending.push(Piece::Quoted(word)),
+        View::Bytes(_) => p.pending.push(Piece::ByteList(word)),
         View::Tuple(fields) => {
             p.text("(");
             p.separated(fields);
@@ -425,7 +511,8 @@ unsafe fn step(word: Word, p: &mut Printer) {
                 // A type with hooks prints the text of its `debug` hook,
                 // as it is (D-342, D-345).
                 // SAFETY: a live value of a type with these hooks.
-                p.text_owned(unsafe { hooks::debug_text(hooks, word) });
+                p.pending
+                    .push(Piece::Owned(unsafe { hooks::debug_text(hooks, word) }));
             } else {
                 ctor(word, info, p);
             }
@@ -457,7 +544,7 @@ unsafe fn step(word: Word, p: &mut Printer) {
 ///
 /// `word` is a live map or set root.
 unsafe fn hashed_collection(word: Word, collection: Collection, p: &mut Printer) {
-    let mut entries = Vec::new();
+    let mut entries = ScratchVec::new();
     // SAFETY: forwarded from the caller; the entries are borrowed from the
     // collection, which outlives the walk.
     unsafe {
@@ -472,7 +559,7 @@ unsafe fn hashed_collection(word: Word, collection: Collection, p: &mut Printer)
         Collection::Map => "map::from_list([",
         Collection::Set => "set::from_list([",
     });
-    p.sorted(entries);
+    p.sorted(entries.drain());
     p.text("])");
 }
 
@@ -554,35 +641,36 @@ fn raw_text(raw: Raw) -> String {
 /// needs to read back as the same text (D-531): `\"`, `\\`, `\n`, `\t`,
 /// `\r`, `\{`, and `\u{…}` for every other control character, in
 /// lower-case hex without leading zeros (D-557).
-pub(super) fn write_string(out: &mut String, text: &str) {
-    out.push('"');
+/// Writes one code point or one escape at a time, as [`Chunked`] needs.
+fn write_string(out: &mut impl fmt::Write, text: &str) {
+    out.write_char('"').ok();
     for c in text.chars() {
         match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\t' => out.push_str("\\t"),
-            '\r' => out.push_str("\\r"),
-            '{' => out.push_str("\\{"),
-            c if c.is_control() => {
-                write!(out, "\\u{{{:x}}}", u32::from(c)).ok();
-            }
-            c => out.push(c),
+            '"' => out.write_str("\\\""),
+            '\\' => out.write_str("\\\\"),
+            '\n' => out.write_str("\\n"),
+            '\t' => out.write_str("\\t"),
+            '\r' => out.write_str("\\r"),
+            '{' => out.write_str("\\{"),
+            c if c.is_control() => write!(out, "\\u{{{:x}}}", u32::from(c)),
+            c => out.write_char(c),
         }
+        .ok();
     }
-    out.push('"');
+    out.write_char('"').ok();
 }
 
-/// `Bytes` as `bytes::from_list([0x66, 0x6f])` (D-388).
-fn write_bytes(out: &mut String, bytes: &[u8]) {
-    out.push_str("bytes::from_list([");
+/// `Bytes` as `bytes::from_list([0x66, 0x6f])` (D-388), one byte at a
+/// time.
+fn write_bytes(out: &mut impl fmt::Write, bytes: &[u8]) {
+    out.write_str("bytes::from_list([").ok();
     for (index, byte) in bytes.iter().enumerate() {
         if index > 0 {
-            out.push_str(", ");
+            out.write_str(", ").ok();
         }
         write!(out, "0x{byte:02x}").ok();
     }
-    out.push_str("])");
+    out.write_str("])").ok();
 }
 
 /// The text of a `Float` (§3.3.6), from `std::float`'s kernel.

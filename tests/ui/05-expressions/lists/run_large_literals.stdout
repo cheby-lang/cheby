@@ -1,0 +1,4 @@
+numbers: 400, total 79800, first Some(0), last Some(399)
+computed: 150, first Some(400), last Some(549)
+words: 100, last Some("w400"), word w400
+map: 100, k99 Some(99)

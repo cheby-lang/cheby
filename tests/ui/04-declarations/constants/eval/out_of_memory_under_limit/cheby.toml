@@ -1,0 +1,6 @@
+name = "app"
+version = "0.1.0"
+targets = ["native"]
+
+[const-eval]
+memory-limit = "134217728GiB"

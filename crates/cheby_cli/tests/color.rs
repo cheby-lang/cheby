@@ -2,6 +2,13 @@
 //! the same text as with `--color=never`, plus SGR escapes, on every UI
 //! test and every example. And the environment decides `auto` as
 //! `src/color.rs` documents.
+//!
+//! `cheby check` evaluates constants with the JIT once the front end
+//! reports no error, so on Windows the checks of such packages are skipped
+//! until M6 (D-545): the examples, and the UI tests that the UI harness
+//! ignores there too ([`ui::UiTest::builds_a_jit`]). The other UI tests
+//! and the test of quoted escapes, which stops in the front end, still
+//! run.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -9,8 +16,8 @@ use std::time::Duration;
 
 use cheby_diag::strip_colors;
 use cheby_test_support::process::{self, RunOutput};
-use cheby_test_support::repo_root;
 use cheby_test_support::ui::{self, Layout};
+use cheby_test_support::{platform, repo_root};
 
 const CHEBY: &str = env!("CARGO_BIN_EXE_cheby");
 const TMP: &str = env!("CARGO_TARGET_TMPDIR");
@@ -97,18 +104,26 @@ fn package(test: &ui::UiTest) -> PathBuf {
     dir
 }
 
-/// Every UI test: color adds escapes and changes nothing else.
+/// Every UI test: color adds escapes and changes nothing else. Where
+/// programs do not run, only the tests that build no JIT.
 #[test]
 fn ui_tests_strip_to_plain() {
     let tests = ui::all(&repo_root()).unwrap();
     assert_ne!(tests.len(), 0);
     for test in &tests {
+        if platform::runs_skipped() && test.builds_a_jit() {
+            continue;
+        }
         compare(&package(test), &test.name);
     }
 }
 
 /// Every example: color adds escapes and changes nothing else.
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
 fn examples_strip_to_plain() {
     let dir = repo_root().join("docs/examples");
     let mut examples: Vec<PathBuf> = std::fs::read_dir(&dir)
@@ -124,7 +139,9 @@ fn examples_strip_to_plain() {
 }
 
 /// Source text quoted in a message cannot write a terminal escape: an ESC
-/// in a native symbol shows as its control picture, colored or not.
+/// in a native symbol shows as its control picture, colored or not. The
+/// package stops in the front end (E0054), so it builds no JIT and runs on
+/// every platform.
 #[test]
 fn quoted_escapes_are_shown_as_pictures() {
     let dir = Path::new(TMP).join("color/quoted_escape");

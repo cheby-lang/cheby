@@ -729,6 +729,10 @@ fn main() {
     /// built under its own seed (D-535, D-538), so its key order, which
     /// `keys` records, is the same.
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+    )]
     fn a_constant_has_one_value_whichever_constant_forces_it() {
         let dir = package("forcing", "", FORCING);
         let (front, out) = front(&dir);
@@ -791,6 +795,10 @@ fn main() {
     /// two functions; the deadline interrupts it at the next function
     /// entry, and `cheby check` returns soon after.
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+    )]
     fn a_tiny_time_limit_stops_endless_constants() {
         for (name, body) in [
             ("self", "fn spin(n: Int) -> Int {\n  spin(n + 1)\n}\n"),
@@ -819,6 +827,10 @@ fn main() {
     /// allocate included; a constant that only churns through temporaries
     /// stays under it.
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+    )]
     fn a_tiny_memory_limit_stops_constants_that_hold_too_much() {
         let limit = "[const-eval]\nmemory-limit = \"256KiB\"\n";
         for (name, init) in [
@@ -877,6 +889,10 @@ fn main() {
     /// rebuild) and `cheby run` (`Roots::Main`, rebuilt with the process
     /// seed afterwards); only the maps' own seeds differ.
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+    )]
     fn check_and_run_give_constants_the_same_value() {
         let dir = package("keys_order", "", KEYS);
         let (front, out) = front(&dir);
@@ -914,6 +930,10 @@ fn main() {
     /// Plan §4.5: the determinism dumps hold the MIR of every unit, the
     /// CLIF and the debug text of every evaluated constant, sorted.
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+    )]
     fn the_dump_hook_writes_mir_clif_and_constants() {
         let dir = package("dumps", "", KEYS);
         let dumps = dir.join("dumps");
@@ -953,6 +973,10 @@ fn main() {
     /// The gate relies on it (plan §2.1, gate 4): 007's constants evaluate
     /// under the default limits on the debug toolchain.
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+    )]
     fn example_007_constants_evaluate_under_the_default_limits() {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/007_mandelbrot");
         let mut out = CheckOutput::default();
@@ -1002,6 +1026,10 @@ fn main() {
     /// symbol constants only reach, and E0077 for one they call;
     /// `cheby run` reports E0053 either way.
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+    )]
     fn check_stubs_missing_native_symbols() {
         for (call, check_codes) in [("False", Vec::<&str>::new()), ("True", vec!["E0077"])] {
             let dir = package(
@@ -1023,6 +1051,10 @@ fn main() {
     /// `Roots::AllFunctions` compiles every function and evaluates nothing,
     /// so a constant that would panic is not reported.
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+    )]
     fn all_functions_compile_without_evaluating() {
         let dir = package(
             "all_functions",

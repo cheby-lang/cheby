@@ -16,6 +16,7 @@ use siphasher::sip::SipHasher13;
 use super::raw::{Raw, View, f32_hash_bits, float_hash_bits, view};
 use super::{Reached, hooks};
 use crate::abi::Word;
+use crate::alloc::scratch::ScratchVec;
 use crate::layout::FieldKind;
 use crate::object::{read_field, to_u64, to_usize, word_to_ptr};
 use crate::panic::fatal;
@@ -85,12 +86,12 @@ enum Saved {
 pub struct Hasher {
     sip: SipHasher13,
     seed: u64,
-    pending: Vec<Task>,
+    pending: ScratchVec<Task>,
     /// The states and groups set aside, innermost last.
-    saved: Vec<Saved>,
+    saved: ScratchVec<Saved>,
     /// Values the walk owns, such as the keys `hash` hooks returned,
     /// released when the hasher is dropped.
-    owned: Vec<Word>,
+    owned: ScratchVec<Word>,
 }
 
 impl Hasher {
@@ -100,9 +101,9 @@ impl Hasher {
         Self {
             sip: SipHasher13::new_with_keys(seed, 0),
             seed,
-            pending: Vec::new(),
-            saved: Vec::new(),
-            owned: Vec::new(),
+            pending: ScratchVec::new(),
+            saved: ScratchVec::new(),
+            owned: ScratchVec::new(),
         }
     }
 
@@ -226,7 +227,7 @@ impl Hasher {
 
 impl Drop for Hasher {
     fn drop(&mut self) {
-        for word in self.owned.drain(..) {
+        for word in self.owned.drain() {
             // SAFETY: the walk owns these references.
             unsafe { rc::drop(word) };
         }
@@ -262,7 +263,7 @@ pub unsafe fn hash(word: Word) -> Result<u64, Reached> {
 /// As for [`hash`].
 pub unsafe fn hash_with_seed(word: Word, seed: u64) -> Result<u64, Reached> {
     let mut hasher = Hasher::new(seed);
-    let mut stack = vec![Task::Value(word)];
+    let mut stack = ScratchVec::of(Task::Value(word));
     while let Some(task) = stack.pop() {
         match task {
             // SAFETY: every word on the stack is borrowed from `word`, or
@@ -270,7 +271,7 @@ pub unsafe fn hash_with_seed(word: Word, seed: u64) -> Result<u64, Reached> {
             Task::Value(word) => unsafe { step(word, &mut hasher) }?,
             control => hasher.control(control),
         }
-        stack.extend(hasher.pending.drain(..).rev());
+        stack.push_reversed(&mut hasher.pending);
     }
     Ok(hasher.finish())
 }

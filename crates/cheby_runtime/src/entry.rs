@@ -37,7 +37,9 @@
 //!   (D-617). Every allocation checks it before it
 //!   asks the system for memory ([`check_budget`]), so the peak never
 //!   passes it and a single huge request is E0076, not an abort; kernels
-//!   allocate through the same path. Exceeding it abandons the entry with
+//!   allocate through the same path, and the Rust-side worklists of the
+//!   runtime's walks are scratch buffers that the budget counts too
+//!   ([`alloc::scratch`]). Exceeding it abandons the entry with
 //!   [`Limit::Memory`].
 //!
 //! The host learns which limit ended an entry from the build's
@@ -378,8 +380,9 @@ pub fn with_seed<R>(seed: u64, f: impl FnOnce() -> R) -> R {
 
 /// The memory limit of constant evaluation (D-536): called before every
 /// allocation of `bytes` bytes, so a request over the budget never reaches
-/// the system allocator. When a budget is set and the domain's live bytes
-/// plus `bytes` would exceed it, the entry is abandoned with
+/// the system allocator. When a budget is set and the domain's live bytes,
+/// plus the scratch buffers live on this thread ([`alloc::scratch`]), plus
+/// `bytes` would exceed it, the entry is abandoned with
 /// [`Limit::Memory`]. Outside constant evaluation it reads one
 /// thread-local word.
 #[inline]
@@ -388,7 +391,9 @@ pub(crate) fn check_budget(bytes: u64) {
     if budget == u64::MAX {
         return;
     }
-    let live = u64::try_from(alloc::current_live_bytes()).unwrap_or(0);
+    let live = u64::try_from(alloc::current_live_bytes())
+        .unwrap_or(0)
+        .saturating_add(alloc::scratch::live());
     if live.saturating_add(bytes) > budget {
         // No further check while the entry is abandoned.
         BUDGET.try_with(|cell| cell.set(u64::MAX)).ok();
@@ -525,6 +530,8 @@ unsafe fn spawn_entry(
     let (sender, receiver) = mpsc::channel();
     let started = Instant::now();
     let stats_domain = Arc::clone(&config.domain);
+    // Memory for ending in order an entry that the system refuses memory.
+    alloc::ensure_reserve();
     let thread = std::thread::Builder::new()
         .name("cheby-entry".to_owned())
         .stack_size(stack_size)
@@ -1185,11 +1192,13 @@ mod tests {
 
     /// The stack positions of [`touches_its_stack_then_panics`]: where it
     /// started and where it panicked.
+    #[cfg(unix)]
     static TOUCHED: [std::sync::atomic::AtomicUsize; 2] = [
         std::sync::atomic::AtomicUsize::new(0),
         std::sync::atomic::AtomicUsize::new(0),
     ];
 
+    #[cfg(unix)]
     fn touch(ctx: *mut ExecCtx, depth: u32) -> u64 {
         #[expect(
             clippy::large_stack_arrays,
@@ -1205,6 +1214,7 @@ mod tests {
         touch(ctx, depth.saturating_sub(1)).wrapping_add(u64::from(std::hint::black_box(frame[0])))
     }
 
+    #[cfg(unix)]
     unsafe extern "C" fn touches_its_stack_then_panics(ctx: *mut ExecCtx) -> u64 {
         TOUCHED[0].store(STACK_TOP.with(Cell::get), Ordering::SeqCst);
         touch(ctx, 256)

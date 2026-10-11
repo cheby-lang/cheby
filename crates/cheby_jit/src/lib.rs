@@ -56,7 +56,11 @@ use cheby_runtime::layout::{self as rt_layout, FieldKind, LayoutInfo};
 use cheby_runtime::{Callbacks, EntryConfig, EntryFn, EntryOutcome, RunConfig, RuntimeError};
 
 mod memory;
+// The tests compile and run machine code. Windows support is M6 (D-545),
+// so they are not built there. Two attributes, not `all(test, …)`, so
+// Clippy still sees a test module (`allow-unwrap-in-tests`).
 #[cfg(test)]
+#[cfg(not(windows))]
 mod tests;
 
 /// Why the JIT failed. None of these is a diagnostic about the program

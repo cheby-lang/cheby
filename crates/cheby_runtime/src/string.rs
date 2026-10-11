@@ -24,11 +24,13 @@ const BYTES: i32 = abi::string::BYTES_OFFSET;
 
 /// Allocates an empty heap text object (count 1) of layout
 /// [`abi::layout::STRING`] or [`abi::layout::BYTES`] with room for `cap`
-/// bytes. Ends the process if the size overflows or allocation fails.
+/// bytes. A size that overflows, or a request that cannot be served, ends
+/// as [`alloc::out_of_memory`] says: E0076 when it is over constant
+/// evaluation's memory limit, an `out of memory` panic otherwise.
 #[must_use]
 pub fn alloc_text(cap: u64, layout: LayoutId) -> *mut u8 {
     let Some(size) = abi::string::alloc_size(cap) else {
-        fatal(format_args!("cannot allocate a text of {cap} bytes"));
+        alloc::out_of_memory(u64::MAX)
     };
     let obj = alloc::alloc_object(size, abi::header(abi::RC_UNIQUE, 0, layout));
     // SAFETY: a fresh text object: `len` and `cap` are within it.
@@ -40,7 +42,7 @@ pub fn alloc_text(cap: u64, layout: LayoutId) -> *mut u8 {
 }
 
 /// Allocates an empty heap string (count 1) with room for `cap` bytes.
-/// Ends the process if the size overflows or allocation fails.
+/// Fails as [`alloc_text`] does.
 #[must_use]
 pub fn alloc_string(cap: u64) -> *mut u8 {
     alloc_text(cap, abi::layout::STRING)
@@ -197,7 +199,8 @@ pub unsafe fn to_rust_string(word: Word) -> Option<String> {
 /// one) and has room, otherwise a new unique one of capacity
 /// `max(len + extra, 2 * cap)`, after which the old one is released (freed
 /// when it was unique, left alone when shared or static). Ends the process
-/// if `text` is not a text object or the size overflows.
+/// if `text` is not a text object. A size that overflows fails as
+/// [`alloc_text`] does.
 ///
 /// # Safety
 ///
@@ -218,7 +221,7 @@ pub unsafe fn reserve(text: Word, extra: u64) -> Word {
         )
     };
     let Some(need) = len.checked_add(extra) else {
-        fatal(format_args!("a text of {len} + {extra} bytes is too large"));
+        alloc::out_of_memory(u64::MAX)
     };
     // SAFETY: a live object.
     if need <= cap && unsafe { rc::is_unique(text) } {
@@ -279,8 +282,8 @@ pub unsafe fn append(text: Word, piece: &[u8]) -> Word {
 /// reference it returns with `rc::dup`. Otherwise it is a new unique object
 /// of capacity `max(len + extra, 2 * cap)` that the caller owns, so a chain
 /// of appends to a unique result grows by doubling. `text` keeps its
-/// reference either way. Ends the process if `text` is not a text object
-/// or the size overflows.
+/// reference either way. Ends the process if `text` is not a text object.
+/// A size that overflows fails as [`alloc_text`] does.
 ///
 /// The caller passes `reuse` false when another argument of its kernel is
 /// the same object (D-563's alias rule).
@@ -303,7 +306,7 @@ pub unsafe fn with_room(text: Word, extra: u64, reuse: bool) -> (Word, bool) {
         )
     };
     let Some(need) = len.checked_add(extra) else {
-        fatal(format_args!("a text of {len} + {extra} bytes is too large"));
+        alloc::out_of_memory(u64::MAX)
     };
     // SAFETY: a live object.
     let path = unsafe { growth(text, extra, reuse) };

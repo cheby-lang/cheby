@@ -1,0 +1,18 @@
+// @mode: check-fail
+// @decisions: D-449, D-617
+//! A request under the memory limit that the system cannot serve is not
+//! over the limit, so raising the limit would not help: the evaluation
+//! panics with `out of memory`, as the same call does at run time, and
+//! the constant is E0075. The limit is 2^57 bytes, and the request of
+//! 2^56 bytes is beyond the address space of every 64-bit platform
+//! (§4.5, §11.8).
+
+import std::io
+import std::string
+
+const big: String = string::repeat("ab", 36_028_797_018_963_968)
+
+fn main() {
+  let size = string::length(big)
+  io::println("{size}")
+}

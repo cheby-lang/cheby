@@ -151,6 +151,12 @@ pub struct Session {
     units: BTreeSet<ModuleId>,
     /// Constants evaluated.
     evaluated: BTreeSet<DefId>,
+    /// Constants whose entry thunk is compiled into the JIT. It outlives a
+    /// failed evaluation: a constant that an entry's failed evaluation
+    /// reached (a standard-library constant it forced, say) is not
+    /// evaluated, so the next entry that reaches it evaluates it again with
+    /// the thunk it already has.
+    const_thunks: BTreeSet<DefId>,
     /// Entries read so far: `N` of the next `<repl:N>`.
     count: u32,
     /// Definitions checked again so far, to name their modules.
@@ -266,6 +272,7 @@ impl Session {
             compiled: BTreeSet::new(),
             units: BTreeSet::new(),
             evaluated: BTreeSet::new(),
+            const_thunks: BTreeSet::new(),
             count: 0,
             again: 0,
             known: std_lib::known(),
@@ -715,6 +722,7 @@ impl Session {
         self.repl.note_compiled(checked);
         self.compiled.extend(built.items);
         self.units.extend(built.modules);
+        self.const_thunks.extend(built.constants.iter().copied());
         if !built.constants.is_empty() {
             let mut diagnostics = self.evaluate(&built.constants, &built.reach, checked)?;
             if !diagnostics.is_empty() {
@@ -1694,7 +1702,12 @@ impl Session {
             .into_iter()
             .filter(|def| !self.evaluated.contains(def))
             .collect();
-        units.extend(self.lower_entry_units(entry, &constants, &all)?);
+        let thunks: Vec<DefId> = constants
+            .iter()
+            .copied()
+            .filter(|def| !self.const_thunks.contains(def))
+            .collect();
+        units.extend(self.lower_entry_units(entry, &thunks, &all)?);
         Ok(Built {
             units,
             items,
@@ -2198,6 +2211,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+    )]
     fn a_session_runs_entries_and_redefinitions() {
         let printed = session(&[
             "let x = 20",
@@ -2223,6 +2240,10 @@ mod tests {
 
     /// `--deny-warnings` refuses an entry with a warning (D-549).
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+    )]
     fn denied_warnings_refuse_the_entry() {
         let options = SessionOptions {
             deny_warnings: true,
@@ -2280,6 +2301,10 @@ mod tests {
     /// `:type` checks without running or keeping anything, and E0054
     /// counts only live bindings (§13.5.3, D-475).
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+    )]
     fn types_and_live_native_bindings() {
         let printed = std::thread::Builder::new()
             .stack_size(256 << 20)

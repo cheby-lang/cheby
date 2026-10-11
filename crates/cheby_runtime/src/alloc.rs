@@ -314,8 +314,8 @@ pub(crate) unsafe fn leave_domain(obj: *mut u8) {
 
 /// Allocates an object for generated code: `size` bytes including the
 /// header, 8-aligned, with `header` written at offset 0. The fields are
-/// left uninitialized for the caller to write. Ends the process on
-/// allocation failure.
+/// left uninitialized for the caller to write. A request that cannot be
+/// served ends as [`out_of_memory`] says.
 ///
 /// `ctx` is the running entry's execution context, unused in M1 (the
 /// memory limit of constant evaluation reads the domain, D-536); it may be
@@ -334,22 +334,26 @@ pub unsafe extern "C" fn cheby_rt_alloc(ctx: *mut ExecCtx, size: u64, header: u6
 
 /// Allocates an object of `size` bytes (rounded up to 8) with the given
 /// header and uninitialized fields, and charges it to the current domain.
-/// Ends the process on allocation failure. During constant evaluation, a
-/// request that would pass the memory budget abandons the entry with the
-/// memory limit before anything is allocated (D-536).
+/// During constant evaluation, a request that would pass the memory budget
+/// abandons the entry with the memory limit before anything is allocated
+/// (D-536, D-617). A request that cannot be served, because its size does
+/// not fit the address space or the system refuses it, ends as
+/// [`out_of_memory`] says.
 #[must_use]
 pub fn alloc_object(size: u64, header: u64) -> *mut u8 {
-    crate::entry::check_budget(
-        size.max(abi::HEADER_SIZE)
-            .checked_next_multiple_of(abi::OBJECT_ALIGN)
-            .unwrap_or(u64::MAX),
-    );
-    let layout = object_layout(size);
+    let request = size
+        .max(abi::HEADER_SIZE)
+        .checked_next_multiple_of(abi::OBJECT_ALIGN)
+        .unwrap_or(u64::MAX);
+    crate::entry::check_budget(request);
+    let Some(layout) = try_object_layout(size) else {
+        out_of_memory(request)
+    };
     let ptr = cached_block(layout).unwrap_or_else(|| {
-        // SAFETY: `object_layout` never returns a zero-sized layout.
+        // SAFETY: `try_object_layout` never returns a zero-sized layout.
         let ptr = unsafe { std::alloc::alloc(layout) };
         if ptr.is_null() {
-            std::alloc::handle_alloc_error(layout);
+            out_of_memory(request);
         }
         ptr
     });
@@ -366,15 +370,91 @@ pub fn alloc_object(size: u64, header: u64) -> *mut u8 {
     ptr
 }
 
-/// The allocation layout of an object of `size` bytes.
-fn object_layout(size: u64) -> Layout {
+/// The message of the panic that an allocation request which cannot be
+/// served raises when it is not over constant evaluation's memory limit
+/// (GAP(runtime-out-of-memory)).
+pub const OUT_OF_MEMORY: &str = "out of memory";
+
+/// Ends a request for `bytes` bytes that cannot be served: its size
+/// overflows 64 bits or the address space, or the system allocator
+/// refused it. Kernels call it too when the size of their result cannot
+/// even be computed, with `u64::MAX`, and so do the scratch buffers of the
+/// runtime's walks ([`scratch`]).
+///
+/// During constant evaluation a request over the memory budget abandons
+/// the evaluation with the memory limit, E0076, like any request over the
+/// limit (D-617); a size that overflows is over every budget. Anywhere
+/// else, and for a request under the budget that the system refuses
+/// during constant evaluation, it panics the running entry with the
+/// message [`OUT_OF_MEMORY`] at an unknown location: `cheby run` exits
+/// with 101, `cheby test` fails the test, the REPL abandons the entry and
+/// continues (D-457), and a constant gives E0075, since raising the limit
+/// would not help. GAP(runtime-out-of-memory): neither the spec nor the
+/// log says what an allocation that cannot be served does at run time, or
+/// what a refusal under the limit does during constant evaluation; a
+/// panic is what §11.8 makes of every other condition a program's values
+/// cause, and it keeps a REPL session alive. Nothing has been allocated
+/// for the request, so the panic itself can still allocate its report.
+/// Outside any entry, which only the runtime's own host-side callers
+/// reach, it ends the process.
+pub fn out_of_memory(bytes: u64) -> ! {
+    // The system may have nothing left at all, not even for the report of
+    // the panic or the memory-limit error: give it the reserve first.
+    release_reserve();
+    crate::entry::check_budget(bytes);
+    if crate::entry::current_ctx().is_none() {
+        fatal(format_args!("{OUT_OF_MEMORY}"));
+    }
+    crate::panic::panic_current(abi::PanicKind::Explicit, Some(OUT_OF_MEMORY))
+}
+
+/// The memory set aside so that an entry whose request the system refused
+/// can still end in order: [`out_of_memory`] frees it before it reports,
+/// so a program that used up all memory still panics with `out of memory`
+/// and does not abort while it reports. Each entry sets it aside again
+/// when it starts ([`ensure_reserve`]).
+static RESERVE: std::sync::Mutex<Option<Vec<u8>>> = std::sync::Mutex::new(None);
+
+/// The size of [`RESERVE`].
+const RESERVE_BYTES: usize = 4 << 20;
+
+/// Sets the reserve aside if it is not, when the system can spare it.
+pub(crate) fn ensure_reserve() {
+    let mut reserve = RESERVE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if reserve.is_none() {
+        let mut block = Vec::new();
+        if block.try_reserve_exact(RESERVE_BYTES).is_ok() {
+            *reserve = Some(block);
+        }
+    }
+}
+
+/// Gives the reserve back to the system.
+fn release_reserve() {
+    let block = RESERVE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .take();
+    drop(block);
+}
+
+/// The allocation layout of an object of `size` bytes, or `None` when the
+/// rounded size overflows or is too large for the address space.
+fn try_object_layout(size: u64) -> Option<Layout> {
     let rounded = size
         .max(abi::HEADER_SIZE)
-        .checked_next_multiple_of(abi::OBJECT_ALIGN);
-    match rounded.map(|size| Layout::from_size_align(to_usize(size), to_usize(abi::OBJECT_ALIGN))) {
-        Some(Ok(layout)) => layout,
-        _ => fatal(format_args!("cannot allocate an object of {size} bytes")),
-    }
+        .checked_next_multiple_of(abi::OBJECT_ALIGN)?;
+    let rounded = usize::try_from(rounded).ok()?;
+    Layout::from_size_align(rounded, to_usize(abi::OBJECT_ALIGN)).ok()
+}
+
+/// The allocation layout of an existing object of `size` bytes. A size that
+/// has no layout was never allocated, so it breaks an invariant.
+fn object_layout(size: u64) -> Layout {
+    try_object_layout(size)
+        .unwrap_or_else(|| fatal(format_args!("an object of {size} bytes has no layout")))
 }
 
 thread_local! {
@@ -756,20 +836,39 @@ fn cached_blocks() -> usize {
 /// `obj` was allocated by `alloc_object` with `layout` and no reference to
 /// it remains.
 unsafe fn release_block(obj: *mut u8, layout: Layout) {
-    if poison_enabled() {
-        // SAFETY: the block is still allocated and nothing else uses it.
-        unsafe { object::write_field(obj, 0, POISON_HEADER) };
-        let kept = QUARANTINE
-            .try_with(|quarantine| quarantine.borrow_mut().keep(obj, layout))
-            .is_ok();
-        if kept {
+    if keeps_freed_blocks() {
+        if poison_enabled() {
+            // SAFETY: the block is still allocated and nothing else uses
+            // it.
+            unsafe { object::write_field(obj, 0, POISON_HEADER) };
+            let kept = QUARANTINE
+                .try_with(|quarantine| quarantine.borrow_mut().keep(obj, layout))
+                .is_ok();
+            if kept {
+                return;
+            }
+        } else if cache_block(obj, layout) {
             return;
         }
-    } else if cache_block(obj, layout) {
-        return;
     }
     // SAFETY: forwarded from the caller.
     unsafe { std::alloc::dealloc(obj, layout) };
+}
+
+/// Whether freed blocks may be kept, in the quarantine or the block cache.
+#[cfg(not(test))]
+#[inline]
+const fn keeps_freed_blocks() -> bool {
+    true
+}
+
+/// Whether freed blocks may be kept: tests that measure what a thread asks
+/// the system for turn it off on their thread.
+#[cfg(test)]
+fn keeps_freed_blocks() -> bool {
+    temporaries_tests::KEEP_FREED
+        .try_with(Cell::get)
+        .unwrap_or(true)
 }
 
 /// In poisoning mode, ends the process if `word` points to a freed
@@ -813,6 +912,14 @@ unsafe fn check_header(word: Word, what: &str) {
         ));
     }
 }
+
+pub(crate) mod scratch;
+
+#[cfg(test)]
+mod out_of_memory_tests;
+
+#[cfg(test)]
+mod temporaries_tests;
 
 #[cfg(test)]
 pub(crate) mod tests {

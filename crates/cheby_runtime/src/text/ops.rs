@@ -37,13 +37,18 @@ pub(crate) fn code_points(text: &str) -> impl Iterator<Item = &str> {
 }
 
 /// The parts of `text` between occurrences of `separator`, searched from
-/// the start; an empty separator gives the code points (D-315).
-pub(crate) fn split<'a>(text: &'a str, separator: &str) -> Vec<&'a str> {
-    if separator.is_empty() {
-        code_points(text).collect()
+/// the start; an empty separator gives the code points (D-315). The parts
+/// are found as they are taken, so splitting holds no buffer of them.
+pub(crate) fn split<'a>(text: &'a str, separator: &'a str) -> impl Iterator<Item = &'a str> {
+    let (points, parts) = if separator.is_empty() {
+        (Some(code_points(text)), None)
     } else {
-        text.split(separator).collect()
-    }
+        (None, Some(text.split(separator)))
+    };
+    points
+        .into_iter()
+        .flatten()
+        .chain(parts.into_iter().flatten())
 }
 
 /// The parts of `text` before and after the first `separator`, or `None`
@@ -122,8 +127,93 @@ pub(crate) fn remove_suffix(text: &str, suffix: &str) -> Range<usize> {
 }
 
 /// The code points of `text` in reverse order (D-302).
-pub(crate) fn reverse(text: &str) -> String {
-    text.chars().rev().collect()
+pub(crate) fn reverse(text: &str) -> impl Iterator<Item = char> {
+    text.chars().rev()
+}
+
+/// The code points of `str::to_uppercase(text)`, in order: each code
+/// point's full uppercase mapping, which depends on nothing around it.
+pub(crate) fn uppercase(text: &str) -> impl Iterator<Item = char> {
+    text.chars().flat_map(char::to_uppercase)
+}
+
+/// The code points of `str::to_lowercase(text)`, in order: each code
+/// point's full lowercase mapping, except that a capital sigma becomes
+/// `ς` at the end of a word and `σ` elsewhere (`Final_Sigma`, D-310), the
+/// one mapping that depends on its context.
+pub(crate) fn lowercase(text: &str) -> impl Iterator<Item = char> {
+    text.char_indices().flat_map(move |(at, c)| {
+        let sigma = (c == CAPITAL_SIGMA).then(|| {
+            let before = text.get(..at).unwrap_or_default();
+            let after = text
+                .get(at.saturating_add(c.len_utf8())..)
+                .unwrap_or_default();
+            if ignorable_then_cased(before.chars().rev()) && !ignorable_then_cased(after.chars()) {
+                'ς'
+            } else {
+                'σ'
+            }
+        });
+        let mapped = sigma.is_none().then(|| c.to_lowercase());
+        sigma.into_iter().chain(mapped.into_iter().flatten())
+    })
+}
+
+/// `Σ`, whose lowercase depends on its context.
+const CAPITAL_SIGMA: char = 'Σ';
+
+/// What the `Final_Sigma` condition needs of a code point.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SigmaClass {
+    /// `Case_Ignorable`: skipped when looking for the cased letter.
+    Ignorable,
+    /// `Cased` and not `Case_Ignorable`.
+    Cased,
+    /// Neither.
+    Other,
+}
+
+/// Whether the first code point of `chars` that is not `Case_Ignorable`
+/// is `Cased`: half of the `Final_Sigma` condition, as the standard
+/// library's `str::to_lowercase` checks it.
+fn ignorable_then_cased(chars: impl Iterator<Item = char>) -> bool {
+    chars
+        .map(sigma_class)
+        .find(|&class| class != SigmaClass::Ignorable)
+        == Some(SigmaClass::Cased)
+}
+
+/// The class of `c` for the `Final_Sigma` condition. The standard library
+/// keeps `Case_Ignorable` and `Cased` to itself, so they are read off
+/// `str::to_lowercase` on two three-code-point texts that end with `Σ`,
+/// which lowercases to `ς` exactly when the first code point before it
+/// that is not `Case_Ignorable` is `Cased`. Before `c` stands `A`, which
+/// is cased, or a space, which is neither cased nor `Case_Ignorable`:
+/// `AcΣ` gives `ς` when `c` is ignorable or cased, and ` cΣ` when it is
+/// cased and not ignorable. Each text is a few bytes, so this allocates
+/// nothing that grows with the data.
+fn sigma_class(c: char) -> SigmaClass {
+    if c.is_ascii() {
+        return match c {
+            // ASCII's `Case_Ignorable` code points: `MidLetter`,
+            // `MidNumLet` and `Single_Quote` ones, and the modifier
+            // symbols `^` and `` ` ``.
+            '\'' | '.' | ':' | '^' | '`' => SigmaClass::Ignorable,
+            c if c.is_ascii_alphabetic() => SigmaClass::Cased,
+            _ => SigmaClass::Other,
+        };
+    }
+    let ends_final = |before: char| {
+        let probe: String = [before, c, CAPITAL_SIGMA].into_iter().collect();
+        probe.to_lowercase().ends_with('ς')
+    };
+    if ends_final(' ') {
+        SigmaClass::Cased
+    } else if ends_final('A') {
+        SigmaClass::Ignorable
+    } else {
+        SigmaClass::Other
+    }
 }
 
 /// The padding that makes a text of `length` code points `width` code
@@ -175,11 +265,8 @@ impl<'a> Fill<'a> {
     }
 }
 
-/// The text of the scalar values in `values`, or `None` when one is not a
+/// The code point of the scalar value `value`, or `None` when it is not a
 /// Unicode scalar value (below 0, above `0x10FFFF`, or a surrogate).
-pub(crate) fn from_code_point_values(values: impl IntoIterator<Item = i64>) -> Option<String> {
-    values
-        .into_iter()
-        .map(|value| u32::try_from(value).ok().and_then(char::from_u32))
-        .collect()
+pub(crate) fn scalar(value: i64) -> Option<char> {
+    u32::try_from(value).ok().and_then(char::from_u32)
 }

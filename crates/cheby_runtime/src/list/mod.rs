@@ -20,7 +20,7 @@
 //!
 //! [`CustomKind`]: crate::layout::CustomKind
 
-mod kernels;
+pub(crate) mod kernels;
 mod node;
 mod ops;
 mod tree;

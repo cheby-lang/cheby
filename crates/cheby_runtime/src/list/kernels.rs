@@ -8,11 +8,10 @@
 //! call, so the kernel updates the root in place, dups it and returns it,
 //! and the wrapper's drop leaves it at count one (plan §6, D-522).
 
-use std::collections::HashMap;
-
 use super::node::{Root, dup_word, register};
 use super::ops;
 use crate::abi::{PanicKind, Word};
+use crate::alloc::scratch::ScratchVec;
 use crate::ctx::ExecCtx;
 use crate::entry;
 use crate::generic::{self, Reached};
@@ -326,27 +325,24 @@ pub unsafe extern "C" fn cheby_list_unique(xs: u64) -> u64 {
     }
     register();
     let seed = entry::current_seed();
-    // Elements are borrowed from `xs`, which the caller keeps alive.
-    let mut buckets: HashMap<u64, Vec<Word>> = HashMap::new();
-    let mut kept = Vec::new();
+    // Elements are borrowed from `xs`, which the caller keeps alive. The
+    // kept elements and the table that finds them are scratch buffers, so
+    // the memory limit counts them (D-617).
+    let mut kept: ScratchVec<Word> = ScratchVec::new();
+    let mut table = Table::default();
     let mut repeated = false;
     // SAFETY: forwarded from the caller.
     for item in unsafe { super::iter(xs) } {
         // SAFETY: a live element of a live list.
         let hash = unsafe { generic::hash_with_seed(item, seed) }.unwrap_or_else(reached);
-        let bucket = buckets.entry(hash).or_default();
-        let mut found = false;
-        for &other in bucket.iter() {
+        let found = table.find_or_insert(hash, kept.len(), |index| {
+            let other = kept.get(index).copied().unwrap_or_default();
             // SAFETY: live elements of one type.
-            if unsafe { generic::equal(other, item) }.unwrap_or_else(reached) {
-                found = true;
-                break;
-            }
-        }
+            unsafe { generic::equal(other, item) }.unwrap_or_else(reached)
+        });
         if found {
             repeated = true;
         } else {
-            bucket.push(item);
             kept.push(item);
         }
     }
@@ -354,10 +350,67 @@ pub unsafe extern "C" fn cheby_list_unique(xs: u64) -> u64 {
         dup_word(xs);
         return xs;
     }
-    for &item in &kept {
+    for &item in kept.iter() {
         dup_word(item);
     }
-    super::from_iter(kept)
+    super::from_iter(kept.drain())
+}
+
+/// An open-addressing hash table of the indices of the kept elements of
+/// [`cheby_list_unique`], keyed by their hashes, at most half full. A slot
+/// holds a hash and an index plus one; 0 marks an empty slot.
+#[derive(Default)]
+struct Table {
+    slots: ScratchVec<(u64, usize)>,
+    len: usize,
+}
+
+impl Table {
+    /// Whether an element with `hash` that `same` says is equal to the new
+    /// element is in the table. If none is, the new element is inserted
+    /// as the element at `index`.
+    fn find_or_insert(&mut self, hash: u64, index: usize, same: impl Fn(usize) -> bool) -> bool {
+        if self.len.saturating_add(1).saturating_mul(2) > self.slots.len() {
+            self.grow();
+        }
+        let mask = self.slots.len().saturating_sub(1);
+        // The low bits of a SipHash are as good as any.
+        let mut at = usize::try_from(hash).unwrap_or(usize::MAX) & mask;
+        loop {
+            let Some(slot) = self.slots.get_mut(at) else {
+                fatal(format_args!("the table of `list::unique` has no slot {at}"));
+            };
+            match *slot {
+                (_, 0) => {
+                    *slot = (hash, index.saturating_add(1));
+                    self.len = self.len.saturating_add(1);
+                    return false;
+                }
+                (other, kept) if other == hash && same(kept.saturating_sub(1)) => return true,
+                _ => at = at.wrapping_add(1) & mask,
+            }
+        }
+    }
+
+    /// Doubles the slots, at least 16, and inserts the entries again.
+    fn grow(&mut self) {
+        let size = self.slots.len().saturating_mul(2).max(16);
+        let mut slots = ScratchVec::new();
+        slots.reserve(size);
+        slots.extend(std::iter::repeat_n((0, 0), size));
+        let mask = size.saturating_sub(1);
+        for &(hash, kept) in self.slots.iter().filter(|(_, kept)| *kept != 0) {
+            let mut at = usize::try_from(hash).unwrap_or(usize::MAX) & mask;
+            while let Some(slot) = slots.get_mut(at) {
+                if slot.1 == 0 {
+                    *slot = (hash, kept);
+                    break;
+                }
+                at = at.wrapping_add(1) & mask;
+            }
+        }
+        self.slots = slots;
+    }
 }
 
 /// The kernels, with their std symbols.

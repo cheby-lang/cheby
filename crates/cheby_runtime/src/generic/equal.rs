@@ -3,6 +3,7 @@
 use super::raw::{Raw, View, f32_eq, float_eq, view};
 use super::{Reached, hooks};
 use crate::abi::Word;
+use crate::alloc::scratch::ScratchVec;
 use crate::layout::FieldKind;
 use crate::object::{read_field, to_usize, word_to_ptr};
 use crate::panic::fatal;
@@ -19,7 +20,7 @@ enum Task {
 /// kind's `equal` function schedules the children that must also be equal.
 #[derive(Debug, Default)]
 pub struct Cx {
-    pending: Vec<(Word, Word)>,
+    pending: ScratchVec<(Word, Word)>,
 }
 
 impl Cx {
@@ -51,8 +52,8 @@ impl Cx {
 /// `a` and `b` are tagged integers or live objects, not changed during the
 /// call. On an entry's thread when the values may hold a type with hooks.
 pub unsafe fn equal(a: Word, b: Word) -> Result<bool, Reached> {
-    let mut stack = vec![Task::Pair(a, b)];
-    let mut later = Vec::new();
+    let mut stack = ScratchVec::of(Task::Pair(a, b));
+    let mut later = ScratchVec::new();
     let mut cx = Cx::default();
     while let Some(task) = stack.pop() {
         let (a, b) = match task {
@@ -68,7 +69,7 @@ pub unsafe fn equal(a: Word, b: Word) -> Result<bool, Reached> {
         if !unsafe { step(a, b, &mut later, &mut cx) }? {
             return Ok(false);
         }
-        stack.extend(later.drain(..).rev());
+        stack.push_reversed(&mut later);
     }
     Ok(true)
 }
@@ -79,7 +80,12 @@ pub unsafe fn equal(a: Word, b: Word) -> Result<bool, Reached> {
 /// # Safety
 ///
 /// As for [`equal`].
-unsafe fn step(a: Word, b: Word, later: &mut Vec<Task>, cx: &mut Cx) -> Result<bool, Reached> {
+unsafe fn step(
+    a: Word,
+    b: Word,
+    later: &mut ScratchVec<Task>,
+    cx: &mut Cx,
+) -> Result<bool, Reached> {
     // SAFETY: forwarded from the caller.
     let (va, vb) = unsafe { (view(a, "`==`"), view(b, "`==`")) };
     let same = match (va, vb) {
@@ -141,7 +147,7 @@ unsafe fn step(a: Word, b: Word, later: &mut Vec<Task>, cx: &mut Cx) -> Result<b
             };
             // SAFETY: live objects of one runtime-defined kind.
             let same = unsafe { equal(a, b, cx) };
-            later.extend(cx.pending.drain(..).map(|(x, y)| Task::Pair(x, y)));
+            later.extend(cx.pending.drain().map(|(x, y)| Task::Pair(x, y)));
             same
         }
         // Two `dyn` values are equal when their descriptors are equal and

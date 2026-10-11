@@ -6,7 +6,7 @@ use cranelift_codegen::ir::condcodes::IntCC;
 use cranelift_codegen::ir::{BlockArg, InstBuilder, MemFlagsData, Value, types};
 
 use cheby_iface::{DefId, builtin};
-use cheby_mir::{BuiltinLayout, LayoutRef, Local, Operand, Repr, RuntimeFn, TagType};
+use cheby_mir::{BuiltinLayout, Const, LayoutRef, Local, Operand, Repr, RuntimeFn, TagType};
 use cheby_runtime::abi;
 
 use crate::CodegenError;
@@ -60,6 +60,34 @@ fn uniform_fields(count: u64, first: i64) -> Result<Vec<(i32, Repr)>, CodegenErr
     (0..count)
         .map(|n| Ok((offset(n, first)?, Repr::Value)))
         .collect()
+}
+
+/// The tagged word `(n << 1) | 1` of a constant `Int`, `I64` or `U64`
+/// operand boxed from `from`, when it fits a tagged word (D-521); `None`
+/// for anything else, which [`Translator::box_value`] checks at run time.
+fn constant_tagged(value: &Operand, from: Repr) -> Option<i64> {
+    let Operand::Const(c) = value else {
+        return None;
+    };
+    let fits = match (c, from) {
+        (Const::Int(n), Repr::Int) => Some(*n).filter(|n| n.wrapping_shl(1) >> 1 == *n),
+        (
+            Const::Sized {
+                repr: Repr::I64,
+                bits,
+            },
+            Repr::I64,
+        ) => Some(bits.cast_signed()).filter(|n| n.wrapping_shl(1) >> 1 == *n),
+        (
+            Const::Sized {
+                repr: Repr::U64,
+                bits,
+            },
+            Repr::U64,
+        ) => i64::try_from(*bits).ok().filter(|n| *n < U64_TAGGED_LIMIT),
+        _ => None,
+    }?;
+    Some(fits.wrapping_shl(1) | 1)
 }
 
 fn size_of(fields: &[(i32, Repr)], first: i64) -> Result<i64, CodegenError> {
@@ -261,8 +289,7 @@ impl Translator<'_, '_> {
             .ok_or_else(|| {
                 CodegenError::ice(format!("`field` {field} of {layout:?} does not exist"))
             })?;
-        let var = self.var(base)?;
-        let base = self.b.use_var(var);
+        let base = self.local(base)?;
         Ok(self
             .b
             .ins()
@@ -360,6 +387,11 @@ impl Translator<'_, '_> {
     /// number from the runtime; floats always boxed; `Bool` as the static
     /// `True` or `False`. The result is owned.
     pub(crate) fn box_value(&mut self, value: &Operand, from: Repr) -> Result<Value, CodegenError> {
+        if let Some(tagged) = constant_tagged(value, from) {
+            // A constant that fits: its tagged word, without the check
+            // and the cold block (a literal of many integers).
+            return Ok(self.b.ins().iconst(types::I64, tagged));
+        }
         let v = self.operand(value)?;
         Ok(match from {
             Repr::Int | Repr::I64 => {

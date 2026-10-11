@@ -287,6 +287,10 @@ fn unit() -> MirModule {
 /// Translation reads only `&Decls`, gives the same text twice, and the
 /// result compiles.
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
 fn translation_is_pure_and_deterministic() {
     let mut m = module();
     let mut decls = Decls::new(cranelift_module::Module::isa(&m)).unwrap();
@@ -312,6 +316,10 @@ fn translation_is_pure_and_deterministic() {
 
 /// Declaring the same function twice is an ICE, not a silent redefinition.
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
 fn a_function_is_declared_once() {
     let mut m = module();
     let mut decls = Decls::new(cranelift_module::Module::isa(&m)).unwrap();
@@ -406,6 +414,10 @@ fn labs_unit(index: u32, params: &[CType]) -> MirModule {
 /// may (D-455 counts only the current definitions). Under
 /// `ForeignImport::Function` a module keeps one signature per symbol.
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
 fn foreign_imports_by_address_allow_new_signatures() {
     let cx = CodegenCx {
         layouts: &BuiltinLayouts,

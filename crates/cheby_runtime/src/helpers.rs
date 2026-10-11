@@ -60,9 +60,15 @@ pub unsafe extern "C" fn cheby_rt_str_append(ctx: *mut ExecCtx, acc: Word, piece
         // The piece aliases the accumulator, which this call may grow or
         // free: copy it first. (The caller owns two references, so the
         // accumulator is shared and is copied anyway.)
-        let copy = bytes.to_vec();
-        // SAFETY: forwarded from the caller.
-        return unsafe { string::append(acc, &copy) };
+        // The copy is an object, so the memory limit counts it (D-617).
+        let copy = string::new_text(bytes, crate::abi::layout::STRING);
+        // SAFETY: forwarded from the caller; the copy is a live object of
+        // its own, released once it is appended.
+        unsafe {
+            let out = string::append(acc, string::text_bytes(copy).unwrap_or_default());
+            crate::rc::drop(copy);
+            return out;
+        }
     }
     // SAFETY: forwarded from the caller; `piece` is another object, so its
     // bytes stay valid while `acc` changes.

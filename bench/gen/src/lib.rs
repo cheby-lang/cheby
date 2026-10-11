@@ -484,6 +484,10 @@ mod tests {
     /// Every shape generates a project that checks with no diagnostics
     /// at all, so that the D-247 budgets measure real work.
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+    )]
     fn generated_projects_check_cleanly() {
         for shape in Shape::ALL {
             let project = generate(&Config {

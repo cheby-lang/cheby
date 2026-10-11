@@ -464,6 +464,59 @@ fn final_sigma_lowercases_at_the_end_of_a_word() {
     });
 }
 
+/// The kernels write case mappings code point by code point, with their
+/// own `Final_Sigma` rule; it must agree with `str::to_lowercase`.
+#[test]
+fn case_mapping_agrees_with_the_standard_library() {
+    let samples = [
+        "ΟΔΟΣ ΟΔΟΣ. Σ.Σ ΑΣ' Σ'Α Α\u{301}Σ ΑΣ\u{301} ΑΣ\u{AD}Β A:Σ:B 1Σ ΣΣ",
+        "ὈΔΥΣΣΕΎΣ ΣΑΣ-ΑΣ ΑΣ_ ΑΣ\u{300}\u{300}\u{300}x ΑΣ\u{2019} Σ\u{37A}Α",
+        "İSTANBUL ǅ ǈ ß ŉ ﬁ Ω K Å",
+    ];
+    for text in samples {
+        assert_eq!(
+            ops::lowercase(text).collect::<String>(),
+            text.to_lowercase()
+        );
+        assert_eq!(
+            ops::uppercase(text).collect::<String>(),
+            text.to_uppercase()
+        );
+    }
+    // Every ASCII code point on either side of a sigma, after a cased
+    // letter and after a space: the classes the rule reads off ASCII
+    // directly.
+    for c in (0_u8..128).map(char::from) {
+        for text in [
+            format!("A{c}Σ"),
+            format!(" {c}Σ"),
+            format!("AΣ{c}"),
+            format!("AΣ{c}b"),
+            format!("A{c}{c}Σ "),
+        ] {
+            assert_eq!(
+                ops::lowercase(&text).collect::<String>(),
+                text.to_lowercase(),
+                "{text:?}"
+            );
+        }
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig { cases: 512, ..ProptestConfig::default() })]
+
+    /// Texts dense in sigmas, cased and uncased letters and
+    /// `Case_Ignorable` code points (`'`, `.`, `:`, combining marks, a
+    /// soft hyphen, a modifier letter).
+    #[test]
+    fn lowercase_matches_the_standard_library(
+        text in "[ΣσΑαAa ,.':^`\u{301}\u{AD}\u{2B0}\u{37A}1ǅ]{0,16}",
+    ) {
+        prop_assert_eq!(ops::lowercase(&text).collect::<String>(), text.to_lowercase());
+    }
+}
+
 #[test]
 fn reverse_reverses_code_points() {
     balanced(|| {

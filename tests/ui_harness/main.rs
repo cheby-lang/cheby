@@ -30,8 +30,12 @@
 //! the file `CHEBY_PENDING_ALLOW` names lists it, and every `cheby` runs
 //! with `CHEBY_RT_POISON=1` (see `cheby_test_support::milestone`).
 //!
-//! On Windows, `run-pass` and `run-fail` tests are ignored until M6
-//! (D-545, `cheby_test_support::platform`); the check tests still run.
+//! On Windows, the tests that run JIT-compiled code are ignored until M6
+//! (D-545, `cheby_test_support::platform`): `run-pass` and `run-fail`
+//! tests, and the check tests whose `.stderr` golden holds no front-end
+//! error, since `cheby check` evaluates the package's constants with the
+//! JIT once the front end reports no error. The other check tests still
+//! run.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -63,7 +67,9 @@ fn main() -> ExitCode {
     };
     let bless = bless_enabled();
     if let Some(reason) = platform::run_skip_reason() {
-        eprintln!("UI harness: run tests are ignored: {reason}");
+        eprintln!(
+            "UI harness: run tests, and check tests without a front-end error, are ignored: {reason}"
+        );
     }
 
     let trials = tests
@@ -72,7 +78,7 @@ fn main() -> ExitCode {
             let expectation = current.expectation(test.header.milestone);
             let verdicts = verdicts.clone();
             let name = test.name.clone();
-            let skipped = test.header.mode.runs() && platform::runs_skipped();
+            let skipped = platform::runs_skipped() && test.builds_a_jit();
             Trial::test(name.clone(), move || {
                 let result = run_test(&test, bless && expectation != Expectation::Fail);
                 verdicts.judge(&name, test.header.milestone, expectation, result)?;

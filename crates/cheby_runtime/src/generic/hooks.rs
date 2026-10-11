@@ -12,7 +12,6 @@
 use crate::abi::Word;
 use crate::callback;
 use crate::rc;
-use crate::string;
 use crate::values;
 
 /// `equal(a, b)` of the hooks: whether two borrowed values of the type are
@@ -55,17 +54,13 @@ pub(super) unsafe fn hash_key(hooks: [Word; 3], value: Word) -> Word {
 ///
 /// # Safety
 ///
-/// As for [`equal`].
-pub(super) unsafe fn debug_text(hooks: [Word; 3], value: Word) -> String {
+/// As for [`equal`]. The result is an owned `String`, which the caller
+/// releases: the printer writes it as it is, with no copy.
+pub(super) unsafe fn debug_text(hooks: [Word; 3], value: Word) -> Word {
     let [_, _, debug] = hooks;
     // SAFETY: forwarded from the caller; the result is an owned `String`.
     unsafe {
         rc::dup(value);
-        let text = callback::call(debug, &[value]);
-        let out = string::text_bytes(text)
-            .map(|bytes| String::from_utf8_lossy(bytes).into_owned())
-            .unwrap_or_default();
-        rc::drop(text);
-        out
+        callback::call(debug, &[value])
     }
 }

@@ -278,7 +278,35 @@ impl UiTest {
             .unwrap_or_default();
         Ok(RunInput { stdin, args })
     }
+
+    /// Whether the test runs JIT-compiled code (D-545), so that it is
+    /// ignored where programs do not run ([`crate::platform`]). A run test
+    /// does. A check test does unless its `.stderr` golden holds an error
+    /// with a front-end code, a denied warning included, because `cheby
+    /// check` evaluates the package's constants only after a front end
+    /// without errors (D-459). An unreadable golden counts as no error.
+    #[must_use]
+    pub fn builds_a_jit(&self) -> bool {
+        if self.header.mode.runs() {
+            return true;
+        }
+        let golden = crate::golden::read(&self.golden("stderr"))
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        !golden.lines().any(|line| {
+            line.strip_prefix("error[")
+                .and_then(|rest| rest.split_once(']'))
+                .is_some_and(|(code, _)| !BACK_END_CODES.contains(&code))
+        })
+    }
 }
+
+/// The codes that only the back end reports: an unresolved native symbol
+/// and the constant-evaluation errors. `cheby check` reports them after it
+/// has built a JIT for the package's constants. E0069 is also a front-end
+/// code; counting it here only ignores a few more tests on Windows.
+const BACK_END_CODES: [&str; 6] = ["E0053", "E0069", "E0075", "E0076", "E0077", "E0078"];
 
 /// The extensions of the input files of a run test (D-543).
 pub const INPUT_EXTENSIONS: [&str; 2] = ["stdin", "args"];

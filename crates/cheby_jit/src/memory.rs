@@ -509,7 +509,10 @@ mod os {
     }
 }
 
+// The reservation path of Windows has never run, and Windows support is
+// M6 (D-545), so these tests are not built there.
 #[cfg(test)]
+#[cfg(not(windows))]
 mod tests {
     use super::*;
 

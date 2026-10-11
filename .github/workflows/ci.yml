@@ -2,9 +2,17 @@
 #
 # - `test`: build, clippy and every test, including the conformance, UI and
 #   REPL harnesses, on the full platform matrix of D-074. M1 is judged on
-#   Linux and macOS (D-545): on Windows the harnesses ignore the UI run
-#   tests, the conformance runs and `::test` trials and the REPL suite
-#   until M6, and the `cheby run` end-to-end tests are not built there.
+#   Linux and macOS (D-545). On Windows, until M6, CI runs only tests that
+#   execute no generated code. A test that builds or runs JIT code is
+#   ignored there (`#[cfg_attr(windows, ignore = …)]`), and the JIT crate's
+#   own tests are not built there at all, its memory-reservation tests
+#   included, although those run no code: the reservation path of Windows
+#   has never run, and M6 brings it up with the rest. This includes
+#   `cheby check` on a package that passes the front end, which evaluates
+#   its constants with the JIT. So the harnesses ignore the UI run tests,
+#   the UI check tests whose golden has no front-end error, every
+#   conformance trial and the REPL suite, and the `cheby run` end-to-end
+#   tests are not built there.
 #   The harnesses follow tests/milestone (D-288); CI sets none of the
 #   strict-run variables (D-544).
 # - `fmt`: rustfmt, once, because formatting does not depend on the platform.

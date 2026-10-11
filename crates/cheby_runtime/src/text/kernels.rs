@@ -8,7 +8,7 @@ use super::ops::{self, Fill, int};
 use crate::abi::Word;
 use crate::list;
 use crate::panic::fatal;
-use crate::{rc, string, values};
+use crate::{alloc, rc, string, values};
 
 /// The text of a borrowed `String` argument.
 ///
@@ -27,12 +27,35 @@ fn cap(n: usize) -> u64 {
     u64::try_from(n).unwrap_or(u64::MAX)
 }
 
-/// The sum of byte counts, ending the process when it overflows.
+/// The sum of byte counts. A sum that overflows is a request no memory can
+/// serve: E0076 during constant evaluation, a panic otherwise
+/// ([`alloc::out_of_memory`]).
 fn total(parts: impl IntoIterator<Item = u64>) -> u64 {
     parts
         .into_iter()
         .try_fold(0_u64, u64::checked_add)
-        .unwrap_or_else(|| fatal(format_args!("a string would be too large to allocate")))
+        .unwrap_or_else(|| alloc::out_of_memory(u64::MAX))
+}
+
+/// A new string of the code points `chars` gives, which it must give the
+/// same twice: once to measure the result and once to write it, so no
+/// Rust-side copy of the result is ever held (D-617).
+fn build_chars<I: Iterator<Item = char>>(chars: impl Fn() -> I) -> Word {
+    let size = total(chars().map(|c| cap(c.len_utf8())));
+    build(size, |write| {
+        // The code points are written in chunks of a fixed size.
+        let mut chunk = [0_u8; 1024];
+        let mut used = 0_usize;
+        for c in chars() {
+            if chunk.len().saturating_sub(used) < c.len_utf8() {
+                write(chunk.get(..used).unwrap_or_default());
+                used = 0;
+            }
+            let free = chunk.get_mut(used..).unwrap_or_default();
+            used = used.saturating_add(c.encode_utf8(free).len());
+        }
+        write(chunk.get(..used).unwrap_or_default());
+    })
 }
 
 /// Builds a new string of exactly `cap` bytes from the pieces `write`
@@ -313,7 +336,7 @@ pub unsafe extern "C" fn cheby_string_repeat(text: Word, count: i64) -> Word {
     };
     let size = cap(piece.len())
         .checked_mul(cap(count))
-        .unwrap_or_else(|| fatal(format_args!("a string would be too large to allocate")));
+        .unwrap_or_else(|| alloc::out_of_memory(u64::MAX));
     build(size, |write| {
         for _ in 0..count {
             write(piece.as_bytes());
@@ -321,10 +344,10 @@ pub unsafe extern "C" fn cheby_string_repeat(text: Word, count: i64) -> Word {
     })
 }
 
-/// The bytes of a fill, ending the process when they cannot be counted.
+/// The bytes of a fill. A count that overflows fails as [`total`] does.
 fn fill_bytes(fill: &Fill<'_>) -> u64 {
     fill.bytes()
-        .unwrap_or_else(|| fatal(format_args!("a string would be too large to allocate")))
+        .unwrap_or_else(|| alloc::out_of_memory(u64::MAX))
 }
 
 /// `string::pad_start`: copies of `pad` before `text` up to `width` code
@@ -447,7 +470,8 @@ pub unsafe extern "C" fn cheby_string_remove_suffix(text: Word, suffix: Word) ->
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_string_lowercase(text: Word) -> Word {
     // SAFETY: forwarded from the caller.
-    values::string(&unsafe { arg(text) }.to_lowercase())
+    let text = unsafe { arg(text) };
+    build_chars(|| ops::lowercase(text))
 }
 
 /// `string::uppercase`: full Unicode case mapping, such as `ß` to `SS`
@@ -459,7 +483,8 @@ pub unsafe extern "C" fn cheby_string_lowercase(text: Word) -> Word {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_string_uppercase(text: Word) -> Word {
     // SAFETY: forwarded from the caller.
-    values::string(&unsafe { arg(text) }.to_uppercase())
+    let text = unsafe { arg(text) };
+    build_chars(|| ops::uppercase(text))
 }
 
 /// `string::reverse`: the code points in reverse order (D-302). O(n).
@@ -470,7 +495,8 @@ pub unsafe extern "C" fn cheby_string_uppercase(text: Word) -> Word {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_string_reverse(text: Word) -> Word {
     // SAFETY: forwarded from the caller.
-    values::string(&ops::reverse(unsafe { arg(text) }))
+    let text = unsafe { arg(text) };
+    build_chars(|| ops::reverse(text))
 }
 
 /// `string::slice`: code points `start..end`, clamped (D-298, D-319), in
@@ -527,14 +553,16 @@ pub unsafe extern "C" fn cheby_string_to_code_point_values(text: Word) -> Word {
 /// `points` is a live `List<Int>`, borrowed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_string_from_code_point_values(points: Word) -> Word {
-    // SAFETY: a live list, borrowed for the call.
-    let elements = unsafe { list::iter(points) };
-    // SAFETY: its elements are live `Int` words while the list lives.
-    let scalars = elements.map(|value| unsafe { values::word_to_i64(value) });
-    match ops::from_code_point_values(scalars) {
-        Some(text) => values::ok(values::string(&text)),
-        None => values::err_nil(),
+    let scalars = || {
+        // SAFETY: a live list, borrowed for the call.
+        let elements = unsafe { list::iter(points) };
+        // SAFETY: its elements are live `Int` words while the list lives.
+        elements.map(|value| ops::scalar(unsafe { values::word_to_i64(value) }))
+    };
+    if scalars().any(|c| c.is_none()) {
+        return values::err_nil();
     }
+    values::ok(build_chars(|| scalars().flatten()))
 }
 
 /// One kernel: symbol, address, C parameter types and C result type.

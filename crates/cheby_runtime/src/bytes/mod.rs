@@ -23,7 +23,7 @@
 //! (D-298). Equality, hashing and the debug text `bytes::from_list([0x66,
 //! 0x6f])` (D-388) are the generic operations of [`crate::generic`].
 
-mod kernels;
+pub(crate) mod kernels;
 
 #[cfg(test)]
 mod tests;

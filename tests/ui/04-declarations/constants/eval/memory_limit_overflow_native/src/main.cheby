@@ -1,0 +1,22 @@
+// @mode: check-fail
+// @decisions: D-536, D-617
+//! Every kernel that sizes its result from a count it is given stops at
+//! the memory limit when that size overflows 64 bits or the address
+//! space: `repeat` with `int::max_value` copies, and padding to
+//! `int::max_value` code points with a pad of 4-byte code points, on both
+//! sides (§4.5, §13.9).
+
+import std::int
+import std::io
+import std::string
+
+const copies: String = string::repeat("ab", int::max_value)
+
+const before: String = string::pad_start("x", int::max_value, "😀")
+
+const after: String = string::pad_end("x", int::max_value, "😀")
+
+fn main() {
+  let size = string::length(copies) + string::length(before) + string::length(after)
+  io::println("{size}")
+}

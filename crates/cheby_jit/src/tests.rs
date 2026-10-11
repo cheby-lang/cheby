@@ -864,6 +864,9 @@ fn process_memory() -> Option<u64> {
     pages.checked_mul(page)
 }
 
+// TODO(M6): this module is not built on Windows until M6 (D-545, see
+// `lib.rs`), so this function is compiled nowhere for now. It is kept for
+// M6, which runs these tests on Windows.
 #[cfg(windows)]
 fn process_memory() -> Option<u64> {
     use windows_sys::Win32::System::ProcessStatus::{

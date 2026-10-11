@@ -66,6 +66,10 @@ const LATER_EXAMPLES: [&str; 8] = [
 /// covers every target the manifest declares, so this is the check for
 /// both targets (D-512).
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
 fn examples_check_cleanly() {
     let mut checked = 0;
     for dir in examples() {
@@ -85,6 +89,10 @@ fn examples_check_cleanly() {
 /// silent, and its other code checks. 022 keeps its deliberate `todo`
 /// (W0009, D-068). 030 still stops after phase A (D-446).
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
 fn later_examples_report_only_unshipped_modules() {
     for dir in examples() {
         let name = dir.file_name().unwrap().to_string_lossy().into_owned();
@@ -174,6 +182,10 @@ fn the_front_end_is_deterministic() {
 /// an internal compiler error (D-464, D-510). Nothing runs: 001 runs in
 /// `hello_world_runs_without_leaks`, and the others may read input.
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
 fn run_never_fails_internally_on_examples() {
     let mut failures = Vec::new();
     for dir in examples() {
@@ -193,6 +205,10 @@ fn run_never_fails_internally_on_examples() {
 /// a package, like the UI harness, or a package test as it is. Tool errors
 /// for a package without `main` are fine; an internal error is not.
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
 fn run_never_fails_internally_on_ui_tests() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/ui");
     let mut cases = Vec::new();
@@ -373,6 +389,10 @@ fn dyn_package(name: &str, main_calls_it: bool) -> PathBuf {
 /// run` before any code was generated (D-510); since W4-A they compile,
 /// reachable or not, and the program runs without leaks.
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
 fn conversions_to_dyn_compile_and_run() {
     for (name, calls) in [("dyn_reachable", true), ("dyn_unreachable", false)] {
         let dir = dyn_package(name, calls);
@@ -422,6 +442,10 @@ fn dumps_follow_reachability() {
 
 /// Every shipped std module checks cleanly when a package imports it.
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
 fn std_checks_cleanly() {
     for module in std_lib::STD_MODULES {
         let source = format!(
@@ -588,6 +612,10 @@ fn normalize_clif(text: &str) -> String {
 /// loads, `return_call` for the tail call, the static strings. The same
 /// twice (D-264).
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
 fn clif_of_hello_world() {
     let (out, clif) = dump_clif(&example("001_hello_world")).unwrap();
     assert_eq!(out.render(), "");
@@ -616,6 +644,10 @@ fn dumps_of_a_package_with_errors_are_empty() {
 /// each at the `@external` that names it, sorted by position, before
 /// anything runs (D-532); `cheby check` reports none of them (D-455).
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
 fn every_missing_native_symbol_is_reported() {
     let main = b"//! Two missing natives.\n\n\
         @external(native, \"cheby_test_missing_second\")\n\
@@ -655,6 +687,10 @@ fn every_missing_native_symbol_is_reported() {
 /// Runs 001 in this process: status 0 and, in debug builds, no object
 /// left live (the leak check would give 102).
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
 fn hello_world_runs_without_leaks() {
     let result = run(&example("001_hello_world"), RunOptions::default()).unwrap();
     let RunResult::Ran { output, exit } = result else {
@@ -670,6 +706,10 @@ fn hello_world_runs_without_leaks() {
 /// the whole type's layouts, and the run succeeds with no internal error
 /// and no leak (D-555).
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
 fn wide_constructors_escape_the_scan_count() {
     let fields: String = (0..255).map(|_| "    String,\n").collect();
     let source = format!(
@@ -692,6 +732,10 @@ fn wide_constructors_escape_the_scan_count() {
 /// from `cheby.toml`, also when another module's `main` runs, and the
 /// arguments after `--` are `env::args()`.
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
 fn program_name_is_the_package_name() {
     let tools = b"//! A tool with its own `main`.\n\nimport std::env\nimport std::io\nimport std::string\n\nfn main() {\n  io::println(env::program_name())\n  io::println(string::join(env::args(), \",\"))\n}\n";
     let dir = package(
@@ -993,6 +1037,10 @@ fn codes_of(out: &CheckOutput) -> Vec<String> {
 /// without errors (D-459, D-534): a panicking initializer is E0075 in a
 /// clean package, and nothing beyond the type error in a package with one.
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
 fn check_evaluates_constants_only_without_front_end_errors() {
     let clean = package(
         "check_consts_clean",
@@ -1030,6 +1078,10 @@ fn check_evaluates_constants_only_without_front_end_errors() {
 /// A package with two modules of tests: the selection by filter and by
 /// module, and the report's counts (D-541).
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
 fn tests_are_selected_and_counted() {
     let dir = package(
         "test_selection",
@@ -1106,6 +1158,10 @@ fn tests_are_selected_and_counted() {
 /// The std self-test runs a filtered selection, one batch per module, and
 /// renders the counts per module (D-542).
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
 fn std_self_test_runs_a_selection() {
     let report = test_std(Some("std::bool ")).unwrap();
     assert!(report.success(), "{}", report.render());
@@ -1124,6 +1180,10 @@ fn std_self_test_runs_a_selection() {
 /// `std::bytes` builds and passes now that its kernels are registered
 /// (F2), and the report counts it per module (D-542).
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
 fn std_bytes_builds_and_passes() {
     let report = test_std(Some("std::bytes ")).unwrap();
     let text = report.render();
@@ -1160,6 +1220,10 @@ fn warning_package(name: &str) -> PathBuf {
 /// code, the first with a note, and the output then has errors, so `run`
 /// and `test` compile and run nothing.
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
 fn denied_warnings_are_errors_with_their_own_codes() {
     let dir = warning_package("deny_warnings");
     let allowed = check(&dir).unwrap();
@@ -1246,6 +1310,10 @@ fn main() {\n  let _ = js_now()\n  io::println(\"done\")\n}\n";
 /// target only, and a target the manifest does not declare is a tool
 /// error.
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
 fn check_target_narrows_the_cross_target_check() {
     let dir = package(
         "check_target",
@@ -1307,6 +1375,10 @@ fn build_outputs(dir: &Path) -> (String, String, String) {
 /// build graph uses as it would use the global pool `configure_jobs`
 /// builds.
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
 fn the_number_of_jobs_does_not_change_the_output() {
     let warnings = warning_package("jobs");
     let dirs = [

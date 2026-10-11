@@ -844,11 +844,13 @@ fn count_operations_are_inline_unless_checked() {
         jit.compile(&p.units()).unwrap();
         jit.take_clif().join("\n")
     };
+    // The tag test prints as `band` or, when its operand is defined in
+    // another block, with an explicit type: `band.i64`.
     let inline = clif(false);
-    assert!(inline.contains(" = band "), "{inline}");
+    assert!(inline.contains(" = band"), "{inline}");
     assert!(inline.contains("store notrap aligned"), "{inline}");
     let checked = clif(true);
-    assert!(!checked.contains(" = band "), "{checked}");
+    assert!(!checked.contains(" = band"), "{checked}");
     assert!(!checked.contains("store notrap aligned"), "{checked}");
     assert!(checked.contains("= cheby_rt_dup"), "{checked}");
     assert!(checked.contains("= cheby_rt_drop"), "{checked}");
