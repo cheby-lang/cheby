@@ -138,7 +138,7 @@ Until E6 lands, `cheby check` checks a constant's declared type, its restriction
 
 ## Exit criteria
 
-M1 is judged on Linux and macOS. On Windows, CI builds the workspace and runs the unit tests, and the harnesses skip the UI run tests, the conformance runs and `::test` trials and the REPL suite until M6 (D-545). Every criterion is checked with `CHEBY_MILESTONE=M2`, so the tests of M1 count as required before `tests/milestone` is bumped (D-544).
+M1 is judged on Linux and macOS. On Windows, CI builds every test but runs only the tests that execute no generated code until M6: the harnesses skip the UI run tests and every check test that evaluates constants with the JIT, every conformance trial and the REPL suite, and the unit tests that build or run a JIT are ignored or not built (D-545, D-641). Every criterion is checked with `CHEBY_MILESTONE=M2`, so the tests of M1 count as required before `tests/milestone` is bumped (D-544).
 
 - These examples pass through `cheby run` with their goldens: 001, 002, 003, 004, 006, 007, 008, 010, 012, 014, 015, 016, 017, 021, 023, 024, 025, 026, 027, 029, 032, and 011, which passes since gate 5 of the back end.
 - Every other example passes `cheby check` for both targets, with two exceptions. Examples with dependencies are checked from M5, when dependencies resolve, and 030 is the only one (D-446). Examples that import standard-library modules of later tiers are checked from the milestone that ships those modules, and until then report only E0038 for those imports: 005, 009, 013, 018, 019, 022 and 028 from M2, and 031 from M3 (D-477). The examples that pass `cheby check` at M1 exit are therefore 001-004, 006-008, 010-012, 014-017, 020, 021, 023-027, 029 and 032.
@@ -149,42 +149,42 @@ M1 is judged on Linux and macOS. On Windows, CI builds the workspace and runs th
 - The REPL test suite passes.
 - The `test` blocks of the examples above pass through `cheby test` in the conformance suite (D-472).
 - Builds are deterministic across thread counts.
-- Compile-speed numbers are reported, and OQ-P10, the throughput budget, is settled.
+- Compile-speed numbers are reported, and OQ-P10, the throughput budget, is settled (D-640).
 
 ## Status
 
-In progress. The syntax layer, the vertical slice and the front end are done. The back end runs 22 examples with their goldens so far, listed under waves 3 to 5 below, and the other examples are only checked until a later milestone. The JS kernels do not exist yet.
+Exit criteria met, at commit `9efadd2`. The syntax layer, the vertical slice, the front end and the back end are done. The back end runs 22 examples with their goldens: the 21 of the exit list, and 011. The other 10 examples are only checked until a later milestone. The JS kernels do not exist yet (M4). Every exit criterion passes with `CHEBY_MILESTONE=M2`, and OQ-P10 is settled by D-640. The milestone moves to M2 when the user approves the exit, and `tests/milestone` is bumped then (D-288).
 
 ### Front end
 
 Done on 2026-10-10, at commit `6e34ac6`. The gaps it found are settled by D-477 to D-519, and its follow-ups are open items of the [M1 front end](../decisions/LOG.md#2026-10-10-m1-front-end) session.
 
-| #   | State  | Notes                                                                                                                                                                                                                           |
-| --- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| B4  | done   | Items per namespace and duplicate names.                                                                                                                                                                                        |
-| B5  | done   | Opacity errors at the use (D-487). Less visible types in signatures, with aliases transparent (D-488).                                                                                                                          |
-| B6  | done   | Hiding warned at the declaration or import (D-487). `Map`, `Set` and `Bytes` are builtin items outside the prelude, named through their home modules (D-481).                                                                   |
-| B7  | done   | Local resolution, the shadowing ban, and naming and reserved words where names are bound.                                                                                                                                       |
-| B8  | done   | Two runs over every example give byte-identical interface encodings and hashes.                                                                                                                                                 |
-| C1  | done   |                                                                                                                                                                                                                                 |
-| C2  | done   | An erroneous signature makes its uses silent (D-490). `main` takes no type parameters, and a bodiless type needs no `@external` (D-491).                                                                                        |
-| C3  | done   | E0057 for types nothing fixes (D-480), the result before the arguments and the types of `case` arms (D-497), test bodies (D-493), recovery after errors (D-494), float literal range (D-496), codes for uncoded checks (D-495). |
-| C4  | done   | Record update through aliases, never changing type arguments (D-501).                                                                                                                                                           |
-| C5  | done   | Irrefutability by §6.1's list (D-509), constructor pattern shapes (D-495), alternatives (D-506).                                                                                                                                |
-| C6  | done   | Witness text (D-507), two passes with their own budgets (D-508), `Never` as an opaque type (D-492).                                                                                                                             |
-| C7  | partly | Desugaring is done (D-498, D-500). The done-when, REPL `:type`, waits for G5.                                                                                                                                                   |
-| C8  | done   | 012, 016 and 017 check. How a satisfying function is matched (D-504), own and embedded names (D-505), unreadable home modules in std (D-489).                                                                                   |
-| C9  | done   | UI tests for bounds, `compare` and ordering pass (D-477). Operators through any bound (D-503).                                                                                                                                  |
-| C10 | done   | Descriptors for dictionaries, and `dyn` of empty interfaces (D-502).                                                                                                                                                            |
-| C11 | done   |                                                                                                                                                                                                                                 |
-| C12 | done   | 010 and 020 check for both targets. E0067 once per pair of items (D-512), items on no target (D-513), member attributes (D-514), std-only attributes (D-482).                                                                   |
-| C13 | partly | Types, restrictions and direct cycles are checked (D-511). Evaluation waits for E6 (D-478).                                                                                                                                     |
-| C14 | done   | Every warning of §13.8 has a UI test. Imports are used by written names (D-515), unused items (D-516), deprecated uses (D-517), the scope of W0011 and W0013 (D-518).                                                           |
-| C15 | done   | THIR carries descriptors in dictionaries and needs no inference later (D-499).                                                                                                                                                  |
-| H1  | done   | Prelude types, and `Map`, `Set` and `Bytes` (D-447, D-481).                                                                                                                                                                     |
-| H2  | partly | Every kernel is declared with its `@external` bindings (D-484). The symbols come with F2 to F4.                                                                                                                                 |
-| H3  | partly | Every shipped tier-1 module is written and checks clean, laid out per D-483. `std::multimap`, `std::sorted_*` and `std::ordered_*` are not written (D-480). The `test` blocks run with G4 (D-479).                              |
-| H4  | partly | `std::json`, `std::json::decode` and the internal `std::json::tree` are written, and 011 checks. 011 runs once the back end is done.                                                                                            |
+| #   | State | Notes                                                                                                                                                                                                                           |
+| --- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| B4  | done  | Items per namespace and duplicate names.                                                                                                                                                                                        |
+| B5  | done  | Opacity errors at the use (D-487). Less visible types in signatures, with aliases transparent (D-488).                                                                                                                          |
+| B6  | done  | Hiding warned at the declaration or import (D-487). `Map`, `Set` and `Bytes` are builtin items outside the prelude, named through their home modules (D-481).                                                                   |
+| B7  | done  | Local resolution, the shadowing ban, and naming and reserved words where names are bound.                                                                                                                                       |
+| B8  | done  | Two runs over every example give byte-identical interface encodings and hashes.                                                                                                                                                 |
+| C1  | done  |                                                                                                                                                                                                                                 |
+| C2  | done  | An erroneous signature makes its uses silent (D-490). `main` takes no type parameters, and a bodiless type needs no `@external` (D-491).                                                                                        |
+| C3  | done  | E0057 for types nothing fixes (D-480), the result before the arguments and the types of `case` arms (D-497), test bodies (D-493), recovery after errors (D-494), float literal range (D-496), codes for uncoded checks (D-495). |
+| C4  | done  | Record update through aliases, never changing type arguments (D-501).                                                                                                                                                           |
+| C5  | done  | Irrefutability by §6.1's list (D-509), constructor pattern shapes (D-495), alternatives (D-506).                                                                                                                                |
+| C6  | done  | Witness text (D-507), two passes with their own budgets (D-508), `Never` as an opaque type (D-492).                                                                                                                             |
+| C7  | done  | Desugaring is done (D-498, D-500). The done-when, REPL `:type`, came with G5 in the back end.                                                                                                                                   |
+| C8  | done  | 012, 016 and 017 check. How a satisfying function is matched (D-504), own and embedded names (D-505), unreadable home modules in std (D-489).                                                                                   |
+| C9  | done  | UI tests for bounds, `compare` and ordering pass (D-477). Operators through any bound (D-503).                                                                                                                                  |
+| C10 | done  | Descriptors for dictionaries, and `dyn` of empty interfaces (D-502).                                                                                                                                                            |
+| C11 | done  |                                                                                                                                                                                                                                 |
+| C12 | done  | 010 and 020 check for both targets. E0067 once per pair of items (D-512), items on no target (D-513), member attributes (D-514), std-only attributes (D-482).                                                                   |
+| C13 | done  | Types, restrictions and direct cycles are checked (D-511). Evaluation came with E6 in the back end (D-478, D-534).                                                                                                              |
+| C14 | done  | Every warning of §13.8 has a UI test. Imports are used by written names (D-515), unused items (D-516), deprecated uses (D-517), the scope of W0011 and W0013 (D-518).                                                           |
+| C15 | done  | THIR carries descriptors in dictionaries and needs no inference later (D-499).                                                                                                                                                  |
+| H1  | done  | Prelude types, and `Map`, `Set` and `Bytes` (D-447, D-481).                                                                                                                                                                     |
+| H2  | done  | Every kernel is declared with its `@external` bindings (D-484). The symbols came with F2 to F4 in the back end.                                                                                                                 |
+| H3  | done  | Every shipped tier-1 module is written and checks clean, laid out per D-483. `std::multimap`, `std::sorted_*` and `std::ordered_*` are not written (D-480). The 371 `test` blocks pass (D-479).                                 |
+| H4  | done  | `std::json`, `std::json::decode` and the internal `std::json::tree` are written, and 011 runs with its goldens since gate 5 of the back end.                                                                                    |
 
 Changes against the plan:
 
@@ -194,7 +194,7 @@ Changes against the plan:
 
 ### Back end
 
-The back end starts from a plan whose spec gaps are settled by D-520 to D-554, logged in the [M1 back-end plan](../decisions/LOG.md#2026-10-10-m1-back-end-plan) session before its first wave. Codes E0075 to E0078 are added for constant evaluation (D-533). OQ-P10 is an open item of that session.
+The back end starts from a plan whose spec gaps are settled by D-520 to D-554, logged in the [M1 back-end plan](../decisions/LOG.md#2026-10-10-m1-back-end-plan) session before its first wave. Codes E0075 to E0078 are added for constant evaluation (D-533). OQ-P10 was an open item of that session, and D-640 settles it at the exit.
 
 Wave 1 (MIR contracts, the runtime ABI, code generation for every MIR form, numbers and lists) is done at commit `c029c49`. The gaps it found are settled by D-555 to D-568, logged in the [M1 back end, wave 1](../decisions/LOG.md#2026-10-10-m1-back-end-wave-1) session. Changes against the plan:
 
@@ -243,3 +243,29 @@ Wave 6 (the retirement of E0038 in MIR lowering, the `case` subject rules shared
 - No `case` subject may start with `{`, the first or a later one, and subjects take no trailing comma (D-639). tree-sitter-cheby 1d891ef rejects a record literal or a block as an unparenthesized subject and is pinned in `tests/tree-sitter-cheby.rev`. CI's cross-check needs that commit pushed, and `../zed-cheby` bumps its `rev` to it.
 - On Windows, the UI harness ignores run-pass and run-fail tests, the REPL harness ignores every transcript, and the conformance harness ignores run and `::test` trials (D-545). The JIT and runtime unit tests, the driver tests that run examples and the check-pass UI tests that evaluate constants through the JIT still run there and have not been checked on Windows.
 - The CI job for `cargo xtask test-std` is binding, since every std test passes.
+
+### Exit
+
+Wave 7, the exit verification at commit `dc0ef73`, found no failing criterion. The exit fixes that followed are at commit `9efadd2`, and its gate passes on macOS and in a Linux container (aarch64, Rust 1.99.0), with every step run again after the last edit:
+
+- `cargo test --workspace` gives 2112 passed, 0 failed and 8 ignored.
+- The strict run, with `CHEBY_MILESTONE=M2`, `CHEBY_PENDING=require` and `CHEBY_RT_POISON=1`, passes 678 of 678 UI tests and 64 of 64 conformance trials, so every M1 trial is required and passes.
+- The REPL suite passes, 26 of 26. `cargo xtask test-std` reports 371 passed and 0 failed, and `cargo xtask check-examples` gives 32 of 32 as expected.
+- `cargo xtask check-determinism` finds all 37 projects identical. `cargo xtask cross-check` reports 0 mismatches over 845 files and 334 REPL inputs.
+- `cargo xtask coverage` finds 122 decisions cited in the spec uncovered, as at wave 6, none of them in a "must" of chapters 2 to 8. With the exit's entries it finds 123: the spec now cites D-640, a compile-speed budget that no UI test can pin, and the two `out_of_memory` UI tests name D-642.
+- The examples' output under `cheby run` and `cheby test` is identical to gate 6's.
+
+The measurements (I1 to I3) were taken at commit `dc0ef73` on an Apple M3 with 4 performance and 4 efficiency cores, with a release-built compiler and debug code generation (D-259):
+
+- Checking runs at 593k to 645k lines per second per core on 100k and 1M lines.
+- Checking with code generation runs at 95k to 97k lines per second per core on 100k and 1M lines, and 85k to 88k on 10k lines. It scales 3.6x to 3.7x at 8 threads. The back end takes 87% of the time, and over 80% of that is inside Cranelift, mostly register allocation and code emission.
+- Editing one function of the 1M-line project and running it takes 0.49 s to 0.53 s, against D-247's 500 ms. OQ-P11 settles this budget in M3.
+- The front end's profile (I2, 1M lines) showed W0005's package pass taking 48% of `cheby check`. Grouping it by module, sharding the interners and parsing files in parallel halved `cheby check` on one thread and brought it to 0.51 s to 0.61 s at 8 threads, with no function above 5%.
+- OQ-P10 is settled by D-640, the user's choice of the measured baseline: until M3's exit the throughput budget is 95k lines per second per core on projects of 100k lines or more, with at least 3.5x at 8 threads, and D-247's 100k is the target at M3's exit (I3).
+
+The gaps the exit found are settled by D-640 to D-643, logged in the [M1 exit](../decisions/LOG.md#2026-10-11-m1-exit) session. Changes against the plan:
+
+- On Windows, CI runs only the tests that execute no generated code. The JIT's own test modules are not built there, and every test that builds or runs a JIT is ignored, including the check tests that evaluate constants and every conformance trial (D-641). This replaces wave 6's state, in which those tests still ran on Windows unchecked.
+- An allocation that cannot be served panics with `out of memory` instead of aborting with exit 134, so `cheby run` exits with 101, a test fails and a REPL session continues. In constant evaluation, a request over the memory limit is E0076, and one under it that the system refuses is E0075. The runtime's scratch buffers count toward the limit, and a 4 MiB reserve lets even complete exhaustion end as the panic (D-642).
+- Code generation binds MIR locals to CLIF values directly, with no `cranelift_frontend` variables, and boxes constant `Int`s at compile time. A list literal of constant elements now compiles in linear time, 100k elements in 0.75 s under `cheby run`. Literals of computed elements still compile in superlinear time inside regalloc2, an open item of the exit session for M2. The CLIF text changed, and its golden was blessed again (D-643).
+- Windows has not run in CI yet, because nothing is pushed before the exit, and the throughput numbers predate D-643's change.

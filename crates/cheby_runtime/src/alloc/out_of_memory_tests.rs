@@ -3,11 +3,10 @@
 //! constant evaluation a request over the memory limit ends the evaluation
 //! with the memory limit, E0076, before anything is allocated (D-617).
 //! Anywhere else, and for a refusal under the limit, it panics the entry
-//! with `out of memory` (GAP(runtime-out-of-memory)), so a REPL session
-//! or a test run goes on. One test per path: every kernel that computes a
-//! size from a count it is given, the growth of text objects
-//! (interpolation included), scratch buffers, the debug-text arena, and
-//! raw allocation.
+//! with `out of memory` (D-642), so a REPL session or a test run goes on.
+//! One test per path: every kernel that computes a size from a count it is
+//! given, the growth of text objects (interpolation included), scratch
+//! buffers, the debug-text arena, and raw allocation.
 //!
 //! `string::join` and `bytes::concat` sum the sizes of existing values,
 //! which cannot overflow 64 bits in a real process, so only the shared
@@ -63,7 +62,7 @@ fn exceeds_the_limit(request: fn() -> Word) {
 }
 
 /// Checks that `request`, run as a test entry, panics with `out of memory`
-/// (GAP(runtime-out-of-memory)).
+/// (D-642).
 fn panics_out_of_memory(request: fn() -> Word) {
     assert_eq!(panic_report(EntryMode::Test, None, request), OUT_OF_MEMORY);
 }
@@ -199,9 +198,9 @@ fn raw_objects_that_cannot_be_allocated() {
     refused(|| ptr_to_word(alloc_object(1 << 63, 0)));
 }
 
-/// GAP(runtime-out-of-memory): a request under the memory limit that the
-/// system refuses is no memory-limit error, which raising the limit would
-/// not cure, but the `out of memory` panic, E0075 for a constant.
+/// A request under the memory limit that the system refuses is no
+/// memory-limit error, which raising the limit would not cure, but the
+/// `out of memory` panic, E0075 for a constant (D-642).
 #[test]
 #[cfg_attr(miri, ignore = "parks a thread forever")]
 fn a_refusal_under_the_limit_panics() {

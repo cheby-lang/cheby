@@ -1,5 +1,5 @@
 // @mode: check-fail
-// @decisions: D-449, D-617
+// @decisions: D-449, D-617, D-642
 //! A request under the memory limit that the system cannot serve is not
 //! over the limit, so raising the limit would not help: the evaluation
 //! panics with `out of memory`, as the same call does at run time, and

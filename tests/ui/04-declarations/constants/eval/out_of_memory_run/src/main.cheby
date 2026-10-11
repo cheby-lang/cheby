@@ -1,5 +1,5 @@
 // @mode: run-fail
-// @decisions: D-449, D-457, D-617
+// @decisions: D-449, D-457, D-617, D-642
 //! At run time there is no memory limit, and a request that no memory can
 //! serve panics with `out of memory` at an unknown location, inside the
 //! kernel. The same call in a constant is E0076 (§4.5, §11.8).

@@ -45,5 +45,6 @@ Detail level: workstreams with outcomes. This file is refined into tasks when M3
 - Every example that passes on the JIT also passes as an executable from `cheby build --target native`.
 - 020 and 031 pass, against the harness's local fixtures. 031 imports `std::http`, so it is checked from this milestone (D-477). 030 needs its git dependency too, so it moves to M5 (D-446).
 - After a one-function edit in the 1M-line `bench/gen` project, `cheby run` reaches `main` within the D-247 latency budget, as revised by OQ-P11, on the CI reference machine, and OQ-P11 is settled.
+- Checking with code generation is measured against D-247's 100,000 lines per second per core, the throughput target at this exit, on the `bench/gen` shapes of M1's measurement by CI's Linux runner. Until this exit the budget is M1's measured 95,000 lines per second per core, and like every budget it stays reported, not enforced, until M6 (D-640).
 - Two builds of the same inputs produce bit-identical artifacts and executables (D-264).
 - Editing a function body recompiles only its module, checked by a cache-hit test.

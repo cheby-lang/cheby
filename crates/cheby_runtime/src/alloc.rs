@@ -372,7 +372,7 @@ pub fn alloc_object(size: u64, header: u64) -> *mut u8 {
 
 /// The message of the panic that an allocation request which cannot be
 /// served raises when it is not over constant evaluation's memory limit
-/// (GAP(runtime-out-of-memory)).
+/// (D-642).
 pub const OUT_OF_MEMORY: &str = "out of memory";
 
 /// Ends a request for `bytes` bytes that cannot be served: its size
@@ -389,12 +389,10 @@ pub const OUT_OF_MEMORY: &str = "out of memory";
 /// message [`OUT_OF_MEMORY`] at an unknown location: `cheby run` exits
 /// with 101, `cheby test` fails the test, the REPL abandons the entry and
 /// continues (D-457), and a constant gives E0075, since raising the limit
-/// would not help. GAP(runtime-out-of-memory): neither the spec nor the
-/// log says what an allocation that cannot be served does at run time, or
-/// what a refusal under the limit does during constant evaluation; a
-/// panic is what §11.8 makes of every other condition a program's values
-/// cause, and it keeps a REPL session alive. Nothing has been allocated
-/// for the request, so the panic itself can still allocate its report.
+/// would not help (D-642). A panic is what §11.8 makes of every other
+/// condition a program's values cause, and it keeps a REPL session alive.
+/// Nothing has been allocated for the request, so the panic itself can
+/// still allocate its report.
 /// Outside any entry, which only the runtime's own host-side callers
 /// reach, it ends the process.
 pub fn out_of_memory(bytes: u64) -> ! {

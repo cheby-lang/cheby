@@ -91,6 +91,7 @@ These rules apply to every module. Entries do not repeat them.
 
 - A function returns `Option` when the answer may simply be absent, `Result<T, Nil>` when there is only one way to fail, and `Result<T, E>` with the module's own error type when callers need the reason (D-297).
 - A function never panics because of a bad argument. It panics only where a language rule already does, such as overflow (D-025) or `==` reaching a function value (D-233) (D-297). Any function that compares or hashes values, such as `list::contains` or `map::insert`, panics where `==` or hashing would ([§3.13](../spec/03-types.md#313-equality-hashing-and-debug-printing)).
+- On native targets, any function that allocates panics with `out of memory` when its result cannot be allocated, as `string::repeat`, `pad_start` and `pad_end` can with a large count or width ([§11.8.2](../spec/11-errors-and-panics.md#1182-out-of-memory), D-642). Entries do not list this panic.
 - **Counts are clamped.** A count, width or length outside its useful range is clamped, so `list::take(xs, -1)` is `[]` and `list::take(xs, 100)` on a shorter list is the whole list (D-298).
 - **Indexes are not counts.** An index outside `0` to `length - 1`, including a negative one, makes the function return `None` or leave its input unchanged, as the entry says. Indexes never count from the end (D-318).
 - **Ranges exclude their end.** A range given as `start` and `end` includes `start` and excludes `end` (D-319).
