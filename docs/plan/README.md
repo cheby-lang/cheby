@@ -57,7 +57,7 @@ M5 is listed as a milestone so it has exit criteria, but its work starts as soon
 
 ## Plan decisions
 
-Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-plan), D-284 onward in [M0 foundation](../decisions/LOG.md#2026-10-04-m0-foundation), D-418 onward in [Diagnostics](../decisions/LOG.md#2026-10-06-diagnostics), and the plan-level ones of [M1 syntax layer](../decisions/LOG.md#2026-10-07-m1-syntax-layer), [M1 vertical slice](../decisions/LOG.md#2026-10-07-m1-vertical-slice), [Open items](../decisions/LOG.md#2026-10-07-open-items), [M1 front end](../decisions/LOG.md#2026-10-10-m1-front-end), [M1 back-end plan](../decisions/LOG.md#2026-10-10-m1-back-end-plan), [M1 back end, wave 1](../decisions/LOG.md#2026-10-10-m1-back-end-wave-1), [M1 back end, wave 2](../decisions/LOG.md#2026-10-10-m1-back-end-wave-2), [M1 back end, wave 3](../decisions/LOG.md#2026-10-10-m1-back-end-wave-3), [M1 back end, wave 4](../decisions/LOG.md#2026-10-11-m1-back-end-wave-4), [M1 back end, wave 5](../decisions/LOG.md#2026-10-11-m1-back-end-wave-5), [M1 back end, wave 6](../decisions/LOG.md#2026-10-11-m1-back-end-wave-6) and [M1 exit](../decisions/LOG.md#2026-10-11-m1-exit):
+Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-plan), D-284 onward in [M0 foundation](../decisions/LOG.md#2026-10-04-m0-foundation), D-418 onward in [Diagnostics](../decisions/LOG.md#2026-10-06-diagnostics), and the plan-level ones of [M1 syntax layer](../decisions/LOG.md#2026-10-07-m1-syntax-layer), [M1 vertical slice](../decisions/LOG.md#2026-10-07-m1-vertical-slice), [Open items](../decisions/LOG.md#2026-10-07-open-items), [M1 front end](../decisions/LOG.md#2026-10-10-m1-front-end), [M1 back-end plan](../decisions/LOG.md#2026-10-10-m1-back-end-plan), [M1 back end, wave 1](../decisions/LOG.md#2026-10-10-m1-back-end-wave-1), [M1 back end, wave 2](../decisions/LOG.md#2026-10-10-m1-back-end-wave-2), [M1 back end, wave 3](../decisions/LOG.md#2026-10-10-m1-back-end-wave-3), [M1 back end, wave 4](../decisions/LOG.md#2026-10-11-m1-back-end-wave-4), [M1 back end, wave 5](../decisions/LOG.md#2026-10-11-m1-back-end-wave-5), [M1 back end, wave 6](../decisions/LOG.md#2026-10-11-m1-back-end-wave-6), [M1 exit](../decisions/LOG.md#2026-10-11-m1-exit) and [M2 design](../decisions/LOG.md#2026-10-11-m2-design):
 
 | Decision  | Summary                                                                                             |
 | --------- | --------------------------------------------------------------------------------------------------- |
@@ -74,7 +74,7 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-280     | Event-based parser feeding a flat, arena-allocated CST written for Cheby, not `rowan`               |
 | D-281     | Per-target hash behind one routine: SipHash-1-3 on native, a keyed 32-bit hash on JS                |
 | D-282     | New permanent `cheby check`; `cheby build` errors for a target until its backend exists             |
-| D-283     | Before unwinding, a REPL panic abandons the entry on its own stack and the session continues        |
+| ~~D-283~~ | Superseded by D-712                                                                                 |
 | D-284     | All 20 crates exist from M0 as skeletons, plus `bench/gen`, `tests/support` and `xtask`             |
 | D-285     | License holder is "The Cheby Project Developers"                                                    |
 | D-286     | `cheby` parses arguments with clap derive; program arguments of `cheby run` follow `--`             |
@@ -192,24 +192,40 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-642     | An allocation that cannot be served panics with `out of memory`; over the const limit it is E0076   |
 | D-643     | Code generation binds MIR locals to CLIF values directly, with no `cranelift_frontend` variables    |
 | D-644     | D-247's throughput budget holds at M1 (104k to 107k lines/s per core) and stays as written          |
+| D-658     | `CHEBY_THREADS` sets the scheduler's thread count; an invalid value stops the program, status 1     |
+| D-660     | `[runtime]` in `cheby.toml` sets `fiber-stack` and `main-stack`, from 1 MiB to 16 GiB               |
+| D-662     | `cargo xtask cross-check` also parses the `cheby` blocks of `docs/stdlib`                           |
+| D-663     | Example 022 keeps its `todo`, with W0009 in `expected.stderr`                                       |
+| D-664     | M2 ships the seven Cheby collections of tier 1 and benchmarks them before and after Perceus         |
+| D-676     | OQ-P7: own `naked_asm!` context switch                                                              |
+| D-680     | OQ-P8: integrated `mio` poller, no io_uring in v1                                                   |
+| D-681     | Sockets move from M2 to M3                                                                          |
+| D-696     | The unwinding backend is chosen by measurement at the slice checkpoint                              |
+| D-714     | Windows: thread backend with unwinding until M6                                                     |
+| D-719     | The reference-evaluator fuzzer moves to M3                                                          |
+| D-721     | Sanitizers on a scheduled, dated-nightly workflow                                                   |
+| D-722     | Every example runs at `CHEBY_THREADS` unset, 1 and 2                                                |
+| D-724     | Every build treats a global deadlock as fatal and exits with status 103                             |
+| D-728     | Pending stdlib spec tests listed per milestone                                                      |
+| D-730     | Runtime dependencies: `mio`, `parking_lot`, `crossbeam`                                             |
 
 ## Open questions
 
 Each open question is answered through a decision-log entry before the task that depends on it starts. Proposals in the milestone files are marked _Proposed_ and are not decisions.
 
-| ID     | Question                                                                                                                               | Needed by | Status       |
-| ------ | -------------------------------------------------------------------------------------------------------------------------------------- | --------- | ------------ |
-| OQ-P1  | Toolchain basics: Rust version and edition, CI provider and runner matrix                                                              | M0        | D-277        |
-| OQ-P2  | Native value representation: tag scheme, `Int` values outside the tagged range, object header layout, unboxed scalars                  | M1 start  | D-278, D-279 |
-| OQ-P3  | CST library: `rowan` or a custom tree tuned for throughput                                                                             | M1 start  | D-280        |
-| OQ-P4  | Hash function for `Map`/`Set` and the seeded hasher used by hashing (D-093)                                                            | M1        | D-281        |
-| OQ-P5  | What `cheby build` does before AOT exists                                                                                              | M1        | D-282        |
-| OQ-P6  | How panics end a REPL entry in M1, before unwinding exists                                                                             | M1        | D-283        |
-| OQ-P7  | Fiber context switch: own assembly per platform or a crate such as `corosensei`                                                        | M2        | open         |
-| OQ-P8  | IO poller: `mio`, a custom poller, and whether io_uring is used in v1                                                                  | M2        | open         |
-| OQ-P9  | How a package supplies native foreign code (C sources, static libraries, build scripts) to be linked, needed by example 020. Spec gap. | M3        | open         |
-| OQ-P10 | Whether the D-247 throughput budget holds, checked against M1 measurements                                                             | M1 exit   | D-644        |
-| OQ-P11 | Whether the D-247 latency budget, from a one-function edit to `main` running, holds with the M3 cache                                  | M3 exit   | open         |
-| OQ-P12 | Whether the release-to-debug ratio of D-267 holds                                                                                      | M6        | open         |
-| OQ-P13 | The factor by which a Cheby collection may be slower than a Rust kernel before it moves (D-274, D-336)                                 | M2 exit   | open         |
-| OQ-P14 | File IO, standard input and `std::env` on JS hosts, including hosts without a process such as browsers (OQ-io-3, OQ-env-1)             | M4 start  | open         |
+| ID     | Question                                                                                                                               | Needed by | Status                                           |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------- | --------- | ------------------------------------------------ |
+| OQ-P1  | Toolchain basics: Rust version and edition, CI provider and runner matrix                                                              | M0        | D-277                                            |
+| OQ-P2  | Native value representation: tag scheme, `Int` values outside the tagged range, object header layout, unboxed scalars                  | M1 start  | D-278, D-279                                     |
+| OQ-P3  | CST library: `rowan` or a custom tree tuned for throughput                                                                             | M1 start  | D-280                                            |
+| OQ-P4  | Hash function for `Map`/`Set` and the seeded hasher used by hashing (D-093)                                                            | M1        | D-281                                            |
+| OQ-P5  | What `cheby build` does before AOT exists                                                                                              | M1        | D-282                                            |
+| OQ-P6  | How panics end a REPL entry in M1, before unwinding exists                                                                             | M1        | D-283, superseded by D-712                       |
+| OQ-P7  | Fiber context switch: own assembly per platform or a crate such as `corosensei`                                                        | M2        | D-676                                            |
+| OQ-P8  | IO poller: `mio`, a custom poller, and whether io_uring is used in v1                                                                  | M2        | D-680                                            |
+| OQ-P9  | How a package supplies native foreign code (C sources, static libraries, build scripts) to be linked, needed by example 020. Spec gap. | M3        | open                                             |
+| OQ-P10 | Whether the D-247 throughput budget holds, checked against M1 measurements                                                             | M1 exit   | D-644                                            |
+| OQ-P11 | Whether the D-247 latency budget, from a one-function edit to `main` running, holds with the M3 cache                                  | M3 exit   | open                                             |
+| OQ-P12 | Whether the release-to-debug ratio of D-267 holds                                                                                      | M6        | open                                             |
+| OQ-P13 | The factor by which a Cheby collection may be slower than a Rust kernel before it moves (D-274, D-336)                                 | M2 exit   | open (benchmarks scheduled in M2's 2.9 by D-664) |
+| OQ-P14 | File IO, standard input and `std::env` on JS hosts, including hosts without a process such as browsers (OQ-io-3, OQ-env-1)             | M4 start  | open                                             |

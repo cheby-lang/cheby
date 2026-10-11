@@ -1,0 +1,8 @@
+warning[W0009]: `todo` left in the code
+  --> src/money.cheby:97:3
+   |
+97 |   todo as "interest on {amount} at {rate_percent}% is not implemented yet"
+   |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this panics when it is reached
+   |
+   = help: write the missing code in place of the `todo`
+

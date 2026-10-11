@@ -251,7 +251,7 @@ The initializer is an ordinary expression, evaluated **at compile time** (D-090)
 
 There are no comptime parameters and types are not values (D-090, D-057).
 
-A constant's value must not contain function values (including references to top-level functions), channels, fibers or external/handle types (D-139). Baking these into a binary is either impossible or meaningless. The type checker rejects a declared type that contains them, and evaluation rejects any such value it produces. A type contains what its tuples, built-in collections and the fields of every constructor of its named types contain, transitively and with the type arguments in place, so `Option<Db>` and a record with a function field are rejected like `Db` and `fn() -> Int`. A type argument that no field uses holds no value and is not looked at (D-511).
+A constant's value must not contain function values (including references to top-level functions), channels, fibers or external/handle types (D-139). The handles of the concurrency modules, `Sender`, `Receiver`, `Fiber`, `Scope` and `Selector`, are external types, so this rule covers them (D-647). Baking these into a binary is either impossible or meaningless. The type checker rejects a declared type that contains them, and evaluation rejects any such value it produces. A type contains what its tuples, built-in collections and the fields of every constructor of its named types contain, transitively and with the type arguments in place, so `Option<Db>` and a record with a function field are rejected like `Db` and `fn() -> Int`. A type argument that no field uses holds no value and is not looked at (D-511).
 
 In v1 a constant's value must not contain `dyn` values either, because a `dyn` value carries a function table and a type descriptor ([§8.6](08-interfaces.md#86-dyn-values)). The type checker rejects a declared type that contains `dyn`. Allowing it later breaks no program (D-237).
 
@@ -324,10 +324,11 @@ An unknown attribute name, a malformed attribute, a duplicated attribute (other 
 
 An attribute name binds nothing, so it is not checked against the reserved words or the naming convention of [§2.3](02-lexical-structure.md#23-identifiers) and [§2.4](02-lexical-structure.md#24-keywords). This is what lets `@async` exist although `async` is a reserved word. A name outside the table is an unknown attribute (D-435).
 
-The standard library also uses two attributes that user code cannot write (D-482):
+The standard library also uses three attributes that user code cannot write (D-482, D-692):
 
 - `@std_clamped(param, …)` on a function names one or more distinct parameters of the function, which it clamps (D-298). A negative integer literal written for one of them is a warning ([§13.8](13-tooling.md#138-diagnostics-and-warnings)) (D-303). The warning also covers a literal that a capture such as `list::take(_, -1)` moves into its closure, and it does not look through constants or other expressions (D-518).
 - `@std_hooks(equal_fn, hash_fn, debug_fn)` on a type names three functions of the type's module that implement its equality, hashing and debug printing ([§3.13](03-types.md#313-equality-hashing-and-debug-printing)) (D-342). Their shapes are `equal_fn(a: T, b: T) -> Bool`, `hash_fn(value: T) -> K` for any `K`, and `debug_fn(value: T) -> String`, where `T` is the type and no type parameter has a bound. The runtime hashes the `K` that `hash_fn` returns with the built-in structural hash, so a hook may return a canonical value such as a sorted list of entries.
+- `@std_context` on an `@external` function takes no arguments. It marks a kernel that receives the running fiber's context, so it may suspend the fiber, start fibers or use the fiber's state, as the functions of the concurrency modules and the suspending IO functions do (D-692). Such a kernel never calls a Cheby closure (D-484, D-675).
 
 Only package `std` may write them. Outside it they are unknown attributes, and inside it a misplaced one or one that breaks these rules is a compile error like any other attribute error.
 

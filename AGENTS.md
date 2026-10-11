@@ -112,7 +112,7 @@ Follow `docs/plan/`, especially `architecture.md`, `testing.md` and the file of 
 - The locality rule (D-246): type-checking a module may use only the interfaces of its dependencies, never their bodies.
 - The parser is hand-written over a lossless CST (D-272, D-280).
 - Gaps found while implementing go into the decision log and the spec before the code relies on an answer. Never resolve them with ad-hoc compiler behavior.
-- Plan-level open questions in `docs/plan/README.md` (OQ-P7 to OQ-P9 and OQ-P11 to OQ-P14) need a decision before the tasks that depend on them start.
+- Plan-level open questions in `docs/plan/README.md` (OQ-P9 and OQ-P11 to OQ-P14) need a decision before the tasks that depend on them start.
 
 ### Building and testing
 

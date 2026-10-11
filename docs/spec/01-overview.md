@@ -29,7 +29,9 @@ This chapter is informative. It summarizes the language and points to the normat
 | Operator overloading through interfaces                                 | [8](08-interfaces.md)                                 | D-034, D-047, D-118        |
 | Persistent collections: RRB-tree `List`, HAMT `Map` and `Set`           | [3](03-types.md), [9](09-memory-model.md)             | D-039                      |
 | Sorted and insertion-ordered maps and sets in the standard library      | [3](03-types.md)                                      | D-331, D-336, D-337        |
-| Fibers on an M:N scheduler, structured concurrency, channels            | [10](10-concurrency.md)                               | D-003, D-012, D-040, D-054 |
+| Fibers on an M:N scheduler, structured concurrency, channels, selectors | [10](10-concurrency.md)                               | D-003, D-012, D-040, D-054 |
+| Scope bodies and timeouts on the calling fiber, nested cancellation     | [10](10-concurrency.md)                               | D-665, D-667               |
+| Deadlocks detected in every build, exit status 103                      | [10](10-concurrency.md)                               | D-724                      |
 | Compile-time evaluated constants                                        | [4](04-declarations.md)                               | D-090                      |
 | Inline `test` blocks                                                    | [4](04-declarations.md), [13](13-tooling.md)          | D-055                      |
 | Per-target FFI through `@external` and `@target`                        | [12](12-targets-and-ffi.md)                           | D-030, D-056               |
@@ -121,7 +123,7 @@ fn parallel_sum(left: List<Int>, right: List<Int>) -> Result<Int, fiber::Panic> 
 }
 ```
 
-_Note:_ the standard-library function names in these examples (`fiber::spawn`, `fiber::join`, `map::upsert` and so on) are illustrative. The fiber and channel API names are provisional and will be refined in a standard-library specification (D-174, [chapter 10](10-concurrency.md)).
+_Note:_ the standard-library functions in these examples, such as `fiber::spawn`, `fiber::join` and `map::upsert`, are those of the [standard-library specification](../stdlib/README.md), which fixes the names of the fiber, channel and selector API (D-220, D-646, [chapter 10](10-concurrency.md)).
 
 ## 1.5 Implementation architecture (informative)
 

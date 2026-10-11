@@ -57,21 +57,23 @@ _Example:_ when `counts` is not used afterwards, this updates the map in place.
 let updated = map::insert(counts, word, n + 1)
 ```
 
-Implementations provide a compiler flag that reports where reuse did or did not happen, for performance tuning (D-170). The flag and its output are tooling, outside this specification.
+Implementations provide a compiler flag that reports where reuse did or did not happen, for performance tuning (D-170). The flag and its output are tooling, outside this specification. The reference toolchain's flag is `--reuse-report` ([§13.1](13-tooling.md#131-the-cheby-command)) (D-717).
 
 ## 9.4 Sharing across threads
 
 Fibers run in parallel on several OS threads (D-012). To keep reference counting cheap, a value is either **local** to one fiber or **shared** (D-072, ADR-0024):
 
-- A value becomes shared, together with everything it reaches, when it is sent on a channel, captured by a spawned fiber, or stored in a global such as a constant.
+- A value becomes shared, together with everything it reaches, when it is sent on a channel, captured by a spawned fiber, returned by a fiber, whose result other fibers read with `join`, or stored in a global such as a constant (D-674). The body of a scope and the function of a timeout run on the calling fiber, so what they capture and return is not marked ([§10.3](10-concurrency.md#103-scopes)) (D-665, D-674).
 - Local values use plain, non-atomic count operations. Shared values use atomic ones.
 - A shared value is never reused in place, since other threads may still see it ([§9.3](#93-reuse)).
 
 Marking is automatic and invisible to programs, except for its cost: marking a large structure as shared traverses it once (ADR-0024).
 
+_Note:_ the reference implementation also marks the values bound at the REPL prompt, which detached fibers of later entries may reach ([§13.5.4](13-tooling.md#1354-fibers-in-the-repl)). A shared value stays shared, even when only one fiber can reach it again (D-705).
+
 ## 9.5 Handles and drop functions
 
-Some runtime and FFI types are **handles**: channel `Sender` and `Receiver` values ([chapter 10](10-concurrency.md)), files, sockets, and external types declared with a drop function ([§12.5.3](12-targets-and-ffi.md#1253-external-types)) (D-101).
+Some runtime and FFI types are **handles**: channel `Sender` and `Receiver` values, `Fiber`, `Scope` and `Selector` values ([chapter 10](10-concurrency.md)), files, sockets, and external types declared with a drop function ([§12.5.3](12-targets-and-ffi.md#1253-external-types)) (D-101). The handles of the concurrency modules are external types of `std::channel`, `std::fiber` and `std::selector`, with drop functions (D-647).
 
 - A handle type may have a **drop function**. It runs exactly once, when the last reference to the handle goes away (D-101).
 - Drop functions run deterministically on every target, including JS ([§9.8](#98-memory-on-the-js-target)) (D-100, ADR-0028).
@@ -84,12 +86,14 @@ Some runtime and FFI types are **handles**: channel `Sender` and `Receiver` valu
 
 Channels close when their last `Sender` or last `Receiver` is dropped ([§10.5](10-concurrency.md#105-channels)).
 
+_Note:_ the drop functions of the standard library's handles never block, suspend, panic or run Cheby code ([§10.5](10-concurrency.md#105-channels)) (D-672, D-703). The reference implementation runs them from M2, and the drop functions of user external types from M3 (D-703).
+
 ## 9.6 Reference cycles
 
 Mutable runtime objects, such as channels and fibers, can form reference cycles, for example a channel whose buffered message contains a `Sender` for that same channel. Reference counting cannot free such cycles (D-029, ADR-0014).
 
 - In v1, memory reachable only through such cycles leaks. Implementations must document this (D-029).
-- In debug builds, the runtime should report leaked runtime objects at program exit (D-029).
+- In debug builds, the runtime should report leaked runtime objects at program exit (D-029). _Note:_ debug builds of the reference implementation follow the leak check's line ([§10.10](10-concurrency.md#1010-program-entry-and-exit)) with one more line that names the kinds of the leaked runtime objects, such as `<Sender>` and `<Fiber>` (D-711).
 - A cycle collector limited to runtime objects may be added later without changing the language (D-029).
 
 Structured concurrency ([§10.3](10-concurrency.md#103-scopes)) prevents the most common source of leaks, fibers that are never joined (D-040).

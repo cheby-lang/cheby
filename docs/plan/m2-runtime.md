@@ -2,72 +2,138 @@
 
 Goal: Perceus, fibers on an M:N scheduler, structured concurrency, channels, selectors, cancellation, unwinding and non-blocking IO, so that every concurrent example runs on the JIT (D-099, step 2).
 
-Prerequisites: M1 done. Tier-2 stdlib specified. OQ-P7 (context switch) and OQ-P8 (poller) settled.
+Prerequisites: M1 done. Tier-2 stdlib specified. OQ-P7 (context switch) and OQ-P8 (poller) settled. All three are met: the tier-2 modules are specified in `docs/stdlib/` (D-645), D-676 settles OQ-P7 and D-680 settles OQ-P8.
 
-Detail level: workstreams with outcomes. This file is refined into tasks when M2 starts.
+Out of scope: sockets, which arrive with `std::net` in M3 (D-681); comparing generated programs with a reference evaluator (M3, D-719); drop functions of user external types and `@blocking` foreign code from packages, which wait for OQ-P9 in M3 (D-647, D-683, D-703); fibers on Windows (M6, D-714); the `.mjs` files of the tier-2 modules (M4, D-661); io_uring (D-680); and the optimizations of D-731, each of which needs benchmark data and an entry of its own.
+
+The design behind the tasks is logged in the [M2 design](../decisions/LOG.md#2026-10-11-m2-design) session, D-645 to D-732. [architecture.md](architecture.md#3-runtime) describes the runtime it builds.
 
 ## Workstreams
 
-### 2.1 Perceus
+The workstreams of the roadmap stay. The packages below deliver them.
 
-- Borrowing inference for calls inside a module (D-072, D-250), run as a per-module step (D-263). Calls across modules keep the owned convention.
-- Reuse analysis: `drop` plus an allocation of the same size becomes `drop_reuse`/`reuse`, covering record updates, pattern-and-rebuild in one arm, and kernel calls with a count of one (§9.3).
-- Dup/drop fusion and specialization of `drop` for known constructors, on the MIR, before Cranelift (D-262).
-- The reuse report flag (D-170).
-- Outcome: the RC benchmarks of [testing.md](testing.md#7-performance) improve measurably, the leak counter stays at zero, and reuse never changes a program's output (differential fuzzing against M1's naive RC).
+| #   | Workstream                   | Packages                   | Outcome                                                                                                                                                                                                                                                                                                                                                        |
+| --- | ---------------------------- | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2.1 | Perceus                      | P0, P1 to P6               | Borrowing, reuse, fusion and specialized drops on the MIR (D-715, D-716) and the reuse report (D-717). The RC benchmarks of [testing.md](testing.md#7-performance) improve measurably against the M1 baseline, the leak counter stays at zero, and reuse never changes a program's output, checked against M1's naive RC (D-718)                               |
+| 2.2 | Shared values                | S3                         | Values are marked shared where they reach another fiber, and shared objects are never reused in place (D-072, D-674, D-705, ADR-0024). ThreadSanitizer is clean on the concurrent examples (D-721)                                                                                                                                                             |
+| 2.3 | Unwinding                    | U1a to U5                  | Unwind edges and shared cleanup pads on the MIR, a backend chosen from measurements, and Rust frames unwound to guards (D-696 to D-702). Handle drop functions run once, on the releasing fiber, and a panic inside one aborts (D-101, D-171, D-703). A panic in any example frees everything the fiber held (D-710), and the REPL unwinds its entries (D-712) |
+| 2.4 | Fibers and scheduling        | S1, S2, S5, S6, G1, U5, L1 | Fibers on stack slots with our own switch (D-676 to D-679), an M:N work-stealing scheduler sized by `CHEBY_THREADS` and `runtime::set_thread_count` (D-657, D-658, D-685 to D-691), scopes, `spawn`, `join`, detached fibers, cancellation, timeouts (D-665 to D-671, D-706, D-707) and program exit (D-708, D-709)                                            |
+| 2.5 | Channels and selectors       | S6, T1                     | Channels and selectors as chapter 10 and the tier-2 pages specify them (D-672, D-673, D-695, D-704)                                                                                                                                                                                                                                                            |
+| 2.6 | IO                           | T1, I1                     | An integrated poller for timers and its waker (D-680, D-682), a blocking pool for file IO, standard input and `@blocking` calls, and `std::io` unchanged (D-683, D-684). Sockets move to M3 (D-681)                                                                                                                                                            |
+| 2.7 | Runtime-object cycles        | L1                         | Debug builds name the runtime kinds behind a leak, and the conformance harness checks the report (D-029, D-711)                                                                                                                                                                                                                                                |
+| 2.8 | Tests in parallel            | T4                         | `cheby test` runs its tests as root fibers in parallel, with M1's output (D-723)                                                                                                                                                                                                                                                                               |
+| 2.9 | Collections written in Cheby | Q1                         | The seven tier-1 collections that M1 left unshipped ship, and their benchmarks before and after Perceus settle OQ-P13 (D-664)                                                                                                                                                                                                                                  |
 
-### 2.2 Shared values
+## Packages
 
-- The shared mark in the object header, atomic count operations for shared objects, and the marking traversal when a value is sent, captured by a spawned fiber or stored in a global (D-072, ADR-0024).
-- Shared objects are never reused in place.
-- Outcome: ThreadSanitizer is clean on the concurrent examples.
+The work is split into packages. A package starts once the packages it depends on are merged, and packages that own disjoint files run in parallel.
 
-### 2.3 Unwinding
+```text
+Lane 0 (first):       D0, H0, P0, U1a       baseline before any change; variants before the scheduler
+Lane A (core):        S1 ─┬─> S5 ──> S6     the slice, up to checkpoint 1
+Lane B (stacks):      S2 ─┘
+Lane C (handles):     (after S1) S3 ──> S6
+Lane D (front end):   (after U1a) S4 ──> S6
+Lane E (codegen):     (after S1) G1
+Lane F (unwinding):   (after U1a) U1b ──> branch: U2a, U2b, U3, measured ── checkpoint 1 ──> U4 ──> U5 ─┬─> T1
+                                                                                                        └─> L1 ──> L2, T4
+Lane G (IO):          (after S4, U4) I1 ;  (after L1, T1, I1) H1
+Lane H (Perceus):     P0 ──> (after U1b) P1 ──> P2 ──> P3, P4 ;  P5, P6 at any time
+Lane I (collections): Q1 at any time, its second benchmark after P2
+```
 
-- `try_call` landing pads with cleanup blocks shared between calls (D-077, D-262).
-- Handle drop functions run once, on the releasing fiber, and a panic inside one aborts the process (D-101, D-171).
-- The REPL switches from the interim behavior of D-283 to unwinding the entry's fiber.
-- Outcome: a panic in any example frees everything the fiber held (leak counter at zero).
+- **Vertical slice (checkpoint 1).** D0, H0, P0's baseline, U1a, S1 to S6 and G1. At checkpoint 1, `005_prime_sieve` runs on the JIT with real fibers on the M:N scheduler and real channels. Its run trial and its `::test` trial pass with `CHEBY_THREADS` unset, 1 and 2, with the leak check at zero, and so does 028's run trial, whose `main` starts no fiber. Every M1 test stays green on Linux and macOS, and Windows builds.
+- **The unwinding backend is chosen at checkpoint 1.** U2a and U2b are built on a branch in parallel with the slice, both over U1b's MIR pass and with U3, and measured as D-702 sets out. The user picks one from the numbers at checkpoint 1 (D-696), and U4 merges it.
+- **Slice+ (checkpoint 2).** Unwinding and cancellation make 018 (a worker's panic becomes its scope's `Err`), 028's tests (a panic caught by `scope`) and 022 pass.
+- **Critical paths.** To the slice: S1, S5 and S6 in sequence, with S2 beside S1, and U1a then S4 beside both. To M2's exit: checkpoint 1, U4, U5, then T1 and L1, then L2 and T4, beside P1, P2 and P4 and the sanitizer workflow.
+- Until U4 merges, a panic in a child fiber is a fatal runtime error and a root's panic is reported as in M1. This interim never ships.
+- **H1 waits for two open questions.** The locations in the deadlock report (OQ-10-11, given D-732) and the detection of a deadlock in one test while others run (OQ-13-8) need a log entry before H1 starts.
 
-### 2.4 Fibers and scheduling
+### A. Design, harness and baseline
 
-- Stack regions with fixed reservations, 8 MiB by default and more for the root fiber, configurable per spawn and at build time, pages returned with `madvise` on reuse (D-124, D-125, ADR-0032).
-- The combined yield and stack-limit check at every function entry (D-028).
-- M:N work-stealing scheduler, one thread per core by default, overridable through an environment variable and `std::runtime` (D-012, D-175).
-- Scopes, `spawn`, `join`, detached fibers, the first-panic rule and `fiber::Panic`, whose message is the message line of the panic report (D-040, D-073, D-176, D-177, D-178, D-473).
-- Cancellation delivered at suspension points and entry checks, unwinding like a panic and uncatchable (D-102, ADR-0029).
-- Timeouts with `TimedOut` and `Panicked` (D-103, D-181).
-- Program exit: wait for `main`'s scopes, kill detached fibers without unwinding (D-073).
+| #   | Package                                                                                                                                                                                                                                                                                                                                               | Depends on | Decisions                  | Done when                                                                                                        |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| D0  | The M2 design in the docs: the log entries D-645 to D-732, ADRs 0056 to 0060 and 0062, the spec chapters, the tier-2 stdlib pages, the diagnostics and the plan                                                                                                                                                                                       | –          | D-645 to D-732             | the log, the spec, the stdlib pages and the plan agree                                                           |
+| H0  | Thread variants `<name>@threads=1` and `<name>@threads=2` of every run and `::test` trial, landed before the scheduler; the harness's own parallelism capped while they run, and `CHEBY_HARNESS_SCALE`; the REPL transcript key `milestone`; the pending spec-test list in the spec-test guard; the `docs/stdlib` blocks in `cargo xtask cross-check` | –          | D-662, D-722, D-726, D-728 | the variants pass on M1's code, an M2 transcript lands pending, and cross-check parses every `docs/stdlib` block |
+| P0  | `bench/runtime` with its RC, fiber and collection groups, `cargo xtask bench-run`, the M1 baseline of the RC group recorded at 587f8a9 before any Perceus or unwinding change, naive RC selectable (`CHEBY_RC=naive`), and code-size and RC-operation columns in `bench-compile`                                                                      | –          | D-718                      | `bench/runtime/baseline-m1.json` is committed, and every example builds in both RC modes                         |
+| U1a | The MIR's unwind IR only: unwind edges per block, `Resume`, the entry pad, `clear_unwind`, their dump syntax and a validator stage that checks only their shape. Code generation ignores the edges and lowers `Resume` as a trap until U4                                                                                                             | –          | D-698                      | the MIR goldens are unchanged, and a function built with edges dumps and validates                               |
 
-### 2.5 Channels and selectors
+### B. Vertical slice
 
-- Bounded channels with capacity 0 handoff, `send` returning `Err(value)` and `receive` returning `Err(Nil)` (D-054, D-087, D-179).
-- Closing when the last `Sender` or `Receiver` is dropped, through handle reference counting (D-054).
-- Selectors with receive and timer arms, closed-channel arms, fair choice, and a waiting selector counting as a receiver (D-041, D-180, D-206).
+| #   | Package                                                                                                                                                                                                                                                                                                                                                                                                         | Depends on              | Decisions                                                                                        | Done when                                                                                                                                  |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| S1  | The fiber control block with its generated-code view at offsets 0, 8 and 12, holding M1's per-entry thread-locals; `tls.rs` as the only module that declares thread-locals, read through `#[inline(never)]` accessors and checked by a source test over the whole crate; interrupt reasons with sequentially consistent operations; accounting domains per root, test, session and constant, sharded per worker | –                       | D-685, D-686, D-688, D-691                                                                       | the M1 suite passes, and the source test finds no thread-local outside `tls.rs`                                                            |
+| S2  | Stack slots in power-of-two classes from 512 KiB to 16 GiB, carved from `MAP_NORESERVE` regions that are never unmapped, with watermark release and debug guard pages; the `naked_asm!` switch for x86-64 SysV and AAPCS64; the FCB at the top of its slot; the runtime's new dependencies                                                                                                                      | –                       | D-676, D-677, D-678, D-730                                                                       | a test that fills every callee-saved and float register survives a switch on both architectures, and a stress test runs a million switches |
+| S3  | Handle kinds 40 to 44 with the `handle` flag and finalizers run from the free worklist; `mark_shared`                                                                                                                                                                                                                                                                                                           | S1                      | D-647, D-703, D-705                                                                              | `==`, hashing and debug text of each kind behave as D-233 says, and marking is tested over every layout kind                               |
+| S4  | `@std_context` and the table of intrinsic symbols through resolution, THIR, MIR and code generation; the scope helpers declared                                                                                                                                                                                                                                                                                 | U1a                     | D-692, D-693                                                                                     | a `@std_context` kernel receives `ctx`, and lowering generates `scope_run`'s body                                                          |
+| G1  | The large-frame entry guard                                                                                                                                                                                                                                                                                                                                                                                     | S1                      | D-679                                                                                            | a function with a frame of about 300 KiB overflows cleanly at depth                                                                        |
+| S5  | The scheduler: per-worker `runnext`, Chase-Lev deque and pinned queue, a global injector, stealing, Tokio's idle protocol, `park` with its post-switch action, the monitor's 10 ms preemption and `CHEBY_THREADS`; a `Runtime` per host run that holds the code tokens of its JITs; `run_main` and sequential tests on it; the Windows stubs; the interim for child panics                                      | S1, S2                  | D-658, D-687, D-688, D-689, D-690, D-708, D-714                                                  | the M1 examples pass on the runtime at every thread variant, and Windows builds                                                            |
+| S6  | `std::fiber` and `std::channel` with the slice's functions (`scope`, `spawn`, `join`, `Panic`, `message`, `new`, `send` and `receive`) in their final signatures, their kernels and JS bindings, `scope_run`, the scope tree without cancellation, channels, `fiber_main`; the unshipped-module probes moved to `std::http`                                                                                     | S3, S4, S5, H0, D0, U1a | D-646, D-647, D-648, D-661, D-665, D-666, D-672, D-674, D-675, D-693, D-694, D-704, D-729, D-732 | checkpoint 1                                                                                                                               |
 
-### 2.6 IO
+### C. Unwinding
 
-- Poller for sockets and timers, per OQ-P8 (D-042).
-- Blocking thread pool for file IO and `@blocking` foreign calls (D-042, §12.7).
-- `std::io` functions from M1 move onto the poller or the blocking pool without API changes.
+| #   | Package                                                                                                                                                                                                                                                                                                                                                                           | Depends on                  | Decisions                                       | Done when                                                                                                                  |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------- | ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| U1b | The unwind pass: statements that may unwind, owned sets shared with the validator, chained pads memoized by owned set, the entry pad, and the `Stage::Unwound` checks; the measurement switch `CHEBY_UNWIND_EDGES=off`, a hidden option that release builds honor too, which ignores the unwind edges for both backends; the MIR goldens blessed again, once                      | U1a                         | D-698, D-702                                    | every example's MIR passes the `Stage::Unwound` checks                                                                     |
+| U2a | Prototype of the return-flag backend: a test of the result after each Cheby call and of the flag at `ctx+12` after each C call, pads, `Resume` returning 0, the entry pad, and guards that set the flag                                                                                                                                                                           | U1b, G1                     | D-696, D-702                                    | its numbers are measured per D-702, and the M1 suite passes on it                                                          |
+| U2b | Prototype of the `try_call` backend: catch-all handlers on calls of Cheby code, generated exit stubs for C callees, a frame-pointer unwinder with resume code per architecture, per-function tables and a process registry                                                                                                                                                        | U1b, G1                     | D-077, D-696, D-702                             | its numbers are measured per D-702, and the M1 suite passes on it                                                          |
+| U3  | The runtime's unwinding, shared by both backends: the unwind record in the FCB, `raise`, guards at every C-ABI entry point, `callback::call` passing an unwinding on, the `map::upsert` drop guard, owned-argument guards on helpers, M1's abandon removed, reports printed at catch points, the leak check after a panic, the overflow path, constants unwinding on their thread | U1b; built with U2a and U2b | D-697, D-699, D-700, D-701, D-710, D-713        | a test per kernel family raises inside a kernel and finds the leak counter at zero, and the raise path stays within 32 KiB |
+| U4  | The backend decision. The numbers of U2a and U2b go to the user at checkpoint 1, and a new log entry records the choice. If the return flag wins, the entry supersedes D-077, with an ADR, and refines D-453 for unboxed-result entry points. The chosen backend merges with U3, and the other is removed                                                                         | U2a, U2b, U3, checkpoint 1  | D-696, D-702                                    | the entry is logged, and panics in the examples and UI tests unwind with the leak counter at zero                          |
+| U5  | Cancellation: targets and wait nodes under the fiber lock, the subtree walk, the waiter's compare-and-swap, the pass-through in `scope_close`, the first cause, `join`'s failure rules and `loom` models of their races; 022's golden of W0009                                                                                                                                    | U4                          | D-663, D-666, D-667, D-668, D-670, D-706, D-707 | Slice+: 018, 028's tests and 022 pass                                                                                      |
 
-### 2.7 Runtime-object cycles
+### D. Concurrency, IO and lifecycle
 
-- Debug builds report leaked runtime objects at exit, and the conformance harness checks the report (D-029).
+| #   | Package                                                                                                                                                                                                                          | Depends on     | Decisions                                                | Done when                                                                                                                 |
+| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| T1  | The `mio` poller, the timer heap, `timeout`, selectors, `std::selector`, `std::duration`, `std::random` and `std::runtime`, and `set_thread_count`                                                                               | U5, S4         | D-649 to D-657, D-661, D-671, D-673, D-680, D-682, D-695 | 009 and 013 pass                                                                                                          |
+| I1  | The blocking pool, `@blocking` through THIR, the io kernels as `@std_context` kernels, and the standard streams under fibers                                                                                                     | S4, U4         | D-683, D-684                                             | a fiber blocked on standard input leaves the others running, and `std::io`'s API and tests are unchanged                  |
+| L1  | Lifecycle: safepoint stops, detached fibers, the exit sequence, teardown, termination as an outcome, the line of leaked runtime kinds, `spawn_with_stack` and the manifest's `[runtime]` table                                   | U5, S5         | D-659, D-660, D-669, D-708, D-709, D-710, D-711          | 019 passes, and dropping a JIT while a detached fiber spins is safe                                                       |
+| L2  | The REPL on the runtime: one JIT and one runtime per session, slots written with release stores, session values marked shared, and teardown at `:reload` and at session end                                                      | L1             | D-712                                                    | `tests/repl/panics.repl` keeps its output, and a `:reload` transcript with a detached fiber passes under AddressSanitizer |
+| T4  | Parallel `cheby test`: tests as root fibers, captured output replayed in source order, a domain per test, and teardown of each test's detached fibers                                                                            | L1             | D-723                                                    | the `@command: test` UI goldens are unchanged, and 019's tests pass at every thread variant                               |
+| H1  | Deadlock detection in every build; the scheduled sanitizer workflow with the fiber annotations, the Miri subset and bounded fuzz runs; the serial group of timing-sensitive trials; D-641's rule extended to the runtime's tests | S5, L1, T1, I1 | D-714, D-721, D-724, D-725                               | a deadlocking program exits with 103 and its report, and the scheduled workflow passes                                    |
 
-### 2.8 Tests in parallel
+### E. Perceus
 
-- `cheby test` runs each test in its own fiber and scope, in parallel (§13.6).
+| #   | Package                                                                                                                                                         | Depends on | Decisions    | Done when                                                                                         |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | ------------ | ------------------------------------------------------------------------------------------------- |
+| P1  | Borrowing inference, with the borrow mask in the ABI signature and the slot key                                                                                 | U1b, P0    | D-715        | the RC group improves against the baseline, and every example's output is unchanged               |
+| P2  | Reuse in the MIR, the runtime and code generation, with reuse counters in `CHEBY_RT_STATS`                                                                      | P1         | D-716        | record updates, pattern-and-rebuild in one arm and owned last-use kernel arguments reuse in place |
+| P3  | Dup and drop fusion, drops specialized by constructor, and the check that no drop of a value that may hold a handle moves later                                 | P2         | D-716        | the validator's check passes on every example                                                     |
+| P4  | `--reuse-report`, its UI tests, the `@rc=naive` conformance variant and its CI job                                                                              | P2         | D-717, D-718 | the report's UI goldens pass, and every example gives the same output under naive RC              |
+| P5  | Compile-time debts: tuple fields boxed after the single allocation, very large functions split into continuations, and the `huge_literals` shape of `bench/gen` | –          | D-720        | a literal of 100k computed elements compiles in linear time                                       |
+| P6  | The program generator and the naive-versus-Perceus fuzz target                                                                                                  | P0         | D-718, D-719 | the target runs in the nightly workflow without findings                                          |
 
-### 2.9 Collection benchmarks
+### F. Collections
 
-- The sorted, insertion-ordered and multimap collections written in Cheby are benchmarked against a Rust tree, with Perceus reuse on, to settle OQ-P13, the factor by which a Cheby collection may be slower before it moves to a runtime kernel (D-274, D-336).
+| #   | Package                                                                                                                                                                                                                                                 | Depends on                       | Decisions | Done when                                                                     |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- | --------- | ----------------------------------------------------------------------------- |
+| Q1  | Ship `std::sorted_map`, `std::sorted_set`, `std::sorted_multimap`, `std::ordered_map`, `std::ordered_set`, `std::ordered_multimap` and `std::multimap`, written in Cheby, and benchmark them under naive RC, then under Perceus, against Rust baselines | –; the second benchmark after P2 | D-664     | the modules pass `cargo xtask test-std`, and both benchmark runs are reported |
 
 ## Exit criteria
 
+M2 is judged on Linux and macOS. On Windows the runtime builds with stubs, programs that start no fiber keep working, and tests that switch stacks or run a scheduler are ignored like those of D-641 (D-714). Every criterion is checked with `CHEBY_MILESTONE=M3`, so the tests of M2 count as required before `tests/milestone` is bumped (D-544).
+
 - 005, 009, 013, 018, 019, 022 and 028 pass `cheby check` and run on the JIT, in addition to the M1 examples. They import tier-2 modules, so they are checked from this milestone (D-477).
-- Every example passes with 1, 2 and the default number of scheduler threads.
-- ThreadSanitizer and AddressSanitizer jobs are clean on the conformance suite.
-- Reuse is reported for the record-update and kernel cases of §9.3 in the examples.
-- The tier-2 stdlib is implemented on native.
-- The collection benchmarks are reported, and OQ-P13 is settled.
+- Every example's run trial and `::test` trial pass with `CHEBY_THREADS` unset, 1 and 2, with the same goldens (D-722).
+- The leak counter reports zero live objects for every passing example, after a panic too (D-710).
+- ThreadSanitizer and AddressSanitizer are clean on the runtime's tests and the conformance suite in the scheduled sanitizer workflow, and the Miri subset passes. The exit report states that JIT code is not instrumented (D-721).
+- `--reuse-report` reports reuse for the record-update and kernel cases of §9.3, pinned by UI goldens built from 019 and 013 (D-717).
+- Every example gives the same output under naive RC as under Perceus (D-718).
+- Unwinding uses the backend that the user chose at checkpoint 1 from D-702's measurements, and the choice is logged (D-696).
+- The tier-2 stdlib is implemented on native, and the list of pending spec tests is empty (D-728).
+- The seven Cheby collections ship, so importing them is no longer E0038, their benchmarks are reported before and after Perceus, and OQ-P13 is settled (D-664).
+- Compile-speed numbers are reported with M2's passes on, against D-247's throughput budget (D-644, D-702).
+
+## Status
+
+Started. The design is logged: D-645 to D-732 in the [M2 design](../decisions/LOG.md#2026-10-11-m2-design) session, ADRs 0056 to 0060 and 0062, the tier-2 pages in `docs/stdlib/`, and the spec, diagnostics and plan changes that the entries list. D-676 settles OQ-P7 and D-680 settles OQ-P8. Package D0 is done.
+
+The vertical slice is next: H0, P0 and U1a first, then S1 to S6 and G1, up to checkpoint 1. The unwinding backend stays open until then. Both backends are prototyped and measured per D-702, and the user decides at checkpoint 1 (D-696). D-453's refinement for unboxed-result entry points applies only if the return flag wins. Two parts of D-724's deadlock rule are open, the report's locations (OQ-10-11) and deadlocks in parallel tests (OQ-13-8), and need a decision before H1.
+
+Changes against the plan:
+
+- Workstream 2.6's sockets move to M3, with `std::net` (D-681).
+- The comparison with a reference evaluator that [testing.md](testing.md#8-fuzzing) asked for from M2 moves to M3. M2 delivers the program generator and the naive-versus-Perceus fuzz target (D-719).
+- Workstream 2.9 also ships the seven tier-1 collections that M1 left unshipped (D-664).
+- Every build detects a global deadlock and ends `cheby run` with status 103 (D-724).
+- D-077's `try_call` is no longer assumed: both unwinding backends are prototyped on one MIR pass and measured before the user decides (D-696).
