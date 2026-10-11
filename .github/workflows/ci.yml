@@ -1,12 +1,19 @@
 # CI for the reference implementation (D-277, docs/plan/m0-foundation.md).
 #
-# - `test`: build, clippy and every test, including the conformance and UI
-#   harnesses, on the full platform matrix of D-074.
+# - `test`: build, clippy and every test, including the conformance, UI and
+#   REPL harnesses, on the full platform matrix of D-074. M1 is judged on
+#   Linux and macOS (D-545): on Windows the harnesses ignore the UI run
+#   tests, the conformance runs and `::test` trials and the REPL suite
+#   until M6, and the `cheby run` end-to-end tests are not built there.
+#   The harnesses follow tests/milestone (D-288); CI sets none of the
+#   strict-run variables (D-544).
 # - `fmt`: rustfmt, once, because formatting does not depend on the platform.
-# - `cross-check`: parses examples and UI tests with tree-sitter-cheby at the
-#   commit pinned in tests/tree-sitter-cheby.rev (D-272).
+# - `cross-check`: parses examples, UI tests, REPL inputs and std sources with
+#   tree-sitter-cheby at the commit pinned in tests/tree-sitter-cheby.rev
+#   (D-272).
 # - `std-tests`: checks and runs the standard library's own tests, one module
-#   at a time (D-479, D-542).
+#   at a time (D-479, D-542). Every std module builds and every test passes,
+#   so a failure fails CI.
 # - `examples`: `cheby check` in every example directory, with the expected
 #   outcome of each (G6), and the determinism check: every example and the
 #   benchmark projects built with `--jobs 1` and the default from two paths,
@@ -88,10 +95,6 @@ jobs:
 
   std-tests:
     runs-on: ubuntu-24.04
-    # Until M1's exit (gate 5 of the back-end plan), std modules that reach
-    # kernels of a later wave do not build yet, so the report is not
-    # binding. Remove this line when `cargo xtask test-std` passes.
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@master

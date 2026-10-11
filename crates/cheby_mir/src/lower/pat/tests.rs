@@ -169,11 +169,9 @@ fn main() {
 }
 "#;
 
-/// Lowers `src` as the root module and checks that nothing is E0038.
+/// Lowers `src` as the root module.
 fn lower(src: &str) -> Lowered {
-    let lowered = lower_source(&[("", src)]);
-    assert_eq!(lowered.unsupported(), Vec::<String>::new());
-    lowered
+    lower_source(&[("", src)])
 }
 
 /// The dumps of `app::<name>` for each name, separated by blank lines.

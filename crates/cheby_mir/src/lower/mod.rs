@@ -18,14 +18,14 @@
 //! records, fields, tuples), `list.rs`, `interp.rs`, `dict.rs`
 //! (dictionaries and `dyn`), `consts.rs`, `external.rs` and `entry.rs`.
 //!
-//! The front end no longer gates what the back end cannot run (D-480,
-//! D-510): a construct that lowering does not implement yet is E0038 at
-//! the construct, once per outermost construct, never an [`Ice`].
-//! Lowering goes on after one, so a run reports every such construct of
-//! the items it needs at once; an item with one produces no function.
+//! Every THIR construct lowers (D-554): lowering reports no diagnostics,
+//! and its only error is an [`Ice`] for input inconsistent with the
+//! interfaces. THIR enums are `#[non_exhaustive]`, so the dispatch keeps a
+//! fallback arm, and a kind added to THIR later is an [`Ice`] until it is
+//! lowered. E0038 remains only for imports of standard-library modules
+//! that are not shipped yet, which the resolver reports (D-480).
 //! `cheby run` lowers only the items reachable from its entry
-//! ([`crate::reach`]), so `cheby check` never reports these. At M1 exit
-//! lowering reports no E0038 at all (D-554).
+//! ([`crate::reach`], D-510).
 
 mod body;
 mod closure;
@@ -45,9 +45,8 @@ mod scalar;
 mod scalar_tests;
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt;
 
-use cheby_diag::{Diagnostic, SourceMap, Span, codes};
+use cheby_diag::{SourceMap, Span};
 use cheby_iface::{DefId, DisplayCx, Generics, Ice, ModuleId, Ty, display};
 use cheby_types::thir;
 
@@ -97,89 +96,6 @@ impl LowerCx<'_> {
                 generics,
             },
         )
-    }
-}
-
-/// Why lowering produced no MIR.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum LowerError {
-    /// The items use constructs the back end does not implement yet:
-    /// E0038 diagnostics, one per outermost construct, unsorted.
-    Unsupported(Vec<Diagnostic>),
-    /// A broken invariant.
-    Ice(Ice),
-}
-
-impl From<Ice> for LowerError {
-    fn from(ice: Ice) -> Self {
-        Self::Ice(ice)
-    }
-}
-
-impl fmt::Display for LowerError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Unsupported(diags) => {
-                let messages: Vec<&str> = diags.iter().map(|d| d.message.as_str()).collect();
-                write!(f, "unsupported: {}", messages.join("; "))
-            }
-            Self::Ice(ice) => f.write_str(ice.message()),
-        }
-    }
-}
-
-/// Collects the E0038 diagnostics of several items, so one run reports
-/// all of them; an [`Ice`] stops at once.
-#[derive(Debug, Default)]
-pub struct Unsupported {
-    diags: Vec<Diagnostic>,
-}
-
-impl Unsupported {
-    /// The value of `result`, or `None` after recording its diagnostics.
-    ///
-    /// # Errors
-    ///
-    /// The [`Ice`] of `result`.
-    pub fn take<T>(&mut self, result: Result<T, LowerError>) -> Result<Option<T>, Ice> {
-        match result {
-            Ok(value) => Ok(Some(value)),
-            Err(LowerError::Unsupported(diags)) => {
-                self.diags.extend(diags);
-                Ok(None)
-            }
-            Err(LowerError::Ice(ice)) => Err(ice),
-        }
-    }
-
-    /// Records one diagnostic.
-    pub fn push(&mut self, diag: Diagnostic) {
-        self.diags.push(diag);
-    }
-
-    /// Whether nothing was recorded.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.diags.is_empty()
-    }
-
-    /// The recorded diagnostics, in recording order.
-    #[must_use]
-    pub fn into_diagnostics(self) -> Vec<Diagnostic> {
-        self.diags
-    }
-
-    /// `value`, or the recorded diagnostics as the error.
-    ///
-    /// # Errors
-    ///
-    /// [`LowerError::Unsupported`] if anything was recorded.
-    pub fn finish<T>(self, value: T) -> Result<T, LowerError> {
-        if self.diags.is_empty() {
-            Ok(value)
-        } else {
-            Err(LowerError::Unsupported(self.diags))
-        }
     }
 }
 
@@ -302,32 +218,14 @@ impl Pending {
     }
 }
 
-/// The text of a string literal that test THIR uses for a construct MIR
-/// does not lower (E0038), to test reporting and placeholders now that
-/// every THIR construct lowers.
-#[cfg(test)]
-pub(crate) const TEST_UNSUPPORTED: &str = "\u{0}unsupported";
-
-/// E0038: "<what> are not supported yet", worded like the front end's old
-/// gates, with the primary label on the construct (D-451).
-pub(crate) fn not_supported(span: Span, what: &str) -> Diagnostic {
-    Diagnostic::new(
-        codes::NOT_SUPPORTED_YET,
-        format!("{what} are not supported yet"),
-    )
-    .with_primary(span, "")
-}
-
 /// Lowers every function and constant initializer of a module into its
 /// code unit. The result has no reference counts yet
 /// ([`crate::count_and_check`]).
 ///
 /// # Errors
 ///
-/// [`LowerError::Unsupported`] for constructs the back end does not
-/// implement yet, and an [`Ice`] on input inconsistent with the
-/// interfaces.
-pub fn lower_module(module: &thir::Module, cx: &LowerCx<'_>) -> Result<MirModule, LowerError> {
+/// An [`Ice`] on input inconsistent with the interfaces.
+pub fn lower_module(module: &thir::Module, cx: &LowerCx<'_>) -> Result<MirModule, Ice> {
     lower_items(module, &|_| true, cx)
 }
 
@@ -338,20 +236,18 @@ pub fn lower_module(module: &thir::Module, cx: &LowerCx<'_>) -> Result<MirModule
 ///
 /// # Errors
 ///
-/// As [`lower_module`]: every selected item is lowered, so the error
-/// holds the diagnostics of all of them.
+/// As [`lower_module`].
 pub fn lower_items(
     module: &thir::Module,
     wanted: &dyn Fn(DefId) -> bool,
     cx: &LowerCx<'_>,
-) -> Result<MirModule, LowerError> {
+) -> Result<MirModule, Ice> {
     let mut fns: Vec<&thir::FnDef> = module.fns.iter().filter(|f| wanted(f.def)).collect();
     fns.sort_by_key(|f| f.def);
     let mut consts: Vec<&thir::ConstDef> = module.consts.iter().filter(|c| wanted(c.def)).collect();
     consts.sort_by_key(|c| c.def);
     let mut functions = Vec::new();
     let mut pending = Pending::default();
-    let mut unsupported = Unsupported::default();
     // Items in `DefIndex` order: merge functions and constants.
     let mut fi = fns.into_iter().peekable();
     let mut ci = consts.into_iter().peekable();
@@ -364,7 +260,7 @@ pub fn lower_items(
         };
         let lowered = if take_fn {
             let Some(f) = fi.next() else { break };
-            lower_item(f, cx, &mut pending)
+            lower_item(f, cx, &mut pending)?
         } else {
             let Some(c) = ci.next() else { break };
             body::lower_body(
@@ -374,24 +270,20 @@ pub fn lower_items(
                 0,
                 cx,
                 &mut pending,
-            )
+            )?
         };
         // Each item is followed by the closures it made.
-        let made = std::mem::take(&mut pending.functions);
-        if let Some(f) = unsupported.take(lowered)? {
-            functions.push(f);
-            functions.extend(made);
-        }
+        functions.push(lowered);
+        functions.append(&mut pending.functions);
     }
     let layouts = module_layouts(module.module, &cx.defs)?;
-    let unit = finish_unit(
+    finish_unit(
         UnitKind::Code(module.module),
         functions,
         layouts,
         pending,
         cx,
-    )?;
-    unsupported.finish(unit)
+    )
 }
 
 /// Lowers one module's `test` blocks into its tests unit (D-265).
@@ -399,28 +291,23 @@ pub fn lower_items(
 /// # Errors
 ///
 /// As [`lower_module`].
-pub fn lower_tests(module: &thir::Module, cx: &LowerCx<'_>) -> Result<MirModule, LowerError> {
+pub fn lower_tests(module: &thir::Module, cx: &LowerCx<'_>) -> Result<MirModule, Ice> {
     let mut tests: Vec<&thir::TestDef> = module.tests.iter().collect();
     tests.sort_by_key(|t| t.def);
     let mut functions = Vec::new();
     let mut pending = Pending::default();
-    let mut unsupported = Unsupported::default();
     for t in tests {
-        let lowered = body::lower_body(FnKey::Test(t.def), t.span, &t.body, 0, cx, &mut pending);
-        let made = std::mem::take(&mut pending.functions);
-        if let Some(f) = unsupported.take(lowered)? {
-            functions.push(f);
-            functions.extend(made);
-        }
+        let lowered = body::lower_body(FnKey::Test(t.def), t.span, &t.body, 0, cx, &mut pending)?;
+        functions.push(lowered);
+        functions.append(&mut pending.functions);
     }
-    let unit = finish_unit(
+    finish_unit(
         UnitKind::Tests(module.module),
         functions,
         Vec::new(),
         pending,
         cx,
-    )?;
-    unsupported.finish(unit)
+    )
 }
 
 /// Lowers one top-level function: its body, or the Cheby-ABI wrapper of
@@ -431,7 +318,7 @@ pub fn lower_tests(module: &thir::Module, cx: &LowerCx<'_>) -> Result<MirModule,
 /// # Errors
 ///
 /// As [`lower_module`].
-pub fn lower_fn(f: &thir::FnDef, cx: &LowerCx<'_>) -> Result<Vec<Function>, LowerError> {
+pub fn lower_fn(f: &thir::FnDef, cx: &LowerCx<'_>) -> Result<Vec<Function>, Ice> {
     let mut pending = Pending::default();
     let item = lower_item(f, cx, &mut pending)?;
     let mut out = vec![item];
@@ -440,11 +327,7 @@ pub fn lower_fn(f: &thir::FnDef, cx: &LowerCx<'_>) -> Result<Vec<Function>, Lowe
 }
 
 /// The function of one top-level function; closures go to `pending`.
-fn lower_item(
-    f: &thir::FnDef,
-    cx: &LowerCx<'_>,
-    pending: &mut Pending,
-) -> Result<Function, LowerError> {
+fn lower_item(f: &thir::FnDef, cx: &LowerCx<'_>, pending: &mut Pending) -> Result<Function, Ice> {
     let sig = cx.defs.fn_sig(f.def)?;
     let dicts = sig
         .generics

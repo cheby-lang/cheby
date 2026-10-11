@@ -29,20 +29,16 @@ use cheby_syntax::SyntaxTree;
 use cheby_types::{Tests, TypesInput, build_interface, check_bodies_with, thir};
 
 use crate::{
-    Defs, EntryKind, EntryRequest, LowerCx, MirModule, Program, Root, Unsupported, count_and_check,
-    dump, dump_function, lower_entries, lower_items, lower_tests, reachable,
+    Defs, EntryKind, EntryRequest, LowerCx, MirModule, Program, Root, count_and_check, dump,
+    dump_function, lower_entries, lower_items, lower_tests, reachable,
 };
 
 /// What [`lower_source`] produced.
 pub(crate) struct Lowered {
-    /// The front end's diagnostics (warnings only), then E0038 from
-    /// lowering, in the order they were produced.
-    pub diags: Vec<Diagnostic>,
-    /// The units that lowered without E0038, after reference counting and
-    /// validation: one per needed module in build order, then the entries
-    /// unit.
+    /// The units, after reference counting and validation: one per needed
+    /// module in build order, then the entries unit. Front-end errors
+    /// stop before lowering, which reports no diagnostics (D-554).
     pub units: Vec<MirModule>,
-    pub sources: SourceMap,
 }
 
 impl Lowered {
@@ -60,7 +56,7 @@ impl Lowered {
         self.units
             .iter()
             .find(|u| &*u.path == path && u.module().is_some())
-            .unwrap_or_else(|| panic!("no unit `{path}`; E0038: {:?}", self.unsupported()))
+            .unwrap_or_else(|| panic!("no unit `{path}`"))
     }
 
     /// The dump of the function whose key prints as `key` (`app::main`,
@@ -92,25 +88,6 @@ impl Lowered {
                     .is_some_and(|rest| rest.starts_with(&format!("{key}(")))
             })
             .unwrap_or_else(|| panic!("no function `{key}` in:\n{}", self.dump()))
-    }
-
-    /// Every E0038 as `message @ path:line:col`, sorted.
-    pub fn unsupported(&self) -> Vec<String> {
-        let mut out: Vec<String> = self
-            .diags
-            .iter()
-            .filter(|d| d.code == cheby_diag::codes::NOT_SUPPORTED_YET)
-            .map(|d| {
-                let at = d
-                    .labels
-                    .first()
-                    .and_then(|l| self.sources.location(l.span))
-                    .map_or_else(String::new, |l| l.to_string());
-                format!("{} @ {at}", d.message)
-            })
-            .collect();
-        out.sort();
-        out
     }
 }
 
@@ -415,7 +392,7 @@ fn lower_package_with(
             package, &modules, &checked, &order, &set, &globals, &sources, with_tests,
         )
     };
-    let (units, unsupported) = match back_end_thread {
+    let units = match back_end_thread {
         None => back_end(),
         Some((stack, setup)) => std::thread::scope(|scope| {
             std::thread::Builder::new()
@@ -430,15 +407,11 @@ fn lower_package_with(
                 .unwrap()
         }),
     };
-    diags.extend(unsupported);
-    Ok(Lowered {
-        diags,
-        units,
-        sources,
-    })
+    Ok(Lowered { units })
 }
 
-/// The back end of [`lower_package_with`]: the units, then E0038.
+/// The back end of [`lower_package_with`]: the units, each counted and
+/// checked. An internal error panics with the unit's dump.
 #[expect(
     clippy::too_many_arguments,
     reason = "what the front end of a test build produced"
@@ -452,7 +425,7 @@ fn back_end(
     globals: &Globals,
     sources: &SourceMap,
     with_tests: bool,
-) -> (Vec<MirModule>, Vec<Diagnostic>) {
+) -> Vec<MirModule> {
     let root = modules.find(&ModulePath::root(package)).unwrap();
     let main = checked[&root]
         .0
@@ -485,7 +458,12 @@ fn back_end(
     roots.extend(tests.iter().map(|&(_, t)| Root::Test(t)));
     let reach = reachable(&program, &roots).unwrap();
     let mut units = Vec::new();
-    let mut unsupported = Unsupported::default();
+    let mut push = |mut unit: MirModule| {
+        if let Err(ice) = count_and_check(&mut unit) {
+            panic!("{ice}\n{}", dump(&unit).unwrap_or_default());
+        }
+        units.push(unit);
+    };
     for &id in order {
         if !reach.needs_module(id) {
             continue;
@@ -501,21 +479,9 @@ fn back_end(
             },
             sources,
         };
-        let lowered = lower_items(thir, &|def| reach.contains(def), &cx);
-        if let Some(mut unit) = unsupported.take(lowered).unwrap() {
-            if let Err(ice) = count_and_check(&mut unit) {
-                panic!("{ice}\n{}", dump(&unit).unwrap_or_default());
-            }
-            units.push(unit);
-        }
+        push(lower_items(thir, &|def| reach.contains(def), &cx).unwrap());
         if tests.iter().any(|&(m, _)| m == id) {
-            let lowered = lower_tests(thir, &cx);
-            if let Some(mut unit) = unsupported.take(lowered).unwrap() {
-                if let Err(ice) = count_and_check(&mut unit) {
-                    panic!("{ice}\n{}", dump(&unit).unwrap_or_default());
-                }
-                units.push(unit);
-            }
+            push(lower_tests(thir, &cx).unwrap());
         }
     }
     let mut all: Vec<ModuleId> = order.to_vec();
@@ -538,12 +504,6 @@ fn back_end(
         kind: EntryKind::Test(t.def),
         info: Some(&t.entry),
     }));
-    let entries = lower_entries(&requests, &cx);
-    if let Some(mut unit) = unsupported.take(entries).unwrap() {
-        if let Err(ice) = count_and_check(&mut unit) {
-            panic!("{ice}\n{}", dump(&unit).unwrap_or_default());
-        }
-        units.push(unit);
-    }
-    (units, unsupported.into_diagnostics())
+    push(lower_entries(&requests, &cx).unwrap());
+    units
 }

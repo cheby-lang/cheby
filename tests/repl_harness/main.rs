@@ -1,7 +1,10 @@
 //! REPL transcript harness: runs every transcript under `tests/repl/`
 //! through the real `cheby repl` (plan §8.3, D-546, D-548).
 //!
-//! A transcript `tests/repl/<name>.repl` is what a piped session prints:
+//! A transcript `tests/repl/<name>.repl` is what a piped session prints,
+//! after an optional header of `// @decisions: …` lines that name the
+//! decisions it pins (`cheby_test_support::repl`,
+//! GAP(repl-transcript-header)):
 //!
 //! - a line that starts with `> ` or `. ` is an input line after its
 //!   prompt, which the REPL echoes;
@@ -23,6 +26,9 @@
 //! `CHEBY_BLESS=1` rewrites each transcript with the actual output, its
 //! `< ` lines kept after the same input lines. Every `cheby` runs with
 //! `CHEBY_RT_POISON=1`, like the other harnesses (plan §4.8).
+//!
+//! On Windows every transcript is ignored until M6 (D-545,
+//! `cheby_test_support::platform`).
 
 use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
@@ -30,7 +36,9 @@ use std::process::{Command, ExitCode, Stdio};
 use std::time::{Duration, Instant};
 
 use cheby_test_support::milestone::POISON_ENV;
-use cheby_test_support::{bless_enabled, files_with_extension, golden, process, repo_root};
+use cheby_test_support::{
+    bless_enabled, files_with_extension, golden, platform, process, repl, repo_root,
+};
 use libtest_mimic::{Arguments, Failed, Trial};
 
 const CHEBY: &str = env!("CARGO_BIN_EXE_cheby");
@@ -48,6 +56,9 @@ fn main() -> ExitCode {
         }
     };
     let bless = bless_enabled();
+    if let Some(reason) = platform::run_skip_reason() {
+        eprintln!("REPL harness: transcripts are ignored: {reason}");
+    }
     let trials = transcripts
         .into_iter()
         .map(|path| {
@@ -60,6 +71,7 @@ fn main() -> ExitCode {
             Trial::test(name, move || {
                 run_transcript(&path, bless).map_err(Failed::from)
             })
+            .with_ignored_flag(platform::runs_skipped())
         })
         .collect();
     libtest_mimic::run(&args, trials).exit_code()
@@ -102,7 +114,9 @@ fn parse(text: &str) -> Transcript {
 
 fn run_transcript(path: &Path, bless: bool) -> Result<(), String> {
     let text = golden::read(path)?.ok_or_else(|| format!("{} is missing", path.display()))?;
-    let transcript = parse(&text);
+    let (header, session) = repl::split(&text);
+    repl::Header::parse(header)?;
+    let transcript = parse(session);
     // The session runs in a scratch directory: a copy of the transcript's
     // package, if it has one, so an entry may write files there (`:reload`
     // reads changed modules) without touching the repository.
@@ -120,7 +134,7 @@ fn run_transcript(path: &Path, bless: bool) -> Result<(), String> {
         .map_or_else(|| output.clone(), str::to_owned);
     if bless {
         let blessed = with_stdin_lines(&output, &transcript.stdin_lines);
-        golden::write(path, &blessed, true)?;
+        golden::write(path, &format!("{header}{blessed}"), true)?;
     } else {
         golden::compare("the transcript", &transcript.expected, &output)?;
     }

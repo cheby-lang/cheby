@@ -273,6 +273,40 @@ impl<'a> Input<'a> {
         }
     }
 
+    /// For a current `{`, the kind of the first raw token after its
+    /// matching `}` that is not trivia, a line break included. Braces are
+    /// matched like brackets, ignoring the grammar, as `Braces` in the
+    /// parser does. `None` if the current token is not `{` or no `}`
+    /// closes it. Recovery uses this to tell a block from a body.
+    pub(super) fn after_matching_brace(&self) -> Option<SyntaxKind> {
+        let current = self.current();
+        if current.kind != L_BRACE {
+            return None;
+        }
+        let mut depth = 0_usize;
+        let mut i = current.raw;
+        loop {
+            match self.lexed.kind(i) {
+                EOF => return None,
+                L_BRACE => depth = depth.saturating_add(1),
+                R_BRACE => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+            i = i.saturating_add(1);
+        }
+        loop {
+            i = i.saturating_add(1);
+            if !self.is_trivia(i) {
+                return Some(self.lexed.kind(i));
+            }
+        }
+    }
+
     /// Consumes the current token. `binop` says that the parser reads it as
     /// a binary operator, so a line break after it continues the line.
     pub(super) fn advance(&mut self, binop: bool) -> Consumed {

@@ -1,3 +1,4 @@
+// @decisions: D-043, D-610, D-626, D-627, D-629
 > type Shape {
 .   Circle(Float),
 .   Square(Float),

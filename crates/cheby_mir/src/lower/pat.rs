@@ -147,12 +147,6 @@ impl BodyCx<'_, '_> {
         ty: Ty,
         on_fail: OnFail,
     ) -> Result<Option<()>, Ice> {
-        if self.is_poisoned(&Operand::Local(value)) {
-            // The value stands for a construct reported as E0038: its
-            // names become placeholders too, and nothing is matched.
-            self.bind_pattern(pat)?;
-            return Ok(Some(()));
-        }
         let input = Input {
             subjects: vec![ty],
             rows: vec![(vec![pat], 0)],

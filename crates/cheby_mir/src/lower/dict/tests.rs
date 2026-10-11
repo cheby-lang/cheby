@@ -11,9 +11,7 @@ use crate::ir::{
 use crate::test_support::{Lowered, lower_source};
 
 fn lowered(files: &[(&str, &str)]) -> Lowered {
-    let lowered = lower_source(files);
-    assert_eq!(lowered.unsupported(), Vec::<String>::new());
-    lowered
+    lower_source(files)
 }
 
 fn app(l: &Lowered) -> &MirModule {
@@ -573,7 +571,6 @@ test "shows through a dictionary" {
 }
 "#,
     )]);
-    assert_eq!(l.unsupported(), Vec::<String>::new());
     let tests = l
         .units
         .iter()

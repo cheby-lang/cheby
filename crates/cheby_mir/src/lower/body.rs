@@ -5,21 +5,18 @@
 //! `Result<_, Ice>`. A method that lowers an expression returns
 //! `Option<Operand>`: `None` means the expression diverged (the current
 //! block ended in a tail call or a panic), so the rest of the enclosing
-//! block is unreachable. A construct the back end cannot lower yet is
-//! E0038 at the construct ([`BodyCx::unsupported`]), and its value is a
-//! placeholder local, so lowering goes on and reports every such
-//! construct of the body (D-510).
+//! block is unreachable. Every THIR construct lowers (D-554); a kind
+//! added to THIR later is an [`Ice`] until it is lowered.
 
-use cheby_diag::{Diagnostic, Span};
+use cheby_diag::Span;
 use cheby_iface::{Generics, Ice, Idx, Name, Ty};
-use cheby_types::thir::{self, ExprId, PatKind};
-use rustc_hash::FxHashSet;
+use cheby_types::thir::{self, ExprId};
 
 use crate::builder::FunctionBuilder;
 use crate::ir::{
     Abi, BlockId, Const, FnKey, Function, Local, Operand, Rvalue, Stmt, StrId, Terminator,
 };
-use crate::lower::{LowerCx, LowerError, Pending, not_supported};
+use crate::lower::{LowerCx, Pending};
 use crate::repr::{Repr, repr_of};
 
 /// Lowers a function, constant or test body into a Cheby-ABI function.
@@ -33,7 +30,7 @@ pub(super) fn lower_body(
     dicts: usize,
     cx: &LowerCx<'_>,
     pending: &mut Pending,
-) -> Result<Function, LowerError> {
+) -> Result<Function, Ice> {
     let generics = match key {
         FnKey::Item(def) => Some(&cx.defs.fn_sig(def)?.generics),
         _ => None,
@@ -46,36 +43,23 @@ pub(super) fn lower_body(
         generics,
         b,
         locals: vec![None; body.locals.len()],
-        diags: Vec::new(),
-        poisoned: FxHashSet::default(),
         pending,
         dict_params: Vec::new(),
     };
-    let lowered = lx.run(dicts);
-    // A broken invariant after an unsupported construct is most likely
-    // the placeholder's doing: the construct is what to report.
-    if !lx.diags.is_empty() {
-        return Err(LowerError::Unsupported(lx.diags));
-    }
-    lowered?;
-    Ok(lx.b.finish()?)
+    lx.run(dicts)?;
+    lx.b.finish()
 }
 
 /// The state of lowering one body.
 pub(super) struct BodyCx<'a, 'cx> {
     pub(super) cx: &'a LowerCx<'cx>,
     pub(super) body: &'a thir::Body,
-    /// The enclosing item's type parameters, to name types in E0038.
+    /// The enclosing item's type parameters, to name types in internal
+    /// errors.
     pub(super) generics: Option<&'cx Generics>,
     pub(super) b: FunctionBuilder,
     /// The MIR local of each THIR local, by the resolver's id.
     pub(super) locals: Vec<Option<Local>>,
-    /// E0038 for each outermost unsupported construct.
-    pub(super) diags: Vec<Diagnostic>,
-    /// Placeholder locals that stand for unsupported constructs. They are
-    /// never defined; the function is dropped. Membership tests only, so
-    /// the hash set's order never shows (D-264).
-    pub(super) poisoned: FxHashSet<Local>,
     /// What the unit needs besides this body's function.
     pub(super) pending: &'a mut Pending,
     /// The local holding each dictionary of the enclosing item's bounds,
@@ -120,18 +104,14 @@ impl<'a> BodyCx<'a, '_> {
         Ok(())
     }
 
-    /// The value of local `id`, of type `ty`.
-    pub(super) fn lookup<I: Idx>(&mut self, id: I, ty: Ty) -> Result<Operand, Ice> {
-        if let Some(local) = self.locals.get(id.index()).copied().flatten() {
-            return Ok(Operand::Local(local));
-        }
-        if self.diags.is_empty() {
-            return Err(Ice::new(format!(
-                "THIR local {id:?} used before its binding"
-            )));
-        }
-        // Bound by a construct that was not lowered.
-        self.placeholder(self.repr_of(ty))
+    /// The value of local `id`.
+    pub(super) fn lookup<I: Idx>(&self, id: I) -> Result<Operand, Ice> {
+        self.locals
+            .get(id.index())
+            .copied()
+            .flatten()
+            .map(Operand::Local)
+            .ok_or_else(|| Ice::new(format!("THIR local {id:?} used before its binding")))
     }
 
     /// The THIR expression `id`.
@@ -154,35 +134,6 @@ impl<'a> BodyCx<'a, '_> {
     /// `ty` as users write it (D-463).
     pub(super) fn show(&self, ty: Ty) -> String {
         self.cx.show(ty, self.generics)
-    }
-
-    /// A local of `repr` that stands for something not lowered.
-    pub(super) fn placeholder(&mut self, repr: Repr) -> Result<Operand, Ice> {
-        let local = self.new_local(repr)?;
-        self.poisoned.insert(local);
-        Ok(Operand::Local(local))
-    }
-
-    /// Whether `op` is a placeholder (or nothing was lowered for it).
-    pub(super) fn is_poisoned(&self, op: &Operand) -> bool {
-        matches!(op, Operand::Local(l) if self.poisoned.contains(l))
-    }
-
-    /// Reports E0038 "`<what>` are not supported yet" at `span` and returns
-    /// a placeholder for the construct's value of type `ty`.
-    pub(super) fn unsupported(
-        &mut self,
-        span: Span,
-        what: &str,
-        ty: Ty,
-    ) -> Result<Option<Operand>, Ice> {
-        self.diags.push(not_supported(span, what));
-        self.placeholder(self.repr_of(ty)).map(Some)
-    }
-
-    /// A new local of `repr`, not yet defined.
-    pub(super) fn new_local(&mut self, repr: Repr) -> Result<Local, Ice> {
-        self.b.new_local(repr, None, None)
     }
 
     /// Defines a new local of `repr` as `value` in the current block.
@@ -212,23 +163,6 @@ impl<'a> BodyCx<'a, '_> {
         self.b.string(&text)
     }
 
-    /// Binds every name of a pattern that is not lowered to a
-    /// placeholder, so later uses lower without an error of their own.
-    pub(super) fn bind_pattern(&mut self, pat: &thir::Pat) -> Result<(), Ice> {
-        let mut bound = Vec::new();
-        pat.walk(&mut |p| match &p.kind {
-            PatKind::Bind(l) | PatKind::As { local: l, .. } => bound.push((*l, p.ty)),
-            _ => {}
-        });
-        for (local, ty) in bound {
-            let placeholder = self.placeholder(self.repr_of(ty))?;
-            if let Operand::Local(l) = placeholder {
-                self.bind(local, l)?;
-            }
-        }
-        Ok(())
-    }
-
     /// Binds a name to `op`, a value of type `ty` (already in `ty`'s
     /// representation). A fresh temporary takes the name; anything else
     /// (a constant, another binding) is moved into a new local, so every
@@ -242,7 +176,6 @@ impl<'a> BodyCx<'a, '_> {
     ) -> Result<(), Ice> {
         let repr = self.repr_of(ty);
         let local = match op {
-            Operand::Local(l) if self.poisoned.contains(&l) => l,
             Operand::Local(l) if self.b.name_local(l, name, ty)? => l,
             op => {
                 let l = self.b.new_local(repr, Some(name), Some(ty))?;
@@ -267,11 +200,11 @@ impl<'a> BodyCx<'a, '_> {
             }
             thir::Stmt::Assert { cond, message } => self.assert_stmt(*cond, *message),
             thir::Stmt::LetAssert { pat, init, message } => self.let_assert(pat, *init, *message),
-            _ => {
-                self.diags
-                    .push(not_supported(block_span, "this kind of statement"));
-                Ok(Some(()))
-            }
+            // THIR's `Stmt` is `#[non_exhaustive]`: a kind added later is
+            // an internal error until it is lowered (D-554).
+            _ => Err(Ice::new(format!(
+                "a kind of statement MIR does not lower reached it in the block at {block_span:?}"
+            ))),
         }
     }
 }

@@ -1,3 +1,4 @@
+// @decisions: D-546
 > 1 / 0
 panicked at <repl:1>:1:1:
 division by zero

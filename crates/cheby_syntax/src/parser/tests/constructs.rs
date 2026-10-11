@@ -299,6 +299,46 @@ fn records_and_case_subjects() {
     // A lower-case name followed by `{` is never a record.
     let text = in_fn("  case x {\n    _ => 1\n  }");
     assert_eq!(count(&text, RECORD_EXPR), 0);
+    // A record or a block as a subject must be parenthesized (§5.9.6). The
+    // restriction reaches operands, calls and field accesses outside
+    // brackets, as in tree-sitter-cheby.
+    for subject in [
+        "P { x: 1 }",
+        "a + P { x: 1 }",
+        "-P { x: 1 }",
+        "P { x: 1 }.x",
+        "{ 1 }",
+    ] {
+        let text = in_fn(&format!("  case {subject} {{\n    _ => 1\n  }}"));
+        let codes = codes_of(&text);
+        assert!(!codes.is_empty(), "{subject}");
+        assert!(codes.iter().all(|c| c == "E0013"), "{subject}: {codes:?}");
+    }
+    // No subject may start with `{`, not only the first (A.5).
+    let text = in_fn("  case a, { 1 } {\n    _, _ => 1\n  }");
+    assert_eq!(codes_of(&text), ["E0013"]);
+    assert_eq!(count(&text, CASE_BODY), 1);
+    // A block subject may span lines; the `{` after its `}` opens the arms.
+    let text = in_fn("  case a, {\n    1\n  } {\n    _, _ => 1\n  }");
+    assert_eq!(codes_of(&text), ["E0013"]);
+    assert_eq!(count(&text, CASE_BODY), 1);
+    // A trailing comma after the last subject: the `{` opens the arms, and
+    // the one error says to remove the comma (A.5 `subjects`).
+    for text in [
+        in_fn("  case a, b, {\n    _, _ => 1\n  }"),
+        in_fn("  case a, {\n    _ => 1\n  }"),
+        in_fn("  let x = case a, b, { _, _ => 1 }\n  x"),
+    ] {
+        assert_eq!(codes_of(&text), ["E0013"], "{text}");
+        assert_eq!(count(&text, CASE_BODY), 1, "{text}");
+        // Only the function body is a block.
+        assert_eq!(count(&text, BLOCK), 1, "{text}");
+        let errors = errors_of(&text);
+        assert!(errors.contains("remove the trailing comma"), "{errors}");
+    }
+    // A block later in a subject is allowed.
+    let text = in_fn("  case a, b + { 1 }, ({ 2 }) {\n    _, _, _ => 1\n  }");
+    assert_ok(&text);
 }
 
 #[test]

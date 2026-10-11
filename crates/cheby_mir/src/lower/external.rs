@@ -22,7 +22,7 @@ use crate::builder::FunctionBuilder;
 use crate::ir::{
     Abi, Const, FnKey, Function, Operand, PanicKind, RuntimeFn, Rvalue, Stmt, Terminator,
 };
-use crate::lower::{LowerCx, LowerError};
+use crate::lower::LowerCx;
 use crate::repr::{CType, Repr, foreign_sig, repr_of};
 
 pub(super) fn lower_wrapper(
@@ -30,16 +30,16 @@ pub(super) fn lower_wrapper(
     ext: &thir::External,
     sig: &FnSig,
     cx: &LowerCx<'_>,
-) -> Result<Function, LowerError> {
+) -> Result<Function, Ice> {
     let globals = cx.defs.globals;
     if sig.generics.params.iter().any(|p| !p.bounds.is_empty()) {
         // Dictionaries cannot cross the C ABI (§12.5): the front end
         // reports E0045 at the bound and stops before MIR (D-554).
-        return Err(LowerError::Ice(Ice::new(format!(
+        return Err(Ice::new(format!(
             "an external function with a bounded type parameter reached MIR at {:?}; \
              the front end reports E0045 (D-554)",
             ext.span
-        ))));
+        )));
     }
     let ret_repr = repr_of(sig.ret, globals);
     let mut b = FunctionBuilder::new(FnKey::Item(f.def), Abi::Cheby, Repr::Value, f.span)?;
@@ -82,7 +82,7 @@ pub(super) fn lower_wrapper(
         }
     };
     b.terminate(Terminator::Return(result))?;
-    Ok(b.finish()?)
+    b.finish()
 }
 
 /// The native body of a function whose only implementation is an
@@ -97,7 +97,7 @@ pub(super) fn lower_js_only(
     f: &thir::FnDef,
     sig: &FnSig,
     cx: &LowerCx<'_>,
-) -> Result<Function, LowerError> {
+) -> Result<Function, Ice> {
     let globals = cx.defs.globals;
     let dicts: usize = sig.generics.params.iter().map(|p| p.bounds.len()).sum();
     let mut b = FunctionBuilder::new(FnKey::Item(f.def), Abi::Cheby, Repr::Value, f.span)?;
@@ -122,7 +122,7 @@ pub(super) fn lower_js_only(
         message: Some(Operand::Const(Const::Str(message))),
         loc,
     })?;
-    Ok(b.finish()?)
+    b.finish()
 }
 
 /// The std modules whose kernels constant evaluation may run (D-360,

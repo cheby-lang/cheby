@@ -19,8 +19,7 @@ use crate::repr::Repr;
 impl BodyCx<'_, '_> {
     /// `op`, a value of type `ty` held in `from`, converted to `to`: a
     /// `box` from an unboxed representation into [`Repr::Value`], an
-    /// `unbox` the other way, nothing when they agree. A placeholder
-    /// stays a placeholder.
+    /// `unbox` the other way, nothing when they agree.
     ///
     /// # Errors
     ///
@@ -39,9 +38,6 @@ impl BodyCx<'_, '_> {
     ) -> Result<Operand, Ice> {
         if from == to {
             return Ok(op);
-        }
-        if self.is_poisoned(&op) {
-            return self.placeholder(to);
         }
         match (from, to) {
             (Repr::Bool, Repr::Value) => {

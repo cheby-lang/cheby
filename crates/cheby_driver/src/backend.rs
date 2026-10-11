@@ -13,9 +13,9 @@
 //! the reachable constants in that JIT (D-535), so code that runs later
 //! reads their values from their slots.
 //!
-//! A reachable construct that the back end does not implement yet is
-//! E0038 at the construct; every reachable item is lowered first, so one
-//! build reports all of them, and nothing is compiled.
+//! Lowering reports no diagnostics: every construct the front end accepts
+//! lowers (D-554), so E0038 remains only for imports of unshipped std
+//! modules, which the resolver reports (D-480).
 //!
 //! Constants are evaluated under the package's `[const-eval]` limits
 //! (D-536), checked against the JS range when they exist on `js` (D-540),
@@ -45,8 +45,8 @@ use cheby_iface::{DefId, DepView, Ice, ModuleId};
 use cheby_jit::{Jit, JitError, JitOptions};
 use cheby_mir::reach::{Reach, Root, reachable_with_hooks};
 use cheby_mir::{
-    Defs, EntryKind, EntryRequest, LowerCx, MirModule, Program, UnitKind, Unsupported,
-    count_and_check, lower_entries, lower_items, lower_tests,
+    Defs, EntryKind, EntryRequest, LowerCx, MirModule, Program, UnitKind, count_and_check,
+    lower_entries, lower_items, lower_tests,
 };
 use cheby_package::Target;
 use cheby_types::thir;
@@ -86,8 +86,8 @@ pub(crate) struct Built {
 }
 
 /// Lowers what the roots reach (D-510), compiles it in one JIT, and
-/// evaluates the reachable constants in that JIT (E6). `Err` holds E0038,
-/// E0053, E0069 or E0075-E0078 diagnostics, sorted. `Constants` builds
+/// evaluates the reachable constants in that JIT (E6). `Err` holds E0053,
+/// E0069 or E0075-E0078 diagnostics, sorted. `Constants` builds
 /// with `stub_unresolved` (plan §4.4) and never reports E0053 (D-532);
 /// `AllFunctions` evaluates nothing. A CLIF dump (`capture_clif`) compiles
 /// with the default options, so dumps do not depend on the environment
@@ -114,13 +114,7 @@ fn build_dumping(
     capture_clif: bool,
     dump: Option<&Path>,
 ) -> Result<Result<Built, Vec<Diagnostic>>, Ice> {
-    let lowered = match lower(front, sources, roots)? {
-        Ok(lowered) => lowered,
-        Err(mut diagnostics) => {
-            sources.sort(&mut diagnostics);
-            return Ok(Err(diagnostics));
-        }
-    };
+    let lowered = lower(front, sources, roots)?;
     if let Some(dir) = dump {
         write_mir_dumps(dir, &lowered.units)?;
     }
@@ -288,23 +282,17 @@ struct Lowered {
 
 /// The MIR units that running `main` needs, after reference counting and
 /// validation: one per needed module in build order, then the entry unit,
-/// which also holds the thunks of the constants `main` reaches. `Err`
-/// holds the E0038 diagnostics of the constructs the back end cannot
-/// lower yet, unsorted.
+/// which also holds the thunks of the constants `main` reaches.
 pub(crate) fn lower_program(
     front: &Frontend,
     sources: &SourceMap,
     main: &thir::FnDef,
-) -> Result<Result<Vec<MirModule>, Vec<Diagnostic>>, Ice> {
-    Ok(lower(front, sources, &Roots::Main(main))?.map(|lowered| lowered.units))
+) -> Result<Vec<MirModule>, Ice> {
+    Ok(lower(front, sources, &Roots::Main(main))?.units)
 }
 
 /// Lowers what `roots` reach.
-fn lower(
-    front: &Frontend,
-    sources: &SourceMap,
-    roots: &Roots<'_>,
-) -> Result<Result<Lowered, Vec<Diagnostic>>, Ice> {
+fn lower(front: &Frontend, sources: &SourceMap, roots: &Roots<'_>) -> Result<Lowered, Ice> {
     let mut program = Program::new();
     for &module in &front.order {
         program.insert(module, &checked(front, module)?.thir);
@@ -356,8 +344,8 @@ fn lower(
     // Lowering a module reads only its THIR and the interfaces (D-246), so
     // the modules are lowered, counted and checked in parallel on rayon's
     // global pool (G1, D-263). The results are taken in build order, so
-    // the units, the E0038 order and the error reported do not depend on
-    // the thread count (D-264).
+    // the units and the error reported do not depend on the thread count
+    // (D-264).
     let jobs: Vec<(ModuleId, Option<&Vec<&thir::TestDef>>)> = front
         .order
         .iter()
@@ -369,29 +357,20 @@ fn lower(
         .map(|&(module, selected)| lower_module(front, sources, &reach, module, selected))
         .collect();
     let mut units = Vec::new();
-    let mut unsupported = Unsupported::default();
     for result in lowered {
         for unit in result?.into_iter().flatten() {
-            if let Some(unit) = unsupported.take(unit)? {
-                units.push(unit);
-            }
+            units.push(unit?);
         }
     }
-    if !entries.is_empty()
-        && let Some(entry) = unsupported.take(lower_entry_unit(front, sources, &entries))?
-    {
-        units.push(entry);
+    if !entries.is_empty() {
+        units.push(lower_entry_unit(front, sources, &entries)?);
     }
-    if unsupported.is_empty() {
-        Ok(Ok(Lowered { units, reach }))
-    } else {
-        Ok(Err(unsupported.into_diagnostics()))
-    }
+    Ok(Lowered { units, reach })
 }
 
 /// The code unit and the tests unit of one module, each counted and
-/// checked, or E0038; `None` where the build needs no such unit.
-type ModuleUnits = [Option<Result<MirModule, cheby_mir::LowerError>>; 2];
+/// checked; `None` where the build needs no such unit.
+type ModuleUnits = [Option<Result<MirModule, Ice>>; 2];
 
 /// Lowers `module`: its items that `reach` contains into its code unit,
 /// and its `selected` tests into its tests unit.
@@ -417,7 +396,7 @@ fn lower_module(
         },
         sources,
     };
-    let counted = |lowered: Result<MirModule, cheby_mir::LowerError>| {
+    let counted = |lowered: Result<MirModule, Ice>| {
         lowered.and_then(|mut unit| {
             count_and_check(&mut unit)?;
             Ok(unit)
@@ -438,6 +417,35 @@ fn lower_module(
         counted(lower_tests(&only, &cx))
     });
     Ok([code, tests])
+}
+
+/// Every unit a build of the local package can lower, each counted and
+/// checked: what `main` reaches (if given), every local test that exists
+/// on native, and every local constant (D-510). Lowering reports no
+/// diagnostics (D-554), so the only failure is an internal error.
+#[cfg(test)]
+pub(crate) fn lower_every_root(
+    front: &Frontend,
+    sources: &SourceMap,
+    main: Option<&thir::FnDef>,
+) -> Result<Vec<MirModule>, Ice> {
+    let mut units = Vec::new();
+    if let Some(main) = main {
+        units.extend(lower(front, sources, &Roots::Main(main))?.units);
+    }
+    let mut tests = Vec::new();
+    for module in local_modules(front) {
+        for test in &checked(front, module)?.thir.tests {
+            if crate::test::on_native(front, test) {
+                tests.push(TestRoot { module, test });
+            }
+        }
+    }
+    if !tests.is_empty() {
+        units.extend(lower(front, sources, &Roots::Tests(tests))?.units);
+    }
+    units.extend(lower(front, sources, &Roots::Constants)?.units);
+    Ok(units)
 }
 
 /// The modules of the local package, in build order.
@@ -505,7 +513,7 @@ fn lower_entry_unit(
     front: &Frontend,
     sources: &SourceMap,
     entries: &[EntryRequest<'_>],
-) -> Result<MirModule, cheby_mir::LowerError> {
+) -> Result<MirModule, Ice> {
     let mut all: Vec<ModuleId> = front.order.clone();
     all.sort_unstable();
     let deps = DepView::new(&front.set, &all);
@@ -728,9 +736,7 @@ fn main() {
             .local_module(&cheby_package::ModulePath::root("app"))
             .unwrap();
         let main = front.main_of(module).unwrap();
-        let lowered = lower(&front, &out.sources, &Roots::Main(main))
-            .unwrap()
-            .unwrap();
+        let lowered = lower(&front, &out.sources, &Roots::Main(main)).unwrap();
         let infos = const_infos(&front, &out.sources, &lowered.reach).unwrap();
         let names: Vec<&str> = infos.iter().map(|i| &*i.name).collect();
         assert_eq!(names, ["table", "keys", "size"]);

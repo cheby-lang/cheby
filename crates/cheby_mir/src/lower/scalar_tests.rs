@@ -212,9 +212,7 @@ fn main() {
 "#;
 
 fn scalars() -> Lowered {
-    let lowered = lower_source(&[("", SCALARS)]);
-    assert_eq!(lowered.unsupported(), Vec::<String>::new());
-    lowered
+    lower_source(&[("", SCALARS)])
 }
 
 /// The whole unit, pinned.
@@ -436,9 +434,7 @@ fn main() {
 "#;
 
 fn panics() -> Lowered {
-    let lowered = lower_source(&[("", PANICS)]);
-    assert_eq!(lowered.unsupported(), Vec::<String>::new());
-    lowered
+    lower_source(&[("", PANICS)])
 }
 
 #[test]
@@ -537,9 +533,7 @@ test "returns an error without show" {
 "#;
 
 fn entries() -> Lowered {
-    let lowered = lower_source_with_tests(&[("", ENTRIES)]);
-    assert_eq!(lowered.unsupported(), Vec::<String>::new());
-    lowered
+    lower_source_with_tests(&[("", ENTRIES)])
 }
 
 #[test]

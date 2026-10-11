@@ -7,8 +7,9 @@
 //! - [`layout`]: constructor layouts from interfaces (D-246, D-252).
 //! - [`reach`]: the items a run needs, from its entry (D-510).
 //! - [`lower`]: THIR to MIR (D2), with tail-position marking (§5.15.2),
-//!   external wrappers and entry thunks. What it cannot lower yet is
-//!   E0038 at the construct (D-480, D-510), never an internal error.
+//!   external wrappers and entry thunks. Every THIR construct lowers, so
+//!   lowering reports no diagnostics (D-554); its only error is an
+//!   internal one.
 //! - [`rc`]: naive dup/drop placement by the last-use rule (D7, D-205).
 //! - [`validate`] and [`dump`]: the validator and the stable text form.
 
@@ -48,8 +49,7 @@ pub use ir::{
 };
 pub use layout::{FieldDesc, LayoutDesc, ctor_layout, type_key, type_layouts};
 pub use lower::{
-    EntryRequest, LowerCx, LowerError, Unsupported, lower_entries, lower_fn, lower_items,
-    lower_module, lower_tests,
+    EntryRequest, LowerCx, lower_entries, lower_fn, lower_items, lower_module, lower_tests,
 };
 pub use reach::{Program, Reach, Root, reachable};
 pub use repr::{CType, ForeignSig, Repr, ctype_of, foreign_sig, repr_of};

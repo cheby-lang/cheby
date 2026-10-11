@@ -7,9 +7,10 @@
 //! - `gen-bench`: generates a synthetic benchmark project.
 //! - `check-determinism`: checks that outputs are the same byte for byte
 //!   from different paths (D-264).
-//! - `coverage`: lists decisions cited in the spec that no UI test names,
-//!   reading `@decisions` from each test's header (`src/main.cheby` of a
-//!   package test).
+//! - `coverage`: lists decisions cited in the spec that no UI test or REPL
+//!   transcript names, reading `@decisions` from each test's header
+//!   (`src/main.cheby` of a package test) and from each transcript's
+//!   header (GAP(repl-transcript-header)).
 //! - `cross-check`: parses examples and UI tests with `tree-sitter-cheby`
 //!   at the pinned commit and with the compiler parser, and fails if they
 //!   disagree (D-272).
@@ -292,10 +293,22 @@ fn coverage(root: &Path) -> Result<(), String> {
     for test in ui::all(root)? {
         covered.extend(test.header.decisions);
     }
+    // REPL transcripts pin decisions through their header too
+    // (GAP(repl-transcript-header)).
+    let transcripts = root.join("tests/repl");
+    for path in cheby_test_support::files_with_extension(&transcripts, "repl")
+        .map_err(|e| format!("{}: {e}", transcripts.display()))?
+    {
+        let text =
+            std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let header = cheby_test_support::repl::Header::of(&text)
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        covered.extend(header.decisions);
+    }
     let uncovered: Vec<_> = cited.difference(&covered).copied().collect();
     let unknown: Vec<_> = covered.difference(&cited).copied().collect();
     println!(
-        "D-number coverage: {}/{} decisions cited in the spec have a UI test",
+        "D-number coverage: {}/{} decisions cited in the spec have a UI test or a REPL transcript",
         cited.len().saturating_sub(uncovered.len()),
         cited.len()
     );

@@ -44,7 +44,6 @@ use cheby_diag::{FileId, Span, TextRange};
 use cheby_iface::{DefId, Ice, Ty};
 use cheby_resolve::LocalId;
 use cheby_types::thir::{Dict, ExprId, Param};
-use rustc_hash::FxHashSet;
 
 use crate::abi::abi_sig;
 use crate::builder::FunctionBuilder;
@@ -93,28 +92,19 @@ impl BodyCx<'_, '_> {
     /// A local function's own name inside its body: its `self` (D-453,
     /// D-499), which the function's code binds to the local function's
     /// local, as a closure nested in it binds its capture.
-    pub(super) fn self_ref(
-        &mut self,
-        local: LocalId,
-        ty: Ty,
-        _span: Span,
-    ) -> Result<Option<Operand>, Ice> {
-        self.lookup(local, ty).map(Some)
+    pub(super) fn self_ref(&self, local: LocalId) -> Result<Option<Operand>, Ice> {
+        self.lookup(local).map(Some)
     }
 
-    /// A top-level function as a value of type `ty`, with its
-    /// dictionaries (D-453).
+    /// A top-level function as a value, with its dictionaries (D-453).
     pub(super) fn fn_ref(
         &mut self,
         def: DefId,
-        _ty_args: &[Ty],
         dicts: &[Dict],
-        ty: Ty,
         span: Span,
     ) -> Result<Option<Operand>, Ice> {
-        let dict_ops = match self.call_dicts(dicts, ty, span)? {
-            Ok(ops) => ops,
-            Err(instead) => return Ok(instead),
+        let Some(dict_ops) = self.call_dicts(dicts, span)? else {
+            return Ok(None);
         };
         self.fn_value(def, dict_ops).map(Some)
     }
@@ -174,8 +164,6 @@ impl BodyCx<'_, '_> {
 
     /// The closure object of a closure (`own` is `None`) or of the local
     /// function `own`, after lowering its code into a function of its own.
-    /// A placeholder when its body has constructs the back end cannot
-    /// lower yet; their E0038 are this body's.
     fn make_closure(
         &mut self,
         own: Option<LocalId>,
@@ -196,9 +184,7 @@ impl BodyCx<'_, '_> {
             locals: &captures,
             dicts: &dicts,
         };
-        let Some(code) = self.closure_function(key, &shape, params, body, span)? else {
-            return self.placeholder(Repr::Value).map(Some);
-        };
+        let code = self.closure_function(key, &shape, params, body, span)?;
         self.pending.add_function(code);
         let mut fields =
             Vec::with_capacity(captures.len().saturating_add(dicts.len()).saturating_add(1));
@@ -209,7 +195,7 @@ impl BodyCx<'_, '_> {
                 .local(l)
                 .ok_or_else(|| Ice::new("a capture without its local"))?
                 .ty;
-            let value = self.lookup(l, ty)?;
+            let value = self.lookup(l)?;
             fields.push(self.to_uniform(value, ty)?);
         }
         for &n in &dicts {
@@ -219,8 +205,7 @@ impl BodyCx<'_, '_> {
         Ok(Some(Operand::Local(closure)))
     }
 
-    /// Lowers the code of a closure into a new function with key `key`;
-    /// `None` after recording its E0038 in this body.
+    /// Lowers the code of a closure into a new function with key `key`.
     fn closure_function(
         &mut self,
         key: FnKey,
@@ -228,7 +213,7 @@ impl BodyCx<'_, '_> {
         params: &[Param],
         body: ExprId,
         span: Span,
-    ) -> Result<Option<Function>, Ice> {
+    ) -> Result<Function, Ice> {
         let mut b = FunctionBuilder::new(key, Abi::Cheby, Repr::Value, span)?;
         b.set_entry_loc(&self.cx.location(span)?)?;
         let mut inner = BodyCx {
@@ -237,22 +222,11 @@ impl BodyCx<'_, '_> {
             generics: self.generics,
             b,
             locals: vec![None; self.body.locals.len()],
-            diags: Vec::new(),
-            poisoned: FxHashSet::default(),
             pending: &mut *self.pending,
             dict_params: vec![None; self.dict_params.len()],
         };
-        let lowered = inner.closure_body(shape, params, body);
-        let diags = std::mem::take(&mut inner.diags);
-        let b = inner.b;
-        if !diags.is_empty() {
-            // A broken invariant after an unsupported construct is most
-            // likely the placeholder's doing (as in `lower_body`).
-            self.diags.extend(diags);
-            return Ok(None);
-        }
-        lowered?;
-        b.finish().map(Some)
+        inner.closure_body(shape, params, body)?;
+        inner.b.finish()
     }
 
     /// The body of a closure's code: captures from `self` (locals, then

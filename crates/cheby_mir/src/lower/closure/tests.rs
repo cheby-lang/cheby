@@ -244,9 +244,7 @@ fn free_locals_of_local_functions_and_self_references() {
 // Lowering from source.
 
 fn lowered(source: &str) -> Lowered {
-    let lowered = lower_source(&[("", source)]);
-    assert_eq!(lowered.unsupported(), Vec::<String>::new());
-    lowered
+    lower_source(&[("", source)])
 }
 
 /// The dumps of the functions of `app` whose keys print as `keys`, for a
@@ -628,8 +626,7 @@ fn main() {
 
 /// A function with interface bounds as a value needs its dictionaries:
 /// a closure of the shim's code and the dictionaries, which the shim
-/// reads from `self`. Until W3-A lowers dictionaries, the dictionary is
-/// the stub's E0038.
+/// reads from `self` (D-453).
 #[test]
 fn function_values_with_dictionaries() {
     let l = lower_source(&[(
@@ -644,23 +641,13 @@ fn main() {
 }
 "#,
     )]);
-    let unsupported = l.unsupported();
-    if unsupported.is_empty() {
-        let main = l.function("app", "app::main");
-        assert!(
-            main.contains("alloc closure/1(const code <shim app::shown>"),
-            "{main}"
-        );
-        let shim = l.function("app", "shim app::shown");
-        assert!(shim.contains("field _0.1 of closure/1"), "{shim}");
-    } else {
-        assert_eq!(
-            unsupported,
-            [
-                "calls of functions with interface bounds are not supported yet @ src/main.cheby:7:12"
-            ]
-        );
-    }
+    let main = l.function("app", "app::main");
+    assert!(
+        main.contains("alloc closure/1(const code <shim app::shown>"),
+        "{main}"
+    );
+    let shim = l.function("app", "shim app::shown");
+    assert!(shim.contains("field _0.1 of closure/1"), "{shim}");
 }
 
 /// Trampolines of arities 0-4 (D-526): C ABI, the closure and `n`

@@ -38,7 +38,7 @@ use crate::ir::{
     Stmt, TagType, Terminator, UnitKind,
 };
 use crate::lower::dict::{IfaceShape, Statics, dict_closed, dict_iface};
-use crate::lower::{LowerCx, LowerError, Pending, Unsupported, closure, finish_unit};
+use crate::lower::{LowerCx, Pending, closure, finish_unit};
 use crate::repr::{CType, ForeignSig, Repr};
 use crate::{Abi, MirModule};
 
@@ -75,25 +75,18 @@ pub struct EntryRequest<'a> {
 ///
 /// An [`Ice`] for an entry whose item is not readable through `cx` (a
 /// REPL entry needs its module's interface as `cx.defs.own`).
-pub fn lower_entries(
-    entries: &[EntryRequest<'_>],
-    cx: &LowerCx<'_>,
-) -> Result<MirModule, LowerError> {
+pub fn lower_entries(entries: &[EntryRequest<'_>], cx: &LowerCx<'_>) -> Result<MirModule, Ice> {
     let mut functions = Vec::with_capacity(entries.len());
-    let mut unsupported = Unsupported::default();
     let mut pending = Pending::default();
     for req in entries {
-        if let Some(f) = unsupported.take(entry_thunk(*req, cx, &mut pending))? {
-            functions.push(f);
-        }
+        functions.push(entry_thunk(*req, cx, &mut pending)?);
     }
     // Nothing in MIR records which kernels call closures back (plan
     // §4.3.4), so every entries unit carries the trampolines of every
     // arity the runtime supports; the JIT defines each once (D-561).
     let arities: BTreeSet<u32> = (0..=MAX_TRAMPOLINE_ARITY).collect();
     functions.extend(closure::trampolines(&arities)?);
-    let unit = finish_unit(UnitKind::Entries, functions, Vec::new(), pending, cx)?;
-    unsupported.finish(unit)
+    finish_unit(UnitKind::Entries, functions, Vec::new(), pending, cx)
 }
 
 /// The thunk of one entry; the static dictionaries it needs go to
@@ -102,7 +95,7 @@ fn entry_thunk(
     req: EntryRequest<'_>,
     cx: &LowerCx<'_>,
     pending: &mut Pending,
-) -> Result<Function, LowerError> {
+) -> Result<Function, Ice> {
     let (def, callee) = match req.kind {
         EntryKind::Main(def) => (def, Callee::Direct(def)),
         EntryKind::Test(def) => (def, Callee::Code(FnKey::Test(def))),
@@ -116,7 +109,9 @@ fn entry_thunk(
             .params
             .is_empty()
     {
-        return Err(Ice::new("an entry point with parameters reached MIR lowering").into());
+        return Err(Ice::new(
+            "an entry point with parameters reached MIR lowering",
+        ));
     }
     let result = b.assign(
         Repr::Value,
@@ -136,18 +131,18 @@ fn entry_thunk(
             report_result(&mut b, result, &show, is_test, cx)?;
         }
         (EntryKind::Main(_) | EntryKind::Test(_), None) => {
-            return Err(Ice::new("a `main` or test entry without its entry info").into());
+            return Err(Ice::new("a `main` or test entry without its entry info"));
         }
         (EntryKind::Const(_) | EntryKind::Repl(_), _) => {
             b.terminate(Terminator::Return(Operand::Local(result)))?;
         }
     }
-    Ok(b.finish()?)
+    b.finish()
 }
 
 /// The thunk of the REPL entry `kind`: `cx.defs.own` is the entry
 /// module's interface, whose one `test` item is the entry's body.
-fn repl_thunk(kind: EntryKind, cx: &LowerCx<'_>) -> Result<Function, LowerError> {
+fn repl_thunk(kind: EntryKind, cx: &LowerCx<'_>) -> Result<Function, Ice> {
     let own = cx
         .defs
         .own
@@ -159,10 +154,10 @@ fn repl_thunk(kind: EntryKind, cx: &LowerCx<'_>) -> Result<Function, LowerError>
         .ok_or_else(|| Ice::new("a REPL entry without its body"))?;
     let body = DefId::new(own.module, index);
     let ItemSig::Fn(sig) = &item.sig else {
-        return Err(Ice::new("a REPL entry's body without its signature").into());
+        return Err(Ice::new("a REPL entry's body without its signature"));
     };
     let TyKind::Tuple(elems) = cx.defs.globals.types.kind(sig.ret) else {
-        return Err(Ice::new("a REPL entry's body does not return a tuple").into());
+        return Err(Ice::new("a REPL entry's body does not return a tuple"));
     };
     let arity = u32::try_from(elems.len())
         .ok()
@@ -198,7 +193,7 @@ fn repl_thunk(kind: EntryKind, cx: &LowerCx<'_>) -> Result<Function, LowerError>
         },
     )?;
     b.terminate(Terminator::Return(Operand::Local(pair)))?;
-    Ok(b.finish()?)
+    b.finish()
 }
 
 /// What a `main` or test returns when it passed: status 0 for `main`, the
@@ -233,7 +228,7 @@ fn show_call(
     def: DefId,
     cx: &LowerCx<'_>,
     pending: &mut Pending,
-) -> Result<ShowCall, LowerError> {
+) -> Result<ShowCall, Ice> {
     let Some(dict) = show else {
         return Ok(ShowCall::Debug);
     };
@@ -247,7 +242,9 @@ fn show_call(
         // A `main` or test has no type parameters, and a `dyn` error type
         // has a static forwarding dictionary (D-499), so every dictionary
         // here is closed.
-        return Err(Ice::new("an entry's `show` dictionary mentions a type parameter").into());
+        return Err(Ice::new(
+            "an entry's `show` dictionary mentions a type parameter",
+        ));
     }
     let module = cx.defs.name(def)?.module;
     let mut statics = Statics {
@@ -274,7 +271,7 @@ fn report_result(
     show: &ShowCall,
     is_test: bool,
     cx: &LowerCx<'_>,
-) -> Result<(), LowerError> {
+) -> Result<(), Ice> {
     let tag = b.assign(
         Repr::Int,
         Rvalue::ReadTag {
@@ -313,7 +310,7 @@ fn report_result(
         ShowCall::Direct(show) => {
             let want = abi_sig(cx.defs.fn_sig(*show)?, cx.defs.globals);
             let [repr] = want.params.as_slice() else {
-                return Err(Ice::new(format!("`show` {show:?} without one parameter")).into());
+                return Err(Ice::new(format!("`show` {show:?} without one parameter")));
             };
             let arg = if *repr == Repr::Value {
                 Operand::Local(e)

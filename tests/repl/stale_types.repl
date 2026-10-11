@@ -1,3 +1,4 @@
+// @decisions: D-626
 > type Shape {
 .   Circle(Float),
 . }

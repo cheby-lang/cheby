@@ -25,7 +25,8 @@
 //! The grammar is checked out under `target/tree-sitter-cheby`, cloned
 //! from a sibling `../tree-sitter-cheby` if there is one and from GitHub
 //! otherwise, so a local checkout on another commit is never used by
-//! mistake.
+//! mistake. A pinned commit the checkout lacks is fetched from the
+//! sibling's branches first, then from GitHub.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -377,19 +378,34 @@ fn checkout(root: &Path, rev: &str) -> Result<PathBuf, String> {
         println!("removing a broken checkout in {}", dir.display());
         std::fs::remove_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }
+    let sibling = root.join("../tree-sitter-cheby");
+    let sibling = sibling
+        .join(".git")
+        .exists()
+        .then(|| sibling.to_string_lossy().into_owned());
     if !dir.exists() {
-        let sibling = root.join("../tree-sitter-cheby");
-        let source = if sibling.join(".git").exists() {
-            sibling.to_string_lossy().into_owned()
-        } else {
-            UPSTREAM.to_owned()
-        };
+        let source = sibling.as_deref().unwrap_or(UPSTREAM);
         println!("cloning tree-sitter-cheby from {source}");
-        git(root, &["clone", "--quiet", &source, &dir.to_string_lossy()])?;
+        git(root, &["clone", "--quiet", source, &dir.to_string_lossy()])?;
     }
-    let has_rev = git(&dir, &["cat-file", "-e", &format!("{rev}^{{commit}}")]).is_ok();
-    if !has_rev {
-        // The clone may come from a sibling that lacks the commit.
+    let has_rev = |dir: &Path| git(dir, &["cat-file", "-e", &format!("{rev}^{{commit}}")]).is_ok();
+    // An earlier checkout, or a clone of a sibling, may lack the commit:
+    // fetch every branch of the sibling, where a pinned commit is made
+    // first, then the commit itself from GitHub.
+    if !has_rev(&dir)
+        && let Some(sibling) = &sibling
+    {
+        git(
+            &dir,
+            &[
+                "fetch",
+                "--quiet",
+                sibling,
+                "+refs/heads/*:refs/remotes/sibling/*",
+            ],
+        )?;
+    }
+    if !has_rev(&dir) {
         git(&dir, &["fetch", "--quiet", UPSTREAM, rev])?;
     }
     git(&dir, &["checkout", "--quiet", "--detach", rev])?;

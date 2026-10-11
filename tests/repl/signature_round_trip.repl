@@ -1,3 +1,4 @@
+// @decisions: D-607, D-608, D-609
 > fn scale(n: Int) -> Int {
 .   n
 . }

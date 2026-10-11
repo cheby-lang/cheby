@@ -331,6 +331,16 @@ impl<'a> Parser<'a> {
         self.nth(n) == kind
     }
 
+    /// Whether the current `{` is closed by a `}` that more of the line
+    /// follows, as in `{ 1 } {` or `{ 1 } + x`. A `{` whose `}` ends the
+    /// line, closes an enclosing delimiter or is never closed is more
+    /// likely a body than a block in an expression.
+    pub(crate) fn brace_group_continues_line(&self) -> bool {
+        self.input
+            .after_matching_brace()
+            .is_some_and(|next| !matches!(next, NEWLINE | EOF | R_BRACE | R_PAREN | R_BRACK))
+    }
+
     /// Whether the current token is the first of its line.
     pub(crate) fn at_line_start(&self) -> bool {
         self.input.current().line_start

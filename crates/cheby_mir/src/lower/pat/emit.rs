@@ -316,7 +316,7 @@ impl BodyCx<'_, '_> {
             } else {
                 let values = locals
                     .iter()
-                    .map(|&id| self.lookup(id, Ty::ERROR))
+                    .map(|&id| self.lookup(id))
                     .collect::<Result<Vec<_>, Ice>>()?;
                 self.jump_to_arm(m, arm, values)?;
             }

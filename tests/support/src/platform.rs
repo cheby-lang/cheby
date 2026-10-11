@@ -1,0 +1,36 @@
+//! Platforms on which the harnesses skip the trials that run programs.
+//!
+//! M1 is judged on Linux and macOS (D-545). On Windows, CI builds the
+//! workspace and runs the unit tests, and the harnesses skip the UI run
+//! tests, the conformance runs and `::test` trials and the REPL suite
+//! until M6, which brings Windows support: the JIT's memory path has never
+//! run there and native symbol lookup has no Windows fallback. A skipped
+//! trial is reported as ignored, never as passed.
+
+/// Why trials that run a compiled program are skipped on this platform,
+/// or `None` where they run (D-545).
+#[must_use]
+pub const fn run_skip_reason() -> Option<&'static str> {
+    if cfg!(windows) {
+        Some("programs do not run on Windows until M6 (D-545)")
+    } else {
+        None
+    }
+}
+
+/// Whether trials that run a compiled program are skipped here (D-545).
+#[must_use]
+pub const fn runs_skipped() -> bool {
+    run_skip_reason().is_some()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn programs_run_except_on_windows() {
+        assert_eq!(runs_skipped(), cfg!(windows));
+        assert_eq!(run_skip_reason().is_some(), runs_skipped());
+    }
+}

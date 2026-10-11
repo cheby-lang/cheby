@@ -1,0 +1,16 @@
+// @mode: parse-fail
+// @decisions: D-052
+//! `case` subjects take no trailing comma (A.5), so in `case n, m, {` the
+//! `{` opens the arms. The one error says to remove the comma, and the arms
+//! still parse as the body.
+
+fn size(n: Int, m: Int) -> Int {
+  case n, m, {
+    0, _ => 0
+    _, _ => 10
+  }
+}
+
+fn main() {
+  assert size(1, 2) == 10
+}

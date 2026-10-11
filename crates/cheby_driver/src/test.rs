@@ -112,7 +112,7 @@ pub enum TestOutcome {
     /// the leak message, ending with a newline.
     Failed(String),
     /// The test did not build (std self-test only): its codes, such as
-    /// `E0038, E0053`.
+    /// `E0053, E0075`.
     NotBuilt(String),
 }
 
@@ -130,7 +130,7 @@ pub struct ModuleTests {
     /// The module path, such as `app::util` or `std::list`.
     pub path: String,
     /// Set when the module's tests did not build at all (std self-test):
-    /// the codes, such as `E0038, E0053`. Each test is then
+    /// the codes, such as `E0053, E0075`. Each test is then
     /// [`TestOutcome::NotBuilt`].
     pub not_built: Option<String>,
     /// The selected tests in source order.
@@ -280,7 +280,7 @@ fn failure_block(module: &str, name: &str, text: &str) -> String {
 /// for a local test (D-190), contain `native`. A test that exists only on
 /// `js` is not part of a native build (§12.6), so it is neither run nor
 /// counted as filtered out (D-597).
-fn on_native(front: &Frontend, test: &thir::TestDef) -> bool {
+pub(crate) fn on_native(front: &Frontend, test: &thir::TestDef) -> bool {
     let native = cheby_package::Target::Native;
     let local = front
         .modules
@@ -297,8 +297,8 @@ fn on_native(front: &Frontend, test: &thir::TestDef) -> bool {
 }
 
 /// Checks the package at `root` and compiles the tests `options` selects
-/// (D-541). Compile errors, including E0038 and E0053 from the back end,
-/// stop here.
+/// (D-541). Compile errors, including E0053 and constant-evaluation
+/// errors from the back end, stop here.
 ///
 /// # Errors
 ///
@@ -361,7 +361,7 @@ pub fn prepare_test(root: &Path, options: &TestOptions) -> Result<PreparedTests,
         match backend::build(&front, &out.sources, Roots::Tests(roots), false)? {
             Ok(built) => Some(built.jit),
             Err(diagnostics) => {
-                crate::report_unsupported(&mut out, diagnostics);
+                crate::report_back_end(&mut out, diagnostics);
                 return Ok(PreparedTests::CompileFailed(out));
             }
         }

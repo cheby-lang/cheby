@@ -27,6 +27,12 @@
 //! [`Expectation::Tolerated`] and stay report-only, and so are the trials
 //! of a milestone later than `tests/milestone` that the override made
 //! pending (`Setting::expectation`).
+//!
+//! On Windows the run trials and the `::test` trials are ignored until M6
+//! (D-545, `cheby_test_support::platform`): M1 is judged on Linux and
+//! macOS. A `skip-run` example's trial only runs `cheby check`, which
+//! D-545 does not name, so it stays; its result is report-only before its
+//! milestone anyway.
 
 use std::path::Path;
 use std::process::{Command, ExitCode};
@@ -34,7 +40,7 @@ use std::time::Duration;
 
 use cheby_test_support::example::{self, Example};
 use cheby_test_support::milestone::{Expectation, POISON_ENV, Setting, Verdicts};
-use cheby_test_support::{bless_enabled, golden, process, repo_root};
+use cheby_test_support::{bless_enabled, golden, platform, process, repo_root};
 use libtest_mimic::{Arguments, Trial};
 
 const CHEBY: &str = env!("CARGO_BIN_EXE_cheby");
@@ -53,6 +59,9 @@ fn main() -> ExitCode {
         }
     };
     let bless = bless_enabled();
+    if let Some(reason) = platform::run_skip_reason() {
+        eprintln!("conformance harness: runs are ignored: {reason}");
+    }
 
     let trials = examples
         .into_iter()
@@ -60,6 +69,9 @@ fn main() -> ExitCode {
             let expectation = check_only_expectation(&ex, current);
             let verdicts = verdicts.clone();
             let name = ex.name.clone();
+            // D-545: a run is skipped where programs do not run; a
+            // `skip-run` example's trial only checks.
+            let skipped = platform::runs_skipped() && !ex.config.skip_run;
             let test_trial = test_trial(ex.clone(), current, verdicts.clone());
             let run_trial = Trial::test(name.clone(), move || {
                 let result = if bless && expectation != Expectation::Fail {
@@ -70,7 +82,8 @@ fn main() -> ExitCode {
                 verdicts.judge(&name, ex.config.milestone, expectation, result)?;
                 Ok(())
             })
-            .with_kind(expectation.kind());
+            .with_kind(expectation.kind())
+            .with_ignored_flag(skipped);
             [run_trial, test_trial]
         })
         .collect();
@@ -138,6 +151,7 @@ fn test_trial(ex: Example, current: Setting, verdicts: Verdicts) -> Trial {
         Ok(())
     })
     .with_kind(expectation.kind())
+    .with_ignored_flag(platform::runs_skipped())
 }
 
 /// Runs the example and compares the result with its goldens.

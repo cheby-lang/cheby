@@ -389,7 +389,16 @@ fn case_expr(p: &mut Parser<'_>) -> CompletedMarker {
     }
     let subject = Restrictions { no_record: true };
     expr_with(p, subject);
-    while p.eat(COMMA) {
+    while p.at(COMMA) {
+        let comma = p.current_span();
+        p.bump(COMMA);
+        if p.at(L_BRACE) {
+            if !p.brace_group_continues_line() {
+                trailing_subject_comma(p, comma);
+                break;
+            }
+            block_subject(p);
+        }
         expr_with(p, subject);
     }
     if p.at(L_BRACE) {
@@ -398,6 +407,32 @@ fn case_expr(p: &mut Parser<'_>) -> CompletedMarker {
         p.expected("`{`");
     }
     m.complete(p, CASE_EXPR)
+}
+
+/// Reports a `,` after the last subject, as in `case a, b, {`. A.5's
+/// `subjects` has no trailing comma, so the `{` opens the arms, and the
+/// caller parses them as the body. `case_expr` takes a `{` after a `,` for
+/// the arms when its `}` ends the line, and for a block subject when more
+/// of the line follows it, as in `case a, { 1 } {` (§5.9.6).
+fn trailing_subject_comma(p: &mut Parser<'_>, comma: cheby_diag::Span) {
+    let diag = Diagnostic::new(codes::SYNTAX_ERROR, "expected a `case` subject after `,`")
+        .with_primary(comma, "")
+        .with_help("remove the trailing comma");
+    p.report(diag);
+}
+
+/// Reports a later subject that starts with `{`. No subject may start with
+/// a block (App. A.5, §5.9.6), not only the first, where `{` starts a
+/// subjectless `case`. The block is still parsed as the subject, so the
+/// arms after it parse as usual.
+fn block_subject(p: &mut Parser<'_>) {
+    let diag = Diagnostic::new(
+        codes::SYNTAX_ERROR,
+        "a `case` subject cannot start with `{`",
+    )
+    .with_primary(p.current_span(), "")
+    .with_help("put the block in parentheses, such as `({ … })`");
+    p.report(diag);
 }
 
 /// `pattern, … when guard => expr`.

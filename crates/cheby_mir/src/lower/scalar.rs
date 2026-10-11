@@ -42,7 +42,13 @@ impl BodyCx<'_, '_> {
             }
             Lit::Int(v) => int_const(*v, repr),
             Lit::Float(v) => float_const(*v, repr),
-            _ => return self.unsupported(span, "this kind of literal", ty),
+            // THIR's `Lit` is `#[non_exhaustive]`: a kind added later is an
+            // internal error until it is lowered (D-554).
+            _ => {
+                return Err(Ice::new(format!(
+                    "a kind of literal MIR does not lower reached it at {span:?}"
+                )));
+            }
         };
         c.map(|c| Some(Operand::Const(c))).ok_or_else(|| {
             Ice::new(format!(
@@ -354,9 +360,8 @@ impl BodyCx<'_, '_> {
     ) -> Result<Option<Operand>, Ice> {
         match callee {
             ThirCallee::Fn { def, dicts, .. } => {
-                let dict_ops = match self.call_dicts(dicts, ret_ty, span)? {
-                    Ok(ops) => ops,
-                    Err(early) => return Ok(early),
+                let Some(dict_ops) = self.call_dicts(dicts, span)? else {
+                    return Ok(None);
                 };
                 let sig = crate::abi::abi_sig(self.cx.defs.fn_sig(*def)?, self.cx.defs.globals);
                 let want = sig.params.get(dicts.len()..).unwrap_or_default();

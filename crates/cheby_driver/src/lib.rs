@@ -14,9 +14,10 @@
 //!   generation for `-j`/`--jobs` (D-551).
 //! - [`prepare_run`] and [`Program::run`] are `cheby run` (G3): the front
 //!   end, then MIR of the items reachable from the program's `main`, the
-//!   JIT, the constants `main` reaches, and `main` (D-137). Constructs the
-//!   back end cannot lower yet are E0038, reported like compile errors
-//!   before any code is generated (D-510).
+//!   JIT, the constants `main` reaches, and `main` (D-137). Unresolved
+//!   native symbols (E0053) and constant-evaluation errors are reported
+//!   like compile errors before `main` runs; lowering reports nothing
+//!   (D-554).
 //! - [`prepare_test`] and [`TestProgram::run`] are `cheby test` (G4,
 //!   D-541), and [`test_std`] tests the standard library itself (D-542).
 //! - [`dump_mir`] and [`dump_clif`] print the MIR and CLIF that running
@@ -329,7 +330,7 @@ pub fn check_with(root: &Path, options: &CheckOptions) -> Result<CheckOutput, Er
         && let Err(diagnostics) =
             backend::build(&front, &out.sources, backend::Roots::Constants, false)?
     {
-        report_unsupported(&mut out, diagnostics);
+        report_back_end(&mut out, diagnostics);
     }
     Ok(out)
 }
@@ -485,13 +486,13 @@ pub fn prepare_run(root: &Path, options: RunOptions) -> Result<Prepared, Error> 
     let main = front
         .main_of(module)
         .ok_or_else(|| Error::new(format!("module `{path}` has no `main` function")))?;
-    // E0038 for what the back end cannot lower yet, E0053 for a native
-    // symbol nothing defines (D-532), and the constant-evaluation errors
-    // of the constants `main` reaches (D-535) stop the run.
+    // E0053 for a native symbol nothing defines (D-532) and the
+    // constant-evaluation errors of the constants `main` reaches (D-535)
+    // stop the run.
     let jit = match backend::build(&front, &out.sources, backend::Roots::Main(main), false)? {
         Ok(built) => built.jit,
         Err(diagnostics) => {
-            report_unsupported(&mut out, diagnostics);
+            report_back_end(&mut out, diagnostics);
             return Ok(Prepared::CompileFailed(out));
         }
     };
@@ -595,9 +596,8 @@ fn parse_module_path(text: &str) -> Option<ModulePath> {
 /// The MIR that running the root module's `main` compiles, after
 /// reference counting (D1): the units of the modules it needs, in build
 /// order, with the items reachable from `main` (D-510), then the entry
-/// unit. Empty if the package has errors, if the back end cannot lower
-/// something `main` needs (E0038 in the output), or if the root module has
-/// no `main`.
+/// unit. Empty if the package has errors or if the root module has no
+/// `main`.
 ///
 /// # Errors
 ///
@@ -635,7 +635,7 @@ pub fn dump_clif(root: &Path) -> Result<(CheckOutput, String), Error> {
     match backend::build(&front, &out.sources, backend::Roots::Main(main), true)? {
         Ok(mut built) => Ok((out, built.jit.take_clif().join("\n"))),
         Err(diagnostics) => {
-            report_unsupported(&mut out, diagnostics);
+            report_back_end(&mut out, diagnostics);
             Ok((out, String::new()))
         }
     }
@@ -653,21 +653,15 @@ fn units_for_dump(root: &Path, out: &mut CheckOutput) -> Result<Vec<cheby_mir::M
     let Some(main) = main else {
         return Ok(Vec::new());
     };
-    match backend::lower_program(&front, &out.sources, main)? {
-        Ok(units) => Ok(units),
-        Err(unsupported) => {
-            report_unsupported(out, unsupported);
-            Ok(Vec::new())
-        }
-    }
+    Ok(backend::lower_program(&front, &out.sources, main)?)
 }
 
-/// Adds the back end's diagnostics (E0038, E0053, the constant-evaluation
+/// Adds the back end's diagnostics (E0053, the constant-evaluation
 /// errors) after the front end's, which are already sorted (warnings
 /// only, since errors stop before the back end).
-fn report_unsupported(out: &mut CheckOutput, mut unsupported: Vec<Diagnostic>) {
-    out.sources.sort(&mut unsupported);
-    out.diagnostics.extend(unsupported);
+fn report_back_end(out: &mut CheckOutput, mut diagnostics: Vec<Diagnostic>) {
+    out.sources.sort(&mut diagnostics);
+    out.diagnostics.extend(diagnostics);
 }
 
 /// Reads the manifest, discovers the modules and parses each one. Every

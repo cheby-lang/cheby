@@ -1,3 +1,4 @@
+// @decisions: D-475
 > @external(native, "abs")
 . fn magnitude(n: I32) -> I32
 > magnitude(-5)

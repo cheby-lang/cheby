@@ -144,9 +144,6 @@ impl BodyCx<'_, '_> {
             return Ok(None);
         };
         let want = self.repr_of(ty);
-        if self.is_poisoned(&op) {
-            return self.placeholder(want).map(Some);
-        }
         let base = self.base_local(op)?;
         let mut reads = Vec::with_capacity(index_per_ctor.len());
         for &(ctor, index) in index_per_ctor {
@@ -205,9 +202,6 @@ impl BodyCx<'_, '_> {
             values.push((op, self.ty(field.value)?));
         }
         let want = self.repr_of(ty);
-        if self.is_poisoned(&base_op) || values.iter().any(|(op, _)| self.is_poisoned(op)) {
-            return self.placeholder(want).map(Some);
-        }
         // §5.11.2 requires at least one field, and the checker reports an
         // update without one; with none the copy would equal the base.
         let Some(first) = fields.first() else {
@@ -491,12 +485,9 @@ mod tests {
     use crate::golden_tests::check_golden;
     use crate::test_support::{Lowered, lower_source};
 
-    /// Lowers `source` as the root module of `app`, requires that nothing
-    /// is unsupported, and returns the result.
+    /// Lowers `source` as the root module of `app`.
     fn lower(source: &str) -> Lowered {
-        let lowered = lower_source(&[("", source)]);
-        assert_eq!(lowered.unsupported(), Vec::<String>::new());
-        lowered
+        lower_source(&[("", source)])
     }
 
     /// The dump of the `app` unit.

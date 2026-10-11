@@ -1,9 +1,9 @@
-//! Reachability and the back-end gate (D-510) on hand-built THIR, so
-//! they do not depend on what the front end accepts yet.
+//! Reachability and lowering (D-510, D-554) on hand-built THIR, so they
+//! do not depend on what the front end accepts.
 
 use std::sync::Arc;
 
-use cheby_diag::{Diagnostic, FileId, SourceMap, Span, TextRange, TextSize};
+use cheby_diag::{FileId, SourceMap, Span, TextRange, TextSize};
 use cheby_iface::{ConstSig, Globals};
 use cheby_iface::{
     DefId, DefIndex, DefKind, DepView, FnSig, Generics, IfaceItem, IndexVec, InterfaceSet, ItemSig,
@@ -16,7 +16,7 @@ use cheby_types::thir::{
     Stmt,
 };
 
-use crate::lower::{LowerCx, LowerError, lower_entries, lower_items};
+use crate::lower::{LowerCx, lower_entries, lower_items};
 use crate::reach::{Program, Root, reachable};
 use crate::{Defs, EntryKind, EntryRequest};
 
@@ -113,14 +113,14 @@ impl BodyB {
         )
     }
 
-    /// A construct the back end does not lower: every THIR construct
-    /// lowers now (W4-A lowered the last, conversions to `dyn`), so the
-    /// test-only literal [`crate::lower::TEST_UNSUPPORTED`] stands for
-    /// one. It reaches nothing (D-510).
-    fn unsupported(&mut self, at: u32) -> ExprId {
+    /// An empty block, `Nil`: a body that reaches nothing (D-510).
+    fn nil(&mut self, at: u32) -> ExprId {
         self.expr(
-            ExprKind::Lit(Lit::Str(crate::lower::TEST_UNSUPPORTED.into())),
-            Ty::STRING,
+            ExprKind::Block {
+                stmts: Box::new([]),
+                tail: None,
+            },
+            Ty::NIL,
             at,
         )
     }
@@ -236,14 +236,14 @@ fn fixture() -> Fixture {
         103,
     );
     fns.push(fn_def(MAIN, file, b.finish(block, Ty::NIL)));
-    // with_case: an unsupported construct (E0038 at 110). It was a `case`
-    // until W2-B lowered them.
+    // with_case: `Nil`. (It held a construct MIR did not lower until
+    // every one lowered, D-554.)
     let mut b = BodyB::new(file);
-    let case = b.unsupported(110);
+    let case = b.nil(110);
     fns.push(fn_def(WITH_CASE, file, b.finish(case, Ty::NIL)));
-    // unused: one too, never reached.
+    // unused: the same, never reached.
     let mut b = BodyB::new(file);
-    let case = b.unsupported(120);
+    let case = b.nil(120);
     fns.push(fn_def(UNUSED, file, b.finish(case, Ty::NIL)));
     // shown: returns its parameter.
     let mut b = BodyB::new(file);
@@ -276,16 +276,15 @@ fn fixture() -> Fixture {
         body: None,
         entry: None,
     });
-    // many: `let x = (unsupported)`, `let (y, z) = …`, a tuple statement
-    // holding an unsupported construct, then `say(x)` and `say(y)` with the
-    // placeholders.
+    // many: `let x = "r"`, `let (y, z) = ("t", "u")`, a tuple statement
+    // `("v", "s")`, then `say(x)` and `say(y)`.
     let mut b = BodyB::new(file);
     let x = b.local(Ty::STRING, 160);
     let y = b.local(Ty::STRING, 161);
     let z = b.local(Ty::STRING, 162);
-    let case_x = b.unsupported(163);
+    let case_x = b.expr(ExprKind::Lit(Lit::Str("r".into())), Ty::STRING, 163);
     let lit = b.expr(ExprKind::Lit(Lit::Str("s".into())), Ty::STRING, 164);
-    let inner_case = b.unsupported(165);
+    let inner_case = b.expr(ExprKind::Lit(Lit::Str("v".into())), Ty::STRING, 165);
     let tuple_ty = globals.types.intern(cheby_iface::TyKind::Tuple(Box::new([
         Ty::STRING,
         Ty::STRING,
@@ -372,7 +371,7 @@ impl Fixture {
         self.modules.get(MODULE).unwrap().file.unwrap()
     }
 
-    fn lower(&self, wanted: &[u32]) -> Result<crate::MirModule, LowerError> {
+    fn lower(&self, wanted: &[u32]) -> Result<crate::MirModule, cheby_iface::Ice> {
         let deps = DepView::new(&self.set, &[]);
         let cx = LowerCx {
             defs: Defs {
@@ -387,13 +386,6 @@ impl Fixture {
         lower_items(&self.thir, &|d| wanted.contains(&d), &cx)
     }
 
-    fn unsupported(&self, wanted: &[u32]) -> Vec<(String, Span)> {
-        match self.lower(wanted) {
-            Err(LowerError::Unsupported(diags)) => diags.iter().map(summary).collect(),
-            other => panic!("expected E0038, got {other:?}"),
-        }
-    }
-
     fn program(&self) -> Program<'_> {
         Program::from([(MODULE, &self.thir)])
     }
@@ -401,12 +393,6 @@ impl Fixture {
     fn fn_def(&self, n: u32) -> &thir::FnDef {
         self.thir.fns.iter().find(|f| f.def == def(n)).unwrap()
     }
-}
-
-fn summary(d: &Diagnostic) -> (String, Span) {
-    assert_eq!(d.code, cheby_diag::codes::NOT_SUPPORTED_YET);
-    let primary = d.labels.first().unwrap().span;
-    (d.message.clone(), primary)
 }
 
 #[test]
@@ -419,18 +405,43 @@ fn reachability_follows_calls_only() {
     assert!(!reach.contains(def(UNUSED)));
 }
 
+/// What `main` reaches lowers, each reached item into one function
+/// (lowering reports no diagnostics, D-554).
 #[test]
-fn reachable_unsupported_construct_is_reported_at_it() {
+fn reachable_items_lower() {
     let f = fixture();
-    let file = f.file();
     let reach = reachable(&f.program(), &[Root::Fn(f.fn_def(MAIN))]).unwrap();
     let wanted: Vec<u32> = reach.items().map(|d| d.index.as_u32()).collect();
-    assert_eq!(
-        f.unsupported(&wanted),
-        [(
-            "test-only constructs are not supported yet".to_owned(),
-            sp(file, 110)
-        )]
+    let unit = f.lower(&wanted).unwrap();
+    let keys: Vec<String> = unit
+        .functions
+        .iter()
+        .map(|func| format!("{:?}", func.key))
+        .collect();
+    assert_eq!(keys.len(), 3, "{keys:?}");
+}
+
+/// An expression with a type error never reaches MIR: if one does, it is
+/// an internal error, not a diagnostic (D-554).
+#[test]
+fn an_error_expression_is_an_internal_error() {
+    let mut f = fixture();
+    let file = f.file();
+    let mut b = BodyB::new(file);
+    let error = b.expr(ExprKind::Error, Ty::NIL, 110);
+    let with_case = f
+        .thir
+        .fns
+        .iter_mut()
+        .find(|g| g.def == def(WITH_CASE))
+        .unwrap();
+    with_case.body = Some(b.finish(error, Ty::NIL));
+    let ice = f.lower(&[WITH_CASE]).unwrap_err();
+    assert!(
+        ice.message()
+            .starts_with("an expression with an error reached MIR lowering"),
+        "{}",
+        ice.message()
     );
 }
 
@@ -447,29 +458,18 @@ fn unreachable_items_are_not_lowered() {
     assert_eq!(keys.len(), 4, "{keys:?}");
 }
 
-/// Each outermost construct once; nothing inside it, and no follow-up
-/// error where its placeholder value is used.
+/// `let` statements with a name and a tuple pattern, an expression
+/// statement and calls with the bound names lower into one function.
 #[test]
-fn every_outermost_construct_is_reported_once() {
+fn lets_and_statements_lower() {
     let f = fixture();
-    let file = f.file();
-    assert_eq!(
-        f.unsupported(&[MANY]),
-        [
-            (
-                "test-only constructs are not supported yet".to_owned(),
-                sp(file, 163)
-            ),
-            (
-                "test-only constructs are not supported yet".to_owned(),
-                sp(file, 165)
-            ),
-        ]
-    );
+    let mut unit = f.lower(&[MANY]).unwrap();
+    assert_eq!(unit.functions.len(), 1);
+    crate::count_and_check(&mut unit).unwrap();
 }
 
 /// Returning an unboxed `Bool` boxes it, and an external returning `Int`
-/// boxes its result (D6); neither is E0038 any more.
+/// boxes its result (D6).
 #[test]
 fn boxing_is_lowered_where_it_is_needed() {
     let f = fixture();
@@ -482,24 +482,6 @@ fn boxing_is_lowered_where_it_is_needed() {
     assert!(
         text.contains("_0: int = call_foreign \"ext_int\"() -> i64\n  _1: value = box int _0"),
         "{text}"
-    );
-}
-
-/// The diagnostics of every selected item, so a run reports them all.
-#[test]
-fn diagnostics_of_several_items_are_collected() {
-    let f = fixture();
-    let messages: Vec<String> = f
-        .unsupported(&[WITH_CASE, UNUSED, SAME_BOOL])
-        .into_iter()
-        .map(|(m, _)| m)
-        .collect();
-    assert_eq!(
-        messages,
-        [
-            "test-only constructs are not supported yet",
-            "test-only constructs are not supported yet",
-        ]
     );
 }
 
@@ -785,9 +767,7 @@ fn main() {
 "#;
 
 fn d6() -> crate::test_support::Lowered {
-    let lowered = crate::test_support::lower_source(&[("", D6_SOURCE)]);
-    assert_eq!(lowered.unsupported(), Vec::<String>::new());
-    lowered
+    crate::test_support::lower_source(&[("", D6_SOURCE)])
 }
 
 /// A value of each unboxed type is boxed where it is passed to a generic
@@ -961,12 +941,12 @@ fn example_sources(dir: &std::path::Path) -> (String, Vec<(String, String)>) {
     (name, files)
 }
 
-/// Every example the front end accepts lowers without an internal error,
-/// and no E0038 about representations remains (D6): values crossing
-/// generic boundaries are boxed, and externals with scalar results are
-/// wrapped.
+/// What `main` reaches in every example the front end accepts lowers
+/// without an internal error (D6, D-554): values crossing generic
+/// boundaries are boxed, and externals with scalar results are wrapped.
+/// `lower_package` panics on an internal error, with the unit's dump.
 #[test]
-fn examples_lower_without_representation_errors() {
+fn examples_lower_without_internal_errors() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples");
     let mut dirs: Vec<_> = std::fs::read_dir(&root)
         .unwrap()
@@ -986,21 +966,8 @@ fn examples_lower_without_representation_errors() {
             // Unshipped std modules or dependencies (D-477, D-446).
             continue;
         };
+        assert!(!lowered.units.is_empty(), "{}", dir.display());
         lowered_any = true;
-        for message in lowered.unsupported() {
-            assert!(
-                !message.starts_with("values of type")
-                    && !message.starts_with("external functions that return"),
-                "{}: {message}",
-                dir.display()
-            );
-        }
-        if std::env::var_os("CHEBY_SHOW_E0038").is_some() {
-            println!("== {}", dir.display());
-            for message in lowered.unsupported() {
-                println!("{message}");
-            }
-        }
     }
     assert!(lowered_any);
 }
@@ -1038,7 +1005,6 @@ pub type Color {
 ",
         ),
     ]);
-    assert_eq!(lowered.unsupported(), Vec::<String>::new());
     let key = crate::type_key("app::colors", "Color");
     assert_eq!(
         crate::dump(lowered.unit("app::colors")).unwrap(),

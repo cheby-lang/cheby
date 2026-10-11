@@ -1,3 +1,4 @@
+// @decisions: D-098, D-547
 > type Celsius = Float
 > fn warm(t: Celsius) -> Bool {
 .   t > 20.0

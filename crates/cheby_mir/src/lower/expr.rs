@@ -22,25 +22,13 @@ impl BodyCx<'_, '_> {
     pub(super) fn expr(&mut self, id: ExprId, tail: bool) -> Result<Option<Operand>, Ice> {
         let e = self.expr_data(id)?;
         let (ty, span) = (e.ty, e.span);
-        // Every THIR construct lowers now; tests of the E0038 machinery
-        // (reporting, placeholders) mark a construct as one MIR cannot
-        // lower with this string literal.
-        #[cfg(test)]
-        if matches!(&e.kind, ExprKind::Lit(cheby_types::thir::Lit::Str(s)) if **s == *crate::lower::TEST_UNSUPPORTED)
-        {
-            return self.unsupported(span, "test-only constructs", ty);
-        }
         match &e.kind {
             ExprKind::Lit(lit) => self.lit(lit, ty, span),
-            ExprKind::Local(l) => self.lookup(*l, ty).map(Some),
+            ExprKind::Local(l) => self.lookup(*l).map(Some),
             ExprKind::Ctor { ctor, .. } => self.unit_ctor(*ctor, ty, span),
             ExprKind::Call { callee, args } => self.call(callee, args, ty, span, tail),
             ExprKind::Block { stmts, tail: value } => self.block(stmts, *value, span, tail),
-            ExprKind::FnRef {
-                def,
-                ty_args,
-                dicts,
-            } => self.fn_ref(*def, ty_args, dicts, ty, span),
+            ExprKind::FnRef { def, dicts, .. } => self.fn_ref(*def, dicts, span),
             ExprKind::ConstRef { def } => self.const_ref(*def, ty, span),
             ExprKind::Closure { params, body } => self.closure(params, *body, ty, span),
             ExprKind::LocalFn {
@@ -48,7 +36,7 @@ impl BodyCx<'_, '_> {
                 params,
                 body,
             } => self.local_fn(*local, params, *body, span),
-            ExprKind::SelfRef { local } => self.self_ref(*local, ty, span),
+            ExprKind::SelfRef { local } => self.self_ref(*local),
             ExprKind::Case { subjects, arms } => self.case(subjects, arms, ty, span, tail),
             ExprKind::Field {
                 base,
@@ -71,13 +59,16 @@ impl BodyCx<'_, '_> {
             ExprKind::Interpolate { parts } => self.interpolate(parts, ty, span),
             ExprKind::Panic { kind, message } => self.panic_expr(*kind, *message, ty, span),
             ExprKind::DynCoerce { value, iface, dict } => {
-                self.dyn_coerce(*value, *iface, dict, ty, span)
+                self.dyn_coerce(*value, *iface, dict, span)
             }
             ExprKind::Error => Err(Ice::new(format!(
                 "an expression with an error reached MIR lowering at {span:?}"
             ))),
-            // A kind added to THIR later is E0038 until it is lowered.
-            _ => self.unsupported(span, "this kind of expression", ty),
+            // THIR's `ExprKind` is `#[non_exhaustive]`: a kind added later
+            // is an internal error until it is lowered (D-554).
+            _ => Err(Ice::new(format!(
+                "a kind of expression MIR does not lower reached it at {span:?}"
+            ))),
         }
     }
 
@@ -104,9 +95,8 @@ impl BodyCx<'_, '_> {
             ThirCallee::Fn { def, dicts, .. } => {
                 // Dictionaries first (D-453); they are not expressions, so
                 // evaluation order is unchanged (§5.15.1).
-                let dict_ops = match self.call_dicts(dicts, ty, span)? {
-                    Ok(ops) => ops,
-                    Err(early) => return Ok(early),
+                let Some(dict_ops) = self.call_dicts(dicts, span)? else {
+                    return Ok(None);
                 };
                 let sig = abi_sig(self.cx.defs.fn_sig(*def)?, self.cx.defs.globals);
                 let want = sig.params.get(dicts.len()..).unwrap_or_default();
@@ -134,32 +124,28 @@ impl BodyCx<'_, '_> {
             }
             ThirCallee::Dyn { iface_fn } => self.call_dyn(*iface_fn, args, ty, span, tail),
             ThirCallee::Value(callee) => self.call_value(*callee, args, ty, span, tail),
-            _ => self.unsupported(span, "this kind of call", ty),
+            // THIR's `Callee` is `#[non_exhaustive]` (as above).
+            _ => Err(Ice::new(format!(
+                "a kind of call MIR does not lower reached it at {span:?}"
+            ))),
         }
     }
 
-    /// The dictionary objects of a call at `span` whose result has type
-    /// `ty` (D-453), or `Err` with what the call evaluates to instead:
-    /// `None` if a dictionary diverged, a placeholder if one is not
-    /// lowered (reported at the call, so the arguments are not lowered
-    /// and nothing inside them is reported).
+    /// The dictionary objects of a call at `span` (D-453), or `None` if
+    /// building one diverged.
     pub(super) fn call_dicts(
         &mut self,
         dicts: &[thir::Dict],
-        ty: cheby_iface::Ty,
         span: cheby_diag::Span,
-    ) -> Result<Result<Vec<Operand>, Option<Operand>>, Ice> {
+    ) -> Result<Option<Vec<Operand>>, Ice> {
         let mut ops = Vec::with_capacity(dicts.len());
         for d in dicts {
             let Some(op) = self.dict(d, span)? else {
-                return Ok(Err(None));
+                return Ok(None);
             };
-            if self.is_poisoned(&op) {
-                return Ok(Err(Some(self.placeholder(self.repr_of(ty))?)));
-            }
             ops.push(op);
         }
-        Ok(Ok(ops))
+        Ok(Some(ops))
     }
 
     /// A direct call of the top-level function `def` (through its slot,

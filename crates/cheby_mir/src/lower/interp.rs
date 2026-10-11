@@ -115,9 +115,6 @@ impl BodyCx<'_, '_> {
                     let Some(op) = self.dict(d, span)? else {
                         return Ok(None);
                     };
-                    if self.is_poisoned(&op) {
-                        return self.placeholder(Repr::Value).map(Some);
-                    }
                     dict_ops.push(op);
                 }
                 let sig = abi_sig(self.cx.defs.fn_sig(*def)?, self.cx.defs.globals);
@@ -140,7 +137,11 @@ impl BodyCx<'_, '_> {
             Some(Callee::Dyn { iface_fn }) => {
                 self.call_dyn(*iface_fn, &[expr], Ty::STRING, span, false)
             }
-            Some(_) => self.unsupported(span, "this kind of call", Ty::STRING),
+            // THIR's `Callee` is `#[non_exhaustive]`: a kind added later is
+            // an internal error until it is lowered (D-554).
+            Some(_) => Err(Ice::new(format!(
+                "an interpolated value's `show` is a kind of call MIR does not lower, at {span:?}"
+            ))),
             None => Err(Ice::new(format!(
                 "an interpolated value without its `show` function at {span:?}"
             ))),

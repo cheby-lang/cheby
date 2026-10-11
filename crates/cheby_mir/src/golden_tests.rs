@@ -405,7 +405,6 @@ fn example_goldens() {
             .collect();
         let lowered = crate::test_support::lower_package(&name, &refs)
             .unwrap_or_else(|errors| panic!("{example}: {errors}"));
-        assert_eq!(lowered.unsupported(), Vec::<String>::new(), "{example}");
         let text = lowered
             .units
             .iter()

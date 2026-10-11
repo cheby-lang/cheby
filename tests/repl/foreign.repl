@@ -1,3 +1,4 @@
+// @decisions: D-475
 > @external(native, "cheby_io_println")
 . fn say(text: String)
 > fn greet() {

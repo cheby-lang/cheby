@@ -1,3 +1,4 @@
+// @decisions: D-606, D-628, D-629
 > import web::page
 > page::title("home")
 "<home>" : String

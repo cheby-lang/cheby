@@ -647,7 +647,8 @@ impl Walk<'_, '_> {
             }
             // An enclosing item's own dictionary, or the one a `dyn`
             // value carries: what it holds was reached where it was built.
-            // A kind added to THIR later is lowered as E0038.
+            // A kind added to THIR later is an internal error in lowering
+            // until it is lowered (D-554).
             _ => {}
         }
     }
@@ -741,8 +742,8 @@ impl Walk<'_, '_> {
             }
             ExprKind::DynCoerce { dict, .. } => self.dict(dict),
             // The rest refer to no item; their sub-expressions are walked
-            // as children. A variant added to THIR later is lowered as
-            // E0038 until the back end supports it.
+            // as children. A variant added to THIR later is an internal
+            // error in lowering until the back end supports it (D-554).
             _ => {}
         }
     }

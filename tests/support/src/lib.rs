@@ -1,13 +1,15 @@
-//! Shared code for the conformance and UI harnesses and for `xtask`:
-//! milestones and expected-fail tracking, example and UI-test metadata,
-//! golden files, and running commands with a timeout
-//! (docs/plan/testing.md).
+//! Shared code for the conformance, UI and REPL harnesses and for `xtask`:
+//! milestones and expected-fail tracking, example, UI-test and transcript
+//! metadata, golden files, the platforms that skip run trials (D-545), and
+//! running commands with a timeout (docs/plan/testing.md).
 
 pub mod decisions;
 pub mod example;
 pub mod golden;
 pub mod milestone;
+pub mod platform;
 pub mod process;
+pub mod repl;
 pub mod ui;
 
 use std::path::{Path, PathBuf};

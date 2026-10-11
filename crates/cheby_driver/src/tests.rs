@@ -224,6 +224,117 @@ fn run_never_fails_internally_on_ui_tests() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
+/// Whether every E0038 in `out` is the resolver's, for an import of a std
+/// module that is planned but not shipped (D-480, D-451).
+fn only_unshipped_imports_are_e0038(out: &CheckOutput) -> bool {
+    out.diagnostics
+        .iter()
+        .filter(|d| d.code == cheby_diag::codes::NOT_SUPPORTED_YET)
+        .all(|d| {
+            d.message
+                .strip_prefix("the module `std::")
+                .and_then(|m| m.strip_suffix("` is not supported yet"))
+                .is_some_and(|m| std_lib::PLANNED_STD_MODULES.contains(&m))
+        })
+}
+
+/// Lowers every root of the package at `dir` that the front end accepts
+/// (its root module's `main`, its tests, its constants). `Ok(None)` when
+/// the front end reports an error; `Err` with the problem otherwise.
+fn lower_package_roots(dir: &Path) -> Result<Option<usize>, String> {
+    let mut out = CheckOutput::default();
+    let front =
+        front_end(dir, frontend::Mode::Build, &mut out).map_err(|e| e.message().to_owned())?;
+    if !only_unshipped_imports_are_e0038(&out) {
+        return Err(out.render());
+    }
+    let Some((front, package)) = front.filter(|_| !out.has_errors()) else {
+        return Ok(None);
+    };
+    let main = front
+        .local_module(&ModulePath::root(&package))
+        .and_then(|m| front.main_of(m));
+    let units = backend::lower_every_root(&front, &out.sources, main)
+        .map_err(|ice| ice.message().to_owned())?;
+    Ok(Some(units.len()))
+}
+
+/// MIR lowering emits no E0038 (D-554): every example and every run-pass
+/// and run-fail UI test lowers all it can build (what `main` reaches, its
+/// tests on native, its constants) with no diagnostic and no internal
+/// error. E0038 is left only for imports of unshipped std modules, which
+/// the resolver reports before anything is lowered (D-480); the later-tier
+/// examples are such packages.
+#[test]
+fn lowering_reports_no_e0038() {
+    let mut failures = Vec::new();
+    let mut lowered = 0_usize;
+    for dir in examples() {
+        let name = dir.file_name().unwrap().to_string_lossy().into_owned();
+        match lower_package_roots(&dir) {
+            Ok(Some(units)) => {
+                assert!(units > 0, "{name}");
+                lowered += 1;
+            }
+            Ok(None) => assert!(
+                name == "030_shop_service" || LATER_EXAMPLES.contains(&name.as_str()),
+                "{name} has front-end errors"
+            ),
+            Err(e) => failures.push(format!("{name}: {e}")),
+        }
+    }
+    assert_eq!(lowered, 23, "{}", failures.join("\n"));
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/ui");
+    let mut cases = Vec::new();
+    collect_ui_tests(&root, &mut cases);
+    let mut runs = 0_usize;
+    for (n, case) in cases.iter().enumerate() {
+        let main = if case.is_dir() {
+            case.join("src/main.cheby")
+        } else {
+            case.clone()
+        };
+        let source = std::fs::read(&main).unwrap();
+        let header = String::from_utf8_lossy(&source);
+        let mode = header
+            .lines()
+            .take_while(|l| l.starts_with("//"))
+            .map(|l| l.trim_start_matches('/').trim())
+            .find_map(|l| l.strip_prefix("@mode:"))
+            .map(str::trim);
+        let fails = match mode {
+            Some("run-pass") => false,
+            Some("run-fail") => true,
+            _ => continue,
+        };
+        let dir = if case.is_dir() {
+            case.clone()
+        } else {
+            package(
+                &format!("lower_ui_{n}"),
+                &[
+                    ("cheby.toml", b"name = \"ui_test\"\nversion = \"0.1.0\"\n"),
+                    ("src/main.cheby", &source),
+                ],
+            )
+        };
+        match lower_package_roots(&dir) {
+            Ok(Some(_)) => runs += 1,
+            // A run-fail test may fail to compile on purpose, such as
+            // `cheby test` stopping at a compile error (D-541); its
+            // diagnostics hold no E0038 all the same.
+            Ok(None) if fails => {}
+            Ok(None) => failures.push(format!("{}: front-end errors", case.display())),
+            Err(e) => failures.push(format!("{}: {e}", case.display())),
+        }
+        if !case.is_dir() {
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    assert!(runs > 190, "lowered only {runs} run UI tests");
+}
+
 /// Single-file and package UI tests under `dir`, sorted.
 fn collect_ui_tests(dir: &Path, out: &mut Vec<PathBuf>) {
     let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
@@ -288,7 +399,7 @@ fn conversions_to_dyn_compile_and_run() {
 }
 
 /// The dumps show what running the root `main` compiles: the items it
-/// reaches. `cheby check` lowers nothing, so it reports no back-end E0038.
+/// reaches. A package without a root `main` dumps nothing.
 #[test]
 fn dumps_follow_reachability() {
     let (out, mir) = dump_mir(&test_package("lets")).unwrap();

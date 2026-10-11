@@ -1,3 +1,4 @@
+// @decisions: D-098, D-546, D-624
 > :help
 Enter an expression to see its value and type, `let` or `let assert` to bind names for later entries, a declaration (`fn`, `type`, a type alias, `interface`, `const`), or an `import`. A name may be defined again (§13.5.2).
 

@@ -1,3 +1,4 @@
+// @decisions: D-098, D-624
 > heat(1)
 error[E0042]: cannot find value `heat` in this scope
  --> <repl:1>:1:1

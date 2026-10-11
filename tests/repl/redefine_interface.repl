@@ -1,3 +1,4 @@
+// @decisions: D-043, D-626
 > interface Named {
 .   fn name(Self) -> String
 . }

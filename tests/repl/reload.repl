@@ -1,3 +1,4 @@
+// @decisions: D-098, D-625, D-626
 > import store::prices
 > let basket = [prices::Item(2), prices::Item(3)]
 > prices::total(basket)

@@ -56,11 +56,6 @@ fn main() {
 }
 ",
         )]);
-        assert!(
-            lowered.unsupported().is_empty(),
-            "{:?}",
-            lowered.unsupported()
-        );
         check_golden(
             "consts/load_const",
             &crate::dump(lowered.unit("app")).unwrap(),

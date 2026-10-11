@@ -4,9 +4,10 @@ use std::fmt;
 
 use cheby_iface::Ice;
 
-/// Why code generation failed. None of these is a user error: the front
-/// end rejects everything code generation cannot handle (E0038), so every
-/// variant is a bug in the compiler or an unsupported host.
+/// Why code generation failed. None of these is a user error: MIR
+/// lowering accepts every program the front end accepts and code
+/// generation handles all valid MIR (D-554), so every variant is a bug in
+/// the compiler or an unsupported host.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CodegenError {
     /// A broken invariant in the MIR or in this crate.

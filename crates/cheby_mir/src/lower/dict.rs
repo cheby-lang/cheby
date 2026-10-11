@@ -655,9 +655,6 @@ impl BodyCx<'_, '_> {
         let Some(d) = self.dict(dict, span)? else {
             return Ok(None);
         };
-        if self.is_poisoned(&d) {
-            return self.placeholder(self.repr_of(ret_ty)).map(Some);
-        }
         let mut ops = Vec::with_capacity(args.len());
         for &arg in args {
             let Some(op) = self.expr(arg, false)? else {
@@ -688,9 +685,6 @@ impl BodyCx<'_, '_> {
         let Some(d) = self.dict(dict, span)? else {
             return Ok(None);
         };
-        if self.is_poisoned(&d) {
-            return self.placeholder(self.repr_of(ret_ty)).map(Some);
-        }
         let mut ops = Vec::with_capacity(args.len());
         for (op, ty) in args {
             ops.push(self.to_uniform(op, ty)?);
@@ -727,9 +721,6 @@ impl BodyCx<'_, '_> {
         let Some(recv) = ops.next() else {
             return Err(Ice::new("a `dyn` call without its receiver"));
         };
-        if self.is_poisoned(&recv) {
-            return self.placeholder(self.repr_of(ret_ty)).map(Some);
-        }
         let recv = self.dict_local(recv)?;
         let (dict, inner) = self.dyn_parts(recv)?;
         let shape = IfaceShape::of(self.cx, dyn_iface)?;
@@ -788,26 +779,22 @@ impl BodyCx<'_, '_> {
         )?))
     }
 
-    /// `value` converted to `dyn iface`, of type `ty` (§8.6, D-168): a new
-    /// `dyn` value of `dict` and the value as a uniform word. A `dyn J`
-    /// value is not packaged again (D-502): converted to `dyn` of an
-    /// interface `J` embeds, it gets the embedded dictionary from its own;
-    /// converted to `dyn` of an empty interface, it keeps its descriptor.
+    /// `value` converted to `dyn iface` (§8.6, D-168): a new `dyn` value of
+    /// `dict` and the value as a uniform word. A `dyn J` value is not
+    /// packaged again (D-502): converted to `dyn` of an interface `J`
+    /// embeds, it gets the embedded dictionary from its own; converted to
+    /// `dyn` of an empty interface, it keeps its descriptor.
     pub(super) fn dyn_coerce(
         &mut self,
         value: ExprId,
         iface: DefId,
         dict: &Dict,
-        ty: Ty,
         span: Span,
     ) -> Result<Option<Operand>, Ice> {
         let from = self.ty(value)?;
         let Some(v) = self.expr(value, false)? else {
             return Ok(None);
         };
-        if self.is_poisoned(&v) {
-            return self.placeholder(self.repr_of(ty)).map(Some);
-        }
         if let TyKind::Dyn { iface: has, .. } = self.cx.defs.globals.types.kind(from) {
             let has = *has;
             return self.dyn_to_dyn(v, has, iface, dict).map(Some);
@@ -816,9 +803,6 @@ impl BodyCx<'_, '_> {
         let Some(d) = self.dict(dict, span)? else {
             return Ok(None);
         };
-        if self.is_poisoned(&d) {
-            return self.placeholder(self.repr_of(ty)).map(Some);
-        }
         self.alloc_dyn(d, v).map(Some)
     }
 

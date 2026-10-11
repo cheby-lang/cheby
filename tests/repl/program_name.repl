@@ -1,0 +1,6 @@
+// @decisions: D-612
+> import std::env
+> env::program_name()
+"repl" : String
+> env::args()
+[] : List<String>

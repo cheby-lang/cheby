@@ -213,6 +213,7 @@ fn environment_and_flag_precedence() {
 
 /// The REPL's diagnostics and tool errors follow `--color` too.
 #[test]
+#[cfg_attr(windows, ignore = "the REPL does not run on Windows until M6 (D-545)")]
 fn repl_follows_the_flag() {
     let dir = Path::new(TMP);
     let input: &[u8] = b"let x: Int = \"a\"\n:bogus\n:quit\n";

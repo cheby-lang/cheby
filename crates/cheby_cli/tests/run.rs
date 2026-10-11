@@ -2,6 +2,10 @@
 //! and on small packages. Binding whatever the milestone: these must pass.
 //! In a debug build of the toolchain, status 0 also means the leak check
 //! found no live object at exit (it would give 102).
+//!
+//! Programs do not run on Windows until M6, so this file is not built
+//! there (D-545).
+#![cfg(not(windows))]
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

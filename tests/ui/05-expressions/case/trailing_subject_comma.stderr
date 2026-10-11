@@ -1,0 +1,8 @@
+error[E0013]: expected a `case` subject after `,`
+ --> tests/ui/05-expressions/case/trailing_subject_comma.cheby:8:12
+  |
+8 |   case n, m, {
+  |            ^
+  |
+  = help: remove the trailing comma
+

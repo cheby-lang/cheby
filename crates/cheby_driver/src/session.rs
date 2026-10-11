@@ -64,8 +64,8 @@ use cheby_iface::{
 use cheby_jit::{Jit, JitError, JitOptions};
 use cheby_mir::reach::{Reach, Root, reachable_with_hooks};
 use cheby_mir::{
-    Defs, EntryKind, EntryRequest, LowerCx, MirModule, Program, Unsupported, count_and_check,
-    foreign_sig, lower_entries, lower_items, lower_tests,
+    Defs, EntryKind, EntryRequest, LowerCx, MirModule, Program, count_and_check, foreign_sig,
+    lower_entries, lower_items, lower_tests,
 };
 use cheby_package::{Manifest, ModulePath, Target, Targets};
 use cheby_resolve::repl::{Entered, SessionScope};
@@ -702,13 +702,7 @@ impl Session {
                 },
             )
         }));
-        let built = match self.lower(entry)? {
-            Ok(built) => built,
-            Err(mut diagnostics) => {
-                self.report(&mut diagnostics, out);
-                return Ok(false);
-            }
-        };
+        let built = self.lower(entry)?;
         match self.jit.compile(&built.units) {
             Ok(()) => {}
             Err(JitError::UnresolvedSymbols(symbols)) => {
@@ -1620,9 +1614,9 @@ struct Built {
 }
 
 impl Session {
-    /// Lowers what `entry` reaches that is not compiled yet. `Err` holds
-    /// E0038 diagnostics.
-    fn lower(&self, entry: &Entry) -> Result<Result<Built, Vec<Diagnostic>>, Error> {
+    /// Lowers what `entry` reaches that is not compiled yet. MIR lowering
+    /// reports no diagnostics (D-554), so every error is an `Ice`.
+    fn lower(&self, entry: &Entry) -> Result<Built, Error> {
         let checked = &entry.checked;
         let mut program = Program::new();
         for &module in &self.front.order {
@@ -1647,7 +1641,6 @@ impl Session {
         let mut units = Vec::new();
         let mut items = Vec::new();
         let mut lowered_modules = Vec::new();
-        let mut unsupported = Unsupported::default();
         let wanted = |def: DefId| reach.contains(def) && !self.compiled.contains(&def);
         for module in modules {
             if !reach.needs_module(module) {
@@ -1690,10 +1683,9 @@ impl Session {
                 },
                 sources: &self.sources,
             };
-            if let Some(mut unit) = unsupported.take(lower_items(thir, &wanted, &cx))? {
-                count_and_check(&mut unit)?;
-                units.push(unit);
-            }
+            let mut unit = lower_items(thir, &wanted, &cx)?;
+            count_and_check(&mut unit)?;
+            units.push(unit);
             items.extend(new);
             lowered_modules.push(module);
         }
@@ -1702,17 +1694,14 @@ impl Session {
             .into_iter()
             .filter(|def| !self.evaluated.contains(def))
             .collect();
-        units.extend(self.lower_entry_units(entry, &constants, &all, &mut unsupported)?);
-        if !unsupported.is_empty() {
-            return Ok(Err(unsupported.into_diagnostics()));
-        }
-        Ok(Ok(Built {
+        units.extend(self.lower_entry_units(entry, &constants, &all)?);
+        Ok(Built {
             units,
             items,
             modules: lowered_modules,
             constants,
             reach,
-        }))
+        })
     }
 
     /// The entry's tests unit (its body) and its entries unit: the thunk of
@@ -1722,7 +1711,6 @@ impl Session {
         entry: &Entry,
         constants: &[DefId],
         all: &[ModuleId],
-        unsupported: &mut Unsupported,
     ) -> Result<Vec<MirModule>, Error> {
         let checked = &entry.checked;
         let mut units = Vec::new();
@@ -1743,10 +1731,9 @@ impl Session {
                 consts: Vec::new(),
                 tests: checked.thir.tests.clone(),
             };
-            if let Some(mut unit) = unsupported.take(lower_tests(&tests, &cx))? {
-                count_and_check(&mut unit)?;
-                units.push(unit);
-            }
+            let mut unit = lower_tests(&tests, &cx)?;
+            count_and_check(&mut unit)?;
+            units.push(unit);
         }
         let mut requests: Vec<EntryRequest<'_>> = Vec::new();
         if checked.body.is_some() {
@@ -1759,9 +1746,8 @@ impl Session {
             kind: EntryKind::Const(def),
             info: None,
         }));
-        if !requests.is_empty()
-            && let Some(mut unit) = unsupported.take(lower_entries(&requests, &cx))?
-        {
+        if !requests.is_empty() {
+            let mut unit = lower_entries(&requests, &cx)?;
             count_and_check(&mut unit)?;
             units.push(unit);
         }
