@@ -1,0 +1,11 @@
+// @mode: check-fail
+// @decisions: D-114
+//! A `\u{…}` escape names a Unicode scalar value, so a surrogate code
+//! point is not allowed even with a valid number of digits (§2.5.3).
+
+fn main() {
+  let high = "\u{D800}"
+  let low = "\u{dfff}"
+  let fine = "\u{1F600}"
+  assert high != low && low != fine
+}

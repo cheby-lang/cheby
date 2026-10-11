@@ -1,0 +1,18 @@
+error[E0048]: this function takes 2 arguments but 1 argument was supplied
+  --> tests/ui/05-expressions/calls/argument_count.cheby:11:16
+   |
+6  | pub fn add(a: Int, b: Int) -> Int {
+   |        --- `add` is declared here
+...
+11 |   let one = add(1)
+   |                ^^^ expected 2 arguments
+
+error[E0048]: this function takes 2 arguments but 3 arguments were supplied
+  --> tests/ui/05-expressions/calls/argument_count.cheby:12:18
+   |
+6  | pub fn add(a: Int, b: Int) -> Int {
+   |        --- `add` is declared here
+...
+12 |   let three = add(1, 2, 3)
+   |                  ^^^^^^^^^ expected 2 arguments
+

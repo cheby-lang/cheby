@@ -1,0 +1,76 @@
+// @mode: run-pass
+// @decisions: D-022, D-113
+//! Constructor patterns match the prelude's `Bool`, `Option`, `Result`
+//! and `Order` and user types, by position or by field name, with `..`
+//! for the rest (§6.4). Fields of type `Int` are stored unboxed.
+
+import std::int
+import std::io
+
+type Shape {
+  Circle { radius: Int },
+  Rect { width: Int, height: Int },
+  Dot,
+}
+
+type Tree {
+  Leaf,
+  Node(Tree, Int, Tree),
+}
+
+fn area(shape: Shape) -> Int {
+  case shape {
+    Circle { radius } => 3 * radius * radius
+    Rect { width, height: 0 } => width
+    Rect { width: w, height: h } => w * h
+    Dot => 0
+  }
+}
+
+fn sum(tree: Tree) -> Int {
+  case tree {
+    Leaf => 0
+    Node(left, value, right) => sum(left) + value + sum(right)
+  }
+}
+
+fn describe(value: Option<Result<Int, String>>) -> String {
+  case value {
+    None => "nothing"
+    Some(Ok(0)) => "zero"
+    Some(Ok(n)) => "number {n}"
+    Some(Err(message)) => "error: {message}"
+  }
+}
+
+fn order_name(order: Order) -> String {
+  case order {
+    Less => "less"
+    Equal => "equal"
+    Greater => "greater"
+  }
+}
+
+fn flag(on: Bool) -> String {
+  case on {
+    True => "on"
+    False => "off"
+  }
+}
+
+fn main() {
+  io::println(int::show(area(Circle { radius: 2 })))
+  io::println(int::show(area(Rect { width: 3, height: 0 })))
+  io::println(int::show(area(Rect { width: 3, height: 4 })))
+  io::println(int::show(area(Dot)))
+  io::println(int::show(sum(Node(Node(Leaf, 1, Leaf), 2, Node(Leaf, 3, Leaf)))))
+  io::println(describe(None))
+  io::println(describe(Some(Ok(0))))
+  io::println(describe(Some(Ok(7))))
+  io::println(describe(Some(Err("bad"))))
+  io::println(order_name(Less))
+  io::println(order_name(Equal))
+  io::println(order_name(Greater))
+  io::println(flag(True))
+  io::println(flag(False))
+}

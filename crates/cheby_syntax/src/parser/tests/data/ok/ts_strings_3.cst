@@ -1,0 +1,48 @@
+SOURCE_FILE@0..122
+  COMMENT@0..14 "// Raw strings"
+  NEWLINE@14..15 "\n"
+  CONST_DECL@15..43
+    CONST_KW@15..20 "const"
+    WHITESPACE@20..21 " "
+    LOWER_IDENT@21..22 "a"
+    COLON@22..23 ":"
+    WHITESPACE@23..24 " "
+    PATH_TYPE@24..30
+      PATH@24..30
+        UPPER_IDENT@24..30 "String"
+    WHITESPACE@30..31 " "
+    EQ@31..32 "="
+    WHITESPACE@32..33 " "
+    LITERAL@33..43
+      RAW_STRING@33..43 "r\"^\\d{3}$\""
+  NEWLINE@43..44 "\n"
+  CONST_DECL@44..82
+    CONST_KW@44..49 "const"
+    WHITESPACE@49..50 " "
+    LOWER_IDENT@50..51 "b"
+    COLON@51..52 ":"
+    WHITESPACE@52..53 " "
+    PATH_TYPE@53..59
+      PATH@53..59
+        UPPER_IDENT@53..59 "String"
+    WHITESPACE@59..60 " "
+    EQ@60..61 "="
+    WHITESPACE@61..62 " "
+    LITERAL@62..82
+      RAW_STRING@62..82 "r#\"a \"quoted\" word\"#"
+  NEWLINE@82..83 "\n"
+  CONST_DECL@83..121
+    CONST_KW@83..88 "const"
+    WHITESPACE@88..89 " "
+    LOWER_IDENT@89..90 "c"
+    COLON@90..91 ":"
+    WHITESPACE@91..92 " "
+    PATH_TYPE@92..98
+      PATH@92..98
+        UPPER_IDENT@92..98 "String"
+    WHITESPACE@98..99 " "
+    EQ@99..100 "="
+    WHITESPACE@100..101 " "
+    LITERAL@101..121
+      RAW_STRING@101..121 "r##\"has \"# inside\"##"
+  NEWLINE@121..122 "\n"

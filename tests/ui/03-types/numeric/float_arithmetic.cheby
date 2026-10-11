@@ -1,0 +1,53 @@
+// @mode: run-pass
+// @decisions: D-069, D-135, D-154, D-527
+//! IEEE arithmetic on `Float` and `F32` (§3.3.2, §5.4.2): it never
+//! panics, `%` is `fmod` with the dividend's sign, and unary `-` flips the
+//! sign. `==` is reflexive on NaN and `-0.0 == 0.0`; `<`, `<=`, `>` and
+//! `>=` follow `compare`'s total order, where NaN is above every other
+//! float (§3.14).
+
+import std::f32
+import std::float
+import std::io
+
+fn put(label: String, x: Float) {
+  io::print(label)
+  io::print(" = ")
+  io::println(float::show(x))
+}
+
+fn main() {
+  let x = 7.5
+  let y = -2.0
+  put("x + y", x + y)
+  put("x - y", x - y)
+  put("x * y", x * y)
+  put("x / y", x / y)
+  put("x % y", x % y)
+  put("y % x", y % x)
+  put("-x", -x)
+  let zero = 0.0
+  let nan = zero / zero
+  let inf = 1.0 / zero
+  put("1 / 0", inf)
+  put("-1 / 0", -inf)
+  put("0 / 0", nan)
+  put("-0", -zero)
+  put("inf % 2", inf % 2.0)
+  assert nan == nan
+  assert !(nan != nan)
+  assert -zero == zero
+  assert 1.0 < nan
+  assert nan > inf
+  assert !(nan < nan) && nan <= nan && nan >= nan
+  assert -zero <= zero && -zero >= zero && !(-zero < zero)
+  assert -inf < inf && inf < nan
+  let a: F32 = 0.1
+  let b: F32 = 0.2
+  io::println(f32::show(a + b))
+  io::println(f32::show(-a))
+  let fzero: F32 = 0.0
+  let fnan = fzero / fzero
+  assert fnan == fnan && fnan > a && -fzero == fzero
+  io::println(f32::show(fnan))
+}

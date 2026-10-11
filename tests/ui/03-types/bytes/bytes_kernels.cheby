@@ -1,0 +1,88 @@
+// @mode: run-pass
+// @decisions: D-095, D-298, D-316, D-318, D-319, D-334, D-388
+//! The `std::bytes` kernels from Cheby (§3.5, D-095): text becomes bytes
+//! as UTF-8, `get` and the reads give `None` past either end (D-318),
+//! `slice` clamps (D-298, D-319), every integer width is written and read
+//! back in both byte orders (D-334), a value built by pushes compares
+//! with `==` byte by byte, and debug text shows the bytes in hex (D-388).
+
+import std::bytes
+import std::io
+import std::list
+
+fn put<T>(label: String, value: T) {
+  io::println("{label}: {value:?}")
+}
+
+/// Pushes `count - next` bytes onto `data`, one at a time.
+fn count_up(data: bytes::Bytes, next: Int, count: Int) -> bytes::Bytes {
+  case {
+    next >= count => data
+    _ => count_up(bytes::push(data, 7), next + 1, count)
+  }
+}
+
+fn main() {
+  let text = bytes::from_string("hé!")
+  put("text", text)
+  put("to_list", bytes::to_list(text))
+  put("length", bytes::length(text))
+  put("get 1", bytes::get(text, 1))
+  put("get 4", bytes::get(text, 4))
+  put("get -1", bytes::get(text, -1))
+
+  let header = bytes::new()
+    |> bytes::push_u32_be(_, 0x8950_4E47)
+    |> bytes::push_u16_le(_, 0x0A0D)
+    |> bytes::push_i8(_, -1)
+  put("header", header)
+  put("u32 be", bytes::read_u32_be(header, 0))
+  put("u32 le", bytes::read_u32_le(header, 0))
+  put("i16 le", bytes::read_i16_le(header, 4))
+  put("i8", bytes::read_i8(header, 6))
+  put("past the end", bytes::read_u16_be(header, 6))
+  put("negative", bytes::read_u64_le(header, -1))
+
+  let wide = bytes::new()
+    |> bytes::push_u64_le(_, 0xFFFF_FFFF_FFFF_FFFF)
+    |> bytes::push_i64_be(_, -2)
+    |> bytes::push_i32_le(_, -3)
+    |> bytes::push_i16_be(_, -4)
+    |> bytes::push_u16_be(_, 0xBEEF)
+    |> bytes::push_u32_le(_, 0xCBF4_3926)
+    |> bytes::push_i32_be(_, -5)
+    |> bytes::push_u64_be(_, 0x0102_0304_0506_0708)
+    |> bytes::push_i64_le(_, -6)
+    |> bytes::push_i16_le(_, -7)
+  put("wide", wide)
+  put("u64 le", bytes::read_u64_le(wide, 0))
+  put("i64 be", bytes::read_i64_be(wide, 8))
+  put("i32 le", bytes::read_i32_le(wide, 16))
+  put("i16 be", bytes::read_i16_be(wide, 20))
+  put("u16 be", bytes::read_u16_be(wide, 22))
+  put("u32 le", bytes::read_u32_le(wide, 24))
+  put("i32 be", bytes::read_i32_be(wide, 28))
+  put("u64 be", bytes::read_u64_be(wide, 32))
+  put("i64 le", bytes::read_i64_le(wide, 40))
+  put("i16 le", bytes::read_i16_le(wide, 48))
+  put("u16 le", bytes::read_u16_le(wide, 48))
+  put("u32 be", bytes::read_u32_be(wide, 46))
+  put("i64 at the end", bytes::read_i64_be(wide, 42))
+  put("u64 one past", bytes::read_u64_be(wide, 43))
+
+  let digits = bytes::from_list([1, 2, 3, 4])
+  let negative = -5
+  put("slice", bytes::slice(digits, 1, 3))
+  put("clamped", bytes::slice(digits, negative, 100))
+  put("empty", bytes::slice(digits, 3, 1))
+  put("append", bytes::append(digits, digits))
+  put("concat", bytes::concat([digits, bytes::new(), text]))
+  put("digits", digits)
+
+  let built = count_up(bytes::new(), 0, 1000)
+  put("built", bytes::length(built))
+  let ab = bytes::new() |> bytes::push(_, 0x41) |> bytes::push(_, 0x42)
+  put("equal", ab == bytes::from_string("AB"))
+  put("not equal", ab == bytes::from_string("AC"))
+  put("fold", bytes::fold(digits, 0, fn(sum, byte) { sum + list::length([byte]) }))
+}

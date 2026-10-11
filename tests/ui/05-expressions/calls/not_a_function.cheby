@@ -1,0 +1,8 @@
+// @mode: check-fail
+// @decisions: D-083
+//! Only a value of function type can be called (§5.5).
+
+pub fn main() {
+  let greeting = "hello"
+  greeting("world")
+}

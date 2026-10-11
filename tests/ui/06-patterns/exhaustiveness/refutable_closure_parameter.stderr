@@ -1,0 +1,9 @@
+error[E0060]: refutable pattern in a parameter
+ --> tests/ui/06-patterns/exhaustiveness/refutable_closure_parameter.cheby:7:18
+  |
+7 |   let first = fn([x]) { x }
+  |                  ^^^ `[]` and `[_, _, ..]` not covered
+  |
+  = note: this pattern must match every value of its type (§6.1)
+  = help: take the parameter as a plain name and use `case` in the body to handle `[]` as well, or `let assert` to panic when it does not match
+

@@ -1,0 +1,7 @@
+// Subjectless case
+fn f() {
+  case {
+    n > 0 => "positive"
+    _ => "other"
+  }
+}

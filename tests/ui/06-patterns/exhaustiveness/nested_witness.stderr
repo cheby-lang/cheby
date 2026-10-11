@@ -1,0 +1,8 @@
+error[E0061]: `case` does not cover every value
+ --> tests/ui/06-patterns/exhaustiveness/nested_witness.cheby:7:8
+  |
+7 |   case value {
+  |        ^^^^^ `Some(Some(False))` not covered
+  |
+  = help: add an arm for `Some(Some(False))`
+

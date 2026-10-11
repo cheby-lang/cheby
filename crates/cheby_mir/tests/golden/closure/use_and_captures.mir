@@ -1,0 +1,46 @@
+fn app::both(_0: value, _1: value) -> value check str#0 {
+  str#0 = "src/main.cheby:8:4"
+bb0:
+  _2: value = alloc closure/1(const code <closure app::both#0>, _1)
+  tail_call app::with(_0, _2)
+}
+
+fn closure app::both#0(_0: value, _1: value) -> value check str#0 {
+  str#0 = "src/main.cheby:9:3"
+bb0:
+  _2: value = field _0.1 of closure/1
+  dup _2
+  drop _0
+  _3: value = alloc closure/1(const code <closure app::both#1>, _1)
+  tail_call app::with(_2, _3)
+}
+
+fn closure app::both#1(_0: value, _1: value) -> value check str#0 {
+  str#0 = "src/main.cheby:10:3"
+bb0:
+  _2: value = field _0.1 of closure/1
+  dup _2
+  drop _0
+  tail_call std::string::add(_2, _1)
+}
+
+fn app::captured(_0: value) -> value check str#0 {
+  str#0 = "src/main.cheby:22:4"
+  str#1 = "m"
+bb0:
+  _1: value = call app::prefix()
+  _2: value = alloc closure/2(const code <closure app::captured#0>, _1, _0)
+  _3: value = const str#1
+  tail_call _2(_3)
+}
+
+fn closure app::captured#0(_0: value, _1: value) -> value check str#0 {
+  str#0 = "src/main.cheby:23:11"
+bb0:
+  _2: value = field _0.1 of closure/2
+  dup _2
+  _3: value = field _0.2 of closure/2
+  dup _3
+  drop _0
+  tail_call app::add3(_2, _1, _3)
+}

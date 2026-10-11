@@ -1,0 +1,21 @@
+// @mode: run-fail
+// @exit: 1
+// @command: test
+// @decisions: D-458, D-541, D-543
+//! In a toolchain with debug assertions, a passing test that leaves objects
+//! alive fails with the leak check's message. This one leaks on purpose: it
+//! binds a kernel that returns a new `String` as if it returned `Nil`, so
+//! nothing ever releases the string (§12.5 makes the binding the program's
+//! responsibility).
+
+@external(native, "cheby_env_program_name")
+fn program_name_dropped() -> Nil
+
+@target(native)
+test "leaks a string" {
+  program_name_dropped()
+}
+
+test "leaks nothing" {
+  assert 1 + 1 == 2
+}

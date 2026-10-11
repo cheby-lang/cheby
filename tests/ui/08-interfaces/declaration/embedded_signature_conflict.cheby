@@ -1,0 +1,16 @@
+// @mode: check-fail
+// @decisions: D-117
+//! Two embedded interfaces that require a function with the same name
+//! must give it the same signature (§8.3).
+
+pub interface Named {
+  fn name(Self) -> String
+}
+
+pub interface Numbered {
+  fn name(Self) -> Int
+}
+
+pub interface Tagged: Named + Numbered
+
+fn main() {}

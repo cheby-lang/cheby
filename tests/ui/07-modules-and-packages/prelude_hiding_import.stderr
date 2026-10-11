@@ -1,0 +1,18 @@
+warning[W0007]: `Some` hides the prelude constructor `Some`
+ --> tests/ui/07-modules-and-packages/prelude_hiding_import/src/lookup.cheby:5:3
+  |
+5 |   Some(String),
+  |   ^^^^ declared here
+  |
+  = note: in this module, `Some` no longer means the prelude constructor, which stays reachable as `option::Some` after `import std::option`
+  = help: if this is not intended, give the constructor another name
+
+warning[W0007]: `Some` hides the prelude constructor `Some`
+ --> tests/ui/07-modules-and-packages/prelude_hiding_import/src/main.cheby:6:39
+  |
+6 | import app::lookup::{Lookup, Missing, Some}
+  |                                       ^^^^ imported here
+  |
+  = note: in this module, `Some` no longer means the prelude constructor, which stays reachable as `option::Some` after `import std::option`
+  = help: if this is not intended, import it under another name: `Some as …`
+

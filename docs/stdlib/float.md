@@ -792,7 +792,7 @@ test "pow raises to a power" {
 
 The functions of this section and `pow` return the correctly rounded result, the `Float` nearest to the exact mathematical value, on every target (D-396).
 
-These functions are correctly rounded on every target, computed by code shipped with the runtime rather than by the host's library (D-396, ADR-0054). Functions such as `asin`, `log2` and the hyperbolic ones can be added later under the same rule.
+These functions are correctly rounded on every target, computed by code shipped with the runtime rather than by the host's library (D-396, ADR-0054). _Note:_ the reference implementation's native runtime computes them in Rust with double-double evaluation and Ziv's rounding test (D-568). Its accurate phase tries 256, 512, 1024 and 2048 bits and rounds the 2048-bit value to nearest if the rounding is still undecided, a cap that no verified input came near. Exact results, such as powers that are dyadic rationals, are settled before that loop (D-623). Functions such as `asin`, `log2` and the hyperbolic ones can be added later under the same rule.
 
 ### `exp`
 

@@ -1,0 +1,19 @@
+// @mode: check-pass
+// @decisions: D-164
+//! For a `priv` type, every function of its module counts, `priv` ones
+//! included (§8.2).
+
+import std::io
+
+priv type Token {
+  text: String,
+}
+
+priv fn show(token: Token) -> String {
+  token.text
+}
+
+fn main() {
+  let token = Token { text: "let" }
+  io::println("{token}")
+}

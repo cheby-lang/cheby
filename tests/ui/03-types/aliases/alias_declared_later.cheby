@@ -1,0 +1,14 @@
+// @mode: check-pass
+// @decisions: D-081
+//! Items may appear in any order, so an alias may be used before it is
+//! declared, also by another alias (§4.1.1).
+
+pub fn names(group: Group) -> Names {
+  group
+}
+
+pub type Group = Names
+
+pub type Names = List<Name>
+
+pub type Name = String

@@ -1,0 +1,10 @@
+// @mode: check-fail
+// @decisions: D-114
+//! A `\` at the end of a line inside a string is not an escape. Strings
+//! may span lines, so the `\` is not needed.
+
+fn main() {
+  let s = "one \
+two"
+  assert s != ""
+}

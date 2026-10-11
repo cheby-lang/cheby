@@ -1,0 +1,15 @@
+// @mode: parse-fail
+// @decisions: D-052, D-109
+//! A `{` right after `case` always starts a subjectless `case`, so a
+//! block used as a subject must be parenthesized (§5.9.6).
+
+fn size() -> Int {
+  case { 1 } {
+    1 => 10
+    _ => 20
+  }
+}
+
+fn main() {
+  assert size() == 10
+}

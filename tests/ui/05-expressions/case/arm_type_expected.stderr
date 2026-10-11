@@ -1,0 +1,9 @@
+error[E0047]: mismatched types
+ --> tests/ui/05-expressions/case/arm_type_expected.cheby:8:14
+  |
+5 | fn answer(flag: Bool) -> String {
+  |                          ------ expected because of this return type
+...
+8 |     False => Nil
+  |              ^^^ expected `String`, found `Nil`
+

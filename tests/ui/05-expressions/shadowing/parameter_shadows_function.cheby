@@ -1,0 +1,16 @@
+// @mode: check-fail
+// @decisions: D-062
+//! Parameters are bindings, so a parameter cannot use the name of a
+//! top-level function of its module (§4.2, §5.2.3).
+
+fn scale(n: Int) -> Int {
+  n * 2
+}
+
+fn area(width: Int, scale: Int) -> Int {
+  width * scale
+}
+
+fn main() {
+  assert area(scale(1), 2) == 4
+}

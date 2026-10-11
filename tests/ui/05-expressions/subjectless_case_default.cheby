@@ -1,0 +1,14 @@
+// @mode: check-fail
+// @decisions: D-109
+//! A `case` without a subject ends with a `_` arm.
+
+fn sign(n: Int) -> Int {
+  case {
+    n > 0 => 1
+    n < 0 => -1
+  }
+}
+
+fn main() {
+  assert sign(2) == 1
+}

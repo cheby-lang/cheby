@@ -1,0 +1,15 @@
+// @mode: check-fail
+// @decisions: D-437
+//! A positional constructor pattern has at least one sub-pattern: `Some()`
+//! is an error (§6.4).
+
+fn has_value(value: Option<Int>) -> Bool {
+  case value {
+    Some() => True
+    None => False
+  }
+}
+
+fn main() {
+  assert has_value(Some(1))
+}

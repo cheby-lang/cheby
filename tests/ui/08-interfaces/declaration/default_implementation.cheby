@@ -1,0 +1,12 @@
+// @mode: parse-fail
+// @decisions: D-117
+//! There are no default implementations: an interface function has no body
+//! (§8.1).
+
+interface Describe {
+  fn describe(Self) -> String {
+    "thing"
+  }
+}
+
+fn main() {}

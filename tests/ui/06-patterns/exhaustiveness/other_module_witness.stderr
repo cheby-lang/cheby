@@ -1,0 +1,8 @@
+error[E0061]: `case` does not cover every value
+ --> tests/ui/06-patterns/exhaustiveness/other_module_witness/src/main.cheby:9:8
+  |
+9 |   case s {
+  |        ^ `shape::Circle { .. }` not covered
+  |
+  = help: add an arm for `shape::Circle { .. }`
+

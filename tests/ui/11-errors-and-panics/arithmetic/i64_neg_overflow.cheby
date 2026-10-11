@@ -1,0 +1,8 @@
+// @mode: run-fail
+// @decisions: D-025, D-449
+//! Unary `-` on the minimum `I64` overflows and panics (§5.4.2).
+
+fn main() {
+  let x: I64 = -9223372036854775808
+  let _ = -x
+}

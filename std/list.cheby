@@ -1,0 +1,782 @@
+//! Functions for the built-in `List<T>`, a persistent RRB-tree vector
+//! (§3.8, D-039, ADR-0018).
+//!
+//! `List` is a builtin item whose home module is this one (D-447). The
+//! kernels, the functions that build, read or cut the tree, are runtime
+//! functions with required costs (D-274, D-300). Every other function is
+//! written in Cheby over the kernels and over list patterns, whose `..rest`
+//! shares structure with the list (D-053). Each of them is tail-recursive,
+//! so none grows the stack with the length of a list (D-094), and none of
+//! the kernels calls back into Cheby.
+
+import std::bool
+import std::float
+import std::int
+import std::ops::{Add, Compare, Mul}
+import std::order
+import std::string
+import std::u32
+
+// Building
+
+/// Returns the empty list, the same as `[]`.
+pub fn new<T>() -> List<T> {
+  []
+}
+
+test "new is the empty list" {
+  assert new::<Int>() == []
+  assert length(new::<String>()) == 0
+}
+
+/// Returns the integers from `start` up to but not including `end` (D-319).
+pub fn range(start: Int, end: Int) -> List<Int> {
+  fn step(found: List<Int>, next: Int) -> List<Int> {
+    case next < end {
+      True => step(push(found, next), next + 1)
+      False => found
+    }
+  }
+  step([], start)
+}
+
+test "range excludes its end" {
+  assert range(0, 4) == [0, 1, 2, 3]
+  assert range(-2, 1) == [-2, -1, 0]
+  assert range(3, 3) == []
+  assert range(5, 1) == []
+}
+
+/// Returns a list of `times` copies of `item`.
+@std_clamped(times)
+pub fn repeat<T>(item: T, times: Int) -> List<T> {
+  fn step(found: List<T>, left: Int) -> List<T> {
+    case left > 0 {
+      True => step(push(found, item), left - 1)
+      False => found
+    }
+  }
+  step([], times)
+}
+
+test "repeat clamps its count" {
+  let negative = 0 - 2
+  assert repeat("ab", 3) == ["ab", "ab", "ab"]
+  assert repeat("ab", 0) == []
+  assert repeat("ab", negative) == []
+}
+
+// Size and access
+
+/// Returns the number of elements in `xs` (D-301).
+@external(native, "cheby_list_length")
+@external(js, "./list.mjs", "length")
+pub fn length<T>(xs: List<T>) -> Int
+
+test "length counts the elements" {
+  assert length([7, 8, 9]) == 3
+  assert length(new::<Int>()) == 0
+}
+
+/// Tells whether `xs` has no elements.
+pub fn is_empty<T>(xs: List<T>) -> Bool {
+  length(xs) == 0
+}
+
+test "is_empty tells whether there are elements" {
+  assert is_empty(new::<Int>())
+  assert !is_empty([0])
+}
+
+/// Returns the element at `index`, counting from 0, or `None` outside the list (D-318).
+@external(native, "cheby_list_get")
+@external(js, "./list.mjs", "get")
+pub fn get<T>(xs: List<T>, index: Int) -> Option<T>
+
+test "get reads by position" {
+  assert get([10, 20, 30], 0) == Some(10)
+  assert get([10, 20, 30], 2) == Some(30)
+  assert get([10, 20, 30], 3) == None
+  assert get([10, 20, 30], -1) == None
+}
+
+/// Returns the first element of `xs`.
+pub fn first<T>(xs: List<T>) -> Option<T> {
+  case xs {
+    [head, ..] => Some(head)
+    [] => None
+  }
+}
+
+test "first reads the front" {
+  assert first([1, 2, 3]) == Some(1)
+  assert first(new::<Int>()) == None
+}
+
+/// Returns the last element of `xs`.
+pub fn last<T>(xs: List<T>) -> Option<T> {
+  case xs {
+    [.., tail] => Some(tail)
+    [] => None
+  }
+}
+
+test "last reads the back" {
+  assert last([1, 2, 3]) == Some(3)
+  assert last(new::<Int>()) == None
+}
+
+// Adding and updating
+
+/// Returns `xs` with `item` added at the end, the same as `[..xs, item]`.
+@external(native, "cheby_list_push")
+@external(js, "./list.mjs", "push")
+pub fn push<T>(xs: List<T>, item: T) -> List<T>
+
+test "push adds at the end" {
+  assert push([1, 2], 3) == [1, 2, 3]
+  assert fold([1, 2, 3], [], push) == [1, 2, 3]
+}
+
+/// Returns `xs` with `item` added at the front, the same as `[item, ..xs]`.
+@external(native, "cheby_list_prepend")
+@external(js, "./list.mjs", "prepend")
+pub fn prepend<T>(xs: List<T>, item: T) -> List<T>
+
+test "prepend adds at the front" {
+  assert prepend([2, 3], 1) == [1, 2, 3]
+  assert fold([1, 2, 3], [], prepend) == [3, 2, 1]
+}
+
+/// Returns the elements of `xs` followed by those of `other` (D-316).
+@external(native, "cheby_list_append")
+@external(js, "./list.mjs", "append")
+pub fn append<T>(xs: List<T>, other: List<T>) -> List<T>
+
+test "append concatenates two lists" {
+  assert append([1, 2], [3]) == [1, 2, 3]
+  assert append([1], []) == [1]
+}
+
+/// Returns `xs` with the element at `index` replaced, or `xs` unchanged outside the list (D-318).
+@external(native, "cheby_list_set")
+@external(js, "./list.mjs", "set")
+pub fn set<T>(xs: List<T>, index: Int, item: T) -> List<T>
+
+test "set replaces one element" {
+  assert set([1, 2, 3], 1, 20) == [1, 20, 3]
+  assert set([1, 2, 3], 3, 40) == [1, 2, 3]
+  assert set([1, 2, 3], -1, 0) == [1, 2, 3]
+}
+
+// Slicing
+
+/// Returns the elements from `start` up to but not including `end` (D-319).
+@external(native, "cheby_list_slice")
+@external(js, "./list.mjs", "slice")
+@std_clamped(start, end)
+pub fn slice<T>(xs: List<T>, start: Int, end: Int) -> List<T>
+
+test "slice cuts out a range" {
+  assert slice([0, 1, 2, 3, 4], 1, 3) == [1, 2]
+  assert slice([0, 1, 2], 2, 10) == [2]
+  assert slice([0, 1, 2], 2, 1) == []
+}
+
+/// Returns the first `count` elements of `xs`.
+@external(native, "cheby_list_take")
+@external(js, "./list.mjs", "take")
+@std_clamped(count)
+pub fn take<T>(xs: List<T>, count: Int) -> List<T>
+
+test "take keeps a prefix" {
+  let negative = 0 - 1
+  assert take([1, 2, 3], 2) == [1, 2]
+  assert take([1, 2, 3], 10) == [1, 2, 3]
+  assert take([1, 2, 3], negative) == []
+}
+
+/// Returns `xs` without its first `count` elements.
+@external(native, "cheby_list_drop")
+@external(js, "./list.mjs", "drop")
+@std_clamped(count)
+pub fn drop<T>(xs: List<T>, count: Int) -> List<T>
+
+test "drop removes a prefix" {
+  let negative = 0 - 1
+  assert drop([1, 2, 3], 2) == [3]
+  assert drop([1, 2, 3], 10) == []
+  assert drop([1, 2, 3], negative) == [1, 2, 3]
+}
+
+/// Splits `xs` after its first `count` elements.
+@external(native, "cheby_list_split_at")
+@external(js, "./list.mjs", "split_at")
+@std_clamped(count)
+pub fn split_at<T>(xs: List<T>, count: Int) -> (List<T>, List<T>)
+
+test "split_at splits after a prefix" {
+  assert split_at([1, 2, 3, 4], 1) == ([1], [2, 3, 4])
+  assert split_at([1, 2], 5) == ([1, 2], [])
+}
+
+// Searching
+
+/// Tells whether some element of `xs` is `==` to `item`, stopping at the first match.
+pub fn contains<T>(xs: List<T>, item: T) -> Bool {
+  any(xs, fn(element) { element == item })
+}
+
+test "contains looks for an equal element" {
+  assert contains(["a", "b"], "b")
+  assert !contains([1, 2], 3)
+}
+
+/// Returns the first element for which `predicate` returns `True`.
+pub fn find<T>(xs: List<T>, predicate: fn(T) -> Bool) -> Option<T> {
+  fn step(rest: List<T>) -> Option<T> {
+    case rest {
+      [] => None
+      [head, ..] when predicate(head) => Some(head)
+      [_, ..tail] => step(tail)
+    }
+  }
+  step(xs)
+}
+
+test "find returns the first match" {
+  assert find([1, 4, 9], fn(n) { n > 3 }) == Some(4)
+  assert find([1, 4, 9], fn(n) { n > 10 }) == None
+  let stops = find([1, 2, 3], fn(n) {
+    case n {
+      3 => panic as "not reached"
+      _ => n == 2
+    }
+  })
+  assert stops == Some(2)
+}
+
+/// Returns the index of the first element for which `predicate` returns `True` (D-378).
+pub fn position<T>(xs: List<T>, predicate: fn(T) -> Bool) -> Option<Int> {
+  fn step(rest: List<T>, index: Int) -> Option<Int> {
+    case rest {
+      [] => None
+      [head, ..] when predicate(head) => Some(index)
+      [_, ..tail] => step(tail, index + 1)
+    }
+  }
+  step(xs, 0)
+}
+
+test "position returns the index of the first match" {
+  assert position(["a", "b", "c", "b"], fn(s) { s == "b" }) == Some(1)
+  assert position(["a"], fn(s) { s == "z" }) == None
+}
+
+/// Tells whether `predicate` returns `True` for some element, stopping at the first.
+pub fn any<T>(xs: List<T>, predicate: fn(T) -> Bool) -> Bool {
+  fn step(rest: List<T>) -> Bool {
+    case rest {
+      [] => False
+      [head, ..] when predicate(head) => True
+      [_, ..tail] => step(tail)
+    }
+  }
+  step(xs)
+}
+
+test "any stops at the first match" {
+  assert any([1, 2, 3], fn(n) {
+    case n {
+      3 => panic as "not reached"
+      _ => n == 2
+    }
+  })
+  assert !any([1, 2], fn(n) { n > 5 })
+  assert !any(new::<Int>(), fn(n) { n > 5 })
+}
+
+/// Tells whether `predicate` returns `True` for every element, stopping at the first that fails.
+pub fn all<T>(xs: List<T>, predicate: fn(T) -> Bool) -> Bool {
+  fn step(rest: List<T>) -> Bool {
+    case rest {
+      [] => True
+      [head, ..tail] when predicate(head) => step(tail)
+      [_, ..] => False
+    }
+  }
+  step(xs)
+}
+
+test "all needs every element to match" {
+  assert all([2, 4], fn(n) { n % 2 == 0 })
+  assert !all([2, 3, 4], fn(n) { n % 2 == 0 })
+  assert all(new::<Int>(), fn(n) { n > 5 })
+}
+
+/// Returns the number of elements for which `predicate` returns `True`.
+pub fn count<T>(xs: List<T>, predicate: fn(T) -> Bool) -> Int {
+  fold(xs, 0, fn(total, item) {
+    case predicate(item) {
+      True => total + 1
+      False => total
+    }
+  })
+}
+
+test "count counts the matches" {
+  assert count([1, 2, 3, 4], fn(n) { n % 2 == 0 }) == 2
+  assert count(["a"], fn(s) { s == "b" }) == 0
+}
+
+// Transforming
+
+/// Returns the results of calling `f` on each element, in order.
+pub fn map<T, U>(xs: List<T>, f: fn(T) -> U) -> List<U> {
+  fold(xs, [], fn(found, item) { push(found, f(item)) })
+}
+
+test "map transforms every element" {
+  assert map([1, 2, 3], fn(n) { n * 10 }) == [10, 20, 30]
+  assert map(["a", "bc"], string::length) == [1, 2]
+}
+
+/// Returns the elements for which `keep` returns `True`, in order.
+pub fn filter<T>(xs: List<T>, keep: fn(T) -> Bool) -> List<T> {
+  fold(xs, [], fn(found, item) {
+    case keep(item) {
+      True => push(found, item)
+      False => found
+    }
+  })
+}
+
+test "filter keeps the matching elements" {
+  assert filter([1, 2, 3, 4], fn(n) { n % 2 == 0 }) == [2, 4]
+  assert filter(["a", ""], fn(s) { s != "" }) == ["a"]
+}
+
+/// Calls `f` on each element and returns the values of the `Some` results, in order (D-379).
+pub fn filter_map<T, U>(xs: List<T>, f: fn(T) -> Option<U>) -> List<U> {
+  fold(xs, [], fn(found, item) {
+    case f(item) {
+      Some(value) => push(found, value)
+      None => found
+    }
+  })
+}
+
+/// Calls `f` on each element and concatenates the resulting lists, in order.
+pub fn flat_map<T, U>(xs: List<T>, f: fn(T) -> List<U>) -> List<U> {
+  fold(xs, [], fn(found, item) { append(found, f(item)) })
+}
+
+test "flat_map concatenates the results" {
+  assert flat_map([1, 2], fn(n) { [n, n * 10] }) == [1, 10, 2, 20]
+  assert flat_map([1, 2], fn(_) { new::<Int>() }) == []
+}
+
+/// Concatenates the lists in `lists`, in order.
+pub fn flatten<T>(lists: List<List<T>>) -> List<T> {
+  fold(lists, [], append)
+}
+
+test "flatten concatenates a list of lists" {
+  assert flatten([[1], [], [2, 3]]) == [1, 2, 3]
+  assert flatten(new::<List<Int>>()) == []
+}
+
+/// Returns the elements of `xs` in the opposite order.
+pub fn reverse<T>(xs: List<T>) -> List<T> {
+  fold(xs, [], prepend)
+}
+
+test "reverse flips the order" {
+  assert reverse([1, 2, 3]) == [3, 2, 1]
+  assert reverse(new::<Int>()) == []
+}
+
+/// Returns `xs` without repeated elements, keeping the first of each group of `==` elements.
+/// Elements are hashed like `Set` elements (§3.13).
+@external(native, "cheby_list_unique")
+@external(js, "./list.mjs", "unique")
+pub fn unique<T>(xs: List<T>) -> List<T>
+
+test "unique keeps the first of each element" {
+  assert unique([3, 1, 3, 2, 1]) == [3, 1, 2]
+  assert unique(["a", "a"]) == ["a"]
+}
+
+/// Splits `xs` into the elements for which `keep` returns `True` and the others.
+pub fn partition<T>(xs: List<T>, keep: fn(T) -> Bool) -> (List<T>, List<T>) {
+  fold(xs, ([], []), fn((kept, dropped), item) {
+    case keep(item) {
+      True => (push(kept, item), dropped)
+      False => (kept, push(dropped, item))
+    }
+  })
+}
+
+test "partition splits by a predicate" {
+  assert partition([1, 2, 3, 4], fn(n) { n > 2 }) == ([3, 4], [1, 2])
+  assert partition([1], fn(n) { n > 2 }) == ([], [1])
+}
+
+/// Pairs each element with its index, counting from 0 (D-380).
+pub fn enumerate<T>(xs: List<T>) -> List<(Int, T)> {
+  zip(range(0, length(xs)), xs)
+}
+
+test "enumerate pairs elements with their indexes" {
+  assert enumerate(["a", "b"]) == [(0, "a"), (1, "b")]
+  let labels = map(enumerate(["x", "y"]), fn((index, name)) { "{index}:{name}" })
+  assert labels == ["0:x", "1:y"]
+}
+
+/// Pairs the elements of `xs` and `other` by position, up to the shorter length.
+pub fn zip<T, U>(xs: List<T>, other: List<U>) -> List<(T, U)> {
+  fn step(found: List<(T, U)>, left: List<T>, right: List<U>) -> List<(T, U)> {
+    case left, right {
+      [a, ..left_rest], [b, ..right_rest] => step(push(found, (a, b)), left_rest, right_rest)
+      _, _ => found
+    }
+  }
+  step([], xs, other)
+}
+
+test "zip pairs by position" {
+  assert zip([1, 2, 3], ["a", "b"]) == [(1, "a"), (2, "b")]
+  assert zip([1], new::<String>()) == []
+}
+
+/// Splits a list of pairs into the list of first elements and the list of second elements.
+pub fn unzip<T, U>(pairs: List<(T, U)>) -> (List<T>, List<U>) {
+  fold(pairs, ([], []), fn((firsts, seconds), (a, b)) { (push(firsts, a), push(seconds, b)) })
+}
+
+test "unzip splits pairs" {
+  assert unzip([(1, "a"), (2, "b")]) == ([1, 2], ["a", "b"])
+}
+
+// Folding and visiting
+
+/// Combines the elements from front to back, starting from `initial`.
+pub fn fold<T, A>(xs: List<T>, initial: A, f: fn(A, T) -> A) -> A {
+  case xs {
+    [] => initial
+    [head, ..tail] => fold(tail, f(initial, head), f)
+  }
+}
+
+test "fold combines from the front" {
+  assert fold([1, 2, 3], 0, int::add) == 6
+  assert fold(["a", "b", "c"], "", fn(text, s) { text + s }) == "abc"
+}
+
+/// Adds the elements to `zero`, front to back (D-381, D-406).
+pub fn sum<T: Add>(xs: List<T>, zero: T) -> T {
+  fold(xs, zero, fn(total, item) { total + item })
+}
+
+test "sum adds to the starting value" {
+  assert sum([1, 2, 3], 0) == 6
+  assert sum([0.5, 0.25], 0.0) == 0.75
+  assert sum([], 0) == 0
+}
+
+/// Multiplies `one` by the elements, front to back (D-381, D-406).
+pub fn product<T: Mul>(xs: List<T>, one: T) -> T {
+  fold(xs, one, fn(total, item) { total * item })
+}
+
+test "product multiplies from the starting value" {
+  assert product([2, 3, 4], 1) == 24
+  assert product([], 1) == 1
+}
+
+/// Returns the largest element by `compare`, the last of equal ones (D-407, D-408).
+pub fn max<T: Compare>(xs: List<T>) -> Option<T> {
+  max_with(xs, fn(a, b) { Compare::compare(a, b) })
+}
+
+test "max finds the largest element" {
+  assert max([3, 9, 2]) == Some(9)
+  assert max(["pear", "apple"]) == Some("pear")
+  let empty: List<Int> = []
+  assert max(empty) == None
+}
+
+/// Returns the smallest element by `compare`, the first of equal ones (D-407, D-408).
+pub fn min<T: Compare>(xs: List<T>) -> Option<T> {
+  min_with(xs, fn(a, b) { Compare::compare(a, b) })
+}
+
+test "min finds the smallest element" {
+  assert min([3, 9, 2]) == Some(2)
+  let empty: List<String> = []
+  assert min(empty) == None
+}
+
+// list.md names the comparison parameter of `max_with`, `min_with` and
+// `sort_with` `compare`, which is also the name of this module's
+// `compare` function, so a body could not bind it (§5.2.3, D-062).
+// These three functions have Cheby bodies, so the parameter is called
+// `by` here (D-483). `take`, `drop` and `split_at` keep their parameter
+// `count`, the name of `list::count`, because kernels have no body that
+// would bind it.
+
+/// Returns the largest element by `by`, the last of equal ones (D-408, D-409).
+pub fn max_with<T>(xs: List<T>, by: fn(T, T) -> Order) -> Option<T> {
+  case xs {
+    [] => None
+    [head, ..tail] => Some(fold(tail, head, fn(best, item) {
+      case by(item, best) {
+        Less => best
+        _ => item
+      }
+    }))
+  }
+}
+
+test "max_with returns the last of equal elements" {
+  let by_count = fn((_, a), (_, b)) { int::compare(a, b) }
+  assert max_with([("a", 2), ("b", 5), ("c", 5)], by_count) == Some(("c", 5))
+}
+
+/// Returns the smallest element by `by`, the first of equal ones (D-408, D-409).
+pub fn min_with<T>(xs: List<T>, by: fn(T, T) -> Order) -> Option<T> {
+  case xs {
+    [] => None
+    [head, ..tail] => Some(fold(tail, head, fn(best, item) {
+      case by(item, best) {
+        Less => item
+        _ => best
+      }
+    }))
+  }
+}
+
+test "min_with returns the first of equal elements" {
+  let by_count = fn((_, a), (_, b)) { int::compare(a, b) }
+  assert min_with([("a", 2), ("b", 1), ("c", 1)], by_count) == Some(("b", 1))
+}
+
+/// Combines the elements from back to front, starting from `initial`.
+pub fn fold_right<T, A>(xs: List<T>, initial: A, f: fn(A, T) -> A) -> A {
+  case xs {
+    [] => initial
+    [..init, tail] => fold_right(init, f(initial, tail), f)
+  }
+}
+
+test "fold_right combines from the back" {
+  assert fold_right(["a", "b", "c"], "", fn(text, s) { text + s }) == "cba"
+  assert fold_right([1, 2], [], push) == [2, 1]
+}
+
+/// Calls `f` on each element, front to back, for its effects.
+pub fn each<T>(xs: List<T>, f: fn(T)) {
+  case xs {
+    [] => Nil
+    [head, ..tail] => {
+      f(head)
+      each(tail, f)
+    }
+  }
+}
+
+test "each visits every element" {
+  each([1, 2, 3], fn(n) { assert n > 0 })
+}
+
+// Sorting and comparing
+
+/// Returns the elements in increasing order by `T`'s `compare`, stably (D-299, D-335).
+pub fn sort<T: Compare>(xs: List<T>) -> List<T> {
+  sort_with(xs, fn(a, b) { Compare::compare(a, b) })
+}
+
+test "sort orders by compare" {
+  assert sort([3, 1, 2]) == [1, 2, 3]
+  assert sort(["pear", "apple"]) == ["apple", "pear"]
+  assert sort([(2, "b"), (1, "z"), (2, "a")]) == [(1, "z"), (2, "a"), (2, "b")]
+}
+
+/// Returns the elements in increasing order by `by`, where `Less` means the first argument
+/// goes first, stably (D-299, D-335).
+pub fn sort_with<T>(xs: List<T>, by: fn(T, T) -> Order) -> List<T> {
+  // A bottom-up merge sort: runs of one element are merged in adjacent
+  // pairs until one run is left. A merge takes from the left run while its
+  // element is not `Greater`, which keeps equal elements in order. The
+  // algorithm is the same on every target because it is written here.
+  fn merge(found: List<T>, left: List<T>, right: List<T>) -> List<T> {
+    case left, right {
+      [], _ => append(found, right)
+      _, [] => append(found, left)
+      [a, ..left_rest], [b, ..right_rest] => case by(a, b) {
+        Greater => merge(push(found, b), left, right_rest)
+        _ => merge(push(found, a), left_rest, right)
+      }
+    }
+  }
+  fn merge_pairs(merged: List<List<T>>, runs: List<List<T>>) -> List<List<T>> {
+    case runs {
+      [left, right, ..rest] => merge_pairs(push(merged, merge([], left, right)), rest)
+      [run] => push(merged, run)
+      [] => merged
+    }
+  }
+  fn sort_runs(runs: List<List<T>>) -> List<T> {
+    case runs {
+      [] => []
+      [sorted] => sorted
+      _ => sort_runs(merge_pairs([], runs))
+    }
+  }
+  sort_runs(map(xs, fn(item) { [item] }))
+}
+
+test "sort_with is stable" {
+  let by_length = fn(a: String, b: String) { int::compare(string::length(a), string::length(b)) }
+  assert sort_with(["bb", "a", "cc", "d"], by_length) == ["a", "d", "bb", "cc"]
+  assert sort_with([1, 3, 2], fn(a, b) { int::compare(b, a) }) == [3, 2, 1]
+}
+
+/// Compares two lists lexicographically (D-136). It makes `List<T>` satisfy `Compare` when
+/// `T` does (D-064).
+pub fn compare<T: Compare>(a: List<T>, b: List<T>) -> Order {
+  fn step(left: List<T>, right: List<T>) -> Order {
+    case left, right {
+      [], [] => Equal
+      [], _ => Less
+      _, [] => Greater
+      [x, ..left_rest], [y, ..right_rest] => case Compare::compare(x, y) {
+        Equal => step(left_rest, right_rest)
+        decided => decided
+      }
+    }
+  }
+  step(a, b)
+}
+
+test "lists compare lexicographically" {
+  assert compare([1, 2], [1, 3]) == Less
+  assert compare([1, 2], [1, 2, 0]) == Less
+  assert compare(["b"], ["a", "z"]) == Greater
+  assert compare([1], [1]) == Equal
+  assert [2] > [1, 9]
+}
+
+// Text
+
+/// Writes `[`, the `show` of each element separated by `, `, and `]` (D-355). It makes
+/// `List<T>` satisfy `Show` when `T` does (D-064).
+pub fn show<T: Show>(xs: List<T>) -> String {
+  let parts = map(xs, fn(item) { Show::show(item) })
+  let joined = string::join(parts, ", ")
+  "[{joined}]"
+}
+
+test "a list shows its elements" {
+  let numbers = [1, 2]
+  let words = ["a", "b"]
+  assert "{numbers}" == "[1, 2]"
+  assert show(words) == "[a, b]"
+  assert show(new::<Int>()) == "[]"
+}
+
+// Tests of `std::bool` that need this module.
+
+test "False comes before True" {
+  assert bool::compare(False, True) == Less
+  assert bool::compare(True, True) == Equal
+  assert sort([True, False, True]) == [False, True, True]
+}
+
+// Tests of `std::float` that need this module.
+
+test "compare is a total order" {
+  assert float::compare(1.0, 2.0) == Less
+  assert float::compare(-0.0, 0.0) == Equal
+  assert float::compare(float::nan, float::infinity) == Greater
+  assert float::compare(float::nan, float::nan) == Equal
+  assert sort([float::nan, 1.0, float::neg_infinity]) == [float::neg_infinity, 1.0, float::nan]
+}
+
+test "float add is plus as a function" {
+  assert float::add(0.5, 0.25) == 0.75
+  assert fold([0.5, 1.5, 2.0], 0.0, float::add) == 4.0
+  assert float::add(float::infinity, float::neg_infinity) == float::nan
+}
+
+// Tests of `std::int` that need this module.
+
+test "from_u32 widens" {
+  assert int::from_u32(u32::max_value) == 4_294_967_295
+  assert get(["a", "b", "c"], int::from_u32(1)) == Some("b")
+}
+
+test "compare orders by value" {
+  assert int::compare(1, 2) == Less
+  assert int::compare(2, 2) == Equal
+  assert int::compare(-1, -2) == Greater
+  assert sort_with([3, 1, 2], fn(a, b) { int::compare(b, a) }) == [3, 2, 1]
+}
+
+test "max picks the larger" {
+  assert int::max(3, 7) == 7
+  assert fold([4, 9, 2], int::min_safe, int::max) == 9
+}
+
+test "int add is plus as a function" {
+  assert int::add(2, 3) == 5
+  assert fold([1, 2, 3], 0, int::add) == 6
+}
+
+test "mul is times as a function" {
+  assert int::mul(-4, 5) == -20
+  assert fold([1, 2, 3, 4], 1, int::mul) == 24
+}
+
+// Tests of `std::ops` that need this module. The function exists for the
+// test, and the module has a function named `first`, so its first
+// parameter is named `head` (D-483).
+
+priv fn largest<T: Compare>(head: T, rest: List<T>) -> T {
+  fold(rest, head, fn(best, x) {
+    case {
+      x > best => x
+      _ => best
+    }
+  })
+}
+
+test "a bound names an operator interface" {
+  assert largest(3, [7, 2]) == 7
+  assert largest("pear", ["apple", "fig"]) == "pear"
+}
+
+// Tests of `std::order` that need this module.
+
+test "reverse flips a comparison" {
+  assert order::reverse(int::compare(1, 2)) == Greater
+  assert order::reverse(Equal) == Equal
+  assert sort_with([1, 3, 2], fn(a, b) { order::reverse(int::compare(a, b)) }) == [3, 2, 1]
+}
+
+test "then breaks ties with the next key" {
+  fn by_length_then_text(a: String, b: String) -> Order {
+    order::then(int::compare(string::length(a), string::length(b)), fn() { string::compare(a, b) })
+  }
+  assert sort_with(["bb", "c", "aa"], by_length_then_text) == ["c", "aa", "bb"]
+}
+
+// Tests of `std::string` that need this module.
+
+test "strings compare by code point" {
+  assert string::compare("apple", "banana") == Less
+  assert string::compare("app", "apple") == Less
+  assert string::compare("Z", "a") == Less
+  assert string::compare("é", "z") == Greater
+  assert sort(["b", "c", "a"]) == ["a", "b", "c"]
+}

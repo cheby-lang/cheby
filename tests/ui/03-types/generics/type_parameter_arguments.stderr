@@ -1,0 +1,6 @@
+error[E0051]: `T` takes no type arguments
+ --> tests/ui/03-types/generics/type_parameter_arguments.cheby:5:23
+  |
+5 | pub fn wrap<T>(value: T<Int>) -> List<T> {
+  |                       ^^^^^^ a type parameter takes no type arguments
+

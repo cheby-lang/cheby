@@ -1,0 +1,193 @@
+// @decisions: D-098, D-625, D-626
+> import store::prices
+> let basket = [prices::Item(2), prices::Item(3)]
+> prices::total(basket)
+5 : Int
+> fn bill() -> Int {
+.   prices::total([prices::Item(10)])
+. }
+> fn first_item() -> prices::Item {
+.   prices::Item(1)
+. }
+> bill()
+10 : Int
+> :reload
+no module changed
+> import std::io
+> io::write_file("src/prices.cheby", r#"//! Prices, with a tax.
+. import std::list
+. /// An item with its price.
+. pub type Item {
+.   Item(Int),
+. }
+. /// The sum of the prices of `items`, with a tax of 10%.
+. pub fn total(items: List<Item>) -> Int {
+.   let sum = list::fold(items, 0, fn(sum, item) {
+.     let Item(price) = item
+.     sum + price
+.   })
+.   sum + sum / 10
+. }
+. "#)
+Ok(Nil) : Result<Nil, io::Error>
+> :reload
+reloaded `store::prices`
+reloaded `store`
+> bill()
+11 : Int
+> first_item()
+Item(1) : prices::Item
+> basket
+[Item(2), Item(3)] : List<prices::Item (stale)>
+> prices::total(basket)
+error[E0047]: mismatched types
+ --> <repl:12>:1:15
+  |
+1 | prices::total(basket)
+  | ------------- ^^^^^^ expected `List<prices::Item>`, found `List<prices::Item (stale)>`
+  | |
+  | arguments to this function are incorrect
+
+> prices::total([prices::Item(100)])
+110 : Int
+> io::write_file("src/prices.cheby", r#"//! Prices, as text.
+. /// An item with its price.
+. pub type Item {
+.   Item(Int),
+. }
+. /// The prices of `items`, as text.
+. pub fn total(items: List<Item>) -> String {
+.   "{items:?}"
+. }
+. "#)
+Ok(Nil) : Result<Nil, io::Error>
+> :reload
+reloaded `store::prices`
+reloaded `store`
+error[E0047]: mismatched types
+ --> <repl:4>:2:3
+  |
+1 | fn bill() -> Int {
+  |              --- expected because of this return type
+2 |   prices::total([prices::Item(10)])
+  |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Int`, found `String`
+  |
+  = note: `bill` was checked again because `:reload` changed a module it uses; it keeps its old definition
+
+> bill()
+11 : Int
+> prices::total([prices::Item(5)])
+"[Item(5)]" : String
+> io::write_file("src/prices.cheby", r#"//! Prices, broken.
+. pub fn total(items: List<Int>) -> Int {
+.   "not an int"
+. }
+. "#)
+Ok(Nil) : Result<Nil, io::Error>
+> :reload
+warning[W0002]: unused parameter `items`
+ --> src/prices.cheby:2:14
+  |
+2 | pub fn total(items: List<Int>) -> Int {
+  |              ^^^^^ never used
+  |
+  = help: if this is intentional, start the name with an underscore: `_items`
+
+error[E0047]: mismatched types
+ --> src/prices.cheby:3:3
+  |
+2 | pub fn total(items: List<Int>) -> Int {
+  |                                   --- expected because of this return type
+3 |   "not an int"
+  |   ^^^^^^^^^^^^ expected `Int`, found `String`
+
+> prices::total([prices::Item(5)])
+"[Item(5)]" : String
+> prices::Item(6)
+Item(6) : prices::Item
+> basket
+[Item(2), Item(3)] : List<prices::Item (stale)>
+> io::write_file("src/prices.cheby", r#"//! Prices, as text.
+. /// An item with its price.
+. pub type Item {
+.   Item(Int),
+. }
+. /// The prices of `items`, as text.
+. pub fn total(items: List<Item>) -> String {
+.   "{items:?}"
+. }
+. "#)
+Ok(Nil) : Result<Nil, io::Error>
+> :reload
+no module changed
+> prices::Item(7)
+Item(7) : prices::Item
+> fn label() -> String {
+.   prices::total([prices::Item(8)])
+. }
+> io::write_file("src/prices.cheby", r#"//! Prices, as a count.
+. import std::list
+. /// An item with its price.
+. pub type Item {
+.   Item(Int),
+. }
+. /// How many items there are.
+. pub fn total(items: List<Item>) -> Int {
+.   list::length(items)
+. }
+. "#)
+Ok(Nil) : Result<Nil, io::Error>
+> :reload
+reloaded `store::prices`
+reloaded `store`
+error[E0047]: mismatched types
+ --> <repl:23>:2:3
+  |
+1 | fn label() -> String {
+  |               ------ expected because of this return type
+2 |   prices::total([prices::Item(8)])
+  |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `String`, found `Int`
+  |
+  = note: `label` was checked again because `:reload` changed a module it uses; it keeps its old definition
+
+> label()
+"[Item(8)]" : String
+> io::write_file("src/prices.cheby", r#"//! Prices, as text again.
+. /// An item with its price.
+. pub type Item {
+.   Item(Int),
+. }
+. /// The prices of `items`, as text.
+. pub fn total(items: List<Item>) -> String {
+.   "items {items:?}"
+. }
+. "#)
+Ok(Nil) : Result<Nil, io::Error>
+> :reload
+reloaded `store::prices`
+reloaded `store`
+error[E0047]: mismatched types
+ --> <repl:4>:2:3
+  |
+1 | fn bill() -> Int {
+  |              --- expected because of this return type
+2 |   prices::total([prices::Item(10)])
+  |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Int`, found `String`
+  |
+  = note: `bill` was checked again because `:reload` changed a module it uses; it keeps its old definition
+
+> label()
+"items [Item(8)]" : String
+> :module store::prices
+> total([Item(4)])
+"items [Item(4)]" : String
+> :module
+> io::write_file("src/Bad-Name.cheby", "//! A module with a bad name.\n")
+Ok(Nil) : Result<Nil, io::Error>
+> :reload
+error[E0037]: `src/Bad-Name.cheby` is not a valid module name
+  = note: the name of a file under `src/` becomes part of a module path, so it must be a snake_case identifier that is not a keyword
+  = help: rename it to `src/bad_name.cheby`
+
+> label()
+"items [Item(8)]" : String

@@ -1,0 +1,13 @@
+// @mode: check-pass
+// @decisions: D-159
+//! `let assert` with a pattern that always matches is a warning, since a
+//! plain `let` does the same.
+
+fn sum(pair: (Int, Int)) -> Int {
+  let assert (a, b) = pair
+  a + b
+}
+
+fn main() {
+  assert sum((1, 2)) == 3
+}

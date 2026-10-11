@@ -1,0 +1,7 @@
+// @mode: check-fail
+// @decisions: D-022
+//! A type declaration has at least one variant (§4.3.1).
+
+type Empty {}
+
+fn main() {}

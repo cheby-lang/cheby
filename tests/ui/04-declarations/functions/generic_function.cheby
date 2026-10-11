@@ -1,0 +1,23 @@
+// @mode: check-pass
+// @decisions: D-011, D-063
+//! Every parameter of a top-level function has a type, and type
+//! parameters may have bounds (§4.2).
+
+pub interface Measure {
+  fn measure(Self) -> Int
+}
+
+pub fn clamp(value: Int, low: Int, high: Int) -> Int {
+  case {
+    value < low => low
+    value > high => high
+    _ => value
+  }
+}
+
+pub fn larger<T: Measure>(first: T, second: T) -> T {
+  case Measure::measure(first) >= Measure::measure(second) {
+    True => first
+    False => second
+  }
+}

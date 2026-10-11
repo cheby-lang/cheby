@@ -1,0 +1,9 @@
+//! An interface named `I` whose function is `alpha`.
+
+pub interface I {
+  fn alpha(Self) -> String
+}
+
+pub fn call<X: I>(x: X) -> String {
+  I::alpha(x)
+}

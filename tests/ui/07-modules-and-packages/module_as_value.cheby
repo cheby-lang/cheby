@@ -1,0 +1,9 @@
+// @mode: check-fail
+// @decisions: D-060
+//! An imported module's name is not a value: only its items are.
+
+import std::io
+
+fn main() {
+  io("Hello!")
+}

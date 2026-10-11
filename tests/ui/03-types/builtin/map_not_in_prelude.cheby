@@ -1,0 +1,12 @@
+// @mode: check-fail
+// @decisions: D-039, D-112, D-481
+//! `Map` and `Set` are built-in types but not in the prelude: they are
+//! named through `std::map` and `std::set` (§3.2).
+
+pub fn size(counts: Map<String, Int>) -> Int {
+  case counts {
+    _ => 0
+  }
+}
+
+fn main() {}

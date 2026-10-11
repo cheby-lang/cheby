@@ -1,0 +1,9 @@
+error[E0045]: `now` exists on no target
+ --> tests/ui/04-declarations/attributes/no_target_external.cheby:6:1
+  |
+6 | @target(js)
+  | ^^^^^^^^^^^ only on `js` here
+  |
+  = note: a function without a body exists only on the targets of its `@external` attributes, and `now` has no `@external` for `js`
+  = help: add an `@external(js, …)` attribute, or remove `@target(js)`
+

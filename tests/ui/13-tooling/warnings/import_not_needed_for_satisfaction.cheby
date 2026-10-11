@@ -1,0 +1,16 @@
+// @mode: check-pass
+// @decisions: D-080, D-447, D-515
+//! Satisfaction never needs an import: `Int` gets its `show` from its
+//! home module without one (§7.6), so an import that nothing names is
+//! unused even when the module calls one of its functions implicitly.
+
+import std::int
+import std::io
+import std::list::{length}
+
+fn main() {
+  let n = 42
+  let xs = [n]
+  let s = "a" + "b"
+  io::println("{n} {xs} {s}")
+}

@@ -17,3 +17,4 @@ Night:
   sun: circle at (10.0, 7.0), radius 2.25
   house, lights on: 4.0 by 3.0 rectangle at (3.0, 4.0)
   bird: dot at (8.0, 7.0)
+

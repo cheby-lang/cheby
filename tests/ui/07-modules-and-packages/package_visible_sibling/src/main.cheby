@@ -1,0 +1,11 @@
+// @mode: check-pass
+// @decisions: D-162
+//! An item without `pub` or `priv` is package-visible, so every module of
+//! the package can use it.
+
+import app::greeting
+import std::io
+
+fn main() {
+  io::println(greeting::text())
+}

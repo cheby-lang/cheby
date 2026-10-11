@@ -1,0 +1,20 @@
+// @mode: check-fail
+// @decisions: D-113
+//! A constructor pattern matches only values of its type.
+
+type Color {
+  Red,
+  Green,
+}
+
+fn describe(value: Option<Int>) -> String {
+  case value {
+    Red => "red"
+    _ => "other"
+  }
+}
+
+fn main() {
+  assert describe(None) == "other"
+  assert Green != Red
+}

@@ -1,0 +1,105 @@
+module app
+
+fn app::show(_0: value) -> value check str#0 {
+  str#0 = "src/main.cheby:8:8"
+  str#1 = "a point"
+bb0:
+  drop _0
+  _1: value = const str#1
+  return _1
+}
+
+fn app::texts(_0: value, _1: int, _2: float) -> value check str#0 {
+  str#0 = "src/main.cheby:12:4"
+  str#1 = "hi "
+  str#2 = ", "
+  str#3 = " at "
+  str#4 = "!"
+bb0:
+  _3: value = call_runtime str_with_capacity(borrow const int 58)
+  _4: value = call_runtime str_append(_3, borrow const str#1)
+  _5: value = call_runtime str_append(_4, borrow _0)
+  drop _0
+  _6: value = call_runtime str_append(_5, borrow const str#2)
+  _7: value = call std::int::show(_1)
+  _8: value = call_runtime str_append(_6, borrow _7)
+  drop _7
+  _9: value = call_runtime str_append(_8, borrow const str#3)
+  _10: value = call std::float::show(_2)
+  _11: value = call_runtime str_append(_9, borrow _10)
+  drop _10
+  _12: value = call_runtime str_append(_11, borrow const str#4)
+  return _12
+}
+
+fn app::user(_0: value) -> value check str#0 {
+  str#0 = "src/main.cheby:16:4"
+  str#1 = " with x "
+  str#2 = ": "
+  str#3 = " and "
+bb0:
+  _1: value = call_runtime str_with_capacity(borrow const int 79)
+  dup _0
+  _2: value = call app::show(_0)
+  _3: value = call_runtime str_append(_1, borrow _2)
+  drop _2
+  _4: value = call_runtime str_append(_3, borrow const str#1)
+  _5: int = field _0.0 of ctor app::Point
+  _6: value = call std::int::show(_5)
+  _7: value = call_runtime str_append(_4, borrow _6)
+  drop _6
+  _8: value = call_runtime str_append(_7, borrow const str#2)
+  _9: value = call_runtime debug(borrow _0)
+  _10: value = call_runtime str_append(_8, borrow _9)
+  drop _9
+  _11: value = call_runtime str_append(_10, borrow const str#3)
+  _12: int = field _0.1 of ctor app::Point
+  drop _0
+  _13: value = box int _12
+  _14: value = call_runtime debug(borrow _13)
+  drop _13
+  _15: value = call_runtime str_append(_11, borrow _14)
+  drop _14
+  return _15
+}
+
+fn app::only(_0: value) -> value check str#0 {
+  str#0 = "src/main.cheby:20:4"
+bb0:
+  return _0
+}
+
+fn app::only_int(_0: int) -> value check str#0 {
+  str#0 = "src/main.cheby:24:4"
+bb0:
+  _1: value = call std::int::show(_0)
+  return _1
+}
+
+fn app::main() -> value check str#0 {
+  str#0 = "src/main.cheby:28:4"
+  str#1 = "a"
+  str#2 = "b"
+bb0:
+  _0: value = const str#1
+  _1: value = call app::texts(_0, const int 1, const float 2.5)
+  drop _1
+  _2: value = alloc ctor app::Point(const int 1, const int 2)
+  _3: value = call app::user(_2)
+  drop _3
+  _4: value = const str#2
+  _5: value = call app::only(_4)
+  drop _5
+  _6: value = call app::only_int(const int 3)
+  drop _6
+  return const nil
+}
+
+layout ctor app::Point: Point.Point tag 0 key ec11cf523cf6d065 record [x: int @8, y: int @16]
+callee app::show(value) -> value
+callee app::texts(value, int, float) -> value
+callee app::user(value) -> value
+callee app::only(value) -> value
+callee app::only_int(int) -> value
+callee std::int::show(int) -> value
+callee std::float::show(float) -> value

@@ -1,0 +1,68 @@
+// @mode: run-pass
+// @decisions: D-039, D-484
+//! `Map<String, List<Int>>`: grouping with `upsert`, whose function gets
+//! the list stored under a key and returns it with one more element;
+//! lookups, replacement and removal of `String` keys (§3.8).
+
+import std::int
+import std::io
+import std::list
+import std::map
+import std::map::{Map}
+import std::string
+
+fn add_position(found: Map<String, List<Int>>, position: Int, word: String) -> Map<String, List<Int>> {
+  map::upsert(found, word, fn(seen) {
+    case seen {
+      Some(earlier) => list::push(earlier, position)
+      None => [position]
+    }
+  })
+}
+
+fn positions(words: List<String>) -> Map<String, List<Int>> {
+  list::fold(list::enumerate(words), map::new(), fn(found, (position, word)) {
+    add_position(found, position, word)
+  })
+}
+
+fn show(m: Map<String, List<Int>>) -> String {
+  let pairs = list::sort_with(map::to_list(m), fn((a, _), (b, _)) { string::compare(a, b) })
+  let lines = list::map(pairs, fn((word, found)) {
+    let numbers = string::join(list::map(found, int::show), " ")
+    "{word}: {numbers}"
+  })
+  string::join(lines, "; ")
+}
+
+fn count(m: Map<String, List<Int>>, word: String) -> Int {
+  case map::get(m, word) {
+    Some(found) => list::length(found)
+    None => 0
+  }
+}
+
+fn main() {
+  let index = positions(string::split("the cat and the hat and the bat", " "))
+  io::println(show(index))
+  let the = count(index, "the")
+  let dog = count(index, "dog")
+  let keys = map::size(index)
+  io::println("the: {the}, dog: {dog}, keys: {keys}")
+
+  let renamed = map::insert(map::remove(index, "bat"), "rat", [7])
+  io::println(show(renamed))
+  io::println(show(index))
+  let has_bat = map::has_key(renamed, "bat")
+  io::println("renamed has bat: {has_bat}")
+
+  // A hundred keys sharing five thousand positions.
+  let many = list::fold(list::range(0, 5000), map::new(), fn(found, n) {
+    let bucket = n % 100
+    add_position(found, n, "k{bucket}")
+  })
+  let total = map::fold(many, 0, fn(sum, _, found) { sum + list::length(found) })
+  let first = count(many, "k0")
+  let size = map::size(many)
+  io::println("keys: {size}, positions: {total}, under k0: {first}")
+}

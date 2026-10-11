@@ -1,0 +1,16 @@
+// @mode: check-fail
+// @decisions: D-023, D-242
+//! A `use` binder is a pattern that must match every value (§5.10).
+
+fn with_value(f: fn(Option<Int>) -> Int) -> Int {
+  f(Some(1))
+}
+
+fn get() -> Int {
+  use Some(x) <- with_value
+  x
+}
+
+fn main() {
+  assert get() == 1
+}

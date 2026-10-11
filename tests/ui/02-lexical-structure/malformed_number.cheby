@@ -1,0 +1,9 @@
+// @mode: parse-fail
+// @decisions: D-084
+//! A base prefix needs digits of its base.
+
+fn main() {
+  let a = 0x
+  let b = 0b102
+  assert a == b
+}

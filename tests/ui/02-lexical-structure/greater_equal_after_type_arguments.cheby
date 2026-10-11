@@ -1,0 +1,15 @@
+// @mode: check-pass
+// @decisions: D-430
+//! In a type, `>=` is split into `>` and `=`, so a type argument list may
+//! end right before the `=` of a constant or a `let`.
+
+const empty: List<Int>= []
+
+pub fn none() -> Option<Int> {
+  let nothing: Option<Int>= None
+  nothing
+}
+
+fn main() {
+  assert empty == []
+}

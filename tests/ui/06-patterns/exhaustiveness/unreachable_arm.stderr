@@ -1,0 +1,8 @@
+warning[W0010]: this arm can never match
+  --> tests/ui/06-patterns/exhaustiveness/unreachable_arm.cheby:10:5
+   |
+10 |     Some(0) => "zero"
+   |     ^^^^^^^ the arms before it match every value it matches
+   |
+   = help: remove the arm, or move it before the arms that cover it
+

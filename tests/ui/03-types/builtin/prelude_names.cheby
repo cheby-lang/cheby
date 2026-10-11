@@ -1,0 +1,73 @@
+// @mode: check-pass
+// @decisions: D-112, D-131
+//! The prelude's types, constructors and `Show` are in scope in every
+//! module without an import (§3.2, §7.6).
+
+type Everything {
+  whole: Int,
+  real: Float,
+  text: String,
+  flag: Bool,
+  unit: Nil,
+  items: List<Int>,
+  outcome: Result<Int, String>,
+  maybe: Option<Int>,
+  order: Order,
+  small: I8,
+  medium: I16,
+  large: I32,
+  wide: I64,
+  byte: U8,
+  word: U16,
+  double_word: U32,
+  quad_word: U64,
+  single: F32,
+}
+
+fn stop() -> Never {
+  panic as "stop"
+}
+
+type Label { Label(String) }
+
+fn show(label: Label) -> String {
+  let Label(text) = label
+  text
+}
+
+fn describe<T: Show>(value: T) -> String {
+  Show::show(value)
+}
+
+fn main() {
+  let all = Everything {
+    whole: 1,
+    real: 1.0,
+    text: "a",
+    flag: True,
+    unit: Nil,
+    items: [1],
+    outcome: Ok(1),
+    maybe: Some(1),
+    order: Less,
+    small: 1,
+    medium: 1,
+    large: 1,
+    wide: 1,
+    byte: 1,
+    word: 1,
+    double_word: 1,
+    quad_word: 1,
+    single: 1.0,
+  }
+  let others = [Err("e"), Ok(2)]
+  let more = [None, Some(2)]
+  let orders = [Equal, Greater]
+  let flags = [False]
+  assert describe(Label("a")) == "a"
+  assert all.flag && others != [] && more != [] && orders != [] && flags != []
+  case all.whole {
+    0 => stop()
+    _ => Nil
+  }
+}

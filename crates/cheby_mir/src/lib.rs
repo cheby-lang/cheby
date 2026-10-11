@@ -1,3 +1,72 @@
-//! MIR, lowering from typed bodies, and the RC passes: naive in M1, Perceus in M2 (D-273).
+//! MIR, lowering from typed bodies, and the RC passes: naive in M1,
+//! Perceus in M2 (D-273). See `docs/plan/m1-core.md` phase D.
 //!
-//! Planned for M1. See `docs/plan/architecture.md`.
+//! - [`ir`]: the data model (D1); [`builder`] builds functions.
+//! - [`repr`] and [`abi`]: value representations and the one source of
+//!   machine signatures (D-453, D-454).
+//! - [`layout`]: constructor layouts from interfaces (D-246, D-252).
+//! - [`reach`]: the items a run needs, from its entry (D-510).
+//! - [`lower`]: THIR to MIR (D2), with tail-position marking (§5.15.2),
+//!   external wrappers and entry thunks. Every THIR construct lowers, so
+//!   lowering reports no diagnostics (D-554); its only error is an
+//!   internal one.
+//! - [`rc`]: naive dup/drop placement by the last-use rule (D7, D-205).
+//! - [`validate`] and [`dump`]: the validator and the stable text form.
+
+pub mod abi;
+pub mod builder;
+mod defs;
+pub mod dump;
+#[cfg(test)]
+mod golden_tests;
+pub mod ir;
+pub mod layout;
+mod liveness;
+pub mod lower;
+#[cfg(test)]
+mod lower_tests;
+pub mod rc;
+pub mod reach;
+pub mod repr;
+#[cfg(test)]
+mod test_support;
+#[cfg(test)]
+mod tests;
+pub mod validate;
+#[cfg(test)]
+mod validate_tests;
+
+pub use abi::{AbiSig, abi_sig, entry_sig, fixed_sig, is_uniform_sig, trampoline_sig, uniform_sig};
+pub use builder::FunctionBuilder;
+pub use defs::Defs;
+pub use dump::{dump, dump_function};
+pub use ir::LayoutRef;
+pub use ir::{
+    Abi, ArithOp, BitOp, Block, BlockId, BuiltinDesc, BuiltinLayout, Callee, CalleeDecl, CmpOp,
+    Const, DefName, EntryKind, FnKey, Function, Local, LocalDecl, MirModule, Operand, PanicKind,
+    RuntimeFn, Rvalue, StaticId, StaticKind, StaticObject, Stmt, StrId, TagType, Terminator,
+    UnitKind, UseKind,
+};
+pub use layout::{FieldDesc, LayoutDesc, ctor_layout, type_key, type_layouts};
+pub use lower::{
+    EntryRequest, LowerCx, lower_entries, lower_fn, lower_items, lower_module, lower_tests,
+};
+pub use reach::{Program, Reach, Root, reachable};
+pub use repr::{CType, ForeignSig, Repr, ctype_of, foreign_sig, repr_of};
+pub use validate::{Stage, validate};
+
+/// Validates a freshly lowered unit, inserts reference counts, and
+/// validates again with the ownership check: the pipeline every unit goes
+/// through before codegen.
+///
+/// # Errors
+///
+/// An [`Ice`](cheby_iface::Ice) listing the validator's findings.
+pub fn count_and_check(module: &mut MirModule) -> Result<(), cheby_iface::Ice> {
+    let report = |stage: &str, errors: Vec<String>| {
+        cheby_iface::Ice::new(format!("invalid MIR {stage}:\n  {}", errors.join("\n  ")))
+    };
+    validate(module, Stage::Lowered).map_err(|e| report("after lowering", e))?;
+    rc::insert_module(module)?;
+    validate(module, Stage::Counted).map_err(|e| report("after reference counting", e))
+}

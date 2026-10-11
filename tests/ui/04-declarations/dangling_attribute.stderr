@@ -1,0 +1,8 @@
+error[E0019]: attribute not followed by an item
+  --> tests/ui/04-declarations/dangling_attribute.cheby:10:1
+   |
+10 | @deprecated("not attached to anything")
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: put the attribute on the line right before the item it applies to
+

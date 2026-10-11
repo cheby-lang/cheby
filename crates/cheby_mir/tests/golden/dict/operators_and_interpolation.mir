@@ -1,0 +1,65 @@
+fn app::label(_0: value, _1: value) -> value check str#0 {
+  str#0 = "src/main.cheby:6:4"
+  str#1 = "<"
+  str#2 = ">"
+bb0:
+  _2: value = call_runtime str_with_capacity(borrow const int 18)
+  _3: value = call_runtime str_append(_2, borrow const str#1)
+  _4: value = field _0.1 of dict/1+0
+  dup _4
+  drop _0
+  _5: value = call _4(_1)
+  _6: value = call_runtime str_append(_3, borrow _5)
+  drop _5
+  _7: value = call_runtime str_append(_6, borrow const str#2)
+  return _7
+}
+
+fn app::plus(_0: value, _1: value, _2: value) -> value check str#0 {
+  str#0 = "src/main.cheby:10:4"
+bb0:
+  _3: value = field _0.1 of dict/1+0
+  dup _3
+  drop _0
+  tail_call _3(_1, _2)
+}
+
+fn app::less(_0: value, _1: value, _2: value) -> value check str#0 {
+  str#0 = "src/main.cheby:14:4"
+bb0:
+  _3: value = field _0.1 of dict/1+0
+  dup _3
+  drop _0
+  _4: value = call _3(_1, _2)
+  _5: int = read_tag _4 of order
+  drop _4
+  _6: bool = compare eq int _5, const int 0
+  _7: value = box bool _6
+  return _7
+}
+
+fn app::diff(_0: value, _1: value, _2: value) -> value check str#0 {
+  str#0 = "src/main.cheby:18:4"
+bb0:
+  _3: value = field _0.4 of dict/2+2
+  dup _3
+  _4: value = field _3.1 of dict/1+0
+  dup _4
+  drop _3
+  dup _2
+  _5: value = call _4(_1, _2)
+  _6: value = field _0.3 of dict/2+2
+  dup _6
+  drop _0
+  _7: value = field _6.1 of dict/1+0
+  dup _7
+  drop _6
+  tail_call _7(_5, _2)
+}
+
+static#0 dict app$Show$Int = dict/1+0(builtin_desc int, fn std::int::show)
+static#1 dict app$std::ops::Add$Int = dict/1+0(builtin_desc int, fn std::int::add)
+static#2 dict app$std::ops::Compare$String = dict/1+0(builtin_desc string, fn std::string::compare)
+static#3 dict app$std::ops::Add$Float = dict/1+0(builtin_desc float, fn std::float::add)
+static#4 dict app$std::ops::Sub$Float = dict/1+0(builtin_desc float, fn std::float::sub)
+static#5 dict app$app::Num$Float = dict/2+2(builtin_desc float, fn std::float::add, fn std::float::sub, static#3, static#4)

@@ -314,7 +314,7 @@ test "decode_value decodes a value built in the program" {
 }
 ```
 
-`decode_value` lives in `std::json` because `std::json::decode` cannot import `std::json` (D-145, D-361, ADR-0053). For the same reason, no decoder can return part of a document as a raw `Value`.
+`decode_value` lives in `std::json` because `std::json::decode` cannot import `std::json` (D-145, D-361, ADR-0053). For the same reason, no decoder can return part of a document as a raw `Value`. Decoders run over the raw tree of the internal module `std::json::tree`, which both modules import. Its items are package-visible, so no other package can name them (D-483).
 
 ## Errors
 

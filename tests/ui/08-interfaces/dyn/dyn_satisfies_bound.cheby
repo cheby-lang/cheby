@@ -1,0 +1,37 @@
+// @mode: check-pass
+// @decisions: D-046, D-173
+//! `dyn I` satisfies `I` and the interfaces `I` embeds, so `dyn` values
+//! can be passed where a bound requires them (§8.6).
+
+import std::io
+
+interface Notifier: Show {
+  fn notify(Self, String) -> String
+}
+
+type Pager {
+  number: String,
+}
+
+fn notify(pager: Pager, text: String) -> String {
+  pager.number + ": " + text
+}
+
+fn show(pager: Pager) -> String {
+  pager.number
+}
+
+fn deliver<N: Notifier>(target: N, text: String) {
+  io::println("to {target}:")
+  io::println(Notifier::notify(target, text))
+}
+
+fn announce<S: Show>(item: S) {
+  io::println("{item}")
+}
+
+fn main() {
+  let target: dyn Notifier = Pager { number: "555-0100" }
+  deliver(target, "hello")
+  announce(target)
+}

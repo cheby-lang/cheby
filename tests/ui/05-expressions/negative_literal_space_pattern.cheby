@@ -1,0 +1,16 @@
+// @mode: check-fail
+// @decisions: D-470
+//! A negative literal in a pattern has its `-` directly before the digits,
+//! as in an expression.
+
+fn sign(n: Int) -> Int {
+  case n {
+    - 1 => -1
+    -2 => -1
+    _ => 1
+  }
+}
+
+fn main() {
+  assert sign(-1) == -1
+}

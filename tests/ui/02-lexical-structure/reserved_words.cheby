@@ -1,0 +1,11 @@
+// @mode: check-fail
+// @decisions: D-128
+//! Reserved words cannot be names, and the error says what Cheby has
+//! instead.
+
+fn main() {
+  let return = 1
+  let loop = 2
+  let impl = 3
+  assert return + loop + impl == 6
+}

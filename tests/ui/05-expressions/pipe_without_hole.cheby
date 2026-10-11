@@ -1,0 +1,14 @@
+// @mode: check-fail
+// @decisions: D-244
+//! A pipe into a call needs an explicit `_` where the piped value goes.
+
+import std::list
+
+fn double(n: Int) -> Int {
+  n * 2
+}
+
+fn main() {
+  let xs = [1, 2] |> list::map(double)
+  assert xs == [2, 4]
+}

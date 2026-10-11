@@ -1,0 +1,68 @@
+// @mode: run-pass
+// @decisions: D-095, D-316, D-334
+//! The `Bytes` operations of example 021 (`from_string`, `to_list`, `get`,
+//! `push_u32_be` and `==`) in a hex dump and a checksum that is appended
+//! big-endian, read back, and compared.
+
+import std::bytes
+import std::int
+import std::io
+import std::list
+import std::option
+import std::string
+import std::u32
+import std::u8
+
+/// One hex digit of a value below 16.
+fn digit(value: Int) -> String {
+  string::slice("0123456789abcdef", value, value + 1)
+}
+
+/// Two lower-case hex digits per byte.
+fn hex(data: bytes::Bytes) -> String {
+  let parts = list::map(bytes::to_list(data), fn(byte) {
+    let value = int::from_u8(byte)
+    digit(value / 16) + digit(value % 16)
+  })
+  string::join(parts, " ")
+}
+
+/// A 32-bit checksum: each byte times its position plus one, summed
+/// with wrapping.
+fn checksum(data: bytes::Bytes) -> U32 {
+  fn step(sum: U32, index: Int) -> U32 {
+    case bytes::get(data, index) {
+      Some(byte) => {
+        let weight = option::unwrap_or(result_to_option(u32::from_int(index + 1)), 0)
+        step(u32::wrapping_add(sum, u32::wrapping_mul(u32::from_u8(byte), weight)), index + 1)
+      }
+      None => sum
+    }
+  }
+  step(0, 0)
+}
+
+fn result_to_option(value: Result<U32, Nil>) -> Option<U32> {
+  case value {
+    Ok(x) => Some(x)
+    Err(_) => None
+  }
+}
+
+fn main() {
+  let data = bytes::from_string("héllo, wörld")
+  io::println(hex(data))
+  let first = option::unwrap_or(bytes::get(data, 0), 0)
+  io::println("first byte {first}")
+  let sum = checksum(data)
+  let framed = bytes::push_u32_be(data, sum)
+  io::println(hex(framed))
+  let length = bytes::length(framed)
+  let stored = bytes::read_u32_be(framed, length - 4)
+  io::println("checksum {sum}, stored {stored:?}")
+  let intact = bytes::slice(framed, 0, length - 4) == data
+  io::println("payload intact: {intact}")
+  let tampered = bytes::push(bytes::slice(framed, 0, 1), 0x00) == bytes::slice(framed, 0, 2)
+  io::println("tampered equal: {tampered}")
+  io::println(u8::show(first))
+}

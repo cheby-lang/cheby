@@ -1,0 +1,12 @@
+// @mode: run-pass
+// @decisions: D-134
+//! Debug text shows the fields of a type whose structure is hidden from
+//! the printing module, because debug output is for developers (§3.13).
+
+import app::vault
+import std::io
+
+fn main() {
+  let secret = vault::seal(42)
+  io::println("{secret:?}")
+}

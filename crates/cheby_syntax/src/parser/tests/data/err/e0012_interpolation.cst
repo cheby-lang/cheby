@@ -1,0 +1,148 @@
+SOURCE_FILE@0..173
+  CONST_DECL@0..37
+    CONST_KW@0..5 "const"
+    WHITESPACE@5..6 " "
+    LOWER_IDENT@6..7 "a"
+    COLON@7..8 ":"
+    WHITESPACE@8..9 " "
+    PATH_TYPE@9..15
+      PATH@9..15
+        UPPER_IDENT@9..15 "String"
+    WHITESPACE@15..16 " "
+    EQ@16..17 "="
+    WHITESPACE@17..18 " "
+    STRING_LIT@18..37
+      STRING_START@18..19 "\""
+      STRING_TEXT@19..25 "next: "
+      INTERPOLATION@25..36
+        INTERP_START@25..26 "{"
+        LOWER_IDENT@26..31 "count"
+        WHITESPACE@31..32 " "
+        ERROR@32..35
+          PLUS@32..33 "+"
+          WHITESPACE@33..34 " "
+          INT_NUMBER@34..35 "1"
+        INTERP_END@35..36 "}"
+      STRING_END@36..37 "\""
+  NEWLINE@37..38 "\n"
+  CONST_DECL@38..67
+    CONST_KW@38..43 "const"
+    WHITESPACE@43..44 " "
+    LOWER_IDENT@44..45 "b"
+    COLON@45..46 ":"
+    WHITESPACE@46..47 " "
+    PATH_TYPE@47..53
+      PATH@47..53
+        UPPER_IDENT@47..53 "String"
+    WHITESPACE@53..54 " "
+    EQ@54..55 "="
+    WHITESPACE@55..56 " "
+    STRING_LIT@56..67
+      STRING_START@56..57 "\""
+      STRING_TEXT@57..64 "empty: "
+      INTERPOLATION@64..66
+        INTERP_START@64..65 "{"
+        INTERP_END@65..66 "}"
+      STRING_END@66..67 "\""
+  NEWLINE@67..68 "\n"
+  CONST_DECL@68..103
+    CONST_KW@68..73 "const"
+    WHITESPACE@73..74 " "
+    LOWER_IDENT@74..75 "c"
+    COLON@75..76 ":"
+    WHITESPACE@76..77 " "
+    PATH_TYPE@77..83
+      PATH@77..83
+        UPPER_IDENT@77..83 "String"
+    WHITESPACE@83..84 " "
+    EQ@84..85 "="
+    WHITESPACE@85..86 " "
+    STRING_LIT@86..103
+      STRING_START@86..87 "\""
+      STRING_TEXT@87..94 "tuple: "
+      INTERPOLATION@94..102
+        INTERP_START@94..95 "{"
+        LOWER_IDENT@95..99 "pair"
+        ERROR@99..101
+          DOT@99..100 "."
+          INT_NUMBER@100..101 "0"
+        INTERP_END@101..102 "}"
+      STRING_END@102..103 "\""
+  NEWLINE@103..104 "\n"
+  CONST_DECL@104..135
+    CONST_KW@104..109 "const"
+    WHITESPACE@109..110 " "
+    LOWER_IDENT@110..111 "d"
+    COLON@111..112 ":"
+    WHITESPACE@112..113 " "
+    PATH_TYPE@113..119
+      PATH@113..119
+        UPPER_IDENT@113..119 "String"
+    WHITESPACE@119..120 " "
+    EQ@120..121 "="
+    WHITESPACE@121..122 " "
+    STRING_LIT@122..135
+      STRING_START@122..123 "\""
+      STRING_TEXT@123..129 "open: "
+      INTERPOLATION@129..134
+        INTERP_START@129..130 "{"
+        LOWER_IDENT@130..134 "name"
+      STRING_END@134..135 "\""
+  NEWLINE@135..136 "\n"
+  CONST_DECL@136..172
+    CONST_KW@136..141 "const"
+    WHITESPACE@141..142 " "
+    LOWER_IDENT@142..143 "e"
+    COLON@143..144 ":"
+    WHITESPACE@144..145 " "
+    PATH_TYPE@145..151
+      PATH@145..151
+        UPPER_IDENT@145..151 "String"
+    WHITESPACE@151..152 " "
+    EQ@152..153 "="
+    WHITESPACE@153..154 " "
+    STRING_LIT@154..172
+      STRING_START@154..155 "\""
+      STRING_TEXT@155..159 "ok: "
+      INTERPOLATION@159..165
+        INTERP_START@159..160 "{"
+        LOWER_IDENT@160..164 "name"
+        INTERP_END@164..165 "}"
+      STRING_TEXT@165..171 " after"
+      STRING_END@171..172 "\""
+  NEWLINE@172..173 "\n"
+
+// errors
+
+error[E0012]: unexpected `+` in string interpolation
+ --> err/e0012_interpolation.cheby:1:33
+  |
+1 | const a: String = "next: {count + 1}"
+  |                                 ^
+  |
+  = help: an interpolation holds a name, optionally with fields and `:?`, such as `{user.name}`; bind other values to a name first
+
+error[E0012]: empty string interpolation
+ --> err/e0012_interpolation.cheby:2:27
+  |
+2 | const b: String = "empty: {}"
+  |                           ^^
+  |
+  = help: write a name between the braces, or escape the brace as `\{`
+
+error[E0012]: unexpected `.` in string interpolation
+ --> err/e0012_interpolation.cheby:3:32
+  |
+3 | const c: String = "tuple: {pair.0}"
+  |                                ^
+  |
+  = help: an interpolation holds a name, optionally with fields and `:?`, such as `{user.name}`; bind other values to a name first
+
+error[E0012]: unclosed string interpolation
+ --> err/e0012_interpolation.cheby:4:26
+  |
+4 | const d: String = "open: {name"
+  |                          ^ this `{` is never closed
+  |
+  = help: close it with `}`, or escape the brace as `\{`
+

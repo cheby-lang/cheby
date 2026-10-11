@@ -1,0 +1,12 @@
+// @mode: check-fail
+//! The type parameters of a type declaration have no bounds; the
+//! functions that need a bound declare it.
+
+type Labelled<T: Show> {
+  value: T,
+}
+
+fn main() {
+  let item = Labelled { value: 1 }
+  assert item.value == 1
+}

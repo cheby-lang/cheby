@@ -1,0 +1,74 @@
+// @decisions: D-043, D-626
+> interface Named {
+.   fn name(Self) -> String
+. }
+> type Cat {
+.   Cat(Int),
+. }
+> fn name(_c: Cat) -> String {
+.   "cat"
+. }
+> fn greet<T: Named>(x: T) -> String {
+.   let n = Named::name(x)
+.   "hi {n}"
+. }
+> greet(Cat(1))
+"hi cat" : String
+> let boxed: dyn Named = Cat(2)
+> interface Named {
+.   fn name(Self) -> Int
+. }
+> greet(Cat(3))
+"hi cat" : String
+> Named::name(Cat(4))
+error[E0063]: `Cat` does not satisfy `Named`
+ --> <repl:9>:1:1
+  |
+1 | Named::name(Cat(4))
+  | ^^^^^^^^^^^^^^^^^^^ `Named::name` is called with `Self` = `Cat`
+  |
+ ::: <repl:3>:1:4
+  |
+1 | fn name(_c: Cat) -> String {
+  |    ---- `name` has the signature `name(Cat) -> String`
+  |
+  = note: `Named` needs `name(Cat) -> Int` (§8.2)
+
+> fn count<T: Named>(x: T) -> Int {
+.   Named::name(x)
+. }
+> count(Cat(5))
+error[E0063]: `Cat` does not satisfy `Named`
+ --> <repl:11>:1:1
+  |
+1 | count(Cat(5))
+  | ^^^^^^^^^^^^^ required by a bound of `count`
+  |
+ ::: <repl:3>:1:4
+  |
+1 | fn name(_c: Cat) -> String {
+  |    ---- `name` has the signature `name(Cat) -> String`
+  |
+  = note: `Named` needs `name(Cat) -> Int` (§8.2)
+
+> fn name(_c: Cat) -> Int {
+.   9
+. }
+> count(Cat(6))
+9 : Int
+> greet(Cat(7))
+error[E0063]: `Cat` does not satisfy `Named (stale)`
+ --> <repl:14>:1:1
+  |
+1 | greet(Cat(7))
+  | ^^^^^^^^^^^^^ required by a bound of `greet`
+  |
+ ::: <repl:12>:1:4
+  |
+1 | fn name(_c: Cat) -> Int {
+  |    ---- `name` has the signature `name(Cat) -> Int`
+  |
+  = note: `Named (stale)` needs `name(Cat) -> String` (§8.2)
+
+> boxed
+Cat(2) : dyn Named (stale)

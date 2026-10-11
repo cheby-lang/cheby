@@ -1,0 +1,40 @@
+error[E0045]: `@external` is not allowed on a type
+ --> tests/ui/04-declarations/attributes/external_placement.cheby:5:1
+  |
+5 | @external(native, "app_point")
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = help: `@external` on a type names the drop function of an external type, which has no body
+
+error[E0045]: `@external` is not allowed on a type alias
+  --> tests/ui/04-declarations/attributes/external_placement.cheby:10:1
+   |
+10 | @external(native, "app_count")
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: `@external` applies to functions and external types
+
+error[E0045]: `@external` is not allowed on a constant
+  --> tests/ui/04-declarations/attributes/external_placement.cheby:13:1
+   |
+13 | @external(native, "app_limit")
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: `@external` applies to functions and external types
+
+error[E0045]: `@external` is not allowed on an interface
+  --> tests/ui/04-declarations/attributes/external_placement.cheby:16:1
+   |
+16 | @external(native, "app_named")
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: `@external` applies to functions and external types
+
+error[E0045]: `@external` is not allowed on a test
+  --> tests/ui/04-declarations/attributes/external_placement.cheby:21:1
+   |
+21 | @external(native, "app_test")
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: `@external` applies to functions and external types
+

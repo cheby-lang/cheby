@@ -1,0 +1,49 @@
+// @mode: run-pass
+// @decisions: D-453, D-455
+//! Top-level functions, external functions and generic functions are
+//! values that can be passed, stored and called; each converts its
+//! arguments and result like a direct call (§3.12, D-453).
+
+import std::int
+import std::io
+import std::list
+import std::string
+
+fn double(n: Int) -> Int {
+  n * 2
+}
+
+fn apply(f: fn(Int) -> Int, n: Int) -> Int {
+  f(n)
+}
+
+fn identity<T>(x: T) -> T {
+  x
+}
+
+fn compose(f: fn(Int) -> Int, g: fn(Int) -> Int) -> fn(Int) -> Int {
+  fn(x) { g(f(x)) }
+}
+
+fn is_big(x: Float) -> Bool {
+  x > 1.5
+}
+
+fn main() {
+  io::println(int::show(apply(double, 21)))
+  let quadruple = compose(double, double)
+  io::println(int::show(quadruple(5)))
+  let shown = list::map([1, 2, 3], int::show)
+  io::println(string::join(shown, " "))
+  let same = identity::<String>
+  io::println(same("generic"))
+  let print = io::println
+  print("external")
+  let check = is_big
+  let big = check(2.0)
+  let small = check(1.0)
+  io::println("{big} {small}")
+  let steps = [double, quadruple, fn(x) { x + 1 }]
+  let results = list::map(steps, fn(step) { int::show(step(10)) })
+  io::println(string::join(results, " "))
+}

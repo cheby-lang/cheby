@@ -16,13 +16,14 @@ Detail level: workstreams with outcomes. This file is refined into tasks when M3
 - DWARF line tables by default, full debug info opt-in (D-184, D-259), and panic backtraces from them.
 - Foreign code supplied by packages, per OQ-P9, and the `cheby.h` header for it (D-187).
 - `@external(native, …)` symbols resolved at link time instead of in the process.
+- An executable's entry that bypasses Rust's startup code reopens standard streams that are closed at start on the null device, so they behave as D-474 requires.
 
 ### 3.2 Interface artifacts and the global cache
 
 - `ModuleInterface` (M1, B8) written to disk as the interface artifact (D-249, ADR-0044).
 - One content-addressed cache per machine, keyed by input hashes, compiler version and flags (D-255).
 - Early cutoff: a dependent is recompiled only when the hash of an interface it uses changes. Hidden dependencies of D-260 are recorded.
-- Constant values linked in as data, only their types in the interface (D-257).
+- Constant values linked in as data, only their types in the interface (D-257). A serialized image of the evaluated constants replaces M1's results made static in place (D-539), and a constant's seed may use the interface hash instead of the source hash (D-538).
 - Cache safety under concurrent `cheby` processes, since every command is its own process (D-268).
 
 ### 3.3 Cached code for `cheby run`
@@ -42,7 +43,8 @@ Detail level: workstreams with outcomes. This file is refined into tasks when M3
 ## Exit criteria
 
 - Every example that passes on the JIT also passes as an executable from `cheby build --target native`.
-- 020, 030 and 031 pass, against the harness's local fixtures.
-- After a one-function edit in the 1M-line `bench/gen` project, `cheby run` reaches `main` within the D-247 budget, as revised by OQ-P10, on the CI reference machine.
+- 020 and 031 pass, against the harness's local fixtures. 031 imports `std::http`, so it is checked from this milestone (D-477). 030 needs its git dependency too, so it moves to M5 (D-446).
+- After a one-function edit in the 1M-line `bench/gen` project, `cheby run` reaches `main` within the D-247 latency budget, as revised by OQ-P11, on the CI reference machine, and OQ-P11 is settled.
+- Checking with code generation is measured again against D-247's 100,000 lines per second per core, on the `bench/gen` shapes of M1's measurement by CI's Linux runner. Like every budget it stays reported, not enforced, until M6 (D-644).
 - Two builds of the same inputs produce bit-identical artifacts and executables (D-264).
 - Editing a function body recompiles only its module, checked by a cache-hit test.

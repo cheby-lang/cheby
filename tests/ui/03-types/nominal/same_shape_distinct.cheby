@@ -1,0 +1,16 @@
+// @mode: check-fail
+// @decisions: D-022
+//! Each type declaration introduces a new nominal type: two declarations
+//! with the same shape are different types (§3.11).
+
+type Meters { Meters(Float) }
+
+type Feet { Feet(Float) }
+
+fn to_feet(length: Meters) -> Feet {
+  length
+}
+
+fn main() {
+  assert to_feet(Meters(1.0)) == Feet(1.0)
+}

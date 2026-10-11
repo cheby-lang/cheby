@@ -1,0 +1,18 @@
+fn app::shower(_0: value, _1: value) -> value check str#0 {
+  str#0 = "src/main.cheby:6:4"
+bb0:
+  drop _1
+  _2: value = alloc closure/1(const code <shim app::shown>, _0)
+  return _2
+}
+
+fn shim app::shown(_0: value, _1: value) -> value check str#0 {
+  str#0 = "src/main.cheby:2:4"
+bb0:
+  _2: value = field _0.1 of closure/1
+  dup _2
+  drop _0
+  tail_call app::shown(_2, _1)
+}
+
+static#0 dict app$Show$Int = dict/1+0(builtin_desc int, fn std::int::show)

@@ -1,0 +1,14 @@
+// @mode: run-pass
+// @decisions: D-084, D-129
+//! Integer literals may be octal, with the prefix `0o`, alongside hex and
+//! binary (§2.5.1).
+
+import std::int
+import std::io
+
+fn main() {
+  io::println(int::show(0o755))
+  io::println(int::show(0o1_000))
+  assert 0o17 == 0xf
+  assert 0o17 == 0b1111
+}

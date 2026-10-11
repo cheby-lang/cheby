@@ -1,0 +1,257 @@
+//! The built-in `F32`, an IEEE 754 binary32 number: the float families of
+//! `docs/stdlib/README.md` (D-350) with the rounding functions and special
+//! values of `std::float`.
+//!
+//! `F32` itself is a builtin item whose home module is this one (D-447).
+
+// Constants
+
+/// Positive infinity, which shows as `inf`.
+pub const infinity: F32 = 1.0 / 0.0
+
+/// Negative infinity, which shows as `-inf`.
+pub const neg_infinity: F32 = -1.0 / 0.0
+
+/// A NaN, which shows as `NaN` and is `==` to every other NaN.
+pub const nan: F32 = 0.0 / 0.0
+
+/// The `F32` closest to pi.
+pub const pi: F32 = 3.1415927
+
+/// The `F32` closest to Euler's number e.
+pub const e: F32 = 2.7182817
+
+/// The difference between 1.0 and the next larger `F32`, 2^-23.
+pub const epsilon: F32 = 1.1920929e-7
+
+/// The largest finite `F32`.
+pub const max_value: F32 = 3.4028235e38
+
+/// The smallest finite `F32`, the negation of `max_value`.
+pub const min_value: F32 = -3.4028235e38
+
+// Conversions
+
+/// Returns `x` rounded to the nearest `F32`, and an infinity beyond its range (D-359).
+@external(native, "cheby_f32_from_float")
+@external(js, "./f32.mjs", "from_float")
+pub fn from_float(x: Float) -> F32
+
+/// Returns `n` as an `F32`, rounded to the nearest value, ties to even (D-359).
+@external(native, "cheby_f32_from_int")
+@external(js, "./f32.mjs", "from_int")
+pub fn from_int(n: Int) -> F32
+
+/// Returns `n` as an `F32`. Every `I8` is exact.
+@external(native, "cheby_f32_from_i8")
+@external(js, "./f32.mjs", "from_i8")
+pub fn from_i8(n: I8) -> F32
+
+/// Returns `n` as an `F32`. Every `I16` is exact.
+@external(native, "cheby_f32_from_i16")
+@external(js, "./f32.mjs", "from_i16")
+pub fn from_i16(n: I16) -> F32
+
+/// Returns `n` as an `F32`, rounded to the nearest value, ties to even (D-359).
+@external(native, "cheby_f32_from_i32")
+@external(js, "./f32.mjs", "from_i32")
+pub fn from_i32(n: I32) -> F32
+
+/// Returns `n` as an `F32`, rounded to the nearest value, ties to even (D-359).
+@external(native, "cheby_f32_from_i64")
+@external(js, "./f32.mjs", "from_i64")
+pub fn from_i64(n: I64) -> F32
+
+/// Returns `n` as an `F32`. Every `U8` is exact.
+@external(native, "cheby_f32_from_u8")
+@external(js, "./f32.mjs", "from_u8")
+pub fn from_u8(n: U8) -> F32
+
+/// Returns `n` as an `F32`. Every `U16` is exact.
+@external(native, "cheby_f32_from_u16")
+@external(js, "./f32.mjs", "from_u16")
+pub fn from_u16(n: U16) -> F32
+
+/// Returns `n` as an `F32`, rounded to the nearest value, ties to even (D-359).
+@external(native, "cheby_f32_from_u32")
+@external(js, "./f32.mjs", "from_u32")
+pub fn from_u32(n: U32) -> F32
+
+/// Returns `n` as an `F32`, rounded to the nearest value, ties to even (D-359).
+@external(native, "cheby_f32_from_u64")
+@external(js, "./f32.mjs", "from_u64")
+pub fn from_u64(n: U64) -> F32
+
+// Parsing and text
+
+/// Reads an `F32` written in decimal, or `NaN`, `inf` or `-inf` (D-313).
+@external(native, "cheby_f32_parse")
+@external(js, "./f32.mjs", "parse")
+pub fn parse(text: String) -> Result<F32, Nil>
+
+/// Returns the shortest text that reads back as `x` (§3.3.6). It makes `F32` satisfy `Show`.
+@external(native, "cheby_f32_show")
+@external(js, "./f32.mjs", "show")
+pub fn show(x: F32) -> String
+
+// Comparison
+
+/// Orders two `F32` values. It makes `F32` satisfy `Compare`.
+pub fn compare(a: F32, b: F32) -> Order {
+  case {
+    a < b => Less
+    a > b => Greater
+    _ => Equal
+  }
+}
+
+/// Returns the smaller of `a` and `b`, and `a` when they are `Equal`.
+pub fn min(a: F32, b: F32) -> F32 {
+  case {
+    b < a => b
+    _ => a
+  }
+}
+
+/// Returns the larger of `a` and `b`, and `a` when they are `Equal`.
+pub fn max(a: F32, b: F32) -> F32 {
+  case {
+    b > a => b
+    _ => a
+  }
+}
+
+// Arithmetic
+
+/// Returns `a + b`. It makes `F32` satisfy `Add`.
+pub fn add(a: F32, b: F32) -> F32 {
+  a + b
+}
+
+/// Returns `a - b`. It makes `F32` satisfy `Sub`.
+pub fn sub(a: F32, b: F32) -> F32 {
+  a - b
+}
+
+/// Returns `a * b`. It makes `F32` satisfy `Mul`.
+pub fn mul(a: F32, b: F32) -> F32 {
+  a * b
+}
+
+/// Returns `a / b` by IEEE 754. It makes `F32` satisfy `Div`.
+pub fn div(a: F32, b: F32) -> F32 {
+  a / b
+}
+
+/// Returns `a % b`, with the sign of `a`, like C's `fmod`.
+pub fn rem(a: F32, b: F32) -> F32 {
+  a % b
+}
+
+/// Returns `-x`, flipping the sign. It makes `F32` satisfy `Neg`.
+pub fn neg(x: F32) -> F32 {
+  -x
+}
+
+/// Returns `x` without its sign, so `-0.0` becomes `0.0`.
+pub fn abs(x: F32) -> F32 {
+  // `0.0 - x` turns `-0.0` into `0.0`, which `-x` would not.
+  case {
+    x <= 0.0 => 0.0 - x
+    _ => x
+  }
+}
+
+// Conversion to Int
+
+/// Returns `x` rounded toward zero, or `Err(Nil)` for NaN, the infinities and values outside `Int`.
+@external(native, "cheby_f32_truncate")
+@external(js, "./f32.mjs", "truncate")
+pub fn truncate(x: F32) -> Result<Int, Nil>
+
+/// Returns `x` rounded to the nearest whole number, halves away from zero (D-314), or `Err(Nil)`.
+@external(native, "cheby_f32_round")
+@external(js, "./f32.mjs", "round")
+pub fn round(x: F32) -> Result<Int, Nil>
+
+/// Returns the largest whole number not above `x`, or `Err(Nil)`.
+@external(native, "cheby_f32_floor")
+@external(js, "./f32.mjs", "floor")
+pub fn floor(x: F32) -> Result<Int, Nil>
+
+/// Returns the smallest whole number not below `x`, or `Err(Nil)`.
+@external(native, "cheby_f32_ceil")
+@external(js, "./f32.mjs", "ceil")
+pub fn ceil(x: F32) -> Result<Int, Nil>
+
+// Special values
+
+/// Tells whether `x` is a NaN. Every NaN is `==` to `nan` (D-069).
+pub fn is_nan(x: F32) -> Bool {
+  x == nan
+}
+
+/// Tells whether `x` is `inf` or `-inf`.
+pub fn is_infinite(x: F32) -> Bool {
+  x == infinity || x == neg_infinity
+}
+
+/// Tells whether `x` is neither a NaN nor an infinity.
+pub fn is_finite(x: F32) -> Bool {
+  !is_nan(x) && !is_infinite(x)
+}
+
+// Examples
+
+test "the f32 constants" {
+  assert max_value == 3.4028235e38
+  assert max_value * 2.0 == infinity
+  assert 1.0 + epsilon > 1.0
+  assert nan == nan
+  assert neg_infinity < min_value
+}
+
+test "f32 shows at its own precision" {
+  let tenth: F32 = 0.1
+  assert "{tenth}" == "0.1"
+  assert show(max_value) == "3.4028235e38"
+  assert show(neg_infinity) == "-inf"
+  assert parse("0.1") == Ok(tenth)
+  assert parse("1e3") == Ok(1000.0)
+  assert parse(".5") == Err(Nil)
+  assert parse(show(epsilon)) == Ok(epsilon)
+}
+
+test "comparing f32 values" {
+  assert compare(1.0, 2.0) == Less
+  assert compare(-0.0, 0.0) == Equal
+  assert compare(nan, infinity) == Greater
+  assert min(1.0, nan) == 1.0
+  assert max(-1.0, 2.5) == 2.5
+}
+
+test "f32 operators as functions" {
+  assert add(0.5, 0.25) == 0.75
+  assert sub(0.5, 0.25) == 0.25
+  assert mul(1.5, -2.0) == -3.0
+  assert div(1.0, 0.0) == infinity
+  assert rem(-7.5, 2.0) == -1.5
+  assert neg(1.5) == -1.5
+  assert abs(-1.5) == 1.5
+}
+
+test "f32 rounds to an Int" {
+  assert truncate(-2.7) == Ok(-2)
+  assert round(2.5) == Ok(3)
+  assert round(-2.5) == Ok(-3)
+  assert floor(-2.5) == Ok(-3)
+  assert ceil(2.1) == Ok(3)
+  assert truncate(nan) == Err(Nil)
+}
+
+test "f32 tests for special values" {
+  assert is_nan(nan)
+  assert is_infinite(infinity)
+  assert is_finite(max_value)
+  assert !is_finite(neg_infinity)
+}

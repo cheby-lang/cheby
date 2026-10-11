@@ -1,0 +1,8 @@
+error[E0047]: mismatched types
+  --> tests/ui/05-expressions/records/update_base_wrong_type.cheby:15:13
+   |
+15 |   Point { ..size, x: 1 }
+   |   -----     ^^^^ expected `Point`, found `Size`
+   |   |
+   |   expected because of this type name
+

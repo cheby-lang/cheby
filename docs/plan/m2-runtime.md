@@ -34,7 +34,7 @@ Detail level: workstreams with outcomes. This file is refined into tasks when M2
 - Stack regions with fixed reservations, 8 MiB by default and more for the root fiber, configurable per spawn and at build time, pages returned with `madvise` on reuse (D-124, D-125, ADR-0032).
 - The combined yield and stack-limit check at every function entry (D-028).
 - M:N work-stealing scheduler, one thread per core by default, overridable through an environment variable and `std::runtime` (D-012, D-175).
-- Scopes, `spawn`, `join`, detached fibers, the first-panic rule and `fiber::Panic` (D-040, D-073, D-176, D-177, D-178).
+- Scopes, `spawn`, `join`, detached fibers, the first-panic rule and `fiber::Panic`, whose message is the message line of the panic report (D-040, D-073, D-176, D-177, D-178, D-473).
 - Cancellation delivered at suspension points and entry checks, unwinding like a panic and uncatchable (D-102, ADR-0029).
 - Timeouts with `TimedOut` and `Panicked` (D-103, D-181).
 - Program exit: wait for `main`'s scopes, kill detached fibers without unwinding (D-073).
@@ -59,10 +59,15 @@ Detail level: workstreams with outcomes. This file is refined into tasks when M2
 
 - `cheby test` runs each test in its own fiber and scope, in parallel (§13.6).
 
+### 2.9 Collection benchmarks
+
+- The sorted, insertion-ordered and multimap collections written in Cheby are benchmarked against a Rust tree, with Perceus reuse on, to settle OQ-P13, the factor by which a Cheby collection may be slower before it moves to a runtime kernel (D-274, D-336).
+
 ## Exit criteria
 
-- 005, 009, 013, 018, 019, 022 and 028 pass on the JIT, in addition to the M1 examples.
+- 005, 009, 013, 018, 019, 022 and 028 pass `cheby check` and run on the JIT, in addition to the M1 examples. They import tier-2 modules, so they are checked from this milestone (D-477).
 - Every example passes with 1, 2 and the default number of scheduler threads.
 - ThreadSanitizer and AddressSanitizer jobs are clean on the conformance suite.
 - Reuse is reported for the record-update and kernel cases of §9.3 in the examples.
 - The tier-2 stdlib is implemented on native.
+- The collection benchmarks are reported, and OQ-P13 is settled.

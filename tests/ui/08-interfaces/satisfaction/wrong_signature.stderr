@@ -1,0 +1,12 @@
+error[E0063]: `Money` does not satisfy `Show`
+  --> tests/ui/08-interfaces/satisfaction/wrong_signature.cheby:18:17
+   |
+12 | fn show(m: Money, currency: String) -> String {
+   |    ---- `show` has the signature `show(Money, String) -> String`
+...
+18 |   io::println("{price}")
+   |                 ^^^^^ interpolated here
+   |
+   = note: `Show` needs `show(Money) -> String` (§8.2)
+   = help: write `{price:?}` to use debug printing instead (D-086)
+

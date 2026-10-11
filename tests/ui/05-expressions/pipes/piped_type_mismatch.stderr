@@ -1,0 +1,8 @@
+error[E0047]: mismatched types
+  --> tests/ui/05-expressions/pipes/piped_type_mismatch.cheby:10:11
+   |
+10 |   let x = "two" |> double
+   |           ^^^^^    ------ arguments to this function are incorrect
+   |           |
+   |           expected `Int`, found `String`
+

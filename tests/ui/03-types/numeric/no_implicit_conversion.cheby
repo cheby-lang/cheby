@@ -1,0 +1,13 @@
+// @mode: check-fail
+// @decisions: D-047, D-105
+//! There are no implicit numeric conversions: an `I32` is not an `Int`,
+//! even where every value would fit (§3.3.5).
+
+fn widen(small: I32) -> Int {
+  small
+}
+
+fn main() {
+  let n: I32 = 1
+  assert widen(n) == 1
+}

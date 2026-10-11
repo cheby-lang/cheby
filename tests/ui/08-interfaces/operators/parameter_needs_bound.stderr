@@ -1,0 +1,9 @@
+error[E0063]: `T` does not satisfy `Compare`
+ --> tests/ui/08-interfaces/operators/parameter_needs_bound.cheby:8:5
+  |
+8 |     a > b => a
+  |     ^^^^^ `>` calls `compare` of the operand type
+  |
+  = note: a type parameter satisfies only the interfaces of its bounds and the ones they embed (§8.4)
+  = help: add the bound `T: Compare` (`import std::ops::{Compare}`)
+

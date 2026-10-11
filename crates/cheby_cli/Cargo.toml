@@ -13,6 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 clap.workspace = true
+cheby_diag.workspace = true
 cheby_doc.workspace = true
 cheby_driver.workspace = true
 cheby_fmt.workspace = true
@@ -34,6 +35,12 @@ harness = false
 [[test]]
 name = "ui"
 path = "../../tests/ui_harness/main.rs"
+harness = false
+
+# REPL transcripts under tests/repl/ (plan §8.3, D-546).
+[[test]]
+name = "repl"
+path = "../../tests/repl_harness/main.rs"
 harness = false
 
 [lints]

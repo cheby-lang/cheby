@@ -1,0 +1,18 @@
+// @mode: check-pass
+// @decisions: D-049, D-234
+//! A generic function's type arguments are inferred at each call, from the
+//! arguments and the expected type (§3.12.4, §3.12.5).
+
+pub fn pair<A, B>(a: A, b: B) -> (A, B) {
+  (a, b)
+}
+
+pub fn wrap<T>(value: T) -> Option<T> {
+  Some(value)
+}
+
+pub fn main() {
+  let p = pair(1, "one")
+  let small: Option<U8> = wrap(3)
+  assert p == (1, "one") && small == Some(3)
+}

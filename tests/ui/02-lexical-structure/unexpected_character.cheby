@@ -1,0 +1,10 @@
+// @mode: parse-fail
+// @decisions: D-051
+//! A line break ends a statement, so `;` is not a token, and neither is
+//! `$`.
+
+fn main() {
+  let x = 1;
+  let y = $x
+  assert x == y
+}

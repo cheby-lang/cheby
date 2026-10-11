@@ -1,0 +1,15 @@
+// @mode: check-pass
+// @decisions: D-068, D-161
+//! `panic` has type `Never` and fits wherever a value is expected
+//! (§5.14).
+
+pub fn first(items: List<Int>) -> Int {
+  case items {
+    [x, ..] => x
+    [] => panic as "no items"
+  }
+}
+
+pub fn unreachable() -> String {
+  panic
+}

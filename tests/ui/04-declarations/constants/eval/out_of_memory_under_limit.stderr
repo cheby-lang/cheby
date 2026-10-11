@@ -1,0 +1,8 @@
+error[E0075]: evaluating the constant `big` panicked
+  --> tests/ui/04-declarations/constants/eval/out_of_memory_under_limit/src/main.cheby:13:7
+   |
+13 | const big: String = string::repeat("ab", 36_028_797_018_963_968)
+   |       ^^^ its initializer panicked
+   |
+   = note: panicked at <unknown location>: out of memory
+

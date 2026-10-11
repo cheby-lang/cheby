@@ -1,0 +1,19 @@
+// @decisions: D-098, D-547
+> type Celsius = Float
+> fn warm(t: Celsius) -> Bool {
+.   t > 20.0
+. }
+> warm(25.0)
+True : Bool
+> const limit: Int = 3
+> fn under(n: Int) -> Bool {
+.   n < limit
+. }
+> under(2)
+True : Bool
+> const limit: Int = 1
+> under(2)
+False : Bool
+> interface Named {
+.   fn name(Self) -> String
+. }

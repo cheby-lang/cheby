@@ -1,0 +1,8 @@
+error[E0024]: positional access `.0` is not allowed
+ --> tests/ui/05-expressions/tuple_index.cheby:7:15
+  |
+7 |   assert pair.0 == 1
+  |               ^
+  |
+  = help: read the tuple with a pattern, such as `let (first, second) = pair`
+

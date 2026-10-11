@@ -1,6 +1,6 @@
 # `std::map`
 
-The hashed map `Map<K, V>` (§3.8, D-039). `Map` is not in the prelude: `import std::map` brings in the module and `import std::map::{Map}` the type (§3.2). This module is where the type is declared (§8.2):
+The hashed map `Map<K, V>` (§3.8, D-039). `Map` is a built-in type outside the prelude, and this module is its home module (§3.2, §7.6, D-481). The module does not declare the type again. Inside it the type is written `Map`, and other modules write `map::Map` after `import std::map`, or `Map` after `import std::map::{Map}`. Interface satisfaction treats the type as declared here (§8.2). In the form `cheby doc` prints:
 
 ```cheby
 pub type Map<K, V>
@@ -24,7 +24,7 @@ test "maps compare by contents and print sorted" {
 }
 ```
 
-Debug printing writes `map::from_list([…])`, with the entries sorted by their whole debug text, so `10` comes before `9` (D-344, D-382).
+Debug printing writes `map::from_list([…])`, with the entries sorted by their whole debug text, compared as UTF-8 bytes, so `10` comes before `9` (D-344, D-382, D-587).
 
 ## Building
 
@@ -52,7 +52,7 @@ test "new is empty" {
 pub fn from_list<K, V>(pairs: List<(K, V)>) -> Map<K, V>
 ```
 
-Returns a map with the given pairs, as if each pair were inserted in turn. When the list repeats a key, the last value wins (D-329).
+Returns a map with the given pairs, as if each pair were inserted in turn. When the list repeats a key, the last value wins (D-329), and the first of the repeated keys is kept (D-588).
 
 - **Cost:** O(n log n), effectively O(n), where n is the length of `pairs`. Required (D-300).
 
@@ -147,7 +147,7 @@ test "has_key tells whether a key is present" {
 pub fn insert<K, V>(m: Map<K, V>, key: K, value: V) -> Map<K, V>
 ```
 
-Returns the map with `value` stored under `key`, replacing any value already there.
+Returns the map with `value` stored under `key`, replacing any value already there. When a stored key is `==` to `key`, the stored key is kept. This shows only for keys that are `==` but print differently, such as `0.0` and `-0.0` (D-588).
 
 - **Cost:** O(log n), effectively constant. Required (D-300).
 
@@ -185,7 +185,7 @@ test "remove drops a key and ignores a missing one" {
 pub fn upsert<K, V>(m: Map<K, V>, key: K, update: fn(Option<V>) -> V) -> Map<K, V>
 ```
 
-Calls `update` once, with `Some` of the value stored under `key` or `None` when there is none, and stores its result under `key`.
+Calls `update` once, with `Some` of the value stored under `key` or `None` when there is none, and stores its result under `key`. As for `insert`, a stored key that is `==` to `key` is kept (D-588).
 
 - **Cost:** O(log n), effectively constant, plus the call to `update`. Required (D-300).
 

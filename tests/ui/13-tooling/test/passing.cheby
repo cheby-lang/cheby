@@ -1,0 +1,28 @@
+// @mode: run-pass
+// @command: test
+// @decisions: D-055, D-140, D-541, D-543, D-578, D-598
+//! Passing tests each print an `ok` line when they finish, in source order,
+//! then a summary. A test's own output is not captured, so it comes before
+//! the test's line, and `env::program_name` is the package's name.
+
+import std::env
+import std::io
+
+fn double(n: Int) -> Int {
+  n * 2
+}
+
+test "doubles" {
+  assert double(2) == 4
+}
+
+test "prints as it runs" {
+  let name = env::program_name()
+  io::println("hello from {name}")
+  assert double(0) == 0
+}
+
+test "returns ok" {
+  let result: Result<Nil, String> = Ok(Nil)
+  result
+}

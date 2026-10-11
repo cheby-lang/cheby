@@ -1,0 +1,40 @@
+// @mode: run-pass
+// @decisions: D-015, D-453
+//! Ten million tail calls through closures and through function values
+//! run in constant stack: a local function and the closure it makes call
+//! each other, and a function calls another passed to it as a value,
+//! which calls it back (§5.15.3, E2).
+
+import std::io
+
+fn spin(steps: Int) -> Int {
+  fn turn(i, acc) {
+    let next = fn(j) { turn(j, acc + 1) }
+    case {
+      i == 0 => acc
+      _ => next(i - 1)
+    }
+  }
+  turn(steps, 0)
+}
+
+fn is_even(n: Int, step: fn(Int) -> Bool) -> Bool {
+  case {
+    n == 0 => True
+    _ => step(n - 1)
+  }
+}
+
+fn is_odd(n: Int) -> Bool {
+  case {
+    n == 0 => False
+    _ => is_even(n - 1, is_odd)
+  }
+}
+
+fn main() {
+  let spun = spin(10_000_000)
+  let even = is_even(10_000_000, is_odd)
+  let odd = is_odd(10_000_001)
+  io::println("{spun} {even} {odd}")
+}

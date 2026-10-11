@@ -1,0 +1,8 @@
+error[E0010]: unterminated string
+ --> tests/ui/02-lexical-structure/unterminated_string_braces.cheby:9:15
+  |
+9 |   io::println("hello)
+  |               ^ this string is never closed
+  |
+  = help: add a closing `"`
+

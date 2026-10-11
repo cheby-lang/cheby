@@ -1,0 +1,97 @@
+entries
+
+fn entry main(app::main) [c] () -> i64 {
+bb0:
+  _0: value = call app::main()
+  _1: int = read_tag _0 of result
+  _2: bool = compare eq int _1, const int 0
+  branch _2, bb1, bb2
+bb1:
+  drop _0
+  return const i64 0
+bb2:
+  _3: value = field _0.0 of ctor Err
+  dup _3
+  drop _0
+  _4: value = call app::show(_3)
+  call_foreign "cheby_io_eprintln"(borrow _4) -> void
+  drop _4
+  return const i64 1
+}
+
+fn entry test(app::returns nil) [c] () -> value {
+bb0:
+  _0: value = call <test app::returns nil>()
+  drop _0
+  return const nil
+}
+
+fn entry test(app::returns ok) [c] () -> value {
+bb0:
+  _0: value = call <test app::returns ok>()
+  _1: int = read_tag _0 of result
+  _2: bool = compare eq int _1, const int 0
+  branch _2, bb1, bb2
+bb1:
+  drop _0
+  return const nil
+bb2:
+  _3: value = field _0.0 of ctor Err
+  dup _3
+  drop _0
+  _4: value = call std::string::show(_3)
+  return _4
+}
+
+fn entry test(app::returns an error without show) [c] () -> value {
+bb0:
+  _0: value = call <test app::returns an error without show>()
+  _1: int = read_tag _0 of result
+  _2: bool = compare eq int _1, const int 0
+  branch _2, bb1, bb2
+bb1:
+  drop _0
+  return const nil
+bb2:
+  _3: value = field _0.0 of ctor Err
+  dup _3
+  drop _0
+  _4: value = call_runtime debug(borrow _3)
+  drop _3
+  return _4
+}
+
+fn trampoline 0 [c] (_0: value) -> value {
+bb0:
+  _1: value = call _0()
+  return _1
+}
+
+fn trampoline 1 [c] (_0: value, _1: value) -> value {
+bb0:
+  _2: value = call _0(_1)
+  return _2
+}
+
+fn trampoline 2 [c] (_0: value, _1: value, _2: value) -> value {
+bb0:
+  _3: value = call _0(_1, _2)
+  return _3
+}
+
+fn trampoline 3 [c] (_0: value, _1: value, _2: value, _3: value) -> value {
+bb0:
+  _4: value = call _0(_1, _2, _3)
+  return _4
+}
+
+fn trampoline 4 [c] (_0: value, _1: value, _2: value, _3: value, _4: value) -> value {
+bb0:
+  _5: value = call _0(_1, _2, _3, _4)
+  return _5
+}
+
+foreign_layout ctor Err: Result.Err tag 1 key 0b7d6449ba7cbef5 [value @8]
+callee app::show(value) -> value
+callee app::main() -> value
+callee std::string::show(value) -> value

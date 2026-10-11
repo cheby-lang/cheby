@@ -1,0 +1,31 @@
+fn shim app::twice(_0: value, _1: value, _2: value) -> value check str#0 {
+  str#0 = "src/main.cheby:5:4"
+bb0:
+  drop _0
+  _3: int = unbox int _1
+  drop _1
+  _4: bool = unbox bool _2
+  drop _2
+  tail_call app::twice(_3, _4)
+}
+
+fn shim app::identity(_0: value, _1: value) -> value check str#0 {
+  str#0 = "src/main.cheby:9:4"
+bb0:
+  drop _0
+  tail_call app::identity(_1)
+}
+
+fn shim std::io::println(_0: value, _1: value) -> value check str#0 {
+  str#0 = "std/io.cheby:86:8"
+bb0:
+  drop _0
+  tail_call std::io::println(_1)
+}
+
+fn shim std::string::length(_0: value, _1: value) -> value check str#0 {
+  str#0 = "std/string.cheby:14:8"
+bb0:
+  drop _0
+  tail_call std::string::length(_1)
+}

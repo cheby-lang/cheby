@@ -1,0 +1,18 @@
+warning[W0011]: `==` on a type that contains a function
+  --> tests/ui/13-tooling/warnings/function_equality.cheby:13:3
+   |
+13 |   a == b
+   |   ^^^^^^ `Handler` contains a function type
+   |
+   = note: `==` and `!=` panic when they reach a function value at run time
+   = help: compare the parts that can be compared
+
+warning[W0011]: `!=` on a type that contains a function
+  --> tests/ui/13-tooling/warnings/function_equality.cheby:17:3
+   |
+17 |   [(1, f)] != [(1, g)]
+   |   ^^^^^^^^^^^^^^^^^^^^ `List<(Int, fn() -> Nil)>` contains a function type
+   |
+   = note: `==` and `!=` panic when they reach a function value at run time
+   = help: compare the parts that can be compared
+

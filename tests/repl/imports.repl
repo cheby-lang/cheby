@@ -1,0 +1,23 @@
+// @decisions: D-098, D-606
+> import shop::prices
+> prices::total([1, 2, 3])
+6 : Int
+> prices::discount(10)
+9 : Int
+> import std::list
+> list::length([1, 2])
+2 : Int
+> import std::nope
+error[E0039]: there is no module `std::nope`
+ --> <repl:6>:1:8
+  |
+1 | import std::nope
+  |        ^^^^^^^^^ no such module
+
+> import shop::nope
+error[E0039]: there is no module `shop::nope`
+ --> <repl:7>:1:8
+  |
+1 | import shop::nope
+  |        ^^^^^^^^^^ no such module
+

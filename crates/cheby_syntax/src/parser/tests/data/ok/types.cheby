@@ -1,0 +1,26 @@
+//! Types (App. A.3).
+type A = Int
+type B = map::Map<String, List<Int>>
+type C = List<List<List<Int>>>
+type D = (Int, (String, Bool), fn() -> Int)
+type E = fn(fn(Int) -> Int) -> fn(Int) -> Int
+type F = dyn Show
+type G = dyn fmt::Display
+type H<T> = Result<T, List<String>>
+
+const empty: List<Int>= []
+const nested: List<List<Int>>= []
+
+fn f(x: Self, g: fn(Int)) -> Option<(Int, Int)> {
+  x
+}
+
+fn spans() -> map::Map<
+  String,
+  List<Int>,
+> {
+  map::new::<
+    String,
+    List<Int>,
+  >()
+}

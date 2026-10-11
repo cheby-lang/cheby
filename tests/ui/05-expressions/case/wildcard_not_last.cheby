@@ -1,0 +1,15 @@
+// @mode: check-fail
+// @decisions: D-109, D-439
+//! In a `case` without a subject, `_` may only be the last arm (§5.9.5).
+
+fn sign(n: Int) -> Int {
+  case {
+    n > 0 => 1
+    _ => 0
+    n < 0 => -1
+  }
+}
+
+fn main() {
+  assert sign(2) == 1
+}

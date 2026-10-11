@@ -1,0 +1,11 @@
+error[E0059]: missing field `y` in `Point`
+  --> tests/ui/05-expressions/records/missing_field.cheby:11:3
+   |
+5  | type Point {
+   |      ----- `Point` is declared here
+...
+11 |   Point { x: 0 }
+   |   ^^^^^ missing `y`
+   |
+   = note: a named-field constructor must initialize every field (§5.11.1)
+

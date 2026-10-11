@@ -1,0 +1,18 @@
+// @mode: run-fail
+// @exit: 1
+// @decisions: D-064, D-182, D-355
+//! An `Err` from `main` is written by its type's `show` even when that
+//! `show` needs dictionaries, as for a `List` of a user type (§10.10).
+
+type Problem {
+  Problem(String),
+}
+
+fn show(p: Problem) -> String {
+  let Problem(text) = p
+  "problem: {text}"
+}
+
+fn main() -> Result<Nil, List<Problem>> {
+  Err([Problem("disk"), Problem("network")])
+}

@@ -1,0 +1,18 @@
+error[E0063]: `Vector` does not satisfy `Add`
+  --> tests/ui/08-interfaces/operators/missing_function.cheby:14:10
+   |
+14 |   assert a + b == b
+   |          ^^^^^ `+` calls `add` of the operand type
+   |
+   = note: this module declares `Vector` but has no function `add(Vector, Vector) -> Vector` (§8.2, D-061)
+   = help: add a function `add(Vector, Vector) -> Vector` to this module
+
+error[E0063]: `Vector` does not satisfy `Compare`
+  --> tests/ui/08-interfaces/operators/missing_function.cheby:15:10
+   |
+15 |   assert a < b
+   |          ^^^^^ `<` calls `compare` of the operand type
+   |
+   = note: this module declares `Vector` but has no function `compare(Vector, Vector) -> Order` (§8.2, D-061)
+   = help: add a function `compare(Vector, Vector) -> Order` to this module
+

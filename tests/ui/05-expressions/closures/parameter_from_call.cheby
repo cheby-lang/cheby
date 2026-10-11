@@ -1,0 +1,13 @@
+// @mode: check-pass
+// @decisions: D-011, D-234
+//! A closure argument takes its parameter types from the callee's
+//! signature (§5.7).
+
+pub fn twice(f: fn(Int) -> Int, x: Int) -> Int {
+  f(f(x))
+}
+
+pub fn main() {
+  let four = twice(fn(x) { x + 1 }, 2)
+  assert four == 4
+}

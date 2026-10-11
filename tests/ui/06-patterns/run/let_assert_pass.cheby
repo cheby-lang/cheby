@@ -1,0 +1,29 @@
+// @mode: run-pass
+// @decisions: D-068, D-159
+//! A `let assert` whose pattern matches binds its names for the rest of
+//! the block, and its `as` message is never evaluated (§11.4).
+
+import std::io
+
+fn find(id: Int) -> Option<String> {
+  case id {
+    1 => Some("ada")
+    _ => None
+  }
+}
+
+fn parse(text: String) -> Result<Int, String> {
+  case text {
+    "3" => Ok(3)
+    _ => Err(text)
+  }
+}
+
+fn main() {
+  let assert Some(name) = find(1)
+  io::println(name)
+  let assert [first, .., last] = ["a", "b", "c"]
+  io::println("{first}{last}")
+  let assert Ok(n) = parse("3") as panic as "not evaluated"
+  io::println("{n}")
+}

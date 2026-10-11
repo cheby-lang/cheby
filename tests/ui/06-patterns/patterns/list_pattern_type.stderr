@@ -1,0 +1,10 @@
+error[E0047]: mismatched types
+ --> tests/ui/06-patterns/patterns/list_pattern_type.cheby:7:5
+  |
+6 |   case text {
+  |        ---- this subject has type `String`
+7 |     [c, ..] => c
+  |     ^^^^^^^ expected `String`, found `List<_>`
+  |
+  = note: a pattern matches values of the type of its subject
+

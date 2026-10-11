@@ -1,0 +1,30 @@
+// @mode: check-fail
+// @decisions: D-046, D-117
+//! `dyn I` satisfies `I` and the interfaces `I` embeds, and no others, even
+//! when the value inside satisfies them (§8.6).
+
+interface Shape {
+  fn area(Self) -> Float
+}
+
+type Circle { radius: Float }
+
+fn area(c: Circle) -> Float {
+  c.radius * c.radius * 3.0
+}
+
+fn show(c: Circle) -> String {
+  case c.radius == 0.0 {
+    True => "dot"
+    False => "circle"
+  }
+}
+
+fn describe<T: Show>(value: T) -> String {
+  Show::show(value)
+}
+
+fn main() {
+  let s: dyn Shape = Circle { radius: 1.0 }
+  assert describe(s) == "circle" && describe(Circle { radius: 2.0 }) != ""
+}

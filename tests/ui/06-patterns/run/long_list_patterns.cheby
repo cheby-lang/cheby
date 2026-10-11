@@ -1,0 +1,71 @@
+// @mode: run-pass
+// @decisions: D-053, D-158, D-052
+//! A `case` whose list patterns name many lengths still tries its arms in
+//! order (§6.6, §5.9): exact lengths, spreads with long prefixes and their
+//! rests, a guard that falls through, and a catch-all prefix. The patterns
+//! name more than eight lengths, so the compiler tests one element at a
+//! time instead of switching on every length.
+
+import std::io
+import std::list
+
+fn classify(xs: List<Int>) -> String {
+  case xs {
+    [] => "empty"
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] => "ten exactly"
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, ..rest] => {
+      let more = list::length(rest)
+      "one to nine, then {more} more"
+    }
+    [x] when x > 100 => "one big: {x}"
+    [1, 2, 3, ..rest] => {
+      let more = list::length(rest)
+      "one two three, then {more} more"
+    }
+    [a, b] => "pair: {a} {b}"
+    [first, ..] => "starts with {first}"
+  }
+}
+
+/// The longest prefix of `0, 1, 2, …` that `xs` starts with, up to 12,
+/// written longest first.
+fn depth(xs: List<Int>) -> Int {
+  case xs {
+    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, ..] => 12
+    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, ..] => 11
+    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, ..] => 10
+    [0, 1, 2, 3, 4, 5, 6, 7, 8, ..] => 9
+    [0, 1, 2, 3, 4, 5, 6, 7, ..] => 8
+    [0, 1, 2, 3, 4, 5, 6, ..] => 7
+    [0, 1, 2, 3, 4, 5, ..] => 6
+    [0, 1, 2, 3, 4, ..] => 5
+    [0, 1, 2, 3, ..] => 4
+    [0, 1, 2, ..] => 3
+    [0, 1, ..] => 2
+    [0, ..] => 1
+    _ => 0
+  }
+}
+
+fn main() {
+  io::println(classify([]))
+  io::println(classify([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]))
+  io::println(classify([1, 2, 3, 4, 5, 6, 7, 8, 9]))
+  io::println(classify([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]))
+  io::println(classify([1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 0, 0]))
+  io::println(classify([200]))
+  io::println(classify([5]))
+  io::println(classify([1, 2, 3]))
+  io::println(classify([1, 2, 3, 4]))
+  io::println(classify([1, 2]))
+  io::println(classify([7, 8, 9]))
+  io::println(classify([1, 2, 4, 8, 16, 32, 64, 128, 256, 512]))
+  let depths = [
+    depth([]),
+    depth([0]),
+    depth([0, 1, 2, 3, 9]),
+    depth([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]),
+    depth([1, 0]),
+  ]
+  io::println("{depths:?}")
+}

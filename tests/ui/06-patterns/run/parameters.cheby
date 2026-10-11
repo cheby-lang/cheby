@@ -1,0 +1,23 @@
+// @mode: run-pass
+// @decisions: D-242
+//! Closure and local-function parameters are irrefutable patterns that
+//! take their argument apart like a `let` (§5.7, §5.8).
+
+import std::int
+import std::io
+
+type Point {
+  Point { x: Int, y: Int },
+}
+
+fn main() {
+  let add = fn((a, b)) { a + b }
+  io::println(int::show(add((2, 3))))
+  let x_of = fn(Point { x, .. }) { x }
+  io::println(int::show(x_of(Point { x: 4, y: 5 })))
+  fn swap((left, right): (String, String)) -> (String, String) {
+    (right, left)
+  }
+  let (one, two) = swap(("a", "b"))
+  io::println("{one}{two}")
+}

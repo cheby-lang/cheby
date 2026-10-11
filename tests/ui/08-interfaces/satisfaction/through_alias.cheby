@@ -1,0 +1,22 @@
+// @mode: check-pass
+// @decisions: D-020, D-081
+//! An alias satisfies the interfaces of the type it stands for, through
+//! that type's module (§8.2).
+
+type Label { Label(String) }
+
+type Name = Label
+
+fn show(label: Label) -> String {
+  let Label(text) = label
+  text
+}
+
+fn describe<T: Show>(value: T) -> String {
+  Show::show(value)
+}
+
+fn main() {
+  let name: Name = Label("a")
+  assert describe(name) == "a"
+}

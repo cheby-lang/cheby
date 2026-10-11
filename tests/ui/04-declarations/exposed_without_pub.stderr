@@ -1,0 +1,8 @@
+error[E0022]: `exposed` requires `pub`
+ --> tests/ui/04-declarations/exposed_without_pub.cheby:6:1
+  |
+6 | exposed type Point {
+  | ^^^^^^^
+  |
+  = help: make the type `pub` as well
+

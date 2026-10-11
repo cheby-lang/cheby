@@ -1,0 +1,12 @@
+error[E0051]: `Result` takes 2 type arguments but 1 was given
+ --> tests/ui/06-patterns/exhaustiveness/error_subject.cheby:6:13
+  |
+6 | fn count(r: Result<Int>) -> Int {
+  |             ^^^^^^^^^^^ expected 2 type arguments
+
+error[E0042]: cannot find type `Unknown` in this scope
+  --> tests/ui/06-patterns/exhaustiveness/error_subject.cheby:13:14
+   |
+13 | fn first(xs: Unknown) -> Int {
+   |              ^^^^^^^ not found
+

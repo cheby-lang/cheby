@@ -1,0 +1,8 @@
+// @mode: run-fail
+// @decisions: D-092, D-449
+//! A shift by a negative amount panics (§5.4.6).
+
+fn main() {
+  let n = -1
+  let _ = 8 >> n
+}

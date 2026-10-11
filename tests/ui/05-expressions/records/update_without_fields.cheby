@@ -1,0 +1,14 @@
+// @mode: check-fail
+// @decisions: D-156
+//! A record update lists at least one field (§5.11.2).
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+fn main() {
+  let p = Point { x: 1, y: 2 }
+  let q = Point { ..p }
+  assert q == p
+}

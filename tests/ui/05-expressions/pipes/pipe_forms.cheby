@@ -1,0 +1,25 @@
+// @mode: check-pass
+// @decisions: D-244, D-245
+//! `x |> f(a, _)` passes `x` at the hole, and `x |> g` calls `g` with `x`
+//! alone; `x` is evaluated first (§5.16).
+
+pub fn add(a: Int, b: Int) -> Int {
+  a + b
+}
+
+pub fn double(n: Int) -> Int {
+  n * 2
+}
+
+pub fn adder(n: Int) -> fn(Int) -> Int {
+  fn(x) { x + n }
+}
+
+pub fn main() {
+  let a = 1 |> double
+  let b = a |> add(_, 1)
+  let c = b |> add(10, _)
+  let d = c |> (adder(5))
+  let e = [1, 2] |> fn(xs) { xs == [] }
+  assert d == 18 && !e
+}

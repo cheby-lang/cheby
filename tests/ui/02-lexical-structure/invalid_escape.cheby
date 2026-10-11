@@ -1,0 +1,12 @@
+// @mode: check-fail
+// @decisions: D-114
+//! The escapes are `\n \t \r \\ \" \{ \u{…}`, and `\u{…}` names a Unicode
+//! scalar value with one to six hex digits.
+
+fn main() {
+  let a = "tab\q"
+  let b = "\u{110000}"
+  let c = "\u{}"
+  assert a != b
+  assert b != c
+}

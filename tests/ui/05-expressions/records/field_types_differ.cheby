@@ -1,0 +1,16 @@
+// @mode: check-fail
+// @decisions: D-071
+//! A field read without `case` must have one type in every variant.
+
+type Value {
+  Small { n: Int },
+  Big { n: String },
+}
+
+fn size(value: Value) -> Int {
+  value.n
+}
+
+fn main() {
+  assert size(Small { n: 1 }) == 1
+}

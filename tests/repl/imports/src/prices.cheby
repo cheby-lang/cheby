@@ -1,0 +1,13 @@
+//! Prices.
+
+import std::list
+
+/// The sum of `items`.
+pub fn total(items: List<Int>) -> Int {
+  list::fold(items, 0, fn(sum, n) { sum + n })
+}
+
+/// A package-visible helper.
+fn discount(price: Int) -> Int {
+  price - 1
+}

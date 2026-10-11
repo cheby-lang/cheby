@@ -1,0 +1,8 @@
+error[E0034]: interpolation in a string pattern
+ --> tests/ui/06-patterns/interpolated_pattern.cheby:8:9
+  |
+8 |     "hi {name}" => True
+  |         ^^^^^^
+  |
+  = help: a string pattern matches fixed text; compare with `==` in a guard
+

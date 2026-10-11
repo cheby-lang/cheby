@@ -1,0 +1,5 @@
+//! Holds a greeting for the other modules of the package.
+
+fn text() -> String {
+  "Hello from a sibling module!"
+}

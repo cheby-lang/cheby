@@ -1,0 +1,21 @@
+// @mode: check-fail
+// @decisions: D-148, D-149
+//! An item's signature must not mention a type less visible than the item
+//! itself (§7.4).
+
+priv type Secret { Secret(String) }
+
+type Token { Token(String) }
+
+fn reveal() -> Secret {
+  Secret("hidden")
+}
+
+pub fn issue() -> Token {
+  Token("token")
+}
+
+fn main() {
+  let _ = reveal()
+  let _ = issue()
+}

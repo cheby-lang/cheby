@@ -1,0 +1,136 @@
+SOURCE_FILE@0..109
+  FN_DECL@0..108
+    FN_KW@0..2 "fn"
+    WHITESPACE@2..3 " "
+    LOWER_IDENT@3..4 "f"
+    PARAM_LIST@4..12
+      L_PAREN@4..5 "("
+      PARAM@5..11
+        IDENT_PAT@5..6
+          LOWER_IDENT@5..6 "x"
+        COLON@6..7 ":"
+        WHITESPACE@7..8 " "
+        PATH_TYPE@8..11
+          PATH@8..11
+            UPPER_IDENT@8..11 "Int"
+      R_PAREN@11..12 ")"
+    WHITESPACE@12..13 " "
+    BLOCK@13..108
+      L_BRACE@13..14 "{"
+      NEWLINE@14..15 "\n"
+      WHITESPACE@15..17 "  "
+      CASE_EXPR@17..106
+        CASE_KW@17..21 "case"
+        WHITESPACE@21..22 " "
+        PATH_EXPR@22..23
+          PATH@22..23
+            LOWER_IDENT@22..23 "x"
+        WHITESPACE@23..24 " "
+        CASE_BODY@24..106
+          L_BRACE@24..25 "{"
+          NEWLINE@25..26 "\n"
+          WHITESPACE@26..30 "    "
+          CASE_ARM@30..40
+            CTOR_PAT@30..35
+              PATH@30..34
+                UPPER_IDENT@30..34 "Some"
+              POS_PAT_LIST@34..35
+                L_PAREN@34..35 "("
+            WHITESPACE@35..36 " "
+            FAT_ARROW@36..38 "=>"
+            WHITESPACE@38..39 " "
+            LITERAL@39..40
+              INT_NUMBER@39..40 "1"
+          NEWLINE@40..41 "\n"
+          WHITESPACE@41..45 "    "
+          CASE_ARM@45..55
+            LIST_PAT@45..50
+              L_BRACK@45..46 "["
+              LITERAL_PAT@46..47
+                INT_NUMBER@46..47 "1"
+              COMMA@47..48 ","
+              WHITESPACE@48..49 " "
+              LITERAL_PAT@49..50
+                INT_NUMBER@49..50 "2"
+            WHITESPACE@50..51 " "
+            FAT_ARROW@51..53 "=>"
+            WHITESPACE@53..54 " "
+            LITERAL@54..55
+              INT_NUMBER@54..55 "2"
+          NEWLINE@55..56 "\n"
+          WHITESPACE@56..60 "    "
+          CASE_ARM@60..77
+            CTOR_PAT@60..72
+              PATH@60..65
+                UPPER_IDENT@60..65 "Point"
+              WHITESPACE@65..66 " "
+              FIELD_PAT_LIST@66..72
+                L_BRACE@66..67 "{"
+                WHITESPACE@67..68 " "
+                FIELD_PAT@68..70
+                  LOWER_IDENT@68..69 "x"
+                  COLON@69..70 ":"
+                WHITESPACE@70..71 " "
+                R_BRACE@71..72 "}"
+            WHITESPACE@72..73 " "
+            FAT_ARROW@73..75 "=>"
+            WHITESPACE@75..76 " "
+            LITERAL@76..77
+              INT_NUMBER@76..77 "3"
+          NEWLINE@77..78 "\n"
+          WHITESPACE@78..82 "    "
+          CASE_ARM@82..88
+            LITERAL_PAT@82..83
+              MINUS@82..83 "-"
+            WHITESPACE@83..84 " "
+            FAT_ARROW@84..86 "=>"
+            WHITESPACE@86..87 " "
+            LITERAL@87..88
+              INT_NUMBER@87..88 "4"
+          NEWLINE@88..89 "\n"
+          WHITESPACE@89..93 "    "
+          CASE_ARM@93..102
+            IDENT_PAT@93..97
+              LOWER_IDENT@93..97 "good"
+            WHITESPACE@97..98 " "
+            FAT_ARROW@98..100 "=>"
+            WHITESPACE@100..101 " "
+            LITERAL@101..102
+              INT_NUMBER@101..102 "5"
+          NEWLINE@102..103 "\n"
+          WHITESPACE@103..105 "  "
+          R_BRACE@105..106 "}"
+      NEWLINE@106..107 "\n"
+      R_BRACE@107..108 "}"
+  NEWLINE@108..109 "\n"
+
+// errors
+
+error[E0015]: unclosed `(`
+ --> err/recovery_patterns.cheby:3:11
+  |
+3 |     Some( => 1
+  |         - ^^ expected `)`
+  |         |
+  |         this `(` is never closed
+
+error[E0015]: unclosed `[`
+ --> err/recovery_patterns.cheby:4:11
+  |
+4 |     [1, 2 => 2
+  |     -     ^^ expected `]`
+  |     |
+  |     this `[` is never closed
+
+error[E0013]: expected a pattern, found `}`
+ --> err/recovery_patterns.cheby:5:16
+  |
+5 |     Point { x: } => 3
+  |                ^
+
+error[E0013]: expected a number, found `=>`
+ --> err/recovery_patterns.cheby:6:7
+  |
+6 |     - => 4
+  |       ^^
+

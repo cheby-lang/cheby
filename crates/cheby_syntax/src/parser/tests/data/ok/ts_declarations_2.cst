@@ -1,0 +1,131 @@
+SOURCE_FILE@0..199
+  TYPE_DECL@0..92
+    DOC_COMMENT@0..12 "/// A value."
+    NEWLINE@12..13 "\n"
+    VISIBILITY@13..16
+      PUB_KW@13..16 "pub"
+    WHITESPACE@16..17 " "
+    EXPOSED_KW@17..24 "exposed"
+    WHITESPACE@24..25 " "
+    TYPE_KW@25..29 "type"
+    WHITESPACE@29..30 " "
+    UPPER_IDENT@30..35 "Value"
+    WHITESPACE@35..36 " "
+    VARIANT_LIST@36..92
+      L_BRACE@36..37 "{"
+      NEWLINE@37..38 "\n"
+      WHITESPACE@38..40 "  "
+      VARIANT@40..44
+        UPPER_IDENT@40..44 "Null"
+      COMMA@44..45 ","
+      NEWLINE@45..46 "\n"
+      WHITESPACE@46..48 "  "
+      VARIANT@48..61
+        UPPER_IDENT@48..54 "Number"
+        POS_FIELD_LIST@54..61
+          L_PAREN@54..55 "("
+          PATH_TYPE@55..60
+            PATH@55..60
+              UPPER_IDENT@55..60 "Float"
+          R_PAREN@60..61 ")"
+      COMMA@61..62 ","
+      NEWLINE@62..63 "\n"
+      WHITESPACE@63..65 "  "
+      VARIANT@65..89
+        UPPER_IDENT@65..70 "Point"
+        WHITESPACE@70..71 " "
+        RECORD_FIELD_LIST@71..89
+          L_BRACE@71..72 "{"
+          WHITESPACE@72..73 " "
+          RECORD_FIELD@73..79
+            LOWER_IDENT@73..74 "x"
+            COLON@74..75 ":"
+            WHITESPACE@75..76 " "
+            PATH_TYPE@76..79
+              PATH@76..79
+                UPPER_IDENT@76..79 "Int"
+          COMMA@79..80 ","
+          WHITESPACE@80..81 " "
+          RECORD_FIELD@81..87
+            LOWER_IDENT@81..82 "y"
+            COLON@82..83 ":"
+            WHITESPACE@83..84 " "
+            PATH_TYPE@84..87
+              PATH@84..87
+                UPPER_IDENT@84..87 "Int"
+          WHITESPACE@87..88 " "
+          R_BRACE@88..89 "}"
+      COMMA@89..90 ","
+      NEWLINE@90..91 "\n"
+      R_BRACE@91..92 "}"
+  NEWLINE@92..93 "\n"
+  NEWLINE@93..94 "\n"
+  TYPE_DECL@94..145
+    TYPE_KW@94..98 "type"
+    WHITESPACE@98..99 " "
+    UPPER_IDENT@99..106 "Counter"
+    WHITESPACE@106..107 " "
+    RECORD_FIELD_LIST@107..145
+      L_BRACE@107..108 "{"
+      WHITESPACE@108..109 " "
+      RECORD_FIELD@109..143
+        LOWER_IDENT@109..117 "requests"
+        COLON@117..118 ":"
+        WHITESPACE@118..119 " "
+        PATH_TYPE@119..143
+          PATH@119..134
+            LOWER_IDENT@119..126 "channel"
+            COLON2@126..128 "::"
+            UPPER_IDENT@128..134 "Sender"
+          TYPE_ARG_LIST@134..143
+            LT@134..135 "<"
+            PATH_TYPE@135..142
+              PATH@135..142
+                UPPER_IDENT@135..142 "Request"
+            GT@142..143 ">"
+      WHITESPACE@143..144 " "
+      R_BRACE@144..145 "}"
+  NEWLINE@145..146 "\n"
+  NEWLINE@146..147 "\n"
+  TYPE_DECL@147..172
+    ATTR@147..164
+      AT@147..148 "@"
+      LOWER_IDENT@148..156 "external"
+      ATTR_ARG_LIST@156..164
+        L_PAREN@156..157 "("
+        LOWER_IDENT@157..163 "native"
+        R_PAREN@163..164 ")"
+    NEWLINE@164..165 "\n"
+    TYPE_KW@165..169 "type"
+    WHITESPACE@169..170 " "
+    UPPER_IDENT@170..172 "Db"
+  NEWLINE@172..173 "\n"
+  NEWLINE@173..174 "\n"
+  ALIAS_DECL@174..198
+    TYPE_KW@174..178 "type"
+    WHITESPACE@178..179 " "
+    UPPER_IDENT@179..183 "Pair"
+    TYPE_PARAM_LIST@183..189
+      LT@183..184 "<"
+      TYPE_PARAM@184..185
+        UPPER_IDENT@184..185 "A"
+      COMMA@185..186 ","
+      WHITESPACE@186..187 " "
+      TYPE_PARAM@187..188
+        UPPER_IDENT@187..188 "B"
+      GT@188..189 ">"
+    WHITESPACE@189..190 " "
+    EQ@190..191 "="
+    WHITESPACE@191..192 " "
+    TUPLE_TYPE@192..198
+      L_PAREN@192..193 "("
+      PATH_TYPE@193..194
+        PATH@193..194
+          UPPER_IDENT@193..194 "A"
+      COMMA@194..195 ","
+      WHITESPACE@195..196 " "
+      PATH_TYPE@196..197
+        PATH@196..197
+          UPPER_IDENT@196..197 "B"
+      R_PAREN@197..198 ")"
+  NEWLINE@198..199 "\n"

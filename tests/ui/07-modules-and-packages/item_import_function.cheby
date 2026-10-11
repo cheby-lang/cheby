@@ -1,0 +1,10 @@
+// @mode: check-pass
+// @decisions: D-111
+//! An item import brings a function into scope, so it is called without
+//! its module's name.
+
+import std::io::{println}
+
+fn main() {
+  println("Hello!")
+}

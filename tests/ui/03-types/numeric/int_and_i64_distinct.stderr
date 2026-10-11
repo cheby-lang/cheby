@@ -1,0 +1,8 @@
+error[E0047]: mismatched types
+ --> tests/ui/03-types/numeric/int_and_i64_distinct.cheby:7:3
+  |
+6 | fn to_int(wide: I64) -> Int {
+  |                         --- expected because of this return type
+7 |   wide
+  |   ^^^^ expected `Int`, found `I64`
+

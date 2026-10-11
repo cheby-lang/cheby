@@ -1,0 +1,26 @@
+// @mode: check-pass
+// @decisions: D-055, D-140
+//! A test body may return `Result<Nil, E>`, and it can use every item of
+//! its module, `priv` ones included (§4.7).
+
+priv fn half(n: Int) -> Result<Int, String> {
+  case n % 2 {
+    0 => Ok(n / 2)
+    _ => Err("odd")
+  }
+}
+
+test "half of an even number" {
+  case half(4) {
+    Ok(2) => Ok(Nil)
+    _ => Err("wrong half")
+  }
+}
+
+test "half of an odd number fails" {
+  assert half(3) == Err("odd")
+}
+
+fn main() {
+  assert half(2) == Ok(1)
+}

@@ -1,0 +1,10 @@
+// @mode: parse-fail
+// @decisions: D-114
+//! A string literal needs its closing quote. Strings may span lines, so
+//! the string runs to the end of the file and the error points at its
+//! opening quote.
+
+fn main() {
+  let s = "hello
+  assert s == s
+}

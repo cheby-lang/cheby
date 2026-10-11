@@ -1,0 +1,19 @@
+//! Text helpers.
+
+/// Returns the text loudly.
+@deprecated("use `shout` instead")
+pub fn yell(s: String) -> String {
+  s
+}
+
+/// Returns the text loudly.
+pub fn shout(s: String) -> String {
+  yell(s)
+}
+
+/// How loud a text is.
+@deprecated("volumes are going away")
+pub type Volume {
+  Loud,
+  Quiet,
+}

@@ -1,0 +1,8 @@
+error[E0059]: the pattern does not list the field `y` of `Point`
+  --> tests/ui/06-patterns/patterns/missing_fields_without_rest.cheby:11:13
+   |
+11 |   let Point { x } = p
+   |             ^^^^^ missing `y`
+   |
+   = help: list the missing fields, or add `..` to ignore the fields not listed
+

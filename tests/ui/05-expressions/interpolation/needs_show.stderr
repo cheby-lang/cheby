@@ -1,0 +1,10 @@
+error[E0063]: `Point` does not satisfy `Show`
+  --> tests/ui/05-expressions/interpolation/needs_show.cheby:12:11
+   |
+12 |   "point {p}"
+   |           ^ interpolated here
+   |
+   = note: this module declares `Point` but has no function `show(Point) -> String` (§8.2, D-061)
+   = help: add a function `show(Point) -> String` to this module
+   = help: write `{p:?}` to use debug printing instead (D-086)
+

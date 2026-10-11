@@ -1,0 +1,12 @@
+error[E0074]: the package-visible constant `start` mentions the `priv` type `Level`
+ --> tests/ui/04-declarations/visibility/constant_type_less_visible.cheby:8:14
+  |
+6 | priv type Level { Level(Int) }
+  |           ----- declared here
+7 |
+8 | const start: Level = Level(1)
+  |              ^^^^^ `priv` type
+  |
+  = note: code that can use `start` could not name `Level` (D-149)
+  = help: make `Level` package-visible, or make `start` `priv`
+

@@ -98,6 +98,8 @@ Structured concurrency ([§10.3](10-concurrency.md#103-scopes)) prevents the mos
 
 The values of module constants are computed at compile time ([§4.5](04-declarations.md#45-constants)) and stored in the program image (D-090). They are shared by all fibers, are never reference counted, and are never freed. Reference count operations on a constant's value are no-ops.
 
+_Note:_ the JIT of the reference implementation evaluates constants in the process that runs the program, and makes each result static where it was built: its objects get count 0 and leave the leak check. A serialized image of the results comes with the build cache (D-539).
+
 ## 9.8 Memory on the JS target
 
 On the JS target, ordinary values are managed by the JS engine's garbage collector, and no reference counts are kept for them (D-100). This is not observable, because values are immutable and identity is not observable ([§9.1](#91-values-and-sharing)).

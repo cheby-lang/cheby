@@ -1,0 +1,14 @@
+// @mode: check-fail
+// @decisions: D-081
+//! An alias names an existing type; a single-variant type is a new one,
+//! so an `Int` is not a `UserId`.
+
+pub type UserId { UserId(Int) }
+
+pub fn lookup(id: UserId) -> UserId {
+  id
+}
+
+pub fn wrong() -> UserId {
+  lookup(42)
+}

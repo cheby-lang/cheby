@@ -1,16 +1,36 @@
 //! Developer commands (docs/plan/m0-foundation.md, task 0.10):
 //!
 //! - `bless`: rewrites the goldens of examples and UI tests from the
-//!   current `cheby` binary.
+//!   current `cheby` binary, including the goldens beside package UI tests
+//!   (directories with their own `cheby.toml`). An example's `cheby test`
+//!   trial has no goldens, so blessing only runs it.
 //! - `gen-bench`: generates a synthetic benchmark project.
 //! - `check-determinism`: checks that outputs are the same byte for byte
 //!   from different paths (D-264).
-//! - `coverage`: lists decisions cited in the spec that no UI test names.
+//! - `coverage`: lists decisions cited in the spec that no UI test or REPL
+//!   transcript names, reading `@decisions` from each test's header
+//!   (`src/main.cheby` of a package test) and from each transcript's
+//!   header (D-638).
 //! - `cross-check`: parses examples and UI tests with `tree-sitter-cheby`
-//!   at the pinned commit (D-272).
+//!   at the pinned commit and with the compiler parser, and fails if they
+//!   disagree (D-272).
+//! - `test-std`: checks every shipped std module with its `test` blocks
+//!   and runs them, one batch per module (D-479, D-542).
+//! - `bench-compile`: compile-speed numbers on generated projects (I1,
+//!   D-247, plan §8.5).
+//! - `check-examples`: runs `cheby check` in every example directory and
+//!   compares the outcome with the expected one (G6).
+//! - `bench-build` (hidden): checks and compiles every function of a
+//!   package on `--jobs` threads and prints the times; `bench-compile` and
+//!   `check-determinism` run it as a child process, since the size of
+//!   rayon's global pool is fixed once per process.
 
+mod bench;
 mod cross_check;
+mod determinism;
+mod examples;
 
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::time::Instant;
@@ -51,16 +71,48 @@ enum Cmd {
         #[arg(long)]
         summary: Option<PathBuf>,
     },
-    /// Check that outputs do not depend on the absolute path (D-264)
+    /// Check that outputs depend neither on the absolute path nor on the
+    /// number of threads (D-264, D-551)
     CheckDeterminism {
-        /// Lines per generated project
-        #[arg(long, default_value_t = 50_000)]
+        /// Lines per generated project (at least 40k for `large`)
+        #[arg(long, default_value_t = 20_000)]
         lines: usize,
+        /// Only build the examples and projects whose name contains this
+        filter: Option<String>,
     },
+    /// Run `cheby check` in every example and compare with the expected
+    /// outcome
+    CheckExamples,
     /// List decisions cited in the spec that no UI test names
     Coverage,
-    /// Parse examples and UI tests with tree-sitter-cheby at the pinned commit
+    /// Parse examples and UI tests with tree-sitter-cheby at the pinned
+    /// commit and with the compiler parser, and compare
     CrossCheck(cross_check::Args),
+    /// Check and run the standard library's own tests, one module at a time
+    TestStd {
+        /// Only run tests whose full name, `std::<module> "<name>"`, contains this text
+        filter: Option<String>,
+    },
+    /// Measure compile speed on generated projects (D-247)
+    BenchCompile {
+        /// Only the 10k-line projects
+        #[arg(long)]
+        quick: bool,
+        /// Append the Markdown table to this file, such as
+        /// `$GITHUB_STEP_SUMMARY`
+        #[arg(long)]
+        summary: Option<PathBuf>,
+    },
+    /// Check and compile every function of a package and print the front
+    /// end's and the back end's times in nanoseconds
+    #[command(hide = true)]
+    BenchBuild {
+        /// Worker threads (default: the available parallelism)
+        #[arg(long)]
+        jobs: Option<NonZeroUsize>,
+        /// The package directory
+        dir: PathBuf,
+    },
 }
 
 fn main() -> ExitCode {
@@ -75,9 +127,15 @@ fn main() -> ExitCode {
             out,
             summary,
         } => gen_bench(&Config { lines, shape, seed }, &out, summary.as_deref()),
-        Cmd::CheckDeterminism { lines } => check_determinism(&root, lines),
+        Cmd::CheckDeterminism { lines, filter } => {
+            determinism::run(&root, lines, filter.as_deref())
+        }
+        Cmd::CheckExamples => examples::run(&root),
         Cmd::Coverage => coverage(&root),
         Cmd::CrossCheck(args) => cross_check::run(&root, &args),
+        Cmd::TestStd { filter } => test_std(filter.as_deref()),
+        Cmd::BenchCompile { quick, summary } => bench::run(&root, quick, summary.as_deref()),
+        Cmd::BenchBuild { jobs, dir } => bench_build(jobs, &dir),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -115,6 +173,24 @@ fn bless(root: &Path, filter: Option<&str>) -> Result<(), String> {
     }
 }
 
+/// Tests the standard library (D-542) and prints the report: a line per
+/// test, the modules and tests that did not build with their codes, a
+/// block per failure, and the counts per module and in total. Fails when a
+/// test failed or did not build.
+fn test_std(filter: Option<&str>) -> Result<(), String> {
+    let report = cheby_driver::test_std(filter).map_err(|e| e.message().to_owned())?;
+    print!("{}", report.render());
+    if report.success() {
+        Ok(())
+    } else {
+        let counts = report.counts();
+        Err(format!(
+            "{} std tests failed and {} did not build",
+            counts.failed, counts.not_built
+        ))
+    }
+}
+
 fn gen_bench(config: &Config, out: &Path, summary: Option<&Path>) -> Result<(), String> {
     if out.exists() {
         return Err(format!("{} already exists; remove it first", out.display()));
@@ -141,47 +217,36 @@ fn gen_bench(config: &Config, out: &Path, summary: Option<&Path>) -> Result<(), 
     Ok(())
 }
 
-/// Before M1 there is no compiler output, so this checks the benchmark
-/// generator: each shape is generated into two different directories and
-/// the trees are compared. From M1 it also compares interface and
-/// Cranelift IR dumps of the examples (docs/plan/testing.md §6).
-fn check_determinism(root: &Path, lines: usize) -> Result<(), String> {
-    let base = root.join("target/determinism");
-    if base.exists() {
-        std::fs::remove_dir_all(&base).map_err(|e| format!("{}: {e}", base.display()))?;
+/// Checks and compiles every function of the package in `dir` with
+/// `jobs` worker threads and prints `<front end ns> <back end ns>`.
+fn bench_build(jobs: Option<NonZeroUsize>, dir: &Path) -> Result<(), String> {
+    cheby_driver::configure_jobs(jobs).map_err(|e| e.message().to_owned())?;
+    let t = cheby_driver::bench_build(dir).map_err(|e| e.message().to_owned())?;
+    println!("{} {}", t.front_end.as_nanos(), t.back_end.as_nanos());
+    Ok(())
+}
+
+/// Builds `cheby` with the profile this xtask was built with and returns
+/// its path.
+fn build_cheby(root: &Path) -> Result<PathBuf, String> {
+    let release = !cfg!(debug_assertions);
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
+    let mut cmd = Command::new(cargo);
+    cmd.current_dir(root)
+        .args(["build", "--quiet", "--package", "cheby_cli"]);
+    if release {
+        cmd.arg("--release");
     }
-    let mut failures: usize = 0;
-    for shape in Shape::ALL {
-        let lines = if shape == Shape::Large {
-            lines.max(40_000)
-        } else {
-            lines
-        };
-        let config = Config {
-            lines,
-            shape,
-            seed: 1,
-        };
-        let a = base.join("a").join(shape.name());
-        let b = base.join("b/nested").join(shape.name());
-        for dir in [&a, &b] {
-            cheby_bench_gen::generate(&config)
-                .write(dir)
-                .map_err(|e| format!("{}: {e}", dir.display()))?;
-        }
-        match compare_trees(&a, &b)? {
-            None => println!("ok    bench `{}`: identical", shape.name()),
-            Some(diff) => {
-                failures = failures.saturating_add(1);
-                println!("FAIL  bench `{}`: {diff}", shape.name());
-            }
-        }
+    let status = cmd.status().map_err(|e| format!("cannot run cargo: {e}"))?;
+    if !status.success() {
+        return Err("cannot build `cheby`".to_owned());
     }
-    println!("compiler artifacts: none before M1, nothing else to compare");
-    match failures {
-        0 => Ok(()),
-        n => Err(format!("{n} outputs are not deterministic")),
-    }
+    let target =
+        std::env::var_os("CARGO_TARGET_DIR").map_or_else(|| root.join("target"), PathBuf::from);
+    let name = format!("cheby{}", std::env::consts::EXE_SUFFIX);
+    Ok(target
+        .join(if release { "release" } else { "debug" })
+        .join(name))
 }
 
 /// Describes the first difference between two directory trees.
@@ -228,10 +293,21 @@ fn coverage(root: &Path) -> Result<(), String> {
     for test in ui::all(root)? {
         covered.extend(test.header.decisions);
     }
+    // REPL transcripts pin decisions through their header too (D-638).
+    let transcripts = root.join("tests/repl");
+    for path in cheby_test_support::files_with_extension(&transcripts, "repl")
+        .map_err(|e| format!("{}: {e}", transcripts.display()))?
+    {
+        let text =
+            std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let header = cheby_test_support::repl::Header::of(&text)
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        covered.extend(header.decisions);
+    }
     let uncovered: Vec<_> = cited.difference(&covered).copied().collect();
     let unknown: Vec<_> = covered.difference(&cited).copied().collect();
     println!(
-        "D-number coverage: {}/{} decisions cited in the spec have a UI test",
+        "D-number coverage: {}/{} decisions cited in the spec have a UI test or a REPL transcript",
         cited.len().saturating_sub(uncovered.len()),
         cited.len()
     );

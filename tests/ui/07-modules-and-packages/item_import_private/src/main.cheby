@@ -1,0 +1,10 @@
+// @mode: check-fail
+// @decisions: D-111, D-162
+//! Each item of an item import must be visible to the importing module, so
+//! a `priv` item of a sibling module cannot be imported (§7.5.2).
+
+import app::greeting::{text}
+
+fn main() {
+  assert text() == "hi"
+}

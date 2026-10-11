@@ -1,0 +1,18 @@
+// @mode: parse-fail
+// @decisions: D-202
+//! A `_` is a whole call argument, so `f(x._)` is an error (§5.6).
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+fn add(a: Int, b: Int) -> Int {
+  a + b
+}
+
+fn main() {
+  let p = Point { x: 1, y: 2 }
+  let f = add(p._, 1)
+  assert f(1) == 2
+}

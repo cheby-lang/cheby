@@ -1,0 +1,21 @@
+// @mode: check-fail
+// @decisions: D-148
+//! An interface's function signatures are part of its signature, so a
+//! `pub` interface must not mention a type that is not `pub` (§7.4).
+
+type Secret { Secret(String) }
+
+pub interface Keeper {
+  fn secret(Self) -> Secret
+}
+
+pub type Vault { Vault(String) }
+
+fn secret(vault: Vault) -> Secret {
+  let Vault(text) = vault
+  Secret(text)
+}
+
+fn main() {
+  assert secret(Vault("a")) == Secret("a")
+}

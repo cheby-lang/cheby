@@ -1,0 +1,26 @@
+// @mode: check-fail
+// @decisions: D-418, D-421, D-443
+//! Diagnostics are rendered as rustc renders them: columns count code
+//! points, several labels on one line share a marker row with the last
+//! one inline, and a gap of more than one line between shown lines
+//! becomes `...`.
+
+type Label {
+  Label(String),
+}
+
+pub fn greeting() -> String {
+  let name = "café"
+  "héllo, {name}, " + 1
+}
+
+pub fn count() -> Int {
+  let total: Int = "three"
+  total
+}
+
+pub fn mismatch() -> Int {
+  let text = "a"
+  let _ = Label(text)
+  text
+}

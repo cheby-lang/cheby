@@ -1,0 +1,50 @@
+// @mode: run-pass
+// @decisions: D-134, D-233, D-252, D-454
+//! `{x:?}` on user types (§3.13): records as `Name { field: value }`,
+//! positional constructors as `Name(value)`, unit constructors by name,
+//! with raw and generic fields, nested values and recursive types.
+
+import std::io
+
+type Point {
+  x: Float,
+  y: Float,
+}
+
+type Shape {
+  Circle { center: Point, radius: Float },
+  Polygon(List<Point>),
+  Nothing,
+}
+
+type Tagged<T> {
+  Tagged(String, T),
+}
+
+type Expr {
+  Num(Int),
+  Add(Expr, Expr),
+  Neg(Expr),
+}
+
+type Settings {
+  count: Int,
+  enabled: Bool,
+  scale: F32,
+  code: U8,
+  handler: fn(Int) -> Int,
+}
+
+fn main() {
+  let center = Point { x: 1.0, y: -2.5 }
+  let circle = Circle { center, radius: 3.0 }
+  let polygon = Polygon([Point { x: 0.0, y: 0.0 }, center])
+  let shapes = [circle, polygon, Nothing]
+  io::println("{shapes:?}")
+  let tagged = Tagged("pair", (Some(center), [Nothing]))
+  io::println("{tagged:?}")
+  let expr = Add(Num(1), Neg(Add(Num(2), Num(-3))))
+  io::println("{expr:?}")
+  let settings = Settings { count: 3, enabled: False, scale: 0.5, code: 7, handler: fn(n) { n } }
+  io::println("{settings:?}")
+}

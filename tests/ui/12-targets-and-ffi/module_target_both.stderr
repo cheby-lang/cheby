@@ -1,0 +1,14 @@
+error[E0067]: `name` exists only on `native`, but `main` also runs on `js`
+  --> tests/ui/12-targets-and-ffi/module_target_both/src/main.cheby:10:15
+   |
+10 |   io::println(platform::name())
+   |               ^^^^^^^^^^^^^^ not available on `js`
+   |
+  ::: tests/ui/12-targets-and-ffi/module_target_both/src/platform.cheby:5:8
+   |
+5  | pub fn name() -> String {
+   |        ---- `name` is declared here
+   |
+   = help: restrict `main` to `native` with `@target(native)`, or the whole module with `@!target(native)`
+   = help: if the package supports only `native`, declare `targets = ["native"]` in `cheby.toml`
+

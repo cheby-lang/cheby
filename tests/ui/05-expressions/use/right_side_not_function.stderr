@@ -1,0 +1,6 @@
+error[E0049]: expected a function, found `{integer}`
+ --> tests/ui/05-expressions/use/right_side_not_function.cheby:7:14
+  |
+7 |     use n <- 5
+  |              ^ this has type `{integer}`
+

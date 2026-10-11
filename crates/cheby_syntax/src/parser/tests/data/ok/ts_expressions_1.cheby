@@ -1,0 +1,9 @@
+// Records, spreads and use
+fn f() {
+  let p = Point { ..origin, x: 1, y }
+  let q = shape::Circle { radius: 1.0e3 }
+  let xs = [..front, 0x_ff, 0b101, 0o17, -1]
+  use a, b: Int <- result::try(x)
+  let assert Ok(v) = parse(s) as "no"
+  Show::show(p.x)
+}

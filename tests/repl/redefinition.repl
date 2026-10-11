@@ -1,0 +1,45 @@
+// @decisions: D-043, D-607, D-609
+> fn greet(name: String) -> String {
+.   "hello {name}"
+. }
+> fn welcome() -> String {
+.   greet("Ada")
+. }
+> welcome()
+"hello Ada" : String
+> fn greet(name: String) -> String {
+.   "hi {name}"
+. }
+> welcome()
+"hi Ada" : String
+> fn size(n: Int) -> Int {
+.   n
+. }
+> fn describe(n: Int) -> String {
+.   let s = size(n)
+.   "size {s}"
+. }
+> fn doubled(n: Int) -> Int {
+.   size(n) * 2
+. }
+> describe(3)
+"size 3" : String
+> fn size(n: Int) -> String {
+.   "<{n}>"
+. }
+error[E0047]: mismatched types
+ --> <repl:8>:2:13
+  |
+2 |   size(n) * 2
+  |   -------   ^ expected `String`, found `{integer}`
+  |   |
+  |   the left operand of `*` has type `String`
+  |
+  = note: `doubled` was checked again because a definition it uses changed its signature; it keeps its old definition
+
+> describe(3)
+"size <3>" : String
+> doubled(3)
+6 : Int
+> size(3)
+"<3>" : String

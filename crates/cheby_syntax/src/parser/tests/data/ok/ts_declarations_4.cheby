@@ -1,0 +1,8 @@
+// Functions
+@external(native, "cheby_sqlite_open")
+@blocking
+pub fn open(path: String) -> Result<Db, String>
+
+priv fn describe<T: Show + Any>(items: List<T>, f: fn(T) -> dyn Show) -> (Int, T) {
+  todo
+}

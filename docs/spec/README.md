@@ -32,6 +32,7 @@ The standard library is specified separately, one file per module, in [`../stdli
 - **may**: permitted but not required.
 - **should**: a recommendation, usually for implementations or tooling.
 - Text marked _Note_ or _Example_ is informative, not normative.
+- A comment in an example that marks a line as an error describes the rule informally and names no diagnostic code. The codes and the rules they report are listed in [`../diagnostics/`](../diagnostics/), and each such example gets a UI test once its check exists (D-420, D-476).
 
 ### Grammar notation
 

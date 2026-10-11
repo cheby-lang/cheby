@@ -2,7 +2,7 @@
 
 Goal: every example runs on Node from `cheby build --target js`, with the same goldens as native (D-006, D-099, step 4; spec §1.1 principle 5).
 
-Prerequisites: M3 done. JS parts of the tier-1 to tier-3 stdlib specified.
+Prerequisites: M3 done. JS parts of the tier-1 to tier-3 stdlib specified. OQ-P14 (file IO, standard input and `std::env` on JS hosts, including browsers) settled.
 
 Detail level: workstreams with outcomes. This file is refined into tasks when M4 starts.
 
@@ -29,7 +29,7 @@ Detail level: workstreams with outcomes. This file is refined into tasks when M4
 - Cooperative fiber scheduler over generators, scopes, cancellation at real suspension points, channels, selectors and timers (§12.3.1, D-232).
 - Handle reference counting where Perceus would count, and the handle flag for values that may contain handles (D-100, D-172, ADR-0028).
 - Callbacks from foreign code as new detached fibers (D-191).
-- IO through host asynchronous APIs, on Node first, then Deno, Bun and browsers (D-074).
+- IO through host asynchronous APIs, on Node first, then Deno, Bun and browsers (D-074). A standard stream that is closed or missing at start is a null device, and only failures of streams that were open at start end the program with status 1 (D-306, D-474).
 
 ### 4.4 Cross-target conformance
 

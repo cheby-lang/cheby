@@ -1,0 +1,25 @@
+// @mode: check-fail
+// @decisions: D-235
+//! Nothing converts inside another type: `List<Circle>` is not
+//! `List<dyn Shape>` (§3.12.5).
+
+pub interface Shape {
+  fn area(Self) -> Float
+}
+
+pub type Circle {
+  radius: Float,
+}
+
+pub type Square {
+  side: Float,
+}
+
+pub fn area(circle: Circle) -> Float {
+  circle.radius * circle.radius * 3.0
+}
+
+pub fn all(circles: List<Circle>) -> List<dyn Shape> {
+  let shapes: List<dyn Shape> = circles
+  shapes
+}

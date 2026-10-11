@@ -1,0 +1,77 @@
+// @mode: run-pass
+// @decisions: D-046, D-173, D-502, D-524
+//! `dyn J` satisfies `J` and every interface `J` embeds, so it can be a
+//! bounded function's type argument: the dictionary passed for the bound
+//! forwards each call to the functions packaged with the value (§8.6).
+//! `Both` embeds `Sized` after `Named`, so `Sized`'s function sits after
+//! `Named`'s in a `Both` dictionary but first in a `Sized` one.
+
+import std::io
+import std::list
+
+interface Named {
+  fn name(Self) -> String
+}
+
+interface Sized {
+  fn size(Self) -> Int
+}
+
+interface Both: Named + Sized {
+  fn summary(Self, String) -> String
+}
+
+type Crate {
+  Crate(Int)
+}
+
+fn name(_c: Crate) -> String {
+  "crate"
+}
+
+fn size(c: Crate) -> Int {
+  let Crate(n) = c
+  n
+}
+
+fn summary(c: Crate, prefix: String) -> String {
+  let n = size(c)
+  "{prefix} crate of {n}"
+}
+
+fn measure<S: Sized>(x: S) -> Int {
+  Sized::size(x)
+}
+
+fn call_name<N: Named>(x: N) -> String {
+  Named::name(x)
+}
+
+fn sum_up<B: Both>(x: B) -> String {
+  let n = measure(x)
+  let label = call_name(x)
+  let line = Both::summary(x, ">")
+  "{label} {n} {line}"
+}
+
+fn total<S: Sized>(xs: List<S>) -> Int {
+  list::fold(xs, 0, fn(acc, x) { acc + Sized::size(x) })
+}
+
+fn main() {
+  let one: dyn Both = Crate(3)
+  let n = measure(one)
+  io::println("measure(dyn Both): {n}")
+  let named = call_name(one)
+  io::println("call_name(dyn Both): {named}")
+  let summed = sum_up(one)
+  io::println("sum_up(dyn Both): {summed}")
+  let sized: dyn Sized = one
+  let m = measure(sized)
+  io::println("measure(dyn Sized): {m}")
+  let crates: List<dyn Both> = [Crate(1), Crate(2), one]
+  let t = total(crates)
+  io::println("total(List<dyn Both>): {t}")
+  let concrete = total([Crate(4), Crate(5)])
+  io::println("total(List<Crate>): {concrete}")
+}

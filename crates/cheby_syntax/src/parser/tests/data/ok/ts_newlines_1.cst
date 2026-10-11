@@ -1,0 +1,79 @@
+SOURCE_FILE@0..172
+  COMMENT@0..34 "// Leading pipe continues the line"
+  NEWLINE@34..35 "\n"
+  FN_DECL@35..171
+    FN_KW@35..37 "fn"
+    WHITESPACE@37..38 " "
+    LOWER_IDENT@38..39 "f"
+    PARAM_LIST@39..41
+      L_PAREN@39..40 "("
+      R_PAREN@40..41 ")"
+    WHITESPACE@41..42 " "
+    BLOCK@42..171
+      L_BRACE@42..43 "{"
+      NEWLINE@43..44 "\n"
+      WHITESPACE@44..46 "  "
+      LET_STMT@46..169
+        LET_KW@46..49 "let"
+        WHITESPACE@49..50 " "
+        IDENT_PAT@50..55
+          LOWER_IDENT@50..55 "total"
+        WHITESPACE@55..56 " "
+        EQ@56..57 "="
+        NEWLINE@57..58 "\n"
+        WHITESPACE@58..62 "    "
+        BIN_EXPR@62..169
+          BIN_EXPR@62..100
+            PATH_EXPR@62..68
+              PATH@62..68
+                LOWER_IDENT@62..68 "orders"
+            NEWLINE@68..69 "\n"
+            WHITESPACE@69..73 "    "
+            PIPE_GT@73..75 "|>"
+            WHITESPACE@75..76 " "
+            CALL_EXPR@76..100
+              PATH_EXPR@76..88
+                PATH@76..88
+                  LOWER_IDENT@76..80 "list"
+                  COLON2@80..82 "::"
+                  LOWER_IDENT@82..88 "filter"
+              ARG_LIST@88..100
+                L_PAREN@88..89 "("
+                HOLE@89..90
+                  UNDERSCORE@89..90 "_"
+                COMMA@90..91 ","
+                WHITESPACE@91..92 " "
+                PATH_EXPR@92..99
+                  PATH@92..99
+                    LOWER_IDENT@92..99 "is_paid"
+                R_PAREN@99..100 ")"
+          NEWLINE@100..101 "\n"
+          WHITESPACE@101..105 "    "
+          COMMENT@105..140 "// a comment between pipeline steps"
+          NEWLINE@140..141 "\n"
+          WHITESPACE@141..145 "    "
+          PIPE_GT@145..147 "|>"
+          WHITESPACE@147..148 " "
+          CALL_EXPR@148..169
+            PATH_EXPR@148..158
+              PATH@148..158
+                LOWER_IDENT@148..152 "list"
+                COLON2@152..154 "::"
+                LOWER_IDENT@154..158 "fold"
+            ARG_LIST@158..169
+              L_PAREN@158..159 "("
+              HOLE@159..160
+                UNDERSCORE@159..160 "_"
+              COMMA@160..161 ","
+              WHITESPACE@161..162 " "
+              LITERAL@162..163
+                INT_NUMBER@162..163 "0"
+              COMMA@163..164 ","
+              WHITESPACE@164..165 " "
+              PATH_EXPR@165..168
+                PATH@165..168
+                  LOWER_IDENT@165..168 "add"
+              R_PAREN@168..169 ")"
+      NEWLINE@169..170 "\n"
+      R_BRACE@170..171 "}"
+  NEWLINE@171..172 "\n"

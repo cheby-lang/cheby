@@ -1,0 +1,5 @@
+// Trailing operator continues the line
+fn f() {
+  let a = b +
+    c
+}

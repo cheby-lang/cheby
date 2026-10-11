@@ -1,0 +1,8 @@
+error[E0014]: unexpected line break
+ --> tests/ui/02-lexical-structure/line_break_before_equals.cheby:7:12
+  |
+7 |   let total
+  |            ^ expected `=`
+  |
+  = note: a line continues only inside `(`, `[` or type `<…>`, after an operator, `,`, `=`, `=>`, `->` or `<-`, or before a line starting with `|>`, `&&` or `||`
+

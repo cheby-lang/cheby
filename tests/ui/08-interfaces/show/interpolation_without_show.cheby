@@ -1,0 +1,14 @@
+// @mode: check-fail
+// @decisions: D-086
+//! `{x}` needs `Show`, and the error suggests `{x:?}` (§5.3.2).
+
+import std::io
+
+type Session {
+  id: Int,
+}
+
+fn main() {
+  let session = Session { id: 7 }
+  io::println("current: {session}")
+}

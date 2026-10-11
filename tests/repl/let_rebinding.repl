@@ -1,0 +1,50 @@
+// @decisions: D-193, D-547, D-608
+> let x = 1
+> let f = fn() -> Int { x }
+> fn read_x() -> Int {
+.   x
+. }
+> let x = 2
+> f()
+1 : Int
+> read_x()
+1 : Int
+> x
+2 : Int
+> let x = x + 1
+> x
+3 : Int
+> let x = "now a string"
+> x
+"now a string" : String
+> read_x()
+1 : Int
+> f()
+1 : Int
+> fn read_x_again() -> String {
+.   x
+. }
+> let x = 5
+> read_x_again()
+"now a string" : String
+> let (a, b) = (1, "b")
+> b
+"b" : String
+> let assert [first, ..] = [7, 8, 9]
+> first + a
+8 : Int
+> {
+.   let y = 1
+.   let y = 2
+.   y
+. }
+error[E0044]: `y` is already bound
+ --> <repl:21>:3:7
+  |
+2 |   let y = 1
+  |       - first bound here
+3 |   let y = 2
+  |       ^ bound again here
+  |
+  = help: give this binding a new name, such as `y_2`; names cannot be shadowed (§5.2.3)
+

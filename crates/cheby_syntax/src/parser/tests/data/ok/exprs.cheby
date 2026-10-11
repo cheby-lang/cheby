@@ -1,0 +1,107 @@
+//! Expressions (App. A.5).
+fn precedence() {
+  let a = 1 + 2 * 3 - 4 / 5 % 6
+  let b = x << 1 >> 2 & 3 ^ 4 | 5
+  let c = xs |> list::length == 3 && !done || -a < b
+  let d = -x.field.inner(1)(2)
+  let e = !(a == b) != c
+  let f = a <= b
+  let g = a >= b
+  let h = a > b
+}
+
+fn postfix() {
+  io::println("hi")
+  Show::show(p.x)
+  shape::Shape::area(s)
+  channel::new::<Int>()
+  list::empty::<String>
+  Some
+  None
+  Some(1)
+}
+
+fn records() {
+  let p = Point { x: 1, y }
+  let q = shape::Circle { radius: 1.0e3 }
+  let r = Point { ..p, x: 2 }
+  let s = supervisor::Policy { ..save_policy, backoff_ms: 1 }
+  let t = Point {
+    x: 1,
+    y: 2,
+  }
+  let u = Empty {}
+}
+
+fn collections() {
+  let xs = [..front, 0x_ff, 0b101, 0o17, -1]
+  let ys = []
+  let zs = [
+    1,
+    2,
+  ]
+  let pair = (1, "a")
+  let triple = (1, 2, 3,)
+  let paren = (1 + 2) * 3
+  let block = {
+    let inner = 1
+    inner + 1
+  }
+}
+
+fn closures() {
+  let add = fn(a, b) { a + b }
+  let typed = fn(a: Int) -> Int { a }
+  let destructure = fn((a, b)) { a }
+  fn local(x: Int) -> Int {
+    x + 1
+  }
+  fn helper(n) { n }
+  list::map(xs, int::add(1, _))
+  list::fold(xs, 0, fn(acc, (_, quantity)) { acc + quantity })
+}
+
+fn cases() {
+  let a = case x {
+    Some(v) when v > 1 => v
+    _ => 0
+  }
+  let b = case x, y {
+    0, _ => "zero"
+    _, _ => "other"
+  }
+  let c = case {
+    n > 0 => "positive"
+    _ => "other"
+  }
+  let d = case Red {
+    Red => 1
+    _ => 0
+  }
+  let e = case (Point { x: 0, y: 0 }) {
+    _ => 0
+  }
+  let f = case shape::Circle {
+    _ => 0
+  }
+}
+
+fn statements() {
+  use <- defer(cleanup)
+  use a, b: Int <- result::try(x)
+  use x <- with_x
+  let assert Ok(v) = parse(s) as "no"
+  assert a == b
+  assert ok as "message"
+  panic
+  panic as "boom"
+  todo as "later"
+}
+
+fn strings() {
+  let s = "at {point.x}, {user.name} {state:?} \{brace} \u{1F600}\n"
+  let t = "one
+two"
+  let u = r#"a "quoted" word"#
+  let v = ""
+}

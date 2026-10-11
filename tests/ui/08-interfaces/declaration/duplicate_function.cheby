@@ -1,0 +1,10 @@
+// @mode: check-fail
+// @decisions: D-045, D-063
+//! Function names are distinct within an interface (§8.1).
+
+pub interface Describe {
+  fn describe(Self) -> String
+  fn describe(Self, Int) -> String
+}
+
+fn main() {}

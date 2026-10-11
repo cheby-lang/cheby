@@ -1,0 +1,17 @@
+// @mode: check-fail
+// @decisions: D-071, D-156
+//! A field listed in a record update must have the same type in every
+//! variant (§5.11.2).
+
+type Value {
+  Small { n: Int },
+  Big { n: String },
+}
+
+fn reset(value: Value) -> Value {
+  Value { ..value, n: 0 }
+}
+
+fn main() {
+  assert reset(Small { n: 1 }) == Small { n: 0 }
+}

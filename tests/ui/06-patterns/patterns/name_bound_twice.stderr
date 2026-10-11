@@ -1,0 +1,10 @@
+error[E0044]: `x` is bound twice in this pattern
+ --> tests/ui/06-patterns/patterns/name_bound_twice.cheby:7:11
+  |
+7 |   let (x, x) = pair
+  |        -  ^ bound again here
+  |        |
+  |        first bound here
+  |
+  = help: give one of them a new name, such as `x_2`, or match it with `_`
+

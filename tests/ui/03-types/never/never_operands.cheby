@@ -1,0 +1,32 @@
+// @mode: check-fail
+// @decisions: D-161, D-492
+//! A value of type `Never` satisfies only empty interfaces, so operators
+//! on it are errors like interpolation is: `<` needs `Compare`, unary `-`
+//! needs `Neg`, and `%` is defined only on the numeric types
+//! (D-492).
+
+fn less() -> Bool {
+  let x = panic
+  x < x
+}
+
+fn rest() -> Int {
+  let x = panic
+  x % x
+}
+
+fn negate() -> Int {
+  let x = panic
+  -x
+}
+
+fn shown() -> String {
+  let x = panic
+  "{x}"
+}
+
+fn main() {
+  assert less()
+  assert rest() + negate() == 0
+  assert shown() == ""
+}

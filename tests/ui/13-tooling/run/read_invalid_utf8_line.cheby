@@ -1,0 +1,27 @@
+// @mode: run-pass
+// @decisions: D-311, D-345, D-543
+//! A line that is not UTF-8 is an error for which `io::is_invalid_data`
+//! holds. The line is consumed, so the next call reads the line after it.
+
+import std::io
+
+fn report() {
+  case io::read_line() {
+    Ok(Some(line)) => {
+      io::println(line)
+      report()
+    }
+    Ok(None) => io::println("end")
+    Err(reason) => {
+      case io::is_invalid_data(reason) {
+        True => io::println(io::show(reason))
+        False => io::println("other error")
+      }
+      report()
+    }
+  }
+}
+
+fn main() {
+  report()
+}

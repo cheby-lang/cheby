@@ -1,0 +1,10 @@
+// @mode: check-fail
+// @decisions: D-062
+//! A local binding cannot use the name of a constant of its module (§5.2.3).
+
+pub const limit: Int = 10
+
+fn main() {
+  let limit = 5
+  assert limit == 5
+}

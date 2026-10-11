@@ -1,0 +1,16 @@
+error[E0013]: a variant's field list is empty
+ --> tests/ui/04-declarations/types/empty_variant_fields.cheby:8:7
+  |
+8 |   Stop(),
+  |       ^^
+  |
+  = help: for a variant without fields, remove the brackets
+
+error[E0013]: a variant's field list is empty
+ --> tests/ui/04-declarations/types/empty_variant_fields.cheby:9:6
+  |
+9 |   Go {},
+  |      ^^
+  |
+  = help: for a variant without fields, remove the brackets
+

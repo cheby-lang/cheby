@@ -1,0 +1,30 @@
+// @mode: run-pass
+// @decisions: D-244, D-498
+//! A pipe evaluates its left side first and passes it at the hole, or
+//! calls a bare function with it alone, or calls the function a
+//! parenthesized expression gives (§5.16).
+
+import std::io
+import std::list
+
+fn add(a: Int, b: Int) -> Int {
+  a + b
+}
+
+fn adder(n: Int) -> fn(Int) -> Int {
+  io::println("adder {n}")
+  fn(x) { x + n }
+}
+
+fn first(label: String, n: Int) -> Int {
+  io::println("first {label}")
+  n
+}
+
+fn main() {
+  let a = first("a", 1) |> add(_, 10)
+  let b = first("b", 2) |> add(100, _)
+  let c = first("c", 3) |> (adder(5))
+  let d = [1, 2, 3] |> list::map(_, fn(x) { x * x }) |> list::length
+  io::println("{a} {b} {c} {d}")
+}

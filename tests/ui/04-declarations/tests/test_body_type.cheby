@@ -1,0 +1,15 @@
+// @mode: check-fail
+// @decisions: D-140
+//! A test body has type `Nil` or `Result<Nil, E>` (§4.7).
+
+fn double(n: Int) -> Int {
+  n * 2
+}
+
+test "double returns a number" {
+  double(2)
+}
+
+fn main() {
+  assert double(1) == 2
+}

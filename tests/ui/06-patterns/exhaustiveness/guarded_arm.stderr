@@ -1,0 +1,9 @@
+error[E0061]: `case` does not cover every value
+ --> tests/ui/06-patterns/exhaustiveness/guarded_arm.cheby:7:8
+  |
+7 |   case n {
+  |        ^ `_` not covered
+  |
+  = note: an arm with a guard does not count, since its guard may be false
+  = help: add a `_` arm
+

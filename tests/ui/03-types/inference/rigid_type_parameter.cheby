@@ -1,0 +1,8 @@
+// @mode: check-fail
+// @decisions: D-049, D-235
+//! Inside a generic function, a type parameter is not any particular type
+//! (§3.12.1).
+
+pub fn first<T>(x: T) -> Int {
+  x
+}

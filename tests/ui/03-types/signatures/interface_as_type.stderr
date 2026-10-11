@@ -1,0 +1,8 @@
+error[E0052]: `Describe` is an interface, not a type
+  --> tests/ui/03-types/signatures/interface_as_type.cheby:10:20
+   |
+10 | pub fn label(item: Describe) -> String {
+   |                    ^^^^^^^^ expected a type
+   |
+   = help: write `dyn Describe` for a value of any type that satisfies it, or use a type parameter bounded by it, such as `T: Describe`
+

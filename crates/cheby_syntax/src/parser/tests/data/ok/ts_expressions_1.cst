@@ -1,0 +1,199 @@
+SOURCE_FILE@0..254
+  COMMENT@0..27 "// Records, spreads and use"
+  NEWLINE@27..28 "\n"
+  FN_DECL@28..253
+    FN_KW@28..30 "fn"
+    WHITESPACE@30..31 " "
+    LOWER_IDENT@31..32 "f"
+    PARAM_LIST@32..34
+      L_PAREN@32..33 "("
+      R_PAREN@33..34 ")"
+    WHITESPACE@34..35 " "
+    BLOCK@35..253
+      L_BRACE@35..36 "{"
+      NEWLINE@36..37 "\n"
+      WHITESPACE@37..39 "  "
+      LET_STMT@39..74
+        LET_KW@39..42 "let"
+        WHITESPACE@42..43 " "
+        IDENT_PAT@43..44
+          LOWER_IDENT@43..44 "p"
+        WHITESPACE@44..45 " "
+        EQ@45..46 "="
+        WHITESPACE@46..47 " "
+        RECORD_EXPR@47..74
+          PATH@47..52
+            UPPER_IDENT@47..52 "Point"
+          WHITESPACE@52..53 " "
+          L_BRACE@53..54 "{"
+          WHITESPACE@54..55 " "
+          SPREAD@55..63
+            DOT2@55..57 ".."
+            PATH_EXPR@57..63
+              PATH@57..63
+                LOWER_IDENT@57..63 "origin"
+          COMMA@63..64 ","
+          WHITESPACE@64..65 " "
+          FIELD_INIT@65..69
+            LOWER_IDENT@65..66 "x"
+            COLON@66..67 ":"
+            WHITESPACE@67..68 " "
+            LITERAL@68..69
+              INT_NUMBER@68..69 "1"
+          COMMA@69..70 ","
+          WHITESPACE@70..71 " "
+          FIELD_INIT@71..72
+            LOWER_IDENT@71..72 "y"
+          WHITESPACE@72..73 " "
+          R_BRACE@73..74 "}"
+      NEWLINE@74..75 "\n"
+      WHITESPACE@75..77 "  "
+      LET_STMT@77..116
+        LET_KW@77..80 "let"
+        WHITESPACE@80..81 " "
+        IDENT_PAT@81..82
+          LOWER_IDENT@81..82 "q"
+        WHITESPACE@82..83 " "
+        EQ@83..84 "="
+        WHITESPACE@84..85 " "
+        RECORD_EXPR@85..116
+          PATH@85..98
+            LOWER_IDENT@85..90 "shape"
+            COLON2@90..92 "::"
+            UPPER_IDENT@92..98 "Circle"
+          WHITESPACE@98..99 " "
+          L_BRACE@99..100 "{"
+          WHITESPACE@100..101 " "
+          FIELD_INIT@101..114
+            LOWER_IDENT@101..107 "radius"
+            COLON@107..108 ":"
+            WHITESPACE@108..109 " "
+            LITERAL@109..114
+              FLOAT_NUMBER@109..114 "1.0e3"
+          WHITESPACE@114..115 " "
+          R_BRACE@115..116 "}"
+      NEWLINE@116..117 "\n"
+      WHITESPACE@117..119 "  "
+      LET_STMT@119..161
+        LET_KW@119..122 "let"
+        WHITESPACE@122..123 " "
+        IDENT_PAT@123..125
+          LOWER_IDENT@123..125 "xs"
+        WHITESPACE@125..126 " "
+        EQ@126..127 "="
+        WHITESPACE@127..128 " "
+        LIST_EXPR@128..161
+          L_BRACK@128..129 "["
+          SPREAD@129..136
+            DOT2@129..131 ".."
+            PATH_EXPR@131..136
+              PATH@131..136
+                LOWER_IDENT@131..136 "front"
+          COMMA@136..137 ","
+          WHITESPACE@137..138 " "
+          LITERAL@138..143
+            INT_NUMBER@138..143 "0x_ff"
+          COMMA@143..144 ","
+          WHITESPACE@144..145 " "
+          LITERAL@145..150
+            INT_NUMBER@145..150 "0b101"
+          COMMA@150..151 ","
+          WHITESPACE@151..152 " "
+          LITERAL@152..156
+            INT_NUMBER@152..156 "0o17"
+          COMMA@156..157 ","
+          WHITESPACE@157..158 " "
+          PREFIX_EXPR@158..160
+            MINUS@158..159 "-"
+            LITERAL@159..160
+              INT_NUMBER@159..160 "1"
+          R_BRACK@160..161 "]"
+      NEWLINE@161..162 "\n"
+      WHITESPACE@162..164 "  "
+      USE_STMT@164..195
+        USE_KW@164..167 "use"
+        WHITESPACE@167..168 " "
+        USE_BINDER@168..169
+          IDENT_PAT@168..169
+            LOWER_IDENT@168..169 "a"
+        COMMA@169..170 ","
+        WHITESPACE@170..171 " "
+        USE_BINDER@171..177
+          IDENT_PAT@171..172
+            LOWER_IDENT@171..172 "b"
+          COLON@172..173 ":"
+          WHITESPACE@173..174 " "
+          PATH_TYPE@174..177
+            PATH@174..177
+              UPPER_IDENT@174..177 "Int"
+        WHITESPACE@177..178 " "
+        LEFT_ARROW@178..180 "<-"
+        WHITESPACE@180..181 " "
+        CALL_EXPR@181..195
+          PATH_EXPR@181..192
+            PATH@181..192
+              LOWER_IDENT@181..187 "result"
+              COLON2@187..189 "::"
+              LOWER_IDENT@189..192 "try"
+          ARG_LIST@192..195
+            L_PAREN@192..193 "("
+            PATH_EXPR@193..194
+              PATH@193..194
+                LOWER_IDENT@193..194 "x"
+            R_PAREN@194..195 ")"
+      NEWLINE@195..196 "\n"
+      WHITESPACE@196..198 "  "
+      LET_STMT@198..233
+        LET_KW@198..201 "let"
+        WHITESPACE@201..202 " "
+        ASSERT_KW@202..208 "assert"
+        WHITESPACE@208..209 " "
+        CTOR_PAT@209..214
+          PATH@209..211
+            UPPER_IDENT@209..211 "Ok"
+          POS_PAT_LIST@211..214
+            L_PAREN@211..212 "("
+            IDENT_PAT@212..213
+              LOWER_IDENT@212..213 "v"
+            R_PAREN@213..214 ")"
+        WHITESPACE@214..215 " "
+        EQ@215..216 "="
+        WHITESPACE@216..217 " "
+        CALL_EXPR@217..225
+          PATH_EXPR@217..222
+            PATH@217..222
+              LOWER_IDENT@217..222 "parse"
+          ARG_LIST@222..225
+            L_PAREN@222..223 "("
+            PATH_EXPR@223..224
+              PATH@223..224
+                LOWER_IDENT@223..224 "s"
+            R_PAREN@224..225 ")"
+        WHITESPACE@225..226 " "
+        MESSAGE@226..233
+          AS_KW@226..228 "as"
+          WHITESPACE@228..229 " "
+          STRING_LIT@229..233
+            STRING_START@229..230 "\""
+            STRING_TEXT@230..232 "no"
+            STRING_END@232..233 "\""
+      NEWLINE@233..234 "\n"
+      WHITESPACE@234..236 "  "
+      CALL_EXPR@236..251
+        PATH_EXPR@236..246
+          PATH@236..246
+            UPPER_IDENT@236..240 "Show"
+            COLON2@240..242 "::"
+            LOWER_IDENT@242..246 "show"
+        ARG_LIST@246..251
+          L_PAREN@246..247 "("
+          FIELD_EXPR@247..250
+            PATH_EXPR@247..248
+              PATH@247..248
+                LOWER_IDENT@247..248 "p"
+            DOT@248..249 "."
+            LOWER_IDENT@249..250 "x"
+          R_PAREN@250..251 ")"
+      NEWLINE@251..252 "\n"
+      R_BRACE@252..253 "}"
+  NEWLINE@253..254 "\n"

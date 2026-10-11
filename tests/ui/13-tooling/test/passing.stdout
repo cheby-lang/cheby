@@ -1,0 +1,6 @@
+test ui_test "doubles" ... ok
+hello from ui_test
+test ui_test "prints as it runs" ... ok
+test ui_test "returns ok" ... ok
+
+test result: ok. 3 passed; 0 failed; 0 filtered out

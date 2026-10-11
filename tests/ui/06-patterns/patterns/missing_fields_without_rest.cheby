@@ -1,0 +1,17 @@
+// @mode: check-fail
+// @decisions: D-113
+//! Without `..`, a named-field pattern lists every field (§6.4).
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+fn x_of(p: Point) -> Int {
+  let Point { x } = p
+  x
+}
+
+fn main() {
+  assert x_of(Point { x: 1, y: 2 }) == 1
+}

@@ -1,0 +1,14 @@
+error[E0063]: `Fahrenheit` does not satisfy `Show`
+  --> tests/ui/08-interfaces/satisfaction/one_type_per_module.cheby:22:17
+   |
+16 | fn show(c: Celsius) -> String {
+   |    ---- `show` has the signature `show(Celsius) -> String`
+...
+22 |   io::println("{hot}")
+   |                 ^^^ interpolated here
+   |
+   = note: `Show` needs `show(Fahrenheit) -> String` (§8.2)
+   = note: the module's `show` is for `Celsius`: a module satisfies an interface for one type only (§8.2.1, D-045)
+   = help: move `Fahrenheit` and its functions to a module of their own
+   = help: write `{hot:?}` to use debug printing instead (D-086)
+

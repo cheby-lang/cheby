@@ -1,0 +1,9 @@
+error[E0065]: cannot pass `T` for a bound of `keep`: the type parameter `T` has no bound
+  --> tests/ui/08-interfaces/bounds/bound_needs_descriptor.cheby:14:3
+   |
+14 |   keep(value)
+   |   ^^^^^^^^^^^ required by a bound of `keep`
+   |
+   = note: a dictionary passed for a bound carries a descriptor of its type, and the descriptor of `T` can come only from one of its bounds (§8.5.1, D-236)
+   = help: add a bound such as `T: Any`, with `interface Any`: every type satisfies an empty interface (D-166)
+

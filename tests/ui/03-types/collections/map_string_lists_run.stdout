@@ -1,0 +1,6 @@
+and: 2 5; bat: 7; cat: 1; hat: 4; the: 0 3 6
+the: 3, dog: 0, keys: 5
+and: 2 5; cat: 1; hat: 4; rat: 7; the: 0 3 6
+and: 2 5; bat: 7; cat: 1; hat: 4; the: 0 3 6
+renamed has bat: False
+keys: 100, positions: 5000, under k0: 50

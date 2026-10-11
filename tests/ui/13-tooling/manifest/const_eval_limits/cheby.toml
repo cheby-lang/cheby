@@ -1,0 +1,6 @@
+name = "app"
+version = "0.1.0"
+
+[const-eval]
+time-limit = "1500ms"
+memory-limit = "64MiB"

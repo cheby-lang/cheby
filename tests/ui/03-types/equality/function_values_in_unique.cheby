@@ -1,0 +1,16 @@
+// @mode: run-fail
+// @decisions: D-233, D-449, D-556
+//! Hashing a function value panics too: `list::unique` hashes its
+//! elements like `Set` elements, inside a kernel, where no source
+//! location exists (§3.13, D-556).
+
+import std::io
+import std::list
+
+fn main() {
+  let handlers = [fn(n: Int) { n }, fn(n: Int) { n + 1 }]
+  let count = list::length(handlers)
+  io::println("hashing {count} functions")
+  let _ = list::unique(handlers)
+  io::println("never printed")
+}

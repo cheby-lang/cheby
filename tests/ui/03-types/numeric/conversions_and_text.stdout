@@ -1,0 +1,14 @@
+200
+Ok(255) Err(Nil) Err(Nil)
+Ok(3) Ok(-3) Ok(-2)
+Err(Nil) Err(Nil) Err(Nil)
+Ok(18014398509481982) Err(Nil)
+2.0
+0.1
+1.0e21
+NaN
+inf
+-inf
+-0.0
+0.33333334
+0.3333333432674408

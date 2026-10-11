@@ -1,0 +1,8 @@
+error[E0022]: `exposed` is not allowed on a function
+ --> tests/ui/04-declarations/exposed_function.cheby:5:5
+  |
+5 | pub exposed fn origin() -> Int {
+  |     ^^^^^^^
+  |
+  = help: `exposed` applies only to `pub` type declarations; remove it
+

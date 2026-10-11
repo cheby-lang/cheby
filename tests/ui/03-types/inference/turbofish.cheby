@@ -1,0 +1,13 @@
+// @mode: check-pass
+// @decisions: D-049
+//! The turbofish gives a generic function's type arguments (§3.12.6).
+
+pub fn empty<T>() -> List<T> {
+  []
+}
+
+pub fn main() {
+  let xs = empty::<Int>()
+  let none = None::<String>
+  assert xs == [] && none == None
+}

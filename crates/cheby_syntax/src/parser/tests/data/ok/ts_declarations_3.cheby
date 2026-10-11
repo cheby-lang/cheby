@@ -1,0 +1,7 @@
+// Interfaces
+pub interface Show {
+  /// Renders.
+  fn show(Self) -> String
+}
+
+pub interface Num: Add + ops::Mul

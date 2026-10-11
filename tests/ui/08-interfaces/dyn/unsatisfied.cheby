@@ -1,0 +1,16 @@
+// @mode: check-fail
+// @decisions: D-168
+//! Only a value whose type satisfies `I` converts to `dyn I` (§8.6).
+
+interface Named {
+  fn name(Self) -> String
+}
+
+type Rock {
+  weight: Int,
+}
+
+fn main() {
+  let rock: dyn Named = Rock { weight: 3 }
+  assert rock == rock
+}

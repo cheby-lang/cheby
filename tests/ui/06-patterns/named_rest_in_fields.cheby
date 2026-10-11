@@ -1,0 +1,18 @@
+// @mode: parse-fail
+// @decisions: D-158
+//! In a constructor pattern with named fields, the rest `..` takes no
+//! name.
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+fn x_of(p: Point) -> Int {
+  let Point { x, ..others } = p
+  x
+}
+
+fn main() {
+  assert x_of(Point { x: 1, y: 2 }) == 1
+}

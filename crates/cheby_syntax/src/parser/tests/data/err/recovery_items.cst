@@ -1,0 +1,131 @@
+SOURCE_FILE@0..126
+  FN_DECL@0..17
+    FN_KW@0..2 "fn"
+    WHITESPACE@2..3 " "
+    LOWER_IDENT@3..12 "ok_before"
+    PARAM_LIST@12..14
+      L_PAREN@12..13 "("
+      R_PAREN@13..14 ")"
+    WHITESPACE@14..15 " "
+    BLOCK@15..17
+      L_BRACE@15..16 "{"
+      R_BRACE@16..17 "}"
+  NEWLINE@17..18 "\n"
+  ERROR@18..28
+    LET_KW@18..21 "let"
+    WHITESPACE@21..22 " "
+    LOWER_IDENT@22..23 "x"
+    WHITESPACE@23..24 " "
+    EQ@24..25 "="
+    WHITESPACE@25..26 " "
+    INT_NUMBER@26..27 "1"
+    NEWLINE@27..28 "\n"
+  FN_DECL@28..44
+    FN_KW@28..30 "fn"
+    WHITESPACE@30..31 " "
+    LOWER_IDENT@31..39 "ok_after"
+    PARAM_LIST@39..41
+      L_PAREN@39..40 "("
+      R_PAREN@40..41 ")"
+    WHITESPACE@41..42 " "
+    BLOCK@42..44
+      L_BRACE@42..43 "{"
+      R_BRACE@43..44 "}"
+  NEWLINE@44..45 "\n"
+  ERROR@45..63
+    R_BRACE@45..46 "}"
+    R_BRACE@46..47 "}"
+    R_BRACE@47..48 "}"
+    WHITESPACE@48..49 " "
+    LOWER_IDENT@49..56 "garbage"
+    WHITESPACE@56..57 " "
+    L_PAREN@57..58 "("
+    WHITESPACE@58..59 " "
+    LOWER_IDENT@59..63 "here"
+  NEWLINE@63..64 "\n"
+  TYPE_DECL@64..81
+    TYPE_KW@64..68 "type"
+    WHITESPACE@68..69 " "
+    UPPER_IDENT@69..70 "T"
+    WHITESPACE@70..71 " "
+    RECORD_FIELD_LIST@71..81
+      L_BRACE@71..72 "{"
+      WHITESPACE@72..73 " "
+      RECORD_FIELD@73..79
+        LOWER_IDENT@73..74 "x"
+        COLON@74..75 ":"
+        WHITESPACE@75..76 " "
+        PATH_TYPE@76..79
+          PATH@76..79
+            UPPER_IDENT@76..79 "Int"
+      WHITESPACE@79..80 " "
+      R_BRACE@80..81 "}"
+  NEWLINE@81..82 "\n"
+  ERROR@82..85
+    VISIBILITY@82..85
+      PUB_KW@82..85 "pub"
+  NEWLINE@85..86 "\n"
+  CONST_DECL@86..102
+    CONST_KW@86..91 "const"
+    WHITESPACE@91..92 " "
+    LOWER_IDENT@92..93 "c"
+    COLON@93..94 ":"
+    WHITESPACE@94..95 " "
+    PATH_TYPE@95..98
+      PATH@95..98
+        UPPER_IDENT@95..98 "Int"
+    WHITESPACE@98..99 " "
+    EQ@99..100 "="
+    WHITESPACE@100..101 " "
+    LITERAL@101..102
+      INT_NUMBER@101..102 "1"
+  NEWLINE@102..103 "\n"
+  ERROR@103..108
+    ATTR@103..108
+      AT@103..104 "@"
+      LOWER_IDENT@104..108 "attr"
+  WHITESPACE@108..109 " "
+  ERROR@109..113
+    LET_KW@109..112 "let"
+    NEWLINE@112..113 "\n"
+  FN_DECL@113..125
+    FN_KW@113..115 "fn"
+    WHITESPACE@115..116 " "
+    LOWER_IDENT@116..120 "last"
+    PARAM_LIST@120..122
+      L_PAREN@120..121 "("
+      R_PAREN@121..122 ")"
+    WHITESPACE@122..123 " "
+    BLOCK@123..125
+      L_BRACE@123..124 "{"
+      R_BRACE@124..125 "}"
+  NEWLINE@125..126 "\n"
+
+// errors
+
+error[E0013]: expected an item, found `let`
+ --> err/recovery_items.cheby:2:1
+  |
+2 | let x = 1
+  | ^^^
+
+error[E0013]: expected an item, found `}`
+ --> err/recovery_items.cheby:4:1
+  |
+4 | }}} garbage ( here
+  | ^
+
+error[E0014]: unexpected line break
+ --> err/recovery_items.cheby:6:4
+  |
+6 | pub
+  |    ^ expected `fn`, `type`, `const`, `interface` or `test`
+  |
+  = note: a line continues only inside `(`, `[` or type `<…>`, after an operator, `,`, `=`, `=>`, `->` or `<-`, or before a line starting with `|>`, `&&` or `||`
+
+error[E0013]: expected a line break after the attribute, found `let`
+ --> err/recovery_items.cheby:8:7
+  |
+8 | @attr let
+  |       ^^^
+

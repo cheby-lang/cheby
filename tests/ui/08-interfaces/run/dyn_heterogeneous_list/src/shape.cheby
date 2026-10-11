@@ -1,0 +1,11 @@
+//! The `Shape` interface, which embeds `Show`.
+
+pub interface Shape: Show {
+  fn area(Self) -> Int
+  fn scaled(Self, Int) -> Int
+}
+
+/// The area of `s` through the bound, whatever `S` is.
+pub fn area_of<S: Shape>(s: S) -> Int {
+  Shape::area(s)
+}

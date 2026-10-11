@@ -1,0 +1,37 @@
+// @mode: run-pass
+// @decisions: D-086, D-233
+//! Interpolation runs: `{x}` uses the `show` function of `x`'s type,
+//! including a user type's own, `{x:?}` uses debug printing, a path reads
+//! fields, and the parts are evaluated and joined left to right into one
+//! string (§5.3.2, §3.13).
+
+import std::io
+
+pub type Point {
+  x: Int,
+  y: Int,
+}
+
+pub fn show(p: Point) -> String {
+  io::println("showing a point")
+  "({p.x}, {p.y})"
+}
+
+fn main() {
+  let name = "Ada \"the first\""
+  let count = -42
+  let big: I64 = 9223372036854775807
+  let ratio = 0.1
+  let whole = 3.0
+  let point = Point { x: 1, y: -2 }
+  io::println("{name}")
+  io::println("{count}")
+  io::println("name {name}, count {count}, big {big}, ratio {ratio}, whole {whole}")
+  io::println("{point} then {point.x} and {point.y}")
+  io::println("debug: {point:?} {name:?} {ratio:?} {count:?}")
+  let some = Some(point)
+  io::println("{some:?} is \{not} {point}")
+  let long = "{name}{name}{name}{name}{name}{name}{name}{name}{name}{name}{name}{name}"
+  io::println(long)
+  io::println("unicode: {name} → ✓ {count}")
+}

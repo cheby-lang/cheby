@@ -1,0 +1,19 @@
+// @mode: check-pass
+// @decisions: D-011, D-083
+//! A function without `-> type` returns `Nil`, and so does a function type
+//! written without one.
+
+import std::io
+
+pub fn greet(name: String) {
+  io::println(name)
+}
+
+pub fn twice(action: fn(String), text: String) -> Nil {
+  action(text)
+  action(text)
+}
+
+fn main() {
+  twice(greet, "hello")
+}

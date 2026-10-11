@@ -1,0 +1,8 @@
+// @mode: check-pass
+// @decisions: D-071
+//! The same field name may appear in several variants (§4.3.1).
+
+pub exposed type Shape {
+  Circle { x: Float, y: Float, radius: Float },
+  Square { x: Float, y: Float, side: Float },
+}

@@ -1,0 +1,9 @@
+// @mode: run-fail
+// @decisions: D-092, D-449
+//! A shift by the type's width panics: 8 for `U8` (§5.4.6).
+
+fn main() {
+  let x: U8 = 1
+  let n: U8 = 8
+  let _ = x << n
+}

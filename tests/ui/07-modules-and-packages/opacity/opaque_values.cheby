@@ -1,0 +1,21 @@
+// @mode: check-pass
+// @decisions: D-048, D-233
+//! Values of an opaque type from another package can still be passed
+//! around, compared with `==`, debug-printed and given to the package's
+//! `pub` functions (§4.3.4).
+
+import std::io
+
+fn describe(error: io::Error) -> String {
+  case io::is_not_found(error) && error == error {
+    True => "missing: {error}, {error:?}"
+    False => io::show(error)
+  }
+}
+
+fn main() {
+  case io::read_file("missing.txt") {
+    Ok(_) => Nil
+    Err(error) => io::println(describe(error))
+  }
+}

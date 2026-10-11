@@ -1,0 +1,12 @@
+// @mode: check-pass
+// @decisions: D-067
+//! `String` satisfies `Add` through `std::string`, so `+` concatenates
+//! strings without importing it (§5.4.3).
+
+fn full(first: String, last: String) -> String {
+  first + " " + last
+}
+
+fn main() {
+  assert full("Ada", "Lovelace") == "Ada Lovelace"
+}

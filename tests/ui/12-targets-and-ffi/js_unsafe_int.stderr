@@ -1,0 +1,27 @@
+error[E0071]: literal out of range for `Int` on the `js` target
+  --> tests/ui/12-targets-and-ffi/js_unsafe_int.cheby:12:3
+   |
+12 |   9007199254740992
+   |   ^^^^^^^^^^^^^^^^ `9007199254740992` does not fit in `Int` on JS
+   |
+   = note: on JS, `Int` holds -9007199254740991 to 9007199254740991, the safe-integer range
+   = help: use an `I64`, which holds every 64-bit value on both targets, or restrict `too_large` to `native` with `@target(native)`
+
+error[E0071]: literal out of range for `Int` on the `js` target
+  --> tests/ui/12-targets-and-ffi/js_unsafe_int.cheby:16:3
+   |
+16 |   -9007199254740992
+   |   ^^^^^^^^^^^^^^^^^ `-9007199254740992` does not fit in `Int` on JS
+   |
+   = note: on JS, `Int` holds -9007199254740991 to 9007199254740991, the safe-integer range
+   = help: use an `I64`, which holds every 64-bit value on both targets, or restrict `too_small` to `native` with `@target(native)`
+
+error[E0071]: literal out of range for `Int` on the `js` target
+  --> tests/ui/12-targets-and-ffi/js_unsafe_int.cheby:30:5
+   |
+30 |     9007199254740993 => True
+   |     ^^^^^^^^^^^^^^^^ `9007199254740993` does not fit in `Int` on JS
+   |
+   = note: on JS, `Int` holds -9007199254740991 to 9007199254740991, the safe-integer range
+   = help: use an `I64`, which holds every 64-bit value on both targets, or restrict `is_huge` to `native` with `@target(native)`
+

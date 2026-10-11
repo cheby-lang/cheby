@@ -1,0 +1,25 @@
+// @mode: run-pass
+// @decisions: D-316, D-525
+//! A `Bytes` built by a million pushes on a unique value runs in
+//! amortized O(1) per byte, because each push updates its argument in
+//! place when nothing else refers to it (D-316). A copy taken half way
+//! keeps its own bytes, and the value leaves nothing live at exit.
+
+import std::bytes
+import std::io
+
+fn fill(data: bytes::Bytes, n: Int) -> bytes::Bytes {
+  case n {
+    0 => data
+    _ => fill(bytes::push_u16_be(data, 0x0102), n - 1)
+  }
+}
+
+fn main() {
+  let half = fill(bytes::new(), 250_000)
+  let whole = fill(half, 250_000)
+  let length = bytes::length(whole)
+  let half_length = bytes::length(half)
+  let last = bytes::read_u16_be(whole, length - 2)
+  io::println("{length} {half_length} {last:?}")
+}

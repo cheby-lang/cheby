@@ -1,0 +1,8 @@
+//! Greets with a prefix.
+
+import std::io
+
+pub fn shout(text: String) {
+  io::print("greet: ")
+  io::println(text)
+}

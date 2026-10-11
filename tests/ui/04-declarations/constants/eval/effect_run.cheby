@@ -1,0 +1,20 @@
+// @mode: run-fail
+// @exit: 1
+// @decisions: D-090, D-533, D-537
+//! `cheby run` reports a forbidden effect in a constant as E0077 before
+//! `main` starts (§4.5).
+
+import std::io
+
+const home: String = read_name()
+
+fn read_name() -> String {
+  case io::read_line() {
+    Ok(Some(line)) => line
+    _ => "nobody"
+  }
+}
+
+fn main() {
+  io::println("main ran: {home}")
+}

@@ -1,0 +1,17 @@
+// @mode: check-fail
+// @decisions: D-049
+//! The turbofish gives every type argument, and only those (§3.12.6).
+
+pub fn empty<T>() -> List<T> {
+  []
+}
+
+pub fn double(n: Int) -> Int {
+  n * 2
+}
+
+pub fn main() {
+  let xs = empty::<Int, String>()
+  let y = double::<Int>(1)
+  assert xs == [] && y == 2
+}

@@ -1,0 +1,9 @@
+error[E0027]: `_` is the only argument of the call
+  --> tests/ui/05-expressions/call_sole_hole.cheby:13:30
+   |
+13 |   let xs = list::map([1, 2], double(_))
+   |                              ^^^^^^^^^
+   |
+   = note: `double(_)` means exactly `double` (D-245)
+   = help: write `double` instead
+

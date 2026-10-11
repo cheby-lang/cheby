@@ -1,0 +1,12 @@
+// @mode: check-fail
+// @decisions: D-084
+//! An integer literal is never a float, and a float literal never an
+//! integer (§3.3.4).
+
+pub fn ratio() -> Float {
+  1
+}
+
+pub fn count() -> Int {
+  1.0
+}

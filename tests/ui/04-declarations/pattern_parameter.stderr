@@ -1,0 +1,8 @@
+error[E0021]: a top-level function parameter must be a name
+ --> tests/ui/04-declarations/pattern_parameter.cheby:6:8
+  |
+6 | fn sum((a, b): (Int, Int)) -> Int {
+  |        ^^^^^^
+  |
+  = help: name the parameter and take it apart in the body with `let` (D-242)
+

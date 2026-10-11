@@ -1,0 +1,9 @@
+error[E0076]: evaluating the constant `big` used more than the memory limit of 1GiB
+  --> tests/ui/04-declarations/constants/eval/memory_limit_overflow.cheby:10:7
+   |
+10 | const big: String = string::repeat("abc", 9_000_000_000_000_000_000)
+   |       ^^^ this constant is computed at compile time
+   |
+   = note: the limit counts the heap bytes that the evaluation keeps live at once
+   = help: compute less at compile time, or raise `memory-limit` in the `[const-eval]` table of `cheby.toml`
+

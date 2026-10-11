@@ -1,0 +1,20 @@
+error[E0041]: the field `width` is declared twice in `Rect`
+ --> tests/ui/04-declarations/types/duplicate_field.cheby:6:24
+  |
+6 |   Rect { width: Float, width: Float },
+  |          -----         ^^^^^ declared again here
+  |          |
+  |          first declared here
+  |
+  = note: field names must be distinct within a variant (§4.3.1)
+
+error[E0041]: the field `x` is declared twice in `Point`
+  --> tests/ui/04-declarations/types/duplicate_field.cheby:10:38
+   |
+10 | pub type Point { x: Float, y: Float, x: Float }
+   |                  -                   ^ declared again here
+   |                  |
+   |                  first declared here
+   |
+   = note: field names must be distinct within a variant (§4.3.1)
+

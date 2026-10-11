@@ -1,0 +1,8 @@
+// @mode: parse-fail
+// @decisions: D-076
+//! `()` is not a value; the unit value is `Nil`.
+
+fn main() {
+  let unit = ()
+  assert unit == Nil
+}

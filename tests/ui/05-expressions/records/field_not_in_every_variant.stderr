@@ -1,0 +1,9 @@
+error[E0058]: not every variant of `Shape` has the field `width`
+  --> tests/ui/05-expressions/records/field_not_in_every_variant.cheby:12:9
+   |
+12 |   shape.width
+   |         ^^^^^ `Circle` has no field `width`
+   |
+   = note: a field can be read without `case` only if every variant has it with the same type (D-071)
+   = help: use `case` to handle each variant
+

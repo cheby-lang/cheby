@@ -1,0 +1,27 @@
+// @mode: check-pass
+// @decisions: D-037, D-084, D-470
+//! A numeric literal may have any numeric type of its kind, and a negative
+//! literal fits down to the type's minimum (§3.3.4, §5.3.1). The lowest
+//! `Int` is outside JS's safe-integer range, so that function exists only on
+//! native (D-037).
+
+pub fn byte() -> U8 {
+  255
+}
+
+pub fn small() -> I8 {
+  -128
+}
+
+pub fn single() -> F32 {
+  1.5
+}
+
+@target(native)
+pub fn lowest() -> Int {
+  -9223372036854775808
+}
+
+pub fn widest() -> U64 {
+  18446744073709551615
+}

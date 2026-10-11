@@ -1,0 +1,39 @@
+// @mode: check-pass
+// @decisions: D-168, D-235
+//! A value converts to `dyn I` where `dyn I` is expected, and `dyn I`
+//! calls go through the packaged functions (§8.6).
+
+import std::io
+
+interface Named: Show {
+  fn name(Self) -> String
+}
+
+type Robot {
+  serial: String,
+}
+
+fn name(robot: Robot) -> String {
+  robot.serial
+}
+
+fn show(robot: Robot) -> String {
+  robot.serial
+}
+
+fn greet(who: dyn Named) -> String {
+  Named::name(who)
+}
+
+fn shown(value: dyn Show) -> String {
+  "{value}"
+}
+
+fn main() {
+  let robot = Robot { serial: "R2" }
+  let named: dyn Named = robot
+  let crew: List<dyn Named> = [robot, named]
+  io::println(greet(robot))
+  io::println(shown(named))
+  assert crew == [named, named]
+}

@@ -1,0 +1,33 @@
+module app
+
+fn app::triple(_0: int, _1: float, _2: value) -> value check str#0 {
+  str#0 = "src/main.cheby:3:4"
+bb0:
+  _3: value = box int _0
+  _4: value = box float _1
+  _5: value = alloc tuple/3(_3, _4, _2)
+  return _5
+}
+
+fn app::pair(_0: bool) -> value check str#0 {
+  str#0 = "src/main.cheby:7:4"
+bb0:
+  _1: value = box bool _0
+  _2: value = alloc tuple/2(_1, const nil)
+  return _2
+}
+
+fn app::main() -> value check str#0 {
+  str#0 = "src/main.cheby:11:4"
+  str#1 = "s"
+bb0:
+  _0: value = const str#1
+  _1: value = call app::triple(const int 1, const float 2.5, _0)
+  drop _1
+  _2: value = call app::pair(const bool true)
+  drop _2
+  return const nil
+}
+
+callee app::triple(int, float, value) -> value
+callee app::pair(bool) -> value

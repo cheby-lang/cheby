@@ -1,0 +1,8 @@
+error[E0058]: `Point` has no field `z`
+  --> tests/ui/06-patterns/patterns/unknown_field_pattern.cheby:11:15
+   |
+11 |   let Point { z, .. } = p
+   |               ^ unknown field
+   |
+   = note: the fields of `Point`: `x` and `y`
+

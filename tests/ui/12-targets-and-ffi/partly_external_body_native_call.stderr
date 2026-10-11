@@ -1,0 +1,11 @@
+error[E0067]: `native_now` exists only on `native`, but the body of `ticks` runs on `js`
+  --> tests/ui/12-targets-and-ffi/partly_external_body_native_call.cheby:13:3
+   |
+9  | fn native_now() -> Int
+   |    ---------- `native_now` is declared here
+...
+13 |   native_now()
+   |   ^^^^^^^^^^ not available on `js`
+   |
+   = note: the body of `ticks` runs only on the targets it has no `@external` for
+

@@ -1,0 +1,4 @@
+fn first(pair: (Int, String)) -> Int {
+  let a = pair.0
+  pair.0.1
+}

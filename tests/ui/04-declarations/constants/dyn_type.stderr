@@ -1,0 +1,9 @@
+error[E0068]: the constant `anything` has a type that contains `dyn`
+ --> tests/ui/04-declarations/constants/dyn_type.cheby:9:21
+  |
+9 | pub const anything: List<dyn Named> = []
+  |                     ^^^^^^^^^^^^^^^ this type contains `dyn Named`
+  |
+  = note: a constant's value is computed at compile time and embedded in the program, which cannot hold `dyn` values
+  = help: give the constant a concrete type
+

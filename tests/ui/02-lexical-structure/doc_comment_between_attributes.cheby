@@ -1,0 +1,11 @@
+// @mode: check-fail
+// @decisions: D-434
+//! The doc comments of an item come before all of its attributes, so a
+//! `///` comment between two attributes is misplaced.
+
+@target(native)
+/// Reads a number.
+@blocking
+pub fn read() -> Int {
+  1
+}

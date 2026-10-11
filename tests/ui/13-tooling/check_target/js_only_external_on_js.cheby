@@ -1,0 +1,16 @@
+// @mode: check-pass
+// @flags: --target js
+// @decisions: D-030, D-056, D-550
+//! `cheby check --target js` checks the code as it runs on JS only, so a
+//! call of a function that exists only on JS is accepted, although the
+//! package targets both.
+
+import std::io
+
+@external(js, "./clock.mjs", "now")
+fn js_now() -> Int
+
+fn main() {
+  let _ = js_now()
+  io::println("done")
+}

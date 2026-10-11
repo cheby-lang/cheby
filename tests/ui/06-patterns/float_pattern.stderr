@@ -1,0 +1,8 @@
+error[E0033]: float literal in a pattern
+ --> tests/ui/06-patterns/float_pattern.cheby:7:5
+  |
+7 |     0.5 => True
+  |     ^^^
+  |
+  = help: compare in a guard, such as `x when x == 0.5 => …`, or in a subjectless `case` (D-113)
+

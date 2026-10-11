@@ -1,0 +1,12 @@
+error[E0064]: `dyn Shape` is not allowed: `scale` uses `Self` other than as its first parameter
+  --> tests/ui/08-interfaces/dyn/not_object_safe.cheby:11:23
+   |
+8  |   fn scale(Self, Float) -> Self
+   |      ----- `fn scale(Self, Float) -> Self`
+...
+11 | pub fn area_of(shape: dyn Shape) -> Float {
+   |                       ^^^^^^^^^ `dyn Shape` written here
+   |
+   = note: a `dyn` value can supply `Self` only as the first argument of each function, and nowhere else (§8.6, D-117)
+   = help: put the functions that `dyn` needs in an interface of their own
+

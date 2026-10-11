@@ -1,0 +1,17 @@
+//! Rectangles, which satisfy `shape::Shape`.
+
+pub type Rect {
+  Rect { width: Int, height: Int }
+}
+
+pub fn area(r: Rect) -> Int {
+  r.width * r.height
+}
+
+pub fn scaled(r: Rect, k: Int) -> Int {
+  k * area(r)
+}
+
+pub fn show(r: Rect) -> String {
+  "rect {r.width}x{r.height}"
+}

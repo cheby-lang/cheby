@@ -1,0 +1,8 @@
+// Case with subjects, patterns and guards
+fn f() {
+  case x, y {
+    Some(v) | None as w, _ when v > 1 => v
+    shape::Circle { radius, .. }, [first, ..rest] => first
+    (a, -1), [..] => panic as "no"
+  }
+}

@@ -1,0 +1,6 @@
+error[E0049]: expected a function, found `String`
+ --> tests/ui/05-expressions/calls/not_a_function.cheby:7:3
+  |
+7 |   greeting("world")
+  |   ^^^^^^^^ this has type `String`
+

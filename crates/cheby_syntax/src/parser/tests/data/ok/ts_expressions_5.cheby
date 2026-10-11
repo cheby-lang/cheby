@@ -1,0 +1,4 @@
+// Closure with pattern parameters
+fn f() {
+  list::fold(xs, 0, fn(acc, (_, quantity)) { acc + quantity })
+}

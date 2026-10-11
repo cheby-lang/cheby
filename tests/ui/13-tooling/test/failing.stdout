@@ -1,0 +1,20 @@
+test ui_test "adds" ... ok
+test ui_test "assert fails" ... FAILED
+test ui_test "panics" ... FAILED
+test ui_test "returns an error" ... FAILED
+test ui_test "runs after failures" ... ok
+
+---- ui_test "assert fails" ----
+panicked at tests/ui/13-tooling/test/failing.cheby:18:10:
+assertion failed: double(2) == 5
+  left: 4
+ right: 5
+
+---- ui_test "panics" ----
+panicked at tests/ui/13-tooling/test/failing.cheby:22:3:
+boom
+
+---- ui_test "returns an error" ----
+no luck
+
+test result: FAILED. 2 passed; 3 failed; 0 filtered out

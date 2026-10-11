@@ -1,0 +1,2 @@
+panicked at tests/ui/05-expressions/panic/panic_as.cheby:6:3:
+computation failed: no input

@@ -1,0 +1,21 @@
+fn app::labels(_0: value, _1: value, _2: value) -> value check str#0 {
+  str#0 = "src/main.cheby:4:4"
+bb0:
+  _3: value = alloc closure/2(const code <closure app::labels#0>, _2, _0)
+  tail_call std::list::map(_1, _3)
+}
+
+fn closure app::labels#0(_0: value, _1: value) -> value check str#0 {
+  str#0 = "src/main.cheby:5:17"
+bb0:
+  _2: value = field _0.2 of closure/2
+  dup _2
+  _3: value = field _0.1 of closure/2
+  dup _3
+  drop _0
+  _4: value = field _2.1 of dict/1+0
+  dup _4
+  drop _2
+  _5: value = call _4(_1)
+  tail_call std::string::add(_3, _5)
+}

@@ -1,0 +1,10 @@
+warning[W0009]: `todo` left in the code
+ --> tests/ui/05-expressions/panic/todo_plain.cheby:7:3
+  |
+7 |   todo
+  |   ^^^^ this panics when it is reached
+  |
+  = help: write the missing code in place of the `todo`
+
+panicked at tests/ui/05-expressions/panic/todo_plain.cheby:7:3:
+not implemented

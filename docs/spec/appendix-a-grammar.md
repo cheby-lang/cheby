@@ -7,12 +7,12 @@ Operator precedence is given by the layered `expr` rules below and summarized in
 ## A.1 Modules
 
 ```ebnf
-module          = [ NL ] { module_doc NL }
+module          = { module_doc NL }
                   { inner_attribute NL }                  (* after module docs, before imports, D-141, D-201 *)
                   { import_decl NL }                      (* all imports before all items, D-143 *)
-                  { item NL } ;
+                  { item NL } ;                           (* the end of the file stands for the last NL, D-426 *)
 module_doc      = "//!" text ;                            (* §2.2 *)
-inner_attribute = "@!" LOWER [ "(" [ attr_arg { "," attr_arg } [ "," ] ] ")" ] ;   (* only @!target(...), D-141 *)
+inner_attribute = "@!" LOWER [ "(" [ attr_arg { "," attr_arg } [ "," ] ] ")" ] ;   (* only @!target(...), D-141; the name may be a reserved word, D-435 *)
 
 import_decl     = "import" module_path [ "as" LOWER ]
                 | "import" module_path "::" "{" [ NL ] import_item { "," [ NL ] import_item } [ "," ] [ NL ] "}" ;
@@ -21,12 +21,14 @@ import_item     = LOWER [ "as" LOWER ]
                 | UPPER [ "as" UPPER ] ;
 ```
 
+The lexer drops `NL` tokens at the start and at the end of a file, as it does after `{` and before `}` ([§2.8](02-lexical-structure.md#28-newlines-and-statement-separation)). The end of the file then ends the last line, so a file need not end with a newline (D-426).
+
 ## A.2 Items
 
 ```ebnf
-item            = { doc_comment NL } { attribute NL } item_body ;
+item            = { doc_comment NL } { attribute NL } item_body ;   (* doc comments before attributes, D-434 *)
 doc_comment     = "///" text ;
-attribute       = "@" LOWER [ "(" [ attr_arg { "," attr_arg } [ "," ] ] ")" ] ;
+attribute       = "@" LOWER [ "(" [ attr_arg { "," attr_arg } [ "," ] ] ")" ] ;   (* the name may be a reserved word, D-435 *)
 attr_arg        = LOWER | STRING ;
 
 item_body       = fn_decl
@@ -61,7 +63,7 @@ alias_decl      = [ visibility ] "type" UPPER [ plain_params ] "=" type ;
 const_decl      = [ visibility ] "const" LOWER ":" type "=" expr ;
 
 interface_decl  = [ visibility ] "interface" UPPER [ ":" bound ]
-                  [ "{" [ NL ] { interface_fn NL } "}" ] ;
+                  [ "{" [ NL ] [ interface_fn { NL interface_fn } ] [ NL ] "}" ] ;   (* D-427 *)
 interface_fn    = { doc_comment NL } "fn" LOWER "(" [ type { "," type } [ "," ] ] ")" [ "->" type ] ;   (* doc comments: D-227 *)
 
 test_decl       = "test" STRING block ;                   (* no visibility *)
@@ -71,10 +73,13 @@ Notes:
 
 - An item without `pub` or `priv` is visible to every module of its package. `pub` makes it visible to other packages, and `priv` restricts it to its own module (D-162).
 
-- A `type_decl` without a body is an external type and requires an `@external` attribute ([§12.5.3](12-targets-and-ffi.md#1253-external-types)).
+- A `type_decl` without a body is an external type ([§12.5.3](12-targets-and-ffi.md#1253-external-types)). It may have an `@external` attribute, which names its drop function, and needs none (D-491).
 - An `fn_decl` without a block requires an `@external` attribute ([§12.5](12-targets-and-ffi.md#125-foreign-functions)).
 - The two `type_body` forms are told apart by the first token after any doc comments: `UPPER` starts variants, `LOWER ":"` starts fields.
 - Newlines inside `{ … }` of type bodies are allowed only where the rules show `[ NL ]`, so variants and fields may be written one per line with commas.
+- A positional variant has at least one type and a named-field variant at least one field. `Foo()` and `Foo {}` are compile errors, and a variant without fields is written `Foo` (D-437).
+- No attribute may come before a `variant`, a `field` or an `interface_fn`. A run of attributes there is one compile error, and the member after it still parses (D-461, D-514).
+- An `interface_decl` has no type parameters. A `<…>` list after its name is one compile error, and the rest of the declaration still parses (D-165, D-495).
 
 ## A.3 Types
 
@@ -91,7 +96,9 @@ fn_type         = "fn" "(" [ type { "," type } [ "," ] ] ")" [ "->" type ] ;
 dyn_type        = "dyn" interface_ref ;
 ```
 
-In type contexts, a `>>` token is split into two `>` tokens ([§2.6](02-lexical-structure.md#26-operators-and-punctuation)).
+In type contexts, a `>>` token is split into two `>` tokens, and a `>=` token into `>` and `=` ([§2.6](02-lexical-structure.md#26-operators-and-punctuation), D-430).
+
+There is no parenthesized type. `(T)` is a `tuple_type` with one element and a compile error, like `()` and `(T,)` (D-076, D-436).
 
 ## A.4 Blocks and statements
 
@@ -155,7 +162,7 @@ literal         = INT | FLOAT | STRING | RAW_STRING ;
 path_expr       = [ LOWER "::" ] ( LOWER | UPPER ) [ "::" type_args ]
                 | [ LOWER "::" ] UPPER "::" LOWER ;             (* interface function, Show::show, D-173 *)
 constructor     = ctor_path "{" [ NL ] [ field_init { "," [ NL ] field_init } [ "," ] ] [ NL ] "}" ;
-record_update   = UPPER "{" [ NL ] ".." expr { "," [ NL ] field_init } [ "," ] [ NL ] "}" ;
+record_update   = ctor_path "{" [ NL ] ".." expr { "," [ NL ] field_init } [ "," ] [ NL ] "}" ;   (* type name, may be qualified, D-156, D-429 *)
 ctor_path       = [ LOWER "::" ] UPPER ;
 field_init      = LOWER [ ":" expr ] ;
 tuple           = "(" expr "," expr { "," expr } [ "," ] ")" ;
@@ -171,7 +178,7 @@ case_expr       = "case" subjects "{" [ NL ] case_arm { NL case_arm } [ NL ] "}"
                 | "case" "{" [ NL ] cond_arm { NL cond_arm } [ NL ] "}" ;
 subjects        = subject_expr { "," subject_expr } ;
 case_arm        = pattern { "," pattern } [ "when" expr ] "=>" expr ;
-cond_arm        = ( expr | "_" ) "=>" expr ;                    (* last arm must be "_", D-109 *)
+cond_arm        = ( expr | "_" ) "=>" expr ;                    (* last arm must be "_", and only the last, D-109, D-439 *)
 ```
 
 Notes:
@@ -179,8 +186,8 @@ Notes:
 - A unit or positional constructor used as a value (`None`, `Some(1)`, `Some`) parses as `path_expr` followed by an optional `call_suffix`.
 - An interface function call (`Show::show(x)`, `shape::Shape::area(x)`) parses as the interface-function form of `path_expr` followed by a `call_suffix` (D-173). After `UPPER "::"`, a `LOWER` token selects this form and `<` selects `type_args`.
 - The message after `as` in `panic_expr`, `todo_expr`, `assert_stmt` and `let_assert_stmt` is a `String` expression (D-159, D-160, D-161).
-- `subject_expr` is `expr` with two restrictions ([§5.9.6](05-expressions.md#596-parsing-subjects)): an `UPPER` path followed by `{` ends the subject instead of starting a `constructor` or `record_update`, and a subject cannot start with `{`. Parenthesize to use either form.
-- `-` directly applied to an `INT` or `FLOAT` literal is treated as a negative literal for typing ([§5.3.1](05-expressions.md#531-negative-literals)).
+- `subject_expr` is `expr` with two restrictions ([§5.9.6](05-expressions.md#596-parsing-subjects)): an `UPPER` path followed by `{` ends the subject instead of starting a `constructor` or `record_update`, and a subject cannot start with `{`. Both restrictions apply to every subject, not only the first. Parenthesize to use either form. `subjects` has no trailing comma (D-639).
+- `-` written directly before an `INT` or `FLOAT` literal is treated as a negative literal for typing ([§5.3.1](05-expressions.md#531-negative-literals)). Whitespace or a comment between a unary `-` and an `INT` or `FLOAT` is a compile error, here and in `literal_pat` (D-470).
 - In `cmp_expr`, a second comparison operator is a compile error with a suggestion, not a parse of a different expression.
 
 ## A.6 Patterns
@@ -206,6 +213,12 @@ tuple_pattern   = "(" pattern "," pattern { "," pattern } [ "," ] ")" ;
 list_pattern    = "[" [ list_pat_item { "," list_pat_item } [ "," ] ] "]" ;
 list_pat_item   = pattern | ".." [ LOWER ] ;                    (* at most one spread, in any position, D-158 *)
 ```
+
+Notes:
+
+- `as` follows a whole `alt_pattern` and comes at most once, so `A as x | B` and `p as a as b` are compile errors. Parentheses put an `as` pattern anywhere a pattern may stand (D-438).
+- A positional `ctor_pattern` has at least one sub-pattern, so `Some()` is a compile error (D-437).
+- The `..` of `field_pats` takes no name: `P { x, ..rest }` is a compile error ([§6.4](06-patterns.md#64-constructor-patterns)).
 
 ## A.7 String literals
 
@@ -240,7 +253,7 @@ LOWER           = ( "a"…"z" | "_" ) { "a"…"z" | "0"…"9" | "_" } ;   (* not
 UPPER           = "A"…"Z" { "A"…"Z" | "a"…"z" | "0"…"9" } ;
 ```
 
-Identifiers are ASCII only (D-127). `LOWER` excludes keywords and reserved words.
+Identifiers are ASCII only (D-127). `LOWER` excludes keywords. A reserved word that is not a keyword, or a word that breaks the case rules, is read as an identifier, and the error is reported where the name is bound or declared, or at a use that nothing binds (D-424, D-469).
 
 Keywords ([§2.4](02-lexical-structure.md#24-keywords)):
 

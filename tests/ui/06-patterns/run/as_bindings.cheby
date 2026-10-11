@@ -1,0 +1,40 @@
+// @mode: run-pass
+// @decisions: D-113, D-438
+//! `pattern as name` binds the whole matched value as well, whichever
+//! alternative matched (§6.8).
+
+import std::int
+import std::io
+import std::list
+
+fn describe(items: List<Int>) -> String {
+  case items {
+    [_, ..] as non_empty => {
+      let count = list::length(non_empty)
+      "{count} items"
+    }
+    [] => "no items"
+  }
+}
+
+fn keep(value: Option<Int>) -> Option<Int> {
+  case value {
+    Some(0) | None as nothing => nothing
+    Some(n) => Some(n * 10)
+  }
+}
+
+fn show(value: Option<Int>) -> String {
+  case value {
+    Some(n) => int::show(n)
+    None => "none"
+  }
+}
+
+fn main() {
+  io::println(describe([1, 2, 3]))
+  io::println(describe([]))
+  io::println(show(keep(Some(0))))
+  io::println(show(keep(None)))
+  io::println(show(keep(Some(4))))
+}

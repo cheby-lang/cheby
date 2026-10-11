@@ -1,0 +1,17 @@
+// @mode: check-fail
+// @decisions: D-148
+//! The signature of an alias is its definition, so a `pub` alias must not
+//! stand for a type that is not `pub` (§4.1.3).
+
+type Secret { Secret(String) }
+
+pub type Handle = Secret
+
+pub fn open() -> Nil {
+  let handle: Handle = Secret("key")
+  assert handle == Secret("key")
+}
+
+fn main() {
+  open()
+}

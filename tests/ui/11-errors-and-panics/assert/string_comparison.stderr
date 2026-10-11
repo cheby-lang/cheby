@@ -1,0 +1,4 @@
+panicked at tests/ui/11-errors-and-panics/assert/string_comparison.cheby:7:10:
+assertion failed: name == "Bob"
+  left: "Ada"
+ right: "Bob"

@@ -1,0 +1,9 @@
+// @mode: run-fail
+// @decisions: D-069, D-449
+//! Division by zero panics on the sized integer types too (§3.3.3).
+
+fn main() {
+  let x: U8 = 9
+  let zero: U8 = 0
+  let _ = x / zero
+}

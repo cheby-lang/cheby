@@ -1,0 +1,7 @@
+//! Imports `second`, which imports this module back.
+
+import app::second
+
+pub fn one() -> Int {
+  second::two() - 1
+}

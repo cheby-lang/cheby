@@ -1,0 +1,9 @@
+error[E0065]: cannot convert `List<T>` to `dyn Any`: the type parameter `T` has no bound
+  --> tests/ui/08-interfaces/dyn/wrap_bad.cheby:14:3
+   |
+14 |   xs
+   |   ^^ converted to `dyn Any` here
+   |
+   = note: a `dyn` value carries a descriptor of its value's type, and the descriptor of `T` can come only from one of its bounds (§8.6.1, D-236)
+   = help: add a bound such as `T: Any`, with `interface Any`: every type satisfies an empty interface (D-166)
+

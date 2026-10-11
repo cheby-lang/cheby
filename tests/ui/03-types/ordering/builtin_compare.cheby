@@ -1,0 +1,12 @@
+// @mode: check-pass
+// @decisions: D-135, D-136
+//! The numeric types, `Bool`, `String`, tuples and `List` have built-in
+//! `compare` functions, so the comparison operators work on them (§3.14).
+
+fn main() {
+  assert 1 < 2 && 1.5 >= 1.0
+  assert False < True
+  assert "apple" < "banana"
+  assert (1, "a") < (1, "b")
+  assert [1, 2] < [1, 3]
+}

@@ -1,0 +1,14 @@
+error[E0067]: `max_value` exists only on `native`, but `largest` also runs on `js`
+  --> tests/ui/12-targets-and-ffi/std_location.cheby:10:3
+   |
+10 |   int::max_value
+   |   ^^^^^^^^^^^^^^ not available on `js`
+   |
+  ::: std/int.cheby:22:11
+   |
+22 | pub const max_value: Int = 9_223_372_036_854_775_807
+   |           --------- `max_value` is declared here
+   |
+   = help: restrict `largest` to `native` with `@target(native)`, or the whole module with `@!target(native)`
+   = help: if the package supports only `native`, declare `targets = ["native"]` in `cheby.toml`
+

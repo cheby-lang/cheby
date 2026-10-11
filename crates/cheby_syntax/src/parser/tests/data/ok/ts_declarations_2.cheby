@@ -1,0 +1,13 @@
+/// A value.
+pub exposed type Value {
+  Null,
+  Number(Float),
+  Point { x: Int, y: Int },
+}
+
+type Counter { requests: channel::Sender<Request> }
+
+@external(native)
+type Db
+
+type Pair<A, B> = (A, B)

@@ -1,0 +1,12 @@
+error[E0074]: the fields of the `pub exposed` type `Outer` mention the package-visible type `Inner`
+ --> tests/ui/04-declarations/types/exposed_field_visibility.cheby:8:32
+  |
+6 | type Inner { Inner(Int) }
+  |      ----- declared here
+7 |
+8 | pub exposed type Outer { Outer(Inner) }
+  |                                ^^^^^ package-visible type
+  |
+  = note: the fields of a `pub exposed` type are visible in every package, so their types must be `pub` (D-198)
+  = help: make `Inner` `pub`, or remove `exposed` from `Outer`
+

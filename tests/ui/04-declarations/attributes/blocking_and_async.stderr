@@ -1,0 +1,36 @@
+error[E0045]: `@blocking` is not allowed on a function
+  --> tests/ui/04-declarations/attributes/blocking_and_async.cheby:14:1
+   |
+14 | @blocking
+   | ^^^^^^^^^
+   |
+   = help: `@blocking` applies to functions with an `@external` attribute
+
+error[E0045]: `@async` is not allowed on a function
+  --> tests/ui/04-declarations/attributes/blocking_and_async.cheby:20:1
+   |
+20 | @async
+   | ^^^^^^
+   |
+   = help: `@async` applies to functions with an `@external(js, …)` attribute
+
+error[E0045]: `@blocking` takes no arguments
+  --> tests/ui/04-declarations/attributes/blocking_and_async.cheby:24:1
+   |
+24 | @blocking()
+   | ^^^^^^^^^^^
+
+error[E0045]: `@async` takes no arguments
+  --> tests/ui/04-declarations/attributes/blocking_and_async.cheby:28:1
+   |
+28 | @async(js)
+   | ^^^^^^^^^^
+
+error[E0045]: `@blocking` is not allowed on a type
+  --> tests/ui/04-declarations/attributes/blocking_and_async.cheby:31:1
+   |
+31 | @blocking
+   | ^^^^^^^^^
+   |
+   = help: `@blocking` applies to functions with an `@external` attribute
+

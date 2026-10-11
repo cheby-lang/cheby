@@ -1,0 +1,8 @@
+// @mode: parse-fail
+// @decisions: D-241
+//! Tuples have no positional access; read them with a pattern.
+
+fn main() {
+  let pair = (1, 2)
+  assert pair.0 == 1
+}

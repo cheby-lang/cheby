@@ -1,0 +1,28 @@
+// @mode: run-pass
+// @decisions: D-015
+//! Every arm of a `case` in tail position is in tail position, so a
+//! recursive call there runs ten million times in constant stack
+//! (§5.15.2).
+
+import std::int
+import std::io
+
+fn count(n: Int, acc: Int) -> Int {
+  case n {
+    0 => acc
+    _ => count(n - 1, acc + 1)
+  }
+}
+
+fn walk(n: Int, steps: List<Int>) -> Int {
+  case n, steps {
+    0, _ => 0
+    _, [] => walk(n - 1, [n])
+    _, [_, ..] => walk(n - 1, [])
+  }
+}
+
+fn main() {
+  io::println(int::show(count(10000000, 0)))
+  io::println(int::show(walk(10000000, [])))
+}

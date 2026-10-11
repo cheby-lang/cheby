@@ -1,0 +1,11 @@
+error[E0059]: `Wrapped` has positional fields, not named ones
+  --> tests/ui/05-expressions/records/braces_on_positional_constructor.cheby:11:3
+   |
+7  |   Wrapped(Int),
+   |   ------- `Wrapped` is declared here
+...
+11 |   Wrapped { value: n }
+   |   ^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: call it with its fields in order: `Wrapped(…)`
+

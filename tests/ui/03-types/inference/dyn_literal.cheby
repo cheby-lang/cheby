@@ -1,0 +1,13 @@
+// @mode: check-pass
+// @decisions: D-237
+//! A numeric literal converts to `dyn`, and its type is still fixed later
+//! or defaulted (§3.12.5).
+
+pub interface Any
+
+pub fn boxed() -> List<dyn Any> {
+  let x = 1
+  let d: dyn Any = x
+  let small: U8 = x
+  [d, 2.5, small]
+}

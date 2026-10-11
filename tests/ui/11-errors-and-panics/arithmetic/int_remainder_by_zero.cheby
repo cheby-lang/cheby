@@ -1,0 +1,8 @@
+// @mode: run-fail
+// @decisions: D-069, D-449
+//! Integer remainder by zero panics (§3.3.1).
+
+fn main() {
+  let zero = 0
+  let _ = 7 % zero
+}

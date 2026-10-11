@@ -1,0 +1,9 @@
+# Check out text files with LF on every platform, so goldens compare byte for
+# byte on Windows too.
+* text=auto eol=lf
+
+# Inputs and goldens that hold carriage returns on purpose.
+tests/ui/02-lexical-structure/raw_string_crlf.cheby -text
+tests/ui/02-lexical-structure/lone_carriage_return.cheby -text
+tests/ui/13-tooling/run/read_lines.stdin -text
+tests/ui/13-tooling/run/read_lines.stdout -text

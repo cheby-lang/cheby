@@ -1,0 +1,27 @@
+error[E0045]: attributes are not allowed on a variant
+ --> tests/ui/04-declarations/attributes/member_attributes.cheby:8:3
+  |
+8 |   @deprecated("use Second")
+  |   ^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: only items take attributes (D-461)
+  = help: remove the attribute
+
+error[E0045]: attributes are not allowed on a record field
+  --> tests/ui/04-declarations/attributes/member_attributes.cheby:14:3
+   |
+14 |   @deprecated("use y")
+   |   ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: only items take attributes (D-461)
+   = help: remove the attribute
+
+error[E0045]: attributes are not allowed on an interface function
+  --> tests/ui/04-declarations/attributes/member_attributes.cheby:20:3
+   |
+20 |   @target(native)
+   |   ^^^^^^^^^^^^^^^
+   |
+   = note: only items take attributes (D-461)
+   = help: remove the attribute
+

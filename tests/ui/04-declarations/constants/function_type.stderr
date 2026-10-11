@@ -1,0 +1,28 @@
+error[E0068]: the constant `step` has a type that contains a function
+  --> tests/ui/04-declarations/constants/function_type.cheby:14:17
+   |
+14 | pub const step: fn(Int) -> Int = double
+   |                 ^^^^^^^^^^^^^^
+   |
+   = note: a constant's value is computed at compile time and embedded in the program, which cannot hold functions
+   = help: declare a function instead, which can be called wherever the constant would be used
+
+error[E0068]: the constant `steps` has a type that contains a function
+  --> tests/ui/04-declarations/constants/function_type.cheby:16:18
+   |
+16 | pub const steps: List<fn(Int) -> Int> = [double]
+   |                  ^^^^^^^^^^^^^^^^^^^^ this type contains `fn(Int) -> Int`
+   |
+   = note: a constant's value is computed at compile time and embedded in the program, which cannot hold functions
+   = help: declare a function instead, which can be called wherever the constant would be used
+
+error[E0068]: the constant `handler` has a type that contains a function
+  --> tests/ui/04-declarations/constants/function_type.cheby:18:20
+   |
+18 | pub const handler: Handler = Handler { run: double }
+   |                    ^^^^^^^ this type contains `fn(Int) -> Int`
+   |
+   = note: `Handler` has a field of type `fn(Int) -> Int`
+   = note: a constant's value is computed at compile time and embedded in the program, which cannot hold functions
+   = help: declare a function instead, which can be called wherever the constant would be used
+

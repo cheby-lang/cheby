@@ -1,0 +1,26 @@
+// @mode: run-pass
+// @decisions: D-328, D-366
+//! `io::write_file` creates a file in the working directory, and
+//! `io::read_file` gives back exactly the text written, line endings and
+//! a byte-order mark included.
+
+import std::io
+import std::string
+
+fn main() {
+  case io::write_file("out.txt", "\u{FEFF}one\r\ntwo") {
+    Ok(_) => {
+      case io::read_file("out.txt") {
+        Ok(text) => {
+          io::println(string::join(string::split(text, "\r\n"), "|"))
+          case string::starts_with(text, "\u{FEFF}") {
+            True => io::println("kept the byte-order mark")
+            False => io::println("lost the byte-order mark")
+          }
+        }
+        Err(reason) => io::println(io::show(reason))
+      }
+    }
+    Err(reason) => io::println(io::show(reason))
+  }
+}

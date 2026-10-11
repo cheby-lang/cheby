@@ -1,0 +1,31 @@
+// @mode: run-pass
+// @decisions: D-093, D-344, D-382, D-538, D-587
+//! Maps and sets compare by contents, whatever their insertion order, and
+//! print as `map::from_list([…])` and `set::from_list([…])` with their
+//! entries sorted by each entry's whole debug text, so `10` comes before
+//! `9` and the output is the same on every run (§3.13).
+
+import std::io
+import std::map
+import std::set
+
+fn main() {
+  let numbers = map::from_list([(10, "ten"), (9, "nine")])
+  let again = map::insert(map::insert(map::new(), 9, "nine"), 10, "ten")
+  let same = numbers == again
+  io::println("{numbers:?} {same}")
+  let words = set::from_list(["pear", "apple", "pear"])
+  io::println("{words:?}")
+  let empty_map: map::Map<Int, Int> = map::new()
+  let empty_set: set::Set<String> = set::new()
+  io::println("{empty_map:?} {empty_set:?}")
+  let lists = map::from_list([("b", [2, 1]), ("a", []), ("c", [3])])
+  io::println("{lists:?}")
+  let points = set::from_list([(2, 1), (1, 2), (1, 1)])
+  io::println("{points:?}")
+  let nested = set::from_list([numbers, again, map::new()])
+  let size = set::size(nested)
+  io::println("{nested:?} {size}")
+  let keyed = map::from_list([(Some(words), 1)])
+  io::println("{keyed:?}")
+}

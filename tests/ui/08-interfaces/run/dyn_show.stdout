@@ -1,0 +1,9 @@
+1 | 1 | 1
+two | two | "two"
+2.5 | 2.5 | 2.5
+True | True | True
+[1, 2] | [1, 2] | [1, 2]
+(3, four) | (3, four) | (3, "four")
+#x | #x | Tag { name: "x", weight: 9 }
+#y: tag y (1)
+as dyn Show: #y Tag { name: "y", weight: 1 }

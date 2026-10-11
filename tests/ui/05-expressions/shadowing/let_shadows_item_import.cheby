@@ -1,0 +1,11 @@
+// @mode: check-fail
+// @decisions: D-062, D-111
+//! A local binding cannot use the name of an imported item.
+
+import std::io::{println}
+
+fn main() {
+  println("Hi!")
+  let println = "Hello!"
+  assert println != ""
+}

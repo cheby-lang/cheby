@@ -1,0 +1,18 @@
+// @mode: check-fail
+// @decisions: D-118
+//! Both operands of an overloaded operator have the same type, so
+//! `Vector * Float` is not an operator (§8.7).
+
+type Vector {
+  x: Float,
+  y: Float,
+}
+
+fn mul(a: Vector, b: Vector) -> Vector {
+  Vector { x: a.x * b.x, y: a.y * b.y }
+}
+
+fn main() {
+  let v = Vector { x: 1.0, y: 2.0 }
+  assert v * 2.0 == v * v
+}

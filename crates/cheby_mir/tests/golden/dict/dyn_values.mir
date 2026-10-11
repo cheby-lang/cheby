@@ -1,0 +1,84 @@
+fn app::main() -> value check str#0 {
+  str#0 = "src/main.cheby:25:4"
+  str#1 = "src/main.cheby:33:11"
+bb0:
+  _0: value = call app::circle::new(const float 1.0)
+  _1: value = alloc dyn(const static#2, _0)
+  _2: value = call_runtime list_push(const empty_list, _1)
+  _3: value = call app::square::new(const float 2.0)
+  _4: value = alloc dyn(const static#5, _3)
+  _5: value = call_runtime list_push(_2, _4)
+  _6: value = call app::total(_5)
+  _7: float = unbox float _6
+  drop _6
+  _8: value = call app::circle::new(const float 3.0)
+  _9: value = alloc dyn(const static#2, _8)
+  dup _9
+  _10: value = call app::label(_9)
+  drop _10
+  dup _9
+  _11: value = call app::measure(const static#11, _9)
+  _12: float = unbox float _11
+  drop _11
+  _13: value = field _9.0 of dyn
+  dup _13
+  _14: value = field _9.1 of dyn
+  dup _14
+  _15: value = field _13.0 of dict/2+1
+  dup _15
+  drop _13
+  _16: value = alloc dict/0+0(_15)
+  _17: value = alloc dyn(_16, _14)
+  _18: value = field _9.0 of dyn
+  dup _18
+  _19: value = field _9.1 of dyn
+  dup _19
+  _20: value = field _18.3 of dict/2+1
+  dup _20
+  drop _18
+  _21: value = alloc dyn(_20, _19)
+  _22: value = call app::boxed(const static#12, _9)
+  _23: bool = call_runtime equal(borrow _17, borrow _22, borrow const str#1)
+  drop _17
+  drop _22
+  _24: value = field _21.0 of dyn
+  dup _24
+  _25: value = field _21.1 of dyn
+  dup _25
+  drop _21
+  _26: value = field _24.1 of dict/1+0
+  dup _26
+  drop _24
+  _27: value = call _26(_25)
+  drop _27
+  return const nil
+}
+
+fn app::label(_0: value) -> value check str#0 {
+  str#0 = "src/main.cheby:13:4"
+bb0:
+  _1: value = field _0.0 of dyn
+  dup _1
+  _2: value = field _0.1 of dyn
+  dup _2
+  drop _0
+  _3: value = field _1.1 of dict/2+1
+  dup _3
+  drop _1
+  _4: value = call _3(_2)
+  return _4
+}
+
+static#0 desc app::circle$Circle = desc_nominal(str#0, str#1) str#0 = "Circle" str#1 = "app::circle"
+static#1 dict app$Show$app::circle::Circle = dict/1+0(static#0, fn app::circle::show)
+static#2 dict app$app::shape::Shape$app::circle::Circle = dict/2+1(static#0, fn app::circle::show, fn app::circle::area, static#1)
+static#3 desc app::square$Square = desc_nominal(str#0, str#1) str#0 = "Square" str#1 = "app::square"
+static#4 dict app$Show$app::square::Square = dict/1+0(static#3, fn app::square::show)
+static#5 dict app$app::shape::Shape$app::square::Square = dict/2+1(static#3, fn app::square::show, fn app::square::area, static#4)
+static#6 desc app::shape$dyn$Shape = desc_nominal(str#0, str#1) str#0 = "dyn Shape" str#1 = "app::shape"
+static#7 fnval app$app::shape::Shape$dyn app::shape::Shape$0 = closure/0(code <dyn_forward Show::show for dyn app::shape::Shape>)
+static#8 fnval app$app::shape::Shape$dyn app::shape::Shape$1 = closure/0(code <dyn_forward app::shape::Shape::area for dyn app::shape::Shape>)
+static#9 fnval app$Show$dyn app::shape::Shape$0 = closure/0(code <dyn_forward Show::show for dyn app::shape::Shape>)
+static#10 dict app$Show$dyn app::shape::Shape = dict/1+0(static#6, static#9)
+static#11 dict app$app::shape::Shape$dyn app::shape::Shape = dict/2+1(static#6, static#7, static#8, static#10)
+static#12 dict app$app::Any$dyn app::shape::Shape = dict/0+0(static#6)

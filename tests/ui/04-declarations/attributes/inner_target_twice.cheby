@@ -1,0 +1,10 @@
+// @mode: check-fail
+// @decisions: D-141, D-461
+//! `@!target` appears at most once in a module.
+
+@!target(native)
+@!target(native)
+
+pub fn name() -> String {
+  "native"
+}

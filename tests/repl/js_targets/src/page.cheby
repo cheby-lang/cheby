@@ -1,0 +1,10 @@
+//! Pages.
+
+/// The title of the page `name`.
+pub fn title(name: String) -> String {
+  "<{name}>"
+}
+
+/// Shows `text` in the browser.
+@external(js, "./page.mjs", "alert")
+pub fn alert(text: String)

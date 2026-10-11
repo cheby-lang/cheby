@@ -1,0 +1,9 @@
+//! Utilities.
+
+test "util first" {
+  assert 1 < 2
+}
+
+test "util second" {
+  assert 2 < 3
+}

@@ -1,0 +1,9 @@
+// @mode: parse-fail
+// @decisions: D-017
+//! A binding can never be changed: there is no assignment (§5.2.1).
+
+fn main() {
+  let count = 1
+  count = 2
+  assert count == 2
+}

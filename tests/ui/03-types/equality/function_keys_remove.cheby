@@ -1,0 +1,18 @@
+// @mode: run-fail
+// @decisions: D-233, D-449, D-556
+//! Removing a function value from an empty `Map` panics: the key is
+//! hashed before the map is searched (§3.13).
+
+import std::io
+import std::map
+
+fn double(n: Int) -> Int {
+  n * 2
+}
+
+fn main() {
+  let handlers: map::Map<fn(Int) -> Int, String> = map::new()
+  io::println("removing a function")
+  let _ = map::remove(handlers, double)
+  io::println("never printed")
+}

@@ -1,0 +1,16 @@
+// @mode: check-pass
+// @decisions: D-022, D-080
+//! An arm whose values the arms before it already match can never match.
+//! It is a warning, not an error.
+
+fn describe(n: Option<Int>) -> String {
+  case n {
+    Some(_) => "some"
+    None => "none"
+    Some(0) => "zero"
+  }
+}
+
+fn main() {
+  assert describe(Some(0)) == "some"
+}

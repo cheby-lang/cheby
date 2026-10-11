@@ -1,0 +1,10 @@
+// @mode: check-fail
+// @decisions: D-060
+//! A module's items are reached only through an import of the module, so
+//! `int::show` needs `import std::int` (§7.5.1).
+
+import std::io
+
+fn main() {
+  io::println(int::show(2))
+}

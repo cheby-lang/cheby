@@ -1,0 +1,23 @@
+// @mode: run-pass
+// @command: test
+// @flags: double
+// @decisions: D-541, D-543
+//! `cheby test FILTER` runs only the tests whose full name,
+//! `<module path> "<test name>"`, contains the filter, and counts the
+//! others as filtered out.
+
+fn double(n: Int) -> Int {
+  n * 2
+}
+
+test "double of two" {
+  assert double(2) == 4
+}
+
+test "a negative double" {
+  assert double(-1) == -2
+}
+
+test "halves" {
+  assert 4 / 2 == 2
+}

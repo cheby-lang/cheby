@@ -1,0 +1,253 @@
+//! Standard input, standard output, standard error, and reading and
+//! writing whole files.
+//!
+//! Every function that can fail returns `Result<T, Error>`. `Error` is
+//! opaque: callers ask the predicates, such as `is_not_found`, and handle
+//! every other kind with a fallback arm (D-304, ADR-0051).
+//!
+//! The kernels report a failure as a pair of a kind code and the operating
+//! system's message, and `Error` is built from it here, so its
+//! representation stays private to this module (D-484).
+
+import std::bytes
+
+// Errors
+
+/// An input or output failure. Its kind, and the operating system's
+/// message for a kind without a predicate (D-345). Equality, hashing and
+/// debug printing go through `equal`, `hash` and `debug` (D-342, D-368).
+@std_hooks(equal, hash, debug)
+pub type Error {
+  kind: Kind,
+  message: String,
+}
+
+/// The kinds of failure: one per predicate, and every other kind (D-367).
+type Kind {
+  NotFound,
+  PermissionDenied,
+  InvalidData,
+  Other,
+}
+
+/// The `Error` for the kernels' pair: `1` not found, `2` permission
+/// denied, `3` invalid UTF-8, anything else another kind with the
+/// operating system's message. A kind with a predicate drops the message,
+/// so its text is the same on every platform (D-345).
+fn from_os(code: Int, message: String) -> Error {
+  case code {
+    1 => Error { kind: NotFound, message: "" }
+    2 => Error { kind: PermissionDenied, message: "" }
+    3 => Error { kind: InvalidData, message: "" }
+    _ => Error { kind: Other, message }
+  }
+}
+
+/// A kernel's outcome with its failure turned into an `Error`.
+fn lift<T>(outcome: Result<T, (Int, String)>) -> Result<T, Error> {
+  case outcome {
+    Ok(value) => Ok(value)
+    Err((code, message)) => Err(from_os(code, message))
+  }
+}
+
+/// What two equal errors share: the kind, and the message for a kind
+/// without a predicate (D-368). The runtime hashes this value.
+fn hash(error: Error) -> (Int, String) {
+  case error.kind {
+    NotFound => (1, "")
+    PermissionDenied => (2, "")
+    InvalidData => (3, "")
+    Other => (0, error.message)
+  }
+}
+
+/// Whether two errors are `==`: the same kind and, for a kind without a
+/// predicate, the same message (D-368).
+fn equal(a: Error, b: Error) -> Bool {
+  hash(a) == hash(b)
+}
+
+/// The debug text of an error, the same as its `show` text (§3.13).
+fn debug(error: Error) -> String {
+  show(error)
+}
+
+// Standard output and standard error
+
+/// Writes `text` to standard output, with no line ending.
+@external(native, "cheby_io_print")
+@external(js, "./io.mjs", "print")
+pub fn print(text: String)
+
+/// Writes `text` and a line ending to standard output.
+@external(native, "cheby_io_println")
+@external(js, "./io.mjs", "println")
+pub fn println(text: String)
+
+/// Writes `text` to standard error, with no line ending.
+@external(native, "cheby_io_eprint")
+@external(js, "./io.mjs", "eprint")
+pub fn eprint(text: String)
+
+/// Writes `text` and a line ending to standard error.
+@external(native, "cheby_io_eprintln")
+@external(js, "./io.mjs", "eprintln")
+pub fn eprintln(text: String)
+
+/// Writes `text` to standard output, with no line ending, and reports a
+/// failure instead of ending the program (D-306, D-365).
+pub fn write_stdout(text: String) -> Result<Nil, Error> {
+  lift(sys_write_stdout(text))
+}
+
+/// Writes `text` to standard error, with no line ending, and reports a
+/// failure instead of ending the program (D-306).
+pub fn write_stderr(text: String) -> Result<Nil, Error> {
+  lift(sys_write_stderr(text))
+}
+
+// Standard input
+
+/// Reads the next line from standard input, without its line ending, or
+/// `None` at the end of input (D-305).
+pub fn read_line() -> Result<Option<String>, Error> {
+  lift(sys_read_line())
+}
+
+// Files
+
+/// Reads the whole file at `path` as UTF-8 text (D-311, D-366).
+pub fn read_file(path: String) -> Result<String, Error> {
+  lift(sys_read_file(path))
+}
+
+test "read_file reports a missing file" {
+  let assert Err(reason) = read_file("no/such/directory/file.txt")
+  assert is_not_found(reason)
+}
+
+/// Reads the whole file at `path` as raw bytes (D-311).
+pub fn read_file_bytes(path: String) -> Result<bytes::Bytes, Error> {
+  lift(sys_read_file_bytes(path))
+}
+
+test "read_file_bytes reports a missing file" {
+  let assert Err(reason) = read_file_bytes("no/such/directory/file.bin")
+  assert is_not_found(reason)
+}
+
+/// Writes `text` as UTF-8 to the file at `path`, creating or replacing it
+/// (D-328).
+pub fn write_file(path: String, text: String) -> Result<Nil, Error> {
+  lift(sys_write_file(path, text))
+}
+
+test "write_file needs the directory to exist" {
+  let assert Err(reason) = write_file("no/such/directory/out.txt", "hello")
+  assert is_not_found(reason)
+}
+
+/// Writes `data` to the file at `path` unchanged, creating or replacing it
+/// (D-328).
+pub fn write_file_bytes(path: String, data: bytes::Bytes) -> Result<Nil, Error> {
+  lift(sys_write_file_bytes(path, data))
+}
+
+test "write_file_bytes needs the directory to exist" {
+  let assert Err(reason) = write_file_bytes("no/such/directory/out.bin", bytes::from_list([0x00]))
+  assert is_not_found(reason)
+}
+
+// Errors
+
+/// Tells whether `error` means that a file or a directory on its path does
+/// not exist.
+pub fn is_not_found(error: Error) -> Bool {
+  case error.kind {
+    NotFound => True
+    _ => False
+  }
+}
+
+test "a missing file is not found" {
+  let assert Err(reason) = read_file("no/such/directory/file.txt")
+  assert is_not_found(reason)
+  assert !is_permission_denied(reason)
+  assert !is_invalid_data(reason)
+}
+
+/// Tells whether `error` means that the operating system refused the
+/// program access to a file or a directory.
+pub fn is_permission_denied(error: Error) -> Bool {
+  case error.kind {
+    PermissionDenied => True
+    _ => False
+  }
+}
+
+/// Tells whether `error` means that text read from the operating system
+/// was not valid UTF-8 (D-311).
+pub fn is_invalid_data(error: Error) -> Bool {
+  case error.kind {
+    InvalidData => True
+    _ => False
+  }
+}
+
+/// Returns the text of `error`: a fixed message for each kind with a
+/// predicate, and the operating system's message otherwise (D-345). It
+/// makes `Error` satisfy `Show`.
+pub fn show(error: Error) -> String {
+  case error.kind {
+    NotFound => "not found"
+    PermissionDenied => "permission denied"
+    InvalidData => "invalid UTF-8"
+    Other => error.message
+  }
+}
+
+test "an io error shows a fixed message" {
+  let assert Err(reason) = read_file("no/such/directory/file.txt")
+  assert show(reason) == "not found"
+  assert "{reason}" == "not found"
+  assert "{reason:?}" == "not found"
+}
+
+// Kernels: each reports a failure as a kind code and the operating
+// system's message (see `from_os`).
+
+/// Writes to standard output through its buffer, then flushes it.
+@external(native, "cheby_io_sys_write_stdout")
+@external(js, "./io.mjs", "sys_write_stdout")
+fn sys_write_stdout(text: String) -> Result<Nil, (Int, String)>
+
+/// Writes to standard error.
+@external(native, "cheby_io_sys_write_stderr")
+@external(js, "./io.mjs", "sys_write_stderr")
+fn sys_write_stderr(text: String) -> Result<Nil, (Int, String)>
+
+/// Flushes standard output, then reads one line from standard input.
+@external(native, "cheby_io_sys_read_line")
+@external(js, "./io.mjs", "sys_read_line")
+fn sys_read_line() -> Result<Option<String>, (Int, String)>
+
+/// Reads a whole file as UTF-8 text.
+@external(native, "cheby_io_sys_read_file")
+@external(js, "./io.mjs", "sys_read_file")
+fn sys_read_file(path: String) -> Result<String, (Int, String)>
+
+/// Reads a whole file as bytes.
+@external(native, "cheby_io_sys_read_file_bytes")
+@external(js, "./io.mjs", "sys_read_file_bytes")
+fn sys_read_file_bytes(path: String) -> Result<bytes::Bytes, (Int, String)>
+
+/// Writes a whole file from UTF-8 text.
+@external(native, "cheby_io_sys_write_file")
+@external(js, "./io.mjs", "sys_write_file")
+fn sys_write_file(path: String, text: String) -> Result<Nil, (Int, String)>
+
+/// Writes a whole file from bytes.
+@external(native, "cheby_io_sys_write_file_bytes")
+@external(js, "./io.mjs", "sys_write_file_bytes")
+fn sys_write_file_bytes(path: String, data: bytes::Bytes) -> Result<Nil, (Int, String)>

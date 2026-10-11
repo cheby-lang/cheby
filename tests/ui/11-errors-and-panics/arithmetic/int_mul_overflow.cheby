@@ -1,0 +1,8 @@
+// @mode: run-fail
+// @decisions: D-025, D-449
+//! `*` on `Int` panics when the product does not fit (§3.3.1).
+
+fn main() {
+  let big = 1 << 62
+  let _ = big * 2
+}

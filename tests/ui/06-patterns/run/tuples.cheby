@@ -1,0 +1,32 @@
+// @mode: run-pass
+// @decisions: D-076, D-113, D-241
+//! Tuple patterns match each element against its pattern (§6.5), nested
+//! inside other patterns too.
+
+import std::io
+
+fn quadrant(point: (Int, Int)) -> String {
+  case point {
+    (0, 0) => "origin"
+    (0, _) | (_, 0) => "axis"
+    (x, y) => "x {x}, y {y}"
+  }
+}
+
+fn first_pair(pairs: Option<(String, Int)>) -> String {
+  case pairs {
+    Some((name, 1)) => "{name} once"
+    Some((name, count)) => "{name} {count} times"
+    None => "none"
+  }
+}
+
+fn main() {
+  io::println(quadrant((0, 0)))
+  io::println(quadrant((0, 5)))
+  io::println(quadrant((5, 0)))
+  io::println(quadrant((2, 3)))
+  io::println(first_pair(Some(("a", 1))))
+  io::println(first_pair(Some(("b", 4))))
+  io::println(first_pair(None))
+}

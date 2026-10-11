@@ -1,0 +1,24 @@
+// @mode: check-pass
+// @decisions: D-161, D-235
+//! An expression of type `Never` takes the expected type (§3.10,
+//! §3.12.5).
+
+pub fn unreachable(what: String) -> Never {
+  panic as what
+}
+
+pub fn parse(digit: String) -> Int {
+  case digit == "1" {
+    True => 1
+    False => unreachable(digit)
+  }
+}
+
+pub fn later() -> Int {
+  let n: Int = panic as "not yet"
+  n
+}
+
+pub fn convert() -> fn(String) -> Int {
+  fn(s) { unreachable(s) }
+}

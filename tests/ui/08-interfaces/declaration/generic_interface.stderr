@@ -1,0 +1,9 @@
+error[E0013]: an interface has no type parameters
+ --> tests/ui/08-interfaces/declaration/generic_interface.cheby:6:15
+  |
+6 | interface Into<T> {
+  |               ^^^
+  |
+  = note: interfaces are not generic (D-165)
+  = help: remove the type parameters
+

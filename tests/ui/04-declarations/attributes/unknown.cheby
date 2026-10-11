@@ -1,0 +1,14 @@
+// @mode: check-fail
+// @decisions: D-200, D-435, D-461
+//! The set of attributes is fixed. The standard library's own attributes
+//! are unknown outside it (§4.8).
+
+@inline
+pub fn fast() -> Int {
+  1
+}
+
+@std_clamped(count)
+pub fn repeat(count: Int) -> Int {
+  count
+}

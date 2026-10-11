@@ -1,0 +1,4 @@
+panicked at tests/ui/11-errors-and-panics/assert/int_comparison.cheby:8:10:
+assertion failed: items + 0 == 3
+  left: 2
+ right: 3

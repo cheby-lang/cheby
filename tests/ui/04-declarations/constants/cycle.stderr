@@ -1,0 +1,12 @@
+error[E0069]: the constants `width` and `height` refer to each other in a cycle
+ --> tests/ui/04-declarations/constants/cycle.cheby:5:11
+  |
+5 | pub const width: Int = height * 2
+  |           ^^^^^        ------ `width` uses `height` here
+6 |
+7 | pub const height: Int = width / 2
+  |                         ----- `height` uses `width` here
+  |
+  = note: a constant is evaluated from the constants it uses, at compile time, so a cycle has no value
+  = help: give one of them a value that does not depend on the others
+

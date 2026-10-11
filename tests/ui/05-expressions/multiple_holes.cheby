@@ -1,0 +1,12 @@
+// @mode: check-fail
+// @decisions: D-202
+//! A call takes at most one `_`; write a closure for more parameters.
+
+fn add(a: Int, b: Int) -> Int {
+  a + b
+}
+
+fn main() {
+  let f = add(_, _)
+  assert f(1, 2) == 3
+}

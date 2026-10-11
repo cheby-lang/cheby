@@ -1,0 +1,9 @@
+error[E0060]: refutable pattern in a parameter
+ --> tests/ui/05-expressions/local_fns/refutable_parameter.cheby:7:12
+  |
+7 |   fn first(Some(x)) {
+  |            ^^^^^^^ `None` not covered
+  |
+  = note: this pattern must match every value of its type (§6.1)
+  = help: take the parameter as a plain name and use `case` in the body to handle `None` as well, or `let assert` to panic when it does not match
+

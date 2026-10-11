@@ -1,0 +1,3 @@
+fn f(p: Point) {
+  let Point { x, ..rest } = p
+}

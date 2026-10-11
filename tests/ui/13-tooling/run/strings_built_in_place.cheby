@@ -1,0 +1,31 @@
+// @mode: run-pass
+// @decisions: D-302, D-310, D-525
+//! A string built by `+` on a unique accumulator, then padded, trimmed and
+//! sliced, which the kernels may do in place, reads back as expected and
+//! leaves nothing live at exit.
+
+import std::int
+import std::io
+import std::string
+
+fn build(acc: String, n: Int) -> String {
+  case n {
+    0 => acc
+    _ => build(acc + int::show(n % 10), n - 1)
+  }
+}
+
+fn main() {
+  let digits = build("", 1000)
+  io::println(int::show(string::length(digits)))
+  let padded = string::pad_end(digits, 1004, "é")
+  io::println(string::slice(padded, 998, 1004))
+  let trimmed = string::trim_end(string::pad_end(digits, 1003, " "))
+  io::println(int::show(string::length(trimmed)))
+  io::println(string::slice(trimmed, 0, 12))
+  io::println(string::join(string::split("a,b,,c", ","), "+"))
+  io::println(string::uppercase("straße"))
+  io::println(string::lowercase("ÉCOLE"))
+  io::println(int::show(string::grapheme_length("🇳🇱e\u{301}")))
+  io::println(string::reverse(string::remove_prefix("--stressed", "--")))
+}

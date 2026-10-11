@@ -1,0 +1,6 @@
+error[E0013]: expected a line break or `}`, found `{`
+ --> tests/ui/08-interfaces/declaration/default_implementation.cheby:7:31
+  |
+7 |   fn describe(Self) -> String {
+  |                               ^
+

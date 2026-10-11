@@ -1,0 +1,10 @@
+// @mode: parse-fail
+// @decisions: D-115
+//! An interpolation holds only a name or a field path, optionally with
+//! `:?`.
+
+fn main() {
+  let a = 1
+  let s = "sum: {a + 1}"
+  assert s == "sum: 2"
+}

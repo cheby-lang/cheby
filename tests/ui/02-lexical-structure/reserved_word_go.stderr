@@ -1,0 +1,8 @@
+error[E0007]: `go` is a reserved word
+ --> tests/ui/02-lexical-structure/reserved_word_go.cheby:7:6
+  |
+7 |   fn go(i: Int, acc: Int) -> Int {
+  |      ^^ reserved, cannot be used as a name
+  |
+  = help: Cheby has no `go`; spawn a fiber in a scope
+

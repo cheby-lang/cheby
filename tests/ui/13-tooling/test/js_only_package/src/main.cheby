@@ -1,0 +1,12 @@
+// @mode: run-pass
+// @command: test
+// @decisions: D-190, D-541
+//! In a package whose `targets` is only `js`, every test exists only on
+//! `js`: `cheby test` on native has nothing to run (§12.6, §13.3).
+
+@external(js, "./clock.mjs", "now")
+fn now() -> Int
+
+test "the clock runs" {
+  assert now() >= 0
+}

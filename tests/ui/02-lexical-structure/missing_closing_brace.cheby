@@ -1,0 +1,13 @@
+// @mode: parse-fail
+//! When a `}` is missing, the functions after it stay functions, and the
+//! error points at the brace that most likely lacks its `}`.
+
+fn sign(n: Int) -> Int {
+  case n {
+    0 => 0
+    _ => 1
+}
+
+fn main() {
+  assert sign(1) == 1
+}

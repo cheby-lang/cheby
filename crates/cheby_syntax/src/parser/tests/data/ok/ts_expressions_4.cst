@@ -1,0 +1,51 @@
+SOURCE_FILE@0..91
+  COMMENT@0..38 "// Constructor subject is not a record"
+  NEWLINE@38..39 "\n"
+  FN_DECL@39..90
+    FN_KW@39..41 "fn"
+    WHITESPACE@41..42 " "
+    LOWER_IDENT@42..43 "f"
+    PARAM_LIST@43..45
+      L_PAREN@43..44 "("
+      R_PAREN@44..45 ")"
+    WHITESPACE@45..46 " "
+    BLOCK@46..90
+      L_BRACE@46..47 "{"
+      NEWLINE@47..48 "\n"
+      WHITESPACE@48..50 "  "
+      CASE_EXPR@50..88
+        CASE_KW@50..54 "case"
+        WHITESPACE@54..55 " "
+        PATH_EXPR@55..58
+          PATH@55..58
+            UPPER_IDENT@55..58 "Red"
+        WHITESPACE@58..59 " "
+        CASE_BODY@59..88
+          L_BRACE@59..60 "{"
+          NEWLINE@60..61 "\n"
+          WHITESPACE@61..65 "    "
+          CASE_ARM@65..73
+            CTOR_PAT@65..68
+              PATH@65..68
+                UPPER_IDENT@65..68 "Red"
+            WHITESPACE@68..69 " "
+            FAT_ARROW@69..71 "=>"
+            WHITESPACE@71..72 " "
+            LITERAL@72..73
+              INT_NUMBER@72..73 "1"
+          NEWLINE@73..74 "\n"
+          WHITESPACE@74..78 "    "
+          CASE_ARM@78..84
+            WILDCARD_PAT@78..79
+              UNDERSCORE@78..79 "_"
+            WHITESPACE@79..80 " "
+            FAT_ARROW@80..82 "=>"
+            WHITESPACE@82..83 " "
+            LITERAL@83..84
+              INT_NUMBER@83..84 "0"
+          NEWLINE@84..85 "\n"
+          WHITESPACE@85..87 "  "
+          R_BRACE@87..88 "}"
+      NEWLINE@88..89 "\n"
+      R_BRACE@89..90 "}"
+  NEWLINE@90..91 "\n"

@@ -1,0 +1,9 @@
+// @mode: check-pass
+// @decisions: D-163
+//! `main` may have any visibility, including `priv` (§4.2.1).
+
+import std::io
+
+priv fn main() {
+  io::println("hello")
+}

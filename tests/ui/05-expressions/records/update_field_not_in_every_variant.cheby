@@ -1,0 +1,17 @@
+// @mode: check-fail
+// @decisions: D-071, D-156
+//! A record update keeps the variant of its base, so every variant must
+//! have each listed field (§5.11.2).
+
+type Shape {
+  Circle { radius: Int },
+  Rect { width: Int, height: Int },
+}
+
+fn grown(shape: Shape) -> Shape {
+  Shape { ..shape, radius: 2 }
+}
+
+fn main() {
+  assert grown(Circle { radius: 1 }) == Circle { radius: 2 }
+}

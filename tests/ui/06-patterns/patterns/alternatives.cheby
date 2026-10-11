@@ -1,0 +1,29 @@
+// @mode: check-pass
+// @decisions: D-113
+//! `p1 | p2` matches if any alternative matches, and every alternative
+//! binds the same names with the same types (§6.7).
+
+type Day {
+  Monday,
+  Saturday,
+  Sunday,
+}
+
+fn kind(day: Day) -> String {
+  case day {
+    Saturday | Sunday => "weekend"
+    _ => "weekday"
+  }
+}
+
+fn product(pair: (Int, Int)) -> Int {
+  case pair {
+    (0, n) | (n, 0) => n
+    (a, b) => a * b
+  }
+}
+
+fn main() {
+  assert kind(Monday) == "weekday"
+  assert product((0, 3)) == 3
+}

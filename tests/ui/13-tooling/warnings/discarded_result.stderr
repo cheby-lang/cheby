@@ -1,0 +1,8 @@
+warning[W0006]: this `Result` is discarded
+  --> tests/ui/13-tooling/warnings/discarded_result.cheby:16:3
+   |
+16 |   save("report")
+   |   ^^^^^^^^^^^^^^ this `Result<Nil, String>` may hold an error
+   |
+   = help: handle the error with `case` or `use`, or discard the value explicitly with `let _ = …`
+

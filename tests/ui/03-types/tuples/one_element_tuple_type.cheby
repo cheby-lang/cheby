@@ -1,0 +1,17 @@
+// @mode: check-fail
+// @decisions: D-076, D-436
+//! Types have no grouping parentheses, so `(T)` is a one-element tuple
+//! type, which is an error like `()` and `(T,)` (§3.7).
+
+fn first(value: (Int)) -> () {
+  Nil
+}
+
+fn second(value: (Int,)) -> Int {
+  1
+}
+
+fn main() {
+  first(1)
+  assert second(2) == 1
+}

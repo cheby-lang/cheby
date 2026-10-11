@@ -1,0 +1,10 @@
+// @mode: parse-fail
+// @decisions: D-107, D-231
+//! A line continues after `=`, not before it, so a `let` that breaks
+//! before its `=` ends without a value.
+
+fn main() {
+  let total
+    = 1 + 2
+  assert total == 3
+}

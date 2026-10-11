@@ -1,0 +1,14 @@
+// @mode: check-fail
+// @decisions: D-109
+//! Each condition of a subjectless `case` has type `Bool` (§5.9.5).
+
+fn describe(n: Int) -> String {
+  case {
+    n => "nonzero"
+    _ => "zero"
+  }
+}
+
+fn main() {
+  assert describe(1) == "nonzero"
+}

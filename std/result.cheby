@@ -1,0 +1,238 @@
+//! Helpers for the built-in `Result` type (D-317): chaining, defaults,
+//! tests, lists of results and conversions.
+//!
+//! `Result`, `Ok` and `Err` are builtin items whose home module is this one
+//! (D-447). Everything here is written in Cheby.
+
+import std::int
+import std::list
+import std::nil
+import std::string
+
+// Chaining
+
+/// Calls `next` with the value of an `Ok`, and returns an `Err` unchanged.
+pub fn try<T, E, U>(r: Result<T, E>, next: fn(T) -> Result<U, E>) -> Result<U, E> {
+  case r {
+    Ok(value) => next(value)
+    Err(error) => Err(error)
+  }
+}
+
+test "try stops at the first error" {
+  fn add(a: String, b: String) -> Result<Int, Nil> {
+    use x <- try(int::parse(a))
+    use y <- try(int::parse(b))
+    Ok(x + y)
+  }
+  assert add("1", "2") == Ok(3)
+  assert add("1", "two") == Err(Nil)
+}
+
+/// Applies `f` to the value of an `Ok`, and returns an `Err` unchanged.
+pub fn map<T, E, U>(r: Result<T, E>, f: fn(T) -> U) -> Result<U, E> {
+  case r {
+    Ok(value) => Ok(f(value))
+    Err(error) => Err(error)
+  }
+}
+
+test "map changes only an Ok" {
+  let good: Result<Int, String> = Ok(2)
+  let bad: Result<Int, String> = Err("no")
+  assert map(good, fn(n) { n * 10 }) == Ok(20)
+  assert map(bad, fn(n) { n * 10 }) == Err("no")
+}
+
+/// Applies `f` to the error of an `Err`, and returns an `Ok` unchanged.
+pub fn map_error<T, E, F>(r: Result<T, E>, f: fn(E) -> F) -> Result<T, F> {
+  case r {
+    Ok(value) => Ok(value)
+    Err(error) => Err(f(error))
+  }
+}
+
+test "map_error changes only an Err" {
+  let good: Result<Int, String> = Ok(2)
+  let bad: Result<Int, String> = Err("no")
+  assert map_error(good, string::length) == Ok(2)
+  assert map_error(bad, string::length) == Err(2)
+}
+
+/// Removes one level of nesting: `Ok(inner)` becomes `inner`.
+pub fn flatten<T, E>(r: Result<Result<T, E>, E>) -> Result<T, E> {
+  case r {
+    Ok(inner) => inner
+    Err(error) => Err(error)
+  }
+}
+
+test "flatten removes one level" {
+  let nested: Result<Result<Int, String>, String> = Ok(Ok(1))
+  let inner_error: Result<Result<Int, String>, String> = Ok(Err("inner"))
+  let outer_error: Result<Result<Int, String>, String> = Err("outer")
+  assert flatten(nested) == Ok(1)
+  assert flatten(inner_error) == Err("inner")
+  assert flatten(outer_error) == Err("outer")
+}
+
+// Defaults
+
+/// Returns the value of an `Ok`, or `default` for an `Err`.
+pub fn unwrap_or<T, E>(r: Result<T, E>, default: T) -> T {
+  case r {
+    Ok(value) => value
+    Err(_) => default
+  }
+}
+
+test "unwrap_or falls back on an error" {
+  assert unwrap_or(int::parse("12"), 0) == 12
+  assert unwrap_or(int::parse("twelve"), 0) == 0
+}
+
+/// Returns the value of an `Ok`, or calls `default` for an `Err`.
+pub fn lazy_unwrap_or<T, E>(r: Result<T, E>, default: fn() -> T) -> T {
+  case r {
+    Ok(value) => value
+    Err(_) => default()
+  }
+}
+
+test "lazy_unwrap_or calls the default only for an error" {
+  assert lazy_unwrap_or(int::parse("12"), fn() { panic as "not called" }) == 12
+  assert lazy_unwrap_or(int::parse("twelve"), fn() { 0 }) == 0
+}
+
+/// Returns `first` if it is `Ok`, and `second` otherwise.
+pub fn or<T, E>(first: Result<T, E>, second: Result<T, E>) -> Result<T, E> {
+  case first {
+    Ok(_) => first
+    Err(_) => second
+  }
+}
+
+test "or picks the first success" {
+  assert or(int::parse("1"), int::parse("2")) == Ok(1)
+  assert or(int::parse("one"), int::parse("2")) == Ok(2)
+  assert or(int::parse("one"), int::parse("two")) == Err(Nil)
+}
+
+// Tests
+
+/// Tells whether `r` is an `Ok`.
+pub fn is_ok<T, E>(r: Result<T, E>) -> Bool {
+  case r {
+    Ok(_) => True
+    Err(_) => False
+  }
+}
+
+test "is_ok tells Ok from Err" {
+  assert is_ok(int::parse("1"))
+  assert !is_ok(int::parse("one"))
+}
+
+/// Tells whether `r` is an `Err`.
+pub fn is_error<T, E>(r: Result<T, E>) -> Bool {
+  case r {
+    Ok(_) => False
+    Err(_) => True
+  }
+}
+
+test "is_error tells Err from Ok" {
+  assert is_error(int::parse("one"))
+  assert !is_error(int::parse("1"))
+}
+
+// Lists of results
+
+/// Returns `Ok` with every value, in order, or the first `Err`.
+pub fn all<T, E>(results: List<Result<T, E>>) -> Result<List<T>, E> {
+  fn step(found: List<T>, rest: List<Result<T, E>>) -> Result<List<T>, E> {
+    case rest {
+      [] => Ok(found)
+      [Ok(value), ..tail] => step(list::push(found, value), tail)
+      [Err(error), ..] => Err(error)
+    }
+  }
+  step([], results)
+}
+
+test "all needs every result to succeed" {
+  assert all(list::map(["1", "2"], int::parse)) == Ok([1, 2])
+  assert all(list::map(["1", "two", "x"], int::parse)) == Err(Nil)
+  assert all::<Int, Nil>([]) == Ok([])
+}
+
+/// Returns the values of the `Ok` elements, in order, and drops the errors.
+pub fn values<T, E>(results: List<Result<T, E>>) -> List<T> {
+  list::filter_map(results, to_option)
+}
+
+test "values keeps the successes" {
+  assert values(list::map(["1", "two", "3"], int::parse)) == [1, 3]
+}
+
+/// Splits the elements into the values of the `Ok`s and the errors of the `Err`s.
+pub fn partition<T, E>(results: List<Result<T, E>>) -> (List<T>, List<E>) {
+  list::fold(results, ([], []), fn((oks, errors), item) {
+    case item {
+      Ok(value) => (list::push(oks, value), errors)
+      Err(error) => (oks, list::push(errors, error))
+    }
+  })
+}
+
+test "partition splits successes from errors" {
+  let results: List<Result<Int, String>> = [Ok(1), Err("a"), Ok(2), Err("b")]
+  assert partition(results) == ([1, 2], ["a", "b"])
+}
+
+// Conversions
+
+/// Returns `Some` with the value of an `Ok`, and `None` for an `Err`.
+pub fn to_option<T, E>(r: Result<T, E>) -> Option<T> {
+  case r {
+    Ok(value) => Some(value)
+    Err(_) => None
+  }
+}
+
+test "to_option drops the error" {
+  assert to_option(int::parse("1")) == Some(1)
+  assert to_option(int::parse("one")) == None
+}
+
+/// Writes `Ok(` or `Err(`, the `show` of the value or error, and `)` (D-355).
+/// It makes `Result<T, E>` satisfy `Show` when `T` and `E` do (D-064).
+pub fn show<T: Show, E: Show>(r: Result<T, E>) -> String {
+  case r {
+    Ok(value) => "Ok({value})"
+    Err(error) => "Err({error})"
+  }
+}
+
+test "a result shows its value or error" {
+  let good: Result<Int, String> = Ok(3)
+  let bad: Result<Int, String> = Err("not found")
+  assert "{good}" == "Ok(3)"
+  assert "{bad}" == "Err(not found)"
+}
+
+// Tests of `std::list` that need this module.
+
+test "filter_map keeps the Some results" {
+  assert list::filter_map([0, 2, 5], list::get(["a", "b", "c"], _)) == ["a", "c"]
+  assert list::filter_map(["1", "x", "3"], fn(text) { to_option(int::parse(text)) }) == [1, 3]
+}
+
+// Tests of `std::nil` that need this module: `std::nil` imports nothing,
+// so it cannot show a `Result` or a `String`.
+
+test "Nil shows as Nil" {
+  let done: Result<Nil, String> = Ok(Nil)
+  assert nil::show(Nil) == "Nil"
+  assert "{done}" == "Ok(Nil)"
+}

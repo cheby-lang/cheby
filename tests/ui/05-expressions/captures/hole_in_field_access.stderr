@@ -1,0 +1,6 @@
+error[E0013]: expected a field name, found `_`
+  --> tests/ui/05-expressions/captures/hole_in_field_access.cheby:16:17
+   |
+16 |   let f = add(p._, 1)
+   |                 ^
+

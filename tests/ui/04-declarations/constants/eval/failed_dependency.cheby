@@ -1,0 +1,21 @@
+// @mode: check-fail
+// @decisions: D-533, D-535, D-592
+//! A constant that reads a constant whose initializer panicked is not
+//! reported again: the error is at the constant that panicked (§13.9).
+
+const base: Int = first([])
+
+const next: Int = base + 1
+
+const last: Int = next * 2
+
+fn first(items: List<Int>) -> Int {
+  case items {
+    [item, ..] => item
+    [] => panic as "no items"
+  }
+}
+
+fn main() {
+  assert last > 0
+}

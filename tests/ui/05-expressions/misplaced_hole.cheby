@@ -1,0 +1,12 @@
+// @mode: parse-fail
+// @decisions: D-202
+//! A `_` captures only as a whole argument of a call.
+
+fn double(n: Int) -> Int {
+  n * 2
+}
+
+fn main() {
+  let f = double(_ + 1)
+  assert f(1) == 4
+}

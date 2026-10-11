@@ -1,0 +1,21 @@
+error[E0013]: expected a pattern, found `=`
+ --> tests/ui/02-lexical-structure/recovery.cheby:7:7
+  |
+7 |   let = 1
+  |       ^
+
+error[E0015]: unclosed `(`
+  --> tests/ui/02-lexical-structure/recovery.cheby:14:1
+   |
+12 |   let x = (1 +
+   |           - this `(` is never closed
+13 |   x
+14 | }
+   | ^ expected `)`
+
+error[E0013]: expected a line break or `}`, found integer
+  --> tests/ui/02-lexical-structure/recovery.cheby:17:5
+   |
+17 |   3 4
+   |     ^
+

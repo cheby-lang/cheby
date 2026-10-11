@@ -1,0 +1,28 @@
+// @mode: check-fail
+// @decisions: D-235
+//! Without an expected type nothing converts, so a list of a `Circle` and a
+//! `Square` is a mismatch (§3.12.5).
+
+pub interface Shape {
+  fn area(Self) -> Float
+}
+
+pub type Circle {
+  radius: Float,
+}
+
+pub type Square {
+  side: Float,
+}
+
+pub fn area(circle: Circle) -> Float {
+  circle.radius * circle.radius * 3.0
+}
+
+pub fn mixed(circle: Circle, square: Square) -> Int {
+  let both = [circle, square]
+  case both {
+    [] => 0
+    _ => 1
+  }
+}

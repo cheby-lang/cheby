@@ -1,0 +1,21 @@
+// @mode: run-pass
+// @decisions: D-033, D-069
+//! `==` and `!=` on numbers, `Bool`, `String` and other types (§5.4.4):
+//! structural equality, reflexive on floats (§3.13).
+
+import std::io
+
+fn main() {
+  let n = 3
+  let x = 0.5
+  let flag = True
+  let name = "Ada"
+  assert n == 3 && n != 4
+  assert x == 0.5 && x != 0.25
+  assert flag == True && flag != False
+  assert name == "Ada" && name != "Bob"
+  assert Some(n) == Some(3) && Some(n) != None
+  assert (n, name) == (3, "Ada") && (n, name) != (n, "Bob")
+  assert Ok(name) != Err(name)
+  io::println("ok")
+}

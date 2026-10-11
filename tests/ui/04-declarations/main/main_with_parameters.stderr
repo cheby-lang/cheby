@@ -1,0 +1,9 @@
+error[E0050]: `main` must take no parameters and return `Nil` or `Result<Nil, E>`
+ --> tests/ui/04-declarations/main/main_with_parameters.cheby:8:8
+  |
+8 | fn main(name: String) {
+  |        ^^^^^^^^^^^^^^ `main` takes no parameters
+  |
+  = note: any module's `main` can be run with `cheby run <module>` (D-137)
+  = help: program arguments come from `env::args()`; give the function another name if it is not an entry point
+

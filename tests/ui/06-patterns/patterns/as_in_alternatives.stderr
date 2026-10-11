@@ -1,0 +1,16 @@
+error[E0013]: `as` in an alternative must be in parentheses
+ --> tests/ui/06-patterns/patterns/as_in_alternatives.cheby:8:5
+  |
+8 |     Some(_) as x | None => x
+  |     ^^^^^^^^^^^^
+  |
+  = help: write `(A as x) | B`, or put `as` after the last alternative to bind the whole pattern
+
+error[E0013]: a pattern has at most one `as` name
+ --> tests/ui/06-patterns/patterns/as_in_alternatives.cheby:9:12
+  |
+9 |     _ as a as b => b
+  |            ^^
+  |
+  = help: bind the value once; use the first name
+

@@ -1,0 +1,34 @@
+// @decisions: D-546
+> 1 / 0
+panicked at <repl:1>:1:1:
+division by zero
+> "the session continues"
+"the session continues" : String
+> fn countdown(n: Int) -> Int {
+.   1 + countdown(n - 1)
+. }
+> countdown(1)
+panicked at <repl:3>:1:4:
+stack overflow
+> let empty: List<Int> = []
+> let assert [head, ..] = empty
+panicked at <repl:6>:1:12:
+`let assert` pattern did not match
+  value: []
+> head
+error[E0042]: cannot find value `head` in this scope
+ --> <repl:7>:1:1
+  |
+1 | head
+  | ^^^^ not found
+
+> import std::io
+> {
+.   io::println("printed before the panic")
+.   [1, 2, 3] == [1, 2] || 1 / 0 == 1
+. }
+printed before the panic
+panicked at <repl:9>:3:26:
+division by zero
+> "still here"
+"still here" : String

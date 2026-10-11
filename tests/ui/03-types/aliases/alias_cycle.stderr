@@ -1,0 +1,18 @@
+error[E0070]: the type alias `Ping` refers to itself
+ --> tests/ui/03-types/aliases/alias_cycle.cheby:6:10
+  |
+6 | pub type Ping = Option<Pong>
+  |          ^^^^          ---- which leads back to it through this alias
+  |
+  = note: the aliases form a cycle: `Ping` → `Pong` → `Ping`
+  = help: an alias never finishes expanding if it contains itself; declare a type for a recursive structure (§4.4)
+
+error[E0070]: the type alias `Pong` refers to itself
+ --> tests/ui/03-types/aliases/alias_cycle.cheby:8:10
+  |
+8 | pub type Pong = (Ping, Int)
+  |          ^^^^    ---- which leads back to it through this alias
+  |
+  = note: the aliases form a cycle: `Pong` → `Ping` → `Pong`
+  = help: an alias never finishes expanding if it contains itself; declare a type for a recursive structure (§4.4)
+

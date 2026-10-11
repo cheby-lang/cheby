@@ -1,0 +1,8 @@
+error[E0042]: cannot find type `Map` in this scope
+ --> tests/ui/03-types/builtin/map_not_in_prelude.cheby:6:21
+  |
+6 | pub fn size(counts: Map<String, Int>) -> Int {
+  |                     ^^^ not found
+  |
+  = help: `Map` is not in the prelude: add `import std::map` and write `map::Map`
+

@@ -1,0 +1,26 @@
+// @mode: parse-fail
+// @decisions: D-461, D-514
+//! Only items take attributes: one on a variant, a record field or an
+//! interface function is an error, and the declaration around it still
+//! parses.
+
+type Choice {
+  @deprecated("use Second")
+  First,
+  Second,
+}
+
+type Point {
+  @deprecated("use y")
+  x: Int,
+  y: Int,
+}
+
+interface Named {
+  @target(native)
+  fn name(Self) -> String
+}
+
+fn main() {
+  assert First != Second
+}

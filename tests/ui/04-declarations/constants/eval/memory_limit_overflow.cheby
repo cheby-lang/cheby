@@ -1,0 +1,15 @@
+// @mode: check-fail
+// @decisions: D-536, D-617
+//! A kernel call whose size does not even fit in 64 bits is a request
+//! over the memory limit like any other, so it is E0076 and the compiler
+//! never tries to allocate it (§4.5, §13.9).
+
+import std::io
+import std::string
+
+const big: String = string::repeat("abc", 9_000_000_000_000_000_000)
+
+fn main() {
+  let size = string::length(big)
+  io::println("{size}")
+}

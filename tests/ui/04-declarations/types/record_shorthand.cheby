@@ -1,0 +1,10 @@
+// @mode: check-pass
+// @decisions: D-082, D-111
+//! A body that starts with a field declares one named-field variant whose
+//! constructor has the type's name (§4.3.3).
+
+pub type Point { x: Float, y: Float }
+
+pub fn origin() -> Point {
+  Point { x: 0.0, y: 0.0 }
+}

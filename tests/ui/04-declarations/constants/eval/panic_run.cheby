@@ -1,0 +1,18 @@
+// @mode: run-fail
+// @exit: 1
+// @decisions: D-090, D-449, D-533
+//! `cheby run` reports a constant whose initializer panics before `main`
+//! starts, so `main` prints nothing (§4.5, §13.9).
+
+import std::io
+
+const checked: Int = must_be_positive(-3)
+
+fn must_be_positive(n: Int) -> Int {
+  assert n > 0 as "a size must be positive"
+  n
+}
+
+fn main() {
+  io::println("main ran: {checked}")
+}

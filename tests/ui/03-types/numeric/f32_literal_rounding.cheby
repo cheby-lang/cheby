@@ -1,0 +1,23 @@
+// @mode: run-pass
+// @decisions: D-084, D-313, D-496, D-569
+//! An `F32` literal is the `F32` nearest to its decimal text, rounded
+//! once (§3.3.4). Rounding to `Float` first would turn the first literal
+//! into an exact tie between `1.0` and `1.0000001`, and the tie would go
+//! to the even `1.0`. The second literal lies just below the overflow
+//! midpoint, so it is the largest finite `F32`.
+
+import std::f32
+import std::io
+
+fn main() {
+  let above_tie: F32 = 1.00000005960464477539062500001
+  io::println(f32::show(above_tie))
+  assert above_tie == 1.0000001
+  let negative: F32 = -1.00000005960464477539062500001
+  io::println(f32::show(negative))
+  let edge: F32 = 3.4028235677973366e38
+  io::println(f32::show(edge))
+  assert edge == 3.4028235e38
+  let parsed = f32::parse("3.4028235677973366e38")
+  io::println("{parsed:?}")
+}

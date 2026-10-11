@@ -1,0 +1,10 @@
+// @mode: run-pass
+// @decisions: D-182
+//! `main` returning `Ok(Nil)` exits with status 0 (§10.10).
+
+import std::io
+
+fn main() -> Result<Nil, String> {
+  io::println("done")
+  Ok(Nil)
+}

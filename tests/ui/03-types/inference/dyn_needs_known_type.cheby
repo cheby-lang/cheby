@@ -1,0 +1,11 @@
+// @mode: check-fail
+// @decisions: D-237
+//! A value converted to `dyn` needs a known type at the end of the body
+//! (§8.6.1).
+
+pub interface Any
+
+pub fn boxed() -> dyn Any {
+  let a: dyn Any = []
+  a
+}

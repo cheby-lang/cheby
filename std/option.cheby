@@ -1,0 +1,186 @@
+//! Helpers for the built-in `Option` type (D-317): chaining, defaults,
+//! tests, lists of options and conversions.
+//!
+//! `Option`, `Some` and `None` are builtin items whose home module is this
+//! one (D-447). Everything here is written in Cheby.
+
+import std::list
+
+// Chaining
+
+/// Calls `next` with the value of a `Some`, and returns `None` otherwise (D-383).
+pub fn then<T, U>(o: Option<T>, next: fn(T) -> Option<U>) -> Option<U> {
+  case o {
+    Some(value) => next(value)
+    None => None
+  }
+}
+
+test "then stops at the first None" {
+  fn second_of_first(rows: List<List<Int>>) -> Option<Int> {
+    use row <- then(list::get(rows, 0))
+    list::get(row, 1)
+  }
+  assert second_of_first([[1, 2], [3]]) == Some(2)
+  assert second_of_first([[1]]) == None
+  assert second_of_first([]) == None
+}
+
+/// Applies `f` to the value of a `Some`, and returns `None` unchanged.
+pub fn map<T, U>(o: Option<T>, f: fn(T) -> U) -> Option<U> {
+  case o {
+    Some(value) => Some(f(value))
+    None => None
+  }
+}
+
+test "map changes only a Some" {
+  assert map(Some(2), fn(n) { n * 10 }) == Some(20)
+  assert map(None, fn(n: Int) { n * 10 }) == None
+}
+
+/// Removes one level of nesting: `Some(inner)` becomes `inner`.
+pub fn flatten<T>(o: Option<Option<T>>) -> Option<T> {
+  case o {
+    Some(inner) => inner
+    None => None
+  }
+}
+
+test "flatten removes one level" {
+  let inner_none: Option<Option<Int>> = Some(None)
+  let outer_none: Option<Option<Int>> = None
+  assert flatten(Some(Some(1))) == Some(1)
+  assert flatten(inner_none) == None
+  assert flatten(outer_none) == None
+}
+
+// Defaults
+
+/// Returns the value of a `Some`, or `default` for `None`.
+pub fn unwrap_or<T>(o: Option<T>, default: T) -> T {
+  case o {
+    Some(value) => value
+    None => default
+  }
+}
+
+test "unwrap_or falls back on None" {
+  assert unwrap_or(list::get([5], 0), 0) == 5
+  assert unwrap_or(list::get([5], 3), 0) == 0
+}
+
+/// Returns the value of a `Some`, or calls `default` for `None`.
+pub fn lazy_unwrap_or<T>(o: Option<T>, default: fn() -> T) -> T {
+  case o {
+    Some(value) => value
+    None => default()
+  }
+}
+
+test "lazy_unwrap_or calls the default only for None" {
+  assert lazy_unwrap_or(list::get([5], 0), fn() { panic as "not called" }) == 5
+  assert lazy_unwrap_or(list::get([5], 3), fn() { 0 }) == 0
+}
+
+/// Returns `first` if it is `Some`, and `second` otherwise.
+pub fn or<T>(first: Option<T>, second: Option<T>) -> Option<T> {
+  case first {
+    Some(_) => first
+    None => second
+  }
+}
+
+test "or picks the first Some" {
+  assert or(list::get([1], 0), Some(2)) == Some(1)
+  assert or(list::get([1], 5), Some(2)) == Some(2)
+  assert or(list::get([1], 5), list::get([1], 6)) == None
+}
+
+// Tests
+
+/// Tells whether `o` is a `Some`.
+pub fn is_some<T>(o: Option<T>) -> Bool {
+  case o {
+    Some(_) => True
+    None => False
+  }
+}
+
+test "is_some tells Some from None" {
+  assert is_some(list::get([1], 0))
+  assert !is_some(list::get([1], 1))
+}
+
+/// Tells whether `o` is `None`.
+pub fn is_none<T>(o: Option<T>) -> Bool {
+  case o {
+    Some(_) => False
+    None => True
+  }
+}
+
+test "is_none tells None from Some" {
+  assert is_none(list::get([1], 1))
+  assert !is_none(list::get([1], 0))
+}
+
+// Lists of options
+
+/// Returns `Some` with every value, in order, when every element is `Some`.
+pub fn all<T>(options: List<Option<T>>) -> Option<List<T>> {
+  fn step(found: List<T>, rest: List<Option<T>>) -> Option<List<T>> {
+    case rest {
+      [] => Some(found)
+      [Some(value), ..tail] => step(list::push(found, value), tail)
+      [None, ..] => None
+    }
+  }
+  step([], options)
+}
+
+test "all needs every option to be Some" {
+  assert all([Some(1), Some(2)]) == Some([1, 2])
+  assert all([Some(1), None]) == None
+  assert all::<Int>([]) == Some([])
+}
+
+/// Returns the values of the `Some` elements, in order.
+pub fn values<T>(options: List<Option<T>>) -> List<T> {
+  list::filter_map(options, fn(item) { item })
+}
+
+test "values keeps the Somes" {
+  assert values([Some(1), None, Some(3)]) == [1, 3]
+}
+
+// Conversions
+
+/// Returns `Ok` with the value of a `Some`, and `Err(error)` for `None`.
+pub fn to_result<T, E>(o: Option<T>, error: E) -> Result<T, E> {
+  case o {
+    Some(value) => Ok(value)
+    None => Err(error)
+  }
+}
+
+test "to_result supplies the error" {
+  assert to_result(list::get([1], 0), "missing") == Ok(1)
+  assert to_result(list::get([1], 4), "missing") == Err("missing")
+}
+
+/// Writes `Some(`, the `show` of the value and `)`, or `None` (D-355).
+/// It makes `Option<T>` satisfy `Show` when `T` does (D-064).
+pub fn show<T: Show>(o: Option<T>) -> String {
+  case o {
+    Some(value) => "Some({value})"
+    None => "None"
+  }
+}
+
+test "an option shows its value" {
+  let found = list::get([3], 0)
+  let missing = list::get([3], 1)
+  assert "{found}" == "Some(3)"
+  assert "{missing}" == "None"
+}

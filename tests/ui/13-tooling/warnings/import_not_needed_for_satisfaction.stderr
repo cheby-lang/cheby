@@ -1,0 +1,16 @@
+warning[W0003]: unused import `std::int`
+ --> tests/ui/13-tooling/warnings/import_not_needed_for_satisfaction.cheby:7:1
+  |
+7 | import std::int
+  | ^^^^^^^^^^^^^^^ nothing in this module uses it
+  |
+  = help: remove the import
+
+warning[W0003]: unused import `std::list::{length}`
+ --> tests/ui/13-tooling/warnings/import_not_needed_for_satisfaction.cheby:9:1
+  |
+9 | import std::list::{length}
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^ nothing in this module uses it
+  |
+  = help: remove the import
+

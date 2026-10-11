@@ -1,0 +1,8 @@
+error[E0045]: unknown inner attribute `@!deprecated`
+ --> tests/ui/04-declarations/attributes/unknown_inner_attribute.cheby:5:1
+  |
+5 | @!deprecated("old")
+  | ^^^^^^^^^^^^^^^^^^^
+  |
+  = help: the only inner attribute is `@!target(native)` or `@!target(js)`
+

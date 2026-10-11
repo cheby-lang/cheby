@@ -10,6 +10,35 @@ publish = false
 [dependencies]
 cheby_codegen_clif.workspace = true
 cheby_runtime.workspace = true
+cheby_mir.workspace = true
+cheby_iface.workspace = true
+cranelift-codegen.workspace = true
+cranelift-jit.workspace = true
+cranelift-module.workspace = true
+cranelift-native.workspace = true
+rustc-hash.workspace = true
+wasmtime-internal-jit-icache-coherence.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+  "Win32_System_Memory",
+  "Win32_System_SystemInformation",
+] }
+
+# TODO(M6): only `process_memory` in src/tests.rs uses this, and the tests
+# are not built on Windows until M6 (D-545); kept for M6.
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { workspace = true, features = [
+  "Win32_Foundation",
+  "Win32_System_ProcessStatus",
+  "Win32_System_Threading",
+] }
+
+[dev-dependencies]
+cheby_diag.workspace = true
 
 [lints]
 workspace = true

@@ -1,0 +1,9 @@
+error[E0041]: two tests are named "doubling"
+  --> tests/ui/04-declarations/tests/duplicate_test_name.cheby:13:6
+   |
+9  | test "doubling" {
+   |      ---------- first declared here
+...
+13 | test "doubling" {
+   |      ^^^^^^^^^^ declared again here
+

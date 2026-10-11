@@ -1,0 +1,12 @@
+// @mode: check-pass
+// @decisions: D-101
+//! A type without a body is an external type, whose values are foreign
+//! handles; its `@external` names the drop function (§12.5.3).
+
+@external(native, "cheby_test_db_close")
+@external(js, "./db.mjs", "close")
+pub type Db
+
+@external(native, "cheby_test_db_open")
+@external(js, "./db.mjs", "open")
+pub fn open(path: String) -> Db

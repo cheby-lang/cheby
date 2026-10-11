@@ -1,0 +1,20 @@
+// @mode: check-fail
+// @decisions: D-167
+//! A tuple satisfies `Show` when every element does (§8.2).
+
+import std::io
+
+type Label {
+  text: String,
+}
+
+fn show(label: Label) -> String {
+  label.text
+}
+
+fn main() {
+  let pair = (Label { text: "a" }, Label { text: "b" })
+  io::println("{pair}")
+  let with_action = (Label { text: "run" }, fn() { Nil })
+  io::println("{with_action}")
+}

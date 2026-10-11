@@ -1,0 +1,9 @@
+error[E0058]: the field `n` does not have one type in every variant of `Value`
+  --> tests/ui/05-expressions/records/update_field_types_differ.cheby:12:20
+   |
+12 |   Value { ..value, n: 0 }
+   |                    ^ `n` is `Int` in `Small` and `String` in `Big`
+   |
+   = note: a field can be updated without `case` only if every variant has it with the same type (D-071)
+   = help: use `case` to handle each variant
+

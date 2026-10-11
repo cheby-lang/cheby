@@ -1,0 +1,9 @@
+// @mode: check-fail
+// @decisions: D-141, D-461
+//! The only inner attribute is `@!target(…)`.
+
+@!deprecated("old")
+
+pub fn name() -> String {
+  "name"
+}

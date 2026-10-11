@@ -1,0 +1,11 @@
+// @mode: check-fail
+// @flags: --target js
+// @decisions: D-550
+//! A target outside the manifest's `targets` is a tool error without a
+//! code.
+
+import std::io
+
+fn main() {
+  io::println("native only")
+}

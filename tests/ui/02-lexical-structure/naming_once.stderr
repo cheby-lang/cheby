@@ -1,0 +1,16 @@
+error[E0006]: name `userName` is not in snake_case
+ --> tests/ui/02-lexical-structure/naming_once.cheby:8:10
+  |
+8 | fn greet(userName: String) {
+  |          ^^^^^^^^
+  |
+  = help: write `user_name`
+
+error[E0006]: name `myGreeting` is not in snake_case
+  --> tests/ui/02-lexical-structure/naming_once.cheby:14:7
+   |
+14 |   let myGreeting = "hello"
+   |       ^^^^^^^^^^
+   |
+   = help: write `my_greeting`
+

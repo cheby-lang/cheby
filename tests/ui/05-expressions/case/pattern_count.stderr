@@ -1,0 +1,8 @@
+error[E0048]: this arm has 1 pattern, but the `case` has 2 subjects
+ --> tests/ui/05-expressions/case/pattern_count.cheby:9:5
+  |
+9 |     False => False
+  |     ^^^^^ expected 2 patterns
+  |
+  = note: each arm has one pattern per subject, separated by commas (§5.9.2)
+

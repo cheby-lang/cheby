@@ -1,0 +1,13 @@
+// @mode: check-fail
+// @flags: --target js
+// @decisions: D-037, D-550
+//! The same `Int` literal outside JS's safe range is E0071 when the code
+//! is checked for JS.
+
+import std::int
+import std::io
+
+fn main() {
+  let big = 9_007_199_254_740_993
+  io::println(int::show(big))
+}

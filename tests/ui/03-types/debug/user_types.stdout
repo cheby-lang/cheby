@@ -1,0 +1,4 @@
+[Circle { center: Point { x: 1.0, y: -2.5 }, radius: 3.0 }, Polygon([Point { x: 0.0, y: 0.0 }, Point { x: 1.0, y: -2.5 }]), Nothing]
+Tagged("pair", (Some(Point { x: 1.0, y: -2.5 }), [Nothing]))
+Add(Num(1), Neg(Add(Num(2), Num(-3))))
+Settings { count: 3, enabled: False, scale: 0.5, code: 7, handler: <fn> }

@@ -1,0 +1,15 @@
+// @mode: check-fail
+// @decisions: D-059
+//! Values are named in snake_case and types in PascalCase, and the error
+//! suggests the right spelling.
+
+type Point_2d {
+  x: Int,
+  y: Int,
+}
+
+fn main() {
+  let maxValue = 3
+  let point = Point_2d { x: maxValue, y: 0 }
+  assert point.x == 3
+}

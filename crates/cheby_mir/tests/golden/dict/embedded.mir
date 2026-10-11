@@ -1,0 +1,17 @@
+fn app::both(_0: value, _1: value) -> value check str#0 {
+  str#0 = "src/main.cheby:27:4"
+bb0:
+  _2: value = field _0.3 of dict/2+1
+  dup _2
+  dup _1
+  _3: value = call app::just_name(_2, _1)
+  _4: value = field _0.2 of dict/2+1
+  dup _4
+  drop _0
+  _5: value = call _4(_1)
+  tail_call std::string::add(_3, _5)
+}
+
+static#0 desc app$Person = desc_nominal(str#0, str#1) str#0 = "Person" str#1 = "app"
+static#1 dict app$app::Named$app::Person = dict/1+0(static#0, fn app::name)
+static#2 dict app$app::Greeter$app::Person = dict/2+1(static#0, fn app::name, fn app::greeting, static#1)

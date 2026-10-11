@@ -1,0 +1,24 @@
+error[E0045]: duplicate `@target` attribute
+ --> tests/ui/04-declarations/attributes/duplicates.cheby:7:1
+  |
+6 | @target(native)
+  | --------------- first written here
+7 | @target(native)
+  | ^^^^^^^^^^^^^^^
+
+error[E0045]: duplicate `@async` attribute
+  --> tests/ui/04-declarations/attributes/duplicates.cheby:14:1
+   |
+13 | @async
+   | ------ first written here
+14 | @async
+   | ^^^^^^
+
+error[E0045]: duplicate `@deprecated` attribute
+  --> tests/ui/04-declarations/attributes/duplicates.cheby:18:1
+   |
+17 | @deprecated("old")
+   | ------------------ first written here
+18 | @deprecated("older")
+   | ^^^^^^^^^^^^^^^^^^^^
+

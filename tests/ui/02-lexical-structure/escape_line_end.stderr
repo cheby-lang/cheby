@@ -1,0 +1,10 @@
+error[E0011]: `\` at the end of a line is not an escape
+ --> tests/ui/02-lexical-structure/escape_line_end.cheby:7:16
+  |
+7 |   let s = "one \
+  |                ^
+  |
+  = note: strings may span lines (D-114)
+  = help: remove the `\`
+  = help: write `\\` for a backslash
+

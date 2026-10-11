@@ -1,0 +1,22 @@
+// @mode: check-fail
+// @decisions: D-048, D-487
+//! The fields of a `pub` type from another package are visible only if the
+//! type is `exposed`, so `io::Error`'s fields cannot be read or updated here
+//! (§4.3.4, §5.11.3).
+
+import std::io
+
+fn message(error: io::Error) -> String {
+  error.message
+}
+
+fn renamed(error: io::Error) -> io::Error {
+  io::Error { ..error, message: "renamed" }
+}
+
+fn main() {
+  case io::read_file("missing.txt") {
+    Ok(_) => Nil
+    Err(error) => io::println(message(renamed(error)))
+  }
+}

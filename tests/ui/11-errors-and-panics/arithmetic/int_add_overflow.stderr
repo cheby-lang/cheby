@@ -1,0 +1,2 @@
+panicked at tests/ui/11-errors-and-panics/arithmetic/int_add_overflow.cheby:11:11:
+integer overflow

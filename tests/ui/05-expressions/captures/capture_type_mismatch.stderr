@@ -1,0 +1,8 @@
+error[E0047]: mismatched types
+  --> tests/ui/05-expressions/captures/capture_type_mismatch.cheby:11:15
+   |
+11 |   let f = add("one", _)
+   |           --- ^^^^^ expected `Int`, found `String`
+   |           |
+   |           arguments to this function are incorrect
+

@@ -1,0 +1,7 @@
+// @mode: check-fail
+// @decisions: D-073, D-448
+//! An entry point returns `Nil` or `Result<Nil, E>` (§4.2.1).
+
+fn main() -> Int {
+  0
+}

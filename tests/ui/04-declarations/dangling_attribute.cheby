@@ -1,0 +1,10 @@
+// @mode: check-fail
+// @decisions: D-200
+//! An attribute applies to the item right after it. An attribute with no
+//! item after it is an error.
+
+fn main() {
+  assert 1 + 1 == 2
+}
+
+@deprecated("not attached to anything")

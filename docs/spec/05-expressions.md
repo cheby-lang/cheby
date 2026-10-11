@@ -108,7 +108,9 @@ The lexical forms are defined in [§2.5](02-lexical-structure.md#25-literals). T
 
 ### 5.3.1 Negative literals
 
-When unary `-` is applied directly to an integer or float literal, the pair is treated as one negative literal for type inference and range checking. `-128` is a valid `I8` literal and `-9223372036854775808` is a valid `Int` literal, even though `128` and `9223372036854775808` are out of range for those types.
+When unary `-` is written directly before an integer or float literal, with nothing between them, the pair is treated as one negative literal for type inference and range checking. `-128` is a valid `I8` literal and `-9223372036854775808` is a valid `Int` literal, even though `128` and `9223372036854775808` are out of range for those types.
+
+Whitespace or a comment between a unary `-` and a numeric literal is a compile error, so `- 128` is rejected rather than read as `neg(128)`. `-(128)` negates a parenthesized expression and is not a negative literal, and binary minus, as in `a - 5`, is not affected (D-470).
 
 ### 5.3.2 String interpolation
 
@@ -148,7 +150,7 @@ Comparison operators do not chain. `a < b < c` and `a == b == c` are compile err
 
 Because `|>` binds tighter than comparisons, `xs |> list::length == 3` means `(xs |> list::length) == 3` (D-108).
 
-The operand type of an arithmetic, comparison or bitwise operator need not be known when the operator is checked. The choice between the built-in operation and the operand type's functions is made at the end of the body ([§3.12.4](03-types.md#3124-order-of-inference)) (D-234).
+The operand type of an arithmetic, comparison or bitwise operator need not be known when the operator is checked. The choice between the built-in operation and the operand type's functions is made at the end of the body ([§3.12.4](03-types.md#3124-order-of-inference)) (D-234). An operand of type `Never` converts to the other operand's type ([§3.10](03-types.md#310-never)) (D-492).
 
 ### 5.4.2 Built-in arithmetic
 
@@ -161,9 +163,11 @@ For the built-in numeric types, both operands must have the **same type**, and t
 | `a % b`                   | remainder with the sign of `a`, panics on zero divisor (D-092)    | IEEE `fmod` (D-154) |
 | `-a`                      | checked negation, panics on overflow                              | IEEE 754 negation   |
 
-`%` on `Float` and `F32` has IEEE `fmod` semantics: the result has the sign of the dividend `a`, as for integers (D-154).
+`%` on `Float` and `F32` is `fmod`: the exact remainder of the division truncated toward zero, with the sign of the dividend `a`, as for integers (D-154, D-527). Unary `-` on a float flips its sign, so it turns `0.0` into `-0.0` and a NaN into a NaN (D-527). Float arithmetic never panics (D-069).
 
 On the JS target, every `Int` result is additionally checked against the safe-integer range ([§3.3.1](03-types.md#331-int)) (D-037).
+
+The panic of a failing operator is located at the start of the whole operator expression, the start of `a` or the `-` of `-a`, as [§11.6](11-errors-and-panics.md#116-panic-and-todo) describes (D-570).
 
 ### 5.4.3 Overloaded arithmetic
 
@@ -187,9 +191,11 @@ let full = first + " " + last
 | `a > b`    | `Compare::compare(a, b) == Greater` |
 | `a >= b`   | `Compare::compare(a, b) != Less`    |
 
+On `Float` and `F32`, the comparison operators therefore follow the total order of `compare` ([§3.14](03-types.md#314-ordering)), not IEEE comparison. NaNs are equal to each other and greater than every other float, and `-0.0` and `0.0` are equal, so `1.0 < x` is `True` when `x` is a NaN (D-135, D-527).
+
 ### 5.4.5 Logical operators
 
-`&&`, `||` and `!` take and return `Bool` (D-092).
+`&&`, `||` and `!` take and return `Bool` (D-092). Their operands are checked against the expected type `Bool`, so an operand of another type is a type mismatch (D-495).
 
 - `a && b` evaluates `a`. If it is `False`, the result is `False` and `b` is not evaluated. Otherwise the result is `b`.
 - `a || b` evaluates `a`. If it is `True`, the result is `True` and `b` is not evaluated. Otherwise the result is `b`.
@@ -233,13 +239,15 @@ list::map(numbers, int::add(1, _))
 list::map(numbers, fn(x) { int::add(1, x) })
 ```
 
-A `_` belongs to the innermost call that has it as a whole argument (D-202). A capture may itself be an argument of another call, which then receives the capture as an ordinary function value: `f(a, g(_))` means `f(a, fn(x) { g(x) })`.
+A `_` belongs to the innermost call that has it as a whole argument (D-202). A capture may itself be an argument of another call, which then receives the capture as an ordinary function value: `f(a, g(_, b))` means `f(a, fn(x) { g(x, b) })`.
 
 - At most one `_` may appear in one argument list. `f(_, _)` is a compile error.
 - A call whose only argument is `_` is a compile error, because `f(_)` means exactly `f`. Write `f` instead (D-245).
 - A `_` must be a whole argument. `f(_ + 1)` and `f(x._)` are compile errors, and so is a `_` anywhere else in an expression.
 
-The other arguments of a capture are evaluated once, from left to right, when the capture expression itself is evaluated, and the resulting closure holds their values (D-155). Calling the closure does not evaluate them again, so their side effects happen exactly once. This deliberately differs from Gleam, where they are evaluated at each call.
+The other arguments of a capture are evaluated once, from left to right, when the capture expression itself is evaluated, and the resulting closure holds their values (D-155). Calling the closure does not evaluate them again, so their side effects happen exactly once. This deliberately differs from Gleam, where they are evaluated at each call. The callee is evaluated once in the same way, before the arguments (D-498).
+
+_Note:_ only evaluation that could be observed needs a binding. A callee or argument that is a literal, a local binding, a top-level function, a constant or a constructor is used in place, and any other is bound once, in written order (D-498).
 
 ```cheby
 let add_next = int::add(next_id(), _)   // `next_id()` runs here, once
@@ -312,7 +320,7 @@ case_expr   = "case" subjects "{" [ NL ] case_arm { NL case_arm } [ NL ] "}"
             | "case" "{" [ NL ] cond_arm { NL cond_arm } [ NL ] "}" ;
 subjects    = subject_expr { "," subject_expr } ;   (* subject_expr: §5.9.6 *)
 case_arm    = pattern { "," pattern } [ "when" expr ] "=>" expr ;
-cond_arm    = ( expr | "_" ) "=>" expr ;
+cond_arm    = ( expr | "_" ) "=>" expr ;   (* "_" only as the last arm, D-109, D-439 *)
 ```
 
 ### 5.9.1 Matching
@@ -320,6 +328,7 @@ cond_arm    = ( expr | "_" ) "=>" expr ;
 `case` evaluates its subjects from left to right, then tries the arms in order. An arm matches when each of its patterns matches the corresponding subject ([chapter 6](06-patterns.md)) and, if it has a guard, the guard evaluates to `True` with the pattern's bindings in scope. The value of the `case` is the value of the first matching arm's body, evaluated with that arm's bindings in scope.
 
 - All arm bodies must have the same type, which is the type of the `case`. Arms of type `Never`, such as `panic`, take the type of the other arms ([§3.10](03-types.md#310-never)) (D-235).
+- When the `case` has an expected type, every arm is checked against it. Otherwise the first arm whose type is not `Never` fixes the type, and later arms are checked against it. A `case` whose arms all have type `Never` has type `Never` (D-497).
 - Each arm must have exactly as many patterns as there are subjects (D-052).
 - Arms are separated by newlines and never end with a comma (D-107).
 - An arm body is a single expression. A block `{ … }` groups several statements.
@@ -355,6 +364,19 @@ fn fizzbuzz(n: Int) -> String {
 
 A guard `when expr` follows the patterns of an arm (D-052). The guard must have type `Bool` and may use the arm's bindings. Guards are not considered by exhaustiveness checking ([§6.9](06-patterns.md#69-exhaustiveness-and-reachability)).
 
+A guard runs at most once each time its arm is tried (D-571). When the arm's pattern has alternatives ([§6.7](06-patterns.md#67-alternatives)), the guard runs with the bindings of the first alternative that matches. If it is `False`, the whole arm is skipped: its later alternatives are not tried, and matching goes on with the next arm. A guard can have effects, so running it again for another alternative would be observable.
+
+```cheby
+fn pick(pair: (Int, Int)) -> String {
+  case pair {
+    (0, n) | (n, _) when n < 5 => "small {n}"
+    _ => "other"
+  }
+}
+```
+
+_Example:_ `pick((0, 9))` returns `"other"`. The first alternative binds `n` to `9`, the guard is `False`, and `(n, _)` is not tried, although it would bind `n` to `0`.
+
 ### 5.9.4 Exhaustiveness
 
 A `case` with subjects must be exhaustive: every possible combination of subject values must be matched by some arm, ignoring guards (D-022). A non-exhaustive `case` is a compile error that lists missing patterns. An arm that can never match is a warning ([§6.9](06-patterns.md#69-exhaustiveness-and-reachability)).
@@ -373,7 +395,7 @@ fn sign(n: Int) -> String {
 }
 ```
 
-- Each arm's left side is an expression of type `Bool`, except the last, which must be `_` (D-109).
+- Each arm's left side is an expression of type `Bool`, except the last, which must be `_` (D-109). A `_` arm anywhere else is a compile error, because `_` is not an expression (D-439).
 - The conditions are evaluated in order. The first arm whose condition is `True` is taken, and later conditions are not evaluated. If none is `True`, the `_` arm is taken.
 - Arm bodies follow the same rules as in [§5.9.1](#591-matching).
 
@@ -381,11 +403,19 @@ _Rationale:_ this avoids nested `case b { True => … False => case … }` chain
 
 ### 5.9.6 Parsing subjects
 
-In the subject position of a `case`, an `UPPER` name followed by `{` is never parsed as a record construction, because the `{` opens the arms. A record construction or record update used as a subject must be parenthesized. A `{` right after `case` always starts a subjectless `case`, so a block used as a subject must be parenthesized too.
+Every subject of a `case` is a `subject_expr`, which restricts `expr` in two ways. The restrictions apply to each subject, not only the first (D-639).
+
+- An `UPPER` name followed by `{` is never parsed as a record construction or record update, because the `{` opens the arms. This holds anywhere in the subject outside brackets, also in an operand, a call or a field access. A record construction or record update used as a subject must be parenthesized.
+- A subject cannot start with `{`. A `{` right after `case` always starts a subjectless `case`, so a block used as a subject must be parenthesized too. A block later inside a subject, as in `case a + { 1 } { … }`, is valid.
+
+Subjects are separated by commas and, unlike arguments, take no trailing comma (D-107, D-639).
 
 ```cheby
 case (Point { x: 0.0, y: 0.0 }) { … }
+case n, ({ 1 }) { … }
 ```
+
+_Note:_ after a `,`, a `{` could be a block used as a subject or the arms after a trailing comma. Both are syntax errors, and the parser picks one to report. It finds the `}` that closes the `{` by counting braces and looks at the next token, where a line break counts as a token. If that token is anything but a line break, the end of the file, `}`, `)` or `]`, the `{` is taken for a block subject, as in `case n, { 1 } { … }`. Otherwise, and when no `}` closes it, the `{` is taken for the arms, as in `case n, m, {` followed by the arms on the next lines (D-639).
 
 ## 5.10 Use
 
@@ -418,7 +448,7 @@ where `t1` and `t2` are fresh names. If the right side is `f` without arguments,
 - The binders are patterns and must be irrefutable ([§6.1](06-patterns.md#61-pattern-syntax)). Binder names follow the no-shadowing rule.
 - The callback's body is the rest of the enclosing block. If nothing follows the `use`, the body is empty and its value is `Nil` ([§5.1](#51-blocks-and-statements)).
 - The value of the `use` statement is the value of the call, and it is the value of the enclosing block.
-- The callback's parameter and return types are inferred from the called function's signature.
+- The callback's parameter and return types are inferred from the called function's signature. The number of binders must equal the number of parameters of the callback type that the function takes as its last argument (D-495).
 - When the `use` statement is in tail position, the call it desugars to is a tail call.
 
 `use` handles early returns on errors ([chapter 11](11-errors-and-panics.md)), resource scopes and fiber scopes:
@@ -440,7 +470,7 @@ fn with_log(path: String) -> Result<Nil, io::Error> {
 
 ```ebnf
 constructor   = ctor_path "{" [ NL ] [ field_init { "," [ NL ] field_init } [ "," ] ] [ NL ] "}" ;
-record_update = UPPER "{" [ NL ] ".." expr { "," [ NL ] field_init } [ "," ] [ NL ] "}" ;
+record_update = ctor_path "{" [ NL ] ".." expr { "," [ NL ] field_init } [ "," ] [ NL ] "}" ;   (* the type name, D-156, D-429 *)
 ctor_path     = [ LOWER "::" ] UPPER ;
 (* a unit or positional constructor used as a value, `None`, `Some(1)` or `Some`, is a path_expr, §5.17 *)
 field_init  = LOWER [ ":" expr ] ;
@@ -459,12 +489,14 @@ Constructing a value of a `priv` type is possible only in its own module (D-151)
 
 ### 5.11.2 Record update
 
-`T { ..base, field: value, … }` produces a copy of `base` with the listed fields replaced (D-035). `T` is the **type name**, not a constructor name, and may be qualified with a module (D-156):
+`T { ..base, field: value, … }` produces a copy of `base` with the listed fields replaced (D-035). `T` is the **type name**, not a constructor name, and may be qualified with a module, as in `supervisor::Policy { ..policy, backoff_ms: 1 }` (D-156, D-429):
 
 - `base` is evaluated first, then the field values in the order written.
 - Every listed field must exist in the type and must be accessible under the rules of [§5.11.3](#5113-field-access). For a type with several variants, every variant must have each listed field with the same type (D-071).
 - The result has the same variant as `base` (D-156).
+- The result has the type of `base`. Each listed value is checked against its field's type under `base`'s type arguments, so an update never changes a type argument (D-501).
 - At least one field must be listed.
+- `T` may be an alias of the type, as in `A { ..base, x: 1 }`, and the update then behaves as with the type the alias stands for ([§4.4](04-declarations.md#44-type-aliases)). An alias of a type without named fields, such as a tuple, is a compile error (D-501).
 
 For a single-variant type, the type name and the constructor name coincide. For a multi-variant type, the update works on whichever variant `base` has, which is why every variant must have the listed fields (D-071, D-156).
 
@@ -538,7 +570,7 @@ Evaluation is strict and left to right (D-120):
 - In a binary operator, the left operand, then the right, except for the short-circuit rules of `&&` and `||`.
 - In tuples, lists, constructors and record updates, items in the order written.
 - In `x |> f(_, a)`, `x` first, then `a`.
-- In `case`, the subjects in order, then guards in arm order.
+- In `case`, the subjects in order, then guards in arm order, each at most once per arm (D-571).
 
 ### 5.15.2 Tail position
 
@@ -573,9 +605,15 @@ pipe        = expr "|>" expr ;
 
 The hole may be in any position, including the first: `xs |> list::map(_, f)` means `list::map(xs, f)`. A function with more than one parameter is therefore always piped into with an explicit `_`, and a one-parameter function is written bare, `xs |> list::length`, never `xs |> list::length(_)` ([§5.6](#56-function-capture), D-245).
 
-Only a `_` that is a whole argument of the call on the right side counts as its hole. A `_` nested in another argument belongs to that inner call ([§5.6](#56-function-capture)), so `x |> f(a, g(_))` has no hole and is a compile error. It is written `x |> f(_, a, g(_))`, which means `f(x, a, fn(y) { g(y) })`. A `_` therefore means the same thing with or without a pipe in front.
+Only a `_` that is a whole argument of the call on the right side counts as its hole. A `_` nested in another argument belongs to that inner call ([§5.6](#56-function-capture)), so `x |> f(a, g(_, b))` has no hole and is a compile error. It is written `x |> f(_, a, g(_, b))`, which means `f(x, a, fn(y) { g(y, b) })`. A `_` therefore means the same thing with or without a pipe in front.
 
-`x` is evaluated before the rest of the right side ([§5.15.1](#5151-evaluation-order)). To pipe into a function returned by a call, parenthesize the call: `x |> (make_handler(config))`.
+`x` is evaluated before the rest of the right side ([§5.15.1](#5151-evaluation-order)). To pipe into a function returned by a call, parenthesize the call: `x |> (make_handler(config))`. A pipe desugars as follows (D-498):
+
+- `x |> f(a, _)` is `f(a, x)` with `x` evaluated first.
+- `x |> g`, where `g` is a path, is `g(x)`.
+- With any other right side, such as `(make_handler(config))`, `x` is evaluated first, then the right side, and the function it gives is called with `x`.
+
+_Note:_ `x` needs a binding of its own only where something is evaluated before the hole. When the hole is the first argument of a function or constructor called directly, `x` is used in place (D-498).
 
 ```cheby
 let names =
@@ -596,3 +634,5 @@ path_expr   = [ LOWER "::" ] ( LOWER | UPPER ) [ "::" type_args ]
 ```
 
 An unqualified name refers to a local binding, a top-level item of the current module, an imported value or a prelude constructor ([§7.7](07-modules-and-packages.md#77-namespaces-and-name-resolution)). A qualified name `module::name` refers to an item of an imported module that is visible to the current module: a package-visible or `pub` item of a module in the same package, or a `pub` item of a module in another package, never a `priv` item ([§7.3](07-modules-and-packages.md#73-visibility), D-060, D-162).
+
+A path to an interface function, such as `Show::show`, may be used as a value, as in `list::map(xs, Show::show)`. The value is a function that calls the interface function through the function package chosen by the type of its `Self` argument, like an interface call ([§8.5](08-interfaces.md#85-calling-interface-functions)) (D-500).

@@ -1,0 +1,11 @@
+// @mode: check-fail
+// @decisions: D-450, D-512
+//! A standard-library file is shown as `std/` and its module path in
+//! diagnostics. `int::max_value` does not fit `Int` on JS, so it exists
+//! only on native, and code for both targets cannot read it.
+
+import std::int
+
+pub fn largest() -> Int {
+  int::max_value
+}

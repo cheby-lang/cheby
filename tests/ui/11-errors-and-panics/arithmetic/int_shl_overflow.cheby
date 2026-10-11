@@ -1,0 +1,9 @@
+// @mode: run-fail
+// @decisions: D-092, D-449
+//! `<<` on `Int` panics when the result overflows, like
+//! multiplication (§5.4.6).
+
+fn main() {
+  let big = 1 << 62
+  let _ = big << 1
+}

@@ -1,0 +1,10 @@
+error[E0044]: `trimmed` is already bound
+ --> tests/ui/05-expressions/shadowing/let_shadows_let.cheby:8:7
+  |
+7 |   let trimmed = input
+  |       ------- first bound here
+8 |   let trimmed = trimmed + "!"
+  |       ^^^^^^^ bound again here
+  |
+  = help: give this binding a new name, such as `trimmed_2`; names cannot be shadowed (§5.2.3)
+

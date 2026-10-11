@@ -1,0 +1,8 @@
+error[E0063]: `dyn Shape` does not satisfy `Show`
+  --> tests/ui/08-interfaces/dyn/only_embedded.cheby:29:10
+   |
+29 |   assert describe(s) == "circle" && describe(Circle { radius: 2.0 }) != ""
+   |          ^^^^^^^^^^^ required by a bound of `describe`
+   |
+   = note: `dyn Shape` satisfies only `Shape` and the interfaces it embeds (§8.6)
+

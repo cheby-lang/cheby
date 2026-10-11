@@ -1,0 +1,5 @@
+//! Formats numbers.
+
+pub fn name() -> String {
+  "numbers"
+}

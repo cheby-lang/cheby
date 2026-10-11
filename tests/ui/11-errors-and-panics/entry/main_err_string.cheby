@@ -1,0 +1,8 @@
+// @mode: run-fail
+// @exit: 1
+// @decisions: D-182, D-529
+//! A `String` error shows as its text, without quotes (§10.10).
+
+fn main() -> Result<Nil, String> {
+  Err("cannot open data.txt")
+}

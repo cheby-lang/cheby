@@ -1,0 +1,6 @@
+error[E0036]: the package name `std` is reserved for the standard library
+ --> tests/ui/07-modules-and-packages/package_named_std/cheby.toml:1:8
+  |
+1 | name = "std"
+  |        ^^^^^
+

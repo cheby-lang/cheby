@@ -1,0 +1,8 @@
+error[E0047]: mismatched types
+ --> tests/ui/03-types/never/never_body_must_diverge.cheby:7:3
+  |
+6 | fn stop() -> Never {
+  |              ----- expected because of this return type
+7 |   Nil
+  |   ^^^ expected `Never`, found `Nil`
+

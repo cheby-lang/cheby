@@ -1,0 +1,23 @@
+// @mode: check-pass
+// @decisions: D-050, D-155, D-202
+//! A call with one `_` argument is a one-parameter function; the other
+//! arguments are evaluated once, when the capture is (§5.6).
+
+pub fn add(a: Int, b: Int) -> Int {
+  a + b
+}
+
+pub fn apply(f: fn(Int) -> Int, x: Int) -> Int {
+  f(x)
+}
+
+pub fn next_id() -> Int {
+  41
+}
+
+pub fn main() {
+  let add_one = add(1, _)
+  let add_next = add(next_id(), _)
+  let nested = apply(add(_, 2), 1)
+  assert add_one(1) == 2 && add_next(1) == 42 && nested == 3
+}

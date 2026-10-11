@@ -1,0 +1,17 @@
+// @mode: check-pass
+// @decisions: D-051
+//! A block's value is its last statement when that is an expression, and
+//! `Nil` otherwise (§5.1).
+
+pub fn area(width: Int, height: Int) -> Int {
+  let size = {
+    let w = width
+    let h = height
+    w * h
+  }
+  let nothing = {
+    let _inner = size
+  }
+  assert nothing == Nil
+  size
+}

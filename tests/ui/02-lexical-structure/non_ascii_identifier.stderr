@@ -1,0 +1,16 @@
+error[E0005]: non-ASCII character `é` in an identifier
+ --> tests/ui/02-lexical-structure/non_ascii_identifier.cheby:6:10
+  |
+6 |   let café = 1
+  |          ^ not an ASCII letter
+  |
+  = help: identifiers use only ASCII letters, digits and `_` (D-127)
+
+error[E0005]: non-ASCII character `é` in an identifier
+ --> tests/ui/02-lexical-structure/non_ascii_identifier.cheby:7:13
+  |
+7 |   assert café == 1
+  |             ^ not an ASCII letter
+  |
+  = help: identifiers use only ASCII letters, digits and `_` (D-127)
+

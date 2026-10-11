@@ -1,0 +1,14 @@
+// @mode: check-fail
+// @decisions: D-452
+//! When the syntax layer reports an error, name resolution and type
+//! checking do not run, so the type error and the unknown name below are
+//! not reported.
+
+fn label() -> Int {
+  "not an Int"
+}
+
+fn main() {
+  assert 1 < 2 < 3
+  assert missing == 1
+}

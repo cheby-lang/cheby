@@ -1,0 +1,16 @@
+// @mode: check-fail
+// @decisions: D-138
+//! A named-field constructor must initialize every field (§5.11.1).
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+fn origin() -> Point {
+  Point { x: 0 }
+}
+
+fn main() {
+  assert origin().x == 0
+}

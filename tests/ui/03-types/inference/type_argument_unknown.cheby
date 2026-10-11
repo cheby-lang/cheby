@@ -1,0 +1,13 @@
+// @mode: check-fail
+// @decisions: D-049, D-451
+//! A generic function's type argument that nothing fixes needs the
+//! turbofish or an annotation (§3.12.6).
+
+pub fn empty<T>() -> List<T> {
+  []
+}
+
+pub fn main() {
+  let xs = empty()
+  assert xs == xs
+}

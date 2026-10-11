@@ -1,0 +1,2 @@
+panicked at tests/ui/03-types/collections/upsert_panic_run.cheby:12:20:
+division by zero

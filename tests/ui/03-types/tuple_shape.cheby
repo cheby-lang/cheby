@@ -1,0 +1,19 @@
+// @mode: check-pass
+// @decisions: D-243
+//! A written tuple type with a tuple element, or with four or more
+//! elements, is a warning: a named type reads better.
+
+fn quad(n: Int) -> (Int, Int, Int, Int) {
+  (n, n + 1, n + 2, n + 3)
+}
+
+fn first(nested: ((Int, Int), Int)) -> Int {
+  let ((a, _), _) = nested
+  a
+}
+
+fn main() {
+  let (a, _, _, d) = quad(1)
+  assert a + d == 5
+  assert first(((1, 2), 3)) == 1
+}

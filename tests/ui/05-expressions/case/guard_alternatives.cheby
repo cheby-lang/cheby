@@ -1,0 +1,27 @@
+// @mode: run-pass
+// @decisions: D-052, D-113, D-571
+//! A guard runs at most once per arm, with the names of the first
+//! alternative that matches; when it is `False`, the arm's later
+//! alternatives are not tried and matching goes on with the next arm
+//! (§5.9.1, §5.15.1, §6.7).
+
+import std::io
+
+fn small(n: Int) -> Bool {
+  io::println("guard sees {n}")
+  n < 5
+}
+
+fn pick(pair: (Int, Int)) -> String {
+  case pair {
+    (0, n) | (n, _) when small(n) => "small {n}"
+    _ => "other"
+  }
+}
+
+fn main() {
+  io::println(pick((0, 2)))
+  io::println(pick((3, 1)))
+  io::println(pick((0, 9)))
+  io::println(pick((7, 0)))
+}

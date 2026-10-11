@@ -1,0 +1,8 @@
+error[E0077]: evaluating the constant `home` reached an effect
+ --> tests/ui/04-declarations/constants/eval/effect_run.cheby:9:7
+  |
+9 | const home: String = read_name()
+  |       ^^^^ this constant is computed at compile time
+  |
+  = note: it reached the external function `cheby_io_sys_read_line`; only the kernels of `std::list`, `std::map`, `std::set`, `std::string`, `std::bytes` and the numeric modules run at compile time
+

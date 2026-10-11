@@ -1,0 +1,16 @@
+error[E0043]: the fields of `Error` are not visible outside its package
+  --> tests/ui/07-modules-and-packages/opacity/opaque_fields.cheby:10:9
+   |
+10 |   error.message
+   |         ^^^^^^^
+   |
+   = note: a `pub` type hides its constructors and fields unless it is `pub exposed`
+
+error[E0043]: the fields of `Error` are not visible outside its package
+  --> tests/ui/07-modules-and-packages/opacity/opaque_fields.cheby:14:3
+   |
+14 |   io::Error { ..error, message: "renamed" }
+   |   ^^^^^^^^^
+   |
+   = note: a `pub` type hides its constructors and fields unless it is `pub exposed`
+

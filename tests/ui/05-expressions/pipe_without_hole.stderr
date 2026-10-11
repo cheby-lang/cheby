@@ -1,0 +1,10 @@
+error[E0028]: pipe into a call without `_`
+  --> tests/ui/05-expressions/pipe_without_hole.cheby:12:22
+   |
+12 |   let xs = [1, 2] |> list::map(double)
+   |                   -- ^^^^^^^^^^^^^^^^^ this call has no `_` argument
+   |                   |
+   |                   the value piped in
+   |
+   = help: add `_` where the piped value goes
+

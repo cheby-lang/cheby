@@ -1,0 +1,11 @@
+error[E0044]: `io` is the name of an imported module
+ --> tests/ui/05-expressions/shadowing/let_shadows_import.cheby:8:7
+  |
+5 | import std::io
+  |             -- imported here
+...
+8 |   let io = "Hello!"
+  |       ^^ bound again here
+  |
+  = help: give this binding a new name, such as `io_2`; names cannot be shadowed (§5.2.3)
+

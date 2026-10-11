@@ -1,0 +1,261 @@
+//! Decoders, which turn a JSON value into typed data (D-320). A decoder is
+//! built from the primitive decoders and combined with `use` through
+//! `field`, `optional_field` and `then`. `json::parse` and
+//! `json::decode_value` run them.
+//!
+//! This module cannot import `std::json`, which imports it (D-145, D-361),
+//! so decoders run over the raw tree of `std::json::tree` rather than over
+//! `json::Value` (ADR-0053).
+//!
+//! Decoding reports every value that did not fit (D-322). A decoder that
+//! fails records its error and gives a placeholder of its type, so decoding
+//! goes on and later values are checked too (D-401). Errors are kept in
+//! the order the values are visited, and an error equal to one recorded
+//! already is dropped (D-404).
+
+// The module has functions named `float`, `int`, `list` and `string`, so it
+// imports those modules under other names (§7.5.1, D-062).
+import std::float as floats
+import std::int as ints
+import std::json::tree
+import std::list as lists
+import std::string as strings
+
+/// A decoder of a `T` (D-320). It is opaque: its representation, a function
+/// over the raw tree, is not part of the API.
+pub type Decoder<T> {
+  Decoder(fn(tree::Tree, List<String>) -> (T, List<Error>)),
+}
+
+/// One value that did not fit (D-322, D-323): what the decoder `expected`,
+/// the kind of JSON value `found` there, and the `path` from the decoded
+/// value to it.
+pub exposed type Error { expected: String, found: String, path: List<String> }
+
+/// Runs `decoder` on `value` at `path`, giving its value or placeholder and
+/// the errors it recorded, in the order visited.
+priv fn apply<T>(decoder: Decoder<T>, value: tree::Tree, path: List<String>) -> (T, List<Error>) {
+  let Decoder(decode_tree) = decoder
+  decode_tree(value, path)
+}
+
+/// Decodes `value` for `json::parse` and `json::decode_value`: the decoded
+/// value, or every error in the order visited, each recorded once (D-322,
+/// D-404). Paths start at `value` itself.
+fn run<T>(decoder: Decoder<T>, value: tree::Tree) -> Result<T, List<Error>> {
+  let (decoded, errors) = apply(decoder, value, [])
+  case lists::unique(errors) {
+    [] => Ok(decoded)
+    recorded => Err(recorded)
+  }
+}
+
+/// The error of a value of the wrong kind at `path`.
+priv fn mismatch(expected: String, value: tree::Tree, path: List<String>) -> List<Error> {
+  [Error { expected, found: tree::kind(value), path }]
+}
+
+// Primitive decoders
+
+/// Decodes a JSON string. The placeholder is `""`.
+pub fn string() -> Decoder<String> {
+  Decoder(fn(value, path) {
+    case value {
+      tree::String(text) => (text, [])
+      _ => ("", mismatch("String", value, path))
+    }
+  })
+}
+
+/// Decodes a JSON number read as an `Int`, never a `Float` (D-217, D-222).
+/// The placeholder is `0`.
+pub fn int() -> Decoder<Int> {
+  Decoder(fn(value, path) {
+    case value {
+      tree::Int(n) => (n, [])
+      _ => (0, mismatch("Int", value, path))
+    }
+  })
+}
+
+/// Decodes any JSON number as a `Float`, converting an `Int` to the nearest
+/// one (D-402). The placeholder is `0.0`.
+pub fn float() -> Decoder<Float> {
+  Decoder(fn(value, path) {
+    case value {
+      tree::Float(x) => (x, [])
+      tree::Int(n) => (floats::from_int(n), [])
+      _ => (0.0, mismatch("Float", value, path))
+    }
+  })
+}
+
+/// Decodes `true` or `false`. The placeholder is `False`.
+pub fn bool() -> Decoder<Bool> {
+  Decoder(fn(value, path) {
+    case value {
+      tree::Bool(flag) => (flag, [])
+      _ => (False, mismatch("Bool", value, path))
+    }
+  })
+}
+
+// Arrays, objects and null
+
+/// Decodes a JSON array, running `decoder` on each element in order, with
+/// the element's index added to its errors' paths. The placeholder is `[]`.
+pub fn list<T>(decoder: Decoder<T>) -> Decoder<List<T>> {
+  Decoder(fn(value, path) {
+    case value {
+      tree::Array(items) => {
+        let (_, decoded, errors) = lists::fold(items, (0, [], []), fn((index, done, found), item) {
+          let item_path = lists::push(path, ints::show(index))
+          let (element, element_errors) = apply(decoder, item, item_path)
+          (index + 1, lists::push(done, element), lists::append(found, element_errors))
+        })
+        (decoded, errors)
+      }
+      _ => ([], mismatch("Array", value, path))
+    }
+  })
+}
+
+/// Decodes `null` as `None`, and any other value as `Some` of what `decoder`
+/// gives for it. Its placeholder is `Some` of `decoder`'s (D-401).
+pub fn optional<T>(decoder: Decoder<T>) -> Decoder<Option<T>> {
+  Decoder(fn(value, path) {
+    case value {
+      tree::Null => (None, [])
+      _ => {
+        let (decoded, errors) = apply(decoder, value, path)
+        (Some(decoded), errors)
+      }
+    }
+  })
+}
+
+/// Decodes a JSON object with any keys as its members in the order written,
+/// repeated keys included, with `decoder` run on each value (D-403). The
+/// placeholder is `[]`.
+pub fn pairs<T>(decoder: Decoder<T>) -> Decoder<List<(String, T)>> {
+  Decoder(fn(value, path) {
+    case value {
+      tree::Object(members) => {
+        lists::fold(members, ([], []), fn((done, found), (key, member)) {
+          let (element, element_errors) = apply(decoder, member, lists::push(path, key))
+          (lists::push(done, (key, element)), lists::append(found, element_errors))
+        })
+      }
+      _ => ([], mismatch("Object", value, path))
+    }
+  })
+}
+
+/// Decodes the last member `name` of a JSON object with `decoder` (D-223),
+/// then decodes the same object with the decoder `next` returns.
+pub fn field<T, U>(name: String, decoder: Decoder<T>, next: fn(T) -> Decoder<U>) -> Decoder<U> {
+  Decoder(fn(value, path) {
+    let field_path = lists::push(path, name)
+    let (decoded, errors) = case value {
+      tree::Object(members) => case tree::member(members, name) {
+        Some(member) => apply(decoder, member, field_path)
+        None => {
+          let missing = Error { expected: "Field", found: "Nothing", path: field_path }
+          (missing_placeholder(decoder, field_path), [missing])
+        }
+      }
+      _ => (missing_placeholder(decoder, field_path), mismatch("Object", value, path))
+    }
+    let (next_value, next_errors) = apply(next(decoded), value, path)
+    (next_value, lists::append(errors, next_errors))
+  })
+}
+
+/// The placeholder for a field that is missing: what `decoder` gives for
+/// `null`, with its errors dropped (D-401).
+priv fn missing_placeholder<T>(decoder: Decoder<T>, path: List<String>) -> T {
+  let (placeholder, _) = apply(decoder, tree::Null, path)
+  placeholder
+}
+
+/// Like `field`, but a missing member `name` gives `default` and no error.
+/// A present member is decoded by `decoder`, even when it is `null`.
+pub fn optional_field<T, U>(
+  name: String,
+  default: T,
+  decoder: Decoder<T>,
+  next: fn(T) -> Decoder<U>,
+) -> Decoder<U> {
+  Decoder(fn(value, path) {
+    // For a value that is not an object, `next` gets `default`, since
+    // such a value has no member `name` (D-485).
+    let (decoded, errors) = case value {
+      tree::Object(members) => case tree::member(members, name) {
+        Some(member) => apply(decoder, member, lists::push(path, name))
+        None => (default, [])
+      }
+      _ => (default, mismatch("Object", value, path))
+    }
+    let (next_value, next_errors) = apply(next(decoded), value, path)
+    (next_value, lists::append(errors, next_errors))
+  })
+}
+
+// Combining decoders
+
+/// Decodes the value with `decoder`, then decodes the same value with the
+/// decoder `next` returns. When `decoder` fails, only its errors are
+/// reported (D-405).
+pub fn then<T, U>(decoder: Decoder<T>, next: fn(T) -> Decoder<U>) -> Decoder<U> {
+  Decoder(fn(value, path) {
+    let (decoded, errors) = apply(decoder, value, path)
+    let (next_value, next_errors) = apply(next(decoded), value, path)
+    case errors {
+      [] => (next_value, next_errors)
+      _ => (next_value, errors)
+    }
+  })
+}
+
+/// Decodes the value with `decoder` and applies `f` to the result, or to the
+/// placeholder when `decoder` fails (D-403).
+pub fn map<T, U>(decoder: Decoder<T>, f: fn(T) -> U) -> Decoder<U> {
+  Decoder(fn(value, path) {
+    let (decoded, errors) = apply(decoder, value, path)
+    (f(decoded), errors)
+  })
+}
+
+/// A decoder that ignores the value and gives `value`.
+pub fn success<T>(value: T) -> Decoder<T> {
+  Decoder(fn(_, _) { (value, []) })
+}
+
+/// A decoder that always fails with `expected` and goes on with
+/// `placeholder` (D-322).
+pub fn failure<T>(placeholder: T, expected: String) -> Decoder<T> {
+  Decoder(fn(value, path) { (placeholder, mismatch(expected, value, path)) })
+}
+
+// Errors
+
+/// Writes `expected E, found F`, then `at` and the path's elements separated
+/// by `.` when the path is not empty (D-400). It makes `Error` satisfy
+/// `Show`.
+pub fn show(error: Error) -> String {
+  let message = "expected {error.expected}, found {error.found}"
+  case error.path {
+    [] => message
+    steps => {
+      let joined = strings::join(steps, ".")
+      "{message} at {joined}"
+    }
+  }
+}
+
+test "a decode error shows what was expected, found and where" {
+  let nested = Error { expected: "Format", found: "String", path: ["books", "1", "format"] }
+  assert show(nested) == "expected Format, found String at books.1.format"
+  let top = Error { expected: "Array", found: "Null", path: [] }
+  assert "{top}" == "expected Array, found Null"
+}

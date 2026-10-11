@@ -1,0 +1,6 @@
+//! Shapes, visible to the whole package.
+
+type Shape {
+  Circle { radius: Int },
+  Dot,
+}

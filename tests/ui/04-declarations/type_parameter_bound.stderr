@@ -1,0 +1,8 @@
+error[E0023]: bounds are not allowed on the type parameters of a type declaration
+ --> tests/ui/04-declarations/type_parameter_bound.cheby:5:18
+  |
+5 | type Labelled<T: Show> {
+  |                  ^^^^
+  |
+  = help: put the bound on the functions that need it
+

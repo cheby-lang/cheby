@@ -1,0 +1,59 @@
+fn app::make(_0: int, _1: float, _2: bool, _3: value, _4: u8, _5: f32) -> value check str#0 {
+  str#0 = "src/main.cheby:6:4"
+bb0:
+  _6: value = box int _0
+  _7: value = box float _1
+  _8: value = box bool _2
+  _9: value = box u8 _4
+  _10: value = box f32 _5
+  _11: value = alloc closure/6(const code <closure app::make#0>, _6, _7, _8, _3, _9, _10)
+  return _11
+}
+
+fn closure app::make#0(_0: value, _1: value) -> value check str#0 {
+  str#0 = "src/main.cheby:7:3"
+bb0:
+  _2: value = field _0.1 of closure/6
+  dup _2
+  _3: int = unbox int _2
+  drop _2
+  _4: value = field _0.2 of closure/6
+  dup _4
+  _5: float = unbox float _4
+  drop _4
+  _6: value = field _0.3 of closure/6
+  dup _6
+  _7: bool = unbox bool _6
+  drop _6
+  _8: value = field _0.4 of closure/6
+  dup _8
+  _9: value = field _0.5 of closure/6
+  dup _9
+  _10: u8 = unbox u8 _9
+  drop _9
+  _11: value = field _0.6 of closure/6
+  dup _11
+  drop _0
+  _12: f32 = unbox f32 _11
+  drop _11
+  _13: int = unbox int _1
+  drop _1
+  tail_call app::pick(_3, _13, _5, _7, _8, _10, _12)
+}
+
+fn shim app::make(_0: value, _1: value, _2: value, _3: value, _4: value, _5: value, _6: value) -> value check str#0 {
+  str#0 = "src/main.cheby:6:4"
+bb0:
+  drop _0
+  _7: int = unbox int _1
+  drop _1
+  _8: float = unbox float _2
+  drop _2
+  _9: bool = unbox bool _3
+  drop _3
+  _10: u8 = unbox u8 _5
+  drop _5
+  _11: f32 = unbox f32 _6
+  drop _6
+  tail_call app::make(_7, _8, _9, _4, _10, _11)
+}

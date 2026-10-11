@@ -1,0 +1,7 @@
+//! A lookup result with its own `Some`.
+
+/// What a lookup found.
+pub type Lookup {
+  Some(String),
+  Missing,
+}

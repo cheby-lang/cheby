@@ -1,0 +1,10 @@
+// @mode: parse-fail
+// @decisions: D-231
+//! A line does not continue after `::`, so a path must stay on one line.
+
+import std::io
+
+fn main() {
+  io::
+    println("hello")
+}

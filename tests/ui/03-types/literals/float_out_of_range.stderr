@@ -1,0 +1,8 @@
+error[E0071]: literal out of range for `F32`
+ --> tests/ui/03-types/literals/float_out_of_range.cheby:6:3
+  |
+6 |   1.0e39
+  |   ^^^^^^ this is too large for `F32`
+  |
+  = note: the largest finite `F32` is about 3.4e38
+

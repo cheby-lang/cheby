@@ -1,0 +1,8 @@
+error[E0022]: `exposed` is not allowed on a type alias
+ --> tests/ui/04-declarations/aliases/exposed_alias.cheby:5:5
+  |
+5 | pub exposed type Id = Int
+  |     ^^^^^^^
+  |
+  = help: `exposed` applies only to `pub` type declarations; remove it
+

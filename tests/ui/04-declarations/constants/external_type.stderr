@@ -1,0 +1,18 @@
+error[E0068]: the constant `db` has a type that contains the external type `Db`
+  --> tests/ui/04-declarations/constants/external_type.cheby:14:15
+   |
+14 | pub const db: Db = open()
+   |               ^^
+   |
+   = note: a constant's value is computed at compile time and embedded in the program, which cannot hold values of external types
+   = help: create the value at run time, in a function
+
+error[E0068]: the constant `maybe` has a type that contains the external type `Db`
+  --> tests/ui/04-declarations/constants/external_type.cheby:16:18
+   |
+16 | pub const maybe: Option<Db> = None
+   |                  ^^^^^^^^^^ this type contains `Db`
+   |
+   = note: a constant's value is computed at compile time and embedded in the program, which cannot hold values of external types
+   = help: create the value at run time, in a function
+

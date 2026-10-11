@@ -1,0 +1,29 @@
+// @mode: check-pass
+// @decisions: D-035, D-071, D-156
+//! `T { ..base, field: value }` copies `base` with the listed fields
+//! replaced. `T` is the type name, and on a type with several variants
+//! every variant must have each listed field with one type (§5.11.2).
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+type Shape {
+  Circle { name: String, radius: Int },
+  Rect { name: String, width: Int, height: Int },
+}
+
+fn moved(origin: Point) -> Point {
+  Point { ..origin, x: 10 }
+}
+
+fn renamed(shape: Shape, name: String) -> Shape {
+  Shape { ..shape, name }
+}
+
+fn main() {
+  assert moved(Point { x: 0, y: 1 }) == Point { x: 10, y: 1 }
+  let circle = Circle { name: "c", radius: 1 }
+  assert renamed(circle, "d") == Circle { name: "d", radius: 1 }
+}

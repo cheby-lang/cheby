@@ -8,13 +8,15 @@ pub type String
 
 String literals, `+` and interpolation are part of the language (§2.5, §5.3.2, D-067). This module is how text is measured, searched, split and changed, since a string has no indexing (§3.5).
 
-Every length, position and count in this module is in code points, and grapheme clusters appear only in `to_graphemes` and `grapheme_length` (README "Text", D-302, ADR-0050). The Unicode tables that `lowercase`, `uppercase`, `trim` and the grapheme functions need come from the one Unicode version the toolchain fixes (D-310).
+Every length, position and count in this module is in code points, and grapheme clusters appear only in `to_graphemes` and `grapheme_length` (README "Text", D-302, ADR-0050). The Unicode tables that `lowercase`, `uppercase`, `trim` and the grapheme functions need come from the one Unicode version the toolchain fixes (D-310). On native, case mapping uses the Rust standard library's tables and grapheme segmentation the `unicode-segmentation` crate, and a test asserts that both follow the same version (D-552). The native runtime follows Unicode 17.0.0, the version of both Rust 1.99's tables and `unicode-segmentation` 1.13.3.
 
 `String` satisfies `Add` through `add`, `Compare` through `compare` and `Show` through `show` (§8.7, §8.8).
 
 A conversion between text and bytes lives in the module of its target type, as numeric conversions do (D-308): `bytes::from_string` encodes a string as UTF-8, and `string::from_bytes` decodes UTF-8. There is no `string::to_bytes`.
 
 Every cost in this module is **required** (D-300). `n` is the length of the first argument in code points, unless the entry says otherwise.
+
+_Note:_ on native, a kernel updates its text argument in place when nothing else refers to it and no other argument is the same string (D-525, D-577). `add` and `pad_end` append to it when its capacity suffices, and otherwise copy it with at least twice the old capacity, so `acc + piece` repeated on an accumulator that nothing else refers to costs amortized O(1) per byte. `trim`, `trim_start`, `trim_end`, `remove_prefix`, `remove_suffix` and `slice` move the kept text to the start and keep the capacity. A result equal to the whole argument is the argument itself, with no copy: nothing trimmed or removed, a `slice` of everything, an `add` of `""`, a `pad_start` or `pad_end` already wide enough, `repeat` with count 1, and the single part of a `split` whose non-empty separator does not occur. Likewise, a `join` of a one-element list is that element itself. Every other kernel builds a new string.
 
 ## Measuring
 
@@ -592,7 +594,7 @@ There is no `from_code_points`, because joining one-code-point strings is `strin
 pub fn show(text: String) -> String
 ```
 
-Returns `text` unchanged. This makes `String` satisfy `Show`, so `"{name}"` inserts the text without quotes (§8.8). Debug printing with `{name:?}` writes it in quotes with escapes instead (§3.13).
+Returns `text` unchanged. This makes `String` satisfy `Show`, so `"{name}"` inserts the text without quotes (§8.8). Debug printing with `{name:?}` writes it in quotes instead, with the escapes a string literal needs to read back as the same text (§3.13, D-531).
 
 - **Cost:** O(1), required.
 

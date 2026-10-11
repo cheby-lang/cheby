@@ -1,0 +1,5 @@
+//! A submodule, which comes after its parent and before `app::beta`.
+
+test "alpha zeta" {
+  assert True
+}

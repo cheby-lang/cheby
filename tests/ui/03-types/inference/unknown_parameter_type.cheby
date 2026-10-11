@@ -1,0 +1,8 @@
+// @mode: check-fail
+// @decisions: D-234
+//! An operator is resolved at the end of the body; if its operand type is
+//! still unknown then, the parameter needs an annotation (§3.12.4).
+
+pub fn unused() {
+  let f = fn(a, b) { a + b }
+}

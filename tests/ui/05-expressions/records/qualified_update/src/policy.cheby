@@ -1,0 +1,10 @@
+//! A restart policy, visible to the whole package.
+
+type Policy {
+  retries: Int,
+  backoff_ms: Int,
+}
+
+fn default() -> Policy {
+  Policy { retries: 3, backoff_ms: 100 }
+}

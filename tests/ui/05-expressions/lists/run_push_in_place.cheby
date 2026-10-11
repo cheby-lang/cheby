@@ -1,0 +1,37 @@
+// @mode: run-pass
+// @decisions: D-039, D-157, D-205
+//! `[..found, item]` pushes onto `found` in place when `found` is not
+//! used again, and copies when it is: a list that is still used keeps its
+//! elements (§5.13, §9.3). The MIR golden `data/list_literals` pins the
+//! moved accumulator.
+
+import std::io
+import std::list
+
+fn add(found: List<String>, item: String) -> List<String> {
+  [..found, item]
+}
+
+/// The length and the first six slots of `xs`.
+fn show_all(xs: List<String>) -> String {
+  let n = list::length(xs)
+  let a = list::get(xs, 0)
+  let b = list::get(xs, 1)
+  let c = list::get(xs, 2)
+  let d = list::get(xs, 3)
+  let e = list::get(xs, 4)
+  let f = list::get(xs, 5)
+  "{n}: {a:?} {b:?} {c:?} {d:?} {e:?} {f:?}"
+}
+
+fn main() {
+  let base = ["a", "b"]
+  let left = add(base, "left")
+  let right = add(base, "right")
+  io::println(show_all(base))
+  io::println(show_all(left))
+  io::println(show_all(right))
+  let grown = add(add(add(left, "x"), "y"), "z")
+  io::println(show_all(grown))
+  io::println(show_all(left))
+}

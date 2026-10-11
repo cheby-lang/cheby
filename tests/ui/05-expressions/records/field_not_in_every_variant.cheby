@@ -1,0 +1,17 @@
+// @mode: check-fail
+// @decisions: D-071
+//! `x.name` on a type with several variants needs the field in every
+//! variant; otherwise use `case` (§5.11.3).
+
+type Shape {
+  Circle { radius: Int },
+  Rect { width: Int, height: Int },
+}
+
+fn width(shape: Shape) -> Int {
+  shape.width
+}
+
+fn main() {
+  assert width(Rect { width: 1, height: 2 }) == 1
+}

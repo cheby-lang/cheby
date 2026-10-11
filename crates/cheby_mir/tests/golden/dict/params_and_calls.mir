@@ -1,0 +1,34 @@
+fn app::shown(_0: value, _1: value) -> value check str#0 {
+  str#0 = "src/main.cheby:2:4"
+bb0:
+  _2: value = field _0.1 of dict/1+0
+  dup _2
+  drop _0
+  tail_call _2(_1)
+}
+
+fn app::twice(_0: value, _1: value) -> value check str#0 {
+  str#0 = "src/main.cheby:6:4"
+bb0:
+  dup _0
+  dup _1
+  _2: value = call app::shown(_0, _1)
+  _3: value = call app::shown(_0, _1)
+  tail_call std::string::add(_2, _3)
+}
+
+fn app::main() -> value check str#0 {
+  str#0 = "src/main.cheby:11:4"
+  str#1 = "a"
+bb0:
+  _0: value = box int const int 1
+  _1: value = call app::twice(const static#0, _0)
+  drop _1
+  _2: value = const str#1
+  _3: value = call app::twice(const static#1, _2)
+  drop _3
+  return const nil
+}
+
+static#0 dict app$Show$Int = dict/1+0(builtin_desc int, fn std::int::show)
+static#1 dict app$Show$String = dict/1+0(builtin_desc string, fn std::string::show)

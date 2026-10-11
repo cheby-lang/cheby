@@ -1,0 +1,10 @@
+error[E0047]: mismatched types
+  --> tests/ui/03-types/inference/mixed_list.cheby:23:23
+   |
+23 |   let both = [circle, square]
+   |               ------  ^^^^^^ expected `Circle`, found `Square`
+   |               |
+   |               this element has type `Circle`
+   |
+   = help: to mix values of different types that share an interface `I`, annotate the list as `List<dyn I>`
+

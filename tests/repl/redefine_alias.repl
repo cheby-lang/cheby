@@ -1,0 +1,31 @@
+// @decisions: D-043, D-547, D-609
+> type Temperature = Float
+> fn warm(t: Temperature) -> Bool {
+.   t > 20.0
+. }
+> warm(25.0)
+True : Bool
+> type Temperature = Int
+> warm(25.0)
+True : Bool
+> warm(25)
+error[E0047]: mismatched types
+ --> <repl:6>:1:6
+  |
+1 | warm(25)
+  | ---- ^^ expected `Float`, found `{integer}`
+  | |
+  | arguments to this function are incorrect
+
+> let t: Temperature = 30
+> t
+30 : Int
+> fn colder(t: Temperature) -> Temperature {
+.   t - 1
+. }
+> colder(t)
+29 : Int
+> type Pair<A> = (A, A)
+> let p: Pair<String> = ("a", "b")
+> p
+("a", "b") : (String, String)

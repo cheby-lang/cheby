@@ -1,0 +1,17 @@
+error[W0001]: tuple type with 4 elements
+ --> tests/ui/13-tooling/deny_warnings/phase_a_warning.cheby:8:26
+  |
+8 | pub fn corners() -> List<(Int, Int, Int, Int)> {
+  |                          ^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: warnings are denied by `--deny-warnings`
+  = help: use a record type with named fields instead (D-243)
+
+error[E0047]: mismatched types
+  --> tests/ui/13-tooling/deny_warnings/phase_a_warning.cheby:13:16
+   |
+13 |   let n: Int = "three"
+   |          ---   ^^^^^^^ expected `Int`, found `String`
+   |          |
+   |          expected because of this annotation
+

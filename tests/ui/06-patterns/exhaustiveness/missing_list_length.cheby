@@ -1,0 +1,15 @@
+// @mode: check-fail
+// @decisions: D-022, D-053, D-158
+//! A list `case` must cover every length: `[]` and `[_]` leave the lists
+//! of two or more elements uncovered.
+
+fn describe(xs: List<Int>) -> String {
+  case xs {
+    [] => "empty"
+    [_] => "one"
+  }
+}
+
+fn main() {
+  assert describe([1, 2]) == "many"
+}

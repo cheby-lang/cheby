@@ -1,0 +1,8 @@
+error[E0058]: `Point` has no field `z`
+  --> tests/ui/05-expressions/records/unknown_field.cheby:12:23
+   |
+12 |   Point { x: 0, y: 0, z: 0 }
+   |                       ^ unknown field
+   |
+   = note: the fields of `Point`: `x` and `y`
+

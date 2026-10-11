@@ -1,0 +1,13 @@
+// @mode: check-fail
+// @decisions: D-050
+//! The arguments of a capture are checked against the function's
+//! parameters (§5.6).
+
+pub fn add(a: Int, b: Int) -> Int {
+  a + b
+}
+
+pub fn main() {
+  let f = add("one", _)
+  assert f(1) == 2
+}

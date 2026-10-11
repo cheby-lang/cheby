@@ -1,0 +1,11 @@
+// @mode: check-fail
+// @decisions: D-023
+//! The right side of `use` is a call or a function expression (§5.10).
+
+fn main() {
+  let total = {
+    use n <- 5
+    n + 1
+  }
+  assert total == 6
+}

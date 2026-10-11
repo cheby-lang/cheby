@@ -1,0 +1,12 @@
+error[E0074]: the `pub` function `label` mentions the package-visible interface `Describe`
+  --> tests/ui/04-declarations/functions/less_visible_bound.cheby:10:17
+   |
+6  | interface Describe {
+   |           -------- declared here
+...
+10 | pub fn label<T: Describe>(item: T) -> String {
+   |                 ^^^^^^^^ package-visible interface
+   |
+   = note: code that can use `label` could not name `Describe` (D-148)
+   = help: make `Describe` `pub`, or make `label` package-visible
+

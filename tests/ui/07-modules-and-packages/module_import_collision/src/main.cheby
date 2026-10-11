@@ -1,0 +1,11 @@
+// @mode: check-fail
+// @decisions: D-062
+//! Two module imports with the same last segment need an `as` alias
+//! (§7.5.1).
+
+import app::numbers::format
+import app::text::format
+
+fn main() {
+  assert format::name() == "text"
+}

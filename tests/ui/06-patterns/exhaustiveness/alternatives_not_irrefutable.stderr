@@ -1,0 +1,36 @@
+error[E0060]: refutable pattern in `let`
+  --> tests/ui/06-patterns/exhaustiveness/alternatives_not_irrefutable.cheby:14:7
+   |
+14 |   let True | False = b
+   |       ^^^^^^^^^^^^ its alternatives match every value only together
+   |
+   = note: alternatives make a pattern irrefutable only when one of them is irrefutable on its own (§6.1)
+   = help: match the value with `case`, with one arm per alternative
+
+error[E0060]: refutable pattern in `let`
+  --> tests/ui/06-patterns/exhaustiveness/alternatives_not_irrefutable.cheby:19:7
+   |
+19 |   let Ok(v) | Err(v) = r
+   |       ^^^^^^^^^^^^^^ its alternatives match every value only together
+   |
+   = note: alternatives make a pattern irrefutable only when one of them is irrefutable on its own (§6.1)
+   = help: match the value with `case`, with one arm per alternative
+
+error[E0060]: refutable pattern in `let`
+  --> tests/ui/06-patterns/exhaustiveness/alternatives_not_irrefutable.cheby:24:7
+   |
+24 |   let Pair(True | False, n) = p
+   |       ^^^^^^^^^^^^^^^^^^^^^ its alternatives match every value only together
+   |
+   = note: alternatives make a pattern irrefutable only when one of them is irrefutable on its own (§6.1)
+   = help: match the value with `case`, with one arm per alternative
+
+error[E0060]: refutable pattern in a parameter
+  --> tests/ui/06-patterns/exhaustiveness/alternatives_not_irrefutable.cheby:29:29
+   |
+29 |   list::fold(rs, 0, fn(acc, Ok(v) | Err(v)) { acc + v })
+   |                             ^^^^^^^^^^^^^^ its alternatives match every value only together
+   |
+   = note: alternatives make a pattern irrefutable only when one of them is irrefutable on its own (§6.1)
+   = help: take the parameter as a plain name and match it with `case` in the body
+

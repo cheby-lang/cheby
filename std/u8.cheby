@@ -1,0 +1,259 @@
+//! The built-in `U8`, a unsigned 8-bit integer: constants, conversions,
+//! parsing and text, comparison, and checked and wrapping arithmetic
+//! (the integer families of `docs/stdlib/README.md`, D-350).
+//!
+//! `U8` itself is a builtin item whose home module is this one (D-447).
+
+// Constants
+
+/// The smallest `U8`.
+pub const min_value: U8 = 0
+
+/// The largest `U8`.
+pub const max_value: U8 = 255
+
+// Conversions
+
+/// Returns `n` as an `U8`, or `Err(Nil)` when it does not fit.
+@external(native, "cheby_u8_from_int")
+@external(js, "./u8.mjs", "from_int")
+pub fn from_int(n: Int) -> Result<U8, Nil>
+
+/// Returns `n` as an `U8`, or `Err(Nil)` when it does not fit.
+@external(native, "cheby_u8_from_i8")
+@external(js, "./u8.mjs", "from_i8")
+pub fn from_i8(n: I8) -> Result<U8, Nil>
+
+/// Returns `n` as an `U8`, or `Err(Nil)` when it does not fit.
+@external(native, "cheby_u8_from_i16")
+@external(js, "./u8.mjs", "from_i16")
+pub fn from_i16(n: I16) -> Result<U8, Nil>
+
+/// Returns `n` as an `U8`, or `Err(Nil)` when it does not fit.
+@external(native, "cheby_u8_from_i32")
+@external(js, "./u8.mjs", "from_i32")
+pub fn from_i32(n: I32) -> Result<U8, Nil>
+
+/// Returns `n` as an `U8`, or `Err(Nil)` when it does not fit.
+@external(native, "cheby_u8_from_i64")
+@external(js, "./u8.mjs", "from_i64")
+pub fn from_i64(n: I64) -> Result<U8, Nil>
+
+/// Returns `n` as an `U8`, or `Err(Nil)` when it does not fit.
+@external(native, "cheby_u8_from_u16")
+@external(js, "./u8.mjs", "from_u16")
+pub fn from_u16(n: U16) -> Result<U8, Nil>
+
+/// Returns `n` as an `U8`, or `Err(Nil)` when it does not fit.
+@external(native, "cheby_u8_from_u32")
+@external(js, "./u8.mjs", "from_u32")
+pub fn from_u32(n: U32) -> Result<U8, Nil>
+
+/// Returns `n` as an `U8`, or `Err(Nil)` when it does not fit.
+@external(native, "cheby_u8_from_u64")
+@external(js, "./u8.mjs", "from_u64")
+pub fn from_u64(n: U64) -> Result<U8, Nil>
+
+// Parsing and text
+
+/// Reads an `U8` written as an optional `-` and ASCII decimal digits (D-312).
+@external(native, "cheby_u8_parse")
+@external(js, "./u8.mjs", "parse")
+pub fn parse(text: String) -> Result<U8, Nil>
+
+/// Reads an `U8` written in `base`, from 2 to 36, as an optional `-` and digits.
+@external(native, "cheby_u8_parse_base")
+@external(js, "./u8.mjs", "parse_base")
+pub fn parse_base(text: String, base: Int) -> Result<U8, Nil>
+
+/// Returns `n` in decimal. It makes `U8` satisfy `Show`.
+@external(native, "cheby_u8_show")
+@external(js, "./u8.mjs", "show")
+pub fn show(n: U8) -> String
+
+// Comparison
+
+/// Orders two `U8` values. It makes `U8` satisfy `Compare`.
+pub fn compare(a: U8, b: U8) -> Order {
+  case {
+    a < b => Less
+    a > b => Greater
+    _ => Equal
+  }
+}
+
+/// Returns the smaller of `a` and `b`, and `a` when they are `Equal`.
+pub fn min(a: U8, b: U8) -> U8 {
+  case {
+    b < a => b
+    _ => a
+  }
+}
+
+/// Returns the larger of `a` and `b`, and `a` when they are `Equal`.
+pub fn max(a: U8, b: U8) -> U8 {
+  case {
+    b > a => b
+    _ => a
+  }
+}
+
+// Arithmetic
+
+/// Returns `a + b`, and panics when the result does not fit. It makes `U8` satisfy `Add`.
+pub fn add(a: U8, b: U8) -> U8 {
+  a + b
+}
+
+/// Returns `a - b`, and panics when the result does not fit. It makes `U8` satisfy `Sub`.
+pub fn sub(a: U8, b: U8) -> U8 {
+  a - b
+}
+
+/// Returns `a * b`, and panics when the result does not fit. It makes `U8` satisfy `Mul`.
+pub fn mul(a: U8, b: U8) -> U8 {
+  a * b
+}
+
+/// Returns `a / b` toward zero, panicking like `/`. It makes `U8` satisfy `Div`.
+pub fn div(a: U8, b: U8) -> U8 {
+  a / b
+}
+
+/// Returns `a % b`, with the sign of `a`, and panics on a zero divisor.
+pub fn rem(a: U8, b: U8) -> U8 {
+  a % b
+}
+
+/// Returns `-n`, and panics when it does not fit. It makes `U8` satisfy `Neg`.
+pub fn neg(n: U8) -> U8 {
+  -n
+}
+
+/// Returns `n`, since `U8` has no negative values.
+pub fn abs(n: U8) -> U8 {
+  n
+}
+
+// Checked arithmetic
+
+/// Returns `Ok(a + b)`, or `Err(Nil)` when the sum does not fit (D-309).
+@external(native, "cheby_u8_checked_add")
+@external(js, "./u8.mjs", "checked_add")
+pub fn checked_add(a: U8, b: U8) -> Result<U8, Nil>
+
+/// Returns `Ok(a - b)`, or `Err(Nil)` when the difference does not fit (D-309).
+@external(native, "cheby_u8_checked_sub")
+@external(js, "./u8.mjs", "checked_sub")
+pub fn checked_sub(a: U8, b: U8) -> Result<U8, Nil>
+
+/// Returns `Ok(a * b)`, or `Err(Nil)` when the product does not fit (D-309).
+@external(native, "cheby_u8_checked_mul")
+@external(js, "./u8.mjs", "checked_mul")
+pub fn checked_mul(a: U8, b: U8) -> Result<U8, Nil>
+
+/// Returns `Ok(a / b)`, or `Err(Nil)` for a zero divisor (D-356).
+pub fn checked_div(a: U8, b: U8) -> Result<U8, Nil> {
+  case b {
+    0 => Err(Nil)
+    _ => Ok(a / b)
+  }
+}
+
+/// Returns `Ok(a % b)`, or `Err(Nil)` for a zero divisor (D-356).
+pub fn checked_rem(a: U8, b: U8) -> Result<U8, Nil> {
+  case b {
+    0 => Err(Nil)
+    _ => Ok(a % b)
+  }
+}
+
+/// Returns `Ok(n)` for 0, the only value whose negation fits, and `Err(Nil)` otherwise (D-309).
+pub fn checked_neg(n: U8) -> Result<U8, Nil> {
+  case n {
+    0 => Ok(n)
+    _ => Err(Nil)
+  }
+}
+
+// Wrapping arithmetic
+
+/// Returns `a + b` modulo 2^8 (D-025).
+@external(native, "cheby_u8_wrapping_add")
+@external(js, "./u8.mjs", "wrapping_add")
+pub fn wrapping_add(a: U8, b: U8) -> U8
+
+/// Returns `a - b` modulo 2^8 (D-025).
+@external(native, "cheby_u8_wrapping_sub")
+@external(js, "./u8.mjs", "wrapping_sub")
+pub fn wrapping_sub(a: U8, b: U8) -> U8
+
+/// Returns `a * b` modulo 2^8 (D-025).
+@external(native, "cheby_u8_wrapping_mul")
+@external(js, "./u8.mjs", "wrapping_mul")
+pub fn wrapping_mul(a: U8, b: U8) -> U8
+
+/// Returns `-n` modulo 2^8 (D-025).
+@external(native, "cheby_u8_wrapping_neg")
+@external(js, "./u8.mjs", "wrapping_neg")
+pub fn wrapping_neg(n: U8) -> U8
+
+// Examples
+
+test "the u8 range" {
+  assert min_value == 0
+  assert max_value == 255
+}
+
+test "conversions to u8" {
+  assert from_u32(200) == Ok(200)
+  assert from_u32(0x1234 & 0xFF) == Ok(0x34)
+  assert from_int(256) == Err(Nil)
+  assert from_i8(-1) == Err(Nil)
+}
+
+test "u8 parses and shows decimal digits" {
+  let small: U8 = 7
+  assert parse("255") == Ok(255)
+  assert parse("256") == Err(Nil)
+  assert parse("-1") == Err(Nil)
+  assert parse("-0") == Ok(0)
+  assert parse_base("ff", 16) == Ok(255)
+  assert show(255) == "255"
+  assert "{small}" == "7"
+}
+
+test "comparing u8 values" {
+  assert compare(1, 2) == Less
+  assert compare(3, 3) == Equal
+  assert min(100, 7) == 7
+  assert max(100, 7) == 100
+}
+
+test "u8 operators as functions" {
+  assert add(200, 55) == 255
+  assert sub(7, 2) == 5
+  assert mul(15, 17) == 255
+  assert div(7, 2) == 3
+  assert rem(7, 2) == 1
+  assert neg(0) == 0
+  assert abs(7) == 7
+}
+
+test "u8 checked arithmetic reports overflow" {
+  assert checked_add(200, 55) == Ok(255)
+  assert checked_add(max_value, 1) == Err(Nil)
+  assert checked_sub(0, 1) == Err(Nil)
+  assert checked_mul(max_value, 2) == Err(Nil)
+  assert checked_div(7, 0) == Err(Nil)
+  assert checked_rem(7, 2) == Ok(1)
+  assert checked_neg(0) == Ok(0)
+  assert checked_neg(1) == Err(Nil)
+}
+
+test "u8 wrapping arithmetic wraps around" {
+  assert wrapping_add(max_value, 1) == 0
+  assert wrapping_sub(0, 1) == max_value
+  assert wrapping_mul(max_value, 2) == max_value - 1
+  assert wrapping_neg(1) == max_value
+}

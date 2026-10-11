@@ -1,0 +1,2 @@
+panicked at tests/ui/11-errors-and-panics/arithmetic/i8_shl_overflow.cheby:8:11:
+integer overflow

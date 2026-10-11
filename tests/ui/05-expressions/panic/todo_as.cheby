@@ -1,0 +1,11 @@
+// @mode: run-fail
+// @decisions: D-161, D-449
+//! `todo as m` reports `not implemented: m` (§11.6).
+
+fn area(_size: Int) -> Int {
+  todo as "area of a dot"
+}
+
+fn main() {
+  let _ = area(3)
+}

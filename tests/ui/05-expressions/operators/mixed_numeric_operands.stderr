@@ -1,0 +1,8 @@
+error[E0047]: mismatched types
+ --> tests/ui/05-expressions/operators/mixed_numeric_operands.cheby:7:11
+  |
+7 |   count + extra
+  |   -----   ^^^^^ expected `Int`, found `I32`
+  |   |
+  |   the left operand of `+` has type `Int`
+

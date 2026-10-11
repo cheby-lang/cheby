@@ -1,0 +1,8 @@
+error[E0042]: cannot find type `Circle` in this scope
+  --> tests/ui/05-expressions/records/update_constructor_name.cheby:11:3
+   |
+11 |   Circle { ..shape, label: "renamed" }
+   |   ^^^^^^ not found
+   |
+   = help: `Circle` is a constructor of the type `Shape`; name the type here
+

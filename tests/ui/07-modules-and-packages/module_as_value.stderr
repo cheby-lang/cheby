@@ -1,0 +1,8 @@
+error[E0042]: `io` is a module, not a value
+ --> tests/ui/07-modules-and-packages/module_as_value.cheby:8:3
+  |
+8 |   io("Hello!")
+  |   ^^
+  |
+  = help: use one of its items, such as `io::name`
+

@@ -1,0 +1,9 @@
+// @mode: run-fail
+// @decisions: D-025, D-092, D-449
+//! `<<` on `U32` panics when the result does not fit the type's width,
+//! like multiplication (§5.4.6).
+
+fn main() {
+  let x: U32 = 2147483648
+  let _ = x << 1
+}

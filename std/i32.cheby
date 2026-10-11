@@ -1,0 +1,270 @@
+//! The built-in `I32`, a signed 32-bit integer: constants, conversions,
+//! parsing and text, comparison, and checked and wrapping arithmetic
+//! (the integer families of `docs/stdlib/README.md`, D-350).
+//!
+//! `I32` itself is a builtin item whose home module is this one (D-447).
+
+import std::int
+
+// Constants
+
+/// The smallest `I32`.
+pub const min_value: I32 = -2_147_483_648
+
+/// The largest `I32`.
+pub const max_value: I32 = 2_147_483_647
+
+// Conversions
+
+/// Returns `n` as an `I32`, or `Err(Nil)` when it does not fit.
+@external(native, "cheby_i32_from_int")
+@external(js, "./i32.mjs", "from_int")
+pub fn from_int(n: Int) -> Result<I32, Nil>
+
+/// Returns `n` as an `I32`. Every `I8` fits.
+@external(native, "cheby_i32_from_i8")
+@external(js, "./i32.mjs", "from_i8")
+pub fn from_i8(n: I8) -> I32
+
+/// Returns `n` as an `I32`. Every `I16` fits.
+@external(native, "cheby_i32_from_i16")
+@external(js, "./i32.mjs", "from_i16")
+pub fn from_i16(n: I16) -> I32
+
+/// Returns `n` as an `I32`, or `Err(Nil)` when it does not fit.
+@external(native, "cheby_i32_from_i64")
+@external(js, "./i32.mjs", "from_i64")
+pub fn from_i64(n: I64) -> Result<I32, Nil>
+
+/// Returns `n` as an `I32`. Every `U8` fits.
+@external(native, "cheby_i32_from_u8")
+@external(js, "./i32.mjs", "from_u8")
+pub fn from_u8(n: U8) -> I32
+
+/// Returns `n` as an `I32`. Every `U16` fits.
+@external(native, "cheby_i32_from_u16")
+@external(js, "./i32.mjs", "from_u16")
+pub fn from_u16(n: U16) -> I32
+
+/// Returns `n` as an `I32`, or `Err(Nil)` when it does not fit.
+@external(native, "cheby_i32_from_u32")
+@external(js, "./i32.mjs", "from_u32")
+pub fn from_u32(n: U32) -> Result<I32, Nil>
+
+/// Returns `n` as an `I32`, or `Err(Nil)` when it does not fit.
+@external(native, "cheby_i32_from_u64")
+@external(js, "./i32.mjs", "from_u64")
+pub fn from_u64(n: U64) -> Result<I32, Nil>
+
+// Parsing and text
+
+/// Reads an `I32` written as an optional `-` and ASCII decimal digits (D-312).
+@external(native, "cheby_i32_parse")
+@external(js, "./i32.mjs", "parse")
+pub fn parse(text: String) -> Result<I32, Nil>
+
+/// Reads an `I32` written in `base`, from 2 to 36, as an optional `-` and digits.
+@external(native, "cheby_i32_parse_base")
+@external(js, "./i32.mjs", "parse_base")
+pub fn parse_base(text: String, base: Int) -> Result<I32, Nil>
+
+/// Returns `n` in decimal. It makes `I32` satisfy `Show`.
+@external(native, "cheby_i32_show")
+@external(js, "./i32.mjs", "show")
+pub fn show(n: I32) -> String
+
+// Comparison
+
+/// Orders two `I32` values. It makes `I32` satisfy `Compare`.
+pub fn compare(a: I32, b: I32) -> Order {
+  case {
+    a < b => Less
+    a > b => Greater
+    _ => Equal
+  }
+}
+
+/// Returns the smaller of `a` and `b`, and `a` when they are `Equal`.
+pub fn min(a: I32, b: I32) -> I32 {
+  case {
+    b < a => b
+    _ => a
+  }
+}
+
+/// Returns the larger of `a` and `b`, and `a` when they are `Equal`.
+pub fn max(a: I32, b: I32) -> I32 {
+  case {
+    b > a => b
+    _ => a
+  }
+}
+
+// Arithmetic
+
+/// Returns `a + b`, and panics when the result does not fit. It makes `I32` satisfy `Add`.
+pub fn add(a: I32, b: I32) -> I32 {
+  a + b
+}
+
+/// Returns `a - b`, and panics when the result does not fit. It makes `I32` satisfy `Sub`.
+pub fn sub(a: I32, b: I32) -> I32 {
+  a - b
+}
+
+/// Returns `a * b`, and panics when the result does not fit. It makes `I32` satisfy `Mul`.
+pub fn mul(a: I32, b: I32) -> I32 {
+  a * b
+}
+
+/// Returns `a / b` toward zero, panicking like `/`. It makes `I32` satisfy `Div`.
+pub fn div(a: I32, b: I32) -> I32 {
+  a / b
+}
+
+/// Returns `a % b`, with the sign of `a`, and panics on a zero divisor.
+pub fn rem(a: I32, b: I32) -> I32 {
+  a % b
+}
+
+/// Returns `-n`, and panics when it does not fit. It makes `I32` satisfy `Neg`.
+pub fn neg(n: I32) -> I32 {
+  -n
+}
+
+/// Returns `n` without its sign, and panics for `min_value`, like `neg`.
+pub fn abs(n: I32) -> I32 {
+  case {
+    n < 0 => -n
+    _ => n
+  }
+}
+
+// Checked arithmetic
+
+/// Returns `Ok(a + b)`, or `Err(Nil)` when the sum does not fit (D-309).
+@external(native, "cheby_i32_checked_add")
+@external(js, "./i32.mjs", "checked_add")
+pub fn checked_add(a: I32, b: I32) -> Result<I32, Nil>
+
+/// Returns `Ok(a - b)`, or `Err(Nil)` when the difference does not fit (D-309).
+@external(native, "cheby_i32_checked_sub")
+@external(js, "./i32.mjs", "checked_sub")
+pub fn checked_sub(a: I32, b: I32) -> Result<I32, Nil>
+
+/// Returns `Ok(a * b)`, or `Err(Nil)` when the product does not fit (D-309).
+@external(native, "cheby_i32_checked_mul")
+@external(js, "./i32.mjs", "checked_mul")
+pub fn checked_mul(a: I32, b: I32) -> Result<I32, Nil>
+
+/// Returns `Ok(a / b)`, or `Err(Nil)` for a zero divisor and for `min_value / -1` (D-356).
+pub fn checked_div(a: I32, b: I32) -> Result<I32, Nil> {
+  // Dividing by -1 overflows exactly when negating does.
+  case b {
+    0 => Err(Nil)
+    -1 => checked_neg(a)
+    _ => Ok(a / b)
+  }
+}
+
+/// Returns `Ok(a % b)`, or `Err(Nil)` for a zero divisor (D-356).
+pub fn checked_rem(a: I32, b: I32) -> Result<I32, Nil> {
+  case b {
+    0 => Err(Nil)
+    _ => Ok(a % b)
+  }
+}
+
+/// Returns `Ok(-n)`, or `Err(Nil)` for `min_value` (D-309).
+pub fn checked_neg(n: I32) -> Result<I32, Nil> {
+  case {
+    n == min_value => Err(Nil)
+    _ => Ok(-n)
+  }
+}
+
+// Wrapping arithmetic
+
+/// Returns `a + b` modulo 2^32 (D-025).
+@external(native, "cheby_i32_wrapping_add")
+@external(js, "./i32.mjs", "wrapping_add")
+pub fn wrapping_add(a: I32, b: I32) -> I32
+
+/// Returns `a - b` modulo 2^32 (D-025).
+@external(native, "cheby_i32_wrapping_sub")
+@external(js, "./i32.mjs", "wrapping_sub")
+pub fn wrapping_sub(a: I32, b: I32) -> I32
+
+/// Returns `a * b` modulo 2^32 (D-025).
+@external(native, "cheby_i32_wrapping_mul")
+@external(js, "./i32.mjs", "wrapping_mul")
+pub fn wrapping_mul(a: I32, b: I32) -> I32
+
+/// Returns `-n` modulo 2^32 (D-025).
+@external(native, "cheby_i32_wrapping_neg")
+@external(js, "./i32.mjs", "wrapping_neg")
+pub fn wrapping_neg(n: I32) -> I32
+
+// Examples
+
+test "the i32 range" {
+  assert min_value == -2_147_483_648
+  assert max_value == 2_147_483_647
+}
+
+test "conversions to i32" {
+  assert from_i16(-32768) == -32768
+  assert from_u16(65535) == 65535
+  assert from_int(-2_147_483_649) == Err(Nil)
+  assert from_i64(-1) == Ok(-1)
+  assert from_u32(4_294_967_295) == Err(Nil)
+}
+
+test "i32 parses and shows decimal digits" {
+  let small: I32 = -5
+  assert parse("2147483647") == Ok(2_147_483_647)
+  assert parse("2147483648") == Err(Nil)
+  assert parse_base("-80000000", 16) == Ok(-2_147_483_648)
+  assert show(max_value) == "2147483647"
+  assert "{small}" == "-5"
+}
+
+test "comparing i32 values" {
+  assert compare(-1, 1) == Less
+  assert compare(3, 3) == Equal
+  assert min(-100, 7) == -100
+  assert max(-100, 7) == 7
+}
+
+test "i32 operators as functions" {
+  assert add(100, 27) == 127
+  assert sub(-100, 28) == -128
+  assert mul(-4, 5) == -20
+  assert div(-7, 2) == -3
+  assert rem(-7, 2) == -1
+  assert neg(127) == -127
+  assert abs(-127) == 127
+}
+
+test "i32 checked arithmetic reports overflow" {
+  assert checked_add(100, 27) == Ok(127)
+  assert checked_add(max_value, 1) == Err(Nil)
+  assert checked_sub(min_value, 1) == Err(Nil)
+  assert checked_mul(max_value, 2) == Err(Nil)
+  assert checked_div(min_value, -1) == Err(Nil)
+  assert checked_rem(7, 0) == Err(Nil)
+  assert checked_neg(min_value) == Err(Nil)
+}
+
+test "i32 wrapping arithmetic wraps around" {
+  assert wrapping_add(max_value, 1) == min_value
+  assert wrapping_sub(min_value, 1) == max_value
+  assert wrapping_mul(max_value, 2) == -2
+  assert wrapping_neg(min_value) == min_value
+}
+
+// Tests of `std::int` that need this module.
+
+test "from_i32 widens" {
+  assert int::from_i32(max_value) == 2_147_483_647
+}

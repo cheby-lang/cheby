@@ -1,0 +1,11 @@
+// @mode: check-fail
+// @decisions: D-064, D-166
+//! `List<T>` satisfies `Show` when `T` does, through `std::list`'s
+//! `show<T: Show>`, and function types do not (§8.2.2).
+
+import std::io
+
+fn main() {
+  let actions = [fn() { Nil }]
+  io::println("{actions}")
+}

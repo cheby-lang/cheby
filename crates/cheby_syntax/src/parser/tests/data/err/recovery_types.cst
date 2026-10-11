@@ -1,0 +1,123 @@
+SOURCE_FILE@0..84
+  FN_DECL@0..63
+    FN_KW@0..2 "fn"
+    WHITESPACE@2..3 " "
+    LOWER_IDENT@3..4 "f"
+    PARAM_LIST@4..40
+      L_PAREN@4..5 "("
+      PARAM@5..11
+        IDENT_PAT@5..6
+          LOWER_IDENT@5..6 "x"
+        COLON@6..7 ":"
+        WHITESPACE@7..8 " "
+        PATH_TYPE@8..11
+          PATH@8..11
+            LOWER_IDENT@8..11 "int"
+      COMMA@11..12 ","
+      WHITESPACE@12..13 " "
+      PARAM@13..22
+        IDENT_PAT@13..14
+          LOWER_IDENT@13..14 "y"
+        COLON@14..15 ":"
+        WHITESPACE@15..16 " "
+        PATH_TYPE@16..22
+          PATH@16..20
+            UPPER_IDENT@16..20 "List"
+          TYPE_ARG_LIST@20..22
+            LT@20..21 "<"
+            GT@21..22 ">"
+      COMMA@22..23 ","
+      WHITESPACE@23..24 " "
+      PARAM@24..39
+        IDENT_PAT@24..25
+          LOWER_IDENT@24..25 "z"
+        COLON@25..26 ":"
+        WHITESPACE@26..27 " "
+        TUPLE_TYPE@27..39
+          L_PAREN@27..28 "("
+          PATH_TYPE@28..31
+            PATH@28..31
+              UPPER_IDENT@28..31 "Int"
+          WHITESPACE@31..32 " "
+          PATH_TYPE@32..38
+            PATH@32..38
+              UPPER_IDENT@32..38 "String"
+          R_PAREN@38..39 ")"
+      R_PAREN@39..40 ")"
+    WHITESPACE@40..41 " "
+    RET_TYPE@41..55
+      THIN_ARROW@41..43 "->"
+      WHITESPACE@43..44 " "
+      PATH_TYPE@44..55
+        PATH@44..47
+          UPPER_IDENT@44..47 "Map"
+        TYPE_ARG_LIST@47..55
+          LT@47..48 "<"
+          PATH_TYPE@48..54
+            PATH@48..54
+              UPPER_IDENT@48..54 "String"
+          COMMA@54..55 ","
+    WHITESPACE@55..56 " "
+    BLOCK@56..63
+      L_BRACE@56..57 "{"
+      NEWLINE@57..58 "\n"
+      WHITESPACE@58..60 "  "
+      LITERAL@60..61
+        INT_NUMBER@60..61 "1"
+      NEWLINE@61..62 "\n"
+      R_BRACE@62..63 "}"
+  NEWLINE@63..64 "\n"
+  ALIAS_DECL@64..76
+    TYPE_KW@64..68 "type"
+    WHITESPACE@68..69 " "
+    UPPER_IDENT@69..70 "T"
+    WHITESPACE@70..71 " "
+    EQ@71..72 "="
+    WHITESPACE@72..73 " "
+    NEWLINE@73..74 "\n"
+    FN_TYPE@74..76
+      FN_KW@74..76 "fn"
+  WHITESPACE@76..77 " "
+  ERROR@77..83
+    LOWER_IDENT@77..78 "g"
+    L_PAREN@78..79 "("
+    R_PAREN@79..80 ")"
+    WHITESPACE@80..81 " "
+    L_BRACE@81..82 "{"
+    R_BRACE@82..83 "}"
+  NEWLINE@83..84 "\n"
+
+// errors
+
+error[E0013]: expected a type, found identifier
+ --> err/recovery_types.cheby:1:9
+  |
+1 | fn f(x: int, y: List<>, z: (Int String)) -> Map<String, {
+  |         ^^^
+
+error[E0013]: expected a type, found `>`
+ --> err/recovery_types.cheby:1:22
+  |
+1 | fn f(x: int, y: List<>, z: (Int String)) -> Map<String, {
+  |                      ^
+
+error[E0013]: expected `,` or `)`, found type name
+ --> err/recovery_types.cheby:1:33
+  |
+1 | fn f(x: int, y: List<>, z: (Int String)) -> Map<String, {
+  |                                 ^^^^^^
+
+error[E0015]: unclosed `<`
+ --> err/recovery_types.cheby:1:57
+  |
+1 | fn f(x: int, y: List<>, z: (Int String)) -> Map<String, {
+  |                                                -        ^ expected `>`
+  |                                                |
+  |                                                this `<` is never closed
+
+error[E0013]: expected `(`, found identifier
+ --> err/recovery_types.cheby:5:4
+  |
+5 | fn g() {}
+  |    ^
+

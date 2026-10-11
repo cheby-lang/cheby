@@ -1,0 +1,16 @@
+// @mode: check-fail
+// @decisions: D-138
+//! Each field value has the field's declared type.
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+fn origin() -> Point {
+  Point { x: "zero", y: 0 }
+}
+
+fn main() {
+  assert origin().y == 0
+}

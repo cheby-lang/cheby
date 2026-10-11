@@ -1,0 +1,8 @@
+// @mode: run-fail
+// @decisions: D-025, D-449
+//! `+` on `I16` panics at the type's own width (§3.3.3).
+
+fn main() {
+  let x: I16 = 32767
+  let _ = x + 1
+}

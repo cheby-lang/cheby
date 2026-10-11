@@ -1,0 +1,10 @@
+//! A greeting, whose only constructor has the type's name.
+
+type Greeting {
+  Greeting(String),
+}
+
+fn words(greeting: Greeting) -> String {
+  let Greeting(text) = greeting
+  text
+}

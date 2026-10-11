@@ -1,0 +1,10 @@
+error[W0005]: the function `unit_area` is never used in this package
+ --> tests/ui/13-tooling/deny_warnings/unused_package_item/src/geometry.cheby:3:4
+  |
+3 | fn unit_area() -> Float {
+  |    ^^^^^^^^^ no module of the package uses it
+  |
+  = note: without `pub`, only modules of this package can use the function
+  = note: warnings are denied by `--deny-warnings`
+  = help: remove the function, use it, or make it `pub` if other packages should use it
+

@@ -1,0 +1,11 @@
+// @mode: check-fail
+// @decisions: D-117, D-505
+//! Function names are distinct within an interface, including the
+//! functions it inherits by embedding (§8.1).
+
+pub interface Describe: Show {
+  fn show(Self) -> String
+  fn describe(Self) -> String
+}
+
+fn main() {}

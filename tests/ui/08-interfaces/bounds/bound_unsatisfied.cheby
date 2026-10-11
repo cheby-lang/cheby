@@ -1,0 +1,19 @@
+// @mode: check-fail
+// @decisions: D-063, D-117
+//! A call to a bounded generic function type-checks only if every type
+//! argument satisfies its bounds (§8.4).
+
+import std::io
+
+type Secret {
+  value: String,
+}
+
+fn describe<T: Show>(item: T) -> String {
+  "item: {item}"
+}
+
+fn main() {
+  let secret = Secret { value: "hunter2" }
+  io::println(describe(secret))
+}

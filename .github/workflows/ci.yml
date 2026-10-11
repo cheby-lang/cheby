@@ -1,12 +1,35 @@
 # CI for the reference implementation (D-277, docs/plan/m0-foundation.md).
 #
-# - `test`: build, clippy and every test, including the conformance and UI
-#   harnesses, on the full platform matrix of D-074.
+# - `test`: build, clippy and every test, including the conformance, UI and
+#   REPL harnesses, on the full platform matrix of D-074. M1 is judged on
+#   Linux and macOS (D-545). On Windows, until M6, CI runs only tests that
+#   execute no generated code. A test that builds or runs JIT code is
+#   ignored there (`#[cfg_attr(windows, ignore = …)]`), and the JIT crate's
+#   own tests are not built there at all, its memory-reservation tests
+#   included, although those run no code: the reservation path of Windows
+#   has never run, and M6 brings it up with the rest. This includes
+#   `cheby check` on a package that passes the front end, which evaluates
+#   its constants with the JIT. So the harnesses ignore the UI run tests,
+#   the UI check tests whose golden has no front-end error, every
+#   conformance trial and the REPL suite, and the `cheby run` end-to-end
+#   tests are not built there.
+#   The harnesses follow tests/milestone (D-288); CI sets none of the
+#   strict-run variables (D-544).
 # - `fmt`: rustfmt, once, because formatting does not depend on the platform.
-# - `cross-check`: parses examples and UI tests with tree-sitter-cheby at the
-#   commit pinned in tests/tree-sitter-cheby.rev (D-272).
+# - `cross-check`: parses examples, UI tests, REPL inputs and std sources with
+#   tree-sitter-cheby at the commit pinned in tests/tree-sitter-cheby.rev
+#   (D-272).
+# - `std-tests`: checks and runs the standard library's own tests, one module
+#   at a time (D-479, D-542). Every std module builds and every test passes,
+#   so a failure fails CI.
+# - `examples`: `cheby check` in every example directory, with the expected
+#   outcome of each (G6), and the determinism check: every example and the
+#   benchmark projects built with `--jobs 1` and the default from two paths,
+#   their interfaces, MIR, CLIF and constants compared byte for byte (D-264,
+#   D-551), on Linux and macOS.
 # - `bench`: generates benchmark projects and reports, never enforces, the
-#   results (D-247). From M1 it also times the compiler.
+#   results (D-247), and times the compiler on them (I1): checking, checking
+#   with code generation, and the edit-to-run latency, in the step summary.
 
 name: CI
 
@@ -49,7 +72,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --workspace --all-targets --locked
       - run: cargo clippy --workspace --all-targets --locked
-      - run: cargo test --workspace --locked
+      - run: cargo test --workspace --locked --no-fail-fast
       - name: D-number coverage
         run: cargo xtask coverage
 
@@ -78,6 +101,37 @@ jobs:
       - name: Parse examples and UI tests with tree-sitter-cheby
         run: cargo xtask cross-check --summary "$GITHUB_STEP_SUMMARY"
 
+  std-tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.0"
+      - uses: Swatinem/rust-cache@v2
+      - name: Run the standard library's tests
+        run: cargo xtask test-std
+
+  examples:
+    name: examples (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-x86_64, os: ubuntu-24.04 }
+          - { name: macos-aarch64, os: macos-15 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.0"
+      - uses: Swatinem/rust-cache@v2
+      - name: cheby check in every example
+        run: cargo xtask check-examples
+      - name: Deterministic builds across thread counts and paths
+        run: cargo xtask check-determinism
+
   bench:
     runs-on: ubuntu-24.04
     steps:
@@ -103,8 +157,6 @@ jobs:
             --out target/bench/b/nested/wide
           diff -r target/bench/a/wide target/bench/b/nested/wide
           echo "- deterministic: yes" >> "$GITHUB_STEP_SUMMARY"
-      - name: Determinism of every shape
-        run: cargo xtask check-determinism
       - name: Generated code parses with tree-sitter-cheby
         run: |
           for shape in small large deep wide generic; do
@@ -115,3 +167,9 @@ jobs:
             --also target/bench/sample/small --also target/bench/sample/large \
             --also target/bench/sample/deep --also target/bench/sample/wide \
             --also target/bench/sample/generic
+      - name: Compile speed on every merge
+        if: github.event_name == 'push'
+        run: cargo xtask bench-compile --summary "$GITHUB_STEP_SUMMARY"
+      - name: Compile speed (10k lines) on pull requests
+        if: github.event_name != 'push'
+        run: cargo xtask bench-compile --quick --summary "$GITHUB_STEP_SUMMARY"

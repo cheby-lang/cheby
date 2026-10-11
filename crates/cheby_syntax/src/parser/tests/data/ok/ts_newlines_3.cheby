@@ -1,0 +1,5 @@
+// Leading minus starts a new statement
+fn f() {
+  let a = b
+  -c
+}

@@ -1,0 +1,37 @@
+SOURCE_FILE@0..71
+  COMMENT@0..39 "// Trailing operator continues the line"
+  NEWLINE@39..40 "\n"
+  FN_DECL@40..70
+    FN_KW@40..42 "fn"
+    WHITESPACE@42..43 " "
+    LOWER_IDENT@43..44 "f"
+    PARAM_LIST@44..46
+      L_PAREN@44..45 "("
+      R_PAREN@45..46 ")"
+    WHITESPACE@46..47 " "
+    BLOCK@47..70
+      L_BRACE@47..48 "{"
+      NEWLINE@48..49 "\n"
+      WHITESPACE@49..51 "  "
+      LET_STMT@51..68
+        LET_KW@51..54 "let"
+        WHITESPACE@54..55 " "
+        IDENT_PAT@55..56
+          LOWER_IDENT@55..56 "a"
+        WHITESPACE@56..57 " "
+        EQ@57..58 "="
+        WHITESPACE@58..59 " "
+        BIN_EXPR@59..68
+          PATH_EXPR@59..60
+            PATH@59..60
+              LOWER_IDENT@59..60 "b"
+          WHITESPACE@60..61 " "
+          PLUS@61..62 "+"
+          NEWLINE@62..63 "\n"
+          WHITESPACE@63..67 "    "
+          PATH_EXPR@67..68
+            PATH@67..68
+              LOWER_IDENT@67..68 "c"
+      NEWLINE@68..69 "\n"
+      R_BRACE@69..70 "}"
+  NEWLINE@70..71 "\n"

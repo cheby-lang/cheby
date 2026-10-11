@@ -1,0 +1,33 @@
+// @mode: run-pass
+// @decisions: D-109
+//! A `case` without a subject evaluates its conditions in order, takes the
+//! first that holds and evaluates no later one, and takes `_` otherwise
+//! (§5.9.5).
+
+import std::io
+
+fn noisy(label: String, result: Bool) -> Bool {
+  io::println("checked {label}")
+  result
+}
+
+fn sign(n: Int) -> String {
+  case {
+    n < 0 => "negative"
+    n == 0 => "zero"
+    _ => "positive"
+  }
+}
+
+fn main() {
+  io::println(sign(-3))
+  io::println(sign(0))
+  io::println(sign(3))
+  let picked = case {
+    noisy("first", False) => "first"
+    noisy("second", True) => "second"
+    noisy("third", True) => "third"
+    _ => "none"
+  }
+  io::println(picked)
+}

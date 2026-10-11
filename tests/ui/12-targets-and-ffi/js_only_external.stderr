@@ -1,0 +1,12 @@
+error[E0067]: `js_now` exists only on `js`, but `main` also runs on `native`
+  --> tests/ui/12-targets-and-ffi/js_only_external/src/main.cheby:13:11
+   |
+10 | fn js_now() -> Int
+   |    ------ `js_now` is declared here
+...
+13 |   let _ = js_now()
+   |           ^^^^^^ not available on `native`
+   |
+   = help: restrict `main` to `js` with `@target(js)`, or the whole module with `@!target(js)`
+   = help: if the package supports only `js`, declare `targets = ["js"]` in `cheby.toml`
+

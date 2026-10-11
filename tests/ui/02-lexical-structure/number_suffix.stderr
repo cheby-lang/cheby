@@ -1,0 +1,16 @@
+error[E0009]: unexpected suffix `u8` after a number
+ --> tests/ui/02-lexical-structure/number_suffix.cheby:7:12
+  |
+7 |   let a = 1u8
+  |            ^^ numbers have no suffixes
+  |
+  = help: a literal's type comes from context; annotate the binding instead, such as `let x: U8 = 1` (D-084)
+
+error[E0009]: unexpected suffix `f` after a number
+ --> tests/ui/02-lexical-structure/number_suffix.cheby:8:14
+  |
+8 |   let b = 2.5f
+  |              ^ numbers have no suffixes
+  |
+  = help: a literal's type comes from context; annotate the binding instead, such as `let x: U8 = 1` (D-084)
+

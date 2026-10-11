@@ -1,0 +1,19 @@
+// @mode: check-pass
+// @decisions: D-081, D-156
+//! A type alias is interchangeable with its definition, so a record
+//! update may name the type through an alias (§4.4, §5.11.2).
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+type Position = Point
+
+fn moved(p: Position) -> Point {
+  Position { ..p, x: 10 }
+}
+
+fn main() {
+  assert moved(Point { x: 0, y: 1 }) == Point { x: 10, y: 1 }
+}

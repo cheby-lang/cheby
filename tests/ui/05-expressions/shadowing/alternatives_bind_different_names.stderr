@@ -1,0 +1,11 @@
+error[E0062]: this alternative does not bind `text`
+ --> tests/ui/05-expressions/shadowing/alternatives_bind_different_names.cheby:9:16
+  |
+9 |     Ok(text) | Err(_) => text
+  |        ----    ^^^^^^ binds no `text`
+  |        |
+  |        `text` is bound here
+  |
+  = note: every alternative of a pattern must bind the same names (§6.7)
+  = help: bind the same names in every alternative, or match the value with `_` where it is not needed
+

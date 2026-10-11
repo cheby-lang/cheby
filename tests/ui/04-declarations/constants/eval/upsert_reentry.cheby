@@ -1,0 +1,27 @@
+// @mode: run-pass
+// @decisions: D-360, D-484, D-526, D-536
+//! `map::upsert` calls back into Cheby code while a constant is computed:
+//! the closure runs on the constant's entry, under its limits and its
+//! effect check, and the counts it builds are read from `main` (§4.5).
+
+import std::io
+import std::list
+import std::map
+
+const words: List<String> = ["to", "be", "or", "not", "to", "be"]
+
+const counts: map::Map<String, Int> = list::fold(words, map::new(), count)
+
+fn count(acc: map::Map<String, Int>, word: String) -> map::Map<String, Int> {
+  map::upsert(acc, word, fn(previous) {
+    case previous {
+      Some(n) => n + 1
+      None => 1
+    }
+  })
+}
+
+fn main() {
+  let sorted = map::to_list(counts) |> list::sort
+  io::println("{sorted:?}")
+}

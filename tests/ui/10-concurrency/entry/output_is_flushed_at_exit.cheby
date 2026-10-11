@@ -1,0 +1,11 @@
+// @mode: run-pass
+// @decisions: D-346
+//! Text written with `io::print` and no line ending still reaches standard
+//! output when `main` returns, and standard error is written at once.
+
+import std::io
+
+fn main() {
+  io::eprintln("to standard error")
+  io::print("no line ending")
+}

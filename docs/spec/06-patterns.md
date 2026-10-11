@@ -38,6 +38,8 @@ A pattern is **irrefutable** if it matches every value of its type. The irrefuta
 
 Every other pattern is **refutable**. `let`, `use` binders and the parameters of closures and local functions (D-242) require irrefutable patterns. `case` arms and `let assert` accept both.
 
+This list is syntactic (D-509). Alternatives that match every value only together do not make an irrefutable pattern, so `let True | False = b` is a compile error, and `let assert True | False = b` gets no warning ([§11.4](11-errors-and-panics.md#114-let-assert)).
+
 ## 6.2 Wildcards and bindings
 
 - `_` matches any value and binds nothing.
@@ -47,7 +49,7 @@ Because `UPPER` names are always constructors and `LOWER` names are always bindi
 
 ## 6.3 Literal patterns
 
-An integer literal pattern (optionally negative, [§5.3.1](05-expressions.md#531-negative-literals)) matches an integer of the subject's type that is equal to it. A string literal pattern matches an equal string. String literal patterns must not contain interpolation. Raw strings are allowed.
+An integer literal pattern (optionally negative, with the `-` directly before the digits, [§5.3.1](05-expressions.md#531-negative-literals), D-470) matches an integer of the subject's type that is equal to it. A string literal pattern matches an equal string. String literal patterns must not contain interpolation. Raw strings are allowed.
 
 `True` and `False` are constructor patterns, not literal patterns ([§3.4](03-types.md#34-bool)).
 
@@ -69,7 +71,7 @@ fn http_reason(code: Int) -> String {
 A constructor pattern matches values built with that constructor:
 
 - A **unit** constructor pattern is the name alone: `None`, `Red`, `True`.
-- A **positional** constructor pattern has one sub-pattern per field, in order: `Some(x)`, `Node(left, value, right)`.
+- A **positional** constructor pattern has one sub-pattern per field, in order: `Some(x)`, `Node(left, value, right)`. Empty parentheses, as in `Some()`, are a compile error (D-437).
 - A **named-field** constructor pattern lists fields by name, in any order:
   - `field: pattern` matches the field against the pattern,
   - `field` alone is punning and binds the field to a variable of the same name (D-113),
@@ -91,6 +93,8 @@ case event {
 ```
 
 The constructor may be qualified with a module: `shape::Circle { radius }`.
+
+A constructor pattern must have the shape of its variant: a unit constructor takes no sub-patterns, a positional constructor takes one sub-pattern per field in parentheses, and a named-field constructor takes its fields in braces. A pattern with the wrong number of sub-patterns, or with fields written in the other form, is a compile error (D-495).
 
 Matching on the constructors of a `priv` type is possible only in its own module (D-151). Matching on the constructors of a type from another package requires the type to be `exposed` ([§4.3.4](04-declarations.md#434-opacity-and-exposed)) (D-048). Values of opaque types from other packages can only be matched with `_`, bindings, and `as`.
 
@@ -129,7 +133,7 @@ fn last_of(xs: List<Int>) -> Option<Int> {
 
 ## 6.7 Alternatives
 
-`p1 | p2 | …` matches if any alternative matches, trying them from left to right (D-113). Every alternative must bind exactly the same set of names, each with the same type in every alternative.
+`p1 | p2 | …` matches if any alternative matches, trying them from left to right (D-113). Every alternative must bind exactly the same set of names, each with the same type in every alternative. An alternative that lacks names bound by another is one error that names all of them, and a name bound twice on one path through a pattern is only the error of [§6.2](#62-wildcards-and-bindings) (D-506). In a `case` arm with a guard, the bindings are those of the first alternative that matches, and a `False` guard skips the whole arm without trying the later alternatives ([§5.9.3](05-expressions.md#593-guards), D-571).
 
 ```cheby
 case day {
@@ -148,6 +152,8 @@ Inside a pattern, `|` always means alternatives. It is never the bitwise-or oper
 ## 6.8 As bindings
 
 `pattern as name` matches `pattern` and additionally binds the whole matched value to `name` (D-113). `as` has the lowest precedence in patterns, so `A | B as x` binds `x` whichever alternative matched.
+
+`as` follows a whole list of alternatives and comes at most once there, so `A as x | B` and `p as a as b` are compile errors. An `as` pattern in parentheses may stand wherever a pattern may (D-438).
 
 ```cheby
 case items {
@@ -169,5 +175,12 @@ For the purposes of exhaustiveness:
 - An opaque type from another package ([§6.4](#64-constructor-patterns)) can only be covered by `_` or a binding.
 - `Int`, the sized integer types and `String` have infinitely many values in practice, so a `case` that matches literals of these types needs a catch-all arm.
 - A list is covered when every length is covered, for example by `[]` and `[_, ..]`.
+- `Never` is treated as an opaque type, covered only by `_` or a binding, so `Option<Never>` needs a `Some(_)` arm (D-492).
+
+The missing values of a non-exhaustive `case` are written as patterns a user would write, such as `None`, `Some(Some(False))`, `Circle { .. }`, `(True, _)` and `[_, _, ..]`, with `_` for a type with infinitely many values such as `Int` (D-507). A `case` with several subjects lists a comma-separated row, as in `True, False`. Constructors of the prelude and of the current module are written bare, and others with the last segment of their module path, as in `shape::Circle { .. }` ([§13.8](13-tooling.md#138-diagnostics-and-warnings), D-463). At most three are listed, followed by the number of the others, as in "`Tuesday`, `Wednesday`, `Thursday` and 1 more", or by "and more" when the search stopped at its limit of missing values (D-508).
+
+Both checks are bounded by a fixed budget, so that their cost has a limit and their results never depend on timing (D-264, D-508). Each `case` is checked in two passes, reachability of the arms and then the missing values, each with a budget of its own. A `case` with an unguarded arm of only wildcards is exhaustive without a search. When the reachability pass runs out, the remaining arms count as reachable and get no warning. When the search for missing values runs out, the `case` is reported as missing `_`, with a note that the patterns are too complex to check in full.
+
+_Note:_ the reference implementation allows 2,000,000 steps per pass and collects at most 64 missing values. It groups rows by the constructor or literal they start with, so a large table of literal or variant arms checks in about linear time (D-508).
 
 `let assert` uses a refutable pattern and panics when it does not match instead of requiring exhaustiveness ([§11.4](11-errors-and-panics.md#114-let-assert)).

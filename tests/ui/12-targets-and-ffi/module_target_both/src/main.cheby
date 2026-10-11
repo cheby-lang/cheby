@@ -1,0 +1,11 @@
+// @mode: check-fail
+// @decisions: D-141, D-190
+//! `@!target(native)` restricts every item of a module to native. The
+//! package also targets JS, so a module that runs on both cannot use it.
+
+import app::platform
+import std::io
+
+fn main() {
+  io::println(platform::name())
+}

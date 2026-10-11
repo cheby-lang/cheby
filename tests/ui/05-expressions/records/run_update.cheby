@@ -1,0 +1,56 @@
+// @mode: run-pass
+// @decisions: D-035, D-071, D-120, D-156, D-501
+//! Record updates run: `base` is evaluated first, then the new values in
+//! the order written; the fields not listed are copied, the base keeps
+//! its value, and on a type with several variants the result keeps
+//! `base`'s variant (§5.11.2).
+
+import std::io
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+type Position = Point
+
+type Labeled<T> {
+  value: T,
+  label: String,
+}
+
+type Shape {
+  Circle { name: String, radius: Int },
+  Rect { width: Int, height: Int, name: String },
+}
+
+fn trace(label: String, n: Int) -> Int {
+  io::println("evaluating {label}")
+  n
+}
+
+fn origin() -> Point {
+  io::println("evaluating base")
+  Point { x: 0, y: 0 }
+}
+
+fn renamed(shape: Shape, name: String) -> Shape {
+  Shape { ..shape, name }
+}
+
+fn main() {
+  let moved = Point { ..origin(), y: trace("y", 2), x: trace("x", 1) }
+  io::println("{moved:?}")
+  let start = Point { x: 5, y: 6 }
+  let shifted = Position { ..start, y: 7 }
+  io::println("{start:?} {shifted:?}")
+  let labeled = Labeled { value: 1, label: "one" }
+  let relabeled = Labeled { ..labeled, value: 2 }
+  io::println("{labeled:?} {relabeled:?}")
+  let circle = Circle { name: "c", radius: 1 }
+  let rect = Rect { width: 2, height: 3, name: "r" }
+  let circle_2 = renamed(circle, "c2")
+  let rect_2 = renamed(rect, "r2")
+  io::println("{circle_2:?}")
+  io::println("{rect_2:?}")
+}

@@ -9,6 +9,18 @@ publish = false
 
 [dependencies]
 cheby_mir.workspace = true
+cheby_iface.workspace = true
+cheby_diag.workspace = true
+cheby_runtime.workspace = true
+cranelift-codegen.workspace = true
+cranelift-frontend.workspace = true
+cranelift-module.workspace = true
+rayon.workspace = true
+rustc-hash.workspace = true
+
+[dev-dependencies]
+cranelift-jit.workspace = true
+cranelift-native.workspace = true
 
 [lints]
 workspace = true

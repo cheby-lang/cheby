@@ -1,0 +1,21 @@
+// @mode: run-pass
+// @decisions: D-076, D-120
+//! Tuples run: elements are evaluated from left to right and hold values
+//! of any type (§5.12).
+
+import std::io
+
+fn trace(label: String, n: Int) -> Int {
+  io::println("evaluating {label}")
+  n
+}
+
+fn main() {
+  let pair = (trace("first", 1), trace("second", 2))
+  io::println("{pair:?}")
+  let triple = (2.5, "two", True)
+  io::println("{triple:?}")
+  let inner = (Some(1), "inner")
+  let outer = (inner, Nil)
+  io::println("{outer:?}")
+}

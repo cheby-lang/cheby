@@ -1,0 +1,16 @@
+error[E0011]: `\u{D800}` is not a Unicode scalar value
+ --> tests/ui/02-lexical-structure/surrogate_escape.cheby:7:15
+  |
+7 |   let high = "\u{D800}"
+  |               ^^^^^^^^
+  |
+  = help: the escapes are `\n`, `\t`, `\r`, `\\`, `\"`, `\{` and `\u{…}` (D-114)
+
+error[E0011]: `\u{DFFF}` is not a Unicode scalar value
+ --> tests/ui/02-lexical-structure/surrogate_escape.cheby:8:14
+  |
+8 |   let low = "\u{dfff}"
+  |              ^^^^^^^^
+  |
+  = help: the escapes are `\n`, `\t`, `\r`, `\\`, `\"`, `\{` and `\u{…}` (D-114)
+

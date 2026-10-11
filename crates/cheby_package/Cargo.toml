@@ -9,6 +9,10 @@ publish = false
 
 [dependencies]
 cheby_diag.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+cheby_syntax.workspace = true
 
 [lints]
 workspace = true

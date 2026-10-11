@@ -1,0 +1,28 @@
+// @mode: check-pass
+// @decisions: D-022, D-113
+//! Alternatives and `as` patterns cover what each of their parts covers.
+
+type Color {
+  Red,
+  Green,
+  Blue,
+}
+
+fn warm(color: Color) -> Bool {
+  case color {
+    (Red as c) | (Green as c) => c == Red
+    Blue => False
+  }
+}
+
+fn pair(a: Bool, b: Bool) -> Int {
+  case (a, b) {
+    (True, _) | (_, True) => 1
+    (False, False) => 0
+  }
+}
+
+fn main() {
+  assert warm(Red)
+  assert pair(False, True) == 1
+}

@@ -1,0 +1,12 @@
+// @mode: check-fail
+// @decisions: D-062
+//! A closure's parameters follow the no-shadowing rule, so a parameter
+//! cannot reuse the name of a binding in scope.
+
+import std::io
+
+fn main() {
+  let text = "outer"
+  let shout = fn(text) { text }
+  io::println(shout(text))
+}

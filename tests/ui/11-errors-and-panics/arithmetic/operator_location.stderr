@@ -1,0 +1,2 @@
+panicked at tests/ui/11-errors-and-panics/arithmetic/operator_location.cheby:10:15:
+integer overflow

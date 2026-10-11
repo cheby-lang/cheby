@@ -1,0 +1,19 @@
+// @mode: check-fail
+// @decisions: D-020
+//! The function must have the interface's signature with `Self` replaced
+//! by the type (§8.2).
+
+import std::io
+
+type Money {
+  cents: Int,
+}
+
+fn show(m: Money, currency: String) -> String {
+  "{m.cents:?} {currency:?}"
+}
+
+fn main() {
+  let price = Money { cents: 250 }
+  io::println("{price}")
+}

@@ -1,0 +1,12 @@
+// @mode: check-fail
+// @decisions: D-162
+//! A package-visible item is not visible in another package: user code
+//! cannot call `std::json::decode`'s package-visible functions (§7.3).
+
+import std::json
+import std::json::decode
+
+fn main() {
+  let value = json::Null
+  assert decode::run(decode::int(), value) == Ok(1)
+}

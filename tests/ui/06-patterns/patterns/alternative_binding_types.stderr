@@ -1,0 +1,10 @@
+error[E0047]: mismatched types
+ --> tests/ui/06-patterns/patterns/alternative_binding_types.cheby:7:15
+  |
+7 |     (0, n) | (n, "") => "{n:?}"
+  |         -     ^ `n` is `Int` here
+  |         |
+  |         `n` is `String` in an earlier alternative
+  |
+  = note: a name bound by several alternatives must have the same type in each (§6.7)
+

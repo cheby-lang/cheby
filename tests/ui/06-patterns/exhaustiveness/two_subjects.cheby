@@ -1,0 +1,14 @@
+// @mode: check-fail
+// @decisions: D-022, D-052
+//! With several subjects, every combination of values must be covered.
+
+fn describe(a: Bool, b: Bool) -> String {
+  case a, b {
+    True, True => "both"
+    False, _ => "not a"
+  }
+}
+
+fn main() {
+  assert describe(True, False) == "only a"
+}

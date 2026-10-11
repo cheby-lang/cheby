@@ -1,0 +1,10 @@
+// @mode: run-pass
+// @command: test
+// @decisions: D-541, D-543
+//! A package without tests passes, with only the summary.
+
+import std::io
+
+fn main() {
+  io::println("never printed")
+}

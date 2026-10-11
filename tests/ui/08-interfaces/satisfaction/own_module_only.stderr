@@ -1,0 +1,9 @@
+error[E0063]: `label::Label` does not satisfy `Show`
+  --> tests/ui/08-interfaces/satisfaction/own_module_only/src/main.cheby:15:12
+   |
+15 |   assert "{l}" == show(l)
+   |            ^ interpolated here
+   |
+   = note: only functions of the module that declares `label::Label` count, and `app::label` has no function `show(label::Label) -> String` (§8.2, D-061)
+   = help: write `{l:?}` to use debug printing instead (D-086)
+

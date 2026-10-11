@@ -1,0 +1,35 @@
+// @decisions: D-008, D-546
+> 1 + 2
+3 : Int
+> 7 / 2
+3 : Int
+> 2.5 * 2.0
+5.0 : Float
+> "text" + "!"
+"text!" : String
+> [1, 2, 3]
+[1, 2, 3] : List<Int>
+> (1, "one", True)
+(1, "one", True) : (Int, String, Bool)
+> Some([1.5])
+Some([1.5]) : Option<List<Float>>
+> let nothing: Option<Int> = None
+> nothing
+None : Option<Int>
+> 3 > 2 && False
+False : Bool
+> Nil
+> import std::list
+> list::reverse([1, 2, 3])
+[3, 2, 1] : List<Int>
+> import std::map
+> map::from_list([("b", 2), ("a", 1)])
+map::from_list([("a", 1), ("b", 2)]) : map::Map<String, Int>
+> fn(x: Int) { x + 1 }
+<fn> : fn(Int) -> Int
+> type Point { x: Int, y: Int }
+> Point { x: 1, y: -2 }
+Point { x: 1, y: -2 } : Point
+> let n = 2
+> "interpolated {n}"
+"interpolated 2" : String

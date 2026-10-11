@@ -1,0 +1,6 @@
+// @mode: check-fail
+// @decisions: D-162
+//! The names of `.cheby` files under `src/` are valid `LOWER` identifiers,
+//! since they become segments of module paths (§7.2).
+
+fn main() {}

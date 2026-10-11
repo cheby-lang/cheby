@@ -1,0 +1,9 @@
+error[E0063]: `map::Map<String, Int>` does not satisfy `Show`
+ --> tests/ui/08-interfaces/show/map_not_show.cheby:9:5
+  |
+9 |   "{counts}"
+  |     ^^^^^^ interpolated here
+  |
+  = note: `map::Map<String, Int>` gets its functions from `std::map`, which has no function `show(map::Map<String, Int>) -> String` (§8.2, D-447)
+  = help: write `{counts:?}` to use debug printing instead (D-086)
+

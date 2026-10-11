@@ -1,0 +1,11 @@
+// @mode: check-fail
+// @decisions: D-162
+//! A `priv` item is visible only in its own module, so a sibling module
+//! of the same package cannot use it.
+
+import app::greeting
+import std::io
+
+fn main() {
+  io::println(greeting::text())
+}

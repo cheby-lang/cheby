@@ -1,0 +1,9 @@
+error[E0076]: evaluating the constant `forever` took longer than the time limit of 100ms
+  --> tests/ui/04-declarations/constants/eval/time_limit/src/main.cheby:10:7
+   |
+10 | const forever: Int = ping(0)
+   |       ^^^^^^^ this constant is computed at compile time
+   |
+   = note: constant evaluation stops an initializer that runs past the limit
+   = help: compute less at compile time, or raise `time-limit` in the `[const-eval]` table of `cheby.toml`
+

@@ -1,0 +1,7 @@
+// @mode: check-fail
+// @decisions: D-049, D-462
+//! A type parameter takes no type arguments.
+
+pub fn wrap<T>(value: T<Int>) -> List<T> {
+  [value]
+}

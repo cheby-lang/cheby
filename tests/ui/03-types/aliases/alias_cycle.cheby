@@ -1,0 +1,8 @@
+// @mode: check-fail
+// @decisions: D-081
+//! An alias must not refer to itself through other aliases either. Each
+//! alias on the cycle is reported once (§4.4).
+
+pub type Ping = Option<Pong>
+
+pub type Pong = (Ping, Int)

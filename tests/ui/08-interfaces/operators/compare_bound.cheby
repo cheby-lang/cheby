@@ -1,0 +1,21 @@
+// @mode: check-pass
+// @decisions: D-169
+//! The example of `std::ops`: a bound names `Compare`, and the body uses
+//! `>` on the type parameter.
+
+import std::list
+import std::ops::{Compare}
+
+fn largest<T: Compare>(first: T, rest: List<T>) -> T {
+  list::fold(rest, first, fn(best, x) {
+    case {
+      x > best => x
+      _ => best
+    }
+  })
+}
+
+fn main() {
+  assert largest(3, [7, 2]) == 7
+  assert largest("pear", ["apple", "fig"]) == "pear"
+}

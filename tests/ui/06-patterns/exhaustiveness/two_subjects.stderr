@@ -1,0 +1,8 @@
+error[E0061]: `case` does not cover every value
+ --> tests/ui/06-patterns/exhaustiveness/two_subjects.cheby:6:8
+  |
+6 |   case a, b {
+  |        ^^^^ `True, False` not covered
+  |
+  = help: add an arm for `True, False`
+

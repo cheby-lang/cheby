@@ -1,0 +1,12 @@
+// @mode: check-fail
+// @decisions: D-123
+//! A local function has one type, fixed by its uses (§5.8).
+
+pub fn main() {
+  fn id(x) {
+    x
+  }
+  let a = id(1)
+  let b = id("a")
+  assert a == 1 && b == b
+}

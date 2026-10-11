@@ -1,0 +1,64 @@
+// @mode: run-pass
+// @decisions: D-113, D-470
+//! Integer literal patterns, negative ones included, match equal values of
+//! `Int` and of the sized types, and string literal patterns match equal
+//! strings (§6.3).
+
+import std::io
+
+fn http_reason(code: Int) -> String {
+  case code {
+    200 => "OK"
+    404 => "Not Found"
+    -1 => "unknown"
+    _ => "other"
+  }
+}
+
+fn byte_name(b: U8) -> String {
+  case b {
+    0 => "zero"
+    255 => "max"
+    _ => "some byte"
+  }
+}
+
+fn small_name(n: I8) -> String {
+  case n {
+    -128 => "min"
+    -1 => "minus one"
+    _ => "other"
+  }
+}
+
+fn greeting(language: String) -> String {
+  case language {
+    "en" => "hello"
+    "fr" => "bonjour"
+    "" => "(empty)"
+    _ => "?"
+  }
+}
+
+fn main() {
+  io::println(http_reason(200))
+  io::println(http_reason(404))
+  io::println(http_reason(-1))
+  io::println(http_reason(500))
+  let zero: U8 = 0
+  let max: U8 = 255
+  let seven: U8 = 7
+  io::println(byte_name(zero))
+  io::println(byte_name(max))
+  io::println(byte_name(seven))
+  let min: I8 = -128
+  let minus_one: I8 = -1
+  let one: I8 = 1
+  io::println(small_name(min))
+  io::println(small_name(minus_one))
+  io::println(small_name(one))
+  io::println(greeting("en"))
+  io::println(greeting("fr"))
+  io::println(greeting(""))
+  io::println(greeting("de"))
+}

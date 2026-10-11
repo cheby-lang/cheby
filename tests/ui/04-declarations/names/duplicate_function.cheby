@@ -1,0 +1,16 @@
+// @mode: check-fail
+// @decisions: D-111
+//! Top-level names of a module are distinct within their namespace, so a
+//! function cannot be declared twice (§4.1.2).
+
+pub fn size() -> Int {
+  1
+}
+
+pub fn size() -> Int {
+  2
+}
+
+fn main() {
+  assert size() == 1
+}

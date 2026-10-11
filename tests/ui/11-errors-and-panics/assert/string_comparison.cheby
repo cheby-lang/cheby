@@ -1,0 +1,8 @@
+// @mode: run-fail
+// @decisions: D-096, D-528
+//! Operands print as debug text, so strings are quoted (§3.13, §11.5).
+
+fn main() {
+  let name = "Ada"
+  assert name == "Bob"
+}

@@ -1,0 +1,8 @@
+// @mode: check-fail
+// @decisions: D-234, D-451
+//! A type that nothing in the body fixes needs an annotation (§3.12.4).
+
+pub fn main() {
+  let xs = []
+  assert xs == xs
+}

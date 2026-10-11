@@ -1,0 +1,9 @@
+//! Another interface named `I`, whose function is `beta`.
+
+pub interface I {
+  fn beta(Self) -> String
+}
+
+pub fn call<X: I>(x: X) -> String {
+  I::beta(x)
+}

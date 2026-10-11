@@ -1,0 +1,32 @@
+// @mode: run-fail
+// @exit: 1
+// @command: test
+// @decisions: D-140, D-529, D-541, D-543, D-595, D-598
+//! A failing `assert`, a panic and an `Err` result each fail their test.
+//! Every test still runs, and each failure gets a block with the panic
+//! report or the error's text after the test lines.
+
+fn double(n: Int) -> Int {
+  n * 2
+}
+
+test "adds" {
+  assert double(1) == 2
+}
+
+test "assert fails" {
+  assert double(2) == 5
+}
+
+test "panics" {
+  panic as "boom"
+}
+
+test "returns an error" {
+  let result: Result<Nil, String> = Err("no luck")
+  result
+}
+
+test "runs after failures" {
+  assert double(3) == 6
+}

@@ -1,0 +1,16 @@
+//! Prices.
+
+import std::list
+
+/// An item with its price.
+pub type Item {
+  Item(Int),
+}
+
+/// The sum of the prices of `items`.
+pub fn total(items: List<Item>) -> Int {
+  list::fold(items, 0, fn(sum, item) {
+    let Item(price) = item
+    sum + price
+  })
+}

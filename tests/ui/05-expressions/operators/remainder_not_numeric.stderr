@@ -1,0 +1,8 @@
+error[E0072]: `%` cannot be applied to `String`
+ --> tests/ui/05-expressions/operators/remainder_not_numeric.cheby:7:3
+  |
+7 |   a % b
+  |   ^^^^^ `%` on `String`
+  |
+  = note: `%` is defined only on the numeric types and cannot be overloaded
+

@@ -1,0 +1,25 @@
+error[W0003]: unused import `std::list`
+ --> tests/ui/13-tooling/deny_warnings/check_denied.cheby:9:1
+  |
+9 | import std::list
+  | ^^^^^^^^^^^^^^^^ nothing in this module uses it
+  |
+  = note: warnings are denied by `--deny-warnings`
+  = help: remove the import
+
+error[W0002]: unused binding `unused`
+  --> tests/ui/13-tooling/deny_warnings/check_denied.cheby:12:7
+   |
+12 |   let unused = 1
+   |       ^^^^^^ never used
+   |
+   = help: if this is intentional, start the name with an underscore: `_unused`
+
+error[W0002]: unused binding `also_unused`
+  --> tests/ui/13-tooling/deny_warnings/check_denied.cheby:13:7
+   |
+13 |   let also_unused = 2
+   |       ^^^^^^^^^^^ never used
+   |
+   = help: if this is intentional, start the name with an underscore: `_also_unused`
+

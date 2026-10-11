@@ -1,0 +1,13 @@
+// @mode: check-fail
+// @decisions: D-117
+//! Embedding must not be cyclic (§8.3).
+
+interface Reader: Writer {
+  fn read(Self) -> String
+}
+
+interface Writer: Reader {
+  fn write(Self, String)
+}
+
+fn main() {}

@@ -1,6 +1,6 @@
 # `std::set`
 
-The hashed set `Set<T>` (§3.8, D-039). `Set` is not in the prelude: `import std::set` brings in the module and `import std::set::{Set}` the type (§3.2). This module is where the type is declared (§8.2):
+The hashed set `Set<T>` (§3.8, D-039). `Set` is a built-in type outside the prelude, and this module is its home module (§3.2, §7.6, D-481). The module does not declare the type again. Inside it the type is written `Set`, and other modules write `set::Set` after `import std::set`, or `Set` after `import std::set::{Set}`. Interface satisfaction treats the type as declared here (§8.2). In the form `cheby doc` prints:
 
 ```cheby
 pub type Set<T>
@@ -11,7 +11,7 @@ pub type Set<T>
 - **Elements.** Elements need no interface. They are compared with `==` and hashed with the built-in structural hash (§3.13).
 - **Order.** `to_list`, `fold`, `each` and the callbacks of `filter` and `map` visit the elements in an order that depends on a per-process random seed and changes between runs (D-093). Programs that print or compare that order sort first, for example with [`to_sorted_list`](#to_sorted_list).
 - **Kernels.** `new`, `from_list`, `size`, `is_empty`, `contains`, `insert`, `remove` and `to_list` are runtime kernels, and their costs are required (D-274, D-300). The other functions are written in Cheby over them, and their costs are informative. `insert` and `remove` update the set in place when it is unique (§9.3).
-- **Equality, hashing and printing.** Two sets are `==` when they hold the same elements, in any order, and equal sets hash equally (D-093, §3.13). Debug printing writes `set::from_list([…])` with the elements sorted by their debug text, so it is the same on every run (D-344, D-382).
+- **Equality, hashing and printing.** Two sets are `==` when they hold the same elements, in any order, and equal sets hash equally (D-093, §3.13). Debug printing writes `set::from_list([…])` with the elements sorted by their debug text, compared as UTF-8 bytes, so it is the same on every run (D-344, D-382, D-587).
 - **Interfaces.** `Set` satisfies neither `Show` nor `Compare`, because its order changes between runs (§8.8, D-344).
 - **Costs.** For a set of n elements, a lookup or an update takes O(log n), effectively constant.
 
@@ -125,7 +125,7 @@ test "contains looks an element up" {
 pub fn insert<T>(s: Set<T>, item: T) -> Set<T>
 ```
 
-Returns the set with `item` added. The set is returned unchanged when `item` is already in it.
+Returns the set with `item` added. The set is returned unchanged when `item` is already in it, so a stored element that is `==` to `item` is kept (D-588).
 
 - **Cost:** O(log n), effectively constant. Required (D-300).
 

@@ -1,0 +1,53 @@
+// @mode: run-pass
+// @decisions: D-196, D-539, D-538
+//! Maps and sets in constants are rebuilt with the program's seed before
+//! `main` runs (§4.5): a constant `Map`, a record holding a `Set`, and a
+//! `Map` with `Set` keys that two constants share are all found by value
+//! from `main`.
+
+import std::io
+import std::list
+import std::map
+import std::set
+
+type Palette { name: String, colours: set::Set<String> }
+
+const ages: map::Map<String, Int> = map::from_list([("ada", 36), ("alan", 41), ("grace", 85)])
+
+const warm: Palette = Palette { name: "warm", colours: set::from_list(["red", "orange", "yellow"]) }
+
+const routes: map::Map<set::Set<String>, Int> = map::from_list([
+  (set::from_list(["paris", "rome"]), 1420),
+  (set::from_list(["oslo", "rome"]), 2010),
+  (set::from_list(["paris", "oslo"]), 1340),
+])
+
+const same_routes: map::Map<set::Set<String>, Int> = routes
+
+const legs: List<map::Map<set::Set<String>, Int>> = [routes, same_routes]
+
+fn distance(table: map::Map<set::Set<String>, Int>, a: String, b: String) -> Int {
+  case map::get(table, set::from_list([b, a])) {
+    Some(km) => km
+    None => -1
+  }
+}
+
+fn main() {
+  let ada = map::get(ages, "ada")
+  let bob = map::get(ages, "bob")
+  io::println("{ada:?} {bob:?}")
+  let Palette { name, colours } = warm
+  let has_red = set::contains(colours, "red")
+  let has_blue = set::contains(colours, "blue")
+  io::println("{name}: {has_red} {has_blue}")
+  let rome_paris = distance(routes, "rome", "paris")
+  let oslo_paris = distance(same_routes, "oslo", "paris")
+  let none = distance(routes, "rome", "lima")
+  io::println("{rome_paris} {oslo_paris} {none}")
+  let sizes = list::map(legs, map::size)
+  let extended = map::insert(same_routes, set::from_list(["lima"]), 0)
+  let lima = distance(extended, "lima", "lima")
+  let size = map::size(routes)
+  io::println("{sizes:?} {lima} {size}")
+}

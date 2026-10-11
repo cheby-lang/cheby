@@ -1,0 +1,7 @@
+test app "root second" ... ok
+test app "root first" ... ok
+test app::alpha "alpha" ... ok
+test app::alpha::zeta "alpha zeta" ... ok
+test app::beta "beta" ... ok
+
+test result: ok. 5 passed; 0 failed; 0 filtered out

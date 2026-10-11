@@ -1,0 +1,13 @@
+//! A type that satisfies both interfaces.
+
+pub type T {
+  T,
+}
+
+pub fn alpha(_t: T) -> String {
+  "alpha"
+}
+
+pub fn beta(_t: T) -> String {
+  "beta"
+}

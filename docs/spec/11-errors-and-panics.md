@@ -82,15 +82,22 @@ let assert Ok(config) = load_config("app.toml")
 let assert [first, ..] = arguments
 ```
 
-The panic message includes the source location and the debug-printed value that failed to match.
+The panic report includes the source location, which is the start of the pattern (D-570). Its message is `` `let assert` pattern did not match ``, followed by the line `value: <debug text>`, indented by two spaces, with the debug-printed value that failed to match (D-528).
 
-An optional custom message follows `as`. It is an expression of type `String`, evaluated only when the match fails, and it is included in the panic message (D-159):
+An optional custom message follows `as`. It is an expression of type `String`, evaluated only when the match fails. The first line of the panic message is then `` `let assert` pattern did not match: `` followed by the custom message, and the value line still follows (D-159, D-528):
 
 ```cheby
 let assert Some(user) = find_user(id) as "user {id} must exist"
 ```
 
-A `let assert` whose pattern is irrefutable is a warning, since a plain `let` would do (D-159).
+_Example:_ when `id` is `7` and `find_user` returns `None`, the panic message is:
+
+```
+`let assert` pattern did not match: user 7 must exist
+  value: None
+```
+
+A `let assert` whose pattern is irrefutable is a warning, since a plain `let` would do (D-159). Irrefutability follows the syntactic list of [§6.1](06-patterns.md#61-pattern-syntax), so `let assert True | False = b` does not warn (D-509).
 
 ## 11.5 assert
 
@@ -100,13 +107,23 @@ assert_stmt = "assert" expr [ "as" expr ] ;
 
 `assert expr` evaluates an expression of type `Bool` and panics if it is `False` (D-096). It may be used anywhere a statement may appear, not only in tests (D-096).
 
-When the asserted expression is a comparison (`==`, `!=`, `<`, `<=`, `>`, `>=`), the panic message shows the debug-printed values of both operands (D-096). Otherwise it shows the source text of the expression.
+A failed `assert e` has the panic message `assertion failed: <source text of e>`. When `e` is a comparison (`==`, `!=`, `<`, `<=`, `>`, `>=`), two more lines follow with the debug-printed values of both operands, labelled `left:` and `right:`. The labels are right-aligned, so `left:` is indented by two spaces and `right:` by one (D-096, D-528). The panic is located at the start of `e`, not at the `assert` keyword (D-570).
 
-An optional custom message follows `as`. It is an expression of type `String`, evaluated only when the assertion fails, and it is shown alongside the automatically printed operands of a failing comparison (D-160):
+An optional custom message follows `as`. It is an expression of type `String`, evaluated only when the assertion fails. It replaces the source text in the first line, and the operand lines of a failing comparison still follow (D-160, D-528):
 
 ```cheby
 assert list::length(items) == 3 as "expected one item per slot"
 ```
+
+_Example:_ when `items` has two elements, the panic message is:
+
+```
+assertion failed: expected one item per slot
+  left: 2
+ right: 3
+```
+
+Without the custom message, its first line is `assertion failed: list::length(items) == 3`.
 
 ```cheby
 test "parse numbers" {
@@ -141,7 +158,16 @@ fn area(shape: Shape) -> Float {
 }
 ```
 
-Every panic message includes the source location where the panic started.
+Every panic report includes the source location where the panic started. Its message is the text after the `panicked at …:` line, without the location, and it is what a `fiber::Panic` carries as its message (D-473). A panic is reported on standard error, after standard output has been flushed, as two lines in the form rustc uses: `panicked at path:line:column:`, with the path and position as in diagnostics ([§13.8](13-tooling.md#138-diagnostics-and-warnings)), then the message (D-449). For example, reaching the `todo` above in `src/main.cheby` prints:
+
+```
+panicked at src/main.cheby:5:12:
+not implemented: area of a dot
+```
+
+`panic` without a message reports `explicit panic`, and a message given with `as` replaces it. `todo` reports `not implemented`, and `todo as m` reports `not implemented: m`. The runtime panics of [§11.8](#118-runtime-panics) report `integer overflow`, `division by zero`, `shift amount out of range`, `equality or hashing reached a function value or a handle`, `stack overflow` and `out of memory` (D-642). Failed assertions report `assertion failed` and `` `let assert` pattern did not match ``, with the details of [§11.4](#114-let-assert) and [§11.5](#115-assert) (D-449, D-528).
+
+A panic of a built-in operator is located at the start of the whole operator expression: the start of the left operand of a binary operator, and the `-` of a negation (D-570). This covers integer overflow, division by zero, a shift amount out of range, and a `==` or `!=` that reaches a function value or a handle (D-556). In `a + b * c`, an overflow of `*` is located at the start of `b`. A failed `assert e`, with or without `as`, is located at the start of its condition `e`, not at the `assert` keyword, and a failed `let assert` at the start of its pattern (D-570). _Note:_ when the standard library compares or hashes values inside a runtime kernel, as a `Map` lookup does, the reference implementation knows no Cheby location and prints `<unknown location>` in its place (D-449, D-556). An `out of memory` panic is located at `<unknown location>` too (D-642). Built-in code with no source, the `show` of tuples, is located at `<builtin>`, so a stack overflow inside it reports `panicked at <builtin>` (D-583).
 
 ## 11.7 Panics and fibers
 
@@ -182,6 +208,7 @@ The following are panics, not undefined behavior or silent results:
 | reaching `panic` or `todo`                                             | D-068               |
 | list index out of range, in the standard library's panicking accessors | D-039               |
 | stack overflow                                                         | see below           |
+| an allocation that cannot be served, on native targets                 | D-642, see below    |
 
 ### 11.8.1 Stack overflow
 
@@ -193,3 +220,13 @@ Deep non-tail recursion can exhaust a fiber's stack. Exhausting it panics the fi
 Tail calls never grow the stack ([§5.15.3](05-expressions.md#5153-guaranteed-tail-calls)), and all standard-library functions are written so that their stack use does not depend on the size of their input (D-094).
 
 Foreign functions do not perform the entry check. The runtime must leave enough headroom below the limit for foreign calls, or run them on a separate stack (ADR-0032).
+
+_Note:_ the reference implementation gives the root fiber a 64 MiB stack and leaves 256 KiB of headroom below the limit (D-457). Each test gets a 64 MiB stack too, so deep recursion that works under `cheby run` also works in a test (D-596), and so does the body of each REPL entry (D-613).
+
+### 11.8.2 Out of memory
+
+On native targets, an allocation that cannot be served panics the running fiber with the message `out of memory`. This covers a size that overflows and a request that the system refuses, for objects, text and the results that standard-library functions such as `string::repeat` compute. It is a panic like any other, not an abort, so a REPL session and a test run survive it: `cheby run` exits with 101, `cheby test` fails the test, and the REPL abandons the entry and continues (D-642).
+
+During constant evaluation, a request over the memory limit, including one whose size overflows, is E0076 instead ([§13.9](13-tooling.md#139-compile-time-evaluation), D-617). A request under the limit that the system refuses is the panic, so the constant gets E0075 (D-642).
+
+_Note:_ the reference implementation sets aside a 4 MiB reserve per process and frees it before it reports, so even complete exhaustion ends as this panic. The panic is located at `<unknown location>` (D-642).

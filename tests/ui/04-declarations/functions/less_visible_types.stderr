@@ -1,0 +1,24 @@
+error[E0074]: the package-visible function `reveal` mentions the `priv` type `Secret`
+  --> tests/ui/04-declarations/functions/less_visible_types.cheby:10:16
+   |
+6  | priv type Secret { Secret(String) }
+   |           ------ declared here
+...
+10 | fn reveal() -> Secret {
+   |                ^^^^^^ `priv` type
+   |
+   = note: code that can use `reveal` could not name `Secret` (D-149)
+   = help: make `Secret` package-visible, or make `reveal` `priv`
+
+error[E0074]: the `pub` function `issue` mentions the package-visible type `Token`
+  --> tests/ui/04-declarations/functions/less_visible_types.cheby:14:19
+   |
+8  | type Token { Token(String) }
+   |      ----- declared here
+...
+14 | pub fn issue() -> Token {
+   |                   ^^^^^ package-visible type
+   |
+   = note: code that can use `issue` could not name `Token` (D-148)
+   = help: make `Token` `pub`, or make `issue` package-visible
+

@@ -1,0 +1,7 @@
+68 c3 a9 6c 6c 6f 2c 20 77 c3 b6 72 6c 64
+first byte 104
+68 c3 a9 6c 6c 6f 2c 20 77 c3 b6 72 6c 64 00 00 30 6e
+checksum 12398, stored Some(12398)
+payload intact: True
+tampered equal: False
+104

@@ -1,0 +1,17 @@
+// @mode: check-pass
+// @decisions: D-080, D-152
+//! Package-visible items used from another module of the package do not
+//! warn: functions, constants, types through their constructors in
+//! expressions and patterns, and interfaces through bounds.
+
+import app::shapes
+
+fn describe<T: shapes::Named>(value: T) -> String {
+  shapes::Named::name(value)
+}
+
+fn main() {
+  let shapes::Square(side) = shapes::Square(shapes::default_side)
+  assert shapes::area(shapes::Square(side)) == 4.0
+  assert describe(shapes::Square(1.0)) == "square"
+}

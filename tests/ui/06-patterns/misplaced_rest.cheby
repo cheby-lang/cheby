@@ -1,0 +1,25 @@
+// @mode: check-fail
+// @decisions: D-158
+//! A list pattern has at most one rest, and in a constructor pattern with
+//! named fields the rest `..` comes last.
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+fn first_or_zero(items: List<Int>) -> Int {
+  case items {
+    [first, .., ..] => first
+    _ => 0
+  }
+}
+
+fn x_of(p: Point) -> Int {
+  let Point { .., x } = p
+  x
+}
+
+fn main() {
+  assert first_or_zero([1, 2]) + x_of(Point { x: 1, y: 2 }) == 2
+}

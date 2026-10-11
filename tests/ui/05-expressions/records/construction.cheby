@@ -1,0 +1,27 @@
+// @mode: check-pass
+// @decisions: D-022, D-113, D-138
+//! A named-field constructor initializes every field exactly once, in any
+//! order, and `Point { x }` puns `Point { x: x }` (§5.11.1).
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+type Labeled<T> {
+  value: T,
+  label: String,
+}
+
+fn make(x: Int) -> Point {
+  Point { y: 2, x }
+}
+
+fn label(value: Int) -> Labeled<Int> {
+  Labeled { label: "count", value }
+}
+
+fn main() {
+  assert make(1) == Point { x: 1, y: 2 }
+  assert label(3).value == 3
+}

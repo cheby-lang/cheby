@@ -1,0 +1,16 @@
+error[E0012]: whitespace inside an interpolation
+ --> tests/ui/02-lexical-structure/interpolation_whitespace.cheby:7:19
+  |
+7 |   let s = "hello { name }"
+  |                   ^
+  |
+  = help: remove the whitespace (D-115)
+
+error[E0012]: whitespace inside an interpolation
+ --> tests/ui/02-lexical-structure/interpolation_whitespace.cheby:7:24
+  |
+7 |   let s = "hello { name }"
+  |                        ^
+  |
+  = help: remove the whitespace (D-115)
+

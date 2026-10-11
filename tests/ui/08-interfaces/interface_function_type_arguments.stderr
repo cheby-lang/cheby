@@ -1,0 +1,9 @@
+error[E0023]: an interface function takes no type arguments
+ --> tests/ui/08-interfaces/interface_function_type_arguments.cheby:6:13
+  |
+6 |   Show::show::<Int>(n)
+  |             ^^^^^^^
+  |
+  = note: interface functions are not generic (D-165)
+  = help: remove the type arguments
+

@@ -1,0 +1,13 @@
+// @mode: check-pass
+// @decisions: D-086, D-233
+//! `{x:?}` uses built-in debug printing, which works for every type
+//! (§5.3.2).
+
+pub type Point {
+  x: Int,
+  y: Int,
+}
+
+pub fn describe(p: Point, f: fn(Int) -> Int) -> String {
+  "point {p:?} and {f:?} at {p.x:?}"
+}

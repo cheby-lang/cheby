@@ -1,0 +1,21 @@
+// @mode: check-fail
+// @decisions: D-022, D-507
+//! The error lists at most three values that no arm covers.
+
+type Day {
+  Monday,
+  Tuesday,
+  Wednesday,
+  Thursday,
+  Friday,
+}
+
+fn is_monday(day: Day) -> Bool {
+  case day {
+    Monday => True
+  }
+}
+
+fn main() {
+  assert is_monday(Monday)
+}

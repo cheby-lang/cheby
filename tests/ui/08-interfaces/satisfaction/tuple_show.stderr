@@ -1,0 +1,10 @@
+error[E0063]: `(Label, fn() -> Nil)` does not satisfy `Show`
+  --> tests/ui/08-interfaces/satisfaction/tuple_show.cheby:19:17
+   |
+19 |   io::println("{with_action}")
+   |                 ^^^^^^^^^^^ interpolated here
+   |
+   = note: element 2 of `(Label, fn() -> Nil)` is `fn() -> Nil`, which does not satisfy `Show` (§8.2, D-167)
+   = note: function types satisfy only empty interfaces (§8.2, D-166)
+   = help: write `{with_action:?}` to use debug printing instead (D-086)
+

@@ -1,0 +1,43 @@
+// @mode: run-pass
+// @decisions: D-134, D-233, D-521, D-531, D-557
+//! `{x:?}` on every builtin type (§3.13): numbers as their literals,
+//! strings in quotes with the escapes a literal needs, `Bool`, `Nil`,
+//! `Order`, options, results, tuples and lists as written, and functions
+//! as `<fn>`.
+
+import std::io
+
+fn main() {
+  let negative = -42
+  let small: I8 = -128
+  let byte: U8 = 255
+  let huge: U64 = 18446744073709551615
+  let wide: I64 = -9223372036854775807
+  io::println("{negative:?} {small:?} {byte:?} {huge:?} {wide:?}")
+  let nan = 0.0 / 0.0
+  let infinite = 1.0 / 0.0
+  let floats = [1.0, 0.1, -0.0, 2.5e-8, 1e21, nan, infinite, -infinite]
+  io::println("{floats:?}")
+  let narrow: F32 = 0.1
+  let narrow_third = narrow / 3.0
+  io::println("{narrow:?} {narrow_third:?}")
+  let text = "quote \" backslash \\ brace \{ tab\tnew\nline\r é ✓ \u{1b}\u{7f}\u{0}"
+  io::println("{text:?}")
+  let empty = ""
+  io::println("{empty:?}")
+  let flags = (True, False, Nil)
+  io::println("{flags:?}")
+  let orders = [Less, Equal, Greater]
+  io::println("{orders:?}")
+  let options = [Some(Some(1)), Some(None), None]
+  io::println("{options:?}")
+  let results: List<Result<Int, String>> = [Ok(1), Err("no")]
+  io::println("{results:?}")
+  let nested: (List<Int>, List<String>, List<List<Nil>>) = ([1, 2], [], [[Nil]])
+  io::println("{nested:?}")
+  let unit_list: List<Nil> = []
+  io::println("{unit_list:?}")
+  let double = fn(n: Int) { n * 2 }
+  let with_functions = (1, double, [io::println])
+  io::println("{with_functions:?} {double:?}")
+}

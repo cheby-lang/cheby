@@ -1,0 +1,23 @@
+// @mode: check-fail
+// @decisions: D-045
+//! Function names are not overloaded, so a module satisfies an interface
+//! for one type only (§8.2.1).
+
+import std::io
+
+type Celsius {
+  degrees: Int,
+}
+
+type Fahrenheit {
+  degrees: Int,
+}
+
+fn show(c: Celsius) -> String {
+  "{c.degrees:?} C"
+}
+
+fn main() {
+  let hot = Fahrenheit { degrees: 100 }
+  io::println("{hot}")
+}

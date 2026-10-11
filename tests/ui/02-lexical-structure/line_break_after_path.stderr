@@ -1,0 +1,6 @@
+error[E0013]: expected a line break or `}`, found `::`
+ --> tests/ui/02-lexical-structure/line_break_after_path.cheby:8:5
+  |
+8 |   io::
+  |     ^^
+

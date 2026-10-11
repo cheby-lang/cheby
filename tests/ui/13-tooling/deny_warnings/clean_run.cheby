@@ -1,0 +1,10 @@
+// @mode: run-pass
+// @flags: --deny-warnings
+// @decisions: D-549
+//! Without warnings, `--deny-warnings` changes nothing: the program runs.
+
+import std::io
+
+fn main() {
+  io::println("no warnings here")
+}

@@ -1,0 +1,7 @@
+static#0 desc app::geometry$Point = desc_nominal(str#0, str#1) str#0 = "Point" str#1 = "app::geometry"
+static#1 dict app$Show$app::geometry::Point = dict/1+0(static#0, fn app::geometry::show)
+static#2 desc app::boxed$Boxed = desc_nominal(str#0, str#1) str#0 = "Boxed" str#1 = "app::boxed"
+static#3 desc app$app::boxed::Boxed<Int> = desc/1(static#2, builtin_desc int)
+static#4 dict app$Show$Int = dict/1+0(builtin_desc int, fn std::int::show)
+static#5 fnval app$Show$app::boxed::Boxed<Int>$0 = closure/1(code <shim app::boxed::show>, static#4)
+static#6 dict app$Show$app::boxed::Boxed<Int> = dict/1+0(static#3, static#5)

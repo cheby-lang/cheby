@@ -1,0 +1,8 @@
+// @mode: check-fail
+// @decisions: D-118
+//! `%` is defined on the numeric types only and cannot be overloaded
+//! (§5.4.2).
+
+pub fn rest(a: String, b: String) -> String {
+  a % b
+}

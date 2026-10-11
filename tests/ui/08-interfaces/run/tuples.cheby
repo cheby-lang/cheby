@@ -1,0 +1,53 @@
+// @mode: run-pass
+// @decisions: D-136, D-167, D-355
+//! Tuples satisfy `Show` and `Compare` by the built-in rule when their
+//! elements do (D-167): `show` writes `(a, b)` with each element's own
+//! `show` (D-355), and `compare` compares the elements left to right
+//! (D-136). Generic code gets the tuple's dictionary from its elements'
+//! dictionaries, also when an element's type is a type parameter.
+
+import std::io
+import std::list
+import std::ops::{Compare}
+
+type Grade {
+  Grade(Int),
+}
+
+fn show(g: Grade) -> String {
+  let Grade(n) = g
+  "grade {n}"
+}
+
+fn compare(a: Grade, b: Grade) -> Order {
+  let Grade(x) = a
+  let Grade(y) = b
+  Compare::compare(y, x)
+}
+
+fn framed<T: Show>(x: T) -> String {
+  "<{x}>"
+}
+
+fn sorted<T: Compare + Show>(xs: List<T>) -> String {
+  let ys = list::sort(xs)
+  "{ys}"
+}
+
+fn tagged<T: Compare + Show>(xs: List<T>) -> String {
+  let pairs = list::map(xs, fn(x) { (x, 0) })
+  sorted(pairs)
+}
+
+fn main() {
+  let pair = (1, "one")
+  io::println("{pair}")
+  io::println(framed((True, 2.5, Nil)))
+  io::println(framed(((1, 2), [("a", Grade(3))])))
+  io::println(sorted([(2, "b"), (1, "z"), (2, "a"), (1, "a")]))
+  io::println(sorted([(Grade(1), 1), (Grade(2), 2), (Grade(1), 0)]))
+  io::println(tagged(["y", "x"]))
+  let first = (1, (2, 3)) < (1, (2, 4))
+  let second = ("a", 9) >= ("b", 0)
+  io::println("{first} {second}")
+}

@@ -1,0 +1,8 @@
+//! Calls `app::m`'s interface for `t::T`.
+
+import app::m
+import app::t
+
+pub fn via_m() -> String {
+  m::call(t::T)
+}

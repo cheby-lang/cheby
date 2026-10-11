@@ -1,0 +1,8 @@
+// @mode: check-fail
+// @decisions: D-076
+//! A tuple has at least two elements.
+
+fn main() {
+  let single = (1,)
+  assert single == single
+}

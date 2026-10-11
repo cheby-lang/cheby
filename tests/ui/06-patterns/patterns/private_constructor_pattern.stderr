@@ -1,0 +1,23 @@
+error[E0043]: `Key` is private to module `app::secret`
+  --> tests/ui/06-patterns/patterns/private_constructor_pattern/src/main.cheby:12:13
+   |
+12 |     secret::Key(inner) => inner
+   |             ^^^
+   |
+  ::: tests/ui/06-patterns/patterns/private_constructor_pattern/src/secret.cheby:3:17
+   |
+3  | priv type Key { Key(String) }
+   |                 --- declared here
+
+error[E0074]: the package-visible function `make` mentions the `priv` type `Key`
+ --> tests/ui/06-patterns/patterns/private_constructor_pattern/src/secret.cheby:5:14
+  |
+3 | priv type Key { Key(String) }
+  |           --- declared here
+4 |
+5 | fn make() -> Key {
+  |              ^^^ `priv` type
+  |
+  = note: code that can use `make` could not name `Key` (D-149)
+  = help: make `Key` package-visible, or make `make` `priv`
+

@@ -1,0 +1,12 @@
+// @mode: check-fail
+// @decisions: D-242
+//! A parameter of a top-level function is a name, not a pattern.
+//! Destructure in the body instead.
+
+fn sum((a, b): (Int, Int)) -> Int {
+  a + b
+}
+
+fn main() {
+  assert sum((1, 2)) == 3
+}

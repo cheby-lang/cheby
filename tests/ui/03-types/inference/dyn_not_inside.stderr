@@ -1,0 +1,8 @@
+error[E0047]: mismatched types
+  --> tests/ui/03-types/inference/dyn_not_inside.cheby:23:33
+   |
+23 |   let shapes: List<dyn Shape> = circles
+   |               ---------------   ^^^^^^^ expected `List<dyn Shape>`, found `List<Circle>`
+   |               |
+   |               expected because of this annotation
+

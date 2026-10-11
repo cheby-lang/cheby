@@ -1,0 +1,26 @@
+// @mode: check-pass
+// @decisions: D-056, D-207
+//! The body of a function with an `@external` for native runs only on
+//! JS, so it may call a JS-only function (§12.6).
+
+import std::float
+import std::io
+import std::u32
+
+/// Returns a random number from 0 up to but not including `bound`.
+@external(native, "arc4random_uniform")
+priv fn below(bound: U32) -> U32 {
+  // Runs only on JS, so it may call the JS-only `js_random`.
+  let assert Ok(whole) = float::truncate(js_random() * float::from_u32(bound))
+  let assert Ok(number) = u32::from_int(whole)
+  number
+}
+
+@target(js)
+@external(js, "./random_ffi.mjs", "random")
+priv fn js_random() -> Float
+
+fn main() {
+  let _ = below(6)
+  io::println("rolled")
+}

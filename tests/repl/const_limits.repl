@@ -1,0 +1,17 @@
+> import std::list
+> const small: List<Int> = [1]
+> const big: List<List<Int>> = list::map(list::range(0, 100_000), fn(i) { [i] })
+error[E0076]: evaluating the constant `big` used more than the memory limit of 1MiB
+ --> <repl:3>:1:7
+  |
+1 | const big: List<List<Int>> = list::map(list::range(0, 100_000), fn(i) { [i] })
+  |       ^^^ this constant is computed at compile time
+  |
+  = note: the limit counts the heap bytes that the evaluation keeps live at once
+  = help: compute less at compile time, or raise `memory-limit` in the `[const-eval]` table of `cheby.toml`
+
+> const tiny: List<Int> = [2]
+> let held = list::map(list::range(0, 30_000), fn(i) { [i] })
+> const after: List<List<Int>> = list::map(list::range(0, 10_000), fn(i) { [i] })
+> list::length(held) + list::length(after) + list::length(small) + list::length(tiny)
+40002 : Int

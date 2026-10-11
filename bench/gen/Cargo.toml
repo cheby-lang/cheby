@@ -9,5 +9,8 @@ publish = false
 
 [dependencies]
 
+[dev-dependencies]
+cheby_driver.workspace = true
+
 [lints]
 workspace = true

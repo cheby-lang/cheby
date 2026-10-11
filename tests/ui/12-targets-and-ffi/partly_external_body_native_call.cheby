@@ -1,0 +1,19 @@
+// @mode: check-fail
+// @decisions: D-056, D-207
+//! The body of a function with an `@external` for native runs only on
+//! JS, so it cannot call a function that exists only on native.
+
+import std::io
+
+@external(native, "app_clock_now")
+fn native_now() -> Int
+
+@external(native, "app_clock_ticks")
+fn ticks() -> Int {
+  native_now()
+}
+
+fn main() {
+  let _ = ticks()
+  io::println("ticked")
+}

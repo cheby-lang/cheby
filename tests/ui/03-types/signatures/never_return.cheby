@@ -1,0 +1,15 @@
+// @mode: check-pass
+// @decisions: D-131, D-161
+//! `Never` is in the prelude and is a writable return type, for functions
+//! that never return (§3.10).
+
+pub fn unreachable(what: String) -> Never {
+  panic as what
+}
+
+pub fn first_word(text: String) -> String {
+  case text {
+    "" => unreachable("empty text")
+    _ => text
+  }
+}

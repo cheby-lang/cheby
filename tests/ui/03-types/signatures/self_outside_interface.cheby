@@ -1,0 +1,7 @@
+// @mode: check-fail
+// @decisions: D-063, D-462
+//! `Self` is a type only inside an interface declaration.
+
+pub fn same(value: Self) -> Self {
+  value
+}

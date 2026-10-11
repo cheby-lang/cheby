@@ -1,0 +1,19 @@
+// @mode: run-pass
+// @decisions: D-038, D-302
+//! A `String` has no integer indexing. It is read by code point or by
+//! grapheme, and its UTF-8 bytes are an explicit view (§3.5).
+
+import std::bytes
+import std::io
+import std::string
+
+fn main() {
+  let word = "cafe\u{301}"
+  io::println(word)
+  let points = string::length(word)
+  let graphemes = string::grapheme_length(word)
+  let size = bytes::length(bytes::from_string(word))
+  io::println("{points} {graphemes} {size}")
+  let pieces = string::to_graphemes(word)
+  io::println("{pieces:?}")
+}

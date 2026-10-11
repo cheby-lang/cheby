@@ -1,0 +1,27 @@
+error[E0076]: evaluating the constant `copies` used more than the memory limit of 1GiB
+  --> tests/ui/04-declarations/constants/eval/memory_limit_overflow_native/src/main.cheby:13:7
+   |
+13 | const copies: String = string::repeat("ab", int::max_value)
+   |       ^^^^^^ this constant is computed at compile time
+   |
+   = note: the limit counts the heap bytes that the evaluation keeps live at once
+   = help: compute less at compile time, or raise `memory-limit` in the `[const-eval]` table of `cheby.toml`
+
+error[E0076]: evaluating the constant `before` used more than the memory limit of 1GiB
+  --> tests/ui/04-declarations/constants/eval/memory_limit_overflow_native/src/main.cheby:15:7
+   |
+15 | const before: String = string::pad_start("x", int::max_value, "😀")
+   |       ^^^^^^ this constant is computed at compile time
+   |
+   = note: the limit counts the heap bytes that the evaluation keeps live at once
+   = help: compute less at compile time, or raise `memory-limit` in the `[const-eval]` table of `cheby.toml`
+
+error[E0076]: evaluating the constant `after` used more than the memory limit of 1GiB
+  --> tests/ui/04-declarations/constants/eval/memory_limit_overflow_native/src/main.cheby:17:7
+   |
+17 | const after: String = string::pad_end("x", int::max_value, "😀")
+   |       ^^^^^ this constant is computed at compile time
+   |
+   = note: the limit counts the heap bytes that the evaluation keeps live at once
+   = help: compute less at compile time, or raise `memory-limit` in the `[const-eval]` table of `cheby.toml`
+

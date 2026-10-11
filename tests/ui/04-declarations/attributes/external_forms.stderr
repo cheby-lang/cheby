@@ -1,0 +1,80 @@
+error[E0045]: malformed `@external` attribute
+ --> tests/ui/04-declarations/attributes/external_forms.cheby:6:1
+  |
+6 | @external(native)
+  | ^^^^^^^^^^^^^^^^^
+  |
+  = help: write `@external(native, "symbol")` or `@external(js, "./module.mjs", "name")`
+
+error[E0046]: the function `a` has no body
+ --> tests/ui/04-declarations/attributes/external_forms.cheby:7:8
+  |
+7 | pub fn a() -> Int
+  |        ^
+  |
+  = help: add a body, or an `@external` attribute that names its foreign implementation
+
+error[E0045]: malformed `@external` attribute
+ --> tests/ui/04-declarations/attributes/external_forms.cheby:9:1
+  |
+9 | @external(native, "")
+  | ^^^^^^^^^^^^^^^^^^^^^
+  |
+  = help: write `@external(native, "symbol")` or `@external(js, "./module.mjs", "name")`
+
+error[E0046]: the function `b` has no body
+  --> tests/ui/04-declarations/attributes/external_forms.cheby:10:8
+   |
+10 | pub fn b() -> Int
+   |        ^
+   |
+   = help: add a body, or an `@external` attribute that names its foreign implementation
+
+error[E0045]: malformed `@external` attribute
+  --> tests/ui/04-declarations/attributes/external_forms.cheby:12:1
+   |
+12 | @external(js, "./m.mjs")
+   | ^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: write `@external(native, "symbol")` or `@external(js, "./module.mjs", "name")`
+
+error[E0046]: the function `c` has no body
+  --> tests/ui/04-declarations/attributes/external_forms.cheby:13:8
+   |
+13 | pub fn c() -> Int
+   |        ^
+   |
+   = help: add a body, or an `@external` attribute that names its foreign implementation
+
+error[E0045]: malformed `@external` attribute
+  --> tests/ui/04-declarations/attributes/external_forms.cheby:15:1
+   |
+15 | @external(js, "./m.mjs", "")
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: write `@external(native, "symbol")` or `@external(js, "./module.mjs", "name")`
+
+error[E0046]: the function `d` has no body
+  --> tests/ui/04-declarations/attributes/external_forms.cheby:16:8
+   |
+16 | pub fn d() -> Int
+   |        ^
+   |
+   = help: add a body, or an `@external` attribute that names its foreign implementation
+
+error[E0045]: malformed `@external` attribute
+  --> tests/ui/04-declarations/attributes/external_forms.cheby:18:1
+   |
+18 | @external(wasm, "e")
+   | ^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: write `@external(native, "symbol")` or `@external(js, "./module.mjs", "name")`
+
+error[E0046]: the function `e` has no body
+  --> tests/ui/04-declarations/attributes/external_forms.cheby:19:8
+   |
+19 | pub fn e() -> Int
+   |        ^
+   |
+   = help: add a body, or an `@external` attribute that names its foreign implementation
+

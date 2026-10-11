@@ -1,0 +1,11 @@
+// @decisions: D-605
+> r"C:\"
+"C:\\" : String
+> 1 + 1
+2 : Int
+> r"{"
+"\{" : String
+> r#"a "quoted" word"#
+"a \"quoted\" word" : String
+> 2 + 2
+4 : Int

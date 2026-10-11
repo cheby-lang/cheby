@@ -1,0 +1,15 @@
+// @mode: check-fail
+// @decisions: D-113
+//! A literal pattern has the type of its literal, which must be the
+//! subject's type.
+
+fn describe(n: Int) -> String {
+  case n {
+    "one" => "one"
+    _ => "other"
+  }
+}
+
+fn main() {
+  assert describe(1) == "other"
+}

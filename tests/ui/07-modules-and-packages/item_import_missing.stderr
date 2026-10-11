@@ -1,0 +1,10 @@
+error[E0042]: there is no value `txt` in module `app::greeting`
+ --> tests/ui/07-modules-and-packages/item_import_missing/src/main.cheby:5:24
+  |
+5 | import app::greeting::{txt}
+  |        -------------   ^^^ not found
+  |        |
+  |        `app::greeting`
+  |
+  = help: did you mean `text`?
+

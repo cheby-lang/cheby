@@ -1,0 +1,35 @@
+// @mode: run-pass
+// @decisions: D-360, D-484, D-537
+//! Constant evaluation runs the effect-free kernels of `std::string`,
+//! `std::list` and the numeric modules, so interpolation and conversions
+//! work in constants (§4.5).
+
+import std::float
+import std::int
+import std::io
+import std::list
+import std::string
+import std::u8
+
+const count: Int = 12
+
+const label: String = "{count} items"
+
+const shouted: String = string::uppercase(label)
+
+const size: Int = string::length(shouted) + list::length([1, 2, 3])
+
+const parsed: Int = case int::parse("-17") {
+  Ok(n) => n
+  Err(_) => 0
+}
+
+const half: Float = float::from_int(count) / 8.0
+
+const small: U8 = u8::wrapping_add(250, 10)
+
+fn main() {
+  io::println(label)
+  io::println(shouted)
+  io::println("{size} {parsed} {half} {small}")
+}

@@ -10,6 +10,14 @@ publish = false
 [dependencies]
 cheby_diag.workspace = true
 cheby_types.workspace = true
+cheby_iface.workspace = true
+cheby_resolve.workspace = true
+rustc-hash.workspace = true
+siphasher.workspace = true
+
+[dev-dependencies]
+cheby_package.workspace = true
+cheby_syntax.workspace = true
 
 [lints]
 workspace = true

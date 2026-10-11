@@ -1,0 +1,8 @@
+// @mode: check-fail
+// @decisions: D-073, D-448, D-491
+//! An entry point has no type parameters, since `cheby run` could not
+//! choose its type arguments.
+
+fn main<E>() -> Result<Nil, E> {
+  Ok(Nil)
+}

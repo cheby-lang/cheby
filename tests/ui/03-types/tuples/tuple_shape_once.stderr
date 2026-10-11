@@ -1,0 +1,8 @@
+warning[W0001]: tuple type with a tuple element
+ --> tests/ui/03-types/tuples/tuple_shape_once.cheby:6:19
+  |
+6 | fn deepest(value: (((Int, Int), Int), Int)) -> Int {
+  |                   ^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = help: use a record type with named fields instead (D-243)
+

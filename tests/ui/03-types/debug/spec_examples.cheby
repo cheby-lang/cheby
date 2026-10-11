@@ -1,0 +1,27 @@
+// @mode: run-pass
+// @decisions: D-134, D-233, D-531, D-557
+//! The debug texts that §3.13 shows: `Point { x: 1.0, y: 2.0 }`,
+//! `Some(3)`, `[1, 2]`, `"text"`, `(1, <fn>)`, and strings that read back
+//! as literals, such as `\u{0}`, `\u{1b}` and `\u{7f}`.
+
+import std::io
+
+type Point {
+  x: Float,
+  y: Float,
+}
+
+fn main() {
+  let point = Point { x: 1.0, y: 2.0 }
+  let some = Some(3)
+  let numbers = [1, 2]
+  let text = "text"
+  let pair = (1, fn(x: Int) { x })
+  io::println("{point:?}")
+  io::println("{some:?}")
+  io::println("{numbers:?}")
+  io::println("{text:?}")
+  io::println("{pair:?}")
+  let controls = "\u{0}\u{1b}\u{7f}"
+  io::println("{controls:?}")
+}

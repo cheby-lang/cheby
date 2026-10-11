@@ -1,0 +1,8 @@
+error[E0042]: `int` is not imported
+ --> tests/ui/07-modules-and-packages/module_not_imported.cheby:9:15
+  |
+9 |   io::println(int::show(2))
+  |               ^^^
+  |
+  = help: add `import std::int` at the top of the file
+

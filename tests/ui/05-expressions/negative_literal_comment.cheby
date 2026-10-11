@@ -1,0 +1,16 @@
+// @mode: check-fail
+// @decisions: D-470
+//! Inside parentheses and brackets a line break is whitespace, so a line
+//! break or a comment can sit between `-` and the number. That is an error
+//! too, and its help offers no fix that would delete the comment.
+
+fn pick(n: Int) -> Int {
+  n
+}
+
+fn main() {
+  assert pick(- // the lowest
+    5) == -5
+  assert pick(-
+    5) == -5
+}

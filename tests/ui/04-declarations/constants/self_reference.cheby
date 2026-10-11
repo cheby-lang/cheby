@@ -1,0 +1,5 @@
+// @mode: check-fail
+// @decisions: D-090
+//! A constant cannot refer to itself (§4.5).
+
+pub const count: Int = count + 1

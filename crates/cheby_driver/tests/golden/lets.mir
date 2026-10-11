@@ -1,0 +1,246 @@
+module std::io
+
+fn std::io::hash(_0: value) -> value check str#0 {
+  str#0 = "std/io.cheby:56:4"
+  str#1 = ""
+bb0:
+  _1: value = field _0.0 of ctor std::io::Error
+  dup _1
+  _2: int = read_tag _1 of std::io::Kind
+  drop _1
+  switch _2 [0 => bb1, 1 => bb2, 2 => bb3, _ => bb4]
+bb1:
+  drop _0
+  _3: value = box int const int 1
+  _4: value = const str#1
+  _5: value = alloc tuple/2(_3, _4)
+  goto bb5(_5)
+bb2:
+  drop _0
+  _7: value = box int const int 2
+  _8: value = const str#1
+  _9: value = alloc tuple/2(_7, _8)
+  goto bb5(_9)
+bb3:
+  drop _0
+  _10: value = box int const int 3
+  _11: value = const str#1
+  _12: value = alloc tuple/2(_10, _11)
+  goto bb5(_12)
+bb4:
+  _13: value = box int const int 0
+  _14: value = field _0.1 of ctor std::io::Error
+  dup _14
+  drop _0
+  _15: value = alloc tuple/2(_13, _14)
+  goto bb5(_15)
+bb5(_6: value):
+  return _6
+}
+
+fn std::io::equal(_0: value, _1: value) -> value check str#0 {
+  str#0 = "std/io.cheby:67:4"
+  str#1 = "std/io.cheby:68:3"
+bb0:
+  _2: value = call std::io::hash(_0)
+  _3: value = call std::io::hash(_1)
+  _4: bool = call_runtime equal(borrow _2, borrow _3, borrow const str#1)
+  drop _2
+  drop _3
+  _5: value = box bool _4
+  return _5
+}
+
+fn std::io::debug(_0: value) -> value check str#0 {
+  str#0 = "std/io.cheby:72:4"
+bb0:
+  tail_call std::io::show(_0)
+}
+
+fn std::io::print(_0: value) -> value check str#0 {
+  str#0 = "std/io.cheby:81:8"
+  str#1 = "cheby_io_print"
+bb0:
+  call_runtime effect_check(borrow const str#1)
+  call_foreign "cheby_io_print"(borrow _0) -> void
+  drop _0
+  return const nil
+}
+
+fn std::io::println(_0: value) -> value check str#0 {
+  str#0 = "std/io.cheby:86:8"
+  str#1 = "cheby_io_println"
+bb0:
+  call_runtime effect_check(borrow const str#1)
+  call_foreign "cheby_io_println"(borrow _0) -> void
+  drop _0
+  return const nil
+}
+
+fn std::io::eprintln(_0: value) -> value check str#0 {
+  str#0 = "std/io.cheby:96:8"
+  str#1 = "cheby_io_eprintln"
+bb0:
+  call_runtime effect_check(borrow const str#1)
+  call_foreign "cheby_io_eprintln"(borrow _0) -> void
+  drop _0
+  return const nil
+}
+
+fn std::io::show(_0: value) -> value check str#0 {
+  str#0 = "std/io.cheby:201:8"
+  str#1 = "not found"
+  str#2 = "permission denied"
+  str#3 = "invalid UTF-8"
+bb0:
+  _1: value = field _0.0 of ctor std::io::Error
+  dup _1
+  _2: int = read_tag _1 of std::io::Kind
+  drop _1
+  switch _2 [0 => bb1, 1 => bb2, 2 => bb3, _ => bb4]
+bb1:
+  drop _0
+  _3: value = const str#1
+  goto bb5(_3)
+bb2:
+  drop _0
+  _5: value = const str#2
+  goto bb5(_5)
+bb3:
+  drop _0
+  _6: value = const str#3
+  goto bb5(_6)
+bb4:
+  _7: value = field _0.1 of ctor std::io::Error
+  dup _7
+  drop _0
+  goto bb5(_7)
+bb5(_4: value):
+  return _4
+}
+
+fn shim std::io::hash(_0: value, _1: value) -> value check str#0 {
+  str#0 = "std/io.cheby:56:4"
+bb0:
+  drop _0
+  tail_call std::io::hash(_1)
+}
+
+fn shim std::io::equal(_0: value, _1: value, _2: value) -> value check str#0 {
+  str#0 = "std/io.cheby:67:4"
+bb0:
+  drop _0
+  tail_call std::io::equal(_1, _2)
+}
+
+fn shim std::io::debug(_0: value, _1: value) -> value check str#0 {
+  str#0 = "std/io.cheby:72:4"
+bb0:
+  drop _0
+  tail_call std::io::debug(_1)
+}
+
+layout ctor std::io::Error: Error.Error tag 0 key f8879bc7f612847b record [kind: value @8, message: value @16] hooks(std::io::equal, std::io::hash, std::io::debug)
+layout ctor std::io::NotFound: Kind.NotFound tag 0 key 5565b57f5c6dbf52 []
+layout ctor std::io::PermissionDenied: Kind.PermissionDenied tag 1 key 5565b57f5c6dbf52 []
+layout ctor std::io::InvalidData: Kind.InvalidData tag 2 key 5565b57f5c6dbf52 []
+layout ctor std::io::Other: Kind.Other tag 3 key 5565b57f5c6dbf52 []
+callee std::io::hash(value) -> value
+callee std::io::equal(value, value) -> value
+callee std::io::debug(value) -> value
+callee std::io::show(value) -> value
+
+module app::greet
+
+fn app::greet::shout(_0: value) -> value check str#0 {
+  str#0 = "src/greet.cheby:5:8"
+  str#1 = "greet: "
+bb0:
+  _1: value = const str#1
+  _2: value = call std::io::print(_1)
+  drop _2
+  tail_call std::io::println(_0)
+}
+
+callee std::io::print(value) -> value
+callee std::io::println(value) -> value
+
+module app
+
+fn app::main() -> value check str#0 {
+  str#0 = "src/main.cheby:6:4"
+  str#1 = "hi"
+bb0:
+  _0: value = const str#1
+  dup _0
+  _1: value = call std::io::println(_0)
+  drop _1
+  dup _0
+  _2: value = call app::greet::shout(_0)
+  drop _2
+  tail_call app::shout(_0)
+}
+
+fn app::shout(_0: value) -> value check str#0 {
+  str#0 = "src/main.cheby:13:4"
+  str#1 = "never printed"
+  str#2 = "!"
+bb0:
+  dup _0
+  _1: value = call std::io::print(_0)
+  drop _1
+  _2: value = const str#1
+  drop _2
+  _3: value = _0
+  _4: value = const str#2
+  _5: value = call std::io::println(_4)
+  drop _5
+  tail_call std::io::eprintln(_3)
+}
+
+callee app::greet::shout(value) -> value
+callee app::shout(value) -> value
+callee std::io::print(value) -> value
+callee std::io::println(value) -> value
+callee std::io::eprintln(value) -> value
+
+entries
+
+fn entry main(app::main) [c] () -> i64 {
+bb0:
+  _0: value = call app::main()
+  drop _0
+  return const i64 0
+}
+
+fn trampoline 0 [c] (_0: value) -> value {
+bb0:
+  _1: value = call _0()
+  return _1
+}
+
+fn trampoline 1 [c] (_0: value, _1: value) -> value {
+bb0:
+  _2: value = call _0(_1)
+  return _2
+}
+
+fn trampoline 2 [c] (_0: value, _1: value, _2: value) -> value {
+bb0:
+  _3: value = call _0(_1, _2)
+  return _3
+}
+
+fn trampoline 3 [c] (_0: value, _1: value, _2: value, _3: value) -> value {
+bb0:
+  _4: value = call _0(_1, _2, _3)
+  return _4
+}
+
+fn trampoline 4 [c] (_0: value, _1: value, _2: value, _3: value, _4: value) -> value {
+bb0:
+  _5: value = call _0(_1, _2, _3, _4)
+  return _5
+}
+
+callee app::main() -> value

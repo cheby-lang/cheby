@@ -59,7 +59,7 @@ Scopes nest. A fiber may open its own scopes, and a scope's fibers are cancelled
 
 `fiber::join(f)` waits for the fiber `f` and returns its value directly, not wrapped in a `Result` (D-177). If the joined fiber panics or is cancelled, its scope is failing, so the joining fiber is itself cancelled as part of that failure and `join` never returns (D-177).
 
-The error value of a failed scope, `fiber::Panic`, carries the message and source location of the **first** panic in the scope. Panics caused by the resulting cancellation are not reported (D-178).
+The error value of a failed scope, `fiber::Panic`, carries the message and source location of the **first** panic in the scope. Panics caused by the resulting cancellation are not reported (D-178). The message is exactly the message line of the panic report ([§11.6](11-errors-and-panics.md#116-panic-and-todo)), without the location or any prefix, and the location is held separately (D-473).
 
 A scope value must not escape the scope's callback: storing it or returning it and spawning into it after the scope has ended panics.
 
@@ -211,10 +211,12 @@ A program runs a `main` function ([§4.2.1](04-declarations.md#421-main)) in a f
 3. Any detached fibers still running at that point are killed without unwinding (D-073).
 4. The exit status is:
    - `0` if `main` returns `Nil` or `Ok(Nil)`,
-   - `1` if `main` returns `Err(e)`, after printing `e` to standard error (D-073, D-182). `e` is printed with `Show` if its type satisfies `Show` ([§8.8](08-interfaces.md#88-standard-interfaces)), and with debug printing otherwise ([§3.13](03-types.md#313-equality-hashing-and-debug-printing)) (D-182),
-   - `101` if the root fiber panics, after printing the panic ([chapter 11](11-errors-and-panics.md)) (D-182).
+   - `1` if `main` returns `Err(e)`, after printing `e` to standard error (D-073, D-182). `e` is printed with `Show` if its type satisfies `Show` ([§8.8](08-interfaces.md#88-standard-interfaces)), and with debug printing otherwise ([§3.13](03-types.md#313-equality-hashing-and-debug-printing)) (D-182). The text is followed by a newline and has no prefix, because the program chose it (D-529),
+   - `101` if the root fiber panics, after printing the panic ([§11.6](11-errors-and-panics.md#116-panic-and-todo)) (D-182, D-449).
 
-`main` takes no parameters. A program reads its command-line arguments and environment variables through the standard-library module `std::env`, which any module may use (D-183). `env::args()` does not include the program name, which `env::program_name()` returns (D-347).
+_Note:_ a toolchain built with debug assertions also checks, when `main` returns with status `0` or `1`, that no objects are still live. If some are, it prints `error: leak check failed: N objects are still live at exit` to standard error and exits with status `102`. There is no check after a panic (D-458).
+
+`main` takes no parameters and no type parameters ([§4.2.1](04-declarations.md#421-main)) (D-491). A program reads its command-line arguments and environment variables through the standard-library module `std::env`, which any module may use (D-183). `env::args()` does not include the program name, which `env::program_name()` returns (D-347).
 
 Standard output and standard error behave the same way on every target:
 
@@ -222,3 +224,5 @@ Standard output and standard error behave the same way on every target:
 - Standard error is not buffered (D-346).
 - All buffered output is flushed when the program ends, whatever its exit status (D-346).
 - When a write or flush that does not return a `Result`, such as `io::println`, cannot complete, for example because the reader of a pipe has gone, the program ends at once with exit status `1` and prints nothing (D-306).
+- After `io::write_stdout` returns `Err`, the text it could not write may stay unwritten, and a later flush of standard output that fails does not end the program, whether it is the flush at exit, before a panic report or before reading standard input. The `Err` has already reported that text, so a program that handles it keeps its exit status. This lasts until `io::print` or `io::println` adds text to standard output or a later `io::write_stdout` succeeds, after which the previous rule applies again (D-574).
+- A standard stream that is closed or missing when the program starts behaves as a null device: writes and flushes succeed and discard the text, and reads see the end of input. The previous rule applies only to streams that are open at start (D-474).

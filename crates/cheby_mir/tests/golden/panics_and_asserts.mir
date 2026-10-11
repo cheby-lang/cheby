@@ -1,0 +1,193 @@
+module app
+
+fn app::plain() -> value check str#0 {
+  str#0 = "src/main.cheby:5:4"
+  str#1 = "src/main.cheby:6:3"
+bb0:
+  panic explicit at str#1
+}
+
+fn app::with_message(_0: value) -> value check str#0 {
+  str#0 = "src/main.cheby:9:4"
+  str#1 = "src/main.cheby:10:3"
+bb0:
+  panic explicit _0 at str#1
+}
+
+fn app::unfinished() -> value check str#0 {
+  str#0 = "src/main.cheby:13:4"
+  str#1 = "src/main.cheby:14:3"
+bb0:
+  panic todo at str#1
+}
+
+fn app::unfinished_as() -> value check str#0 {
+  str#0 = "src/main.cheby:17:4"
+  str#1 = "area of a dot"
+  str#2 = "src/main.cheby:18:3"
+bb0:
+  _0: value = const str#1
+  panic todo _0 at str#2
+}
+
+fn app::check(_0: bool) -> value check str#0 {
+  str#0 = "src/main.cheby:21:4"
+  str#1 = "assertion failed: b"
+  str#2 = "src/main.cheby:22:10"
+bb0:
+  branch _0, bb1, bb2
+bb1:
+  return const nil
+bb2:
+  _1: value = call_runtime str_with_capacity(borrow const int 64)
+  _2: value = call_runtime str_append(_1, borrow const str#1)
+  panic assert _2 at str#2
+}
+
+fn app::check_ints(_0: value) -> value check str#0 {
+  str#0 = "src/main.cheby:25:4"
+  str#1 = "assertion failed: list::length(items) == 3"
+  str#2 = "\n  left: "
+  str#3 = "\n right: "
+  str#4 = "src/main.cheby:26:10"
+bb0:
+  _1: value = call std::list::length(_0)
+  _2: int = unbox int _1
+  drop _1
+  _3: bool = compare eq int _2, const int 3
+  branch _3, bb1, bb2
+bb1:
+  return const nil
+bb2:
+  _4: value = call_runtime str_with_capacity(borrow const int 64)
+  _5: value = call_runtime str_append(_4, borrow const str#1)
+  _6: value = call_runtime str_append(_5, borrow const str#2)
+  _7: value = box int _2
+  _8: value = call_runtime debug(borrow _7)
+  drop _7
+  _9: value = call_runtime str_append(_6, borrow _8)
+  drop _8
+  _10: value = call_runtime str_append(_9, borrow const str#3)
+  _11: value = box int const int 3
+  _12: value = call_runtime debug(borrow _11)
+  drop _11
+  _13: value = call_runtime str_append(_10, borrow _12)
+  drop _12
+  panic assert _13 at str#4
+}
+
+fn app::check_strings(_0: value, _1: value) -> value check str#0 {
+  str#0 = "src/main.cheby:29:4"
+  str#1 = "assertion failed: "
+  str#2 = "different "
+  str#3 = "\n  left: "
+  str#4 = "\n right: "
+  str#5 = "src/main.cheby:30:10"
+bb0:
+  _2: bool = call_runtime str_eq(borrow _0, borrow _1)
+  _3: bool = not _2
+  branch _3, bb1, bb2
+bb1:
+  drop _0
+  drop _1
+  return const nil
+bb2:
+  _4: value = call_runtime str_with_capacity(borrow const int 64)
+  _5: value = call_runtime str_append(_4, borrow const str#1)
+  _6: value = const str#2
+  dup _0
+  _7: value = call std::string::add(_6, _0)
+  _8: value = call_runtime str_append(_5, borrow _7)
+  drop _7
+  _9: value = call_runtime str_append(_8, borrow const str#3)
+  _10: value = call_runtime debug(borrow _0)
+  drop _0
+  _11: value = call_runtime str_append(_9, borrow _10)
+  drop _10
+  _12: value = call_runtime str_append(_11, borrow const str#4)
+  _13: value = call_runtime debug(borrow _1)
+  drop _1
+  _14: value = call_runtime str_append(_12, borrow _13)
+  drop _13
+  panic assert _14 at str#5
+}
+
+fn app::check_order(_0: value, _1: value) -> value check str#0 {
+  str#0 = "src/main.cheby:33:4"
+  str#1 = "assertion failed: a < b"
+  str#2 = "\n  left: "
+  str#3 = "\n right: "
+  str#4 = "src/main.cheby:34:10"
+bb0:
+  dup _0
+  dup _1
+  _2: value = call std::string::compare(_0, _1)
+  _3: int = read_tag _2 of order
+  drop _2
+  _4: bool = compare eq int _3, const int 0
+  branch _4, bb1, bb2
+bb1:
+  drop _0
+  drop _1
+  return const nil
+bb2:
+  _5: value = call_runtime str_with_capacity(borrow const int 64)
+  _6: value = call_runtime str_append(_5, borrow const str#1)
+  _7: value = call_runtime str_append(_6, borrow const str#2)
+  _8: value = call_runtime debug(borrow _0)
+  drop _0
+  _9: value = call_runtime str_append(_7, borrow _8)
+  drop _8
+  _10: value = call_runtime str_append(_9, borrow const str#3)
+  _11: value = call_runtime debug(borrow _1)
+  drop _1
+  _12: value = call_runtime str_append(_10, borrow _11)
+  drop _11
+  panic assert _12 at str#4
+}
+
+fn app::main() -> value check str#0 {
+  str#0 = "src/main.cheby:37:4"
+  str#1 = "x"
+  str#2 = "a"
+  str#3 = "b"
+bb0:
+  _0: value = call app::plain()
+  _1: int = unbox int _0
+  drop _0
+  _2: value = const str#1
+  _3: value = call app::with_message(_2)
+  _4: int = unbox int _3
+  drop _3
+  _5: value = call app::unfinished()
+  _6: int = unbox int _5
+  drop _5
+  _7: value = call app::unfinished_as()
+  _8: int = unbox int _7
+  drop _7
+  _9: value = call app::check(const bool true)
+  drop _9
+  _10: value = call std::list::new()
+  _11: value = call app::check_ints(_10)
+  drop _11
+  _12: value = const str#2
+  _13: value = const str#3
+  _14: value = call app::check_strings(_12, _13)
+  drop _14
+  _15: value = const str#2
+  _16: value = const str#3
+  tail_call app::check_order(_15, _16)
+}
+
+callee app::plain() -> value
+callee app::with_message(value) -> value
+callee app::unfinished() -> value
+callee app::unfinished_as() -> value
+callee app::check(bool) -> value
+callee app::check_ints(value) -> value
+callee app::check_strings(value, value) -> value
+callee app::check_order(value, value) -> value
+callee std::list::new() -> value
+callee std::list::length(value) -> value
+callee std::string::compare(value, value) -> value
+callee std::string::add(value, value) -> value

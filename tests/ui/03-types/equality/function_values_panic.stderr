@@ -1,0 +1,2 @@
+panicked at tests/ui/03-types/equality/function_values_panic.cheby:10:3:
+equality or hashing reached a function value or a handle

@@ -1,0 +1,20 @@
+// @mode: check-fail
+// @decisions: D-168
+//! There is no conversion from `dyn I` back to the underlying type
+//! (§8.6).
+
+interface Shape {
+  fn area(Self) -> Float
+}
+
+type Circle { radius: Float }
+
+fn area(c: Circle) -> Float {
+  c.radius * c.radius * 3.0
+}
+
+fn main() {
+  let s: dyn Shape = Circle { radius: 1.0 }
+  let c: Circle = s
+  assert c.radius == 1.0
+}

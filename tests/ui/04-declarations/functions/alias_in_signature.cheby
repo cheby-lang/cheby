@@ -1,0 +1,20 @@
+// @mode: check-fail
+// @decisions: D-081, D-148, D-488
+//! An alias is transparent, so what matters in a signature is the type it
+//! stands for: a package-visible alias of `Int` is fine in a `pub`
+//! function, one of a package-visible type is not.
+
+type Count = Int
+
+type Token { Token(String) }
+
+type Tokens = List<Token>
+
+pub fn total(count: Count) -> Count {
+  count
+}
+
+pub fn first(tokens: Tokens) -> Int {
+  let _ = tokens
+  0
+}

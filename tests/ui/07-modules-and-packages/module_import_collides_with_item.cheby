@@ -1,0 +1,14 @@
+// @mode: check-fail
+// @decisions: D-062
+//! An imported module's name is a name in scope for the whole module, so a
+//! top-level item cannot have the same name (§7.5.1, §7.7).
+
+import std::io
+
+fn io() -> Int {
+  1
+}
+
+fn main() {
+  assert io() == 1
+}

@@ -1,0 +1,12 @@
+// @mode: check-fail
+// @decisions: D-011, D-235
+//! A function's body has its declared return type, which is the body's
+//! expected type (§4.2).
+
+fn count() -> Int {
+  "three"
+}
+
+fn main() {
+  assert count() == 3
+}

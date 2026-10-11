@@ -1,0 +1,14 @@
+error[E0040]: modules import each other in a cycle
+ --> tests/ui/07-modules-and-packages/import_cycle/src/first.cheby:3:1
+  |
+3 | import app::second
+  | ^^^^^^^^^^^^^^^^^^ `app::first` imports `app::second`
+  |
+ ::: tests/ui/07-modules-and-packages/import_cycle/src/second.cheby:3:1
+  |
+3 | import app::first
+  | ----------------- `app::second` imports `app::first`
+  |
+  = note: the cycle is app::first → app::second → app::first
+  = help: move what the modules share into a module that neither imports
+

@@ -1,0 +1,12 @@
+//! A label whose module has no `show`.
+
+pub type Label { Label(String) }
+
+pub fn make() -> Label {
+  Label("a")
+}
+
+pub fn text(label: Label) -> String {
+  let Label(inner) = label
+  inner
+}

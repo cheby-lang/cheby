@@ -1,0 +1,19 @@
+// @mode: check-pass
+// @decisions: D-234
+//! Closure arguments are checked after the other arguments, so the
+//! closure's parameter type is known wherever it is written (§3.12.4).
+
+pub type Point {
+  x: Int,
+  y: Int,
+}
+
+pub fn apply<A, B>(f: fn(A) -> B, value: A) -> B {
+  f(value)
+}
+
+pub fn main() {
+  let origin = Point { x: 0, y: 0 }
+  let x = apply(fn(p) { p.x }, origin)
+  assert x == 0
+}

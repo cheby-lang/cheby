@@ -1,0 +1,36 @@
+// @mode: check-fail
+// @decisions: D-056
+//! Every type, alias and interface a signature names must exist wherever
+//! the item does.
+
+@target(native)
+pub type Path {
+  Path(String),
+}
+
+@target(native)
+pub type Paths = List<Path>
+
+@target(native)
+pub interface Named {
+  fn name(Self) -> String
+}
+
+pub fn first(paths: Paths) -> Option<Path> {
+  case paths {
+    [path, ..] => Some(path)
+    [] => None
+  }
+}
+
+pub fn label<T: Named>(x: T) -> String {
+  Named::name(x)
+}
+
+@target(native)
+pub fn native_first(paths: Paths) -> Option<Path> {
+  case paths {
+    [path, ..] => Some(path)
+    [] => None
+  }
+}

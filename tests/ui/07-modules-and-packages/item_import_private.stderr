@@ -1,0 +1,11 @@
+error[E0043]: `text` is private to module `app::greeting`
+ --> tests/ui/07-modules-and-packages/item_import_private/src/main.cheby:6:24
+  |
+6 | import app::greeting::{text}
+  |                        ^^^^
+  |
+ ::: tests/ui/07-modules-and-packages/item_import_private/src/greeting.cheby:3:9
+  |
+3 | priv fn text() -> String {
+  |         ---- declared here
+

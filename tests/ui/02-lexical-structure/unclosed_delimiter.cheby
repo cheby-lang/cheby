@@ -1,0 +1,12 @@
+// @mode: parse-fail
+//! A `(` that is never closed is reported at the place the `)` is
+//! missing, and points back at the `(`.
+
+fn add(a: Int, b: Int) -> Int {
+  a + b
+}
+
+fn main() {
+  let x = add(1, 2
+  assert x == 3
+}

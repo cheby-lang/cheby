@@ -1,0 +1,19 @@
+<42>
+<-1.5>
+<text>
+<True>
+<Nil>
+<200>
+<[1, 2, 3]>
+<[a, b]>
+<[[1], [], [2, 3]]>
+<Some(x)>
+<None>
+<Ok(1)>
+<Err(bad)>
+less
+equal
+greater
+less
+less
+greater

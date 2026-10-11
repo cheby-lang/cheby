@@ -1,0 +1,14 @@
+// @mode: check-fail
+// @decisions: D-050
+//! A call passes exactly as many arguments as the function has parameters;
+//! there is no partial application (§5.5).
+
+pub fn add(a: Int, b: Int) -> Int {
+  a + b
+}
+
+pub fn main() {
+  let one = add(1)
+  let three = add(1, 2, 3)
+  assert one == three
+}

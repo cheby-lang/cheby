@@ -1,0 +1,42 @@
+// @mode: run-pass
+// @decisions: D-453, D-500, D-524
+//! A bounded generic function used as a value carries its dictionaries
+//! (D-453); an interface function used as a value resolves each call
+//! through the dictionary of its argument's type (D-500); closures and
+//! local functions inside a generic function use its dictionaries.
+
+import std::io
+import std::list
+import std::string
+
+fn framed<T: Show>(x: T) -> String {
+  "<{x}>"
+}
+
+fn framer<T: Show>(_witness: T) -> fn(T) -> String {
+  framed
+}
+
+fn apply_all<T>(xs: List<T>, f: fn(T) -> String) -> String {
+  string::join(list::map(xs, f), " ")
+}
+
+fn countdown<T: Show>(x: T, from: Int) -> String {
+  fn step(n, acc) {
+    case n {
+      0 => acc
+      _ => step(n - 1, acc + Show::show(x) + "{n};")
+    }
+  }
+  step(from, "")
+}
+
+fn main() {
+  io::println(apply_all([1, 2], framed))
+  io::println(apply_all([[1], [2, 3]], framed))
+  io::println(apply_all(["a", "b"], framer("witness")))
+  io::println(apply_all([1.5, 2.5], Show::show))
+  io::println(apply_all([Some(1), None], Show::show))
+  io::println(countdown("x", 3))
+  io::println(countdown([True], 2))
+}

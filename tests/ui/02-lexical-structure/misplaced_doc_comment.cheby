@@ -1,0 +1,14 @@
+// @mode: check-fail
+// @decisions: D-211, D-227
+//! A `///` comment documents the declaration right after it. One that
+//! documents nothing is an error.
+
+/// Adds one.
+fn inc(n: Int) -> Int {
+  /// Not before a declaration.
+  n + 1
+}
+
+fn main() {
+  assert inc(1) == 2
+}

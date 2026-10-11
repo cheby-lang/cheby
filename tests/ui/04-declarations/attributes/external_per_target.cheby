@@ -1,0 +1,7 @@
+// @mode: check-fail
+// @decisions: D-030, D-461
+//! An item has at most one `@external` per target.
+
+@external(native, "app_first")
+@external(native, "app_second")
+pub fn now() -> Int

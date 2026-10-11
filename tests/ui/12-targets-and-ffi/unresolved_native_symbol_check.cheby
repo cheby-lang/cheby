@@ -1,0 +1,17 @@
+// @mode: check-pass
+// @decisions: D-455, D-532
+//! `cheby check` runs no code except constants, so a native symbol that
+//! nothing defines is not an error there (§12.5.1). Only a build that
+//! runs code reports it (E0053).
+
+@!target(native)
+
+import std::io
+
+@external(native, "app_missing_symbol")
+fn missing() -> Int
+
+fn main() {
+  io::println("checked")
+  let _ = missing()
+}

@@ -8,8 +8,12 @@ repository.workspace = true
 publish = false
 
 [dependencies]
-cheby_mir.workspace = true
+cheby_diag.workspace = true
+cheby_iface.workspace = true
 cheby_jit.workspace = true
+cheby_mir.workspace = true
+cheby_package.workspace = true
+cheby_runtime.workspace = true
 
 [lints]
 workspace = true

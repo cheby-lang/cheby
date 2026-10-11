@@ -1,0 +1,57 @@
+// @mode: run-pass
+// @decisions: D-046, D-063, D-173, D-453
+//! A bounded generic function receives one dictionary per bound and
+//! calls interface functions through it (§8.4, §8.5). A call passes its
+//! own dictionaries on, two bounds of one parameter are distinct calls,
+//! and each type parameter has its own dictionaries.
+
+import std::io
+
+pub interface Formal {
+  fn greeting(Self) -> String
+}
+
+type Person {
+  Person(String)
+}
+
+fn greeting(p: Person) -> String {
+  let Person(name) = p
+  "Good day, {name}."
+}
+
+fn show(p: Person) -> String {
+  let Person(name) = p
+  name
+}
+
+fn formal_greeting<T: Formal>(x: T) -> String {
+  Formal::greeting(x)
+}
+
+fn both<T: Formal + Show>(x: T) -> String {
+  let label = Show::show(x)
+  let text = formal_greeting(x)
+  "{label}: {text}"
+}
+
+fn pair<A: Show, B: Show>(a: A, b: B) -> String {
+  "{a} and {b}"
+}
+
+fn repeat<T: Show>(x: T, times: Int) -> String {
+  case times {
+    0 => ""
+    _ => Show::show(x) + repeat(x, times - 1)
+  }
+}
+
+fn main() {
+  let ada = Person("Ada")
+  io::println(formal_greeting(ada))
+  io::println(both(ada))
+  io::println(pair(1, "one"))
+  io::println(pair(ada, True))
+  io::println(repeat(7, 3))
+  io::println(repeat(ada, 2))
+}

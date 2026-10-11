@@ -1,0 +1,66 @@
+// @decisions: D-626
+> type Shape {
+.   Circle(Float),
+. }
+> let c = Circle(1.0)
+> type Holder<T> {
+.   Holder(T),
+. }
+> let h = Holder(c)
+> let shapes = [c]
+> fn area(s: Shape) -> Float {
+.   case s {
+.     Circle(r) => 3.0 * r * r
+.   }
+. }
+> type Shape {
+.   Square(Float),
+. }
+> c
+Circle(1.0) : Shape (stale)
+> h
+Holder(Circle(1.0)) : Holder<Shape (stale)>
+> shapes
+[Circle(1.0)] : List<Shape (stale)>
+> Square(2.0)
+Square(2.0) : Shape
+> [c, Square(1.0)]
+error[E0047]: mismatched types
+ --> <repl:12>:1:5
+  |
+1 | [c, Square(1.0)]
+  |  -  ^^^^^^^^^^^ expected `Shape (stale)`, found `Shape`
+  |  |
+  |  this element has type `Shape (stale)`
+  |
+  = help: to mix values of different types that share an interface `I`, annotate the list as `List<dyn I>`
+
+> area(c)
+3.0 : Float
+> area(Square(1.0))
+error[E0047]: mismatched types
+ --> <repl:14>:1:6
+  |
+1 | area(Square(1.0))
+  | ---- ^^^^^^^^^^^ expected `Shape (stale)`, found `Shape`
+  | |
+  | arguments to this function are incorrect
+
+> fn side(s: Shape) -> Float {
+.   case s {
+.     Square(x) => x
+.   }
+. }
+> side(Square(4.0))
+4.0 : Float
+> side(c)
+error[E0047]: mismatched types
+ --> <repl:17>:1:6
+  |
+1 | side(c)
+  | ---- ^ expected `Shape`, found `Shape (stale)`
+  | |
+  | arguments to this function are incorrect
+
+> c == c
+True : Bool

@@ -1,0 +1,14 @@
+// @mode: check-fail
+// @decisions: D-111
+//! Functions and constants share the value namespace, so they cannot have
+//! the same name (§4.1.2).
+
+const limit: Int = 10
+
+pub fn limit() -> Int {
+  20
+}
+
+fn main() {
+  assert limit == 10
+}

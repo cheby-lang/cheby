@@ -1,0 +1,21 @@
+// @mode: run-pass
+// @command: test
+// @decisions: D-457, D-596
+//! A test runs on a stack as large as that of `main`, so deep non-tail
+//! recursion that works under `cheby run` also works in a test. This
+//! depth needs more than the 8 MiB of other entries.
+
+fn depth(n: Int) -> Int {
+  case n {
+    0 => 0
+    _ => 1 + depth(n - 1)
+  }
+}
+
+test "deep recursion fits on the test's stack" {
+  assert depth(400_000) == 400_000
+}
+
+fn main() {
+  assert depth(400_000) == 400_000
+}

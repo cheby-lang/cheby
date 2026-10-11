@@ -1,0 +1,21 @@
+// @mode: run-fail
+// @exit: 1
+// @decisions: D-455, D-532
+//! A build that runs code reports every native symbol it cannot resolve,
+//! one E0053 each, in the order of the `@external`s that name them
+//! (§12.5.1).
+
+@!target(native)
+
+import std::io
+
+@external(native, "app_missing_second")
+fn second() -> Int
+
+@external(native, "app_missing_first")
+fn first() -> Int
+
+fn main() {
+  io::println("never printed")
+  let _ = first() + second()
+}

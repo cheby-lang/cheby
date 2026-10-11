@@ -140,32 +140,40 @@ priv const all_codes: Map<String, Code> = map::from_list([
   ("WELCOME5", Code { code: "WELCOME5", discount: CentsOff(500), minimum_cents: 2_000 }),
 ])
 
-/// Returns the subtotal, discount, shipping and total of an order of
-/// `(product_id, quantity)` pairs, for the tests.
-priv fn sums(pairs: List<(Int, Int)>, discount: Option<String>) -> Result<(Int, Int, Int, Int), CheckoutError> {
+/// The sums of a quote, in cents, for the tests.
+priv type Sums { subtotal: Int, discount: Int, shipping: Int, total: Int }
+
+/// Returns the sums of an order of `(product_id, quantity)` pairs, for
+/// the tests.
+priv fn sums(pairs: List<(Int, Int)>, discount: Option<String>) -> Result<Sums, CheckoutError> {
   let items = list::map(pairs, fn((product_id, quantity)) { order::Line { product_id, quantity } })
   use priced <- result::try(quote(items, discount, catalogue, all_codes))
-  Ok((priced.subtotal_cents, priced.discount_cents, priced.shipping_cents, priced.total_cents))
+  Ok(Sums {
+    subtotal: priced.subtotal_cents,
+    discount: priced.discount_cents,
+    shipping: priced.shipping_cents,
+    total: priced.total_cents,
+  })
 }
 
 test "a small order pays for shipping" {
   // 2 * 450 + 1195 = 2095, plus 495 shipping.
-  assert sums([(1, 2), (3, 1)], None) == Ok((2_095, 0, 495, 2_590))
-  assert sums([(3, 5)], None) == Ok((5_975, 0, 0, 5_975))
+  assert sums([(1, 2), (3, 1)], None) == Ok(Sums { subtotal: 2_095, discount: 0, shipping: 495, total: 2_590 })
+  assert sums([(3, 5)], None) == Ok(Sums { subtotal: 5_975, discount: 0, shipping: 0, total: 5_975 })
 }
 
 test "a percentage is rounded down to a cent" {
-  assert sums([(1, 3), (2, 1)], Some("SPRING10")) == Ok((4_550, 455, 495, 4_590))
+  assert sums([(1, 3), (2, 1)], Some("SPRING10")) == Ok(Sums { subtotal: 4_550, discount: 455, shipping: 495, total: 4_590 })
   // 10% of 3585 is 358.5 cents, and the half cent stays with the shop.
-  assert sums([(3, 3)], Some("SPRING10")) == Ok((3_585, 358, 495, 3_722))
+  assert sums([(3, 3)], Some("SPRING10")) == Ok(Sums { subtotal: 3_585, discount: 358, shipping: 495, total: 3_722 })
 }
 
 test "free shipping counts the total after the discount" {
-  assert sums([(2, 2)], Some("SPRING10")) == Ok((6_400, 640, 0, 5_760))
+  assert sums([(2, 2)], Some("SPRING10")) == Ok(Sums { subtotal: 6_400, discount: 640, shipping: 0, total: 5_760 })
 }
 
 test "a fixed discount needs its minimum subtotal" {
-  assert sums([(1, 2), (3, 1)], Some("WELCOME5")) == Ok((2_095, 500, 495, 2_090))
+  assert sums([(1, 2), (3, 1)], Some("WELCOME5")) == Ok(Sums { subtotal: 2_095, discount: 500, shipping: 495, total: 2_090 })
   assert sums([(1, 3)], Some("WELCOME5")) == Err(BelowMinimum { code: "WELCOME5", minimum_cents: 2_000 })
 }
 

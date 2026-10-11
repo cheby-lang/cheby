@@ -1,0 +1,20 @@
+// @mode: run-pass
+// @decisions: D-195, D-536
+//! The memory limit applies to each constant's own evaluation. Each of
+//! these three constants keeps about 0.6 MiB live, under the limit of
+//! 1 MiB, so all of them evaluate even though the build holds more than
+//! the limit once the first two are done (§13.9).
+
+import std::io
+import std::list
+
+const a: List<List<Int>> = list::map(list::range(0, 12_000), fn(i) { [i] })
+
+const b: List<List<Int>> = list::map(list::range(0, 12_000), fn(i) { [i] })
+
+const c: List<Int> = [1]
+
+fn main() {
+  let n = list::length(a) + list::length(b) + list::length(c)
+  io::println("{n}")
+}

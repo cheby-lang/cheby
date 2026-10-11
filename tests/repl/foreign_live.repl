@@ -1,0 +1,52 @@
+// @decisions: D-475
+> @external(native, "abs")
+. fn magnitude(n: I32) -> I32
+> magnitude(-5)
+5 : I32
+> @external(native, "abs")
+. fn magnitude_wide(n: Int) -> Int
+error[E0054]: the native symbol `abs` is bound with two different C signatures
+ --> <repl:3>:1:19
+  |
+1 | @external(native, "abs")
+  |                   ^^^^^ bound here with another signature
+  |
+ ::: <repl:1>:1:19
+  |
+1 | @external(native, "abs")
+  |                   ----- first bound here
+  |
+  = note: every `@external` of one symbol must give it the same C signature; in the REPL, only the session's current definitions count
+
+> magnitude_wide(-5)
+error[E0042]: cannot find value `magnitude_wide` in this scope
+ --> <repl:4>:1:1
+  |
+1 | magnitude_wide(-5)
+  | ^^^^^^^^^^^^^^ not found
+
+> @external(native, "abs")
+. fn magnitude(n: Int) -> Int
+> @external(native, "abs")
+. fn magnitude(n: I32) -> I32
+> magnitude(-7)
+7 : I32
+> @external(native, "cheby_io_println")
+. fn say(n: Int)
+error[E0054]: the native symbol `cheby_io_println` is bound with two different C signatures
+  --> <repl:8>:1:19
+   |
+1  | @external(native, "cheby_io_println")
+   |                   ^^^^^^^^^^^^^^^^^^ bound here with another signature
+   |
+  ::: std/io.cheby:84:19
+   |
+84 | @external(native, "cheby_io_println")
+   |                   ------------------ first bound here
+   |
+   = note: every `@external` of one symbol must give it the same C signature; in the REPL, only the session's current definitions count
+
+> @external(native, "cheby_io_println")
+. fn say(text: String)
+> say("the std binding agrees")
+the std binding agrees

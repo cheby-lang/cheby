@@ -1,0 +1,44 @@
+// @decisions: D-611
+> import std::list
+> let p = (1, "a")
+> "{p}"
+"(1, a)" : String
+> "{p}"
+"(1, a)" : String
+> list::sort([(2, 1), (1, 2)])
+[(1, 2), (2, 1)] : List<(Int, Int)>
+> list::sort([(2, 1), (1, 2)])
+[(1, 2), (2, 1)] : List<(Int, Int)>
+> fn show_all(xs: List<Option<Int>>) -> String {
+.   "{xs}"
+. }
+> fn show_again(xs: List<Option<Int>>) -> String {
+.   "{xs}"
+. }
+> show_again([Some(1), None])
+"[Some(1), None]" : String
+> type A {
+.   Red,
+.   Green,
+. }
+> type B {
+.   Red,
+.   Blue,
+. }
+> Green
+Green : A
+> Blue
+Blue : B
+> Red
+Red : B
+> fn same() -> Bool {
+.   Green == Green && Blue == Blue
+. }
+> same()
+True : Bool
+> type A {
+.   Red,
+.   Green,
+. }
+> Green
+Green : A

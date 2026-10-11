@@ -1,0 +1,10 @@
+error[E0047]: mismatched types
+  --> tests/ui/05-expressions/use/binder_count.cheby:14:3
+   |
+14 |   use x, y <- try(a)
+   |   ^^^^^^^^^^^^^^^^^^ this `use` has 2 binders, but the callback takes 1 parameter
+   |               |
+   |               the function called by this `use`
+   |
+   = note: the callback must have type `fn(Int) -> Result<Int, String>`
+

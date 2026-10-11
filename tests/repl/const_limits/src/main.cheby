@@ -1,0 +1,4 @@
+//! A package with a small memory limit for constant evaluation, for the
+//! `const_limits` transcript.
+
+fn main() {}

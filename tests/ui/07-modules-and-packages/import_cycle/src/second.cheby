@@ -1,0 +1,11 @@
+//! Imports `first`, which imports this module.
+
+import app::first
+
+pub fn two() -> Int {
+  2
+}
+
+pub fn three() -> Int {
+  first::one() + 2
+}

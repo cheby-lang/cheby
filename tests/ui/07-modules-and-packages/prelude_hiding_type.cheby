@@ -1,0 +1,22 @@
+// @mode: check-pass
+// @decisions: D-146, D-212
+//! A type named like a prelude type hides it in its module, with a
+//! warning.
+
+import std::io
+
+type Order {
+  Placed,
+  Shipped,
+}
+
+fn label(order: Order) -> String {
+  case order {
+    Placed => "placed"
+    Shipped => "shipped"
+  }
+}
+
+fn main() {
+  io::println(label(Shipped))
+}

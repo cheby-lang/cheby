@@ -1,0 +1,8 @@
+error[E0004]: block comments are not supported
+ --> tests/ui/02-lexical-structure/block_comment.cheby:5:1
+  |
+5 | /* a block comment */
+  | ^^ block comment starts here
+  |
+  = help: start each line of the comment with `//` (D-078)
+

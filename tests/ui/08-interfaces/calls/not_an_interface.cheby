@@ -1,0 +1,21 @@
+// @mode: check-fail
+// @decisions: D-173
+//! `Name::function` calls a function through an interface, so `Name` must
+//! be an interface; a module's function is called as `module::function`
+//! (§8.5).
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+fn show(p: Point) -> String {
+  case p.x == p.y {
+    True => "diagonal point"
+    False => "point"
+  }
+}
+
+fn main() {
+  assert Point::show(Point { x: 1, y: 2 }) == "point"
+}

@@ -1,0 +1,19 @@
+// @mode: check-fail
+// @decisions: D-086, D-164
+//! `{x.f}` shows the field with its type's `show`, so a field whose type
+//! has no `show` is an error (§5.3.2).
+
+import std::io
+
+type Inner {
+  code: Int,
+}
+
+type Outer {
+  inner: Inner,
+}
+
+fn main() {
+  let outer = Outer { inner: Inner { code: 1 } }
+  io::println("inner: {outer.inner}")
+}

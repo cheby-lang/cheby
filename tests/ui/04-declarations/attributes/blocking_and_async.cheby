@@ -1,0 +1,34 @@
+// @mode: check-fail
+// @decisions: D-042, D-188, D-461
+//! `@blocking` needs an `@external` on the same function, and `@async` an
+//! `@external(js, …)`. Neither takes arguments.
+
+@external(native, "app_read")
+@blocking
+pub fn read() -> String
+
+@external(js, "./http.mjs", "fetchText")
+@async
+pub fn fetch_text(url: String) -> String
+
+@blocking
+pub fn plain() -> Int {
+  1
+}
+
+@external(native, "app_wait")
+@async
+pub fn wait() -> Int
+
+@external(native, "app_sleep")
+@blocking()
+pub fn sleep()
+
+@external(js, "./http.mjs", "get")
+@async(js)
+pub fn get(url: String) -> String
+
+@blocking
+pub type Lock {
+  Lock,
+}

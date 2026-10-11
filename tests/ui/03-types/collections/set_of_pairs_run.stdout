@@ -1,0 +1,7 @@
+(0, 0) (0, 1) (1, 0) (1, 1) (2, 0)
+size: 5, home: True, far: False
+(0, 0) (0, 1) (1, 0) (1, 1) (2, 0)
+(0, 1) (1, 0) (1, 1) (2, 0)
+size after inserting a visited cell: 5
+equal: True, unequal: False
+grid: 40000, cut: 39800, corner: True, diagonal: False

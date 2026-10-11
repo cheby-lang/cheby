@@ -1,0 +1,8 @@
+// @mode: check-pass
+// @decisions: D-126, D-208
+//! Files under `src/` that are not `.cheby` files are not modules, so the
+//! naming rule does not apply to them (§7.2).
+
+fn main() {
+  assert 1 == 1
+}

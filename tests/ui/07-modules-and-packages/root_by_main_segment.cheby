@@ -1,0 +1,10 @@
+// @mode: check-fail
+// @decisions: D-142
+//! The root module is imported by the package's name alone, never as
+//! `<package>::main`.
+
+import ui_test::main
+
+fn main() {
+  Nil
+}

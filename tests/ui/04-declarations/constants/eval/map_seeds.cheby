@@ -1,0 +1,35 @@
+// @mode: run-pass
+// @decisions: D-196, D-269, D-538
+//! A constant may read and extend another constant's map: a map keeps the
+//! seed it was built with, so lookups work under any other constant's seed
+//! and under the program's (§13.9).
+
+import std::io
+import std::map
+
+const table: map::Map<String, Int> = map::from_list([("one", 1), ("two", 2), ("three", 3)])
+
+const two: Int = case map::get(table, "two") {
+  Some(n) => n
+  None => 0
+}
+
+const bigger: map::Map<String, Int> = map::insert(table, "four", 4)
+
+const sum: Int = map::values(bigger) |> list_sum
+
+fn list_sum(items: List<Int>) -> Int {
+  case items {
+    [] => 0
+    [first, ..rest] => first + list_sum(rest)
+  }
+}
+
+fn main() {
+  let four = map::get(bigger, "four")
+  let one = map::get(bigger, "one")
+  let missing = map::get(table, "four")
+  let sizes = (map::size(table), map::size(bigger))
+  io::println("{two} {sum}")
+  io::println("{four:?} {one:?} {missing:?} {sizes:?}")
+}

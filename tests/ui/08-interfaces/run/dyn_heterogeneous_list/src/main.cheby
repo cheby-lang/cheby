@@ -1,0 +1,37 @@
+// @mode: run-pass
+// @decisions: D-046, D-063, D-117, D-168, D-235, D-524
+//! A list of `dyn shape::Shape` holds values of different types, each
+//! packaged with its own type's functions. Calls through the interface,
+//! interpolation through the embedded `Show`, and a bounded function
+//! used as a value with `S = dyn shape::Shape` all pick each value's
+//! functions (§8.6).
+
+import app::rect
+import app::shape
+import app::square
+import std::io
+import std::list
+import std::string
+
+fn shapes() -> List<dyn shape::Shape> {
+  [square::Square(2), rect::Rect { width: 2, height: 3 }, square::Square(5)]
+}
+
+fn describe(s: dyn shape::Shape) -> String {
+  let area = shape::Shape::area(s)
+  let doubled = shape::Shape::scaled(s, 2)
+  "{s}: area {area}, doubled {doubled}"
+}
+
+fn main() {
+  let all = shapes()
+  list::each(all, fn(s) { io::println(describe(s)) })
+  let total = list::fold(all, 0, fn(acc, s) { acc + shape::Shape::area(s) })
+  io::println("total area: {total}")
+  let through_bound = list::map(all, shape::area_of)
+  io::println("through the bound: {through_bound}")
+  let names = all |> list::map(_, fn(s) { "{s}" }) |> string::join(_, ", ")
+  io::println("shapes: {names}")
+  let count = list::length(all)
+  io::println("count: {count}")
+}

@@ -2,7 +2,7 @@
 
 Cheby is a statically typed, expression-oriented programming language with immutable data, lightweight fibers and deterministic memory management. Its syntax is inspired by Rust, its semantics by Gleam and Erlang, and its concurrency by Go. Programs compile to native code through Cranelift and to JavaScript.
 
-> **Status:** design phase, pre-1.0. The language specification is a draft and the reference implementation has not started yet. Breaking changes are allowed until 1.0.
+> **Status:** pre-1.0. The language specification is a draft. The reference implementation has finished milestone M1, the single-fiber core: `cheby check`, `run`, `test` and `repl` work through a Cranelift JIT, and fibers come in M2. Breaking changes are allowed until 1.0.
 
 ## A taste
 
@@ -56,14 +56,19 @@ The [overview](docs/spec/01-overview.md) lists what Cheby has, what it deliberat
 
 ## Repository layout
 
-| Path                                              | Contents                                              |
-| ------------------------------------------------- | ----------------------------------------------------- |
-| [`docs/spec/`](docs/spec/README.md)               | The language specification                            |
-| [`docs/decisions/LOG.md`](docs/decisions/LOG.md)  | The decision log (`D-NNN`), cited throughout the spec |
-| [`docs/adr/`](docs/adr/)                          | Architecture decision records for the major choices   |
-| [`docs/plan/`](docs/plan/README.md)               | Implementation plan, milestones M0-M6                 |
-| [`docs/examples/`](docs/examples/)                | 32 example programs, the future conformance suite     |
-| [`docs/diagnostics/`](docs/diagnostics/README.md) | Explanations of diagnostic codes, for `cheby explain` |
+| Path                                              | Contents                                                |
+| ------------------------------------------------- | ------------------------------------------------------- |
+| [`docs/spec/`](docs/spec/README.md)               | The language specification                              |
+| [`docs/stdlib/`](docs/stdlib/README.md)           | The standard-library specification                      |
+| [`docs/decisions/LOG.md`](docs/decisions/LOG.md)  | The decision log (`D-NNN`), cited throughout the spec   |
+| [`docs/adr/`](docs/adr/)                          | Architecture decision records for the major choices     |
+| [`docs/plan/`](docs/plan/README.md)               | Implementation plan, milestones M0-M6                   |
+| [`docs/examples/`](docs/examples/)                | 32 example programs with goldens, the conformance suite |
+| [`docs/diagnostics/`](docs/diagnostics/README.md) | Explanations of diagnostic codes, for `cheby explain`   |
+| [`crates/`](crates/)                              | The compiler, runtime and tools, one Cargo workspace    |
+| [`std/`](std/)                                    | The standard library's Cheby sources                    |
+| [`tests/`](tests/)                                | Conformance, UI and REPL test harnesses                 |
+| [`xtask/`](xtask/)                                | Developer commands, run as `cargo xtask`                |
 
 ## Editor support
 
@@ -72,4 +77,4 @@ The [overview](docs/spec/01-overview.md) lists what Cheby has, what it deliberat
 
 ## License
 
-The compiler, runtime and standard library will be dual-licensed under MIT and Apache-2.0 (D-089).
+The compiler, runtime and standard library are dual-licensed under MIT and Apache-2.0 (D-089).

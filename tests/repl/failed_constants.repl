@@ -1,0 +1,26 @@
+// @decisions: D-457, D-535
+> import std::int
+> import std::string
+> const a: Int = int::max_value / 0
+error[E0075]: evaluating the constant `a` panicked
+ --> <repl:3>:1:7
+  |
+1 | const a: Int = int::max_value / 0
+  |       ^ its initializer panicked
+  |
+  = note: panicked at <repl:3>:1:16: division by zero
+
+> const s: String = string::repeat("ab", int::max_value + 0 * int::min_value)
+error[E0076]: evaluating the constant `s` used more than the memory limit of 1GiB
+ --> <repl:4>:1:7
+  |
+1 | const s: String = string::repeat("ab", int::max_value + 0 * int::min_value)
+  |       ^ this constant is computed at compile time
+  |
+  = note: the limit counts the heap bytes that the evaluation keeps live at once
+  = help: compute less at compile time, or raise `memory-limit` in the `[const-eval]` table of `cheby.toml`
+
+> int::max_value
+9223372036854775807 : Int
+> int::min_value
+-9223372036854775808 : Int

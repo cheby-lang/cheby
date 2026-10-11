@@ -1,0 +1,14 @@
+// @mode: check-pass
+// @decisions: D-234
+//! An operator in a local function is resolved at the end of the enclosing
+//! body, so a call after the declaration fixes its types (§3.12.4).
+
+pub fn sum(numbers: List<Int>) -> Int {
+  fn step(acc, rest) {
+    case rest {
+      [] => acc
+      [first, ..tail] => step(acc + first, tail)
+    }
+  }
+  step(0, numbers)
+}

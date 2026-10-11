@@ -1,0 +1,6 @@
+measure(dyn Both): 3
+call_name(dyn Both): crate
+sum_up(dyn Both): crate 3 > crate of 3
+measure(dyn Sized): 3
+total(List<dyn Both>): 6
+total(List<Crate>): 9

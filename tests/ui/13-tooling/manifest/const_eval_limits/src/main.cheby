@@ -1,0 +1,13 @@
+// @mode: run-pass
+// @decisions: D-195, D-536
+//! `[const-eval]` sets the limits of constant evaluation in the spelling of
+//! §13.3; constants that stay within them evaluate as usual.
+
+import std::io
+import std::list
+
+const squares: List<Int> = list::map(list::range(1, 6), fn(n) { n * n })
+
+fn main() {
+  io::println("{squares:?}")
+}

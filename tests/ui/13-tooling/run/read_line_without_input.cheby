@@ -1,0 +1,14 @@
+// @mode: run-pass
+// @decisions: D-305, D-474, D-543
+//! Without a `.stdin` file standard input is null, and `io::read_line`
+//! sees the end of input at once.
+
+import std::io
+
+fn main() {
+  case io::read_line() {
+    Ok(None) => io::println("end of input")
+    Ok(Some(_)) => io::println("a line")
+    Err(_) => io::println("an error")
+  }
+}

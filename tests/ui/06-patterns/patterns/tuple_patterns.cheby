@@ -1,0 +1,20 @@
+// @mode: check-pass
+// @decisions: D-076, D-113, D-241
+//! A tuple pattern matches a tuple of the same length element by element,
+//! and is the only way to read tuple elements (§6.5).
+
+fn name_of(person: (String, Int)) -> String {
+  let (name, _) = person
+  name
+}
+
+fn swap(pair: (Int, String)) -> (String, Int) {
+  case pair {
+    (n, s) => (s, n)
+  }
+}
+
+fn main() {
+  assert name_of(("Ada", 36)) == "Ada"
+  assert swap((1, "a")) == ("a", 1)
+}

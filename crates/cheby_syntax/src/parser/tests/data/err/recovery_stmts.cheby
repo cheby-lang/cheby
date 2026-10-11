@@ -1,0 +1,14 @@
+fn f() {
+  let a = )
+  let b = 2
+  foo(1, , 2)
+  let c = [1, 2,, 3]
+  let d = Point { x: 1 y: 2 }
+  let e = 3 +
+}
+fn g() {
+  bar(
+}
+fn h() -> Int {
+  1
+}

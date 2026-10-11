@@ -1,0 +1,9 @@
+fn ok_before() {}
+let x = 1
+fn ok_after() {}
+}}} garbage ( here
+type T { x: Int }
+pub
+const c: Int = 1
+@attr let
+fn last() {}

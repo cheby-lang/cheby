@@ -1,0 +1,10 @@
+error[E0026]: more than one `_` in one argument list
+  --> tests/ui/05-expressions/multiple_holes.cheby:10:18
+   |
+10 |   let f = add(_, _)
+   |               -  ^
+   |               |
+   |               first `_` here
+   |
+   = help: a capture has exactly one `_` (D-202); write a closure, such as `fn(a, b) { f(a, b) }`, or pass the function itself
+

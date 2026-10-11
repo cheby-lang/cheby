@@ -1,0 +1,14 @@
+// @mode: check-fail
+// @decisions: D-455
+//! Native symbols that start with `cheby_rt_` or `cb$` belong to the
+//! runtime and to generated code, so only the standard library may bind
+//! them (§12.5.1).
+
+@external(native, "cheby_rt_alloc")
+pub fn alloc(size: Int) -> Int
+
+@external(native, "cb$fn$app$main")
+pub fn entry() -> Nil
+
+@external(native, "cheby_app_ok")
+pub fn allowed() -> Int

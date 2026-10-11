@@ -1,0 +1,25 @@
+error[E0047]: mismatched types
+  --> tests/ui/13-tooling/diagnostics/rendering.cheby:14:23
+   |
+14 |   "héllo, {name}, " + 1
+   |   -----------------   ^ expected `String`, found `{integer}`
+   |   |
+   |   the left operand of `+` has type `String`
+
+error[E0047]: mismatched types
+  --> tests/ui/13-tooling/diagnostics/rendering.cheby:18:20
+   |
+18 |   let total: Int = "three"
+   |              ---   ^^^^^^^ expected `Int`, found `String`
+   |              |
+   |              expected because of this annotation
+
+error[E0047]: mismatched types
+  --> tests/ui/13-tooling/diagnostics/rendering.cheby:25:3
+   |
+22 | pub fn mismatch() -> Int {
+   |                      --- expected because of this return type
+...
+25 |   text
+   |   ^^^^ expected `Int`, found `String`
+

@@ -1,0 +1,8 @@
+error[E0047]: mismatched types
+ --> tests/ui/05-expressions/blocks/ends_in_let.cheby:6:3
+  |
+5 | pub fn name() -> String {
+  |                  ------ expected because of this return type
+6 |   let _ = "a"
+  |   ^^^^^^^^^^^ expected `String`, found `Nil`
+

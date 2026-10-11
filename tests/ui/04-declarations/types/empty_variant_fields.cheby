@@ -1,0 +1,12 @@
+// @mode: check-fail
+// @decisions: D-437
+//! A positional variant has at least one type and a named-field variant at
+//! least one field: `Foo()` and `Foo {}` are errors that suggest the unit
+//! variant `Foo` (§4.3.1).
+
+type Signal {
+  Stop(),
+  Go {},
+}
+
+fn main() {}

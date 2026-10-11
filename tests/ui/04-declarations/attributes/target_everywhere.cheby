@@ -1,0 +1,30 @@
+// @mode: check-pass
+// @decisions: D-056, D-461
+//! `@target` is allowed on functions, types, aliases, constants,
+//! interfaces and tests.
+
+@target(native)
+pub type Handle {
+  Handle(Int),
+}
+
+@target(native)
+pub type Handles = List<Handle>
+
+@target(native)
+pub const first: Handle = Handle(1)
+
+@target(native)
+pub interface Named {
+  fn name(Self) -> String
+}
+
+@target(native)
+pub fn handles() -> Handles {
+  [first]
+}
+
+@target(native)
+test "handles holds the first handle" {
+  assert handles() == [first]
+}

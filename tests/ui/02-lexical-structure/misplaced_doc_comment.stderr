@@ -1,0 +1,9 @@
+error[E0017]: doc comment documents nothing
+ --> tests/ui/02-lexical-structure/misplaced_doc_comment.cheby:8:3
+  |
+8 |   /// Not before a declaration.
+  |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: a `///` comment documents the item, variant, field or interface function right after it
+  = help: use `//` for an ordinary comment
+

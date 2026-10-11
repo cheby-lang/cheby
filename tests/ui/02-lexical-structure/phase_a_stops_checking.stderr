@@ -1,0 +1,10 @@
+error[E0029]: comparison operators cannot be chained
+  --> tests/ui/02-lexical-structure/phase_a_stops_checking.cheby:12:16
+   |
+12 |   assert 1 < 2 < 3
+   |            -   ^
+   |            |
+   |            first comparison here
+   |
+   = help: combine the comparisons with `&&`, such as `a < b && b < c`
+

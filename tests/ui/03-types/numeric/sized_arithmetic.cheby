@@ -1,0 +1,95 @@
+// @mode: run-pass
+// @decisions: D-025, D-092, D-105
+//! Arithmetic, shifts, minimums and maximums of each sized integer type
+//! (§3.3.3): checked at the type's own width, printed and compared
+//! correctly at both ends of the range.
+
+import std::i16
+import std::i32
+import std::i64
+import std::i8
+import std::io
+import std::u16
+import std::u32
+import std::u64
+import std::u8
+
+fn put(label: String, text: String) {
+  io::print(label)
+  io::print(" = ")
+  io::println(text)
+}
+
+fn signed() {
+  let a8: I8 = 100
+  let b8: I8 = 27
+  let min8: I8 = -128
+  let max8: I8 = 127
+  put("i8 min", i8::show(min8))
+  put("i8 max", i8::show(max8))
+  put("i8 a + b", i8::show(a8 + b8))
+  put("i8 a ^ b", i8::show(a8 ^ b8))
+  put("i8 min / 3", i8::show(min8 / 3))
+  put("i8 min % 3", i8::show(min8 % 3))
+  put("i8 min >> 1", i8::show(min8 >> 1))
+  assert min8 < max8 && max8 - a8 == b8
+  let min16: I16 = -32768
+  let max16: I16 = 32767
+  let a16: I16 = 30000
+  put("i16 min", i16::show(min16))
+  put("i16 max", i16::show(max16))
+  put("i16 a + 2767", i16::show(a16 + 2767))
+  put("i16 min / -2", i16::show(min16 / -2))
+  put("i16 min >> 15", i16::show(min16 >> 15))
+  assert min16 < max16 && -max16 - 1 == min16
+  let min32: I32 = -2147483648
+  let max32: I32 = 2147483647
+  let a32: I32 = 46340
+  put("i32 min", i32::show(min32))
+  put("i32 max", i32::show(max32))
+  put("i32 a * a", i32::show(a32 * a32))
+  put("i32 -a", i32::show(-a32))
+  assert min32 < max32 && max32 > a32 * a32
+  let min64: I64 = -9223372036854775808
+  let max64: I64 = 9223372036854775807
+  put("i64 min", i64::show(min64))
+  put("i64 max", i64::show(max64))
+  put("i64 max / 3", i64::show(max64 / 3))
+  put("i64 min % 10", i64::show(min64 % 10))
+  put("i64 1 << 62", i64::show(1 << 62))
+  assert min64 < max64 && min64 + max64 == -1
+}
+
+fn unsigned() {
+  let max8: U8 = 255
+  let a8: U8 = 200
+  put("u8 max", u8::show(max8))
+  put("u8 a + 55", u8::show(a8 + 55))
+  put("u8 max / 16", u8::show(max8 / 16))
+  put("u8 max % 16", u8::show(max8 % 16))
+  put("u8 1 << 7", u8::show(1 << 7))
+  put("u8 max >> 4", u8::show(max8 >> 4))
+  assert a8 < max8 && max8 - a8 == 55
+  let max16: U16 = 65535
+  put("u16 max", u16::show(max16))
+  put("u16 max / 255", u16::show(max16 / 255))
+  assert max16 > 0
+  let max32: U32 = 4294967295
+  let a32: U32 = 65535
+  put("u32 max", u32::show(max32))
+  put("u32 a * 65537", u32::show(a32 * 65537))
+  assert a32 * 65537 == max32
+  let max64: U64 = 18446744073709551615
+  let zero64: U64 = 0
+  put("u64 max", u64::show(max64))
+  put("u64 max / 2", u64::show(max64 / 2))
+  put("u64 max >> 63", u64::show(max64 >> 63))
+  put("u64 1 << 63", u64::show(1 << 63))
+  put("u64 max - 1", u64::show(max64 - 1))
+  assert zero64 < max64 && max64 >= 1 << 63
+}
+
+fn main() {
+  signed()
+  unsigned()
+}

@@ -1,0 +1,28 @@
+//! The built-in `Bool`: its order and its text.
+//!
+//! `Bool`, `True` and `False` are builtin items whose home module is this
+//! one (D-447, D-353). The logical operators are built in, so there are no
+//! functions that repeat them.
+
+/// Orders `False` before `True` (D-136). It makes `Bool` satisfy `Compare`.
+pub fn compare(a: Bool, b: Bool) -> Order {
+  case a, b {
+    False, True => Less
+    True, False => Greater
+    _, _ => Equal
+  }
+}
+
+/// Returns `"True"` or `"False"`. It makes `Bool` satisfy `Show`.
+pub fn show(b: Bool) -> String {
+  case b {
+    True => "True"
+    False => "False"
+  }
+}
+
+test "a bool shows as its constructor" {
+  let yes = True
+  assert show(False) == "False"
+  assert "{yes}" == "True"
+}

@@ -11,6 +11,14 @@ publish = false
 crate-type = ["rlib", "staticlib"]
 
 [dependencies]
+libc.workspace = true
+ryu.workspace = true
+siphasher.workspace = true
+unicode-segmentation.workspace = true
+
+[dev-dependencies]
+astro-float.workspace = true
+proptest.workspace = true
 
 [lints]
 workspace = true

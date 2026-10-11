@@ -1,0 +1,23 @@
+// @mode: check-fail
+// @decisions: D-049
+//! A pattern over a type that failed to lower reports only the type's
+//! error: matching over it is not checked.
+
+fn count(r: Result<Int>) -> Int {
+  case r {
+    Ok(n) => n
+    Err(_) => 0
+  }
+}
+
+fn first(xs: Unknown) -> Int {
+  let (a, _) = xs
+  case xs {
+    [x, ..] => x + a
+    _ => 0
+  }
+}
+
+fn main() {
+  assert count(Ok(1)) + first([]) == 1
+}

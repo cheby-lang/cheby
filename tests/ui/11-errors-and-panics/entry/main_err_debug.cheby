@@ -1,0 +1,13 @@
+// @mode: run-fail
+// @exit: 1
+// @decisions: D-182, D-529
+//! An error whose type does not satisfy `Show` is written with debug
+//! printing (§3.13, §10.10).
+
+type Code {
+  Code(Int),
+}
+
+fn main() -> Result<Nil, Code> {
+  Err(Code(3))
+}

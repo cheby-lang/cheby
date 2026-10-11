@@ -1,0 +1,6 @@
+error[E0013]: expected `:`, found `,`
+ --> tests/ui/04-declarations/types/field_without_type.cheby:7:4
+  |
+7 |   y,
+  |    ^
+

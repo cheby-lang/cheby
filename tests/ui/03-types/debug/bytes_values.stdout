@@ -1,0 +1,4 @@
+bytes::from_list([0x66, 0x6f, 0x00, 0xc3, 0xbf])
+bytes::from_list([0x66, 0x6f]) bytes::from_list([])
+equal: True, different: True
+distinct: 3

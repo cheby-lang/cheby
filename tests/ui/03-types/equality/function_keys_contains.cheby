@@ -1,0 +1,18 @@
+// @mode: run-fail
+// @decisions: D-233, D-449, D-556
+//! Asking whether an empty `Set` holds a function value panics: the
+//! element is hashed before the set is searched (§3.13).
+
+import std::io
+import std::set
+
+fn double(n: Int) -> Int {
+  n * 2
+}
+
+fn main() {
+  let handlers: set::Set<fn(Int) -> Int> = set::new()
+  io::println("searching for a function")
+  let _ = set::contains(handlers, double)
+  io::println("never printed")
+}

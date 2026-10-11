@@ -1,0 +1,8 @@
+error[E0047]: mismatched types
+ --> tests/ui/06-patterns/patterns/tuple_pattern_length.cheby:6:7
+  |
+6 |   let (a, b) = triple
+  |       ^^^^^^ expected `(Int, Int, Int)`, found `(_, _)`
+  |
+  = note: a pattern matches values of the type of the value after `=`
+

@@ -1,0 +1,8 @@
+error[E0057]: type annotation needed
+  --> tests/ui/08-interfaces/dyn/none_needs_annotation.cheby:10:20
+   |
+10 |   let b: dyn Any = None
+   |                    ^^^^ the type argument `T` of `Option` is not known
+   |
+   = help: give the type arguments after the name: `Option::<…>`
+

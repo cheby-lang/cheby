@@ -1,0 +1,12 @@
+error[E0013]: expected `=>`, found `:`
+  --> tests/ui/05-expressions/case/record_subject_unparenthesized.cheby:13:17
+   |
+13 |   case Point { x: 0, y: 1 } {
+   |                 ^
+
+error[E0013]: expected a line break or `}`, found `{`
+  --> tests/ui/05-expressions/case/record_subject_unparenthesized.cheby:13:29
+   |
+13 |   case Point { x: 0, y: 1 } {
+   |                             ^
+

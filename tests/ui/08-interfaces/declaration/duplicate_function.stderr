@@ -1,0 +1,8 @@
+error[E0041]: the interface declares `describe` twice
+ --> tests/ui/08-interfaces/declaration/duplicate_function.cheby:7:6
+  |
+6 |   fn describe(Self) -> String
+  |      -------- first declared here
+7 |   fn describe(Self, Int) -> String
+  |      ^^^^^^^^ declared again here
+

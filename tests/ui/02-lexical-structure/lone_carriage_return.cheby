@@ -1,0 +1,8 @@
+// @mode: check-fail
+//! A carriage return is part of a line break only before a line feed
+//! (§2.1). Alone it is an error, even where a space would do.
+
+fn main() {
+  let x = 1
+  assert x == 1
+}

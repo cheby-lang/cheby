@@ -1,0 +1,8 @@
+error[E0075]: evaluating the constant `ratio` panicked
+  --> tests/ui/04-declarations/constants/eval/panic.cheby:10:7
+   |
+10 | const ratio: Int = 100 / parts()
+   |       ^^^^^ its initializer panicked
+   |
+   = note: panicked at tests/ui/04-declarations/constants/eval/panic.cheby:10:20: division by zero
+

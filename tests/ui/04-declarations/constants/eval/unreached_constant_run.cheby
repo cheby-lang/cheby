@@ -1,0 +1,20 @@
+// @mode: run-pass
+// @decisions: D-510, D-534
+//! `cheby run` evaluates only the constants that `main` reaches, so a
+//! constant whose initializer would panic does not stop a run that never
+//! reads it. `cheby check` evaluates every constant of the package.
+
+import std::io
+import std::list
+
+const broken: Int = list::fold([1, 0], 10, fn(acc, n) { acc / n })
+
+const greeting: String = "hello"
+
+pub fn broken_value() -> Int {
+  broken
+}
+
+fn main() {
+  io::println(greeting)
+}

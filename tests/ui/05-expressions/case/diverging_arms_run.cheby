@@ -1,0 +1,18 @@
+// @mode: run-fail
+// @decisions: D-161, D-235
+//! An arm that panics ends the program there; the other arms give the
+//! `case` its value (§3.10, §5.9.1).
+
+import std::io
+
+fn unwrap(value: Option<String>) -> String {
+  case value {
+    None => panic as "no value"
+    Some(inner) => inner
+  }
+}
+
+fn main() {
+  io::println(unwrap(Some("a")))
+  io::println(unwrap(None))
+}

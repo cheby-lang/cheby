@@ -1,0 +1,24 @@
+// @mode: check-fail
+// @decisions: D-195, D-536, D-618
+//! A constant whose initializer never finishes is stopped at the time
+//! limit that `[const-eval]` sets, at its next tail call, and reported
+//! as E0076; the constant that reads it is not reported again (§4.5,
+//! §13.9).
+
+import std::io
+
+const forever: Int = ping(0)
+
+const after: Int = forever + 1
+
+fn ping(n: Int) -> Int {
+  pong(n + 1)
+}
+
+fn pong(n: Int) -> Int {
+  ping(n - 1)
+}
+
+fn main() {
+  io::println("{after}")
+}

@@ -1,0 +1,13 @@
+// Closing type argument ends the line
+type Cell = Option<player::Player>
+type Grid = List<List<Cell>>
+
+fn index() -> map::Map<
+  String,
+  List<Int>,
+> {
+  map::new::<
+    String,
+    List<Int>,
+  >()
+}

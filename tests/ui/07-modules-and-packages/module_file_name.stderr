@@ -1,0 +1,4 @@
+error[E0037]: `src/Helpers.cheby` is not a valid module name
+  = note: the name of a file under `src/` becomes part of a module path, so it must be a snake_case identifier that is not a keyword
+  = help: rename it to `src/helpers.cheby`
+

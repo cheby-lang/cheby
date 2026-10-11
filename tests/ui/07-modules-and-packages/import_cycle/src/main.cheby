@@ -1,0 +1,10 @@
+// @mode: check-fail
+// @decisions: D-145
+//! Modules must not import each other in a cycle, directly or through
+//! other modules (§7.5.3).
+
+import app::first
+
+fn main() {
+  assert first::one() == 1
+}

@@ -1,0 +1,14 @@
+// @mode: check-fail
+// @decisions: D-113
+//! A name bound by several alternatives has the same type in each (§6.7).
+
+fn describe(pair: (Int, String)) -> String {
+  case pair {
+    (0, n) | (n, "") => "{n:?}"
+    _ => ""
+  }
+}
+
+fn main() {
+  assert describe((0, "a")) == "\"a\""
+}

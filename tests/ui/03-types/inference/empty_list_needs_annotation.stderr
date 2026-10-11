@@ -1,0 +1,8 @@
+error[E0057]: type annotation needed
+ --> tests/ui/03-types/inference/empty_list_needs_annotation.cheby:6:12
+  |
+6 |   let xs = []
+  |            ^^ the type of this is not known
+  |
+  = help: annotate the binding that holds it: `let name: <type> = …`
+

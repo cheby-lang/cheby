@@ -1,0 +1,8 @@
+error[E0057]: type annotation needed
+ --> tests/ui/03-types/inference/dyn_needs_known_type.cheby:9:20
+  |
+9 |   let a: dyn Any = []
+  |                    ^^ the type of this is not known
+  |
+  = help: annotate the binding that holds it: `let name: <type> = …`
+

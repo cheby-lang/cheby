@@ -1,0 +1,36 @@
+// @mode: run-pass
+// @decisions: D-052
+//! `case a, b` evaluates its subjects left to right once and matches them
+//! together, one pattern per subject (§5.9.1, §5.9.2).
+
+import std::int
+import std::io
+
+fn fizzbuzz(n: Int) -> String {
+  case n % 3, n % 5 {
+    0, 0 => "FizzBuzz"
+    0, _ => "Fizz"
+    _, 0 => "Buzz"
+    _, _ => int::show(n)
+  }
+}
+
+fn both(left: Option<Int>, right: Option<Int>) -> String {
+  case left, right {
+    Some(a), Some(b) => "both {a} {b}"
+    Some(a), None => "left {a}"
+    None, Some(b) => "right {b}"
+    None, None => "neither"
+  }
+}
+
+fn main() {
+  io::println(fizzbuzz(15))
+  io::println(fizzbuzz(9))
+  io::println(fizzbuzz(10))
+  io::println(fizzbuzz(7))
+  io::println(both(Some(1), Some(2)))
+  io::println(both(Some(3), None))
+  io::println(both(None, Some(4)))
+  io::println(both(None, None))
+}

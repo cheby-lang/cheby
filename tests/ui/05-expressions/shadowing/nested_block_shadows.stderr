@@ -1,0 +1,11 @@
+error[E0044]: `x` is already bound
+ --> tests/ui/05-expressions/shadowing/nested_block_shadows.cheby:9:9
+  |
+7 |   let x = 1
+  |       - first bound here
+8 |   let y = {
+9 |     let x = 2
+  |         ^ bound again here
+  |
+  = help: give this binding a new name, such as `x_2`; names cannot be shadowed (§5.2.3)
+

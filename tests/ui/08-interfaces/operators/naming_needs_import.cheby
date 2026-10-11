@@ -1,0 +1,15 @@
+// @mode: check-fail
+// @decisions: D-169
+//! The operator interfaces live in `std::ops`, not in the prelude, so
+//! naming one in a bound needs the import (§8.7).
+
+fn largest<T: Compare>(a: T, b: T) -> T {
+  case a > b {
+    True => a
+    False => b
+  }
+}
+
+fn main() {
+  assert largest(1, 2) == 2
+}

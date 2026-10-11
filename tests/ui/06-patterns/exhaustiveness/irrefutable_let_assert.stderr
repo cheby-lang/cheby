@@ -1,0 +1,8 @@
+warning[W0008]: `let assert` with a pattern that always matches
+ --> tests/ui/06-patterns/exhaustiveness/irrefutable_let_assert.cheby:7:14
+  |
+7 |   let assert (a, b) = pair
+  |              ^^^^^^ this pattern matches every value of its type
+  |
+  = help: use `let` instead, since the assertion can never fail
+

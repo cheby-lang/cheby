@@ -1,0 +1,6 @@
+error[E0013]: expected a line break or `}`, found `=`
+ --> tests/ui/05-expressions/bindings/no_assignment.cheby:7:9
+  |
+7 |   count = 2
+  |         ^
+

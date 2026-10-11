@@ -1,0 +1,40 @@
+// @mode: run-pass
+// @decisions: D-033, D-252, D-538
+//! `==`, hashing and `{x:?}` of a value a million constructors deep, the
+//! shape of a hand-written linked list, finish without overflowing the
+//! stack: the runtime walks values with worklists, not recursion (§3.13).
+//! `list::unique` hashes the chains.
+
+import std::io
+import std::list
+import std::string
+
+type LinkedList<T> {
+  Empty,
+  Node(T, LinkedList<T>),
+}
+
+/// The chain `Node(0, Node(1, … Node(n - 1, rest)))`.
+fn build(n: Int, rest: LinkedList<Int>) -> LinkedList<Int> {
+  case n {
+    0 => rest
+    _ => build(n - 1, Node(n - 1, rest))
+  }
+}
+
+fn main() {
+  let depth = 1_000_000
+  let chain = build(depth, Empty)
+  let again = build(depth, Empty)
+  let longer = Node(-1, build(depth, Empty))
+  let equal = chain == again
+  let unequal = chain == longer
+  io::println("equal: {equal}, longer equal: {unequal}")
+  let kept = list::length(list::unique([chain, again, longer, chain]))
+  io::println("distinct chains: {kept}")
+  let text = "{chain:?}"
+  let size = string::length(text)
+  let head = string::slice(text, 0, 25)
+  let tail = string::slice(text, size - 20, size)
+  io::println("{size} characters: {head} … {tail}")
+}

@@ -1,0 +1,17 @@
+// @mode: check-fail
+// @decisions: D-055, D-495
+//! A test name is a string literal without interpolation (§4.7).
+
+const subject: String = "doubling"
+
+fn double(n: Int) -> Int {
+  n * 2
+}
+
+test "{subject} works" {
+  assert double(2) == 4
+}
+
+fn main() {
+  assert double(1) == 2 && subject != ""
+}

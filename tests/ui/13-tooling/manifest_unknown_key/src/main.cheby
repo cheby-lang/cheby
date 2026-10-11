@@ -1,0 +1,10 @@
+// @mode: check-fail
+// @decisions: D-444
+//! A manifest key that §13.3 does not define is an error. The message
+//! quotes the manifest's file name, which stays as it is in the golden.
+
+import std::io
+
+fn main() {
+  io::println("hi")
+}

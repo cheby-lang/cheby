@@ -1,0 +1,24 @@
+error[E0045]: malformed `@target` attribute
+ --> tests/ui/04-declarations/attributes/target_forms.cheby:5:1
+  |
+5 | @target(native, js)
+  | ^^^^^^^^^^^^^^^^^^^
+  |
+  = help: write `@target(native)` or `@target(js)`
+
+error[E0045]: malformed `@target` attribute
+  --> tests/ui/04-declarations/attributes/target_forms.cheby:10:1
+   |
+10 | @target
+   | ^^^^^^^
+   |
+   = help: write `@target(native)` or `@target(js)`
+
+error[E0045]: malformed `@target` attribute
+  --> tests/ui/04-declarations/attributes/target_forms.cheby:15:1
+   |
+15 | @target(wasm)
+   | ^^^^^^^^^^^^^
+   |
+   = help: write `@target(native)` or `@target(js)`
+

@@ -1,0 +1,24 @@
+// @mode: check-pass
+// @decisions: D-030, D-101, D-461
+//! An external type has no body (§12.5.3). Its `@external` names a drop
+//! function and does not restrict where the type exists, so functions on
+//! both targets may mention it.
+
+import std::io
+
+@external(native, "app_db_close")
+pub type Db
+
+@external(native, "app_db_open")
+@external(js, "./db.mjs", "open")
+pub fn open(path: String) -> Db
+
+pub fn reopen(db: Db, path: String) -> Db {
+  let _ = db
+  open(path)
+}
+
+fn main() {
+  let _ = reopen(open("a.db"), "b.db")
+  io::println("opened")
+}

@@ -1,0 +1,27 @@
+// @mode: run-pass
+// @decisions: D-050, D-155, D-498
+//! A capture `f(a, _)` evaluates its other arguments once, left to right,
+//! when the capture is evaluated, and the hole may be in any position
+//! (§5.6).
+
+import std::io
+import std::string
+
+fn join3(a: String, b: String, c: String) -> String {
+  "{a}-{b}-{c}"
+}
+
+fn noisy(label: String) -> String {
+  io::println("evaluated {label}")
+  label
+}
+
+fn main() {
+  let first = join3(noisy("x"), _, noisy("z"))
+  io::println(first("1"))
+  io::println(first("2"))
+  let last = join3(_, "b", "c")
+  io::println(last("a"))
+  let middle = string::add("<", _)
+  io::println(middle(">"))
+}

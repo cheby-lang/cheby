@@ -1,0 +1,544 @@
+//! The built-in `Float`, an IEEE 754 binary64 number: constants,
+//! conversions, parsing and text, comparison, arithmetic, rounding to
+//! `Int`, special values and a few correctly rounded functions.
+//!
+//! `Float` itself is a builtin item whose home module is this one (D-447).
+//! `compare` is the total order of D-135, so `<` and `>` on floats follow it.
+
+import std::f32
+import std::i32
+import std::int
+import std::u32
+import std::u64
+
+// Constants
+
+/// Positive infinity, which shows as `inf`.
+pub const infinity: Float = 1.0 / 0.0
+
+test "infinity is above every finite float" {
+  assert infinity > max_value
+  assert show(infinity) == "inf"
+}
+
+/// Negative infinity, which shows as `-inf`.
+pub const neg_infinity: Float = -1.0 / 0.0
+
+test "neg_infinity is below every finite float" {
+  assert neg_infinity < min_value
+  assert neg_infinity == -infinity
+}
+
+/// A NaN, which shows as `NaN` and is `==` to every other NaN.
+pub const nan: Float = 0.0 / 0.0
+
+test "nan equals itself" {
+  assert nan == nan
+  assert is_nan(nan)
+  assert sqrt(-1.0) == nan
+}
+
+/// The `Float` closest to pi.
+pub const pi: Float = 3.141592653589793
+
+test "pi is the float closest to pi" {
+  assert pi == 3.141592653589793
+}
+
+/// The `Float` closest to Euler's number e.
+pub const e: Float = 2.718281828459045
+
+test "e is the float closest to e" {
+  assert e == 2.718281828459045
+  assert exp(1.0) == e
+}
+
+/// The difference between 1.0 and the next larger `Float`, 2^-52.
+pub const epsilon: Float = 2.220446049250313e-16
+
+test "epsilon is the gap above 1.0" {
+  assert 1.0 + epsilon > 1.0
+  assert 1.0 + epsilon / 2.0 == 1.0
+}
+
+/// The largest finite `Float`.
+pub const max_value: Float = 1.7976931348623157e308
+
+test "max_value is the largest finite float" {
+  assert is_finite(max_value)
+  assert max_value * 2.0 == infinity
+}
+
+/// The smallest finite `Float`, the negation of `max_value`.
+pub const min_value: Float = -1.7976931348623157e308
+
+test "min_value is the smallest finite float" {
+  assert min_value == -max_value
+}
+
+// Conversions
+
+/// Returns `n` as a `Float`, rounded to the nearest value, ties to even (D-359).
+@external(native, "cheby_float_from_int")
+@external(js, "./float.mjs", "from_int")
+pub fn from_int(n: Int) -> Float
+
+test "from_int converts" {
+  assert from_int(-3) == -3.0
+}
+
+@target(native)
+test "from_int rounds beyond 2^53" {
+  assert from_int(int::max_safe + 2) == 9007199254740992.0
+}
+
+/// Returns `n` as a `Float`. Every `I8` is exact.
+@external(native, "cheby_float_from_i8")
+@external(js, "./float.mjs", "from_i8")
+pub fn from_i8(n: I8) -> Float
+
+test "from_i8 is exact" {
+  assert from_i8(-128) == -128.0
+}
+
+/// Returns `n` as a `Float`. Every `I16` is exact.
+@external(native, "cheby_float_from_i16")
+@external(js, "./float.mjs", "from_i16")
+pub fn from_i16(n: I16) -> Float
+
+test "from_i16 is exact" {
+  assert from_i16(-32768) == -32768.0
+}
+
+/// Returns `n` as a `Float`. Every `I32` is exact.
+@external(native, "cheby_float_from_i32")
+@external(js, "./float.mjs", "from_i32")
+pub fn from_i32(n: I32) -> Float
+
+test "from_i32 is exact" {
+  assert from_i32(i32::max_value) == 2147483647.0
+}
+
+/// Returns `n` as a `Float`, rounded to the nearest value, ties to even (D-359).
+@external(native, "cheby_float_from_i64")
+@external(js, "./float.mjs", "from_i64")
+pub fn from_i64(n: I64) -> Float
+
+test "from_i64 rounds beyond 2^53" {
+  assert from_i64(-42) == -42.0
+  assert from_i64(9_007_199_254_740_993) == 9007199254740992.0
+}
+
+/// Returns `n` as a `Float`. Every `U8` is exact.
+@external(native, "cheby_float_from_u8")
+@external(js, "./float.mjs", "from_u8")
+pub fn from_u8(n: U8) -> Float
+
+test "from_u8 is exact" {
+  assert from_u8(255) == 255.0
+}
+
+/// Returns `n` as a `Float`. Every `U16` is exact.
+@external(native, "cheby_float_from_u16")
+@external(js, "./float.mjs", "from_u16")
+pub fn from_u16(n: U16) -> Float
+
+test "from_u16 is exact" {
+  assert from_u16(65535) == 65535.0
+}
+
+/// Returns `n` as a `Float`. Every `U32` is exact.
+@external(native, "cheby_float_from_u32")
+@external(js, "./float.mjs", "from_u32")
+pub fn from_u32(n: U32) -> Float
+
+test "from_u32 is exact" {
+  assert from_u32(u32::max_value) == 4294967295.0
+  assert 0.5 * from_u32(10) == 5.0
+}
+
+/// Returns `n` as a `Float`, rounded to the nearest value, ties to even (D-359).
+@external(native, "cheby_float_from_u64")
+@external(js, "./float.mjs", "from_u64")
+pub fn from_u64(n: U64) -> Float
+
+test "from_u64 rounds beyond 2^53" {
+  assert from_u64(u64::max_value) == 18446744073709551616.0
+}
+
+/// Returns `n` as a `Float`. Every `F32` is exact.
+@external(native, "cheby_float_from_f32")
+@external(js, "./float.mjs", "from_f32")
+pub fn from_f32(n: F32) -> Float
+
+test "from_f32 is exact" {
+  assert from_f32(1.5) == 1.5
+  assert from_f32(f32::infinity) == infinity
+}
+
+// Parsing and text
+
+/// Reads an `Float` written in decimal, or `NaN`, `inf` or `-inf` (D-313).
+@external(native, "cheby_float_parse")
+@external(js, "./float.mjs", "parse")
+pub fn parse(text: String) -> Result<Float, Nil>
+
+test "parse reads decimal floats" {
+  assert parse("42") == Ok(42.0)
+  assert parse("-1.5e-3") == Ok(-0.0015)
+  assert parse("1E+3") == Ok(1000.0)
+  assert parse("NaN") == Ok(nan)
+  assert parse("-inf") == Ok(neg_infinity)
+}
+
+test "parse rejects other spellings" {
+  assert parse(".5") == Err(Nil)
+  assert parse("1.") == Err(Nil)
+  assert parse("+1.0") == Err(Nil)
+  assert parse(" 1.0") == Err(Nil)
+  assert parse("1_000.0") == Err(Nil)
+  assert parse("nan") == Err(Nil)
+}
+
+test "parse reads back what show writes" {
+  let third = 1.0 / 3.0
+  assert parse(show(third)) == Ok(third)
+  assert parse("1e400") == Ok(infinity)
+}
+
+/// Returns the shortest text that reads back as `x` (§3.3.6). It makes `Float` satisfy `Show`.
+@external(native, "cheby_float_show")
+@external(js, "./float.mjs", "show")
+pub fn show(x: Float) -> String
+
+test "show writes the shortest text that reads back" {
+  let half = 0.5
+  let sum = 0.1 + 0.2
+  assert show(2.0) == "2.0"
+  assert show(0.1) == "0.1"
+  assert show(-2.25) == "-2.25"
+  assert "{half}" == "0.5"
+  assert "{sum}" == "0.30000000000000004"
+}
+
+test "show uses an exponent for large and small magnitudes" {
+  assert show(1.0e20) == "100000000000000000000.0"
+  assert show(1.0e21) == "1.0e21"
+  assert show(0.000001) == "0.000001"
+  assert show(1.0e-7) == "1.0e-7"
+  assert show(-1.5e300) == "-1.5e300"
+}
+
+test "show spells the special values" {
+  assert show(nan) == "NaN"
+  assert show(infinity) == "inf"
+  assert show(neg_infinity) == "-inf"
+  assert show(-0.0) == "-0.0"
+}
+
+// Comparison
+
+/// Orders two `Float` values. It makes `Float` satisfy `Compare`.
+pub fn compare(a: Float, b: Float) -> Order {
+  case {
+    a < b => Less
+    a > b => Greater
+    _ => Equal
+  }
+}
+
+/// Returns the smaller of `a` and `b`, and `a` when they are `Equal`.
+pub fn min(a: Float, b: Float) -> Float {
+  case {
+    b < a => b
+    _ => a
+  }
+}
+
+test "min follows compare" {
+  assert min(1.0, 2.0) == 1.0
+  assert min(1.0, nan) == 1.0
+  assert show(min(-0.0, 0.0)) == "-0.0"
+}
+
+/// Returns the larger of `a` and `b`, and `a` when they are `Equal`.
+pub fn max(a: Float, b: Float) -> Float {
+  case {
+    b > a => b
+    _ => a
+  }
+}
+
+test "max follows compare" {
+  assert max(1.0, 2.0) == 2.0
+  assert is_nan(max(1.0, nan))
+}
+
+/// Returns `x` limited to the range from `low` to `high` by `compare`.
+pub fn clamp(x: Float, low: Float, high: Float) -> Float {
+  max(min(x, high), low)
+}
+
+test "clamp limits to a range" {
+  assert clamp(1.5, 0.0, 1.0) == 1.0
+  assert clamp(-0.5, 0.0, 1.0) == 0.0
+  assert clamp(0.25, 0.0, 1.0) == 0.25
+  assert clamp(nan, 0.0, 1.0) == 1.0
+}
+
+// Arithmetic
+
+/// Returns `a + b`. It makes `Float` satisfy `Add`.
+pub fn add(a: Float, b: Float) -> Float {
+  a + b
+}
+
+/// Returns `a - b`. It makes `Float` satisfy `Sub`.
+pub fn sub(a: Float, b: Float) -> Float {
+  a - b
+}
+
+test "sub is minus as a function" {
+  assert sub(0.5, 0.25) == 0.25
+}
+
+/// Returns `a * b`. It makes `Float` satisfy `Mul`.
+pub fn mul(a: Float, b: Float) -> Float {
+  a * b
+}
+
+test "mul is times as a function" {
+  assert mul(1.5, -2.0) == -3.0
+  assert mul(max_value, 2.0) == infinity
+}
+
+/// Returns `a / b` by IEEE 754. It makes `Float` satisfy `Div`.
+pub fn div(a: Float, b: Float) -> Float {
+  a / b
+}
+
+test "div follows IEEE 754" {
+  assert div(1.0, 4.0) == 0.25
+  assert div(1.0, 0.0) == infinity
+  assert div(-1.0, 0.0) == neg_infinity
+  assert is_nan(div(0.0, 0.0))
+}
+
+/// Returns `a % b`, with the sign of `a`, like C's `fmod`.
+pub fn rem(a: Float, b: Float) -> Float {
+  a % b
+}
+
+test "rem keeps the sign of the dividend" {
+  assert rem(7.5, 2.0) == 1.5
+  assert rem(-7.5, 2.0) == -1.5
+  assert is_nan(rem(1.0, 0.0))
+}
+
+/// Returns `-x`, flipping the sign. It makes `Float` satisfy `Neg`.
+pub fn neg(x: Float) -> Float {
+  -x
+}
+
+test "neg flips the sign" {
+  assert neg(1.5) == -1.5
+  assert show(neg(0.0)) == "-0.0"
+}
+
+/// Returns `x` without its sign, so `-0.0` becomes `0.0`.
+pub fn abs(x: Float) -> Float {
+  // `0.0 - x` turns `-0.0` into `0.0`, which `-x` would not.
+  case {
+    x <= 0.0 => 0.0 - x
+    _ => x
+  }
+}
+
+test "abs drops the sign" {
+  assert abs(-1.5) == 1.5
+  assert abs(neg_infinity) == infinity
+  assert show(abs(-0.0)) == "0.0"
+}
+
+// Conversion to Int
+
+/// Returns `x` rounded toward zero, or `Err(Nil)` for NaN, the infinities and values outside `Int`.
+@external(native, "cheby_float_truncate")
+@external(js, "./float.mjs", "truncate")
+pub fn truncate(x: Float) -> Result<Int, Nil>
+
+test "truncate drops the fraction" {
+  assert truncate(2.7) == Ok(2)
+  assert truncate(-2.7) == Ok(-2)
+  assert truncate(nan) == Err(Nil)
+  assert truncate(infinity) == Err(Nil)
+  assert truncate(1.0e19) == Err(Nil)
+}
+
+/// Returns `x` rounded to the nearest whole number, halves away from zero (D-314), or `Err(Nil)`.
+@external(native, "cheby_float_round")
+@external(js, "./float.mjs", "round")
+pub fn round(x: Float) -> Result<Int, Nil>
+
+test "round takes halves away from zero" {
+  assert round(2.4) == Ok(2)
+  assert round(2.5) == Ok(3)
+  assert round(-2.5) == Ok(-3)
+  assert round(-0.4) == Ok(0)
+}
+
+/// Returns the largest whole number not above `x`, or `Err(Nil)`.
+@external(native, "cheby_float_floor")
+@external(js, "./float.mjs", "floor")
+pub fn floor(x: Float) -> Result<Int, Nil>
+
+test "floor rounds down" {
+  assert floor(2.7) == Ok(2)
+  assert floor(-2.5) == Ok(-3)
+  assert floor(neg_infinity) == Err(Nil)
+}
+
+/// Returns the smallest whole number not below `x`, or `Err(Nil)`.
+@external(native, "cheby_float_ceil")
+@external(js, "./float.mjs", "ceil")
+pub fn ceil(x: Float) -> Result<Int, Nil>
+
+test "ceil rounds up" {
+  assert ceil(2.1) == Ok(3)
+  assert ceil(-2.5) == Ok(-2)
+}
+
+// Special values
+
+/// Tells whether `x` is a NaN. Every NaN is `==` to `nan` (D-069).
+pub fn is_nan(x: Float) -> Bool {
+  x == nan
+}
+
+test "is_nan finds NaN" {
+  assert is_nan(nan)
+  assert !is_nan(infinity)
+}
+
+/// Tells whether `x` is `inf` or `-inf`.
+pub fn is_infinite(x: Float) -> Bool {
+  x == infinity || x == neg_infinity
+}
+
+test "is_infinite finds both infinities" {
+  assert is_infinite(neg_infinity)
+  assert !is_infinite(nan)
+  assert !is_infinite(max_value)
+}
+
+/// Tells whether `x` is neither a NaN nor an infinity.
+pub fn is_finite(x: Float) -> Bool {
+  !is_nan(x) && !is_infinite(x)
+}
+
+test "is_finite excludes NaN and the infinities" {
+  assert is_finite(-0.0)
+  assert !is_finite(nan)
+  assert !is_finite(infinity)
+}
+
+// Roots, powers, exponentials and trigonometry (correctly rounded, D-396)
+
+/// Returns the square root of `x`, and NaN for a negative `x`.
+@external(native, "cheby_float_sqrt")
+@external(js, "./float.mjs", "sqrt")
+pub fn sqrt(x: Float) -> Float
+
+test "sqrt is correctly rounded" {
+  assert sqrt(16.0) == 4.0
+  assert sqrt(2.0) == 1.4142135623730951
+  assert is_nan(sqrt(-1.0))
+  assert sqrt(infinity) == infinity
+}
+
+/// Returns `x` raised to `exponent`, with the special cases of IEEE 754's `pow`.
+@external(native, "cheby_float_pow")
+@external(js, "./float.mjs", "pow")
+pub fn pow(x: Float, exponent: Float) -> Float
+
+test "pow raises to a power" {
+  assert pow(2.0, 10.0) == 1024.0
+  assert pow(2.0, -1.0) == 0.5
+  assert pow(nan, 0.0) == 1.0
+  assert pow(1.0, nan) == 1.0
+  assert is_nan(pow(-8.0, 1.0 / 3.0))
+}
+
+/// Returns e raised to `x`.
+@external(native, "cheby_float_exp")
+@external(js, "./float.mjs", "exp")
+pub fn exp(x: Float) -> Float
+
+test "exp raises e to a power" {
+  assert exp(0.0) == 1.0
+  assert exp(1.0) == e
+  assert exp(neg_infinity) == 0.0
+  assert exp(1000.0) == infinity
+}
+
+/// Returns the natural logarithm of `x`.
+@external(native, "cheby_float_ln")
+@external(js, "./float.mjs", "ln")
+pub fn ln(x: Float) -> Float
+
+test "ln is the natural logarithm" {
+  assert ln(1.0) == 0.0
+  assert ln(0.0) == neg_infinity
+  assert is_nan(ln(-1.0))
+}
+
+/// Returns the sine of `x`, in radians.
+@external(native, "cheby_float_sin")
+@external(js, "./float.mjs", "sin")
+pub fn sin(x: Float) -> Float
+
+test "sin takes radians" {
+  assert sin(0.0) == 0.0
+  assert sin(pi / 2.0) == 1.0
+  assert is_nan(sin(infinity))
+}
+
+/// Returns the cosine of `x`, in radians.
+@external(native, "cheby_float_cos")
+@external(js, "./float.mjs", "cos")
+pub fn cos(x: Float) -> Float
+
+test "cos takes radians" {
+  assert cos(0.0) == 1.0
+  assert cos(pi) == -1.0
+}
+
+/// Returns the tangent of `x`, in radians.
+@external(native, "cheby_float_tan")
+@external(js, "./float.mjs", "tan")
+pub fn tan(x: Float) -> Float
+
+test "tan takes radians" {
+  assert tan(0.0) == 0.0
+  assert is_nan(tan(neg_infinity))
+}
+
+/// Returns the angle in radians between the positive x-axis and the point (`x`, `y`).
+@external(native, "cheby_float_atan2")
+@external(js, "./float.mjs", "atan2")
+pub fn atan2(y: Float, x: Float) -> Float
+
+test "atan2 gives the angle of a point" {
+  assert atan2(1.0, 1.0) == pi / 4.0
+  assert atan2(0.0, -1.0) == pi
+  assert atan2(-1.0, 0.0) == -pi / 2.0
+}
+
+// Tests of `std::f32` that need this module.
+
+test "conversions to f32 round to the nearest value" {
+  assert f32::from_u8(255) == 255.0
+  assert f32::from_int(16_777_217) == 16777216.0
+  assert f32::from_float(1.0e300) == f32::infinity
+  assert from_f32(f32::from_float(0.1)) == 0.10000000149011612
+}

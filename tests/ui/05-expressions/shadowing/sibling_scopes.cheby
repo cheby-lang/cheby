@@ -1,0 +1,24 @@
+// @mode: check-pass
+// @decisions: D-062
+//! Names that are never in scope at the same time do not conflict: sibling
+//! `case` arms and closures that are not nested may bind the same name
+//! (§5.2.3).
+
+fn total(pair: (Option<Int>, Option<Int>)) -> Int {
+  let (first, second) = pair
+  let a = case first {
+    Some(n) => n
+    None => 0
+  }
+  let b = case second {
+    Some(n) => n
+    None => 0
+  }
+  let f = fn(x) { x + a }
+  let g = fn(x) { x + b }
+  f(0) + g(0)
+}
+
+fn main() {
+  assert total((Some(1), None)) == 1
+}

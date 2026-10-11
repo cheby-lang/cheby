@@ -1,0 +1,8 @@
+// @mode: check-pass
+// @decisions: D-426
+//! The end of the file ends the last line, so a file needs no final line
+//! break (§4).
+
+fn main() {
+  assert 1 == 1
+}

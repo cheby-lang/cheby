@@ -1,0 +1,17 @@
+// @mode: check-fail
+// @decisions: D-138
+//! A named-field constructor is built with braces; it is never called
+//! positionally or used as a function (§4.3.2).
+
+pub type Point {
+  x: Int,
+  y: Int,
+}
+
+pub fn origin() -> Point {
+  Point(0, 0)
+}
+
+pub fn maker() -> fn(Int, Int) -> Point {
+  Point
+}

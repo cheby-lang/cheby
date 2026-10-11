@@ -1,0 +1,13 @@
+// @mode: check-fail
+// @decisions: D-164
+//! A function counts toward an interface only if it is at least as
+//! visible as the type, so `Angle` does not satisfy `Show` anywhere, even
+//! inside its package (§8.2, ADR-0034).
+
+import app::geometry::angle
+import std::io
+
+fn main() {
+  let right = angle::Angle { radians: 1.5708 }
+  io::println("{right}")
+}

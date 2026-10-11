@@ -1,0 +1,17 @@
+fn paren() {
+  io::println("hello"
+}
+
+fn bracket() {
+  let xs = [1, 2
+  xs
+}
+
+fn brace() {
+  let x = 1
+
+type After { x: Int }
+
+fn generic() -> List<Int {
+  1
+}

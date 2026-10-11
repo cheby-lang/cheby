@@ -1,0 +1,12 @@
+// @mode: check-pass
+// @decisions: D-141, D-190
+// @milestone: M1
+//! `@!target(native)` restricts a whole module to native. A package that
+//! declares only the native target may use it anywhere.
+
+import app::platform
+import std::io
+
+fn main() {
+  io::println(platform::name())
+}

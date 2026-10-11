@@ -1,0 +1,16 @@
+error[E0006]: type name `Point_2d` is not in PascalCase
+ --> tests/ui/02-lexical-structure/naming_convention.cheby:6:6
+  |
+6 | type Point_2d {
+  |      ^^^^^^^^
+  |
+  = help: write `Point2d`
+
+error[E0006]: name `maxValue` is not in snake_case
+  --> tests/ui/02-lexical-structure/naming_convention.cheby:12:7
+   |
+12 |   let maxValue = 3
+   |       ^^^^^^^^
+   |
+   = help: write `max_value`
+

@@ -1,0 +1,7 @@
+// @mode: check-fail
+// @decisions: D-157
+//! A spread item is a list of the same element type (§5.13).
+
+pub fn wrong(n: Int) -> List<Int> {
+  [..n, 1]
+}

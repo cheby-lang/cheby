@@ -1,0 +1,11 @@
+// @mode: check-fail
+// @decisions: D-201
+//! Inner attributes come after the `//!` docs and before the imports.
+
+import std::io
+
+@!target(native)
+
+fn main() {
+  io::println("hello")
+}

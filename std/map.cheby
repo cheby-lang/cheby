@@ -1,0 +1,234 @@
+//! The hashed map `Map<K, V>`, a persistent hash array mapped trie (§3.8,
+//! D-039).
+//!
+//! `Map` is a builtin item whose home module is this one
+//! (D-447, D-481), so it is not declared here. As in the spec's
+//! signatures, it is written unqualified in this module
+//! (D-481). Keys need no interface: they are compared
+//! with `==` and hashed with the built-in structural hash (§3.13).
+//! Iteration order depends on a per-process seed (D-093), so
+//! `to_sorted_list` gives an order that is the same on every run. The
+//! kernels are the functions map.md lists (D-274); the rest is written in
+//! Cheby over them.
+
+import std::list
+import std::ops::{Compare}
+import std::string
+
+// Building
+
+/// Returns an empty map.
+@external(native, "cheby_map_new")
+@external(js, "./map.mjs", "new")
+pub fn new<K, V>() -> Map<K, V>
+
+test "new is empty" {
+  let empty = new::<String, Int>()
+  assert is_empty(empty)
+  assert to_list(empty) == []
+}
+
+/// Returns a map with the given pairs, the last value winning for a repeated key (D-329).
+@external(native, "cheby_map_from_list")
+@external(js, "./map.mjs", "from_list")
+pub fn from_list<K, V>(pairs: List<(K, V)>) -> Map<K, V>
+
+test "from_list keeps the last duplicate" {
+  let fruit = from_list([("pear", 1), ("apple", 2), ("pear", 3)])
+  assert fruit == from_list([("apple", 2), ("pear", 3)])
+  assert get(fruit, "pear") == Some(3)
+}
+
+// Size
+
+/// Returns the number of keys (D-301).
+@external(native, "cheby_map_size")
+@external(js, "./map.mjs", "size")
+pub fn size<K, V>(m: Map<K, V>) -> Int
+
+test "size counts keys" {
+  assert size(from_list([("a", 1), ("b", 2), ("a", 3)])) == 2
+  assert size(new::<String, Int>()) == 0
+}
+
+/// Tells whether the map has no keys.
+@external(native, "cheby_map_is_empty")
+@external(js, "./map.mjs", "is_empty")
+pub fn is_empty<K, V>(m: Map<K, V>) -> Bool
+
+test "is_empty tells an empty map" {
+  assert is_empty(new::<String, Int>())
+  assert !is_empty(from_list([("a", 1)]))
+}
+
+// Lookup
+
+/// Returns the value stored under `key`.
+@external(native, "cheby_map_get")
+@external(js, "./map.mjs", "get")
+pub fn get<K, V>(m: Map<K, V>, key: K) -> Option<V>
+
+test "get looks a key up" {
+  let ages = from_list([("ada", 36), ("alan", 41)])
+  assert get(ages, "ada") == Some(36)
+  assert get(ages, "grace") == None
+}
+
+/// Tells whether `key` is in the map.
+@external(native, "cheby_map_has_key")
+@external(js, "./map.mjs", "has_key")
+pub fn has_key<K, V>(m: Map<K, V>, key: K) -> Bool
+
+test "has_key tells whether a key is present" {
+  let ages = from_list([("ada", 36)])
+  assert has_key(ages, "ada")
+  assert !has_key(ages, "alan")
+}
+
+// Updating
+
+/// Returns the map with `value` stored under `key`, replacing any value already there.
+@external(native, "cheby_map_insert")
+@external(js, "./map.mjs", "insert")
+pub fn insert<K, V>(m: Map<K, V>, key: K, value: V) -> Map<K, V>
+
+test "insert adds or replaces" {
+  let start = from_list([("a", 1)])
+  let added = insert(start, "b", 2)
+  let replaced = insert(added, "a", 10)
+  assert replaced == from_list([("a", 10), ("b", 2)])
+  assert start == from_list([("a", 1)])
+}
+
+/// Returns the map without `key`, or unchanged when `key` is not in it.
+@external(native, "cheby_map_remove")
+@external(js, "./map.mjs", "remove")
+pub fn remove<K, V>(m: Map<K, V>, key: K) -> Map<K, V>
+
+test "remove drops a key and ignores a missing one" {
+  let pair = from_list([("a", 1), ("b", 2)])
+  assert remove(pair, "a") == from_list([("b", 2)])
+  assert remove(pair, "z") == pair
+}
+
+/// Calls `update` once with the value under `key`, if any, and stores its result there.
+@external(native, "cheby_map_upsert")
+@external(js, "./map.mjs", "upsert")
+pub fn upsert<K, V>(m: Map<K, V>, key: K, update: fn(Option<V>) -> V) -> Map<K, V>
+
+test "upsert updates or inserts through one function" {
+  fn bump(previous: Option<Int>) -> Int {
+    case previous {
+      Some(n) => n + 1
+      None => 1
+    }
+  }
+  let counts = list::fold(["b", "a", "b"], new(), fn(found, word) { upsert(found, word, bump) })
+  assert counts == from_list([("a", 1), ("b", 2)])
+}
+
+/// Returns the entries of both maps, the value from `other` winning on a shared key.
+pub fn merge<K, V>(m: Map<K, V>, other: Map<K, V>) -> Map<K, V> {
+  list::fold(to_list(other), m, fn(merged, (key, value)) { insert(merged, key, value) })
+}
+
+test "merge prefers the second map on shared keys" {
+  let base = from_list([("a", 1), ("b", 2)])
+  let changes = from_list([("b", 20), ("c", 30)])
+  assert merge(base, changes) == from_list([("a", 1), ("b", 20), ("c", 30)])
+}
+
+// Iterating
+
+/// Returns the keys, in the map's per-process order (D-093).
+@external(native, "cheby_map_keys")
+@external(js, "./map.mjs", "keys")
+pub fn keys<K, V>(m: Map<K, V>) -> List<K>
+
+test "keys lists every key once" {
+  let scores = from_list([("b", 2), ("c", 3), ("a", 1)])
+  assert list::sort(keys(scores)) == ["a", "b", "c"]
+}
+
+/// Returns the values, in the same order as `keys` returns the keys.
+@external(native, "cheby_map_values")
+@external(js, "./map.mjs", "values")
+pub fn values<K, V>(m: Map<K, V>) -> List<V>
+
+test "values lists every value" {
+  let scores = from_list([("b", 2), ("c", 2), ("a", 1)])
+  assert list::sort(values(scores)) == [1, 2, 2]
+  assert list::zip(keys(scores), values(scores)) == to_list(scores)
+}
+
+/// Returns the entries as pairs, in the same order as `keys` returns the keys (D-093).
+@external(native, "cheby_map_to_list")
+@external(js, "./map.mjs", "to_list")
+pub fn to_list<K, V>(m: Map<K, V>) -> List<(K, V)>
+
+test "to_list gives every entry" {
+  let scores = from_list([("b", 2), ("a", 1)])
+  assert list::sort(to_list(scores)) == [("a", 1), ("b", 2)]
+  assert from_list(to_list(scores)) == scores
+}
+
+/// Returns the entries as pairs sorted by key, the same on every run (D-093, D-344).
+pub fn to_sorted_list<K: Compare, V>(m: Map<K, V>) -> List<(K, V)> {
+  list::sort_with(to_list(m), fn((a, _), (b, _)) { Compare::compare(a, b) })
+}
+
+test "to_sorted_list orders by key" {
+  let scores = from_list([("b", 2), ("c", 3), ("a", 1)])
+  assert to_sorted_list(scores) == [("a", 1), ("b", 2), ("c", 3)]
+  assert to_sorted_list(new::<Int, Int>()) == []
+}
+
+/// Combines the entries, starting from `initial`, in the map's per-process order (D-093).
+pub fn fold<K, V, A>(m: Map<K, V>, initial: A, f: fn(A, K, V) -> A) -> A {
+  list::fold(to_list(m), initial, fn(found, (key, value)) { f(found, key, value) })
+}
+
+test "fold visits every entry once" {
+  let scores = from_list([("b", 2), ("c", 3), ("a", 1)])
+  assert fold(scores, 0, fn(total, _, value) { total + value }) == 6
+  assert fold(scores, 0, fn(seen, _, _) { seen + 1 }) == 3
+}
+
+/// Calls `f` once per entry, in the map's per-process order (D-093), for its effects.
+pub fn each<K, V>(m: Map<K, V>, f: fn(K, V)) {
+  list::each(to_list(m), fn((key, value)) { f(key, value) })
+}
+
+test "each calls the function once per entry" {
+  let lengths = from_list([("a", 1), ("bb", 2)])
+  each(lengths, fn(key, value) { assert string::length(key) == value })
+}
+
+// Transforming
+
+/// Returns a map with the same keys, each value replaced by `f` of its key and value.
+pub fn map_values<K, V, W>(m: Map<K, V>, f: fn(K, V) -> W) -> Map<K, W> {
+  list::fold(to_list(m), new(), fn(mapped, (key, value)) { insert(mapped, key, f(key, value)) })
+}
+
+test "map_values keeps the keys" {
+  let counts = from_list([("a", 1), ("b", 2)])
+  let labels = map_values(counts, fn(key, value) { "{key}={value}" })
+  assert labels == from_list([("a", "a=1"), ("b", "b=2")])
+}
+
+/// Returns the entries for which `keep` returns `True`.
+pub fn filter<K, V>(m: Map<K, V>, keep: fn(K, V) -> Bool) -> Map<K, V> {
+  list::fold(to_list(m), m, fn(kept, (key, value)) {
+    case keep(key, value) {
+      True => kept
+      False => remove(kept, key)
+    }
+  })
+}
+
+test "filter keeps the matching entries" {
+  let counts = from_list([("a", 1), ("b", 2), ("c", 3)])
+  let odd = filter(counts, fn(_, value) { value % 2 == 1 })
+  assert odd == from_list([("a", 1), ("c", 3)])
+}

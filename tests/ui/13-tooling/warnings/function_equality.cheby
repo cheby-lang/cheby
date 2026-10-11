@@ -1,0 +1,24 @@
+// @mode: check-pass
+// @decisions: D-070, D-233, D-518
+//! `==` and `!=` on a type known to contain a function type warn, through
+//! fields, lists and tuples, since the comparison panics when it reaches
+//! a function value.
+
+type Handler {
+  name: String,
+  run: fn(Int) -> Int,
+}
+
+fn same(a: Handler, b: Handler) -> Bool {
+  a == b
+}
+
+fn differ(f: fn() -> Nil, g: fn() -> Nil) -> Bool {
+  [(1, f)] != [(1, g)]
+}
+
+fn main() {
+  let h = Handler { name: "double", run: fn(n: Int) { n * 2 } }
+  let nothing = fn() { Nil }
+  assert !differ(nothing, nothing) || same(h, h)
+}

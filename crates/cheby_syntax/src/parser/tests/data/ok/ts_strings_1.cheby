@@ -1,0 +1,2 @@
+// Interpolation and escapes
+const s: String = "at {point.x}, {user.name} {state:?} \{brace} \u{1F600}\n"

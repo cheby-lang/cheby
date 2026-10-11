@@ -1,0 +1,8 @@
+error[E0013]: a `case` subject cannot start with `{`
+ --> tests/ui/05-expressions/case/later_subject_block.cheby:7:11
+  |
+7 |   case n, { 1 } {
+  |           ^
+  |
+  = help: put the block in parentheses, such as `({ … })`
+

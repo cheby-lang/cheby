@@ -1,0 +1,25 @@
+// @mode: check-pass
+// @decisions: D-002, D-052, D-113
+//! `case` tries its arms in order; a guard may use the arm's bindings, and
+//! all arm bodies have one type (§5.9.1, §5.9.3).
+
+type Shape {
+  Circle { radius: Float },
+  Rect { width: Float, height: Float },
+  Dot,
+}
+
+fn describe(shape: Shape) -> String {
+  case shape {
+    Circle { radius } when radius == 0.0 => "a point"
+    Circle { .. } => "a circle"
+    Rect { width, height } when width == height => "a square"
+    Rect { .. } => "a rectangle"
+    Dot => "a dot"
+  }
+}
+
+fn main() {
+  assert describe(Rect { width: 1.0, height: 1.0 }) == "a square"
+  assert describe(Dot) == "a dot"
+}

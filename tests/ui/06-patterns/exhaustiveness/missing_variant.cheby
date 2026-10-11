@@ -1,0 +1,20 @@
+// @mode: check-fail
+// @decisions: D-022
+//! A `case` must have an arm for every variant of its subject's type.
+
+type Color {
+  Red,
+  Green,
+  Blue,
+}
+
+fn name(color: Color) -> String {
+  case color {
+    Red => "red"
+    Green => "green"
+  }
+}
+
+fn main() {
+  assert name(Blue) == "blue"
+}

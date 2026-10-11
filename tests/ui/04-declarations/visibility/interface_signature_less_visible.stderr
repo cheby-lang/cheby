@@ -1,0 +1,12 @@
+error[E0074]: the `pub` interface `Keeper` mentions the package-visible type `Secret`
+ --> tests/ui/04-declarations/visibility/interface_signature_less_visible.cheby:9:22
+  |
+6 | type Secret { Secret(String) }
+  |      ------ declared here
+...
+9 |   fn secret(Self) -> Secret
+  |                      ^^^^^^ package-visible type
+  |
+  = note: code that can use `Keeper` could not name `Secret` (D-148)
+  = help: make `Secret` `pub`, or make `Keeper` package-visible
+

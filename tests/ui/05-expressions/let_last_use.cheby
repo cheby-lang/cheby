@@ -1,0 +1,17 @@
+// @mode: run-pass
+// @decisions: D-205, D-273
+//! A binding used twice: the first call gets a new reference, the last
+//! call takes the binding's own, so the line prints twice. This test
+//! checks the output only: a string literal is a static object, which
+//! reference counting never changes, so the leak check cannot see where
+//! dups and drops go. The MIR goldens pin their placement, and
+//! `cheby_jit`'s `rc_placement_frees_every_object` checks a heap object at
+//! run time.
+
+import std::io
+
+fn main() {
+  let greeting = "hello"
+  io::println(greeting)
+  io::println(greeting)
+}

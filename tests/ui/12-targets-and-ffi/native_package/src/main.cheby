@@ -1,0 +1,15 @@
+// @mode: check-pass
+// @decisions: D-030, D-056, D-190
+//! A function with only an `@external(native, …)` exists only on native.
+//! The package declares only the native target, so the cross-target check
+//! covers native alone, and any code may call it.
+
+import std::io
+
+@external(native, "app_clock_now")
+fn native_now() -> Int
+
+fn main() {
+  let _ = native_now()
+  io::println("done")
+}

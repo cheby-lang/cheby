@@ -1,0 +1,8 @@
+error[E0012]: interpolation in a test name
+  --> tests/ui/04-declarations/tests/test_name_interpolation.cheby:11:7
+   |
+11 | test "{subject} works" {
+   |       ^^^^^^^^^
+   |
+   = help: a test name is fixed text; write it out, or escape the brace as `\{`
+

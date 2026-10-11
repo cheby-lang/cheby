@@ -1,0 +1,23 @@
+// @mode: check-pass
+// @decisions: D-022, D-049
+//! A type declaration lists variants: unit, positional and named-field
+//! ones, and may be generic and recursive (§4.3.1).
+
+pub exposed type Shape {
+  Circle { radius: Float },
+  Rect { width: Float, height: Float },
+  Dot,
+}
+
+pub type Tree<T> {
+  Leaf,
+  Node(Tree<T>, T, Tree<T>),
+}
+
+pub fn single<T>(value: T) -> Tree<T> {
+  Node(Leaf, value, Leaf)
+}
+
+pub fn rectangle() -> Shape {
+  Rect { width: 1.0, height: 2.0 }
+}

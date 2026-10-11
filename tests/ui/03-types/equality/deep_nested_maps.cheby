@@ -1,0 +1,77 @@
+// @mode: run-pass
+// @decisions: D-093, D-252, D-344, D-538
+//! `==`, hashing and `{x:?}` of values that nest maps and sets inside each
+//! other finish, however deep: a tree a million levels deep through map
+//! values, used as a set element and a map key, and a tree that nests sets
+//! through their elements. The runtime walks maps and sets on the same
+//! worklists as other values, never with recursion (§3.13).
+
+import std::io
+import std::list
+import std::map
+import std::map::{Map}
+import std::set
+import std::set::{Set}
+import std::string
+
+type Tree {
+  Leaf,
+  Branch(Map<Int, Tree>),
+}
+
+type Bag {
+  Empty,
+  Holds(Set<Bag>),
+}
+
+/// A tree `n` levels deep, each level one map entry.
+fn build(n: Int, acc: Tree) -> Tree {
+  case n {
+    0 => acc
+    _ => build(n - 1, Branch(map::from_list([(n, acc)])))
+  }
+}
+
+/// A bag `n` levels deep, each level a set with one bag in it.
+fn nest(n: Int, acc: Bag) -> Bag {
+  case n {
+    0 => acc
+    _ => nest(n - 1, Holds(set::from_list([acc])))
+  }
+}
+
+fn main() {
+  let depth = 1_000_000
+  let tree = build(depth, Leaf)
+  let again = build(depth, Leaf)
+  let other = Branch(map::from_list([(0, build(depth, Leaf))]))
+  let same = tree == again
+  let differ = tree == other
+  io::println("equal: {same}, other equal: {differ}")
+  let kept = list::length(list::unique([tree, again, other, tree]))
+  io::println("distinct trees: {kept}")
+  let trees = set::from_list([tree, other])
+  let found = set::contains(trees, again)
+  let sets_equal = trees == set::from_list([other, again])
+  io::println("in the set: {found}, sets equal: {sets_equal}")
+  let keyed = map::insert(map::new(), again, "deep")
+  let value = map::get(keyed, tree)
+  io::println("by key: {value:?}")
+  let text = "{tree:?}"
+  let size = string::length(text)
+  let head = string::slice(text, 0, 44)
+  let tail = string::slice(text, size - 12, size)
+  io::println("{size} characters: {head} … {tail}")
+  let bags = 2_000
+  let bag = nest(bags, Empty)
+  let bag_again = nest(bags, Empty)
+  let shallower = nest(bags - 1, Empty)
+  let bags_equal = bag == bag_again
+  let bags_differ = bag == shallower
+  let distinct_bags = list::length(list::unique([bag, shallower, bag_again]))
+  io::println("bags equal: {bags_equal}, differ: {bags_differ}, distinct: {distinct_bags}")
+  let bag_text = "{bag:?}"
+  let bag_size = string::length(bag_text)
+  let bag_head = string::slice(bag_text, 0, 31)
+  io::println("{bag_size} characters: {bag_head} …")
+}

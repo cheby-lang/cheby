@@ -1,0 +1,16 @@
+// @mode: check-fail
+// @decisions: D-455
+//! Every `@external(native, "symbol")` that names one C symbol must give
+//! it the same C signature, so the second declaration that disagrees is
+//! an error (§12.5.1).
+
+@!target(native)
+
+@external(native, "app_store_open")
+pub fn open(path: String) -> Int
+
+@external(native, "app_store_open")
+pub fn open_with(path: String, mode: Int) -> Int
+
+@external(native, "app_store_open")
+pub fn open_again(path: String) -> Int

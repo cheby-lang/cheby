@@ -1,0 +1,98 @@
+module app
+
+fn app::first() -> value check str#0 {
+  str#0 = "src/main.cheby:22:4"
+  str#1 = "first"
+bb0:
+  call_runtime effect_check(borrow const str#1)
+  _0: int = call_foreign "first"() -> i64
+  _1: value = box int _0
+  return _1
+}
+
+fn app::moved(_0: value) -> value check str#0 {
+  str#0 = "src/main.cheby:24:4"
+bb0:
+  _1: value = call app::first()
+  _2: int = unbox int _1
+  drop _1
+  _3: int = field _0.1 of ctor app::Point
+  drop _0
+  _4: value = alloc ctor app::Point(_2, _3)
+  return _4
+}
+
+fn app::aliased(_0: value) -> value check str#0 {
+  str#0 = "src/main.cheby:28:4"
+bb0:
+  _1: int = field _0.0 of ctor app::Point
+  drop _0
+  _2: value = alloc ctor app::Point(_1, const int 10)
+  return _2
+}
+
+fn app::relabeled(_0: value, _1: int) -> value check str#0 {
+  str#0 = "src/main.cheby:32:4"
+bb0:
+  _2: value = box int _1
+  _3: value = field _0.1 of ctor app::Labeled
+  dup _3
+  drop _0
+  _4: value = alloc ctor app::Labeled(_2, _3)
+  return _4
+}
+
+fn app::renamed(_0: value, _1: value) -> value check str#0 {
+  str#0 = "src/main.cheby:36:4"
+bb0:
+  _2: int = read_tag _0 of app::Shape
+  switch _2 [0 => bb1, _ => bb2]
+bb1:
+  _4: int = field _0.1 of ctor app::Circle
+  drop _0
+  _5: value = alloc ctor app::Circle(_1, _4)
+  goto bb3(_5)
+bb2:
+  _6: int = field _0.0 of ctor app::Rect
+  _7: int = field _0.1 of ctor app::Rect
+  drop _0
+  _8: value = alloc ctor app::Rect(_6, _7, _1)
+  goto bb3(_8)
+bb3(_3: value):
+  return _3
+}
+
+fn app::main() -> value check str#0 {
+  str#0 = "src/main.cheby:40:4"
+  str#1 = "one"
+  str#2 = "c"
+  str#3 = "d"
+bb0:
+  _0: value = alloc ctor app::Point(const int 1, const int 2)
+  _1: value = call app::moved(_0)
+  drop _1
+  _2: value = alloc ctor app::Point(const int 1, const int 2)
+  _3: value = call app::aliased(_2)
+  drop _3
+  _4: value = box int const int 1
+  _5: value = const str#1
+  _6: value = alloc ctor app::Labeled(_4, _5)
+  _7: value = call app::relabeled(_6, const int 2)
+  drop _7
+  _8: value = const str#2
+  _9: value = alloc ctor app::Circle(_8, const int 1)
+  _10: value = const str#3
+  _11: value = call app::renamed(_9, _10)
+  drop _11
+  return const nil
+}
+
+layout ctor app::Point: Point.Point tag 0 key ec11cf523cf6d065 record [x: int @8, y: int @16]
+layout ctor app::Labeled: Labeled.Labeled tag 0 key c739b5310c3ba1c8 record [value: value @8, label: value @16]
+layout ctor app::Circle: Shape.Circle tag 0 key 057c1db0258c1332 record [name: value @8, radius: int @16]
+layout ctor app::Rect: Shape.Rect tag 1 key 057c1db0258c1332 record [width: int @16, height: int @24, name: value @8]
+callee app::first() -> value
+callee app::moved(value) -> value
+callee app::aliased(value) -> value
+callee app::relabeled(value, int) -> value
+callee app::renamed(value, value) -> value

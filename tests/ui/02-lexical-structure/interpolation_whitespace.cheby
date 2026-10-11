@@ -1,0 +1,9 @@
+// @mode: check-fail
+// @decisions: D-115
+//! There is no space inside interpolation braces.
+
+fn main() {
+  let name = "Ada"
+  let s = "hello { name }"
+  assert s == "hello Ada"
+}

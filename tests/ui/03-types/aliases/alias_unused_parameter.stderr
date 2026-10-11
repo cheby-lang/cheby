@@ -1,0 +1,9 @@
+error[E0070]: the type parameter `B` of the alias `Pair` is not used
+ --> tests/ui/03-types/aliases/alias_unused_parameter.cheby:5:18
+  |
+5 | pub type Pair<A, B> = (A, A)
+  |                  ^ not used in the definition
+  |
+  = note: an alias is replaced by its definition, so an unused parameter would make different-looking types the same (§4.4)
+  = help: use `B` in the definition, or remove it
+

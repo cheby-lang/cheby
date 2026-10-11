@@ -1,0 +1,8 @@
+error[E0031]: `..base` must come first in a record update
+  --> tests/ui/05-expressions/record_update.cheby:12:25
+   |
+12 |   let q = Point { x: 3, ..p }
+   |                         ^^^
+   |
+   = help: move the spread before the fields
+

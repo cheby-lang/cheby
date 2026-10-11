@@ -1,0 +1,17 @@
+// @mode: parse-fail
+// @decisions: D-114
+//! An unterminated string runs to the end of the file. The `{` in the
+//! rest of the file are not reported as interpolations.
+
+import std::io
+
+fn main() {
+  io::println("hello)
+}
+
+fn sign(n: Int) -> Int {
+  case n {
+    0 => 0
+    _ => 1
+  }
+}

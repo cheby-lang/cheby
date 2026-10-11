@@ -1,0 +1,9 @@
+error[E0050]: `main` must take no parameters and return `Nil` or `Result<Nil, E>`
+ --> tests/ui/04-declarations/main/main_in_any_module/src/tool.cheby:7:18
+  |
+7 | pub fn main() -> String {
+  |                  ^^^^^^ `main` must return `Nil` or `Result<Nil, E>`
+  |
+  = note: any module's `main` can be run with `cheby run <module>` (D-137)
+  = help: return `Nil`, or `Result<Nil, E>` to report an error; give the function another name if it is not an entry point
+

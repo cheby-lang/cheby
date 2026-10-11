@@ -1,0 +1,18 @@
+// @mode: check-pass
+// @decisions: D-080
+//! A binding whose name starts with `_` is never reported, and `_` binds
+//! nothing (§2.3).
+
+fn describe(size: Int, _unused: Int) -> Int {
+  let _total = size + 1
+  let _ = size * 2
+  let add = fn(_a: Int, b: Int) { b }
+  case Some(size) {
+    Some(_value) => add(1, 2)
+    None => 0
+  }
+}
+
+fn main() {
+  assert describe(1, 2) == 2
+}

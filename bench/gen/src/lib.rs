@@ -219,22 +219,6 @@ fn main_module(count: usize) -> String {
 
 fn module(shape: Shape, index: usize, imports: &[usize], target: usize, rng: &mut Rng) -> String {
     let mut out = String::with_capacity(target.saturating_mul(40));
-    let _ = writeln!(
-        out,
-        "//! Generated module {index} of a `{}` benchmark project.",
-        shape.name()
-    );
-    out.push('\n');
-    if shape == Shape::Generic || rng.below(2) == 0 {
-        out.push_str("import std::list\n");
-    }
-    for &dep in imports {
-        let _ = writeln!(out, "import {}", import_path(dep));
-    }
-    if !imports.is_empty() || out.ends_with("list\n") {
-        out.push('\n');
-    }
-
     // `entry` is what other modules and `main` call.
     out.push_str("/// The function other modules call.\npub fn entry(n: Int) -> Int {\n");
     let mut sum = "count_0(n)".to_owned();
@@ -270,7 +254,27 @@ fn module(shape: Shape, index: usize, imports: &[usize], target: usize, rng: &mu
         out.push('\n');
         counting_function(&mut out, 0, 3);
     }
-    out
+    // The header goes on last: `std::list` is imported only when a unit
+    // uses it, so that no import is unused (W0003).
+    let mut header = String::new();
+    let _ = writeln!(
+        header,
+        "//! Generated module {index} of a `{}` benchmark project.",
+        shape.name()
+    );
+    header.push('\n');
+    if out.contains("list::") {
+        header.push_str("import std::list\n");
+    }
+    for &dep in imports {
+        let _ = writeln!(header, "import {}", import_path(dep));
+    }
+    if header.ends_with("\n\n") {
+        header.pop();
+    }
+    header.push('\n');
+    header.push_str(&out);
+    header
 }
 
 fn counting_unit(out: &mut String, unit: usize, rng: &mut Rng) {
@@ -321,10 +325,10 @@ fn list_unit(out: &mut String, unit: usize, rng: &mut Rng) {
     let items: Vec<String> = (0..len).map(|_| rng.below(1000).to_string()).collect();
     let _ = write!(
         out,
-        "/// Sums a fixed list of numbers.\n\
+        "/// Sums a fixed list of numbers and adds its length.\n\
          pub fn total_{unit}() -> Int {{\n\
          \x20 let items = [{}]\n\
-         \x20 sum_{unit}(items, 0)\n\
+         \x20 sum_{unit}(items, list::length(items))\n\
          }}\n\
          \n\
          fn sum_{unit}(items: List<Int>, acc: Int) -> Int {{\n\
@@ -371,22 +375,22 @@ fn variant_unit(out: &mut String, unit: usize, rng: &mut Rng) {
         out,
         "/// A small shape.\n\
          pub type Shape{unit} {{\n\
-         \x20 Square(Int),\n\
-         \x20 Rect(Int, Int),\n\
-         \x20 Empty,\n\
+         \x20 Square{unit}(Int),\n\
+         \x20 Rect{unit}(Int, Int),\n\
+         \x20 Empty{unit},\n\
          }}\n\
          \n\
          /// Returns the area of `shape`.\n\
          pub fn area_{unit}(shape: Shape{unit}) -> Int {{\n\
          \x20 case shape {{\n\
-         \x20   Square(side) => side * side\n\
-         \x20   Rect(width, height) => width * height\n\
-         \x20   Empty => 0\n\
+         \x20   Square{unit}(side) => side * side\n\
+         \x20   Rect{unit}(width, height) => width * height\n\
+         \x20   Empty{unit} => 0\n\
          \x20 }}\n\
          }}\n\
          \n\
          test \"area_{unit} of a square\" {{\n\
-         \x20 assert area_{unit}(Square({a})) == {}\n\
+         \x20 assert area_{unit}(Square{unit}({a})) == {}\n\
          }}\n",
         a.saturating_mul(a)
     );
@@ -474,6 +478,34 @@ mod tests {
                     assert!(dep < index);
                 }
             }
+        }
+    }
+
+    /// Every shape generates a project that checks with no diagnostics
+    /// at all, so that the D-247 budgets measure real work.
+    #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+    )]
+    fn generated_projects_check_cleanly() {
+        for shape in Shape::ALL {
+            let project = generate(&Config {
+                lines: 1_500,
+                shape,
+                seed: 11,
+            });
+            let dir = std::env::temp_dir().join(format!(
+                "cheby_bench_gen_{}_{}",
+                std::process::id(),
+                shape.name()
+            ));
+            let _ = std::fs::remove_dir_all(&dir);
+            project.write(&dir).unwrap();
+            let out = cheby_driver::check(&dir).unwrap();
+            let rendered = out.render();
+            let _ = std::fs::remove_dir_all(&dir);
+            assert_eq!(rendered, "", "{}", shape.name());
         }
     }
 

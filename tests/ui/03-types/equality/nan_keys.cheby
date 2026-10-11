@@ -1,0 +1,37 @@
+// @mode: run-pass
+// @decisions: D-069, D-233, D-538
+//! Equal floats hash equally, so NaN and the two zeros work as hashed
+//! keys: `list::unique` hashes its elements like `Set` elements and keeps
+//! one NaN and one zero, also inside tuples and records, and a `Map` holds
+//! one entry for every NaN and one for both zeros (§3.3.2, §3.13).
+
+import std::io
+import std::list
+import std::map
+
+type Reading {
+  sensor: String,
+  value: Float,
+}
+
+fn main() {
+  let nan = 0.0 / 0.0
+  let other_nan = -(0.0 / 0.0)
+  let floats = list::unique([nan, 0.0, other_nan, -0.0, 1.5, nan])
+  io::println("{floats:?}")
+  let pairs = list::unique([(nan, "a"), (nan, "a"), (nan, "b"), (-0.0, "a"), (0.0, "a")])
+  io::println("{pairs:?}")
+  let readings = list::unique([
+    Reading { sensor: "s", value: nan },
+    Reading { sensor: "s", value: other_nan },
+    Reading { sensor: "t", value: nan },
+  ])
+  io::println("{readings:?}")
+  let narrow: F32 = 0.0
+  let narrow_nan = narrow / narrow
+  let narrows = list::unique([narrow_nan, -narrow, narrow, narrow_nan])
+  io::println("{narrows:?}")
+  let counts = map::from_list([(nan, 1), (other_nan, 2), (0.0, 3)])
+  let found = [map::get(counts, 0.0 / 0.0), map::get(counts, -0.0)]
+  io::println("{counts:?} {found:?}")
+}

@@ -1,0 +1,26 @@
+// @mode: run-pass
+// @decisions: D-092, D-120
+//! `&&` and `||` evaluate the right operand only when the left one does
+//! not decide the result (§5.4.5), left to right (§5.15.1).
+
+import std::io
+
+fn noisy(label: String, value: Bool) -> Bool {
+  io::println(label)
+  value
+}
+
+fn boom() -> Bool {
+  panic as "the right operand was evaluated"
+}
+
+fn main() {
+  assert !(False && boom())
+  assert True || boom()
+  assert !(noisy("a", False) && noisy("b", True))
+  assert noisy("c", True) && noisy("d", True)
+  assert noisy("e", False) || noisy("f", True)
+  assert noisy("g", True) || noisy("h", False)
+  assert !noisy("i", False)
+  io::println("done")
+}

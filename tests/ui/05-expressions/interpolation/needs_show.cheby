@@ -1,0 +1,13 @@
+// @mode: check-fail
+// @decisions: D-086
+//! `{x}` needs a type that satisfies `Show`; otherwise the error suggests
+//! `{x:?}` (§5.3.2).
+
+pub type Point {
+  x: Int,
+  y: Int,
+}
+
+pub fn describe(p: Point) -> String {
+  "point {p}"
+}

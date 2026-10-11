@@ -1,0 +1,16 @@
+warning[W0003]: unused import `std::list`
+ --> tests/ui/13-tooling/warnings/unused_import.cheby:7:1
+  |
+7 | import std::list
+  | ^^^^^^^^^^^^^^^^ nothing in this module uses it
+  |
+  = help: remove the import
+
+warning[W0003]: unused import `length` from `std::string`
+ --> tests/ui/13-tooling/warnings/unused_import.cheby:8:22
+  |
+8 | import std::string::{length, trim}
+  |                      ^^^^^^ nothing in this module uses it
+  |
+  = help: remove it from the list
+

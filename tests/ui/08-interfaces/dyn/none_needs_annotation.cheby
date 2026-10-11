@@ -1,0 +1,12 @@
+// @mode: check-fail
+// @decisions: D-237
+//! A value converted to `dyn` needs a fully known type at the end of the
+//! body, so `None` with nothing fixing its element type is an error
+//! (§8.6.1).
+
+interface Any
+
+fn main() {
+  let b: dyn Any = None
+  assert b == b
+}

@@ -1,0 +1,9 @@
+// @mode: check-fail
+// @decisions: D-084
+//! A decimal literal has no leading zeros, and `_` goes between digits.
+
+fn main() {
+  let a = 007
+  let b = 0x_ff
+  assert a < b
+}

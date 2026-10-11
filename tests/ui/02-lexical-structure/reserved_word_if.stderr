@@ -1,0 +1,8 @@
+error[E0013]: expected a line break or `}`, found identifier
+ --> tests/ui/02-lexical-structure/reserved_word_if.cheby:7:6
+  |
+7 |   if n > 0 { 1 } else { 0 }
+  |      ^
+  |
+  = help: Cheby has no `if`; use `case`
+

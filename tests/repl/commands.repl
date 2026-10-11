@@ -1,0 +1,56 @@
+// @decisions: D-098, D-546, D-624
+> :help
+Enter an expression to see its value and type, `let` or `let assert` to bind names for later entries, a declaration (`fn`, `type`, a type alias, `interface`, `const`), or an `import`. A name may be defined again (§13.5.2).
+
+Commands:
+  :type <expr>     show the type of an expression without evaluating it
+  :module <path>   enter a module, so its `priv` items and its imports are in scope
+  :module          leave the module entered with `:module`
+  :reload          check and compile again the modules of the package that changed
+  :help            show this text
+  :quit            end the session, as the end of input does
+> import std::list
+> let double = fn(x: Int) { x * 2 }
+> :type list::map(_, double)
+list::map(_, double) : fn(List<Int>) -> List<Int>
+> :type list::reverse([1, 2])
+list::reverse([1, 2]) : List<Int>
+> :type double
+double : fn(Int) -> Int
+> :type [1, 2] |> list::map(_, double)
+[1, 2] |> list::map(_, double) : List<Int>
+> :type Some("text")
+Some("text") : Option<String>
+> :type 1 +
+error[E0013]: expected an expression, found the end of the entry
+ --> <repl:8>:1:4
+  |
+1 | 1 +
+  |    ^
+
+> :type undefined_name
+error[E0042]: cannot find value `undefined_name` in this scope
+ --> <repl:9>:1:1
+  |
+1 | undefined_name
+  | ^^^^^^^^^^^^^^ not found
+
+> :type let y = 1
+error: `:type` needs an expression, and the last statement here is not one
+> :type fn f() {}
+error: `:type` needs an expression, as in `:type 1 + 2`
+> :type
+error: `:type` needs an expression, as in `:type 1 + 2`
+> :type 1 / 0
+1 / 0 : Int
+> :frobnicate
+error: there is no command `:frobnicate`; `:help` lists the commands
+> :reload
+error: `:reload` reloads the modules of the package, and this session has no package
+> :help me
+error: `:help` takes no argument
+> :quit now
+error: `:quit` takes no argument
+> 1 + 1
+2 : Int
+> :quit

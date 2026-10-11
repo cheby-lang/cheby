@@ -1,0 +1,8 @@
+error[E0039]: the root module is imported as `ui_test`, not `ui_test::main`
+ --> tests/ui/07-modules-and-packages/root_by_main_segment.cheby:6:8
+  |
+6 | import ui_test::main
+  |        ^^^^^^^^^^^^^ the root module has no `main` segment
+  |
+  = help: import it as `ui_test`
+

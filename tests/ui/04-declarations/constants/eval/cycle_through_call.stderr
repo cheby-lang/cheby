@@ -1,0 +1,9 @@
+error[E0069]: the constant `limit` depends on itself
+ --> tests/ui/04-declarations/constants/eval/cycle_through_call.cheby:8:7
+  |
+8 | const limit: Int = twice_limit() / 2
+  |       ^^^^^ `limit` needs its own value while it is computed
+  |
+  = note: its initializer reaches its own value through a function call
+  = help: give it a value that does not depend on itself
+
