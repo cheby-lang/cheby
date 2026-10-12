@@ -1,0 +1,23 @@
+// @mode: run-fail
+// @milestone: M2
+// @decisions: D-698, D-710
+//! A panic at the bottom of a recursion unwinds every frame. Each frame
+//! releases the list and the text it holds on the way, so no leak turns
+//! the exit status 101 into 102 (§11.3).
+
+import std::io
+import std::list
+
+fn descend(depth: Int, held: List<String>) -> Int {
+  let more = list::push(held, "frame {depth}")
+  case depth {
+    0 => panic as "bottom reached"
+    _ => descend(depth - 1, ["below {depth}"]) + list::length(more)
+  }
+}
+
+fn main() {
+  io::println("descending")
+  let total = descend(300, ["top"])
+  io::println("not reached: {total}")
+}

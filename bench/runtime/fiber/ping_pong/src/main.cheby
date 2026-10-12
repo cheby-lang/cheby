@@ -1,0 +1,91 @@
+//! Runtime benchmark of the fiber group: messages over channels of
+//! capacity 0.
+//!
+//! The main fiber sends a number to an echo fiber, which sends an answer
+//! back. Both channels have capacity 0, so every message is handed from
+//! one fiber straight to the other, and each one is a switch. The number
+//! of messages is the first program argument, and `main` prints a
+//! checksum of the answers.
+
+import std::channel
+import std::env
+import std::fiber
+import std::int
+import std::io
+
+/// The number of messages, both ways together, when no argument is
+/// given.
+const default_size: Int = 1_000_000
+
+/// Keeps the checksum small.
+const modulus: Int = 1_000_000_007
+
+fn main() {
+  let n = size(env::args())
+  let assert Ok(checksum) = exchange(n / 2)
+  io::println("size: {n}")
+  io::println("checksum: {checksum}")
+}
+
+/// The size from the first program argument, or `default_size`.
+fn size(args: List<String>) -> Int {
+  case args {
+    [] => default_size
+    [first, ..] => {
+      let assert Ok(n) = int::parse(first)
+      n
+    }
+  }
+}
+
+/// Plays `rounds` rounds with an echo fiber, two messages each, and
+/// returns a checksum of the answers. The result is an `Err` only if the
+/// echo fiber panics.
+fn exchange(rounds: Int) -> Result<Int, fiber::Panic> {
+  use scope <- fiber::scope()
+  let (ping_tx, ping_rx) = channel::new::<Int>(0)
+  let (pong_tx, pong_rx) = channel::new::<Int>(0)
+  fiber::spawn(scope, fn() { echo(ping_rx, pong_tx) })
+  // Returning drops `ping_tx`, which closes the channel and lets the echo
+  // fiber return.
+  play(ping_tx, pong_rx, rounds, 1, 0)
+}
+
+/// Sends `value`, waits for the answer and goes on with the next round
+/// until `remaining` is 0.
+fn play(
+  output: channel::Sender<Int>,
+  input: channel::Receiver<Int>,
+  remaining: Int,
+  value: Int,
+  total: Int,
+) -> Int {
+  case remaining {
+    0 => total
+    _ => {
+      let assert Ok(_) = channel::send(output, value)
+      let assert Ok(answer) = channel::receive(input)
+      play(output, input, remaining - 1, answer % 1_000_003, (total * 31 + answer) % modulus)
+    }
+  }
+}
+
+/// Answers each number from `input` on `output` until `input` closes.
+fn echo(input: channel::Receiver<Int>, output: channel::Sender<Int>) {
+  case channel::receive(input) {
+    Ok(n) => case channel::send(output, n * 3 + 1) {
+      Ok(_) => echo(input, output)
+      Err(_) => Nil
+    }
+    Err(_) => Nil
+  }
+}
+
+test "two rounds give the answers of the echo fiber" {
+  // 1 is answered with 4, then 4 with 13.
+  assert exchange(2) == Ok(4 * 31 + 13)
+}
+
+test "no rounds give zero" {
+  assert exchange(0) == Ok(0)
+}

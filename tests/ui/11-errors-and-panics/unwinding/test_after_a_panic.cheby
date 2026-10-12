@@ -1,0 +1,27 @@
+// @mode: run-fail
+// @exit: 1
+// @command: test
+// @milestone: M2
+// @decisions: D-595, D-699, D-710
+//! A test that panics while its frames hold a list fails with its report,
+//! and the test after it still runs (§13.6).
+
+import std::list
+
+fn build(n: Int, acc: List<String>) -> List<String> {
+  case n {
+    0 => acc
+    _ => build(n - 1, list::push(acc, "item {n}"))
+  }
+}
+
+test "panics holding a list" {
+  let items = build(50, [])
+  let assert Some(first) = list::get(items, 100)
+  assert first == "never"
+}
+
+test "runs after the panic" {
+  let items = build(3, [])
+  assert list::length(items) == 3
+}

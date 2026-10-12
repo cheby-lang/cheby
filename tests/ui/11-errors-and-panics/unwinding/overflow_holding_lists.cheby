@@ -1,0 +1,17 @@
+// @mode: run-fail
+// @milestone: M2
+// @decisions: D-094, D-700, D-710
+//! A stack overflow in a recursion whose every frame holds a list unwinds
+//! within the headroom and releases each list on the way, so the report
+//! is `stack overflow` and the exit status stays 101 (§11.8.1).
+
+import std::list
+
+fn deep(n: Int) -> Int {
+  let held = [n, n + 1]
+  deep(n + 1) + list::length(held)
+}
+
+fn main() {
+  let _ = deep(0)
+}

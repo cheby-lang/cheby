@@ -539,7 +539,7 @@ fn alloc_from(ctx: Option<&ExecCtx>, size: u64, header: u64, try_cache: bool) ->
         out_of_memory(request)
     };
     let cached = if try_cache {
-        cached_block(layout)
+        cached_block(ctx, layout)
     } else {
         None
     };
@@ -576,6 +576,12 @@ fn init_object(ctx: Option<&ExecCtx>, ptr: *mut u8, layout: Layout, header: u64)
 /// update's own requests would. With the default backend, without a
 /// budget and outside any entry it does nothing.
 pub(crate) fn preflight(bytes: u64) {
+    // No entry of this process runs under an unwinding backend: nothing to
+    // check, and no current-fiber lookup on the default backend's hot path
+    // (D-686, GATE1-1).
+    if !crate::ctx::unwinding_backend_used() {
+        return;
+    }
     let Some(ctx) = current_fiber() else {
         return;
     };
@@ -1189,10 +1195,12 @@ fn class_layout(class: usize) -> Option<Layout> {
     Layout::from_size_align(class.checked_add(1)?.checked_mul(step)?, step).ok()
 }
 
-/// A cached free block for `layout`, if the current thread has one.
-fn cached_block(layout: Layout) -> Option<*mut u8> {
+/// A cached free block for `layout`, if the current thread has one. With
+/// the running fiber `ctx`, the cache is found through its control block,
+/// with no thread-local lookup (D-686, GATE1-1).
+fn cached_block(ctx: Option<&ExecCtx>, layout: Layout) -> Option<*mut u8> {
     let class = size_class(layout)?;
-    tls::with_cache(|cache| cache.try_borrow_mut().ok()?.take(class)).flatten()
+    tls::with_cache_of(ctx, |cache| cache.try_borrow_mut().ok()?.take(class)).flatten()
 }
 
 impl BlockCache {

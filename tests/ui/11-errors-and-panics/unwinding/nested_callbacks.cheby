@@ -1,0 +1,25 @@
+// @mode: run-fail
+// @milestone: M2
+// @decisions: D-697, D-698, D-699
+//! An overflow inside a function that `list::filter` calls, itself inside
+//! a function that `list::map` calls, unwinds through both kernels and
+//! their callbacks to `main`, and every frame on the way releases what it
+//! holds (§11.3).
+
+import std::io
+import std::list
+import std::string
+
+fn scaled(n: Int, factor: Int) -> Int {
+  n * factor
+}
+
+fn main() {
+  let label = "rows"
+  let rows = list::map([1, 2, 3], fn(row) {
+    let cells = [row, row + 1, 9_007_199_254_740_991 * 1024]
+    let kept = list::filter(cells, fn(n) { scaled(n, row + 1) > string::length(label) })
+    list::length(kept)
+  })
+  io::println("not reached: {label} {rows:?}")
+}

@@ -26,7 +26,13 @@
 //!   (its current accounting domain and scratch counts), M1's per-thread
 //!   behavior for host code;
 //! - the allocator's free worklist, block cache and quarantine, which stay
-//!   per thread.
+//!   per thread. The fiber current on a thread also holds the address of
+//!   that thread's block cache in its control block, recorded by
+//!   [`set_current_fiber`] at every switch-in and cleared at switch-out,
+//!   so the allocation paths that know their fiber skip an accessor call
+//!   ([`with_cache_of`], [`with_fiber_and_cache`]; GATE1-1). The address
+//!   is used only while that fiber is current here, so it never names
+//!   another thread's cache.
 //!
 //! A source test checks the whole crate for thread-locals declared or
 //! accessed elsewhere.
@@ -90,20 +96,39 @@ pub(crate) fn current_fiber() -> *mut ExecCtx {
 
 /// Makes `fiber` the fiber running on this thread and returns the previous
 /// one. A fiber that becomes current charges this thread's shard of the
-/// accounting domains (D-691).
+/// accounting domains (D-691) and records the address of this thread's
+/// block cache, which the allocator then reads from the control block
+/// instead of the thread-local ([`with_cache_of`]); the previous fiber's
+/// record is cleared, so a control block holds the address only while it
+/// is current here. The address is recomputed at every call, so a fiber
+/// that migrates holds its new thread's cache from its first instruction
+/// there (D-686). GAP(fcb-thread-cache-address): D-686 says every access
+/// goes through an accessor; reading this recorded address from the
+/// control block is read as allowed, because the hazard D-686 names (an
+/// address reused after a switch to another thread) cannot arise: the
+/// record is rewritten at every switch-in and the readers never suspend.
 ///
 /// # Safety
 ///
 /// `fiber` is null or a live control block that stays live, and is used
-/// only by this thread's code, until another call replaces it.
+/// only by this thread's code, until another call replaces it; the
+/// previous fiber is still live when this call replaces it.
 #[inline(never)]
 pub(crate) unsafe fn set_current_fiber(fiber: *mut ExecCtx) -> *mut ExecCtx {
     let previous = CURRENT_FIBER
         .try_with(|cell| cell.replace(fiber))
         .unwrap_or(ptr::null_mut());
+    // SAFETY: forwarded from the caller: the previous fiber is live.
+    if let Some(ctx) = unsafe { black_box(previous).as_ref() }
+        && previous != fiber
+    {
+        ctx.set_block_cache(ptr::null());
+    }
     // SAFETY: forwarded from the caller.
     if let Some(ctx) = unsafe { black_box(fiber).as_ref() } {
         ctx.set_shard(shard_index());
+        let cache = CACHE.try_with(ptr::from_ref).unwrap_or(ptr::null());
+        ctx.set_block_cache(black_box(cache));
     }
     black_box(previous)
 }
@@ -151,18 +176,52 @@ pub(crate) fn with_cache<R>(f: impl FnOnce(&RefCell<BlockCache>) -> R) -> Option
 /// Calls `f` with the control block of the fiber running on this thread
 /// (null when none) and this thread's block cache, in one accessor call
 /// (D-686): the allocator's free and kernel-allocation paths need both.
-/// `None` during thread teardown, when the cache is gone. `f` never
-/// suspends.
+/// When a fiber runs, the cache's address comes from its control block
+/// ([`set_current_fiber`]), so only one thread-local is read. `None`
+/// during thread teardown, when the cache is gone. `f` never suspends.
 #[inline(never)]
 pub(crate) fn with_fiber_and_cache<R>(
     f: impl FnOnce(*mut ExecCtx, &RefCell<BlockCache>) -> R,
 ) -> Option<R> {
-    CACHE
-        .try_with(|cache| {
-            let fiber = black_box(CURRENT_FIBER.try_with(Cell::get).unwrap_or(ptr::null_mut()));
-            f(fiber, cache)
-        })
-        .ok()
+    let fiber = black_box(CURRENT_FIBER.try_with(Cell::get).unwrap_or(ptr::null_mut()));
+    // SAFETY: the current fiber is null or a live control block current on
+    // this thread (`set_current_fiber`'s contract).
+    if let Some(ctx) = unsafe { fiber.as_ref() }
+        // SAFETY: a current fiber's block cache is null or this thread's,
+        // a thread-local that lives as long as the thread (see
+        // `set_current_fiber`).
+        && let Some(cache) = unsafe { ctx.block_cache().as_ref() }
+    {
+        return Some(f(fiber, cache));
+    }
+    CACHE.try_with(|cache| f(fiber, cache)).ok()
+}
+
+/// Calls `f` with this thread's block cache, given `ctx`, the control
+/// block of the fiber running on this thread, or `None` for host code.
+/// With a fiber the address comes from its control block and no
+/// thread-local is read: the allocation path of generated code, which
+/// passes its `ctx`, takes a cached block without a `tls.rs` accessor call
+/// (GATE1-1). Without one, or when the fiber has no cache recorded, it is
+/// [`with_cache`]. `None` during thread teardown. `f` never suspends.
+#[inline]
+pub(crate) fn with_cache_of<R>(
+    ctx: Option<&ExecCtx>,
+    f: impl FnOnce(&RefCell<BlockCache>) -> R,
+) -> Option<R> {
+    if let Some(ctx) = ctx {
+        debug_assert!(
+            ptr::eq(current_fiber(), ctx),
+            "a block cache taken through a fiber that is not current on this thread"
+        );
+        // SAFETY: `ctx` is the fiber current on this thread (the caller's
+        // contract, checked in debug builds), whose block cache is null or
+        // this thread's, a thread-local that lives as long as the thread.
+        if let Some(cache) = unsafe { ctx.block_cache().as_ref() } {
+            return Some(f(cache));
+        }
+    }
+    with_cache(f)
 }
 
 /// Calls `f` with this thread's quarantine; `None` during thread teardown.
@@ -377,5 +436,65 @@ mod tests {
         });
         assert!(fiber.join().unwrap());
         assert!(current_fiber().is_null());
+    }
+
+    /// GATE1-1: a fiber that becomes current records its thread's block
+    /// cache, which `with_cache_of` and `with_fiber_and_cache` then use,
+    /// and the record is cleared when it stops being current. On another
+    /// thread it records that thread's cache (D-686: a migrated fiber
+    /// never uses its old thread's cache).
+    #[test]
+    fn a_current_fiber_holds_its_threads_block_cache() {
+        let new_ctx = || {
+            Box::into_raw(Box::new(crate::ctx::ExecCtx::new(crate::ctx::FiberInit {
+                entry_mode: crate::entry::EntryMode::Test,
+                ..crate::ctx::FiberInit::placeholder()
+            })))
+        };
+        let ctx = new_ctx();
+        let other = new_ctx();
+        let address = |cache: &RefCell<BlockCache>| ptr::from_ref(cache).addr();
+        let here = with_cache(address).unwrap();
+        // SAFETY: live control blocks; each is current until replaced, and
+        // both are freed at the end, after they stop being current.
+        unsafe {
+            assert!((*ctx).block_cache().is_null());
+            set_current_fiber(ctx);
+            assert_eq!((*ctx).block_cache().addr(), here);
+            assert_eq!(with_cache_of(Some(&*ctx), address), Some(here));
+            assert_eq!(
+                with_fiber_and_cache(|fiber, cache| (fiber, address(cache))),
+                Some((ctx, here))
+            );
+            // Replacing it clears its record.
+            set_current_fiber(other);
+            assert!((*ctx).block_cache().is_null());
+            assert_eq!((*other).block_cache().addr(), here);
+            set_current_fiber(ptr::null_mut());
+            assert!((*other).block_cache().is_null());
+            // Host code takes the thread-local.
+            assert_eq!(with_cache_of(None, address), Some(here));
+        }
+        let ctx_word = ctx.expose_provenance();
+        let there = std::thread::spawn(move || {
+            let ctx = ptr::with_exposed_provenance_mut::<crate::ctx::ExecCtx>(ctx_word);
+            let there = with_cache(address).unwrap();
+            // SAFETY: as above; current on this thread until cleared.
+            unsafe {
+                set_current_fiber(ctx);
+                let recorded = (*ctx).block_cache().addr();
+                set_current_fiber(ptr::null_mut());
+                (there, recorded)
+            }
+        })
+        .join()
+        .unwrap();
+        assert_eq!(there.0, there.1);
+        assert_ne!(there.0, here);
+        // SAFETY: allocated above and current nowhere.
+        unsafe {
+            drop(Box::from_raw(ctx));
+            drop(Box::from_raw(other));
+        }
     }
 }

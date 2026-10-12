@@ -12,7 +12,7 @@ baseline's.
 | ------------------ | ------------------------------------------------------------- |
 | `<group>/<name>/`  | One benchmark: a Cheby package with `cheby.toml` and `src/`   |
 | `rc/`              | The RC group: reference counting and in-place updates (D-718) |
-| `fiber/`           | The fiber group, added with M2's scheduler                    |
+| `fiber/`           | The fiber group: fibers, scopes and channels (M2)             |
 | `baseline-m1.json` | M1's results for the RC group, the committed reference        |
 
 The RC group has five benchmarks:
@@ -25,16 +25,29 @@ The RC group has five benchmarks:
 | `string_building` | interpolated lines appended to a string, then split and joined again |
 | `tree_inserts`    | pseudo-random keys inserted into a persistent binary search tree     |
 
+The fiber group has four benchmarks on M2's scheduler (D-718, D-722). Their default sizes are the
+ones D-702's plan names, so some run for less than half a second:
+
+| Benchmark      | What it does                                                                     |
+| -------------- | -------------------------------------------------------------------------------- |
+| `spawn_join`   | 100,000 fibers spawned into scopes of a thousand and joined                      |
+| `ping_pong`    | 1,000,000 messages between two fibers over two channels of capacity 0            |
+| `sieve`        | the concurrent prime sieve of `005_prime_sieve`, to 2,000 primes                 |
+| `buffered_4x4` | 4,000,000 messages from four producers to four consumers over a buffered channel |
+
 A group is a directory of `bench/runtime`, and its benchmarks are the subdirectories that hold a
 `cheby.toml`. A new group or benchmark needs no change to the command.
 
 Each program follows these rules:
 
-- It uses only what M1 ships, so the M1 baseline can run it.
+- A program of the RC group uses only what M1 ships, so the M1 baseline can run it. The fiber
+  group needs `std::fiber` and `std::channel`, so `baseline-m1.json` has no entry for it, and its
+  `Δ%` column stays empty against that file.
 - It reads its size from the first program argument. Without one, it uses a default that runs for
-  0.5 to 2 seconds on a release build.
+  0.5 to 2 seconds on a release build, unless the group's table says otherwise.
 - It prints `size: <n>` and then `checksum: <n>`. The checksum depends only on the size, never on
-  timing, addresses, thread count or a map's iteration order.
+  timing, addresses, thread count, scheduling or a map's iteration order (D-722). A fiber program
+  combines its fibers' results with sums and ordered joins, never in the order they ran.
 - It passes `cheby check` and both parsers: `cargo xtask cross-check` parses `bench/runtime`.
 
 ## Commands
@@ -47,6 +60,28 @@ cargo xtask bench-run --group rc --threads 1 --runs 5 \
 cargo xtask bench-run --cheby path/to/cheby --commit 587f8a9   # another binary
 cargo xtask bench-run --env CHEBY_RC=naive                     # a variable for every run
 ```
+
+A fiber benchmark must print the same checksum at every thread count. To check it, compare the run
+at two threads with the run at one:
+
+```sh
+cargo xtask bench-run --group fiber --threads 1 --json fiber-1.json
+cargo xtask bench-run --group fiber --threads 2 --baseline fiber-1.json
+```
+
+The times of the two runs do not compare like for like. Two properties of the current runtime, not
+noise, show in the group (release `cheby`, macOS arm64, quiet machine, checkpoint 1):
+
+- `spawn_join` at one thread mostly measures stack-slot releases. A stack class keeps at most
+  `FREE_KEEP` (64) free slots warm, and a slot given back beyond them is released whole
+  (`crates/cheby_runtime/src/fiber/stack.rs`). At one thread the 1,000 fibers of a scope are all
+  live before the first join, so about 936 slots per scope are released and fault in again: about
+  0.6 s with 0.45 s of system time, against 0.1 s at two threads. With scopes of 64 fibers it runs
+  in 0.07 s at one thread.
+- `buffered_4x4` gets slower with more workers: about 0.26 s at one thread, 0.7 to 0.9 s at two and
+  four, and 1.0 s at eight, with user and system time growing. Its eight fibers contend for the
+  channel's one lock, and a profile at four threads is dominated by that lock's slow path and the
+  waits behind it. `ping_pong` keeps its time at every thread count and `sieve` scales.
 
 | Option            | Meaning                                                                                     |
 | ----------------- | ------------------------------------------------------------------------------------------- |

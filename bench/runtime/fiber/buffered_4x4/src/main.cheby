@@ -1,0 +1,125 @@
+//! Runtime benchmark of the fiber group: four producers and four
+//! consumers over one buffered channel.
+//!
+//! Producer `p` sends the values of the indexes `p`, `p + 4`, `p + 8` and
+//! so on below the size. Each consumer receives until the channel closes,
+//! which happens when every producer has returned, and returns how many
+//! values it received and their sum. Which consumer gets which value
+//! depends on scheduling, but the totals do not, so the number of
+//! messages is the first program argument and `main` prints a checksum of
+//! the totals.
+
+import std::channel
+import std::env
+import std::fiber
+import std::int
+import std::io
+import std::list
+
+/// The number of messages when no argument is given.
+const default_size: Int = 4_000_000
+
+/// The number of producers, and of consumers.
+const workers: Int = 4
+
+/// The channel's capacity.
+const capacity: Int = 64
+
+/// Keeps the checksum small.
+const modulus: Int = 1_000_000_007
+
+fn main() {
+  let n = size(env::args())
+  let assert Ok((count, total)) = transfer(n)
+  let checksum = (count * 31 + total) % modulus
+  io::println("size: {n}")
+  io::println("checksum: {checksum}")
+}
+
+/// The size from the first program argument, or `default_size`.
+fn size(args: List<String>) -> Int {
+  case args {
+    [] => default_size
+    [first, ..] => {
+      let assert Ok(n) = int::parse(first)
+      n
+    }
+  }
+}
+
+/// Sends the values of the indexes below `n` from the producers to the
+/// consumers, and returns how many values the consumers received and
+/// their sum. The result is an `Err` only if a fiber panics.
+fn transfer(n: Int) -> Result<(Int, Int), fiber::Panic> {
+  use scope <- fiber::scope()
+  let (tx, rx) = channel::new::<Int>(capacity)
+  start_producers(scope, tx, 0, n)
+  start_consumers(scope, rx, 0, [])
+  |> list::fold(_, (0, 0), fn((count, total), consumer) {
+    let (received, sum) = fiber::join(consumer)
+    (count + received, (total + sum) % modulus)
+  })
+}
+
+/// Spawns the producers from `p` on. The last one to return drops the
+/// last sender, which closes the channel.
+fn start_producers(owner: fiber::Scope, tx: channel::Sender<Int>, p: Int, n: Int) {
+  case {
+    p == workers => Nil
+    _ => {
+      fiber::spawn(owner, fn() { produce(tx, p, n) })
+      start_producers(owner, tx, p + 1, n)
+    }
+  }
+}
+
+/// Spawns the consumers from `c` on and returns them.
+fn start_consumers(
+  owner: fiber::Scope,
+  rx: channel::Receiver<Int>,
+  c: Int,
+  started: List<fiber::Fiber<(Int, Int)>>,
+) -> List<fiber::Fiber<(Int, Int)>> {
+  case {
+    c == workers => started
+    _ => {
+      let consumer = fiber::spawn(owner, fn() { consume(rx, 0, 0) })
+      start_consumers(owner, rx, c + 1, [consumer, ..started])
+    }
+  }
+}
+
+/// Sends the value of `index`, then of every index `workers` further on,
+/// while it is below `n`.
+fn produce(tx: channel::Sender<Int>, index: Int, n: Int) {
+  case {
+    index >= n => Nil
+    _ => {
+      let assert Ok(_) = channel::send(tx, value(index))
+      produce(tx, index + workers, n)
+    }
+  }
+}
+
+/// Receives until the channel closes, and returns how many values came
+/// and their sum.
+fn consume(rx: channel::Receiver<Int>, count: Int, total: Int) -> (Int, Int) {
+  case channel::receive(rx) {
+    Ok(v) => consume(rx, count + 1, (total + v) % modulus)
+    Err(_) => (count, total)
+  }
+}
+
+/// The value sent for `index`.
+fn value(index: Int) -> Int {
+  (index * 7_919 + 13) % 1_000_003
+}
+
+test "every value arrives once" {
+  let expected = list::fold(list::range(0, 10), 0, fn(acc, i) { acc + value(i) })
+  assert transfer(10) == Ok((10, expected))
+}
+
+test "no messages close the channel at once" {
+  assert transfer(0) == Ok((0, 0))
+}

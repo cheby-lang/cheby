@@ -52,9 +52,19 @@ impl Cx {
 /// `a` and `b` are tagged integers or live objects, not changed during the
 /// call. On an entry's thread when the values may hold a type with hooks.
 pub unsafe fn equal(a: Word, b: Word) -> Result<bool, Reached> {
-    let mut stack = ScratchVec::of(Task::Pair(a, b));
     let mut later = ScratchVec::new();
     let mut cx = Cx::default();
+    // The first step runs before the walk's stack exists: leaves leave no
+    // work, so no scratch buffer grows (GATE1-1).
+    // SAFETY: forwarded from the caller.
+    if !unsafe { step(a, b, &mut later, &mut cx) }? {
+        return Ok(false);
+    }
+    if later.is_empty() {
+        return Ok(true);
+    }
+    let mut stack = ScratchVec::new();
+    stack.push_reversed(&mut later);
     while let Some(task) = stack.pop() {
         let (a, b) = match task {
             Task::Raw(x, y) => {

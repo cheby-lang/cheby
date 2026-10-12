@@ -1,0 +1,9 @@
+test ui_test "panics holding a list" ... FAILED
+test ui_test "runs after the panic" ... ok
+
+---- ui_test "panics holding a list" ----
+panicked at tests/ui/11-errors-and-panics/unwinding/test_after_a_panic.cheby:20:14:
+`let assert` pattern did not match
+  value: None
+
+test result: FAILED. 1 passed; 1 failed; 0 filtered out

@@ -531,6 +531,124 @@ mod tests {
         assert_eq!(ran.domain.live_objects(), 0);
     }
 
+    /// A one-field value of a test type registered as `name` with the test
+    /// hooks: the type's layout id.
+    fn hooked_type(name: &str) -> abi::LayoutId {
+        let key = layout::type_key("unwind_tests", name);
+        let id = layout::register_consecutive(vec![
+            LayoutInfo::ctor(
+                &format!("unwind_tests.{name}.{name}"),
+                0,
+                &[(FieldKind::Int, None)],
+            )
+            .named(name, name, false, key),
+        ])
+        .unwrap();
+        layout::set_hooks(id, [hook(), hook(), hook()]).unwrap();
+        id
+    }
+
+    /// A fresh value of the hooked type `id`.
+    fn hooked_value(id: abi::LayoutId) -> Word {
+        let obj = alloc::alloc_object(16, abi::header(1, 0, id));
+        // SAFETY: a fresh object with one raw field.
+        unsafe { write_field(obj, 8, 5) };
+        object::ptr_to_word(obj)
+    }
+
+    /// A `debug` hook's trampoline: returns a text longer than the
+    /// printer's first 16 bytes, then lets the fiber allocate nothing more,
+    /// so writing the text it gave the printer raises the memory limit.
+    unsafe extern "C" fn long_text_then_exhausted(ctx: *mut ExecCtx, _: u64, a: u64) -> u64 {
+        // SAFETY: the trampoline owns its argument; `ctx` is the running
+        // fiber's.
+        unsafe { rc::drop(a) };
+        let text = values::string("a debug text longer than sixteen bytes");
+        // SAFETY: as above.
+        exhaust(unsafe { &*ctx });
+        text
+    }
+
+    #[test]
+    fn debug_printing_releases_a_hook_text_when_it_raises() {
+        let id = hooked_type("Printed");
+        // Alone, the printer's first worklist growth raises with the hook's
+        // text in hand; inside a tuple the worklist has room, and writing
+        // the text to the result raises.
+        for in_tuple in [false, true] {
+            let callbacks = Callbacks {
+                t1: Some(long_text_then_exhausted),
+                ..Callbacks::default()
+            };
+            let ran = on_flag_entry(EntryMode::Test, None, callbacks, move |ctx| {
+                let value = hooked_value(id);
+                let printed = if in_tuple {
+                    values::tuple(&[value])
+                } else {
+                    value
+                };
+                let ptr = std::ptr::from_ref(ctx).cast_mut();
+                // SAFETY: a live value, borrowed, on the running entry.
+                let text = unsafe { crate::helpers::cheby_rt_debug(ptr, printed) };
+                let flag = flag_of(ctx);
+                unlimit(ctx);
+                // SAFETY: the test's reference (the tuple owns `value`).
+                unsafe { rc::drop(printed) };
+                (text, flag)
+            });
+            assert_raised(&ran, &0);
+        }
+    }
+
+    /// Whether [`hash_hook`] raises.
+    static HASH_HOOK_RAISES: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+
+    /// A `hash` hook's trampoline: the canonical key 7, or a panic once
+    /// [`HASH_HOOK_RAISES`] is set.
+    unsafe extern "C" fn hash_hook(ctx: *mut ExecCtx, _: u64, a: u64) -> u64 {
+        // SAFETY: the trampoline owns its argument.
+        unsafe { rc::drop(a) };
+        if HASH_HOOK_RAISES.load(Ordering::Acquire) {
+            // SAFETY: the running fiber's context.
+            unsafe { cheby_rt_panic(ctx, PanicKind::Assert.code(), 0, 0) };
+            return 0;
+        }
+        values::int_word(7)
+    }
+
+    #[test]
+    fn rebuilding_under_a_seed_releases_the_map_when_a_hash_hook_raises() {
+        let callbacks = Callbacks {
+            t1: Some(hash_hook),
+            ..Callbacks::default()
+        };
+        let ran = on_flag_entry(EntryMode::Test, None, callbacks, |ctx| {
+            let key = hooked_value(hooked_type("Rehashed"));
+            let value = values::string("value");
+            // SAFETY: live words, borrowed; the empty map is static.
+            let map = unsafe { hamt::cheby_map_insert(hamt::cheby_map_new(), key, value) };
+            let seed = crate::entry::current_seed();
+            HASH_HOOK_RAISES.store(true, Ordering::Release);
+            // The map is given up, and the new trie's first key raises.
+            // SAFETY: a live map, owned.
+            let rebuilt: Word = guarded(None, || unsafe {
+                hamt::rebuild_with_seed(map, seed.wrapping_add(1))
+            });
+            HASH_HOOK_RAISES.store(false, Ordering::Release);
+            let flag = flag_of(ctx);
+            // SAFETY: the test's references.
+            unsafe {
+                rc::drop(key);
+                rc::drop(value);
+            }
+            (rebuilt, flag)
+        });
+        assert_eq!(ran.value, (0, unwind_flag::PANIC));
+        assert_eq!(report(&ran.outcome).kind, PanicKind::Assert);
+        assert_eq!(ran.domain.live_objects(), 0);
+    }
+
     // -----------------------------------------------------------------
     // Runtime helpers consume their owned arguments even when they raise
     // (D-698)

@@ -47,7 +47,9 @@ pub const MAX_ARITY: usize = 4;
 /// uniform word of its parameter's type.
 #[must_use]
 pub unsafe fn call(closure: Word, args: &[Word]) -> Word {
-    let (Some(ctx), Some(callbacks)) = (entry::current_ctx(), entry::callbacks()) else {
+    // One current-fiber lookup: the trampolines come from its control
+    // block (D-686, GATE1-1).
+    let Some(ctx) = entry::current_ctx() else {
         fatal(format_args!(
             "a kernel called a closure outside of any entry"
         ));
@@ -63,6 +65,7 @@ pub unsafe fn call(closure: Word, args: &[Word]) -> Word {
     // SAFETY: `ctx` is the running fiber's control block, live while it
     // runs; the reference ends with this call.
     let fiber = unsafe { &*ctx };
+    let callbacks = fiber.callbacks();
     fiber.sched.enter_callback();
     let exit = SavedExit::save(fiber);
     // SAFETY: the trampolines come from the entry's configuration, whose

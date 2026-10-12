@@ -50,13 +50,15 @@
 //! reported (D-677). The lowest soft limit is the watermark the slot is
 //! given back with. An isolated entry's soft limit is its hard limit.
 
+use std::cell::RefCell;
 use std::mem::offset_of;
+use std::ptr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::Sender;
 
 use crate::abi::{self, UnwindBackend};
-use crate::alloc::Domain;
+use crate::alloc::{BlockCache, Domain};
 use crate::consteval::ConstTable;
 use crate::entry::{Callbacks, EntryMode, EntryOutcome};
 use crate::fiber_ops::FiberConc;
@@ -129,6 +131,13 @@ pub struct ExecCtx {
     /// thread's, set whenever it becomes the thread's current fiber
     /// (D-691).
     shard: AtomicUsize,
+    /// The block cache of the thread the fiber runs on, set with the shard
+    /// whenever it becomes the thread's current fiber and cleared when it
+    /// stops being current (`tls::set_current_fiber`); null when it is
+    /// current nowhere or the thread's cache is gone. The allocator reads
+    /// it instead of the thread-local, which saves a `tls.rs` accessor
+    /// call on the paths that know their fiber (GATE1-1, D-686).
+    block_cache: AtomicPtr<RefCell<BlockCache>>,
     /// The accounting domain the fiber charges (D-564, D-691).
     domain: Arc<Domain>,
     /// The build's constants during constant evaluation (D-535).
@@ -207,6 +216,9 @@ impl FiberInit {
 impl ExecCtx {
     /// A fiber control block with nothing pending.
     pub(crate) fn new(init: FiberInit) -> Self {
+        if init.unwind_backend != UnwindBackend::Off {
+            UNWINDING_BACKEND_USED.store(true, Ordering::Relaxed);
+        }
         let mode = match init.entry_mode {
             EntryMode::ConstEval(_) => abi::CTX_MODE_CONST_EVAL,
             EntryMode::Run | EntryMode::Test | EntryMode::Repl => 0,
@@ -228,6 +240,7 @@ impl ExecCtx {
             scratch_live: AtomicU64::new(0),
             scratch_peak: AtomicU64::new(0),
             shard: AtomicUsize::new(0),
+            block_cache: AtomicPtr::new(ptr::null_mut()),
             domain: init.domain,
             consts: init.consts,
             callbacks: init.callbacks,
@@ -353,6 +366,19 @@ impl ExecCtx {
         self.shard.store(shard, Ordering::Relaxed);
     }
 
+    /// The block cache of the thread the fiber is current on, or null (see
+    /// the field). Valid only while the fiber is this thread's current
+    /// fiber, and only for code that does not suspend (D-686).
+    pub(crate) fn block_cache(&self) -> *const RefCell<BlockCache> {
+        self.block_cache.load(Ordering::Relaxed)
+    }
+
+    /// Records the block cache of the thread the fiber becomes current on,
+    /// or null when it stops being current (`tls::set_current_fiber`).
+    pub(crate) fn set_block_cache(&self, cache: *const RefCell<BlockCache>) {
+        self.block_cache.store(cache.cast_mut(), Ordering::Relaxed);
+    }
+
     /// The memory budget, `u64::MAX` for none.
     pub(crate) fn budget(&self) -> u64 {
         self.budget.load(Ordering::Relaxed)
@@ -367,6 +393,21 @@ impl ExecCtx {
     pub(crate) fn scratch(&self) -> (&AtomicU64, &AtomicU64) {
         (&self.scratch_live, &self.scratch_peak)
     }
+}
+
+/// Whether a control block was ever made for code compiled with an
+/// unwinding backend (D-696) in this process.
+static UNWINDING_BACKEND_USED: AtomicBool = AtomicBool::new(false);
+
+/// Whether any fiber of this process may run code compiled with an
+/// unwinding backend (`flag` or `try_call`, D-696): false while every
+/// control block made so far has the default backend. Work that only an
+/// unwinding backend needs, such as the allocator's budget preflight
+/// (D-698), tests it first, so that with the default backend it costs a
+/// relaxed load instead of a current-fiber lookup (GATE1-1).
+#[must_use]
+pub(crate) fn unwinding_backend_used() -> bool {
+    UNWINDING_BACKEND_USED.load(Ordering::Relaxed)
 }
 
 /// Requests an interrupt of the fiber `ctx` for `reason` (D-688): adds the
@@ -436,6 +477,23 @@ mod tests {
         assert_eq!(ctx.stack_limit.load(Ordering::SeqCst), usize::MAX);
         assert_eq!(take(&ctx), reason::YIELD);
         assert_eq!(ctx.stack_limit.load(Ordering::SeqCst), 0x10_0000 - 0x2000);
+    }
+
+    /// GATE1-1: a control block made for an unwinding backend marks the
+    /// process; one made for the default backend leaves the mark as it
+    /// was (the tests of this crate share the process, so only the first
+    /// half is checked strictly).
+    #[test]
+    fn a_control_block_for_an_unwinding_backend_marks_the_process() {
+        drop(fcb());
+        let flag = ExecCtx::new(FiberInit {
+            unwind_backend: UnwindBackend::Flag,
+            ..FiberInit::placeholder()
+        });
+        assert!(unwinding_backend_used());
+        drop(flag);
+        drop(fcb());
+        assert!(unwinding_backend_used());
     }
 
     #[test]
