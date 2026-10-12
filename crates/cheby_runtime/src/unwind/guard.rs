@@ -5,24 +5,24 @@
 //! reach a Cranelift frame, so every `extern "C"` kernel and helper that
 //! may unwind runs its whole body in [`guarded`], which catches the marker
 //! at the entry point, after every Rust frame above it ran its `Drop`s
-//! (I-4), and hands the unwinding to the backend the fiber's code was
-//! compiled for:
-//!
-//! - `Flag`: sets the fiber's unwind flag and returns the entry point's
-//!   [`Unwound::UNWOUND`] sentinel; generated code tests the flag after the
-//!   call and runs its cleanup pad.
-//! - `TryCall`: resumes at the handler of the nearest Cranelift frame
-//!   ([`super::try_call::throw_from_guard`]).
-//! - `Off`: never reached, since a raise under `Off` abandons the entry.
+//! (I-4), and hands the unwinding to generated code by the return flag
+//! (D-733): it sets the fiber's unwind flag and returns the entry point's
+//! [`Unwound::UNWOUND`] sentinel, and generated code tests the flag after
+//! the call and runs its cleanup pad. In code compiled without unwind
+//! edges, which would not test the flag, it ends the process instead
+//! (GAP(edgeless-panics)).
 //!
 //! Any other Rust panic stays fatal, as before the guards: the panic hook
 //! has printed it, and the process aborts.
 //!
 //! A guard hands the unwinding over to generated code right above it, so
-//! no runtime code calls another guarded entry point from Rust: under
-//! `TryCall` the inner guard would jump over the outer kernel's frames
-//! without their drops (board U2b-1). Hosts that run Rust tasks on an
-//! entry catch the marker themselves (`entry::catch_unwinding`). `cheby_rt_dup` and
+//! no runtime code calls another guarded entry point from Rust and then
+//! goes on: the inner guard would return its sentinel into Rust code that
+//! does not test the flag, which would carry on as if nothing had
+//! happened, with the unwinding recorded but not propagated. A Rust caller
+//! of a guarded entry point must test the flag right after the call, as
+//! the tests of this crate do. Hosts that run Rust tasks on an entry catch
+//! the marker themselves (`entry::catch_unwinding`). `cheby_rt_dup` and
 //! `cheby_rt_drop` are not guarded: a panic in a drop function aborts
 //! (D-171). The source test `guards_cover_entry_points` keeps every entry
 //! point of the crate guarded or on its list of entry points that never
@@ -30,7 +30,7 @@
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use crate::abi::{UnwindBackend, Word, unwind_flag};
+use crate::abi::{Word, unwind_flag};
 use crate::ctx::ExecCtx;
 use crate::panic::fatal;
 use crate::rc;
@@ -88,8 +88,8 @@ pub(crate) fn guarded<R: Unwound>(ctx: Option<*mut ExecCtx>, body: impl FnOnce()
     }
 }
 
-/// Hands the unwinding a guard caught to the backend; returns the
-/// sentinel under the flag backend.
+/// Hands the unwinding a guard caught to generated code: sets the flag and
+/// returns the sentinel (D-733).
 #[cold]
 #[inline(never)]
 fn deliver<R: Unwound>(ctx: Option<*mut ExecCtx>) -> R {
@@ -101,29 +101,23 @@ fn deliver<R: Unwound>(ctx: Option<*mut ExecCtx>) -> R {
     // SAFETY: `running` returns the running fiber's control block, alive
     // while it runs; only shared references to it are made.
     let fiber = unsafe { &*ctx };
-    match fiber.unwind_backend() {
-        UnwindBackend::Flag => {
-            set_flag(fiber);
-            R::UNWOUND
-        }
-        UnwindBackend::TryCall => {
-            set_flag(fiber);
-            // SAFETY: `ctx` is the running fiber's, with the unwinding in
-            // flight that the guard caught; the Rust frames above the guard
-            // have run their drops and the payload is dropped, and the
-            // entry point's own frame holds nothing that needs dropping
-            // once its body has unwound.
-            unsafe { super::try_call::throw_from_guard(ctx) }
-        }
-        UnwindBackend::Off => fatal(format_args!(
-            "an unwinding reached a guard in code compiled without an unwinding backend"
-        )),
+    if !fiber.unwind_edges() {
+        // The raise paths end an edgeless fiber's panic before it unwinds;
+        // whatever else reaches a guard there ends the same way, before the
+        // sentinel returns into code that does not test the flag
+        // (GAP(edgeless-panics)).
+        let report = match record::take_record(fiber) {
+            Some(UnwindRecord::Panic(report)) => Some(report),
+            Some(UnwindRecord::Cancel) | None => None,
+        };
+        super::raise::edgeless(report.as_ref());
     }
+    set_flag(fiber);
+    R::UNWOUND
 }
 
-/// Sets the fiber's unwind flag for the record in flight. Under `TryCall`
-/// generated code does not read it, but the catch points read and clear
-/// it the same way under both backends (board U2b-1).
+/// Sets the fiber's unwind flag for the record in flight: generated code
+/// tests it after the call (D-733), and the catch points read and clear it.
 pub(crate) fn set_flag(fiber: &ExecCtx) {
     let flag = match record::peek_kind(fiber) {
         Some(RecordKind::Cancel) => unwind_flag::CANCEL,

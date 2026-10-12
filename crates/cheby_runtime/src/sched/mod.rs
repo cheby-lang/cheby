@@ -75,7 +75,7 @@ pub const STRESS_MIGRATE_ENV: &str = "CHEBY_RT_STRESS_MIGRATE";
 /// least 1 is clamped to it; anything else is
 /// [`RuntimeError::InvalidThreads`].
 ///
-/// GAP(cheby-threads-syntax): a decimal whole number is ASCII digits only,
+/// (D-740) A decimal whole number is ASCII digits only,
 /// leading zeros allowed (`007` is 7), with no sign and no surrounding
 /// whitespace; one too large for the machine's word is still a whole
 /// number and clamps to [`MAX_THREADS`].
@@ -406,8 +406,9 @@ pub(crate) fn spawn_fiber(
 /// slot of `stack_size` bytes (D-677), without queueing it: the caller
 /// records it where it must be known before it can run, then calls
 /// [`schedule_new`]. Its control block takes the spawner's entry mode,
-/// hash seed, accounting domain (D-691), trampolines (D-526) and unwinding
-/// backend; it has no host to report to. On an error, `start` is dropped
+/// hash seed, accounting domain (D-691), trampolines (D-526) and whether
+/// its code has unwind edges (GAP(edgeless-panics)); it has no host to
+/// report to. On an error, `start` is dropped
 /// without running.
 ///
 /// # Errors
@@ -430,7 +431,8 @@ pub(crate) fn create_fiber(
             domain: Arc::clone(spawner.domain()),
             consts: None,
             callbacks: spawner.callbacks(),
-            unwind_backend: spawner.unwind_backend(),
+            // A fiber runs code of its spawner's build (GAP(edgeless-panics)).
+            unwind_edges: spawner.unwind_edges(),
             ..FiberInit::placeholder()
         },
         stack_size,
@@ -579,11 +581,11 @@ impl Runtime {
     /// Runs one entry thunk as a root fiber on a stack slot of
     /// `config.stack_size` bytes and blocks the calling thread until it
     /// returns or panics (D-690). The fiber charges `config.domain` and
-    /// gets `config`'s trampolines, constants and unwinding backend; its
+    /// gets `config`'s trampolines, constants and unwind edges setting; its
     /// hash seed is the constant's under [`EntryMode::ConstEval`], the
-    /// per-process seed otherwise. Until unwinding exists, a panic is
-    /// reported as in M1 and the fiber's slot is quarantined
-    /// (GAP(interim-panics)).
+    /// per-process seed otherwise. A panic unwinds the root to its catch
+    /// point, which reports it to the caller, and its slot goes back to
+    /// the pool (D-713).
     ///
     /// # Errors
     ///
@@ -645,7 +647,7 @@ impl Runtime {
                 domain: Arc::clone(&config.domain),
                 consts: config.consts.clone(),
                 callbacks: config.callbacks,
-                unwind_backend: config.unwind,
+                unwind_edges: config.unwind_edges,
                 ..FiberInit::placeholder()
             },
             stack_size: config.stack_size,

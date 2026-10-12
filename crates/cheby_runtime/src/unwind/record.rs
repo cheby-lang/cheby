@@ -7,16 +7,16 @@
 //! (D-701). A fiber is unwinding while it holds a record. A catch point
 //! takes the record: an entry's ([`finish_entry`]), a trampoline's caller
 //! (`callback::call`, which rethrows), `fiber_main` and the scope
-//! intrinsic ([`take_unwound`], [`take_record`]).
+//! intrinsic ([`take_unwound`], [`take_record`]). A panic is also recorded
+//! in the fiber's responsible scope when it starts (D-666, [`start_panic`]).
 //!
 //! A host decides whether an entry panicked from the record, through
-//! [`finish_entry`], never from the entry thunk's result: under the flag
-//! backend an unwinding thunk returns 0, but `main`'s thunk returns the
-//! exit status, and 0 is success.
+//! [`finish_entry`], never from the entry thunk's result: with the return
+//! flag (D-733) an unwinding thunk returns 0, but `main`'s thunk returns
+//! the exit status, and 0 is success.
 
 use parking_lot::Mutex;
 
-use crate::abi::UnwindBackend;
 use crate::ctx::ExecCtx;
 use crate::entry::EntryMode;
 use crate::io;
@@ -44,13 +44,40 @@ pub(crate) enum UnwindRecord {
 }
 
 /// Records the panic `report` as the fiber's unwinding when it starts
-/// (D-699). If the fiber is already unwinding, the new panic is dropped:
-/// no user code runs while a fiber unwinds (ADR-0029), so the first cause
-/// stands.
+/// (D-699), then in the fiber's responsible scope (D-666, architecture
+/// §6.6): the innermost scope the fiber has open, a root's `main` or test
+/// body inside `scope` included, else the scope it was spawned into. The
+/// scope keeps it as its first cause if it has none, so the first panic by
+/// start wins, whoever ends first. A fiber with neither scope (a root
+/// outside every scope, an isolated entry) records nothing in a scope: its
+/// catch point reports the panic.
+///
+/// If the fiber is already unwinding, the new panic is dropped and
+/// recorded nowhere: no user code runs while a fiber unwinds (ADR-0029),
+/// so the first cause stands.
+///
+/// Entered with no runtime lock held (scope, channel, join cell, fiber,
+/// record): the scope's lock is taken after the record's is released, as
+/// the lock order wants (architecture §7.5: the record's lock is a leaf).
+/// So that the scope can read the report once the record's lock is
+/// released, a copy of it is kept for the call, and the scope copies its
+/// texts into its first cause only when it records: the scope's `Failure`
+/// owns strings of its own, never shared with the record. D-642's reserve
+/// has been released before an out-of-memory report is built, so the
+/// copies have room.
 pub(crate) fn start_panic(ctx: &ExecCtx, report: PanicReport) {
-    let mut record = ctx.unwinding.record.lock();
-    if record.is_none() {
+    let scope = ctx.conc.responsible_scope();
+    let copy = {
+        let mut record = ctx.unwinding.record.lock();
+        if record.is_some() {
+            return;
+        }
+        let copy = scope.as_ref().map(|_| report.clone());
         *record = Some(UnwindRecord::Panic(report));
+        copy
+    };
+    if let (Some(scope), Some(copy)) = (scope, copy) {
+        scope.record_panic(&copy);
     }
 }
 
@@ -110,9 +137,4 @@ pub(crate) fn finish_entry(ctx: &ExecCtx) -> Option<PanicReport> {
         EntryMode::Test | EntryMode::ConstEval(_) => {}
     }
     Some(report)
-}
-
-/// The unwinding backend the fiber's code was compiled for (D-696).
-pub(crate) fn backend(ctx: &ExecCtx) -> UnwindBackend {
-    ctx.unwind_backend()
 }

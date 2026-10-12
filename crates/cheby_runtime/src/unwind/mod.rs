@@ -1,27 +1,22 @@
-//! Unwinding (D-077, D-696): the runtime side of the two unwinding
-//! backends that are prototyped and measured before one is chosen. Both
-//! sit behind the hidden `CHEBY_UNWIND` switch, whose default `off` keeps
-//! M1's behavior ([`crate::abi::UnwindBackend`]).
+//! Unwinding (D-077): the runtime side of unwinding by return-flag
+//! propagation, the one unwinding backend (D-733, ADR-0061), with the
+//! catch points of D-699 and the Rust guards of D-697:
 //!
-//! The part both backends share (D-697, D-699, D-701):
-//!
+//! - `flag`: the fiber's unwind flag at `ctx+12` (D-685), which generated
+//!   code tests after each call that may unwind.
 //! - `guard`: every `extern "C"` kernel and helper that may unwind runs
 //!   its body in `guarded`, which turns a Cheby unwinding inside Rust
-//!   into the backend's delivery.
-//! - `raise`: `raise_panic` starts a Cheby panic from runtime code.
+//!   into the flag and a sentinel.
+//! - `raise`: `raise_panic` starts a Cheby panic from runtime code, and
+//!   ends the process in code compiled without unwind edges
+//!   (GAP(edgeless-panics)).
 //! - `record`: [`UnwindState`], the record of the unwinding in flight in
 //!   a fiber's control block (D-685), and the catch points' accessors.
-//!
-//! Per backend:
-//!
-//! - [`try_call`]: the `try_call` prototype's resume entry and, later, its
-//!   code registry, which `cheby_jit` reaches.
 
 pub(crate) mod flag;
 pub(crate) mod guard;
 pub(crate) mod raise;
 pub(crate) mod record;
-pub mod try_call;
 
 pub(crate) use record::UnwindState;
 
@@ -39,7 +34,7 @@ mod tests {
     use super::guard::{DropOnUnwind, guarded};
     use super::raise::raise_panic;
     use super::record::{self, UnwindRecord};
-    use crate::abi::{self, PanicKind, UnwindBackend, Word, layout as ids, unwind_flag};
+    use crate::abi::{self, PanicKind, Word, layout as ids, unwind_flag};
     use crate::alloc::{self, Domain, OUT_OF_MEMORY};
     use crate::consteval::{ConstTable, Limit};
     use crate::ctx::ExecCtx;
@@ -90,7 +85,6 @@ mod tests {
             domain: Arc::clone(&domain),
             callbacks,
             consts,
-            unwind: UnwindBackend::Flag,
             ..EntryConfig::new(mode)
         };
         let slot: Arc<Mutex<Option<T>>> = Arc::default();
@@ -1010,7 +1004,7 @@ mod tests {
     // Every entry point is guarded (D-697)
 
     /// Reasons an entry point never unwinds.
-    const DUP: &str = "a count overflow makes the object static (D-454)";
+    const DUP: &str = "a count overflow makes the object static (D-454); the walk that marks what it reaches shared is not charged to the budget, and a system refusal during it is fatal (D-753, D-765)";
     const DROP: &str = "a panic in a drop function aborts (D-171)";
     const RAISES_ITSELF: &str = "the outermost raise: hands the panic to the backend itself";
     const READS: &str = "reads its arguments and allocates nothing";
@@ -1019,7 +1013,6 @@ mod tests {
     const ARITHMETIC: &str = "arithmetic on unboxed numbers";
     const FLOAT_MATH: &str = "float arithmetic whose Rust temporaries never raise";
     const PRINTS: &str = "a failed write exits (D-306) and nothing is allocated";
-    const RESUMES: &str = "transfers control to a handler itself";
     const FIBER_BASE: &str = "a fiber's base: runs catch points that return (D-699)";
     const SWITCH: &str = "the context switch, in assembly";
     const FIRST_FRAME: &str = "the first frame of a fiber, in assembly";
@@ -1069,7 +1062,6 @@ mod tests {
         ("io.rs", "cheby_io_println", PRINTS),
         ("io.rs", "cheby_io_eprint", PRINTS),
         ("io.rs", "cheby_io_eprintln", PRINTS),
-        ("unwind/try_call/mod.rs", "cheby_rt_unwind_resume", RESUMES),
         ("sched/fiber.rs", "fiber_start", FIBER_BASE),
         ("fiber/switch/aarch64.rs", "switch", SWITCH),
         ("fiber/switch/aarch64.rs", "fiber_entry", FIRST_FRAME),

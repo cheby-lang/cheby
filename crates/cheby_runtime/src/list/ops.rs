@@ -45,7 +45,7 @@ fn tallest(lists: &[Root]) -> usize {
 
 // Upper bounds of what an update allocates, for the memory-budget check
 // a runtime helper makes before it takes its owned arguments over (D-698,
-// GAP(unwind-budget-preflight)). A request a bound missed would only leak
+// D-738). A request a bound missed would only leak
 // what the update held, if the budget then ran out halfway.
 
 /// [`push`] onto `list` of height `h`: the cut of a view that ends early

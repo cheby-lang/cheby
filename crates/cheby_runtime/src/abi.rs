@@ -294,8 +294,8 @@ pub const CTX_MODE_CONST_EVAL: u32 = 1;
 
 /// Byte offset of the fiber control block's unwind flag, a `u32` (D-685):
 /// [`unwind_flag::NONE`], [`unwind_flag::PANIC`] or
-/// [`unwind_flag::CANCEL`]. Reserved whichever unwinding backend is chosen
-/// (D-696).
+/// [`unwind_flag::CANCEL`]. Generated code loads it after a C call that
+/// may unwind (D-733).
 pub const CTX_UNWIND: i32 = 12;
 
 /// The values of the unwind flag at [`CTX_UNWIND`] (D-685).
@@ -308,60 +308,9 @@ pub mod unwind_flag {
     pub const CANCEL: u32 = 2;
 }
 
-/// `try_call` prototype only (D-696): the byte offset where a generated
-/// exit stub records its caller's frame pointer before it calls a C
-/// function. GAP(try-call-exit-record).
-pub const CTX_EXIT_FP: i32 = 16;
-
-/// `try_call` prototype only (D-696): the byte offset where a generated
-/// exit stub records its caller's return address before it calls a C
-/// function. GAP(try-call-exit-record).
-pub const CTX_EXIT_PC: i32 = 24;
-
-/// The unwinding backend generated code was compiled for (D-696, D-702),
-/// selected by the hidden `CHEBY_UNWIND` until the user's choice between
-/// the two prototypes. GAP(unwind-backend-switch).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
-#[repr(u8)]
-pub enum UnwindBackend {
-    /// No unwinding: a panic abandons its entry, as in M1.
-    #[default]
-    Off = 0,
-    /// The return-flag prototype.
-    Flag = 1,
-    /// The `try_call` prototype.
-    TryCall = 2,
-}
-
-impl UnwindBackend {
-    /// The environment variable that selects the backend.
-    pub const ENV: &'static str = "CHEBY_UNWIND";
-
-    /// The backend named `"off"`, `"flag"` or `"try_call"`; anything else
-    /// is `None`.
-    #[must_use]
-    pub fn parse(text: &str) -> Option<Self> {
-        match text {
-            "off" => Some(Self::Off),
-            "flag" => Some(Self::Flag),
-            "try_call" => Some(Self::TryCall),
-            _ => None,
-        }
-    }
-
-    /// The name [`UnwindBackend::parse`] reads back.
-    #[must_use]
-    pub const fn name(self) -> &'static str {
-        match self {
-            Self::Off => "off",
-            Self::Flag => "flag",
-            Self::TryCall => "try_call",
-        }
-    }
-}
-
-/// D-702's measurement switch: `CHEBY_UNWIND_EDGES=off` ignores the unwind
-/// edges.
+/// D-742's measurement switch: `CHEBY_UNWIND_EDGES=off` skips the unwind
+/// pass, and a raise in code built so ends the process
+/// (GAP(edgeless-panics)).
 pub const UNWIND_EDGES_ENV: &str = "CHEBY_UNWIND_EDGES";
 
 /// Exit statuses of a program (§10.10, D-182). Entry thunks for `main`
@@ -577,7 +526,7 @@ pub mod sym {
     /// `void cheby_rt_stack_slow_frame(ExecCtx *ctx, uint64_t location, uint64_t frame_size)`:
     /// the slow path of a large function's entry check (D-679), like
     /// [`STACK_SLOW`] but accounting for the caller's frame of
-    /// `frame_size` bytes plus 64 KiB. GAP(stack-slow-frame).
+    /// `frame_size` bytes plus 64 KiB (D-743).
     pub const STACK_SLOW_FRAME: &str = "cheby_rt_stack_slow_frame";
     /// `uint64_t cheby_rt_scope_open(ExecCtx *ctx, bool timed, int64_t seconds, int64_t nanoseconds)`:
     /// opens a scope for the `scope_run` intrinsic (D-693) and returns its
@@ -588,9 +537,6 @@ pub mod sym {
     /// true when the scope succeeded, false when it caught a failure
     /// (`scope_run` then returns the static `Err(Nil)`).
     pub const SCOPE_CLOSE: &str = "cheby_rt_scope_close";
-    /// `void cheby_rt_unwind_resume(ExecCtx *ctx)`: the `try_call`
-    /// prototype's resume of an unwinding (D-696).
-    pub const UNWIND_RESUME: &str = "cheby_rt_unwind_resume";
     /// Data: the static `Err(Nil)` the `scope_run` intrinsic returns on
     /// failure (D-693).
     pub const STATIC_ERR_NIL: &str = "cheby_rt_static_err_nil";
@@ -665,7 +611,7 @@ pub mod sym {
     /// order `symbols()` lists them first. Kernels
     /// (`cheby_<module>_<function>`) follow in `symbols()`; they come from
     /// each kernel module's registration (plan §4.3.3).
-    pub const ALL: [&str; 61] = [
+    pub const ALL: [&str; 60] = [
         ALLOC,
         DUP,
         DROP,
@@ -702,7 +648,6 @@ pub mod sym {
         STACK_SLOW_FRAME,
         SCOPE_OPEN,
         SCOPE_CLOSE,
-        UNWIND_RESUME,
         STATIC_ERR_NIL,
         DESC_SYMBOLS[0],
         DESC_SYMBOLS[1],
@@ -891,7 +836,7 @@ mod tests {
             assert_eq!(sym::desc_symbol(name), Some(symbol));
         }
         assert_eq!(sym::desc_symbol("dyn"), None);
-        assert_eq!(sym::ALL.get(38..), Some(&sym::DESC_SYMBOLS[..]));
+        assert_eq!(sym::ALL.get(37..), Some(&sym::DESC_SYMBOLS[..]));
         assert_eq!(
             [
                 layout::SENDER,
@@ -909,35 +854,12 @@ mod tests {
         }
     }
 
+    /// D-685, D-742: the generated-code view of the control block ends at
+    /// the unwind flag, and the measurement switch keeps its name.
     #[test]
-    fn unwind_backends_parse_their_names() {
-        for backend in [
-            UnwindBackend::Off,
-            UnwindBackend::Flag,
-            UnwindBackend::TryCall,
-        ] {
-            assert_eq!(UnwindBackend::parse(backend.name()), Some(backend));
-        }
-        assert_eq!(UnwindBackend::default(), UnwindBackend::Off);
-        assert_eq!(
-            UnwindBackend::parse("try_call"),
-            Some(UnwindBackend::TryCall)
-        );
-        for bogus in ["", "on", "Flag", "try-call", " off"] {
-            assert_eq!(UnwindBackend::parse(bogus), None, "{bogus:?}");
-        }
-        assert_eq!(UnwindBackend::ENV, "CHEBY_UNWIND");
+    fn the_control_blocks_offsets_and_the_unwind_switch() {
         assert_eq!(UNWIND_EDGES_ENV, "CHEBY_UNWIND_EDGES");
-        assert_eq!(
-            (
-                CTX_STACK_LIMIT,
-                CTX_MODE,
-                CTX_UNWIND,
-                CTX_EXIT_FP,
-                CTX_EXIT_PC
-            ),
-            (0, 8, 12, 16, 24)
-        );
+        assert_eq!((CTX_STACK_LIMIT, CTX_MODE, CTX_UNWIND), (0, 8, 12));
         assert_eq!(
             (unwind_flag::NONE, unwind_flag::PANIC, unwind_flag::CANCEL),
             (0, 1, 2)

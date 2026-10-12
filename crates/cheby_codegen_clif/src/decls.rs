@@ -12,15 +12,14 @@ use cheby_mir::{
     AbiSig, BuiltinDesc, Const, DefName, EntryKind, FnKey, Function, LayoutDesc, LayoutRef,
     MirModule, Operand, Rvalue, StaticKind, StaticObject, Stmt, StrId, Terminator, UnitKind,
 };
-use cheby_runtime::abi::{self, UnwindBackend};
+use cheby_runtime::abi;
 
 use crate::layout::builtin_layout_id;
 use crate::mangle::{self, Kind};
 use crate::runtime::{RuntimeFunc, STATIC_DATA};
 use crate::session::{SessionName, SessionNames};
 use crate::sig;
-use crate::unwind::exit_stub::{self, ExitKey};
-use crate::{CodegenError, ForeignImport, UnwindTable};
+use crate::{CodegenError, ForeignImport};
 
 /// A declared function of generated code.
 #[derive(Clone, Debug)]
@@ -157,17 +156,6 @@ pub struct Decls {
     /// (the JIT's all-or-nothing batches).
     pub(crate) defined_data: FxHashSet<DataId>,
     pub(crate) defined_funcs: FxHashSet<FuncId>,
-    /// The `try_call` prototype's exit stubs declared so far, by machine
-    /// signature, with the stub's own signature (D-696). Empty unless the
-    /// backend is `TryCall`.
-    exit_stubs: FxHashMap<ExitKey, (FuncId, Signature)>,
-    /// Exit stubs declared by the batch being compiled, in declaration
-    /// order, which [`crate::define`] defines.
-    pub(crate) pending_exit_stubs: Vec<(ExitKey, FuncId)>,
-    /// The handler tables of the functions the last batches defined, under
-    /// the `try_call` prototype only, for the JIT to register once their
-    /// code is finalized ([`Decls::take_unwind_tables`]).
-    pub(crate) pending_unwind_tables: Vec<UnwindTable>,
 }
 
 impl std::fmt::Debug for Decls {
@@ -180,7 +168,6 @@ impl std::fmt::Debug for Decls {
             .field("layouts", &self.layouts.len())
             .field("consts", &self.consts.len())
             .field("statics", &self.statics.len())
-            .field("exit_stubs", &self.exit_stubs.len())
             .finish_non_exhaustive()
     }
 }
@@ -333,9 +320,6 @@ impl Decls {
             pending_statics: Vec::new(),
             defined_data: FxHashSet::default(),
             defined_funcs: FxHashSet::default(),
-            exit_stubs: FxHashMap::default(),
-            pending_exit_stubs: Vec::new(),
-            pending_unwind_tables: Vec::new(),
         })
     }
 
@@ -634,82 +618,11 @@ impl Decls {
         out
     }
 
-    /// The exit stub of the `try_call` prototype for C functions with the
-    /// machine signature `key`, and its own signature.
-    pub(crate) fn exit_stub(&self, key: &ExitKey) -> Result<(FuncId, &Signature), CodegenError> {
-        self.exit_stubs
-            .get(key)
-            .map(|(id, s)| (*id, s))
-            .ok_or_else(|| {
-                CodegenError::ice(format!("the exit stub `{}` was not declared", key.symbol()))
-            })
-    }
-
-    /// The handler tables of the functions defined since the last call,
-    /// with the `try_call` prototype (D-696); empty with any other backend.
-    /// The JIT registers each one with the runtime once its code is
-    /// finalized.
-    pub fn take_unwind_tables(&mut self) -> Vec<UnwindTable> {
-        std::mem::take(&mut self.pending_unwind_tables)
-    }
-
-    /// Declares the exit stubs the `try_call` prototype needs for the units
-    /// of a batch (D-696): one per machine signature of the runtime
-    /// functions called with an unwind edge (in the first batch), and of
-    /// every foreign kernel the units call, with the runtime's resume
-    /// function. New stubs are declared in key order, after everything
-    /// else of the batch, so ids are the same in every build (D-264), and
-    /// [`crate::define`] defines them with the batch.
-    fn declare_exit_stubs<M: Module>(
-        &mut self,
-        module: &mut M,
-        mirs: &[MirModule],
-    ) -> Result<(), CodegenError> {
-        self.declare_runtime_func(module, RuntimeFunc::UnwindResume)?;
-        let mut keys = std::collections::BTreeSet::new();
-        for f in RuntimeFunc::ALL {
-            if exit_stub::runtime_needs_stub(f) {
-                keys.insert(ExitKey::runtime(f));
-            }
-        }
-        for unit in mirs {
-            for function in &unit.functions {
-                for block in &function.blocks {
-                    for stmt in &block.stmts {
-                        if let Stmt::Assign {
-                            value: Rvalue::CallForeign { sig, .. },
-                            ..
-                        }
-                        | Stmt::Eval(Rvalue::CallForeign { sig, .. }) = stmt
-                        {
-                            keys.insert(ExitKey::of(&sig.params, sig.ret));
-                        }
-                    }
-                }
-            }
-        }
-        for key in keys {
-            if self.exit_stubs.contains_key(&key) {
-                continue;
-            }
-            let symbol = key.symbol();
-            let signature = key.signature(self.call_conv);
-            let id = module
-                .declare_function(&symbol, Linkage::Local, &signature)
-                .map_err(|e| CodegenError::module(&e))?;
-            self.names.insert((0, id.as_u32()), symbol);
-            self.pending_exit_stubs.push((key.clone(), id));
-            self.exit_stubs.insert(key, (id, signature));
-        }
-        Ok(())
-    }
-
     pub(crate) fn declare_units<M: Module>(
         &mut self,
         module: &mut M,
         mirs: &[MirModule],
         import: ForeignImport,
-        unwind: UnwindBackend,
     ) -> Result<(), CodegenError> {
         self.declare_runtime(module)?;
         for unit in mirs {
@@ -736,9 +649,6 @@ impl Decls {
             for function in &unit.functions {
                 self.declare_foreign(module, function, import)?;
             }
-        }
-        if unwind == UnwindBackend::TryCall {
-            self.declare_exit_stubs(module, mirs)?;
         }
         Ok(())
     }

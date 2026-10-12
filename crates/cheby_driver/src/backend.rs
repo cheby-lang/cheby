@@ -40,14 +40,14 @@
 //! its switches once, in one place: [`mir_options_from_env`] reads
 //! `CHEBY_RC` (`naive` or `perceus`; unset or empty is the default) and
 //! `CHEBY_UNWIND_EDGES` (`off` turns the unwind pass off, D-698; unset or
-//! empty keeps it), and [`codegen_options_from_env`] reads `CHEBY_UNWIND`
-//! (`off`, `flag` or `try_call`; unset or empty is `off`), which
-//! `CHEBY_UNWIND_EDGES=off` forces to `off`. Every unit is counted with
+//! empty keeps it), and [`codegen_options`] carries the latter into
+//! [`CodegenOptions::unwind_edges`], so the runtime knows code compiled
+//! without edges (GAP(edgeless-panics)). Every unit is counted with
 //! `cheby_mir::count_and_check_with`. The dumps for goldens use the
 //! defaults, so they do not depend on the environment. These are hidden
 //! developer switches, honored by release builds too, so `bench-run` can
-//! measure every mode (D-702); an invalid value is a driver error.
-//! GAP(rc-mode-env) GAP(unwind-backend-switch)
+//! measure every mode (D-702); an invalid value is a driver error (D-746,
+//! D-742).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -63,7 +63,6 @@ use cheby_mir::{
     count_and_check_with, lower_entries, lower_items, lower_tests,
 };
 use cheby_package::Target;
-use cheby_runtime::abi::UnwindBackend;
 use cheby_types::thir;
 use rayon::prelude::*;
 
@@ -106,8 +105,7 @@ pub(crate) struct Built {
 }
 
 /// The MIR options of a build, read from the environment once per build:
-/// `CHEBY_RC` (plan §2.3; GAP(rc-mode-env)) and `CHEBY_UNWIND_EDGES`
-/// (plan §2.4; GAP(unwind-backend-switch)).
+/// `CHEBY_RC` (D-746) and `CHEBY_UNWIND_EDGES` (D-742).
 ///
 /// # Errors
 ///
@@ -116,57 +114,18 @@ pub(crate) fn mir_options_from_env() -> Result<MirOptions, Error> {
     MirOptions::from_env().map_err(Error::new)
 }
 
-/// The code-generation options of a build or a REPL session, read from
-/// the environment once (plan §2.4, D-702): `CHEBY_UNWIND` picks
-/// [`CodegenOptions::unwind`] (unset or empty is `off`), and
-/// `CHEBY_UNWIND_EDGES=off` makes it `off` whatever `CHEBY_UNWIND` says;
-/// both are checked either way. A CLIF dump (`capture_clif`) compiles with
-/// the defaults and reads nothing, so dumps do not depend on the
-/// environment (D-264). GAP(unwind-backend-switch)
-///
-/// # Errors
-///
-/// An [`Error`] with the message of an invalid value.
-pub(crate) fn codegen_options_from_env(capture_clif: bool) -> Result<CodegenOptions, Error> {
-    if capture_clif {
-        return Ok(CodegenOptions {
-            capture_clif,
-            ..CodegenOptions::default()
-        });
-    }
-    let backend = unwind_backend_from_env()?;
-    let edges = MirOptions::unwind_edges_from_env().map_err(Error::new)?;
-    Ok(CodegenOptions {
-        unwind: if edges { backend } else { UnwindBackend::Off },
+/// The code-generation options of a build or a REPL session compiled with
+/// the MIR options `mir`: [`CodegenOptions::unwind_edges`] follows
+/// `mir.unwind_edges` (`CHEBY_UNWIND_EDGES`, D-742), so the JIT tells the
+/// runtime when code has no edges (GAP(edgeless-panics)). A CLIF dump
+/// (`capture_clif`) compiles with the default MIR options, so dumps do not
+/// depend on the environment (D-264).
+pub(crate) fn codegen_options(mir: MirOptions, capture_clif: bool) -> CodegenOptions {
+    CodegenOptions {
+        capture_clif,
+        unwind_edges: mir.unwind_edges,
         ..CodegenOptions::default()
-    })
-}
-
-/// `CHEBY_UNWIND`: the unwinding backend to generate code for.
-fn unwind_backend_from_env() -> Result<UnwindBackend, Error> {
-    let value = std::env::var_os(UnwindBackend::ENV);
-    match value.as_deref().map(std::ffi::OsStr::to_str) {
-        None => Ok(UnwindBackend::Off),
-        Some(Some(text)) => parse_unwind_backend(text),
-        Some(None) => Err(Error::new(format!(
-            "{} must be off, flag or try_call, not a value that is not Unicode",
-            UnwindBackend::ENV
-        ))),
     }
-}
-
-/// The backend the value `text` of `CHEBY_UNWIND` names; empty is `off`.
-fn parse_unwind_backend(text: &str) -> Result<UnwindBackend, Error> {
-    if text.is_empty() {
-        return Ok(UnwindBackend::Off);
-    }
-    UnwindBackend::parse(text).ok_or_else(|| {
-        Error::new(format!(
-            "{} must be off, flag or try_call, not \"{}\"",
-            UnwindBackend::ENV,
-            text.escape_debug()
-        ))
-    })
 }
 
 /// Lowers what the roots reach (D-510), compiles it in one JIT, and
@@ -198,7 +157,7 @@ pub(crate) fn build(
     } else {
         mir_options_from_env()?
     };
-    let codegen = codegen_options_from_env(capture_clif)?;
+    let codegen = codegen_options(options, capture_clif);
     Ok(build_dumping(
         front,
         sources,
@@ -1474,26 +1433,12 @@ fn main() {
         );
     }
 
-    /// Plan §2.4: `CHEBY_UNWIND` names a backend by
-    /// `UnwindBackend::parse`, empty is `off`, and anything else is the
-    /// driver error of the plan. GAP(unwind-backend-switch)
+    /// D-742: `CHEBY_UNWIND_EDGES` is the one unwinding switch, and code
+    /// generation carries the MIR's setting into
+    /// [`CodegenOptions::unwind_edges`] (GAP(edgeless-panics)); a CLIF dump
+    /// compiles with the defaults.
     #[test]
-    fn unwind_switch_values() {
-        assert_eq!(parse_unwind_backend("").unwrap(), UnwindBackend::Off);
-        assert_eq!(parse_unwind_backend("off").unwrap(), UnwindBackend::Off);
-        assert_eq!(parse_unwind_backend("flag").unwrap(), UnwindBackend::Flag);
-        assert_eq!(
-            parse_unwind_backend("try_call").unwrap(),
-            UnwindBackend::TryCall
-        );
-        let Err(e) = parse_unwind_backend("bogus") else {
-            panic!("bogus is not a backend");
-        };
-        assert_eq!(
-            e.to_string(),
-            "CHEBY_UNWIND must be off, flag or try_call, not \"bogus\""
-        );
-        assert!(parse_unwind_backend("Flag").is_err());
+    fn unwind_edges_switch_reaches_the_codegen_options() {
         // The two crates name the edges switch alike; the MIR crate does
         // not depend on the runtime.
         assert_eq!(
@@ -1501,9 +1446,21 @@ fn main() {
             cheby_runtime::abi::UNWIND_EDGES_ENV
         );
         assert_eq!(
-            codegen_options_from_env(true).unwrap(),
+            codegen_options(MirOptions::default(), true),
             CodegenOptions {
                 capture_clif: true,
+                ..CodegenOptions::default()
+            }
+        );
+        assert!(codegen_options(MirOptions::default(), false).unwind_edges);
+        let off = MirOptions {
+            unwind_edges: false,
+            ..MirOptions::default()
+        };
+        assert_eq!(
+            codegen_options(off, false),
+            CodegenOptions {
+                unwind_edges: false,
                 ..CodegenOptions::default()
             }
         );

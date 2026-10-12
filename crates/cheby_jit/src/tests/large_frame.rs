@@ -66,6 +66,8 @@ fn deep_body(me: DefId, width: u32) -> (Vec<Repr>, Vec<Stmt>, u32) {
             to: Repr::Int,
         },
     ));
+    // `r` is owned: its count balances, as the unwind pass checks (D-698).
+    body.push(Stmt::Drop(local(r)));
     let mut previous = t;
     for i in 0..width {
         let acc = add(first_acc, i);
@@ -84,8 +86,9 @@ fn deep_body(me: DefId, width: u32) -> (Vec<Repr>, Vec<Stmt>, u32) {
 
 /// `deep(n: Int)`: `n == 0` returns 0; otherwise it computes
 /// `v_i = n ^ i` for `i` in `1..=width`, calls `deep(n - 1)` (through its
-/// slot, so recursion re-enters the outer function, D-043) and returns the
-/// result xor every `v_i`. The `width` values are live across the call,
+/// slot, so recursion re-enters the outer function, D-043), drops the
+/// boxed result after unboxing it, and returns the result xor every
+/// `v_i`. The `width` values are live across the call,
 /// so each takes a spill slot: the frame is about `8 * width` bytes.
 fn deep(index: u32, width: u32) -> Function {
     let me = def(1, index);
@@ -140,7 +143,8 @@ fn expected(n: i64, width: u32) -> i128 {
     i128::from(acc)
 }
 
-/// A JIT holding `deep` of `width` values compiled with `options`, two
+/// A JIT holding `deep` of `width` values compiled with `options` after
+/// the unwind pass (an overflow unwinds by the return flag, D-733), two
 /// thunks calling it with `shallow` and with `depth`, and its CLIF.
 struct Built {
     jit: Jit,
@@ -161,7 +165,7 @@ fn compile_deep(width: u32, shallow: i64, depth: i64, options: CodegenOptions) -
         ..options
     })
     .unwrap();
-    jit.compile(&p.units()).unwrap();
+    jit.compile(&p.unwound_units()).unwrap();
     let clif = jit.take_clif().join("\n");
     Built {
         jit,

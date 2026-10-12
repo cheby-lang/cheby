@@ -75,14 +75,17 @@ unsafe fn dup_slow(obj: *mut u8, rc: i32) {
         // everything it reaches, so what this one reaches is made shared
         // first: a static object reaches only static or shared objects,
         // as a shared one does (I-2), and a value reaching it may cross
-        // to another fiber (review findings MEM-1, CONC2-3).
-        // GAP(overflow-static-subgraph): D-454 does not say what happens
-        // to what the object reaches.
+        // to another fiber (D-753).
+        //
+        // `cheby_rt_dup` has no unwind edge, so this walk must not raise:
+        // its worklist is not charged to the memory budget, and a system
+        // refusal while it grows ends the process (D-765).
+        let list = alloc::scratch::ScratchVec::unbudgeted(OVERFLOW_WALK_REFUSED);
         // SAFETY: a live object whose count is positive, so it and every
         // object it reaches with a positive count are confined to this
         // fiber (I-1); marking stores `-rc` into it, which the next store
         // replaces.
-        unsafe { mark_shared(ptr_to_word(obj)) };
+        unsafe { mark_with(ptr_to_word(obj), list) };
         // SAFETY: a live object, now shared, that only this fiber has
         // touched since it was local; no other fiber can reach it before
         // this dup returns.
@@ -164,7 +167,9 @@ pub unsafe fn is_unique(value: Word) -> bool {
 /// REPL binding. Sharing is sticky in M2. The walk is a worklist of
 /// scratch memory, so a million-deep value is marked without deep Rust
 /// recursion (plan §0), and the scratch counts towards constant
-/// evaluation's memory budget like every walk's.
+/// evaluation's memory budget like every walk's. The one exception is the
+/// walk of a count overflow (`dup_slow`), which runs the same steps on an
+/// unbudgeted worklist (D-765).
 ///
 /// The walk marks an object only after everything it reaches is marked
 /// (post-order), so the invariant it relies on, "a count `<= 0` means
@@ -185,14 +190,32 @@ pub unsafe fn is_unique(value: Word) -> bool {
 /// reaches with a positive count is confined to the calling fiber (no
 /// other thread reads or writes its count meanwhile).
 pub unsafe fn mark_shared(word: Word) {
-    /// One step of the walk.
-    enum Step {
-        /// Enter the value: push its mark, then its children.
-        Enter(Word),
-        /// Everything the object reaches is marked: mark it.
-        Mark(Word),
-    }
-    let mut list = alloc::scratch::ScratchVec::of(Step::Enter(word));
+    // SAFETY: forwarded from the caller.
+    unsafe { mark_with(word, alloc::scratch::ScratchVec::new()) };
+}
+
+/// What ends the process when the system refuses the worklist of a count
+/// overflow's walk (D-765), after `fatal runtime error: `.
+const OVERFLOW_WALK_REFUSED: &str =
+    "out of memory while marking a value shared after its count overflowed";
+
+/// One step of [`mark_shared`]'s walk.
+enum Step {
+    /// Enter the value: push its mark, then its children.
+    Enter(Word),
+    /// Everything the object reaches is marked: mark it.
+    Mark(Word),
+}
+
+/// [`mark_shared`] with `list`, an empty worklist, whose growth is
+/// accounted for as the caller chose: charged to the budget, or not
+/// (`dup_slow`, D-765).
+///
+/// # Safety
+///
+/// As for [`mark_shared`].
+unsafe fn mark_with(word: Word, mut list: alloc::scratch::ScratchVec<Step>) {
+    list.push(Step::Enter(word));
     while let Some(step) = list.pop() {
         match step {
             Step::Enter(word) => {
@@ -667,6 +690,200 @@ mod mark_shared_tests {
             release([node]);
         });
         assert_eq!((domain.live_objects(), domain.live_bytes()), (0, 0));
+    }
+}
+
+/// D-765: the walk that `dup_slow` runs when a local count overflows is not
+/// charged to the memory budget, so it never raises, and a refusal of the
+/// system allocator during it ends the process. Its own module, so that
+/// `cargo test -p cheby_runtime rc::overflow_oom` selects these tests.
+#[cfg(test)]
+mod overflow_oom_tests {
+    use std::sync::{Arc, Mutex, PoisonError};
+
+    use super::*;
+    use crate::alloc::{Domain, scratch, with_domain};
+    use crate::entry::{EntryConfig, EntryMode, EntryOutcome, current_fiber, run_task};
+    use crate::values::{string, tuple};
+
+    /// The line D-765 ends the process with.
+    const FATAL_LINE: &str = "fatal runtime error: out of memory while marking a value shared after its count overflowed\n";
+
+    /// `(parent, child)`: a tuple holding a list of `items` strings and a
+    /// string, one reference short of the most a local count holds, so the
+    /// next `dup` overflows it and its walk grows its worklist many times.
+    fn overflowing(items: i64) -> (Word, Word) {
+        let child = crate::list::from_iter((0..items).map(|n| string(&format!("item {n}"))));
+        let parent = tuple(&[child, string("sibling")]);
+        // SAFETY: a live object only this thread uses.
+        unsafe { store_rc(word_to_ptr(parent), i32::MAX) };
+        (parent, child)
+    }
+
+    /// Every distinct heap object reachable from `word` (the root included)
+    /// and whether each one's count is `<= 0`. Iterative.
+    fn all_shared_or_static(word: Word) -> (usize, bool) {
+        let mut seen = std::collections::HashSet::new();
+        let mut list = vec![word];
+        let mut all = true;
+        while let Some(word) = list.pop() {
+            if abi::is_tagged_int(word) || word == 0 || !seen.insert(word) {
+                continue;
+            }
+            // SAFETY: a live object reached from the test's value.
+            all &= unsafe { load_rc(word_to_ptr(word)) } <= 0;
+            // SAFETY: as above.
+            unsafe { alloc::for_each_child(word, &mut |child| list.push(child)) };
+        }
+        (seen.len(), all)
+    }
+
+    /// What the entry of the budget test saw.
+    #[derive(Debug, Default)]
+    struct Seen {
+        budget_set: u64,
+        budget_after: u64,
+        flag: u32,
+        scratch_before: u64,
+        scratch_after: u64,
+        peak_after: u64,
+        domain_before: i64,
+        domain_after: i64,
+        parent_count: i32,
+        reached: usize,
+        all_shared: bool,
+    }
+
+    /// An overflow inside a fiber whose budget is used up: before D-765 the
+    /// walk's first scratch growth raised the memory limit inside
+    /// `cheby_rt_dup`, which has no unwind edge. Now the subgraph is marked
+    /// shared, nothing raises, and the budget's use is unchanged: no
+    /// scratch is charged (live and peak stay where they were) and the
+    /// domain's live bytes only fall by the object that left it (D-454).
+    #[test]
+    #[cfg_attr(miri, ignore = "runs an entry thread")]
+    fn an_overflow_inside_an_exhausted_budget_marks_the_subgraph_and_raises_nothing() {
+        let domain = Domain::new();
+        let config = EntryConfig {
+            domain: Arc::clone(&domain),
+            ..EntryConfig::new(EntryMode::Test)
+        };
+        let slot: Arc<Mutex<Option<Seen>>> = Arc::default();
+        let out = Arc::clone(&slot);
+        let task = move || {
+            let Some(ctx) = current_fiber() else {
+                return 1;
+            };
+            let (parent, _child) = overflowing(2_000);
+            scratch::reset_peak();
+            let scratch_before = scratch::live();
+            let domain_before = ctx.domain().live_bytes();
+            // Nothing more may be allocated, scratch included (D-536).
+            let budget_set = u64::try_from(domain_before)
+                .unwrap_or(u64::MAX)
+                .saturating_add(scratch_before);
+            ctx.set_budget(budget_set);
+            // SAFETY: a live object only this fiber uses.
+            unsafe { cheby_rt_dup(parent) };
+            let seen = Seen {
+                budget_set,
+                budget_after: ctx.budget(),
+                flag: ctx.unwind.load(Ordering::Acquire),
+                scratch_before,
+                scratch_after: scratch::live(),
+                peak_after: scratch::peak(),
+                domain_before,
+                domain_after: ctx.domain().live_bytes(),
+                // SAFETY: a live object.
+                parent_count: unsafe { load_rc(word_to_ptr(parent)) },
+                reached: 0,
+                all_shared: false,
+            };
+            ctx.set_budget(u64::MAX);
+            let (reached, all_shared) = all_shared_or_static(parent);
+            // SAFETY: the test's reference to a static object: a no-op.
+            unsafe { cheby_rt_drop(parent) };
+            *out.lock().unwrap_or_else(PoisonError::into_inner) = Some(Seen {
+                reached,
+                all_shared,
+                ..seen
+            });
+            0
+        };
+        // SAFETY: the task builds and reads only its own runtime objects.
+        let outcome = unsafe { run_task(&config, task) }.unwrap();
+        assert!(matches!(outcome, EntryOutcome::Returned(0)), "{outcome:?}");
+        let seen = slot
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+            .unwrap();
+        assert_eq!(seen.flag, 0, "nothing raised: {seen:?}");
+        assert_eq!(seen.budget_after, seen.budget_set, "{seen:?}");
+        assert_eq!(seen.scratch_after, seen.scratch_before, "{seen:?}");
+        assert_eq!(seen.peak_after, seen.scratch_before, "{seen:?}");
+        assert!(seen.domain_after < seen.domain_before, "{seen:?}");
+        assert_eq!(seen.parent_count, abi::RC_STATIC);
+        // The tuple, the sibling, the list's nodes and its 2,000 strings.
+        assert!(seen.reached > 2_002, "{seen:?}");
+        assert!(seen.all_shared, "a local count is left below: {seen:?}");
+    }
+
+    /// The same walk on a thread that runs no fiber charges nothing either.
+    #[test]
+    fn the_overflow_walk_charges_no_scratch() {
+        let domain = Domain::new();
+        with_domain(Arc::clone(&domain), || {
+            let (parent, child) = overflowing(100);
+            scratch::reset_peak();
+            let before = scratch::live();
+            // SAFETY: a live object only this thread uses.
+            unsafe { cheby_rt_dup(parent) };
+            assert_eq!((scratch::live(), scratch::peak()), (before, before));
+            assert!(all_shared_or_static(parent).1);
+            // SAFETY: a live object.
+            assert!(unsafe { load_rc(word_to_ptr(child)) } < 0);
+        });
+    }
+
+    /// D-765's fatal line: the child test below overflows a count with the
+    /// next scratch growth refused, as a system that has no memory left
+    /// would refuse it.
+    #[test]
+    #[cfg_attr(miri, ignore = "starts a process")]
+    fn a_refused_growth_of_the_overflow_walk_is_fatal() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "rc::overflow_oom_tests::refused_overflow_walk_child",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env("CHEBY_RT_TEST_DUP_REFUSAL", "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stdout.contains("running 1 test"), "{stdout}{stderr}");
+        assert!(!output.status.success(), "{stdout}{stderr}");
+        assert!(stderr.contains(FATAL_LINE), "{stdout}{stderr}");
+        assert!(!stdout.contains("the dup returned"), "{stdout}{stderr}");
+    }
+
+    /// The child side of `a_refused_growth_of_the_overflow_walk_is_fatal`:
+    /// does nothing unless `CHEBY_RT_TEST_DUP_REFUSAL` is set.
+    #[test]
+    fn refused_overflow_walk_child() {
+        if std::env::var_os("CHEBY_RT_TEST_DUP_REFUSAL").is_none() {
+            return;
+        }
+        with_domain(Domain::new(), || {
+            let (parent, _child) = overflowing(100);
+            scratch::refuse_next_scratch_growth();
+            // SAFETY: a live object only this thread uses.
+            unsafe { cheby_rt_dup(parent) };
+            println!("the dup returned");
+        });
     }
 }
 

@@ -5,9 +5,9 @@
 //!
 //! `CHEBY_RC` is a hidden developer switch, honored by every build,
 //! release included, so that `bench-run` can measure a release `cheby`
-//! under both modes (D-702, D-718). GAP(rc-mode-env): the name, the values
-//! and that release builds honor it are this plan's answer, not yet
-//! logged.
+//! under both modes (D-702, D-718); the name, the values and that release
+//! builds honor it are D-746's. `CHEBY_UNWIND_EDGES=off` turns the unwind
+//! pass off for D-702's measurement (D-742).
 
 use cheby_iface::Ice;
 
@@ -18,7 +18,7 @@ use crate::validate::{Stage, validate};
 ///
 /// Naive counting stays selectable as the differential oracle of the
 /// Perceus passes. Until those passes land, both modes run the same naive
-/// pass, so their MIR is identical. GAP(rc-mode-env)
+/// pass, so their MIR is identical (D-746).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum RcMode {
     /// The optimized passes (D-273); the default.
@@ -67,11 +67,11 @@ impl MirOptions {
 
     /// The environment variable that turns the unwind pass off, for the
     /// measurement of D-702 (`cheby_runtime::abi::UNWIND_EDGES_ENV`; this
-    /// crate does not depend on the runtime). GAP(unwind-backend-switch)
+    /// crate does not depend on the runtime; D-742).
     pub const UNWIND_EDGES_ENV: &'static str = "CHEBY_UNWIND_EDGES";
 
     /// Reads `CHEBY_RC` (`naive`, `perceus`, or unset or empty for the
-    /// default; GAP(rc-mode-env)) and `CHEBY_UNWIND_EDGES` (see
+    /// default; D-746) and `CHEBY_UNWIND_EDGES` (see
     /// [`MirOptions::unwind_edges_from_env`]).
     ///
     /// # Errors
@@ -96,10 +96,11 @@ impl MirOptions {
         })
     }
 
-    /// Reads `CHEBY_UNWIND_EDGES`: `off` turns the unwind pass off (D-702:
-    /// the run-time baseline of the unwinding backends, honored by every
-    /// build, release included); unset or empty keeps it on.
-    /// GAP(unwind-backend-switch)
+    /// Reads `CHEBY_UNWIND_EDGES`: `off` turns the unwind pass off (D-742:
+    /// the measurement baseline of D-702, honored by every build, release
+    /// included); unset or empty keeps it on. Code compiled without edges
+    /// unwinds nowhere: a raise in it ends the process with its report
+    /// (GAP(edgeless-panics)).
     ///
     /// # Errors
     ///

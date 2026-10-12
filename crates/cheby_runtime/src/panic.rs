@@ -1,18 +1,12 @@
 //! Panics (F7, §11.6, §11.8) and the stack-limit slow path (§11.8.1).
 //!
-//! What a panic does depends on the unwinding backend the entry's code was
-//! compiled for (D-696, [`crate::abi::UnwindBackend`]):
-//!
-//! - With the default backend, `off`, a panic flushes standard output,
-//!   prints its report to standard error (except in a test or during
-//!   constant evaluation, whose hosts capture it), and then abandons the
-//!   entry: it hands the report to the host waiting in `run_entry` or
-//!   `Runtime::run_root` and parks the entry's thread forever, or, for a
-//!   root fiber, switches to its worker for good (GAP(interim-panics)). It
-//!   never returns and never unwinds (D-283), as in M1.
-//! - With an unwinding backend, a panic records its report in the fiber
-//!   (D-699) and unwinds to its catch point, which prints the report where
-//!   D-701 says ([`crate::unwind`]).
+//! A panic records its report in the fiber (D-699) and unwinds by the
+//! return flag to its catch point (D-733, ADR-0061), which prints the
+//! report where D-701 says ([`crate::unwind`]): the entry's thread or
+//! fiber then ends normally, and the cleanup pads have released its
+//! objects (D-713). In code compiled without unwind edges
+//! (`CHEBY_UNWIND_EDGES=off`, D-742) a panic ends the process instead
+//! (GAP(edgeless-panics), [`crate::unwind::raise`]).
 //!
 //! What happens next is the host's policy: `cheby run` exits with 101
 //! (D-182), `cheby test` records a failure and prints the report in its
@@ -31,7 +25,7 @@ use std::fmt;
 
 use crate::abi::{PanicKind, Word};
 use crate::ctx::{self, ExecCtx};
-use crate::entry::{EntryMode, EntryOutcome};
+use crate::entry::EntryMode;
 use crate::io;
 use crate::sched::{self, AfterSwitch};
 use crate::string;
@@ -84,11 +78,9 @@ impl fmt::Display for PanicReport {
 /// `path:line:column`, or 0.
 ///
 /// It is the outermost Rust frame of the panic, so it hands the panic to
-/// the backend directly ([`crate::unwind::raise::raise_from_runtime`]):
-/// with the default backend it never returns (the entry is abandoned);
-/// with the return flag it records the report, sets the flag and returns,
-/// and generated code runs its cleanup pad; with `try_call` it resumes at
-/// the nearest handler (D-697).
+/// the return flag directly ([`crate::unwind::raise::raise_from_runtime`],
+/// D-697, D-733): it records the report, sets the flag and returns, and
+/// generated code runs its cleanup pad.
 ///
 /// # Safety
 ///
@@ -161,7 +153,7 @@ pub const LARGE_FRAME_MARGIN: u64 = 64 << 10;
 /// frame is allocated. Handles a pending interrupt and returns, or panics
 /// with [`PanicKind::StackOverflow`] when the stack position minus
 /// `frame_size` minus [`LARGE_FRAME_MARGIN`] is below the real limit.
-/// GAP(stack-slow-frame).
+/// (D-743)
 ///
 /// # Safety
 ///
@@ -269,59 +261,6 @@ unsafe fn location_text(location: Word) -> String {
     }
     // SAFETY: forwarded from the caller.
     unsafe { string::to_rust_string(location) }.unwrap_or_else(|| UNKNOWN_LOCATION.to_owned())
-}
-
-/// Ends the entry with a panic under the default backend, `off`: flushes
-/// standard output, prints the report unless the entry captures it (tests
-/// and constant evaluation), hands it to the host and parks forever.
-///
-/// GAP(interim-panics): until unwinding is chosen, a root fiber of a
-/// runtime does the same and then switches to its worker for good, which
-/// quarantines its slot; any other fiber of a runtime ends the process.
-///
-/// # Safety
-///
-/// `ctx` is null or the running entry's context.
-pub(crate) unsafe fn abandon(ctx: *mut ExecCtx, report: PanicReport) -> ! {
-    if io::flush_stdout().is_err() {
-        io::exit_after_write_failure();
-    }
-    // SAFETY: forwarded from the caller.
-    let context = unsafe { ctx.as_ref() };
-    let captured = context.is_some_and(|context| {
-        matches!(
-            context.entry_mode(),
-            EntryMode::ConstEval(_) | EntryMode::Test
-        )
-    });
-    if !captured {
-        io::write_stderr(&report.to_string());
-    }
-    let Some(outcome) = context.and_then(ExecCtx::outcome) else {
-        if context.is_some_and(|context| context.sched.runtime().is_some()) {
-            fatal(format_args!(
-                "a fiber panicked (unwinding arrives with package U4)"
-            ));
-        }
-        fatal(format_args!("a panic happened outside of any entry"));
-    };
-    // If the host has gone there is nobody to tell; park anyway.
-    outcome.send(EntryOutcome::Panicked(report)).ok();
-    if let Some(context) = context
-        && context.sched.runtime().is_some()
-    {
-        // The worker drops the control block and quarantines the slot; the
-        // abandoned frames never run again, and nothing borrowed from a
-        // thread-local or a lock is held here (I-5).
-        sched::park(context, AfterSwitch::Quarantine);
-    }
-    // The parked thread never allocates again: its cached free blocks go
-    // back to the system, like its stack.
-    crate::alloc::release_block_cache();
-    crate::entry::release_abandoned_stack();
-    loop {
-        std::thread::park();
-    }
 }
 
 /// Reports a broken runtime invariant and aborts the process. This is an

@@ -39,6 +39,11 @@
 //! unchecked inner body `cb$big$…` that the outer one `return_call`s.
 //! [`define`] learns the frame size from the first compilation.
 //!
+//! Unwinding is return-flag propagation (D-733, ADR-0061): every unwind
+//! edge of the MIR (D-698) is lowered to a test of the call's result or of
+//! the flag at `ctx+12`, with a branch to the edge's pad, a cold block
+//! (`unwind`).
+//!
 //! REPL session items (E4, D-547) are registered with
 //! [`Decls::set_session_name`]: their symbols use the module `<repl>` and
 //! carry `$r<generation>`, and a redefinition that takes over an earlier
@@ -94,8 +99,6 @@ use cranelift_codegen::isa::TargetIsa;
 use cranelift_module::{Module, ModuleReloc};
 
 use cheby_mir::MirModule;
-use cheby_runtime::abi::UnwindBackend;
-use cheby_runtime::unwind::try_call::CallSite;
 
 pub use decls::{Decls, FuncDecl, SlotDecl, SlotKey};
 pub use error::CodegenError;
@@ -138,6 +141,10 @@ pub enum ForeignImport {
 
 /// What code generation emits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent switches, each set by its own caller"
+)]
 pub struct CodegenOptions {
     pub call_mode: CallMode,
     pub foreign_import: ForeignImport,
@@ -151,10 +158,14 @@ pub struct CodegenOptions {
     /// mode (plan §4.3.4), instead of the inline fast paths that skip
     /// tagged integers and static objects and update the count in place.
     pub checked_rc: bool,
-    /// The unwinding backend the code is generated for (plan §4: a hidden
-    /// switch while D-696 is open). `Off`, the default, generates the code
-    /// of M1 and ignores the MIR's unwind edges.
-    pub unwind: cheby_runtime::abi::UnwindBackend,
+    /// Whether the MIR was compiled with unwind edges, that is without
+    /// `CHEBY_UNWIND_EDGES=off` (D-742); `true` by default. Code generation
+    /// does not read it: it lowers whatever edges the MIR has (D-733). The
+    /// JIT copies it into the runtime's entry and run configurations, so a
+    /// raise in a fiber compiled without edges ends the process with its
+    /// report instead of returning into code that tests no flag
+    /// (GAP(edgeless-panics)).
+    pub unwind_edges: bool,
     /// The frame size in bytes above which a function is split into an
     /// outer function, which checks the stack for its whole frame, and an
     /// unchecked inner body `cb$big$…` (D-679). Only consulted when
@@ -176,7 +187,7 @@ impl Default for CodegenOptions {
             stack_check: true,
             capture_clif: false,
             checked_rc: false,
-            unwind: cheby_runtime::abi::UnwindBackend::Off,
+            unwind_edges: true,
             large_frame_threshold: LARGE_FRAME_THRESHOLD,
         }
     }
@@ -214,21 +225,7 @@ pub fn declare<M: Module>(
     _cx: &CodegenCx<'_>,
     opts: &CodegenOptions,
 ) -> Result<(), CodegenError> {
-    decls.declare_units(module, mirs, opts.foreign_import, opts.unwind)
-}
-
-/// The handler table of one function compiled for the `try_call`
-/// prototype (D-696): its call sites with a handler, offsets from the
-/// start of its code, for the runtime's registry
-/// (`cheby_runtime::unwind::try_call::register_code`).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct UnwindTable {
-    /// The function.
-    pub func: cranelift_module::FuncId,
-    /// The size of its code in bytes.
-    pub len: usize,
-    /// Its call sites with a handler, by return address.
-    pub sites: Box<[CallSite]>,
+    decls.declare_units(module, mirs, opts.foreign_import)
 }
 
 /// What one call of [`define_with_stats`] defined: the size of the machine
@@ -326,7 +323,7 @@ pub fn define_with_stats<M: Module>(
         .map(|&(unit, function, _)| {
             let translated = translate(unit, function, shared, cx, opts)?;
             let text = opts.capture_clif.then(|| shared.describe(&translated));
-            Ok((text, compile_for(isa, translated, opts.unwind)?))
+            Ok((text, compile_function(isa, translated)?))
         })
         .collect();
     let mut first = Vec::with_capacity(results.len());
@@ -373,15 +370,6 @@ pub fn define_with_stats<M: Module>(
             compiled.push((Some(function.key), id, code));
         }
     }
-    // The `try_call` prototype's exit stubs the batch declared (D-696),
-    // in declaration order; none with any other backend.
-    let mut stubs = rustc_hash::FxHashSet::default();
-    for (key, id) in std::mem::take(&mut decls.pending_exit_stubs) {
-        let stub = unwind::exit_stub::translate(decls, &key, id)?;
-        clif.extend(opts.capture_clif.then(|| decls.describe(&stub)));
-        compiled.push((None, id, compile_function(module.isa(), stub)?));
-        stubs.insert(id);
-    }
     // A function defined twice would fail after the data are defined,
     // which the module keeps: check first, so a failed batch defines
     // nothing.
@@ -403,17 +391,6 @@ pub fn define_with_stats<M: Module>(
             .map_err(|e| CodegenError::module(&e))?;
         if let Some(key) = key {
             decls.mark_defined(key)?;
-        }
-        // Under the `try_call` prototype every function but the exit stubs
-        // can be a frame the runtime's unwinder walks, with or without a
-        // handler at its call (D-696); exit stubs never are, as the walk
-        // starts at a stub's caller.
-        if opts.unwind == UnwindBackend::TryCall && !stubs.contains(&id) {
-            decls.pending_unwind_tables.push(UnwindTable {
-                func: id,
-                len: code.bytes.len(),
-                sites: code.call_sites.into_boxed_slice(),
-            });
         }
         stats = stats.add(DefineStats {
             code_bytes: u64::try_from(code.bytes.len()).unwrap_or(u64::MAX),
@@ -472,7 +449,7 @@ fn compile_large_frame(
 ) -> Result<LargeFrame, CodegenError> {
     let body = func::translate_large_frame_body(unit, function, decls, opts, inner)?;
     let inner_text = opts.capture_clif.then(|| decls.describe(&body));
-    let inner_code = compile_for(isa, body, opts.unwind)?;
+    let inner_code = compile_function(isa, body)?;
     let outer = func::translate_large_frame_outer(
         unit,
         function,
@@ -483,7 +460,7 @@ fn compile_large_frame(
     )?;
     let outer_text = opts.capture_clif.then(|| decls.describe(&outer));
     Ok(LargeFrame {
-        outer: compile_for(isa, outer, opts.unwind)?,
+        outer: compile_function(isa, outer)?,
         inner: inner_code,
         outer_text,
         inner_text,
@@ -500,11 +477,6 @@ pub struct CompiledFunction {
     /// (Cranelift's `frame_to_fp_offset`). It decides whether the function
     /// has a large frame (D-679).
     pub frame_size: u32,
-    /// The call sites with a catch-all handler, sorted by return address:
-    /// the `try_call`s of the `try_call` prototype (D-696), kept only when
-    /// compiling for it ([`compile_for`]), so no other backend pays for
-    /// them. Empty otherwise.
-    pub call_sites: Vec<CallSite>,
 }
 
 impl std::fmt::Debug for CompiledFunction {
@@ -514,7 +486,6 @@ impl std::fmt::Debug for CompiledFunction {
             .field("align", &self.align)
             .field("relocs", &self.relocs.len())
             .field("frame_size", &self.frame_size)
-            .field("call_sites", &self.call_sites.len())
             .finish()
     }
 }
@@ -529,23 +500,6 @@ impl std::fmt::Debug for CompiledFunction {
 pub fn compile_function(
     isa: &dyn TargetIsa,
     func: ir::Function,
-) -> Result<CompiledFunction, CodegenError> {
-    compile_for(isa, func, UnwindBackend::Off)
-}
-
-/// [`compile_function`] for code generated for the unwinding backend
-/// `unwind`: with the `try_call` prototype, the machine buffer's call sites
-/// that have a handler are kept in [`CompiledFunction::call_sites`]
-/// (D-696).
-///
-/// # Errors
-///
-/// A [`CodegenError`] with the verifier's or compiler's message, or an ICE
-/// for a handler without a frame offset.
-pub fn compile_for(
-    isa: &dyn TargetIsa,
-    func: ir::Function,
-    unwind: UnwindBackend,
 ) -> Result<CompiledFunction, CodegenError> {
     let ir::UserFuncName::User(name) = func.name.clone() else {
         return Err(CodegenError::ice("a translated function has no user name"));
@@ -572,46 +526,10 @@ pub fn compile_for(
         .iter()
         .map(|r| ModuleReloc::from_mach_reloc(r, &ctx.func, func_id))
         .collect();
-    let call_sites = if unwind == UnwindBackend::TryCall {
-        handler_sites(&compiled.buffer)?
-    } else {
-        Vec::new()
-    };
     Ok(CompiledFunction {
         bytes,
         align,
         relocs,
         frame_size,
-        call_sites,
     })
-}
-
-/// The call sites of `buffer` with a catch-all handler, sorted by return
-/// address: the `try_call`s of the `try_call` prototype, each with the one
-/// `Default` handler it was generated with (D-696).
-fn handler_sites(
-    buffer: &cranelift_codegen::MachBufferFinalized<cranelift_codegen::Final>,
-) -> Result<Vec<CallSite>, CodegenError> {
-    let mut sites = Vec::new();
-    for site in buffer.call_sites() {
-        for handler in site.exception_handlers {
-            let cranelift_codegen::FinalizedMachExceptionHandler::Default(handler_offset) =
-                *handler
-            else {
-                return Err(CodegenError::ice(
-                    "a call site with a handler other than a catch-all",
-                ));
-            };
-            let frame_offset = site.frame_offset.ok_or_else(|| {
-                CodegenError::ice("a call site with a handler but no frame offset")
-            })?;
-            sites.push(CallSite {
-                ret_offset: site.ret_addr,
-                frame_offset,
-                handler_offset,
-            });
-        }
-    }
-    sites.sort_unstable_by_key(|site| site.ret_offset);
-    Ok(sites)
 }

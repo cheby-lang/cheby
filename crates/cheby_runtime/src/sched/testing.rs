@@ -192,10 +192,13 @@ impl MonitorProbe {
     }
 }
 
-/// The function-entry check generated code performs.
-pub(crate) fn entry_check(ctx: &ExecCtx) {
+/// The function-entry check generated code performs; returns whether the
+/// slow path raised (a stack overflow, a deadline), after which generated
+/// code would run its cleanup pad and return (D-733).
+pub(crate) fn entry_check(ctx: &ExecCtx) -> bool {
     if stack_position() < ctx.stack_limit.load(Ordering::Relaxed) {
         // SAFETY: `ctx` is the running fiber's.
         unsafe { cheby_rt_stack_slow(std::ptr::from_ref(ctx).cast_mut(), 0) };
     }
+    crate::unwind::flag::get(ctx) != crate::abi::unwind_flag::NONE
 }

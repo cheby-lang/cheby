@@ -1,26 +1,29 @@
-//! Raising a Cheby panic from runtime code (D-697, D-699).
+//! Raising a Cheby panic from runtime code (D-697, D-699, D-733).
 //!
-//! What a raise does depends on the backend the running fiber's code was
-//! compiled for ([`UnwindBackend`], D-696):
+//! Every raise records the panic in the fiber's unwind record when it
+//! starts (D-699) and unwinds by the return flag (D-733, ADR-0061):
 //!
-//! - `Off` (the default): the slice's interim. The panic is reported and
-//!   the entry or fiber is abandoned, as in M1 ([`crate::panic::abandon`],
-//!   GAP(interim-panics)).
-//! - `Flag` and `TryCall`: the panic is recorded in the fiber's unwind
-//!   record when it starts (D-699), then the Rust frames between the raise
-//!   and the entry point's guard unwind with Rust's own unwinder, carrying
-//!   the zero-sized [`ChebyUnwind`] marker and running every `Drop` (I-4).
-//!   The guard hands the unwinding to the backend ([`super::guard`]).
+//! - A raise inside Rust code ([`raise`], [`raise_panic`]) unwinds the
+//!   Rust frames between it and the entry point's guard with Rust's own
+//!   unwinder, carrying the zero-sized [`ChebyUnwind`] marker and running
+//!   every `Drop` (I-4). The guard sets the flag and returns its sentinel
+//!   ([`super::guard`]).
+//! - Generated code's own raises (`cheby_rt_panic`, a stack overflow found
+//!   by the slow paths) have no Rust frame to unwind:
+//!   [`raise_from_runtime`] records the panic, sets the flag and returns
+//!   (D-700).
 //!
-//! Generated code's own raises (`cheby_rt_panic`, a stack overflow found
-//! by the slow paths) have no Rust frame to unwind:
-//! [`raise_from_runtime`] hands them to the backend directly.
+//! Code compiled without unwind edges (`CHEBY_UNWIND_EDGES=off`, D-742's
+//! measurement switch) cannot unwind: a raise in such a fiber flushes
+//! standard output, prints the report and ends the process
+//! ([`edgeless`], GAP(edgeless-panics)).
 
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::abi::{PanicKind, UnwindBackend};
+use crate::abi::PanicKind;
 use crate::ctx::ExecCtx;
-use crate::panic::{PanicReport, UNKNOWN_LOCATION, abandon, fatal};
+use crate::io;
+use crate::panic::{PanicReport, UNKNOWN_LOCATION, fatal};
 
 use super::record;
 
@@ -30,9 +33,14 @@ use super::record;
 #[derive(Debug)]
 pub(crate) struct ChebyUnwind;
 
-/// Starts a Cheby panic from runtime code (D-697, D-699). Under
-/// `UnwindBackend::Off` it is the slice's interim (S5): the panic is
-/// reported and the fiber is abandoned, as in M1.
+/// The last words of a process whose fiber raised in code compiled without
+/// unwind edges (GAP(edgeless-panics)).
+pub(crate) const EDGELESS_FATAL: &str =
+    "an unwinding in code compiled without unwind edges (CHEBY_UNWIND_EDGES=off)";
+
+/// Starts a Cheby panic from runtime code (D-697, D-699): records it in
+/// the running fiber and unwinds the Rust frames above to the entry
+/// point's guard or the host's catch point (D-733).
 ///
 /// `ctx` is the running fiber's control block, or `None` (or null) for
 /// code without one: the current fiber is used then. The location is
@@ -53,22 +61,18 @@ pub(crate) fn raise(ctx: Option<*mut ExecCtx>, report: PanicReport) -> ! {
     // SAFETY: `running` returns the running fiber's control block, alive
     // while it runs; only shared references to it are made.
     let fiber = unsafe { &*ctx };
-    match fiber.unwind_backend() {
-        // SAFETY: `ctx` is the running fiber's.
-        UnwindBackend::Off => unsafe { abandon(ctx, report) },
-        UnwindBackend::Flag | UnwindBackend::TryCall => {
-            record::start_panic(fiber, report);
-            std::panic::resume_unwind(Box::new(ChebyUnwind))
-        }
+    if !fiber.unwind_edges() {
+        edgeless(Some(&report));
     }
+    record::start_panic(fiber, report);
+    std::panic::resume_unwind(Box::new(ChebyUnwind))
 }
 
 /// Hands a panic raised by generated code's own call into the runtime
-/// (`cheby_rt_panic`, the stack slow paths) to the backend, from the
-/// outermost Rust frame, so no Rust unwinding runs (D-700): `Off` abandons
-/// the entry and never returns; `Flag` records the report, sets the flag
-/// and returns, and generated code runs its cleanup pad; `TryCall` records
-/// the report and resumes at the nearest handler.
+/// (`cheby_rt_panic`, the stack slow paths) to the return flag, from the
+/// outermost Rust frame, so no Rust unwinding runs (D-700): records the
+/// report, sets the flag and returns, and generated code runs its cleanup
+/// pad (D-733).
 ///
 /// # Safety
 ///
@@ -78,26 +82,56 @@ pub(crate) fn raise(ctx: Option<*mut ExecCtx>, report: PanicReport) -> ! {
 pub(crate) unsafe fn raise_from_runtime(ctx: *mut ExecCtx, report: PanicReport) {
     // SAFETY: forwarded from the caller.
     let Some(fiber) = (unsafe { ctx.as_ref() }) else {
-        // SAFETY: null is allowed: it ends the process.
-        unsafe { abandon(ctx, report) }
+        fatal(format_args!(
+            "a `{:?}` panic happened outside of any entry",
+            report.kind
+        ))
     };
-    match fiber.unwind_backend() {
-        // SAFETY: forwarded from the caller.
-        UnwindBackend::Off => unsafe { abandon(ctx, report) },
-        UnwindBackend::Flag => {
-            record::start_panic(fiber, report);
-            super::guard::set_flag(fiber);
-        }
-        UnwindBackend::TryCall => {
-            record::start_panic(fiber, report);
-            super::guard::set_flag(fiber);
-            // SAFETY: `ctx` is the running fiber's, with the unwinding just
-            // recorded; generated code called the caller through an exit
-            // stub, which recorded the exit record; no value with a
-            // destructor is alive in this frame or the caller's.
-            unsafe { super::try_call::throw_from_runtime(ctx) }
+    if !fiber.unwind_edges() {
+        edgeless(Some(&report));
+    }
+    record::start_panic(fiber, report);
+    super::guard::set_flag(fiber);
+}
+
+/// Ends the process for a raise in code compiled without unwind edges
+/// (GAP(edgeless-panics), refining D-742 and D-733): such code does not
+/// test the flag, so returning into it would go on as if nothing had
+/// happened, or trap without a report. It flushes standard output, prints
+/// the panic's `report` to standard error, whatever the entry's mode (a
+/// cancellation has none), prints `fatal runtime error:` and
+/// [`EDGELESS_FATAL`], and exits with the panic status 101 (D-182), not by
+/// a signal: the tools that run such a build see an ordinary failure.
+/// `CHEBY_UNWIND_EDGES=off` is a measurement switch, so the rule is only
+/// that such a build never runs on silently.
+///
+/// The process ends once: when fibers on several workers raise at the same
+/// time, only the first caller prints and exits, and every later one parks
+/// its thread for good without printing, so the output is one report and
+/// one fatal line at every thread count (plan §0 'Determinism'), and
+/// `exit` is never called from two threads at once.
+#[cold]
+#[inline(never)]
+#[expect(
+    clippy::exit,
+    reason = "GAP(edgeless-panics): the process ends with the panic status, not a signal"
+)]
+pub(crate) fn edgeless(report: Option<&PanicReport>) -> ! {
+    /// Set by the first caller, which ends the process.
+    static ENDING: AtomicBool = AtomicBool::new(false);
+    if ENDING.swap(true, Ordering::SeqCst) {
+        // Another thread is ending the process: this one waits for it.
+        loop {
+            std::thread::park();
         }
     }
+    // The process ends below whether the flush worked.
+    let _ = io::flush_stdout();
+    if let Some(report) = report {
+        io::write_stderr(&report.to_string());
+    }
+    io::write_stderr(&format!("fatal runtime error: {EDGELESS_FATAL}\n"));
+    std::process::exit(crate::abi::status::PANIC)
 }
 
 /// The running fiber's control block: `ctx` when it is given and not
@@ -105,33 +139,6 @@ pub(crate) unsafe fn raise_from_runtime(ctx: *mut ExecCtx, report: PanicReport) 
 pub(crate) fn running(ctx: Option<*mut ExecCtx>) -> Option<*mut ExecCtx> {
     ctx.filter(|ctx| !ctx.is_null())
         .or_else(crate::entry::current_ctx)
-}
-
-/// The `try_call` prototype's exit record (FCB offsets 16 and 24,
-/// GAP(try-call-exit-record)), saved where Rust code calls generated code
-/// and may raise afterwards: the callee's own exit stubs overwrite the
-/// record, and a throw after the call must start from the caller's
-/// (plan §4.2). Harmless under the other backends.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct SavedExit {
-    fp: usize,
-    pc: usize,
-}
-
-impl SavedExit {
-    /// Saves `fiber`'s exit record.
-    pub(crate) fn save(fiber: &ExecCtx) -> Self {
-        Self {
-            fp: fiber.exit_fp.load(Ordering::Relaxed),
-            pc: fiber.exit_pc.load(Ordering::Relaxed),
-        }
-    }
-
-    /// Puts the saved exit record back.
-    pub(crate) fn restore(self, fiber: &ExecCtx) {
-        fiber.exit_fp.store(self.fp, Ordering::Relaxed);
-        fiber.exit_pc.store(self.pc, Ordering::Relaxed);
-    }
 }
 
 /// Rethrows the unwinding in flight in `fiber` through the Rust frames

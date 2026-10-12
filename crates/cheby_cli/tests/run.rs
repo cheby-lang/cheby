@@ -481,23 +481,116 @@ fn an_invalid_thread_count_stops_run_test_and_repl() {
     }
 }
 
-/// Plan §2.4: the REPL compiles with the unwinding backend `CHEBY_UNWIND`
-/// selects, so an invalid one stops it when the session starts.
+/// D-742: the REPL compiles with the unwind edges `CHEBY_UNWIND_EDGES`
+/// selects, so an invalid value stops it when the session starts, with
+/// the MIR options' error.
 #[test]
-fn an_invalid_unwinding_backend_stops_the_repl() {
+fn an_invalid_unwind_edges_switch_stops_the_repl() {
     let dir = Path::new(TMP).join(format!("repl-unwind-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let out = cheby_env(
         &dir,
         &["repl"],
-        &[("CHEBY_UNWIND", "bogus")],
+        &[("CHEBY_UNWIND_EDGES", "bogus")],
         Some(b"1 + 1\n"),
     );
     std::fs::remove_dir_all(&dir).ok();
     assert_eq!(
         out.stderr,
-        "error: CHEBY_UNWIND must be off, flag or try_call, not \"bogus\"\n"
+        "error: CHEBY_UNWIND_EDGES must be off or empty, not \"bogus\"\n"
     );
     assert_eq!(out.stdout, "");
     assert_eq!(out.status, Some(1));
+}
+
+/// The fatal line of a raise in code compiled without unwind edges
+/// (GAP(edgeless-panics)).
+const EDGELESS: &str = "fatal runtime error: an unwinding in code compiled without unwind edges (CHEBY_UNWIND_EDGES=off)\n";
+
+/// D-742: `CHEBY_UNWIND_EDGES=off` compiles without the unwind pass, and a
+/// program that does not panic runs as it does with it.
+#[test]
+fn hello_world_runs_without_unwind_edges() {
+    let out = cheby_env(
+        &repo_root().join("docs/examples/001_hello_world"),
+        &["run"],
+        &[("CHEBY_UNWIND_EDGES", "off")],
+        None,
+    );
+    assert_eq!(out.stderr, "");
+    assert_eq!(out.stdout, "Hello, world!\n");
+    assert_eq!(out.status, Some(0));
+}
+
+/// GAP(edgeless-panics): a panic in code compiled with
+/// `CHEBY_UNWIND_EDGES=off` flushes standard output, prints its report,
+/// then the fatal line, and ends the process with a nonzero status, never
+/// by a signal: the code has no edges to unwind by.
+#[test]
+fn a_panic_without_unwind_edges_is_fatal_with_its_report() {
+    let dir = package(
+        "edgeless_panic",
+        &[
+            MANIFEST,
+            (
+                "src/main.cheby",
+                "//! Prints, then panics.\n\nimport std::io\n\nfn main() {\n  io::println(\"before\")\n  panic as \"stop here\"\n}\n",
+            ),
+        ],
+    );
+    let out = cheby_env(&dir, &["run"], &[("CHEBY_UNWIND_EDGES", "off")], None);
+    assert_eq!(out.stdout, "before\n", "{}", out.stderr);
+    assert!(
+        out.stderr
+            .starts_with("panicked at src/main.cheby:7:3:\nstop here\n"),
+        "{}",
+        out.stderr
+    );
+    assert!(out.stderr.ends_with(EDGELESS), "{}", out.stderr);
+    assert!(
+        matches!(out.status, Some(code) if code != 0),
+        "{}: {}",
+        out.describe_status(),
+        out.stderr
+    );
+    // With the edges, the same program ends with the panic's status.
+    let out = cheby(&dir, &["run"]);
+    assert_eq!(out.stdout, "before\n");
+    assert!(!out.stderr.contains("fatal"), "{}", out.stderr);
+    assert_eq!(out.status, Some(101), "{}", out.stderr);
+}
+
+/// GAP(edgeless-panics): constant evaluation carries the setting like
+/// `cheby run`, so under `CHEBY_UNWIND_EDGES=off` `cheby check` of a
+/// package whose constant panics ends with the fatal line and a nonzero
+/// status, never by a signal.
+#[test]
+fn a_panicking_constant_without_unwind_edges_is_fatal() {
+    let dir = package(
+        "edgeless_const",
+        &[
+            MANIFEST,
+            (
+                "src/main.cheby",
+                "//! A constant that panics.\n\nimport std::io\n\nconst ratio: Int = 100 / parts()\n\nfn parts() -> Int {\n  0\n}\n\nfn main() {\n  io::println(\"main ran: {ratio}\")\n}\n",
+            ),
+        ],
+    );
+    let out = cheby_env(&dir, &["check"], &[("CHEBY_UNWIND_EDGES", "off")], None);
+    assert!(out.stderr.contains(EDGELESS), "{}", out.stderr);
+    assert!(
+        matches!(out.status, Some(code) if code != 0),
+        "{}: {}",
+        out.describe_status(),
+        out.stderr
+    );
+    // With the edges, the panic is E0075 at the constant (D-533).
+    let out = cheby(&dir, &["check"]);
+    assert!(
+        out.stderr
+            .starts_with("error[E0075]: evaluating the constant `ratio` panicked\n"),
+        "{}",
+        out.stderr
+    );
+    assert_eq!(out.status, Some(1), "{}", out.stderr);
 }

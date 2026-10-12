@@ -74,7 +74,8 @@ pub unsafe extern "C" fn cheby_rt_list_push(ctx: *mut ExecCtx, list: u64, elem: 
         let owned = DropOnUnwind::new([list, elem]);
         // SAFETY: forwarded from the caller.
         let list = unsafe { root(list) };
-        alloc::preflight(ops::push_bound(list));
+        // SAFETY: `ctx` is null or the running fiber's control block.
+        alloc::preflight(unsafe { ctx.as_ref() }, || ops::push_bound(list));
         owned.disarm();
         ops::push(list, elem).word()
     })
@@ -92,7 +93,8 @@ pub unsafe extern "C" fn cheby_rt_list_append(ctx: *mut ExecCtx, a: u64, b: u64)
         let owned = DropOnUnwind::new([a]);
         // SAFETY: forwarded from the caller.
         let (a, b) = unsafe { (root(a), root(b)) };
-        alloc::preflight(ops::append_bound(a, b));
+        // SAFETY: `ctx` is null or the running fiber's control block.
+        alloc::preflight(unsafe { ctx.as_ref() }, || ops::append_bound(a, b));
         owned.disarm();
         ops::append(a, b).word()
     })
@@ -172,7 +174,8 @@ pub unsafe extern "C" fn cheby_rt_list_slice_owned(
         let owned = DropOnUnwind::new([list]);
         // SAFETY: forwarded from the caller.
         let list = unsafe { root(list) };
-        alloc::preflight(ops::slice_owned_bound());
+        // SAFETY: `ctx` is null or the running fiber's control block.
+        alloc::preflight(unsafe { ctx.as_ref() }, ops::slice_owned_bound);
         owned.disarm();
         let len = ops::len(list);
         ops::slice_owned(list, ops::clamp(start, len), ops::clamp(end, len)).word()

@@ -184,8 +184,8 @@ pub unsafe extern "C" fn cheby_map_remove(m: u64, key: u64) -> u64 {
 /// `map::upsert`: one lookup, then `update` called once through
 /// `callback::call` (D-484, D-526) with `Some` of the stored value (moved
 /// out when the path is this map's alone) or `None`, and its result
-/// stored in place at count one (§9.3). When `update` panics under an
-/// unwinding backend, a drop guard removes the key's entry, whose value
+/// stored in place at count one (§9.3). When `update` panics, a drop
+/// guard removes the key's entry, whose value
 /// was moved out, before the map is released (D-697, `ops::upsert`).
 ///
 /// # Safety

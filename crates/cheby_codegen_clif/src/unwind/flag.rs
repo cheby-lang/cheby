@@ -1,20 +1,23 @@
-//! The return-flag prototype (D-696): an unwinding Cheby frame runs its
+//! The return flag (D-733, ADR-0061): an unwinding Cheby frame runs its
 //! pad and returns the word 0, which no uniform word is (D-453), and C
 //! code that unwinds sets the fiber's flag at `ctx+12`
 //! ([`abi::CTX_UNWIND`], D-685) before it returns.
 //!
 //! What each statement with an unwind edge becomes:
 //!
-//! - a Cheby call: `brif result, cont, pad` on its result;
+//! - a Cheby call: `brif result, cont, pad` on its result when the
+//!   callee's MIR result is a uniform word (`Repr::Value`); after a call
+//!   whose result is unboxed (an entry point of D-453), `load.i32 notrap
+//!   aligned ctx+12; brif v, pad, cont`, never a test of the result
+//!   (D-734);
 //! - a C call: `load.i32 notrap aligned ctx+12; brif v, pad, cont`, except
 //!   `cheby_rt_alloc` and the boxing functions, whose result is 0 exactly
 //!   when they unwound: `brif result, cont, pad`;
-//! - `cheby_rt_panic`, which returns under this backend after it set the
-//!   flag: `jump pad`;
+//! - `cheby_rt_panic`, which records the panic, sets the flag and returns:
+//!   `jump pad`;
 //! - `resume`: `return 0` (zero of each result type), in every ABI.
 //!
-//! The prototype is measured as it is described in the design, with no
-//! further optimization (plan §5, risk 6).
+//! The lowering is the one D-702 measured, with no further optimization.
 //!
 //! It depends on the uniform word never being 0. One path breaks that
 //! today: a foreign function whose result is an external type hands its
@@ -22,18 +25,18 @@
 //! with no record, and the program silently skips the rest of the caller
 //! (review finding R3-ROB-2). D-590 makes an external value a 16-byte
 //! object, which is never 0, but the compiler does not build it yet (the
-//! native host library comes with M3, OQ-P9); under every backend such a
-//! value is unsupported at run time until then. The external-value work
-//! must keep the word non-zero for this backend.
+//! native host library comes with M3, OQ-P9); such a value is unsupported
+//! at run time until then. The external-value work must keep the word
+//! non-zero.
 
 use cranelift_codegen::ir::{self, InstBuilder, MemFlagsData, Value, types};
 
+use cheby_mir::Repr;
 use cheby_runtime::abi;
 
 use crate::CodegenError;
 use crate::func::{CCallee, CallTarget, Translator};
 use crate::runtime::RuntimeFunc;
-use crate::sig::WORD;
 
 /// Whether `callee`'s result is 0 exactly when it unwound, so the code
 /// tests the result instead of loading the flag: `cheby_rt_alloc` and the
@@ -52,10 +55,13 @@ const fn tests_result(callee: &CCallee) -> bool {
 }
 
 impl Translator<'_, '_> {
-    /// A non-tail call of Cheby code with an unwind edge to `pad`.
-    pub(crate) fn flag_cheby_call(
+    /// A non-tail call of Cheby code whose MIR result is `ret`, with an
+    /// unwind edge to `pad`: the call's result, with the builder in the
+    /// block that continues after it.
+    pub(crate) fn unwind_cheby_call(
         &mut self,
         target: CallTarget,
+        ret: Repr,
         args: &[Value],
         pad: ir::Block,
     ) -> Result<Value, CodegenError> {
@@ -67,12 +73,14 @@ impl Translator<'_, '_> {
             .copied()
             .ok_or_else(|| CodegenError::ice("a Cheby call without a result"))?;
         let cont = self.continuation_block();
-        if self.b.func.dfg.value_type(result) == WORD {
+        if ret == Repr::Value {
             // A uniform word is never 0 (D-453): 0 means it unwound.
             self.b.ins().brif(result, cont, &[], pad, &[]);
         } else {
-            // A result that may be 0 (an unboxed entry point, D-453)
-            // leaves the flag to tell.
+            // D-734: an unboxed result (an entry point of D-453) can be 0
+            // legitimately, even when it is a machine word like `Int`'s, so
+            // the flag tells, never the result. The MIR representation
+            // decides, not the machine type.
             self.branch_on_flag(pad, cont)?;
         }
         self.b.switch_to_block(cont);
@@ -81,8 +89,9 @@ impl Translator<'_, '_> {
 
     /// A call of a C function (kernel, runtime helper, `cheby_rt_alloc`,
     /// `cheby_rt_panic`, the stack slow paths) with an unwind edge to
-    /// `pad`.
-    pub(crate) fn flag_c_call(
+    /// `pad`: its result, if it has one, with the builder in the block
+    /// that continues after it.
+    pub(crate) fn unwind_c_call(
         &mut self,
         callee: &CCallee,
         args: &[Value],
@@ -100,9 +109,9 @@ impl Translator<'_, '_> {
         Ok(result)
     }
 
-    /// `cheby_rt_panic(args)`, which sets the flag and returns under this
-    /// backend, then the pad.
-    pub(crate) fn flag_panic(
+    /// `cheby_rt_panic(args)`, which sets the flag and returns, then a
+    /// jump to `pad`; it ends the current block.
+    pub(crate) fn unwind_panic(
         &mut self,
         args: &[Value],
         pad: ir::Block,
@@ -115,7 +124,7 @@ impl Translator<'_, '_> {
     /// `Terminator::Resume`: returns 0 to the caller, which tests it (a
     /// Cheby caller) or reads the flag (a catch point: the runtime that
     /// called an entry thunk or a trampoline).
-    pub(crate) fn flag_resume(&mut self) -> Result<(), CodegenError> {
+    pub(crate) fn unwind_resume(&mut self) -> Result<(), CodegenError> {
         let returns: Vec<ir::Type> = self
             .b
             .func

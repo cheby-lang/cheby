@@ -48,7 +48,7 @@ use crate::layout::{self, FieldKind, LayoutKind};
 use crate::object::{load_rc, read_field, word_to_ptr};
 use crate::panic::{fatal, report_of};
 use crate::unwind::guard::guarded;
-use crate::unwind::raise::{SavedExit, raise, raise_panic, rethrow_if_unwinding};
+use crate::unwind::raise::{raise, raise_panic, rethrow_if_unwinding};
 use crate::{alloc, hamt, list, values};
 
 /// The kernels this module registers: none.
@@ -337,19 +337,17 @@ pub unsafe extern "C" fn cheby_rt_const_missing(ctx: *mut ExecCtx, slot: u64) ->
         let slot_ptr: *mut u64 = std::ptr::with_exposed_provenance_mut(address);
         match table.force(address) {
             Forced::Run { thunk, seed } => {
-                let fiber = entry::current_fiber();
-                let exit = fiber.map(SavedExit::save);
                 // SAFETY: the host registered `thunk` as this constant's
                 // entry thunk, valid while the entry runs; `ctx` is the
                 // running entry's, so the initializer runs on the current
                 // entry, its stack checks included.
                 let word = entry::with_seed(seed, || unsafe { thunk(ctx) });
                 // The forced initializer panicked and its thunk unwound to
-                // here (D-713): the reader unwinds too, from this call's
-                // exit record, and the constant stays in progress for the
-                // host's `abandon`, as when the entry was abandoned.
-                if let (Some(fiber), Some(exit)) = (fiber, exit) {
-                    exit.restore(fiber);
+                // here (D-713): the reader unwinds too, and the constant
+                // stays in progress for the host's `abandon`.
+                // SAFETY: `ctx` is null or the running entry's control
+                // block, as the caller guarantees.
+                if let Some(fiber) = unsafe { ctx.as_ref() } {
                     rethrow_if_unwinding(fiber);
                 }
                 // SAFETY: the registered slot is an 8-aligned writable word
@@ -633,7 +631,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore = "parks a thread forever")]
     fn effects_panic_only_during_constant_evaluation() {
         assert_eq!(
             run(checks_an_effect, EntryMode::Run),
@@ -647,7 +644,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore = "parks a thread forever")]
     fn unresolved_symbols_panic_forbidden_effect() {
         let EntryOutcome::Panicked(report) = run(calls_unresolved, const_eval()) else {
             panic!("the stub returned");
@@ -709,7 +705,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore = "parks a thread forever")]
     fn forcing_evaluates_once_under_the_forced_seed_and_finds_cycles() {
         let table = ConstTable::new();
         // SAFETY: static slots and static thunks.

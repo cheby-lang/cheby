@@ -181,33 +181,17 @@ pub const PLANNED_STD_MODULES: &[&str] = &[
 /// that milestone the entry fails the guard, and so does an entry whose
 /// test is in `std/`.
 ///
-/// GAP(slice-std-subset): M2's first slice ships `std::fiber`,
-/// `std::channel` and `std::duration` before unwinding, cancellation,
-/// timers, selectors and detached fibers exist. Each entry's comment
-/// names what its test needs and the M2 package that brings it.
+/// M2's first slice ships `std::fiber`, `std::channel` and
+/// `std::duration` before cancellation, timers, selectors and detached
+/// fibers exist (D-754). Each entry's comment names what its test needs
+/// and the M2 package that brings it.
 pub const PENDING_SPEC_TESTS: &[(&str, &str, &str)] = &[
-    // A body's panic caught by its scope: unwinding (U4).
-    ("fiber", "a panic in the body is caught by its scope", "M2"),
     // A fiber's panic cancels the body: cancellation (U5).
     ("fiber", "a panic in a fiber cancels the body", "M2"),
-    // A child fiber's panic recorded by its scope: unwinding (U4).
-    (
-        "fiber",
-        "a nested scope keeps a fiber's panic to itself",
-        "M2",
-    ),
-    // `spawn`'s panic caught by a scope: unwinding (U4).
-    ("fiber", "spawning into a scope that has ended panics", "M2"),
     // `spawn_with_stack`: lifecycle (L1).
     ("fiber", "a fiber can have a larger stack", "M2"),
     // `spawn_detached`: lifecycle (L1).
     ("fiber", "a detached fiber runs on its own", "M2"),
-    // `join`'s failure rules and a failed scope: cancellation (U5).
-    (
-        "fiber",
-        "joining a failed fiber from outside its scope panics",
-        "M2",
-    ),
     // `timeout` with a positive limit: timers (T1).
     (
         "fiber",
@@ -224,12 +208,6 @@ pub const PENDING_SPEC_TESTS: &[(&str, &str, &str)] = &[
         "a timeout cancels the scopes inside it without their returning",
         "M2",
     ),
-    // A `Panic` exists only once a scope catches one: unwinding (U4).
-    ("fiber", "message is the panic's message line", "M2"),
-    // A `Panic` exists only once a scope catches one: unwinding (U4).
-    ("fiber", "a panic shows like a panic report", "M2"),
-    // A `Panic` exists only once a scope catches one: unwinding (U4).
-    ("fiber", "panics compare by message and location", "M2"),
     // `fiber::timeout` with a positive limit: timers (T1).
     ("channel", "a negative capacity counts as 0", "M2"),
     // `std::selector`: timers and selectors (T1).
@@ -488,9 +466,9 @@ mod tests {
     /// its test is in `std/`, if it names no spec test of a shipped
     /// module, or if it repeats an earlier entry.
     ///
-    /// GAP(pending-spec-test-later): an entry for a milestone after the
-    /// one in effect accepts the test as absent, as D-288 expects a later
-    /// milestone's test to fail.
+    /// An entry for a milestone after the one in effect accepts the test
+    /// as absent, as D-288 expects a later milestone's test to fail
+    /// (D-741).
     fn spec_test_problems(
         tests: &[SpecTest<'_>],
         pending: &[(&str, &str, &str)],

@@ -437,14 +437,13 @@ impl Worker<'_> {
                     Err(other) => fatal(format_args!("a parking fiber was in the state {other}")),
                 }
             }
-            AfterSwitch::Exit => self.retire(fiber, false),
-            AfterSwitch::Quarantine => self.retire(fiber, true),
+            AfterSwitch::Exit => self.retire(fiber),
         }
     }
 
-    /// Ends a fiber that will never run again: drops its control block and
-    /// gives its slot back, or quarantines it for an abandoned fiber.
-    fn retire(&self, fiber: FiberRef, quarantine: bool) {
+    /// Ends a fiber that will never run again, returned or unwound (D-713):
+    /// drops its control block and gives its slot back.
+    fn retire(&self, fiber: FiberRef) {
         // A monitor that read `running` before it was cleared has finished
         // its request: `run_fiber` waited for it.
         // SAFETY: the fiber switched away for good; this worker is its
@@ -456,8 +455,8 @@ impl Worker<'_> {
         let watermark = ctx.real_stack_limit();
         // SAFETY: the control block was written by `fiber::create` and is
         // dropped once, here; nothing refers to it any more: it is in no
-        // queue, no monitor look that read it is in progress, and an
-        // abandoned fiber's frames never run again.
+        // queue, no monitor look that read it is in progress, and the
+        // fiber's frames have all returned or unwound.
         unsafe { ptr::drop_in_place(fiber.as_ptr()) };
         #[cfg(test)]
         self.shared.probe.retired(fiber.as_ptr());
@@ -465,15 +464,7 @@ impl Worker<'_> {
         let Some(slot) = slot else {
             return;
         };
-        let pool = StackPool::global();
-        if quarantine {
-            // SAFETY: the fiber never runs again and its control block is
-            // dropped: nothing in the slot is live.
-            unsafe { slot.release(slot.bottom(), slot.top()) };
-            pool.quarantine(slot);
-        } else {
-            pool.give_back(slot, watermark);
-        }
+        StackPool::global().give_back(slot, watermark);
     }
 }
 

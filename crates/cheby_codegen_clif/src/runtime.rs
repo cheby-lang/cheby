@@ -14,7 +14,8 @@ pub enum RuntimeFunc {
     Dup,
     /// `void cheby_rt_drop(uint64_t value)`.
     Drop,
-    /// `_Noreturn void cheby_rt_panic(ExecCtx *ctx, uint32_t kind, uint64_t message, uint64_t location)`.
+    /// `void cheby_rt_panic(ExecCtx *ctx, uint32_t kind, uint64_t message, uint64_t location)`:
+    /// records the panic, sets the flag and returns (D-733).
     Panic,
     /// `void cheby_rt_stack_slow(ExecCtx *ctx, uint64_t location)`.
     StackSlow,
@@ -58,21 +59,18 @@ pub enum RuntimeFunc {
     ListSliceOwned,
     /// `void cheby_rt_stack_slow_frame(ExecCtx *ctx, uint64_t location, uint64_t frame_size)`:
     /// the slow path of a large function's entry check (D-679).
-    /// GAP(stack-slow-frame).
+    /// (D-743).
     StackSlowFrame,
     /// `uint64_t cheby_rt_scope_open(ExecCtx *ctx, bool timed, int64_t seconds, int64_t nanoseconds)`
     /// (D-693).
     ScopeOpen,
     /// `bool cheby_rt_scope_close(ExecCtx *ctx, uint64_t scope, bool unwound)` (D-693).
     ScopeClose,
-    /// `void cheby_rt_unwind_resume(ExecCtx *ctx)`: the `try_call`
-    /// prototype's resume of an unwinding (D-696).
-    UnwindResume,
 }
 
 impl RuntimeFunc {
     /// Every runtime function, in declaration order ([`Self::index`]).
-    pub const ALL: [Self; 28] = [
+    pub const ALL: [Self; 27] = [
         Self::Alloc,
         Self::Dup,
         Self::Drop,
@@ -100,7 +98,6 @@ impl RuntimeFunc {
         Self::StackSlowFrame,
         Self::ScopeOpen,
         Self::ScopeClose,
-        Self::UnwindResume,
     ];
 
     /// The symbol.
@@ -134,7 +131,6 @@ impl RuntimeFunc {
             Self::StackSlowFrame => sym::STACK_SLOW_FRAME,
             Self::ScopeOpen => sym::SCOPE_OPEN,
             Self::ScopeClose => sym::SCOPE_CLOSE,
-            Self::UnwindResume => sym::UNWIND_RESUME,
         }
     }
 
@@ -147,7 +143,7 @@ impl RuntimeFunc {
             Self::Alloc | Self::StrAppend | Self::ListPush | Self::ListAppend => {
                 (&[Ptr, U64, U64], U64)
             }
-            Self::Dup | Self::Drop | Self::UnwindResume => (&[Ptr], Void),
+            Self::Dup | Self::Drop => (&[Ptr], Void),
             Self::Panic => (&[Ptr, U32, Ptr, Ptr], Void),
             Self::StackSlow | Self::EffectCheck => (&[Ptr, Ptr], Void),
             Self::BoxI64 | Self::StrWithCapacity => (&[Ptr, I64], U64),
@@ -174,7 +170,7 @@ impl RuntimeFunc {
     pub const fn on_demand(self) -> bool {
         matches!(
             self,
-            Self::StackSlowFrame | Self::ScopeOpen | Self::ScopeClose | Self::UnwindResume
+            Self::StackSlowFrame | Self::ScopeOpen | Self::ScopeClose
         )
     }
 
@@ -209,7 +205,6 @@ impl RuntimeFunc {
             Self::StackSlowFrame => 24,
             Self::ScopeOpen => 25,
             Self::ScopeClose => 26,
-            Self::UnwindResume => 27,
         }
     }
 

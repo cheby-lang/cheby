@@ -1085,7 +1085,9 @@ fn unique_of_a_view_reads_only_the_view() {
 unsafe extern "C" fn unique_of_functions(_: *mut crate::ctx::ExecCtx) -> u64 {
     let f = crate::generic::tests::closure(&[]);
     let xs = from_iter([f]);
-    // SAFETY: the kernel borrows its list; it panics, so nothing returns.
+    // SAFETY: the kernel borrows its list. It panics: its guard sets the
+    // flag and returns the sentinel, which goes back to the entry's catch
+    // point at once (D-733).
     unsafe { cheby_list_unique(xs) }
 }
 
@@ -1152,4 +1154,83 @@ proptest! {
             release(xs);
         });
     }
+}
+
+// ---------------------------------------------------------------------
+// A system refusal in the middle of an in-place update
+// (GAP(system-refusal-leak))
+
+/// `main`'s thunk: fills a unique list's first leaf in place, then pushes
+/// once more with the next system allocation refused. The push has taken
+/// the list over (D-738's preflight passed: there is no budget), so the
+/// refusal stops the update halfway and the list in flight leaks. The
+/// helper's guard sets the flag and returns its sentinel (D-733), and the
+/// thunk returns at once.
+unsafe extern "C" fn pushes_until_the_system_refuses(ctx: *mut crate::ctx::ExecCtx) -> u64 {
+    let mut xs = empty();
+    for v in 0..M {
+        // SAFETY: `ctx` is the running entry's; `xs` is a live list owned
+        // here and given up, the element a tagged integer.
+        xs = unsafe { cheby_rt_list_push(ctx, xs, abi::tag_int(v as i64).unwrap()) };
+    }
+    crate::alloc::refuse_next_system_allocation();
+    // SAFETY: as above. The sentinel goes back to the entry's catch point.
+    unsafe { cheby_rt_list_push(ctx, xs, abi::tag_int(M as i64).unwrap()) }
+}
+
+/// GAP(system-refusal-leak): an out-of-memory panic caused by a refusal of
+/// the system allocator marks the build's domain, and `run_main` exits 101
+/// without the leak check, which would have found the list in flight and
+/// exited 102, and counts the skip.
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+fn system_refusal_skips_the_leak_check_and_exits_101() {
+    let _guard = crate::alloc::tests::serial();
+    let domain = crate::alloc::Domain::new();
+    let config = crate::entry::RunConfig {
+        domain: std::sync::Arc::clone(&domain),
+        threads: Some(1),
+        ..crate::entry::RunConfig::default()
+    };
+    // SAFETY: a test thunk with the `EntryFn` ABI whose code is static.
+    let status = unsafe { crate::entry::run_main(pushes_until_the_system_refuses, config) };
+    assert_eq!(status.unwrap(), abi::status::PANIC);
+    assert!(domain.system_refused());
+    if crate::alloc::LEAK_CHECK_ENABLED {
+        assert!(domain.live_objects() > 0, "the update in flight leaked");
+        assert_eq!(domain.stats().leak_checks_skipped(), 1);
+    }
+}
+
+/// The refusal hook refuses on the thread that armed it, and only once:
+/// the domain is marked, and the next request is served.
+#[test]
+fn system_refusal_is_one_request_of_the_arming_thread() {
+    // The hook arms one thread of the process at a time.
+    let _guard = crate::alloc::tests::serial();
+    let domain = crate::alloc::Domain::new();
+    let config = crate::entry::EntryConfig {
+        domain: std::sync::Arc::clone(&domain),
+        ..crate::entry::EntryConfig::new(crate::entry::EntryMode::Test)
+    };
+    let task = || {
+        // Armed for this thread: another thread's request is served.
+        crate::alloc::refuse_next_system_allocation();
+        let other = std::thread::spawn(|| from_iter([abi::tag_int(1).unwrap()]))
+            .join()
+            .unwrap();
+        drop_word(other);
+        let _ = from_iter([abi::tag_int(2).unwrap()]);
+        0
+    };
+    // SAFETY: the task handles only words it makes.
+    let outcome = unsafe { crate::entry::run_task(&config, task) }.unwrap();
+    let crate::entry::EntryOutcome::Panicked(report) = outcome else {
+        panic!("expected a panic, got {outcome:?}");
+    };
+    assert_eq!(report.message, crate::alloc::OUT_OF_MEMORY);
+    assert!(domain.system_refused());
+    // Disarmed: the next request on this thread is served.
+    let served = from_iter([abi::tag_int(3).unwrap()]);
+    drop_word(served);
 }

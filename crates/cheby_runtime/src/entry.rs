@@ -7,14 +7,11 @@
 //! run (D-690, [`crate::sched`]). Isolated entries, constant evaluation
 //! and the REPL (D-713), and every entry where fibers are not supported
 //! (Windows until M6, D-714), run on a dedicated OS thread with the
-//! requested stack size: [`run_entry`] and [`run_task`] (D-457). With the
-//! default unwinding backend, a panic reports to the waiting host and
-//! abandons the entry: an isolated entry parks its thread forever; a root
-//! fiber switches to its worker for good and its slot is quarantined
-//! (GAP(interim-panics)). Either way its live objects are abandoned. Under
-//! an unwinding backend (D-696) the entry unwinds to its catch point, its
-//! thread or fiber ends normally (D-713), and the host learns of the panic
-//! from the fiber's record (`unwind::record::finish_entry`, D-699).
+//! requested stack size: [`run_entry`] and [`run_task`] (D-457). A panic
+//! unwinds the entry to its catch point by the return flag (D-733), its
+//! cleanup pads release its objects, its thread or fiber ends normally
+//! (D-713), and the host learns of the panic from the fiber's record
+//! (`unwind::record::finish_entry`, D-699).
 //!
 //! # The current entry
 //!
@@ -39,7 +36,8 @@
 //!   deadline passes it requests an interrupt with the reason
 //!   [`DEADLINE`](crate::ctx::reason::DEADLINE) on the entry's context
 //!   (D-688), so the next function entry or tail call takes the slow path
-//!   of the stack check, which abandons the entry with [`Limit::Time`]. A long single kernel call is not interrupted.
+//!   of the stack check, which ends the entry with [`Limit::Time`]. A
+//!   long single kernel call is not interrupted.
 //! - **Memory.** The budget is the live bytes of the entry's accounting
 //!   domain when the entry starts plus the limit, so only what this
 //!   evaluation keeps live counts: earlier constants, the objects of an
@@ -63,7 +61,7 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::time::{Duration, Instant};
 
-use crate::abi::{UnwindBackend, status};
+use crate::abi::status;
 use crate::alloc::{self, Domain, LEAK_CHECK_ENABLED};
 use crate::consteval::{self, ConstTable, Limit};
 use crate::ctx::{ExecCtx, FiberInit};
@@ -178,16 +176,18 @@ pub struct EntryConfig {
     /// The build's constants, for lazy forcing during constant evaluation
     /// (D-535): `None` outside constant evaluation.
     pub consts: Option<Arc<ConstTable>>,
-    /// The unwinding backend the entry's code was compiled for (D-696),
-    /// stored in its control block. The JIT fills it from its code
+    /// Whether the entry's code was compiled with unwind edges: false only
+    /// under `CHEBY_UNWIND_EDGES=off` (D-742), where a raise in the entry,
+    /// or in a fiber it spawns, ends the process (GAP(edgeless-panics)).
+    /// Stored in its control block; the JIT fills it from its code
     /// generation options.
-    pub unwind: UnwindBackend,
+    pub unwind_edges: bool,
 }
 
 impl EntryConfig {
     /// An entry of the given mode with the default fiber stack, no
-    /// trampolines, the calling thread's current accounting domain and the
-    /// default unwinding backend.
+    /// trampolines, the calling thread's current accounting domain and
+    /// unwind edges.
     #[must_use]
     pub fn new(mode: EntryMode) -> Self {
         Self {
@@ -196,7 +196,7 @@ impl EntryConfig {
             callbacks: Callbacks::default(),
             domain: alloc::current_domain(),
             consts: None,
-            unwind: UnwindBackend::Off,
+            unwind_edges: true,
         }
     }
 }
@@ -206,10 +206,8 @@ impl EntryConfig {
 pub enum EntryOutcome {
     /// The thunk returned this word.
     Returned(u64),
-    /// The entry panicked. With the default unwinding backend, its thread
-    /// is parked forever (an isolated entry) or its fiber is abandoned and
-    /// its slot quarantined (a root fiber, GAP(interim-panics)); under an
-    /// unwinding backend it unwound and ended (D-699).
+    /// The entry panicked: it unwound to its catch point and its thread or
+    /// fiber ended (D-699, D-713).
     Panicked(PanicReport),
 }
 
@@ -278,67 +276,6 @@ impl std::error::Error for RuntimeError {
     }
 }
 
-/// The memory kept between the frames a release leaves alone and the
-/// pages it gives back: a multiple of every page size in use.
-const RELEASE_MARGIN: usize = 64 << 10;
-
-/// Gives the operating system back the memory of the frames a panicked
-/// entry abandoned, called on the entry's thread right before it parks
-/// forever. The frames between the panic and the entry's first frame are
-/// never resumed or read again, but a stack overflow touched all of them,
-/// so a REPL session that keeps parking such threads would otherwise keep
-/// tens of MiB per panic resident (D-457). The pages stay mapped and read
-/// as zero if anything touches them; nothing does. The current frames, below the panic, and a
-/// margin on each side, which includes the thread's own bookkeeping above
-/// the entry's first frame, are kept.
-pub(crate) fn release_abandoned_stack() {
-    let top = current_fiber().map_or(0, ExecCtx::stack_top);
-    let here = stack_position();
-    if top == 0 || here >= top {
-        return;
-    }
-    let Some(start) = here
-        .checked_add(RELEASE_MARGIN)
-        .and_then(|at| at.checked_next_multiple_of(RELEASE_MARGIN))
-    else {
-        return;
-    };
-    let end = top.saturating_sub(RELEASE_MARGIN);
-    let end = end.saturating_sub(end % RELEASE_MARGIN);
-    if end <= start {
-        return;
-    }
-    release_pages(start, end.saturating_sub(start));
-}
-
-#[cfg(unix)]
-fn release_pages(start: usize, len: usize) {
-    let address = std::ptr::without_provenance_mut::<libc::c_void>(start);
-    // SAFETY: `[start, start + len)` is page-aligned and lies within this
-    // thread's stack, strictly between the current frame and the entry's
-    // first frame: the frames of the abandoned entry, which nothing reads
-    // or resumes, since the thread parks forever and no reference into
-    // them is used after the panic. A fresh private anonymous mapping
-    // with the stack's protection replaces them, which frees their memory
-    // at once on every Unix (`madvise` frees it only lazily on macOS). A
-    // failure leaves the old pages mapped.
-    unsafe {
-        libc::mmap(
-            address,
-            len,
-            libc::PROT_READ | libc::PROT_WRITE,
-            libc::MAP_PRIVATE | libc::MAP_ANON | libc::MAP_FIXED,
-            -1,
-            0,
-        )
-    };
-}
-
-#[cfg(not(unix))]
-fn release_pages(start: usize, len: usize) {
-    let _ = (start, len);
-}
-
 /// The control block of the fiber running on this thread, or `None`
 /// outside any entry (D-685, D-686). The block stays alive while its fiber
 /// runs; do not keep the reference past the entry, or across a fiber
@@ -347,7 +284,7 @@ pub(crate) fn current_fiber<'a>() -> Option<&'a ExecCtx> {
     // SAFETY: `tls`'s current fiber is null or the control block of the
     // fiber running on this thread: `spawn_entry` makes its heap-allocated
     // block current only while the entry runs on this thread, and frees it
-    // only after clearing it (a panicked entry's block is never freed); a
+    // only after clearing it, whether the entry returned or unwound; a
     // worker makes a fiber current while it runs it, and retires the
     // fiber only after clearing it. The caller runs on this thread, inside
     // the entry, and only shared references to the block are ever made.
@@ -432,8 +369,7 @@ pub(crate) fn check_budget_of(ctx: Option<&ExecCtx>, bytes: u64) {
 
 /// The address of a running entry's context, for the host's watchdog: set
 /// once the context exists and cleared, under the same lock, before it is
-/// dropped. A panicked entry's context lives forever (its thread parks),
-/// so the address stays valid.
+/// dropped, whether the entry returned or unwound (D-713).
 #[derive(Debug, Default)]
 struct Interrupter {
     ctx: Mutex<usize>,
@@ -454,8 +390,8 @@ impl Interrupter {
         let guard = self.ctx.lock().unwrap_or_else(PoisonError::into_inner);
         let ctx: *const ExecCtx = std::ptr::with_exposed_provenance(*guard);
         // SAFETY: a non-zero address is a live context: the entry's thread
-        // clears it under this lock before the context is dropped, and a
-        // panicked entry's context is never dropped. Only the atomic reason
+        // clears it under this lock before the context is dropped. Only
+        // the atomic reason
         // word and stack limit are written, which any thread may do.
         if let Some(ctx) = unsafe { ctx.as_ref() } {
             crate::ctx::request(ctx, reason);
@@ -485,9 +421,9 @@ impl Interrupter {
 ///   `ctx` only as an [`ExecCtx`], and passes only valid words to the
 ///   runtime's symbols).
 /// - The code and data `entry` reaches, such as the JIT memory it was
-///   compiled into, must stay valid until this function returns. After a
-///   panic the entry's thread is parked forever inside the runtime and
-///   never runs that code again, so nothing is required after the return.
+///   compiled into, must stay valid until this function returns. The
+///   entry's thread has ended by then, whether the entry returned or
+///   unwound (D-713), so nothing is required after the return.
 /// - The trampolines in `config.callbacks` must have their declared ABI
 ///   and stay valid as long as `entry`'s code.
 pub unsafe fn run_entry(
@@ -548,7 +484,7 @@ unsafe fn spawn_entry(
     }
     let mode = config.mode.clone();
     let callbacks = config.callbacks;
-    let unwind_backend = config.unwind;
+    let unwind_edges = config.unwind_edges;
     let domain = Arc::clone(&config.domain);
     let consts = config.consts.clone();
     let (deadline, memory_limit) = match &mode {
@@ -599,22 +535,21 @@ unsafe fn spawn_entry(
                 domain,
                 consts,
                 callbacks,
-                unwind_backend,
+                unwind_edges,
                 sched: FiberSched::isolated(),
             })));
             entry_interrupter.set(ctx.cast_const());
             // SAFETY: `ctx` is a live control block, freed below only after
-            // it stops being current; if the entry panics, this thread
-            // parks forever and the block is never freed.
+            // it stops being current, whether the entry returned or
+            // unwound.
             unsafe { tls::set_current_fiber(ctx) };
             // The caller of `spawn_entry` keeps the code `body` runs valid
             // until the host stops waiting, which is after this call
             // returns.
             let word = catch_unwinding(|| body(ctx));
-            // The entry's catch point (D-699, D-701): under an unwinding
-            // backend a panic unwound to here, and the record says so, not
-            // the word (a `main` thunk's 0 is success). With the default
-            // backend a panic never gets here.
+            // The entry's catch point (D-699, D-701): a panic unwound to
+            // here, and the record says so, not the word (a `main` thunk's
+            // 0 is success).
             // SAFETY: `ctx` is the live block made above.
             let outcome = match unwind::record::finish_entry(unsafe { &*ctx }) {
                 Some(report) => EntryOutcome::Panicked(report),
@@ -631,23 +566,14 @@ unsafe fn spawn_entry(
             sender.send(outcome).ok();
         })
         .map_err(RuntimeError::Spawn)?;
-    let result = match wait(&receiver, deadline, &interrupter) {
-        Ok(outcome @ EntryOutcome::Returned(_)) => {
-            thread.join().map_err(|_| RuntimeError::EntryLost)?;
-            Ok(outcome)
-        }
-        // Under an unwinding backend the entry unwound and its thread ends
-        // (D-713).
-        Ok(outcome @ EntryOutcome::Panicked(_)) if unwind_backend != UnwindBackend::Off => {
-            thread.join().map_err(|_| RuntimeError::EntryLost)?;
-            Ok(outcome)
-        }
-        // The thread is parked forever; dropping its handle detaches it.
-        Ok(outcome @ EntryOutcome::Panicked(_)) => Ok(outcome),
-        Err(mpsc::RecvError) => {
-            thread.join().ok();
-            Err(RuntimeError::EntryLost)
-        }
+    // A panicked entry unwound to its catch point, and its thread ends like
+    // a returned one's (D-713).
+    let result = if let Ok(outcome) = wait(&receiver, deadline, &interrupter) {
+        thread.join().map_err(|_| RuntimeError::EntryLost)?;
+        Ok(outcome)
+    } else {
+        thread.join().ok();
+        Err(RuntimeError::EntryLost)
     };
     stats_domain.stats().add_entry(started.elapsed());
     result
@@ -714,15 +640,17 @@ pub struct RunConfig {
     /// The number of worker threads of the run's runtime; `None` reads
     /// `CHEBY_THREADS` (D-658). In-process hosts may bound it.
     pub threads: Option<usize>,
-    /// The unwinding backend `main`'s code was compiled for (D-696). The
-    /// JIT fills it from its code generation options.
-    pub unwind: UnwindBackend,
+    /// Whether `main`'s code was compiled with unwind edges: false only
+    /// under `CHEBY_UNWIND_EDGES=off` (D-742; see
+    /// [`EntryConfig::unwind_edges`]). The JIT fills it from its code
+    /// generation options.
+    pub unwind_edges: bool,
 }
 
 impl Default for RunConfig {
     /// No arguments, the default root stack, no trampolines, the calling
     /// thread's current accounting domain, `CHEBY_THREADS`'s thread count
-    /// and the default unwinding backend.
+    /// and unwind edges.
     fn default() -> Self {
         Self {
             args: Vec::new(),
@@ -731,7 +659,7 @@ impl Default for RunConfig {
             callbacks: Callbacks::default(),
             domain: alloc::current_domain(),
             threads: None,
-            unwind: UnwindBackend::Off,
+            unwind_edges: true,
         }
     }
 }
@@ -741,11 +669,13 @@ impl Default for RunConfig {
 /// - The thunk's 0 or 1 (`main` returned `Nil`/`Ok(Nil)`, or `Err(e)`
 ///   after printing `e`), after flushing standard output. A failed flush
 ///   gives 1 (D-306, D-346).
-/// - 101 after a panic, which has already flushed and printed. Under an
-///   unwinding backend (D-696) the debug leak check also runs after a
-///   panic, and a leak gives 102 instead (D-710).
+/// - 101 after a panic, which has already flushed and printed. The debug
+///   leak check also runs after a panic, and a leak gives 102 instead
+///   (D-710).
 /// - In debug builds, 102 if objects of the build's domain are still live
-///   when the status is 0 or 1 (D-458). Constants frozen before `main`
+///   when the status is 0 or 1 (D-458), unless the system allocator
+///   refused a request of the domain, which skips the check and counts the
+///   skip (GAP(system-refusal-leak)). Constants frozen before `main`
 ///   have left the domain, so every live object is a leak.
 ///
 /// `main` runs as the root fiber of a [`Runtime`] made for the run, with
@@ -786,7 +716,7 @@ pub unsafe fn run_main(entry: EntryFn, config: RunConfig) -> Result<i32, Runtime
         callbacks: config.callbacks,
         domain: Arc::clone(&domain),
         consts: None,
-        unwind: config.unwind,
+        unwind_edges: config.unwind_edges,
     };
     let started = Instant::now();
     let outcome = match &runtime {
@@ -802,6 +732,15 @@ pub unsafe fn run_main(entry: EntryFn, config: RunConfig) -> Result<i32, Runtime
     }
     let outcome = outcome?;
     let flushed = io::flush_stdout().is_ok();
+    // GAP(system-refusal-leak): after the system allocator refused a
+    // request of the build's domain, the update it stopped may have leaked
+    // the structure in flight, which the program did not leak: the check
+    // is skipped and the skip counted, as D-710 skips it for a fiber stuck
+    // on the blocking pool.
+    let check_leaks = !(LEAK_CHECK_ENABLED && domain.system_refused());
+    if !check_leaks {
+        domain.stats().skip_leak_check();
+    }
     if stats::enabled() {
         io::write_stderr(&stats::report(
             started.elapsed(),
@@ -809,13 +748,17 @@ pub unsafe fn run_main(entry: EntryFn, config: RunConfig) -> Result<i32, Runtime
             domain.stats(),
         ));
     }
+    let leaks = || {
+        if check_leaks {
+            leak_report(domain.live_objects())
+        } else {
+            None
+        }
+    };
     match outcome {
-        // With the default backend a panic abandons the root's objects, so
-        // there is no check (D-458). Under an unwinding backend the
-        // cleanup pads released them, and a leak turns 101 into 102
-        // (D-710).
-        EntryOutcome::Panicked(_) if config.unwind == UnwindBackend::Off => Ok(status::PANIC),
-        EntryOutcome::Panicked(_) => match leak_report(domain.live_objects()) {
+        // The cleanup pads released the root's objects, and a leak turns
+        // 101 into 102 (D-710).
+        EntryOutcome::Panicked(_) => match leaks() {
             Some(report) => {
                 io::write_stderr(&report);
                 Ok(status::LEAK_CHECK)
@@ -829,7 +772,7 @@ pub unsafe fn run_main(entry: EntryFn, config: RunConfig) -> Result<i32, Runtime
                 1 => status::ERR,
                 other => return Err(RuntimeError::InvalidStatus(other)),
             };
-            match leak_report(domain.live_objects()) {
+            match leaks() {
                 Some(report) => {
                     io::write_stderr(&report);
                     Ok(status::LEAK_CHECK)
@@ -967,14 +910,13 @@ mod tests {
         let message = MESSAGE.with(StaticImage::word);
         let location = LOCATION.with(StaticImage::word);
         // SAFETY: `ctx` is the running entry's; the strings live as long
-        // as this thread, which parks forever.
+        // as this thread, and the report copies them.
         unsafe { cheby_rt_panic(ctx, PanicKind::Explicit.code(), message, location) };
-        // Reached only under the flag backend, which records the panic.
+        // The panic is recorded and the flag set (D-733): return at once.
         0
     }
 
     #[test]
-    #[cfg_attr(miri, ignore = "parks a thread forever")]
     fn a_panic_reaches_the_host_and_the_process_keeps_running() {
         let outcome = run_entry(panics_with_a_message, &const_eval()).unwrap();
         let EntryOutcome::Panicked(report) = outcome else {
@@ -991,12 +933,11 @@ mod tests {
     unsafe extern "C" fn panics_without_a_message(ctx: *mut ExecCtx) -> u64 {
         // SAFETY: `ctx` is the running entry's; no message or location.
         unsafe { cheby_rt_panic(ctx, PanicKind::DivisionByZero.code(), 0, 0) };
-        // Reached only under the flag backend, which records the panic.
+        // The panic is recorded and the flag set (D-733): return at once.
         0
     }
 
     #[test]
-    #[cfg_attr(miri, ignore = "parks a thread forever")]
     fn panics_without_message_use_the_default() {
         let outcome = run_entry(panics_without_a_message, &const_eval()).unwrap();
         let EntryOutcome::Panicked(report) = outcome else {
@@ -1006,14 +947,24 @@ mod tests {
         assert_eq!(report.location, crate::panic::UNKNOWN_LOCATION);
     }
 
-    /// The function-entry check generated code performs.
-    unsafe fn entry_check(ctx: *mut ExecCtx) {
+    /// The function-entry check generated code performs; returns whether
+    /// the slow path raised, after which generated code would run its
+    /// cleanup pad and return (D-733).
+    unsafe fn entry_check(ctx: *mut ExecCtx) -> bool {
         // SAFETY: `ctx` is the running entry's.
         let limit = unsafe { &*ctx }.stack_limit.load(Ordering::Relaxed);
         if stack_position() < limit {
             // SAFETY: as above.
             unsafe { cheby_rt_stack_slow(ctx, 0) };
         }
+        // SAFETY: as above.
+        crate::unwind::flag::get(unsafe { &*ctx }) != abi::unwind_flag::NONE
+    }
+
+    /// Runs the Rust body of a test thunk in a guard, as a kernel's entry
+    /// point does (D-697): a raise inside it sets the flag and returns 0.
+    fn guarded(ctx: *mut ExecCtx, body: impl FnOnce() -> u64) -> u64 {
+        crate::unwind::guard::guarded(Some(ctx), body)
     }
 
     unsafe extern "C" fn interrupted(ctx: *mut ExecCtx) -> u64 {
@@ -1021,11 +972,14 @@ mod tests {
         let context = unsafe { &*ctx };
         context.request_interrupt();
         // SAFETY: as above.
-        unsafe { entry_check(ctx) };
+        let raised = unsafe { entry_check(ctx) };
         let restored = context.stack_limit.load(Ordering::Relaxed) == context.real_stack_limit();
         // A second check passes on the fast path.
         // SAFETY: as above.
-        unsafe { entry_check(ctx) };
+        let raised = raised || unsafe { entry_check(ctx) };
+        if raised {
+            return 0;
+        }
         context
             .interrupts()
             .wrapping_mul(10)
@@ -1090,7 +1044,9 @@ mod tests {
 
     fn recurse(ctx: *mut ExecCtx, depth: u64) -> u64 {
         // SAFETY: `ctx` is the running entry's.
-        unsafe { entry_check(ctx) };
+        if unsafe { entry_check(ctx) } {
+            return 0;
+        }
         let frame = std::hint::black_box([depth; 64]);
         if depth == u64::MAX {
             return depth;
@@ -1181,7 +1137,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore = "parks a thread forever")]
     fn run_main_exits_101_after_a_panic() {
         let _guard = serial();
         // Prints the panic report to the test's standard error.
@@ -1268,12 +1223,13 @@ mod tests {
     }
 
     unsafe extern "C" fn spins(ctx: *mut ExecCtx) -> u64 {
-        // A loop of calls: every iteration passes a function entry.
-        loop {
-            // SAFETY: `ctx` is the running entry's.
-            unsafe { entry_check(ctx) };
+        // A loop of calls: every iteration passes a function entry, until
+        // one raises.
+        // SAFETY: `ctx` is the running entry's.
+        while !unsafe { entry_check(ctx) } {
             std::hint::spin_loop();
         }
+        0
     }
 
     fn limited(table: &Arc<ConstTable>, limits: ConstEvalLimits) -> EntryConfig {
@@ -1288,7 +1244,6 @@ mod tests {
     /// passes its deadline at its next function entry, which ends it with
     /// the time limit.
     #[test]
-    #[cfg_attr(miri, ignore = "parks a thread forever")]
     fn the_deadline_interrupts_at_the_next_function_entry() {
         let table = ConstTable::new();
         let started = Instant::now();
@@ -1315,17 +1270,18 @@ mod tests {
         assert_eq!(table.abandon().limit, None);
     }
 
-    unsafe extern "C" fn grows(_: *mut ExecCtx) -> u64 {
-        let mut chain = tuple(&[]);
-        loop {
-            chain = tuple(&[chain]);
-        }
+    unsafe extern "C" fn grows(ctx: *mut ExecCtx) -> u64 {
+        guarded(ctx, || {
+            let mut chain = tuple(&[]);
+            loop {
+                chain = tuple(&[chain]);
+            }
+        })
     }
 
     /// D-536: the memory limit counts the live bytes of the entry's domain,
     /// and the allocation that passes it ends the entry.
     #[test]
-    #[cfg_attr(miri, ignore = "parks a thread forever")]
     fn the_memory_budget_ends_an_entry_that_holds_too_much() {
         let table = ConstTable::new();
         let config = limited(
@@ -1373,100 +1329,17 @@ mod tests {
         };
     }
 
-    /// The stack positions of [`touches_its_stack_then_panics`]: where it
-    /// started and where it panicked.
-    #[cfg(unix)]
-    static TOUCHED: [std::sync::atomic::AtomicUsize; 2] = [
-        std::sync::atomic::AtomicUsize::new(0),
-        std::sync::atomic::AtomicUsize::new(0),
-    ];
-
-    #[cfg(unix)]
-    fn touch(ctx: *mut ExecCtx, depth: u32) -> u64 {
-        #[expect(
-            clippy::large_stack_arrays,
-            reason = "the test fills the entry's stack on purpose"
-        )]
-        let mut frame = [0_u8; 32 << 10];
-        std::hint::black_box(&mut frame);
-        if depth == 0 {
-            TOUCHED[1].store(stack_position(), Ordering::SeqCst);
-            // SAFETY: `ctx` is the running entry's; no message or location.
-            unsafe { cheby_rt_panic(ctx, PanicKind::DivisionByZero.code(), 0, 0) };
-            return 0;
-        }
-        touch(ctx, depth.saturating_sub(1)).wrapping_add(u64::from(std::hint::black_box(frame[0])))
-    }
-
-    #[cfg(unix)]
-    unsafe extern "C" fn touches_its_stack_then_panics(ctx: *mut ExecCtx) -> u64 {
-        // SAFETY: `ctx` is the running entry's.
-        TOUCHED[0].store(unsafe { &*ctx }.stack_top(), Ordering::SeqCst);
-        touch(ctx, 256)
-    }
-
-    /// The number of resident pages in `[start, end)`.
-    #[cfg(unix)]
-    fn resident_pages(start: usize, end: usize) -> usize {
-        // SAFETY: `sysconf` only reads a configuration value.
-        let page = usize::try_from(unsafe { libc::sysconf(libc::_SC_PAGESIZE) }).unwrap();
-        let start = start.next_multiple_of(page);
-        let end = end.saturating_sub(end.checked_rem(page).unwrap());
-        let len = end.saturating_sub(start);
-        let mut pages = vec![0_u8; len.div_ceil(page)];
-        // SAFETY: the range is page-aligned and mapped (the parked
-        // thread's stack, which is never unmapped); `pages` has one byte
-        // per page.
-        let status = unsafe {
-            libc::mincore(
-                std::ptr::without_provenance_mut(start),
-                len,
-                pages.as_mut_ptr().cast(),
-            )
-        };
-        assert_eq!(status, 0);
-        pages.iter().filter(|&&p| p & 1 != 0).count()
-    }
-
-    /// D-457: a panicked entry's thread parks forever, but the stack its
-    /// abandoned frames touched is given back, so a REPL session that keeps
-    /// panicking does not keep the memory of every stack overflow.
-    #[test]
-    #[cfg(unix)]
-    #[cfg_attr(miri, ignore = "parks a thread forever")]
-    fn a_parked_entry_gives_back_its_abandoned_stack() {
-        let config = EntryConfig {
-            stack_size: 32 << 20,
-            ..EntryConfig::new(EntryMode::Test)
-        };
-        let outcome = run_entry(touches_its_stack_then_panics, &config).unwrap();
-        assert!(matches!(outcome, EntryOutcome::Panicked(_)));
-        let top = TOUCHED[0].load(Ordering::SeqCst);
-        let deep = TOUCHED[1].load(Ordering::SeqCst);
-        assert!(top > deep + (6 << 20), "{top:#x} {deep:#x}");
-        // The middle of the abandoned frames, well away from both ends.
-        let (start, end) = (deep + (1 << 20), top - (1 << 20));
-        let deadline = Instant::now() + Duration::from_secs(10);
-        loop {
-            let resident = resident_pages(start, end);
-            if resident == 0 {
-                break;
-            }
-            assert!(Instant::now() < deadline, "{resident} pages still resident");
-            std::thread::sleep(Duration::from_millis(5));
-        }
-    }
-
-    unsafe extern "C" fn allocates_too_much(_: *mut ExecCtx) -> u64 {
-        let _ = alloc::alloc_object(1 << 50, 0);
-        1
+    unsafe extern "C" fn allocates_too_much(ctx: *mut ExecCtx) -> u64 {
+        guarded(ctx, || {
+            let _ = alloc::alloc_object(1 << 50, 0);
+            1
+        })
     }
 
     /// D-536: a single request over the budget ends the entry with the
     /// memory limit before anything is allocated, rather than aborting the
     /// process when the system cannot provide it.
     #[test]
-    #[cfg_attr(miri, ignore = "parks a thread forever")]
     fn a_single_request_over_the_budget_is_refused_before_allocating() {
         let table = ConstTable::new();
         let config = limited(
@@ -1501,8 +1374,9 @@ mod tests {
         }
     }
 
-    /// The catch points of entries under the return-flag backend (D-699,
-    /// D-701, D-710), and the default backend unchanged.
+    /// The catch points of entries under the return flag (D-699, D-701,
+    /// D-710, D-733), and code compiled without unwind edges
+    /// (GAP(edgeless-panics)).
     mod unwind {
         use super::*;
 
@@ -1523,71 +1397,179 @@ mod tests {
             0
         }
 
-        fn flag(mode: EntryMode) -> EntryConfig {
+        fn entry_config(mode: EntryMode) -> EntryConfig {
             EntryConfig {
                 domain: Domain::new(),
-                unwind: UnwindBackend::Flag,
                 ..EntryConfig::new(mode)
             }
         }
 
-        fn run_config(unwind: UnwindBackend) -> RunConfig {
+        fn run_config() -> RunConfig {
             RunConfig {
                 domain: Domain::new(),
                 threads: Some(1),
-                unwind,
                 ..RunConfig::default()
             }
         }
 
         #[test]
-        fn a_main_returning_status_0_under_flag_did_not_panic() {
+        fn a_main_returning_status_0_did_not_panic() {
             // `main`'s thunk returns the exit status, and 0 is success: the
             // host asks the record, not the word (plan §2.5).
-            let outcome = run_entry(returns_zero, &flag(EntryMode::Run)).unwrap();
+            let outcome = run_entry(returns_zero, &entry_config(EntryMode::Run)).unwrap();
             assert_eq!(outcome, EntryOutcome::Returned(0));
             let _guard = serial();
-            let status = run_main(returns_zero, run_config(UnwindBackend::Flag)).unwrap();
+            let status = run_main(returns_zero, run_config()).unwrap();
             assert_eq!(status, abi::status::SUCCESS);
         }
 
         #[test]
-        fn a_panic_under_flag_reaches_the_host_from_the_record() {
+        fn a_panic_reaches_the_host_from_the_record() {
             // The thunk returns 0 after its panic, and its thread ends.
-            let outcome = run_entry(panics_with_a_message, &flag(EntryMode::Test)).unwrap();
+            let outcome = run_entry(panics_with_a_message, &entry_config(EntryMode::Test)).unwrap();
             let EntryOutcome::Panicked(report) = outcome else {
                 panic!("expected a panic, got {outcome:?}");
             };
             assert_eq!(report.message, "computation failed");
             assert_eq!(report.location, "src/main.cheby:4:7");
-            let config = flag(EntryMode::ConstEval(ConstEvalLimits::default()));
+            let config = entry_config(EntryMode::ConstEval(ConstEvalLimits::default()));
             let outcome = run_entry(panics_without_a_message, &config).unwrap();
             let EntryOutcome::Panicked(report) = outcome else {
                 panic!("expected a panic, got {outcome:?}");
             };
             assert_eq!(report.kind, PanicKind::DivisionByZero);
             // The next entry runs.
-            let outcome = run_entry(returns_seven, &flag(EntryMode::Test)).unwrap();
+            let outcome = run_entry(returns_seven, &entry_config(EntryMode::Test)).unwrap();
             assert_eq!(outcome, EntryOutcome::Returned(7));
         }
 
+        /// D-710: the leak check runs after every panic.
         #[test]
-        fn a_leak_after_a_panic_turns_101_into_102_under_flag() {
+        fn a_leak_after_a_panic_turns_101_into_102() {
             let _guard = serial();
             // Each prints the panic report to the test's standard error.
-            let status = run_main(panics_cleanly, run_config(UnwindBackend::Flag)).unwrap();
+            let status = run_main(panics_cleanly, run_config()).unwrap();
             assert_eq!(status, abi::status::PANIC);
-            let status = run_main(panics_after_a_leak, run_config(UnwindBackend::Flag)).unwrap();
+            let status = run_main(panics_after_a_leak, run_config()).unwrap();
             let leaked = if LEAK_CHECK_ENABLED {
                 abi::status::LEAK_CHECK
             } else {
                 abi::status::PANIC
             };
             assert_eq!(status, leaked);
-            // With the default backend the panic abandons the entry and
-            // there is no check after it (D-458).
-            let status = run_main(panics_after_a_leak, run_config(UnwindBackend::Off)).unwrap();
-            assert_eq!(status, abi::status::PANIC);
+        }
+
+        /// Prints `text` to standard output without a newline, so that it
+        /// stays in the buffer until a flush.
+        fn print(text: &str) {
+            let word = crate::values::string(text);
+            // SAFETY: a live string, borrowed for the call.
+            unsafe { crate::io::cheby_io_print(word) };
+            // SAFETY: the only reference.
+            unsafe { rc::drop(word) };
+        }
+
+        unsafe extern "C" fn edgeless_panic(ctx: *mut ExecCtx) -> u64 {
+            print("before the panic");
+            // SAFETY: as in `panics_with_a_message`.
+            unsafe { panics_with_a_message(ctx) }
+        }
+
+        unsafe extern "C" fn edgeless_out_of_memory(ctx: *mut ExecCtx) -> u64 {
+            print("before the panic");
+            // SAFETY: `ctx` is the running entry's; the size has no layout.
+            unsafe { crate::alloc::cheby_rt_alloc(ctx, u64::MAX, 0) }
+        }
+
+        unsafe extern "C" fn edgeless_overflow(ctx: *mut ExecCtx) -> u64 {
+            print("before the panic");
+            // SAFETY: as in `overflows`.
+            unsafe { overflows(ctx) }
+        }
+
+        unsafe extern "C" fn edgeless_deadline(ctx: *mut ExecCtx) -> u64 {
+            print("before the panic");
+            // SAFETY: as in `spins`.
+            unsafe { spins(ctx) }
+        }
+
+        /// The cases of [`edgeless_raises_end_the_process_with_the_report`]:
+        /// the thunk, its entry mode, and what its report says.
+        fn edgeless_case(name: &str) -> Option<(EntryFn, EntryMode, &'static str)> {
+            let deadline = EntryMode::ConstEval(ConstEvalLimits {
+                deadline: Instant::now().checked_add(Duration::from_millis(20)),
+                ..ConstEvalLimits::default()
+            });
+            match name {
+                "panic" => Some((
+                    edgeless_panic,
+                    EntryMode::Test,
+                    "panicked at src/main.cheby:4:7:\ncomputation failed\n",
+                )),
+                "out_of_memory" => Some((
+                    edgeless_out_of_memory,
+                    EntryMode::Run,
+                    "panicked at <unknown location>:\nout of memory\n",
+                )),
+                "overflow" => Some((edgeless_overflow, EntryMode::Run, "\nstack overflow\n")),
+                "deadline" => Some((edgeless_deadline, deadline, Limit::Time.message())),
+                _ => None,
+            }
+        }
+
+        /// GAP(edgeless-panics): in code compiled without unwind edges, a
+        /// panic, an out of memory, a stack overflow and a deadline each
+        /// flush standard output, print the report (even in a test or a
+        /// constant evaluation, whose hosts would capture it), and end the
+        /// process with the fatal error and the status 101, before anything
+        /// returns into the code that would not test the flag. Each case
+        /// runs in a child process.
+        #[test]
+        #[cfg_attr(miri, ignore = "starts a process")]
+        fn edgeless_raises_end_the_process_with_the_report() {
+            const CHILD: &str = "CHEBY_RT_TEST_EDGELESS";
+            const NAME: &str =
+                "entry::tests::unwind::edgeless_raises_end_the_process_with_the_report";
+            if let Some(case) = std::env::var_os(CHILD) {
+                let (thunk, mode, _) = edgeless_case(&case.to_string_lossy()).unwrap();
+                let config = EntryConfig {
+                    stack_size: MIN_STACK_SIZE * 2,
+                    unwind_edges: false,
+                    consts: matches!(mode, EntryMode::ConstEval(_)).then(ConstTable::new),
+                    ..entry_config(mode)
+                };
+                let outcome = run_entry(thunk, &config);
+                panic!("the edgeless entry ended: {outcome:?}");
+            }
+            for case in ["panic", "out_of_memory", "overflow", "deadline"] {
+                let (_, _, report) = edgeless_case(case).unwrap();
+                let out = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args(["--exact", NAME, "--nocapture", "--test-threads=1"])
+                    .env(CHILD, case)
+                    .output()
+                    .unwrap();
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                // An exit status, never a signal.
+                assert_eq!(
+                    out.status.code(),
+                    Some(abi::status::PANIC),
+                    "{case}: {stderr}"
+                );
+                assert!(stdout.contains("before the panic"), "{case}: {stdout}");
+                assert!(stderr.contains(report), "{case}: {stderr}");
+                assert!(
+                    stderr.contains(
+                        "fatal runtime error: an unwinding in code compiled without unwind \
+                         edges (CHEBY_UNWIND_EDGES=off)\n"
+                    ),
+                    "{case}: {stderr}"
+                );
+                assert!(
+                    !stderr.contains("the edgeless entry ended"),
+                    "{case}: {stderr}"
+                );
+            }
         }
     }
 }

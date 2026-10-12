@@ -1,6 +1,6 @@
 //! The IR forms of the slice under the JIT (D-692, D-698): `ctx` as a
 //! foreign call's first argument, and unwind edges, which code generation
-//! ignores until an unwinding backend exists (D-696).
+//! lowers with the return flag (D-733).
 
 use cheby_mir::{Stage, validate};
 use cheby_runtime::ExecCtx;
@@ -72,14 +72,16 @@ fn std_ctx_operand_is_the_running_context() {
 
 /// `f()` with unwind edges on two helper calls and a foreign-free
 /// `effect_check`, an entry pad, and a pad `bb1` chained into `resume`
-/// in `bb2`. With the edges ignored, the pads are never translated, and
-/// the function runs as if they were not there.
+/// in `bb2`. The edges are lowered with the return flag (D-733): each
+/// helper call and the entry check's slow path load the flag and branch
+/// to a cold pad. Nothing unwinds, so the function runs as if the pads
+/// were not there.
 #[test]
 #[cfg_attr(
     windows,
     ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
 )]
-fn ignored_edges_point_to_untranslated_pads() {
+fn lowered_edges_lead_to_untaken_pads() {
     let mut p = Prog::default();
     let f = p.item(
         0,
@@ -127,8 +129,20 @@ fn ignored_edges_point_to_untranslated_pads() {
     let target = p.call(f, Vec::new());
     let units = p.units();
     validate(&units[0], Stage::Unwound).unwrap();
-    let mut jit = Jit::new().unwrap();
+    let mut jit = Jit::with_options(cheby_codegen_clif::CodegenOptions {
+        capture_clif: true,
+        ..cheby_codegen_clif::CodegenOptions::default()
+    })
+    .unwrap();
     jit.compile(&units).unwrap();
+    let clif = jit.take_clif().join("\n");
+    let (_, text) = clif.split_once("; cb$fn$app$f\n").unwrap();
+    let (text, _) = text.split_once("\n}").unwrap();
+    // The entry check's slow path and the three helper calls.
+    let load_flag = format!("load.i32 notrap aligned v0+{}", abi::CTX_UNWIND);
+    assert_eq!(text.matches(&load_flag).count(), 4, "{text}");
+    assert!(text.contains(" cold:"), "{text}");
+    assert!(!text.contains("trap user"), "{text}");
     let word = returned(run_const(&jit, target));
     assert_eq!(text_of(word), "ab");
     release(&jit, word);

@@ -19,8 +19,8 @@
 //!   D-689, D-690), [`callback`] (kernels calling
 //!   closures), [`consteval`] (constant evaluation's runtime side),
 //!   [`stats`] (counters of allocations and in-place updates), the private
-//!   `tls` (every thread-local of the crate, D-686), `unwind` (the
-//!   unwinding backends' runtime side, D-696) and the private `fiber_ops`
+//!   `tls` (every thread-local of the crate, D-686), `unwind` (unwinding
+//!   by the return flag, D-733) and the private `fiber_ops`
 //!   (scopes, fibers and channels).
 //! - Kernels, by std module: [`io`], and the private modules `num`, `list`,
 //!   `text`, `bytes`, `env` and [`hamt`], each registering its symbols in

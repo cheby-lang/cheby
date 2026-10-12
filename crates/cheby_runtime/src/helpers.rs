@@ -336,7 +336,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore = "parks a thread forever")]
     fn equality_and_debug_through_the_c_entry_points() {
         // SAFETY: test thunks with the `EntryFn` ABI and static code.
         unsafe {

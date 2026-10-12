@@ -20,12 +20,15 @@
 //!    any other panic, with the panic's message and location in a note.
 //!    The constants that the failed one was computing for are not
 //!    reported again, and those that read a failed constant later stop
-//!    without a report of their own. With the default unwinding backend
-//!    the panicked entry's thread parks forever; under an unwinding
-//!    backend (D-696) the evaluation unwinds through its thunk, a forced
-//!    constant's included, and its thread ends (D-713). Either way the
-//!    table holds the same constants in progress for
-//!    [`ConstTable::abandon`].
+//!    without a report of their own. A panicked evaluation unwinds by the
+//!    return flag through its thunk, a forced constant's included,
+//!    releasing what its frames hold, and its thread ends (D-713, D-733).
+//!    The table then holds the constants still in progress for
+//!    [`ConstTable::abandon`]. Every entry here carries whether the JIT's
+//!    code has unwind edges ([`Jit::unwind_edges`]): under
+//!    `CHEBY_UNWIND_EDGES=off` (D-742) a panicking constant ends the
+//!    process with its report instead of returning into code that tests
+//!    no flag (GAP(edgeless-panics)).
 //!    A top-level evaluation that runs out of time or memory (D-536) is
 //!    E0076 at that constant: the host's watchdog interrupts it at its next
 //!    function entry or tail call once its deadline passes, and an
@@ -220,12 +223,12 @@ pub fn debug_texts(jit: &Jit, defs: &[DefId]) -> Result<Vec<Option<String>>, Ice
         *out.lock().unwrap_or_else(PoisonError::into_inner) = printed;
         0
     };
-    // The task calls the JIT's trampolines, so the entry runs under the
-    // JIT's unwinding backend (D-696).
+    // The task calls the JIT's trampolines, so the entry carries whether
+    // the JIT's code has unwind edges (D-742, GAP(edgeless-panics)).
     let config = EntryConfig {
         callbacks: jit.callbacks(),
         domain: jit.domain(),
-        unwind: jit.unwind_backend(),
+        unwind_edges: jit.unwind_edges(),
         ..EntryConfig::new(EntryMode::Test)
     };
     // SAFETY: the trampolines are `jit`'s, and the words its frozen
@@ -297,7 +300,7 @@ fn rebuild(jit: &Jit, slots: &[*mut u64]) -> Result<(), Ice> {
     let config = EntryConfig {
         callbacks: jit.callbacks(),
         domain: jit.domain(),
-        unwind: jit.unwind_backend(),
+        unwind_edges: jit.unwind_edges(),
         ..EntryConfig::new(EntryMode::ConstEval(ConstEvalLimits {
             seed,
             ..ConstEvalLimits::default()

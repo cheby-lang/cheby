@@ -106,6 +106,9 @@ pub struct Stats {
     shards: Box<[CachePadded<[AtomicU64; Event::ALL.len()]>]>,
     entries: AtomicU64,
     entry_nanos: AtomicU64,
+    /// Debug leak checks skipped because the system allocator refused a
+    /// request of the domain (GAP(system-refusal-leak)).
+    leak_checks_skipped: AtomicU64,
 }
 
 impl Default for Stats {
@@ -116,6 +119,7 @@ impl Default for Stats {
                 .collect(),
             entries: AtomicU64::new(0),
             entry_nanos: AtomicU64::new(0),
+            leak_checks_skipped: AtomicU64::new(0),
         }
     }
 }
@@ -151,6 +155,17 @@ impl Stats {
         )
     }
 
+    /// Counts a debug leak check that was skipped (GAP(system-refusal-leak)).
+    pub(crate) fn skip_leak_check(&self) {
+        self.leak_checks_skipped.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// How many debug leak checks of the domain were skipped.
+    #[must_use]
+    pub fn leak_checks_skipped(&self) -> u64 {
+        self.leak_checks_skipped.load(Ordering::Relaxed)
+    }
+
     /// How often `event` happened.
     #[must_use]
     pub fn count(&self, event: Event) -> u64 {
@@ -184,8 +199,8 @@ fn millis(time: Duration) -> String {
 
 /// The report `cheby run` prints to standard error after `main` when
 /// [`enabled`]: `main`'s wall time, the number and total wall time of the
-/// build's entries (its constants and `main`), the peak of live bytes, and
-/// every counter of `stats`, one per line.
+/// build's entries (its constants and `main`), the peak of live bytes,
+/// every counter of `stats`, one per line, and the leak checks skipped.
 #[must_use]
 pub fn report(main_time: Duration, peak_bytes: i64, stats: &Stats) -> String {
     let mut out = String::new();
@@ -199,6 +214,11 @@ pub fn report(main_time: Duration, peak_bytes: i64, stats: &Stats) -> String {
     for event in Event::ALL {
         let _ = writeln!(out, "  {}: {}", event.name(), stats.count(event));
     }
+    let _ = writeln!(
+        out,
+        "  leak checks skipped: {}",
+        stats.leak_checks_skipped()
+    );
     out
 }
 
@@ -313,6 +333,10 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("  string append grown: 1\n"), "{text}");
-        assert_eq!(text.lines().count(), 1 + Event::ALL.len());
+        assert!(text.ends_with("  leak checks skipped: 0\n"), "{text}");
+        stats.skip_leak_check();
+        let text = report(Duration::ZERO, 0, &stats);
+        assert!(text.ends_with("  leak checks skipped: 1\n"), "{text}");
+        assert_eq!(text.lines().count(), 2 + Event::ALL.len());
     }
 }

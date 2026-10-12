@@ -16,20 +16,19 @@
 //! 3. A function with a function-entry check (every [`Abi::Cheby`]
 //!    function) gets `entry_unwind = pad(its counted parameters)`. C-ABI
 //!    functions (entry thunks and trampolines) have no entry check, so no
-//!    entry pad, but their calls get edges like any other.
-//!    GAP(c-abi-entry-pad)
+//!    entry pad, but their calls get edges like any other (D-752).
 //! 4. An instruction that already has an edge, and an existing entry pad,
 //!    are kept: the generated bodies of std intrinsics (D-693) come with
-//!    their own (GAP(intrinsic-precounted)). Running the pass twice changes
+//!    their own (D-744). Running the pass twice changes
 //!    nothing.
 //!
 //! The pass is per function, deterministic (D-264: pads are created in
 //! block and statement order, memoized in ordered maps) and linear in the
 //! size of the function times the size of its pad sets.
 //!
-//! The MIR is the same for every unwinding backend (D-696 is open): the
-//! code generator ignores the edges with the default backend, and
-//! `CHEBY_UNWIND_EDGES=off` skips this pass for D-702's measurement.
+//! The code generator lowers every edge with the return flag (D-733), and
+//! `CHEBY_UNWIND_EDGES=off` skips this pass for D-702's measurement
+//! (D-742).
 
 use std::collections::BTreeMap;
 

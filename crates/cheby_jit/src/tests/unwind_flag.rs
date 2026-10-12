@@ -1,6 +1,7 @@
-//! The return-flag prototype under the JIT (D-696, D-698): hand-built
-//! MIR, given its unwind edges and pads by the unwind pass, compiled with
-//! `CodegenOptions { unwind: Flag, checked_rc: true }`. An unwinding that
+//! The return flag under the JIT (D-733, D-698): hand-built MIR, given
+//! its unwind edges and pads by the unwind pass
+//! ([`Prog::compile_unwound`]), compiled with
+//! `CodegenOptions { checked_rc: true }`. An unwinding that
 //! starts in a Cheby frame, a C call, an allocation, a checked operation,
 //! a `panic`, an entry check (also the outer function of a large frame,
 //! D-679) or below a trampoline runs every pad on the way, returns 0 to the
@@ -8,17 +9,16 @@
 //! `CHEBY_RT_POISON=1` for freed objects to be poisoned (D-458).
 
 use cheby_codegen_clif::CodegenOptions;
-use cheby_mir::{CType, ForeignSig, LayoutRef, Stage, validate};
+use cheby_mir::{CType, ForeignSig, LayoutRef};
 use cheby_runtime::ConstEvalLimits;
-use cheby_runtime::abi::{PanicKind as RtPanicKind, UnwindBackend};
+use cheby_runtime::abi::PanicKind as RtPanicKind;
 
 use super::*;
 
-/// The options of every test here: the return flag, with the checked
-/// count operations, which validate every header they touch.
+/// The options of every test here: the checked count operations, which
+/// validate every header they touch.
 fn flag_options() -> CodegenOptions {
     CodegenOptions {
-        unwind: UnwindBackend::Flag,
         checked_rc: true,
         ..CodegenOptions::default()
     }
@@ -27,14 +27,7 @@ fn flag_options() -> CodegenOptions {
 /// Gives `p`'s units their unwind edges and pads (D-698), checks them at
 /// `Stage::Unwound`, and compiles them with `options`.
 fn compile_with(p: Prog, options: CodegenOptions) -> Jit {
-    let mut units = p.units();
-    for unit in &mut units {
-        cheby_mir::unwind::insert_module(unit).unwrap();
-        validate(unit, Stage::Unwound).unwrap();
-    }
-    let mut jit = Jit::with_options(options).unwrap();
-    jit.compile(&units).unwrap();
-    jit
+    p.compile_unwound_with(options, JitOptions::from_env())
 }
 
 fn compile_flag(p: Prog) -> Jit {

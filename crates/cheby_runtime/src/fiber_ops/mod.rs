@@ -29,7 +29,9 @@
 //!
 //! [`FiberConc`] is the structured-concurrency part of a fiber's control
 //! block (D-685): the scope it was spawned into, the scopes it has open and
-//! why the last one it closed failed. The fiber lock with the cancellation
+//! why the last one it closed failed. The innermost of those scopes is the
+//! one a panic of the fiber is recorded in when it starts (D-666,
+//! `unwind::record::start_panic`). The fiber lock with the cancellation
 //! target and the wait node other fibers reach (architecture §3.1) belongs
 //! to cancellation, which arrives with package U5.
 
@@ -81,6 +83,17 @@ pub(crate) struct Failure {
     pub(crate) location: String,
 }
 
+impl Failure {
+    /// The failure of a panic, with its message and location.
+    pub(crate) fn panic(message: String, location: String) -> Self {
+        Self {
+            kind: 0,
+            message,
+            location,
+        }
+    }
+}
+
 impl FiberConc {
     /// The scope the fiber was spawned into.
     pub(crate) fn spawn_scope(&self) -> Option<Arc<ScopeState>> {
@@ -96,6 +109,14 @@ impl FiberConc {
     /// The innermost scope the fiber has open.
     pub(crate) fn innermost_scope(&self) -> Option<Arc<ScopeState>> {
         self.open_scopes.lock().last().cloned()
+    }
+
+    /// The scope responsible for the fiber's position (D-666, architecture
+    /// §6.6 and §7.5): its innermost open scope, else the scope it was
+    /// spawned into; `None` for a root fiber or an isolated entry outside
+    /// every scope. A new scope's parent, and where a panic is recorded.
+    pub(crate) fn responsible_scope(&self) -> Option<Arc<ScopeState>> {
+        self.innermost_scope().or_else(|| self.spawn_scope())
     }
 
     /// Pushes a scope the fiber opened.

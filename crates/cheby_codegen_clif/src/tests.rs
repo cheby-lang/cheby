@@ -486,7 +486,7 @@ fn foreign_imports_by_address_allow_new_signatures() {
 }
 
 /// The runtime functions of the slice (plan §2.1): their C types, indexes
-/// 24 to 27, the helpers they implement, and the static `Err(Nil)`.
+/// 24 to 26, the helpers they implement, and the static `Err(Nil)`.
 #[test]
 fn slice_runtime_functions() {
     use cheby_mir::RuntimeFn;
@@ -510,12 +510,6 @@ fn slice_runtime_functions() {
             &[CType::Ptr, CType::U64, CType::Bool][..],
             CType::Bool,
         ),
-        (
-            RuntimeFunc::UnwindResume,
-            27,
-            &[CType::Ptr][..],
-            CType::Void,
-        ),
     ];
     for (f, index, params, ret) in expected {
         assert_eq!(f.index(), index, "{f:?}");
@@ -523,10 +517,10 @@ fn slice_runtime_functions() {
         assert_eq!(f.ctypes(), (params, ret), "{f:?}");
         assert!(f.on_demand(), "{f:?}");
     }
-    assert_eq!(RuntimeFunc::ALL.len(), 28);
+    assert_eq!(RuntimeFunc::ALL.len(), 27);
     assert_eq!(
         RuntimeFunc::ALL.iter().filter(|f| f.on_demand()).count(),
-        4,
+        3,
         "only the M2 functions are declared on demand"
     );
     assert_eq!(
@@ -538,7 +532,6 @@ fn slice_runtime_functions() {
         (RuntimeFunc::ScopeClose, true)
     );
     assert!(STATIC_DATA.contains(&cheby_runtime::abi::sym::STATIC_ERR_NIL));
-    assert!(runtime::imported_symbols().contains(&cheby_runtime::abi::sym::UNWIND_RESUME));
 }
 
 /// `f(_0: bool)` with every IR form of the slice: helper calls with
@@ -661,17 +654,19 @@ fn slice_forms_unit() -> MirModule {
     }
 }
 
-/// Code generation of the slice's IR forms (plan §2.2): unwind edges are
-/// ignored, so the pad is never translated; `resume` traps with its own
-/// code; `clear_unwind` stores a zero `u32` at `ctx+12`; `static Err(Nil)`
-/// is the runtime's data symbol; the scope helpers are declared on demand
-/// with their C signatures; the result compiles.
+/// Code generation of the slice's IR forms (plan §2.2) under the return
+/// flag (D-733): the pad that only the edges reach is translated as a cold
+/// block; `resume` returns 0; the two helper calls with an edge and the
+/// entry check's slow path load the flag; `clear_unwind` stores a zero
+/// `u32` at `ctx+12`; `static Err(Nil)` is the runtime's data symbol; the
+/// scope helpers are declared on demand with their C signatures; the
+/// result compiles.
 #[test]
 #[cfg_attr(
     windows,
     ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
 )]
-fn slice_forms_translate_with_edges_ignored() {
+fn slice_forms_translate_with_their_edges() {
     let mut m = module();
     let mut decls = Decls::new(cranelift_module::Module::isa(&m)).unwrap();
     let units = [slice_forms_unit()];
@@ -687,17 +682,21 @@ fn slice_forms_translate_with_edges_ignored() {
         "= cheby_rt_scope_close",
         "= cheby_rt_static_err_nil",
         "= cheby_test_kernel",
-        &format!("trap user{}", func::TRAP_RESUME),
+        "= cheby_rt_debug",
         "iconst.i32 0",
+        "iconst.i64 0",
+        " cold:",
         &format!("+{}", cheby_runtime::abi::CTX_UNWIND),
     ] {
         assert!(text.contains(needle), "{needle:?} in:\n{text}");
     }
     assert!(text.contains("store"), "{text}");
-    assert!(
-        !text.contains("cheby_rt_debug"),
-        "the pad was translated:\n{text}"
+    let load_flag = format!(
+        "load.i32 notrap aligned v0+{}",
+        cheby_runtime::abi::CTX_UNWIND
     );
+    assert_eq!(text.matches(&load_flag).count(), 3, "{text}");
+    assert!(!text.contains("trap user"), "no trap is left:\n{text}");
     let compiled = compile_function(cranelift_module::Module::isa(&m), clif).unwrap();
     assert_ne!(compiled.bytes.len(), 0);
 }
@@ -731,8 +730,8 @@ fn units_without_the_slice_forms_keep_their_function_ids() {
     assert!(!text.contains("scope_"), "{text}");
 }
 
-/// The options of wave 2 (plan §2.4, D-679): the unwinding backend is
-/// `off` and the large-frame threshold 64 KiB by default; `compile_function`
+/// The default options (D-679, D-742): the code is compiled with unwind
+/// edges and the large-frame threshold is 64 KiB; `compile_function`
 /// reports the frame size Cranelift laid out, which is small for a small
 /// function.
 #[test]
@@ -742,7 +741,7 @@ fn units_without_the_slice_forms_keep_their_function_ids() {
 )]
 fn default_options_and_the_frame_size() {
     let opts = CodegenOptions::default();
-    assert_eq!(opts.unwind, cheby_runtime::abi::UnwindBackend::Off);
+    assert!(opts.unwind_edges);
     assert_eq!(opts.large_frame_threshold, 64 << 10);
     assert_eq!(LARGE_FRAME_THRESHOLD, 64 << 10);
     let mut m = module();
@@ -757,15 +756,17 @@ fn default_options_and_the_frame_size() {
     assert!(compiled.frame_size < 1 << 10, "{compiled:?}");
 }
 
-/// With unwind edges ignored (`off`), the pads of the unwind pass (D-698)
-/// get no CLIF blocks, so a function's CLIF is the same with and without
-/// them: block and value numbers do not move (U1b-7).
+/// Under the return flag (D-733), the pads of the unwind pass (D-698) are
+/// translated as cold blocks: the entry check's slow path and the foreign
+/// call with an edge load the flag and branch to them, the pad drops out
+/// of line and `resume` returns 0. The same function without the pads has
+/// none of it.
 #[test]
 #[cfg_attr(
     windows,
     ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
 )]
-fn unwind_pads_do_not_renumber_the_clif_under_off() {
+fn unwind_pads_are_translated_as_cold_blocks() {
     let cx = CodegenCx {
         layouts: &BuiltinLayouts,
     };
@@ -775,24 +776,18 @@ fn unwind_pads_do_not_renumber_the_clif_under_off() {
         let mut decls = Decls::new(cranelift_module::Module::isa(&m)).unwrap();
         declare(&mut m, &mut decls, &units, &cx, &opts).unwrap();
         let clif = translate(&units[0], &units[0].functions[0], &decls, &cx, &opts).unwrap();
-        decls.describe(&clif)
+        let text = decls.describe(&clif);
+        compile_function(cranelift_module::Module::isa(&m), clif).unwrap();
+        text
     };
     let plain = text_of([unit()]);
     let mut padded = unit();
     let function = &mut padded.functions[0];
-    let extra = function
-        .locals
-        .push(LocalDecl {
-            repr: Repr::Value,
-            name: None,
-            ty: None,
-        })
-        .unwrap();
-    // bb1(_1): drop _0; goto bb2   bb2: resume
+    // bb1: drop _0; goto bb2   bb2: resume
     function
         .blocks
         .push(Block {
-            params: vec![extra],
+            params: Vec::new(),
             stmts: vec![Stmt::Drop(cheby_mir::Local::from_u32(0))],
             term: Terminator::Goto {
                 target: cheby_mir::BlockId::from_u32(2),
@@ -813,12 +808,29 @@ fn unwind_pads_do_not_renumber_the_clif_under_off() {
     function.blocks.iter_mut().next().unwrap().unwind = vec![(0, cheby_mir::BlockId::from_u32(1))];
     function.entry_unwind = Some(cheby_mir::BlockId::from_u32(2));
     let padded_text = text_of([padded]);
-    assert_eq!(plain, padded_text);
-    assert!(!padded_text.contains(&format!("user{}", func::TRAP_RESUME)));
+    let load_flag = format!(
+        "load.i32 notrap aligned v0+{}",
+        cheby_runtime::abi::CTX_UNWIND
+    );
+    assert_eq!(plain.matches(&load_flag).count(), 0, "{plain}");
+    assert_eq!(padded_text.matches(&load_flag).count(), 2, "{padded_text}");
+    // The pad's drop is a plain call: one more call than the inline drop's
+    // slow path makes.
+    assert_eq!(
+        padded_text.matches("call fn").count(),
+        plain.matches("call fn").count() + 1,
+        "{padded_text}"
+    );
+    assert!(padded_text.contains("iconst.i64 0"), "{padded_text}");
+    assert!(
+        padded_text.matches(" cold:").count() > plain.matches(" cold:").count(),
+        "the pads are cold:\n{padded_text}"
+    );
+    assert!(!padded_text.contains("trap user"), "{padded_text}");
 }
 
-/// `f(_0)` with an unwind edge on each kind of statement the return-flag
-/// prototype lowers (D-698): a Cheby call, a checked addition, a foreign
+/// `f(_0)` with an unwind edge on each kind of statement the return flag
+/// lowers (D-698, D-733): a Cheby call, a checked addition, a foreign
 /// call, an allocation and a `panic` terminator, the chained pads `bb1`
 /// (`drop _1`) and `bb2` (`drop _0`, the entry pad), and `bb3: resume`.
 fn edges_unit() -> MirModule {
@@ -934,43 +946,49 @@ fn clif_of(units: &[MirModule; 1], opts: &CodegenOptions) -> String {
     text
 }
 
-/// The return-flag prototype (D-696, architecture §6.3): with edges, the
-/// pads are translated as cold blocks whose drops call `cheby_rt_drop`;
-/// a C call loads the flag at `ctx+12`; a Cheby call and `cheby_rt_alloc`
-/// test their result; the panic block jumps to its pad instead of
-/// trapping; `resume` returns 0; the entry check's slow path tests the
-/// flag. With `off` none of it appears, and the pads stay untranslated.
+/// `edges_unit()` without its unwind edges and its entry pad, as the MIR
+/// is under `CHEBY_UNWIND_EDGES=off` (D-742): its pads are unreachable.
+fn edges_unit_without_edges() -> MirModule {
+    let mut u = edges_unit();
+    let function = &mut u.functions[0];
+    for block in &mut function.blocks {
+        block.unwind.clear();
+    }
+    function.entry_unwind = None;
+    u
+}
+
+/// The return flag (D-733, architecture §6.3): with edges, the pads are
+/// translated as cold blocks whose drops call `cheby_rt_drop`; a C call
+/// loads the flag at `ctx+12`; a Cheby call and `cheby_rt_alloc` test
+/// their result; the panic block jumps to its pad instead of trapping;
+/// `resume` returns 0; the entry check's slow path tests the flag. The
+/// same MIR without edges lowers with none of it: no flag load, no pad,
+/// and a trap after each `cheby_rt_panic`.
 #[test]
 #[cfg_attr(
     windows,
     ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
 )]
-fn flag_backend_lowers_every_edge() {
-    use cheby_runtime::abi::UnwindBackend;
-    let units = [edges_unit()];
-    let off = clif_of(&units, &CodegenOptions::default());
-    let flag = clif_of(
-        &units,
-        &CodegenOptions {
-            unwind: UnwindBackend::Flag,
-            ..CodegenOptions::default()
-        },
-    );
+fn the_flag_lowers_every_edge() {
+    let opts = CodegenOptions::default();
+    let flag = clif_of(&[edges_unit()], &opts);
+    let edgeless = clif_of(&[edges_unit_without_edges()], &opts);
     let load_flag = format!(
         "load.i32 notrap aligned v0+{}",
         cheby_runtime::abi::CTX_UNWIND
     );
-    // Off: the edges are ignored, as before the backends (D-698).
-    assert!(!off.contains(&load_flag), "{off}");
+    // Without edges: the code of a build without the unwind pass.
+    assert!(!edgeless.contains(&load_flag), "{edgeless}");
     assert!(
-        !off.contains("= cheby_rt_drop"),
-        "the pads were translated:\n{off}"
+        !edgeless.contains("= cheby_rt_drop"),
+        "the pads were translated:\n{edgeless}"
     );
     assert!(
-        off.contains(&format!("trap user{}", func::TRAP_NORETURN)),
-        "{off}"
+        edgeless.contains(&format!("trap user{}", func::TRAP_NORETURN)),
+        "{edgeless}"
     );
-    // Flag.
+    // With edges.
     let loads = flag.matches(&load_flag).count();
     // The entry check's slow path and the foreign call; the Cheby call,
     // the allocation and the panic do not load the flag.
@@ -979,10 +997,6 @@ fn flag_backend_lowers_every_edge() {
     assert!(
         !flag.contains(&format!("trap user{}", func::TRAP_NORETURN)),
         "the panic blocks jump to their pads:\n{flag}"
-    );
-    assert!(
-        !flag.contains(&format!("trap user{}", func::TRAP_RESUME)),
-        "{flag}"
     );
     assert!(flag.contains("iconst.i64 0"), "{flag}");
     // Pads drop out of line: no inline drop's `rc > 1` test.
@@ -994,19 +1008,17 @@ fn flag_backend_lowers_every_edge() {
     assert!(flag.matches("brif").count() >= 6, "{flag}");
 }
 
-/// With an unwinding backend, a pad is translated even when only an
-/// unwind edge reaches it, and reverse postorder puts it after the block
-/// whose statement unwinds to it: a pad's drop of a local defined in that
-/// block compiles (the verifier checks dominance).
+/// A pad is translated even when only an unwind edge reaches it, and
+/// reverse postorder puts it after the block whose statement unwinds to
+/// it: a pad's drop of a local defined in that block compiles (the
+/// verifier checks dominance).
 #[test]
 #[cfg_attr(
     windows,
     ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
 )]
 fn flag_pads_follow_their_sources() {
-    use cheby_runtime::abi::UnwindBackend;
     let opts = CodegenOptions {
-        unwind: UnwindBackend::Flag,
         checked_rc: true,
         ..CodegenOptions::default()
     };
@@ -1029,4 +1041,163 @@ fn flag_pads_follow_their_sources() {
         1,
         "{text}"
     );
+}
+
+/// `f() { _0 = call g() unwind bb1; return nil }  bb1: resume`, and
+/// `g() -> ret { return 0 }`, both Cheby functions: `f` calls `g`, whose
+/// MIR result is `ret`, with an unwind edge.
+#[expect(clippy::too_many_lines, reason = "one hand-built MIR unit")]
+fn unboxed_call_unit(ret: Repr) -> MirModule {
+    use cheby_mir::{BlockId, Callee, Local, Rvalue};
+    let f = def(1, 0);
+    let g = def(1, 1);
+    let decl = |repr| LocalDecl {
+        repr,
+        name: None,
+        ty: None,
+    };
+    let span = Span::new(FileId::new(0), TextRange::new(0, 0));
+    let zero = if ret == Repr::Value {
+        Const::Nil
+    } else {
+        Const::Int(0)
+    };
+    let caller = Function {
+        key: FnKey::Item(f),
+        abi: Abi::Cheby,
+        params: Vec::new(),
+        ret: Repr::Value,
+        locals: IndexVec::from_raw(vec![decl(ret)]).unwrap(),
+        blocks: IndexVec::from_raw(vec![
+            Block {
+                params: Vec::new(),
+                stmts: vec![Stmt::Assign {
+                    dst: Local::from_u32(0),
+                    value: Rvalue::Call {
+                        callee: Callee::Direct(g),
+                        args: Vec::new(),
+                    },
+                }],
+                term: Terminator::Return(Operand::Const(Const::Nil)),
+                unwind: vec![(0, BlockId::from_u32(1))],
+            },
+            Block {
+                params: Vec::new(),
+                stmts: Vec::new(),
+                term: Terminator::Resume,
+                unwind: Vec::new(),
+            },
+        ])
+        .unwrap(),
+        span,
+        strings: IndexVec::from_raw(vec!["a.cheby:1:4".into()]).unwrap(),
+        entry_loc: Some(StrId::from_u32(0)),
+        entry_unwind: Some(BlockId::from_u32(1)),
+        precounted: false,
+    };
+    let g_fn = Function {
+        key: FnKey::Item(g),
+        abi: Abi::Cheby,
+        params: Vec::new(),
+        ret,
+        locals: IndexVec::from_raw(Vec::new()).unwrap(),
+        blocks: IndexVec::from_raw(vec![Block {
+            params: Vec::new(),
+            stmts: Vec::new(),
+            term: Terminator::Return(Operand::Const(zero)),
+            unwind: Vec::new(),
+        }])
+        .unwrap(),
+        span,
+        strings: IndexVec::from_raw(vec!["a.cheby:2:4".into()]).unwrap(),
+        entry_loc: Some(StrId::from_u32(0)),
+        entry_unwind: None,
+        precounted: false,
+    };
+    let sig = |ret| AbiSig {
+        abi: Abi::Cheby,
+        params: Vec::new(),
+        ret,
+    };
+    MirModule {
+        unit: UnitKind::Code(ModuleId::from_u32(1)),
+        path: "app".into(),
+        functions: vec![caller, g_fn],
+        callees: vec![
+            CalleeDecl {
+                def: f,
+                sig: sig(Repr::Value),
+            },
+            CalleeDecl {
+                def: g,
+                sig: sig(ret),
+            },
+        ],
+        layouts: Vec::new(),
+        foreign_layouts: Vec::new(),
+        statics: Vec::new(),
+        names: vec![
+            DefName {
+                def: f,
+                module: "app".into(),
+                item: "f".into(),
+            },
+            DefName {
+                def: g,
+                module: "app".into(),
+                item: "g".into(),
+            },
+        ],
+    }
+}
+
+/// The CLIF line of the call of `g` in `text`, its result, and the line
+/// after it.
+fn call_and_next(text: &str) -> (String, String, String) {
+    let lines: Vec<&str> = text.lines().map(str::trim).collect();
+    let at = lines
+        .iter()
+        .position(|line| line.contains("= call_indirect"))
+        .unwrap_or_else(|| panic!("no call in:\n{text}"));
+    let result = lines[at].split(" = ").next().unwrap().to_owned();
+    let next = lines[at.checked_add(1).unwrap()].to_owned();
+    (lines[at].to_owned(), result, next)
+}
+
+/// D-734: a call of a Cheby function whose result is unboxed (an entry
+/// point of D-453, here an `Int`, which is an `i64` like a uniform word)
+/// with an unwind edge loads the flag at `ctx+12` right after the call and
+/// never branches on the result, which can be 0 legitimately. A call of
+/// the uniform-word entry keeps the result test (D-733).
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn unboxed_result_call_tests_the_flag_not_the_result() {
+    let load_flag = format!(
+        "load.i32 notrap aligned v0+{}",
+        cheby_runtime::abi::CTX_UNWIND
+    );
+    let opts = CodegenOptions::default();
+    let unboxed = clif_of(&[unboxed_call_unit(Repr::Int)], &opts);
+    let (call, result, next) = call_and_next(&unboxed);
+    assert!(call.contains("call_indirect"), "{unboxed}");
+    assert!(
+        next.ends_with(&load_flag),
+        "the flag is loaded right after `{call}`:\n{unboxed}"
+    );
+    assert!(
+        !unboxed.contains(&format!("brif {result},")),
+        "the unboxed result {result} is never tested:\n{unboxed}"
+    );
+    // The entry check's slow path and the call.
+    assert_eq!(unboxed.matches(&load_flag).count(), 2, "{unboxed}");
+    let uniform = clif_of(&[unboxed_call_unit(Repr::Value)], &opts);
+    let (_, result, next) = call_and_next(&uniform);
+    assert!(
+        next.starts_with(&format!("brif {result},")),
+        "a uniform word is tested:\n{uniform}"
+    );
+    assert_eq!(uniform.matches(&load_flag).count(), 1, "{uniform}");
 }

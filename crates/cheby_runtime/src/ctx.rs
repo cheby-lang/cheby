@@ -5,10 +5,11 @@
 //! # The generated-code view
 //!
 //! Generated code reads only the fields with an `abi::CTX_*` offset, which
-//! are fixed (D-685): the stack limit at 0, the mode at 8, the unwind flag
-//! at 12 (reserved whichever unwinding backend is chosen, D-696) and, for
-//! the `try_call` prototype only, the exit record at 16 and 24. The
-//! function-entry check compares the stack pointer with `stack_limit` and
+//! are fixed (D-685): the stack limit at 0 (a `usize`), the mode at 8 (a
+//! `u32`) and the unwind flag at 12 (a `u32`, D-733). The view ends at
+//! byte 16, where the Rust part starts with the interrupt reasons; offsets
+//! 16 and 24 held the exit record of a prototype that is gone (D-763), so
+//! nothing generated reads past 16. The function-entry check compares the stack pointer with `stack_limit` and
 //! calls `cheby_rt_stack_slow` when it is below. Setting `stack_limit` to
 //! `usize::MAX` forces the next function entry into that slow path, which
 //! is how an interrupt reaches running code with the same single compare
@@ -54,10 +55,10 @@ use std::cell::RefCell;
 use std::mem::offset_of;
 use std::ptr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicPtr, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::Sender;
 
-use crate::abi::{self, UnwindBackend};
+use crate::abi;
 use crate::alloc::{BlockCache, Domain};
 use crate::consteval::ConstTable;
 use crate::entry::{Callbacks, EntryMode, EntryOutcome};
@@ -93,20 +94,13 @@ pub struct ExecCtx {
     pub mode: AtomicU32,
     /// At [`abi::CTX_UNWIND`]: the unwind flag, one of
     /// [`abi::unwind_flag`]'s values (D-685). Written only by the owning
-    /// fiber; [`abi::unwind_flag::NONE`] with the default backend.
+    /// fiber; [`abi::unwind_flag::NONE`] while nothing unwinds.
     pub unwind: AtomicU32,
-    /// At [`abi::CTX_EXIT_FP`]: the `try_call` prototype's exit record, the
-    /// frame pointer of the generated code that called out to C.
-    /// GAP(try-call-exit-record).
-    pub exit_fp: AtomicUsize,
-    /// At [`abi::CTX_EXIT_PC`]: the return address of that call.
-    /// GAP(try-call-exit-record).
-    pub exit_pc: AtomicUsize,
-    // The Rust part: generated code never reads it.
+    // The Rust part, from byte 16: generated code never reads it.
     /// Why an interrupt was requested: [`reason`] bits (D-688).
     reasons: AtomicU32,
-    /// The unwinding backend the fiber's code was compiled for (D-696).
-    unwind_backend: UnwindBackend,
+    /// Whether the fiber's code was compiled with unwind edges (D-742).
+    unwind_edges: bool,
     /// The stack limit when no interrupt is pending; only lowered, by the
     /// fiber itself (module documentation).
     soft_limit: AtomicUsize,
@@ -159,8 +153,8 @@ pub struct ExecCtx {
 const _: () = assert!(offset_of!(ExecCtx, stack_limit) == 0 && abi::CTX_STACK_LIMIT == 0);
 const _: () = assert!(offset_of!(ExecCtx, mode) == 8 && abi::CTX_MODE == 8);
 const _: () = assert!(offset_of!(ExecCtx, unwind) == 12 && abi::CTX_UNWIND == 12);
-const _: () = assert!(offset_of!(ExecCtx, exit_fp) == 16 && abi::CTX_EXIT_FP == 16);
-const _: () = assert!(offset_of!(ExecCtx, exit_pc) == 24 && abi::CTX_EXIT_PC == 24);
+// The generated-code view ends at 16: the Rust part starts there.
+const _: () = assert!(offset_of!(ExecCtx, reasons) == 16);
 
 /// What a new fiber control block starts with.
 #[derive(Debug)]
@@ -185,16 +179,19 @@ pub(crate) struct FiberInit {
     pub(crate) consts: Option<Arc<ConstTable>>,
     /// The trampolines.
     pub(crate) callbacks: Callbacks,
-    /// The unwinding backend its code was compiled for (D-696).
-    pub(crate) unwind_backend: UnwindBackend,
+    /// Whether its code was compiled with unwind edges: false only under
+    /// `CHEBY_UNWIND_EDGES=off` (D-742), where a raise ends the process
+    /// (GAP(edgeless-panics)).
+    pub(crate) unwind_edges: bool,
     /// The scheduler's fields: [`FiberSched::isolated`] outside a runtime.
     pub(crate) sched: FiberSched,
 }
 
 impl FiberInit {
     /// An isolated entry's fields with no stack, no outcome, the process
-    /// seed, no budget, a fresh domain, no constants or trampolines and the
-    /// default backend, to be completed with struct-update syntax.
+    /// seed, no budget, a fresh domain, no constants or trampolines, the
+    /// return flag (D-733) and unwind edges, to be completed with
+    /// struct-update syntax.
     pub(crate) fn placeholder() -> Self {
         Self {
             soft_limit: 0,
@@ -207,7 +204,7 @@ impl FiberInit {
             domain: Domain::new(),
             consts: None,
             callbacks: Callbacks::default(),
-            unwind_backend: UnwindBackend::Off,
+            unwind_edges: true,
             sched: FiberSched::isolated(),
         }
     }
@@ -216,9 +213,6 @@ impl FiberInit {
 impl ExecCtx {
     /// A fiber control block with nothing pending.
     pub(crate) fn new(init: FiberInit) -> Self {
-        if init.unwind_backend != UnwindBackend::Off {
-            UNWINDING_BACKEND_USED.store(true, Ordering::Relaxed);
-        }
         let mode = match init.entry_mode {
             EntryMode::ConstEval(_) => abi::CTX_MODE_CONST_EVAL,
             EntryMode::Run | EntryMode::Test | EntryMode::Repl => 0,
@@ -227,10 +221,8 @@ impl ExecCtx {
             stack_limit: AtomicUsize::new(init.soft_limit),
             mode: AtomicU32::new(mode),
             unwind: AtomicU32::new(abi::unwind_flag::NONE),
-            exit_fp: AtomicUsize::new(0),
-            exit_pc: AtomicUsize::new(0),
             reasons: AtomicU32::new(0),
-            unwind_backend: init.unwind_backend,
+            unwind_edges: init.unwind_edges,
             soft_limit: AtomicUsize::new(init.soft_limit),
             hard_limit: init.hard_limit.min(init.soft_limit),
             stack_top: init.stack_top,
@@ -307,23 +299,18 @@ impl ExecCtx {
             .compare_exchange(old, limit, Ordering::SeqCst, Ordering::SeqCst);
     }
 
-    /// The stack position where the entry started.
-    #[must_use]
-    pub(crate) fn stack_top(&self) -> usize {
-        self.stack_top
-    }
-
     /// What kind of entry is running.
     #[must_use]
     pub fn entry_mode(&self) -> &EntryMode {
         &self.entry_mode
     }
 
-    /// The unwinding backend the fiber's code was compiled for (D-696):
-    /// [`UnwindBackend::Off`] until the hosts select one.
+    /// Whether the fiber's code was compiled with unwind edges: false only
+    /// under `CHEBY_UNWIND_EDGES=off`, D-742's measurement switch, where a
+    /// raise ends the process instead of unwinding (GAP(edgeless-panics)).
     #[must_use]
-    pub fn unwind_backend(&self) -> UnwindBackend {
-        self.unwind_backend
+    pub fn unwind_edges(&self) -> bool {
+        self.unwind_edges
     }
 
     /// Where a panic reports to.
@@ -395,21 +382,6 @@ impl ExecCtx {
     }
 }
 
-/// Whether a control block was ever made for code compiled with an
-/// unwinding backend (D-696) in this process.
-static UNWINDING_BACKEND_USED: AtomicBool = AtomicBool::new(false);
-
-/// Whether any fiber of this process may run code compiled with an
-/// unwinding backend (`flag` or `try_call`, D-696): false while every
-/// control block made so far has the default backend. Work that only an
-/// unwinding backend needs, such as the allocator's budget preflight
-/// (D-698), tests it first, so that with the default backend it costs a
-/// relaxed load instead of a current-fiber lookup (GATE1-1).
-#[must_use]
-pub(crate) fn unwinding_backend_used() -> bool {
-    UNWINDING_BACKEND_USED.load(Ordering::Relaxed)
-}
-
 /// Requests an interrupt of the fiber `ctx` for `reason` (D-688): adds the
 /// reason, then forces the next function entry into the slow path.
 /// Callable from any thread.
@@ -479,33 +451,15 @@ mod tests {
         assert_eq!(ctx.stack_limit.load(Ordering::SeqCst), 0x10_0000 - 0x2000);
     }
 
-    /// GATE1-1: a control block made for an unwinding backend marks the
-    /// process; one made for the default backend leaves the mark as it
-    /// was (the tests of this crate share the process, so only the first
-    /// half is checked strictly).
-    #[test]
-    fn a_control_block_for_an_unwinding_backend_marks_the_process() {
-        drop(fcb());
-        let flag = ExecCtx::new(FiberInit {
-            unwind_backend: UnwindBackend::Flag,
-            ..FiberInit::placeholder()
-        });
-        assert!(unwinding_backend_used());
-        drop(flag);
-        drop(fcb());
-        assert!(unwinding_backend_used());
-    }
-
     #[test]
     fn the_abi_part_has_its_fixed_offsets() {
         assert_eq!(offset_of!(ExecCtx, stack_limit), 0);
         assert_eq!(offset_of!(ExecCtx, mode), 8);
         assert_eq!(offset_of!(ExecCtx, unwind), 12);
-        assert_eq!(offset_of!(ExecCtx, exit_fp), 16);
-        assert_eq!(offset_of!(ExecCtx, exit_pc), 24);
+        assert_eq!(offset_of!(ExecCtx, reasons), 16);
         let ctx = fcb();
         assert_eq!(ctx.unwind.load(Ordering::Relaxed), abi::unwind_flag::NONE);
-        assert_eq!(ctx.unwind_backend(), UnwindBackend::Off);
+        assert!(ctx.unwind_edges());
     }
 
     #[test]

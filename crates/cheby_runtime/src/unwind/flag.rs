@@ -1,9 +1,9 @@
-//! The return-flag prototype's runtime half (D-696, D-685): the fiber's
-//! unwind flag, the `u32` at [`crate::abi::CTX_UNWIND`] of its control
-//! block. Generated code compiled for [`crate::abi::UnwindBackend::Flag`]
-//! loads it after every C call that may unwind and tests it; the guards,
-//! `raise_panic` and `cheby_rt_panic` set it when an unwinding leaves Rust
-//! code under that backend, and catch points clear it.
+//! The runtime half of unwinding by return-flag propagation (D-733,
+//! ADR-0061, D-685): the fiber's unwind flag, the `u32` at
+//! [`crate::abi::CTX_UNWIND`] of its control block. Generated code loads
+//! it after every C call that may unwind and tests it; the guards and
+//! `cheby_rt_panic` set it when an unwinding leaves Rust code, and catch
+//! points clear it.
 //!
 //! Only the owning fiber writes the flag (D-685), so these accessors need
 //! no read-modify-write; the release store and the acquire load order the
@@ -23,9 +23,12 @@ pub(crate) fn set(ctx: &ExecCtx, flag: u32) {
 
 /// The unwind flag of `ctx`: [`unwind_flag::NONE`] when no unwinding is in
 /// flight.
-#[expect(
-    dead_code,
-    reason = "the shared unwinding runtime (package U3) calls it in this wave"
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "tests read it; the entry check's releasing slow path will (D-698)"
+    )
 )]
 pub(crate) fn get(ctx: &ExecCtx) -> u32 {
     ctx.unwind.load(Ordering::Acquire)

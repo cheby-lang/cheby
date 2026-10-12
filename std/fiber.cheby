@@ -58,7 +58,7 @@ fn scope_run<T>(timed: Bool, seconds: Int, nanoseconds: Int, body: fn(Scope) -> 
 
 /// Why the scope that `scope_run` just closed failed: 0 for a panic and 1
 /// for an expired limit, then the panic's message and location (D-473,
-/// D-648). GAP(fiber-kernel-names).
+/// D-648, D-755).
 @std_context
 @external(native, "cheby_fiber_take_failure")
 @external(js, "./fiber.mjs", "take_failure")
@@ -107,6 +107,30 @@ test "a scope waits for every fiber spawned into it" {
   assert channel::receive(rx) == Err(Nil)
 }
 
+test "a panic in the body is caught by its scope" {
+  let outcome = {
+    use _scope <- scope()
+    panic as "boom"
+  }
+  let assert Err(failure) = outcome
+  assert message(failure) == "boom"
+}
+
+test "a nested scope keeps a fiber's panic to itself" {
+  let outcome = {
+    use outer <- scope()
+    let inner = spawn(outer, fn() {
+      use owner <- scope()
+      spawn(owner, fn() { panic as "inner" })
+    })
+    case join(inner) {
+      Ok(_) => "no panic"
+      Err(failure) => message(failure)
+    }
+  }
+  assert outcome == Ok("inner")
+}
+
 test "fibers and scopes print as placeholders" {
   let outcome = {
     use owner <- scope()
@@ -120,7 +144,7 @@ test "fibers and scopes print as placeholders" {
 
 /// Starts a fiber in `owner` that calls `f`, with the default stack, and
 /// returns it at once. Panics with `spawn into a scope that has ended`
-/// when `owner` has ended (D-666, D-732). GAP(fiber-kernel-names).
+/// when `owner` has ended (D-666, D-732, D-755).
 @std_context
 @external(native, "cheby_fiber_sys_spawn")
 @external(js, "./fiber.mjs", "sys_spawn")
@@ -138,9 +162,22 @@ pub fn spawn<T>(owner: Scope, f: fn() -> T) -> Fiber<T> {
   sys_spawn(owner, f)
 }
 
+test "spawning into a scope that has ended panics" {
+  let assert Ok(ended) = {
+    use owner <- scope()
+    owner
+  }
+  let outcome = {
+    use _scope <- scope()
+    spawn(ended, fn() { Nil })
+  }
+  let assert Err(failure) = outcome
+  assert message(failure) == "spawn into a scope that has ended"
+}
+
 /// Starts a fiber in `owner` that calls `f`, with a stack of `stack_bytes`
 /// bytes (D-659, D-660). Until the lifecycle work of M2 lands, it ends the
-/// program with a fatal runtime error. GAP(slice-std-subset).
+/// program with a fatal runtime error (D-754).
 @std_context
 @external(native, "cheby_fiber_sys_spawn_with_stack")
 @external(js, "./fiber.mjs", "sys_spawn_with_stack")
@@ -157,8 +194,8 @@ pub fn spawn_with_stack<T>(owner: Scope, stack_bytes: Int, f: fn() -> T) -> Fibe
 }
 
 /// Starts a detached fiber that calls `f` (D-669). Until the lifecycle
-/// work of M2 lands, it ends the program with a fatal runtime error.
-/// GAP(slice-std-subset).
+/// work of M2 lands, it ends the program with a fatal runtime error
+/// (D-754).
 @std_context
 @external(native, "cheby_fiber_sys_spawn_detached")
 @external(js, "./fiber.mjs", "sys_spawn_detached")
@@ -178,8 +215,7 @@ pub fn spawn_detached<T>(f: fn() -> T) {
 
 /// Waits until `fiber` has ended and returns its value. Panics with
 /// `joined fiber failed` when the fiber failed and the caller is not
-/// being cancelled with its scope (D-668, D-732).
-/// GAP(fiber-kernel-names).
+/// being cancelled with its scope (D-668, D-732, D-755).
 @std_context
 @external(native, "cheby_fiber_sys_join")
 @external(js, "./fiber.mjs", "sys_join")
@@ -203,6 +239,29 @@ test "join returns the fiber's value every time" {
   assert outcome == Ok(84)
 }
 
+test "joining a failed fiber from outside its scope panics" {
+  let (tx, rx) = channel::new::<Fiber<Never>>(1)
+  let (go_tx, go_rx) = channel::new::<Nil>(1)
+  let first = {
+    use owner <- scope()
+    let doomed = spawn(owner, fn() {
+      let _ = channel::receive(go_rx)
+      panic as "doomed"
+    })
+    let assert Ok(Nil) = channel::send(tx, doomed)
+    let assert Ok(Nil) = channel::send(go_tx, Nil)
+    Nil
+  }
+  let assert Err(_) = first
+  let assert Ok(doomed) = channel::receive(rx)
+  let second = {
+    use _scope <- scope()
+    join(doomed)
+  }
+  let assert Err(failure) = second
+  assert message(failure) == "joined fiber failed"
+}
+
 // Cancellation
 
 /// Calls `f` on the calling fiber, in a new scope, and cancels it if it
@@ -213,7 +272,7 @@ test "join returns the fiber's value every time" {
 /// zero or less has already passed, so `f` is not called (D-652).
 /// `timeout` releases `f` before it returns (D-670). Until the timers of
 /// M2 land, a positive `limit` ends the program with a fatal runtime
-/// error when the scope opens. GAP(slice-std-subset).
+/// error when the scope opens (D-754).
 pub fn timeout<T>(limit: duration::Duration, f: fn() -> T) -> Result<T, Timeout> {
   case duration::compare(limit, duration::zero) {
     Greater => {
@@ -245,12 +304,44 @@ pub fn message(failure: Panic) -> String {
   failure.message
 }
 
+test "message is the panic's message line" {
+  let outcome = {
+    use _scope <- scope()
+    todo as "later"
+  }
+  let assert Err(failure) = outcome
+  assert message(failure) == "not implemented: later"
+}
+
 /// Makes `Panic` satisfy `Show` (§8.8). The text is the panic report of
 /// §11.6 without its final line ending: `panicked at <location>:`, a line
 /// ending, and the message, so `main` returning `Err(p)` prints what the
 /// panic would have printed (§10.10, D-182, D-449, D-648).
 pub fn show(failure: Panic) -> String {
   string::join(["panicked at ", failure.location, ":\n", failure.message], "")
+}
+
+test "a panic shows like a panic report" {
+  let assert Err(failure) = {
+    use _scope <- scope()
+    panic as "boom"
+  }
+  let text = show(failure)
+  assert string::starts_with(text, "panicked at ")
+  assert string::ends_with(text, ":\nboom")
+  assert string::starts_with("{failure:?}", "Panic \{ message: \"boom\", location: \"")
+}
+
+test "panics compare by message and location" {
+  fn fail(text) {
+    let assert Err(failure) = {
+      use _scope <- scope()
+      panic as text
+    }
+    failure
+  }
+  assert fail("same") == fail("same")
+  assert fail("same") != fail("other")
 }
 
 // Tests of `std::channel` that need this module.

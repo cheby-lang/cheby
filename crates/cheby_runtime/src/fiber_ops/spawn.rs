@@ -17,8 +17,13 @@
 //! 4. takes a reference to `f` for the fiber;
 //! 5. creates the fiber on a slot of the default 8 MiB (D-125, D-677),
 //!    inheriting the spawner's domain, trampolines, hash seed, entry mode
-//!    and unwinding backend; a stack region that cannot be mapped gives
-//!    the slot back and panics with `out of memory` (D-677);
+//!    and unwind-edge setting (D-742); a stack region that cannot be
+//!    mapped gives the slot back and panics with `out of memory` (D-677);
+//!
+//! Every raise here happens with no lock held (plan §0 'Locks'): `join`
+//! and `leave` release the scope's lock before they return, and a raise
+//! takes the spawner's own responsible scope's lock to record its panic
+//! (D-666).
 //! 6. records the fiber in its slot and queues it to the worker's runnext
 //!    slot, so it runs when the spawner blocks (architecture §3.5).
 
@@ -138,8 +143,7 @@ unsafe fn spawn(ctx: *mut ExecCtx, owner: Word, function: Word, stack_size: usiz
 }
 
 /// `fiber::sys_spawn_with_stack`, private, which `fiber::spawn_with_stack`
-/// calls. GAP(slice-std-subset): a stub until package L1 (plan §7 UQ-2,
-/// answer (a)): it ends the program with
+/// calls. A stub until package L1 (D-754): it ends the program with
 /// `fatal runtime error: fiber::spawn_with_stack is not supported yet`.
 ///
 /// # Safety
@@ -160,8 +164,7 @@ pub unsafe extern "C" fn cheby_fiber_sys_spawn_with_stack(
 }
 
 /// `fiber::sys_spawn_detached`, private, which `fiber::spawn_detached`
-/// calls. GAP(slice-std-subset): a stub until package L1 (plan §7 UQ-2,
-/// answer (a)): it ends the program with
+/// calls. A stub until package L1 (D-754): it ends the program with
 /// `fatal runtime error: fiber::spawn_detached is not supported yet`.
 ///
 /// # Safety

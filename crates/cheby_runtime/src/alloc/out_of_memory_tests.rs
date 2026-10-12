@@ -111,14 +111,12 @@ fn pad_end(text: &str, width: i64, pad: &str) -> Word {
 }
 
 #[test]
-#[cfg_attr(miri, ignore = "parks a thread forever")]
 fn repeat_whose_size_overflows_64_bits() {
     // The skeptic's reproduction: 3 × 9e18 bytes cannot be counted.
     refused(|| repeat("abc", 9_000_000_000_000_000_000));
 }
 
 #[test]
-#[cfg_attr(miri, ignore = "parks a thread forever")]
 fn repeat_whose_object_size_overflows_64_bits() {
     // 2 × (2^63 - 1) bytes fit 64 bits, but the object with its header
     // does not.
@@ -126,14 +124,12 @@ fn repeat_whose_object_size_overflows_64_bits() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore = "parks a thread forever")]
 fn repeat_beyond_the_address_space() {
     // 8e18 bytes fit 64 bits but no allocation layout.
     refused(|| repeat("ab", 4_000_000_000_000_000_000));
 }
 
 #[test]
-#[cfg_attr(miri, ignore = "parks a thread forever")]
 fn repeat_the_system_refuses() {
     // 2^56 bytes have a layout, which the budget refuses during constant
     // evaluation and the system allocator refuses at run time: no 64-bit
@@ -142,14 +138,12 @@ fn repeat_the_system_refuses() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore = "parks a thread forever")]
 fn pad_start_whose_fill_overflows_64_bits() {
     // (2^63 - 2) copies of a 4-byte pad.
     refused(|| pad_start("x", i64::MAX, "😀"));
 }
 
 #[test]
-#[cfg_attr(miri, ignore = "parks a thread forever")]
 fn pad_start_whose_fill_and_text_overflow_64_bits() {
     // The fill of 2-byte code points fits 64 bits; adding the 16 bytes of
     // the text does not.
@@ -157,26 +151,22 @@ fn pad_start_whose_fill_and_text_overflow_64_bits() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore = "parks a thread forever")]
 fn pad_start_beyond_the_address_space() {
     refused(|| pad_start("x", i64::MAX, "ab"));
 }
 
 #[test]
-#[cfg_attr(miri, ignore = "parks a thread forever")]
 fn pad_end_whose_fill_overflows_64_bits() {
     refused(|| pad_end("x", i64::MAX, "😀"));
 }
 
 #[test]
-#[cfg_attr(miri, ignore = "parks a thread forever")]
 fn pad_end_whose_growth_overflows_64_bits() {
     // The fill fits 64 bits; growing the 16-byte text by it does not.
     refused(|| pad_end("😀😀😀😀", i64::MAX, "é"));
 }
 
 #[test]
-#[cfg_attr(miri, ignore = "parks a thread forever")]
 fn interpolation_buffer_beyond_the_address_space() {
     refused(|| {
         // SAFETY: the helper ignores `ctx` and takes any capacity.
@@ -185,14 +175,12 @@ fn interpolation_buffer_beyond_the_address_space() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore = "parks a thread forever")]
 fn text_objects_whose_size_overflows_64_bits() {
     refused(|| ptr_to_word(string::alloc_string(u64::MAX)));
     refused(|| ptr_to_word(string::alloc_bytes(u64::MAX - 7)));
 }
 
 #[test]
-#[cfg_attr(miri, ignore = "parks a thread forever")]
 fn raw_objects_that_cannot_be_allocated() {
     refused(|| ptr_to_word(alloc_object(u64::MAX, 0)));
     refused(|| ptr_to_word(alloc_object(1 << 63, 0)));
@@ -202,7 +190,6 @@ fn raw_objects_that_cannot_be_allocated() {
 /// memory-limit error, which raising the limit would not cure, but the
 /// `out of memory` panic, E0075 for a constant (D-642).
 #[test]
-#[cfg_attr(miri, ignore = "parks a thread forever")]
 fn a_refusal_under_the_limit_panics() {
     let table = ConstTable::new();
     let limits = ConstEvalLimits {
@@ -222,7 +209,6 @@ fn a_refusal_under_the_limit_panics() {
 /// A scratch buffer of the runtime's walks: its growth counts against the
 /// memory limit, and a growth the system refuses panics.
 #[test]
-#[cfg_attr(miri, ignore = "parks a thread forever")]
 fn scratch_buffers_that_cannot_grow() {
     refused(|| {
         let mut items = ScratchVec::<u64>::new();
@@ -263,7 +249,6 @@ fn debug_of_shared_values() -> Word {
 /// against the memory limit, although the domain does not count it, so
 /// text far larger than the values it prints stops at the limit.
 #[test]
-#[cfg_attr(miri, ignore = "parks a thread forever")]
 fn the_debug_arena_counts_against_the_memory_limit() {
     let table = ConstTable::new();
     let limits = ConstEvalLimits {

@@ -1,24 +1,27 @@
 //! Tests of the fiber and channel runtime (D-666, D-670, D-672, D-674,
-//! D-677, D-692 to D-694, D-704, D-705, D-707): Rust-level fibers on a
-//! `Runtime`, no JIT. Poisoning is on (the crate's tests default), and
-//! every test that does not panic finds its domain's live count at zero
-//! once its runtime has stopped.
+//! D-677, D-692 to D-694, D-699, D-701, D-704, D-705, D-707): Rust-level
+//! fibers on a `Runtime`, no JIT, with the return flag (D-733). Poisoning
+//! is on (the crate's tests default), and every test that does not panic
+//! finds its domain's live count at zero once its runtime has stopped.
 //!
 //! Spawned functions are test closures whose first capture is an
 //! operation code that the test trampoline [`t0`] interprets, in place of
-//! the generated `cb$tramp$0`.
+//! the generated `cb$tramp$0`. A test body that raises acts as generated
+//! code does: it returns, or clears the flag where `scope_run`'s pad
+//! would ([`close_unwound`]).
 
 use std::ptr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-use super::base::{FiberHandle, Outcome};
+use super::base::{FiberHandle, JoinCell, Outcome};
 use super::channel::{SenderEnd, cheby_channel_new, cheby_channel_receive, cheby_channel_send};
 use super::join::cheby_fiber_sys_join;
 use super::scope::{
     ScopeHandle, cheby_fiber_take_failure, cheby_rt_scope_close, cheby_rt_scope_open,
 };
 use super::spawn::cheby_fiber_sys_spawn;
-use crate::abi::{PanicKind, UnwindBackend, Word};
+use crate::abi::{PanicKind, Word};
 use crate::alloc::Domain;
 use crate::ctx::ExecCtx;
 use crate::entry::{Callbacks, EntryConfig, EntryMode, EntryOutcome, run_entry};
@@ -58,7 +61,27 @@ mod op {
     /// more (D-536), so that marking the result shared raises; returns the
     /// string.
     pub(super) const MAKE_EXHAUSTED: i64 = 9;
+    /// `[op, message, location]`: panics with the `String`s `message` at
+    /// `location`, as generated code's `panic as` does.
+    pub(super) const PANIC_WITH: i64 = 10;
+    /// `[op, rx, message, location]`: receives on `rx`, then panics as
+    /// `PANIC_WITH` does.
+    pub(super) const RECEIVE_THEN_PANIC: i64 = 11;
+    /// `[op]`: overflows the stack, as a large function's entry check
+    /// would, and stores the bytes of stack the raise path used in
+    /// [`super::OVERFLOW_STACK_USED`].
+    pub(super) const OVERFLOW: i64 = 12;
+    /// `[op, scope]`: spawns a `RETURN` of 1 into `scope` and returns the
+    /// `Fiber`.
+    pub(super) const SPAWN_INTO: i64 = 13;
+    /// `[op, message, location]`: opens a scope of its own, spawns a
+    /// `PANIC_WITH` into it, closes it, and returns the message of the
+    /// scope's failure, or `"no failure"`.
+    pub(super) const NESTED_PANIC: i64 = 14;
 }
+
+/// The stack the raise path of the last `OVERFLOW` used, in bytes.
+static OVERFLOW_STACK_USED: AtomicUsize = AtomicUsize::new(0);
 
 /// Lets the fiber `me` allocate at most `extra` more bytes, scratch
 /// included (D-536).
@@ -141,6 +164,45 @@ unsafe extern "C" fn t0(ctx: *mut ExecCtx, function: u64) -> u64 {
                 limit_to(me, 0);
                 made
             }
+            op::PANIC_WITH => {
+                cheby_rt_panic(ctx, PanicKind::Explicit.code(), word(1), word(2));
+                0
+            }
+            op::RECEIVE_THEN_PANIC => {
+                rc::drop(cheby_channel_receive(ctx, word(1)));
+                cheby_rt_panic(ctx, PanicKind::Explicit.code(), word(2), word(3));
+                0
+            }
+            op::OVERFLOW => {
+                let used = stack_used(|| {
+                    // SAFETY: the running fiber's block; no location. The
+                    // frame size makes the check fail whatever the depth.
+                    crate::panic::cheby_rt_stack_slow_frame(ctx, 0, u64::MAX);
+                });
+                OVERFLOW_STACK_USED.store(used, Ordering::SeqCst);
+                0
+            }
+            op::SPAWN_INTO => {
+                let inner = closure(&[values::int_word(op::RETURN), values::int_word(1)]);
+                let fiber = cheby_fiber_sys_spawn(ctx, word(1), inner);
+                rc::drop(inner);
+                fiber
+            }
+            op::NESTED_PANIC => {
+                let scope = open(me);
+                let fiber = spawn(
+                    me,
+                    scope,
+                    &[values::int_word(op::PANIC_WITH), dup(word(1)), dup(word(2))],
+                );
+                drop_word(fiber);
+                if close(me, scope) {
+                    values::string("no failure")
+                } else {
+                    let (_, message, _) = failure_of(me);
+                    values::string(&message)
+                }
+            }
             _ => values::nil(),
         }
     }
@@ -166,19 +228,19 @@ fn outcome(
     threads: usize,
     body: impl FnOnce(&ExecCtx) -> u64 + Send + 'static,
 ) -> (EntryOutcome, Arc<Domain>) {
-    outcome_with(threads, UnwindBackend::Off, body)
+    outcome_with(threads, EntryMode::Test, body)
 }
 
-/// [`outcome`] for code compiled for the unwinding backend `backend`.
+/// [`outcome`] for an entry of `mode`.
 fn outcome_with(
     threads: usize,
-    backend: UnwindBackend,
+    mode: EntryMode,
     body: impl FnOnce(&ExecCtx) -> u64 + Send + 'static,
 ) -> (EntryOutcome, Arc<Domain>) {
     let runtime = testing::runtime(threads);
     let domain = Domain::new();
     let config = EntryConfig {
-        unwind: backend,
+        mode,
         ..config(&domain)
     };
     let outcome = testing::start_root_with(&runtime, &config, body)
@@ -250,6 +312,94 @@ fn open(me: &ExecCtx) -> Word {
 fn close(me: &ExecCtx, scope: Word) -> bool {
     // SAFETY: the running fiber's context and the handle its open gave.
     unsafe { cheby_rt_scope_close(ctx_of(me), scope, false) }
+}
+
+/// Closes a scope whose body unwound, as `scope_run`'s pad does: clears
+/// the flag, then closes with `unwound`, consuming the handle.
+fn close_unwound(me: &ExecCtx, scope: Word) -> bool {
+    assert_ne!(
+        me.unwind.load(Ordering::Acquire),
+        0,
+        "the body is not unwinding"
+    );
+    crate::unwind::flag::clear(me);
+    // SAFETY: the running fiber's context and the handle its open gave.
+    unsafe { cheby_rt_scope_close(ctx_of(me), scope, true) }
+}
+
+/// `take_failure` after a scope failed: its kind, message and location.
+fn failure_of(me: &ExecCtx) -> (i64, String, String) {
+    // SAFETY: the running fiber's context, right after a failed close.
+    let failure = unsafe { cheby_fiber_take_failure(ctx_of(me)) };
+    // SAFETY: a live tuple.
+    let parts = unsafe { values::read_tuple(failure) };
+    let taken = (int(parts[0]), text(parts[1]), text(parts[2]));
+    drop_word(failure);
+    taken
+}
+
+/// The join cell of a borrowed `Fiber` handle.
+fn cell_of(fiber: Word) -> Arc<JoinCell> {
+    // SAFETY: a live `Fiber` handle, borrowed.
+    Arc::clone(&unsafe { handles::payload::<FiberHandle>(fiber, HandleKind::Fiber) }.0)
+}
+
+/// Waits, yielding, until the fiber of `cell` has ended with `Failed`.
+fn wait_until_failed(me: &ExecCtx, cell: &JoinCell) {
+    for _ in 0..1_000_000 {
+        if cell.outcome() == Outcome::Failed {
+            return;
+        }
+        yield_now(me, 1);
+    }
+    panic!("the fiber never failed");
+}
+
+/// A fresh `String`, owned.
+fn string(text: &str) -> Word {
+    values::string(text)
+}
+
+/// The byte a painted stack holds where nothing has written.
+const PAINT: u8 = 0xA5;
+/// How much stack below the measuring frame is painted.
+const PAINTED: usize = 128 << 10;
+/// The most stack the raise path may use (D-700), as `unwind::tests`
+/// bounds it.
+const RAISE_BOUND: usize = 32 << 10;
+
+/// Paints `PAINTED` bytes of the stack below the caller's frame and
+/// returns their addresses (as `unwind::tests` measures the raise path).
+#[inline(never)]
+fn paint() -> std::ops::Range<usize> {
+    #[expect(
+        clippy::large_stack_arrays,
+        reason = "the test paints the stack on purpose"
+    )]
+    let mut area = [PAINT; PAINTED];
+    std::hint::black_box(&mut area);
+    let start = area.as_mut_ptr().expose_provenance();
+    start..start.saturating_add(PAINTED)
+}
+
+/// The bytes of stack that `raise` used: from the measuring frame down to
+/// the lowest painted byte it overwrote.
+#[inline(never)]
+fn stack_used(raise: impl FnOnce()) -> usize {
+    let top = crate::panic::stack_position();
+    let area = paint();
+    raise();
+    let lowest = area
+        .clone()
+        .find(|&at| {
+            let byte = std::ptr::with_exposed_provenance::<u8>(at);
+            // SAFETY: the painted bytes lie in this thread's stack, below
+            // the current frame, mapped and no longer used.
+            let value = unsafe { byte.read_volatile() };
+            value != PAINT
+        })
+        .unwrap_or(area.end);
+    top.saturating_sub(lowest)
 }
 
 /// Spawns a test closure with `captures` (an operation code first, each
@@ -722,8 +872,7 @@ fn a_stack_that_cannot_be_mapped_makes_spawn_panic() {
     assert_eq!(report.message, "out of memory");
 }
 
-/// The handle of a fiber that failed, owned. In the slice no fiber fails
-/// without ending the process, so the cell is failed by hand.
+/// The handle of a fiber that failed, owned, with its cell failed by hand.
 fn failed_fiber(me: &ExecCtx) -> Word {
     let cell = Arc::new(super::base::JoinCell::default());
     assert_eq!(cell.finish(Outcome::Failed), None);
@@ -747,34 +896,31 @@ fn joining_a_failed_fiber_panics() {
     assert_eq!(report.location, "<unknown location>");
 }
 
-/// Architecture §5.3 under the flag backend: a kernel that raises in the
-/// body returns with the flag set; after `scope_run`'s pad clears it,
-/// `scope_close(_, true)` takes U3's record as the scope's first cause,
-/// returns false and leaves the cause for `take_failure`.
+/// Architecture §5.3, D-666: a kernel that raises in the body returns with
+/// the flag set, and the panic is recorded in the scope when it starts;
+/// after `scope_run`'s pad clears the flag, `scope_close(_, true)` takes
+/// the record, returns false and leaves the cause for `take_failure`.
 #[test]
 #[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
-fn under_the_flag_backend_a_scope_takes_its_bodys_panic() {
-    let (outcome, domain) = outcome_with(1, UnwindBackend::Flag, |me| {
+fn a_scope_takes_its_bodys_panic() {
+    let (outcome, domain) = outcome(1, |me| {
         let scope = open(me);
         let fiber = failed_fiber(me);
         // SAFETY: the running fiber's context and a live `Fiber`.
         let joined = unsafe { cheby_fiber_sys_join(ctx_of(me), fiber) };
         assert_eq!(joined, 0);
-        assert_ne!(me.unwind.load(std::sync::atomic::Ordering::Acquire), 0);
         drop_word(fiber);
-        // The pad's `clear_unwind`.
-        crate::unwind::flag::clear(me);
-        // SAFETY: the running fiber's context and its scope's handle.
-        assert!(!unsafe { cheby_rt_scope_close(ctx_of(me), scope, true) });
+        assert!(!close_unwound(me, scope));
         assert_eq!(me.conc.open_scope_count(), 0);
-        // SAFETY: the running fiber's context.
-        let failure = unsafe { cheby_fiber_take_failure(ctx_of(me)) };
-        // SAFETY: a live tuple.
-        let parts = unsafe { values::read_tuple(failure) };
-        assert_eq!(int(parts[0]), 0);
-        assert_eq!(text(parts[1]), "joined fiber failed");
-        assert_eq!(text(parts[2]), "<unknown location>");
-        drop_word(failure);
+        assert!(!crate::unwind::record::unwinding(me));
+        assert_eq!(
+            failure_of(me),
+            (
+                0,
+                "joined fiber failed".to_owned(),
+                "<unknown location>".to_owned()
+            )
+        );
         7
     });
     assert_eq!(outcome, EntryOutcome::Returned(7));
@@ -782,11 +928,12 @@ fn under_the_flag_backend_a_scope_takes_its_bodys_panic() {
 }
 
 /// D-699, D-701 at the root runner: a root whose code unwound out of its
-/// thunk reports `Panicked` from the record, whatever word it returned.
+/// thunk reports `Panicked` from the record, whatever word it returned. A
+/// root outside every scope records its panic in no scope.
 #[test]
 #[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
-fn under_the_flag_backend_a_root_that_unwound_panicked() {
-    let (outcome, domain) = outcome_with(2, UnwindBackend::Flag, |me| {
+fn a_root_that_unwound_panicked() {
+    let (outcome, domain) = outcome(2, |me| {
         let fiber = failed_fiber(me);
         // SAFETY: the running fiber's context and a live `Fiber`.
         let joined = unsafe { cheby_fiber_sys_join(ctx_of(me), fiber) };
@@ -800,83 +947,64 @@ fn under_the_flag_backend_a_root_that_unwound_panicked() {
     assert_eq!(domain.live_objects(), 0);
 }
 
-/// GAP(interim-panics) under the flag backend: `fiber_main` takes the
-/// record of a spawned function that unwound, and a panic ends the process
-/// with the interim's fatal error until U4. Runs itself in a child process.
+/// D-666 (rewritten from the interim's "fatal for now" test): `fiber_main`
+/// takes the record of a spawned function that unwound and drops it; the
+/// panic was recorded in the fiber's scope when it started, so the scope
+/// fails with it, the fiber's join cell is `Failed`, and the process goes
+/// on.
 #[test]
 #[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
-fn under_the_flag_backend_a_spawned_fibers_panic_is_fatal_for_now() {
-    const CHILD: &str = "CHEBY_RT_TEST_FLAG_CHILD_PANIC";
-    const NAME: &str =
-        "fiber_ops::tests::under_the_flag_backend_a_spawned_fibers_panic_is_fatal_for_now";
-    if std::env::var_os(CHILD).is_some() {
-        let (outcome, _) = outcome_with(2, UnwindBackend::Flag, |me| {
-            let scope = open(me);
-            let fiber = spawn(me, scope, &[values::int_word(op::PANIC)]);
-            drop_word(fiber);
-            u64::from(close(me, scope))
-        });
-        panic!("the root ended: {outcome:?}");
-    }
-    let out = std::process::Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", NAME, "--nocapture", "--test-threads=1"])
-        .env(CHILD, "1")
-        .output()
-        .unwrap();
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(!out.status.success(), "{stderr}");
-    assert!(
-        stderr.contains(
-            "fatal runtime error: a fiber panicked (unwinding arrives with package U4)\n"
-        ),
-        "{stderr}"
-    );
+fn a_spawned_fibers_panic_is_its_scopes_cause() {
+    let (outcome, domain) = outcome(2, |me| {
+        let scope = open(me);
+        let fiber = spawn(me, scope, &[values::int_word(op::PANIC)]);
+        let cell = cell_of(fiber);
+        drop_word(fiber);
+        assert!(!close(me, scope));
+        assert_eq!(cell.outcome(), Outcome::Failed);
+        let (kind, message, location) = failure_of(me);
+        assert_eq!(kind, 0);
+        assert_eq!(message, PanicKind::Explicit.default_message());
+        assert_eq!(location, "<unknown location>");
+        3
+    });
+    assert_eq!(outcome, EntryOutcome::Returned(3));
+    assert_eq!(domain.live_objects(), 0);
 }
 
-/// Review finding MEM-1 under the flag backend: when marking a fiber's
-/// result shared raises out of memory (here the memory limit, which takes
-/// the same path), `fiber_main` catches it, so the raise does not unwind
-/// into the fiber's `extern "C"` start function, which aborts; the fiber
-/// ends with the panic, the interim's fatal error until U4. Runs itself in
-/// a child process.
+/// Review finding MEM-1 and D-666 (rewritten from the interim's test):
+/// when marking a fiber's result shared raises out of memory (here the
+/// memory limit, which takes the same path), `fiber_main` catches it, so
+/// the raise does not unwind into the fiber's `extern "C"` start function;
+/// the fiber has no scope open by then, so the panic is recorded in the
+/// scope it was spawned into, which fails with it.
 #[test]
 #[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
-fn under_the_flag_backend_a_raise_marking_a_fibers_result_is_its_panic() {
-    const CHILD: &str = "CHEBY_RT_TEST_FLAG_CHILD_RESULT";
-    const NAME: &str =
-        "fiber_ops::tests::under_the_flag_backend_a_raise_marking_a_fibers_result_is_its_panic";
-    if std::env::var_os(CHILD).is_some() {
-        let (outcome, _) = outcome_with(1, UnwindBackend::Flag, |me| {
-            let scope = open(me);
-            let fiber = spawn(me, scope, &[values::int_word(op::MAKE_EXHAUSTED)]);
-            drop_word(fiber);
-            u64::from(close(me, scope))
-        });
-        panic!("the root ended: {outcome:?}");
-    }
-    let out = std::process::Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", NAME, "--nocapture", "--test-threads=1"])
-        .env(CHILD, "1")
-        .output()
-        .unwrap();
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(!out.status.success(), "{stderr}");
-    assert!(
-        stderr.contains(
-            "fatal runtime error: a fiber panicked (unwinding arrives with package U4)\n"
-        ),
-        "{stderr}"
-    );
+fn a_raise_marking_a_fibers_result_fails_its_scope() {
+    let (outcome, domain) = outcome(1, |me| {
+        let scope = open(me);
+        let fiber = spawn(me, scope, &[values::int_word(op::MAKE_EXHAUSTED)]);
+        let cell = cell_of(fiber);
+        drop_word(fiber);
+        assert!(!close(me, scope));
+        assert_eq!(cell.outcome(), Outcome::Failed);
+        let (_, message, _) = failure_of(me);
+        assert_eq!(message, crate::consteval::Limit::Memory.message());
+        4
+    });
+    assert_eq!(outcome, EntryOutcome::Returned(4));
+    assert_eq!(domain.live_objects(), 0);
 }
 
-/// Review finding MEM-1 under the flag backend: `spawn` marks its function
-/// shared before it reserves a member slot, so when the marking raises out
-/// of memory the scope does not wait for a fiber that never existed: it
-/// closes, and the program goes on.
+/// Review finding MEM-1: `spawn` marks its function shared before it
+/// reserves a member slot, so when the marking raises out of memory the
+/// scope does not wait for a fiber that never existed: it closes, and the
+/// program goes on. The raise is the body's panic, recorded in the scope
+/// when it started (D-666), so the scope fails with it.
 #[test]
 #[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
-fn under_the_flag_backend_a_spawn_whose_marking_raises_leaves_no_member() {
-    let (outcome, domain) = outcome_with(1, UnwindBackend::Flag, |me| {
+fn a_spawn_whose_marking_raises_leaves_no_member() {
+    let (outcome, domain) = outcome(1, |me| {
         let scope = open(me);
         let function = closure(&[values::int_word(op::RETURN), values::int_word(1)]);
         // Room for the `Fiber` handle, not for the walk's worklist.
@@ -885,16 +1013,297 @@ fn under_the_flag_backend_a_spawn_whose_marking_raises_leaves_no_member() {
         let fiber = unsafe { cheby_fiber_sys_spawn(ctx_of(me), scope, function) };
         me.set_budget(u64::MAX);
         assert_eq!(fiber, 0);
-        assert_ne!(me.unwind.load(std::sync::atomic::Ordering::Acquire), 0);
-        let report = match crate::unwind::record::take_unwound(me) {
-            Some(crate::unwind::record::UnwindRecord::Panic(report)) => report,
-            other => panic!("no panic: {other:?}"),
-        };
-        assert_eq!(report.message, crate::consteval::Limit::Memory.message());
         drop_word(function);
-        u64::from(close(me, scope))
+        assert!(!close_unwound(me, scope));
+        let (_, message, _) = failure_of(me);
+        assert_eq!(message, crate::consteval::Limit::Memory.message());
+        1
     });
     assert_eq!(outcome, EntryOutcome::Returned(1));
+    assert_eq!(domain.live_objects(), 0);
+}
+
+/// The child side of [`a_members_panic_is_the_scopes_err_and_is_not_printed`]
+/// in an entry of mode `Run`, which prints the panics that reach its catch
+/// point: does nothing unless `CHEBY_RT_TEST_MEMBER_PANIC` is set. Prints
+/// what the scope reported to standard output.
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+fn member_panic_child() {
+    if std::env::var_os("CHEBY_RT_TEST_MEMBER_PANIC").is_none() {
+        return;
+    }
+    let (outcome, domain) = outcome_with(2, EntryMode::Run, |me| {
+        let scope = open(me);
+        let fiber = spawn(
+            me,
+            scope,
+            &[
+                values::int_word(op::PANIC_WITH),
+                string("a member failed"),
+                string("src/member.cheby:3:5"),
+            ],
+        );
+        let cell = cell_of(fiber);
+        drop_word(fiber);
+        assert!(!close(me, scope));
+        assert_eq!(cell.outcome(), Outcome::Failed);
+        let (kind, message, location) = failure_of(me);
+        println!("scope failure: {kind} {message} at {location}");
+        5
+    });
+    assert_eq!(outcome, EntryOutcome::Returned(5));
+    assert_eq!(domain.live_objects(), 0, "objects leaked");
+    println!("live objects: 0");
+}
+
+/// D-666, D-699, D-701: a member's panic is its scope's `Err`, with its
+/// message and location; nothing is printed, even in an entry that prints
+/// the panics reaching its catch point; the member's join cell is `Failed`;
+/// nothing leaks. Runs [`member_panic_child`] in a child process to see
+/// its standard error.
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+#[cfg_attr(miri, ignore = "starts a process")]
+fn a_members_panic_is_the_scopes_err_and_is_not_printed() {
+    let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "fiber_ops::tests::member_panic_child",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env("CHEBY_RT_TEST_MEMBER_PANIC", "1")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stdout}\n{stderr}");
+    assert!(
+        stdout.contains("scope failure: 0 a member failed at src/member.cheby:3:5\n"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("live objects: 0\n"), "{stdout}");
+    assert!(!stderr.contains("panicked"), "{stderr}");
+    assert!(!stderr.contains("a member failed"), "{stderr}");
+    assert!(!stderr.contains("fatal runtime error"), "{stderr}");
+}
+
+/// D-666: the first panic by start is the cause, not the first to end. A
+/// member panics and ends while the body runs, then the body panics: the
+/// member's panic is the scope's `Err`.
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+fn the_first_panic_by_start_wins() {
+    for threads in [1, 2] {
+        let (outcome, domain) = outcome(threads, |me| {
+            let scope = open(me);
+            let fiber = spawn(
+                me,
+                scope,
+                &[
+                    values::int_word(op::PANIC_WITH),
+                    string("the member's"),
+                    string("src/member.cheby:1:1"),
+                ],
+            );
+            let cell = cell_of(fiber);
+            drop_word(fiber);
+            wait_until_failed(me, &cell);
+            let (message, location) = (string("the body's"), string("src/body.cheby:2:2"));
+            // SAFETY: the running fiber's context and live `String`s.
+            unsafe { cheby_rt_panic(ctx_of(me), PanicKind::Explicit.code(), message, location) };
+            drop_word(message);
+            drop_word(location);
+            assert!(!close_unwound(me, scope));
+            let (_, message, location) = failure_of(me);
+            assert_eq!(
+                (message.as_str(), location.as_str()),
+                ("the member's", "src/member.cheby:1:1")
+            );
+            0
+        });
+        assert_eq!(outcome, EntryOutcome::Returned(0));
+        assert_eq!(domain.live_objects(), 0);
+    }
+}
+
+/// D-666, D-699, spec §10.3 item 3: a root's body inside `scope` records
+/// its panic in that scope when it starts, like a member. The body panics
+/// while a member still runs; its unwinding releases the channel's only
+/// `Sender`, which ends the member's wait, and the member panics after the
+/// body's panic started: the scope's `Err` carries the body's message and
+/// location, although the body's close ends last.
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+fn body_panic_first_wins_over_a_later_member_panic() {
+    for threads in [1, 2] {
+        let (outcome, domain) = outcome(threads, |me| {
+            let (tx, rx) = channel(me, 0);
+            let scope = open(me);
+            let fiber = spawn(
+                me,
+                scope,
+                &[
+                    values::int_word(op::RECEIVE_THEN_PANIC),
+                    rx,
+                    string("the member's"),
+                    string("src/member.cheby:1:1"),
+                ],
+            );
+            let cell = cell_of(fiber);
+            drop_word(fiber);
+            let (message, location) = (string("the body's"), string("src/body.cheby:2:2"));
+            // SAFETY: the running fiber's context and live `String`s.
+            unsafe { cheby_rt_panic(ctx_of(me), PanicKind::Explicit.code(), message, location) };
+            drop_word(message);
+            drop_word(location);
+            // The body's cleanup pads: the `Sender` goes, which wakes the
+            // member with `Err(Nil)`.
+            drop_word(tx);
+            assert!(!close_unwound(me, scope));
+            assert_eq!(cell.outcome(), Outcome::Failed);
+            let (_, message, location) = failure_of(me);
+            assert_eq!(
+                (message.as_str(), location.as_str()),
+                ("the body's", "src/body.cheby:2:2")
+            );
+            0
+        });
+        assert_eq!(outcome, EntryOutcome::Returned(0));
+        assert_eq!(domain.live_objects(), 0);
+    }
+}
+
+/// D-666, D-700: a member that overflows its stack records the overflow in
+/// its scope at the start of the raise, and the raise path, the scope's
+/// lock and the copy of the report included, stays within the 32 KiB that
+/// `unwind::tests` bounds it to. The scope's `Err` is `stack overflow`.
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+#[cfg_attr(miri, ignore = "reads the stack below the current frame")]
+fn overflow_in_a_member_is_recorded_within_the_raise_bound() {
+    let (outcome, domain) = outcome(2, |me| {
+        let scope = open(me);
+        let fiber = spawn(me, scope, &[values::int_word(op::OVERFLOW)]);
+        let cell = cell_of(fiber);
+        drop_word(fiber);
+        assert!(!close(me, scope));
+        assert_eq!(cell.outcome(), Outcome::Failed);
+        let (kind, message, location) = failure_of(me);
+        assert_eq!((kind, message.as_str()), (0, "stack overflow"));
+        assert_eq!(location, "<unknown location>");
+        0
+    });
+    assert_eq!(outcome, EntryOutcome::Returned(0));
+    assert_eq!(domain.live_objects(), 0);
+    let used = OVERFLOW_STACK_USED.load(Ordering::SeqCst);
+    // For the report.
+    eprintln!("raise path stack in a member: stack overflow {used} bytes");
+    assert!(used > 0, "nothing was measured");
+    assert!(
+        used <= RAISE_BOUND,
+        "the raise path used {used} bytes of stack"
+    );
+}
+
+/// D-666, plan §0 'Locks': a member that spawns into an ended scope raises
+/// after the ended scope's lock is released, and its panic is recorded in
+/// its own scope, which has other members, without holding another lock:
+/// no deadlock, and the scope fails with `spawn into a scope that has
+/// ended`.
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+fn spawn_into_an_ended_scope_raises_while_the_spawners_scope_has_members() {
+    for threads in [1, 2] {
+        let (outcome, domain) = outcome(threads, |me| {
+            let ended = open(me);
+            let kept = dup(ended);
+            assert!(close(me, ended));
+            let (tx, rx) = channel(me, 0);
+            let scope = open(me);
+            let waiting = spawn(me, scope, &[values::int_word(op::RECEIVE), rx]);
+            let spawner = spawn(me, scope, &[values::int_word(op::SPAWN_INTO), kept]);
+            let cell = cell_of(spawner);
+            wait_until_failed(me, &cell);
+            // The scope still waits for `waiting`; let it return.
+            assert_eq!(send(me, tx, values::int_word(9)), Ok(values::nil()));
+            assert!(!close(me, scope));
+            let (_, message, location) = failure_of(me);
+            assert_eq!(message, "spawn into a scope that has ended");
+            assert_eq!(location, "<unknown location>");
+            for word in [waiting, spawner, tx] {
+                drop_word(word);
+            }
+            0
+        });
+        assert_eq!(outcome, EntryOutcome::Returned(0));
+        assert_eq!(domain.live_objects(), 0);
+    }
+}
+
+/// D-666, spec §10.3: a scope nested in a member keeps the panic of its own
+/// member to itself: the inner scope fails, the member that opened it
+/// returns, and the outer scope succeeds.
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+fn a_nested_scope_keeps_a_members_panic_to_itself() {
+    for threads in [1, 2] {
+        let (outcome, domain) = outcome(threads, |me| {
+            let scope = open(me);
+            let fiber = spawn(
+                me,
+                scope,
+                &[
+                    values::int_word(op::NESTED_PANIC),
+                    string("inner"),
+                    string("src/inner.cheby:4:4"),
+                ],
+            );
+            // SAFETY: the running fiber's context and a live `Fiber`.
+            let value = unsafe { cheby_fiber_sys_join(ctx_of(me), fiber) };
+            assert_eq!(text(value), "inner");
+            drop_word(value);
+            drop_word(fiber);
+            assert!(close(me, scope));
+            0
+        });
+        assert_eq!(outcome, EntryOutcome::Returned(0));
+        assert_eq!(domain.live_objects(), 0);
+    }
+}
+
+/// D-699, ADR-0029: a panic that starts while the fiber is already
+/// unwinding is dropped and recorded nowhere, not even in a scope that has
+/// no cause yet.
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+fn a_panic_while_unwinding_is_recorded_nowhere() {
+    let (outcome, domain) = outcome(1, |me| {
+        let outer = open(me);
+        crate::unwind::record::start_panic(
+            me,
+            crate::panic::PanicReport::new(PanicKind::Explicit, Some("first"), "a:1:1"),
+        );
+        let inner = open(me);
+        crate::unwind::record::start_panic(
+            me,
+            crate::panic::PanicReport::new(PanicKind::Explicit, Some("second"), "b:2:2"),
+        );
+        // The inner scope has no cause: it succeeds.
+        assert!(close(me, inner));
+        match crate::unwind::record::take_unwound(me) {
+            Some(crate::unwind::record::UnwindRecord::Panic(report)) => {
+                assert_eq!(report.message, "first");
+            }
+            other => panic!("no panic: {other:?}"),
+        }
+        assert!(!close(me, outer));
+        let (_, message, _) = failure_of(me);
+        assert_eq!(message, "first");
+        0
+    });
+    assert_eq!(outcome, EntryOutcome::Returned(0));
     assert_eq!(domain.live_objects(), 0);
 }
 

@@ -18,8 +18,9 @@
 //!    the same signature takes over the old slot, another gets a new one.
 //! 4. New constants are evaluated (E6); the body runs on its own stack as
 //!    the root of its entry (§13.5.4, D-457, `EntryMode::Repl`). A panic is
-//!    printed by the runtime and abandons the entry (D-283); no leak check
-//!    runs (D-458).
+//!    printed by the runtime, and the entry unwinds by the return flag: its
+//!    pads release what its frames held and its thread ends (D-712,
+//!    D-733). No leak check runs (D-458).
 //! 5. The value of a final expression prints as `<debug text> : <type>`,
 //!    nothing for `Nil` (D-546); the values of the entry's `let`s go in
 //!    their slots (D-547). Only then is the entry committed: its names
@@ -230,11 +231,11 @@ impl Session {
     /// An [`Error`] for failures that are not diagnostics, among them an
     /// invalid setting in the environment: `CHEBY_THREADS` (D-658), which
     /// the REPL checks although its entries run isolated (D-713), and the
-    /// compiler's `CHEBY_RC`, `CHEBY_UNWIND` and `CHEBY_UNWIND_EDGES`.
+    /// compiler's `CHEBY_RC` and `CHEBY_UNWIND_EDGES`.
     pub fn start(dir: &Path, options: SessionOptions) -> Result<Start, Error> {
         cheby_runtime::sched::threads_from_env().map_err(|e| Error::new(e.to_string()))?;
         let mir = crate::backend::mir_options_from_env()?;
-        let codegen = crate::backend::codegen_options_from_env(false)?;
+        let codegen = crate::backend::codegen_options(mir, false);
         let mut sources = SourceMap::new();
         let mut diagnostics = Vec::new();
         let root = find_package_root(dir);
@@ -743,8 +744,12 @@ impl Session {
         let Some(body) = &checked.body else {
             return Ok(true);
         };
+        // The entry carries whether the session's code has unwind edges
+        // (D-742): under `CHEBY_UNWIND_EDGES=off` a raise ends the process
+        // with its report (GAP(edgeless-panics)).
         let config = EntryConfig {
             stack_size: cheby_runtime::entry::DEFAULT_ROOT_STACK_SIZE,
+            unwind_edges: self.jit.unwind_edges(),
             ..EntryConfig::new(EntryMode::Repl)
         };
         let outcome = self
@@ -754,7 +759,8 @@ impl Session {
         let word = match outcome {
             EntryOutcome::Returned(word) => word,
             // The runtime printed the report after flushing standard output;
-            // the entry's objects are abandoned with its stack (D-283).
+            // the entry unwound by the return flag, its pads released what
+            // its frames held, and its thread ended (D-712, D-733).
             EntryOutcome::Panicked(_) => {
                 self.jit.revert_repoints()?;
                 return Ok(false);

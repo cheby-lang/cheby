@@ -16,10 +16,10 @@ use crate::unwind::raise::raise_panic;
 /// owned, the same value on every call by any fiber (D-668, D-707).
 ///
 /// If the fiber failed, a joiner that is being cancelled unwinds, which
-/// package U5 brings; any other joiner panics with `joined fiber failed`,
-/// at `<unknown location>` (D-668, D-732). In the slice no fiber can fail
-/// without ending the process (GAP(interim-panics)), but the rule is here.
-/// Without a runtime, waiting ends the program (D-692).
+/// package U5 brings; until then every joiner of a failed fiber panics with
+/// `joined fiber failed`, at `<unknown location>` (D-668, D-732), raised
+/// after the join cell's lock is released. Without a runtime, waiting ends
+/// the program (D-692).
 ///
 /// # Safety
 ///

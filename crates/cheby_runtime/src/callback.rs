@@ -6,19 +6,13 @@
 //! right arity (`cb$tramp$<n>`, C ABI: `u64 (ctx*, u64 closure, u64 a0,
 //! …)`) with the entry's context.
 //!
-//! A panic inside the closure: with the default backend, it abandons the
-//! entry like any other panic (D-457), and no Rust frame of the kernel
-//! ever runs again. With an unwinding backend, the trampoline is a catch
-//! point (D-699) that returns while the fiber unwinds; [`call`] then
-//! rethrows the `ChebyUnwind` marker, so the kernel's own frames unwind
-//! with their `Drop`s to the kernel's guard, which hands the unwinding
-//! back to generated code (D-697). A kernel must not hold an owned word
-//! across the call without a drop guard (`map::upsert` has one).
-//!
-//! [`call`] also saves the fiber's `try_call` exit record (FCB offsets 16
-//! and 24) around the trampoline and restores it before it returns or
-//! rethrows, so a throw from the kernel's guard starts from the kernel's
-//! caller, not from the closure's finished frames (plan §4.2).
+//! A panic inside the closure: the trampoline is a catch point (D-699)
+//! that returns while the fiber unwinds; [`call`] then rethrows the
+//! `ChebyUnwind` marker, so the kernel's own frames unwind with their
+//! `Drop`s to the kernel's guard, which hands the unwinding back to
+//! generated code by the return flag (D-697, D-733). A kernel must not
+//! hold an owned word across the call without a drop guard (`map::upsert`
+//! has one).
 //!
 //! While the closure runs, the fiber is pinned to its worker (D-687): the
 //! kernel's frames below it are tier-1 code written for one thread, so if
@@ -27,7 +21,7 @@
 use crate::abi::Word;
 use crate::entry;
 use crate::panic::fatal;
-use crate::unwind::raise::{SavedExit, rethrow_if_unwinding};
+use crate::unwind::raise::rethrow_if_unwinding;
 
 /// The most arguments a closure called from a kernel may take (D-526).
 pub const MAX_ARITY: usize = 4;
@@ -36,9 +30,9 @@ pub const MAX_ARITY: usize = 4;
 /// borrowed, the arguments are owned (given to the closure, also when it
 /// panics), the result is owned. Ends the process if no entry runs on this
 /// thread, if the entry has no trampoline of this arity, or if there are
-/// more than four arguments. When the closure panics under an unwinding
-/// backend, it does not return: it rethrows the unwinding through the
-/// caller's Rust frames to the kernel's guard (module documentation).
+/// more than four arguments. When the closure panics, it does not return:
+/// it rethrows the unwinding through the caller's Rust frames to the
+/// kernel's guard (module documentation).
 ///
 /// # Safety
 ///
@@ -67,7 +61,6 @@ pub unsafe fn call(closure: Word, args: &[Word]) -> Word {
     let fiber = unsafe { &*ctx };
     let callbacks = fiber.callbacks();
     fiber.sched.enter_callback();
-    let exit = SavedExit::save(fiber);
     // SAFETY: the trampolines come from the entry's configuration, whose
     // ABI the host guarantees (`run_entry`'s contract); `ctx` is the running
     // entry's; the closure and arguments are as the caller guarantees.
@@ -86,7 +79,6 @@ pub unsafe fn call(closure: Word, args: &[Word]) -> Word {
             )),
         }
     };
-    exit.restore(fiber);
     fiber.sched.leave_callback();
     // The trampoline caught an unwinding (D-699) and returned 0: the
     // kernel's frames unwind to its guard (D-697).

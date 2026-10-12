@@ -11,7 +11,7 @@
 //! RUNNING --park(Park(lock))--> PARKING --worker, after the switch--> PARKED
 //! PARKING --a waker that takes no lock--> PARKING_WOKEN --worker--> RUNNABLE
 //! PARKED --wake--> RUNNABLE
-//! RUNNING --park(Exit | Quarantine)--> DONE
+//! RUNNING --park(Exit)--> DONE
 //! ```
 //!
 //! `PARKING` covers the moment between the fiber's decision to park and the
@@ -59,7 +59,7 @@ pub(crate) mod state {
     pub(crate) const PARKING_WOKEN: u8 = 3;
     /// Parked: a wake makes it runnable.
     pub(crate) const PARKED: u8 = 4;
-    /// Finished or quarantined: never runs again.
+    /// Finished: never runs again.
     pub(crate) const DONE: u8 = 5;
 }
 
@@ -247,11 +247,9 @@ pub(crate) enum AfterSwitch<'a> {
     /// register itself as a waiter: wakers that take that lock see the
     /// fiber parked.
     Park(Option<Unlock<'a>>),
-    /// The fiber finished: its slot goes back to the pool.
+    /// The fiber finished, returned or unwound: its slot goes back to the
+    /// pool.
     Exit,
-    /// The fiber is abandoned (a panic before unwinding exists, plan
-    /// §2.6's GAP(interim-panics)): its slot is never reused.
-    Quarantine,
 }
 
 /// A locked `parking_lot` mutex whose guard was given up so that the
@@ -291,8 +289,8 @@ impl<'a> Unlock<'a> {
 
 /// Suspends the running fiber `me` and runs `after` on its worker once its
 /// registers are saved (D-687, architecture §3.4). Returns when the fiber
-/// is resumed, maybe on another worker, except after [`AfterSwitch::Exit`]
-/// and [`AfterSwitch::Quarantine`], which never return.
+/// is resumed, maybe on another worker, except after [`AfterSwitch::Exit`],
+/// which never returns.
 ///
 /// `me` must be the fiber running on this thread. No lock guard, `RefCell`
 /// borrow or thread-local-derived pointer may be held across the call
@@ -305,7 +303,7 @@ pub(crate) fn park(me: &ExecCtx, after: AfterSwitch<'_>) {
     let Some(worker) = shared.worker(me.sched.worker()) else {
         fatal(format_args!("a fiber's worker does not exist"));
     };
-    let ends = matches!(after, AfterSwitch::Exit | AfterSwitch::Quarantine);
+    let ends = matches!(after, AfterSwitch::Exit);
     if matches!(after, AfterSwitch::Park(_)) {
         me.sched.state.store(state::PARKING, Ordering::SeqCst);
     }

@@ -26,7 +26,10 @@
 //!   exit-status policy of §10.10, and [`Entry::run_root`] runs an entry
 //!   as a root fiber of a [`Runtime`] (D-690). Every run gets the JIT's
 //!   trampolines ([`Jit::callbacks`], D-526), its accounting domain
-//!   ([`Jit::domain`]) and its unwinding backend (D-696).
+//!   ([`Jit::domain`]) and whether its code has unwind edges
+//!   ([`Jit::unwind_edges`], D-742). An entry that panics unwinds by the
+//!   return flag (D-733): its frames release what they hold, and its
+//!   thread ends.
 //! - Code and data live in one reservation of 1 GiB of address space per
 //!   `Jit`, committed segment by segment as batches need it (see
 //!   `memory.rs`). Dropping a [`Jit`] hands the memory to its
@@ -55,11 +58,10 @@ use cheby_codegen_clif::{
 };
 use cheby_iface::{DefId, Ice};
 use cheby_mir::{AbiSig, EntryKind, FnKey, LayoutDesc, LayoutRef, MirModule, Repr};
-use cheby_runtime::abi::{UnwindBackend, sym};
+use cheby_runtime::abi::sym;
 use cheby_runtime::alloc::Domain;
 use cheby_runtime::entry::{Tramp0, Tramp1, Tramp2, Tramp3, Tramp4};
 use cheby_runtime::layout::{self as rt_layout, FieldKind, LayoutInfo};
-use cheby_runtime::unwind::try_call::{CodeRegistration, register_code};
 use cheby_runtime::{
     Callbacks, CodeToken, EntryConfig, EntryFn, EntryOutcome, RunConfig, Runtime, RuntimeError,
 };
@@ -243,20 +245,10 @@ type SymbolTable = Arc<Mutex<FxHashMap<Box<str>, usize>>>;
 struct CodeKeepAlive {
     /// The module, once the `Jit` is dropped.
     module: Mutex<Option<JITModule>>,
-    /// The handler tables of the module's functions registered with the
-    /// runtime, under the `try_call` prototype only (D-696): they end
-    /// with the code, before its memory is freed.
-    registrations: Mutex<Vec<CodeRegistration>>,
 }
 
 impl Drop for CodeKeepAlive {
     fn drop(&mut self) {
-        // No lookup may find code that is about to be freed, or later code
-        // at the same addresses.
-        self.registrations
-            .get_mut()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clear();
         let module = self
             .module
             .get_mut()
@@ -265,9 +257,9 @@ impl Drop for CodeKeepAlive {
         if let Some(module) = module {
             // SAFETY: no code of the JIT can run any more: the `Jit` is
             // dropped, so no `Entry` borrows it and no isolated entry runs
-            // its code (running one returns only after its thunk returned
-            // or panicked, and a panicked entry's thread parks forever
-            // inside the runtime); and this is the last token, so no
+            // its code (running one returns only after its thread ended:
+            // its thunk returned, or panicked and unwound out of the
+            // generated frames, D-733); and this is the last token, so no
             // `Runtime` that ran its code as fibers holds it, and a runtime
             // releases its tokens only after its workers stopped (D-708).
             // Without this, cranelift-jit keeps finalized memory forever.
@@ -386,7 +378,6 @@ impl Jit {
             module,
             keep_alive: Arc::new(CodeKeepAlive {
                 module: Mutex::new(None),
-                registrations: Mutex::new(Vec::new()),
             }),
             decls,
             layouts: JitLayouts::default(),
@@ -420,11 +411,15 @@ impl Jit {
         CodeToken::new(keep_alive)
     }
 
-    /// The unwinding backend this JIT compiles for (D-696), which every
-    /// entry it runs records in its control block.
+    /// Whether the code this JIT compiles has unwind edges
+    /// ([`CodegenOptions::unwind_edges`], D-742), which every entry it runs
+    /// records in its control block: a raise in a fiber whose code has
+    /// none ends the process with its report (GAP(edgeless-panics)).
+    /// Constant evaluation and the REPL copy it into the configurations
+    /// of the entries they build, as [`Entry::run`] does.
     #[must_use]
-    pub const fn unwind_backend(&self) -> UnwindBackend {
-        self.codegen.unwind
+    pub const fn unwind_edges(&self) -> bool {
+        self.codegen.unwind_edges
     }
 
     /// Makes the native symbol `name` resolve to `address` in later
@@ -485,38 +480,10 @@ impl Jit {
         self.module
             .finalize_definitions()
             .map_err(|e| JitError::Codegen(CodegenError::Module(e.to_string())))?;
-        self.register_unwind_tables()?;
         self.apply_repoints()?;
         self.callbacks = self.find_callbacks();
         self.register_hooks(mirs)?;
         self.code_stats = self.code_stats.add(stats);
-        Ok(())
-    }
-
-    /// Registers the handler tables of the functions the batch defined with
-    /// the runtime's registry, now that their code has its final address:
-    /// only under the `try_call` prototype, whose unwinder looks them up
-    /// (D-696); code generation keeps no tables under any other backend.
-    /// The registrations live as long as the code memory
-    /// ([`CodeKeepAlive`]).
-    fn register_unwind_tables(&mut self) -> Result<(), JitError> {
-        let tables = self.decls.take_unwind_tables();
-        if tables.is_empty() {
-            return Ok(());
-        }
-        let mut registrations = Vec::with_capacity(tables.len());
-        for table in tables {
-            let start = self.module.get_finalized_function(table.func);
-            if start.is_null() {
-                return Err(JitError::ice("a compiled function has no address"));
-            }
-            registrations.push(register_code(start.addr(), table.len, table.sites));
-        }
-        self.keep_alive
-            .registrations
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .extend(registrations);
         Ok(())
     }
 
@@ -984,7 +951,8 @@ impl Entry<'_> {
     }
 
     /// Runs the entry on its own stack and reports how it ended, with the
-    /// JIT's trampolines and accounting domain in place of `config`'s. A
+    /// JIT's trampolines, accounting domain and [`Jit::unwind_edges`] in
+    /// place of `config`'s. A
     /// returned word may point into the `Jit`'s data (a static string or
     /// constructor) and is valid only while the `Jit` lives.
     ///
@@ -1001,7 +969,7 @@ impl Entry<'_> {
 
     /// Runs the entry as a root fiber of `runtime` (D-690) and reports how
     /// it ended, with the JIT's trampolines, accounting domain and
-    /// unwinding backend in place of `config`'s. The runtime keeps the
+    /// [`Jit::unwind_edges`] in place of `config`'s. The runtime keeps the
     /// JIT's code alive until it stops ([`Jit::code_token`]). A returned
     /// word is valid as for [`Entry::run`].
     ///
@@ -1022,19 +990,20 @@ impl Entry<'_> {
         unsafe { runtime.run_root(self.thunk, &config) }.map_err(JitError::Runtime)
     }
 
-    /// `config` with the JIT's trampolines, domain and backend.
+    /// `config` with the JIT's trampolines, domain and `unwind_edges`.
     fn config(&self, config: &EntryConfig) -> EntryConfig {
         EntryConfig {
             callbacks: self.jit.callbacks(),
             domain: self.jit.domain(),
-            unwind: self.jit.unwind_backend(),
+            unwind_edges: self.jit.unwind_edges(),
             ..config.clone()
         }
     }
 
     /// Runs `main`'s entry thunk under `cheby run`'s policy (§10.10,
-    /// D-182), with the JIT's trampolines, accounting domain and unwinding
-    /// backend in place of `config`'s, and returns the exit status: 0 or 1
+    /// D-182), with the JIT's trampolines, accounting domain and
+    /// [`Jit::unwind_edges`] in place of `config`'s, and returns the exit
+    /// status: 0 or 1
     /// from the program, 101 after a panic, 102 in debug builds when
     /// objects of the domain leak (D-458). `main` runs as the root fiber of
     /// a runtime made for the run (D-690).
@@ -1047,7 +1016,7 @@ impl Entry<'_> {
         let config = RunConfig {
             callbacks: self.jit.callbacks(),
             domain: self.jit.domain(),
-            unwind: self.jit.unwind_backend(),
+            unwind_edges: self.jit.unwind_edges(),
             ..config
         };
         // SAFETY: as in `run`; `run_main` stops its runtime before it

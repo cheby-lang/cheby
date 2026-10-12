@@ -47,7 +47,7 @@ use std::collections::VecDeque;
 use std::mem::MaybeUninit;
 use std::sync::Arc;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 
 use crossbeam_utils::CachePadded;
 
@@ -85,6 +85,11 @@ pub struct Domain {
     shards: Box<[CachePadded<Shard>]>,
     peak: AtomicI64,
     stats: Stats,
+    /// Whether the system allocator refused a request of a fiber or host
+    /// thread charging this domain (GAP(system-refusal-leak)): the update
+    /// in flight may then have leaked what it held, so `run_main` skips
+    /// the debug leak check.
+    system_refused: AtomicBool,
     /// How often a charge summed the shards to sample the peak.
     #[cfg(test)]
     samples: std::sync::atomic::AtomicU64,
@@ -122,6 +127,7 @@ impl Default for Domain {
                 .collect(),
             peak: AtomicI64::new(0),
             stats: Stats::default(),
+            system_refused: AtomicBool::new(false),
             #[cfg(test)]
             samples: std::sync::atomic::AtomicU64::new(0),
         }
@@ -186,6 +192,21 @@ impl Domain {
     #[must_use]
     pub fn stats(&self) -> &Stats {
         &self.stats
+    }
+
+    /// Whether the system allocator refused a request charged to this
+    /// domain (GAP(system-refusal-leak)). An in-place update of a list,
+    /// map or text that it stopped halfway may have leaked the structure
+    /// in flight, so the debug leak check after such a run would report a
+    /// leak the program did not make.
+    #[must_use]
+    pub fn system_refused(&self) -> bool {
+        self.system_refused.load(Ordering::Relaxed)
+    }
+
+    /// Marks the domain: the system allocator refused one of its requests.
+    fn mark_system_refused(&self) {
+        self.system_refused.store(true, Ordering::Relaxed);
     }
 
     /// Adds `objects` and `bytes` to shard `index`.
@@ -509,7 +530,7 @@ pub fn alloc_object(size: u64, header: u64) -> *mut u8 {
     // (GATE1-1). A fiber under a memory budget checks it before anything
     // is taken, in `alloc_in`.
     let (ctx, cached, tried) = with_fiber_cache(|ctx, cache| {
-        let unlimited = ctx.is_none_or(|ctx| ctx.budget() == u64::MAX);
+        let unlimited = ctx.is_none_or(|ctx| ctx.budget() == u64::MAX) && !refusal_armed();
         match (cache, class) {
             (Some(cache), Some(class)) if unlimited => (ctx, cache.take(class), true),
             _ => (ctx, None, false),
@@ -538,20 +559,116 @@ fn alloc_from(ctx: Option<&ExecCtx>, size: u64, header: u64, try_cache: bool) ->
     let Some(layout) = try_object_layout(size) else {
         out_of_memory(request)
     };
-    let cached = if try_cache {
+    let cached = if try_cache && !refusal_armed() {
         cached_block(ctx, layout)
     } else {
         None
     };
     let ptr = cached.unwrap_or_else(|| {
-        // SAFETY: `try_object_layout` never returns a zero-sized layout.
-        let ptr = unsafe { std::alloc::alloc(layout) };
+        let ptr = if test_refuses() {
+            std::ptr::null_mut()
+        } else {
+            // SAFETY: `try_object_layout` never returns a zero-sized layout.
+            unsafe { std::alloc::alloc(layout) }
+        };
         if ptr.is_null() {
-            out_of_memory(request);
+            system_refused(ctx, request);
         }
         ptr
     });
     init_object(ctx, ptr, layout, header)
+}
+
+/// Ends a request of `request` bytes that the system allocator refused,
+/// as [`out_of_memory`] says, after marking the domain `ctx` charges
+/// (GAP(system-refusal-leak)): the refusal may stop an in-place update
+/// halfway and leak the structure in flight, so `run_main` skips the
+/// debug leak check of that domain and counts the skip.
+fn system_refused(ctx: Option<&ExecCtx>, request: u64) -> ! {
+    with_charged(ctx, |domain, _| domain.mark_system_refused());
+    out_of_memory(request)
+}
+
+/// The test hook of [`refuse_next_system_allocation`]: the thread it
+/// refuses on and how many system allocations of that thread to let
+/// through first. `None` when nothing is armed.
+#[cfg(test)]
+static REFUSAL: std::sync::Mutex<Option<(std::thread::ThreadId, u32)>> =
+    std::sync::Mutex::new(None);
+
+/// Whether [`REFUSAL`] holds anything: a relaxed load before its lock.
+#[cfg(test)]
+static REFUSAL_ARMED: AtomicBool = AtomicBool::new(false);
+
+/// Makes the next allocation the runtime requests from the system
+/// allocator fail, as if the system had refused it. A real atomic flag: it
+/// arms the calling thread (the tests of this crate share the process), and
+/// while it is armed that thread's allocations bypass the block cache, so
+/// the next one reaches the system path, which tests and clears the flag
+/// and then ends the request as a refusal does (GAP(system-refusal-leak)).
+/// One thread is armed at a time: tests that arm it hold
+/// `alloc::tests::serial()`. It does not reach `alloc::scratch`, which
+/// grows with
+/// `try_reserve_exact` through the global allocator and has a hook of its
+/// own.
+#[cfg(test)]
+pub(crate) fn refuse_next_system_allocation() {
+    refuse_system_allocation_after(0);
+}
+
+/// [`refuse_next_system_allocation`] after `allowed` further system
+/// allocations of the calling thread succeed: a refusal in the middle of
+/// an update that allocates several objects.
+#[cfg(test)]
+pub(crate) fn refuse_system_allocation_after(allowed: u32) {
+    *REFUSAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) =
+        Some((std::thread::current().id(), allowed));
+    REFUSAL_ARMED.store(true, Ordering::SeqCst);
+}
+
+/// Whether a refusal is armed for this thread, which makes its
+/// allocations bypass the block cache. Always false outside tests.
+#[inline]
+fn refusal_armed() -> bool {
+    #[cfg(test)]
+    {
+        if REFUSAL_ARMED.load(Ordering::Relaxed) {
+            let armed = *REFUSAL
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            return armed.is_some_and(|(thread, _)| thread == std::thread::current().id());
+        }
+    }
+    false
+}
+
+/// Whether the test hook refuses this system allocation: it counts down
+/// the allocations let through on the armed thread, then refuses one and
+/// clears itself. Always false outside tests.
+#[inline]
+fn test_refuses() -> bool {
+    #[cfg(test)]
+    {
+        if REFUSAL_ARMED.load(Ordering::Relaxed) {
+            let mut armed = REFUSAL
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            match *armed {
+                Some((thread, 0)) if thread == std::thread::current().id() => {
+                    *armed = None;
+                    REFUSAL_ARMED.store(false, Ordering::SeqCst);
+                    return true;
+                }
+                Some((thread, allowed)) if thread == std::thread::current().id() => {
+                    *armed = Some((thread, allowed.saturating_sub(1)));
+                }
+                Some(_) | None => {}
+            }
+        }
+    }
+    false
 }
 
 /// Writes the header of a fresh block of `layout` and charges it to
@@ -567,28 +684,24 @@ fn init_object(ctx: Option<&ExecCtx>, ptr: *mut u8, layout: Layout, header: u64)
     ptr
 }
 
-/// Checks constant evaluation's memory budget for `bytes`, an upper bound
-/// of what an in-place update about to start allocates, under an
-/// unwinding backend: a runtime helper calls it before it takes its owned
-/// arguments over, so that running out of budget raises while it can
-/// still release them whole (D-698). GAP(unwind-budget-preflight): the
-/// limit can then end an evaluation by at most `bytes` earlier than the
-/// update's own requests would. With the default backend, without a
-/// budget and outside any entry it does nothing.
-pub(crate) fn preflight(bytes: u64) {
-    // No entry of this process runs under an unwinding backend: nothing to
-    // check, and no current-fiber lookup on the default backend's hot path
-    // (D-686, GATE1-1).
-    if !crate::ctx::unwinding_backend_used() {
-        return;
-    }
-    let Some(ctx) = current_fiber() else {
+/// Checks constant evaluation's memory budget of the fiber `ctx` for
+/// `bound()`, an upper bound of what an in-place update about to start
+/// allocates: a runtime helper calls it with its own `ctx` before it takes
+/// its owned arguments over, so that running out of budget raises while
+/// it can still release them whole (D-698). The limit can then end an
+/// evaluation by at most the bound earlier than the update's own requests
+/// would (D-738). Without a budget, and without a fiber (host code and
+/// tests that pass a null `ctx`), it returns before computing the bound,
+/// and it never reads a thread-local (D-686).
+#[inline]
+pub(crate) fn preflight(ctx: Option<&ExecCtx>, bound: impl FnOnce() -> u64) {
+    let Some(ctx) = ctx else {
         return;
     };
-    if ctx.budget() == u64::MAX || ctx.unwind_backend() == abi::UnwindBackend::Off {
+    if ctx.budget() == u64::MAX {
         return;
     }
-    crate::entry::check_budget_of(Some(ctx), bytes);
+    crate::entry::check_budget_of(Some(ctx), bound());
 }
 
 /// The message of the panic that an allocation request which cannot be
@@ -1226,7 +1339,8 @@ impl BlockCache {
 }
 
 /// Returns the current thread's cached free blocks to the system allocator,
-/// for a thread that will not allocate again (a panicked entry parks).
+/// for tests of the cache.
+#[cfg(test)]
 pub(crate) fn release_block_cache() {
     tls::with_cache(|cache| {
         if let Ok(mut cache) = cache.try_borrow_mut() {
@@ -1741,6 +1855,27 @@ pub(crate) mod tests {
         handle.join().unwrap();
     }
 
+    /// D-738: the preflight of the list helpers reads the budget from the
+    /// helper's `ctx` and computes its bound only under a budget; without
+    /// one, or without a fiber, the bound is never computed.
+    #[test]
+    fn preflight_computes_its_bound_only_under_a_budget() {
+        use crate::ctx::{ExecCtx, FiberInit};
+        let computed = std::cell::Cell::new(0_u32);
+        let bound = || {
+            computed.set(computed.get() + 1);
+            64
+        };
+        preflight(None, bound);
+        let ctx = ExecCtx::new(FiberInit::placeholder());
+        preflight(Some(&ctx), bound);
+        assert_eq!(computed.get(), 0, "the bound was computed without a budget");
+        // Under a budget with room, the bound is computed and passes.
+        ctx.set_budget(u64::MAX - 1);
+        preflight(Some(&ctx), bound);
+        assert_eq!(computed.get(), 1);
+    }
+
     #[test]
     fn size_classes_cover_small_objects() {
         let layout = |size| Layout::from_size_align(size, 8).unwrap();
@@ -1781,7 +1916,7 @@ pub(crate) mod tests {
             // SAFETY: the only reference.
             unsafe { rc::drop(again) };
             assert_eq!(live(), 0);
-            // A panicked entry gives its cached blocks back before parking.
+            // Releasing the cache gives every block back to the system.
             release_block_cache();
             assert_eq!(cached_blocks(), 0);
         });

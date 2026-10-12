@@ -1,0 +1,3 @@
+a member failed
+panicked at tests/ui/10-concurrency/scope/member_panic_is_the_scopes_err.cheby:14:40:
+a member failed

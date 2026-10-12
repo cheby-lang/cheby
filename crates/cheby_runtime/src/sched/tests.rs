@@ -473,15 +473,26 @@ unsafe extern "C" fn returns_seven(_: *mut ExecCtx) -> u64 {
 }
 
 unsafe extern "C" fn panics(ctx: *mut ExecCtx) -> u64 {
-    // SAFETY: `ctx` is the running fiber's; no message or location. Under
-    // the default backend it never returns.
+    // SAFETY: `ctx` is the running fiber's; no message or location. The
+    // panic is recorded and the flag set (D-733): return at once.
     unsafe { cheby_rt_panic(ctx, PanicKind::DivisionByZero.code(), 0, 0) };
     0
 }
 
-/// D-690 and GAP(interim-panics): a root fiber's word reaches the host; a
-/// root that panics is reported, its slot quarantined, and the runtime
-/// goes on running roots.
+/// The slots of the class of `size` in use: carved, and neither free nor
+/// quarantined.
+fn slots_in_use(size: usize) -> usize {
+    let counts = StackPool::global().counts(size).unwrap();
+    counts
+        .carved
+        .checked_sub(counts.free)
+        .and_then(|rest| rest.checked_sub(counts.quarantined))
+        .unwrap()
+}
+
+/// D-690 and D-713: a root fiber's word reaches the host; a root that
+/// panics unwinds to its catch point, is reported, and its slot goes back
+/// to the pool, never into quarantine; the runtime goes on running roots.
 #[test]
 #[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
 fn roots_return_or_panic_and_the_runtime_goes_on() {
@@ -494,19 +505,25 @@ fn roots_return_or_panic_and_the_runtime_goes_on() {
         run(returns_seven, MIN_STACK_SIZE),
         EntryOutcome::Returned(7)
     );
-    // A class no other test of this module uses, so the count is ours.
+    // A class no other test of this module uses, so the counts are ours.
     let size = 4 << 20;
-    let before = StackPool::global().counts(size).unwrap().quarantined;
+    let quarantined = StackPool::global().counts(size).unwrap().quarantined;
+    let in_use = slots_in_use(size);
     let EntryOutcome::Panicked(report) = run(panics, size) else {
         panic!("expected a panic");
     };
     assert_eq!(report.kind, PanicKind::DivisionByZero);
-    // The worker quarantines the slot after the host heard of the panic.
+    // The worker gives the slot back once the fiber has switched away for
+    // good, after the host heard of the panic.
     let deadline = Instant::now() + HANG;
-    while StackPool::global().counts(size).unwrap().quarantined == before {
-        assert!(Instant::now() < deadline, "the slot was not quarantined");
+    while slots_in_use(size) != in_use {
+        assert!(Instant::now() < deadline, "the slot was not given back");
         std::thread::sleep(Duration::from_millis(1));
     }
+    assert_eq!(
+        StackPool::global().counts(size).unwrap().quarantined,
+        quarantined
+    );
     assert_eq!(run(returns_seven, size), EntryOutcome::Returned(7));
     // SAFETY: as above.
     let too_small = unsafe { runtime.run_root(returns_seven, &config(4096)) };
@@ -514,18 +531,56 @@ fn roots_return_or_panic_and_the_runtime_goes_on() {
     runtime.shutdown();
 }
 
-/// GAP(interim-panics): until unwinding exists, a panic in a fiber that is
-/// not a root ends the process with a fatal runtime error. The test runs
-/// itself in a child process, which aborts.
+/// D-733 and D-713: a panic in a fiber that is not a root unwinds that
+/// fiber only. Generated code would test the flag after the call and
+/// return; the child sends the flag it finds instead, and ends. Nothing
+/// ends the process, and the root, which waited for the word, returns.
+/// (A spawned fiber's panic in a scope, recorded as the scope's first
+/// cause by D-666, is `fiber_ops::tests`'.)
 #[test]
 #[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
-fn a_child_fibers_panic_ends_the_process() {
-    const CHILD: &str = "CHEBY_RT_TEST_CHILD_FIBER_PANIC";
-    const NAME: &str = "sched::tests::a_child_fibers_panic_ends_the_process";
+fn a_child_fibers_panic_unwinds_only_that_fiber() {
+    let runtime = runtime(2);
+    let word = root(&runtime, |me| {
+        let mailbox = Arc::new(Mailbox::default());
+        let child_mailbox = Arc::clone(&mailbox);
+        spawn(me, false, move |fiber| {
+            // SAFETY: `fiber` is the running fiber; no message or location.
+            unsafe {
+                cheby_rt_panic(
+                    std::ptr::from_ref(fiber).cast_mut(),
+                    PanicKind::DivisionByZero.code(),
+                    0,
+                    0,
+                );
+            }
+            child_mailbox.send(u64::from(crate::unwind::flag::get(fiber)), false);
+        });
+        mailbox.receive(me)
+    });
+    assert_eq!(word, u64::from(crate::abi::unwind_flag::PANIC));
+    runtime.shutdown();
+}
+
+/// GAP(edgeless-panics): a fiber spawned by a root whose code was compiled
+/// without unwind edges runs that code too, so its panic ends the process
+/// with its report, the fatal error and the status 101, while the root
+/// waits. The test runs itself in a child process.
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+fn edgeless_spawned_fibers_inherit_their_spawners_setting() {
+    const CHILD: &str = "CHEBY_RT_TEST_EDGELESS_CHILD_FIBER";
+    const NAME: &str = "sched::tests::edgeless_spawned_fibers_inherit_their_spawners_setting";
     if std::env::var_os(CHILD).is_some() {
         let runtime = runtime(2);
-        root(&runtime, |me| {
+        let config = EntryConfig {
+            unwind_edges: false,
+            ..config(MIN_STACK_SIZE)
+        };
+        let outcome = super::testing::start_root_with(&runtime, &config, |me| {
+            assert!(!me.unwind_edges());
             spawn(me, false, |fiber| {
+                assert!(!fiber.unwind_edges());
                 // SAFETY: `fiber` is the running fiber; no message or
                 // location.
                 unsafe {
@@ -539,8 +594,9 @@ fn a_child_fibers_panic_ends_the_process() {
             });
             // Waits for ever: the child's panic ends the process first.
             Mailbox::default().receive(me)
-        });
-        return;
+        })
+        .recv_timeout(HANG);
+        panic!("the root ended: {outcome:?}");
     }
     let out = std::process::Command::new(std::env::current_exe().unwrap())
         .args(["--exact", NAME, "--nocapture", "--test-threads=1"])
@@ -548,13 +604,109 @@ fn a_child_fibers_panic_ends_the_process() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(!out.status.success(), "{stderr}");
+    assert_eq!(
+        out.status.code(),
+        Some(crate::abi::status::PANIC),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("panicked at <unknown location>:\ndivision by zero\n"),
+        "{stderr}"
+    );
     assert!(
         stderr.contains(
-            "fatal runtime error: a fiber panicked (unwinding arrives with package U4)\n"
+            "fatal runtime error: an unwinding in code compiled without unwind edges \
+             (CHEBY_UNWIND_EDGES=off)\n"
         ),
         "{stderr}"
     );
+    assert!(!stderr.contains("the root ended"), "{stderr}");
+}
+
+/// GAP(edgeless-panics): when several fibers raise at once on different
+/// workers in code compiled without unwind edges, the process still ends
+/// once, with one report, one fatal line and the status 101, as at one
+/// worker (plan §0 'Determinism'). Eight fibers on four workers wait until
+/// four of them run at the same time, then all raise. The test runs itself
+/// in a child process, several times, since the race is one of timing.
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+fn edgeless_raises_on_several_workers_end_the_process_once() {
+    const CHILD: &str = "CHEBY_RT_TEST_EDGELESS_SEVERAL_WORKERS";
+    const NAME: &str = "sched::tests::edgeless_raises_on_several_workers_end_the_process_once";
+    const WORKERS: usize = 4;
+    const FIBERS: usize = 8;
+    const RUNS: usize = 10;
+    if std::env::var_os(CHILD).is_some() {
+        let runtime = runtime(WORKERS);
+        let config = EntryConfig {
+            unwind_edges: false,
+            ..config(MIN_STACK_SIZE)
+        };
+        let outcome = super::testing::start_root_with(&runtime, &config, |me| {
+            let arrived = Arc::new(AtomicUsize::new(0));
+            for _ in 0..FIBERS {
+                let arrived = Arc::clone(&arrived);
+                spawn(me, false, move |fiber| {
+                    arrived.fetch_add(1, Ordering::SeqCst);
+                    // Waits until a fiber runs on every worker, or gives up
+                    // after a while (fewer workers ran them): the rule must
+                    // hold either way.
+                    let start = Instant::now();
+                    while arrived.load(Ordering::SeqCst) < WORKERS
+                        && start.elapsed() < Duration::from_secs(2)
+                    {
+                        std::hint::spin_loop();
+                    }
+                    // SAFETY: `fiber` is the running fiber; no message or
+                    // location.
+                    unsafe {
+                        cheby_rt_panic(
+                            std::ptr::from_ref(fiber).cast_mut(),
+                            PanicKind::DivisionByZero.code(),
+                            0,
+                            0,
+                        );
+                    }
+                });
+            }
+            // Waits for ever: the first panic ends the process.
+            Mailbox::default().receive(me)
+        })
+        .recv_timeout(HANG);
+        panic!("the root ended: {outcome:?}");
+    }
+    for run in 0..RUNS {
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", NAME, "--nocapture", "--test-threads=1"])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(
+            out.status.code(),
+            Some(crate::abi::status::PANIC),
+            "run {run}: {stderr}"
+        );
+        assert_eq!(
+            stderr
+                .matches("panicked at <unknown location>:\ndivision by zero\n")
+                .count(),
+            1,
+            "run {run}: {stderr}"
+        );
+        assert_eq!(
+            stderr
+                .matches(
+                    "fatal runtime error: an unwinding in code compiled without unwind edges \
+                     (CHEBY_UNWIND_EDGES=off)\n"
+                )
+                .count(),
+            1,
+            "run {run}: {stderr}"
+        );
+        assert!(!stderr.contains("the root ended"), "run {run}: {stderr}");
+    }
 }
 
 /// D-677: a root fiber that goes deep lowers its soft limit, in doubling
@@ -563,7 +715,9 @@ fn a_child_fibers_panic_ends_the_process() {
 #[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
 fn deep_fibers_lower_their_soft_limit_and_overflow_at_the_hard_one() {
     fn recurse(ctx: &ExecCtx, depth: u64) -> u64 {
-        entry_check(ctx);
+        if entry_check(ctx) {
+            return 0;
+        }
         let frame = std::hint::black_box([depth; 64]);
         if depth == 0 {
             return 0;

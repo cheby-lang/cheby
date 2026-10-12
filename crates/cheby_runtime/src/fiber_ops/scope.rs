@@ -10,11 +10,13 @@
 //! a scope lock is never held together with a channel lock, and never
 //! across a switch (I-5): the owner waiting in close hands it to `park`.
 //!
-//! Without cancellation (package U5) a scope's first cause is the panic of
-//! its body, which `scope_close(_, true)` takes from U3's record. A member
-//! fiber's panic ends the process until unwinding is chosen
-//! (GAP(interim-panics)), so the recording of a member's panic at its start
-//! (D-666) arrives with U4 and U5.
+//! A scope's first cause is the first panic, by start, of a fiber
+//! responsible to it: a member, or the body of the fiber that opened it
+//! (D-666). The panic is recorded when it starts
+//! ([`ScopeState::record_panic`], called by `unwind::record::start_panic`),
+//! before the panicking fiber unwinds, so a panic that starts later never
+//! replaces it, whichever fiber ends first. Cancelling the other members at
+//! that moment belongs to cancellation (package U5).
 
 use std::sync::{Arc, Weak};
 
@@ -24,7 +26,7 @@ use super::{Failure, Owned, needs_scheduler, running};
 use crate::abi::Word;
 use crate::ctx::ExecCtx;
 use crate::handles::{self, HandleKind, HandlePayload};
-use crate::panic::fatal;
+use crate::panic::{PanicReport, fatal};
 use crate::sched::{AfterSwitch, FiberRef, Unlock, park, wake};
 use crate::unwind::guard::guarded;
 use crate::unwind::record::{UnwindRecord, take_record};
@@ -234,6 +236,27 @@ impl ScopeState {
         }
     }
 
+    /// Records `report` as the scope's first cause if it has none (D-666),
+    /// under the scope's lock. Returns whether it recorded. Called by
+    /// `record::start_panic` after the record's lock is released, for the
+    /// top of `open_scopes` (a root's body inside `scope` included), else
+    /// the spawn scope; a fiber with neither records nothing. Entered with
+    /// no runtime lock held, and holds only the scope's lock; from U5 on it
+    /// releases the scope's lock before it calls `cancel` (plan §0
+    /// 'Locks'). It allocates only the copy of the report's two texts, and
+    /// only when it records.
+    pub(crate) fn record_panic(&self, report: &PanicReport) -> bool {
+        let mut inner = self.inner.lock();
+        if inner.first_cause.is_some() {
+            return false;
+        }
+        inner.first_cause = Some(Failure::panic(
+            report.message.clone(),
+            report.location.clone(),
+        ));
+        true
+    }
+
     /// Records the fiber of the reserved slot `index`.
     pub(crate) fn fill(&self, index: usize, fiber: FiberRef) {
         self.inner.lock().members.fill(index, fiber);
@@ -292,10 +315,10 @@ pub(crate) unsafe fn state_of(word: Word) -> Arc<ScopeState> {
 /// happens before anything is open.
 ///
 /// `timed` gives the scope a deadline `seconds` and `nanoseconds` from
-/// now, which only `fiber::timeout` asks for. GAP(slice-std-subset): timers
-/// arrive with package T1, so until then a timed scope ends the program
-/// with `fatal runtime error: fiber::timeout is not supported yet` (plan
-/// §7 UQ-2, answer (a)); a limit of zero or less never gets here (D-671).
+/// now, which only `fiber::timeout` asks for. Timers arrive with package
+/// T1, so until then a timed scope ends the program with `fatal runtime
+/// error: fiber::timeout is not supported yet` (D-754); a limit of zero or
+/// less never gets here (D-671).
 ///
 /// # Safety
 ///
@@ -314,7 +337,7 @@ pub unsafe extern "C" fn cheby_rt_scope_open(
         if timed {
             fatal(format_args!("fiber::timeout is not supported yet"));
         }
-        let parent = me.conc.innermost_scope().or_else(|| me.conc.spawn_scope());
+        let parent = me.conc.responsible_scope();
         let state = Arc::new(ScopeState::new(parent));
         // SAFETY: `ctx` is the running fiber's. If the allocation raises,
         // nothing is open yet and the payload box is dropped.
@@ -338,11 +361,14 @@ pub unsafe extern "C" fn cheby_rt_scope_open(
 /// 1. waits, without interruption, until every member has left;
 /// 2. pops the scope from the fiber's open scopes, marks it ended and
 ///    unlinks it from its parent;
-/// 3. decides: the first cause is the scope's own (a member's panic, from
-///    U4 on) or, when the body unwound (`unwound`), the panic in U3's
-///    record, which it takes. Without a cause the scope succeeded and the
-///    result is true; with one it is stored for `take_failure` and the
-///    result is false, so that `scope_run` returns the static `Err(Nil)`.
+/// 3. decides from the scope's first cause (D-666), recorded when the
+///    first panic of a member or of the body started. When the body
+///    unwound (`unwound`), the close takes the fiber's record, which ends
+///    the unwinding; the body's panic becomes the cause only if none was
+///    recorded. Without a cause the scope succeeded and the result is
+///    true; with one it is stored for `take_failure` and the result is
+///    false, so that `scope_run` returns the static `Err(Nil)`. Nothing is
+///    printed (D-701).
 ///
 /// A cancellation passing through re-raises from here once package U5
 /// brings it; until then a cancellation record here is a broken invariant.
@@ -382,14 +408,14 @@ pub unsafe extern "C" fn cheby_rt_scope_close(
         // 2. Pop, end, unlink.
         me.conc.pop_scope(&state);
         state.unlink();
-        // 3. Decide.
+        // 3. Decide. The body's own panic was recorded in this scope when
+        // it started, unless an earlier one was; the record is taken
+        // either way.
         let unwound_cause = if unwound {
             match take_record(me) {
-                Some(UnwindRecord::Panic(report)) => Some(Failure {
-                    kind: 0,
-                    message: report.message,
-                    location: report.location,
-                }),
+                Some(UnwindRecord::Panic(report)) => {
+                    Some(Failure::panic(report.message, report.location))
+                }
                 Some(UnwindRecord::Cancel) => fatal(format_args!(
                     "a cancellation reached a scope (cancellation arrives with package U5)"
                 )),
@@ -449,6 +475,29 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::ScopeState;
+    use crate::abi::PanicKind;
+    use crate::fiber_ops::Failure;
+    use crate::panic::PanicReport;
+
+    /// D-666: a scope records its first cause once; a later panic leaves it
+    /// as it is, and the scope's parent and nested scopes record nothing.
+    #[test]
+    fn record_panic_records_once() {
+        let parent = Arc::new(ScopeState::new(None));
+        let scope = Arc::new(ScopeState::new(Some(Arc::clone(&parent))));
+        ScopeState::link(&scope);
+        let first = PanicReport::new(PanicKind::Explicit, Some("first"), "a.cheby:1:2");
+        let second = PanicReport::new(PanicKind::Todo, None, "b.cheby:3:4");
+        assert!(scope.record_panic(&first));
+        assert!(!scope.record_panic(&second));
+        assert!(!scope.record_panic(&first));
+        assert_eq!(
+            scope.inner.lock().first_cause,
+            Some(Failure::panic("first".to_owned(), "a.cheby:1:2".to_owned()))
+        );
+        assert_eq!(parent.inner.lock().first_cause, None);
+        scope.unlink();
+    }
 
     /// Opens `count` sibling scopes under one parent, all open at once,
     /// then closes them oldest first; returns the time the closes took.

@@ -70,7 +70,7 @@ fn context_wrapper(p: &mut Prog) -> DefId {
 
 /// (a) The wrapper of a `@std_context` kernel passes the running entry's
 /// context first, and the kernel finds it equal to
-/// `entry::current_ctx()` (D-692, GAP(const-ctx-operand)).
+/// `entry::current_ctx()` (D-692, D-745).
 #[test]
 #[cfg_attr(
     windows,
@@ -230,9 +230,9 @@ fn scope_run() -> Function {
     f
 }
 
-/// (b) `scope_run`'s generated body compiles with the default backend,
-/// which ignores its edges (D-696). It is not run: the runtime's scope
-/// helpers are stubs until wave 3.
+/// (b) `scope_run`'s generated body, precounted with its own edges
+/// (D-744), compiles with those edges lowered by the return flag (D-733).
+/// It is not run here; the std tests of `std::fiber` run it.
 #[test]
 #[cfg_attr(
     windows,

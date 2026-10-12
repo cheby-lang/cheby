@@ -337,8 +337,8 @@ impl Translator<'_, '_> {
 
     /// The value in the slot of the constant `def`, borrowed from the slot;
     /// an empty slot (0) asks `cheby_rt_const_missing(ctx, slot)` (E6),
-    /// whose unwinding, under an unwinding backend, is tested only on that
-    /// cold path (D-698).
+    /// whose unwinding, when the load has an unwind edge, is tested only on
+    /// that cold path (D-698).
     pub(crate) fn load_const(&mut self, def: DefId) -> Result<Value, CodegenError> {
         let slot = self.decls.const_data(def)?;
         let address = self.data_address(slot, true);

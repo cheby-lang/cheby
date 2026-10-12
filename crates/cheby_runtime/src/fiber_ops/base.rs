@@ -13,10 +13,10 @@
 //! 2. stores the result in the join cell, marked shared (D-674, D-705), or
 //!    drops it when no `Fiber` handle remains (D-670); a fiber that did
 //!    not return marks the cell failed (D-668);
-//! 3. after an unwinding under a backend other than `Off`, takes U3's
-//!    record: a panic ends the process with the interim fatal error until
-//!    U4 records it in the scope (GAP(interim-panics)); a cancellation just
-//!    ends the fiber;
+//! 3. after an unwinding, has taken its record and drops it, printing
+//!    nothing (D-701): a panic was recorded in the fiber's scope when it
+//!    started (D-666, `unwind::record::start_panic`), which reports it as
+//!    its `Err`, and a cancellation just ends the fiber;
 //! 4. drops its share of the join cell and every other reference its
 //!    control block holds, so the fiber holds no Cheby object;
 //! 5. only then leaves its scope's members, which may wake the scope's
@@ -31,16 +31,14 @@ use parking_lot::Mutex;
 
 use super::scope::ScopeState;
 use super::{Owned, needs_scheduler};
-use crate::abi::{UnwindBackend, Word};
+use crate::abi::Word;
 use crate::ctx::ExecCtx;
-use crate::entry::EntryMode;
 use crate::handles::HandlePayload;
-use crate::io;
-use crate::panic::{PanicReport, fatal};
+use crate::panic::fatal;
 use crate::rc;
 use crate::sched::{AfterSwitch, FiberRef, Unlock, park, wake};
 use crate::unwind::raise::ChebyUnwind;
-use crate::unwind::record::{UnwindRecord, backend, take_unwound};
+use crate::unwind::record::{UnwindRecord, take_unwound};
 
 /// Where a fiber's result goes (D-707): shared by the fiber and its
 /// `Fiber` handle, and outliving both as long as either holds it.
@@ -219,8 +217,9 @@ pub(crate) unsafe fn fiber_main(ctx: *mut ExecCtx, base: Base) {
         // function is a live `fn() -> T`, borrowed by the call, and the
         // result is owned.
         let result = unsafe { tramp(ctx, function.word()) };
-        // An unwinding returns 0 here, which owns nothing.
-        unwinding(me).map_or(Ok(result), |record| Err(Some(record)))
+        // An unwinding returns 0 here, which owns nothing. Taking the
+        // record clears the flag (D-699).
+        take_unwound(me).map_or(Ok(result), |record| Err(Some(record)))
     };
     drop(function);
     // 2. Store or drop the result.
@@ -233,10 +232,10 @@ pub(crate) unsafe fn fiber_main(ctx: *mut ExecCtx, base: Base) {
         // SAFETY: the value the cell gave back, owned.
         unsafe { rc::drop(released) };
     }
-    // 3. A panic: the interim; a cancellation just ends the fiber.
-    if let Err(Some(UnwindRecord::Panic(report))) = ended {
-        interim_panic(me, &report);
-    }
+    // 3. The record ends here, unprinted (D-701): a panic is in the
+    // scope's first cause already, or was not the first (D-666); a
+    // cancellation just ends the fiber.
+    drop(ended);
     // 4. Hold no reference any more.
     drop(cell);
     me.conc.set_spawn_scope(None);
@@ -247,10 +246,11 @@ pub(crate) unsafe fn fiber_main(ctx: *mut ExecCtx, base: Base) {
 /// Marks the fiber's result shared for its joiners (D-674, D-705) and
 /// returns it. Growing the walk's worklist can raise `out of memory`
 /// (D-642), and the raise must not unwind into the fiber's start function,
-/// which is `extern "C"` (review finding MEM-1): under an unwinding
-/// backend it is caught here, the result is released, and the fiber ends
-/// with that panic as if its function had raised it. Under `Off` the raise
-/// abandons the entry and never returns here.
+/// which is `extern "C"` (review finding MEM-1): it is caught here, the
+/// result is released, and the fiber ends with that panic as if its
+/// function had raised it. The function has returned, so the fiber has no
+/// scope open: the panic was recorded in the scope it was spawned into
+/// (D-666).
 fn share_result(me: &ExecCtx, result: Word) -> Result<Word, Option<UnwindRecord>> {
     let marked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         // SAFETY: the fiber's own result: every object it reaches with a
@@ -269,29 +269,4 @@ fn share_result(me: &ExecCtx, result: Word) -> Result<Word, Option<UnwindRecord>
         }
         Err(_) => fatal(format_args!("a Rust panic inside the runtime")),
     }
-}
-
-/// The record of the unwinding the call the fiber's base frame just made
-/// ended with, taken, which clears the flag (D-699). Under `Off` a panic
-/// never returns here, so there is none.
-fn unwinding(me: &ExecCtx) -> Option<UnwindRecord> {
-    if backend(me) == UnwindBackend::Off {
-        return None;
-    }
-    take_unwound(me)
-}
-
-/// GAP(interim-panics): a spawned fiber's panic is printed as an abandoned
-/// fiber's (unless the entry captures reports) and ends the process with
-/// the interim's fatal error, until U4 records it in the fiber's scope.
-fn interim_panic(me: &ExecCtx, report: &PanicReport) -> ! {
-    if io::flush_stdout().is_err() {
-        io::exit_after_write_failure();
-    }
-    if !matches!(me.entry_mode(), EntryMode::Test | EntryMode::ConstEval(_)) {
-        io::write_stderr(&report.to_string());
-    }
-    fatal(format_args!(
-        "a fiber panicked (unwinding arrives with package U4)"
-    ))
 }

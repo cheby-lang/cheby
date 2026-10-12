@@ -36,7 +36,6 @@ use crate::object::{
 };
 use crate::panic::{cheby_rt_panic, cheby_rt_stack_slow, cheby_rt_stack_slow_frame};
 use crate::rc::{cheby_rt_drop, cheby_rt_dup};
-use crate::unwind::try_call::cheby_rt_unwind_resume;
 use crate::{bytes, consteval, desc, env, fiber_ops, hamt, io, list, num, text};
 
 /// The address of a static object.
@@ -50,7 +49,7 @@ fn data<T>(object: &'static T) -> *const u8 {
     clippy::as_conversions,
     reason = "taking the address of a function needs an `as` cast"
 )]
-fn runtime_symbols() -> [(&'static str, *const u8); 38] {
+fn runtime_symbols() -> [(&'static str, *const u8); 37] {
     [
         (sym::ALLOC, cheby_rt_alloc as *const u8),
         (sym::DUP, cheby_rt_dup as *const u8),
@@ -97,7 +96,6 @@ fn runtime_symbols() -> [(&'static str, *const u8); 38] {
         ),
         (sym::SCOPE_OPEN, cheby_rt_scope_open as *const u8),
         (sym::SCOPE_CLOSE, cheby_rt_scope_close as *const u8),
-        (sym::UNWIND_RESUME, cheby_rt_unwind_resume as *const u8),
         (sym::STATIC_ERR_NIL, data(&cheby_rt_static_err_nil)),
     ]
 }
@@ -347,12 +345,14 @@ mod tests {
             _ => None,
         })?;
         let (params, result) = rest.split_at(close);
+        // A local `fn` of a test block may leave its parameter types to
+        // inference: it declares no kernel.
         let params = params
             .split(',')
             .map(str::trim)
             .filter(|param| !param.is_empty())
-            .map(|param| c_type(param.split_once(':').unwrap().1.trim()))
-            .collect();
+            .map(|param| Some(c_type(param.split_once(':')?.1.trim())))
+            .collect::<Option<Vec<_>>>()?;
         let result = result
             .get(1..)?
             .trim()
