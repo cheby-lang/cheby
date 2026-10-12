@@ -217,6 +217,9 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-754     | Temporary std subset of checkpoint 1: stub kernels until T1 and L1                                  |
 | D-759     | `bench-compile`'s RC column leaves out drops in unwind cleanup pads                                 |
 | D-760     | RC group accepted on its geometric mean; a later package brings each benchmark within 3% of M1      |
+| D-766     | C1's target: build throughput no more than 10% below `base` at 100k and 1M                          |
+| D-767     | C1 keeps the never-raise kernel table; it does not count toward the target                          |
+| D-768     | `CHEBY_RT_STATS` event counters count only on demand                                                |
 
 ## Open questions
 

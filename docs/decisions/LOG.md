@@ -1106,8 +1106,21 @@ Goal: record the user's answers at M2's checkpoint 1: the unwinding backend, the
 
 Open:
 
-- The target of D-735's compile-cost package is not set yet.
+- ~~The target of D-735's compile-cost package is not set yet.~~ → D-766
 - Fiber-group cliffs, not decisions yet. Spawn-heavy programs at one thread release stack slots past D-749's limit of 64 and fault them in again (ROB4-1); the limit stays, and D-677's limit is revisited with numbers from real programs. Several fibers on one buffered channel slow down with more workers, from contention on the channel's lock (ROB4-2); the scheduler and channel work after checkpoint 1 owns it, and the fix (a lock-free buffer, batching or tuned spinning) needs its own entry.
 - D-733 needs every value that reaches Cheby code as a uniform word to be nonzero. The compiler does not build D-590's external values yet, so until M3's external-value work (OQ-P9) a NULL foreign result reads as an unwinding with no record (R3-ROB-2).
 - U4 decides two raise paths that are left: `rc::dup_slow` can run out of memory while it marks a subgraph shared (D-753), where no unwind edge exists; and when the system allocator refuses an allocation halfway through an in-place update, the structure in flight leaks, so such a program exits 102 instead of 101.
 - Tree-sitter: no grammar change. `../zed-cheby` needs nothing.
+
+## 2026-10-12: M2 checkpoint 2 plan
+
+Goal: settle the questions that the checkpoint-2 plan (U4, U5, C1, C2) needs answered before its packages start.
+
+- **D-765 Out of memory while marking an overflowed value shared**: When a value's local count overflows and `rc::dup_slow` marks everything it reaches as shared (D-753), the marking walk's scratch memory is not charged to the memory budget. If the system allocator refuses it, the process ends with `fatal runtime error: out of memory while marking a value shared after its count overflowed`. §11.8.2 names this as the one out-of-memory case that is not a panic. Why: `cheby_rt_dup` has no unwind edge, so it cannot raise. The case needs 2^31 references to one value and a refused allocation at once, which no real program meets. The user chose this. The rejected alternative was to mark what fits and raise `out of memory` at the fiber's next entry check. That keeps the spec as it was, but it needs a proof that no reference taken in between goes uncounted. Refines D-617, D-642, D-753.
+- **D-766 Target of the compile-cost package**: Package C1 (D-735) brings build throughput under the return flag to no more than 10% below `base` (`c300fdb`) on `bench-compile`'s 100k and 1M shapes, measured as D-702 measured. 8% is reported as a stretch, and D-702's 3% stays the reference. Why: the user set it from the levers measured at planning: one walk for the unwind pass and its validation, entry unwinding through a releasing helper, and pad drops. Together they are expected to win back 3.5 to 6 of the 14 points. The rejected alternatives were 11% (safer) and 8% (it needs every lever at its upper bound). Refines D-735.
+- **D-767 The never-raise kernel table stays in C1**: C1 builds a table of std kernels that never raise, so calls to them get no unwind edge. The table is cross-checked against the runtime's own list, and it does not count toward D-766's target. Why: the user chose to keep it. It removes flag loads in loops heavy on std calls, though it gives about 0 on C1's metric, because only 3 of 33,913 unwind edges in the 100k build are foreign calls. Dropping it until a measurement shows a gain was rejected. Refines D-735.
+- **D-768 Runtime counters count on demand**: The event counters of `CHEBY_RT_STATS` count only when `CHEBY_RT_STATS=1` is set or a test turns them on. Allocation and byte accounting for domains, budgets and the peak (D-564, D-617, D-691) are unchanged. Why: counting on every list push and string append costs RC benchmarks 3.5 to 10 points against M1. Counting only on demand is enough on its own to bring every RC benchmark within 3% (D-760). No program can observe the counters (D-635), and `bench-run`'s stats run sets the variable. The user chose this. Refines D-635.
+
+Open:
+
+- When the system allocator refuses an allocation halfway through an in-place update, the structure in flight leaks. U4 decides it, as the checkpoint-1 session's Open list says. The other raise path there is settled by D-765.

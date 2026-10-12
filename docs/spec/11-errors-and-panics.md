@@ -237,7 +237,7 @@ _Note:_ the reference implementation gives the root fiber a 64 MiB stack and lea
 
 ### 11.8.2 Out of memory
 
-On native targets, an allocation that cannot be served panics the running fiber with the message `out of memory`. This covers a size that overflows and a request that the system refuses, for objects, text and the results that standard-library functions such as `string::repeat` compute. It is a panic like any other, not an abort, so a REPL session and a test run survive it: `cheby run` exits with 101, `cheby test` fails the test, and the REPL unwinds the entry and continues (D-642, D-712).
+On native targets, an allocation that cannot be served panics the running fiber with the message `out of memory`. This covers a size that overflows and a request that the system refuses, for objects, text and the results that standard-library functions such as `string::repeat` compute. It is a panic like any other, not an abort, so a REPL session and a test run survive it: `cheby run` exits with 101, `cheby test` fails the test, and the REPL unwinds the entry and continues (D-642, D-712). One case is fatal instead: if the system refuses memory while the runtime marks a value as shared after its reference count overflowed, the process ends (D-765).
 
 During constant evaluation, a request over the memory limit, including one whose size overflows, is E0076 instead ([§13.9](13-tooling.md#139-compile-time-evaluation), D-617). A request under the limit that the system refuses is the panic, so the constant gets E0075 (D-642).
 
