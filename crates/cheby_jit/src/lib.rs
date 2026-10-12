@@ -59,6 +59,7 @@ use cheby_runtime::abi::{UnwindBackend, sym};
 use cheby_runtime::alloc::Domain;
 use cheby_runtime::entry::{Tramp0, Tramp1, Tramp2, Tramp3, Tramp4};
 use cheby_runtime::layout::{self as rt_layout, FieldKind, LayoutInfo};
+use cheby_runtime::unwind::try_call::{CodeRegistration, register_code};
 use cheby_runtime::{
     Callbacks, CodeToken, EntryConfig, EntryFn, EntryOutcome, RunConfig, Runtime, RuntimeError,
 };
@@ -242,10 +243,20 @@ type SymbolTable = Arc<Mutex<FxHashMap<Box<str>, usize>>>;
 struct CodeKeepAlive {
     /// The module, once the `Jit` is dropped.
     module: Mutex<Option<JITModule>>,
+    /// The handler tables of the module's functions registered with the
+    /// runtime, under the `try_call` prototype only (D-696): they end
+    /// with the code, before its memory is freed.
+    registrations: Mutex<Vec<CodeRegistration>>,
 }
 
 impl Drop for CodeKeepAlive {
     fn drop(&mut self) {
+        // No lookup may find code that is about to be freed, or later code
+        // at the same addresses.
+        self.registrations
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
         let module = self
             .module
             .get_mut()
@@ -375,6 +386,7 @@ impl Jit {
             module,
             keep_alive: Arc::new(CodeKeepAlive {
                 module: Mutex::new(None),
+                registrations: Mutex::new(Vec::new()),
             }),
             decls,
             layouts: JitLayouts::default(),
@@ -473,10 +485,38 @@ impl Jit {
         self.module
             .finalize_definitions()
             .map_err(|e| JitError::Codegen(CodegenError::Module(e.to_string())))?;
+        self.register_unwind_tables()?;
         self.apply_repoints()?;
         self.callbacks = self.find_callbacks();
         self.register_hooks(mirs)?;
         self.code_stats = self.code_stats.add(stats);
+        Ok(())
+    }
+
+    /// Registers the handler tables of the functions the batch defined with
+    /// the runtime's registry, now that their code has its final address:
+    /// only under the `try_call` prototype, whose unwinder looks them up
+    /// (D-696); code generation keeps no tables under any other backend.
+    /// The registrations live as long as the code memory
+    /// ([`CodeKeepAlive`]).
+    fn register_unwind_tables(&mut self) -> Result<(), JitError> {
+        let tables = self.decls.take_unwind_tables();
+        if tables.is_empty() {
+            return Ok(());
+        }
+        let mut registrations = Vec::with_capacity(tables.len());
+        for table in tables {
+            let start = self.module.get_finalized_function(table.func);
+            if start.is_null() {
+                return Err(JitError::ice("a compiled function has no address"));
+            }
+            registrations.push(register_code(start.addr(), table.len, table.sites));
+        }
+        self.keep_alive
+            .registrations
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .extend(registrations);
         Ok(())
     }
 

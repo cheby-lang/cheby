@@ -11,11 +11,13 @@
 use super::node::{Root, dup_word, register};
 use super::ops;
 use crate::abi::{PanicKind, Word};
-use crate::alloc::scratch::ScratchVec;
+use crate::alloc::{self, scratch::ScratchVec};
 use crate::ctx::ExecCtx;
 use crate::entry;
 use crate::generic::{self, Reached};
-use crate::panic::{fatal, panic_current};
+use crate::panic::fatal;
+use crate::unwind::guard::{DropOnUnwind, guarded};
+use crate::unwind::raise::raise_panic;
 use crate::values;
 
 /// The root behind a list word from generated code.
@@ -58,28 +60,42 @@ fn in_place(list: Root, alias: bool, op: impl FnOnce(Root) -> Root) -> Word {
 /// `ListPush`: `list` and `elem` owned; result owned. In place when the
 /// list is unique (F3).
 ///
+/// Both are consumed even when it raises (D-698): the memory budget is
+/// checked for the whole update before the list is taken over
+/// (`alloc::preflight`), and if it runs out there, both are released.
+///
 /// # Safety
 ///
 /// `list` is a live list and `elem` a live uniform word, both owned by the
 /// caller and given up.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_rt_list_push(ctx: *mut ExecCtx, list: u64, elem: u64) -> u64 {
-    let _ = ctx;
-    // SAFETY: forwarded from the caller.
-    ops::push(unsafe { root(list) }, elem).word()
+    guarded(Some(ctx), || {
+        let owned = DropOnUnwind::new([list, elem]);
+        // SAFETY: forwarded from the caller.
+        let list = unsafe { root(list) };
+        alloc::preflight(ops::push_bound(list));
+        owned.disarm();
+        ops::push(list, elem).word()
+    })
 }
 
 /// `ListAppend` (`[..a, ..b]`): `a` owned, `b` borrowed; result owned.
+/// `a` is consumed even when it raises, as [`cheby_rt_list_push`] says.
 ///
 /// # Safety
 ///
 /// `a` and `b` are live lists; the caller gives up its reference to `a`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_rt_list_append(ctx: *mut ExecCtx, a: u64, b: u64) -> u64 {
-    let _ = ctx;
-    // SAFETY: forwarded from the caller.
-    let (a, b) = unsafe { (root(a), root(b)) };
-    ops::append(a, b).word()
+    guarded(Some(ctx), || {
+        let owned = DropOnUnwind::new([a]);
+        // SAFETY: forwarded from the caller.
+        let (a, b) = unsafe { (root(a), root(b)) };
+        alloc::preflight(ops::append_bound(a, b));
+        owned.disarm();
+        ops::append(a, b).word()
+    })
 }
 
 /// `ListLength`: the list borrowed.
@@ -129,16 +145,18 @@ pub unsafe extern "C" fn cheby_rt_list_slice(
     start: i64,
     end: i64,
 ) -> u64 {
-    let _ = ctx;
-    // SAFETY: forwarded from the caller.
-    let list = unsafe { root(list) };
-    let len = ops::len(list);
-    ops::slice(list, ops::clamp(start, len), ops::clamp(end, len)).word()
+    guarded(Some(ctx), || {
+        // SAFETY: forwarded from the caller.
+        let list = unsafe { root(list) };
+        let len = ops::len(list);
+        ops::slice(list, ops::clamp(start, len), ops::clamp(end, len)).word()
+    })
 }
 
 /// `ListSlice` on a list that dies at the match: `list` owned; the O(1)
 /// view of [`cheby_rt_list_slice`], with the root changed in place when
-/// the list's count is one.
+/// the list's count is one. `list` is consumed even when it raises, as
+/// [`cheby_rt_list_push`] says.
 ///
 /// # Safety
 ///
@@ -150,11 +168,15 @@ pub unsafe extern "C" fn cheby_rt_list_slice_owned(
     start: i64,
     end: i64,
 ) -> u64 {
-    let _ = ctx;
-    // SAFETY: forwarded from the caller.
-    let list = unsafe { root(list) };
-    let len = ops::len(list);
-    ops::slice_owned(list, ops::clamp(start, len), ops::clamp(end, len)).word()
+    guarded(Some(ctx), || {
+        let owned = DropOnUnwind::new([list]);
+        // SAFETY: forwarded from the caller.
+        let list = unsafe { root(list) };
+        alloc::preflight(ops::slice_owned_bound());
+        owned.disarm();
+        let len = ops::len(list);
+        ops::slice_owned(list, ops::clamp(start, len), ops::clamp(end, len)).word()
+    })
 }
 
 // ---------------------------------------------------------------------
@@ -179,15 +201,22 @@ pub unsafe extern "C" fn cheby_list_length(xs: u64) -> i64 {
 /// `xs` is a live list.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_list_get(xs: u64, index: i64) -> u64 {
-    // SAFETY: forwarded from the caller.
-    let xs = unsafe { root(xs) };
-    match usize::try_from(index).ok().and_then(|i| ops::get(xs, i)) {
-        Some(elem) => {
-            dup_word(elem);
-            values::some(elem)
+    guarded(None, || {
+        // SAFETY: forwarded from the caller.
+        let xs = unsafe { root(xs) };
+        match usize::try_from(index).ok().and_then(|i| ops::get(xs, i)) {
+            Some(elem) => {
+                dup_word(elem);
+                // The reference is released if the `Some` cannot be
+                // allocated.
+                let held = DropOnUnwind::new([elem]);
+                let some = values::some(elem);
+                held.disarm();
+                some
+            }
+            None => values::none(),
         }
-        None => values::none(),
-    }
+    })
 }
 
 /// `list::push`. O(log n); in place, amortized O(1), at count one.
@@ -197,11 +226,13 @@ pub unsafe extern "C" fn cheby_list_get(xs: u64, index: i64) -> u64 {
 /// `xs` is a live list and `item` a live uniform word.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_list_push(xs: u64, item: u64) -> u64 {
-    // SAFETY: forwarded from the caller.
-    let xs = unsafe { root(xs) };
-    in_place(xs, false, |xs| {
-        dup_word(item);
-        ops::push(xs, item)
+    guarded(None, || {
+        // SAFETY: forwarded from the caller.
+        let xs = unsafe { root(xs) };
+        in_place(xs, false, |xs| {
+            dup_word(item);
+            ops::push(xs, item)
+        })
     })
 }
 
@@ -212,11 +243,13 @@ pub unsafe extern "C" fn cheby_list_push(xs: u64, item: u64) -> u64 {
 /// `xs` is a live list and `item` a live uniform word.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_list_prepend(xs: u64, item: u64) -> u64 {
-    // SAFETY: forwarded from the caller.
-    let xs = unsafe { root(xs) };
-    in_place(xs, false, |xs| {
-        dup_word(item);
-        ops::prepend(xs, item)
+    guarded(None, || {
+        // SAFETY: forwarded from the caller.
+        let xs = unsafe { root(xs) };
+        in_place(xs, false, |xs| {
+            dup_word(item);
+            ops::prepend(xs, item)
+        })
     })
 }
 
@@ -227,9 +260,11 @@ pub unsafe extern "C" fn cheby_list_prepend(xs: u64, item: u64) -> u64 {
 /// `xs` and `other` are live lists.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_list_append(xs: u64, other: u64) -> u64 {
-    // SAFETY: forwarded from the caller.
-    let (xs, other) = unsafe { (root(xs), root(other)) };
-    in_place(xs, xs == other, |xs| ops::append(xs, other))
+    guarded(None, || {
+        // SAFETY: forwarded from the caller.
+        let (xs, other) = unsafe { (root(xs), root(other)) };
+        in_place(xs, xs == other, |xs| ops::append(xs, other))
+    })
 }
 
 /// `list::set`: unchanged outside the list (D-318). O(log n); in place
@@ -240,15 +275,17 @@ pub unsafe extern "C" fn cheby_list_append(xs: u64, other: u64) -> u64 {
 /// `xs` is a live list and `item` a live uniform word.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_list_set(xs: u64, index: i64, item: u64) -> u64 {
-    // SAFETY: forwarded from the caller.
-    let xs = unsafe { root(xs) };
-    let Some(index) = usize::try_from(index).ok().filter(|&i| i < ops::len(xs)) else {
-        dup_word(xs.word());
-        return xs.word();
-    };
-    in_place(xs, false, |xs| {
-        dup_word(item);
-        ops::set(xs, index, item)
+    guarded(None, || {
+        // SAFETY: forwarded from the caller.
+        let xs = unsafe { root(xs) };
+        let Some(index) = usize::try_from(index).ok().filter(|&i| i < ops::len(xs)) else {
+            dup_word(xs.word());
+            return xs.word();
+        };
+        in_place(xs, false, |xs| {
+            dup_word(item);
+            ops::set(xs, index, item)
+        })
     })
 }
 
@@ -259,10 +296,12 @@ pub unsafe extern "C" fn cheby_list_set(xs: u64, index: i64, item: u64) -> u64 {
 /// `xs` is a live list.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_list_slice(xs: u64, start: i64, end: i64) -> u64 {
-    // SAFETY: forwarded from the caller.
-    let xs = unsafe { root(xs) };
-    let len = ops::len(xs);
-    ops::slice(xs, ops::clamp(start, len), ops::clamp(end, len)).word()
+    guarded(None, || {
+        // SAFETY: forwarded from the caller.
+        let xs = unsafe { root(xs) };
+        let len = ops::len(xs);
+        ops::slice(xs, ops::clamp(start, len), ops::clamp(end, len)).word()
+    })
 }
 
 /// `list::take`, clamped (D-298). O(1).
@@ -272,9 +311,11 @@ pub unsafe extern "C" fn cheby_list_slice(xs: u64, start: i64, end: i64) -> u64 
 /// `xs` is a live list.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_list_take(xs: u64, count: i64) -> u64 {
-    // SAFETY: forwarded from the caller.
-    let xs = unsafe { root(xs) };
-    ops::slice(xs, 0, ops::clamp(count, ops::len(xs))).word()
+    guarded(None, || {
+        // SAFETY: forwarded from the caller.
+        let xs = unsafe { root(xs) };
+        ops::slice(xs, 0, ops::clamp(count, ops::len(xs))).word()
+    })
 }
 
 /// `list::drop`, clamped (D-298). O(1).
@@ -284,10 +325,12 @@ pub unsafe extern "C" fn cheby_list_take(xs: u64, count: i64) -> u64 {
 /// `xs` is a live list.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_list_drop(xs: u64, count: i64) -> u64 {
-    // SAFETY: forwarded from the caller.
-    let xs = unsafe { root(xs) };
-    let len = ops::len(xs);
-    ops::slice(xs, ops::clamp(count, len), len).word()
+    guarded(None, || {
+        // SAFETY: forwarded from the caller.
+        let xs = unsafe { root(xs) };
+        let len = ops::len(xs);
+        ops::slice(xs, ops::clamp(count, len), len).word()
+    })
 }
 
 /// `list::split_at`, clamped (D-298): the tuple `(take, drop)`. O(1).
@@ -297,13 +340,19 @@ pub unsafe extern "C" fn cheby_list_drop(xs: u64, count: i64) -> u64 {
 /// `xs` is a live list.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_list_split_at(xs: u64, count: i64) -> u64 {
-    // SAFETY: forwarded from the caller.
-    let xs = unsafe { root(xs) };
-    let len = ops::len(xs);
-    let count = ops::clamp(count, len);
-    let front = ops::slice(xs, 0, count).word();
-    let back = ops::slice(xs, count, len).word();
-    values::tuple(&[front, back])
+    guarded(None, || {
+        // SAFETY: forwarded from the caller.
+        let xs = unsafe { root(xs) };
+        let len = ops::len(xs);
+        let count = ops::clamp(count, len);
+        let front = DropOnUnwind::new([ops::slice(xs, 0, count).word()]);
+        let back = DropOnUnwind::new([ops::slice(xs, count, len).word()]);
+        let ([front_word], [back_word]) = (front.words(), back.words());
+        let pair = values::tuple(&[front_word, back_word]);
+        front.disarm();
+        back.disarm();
+        pair
+    })
 }
 
 /// `list::unique`: `xs` without repeated elements, keeping the first of
@@ -321,39 +370,42 @@ pub unsafe extern "C" fn cheby_list_split_at(xs: u64, count: i64) -> u64 {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_list_unique(xs: u64) -> u64 {
     fn reached<T>(_: Reached) -> T {
-        panic_current(PanicKind::EqualityOnFunction, None)
+        raise_panic(None, PanicKind::EqualityOnFunction, None)
     }
-    register();
-    let seed = entry::current_seed();
-    // Elements are borrowed from `xs`, which the caller keeps alive. The
-    // kept elements and the table that finds them are scratch buffers, so
-    // the memory limit counts them (D-617).
-    let mut kept: ScratchVec<Word> = ScratchVec::new();
-    let mut table = Table::default();
-    let mut repeated = false;
-    // SAFETY: forwarded from the caller.
-    for item in unsafe { super::iter(xs) } {
-        // SAFETY: a live element of a live list.
-        let hash = unsafe { generic::hash_with_seed(item, seed) }.unwrap_or_else(reached);
-        let found = table.find_or_insert(hash, kept.len(), |index| {
-            let other = kept.get(index).copied().unwrap_or_default();
-            // SAFETY: live elements of one type.
-            unsafe { generic::equal(other, item) }.unwrap_or_else(reached)
-        });
-        if found {
-            repeated = true;
-        } else {
-            kept.push(item);
+    guarded(None, || {
+        register();
+        let seed = entry::current_seed();
+        // Elements are borrowed from `xs`, which the caller keeps alive. The
+        // kept elements and the table that finds them are scratch buffers,
+        // so the memory limit counts them (D-617), and an unwinding drops
+        // them (D-697).
+        let mut kept: ScratchVec<Word> = ScratchVec::new();
+        let mut table = Table::default();
+        let mut repeated = false;
+        // SAFETY: forwarded from the caller.
+        for item in unsafe { super::iter(xs) } {
+            // SAFETY: a live element of a live list.
+            let hash = unsafe { generic::hash_with_seed(item, seed) }.unwrap_or_else(reached);
+            let found = table.find_or_insert(hash, kept.len(), |index| {
+                let other = kept.get(index).copied().unwrap_or_default();
+                // SAFETY: live elements of one type.
+                unsafe { generic::equal(other, item) }.unwrap_or_else(reached)
+            });
+            if found {
+                repeated = true;
+            } else {
+                kept.push(item);
+            }
         }
-    }
-    if !repeated {
-        dup_word(xs);
-        return xs;
-    }
-    for &item in kept.iter() {
-        dup_word(item);
-    }
-    super::from_iter(kept.drain())
+        if !repeated {
+            dup_word(xs);
+            return xs;
+        }
+        for &item in kept.iter() {
+            dup_word(item);
+        }
+        super::from_iter(kept.drain())
+    })
 }
 
 /// An open-addressing hash table of the indices of the kept elements of

@@ -1,0 +1,14 @@
+// @mode: check-fail
+// @decisions: D-455, D-692
+// @milestone: M2
+//! A kernel that receives the running fiber's context takes it as its
+//! first C argument. Binding the symbol of `channel::send` from a user
+//! module, with exactly the Cheby types of `channel::send`, therefore
+//! gives the symbol another C signature (§12.5.1).
+
+@!target(native)
+
+import std::channel
+
+@external(native, "cheby_channel_send")
+pub fn send_directly<T>(sender: channel::Sender<T>, value: T) -> Result<Nil, T>

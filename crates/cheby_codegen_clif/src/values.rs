@@ -238,7 +238,7 @@ impl Translator<'_, '_> {
             }
         };
         let size = self.b.ins().iconst(types::I64, shape.size);
-        let object = self.runtime_value(RuntimeFunc::Alloc, &[ctx, size, header])?;
+        let object = self.edge_runtime_value(RuntimeFunc::Alloc, &[ctx, size, header])?;
         if let Some((at, count)) = shape.escaped {
             let tagged = abi::tag_int(i64::try_from(count).unwrap_or(i64::MAX))
                 .ok_or_else(|| CodegenError::ice("a field count out of range"))?;
@@ -336,7 +336,9 @@ impl Translator<'_, '_> {
     }
 
     /// The value in the slot of the constant `def`, borrowed from the slot;
-    /// an empty slot (0) asks `cheby_rt_const_missing(ctx, slot)` (E6).
+    /// an empty slot (0) asks `cheby_rt_const_missing(ctx, slot)` (E6),
+    /// whose unwinding, under an unwinding backend, is tested only on that
+    /// cold path (D-698).
     pub(crate) fn load_const(&mut self, def: DefId) -> Result<Value, CodegenError> {
         let slot = self.decls.const_data(def)?;
         let address = self.data_address(slot, true);
@@ -354,7 +356,7 @@ impl Translator<'_, '_> {
             .brif(empty, missing, &[], join, &[BlockArg::Value(value)]);
         self.b.switch_to_block(missing);
         let ctx = self.ctx()?;
-        let forced = self.runtime_value(RuntimeFunc::ConstMissing, &[ctx, address])?;
+        let forced = self.edge_runtime_value(RuntimeFunc::ConstMissing, &[ctx, address])?;
         self.b.ins().jump(join, &[BlockArg::Value(forced)]);
         self.b.switch_to_block(join);
         Ok(result)
@@ -372,7 +374,7 @@ impl Translator<'_, '_> {
             vals.push(self.ctx()?);
         }
         vals.extend(self.operands(args)?);
-        let result = self.runtime_call(f, &vals)?;
+        let result = self.edge_runtime_call(f, &vals)?;
         match (helper.ret(), result) {
             (Some(_), Some(v)) => Ok(Some(v)),
             (None, None) => Ok(None),
@@ -423,7 +425,7 @@ impl Translator<'_, '_> {
                     RuntimeFunc::BoxF32
                 };
                 let ctx = self.ctx()?;
-                self.runtime_value(f, &[ctx, v])?
+                self.edge_runtime_value(f, &[ctx, v])?
             }
             Repr::Bool => {
                 let truth = self.static_object(abi::sym::STATIC_TRUE)?;
@@ -458,7 +460,7 @@ impl Translator<'_, '_> {
             .brif(fits, join, &[BlockArg::Value(tagged)], slow, &[]);
         self.b.switch_to_block(slow);
         let ctx = self.ctx()?;
-        let boxed = self.runtime_value(f, &[ctx, raw])?;
+        let boxed = self.edge_runtime_value(f, &[ctx, raw])?;
         self.b.ins().jump(join, &[BlockArg::Value(boxed)]);
         self.b.switch_to_block(join);
         Ok(result)

@@ -816,3 +816,217 @@ fn unwind_pads_do_not_renumber_the_clif_under_off() {
     assert_eq!(plain, padded_text);
     assert!(!padded_text.contains(&format!("user{}", func::TRAP_RESUME)));
 }
+
+/// `f(_0)` with an unwind edge on each kind of statement the return-flag
+/// prototype lowers (D-698): a Cheby call, a checked addition, a foreign
+/// call, an allocation and a `panic` terminator, the chained pads `bb1`
+/// (`drop _1`) and `bb2` (`drop _0`, the entry pad), and `bb3: resume`.
+fn edges_unit() -> MirModule {
+    use cheby_mir::{ArithOp, BlockId, Callee, LayoutRef, Local, PanicKind, Rvalue};
+    let mut u = unit();
+    let f = u.functions[0].key;
+    let FnKey::Item(f_def) = f else {
+        panic!("unit() has an item")
+    };
+    let local = Local::from_u32;
+    let function = &mut u.functions[0];
+    function.locals = IndexVec::from_raw(
+        [Repr::Value, Repr::Value, Repr::Int, Repr::Value]
+            .into_iter()
+            .map(|repr| LocalDecl {
+                repr,
+                name: None,
+                ty: None,
+            })
+            .collect(),
+    )
+    .unwrap();
+    let goto = |n| Terminator::Goto {
+        target: BlockId::from_u32(n),
+        args: Vec::new(),
+    };
+    let bb0 = Block {
+        params: Vec::new(),
+        stmts: vec![
+            Stmt::Dup(local(0)),
+            Stmt::Assign {
+                dst: local(1),
+                value: Rvalue::Call {
+                    callee: Callee::Direct(f_def),
+                    args: vec![Operand::Local(local(0))],
+                },
+            },
+            Stmt::Assign {
+                dst: local(2),
+                value: Rvalue::Checked {
+                    op: ArithOp::Add,
+                    lhs: Operand::Const(Const::Int(1)),
+                    rhs: Operand::Const(Const::Int(2)),
+                    repr: Repr::Int,
+                    loc: StrId::from_u32(0),
+                },
+            },
+            Stmt::Eval(Rvalue::CallForeign {
+                symbol: "cheby_io_print".into(),
+                sig: ForeignSig {
+                    params: vec![CType::Ptr],
+                    ret: CType::Void,
+                },
+                args: vec![Operand::Local(local(1))],
+            }),
+            Stmt::Assign {
+                dst: local(3),
+                value: Rvalue::Alloc {
+                    layout: LayoutRef::Ctor(cheby_iface::builtin::SOME),
+                    fields: vec![Operand::Local(local(1))],
+                },
+            },
+        ],
+        term: Terminator::Panic {
+            kind: PanicKind::Overflow,
+            message: None,
+            loc: StrId::from_u32(0),
+        },
+        unwind: vec![
+            (1, BlockId::from_u32(2)),
+            (2, BlockId::from_u32(1)),
+            (3, BlockId::from_u32(1)),
+            (4, BlockId::from_u32(1)),
+            (5, BlockId::from_u32(1)),
+        ],
+    };
+    let pad = |drop: u32, term| Block {
+        params: Vec::new(),
+        stmts: vec![Stmt::Drop(local(drop))],
+        term,
+        unwind: Vec::new(),
+    };
+    function.blocks = IndexVec::from_raw(vec![
+        bb0,
+        pad(1, goto(2)),
+        pad(0, goto(3)),
+        Block {
+            params: Vec::new(),
+            stmts: Vec::new(),
+            term: Terminator::Resume,
+            unwind: Vec::new(),
+        },
+    ])
+    .unwrap();
+    function.entry_unwind = Some(BlockId::from_u32(2));
+    u
+}
+
+/// The CLIF text of `units[0]`'s first function under `opts`, checked to
+/// compile.
+fn clif_of(units: &[MirModule; 1], opts: &CodegenOptions) -> String {
+    let cx = CodegenCx {
+        layouts: &BuiltinLayouts,
+    };
+    let mut m = module();
+    let mut decls = Decls::new(cranelift_module::Module::isa(&m)).unwrap();
+    declare(&mut m, &mut decls, units, &cx, opts).unwrap();
+    let clif = translate(&units[0], &units[0].functions[0], &decls, &cx, opts).unwrap();
+    let again = translate(&units[0], &units[0].functions[0], &decls, &cx, opts).unwrap();
+    let text = decls.describe(&clif);
+    assert_eq!(text, decls.describe(&again), "translation is deterministic");
+    compile_function(cranelift_module::Module::isa(&m), clif).unwrap();
+    text
+}
+
+/// The return-flag prototype (D-696, architecture §6.3): with edges, the
+/// pads are translated as cold blocks whose drops call `cheby_rt_drop`;
+/// a C call loads the flag at `ctx+12`; a Cheby call and `cheby_rt_alloc`
+/// test their result; the panic block jumps to its pad instead of
+/// trapping; `resume` returns 0; the entry check's slow path tests the
+/// flag. With `off` none of it appears, and the pads stay untranslated.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn flag_backend_lowers_every_edge() {
+    use cheby_runtime::abi::UnwindBackend;
+    let units = [edges_unit()];
+    let off = clif_of(&units, &CodegenOptions::default());
+    let flag = clif_of(
+        &units,
+        &CodegenOptions {
+            unwind: UnwindBackend::Flag,
+            ..CodegenOptions::default()
+        },
+    );
+    let load_flag = format!(
+        "load.i32 notrap aligned v0+{}",
+        cheby_runtime::abi::CTX_UNWIND
+    );
+    // Off: the edges are ignored, as before the backends (D-698).
+    assert!(!off.contains(&load_flag), "{off}");
+    assert!(
+        !off.contains("= cheby_rt_drop"),
+        "the pads were translated:\n{off}"
+    );
+    assert!(
+        off.contains(&format!("trap user{}", func::TRAP_NORETURN)),
+        "{off}"
+    );
+    // Flag.
+    let loads = flag.matches(&load_flag).count();
+    // The entry check's slow path and the foreign call; the Cheby call,
+    // the allocation and the panic do not load the flag.
+    assert_eq!(loads, 2, "{flag}");
+    assert!(flag.contains(" cold:"), "{flag}");
+    assert!(
+        !flag.contains(&format!("trap user{}", func::TRAP_NORETURN)),
+        "the panic blocks jump to their pads:\n{flag}"
+    );
+    assert!(
+        !flag.contains(&format!("trap user{}", func::TRAP_RESUME)),
+        "{flag}"
+    );
+    assert!(flag.contains("iconst.i64 0"), "{flag}");
+    // Pads drop out of line: no inline drop's `rc > 1` test.
+    assert!(!flag.contains("icmp_imm sgt"), "{flag}");
+    // The two panics (the checked add's and the terminator's) and the
+    // two calls whose result is tested branch to a pad: six `brif`s on
+    // top of the dup's two and the entry check's one, the add's
+    // overflow test and the two flag loads.
+    assert!(flag.matches("brif").count() >= 6, "{flag}");
+}
+
+/// With an unwinding backend, a pad is translated even when only an
+/// unwind edge reaches it, and reverse postorder puts it after the block
+/// whose statement unwinds to it: a pad's drop of a local defined in that
+/// block compiles (the verifier checks dominance).
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn flag_pads_follow_their_sources() {
+    use cheby_runtime::abi::UnwindBackend;
+    let opts = CodegenOptions {
+        unwind: UnwindBackend::Flag,
+        checked_rc: true,
+        ..CodegenOptions::default()
+    };
+    let text = clif_of(&[edges_unit()], &opts);
+    // Both pads and `resume` are there: two out-of-line drops in the pads.
+    assert!(text.contains("= cheby_rt_drop"), "{text}");
+    // Without the stack check there is no entry pad, and the function
+    // still compiles.
+    let unchecked = CodegenOptions {
+        stack_check: false,
+        ..opts
+    };
+    let text = clif_of(&[edges_unit()], &unchecked);
+    assert_eq!(
+        text.matches(&format!(
+            "load.i32 notrap aligned v0+{}",
+            cheby_runtime::abi::CTX_UNWIND
+        ))
+        .count(),
+        1,
+        "{text}"
+    );
+}

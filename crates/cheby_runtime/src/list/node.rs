@@ -72,7 +72,9 @@ const ROOT_TREE: usize = 8;
 const ROOT_OFFSET: usize = 16;
 const ROOT_LEN: usize = 24;
 /// Size of a root in bytes.
-const ROOT_SIZE: usize = 32;
+pub(super) const ROOT_SIZE: usize = 32;
+/// The most bytes one node takes: a branch, larger than any leaf.
+pub(super) const MAX_NODE_SIZE: usize = BRANCH_SIZE;
 
 /// The byte offset of slot `i` of a leaf or branch.
 const fn slot(i: usize) -> usize {

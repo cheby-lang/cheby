@@ -584,8 +584,9 @@ pub mod sym {
     /// handle.
     pub const SCOPE_OPEN: &str = "cheby_rt_scope_open";
     /// `bool cheby_rt_scope_close(ExecCtx *ctx, uint64_t scope, bool unwound)`:
-    /// closes the scope `scope_run` opened (D-693); true when the body's
-    /// failure was caught there.
+    /// closes the scope `scope_run` opened (D-693), consuming the handle;
+    /// true when the scope succeeded, false when it caught a failure
+    /// (`scope_run` then returns the static `Err(Nil)`).
     pub const SCOPE_CLOSE: &str = "cheby_rt_scope_close";
     /// `void cheby_rt_unwind_resume(ExecCtx *ctx)`: the `try_call`
     /// prototype's resume of an unwinding (D-696).

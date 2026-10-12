@@ -1,0 +1,24 @@
+// @mode: run-pass
+// @decisions: D-054, D-087, D-205, D-670
+// @milestone: M2
+//! There is no `close`: a channel closes for its receivers when its last
+//! `Sender` is dropped, after the buffer drains, and for its senders when
+//! its last `Receiver` is dropped. `send` then gives the value back
+//! (§10.5.3).
+
+import std::channel
+import std::io
+
+fn main() {
+  let (tx, rx) = channel::new::<Int>(2)
+  let assert Ok(Nil) = channel::send(tx, 7)
+  // `tx` is not used again, so the channel is closed for `rx` now.
+  let buffered = channel::receive(rx)
+  let drained = channel::receive(rx)
+  io::println("{buffered:?} {drained:?}")
+  let (lonely_tx, lonely_rx) = channel::new::<String>(2)
+  let _ = lonely_rx
+  // The only `Receiver` is gone, so the value comes back.
+  let refused = channel::send(lonely_tx, "returned")
+  io::println("{refused:?}")
+}

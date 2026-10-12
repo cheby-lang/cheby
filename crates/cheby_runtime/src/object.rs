@@ -260,6 +260,11 @@ impl StaticPair {
 #[unsafe(no_mangle)]
 pub static cheby_rt_static_err_nil: StaticPair = StaticPair::new(layout::ERR, &cheby_rt_static_nil);
 
+/// A static `Ok(Nil)`, which `channel::send` returns when it succeeds, so
+/// that a send allocates nothing for its result. Runtime code only: no
+/// symbol of generated code names it.
+pub(crate) static STATIC_OK_NIL: StaticPair = StaticPair::new(layout::OK, &cheby_rt_static_nil);
+
 /// The static object of a builtin nullary constructor, by layout id.
 #[must_use]
 pub fn static_ctor(id: LayoutId) -> Option<&'static StaticObject> {

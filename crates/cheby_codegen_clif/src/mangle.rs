@@ -51,11 +51,13 @@ pub enum Kind {
     DynFwd,
     /// The unchecked inner body of a function with a large frame (D-679).
     Big,
+    /// The `try_call` prototype's exit stub of one C signature (D-696).
+    Exit,
 }
 
 impl Kind {
     /// Every kind.
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 19] = [
         Self::Fn,
         Self::Slot,
         Self::Shim,
@@ -74,6 +76,7 @@ impl Kind {
         Self::TupleFn,
         Self::DynFwd,
         Self::Big,
+        Self::Exit,
     ];
 
     /// The word in the symbol.
@@ -98,6 +101,7 @@ impl Kind {
             Self::TupleFn => "tfn",
             Self::DynFwd => "dynfwd",
             Self::Big => "big",
+            Self::Exit => "exit",
         }
     }
 }
@@ -227,6 +231,22 @@ pub fn dyn_forward(iface_fn: &DefName, dyn_iface: &DefName) -> String {
 pub fn large_frame_body(owner: &str) -> String {
     let owner = owner.strip_prefix(PREFIX).unwrap_or(owner);
     format!("{PREFIX}{}${owner}", Kind::Big.word())
+}
+
+/// `cb$exit$<parameters>$<result>`: the `try_call` prototype's exit stub
+/// for C functions of one machine signature (D-696), the parameters' and
+/// the result's type words (`i8` … `f64`, `v` for no result) joined with
+/// `_`, or `v` when there are no parameters. The words come from the
+/// signature, so the name is the same in every build (D-264); the kind
+/// comes first, as in every symbol (D-456). GAP(try-call-exit-stub-symbol).
+#[must_use]
+pub fn exit_stub(params: &[&str], ret: &str) -> String {
+    let params = if params.is_empty() {
+        "v".to_owned()
+    } else {
+        params.join("_")
+    };
+    format!("{PREFIX}{}${params}${ret}", Kind::Exit.word())
 }
 
 /// `cb$str$<owner without cb$>$<n>`: string `n` of the function whose

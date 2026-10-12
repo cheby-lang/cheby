@@ -7,11 +7,14 @@
 //! run (D-690, [`crate::sched`]). Isolated entries, constant evaluation
 //! and the REPL (D-713), and every entry where fibers are not supported
 //! (Windows until M6, D-714), run on a dedicated OS thread with the
-//! requested stack size: [`run_entry`] and [`run_task`] (D-457). Until
-//! unwinding exists, a panic reports to the waiting host and abandons the
-//! entry: an isolated entry parks its thread forever; a root fiber switches
-//! to its worker for good and its slot is quarantined
-//! (GAP(interim-panics)). Either way its live objects are abandoned.
+//! requested stack size: [`run_entry`] and [`run_task`] (D-457). With the
+//! default unwinding backend, a panic reports to the waiting host and
+//! abandons the entry: an isolated entry parks its thread forever; a root
+//! fiber switches to its worker for good and its slot is quarantined
+//! (GAP(interim-panics)). Either way its live objects are abandoned. Under
+//! an unwinding backend (D-696) the entry unwinds to its catch point, its
+//! thread or fiber ends normally (D-713), and the host learns of the panic
+//! from the fiber's record (`unwind::record::finish_entry`, D-699).
 //!
 //! # The current entry
 //!
@@ -71,6 +74,7 @@ use crate::panic::{PanicReport, stack_position};
 use crate::sched::{FiberSched, Runtime, RuntimeConfig};
 use crate::stats;
 use crate::tls;
+use crate::unwind;
 
 /// An entry thunk: generated with the platform C calling convention, it
 /// takes the context and returns a raw `i64` status (`main`, tests) or an
@@ -202,9 +206,10 @@ impl EntryConfig {
 pub enum EntryOutcome {
     /// The thunk returned this word.
     Returned(u64),
-    /// The entry panicked. Until unwinding exists, its thread is parked
-    /// forever (an isolated entry) or its fiber is abandoned and its slot
-    /// quarantined (a root fiber, GAP(interim-panics)).
+    /// The entry panicked. With the default unwinding backend, its thread
+    /// is parked forever (an isolated entry) or its fiber is abandoned and
+    /// its slot quarantined (a root fiber, GAP(interim-panics)); under an
+    /// unwinding backend it unwound and ended (D-699).
     Panicked(PanicReport),
 }
 
@@ -605,7 +610,16 @@ unsafe fn spawn_entry(
             // The caller of `spawn_entry` keeps the code `body` runs valid
             // until the host stops waiting, which is after this call
             // returns.
-            let word = body(ctx);
+            let word = catch_unwinding(|| body(ctx));
+            // The entry's catch point (D-699, D-701): under an unwinding
+            // backend a panic unwound to here, and the record says so, not
+            // the word (a `main` thunk's 0 is success). With the default
+            // backend a panic never gets here.
+            // SAFETY: `ctx` is the live block made above.
+            let outcome = match unwind::record::finish_entry(unsafe { &*ctx }) {
+                Some(report) => EntryOutcome::Panicked(report),
+                None => EntryOutcome::Returned(word),
+            };
             entry_interrupter.clear();
             // SAFETY: null is always allowed.
             unsafe { tls::set_current_fiber(std::ptr::null_mut()) };
@@ -614,11 +628,17 @@ unsafe fn spawn_entry(
             // lock). Dropping it releases the entry's constants and domain
             // before the host hears of the outcome.
             drop(unsafe { Box::from_raw(ctx) });
-            sender.send(EntryOutcome::Returned(word)).ok();
+            sender.send(outcome).ok();
         })
         .map_err(RuntimeError::Spawn)?;
     let result = match wait(&receiver, deadline, &interrupter) {
         Ok(outcome @ EntryOutcome::Returned(_)) => {
+            thread.join().map_err(|_| RuntimeError::EntryLost)?;
+            Ok(outcome)
+        }
+        // Under an unwinding backend the entry unwound and its thread ends
+        // (D-713).
+        Ok(outcome @ EntryOutcome::Panicked(_)) if unwind_backend != UnwindBackend::Off => {
             thread.join().map_err(|_| RuntimeError::EntryLost)?;
             Ok(outcome)
         }
@@ -631,6 +651,19 @@ unsafe fn spawn_entry(
     };
     stats_domain.stats().add_entry(started.elapsed());
     result
+}
+
+/// Runs an entry's body and returns its word, or 0 when a Cheby unwinding
+/// leaves it: a host task's Rust body ([`run_task`]) raises with no guard
+/// above it, and the unwinding ends here, at the entry's catch point,
+/// where the fiber's record tells the host (D-699). Any other Rust panic
+/// goes on as before.
+fn catch_unwinding(body: impl FnOnce() -> u64) -> u64 {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
+        Ok(word) => word,
+        Err(payload) if payload.is::<unwind::raise::ChebyUnwind>() => 0,
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
 }
 
 /// How often the watchdog repeats its interrupt after the deadline, in
@@ -708,7 +741,9 @@ impl Default for RunConfig {
 /// - The thunk's 0 or 1 (`main` returned `Nil`/`Ok(Nil)`, or `Err(e)`
 ///   after printing `e`), after flushing standard output. A failed flush
 ///   gives 1 (D-306, D-346).
-/// - 101 after a panic, which has already flushed and printed.
+/// - 101 after a panic, which has already flushed and printed. Under an
+///   unwinding backend (D-696) the debug leak check also runs after a
+///   panic, and a leak gives 102 instead (D-710).
 /// - In debug builds, 102 if objects of the build's domain are still live
 ///   when the status is 0 or 1 (D-458). Constants frozen before `main`
 ///   have left the domain, so every live object is a leak.
@@ -775,7 +810,18 @@ pub unsafe fn run_main(entry: EntryFn, config: RunConfig) -> Result<i32, Runtime
         ));
     }
     match outcome {
-        EntryOutcome::Panicked(_) => Ok(status::PANIC),
+        // With the default backend a panic abandons the root's objects, so
+        // there is no check (D-458). Under an unwinding backend the
+        // cleanup pads released them, and a leak turns 101 into 102
+        // (D-710).
+        EntryOutcome::Panicked(_) if config.unwind == UnwindBackend::Off => Ok(status::PANIC),
+        EntryOutcome::Panicked(_) => match leak_report(domain.live_objects()) {
+            Some(report) => {
+                io::write_stderr(&report);
+                Ok(status::LEAK_CHECK)
+            }
+            None => Ok(status::PANIC),
+        },
         EntryOutcome::Returned(_) if !flushed => Ok(status::ERR),
         EntryOutcome::Returned(raw) => {
             let code = match raw {
@@ -922,7 +968,9 @@ mod tests {
         let location = LOCATION.with(StaticImage::word);
         // SAFETY: `ctx` is the running entry's; the strings live as long
         // as this thread, which parks forever.
-        unsafe { cheby_rt_panic(ctx, PanicKind::Explicit.code(), message, location) }
+        unsafe { cheby_rt_panic(ctx, PanicKind::Explicit.code(), message, location) };
+        // Reached only under the flag backend, which records the panic.
+        0
     }
 
     #[test]
@@ -942,7 +990,9 @@ mod tests {
 
     unsafe extern "C" fn panics_without_a_message(ctx: *mut ExecCtx) -> u64 {
         // SAFETY: `ctx` is the running entry's; no message or location.
-        unsafe { cheby_rt_panic(ctx, PanicKind::DivisionByZero.code(), 0, 0) }
+        unsafe { cheby_rt_panic(ctx, PanicKind::DivisionByZero.code(), 0, 0) };
+        // Reached only under the flag backend, which records the panic.
+        0
     }
 
     #[test]
@@ -1342,7 +1392,8 @@ mod tests {
         if depth == 0 {
             TOUCHED[1].store(stack_position(), Ordering::SeqCst);
             // SAFETY: `ctx` is the running entry's; no message or location.
-            unsafe { cheby_rt_panic(ctx, PanicKind::DivisionByZero.code(), 0, 0) }
+            unsafe { cheby_rt_panic(ctx, PanicKind::DivisionByZero.code(), 0, 0) };
+            return 0;
         }
         touch(ctx, depth.saturating_sub(1)).wrapping_add(u64::from(std::hint::black_box(frame[0])))
     }
@@ -1447,6 +1498,96 @@ mod tests {
             );
         } else {
             assert_eq!(leak_report(3), None);
+        }
+    }
+
+    /// The catch points of entries under the return-flag backend (D-699,
+    /// D-701, D-710), and the default backend unchanged.
+    mod unwind {
+        use super::*;
+
+        unsafe extern "C" fn returns_zero(_: *mut ExecCtx) -> u64 {
+            0
+        }
+
+        unsafe extern "C" fn panics_after_a_leak(ctx: *mut ExecCtx) -> u64 {
+            let _ = tuple(&[]);
+            // SAFETY: `ctx` is the running entry's; no message or location.
+            unsafe { cheby_rt_panic(ctx, PanicKind::Assert.code(), 0, 0) };
+            0
+        }
+
+        unsafe extern "C" fn panics_cleanly(ctx: *mut ExecCtx) -> u64 {
+            // SAFETY: `ctx` is the running entry's; no message or location.
+            unsafe { cheby_rt_panic(ctx, PanicKind::Assert.code(), 0, 0) };
+            0
+        }
+
+        fn flag(mode: EntryMode) -> EntryConfig {
+            EntryConfig {
+                domain: Domain::new(),
+                unwind: UnwindBackend::Flag,
+                ..EntryConfig::new(mode)
+            }
+        }
+
+        fn run_config(unwind: UnwindBackend) -> RunConfig {
+            RunConfig {
+                domain: Domain::new(),
+                threads: Some(1),
+                unwind,
+                ..RunConfig::default()
+            }
+        }
+
+        #[test]
+        fn a_main_returning_status_0_under_flag_did_not_panic() {
+            // `main`'s thunk returns the exit status, and 0 is success: the
+            // host asks the record, not the word (plan §2.5).
+            let outcome = run_entry(returns_zero, &flag(EntryMode::Run)).unwrap();
+            assert_eq!(outcome, EntryOutcome::Returned(0));
+            let _guard = serial();
+            let status = run_main(returns_zero, run_config(UnwindBackend::Flag)).unwrap();
+            assert_eq!(status, abi::status::SUCCESS);
+        }
+
+        #[test]
+        fn a_panic_under_flag_reaches_the_host_from_the_record() {
+            // The thunk returns 0 after its panic, and its thread ends.
+            let outcome = run_entry(panics_with_a_message, &flag(EntryMode::Test)).unwrap();
+            let EntryOutcome::Panicked(report) = outcome else {
+                panic!("expected a panic, got {outcome:?}");
+            };
+            assert_eq!(report.message, "computation failed");
+            assert_eq!(report.location, "src/main.cheby:4:7");
+            let config = flag(EntryMode::ConstEval(ConstEvalLimits::default()));
+            let outcome = run_entry(panics_without_a_message, &config).unwrap();
+            let EntryOutcome::Panicked(report) = outcome else {
+                panic!("expected a panic, got {outcome:?}");
+            };
+            assert_eq!(report.kind, PanicKind::DivisionByZero);
+            // The next entry runs.
+            let outcome = run_entry(returns_seven, &flag(EntryMode::Test)).unwrap();
+            assert_eq!(outcome, EntryOutcome::Returned(7));
+        }
+
+        #[test]
+        fn a_leak_after_a_panic_turns_101_into_102_under_flag() {
+            let _guard = serial();
+            // Each prints the panic report to the test's standard error.
+            let status = run_main(panics_cleanly, run_config(UnwindBackend::Flag)).unwrap();
+            assert_eq!(status, abi::status::PANIC);
+            let status = run_main(panics_after_a_leak, run_config(UnwindBackend::Flag)).unwrap();
+            let leaked = if LEAK_CHECK_ENABLED {
+                abi::status::LEAK_CHECK
+            } else {
+                abi::status::PANIC
+            };
+            assert_eq!(status, leaked);
+            // With the default backend the panic abandons the entry and
+            // there is no check after it (D-458).
+            let status = run_main(panics_after_a_leak, run_config(UnwindBackend::Off)).unwrap();
+            assert_eq!(status, abi::status::PANIC);
         }
     }
 }

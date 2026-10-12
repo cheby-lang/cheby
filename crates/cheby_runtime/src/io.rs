@@ -45,6 +45,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::abi::{self, Word, sym};
 use crate::panic::fatal;
+use crate::unwind::guard::guarded;
 use crate::{string, values};
 
 /// Appends the `std::io` kernels this module implements, with their
@@ -219,21 +220,27 @@ unsafe fn str_arg<'a>(text: Word) -> &'a str {
 /// `text` is a live `String`, borrowed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_io_sys_write_stdout(text: Word) -> Word {
-    // SAFETY: forwarded from the caller.
-    let bytes = unsafe { str_arg(text) }.as_bytes();
-    let mut out = io::stdout().lock();
-    match out.write_all(bytes).and_then(|()| out.flush()) {
-        Ok(()) => {
-            // Everything buffered so far is written: no reported text is
-            // left over.
-            STDOUT_FAILURE_REPORTED.store(false, Ordering::Relaxed);
-            values::ok_nil()
+    guarded(None, || {
+        // SAFETY: forwarded from the caller.
+        let bytes = unsafe { str_arg(text) }.as_bytes();
+        let written = {
+            let mut out = io::stdout().lock();
+            out.write_all(bytes).and_then(|()| out.flush())
+            // The lock is released before the result is allocated.
+        };
+        match written {
+            Ok(()) => {
+                // Everything buffered so far is written: no reported text is
+                // left over.
+                STDOUT_FAILURE_REPORTED.store(false, Ordering::Relaxed);
+                values::ok_nil()
+            }
+            Err(error) => {
+                STDOUT_FAILURE_REPORTED.store(true, Ordering::Relaxed);
+                io_err(&error)
+            }
         }
-        Err(error) => {
-            STDOUT_FAILURE_REPORTED.store(true, Ordering::Relaxed);
-            io_err(&error)
-        }
-    }
+    })
 }
 
 /// `io::write_stderr`'s kernel: writes `text` to standard error, which is
@@ -244,9 +251,12 @@ pub unsafe extern "C" fn cheby_io_sys_write_stdout(text: Word) -> Word {
 /// `text` is a live `String`, borrowed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_io_sys_write_stderr(text: Word) -> Word {
-    // SAFETY: forwarded from the caller.
-    let bytes = unsafe { str_arg(text) }.as_bytes();
-    lift(io::stderr().lock().write_all(bytes).map(|()| values::nil()))
+    guarded(None, || {
+        // SAFETY: forwarded from the caller.
+        let bytes = unsafe { str_arg(text) }.as_bytes();
+        let written = io::stderr().lock().write_all(bytes);
+        lift(written.map(|()| values::nil()))
+    })
 }
 
 /// `io::read_line`'s kernel: flushes standard output, then reads one line
@@ -256,11 +266,11 @@ pub unsafe extern "C" fn cheby_io_sys_write_stderr(text: Word) -> Word {
 /// (D-311), and the error pair when standard input cannot be read.
 #[unsafe(no_mangle)]
 pub extern "C" fn cheby_io_sys_read_line() -> Word {
-    match read_raw_line() {
+    guarded(None, || match read_raw_line() {
         Ok(Some(line)) => text_result(&line, values::some),
         Ok(None) => values::ok(values::none()),
         Err(error) => io_err(&error),
-    }
+    })
 }
 
 /// `io::read_file`'s kernel: the whole file as UTF-8 text, kept exactly,
@@ -271,12 +281,14 @@ pub extern "C" fn cheby_io_sys_read_line() -> Word {
 /// `path` is a live `String`, borrowed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_io_sys_read_file(path: Word) -> Word {
-    // SAFETY: forwarded from the caller.
-    let path = unsafe { str_arg(path) };
-    match std::fs::read(path) {
-        Ok(data) => text_result(&data, |text| text),
-        Err(error) => file_err(path, &error),
-    }
+    guarded(None, || {
+        // SAFETY: forwarded from the caller.
+        let path = unsafe { str_arg(path) };
+        match std::fs::read(path) {
+            Ok(data) => text_result(&data, |text| text),
+            Err(error) => file_err(path, &error),
+        }
+    })
 }
 
 /// `io::read_file_bytes`'s kernel: the whole file as `Bytes` (D-311).
@@ -286,9 +298,11 @@ pub unsafe extern "C" fn cheby_io_sys_read_file(path: Word) -> Word {
 /// `path` is a live `String`, borrowed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_io_sys_read_file_bytes(path: Word) -> Word {
-    // SAFETY: forwarded from the caller.
-    let path = unsafe { str_arg(path) };
-    lift_file(path, std::fs::read(path).map(|data| values::bytes(&data)))
+    guarded(None, || {
+        // SAFETY: forwarded from the caller.
+        let path = unsafe { str_arg(path) };
+        lift_file(path, std::fs::read(path).map(|data| values::bytes(&data)))
+    })
 }
 
 /// `io::write_file`'s kernel: creates or replaces the file with `text`
@@ -299,9 +313,11 @@ pub unsafe extern "C" fn cheby_io_sys_read_file_bytes(path: Word) -> Word {
 /// `path` and `text` are live `String`s, borrowed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_io_sys_write_file(path: Word, text: Word) -> Word {
-    // SAFETY: forwarded from the caller.
-    let (path, text) = unsafe { (str_arg(path), str_arg(text)) };
-    lift_file(path, std::fs::write(path, text).map(|()| values::nil()))
+    guarded(None, || {
+        // SAFETY: forwarded from the caller.
+        let (path, text) = unsafe { (str_arg(path), str_arg(text)) };
+        lift_file(path, std::fs::write(path, text).map(|()| values::nil()))
+    })
 }
 
 /// `io::write_file_bytes`'s kernel: creates or replaces the file with
@@ -312,9 +328,11 @@ pub unsafe extern "C" fn cheby_io_sys_write_file(path: Word, text: Word) -> Word
 /// `path` is a live `String` and `data` a live `Bytes`, borrowed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_io_sys_write_file_bytes(path: Word, data: Word) -> Word {
-    // SAFETY: forwarded from the caller.
-    let (path, data) = unsafe { (str_arg(path), values::bytes_of(data)) };
-    lift_file(path, std::fs::write(path, data).map(|()| values::nil()))
+    guarded(None, || {
+        // SAFETY: forwarded from the caller.
+        let (path, data) = unsafe { (str_arg(path), values::bytes_of(data)) };
+        lift_file(path, std::fs::write(path, data).map(|()| values::nil()))
+    })
 }
 
 /// One kernel: symbol, address, C parameter types and C result type.

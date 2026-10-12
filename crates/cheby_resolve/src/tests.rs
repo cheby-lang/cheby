@@ -114,9 +114,11 @@ fn planned() -> Vec<String> {
         .filter(|n| n != "README" && !SHIPPED.iter().any(|(p, _)| p == n))
         .collect();
     names.push("json::decode".to_owned());
+    // `std::fiber`, `std::channel` and `std::duration` ship from M2's first
+    // slice (D-729); their pages above still keep them planned here,
+    // because this test std does not ship them.
     for tier2 in [
-        "fiber", "channel", "selector", "duration", "random", "runtime", "file", "net", "http",
-        "time", "process",
+        "selector", "random", "runtime", "file", "net", "http", "time", "process",
     ] {
         names.push(tier2.to_owned());
     }

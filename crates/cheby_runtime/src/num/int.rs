@@ -10,6 +10,7 @@
 
 use super::{Kernel, result, text, text_arg};
 use crate::abi::Word;
+use crate::unwind::guard::guarded;
 use crate::values;
 
 /// Defines one integer family: a module `$module` with the kernels of std
@@ -25,7 +26,7 @@ macro_rules! int_family {
         narrow: [$($nsrc:ident => $nfn:ident),* $(,)?] $(,)?
     ) => {
         mod $module {
-            use super::{Kernel, Word, result, text, text_arg, values};
+            use super::{Kernel, Word, guarded, result, text, text_arg, values};
 
             $(
                 #[doc = concat!("`", $std, "::", stringify!($wfn), "`: every value fits (D-308).")]
@@ -39,7 +40,7 @@ macro_rules! int_family {
                 #[doc = concat!("`", $std, "::", stringify!($nfn), "`: `Err(Nil)` when `n` does not fit (D-308).")]
                 #[unsafe(export_name = concat!("cheby_", $std, "_", stringify!($nfn)))]
                 pub(crate) extern "C" fn $nfn(n: $nsrc) -> Word {
-                    result(<$t>::try_from(n).ok())
+                    guarded(None, || result(<$t>::try_from(n).ok()))
                 }
             )*
 
@@ -50,9 +51,11 @@ macro_rules! int_family {
             /// `text` is a live `String`, borrowed for the call.
             #[unsafe(export_name = concat!("cheby_", $std, "_parse"))]
             pub(crate) unsafe extern "C" fn parse(text: Word) -> Word {
-                // SAFETY: forwarded from the caller.
-                let text = unsafe { text_arg(text) };
-                result(text::parse_int::<$t>(text, 10))
+                guarded(None, || {
+                    // SAFETY: forwarded from the caller.
+                    let text = unsafe { text_arg(text) };
+                    result(text::parse_int::<$t>(text, 10))
+                })
             }
 
             #[doc = concat!("`", $std, "::parse_base`: an optional `-` and digits of `base`, 2 to 36.")]
@@ -62,33 +65,35 @@ macro_rules! int_family {
             /// `text` is a live `String`, borrowed for the call.
             #[unsafe(export_name = concat!("cheby_", $std, "_parse_base"))]
             pub(crate) unsafe extern "C" fn parse_base(text: Word, base: i64) -> Word {
-                // SAFETY: forwarded from the caller.
-                let text = unsafe { text_arg(text) };
-                result(text::parse_int::<$t>(text, base))
+                guarded(None, || {
+                    // SAFETY: forwarded from the caller.
+                    let text = unsafe { text_arg(text) };
+                    result(text::parse_int::<$t>(text, base))
+                })
             }
 
             #[doc = concat!("`", $std, "::show`: decimal digits, `-` when negative.")]
             #[unsafe(export_name = concat!("cheby_", $std, "_show"))]
             pub(crate) extern "C" fn show(n: $t) -> Word {
-                values::string(&n.to_string())
+                guarded(None, || values::string(&n.to_string()))
             }
 
             #[doc = concat!("`", $std, "::checked_add` (D-309).")]
             #[unsafe(export_name = concat!("cheby_", $std, "_checked_add"))]
             pub(crate) extern "C" fn checked_add(a: $t, b: $t) -> Word {
-                result(a.checked_add(b))
+                guarded(None, || result(a.checked_add(b)))
             }
 
             #[doc = concat!("`", $std, "::checked_sub` (D-309).")]
             #[unsafe(export_name = concat!("cheby_", $std, "_checked_sub"))]
             pub(crate) extern "C" fn checked_sub(a: $t, b: $t) -> Word {
-                result(a.checked_sub(b))
+                guarded(None, || result(a.checked_sub(b)))
             }
 
             #[doc = concat!("`", $std, "::checked_mul` (D-309).")]
             #[unsafe(export_name = concat!("cheby_", $std, "_checked_mul"))]
             pub(crate) extern "C" fn checked_mul(a: $t, b: $t) -> Word {
-                result(a.checked_mul(b))
+                guarded(None, || result(a.checked_mul(b)))
             }
 
             #[doc = concat!("`", $std, "::wrapping_add`: modulo 2^bits (D-025).")]
@@ -317,13 +322,13 @@ int_family! {
 /// another base (D-390).
 #[unsafe(export_name = "cheby_int_to_base")]
 pub(crate) extern "C" fn to_base(n: i64, base: i64) -> Word {
-    result(text::int_to_base(n, base))
+    guarded(None, || result(text::int_to_base(n, base)))
 }
 
 /// `int::checked_neg`: `Err(Nil)` for `min_value` (D-309).
 #[unsafe(export_name = "cheby_int_checked_neg")]
 pub(crate) extern "C" fn checked_neg(n: i64) -> Word {
-    result(n.checked_neg())
+    guarded(None, || result(n.checked_neg()))
 }
 
 /// `int::checked_pow`: `n` to the power `exponent`, or `Err(Nil)` when the
@@ -331,7 +336,7 @@ pub(crate) extern "C" fn checked_neg(n: i64) -> Word {
 /// `Ok(1)` (`@std_clamped`, D-298, D-392).
 #[unsafe(export_name = "cheby_int_checked_pow")]
 pub(crate) extern "C" fn checked_pow(n: i64, exponent: i64) -> Word {
-    result(int_pow(n, exponent))
+    guarded(None, || result(int_pow(n, exponent)))
 }
 
 /// `n ^ max(exponent, 0)` when it fits an `Int`.

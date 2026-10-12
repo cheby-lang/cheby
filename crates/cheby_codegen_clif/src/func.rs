@@ -16,8 +16,8 @@ use cranelift_module::{DataId, FuncId};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use cheby_mir::{
-    Abi, AbiSig, BlockId, Callee, Const, FnKey, Function, Local, MirModule, Operand, PanicKind,
-    Repr, Rvalue, Stmt, StrId, Terminator, uniform_sig,
+    Abi, AbiSig, BlockId, Callee, Const, FnKey, ForeignSig, Function, Local, MirModule, Operand,
+    PanicKind, Repr, Rvalue, Stmt, StrId, Terminator, uniform_sig,
 };
 use cheby_runtime::abi::{self, UnwindBackend};
 
@@ -28,13 +28,14 @@ use crate::sig::{self, WORD, repr_type};
 use crate::{CallMode, CodegenCx, CodegenError, CodegenOptions};
 
 /// The trap after a call that does not return (`cheby_rt_panic`).
-const TRAP_NORETURN: u8 = 1;
+pub(crate) const TRAP_NORETURN: u8 = 1;
 /// The trap of an `unreachable` terminator or a `switch` without default.
 const TRAP_UNREACHABLE: u8 = 2;
-/// The trap of a `resume` terminator (D-698). With unwind edges ignored,
-/// pads are never translated, so a `resume` is reached only through
-/// normal control flow, which the validator rules out; the unwinding
-/// backends replace it (D-696).
+/// The trap of a `resume` terminator under
+/// [`UnwindBackend::Off`] (D-698). With unwind edges ignored, pads are
+/// never translated, so a `resume` is reached only through normal control
+/// flow, which the validator rules out; the unwinding backends lower it
+/// themselves (D-696).
 pub(crate) const TRAP_RESUME: u8 = 3;
 
 /// Translates `func` of `unit` into a Cranelift function named by its
@@ -129,6 +130,8 @@ fn build(
         sigs: FxHashMap::default(),
         panics: Vec::new(),
         panic_blocks: FxHashMap::default(),
+        pad: None,
+        in_pad: false,
     };
     body(&mut t)?;
     t.b.seal_all_blocks();
@@ -160,42 +163,70 @@ pub(crate) struct Translator<'a, 'f> {
     /// costs memory per variable and block, which made a function of `n`
     /// locals spread over `n` blocks quadratic (a list literal of `n`
     /// elements).
-    values: Vec<Option<Value>>,
+    pub(crate) values: Vec<Option<Value>>,
     /// Each MIR block's CLIF block, by MIR block index; `None` for a block
     /// that only unwinding reaches when unwind edges are ignored.
-    blocks: Vec<Option<ir::Block>>,
-    ctx: Option<Value>,
-    func_refs: FxHashMap<FuncId, FuncRef>,
-    data: FxHashMap<DataId, GlobalValue>,
-    sigs: FxHashMap<AbiSig, SigRef>,
+    pub(crate) blocks: Vec<Option<ir::Block>>,
+    pub(crate) ctx: Option<Value>,
+    pub(crate) func_refs: FxHashMap<FuncId, FuncRef>,
+    pub(crate) data: FxHashMap<DataId, GlobalValue>,
+    pub(crate) sigs: FxHashMap<AbiSig, SigRef>,
     /// The cold blocks that panic with a kind at a location, created by
     /// checked operations and filled after the function's blocks, one per
-    /// kind and location.
-    panics: Vec<(PanicKind, StrId, ir::Block)>,
-    /// The block of each entry of `panics`, by kind and location, so a
-    /// function with many checked operations finds them in constant time.
-    panic_blocks: FxHashMap<(PanicKind, StrId), ir::Block>,
+    /// kind, location and unwind pad (`None` with unwind edges ignored).
+    panics: Vec<(PanicKind, StrId, Option<ir::Block>, ir::Block)>,
+    /// The block of each entry of `panics`, by kind, location and pad, so
+    /// a function with many checked operations finds them in constant
+    /// time.
+    panic_blocks: FxHashMap<(PanicKind, StrId, Option<ir::Block>), ir::Block>,
+    /// The CLIF block of the unwind pad of the statement or terminator
+    /// being translated (D-698); always `None` with
+    /// [`UnwindBackend::Off`], which ignores the edges.
+    pub(crate) pad: Option<ir::Block>,
+    /// Whether the MIR block being translated is a pad, whose drops call
+    /// `cheby_rt_drop` out of line to keep the cold code small.
+    in_pad: bool,
 }
 
-/// Where a call goes: a known function, or an address with a signature.
-enum Target {
+/// Where a Cheby-ABI call goes: a known function, or an address with a
+/// signature.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum CallTarget {
     Direct(FuncRef),
     Indirect(SigRef, Value),
+}
+
+/// A C function that a statement with an unwind edge calls (D-698): a
+/// runtime function (a helper, `cheby_rt_alloc`, a boxing function,
+/// `cheby_rt_panic`, a stack slow path, `cheby_rt_const_missing`), or a
+/// foreign kernel by its symbol and C signature.
+#[derive(Clone, Debug)]
+pub(crate) enum CCallee {
+    Runtime(RuntimeFunc),
+    Foreign { symbol: Box<str>, sig: ForeignSig },
 }
 
 pub(crate) fn unsupported(what: &str) -> CodegenError {
     CodegenError::ice(format!("code generation does not support {what}"))
 }
 
-fn trap(code: u8) -> Result<TrapCode, CodegenError> {
+pub(crate) fn trap(code: u8) -> Result<TrapCode, CodegenError> {
     TrapCode::user(code).ok_or_else(|| CodegenError::ice("invalid trap code"))
 }
 
-/// The blocks reachable from `bb0`, in reverse postorder: every block
+/// The blocks reachable from `roots`, in reverse postorder: every block
 /// after its dominators. Successors are visited last to first, so the
-/// order follows the source (a branch's `then` before its `else`).
-/// Iterative, as a long function nests deeply.
-fn reverse_postorder(func: &Function) -> Result<Vec<BlockId>, CodegenError> {
+/// order follows the source (a branch's `then` before its `else`). With
+/// `with_unwind`, a block's successors are [`Function::successors`], its
+/// unwind pads included (D-698); otherwise only its terminator's. The
+/// roots are searched in order and their postorders concatenated, so the
+/// last root's blocks come first. Iterative, as a long function nests
+/// deeply.
+fn reverse_postorder(
+    func: &Function,
+    roots: &[BlockId],
+    with_unwind: bool,
+) -> Result<Vec<BlockId>, CodegenError> {
     let count = func.blocks.len();
     let mut visited = vec![false; count];
     let mut post = Vec::with_capacity(count);
@@ -208,21 +239,62 @@ fn reverse_postorder(func: &Function) -> Result<Vec<BlockId>, CodegenError> {
             .and_then(|n| visited.get_mut(n))
             .ok_or_else(|| CodegenError::ice(format!("unknown MIR block {id:?}")))?;
         if !std::mem::replace(seen, true) {
-            stack.push((id, func.block(id)?.term.successors()));
+            let succs = if with_unwind {
+                func.successors(id)?
+            } else {
+                func.block(id)?.term.successors()
+            };
+            stack.push((id, succs));
         }
         Ok::<_, CodegenError>(())
     };
-    enter(BlockId::from_u32(0), &mut stack)?;
-    while let Some((id, succs)) = stack.last_mut() {
-        if let Some(next) = succs.pop() {
-            enter(next, &mut stack)?;
-        } else {
-            post.push(*id);
-            stack.pop();
+    for &root in roots {
+        enter(root, &mut stack)?;
+        while let Some((id, succs)) = stack.last_mut() {
+            if let Some(next) = succs.pop() {
+                enter(next, &mut stack)?;
+            } else {
+                post.push(*id);
+                stack.pop();
+            }
         }
     }
     post.reverse();
     Ok(post)
+}
+
+/// The locals the pad chain from `pad` drops before it resumes, in order:
+/// the unwind pass's chained pads (D-698) are drops, then a `goto` of the
+/// next pad or a `resume`.
+///
+/// # Errors
+///
+/// An ICE if a block of the chain holds anything else.
+fn pad_chain_drops(func: &Function, pad: BlockId) -> Result<Vec<Local>, CodegenError> {
+    let mut drops = Vec::new();
+    let mut at = pad;
+    // A chain visits each block at most once.
+    for _ in 0..=func.blocks.len() {
+        let block = func.block(at)?;
+        for stmt in &block.stmts {
+            let Stmt::Drop(local) = stmt else {
+                return Err(CodegenError::ice(format!(
+                    "the entry pad chain at {at:?} holds a statement other than `drop`"
+                )));
+            };
+            drops.push(*local);
+        }
+        match &block.term {
+            Terminator::Resume => return Ok(drops),
+            Terminator::Goto { target, args } if args.is_empty() => at = *target,
+            _ => {
+                return Err(CodegenError::ice(format!(
+                    "the entry pad chain at {at:?} ends other than with `goto` or `resume`"
+                )));
+            }
+        }
+    }
+    Err(CodegenError::ice("the entry pad chain loops"))
 }
 
 /// For each block, whether only unwinding reaches it: it is reachable from
@@ -279,23 +351,24 @@ pub(crate) fn truncate(bits: u64, ty: ir::Type) -> i64 {
 impl Translator<'_, '_> {
     fn run(&mut self, check: EntryCheck) -> Result<(), CodegenError> {
         self.values = vec![None; self.func.locals.len()];
+        let unwinding = self.opts.unwind != UnwindBackend::Off;
         // CLIF block `n` is MIR block `n`, its parameters created up front
         // so a jump may precede its target's translation. With unwind
         // edges ignored (`off`), a block that only unwinding reaches gets
         // no CLIF block: it is never translated, and creating it would
         // renumber every later block and value, so the CLIF of a function
-        // would differ from M1's with the unwind pass in (D-698).
-        let skipped = if self.opts.unwind == UnwindBackend::Off {
-            unwind_only_blocks(self.func)?
-        } else {
-            vec![false; self.func.blocks.len()]
-        };
-        for (block, skip) in self.func.blocks.iter().zip(skipped) {
-            if skip {
+        // would differ from M1's with the unwind pass in (D-698). With an
+        // unwinding backend, those blocks are the pads, and they are cold.
+        let pads = unwind_only_blocks(self.func)?;
+        for (block, &pad) in self.func.blocks.iter().zip(&pads) {
+            if pad && !unwinding {
                 self.blocks.push(None);
                 continue;
             }
             let cl = self.b.create_block();
+            if pad {
+                self.b.set_cold_block(cl);
+            }
             for &param in &block.params {
                 let ty = repr_type(self.func.local(param)?.repr);
                 let value = self.b.append_block_param(cl, ty);
@@ -303,32 +376,76 @@ impl Translator<'_, '_> {
             }
             self.blocks.push(Some(cl));
         }
-        self.entry(check)?;
+        // The entry pad, when the entry check that unwinds to it is made.
+        let entry_pad = if unwinding && self.checks_entry(check) {
+            self.func.entry_unwind
+        } else {
+            None
+        };
+        self.entry(check, entry_pad)?;
         // Reverse postorder translates a definition before its uses, as a
         // block's dominators come before it. Unreachable blocks are never
         // translated (their CLIF blocks stay out of the layout): no
         // reachable block jumps to one, and their uses need not be
-        // dominated.
-        for id in reverse_postorder(self.func)? {
+        // dominated. With an unwinding backend the order follows the
+        // unwind edges too, from the entry pad as well as from `bb0`.
+        let first = BlockId::from_u32(0);
+        let order = if unwinding {
+            let mut roots: Vec<BlockId> = entry_pad.into_iter().collect();
+            roots.push(first);
+            reverse_postorder(self.func, &roots, true)?
+        } else {
+            reverse_postorder(self.func, &[first], false)?
+        };
+        for id in order {
             let block = self.func.block(id)?;
             let cl = self.block(id)?;
             self.b.switch_to_block(cl);
-            for stmt in &block.stmts {
-                self.stmt(stmt)?;
+            if unwinding {
+                self.in_pad = usize::try_from(id.as_u32())
+                    .ok()
+                    .and_then(|n| pads.get(n))
+                    .copied()
+                    .unwrap_or(false);
+                // `unwind` is sorted by statement index (D-698).
+                let mut edges = block.unwind.iter().peekable();
+                let mut pad_of = |i: usize, t: &Self| {
+                    let at = u32::try_from(i).ok()?;
+                    let &(_, pad) = edges.next_if(|&&(n, _)| n == at)?;
+                    Some(t.block(pad))
+                };
+                for (i, stmt) in block.stmts.iter().enumerate() {
+                    self.pad = pad_of(i, self).transpose()?;
+                    self.stmt(stmt)?;
+                }
+                self.pad = pad_of(block.stmts.len(), self).transpose()?;
+                self.terminator(&block.term)?;
+                self.pad = None;
+                self.in_pad = false;
+            } else {
+                for stmt in &block.stmts {
+                    self.stmt(stmt)?;
+                }
+                self.terminator(&block.term)?;
             }
-            self.terminator(&block.term)?;
         }
-        for (kind, loc, block) in std::mem::take(&mut self.panics) {
+        for (kind, loc, pad, block) in std::mem::take(&mut self.panics) {
             self.b.switch_to_block(block);
-            self.panic(kind, None, loc)?;
+            self.panic(kind, None, loc, pad)?;
         }
         Ok(())
     }
 
+    /// Whether the entry block makes the stack check of D-124.
+    fn checks_entry(&self, check: EntryCheck) -> bool {
+        self.func.abi == Abi::Cheby && self.opts.stack_check && check == EntryCheck::Frame
+    }
+
     /// The entry block: the parameters, the stack check of a Cheby
     /// function (unless `check` is [`EntryCheck::None`]), then a jump to
-    /// `bb0`.
-    fn entry(&mut self, check: EntryCheck) -> Result<(), CodegenError> {
+    /// `bb0`. With `entry_pad`, the check's slow path unwinds to it
+    /// (D-698).
+    fn entry(&mut self, check: EntryCheck, entry_pad: Option<BlockId>) -> Result<(), CodegenError> {
         let entry = self.b.create_block();
         self.b.append_block_params_for_function_params(entry);
         self.b.switch_to_block(entry);
@@ -357,7 +474,7 @@ impl Translator<'_, '_> {
             self.dup(closure)?;
         }
         let first = self.block(BlockId::from_u32(0))?;
-        if self.func.abi == Abi::Cheby && self.opts.stack_check && check == EntryCheck::Frame {
+        if self.checks_entry(check) {
             // D-124: one compare on the fast path; the runtime's slow path
             // tells a real overflow (a panic) from an interrupt request.
             let loc = self
@@ -375,7 +492,13 @@ impl Translator<'_, '_> {
             self.b.ins().brif(below, slow, &[], first, &[]);
             self.b.switch_to_block(slow);
             let loc = self.string(loc)?;
-            self.runtime_call(RuntimeFunc::StackSlow, &[ctx, loc])?;
+            if let Some(pad) = entry_pad {
+                // D-698: an overflow unwinds to the entry pad.
+                let pad = self.block(pad)?;
+                self.unwind_c_call(&CCallee::Runtime(RuntimeFunc::StackSlow), &[ctx, loc], pad)?;
+            } else {
+                self.runtime_call(RuntimeFunc::StackSlow, &[ctx, loc])?;
+            }
             self.b.ins().jump(first, &[]);
         } else {
             self.b.ins().jump(first, &[]);
@@ -432,13 +555,65 @@ impl Translator<'_, '_> {
         self.b.switch_to_block(slow);
         let loc = self.string(loc)?;
         let size = self.b.ins().iconst(types::I64, i64::from(frame_size));
-        self.runtime_call(RuntimeFunc::StackSlowFrame, &[ctx, loc, size])?;
+        let args = [ctx, loc, size];
+        let entry_pad = match self.func.entry_unwind {
+            Some(pad) if self.opts.unwind != UnwindBackend::Off => Some(pad),
+            _ => None,
+        };
+        let outer_pad = if let Some(pad) = entry_pad {
+            // D-698: an overflow unwinds to the outer function's own pad,
+            // which drops what the body's entry pad would drop.
+            let outer_pad = self.b.create_block();
+            self.b.set_cold_block(outer_pad);
+            self.unwind_c_call(
+                &CCallee::Runtime(RuntimeFunc::StackSlowFrame),
+                &args,
+                outer_pad,
+            )?;
+            Some((pad, outer_pad))
+        } else {
+            self.runtime_call(RuntimeFunc::StackSlowFrame, &args)?;
+            None
+        };
         self.b.ins().jump(call, &[]);
         self.b.switch_to_block(call);
         let signature = self.decls.func(self.func.key)?.sig.clone();
         let f = self.func_ref(inner, &signature, true);
         self.b.ins().return_call(f, &params);
+        if let Some((pad, outer_pad)) = outer_pad {
+            self.outer_pad(pad, outer_pad, &params)?;
+        }
         Ok(())
+    }
+
+    /// The pad of a large frame's outer function (D-679, D-698): the
+    /// drops of the MIR entry pad chain from `pad`, out of line, applied
+    /// to the outer function's parameters `params` (`ctx` first), then a
+    /// resume, all in the cold block `block`.
+    fn outer_pad(
+        &mut self,
+        pad: BlockId,
+        block: ir::Block,
+        params: &[Value],
+    ) -> Result<(), CodegenError> {
+        let values = params.get(1..).unwrap_or_default();
+        self.b.switch_to_block(block);
+        for local in pad_chain_drops(self.func, pad)? {
+            let value = self
+                .func
+                .params
+                .iter()
+                .position(|&p| p == local)
+                .and_then(|n| values.get(n))
+                .copied()
+                .ok_or_else(|| {
+                    CodegenError::ice(format!(
+                        "the entry pad drops {local:?}, which is not a parameter"
+                    ))
+                })?;
+            self.runtime_call(RuntimeFunc::Drop, &[value])?;
+        }
+        self.unwind_resume()
     }
 
     pub(crate) fn ctx(&self) -> Result<Value, CodegenError> {
@@ -461,7 +636,7 @@ impl Translator<'_, '_> {
 
     /// Makes `value` the value of `local`, which has no value yet and is
     /// declared with `value`'s type.
-    fn bind(&mut self, local: Local, value: Value) -> Result<(), CodegenError> {
+    pub(crate) fn bind(&mut self, local: Local, value: Value) -> Result<(), CodegenError> {
         let ty = repr_type(self.func.local(local)?.repr);
         if self.b.func.dfg.value_type(value) != ty {
             return Err(CodegenError::ice(format!(
@@ -480,7 +655,7 @@ impl Translator<'_, '_> {
         Ok(())
     }
 
-    fn block(&self, block: BlockId) -> Result<ir::Block, CodegenError> {
+    pub(crate) fn block(&self, block: BlockId) -> Result<ir::Block, CodegenError> {
         usize::try_from(block.as_u32())
             .ok()
             .and_then(|n| self.blocks.get(n))
@@ -493,15 +668,18 @@ impl Translator<'_, '_> {
             })
     }
 
-    /// The cold block that panics with `kind` at `loc`.
+    /// The cold block that panics with `kind` at `loc` and, under an
+    /// unwinding backend, unwinds to the pad of the statement being
+    /// translated.
     pub(crate) fn panic_block(&mut self, kind: PanicKind, loc: StrId) -> ir::Block {
-        if let Some(&block) = self.panic_blocks.get(&(kind, loc)) {
+        let key = (kind, loc, self.pad);
+        if let Some(&block) = self.panic_blocks.get(&key) {
             return block;
         }
         let block = self.b.create_block();
         self.b.set_cold_block(block);
-        self.panics.push((kind, loc, block));
-        self.panic_blocks.insert((kind, loc), block);
+        self.panics.push((kind, loc, self.pad, block));
+        self.panic_blocks.insert(key, block);
         block
     }
 
@@ -533,7 +711,13 @@ impl Translator<'_, '_> {
             }
             Stmt::Drop(local) => {
                 let v = self.local(*local)?;
-                self.drop_value(v)?;
+                if self.in_pad {
+                    // A pad is cold: its drops call the runtime out of
+                    // line, which keeps it small.
+                    self.runtime_call(RuntimeFunc::Drop, &[v])?;
+                } else {
+                    self.drop_value(v)?;
+                }
             }
             Stmt::ClearUnwind => {
                 // D-693: the fiber's unwind flag, a `u32` (D-685).
@@ -553,32 +737,14 @@ impl Translator<'_, '_> {
             Rvalue::Call { callee, args } => return self.call(callee, args, false),
             Rvalue::CallForeign { symbol, sig, args } => {
                 let vals = self.operands(args)?;
-                let inst = match self.decls.foreign(symbol)?.clone() {
-                    ForeignDecl::Function(id, signature) => {
-                        let f = self.func_ref(id, &signature, false);
-                        self.b.ins().call(f, &vals)
-                    }
-                    // Signature-free imports: the call site's own C
-                    // signature (`ForeignImport::Address`).
-                    ForeignDecl::Data(id) => {
-                        let address = self.data_address(id, false);
-                        let s = self.b.import_signature(sig::foreign_signature(
-                            sig,
-                            self.decls.c_call_conv(),
-                        ));
-                        self.b.ins().call_indirect(s, address, &vals)
-                    }
-                    ForeignDecl::FunctionAddress(id, declared) => {
-                        let f = self.func_ref(id, &declared, false);
-                        let address = self.b.ins().func_addr(WORD, f);
-                        let s = self.b.import_signature(sig::foreign_signature(
-                            sig,
-                            self.decls.c_call_conv(),
-                        ));
-                        self.b.ins().call_indirect(s, address, &vals)
-                    }
-                };
-                return Ok(self.b.inst_results(inst).first().copied());
+                if let Some(pad) = self.pad {
+                    let callee = CCallee::Foreign {
+                        symbol: symbol.clone(),
+                        sig: sig.clone(),
+                    };
+                    return self.unwind_c_call(&callee, &vals, pad);
+                }
+                return self.foreign_call(symbol, sig, &vals);
             }
             Rvalue::CallRuntime { func, args } => return self.call_helper(*func, args),
             Rvalue::ReadLayout { base } => {
@@ -731,7 +897,12 @@ impl Translator<'_, '_> {
         self.b.ins().symbol_value(WORD, gv)
     }
 
-    fn func_ref(&mut self, id: FuncId, signature: &Signature, colocated: bool) -> FuncRef {
+    pub(crate) fn func_ref(
+        &mut self,
+        id: FuncId,
+        signature: &Signature,
+        colocated: bool,
+    ) -> FuncRef {
         if let Some(&f) = self.func_refs.get(&id) {
             return f;
         }
@@ -750,7 +921,7 @@ impl Translator<'_, '_> {
         f
     }
 
-    fn sig_ref(&mut self, abi_sig: &AbiSig) -> SigRef {
+    pub(crate) fn sig_ref(&mut self, abi_sig: &AbiSig) -> SigRef {
         if let Some(&s) = self.sigs.get(abi_sig) {
             return s;
         }
@@ -783,6 +954,97 @@ impl Translator<'_, '_> {
             .ok_or_else(|| CodegenError::ice(format!("the runtime function {f:?} returns nothing")))
     }
 
+    /// Calls a runtime function that may unwind: through the unwinding
+    /// backend when the statement being translated has an unwind edge
+    /// (D-698), as [`Self::runtime_call`] otherwise.
+    pub(crate) fn edge_runtime_call(
+        &mut self,
+        f: RuntimeFunc,
+        args: &[Value],
+    ) -> Result<Option<Value>, CodegenError> {
+        match self.pad {
+            Some(pad) => self.unwind_c_call(&CCallee::Runtime(f), args, pad),
+            None => self.runtime_call(f, args),
+        }
+    }
+
+    /// [`Self::edge_runtime_call`] of a runtime function that has a result.
+    pub(crate) fn edge_runtime_value(
+        &mut self,
+        f: RuntimeFunc,
+        args: &[Value],
+    ) -> Result<Value, CodegenError> {
+        self.edge_runtime_call(f, args)?
+            .ok_or_else(|| CodegenError::ice(format!("the runtime function {f:?} returns nothing")))
+    }
+
+    /// Calls the foreign function `symbol` with the C signature `sig` and
+    /// returns its result, if it has one.
+    pub(crate) fn foreign_call(
+        &mut self,
+        symbol: &str,
+        sig: &ForeignSig,
+        vals: &[Value],
+    ) -> Result<Option<Value>, CodegenError> {
+        let inst = match self.decls.foreign(symbol)?.clone() {
+            ForeignDecl::Function(id, signature) => {
+                let f = self.func_ref(id, &signature, false);
+                self.b.ins().call(f, vals)
+            }
+            // Signature-free imports: the call site's own C signature
+            // (`ForeignImport::Address`).
+            ForeignDecl::Data(id) => {
+                let address = self.data_address(id, false);
+                let s = self
+                    .b
+                    .import_signature(sig::foreign_signature(sig, self.decls.c_call_conv()));
+                self.b.ins().call_indirect(s, address, vals)
+            }
+            ForeignDecl::FunctionAddress(id, declared) => {
+                let f = self.func_ref(id, &declared, false);
+                let address = self.b.ins().func_addr(WORD, f);
+                let s = self
+                    .b
+                    .import_signature(sig::foreign_signature(sig, self.decls.c_call_conv()));
+                self.b.ins().call_indirect(s, address, vals)
+            }
+        };
+        Ok(self.b.inst_results(inst).first().copied())
+    }
+
+    /// A plain call of the C function `callee`, its result if it has one.
+    pub(crate) fn emit_c_call(
+        &mut self,
+        callee: &CCallee,
+        args: &[Value],
+    ) -> Result<Option<Value>, CodegenError> {
+        match callee {
+            CCallee::Runtime(f) => self.runtime_call(*f, args),
+            CCallee::Foreign { symbol, sig } => self.foreign_call(symbol, sig, args),
+        }
+    }
+
+    /// A plain, non-tail call of Cheby code.
+    pub(crate) fn emit_cheby_call(&mut self, target: CallTarget, args: &[Value]) -> ir::Inst {
+        match target {
+            CallTarget::Direct(f) => self.b.ins().call(f, args),
+            CallTarget::Indirect(s, code) => self.b.ins().call_indirect(s, code, args),
+        }
+    }
+
+    /// A new block that continues the current one after a call: cold when
+    /// the current block is, so that a call in a cold path keeps its
+    /// continuation out of the hot code.
+    pub(crate) fn continuation_block(&mut self) -> ir::Block {
+        let block = self.b.create_block();
+        if let Some(current) = self.b.current_block()
+            && self.b.func.layout.is_cold(current)
+        {
+            self.b.set_cold_block(block);
+        }
+        block
+    }
+
     /// A Cheby-ABI call; with `tail`, a `return_call` (D-015) that ends
     /// the block.
     fn call(
@@ -807,19 +1069,19 @@ impl Translator<'_, '_> {
                         let slot = self.decls.slot(&path, &abi_sig)?.id;
                         let address = self.data_address(slot, true);
                         let code = self.b.ins().load(WORD, MemFlagsData::trusted(), address, 0);
-                        Target::Indirect(self.sig_ref(&abi_sig), code)
+                        CallTarget::Indirect(self.sig_ref(&abi_sig), code)
                     }
                     CallMode::Direct => {
                         let decl = self.decls.func(FnKey::Item(*def))?;
                         let (id, signature) = (decl.id, decl.sig.clone());
-                        Target::Direct(self.func_ref(id, &signature, true))
+                        CallTarget::Direct(self.func_ref(id, &signature, true))
                     }
                 }
             }
             Callee::Code(key) => {
                 let decl = self.decls.func(*key)?;
                 let (id, signature) = (decl.id, decl.sig.clone());
-                Target::Direct(self.func_ref(id, &signature, true))
+                CallTarget::Direct(self.func_ref(id, &signature, true))
             }
             Callee::Indirect(closure) => {
                 // The uniform convention (D-453): the code word
@@ -835,15 +1097,20 @@ impl Translator<'_, '_> {
                 vals.push(closure);
                 let arity = u32::try_from(args.len())
                     .map_err(|_| CodegenError::ice("too many arguments"))?;
-                Target::Indirect(self.sig_ref(&uniform_sig(arity)), code)
+                CallTarget::Indirect(self.sig_ref(&uniform_sig(arity)), code)
             }
         };
         vals.extend(self.operands(args)?);
+        if let (Some(pad), false) = (self.pad, tail) {
+            return self.unwind_cheby_call(target, &vals, pad).map(Some);
+        }
         let inst = match (target, tail) {
-            (Target::Direct(f), false) => self.b.ins().call(f, &vals),
-            (Target::Direct(f), true) => self.b.ins().return_call(f, &vals),
-            (Target::Indirect(s, code), false) => self.b.ins().call_indirect(s, code, &vals),
-            (Target::Indirect(s, code), true) => self.b.ins().return_call_indirect(s, code, &vals),
+            (CallTarget::Direct(f), false) => self.b.ins().call(f, &vals),
+            (CallTarget::Direct(f), true) => self.b.ins().return_call(f, &vals),
+            (CallTarget::Indirect(s, code), false) => self.b.ins().call_indirect(s, code, &vals),
+            (CallTarget::Indirect(s, code), true) => {
+                self.b.ins().return_call_indirect(s, code, &vals)
+            }
         };
         if tail {
             return Ok(None);
@@ -859,13 +1126,15 @@ impl Translator<'_, '_> {
             .collect())
     }
 
-    /// Calls `cheby_rt_panic(ctx, kind, message or 0, loc)`, which does not
-    /// return, and traps after it.
+    /// Calls `cheby_rt_panic(ctx, kind, message or 0, loc)`. Without `pad`
+    /// it does not return, and a trap follows it; with `pad`, the
+    /// unwinding backend continues the unwinding there (D-698).
     fn panic(
         &mut self,
         kind: PanicKind,
         message: Option<&Operand>,
         loc: StrId,
+        pad: Option<ir::Block>,
     ) -> Result<(), CodegenError> {
         let ctx = self.ctx()?;
         let kind = self.b.ins().iconst(types::I32, i64::from(kind.code()));
@@ -874,7 +1143,11 @@ impl Translator<'_, '_> {
             None => self.b.ins().iconst(WORD, 0),
         };
         let loc = self.string(loc)?;
-        self.runtime_call(RuntimeFunc::Panic, &[ctx, kind, message, loc])?;
+        let args = [ctx, kind, message, loc];
+        if let Some(pad) = pad {
+            return self.unwind_panic(&args, pad);
+        }
+        self.runtime_call(RuntimeFunc::Panic, &args)?;
         self.b.ins().trap(trap(TRAP_NORETURN)?);
         Ok(())
     }
@@ -901,13 +1174,17 @@ impl Translator<'_, '_> {
             }
             Terminator::Switch { on, cases, default } => self.switch(on, cases, *default)?,
             Terminator::Panic { kind, message, loc } => {
-                self.panic(*kind, message.as_ref(), *loc)?;
+                self.panic(*kind, message.as_ref(), *loc, self.pad)?;
             }
             Terminator::Unreachable => {
                 self.b.ins().trap(trap(TRAP_UNREACHABLE)?);
             }
             Terminator::Resume => {
-                self.b.ins().trap(trap(TRAP_RESUME)?);
+                if self.opts.unwind == UnwindBackend::Off {
+                    self.b.ins().trap(trap(TRAP_RESUME)?);
+                } else {
+                    self.unwind_resume()?;
+                }
             }
         }
         Ok(())

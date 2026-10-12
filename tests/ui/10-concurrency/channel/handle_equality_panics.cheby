@@ -1,0 +1,16 @@
+// @mode: run-fail
+// @decisions: D-233, D-518, D-647
+// @milestone: M2
+//! `==` on a channel handle warns at compile time and panics at run time
+//! when it reaches the handle: handles have no structural equality, and
+//! identity is never observable (§3.13, §9.1, §9.5).
+
+import std::channel
+import std::io
+
+fn main() {
+  let (tx, _) = channel::new::<Int>(1)
+  io::println("comparing")
+  let same = tx == tx
+  io::println("never printed: {same}")
+}

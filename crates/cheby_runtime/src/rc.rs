@@ -166,33 +166,68 @@ pub unsafe fn is_unique(value: Word) -> bool {
 /// recursion (plan §0), and the scratch counts towards constant
 /// evaluation's memory budget like every walk's.
 ///
+/// The walk marks an object only after everything it reaches is marked
+/// (post-order), so the invariant it relies on, "a count `<= 0` means
+/// static, or shared together with everything it reaches", holds at every
+/// step. Growing the worklist can raise `out of memory` (D-642), which an
+/// unwinding backend lets a program catch and retry (D-697): the raise
+/// then leaves some objects shared, each with all it reaches, and the
+/// value itself unmarked, so a retry enters it again and completes the
+/// walk (review finding MEM-1: marking before pushing the children left a
+/// shared root above local counts, which a retry skipped). Values are
+/// immutable and so acyclic: an object is entered once, since a second
+/// entry still on the list sits below the first one's mark and finds it
+/// marked.
+///
 /// # Safety
 ///
 /// `word` is a tagged integer, 0, or a live object, and every object it
 /// reaches with a positive count is confined to the calling fiber (no
 /// other thread reads or writes its count meanwhile).
 pub unsafe fn mark_shared(word: Word) {
-    let mut list = alloc::scratch::ScratchVec::of(word);
-    while let Some(word) = list.pop() {
-        if abi::is_tagged_int(word) || word == 0 {
-            continue;
+    /// One step of the walk.
+    enum Step {
+        /// Enter the value: push its mark, then its children.
+        Enter(Word),
+        /// Everything the object reaches is marked: mark it.
+        Mark(Word),
+    }
+    let mut list = alloc::scratch::ScratchVec::of(Step::Enter(word));
+    while let Some(step) = list.pop() {
+        match step {
+            Step::Enter(word) => {
+                if abi::is_tagged_int(word) || word == 0 {
+                    continue;
+                }
+                // SAFETY: every word on the list is reached from the
+                // caller's live value; in poisoning mode a freed one ends
+                // the process here.
+                unsafe { alloc::check_live(word, "marking a value shared") };
+                // SAFETY: a live object.
+                if unsafe { load_rc(word_to_ptr(word)) } <= 0 {
+                    // Static, or shared together with everything it
+                    // reaches.
+                    continue;
+                }
+                list.push(Step::Mark(word));
+                // SAFETY: a live object.
+                unsafe {
+                    alloc::for_each_child(word, &mut |child| list.push(Step::Enter(child)));
+                }
+            }
+            Step::Mark(word) => {
+                let obj = word_to_ptr(word);
+                // SAFETY: a live object, entered with a positive count
+                // that only this fiber touches (the caller's guarantee),
+                // so a plain load and store are enough; marking its
+                // children left its own count as it was, and `-rc` cannot
+                // overflow for a positive `rc`.
+                unsafe {
+                    let rc = load_rc(obj);
+                    store_rc(obj, rc.saturating_neg());
+                }
+            }
         }
-        // SAFETY: every word on the list is reached from the caller's live
-        // value; in poisoning mode a freed one ends the process here.
-        unsafe { alloc::check_live(word, "marking a value shared") };
-        let obj = word_to_ptr(word);
-        // SAFETY: a live object.
-        let rc = unsafe { load_rc(obj) };
-        if rc <= 0 {
-            // Static, or shared together with everything it reaches.
-            continue;
-        }
-        // SAFETY: a live object whose positive count only this fiber
-        // touches (the caller's guarantee), so a plain store is enough;
-        // `-rc` cannot overflow for a positive `rc`.
-        unsafe { store_rc(obj, rc.saturating_neg()) };
-        // SAFETY: a live object.
-        unsafe { alloc::for_each_child(word, &mut |child| list.push(child)) };
     }
 }
 

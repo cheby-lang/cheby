@@ -1,0 +1,103 @@
+//! Typed, bounded channels between fibers (§10.5, D-013, D-054).
+//!
+//! A channel is a FIFO queue with a capacity, reached through a `Sender`
+//! and a `Receiver`. Both are handles: external types whose drop
+//! functions the runtime supplies (D-101, D-647, D-703). A channel closes
+//! for its receivers when its last `Sender` is dropped, and for its
+//! senders when its last `Receiver` is dropped, and the drop functions
+//! never block or suspend (D-087, D-205, D-672). The last `Receiver`
+//! releases the values still buffered (D-670). A sent value becomes shared
+//! (§9.4, D-072).
+//!
+//! `new`, `send` and `receive` are kernels that receive the running
+//! fiber's context (D-692). Each also declares its JS binding, written
+//! with the JS back end (D-661). The tests of this module that need
+//! `std::fiber` live there, because `std::fiber` imports this module
+//! (D-630).
+
+// Handles
+
+/// The sending end of a channel of `T` values. It prints as `<Sender>`,
+/// and `==` and hashing panic when they reach one (D-233, D-647).
+pub type Sender<T>
+
+/// The receiving end of a channel of `T` values. It prints as
+/// `<Receiver>`, and `==` and hashing panic when they reach one (D-233,
+/// D-647).
+pub type Receiver<T>
+
+// Building
+
+/// Returns the two ends of a new channel that buffers up to `capacity`
+/// values. Capacity 0 is a synchronous handoff: a send completes only when
+/// a receiver takes the value (D-054). A negative capacity counts as 0
+/// (D-298, D-672). The buffer's memory grows with the values it holds, not
+/// with `capacity`.
+@std_context
+@external(native, "cheby_channel_new")
+@external(js, "./channel.mjs", "new")
+@std_clamped(capacity)
+pub fn new<T>(capacity: Int) -> (Sender<T>, Receiver<T>)
+
+test "a channel delivers values in the order they were sent" {
+  let (tx, rx) = new::<Int>(2)
+  let assert Ok(Nil) = send(tx, 1)
+  let assert Ok(Nil) = send(tx, 2)
+  assert receive(rx) == Ok(1)
+  assert receive(rx) == Ok(2)
+  assert receive(rx) == Err(Nil)
+}
+
+test "handles print as placeholders" {
+  let (tx, rx) = new::<Int>(0)
+  assert "{tx:?} {rx:?}" == "<Sender> <Receiver>"
+}
+
+// Sending and receiving
+
+/// Puts `value` into the channel and returns `Ok(Nil)` once it is
+/// enqueued, or, for capacity 0, once a receiver has taken it (§10.5.1,
+/// D-087, D-179, D-206). While the buffer is full, or for capacity 0
+/// while nobody takes the value, the calling fiber waits. Returns
+/// `Err(value)` when every `Receiver` has been dropped, before the call or
+/// while the fiber waited. A cancelled `send` has not enqueued `value`
+/// (D-102, D-670).
+@std_context
+@external(native, "cheby_channel_send")
+@external(js, "./channel.mjs", "send")
+pub fn send<T>(sender: Sender<T>, value: T) -> Result<Nil, T>
+
+test "send gives the value back once every Receiver is gone" {
+  let (tx, _) = new::<String>(4)
+  assert send(tx, "lost") == Err("lost")
+}
+
+/// Takes the next value from the channel and returns it in `Ok` (§10.5.2,
+/// D-054, D-179). While the channel is empty and some `Sender` still
+/// exists, the calling fiber waits. Values buffered before the last
+/// `Sender` was dropped are still received; then it returns `Err(Nil)`. A
+/// cancelled `receive` takes nothing (D-670).
+@std_context
+@external(native, "cheby_channel_receive")
+@external(js, "./channel.mjs", "receive")
+pub fn receive<T>(receiver: Receiver<T>) -> Result<T, Nil>
+
+test "receive drains the buffer before it reports the closing" {
+  let (tx, rx) = new::<String>(2)
+  let assert Ok(Nil) = send(tx, "last words")
+  // `tx` is not used again, so the channel is closed now.
+  assert receive(rx) == Ok("last words")
+  assert receive(rx) == Err(Nil)
+}
+
+test "values still buffered are released with the last Receiver" {
+  let (inner_tx, inner_rx) = new::<Int>(0)
+  let (spare_tx, _) = new::<Int>(0)
+  let (tx, rx) = new::<Sender<Int>>(1)
+  let assert Ok(Nil) = send(tx, inner_tx)
+  // Dropping the only `Receiver` releases the buffered `inner_tx`,
+  // although `tx` is still alive.
+  let _ = rx
+  assert receive(inner_rx) == Err(Nil)
+  let assert Err(_) = send(tx, spare_tx)
+}

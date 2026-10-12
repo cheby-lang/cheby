@@ -1,0 +1,45 @@
+warning[W0011]: `==` on a type that contains a handle
+  --> tests/ui/10-concurrency/channel/handle_equality_warns.cheby:16:3
+   |
+16 |   a == b
+   |   ^^^^^^ `channel::Sender<Int>` is an external type
+   |
+   = note: `==` and `!=` panic when they reach a handle value at run time
+   = help: compare the parts that can be compared
+
+warning[W0011]: `==` on a type that contains a handle
+  --> tests/ui/10-concurrency/channel/handle_equality_warns.cheby:20:3
+   |
+20 |   a == b
+   |   ^^^^^^ `channel::Receiver<Int>` is an external type
+   |
+   = note: `==` and `!=` panic when they reach a handle value at run time
+   = help: compare the parts that can be compared
+
+warning[W0011]: `==` on a type that contains a handle
+  --> tests/ui/10-concurrency/channel/handle_equality_warns.cheby:24:3
+   |
+24 |   a == b
+   |   ^^^^^^ `fiber::Fiber<Int>` is an external type
+   |
+   = note: `==` and `!=` panic when they reach a handle value at run time
+   = help: compare the parts that can be compared
+
+warning[W0011]: `!=` on a type that contains a handle
+  --> tests/ui/10-concurrency/channel/handle_equality_warns.cheby:28:3
+   |
+28 |   a != b
+   |   ^^^^^^ `fiber::Scope` is an external type
+   |
+   = note: `==` and `!=` panic when they reach a handle value at run time
+   = help: compare the parts that can be compared
+
+warning[W0011]: `==` on a type that contains a handle
+  --> tests/ui/10-concurrency/channel/handle_equality_warns.cheby:32:3
+   |
+32 |   a == b
+   |   ^^^^^^ `Mailbox` contains the external type `Sender`
+   |
+   = note: `==` and `!=` panic when they reach a handle value at run time
+   = help: compare the parts that can be compared
+

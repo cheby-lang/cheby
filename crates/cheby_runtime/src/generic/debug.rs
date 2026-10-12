@@ -226,7 +226,17 @@ pub unsafe fn debug_object(word: Word) -> Word {
     };
     // SAFETY: forwarded from the caller.
     unsafe { walk(word, &mut sink) };
-    sink.word
+    std::mem::take(&mut sink.word)
+}
+
+impl Drop for ObjectSink {
+    /// Releases the text of a walk that a hook's panic unwound out of
+    /// (D-697); a finished walk has taken it.
+    fn drop(&mut self) {
+        // SAFETY: the sink owns its `String`, or holds 0, which `drop`
+        // skips.
+        unsafe { crate::rc::drop(self.word) };
+    }
 }
 
 /// Prints `word` into `out`.

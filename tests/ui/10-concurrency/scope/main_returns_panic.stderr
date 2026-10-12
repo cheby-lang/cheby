@@ -1,0 +1,2 @@
+panicked at tests/ui/10-concurrency/scope/main_returns_panic.cheby:13:3:
+boom

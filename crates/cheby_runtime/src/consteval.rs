@@ -46,7 +46,9 @@ use crate::ctx::ExecCtx;
 use crate::entry::{self, EntryFn};
 use crate::layout::{self, FieldKind, LayoutKind};
 use crate::object::{load_rc, read_field, word_to_ptr};
-use crate::panic::{cheby_rt_panic, fatal, panic_current};
+use crate::panic::{fatal, report_of};
+use crate::unwind::guard::guarded;
+use crate::unwind::raise::{SavedExit, raise, raise_panic, rethrow_if_unwinding};
 use crate::{alloc, hamt, list, values};
 
 /// The kernels this module registers: none.
@@ -269,7 +271,7 @@ pub(crate) fn limit_exceeded(limit: Limit) -> ! {
     if let Some(table) = entry::current_consts() {
         table.exceed(limit);
     }
-    panic_current(PanicKind::Explicit, Some(limit.message()))
+    raise_panic(None, PanicKind::Explicit, Some(limit.message()))
 }
 
 /// What [`ConstTable::force`] found.
@@ -292,17 +294,21 @@ enum Forced {
 /// `ctx` is the running entry's context, and `symbol` a borrowed `String`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_rt_effect_check(ctx: *mut ExecCtx, symbol: Word) {
-    // SAFETY: forwarded from the caller.
-    let Some(context) = (unsafe { ctx.as_ref() }) else {
-        fatal(format_args!(
-            "an effect check ran without an execution context"
-        ));
-    };
-    let mode = context.mode.load(std::sync::atomic::Ordering::Relaxed);
-    if mode & abi::CTX_MODE_CONST_EVAL != 0 {
+    guarded(Some(ctx), || {
         // SAFETY: forwarded from the caller.
-        unsafe { cheby_rt_panic(ctx, PanicKind::ForbiddenEffect.code(), symbol, 0) }
-    }
+        let Some(context) = (unsafe { ctx.as_ref() }) else {
+            fatal(format_args!(
+                "an effect check ran without an execution context"
+            ));
+        };
+        let mode = context.mode.load(std::sync::atomic::Ordering::Relaxed);
+        if mode & abi::CTX_MODE_CONST_EVAL != 0 {
+            // SAFETY: `symbol` is a borrowed `String`, as the caller
+            // guarantees.
+            let report = unsafe { report_of(PanicKind::ForbiddenEffect.code(), symbol, 0) };
+            raise(Some(ctx), report)
+        }
+    });
 }
 
 /// `cheby_rt_const_missing(ctx, slot)`: called by a `LoadConst` that found
@@ -317,41 +323,54 @@ pub unsafe extern "C" fn cheby_rt_effect_check(ctx: *mut ExecCtx, symbol: Word) 
 /// constant's slot.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_rt_const_missing(ctx: *mut ExecCtx, slot: u64) -> Word {
-    let Some(table) = entry::current_consts() else {
-        fatal(format_args!(
-            "the constant slot at {slot:#x} is empty outside constant evaluation"
-        ));
-    };
-    let Ok(address) = usize::try_from(slot) else {
-        fatal(format_args!(
-            "the constant slot {slot:#x} is not an address"
-        ));
-    };
-    let slot_ptr: *mut u64 = std::ptr::with_exposed_provenance_mut(address);
-    match table.force(address) {
-        Forced::Run { thunk, seed } => {
-            // SAFETY: the host registered `thunk` as this constant's entry
-            // thunk, valid while the entry runs; `ctx` is the running
-            // entry's, so the initializer runs on the current entry, its
-            // stack checks included.
-            let word = entry::with_seed(seed, || unsafe { thunk(ctx) });
-            // SAFETY: the registered slot is an 8-aligned writable word of
-            // the JIT's data, and only this entry's thread evaluates.
-            unsafe { slot_ptr.write(word) };
-            table.finish(slot_ptr);
-            word
+    guarded(Some(ctx), || {
+        let Some(table) = entry::current_consts() else {
+            fatal(format_args!(
+                "the constant slot at {slot:#x} is empty outside constant evaluation"
+            ));
+        };
+        let Ok(address) = usize::try_from(slot) else {
+            fatal(format_args!(
+                "the constant slot {slot:#x} is not an address"
+            ));
+        };
+        let slot_ptr: *mut u64 = std::ptr::with_exposed_provenance_mut(address);
+        match table.force(address) {
+            Forced::Run { thunk, seed } => {
+                let fiber = entry::current_fiber();
+                let exit = fiber.map(SavedExit::save);
+                // SAFETY: the host registered `thunk` as this constant's
+                // entry thunk, valid while the entry runs; `ctx` is the
+                // running entry's, so the initializer runs on the current
+                // entry, its stack checks included.
+                let word = entry::with_seed(seed, || unsafe { thunk(ctx) });
+                // The forced initializer panicked and its thunk unwound to
+                // here (D-713): the reader unwinds too, from this call's
+                // exit record, and the constant stays in progress for the
+                // host's `abandon`, as when the entry was abandoned.
+                if let (Some(fiber), Some(exit)) = (fiber, exit) {
+                    exit.restore(fiber);
+                    rethrow_if_unwinding(fiber);
+                }
+                // SAFETY: the registered slot is an 8-aligned writable word
+                // of the JIT's data, and only this entry's thread evaluates.
+                unsafe { slot_ptr.write(word) };
+                table.finish(slot_ptr);
+                word
+            }
+            // SAFETY: as above; a done constant's slot holds its value.
+            Forced::Done => unsafe { slot_ptr.read() },
+            Forced::Cycle => raise_panic(Some(ctx), PanicKind::ConstCycle, None),
+            Forced::Failed => raise_panic(
+                Some(ctx),
+                PanicKind::ConstCycle,
+                Some("a constant this initializer reads failed to evaluate"),
+            ),
+            Forced::Unknown => fatal(format_args!(
+                "the constant slot at {slot:#x} belongs to no constant of this build"
+            )),
         }
-        // SAFETY: as above; a done constant's slot holds its value.
-        Forced::Done => unsafe { slot_ptr.read() },
-        Forced::Cycle => panic_current(PanicKind::ConstCycle, None),
-        Forced::Failed => panic_current(
-            PanicKind::ConstCycle,
-            Some("a constant this initializer reads failed to evaluate"),
-        ),
-        Forced::Unknown => fatal(format_args!(
-            "the constant slot at {slot:#x} belongs to no constant of this build"
-        )),
-    }
+    })
 }
 
 /// The panic message of [`cheby_rt_unresolved`], by which constant
@@ -369,7 +388,9 @@ pub const UNRESOLVED_MESSAGE: &str =
 /// Called from generated code on an entry's thread.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_rt_unresolved() -> Word {
-    panic_current(PanicKind::ForbiddenEffect, Some(UNRESOLVED_MESSAGE))
+    guarded(None, || -> Word {
+        raise_panic(None, PanicKind::ForbiddenEffect, Some(UNRESOLVED_MESSAGE))
+    })
 }
 
 /// Rebuilds every `Map` and `Set` that `roots` reach with `seed`, the

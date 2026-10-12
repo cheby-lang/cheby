@@ -16,6 +16,7 @@ use super::node::{
 };
 use crate::abi::Word;
 use crate::stats::{self, Event};
+use crate::unwind::guard::DropOnUnwind;
 
 /// The bit of `hash` at the level of `shift`.
 fn bit_at(hash: u64, shift: u32) -> u32 {
@@ -292,9 +293,9 @@ fn writable_root(root: Root, coll: Collection) -> Root {
     Root::alloc(coll, root.count(), root.seed(), node)
 }
 
-/// A one-entry map or set under `seed`, taking the key and value.
-fn single(coll: Collection, seed: u64, key: Word, value: Option<Word>) -> Root {
-    let hash = key_hash(key, seed);
+/// A one-entry map or set under `seed`, taking the key, whose hash under
+/// `seed` is `hash`, and the value.
+fn single(coll: Collection, seed: u64, hash: u64, key: Word, value: Option<Word>) -> Root {
     let node = Bitmap::alloc(coll, coll.stride());
     node.put(0, key);
     if let Some(value) = value {
@@ -441,18 +442,25 @@ fn merge(
 /// (D-588); a set returns itself when the key is
 /// present.
 pub(super) fn insert(root: Root, coll: Collection, key: Word, value: Option<Word>) -> Root {
-    dup_word(key);
-    if let Some(value) = value {
-        dup_word(value);
-    }
+    // The key is hashed before any reference is taken, so a key that holds
+    // a function raises with nothing to release (D-697).
     let Some(top) = root.node() else {
-        return single(coll, crate::entry::current_seed(), key, value);
+        let seed = crate::entry::current_seed();
+        let hash = key_hash(key, seed);
+        dup_word(key);
+        if let Some(value) = value {
+            dup_word(value);
+        }
+        return single(coll, seed, hash, key, value);
     };
     let mut path = Path::walk(top, coll, key, key_hash(key, root.seed()));
     if let (Spot::Found(_), None) = (path.spot, value) {
-        drop_word(key);
         dup_word(root.word());
         return root;
+    }
+    dup_word(key);
+    if let Some(value) = value {
+        dup_word(value);
     }
     let target = writable_root(root, coll);
     put_owned(target, coll, &mut path, key, value);
@@ -479,17 +487,22 @@ fn put_owned(root: Root, coll: Collection, path: &mut Path, key: Word, value: Op
     }
 }
 
-/// Inserts into a root this code owns uniquely, taking the key and value:
-/// the building block of `from_list` and rebuilding.
-pub(super) fn insert_owned(root: Root, coll: Collection, key: Word, value: Option<Word>) {
+/// Inserts into a root this code owns uniquely, taking the key, whose
+/// hash under the root's seed is `hash`, and the value: the building block
+/// of `from_list` and rebuilding.
+fn insert_owned(root: Root, coll: Collection, hash: u64, key: Word, value: Option<Word>) {
     let Some(top) = root.node() else {
         return;
     };
-    let mut path = Path::walk(top, coll, key, key_hash(key, root.seed()));
+    let mut path = Path::walk(top, coll, key, hash);
     put_owned(root, coll, &mut path, key, value);
 }
 
 /// Builds a map or set under `seed` from owned entries, in place.
+///
+/// Each key is hashed before it goes in, while the entry and the root
+/// built so far are held by a drop guard: a key that holds a function, or
+/// a `@std_hooks` hash that panics, releases them all (D-697).
 pub(super) fn build(
     coll: Collection,
     seed: u64,
@@ -497,9 +510,12 @@ pub(super) fn build(
 ) -> Root {
     let mut root: Option<Root> = None;
     for (key, value) in entries {
+        let held = DropOnUnwind::new([key, value.unwrap_or(0), root.map_or(0, Root::word)]);
+        let hash = key_hash(key, seed);
+        held.disarm();
         match root {
-            None => root = Some(single(coll, seed, key, value)),
-            Some(root) => insert_owned(root, coll, key, value),
+            None => root = Some(single(coll, seed, hash, key, value)),
+            Some(root) => insert_owned(root, coll, hash, key, value),
         }
     }
     root.unwrap_or_else(|| Root::empty(coll))
@@ -516,14 +532,25 @@ pub(super) fn upsert(root: Root, key: Word, update: impl FnOnce(Option<Word>) ->
     let coll = Collection::Map;
     let Some(top) = root.node() else {
         let value = update(None);
+        // `update` runs first, as it always did; its result is released if
+        // the key then raises while it is hashed (D-697).
+        let held = DropOnUnwind::new([value]);
+        let seed = crate::entry::current_seed();
+        let hash = key_hash(key, seed);
+        held.disarm();
         dup_word(key);
-        return single(coll, crate::entry::current_seed(), key, Some(value));
+        return single(coll, seed, hash, key, Some(value));
     };
     let mut path = Path::walk(top, coll, key, key_hash(key, root.seed()));
     let target = writable_root(root, coll);
     let Spot::Found(at) = path.spot else {
         path.make_writable(target, coll, coll.stride());
+        let guard = UpsertGuard {
+            target,
+            entry: None,
+        };
         let value = update(None);
+        guard.disarm();
         dup_word(key);
         put_new(target, coll, &mut path, key, Some(value));
         return target;
@@ -536,9 +563,46 @@ pub(super) fn upsert(root: Root, key: Word, update: impl FnOnce(Option<Word>) ->
     // The path is this code's alone now, so nothing else can see the hole
     // while `update` runs.
     node.put(slot, HOLE);
+    let guard = UpsertGuard {
+        target,
+        entry: Some((path, at)),
+    };
     let value = update(Some(old));
+    guard.disarm();
     node.put(slot, value);
     target
+}
+
+/// `upsert`'s drop guard (D-697): when `update` unwinds, the stored value
+/// it was given is gone and the slot holds [`HOLE`], so the key's entry is
+/// removed (without compaction, which may allocate) and the reference the
+/// result would have been is released. The map the caller borrowed is
+/// then whole again: unchanged when it was shared, since the path was
+/// copied, or, when it was unique, without the entry, released by the
+/// caller's cleanup.
+struct UpsertGuard {
+    target: Root,
+    /// The path, writable in `target`, and the slot of the key whose value
+    /// was moved out.
+    entry: Option<(Path, usize)>,
+}
+
+impl UpsertGuard {
+    /// `update` returned: nothing to undo.
+    fn disarm(self) {
+        let mut this = std::mem::ManuallyDrop::new(self);
+        // The path's buffers are still freed.
+        drop(this.entry.take());
+    }
+}
+
+impl Drop for UpsertGuard {
+    fn drop(&mut self) {
+        if let Some((path, at)) = &self.entry {
+            remove_entry(self.target, Collection::Map, path, *at);
+        }
+        drop_word(self.target.word());
+    }
 }
 
 // ---------------------------------------------------------------------
@@ -562,6 +626,16 @@ pub(super) fn remove(root: Root, coll: Collection, key: Word) -> Root {
     }
     let target = writable_root(root, coll);
     path.make_writable(target, coll, 0);
+    remove_entry(target, coll, &path, at);
+    compact(target, coll, &mut path);
+    target
+}
+
+/// Removes the entry at slot `at` of the last node of `path`, writable in
+/// `target`, and releases its words; the trie is left uncompacted. It
+/// allocates nothing, so `upsert`'s drop guard may call it while an
+/// unwinding runs.
+fn remove_entry(target: Root, coll: Collection, path: &Path, at: usize) {
     let stride = coll.stride();
     let last = path.last();
     if path.ends_in_collision() {
@@ -592,8 +666,6 @@ pub(super) fn remove(root: Root, coll: Collection, key: Word) -> Root {
         node.set_maps(data & !bit, nodes);
     }
     target.set_count(target.count().wrapping_sub(1));
-    compact(target, coll, &mut path);
-    target
 }
 
 /// The bit index of the `n`th set bit of `map`.

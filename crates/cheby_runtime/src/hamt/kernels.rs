@@ -16,6 +16,7 @@ use crate::abi::Word;
 use crate::callback;
 use crate::entry;
 use crate::list;
+use crate::unwind::guard::{DropOnUnwind, guarded};
 use crate::values;
 
 /// The map behind a borrowed word from generated code.
@@ -81,7 +82,7 @@ pub extern "C" fn cheby_map_new() -> u64 {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_map_from_list(pairs: u64) -> u64 {
     // SAFETY: forwarded from the caller.
-    unsafe {
+    guarded(None, || unsafe {
         from_items(pairs, Collection::Map, |pair| {
             // SAFETY: the elements are live pairs.
             let parts = values::read_tuple(pair);
@@ -92,7 +93,7 @@ pub unsafe extern "C" fn cheby_map_from_list(pairs: u64) -> u64 {
             dup_word(value);
             (key, Some(value))
         })
-    }
+    })
 }
 
 /// `map::size`. O(1).
@@ -124,13 +125,20 @@ pub unsafe extern "C" fn cheby_map_is_empty(m: u64) -> bool {
 /// `m` is a live map and `key` a live uniform word.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_map_get(m: u64, key: u64) -> u64 {
-    // SAFETY: forwarded from the caller.
-    let found = ops::find(unsafe { map(m) }, Collection::Map, key);
-    values::option(found.map(|found| {
-        let value = found.value();
-        dup_word(value);
-        value
-    }))
+    guarded(None, || {
+        // SAFETY: forwarded from the caller.
+        let found = ops::find(unsafe { map(m) }, Collection::Map, key);
+        let value = found.map(|found| {
+            let value = found.value();
+            dup_word(value);
+            value
+        });
+        // The reference is released if the `Some` cannot be allocated.
+        let held = DropOnUnwind::new([value.unwrap_or(0)]);
+        let result = values::option(value);
+        held.disarm();
+        result
+    })
 }
 
 /// `map::has_key`. O(log n).
@@ -141,7 +149,9 @@ pub unsafe extern "C" fn cheby_map_get(m: u64, key: u64) -> u64 {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_map_has_key(m: u64, key: u64) -> bool {
     // SAFETY: forwarded from the caller.
-    ops::find(unsafe { map(m) }, Collection::Map, key).is_some()
+    guarded(None, || {
+        ops::find(unsafe { map(m) }, Collection::Map, key).is_some()
+    })
 }
 
 /// `map::insert`. O(log n); in place at count one.
@@ -152,7 +162,9 @@ pub unsafe extern "C" fn cheby_map_has_key(m: u64, key: u64) -> bool {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_map_insert(m: u64, key: u64, value: u64) -> u64 {
     // SAFETY: forwarded from the caller.
-    ops::insert(unsafe { map(m) }, Collection::Map, key, Some(value)).word()
+    guarded(None, || {
+        ops::insert(unsafe { map(m) }, Collection::Map, key, Some(value)).word()
+    })
 }
 
 /// `map::remove`: unchanged when the key is absent. O(log n); in place at
@@ -164,13 +176,17 @@ pub unsafe extern "C" fn cheby_map_insert(m: u64, key: u64, value: u64) -> u64 {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_map_remove(m: u64, key: u64) -> u64 {
     // SAFETY: forwarded from the caller.
-    ops::remove(unsafe { map(m) }, Collection::Map, key).word()
+    guarded(None, || {
+        ops::remove(unsafe { map(m) }, Collection::Map, key).word()
+    })
 }
 
 /// `map::upsert`: one lookup, then `update` called once through
 /// `callback::call` (D-484, D-526) with `Some` of the stored value (moved
 /// out when the path is this map's alone) or `None`, and its result
-/// stored in place at count one (§9.3).
+/// stored in place at count one (§9.3). When `update` panics under an
+/// unwinding backend, a drop guard removes the key's entry, whose value
+/// was moved out, before the map is released (D-697, `ops::upsert`).
 ///
 /// # Safety
 ///
@@ -178,14 +194,21 @@ pub unsafe extern "C" fn cheby_map_remove(m: u64, key: u64) -> u64 {
 /// closure of one parameter; called on an entry's thread.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_map_upsert(m: u64, key: u64, update: u64) -> u64 {
-    // SAFETY: forwarded from the caller.
-    let root = unsafe { map(m) };
-    ops::upsert(root, key, |previous| {
-        // SAFETY: on the caller's entry thread; the closure is borrowed
-        // and its argument given away.
-        unsafe { callback::call(update, &[values::option(previous)]) }
+    guarded(None, || {
+        // SAFETY: forwarded from the caller.
+        let root = unsafe { map(m) };
+        ops::upsert(root, key, |previous| {
+            // The moved-out value is released if its `Some` cannot be
+            // allocated.
+            let held = DropOnUnwind::new([previous.unwrap_or(0)]);
+            let argument = values::option(previous);
+            held.disarm();
+            // SAFETY: on the caller's entry thread; the closure is borrowed
+            // and its argument given away.
+            unsafe { callback::call(update, &[argument]) }
+        })
+        .word()
     })
-    .word()
 }
 
 /// `map::keys`, in node order. O(n).
@@ -195,10 +218,12 @@ pub unsafe extern "C" fn cheby_map_upsert(m: u64, key: u64, update: u64) -> u64 
 /// `m` is a live map.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_map_keys(m: u64) -> u64 {
-    // SAFETY: forwarded from the caller.
-    listed(unsafe { map(m) }, Collection::Map, |(key, _)| {
-        dup_word(key);
-        key
+    guarded(None, || {
+        // SAFETY: forwarded from the caller.
+        listed(unsafe { map(m) }, Collection::Map, |(key, _)| {
+            dup_word(key);
+            key
+        })
     })
 }
 
@@ -209,11 +234,13 @@ pub unsafe extern "C" fn cheby_map_keys(m: u64) -> u64 {
 /// `m` is a live map.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_map_values(m: u64) -> u64 {
-    // SAFETY: forwarded from the caller.
-    listed(unsafe { map(m) }, Collection::Map, |(_, value)| {
-        let value = value.unwrap_or(crate::object::nil());
-        dup_word(value);
-        value
+    guarded(None, || {
+        // SAFETY: forwarded from the caller.
+        listed(unsafe { map(m) }, Collection::Map, |(_, value)| {
+            let value = value.unwrap_or(crate::object::nil());
+            dup_word(value);
+            value
+        })
     })
 }
 
@@ -224,12 +251,17 @@ pub unsafe extern "C" fn cheby_map_values(m: u64) -> u64 {
 /// `m` is a live map.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_map_to_list(m: u64) -> u64 {
-    // SAFETY: forwarded from the caller.
-    listed(unsafe { map(m) }, Collection::Map, |(key, value)| {
-        let value = value.unwrap_or(crate::object::nil());
-        dup_word(key);
-        dup_word(value);
-        values::tuple(&[key, value])
+    guarded(None, || {
+        // SAFETY: forwarded from the caller.
+        listed(unsafe { map(m) }, Collection::Map, |(key, value)| {
+            let value = value.unwrap_or(crate::object::nil());
+            dup_word(key);
+            dup_word(value);
+            let held = DropOnUnwind::new([key, value]);
+            let pair = values::tuple(&[key, value]);
+            held.disarm();
+            pair
+        })
     })
 }
 
@@ -251,12 +283,12 @@ pub extern "C" fn cheby_set_new() -> u64 {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_set_from_list(items: u64) -> u64 {
     // SAFETY: forwarded from the caller.
-    unsafe {
+    guarded(None, || unsafe {
         from_items(items, Collection::Set, |item| {
             dup_word(item);
             (item, None)
         })
-    }
+    })
 }
 
 /// `set::size`. O(1).
@@ -289,7 +321,9 @@ pub unsafe extern "C" fn cheby_set_is_empty(s: u64) -> bool {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_set_contains(s: u64, item: u64) -> bool {
     // SAFETY: forwarded from the caller.
-    ops::find(unsafe { set(s) }, Collection::Set, item).is_some()
+    guarded(None, || {
+        ops::find(unsafe { set(s) }, Collection::Set, item).is_some()
+    })
 }
 
 /// `set::insert`: unchanged when present. O(log n); in place at count one.
@@ -300,7 +334,9 @@ pub unsafe extern "C" fn cheby_set_contains(s: u64, item: u64) -> bool {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_set_insert(s: u64, item: u64) -> u64 {
     // SAFETY: forwarded from the caller.
-    ops::insert(unsafe { set(s) }, Collection::Set, item, None).word()
+    guarded(None, || {
+        ops::insert(unsafe { set(s) }, Collection::Set, item, None).word()
+    })
 }
 
 /// `set::remove`: unchanged when absent. O(log n); in place at count one.
@@ -311,7 +347,9 @@ pub unsafe extern "C" fn cheby_set_insert(s: u64, item: u64) -> u64 {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_set_remove(s: u64, item: u64) -> u64 {
     // SAFETY: forwarded from the caller.
-    ops::remove(unsafe { set(s) }, Collection::Set, item).word()
+    guarded(None, || {
+        ops::remove(unsafe { set(s) }, Collection::Set, item).word()
+    })
 }
 
 /// `set::to_list`, in node order. O(n).
@@ -321,10 +359,12 @@ pub unsafe extern "C" fn cheby_set_remove(s: u64, item: u64) -> u64 {
 /// `s` is a live set.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_set_to_list(s: u64) -> u64 {
-    // SAFETY: forwarded from the caller.
-    listed(unsafe { set(s) }, Collection::Set, |(item, _)| {
-        dup_word(item);
-        item
+    guarded(None, || {
+        // SAFETY: forwarded from the caller.
+        listed(unsafe { set(s) }, Collection::Set, |(item, _)| {
+            dup_word(item);
+            item
+        })
     })
 }
 

@@ -132,17 +132,18 @@ fn compile_errors_exit_with_one() {
             MANIFEST,
             (
                 "src/main.cheby",
-                "//! Unsupported.\n\nimport std::fiber\nimport std::io\n\nfn main() {\n  io::println(\"never\")\n}\n",
+                "//! Unsupported.\n\nimport std::http\nimport std::io\n\nfn main() {\n  io::println(\"never\")\n}\n",
             ),
         ],
     );
     let out = cheby(&dir, &["run"]);
     assert_eq!(out.stdout, "");
     // MIR lowering reports no E0038 since `dyn` lowers (D-554); an import
-    // of an unshipped std module stays E0038 (D-480).
+    // of an unshipped std module stays E0038 (D-480), and `std::http`
+    // stays unshipped until tier 3 (D-729).
     assert!(
         out.stderr
-            .starts_with("error[E0038]: the module `std::fiber` is not supported yet"),
+            .starts_with("error[E0038]: the module `std::http` is not supported yet"),
         "{}",
         out.stderr
     );
@@ -164,7 +165,7 @@ fn unsupported_constructs_reached_from_main_exit_with_one() {
             ),
             (
                 "src/pick.cheby",
-                "//! Reaches an unshipped module.\n\nimport std::fiber\n\npub fn pick(text: String) -> String {\n  text\n}\n",
+                "//! Reaches an unshipped module.\n\nimport std::http\n\npub fn pick(text: String) -> String {\n  text\n}\n",
             ),
         ],
     );
@@ -175,7 +176,7 @@ fn unsupported_constructs_reached_from_main_exit_with_one() {
     // (D-480).
     assert!(
         out.stderr.starts_with(
-            "error[E0038]: the module `std::fiber` is not supported yet\n --> src/pick.cheby:3:8\n"
+            "error[E0038]: the module `std::http` is not supported yet\n --> src/pick.cheby:3:8\n"
         ),
         "{}",
         out.stderr

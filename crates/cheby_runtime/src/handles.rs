@@ -37,10 +37,6 @@ use crate::panic::fatal;
 /// The Rust state behind a `Sender`, `Receiver`, `Fiber` or `Scope` handle
 /// (kinds 40 to 43), owned by the handle object and shared by every copy
 /// of the value.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "S6a (wave 3) implements the payloads")
-)]
 pub(crate) trait HandlePayload: Send + Sync + 'static {
     /// Runs once, when the last reference to the handle goes away, on the
     /// fiber that released it (D-171, D-703). Gives every Cheby word the
@@ -53,10 +49,6 @@ pub(crate) trait HandlePayload: Send + Sync + 'static {
 
 /// The handle kinds with a payload: 40 to 43.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "S6a (wave 3) creates the handles")
-)]
 pub(crate) enum HandleKind {
     /// A channel's sending handle, `std::channel.Sender` (40).
     Sender,
@@ -70,10 +62,6 @@ pub(crate) enum HandleKind {
 
 impl HandleKind {
     /// The kind's layout id.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "S6a (wave 3) creates the handles")
-    )]
     pub(crate) const fn id(self) -> LayoutId {
         match self {
             Self::Sender => ids::SENDER,
@@ -115,10 +103,6 @@ struct VtableOf<P>(PhantomData<P>);
 
 impl<P: HandlePayload> VtableOf<P> {
     /// A static table, one per payload type.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "S6a (wave 3) creates the handles")
-    )]
     const VTABLE: &'static PayloadVtable = &PayloadVtable {
         finalize: finalize_payload::<P>,
         type_id: TypeId::of::<P>,
@@ -131,10 +115,6 @@ impl<P: HandlePayload> VtableOf<P> {
 ///
 /// `data` is the pointer [`new_handle`] took from a `Box<P>`, given here
 /// once.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "S6a (wave 3) creates the handles")
-)]
 unsafe fn finalize_payload<P: HandlePayload>(data: *mut (), release: &mut dyn FnMut(Word)) {
     // SAFETY: forwarded from the caller: the box's own pointer, released
     // once, so the box is rebuilt and dropped once.
@@ -175,10 +155,6 @@ unsafe fn parts(obj: *const u8) -> (*mut (), &'static PayloadVtable) {
 /// # Safety
 ///
 /// `ctx` is null or the running fiber's control block.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "S6a (wave 3) creates the handles")
-)]
 #[expect(
     clippy::cast_ptr_alignment,
     reason = "objects are 8-aligned and the two pointers are at offsets 8 and 16"
@@ -211,10 +187,6 @@ pub(crate) unsafe fn new_handle<P: HandlePayload>(
 ///
 /// `word` is a live handle of `kind` made by [`new_handle`] with a payload
 /// of type `P`, and stays live for `'a`.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "S6a (wave 3) reads the payloads")
-)]
 pub(crate) unsafe fn payload<'a, P: HandlePayload>(word: Word, kind: HandleKind) -> &'a P {
     let obj = word_to_ptr(word);
     if cfg!(debug_assertions) {

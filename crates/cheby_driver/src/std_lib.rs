@@ -27,12 +27,24 @@ pub const STD_MODULES: &[StdModule] = &[
         source: include_str!("../../../std/bytes.cheby"),
     },
     StdModule {
+        path: "channel",
+        source: include_str!("../../../std/channel.cheby"),
+    },
+    StdModule {
+        path: "duration",
+        source: include_str!("../../../std/duration.cheby"),
+    },
+    StdModule {
         path: "env",
         source: include_str!("../../../std/env.cheby"),
     },
     StdModule {
         path: "f32",
         source: include_str!("../../../std/f32.cheby"),
+    },
+    StdModule {
+        path: "fiber",
+        source: include_str!("../../../std/fiber.cheby"),
     },
     StdModule {
         path: "float",
@@ -142,9 +154,6 @@ pub const STAGED_STD_MODULES: &[StdModule] = &[];
 /// (`docs/plan/stdlib.md`). Importing one is E0038, not E0039 (D-451).
 /// Sorted.
 pub const PLANNED_STD_MODULES: &[&str] = &[
-    "channel",
-    "duration",
-    "fiber",
     "file",
     "http",
     "multimap",
@@ -170,9 +179,66 @@ pub const PLANNED_STD_MODULES: &[&str] = &[
 /// this module, accepts a listed test as absent while its milestone is the
 /// one in effect (`tests/milestone`, or `CHEBY_MILESTONE`, D-544). Past
 /// that milestone the entry fails the guard, and so does an entry whose
-/// test is in `std/`. Empty: every spec test of a shipped module is in
-/// `std/`.
-pub const PENDING_SPEC_TESTS: &[(&str, &str, &str)] = &[];
+/// test is in `std/`.
+///
+/// GAP(slice-std-subset): M2's first slice ships `std::fiber`,
+/// `std::channel` and `std::duration` before unwinding, cancellation,
+/// timers, selectors and detached fibers exist. Each entry's comment
+/// names what its test needs and the M2 package that brings it.
+pub const PENDING_SPEC_TESTS: &[(&str, &str, &str)] = &[
+    // A body's panic caught by its scope: unwinding (U4).
+    ("fiber", "a panic in the body is caught by its scope", "M2"),
+    // A fiber's panic cancels the body: cancellation (U5).
+    ("fiber", "a panic in a fiber cancels the body", "M2"),
+    // A child fiber's panic recorded by its scope: unwinding (U4).
+    (
+        "fiber",
+        "a nested scope keeps a fiber's panic to itself",
+        "M2",
+    ),
+    // `spawn`'s panic caught by a scope: unwinding (U4).
+    ("fiber", "spawning into a scope that has ended panics", "M2"),
+    // `spawn_with_stack`: lifecycle (L1).
+    ("fiber", "a fiber can have a larger stack", "M2"),
+    // `spawn_detached`: lifecycle (L1).
+    ("fiber", "a detached fiber runs on its own", "M2"),
+    // `join`'s failure rules and a failed scope: cancellation (U5).
+    (
+        "fiber",
+        "joining a failed fiber from outside its scope panics",
+        "M2",
+    ),
+    // `timeout` with a positive limit: timers (T1).
+    (
+        "fiber",
+        "timeout returns the value of work that finishes in time",
+        "M2",
+    ),
+    // `timeout` with a positive limit: timers (T1).
+    ("fiber", "timeout cancels work that takes too long", "M2"),
+    // `timeout` with a positive limit: timers (T1).
+    ("fiber", "timeout reports a panic as Panicked", "M2"),
+    // `timeout` with a positive limit: timers (T1).
+    (
+        "fiber",
+        "a timeout cancels the scopes inside it without their returning",
+        "M2",
+    ),
+    // A `Panic` exists only once a scope catches one: unwinding (U4).
+    ("fiber", "message is the panic's message line", "M2"),
+    // A `Panic` exists only once a scope catches one: unwinding (U4).
+    ("fiber", "a panic shows like a panic report", "M2"),
+    // A `Panic` exists only once a scope catches one: unwinding (U4).
+    ("fiber", "panics compare by message and location", "M2"),
+    // `fiber::timeout` with a positive limit: timers (T1).
+    ("channel", "a negative capacity counts as 0", "M2"),
+    // `std::selector`: timers and selectors (T1).
+    (
+        "channel",
+        "a blocked send fails when the last Receiver goes",
+        "M2",
+    ),
+];
 
 /// The shipped module at `path` (under `std`).
 #[must_use]
@@ -356,6 +422,22 @@ mod tests {
             assert!(find(home).is_some(), "std::{home} is not shipped");
         }
         assert_eq!(STAGED_STD_MODULES, &[]);
+    }
+
+    /// M2's first slice ships `std::fiber` and `std::channel`, and
+    /// `std::duration` with them, because `fiber::timeout` takes a
+    /// `Duration` (D-645, D-646). The rest of tier 2 stays planned, and
+    /// `std::http` is the unshipped module of the probes (D-729).
+    #[test]
+    fn m2_slice_modules_ship() {
+        for path in ["channel", "duration", "fiber"] {
+            assert!(find(path).is_some(), "std::{path} is not shipped");
+            assert!(!is_planned(path), "std::{path} is still planned");
+        }
+        for path in ["http", "random", "runtime", "selector"] {
+            assert!(is_planned(path), "std::{path} is not planned");
+            assert!(find(path).is_none(), "std::{path} is shipped");
+        }
     }
 
     /// The `test "name"` lines of a source or a stdlib-spec page.

@@ -9,9 +9,11 @@ use crate::abi::{PanicKind, Word};
 use crate::ctx::ExecCtx;
 use crate::generic::{self, Reached};
 use crate::object;
-use crate::panic::{cheby_rt_panic, fatal};
+use crate::panic::{fatal, report_of};
 use crate::stats::{self, Event};
 use crate::string;
+use crate::unwind::guard::{DropOnUnwind, guarded};
+use crate::unwind::raise::raise;
 use crate::values;
 
 /// `cheby_rt_str_with_capacity(ctx, cap)`: an empty unique `String` with
@@ -19,18 +21,21 @@ use crate::values;
 ///
 /// # Safety
 ///
-/// Callable from generated code with any arguments; `ctx` is unused.
+/// Callable from generated code with any arguments; `ctx` is null or the
+/// running fiber's context.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_rt_str_with_capacity(ctx: *mut ExecCtx, cap: i64) -> Word {
-    let _ = ctx;
-    let cap = u64::try_from(cap).unwrap_or(0);
-    object::ptr_to_word(string::alloc_string(cap))
+    guarded(Some(ctx), || {
+        let cap = u64::try_from(cap).unwrap_or(0);
+        object::ptr_to_word(string::alloc_string(cap))
+    })
 }
 
 /// `cheby_rt_str_append(ctx, acc, piece)`: `acc` followed by `piece`.
 /// Consumes `acc`, updated in place when it is unique and has room and
 /// copied (with doubled capacity) otherwise (D-316); borrows `piece`.
-/// Result owned.
+/// Result owned. It consumes `acc` even when it raises (D-698): `append`
+/// raises only while it allocates, before it gives `acc` up.
 ///
 /// # Safety
 ///
@@ -38,41 +43,47 @@ pub unsafe extern "C" fn cheby_rt_str_with_capacity(ctx: *mut ExecCtx, cap: i64)
 /// `String`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_rt_str_append(ctx: *mut ExecCtx, acc: Word, piece: Word) -> Word {
-    let _ = ctx;
-    // SAFETY: forwarded from the caller.
-    let Some(bytes) = (unsafe { string::bytes(piece) }) else {
-        fatal(format_args!(
-            "`cheby_rt_str_append` got a piece that is not a String"
-        ));
-    };
-    // SAFETY: `acc` is live (the caller's contract) and checked to be a
-    // text object before its fields are read.
-    if unsafe { string::bytes(acc) }.is_some() {
-        // SAFETY: as above.
-        let path = unsafe { string::growth(acc, object::to_u64(bytes.len()), true) };
-        stats::record(match path {
-            string::Growth::InPlace => Event::StrAppendInPlace,
-            string::Growth::Grown => Event::StrAppendGrown,
-            string::Growth::Copied => Event::StrAppendCopied,
-        });
-    }
-    if acc == piece {
-        // The piece aliases the accumulator, which this call may grow or
-        // free: copy it first. (The caller owns two references, so the
-        // accumulator is shared and is copied anyway.)
-        // The copy is an object, so the memory limit counts it (D-617).
-        let copy = string::new_text(bytes, crate::abi::layout::STRING);
-        // SAFETY: forwarded from the caller; the copy is a live object of
-        // its own, released once it is appended.
-        unsafe {
-            let out = string::append(acc, string::text_bytes(copy).unwrap_or_default());
-            crate::rc::drop(copy);
+    guarded(Some(ctx), || {
+        let owned = DropOnUnwind::new([acc]);
+        // SAFETY: forwarded from the caller.
+        let Some(bytes) = (unsafe { string::bytes(piece) }) else {
+            fatal(format_args!(
+                "`cheby_rt_str_append` got a piece that is not a String"
+            ));
+        };
+        // SAFETY: `acc` is live (the caller's contract) and checked to be a
+        // text object before its fields are read.
+        if unsafe { string::bytes(acc) }.is_some() {
+            // SAFETY: as above.
+            let path = unsafe { string::growth(acc, object::to_u64(bytes.len()), true) };
+            stats::record(match path {
+                string::Growth::InPlace => Event::StrAppendInPlace,
+                string::Growth::Grown => Event::StrAppendGrown,
+                string::Growth::Copied => Event::StrAppendCopied,
+            });
+        }
+        if acc == piece {
+            // The piece aliases the accumulator, which this call may grow or
+            // free: copy it first. (The caller owns two references, so the
+            // accumulator is shared and is copied anyway.)
+            // The copy is an object, so the memory limit counts it (D-617).
+            // It is released once it is appended, or by an unwinding.
+            let copy = DropOnUnwind::new([string::new_text(bytes, crate::abi::layout::STRING)]);
+            let [copy_word] = copy.words();
+            // SAFETY: forwarded from the caller; the copy is a live object of
+            // its own.
+            let out =
+                unsafe { string::append(acc, string::text_bytes(copy_word).unwrap_or_default()) };
+            owned.disarm();
+            drop(copy);
             return out;
         }
-    }
-    // SAFETY: forwarded from the caller; `piece` is another object, so its
-    // bytes stay valid while `acc` changes.
-    unsafe { string::append(acc, bytes) }
+        // SAFETY: forwarded from the caller; `piece` is another object, so its
+        // bytes stay valid while `acc` changes.
+        let out = unsafe { string::append(acc, bytes) };
+        owned.disarm();
+        out
+    })
 }
 
 /// `cheby_rt_str_eq(a, b)`: whether two borrowed `String`s hold the same
@@ -110,14 +121,18 @@ pub unsafe extern "C" fn cheby_rt_equal(
     b: Word,
     location: Word,
 ) -> bool {
-    // SAFETY: forwarded from the caller.
-    match unsafe { generic::equal(a, b) } {
-        Ok(same) => same,
-        // SAFETY: `ctx` is the running entry's, `location` 0 or a string.
-        Err(Reached::Function) => unsafe {
-            cheby_rt_panic(ctx, PanicKind::EqualityOnFunction.code(), 0, location)
-        },
-    }
+    guarded(Some(ctx), || {
+        // SAFETY: forwarded from the caller.
+        match unsafe { generic::equal(a, b) } {
+            Ok(same) => same,
+            Err(Reached::Function) => {
+                // SAFETY: `location` is 0 or a live string.
+                let report =
+                    unsafe { report_of(PanicKind::EqualityOnFunction.code(), 0, location) };
+                raise(Some(ctx), report)
+            }
+        }
+    })
 }
 
 /// `cheby_rt_debug(ctx, value)`: the debug text (§3.13) of a borrowed
@@ -130,9 +145,8 @@ pub unsafe extern "C" fn cheby_rt_equal(
 /// `value` is a live uniform word; `ctx` is the running entry's context.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_rt_debug(ctx: *mut ExecCtx, value: Word) -> Word {
-    let _ = ctx;
     // SAFETY: forwarded from the caller.
-    unsafe { generic::debug_object(value) }
+    guarded(Some(ctx), || unsafe { generic::debug_object(value) })
 }
 
 /// `cheby_rt_box_i64(ctx, value)`: the uniform word of an `Int` or `I64`.
@@ -141,11 +155,11 @@ pub unsafe extern "C" fn cheby_rt_debug(ctx: *mut ExecCtx, value: Word) -> Word 
 ///
 /// # Safety
 ///
-/// Callable with any arguments; `ctx` is unused.
+/// Callable with any arguments; `ctx` is null or the running fiber's
+/// context.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_rt_box_i64(ctx: *mut ExecCtx, value: i64) -> Word {
-    let _ = ctx;
-    values::int_word(value)
+    guarded(Some(ctx), || values::int_word(value))
 }
 
 /// `cheby_rt_box_u64(ctx, value)`: the uniform word of a `U64` (a
@@ -153,33 +167,33 @@ pub unsafe extern "C" fn cheby_rt_box_i64(ctx: *mut ExecCtx, value: i64) -> Word
 ///
 /// # Safety
 ///
-/// Callable with any arguments; `ctx` is unused.
+/// Callable with any arguments; `ctx` is null or the running fiber's
+/// context.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_rt_box_u64(ctx: *mut ExecCtx, value: u64) -> Word {
-    let _ = ctx;
-    values::u64_word(value)
+    guarded(Some(ctx), || values::u64_word(value))
 }
 
 /// `cheby_rt_box_f64(ctx, value)`: a new `BoxedFloat`.
 ///
 /// # Safety
 ///
-/// Callable with any arguments; `ctx` is unused.
+/// Callable with any arguments; `ctx` is null or the running fiber's
+/// context.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_rt_box_f64(ctx: *mut ExecCtx, value: f64) -> Word {
-    let _ = ctx;
-    values::f64_word(value)
+    guarded(Some(ctx), || values::f64_word(value))
 }
 
 /// `cheby_rt_box_f32(ctx, value)`: a new `BoxedF32`.
 ///
 /// # Safety
 ///
-/// Callable with any arguments; `ctx` is unused.
+/// Callable with any arguments; `ctx` is null or the running fiber's
+/// context.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_rt_box_f32(ctx: *mut ExecCtx, value: f32) -> Word {
-    let _ = ctx;
-    values::f32_word(value)
+    guarded(Some(ctx), || values::f32_word(value))
 }
 
 /// `cheby_rt_fmod_f64(a, b)`: `a % b` on `Float`, the exact remainder of

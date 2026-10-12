@@ -246,10 +246,6 @@ pub(crate) enum AfterSwitch<'a> {
     /// Park, then release the lock, if any, that the fiber held to
     /// register itself as a waiter: wakers that take that lock see the
     /// fiber parked.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "joins and channels park (S6a, wave 3)")
-    )]
     Park(Option<Unlock<'a>>),
     /// The fiber finished: its slot goes back to the pool.
     Exit,
@@ -271,13 +267,6 @@ impl fmt::Debug for Unlock<'_> {
 impl<'a> Unlock<'a> {
     /// Gives up `guard`: the mutex stays locked until the worker that
     /// parks the fiber releases it.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the channel kernels park with a lock (S6a, wave 3)"
-        )
-    )]
     pub(crate) fn new<T: ?Sized>(guard: parking_lot::MutexGuard<'a, T>) -> Self {
         let mutex = parking_lot::MutexGuard::mutex(&guard);
         // SAFETY: the raw mutex is used only to unlock it once, below,
@@ -396,6 +385,13 @@ pub(super) fn create(
     params: FiberParams,
     start: StartFn,
 ) -> Result<FiberRef, StackError> {
+    #[cfg(test)]
+    if runtime.fail_stack.swap(false, Ordering::SeqCst) {
+        // The test hook of a stack region that cannot be mapped (D-677).
+        return Err(StackError::OutOfMemory {
+            bytes: params.stack_size,
+        });
+    }
     let pool = StackPool::global();
     let mut slot = pool.take(params.stack_size)?;
     let place = match slot.reserve_top(size_of::<ExecCtx>(), align_of::<ExecCtx>()) {

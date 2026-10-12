@@ -1,13 +1,13 @@
 // @mode: check-fail
-// @decisions: D-477, D-480, D-554
+// @decisions: D-477, D-480, D-554, D-729
 //! An import of a standard-library module that the plan defines but
 //! `std/` does not ship yet is the only E0038 at M1's exit, and paths
 //! through such an import report nothing more.
 
-import std::fiber
+import std::http
 import std::io
 
 fn main() {
-  let _ = fiber::spawn(fn() { io::println("in a fiber") })
-  io::println("spawned")
+  let _ = http::get("https://example.com")
+  io::println("fetched")
 }

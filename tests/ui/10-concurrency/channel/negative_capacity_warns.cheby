@@ -1,0 +1,12 @@
+// @mode: check-pass
+// @decisions: D-298, D-303, D-672
+// @milestone: M2
+//! `channel::new` clamps its capacity, so a negative capacity counts as
+//! 0, and a negative literal written for it is a warning (§10.5).
+
+import std::channel
+
+pub fn handoff() -> channel::Sender<Int> {
+  let (tx, _) = channel::new::<Int>(-1)
+  tx
+}

@@ -1,0 +1,33 @@
+// @mode: check-pass
+// @decisions: D-233, D-518, D-647
+// @milestone: M2
+//! The handles of `std::channel` and `std::fiber` are external types, so
+//! `==` on a type known to contain one warns, also through a field
+//! (§3.13, §9.5).
+
+import std::channel
+import std::fiber
+
+pub type Mailbox {
+  Mailbox(String, channel::Sender<Int>),
+}
+
+pub fn same_sender(a: channel::Sender<Int>, b: channel::Sender<Int>) -> Bool {
+  a == b
+}
+
+pub fn same_receiver(a: channel::Receiver<Int>, b: channel::Receiver<Int>) -> Bool {
+  a == b
+}
+
+pub fn same_fiber(a: fiber::Fiber<Int>, b: fiber::Fiber<Int>) -> Bool {
+  a == b
+}
+
+pub fn same_scope(a: fiber::Scope, b: fiber::Scope) -> Bool {
+  a != b
+}
+
+pub fn same_mailbox(a: Mailbox, b: Mailbox) -> Bool {
+  a == b
+}

@@ -73,6 +73,25 @@ pub(crate) fn start_root(
         .unwrap()
 }
 
+/// Starts `body` as a root fiber with the entry configuration `config`
+/// (its stack, trampolines, domain and backend); the receiver gets its
+/// word, or its panic.
+pub(crate) fn start_root_with(
+    runtime: &Runtime,
+    config: &EntryConfig,
+    body: impl FnOnce(&ExecCtx) -> u64 + Send + 'static,
+) -> mpsc::Receiver<EntryOutcome> {
+    runtime
+        .spawn_root(
+            config,
+            Box::new(move |ctx| {
+                // SAFETY: `ctx` is the root fiber's live control block.
+                body(unsafe { &*ctx })
+            }),
+        )
+        .unwrap()
+}
+
 /// Runs `body` as a root fiber on the smallest stack and returns its word;
 /// panics if it panics or hangs.
 pub(crate) fn root(runtime: &Runtime, body: impl FnOnce(&ExecCtx) -> u64 + Send + 'static) -> u64 {

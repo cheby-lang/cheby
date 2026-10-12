@@ -4,10 +4,10 @@
 //!
 //! [`symbols`] lists the runtime's own symbols first, in the order of
 //! [`sym::ALL`], then every kernel module's kernels. Each kernel module
-//! (`io`, `num`, `list`, `text`, `bytes`, `env`, `hamt`, `consteval`)
-//! registers its kernels through its own `kernels` function and names the
-//! std modules it implements completely in its `COMPLETE`, so kernel
-//! packages never edit this file.
+//! (`io`, `num`, `list`, `text`, `bytes`, `env`, `hamt`, `consteval`,
+//! `fiber_ops`) registers its kernels through its own `kernels` function
+//! and names the std modules it implements completely in its `COMPLETE`,
+//! so kernel packages never edit this file.
 //!
 //! A module that defines runtime kinds (`layout::register_builtin`, ids
 //! 26-63) also registers them from its `kernels` function: the JIT calls
@@ -37,7 +37,7 @@ use crate::object::{
 use crate::panic::{cheby_rt_panic, cheby_rt_stack_slow, cheby_rt_stack_slow_frame};
 use crate::rc::{cheby_rt_drop, cheby_rt_dup};
 use crate::unwind::try_call::cheby_rt_unwind_resume;
-use crate::{bytes, consteval, desc, env, hamt, io, list, num, text};
+use crate::{bytes, consteval, desc, env, fiber_ops, hamt, io, list, num, text};
 
 /// The address of a static object.
 fn data<T>(object: &'static T) -> *const u8 {
@@ -116,6 +116,7 @@ pub fn symbols() -> Vec<(&'static str, *const u8)> {
     env::kernels(&mut out);
     hamt::kernels(&mut out);
     consteval::kernels(&mut out);
+    fiber_ops::kernels(&mut out);
     out
 }
 
@@ -132,6 +133,7 @@ pub fn complete_modules() -> Vec<&'static str> {
         env::COMPLETE,
         hamt::COMPLETE,
         consteval::COMPLETE,
+        fiber_ops::COMPLETE,
     ]
     .concat()
 }
@@ -260,10 +262,12 @@ mod tests {
         let mut errors = Vec::new();
         let mut report = String::new();
         for (module, symbols) in &declared {
+            // Intrinsics get compiler-generated bodies and are never
+            // registered (D-693).
             let missing: Vec<&str> = symbols
                 .iter()
                 .map(String::as_str)
-                .filter(|symbol| !registered.contains(symbol))
+                .filter(|symbol| !registered.contains(symbol) && !sym::INTRINSICS.contains(symbol))
                 .collect();
             writeln!(
                 report,
@@ -401,6 +405,51 @@ mod tests {
         }
         assert_eq!(registered, declared);
         assert_eq!(registered.len(), 27 + 36 + 11 + 3);
+    }
+
+    /// Every kernel of `std::channel` and `std::fiber` has the C signature
+    /// of its `@external` declaration in `std/` after the context pointer,
+    /// and every one is `@std_context` (plan §2.5, D-692). The intrinsic
+    /// `scope_run` has no kernel (D-693).
+    #[test]
+    fn fiber_and_channel_kernels_match_their_declarations() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std");
+        let mut declared = BTreeMap::new();
+        for module in ["channel", "fiber"] {
+            let source = std::fs::read_to_string(root.join(format!("{module}.cheby"))).unwrap();
+            let mut pending: Option<String> = None;
+            let mut context = false;
+            for line in source.lines() {
+                if line.trim_start().starts_with("@std_context") {
+                    context = true;
+                    continue;
+                }
+                if let Some(symbol) = native_symbols(line).pop() {
+                    pending = Some(symbol);
+                    continue;
+                }
+                if let Some(signature) = c_signature(line) {
+                    if let Some(symbol) = pending.take()
+                        && !sym::INTRINSICS.contains(&symbol.as_str())
+                    {
+                        assert!(context, "{symbol} is not `@std_context`");
+                        declared.insert(symbol, signature);
+                    }
+                    context = false;
+                }
+            }
+        }
+        let mut registered = BTreeMap::new();
+        for (name, params, result) in fiber_ops::signatures() {
+            assert!(
+                registered
+                    .insert(name.to_owned(), (params.to_vec(), result))
+                    .is_none(),
+                "{name} twice"
+            );
+        }
+        assert_eq!(registered, declared);
+        assert_eq!(registered.len(), 8);
     }
 
     #[test]

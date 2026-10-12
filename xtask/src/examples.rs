@@ -3,7 +3,9 @@
 //! one the milestone expects.
 //!
 //! - Every example checks cleanly: exit status 0 and no diagnostic at all,
-//!   warnings included (D-477).
+//!   warnings included (D-477, D-663), except `022_bank_accounts`, which
+//!   has exactly one W0009 at `src/money.cheby`, for its deliberate `todo`
+//!   (D-068, D-663).
 //! - The later-tier examples, which import standard-library modules that
 //!   are planned but not shipped yet, fail with E0038 for those imports
 //!   only (D-451, D-480); warnings are allowed.
@@ -15,20 +17,22 @@ use std::process::Command;
 
 use cheby_test_support::example;
 
-/// The examples that import unshipped standard-library modules.
-const LATER_TIER: [&str; 8] = [
-    "005_prime_sieve",
+/// The examples that import unshipped standard-library modules. M2's first
+/// slice ships `std::fiber`, `std::channel` and `std::duration`, so 005,
+/// 018, 022 and 028 left the list (D-729).
+const LATER_TIER: [&str; 4] = [
     "009_counter_actor",
     "013_dining_philosophers",
-    "018_worker_pool",
     "019_supervisor",
-    "022_bank_accounts",
-    "028_money_and_rationals",
     "031_web_scraper",
 ];
 
 /// The example whose dependency cannot resolve yet.
 const DEPENDENCY: &str = "030_shop_service";
+
+/// The example whose clean check allows one W0009, and the file that has
+/// it (D-663).
+const TODO_EXAMPLE: (&str, &str) = ("022_bank_accounts", "src/money.cheby");
 
 /// What `cheby check` printed: the code and message of each diagnostic.
 struct Outcome {
@@ -146,6 +150,9 @@ fn judge(name: &str, outcome: &Outcome) -> Result<String, String> {
     if !outcome.success {
         return Err("`cheby check` failed".to_owned());
     }
+    if name == TODO_EXAMPLE.0 {
+        return judge_todo_example(outcome);
+    }
     if !outcome.errors.is_empty() || !outcome.warnings.is_empty() {
         let all: Vec<String> = outcome
             .errors
@@ -156,4 +163,95 @@ fn judge(name: &str, outcome: &Outcome) -> Result<String, String> {
         return Err(format!("expected no diagnostics (D-477), got {all:?}"));
     }
     Ok(String::new())
+}
+
+/// D-663's exception to the clean check: `022_bank_accounts` keeps the
+/// `todo` of `money::apply_interest`, so its check has exactly one
+/// diagnostic, a W0009 at `src/money.cheby`, and nothing else.
+fn judge_todo_example(outcome: &Outcome) -> Result<String, String> {
+    let codes: Vec<&str> = outcome
+        .errors
+        .iter()
+        .chain(&outcome.warnings)
+        .map(|(code, _)| code.as_str())
+        .collect();
+    let at_money = outcome.text.lines().any(|line| {
+        line.trim_start()
+            .strip_prefix("--> ")
+            .is_some_and(|place| place.starts_with(&format!("{}:", TODO_EXAMPLE.1)))
+    });
+    if outcome.errors.is_empty() && codes == ["W0009"] && at_money {
+        Ok(format!(" (its one W0009 at {}, D-663)", TODO_EXAMPLE.1))
+    } else {
+        Err(format!(
+            "expected exactly one W0009 at {} (D-663), got {codes:?}",
+            TODO_EXAMPLE.1
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn outcome(errors: &[&str], warnings: &[&str], text: &str) -> Outcome {
+        let pairs = |codes: &[&str]| {
+            codes
+                .iter()
+                .map(|c| ((*c).to_owned(), "message".to_owned()))
+                .collect()
+        };
+        Outcome {
+            success: errors.is_empty(),
+            errors: pairs(errors),
+            warnings: pairs(warnings),
+            text: text.to_owned(),
+        }
+    }
+
+    const MONEY: &str = "warning[W0009]: `todo` left in the code\n --> src/money.cheby:40:3\n";
+
+    /// D-663: 022 may have one W0009 at `src/money.cheby`, and nothing
+    /// else; every other example has no diagnostic at all.
+    #[test]
+    fn only_022_may_warn_and_only_once_in_money() {
+        assert!(judge("022_bank_accounts", &outcome(&[], &["W0009"], MONEY)).is_ok());
+        let elsewhere = "warning[W0009]: `todo`\n --> src/bank.cheby:4:3\n";
+        assert!(judge("022_bank_accounts", &outcome(&[], &["W0009"], elsewhere)).is_err());
+        let twice = format!("{MONEY}{MONEY}");
+        let two = outcome(&[], &["W0009", "W0009"], &twice);
+        assert!(judge("022_bank_accounts", &two).is_err());
+        let other = outcome(&[], &["W0002", "W0009"], MONEY);
+        assert!(judge("022_bank_accounts", &other).is_err());
+        assert!(judge("022_bank_accounts", &outcome(&[], &[], "")).is_err());
+        assert!(judge("021_other", &outcome(&[], &["W0009"], MONEY)).is_err());
+        assert!(judge("021_other", &outcome(&[], &[], "")).is_ok());
+    }
+
+    /// The examples of M2's first slice are judged by the clean rule, and
+    /// the rest of the later tier still expects only E0038 (D-729).
+    #[test]
+    fn the_slice_examples_left_the_later_tier() {
+        for name in [
+            "005_prime_sieve",
+            "018_worker_pool",
+            "022_bank_accounts",
+            "028_money_and_rationals",
+        ] {
+            assert!(!LATER_TIER.contains(&name), "{name}");
+        }
+        let unshipped = "error[E0038]: the module `std::selector` is not supported yet\n";
+        let e0038 = Outcome {
+            success: false,
+            errors: vec![(
+                "E0038".to_owned(),
+                "the module `std::selector` is not supported yet".to_owned(),
+            )],
+            warnings: Vec::new(),
+            text: unshipped.to_owned(),
+        };
+        assert!(judge("009_counter_actor", &e0038).is_ok());
+        let e0042 = outcome(&["E0042"], &[], "error[E0042]: ...\n");
+        assert!(judge("009_counter_actor", &e0042).is_err());
+    }
 }

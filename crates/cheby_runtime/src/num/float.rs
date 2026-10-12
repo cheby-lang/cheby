@@ -13,6 +13,7 @@
 
 use super::{Kernel, result, text, text_arg};
 use crate::abi::Word;
+use crate::unwind::guard::guarded;
 use crate::values;
 
 /// 2^63, the first value past `Int`'s range.
@@ -159,39 +160,43 @@ macro_rules! float_family {
         /// `text` is a live `String`, borrowed for the call.
         #[unsafe(export_name = concat!("cheby_", $std, "_parse"))]
         pub(crate) unsafe extern "C" fn parse(text: Word) -> Word {
-            // SAFETY: forwarded from the caller.
-            let text = unsafe { text_arg(text) };
-            result($parse(text))
+            guarded(None, || {
+                // SAFETY: forwarded from the caller.
+                let text = unsafe { text_arg(text) };
+                result($parse(text))
+            })
         }
 
         #[doc = concat!("`", $std, "::show` (§3.3.6, D-219, D-395).")]
         #[unsafe(export_name = concat!("cheby_", $std, "_show"))]
         pub(crate) extern "C" fn show(x: $t) -> Word {
-            values::string(&$show(x))
+            guarded(None, || values::string(&$show(x)))
         }
 
         #[doc = concat!("`", $std, "::truncate`: toward zero (D-132).")]
         #[unsafe(export_name = concat!("cheby_", $std, "_truncate"))]
         pub(crate) extern "C" fn truncate(x: $t) -> Word {
-            result(round_to_int(f64::from(x), Rounding::Truncate))
+            guarded(None, || {
+                result(round_to_int(f64::from(x), Rounding::Truncate))
+            })
         }
 
         #[doc = concat!("`", $std, "::round`: halfway cases away from zero (D-314).")]
         #[unsafe(export_name = concat!("cheby_", $std, "_round"))]
         pub(crate) extern "C" fn round(x: $t) -> Word {
-            result(round_to_int(f64::from(x), Rounding::Round))
+            guarded(None, || result(round_to_int(f64::from(x), Rounding::Round)))
         }
 
         #[doc = concat!("`", $std, "::floor` (D-132).")]
         #[unsafe(export_name = concat!("cheby_", $std, "_floor"))]
         pub(crate) extern "C" fn floor(x: $t) -> Word {
-            result(round_to_int(f64::from(x), Rounding::Floor))
+            guarded(None, || result(round_to_int(f64::from(x), Rounding::Floor)))
         }
 
         #[doc = concat!("`", $std, "::ceil` (D-132).")]
         #[unsafe(export_name = concat!("cheby_", $std, "_ceil"))]
         pub(crate) extern "C" fn ceil(x: $t) -> Word {
-            result(round_to_int(f64::from(x), Rounding::Ceil))
+            guarded(None, || result(round_to_int(f64::from(x), Rounding::Ceil)))
         }
 
         /// Appends this module's kernels to `out`.
@@ -253,7 +258,9 @@ macro_rules! float_family {
 
 /// `std::float`.
 mod float_kernels {
-    use super::{Kernel, RoundTo, Rounding, Word, result, round_to_int, text, text_arg, values};
+    use super::{
+        Kernel, RoundTo, Rounding, Word, guarded, result, round_to_int, text, text_arg, values,
+    };
 
     float_from! {
         "float", f64,
@@ -289,7 +296,9 @@ mod float_kernels {
 
 /// `std::f32`.
 mod f32_kernels {
-    use super::{Kernel, RoundTo, Rounding, Word, result, round_to_int, text, text_arg, values};
+    use super::{
+        Kernel, RoundTo, Rounding, Word, guarded, result, round_to_int, text, text_arg, values,
+    };
 
     float_from! {
         "f32", f32,

@@ -181,6 +181,71 @@ fn ping_pong_stays_on_one_worker_through_runnext() {
     assert!(together >= ROUNDS - ROUNDS / 10, "{together} of {ROUNDS}");
 }
 
+/// D-688, §10.1: on one worker, a ping-pong through the runnext slot does
+/// not starve a fiber waiting in the local deque. The pair inherits one
+/// time slice, so the monitor asks it to yield after one quantum, and the
+/// deque runs (review finding CONC3-1: the third fiber never ran).
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+fn a_ping_pong_through_runnext_lets_the_local_deque_run() {
+    /// How long the pair may run before it gives up waiting for the third
+    /// fiber; the third should run within a few quanta.
+    const BOUND: Duration = Duration::from_secs(10);
+    const STOP: u64 = u64::MAX;
+    let runtime = runtime(1);
+    let word = root(&runtime, |me| {
+        let request = Arc::new(Mailbox::default());
+        let reply = Arc::new(Mailbox::default());
+        let done = Arc::new(Mailbox::default());
+        let stop = Arc::new(AtomicBool::new(false));
+        let started = Instant::now();
+        {
+            let (request, reply) = (Arc::clone(&request), Arc::clone(&reply));
+            spawn(me, false, move |fiber| {
+                loop {
+                    entry_check(fiber);
+                    let word = request.receive(fiber);
+                    if word == STOP {
+                        break;
+                    }
+                    reply.send(word, true);
+                }
+            });
+        }
+        {
+            let (request, reply, done, stop) = (
+                Arc::clone(&request),
+                Arc::clone(&reply),
+                Arc::clone(&done),
+                Arc::clone(&stop),
+            );
+            spawn(me, false, move |fiber| {
+                let mut round = 0;
+                while !stop.load(Ordering::SeqCst) && started.elapsed() < BOUND {
+                    entry_check(fiber);
+                    request.send(round, true);
+                    assert_eq!(reply.receive(fiber), round);
+                    round += 1;
+                }
+                request.send(STOP, true);
+                let waited = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+                done.send(waited, false);
+            });
+        }
+        {
+            let stop = Arc::clone(&stop);
+            spawn(me, false, move |_| stop.store(true, Ordering::SeqCst));
+        }
+        let waited = done.receive(me);
+        u64::from(stop.load(Ordering::SeqCst)) | (waited << 1)
+    });
+    let (stopped_by_third, waited) = (word & 1 == 1, Duration::from_millis(word >> 1));
+    assert!(stopped_by_third, "the third fiber never ran in {waited:?}");
+    if !emulated() {
+        assert!(waited < Duration::from_secs(2), "{waited:?}");
+    }
+}
+
 /// D-689: idle workers steal from the deque of the worker that spawns.
 #[test]
 #[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
@@ -408,8 +473,10 @@ unsafe extern "C" fn returns_seven(_: *mut ExecCtx) -> u64 {
 }
 
 unsafe extern "C" fn panics(ctx: *mut ExecCtx) -> u64 {
-    // SAFETY: `ctx` is the running fiber's; no message or location.
-    unsafe { cheby_rt_panic(ctx, PanicKind::DivisionByZero.code(), 0, 0) }
+    // SAFETY: `ctx` is the running fiber's; no message or location. Under
+    // the default backend it never returns.
+    unsafe { cheby_rt_panic(ctx, PanicKind::DivisionByZero.code(), 0, 0) };
+    0
 }
 
 /// D-690 and GAP(interim-panics): a root fiber's word reaches the host; a
@@ -467,7 +534,7 @@ fn a_child_fibers_panic_ends_the_process() {
                         PanicKind::DivisionByZero.code(),
                         0,
                         0,
-                    )
+                    );
                 }
             });
             // Waits for ever: the child's panic ends the process first.

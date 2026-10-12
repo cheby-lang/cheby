@@ -46,15 +46,7 @@ use std::time::Instant;
 use crossbeam_deque::Injector;
 use parking_lot::Mutex;
 
-#[cfg_attr(
-    not(test),
-    expect(
-        unused_imports,
-        reason = "the channel kernels park with a lock (S6a, wave 3)"
-    )
-)]
-pub(crate) use fiber::Unlock;
-pub(crate) use fiber::{AfterSwitch, FiberRef, FiberSched, StartFn, park};
+pub(crate) use fiber::{AfterSwitch, FiberRef, FiberSched, StartFn, Unlock, park};
 
 use self::fiber::FiberParams;
 use self::idle::Idle;
@@ -204,6 +196,9 @@ pub(crate) struct Shared {
     /// Test hooks of the monitor.
     #[cfg(test)]
     probe: testing::MonitorProbe,
+    /// A test hook: the next fiber created finds no stack region (D-677).
+    #[cfg(test)]
+    pub(crate) fail_stack: AtomicBool,
 }
 
 impl fmt::Debug for Shared {
@@ -350,13 +345,6 @@ fn current_worker(shared: &Arc<Shared>) -> Option<usize> {
 ///
 /// `fiber` is not retired: it is parked, or parking with the lock the
 /// caller holds.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the fiber and channel kernels use it (S6a, wave 3)"
-    )
-)]
 pub(crate) unsafe fn wake(fiber: FiberRef, from_running: bool) -> bool {
     // SAFETY: forwarded from the caller.
     let ctx = unsafe { fiber.ctx() };
@@ -396,26 +384,39 @@ pub(crate) enum SpawnError {
     Stack(StackError),
 }
 
-/// Starts a fiber in the spawner's runtime that runs `start` on a stack
-/// slot of `stack_size` bytes (D-677). Its control block takes the
-/// spawner's entry mode, hash seed, accounting domain (D-691),
-/// trampolines (D-526) and unwinding backend; it has no host to report to.
-/// With `next` it takes the current worker's runnext slot, so it runs
-/// when the spawner blocks; otherwise it goes to the current worker's
-/// deque, where idle workers steal it.
+/// Starts a fiber in the spawner's runtime that runs `start`:
+/// [`create_fiber`], then [`schedule_new`].
 ///
 /// # Errors
 ///
 /// [`SpawnError`] when the spawner has no runtime or no slot is left.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "fiber::spawn's kernel uses it (S6a, wave 3)")
-)]
+#[cfg(test)]
 pub(crate) fn spawn_fiber(
     spawner: &ExecCtx,
     stack_size: usize,
     start: StartFn,
     next: bool,
+) -> Result<FiberRef, SpawnError> {
+    let fiber = create_fiber(spawner, stack_size, start)?;
+    schedule_new(fiber, next);
+    Ok(fiber)
+}
+
+/// Creates a fiber in the spawner's runtime that runs `start` on a stack
+/// slot of `stack_size` bytes (D-677), without queueing it: the caller
+/// records it where it must be known before it can run, then calls
+/// [`schedule_new`]. Its control block takes the spawner's entry mode,
+/// hash seed, accounting domain (D-691), trampolines (D-526) and unwinding
+/// backend; it has no host to report to. On an error, `start` is dropped
+/// without running.
+///
+/// # Errors
+///
+/// [`SpawnError`] when the spawner has no runtime or no slot is left.
+pub(crate) fn create_fiber(
+    spawner: &ExecCtx,
+    stack_size: usize,
+    start: StartFn,
 ) -> Result<FiberRef, SpawnError> {
     let Some(shared) = spawner.sched.runtime() else {
         return Err(SpawnError::NoRuntime);
@@ -434,11 +435,22 @@ pub(crate) fn spawn_fiber(
         },
         stack_size,
     };
-    let fiber =
-        fiber::create(shared, spawner.sched.worker(), params, start).map_err(SpawnError::Stack)?;
+    fiber::create(shared, spawner.sched.worker(), params, start).map_err(SpawnError::Stack)
+}
+
+/// Queues a fiber [`create_fiber`] made. With `next` it takes the current
+/// worker's runnext slot, so it runs when the spawner blocks (architecture
+/// §3.5); otherwise it goes to the current worker's deque, where idle
+/// workers steal it.
+pub(crate) fn schedule_new(fiber: FiberRef, next: bool) {
+    // SAFETY: a fiber that was just created and not queued yet is not
+    // retired: nothing else knows it.
+    let ctx = unsafe { fiber.ctx() };
+    let Some(shared) = ctx.sched.runtime() else {
+        crate::panic::fatal(format_args!("a new fiber has no runtime"));
+    };
     let place = if next { Where::Next } else { Where::Local };
     shared.schedule(fiber, current_worker(shared), place);
-    Ok(fiber)
 }
 
 /// What [`Runtime::new`] takes beyond its [`RuntimeConfig`]; tests change
@@ -522,6 +534,8 @@ impl Runtime {
             monitor: MonitorWake::default(),
             #[cfg(test)]
             probe: testing::MonitorProbe::default(),
+            #[cfg(test)]
+            fail_stack: AtomicBool::new(false),
         });
         let mut runtime = Self {
             shared,
@@ -639,8 +653,16 @@ impl Runtime {
         let start: StartFn = Box::new(move |ctx| {
             let word = body(ctx);
             // SAFETY: `ctx` is this fiber's live control block.
-            if let Some(outcome) = unsafe { &*ctx }.outcome() {
-                outcome.send(EntryOutcome::Returned(word)).ok();
+            let me = unsafe { &*ctx };
+            // The root's catch point (D-699, D-701): an entry that unwound
+            // returns with the record in its control block, never told
+            // apart by the thunk's word (`main`'s 0 is success).
+            let outcome = match crate::unwind::record::finish_entry(me) {
+                Some(report) => EntryOutcome::Panicked(report),
+                None => EntryOutcome::Returned(word),
+            };
+            if let Some(sender) = me.outcome() {
+                sender.send(outcome).ok();
             }
         });
         let fiber = fiber::create(&self.shared, 0, params, start).map_err(RuntimeError::Stack)?;

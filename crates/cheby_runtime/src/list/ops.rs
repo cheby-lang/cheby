@@ -5,7 +5,7 @@
 //! root is updated in place and returned; so is the tree under it, node
 //! by node, where it is unique (D-274, §9.3).
 
-use super::node::{Node, Root, View, drop_word, dup_word, empty};
+use super::node::{M, MAX_NODE_SIZE, Node, ROOT_SIZE, Root, View, drop_word, dup_word, empty};
 use super::tree;
 use crate::abi::Word;
 use crate::stats::{self, Event};
@@ -23,6 +23,56 @@ pub(crate) fn get(list: Root, index: usize) -> Option<Word> {
     }
     view.tree
         .map(|tree| tree::get(tree, view.offset.saturating_add(index)))
+}
+
+/// The bytes of `nodes` nodes of the largest size and a root.
+fn nodes_and_root(nodes: usize) -> u64 {
+    let bytes = nodes
+        .saturating_mul(MAX_NODE_SIZE)
+        .saturating_add(ROOT_SIZE);
+    u64::try_from(bytes).unwrap_or(u64::MAX)
+}
+
+/// The height of the tallest tree of `lists`, 0 for none.
+fn tallest(lists: &[Root]) -> usize {
+    lists
+        .iter()
+        .filter_map(|list| list.view().tree)
+        .map(Node::height)
+        .max()
+        .unwrap_or(0)
+}
+
+// Upper bounds of what an update allocates, for the memory-budget check
+// a runtime helper makes before it takes its owned arguments over (D-698,
+// GAP(unwind-budget-preflight)). A request a bound missed would only leak
+// what the update held, if the budget then ran out halfway.
+
+/// [`push`] onto `list` of height `h`: the cut of a view that ends early
+/// (one node per level), a copy and a new sibling per level, a new top,
+/// and a root: at most `3h + 4` nodes.
+pub(crate) fn push_bound(list: Root) -> u64 {
+    let h = tallest(&[list]);
+    nodes_and_root(h.saturating_mul(3).saturating_add(4))
+}
+
+/// [`append`] of `a` and `b`, the taller of height `h`: both trimmed at
+/// both ends (`4(h + 1)` nodes), the shorter wrapped up to `h` (`h`), the
+/// merged leaves (1), at each branch level the seam's children repacked
+/// and their new parents (`2M + 3`), a new top (1), and a root.
+pub(crate) fn append_bound(a: Root, b: Root) -> u64 {
+    let h = tallest(&[a, b]);
+    let per_level = M.saturating_mul(2).saturating_add(3);
+    let nodes = h
+        .saturating_mul(per_level)
+        .saturating_add(h.saturating_mul(5))
+        .saturating_add(6);
+    nodes_and_root(nodes)
+}
+
+/// [`slice_owned`]: at most a new root.
+pub(crate) fn slice_owned_bound() -> u64 {
+    nodes_and_root(0)
 }
 
 /// The tree holding exactly the view's elements, owned (the view's tree

@@ -1,15 +1,294 @@
-//! The runtime side of `std::fiber` and `std::channel`: scopes, spawning,
-//! joining and channels (D-693, D-706). Only the symbols generated code
-//! calls exist so far, as stubs; their bodies arrive with the scheduler.
+//! The runtime side of `std::fiber` and `std::channel` (D-646, D-692 to
+//! D-694, D-704, D-707): scopes, spawning, the base frame of a spawned
+//! fiber, joining and channels.
+//!
+//! - [`scope`]: `cheby_rt_scope_open` and `cheby_rt_scope_close`, the two
+//!   runtime helpers of the `scope_run` intrinsic (D-693), and the kernel
+//!   `take_failure`.
+//! - [`spawn`]: the kernel `sys_spawn` (architecture §5.4), and the stubs
+//!   of the parts of `std::fiber` that later packages bring.
+//! - [`base`]: `fiber_main`, the base frame of a spawned fiber (D-694), and
+//!   the join cell its result goes to (D-707).
+//! - [`join`]: the kernel `sys_join` (D-668, D-707).
+//! - [`channel`]: Go's `hchan` (D-704): the kernels `new`, `send` and
+//!   `receive`, and the handles' finalizers (D-672).
+//!
+//! Every kernel here is `@std_context` (D-692): it gets the running fiber's
+//! control block first, runs its whole body in U3's `guarded` and raises
+//! only through `raise_panic` (D-697). Arguments are borrowed and results
+//! owned (D-187).
+//!
+//! **Without a runtime** (D-692, architecture §5.1): an isolated entry (the
+//! REPL, constant evaluation never gets here, the thread backend on
+//! Windows) runs these kernels too. What completes without waiting works:
+//! `channel::new`, a `send` with room, a `receive` of a buffered value or
+//! of a closed channel, a `scope` whose body spawns nothing. Starting a
+//! fiber or waiting ends the program with a fatal runtime error naming the
+//! std function ([`needs_scheduler`]): a fatal error, not a panic, because
+//! `scope` would catch a panic and mislead.
 //!
 //! [`FiberConc`] is the structured-concurrency part of a fiber's control
-//! block (D-685): its scope, its open scopes, its join cell and the fields
-//! other fibers reach under the fiber lock (plan §2.4). It is empty until
-//! scopes, spawning and channels land.
+//! block (D-685): the scope it was spawned into, the scopes it has open and
+//! why the last one it closed failed. The fiber lock with the cancellation
+//! target and the wait node other fibers reach (architecture §3.1) belongs
+//! to cancellation, which arrives with package U5.
 
+pub(crate) mod base;
+pub(crate) mod channel;
+pub(crate) mod join;
 pub(crate) mod scope;
+pub(crate) mod spawn;
 
-/// The structured-concurrency fields of a fiber control block (D-685,
-/// D-706): empty until the runtime of `std::fiber` fills it.
+use std::sync::Arc;
+
+use parking_lot::Mutex;
+
+use crate::abi::Word;
+use crate::ctx::ExecCtx;
+use crate::panic::fatal;
+use crate::rc;
+
+use self::scope::ScopeState;
+
+/// The structured-concurrency fields of a fiber control block (D-685).
+///
+/// Only the owning fiber reads or writes them (other fibers reach a fiber
+/// only through its scope, its join cell and its channels), so each lock is
+/// always free when it is taken; the locks make the block `Sync`, which it
+/// must be for the scheduler, at the cost of one uncontended atomic each.
+/// No guard is held across a switch (I-5).
 #[derive(Debug, Default)]
-pub(crate) struct FiberConc {}
+pub(crate) struct FiberConc {
+    /// The scope the fiber was spawned into; `None` for a root fiber and an
+    /// isolated entry.
+    spawn_scope: Mutex<Option<Arc<ScopeState>>>,
+    /// The scopes the fiber's frames have open, innermost last
+    /// (architecture §7.5).
+    open_scopes: Mutex<Vec<Arc<ScopeState>>>,
+    /// Why the scope that `scope_run` last closed on this fiber failed, for
+    /// `take_failure` (architecture §5.3).
+    last_failure: Mutex<Option<Failure>>,
+}
+
+/// Why a scope failed (architecture §5.3), as `take_failure` reports it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Failure {
+    /// 0 for a panic, 1 for an expired limit.
+    pub(crate) kind: i64,
+    /// The panic's message; empty for an expired limit.
+    pub(crate) message: String,
+    /// The panic's location; empty for an expired limit.
+    pub(crate) location: String,
+}
+
+impl FiberConc {
+    /// The scope the fiber was spawned into.
+    pub(crate) fn spawn_scope(&self) -> Option<Arc<ScopeState>> {
+        self.spawn_scope.lock().clone()
+    }
+
+    /// Records the scope the fiber was spawned into; `fiber_main` does it
+    /// before the spawned function runs.
+    pub(crate) fn set_spawn_scope(&self, scope: Option<Arc<ScopeState>>) {
+        *self.spawn_scope.lock() = scope;
+    }
+
+    /// The innermost scope the fiber has open.
+    pub(crate) fn innermost_scope(&self) -> Option<Arc<ScopeState>> {
+        self.open_scopes.lock().last().cloned()
+    }
+
+    /// Pushes a scope the fiber opened.
+    pub(crate) fn push_scope(&self, scope: Arc<ScopeState>) {
+        self.open_scopes.lock().push(scope);
+    }
+
+    /// Pops the innermost open scope, which must be `scope`; a mismatch is
+    /// a broken invariant of the `scope_run` intrinsic (I-7).
+    pub(crate) fn pop_scope(&self, scope: &Arc<ScopeState>) {
+        let popped = self.open_scopes.lock().pop();
+        if !popped.is_some_and(|popped| Arc::ptr_eq(&popped, scope)) {
+            fatal(format_args!(
+                "a scope was closed that is not the fiber's innermost open scope"
+            ));
+        }
+    }
+
+    /// The number of scopes the fiber has open.
+    #[cfg(test)]
+    pub(crate) fn open_scope_count(&self) -> usize {
+        self.open_scopes.lock().len()
+    }
+
+    /// Stores why the scope just closed failed.
+    pub(crate) fn set_last_failure(&self, failure: Failure) {
+        *self.last_failure.lock() = Some(failure);
+    }
+
+    /// Takes why the last scope closed on this fiber failed.
+    pub(crate) fn take_last_failure(&self) -> Option<Failure> {
+        self.last_failure.lock().take()
+    }
+}
+
+/// The std modules whose every kernel is registered here (plan §2.5).
+pub(crate) const COMPLETE: &[&str] = &["channel", "fiber"];
+
+/// A kernel: its symbol, its address, its C parameter types after the
+/// context pointer, and its C result type.
+type Entry = (
+    &'static str,
+    *const u8,
+    &'static [&'static str],
+    &'static str,
+);
+
+/// Every kernel of `std::channel` and `std::fiber` (plan §2.5, and the
+/// stubs of plan §7 UQ-2's answer).
+#[expect(
+    clippy::as_conversions,
+    reason = "taking the address of a function needs an `as` cast"
+)]
+fn all() -> [Entry; 8] {
+    [
+        (
+            "cheby_channel_new",
+            channel::cheby_channel_new as *const u8,
+            &["i64"],
+            "Word",
+        ),
+        (
+            "cheby_channel_send",
+            channel::cheby_channel_send as *const u8,
+            &["Word", "Word"],
+            "Word",
+        ),
+        (
+            "cheby_channel_receive",
+            channel::cheby_channel_receive as *const u8,
+            &["Word"],
+            "Word",
+        ),
+        (
+            "cheby_fiber_sys_spawn",
+            spawn::cheby_fiber_sys_spawn as *const u8,
+            &["Word", "Word"],
+            "Word",
+        ),
+        (
+            "cheby_fiber_sys_join",
+            join::cheby_fiber_sys_join as *const u8,
+            &["Word"],
+            "Word",
+        ),
+        (
+            "cheby_fiber_take_failure",
+            scope::cheby_fiber_take_failure as *const u8,
+            &[],
+            "Word",
+        ),
+        (
+            "cheby_fiber_sys_spawn_with_stack",
+            spawn::cheby_fiber_sys_spawn_with_stack as *const u8,
+            &["Word", "i64", "Word"],
+            "Word",
+        ),
+        (
+            "cheby_fiber_sys_spawn_detached",
+            spawn::cheby_fiber_sys_spawn_detached as *const u8,
+            &["Word"],
+            "()",
+        ),
+    ]
+}
+
+/// Appends every `std::channel` and `std::fiber` kernel symbol and its
+/// address to `out`.
+pub(crate) fn kernels(out: &mut Vec<(&'static str, *const u8)>) {
+    out.extend(all().iter().map(|kernel| (kernel.0, kernel.1)));
+}
+
+/// The C signatures of the kernels, without the leading context pointer
+/// every one of them takes (`@std_context`, D-692), for the cross-check
+/// against `std/` in `symbols.rs`.
+#[cfg(test)]
+pub(crate) fn signatures() -> Vec<(&'static str, &'static [&'static str], &'static str)> {
+    all()
+        .iter()
+        .map(|kernel| (kernel.0, kernel.2, kernel.3))
+        .collect()
+}
+
+/// Ends the program because `operation`, a std function's path such as
+/// `channel::receive`, would start a fiber or wait in an entry that runs no
+/// scheduler (D-692, architecture §5.1). On Windows, where every entry is
+/// such an entry until M6, a note says so (D-714).
+pub(crate) fn needs_scheduler(operation: &str) -> ! {
+    if cfg!(windows) {
+        fatal(format_args!(
+            "{operation} needs the fiber scheduler, which this entry does not run\n\
+             note: fibers on Windows arrive in M6"
+        ))
+    }
+    fatal(format_args!(
+        "{operation} needs the fiber scheduler, which this entry does not run"
+    ))
+}
+
+/// The running fiber's control block, given to a kernel as its context
+/// argument.
+///
+/// # Safety
+///
+/// `ctx` is null or the running fiber's control block, which lives while
+/// the kernel runs.
+pub(crate) unsafe fn running<'a>(ctx: *mut ExecCtx) -> &'a ExecCtx {
+    // SAFETY: forwarded from the caller.
+    match unsafe { ctx.as_ref() } {
+        Some(ctx) => ctx,
+        None => fatal(format_args!(
+            "a fiber or channel kernel ran without an execution context"
+        )),
+    }
+}
+
+/// One owned reference to a Cheby value, released when the guard is
+/// dropped, also when a raise unwinds the kernel's Rust frames (D-697,
+/// I-4).
+#[derive(Debug)]
+pub(crate) struct Owned(Word);
+
+impl Owned {
+    /// Takes ownership of one reference to `word`.
+    ///
+    /// # Safety
+    ///
+    /// `word` is a tagged integer, 0, or a live value of which the caller
+    /// gives up one reference it owns.
+    pub(crate) unsafe fn new(word: Word) -> Self {
+        Self(word)
+    }
+
+    /// The word, still owned by the guard.
+    pub(crate) fn word(&self) -> Word {
+        self.0
+    }
+
+    /// Gives the reference up to the caller.
+    pub(crate) fn into_word(self) -> Word {
+        let word = self.0;
+        std::mem::forget(self);
+        word
+    }
+}
+
+impl Drop for Owned {
+    fn drop(&mut self) {
+        // SAFETY: the guard owns one reference to a live value (the
+        // contract of `new`), released once, here.
+        unsafe { rc::drop(self.0) };
+    }
+}
+
+#[cfg(test)]
+mod tests;

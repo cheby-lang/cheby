@@ -471,8 +471,12 @@ pub(crate) unsafe fn leave_domain(obj: *mut u8) {
 /// read.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_rt_alloc(ctx: *mut ExecCtx, size: u64, header: u64) -> Word {
-    // SAFETY: forwarded from the caller.
-    object::ptr_to_word(unsafe { alloc_for(ctx, size, header) })
+    // A request that cannot be served raises (D-642); under the flag
+    // backend the result is then 0, which generated code tests (D-697).
+    crate::unwind::guard::guarded(Some(ctx), || {
+        // SAFETY: forwarded from the caller.
+        object::ptr_to_word(unsafe { alloc_for(ctx, size, header) })
+    })
 }
 
 /// [`cheby_rt_alloc`] for kernels that are given their fiber's control
@@ -563,6 +567,24 @@ fn init_object(ctx: Option<&ExecCtx>, ptr: *mut u8, layout: Layout, header: u64)
     ptr
 }
 
+/// Checks constant evaluation's memory budget for `bytes`, an upper bound
+/// of what an in-place update about to start allocates, under an
+/// unwinding backend: a runtime helper calls it before it takes its owned
+/// arguments over, so that running out of budget raises while it can
+/// still release them whole (D-698). GAP(unwind-budget-preflight): the
+/// limit can then end an evaluation by at most `bytes` earlier than the
+/// update's own requests would. With the default backend, without a
+/// budget and outside any entry it does nothing.
+pub(crate) fn preflight(bytes: u64) {
+    let Some(ctx) = current_fiber() else {
+        return;
+    };
+    if ctx.budget() == u64::MAX || ctx.unwind_backend() == abi::UnwindBackend::Off {
+        return;
+    }
+    crate::entry::check_budget_of(Some(ctx), bytes);
+}
+
 /// The message of the panic that an allocation request which cannot be
 /// served raises when it is not over constant evaluation's memory limit
 /// (D-642).
@@ -596,7 +618,10 @@ pub fn out_of_memory(bytes: u64) -> ! {
     if crate::entry::current_ctx().is_none() {
         fatal(format_args!("{OUT_OF_MEMORY}"));
     }
-    crate::panic::panic_current(abi::PanicKind::Explicit, Some(OUT_OF_MEMORY))
+    // The reserve is set aside again when the unwinding's catch completes
+    // (D-642, `unwind::record::take_record`), or when the next entry
+    // starts.
+    crate::unwind::raise::raise_panic(None, abi::PanicKind::Explicit, Some(OUT_OF_MEMORY))
 }
 
 /// The memory set aside so that an entry whose request the system refused
@@ -620,6 +645,15 @@ pub(crate) fn ensure_reserve() {
             *reserve = Some(block);
         }
     }
+}
+
+/// Whether the reserve is set aside now.
+#[cfg(test)]
+pub(crate) fn reserve_armed() -> bool {
+    RESERVE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .is_some()
 }
 
 /// Gives the reserve back to the system.

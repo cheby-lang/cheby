@@ -1,0 +1,20 @@
+// @mode: run-pass
+// @decisions: D-233, D-647
+// @milestone: M2
+//! A scope debug-prints as `<Scope>` and a fiber as `<Fiber>`, whatever
+//! they hold (§3.13, §9.5).
+
+import std::fiber
+import std::io
+
+fn main() {
+  let outcome = {
+    use owner <- fiber::scope()
+    let child = fiber::spawn(owner, fn() { "a result" })
+    let children = [child]
+    let text = "{owner:?} {child:?} {children:?}"
+    let _ = fiber::join(child)
+    text
+  }
+  io::println("{outcome:?}")
+}

@@ -378,7 +378,8 @@ fn warnings_are_sorted_and_stable() {
 fn imports_of_planned_modules_are_not_unused() {
     // The import is E0038 (D-451) and paths through it are silent; it is
     // not also reported as unused, but the unused parameter still is.
-    let b = one("import std::fiber\n\npub fn f(unused: Int) {\n  fiber::yield_now()\n}\n");
+    // `std::http` stays unshipped until tier 3 (D-729).
+    let b = one("import std::http\n\npub fn f(unused: Int) {\n  http::get(\"x\")\n}\n");
     assert_eq!(b.codes(), ["E0038", "W0002"], "{}", b.rendered());
     assert_eq!(with_code(&b, "W0003"), Vec::<String>::new());
 }

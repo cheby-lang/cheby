@@ -1,0 +1,9 @@
+warning[W0013]: negative `capacity` passed to `new`
+  --> tests/ui/10-concurrency/channel/negative_capacity_warns.cheby:10:37
+   |
+10 |   let (tx, _) = channel::new::<Int>(-1)
+   |                                     ^^ this `capacity` is negative
+   |
+   = note: `new` clamps a `capacity` that is out of range, so a negative one acts like the smallest useful value
+   = help: pass the `capacity` you mean
+

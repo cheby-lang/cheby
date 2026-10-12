@@ -1,16 +1,24 @@
 //! Panics (F7, §11.6, §11.8) and the stack-limit slow path (§11.8.1).
 //!
-//! A panic flushes standard output, prints its report to standard error
-//! (except in a test or during constant evaluation, whose hosts capture
-//! it), and then abandons the entry: it hands the report to the host
-//! waiting in `run_entry` or `Runtime::run_root` and parks the entry's
-//! thread forever, or, for a root fiber, switches to its worker for good
-//! (GAP(interim-panics)). It never returns and never unwinds (D-283; the
-//! unwinding backends are prototyped in M2). What happens next is
-//! the host's policy: `cheby run` exits with 101 (D-182), `cheby test`
-//! records a failure and prints the report in its failure block (D-541),
-//! the REPL continues, and constant evaluation reports a compile error
-//! with the report's message and location in a note (D-449, D-533).
+//! What a panic does depends on the unwinding backend the entry's code was
+//! compiled for (D-696, [`crate::abi::UnwindBackend`]):
+//!
+//! - With the default backend, `off`, a panic flushes standard output,
+//!   prints its report to standard error (except in a test or during
+//!   constant evaluation, whose hosts capture it), and then abandons the
+//!   entry: it hands the report to the host waiting in `run_entry` or
+//!   `Runtime::run_root` and parks the entry's thread forever, or, for a
+//!   root fiber, switches to its worker for good (GAP(interim-panics)). It
+//!   never returns and never unwinds (D-283), as in M1.
+//! - With an unwinding backend, a panic records its report in the fiber
+//!   (D-699) and unwinds to its catch point, which prints the report where
+//!   D-701 says ([`crate::unwind`]).
+//!
+//! What happens next is the host's policy: `cheby run` exits with 101
+//! (D-182), `cheby test` records a failure and prints the report in its
+//! failure block (D-541), the REPL continues, and constant evaluation
+//! reports a compile error with the report's message and location in a
+//! note (D-449, D-533).
 //!
 //! Report format (D-449), as rustc prints panics:
 //!
@@ -27,6 +35,7 @@ use crate::entry::{EntryMode, EntryOutcome};
 use crate::io;
 use crate::sched::{self, AfterSwitch};
 use crate::string;
+use crate::unwind::guard::guarded;
 
 /// A panic as the host sees it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,11 +77,18 @@ impl fmt::Display for PanicReport {
     }
 }
 
-/// Panics the running entry.
+/// Panics the running entry, called by generated code.
 ///
 /// `kind` is a [`PanicKind`] number; `message` is a borrowed `String` or 0
 /// for the default message; `location` is a static `String` holding
 /// `path:line:column`, or 0.
+///
+/// It is the outermost Rust frame of the panic, so it hands the panic to
+/// the backend directly ([`crate::unwind::raise::raise_from_runtime`]):
+/// with the default backend it never returns (the entry is abandoned);
+/// with the return flag it records the report, sets the flag and returns,
+/// and generated code runs its cleanup pad; with `try_call` it resumes at
+/// the nearest handler (D-697).
 ///
 /// # Safety
 ///
@@ -84,39 +100,33 @@ pub unsafe extern "C" fn cheby_rt_panic(
     kind: u32,
     message: Word,
     location: Word,
-) -> ! {
+) {
+    // SAFETY: forwarded from the caller.
+    let report = unsafe { report_of(kind, message, location) };
+    // SAFETY: forwarded from the caller.
+    unsafe { crate::unwind::raise::raise_from_runtime(ctx, report) }
+}
+
+/// The report of a panic given as `cheby_rt_panic`'s words.
+///
+/// # Safety
+///
+/// `message` and `location` are 0 or live objects.
+pub(crate) unsafe fn report_of(kind: u32, message: Word, location: Word) -> PanicReport {
     // SAFETY: forwarded from the caller.
     let message = (message != 0)
         .then(|| unsafe { string::to_rust_string(message) })
         .flatten();
     // SAFETY: as above.
     let location = unsafe { location_text(location) };
-    let report = match PanicKind::from_code(kind) {
+    match PanicKind::from_code(kind) {
         Some(kind) => PanicReport::new(kind, message.as_deref(), &location),
         None => PanicReport::new(
             PanicKind::Explicit,
             Some(&format!("internal error: unknown panic kind {kind}")),
             &location,
         ),
-    };
-    // SAFETY: forwarded from the caller.
-    unsafe { abandon(ctx, report) }
-}
-
-/// Panics the entry running on this thread, for runtime code that has no
-/// `ctx` of its own: kernels (D-453) and the stub bound to unresolved
-/// symbols (D-532). The location is unknown. Ends the process if no entry
-/// runs on this thread.
-pub fn panic_current(kind: PanicKind, message: Option<&str>) -> ! {
-    let Some(ctx) = crate::entry::current_ctx() else {
-        fatal(format_args!(
-            "a `{kind:?}` panic happened outside of any entry"
-        ));
-    };
-    let report = PanicReport::new(kind, message, UNKNOWN_LOCATION);
-    // SAFETY: `ctx` is the context of the entry running on this thread,
-    // recorded by `run_entry` and alive while the entry runs.
-    unsafe { abandon(ctx, report) }
+    }
 }
 
 /// The slow path of the function-entry stack check: called when the stack
@@ -133,7 +143,11 @@ pub fn panic_current(kind: PanicKind, message: Option<&str>) -> ! {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_rt_stack_slow(ctx: *mut ExecCtx, location: Word) {
     // SAFETY: forwarded from the caller.
-    unsafe { stack_slow(ctx, location, 0) }
+    let overflowed = guarded(Some(ctx), || unsafe { stack_slow(ctx, 0) });
+    if overflowed {
+        // SAFETY: forwarded from the caller.
+        unsafe { overflow(ctx, location) }
+    }
 }
 
 /// The room below the stack position that the slow path of a large
@@ -160,17 +174,36 @@ pub unsafe extern "C" fn cheby_rt_stack_slow_frame(
 ) {
     let needed = frame_size.saturating_add(LARGE_FRAME_MARGIN);
     // SAFETY: forwarded from the caller.
-    unsafe { stack_slow(ctx, location, needed) }
+    let overflowed = guarded(Some(ctx), || unsafe { stack_slow(ctx, needed) });
+    if overflowed {
+        // SAFETY: forwarded from the caller.
+        unsafe { overflow(ctx, location) }
+    }
 }
 
-/// The body of both slow paths: handles the pending interrupt, then panics
-/// with a stack overflow if fewer than `needed` bytes are left above the
-/// real limit.
+/// Raises the stack overflow both slow paths found, from their outermost
+/// frame, so that no Rust unwinding runs at the deepest point (D-700).
 ///
 /// # Safety
 ///
 /// As for [`cheby_rt_stack_slow`].
-unsafe fn stack_slow(ctx: *mut ExecCtx, location: Word, needed: u64) {
+unsafe fn overflow(ctx: *mut ExecCtx, location: Word) {
+    // SAFETY: forwarded from the caller.
+    let location = unsafe { location_text(location) };
+    let report = PanicReport::new(PanicKind::StackOverflow, None, &location);
+    // SAFETY: forwarded from the caller.
+    unsafe { crate::unwind::raise::raise_from_runtime(ctx, report) }
+}
+
+/// The body of both slow paths: handles the pending interrupt, then
+/// returns whether fewer than `needed` bytes are left above the real
+/// limit, a stack overflow. Runs in the slow paths' guard: the deadline of
+/// constant evaluation raises inside it.
+///
+/// # Safety
+///
+/// As for [`cheby_rt_stack_slow`].
+unsafe fn stack_slow(ctx: *mut ExecCtx, needed: u64) -> bool {
     // SAFETY: forwarded from the caller.
     let Some(context) = (unsafe { ctx.as_ref() }) else {
         fatal(format_args!(
@@ -211,14 +244,9 @@ unsafe fn stack_slow(ctx: *mut ExecCtx, location: Word, needed: u64) {
             if low < context.real_stack_limit() {
                 context.lower_soft_limit(low);
             }
+            false
         }
-        _ => {
-            // SAFETY: forwarded from the caller.
-            let location = unsafe { location_text(location) };
-            let report = PanicReport::new(PanicKind::StackOverflow, None, &location);
-            // SAFETY: forwarded from the caller.
-            unsafe { abandon(ctx, report) }
-        }
+        _ => true,
     }
 }
 
@@ -243,18 +271,18 @@ unsafe fn location_text(location: Word) -> String {
     unsafe { string::to_rust_string(location) }.unwrap_or_else(|| UNKNOWN_LOCATION.to_owned())
 }
 
-/// Ends the entry with a panic: flushes standard output, prints the report
-/// unless the entry captures it (tests and constant evaluation), hands it
-/// to the host and parks forever.
+/// Ends the entry with a panic under the default backend, `off`: flushes
+/// standard output, prints the report unless the entry captures it (tests
+/// and constant evaluation), hands it to the host and parks forever.
 ///
-/// GAP(interim-panics): until unwinding exists, a root fiber of a runtime
-/// does the same and then switches to its worker for good, which
+/// GAP(interim-panics): until unwinding is chosen, a root fiber of a
+/// runtime does the same and then switches to its worker for good, which
 /// quarantines its slot; any other fiber of a runtime ends the process.
 ///
 /// # Safety
 ///
 /// `ctx` is null or the running entry's context.
-unsafe fn abandon(ctx: *mut ExecCtx, report: PanicReport) -> ! {
+pub(crate) unsafe fn abandon(ctx: *mut ExecCtx, report: PanicReport) -> ! {
     if io::flush_stdout().is_err() {
         io::exit_after_write_failure();
     }

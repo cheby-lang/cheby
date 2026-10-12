@@ -525,8 +525,12 @@ fn run_one(jit: &Jit, runtime: Option<&Runtime>, def: DefId) -> Result<TestOutco
     };
     // A test thunk returns the static `Nil` when the test passed, and the
     // text of the `Err` it returned as an owned `String` otherwise
-    // (D-529, D-595).
+    // (D-529, D-595). Whether it panicked comes from the entry's catch
+    // point, which reads the fiber's unwind record (D-699), never from the
+    // word: under the flag backend an unwound thunk returns 0.
     Ok(match outcome {
+        // The captured report goes into the failure block (D-701). As in
+        // M1, a failing test gets no leak check.
         EntryOutcome::Panicked(report) => TestOutcome::Failed(report.to_string()),
         EntryOutcome::Returned(word) if word == cheby_runtime::values::nil() => {
             // D-541: a passing test must leave the build's accounting

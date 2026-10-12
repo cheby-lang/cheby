@@ -27,6 +27,7 @@ pub(crate) mod math;
 pub(crate) mod text;
 
 use crate::abi::Word;
+use crate::unwind::guard::DropOnUnwind;
 use crate::values;
 
 /// One kernel: its symbol, its address, and its C signature as the names of
@@ -109,7 +110,14 @@ impl ToWord for String {
 /// `Ok(value)` or `Err(Nil)`, the `Result<T, Nil>` of D-132 and D-309.
 fn result<T: ToWord>(value: Option<T>) -> Word {
     match value {
-        Some(value) => values::ok(value.to_word()),
+        Some(value) => {
+            // A boxed word is released if the `Ok` cannot be allocated.
+            let held = DropOnUnwind::new([value.to_word()]);
+            let [word] = held.words();
+            let ok = values::ok(word);
+            held.disarm();
+            ok
+        }
         None => values::err_nil(),
     }
 }

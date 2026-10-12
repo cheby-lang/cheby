@@ -11,7 +11,9 @@
 //!    so the yield lets the worker's other fibers run;
 //! 2. every 61st round, the global queue first, so it is never starved;
 //! 3. its runnext slot: the fiber the running one woke just before it
-//!    blocked, which keeps a capacity-0 ping-pong on one worker;
+//!    blocked, which keeps a capacity-0 ping-pong on one worker; it
+//!    inherits the time slice, so the pair yields after one quantum and
+//!    cannot starve the deque (Go's `inheritTime`);
 //! 4. its local Chase-Lev deque;
 //! 5. the global queue;
 //! 6. as a searcher (at most half the workers search, Tokio's idle
@@ -221,6 +223,10 @@ struct Worker<'a> {
     /// the next search then takes the targeted queue after the runnext
     /// slot, the local deque and the global queue, not first.
     pinned_yielded: bool,
+    /// Whether the last fiber found came from the runnext slot: it then
+    /// continues the time slice of the fiber that woke it (Go's
+    /// `inheritTime`, [`Worker::run_fiber`]).
+    from_runnext: bool,
 }
 
 /// The body of worker `index`'s thread.
@@ -243,6 +249,7 @@ pub(super) fn main(shared: &Shared, index: usize) {
         searching: false,
         random: seed,
         pinned_yielded: false,
+        from_runnext: false,
     };
     worker.run();
 }
@@ -286,6 +293,7 @@ impl Worker<'_> {
         // and the global queue, as Go puts a yielded goroutine at the
         // global queue's tail.
         let yielded = std::mem::take(&mut self.pinned_yielded);
+        self.from_runnext = false;
         if !yielded && let Some(fiber) = self.me.targeted.lock().pop_front() {
             return Some(fiber);
         }
@@ -295,6 +303,7 @@ impl Worker<'_> {
             return Some(fiber);
         }
         if let Some(fiber) = self.me.take_next() {
+            self.from_runnext = true;
             return Some(fiber);
         }
         // SAFETY: the worker loop runs on the worker's own thread, and the
@@ -370,7 +379,18 @@ impl Worker<'_> {
         // SAFETY: the control block is live until this worker retires it,
         // which happens after it stops being current, below.
         unsafe { tls::set_current_fiber(fiber.as_ptr()) };
-        self.me.resumes.store(self.tick, Ordering::Relaxed);
+        // A fiber from the runnext slot continues the time slice of the
+        // fiber that woke it (Go's `inheritTime`): the count the monitor
+        // samples stays as it was, so a chain of hand-offs through the
+        // slot, such as a capacity-0 ping-pong, counts as one fiber
+        // running and is asked to yield after one quantum (D-688). The
+        // yield puts it on the global queue, which breaks the chain, so
+        // the local deque runs: without this, a ping-pong starved the deque
+        // forever on one worker (review finding CONC3-1; §10.1 allows
+        // starvation only on JS).
+        if !self.from_runnext {
+            self.me.resumes.store(self.tick, Ordering::Relaxed);
+        }
         self.me.running.store(fiber.as_ptr(), Ordering::SeqCst);
         self.shared.monitor.kick();
         // SAFETY: the fiber's context was saved by its last park (or made

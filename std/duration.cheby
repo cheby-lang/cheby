@@ -1,0 +1,376 @@
+//! Spans of time, such as a timeout, a timer's wait or the time between
+//! two events (D-103).
+//!
+//! A `Duration` is a record of whole seconds and the nanoseconds after
+//! them, with the nanoseconds always from 0 to `999_999_999`, so every
+//! span has exactly one representation and the built-in `==`, hashing and
+//! debug printing work on it (D-650). The module has no kernels: every
+//! function is written in Cheby and runs in constants, with the same
+//! result on every target (D-090, D-232, D-650, D-651).
+
+import std::int
+import std::string
+
+/// A span of time, possibly negative, with a resolution of one
+/// nanosecond (D-650). A negative span has negative seconds and
+/// non-negative nanoseconds.
+pub type Duration {
+  seconds: Int,
+  nanoseconds: Int,
+}
+
+/// Nanoseconds in a second.
+const billion: Int = 1_000_000_000
+
+// Building
+
+/// The span of length zero, `seconds(0)`.
+pub const zero: Duration = seconds(0)
+
+test "zero is no time at all" {
+  assert zero == seconds(0)
+  assert zero == nanoseconds(0)
+  assert show(zero) == "0s"
+}
+
+/// The span of `whole` seconds plus `nanos` nanoseconds, where `nanos`
+/// may be any `Int`: it is carried into the seconds with floor division,
+/// so the result has its one representation (D-650).
+fn normalized(whole: Int, nanos: Int) -> Duration {
+  let carry = nanos / billion
+  let rest = nanos % billion
+  case rest < 0 {
+    True => Duration { seconds: whole + (carry - 1), nanoseconds: rest + billion }
+    False => Duration { seconds: whole + carry, nanoseconds: rest }
+  }
+}
+
+/// Returns the span of `n` nanoseconds. `n` may be negative.
+pub fn nanoseconds(n: Int) -> Duration {
+  normalized(0, n)
+}
+
+test "nanoseconds build exact spans" {
+  assert nanoseconds(1_500_000_000) == milliseconds(1_500)
+  assert nanoseconds(-1) < zero
+  assert to_nanoseconds(nanoseconds(-7)) == -7
+}
+
+/// Returns the span of `n` microseconds. `n` may be negative. It never
+/// panics: the whole seconds are split off before the rest is scaled.
+pub fn microseconds(n: Int) -> Duration {
+  normalized(n / 1_000_000, n % 1_000_000 * 1_000)
+}
+
+test "microseconds are a thousand nanoseconds" {
+  assert microseconds(3) == nanoseconds(3_000)
+  assert microseconds(-2_000_000) == seconds(-2)
+}
+
+/// Returns the span of `n` milliseconds. `n` may be negative. It never
+/// panics: the whole seconds are split off before the rest is scaled.
+pub fn milliseconds(n: Int) -> Duration {
+  normalized(n / 1_000, n % 1_000 * 1_000_000)
+}
+
+test "milliseconds are a thousand microseconds" {
+  assert milliseconds(250) == microseconds(250_000)
+  assert milliseconds(1_000) == seconds(1)
+  assert milliseconds(-500) + milliseconds(500) == zero
+}
+
+/// Returns the span of `n` seconds. `n` may be negative. It never panics,
+/// because the seconds of a span are any `Int`.
+pub fn seconds(n: Int) -> Duration {
+  Duration { seconds: n, nanoseconds: 0 }
+}
+
+test "seconds build whole spans" {
+  assert seconds(60) == minutes(1)
+  assert to_milliseconds(seconds(2)) == 2_000
+}
+
+/// Returns the span of `n` minutes of 60 seconds. `n` may be negative. It
+/// panics when `n * 60` overflows `Int` (D-025, D-037).
+pub fn minutes(n: Int) -> Duration {
+  seconds(n * 60)
+}
+
+test "minutes are sixty seconds" {
+  assert minutes(2) == seconds(120)
+  assert minutes(-1) == -seconds(60)
+}
+
+/// Returns the span of `n` hours of 3600 seconds. `n` may be negative.
+/// There is no `days`: a calendar day is not always 24 hours (D-651). It
+/// panics when `n * 3600` overflows `Int` (D-025, D-037).
+pub fn hours(n: Int) -> Duration {
+  seconds(n * 3_600)
+}
+
+test "hours are sixty minutes" {
+  assert hours(1) == minutes(60)
+  assert to_seconds(hours(24)) == 86_400
+}
+
+// Reading
+
+/// `d` as a whole number of a unit, truncated toward zero like `/` on
+/// `Int` (D-651): `per_second` units make a second and `unit` nanoseconds
+/// make a unit. A negative span with nanoseconds is read as one second
+/// fewer plus a negative remainder, so nothing overflows unless the
+/// result does (D-025).
+fn truncated(d: Duration, per_second: Int, unit: Int) -> Int {
+  case d.seconds < 0 && d.nanoseconds > 0 {
+    True => (d.seconds + 1) * per_second + (d.nanoseconds - billion) / unit
+    False => d.seconds * per_second + d.nanoseconds / unit
+  }
+}
+
+/// Returns `d` in nanoseconds. It panics when the result overflows `Int`
+/// (D-025, D-037).
+pub fn to_nanoseconds(d: Duration) -> Int {
+  truncated(d, billion, 1)
+}
+
+test "to_nanoseconds is exact" {
+  assert to_nanoseconds(milliseconds(3)) == 3_000_000
+  assert to_nanoseconds(milliseconds(-1)) == -1_000_000
+}
+
+/// Returns `d` in whole microseconds, truncated toward zero. It panics
+/// when the result overflows `Int` (D-025, D-037).
+pub fn to_microseconds(d: Duration) -> Int {
+  truncated(d, 1_000_000, 1_000)
+}
+
+test "to_microseconds truncates toward zero" {
+  assert to_microseconds(nanoseconds(1_999)) == 1
+  assert to_microseconds(nanoseconds(-1_999)) == -1
+}
+
+/// Returns `d` in whole milliseconds, truncated toward zero. It panics
+/// when the result overflows `Int` (D-025, D-037).
+pub fn to_milliseconds(d: Duration) -> Int {
+  truncated(d, 1_000, 1_000_000)
+}
+
+test "to_milliseconds truncates toward zero" {
+  assert to_milliseconds(seconds(5)) == 5_000
+  assert to_milliseconds(microseconds(1_500)) == 1
+  assert to_milliseconds(microseconds(-1_500)) == -1
+  assert to_milliseconds(microseconds(-500)) == 0
+}
+
+/// Returns `d` in whole seconds, truncated toward zero. It never panics.
+pub fn to_seconds(d: Duration) -> Int {
+  truncated(d, 1, billion)
+}
+
+test "to_seconds truncates toward zero" {
+  assert to_seconds(milliseconds(2_999)) == 2
+  assert to_seconds(milliseconds(-2_999)) == -2
+  assert to_seconds(minutes(3)) == 180
+}
+
+// Arithmetic
+
+/// `a + b + 1`, which overflows only when the result does.
+fn sum_and_one(a: Int, b: Int) -> Int {
+  case a < 0 {
+    True => a + 1 + b
+    False => a + (b + 1)
+  }
+}
+
+/// `a - b - 1`, which overflows only when the result does.
+fn difference_less_one(a: Int, b: Int) -> Int {
+  case b < 0 {
+    True => a - (b + 1)
+    False => a - 1 - b
+  }
+}
+
+/// Returns the sum of two spans. It makes `Duration` satisfy `Add`, so
+/// `a + b` calls it (§8.7). It panics when the seconds of the result
+/// overflow `Int` (D-025, D-037).
+pub fn add(a: Duration, b: Duration) -> Duration {
+  let total = a.nanoseconds + b.nanoseconds
+  case total >= billion {
+    True => Duration { seconds: sum_and_one(a.seconds, b.seconds), nanoseconds: total - billion }
+    False => Duration { seconds: a.seconds + b.seconds, nanoseconds: total }
+  }
+}
+
+test "add sums spans" {
+  assert add(milliseconds(700), milliseconds(800)) == milliseconds(1_500)
+  assert seconds(1) + milliseconds(-250) == milliseconds(750)
+}
+
+/// Returns `a` minus `b`, which is negative when `b` is the longer span.
+/// It makes `Duration` satisfy `Sub` (§8.7). It panics when the seconds of
+/// the result overflow `Int` (D-025, D-037).
+pub fn sub(a: Duration, b: Duration) -> Duration {
+  let total = a.nanoseconds - b.nanoseconds
+  case total < 0 {
+    True => Duration {
+      seconds: difference_less_one(a.seconds, b.seconds),
+      nanoseconds: total + billion,
+    }
+    False => Duration { seconds: a.seconds - b.seconds, nanoseconds: total }
+  }
+}
+
+test "sub may go below zero" {
+  assert sub(seconds(2), milliseconds(500)) == milliseconds(1_500)
+  assert seconds(1) - seconds(3) == seconds(-2)
+}
+
+/// Returns the span of the same length with the other sign. It makes
+/// `Duration` satisfy `Neg`, so `-d` calls it (§8.7). It panics only for
+/// the most negative span, whose negation overflows `Int` (D-025).
+pub fn neg(d: Duration) -> Duration {
+  case d.nanoseconds, d.seconds < 0 {
+    0, _ => Duration { seconds: -d.seconds, nanoseconds: 0 }
+    _, True => Duration { seconds: -(d.seconds + 1), nanoseconds: billion - d.nanoseconds }
+    _, False => Duration { seconds: -d.seconds - 1, nanoseconds: billion - d.nanoseconds }
+  }
+}
+
+test "neg flips the sign" {
+  assert neg(milliseconds(1_500)) == milliseconds(-1_500)
+  assert -zero == zero
+}
+
+@target(native)
+test "arithmetic and reading stay exact at the ends of Int" {
+  let almost_lowest = seconds(int::min_value) + nanoseconds(1)
+  assert neg(almost_lowest) == seconds(int::max_value) + nanoseconds(999_999_999)
+  assert to_nanoseconds(nanoseconds(int::min_value)) == int::min_value
+  assert to_seconds(almost_lowest) == int::min_value + 1
+  let half = milliseconds(500)
+  assert seconds(int::min_value) + half + (seconds(-1) + half) == seconds(int::min_value)
+  let almost_highest = seconds(int::max_value - 1) + nanoseconds(999_999_999)
+  assert seconds(int::max_value) - nanoseconds(1) == almost_highest
+}
+
+// Comparison
+
+/// Orders spans by length, negative spans first. It makes `Duration`
+/// satisfy `Compare`, so `<`, `<=`, `>` and `>=` work on spans (§8.7). It
+/// returns `Equal` exactly when `a == b`.
+pub fn compare(a: Duration, b: Duration) -> Order {
+  case {
+    a.seconds < b.seconds => Less
+    a.seconds > b.seconds => Greater
+    a.nanoseconds < b.nanoseconds => Less
+    a.nanoseconds > b.nanoseconds => Greater
+    _ => Equal
+  }
+}
+
+test "compare orders by length" {
+  assert compare(milliseconds(999), seconds(1)) == Less
+  assert compare(seconds(1), milliseconds(1_000)) == Equal
+  assert milliseconds(-1) < nanoseconds(1)
+}
+
+/// Returns the shorter of `a` and `b`, and `a` when they are equal.
+pub fn min(a: Duration, b: Duration) -> Duration {
+  case compare(a, b) {
+    Greater => b
+    _ => a
+  }
+}
+
+test "min picks the shorter" {
+  assert min(seconds(3), milliseconds(10)) == milliseconds(10)
+}
+
+/// Returns the longer of `a` and `b`, and `a` when they are equal.
+pub fn max(a: Duration, b: Duration) -> Duration {
+  case compare(a, b) {
+    Less => b
+    _ => a
+  }
+}
+
+test "max picks the longer" {
+  assert max(seconds(3), milliseconds(10)) == seconds(3)
+}
+
+// Text
+
+/// The fraction `value / 10^width` after the decimal point, with its
+/// trailing zeros left out: `""` for 0, `".5"` for 500 of width 3, and
+/// `".001"` for 1 of width 3. `value` is from 0 to `10^width - 1`.
+fn fraction(value: Int, width: Int) -> String {
+  case value, value % 10 {
+    0, _ => ""
+    _, 0 => fraction(value / 10, width - 1)
+    _, _ => string::add(".", string::pad_start(int::show(value), width, "0"))
+  }
+}
+
+/// `whole` and the fraction `rest / 10^width`, then `unit`: `1.5ms`.
+fn in_unit(whole: String, rest: Int, width: Int, unit: String) -> String {
+  string::join([whole, fraction(rest, width), unit], "")
+}
+
+/// The text of a span that is not negative, as `whole` seconds written
+/// as the decimal digits `whole` and `nanos` nanoseconds after them.
+fn unsigned_text(whole: String, nanos: Int) -> String {
+  case {
+    whole != "0" => in_unit(whole, nanos, 9, "s")
+    nanos >= 1_000_000 => in_unit(int::show(nanos / 1_000_000), nanos % 1_000_000, 6, "ms")
+    nanos >= 1_000 => in_unit(int::show(nanos / 1_000), nanos % 1_000, 3, "\u{b5}s")
+    _ => string::add(int::show(nanos), "ns")
+  }
+}
+
+/// Returns the span as a number and a unit, in the largest of `s`, `ms`,
+/// `µs` and `ns` in which it is at least 1, with the exact fraction and
+/// no trailing zeros: `1.5s`, `100ms`, `-250ms`, and `0s` for `zero`. It
+/// makes `Duration` satisfy `Show` (§8.8, D-651). The micro sign is
+/// U+00B5. It never panics: the most negative span's length is written
+/// from its last digit and the rest, which both fit in an `Int`.
+pub fn show(d: Duration) -> String {
+  case d.seconds < 0, d.nanoseconds {
+    False, 0 => case d.seconds {
+      0 => "0s"
+      _ => unsigned_text(int::show(d.seconds), 0)
+    }
+    False, _ => unsigned_text(int::show(d.seconds), d.nanoseconds)
+    True, 0 => {
+      let tens = -(d.seconds / 10)
+      let last = int::show(-(d.seconds % 10))
+      let digits = case tens {
+        0 => last
+        _ => string::add(int::show(tens), last)
+      }
+      string::add("-", unsigned_text(digits, 0))
+    }
+    True, _ => {
+      let whole = int::show(-(d.seconds + 1))
+      string::add("-", unsigned_text(whole, billion - d.nanoseconds))
+    }
+  }
+}
+
+test "show picks the largest whole unit" {
+  assert show(seconds(90)) == "90s"
+  assert show(milliseconds(1_500)) == "1.5s"
+  assert show(milliseconds(100)) == "100ms"
+  assert show(nanoseconds(1_001)) == "1.001µs"
+  assert show(nanoseconds(7)) == "7ns"
+  assert show(milliseconds(-250)) == "-250ms"
+  assert show(nanoseconds(1_000_000_001)) == "1.000000001s"
+}
+
+@target(native)
+test "show writes the longest spans without overflowing" {
+  assert show(seconds(int::min_value)) == "-9223372036854775808s"
+  assert show(seconds(int::min_value) + nanoseconds(1)) == "-9223372036854775807.999999999s"
+  assert show(seconds(int::max_value)) == "9223372036854775807s"
+  assert show(nanoseconds(int::min_value)) == "-9223372036.854775808s"
+}
