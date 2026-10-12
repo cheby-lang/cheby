@@ -20,7 +20,7 @@
 use std::fmt;
 
 use crate::abi::{PanicKind, Word};
-use crate::ctx::ExecCtx;
+use crate::ctx::{self, ExecCtx};
 use crate::entry::{EntryMode, EntryOutcome};
 use crate::io;
 use crate::string;
@@ -117,9 +117,10 @@ pub fn panic_current(kind: PanicKind, message: Option<&str>) -> ! {
 }
 
 /// The slow path of the function-entry stack check: called when the stack
-/// pointer is below `ctx.stack_limit`. Handles a pending interrupt and
-/// returns, or panics with [`PanicKind::StackOverflow`] if the real limit
-/// is reached.
+/// pointer is below `ctx.stack_limit`. Handles the pending interrupt
+/// reasons in the order of D-688 (safepoint, cancellation, deadline,
+/// yield; only the deadline has an effect so far) and returns, or panics
+/// with [`PanicKind::StackOverflow`] if the real limit is reached.
 ///
 /// # Safety
 ///
@@ -128,16 +129,62 @@ pub fn panic_current(kind: PanicKind, message: Option<&str>) -> ! {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_rt_stack_slow(ctx: *mut ExecCtx, location: Word) {
     // SAFETY: forwarded from the caller.
+    unsafe { stack_slow(ctx, location, 0) }
+}
+
+/// The room below the stack position that the slow path of a large
+/// function's entry check requires on top of its frame (D-679): the outer
+/// function's check is `sp - frame_size - 64 KiB < stack_limit`.
+pub const LARGE_FRAME_MARGIN: u64 = 64 << 10;
+
+/// The slow path of a large function's entry check (D-679): like
+/// [`cheby_rt_stack_slow`], but called by the small outer function of a
+/// function whose frame of `frame_size` bytes exceeds 64 KiB, before that
+/// frame is allocated. Handles a pending interrupt and returns, or panics
+/// with [`PanicKind::StackOverflow`] when the stack position minus
+/// `frame_size` minus [`LARGE_FRAME_MARGIN`] is below the real limit.
+/// GAP(stack-slow-frame).
+///
+/// # Safety
+///
+/// As for [`cheby_rt_stack_slow`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cheby_rt_stack_slow_frame(
+    ctx: *mut ExecCtx,
+    location: Word,
+    frame_size: u64,
+) {
+    let needed = frame_size.saturating_add(LARGE_FRAME_MARGIN);
+    // SAFETY: forwarded from the caller.
+    unsafe { stack_slow(ctx, location, needed) }
+}
+
+/// The body of both slow paths: handles the pending interrupt, then panics
+/// with a stack overflow if fewer than `needed` bytes are left above the
+/// real limit.
+///
+/// # Safety
+///
+/// As for [`cheby_rt_stack_slow`].
+unsafe fn stack_slow(ctx: *mut ExecCtx, location: Word, needed: u64) {
+    // SAFETY: forwarded from the caller.
     let Some(context) = (unsafe { ctx.as_ref() }) else {
         fatal(format_args!(
             "a stack check ran without an execution context"
         ));
     };
-    // The interrupt handlers: the constant-evaluation deadline (D-195,
-    // D-536), and later the scheduler's yield (D-028, M2). A request that
+    // 1. Take the reasons (D-688), in the order of the interrupt protocol.
+    let reasons = ctx::take(context);
+    if reasons != 0 {
+        context.count_interrupt();
+    }
+    // 2. A safepoint stops the fiber, and 3. a cancellation unwinds it;
+    // both are accepted and ignored until the runtime stops fibers and
+    // cancels scopes.
+    // 4. The constant-evaluation deadline (D-195, D-536). A request that
     // finds the deadline not passed yet is ignored; the watchdog repeats
     // it.
-    if context.take_interrupt()
+    if reasons & ctx::reason::DEADLINE != 0
         && let EntryMode::ConstEval(limits) = context.entry_mode()
         && limits
             .deadline
@@ -145,7 +192,13 @@ pub unsafe extern "C" fn cheby_rt_stack_slow(ctx: *mut ExecCtx, location: Word) 
     {
         crate::consteval::limit_exceeded(crate::consteval::Limit::Time);
     }
-    if stack_position() < context.real_stack_limit() {
+    // 5. A yield is accepted and ignored until the scheduler exists.
+    // 6. The depth.
+    let needed = usize::try_from(needed).unwrap_or(usize::MAX);
+    let overflows = stack_position()
+        .checked_sub(needed)
+        .is_none_or(|low| low < context.real_stack_limit());
+    if overflows {
         // SAFETY: forwarded from the caller.
         let location = unsafe { location_text(location) };
         let report = PanicReport::new(PanicKind::StackOverflow, None, &location);

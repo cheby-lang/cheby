@@ -74,6 +74,7 @@ fn sum_item(p: &mut Prog) -> DefId {
                     then_: bb(2),
                     else_: bb(3),
                 },
+                unwind: Vec::new(),
             },
             block(
                 vec![assign(
@@ -154,6 +155,7 @@ fn name_item(p: &mut Prog) -> DefId {
                 params: vec![local(1)],
                 stmts: Vec::new(),
                 term: ret(1),
+                unwind: Vec::new(),
             },
             block(Vec::new(), Terminator::Unreachable),
         ],

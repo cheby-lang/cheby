@@ -20,6 +20,7 @@ use std::ptr;
 use crate::abi::sym;
 use crate::alloc::cheby_rt_alloc;
 use crate::consteval::{cheby_rt_const_missing, cheby_rt_effect_check, cheby_rt_unresolved};
+use crate::fiber_ops::scope::{cheby_rt_scope_close, cheby_rt_scope_open};
 use crate::helpers::{
     cheby_rt_box_f32, cheby_rt_box_f64, cheby_rt_box_i64, cheby_rt_box_u64, cheby_rt_debug,
     cheby_rt_equal, cheby_rt_fmod_f32, cheby_rt_fmod_f64, cheby_rt_str_append, cheby_rt_str_eq,
@@ -30,11 +31,12 @@ use crate::list::{
     cheby_rt_list_slice, cheby_rt_list_slice_owned, cheby_rt_static_empty_list,
 };
 use crate::object::{
-    cheby_rt_static_equal, cheby_rt_static_false, cheby_rt_static_greater, cheby_rt_static_less,
-    cheby_rt_static_nil, cheby_rt_static_none, cheby_rt_static_true,
+    cheby_rt_static_equal, cheby_rt_static_err_nil, cheby_rt_static_false, cheby_rt_static_greater,
+    cheby_rt_static_less, cheby_rt_static_nil, cheby_rt_static_none, cheby_rt_static_true,
 };
-use crate::panic::{cheby_rt_panic, cheby_rt_stack_slow};
+use crate::panic::{cheby_rt_panic, cheby_rt_stack_slow, cheby_rt_stack_slow_frame};
 use crate::rc::{cheby_rt_drop, cheby_rt_dup};
+use crate::unwind::try_call::cheby_rt_unwind_resume;
 use crate::{bytes, consteval, desc, env, hamt, io, list, num, text};
 
 /// The address of a static object.
@@ -48,7 +50,7 @@ fn data<T>(object: &'static T) -> *const u8 {
     clippy::as_conversions,
     reason = "taking the address of a function needs an `as` cast"
 )]
-fn runtime_symbols() -> [(&'static str, *const u8); 33] {
+fn runtime_symbols() -> [(&'static str, *const u8); 38] {
     [
         (sym::ALLOC, cheby_rt_alloc as *const u8),
         (sym::DUP, cheby_rt_dup as *const u8),
@@ -89,6 +91,14 @@ fn runtime_symbols() -> [(&'static str, *const u8); 33] {
             sym::LIST_SLICE_OWNED,
             cheby_rt_list_slice_owned as *const u8,
         ),
+        (
+            sym::STACK_SLOW_FRAME,
+            cheby_rt_stack_slow_frame as *const u8,
+        ),
+        (sym::SCOPE_OPEN, cheby_rt_scope_open as *const u8),
+        (sym::SCOPE_CLOSE, cheby_rt_scope_close as *const u8),
+        (sym::UNWIND_RESUME, cheby_rt_unwind_resume as *const u8),
+        (sym::STATIC_ERR_NIL, data(&cheby_rt_static_err_nil)),
     ]
 }
 
@@ -149,6 +159,21 @@ mod tests {
         let unique: BTreeSet<_> = names.iter().collect();
         assert_eq!(unique.len(), names.len(), "a symbol is registered twice");
         assert!(symbols().iter().all(|(_, address)| !address.is_null()));
+        // Intrinsics get compiler-generated bodies, never a runtime
+        // symbol (D-693).
+        for intrinsic in sym::INTRINSICS {
+            assert!(!names.contains(&intrinsic), "{intrinsic} is registered");
+        }
+    }
+
+    #[test]
+    fn the_static_err_nil_symbol_points_to_its_object() {
+        let table = symbols();
+        let address = table
+            .iter()
+            .find(|(name, _)| *name == sym::STATIC_ERR_NIL)
+            .map(|(_, address)| *address);
+        assert_eq!(address, Some(data(&cheby_rt_static_err_nil)));
     }
 
     #[test]

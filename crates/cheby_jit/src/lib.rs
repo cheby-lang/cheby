@@ -45,7 +45,8 @@ use cranelift_module::Module;
 use rustc_hash::FxHashMap;
 
 use cheby_codegen_clif::{
-    CodegenCx, CodegenError, CodegenOptions, Decls, LayoutIds, SessionName, builtin_layout_id,
+    CodegenCx, CodegenError, CodegenOptions, Decls, DefineStats, LayoutIds, SessionName,
+    builtin_layout_id,
 };
 use cheby_iface::{DefId, Ice};
 use cheby_mir::{AbiSig, EntryKind, FnKey, LayoutDesc, LayoutRef, MirModule, Repr};
@@ -249,6 +250,8 @@ pub struct Jit {
     /// The slots the last batch repointed, with the words they held
     /// before ([`Jit::revert_repoints`]).
     repointed: Vec<(cranelift_module::DataId, u64)>,
+    /// The code every batch that compiled defined ([`Jit::code_stats`]).
+    code_stats: DefineStats,
 }
 
 /// An indirection slot of a [`Jit`] (D-043): a writable word holding the
@@ -340,7 +343,15 @@ impl Jit {
             domain: Domain::new(),
             callbacks: Callbacks::default(),
             repointed: Vec::new(),
+            code_stats: DefineStats::default(),
         })
+    }
+
+    /// The machine code defined so far: its bytes and its functions, summed
+    /// over every batch that compiled (D-718, `cargo xtask bench-compile`).
+    #[must_use]
+    pub const fn code_stats(&self) -> DefineStats {
+        self.code_stats
     }
 
     /// Makes the native symbol `name` resolve to `address` in later
@@ -390,7 +401,7 @@ impl Jit {
         };
         cheby_codegen_clif::declare(&mut *self.module, &mut self.decls, mirs, &cx, &self.codegen)?;
         self.check_symbols()?;
-        let clif = cheby_codegen_clif::define(
+        let (clif, stats) = cheby_codegen_clif::define_with_stats(
             &mut *self.module,
             mirs,
             &mut self.decls,
@@ -404,6 +415,7 @@ impl Jit {
         self.apply_repoints()?;
         self.callbacks = self.find_callbacks();
         self.register_hooks(mirs)?;
+        self.code_stats = self.code_stats.add(stats);
         Ok(())
     }
 

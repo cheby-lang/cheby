@@ -31,6 +31,11 @@ use crate::{CallMode, CodegenCx, CodegenError, CodegenOptions};
 const TRAP_NORETURN: u8 = 1;
 /// The trap of an `unreachable` terminator or a `switch` without default.
 const TRAP_UNREACHABLE: u8 = 2;
+/// The trap of a `resume` terminator (D-698). With unwind edges ignored,
+/// pads are never translated, so a `resume` is reached only through
+/// normal control flow, which the validator rules out; the unwinding
+/// backends replace it (D-696).
+pub(crate) const TRAP_RESUME: u8 = 3;
 
 /// Translates `func` of `unit` into a Cranelift function named by its
 /// declaration. Reads only `decls`, so it needs no `&mut Module` and can
@@ -350,6 +355,14 @@ impl Translator<'_, '_> {
                 let v = self.local(*local)?;
                 self.drop_value(v)?;
             }
+            Stmt::ClearUnwind => {
+                // D-693: the fiber's unwind flag, a `u32` (D-685).
+                let ctx = self.ctx()?;
+                let zero = self.b.ins().iconst(types::I32, 0);
+                self.b
+                    .ins()
+                    .store(MemFlagsData::trusted(), zero, ctx, abi::CTX_UNWIND);
+            }
         }
         Ok(())
     }
@@ -500,6 +513,10 @@ impl Translator<'_, '_> {
                 let address = self.b.ins().func_addr(WORD, f);
                 self.b.ins().bor_imm_u(address, 1)
             }
+            // D-692: the fiber's context, passed to a `@std_context`
+            // kernel. GAP(const-ctx-operand).
+            Const::Ctx => self.ctx()?,
+            Const::ErrNil => self.static_object(abi::sym::STATIC_ERR_NIL)?,
         })
     }
 
@@ -708,6 +725,9 @@ impl Translator<'_, '_> {
             }
             Terminator::Unreachable => {
                 self.b.ins().trap(trap(TRAP_UNREACHABLE)?);
+            }
+            Terminator::Resume => {
+                self.b.ins().trap(trap(TRAP_RESUME)?);
             }
         }
         Ok(())

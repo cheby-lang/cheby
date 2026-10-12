@@ -38,7 +38,7 @@ fn rvalues(unit: &MirModule, key: FnKey) -> Vec<Rvalue> {
         .flat_map(|b| &b.stmts)
         .filter_map(|s| match s {
             MirStmt::Assign { value, .. } | MirStmt::Eval(value) => Some(value.clone()),
-            MirStmt::Dup(_) | MirStmt::Drop(_) => None,
+            MirStmt::Dup(_) | MirStmt::Drop(_) | MirStmt::ClearUnwind => None,
         })
         .collect()
 }

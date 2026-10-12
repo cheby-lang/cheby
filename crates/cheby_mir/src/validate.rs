@@ -10,6 +10,17 @@
 //! ([`Stage::Counted`]), ownership: on every path that returns or
 //! tail-calls, each counted local is consumed exactly once more than it is
 //! duplicated.
+//!
+//! Unwinding (D-698) is checked for its shape at every stage: unwind edges
+//! sorted by statement with at most one per statement and none past the
+//! terminator, pads that exist, are not `bb0` and take no parameters,
+//! `resume` and `clear_unwind` only in blocks that normal control flow
+//! does not reach, `clear_unwind` only in a `precounted` body (D-693),
+//! and `ctx` only as the first argument of a foreign call (D-692). Before
+//! [`Stage::Unwound`], only a `precounted` body has edges, an entry pad or
+//! `resume`; such a body is checked with its counts from
+//! [`Stage::Lowered`] on. CFG, dominance and ownership follow the normal
+//! successors; the pad sets are checked by the unwind pass's rules.
 
 mod dom;
 
@@ -36,6 +47,10 @@ pub enum Stage {
     Lowered,
     /// After [`crate::rc::insert`]: reference counts balance.
     Counted,
+    /// After the unwind pass (D-698): counts balance, and statements that
+    /// may unwind have their edges to pads. Only the shape of the edges is
+    /// checked so far.
+    Unwound,
 }
 
 /// Checks `module`. Returns every problem found, each prefixed with the
@@ -240,12 +255,92 @@ impl FnCx<'_> {
         if !self.check_cfg() {
             return Ok(());
         }
+        self.check_unwind_shape(stage);
         self.check_dominance(&defs)?;
         self.check_reprs(stage)?;
-        if stage == Stage::Counted && self.errors.is_empty() {
+        if self.counted(stage) && self.errors.is_empty() {
             self.check_ownership()?;
         }
         Ok(())
+    }
+
+    /// Whether the function has its counts at `stage`: after RC, or a
+    /// `precounted` body from lowering on (D-693).
+    fn counted(&self, stage: Stage) -> bool {
+        stage != Stage::Lowered || self.f.precounted
+    }
+
+    /// The shape of unwinding (D-698): see the module documentation.
+    fn check_unwind_shape(&mut self, stage: Stage) {
+        let f = self.f;
+        let early = stage != Stage::Unwound && !f.precounted;
+        let pad_ok = |cx: &mut Self, what: &str, pad: BlockId| match f.blocks.get(pad) {
+            None => cx.err(format!("{what} unwinds to unknown bb{}", pad.as_u32())),
+            Some(_) if pad.as_u32() == 0 => {
+                cx.err(format!("{what} unwinds to the entry block"));
+            }
+            Some(target) if !target.params.is_empty() => cx.err(format!(
+                "{what} unwinds to bb{}, which takes parameters",
+                pad.as_u32()
+            )),
+            Some(_) => {}
+        };
+        if let Some(pad) = f.entry_unwind {
+            if early {
+                self.err("an entry pad before the unwind pass");
+            }
+            pad_ok(self, "the entry check", pad);
+        }
+        for (id, block) in f.blocks.iter_enumerated() {
+            if early && !block.unwind.is_empty() {
+                self.err(format!(
+                    "bb{} has unwind edges before the unwind pass",
+                    id.as_u32()
+                ));
+            }
+            if !block
+                .unwind
+                .windows(2)
+                .all(|w| matches!(w, [a, b] if a.0 < b.0))
+            {
+                self.err(format!(
+                    "the unwind edges of bb{} are not sorted by statement without duplicates",
+                    id.as_u32()
+                ));
+            }
+            for &(at, pad) in &block.unwind {
+                if usize::try_from(at).map_or(true, |at| at > block.stmts.len()) {
+                    self.err(format!(
+                        "bb{} has an unwind edge for statement {at}, past its terminator",
+                        id.as_u32()
+                    ));
+                }
+                pad_ok(self, &format!("bb{} statement {at}", id.as_u32()), pad);
+            }
+            if early && block.term == Terminator::Resume {
+                self.err(format!("bb{} resumes before the unwind pass", id.as_u32()));
+            }
+        }
+        // `resume` and `clear_unwind` run only while unwinding: in blocks
+        // that only pads lead to.
+        let normal = normally_reachable(f);
+        for (id, block) in f.blocks.iter_enumerated() {
+            if !normal.contains(&id) {
+                continue;
+            }
+            if block.term == Terminator::Resume {
+                self.err(format!(
+                    "bb{} resumes, but normal control flow reaches it",
+                    id.as_u32()
+                ));
+            }
+            if block.stmts.contains(&Stmt::ClearUnwind) {
+                self.err(format!(
+                    "bb{} clears the unwind flag, but normal control flow reaches it",
+                    id.as_u32()
+                ));
+            }
+        }
     }
 
     fn check_abi(&mut self) -> Result<(), Ice> {
@@ -456,6 +551,9 @@ impl FnCx<'_> {
             Operand::Const(Const::Static(id)) if self.module.static_object(*id).is_none() => {
                 self.err(format!("unknown static#{}", id.as_u32()));
             }
+            Operand::Const(Const::Ctx) => {
+                self.err("ctx appears only as the first argument of a foreign call (D-692)");
+            }
             _ => {}
         }
     }
@@ -538,7 +636,15 @@ impl FnCx<'_> {
                 if sig.params.contains(&CType::Void) {
                     self.err("a foreign parameter of type void");
                 }
-                for (arg, &ctype) in args.iter().zip(&sig.params) {
+                for (n, (arg, &ctype)) in args.iter().zip(&sig.params).enumerate() {
+                    // The fiber's context of a `@std_context` kernel
+                    // (D-692). GAP(const-ctx-operand).
+                    if n == 0 && *arg == Operand::Const(Const::Ctx) {
+                        if !ctype.accepts_ctx() {
+                            self.err(format!("ctx passed as {ctype}"));
+                        }
+                        continue;
+                    }
                     self.check_const(arg, false);
                     if let Some(r) = self.repr(arg)
                         && !ctype.accepts(r)
@@ -863,11 +969,16 @@ impl FnCx<'_> {
                         self.check_rvalue(value);
                     }
                     Stmt::Dup(l) | Stmt::Drop(l) => {
-                        if stage == Stage::Lowered {
+                        if !self.counted(stage) {
                             self.err("dup or drop before reference-count insertion");
                         }
                         if f.local(*l)?.repr != Repr::Value {
                             self.err(format!("dup or drop of uncounted _{}", l.as_u32()));
+                        }
+                    }
+                    Stmt::ClearUnwind => {
+                        if !f.precounted {
+                            self.err("clear_unwind outside a generated intrinsic body (D-693)");
                         }
                     }
                 }
@@ -907,6 +1018,7 @@ impl FnCx<'_> {
                 self.expect_repr(cond, Repr::Bool, "branch condition");
             }
             Terminator::Switch { on, cases, .. } => {
+                self.check_const(on, false);
                 if let Some(r) = self.repr(on)
                     && !(r == Repr::U32 || r.is_signed_int() || r.is_unsigned_int())
                 {
@@ -927,7 +1039,8 @@ impl FnCx<'_> {
                     self.expect_repr(m, Repr::Value, "panic message");
                 }
             }
-            Terminator::Unreachable => {}
+            // Where it may appear is part of the unwinding shape.
+            Terminator::Unreachable | Terminator::Resume => {}
         }
         Ok(())
     }
@@ -998,6 +1111,7 @@ impl FnCx<'_> {
                         }
                     }
                     Stmt::Drop(l) => self.consume(&mut st, &[(*l, UseKind::Owned)], &at(n))?,
+                    Stmt::ClearUnwind => {}
                 }
             }
             let here = format!("bb{} terminator", id.as_u32());
@@ -1023,7 +1137,9 @@ impl FnCx<'_> {
                         self.flow(&mut entry_state, &mut work, succ, &st);
                     }
                 }
-                Terminator::Panic { .. } | Terminator::Unreachable => {}
+                // Pads and what they hold are the unwind pass's rules
+                // (D-698); ownership follows normal control flow here.
+                Terminator::Panic { .. } | Terminator::Unreachable | Terminator::Resume => {}
             }
         }
         Ok(())
@@ -1118,5 +1234,22 @@ fn stmt_locals(stmt: &Stmt) -> Vec<Local> {
             value.uses().into_iter().map(|(l, _)| l).collect()
         }
         Stmt::Dup(l) | Stmt::Drop(l) => vec![*l],
+        Stmt::ClearUnwind => Vec::new(),
     }
+}
+
+/// The blocks reached from `bb0` through normal successors only, without
+/// taking an unwind edge or the entry pad.
+fn normally_reachable(f: &Function) -> BTreeSet<BlockId> {
+    let mut seen = BTreeSet::new();
+    let mut work = vec![BlockId::from_u32(0)];
+    while let Some(id) = work.pop() {
+        let Some(block) = f.blocks.get(id) else {
+            continue;
+        };
+        if seen.insert(id) {
+            work.extend(block.term.successors());
+        }
+    }
+    seen
 }

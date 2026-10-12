@@ -65,6 +65,10 @@ Run with `cargo test --test ui`.
 
 Every `cheby` the harnesses start runs with `CHEBY_RT_POISON=1`, so a toolchain with debug assertions poisons freed objects and stops with a fatal "use after free" error when one is used again.
 
+`CHEBY_HARNESS_SCALE=<n>`, a whole number from 1 to 100 (1 by default), multiplies the timeouts of this harness (180 s), the conformance harness (60 s) and the REPL harness (60 s), for slow machines, emulators and sanitizer builds (D-722). Any other value is a harness error, and the harness exits with status 2.
+
+The conformance harness also runs every example's run trial and `::test` trial with `CHEBY_THREADS=1` and `CHEBY_THREADS=2`, as `<name>@threads=1` and `<name>::test@threads=2`, with the same goldens and the same milestone (D-722). The base trial runs with `CHEBY_THREADS` removed from the environment. When the harness itself runs with `CHEBY_THREADS=<n>` and n is neither 1 nor 2, as in `CHEBY_THREADS=4 cargo test -p cheby_cli --test conformance`, every run trial and `::test` trial also runs as `<name>@threads=<n>`. A value that is not a whole number of at least 1 is a harness error, and the harness exits with status 2. The harness prints the thread counts it runs. A `skip-run` example gets no variants, and `cargo xtask bless` ignores the variants, so only the base trial writes goldens. Unless `--test-threads` is given, the conformance harness runs at most half as many trials at once as the machine has hardware threads. An allow-list pattern such as `005_prime_sieve*` covers an example's trials and their variants.
+
 In an allow-list pattern, `*` matches any run of characters (`/` and `:` included), `?` matches one character, and every other character matches itself. The rest of the line is a note, such as the reason a test is carried and the gate it must pass by:
 
 ```text

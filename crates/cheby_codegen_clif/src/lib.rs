@@ -190,9 +190,49 @@ pub fn declare<M: Module>(
     decls.declare_units(module, mirs, opts.foreign_import)
 }
 
+/// What one call of [`define_with_stats`] defined: the size of the machine
+/// code it installed, for `cargo xtask bench-compile` (D-718).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DefineStats {
+    /// The bytes of machine code of the functions defined, without
+    /// alignment padding or data objects.
+    pub code_bytes: u64,
+    /// How many functions were defined.
+    pub functions: u64,
+}
+
+impl DefineStats {
+    /// The sum of `self` and `other`, saturating.
+    #[must_use]
+    pub const fn add(self, other: Self) -> Self {
+        Self {
+            code_bytes: self.code_bytes.saturating_add(other.code_bytes),
+            functions: self.functions.saturating_add(other.functions),
+        }
+    }
+}
+
 /// Defines the data objects declared by [`declare`] and every function of
 /// `mirs`, in declaration order. Returns the CLIF text of each function
 /// when [`CodegenOptions::capture_clif`] is set.
+///
+/// [`define_with_stats`] also returns the size of the code defined.
+///
+/// # Errors
+///
+/// A [`CodegenError`] if translation or compilation fails.
+pub fn define<M: Module>(
+    module: &mut M,
+    mirs: &[MirModule],
+    decls: &mut Decls,
+    cx: &CodegenCx<'_>,
+    opts: &CodegenOptions,
+) -> Result<Vec<String>, CodegenError> {
+    define_with_stats(module, mirs, decls, cx, opts).map(|(clif, _)| clif)
+}
+
+/// [`define`], returning also what it defined: the bytes of machine code
+/// and the number of functions (D-718).
 ///
 /// Every function is translated and compiled before anything is defined,
 /// so a translation or compilation error leaves `module` without any
@@ -208,13 +248,13 @@ pub fn declare<M: Module>(
 /// # Errors
 ///
 /// A [`CodegenError`] if translation or compilation fails.
-pub fn define<M: Module>(
+pub fn define_with_stats<M: Module>(
     module: &mut M,
     mirs: &[MirModule],
     decls: &mut Decls,
     cx: &CodegenCx<'_>,
     opts: &CodegenOptions,
-) -> Result<Vec<String>, CodegenError> {
+) -> Result<(Vec<String>, DefineStats), CodegenError> {
     use rayon::prelude::*;
 
     // The functions to define, each once, in declaration order.
@@ -263,13 +303,18 @@ pub fn define<M: Module>(
     }
     data::define_pending(module, decls, cx)?;
     decls.defined_funcs.extend(ids);
+    let mut stats = DefineStats::default();
     for (key, id, code) in compiled {
         module
             .define_function_bytes(id, code.align, &code.bytes, &code.relocs)
             .map_err(|e| CodegenError::module(&e))?;
         decls.mark_defined(key)?;
+        stats = stats.add(DefineStats {
+            code_bytes: u64::try_from(code.bytes.len()).unwrap_or(u64::MAX),
+            functions: 1,
+        });
     }
-    Ok(clif)
+    Ok((clif, stats))
 }
 
 /// Defines the data objects declared since the last [`define`] outside any

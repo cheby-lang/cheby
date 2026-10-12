@@ -13,10 +13,22 @@ replays and compares:
 - Every other line is expected output: standard output and standard error, merged in the order
   of writes, since the harness gives `cheby repl` one pipe for both.
 
-A transcript may start with a header of `// @decisions: D-NNN, …` lines, before its first input
-line, naming the decisions the session pins, as a UI test's header does. The header is not part
-of the session: it is neither fed nor expected, blessing keeps it, and `cargo xtask coverage`
-counts its decisions (D-638). On Windows the harness ignores every transcript until M6 (D-545).
+A transcript may start with a header of `// @key: value` lines, before its first input line, as
+a UI test's header does. The header is not part of the session: it is neither fed nor expected,
+and blessing keeps it. It has two keys:
+
+| Key          | Value                                                                                         |
+| ------------ | --------------------------------------------------------------------------------------------- |
+| `@decisions` | the decisions the session pins, `D-NNN, …`, which `cargo xtask coverage` counts (D-638)       |
+| `@milestone` | the milestone in which the transcript must pass, `M1` by default, given at most once (D-726) |
+
+The milestone is judged against `tests/milestone` as for a UI test (D-288): a transcript of an
+earlier milestone must pass, one of the milestone in progress is pending and only reported, and
+one of a later milestone must fail. `CHEBY_MILESTONE`, `CHEBY_PENDING=require` and
+`CHEBY_PENDING_ALLOW` make a strict run, as described in [`tests/ui/README.md`](../ui/README.md)
+(D-544), and the harness prints the pending transcripts at the end. Blessing skips a transcript
+of a later milestone. A header that does not parse fails the transcript. On Windows the harness
+ignores every transcript until M6 (D-545).
 
 The session ends at the end of input, and `cheby repl` must then exit with status 0. A session
 runs in an empty directory, unless a directory `<name>/` next to the transcript holds a

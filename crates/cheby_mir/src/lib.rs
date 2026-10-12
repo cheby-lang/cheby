@@ -25,6 +25,7 @@ mod liveness;
 pub mod lower;
 #[cfg(test)]
 mod lower_tests;
+pub mod options;
 pub mod rc;
 pub mod reach;
 pub mod repr;
@@ -32,6 +33,8 @@ pub mod repr;
 mod test_support;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod unwind_ir_tests;
 pub mod validate;
 #[cfg(test)]
 mod validate_tests;
@@ -51,22 +54,19 @@ pub use layout::{FieldDesc, LayoutDesc, ctor_layout, type_key, type_layouts};
 pub use lower::{
     EntryRequest, LowerCx, lower_entries, lower_fn, lower_items, lower_module, lower_tests,
 };
+pub use options::{MirOptions, RcMode, count_and_check_with};
 pub use reach::{Program, Reach, Root, reachable};
 pub use repr::{CType, ForeignSig, Repr, ctype_of, foreign_sig, repr_of};
 pub use validate::{Stage, validate};
 
 /// Validates a freshly lowered unit, inserts reference counts, and
 /// validates again with the ownership check: the pipeline every unit goes
-/// through before codegen.
+/// through before codegen. [`count_and_check_with`] with the default
+/// options.
 ///
 /// # Errors
 ///
 /// An [`Ice`](cheby_iface::Ice) listing the validator's findings.
 pub fn count_and_check(module: &mut MirModule) -> Result<(), cheby_iface::Ice> {
-    let report = |stage: &str, errors: Vec<String>| {
-        cheby_iface::Ice::new(format!("invalid MIR {stage}:\n  {}", errors.join("\n  ")))
-    };
-    validate(module, Stage::Lowered).map_err(|e| report("after lowering", e))?;
-    rc::insert_module(module)?;
-    validate(module, Stage::Counted).map_err(|e| report("after reference counting", e))
+    count_and_check_with(module, &MirOptions::default())
 }

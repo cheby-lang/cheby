@@ -249,6 +249,7 @@ fn unit() -> MirModule {
             Stmt::Drop(cheby_mir::Local::from_u32(0)),
         ],
         term: Terminator::Return(Operand::Const(Const::Str(StrId::from_u32(1)))),
+        unwind: Vec::new(),
     };
     let function = Function {
         key: FnKey::Item(f),
@@ -260,6 +261,8 @@ fn unit() -> MirModule {
         span: Span::new(FileId::new(0), TextRange::new(0, 0)),
         strings: IndexVec::from_raw(vec!["a.cheby:1:4".into(), "hi".into()]).unwrap(),
         entry_loc: Some(StrId::from_u32(0)),
+        entry_unwind: None,
+        precounted: false,
     };
     MirModule {
         unit: UnitKind::Code(ModuleId::from_u32(1)),
@@ -373,6 +376,7 @@ fn labs_unit(index: u32, params: &[CType]) -> MirModule {
                 .collect(),
         })],
         term: Terminator::Return(Operand::Const(Const::Nil)),
+        unwind: Vec::new(),
     };
     let item = format!("g{index}");
     MirModule {
@@ -388,6 +392,8 @@ fn labs_unit(index: u32, params: &[CType]) -> MirModule {
             span: Span::new(FileId::new(0), TextRange::new(0, 0)),
             strings: IndexVec::from_raw(vec!["a.cheby:1:4".into()]).unwrap(),
             entry_loc: Some(StrId::from_u32(0)),
+            entry_unwind: None,
+            precounted: false,
         }],
         callees: vec![CalleeDecl {
             def: g,
@@ -467,4 +473,250 @@ fn foreign_imports_by_address_allow_new_signatures() {
         err.to_string().contains("two different signatures"),
         "{err}"
     );
+}
+
+/// The runtime functions of the slice (plan §2.1): their C types, indexes
+/// 24 to 27, the helpers they implement, and the static `Err(Nil)`.
+#[test]
+fn slice_runtime_functions() {
+    use cheby_mir::RuntimeFn;
+    use runtime::{RuntimeFunc, STATIC_DATA};
+    let expected = [
+        (
+            RuntimeFunc::StackSlowFrame,
+            24,
+            &[CType::Ptr, CType::Ptr, CType::U64][..],
+            CType::Void,
+        ),
+        (
+            RuntimeFunc::ScopeOpen,
+            25,
+            &[CType::Ptr, CType::Bool, CType::I64, CType::I64][..],
+            CType::U64,
+        ),
+        (
+            RuntimeFunc::ScopeClose,
+            26,
+            &[CType::Ptr, CType::U64, CType::Bool][..],
+            CType::Bool,
+        ),
+        (
+            RuntimeFunc::UnwindResume,
+            27,
+            &[CType::Ptr][..],
+            CType::Void,
+        ),
+    ];
+    for (f, index, params, ret) in expected {
+        assert_eq!(f.index(), index, "{f:?}");
+        assert_eq!(RuntimeFunc::ALL[index], f);
+        assert_eq!(f.ctypes(), (params, ret), "{f:?}");
+        assert!(f.on_demand(), "{f:?}");
+    }
+    assert_eq!(RuntimeFunc::ALL.len(), 28);
+    assert_eq!(
+        RuntimeFunc::ALL.iter().filter(|f| f.on_demand()).count(),
+        4,
+        "only the M2 functions are declared on demand"
+    );
+    assert_eq!(
+        RuntimeFunc::of(RuntimeFn::ScopeOpen),
+        (RuntimeFunc::ScopeOpen, true)
+    );
+    assert_eq!(
+        RuntimeFunc::of(RuntimeFn::ScopeClose),
+        (RuntimeFunc::ScopeClose, true)
+    );
+    assert!(STATIC_DATA.contains(&cheby_runtime::abi::sym::STATIC_ERR_NIL));
+    assert!(runtime::imported_symbols().contains(&cheby_runtime::abi::sym::UNWIND_RESUME));
+}
+
+/// `f(_0: bool)` with every IR form of the slice: helper calls with
+/// unwind edges to a pad `bb2` that normal control flow never reaches,
+/// a foreign call with `ctx` first, `clear_unwind`, `resume` and the
+/// static `Err(Nil)`. The validator would not accept `clear_unwind` and
+/// `resume` on the normal path; code generation does not care.
+#[expect(clippy::too_many_lines, reason = "one hand-built MIR function")]
+fn slice_forms_unit() -> MirModule {
+    use cheby_mir::{BlockId, Local, RuntimeFn, Rvalue};
+    let f = def(1, 0);
+    let local = Local::from_u32;
+    let locals = IndexVec::from_raw(
+        [Repr::Bool, Repr::Value, Repr::Bool, Repr::Int, Repr::Value]
+            .into_iter()
+            .map(|repr| LocalDecl {
+                repr,
+                name: None,
+                ty: None,
+            })
+            .collect(),
+    )
+    .unwrap();
+    let runtime = |func, args| Rvalue::CallRuntime { func, args };
+    let bb0 = Block {
+        params: Vec::new(),
+        stmts: vec![
+            Stmt::Assign {
+                dst: local(1),
+                value: runtime(
+                    RuntimeFn::ScopeOpen,
+                    vec![
+                        Operand::Local(local(0)),
+                        Operand::Const(Const::Int(1)),
+                        Operand::Const(Const::Int(2)),
+                    ],
+                ),
+            },
+            Stmt::Assign {
+                dst: local(2),
+                value: runtime(
+                    RuntimeFn::ScopeClose,
+                    vec![Operand::Local(local(1)), Operand::Local(local(0))],
+                ),
+            },
+            Stmt::Assign {
+                dst: local(3),
+                value: Rvalue::CallForeign {
+                    symbol: "cheby_test_kernel".into(),
+                    sig: ForeignSig {
+                        params: vec![CType::Ptr, CType::I64],
+                        ret: CType::I64,
+                    },
+                    args: vec![Operand::Const(Const::Ctx), Operand::Const(Const::Int(5))],
+                },
+            },
+            Stmt::ClearUnwind,
+        ],
+        term: Terminator::Branch {
+            cond: Operand::Local(local(2)),
+            then_: BlockId::from_u32(1),
+            else_: BlockId::from_u32(3),
+        },
+        unwind: vec![(0, BlockId::from_u32(2)), (1, BlockId::from_u32(2))],
+    };
+    let bb1 = Block {
+        params: Vec::new(),
+        stmts: Vec::new(),
+        term: Terminator::Return(Operand::Const(Const::ErrNil)),
+        unwind: Vec::new(),
+    };
+    let pad = Block {
+        params: Vec::new(),
+        stmts: vec![Stmt::Assign {
+            dst: local(4),
+            value: runtime(RuntimeFn::Debug, vec![Operand::Const(Const::Nil)]),
+        }],
+        term: Terminator::Return(Operand::Local(local(4))),
+        unwind: Vec::new(),
+    };
+    let bb3 = Block {
+        params: Vec::new(),
+        stmts: Vec::new(),
+        term: Terminator::Resume,
+        unwind: Vec::new(),
+    };
+    let function = Function {
+        key: FnKey::Item(f),
+        abi: Abi::Cheby,
+        params: vec![local(0)],
+        ret: Repr::Value,
+        locals,
+        blocks: IndexVec::from_raw(vec![bb0, bb1, pad, bb3]).unwrap(),
+        span: Span::new(FileId::new(0), TextRange::new(0, 0)),
+        strings: IndexVec::from_raw(vec!["a.cheby:1:4".into()]).unwrap(),
+        entry_loc: Some(StrId::from_u32(0)),
+        entry_unwind: Some(BlockId::from_u32(2)),
+        precounted: true,
+    };
+    MirModule {
+        unit: UnitKind::Code(ModuleId::from_u32(1)),
+        path: "app".into(),
+        functions: vec![function],
+        callees: vec![CalleeDecl {
+            def: f,
+            sig: AbiSig {
+                abi: Abi::Cheby,
+                params: vec![Repr::Bool],
+                ret: Repr::Value,
+            },
+        }],
+        layouts: Vec::new(),
+        foreign_layouts: Vec::new(),
+        statics: Vec::new(),
+        names: vec![DefName {
+            def: f,
+            module: "app".into(),
+            item: "f".into(),
+        }],
+    }
+}
+
+/// Code generation of the slice's IR forms (plan §2.2): unwind edges are
+/// ignored, so the pad is never translated; `resume` traps with its own
+/// code; `clear_unwind` stores a zero `u32` at `ctx+12`; `static Err(Nil)`
+/// is the runtime's data symbol; the scope helpers are declared on demand
+/// with their C signatures; the result compiles.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn slice_forms_translate_with_edges_ignored() {
+    let mut m = module();
+    let mut decls = Decls::new(cranelift_module::Module::isa(&m)).unwrap();
+    let units = [slice_forms_unit()];
+    let cx = CodegenCx {
+        layouts: &BuiltinLayouts,
+    };
+    let opts = CodegenOptions::default();
+    declare(&mut m, &mut decls, &units, &cx, &opts).unwrap();
+    let clif = translate(&units[0], &units[0].functions[0], &decls, &cx, &opts).unwrap();
+    let text = decls.describe(&clif);
+    for needle in [
+        "= cheby_rt_scope_open",
+        "= cheby_rt_scope_close",
+        "= cheby_rt_static_err_nil",
+        "= cheby_test_kernel",
+        &format!("trap user{}", func::TRAP_RESUME),
+        "iconst.i32 0",
+        &format!("+{}", cheby_runtime::abi::CTX_UNWIND),
+    ] {
+        assert!(text.contains(needle), "{needle:?} in:\n{text}");
+    }
+    assert!(text.contains("store"), "{text}");
+    assert!(
+        !text.contains("cheby_rt_debug"),
+        "the pad was translated:\n{text}"
+    );
+    let compiled = compile_function(cranelift_module::Module::isa(&m), clif).unwrap();
+    assert_ne!(compiled.bytes.len(), 0);
+}
+
+/// The scope helpers, declared on demand, do not shift the function ids
+/// of a unit that does not use them, so its CLIF stays as before.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn units_without_the_slice_forms_keep_their_function_ids() {
+    let mut m = module();
+    let mut decls = Decls::new(cranelift_module::Module::isa(&m)).unwrap();
+    let units = [unit()];
+    let cx = CodegenCx {
+        layouts: &BuiltinLayouts,
+    };
+    let opts = CodegenOptions::default();
+    declare(&mut m, &mut decls, &units, &cx, &opts).unwrap();
+    let clif = translate(&units[0], &units[0].functions[0], &decls, &cx, &opts).unwrap();
+    let text = decls.describe(&clif);
+    let first_own = runtime::RuntimeFunc::ALL
+        .iter()
+        .filter(|f| !f.on_demand())
+        .count();
+    assert!(
+        text.contains(&format!("function u0:{first_own}(")),
+        "{text}"
+    );
+    assert!(!text.contains("scope_"), "{text}");
 }

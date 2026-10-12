@@ -26,7 +26,7 @@ pub(crate) fn counted(f: &Function, local: Local) -> Result<bool, Ice> {
 pub(crate) const fn stmt_def(stmt: &Stmt) -> Option<Local> {
     match stmt {
         Stmt::Assign { dst, .. } => Some(*dst),
-        Stmt::Eval(_) | Stmt::Dup(_) | Stmt::Drop(_) => None,
+        Stmt::Eval(_) | Stmt::Dup(_) | Stmt::Drop(_) | Stmt::ClearUnwind => None,
     }
 }
 
@@ -37,6 +37,7 @@ pub(crate) fn stmt_uses(f: &Function, stmt: &Stmt) -> Result<Vec<Local>, Ice> {
             value.uses().into_iter().map(|(l, _)| l).collect()
         }
         Stmt::Dup(l) | Stmt::Drop(l) => vec![*l],
+        Stmt::ClearUnwind => Vec::new(),
     };
     filter_counted(f, all)
 }

@@ -12,10 +12,14 @@
 //!   (`String` and `Bytes` objects), [`generic`] (structural equality,
 //!   hashing and debug text), [`desc`] (type descriptors and the builtin
 //!   nominal descriptors).
-//! - Running code: [`panic`](mod@panic), [`ctx`], [`entry`] (entries, the
+//! - Running code: [`panic`](mod@panic), [`ctx`] (the fiber control
+//!   block and interrupt reasons, D-685, D-688), [`entry`] (entries, the
 //!   current entry, exit statuses), [`callback`] (kernels calling
 //!   closures), [`consteval`] (constant evaluation's runtime side),
-//!   [`stats`] (counters of allocations and in-place updates).
+//!   [`stats`] (counters of allocations and in-place updates), the private
+//!   `tls` (every thread-local of the crate, D-686), `unwind` (the
+//!   unwinding backends' runtime side, D-696) and the private `fiber_ops`
+//!   (scopes, fibers and channels).
 //! - Kernels, by std module: [`io`], and the private modules `num`, `list`,
 //!   `text`, `bytes`, `env` and [`hamt`], each registering its symbols in
 //!   [`symbols`] (plan §4.3.3).
@@ -33,6 +37,8 @@ pub mod ctx;
 pub mod desc;
 pub mod entry;
 mod env;
+pub mod fiber;
+pub(crate) mod fiber_ops;
 pub mod generic;
 #[doc(hidden)]
 pub mod hamt;
@@ -49,6 +55,9 @@ pub mod stats;
 pub mod string;
 mod symbols;
 mod text;
+mod tls;
+#[doc(hidden)]
+pub mod unwind;
 pub mod values;
 
 pub use alloc::{LEAK_CHECK_ENABLED, live_objects};

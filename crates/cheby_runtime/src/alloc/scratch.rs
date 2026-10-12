@@ -8,59 +8,81 @@
 //! requested, so the peak never passes the limit. Every buffer here grows
 //! through [`grow`], which
 //!
-//! - adds the new capacity to the bytes of scratch live on this thread and
-//!   checks the sum, with the domain's live bytes, against the budget
-//!   ([`crate::entry::check_budget`]) before it asks the system, and
+//! - adds the new capacity to the bytes of scratch live in the running
+//!   fiber and checks the sum, with the domain's live bytes, against the
+//!   budget ([`crate::entry::check_budget`]) before it asks the system,
+//!   and
 //! - asks with `try_reserve_exact`, so a request the system refuses ends
 //!   as [`super::out_of_memory`] says, never with an abort.
 //!
-//! The scratch of an entry lives on the entry's own thread, so the count
-//! is per thread. A buffer gives its bytes back when it is dropped; an
-//! abandoned entry parks its thread, so its count is never read again.
+//! The count is the running fiber's, kept in its control block (D-685); on
+//! a thread that runs no fiber it is the thread's, kept in `tls.rs`'s host
+//! slot. A buffer gives its bytes back when it is dropped; an abandoned
+//! entry never runs again, so its count is never read again.
 //!
 //! Kernels whose temporary is the size of their result write the result
 //! object straight away instead, and need no scratch.
 
-use std::cell::Cell;
 use std::collections::TryReserveError;
 use std::fmt;
 use std::ops::{Deref, DerefMut};
+use std::sync::atomic::Ordering;
 
-thread_local! {
-    /// The bytes of scratch capacity live on this thread.
-    static LIVE: Cell<u64> = const { Cell::new(0) };
-    /// The most bytes of scratch live on this thread since
-    /// [`reset_peak`], for tests that compare the memory a walk asks the
-    /// system for with what it accounts for.
-    static PEAK: Cell<u64> = const { Cell::new(0) };
-}
+use crate::tls;
 
-/// The bytes of scratch capacity live on this thread, which the memory
-/// budget adds to the domain's live bytes.
+/// The bytes of scratch capacity live in the running fiber, or on this
+/// thread when it runs none. The memory budget adds the fiber's to the
+/// domain's live bytes ([`crate::entry::check_budget`]).
+#[cfg(test)]
 pub(crate) fn live() -> u64 {
-    LIVE.try_with(Cell::get).unwrap_or(0)
+    match super::current_fiber() {
+        Some(ctx) => ctx.scratch().0.load(Ordering::Relaxed),
+        None => tls::with_host(|host| host.scratch_live.get()).unwrap_or(0),
+    }
 }
 
-/// The most bytes of scratch live on this thread since [`reset_peak`].
+/// The most bytes of scratch live since [`reset_peak`], for tests that
+/// compare the memory a walk asks the system for with what it accounts
+/// for.
 #[cfg(test)]
 pub(crate) fn peak() -> u64 {
-    PEAK.try_with(Cell::get).unwrap_or(0)
+    match super::current_fiber() {
+        Some(ctx) => ctx.scratch().1.load(Ordering::Relaxed),
+        None => tls::with_host(|host| host.scratch_peak.get()).unwrap_or(0),
+    }
 }
 
 /// Restarts the peak at the scratch live now.
 #[cfg(test)]
 pub(crate) fn reset_peak() {
-    PEAK.try_with(|peak| peak.set(live())).ok();
+    let now = live();
+    match super::current_fiber() {
+        Some(ctx) => ctx.scratch().1.store(now, Ordering::Relaxed),
+        None => {
+            tls::with_host(|host| host.scratch_peak.set(now));
+        }
+    }
 }
 
-/// Moves this thread's count of live scratch from `old` to `new` bytes.
+/// Moves the count of live scratch from `old` to `new` bytes.
 fn recharge(old: u64, new: u64) {
-    LIVE.try_with(|live| {
-        let now = live.get().saturating_sub(old).saturating_add(new);
-        live.set(now);
-        PEAK.try_with(|peak| peak.set(peak.get().max(now))).ok();
-    })
-    .ok();
+    let next = |live: u64| live.saturating_sub(old).saturating_add(new);
+    match super::current_fiber() {
+        Some(ctx) => {
+            // Only the owning fiber writes its counts.
+            let (live, peak) = ctx.scratch();
+            let now = next(live.load(Ordering::Relaxed));
+            live.store(now, Ordering::Relaxed);
+            peak.fetch_max(now, Ordering::Relaxed);
+        }
+        None => {
+            tls::with_host(|host| {
+                let now = next(host.scratch_live.get());
+                host.scratch_live.set(now);
+                host.scratch_peak.set(host.scratch_peak.get().max(now));
+            });
+        }
+    }
 }
 
 /// Grows a buffer of `cap` items of `item` bytes, holding `len`, so it has

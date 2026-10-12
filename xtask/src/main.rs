@@ -17,15 +17,20 @@
 //! - `test-std`: checks every shipped std module with its `test` blocks
 //!   and runs them, one batch per module (D-479, D-542).
 //! - `bench-compile`: compile-speed numbers on generated projects (I1,
-//!   D-247, plan §8.5).
+//!   D-247, plan §8.5), with the size of the code and its RC operations
+//!   (D-718).
+//! - `bench-run`: run-time numbers of the programs under `bench/runtime`
+//!   against a baseline (D-718, D-702).
 //! - `check-examples`: runs `cheby check` in every example directory and
 //!   compares the outcome with the expected one (G6).
 //! - `bench-build` (hidden): checks and compiles every function of a
-//!   package on `--jobs` threads and prints the times; `bench-compile` and
-//!   `check-determinism` run it as a child process, since the size of
-//!   rayon's global pool is fixed once per process.
+//!   package on `--jobs` threads and prints the times, the bytes of code
+//!   and the RC operations; `bench-compile` and `check-determinism` run it
+//!   as a child process, since the size of rayon's global pool is fixed
+//!   once per process.
 
 mod bench;
+mod bench_run;
 mod cross_check;
 mod determinism;
 mod examples;
@@ -94,17 +99,12 @@ enum Cmd {
         filter: Option<String>,
     },
     /// Measure compile speed on generated projects (D-247)
-    BenchCompile {
-        /// Only the 10k-line projects
-        #[arg(long)]
-        quick: bool,
-        /// Append the Markdown table to this file, such as
-        /// `$GITHUB_STEP_SUMMARY`
-        #[arg(long)]
-        summary: Option<PathBuf>,
-    },
+    BenchCompile(bench::Args),
+    /// Measure the run time of the programs under `bench/runtime` (D-718)
+    BenchRun(bench_run::Args),
     /// Check and compile every function of a package and print the front
-    /// end's and the back end's times in nanoseconds
+    /// end's and the back end's times in nanoseconds, the bytes of machine
+    /// code and the RC operations of the MIR
     #[command(hide = true)]
     BenchBuild {
         /// Worker threads (default: the available parallelism)
@@ -134,7 +134,8 @@ fn main() -> ExitCode {
         Cmd::Coverage => coverage(&root),
         Cmd::CrossCheck(args) => cross_check::run(&root, &args),
         Cmd::TestStd { filter } => test_std(filter.as_deref()),
-        Cmd::BenchCompile { quick, summary } => bench::run(&root, quick, summary.as_deref()),
+        Cmd::BenchCompile(args) => bench::run(&root, &args),
+        Cmd::BenchRun(args) => bench_run::run(&root, &args),
         Cmd::BenchBuild { jobs, dir } => bench_build(jobs, &dir),
     };
     match result {
@@ -218,18 +219,34 @@ fn gen_bench(config: &Config, out: &Path, summary: Option<&Path>) -> Result<(), 
 }
 
 /// Checks and compiles every function of the package in `dir` with
-/// `jobs` worker threads and prints `<front end ns> <back end ns>`.
+/// `jobs` worker threads and prints `<front end ns> <back end ns> <code
+/// bytes> <RC operations>`.
 fn bench_build(jobs: Option<NonZeroUsize>, dir: &Path) -> Result<(), String> {
     cheby_driver::configure_jobs(jobs).map_err(|e| e.message().to_owned())?;
     let t = cheby_driver::bench_build(dir).map_err(|e| e.message().to_owned())?;
-    println!("{} {}", t.front_end.as_nanos(), t.back_end.as_nanos());
+    println!(
+        "{} {} {} {}",
+        t.front_end.as_nanos(),
+        t.back_end.as_nanos(),
+        t.code_bytes,
+        t.rc_ops
+    );
     Ok(())
+}
+
+/// `path` made absolute against the current directory.
+fn absolute(path: &Path) -> Result<PathBuf, String> {
+    std::path::absolute(path).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 /// Builds `cheby` with the profile this xtask was built with and returns
 /// its path.
 fn build_cheby(root: &Path) -> Result<PathBuf, String> {
-    let release = !cfg!(debug_assertions);
+    build_cheby_profile(root, !cfg!(debug_assertions))
+}
+
+/// Builds `cheby`, optimized if `release`, and returns its path.
+fn build_cheby_profile(root: &Path, release: bool) -> Result<PathBuf, String> {
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
     let mut cmd = Command::new(cargo);
     cmd.current_dir(root)

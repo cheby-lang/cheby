@@ -532,7 +532,7 @@ pub fn run(root: &Path, options: RunOptions) -> Result<RunResult, Error> {
     }
 }
 
-/// The times of [`bench_build`].
+/// The times of [`bench_build`], and the size of what it built.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BenchTimings {
     /// Loading, parsing and checking the package and the std modules it
@@ -541,6 +541,11 @@ pub struct BenchTimings {
     /// Lowering every function of the package to MIR and compiling it with
     /// the JIT.
     pub back_end: Duration,
+    /// The bytes of machine code the JIT defined (D-718).
+    pub code_bytes: u64,
+    /// The reference-count operations, `dup` and `drop` statements, of
+    /// every MIR unit compiled (D-718).
+    pub rc_ops: u64,
 }
 
 /// Checks the package at `dir` and generates code for every function of
@@ -566,16 +571,21 @@ pub fn bench_build(dir: &Path) -> Result<BenchTimings, Error> {
     let start = Instant::now();
     let built = backend::build(&front, &out.sources, backend::Roots::AllFunctions, false)?;
     let back_end = start.elapsed();
-    if let Err(diagnostics) = built {
-        out.diagnostics = diagnostics;
-        return Err(Error::new(format!(
-            "the back end cannot build the benchmark project:\n{}",
-            out.render()
-        )));
-    }
+    let built = match built {
+        Ok(built) => built,
+        Err(diagnostics) => {
+            out.diagnostics = diagnostics;
+            return Err(Error::new(format!(
+                "the back end cannot build the benchmark project:\n{}",
+                out.render()
+            )));
+        }
+    };
     Ok(BenchTimings {
         front_end: front_end_time,
         back_end,
+        code_bytes: built.jit.code_stats().code_bytes,
+        rc_ops: built.rc_ops.unwrap_or(0),
     })
 }
 

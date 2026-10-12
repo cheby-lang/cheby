@@ -35,6 +35,14 @@
 //! - `consts.txt`, one line `<module path>::<name> = <debug text>` per
 //!   evaluated constant, sorted by module path and name (empty when no
 //!   constant was evaluated).
+//!
+//! **MIR options** (D-718): every build reads `CHEBY_RC` (`naive` or
+//! `perceus`; unset or empty is the default) once, with
+//! [`mir_options_from_env`] (the dumps for goldens use the defaults, so
+//! they do not depend on the environment), and counts every unit with
+//! `cheby_mir::count_and_check_with`. A hidden developer switch, honored by
+//! release builds too, so `bench-run` can measure both modes; an invalid
+//! value is a driver error. GAP(rc-mode-env)
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -45,13 +53,14 @@ use cheby_iface::{DefId, DepView, Ice, ModuleId};
 use cheby_jit::{Jit, JitError, JitOptions};
 use cheby_mir::reach::{Reach, Root, reachable_with_hooks};
 use cheby_mir::{
-    Defs, EntryKind, EntryRequest, LowerCx, MirModule, Program, UnitKind, count_and_check,
-    lower_entries, lower_items, lower_tests,
+    Defs, EntryKind, EntryRequest, LowerCx, MirModule, MirOptions, Program, Stmt, UnitKind,
+    count_and_check_with, lower_entries, lower_items, lower_tests,
 };
 use cheby_package::Target;
 use cheby_types::thir;
 use rayon::prelude::*;
 
+use crate::Error;
 use crate::frontend::Frontend;
 
 /// The environment variable naming the directory of the determinism dumps
@@ -83,6 +92,20 @@ pub(crate) struct Built {
     /// The code compiled and the reachable constants evaluated: the entry
     /// thunks of `main` or of the tests are ready to run.
     pub jit: Jit,
+    /// For [`Roots::AllFunctions`], the reference-count operations (`dup`
+    /// and `drop` statements) of every MIR unit compiled, for `cargo xtask
+    /// bench-compile` (D-718); `None` for the other roots.
+    pub rc_ops: Option<u64>,
+}
+
+/// The MIR options of a build, read from the environment once per build
+/// (`CHEBY_RC`, plan §2.3; GAP(rc-mode-env)).
+///
+/// # Errors
+///
+/// An [`Error`] with the message of an invalid value.
+pub(crate) fn mir_options_from_env() -> Result<MirOptions, Error> {
+    MirOptions::from_env().map_err(Error::new)
 }
 
 /// Lowers what the roots reach (D-510), compiles it in one JIT, and
@@ -90,9 +113,15 @@ pub(crate) struct Built {
 /// E0069 or E0075-E0078 diagnostics, sorted. `Constants` builds
 /// with `stub_unresolved` (plan §4.4) and never reports E0053 (D-532);
 /// `AllFunctions` evaluates nothing. A CLIF dump (`capture_clif`) compiles
-/// with the default options, so dumps do not depend on the environment
-/// (D-264). With `CHEBY_DUMP_DIR` set, it writes the determinism dumps
-/// (module docs).
+/// with the default options, MIR and JIT, so dumps do not depend on the
+/// environment (D-264); any other build reads the MIR options with
+/// [`mir_options_from_env`]. With `CHEBY_DUMP_DIR` set, it writes the
+/// determinism dumps (module docs).
+///
+/// # Errors
+///
+/// An [`Error`] for an invalid MIR option in the environment, or an
+/// internal compiler error.
 #[expect(
     clippy::needless_pass_by_value,
     reason = "the signature of plan §4.5, which callers build in place"
@@ -102,22 +131,37 @@ pub(crate) fn build(
     sources: &SourceMap,
     roots: Roots<'_>,
     capture_clif: bool,
-) -> Result<Result<Built, Vec<Diagnostic>>, Ice> {
-    build_dumping(front, sources, &roots, capture_clif, dump_dir().as_deref())
+) -> Result<Result<Built, Vec<Diagnostic>>, Error> {
+    let options = if capture_clif {
+        MirOptions::default()
+    } else {
+        mir_options_from_env()?
+    };
+    Ok(build_dumping(
+        front,
+        sources,
+        &roots,
+        capture_clif,
+        options,
+        dump_dir().as_deref(),
+    )?)
 }
 
-/// [`build`], writing the determinism dumps to `dump` if it is given.
+/// [`build`] with the MIR options `mir`, writing the determinism dumps to
+/// `dump` if it is given.
 fn build_dumping(
     front: &Frontend,
     sources: &SourceMap,
     roots: &Roots<'_>,
     capture_clif: bool,
+    mir: MirOptions,
     dump: Option<&Path>,
 ) -> Result<Result<Built, Vec<Diagnostic>>, Ice> {
-    let lowered = lower(front, sources, roots)?;
+    let lowered = lower(front, sources, roots, mir)?;
     if let Some(dir) = dump {
         write_mir_dumps(dir, &lowered.units)?;
     }
+    let rc_ops = matches!(roots, Roots::AllFunctions).then(|| rc_ops(&lowered.units));
     let check = matches!(roots, Roots::Constants);
     let options = JitOptions {
         stub_unresolved: check,
@@ -174,7 +218,19 @@ fn build_dumping(
     if let Some(dir) = dump {
         write_const_dump(front, &jit, dir, &evaluated)?;
     }
-    Ok(Ok(Built { jit }))
+    Ok(Ok(Built { jit, rc_ops }))
+}
+
+/// The `dup` and `drop` statements of every function of `units`.
+fn rc_ops(units: &[MirModule]) -> u64 {
+    let count = units
+        .iter()
+        .flat_map(|unit| &unit.functions)
+        .flat_map(|function| function.blocks.iter())
+        .flat_map(|block| &block.stmts)
+        .filter(|stmt| matches!(stmt, Stmt::Dup(_) | Stmt::Drop(_)))
+        .count();
+    u64::try_from(count).unwrap_or(u64::MAX)
 }
 
 /// The directory of the determinism dumps, if `CHEBY_DUMP_DIR` names one.
@@ -282,17 +338,25 @@ struct Lowered {
 
 /// The MIR units that running `main` needs, after reference counting and
 /// validation: one per needed module in build order, then the entry unit,
-/// which also holds the thunks of the constants `main` reaches.
+/// which also holds the thunks of the constants `main` reaches. A dump for
+/// goldens, so it lowers with the default MIR options, whatever the
+/// environment says (D-264).
 pub(crate) fn lower_program(
     front: &Frontend,
     sources: &SourceMap,
     main: &thir::FnDef,
 ) -> Result<Vec<MirModule>, Ice> {
-    Ok(lower(front, sources, &Roots::Main(main))?.units)
+    Ok(lower(front, sources, &Roots::Main(main), MirOptions::default())?.units)
 }
 
-/// Lowers what `roots` reach.
-fn lower(front: &Frontend, sources: &SourceMap, roots: &Roots<'_>) -> Result<Lowered, Ice> {
+/// Lowers what `roots` reach, counting and checking each unit with the
+/// MIR options `mir`.
+fn lower(
+    front: &Frontend,
+    sources: &SourceMap,
+    roots: &Roots<'_>,
+    mir: MirOptions,
+) -> Result<Lowered, Ice> {
     let mut program = Program::new();
     for &module in &front.order {
         program.insert(module, &checked(front, module)?.thir);
@@ -354,7 +418,7 @@ fn lower(front: &Frontend, sources: &SourceMap, roots: &Roots<'_>) -> Result<Low
         .collect();
     let lowered: Vec<Result<ModuleUnits, Ice>> = jobs
         .par_iter()
-        .map(|&(module, selected)| lower_module(front, sources, &reach, module, selected))
+        .map(|&(module, selected)| lower_module(front, sources, &reach, module, selected, mir))
         .collect();
     let mut units = Vec::new();
     for result in lowered {
@@ -363,7 +427,7 @@ fn lower(front: &Frontend, sources: &SourceMap, roots: &Roots<'_>) -> Result<Low
         }
     }
     if !entries.is_empty() {
-        units.push(lower_entry_unit(front, sources, &entries)?);
+        units.push(lower_entry_unit(front, sources, &entries, mir)?);
     }
     Ok(Lowered { units, reach })
 }
@@ -373,13 +437,15 @@ fn lower(front: &Frontend, sources: &SourceMap, roots: &Roots<'_>) -> Result<Low
 type ModuleUnits = [Option<Result<MirModule, Ice>>; 2];
 
 /// Lowers `module`: its items that `reach` contains into its code unit,
-/// and its `selected` tests into its tests unit.
+/// and its `selected` tests into its tests unit, each counted and checked
+/// with the MIR options `mir`.
 fn lower_module(
     front: &Frontend,
     sources: &SourceMap,
     reach: &Reach,
     module: ModuleId,
     selected: Option<&Vec<&thir::TestDef>>,
+    mir: MirOptions,
 ) -> Result<ModuleUnits, Ice> {
     let checked = checked(front, module)?;
     let own = front
@@ -398,7 +464,7 @@ fn lower_module(
     };
     let counted = |lowered: Result<MirModule, Ice>| {
         lowered.and_then(|mut unit| {
-            count_and_check(&mut unit)?;
+            count_and_check_with(&mut unit, &mir)?;
             Ok(unit)
         })
     };
@@ -429,9 +495,20 @@ pub(crate) fn lower_every_root(
     sources: &SourceMap,
     main: Option<&thir::FnDef>,
 ) -> Result<Vec<MirModule>, Ice> {
+    lower_every_root_with(front, sources, main, MirOptions::default())
+}
+
+/// [`lower_every_root`] with the MIR options `mir`.
+#[cfg(test)]
+pub(crate) fn lower_every_root_with(
+    front: &Frontend,
+    sources: &SourceMap,
+    main: Option<&thir::FnDef>,
+    mir: MirOptions,
+) -> Result<Vec<MirModule>, Ice> {
     let mut units = Vec::new();
     if let Some(main) = main {
-        units.extend(lower(front, sources, &Roots::Main(main))?.units);
+        units.extend(lower(front, sources, &Roots::Main(main), mir)?.units);
     }
     let mut tests = Vec::new();
     for module in local_modules(front) {
@@ -442,9 +519,9 @@ pub(crate) fn lower_every_root(
         }
     }
     if !tests.is_empty() {
-        units.extend(lower(front, sources, &Roots::Tests(tests))?.units);
+        units.extend(lower(front, sources, &Roots::Tests(tests), mir)?.units);
     }
-    units.extend(lower(front, sources, &Roots::Constants)?.units);
+    units.extend(lower(front, sources, &Roots::Constants, mir)?.units);
     Ok(units)
 }
 
@@ -508,11 +585,13 @@ fn hooks_of(front: &Frontend, module: ModuleId) -> Result<Vec<DefId>, Ice> {
     Ok(out)
 }
 
-/// The entry unit with the thunks of `entries` (D-137, D-453).
+/// The entry unit with the thunks of `entries` (D-137, D-453), counted
+/// and checked with the MIR options `mir`.
 fn lower_entry_unit(
     front: &Frontend,
     sources: &SourceMap,
     entries: &[EntryRequest<'_>],
+    mir: MirOptions,
 ) -> Result<MirModule, Ice> {
     let mut all: Vec<ModuleId> = front.order.clone();
     all.sort_unstable();
@@ -527,7 +606,7 @@ fn lower_entry_unit(
         sources,
     };
     let mut unit = lower_entries(entries, &cx)?;
-    count_and_check(&mut unit)?;
+    count_and_check_with(&mut unit, &mir)?;
     Ok(unit)
 }
 
@@ -740,7 +819,13 @@ fn main() {
             .local_module(&cheby_package::ModulePath::root("app"))
             .unwrap();
         let main = front.main_of(module).unwrap();
-        let lowered = lower(&front, &out.sources, &Roots::Main(main)).unwrap();
+        let lowered = lower(
+            &front,
+            &out.sources,
+            &Roots::Main(main),
+            MirOptions::default(),
+        )
+        .unwrap();
         let infos = const_infos(&front, &out.sources, &lowered.reach).unwrap();
         let names: Vec<&str> = infos.iter().map(|i| &*i.name).collect();
         assert_eq!(names, ["table", "keys", "size"]);
@@ -910,8 +995,15 @@ fn main() {
         let mut texts = Vec::new();
         let mut seeds = Vec::new();
         for roots in [Roots::Constants, Roots::Main(main)] {
-            let Ok(built) = build_dumping(&front, &out.sources, &roots, false, None).unwrap()
-            else {
+            let Ok(built) = build_dumping(
+                &front,
+                &out.sources,
+                &roots,
+                false,
+                MirOptions::default(),
+                None,
+            )
+            .unwrap() else {
                 panic!("the package did not build");
             };
             texts.push(cheby_consteval::debug_texts(&built.jit, &consts).unwrap());
@@ -938,9 +1030,15 @@ fn main() {
         let dir = package("dumps", "", KEYS);
         let dumps = dir.join("dumps");
         let (front, out) = front(&dir);
-        let Ok(_) =
-            build_dumping(&front, &out.sources, &Roots::Constants, false, Some(&dumps)).unwrap()
-        else {
+        let Ok(_) = build_dumping(
+            &front,
+            &out.sources,
+            &Roots::Constants,
+            false,
+            MirOptions::default(),
+            Some(&dumps),
+        )
+        .unwrap() else {
             panic!("the package did not build");
         };
         let consts = std::fs::read_to_string(dumps.join("consts.txt")).unwrap();
@@ -958,9 +1056,15 @@ fn main() {
         let clif = std::fs::read_to_string(dumps.join("clif.txt")).unwrap();
         assert!(clif.contains("function"), "{clif}");
         // A second build overwrites the files: the same text.
-        let Ok(_) =
-            build_dumping(&front, &out.sources, &Roots::Constants, false, Some(&dumps)).unwrap()
-        else {
+        let Ok(_) = build_dumping(
+            &front,
+            &out.sources,
+            &Roots::Constants,
+            false,
+            MirOptions::default(),
+            Some(&dumps),
+        )
+        .unwrap() else {
             panic!("the package did not build");
         };
         assert_eq!(
@@ -990,9 +1094,15 @@ fn main() {
             Manifest::DEFAULT_MEMORY_LIMIT
         );
         let started = std::time::Instant::now();
-        let Ok(built) =
-            build_dumping(&front, &out.sources, &Roots::Constants, false, None).unwrap()
-        else {
+        let Ok(built) = build_dumping(
+            &front,
+            &out.sources,
+            &Roots::Constants,
+            false,
+            MirOptions::default(),
+            None,
+        )
+        .unwrap() else {
             panic!("007's constants did not evaluate");
         };
         let elapsed = started.elapsed();
@@ -1091,5 +1201,110 @@ fn main() {
         let checked = crate::check(&dir).unwrap();
         assert_eq!(codes(&checked), ["E0075"], "{}", checked.render());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// `bench_build` reports the size of what it built (D-718): the bytes
+    /// of machine code the JIT defined and the `dup` and `drop` statements
+    /// of the MIR, the same in two builds.
+    #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+    )]
+    fn bench_build_reports_code_bytes_and_rc_ops() {
+        let dir = package("bench_size", "", KEYS);
+        let first = crate::bench_build(&dir).unwrap();
+        let second = crate::bench_build(&dir).unwrap();
+        assert!(first.code_bytes > 0, "{first:?}");
+        assert!(first.rc_ops > 0, "{first:?}");
+        assert_eq!(
+            (first.code_bytes, first.rc_ops),
+            (second.code_bytes, second.rc_ops)
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// What [`every_root_dump`] gives.
+    enum RootDump {
+        /// The MIR of every root, as one dump.
+        Mir(String),
+        /// The codes of the front end's errors.
+        Rejected(String),
+    }
+
+    /// The MIR of every root of the package at `dir` (its `main`, its tests
+    /// on native, its constants) under `mir`.
+    fn every_root_dump(dir: &Path, mir: MirOptions) -> RootDump {
+        let mut out = CheckOutput::default();
+        let front = crate::front_end(dir, frontend::Mode::Build, &mut out).unwrap();
+        let Some((front, package)) = front.filter(|_| !out.has_errors()) else {
+            let mut found = codes(&out);
+            found.sort();
+            found.dedup();
+            return RootDump::Rejected(found.join(", "));
+        };
+        let main = front
+            .local_module(&cheby_package::ModulePath::root(&package))
+            .and_then(|m| front.main_of(m));
+        let units = lower_every_root_with(&front, &out.sources, main, mir).unwrap();
+        assert!(!units.is_empty(), "{}", dir.display());
+        let texts: Vec<String> = units.iter().map(|u| cheby_mir::dump(u).unwrap()).collect();
+        RootDump::Mir(texts.join("\n"))
+    }
+
+    /// `CHEBY_RC=naive` keeps M1's naive counting selectable (D-718). Until
+    /// the Perceus passes land both modes give the same MIR: every example
+    /// that passes the front end lowers its `main`, its tests and its
+    /// constants in both modes with identical dumps. The examples the
+    /// front end rejects today are skipped and printed with their codes.
+    #[test]
+    fn rc_modes_give_the_same_mir_for_every_example() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples");
+        let mut dirs: Vec<PathBuf> = std::fs::read_dir(&root)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|dir| dir.join("cheby.toml").is_file())
+            .collect();
+        dirs.sort();
+        let naive = MirOptions {
+            rc: cheby_mir::RcMode::Naive,
+            ..MirOptions::default()
+        };
+        let perceus = MirOptions {
+            rc: cheby_mir::RcMode::Perceus,
+            ..MirOptions::default()
+        };
+        let mut compared = 0_usize;
+        let mut skipped = Vec::new();
+        for dir in &dirs {
+            let name = dir.file_name().unwrap().to_string_lossy().into_owned();
+            match every_root_dump(dir, naive) {
+                RootDump::Mir(text) => {
+                    let RootDump::Mir(other) = every_root_dump(dir, perceus) else {
+                        panic!("{name}: the front end rejects it the second time");
+                    };
+                    assert!(
+                        text == other,
+                        "{name}: the MIR differs between the RC modes"
+                    );
+                    compared += 1;
+                }
+                RootDump::Rejected(codes) => {
+                    skipped.push(format!("{name} (the front end reports {codes})"));
+                }
+            }
+        }
+        eprintln!(
+            "rc_modes: {compared} examples compared, {} skipped:",
+            skipped.len()
+        );
+        for line in &skipped {
+            eprintln!("  {line}");
+        }
+        assert!(
+            compared * 2 > dirs.len(),
+            "only {compared} of {} examples compared",
+            dirs.len()
+        );
     }
 }

@@ -214,9 +214,19 @@ pub mod layout {
     pub const MAP_FIRST: LayoutId = 32;
     /// The last id of map and set nodes.
     pub const MAP_LAST: LayoutId = 39;
+    /// A channel's sending handle (`std::channel`, D-703).
+    pub const SENDER: LayoutId = 40;
+    /// A channel's receiving handle (D-703).
+    pub const RECEIVER: LayoutId = 41;
+    /// A fiber handle (`std::fiber`, D-703).
+    pub const FIBER: LayoutId = 42;
+    /// A scope handle (D-703).
+    pub const SCOPE: LayoutId = 43;
+    /// A selector node (D-695, D-703).
+    pub const SELECTOR: LayoutId = 44;
     /// The first id of the runtime-defined kinds registered with
-    /// `layout::register_builtin` (list and map nodes, then 40 to 63
-    /// reserved).
+    /// `layout::register_builtin` (list and map nodes, the handle kinds 40
+    /// to 44, then 45 to 63 reserved).
     pub const CUSTOM_FIRST: LayoutId = LIST_FIRST;
     /// The last id reserved for builtin collection nodes (F3, F4).
     pub const BUILTIN_RESERVED_END: LayoutId = 63;
@@ -281,6 +291,78 @@ pub const CTX_MODE: i32 = 8;
 /// `mode` bit: the entry is a constant evaluation, so externals and IO are
 /// forbidden (§4.5, §13.9).
 pub const CTX_MODE_CONST_EVAL: u32 = 1;
+
+/// Byte offset of the fiber control block's unwind flag, a `u32` (D-685):
+/// [`unwind_flag::NONE`], [`unwind_flag::PANIC`] or
+/// [`unwind_flag::CANCEL`]. Reserved whichever unwinding backend is chosen
+/// (D-696).
+pub const CTX_UNWIND: i32 = 12;
+
+/// The values of the unwind flag at [`CTX_UNWIND`] (D-685).
+pub mod unwind_flag {
+    /// No unwinding in flight.
+    pub const NONE: u32 = 0;
+    /// A panic is unwinding the fiber.
+    pub const PANIC: u32 = 1;
+    /// A cancellation is unwinding the fiber.
+    pub const CANCEL: u32 = 2;
+}
+
+/// `try_call` prototype only (D-696): the byte offset where a generated
+/// exit stub records its caller's frame pointer before it calls a C
+/// function. GAP(try-call-exit-record).
+pub const CTX_EXIT_FP: i32 = 16;
+
+/// `try_call` prototype only (D-696): the byte offset where a generated
+/// exit stub records its caller's return address before it calls a C
+/// function. GAP(try-call-exit-record).
+pub const CTX_EXIT_PC: i32 = 24;
+
+/// The unwinding backend generated code was compiled for (D-696, D-702),
+/// selected by the hidden `CHEBY_UNWIND` until the user's choice between
+/// the two prototypes. GAP(unwind-backend-switch).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+#[repr(u8)]
+pub enum UnwindBackend {
+    /// No unwinding: a panic abandons its entry, as in M1.
+    #[default]
+    Off = 0,
+    /// The return-flag prototype.
+    Flag = 1,
+    /// The `try_call` prototype.
+    TryCall = 2,
+}
+
+impl UnwindBackend {
+    /// The environment variable that selects the backend.
+    pub const ENV: &'static str = "CHEBY_UNWIND";
+
+    /// The backend named `"off"`, `"flag"` or `"try_call"`; anything else
+    /// is `None`.
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "off" => Some(Self::Off),
+            "flag" => Some(Self::Flag),
+            "try_call" => Some(Self::TryCall),
+            _ => None,
+        }
+    }
+
+    /// The name [`UnwindBackend::parse`] reads back.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Flag => "flag",
+            Self::TryCall => "try_call",
+        }
+    }
+}
+
+/// D-702's measurement switch: `CHEBY_UNWIND_EDGES=off` ignores the unwind
+/// edges.
+pub const UNWIND_EDGES_ENV: &str = "CHEBY_UNWIND_EDGES";
 
 /// Exit statuses of a program (§10.10, D-182). Entry thunks for `main`
 /// return [`status::SUCCESS`] or [`status::ERR`] as a raw `i64`.
@@ -492,6 +574,28 @@ pub mod sym {
     /// build (D-532): takes no `ctx` and panics `ForbiddenEffect` through
     /// the current entry.
     pub const UNRESOLVED: &str = "cheby_rt_unresolved";
+    /// `void cheby_rt_stack_slow_frame(ExecCtx *ctx, uint64_t location, uint64_t frame_size)`:
+    /// the slow path of a large function's entry check (D-679), like
+    /// [`STACK_SLOW`] but accounting for the caller's frame of
+    /// `frame_size` bytes plus 64 KiB. GAP(stack-slow-frame).
+    pub const STACK_SLOW_FRAME: &str = "cheby_rt_stack_slow_frame";
+    /// `uint64_t cheby_rt_scope_open(ExecCtx *ctx, bool timed, int64_t seconds, int64_t nanoseconds)`:
+    /// opens a scope for the `scope_run` intrinsic (D-693) and returns its
+    /// handle.
+    pub const SCOPE_OPEN: &str = "cheby_rt_scope_open";
+    /// `bool cheby_rt_scope_close(ExecCtx *ctx, uint64_t scope, bool unwound)`:
+    /// closes the scope `scope_run` opened (D-693); true when the body's
+    /// failure was caught there.
+    pub const SCOPE_CLOSE: &str = "cheby_rt_scope_close";
+    /// `void cheby_rt_unwind_resume(ExecCtx *ctx)`: the `try_call`
+    /// prototype's resume of an unwinding (D-696).
+    pub const UNWIND_RESUME: &str = "cheby_rt_unwind_resume";
+    /// Data: the static `Err(Nil)` the `scope_run` intrinsic returns on
+    /// failure (D-693).
+    pub const STATIC_ERR_NIL: &str = "cheby_rt_static_err_nil";
+    /// Std externals whose bodies the compiler generates (D-693). Never
+    /// registered.
+    pub const INTRINSICS: [&str; 1] = ["cheby_rt_scope_run"];
     /// `void cheby_io_print(uint64_t text)`, `text` borrowed.
     pub const IO_PRINT: &str = "cheby_io_print";
     /// `void cheby_io_println(uint64_t text)`, `text` borrowed.
@@ -560,7 +664,7 @@ pub mod sym {
     /// order `symbols()` lists them first. Kernels
     /// (`cheby_<module>_<function>`) follow in `symbols()`; they come from
     /// each kernel module's registration (plan §4.3.3).
-    pub const ALL: [&str; 56] = [
+    pub const ALL: [&str; 61] = [
         ALLOC,
         DUP,
         DROP,
@@ -594,6 +698,11 @@ pub mod sym {
         CONST_MISSING,
         UNRESOLVED,
         LIST_SLICE_OWNED,
+        STACK_SLOW_FRAME,
+        SCOPE_OPEN,
+        SCOPE_CLOSE,
+        UNWIND_RESUME,
+        STATIC_ERR_NIL,
         DESC_SYMBOLS[0],
         DESC_SYMBOLS[1],
         DESC_SYMBOLS[2],
@@ -781,7 +890,57 @@ mod tests {
             assert_eq!(sym::desc_symbol(name), Some(symbol));
         }
         assert_eq!(sym::desc_symbol("dyn"), None);
-        assert_eq!(sym::ALL.get(33..), Some(&sym::DESC_SYMBOLS[..]));
+        assert_eq!(sym::ALL.get(38..), Some(&sym::DESC_SYMBOLS[..]));
+        assert_eq!(
+            [
+                layout::SENDER,
+                layout::RECEIVER,
+                layout::FIBER,
+                layout::SCOPE,
+                layout::SELECTOR
+            ],
+            [40, 41, 42, 43, 44]
+        );
+        // Intrinsics get generated bodies and are never registered (D-693).
+        for intrinsic in sym::INTRINSICS {
+            assert!(intrinsic.starts_with("cheby_rt_"));
+            assert!(!sym::ALL.contains(&intrinsic));
+        }
+    }
+
+    #[test]
+    fn unwind_backends_parse_their_names() {
+        for backend in [
+            UnwindBackend::Off,
+            UnwindBackend::Flag,
+            UnwindBackend::TryCall,
+        ] {
+            assert_eq!(UnwindBackend::parse(backend.name()), Some(backend));
+        }
+        assert_eq!(UnwindBackend::default(), UnwindBackend::Off);
+        assert_eq!(
+            UnwindBackend::parse("try_call"),
+            Some(UnwindBackend::TryCall)
+        );
+        for bogus in ["", "on", "Flag", "try-call", " off"] {
+            assert_eq!(UnwindBackend::parse(bogus), None, "{bogus:?}");
+        }
+        assert_eq!(UnwindBackend::ENV, "CHEBY_UNWIND");
+        assert_eq!(UNWIND_EDGES_ENV, "CHEBY_UNWIND_EDGES");
+        assert_eq!(
+            (
+                CTX_STACK_LIMIT,
+                CTX_MODE,
+                CTX_UNWIND,
+                CTX_EXIT_FP,
+                CTX_EXIT_PC
+            ),
+            (0, 8, 12, 16, 24)
+        );
+        assert_eq!(
+            (unwind_flag::NONE, unwind_flag::PANIC, unwind_flag::CANCEL),
+            (0, 1, 2)
+        );
     }
 
     #[test]

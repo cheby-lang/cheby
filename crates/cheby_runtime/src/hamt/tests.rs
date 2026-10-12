@@ -23,7 +23,6 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use proptest::prelude::*;
 
-use super::compare::HASH_MASK;
 use super::kernels::*;
 use super::node::{BITS, Bitmap, Collection, Collision, MAX_SHIFT, Root, drop_word, dup_word};
 use super::ops;
@@ -130,10 +129,9 @@ fn balanced(f: impl FnOnce()) {
 
 /// Runs `f` with key hashes masked by `mask` (to force collisions).
 fn with_mask<R>(mask: u64, f: impl FnOnce() -> R) -> R {
-    let saved = HASH_MASK.with(Cell::get);
-    HASH_MASK.with(|cell| cell.set(mask));
+    let saved = crate::tls::set_hash_mask(mask);
     let result = f();
-    HASH_MASK.with(|cell| cell.set(saved));
+    crate::tls::set_hash_mask(saved);
     result
 }
 

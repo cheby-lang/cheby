@@ -13,12 +13,14 @@
 //! Kernels take no `ctx` (D-453), yet some need the running entry: a kernel
 //! that calls a Cheby closure ([`crate::callback`], D-526), maps and sets
 //! that take the entry's hash seed (D-538), and the stub bound to
-//! unresolved symbols (D-532). `run_entry` therefore records, on the
-//! entry's thread, the entry's context, its hash seed and its trampolines
-//! ([`current_ctx`], [`current_seed`], [`callbacks`]), and makes the
-//! entry's accounting domain the thread's current one. Generated code
-//! still passes `ctx` explicitly (ADR-0055). M2's fiber switching must
-//! update the record when it switches fibers.
+//! unresolved symbols (D-532). The entry's state therefore lives in its
+//! fiber control block (D-685): its hash seed, its trampolines, its
+//! constants and its accounting domain, read through thin readers of the
+//! current fiber ([`current_ctx`], [`current_seed`], [`callbacks`]).
+//! `run_entry` heap-allocates the block and makes it `tls.rs`'s current
+//! fiber on the entry's thread (D-686). Generated code still passes `ctx`
+//! explicitly (ADR-0055). M2's fiber switching updates the current fiber
+//! when it switches fibers.
 //!
 //! # Limits of constant evaluation
 //!
@@ -26,10 +28,10 @@
 //! [`ConstEvalLimits`] (D-195, D-536):
 //!
 //! - **Time.** The host waiting in [`run_entry`] is the watchdog: when the
-//!   deadline passes it calls [`ExecCtx::request_interrupt`] on the
-//!   entry's context, so the next function entry or tail call takes the
-//!   slow path of the stack check, which abandons the entry with
-//!   [`Limit::Time`]. A long single kernel call is not interrupted.
+//!   deadline passes it requests an interrupt with the reason
+//!   [`DEADLINE`](crate::ctx::reason::DEADLINE) on the entry's context
+//!   (D-688), so the next function entry or tail call takes the slow path
+//!   of the stack check, which abandons the entry with [`Limit::Time`]. A long single kernel call is not interrupted.
 //! - **Memory.** The budget is the live bytes of the entry's accounting
 //!   domain when the entry starts plus the limit, so only what this
 //!   evaluation keeps live counts: earlier constants, the objects of an
@@ -48,7 +50,6 @@
 //! [`Limit::Time`]: crate::consteval::Limit::Time
 //! [`Limit::Memory`]: crate::consteval::Limit::Memory
 
-use std::cell::Cell;
 use std::fmt;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
@@ -57,11 +58,12 @@ use std::time::{Duration, Instant};
 use crate::abi::status;
 use crate::alloc::{self, Domain, LEAK_CHECK_ENABLED};
 use crate::consteval::{self, ConstTable, Limit};
-use crate::ctx::ExecCtx;
+use crate::ctx::{ExecCtx, FiberInit};
 use crate::generic;
 use crate::io;
 use crate::panic::{PanicReport, stack_position};
 use crate::stats;
+use crate::tls;
 
 /// An entry thunk: generated with the platform C calling convention, it
 /// takes the context and returns a raw `i64` status (`main`, tests) or an
@@ -234,29 +236,6 @@ impl std::error::Error for RuntimeError {
     }
 }
 
-/// The record of the entry running on this thread.
-#[derive(Debug, Clone, Copy)]
-struct Current {
-    ctx: *mut ExecCtx,
-    seed: u64,
-    callbacks: Callbacks,
-    /// The entry's [`EntryConfig::consts`], or null. The entry's thread
-    /// holds the `Arc` for as long as it runs.
-    consts: *const ConstTable,
-}
-
-thread_local! {
-    static CURRENT: Cell<Option<Current>> = const { Cell::new(None) };
-    /// The memory budget of the constant evaluation running on this thread
-    /// (D-536): the most live bytes its domain may hold, that is the live
-    /// bytes when the entry started plus the limit, or `u64::MAX` for none. Kept apart from [`CURRENT`] so the
-    /// allocation path reads one word.
-    static BUDGET: Cell<u64> = const { Cell::new(u64::MAX) };
-    /// The stack position where the entry running on this thread started,
-    /// or 0 outside any entry.
-    static STACK_TOP: Cell<usize> = const { Cell::new(0) };
-}
-
 /// The memory kept between the frames a release leaves alone and the
 /// pages it gives back: a multiple of every page size in use.
 const RELEASE_MARGIN: usize = 64 << 10;
@@ -271,7 +250,7 @@ const RELEASE_MARGIN: usize = 64 << 10;
 /// margin on each side, which includes the thread's own bookkeeping above
 /// the entry's first frame, are kept.
 pub(crate) fn release_abandoned_stack() {
-    let top = STACK_TOP.try_with(Cell::get).unwrap_or(0);
+    let top = current_fiber().map_or(0, ExecCtx::stack_top);
     let here = stack_position();
     if top == 0 || here >= top {
         return;
@@ -318,85 +297,92 @@ fn release_pages(start: usize, len: usize) {
     let _ = (start, len);
 }
 
-fn current() -> Option<Current> {
-    CURRENT.try_with(Cell::get).ok().flatten()
+/// The control block of the fiber running on this thread, or `None`
+/// outside any entry (D-685, D-686). The block stays alive while its fiber
+/// runs; do not keep the reference past the entry, or across a fiber
+/// switch.
+pub(crate) fn current_fiber<'a>() -> Option<&'a ExecCtx> {
+    // SAFETY: `tls`'s current fiber is null or the control block of the
+    // fiber running on this thread: `spawn_entry` makes its heap-allocated
+    // block current only while the entry runs on this thread, and frees it
+    // only after clearing it (a panicked entry's block is never freed).
+    // The caller runs on this thread, inside the entry, and only shared
+    // references to the block are ever made.
+    unsafe { tls::current_fiber().as_ref() }
 }
 
 /// The execution context of the entry running on this thread, or `None`
 /// outside any entry.
 #[must_use]
 pub fn current_ctx() -> Option<*mut ExecCtx> {
-    current().map(|current| current.ctx)
+    let ctx = tls::current_fiber();
+    (!ctx.is_null()).then_some(ctx)
 }
 
 /// The hash seed new maps and sets take (D-538): the running constant's
 /// seed during constant evaluation, the per-process seed otherwise.
 #[must_use]
 pub fn current_seed() -> u64 {
-    current().map_or_else(generic::process_seed, |current| current.seed)
+    current_fiber().map_or_else(generic::process_seed, ExecCtx::seed)
 }
 
 /// The trampolines of the entry running on this thread, or `None` outside
 /// any entry.
 #[must_use]
 pub fn callbacks() -> Option<Callbacks> {
-    current().map(|current| current.callbacks)
+    current_fiber().map(ExecCtx::callbacks)
 }
 
 /// The constants of the build whose constant the running entry evaluates
 /// (D-535), or `None` outside constant evaluation. The table stays alive
 /// while the entry runs; do not keep the reference past the entry.
 pub(crate) fn current_consts<'a>() -> Option<&'a ConstTable> {
-    let consts = current()?.consts;
-    // SAFETY: a non-null pointer was taken from the `Arc` that the entry's
-    // thread holds until it ends or parks forever; the caller runs on that
-    // thread, inside the entry.
-    unsafe { consts.as_ref() }
+    current_fiber()?.consts()
 }
 
 /// Runs `f` with `seed` as the entry's hash seed, then restores the
 /// previous one: lazy forcing of a constant evaluates it under its own
 /// seed (plan §7.2). Outside any entry, `f` just runs.
 pub fn with_seed<R>(seed: u64, f: impl FnOnce() -> R) -> R {
-    let Some(saved) = current() else {
+    let Some(ctx) = current_fiber() else {
         return f();
     };
-    CURRENT
-        .try_with(|cell| cell.set(Some(Current { seed, ..saved })))
-        .ok();
+    let saved = ctx.replace_seed(seed);
     let result = f();
-    CURRENT
-        .try_with(|cell| {
-            if let Some(now) = cell.get() {
-                cell.set(Some(Current {
-                    seed: saved.seed,
-                    ..now
-                }));
-            }
-        })
-        .ok();
+    ctx.replace_seed(saved);
     result
 }
 
-/// The memory limit of constant evaluation (D-536): called before every
-/// allocation of `bytes` bytes, so a request over the budget never reaches
-/// the system allocator. When a budget is set and the domain's live bytes,
-/// plus the scratch buffers live on this thread ([`alloc::scratch`]), plus
-/// `bytes` would exceed it, the entry is abandoned with
-/// [`Limit::Memory`]. Outside constant evaluation it reads one
-/// thread-local word.
+/// The memory limit of constant evaluation (D-536) for the running fiber;
+/// see [`check_budget_of`].
 #[inline]
 pub(crate) fn check_budget(bytes: u64) {
-    let budget = BUDGET.try_with(Cell::get).unwrap_or(u64::MAX);
+    check_budget_of(current_fiber(), bytes);
+}
+
+/// The memory limit of constant evaluation (D-536): called before every
+/// allocation of `bytes` bytes by the fiber `ctx`, so a request over the
+/// budget never reaches the system allocator. When the fiber has a budget
+/// and its domain's live bytes, plus the scratch buffers the fiber holds
+/// ([`alloc::scratch`]), plus `bytes` would exceed it, the entry is
+/// abandoned with [`Limit::Memory`]. Outside constant evaluation it reads
+/// one word of the fiber's control block; host code has no budget.
+#[inline]
+pub(crate) fn check_budget_of(ctx: Option<&ExecCtx>, bytes: u64) {
+    let Some(ctx) = ctx else {
+        return;
+    };
+    let budget = ctx.budget();
     if budget == u64::MAX {
         return;
     }
-    let live = u64::try_from(alloc::current_live_bytes())
+    let scratch = ctx.scratch().0.load(std::sync::atomic::Ordering::Relaxed);
+    let live = u64::try_from(ctx.domain().live_bytes())
         .unwrap_or(0)
-        .saturating_add(alloc::scratch::live());
+        .saturating_add(scratch);
     if live.saturating_add(bytes) > budget {
         // No further check while the entry is abandoned.
-        BUDGET.try_with(|cell| cell.set(u64::MAX)).ok();
+        ctx.set_budget(u64::MAX);
         consteval::limit_exceeded(Limit::Memory);
     }
 }
@@ -419,17 +405,17 @@ impl Interrupter {
         *self.ctx.lock().unwrap_or_else(PoisonError::into_inner) = 0;
     }
 
-    /// Asks the entry to enter the runtime at its next function entry, if
-    /// it still runs.
-    fn interrupt(&self) {
+    /// Asks the entry to enter the runtime at its next function entry with
+    /// `reason` (D-688), if it still runs.
+    fn interrupt(&self, reason: u32) {
         let guard = self.ctx.lock().unwrap_or_else(PoisonError::into_inner);
         let ctx: *const ExecCtx = std::ptr::with_exposed_provenance(*guard);
         // SAFETY: a non-zero address is a live context: the entry's thread
         // clears it under this lock before the context is dropped, and a
-        // panicked entry's context is never dropped. Only the atomic stack
-        // limit is written, which any thread may do.
+        // panicked entry's context is never dropped. Only the atomic reason
+        // word and stack limit are written, which any thread may do.
         if let Some(ctx) = unsafe { ctx.as_ref() } {
-            ctx.request_interrupt();
+            crate::ctx::request(ctx, reason);
         }
         drop(guard);
     }
@@ -542,45 +528,50 @@ unsafe fn spawn_entry(
             let limit = top
                 .saturating_sub(stack_size)
                 .saturating_add(STACK_HEADROOM);
-            STACK_TOP.try_with(|cell| cell.set(top)).ok();
             let seed = match &mode {
                 EntryMode::ConstEval(limits) => limits.seed,
                 EntryMode::Run | EntryMode::Test | EntryMode::Repl => generic::process_seed(),
             };
-            alloc::set_current_domain(domain);
+            // Host code on this thread, outside the entry, charges the
+            // entry's domain too.
+            alloc::set_current_domain(Arc::clone(&domain));
             // D-617: the limit counts what this
             // evaluation adds to the domain, not what was live before it.
             let budget = memory_limit.map_or(u64::MAX, |limit| {
-                u64::try_from(alloc::current_live_bytes())
+                u64::try_from(domain.live_bytes())
                     .unwrap_or(0)
                     .saturating_add(limit)
                     .min(u64::MAX - 1)
             });
-            let mut ctx = ExecCtx::new(limit, mode, Some(sender.clone()));
-            // One pointer for every user of the context, so none
-            // invalidates another.
-            let ctx_ptr = &raw mut ctx;
-            entry_interrupter.set(ctx_ptr.cast_const());
-            BUDGET.try_with(|cell| cell.set(budget)).ok();
-            CURRENT
-                .try_with(|cell| {
-                    cell.set(Some(Current {
-                        ctx: ctx_ptr,
-                        seed,
-                        callbacks,
-                        consts: consts.as_ref().map_or(std::ptr::null(), Arc::as_ptr),
-                    }));
-                })
-                .ok();
-            // `ctx` outlives the call: a panic parks this thread forever,
-            // keeping the frame alive. The caller of `spawn_entry` keeps
-            // the code `body` runs valid until the host stops waiting,
-            // which is after this call returns.
-            let word = body(ctx_ptr);
+            // An isolated entry's control block lives on the heap (D-685).
+            let ctx = Box::into_raw(Box::new(ExecCtx::new(FiberInit {
+                soft_limit: limit,
+                stack_top: top,
+                entry_mode: mode,
+                outcome: Some(sender.clone()),
+                seed,
+                budget,
+                domain,
+                consts,
+                callbacks,
+            })));
+            entry_interrupter.set(ctx.cast_const());
+            // SAFETY: `ctx` is a live control block, freed below only after
+            // it stops being current; if the entry panics, this thread
+            // parks forever and the block is never freed.
+            unsafe { tls::set_current_fiber(ctx) };
+            // The caller of `spawn_entry` keeps the code `body` runs valid
+            // until the host stops waiting, which is after this call
+            // returns.
+            let word = body(ctx);
             entry_interrupter.clear();
-            BUDGET.try_with(|cell| cell.set(u64::MAX)).ok();
-            CURRENT.try_with(|cell| cell.set(None)).ok();
-            drop(consts);
+            // SAFETY: null is always allowed.
+            unsafe { tls::set_current_fiber(std::ptr::null_mut()) };
+            // SAFETY: allocated above by `Box::into_raw`; no longer current,
+            // and the watchdog no longer reaches it (cleared under its
+            // lock). Dropping it releases the entry's constants and domain
+            // before the host hears of the outcome.
+            drop(unsafe { Box::from_raw(ctx) });
             sender.send(EntryOutcome::Returned(word)).ok();
         })
         .map_err(RuntimeError::Spawn)?;
@@ -619,7 +610,7 @@ fn wait(
     loop {
         let now = Instant::now();
         let timeout = if now >= deadline {
-            interrupter.interrupt();
+            interrupter.interrupt(crate::ctx::reason::DEADLINE);
             REINTERRUPT
         } else {
             deadline.saturating_duration_since(now)
@@ -911,6 +902,55 @@ mod tests {
     fn an_interrupt_reaches_the_slow_path_and_continues() {
         let outcome = run_entry(interrupted, &EntryConfig::new(EntryMode::Test)).unwrap();
         assert_eq!(outcome, EntryOutcome::Returned(11));
+    }
+
+    /// The interrupts [`large_frames`] saw handled before it overflowed.
+    static LARGE_FRAME_INTERRUPTS: std::sync::atomic::AtomicU64 =
+        std::sync::atomic::AtomicU64::new(0);
+
+    unsafe extern "C" fn large_frames(ctx: *mut ExecCtx) -> u64 {
+        use crate::ctx::{reason, request};
+        use crate::panic::{LARGE_FRAME_MARGIN, cheby_rt_stack_slow_frame};
+        // SAFETY: `ctx` is the running entry's.
+        let context = unsafe { &*ctx };
+        // Every reason is taken; outside constant evaluation none has an
+        // effect yet, and the frame fits.
+        for reason in [
+            reason::SAFEPOINT,
+            reason::CANCEL,
+            reason::DEADLINE,
+            reason::YIELD,
+        ] {
+            request(context, reason);
+            // SAFETY: as above; no location.
+            unsafe { cheby_rt_stack_slow_frame(ctx, 0, 1 << 10) };
+        }
+        LARGE_FRAME_INTERRUPTS.store(context.interrupts(), Ordering::SeqCst);
+        let room = stack_position().saturating_sub(context.real_stack_limit());
+        let room = u64::try_from(room).unwrap();
+        let fits = room.saturating_sub(LARGE_FRAME_MARGIN + (16 << 10));
+        // SAFETY: as above.
+        unsafe { cheby_rt_stack_slow_frame(ctx, 0, fits) };
+        LARGE_FRAME_INTERRUPTS.store(context.interrupts().wrapping_add(100), Ordering::SeqCst);
+        // A frame that leaves less than 64 KiB above the limit overflows.
+        let overflows = room.saturating_sub(LARGE_FRAME_MARGIN);
+        // SAFETY: as above.
+        unsafe { cheby_rt_stack_slow_frame(ctx, 0, overflows) };
+        0
+    }
+
+    /// D-679, D-688: the slow path of a large function's entry check
+    /// handles interrupts like the ordinary one, and overflows when the
+    /// frame plus 64 KiB does not fit above the real limit.
+    #[test]
+    #[cfg_attr(miri, ignore = "compares real stack addresses")]
+    fn large_frames_overflow_when_frame_and_margin_do_not_fit() {
+        let outcome = run_entry(large_frames, &EntryConfig::new(EntryMode::Test)).unwrap();
+        let EntryOutcome::Panicked(report) = outcome else {
+            panic!("expected a stack overflow, got {outcome:?}");
+        };
+        assert_eq!(report.kind, PanicKind::StackOverflow);
+        assert_eq!(LARGE_FRAME_INTERRUPTS.load(Ordering::SeqCst), 104);
     }
 
     fn recurse(ctx: *mut ExecCtx, depth: u64) -> u64 {
@@ -1216,7 +1256,8 @@ mod tests {
 
     #[cfg(unix)]
     unsafe extern "C" fn touches_its_stack_then_panics(ctx: *mut ExecCtx) -> u64 {
-        TOUCHED[0].store(STACK_TOP.with(Cell::get), Ordering::SeqCst);
+        // SAFETY: `ctx` is the running entry's.
+        TOUCHED[0].store(unsafe { &*ctx }.stack_top(), Ordering::SeqCst);
         touch(ctx, 256)
     }
 

@@ -3,7 +3,8 @@
 //!
 //! A transcript `tests/repl/<name>.repl` is what a piped session prints,
 //! after an optional header of `// @decisions: …` lines that name the
-//! decisions it pins (`cheby_test_support::repl`, D-638):
+//! decisions it pins and a `// @milestone: …` line
+//! (`cheby_test_support::repl`, D-638, D-726):
 //!
 //! - a line that starts with `> ` or `. ` is an input line after its
 //!   prompt, which the REPL echoes;
@@ -23,8 +24,19 @@
 //! for `:reload` (§13.5.3).
 //!
 //! `CHEBY_BLESS=1` rewrites each transcript with the actual output, its
-//! `< ` lines kept after the same input lines. Every `cheby` runs with
-//! `CHEBY_RT_POISON=1`, like the other harnesses (plan §4.8).
+//! `< ` lines kept after the same input lines, except a transcript of a
+//! milestone that has not started, which must still fail. Every `cheby`
+//! runs with `CHEBY_RT_POISON=1`, like the other harnesses (plan §4.8).
+//!
+//! A header line `// @milestone: M<n>` names the milestone in which the
+//! transcript must pass, M1 by default (D-726). It is judged against
+//! `tests/milestone` as the UI harness judges a UI test (D-288), with the
+//! strict runs of D-544: `CHEBY_MILESTONE`, `CHEBY_PENDING=require` and
+//! `CHEBY_PENDING_ALLOW` (see `cheby_test_support::milestone`). A header
+//! that does not parse fails its transcript, whatever the milestone.
+//!
+//! `CHEBY_HARNESS_SCALE` multiplies the timeout (D-722,
+//! `cheby_test_support::process`).
 //!
 //! On Windows every transcript is ignored until M6 (D-545,
 //! `cheby_test_support::platform`).
@@ -34,7 +46,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 use std::time::{Duration, Instant};
 
-use cheby_test_support::milestone::POISON_ENV;
+use cheby_test_support::milestone::{Expectation, Milestone, POISON_ENV, Setting, Verdicts};
 use cheby_test_support::{
     bless_enabled, files_with_extension, golden, platform, process, repl, repo_root,
 };
@@ -42,15 +54,27 @@ use libtest_mimic::{Arguments, Failed, Trial};
 
 const CHEBY: &str = env!("CARGO_BIN_EXE_cheby");
 const TMP: &str = env!("CARGO_TARGET_TMPDIR");
+/// Before `CHEBY_HARNESS_SCALE` (D-722).
 const TIMEOUT: Duration = Duration::from_secs(60);
 
 fn main() -> ExitCode {
     let args = Arguments::from_args();
-    let dir = repo_root().join("tests").join("repl");
-    let transcripts = match files_with_extension(&dir, "repl") {
-        Ok(files) => files,
-        Err(e) => {
-            eprintln!("REPL harness: {}: {e}", dir.display());
+    let root = repo_root();
+    let dir = root.join("tests").join("repl");
+    let setup = Setting::read(&root).and_then(|m| {
+        let transcripts =
+            files_with_extension(&dir, "repl").map_err(|e| format!("{}: {e}", dir.display()))?;
+        Ok((
+            m,
+            transcripts,
+            Verdicts::from_env()?,
+            process::scaled_timeout(TIMEOUT)?,
+        ))
+    });
+    let (current, transcripts, verdicts, timeout) = match setup {
+        Ok(setup) => setup,
+        Err(message) => {
+            eprintln!("REPL harness: {message}");
             return ExitCode::from(2);
         }
     };
@@ -67,13 +91,40 @@ fn main() -> ExitCode {
                 .with_extension("")
                 .to_string_lossy()
                 .replace('\\', "/");
-            Trial::test(name, move || {
-                run_transcript(&path, bless).map_err(Failed::from)
+            // The milestone decides the trial's expectation, so the header
+            // is read now. A header that cannot be read fails the
+            // transcript as a test that must pass.
+            let header = read_header(&path);
+            let milestone = header
+                .as_ref()
+                .map_or(Milestone::M1, |header| header.milestone);
+            let expectation = if header.is_ok() {
+                current.expectation(milestone)
+            } else {
+                Expectation::Pass
+            };
+            let verdicts = verdicts.clone();
+            Trial::test(name.clone(), move || {
+                let result = header.and_then(|_| {
+                    run_transcript(&path, bless && expectation != Expectation::Fail, timeout)
+                });
+                verdicts
+                    .judge(&name, milestone, expectation, result)
+                    .map_err(Failed::from)
             })
+            .with_kind(expectation.kind())
             .with_ignored_flag(platform::runs_skipped())
         })
         .collect();
-    libtest_mimic::run(&args, trials).exit_code()
+    let conclusion = libtest_mimic::run(&args, trials);
+    verdicts.report("REPL transcripts");
+    conclusion.exit_code()
+}
+
+/// The header of the transcript at `path` (D-638, D-726).
+fn read_header(path: &Path) -> Result<repl::Header, String> {
+    let text = golden::read(path)?.ok_or_else(|| format!("{} is missing", path.display()))?;
+    repl::Header::of(&text).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 /// One transcript, read.
@@ -111,7 +162,7 @@ fn parse(text: &str) -> Transcript {
     t
 }
 
-fn run_transcript(path: &Path, bless: bool) -> Result<(), String> {
+fn run_transcript(path: &Path, bless: bool, timeout: Duration) -> Result<(), String> {
     let text = golden::read(path)?.ok_or_else(|| format!("{} is missing", path.display()))?;
     let (header, session) = repl::split(&text);
     repl::Header::parse(header)?;
@@ -124,7 +175,7 @@ fn run_transcript(path: &Path, bless: bool) -> Result<(), String> {
     if package.join("cheby.toml").is_file() {
         copy_dir(&package, &scratch)?;
     }
-    let result = run_repl(&scratch, &transcript.input);
+    let result = run_repl(&scratch, &transcript.input, timeout);
     let _ = std::fs::remove_dir_all(&scratch);
     let (status, output) = result?;
     // The prompt printed when the input ended.
@@ -212,7 +263,7 @@ fn copy_dir(from: &Path, to: &Path) -> Result<(), String> {
 
 /// Runs `cheby repl` in `cwd` with `input` on standard input and one pipe
 /// for standard output and standard error; returns its status and output.
-fn run_repl(cwd: &Path, input: &str) -> Result<(Option<i32>, String), String> {
+fn run_repl(cwd: &Path, input: &str, timeout: Duration) -> Result<(Option<i32>, String), String> {
     let (mut reader, writer) = std::io::pipe().map_err(|e| format!("cannot make a pipe: {e}"))?;
     let writer_err = writer
         .try_clone()
@@ -245,7 +296,7 @@ fn run_repl(cwd: &Path, input: &str) -> Result<(Option<i32>, String), String> {
     let status = loop {
         match child.try_wait().map_err(|e| e.to_string())? {
             Some(status) => break status.code(),
-            None if start.elapsed() > TIMEOUT => {
+            None if start.elapsed() > timeout => {
                 let _ = child.kill();
                 let _ = child.wait();
                 return Err("`cheby repl` timed out".to_owned());

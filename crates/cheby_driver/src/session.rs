@@ -64,8 +64,8 @@ use cheby_iface::{
 use cheby_jit::{Jit, JitError, JitOptions};
 use cheby_mir::reach::{Reach, Root, reachable_with_hooks};
 use cheby_mir::{
-    Defs, EntryKind, EntryRequest, LowerCx, MirModule, Program, count_and_check, foreign_sig,
-    lower_entries, lower_items, lower_tests,
+    Defs, EntryKind, EntryRequest, LowerCx, MirModule, MirOptions, Program, count_and_check_with,
+    foreign_sig, lower_entries, lower_items, lower_tests,
 };
 use cheby_package::{Manifest, ModulePath, Target, Targets};
 use cheby_resolve::repl::{Entered, SessionScope};
@@ -138,6 +138,9 @@ impl std::fmt::Debug for Start {
 /// A REPL session.
 pub struct Session {
     options: SessionOptions,
+    /// The MIR options every entry is lowered with, read once when the
+    /// session starts (`CHEBY_RC`, plan §2.3).
+    mir: MirOptions,
     sources: SourceMap,
     front: Frontend,
     repl: ReplSession,
@@ -223,8 +226,10 @@ impl Session {
     ///
     /// # Errors
     ///
-    /// An [`Error`] for failures that are not diagnostics.
+    /// An [`Error`] for failures that are not diagnostics, among them an
+    /// invalid MIR option in the environment (`CHEBY_RC`).
     pub fn start(dir: &Path, options: SessionOptions) -> Result<Start, Error> {
+        let mir = crate::backend::mir_options_from_env()?;
         let mut sources = SourceMap::new();
         let mut diagnostics = Vec::new();
         let root = find_package_root(dir);
@@ -264,6 +269,7 @@ impl Session {
         )?;
         let session = Self {
             options,
+            mir,
             sources,
             repl: ReplSession::new(SessionScope::new(synthetic_span, ast)),
             front,
@@ -1692,7 +1698,7 @@ impl Session {
                 sources: &self.sources,
             };
             let mut unit = lower_items(thir, &wanted, &cx)?;
-            count_and_check(&mut unit)?;
+            count_and_check_with(&mut unit, &self.mir)?;
             units.push(unit);
             items.extend(new);
             lowered_modules.push(module);
@@ -1745,7 +1751,7 @@ impl Session {
                 tests: checked.thir.tests.clone(),
             };
             let mut unit = lower_tests(&tests, &cx)?;
-            count_and_check(&mut unit)?;
+            count_and_check_with(&mut unit, &self.mir)?;
             units.push(unit);
         }
         let mut requests: Vec<EntryRequest<'_>> = Vec::new();
@@ -1761,7 +1767,7 @@ impl Session {
         }));
         if !requests.is_empty() {
             let mut unit = lower_entries(&requests, &cx)?;
-            count_and_check(&mut unit)?;
+            count_and_check_with(&mut unit, &self.mir)?;
             units.push(unit);
         }
         Ok(units)

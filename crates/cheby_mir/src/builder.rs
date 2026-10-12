@@ -16,6 +16,25 @@ struct OpenBlock {
     params: Vec<Local>,
     stmts: Vec<Stmt>,
     term: Option<Terminator>,
+    /// Sorted by statement index, at most one per index ([`Block::unwind`]).
+    unwind: Vec<(u32, BlockId)>,
+}
+
+impl OpenBlock {
+    /// Gives statement `i` (the terminator when `i == stmts.len()`) the
+    /// unwind edge `pad`, keeping the edges sorted.
+    fn add_unwind(&mut self, i: usize, pad: BlockId) -> Result<(), Ice> {
+        let at = u32::try_from(i).map_err(|_| Ice::new("too many MIR statements in a block"))?;
+        match self.unwind.binary_search_by_key(&at, |&(n, _)| n) {
+            Ok(_) => Err(Ice::new(format!(
+                "statement {i} already has an unwind edge"
+            ))),
+            Err(pos) => {
+                self.unwind.insert(pos, (at, pad));
+                Ok(())
+            }
+        }
+    }
 }
 
 /// Builds a [`Function`]. Statements go to the current block; a block is
@@ -34,6 +53,8 @@ pub struct FunctionBuilder {
     /// Lookup only; numbering is first-use order.
     string_ids: FxHashMap<Box<str>, StrId>,
     entry_loc: Option<StrId>,
+    entry_unwind: Option<BlockId>,
+    precounted: bool,
     current: BlockId,
 }
 
@@ -57,6 +78,8 @@ impl FunctionBuilder {
             strings: IndexVec::new(),
             string_ids: FxHashMap::default(),
             entry_loc: None,
+            entry_unwind: None,
+            precounted: false,
             current,
         })
     }
@@ -251,6 +274,67 @@ impl FunctionBuilder {
         Ok(())
     }
 
+    /// Gives the statement pushed last in the current block the unwind
+    /// edge `pad` (D-698).
+    ///
+    /// # Errors
+    ///
+    /// An [`Ice`] if the current block has no statement, is already
+    /// terminated, or its last statement already has an edge.
+    pub fn unwind_last(&mut self, pad: BlockId) -> Result<(), Ice> {
+        let current = self.current;
+        let block = self.open(current)?;
+        if block.term.is_some() {
+            return Err(Ice::new(format!(
+                "an unwind edge for a statement of {current:?}, which is terminated"
+            )));
+        }
+        let Some(last) = block.stmts.len().checked_sub(1) else {
+            return Err(Ice::new(format!(
+                "an unwind edge in {current:?}, which has no statement"
+            )));
+        };
+        block.add_unwind(last, pad)
+    }
+
+    /// Gives the terminator of `block`, once set, the unwind edge `pad`
+    /// (D-698).
+    ///
+    /// # Errors
+    ///
+    /// An [`Ice`] if `block` is unknown, not yet terminated, or its
+    /// terminator already has an edge.
+    pub fn unwind_terminator(&mut self, block: BlockId, pad: BlockId) -> Result<(), Ice> {
+        let open = self.open(block)?;
+        if open.term.is_none() {
+            return Err(Ice::new(format!(
+                "an unwind edge for the terminator of {block:?}, which has none yet"
+            )));
+        }
+        let at = open.stmts.len();
+        open.add_unwind(at, pad)
+    }
+
+    /// Sets the pad the function-entry check unwinds to (D-698).
+    pub const fn set_entry_unwind(&mut self, pad: BlockId) {
+        self.entry_unwind = Some(pad);
+    }
+
+    /// Marks the body as generated with its counts in place (D-693):
+    /// the RC pass leaves it alone. GAP(intrinsic-precounted).
+    pub const fn set_precounted(&mut self) {
+        self.precounted = true;
+    }
+
+    /// Pushes [`Stmt::ClearUnwind`] (D-693).
+    ///
+    /// # Errors
+    ///
+    /// An [`Ice`] if the current block is terminated.
+    pub fn clear_unwind(&mut self) -> Result<(), Ice> {
+        self.push(Stmt::ClearUnwind)
+    }
+
     /// The id of `text` in the string table, adding it on first use.
     ///
     /// # Errors
@@ -291,6 +375,7 @@ impl FunctionBuilder {
                 params: open.params,
                 stmts: open.stmts,
                 term,
+                unwind: open.unwind,
             })?;
         }
         Ok(Function {
@@ -303,6 +388,8 @@ impl FunctionBuilder {
             span: self.span,
             strings: self.strings,
             entry_loc: self.entry_loc,
+            entry_unwind: self.entry_unwind,
+            precounted: self.precounted,
         })
     }
 }

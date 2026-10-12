@@ -1,7 +1,8 @@
 //! Shared code for the conformance, UI and REPL harnesses and for `xtask`:
 //! milestones and expected-fail tracking, example, UI-test and transcript
-//! metadata, golden files, the platforms that skip run trials (D-545), and
-//! running commands with a timeout (docs/plan/testing.md).
+//! metadata, golden files, the platforms that skip run trials (D-545),
+//! running commands with a timeout scaled by `CHEBY_HARNESS_SCALE`, and the
+//! thread variants of the conformance trials (D-722, docs/plan/testing.md).
 
 pub mod decisions;
 pub mod example;
@@ -10,6 +11,7 @@ pub mod milestone;
 pub mod platform;
 pub mod process;
 pub mod repl;
+pub mod threads;
 pub mod ui;
 
 use std::path::{Path, PathBuf};

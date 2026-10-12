@@ -43,12 +43,20 @@ pub fn insert_module(module: &mut MirModule) -> Result<(), Ice> {
     Ok(())
 }
 
-/// Inserts `dup` and `drop` into `f`.
+/// Inserts `dup` and `drop` into `f`. A `precounted` body (D-693) already
+/// has its counts and is left alone. GAP(intrinsic-precounted).
 ///
 /// # Errors
 ///
-/// An [`Ice`] if `f` already has `dup` or `drop`, or is malformed.
+/// An [`Ice`] if `f` already has `dup` or `drop`, has unwind edges
+/// (they come after this pass, D-698), or is malformed.
 pub fn insert(f: &mut Function) -> Result<(), Ice> {
+    if f.precounted {
+        return Ok(());
+    }
+    if f.entry_unwind.is_some() || f.blocks.iter().any(|b| !b.unwind.is_empty()) {
+        return Err(Ice::new("unwind edges before reference counting"));
+    }
     if f.blocks
         .iter()
         .flat_map(|b| &b.stmts)
@@ -79,6 +87,8 @@ pub fn insert(f: &mut Function) -> Result<(), Ice> {
                 Stmt::Dup(_) | Stmt::Drop(_) => {
                     return Err(Ice::new("reference counts inserted twice"));
                 }
+                // Touches no local (D-693).
+                Stmt::ClearUnwind => Vec::new(),
             };
             let (before, mut post) = place(f, &uses, after)?;
             stmts.extend(before);
@@ -121,12 +131,15 @@ pub fn insert(f: &mut Function) -> Result<(), Ice> {
                     }
                 }
             }
-            Terminator::Panic { .. } | Terminator::Unreachable => {}
+            // Like a panic: what is live leaks until the unwind pass adds
+            // pads (D-698).
+            Terminator::Panic { .. } | Terminator::Unreachable | Terminator::Resume => {}
         }
         new_blocks.push(Block {
             params: block.params.clone(),
             stmts,
             term: block.term.clone(),
+            unwind: Vec::new(),
         });
     }
     place_edge_drops(f, new_blocks, edge_drops)
@@ -233,6 +246,7 @@ fn place_edge_drops(
                     target: to,
                     args: Vec::new(),
                 },
+                unwind: Vec::new(),
             });
             blocks
                 .get_mut(from.index())

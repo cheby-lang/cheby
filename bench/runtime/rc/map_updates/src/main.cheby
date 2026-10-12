@@ -1,0 +1,60 @@
+//! Runtime benchmark of the RC group: inserts into and updates of a map.
+//!
+//! The keys come from a fixed sequence that repeats keys often, so most
+//! steps update an entry that exists and the rest insert one. Every few
+//! steps an entry is removed. The map is held by nothing but the loop,
+//! so the time goes to copying or updating its nodes in place. The
+//! number of steps is the first program argument, and `main` prints a
+//! checksum that does not depend on the map's iteration order.
+
+import std::env
+import std::int
+import std::io
+import std::map
+
+/// The number of steps when no argument is given.
+const default_size: Int = 4_000_000
+
+/// How many different keys there are.
+const keys: Int = 65_537
+
+/// Keeps the checksum small.
+const modulus: Int = 1_000_000_007
+
+fn main() {
+  let steps = size(env::args())
+  fn run(step, counts) {
+    case {
+      step == steps => counts
+      step % 7 == 6 => run(step + 1, map::remove(counts, step * 31 % keys))
+      _ => run(step + 1, map::upsert(counts, step * 7_919 % keys, bump))
+    }
+  }
+  let counts = run(0, map::new())
+  let entries = map::size(counts)
+  let sum = map::fold(counts, 0, fn(total, key, count) {
+    (total + key * count) % modulus
+  })
+  let checksum = (sum * 31 + entries) % modulus
+  io::println("size: {steps}")
+  io::println("checksum: {checksum}")
+}
+
+/// The size from the first program argument, or `default_size`.
+fn size(args: List<String>) -> Int {
+  case args {
+    [] => default_size
+    [first, ..] => {
+      let assert Ok(n) = int::parse(first)
+      n
+    }
+  }
+}
+
+/// One more than the count so far.
+fn bump(count: Option<Int>) -> Int {
+  case count {
+    None => 1
+    Some(n) => n + 1
+  }
+}

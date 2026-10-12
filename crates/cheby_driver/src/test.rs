@@ -658,12 +658,13 @@ fn not_built_module(path: String, selected: &[&thir::TestDef], codes: String) ->
 }
 
 /// Builds `roots`; a build that fails gives its distinct codes, sorted
-/// and joined with `, `, or the internal compiler error's message.
+/// and joined with `, `, or the message of the error that stopped it (an
+/// internal compiler error's starts with `internal compiler error: `).
 fn build_codes(front: &Frontend, sources: &SourceMap, roots: Roots<'_>) -> Result<Jit, String> {
     match backend::build(front, sources, roots, false) {
         Ok(Ok(built)) => Ok(built.jit),
         Ok(Err(diagnostics)) => Err(join_codes(&diagnostics)),
-        Err(ice) => Err(format!("internal compiler error: {}", ice.message())),
+        Err(e) => Err(e.message().to_owned()),
     }
 }
 

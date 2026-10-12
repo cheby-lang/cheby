@@ -110,7 +110,9 @@ pub struct Decls {
     funcs: FxHashMap<FnKey, FuncDecl>,
     slots: FxHashMap<SlotKey, SlotDecl>,
     strings: FxHashMap<(FnKey, StrId), DataId>,
-    runtime: Vec<(FuncId, Signature)>,
+    /// By [`RuntimeFunc::index`]; `None` for a function declared on demand
+    /// ([`RuntimeFunc::on_demand`]) that no unit has used yet.
+    runtime: Vec<Option<(FuncId, Signature)>>,
     static_data: FxHashMap<&'static str, DataId>,
     foreign: FxHashMap<Box<str>, ForeignDecl>,
     test_ordinals: FxHashMap<DefId, u32>,
@@ -500,8 +502,14 @@ impl Decls {
     pub(crate) fn runtime(&self, f: RuntimeFunc) -> Result<(FuncId, &Signature), CodegenError> {
         self.runtime
             .get(f.index())
+            .and_then(Option::as_ref)
             .map(|(id, s)| (*id, s))
-            .ok_or_else(|| CodegenError::ice("runtime functions were not declared"))
+            .ok_or_else(|| {
+                CodegenError::ice(format!(
+                    "the runtime function `{}` was not declared",
+                    f.symbol()
+                ))
+            })
     }
 
     pub(crate) fn static_data(&self, symbol: &str) -> Result<DataId, CodegenError> {
@@ -623,6 +631,9 @@ impl Decls {
             }
         }
         for unit in mirs {
+            self.declare_unit_runtime(module, unit)?;
+        }
+        for unit in mirs {
             for desc in &unit.layouts {
                 self.declare_layout(module, unit, desc)?;
             }
@@ -660,18 +671,71 @@ impl Decls {
         if !self.runtime.is_empty() {
             return Ok(());
         }
+        self.runtime = vec![None; RuntimeFunc::ALL.len()];
         for f in RuntimeFunc::ALL {
-            let (params, ret) = f.ctypes();
-            let signature = sig::c_signature(params, ret, self.call_conv);
-            let id = module
-                .declare_function(f.symbol(), Linkage::Import, &signature)
-                .map_err(|e| CodegenError::module(&e))?;
-            self.names.insert((0, id.as_u32()), f.symbol().to_owned());
-            self.runtime.push((id, signature));
+            if !f.on_demand() {
+                self.declare_runtime_func(module, f)?;
+            }
         }
         for symbol in STATIC_DATA {
             let id = self.data(module, symbol, Linkage::Import, false)?;
             self.static_data.insert(symbol, id);
+        }
+        Ok(())
+    }
+
+    /// Declares the runtime function `f` if it is not declared yet: the
+    /// eager ones once per session, the on-demand ones when a unit first
+    /// uses them ([`RuntimeFunc::on_demand`]).
+    pub(crate) fn declare_runtime_func<M: Module>(
+        &mut self,
+        module: &mut M,
+        f: RuntimeFunc,
+    ) -> Result<(), CodegenError> {
+        let slot = self
+            .runtime
+            .get(f.index())
+            .ok_or_else(|| CodegenError::ice("runtime functions were not declared"))?;
+        if slot.is_some() {
+            return Ok(());
+        }
+        let (params, ret) = f.ctypes();
+        let signature = sig::c_signature(params, ret, self.call_conv);
+        let id = module
+            .declare_function(f.symbol(), Linkage::Import, &signature)
+            .map_err(|e| CodegenError::module(&e))?;
+        self.names.insert((0, id.as_u32()), f.symbol().to_owned());
+        let slot = self
+            .runtime
+            .get_mut(f.index())
+            .ok_or_else(|| CodegenError::ice("runtime functions were not declared"))?;
+        *slot = Some((id, signature));
+        Ok(())
+    }
+
+    /// Declares the on-demand runtime functions the helpers of `unit`'s
+    /// code call (D-693).
+    fn declare_unit_runtime<M: Module>(
+        &mut self,
+        module: &mut M,
+        unit: &MirModule,
+    ) -> Result<(), CodegenError> {
+        for function in &unit.functions {
+            for block in &function.blocks {
+                for stmt in &block.stmts {
+                    if let Stmt::Assign {
+                        value: Rvalue::CallRuntime { func, .. },
+                        ..
+                    }
+                    | Stmt::Eval(Rvalue::CallRuntime { func, .. }) = stmt
+                    {
+                        let (f, _) = RuntimeFunc::of(*func);
+                        if f.on_demand() {
+                            self.declare_runtime_func(module, f)?;
+                        }
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -1113,8 +1177,9 @@ impl Decls {
             Const::Static(id) => StaticWord::Data(nth(statics, id.as_u32(), "static")?),
             Const::Str(id) => StaticWord::Data(nth(strings, id.as_u32(), "string")?),
             Const::BuiltinDesc(desc) => StaticWord::Data(self.builtin_desc(*desc)?),
+            Const::ErrNil => StaticWord::Data(self.static_data(abi::sym::STATIC_ERR_NIL)?),
             Const::Code(key) => StaticWord::Code(self.func(*key)?.id),
-            Const::Int(_) | Const::Float(_) | Const::Bool(_) | Const::Sized { .. } => {
+            Const::Int(_) | Const::Float(_) | Const::Bool(_) | Const::Sized { .. } | Const::Ctx => {
                 return Err(CodegenError::ice(format!(
                     "a static object holds the raw constant {field:?}"
                 )));
@@ -1202,7 +1267,7 @@ fn terminator_consts(term: &Terminator) -> Vec<&Const> {
         Terminator::Branch { cond, .. } => vec![cond],
         Terminator::Switch { on, .. } => vec![on],
         Terminator::Panic { message, .. } => message.iter().collect(),
-        Terminator::Unreachable => Vec::new(),
+        Terminator::Unreachable | Terminator::Resume => Vec::new(),
     };
     ops.into_iter()
         .filter_map(|op| match op {

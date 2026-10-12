@@ -34,12 +34,6 @@ use crate::panic::panic_current;
 const MARK_MAP: u8 = 16;
 const MARK_SET: u8 = 17;
 
-#[cfg(test)]
-thread_local! {
-    /// Tests force collisions by masking key hashes.
-    pub(super) static HASH_MASK: std::cell::Cell<u64> = const { std::cell::Cell::new(u64::MAX) };
-}
-
 /// The hash of a borrowed key under a collection's seed. A key that holds
 /// a function panics with `EqualityOnFunction` (D-233).
 pub(super) fn key_hash(key: Word, seed: u64) -> u64 {
@@ -50,9 +44,11 @@ pub(super) fn key_hash(key: Word, seed: u64) -> u64 {
     }
 }
 
+/// Tests force collisions by masking key hashes, with a mask kept in
+/// `tls.rs` (D-686).
 #[cfg(test)]
 fn masked(hash: u64) -> u64 {
-    hash & HASH_MASK.with(std::cell::Cell::get)
+    hash & crate::tls::hash_mask()
 }
 
 #[cfg(not(test))]

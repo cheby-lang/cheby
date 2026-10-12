@@ -3,7 +3,7 @@
 //!
 //! Every [`crate::alloc::Domain`] holds a [`Stats`]. The operations that
 //! may update a value in place record an [`Event`] in the current
-//! thread's domain: whether a list push, a list update, a string append,
+//! domain (the running fiber's, or a host thread's): whether a list push, a list update, a string append,
 //! a string or bytes kernel, or a map or set update changed its unique
 //! argument in place, grew it (unique, but out of room) or copied it
 //! (shared). Tests read the counters of their own domain, so they may run
@@ -16,6 +16,8 @@ use std::fmt::Write as _;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
+
+use crossbeam_utils::CachePadded;
 
 /// An event the runtime counts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,18 +98,38 @@ impl Event {
     }
 }
 
-/// The counters of one accounting domain.
-#[derive(Debug, Default)]
+/// The counters of one accounting domain, sharded like the domain's own
+/// (D-691): an event is counted in the shard of the thread that records
+/// it, and reading sums the shards.
+#[derive(Debug)]
 pub struct Stats {
-    counts: [AtomicU64; Event::ALL.len()],
+    shards: Box<[CachePadded<[AtomicU64; Event::ALL.len()]>]>,
     entries: AtomicU64,
     entry_nanos: AtomicU64,
 }
 
+impl Default for Stats {
+    fn default() -> Self {
+        Self {
+            shards: (0..crate::alloc::shard_count())
+                .map(|_| CachePadded::new(std::array::from_fn(|_| AtomicU64::new(0))))
+                .collect(),
+            entries: AtomicU64::new(0),
+            entry_nanos: AtomicU64::new(0),
+        }
+    }
+}
+
 impl Stats {
-    /// Adds one to `event`'s counter.
-    pub(crate) fn record(&self, event: Event) {
-        if let Some(count) = self.counts.get(event.index()) {
+    /// Adds one to `event`'s counter in shard `shard` (reduced modulo the
+    /// number of shards, a power of two).
+    pub(crate) fn record(&self, shard: usize, event: Event) {
+        let mask = self.shards.len().saturating_sub(1);
+        if let Some(count) = self
+            .shards
+            .get(shard & mask)
+            .and_then(|counts| counts.get(event.index()))
+        {
             count.fetch_add(1, Ordering::Relaxed);
         }
     }
@@ -132,15 +154,18 @@ impl Stats {
     /// How often `event` happened.
     #[must_use]
     pub fn count(&self, event: Event) -> u64 {
-        self.counts
-            .get(event.index())
-            .map_or(0, |count| count.load(Ordering::Relaxed))
+        self.shards
+            .iter()
+            .filter_map(|counts| counts.get(event.index()))
+            .map(|count| count.load(Ordering::Relaxed))
+            .fold(0, u64::wrapping_add)
     }
 }
 
-/// Records `event` in the current thread's accounting domain.
+/// Records `event` in the current accounting domain: the running fiber's,
+/// or a host thread's.
 pub(crate) fn record(event: Event) {
-    crate::alloc::with_current_stats(|stats| stats.record(event));
+    crate::alloc::record_event(event);
 }
 
 /// Whether `CHEBY_RT_STATS=1` asks `cheby run` for the counters (read once
@@ -277,7 +302,7 @@ mod tests {
     #[test]
     fn the_report_lists_every_counter() {
         let stats = Stats::default();
-        stats.record(Event::StrAppendGrown);
+        stats.record(0, Event::StrAppendGrown);
         stats.add_entry(Duration::from_micros(2_000));
         stats.add_entry(Duration::from_micros(12_345));
         let text = report(Duration::from_micros(12_345), 640, &stats);

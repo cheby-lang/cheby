@@ -1,0 +1,12 @@
+// @milestone: M2
+// @decisions: D-672, D-692, D-726
+> import std::channel
+> let (tx, rx) = channel::new::<Int>(2)
+> channel::send(tx, 1)
+Ok(Nil) : Result<Nil, Int>
+> channel::send(tx, 2)
+Ok(Nil) : Result<Nil, Int>
+> channel::receive(rx)
+Ok(1) : Result<Int, Nil>
+> channel::receive(rx)
+Ok(2) : Result<Int, Nil>

@@ -78,6 +78,8 @@ fn function(
         span: span(),
         strings: IndexVec::from_raw(table).unwrap(),
         entry_loc: (abi == Abi::Cheby).then(|| StrId::from_u32(0)),
+        entry_unwind: None,
+        precounted: false,
     }
 }
 
@@ -98,6 +100,7 @@ fn block(stmts: Vec<Stmt>, term: Terminator) -> Block {
         params: Vec::new(),
         stmts,
         term,
+        unwind: Vec::new(),
     }
 }
 
@@ -1088,3 +1091,4 @@ mod objects;
 mod repl;
 mod scalars;
 mod special;
+mod unwind_ir;

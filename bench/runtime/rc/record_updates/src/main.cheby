@@ -1,0 +1,84 @@
+//! Runtime benchmark of the RC group: updates of records.
+//!
+//! A thousand particles move in a box and bounce off its walls. Each
+//! step builds every particle again with a record update, so the time
+//! goes to copying or reusing records and to their reference counts. The
+//! number of steps is the first program argument, and `main` prints a
+//! checksum of where the particles end up.
+
+import std::env
+import std::int
+import std::io
+import std::list
+
+/// The number of steps when no argument is given.
+const default_size: Int = 15_000
+
+/// How many particles move.
+const particles: Int = 1_000
+
+/// The box spans 0 to `side` on both axes.
+const side: Int = 10_000
+
+/// Keeps the checksum small.
+const modulus: Int = 1_000_000_007
+
+/// A particle: its position, its velocity, and how often it hit a wall.
+type Particle {
+  x: Int,
+  y: Int,
+  dx: Int,
+  dy: Int,
+  bounces: Int,
+}
+
+fn main() {
+  let steps = size(env::args())
+  let start = list::range(0, particles) |> list::map(_, spawn)
+  fn run(step, all) {
+    case {
+      step == steps => all
+      _ => run(step + 1, list::map(all, move))
+    }
+  }
+  let checksum = run(0, start) |> list::fold(_, 0, add_to_checksum)
+  io::println("size: {steps}")
+  io::println("checksum: {checksum}")
+}
+
+/// The size from the first program argument, or `default_size`.
+fn size(args: List<String>) -> Int {
+  case args {
+    [] => default_size
+    [first, ..] => {
+      let assert Ok(n) = int::parse(first)
+      n
+    }
+  }
+}
+
+/// The particle number `n`, placed and aimed by its number.
+fn spawn(n: Int) -> Particle {
+  Particle {
+    x: n * 7 % side,
+    y: n * 13 % side,
+    dx: n % 17 - 8,
+    dy: n % 11 - 5,
+    bounces: 0,
+  }
+}
+
+/// Moves `p` one step, turning it around at a wall.
+fn move(p: Particle) -> Particle {
+  let x = p.x + p.dx
+  let y = p.y + p.dy
+  case {
+    x < 0 || x > side => Particle { ..p, dx: -p.dx, bounces: p.bounces + 1 }
+    y < 0 || y > side => Particle { ..p, dy: -p.dy, bounces: p.bounces + 1 }
+    _ => Particle { ..p, x: x, y: y }
+  }
+}
+
+fn add_to_checksum(total: Int, p: Particle) -> Int {
+  (total * 31 + p.x * 7 + p.y * 3 + p.bounces) % modulus
+}

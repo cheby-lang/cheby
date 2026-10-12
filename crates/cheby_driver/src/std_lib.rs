@@ -162,6 +162,18 @@ pub const PLANNED_STD_MODULES: &[&str] = &[
     "time",
 ];
 
+/// Spec tests of shipped modules that `std/` may lack while a milestone is
+/// in progress (D-728), as `(module, test name, milestone)`: the module's
+/// path under `std`, the name of a `test` block of its page in
+/// `docs/stdlib/`, and the milestone, such as `"M2"`. A module may ship
+/// before all its behavior exists. The spec-test guard, a unit test of
+/// this module, accepts a listed test as absent while its milestone is the
+/// one in effect (`tests/milestone`, or `CHEBY_MILESTONE`, D-544). Past
+/// that milestone the entry fails the guard, and so does an entry whose
+/// test is in `std/`. Empty: every spec test of a shipped module is in
+/// `std/`.
+pub const PENDING_SPEC_TESTS: &[(&str, &str, &str)] = &[];
+
 /// The shipped module at `path` (under `std`).
 #[must_use]
 pub fn find(path: &str) -> Option<&'static StdModule> {
@@ -354,11 +366,105 @@ mod tests {
             .collect()
     }
 
+    /// A milestone `M0` to `M6` as its number.
+    fn milestone_number(text: &str) -> Result<u8, String> {
+        let text = text.trim();
+        match text.as_bytes() {
+            [b'M', digit @ b'0'..=b'6'] => Ok(digit.saturating_sub(b'0')),
+            _ => Err(format!("unknown milestone `{text}`, expected M0 to M6")),
+        }
+    }
+
+    /// The milestone in effect: `CHEBY_MILESTONE` when it is set and not
+    /// empty, `tests/milestone` otherwise, as the harnesses read it (D-544,
+    /// D-567, `cheby_test_support::milestone::in_effect`).
+    fn milestone_in_effect() -> u8 {
+        if let Some(value) = std::env::var_os("CHEBY_MILESTONE") {
+            let value = value.into_string().unwrap();
+            if !value.trim().is_empty() {
+                return milestone_number(&value)
+                    .map_err(|e| format!("CHEBY_MILESTONE: {e}"))
+                    .unwrap();
+            }
+        }
+        let file = std::fs::read_to_string(repo().join("tests/milestone")).unwrap();
+        milestone_number(&file).unwrap()
+    }
+
+    /// One test of a shipped module's page in `docs/stdlib/`.
+    struct SpecTest<'a> {
+        module: &'a str,
+        name: &'a str,
+        /// Whether a std module has the test, under its name in `std/`.
+        present: bool,
+    }
+
+    /// What is wrong with the spec tests and the pending list `pending`
+    /// while milestone `in_effect` is in progress (D-728). A test missing
+    /// from `std/` is wrong unless an entry lists it for `in_effect` or a
+    /// later milestone. An entry is wrong if its milestone has ended, if
+    /// its test is in `std/`, if it names no spec test of a shipped
+    /// module, or if it repeats an earlier entry.
+    ///
+    /// GAP(pending-spec-test-later): an entry for a milestone after the
+    /// one in effect accepts the test as absent, as D-288 expects a later
+    /// milestone's test to fail.
+    fn spec_test_problems(
+        tests: &[SpecTest<'_>],
+        pending: &[(&str, &str, &str)],
+        in_effect: u8,
+    ) -> Vec<String> {
+        let mut problems = Vec::new();
+        for (k, &(module, name, milestone)) in pending.iter().enumerate() {
+            let shown = format!("PENDING_SPEC_TESTS entry std::{module} \"{name}\" ({milestone})");
+            if pending
+                .iter()
+                .take(k)
+                .any(|&(m, n, _)| m == module && n == name)
+            {
+                problems.push(format!("{shown} is listed twice"));
+            }
+            let milestone = match milestone_number(milestone) {
+                Ok(n) => n,
+                Err(e) => {
+                    problems.push(format!("{shown}: {e}"));
+                    continue;
+                }
+            };
+            match tests.iter().find(|t| t.module == module && t.name == name) {
+                None => problems.push(format!(
+                    "{shown} names no test of a shipped module's page in docs/stdlib"
+                )),
+                Some(test) if test.present => problems.push(format!(
+                    "{shown} is in std/; remove it from PENDING_SPEC_TESTS"
+                )),
+                Some(_) if milestone < in_effect => problems.push(format!(
+                    "{shown} is still missing from std/, and M{milestone} has ended \
+                     (M{in_effect} is in effect)"
+                )),
+                Some(_) => {}
+            }
+        }
+        for test in tests {
+            let listed = pending
+                .iter()
+                .any(|&(m, n, _)| m == test.module && n == test.name);
+            if !test.present && !listed {
+                problems.push(format!(
+                    "std::{} \"{}\" is missing from std/",
+                    test.module, test.name
+                ));
+            }
+        }
+        problems
+    }
+
     /// Every test of the stdlib spec for a shipped module is in `std/`
-    /// (H3, D-479). A test that needs a module which imports the tested
-    /// one lives in that module (D-145), and two of them are renamed there,
-    /// because `std::list` holds both and test names are unique in a
-    /// module.
+    /// (H3, D-479), unless [`PENDING_SPEC_TESTS`] lists it for the
+    /// milestone in effect (D-728). A test that needs a module which
+    /// imports the tested one lives in that module (D-145), and two of them
+    /// are renamed there, because `std::list` holds both and test names are
+    /// unique in a module.
     #[test]
     fn stdlib_spec_tests_are_in_std() {
         const RENAMED: &[(&str, &str, &str)] = &[
@@ -375,32 +481,115 @@ mod tests {
         ];
         let mut spec_pages = Vec::new();
         module_files(&repo().join("docs/stdlib"), "", ".md", &mut spec_pages);
-        let mut missing = Vec::new();
-        let mut checked = 0;
-        for module in spec_pages {
-            if find(&module).is_none() {
-                continue;
-            }
-            let page = std::fs::read_to_string(
-                repo().join(format!("docs/stdlib/{}.md", module.replace("::", "/"))),
-            )
-            .unwrap();
-            for name in test_names(&page) {
+        spec_pages.sort();
+        let pages: Vec<(String, String)> = spec_pages
+            .into_iter()
+            .filter(|module| find(module).is_some())
+            .map(|module| {
+                let page = std::fs::read_to_string(
+                    repo().join(format!("docs/stdlib/{}.md", module.replace("::", "/"))),
+                )
+                .unwrap();
+                (module, page)
+            })
+            .collect();
+        let mut tests = Vec::new();
+        for (module, page) in &pages {
+            for name in test_names(page) {
                 let wanted = RENAMED
                     .iter()
-                    .find(|(m, n, _)| *m == module && *n == name)
+                    .find(|(m, n, _)| *m == module.as_str() && *n == name)
                     .map_or(name, |(_, _, renamed)| *renamed);
-                checked += 1;
-                if !STD_MODULES
+                let present = STD_MODULES
                     .iter()
-                    .any(|m| test_names(m.source).contains(&wanted))
-                {
-                    missing.push(format!("std::{module} \"{name}\""));
-                }
+                    .any(|m| test_names(m.source).contains(&wanted));
+                tests.push(SpecTest {
+                    module,
+                    name,
+                    present,
+                });
             }
         }
-        assert!(missing.is_empty(), "missing from std/: {missing:#?}");
-        assert!(checked > 300, "{checked} spec tests");
+        let problems = spec_test_problems(&tests, PENDING_SPEC_TESTS, milestone_in_effect());
+        assert!(problems.is_empty(), "{problems:#?}");
+        assert!(tests.len() > 300, "{} spec tests", tests.len());
+    }
+
+    /// The rules of D-728, on a synthetic list.
+    #[test]
+    fn pending_spec_tests_follow_the_milestone() {
+        let tests = [
+            SpecTest {
+                module: "fiber",
+                name: "spawn runs",
+                present: true,
+            },
+            SpecTest {
+                module: "fiber",
+                name: "timeout cancels",
+                present: false,
+            },
+        ];
+        // Not listed and absent: missing.
+        assert_eq!(
+            spec_test_problems(&tests, &[], 2),
+            ["std::fiber \"timeout cancels\" is missing from std/"]
+        );
+        // Listed and absent while its milestone is in effect: accepted.
+        let listed = [("fiber", "timeout cancels", "M2")];
+        let none: Vec<String> = Vec::new();
+        assert_eq!(spec_test_problems(&tests, &listed, 2), none);
+        // ... and while it has not started.
+        assert_eq!(spec_test_problems(&tests, &listed, 1), none);
+        // Past its milestone, as with CHEBY_MILESTONE=M3: the entry fails.
+        let past = spec_test_problems(&tests, &listed, 3);
+        assert_eq!(past.len(), 1, "{past:?}");
+        assert!(past[0].contains("M2 has ended"), "{past:?}");
+        // A listed test that is in std/ fails at any milestone.
+        let present = [("fiber", "spawn runs", "M2")];
+        for in_effect in [1, 2, 3] {
+            let problems = spec_test_problems(&tests, &[listed[0], present[0]], in_effect);
+            assert!(
+                problems.iter().any(|p| p.contains("is in std/")),
+                "{problems:?}"
+            );
+        }
+        // Stale, malformed and repeated entries fail.
+        let unknown = spec_test_problems(&tests, &[listed[0], ("fiber", "no such", "M2")], 2);
+        assert_eq!(unknown.len(), 1, "{unknown:?}");
+        assert!(unknown[0].contains("names no test"), "{unknown:?}");
+        let malformed = spec_test_problems(&tests, &[("fiber", "timeout cancels", "M9")], 2);
+        assert!(
+            malformed
+                .iter()
+                .any(|p| p.contains("unknown milestone `M9`")),
+            "{malformed:?}"
+        );
+        let twice = spec_test_problems(&tests, &[listed[0], listed[0]], 2);
+        assert_eq!(twice.len(), 1, "{twice:?}");
+        assert!(twice[0].contains("listed twice"), "{twice:?}");
+    }
+
+    #[test]
+    fn milestone_numbers() {
+        assert_eq!(milestone_number("M2\n"), Ok(2));
+        assert_eq!(milestone_number(" M0 "), Ok(0));
+        assert_eq!(milestone_number("M6"), Ok(6));
+        for bad in ["M7", "M", "2", "m2", "M02", "M2x", ""] {
+            assert!(milestone_number(bad).is_err(), "{bad}");
+        }
+        assert!(milestone_in_effect() <= 6);
+    }
+
+    /// The list is in the guard's format: every milestone parses.
+    #[test]
+    fn pending_spec_tests_name_milestones() {
+        for (module, name, milestone) in PENDING_SPEC_TESTS {
+            assert!(
+                milestone_number(milestone).is_ok(),
+                "std::{module} \"{name}\": {milestone}"
+            );
+        }
     }
 
     #[test]

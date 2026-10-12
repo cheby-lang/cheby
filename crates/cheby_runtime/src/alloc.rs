@@ -12,15 +12,22 @@
 //!
 //! # Accounting domains
 //!
-//! Live objects and bytes are counted per [`Domain`] (plan §4.3.4), not
-//! per process. Each thread has a current domain: `run_entry` sets it from
-//! `EntryConfig::domain`, and a thread without one gets a fresh domain of
-//! its own, so tests on parallel threads never see each other's objects.
-//! Allocation, freeing and [`forget`] charge the current thread's domain.
-//! An object freed on another thread than the one that allocated it is
-//! charged to the freeing thread's domain; in M1 objects never cross
-//! threads except between a host and the entries it runs with its own
-//! domain.
+//! Live objects and bytes are counted per [`Domain`] (plan §4.3.4, D-564,
+//! D-691), not per process. Allocation charges the allocating fiber's
+//! domain, and freeing and [`forget`] the freeing fiber's: the domain in
+//! its control block, which `run_entry` sets from `EntryConfig::domain`
+//! (D-685). A thread that runs no fiber, host code, charges its current
+//! domain, kept in `tls.rs`'s host slot: a fresh domain of its own unless
+//! [`set_current_domain`] or [`with_domain`] chose one, so tests on
+//! parallel threads never see each other's objects. An object freed by
+//! another fiber or thread than the one that allocated it is charged to
+//! the freeing one's domain; today objects never cross fibers except
+//! between a host and the entries it runs with its own domain.
+//!
+//! A domain's counters are sharded (D-691): each thread charges its own
+//! cache line, and reading sums the shards, which is exact whenever no
+//! thread is charging the domain meanwhile (at exit, at a test's end, or
+//! during a constant evaluation, which runs on one thread).
 //!
 //! # Poisoning
 //!
@@ -33,11 +40,12 @@
 //! `use after free: …` on a poisoned or impossible one.
 
 use std::alloc::Layout;
-use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicI64, Ordering};
+
+use crossbeam_utils::CachePadded;
 
 use crate::abi::{self, Word};
 use crate::ctx::ExecCtx;
@@ -48,6 +56,7 @@ use crate::object::{
 use crate::panic::fatal;
 use crate::rc;
 use crate::stats::{Event, Stats};
+use crate::tls;
 
 /// Whether this build checks for leaks at exit (debug builds only, D-458).
 /// Accounting itself is always on: constant evaluation's memory limit
@@ -55,15 +64,64 @@ use crate::stats::{Event, Stats};
 pub const LEAK_CHECK_ENABLED: bool = cfg!(debug_assertions);
 
 /// An accounting domain: the live objects and bytes, and the peak of live
-/// bytes, of everything allocated while it was some thread's current
-/// domain (plan §4.3.4). One build shares one domain across its constant
-/// entries and its `main` or test entries.
-#[derive(Debug, Default)]
+/// bytes, of everything allocated by the fibers and host threads that
+/// charge it (plan §4.3.4, D-564). One build shares one domain across its
+/// constant entries and its `main` or test entries.
+///
+/// The counters are sharded (D-691): each thread charges the shard its
+/// `tls.rs` shard index selects, so threads charging one domain do not
+/// share a cache line, and reading sums the shards. The peak is sampled:
+/// when a shard's own bytes pass its high, the sum of all shards is
+/// taken, which is exact when one thread charges the domain (a constant
+/// evaluation, D-617) and a lower bound otherwise (D-635 allows it). Once
+/// several shards change, a shard's high also moves ahead of its bytes,
+/// so the sum is taken only now and then ([`Domain::sample_peak`]).
+#[derive(Debug)]
 pub struct Domain {
-    objects: AtomicI64,
-    bytes: AtomicI64,
+    shards: Box<[CachePadded<Shard>]>,
     peak: AtomicI64,
     stats: Stats,
+    /// How often a charge summed the shards to sample the peak.
+    #[cfg(test)]
+    samples: std::sync::atomic::AtomicU64,
+}
+
+/// One shard of a domain's counters.
+#[derive(Debug, Default)]
+struct Shard {
+    objects: AtomicI64,
+    bytes: AtomicI64,
+    /// The bytes above which this shard's next charge samples the peak:
+    /// the most it held since the last peak reset, or more once another
+    /// shard changed ([`Domain::sample_peak`]).
+    high: AtomicI64,
+}
+
+/// The number of shards of every domain (D-691): the next power of two of
+/// the available parallelism, at most 64, read once per process.
+pub(crate) fn shard_count() -> usize {
+    static COUNT: OnceLock<usize> = OnceLock::new();
+    *COUNT.get_or_init(|| {
+        std::thread::available_parallelism()
+            .map_or(1, std::num::NonZero::get)
+            .checked_next_power_of_two()
+            .unwrap_or(64)
+            .min(64)
+    })
+}
+
+impl Default for Domain {
+    fn default() -> Self {
+        Self {
+            shards: (0..shard_count())
+                .map(|_| CachePadded::new(Shard::default()))
+                .collect(),
+            peak: AtomicI64::new(0),
+            stats: Stats::default(),
+            #[cfg(test)]
+            samples: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
 }
 
 impl Domain {
@@ -73,28 +131,50 @@ impl Domain {
         Arc::new(Self::default())
     }
 
-    /// Objects allocated and not yet freed or forgotten.
-    #[must_use]
-    pub fn live_objects(&self) -> i64 {
-        self.objects.load(Ordering::Relaxed)
+    /// The shard of index `index`, reduced modulo the number of shards (a
+    /// power of two).
+    fn shard(&self, index: usize) -> &Shard {
+        let mask = self.shards.len().saturating_sub(1);
+        match self.shards.get(index & mask) {
+            Some(shard) => shard,
+            None => fatal(format_args!("an accounting domain has no shards")),
+        }
     }
 
-    /// Bytes of those objects.
+    /// Objects allocated and not yet freed or forgotten: the sum of the
+    /// shards.
+    #[must_use]
+    pub fn live_objects(&self) -> i64 {
+        self.shards
+            .iter()
+            .map(|shard| shard.objects.load(Ordering::Relaxed))
+            .fold(0, i64::wrapping_add)
+    }
+
+    /// Bytes of those objects: the sum of the shards.
     #[must_use]
     pub fn live_bytes(&self) -> i64 {
-        self.bytes.load(Ordering::Relaxed)
+        self.shards
+            .iter()
+            .map(|shard| shard.bytes.load(Ordering::Relaxed))
+            .fold(0, i64::wrapping_add)
     }
 
     /// The most bytes live at once since the domain was created or
-    /// [`Domain::reset_peak`] was last called.
+    /// [`Domain::reset_peak`] was last called, as sampled.
     #[must_use]
     pub fn peak_bytes(&self) -> i64 {
-        self.peak.load(Ordering::Relaxed)
+        self.peak.load(Ordering::Relaxed).max(self.live_bytes())
     }
 
     /// Restarts the peak at the current live bytes, for measuring one
     /// evaluation (D-536).
     pub fn reset_peak(&self) {
+        for shard in &self.shards {
+            shard
+                .high
+                .store(shard.bytes.load(Ordering::Relaxed), Ordering::Relaxed);
+        }
         self.peak.store(self.live_bytes(), Ordering::Relaxed);
     }
 
@@ -104,40 +184,103 @@ impl Domain {
         &self.stats
     }
 
-    fn charge(&self, objects: i64, bytes: i64) {
-        self.objects.fetch_add(objects, Ordering::Relaxed);
-        let before = self.bytes.fetch_add(bytes, Ordering::Relaxed);
+    /// Adds `objects` and `bytes` to shard `index`.
+    fn charge(&self, index: usize, objects: i64, bytes: i64) {
+        let shard = self.shard(index);
+        shard.objects.fetch_add(objects, Ordering::Relaxed);
+        let before = shard.bytes.fetch_add(bytes, Ordering::Relaxed);
         let now = before.saturating_add(bytes);
-        // Most allocations stay under the peak: a load, not a write.
-        if bytes > 0 && now > self.peak.load(Ordering::Relaxed) {
-            self.peak.fetch_max(now, Ordering::Relaxed);
+        // Most allocations stay under the shard's high: a load of its own
+        // line, not a write.
+        if bytes > 0 && now > shard.high.load(Ordering::Relaxed) {
+            self.sample_peak(shard, now);
         }
+    }
+
+    /// Sums the shards to sample the peak, now that `shard` holds `now`
+    /// bytes, above its high, and moves its high to where the next sample
+    /// is due.
+    ///
+    /// With one shard charged, the sum exceeds the peak at every new high
+    /// of that shard, and the high stays at `now`, so the peak is exact. A
+    /// sum that does not exceed the peak shows that another shard changed
+    /// since, and the peak is a lower bound from then on (D-635). The next
+    /// sample is then due once this shard could have made a new peak with
+    /// the others unchanged, or has grown by an eighth, whichever is later.
+    /// So a shard that only allocates while another only frees, as across
+    /// a channel between two workers, reads the other's cache line only a
+    /// logarithmic number of times, not on every allocation (D-691).
+    fn sample_peak(&self, shard: &Shard, now: i64) {
+        #[cfg(test)]
+        self.samples.fetch_add(1, Ordering::Relaxed);
+        let total = self.live_bytes();
+        let peak = self.peak.load(Ordering::Relaxed);
+        let next = if total > peak {
+            self.peak.fetch_max(total, Ordering::Relaxed);
+            now
+        } else {
+            now.saturating_add(peak.saturating_sub(total).max(now / 8))
+        };
+        shard.high.fetch_max(next, Ordering::Relaxed);
     }
 }
 
-thread_local! {
-    /// The current thread's accounting domain.
-    static DOMAIN: RefCell<Arc<Domain>> = RefCell::new(Domain::new());
+/// The control block of the fiber running on this thread, if any.
+fn current_fiber<'a>() -> Option<&'a ExecCtx> {
+    crate::entry::current_fiber()
 }
 
-/// The current thread's accounting domain.
+/// Calls `f` with the host slot's current domain, creating a fresh one on
+/// first use; `None` during thread teardown. `f` must not reach the host
+/// slot's domain again.
+fn with_host_domain<R>(f: impl FnOnce(&Arc<Domain>) -> R) -> Option<R> {
+    tls::with_host(|host| {
+        let Ok(mut slot) = host.domain.try_borrow_mut() else {
+            fatal(format_args!("the host's accounting domain is in use"));
+        };
+        f(slot.get_or_insert_with(Domain::new))
+    })
+}
+
+/// Calls `f` with what `ctx` charges, its domain and shard, or, without a
+/// fiber, with the host slot's domain and this thread's shard. `None`
+/// during thread teardown, when the host slot is gone.
+fn with_charged<R>(ctx: Option<&ExecCtx>, f: impl FnOnce(&Domain, usize) -> R) -> Option<R> {
+    if let Some(ctx) = ctx {
+        Some(f(ctx.domain(), ctx.shard()))
+    } else {
+        let shard = tls::shard_index();
+        with_host_domain(|domain| f(domain, shard))
+    }
+}
+
+/// The current accounting domain: the running fiber's, or on a thread that
+/// runs no fiber, its own current domain.
 #[must_use]
 pub fn current_domain() -> Arc<Domain> {
-    DOMAIN
-        .try_with(|domain| Arc::clone(&domain.borrow()))
-        .unwrap_or_else(|_| Domain::new())
+    match current_fiber() {
+        Some(ctx) => Arc::clone(ctx.domain()),
+        None => with_host_domain(Arc::clone).unwrap_or_else(Domain::new),
+    }
 }
 
-/// Makes `domain` the current thread's accounting domain and returns the
-/// previous one.
+/// Makes `domain` the current accounting domain of this thread's host
+/// code and returns the previous one. It does not change the domain of a
+/// fiber running on the thread, which its entry chose.
 pub fn set_current_domain(domain: Arc<Domain>) -> Arc<Domain> {
-    DOMAIN
-        .try_with(|current| current.replace(Arc::clone(&domain)))
-        .unwrap_or(domain)
+    let mut domain = Some(domain);
+    let previous = tls::with_host(|host| {
+        let Ok(mut slot) = host.domain.try_borrow_mut() else {
+            fatal(format_args!("the host's accounting domain is in use"));
+        };
+        std::mem::replace(&mut *slot, domain.take())
+    })
+    .flatten();
+    previous.or(domain).unwrap_or_else(Domain::new)
 }
 
-/// Runs `f` with `domain` as the current thread's domain, then restores
-/// the previous one.
+/// Runs `f` with `domain` as the current domain of this thread's host
+/// code, then restores the previous one.
 pub fn with_domain<R>(domain: Arc<Domain>, f: impl FnOnce() -> R) -> R {
     let previous = set_current_domain(domain);
     let result = f();
@@ -145,8 +288,8 @@ pub fn with_domain<R>(domain: Arc<Domain>, f: impl FnOnce() -> R) -> R {
     result
 }
 
-/// Charges the current thread's domain. During thread teardown, when the
-/// domain is gone, nothing is charged.
+/// Charges the current domain. During thread teardown, when the host slot
+/// is gone, nothing is charged.
 fn charge(objects: i64, bytes: u64) {
     let bytes = i64::try_from(bytes).unwrap_or(i64::MAX);
     let bytes = if objects < 0 {
@@ -154,31 +297,26 @@ fn charge(objects: i64, bytes: u64) {
     } else {
         bytes
     };
-    DOMAIN
-        .try_with(|domain| domain.borrow().charge(objects, bytes))
-        .ok();
+    with_charged(current_fiber(), |domain, shard| {
+        domain.charge(shard, objects, bytes);
+    });
 }
 
-/// Calls `f` with the counters of the current thread's domain; during
-/// thread teardown, when the domain is gone, does nothing.
-pub(crate) fn with_current_stats(f: impl FnOnce(&Stats)) {
-    DOMAIN.try_with(|domain| f(&domain.borrow().stats)).ok();
+/// Records `event` in the counters of the current domain; during thread
+/// teardown, when the host slot is gone, does nothing.
+pub(crate) fn record_event(event: Event) {
+    with_charged(current_fiber(), |domain, shard| {
+        domain.stats.record(shard, event);
+    });
 }
 
-/// The number of objects live in the current thread's domain.
+/// The number of objects live in the current domain.
 #[must_use]
 pub fn live() -> i64 {
-    DOMAIN
-        .try_with(|domain| domain.borrow().live_objects())
-        .unwrap_or(0)
-}
-
-/// The bytes live in the current thread's domain, which the memory limit
-/// of constant evaluation checks after every allocation (D-536).
-pub(crate) fn current_live_bytes() -> i64 {
-    DOMAIN
-        .try_with(|domain| domain.borrow().live_bytes())
-        .unwrap_or(0)
+    match current_fiber() {
+        Some(ctx) => ctx.domain().live_objects(),
+        None => with_host_domain(|domain| domain.live_objects()).unwrap_or(0),
+    }
 }
 
 /// Calls `f` with every reference the object `word` owns (its value
@@ -317,35 +455,43 @@ pub(crate) unsafe fn leave_domain(obj: *mut u8) {
 /// left uninitialized for the caller to write. A request that cannot be
 /// served ends as [`out_of_memory`] says.
 ///
-/// `ctx` is the running entry's execution context, unused in M1 (the
-/// memory limit of constant evaluation reads the domain, D-536); it may be
-/// null.
+/// `ctx` is the allocating fiber's control block, whose domain the object
+/// is charged to (D-691); it may be null, and then the current fiber's
+/// domain, or a host thread's current domain, is charged.
 ///
 /// # Safety
 ///
-/// `header` describes an object of exactly `size` bytes (as the layout
-/// table computes it), and the caller initializes every field before the
-/// object is freed or read.
+/// `ctx` is null or the running fiber's control block; `header` describes
+/// an object of exactly `size` bytes (as the layout table computes it),
+/// and the caller initializes every field before the object is freed or
+/// read.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_rt_alloc(ctx: *mut ExecCtx, size: u64, header: u64) -> Word {
-    let _ = ctx;
-    object::ptr_to_word(alloc_object(size, header))
+    // SAFETY: forwarded from the caller.
+    let ctx = unsafe { ctx.as_ref() }.or_else(current_fiber);
+    object::ptr_to_word(alloc_in(ctx, size, header))
 }
 
 /// Allocates an object of `size` bytes (rounded up to 8) with the given
-/// header and uninitialized fields, and charges it to the current domain.
-/// During constant evaluation, a request that would pass the memory budget
-/// abandons the entry with the memory limit before anything is allocated
-/// (D-536, D-617). A request that cannot be served, because its size does
-/// not fit the address space or the system refuses it, ends as
-/// [`out_of_memory`] says.
+/// header and uninitialized fields, and charges it to the current domain:
+/// the running fiber's, or a host thread's. During constant evaluation, a
+/// request that would pass the memory budget abandons the entry with the
+/// memory limit before anything is allocated (D-536, D-617). A request
+/// that cannot be served, because its size does not fit the address space
+/// or the system refuses it, ends as [`out_of_memory`] says. Kernels
+/// allocate through it.
 #[must_use]
 pub fn alloc_object(size: u64, header: u64) -> *mut u8 {
+    alloc_in(current_fiber(), size, header)
+}
+
+/// [`alloc_object`] for the fiber `ctx`, or for host code without one.
+fn alloc_in(ctx: Option<&ExecCtx>, size: u64, header: u64) -> *mut u8 {
     let request = size
         .max(abi::HEADER_SIZE)
         .checked_next_multiple_of(abi::OBJECT_ALIGN)
         .unwrap_or(u64::MAX);
-    crate::entry::check_budget(request);
+    crate::entry::check_budget_of(ctx, request);
     let Some(layout) = try_object_layout(size) else {
         out_of_memory(request)
     };
@@ -360,13 +506,10 @@ pub fn alloc_object(size: u64, header: u64) -> *mut u8 {
     // SAFETY: the allocation is at least 8 bytes and 8-aligned.
     unsafe { object::write_field(ptr, 0, header) };
     let bytes = i64::try_from(layout.size()).unwrap_or(i64::MAX);
-    DOMAIN
-        .try_with(|domain| {
-            let domain = domain.borrow();
-            domain.charge(1, bytes);
-            domain.stats.record(Event::Alloc);
-        })
-        .ok();
+    with_charged(ctx, |domain, shard| {
+        domain.charge(shard, 1, bytes);
+        domain.stats.record(shard, Event::Alloc);
+    });
     ptr
 }
 
@@ -455,14 +598,10 @@ fn object_layout(size: u64) -> Layout {
         .unwrap_or_else(|| fatal(format_args!("an object of {size} bytes has no layout")))
 }
 
-thread_local! {
-    /// The worklist of objects whose count reached zero and whose fields
-    /// are still to be released. Kept per thread so that its capacity is
-    /// reused across frees.
-    static WORKLIST: Cell<Vec<Word>> = const { Cell::new(Vec::new()) };
-}
-
-/// Capacity above which the worklist is not kept for the next free.
+/// Capacity above which the worklist is not kept for the next free. The
+/// worklist of objects whose count reached zero and whose fields are still
+/// to be released is kept per thread, in `tls.rs`, so that its capacity is
+/// reused across frees.
 const WORKLIST_KEEP: usize = 1 << 16;
 
 /// Frees an object whose count just reached zero, then every object that
@@ -476,14 +615,16 @@ pub(crate) unsafe fn free(obj: *mut u8) {
     let word = object::ptr_to_word(obj);
     // During thread teardown the worklist may already be gone; a fresh
     // vector works the same.
-    let mut list = WORKLIST.try_with(Cell::take).unwrap_or_default();
+    // The list is taken out of the thread-local while it is drained, so the
+    // closures below only move it.
+    let mut list = tls::with_worklist(std::cell::Cell::take).unwrap_or_default();
     list.push(word);
     // SAFETY: forwarded from the caller; every word pushed later is an
     // object whose count reached zero.
     unsafe { drain(&mut list) };
     list.clear();
     if list.capacity() <= WORKLIST_KEEP {
-        WORKLIST.try_with(|cell| cell.set(list)).ok();
+        tls::with_worklist(|cell| cell.set(list));
     }
 }
 
@@ -669,14 +810,23 @@ pub fn poison_enabled() -> bool {
         })
 }
 
-/// Freed blocks kept out of the allocator, oldest first.
-#[derive(Default)]
-struct Quarantine {
+/// Freed blocks kept out of the allocator, oldest first: one per thread,
+/// in `tls.rs`.
+#[derive(Debug, Default)]
+pub(crate) struct Quarantine {
     blocks: VecDeque<(*mut u8, Layout)>,
     bytes: usize,
 }
 
 impl Quarantine {
+    /// An empty quarantine.
+    pub(crate) const fn new() -> Self {
+        Self {
+            blocks: VecDeque::new(),
+            bytes: 0,
+        }
+    }
+
     /// Keeps a poisoned block, returning the oldest ones to the allocator
     /// beyond the bounds.
     fn keep(&mut self, obj: *mut u8, layout: Layout) {
@@ -703,16 +853,11 @@ impl Drop for Quarantine {
     }
 }
 
-thread_local! {
-    static QUARANTINE: RefCell<Quarantine> = RefCell::new(Quarantine::default());
-}
-
 /// The number of blocks in the current thread's quarantine.
 #[doc(hidden)]
 #[must_use]
 pub fn quarantine_len() -> usize {
-    QUARANTINE
-        .try_with(|quarantine| quarantine.borrow().blocks.len())
+    tls::with_quarantine(|quarantine| quarantine.try_borrow().map_or(0, |q| q.blocks.len()))
         .unwrap_or(0)
 }
 
@@ -727,13 +872,16 @@ pub const CACHE_BLOCKS: usize = 512;
 /// of the same size, so that the short-lived objects of a running program
 /// do not go to the system allocator each time (W5-D: freeing and
 /// allocating were most of 004's run time). Bypassed in poisoning mode,
-/// whose quarantine must keep freed blocks out of use.
-struct BlockCache {
+/// whose quarantine must keep freed blocks out of use. One per thread, in
+/// `tls.rs`.
+#[derive(Debug)]
+pub(crate) struct BlockCache {
     classes: [Vec<*mut u8>; CACHE_CLASSES],
 }
 
 impl BlockCache {
-    const fn new() -> Self {
+    /// An empty cache.
+    pub(crate) const fn new() -> Self {
         Self {
             classes: [const { Vec::new() }; CACHE_CLASSES],
         }
@@ -760,10 +908,6 @@ impl Drop for BlockCache {
     }
 }
 
-thread_local! {
-    static CACHE: RefCell<BlockCache> = const { RefCell::new(BlockCache::new()) };
-}
-
 /// The block cache's size class of an allocation layout, if it has one.
 fn size_class(layout: Layout) -> Option<usize> {
     let size = layout.size();
@@ -785,10 +929,7 @@ fn class_layout(class: usize) -> Option<Layout> {
 /// A cached free block for `layout`, if the current thread has one.
 fn cached_block(layout: Layout) -> Option<*mut u8> {
     let class = size_class(layout)?;
-    CACHE
-        .try_with(|cache| cache.borrow_mut().classes.get_mut(class)?.pop())
-        .ok()
-        .flatten()
+    tls::with_cache(|cache| cache.try_borrow_mut().ok()?.classes.get_mut(class)?.pop()).flatten()
 }
 
 /// Keeps a free block of `layout` in the current thread's cache; false
@@ -798,32 +939,40 @@ fn cache_block(obj: *mut u8, layout: Layout) -> bool {
     let Some(class) = size_class(layout) else {
         return false;
     };
-    CACHE
-        .try_with(|cache| {
-            let mut cache = cache.borrow_mut();
-            match cache.classes.get_mut(class) {
-                Some(blocks) if blocks.len() < CACHE_BLOCKS => {
-                    blocks.push(obj);
-                    true
-                }
-                _ => false,
+    tls::with_cache(|cache| {
+        let Ok(mut cache) = cache.try_borrow_mut() else {
+            return false;
+        };
+        match cache.classes.get_mut(class) {
+            Some(blocks) if blocks.len() < CACHE_BLOCKS => {
+                blocks.push(obj);
+                true
             }
-        })
-        .unwrap_or(false)
+            _ => false,
+        }
+    })
+    .unwrap_or(false)
 }
 
 /// Returns the current thread's cached free blocks to the system allocator,
 /// for a thread that will not allocate again (a panicked entry parks).
 pub(crate) fn release_block_cache() {
-    CACHE.try_with(|cache| cache.borrow_mut().release()).ok();
+    tls::with_cache(|cache| {
+        if let Ok(mut cache) = cache.try_borrow_mut() {
+            cache.release();
+        }
+    });
 }
 
 /// The number of blocks in the current thread's cache, for tests.
 #[cfg(test)]
 fn cached_blocks() -> usize {
-    CACHE
-        .try_with(|cache| cache.borrow().classes.iter().map(Vec::len).sum())
-        .unwrap_or(0)
+    tls::with_cache(|cache| {
+        cache
+            .try_borrow()
+            .map_or(0, |cache| cache.classes.iter().map(Vec::len).sum())
+    })
+    .unwrap_or(0)
 }
 
 /// Returns a freed block to the block cache or the allocator, or poisons
@@ -839,9 +988,13 @@ unsafe fn release_block(obj: *mut u8, layout: Layout) {
             // SAFETY: the block is still allocated and nothing else uses
             // it.
             unsafe { object::write_field(obj, 0, POISON_HEADER) };
-            let kept = QUARANTINE
-                .try_with(|quarantine| quarantine.borrow_mut().keep(obj, layout))
-                .is_ok();
+            let kept = tls::with_quarantine(|quarantine| {
+                quarantine
+                    .try_borrow_mut()
+                    .map(|mut quarantine| quarantine.keep(obj, layout))
+                    .is_ok()
+            })
+            .unwrap_or(false);
             if kept {
                 return;
             }
@@ -864,9 +1017,7 @@ const fn keeps_freed_blocks() -> bool {
 /// the system for turn it off on their thread.
 #[cfg(test)]
 fn keeps_freed_blocks() -> bool {
-    temporaries_tests::KEEP_FREED
-        .try_with(Cell::get)
-        .unwrap_or(true)
+    temporaries_tests::keeps_freed()
 }
 
 /// In poisoning mode, ends the process if `word` points to a freed
@@ -912,6 +1063,9 @@ unsafe fn check_header(word: Word, what: &str) {
 }
 
 pub(crate) mod scratch;
+
+#[cfg(test)]
+mod domain_tests;
 
 #[cfg(test)]
 mod out_of_memory_tests;

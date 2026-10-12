@@ -174,6 +174,15 @@ impl CType {
         self.repr() == Some(repr) || (self == Self::I64 && repr == Repr::I64)
     }
 
+    /// Whether the running fiber's context ([`crate::Const::Ctx`]) may be
+    /// passed as this C type: only a pointer. Only the first operand of a
+    /// foreign call may be `ctx`, the `@std_context` kernel's first
+    /// parameter (D-692). GAP(const-ctx-operand).
+    #[must_use]
+    pub const fn accepts_ctx(self) -> bool {
+        matches!(self, Self::Ptr)
+    }
+
     /// The name used in dumps.
     #[must_use]
     pub const fn name(self) -> &'static str {

@@ -524,7 +524,7 @@ fn collect_defs(f: &Function, m: &mut Mentions) {
                     operand(msg, m);
                 }
             }
-            Terminator::Unreachable => {}
+            Terminator::Unreachable | Terminator::Resume => {}
         }
     }
 }
@@ -551,7 +551,9 @@ fn const_defs(c: &Const, m: &mut Mentions) {
         | Const::Nil
         | Const::EmptyList
         | Const::Static(_)
-        | Const::BuiltinDesc(_) => {}
+        | Const::BuiltinDesc(_)
+        | Const::Ctx
+        | Const::ErrNil => {}
     }
 }
 

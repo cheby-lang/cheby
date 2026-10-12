@@ -1,0 +1,94 @@
+//! Runtime benchmark of the RC group: inserts into a persistent tree.
+//!
+//! Pseudo-random keys go into an unbalanced binary search tree. Each
+//! insert rebuilds the path from the root to the new leaf and shares the
+//! rest of the tree, so the time goes to allocating nodes and counting
+//! the shared subtrees. Every few thousand keys the tree is summed and
+//! dropped. The number of keys is the first program argument, and `main`
+//! prints a checksum of the trees' sums and depths.
+
+import std::env
+import std::int
+import std::io
+
+/// The number of keys when no argument is given.
+const default_size: Int = 2_000_000
+
+/// How many keys a tree holds before it is summed and dropped.
+const keys_per_tree: Int = 20_000
+
+/// Keeps the checksum small.
+const modulus: Int = 1_000_000_007
+
+/// A binary search tree of distinct keys.
+type Tree {
+  Leaf,
+  Node(Tree, Int, Tree),
+}
+
+fn main() {
+  let keys = size(env::args())
+  fn run(n, seed, tree, total) {
+    case {
+      n == keys => mix(total, summarize(tree))
+      n % keys_per_tree == 0 => run(n + 1, next(seed), Leaf, mix(total, summarize(tree)))
+      _ => run(n + 1, next(seed), insert(tree, seed % 1_000_000), total)
+    }
+  }
+  let checksum = run(0, 42, Leaf, 0)
+  io::println("size: {keys}")
+  io::println("checksum: {checksum}")
+}
+
+/// The size from the first program argument, or `default_size`.
+fn size(args: List<String>) -> Int {
+  case args {
+    [] => default_size
+    [first, ..] => {
+      let assert Ok(n) = int::parse(first)
+      n
+    }
+  }
+}
+
+/// The pseudo-random number after `seed`, from a linear congruential
+/// generator.
+fn next(seed: Int) -> Int {
+  (seed * 1_103_515_245 + 12_345) % 2_147_483_648
+}
+
+/// `tree` with `key`, which it may hold already.
+fn insert(tree: Tree, key: Int) -> Tree {
+  case tree {
+    Leaf => Node(Leaf, key, Leaf)
+    Node(left, here, right) => case int::compare(key, here) {
+      Less => Node(insert(left, key), here, right)
+      Greater => Node(left, here, insert(right, key))
+      Equal => tree
+    }
+  }
+}
+
+/// The sum of the keys of `tree`, and its depth.
+fn summarize(tree: Tree) -> Int {
+  mix(sum(tree), depth(tree))
+}
+
+fn sum(tree: Tree) -> Int {
+  case tree {
+    Leaf => 0
+    Node(left, key, right) => (sum(left) + key + sum(right)) % modulus
+  }
+}
+
+fn depth(tree: Tree) -> Int {
+  case tree {
+    Leaf => 0
+    Node(left, _, right) => 1 + int::max(depth(left), depth(right))
+  }
+}
+
+/// Adds `n` to the checksum `total`.
+fn mix(total: Int, n: Int) -> Int {
+  (total * 31 + n) % modulus
+}

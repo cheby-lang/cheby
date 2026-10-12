@@ -341,9 +341,29 @@ pub struct Function {
     /// The location the function-entry stack check reports. Set for every
     /// [`Abi::Cheby`] function, `None` for [`Abi::C`].
     pub entry_loc: Option<StrId>,
+    /// The pad the function-entry check unwinds to (D-698); `None` before
+    /// the unwind pass.
+    pub entry_unwind: Option<BlockId>,
+    /// The body was generated with its counts already in place (std
+    /// intrinsics, D-693): the RC pass leaves it alone and the unwind pass
+    /// keeps its edges. GAP(intrinsic-precounted).
+    pub precounted: bool,
 }
 
 impl Function {
+    /// The normal successors of `block` followed by its unwind pads, in
+    /// order (D-698), duplicates included.
+    ///
+    /// # Errors
+    ///
+    /// An [`Ice`] if there is no such block.
+    pub fn successors(&self, block: BlockId) -> Result<Vec<BlockId>, Ice> {
+        let b = self.block(block)?;
+        let mut out = b.term.successors();
+        out.extend(b.unwind.iter().map(|&(_, pad)| pad));
+        Ok(out)
+    }
+
     /// The local `local`.
     ///
     /// # Errors
@@ -391,6 +411,24 @@ pub struct Block {
     pub params: Vec<Local>,
     pub stmts: Vec<Stmt>,
     pub term: Terminator,
+    /// `(i, pad)`: statement `i`, or the terminator when
+    /// `i == stmts.len()`, may start or pass on an unwinding, and control
+    /// then goes to `pad`, where the statement's result is undefined
+    /// (D-698). Sorted by `i`, at most one entry per `i`. Empty until the
+    /// unwind pass.
+    pub unwind: Vec<(u32, BlockId)>,
+}
+
+impl Block {
+    /// The pad of statement `i` (or of the terminator, `i == stmts.len()`).
+    #[must_use]
+    pub fn unwind_target(&self, i: usize) -> Option<BlockId> {
+        let i = u32::try_from(i).ok()?;
+        self.unwind
+            .iter()
+            .find(|&&(at, _)| at == i)
+            .map(|&(_, pad)| pad)
+    }
 }
 
 /// A statement.
@@ -408,6 +446,9 @@ pub enum Stmt {
     Dup(Local),
     /// One reference less; frees the object at zero.
     Drop(Local),
+    /// Clears the fiber's unwind flag (D-693); only in generated intrinsic
+    /// bodies.
+    ClearUnwind,
 }
 
 /// An operand: a local or a constant.
@@ -463,6 +504,14 @@ pub enum Const {
     /// The runtime's nominal descriptor of a builtin type,
     /// `cheby_rt_desc_<name>` (D-523).
     BuiltinDesc(BuiltinDesc),
+    /// The running fiber's context as a C pointer: only as the first
+    /// operand of a `CallForeign` of a `@std_context` kernel (D-692), whose
+    /// first C parameter is [`crate::CType::Ptr`]. [`Repr::U64`], never
+    /// counted. GAP(const-ctx-operand).
+    Ctx,
+    /// The runtime's static `Err(Nil)`, `cheby_rt_static_err_nil` (D-693).
+    /// [`Repr::Value`].
+    ErrNil,
 }
 
 /// The builtin types with a runtime nominal descriptor
@@ -545,7 +594,9 @@ impl Const {
             | Self::Code(_)
             | Self::EmptyList
             | Self::Static(_)
-            | Self::BuiltinDesc(_) => Repr::Value,
+            | Self::BuiltinDesc(_)
+            | Self::ErrNil => Repr::Value,
+            Self::Ctx => Repr::U64,
         }
     }
 }
@@ -827,6 +878,8 @@ pub enum Terminator {
         loc: StrId,
     },
     Unreachable,
+    /// Leaves the function while unwinding (D-698).
+    Resume,
 }
 
 impl Terminator {
@@ -854,18 +907,21 @@ impl Terminator {
                     operand_uses(std::slice::from_ref(m), UseKind::Borrowed, &mut out);
                 }
             }
-            Self::Unreachable => {}
+            Self::Unreachable | Self::Resume => {}
         }
         out
     }
 
-    /// The successor blocks, in order, duplicates included.
+    /// The normal successor blocks, in order, duplicates included. Unwind
+    /// pads are the block's ([`Function::successors`]).
     #[must_use]
     pub fn successors(&self) -> Vec<BlockId> {
         match self {
-            Self::Return(_) | Self::TailCall { .. } | Self::Panic { .. } | Self::Unreachable => {
-                Vec::new()
-            }
+            Self::Return(_)
+            | Self::TailCall { .. }
+            | Self::Panic { .. }
+            | Self::Unreachable
+            | Self::Resume => Vec::new(),
             Self::Goto { target, .. } => vec![*target],
             Self::Branch { then_, else_, .. } => vec![*then_, *else_],
             Self::Switch { cases, default, .. } => cases
@@ -884,7 +940,11 @@ impl Terminator {
             }
         };
         match self {
-            Self::Return(_) | Self::TailCall { .. } | Self::Panic { .. } | Self::Unreachable => {}
+            Self::Return(_)
+            | Self::TailCall { .. }
+            | Self::Panic { .. }
+            | Self::Unreachable
+            | Self::Resume => {}
             Self::Goto { target, .. } => swap(target),
             Self::Branch { then_, else_, .. } => {
                 swap(then_);
@@ -1010,11 +1070,19 @@ pub enum RuntimeFn {
     /// the running entry evaluates a constant (plan §7.4); a no-op
     /// otherwise. Evaluated for effect ([`Stmt::Eval`]).
     EffectCheck,
+    /// `(timed: Bool, seconds: Int, nanoseconds: Int) -> Scope`: opens a
+    /// scope (D-693). Result owned. May raise only out of memory, before
+    /// anything is open.
+    ScopeOpen,
+    /// `(scope: Value owned, unwound: Bool) -> Bool`: waits for the
+    /// scope's fibers, closes it and decides (D-693, D-666). Consumes the
+    /// scope even when it raises (D-698).
+    ScopeClose,
 }
 
 impl RuntimeFn {
     /// Every helper, in declaration order.
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 14] = [
         Self::StrWithCapacity,
         Self::StrAppend,
         Self::StrEq,
@@ -1027,13 +1095,23 @@ impl RuntimeFn {
         Self::Equal,
         Self::Debug,
         Self::EffectCheck,
+        Self::ScopeOpen,
+        Self::ScopeClose,
     ];
+
+    /// Whether a call of the helper may start or pass on an unwinding
+    /// (D-698): false for `StrEq`, `ListLength` and `ListGet`, true for
+    /// every other helper.
+    #[must_use]
+    pub const fn may_unwind(self) -> bool {
+        !matches!(self, Self::StrEq | Self::ListLength | Self::ListGet)
+    }
 
     /// The parameters: each one's representation and whether the helper
     /// consumes it ([`UseKind::Owned`]) or only reads it.
     #[must_use]
     pub const fn params(self) -> &'static [(Repr, UseKind)] {
-        use Repr::{Int, Value};
+        use Repr::{Bool, Int, Value};
         use UseKind::{Borrowed, Owned};
         match self {
             Self::StrWithCapacity => &[(Int, Borrowed)],
@@ -1045,6 +1123,8 @@ impl RuntimeFn {
             Self::ListGet => &[(Value, Borrowed), (Int, Borrowed)],
             Self::ListSlice => &[(Value, Borrowed), (Int, Borrowed), (Int, Borrowed)],
             Self::ListSliceOwned => &[(Value, Owned), (Int, Borrowed), (Int, Borrowed)],
+            Self::ScopeOpen => &[(Bool, Borrowed), (Int, Borrowed), (Int, Borrowed)],
+            Self::ScopeClose => &[(Value, Owned), (Bool, Borrowed)],
         }
     }
 
@@ -1060,8 +1140,9 @@ impl RuntimeFn {
             | Self::ListGet
             | Self::ListSlice
             | Self::ListSliceOwned
-            | Self::Debug => Some(Repr::Value),
-            Self::StrEq | Self::Equal => Some(Repr::Bool),
+            | Self::Debug
+            | Self::ScopeOpen => Some(Repr::Value),
+            Self::StrEq | Self::Equal | Self::ScopeClose => Some(Repr::Bool),
             Self::ListLength => Some(Repr::Int),
             Self::EffectCheck => None,
         }
@@ -1083,6 +1164,8 @@ impl RuntimeFn {
             Self::Equal => "equal",
             Self::Debug => "debug",
             Self::EffectCheck => "effect_check",
+            Self::ScopeOpen => "scope_open",
+            Self::ScopeClose => "scope_close",
         }
     }
 }

@@ -56,11 +56,23 @@ pub enum RuntimeFunc {
     EffectCheck,
     /// `uint64_t cheby_rt_list_slice_owned(ExecCtx *ctx, uint64_t list, int64_t start, int64_t end)`.
     ListSliceOwned,
+    /// `void cheby_rt_stack_slow_frame(ExecCtx *ctx, uint64_t location, uint64_t frame_size)`:
+    /// the slow path of a large function's entry check (D-679).
+    /// GAP(stack-slow-frame).
+    StackSlowFrame,
+    /// `uint64_t cheby_rt_scope_open(ExecCtx *ctx, bool timed, int64_t seconds, int64_t nanoseconds)`
+    /// (D-693).
+    ScopeOpen,
+    /// `bool cheby_rt_scope_close(ExecCtx *ctx, uint64_t scope, bool unwound)` (D-693).
+    ScopeClose,
+    /// `void cheby_rt_unwind_resume(ExecCtx *ctx)`: the `try_call`
+    /// prototype's resume of an unwinding (D-696).
+    UnwindResume,
 }
 
 impl RuntimeFunc {
     /// Every runtime function, in declaration order ([`Self::index`]).
-    pub const ALL: [Self; 24] = [
+    pub const ALL: [Self; 28] = [
         Self::Alloc,
         Self::Dup,
         Self::Drop,
@@ -85,6 +97,10 @@ impl RuntimeFunc {
         Self::Debug,
         Self::EffectCheck,
         Self::ListSliceOwned,
+        Self::StackSlowFrame,
+        Self::ScopeOpen,
+        Self::ScopeClose,
+        Self::UnwindResume,
     ];
 
     /// The symbol.
@@ -115,6 +131,10 @@ impl RuntimeFunc {
             Self::Debug => sym::DEBUG,
             Self::EffectCheck => sym::EFFECT_CHECK,
             Self::ListSliceOwned => sym::LIST_SLICE_OWNED,
+            Self::StackSlowFrame => sym::STACK_SLOW_FRAME,
+            Self::ScopeOpen => sym::SCOPE_OPEN,
+            Self::ScopeClose => sym::SCOPE_CLOSE,
+            Self::UnwindResume => sym::UNWIND_RESUME,
         }
     }
 
@@ -127,7 +147,7 @@ impl RuntimeFunc {
             Self::Alloc | Self::StrAppend | Self::ListPush | Self::ListAppend => {
                 (&[Ptr, U64, U64], U64)
             }
-            Self::Dup | Self::Drop => (&[Ptr], Void),
+            Self::Dup | Self::Drop | Self::UnwindResume => (&[Ptr], Void),
             Self::Panic => (&[Ptr, U32, Ptr, Ptr], Void),
             Self::StackSlow | Self::EffectCheck => (&[Ptr, Ptr], Void),
             Self::BoxI64 | Self::StrWithCapacity => (&[Ptr, I64], U64),
@@ -141,7 +161,21 @@ impl RuntimeFunc {
             Self::ListLength => (&[U64], I64),
             Self::ListGet => (&[U64, I64], U64),
             Self::ListSlice | Self::ListSliceOwned => (&[Ptr, U64, I64, I64], U64),
+            Self::StackSlowFrame => (&[Ptr, Ptr, U64], Void),
+            Self::ScopeOpen => (&[Ptr, Bool, I64, I64], U64),
+            Self::ScopeClose => (&[Ptr, U64, Bool], Bool),
         }
+    }
+
+    /// Whether the function is declared only when a unit first uses it.
+    /// The functions M2 added are, so that the function ids, and with
+    /// them the CLIF, of code that does not use them stay as before.
+    #[must_use]
+    pub const fn on_demand(self) -> bool {
+        matches!(
+            self,
+            Self::StackSlowFrame | Self::ScopeOpen | Self::ScopeClose | Self::UnwindResume
+        )
     }
 
     /// The index in [`Self::ALL`].
@@ -172,6 +206,10 @@ impl RuntimeFunc {
             Self::Debug => 21,
             Self::EffectCheck => 22,
             Self::ListSliceOwned => 23,
+            Self::StackSlowFrame => 24,
+            Self::ScopeOpen => 25,
+            Self::ScopeClose => 26,
+            Self::UnwindResume => 27,
         }
     }
 
@@ -193,13 +231,15 @@ impl RuntimeFunc {
             RuntimeFn::Equal => (Self::Equal, true),
             RuntimeFn::Debug => (Self::Debug, true),
             RuntimeFn::EffectCheck => (Self::EffectCheck, true),
+            RuntimeFn::ScopeOpen => (Self::ScopeOpen, true),
+            RuntimeFn::ScopeClose => (Self::ScopeClose, true),
         }
     }
 }
 
 /// The data symbols of the runtime's static objects generated code may
 /// reference, in declaration order.
-pub const STATIC_DATA: [&str; 8] = [
+pub const STATIC_DATA: [&str; 9] = [
     sym::STATIC_NIL,
     sym::STATIC_FALSE,
     sym::STATIC_TRUE,
@@ -208,6 +248,7 @@ pub const STATIC_DATA: [&str; 8] = [
     sym::STATIC_GREATER,
     sym::STATIC_NONE,
     sym::STATIC_EMPTY_LIST,
+    sym::STATIC_ERR_NIL,
 ];
 
 /// Every runtime symbol generated code may import, functions then data.

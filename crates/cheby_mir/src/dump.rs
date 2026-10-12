@@ -17,10 +17,19 @@
 //!
 //! - The header: `module <path>`, `tests <path>` or `entries`.
 //! - Each function: `fn <key>[ [c] ](<params>) -> <repr>[ check str#K] {`,
-//!   then the string table `str#N = "<text>"`, then blocks
-//!   `bbN(<params>):` with statements `_N: <repr> = <rvalue>`,
-//!   `<rvalue>` (evaluated for effect), `dup _N`, `drop _N` and one
-//!   terminator, then `}`. The hidden `ctx` parameter is not printed.
+//!   then the line `entry unwind bbN` when the function has an entry pad
+//!   and the line `precounted` when its body was generated with its
+//!   counts (D-698, D-693), then the string table `str#N = "<text>"`, then
+//!   blocks `bbN(<params>):` with statements `_N: <repr> = <rvalue>`,
+//!   `<rvalue>` (evaluated for effect), `dup _N`, `drop _N`,
+//!   `clear_unwind` and one terminator, then `}`. A statement or
+//!   terminator with an unwind edge ends with ` ; unwind bbN`. The hidden
+//!   `ctx` parameter is not printed. A function without edges, entry pad
+//!   or `precounted` prints exactly as before they existed.
+//! - Terminators: `return <op>`, `tail_call <callee>(<args>)`,
+//!   `goto bbN(<args>)`, `branch <op>, bbN, bbM`,
+//!   `switch <op> [<v> => bbN, …, _ => bbM]`,
+//!   `panic <kind>[ <op>] at str#K`, `unreachable`, `resume`.
 //! - Keys: `<item path>`, `shim <path>`, `closure <owner>#<n>`,
 //!   `const_init <path>`, `test <path>`, `entry main(<path>)`,
 //!   `entry test(<path>)`, `entry const(<path>)`, `entry repl(<n>)`,
@@ -28,7 +37,9 @@
 //!   `dyn_forward <iface fn> for dyn <interface>`.
 //! - Constants: `int N`, `float F`, `bool B`, `<sized repr> N`, `str#N`,
 //!   `nil`, `ctor <path>`, `fn <path>`, `code <key>`, `empty_list`,
-//!   `static#N`, `builtin_desc <name>`.
+//!   `static#N`, `builtin_desc <name>`, `ctx` (the fiber's context, only
+//!   as a foreign call's first argument) and `static Err(Nil)`.
+//!   An operand prints a constant as `const <constant>`.
 //! - Layouts: `string`, `bytes`, `boxed_int`, `boxed_float`, `boxed_f32`,
 //!   `boxed_u64`, `ctor <path>`, `tuple/N`, `closure/N`,
 //!   `dict/<fns>+<embedded>`, `dyn`, `desc/N`, `desc_nominal`.
@@ -190,6 +201,12 @@ fn dump_function_into(out: &mut String, m: &MirModule, f: &Function) -> Result<(
         let _ = write!(out, " check str#{}", loc.as_u32());
     }
     out.push_str(" {\n");
+    if let Some(pad) = f.entry_unwind {
+        let _ = writeln!(out, "  entry unwind bb{}", pad.as_u32());
+    }
+    if f.precounted {
+        out.push_str("  precounted\n");
+    }
     for (id, text) in f.strings.iter_enumerated() {
         let _ = writeln!(out, "  str#{} = \"{}\"", id.as_u32(), text.escape_debug());
     }
@@ -205,7 +222,12 @@ fn dump_function_into(out: &mut String, m: &MirModule, f: &Function) -> Result<(
             let _ = write!(out, "({params})");
         }
         out.push_str(":\n");
-        for stmt in &block.stmts {
+        let edge = |out: &mut String, i: usize| {
+            if let Some(pad) = block.unwind_target(i) {
+                let _ = write!(out, " ; unwind bb{}", pad.as_u32());
+            }
+        };
+        for (i, stmt) in block.stmts.iter().enumerate() {
             out.push_str("  ");
             match stmt {
                 Stmt::Assign { dst, value } => {
@@ -224,11 +246,14 @@ fn dump_function_into(out: &mut String, m: &MirModule, f: &Function) -> Result<(
                 Stmt::Drop(l) => {
                     let _ = write!(out, "drop {}", local(*l));
                 }
+                Stmt::ClearUnwind => out.push_str("clear_unwind"),
             }
+            edge(out, i);
             out.push('\n');
         }
         out.push_str("  ");
         out.push_str(&terminator(m, &block.term)?);
+        edge(out, block.stmts.len());
         out.push('\n');
     }
     out.push_str("}\n");
@@ -283,6 +308,8 @@ fn constant(m: &MirModule, c: &Const) -> Result<String, Ice> {
         Const::EmptyList => "empty_list".to_owned(),
         Const::Static(id) => format!("static#{}", id.as_u32()),
         Const::BuiltinDesc(d) => format!("builtin_desc {}", d.name()),
+        Const::Ctx => "ctx".to_owned(),
+        Const::ErrNil => "static Err(Nil)".to_owned(),
     })
 }
 
@@ -459,5 +486,6 @@ fn terminator(m: &MirModule, term: &Terminator) -> Result<String, Ice> {
             format!("panic {}{msg} at str#{}", kind.name(), loc.as_u32())
         }
         Terminator::Unreachable => "unreachable".to_owned(),
+        Terminator::Resume => "resume".to_owned(),
     })
 }
