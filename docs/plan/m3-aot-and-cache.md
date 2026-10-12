@@ -16,7 +16,7 @@ Detail level: workstreams with outcomes. This file is refined into tasks when M3
 - DWARF line tables by default, full debug info opt-in (D-184, D-259), and panic backtraces from them.
 - Foreign code supplied by packages, per OQ-P9, and the `cheby.h` header for it (D-187).
 - Drop functions of user external types, run from the finalizer slot of M2's handle kinds, and `@blocking` foreign calls from packages, run on M2's blocking pool (D-101, D-647, D-683, D-703).
-- Executables unwind Rust frames with the platform unwinder. The object writer and the cached-code loader carry whatever the unwinding backend chosen in M2 needs, such as the tables of the `try_call` backend (D-696).
+- Executables unwind Rust frames with the platform unwinder. Cheby frames unwind by return-flag propagation, which keeps unwinding in the generated code itself, so the object writer and the cached-code loader carry nothing extra for them (D-733, ADR-0061).
 - `@external(native, …)` symbols resolved at link time instead of in the process.
 - An executable's entry that bypasses Rust's startup code reopens standard streams that are closed at start on the null device, so they behave as D-474 requires.
 

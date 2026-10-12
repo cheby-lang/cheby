@@ -24,7 +24,7 @@ What is heap-allocated, and when counts change, is an implementation detail. The
 2. Handle drop functions run deterministically when the last reference goes away ([§9.5](#95-handles-and-drop-functions)).
 3. A binding stops holding its value right after its last use, on every target (D-205, ADR-0036). A binding that one branch of a `case` uses and another does not is released at the start of the branch that does not use it. It is never held until the end of its scope. The same applies to parameters, pattern bindings, `use` binders and values captured by closures, which are released when the closure itself is.
 
-Guarantee 3 is what makes channel closing predictable ([§10.5.3](10-concurrency.md#1053-closing)): a fiber that passes its last use of a `Sender` closes the channel at that point, even if it keeps running. An implementation must not extend a handle's lifetime past its last use, even to save a reference-count operation. A program that needs a handle kept alive must use it again later.
+Guarantee 3 is what makes channel closing predictable ([§10.5.3](10-concurrency.md#1053-closing)): a fiber that passes its last use of a `Sender` closes the channel at that point, even if it keeps running. An implementation must not extend a handle's lifetime past its last use, even to save a reference-count operation. A program that needs a handle kept alive must use it again later. `let _ = x`, where `x` names a binding, is such a use: the binding is released at that statement if it is its last use (D-736).
 
 _Example:_ `rx` is dropped at the start of the `0` branch, which closes the channel before `found` is returned.
 

@@ -57,7 +57,7 @@ M5 is listed as a milestone so it has exit criteria, but its work starts as soon
 
 ## Plan decisions
 
-Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-plan), D-284 onward in [M0 foundation](../decisions/LOG.md#2026-10-04-m0-foundation), D-418 onward in [Diagnostics](../decisions/LOG.md#2026-10-06-diagnostics), and the plan-level ones of [M1 syntax layer](../decisions/LOG.md#2026-10-07-m1-syntax-layer), [M1 vertical slice](../decisions/LOG.md#2026-10-07-m1-vertical-slice), [Open items](../decisions/LOG.md#2026-10-07-open-items), [M1 front end](../decisions/LOG.md#2026-10-10-m1-front-end), [M1 back-end plan](../decisions/LOG.md#2026-10-10-m1-back-end-plan), [M1 back end, wave 1](../decisions/LOG.md#2026-10-10-m1-back-end-wave-1), [M1 back end, wave 2](../decisions/LOG.md#2026-10-10-m1-back-end-wave-2), [M1 back end, wave 3](../decisions/LOG.md#2026-10-10-m1-back-end-wave-3), [M1 back end, wave 4](../decisions/LOG.md#2026-10-11-m1-back-end-wave-4), [M1 back end, wave 5](../decisions/LOG.md#2026-10-11-m1-back-end-wave-5), [M1 back end, wave 6](../decisions/LOG.md#2026-10-11-m1-back-end-wave-6), [M1 exit](../decisions/LOG.md#2026-10-11-m1-exit) and [M2 design](../decisions/LOG.md#2026-10-11-m2-design):
+Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-plan), D-284 onward in [M0 foundation](../decisions/LOG.md#2026-10-04-m0-foundation), D-418 onward in [Diagnostics](../decisions/LOG.md#2026-10-06-diagnostics), and the plan-level ones of [M1 syntax layer](../decisions/LOG.md#2026-10-07-m1-syntax-layer), [M1 vertical slice](../decisions/LOG.md#2026-10-07-m1-vertical-slice), [Open items](../decisions/LOG.md#2026-10-07-open-items), [M1 front end](../decisions/LOG.md#2026-10-10-m1-front-end), [M1 back-end plan](../decisions/LOG.md#2026-10-10-m1-back-end-plan), [M1 back end, wave 1](../decisions/LOG.md#2026-10-10-m1-back-end-wave-1), [M1 back end, wave 2](../decisions/LOG.md#2026-10-10-m1-back-end-wave-2), [M1 back end, wave 3](../decisions/LOG.md#2026-10-10-m1-back-end-wave-3), [M1 back end, wave 4](../decisions/LOG.md#2026-10-11-m1-back-end-wave-4), [M1 back end, wave 5](../decisions/LOG.md#2026-10-11-m1-back-end-wave-5), [M1 back end, wave 6](../decisions/LOG.md#2026-10-11-m1-back-end-wave-6), [M1 exit](../decisions/LOG.md#2026-10-11-m1-exit), [M2 design](../decisions/LOG.md#2026-10-11-m2-design) and [M2 checkpoint 1](../decisions/LOG.md#2026-10-12-m2-checkpoint-1):
 
 | Decision  | Summary                                                                                             |
 | --------- | --------------------------------------------------------------------------------------------------- |
@@ -208,6 +208,15 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-724     | Every build treats a global deadlock as fatal and exits with status 103                             |
 | D-728     | Pending stdlib spec tests listed per milestone                                                      |
 | D-730     | Runtime dependencies: `mio`, `parking_lot`, `crossbeam`                                             |
+| D-733     | Unwinding by return-flag propagation (ADR-0061); U4 deletes the `try_call` prototype                |
+| D-735     | Unwinding misses D-702's 3% compile reference; a package after U4 reduces the cost                  |
+| D-741     | A pending spec test of a later milestone may be absent too                                          |
+| D-742     | Temporary `CHEBY_UNWIND` until U4; `CHEBY_UNWIND_EDGES=off` stays                                   |
+| D-747     | Thread variant trials take the base goldens; the harness adds `@threads=N` for its own N            |
+| D-748     | `CHEBY_HARNESS_SCALE` multiplies the harness timeouts, from 1 to 100                                |
+| D-754     | Temporary std subset of checkpoint 1: stub kernels until T1 and L1                                  |
+| D-759     | `bench-compile`'s RC column leaves out drops in unwind cleanup pads                                 |
+| D-760     | RC group accepted on its geometric mean; a later package brings each benchmark within 3% of M1      |
 
 ## Open questions
 

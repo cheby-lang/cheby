@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0061
 date: 2026-09-28
 log: D-077
 ---

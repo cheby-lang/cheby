@@ -140,7 +140,7 @@ Every path must be imported before use. `std::list::map(xs, f)` without `import 
 
 Modules must not import each other cyclically, directly or through other modules. An import cycle is a compile error that lists the modules on the cycle (D-145). This keeps the evaluation order of compile-time constants ([§4.5](04-declarations.md#45-constants)), REPL reloading and incremental builds simple.
 
-An unused import is a warning (D-080). An import is used only through names written in the module: a module import when a written path starts with the name it binds, and an item import when a name it binds is written, in either namespace. Implicit uses, such as the `show` that an interpolation calls or the function behind an operator, never use an import, because satisfaction needs none ([§7.6](#76-prelude), [§8.2](08-interfaces.md#82-satisfaction)) (D-515).
+An unused import is a warning (D-080). An import is used only through names written in the module: a module import when a written path starts with the name it binds, and an item import when a name it binds is written, in either namespace. Implicit uses, such as the `show` that an interpolation calls or the function behind an operator, never use an import, because satisfaction needs none ([§7.6](#76-prelude), [§8.2](08-interfaces.md#82-satisfaction)) (D-515). The one exception is a module of the standard library, which depends only on the modules it imports: there, an import of a built-in type's home module is used when satisfaction for a built-in type takes a function from that module, as the `show` that `"{n}"` calls for an `Int` does, because satisfaction needs the import (D-489, D-762).
 
 ## 7.6 Prelude
 

@@ -167,7 +167,7 @@ From M2, the wrapper of a `@std_context` kernel passes its `ctx` as the first ar
 - Native symbols are resolved against the runtime and the process before any code runs. Every missing one is E0053 at its `@external`, sorted by position (D-455, D-532). Under `cheby check`, which compiles code only to evaluate constants, a missing symbol is bound to the stub `cheby_rt_unresolved`, and only a constant that calls it is an error (D-532).
 - The JIT imports a native symbol without a signature, as a data import whose address the call site loads and calls indirectly with its own C signature, so REPL entries, including failed ones, may bind one symbol with different signatures (D-475). AOT objects may keep typed function imports, since a program gives each symbol one signature.
 - JIT code and data live in one address-space reservation of 1 GiB per JIT, so that every PC-relative relocation reaches on x86_64 and aarch64. Pages are committed per segment as they are allocated and made read-execute or read-only when finalized (`cheby_jit::memory`).
-- In M2, an operation that may unwind leaves through the cleanup pad of its MIR unwind edge, and pads are shared between calls (D-262, D-698). Two backends are prototyped on the same MIR and measured as D-702 sets out. With return-flag propagation, a Cheby frame runs its pad and returns 0, and the caller tests the result of a Cheby call, or the flag at `ctx+12` after a C call. With `try_call`, calls of Cheby code get catch-all handlers, C callees get generated exit stubs, and a frame-pointer unwinder reads per-function tables from a process registry (D-077, ADR-0026). The user picks one at M2's slice checkpoint (D-696).
+- In M2, an operation that may unwind leaves through the cleanup pad of its MIR unwind edge, and pads are shared between calls (D-262, D-698). Unwinding uses return-flag propagation (D-733, ADR-0061): a Cheby frame runs its pad and returns 0, and the caller tests the result of a Cheby call, or the flag at `ctx+12` after a C call. A call of an unboxed-result entry point tests the flag instead of its result (D-734). The `try_call` backend was prototyped and measured beside it (D-696, D-702), and U4 deletes it.
 
 ### 2.7 Value representation
 
@@ -188,7 +188,7 @@ Native values (D-278, D-279):
 
   For example, `Some(x)` is 16 bytes: the header with scan count 1 and the layout id of `Option.Some`, then `x`.
 
-  Only the 32-bit count is written after allocation, and never for a static object. A count that would overflow makes the object static (D-454).
+  Only the 32-bit count is written after allocation, and never for a static object. A count that would overflow makes the object static (D-454), and everything it reaches is first marked shared, so a static object reaches only static or shared objects (D-753).
 
   An object with more than 254 leading uniform fields has the scan count 255, the escape value (D-279, D-555). A constructor keeps its fields where its layout puts them, and freeing, equality, hashing and debug text read them from the layout table. A tuple holds its arity as a tagged integer at offset 8, then its elements. A closure, dictionary or descriptor keeps its first field, the code word, type descriptor or nominal descriptor, at offset 8, then the number of the fields after it as a tagged integer at offset 16, then those fields, so indirect calls and readers of a dictionary's descriptor never check for the escape. Static dictionaries and descriptors have the same shape (D-555).
 
@@ -319,9 +319,9 @@ The tier-2 modules are written in Cheby over private runtime operations, and no 
 
 ### 3.6 Unwinding
 
-A panicking or cancelled fiber unwinds its stack and releases each frame's references (D-077). The cause lives in the fiber, in an unwind record that needs no allocation while unwinding (D-699).
+A panicking or cancelled fiber unwinds its stack and releases each frame's references (D-733, ADR-0061). The cause lives in the fiber, in an unwind record that needs no allocation while unwinding (D-699).
 
-- Cheby frames leave through the cleanup pads of the MIR (§2.5, D-698). Return-flag propagation and `try_call` are both prototyped on them and measured, and the user chooses one at M2's slice checkpoint (D-696, D-702).
+- Cheby frames leave through the cleanup pads of the MIR (§2.5, D-698). A frame that unwinds runs its pad and returns 0 to its caller, by the return-flag propagation that M2's checkpoint 1 chose from D-702's measurement (D-696, D-733).
 - A Cheby unwinding inside Rust is a Rust unwinding with a zero-sized marker. Every kernel and helper that may unwind runs in a guard at its C-ABI entry point, so Rust frames run their `Drop`s and Rust's unwinder never reaches a Cranelift frame. `callback::call` passes an unwinding on through the kernel that called back, and `map::upsert` has a drop guard, so a map is never left half-updated. Any other Rust panic stays fatal, and the runtime requires `panic = "unwind"` (D-342, D-697).
 - Unwinding stops at entry thunks, trampolines, a fiber's base frame and the scope intrinsic. A panic is recorded in its responsible scope when it starts, which cancels the scope's other members, and a cancellation unwinds to its outermost target (D-666, D-667, D-699).
 - A stack overflow unwinds within the 256 KiB headroom, and tests bound the stack the raise path uses to 32 KiB (D-700).

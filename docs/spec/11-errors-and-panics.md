@@ -59,7 +59,7 @@ The same pattern works for `Option` with `option::then`, and for any other callb
 
 ## 11.3 Unwinding
 
-When a fiber panics or is cancelled, it **unwinds**: its stack frames are removed from the innermost outwards, and for each frame the runtime releases the references the frame holds (D-077, ADR-0026). Unwinding stops at the `scope` or `timeout` call that catches the panic or that the cancellation targets, because scope bodies and timeout functions run on the calling fiber ([§10.3](10-concurrency.md#103-scopes), [§10.7](10-concurrency.md#107-cancellation)). Otherwise it removes every frame and the fiber ends (D-665, D-667). As a consequence:
+When a fiber panics or is cancelled, it **unwinds**: its stack frames are removed from the innermost outwards, and for each frame the runtime releases the references the frame holds (D-733, ADR-0061). Unwinding stops at the `scope` or `timeout` call that catches the panic or that the cancellation targets, because scope bodies and timeout functions run on the calling fiber ([§10.3](10-concurrency.md#103-scopes), [§10.7](10-concurrency.md#107-cancellation)). Otherwise it removes every frame and the fiber ends (D-665, D-667). As a consequence:
 
 - no memory held by the fiber leaks because of a panic,
 - the drop function of every handle whose last reference is released runs ([§9.5](09-memory-model.md#95-handles-and-drop-functions)),
@@ -67,9 +67,9 @@ When a fiber panics or is cancelled, it **unwinds**: its stack frames are remove
 
 User code cannot run during unwinding, except for handle drop functions. There is no `finally` and no `defer` (ADR-0029).
 
-On native targets, unwinding uses Cranelift `try_call` landing pads and its unwinder (D-077). On the JS target, the garbage collector reclaims ordinary memory, and the JS backend still releases handles at the same points ([§9.8](09-memory-model.md#98-memory-on-the-js-target)).
+On native targets, unwinding propagates a flag through returns: a frame that unwinds runs the cleanup code of its mid-level IR and returns to its caller, which tests for the unwinding after each call that may unwind (D-698, D-733). On the JS target, the garbage collector reclaims ordinary memory, and the JS backend still releases handles at the same points ([§9.8](09-memory-model.md#98-memory-on-the-js-target)).
 
-_Note:_ the native mechanism is not settled yet. The reference implementation builds two backends on the same cleanup pass of its mid-level IR, these landing pads and the propagation of a flag through returns, measures both and keeps one (D-696, D-698, D-702). Either one releases the same references at the same points, so the choice does not change what a program can observe.
+_Note:_ the mechanism releases the same references at the same points as any other would, so it does not change what a program can observe. The reference implementation measured it against Cranelift `try_call` landing pads before choosing it (D-702, ADR-0061).
 
 ## 11.4 let assert
 
