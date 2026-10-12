@@ -30,7 +30,14 @@
 //! callee's slot (D-043, [`CallMode::Indirect`]). Entry thunks use the
 //! platform C convention and are the only way the host enters generated
 //! code. Every Cheby-ABI function starts with the stack-limit check of
-//! D-124, whose slow path is `cheby_rt_stack_slow(ctx, location)`.
+//! D-124, whose slow path is `cheby_rt_stack_slow(ctx, location)`. The
+//! check runs after the prologue has allocated the frame, so a function
+//! whose frame exceeds [`CodegenOptions::large_frame_threshold`] (64 KiB)
+//! is compiled as two (D-679): an outer function with its symbol and a
+//! small frame, whose check accounts for the whole frame with the slow
+//! path `cheby_rt_stack_slow_frame(ctx, location, frame_size)`, and an
+//! unchecked inner body `cb$big$…` that the outer one `return_call`s.
+//! [`define`] learns the frame size from the first compilation.
 //!
 //! REPL session items (E4, D-547) are registered with
 //! [`Decls::set_session_name`]: their symbols use the module `<repl>` and
@@ -141,7 +148,22 @@ pub struct CodegenOptions {
     /// mode (plan §4.3.4), instead of the inline fast paths that skip
     /// tagged integers and static objects and update the count in place.
     pub checked_rc: bool,
+    /// The unwinding backend the code is generated for (plan §4: a hidden
+    /// switch while D-696 is open). `Off`, the default, generates the code
+    /// of M1 and ignores the MIR's unwind edges.
+    pub unwind: cheby_runtime::abi::UnwindBackend,
+    /// The frame size in bytes above which a function is split into an
+    /// outer function, which checks the stack for its whole frame, and an
+    /// unchecked inner body `cb$big$…` (D-679). Only consulted when
+    /// [`CodegenOptions::stack_check`] is set. Tests lower it to split
+    /// small functions.
+    pub large_frame_threshold: u32,
 }
+
+/// The default [`CodegenOptions::large_frame_threshold`]: 64 KiB (D-679).
+/// The ordinary entry check runs after the prologue, so a frame up to this
+/// size must fit in the stack headroom together with the slow path.
+pub const LARGE_FRAME_THRESHOLD: u32 = 64 << 10;
 
 impl Default for CodegenOptions {
     fn default() -> Self {
@@ -151,6 +173,8 @@ impl Default for CodegenOptions {
             stack_check: true,
             capture_clif: false,
             checked_rc: false,
+            unwind: cheby_runtime::abi::UnwindBackend::Off,
+            large_frame_threshold: LARGE_FRAME_THRESHOLD,
         }
     }
 }
@@ -245,6 +269,12 @@ pub fn define<M: Module>(
 /// reported (the first failing function in declaration order) do not
 /// depend on the number of threads (D-264).
 ///
+/// A function whose frame exceeds [`CodegenOptions::large_frame_threshold`]
+/// is then compiled again as two (D-679): its outer function, defined with
+/// its id, and its inner body `cb$big$…`, declared here in declaration
+/// order and defined right after it. Both count in [`DefineStats`], and
+/// with [`CodegenOptions::capture_clif`] both texts replace the first one.
+///
 /// # Errors
 ///
 /// A [`CodegenError`] if translation or compilation fails.
@@ -271,8 +301,8 @@ pub fn define_with_stats<M: Module>(
             todo.push((unit, function, decl.id));
         }
     }
-    let isa = module.isa();
     let shared: &Decls = decls;
+    let isa = module.isa();
     // `collect` keeps the order of `todo` whatever the thread count.
     let results: Vec<Result<(Option<String>, CompiledFunction), CodegenError>> = todo
         .par_iter()
@@ -282,12 +312,49 @@ pub fn define_with_stats<M: Module>(
             Ok((text, compile_function(isa, translated)?))
         })
         .collect();
+    let mut first = Vec::with_capacity(results.len());
+    for result in results {
+        first.push(result?);
+    }
+    // D-679: a function whose frame is large becomes an outer function
+    // with its symbol and an unchecked inner body. The bodies are declared
+    // here, after every function compiled, in declaration order, so their
+    // ids are the same in every build (D-264); then the large functions
+    // are translated and compiled again, in parallel.
+    let mut large = Vec::new();
+    for (index, (&(_, function, _), (_, code))) in todo.iter().zip(&first).enumerate() {
+        if is_large_frame(function, code, opts) {
+            large.push((index, decls.declare_large_frame_body(module, function.key)?));
+        }
+    }
+    let shared: &Decls = decls;
+    let isa = module.isa();
+    let split: Vec<Result<LargeFrame, CodegenError>> = large
+        .par_iter()
+        .map(|&(index, inner)| {
+            let &(unit, function, _) = todo
+                .get(index)
+                .ok_or_else(|| CodegenError::ice("a large frame out of the batch"))?;
+            compile_large_frame(isa, unit, function, shared, opts, inner)
+        })
+        .collect();
+    let mut split_by_index = rustc_hash::FxHashMap::default();
+    for (&(index, inner), result) in large.iter().zip(split) {
+        split_by_index.insert(index, (inner, result?));
+    }
     let mut clif = Vec::new();
-    let mut compiled = Vec::with_capacity(results.len());
-    for ((_, function, id), result) in todo.iter().zip(results) {
-        let (text, code) = result?;
-        clif.extend(text);
-        compiled.push((function.key, *id, code));
+    // `(key, id, code)`; the key is `None` for an inner body.
+    let mut compiled = Vec::with_capacity(todo.len().saturating_add(large.len()));
+    for (index, (&(_, function, id), (text, code))) in todo.iter().zip(first).enumerate() {
+        if let Some((inner, split)) = split_by_index.remove(&index) {
+            clif.extend(split.outer_text);
+            clif.extend(split.inner_text);
+            compiled.push((Some(function.key), id, split.outer));
+            compiled.push((None, inner, split.inner));
+        } else {
+            clif.extend(text);
+            compiled.push((Some(function.key), id, code));
+        }
     }
     // A function defined twice would fail after the data are defined,
     // which the module keeps: check first, so a failed batch defines
@@ -308,7 +375,9 @@ pub fn define_with_stats<M: Module>(
         module
             .define_function_bytes(id, code.align, &code.bytes, &code.relocs)
             .map_err(|e| CodegenError::module(&e))?;
-        decls.mark_defined(key)?;
+        if let Some(key) = key {
+            decls.mark_defined(key)?;
+        }
         stats = stats.add(DefineStats {
             code_bytes: u64::try_from(code.bytes.len()).unwrap_or(u64::MAX),
             functions: 1,
@@ -332,11 +401,68 @@ pub fn define_data<M: Module>(
     data::define_pending(module, decls, cx)
 }
 
+/// Whether `function`, compiled to `code`, has a large frame and is split
+/// into an outer function and an inner body (D-679): a Cheby function with
+/// the entry check whose frame exceeds
+/// [`CodegenOptions::large_frame_threshold`].
+fn is_large_frame(
+    function: &cheby_mir::Function,
+    code: &CompiledFunction,
+    opts: &CodegenOptions,
+) -> bool {
+    function.abi == cheby_mir::Abi::Cheby
+        && opts.stack_check
+        && code.frame_size > opts.large_frame_threshold
+}
+
+/// A function with a large frame, compiled as two (D-679).
+struct LargeFrame {
+    outer: CompiledFunction,
+    inner: CompiledFunction,
+    outer_text: Option<String>,
+    inner_text: Option<String>,
+}
+
+/// Translates and compiles `function` as its inner body `inner`, then its
+/// outer function with the inner body's frame size.
+fn compile_large_frame(
+    isa: &dyn TargetIsa,
+    unit: &MirModule,
+    function: &cheby_mir::Function,
+    decls: &Decls,
+    opts: &CodegenOptions,
+    inner: cranelift_module::FuncId,
+) -> Result<LargeFrame, CodegenError> {
+    let body = func::translate_large_frame_body(unit, function, decls, opts, inner)?;
+    let inner_text = opts.capture_clif.then(|| decls.describe(&body));
+    let inner_code = compile_function(isa, body)?;
+    let outer = func::translate_large_frame_outer(
+        unit,
+        function,
+        decls,
+        opts,
+        inner,
+        inner_code.frame_size,
+    )?;
+    let outer_text = opts.capture_clif.then(|| decls.describe(&outer));
+    Ok(LargeFrame {
+        outer: compile_function(isa, outer)?,
+        inner: inner_code,
+        outer_text,
+        inner_text,
+    })
+}
+
 /// The machine code of one function, ready for `define_function_bytes`.
 pub struct CompiledFunction {
     pub bytes: Vec<u8>,
     pub align: u64,
     pub relocs: Vec<ModuleReloc>,
+    /// The bytes the prologue allocates below the frame pointer: spill
+    /// slots, stack slots, saved registers and outgoing arguments
+    /// (Cranelift's `frame_to_fp_offset`). It decides whether the function
+    /// has a large frame (D-679).
+    pub frame_size: u32,
 }
 
 impl std::fmt::Debug for CompiledFunction {
@@ -345,6 +471,7 @@ impl std::fmt::Debug for CompiledFunction {
             .field("len", &self.bytes.len())
             .field("align", &self.align)
             .field("relocs", &self.relocs.len())
+            .field("frame_size", &self.frame_size)
             .finish()
     }
 }
@@ -373,6 +500,11 @@ pub fn compile_function(
         .compiled_code()
         .ok_or_else(|| CodegenError::ice("Cranelift returned no code"))?;
     let align = u64::from(compiled.buffer.alignment).max(FUNCTION_ALIGN);
+    let frame_size = compiled
+        .buffer
+        .frame_layout()
+        .ok_or_else(|| CodegenError::ice("Cranelift returned no frame layout"))?
+        .frame_to_fp_offset;
     let bytes = compiled.code_buffer().to_vec();
     let relocs = compiled
         .buffer
@@ -384,5 +516,6 @@ pub fn compile_function(
         bytes,
         align,
         relocs,
+        frame_size,
     })
 }

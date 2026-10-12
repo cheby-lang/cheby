@@ -4,11 +4,15 @@
 //! as `map::upsert` or a caller of `@std_hooks` (D-484), calls [`call`],
 //! which reaches the closure through the running entry's trampoline of the
 //! right arity (`cb$tramp$<n>`, C ABI: `u64 (ctx*, u64 closure, u64 a0,
-//! …)`) with the entry's context. A panic inside the closure parks the
-//! entry's thread like any other panic (D-457): no Rust frame of the kernel
-//! ever runs again, so a kernel must not hold anything that needs dropping
-//! for correctness across the call, except memory that the abandoned entry
+//! …)`) with the entry's context. A panic inside the closure abandons the
+//! entry like any other panic (D-457): no Rust frame of the kernel ever
+//! runs again, so a kernel must not hold anything that needs dropping for
+//! correctness across the call, except memory that the abandoned entry
 //! leaks anyway.
+//!
+//! While the closure runs, the fiber is pinned to its worker (D-687): the
+//! kernel's frames below it are tier-1 code written for one thread, so if
+//! the closure suspends, the fiber resumes on the same thread.
 
 use crate::abi::Word;
 use crate::entry;
@@ -41,10 +45,16 @@ pub unsafe fn call(closure: Word, args: &[Word]) -> Word {
             args.len()
         ))
     };
+    // D-687: the fiber is pinned to its worker while the kernel's frames
+    // are on its stack, so they resume on the thread they started on.
+    // SAFETY: `ctx` is the running fiber's control block, live while it
+    // runs; the reference ends with this call.
+    let fiber = unsafe { &*ctx };
+    fiber.sched.enter_callback();
     // SAFETY: the trampolines come from the entry's configuration, whose
     // ABI the host guarantees (`run_entry`'s contract); `ctx` is the running
     // entry's; the closure and arguments are as the caller guarantees.
-    unsafe {
+    let result = unsafe {
         match *args {
             [] => callbacks.t0.unwrap_or_else(|| missing())(ctx, closure),
             [a0] => callbacks.t1.unwrap_or_else(|| missing())(ctx, closure, a0),
@@ -58,7 +68,9 @@ pub unsafe fn call(closure: Word, args: &[Word]) -> Word {
                 args.len()
             )),
         }
-    }
+    };
+    fiber.sched.leave_callback();
+    result
 }
 
 #[cfg(test)]

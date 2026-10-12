@@ -63,9 +63,10 @@ use cheby_iface::{
 };
 use cheby_jit::{Jit, JitError, JitOptions};
 use cheby_mir::reach::{Reach, Root, reachable_with_hooks};
+use cheby_mir::repr::foreign_sig_with_context;
 use cheby_mir::{
     Defs, EntryKind, EntryRequest, LowerCx, MirModule, MirOptions, Program, count_and_check_with,
-    foreign_sig, lower_entries, lower_items, lower_tests,
+    lower_entries, lower_items, lower_tests,
 };
 use cheby_package::{Manifest, ModulePath, Target, Targets};
 use cheby_resolve::repl::{Entered, SessionScope};
@@ -227,9 +228,13 @@ impl Session {
     /// # Errors
     ///
     /// An [`Error`] for failures that are not diagnostics, among them an
-    /// invalid MIR option in the environment (`CHEBY_RC`).
+    /// invalid setting in the environment: `CHEBY_THREADS` (D-658), which
+    /// the REPL checks although its entries run isolated (D-713), and the
+    /// compiler's `CHEBY_RC`, `CHEBY_UNWIND` and `CHEBY_UNWIND_EDGES`.
     pub fn start(dir: &Path, options: SessionOptions) -> Result<Start, Error> {
+        cheby_runtime::sched::threads_from_env().map_err(|e| Error::new(e.to_string()))?;
         let mir = crate::backend::mir_options_from_env()?;
+        let codegen = crate::backend::codegen_options_from_env(false)?;
         let mut sources = SourceMap::new();
         let mut diagnostics = Vec::new();
         let root = find_package_root(dir);
@@ -263,10 +268,7 @@ impl Session {
         // `env::program_name()` is the package's name, as under `cheby
         // run`, and `env::args()` is empty (D-578, D-612).
         cheby_runtime::entry::set_program(Vec::new(), front.package_name.clone());
-        let jit = Jit::configured(
-            cheby_codegen_clif::CodegenOptions::default(),
-            JitOptions::from_env(),
-        )?;
+        let jit = Jit::configured(codegen, JitOptions::from_env())?;
         let session = Self {
             options,
             mir,
@@ -2008,7 +2010,7 @@ fn entry_natives(
             index,
             symbol.into(),
             NativeBinding {
-                sig: foreign_sig(sig, globals),
+                sig: foreign_sig_with_context(sig, globals, item.attrs.std_context),
                 span,
             },
         ));

@@ -1,0 +1,459 @@
+//! A fiber's scheduling state (D-685, D-687, D-689): the part of its
+//! control block the scheduler uses, how a fiber is laid out in its stack
+//! slot, how it starts, and [`park`], the only way a fiber suspends.
+//!
+//! # States
+//!
+//! A fiber's state word moves through [`state`]'s values:
+//!
+//! ```text
+//! RUNNABLE --worker resumes it--> RUNNING --park(Requeue)--> RUNNABLE
+//! RUNNING --park(Park(lock))--> PARKING --worker, after the switch--> PARKED
+//! PARKING --a waker that takes no lock--> PARKING_WOKEN --worker--> RUNNABLE
+//! PARKED --wake--> RUNNABLE
+//! RUNNING --park(Exit | Quarantine)--> DONE
+//! ```
+//!
+//! `PARKING` covers the moment between the fiber's decision to park and the
+//! worker's post-switch step: the fiber's registers are not saved yet, so
+//! it must not be resumed. A waker that holds the lock the fiber parks with
+//! cannot see `PARKING`, since the lock is released after the switch; a
+//! waker that takes no lock (timers, cancellation, the blocking pool) turns
+//! it into `PARKING_WOKEN`, and the worker enqueues the fiber itself once
+//! the switch is complete.
+//!
+//! # Ownership of the cells
+//!
+//! The saved context, the slot and the start function are plain cells.
+//! Exactly one thread uses them at a time: the fiber's own code while it
+//! runs, and otherwise the worker that switched away from it or resumes
+//! it. The hand-off between workers goes through the run queues and the
+//! state word, which order every write before the next worker's read.
+
+use std::cell::UnsafeCell;
+use std::ffi::c_void;
+use std::fmt;
+use std::mem::ManuallyDrop;
+use std::ptr::{self, NonNull};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, AtomicU32, AtomicUsize, Ordering};
+
+use parking_lot::lock_api::RawMutex as _;
+
+use super::Shared;
+use crate::ctx::{ExecCtx, FiberInit};
+use crate::fiber::stack::WARM_BYTES;
+use crate::fiber::{Saved, StackError, StackPool, StackSlot, switch};
+use crate::panic::fatal;
+use crate::tls;
+
+/// The values of a fiber's state word (module documentation).
+pub(crate) mod state {
+    /// In a run queue, or about to be.
+    pub(crate) const RUNNABLE: u8 = 0;
+    /// Running on a worker.
+    pub(crate) const RUNNING: u8 = 1;
+    /// Switching away to park: not resumable yet.
+    pub(crate) const PARKING: u8 = 2;
+    /// Woken while switching away to park: the worker enqueues it.
+    pub(crate) const PARKING_WOKEN: u8 = 3;
+    /// Parked: a wake makes it runnable.
+    pub(crate) const PARKED: u8 = 4;
+    /// Finished or quarantined: never runs again.
+    pub(crate) const DONE: u8 = 5;
+}
+
+/// What a fiber runs when it first starts: a function of its own control
+/// block. When it returns, the fiber exits.
+pub(crate) type StartFn = Box<dyn FnOnce(*mut ExecCtx) + Send>;
+
+/// The scheduling fields of a fiber control block (D-685, D-689).
+pub(crate) struct FiberSched {
+    /// The fiber's number within its runtime; 0 for isolated entries.
+    id: u64,
+    /// The runtime the fiber belongs to; `None` for isolated entries
+    /// (constant evaluation, the REPL, the thread backend, D-690, D-714).
+    runtime: Option<Arc<Shared>>,
+    /// One of [`state`]'s values.
+    state: AtomicU8,
+    /// The worker that runs it, or ran it last.
+    worker: AtomicUsize,
+    /// Kernel callbacks on its stack; above 0 the fiber is pinned to its
+    /// worker (D-687).
+    callback_depth: AtomicU32,
+    /// Its registers while it is not running.
+    saved: UnsafeCell<Saved>,
+    /// The slot it lives in, taken by the worker that retires it.
+    slot: UnsafeCell<Option<StackSlot>>,
+    /// What it runs first, taken when it starts.
+    start: UnsafeCell<Option<StartFn>>,
+}
+
+// SAFETY: the cells are used by one thread at a time (module
+// documentation): the fiber's own code while it runs, otherwise the worker
+// that switched away from it or resumes it, with the hand-off ordered by
+// the run queues and the state word. Every other field is atomic or
+// immutable.
+unsafe impl Sync for FiberSched {}
+
+impl fmt::Debug for FiberSched {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FiberSched")
+            .field("id", &self.id)
+            .field("scheduled", &self.runtime.is_some())
+            .field("state", &self.state.load(Ordering::Relaxed))
+            .field("worker", &self.worker.load(Ordering::Relaxed))
+            .field(
+                "callback_depth",
+                &self.callback_depth.load(Ordering::Relaxed),
+            )
+            .finish_non_exhaustive()
+    }
+}
+
+impl FiberSched {
+    /// The fields of an isolated entry: no runtime, always running.
+    pub(crate) fn isolated() -> Self {
+        Self {
+            id: 0,
+            runtime: None,
+            state: AtomicU8::new(state::RUNNING),
+            worker: AtomicUsize::new(0),
+            callback_depth: AtomicU32::new(0),
+            saved: UnsafeCell::new(Saved::EMPTY),
+            slot: UnsafeCell::new(None),
+            start: UnsafeCell::new(None),
+        }
+    }
+
+    /// The fields of a new fiber of `runtime`, runnable on `worker`.
+    fn scheduled(id: u64, runtime: Arc<Shared>, worker: usize, start: StartFn) -> Self {
+        Self {
+            id,
+            runtime: Some(runtime),
+            state: AtomicU8::new(state::RUNNABLE),
+            worker: AtomicUsize::new(worker),
+            callback_depth: AtomicU32::new(0),
+            saved: UnsafeCell::new(Saved::EMPTY),
+            slot: UnsafeCell::new(None),
+            start: UnsafeCell::new(Some(start)),
+        }
+    }
+
+    /// The runtime the fiber belongs to, or `None` for an isolated entry.
+    pub(crate) fn runtime(&self) -> Option<&Arc<Shared>> {
+        self.runtime.as_ref()
+    }
+
+    /// The worker that runs the fiber, or ran it last.
+    pub(crate) fn worker(&self) -> usize {
+        self.worker.load(Ordering::Relaxed)
+    }
+
+    /// Records the worker that resumes the fiber.
+    pub(super) fn set_worker(&self, worker: usize) {
+        self.worker.store(worker, Ordering::Relaxed);
+    }
+
+    /// The state word.
+    pub(super) fn state(&self) -> &AtomicU8 {
+        &self.state
+    }
+
+    /// Whether a kernel callback is on the fiber's stack, which pins it to
+    /// its worker (D-687).
+    pub(crate) fn pinned(&self) -> bool {
+        self.callback_depth.load(Ordering::Relaxed) > 0
+    }
+
+    /// A kernel starts calling a closure on this fiber (D-687): pins it.
+    /// Only the fiber itself calls this.
+    pub(crate) fn enter_callback(&self) {
+        let depth = self.callback_depth.load(Ordering::Relaxed);
+        self.callback_depth
+            .store(depth.saturating_add(1), Ordering::Relaxed);
+    }
+
+    /// The closure a kernel called returned (D-687).
+    pub(crate) fn leave_callback(&self) {
+        let depth = self.callback_depth.load(Ordering::Relaxed);
+        self.callback_depth
+            .store(depth.saturating_sub(1), Ordering::Relaxed);
+    }
+
+    /// The cell of the fiber's saved registers.
+    pub(super) fn saved(&self) -> *mut Saved {
+        self.saved.get()
+    }
+
+    /// Takes the slot out of a retired fiber.
+    ///
+    /// # Safety
+    ///
+    /// The caller is the worker that retires the fiber, which no longer
+    /// runs.
+    pub(super) unsafe fn take_slot(&self) -> Option<StackSlot> {
+        // SAFETY: forwarded from the caller: only the retiring worker uses
+        // the cell now.
+        unsafe { (*self.slot.get()).take() }
+    }
+}
+
+/// A fiber of a runtime: a pointer to its control block, which lives at
+/// the top of its stack slot until a worker retires it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FiberRef(NonNull<ExecCtx>);
+
+// SAFETY: a `FiberRef` is a handle that moves between run queues and
+// threads; the control block it points to is `Sync`, and the fields that
+// are not atomic are used under the ownership rules of the module
+// documentation.
+unsafe impl Send for FiberRef {}
+// SAFETY: as above.
+unsafe impl Sync for FiberRef {}
+
+impl FiberRef {
+    /// The fiber whose control block is `ctx`.
+    pub(crate) fn from_ctx(ctx: &ExecCtx) -> Self {
+        Self(NonNull::from(ctx))
+    }
+
+    /// The control block's address.
+    pub(crate) fn as_ptr(self) -> *mut ExecCtx {
+        self.0.as_ptr()
+    }
+
+    /// The control block.
+    ///
+    /// # Safety
+    ///
+    /// The fiber is not retired yet, and the reference is not used after
+    /// it is.
+    pub(crate) unsafe fn ctx<'a>(self) -> &'a ExecCtx {
+        // SAFETY: forwarded from the caller.
+        unsafe { self.0.as_ref() }
+    }
+}
+
+/// What the worker does once a parking fiber's registers are saved
+/// (architecture §3.4): Go's `gopark(unlockf)`. It travels to the worker as
+/// the switch's message word.
+#[derive(Debug)]
+pub(crate) enum AfterSwitch<'a> {
+    /// Yield: the fiber goes to the global queue, or back to its worker's
+    /// queue of pinned fibers while it is pinned.
+    Requeue,
+    /// Park, then release the lock, if any, that the fiber held to
+    /// register itself as a waiter: wakers that take that lock see the
+    /// fiber parked.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "joins and channels park (S6a, wave 3)")
+    )]
+    Park(Option<Unlock<'a>>),
+    /// The fiber finished: its slot goes back to the pool.
+    Exit,
+    /// The fiber is abandoned (a panic before unwinding exists, plan
+    /// §2.6's GAP(interim-panics)): its slot is never reused.
+    Quarantine,
+}
+
+/// A locked `parking_lot` mutex whose guard was given up so that the
+/// worker can release it after the switch (I-5).
+pub(crate) struct Unlock<'a>(&'a parking_lot::RawMutex);
+
+impl fmt::Debug for Unlock<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("Unlock").finish_non_exhaustive()
+    }
+}
+
+impl<'a> Unlock<'a> {
+    /// Gives up `guard`: the mutex stays locked until the worker that
+    /// parks the fiber releases it.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the channel kernels park with a lock (S6a, wave 3)"
+        )
+    )]
+    pub(crate) fn new<T: ?Sized>(guard: parking_lot::MutexGuard<'a, T>) -> Self {
+        let mutex = parking_lot::MutexGuard::mutex(&guard);
+        // SAFETY: the raw mutex is used only to unlock it once, below,
+        // after the guard is forgotten, so it is never unlocked twice.
+        let raw = unsafe { mutex.raw() };
+        std::mem::forget(guard);
+        Self(raw)
+    }
+
+    /// Releases the mutex.
+    ///
+    /// # Safety
+    ///
+    /// Called once, on the thread that locked it: the worker that ran the
+    /// fiber, right after the fiber switched to it.
+    unsafe fn unlock(self) {
+        // SAFETY: the mutex is locked (its guard was forgotten in `new`),
+        // and this is its only release.
+        unsafe { self.0.unlock() };
+    }
+}
+
+/// Suspends the running fiber `me` and runs `after` on its worker once its
+/// registers are saved (D-687, architecture §3.4). Returns when the fiber
+/// is resumed, maybe on another worker, except after [`AfterSwitch::Exit`]
+/// and [`AfterSwitch::Quarantine`], which never return.
+///
+/// `me` must be the fiber running on this thread. No lock guard, `RefCell`
+/// borrow or thread-local-derived pointer may be held across the call
+/// (I-5): a lock is handed over in [`AfterSwitch::Park`] instead. Ends the
+/// process for an isolated entry, which cannot suspend.
+pub(crate) fn park(me: &ExecCtx, after: AfterSwitch<'_>) {
+    let Some(shared) = me.sched.runtime() else {
+        fatal(format_args!("a fiber without a runtime tried to suspend"));
+    };
+    let Some(worker) = shared.worker(me.sched.worker()) else {
+        fatal(format_args!("a fiber's worker does not exist"));
+    };
+    let ends = matches!(after, AfterSwitch::Exit | AfterSwitch::Quarantine);
+    if matches!(after, AfterSwitch::Park(_)) {
+        me.sched.state.store(state::PARKING, Ordering::SeqCst);
+    }
+    let after = ManuallyDrop::new(after);
+    let message = ptr::from_ref::<AfterSwitch<'_>>(&after).expose_provenance();
+    // SAFETY: `me` runs on this thread, on the worker `worker`, which
+    // switched to it and saved its own context in `worker.saved` (only
+    // this thread uses that cell now). The fiber's own cell receives its
+    // registers; it stays valid while the fiber is suspended, since the
+    // control block lives at the top of its slot until it is retired. The
+    // worker reads the message, which points to `after` on this stack,
+    // before the fiber can be resumed or retired, and takes ownership of
+    // it (hence `ManuallyDrop`). Nothing borrowed from a thread-local or a
+    // lock guard is held here (I-5).
+    unsafe {
+        let to = (*worker.saved()).take();
+        switch::switch(me.sched.saved(), to, message);
+    }
+    if ends {
+        fatal(format_args!("a finished fiber was resumed"));
+    }
+    if cfg!(debug_assertions) && tls::current_fiber() != ptr::from_ref(me).cast_mut() {
+        fatal(format_args!(
+            "a fiber resumed without being the thread's current fiber (I-5)"
+        ));
+    }
+}
+
+/// Reads the action a fiber passed to its worker with [`park`].
+///
+/// # Safety
+///
+/// `message` is the word [`park`] passed to the switch that returned it,
+/// read once, before the fiber can be resumed or retired.
+pub(super) unsafe fn after_switch(message: usize) -> AfterSwitch<'static> {
+    if message == 0 {
+        fatal(format_args!(
+            "a fiber switched to its worker without an action"
+        ));
+    }
+    let after = ptr::with_exposed_provenance::<AfterSwitch<'static>>(message);
+    // SAFETY: forwarded from the caller: `message` is the exposed address
+    // of the `ManuallyDrop<AfterSwitch>` on the suspended fiber's stack,
+    // read once, which moves it out. Its lifetime only covers the lock it
+    // names, which the worker releases before the fiber can be resumed.
+    unsafe { after.read() }
+}
+
+/// Runs the action of [`AfterSwitch::Park`]'s lock.
+///
+/// # Safety
+///
+/// As for [`Unlock::unlock`].
+pub(super) unsafe fn release(unlock: Option<Unlock<'_>>) {
+    if let Some(unlock) = unlock {
+        // SAFETY: forwarded from the caller.
+        unsafe { unlock.unlock() };
+    }
+}
+
+/// What a new fiber's control block starts with, besides its stack.
+#[derive(Debug)]
+pub(crate) struct FiberParams {
+    /// Everything but the stack fields, which [`create`] fills in.
+    pub(crate) init: FiberInit,
+    /// The size of its stack slot in bytes.
+    pub(crate) stack_size: usize,
+}
+
+/// Creates a runnable fiber of `runtime` that runs `start`: takes a slot,
+/// places the control block at its top with a first soft limit
+/// [`WARM_BYTES`] below the top (D-677), and prepares its first frame. The
+/// fiber is not in any queue yet.
+pub(super) fn create(
+    runtime: &Arc<Shared>,
+    worker: usize,
+    params: FiberParams,
+    start: StartFn,
+) -> Result<FiberRef, StackError> {
+    let pool = StackPool::global();
+    let mut slot = pool.take(params.stack_size)?;
+    let place = match slot.reserve_top(size_of::<ExecCtx>(), align_of::<ExecCtx>()) {
+        Ok(place) => place,
+        Err(error) => {
+            pool.give_back(slot, usize::MAX);
+            return Err(error);
+        }
+    };
+    let hard_limit = slot.hard_limit();
+    let soft_limit = slot.top().saturating_sub(WARM_BYTES).max(hard_limit);
+    let stack_top = slot.stack_top();
+    let id = runtime.next_fiber_id();
+    let init = FiberInit {
+        soft_limit,
+        hard_limit,
+        stack_top,
+        sched: FiberSched::scheduled(id, Arc::clone(runtime), worker, start),
+        ..params.init
+    };
+    let fcb = place.cast::<ExecCtx>();
+    // SAFETY: `place` is `size_of::<ExecCtx>()` bytes aligned for it at the
+    // top of a slot this function owns, which nothing else uses.
+    unsafe { fcb.as_ptr().write(ExecCtx::new(init)) };
+    // SAFETY: `stack_top` lies in `slot` below the control block and above
+    // its hard limit; nothing else uses the stack below it until the fiber
+    // ends; `fiber_start` never returns and uses `arg` only as the control
+    // block written above.
+    let saved = unsafe { switch::prepare(&slot, stack_top, fiber_start, fcb.as_ptr().cast()) };
+    // SAFETY: the block was written above and nothing else knows it yet.
+    let ctx = unsafe { fcb.as_ref() };
+    // SAFETY: as above: this thread is the only user of the cells.
+    unsafe {
+        *ctx.sched.saved.get() = saved;
+        *ctx.sched.slot.get() = Some(slot);
+    }
+    #[cfg(test)]
+    runtime.probe.created(fcb.as_ptr());
+    runtime.fiber_created();
+    Ok(FiberRef(fcb))
+}
+
+/// Where a fiber's stack starts: runs its start function, then exits.
+///
+/// # Safety
+///
+/// `arg` is the fiber's control block, made by [`create`].
+unsafe extern "C" fn fiber_start(arg: *mut c_void) -> ! {
+    let fcb = arg.cast::<ExecCtx>();
+    // SAFETY: `arg` is the control block `create` placed at the top of the
+    // slot; it lives until the worker retires the fiber after `Exit`.
+    let ctx = unsafe { &*fcb };
+    // SAFETY: the start function is set before the fiber is first
+    // scheduled, and only the fiber itself, here, takes it.
+    let start = unsafe { (*ctx.sched.start.get()).take() };
+    if let Some(start) = start {
+        start(fcb);
+    }
+    park(ctx, AfterSwitch::Exit);
+    fatal(format_args!("a finished fiber was resumed"))
+}

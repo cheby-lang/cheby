@@ -23,11 +23,16 @@
 //!   thunks ([`Jit::entry`]), which call the Cheby functions (D-453). An
 //!   [`Entry`] borrows its [`Jit`], so safe code cannot run an entry after
 //!   its code is freed; [`Entry::run_main`] runs `main`'s thunk with the
-//!   exit-status policy of §10.10. Every run gets the JIT's trampolines
-//!   ([`Jit::callbacks`], D-526) and its accounting domain ([`Jit::domain`]).
+//!   exit-status policy of §10.10, and [`Entry::run_root`] runs an entry
+//!   as a root fiber of a [`Runtime`] (D-690). Every run gets the JIT's
+//!   trampolines ([`Jit::callbacks`], D-526), its accounting domain
+//!   ([`Jit::domain`]) and its unwinding backend (D-696).
 //! - Code and data live in one reservation of 1 GiB of address space per
 //!   `Jit`, committed segment by segment as batches need it (see
-//!   `memory.rs`). Dropping a [`Jit`] frees it.
+//!   `memory.rs`). Dropping a [`Jit`] hands the memory to its
+//!   [`CodeToken`]s, and the last of them frees it ([`Jit::code_token`],
+//!   D-708): a runtime that runs the JIT's code as fibers holds one until
+//!   its fibers have stopped.
 //! - Runtime symbols resolve through `cheby_runtime::symbols()`; other
 //!   native symbols of `@external(native, …)` through the symbols defined
 //!   with [`Jit::define_symbol`] and then the process's dynamic symbol
@@ -50,11 +55,13 @@ use cheby_codegen_clif::{
 };
 use cheby_iface::{DefId, Ice};
 use cheby_mir::{AbiSig, EntryKind, FnKey, LayoutDesc, LayoutRef, MirModule, Repr};
-use cheby_runtime::abi::sym;
+use cheby_runtime::abi::{UnwindBackend, sym};
 use cheby_runtime::alloc::Domain;
 use cheby_runtime::entry::{Tramp0, Tramp1, Tramp2, Tramp3, Tramp4};
 use cheby_runtime::layout::{self as rt_layout, FieldKind, LayoutInfo};
-use cheby_runtime::{Callbacks, EntryConfig, EntryFn, EntryOutcome, RunConfig, RuntimeError};
+use cheby_runtime::{
+    Callbacks, CodeToken, EntryConfig, EntryFn, EntryOutcome, RunConfig, Runtime, RuntimeError,
+};
 
 mod memory;
 // The tests compile and run machine code. Windows support is M6 (D-545),
@@ -229,11 +236,44 @@ pub struct CodeMemory {
 /// `Send` for Cranelift's lookup function.
 type SymbolTable = Arc<Mutex<FxHashMap<Box<str>, usize>>>;
 
+/// The code and data memory of a [`Jit`] after the `Jit` is dropped
+/// (D-708): [`Jit`]'s `Drop` moves its module here, and the last
+/// [`CodeToken`] (or the `Jit` itself, if it handed none out) frees it.
+struct CodeKeepAlive {
+    /// The module, once the `Jit` is dropped.
+    module: Mutex<Option<JITModule>>,
+}
+
+impl Drop for CodeKeepAlive {
+    fn drop(&mut self) {
+        let module = self
+            .module
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some(module) = module {
+            // SAFETY: no code of the JIT can run any more: the `Jit` is
+            // dropped, so no `Entry` borrows it and no isolated entry runs
+            // its code (running one returns only after its thunk returned
+            // or panicked, and a panicked entry's thread parks forever
+            // inside the runtime); and this is the last token, so no
+            // `Runtime` that ran its code as fibers holds it, and a runtime
+            // releases its tokens only after its workers stopped (D-708).
+            // Without this, cranelift-jit keeps finalized memory forever.
+            unsafe { module.free_memory() };
+        }
+    }
+}
+
 /// A JIT session: the module, the declarations of every batch so far, and
-/// the registered layouts. Dropping it frees its code and data.
+/// the registered layouts. Dropping it frees its code and data, or hands
+/// them to its outstanding [`CodeToken`]s (D-708).
 pub struct Jit {
-    /// Taken only by `Drop`, which frees its memory.
+    /// Taken only by `Drop`, which moves it into `keep_alive`.
     module: ManuallyDrop<JITModule>,
+    /// What frees the module's memory once the `Jit` and every token are
+    /// gone.
+    keep_alive: Arc<CodeKeepAlive>,
     decls: Decls,
     layouts: JitLayouts,
     codegen: CodegenOptions,
@@ -333,6 +373,9 @@ impl Jit {
         let decls = Decls::new(module.isa())?;
         Ok(Self {
             module,
+            keep_alive: Arc::new(CodeKeepAlive {
+                module: Mutex::new(None),
+            }),
             decls,
             layouts: JitLayouts::default(),
             codegen: options,
@@ -352,6 +395,24 @@ impl Jit {
     #[must_use]
     pub const fn code_stats(&self) -> DefineStats {
         self.code_stats
+    }
+
+    /// A token that keeps this JIT's code and data memory alive after the
+    /// `Jit` is dropped (D-708): the memory is freed by the last of the
+    /// `Jit` and its tokens. A [`Runtime`] whose fibers run this JIT's code
+    /// holds one ([`Runtime::attach`]) until its fibers have stopped.
+    #[must_use]
+    pub fn code_token(&self) -> CodeToken {
+        let keep_alive: Arc<CodeKeepAlive> = Arc::clone(&self.keep_alive);
+        let keep_alive: Arc<dyn Send + Sync> = keep_alive;
+        CodeToken::new(keep_alive)
+    }
+
+    /// The unwinding backend this JIT compiles for (D-696), which every
+    /// entry it runs records in its control block.
+    #[must_use]
+    pub const fn unwind_backend(&self) -> UnwindBackend {
+        self.codegen.unwind
     }
 
     /// Makes the native symbol `name` resolve to `address` in later
@@ -839,15 +900,16 @@ fn process_defines(_symbol: &str) -> bool {
 impl Drop for Jit {
     fn drop(&mut self) {
         // SAFETY: `module` is taken exactly once, here, and never used
-        // again.
+        // again by the `Jit`.
         let module = unsafe { ManuallyDrop::take(&mut self.module) };
-        // SAFETY: no code of this JIT can run after this: every `Entry`
-        // borrows the `Jit`, so none outlives it, and running one returns
-        // only after its thunk returned or panicked. A panicked entry's
-        // thread is parked forever inside the runtime and never resumes
-        // into this code. Without this, cranelift-jit keeps finalized
-        // memory forever.
-        unsafe { module.free_memory() };
+        // The memory is freed when the last holder of the keep-alive goes:
+        // this `Jit`, right below, or the last `CodeToken` a runtime holds
+        // until its fibers have stopped (D-708, I-6).
+        *self
+            .keep_alive
+            .module
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(module);
     }
 }
 
@@ -890,33 +952,66 @@ impl Entry<'_> {
     ///
     /// [`JitError::Runtime`] if the entry cannot run.
     pub fn run(self, config: &EntryConfig) -> Result<EntryOutcome, JitError> {
-        let config = EntryConfig {
-            callbacks: self.jit.callbacks(),
-            domain: self.jit.domain(),
-            ..config.clone()
-        };
+        let config = self.config(config);
         // SAFETY: `thunk` is an entry thunk with the `EntryFn` ABI built by
         // the JIT (see `Jit::entry`), and the borrow of the `Jit` keeps its
         // code and data alive until this returns.
         unsafe { cheby_runtime::run_entry(self.thunk, &config) }.map_err(JitError::Runtime)
     }
 
-    /// Runs `main`'s entry thunk under `cheby run`'s policy (§10.10,
-    /// D-182), with the JIT's trampolines and accounting domain in place
-    /// of `config`'s, and returns the exit status: 0 or 1 from the program,
-    /// 101 after a panic, 102 in debug builds when objects of the domain
-    /// leak (D-458).
+    /// Runs the entry as a root fiber of `runtime` (D-690) and reports how
+    /// it ended, with the JIT's trampolines, accounting domain and
+    /// unwinding backend in place of `config`'s. The runtime keeps the
+    /// JIT's code alive until it stops ([`Jit::code_token`]). A returned
+    /// word is valid as for [`Entry::run`].
     ///
     /// # Errors
     ///
     /// [`JitError::Runtime`] if the entry cannot run.
+    pub fn run_root(
+        self,
+        runtime: &Runtime,
+        config: &EntryConfig,
+    ) -> Result<EntryOutcome, JitError> {
+        let config = self.config(config);
+        runtime.attach(self.jit.code_token());
+        // SAFETY: `thunk` is an entry thunk with the `EntryFn` ABI built by
+        // the JIT (see `Jit::entry`), and `runtime` holds the JIT's code
+        // token, so its code and data stay alive while the runtime's
+        // fibers may run it.
+        unsafe { runtime.run_root(self.thunk, &config) }.map_err(JitError::Runtime)
+    }
+
+    /// `config` with the JIT's trampolines, domain and backend.
+    fn config(&self, config: &EntryConfig) -> EntryConfig {
+        EntryConfig {
+            callbacks: self.jit.callbacks(),
+            domain: self.jit.domain(),
+            unwind: self.jit.unwind_backend(),
+            ..config.clone()
+        }
+    }
+
+    /// Runs `main`'s entry thunk under `cheby run`'s policy (§10.10,
+    /// D-182), with the JIT's trampolines, accounting domain and unwinding
+    /// backend in place of `config`'s, and returns the exit status: 0 or 1
+    /// from the program, 101 after a panic, 102 in debug builds when
+    /// objects of the domain leak (D-458). `main` runs as the root fiber of
+    /// a runtime made for the run (D-690).
+    ///
+    /// # Errors
+    ///
+    /// [`JitError::Runtime`] if the runtime cannot start (an invalid
+    /// `CHEBY_THREADS`, D-658) or the entry cannot run.
     pub fn run_main(self, config: RunConfig) -> Result<i32, JitError> {
         let config = RunConfig {
             callbacks: self.jit.callbacks(),
             domain: self.jit.domain(),
+            unwind: self.jit.unwind_backend(),
             ..config
         };
-        // SAFETY: as in `run`.
+        // SAFETY: as in `run`; `run_main` stops its runtime before it
+        // returns.
         unsafe { cheby_runtime::run_main(self.thunk, config) }.map_err(JitError::Runtime)
     }
 }

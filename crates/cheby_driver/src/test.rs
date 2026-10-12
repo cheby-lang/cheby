@@ -27,6 +27,12 @@
 //! summary is preceded by an empty line when anything was printed before
 //! it. Compile errors stop the command before any test runs.
 //!
+//! Every test runs as a root fiber on a 64 MiB stack (D-596), one after
+//! another, on one [`Runtime`] per `cheby test` run and per std module
+//! batch (D-690), which reads `CHEBY_THREADS` before the first test
+//! (D-658). Where fibers are not supported (Windows until M6, D-714),
+//! tests run on the thread backend instead.
+//!
 //! The std self-test checks every shipped std module with its tests
 //! (`Tests::All`), then builds and runs one batch per module. When a
 //! module's batch does not build, each of its tests is built alone, so
@@ -43,6 +49,7 @@ use cheby_jit::Jit;
 use cheby_mir::EntryKind;
 use cheby_package::{Manifest, ModulePath};
 use cheby_runtime::entry::{DEFAULT_ROOT_STACK_SIZE, EntryConfig, EntryMode, EntryOutcome};
+use cheby_runtime::{Runtime, RuntimeConfig, RuntimeError};
 use cheby_types::thir;
 
 use crate::backend::{self, Roots, TestRoot};
@@ -395,7 +402,7 @@ impl TestProgram {
             |e: std::io::Error| Error::new(format!("cannot write the test report: {e}"));
         // `env::program_name()` is the package name, as under `cheby run`
         // (D-369, D-578).
-        cheby_runtime::entry::set_program(Vec::new(), self.package.clone());
+        let runtime = test_runtime(&self.package)?;
         let mut report = TestReport {
             modules: Vec::new(),
             filtered_out: self.filtered_out,
@@ -403,7 +410,7 @@ impl TestProgram {
         let mut printed = false;
         if let Some(jit) = &self.jit {
             for test in &self.tests {
-                let outcome = run_one(jit, test.def)?;
+                let outcome = run_one(jit, runtime.as_ref(), test.def)?;
                 out.write_all(
                     format!("{}\n", test_line(&test.module, &test.name, &outcome)).as_bytes(),
                 )
@@ -411,6 +418,9 @@ impl TestProgram {
                 printed = true;
                 push_result(&mut report, &test.module, &test.name, outcome);
             }
+        }
+        if let Some(runtime) = runtime {
+            runtime.shutdown();
         }
         for module in &report.modules {
             for test in &module.tests {
@@ -472,8 +482,33 @@ fn matches_filter(module: &str, name: &str, filter: Option<&str>) -> bool {
     filter.is_none_or(|filter| format!("{module} \"{name}\"").contains(filter))
 }
 
-/// Runs one test entry of `jit` and reports how it ended.
-fn run_one(jit: &Jit, def: DefId) -> Result<TestOutcome, Error> {
+/// The runtime a test run's tests run on (D-690), with `package` as the
+/// program name (D-369, D-578), or `None` where fibers are not supported
+/// (D-714): the tests then run on the thread backend, with the program
+/// name set for isolated entries.
+///
+/// # Errors
+///
+/// An [`Error`] with D-658's message for an invalid `CHEBY_THREADS`, or if
+/// the runtime's threads cannot start.
+fn test_runtime(package: &str) -> Result<Option<Runtime>, Error> {
+    let config = RuntimeConfig {
+        program_name: package.to_owned(),
+        ..RuntimeConfig::default()
+    };
+    match Runtime::new(&config) {
+        Ok(runtime) => Ok(Some(runtime)),
+        Err(RuntimeError::Unsupported) => {
+            cheby_runtime::entry::set_program(Vec::new(), package.to_owned());
+            Ok(None)
+        }
+        Err(error) => Err(Error::new(error.to_string())),
+    }
+}
+
+/// Runs one test entry of `jit` as a root fiber of `runtime`, or on the
+/// thread backend without one, and reports how it ended.
+fn run_one(jit: &Jit, runtime: Option<&Runtime>, def: DefId) -> Result<TestOutcome, Error> {
     let domain = jit.domain();
     let before = domain.live_objects();
     // A test runs on a stack as large as the root fiber that runs `main`
@@ -483,7 +518,11 @@ fn run_one(jit: &Jit, def: DefId) -> Result<TestOutcome, Error> {
         stack_size: DEFAULT_ROOT_STACK_SIZE,
         ..EntryConfig::new(EntryMode::Test)
     };
-    let outcome = jit.entry(EntryKind::Test(def))?.run(&config)?;
+    let entry = jit.entry(EntryKind::Test(def))?;
+    let outcome = match runtime {
+        Some(runtime) => entry.run_root(runtime, &config)?,
+        None => entry.run(&config)?,
+    };
     // A test thunk returns the static `Nil` when the test passed, and the
     // text of the `Err` it returned as an owned `String` otherwise
     // (D-529, D-595).
@@ -600,6 +639,9 @@ fn std_module_tests(
         .iter()
         .map(|&test| TestRoot { module, test })
         .collect();
+    // One runtime per module batch (D-690), stopped when it returns.
+    let runtime = test_runtime(STD_TEST_PACKAGE)?;
+    let runtime = runtime.as_ref();
     let batch = match build_codes(front, sources, Roots::Tests(roots)) {
         Ok(jit) => jit,
         Err(codes) => {
@@ -607,7 +649,7 @@ fn std_module_tests(
             for &test in selected {
                 let alone = vec![TestRoot { module, test }];
                 let outcome = match build_codes(front, sources, Roots::Tests(alone)) {
-                    Ok(jit) => run_one(&jit, test.def)?,
+                    Ok(jit) => run_one(&jit, runtime, test.def)?,
                     Err(codes) => TestOutcome::NotBuilt(codes),
                 };
                 tests.push(TestResult {
@@ -632,7 +674,7 @@ fn std_module_tests(
     for &test in selected {
         tests.push(TestResult {
             name: test.name.to_string(),
-            outcome: run_one(&batch, test.def)?,
+            outcome: run_one(&batch, runtime, test.def)?,
         });
     }
     Ok(ModuleTests {

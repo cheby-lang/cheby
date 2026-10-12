@@ -151,6 +151,10 @@ pub struct ItemAttrs {
     /// The functions named by the standard library's `@std_hooks(equal_fn,
     /// hash_fn, debug_fn)` on a type, in that order (D-342, D-482).
     pub hooks: Option<[(Name, Span); 3]>,
+    /// The standard library's `@std_context` on a function with an
+    /// `@external`: its native kernel receives the running fiber's context
+    /// as its first C argument (D-692, D-482).
+    pub std_context: bool,
 }
 
 impl Default for ItemAttrs {
@@ -163,6 +167,7 @@ impl Default for ItemAttrs {
             deprecated: None,
             clamped: Vec::new(),
             hooks: None,
+            std_context: false,
         }
     }
 }

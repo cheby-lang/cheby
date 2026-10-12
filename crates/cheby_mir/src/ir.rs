@@ -870,8 +870,9 @@ pub enum Terminator {
         cases: Vec<(u64, BlockId)>,
         default: Option<BlockId>,
     },
-    /// Panics at `loc`, with an optional borrowed `String` message. Live
-    /// locals leak in M1 (no unwinding, D-077 in M2).
+    /// Panics at `loc`, with an optional borrowed `String` message. The
+    /// unwind pass gives it an edge to the pad that releases the live
+    /// locals (D-698); without the pass they leak, as in M1.
     Panic {
         kind: PanicKind,
         message: Option<Operand>,

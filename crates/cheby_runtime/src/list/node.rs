@@ -200,6 +200,8 @@ static ROOT_KIND: CustomKind = CustomKind {
     equal: Some(root_equal),
     hash: Some(root_hash),
     debug: Some(root_debug),
+    handle: false,
+    finalize: None,
 };
 
 /// The leaf kind: never a value of its own.
@@ -210,6 +212,8 @@ static LEAF_KIND: CustomKind = CustomKind {
     equal: None,
     hash: None,
     debug: None,
+    handle: false,
+    finalize: None,
 };
 
 /// The branch kind: never a value of its own.
@@ -220,6 +224,8 @@ static BRANCH_KIND: CustomKind = CustomKind {
     equal: None,
     hash: None,
     debug: None,
+    handle: false,
+    finalize: None,
 };
 
 /// Registers the three kinds once per process. Every entry point that may

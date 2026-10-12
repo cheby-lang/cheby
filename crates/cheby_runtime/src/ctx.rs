@@ -34,6 +34,21 @@
 //! relaxed ordering by the owning fiber only, so the block may be shared
 //! with the threads that interrupt it. `tls.rs`'s current fiber points to
 //! it while it runs (D-686).
+//!
+//! A fiber of a runtime has its block at the top of its stack slot (D-677)
+//! with the scheduler's fields (`sched`); the structured-concurrency
+//! (`conc`) and unwinding (`unwinding`) parts are placeholders their
+//! packages fill (plan §2.4). An isolated entry's block is on the heap and
+//! has no runtime.
+//!
+//! # Stack limits
+//!
+//! A fiber starts with a soft limit 128 KiB below the top of its slot.
+//! When an entry check fails because of depth, not an interrupt, the slow
+//! path lowers the soft limit in doubling steps down to the hard limit,
+//! 256 KiB above the slot's bottom, which is where a stack overflow is
+//! reported (D-677). The lowest soft limit is the watermark the slot is
+//! given back with. An isolated entry's soft limit is its hard limit.
 
 use std::mem::offset_of;
 use std::sync::Arc;
@@ -44,6 +59,9 @@ use crate::abi::{self, UnwindBackend};
 use crate::alloc::Domain;
 use crate::consteval::ConstTable;
 use crate::entry::{Callbacks, EntryMode, EntryOutcome};
+use crate::fiber_ops::FiberConc;
+use crate::sched::FiberSched;
+use crate::unwind::UnwindState;
 
 /// The reasons for an interrupt (D-688), bits of the FCB's reason word.
 pub mod reason {
@@ -87,8 +105,11 @@ pub struct ExecCtx {
     reasons: AtomicU32,
     /// The unwinding backend the fiber's code was compiled for (D-696).
     unwind_backend: UnwindBackend,
-    /// The stack limit when no interrupt is pending.
-    soft_limit: usize,
+    /// The stack limit when no interrupt is pending; only lowered, by the
+    /// fiber itself (module documentation).
+    soft_limit: AtomicUsize,
+    /// The lowest the soft limit goes: below it the stack overflows.
+    hard_limit: usize,
     /// The stack position where the entry started.
     stack_top: usize,
     /// Interrupts the slow path has handled.
@@ -115,8 +136,15 @@ pub struct ExecCtx {
     /// The trampolines kernels call closures through (D-526).
     callbacks: Callbacks,
     entry_mode: EntryMode,
-    /// Where the outcome goes: the host waiting in `run_entry`.
+    /// Where the outcome goes: the host waiting in `run_entry` or
+    /// `Runtime::run_root`; `None` for a fiber spawned by another.
     outcome: Option<Sender<EntryOutcome>>,
+    /// The scheduler's fields (D-689).
+    pub(crate) sched: FiberSched,
+    /// Structured concurrency: scope, join and the fiber lock (plan §2.4).
+    pub(crate) conc: FiberConc,
+    /// The unwinding in flight (plan §2.4).
+    pub(crate) unwinding: UnwindState,
 }
 
 const _: () = assert!(offset_of!(ExecCtx, stack_limit) == 0 && abi::CTX_STACK_LIMIT == 0);
@@ -128,8 +156,10 @@ const _: () = assert!(offset_of!(ExecCtx, exit_pc) == 24 && abi::CTX_EXIT_PC == 
 /// What a new fiber control block starts with.
 #[derive(Debug)]
 pub(crate) struct FiberInit {
-    /// The stack limit when no interrupt is pending.
+    /// The first stack limit when no interrupt is pending.
     pub(crate) soft_limit: usize,
+    /// The lowest stack limit, at or below `soft_limit`.
+    pub(crate) hard_limit: usize,
     /// The stack position where the entry starts.
     pub(crate) stack_top: usize,
     /// What kind of entry runs.
@@ -146,6 +176,32 @@ pub(crate) struct FiberInit {
     pub(crate) consts: Option<Arc<ConstTable>>,
     /// The trampolines.
     pub(crate) callbacks: Callbacks,
+    /// The unwinding backend its code was compiled for (D-696).
+    pub(crate) unwind_backend: UnwindBackend,
+    /// The scheduler's fields: [`FiberSched::isolated`] outside a runtime.
+    pub(crate) sched: FiberSched,
+}
+
+impl FiberInit {
+    /// An isolated entry's fields with no stack, no outcome, the process
+    /// seed, no budget, a fresh domain, no constants or trampolines and the
+    /// default backend, to be completed with struct-update syntax.
+    pub(crate) fn placeholder() -> Self {
+        Self {
+            soft_limit: 0,
+            hard_limit: 0,
+            stack_top: 0,
+            entry_mode: EntryMode::Run,
+            outcome: None,
+            seed: 0,
+            budget: u64::MAX,
+            domain: Domain::new(),
+            consts: None,
+            callbacks: Callbacks::default(),
+            unwind_backend: UnwindBackend::Off,
+            sched: FiberSched::isolated(),
+        }
+    }
 }
 
 impl ExecCtx {
@@ -162,8 +218,9 @@ impl ExecCtx {
             exit_fp: AtomicUsize::new(0),
             exit_pc: AtomicUsize::new(0),
             reasons: AtomicU32::new(0),
-            unwind_backend: UnwindBackend::Off,
-            soft_limit: init.soft_limit,
+            unwind_backend: init.unwind_backend,
+            soft_limit: AtomicUsize::new(init.soft_limit),
+            hard_limit: init.hard_limit.min(init.soft_limit),
             stack_top: init.stack_top,
             interrupts: AtomicU64::new(0),
             seed: AtomicU64::new(init.seed),
@@ -176,6 +233,9 @@ impl ExecCtx {
             callbacks: init.callbacks,
             entry_mode: init.entry_mode,
             outcome: init.outcome,
+            sched: init.sched,
+            conc: FiberConc::default(),
+            unwinding: UnwindState::default(),
         }
     }
 
@@ -196,10 +256,42 @@ impl ExecCtx {
         self.interrupts.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// The stack limit when no interrupt is pending.
+    /// The stack limit when no interrupt is pending: the soft limit, the
+    /// lowest one so far for a fiber (module documentation).
     #[must_use]
     pub fn real_stack_limit(&self) -> usize {
-        self.soft_limit
+        self.soft_limit.load(Ordering::Relaxed)
+    }
+
+    /// The lowest stack limit: a frame below it overflows the stack.
+    #[must_use]
+    pub(crate) fn hard_limit(&self) -> usize {
+        self.hard_limit
+    }
+
+    /// Lowers the soft limit so that `low` lies above it: from its distance
+    /// to the top in doubling steps, down to the hard limit at most (D-677).
+    /// Called by the fiber itself in the slow path, after it took the
+    /// pending reasons; a request made since keeps its forced limit.
+    pub(crate) fn lower_soft_limit(&self, low: usize) {
+        let old = self.soft_limit.load(Ordering::Relaxed);
+        let mut limit = old;
+        while limit > low && limit > self.hard_limit {
+            let distance = self.stack_top.saturating_sub(limit).max(1);
+            limit = self
+                .stack_top
+                .saturating_sub(distance.saturating_mul(2))
+                .max(self.hard_limit);
+        }
+        if limit == old {
+            return;
+        }
+        self.soft_limit.store(limit, Ordering::SeqCst);
+        // A forced limit (`usize::MAX`) stays: the next check takes the
+        // slow path, whose `take` stores the new soft limit.
+        let _ = self
+            .stack_limit
+            .compare_exchange(old, limit, Ordering::SeqCst, Ordering::SeqCst);
     }
 
     /// The stack position where the entry started.
@@ -289,7 +381,8 @@ pub fn request(ctx: &ExecCtx, reason: u32) {
 /// soft stack limit, then empties the reason word and returns what it
 /// held. Called by the fiber itself, in the slow path.
 pub(crate) fn take(ctx: &ExecCtx) -> u32 {
-    ctx.stack_limit.store(ctx.soft_limit, Ordering::SeqCst);
+    ctx.stack_limit
+        .store(ctx.soft_limit.load(Ordering::Relaxed), Ordering::SeqCst);
     ctx.reasons.swap(0, Ordering::SeqCst)
 }
 
@@ -303,15 +396,46 @@ mod tests {
     fn fcb() -> ExecCtx {
         ExecCtx::new(FiberInit {
             soft_limit: 0x1000,
+            hard_limit: 0x1000,
             stack_top: 0x10_0000,
             entry_mode: EntryMode::Test,
-            outcome: None,
             seed: 7,
-            budget: u64::MAX,
-            domain: Domain::new(),
-            consts: None,
-            callbacks: Callbacks::default(),
+            ..FiberInit::placeholder()
         })
+    }
+
+    /// D-677: the soft limit goes down in doubling steps from the top, to
+    /// the hard limit at most, and a forced limit stays forced.
+    #[test]
+    fn the_soft_limit_goes_down_in_doubling_steps() {
+        let ctx = ExecCtx::new(FiberInit {
+            soft_limit: 0x10_0000 - 0x1000,
+            hard_limit: 0x8_0000,
+            stack_top: 0x10_0000,
+            ..FiberInit::placeholder()
+        });
+        ctx.lower_soft_limit(0x10_0000 - 0x1800);
+        assert_eq!(ctx.real_stack_limit(), 0x10_0000 - 0x2000);
+        assert_eq!(ctx.stack_limit.load(Ordering::SeqCst), 0x10_0000 - 0x2000);
+        // Several steps at once.
+        ctx.lower_soft_limit(0x10_0000 - 0x7000);
+        assert_eq!(ctx.real_stack_limit(), 0x10_0000 - 0x8000);
+        // Never below the hard limit.
+        ctx.lower_soft_limit(0x100);
+        assert_eq!(ctx.real_stack_limit(), 0x8_0000);
+        assert_eq!(ctx.hard_limit(), 0x8_0000);
+        // A request in flight keeps its forced limit.
+        let ctx = ExecCtx::new(FiberInit {
+            soft_limit: 0x10_0000 - 0x1000,
+            hard_limit: 0x8_0000,
+            stack_top: 0x10_0000,
+            ..FiberInit::placeholder()
+        });
+        request(&ctx, reason::YIELD);
+        ctx.lower_soft_limit(0x10_0000 - 0x1800);
+        assert_eq!(ctx.stack_limit.load(Ordering::SeqCst), usize::MAX);
+        assert_eq!(take(&ctx), reason::YIELD);
+        assert_eq!(ctx.stack_limit.load(Ordering::SeqCst), 0x10_0000 - 0x2000);
     }
 
     #[test]

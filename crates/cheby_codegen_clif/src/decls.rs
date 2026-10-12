@@ -713,6 +713,33 @@ impl Decls {
         Ok(())
     }
 
+    /// Declares `cb$big$…`, the unchecked inner body of the function `key`,
+    /// whose frame turned out to be large (D-679), with `key`'s signature,
+    /// and the runtime function its outer function's slow path calls.
+    /// [`crate::define`] calls it after compiling a batch, for each large
+    /// function in declaration order, so the ids are the same in every
+    /// build (D-264). Declaring the same body again (a batch retried after
+    /// its [`Decls`] were restored) gives back the same id.
+    ///
+    /// # Errors
+    ///
+    /// An ICE if `key` was never declared, or the module's error.
+    pub(crate) fn declare_large_frame_body<M: Module>(
+        &mut self,
+        module: &mut M,
+        key: FnKey,
+    ) -> Result<FuncId, CodegenError> {
+        self.declare_runtime_func(module, RuntimeFunc::StackSlowFrame)?;
+        let decl = self.func(key)?;
+        let symbol = mangle::large_frame_body(&decl.symbol);
+        let signature = decl.sig.clone();
+        let id = module
+            .declare_function(&symbol, Linkage::Local, &signature)
+            .map_err(|e| CodegenError::module(&e))?;
+        self.names.insert((0, id.as_u32()), symbol);
+        Ok(id)
+    }
+
     /// Declares the on-demand runtime functions the helpers of `unit`'s
     /// code call (D-693).
     fn declare_unit_runtime<M: Module>(

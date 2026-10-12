@@ -3,8 +3,10 @@
 //! A panic flushes standard output, prints its report to standard error
 //! (except in a test or during constant evaluation, whose hosts capture
 //! it), and then abandons the entry: it hands the report to the host
-//! waiting in `run_entry` and parks the entry's thread forever. It never
-//! returns and never unwinds (D-283; unwinding is M2). What happens next is
+//! waiting in `run_entry` or `Runtime::run_root` and parks the entry's
+//! thread forever, or, for a root fiber, switches to its worker for good
+//! (GAP(interim-panics)). It never returns and never unwinds (D-283; the
+//! unwinding backends are prototyped in M2). What happens next is
 //! the host's policy: `cheby run` exits with 101 (D-182), `cheby test`
 //! records a failure and prints the report in its failure block (D-541),
 //! the REPL continues, and constant evaluation reports a compile error
@@ -23,6 +25,7 @@ use crate::abi::{PanicKind, Word};
 use crate::ctx::{self, ExecCtx};
 use crate::entry::{EntryMode, EntryOutcome};
 use crate::io;
+use crate::sched::{self, AfterSwitch};
 use crate::string;
 
 /// A panic as the host sees it.
@@ -119,8 +122,9 @@ pub fn panic_current(kind: PanicKind, message: Option<&str>) -> ! {
 /// The slow path of the function-entry stack check: called when the stack
 /// pointer is below `ctx.stack_limit`. Handles the pending interrupt
 /// reasons in the order of D-688 (safepoint, cancellation, deadline,
-/// yield; only the deadline has an effect so far) and returns, or panics
-/// with [`PanicKind::StackOverflow`] if the real limit is reached.
+/// yield; the deadline and the yield have an effect so far), lowers the
+/// soft limit of a fiber that goes deeper (D-677), and returns, or panics
+/// with [`PanicKind::StackOverflow`] if the hard limit is reached.
 ///
 /// # Safety
 ///
@@ -192,18 +196,29 @@ unsafe fn stack_slow(ctx: *mut ExecCtx, location: Word, needed: u64) {
     {
         crate::consteval::limit_exceeded(crate::consteval::Limit::Time);
     }
-    // 5. A yield is accepted and ignored until the scheduler exists.
-    // 6. The depth.
+    // 5. A yield (D-688): a fiber of a runtime goes back to a run queue,
+    // and continues here when it is resumed, maybe on another worker.
+    // Isolated entries ignore it.
+    if reasons & ctx::reason::YIELD != 0 && context.sched.runtime().is_some() {
+        sched::park(context, AfterSwitch::Requeue);
+    }
+    // 6. The depth: below the soft limit, the limit goes down in doubling
+    // steps (D-677); below the hard limit, the stack overflows.
     let needed = usize::try_from(needed).unwrap_or(usize::MAX);
-    let overflows = stack_position()
-        .checked_sub(needed)
-        .is_none_or(|low| low < context.real_stack_limit());
-    if overflows {
-        // SAFETY: forwarded from the caller.
-        let location = unsafe { location_text(location) };
-        let report = PanicReport::new(PanicKind::StackOverflow, None, &location);
-        // SAFETY: forwarded from the caller.
-        unsafe { abandon(ctx, report) }
+    let low = stack_position().checked_sub(needed);
+    match low {
+        Some(low) if low >= context.hard_limit() => {
+            if low < context.real_stack_limit() {
+                context.lower_soft_limit(low);
+            }
+        }
+        _ => {
+            // SAFETY: forwarded from the caller.
+            let location = unsafe { location_text(location) };
+            let report = PanicReport::new(PanicKind::StackOverflow, None, &location);
+            // SAFETY: forwarded from the caller.
+            unsafe { abandon(ctx, report) }
+        }
     }
 }
 
@@ -232,6 +247,10 @@ unsafe fn location_text(location: Word) -> String {
 /// unless the entry captures it (tests and constant evaluation), hands it
 /// to the host and parks forever.
 ///
+/// GAP(interim-panics): until unwinding exists, a root fiber of a runtime
+/// does the same and then switches to its worker for good, which
+/// quarantines its slot; any other fiber of a runtime ends the process.
+///
 /// # Safety
 ///
 /// `ctx` is null or the running entry's context.
@@ -251,10 +270,23 @@ unsafe fn abandon(ctx: *mut ExecCtx, report: PanicReport) -> ! {
         io::write_stderr(&report.to_string());
     }
     let Some(outcome) = context.and_then(ExecCtx::outcome) else {
+        if context.is_some_and(|context| context.sched.runtime().is_some()) {
+            fatal(format_args!(
+                "a fiber panicked (unwinding arrives with package U4)"
+            ));
+        }
         fatal(format_args!("a panic happened outside of any entry"));
     };
     // If the host has gone there is nobody to tell; park anyway.
     outcome.send(EntryOutcome::Panicked(report)).ok();
+    if let Some(context) = context
+        && context.sched.runtime().is_some()
+    {
+        // The worker drops the control block and quarantines the slot; the
+        // abandoned frames never run again, and nothing borrowed from a
+        // thread-local or a lock is held here (I-5).
+        sched::park(context, AfterSwitch::Quarantine);
+    }
     // The parked thread never allocates again: its cached free blocks go
     // back to the system, like its stack.
     crate::alloc::release_block_cache();

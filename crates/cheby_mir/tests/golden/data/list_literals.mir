@@ -1,119 +1,188 @@
 module app
 
 fn app::empty() -> value check str#0 {
+  entry unwind bb1
   str#0 = "src/main.cheby:3:4"
 bb0:
   return const empty_list
+bb1:
+  resume
 }
 
 fn app::elements(_0: int) -> value check str#0 {
+  entry unwind bb1
   str#0 = "src/main.cheby:7:4"
 bb0:
   _1: value = box int const int 1
-  _2: value = call_runtime list_push(const empty_list, _1)
-  _3: value = box int _0
-  _4: value = call_runtime list_push(_2, _3)
+  _2: value = call_runtime list_push(const empty_list, _1) ; unwind bb1
+  _3: value = box int _0 ; unwind bb2
+  _4: value = call_runtime list_push(_2, _3) ; unwind bb1
   _5: value = box int const int 3
-  _6: value = call_runtime list_push(_4, _5)
+  _6: value = call_runtime list_push(_4, _5) ; unwind bb1
   return _6
+bb1:
+  resume
+bb2:
+  drop _2
+  goto bb1()
 }
 
 fn app::strings(_0: value) -> value check str#0 {
+  entry unwind bb2
   str#0 = "src/main.cheby:11:4"
   str#1 = "b"
 bb0:
-  _1: value = call_runtime list_push(const empty_list, _0)
+  _1: value = call_runtime list_push(const empty_list, _0) ; unwind bb1
   _2: value = const str#1
-  _3: value = call_runtime list_push(_1, _2)
+  _3: value = call_runtime list_push(_1, _2) ; unwind bb1
   return _3
+bb1:
+  resume
+bb2:
+  drop _0
+  goto bb1()
 }
 
 fn app::push_found(_0: value, _1: value) -> value check str#0 {
+  entry unwind bb3
   str#0 = "src/main.cheby:15:4"
 bb0:
-  _2: value = call_runtime list_push(_0, _1)
+  _2: value = call_runtime list_push(_0, _1) ; unwind bb1
   return _2
+bb1:
+  resume
+bb2:
+  drop _0
+  goto bb1()
+bb3:
+  drop _1
+  goto bb2()
 }
 
 fn app::first(_0: value, _1: value) -> value check str#0 {
+  entry unwind bb3
   str#0 = "src/main.cheby:19:4"
 bb0:
-  _2: value = call_runtime list_append(_0, borrow _1)
+  _2: value = call_runtime list_append(_0, borrow _1) ; unwind bb4
   drop _1
   return _2
+bb1:
+  resume
+bb2:
+  drop _0
+  goto bb1()
+bb3:
+  drop _1
+  goto bb2()
+bb4:
+  drop _1
+  goto bb1()
 }
 
 fn app::middle(_0: value, _1: value) -> value check str#0 {
+  entry unwind bb3
   str#0 = "src/main.cheby:23:4"
 bb0:
   _2: value = box int const int 0
-  _3: value = call_runtime list_push(const empty_list, _2)
-  _4: value = call_runtime list_append(_3, borrow _0)
+  _3: value = call_runtime list_push(const empty_list, _2) ; unwind bb3
+  _4: value = call_runtime list_append(_3, borrow _0) ; unwind bb3
   drop _0
   _5: value = box int const int 99
-  _6: value = call_runtime list_push(_4, _5)
-  _7: value = call_runtime list_append(_6, borrow _1)
+  _6: value = call_runtime list_push(_4, _5) ; unwind bb4
+  _7: value = call_runtime list_append(_6, borrow _1) ; unwind bb4
   drop _1
   return _7
+bb1:
+  resume
+bb2:
+  drop _0
+  goto bb1()
+bb3:
+  drop _1
+  goto bb2()
+bb4:
+  drop _1
+  goto bb1()
 }
 
 fn app::last(_0: value) -> value check str#0 {
+  entry unwind bb2
   str#0 = "src/main.cheby:27:4"
 bb0:
   _1: value = box int const int 0
-  _2: value = call_runtime list_push(const empty_list, _1)
-  _3: value = call_runtime list_append(_2, borrow _0)
+  _2: value = call_runtime list_push(const empty_list, _1) ; unwind bb2
+  _3: value = call_runtime list_append(_2, borrow _0) ; unwind bb2
   drop _0
   return _3
+bb1:
+  resume
+bb2:
+  drop _0
+  goto bb1()
 }
 
 fn app::twice(_0: value) -> value check str#0 {
+  entry unwind bb2
   str#0 = "src/main.cheby:31:4"
 bb0:
   dup _0
-  _1: value = call_runtime list_append(_0, borrow _0)
+  _1: value = call_runtime list_append(_0, borrow _0) ; unwind bb2
   drop _0
   return _1
+bb1:
+  resume
+bb2:
+  drop _0
+  goto bb1()
 }
 
 fn app::main() -> value check str#0 {
+  entry unwind bb1
   str#0 = "src/main.cheby:35:4"
   str#1 = "a"
   str#2 = "b"
 bb0:
-  _0: value = call app::empty()
+  _0: value = call app::empty() ; unwind bb1
   drop _0
-  _1: value = call app::elements(const int 2)
+  _1: value = call app::elements(const int 2) ; unwind bb1
   drop _1
   _2: value = const str#1
-  _3: value = call app::strings(_2)
+  _3: value = call app::strings(_2) ; unwind bb1
   drop _3
   _4: value = const str#1
-  _5: value = call_runtime list_push(const empty_list, _4)
+  _5: value = call_runtime list_push(const empty_list, _4) ; unwind bb1
   _6: value = const str#2
-  _7: value = call app::push_found(_5, _6)
+  _7: value = call app::push_found(_5, _6) ; unwind bb1
   drop _7
   _8: value = box int const int 1
-  _9: value = call_runtime list_push(const empty_list, _8)
+  _9: value = call_runtime list_push(const empty_list, _8) ; unwind bb1
   _10: value = box int const int 2
-  _11: value = call_runtime list_push(const empty_list, _10)
-  _12: value = call app::first(_9, _11)
+  _11: value = call_runtime list_push(const empty_list, _10) ; unwind bb2
+  _12: value = call app::first(_9, _11) ; unwind bb1
   drop _12
   _13: value = box int const int 1
-  _14: value = call_runtime list_push(const empty_list, _13)
+  _14: value = call_runtime list_push(const empty_list, _13) ; unwind bb1
   _15: value = box int const int 2
-  _16: value = call_runtime list_push(const empty_list, _15)
-  _17: value = call app::middle(_14, _16)
+  _16: value = call_runtime list_push(const empty_list, _15) ; unwind bb3
+  _17: value = call app::middle(_14, _16) ; unwind bb1
   drop _17
   _18: value = box int const int 1
-  _19: value = call_runtime list_push(const empty_list, _18)
-  _20: value = call app::last(_19)
+  _19: value = call_runtime list_push(const empty_list, _18) ; unwind bb1
+  _20: value = call app::last(_19) ; unwind bb1
   drop _20
   _21: value = box int const int 1
-  _22: value = call_runtime list_push(const empty_list, _21)
-  _23: value = call app::twice(_22)
+  _22: value = call_runtime list_push(const empty_list, _21) ; unwind bb1
+  _23: value = call app::twice(_22) ; unwind bb1
   drop _23
   return const nil
+bb1:
+  resume
+bb2:
+  drop _9
+  goto bb1()
+bb3:
+  drop _14
+  goto bb1()
 }
 
 callee app::empty() -> value

@@ -28,6 +28,7 @@ use std::fmt;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::Ordering;
 
+use crate::ctx::ExecCtx;
 use crate::tls;
 
 /// The bytes of scratch capacity live in the running fiber, or on this
@@ -64,35 +65,101 @@ pub(crate) fn reset_peak() {
     }
 }
 
-/// Moves the count of live scratch from `old` to `new` bytes.
-fn recharge(old: u64, new: u64) {
-    let next = |live: u64| live.saturating_sub(old).saturating_add(new);
-    match super::current_fiber() {
-        Some(ctx) => {
-            // Only the owning fiber writes its counts.
-            let (live, peak) = ctx.scratch();
-            let now = next(live.load(Ordering::Relaxed));
-            live.store(now, Ordering::Relaxed);
-            peak.fetch_max(now, Ordering::Relaxed);
+/// Whose scratch count a buffer charges: found once, when the buffer first
+/// grows, so a buffer reads `tls.rs` once in its life rather than at every
+/// growth and again when it is dropped (GATE1-1: each accessor is a call
+/// that is never inlined, D-686).
+#[derive(Clone, Copy, Debug)]
+enum Owner {
+    /// The buffer has not grown yet and charges nothing.
+    None,
+    /// The control block of the fiber the buffer was grown on. A buffer
+    /// lives in that fiber's frames, which run only on that fiber, so the
+    /// block stays the right one, and live, even when the fiber moves to
+    /// another thread: it is the fiber's own, not the thread's.
+    /// GAP(fcb-pointer-across-switch): it is read from `tls.rs` once and
+    /// may be kept across a switch (a debug hook that parks); D-686's rule
+    /// is read as covering thread state, not a fiber's own control block.
+    Fiber(*const ExecCtx),
+    /// A thread that runs no fiber: its host slot.
+    Host,
+}
+
+/// The bytes a buffer is charged with, and to whom. Dropping it gives the
+/// bytes back.
+#[derive(Debug)]
+struct Charge {
+    bytes: u64,
+    owner: Owner,
+}
+
+impl Charge {
+    /// Nothing charged yet.
+    const fn new() -> Self {
+        Self {
+            bytes: 0,
+            owner: Owner::None,
         }
-        None => {
-            tls::with_host(|host| {
-                let now = next(host.scratch_live.get());
-                host.scratch_live.set(now);
-                host.scratch_peak.set(host.scratch_peak.get().max(now));
-            });
+    }
+
+    /// The fiber the buffer charges, `None` on a host thread; found on the
+    /// first call.
+    fn fiber<'a>(&mut self) -> Option<&'a ExecCtx> {
+        let ctx: Option<&'a ExecCtx> = match self.owner {
+            Owner::None => {
+                let ctx = super::current_fiber();
+                self.owner = ctx.map_or(Owner::Host, |ctx| Owner::Fiber(ctx));
+                return ctx;
+            }
+            // SAFETY: the control block of the fiber this buffer was grown
+            // on, which runs the code that owns the buffer (see `Owner`).
+            Owner::Fiber(ctx) => Some(unsafe { &*ctx }),
+            Owner::Host => None,
+        };
+        ctx
+    }
+
+    /// Moves the owner's count of live scratch from the bytes charged now
+    /// to `new` bytes.
+    fn recharge(&mut self, new: u64) {
+        let old = self.bytes;
+        let next = |live: u64| live.saturating_sub(old).saturating_add(new);
+        match self.fiber() {
+            Some(ctx) => {
+                // Only the owning fiber writes its counts.
+                let (live, peak) = ctx.scratch();
+                let now = next(live.load(Ordering::Relaxed));
+                live.store(now, Ordering::Relaxed);
+                peak.fetch_max(now, Ordering::Relaxed);
+            }
+            None => {
+                tls::with_host(|host| {
+                    let now = next(host.scratch_live.get());
+                    host.scratch_live.set(now);
+                    host.scratch_peak.set(host.scratch_peak.get().max(now));
+                });
+            }
+        }
+        self.bytes = new;
+    }
+}
+
+impl Drop for Charge {
+    fn drop(&mut self) {
+        if self.bytes != 0 {
+            self.recharge(0);
         }
     }
 }
 
 /// Grows a buffer of `cap` items of `item` bytes, holding `len`, so it has
 /// room for `extra` more: to twice its capacity, or more when `extra`
-/// needs it. `charged` is the bytes the buffer is charged with, and
-/// `reserve` asks the system for room for that many more items. A size
-/// that overflows, a size over constant evaluation's memory budget and a
+/// needs it. `charge` is what the buffer is charged with, and `reserve`
+/// asks the system for room for that many more items. A size that
+/// overflows, a size over constant evaluation's memory budget and a
 /// request the system refuses end as [`super::out_of_memory`] says.
 fn grow(
-    charged: &mut u64,
+    charge: &mut Charge,
     (len, cap, item): (usize, usize, usize),
     extra: usize,
     reserve: impl FnOnce(usize) -> Result<(), TryReserveError>,
@@ -107,12 +174,11 @@ fn grow(
         .unwrap_or(u64::MAX);
     // The old buffer is still counted in the scratch live now, so a move
     // that holds both for a moment fits the budget too.
-    crate::entry::check_budget(bytes);
+    crate::entry::check_budget_of(charge.fiber(), bytes);
     if reserve(new_cap.saturating_sub(len)).is_err() {
         super::out_of_memory(bytes);
     }
-    recharge(*charged, bytes);
-    *charged = bytes;
+    charge.recharge(bytes);
 }
 
 /// The smallest capacity a buffer grows to, in items.
@@ -122,7 +188,7 @@ const MIN_CAP: usize = 8;
 /// it grows only through its own methods, which account for the growth.
 pub(crate) struct ScratchVec<T> {
     items: Vec<T>,
-    charged: u64,
+    charge: Charge,
 }
 
 impl<T> ScratchVec<T> {
@@ -130,7 +196,7 @@ impl<T> ScratchVec<T> {
     pub(crate) const fn new() -> Self {
         Self {
             items: Vec::new(),
-            charged: 0,
+            charge: Charge::new(),
         }
     }
 
@@ -152,7 +218,7 @@ impl<T> ScratchVec<T> {
             size_of::<T>().max(1),
         );
         let items = &mut self.items;
-        grow(&mut self.charged, shape, extra, |more| {
+        grow(&mut self.charge, shape, extra, |more| {
             items.try_reserve_exact(more)
         });
     }
@@ -200,12 +266,6 @@ impl<T> Default for ScratchVec<T> {
     }
 }
 
-impl<T> Drop for ScratchVec<T> {
-    fn drop(&mut self) {
-        recharge(self.charged, 0);
-    }
-}
-
 impl<T> Deref for ScratchVec<T> {
     type Target = [T];
 
@@ -229,10 +289,18 @@ impl<T: fmt::Debug> fmt::Debug for ScratchVec<T> {
 /// A string of scratch text. It derefs to `str`, which cannot grow; it
 /// grows only through [`ScratchString::push_str`], which accounts for the
 /// growth.
-#[derive(Default)]
 pub(crate) struct ScratchString {
     text: String,
-    charged: u64,
+    charge: Charge,
+}
+
+impl Default for ScratchString {
+    fn default() -> Self {
+        Self {
+            text: String::new(),
+            charge: Charge::new(),
+        }
+    }
 }
 
 impl ScratchString {
@@ -241,7 +309,7 @@ impl ScratchString {
         if self.text.capacity().saturating_sub(self.text.len()) < text.len() {
             let shape = (self.text.len(), self.text.capacity(), 1);
             let buffer = &mut self.text;
-            grow(&mut self.charged, shape, text.len(), |more| {
+            grow(&mut self.charge, shape, text.len(), |more| {
                 buffer.try_reserve_exact(more)
             });
         }
@@ -251,12 +319,6 @@ impl ScratchString {
     /// Removes the text, keeping the capacity.
     pub(crate) fn clear(&mut self) {
         self.text.clear();
-    }
-}
-
-impl Drop for ScratchString {
-    fn drop(&mut self) {
-        recharge(self.charged, 0);
     }
 }
 

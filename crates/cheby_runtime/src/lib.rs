@@ -14,7 +14,9 @@
 //!   nominal descriptors).
 //! - Running code: [`panic`](mod@panic), [`ctx`] (the fiber control
 //!   block and interrupt reasons, D-685, D-688), [`entry`] (entries, the
-//!   current entry, exit statuses), [`callback`] (kernels calling
+//!   current entry, exit statuses), [`sched`] (the M:N scheduler: one
+//!   [`Runtime`] per host run, its workers, run queues and monitor,
+//!   D-689, D-690), [`callback`] (kernels calling
 //!   closures), [`consteval`] (constant evaluation's runtime side),
 //!   [`stats`] (counters of allocations and in-place updates), the private
 //!   `tls` (every thread-local of the crate, D-686), `unwind` (the
@@ -42,6 +44,7 @@ pub(crate) mod fiber_ops;
 pub mod generic;
 #[doc(hidden)]
 pub mod hamt;
+pub(crate) mod handles;
 mod helpers;
 pub mod io;
 pub mod layout;
@@ -51,6 +54,7 @@ mod num;
 pub mod object;
 pub mod panic;
 pub mod rc;
+pub mod sched;
 pub mod stats;
 pub mod string;
 mod symbols;
@@ -68,4 +72,5 @@ pub use entry::{
 };
 pub use layout::{FieldInfo, FieldKind, LayoutError, LayoutInfo, LayoutKind};
 pub use panic::PanicReport;
+pub use sched::{CodeToken, Runtime, RuntimeConfig};
 pub use symbols::{complete_modules, symbols};

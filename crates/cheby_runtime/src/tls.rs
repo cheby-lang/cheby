@@ -148,6 +148,23 @@ pub(crate) fn with_cache<R>(f: impl FnOnce(&RefCell<BlockCache>) -> R) -> Option
     CACHE.try_with(f).ok()
 }
 
+/// Calls `f` with the control block of the fiber running on this thread
+/// (null when none) and this thread's block cache, in one accessor call
+/// (D-686): the allocator's free and kernel-allocation paths need both.
+/// `None` during thread teardown, when the cache is gone. `f` never
+/// suspends.
+#[inline(never)]
+pub(crate) fn with_fiber_and_cache<R>(
+    f: impl FnOnce(*mut ExecCtx, &RefCell<BlockCache>) -> R,
+) -> Option<R> {
+    CACHE
+        .try_with(|cache| {
+            let fiber = black_box(CURRENT_FIBER.try_with(Cell::get).unwrap_or(ptr::null_mut()));
+            f(fiber, cache)
+        })
+        .ok()
+}
+
 /// Calls `f` with this thread's quarantine; `None` during thread teardown.
 /// `f` never suspends.
 #[inline(never)]
@@ -343,15 +360,8 @@ mod tests {
         assert!(current_fiber().is_null());
         let fiber = std::thread::spawn(|| {
             let ctx = Box::into_raw(Box::new(crate::ctx::ExecCtx::new(crate::ctx::FiberInit {
-                soft_limit: 0,
-                stack_top: 0,
                 entry_mode: crate::entry::EntryMode::Test,
-                outcome: None,
-                seed: 0,
-                budget: u64::MAX,
-                domain: Domain::new(),
-                consts: None,
-                callbacks: crate::entry::Callbacks::default(),
+                ..crate::ctx::FiberInit::placeholder()
             })));
             // SAFETY: a live control block, current until replaced below.
             let previous = unsafe { set_current_fiber(ctx) };

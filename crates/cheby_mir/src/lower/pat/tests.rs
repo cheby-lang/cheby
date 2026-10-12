@@ -504,10 +504,31 @@ fn main() {
     );
     let never = lowered.function("app", "app::never");
     assert_eq!(count(&never, "  panic "), 2, "{never}");
-    assert!(
-        !never.contains("return") && !never.contains("goto"),
-        "{never}"
-    );
+    // No block that normal control flow reaches returns or jumps to a
+    // join; the cleanup pads of the unwind pass (D-698), which only an
+    // unwinding reaches, end in `goto` and `resume`.
+    let unit = lowered.unit("app");
+    let f = unit
+        .functions
+        .iter()
+        .find(|f| crate::dump_function(unit, f).unwrap() == never)
+        .unwrap();
+    let mut seen = BTreeSet::new();
+    let mut work = vec![crate::BlockId::from_u32(0)];
+    while let Some(id) = work.pop() {
+        if seen.insert(id) {
+            work.extend(f.blocks.get(id).unwrap().term.successors());
+        }
+    }
+    for id in seen {
+        assert!(
+            !matches!(
+                f.blocks.get(id).unwrap().term,
+                crate::Terminator::Return(_) | crate::Terminator::Goto { .. }
+            ),
+            "{never}"
+        );
+    }
 }
 
 #[test]

@@ -129,6 +129,10 @@ pub struct External {
     pub symbol: Box<str>,
     /// The attribute.
     pub span: Span,
+    /// The function carries the standard library's `@std_context`: the
+    /// kernel receives the running fiber's context as its first C argument
+    /// (D-692).
+    pub context: bool,
 }
 
 /// A checked body: a function's block, a constant's initializer or a

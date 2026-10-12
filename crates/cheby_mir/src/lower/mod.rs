@@ -37,6 +37,9 @@ mod entry;
 mod expr;
 mod external;
 mod interp;
+mod intrinsic;
+#[cfg(test)]
+mod intrinsic_tests;
 mod list;
 mod panic;
 mod pat;
@@ -51,6 +54,7 @@ use cheby_iface::{DefId, DisplayCx, Generics, Ice, ModuleId, Ty, display};
 use cheby_types::thir;
 
 pub use entry::{EntryRequest, lower_entries};
+pub use intrinsic::{Intrinsic, intrinsic_symbols};
 
 use crate::abi::abi_sig;
 use crate::defs::Defs;
@@ -199,20 +203,13 @@ impl Pending {
     }
 
     /// Records that a kernel may call a closure of `arity` arguments back
-    /// through a trampoline (plan §4.3.4).
-    #[expect(
-        dead_code,
-        reason = "entries carry trampolines 0-4 (D-561); kept for a unit that records its own"
-    )]
+    /// through a trampoline (plan §4.3.4): the unit then defines
+    /// `FnKey::Trampoline(arity)`, which the JIT defines once (D-561).
     pub(crate) fn need_trampoline(&mut self, arity: u32) {
         self.trampolines.insert(arity);
     }
 
     /// The trampoline arities recorded so far.
-    #[expect(
-        dead_code,
-        reason = "entries carry trampolines 0-4 (D-561); kept for a unit that records its own"
-    )]
     pub(crate) const fn trampolines(&self) -> &BTreeSet<u32> {
         &self.trampolines
     }
@@ -337,7 +334,15 @@ fn lower_item(f: &thir::FnDef, cx: &LowerCx<'_>, pending: &mut Pending) -> Resul
         .sum::<usize>();
     match (&f.native_external, &f.body) {
         // With a body too, the body is for the other targets (D-207, D-510).
-        (Some(ext), _) => external::lower_wrapper(f, ext, sig, cx),
+        (Some(ext), _) => {
+            if ext.context {
+                // A `@std_context` kernel may start a fiber, whose base
+                // frame calls its function through `cb$tramp$0` (D-692,
+                // D-526), so the unit that binds one defines it (D-561).
+                pending.need_trampoline(0);
+            }
+            external::lower_wrapper(f, ext, sig, cx)
+        }
         (None, Some(body)) => {
             body::lower_body(FnKey::Item(f.def), f.span, body, dicts, cx, pending)
         }
@@ -393,6 +398,7 @@ fn finish_unit(
     for &(iface_fn, dyn_iface) in &pending.dyn_forwards {
         functions.push(dict::dyn_forward(iface_fn, dyn_iface, cx)?);
     }
+    functions.extend(closure::trampolines(pending.trampolines())?);
     let statics = pending.statics;
     let mut m = Mentions::default();
     for f in &functions {

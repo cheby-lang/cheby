@@ -16,16 +16,32 @@
 //! terminator, pads that exist, are not `bb0` and take no parameters,
 //! `resume` and `clear_unwind` only in blocks that normal control flow
 //! does not reach, `clear_unwind` only in a `precounted` body (D-693),
-//! and `ctx` only as the first argument of a foreign call (D-692). Before
+//! no entry pad in a C-ABI function, which has no entry check, and `ctx`
+//! only as the first argument of a foreign call (D-692). Before
 //! [`Stage::Unwound`], only a `precounted` body has edges, an entry pad or
 //! `resume`; such a body is checked with its counts from
-//! [`Stage::Lowered`] on. CFG, dominance and ownership follow the normal
-//! successors; the pad sets are checked by the unwind pass's rules.
+//! [`Stage::Lowered`] on.
+//!
+//! The CFG of dominance and ownership follows [`Function::successors`]:
+//! the normal successors, the unwind edges and the entry pad. For
+//! dominance each block is split at its unwind edges ([`Segments`]), so a
+//! pad sees only what is defined before the instruction that unwinds to
+//! it, never that instruction's result. Ownership is the simulation of
+//! [`crate::ownership`]: an unwind edge carries what an unwinding leaves
+//! held at its instruction, so each pad's owned set must equal the
+//! ownership state at every source, and `resume`, like `return`, leaves
+//! nothing held.
+//!
+//! At [`Stage::Unwound`] also (D-698): each edge's instruction may unwind
+//! ([`crate::unwind::stmt_may_unwind`]), every instruction that may unwind
+//! in a reachable block has an edge, a pad does not use the result of the
+//! instruction that unwinds to it, and every Cheby-ABI function has its
+//! entry pad. Reuse tokens do not exist yet, so the rule that each is
+//! consumed once on every path, pads included, waits for them.
 
 mod dom;
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt::Write as _;
 
 use cheby_iface::{Ice, Idx};
 
@@ -33,12 +49,14 @@ use self::dom::Dominance;
 
 use crate::abi::{AbiSig, fixed_sig, is_uniform_sig};
 use crate::ir::{
-    Abi, ArithOp, BlockId, BuiltinLayout, Callee, CmpOp, Const, FnKey, Function, LayoutRef, Local,
-    MirModule, Operand, RuntimeFn, Rvalue, StaticKind, StaticObject, Stmt, TagType, Terminator,
-    UnitKind, UseKind,
+    Abi, ArithOp, Block, BlockId, BuiltinLayout, Callee, CmpOp, Const, FnKey, Function, LayoutRef,
+    Local, MirModule, Operand, RuntimeFn, Rvalue, StaticKind, StaticObject, Stmt, TagType,
+    Terminator, UnitKind,
 };
 use crate::layout::LayoutDesc;
+use crate::ownership::{self, Observer};
 use crate::repr::{CType, Repr};
+use crate::unwind::{stmt_may_unwind, terminator_may_unwind};
 
 /// Which invariants hold at this point of the pipeline.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -47,9 +65,9 @@ pub enum Stage {
     Lowered,
     /// After [`crate::rc::insert`]: reference counts balance.
     Counted,
-    /// After the unwind pass (D-698): counts balance, and statements that
-    /// may unwind have their edges to pads. Only the shape of the edges is
-    /// checked so far.
+    /// After the unwind pass (D-698): counts balance, every instruction
+    /// that may unwind has its edge to the pad of what it leaves held, and
+    /// nothing else has one.
     Unwound,
 }
 
@@ -256,12 +274,77 @@ impl FnCx<'_> {
             return Ok(());
         }
         self.check_unwind_shape(stage);
+        if stage == Stage::Unwound {
+            self.check_unwind_rules();
+        }
         self.check_dominance(&defs)?;
         self.check_reprs(stage)?;
         if self.counted(stage) && self.errors.is_empty() {
             self.check_ownership()?;
         }
         Ok(())
+    }
+
+    /// The rules of [`Stage::Unwound`] beyond the shape (D-698): see the
+    /// module documentation. Pad sets are checked with the ownership.
+    fn check_unwind_rules(&mut self) {
+        let f = self.f;
+        if f.abi == Abi::Cheby && f.entry_unwind.is_none() {
+            self.err("a Cheby-ABI function needs its entry pad after the unwind pass (D-698)");
+        }
+        let reachable = reachable_with_unwinding(f);
+        for (id, block) in f.blocks.iter_enumerated() {
+            let len = block.stmts.len();
+            for &(at, pad) in &block.unwind {
+                let Ok(i) = usize::try_from(at) else {
+                    continue;
+                };
+                let what = match block.stmts.get(i) {
+                    Some(stmt) if !stmt_may_unwind(stmt) => Some("statement"),
+                    None if i == len && !terminator_may_unwind(&block.term) => Some("terminator"),
+                    _ => None,
+                };
+                if let Some(what) = what {
+                    self.err(format!(
+                        "bb{} statement {i} has an unwind edge, but this {what} cannot unwind (D-698)",
+                        id.as_u32()
+                    ));
+                }
+                if let Some(Stmt::Assign { dst, .. }) = block.stmts.get(i)
+                    && f.blocks.get(pad).is_some_and(|p| block_uses(p, *dst))
+                {
+                    self.err(format!(
+                        "bb{} uses _{}, the result of bb{} statement {i}, which an unwinding leaves undefined (D-698)",
+                        pad.as_u32(),
+                        dst.as_u32(),
+                        id.as_u32()
+                    ));
+                }
+            }
+            if !reachable.contains(&id) {
+                continue;
+            }
+            let mut edges = block.unwind.iter().map(|&(at, _)| at).peekable();
+            for (n, stmt) in block.stmts.iter().enumerate() {
+                while edges
+                    .next_if(|&at| usize::try_from(at).is_ok_and(|at| at < n))
+                    .is_some()
+                {}
+                let has_edge = edges.peek().and_then(|&at| usize::try_from(at).ok()) == Some(n);
+                if stmt_may_unwind(stmt) && !has_edge {
+                    self.err(format!(
+                        "bb{} statement {n} may unwind but has no unwind edge (D-698)",
+                        id.as_u32()
+                    ));
+                }
+            }
+            if terminator_may_unwind(&block.term) && block.unwind_target(len).is_none() {
+                self.err(format!(
+                    "bb{} terminator may unwind but has no unwind edge (D-698)",
+                    id.as_u32()
+                ));
+            }
+        }
     }
 
     /// Whether the function has its counts at `stage`: after RC, or a
@@ -288,6 +371,11 @@ impl FnCx<'_> {
         if let Some(pad) = f.entry_unwind {
             if early {
                 self.err("an entry pad before the unwind pass");
+            }
+            // GAP(c-abi-entry-pad): entry thunks and trampolines have no
+            // entry check to unwind from.
+            if f.abi == Abi::C {
+                self.err("a C-ABI function has no entry check, so no entry pad");
             }
             pad_ok(self, "the entry check", pad);
         }
@@ -478,27 +566,29 @@ impl FnCx<'_> {
         self.errors.len() == before
     }
 
+    /// Every use dominated by its definition, over the blocks split at
+    /// their unwind edges ([`Segments`]).
     fn check_dominance(&mut self, defs: &BTreeMap<Local, DefSite>) -> Result<(), Ice> {
         let f = self.f;
-        let dom = Dominance::new(f)?;
+        let segments = Segments::new(f)?;
+        let dom = Dominance::from_successors(&segments.succs)?;
         for (id, block) in f.blocks.iter_enumerated() {
-            // Unreachable blocks have no dominators; their uses are not
-            // checked.
-            if !dom.is_reachable(id) {
-                continue;
-            }
-            let check = |cx: &mut Self, l: Local, at: Option<usize>| {
+            let check = |cx: &mut Self, l: Local, at: usize| {
+                let use_node = segments.use_node(id, at);
+                // Unreachable code has no dominators; its uses are not
+                // checked.
+                if !dom.is_reachable(use_node) {
+                    return;
+                }
                 let Some(&(def_block, def_pos)) = defs.get(&l) else {
                     cx.err(format!("_{} is used but never defined", l.as_u32()));
                     return;
                 };
-                let ok = if def_block == id {
-                    match (def_pos, at) {
-                        (Some(d), Some(u)) => d < u,
-                        (None, _) | (Some(_), None) => true,
-                    }
+                let def_node = segments.def_node(def_block, def_pos);
+                let ok = if def_node == use_node {
+                    def_pos.is_none_or(|d| d < at)
                 } else {
-                    dom.dominates(def_block, id)
+                    dom.dominates(def_node, use_node)
                 };
                 if !ok {
                     cx.err(format!(
@@ -510,11 +600,11 @@ impl FnCx<'_> {
             };
             for (n, stmt) in block.stmts.iter().enumerate() {
                 for l in stmt_locals(stmt) {
-                    check(self, l, Some(n));
+                    check(self, l, n);
                 }
             }
             for (l, _) in block.term.uses() {
-                check(self, l, None);
+                check(self, l, block.stmts.len());
             }
         }
         Ok(())
@@ -1045,171 +1135,139 @@ impl FnCx<'_> {
         Ok(())
     }
 
-    /// Reference counts balance on every path (D7).
+    /// Reference counts balance on every path, pads included (D7, D-698):
+    /// the simulation of [`crate::ownership`].
     fn check_ownership(&mut self) -> Result<(), Ice> {
-        let f = self.f;
-        let counted = |l: Local| f.local(l).map(|d| d.repr == Repr::Value);
-        let mut entry_state: BTreeMap<BlockId, Counts> = BTreeMap::new();
-        let mut start = Counts::default();
-        for &p in &f.params {
-            if counted(p)? {
-                start.held.insert(p, 1);
-            }
-        }
-        let bb0 = BlockId::from_u32(0);
-        entry_state.insert(bb0, start);
-        let mut work = vec![bb0];
-        let mut visited = BTreeSet::new();
-        while let Some(id) = work.pop() {
-            if !visited.insert(id) {
-                continue;
-            }
-            let block = f.block(id)?;
-            let mut st = entry_state.get(&id).cloned().unwrap_or_default();
-            for &p in &block.params {
-                if counted(p)? {
-                    st.held.insert(p, 1);
-                }
-            }
-            let at = |n: usize| format!("bb{} statement {n}", id.as_u32());
-            for (n, stmt) in block.stmts.iter().enumerate() {
-                match stmt {
-                    Stmt::Assign { dst, value } => {
-                        self.consume(&mut st, &value.uses(), &at(n))?;
-                        if counted(*dst)? {
-                            if value.result_is_borrowed() {
-                                st.held.insert(*dst, 0);
-                                let base = match value {
-                                    Rvalue::Field { base, .. } => Some(*base),
-                                    _ => None,
-                                };
-                                st.borrowed_from.insert(*dst, base);
-                            } else {
-                                st.held.insert(*dst, 1);
-                            }
-                        }
-                    }
-                    Stmt::Eval(value) => self.consume(&mut st, &value.uses(), &at(n))?,
-                    Stmt::Dup(l) => {
-                        // A `field` or `load_const` result holds nothing
-                        // until its dup, which needs the base still alive.
-                        let ok = match (st.held.get(l).copied(), st.borrowed_from.get(l)) {
-                            (Some(c), _) if c >= 1 => true,
-                            (Some(0), Some(Some(base))) => {
-                                st.held.get(base).is_some_and(|&c| c >= 1)
-                            }
-                            (Some(0), Some(None)) => true,
-                            _ => false,
-                        };
-                        match st.held.get_mut(l) {
-                            Some(c) if ok => *c = c.saturating_add(1),
-                            _ => self.err(format!(
-                                "{}: dup of _{} which holds no reference",
-                                at(n),
-                                l.as_u32()
-                            )),
-                        }
-                    }
-                    Stmt::Drop(l) => self.consume(&mut st, &[(*l, UseKind::Owned)], &at(n))?,
-                    Stmt::ClearUnwind => {}
-                }
-            }
-            let here = format!("bb{} terminator", id.as_u32());
-            match &block.term {
-                Terminator::Return(_) | Terminator::TailCall { .. } => {
-                    self.consume(&mut st, &block.term.uses(), &here)?;
-                    for (l, c) in &st.held {
-                        if *c != 0 {
-                            self.err(format!(
-                                "{here}: _{} still holds {c} reference(s)",
-                                l.as_u32()
-                            ));
-                        }
-                    }
-                }
-                Terminator::Goto { target, .. } => {
-                    self.consume(&mut st, &block.term.uses(), &here)?;
-                    self.flow(&mut entry_state, &mut work, *target, &st);
-                }
-                Terminator::Branch { .. } | Terminator::Switch { .. } => {
-                    self.consume(&mut st, &block.term.uses(), &here)?;
-                    for succ in block.term.successors() {
-                        self.flow(&mut entry_state, &mut work, succ, &st);
-                    }
-                }
-                // Pads and what they hold are the unwind pass's rules
-                // (D-698); ownership follows normal control flow here.
-                Terminator::Panic { .. } | Terminator::Unreachable | Terminator::Resume => {}
-            }
-        }
-        Ok(())
-    }
-
-    fn flow(
-        &mut self,
-        entry_state: &mut BTreeMap<BlockId, Counts>,
-        work: &mut Vec<BlockId>,
-        target: BlockId,
-        st: &Counts,
-    ) {
-        let mut normalized = st.clone();
-        normalized.held.retain(|_, c| *c != 0);
-        normalized
-            .borrowed_from
-            .retain(|l, _| normalized.held.contains_key(l));
-        match entry_state.get(&target) {
-            Some(existing) if *existing != normalized => self.err(format!(
-                "reference counts differ between the predecessors of bb{}",
-                target.as_u32()
-            )),
-            Some(_) => {}
-            None => {
-                entry_state.insert(target, normalized);
-                work.push(target);
-            }
-        }
-    }
-
-    /// Applies the uses of one instruction: borrowed uses need a reference
-    /// that survives the instruction, owned uses consume one each.
-    fn consume(&mut self, st: &mut Counts, uses: &[(Local, UseKind)], at: &str) -> Result<(), Ice> {
-        let mut per: BTreeMap<Local, (i64, bool)> = BTreeMap::new();
-        for &(l, kind) in uses {
-            if self.f.local(l)?.repr != Repr::Value {
-                continue;
-            }
-            let e = per.entry(l).or_insert((0, false));
-            match kind {
-                UseKind::Owned => e.0 = e.0.saturating_add(1),
-                UseKind::Borrowed => e.1 = true,
-            }
-        }
-        for (l, (owned, borrowed)) in per {
-            let have = st.held.get(&l).copied();
-            let need = owned.saturating_add(i64::from(borrowed));
-            match have {
-                Some(c) if c >= need && need > 0 => {
-                    st.held.insert(l, c.saturating_sub(owned));
-                }
-                _ => {
-                    let mut msg = format!("{at}: _{} is used without a reference", l.as_u32());
-                    if let Some(c) = have {
-                        let _ = write!(msg, " (holds {c}, needs {need})");
-                    }
-                    self.err(msg);
-                }
-            }
-        }
-        Ok(())
+        ownership::simulate(self.f, &mut ErrorSink(&mut self.errors))
     }
 }
 
-/// The references each counted local holds on one path.
-#[derive(Clone, Default, PartialEq, Eq, Debug)]
-struct Counts {
-    held: BTreeMap<Local, i64>,
-    /// Locals defined by `field` (with their base) or `load_const`.
-    borrowed_from: BTreeMap<Local, Option<Local>>,
+/// Collects the ownership simulation's findings.
+struct ErrorSink<'a>(&'a mut Vec<String>);
+
+impl Observer for ErrorSink<'_> {
+    fn error(&mut self, message: String) {
+        self.0.push(message);
+    }
+}
+
+/// The CFG of a function with each block split at its unwind edges
+/// (D-698), for dominance. Node 0 is the function's entry, where its
+/// parameters are defined; it goes to `bb0` and to the entry pad. A block
+/// with edges at instructions `i1 < … < ik` has `k + 1` nodes: node `j`
+/// holds the result of instruction `ij` (none for `j = 0`), the
+/// instructions after it, and the operands of `i(j+1)`, whose edge leaves
+/// from it; the last node ends with the terminator's normal successors. So
+/// a pad sees what is defined before the instruction that unwinds to it,
+/// not that instruction's result.
+struct Segments {
+    /// Each block's first node, by block index.
+    first: Vec<usize>,
+    /// Each block's edge positions, sorted.
+    edges: Vec<Vec<usize>>,
+    /// Each node's successors.
+    succs: Vec<Vec<usize>>,
+}
+
+impl Segments {
+    fn new(f: &Function) -> Result<Self, Ice> {
+        let n = f.blocks.len();
+        let mut first = Vec::with_capacity(n);
+        let mut edges = Vec::with_capacity(n);
+        let mut next = 1_usize;
+        for block in &f.blocks {
+            first.push(next);
+            // Out-of-range pads are shape errors, reported elsewhere.
+            let mut at: Vec<usize> = block
+                .unwind
+                .iter()
+                .filter(|&&(_, pad)| pad.index() < n)
+                .filter_map(|&(i, _)| usize::try_from(i).ok())
+                .collect();
+            at.sort_unstable();
+            next = next.saturating_add(at.len()).saturating_add(1);
+            edges.push(at);
+        }
+        let node = |b: BlockId| first.get(b.index()).copied();
+        let mut succs: Vec<Vec<usize>> = vec![Vec::new(); next];
+        let entry = succs
+            .first_mut()
+            .ok_or_else(|| Ice::new("segments without an entry node"))?;
+        entry.extend(node(BlockId::from_u32(0)));
+        entry.extend(f.entry_unwind.and_then(node));
+        for (id, block) in f.blocks.iter_enumerated() {
+            let base = node(id).ok_or_else(|| Ice::new("a block without a node"))?;
+            let mut pads: Vec<(usize, BlockId)> = block
+                .unwind
+                .iter()
+                .filter(|&&(_, pad)| pad.index() < n)
+                .filter_map(|&(i, pad)| Some((usize::try_from(i).ok()?, pad)))
+                .collect();
+            pads.sort_unstable_by_key(|&(i, _)| i);
+            for (j, &(_, pad)) in pads.iter().enumerate() {
+                let out = succs
+                    .get_mut(base.saturating_add(j))
+                    .ok_or_else(|| Ice::new("a segment out of range"))?;
+                out.extend(node(pad));
+                out.push(base.saturating_add(j).saturating_add(1));
+            }
+            let last = succs
+                .get_mut(base.saturating_add(pads.len()))
+                .ok_or_else(|| Ice::new("a segment out of range"))?;
+            // Unknown targets are CFG errors, reported before.
+            last.extend(block.term.successors().into_iter().filter_map(node));
+        }
+        Ok(Self {
+            first,
+            edges,
+            succs,
+        })
+    }
+
+    fn base(&self, b: BlockId) -> (usize, &[usize]) {
+        (
+            self.first.get(b.index()).copied().unwrap_or(usize::MAX),
+            self.edges.get(b.index()).map_or(&[], Vec::as_slice),
+        )
+    }
+
+    /// The node where instruction `at` of `b` reads its operands.
+    fn use_node(&self, b: BlockId, at: usize) -> usize {
+        let (base, edges) = self.base(b);
+        base.saturating_add(edges.partition_point(|&e| e < at))
+    }
+
+    /// The node where a local defined at `site` becomes defined: node 0
+    /// for a function parameter, a block's first node for its parameters.
+    fn def_node(&self, b: BlockId, at: Option<usize>) -> usize {
+        let (base, edges) = self.base(b);
+        match at {
+            None if b.index() == 0 => 0,
+            None => base,
+            Some(at) => base.saturating_add(edges.partition_point(|&e| e <= at)),
+        }
+    }
+}
+
+/// Whether a statement or the terminator of `block` reads `local`.
+fn block_uses(block: &Block, local: Local) -> bool {
+    block.stmts.iter().any(|s| stmt_locals(s).contains(&local))
+        || block.term.uses().iter().any(|&(l, _)| l == local)
+}
+
+/// The blocks reached from `bb0` and the entry pad through
+/// [`Function::successors`]: normal flow and unwinding.
+fn reachable_with_unwinding(f: &Function) -> BTreeSet<BlockId> {
+    let mut seen = BTreeSet::new();
+    let mut work = vec![BlockId::from_u32(0)];
+    work.extend(f.entry_unwind);
+    while let Some(id) = work.pop() {
+        if f.blocks.get(id).is_none() || !seen.insert(id) {
+            continue;
+        }
+        work.extend(f.successors(id).unwrap_or_default());
+    }
+    seen
 }
 
 /// Whether `value` is a call without a result: a foreign function

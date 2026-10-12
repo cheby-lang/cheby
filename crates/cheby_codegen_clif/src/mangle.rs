@@ -49,11 +49,13 @@ pub enum Kind {
     TupleFn,
     /// The code of a `dyn` dictionary's forwarding entry (D-560).
     DynFwd,
+    /// The unchecked inner body of a function with a large frame (D-679).
+    Big,
 }
 
 impl Kind {
     /// Every kind.
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 18] = [
         Self::Fn,
         Self::Slot,
         Self::Shim,
@@ -71,6 +73,7 @@ impl Kind {
         Self::Layout,
         Self::TupleFn,
         Self::DynFwd,
+        Self::Big,
     ];
 
     /// The word in the symbol.
@@ -94,6 +97,7 @@ impl Kind {
             Self::Layout => "layout",
             Self::TupleFn => "tfn",
             Self::DynFwd => "dynfwd",
+            Self::Big => "big",
         }
     }
 }
@@ -212,6 +216,17 @@ pub fn dyn_forward(iface_fn: &DefName, dyn_iface: &DefName) -> String {
         path_part(&dyn_iface.module),
         path_part(&dyn_iface.item)
     )
+}
+
+/// `cb$big$<owner without cb$>`: the unchecked inner body of the function
+/// whose symbol is `owner`, when its frame is large (D-679). The outer
+/// function keeps `owner`, so slots and callers are unchanged. The kind
+/// comes first, as in every symbol (D-456), so the name never collides
+/// with another kind's. GAP(large-frame-symbol).
+#[must_use]
+pub fn large_frame_body(owner: &str) -> String {
+    let owner = owner.strip_prefix(PREFIX).unwrap_or(owner);
+    format!("{PREFIX}{}${owner}", Kind::Big.word())
 }
 
 /// `cb$str$<owner without cb$>$<n>`: string `n` of the function whose

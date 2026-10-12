@@ -77,6 +77,16 @@ fn mangled_names_do_not_collide() {
         "cb$str$fn$std$io$println$0"
     );
     assert_eq!(mangle::trampoline(2), "cb$tramp$2");
+    // D-679's inner body of a large frame: the kind first, then the
+    // owner's symbol without `cb$`, as for strings.
+    assert_eq!(
+        mangle::large_frame_body("cb$fn$std$io$println"),
+        "cb$big$fn$std$io$println"
+    );
+    assert_ne!(
+        mangle::large_frame_body(&mangle::item(Kind::Fn, &name("a", "b"))),
+        mangle::item(Kind::Fn, &name("big::fn::a", "b"))
+    );
     // D-454's layout words, D-523's statics.
     assert_eq!(
         mangle::item(Kind::Layout, &name("geo", "Circle")),
@@ -719,4 +729,90 @@ fn units_without_the_slice_forms_keep_their_function_ids() {
         "{text}"
     );
     assert!(!text.contains("scope_"), "{text}");
+}
+
+/// The options of wave 2 (plan §2.4, D-679): the unwinding backend is
+/// `off` and the large-frame threshold 64 KiB by default; `compile_function`
+/// reports the frame size Cranelift laid out, which is small for a small
+/// function.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn default_options_and_the_frame_size() {
+    let opts = CodegenOptions::default();
+    assert_eq!(opts.unwind, cheby_runtime::abi::UnwindBackend::Off);
+    assert_eq!(opts.large_frame_threshold, 64 << 10);
+    assert_eq!(LARGE_FRAME_THRESHOLD, 64 << 10);
+    let mut m = module();
+    let mut decls = Decls::new(cranelift_module::Module::isa(&m)).unwrap();
+    let units = [unit()];
+    let cx = CodegenCx {
+        layouts: &BuiltinLayouts,
+    };
+    declare(&mut m, &mut decls, &units, &cx, &opts).unwrap();
+    let clif = translate(&units[0], &units[0].functions[0], &decls, &cx, &opts).unwrap();
+    let compiled = compile_function(cranelift_module::Module::isa(&m), clif).unwrap();
+    assert!(compiled.frame_size < 1 << 10, "{compiled:?}");
+}
+
+/// With unwind edges ignored (`off`), the pads of the unwind pass (D-698)
+/// get no CLIF blocks, so a function's CLIF is the same with and without
+/// them: block and value numbers do not move (U1b-7).
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn unwind_pads_do_not_renumber_the_clif_under_off() {
+    let cx = CodegenCx {
+        layouts: &BuiltinLayouts,
+    };
+    let opts = CodegenOptions::default();
+    let text_of = |units: [MirModule; 1]| {
+        let mut m = module();
+        let mut decls = Decls::new(cranelift_module::Module::isa(&m)).unwrap();
+        declare(&mut m, &mut decls, &units, &cx, &opts).unwrap();
+        let clif = translate(&units[0], &units[0].functions[0], &decls, &cx, &opts).unwrap();
+        decls.describe(&clif)
+    };
+    let plain = text_of([unit()]);
+    let mut padded = unit();
+    let function = &mut padded.functions[0];
+    let extra = function
+        .locals
+        .push(LocalDecl {
+            repr: Repr::Value,
+            name: None,
+            ty: None,
+        })
+        .unwrap();
+    // bb1(_1): drop _0; goto bb2   bb2: resume
+    function
+        .blocks
+        .push(Block {
+            params: vec![extra],
+            stmts: vec![Stmt::Drop(cheby_mir::Local::from_u32(0))],
+            term: Terminator::Goto {
+                target: cheby_mir::BlockId::from_u32(2),
+                args: Vec::new(),
+            },
+            unwind: Vec::new(),
+        })
+        .unwrap();
+    function
+        .blocks
+        .push(Block {
+            params: Vec::new(),
+            stmts: Vec::new(),
+            term: Terminator::Resume,
+            unwind: Vec::new(),
+        })
+        .unwrap();
+    function.blocks.iter_mut().next().unwrap().unwind = vec![(0, cheby_mir::BlockId::from_u32(1))];
+    function.entry_unwind = Some(cheby_mir::BlockId::from_u32(2));
+    let padded_text = text_of([padded]);
+    assert_eq!(plain, padded_text);
+    assert!(!padded_text.contains(&format!("user{}", func::TRAP_RESUME)));
 }

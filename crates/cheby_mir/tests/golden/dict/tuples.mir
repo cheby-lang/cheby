@@ -1,16 +1,64 @@
 fn app::pairs(_0: value, _1: value, _2: value) -> value check str#0 {
+  entry unwind bb4
   str#0 = "src/main.cheby:12:4"
 bb0:
   _3: value = field _0.0 of dict/1+0
   dup _3
-  _4: value = alloc desc/2(const builtin_desc tuple, _3, const builtin_desc int)
-  _5: value = alloc closure/2(const code <tuple_dict_fn std::ops::Compare::compare/2>, _0, const static#0)
-  _6: value = alloc dict/1+0(_4, _5)
+  _4: value = alloc desc/2(const builtin_desc tuple, _3, const builtin_desc int) ; unwind bb5
+  _5: value = alloc closure/2(const code <tuple_dict_fn std::ops::Compare::compare/2>, _0, const static#0) ; unwind bb6
+  _6: value = alloc dict/1+0(_4, _5) ; unwind bb10
   _7: value = box int const int 1
-  _8: value = alloc tuple/2(_1, _7)
+  _8: value = alloc tuple/2(_1, _7) ; unwind bb12
   _9: value = box int const int 2
-  _10: value = alloc tuple/2(_2, _9)
+  _10: value = alloc tuple/2(_2, _9) ; unwind bb16
   tail_call app::smaller(_6, _8, _10)
+bb1:
+  resume
+bb2:
+  drop _0
+  goto bb1()
+bb3:
+  drop _1
+  goto bb2()
+bb4:
+  drop _2
+  goto bb3()
+bb5:
+  drop _3
+  goto bb4()
+bb6:
+  drop _4
+  goto bb4()
+bb7:
+  drop _1
+  goto bb1()
+bb8:
+  drop _2
+  goto bb7()
+bb9:
+  drop _4
+  goto bb8()
+bb10:
+  drop _5
+  goto bb9()
+bb11:
+  drop _6
+  goto bb8()
+bb12:
+  drop _7
+  goto bb11()
+bb13:
+  drop _2
+  goto bb1()
+bb14:
+  drop _6
+  goto bb13()
+bb15:
+  drop _8
+  goto bb14()
+bb16:
+  drop _9
+  goto bb15()
 }
 
 static#0 dict app$std::ops::Compare$Int = dict/1+0(builtin_desc int, fn std::int::compare)
@@ -25,13 +73,14 @@ static#8 dict app$Show$(Int, String) = dict/1+0(static#2, static#7)
 static#9 dict app$std::ops::Compare$Float = dict/1+0(builtin_desc float, fn std::float::compare)
 
 fn tuple_dict_fn Show::show/2(_0: value, _1: value) -> value check str#0 {
+  entry unwind bb3
   str#0 = "<builtin>"
   str#1 = "("
   str#2 = ", "
   str#3 = ")"
 bb0:
-  _2: value = call_runtime str_with_capacity(borrow const int 34)
-  _3: value = call_runtime str_append(_2, borrow const str#1)
+  _2: value = call_runtime str_with_capacity(borrow const int 34) ; unwind bb3
+  _3: value = call_runtime str_append(_2, borrow const str#1) ; unwind bb3
   _4: value = field _1.0 of tuple/2
   dup _4
   _5: value = field _0.1 of closure/2
@@ -39,10 +88,10 @@ bb0:
   _6: value = field _5.1 of dict/1+0
   dup _6
   drop _5
-  _7: value = call _6(_4)
-  _8: value = call_runtime str_append(_3, borrow _7)
+  _7: value = call _6(_4) ; unwind bb4
+  _8: value = call_runtime str_append(_3, borrow _7) ; unwind bb5
   drop _7
-  _9: value = call_runtime str_append(_8, borrow const str#2)
+  _9: value = call_runtime str_append(_8, borrow const str#2) ; unwind bb3
   _10: value = field _1.1 of tuple/2
   dup _10
   drop _1
@@ -52,14 +101,35 @@ bb0:
   _12: value = field _11.1 of dict/1+0
   dup _12
   drop _11
-  _13: value = call _12(_10)
-  _14: value = call_runtime str_append(_9, borrow _13)
+  _13: value = call _12(_10) ; unwind bb6
+  _14: value = call_runtime str_append(_9, borrow _13) ; unwind bb7
   drop _13
-  _15: value = call_runtime str_append(_14, borrow const str#3)
+  _15: value = call_runtime str_append(_14, borrow const str#3) ; unwind bb1
   return _15
+bb1:
+  resume
+bb2:
+  drop _0
+  goto bb1()
+bb3:
+  drop _1
+  goto bb2()
+bb4:
+  drop _3
+  goto bb3()
+bb5:
+  drop _7
+  goto bb3()
+bb6:
+  drop _9
+  goto bb1()
+bb7:
+  drop _13
+  goto bb1()
 }
 
 fn tuple_dict_fn std::ops::Compare::compare/2(_0: value, _1: value, _2: value) -> value check str#0 {
+  entry unwind bb6
   str#0 = "std/ops.cheby:35:6"
 bb0:
   _3: value = field _1.0 of tuple/2
@@ -71,7 +141,7 @@ bb0:
   _6: value = field _5.1 of dict/1+0
   dup _6
   drop _5
-  _7: value = call _6(_3, _4)
+  _7: value = call _6(_3, _4) ; unwind bb6
   _8: int = read_tag _7 of order
   _9: bool = compare eq int _8, const int 1
   branch _9, bb1, bb2
@@ -95,4 +165,15 @@ bb2:
   drop _1
   drop _2
   return _7
+bb3:
+  resume
+bb4:
+  drop _0
+  goto bb3()
+bb5:
+  drop _1
+  goto bb4()
+bb6:
+  drop _2
+  goto bb5()
 }

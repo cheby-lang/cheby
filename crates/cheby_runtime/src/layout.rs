@@ -124,7 +124,28 @@ pub struct CustomKind {
     ///
     /// Safety: called only with a live object of this kind.
     pub debug: Option<unsafe fn(Word, &mut generic::Printer)>,
+    /// A handle (D-703): `==`, hashing and debug text treat an object of
+    /// this kind like a value of an external type (D-189, D-233, D-590),
+    /// through [`LayoutInfo::is_external`]: equality and hashing stop on
+    /// it with the catchable panic of a function value, and it prints as
+    /// `<name>`. `equal`, `hash` and `debug` are then never called.
+    pub handle: bool,
+    /// Runs exactly once when the object's count reaches zero, before its
+    /// block is freed and after `children` was visited (D-703). It gives
+    /// up every reference the object's payload owns by passing it to
+    /// `release`, which feeds the free worklist, so finalizing a million
+    /// handles that each hold the next one never deepens the Rust stack.
+    /// It never blocks, suspends, raises or runs Cheby code; a Rust panic
+    /// in it ends the process (D-171).
+    ///
+    /// Safety: called only with an object of this kind whose count has
+    /// reached zero, once.
+    pub finalize: Option<Finalizer>,
 }
+
+/// A kind's finalizer ([`CustomKind::finalize`]): the dying object, and
+/// the function that releases each reference its payload owns.
+pub type Finalizer = unsafe fn(Word, &mut dyn FnMut(Word));
 
 impl fmt::Debug for CustomKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -564,6 +585,12 @@ fn builtins() -> &'static [Option<LayoutInfo>] {
         set(layout::NONE, builtin_ctor("Option", "None", 1, 0));
         set(layout::OK, builtin_ctor("Result", "Ok", 0, 1));
         set(layout::ERR, builtin_ctor("Result", "Err", 1, 1));
+        // The handle kinds 40 to 44 (D-703) are registered with the
+        // builtins, so the first lookup of any builtin layout makes them
+        // known too; the code that builds them registers them as well
+        // before it allocates one. Registering takes the registration
+        // lock, never this table.
+        crate::handles::register();
         table.into_boxed_slice()
     })
 }
@@ -698,12 +725,14 @@ unsafe fn external_children(_: Word, _: &mut dyn FnMut(Word)) {}
 /// its own layout of this kind ([`register_external`]), whose
 /// [`LayoutInfo::type_name`] is the type's name, so a value debug-prints
 /// as `<Db>`, and `==` and hashing stop on it like on a function value
-/// (D-189, D-233). The generic routines recognize the kind by identity
-/// ([`LayoutInfo::is_external`]); its own functions are never called.
+/// (D-189, D-233). The generic routines recognize it as a handle
+/// ([`LayoutInfo::is_external`]); its own `equal`, `hash` and `debug` are
+/// never called.
 ///
 /// Calling the type's drop function when the last reference goes away
 /// (D-101, §9.5) is not implemented yet: M1 builds no external values,
-/// because a native host library comes with M3 (OQ-P9).
+/// because a native host library comes with M3 (OQ-P9). The kind's
+/// `finalize` slot is where it goes then (D-703).
 pub static EXTERNAL_HANDLE: CustomKind = CustomKind {
     name: "external handle",
     size: external_size,
@@ -711,13 +740,18 @@ pub static EXTERNAL_HANDLE: CustomKind = CustomKind {
     equal: None,
     hash: None,
     debug: None,
+    handle: true,
+    finalize: None,
 };
 
 impl LayoutInfo {
-    /// Whether this is the layout of an external type's values.
+    /// Whether values of this layout are handles: values of an external
+    /// type ([`register_external`]) or of one of std's handle kinds 40 to
+    /// 44 (D-647, D-703). `==` and hashing stop on them and debug text
+    /// prints `<`[`LayoutInfo::type_name`]`>` (D-233).
     #[must_use]
     pub fn is_external(&self) -> bool {
-        matches!(self.kind, LayoutKind::Custom(kind) if ptr::eq(kind, ptr::from_ref(&EXTERNAL_HANDLE)))
+        matches!(self.kind, LayoutKind::Custom(kind) if kind.handle)
     }
 }
 
@@ -997,6 +1031,8 @@ mod tests {
         equal: None,
         hash: None,
         debug: None,
+        handle: false,
+        finalize: None,
     };
 
     static KIND_B: CustomKind = CustomKind {
@@ -1006,6 +1042,8 @@ mod tests {
         equal: None,
         hash: None,
         debug: None,
+        handle: false,
+        finalize: None,
     };
 
     #[test]

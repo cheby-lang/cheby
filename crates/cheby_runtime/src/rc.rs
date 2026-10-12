@@ -11,7 +11,7 @@ use std::sync::atomic::{Ordering, fence};
 
 use crate::abi::{self, Word};
 use crate::alloc;
-use crate::object::{load_rc, shared_rc, store_rc, word_to_ptr};
+use crate::object::{load_rc, ptr_to_word, shared_rc, store_rc, word_to_ptr};
 
 /// Adds a reference to `value`.
 ///
@@ -71,9 +71,21 @@ pub unsafe fn dup(value: Word) {
 unsafe fn dup_slow(obj: *mut u8, rc: i32) {
     if rc > 0 {
         // The count cannot grow further: the object becomes static and is
-        // never freed (D-454).
-        // SAFETY: a live object whose positive count is local to this
-        // thread.
+        // never freed (D-454). `mark_shared` skips a static object and
+        // everything it reaches, so what this one reaches is made shared
+        // first: a static object reaches only static or shared objects,
+        // as a shared one does (I-2), and a value reaching it may cross
+        // to another fiber (review findings MEM-1, CONC2-3).
+        // GAP(overflow-static-subgraph): D-454 does not say what happens
+        // to what the object reaches.
+        // SAFETY: a live object whose count is positive, so it and every
+        // object it reaches with a positive count are confined to this
+        // fiber (I-1); marking stores `-rc` into it, which the next store
+        // replaces.
+        unsafe { mark_shared(ptr_to_word(obj)) };
+        // SAFETY: a live object, now shared, that only this fiber has
+        // touched since it was local; no other fiber can reach it before
+        // this dup returns.
         unsafe {
             store_rc(obj, abi::RC_STATIC);
             alloc::leave_domain(obj);
@@ -137,6 +149,53 @@ pub unsafe fn is_unique(value: Word) -> bool {
     unsafe { load_rc(word_to_ptr(value)) == abi::RC_UNIQUE }
 }
 
+/// Marks `word` and everything it reaches shared (D-072, D-705): each heap
+/// object with a positive, fiber-local count `c` gets the count `-c`, so
+/// from then on its references are counted atomically and it is never
+/// updated in place. Static objects (count 0) and objects that are
+/// already shared are skipped, and so is what they reach: a shared
+/// object only reaches shared or static ones (I-2), and so does a static
+/// one. Frozen constants are static all the way down, and a heap object
+/// that becomes static by count overflow (D-454) is marked shared first
+/// (`dup_slow`).
+///
+/// It runs where a value reaches another fiber: a value sent on a
+/// channel, the function a fiber is spawned with, a fiber's result, and a
+/// REPL binding. Sharing is sticky in M2. The walk is a worklist of
+/// scratch memory, so a million-deep value is marked without deep Rust
+/// recursion (plan §0), and the scratch counts towards constant
+/// evaluation's memory budget like every walk's.
+///
+/// # Safety
+///
+/// `word` is a tagged integer, 0, or a live object, and every object it
+/// reaches with a positive count is confined to the calling fiber (no
+/// other thread reads or writes its count meanwhile).
+pub unsafe fn mark_shared(word: Word) {
+    let mut list = alloc::scratch::ScratchVec::of(word);
+    while let Some(word) = list.pop() {
+        if abi::is_tagged_int(word) || word == 0 {
+            continue;
+        }
+        // SAFETY: every word on the list is reached from the caller's live
+        // value; in poisoning mode a freed one ends the process here.
+        unsafe { alloc::check_live(word, "marking a value shared") };
+        let obj = word_to_ptr(word);
+        // SAFETY: a live object.
+        let rc = unsafe { load_rc(obj) };
+        if rc <= 0 {
+            // Static, or shared together with everything it reaches.
+            continue;
+        }
+        // SAFETY: a live object whose positive count only this fiber
+        // touches (the caller's guarantee), so a plain store is enough;
+        // `-rc` cannot overflow for a positive `rc`.
+        unsafe { store_rc(obj, rc.saturating_neg()) };
+        // SAFETY: a live object.
+        unsafe { alloc::for_each_child(word, &mut |child| list.push(child)) };
+    }
+}
+
 /// Removes one reference from an object, and returns whether that was the
 /// last one, in which case the caller must free it.
 ///
@@ -167,6 +226,412 @@ pub(crate) unsafe fn release(obj: *mut u8) -> bool {
                 false
             }
         }
+    }
+}
+
+/// `mark_shared` (D-705): its own module, so that
+/// `cargo test -p cheby_runtime rc::mark_shared` selects these tests.
+#[cfg(test)]
+mod mark_shared_tests {
+    use std::collections::{BTreeSet, HashSet};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+
+    use super::*;
+    use crate::abi::layout as ids;
+    use crate::alloc::{Domain, alloc_object, for_each_child, poison_enabled, with_domain};
+    use crate::handles::tests::{KINDS, counted, selector};
+    use crate::handles::{HandleKind, SELECTOR_WORDS};
+    use crate::layout::{self, FieldKind, LayoutInfo};
+    use crate::object::{self, scan_and_layout, write_field};
+    use crate::values::{bytes, f32_word, f64_word, int_word, string, tuple, u64_word};
+
+    fn release(words: impl IntoIterator<Item = Word>) {
+        for word in words {
+            // SAFETY: tests release the references they own.
+            unsafe { drop(word) };
+        }
+    }
+
+    fn count(word: Word) -> i32 {
+        // SAFETY: tests pass live objects.
+        unsafe { load_rc(word_to_ptr(word)) }
+    }
+
+    /// Every distinct object reachable from `word`: its count and its
+    /// layout's name. Iterative, like the code under test.
+    fn reachable(word: Word) -> Vec<(i32, String)> {
+        let mut seen = HashSet::new();
+        let mut list = vec![word];
+        let mut out = Vec::new();
+        while let Some(word) = list.pop() {
+            if abi::is_tagged_int(word) || word == 0 || !seen.insert(word) {
+                continue;
+            }
+            let obj = word_to_ptr(word);
+            // SAFETY: a live object reached from the test's value.
+            let (rc, (_, id)) = unsafe { (load_rc(obj), scan_and_layout(obj)) };
+            out.push((rc, layout::get(id).unwrap().name.to_string()));
+            // SAFETY: as above.
+            unsafe { for_each_child(word, &mut |child| list.push(child)) };
+        }
+        out
+    }
+
+    /// A list of owned items.
+    fn list(items: Vec<Word>) -> Word {
+        crate::list::from_iter(items)
+    }
+
+    /// A user constructor `t.Pair(value, Int)` holding `value` (owned).
+    fn user_ctor(value: Word) -> Word {
+        let id = layout::register(LayoutInfo::ctor(
+            "t.Pair",
+            0,
+            &[(FieldKind::Value, None), (FieldKind::Int, None)],
+        ))
+        .unwrap();
+        let obj = alloc_object(24, abi::header(1, 1, id));
+        // SAFETY: a fresh object: the value field, then a raw `Int` that
+        // looks like a pointer and must not be followed.
+        unsafe {
+            write_field(obj, 8, value);
+            write_field(obj, 16, 0x1000);
+        }
+        object::ptr_to_word(obj)
+    }
+
+    /// An object of a uniform layout `id` holding `fields` (owned).
+    fn uniform(id: abi::LayoutId, fields: &[Word]) -> Word {
+        let count = fields.len();
+        let obj = alloc_object(
+            object::to_u64(count.saturating_add(1).saturating_mul(8)),
+            abi::header(1, u8::try_from(count).unwrap(), id),
+        );
+        for (index, field) in fields.iter().enumerate() {
+            // SAFETY: initializing a fresh object's uniform fields.
+            unsafe { write_field(obj, index.saturating_add(1).saturating_mul(8), *field) };
+        }
+        object::ptr_to_word(obj)
+    }
+
+    /// `map::from_list` of owned pairs.
+    fn map_of(pairs: Vec<(Word, Word)>) -> Word {
+        let pairs = list(pairs.into_iter().map(|(k, v)| tuple(&[k, v])).collect());
+        // SAFETY: the kernel borrows its list.
+        let map = unsafe { crate::hamt::cheby_map_from_list(pairs) };
+        release([pairs]);
+        map
+    }
+
+    /// `set::from_list` of owned items.
+    fn set_of(items: Vec<Word>) -> Word {
+        let items = list(items);
+        // SAFETY: the kernel borrows its list.
+        let set = unsafe { crate::hamt::cheby_set_from_list(items) };
+        release([items]);
+        set
+    }
+
+    /// One value holding an object of every layout kind, with the handle
+    /// payloads counting into `finalized`.
+    fn every_kind(finalized: &Arc<AtomicUsize>) -> Word {
+        let desc_of = |name: &str| crate::desc::builtin(name).unwrap();
+        let desc = uniform(ids::DESC, &[desc_of("list"), desc_of("int")]);
+        let dict = uniform(ids::DICT, &[desc]);
+        let dyn_value = uniform(ids::DYN, &[dict, string("inside a dyn")]);
+        let closure = crate::generic::tests::closure(&[string("captured")]);
+        let numbers = tuple(&[
+            int_word(i64::MAX),
+            u64_word(u64::MAX),
+            f64_word(1.5),
+            f32_word(2.5),
+        ]);
+        let long_list = list((0..2_000).map(int_word).collect());
+        let map = map_of((0..100).map(|n| (int_word(n), string("v"))).collect());
+        let set = set_of((0..100).map(int_word).collect());
+        // Every key collides under a zero mask: collision nodes.
+        let previous = crate::tls::set_hash_mask(0);
+        let colliding_map = map_of((0..4).map(|n| (int_word(n), int_word(n))).collect());
+        let colliding_set = set_of((0..4).map(int_word).collect());
+        crate::tls::set_hash_mask(previous);
+        let mut handles: Vec<Word> = KINDS
+            .iter()
+            .map(|kind| counted(*kind, finalized, vec![string("payload")]))
+            .collect();
+        handles.push(selector([
+            counted(HandleKind::Receiver, finalized, Vec::new()),
+            string("apply"),
+            int_word(0),
+            int_word(0),
+            object::nil(),
+        ]));
+        let handles = list(handles);
+        tuple(&[
+            string("text"),
+            bytes(&[1, 2, 3]),
+            numbers,
+            closure,
+            dyn_value,
+            user_ctor(string("field")),
+            long_list,
+            map,
+            set,
+            colliding_map,
+            colliding_set,
+            handles,
+            object::nil(),
+            int_word(7),
+        ])
+    }
+
+    #[test]
+    fn every_layout_kind_is_marked_and_freed_through_the_atomic_path() {
+        let domain = Domain::new();
+        with_domain(Arc::clone(&domain), || {
+            let finalized = Arc::new(AtomicUsize::new(0));
+            let value = every_kind(&finalized);
+            // SAFETY: a live value only this thread uses.
+            unsafe { mark_shared(value) };
+            let objects = reachable(value);
+            let names: BTreeSet<&str> = objects
+                .iter()
+                .filter(|(rc, _)| *rc < 0)
+                .map(|(_, name)| name.as_str())
+                .collect();
+            for name in [
+                "String",
+                "Bytes",
+                "Int",
+                "U64",
+                "Float",
+                "F32",
+                "closure",
+                "tuple",
+                "dictionary",
+                "dyn",
+                "descriptor",
+                "t.Pair",
+                "List",
+                "List.Leaf",
+                "List.Branch",
+                "Map",
+                "Map.Node",
+                "Map.Collision",
+                "Set",
+                "Set.Node",
+                "Set.Collision",
+                "Sender",
+                "Receiver",
+                "Fiber",
+                "Scope",
+                "Selector",
+            ] {
+                assert!(names.contains(name), "{name} is not marked: {names:?}");
+            }
+            // Every heap object is shared; only static ones keep count 0.
+            for (rc, name) in &objects {
+                assert!(*rc < 0 || *rc == abi::RC_STATIC, "{name}: {rc}");
+            }
+            let statics = objects.iter().filter(|(rc, _)| *rc == 0).count();
+            assert!(statics > 0, "the nominal descriptors and `Nil` are static");
+            // Marking again changes nothing.
+            // SAFETY: as above.
+            unsafe { mark_shared(value) };
+            assert_eq!(reachable(value), objects);
+            // A second reference, then both dropped: the first drop only
+            // decrements atomically, the second frees everything through
+            // the shared path, finalizing each handle once.
+            // SAFETY: a live shared value.
+            unsafe { dup(value) };
+            assert_eq!(count(value), -2);
+            release([value]);
+            assert_eq!(finalized.load(AtomicOrdering::Relaxed), 0);
+            release([value]);
+            assert_eq!(finalized.load(AtomicOrdering::Relaxed), 5);
+        });
+        assert_eq!((domain.live_objects(), domain.live_bytes()), (0, 0));
+    }
+
+    /// Static objects are never written, and an object that is already
+    /// shared is not entered again: its subgraph is shared by I-2, so a
+    /// positive count planted under it here stays as it is.
+    #[test]
+    fn static_and_shared_objects_are_skipped() {
+        let domain = Domain::new();
+        with_domain(Arc::clone(&domain), || {
+            let hidden = tuple(&[]);
+            let inner = tuple(&[hidden]);
+            // SAFETY: a live object only this thread uses.
+            unsafe { store_rc(word_to_ptr(inner), -1) };
+            let static_true = object::cheby_rt_static_true.word();
+            let header = object::cheby_rt_static_true.header();
+            let outer = tuple(&[inner, static_true, int_word(1)]);
+            // SAFETY: as above.
+            unsafe { mark_shared(outer) };
+            assert_eq!(count(outer), -1);
+            assert_eq!(count(inner), -1);
+            assert_eq!(count(hidden), 1);
+            assert_eq!(object::cheby_rt_static_true.header(), header);
+            // Tagged integers, 0 and statics on their own.
+            // SAFETY: never dereferenced, or static.
+            unsafe {
+                mark_shared(int_word(5));
+                mark_shared(0);
+                mark_shared(static_true);
+            }
+            assert_eq!(object::cheby_rt_static_true.header(), header);
+            // A count above one becomes the same count, negative.
+            let twice = tuple(&[]);
+            // SAFETY: a live object only this thread uses.
+            unsafe {
+                dup(twice);
+                mark_shared(twice);
+            }
+            assert_eq!(count(twice), -2);
+            release([outer, twice, twice]);
+        });
+        assert_eq!((domain.live_objects(), domain.live_bytes()), (0, 0));
+    }
+
+    /// A heap object that becomes static by count overflow (D-454) reaches
+    /// only shared or static objects, so marking a value that reaches it,
+    /// which skips it, leaves no local count below it (review findings
+    /// MEM-1 and CONC2-3: before the fix its children kept count 1).
+    #[test]
+    fn an_object_made_static_by_overflow_reaches_only_shared_objects() {
+        let domain = Domain::new();
+        with_domain(Arc::clone(&domain), || {
+            let child = tuple(&[string("grandchild")]);
+            let parent = tuple(&[child, string("sibling")]);
+            // SAFETY: a live object only this thread uses, one reference
+            // short of the most a local count holds.
+            unsafe {
+                store_rc(word_to_ptr(parent), i32::MAX);
+                dup(parent);
+            }
+            assert_eq!(count(parent), abi::RC_STATIC);
+            assert_eq!(count(child), -1);
+            let outer = tuple(&[parent]);
+            // SAFETY: as above.
+            unsafe { mark_shared(outer) };
+            let reached = reachable(outer);
+            assert_eq!(reached.len(), 5);
+            for (rc, name) in &reached {
+                assert!(*rc <= 0, "{name} kept the local count {rc}");
+            }
+            // SAFETY: a live object.
+            assert!(!unsafe { is_unique(child) });
+            release([outer]);
+        });
+        // The static parent is never freed, so neither is what it holds:
+        // the child, the grandchild and the sibling, which stay charged to
+        // the domain as D-454's overflow leaves them.
+        assert_eq!(domain.live_objects(), 3);
+    }
+
+    /// `[[…[0]…]]`, lists nested a million deep, marked on a small stack:
+    /// the walk is a worklist, not recursion.
+    #[test]
+    #[cfg_attr(miri, ignore = "a million-deep value")]
+    fn a_million_deep_list_is_marked_without_recursion() {
+        let domain = Domain::new();
+        let handle = std::thread::Builder::new()
+            .stack_size(256 << 10)
+            .spawn({
+                let domain = Arc::clone(&domain);
+                move || {
+                    with_domain(domain, || {
+                        let mut value = int_word(0);
+                        for _ in 0..1_000_000 {
+                            value = list(vec![value]);
+                        }
+                        // SAFETY: a live value only this thread uses.
+                        unsafe { mark_shared(value) };
+                        // Down the spine: each level is a root and a leaf.
+                        let objects = reachable(value);
+                        assert_eq!(objects.len(), 2_000_000);
+                        assert!(objects.iter().all(|(rc, _)| *rc == -1));
+                        release([value]);
+                    });
+                }
+            })
+            .unwrap();
+        handle.join().unwrap();
+        assert_eq!((domain.live_objects(), domain.live_bytes()), (0, 0));
+    }
+
+    /// A shared object freed by another thread, through the atomic path,
+    /// with poisoning on (this crate's tests poison by default): the last
+    /// release frees it and its shared children once, and the blocks go
+    /// to that thread's quarantine.
+    #[test]
+    fn a_shared_object_is_freed_through_the_atomic_path_under_poisoning() {
+        let domain = Domain::new();
+        let finalized = Arc::new(AtomicUsize::new(0));
+        let value = with_domain(Arc::clone(&domain), || {
+            let handle = counted(HandleKind::Scope, &finalized, Vec::new());
+            let value = tuple(&[string("shared"), list(vec![int_word(1)]), handle]);
+            // SAFETY: a live value only this thread uses so far.
+            unsafe { mark_shared(value) };
+            value
+        });
+        let threads: Vec<_> = (0..8)
+            .map(|_| {
+                // SAFETY: a live shared value: one reference per thread.
+                unsafe { dup(value) };
+                let domain = Arc::clone(&domain);
+                std::thread::spawn(move || {
+                    with_domain(domain, || {
+                        // SAFETY: this thread's reference.
+                        unsafe { drop(value) };
+                    });
+                })
+            })
+            .collect();
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        assert_eq!(count(value), -1);
+        let freeing = std::thread::spawn({
+            let domain = Arc::clone(&domain);
+            move || {
+                with_domain(domain, || {
+                    let before = crate::alloc::quarantine_len();
+                    // SAFETY: the last reference.
+                    unsafe { drop(value) };
+                    crate::alloc::quarantine_len().saturating_sub(before)
+                })
+            }
+        });
+        let quarantined = freeing.join().unwrap();
+        assert_eq!(finalized.load(AtomicOrdering::Relaxed), 1);
+        if poison_enabled() {
+            // The tuple, the string, the list's root and leaf, the handle.
+            assert_eq!(quarantined, 5);
+        }
+        assert_eq!((domain.live_objects(), domain.live_bytes()), (0, 0));
+    }
+
+    #[test]
+    fn selector_words_are_marked() {
+        let domain = Domain::new();
+        with_domain(Arc::clone(&domain), || {
+            let words: [Word; SELECTOR_WORDS] = [
+                string("a"),
+                tuple(&[string("b")]),
+                int_word(3),
+                0,
+                object::nil(),
+            ];
+            let node = selector(words);
+            // SAFETY: a live value only this thread uses.
+            unsafe { mark_shared(node) };
+            let objects = reachable(node);
+            assert_eq!(objects.iter().filter(|(rc, _)| *rc == -1).count(), 4);
+            release([node]);
+        });
+        assert_eq!((domain.live_objects(), domain.live_bytes()), (0, 0));
     }
 }
 

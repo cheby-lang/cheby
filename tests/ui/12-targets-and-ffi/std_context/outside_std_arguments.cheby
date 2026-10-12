@@ -1,0 +1,10 @@
+// @mode: check-fail
+// @decisions: D-692, D-482
+// @milestone: M2
+//! Outside the standard library, `@std_context` is unknown whatever its
+//! arguments, so no rule of std's own attribute shows through (§4.8).
+
+@std_context(fiber)
+@external(native, "cheby_app_spawn")
+@external(js, "./app.mjs", "spawn")
+pub fn spawn(count: Int) -> Int

@@ -45,8 +45,10 @@ impl RcMode {
 pub struct MirOptions {
     /// The reference-counting mode.
     pub rc: RcMode,
-    /// Whether lowering keeps unwind edges. Read by the unwind pass, which
-    /// is not in the pipeline yet; `true` by default.
+    /// Whether the unwind pass adds unwind edges and pads (D-698); `true`
+    /// by default. `false` is the measurement baseline of D-702: no
+    /// function gets new edges (a `precounted` body keeps its own), and
+    /// the units are validated at [`Stage::Counted`].
     pub unwind_edges: bool,
 }
 
@@ -63,12 +65,18 @@ impl MirOptions {
     /// The environment variable that selects the reference-counting mode.
     pub const RC_ENV: &'static str = "CHEBY_RC";
 
-    /// Reads `CHEBY_RC`: `naive`, `perceus`, or unset or empty for the
-    /// default. GAP(rc-mode-env)
+    /// The environment variable that turns the unwind pass off, for the
+    /// measurement of D-702 (`cheby_runtime::abi::UNWIND_EDGES_ENV`; this
+    /// crate does not depend on the runtime). GAP(unwind-backend-switch)
+    pub const UNWIND_EDGES_ENV: &'static str = "CHEBY_UNWIND_EDGES";
+
+    /// Reads `CHEBY_RC` (`naive`, `perceus`, or unset or empty for the
+    /// default; GAP(rc-mode-env)) and `CHEBY_UNWIND_EDGES` (see
+    /// [`MirOptions::unwind_edges_from_env`]).
     ///
     /// # Errors
     ///
-    /// The message to report when the variable holds any other value
+    /// The message to report when a variable holds any other value
     /// (including one that is not Unicode).
     pub fn from_env() -> Result<Self, String> {
         let value = std::env::var_os(Self::RC_ENV);
@@ -84,8 +92,42 @@ impl MirOptions {
         };
         Ok(Self {
             rc,
-            ..Self::default()
+            unwind_edges: Self::unwind_edges_from_env()?,
         })
+    }
+
+    /// Reads `CHEBY_UNWIND_EDGES`: `off` turns the unwind pass off (D-702:
+    /// the run-time baseline of the unwinding backends, honored by every
+    /// build, release included); unset or empty keeps it on.
+    /// GAP(unwind-backend-switch)
+    ///
+    /// # Errors
+    ///
+    /// The message to report when the variable holds any other value
+    /// (including one that is not Unicode).
+    pub fn unwind_edges_from_env() -> Result<bool, String> {
+        let value = std::env::var_os(Self::UNWIND_EDGES_ENV);
+        match value.as_deref().map(std::ffi::OsStr::to_str) {
+            None => Ok(true),
+            Some(Some(text)) => Self::parse_unwind_edges(text),
+            Some(None) => Err(format!(
+                "{} must be off or empty, not a value that is not Unicode",
+                Self::UNWIND_EDGES_ENV
+            )),
+        }
+    }
+
+    /// Whether the value `text` of `CHEBY_UNWIND_EDGES` keeps the edges.
+    fn parse_unwind_edges(text: &str) -> Result<bool, String> {
+        match text {
+            "" => Ok(true),
+            "off" => Ok(false),
+            _ => Err(format!(
+                "{} must be off or empty, not \"{}\"",
+                Self::UNWIND_EDGES_ENV,
+                text.escape_debug()
+            )),
+        }
     }
 
     /// The mode `text` names.
@@ -105,7 +147,9 @@ impl MirOptions {
 
 /// [`count_and_check`](crate::count_and_check) with options: validates a
 /// freshly lowered unit, inserts reference counts as `options.rc` says,
-/// and validates again with the ownership check.
+/// then, when `options.unwind_edges`, the unwind edges and pads (D-698,
+/// the last pass, D-262), and validates again: at [`Stage::Unwound`] after
+/// the unwind pass, at [`Stage::Counted`] without it.
 ///
 /// # Errors
 ///
@@ -119,7 +163,15 @@ pub fn count_and_check_with(module: &mut MirModule, options: &MirOptions) -> Res
         // Identical until the Perceus passes land (D-718).
         RcMode::Perceus | RcMode::Naive => crate::rc::insert_module(module)?,
     }
-    validate(module, Stage::Counted).map_err(|e| report("after reference counting", e))
+    if options.unwind_edges {
+        // The unwind pass simulates the counts itself and refuses
+        // unbalanced ones; `Stage::Unwound` checks everything `Counted`
+        // does, so the unit is validated once more, not twice.
+        crate::unwind::insert_module(module)?;
+        validate(module, Stage::Unwound).map_err(|e| report("after the unwind pass", e))
+    } else {
+        validate(module, Stage::Counted).map_err(|e| report("after reference counting", e))
+    }
 }
 
 #[cfg(test)]
@@ -133,6 +185,20 @@ mod tests {
         let err = MirOptions::parse_rc("Naive").unwrap_err();
         assert_eq!(err, "CHEBY_RC must be `naive` or `perceus`, not `Naive`");
         assert!(MirOptions::parse_rc("bogus").is_err());
+    }
+
+    #[test]
+    fn unwind_edges_parse_off_or_empty() {
+        assert_eq!(MirOptions::parse_unwind_edges(""), Ok(true));
+        assert_eq!(MirOptions::parse_unwind_edges("off"), Ok(false));
+        for bogus in ["on", "Off", "0", "false", " off"] {
+            let err = MirOptions::parse_unwind_edges(bogus).unwrap_err();
+            assert!(err.starts_with("CHEBY_UNWIND_EDGES must be off or empty, not \""));
+        }
+        assert_eq!(
+            MirOptions::parse_unwind_edges("on").unwrap_err(),
+            "CHEBY_UNWIND_EDGES must be off or empty, not \"on\""
+        );
     }
 
     #[test]

@@ -1087,8 +1087,10 @@ fn compile_speed_probe() {
 }
 
 mod control;
+mod large_frame;
 mod objects;
 mod repl;
 mod scalars;
 mod special;
+mod std_context;
 mod unwind_ir;

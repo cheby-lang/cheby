@@ -19,7 +19,7 @@ use cheby_mir::{
     Abi, AbiSig, BlockId, Callee, Const, FnKey, Function, Local, MirModule, Operand, PanicKind,
     Repr, Rvalue, Stmt, StrId, Terminator, uniform_sig,
 };
-use cheby_runtime::abi;
+use cheby_runtime::abi::{self, UnwindBackend};
 
 use crate::decls::{Decls, ForeignDecl};
 use crate::mangle::{self, Kind};
@@ -56,11 +56,63 @@ pub fn translate(
     _cx: &CodegenCx<'_>,
     opts: &CodegenOptions,
 ) -> Result<ir::Function, CodegenError> {
+    let id = decls.func(func.key)?.id;
+    build(unit, func, decls, opts, id, |t| t.run(EntryCheck::Frame))
+}
+
+/// Translates `func` as the unchecked inner body `inner` of a function
+/// with a large frame (D-679): the code [`translate`] gives, without the
+/// entry check, which the outer function of [`translate_large_frame_outer`]
+/// makes for the whole frame.
+///
+/// # Errors
+///
+/// As for [`translate`].
+pub(crate) fn translate_large_frame_body(
+    unit: &MirModule,
+    func: &Function,
+    decls: &Decls,
+    opts: &CodegenOptions,
+    inner: FuncId,
+) -> Result<ir::Function, CodegenError> {
+    build(unit, func, decls, opts, inner, |t| t.run(EntryCheck::None))
+}
+
+/// Translates the small outer function of `func`, whose body `inner` has a
+/// frame of `frame_size` bytes (D-679). It has `func`'s symbol and
+/// signature, so slots and callers are unchanged (D-043), checks the stack
+/// for the whole frame and tail-calls `inner` ([`Translator::outer_entry`]).
+///
+/// # Errors
+///
+/// An ICE if `func` is not a Cheby function with an entry location.
+pub(crate) fn translate_large_frame_outer(
+    unit: &MirModule,
+    func: &Function,
+    decls: &Decls,
+    opts: &CodegenOptions,
+    inner: FuncId,
+    frame_size: u32,
+) -> Result<ir::Function, CodegenError> {
+    let id = decls.func(func.key)?.id;
+    build(unit, func, decls, opts, id, |t| {
+        t.outer_entry(frame_size, inner)
+    })
+}
+
+/// A CLIF function named `id` with `func`'s signature, its body made by
+/// `body`.
+fn build(
+    unit: &MirModule,
+    func: &Function,
+    decls: &Decls,
+    opts: &CodegenOptions,
+    id: FuncId,
+    body: impl FnOnce(&mut Translator<'_, '_>) -> Result<(), CodegenError>,
+) -> Result<ir::Function, CodegenError> {
     let decl = decls.func(func.key)?;
-    let mut clif = ir::Function::with_name_signature(
-        ir::UserFuncName::user(0, decl.id.as_u32()),
-        decl.sig.clone(),
-    );
+    let mut clif =
+        ir::Function::with_name_signature(ir::UserFuncName::user(0, id.as_u32()), decl.sig.clone());
     let mut fctx = FunctionBuilderContext::new();
     let builder = FunctionBuilder::new(&mut clif, &mut fctx);
     let mut t = Translator {
@@ -78,10 +130,21 @@ pub fn translate(
         panics: Vec::new(),
         panic_blocks: FxHashMap::default(),
     };
-    t.run()?;
+    body(&mut t)?;
     t.b.seal_all_blocks();
     t.b.finalize(decls.frontend_config());
     Ok(clif)
+}
+
+/// Which stack check a function's entry block makes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EntryCheck {
+    /// The check of D-124, for a Cheby function when
+    /// [`CodegenOptions::stack_check`] is set.
+    Frame,
+    /// None: the inner body of a large frame, whose outer function checked
+    /// (D-679).
+    None,
 }
 
 pub(crate) struct Translator<'a, 'f> {
@@ -98,8 +161,9 @@ pub(crate) struct Translator<'a, 'f> {
     /// locals spread over `n` blocks quadratic (a list literal of `n`
     /// elements).
     values: Vec<Option<Value>>,
-    /// Each MIR block's CLIF block, by MIR block index.
-    blocks: Vec<ir::Block>,
+    /// Each MIR block's CLIF block, by MIR block index; `None` for a block
+    /// that only unwinding reaches when unwind edges are ignored.
+    blocks: Vec<Option<ir::Block>>,
     ctx: Option<Value>,
     func_refs: FxHashMap<FuncId, FuncRef>,
     data: FxHashMap<DataId, GlobalValue>,
@@ -161,6 +225,45 @@ fn reverse_postorder(func: &Function) -> Result<Vec<BlockId>, CodegenError> {
     Ok(post)
 }
 
+/// For each block, whether only unwinding reaches it: it is reachable from
+/// `bb0` and the entry pad through normal and unwind edges
+/// ([`Function::successors`]), but not from `bb0` through normal edges
+/// alone. These are the pads of the unwind pass (D-698). A block that
+/// nothing reaches is not one of them. Iterative, as a long function nests
+/// deeply.
+fn unwind_only_blocks(func: &Function) -> Result<Vec<bool>, CodegenError> {
+    let count = func.blocks.len();
+    let reach = |roots: &[BlockId], with_unwind: bool| {
+        let mut seen = vec![false; count];
+        let mut stack = roots.to_vec();
+        while let Some(id) = stack.pop() {
+            let slot = usize::try_from(id.as_u32())
+                .ok()
+                .and_then(|n| seen.get_mut(n))
+                .ok_or_else(|| CodegenError::ice(format!("unknown MIR block {id:?}")))?;
+            if std::mem::replace(slot, true) {
+                continue;
+            }
+            if with_unwind {
+                stack.extend(func.successors(id)?);
+            } else {
+                stack.extend(func.block(id)?.term.successors());
+            }
+        }
+        Ok::<_, CodegenError>(seen)
+    };
+    let first = BlockId::from_u32(0);
+    let normal = reach(&[first], false)?;
+    let mut roots = vec![first];
+    roots.extend(func.entry_unwind);
+    let all = reach(&roots, true)?;
+    Ok(all
+        .into_iter()
+        .zip(normal)
+        .map(|(any, normal)| any && !normal)
+        .collect())
+}
+
 /// `bits` truncated to the width of `ty`, as Cranelift wants an `iconst`
 /// immediate of a narrow type.
 pub(crate) fn truncate(bits: u64, ty: ir::Type) -> i64 {
@@ -174,20 +277,33 @@ pub(crate) fn truncate(bits: u64, ty: ir::Type) -> i64 {
 }
 
 impl Translator<'_, '_> {
-    fn run(&mut self) -> Result<(), CodegenError> {
+    fn run(&mut self, check: EntryCheck) -> Result<(), CodegenError> {
         self.values = vec![None; self.func.locals.len()];
         // CLIF block `n` is MIR block `n`, its parameters created up front
-        // so a jump may precede its target's translation.
-        for block in &self.func.blocks {
+        // so a jump may precede its target's translation. With unwind
+        // edges ignored (`off`), a block that only unwinding reaches gets
+        // no CLIF block: it is never translated, and creating it would
+        // renumber every later block and value, so the CLIF of a function
+        // would differ from M1's with the unwind pass in (D-698).
+        let skipped = if self.opts.unwind == UnwindBackend::Off {
+            unwind_only_blocks(self.func)?
+        } else {
+            vec![false; self.func.blocks.len()]
+        };
+        for (block, skip) in self.func.blocks.iter().zip(skipped) {
+            if skip {
+                self.blocks.push(None);
+                continue;
+            }
             let cl = self.b.create_block();
             for &param in &block.params {
                 let ty = repr_type(self.func.local(param)?.repr);
                 let value = self.b.append_block_param(cl, ty);
                 self.bind(param, value)?;
             }
-            self.blocks.push(cl);
+            self.blocks.push(Some(cl));
         }
-        self.entry()?;
+        self.entry(check)?;
         // Reverse postorder translates a definition before its uses, as a
         // block's dominators come before it. Unreachable blocks are never
         // translated (their CLIF blocks stay out of the layout): no
@@ -210,8 +326,9 @@ impl Translator<'_, '_> {
     }
 
     /// The entry block: the parameters, the stack check of a Cheby
-    /// function, then a jump to `bb0`.
-    fn entry(&mut self) -> Result<(), CodegenError> {
+    /// function (unless `check` is [`EntryCheck::None`]), then a jump to
+    /// `bb0`.
+    fn entry(&mut self, check: EntryCheck) -> Result<(), CodegenError> {
         let entry = self.b.create_block();
         self.b.append_block_params_for_function_params(entry);
         self.b.switch_to_block(entry);
@@ -240,7 +357,7 @@ impl Translator<'_, '_> {
             self.dup(closure)?;
         }
         let first = self.block(BlockId::from_u32(0))?;
-        if self.func.abi == Abi::Cheby && self.opts.stack_check {
+        if self.func.abi == Abi::Cheby && self.opts.stack_check && check == EntryCheck::Frame {
             // D-124: one compare on the fast path; the runtime's slow path
             // tells a real overflow (a panic) from an interrupt request.
             let loc = self
@@ -263,6 +380,64 @@ impl Translator<'_, '_> {
         } else {
             self.b.ins().jump(first, &[]);
         }
+        Ok(())
+    }
+
+    /// The whole body of the outer function of a large frame (D-679): the
+    /// entry check `sp - frame_size - 64 KiB <u [ctx+0]` (the runtime's
+    /// `LARGE_FRAME_MARGIN`, which its slow path uses too), whose slow path
+    /// is `cheby_rt_stack_slow_frame(ctx, location, frame_size)`
+    /// (GAP(stack-slow-frame)), then a `return_call` of the inner body
+    /// `inner` with every parameter.
+    ///
+    /// The check accounts for the frame before it is allocated: the inner
+    /// body then starts with at least 64 KiB above the limit below its
+    /// frame, the margin every function-entry check keeps for a frame that
+    /// is not large. The subtraction cannot wrap, as a stack is never
+    /// within `frame_size + 64 KiB` of address 0, and comparing `sp` with
+    /// `limit + …` instead would wrap when an interrupt sets the limit to
+    /// the highest address (D-453).
+    fn outer_entry(&mut self, frame_size: u32, inner: FuncId) -> Result<(), CodegenError> {
+        if self.func.abi != Abi::Cheby {
+            return Err(CodegenError::ice("a large frame outside a Cheby function"));
+        }
+        let entry = self.b.create_block();
+        self.b.append_block_params_for_function_params(entry);
+        self.b.switch_to_block(entry);
+        let params = self.b.block_params(entry).to_vec();
+        let &ctx = params
+            .first()
+            .ok_or_else(|| CodegenError::ice("a function without `ctx`"))?;
+        self.ctx = Some(ctx);
+        let loc = self
+            .func
+            .entry_loc
+            .ok_or_else(|| CodegenError::ice("a Cheby function without an entry location"))?;
+        let needed = u64::from(frame_size)
+            .checked_add(cheby_runtime::panic::LARGE_FRAME_MARGIN)
+            .and_then(|n| i64::try_from(n).ok())
+            .ok_or_else(|| CodegenError::ice("a frame size that overflows"))?;
+        let call = self.b.create_block();
+        let sp = self.b.ins().get_stack_pointer(WORD);
+        let needed = self.b.ins().iconst(WORD, needed);
+        let low = self.b.ins().isub(sp, needed);
+        let limit = self
+            .b
+            .ins()
+            .load(WORD, MemFlagsData::trusted(), ctx, abi::CTX_STACK_LIMIT);
+        let below = self.b.ins().icmp(IntCC::UnsignedLessThan, low, limit);
+        let slow = self.b.create_block();
+        self.b.set_cold_block(slow);
+        self.b.ins().brif(below, slow, &[], call, &[]);
+        self.b.switch_to_block(slow);
+        let loc = self.string(loc)?;
+        let size = self.b.ins().iconst(types::I64, i64::from(frame_size));
+        self.runtime_call(RuntimeFunc::StackSlowFrame, &[ctx, loc, size])?;
+        self.b.ins().jump(call, &[]);
+        self.b.switch_to_block(call);
+        let signature = self.decls.func(self.func.key)?.sig.clone();
+        let f = self.func_ref(inner, &signature, true);
+        self.b.ins().return_call(f, &params);
         Ok(())
     }
 
@@ -310,7 +485,12 @@ impl Translator<'_, '_> {
             .ok()
             .and_then(|n| self.blocks.get(n))
             .copied()
-            .ok_or_else(|| CodegenError::ice(format!("unknown MIR block {block:?}")))
+            .ok_or_else(|| CodegenError::ice(format!("unknown MIR block {block:?}")))?
+            .ok_or_else(|| {
+                CodegenError::ice(format!(
+                    "MIR block {block:?}, reached only by unwinding, used with unwind edges ignored"
+                ))
+            })
     }
 
     /// The cold block that panics with `kind` at `loc`.

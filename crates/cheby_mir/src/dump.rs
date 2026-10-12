@@ -63,13 +63,14 @@
 //!   its own table, per static in id order. A blank line separates them
 //!   from the functions when there are any.
 
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use cheby_iface::Ice;
 
 use crate::ir::{
-    Abi, BuiltinLayout, Callee, Const, EntryKind, FnKey, Function, LayoutRef, Local, MirModule,
-    Operand, Rvalue, Stmt, TagType, Terminator, UnitKind, UseKind,
+    Abi, BlockId, BuiltinLayout, Callee, Const, EntryKind, FnKey, Function, LayoutRef, Local,
+    MirModule, Operand, Rvalue, Stmt, TagType, Terminator, UnitKind, UseKind,
 };
 use crate::layout::LayoutDesc;
 use crate::repr::Repr;
@@ -222,8 +223,15 @@ fn dump_function_into(out: &mut String, m: &MirModule, f: &Function) -> Result<(
             let _ = write!(out, "({params})");
         }
         out.push_str(":\n");
+        // By instruction, the first edge of each, as `unwind_target` reads
+        // them, without a search per statement; also for edges that are
+        // not sorted yet (a dump of invalid MIR).
+        let mut edges: BTreeMap<u32, BlockId> = BTreeMap::new();
+        for &(i, pad) in &block.unwind {
+            edges.entry(i).or_insert(pad);
+        }
         let edge = |out: &mut String, i: usize| {
-            if let Some(pad) = block.unwind_target(i) {
+            if let Some(pad) = u32::try_from(i).ok().and_then(|i| edges.get(&i)) {
                 let _ = write!(out, " ; unwind bb{}", pad.as_u32());
             }
         };

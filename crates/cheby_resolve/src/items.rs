@@ -15,11 +15,13 @@
 //! an interface function are the parser's E0045, so they never reach this
 //! pass (D-514).
 //!
-//! The standard library may also write two attributes of its own
-//! (§4.8, D-298, D-303, D-342, D-482): `@std_clamped(param, …)` on a
-//! function names the count parameters it clamps, and
+//! The standard library may also write three attributes of its own
+//! (§4.8, D-298, D-303, D-342, D-482, D-692): `@std_clamped(param, …)` on a
+//! function names the count parameters it clamps,
 //! `@std_hooks(equal_fn, hash_fn, debug_fn)` on a type names the functions
-//! of its module that implement its equality, hashing and debug printing.
+//! of its module that implement its equality, hashing and debug printing,
+//! and `@std_context`, without arguments on a function with an `@external`,
+//! makes its native kernel receive the running fiber's context first.
 //! In any other package they are unknown attributes.
 
 use cheby_diag::{Diagnostic, Span, codes};
@@ -79,8 +81,8 @@ const ATTRIBUTE_LIST: &str =
 /// The attributes every package may write (§4.8).
 const ATTRIBUTES: [&str; 5] = ["external", "target", "blocking", "async", "deprecated"];
 
-/// The attributes only the standard library may write (D-482).
-const STD_ATTRIBUTES: [&str; 2] = ["std_clamped", "std_hooks"];
+/// The attributes only the standard library may write (D-482, D-692).
+const STD_ATTRIBUTES: [&str; 3] = ["std_clamped", "std_hooks", "std_context"];
 
 /// Why a function without a body can end up on no target.
 const BODILESS: &str = "a function without a body exists only on the targets of its \
@@ -389,6 +391,7 @@ impl Cx<'_, '_> {
         let mut target: Option<Target> = None;
         let mut blocking: Option<Span> = None;
         let mut is_async: Option<Span> = None;
+        let mut std_context: Option<Span> = None;
         for attr in attrs {
             let span = attr.significant_span();
             let Some(name) = attr.name() else { continue };
@@ -452,7 +455,7 @@ impl Cx<'_, '_> {
                     target = Some(t);
                     self.item_target = Some((t, span));
                 }
-                "blocking" | "async" => {
+                "blocking" | "async" | "std_context" => {
                     if !args.is_empty() || attr.arg_list().is_some() {
                         self.diags.push(
                             Diagnostic::new(
@@ -463,10 +466,10 @@ impl Cx<'_, '_> {
                         );
                         continue;
                     }
-                    if known == "blocking" {
-                        blocking = Some(span);
-                    } else {
-                        is_async = Some(span);
+                    match known {
+                        "blocking" => blocking = Some(span),
+                        "async" => is_async = Some(span),
+                        _ => std_context = Some(span),
                     }
                 }
                 "deprecated" => {
@@ -542,6 +545,18 @@ impl Cx<'_, '_> {
                     "async",
                     placement,
                     Some("`@async` applies to functions with an `@external(js, …)` attribute"),
+                );
+            }
+        }
+        if let Some(span) = std_context {
+            if is_fn && has_external {
+                out.std_context = true;
+            } else {
+                self.misplaced(
+                    span,
+                    "std_context",
+                    placement,
+                    Some("`@std_context` applies to functions with an `@external` attribute"),
                 );
             }
         }

@@ -8,7 +8,7 @@ use cheby_iface::{DefId, DefIndex, ModuleId};
 use crate::builder::FunctionBuilder;
 use crate::ir::{
     Abi, Block, BlockId, Callee, Const, DefName, FnKey, Function, LayoutRef, Local, MirModule,
-    Operand, RuntimeFn, Rvalue, Stmt, Terminator, UnitKind, UseKind,
+    Operand, PanicKind, RuntimeFn, Rvalue, Stmt, Terminator, UnitKind, UseKind,
 };
 use crate::repr::{CType, ForeignSig, Repr};
 use crate::validate::{Stage, validate};
@@ -16,7 +16,7 @@ use crate::{dump, rc};
 
 const MODULE: ModuleId = ModuleId::from_u32(1);
 
-fn def(n: u32) -> DefId {
+pub(crate) fn def(n: u32) -> DefId {
     DefId::new(MODULE, DefIndex::from_u32(n))
 }
 
@@ -24,7 +24,7 @@ fn span() -> Span {
     Span::new(FileId::new(0), TextRange::empty(0))
 }
 
-fn module(functions: Vec<Function>) -> MirModule {
+pub(crate) fn module(functions: Vec<Function>) -> MirModule {
     MirModule {
         unit: UnitKind::Code(MODULE),
         path: "app".into(),
@@ -43,7 +43,7 @@ fn module(functions: Vec<Function>) -> MirModule {
     }
 }
 
-fn builder(n: u32) -> FunctionBuilder {
+pub(crate) fn builder(n: u32) -> FunctionBuilder {
     let mut b = FunctionBuilder::new(FnKey::Item(def(n)), Abi::Cheby, Repr::Value, span()).unwrap();
     b.set_entry_loc("src/main.cheby:1:4").unwrap();
     b
@@ -68,7 +68,7 @@ fn runtime(func: RuntimeFn, args: Vec<Operand>) -> Rvalue {
 /// The shape of `scope_run`'s generated body (plan §2.4): every form of
 /// the unwind IR, with a pad chained into a shared `resume`.
 #[expect(clippy::too_many_lines, reason = "one hand-built MIR function")]
-fn scope_run() -> Function {
+pub(crate) fn scope_run() -> Function {
     let mut b = builder(0);
     let timed = b.add_param(Repr::Bool, None, None).unwrap();
     let seconds = b.add_param(Repr::Int, None, None).unwrap();
@@ -182,7 +182,8 @@ fn scope_run() -> Function {
 }
 
 /// A `@std_context` kernel's wrapper after the unwind pass: `ctx` first,
-/// an edge on the foreign call and on the tail call.
+/// an edge on the foreign call and on the box, which may allocate; none on
+/// the tail call, which leaves the frame first (D-698).
 fn context_wrapper() -> Function {
     let mut b = builder(1);
     let n = b.add_param(Repr::Int, None, None).unwrap();
@@ -211,14 +212,42 @@ fn context_wrapper() -> Function {
             },
         )
         .unwrap();
+    b.unwind_last(pad).unwrap();
     b.terminate(Terminator::TailCall {
         callee: Callee::Indirect(boxed),
         args: Vec::new(),
     })
     .unwrap();
+    b.switch_to(pad).unwrap();
+    b.terminate(Terminator::Resume).unwrap();
+    b.finish().unwrap()
+}
+
+/// A panic with its edge on the terminator: the pad drops the borrowed
+/// message's owner, as the entry pad does.
+fn panicking() -> Function {
+    let mut b = builder(2);
+    let message = b.add_param(Repr::Value, None, None).unwrap();
+    let pad = b.new_block().unwrap();
+    let resume = b.new_block().unwrap();
+    b.set_entry_unwind(pad);
+    let loc = b.string("src/main.cheby:2:3").unwrap();
+    b.terminate(Terminator::Panic {
+        kind: PanicKind::Explicit,
+        message: Some(local(message)),
+        loc,
+    })
+    .unwrap();
     let current = b.current();
     b.unwind_terminator(current, pad).unwrap();
     b.switch_to(pad).unwrap();
+    b.push(Stmt::Drop(message)).unwrap();
+    b.terminate(Terminator::Goto {
+        target: resume,
+        args: Vec::new(),
+    })
+    .unwrap();
+    b.switch_to(resume).unwrap();
     b.terminate(Terminator::Resume).unwrap();
     b.finish().unwrap()
 }
@@ -263,9 +292,24 @@ fn app::f1(_0: int) -> value check str#0 {
   str#0 = \"src/main.cheby:1:4\"
 bb0:
   _1: int = call_foreign \"cheby_rt_kernel\"(borrow const ctx, borrow _0) -> i64 ; unwind bb1
-  _2: value = box int _1
-  tail_call _2() ; unwind bb1
+  _2: value = box int _1 ; unwind bb1
+  tail_call _2()
 bb1:
+  resume
+}
+";
+
+const PANICKING_DUMP: &str = "\
+fn app::f2(_0: value) -> value check str#0 {
+  entry unwind bb1
+  str#0 = \"src/main.cheby:1:4\"
+  str#1 = \"src/main.cheby:2:3\"
+bb0:
+  panic explicit _0 at str#1 ; unwind bb1
+bb1:
+  drop _0
+  goto bb2()
+bb2:
   resume
 }
 ";
@@ -296,6 +340,11 @@ fn ctx_and_terminator_edges_dump_as_the_grammar_says() {
         dump::dump_function(&m, &m.functions[0]).unwrap(),
         CONTEXT_WRAPPER_DUMP
     );
+    let m = module(vec![panicking()]);
+    assert_eq!(
+        dump::dump_function(&m, &m.functions[0]).unwrap(),
+        PANICKING_DUMP
+    );
 }
 
 #[test]
@@ -316,6 +365,7 @@ fn the_shapes_pass_every_stage_that_allows_them() {
         assert_eq!(errors(scope_run(), stage), "", "{stage:?}");
     }
     assert_eq!(errors(context_wrapper(), Stage::Unwound), "");
+    assert_eq!(errors(panicking(), Stage::Unwound), "");
 }
 
 #[test]
@@ -516,9 +566,17 @@ fn successors_and_unwind_targets() {
     assert_eq!(bb0.unwind_target(bb0.stmts.len()), None);
     let wrapper = context_wrapper();
     let bb0 = bb(&wrapper, 0);
+    assert_eq!(bb0.unwind_target(1), Some(BlockId::from_u32(1)));
+    assert_eq!(bb0.unwind_target(bb0.stmts.len()), None);
+    let panics = panicking();
+    let bb0 = bb(&panics, 0);
     assert_eq!(
         bb0.unwind_target(bb0.stmts.len()),
         Some(BlockId::from_u32(1))
+    );
+    assert_eq!(
+        panics.successors(BlockId::from_u32(0)).unwrap(),
+        [BlockId::from_u32(1)]
     );
 }
 

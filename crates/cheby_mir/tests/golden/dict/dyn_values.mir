@@ -1,23 +1,24 @@
 fn app::main() -> value check str#0 {
+  entry unwind bb1
   str#0 = "src/main.cheby:25:4"
   str#1 = "src/main.cheby:33:11"
 bb0:
-  _0: value = call app::circle::new(const float 1.0)
-  _1: value = alloc dyn(const static#2, _0)
-  _2: value = call_runtime list_push(const empty_list, _1)
-  _3: value = call app::square::new(const float 2.0)
-  _4: value = alloc dyn(const static#5, _3)
-  _5: value = call_runtime list_push(_2, _4)
-  _6: value = call app::total(_5)
+  _0: value = call app::circle::new(const float 1.0) ; unwind bb1
+  _1: value = alloc dyn(const static#2, _0) ; unwind bb2
+  _2: value = call_runtime list_push(const empty_list, _1) ; unwind bb1
+  _3: value = call app::square::new(const float 2.0) ; unwind bb3
+  _4: value = alloc dyn(const static#5, _3) ; unwind bb4
+  _5: value = call_runtime list_push(_2, _4) ; unwind bb1
+  _6: value = call app::total(_5) ; unwind bb1
   _7: float = unbox float _6
   drop _6
-  _8: value = call app::circle::new(const float 3.0)
-  _9: value = alloc dyn(const static#2, _8)
+  _8: value = call app::circle::new(const float 3.0) ; unwind bb1
+  _9: value = alloc dyn(const static#2, _8) ; unwind bb5
   dup _9
-  _10: value = call app::label(_9)
+  _10: value = call app::label(_9) ; unwind bb6
   drop _10
   dup _9
-  _11: value = call app::measure(const static#11, _9)
+  _11: value = call app::measure(const static#11, _9) ; unwind bb6
   _12: float = unbox float _11
   drop _11
   _13: value = field _9.0 of dyn
@@ -27,8 +28,8 @@ bb0:
   _15: value = field _13.0 of dict/2+1
   dup _15
   drop _13
-  _16: value = alloc dict/0+0(_15)
-  _17: value = alloc dyn(_16, _14)
+  _16: value = alloc dict/0+0(_15) ; unwind bb8
+  _17: value = alloc dyn(_16, _14) ; unwind bb9
   _18: value = field _9.0 of dyn
   dup _18
   _19: value = field _9.1 of dyn
@@ -36,9 +37,9 @@ bb0:
   _20: value = field _18.3 of dict/2+1
   dup _20
   drop _18
-  _21: value = alloc dyn(_20, _19)
-  _22: value = call app::boxed(const static#12, _9)
-  _23: bool = call_runtime equal(borrow _17, borrow _22, borrow const str#1)
+  _21: value = alloc dyn(_20, _19) ; unwind bb12
+  _22: value = call app::boxed(const static#12, _9) ; unwind bb14
+  _23: bool = call_runtime equal(borrow _17, borrow _22, borrow const str#1) ; unwind bb15
   drop _17
   drop _22
   _24: value = field _21.0 of dyn
@@ -49,12 +50,57 @@ bb0:
   _26: value = field _24.1 of dict/1+0
   dup _26
   drop _24
-  _27: value = call _26(_25)
+  _27: value = call _26(_25) ; unwind bb1
   drop _27
   return const nil
+bb1:
+  resume
+bb2:
+  drop _0
+  goto bb1()
+bb3:
+  drop _2
+  goto bb1()
+bb4:
+  drop _3
+  goto bb3()
+bb5:
+  drop _8
+  goto bb1()
+bb6:
+  drop _9
+  goto bb1()
+bb7:
+  drop _14
+  goto bb6()
+bb8:
+  drop _15
+  goto bb7()
+bb9:
+  drop _16
+  goto bb7()
+bb10:
+  drop _17
+  goto bb6()
+bb11:
+  drop _19
+  goto bb10()
+bb12:
+  drop _20
+  goto bb11()
+bb13:
+  drop _17
+  goto bb1()
+bb14:
+  drop _21
+  goto bb13()
+bb15:
+  drop _22
+  goto bb14()
 }
 
 fn app::label(_0: value) -> value check str#0 {
+  entry unwind bb2
   str#0 = "src/main.cheby:13:4"
 bb0:
   _1: value = field _0.0 of dyn
@@ -65,8 +111,13 @@ bb0:
   _3: value = field _1.1 of dict/2+1
   dup _3
   drop _1
-  _4: value = call _3(_2)
+  _4: value = call _3(_2) ; unwind bb1
   return _4
+bb1:
+  resume
+bb2:
+  drop _0
+  goto bb1()
 }
 
 static#0 desc app::circle$Circle = desc_nominal(str#0, str#1) str#0 = "Circle" str#1 = "app::circle"

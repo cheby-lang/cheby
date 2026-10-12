@@ -272,6 +272,7 @@ fn fixture() -> Fixture {
         native_external: Some(External {
             symbol: "ext_int".into(),
             span: sp(file, 150),
+            context: false,
         }),
         body: None,
         entry: None,
@@ -332,6 +333,7 @@ fn fixture() -> Fixture {
         native_external: Some(External {
             symbol: "say".into(),
             span: sp(file, 180),
+            context: false,
         }),
         body: None,
         entry: None,
@@ -772,42 +774,50 @@ fn d6() -> crate::test_support::Lowered {
 
 /// A value of each unboxed type is boxed where it is passed to a generic
 /// parameter, and unboxed where it comes back from a generic callee; a
-/// tail call needs neither (D-453).
+/// tail call needs neither (D-453). A box that may allocate (a 64-bit
+/// integer or a float) may unwind and has its edge (D-698); the others
+/// are tagged words or static objects.
 #[test]
 fn values_are_boxed_and_unboxed_at_generic_boundaries() {
     let lowered = d6();
-    for (name, repr, line) in [
-        ("ints", "int", 50),
-        ("i64s", "i64", 54),
-        ("u8s", "u8", 58),
-        ("u64s", "u64", 62),
-        ("floats", "float", 66),
-        ("f32s", "f32", 70),
-        ("bools", "bool", 74),
+    for (name, repr, line, allocates) in [
+        ("ints", "int", 50, true),
+        ("i64s", "i64", 54, true),
+        ("u8s", "u8", 58, false),
+        ("u64s", "u64", 62, true),
+        ("floats", "float", 66, true),
+        ("f32s", "f32", 70, true),
+        ("bools", "bool", 74, false),
     ] {
+        let edge = if allocates { " ; unwind bb1" } else { "" };
         assert_eq!(
             lowered.function("app", &format!("app::{name}")),
             format!(
                 "fn app::{name}(_0: {repr}) -> value check str#0 {{\n  \
+                 entry unwind bb1\n  \
                  str#0 = \"src/main.cheby:{line}:4\"\nbb0:\n  \
-                 _1: value = box {repr} _0\n  tail_call app::id(_1)\n}}\n"
+                 _1: value = box {repr} _0{edge}\n  tail_call app::id(_1)\n\
+                 bb1:\n  resume\n}}\n"
             )
         );
     }
     assert_eq!(
         lowered.function("app", "app::round_trip"),
         r#"fn app::round_trip(_0: int, _1: bool) -> value check str#0 {
+  entry unwind bb1
   str#0 = "src/main.cheby:78:4"
 bb0:
-  _2: value = box int _0
-  _3: value = call app::id(_2)
+  _2: value = box int _0 ; unwind bb1
+  _3: value = call app::id(_2) ; unwind bb1
   _4: int = unbox int _3
   drop _3
-  _5: value = call app::ints(_4)
+  _5: value = call app::ints(_4) ; unwind bb1
   _6: int = unbox int _5
   drop _5
   _7: value = box bool _1
   tail_call app::id(_7)
+bb1:
+  resume
 }
 "#
     );
@@ -826,9 +836,12 @@ fn bool_constants_in_uniform_positions_are_static_objects() {
     assert_eq!(
         d6().function("app", "app::yes"),
         r#"fn app::yes() -> value check str#0 {
+  entry unwind bb1
   str#0 = "src/main.cheby:84:4"
 bb0:
   tail_call app::id(const ctor True)
+bb1:
+  resume
 }
 "#
     );
@@ -839,34 +852,45 @@ bb0:
 #[test]
 fn external_wrappers_box_scalar_results() {
     let lowered = d6();
-    for (name, repr, ctype, line) in [
-        ("get_int", "int", "i64", 12),
-        ("get_bool", "bool", "bool", 40),
-        ("get_u32", "u32", "u32", 24),
-        ("get_float", "float", "f64", 32),
+    for (name, repr, ctype, line, allocates) in [
+        ("get_int", "int", "i64", 12, true),
+        ("get_bool", "bool", "bool", 40, false),
+        ("get_u32", "u32", "u32", 24, false),
+        ("get_float", "float", "f64", 32, true),
     ] {
+        // The effect check, the kernel and a box that may allocate may
+        // unwind (D-698).
+        let edge = if allocates { " ; unwind bb1" } else { "" };
         assert_eq!(
             lowered.function("app", &format!("app::{name}")),
             format!(
                 "fn app::{name}() -> value check str#0 {{\n  \
+                 entry unwind bb1\n  \
                  str#0 = \"src/main.cheby:{line}:4\"\n  \
                  str#1 = \"{name}\"\nbb0:\n  \
-                 call_runtime effect_check(borrow const str#1)\n  \
-                 _0: {repr} = call_foreign \"{name}\"() -> {ctype}\n  \
-                 _1: value = box {repr} _0\n  return _1\n}}\n"
+                 call_runtime effect_check(borrow const str#1) ; unwind bb1\n  \
+                 _0: {repr} = call_foreign \"{name}\"() -> {ctype} ; unwind bb1\n  \
+                 _1: value = box {repr} _0{edge}\n  return _1\n\
+                 bb1:\n  resume\n}}\n"
             )
         );
     }
     assert_eq!(
         lowered.function("app", "app::say"),
         r#"fn app::say(_0: value) -> value check str#0 {
+  entry unwind bb2
   str#0 = "src/main.cheby:44:4"
   str#1 = "say"
 bb0:
-  call_runtime effect_check(borrow const str#1)
-  call_foreign "say"(borrow _0) -> void
+  call_runtime effect_check(borrow const str#1) ; unwind bb2
+  call_foreign "say"(borrow _0) -> void ; unwind bb2
   drop _0
   return const nil
+bb1:
+  resume
+bb2:
+  drop _0
+  goto bb1()
 }
 "#
     );
@@ -880,9 +904,12 @@ fn user_unit_constructors_are_static_objects() {
     assert_eq!(
         lowered.function("app", "app::red"),
         r#"fn app::red() -> value check str#0 {
+  entry unwind bb1
   str#0 = "src/main.cheby:88:4"
 bb0:
   return const ctor app::Red
+bb1:
+  resume
 }
 "#
     );

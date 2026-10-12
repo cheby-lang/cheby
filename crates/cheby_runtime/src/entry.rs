@@ -2,11 +2,16 @@
 //! own stack and reports how it ended; `run_main` adds `cheby run`'s
 //! policy (exit statuses, flushing, the debug leak check).
 //!
-//! M1 runs each entry on a dedicated OS thread with the requested stack
-//! size (D-457). A panic reports to the waiting host and parks the entry's
-//! thread forever, abandoning its stack and live objects, which is D-283's
-//! behavior without a stack-switching library. OQ-P7 replaces the thread
-//! with a runtime-owned stack behind the same API.
+//! Two backends run entries. `run_main` and the hosts of `cheby test` and
+//! `xtask test-std` run them as root fibers of a [`Runtime`] made for the
+//! run (D-690, [`crate::sched`]). Isolated entries, constant evaluation
+//! and the REPL (D-713), and every entry where fibers are not supported
+//! (Windows until M6, D-714), run on a dedicated OS thread with the
+//! requested stack size: [`run_entry`] and [`run_task`] (D-457). Until
+//! unwinding exists, a panic reports to the waiting host and abandons the
+//! entry: an isolated entry parks its thread forever; a root fiber switches
+//! to its worker for good and its slot is quarantined
+//! (GAP(interim-panics)). Either way its live objects are abandoned.
 //!
 //! # The current entry
 //!
@@ -18,9 +23,9 @@
 //! constants and its accounting domain, read through thin readers of the
 //! current fiber ([`current_ctx`], [`current_seed`], [`callbacks`]).
 //! `run_entry` heap-allocates the block and makes it `tls.rs`'s current
-//! fiber on the entry's thread (D-686). Generated code still passes `ctx`
-//! explicitly (ADR-0055). M2's fiber switching updates the current fiber
-//! when it switches fibers.
+//! fiber on the entry's thread (D-686); a worker makes each fiber it
+//! resumes current. Generated code still passes `ctx` explicitly
+//! (ADR-0055).
 //!
 //! # Limits of constant evaluation
 //!
@@ -55,13 +60,15 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::time::{Duration, Instant};
 
-use crate::abi::status;
+use crate::abi::{UnwindBackend, status};
 use crate::alloc::{self, Domain, LEAK_CHECK_ENABLED};
 use crate::consteval::{self, ConstTable, Limit};
 use crate::ctx::{ExecCtx, FiberInit};
+use crate::fiber::StackError;
 use crate::generic;
 use crate::io;
 use crate::panic::{PanicReport, stack_position};
+use crate::sched::{FiberSched, Runtime, RuntimeConfig};
 use crate::stats;
 use crate::tls;
 
@@ -167,11 +174,16 @@ pub struct EntryConfig {
     /// The build's constants, for lazy forcing during constant evaluation
     /// (D-535): `None` outside constant evaluation.
     pub consts: Option<Arc<ConstTable>>,
+    /// The unwinding backend the entry's code was compiled for (D-696),
+    /// stored in its control block. The JIT fills it from its code
+    /// generation options.
+    pub unwind: UnwindBackend,
 }
 
 impl EntryConfig {
     /// An entry of the given mode with the default fiber stack, no
-    /// trampolines, and the calling thread's current accounting domain.
+    /// trampolines, the calling thread's current accounting domain and the
+    /// default unwinding backend.
     #[must_use]
     pub fn new(mode: EntryMode) -> Self {
         Self {
@@ -180,6 +192,7 @@ impl EntryConfig {
             callbacks: Callbacks::default(),
             domain: alloc::current_domain(),
             consts: None,
+            unwind: UnwindBackend::Off,
         }
     }
 }
@@ -189,7 +202,9 @@ impl EntryConfig {
 pub enum EntryOutcome {
     /// The thunk returned this word.
     Returned(u64),
-    /// The entry panicked; its thread is parked forever.
+    /// The entry panicked. Until unwinding exists, its thread is parked
+    /// forever (an isolated entry) or its fiber is abandoned and its slot
+    /// quarantined (a root fiber, GAP(interim-panics)).
     Panicked(PanicReport),
 }
 
@@ -201,12 +216,22 @@ pub enum RuntimeError {
         /// The requested size.
         requested: usize,
     },
-    /// The entry's thread could not be started.
+    /// The entry's thread, or a thread of the runtime, could not be
+    /// started.
     Spawn(std::io::Error),
-    /// The entry's thread ended without reporting an outcome.
+    /// The entry ended without reporting an outcome.
     EntryLost,
     /// A `main` thunk returned something other than 0 or 1.
     InvalidStatus(u64),
+    /// `CHEBY_THREADS` holds something other than a whole number of at
+    /// least 1 (D-658): the value as written. Its message is D-658's line
+    /// without `error: `; the host prints it and exits with 1.
+    InvalidThreads(String),
+    /// This platform has no fiber switch (Windows until M6, D-714): the
+    /// host runs its entries on the thread backend instead.
+    Unsupported,
+    /// No stack slot could be taken for a root fiber.
+    Stack(StackError),
 }
 
 impl fmt::Display for RuntimeError {
@@ -223,6 +248,13 @@ impl fmt::Display for RuntimeError {
             Self::InvalidStatus(status) => {
                 write!(f, "the entry returned the invalid status {status}")
             }
+            Self::InvalidThreads(value) => write!(
+                f,
+                "{} must be a whole number of at least 1, not \"{value}\"",
+                crate::sched::THREADS_ENV
+            ),
+            Self::Unsupported => f.write_str("fibers are not supported on this platform (D-714)"),
+            Self::Stack(error) => write!(f, "cannot take a stack for the entry: {error}"),
         }
     }
 }
@@ -231,7 +263,12 @@ impl std::error::Error for RuntimeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Spawn(error) => Some(error),
-            Self::StackTooSmall { .. } | Self::EntryLost | Self::InvalidStatus(_) => None,
+            Self::Stack(error) => Some(error),
+            Self::StackTooSmall { .. }
+            | Self::EntryLost
+            | Self::InvalidStatus(_)
+            | Self::InvalidThreads(_)
+            | Self::Unsupported => None,
         }
     }
 }
@@ -305,9 +342,10 @@ pub(crate) fn current_fiber<'a>() -> Option<&'a ExecCtx> {
     // SAFETY: `tls`'s current fiber is null or the control block of the
     // fiber running on this thread: `spawn_entry` makes its heap-allocated
     // block current only while the entry runs on this thread, and frees it
-    // only after clearing it (a panicked entry's block is never freed).
-    // The caller runs on this thread, inside the entry, and only shared
-    // references to the block are ever made.
+    // only after clearing it (a panicked entry's block is never freed); a
+    // worker makes a fiber current while it runs it, and retires the
+    // fiber only after clearing it. The caller runs on this thread, inside
+    // the entry, and only shared references to the block are ever made.
     unsafe { tls::current_fiber().as_ref() }
 }
 
@@ -505,6 +543,7 @@ unsafe fn spawn_entry(
     }
     let mode = config.mode.clone();
     let callbacks = config.callbacks;
+    let unwind_backend = config.unwind;
     let domain = Arc::clone(&config.domain);
     let consts = config.consts.clone();
     let (deadline, memory_limit) = match &mode {
@@ -546,6 +585,7 @@ unsafe fn spawn_entry(
             // An isolated entry's control block lives on the heap (D-685).
             let ctx = Box::into_raw(Box::new(ExecCtx::new(FiberInit {
                 soft_limit: limit,
+                hard_limit: limit,
                 stack_top: top,
                 entry_mode: mode,
                 outcome: Some(sender.clone()),
@@ -554,6 +594,8 @@ unsafe fn spawn_entry(
                 domain,
                 consts,
                 callbacks,
+                unwind_backend,
+                sched: FiberSched::isolated(),
             })));
             entry_interrupter.set(ctx.cast_const());
             // SAFETY: `ctx` is a live control block, freed below only after
@@ -636,11 +678,18 @@ pub struct RunConfig {
     pub callbacks: Callbacks,
     /// The build's accounting domain, which the leak check reads.
     pub domain: Arc<Domain>,
+    /// The number of worker threads of the run's runtime; `None` reads
+    /// `CHEBY_THREADS` (D-658). In-process hosts may bound it.
+    pub threads: Option<usize>,
+    /// The unwinding backend `main`'s code was compiled for (D-696). The
+    /// JIT fills it from its code generation options.
+    pub unwind: UnwindBackend,
 }
 
 impl Default for RunConfig {
-    /// No arguments, the default root stack, no trampolines, and the
-    /// calling thread's current accounting domain.
+    /// No arguments, the default root stack, no trampolines, the calling
+    /// thread's current accounting domain, `CHEBY_THREADS`'s thread count
+    /// and the default unwinding backend.
     fn default() -> Self {
         Self {
             args: Vec::new(),
@@ -648,6 +697,8 @@ impl Default for RunConfig {
             root_stack_size: DEFAULT_ROOT_STACK_SIZE,
             callbacks: Callbacks::default(),
             domain: alloc::current_domain(),
+            threads: None,
+            unwind: UnwindBackend::Off,
         }
     }
 }
@@ -662,19 +713,37 @@ impl Default for RunConfig {
 ///   when the status is 0 or 1 (D-458). Constants frozen before `main`
 ///   have left the domain, so every live object is a leak.
 ///
+/// `main` runs as the root fiber of a [`Runtime`] made for the run, with
+/// the program's arguments and `config.threads` workers (D-690); the
+/// runtime stops before the leak check. Where fibers are not supported
+/// (Windows until M6, D-714), `main` runs on the thread backend instead.
+///
 /// With `CHEBY_RT_STATS=1` it first prints `main`'s wall time and the
 /// domain's counters to standard error ([`stats::report`]).
 ///
 /// # Errors
 ///
-/// [`RuntimeError`] if the entry cannot run or returns an invalid status.
+/// [`RuntimeError`] if the runtime cannot start (an invalid
+/// `CHEBY_THREADS` among others, D-658), or the entry cannot run or
+/// returns an invalid status.
 ///
 /// # Safety
 ///
 /// As for [`run_entry`]: `entry` must be a `main` entry thunk with the
 /// [`EntryFn`] ABI, and its code must stay valid until this returns.
 pub unsafe fn run_main(entry: EntryFn, config: RunConfig) -> Result<i32, RuntimeError> {
-    set_program(config.args, config.program_name);
+    let runtime = match Runtime::new(&RuntimeConfig {
+        threads: config.threads,
+        args: config.args.clone(),
+        program_name: config.program_name.clone(),
+    }) {
+        Ok(runtime) => Some(runtime),
+        Err(RuntimeError::Unsupported) => {
+            set_program(config.args, config.program_name);
+            None
+        }
+        Err(error) => return Err(error),
+    };
     let domain = config.domain;
     let entry_config = EntryConfig {
         stack_size: config.root_stack_size,
@@ -682,11 +751,21 @@ pub unsafe fn run_main(entry: EntryFn, config: RunConfig) -> Result<i32, Runtime
         callbacks: config.callbacks,
         domain: Arc::clone(&domain),
         consts: None,
+        unwind: config.unwind,
     };
     let started = Instant::now();
-    // SAFETY: the caller guarantees `run_entry`'s preconditions for
-    // `entry`, which this function passes on unchanged.
-    let outcome = unsafe { run_entry(entry, &entry_config) }?;
+    let outcome = match &runtime {
+        // SAFETY: the caller guarantees `run_root`'s preconditions for
+        // `entry`: its code stays valid until this function returns, which
+        // is after the runtime stopped below.
+        Some(runtime) => unsafe { runtime.run_root(entry, &entry_config) },
+        // SAFETY: as above, for `run_entry`.
+        None => unsafe { run_entry(entry, &entry_config) },
+    };
+    if let Some(runtime) = runtime {
+        runtime.shutdown();
+    }
+    let outcome = outcome?;
     let flushed = io::flush_stdout().is_ok();
     if stats::enabled() {
         io::write_stderr(&stats::report(
@@ -740,12 +819,11 @@ static PROGRAM: RwLock<Program> = RwLock::new(Program {
     name: String::new(),
 });
 
-/// Sets the running program's arguments, without the program name, and
-/// its name (D-347), which `std::env` reads. `run_main` calls it with its
-/// `RunConfig`; a host that runs other entries as a program, such as
-/// `cheby test` (D-369) or the REPL, calls it before they run. An empty
-/// name means "not set": `env::program_name` then gives the process's
-/// first argument.
+/// Sets the arguments, without the program name, and the name (D-347)
+/// that `std::env` reads in isolated entries, which run outside any
+/// runtime: the REPL's, and every entry of the thread backend (D-714). A
+/// runtime keeps its own (D-690, [`RuntimeConfig`]). An empty name means
+/// "not set": `env::program_name` then gives the process's first argument.
 pub fn set_program(args: Vec<String>, name: String) {
     *PROGRAM.write().unwrap_or_else(PoisonError::into_inner) = Program { args, name };
 }
@@ -757,9 +835,13 @@ pub fn program_name_if_set() -> Option<String> {
 }
 
 /// The running program's arguments, without the program name (D-347),
-/// read by `std::env`.
+/// read by `std::env`: the current fiber's runtime's (D-690), or the
+/// isolated entries' record ([`set_program`]).
 #[must_use]
 pub fn program_args() -> Vec<String> {
+    if let Some(runtime) = current_fiber().and_then(|ctx| ctx.sched.runtime()) {
+        return runtime.args().to_vec();
+    }
     PROGRAM
         .read()
         .unwrap_or_else(PoisonError::into_inner)
@@ -767,9 +849,12 @@ pub fn program_args() -> Vec<String> {
         .clone()
 }
 
-/// The running program's name (D-347).
+/// The running program's name (D-347), as [`program_args`] finds it.
 #[must_use]
 pub fn program_name() -> String {
+    if let Some(runtime) = current_fiber().and_then(|ctx| ctx.sched.runtime()) {
+        return runtime.program_name().to_owned();
+    }
     PROGRAM
         .read()
         .unwrap_or_else(PoisonError::into_inner)
@@ -1003,6 +1088,11 @@ mod tests {
         2
     }
 
+    /// 0 when the program's arguments are `["a"]` and its name `p`.
+    unsafe extern "C" fn reads_its_program(_: *mut ExecCtx) -> u64 {
+        u64::from(program_args() != ["a"] || program_name() != "p")
+    }
+
     #[test]
     fn run_main_maps_outcomes_to_statuses() {
         // `run_main` sets the program's arguments, which the other
@@ -1019,8 +1109,11 @@ mod tests {
             run_main(allocates_and_frees, config()).unwrap(),
             status::SUCCESS
         );
-        assert_eq!(program_args(), ["a"]);
-        assert_eq!(program_name(), "p");
+        // D-690: `main` reads the arguments of its runtime.
+        assert_eq!(
+            run_main(reads_its_program, config()).unwrap(),
+            status::SUCCESS
+        );
         assert!(matches!(
             run_main(returns_bad_status, config()),
             Err(RuntimeError::InvalidStatus(2))

@@ -1,13 +1,19 @@
 fn app::call_once(_0: value, _1: int, _2: bool) -> value check str#0 {
+  entry unwind bb2
   str#0 = "src/main.cheby:2:4"
 bb0:
-  _3: value = box int _1
+  _3: value = box int _1 ; unwind bb2
   _4: value = box bool _2
   dup _0
-  _5: value = call _0(_3, _4)
+  _5: value = call _0(_3, _4) ; unwind bb2
   _6: float = unbox float _5
   drop _5
-  _7: value = box int _1
+  _7: value = box int _1 ; unwind bb2
   _8: value = box bool _2
   tail_call _0(_7, _8)
+bb1:
+  resume
+bb2:
+  drop _0
+  goto bb1()
 }

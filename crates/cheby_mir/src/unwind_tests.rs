@@ -1,0 +1,796 @@
+//! The unwind pass (D-698) and the rules of `Stage::Unwound`: which
+//! instructions get edges, what their pads release, how pads are shared
+//! and chained, and for each rule of the validator an accepted and a
+//! rejected function. Determinism (D-264): lowering twice gives identical
+//! dumps.
+
+use crate::ir::{
+    Abi, Block, BlockId, Callee, Const, EntryKind, FnKey, Function, LayoutRef, Local, Operand,
+    PanicKind, RuntimeFn, Rvalue, Stmt, Terminator,
+};
+use crate::options::{MirOptions, count_and_check_with};
+use crate::repr::{CType, ForeignSig, Repr};
+use crate::test_support::lower_source;
+use crate::unwind::{insert, rvalue_may_unwind, stmt_may_unwind, terminator_may_unwind};
+use crate::unwind_ir_tests::{builder, module, scope_run};
+use crate::validate::{Stage, validate};
+use crate::{FunctionBuilder, dump};
+
+fn local(l: Local) -> Operand {
+    Operand::Local(l)
+}
+
+fn bb(n: u32) -> BlockId {
+    BlockId::from_u32(n)
+}
+
+fn text(f: &Function) -> String {
+    let m = module(vec![f.clone()]);
+    dump::dump_function(&m, &m.functions[0]).unwrap()
+}
+
+fn errors(f: &Function) -> String {
+    validate(&module(vec![f.clone()]), Stage::Unwound)
+        .err()
+        .unwrap_or_default()
+        .join("\n")
+}
+
+fn accepted(f: &Function) {
+    assert_eq!(errors(f), "", "{}", text(f));
+}
+
+fn rejected(f: &Function, needle: &str) {
+    let found = errors(f);
+    assert!(
+        found.contains(needle),
+        "expected {needle:?} in:\n{found}\n{}",
+        text(f)
+    );
+}
+
+/// `f` after the unwind pass.
+fn unwound(mut f: Function) -> Function {
+    insert(&mut f).unwrap();
+    f
+}
+
+/// Appends a block to `f` and returns its id.
+fn add_block(f: &mut Function, stmts: Vec<Stmt>, term: Terminator) -> BlockId {
+    f.blocks
+        .push(Block {
+            params: Vec::new(),
+            stmts,
+            term,
+            unwind: Vec::new(),
+        })
+        .unwrap()
+}
+
+/// Points the edge of instruction `at` of `block` to `pad`, adding it if
+/// needed.
+fn set_edge(f: &mut Function, block: u32, at: u32, pad: BlockId) {
+    let b = f.blocks.get_mut(bb(block)).unwrap();
+    b.unwind.retain(|&(i, _)| i != at);
+    b.unwind.push((at, pad));
+    b.unwind.sort_unstable();
+}
+
+/// A counted function: a Cheby call that consumes its arguments, and an
+/// `alloc` that consumes nothing until it succeeded.
+///
+/// ```text
+/// fn f0(_0: value, _1: value) -> value
+///   dup _0
+///   _2 = call _1(_0)        ; an unwinding leaves {_0}
+///   _3 = alloc (_0, _2)     ; an unwinding leaves {_0, _2}
+///   return _3
+/// ```
+fn calls() -> Function {
+    let mut b = builder(0);
+    let x = b.add_param(Repr::Value, None, None).unwrap();
+    let g = b.add_param(Repr::Value, None, None).unwrap();
+    b.push(Stmt::Dup(x)).unwrap();
+    let y = b
+        .assign(
+            Repr::Value,
+            Rvalue::Call {
+                callee: Callee::Indirect(g),
+                args: vec![local(x)],
+            },
+        )
+        .unwrap();
+    let pair = b
+        .assign(
+            Repr::Value,
+            Rvalue::Alloc {
+                layout: LayoutRef::Tuple(2),
+                fields: vec![local(x), local(y)],
+            },
+        )
+        .unwrap();
+    b.terminate(Terminator::Return(local(pair))).unwrap();
+    b.finish().unwrap()
+}
+
+const CALLS_UNWOUND: &str = "\
+fn app::f0(_0: value, _1: value) -> value check str#0 {
+  entry unwind bb3
+  str#0 = \"src/main.cheby:1:4\"
+bb0:
+  dup _0
+  _2: value = call _1(_0) ; unwind bb2
+  _3: value = alloc tuple/2(_0, _2) ; unwind bb4
+  return _3
+bb1:
+  resume
+bb2:
+  drop _0
+  goto bb1()
+bb3:
+  drop _1
+  goto bb2()
+bb4:
+  drop _2
+  goto bb2()
+}
+";
+
+/// A counted function with a runtime helper that consumes its owned
+/// arguments even when it raises, one that cannot unwind, a kernel that
+/// borrows, and boxes with and without allocation.
+///
+/// ```text
+/// fn f1(_0: value, _1: value) -> value
+///   _2 = list_push(_0, _1)  ; consumes both: an unwinding leaves {}
+///   _3 = list_length(_2)    ; cannot unwind
+///   _4 = foreign k(_2)      ; borrows: an unwinding leaves {_2}
+///   drop _2
+///   _5 = box int 1          ; a tagged constant: cannot unwind
+///   _6 = box int _4         ; may allocate: an unwinding leaves {}
+///   return _6
+/// ```
+fn helpers() -> Function {
+    let mut b = builder(1);
+    let list = b.add_param(Repr::Value, None, None).unwrap();
+    let elem = b.add_param(Repr::Value, None, None).unwrap();
+    let pushed = b
+        .assign(
+            Repr::Value,
+            Rvalue::CallRuntime {
+                func: RuntimeFn::ListPush,
+                args: vec![local(list), local(elem)],
+            },
+        )
+        .unwrap();
+    b.assign(
+        Repr::Int,
+        Rvalue::CallRuntime {
+            func: RuntimeFn::ListLength,
+            args: vec![local(pushed)],
+        },
+    )
+    .unwrap();
+    let raw = b
+        .assign(
+            Repr::Int,
+            Rvalue::CallForeign {
+                symbol: "cheby_kernel".into(),
+                sig: ForeignSig {
+                    params: vec![CType::Ptr],
+                    ret: CType::I64,
+                },
+                args: vec![local(pushed)],
+            },
+        )
+        .unwrap();
+    b.push(Stmt::Drop(pushed)).unwrap();
+    let one = b
+        .assign(
+            Repr::Value,
+            Rvalue::Box {
+                value: Operand::Const(Const::Int(1)),
+                from: Repr::Int,
+            },
+        )
+        .unwrap();
+    b.push(Stmt::Drop(one)).unwrap();
+    let boxed = b
+        .assign(
+            Repr::Value,
+            Rvalue::Box {
+                value: local(raw),
+                from: Repr::Int,
+            },
+        )
+        .unwrap();
+    b.terminate(Terminator::Return(local(boxed))).unwrap();
+    b.finish().unwrap()
+}
+
+const HELPERS_UNWOUND: &str = "\
+fn app::f1(_0: value, _1: value) -> value check str#0 {
+  entry unwind bb3
+  str#0 = \"src/main.cheby:1:4\"
+bb0:
+  _2: value = call_runtime list_push(_0, _1) ; unwind bb1
+  _3: int = call_runtime list_length(borrow _2)
+  _4: int = call_foreign \"cheby_kernel\"(borrow _2) -> i64 ; unwind bb4
+  drop _2
+  _5: value = box int const int 1
+  drop _5
+  _6: value = box int _4 ; unwind bb1
+  return _6
+bb1:
+  resume
+bb2:
+  drop _0
+  goto bb1()
+bb3:
+  drop _1
+  goto bb2()
+bb4:
+  drop _2
+  goto bb1()
+}
+";
+
+#[test]
+fn unwind_pads_are_chained_and_shared_by_owned_set() {
+    let f = unwound(calls());
+    assert_eq!(text(&f), CALLS_UNWOUND);
+    accepted(&f);
+}
+
+#[test]
+fn unwind_helpers_consume_owned_arguments_and_kernels_borrow() {
+    let f = unwound(helpers());
+    assert_eq!(text(&f), HELPERS_UNWOUND);
+    accepted(&f);
+}
+
+#[test]
+fn unwind_pass_keeps_existing_edges_and_changes_nothing_twice() {
+    // A precounted intrinsic body keeps its edges and entry pad (D-693).
+    let body = scope_run();
+    assert_eq!(unwound(body.clone()), body);
+    let once = unwound(calls());
+    assert_eq!(unwound(once.clone()), once);
+    // And it goes through the pipeline unchanged.
+    let mut m = module(vec![body.clone()]);
+    count_and_check_with(&mut m, &MirOptions::default()).unwrap();
+    assert_eq!(m.functions[0], body);
+}
+
+#[test]
+fn unwind_entry_pad_of_a_function_without_counted_parameters_resumes() {
+    let mut b = builder(2);
+    b.add_param(Repr::Int, None, None).unwrap();
+    b.terminate(Terminator::Return(Operand::Const(Const::Nil)))
+        .unwrap();
+    let f = unwound(b.finish().unwrap());
+    assert_eq!(f.entry_unwind, Some(bb(1)));
+    assert_eq!(f.blocks.get(bb(1)).unwrap().term, Terminator::Resume);
+    accepted(&f);
+}
+
+#[test]
+fn unwind_classifies_what_may_unwind() {
+    let x = Local::from_u32(0);
+    let int = |n| Operand::Const(Const::Int(n));
+    let may = [
+        Rvalue::Call {
+            callee: Callee::Indirect(x),
+            args: Vec::new(),
+        },
+        Rvalue::CallForeign {
+            symbol: "k".into(),
+            sig: ForeignSig {
+                params: Vec::new(),
+                ret: CType::Void,
+            },
+            args: Vec::new(),
+        },
+        Rvalue::CallRuntime {
+            func: RuntimeFn::EffectCheck,
+            args: vec![local(x)],
+        },
+        Rvalue::Alloc {
+            layout: LayoutRef::Tuple(1),
+            fields: vec![local(x)],
+        },
+        Rvalue::LoadConst(crate::unwind_ir_tests::def(3)),
+        Rvalue::Checked {
+            op: crate::ArithOp::Add,
+            lhs: int(1),
+            rhs: int(2),
+            repr: Repr::Int,
+            loc: crate::StrId::from_u32(0),
+        },
+        Rvalue::Box {
+            value: local(x),
+            from: Repr::Int,
+        },
+        Rvalue::Box {
+            value: int(1 << 62),
+            from: Repr::Int,
+        },
+        Rvalue::Box {
+            value: local(x),
+            from: Repr::U64,
+        },
+        Rvalue::Box {
+            value: Operand::Const(Const::Float(0)),
+            from: Repr::Float,
+        },
+    ];
+    for value in &may {
+        assert!(rvalue_may_unwind(value), "{value:?}");
+    }
+}
+
+#[test]
+fn unwind_classifies_what_never_unwinds() {
+    let x = Local::from_u32(0);
+    let int = |n| Operand::Const(Const::Int(n));
+    let never = [
+        Rvalue::Use(local(x)),
+        Rvalue::Field {
+            base: x,
+            layout: LayoutRef::Tuple(1),
+            field: 0,
+        },
+        Rvalue::CallRuntime {
+            func: RuntimeFn::ListGet,
+            args: vec![local(x), int(0)],
+        },
+        Rvalue::Box {
+            value: int(-(1 << 62)),
+            from: Repr::Int,
+        },
+        Rvalue::Box {
+            value: local(x),
+            from: Repr::I32,
+        },
+        Rvalue::Box {
+            value: local(x),
+            from: Repr::Bool,
+        },
+        Rvalue::Compare {
+            op: crate::CmpOp::Eq,
+            lhs: int(1),
+            rhs: int(2),
+            repr: Repr::Int,
+        },
+        Rvalue::Unbox {
+            value: local(x),
+            to: Repr::Int,
+        },
+    ];
+    for value in &never {
+        assert!(!rvalue_may_unwind(value), "{value:?}");
+    }
+    assert!(!stmt_may_unwind(&Stmt::Dup(x)));
+    assert!(!stmt_may_unwind(&Stmt::Drop(x)));
+    assert!(!stmt_may_unwind(&Stmt::ClearUnwind));
+    assert!(terminator_may_unwind(&Terminator::Panic {
+        kind: PanicKind::Todo,
+        message: None,
+        loc: crate::StrId::from_u32(0),
+    }));
+    for term in [
+        Terminator::TailCall {
+            callee: Callee::Indirect(x),
+            args: Vec::new(),
+        },
+        Terminator::Return(local(x)),
+        Terminator::Unreachable,
+        Terminator::Resume,
+    ] {
+        assert!(!terminator_may_unwind(&term), "{term:?}");
+    }
+}
+
+// Rule: each edge's instruction may unwind; no edge on an instruction
+// that cannot.
+#[test]
+fn unwind_rule_edges_only_on_instructions_that_may_unwind() {
+    let f = unwound(helpers());
+    accepted(&f);
+    let mut on_dup = unwound(calls());
+    set_edge(&mut on_dup, 0, 0, bb(3));
+    rejected(
+        &on_dup,
+        "bb0 statement 0 has an unwind edge, but this statement cannot unwind",
+    );
+    let mut on_quiet_helper = f.clone();
+    set_edge(&mut on_quiet_helper, 0, 1, bb(4));
+    rejected(
+        &on_quiet_helper,
+        "bb0 statement 1 has an unwind edge, but this statement cannot unwind",
+    );
+    let mut on_return = f;
+    let len = u32::try_from(on_return.blocks.get(bb(0)).unwrap().stmts.len()).unwrap();
+    set_edge(&mut on_return, 0, len, bb(1));
+    rejected(
+        &on_return,
+        &format!("bb0 statement {len} has an unwind edge, but this terminator cannot unwind"),
+    );
+}
+
+// Rule (the complement): every instruction that may unwind in reachable
+// code has its edge, the terminator `panic` included.
+#[test]
+fn unwind_rule_every_instruction_that_may_unwind_has_an_edge() {
+    let mut f = unwound(helpers());
+    f.blocks
+        .get_mut(bb(0))
+        .unwrap()
+        .unwind
+        .retain(|&(at, _)| at != 2);
+    rejected(&f, "bb0 statement 2 may unwind but has no unwind edge");
+
+    let mut b = builder(2);
+    let loc = b.string("src/main.cheby:2:3").unwrap();
+    b.terminate(Terminator::Panic {
+        kind: PanicKind::Explicit,
+        message: None,
+        loc,
+    })
+    .unwrap();
+    let panics = unwound(b.finish().unwrap());
+    assert_eq!(panics.blocks.get(bb(0)).unwrap().unwind, [(0, bb(1))]);
+    accepted(&panics);
+    let mut bare = panics;
+    bare.blocks.get_mut(bb(0)).unwrap().unwind.clear();
+    rejected(&bare, "bb0 terminator may unwind but has no unwind edge");
+}
+
+// Rule: each pad's owned set equals the ownership state at every source.
+#[test]
+fn unwind_rule_pad_sets_equal_the_ownership_at_the_source() {
+    accepted(&unwound(calls()));
+    // The alloc leaves {_0, _2}; bb2 releases only {_0}, which is what
+    // the call leaves.
+    let mut short = unwound(calls());
+    set_edge(&mut short, 0, 2, bb(2));
+    rejected(
+        &short,
+        "reference counts differ between the predecessors of bb2",
+    );
+    // A pad that releases something the source does not hold.
+    let mut extra = unwound(helpers());
+    let resume = bb(1);
+    let pad = add_block(
+        &mut extra,
+        vec![
+            Stmt::Drop(Local::from_u32(2)),
+            Stmt::Drop(Local::from_u32(2)),
+        ],
+        Terminator::Goto {
+            target: resume,
+            args: Vec::new(),
+        },
+    );
+    set_edge(&mut extra, 0, 2, pad);
+    rejected(&extra, "_2 is used without a reference (holds 0, needs 1)");
+    // The entry pad starts with the parameters.
+    let mut entry = unwound(calls());
+    entry.entry_unwind = Some(bb(2));
+    rejected(
+        &entry,
+        "reference counts differ between the predecessors of bb2",
+    );
+}
+
+// Rule: `resume`, like `return`, requires every count to be 0.
+#[test]
+fn unwind_rule_resume_and_return_leave_nothing_held() {
+    let f = unwound(helpers());
+    accepted(&f);
+    let mut leaky = f.clone();
+    let alone = add_block(&mut leaky, Vec::new(), Terminator::Resume);
+    set_edge(&mut leaky, 0, 2, alone);
+    rejected(
+        &leaky,
+        &format!(
+            "bb{} terminator (resume): _2 still holds 1 reference(s)",
+            alone.as_u32()
+        ),
+    );
+    let mut returns = f;
+    let block = returns.blocks.get_mut(bb(0)).unwrap();
+    let at = block
+        .stmts
+        .iter()
+        .position(|s| *s == Stmt::Drop(Local::from_u32(2)))
+        .unwrap();
+    block.stmts.remove(at);
+    for (i, _) in &mut block.unwind {
+        if usize::try_from(*i).unwrap() > at {
+            *i -= 1;
+        }
+    }
+    rejected(&returns, "bb0 terminator: _2 still holds 1 reference(s)");
+}
+
+// Rule: a pad does not use the result of the instruction that unwinds to
+// it; dominance follows the edges, with blocks split at them.
+#[test]
+fn unwind_rule_a_pad_does_not_use_its_instructions_result() {
+    let f = unwound(calls());
+    accepted(&f);
+    // The call's pad drops the call's own result.
+    let mut own_result = f.clone();
+    let pad = add_block(
+        &mut own_result,
+        vec![Stmt::Drop(Local::from_u32(2))],
+        Terminator::Goto {
+            target: bb(2),
+            args: Vec::new(),
+        },
+    );
+    set_edge(&mut own_result, 0, 1, pad);
+    rejected(
+        &own_result,
+        &format!(
+            "bb{} uses _2, the result of bb0 statement 1, which an unwinding leaves undefined",
+            pad.as_u32()
+        ),
+    );
+    rejected(
+        &own_result,
+        &format!(
+            "_2 is used in bb{} where its definition does not dominate",
+            pad.as_u32()
+        ),
+    );
+    // A local defined after the edge in the same block is not defined
+    // in its pad either.
+    let mut later = f;
+    let pad = add_block(
+        &mut later,
+        vec![Stmt::Drop(Local::from_u32(3))],
+        Terminator::Goto {
+            target: bb(2),
+            args: Vec::new(),
+        },
+    );
+    set_edge(&mut later, 0, 1, pad);
+    rejected(
+        &later,
+        &format!(
+            "_3 is used in bb{} where its definition does not dominate",
+            pad.as_u32()
+        ),
+    );
+}
+
+// Rule: every Cheby-ABI function has its entry pad after the pass; a
+// C-ABI function, which has no entry check, has none
+// (GAP(c-abi-entry-pad)).
+#[test]
+fn unwind_rule_entry_pads() {
+    let f = unwound(calls());
+    accepted(&f);
+    let mut none = f;
+    none.entry_unwind = None;
+    rejected(&none, "a Cheby-ABI function needs its entry pad");
+
+    let mut b = FunctionBuilder::new(
+        FnKey::Trampoline(1),
+        Abi::C,
+        Repr::Value,
+        cheby_diag::Span::new(cheby_diag::FileId::new(0), cheby_diag::TextRange::empty(0)),
+    )
+    .unwrap();
+    let closure = b.add_param(Repr::Value, None, None).unwrap();
+    let arg = b.add_param(Repr::Value, None, None).unwrap();
+    let out = b
+        .assign(
+            Repr::Value,
+            Rvalue::Call {
+                callee: Callee::Indirect(closure),
+                args: vec![local(arg)],
+            },
+        )
+        .unwrap();
+    b.terminate(Terminator::Return(local(out))).unwrap();
+    let trampoline = unwound(b.finish().unwrap());
+    assert_eq!(trampoline.entry_unwind, None);
+    assert_eq!(trampoline.blocks.get(bb(0)).unwrap().unwind, [(0, bb(1))]);
+    accepted(&trampoline);
+    let mut with_pad = trampoline;
+    with_pad.entry_unwind = Some(bb(1));
+    rejected(
+        &with_pad,
+        "a C-ABI function has no entry check, so no entry pad",
+    );
+}
+
+const SOURCE: &str = "\
+//! Calls, allocation, a panic and a list walk.
+
+import std::io
+
+type Pair {
+  Pair(String, String),
+}
+
+fn swap(p: Pair) -> Pair {
+  let Pair(left, right) = p
+  Pair(right, left)
+}
+
+fn total(xs: List<Int>, acc: Int) -> Int {
+  case xs {
+    [] => acc
+    [x, ..rest] => total(rest, acc + x)
+  }
+}
+
+fn main() {
+  let Pair(left, right) = swap(Pair(\"a\", \"b\"))
+  case total([1, 2, 3], 0) {
+    6 => io::println(\"{left}{right}\")
+    _ => panic as \"unexpected\"
+  }
+}
+";
+
+#[test]
+fn unwind_lowering_twice_gives_identical_dumps() {
+    let first = lower_source(&[("", SOURCE)]).dump();
+    let second = lower_source(&[("", SOURCE)]).dump();
+    assert_eq!(first, second);
+    assert!(first.contains("; unwind bb"), "{first}");
+    assert!(first.contains("entry unwind bb"), "{first}");
+}
+
+#[test]
+fn unwind_entry_thunks_get_edges_but_no_entry_pad() {
+    let lowered = lower_source(&[("", SOURCE)]);
+    let entries = lowered.units.iter().find(|u| u.module().is_none()).unwrap();
+    let thunk = entries
+        .functions
+        .iter()
+        .find(|f| matches!(f.key, FnKey::Entry(EntryKind::Main(_))))
+        .unwrap();
+    assert_eq!(thunk.entry_unwind, None);
+    assert!(
+        thunk.blocks.iter().any(|b| !b.unwind.is_empty()),
+        "{}",
+        lowered.dump()
+    );
+    validate(entries, Stage::Unwound).unwrap();
+}
+
+/// What the pad chain from `pad` releases before it resumes, ascending.
+fn released(f: &Function, mut pad: BlockId) -> Vec<Local> {
+    let mut out = Vec::new();
+    loop {
+        let block = f.blocks.get(pad).unwrap();
+        for stmt in &block.stmts {
+            let Stmt::Drop(l) = stmt else {
+                panic!("a pad statement {stmt:?}");
+            };
+            out.push(*l);
+        }
+        match &block.term {
+            Terminator::Goto { target, .. } => pad = *target,
+            Terminator::Resume => break,
+            other => panic!("a pad ends with {other:?}"),
+        }
+    }
+    out.sort_unstable();
+    out
+}
+
+#[test]
+fn unwind_edges_off_validates_counted_without_edges() {
+    // Before counting: `_2 = alloc (_0, _0); _3 = call _1(_2)`.
+    let mut b = builder(0);
+    let x = b.add_param(Repr::Value, None, None).unwrap();
+    let callee = b.add_param(Repr::Value, None, None).unwrap();
+    let pair = b
+        .assign(
+            Repr::Value,
+            Rvalue::Alloc {
+                layout: LayoutRef::Tuple(2),
+                fields: vec![local(x), local(x)],
+            },
+        )
+        .unwrap();
+    let result = b
+        .assign(
+            Repr::Value,
+            Rvalue::Call {
+                callee: Callee::Indirect(callee),
+                args: vec![local(pair)],
+            },
+        )
+        .unwrap();
+    b.terminate(Terminator::Return(local(result))).unwrap();
+    let function = b.finish().unwrap();
+    let off = MirOptions {
+        unwind_edges: false,
+        ..MirOptions::default()
+    };
+    let mut without = module(vec![function.clone()]);
+    count_and_check_with(&mut without, &off).unwrap();
+    let text = dump::dump(&without).unwrap();
+    assert!(!text.contains("unwind"), "{text}");
+    validate(&without, Stage::Counted).unwrap();
+    let mut with = module(vec![function]);
+    count_and_check_with(&mut with, &MirOptions::default()).unwrap();
+    let text = dump::dump(&with).unwrap();
+    assert!(text.contains("; unwind bb"), "{text}");
+    assert!(text.contains("entry unwind bb"), "{text}");
+    // `dup _0; _2 = alloc (_0, _0); _3 = call _1(_2)`: the alloc leaves
+    // both references of _0 and _1; the call consumes its callee and its
+    // argument; the entry check leaves the parameters.
+    let counted = &with.functions[0];
+    let bb0 = counted.blocks.get(bb(0)).unwrap();
+    assert_eq!(bb0.stmts[0], Stmt::Dup(x));
+    let pad = |at| released(counted, bb0.unwind_target(at).unwrap());
+    assert_eq!(pad(1), [x, x, callee]);
+    assert_eq!(pad(2), []);
+    assert_eq!(
+        released(counted, counted.entry_unwind.unwrap()),
+        [x, callee]
+    );
+}
+
+/// One block of `n` calls `_k = call _0(_0)` whose results are unused
+/// (counting drops them), before counting: the shape of a long `main` of
+/// independent prints.
+fn long_block(n: usize) -> Function {
+    let mut b = builder(0);
+    let x = b.add_param(Repr::Value, None, None).unwrap();
+    for _ in 0..n {
+        b.assign(
+            Repr::Value,
+            Rvalue::Call {
+                callee: Callee::Indirect(x),
+                args: vec![local(x)],
+            },
+        )
+        .unwrap();
+    }
+    b.terminate(Terminator::Return(local(x))).unwrap();
+    b.finish().unwrap()
+}
+
+#[test]
+fn unwind_a_long_block_compiles_in_linear_time() {
+    // Review finding R2-ROB-1: the ownership simulation kept a zero count
+    // for every local the block had consumed and copied them all at each
+    // call, and the validator's dominance walked from each call's segment
+    // up the whole block to the shared pad: both quadratic in the block's
+    // length, the first even with the pass off. 20_000 calls took minutes
+    // in a debug build; the budget is generous for a loaded machine.
+    let n = 20_000;
+    for unwind_edges in [true, false] {
+        let options = MirOptions {
+            unwind_edges,
+            ..MirOptions::default()
+        };
+        let mut m = module(vec![long_block(n)]);
+        let start = std::time::Instant::now();
+        count_and_check_with(&mut m, &options).unwrap();
+        let took = start.elapsed();
+        assert!(
+            took < std::time::Duration::from_secs(10),
+            "edges {unwind_edges}: {took:?}"
+        );
+        if unwind_edges {
+            // Every call unwinds to the one pad that releases _0.
+            let f = &m.functions[0];
+            let bb0 = f.blocks.get(bb(0)).unwrap();
+            assert_eq!(bb0.unwind.len(), n);
+            let pad = bb0.unwind[0].1;
+            assert!(bb0.unwind.iter().all(|&(_, p)| p == pad));
+            assert_eq!(released(f, pad), [Local::from_u32(0)]);
+        }
+    }
+}

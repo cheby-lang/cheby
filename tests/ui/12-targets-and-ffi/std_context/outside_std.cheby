@@ -1,0 +1,15 @@
+// @mode: check-fail
+// @decisions: D-692, D-482
+// @milestone: M2
+//! Only the standard library may give a kernel the running fiber's
+//! context. Outside std, `@std_context` is an unknown attribute, on a
+//! function with an `@external` as on any other (§4.8).
+
+@std_context
+@external(native, "cheby_app_wait")
+pub fn wait(count: Int) -> Int
+
+@std_context
+pub fn twice(count: Int) -> Int {
+  count * 2
+}

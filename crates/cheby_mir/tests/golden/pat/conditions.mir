@@ -1,4 +1,5 @@
 fn app::bools(_0: bool, _1: bool) -> value check str#0 {
+  entry unwind bb6
   str#0 = "src/main.cheby:38:4"
 bb0:
   branch _0, bb1, bb2
@@ -11,11 +12,14 @@ bb3:
 bb4:
   goto bb5(const int 3)
 bb5(_2: int):
-  _3: value = box int _2
+  _3: value = box int _2 ; unwind bb6
   return _3
+bb6:
+  resume
 }
 
 fn app::sign(_0: int) -> value check str#0 {
+  entry unwind bb6
   str#0 = "src/main.cheby:114:4"
   str#1 = "negative"
   str#2 = "zero"
@@ -37,4 +41,6 @@ bb4:
 bb5:
   _6: value = const str#3
   goto bb3(_6)
+bb6:
+  resume
 }

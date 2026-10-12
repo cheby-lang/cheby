@@ -36,17 +36,23 @@
 //!   evaluated constant, sorted by module path and name (empty when no
 //!   constant was evaluated).
 //!
-//! **MIR options** (D-718): every build reads `CHEBY_RC` (`naive` or
-//! `perceus`; unset or empty is the default) once, with
-//! [`mir_options_from_env`] (the dumps for goldens use the defaults, so
-//! they do not depend on the environment), and counts every unit with
-//! `cheby_mir::count_and_check_with`. A hidden developer switch, honored by
-//! release builds too, so `bench-run` can measure both modes; an invalid
-//! value is a driver error. GAP(rc-mode-env)
+//! **MIR and code-generation options** (D-718, D-702): every build reads
+//! its switches once, in one place: [`mir_options_from_env`] reads
+//! `CHEBY_RC` (`naive` or `perceus`; unset or empty is the default) and
+//! `CHEBY_UNWIND_EDGES` (`off` turns the unwind pass off, D-698; unset or
+//! empty keeps it), and [`codegen_options_from_env`] reads `CHEBY_UNWIND`
+//! (`off`, `flag` or `try_call`; unset or empty is `off`), which
+//! `CHEBY_UNWIND_EDGES=off` forces to `off`. Every unit is counted with
+//! `cheby_mir::count_and_check_with`. The dumps for goldens use the
+//! defaults, so they do not depend on the environment. These are hidden
+//! developer switches, honored by release builds too, so `bench-run` can
+//! measure every mode (D-702); an invalid value is a driver error.
+//! GAP(rc-mode-env) GAP(unwind-backend-switch)
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use cheby_codegen_clif::CodegenOptions;
 use cheby_consteval::{ConstEvalConfig, ConstInfo, ConstMode, ConstTypes};
 use cheby_diag::{Diagnostic, SourceMap, codes};
 use cheby_iface::{DefId, DepView, Ice, ModuleId};
@@ -57,6 +63,7 @@ use cheby_mir::{
     count_and_check_with, lower_entries, lower_items, lower_tests,
 };
 use cheby_package::Target;
+use cheby_runtime::abi::UnwindBackend;
 use cheby_types::thir;
 use rayon::prelude::*;
 
@@ -98,8 +105,9 @@ pub(crate) struct Built {
     pub rc_ops: Option<u64>,
 }
 
-/// The MIR options of a build, read from the environment once per build
-/// (`CHEBY_RC`, plan §2.3; GAP(rc-mode-env)).
+/// The MIR options of a build, read from the environment once per build:
+/// `CHEBY_RC` (plan §2.3; GAP(rc-mode-env)) and `CHEBY_UNWIND_EDGES`
+/// (plan §2.4; GAP(unwind-backend-switch)).
 ///
 /// # Errors
 ///
@@ -108,20 +116,73 @@ pub(crate) fn mir_options_from_env() -> Result<MirOptions, Error> {
     MirOptions::from_env().map_err(Error::new)
 }
 
+/// The code-generation options of a build or a REPL session, read from
+/// the environment once (plan §2.4, D-702): `CHEBY_UNWIND` picks
+/// [`CodegenOptions::unwind`] (unset or empty is `off`), and
+/// `CHEBY_UNWIND_EDGES=off` makes it `off` whatever `CHEBY_UNWIND` says;
+/// both are checked either way. A CLIF dump (`capture_clif`) compiles with
+/// the defaults and reads nothing, so dumps do not depend on the
+/// environment (D-264). GAP(unwind-backend-switch)
+///
+/// # Errors
+///
+/// An [`Error`] with the message of an invalid value.
+pub(crate) fn codegen_options_from_env(capture_clif: bool) -> Result<CodegenOptions, Error> {
+    if capture_clif {
+        return Ok(CodegenOptions {
+            capture_clif,
+            ..CodegenOptions::default()
+        });
+    }
+    let backend = unwind_backend_from_env()?;
+    let edges = MirOptions::unwind_edges_from_env().map_err(Error::new)?;
+    Ok(CodegenOptions {
+        unwind: if edges { backend } else { UnwindBackend::Off },
+        ..CodegenOptions::default()
+    })
+}
+
+/// `CHEBY_UNWIND`: the unwinding backend to generate code for.
+fn unwind_backend_from_env() -> Result<UnwindBackend, Error> {
+    let value = std::env::var_os(UnwindBackend::ENV);
+    match value.as_deref().map(std::ffi::OsStr::to_str) {
+        None => Ok(UnwindBackend::Off),
+        Some(Some(text)) => parse_unwind_backend(text),
+        Some(None) => Err(Error::new(format!(
+            "{} must be off, flag or try_call, not a value that is not Unicode",
+            UnwindBackend::ENV
+        ))),
+    }
+}
+
+/// The backend the value `text` of `CHEBY_UNWIND` names; empty is `off`.
+fn parse_unwind_backend(text: &str) -> Result<UnwindBackend, Error> {
+    if text.is_empty() {
+        return Ok(UnwindBackend::Off);
+    }
+    UnwindBackend::parse(text).ok_or_else(|| {
+        Error::new(format!(
+            "{} must be off, flag or try_call, not \"{}\"",
+            UnwindBackend::ENV,
+            text.escape_debug()
+        ))
+    })
+}
+
 /// Lowers what the roots reach (D-510), compiles it in one JIT, and
 /// evaluates the reachable constants in that JIT (E6). `Err` holds E0053,
 /// E0069 or E0075-E0078 diagnostics, sorted. `Constants` builds
 /// with `stub_unresolved` (plan §4.4) and never reports E0053 (D-532);
 /// `AllFunctions` evaluates nothing. A CLIF dump (`capture_clif`) compiles
-/// with the default options, MIR and JIT, so dumps do not depend on the
-/// environment (D-264); any other build reads the MIR options with
-/// [`mir_options_from_env`]. With `CHEBY_DUMP_DIR` set, it writes the
-/// determinism dumps (module docs).
+/// with the default options, MIR, code generation and JIT, so dumps do not
+/// depend on the environment (D-264); any other build reads the options
+/// with [`mir_options_from_env`] and [`codegen_options_from_env`]. With
+/// `CHEBY_DUMP_DIR` set, it writes the determinism dumps (module docs).
 ///
 /// # Errors
 ///
-/// An [`Error`] for an invalid MIR option in the environment, or an
-/// internal compiler error.
+/// An [`Error`] for an invalid option in the environment, or an internal
+/// compiler error.
 #[expect(
     clippy::needless_pass_by_value,
     reason = "the signature of plan §4.5, which callers build in place"
@@ -137,26 +198,28 @@ pub(crate) fn build(
     } else {
         mir_options_from_env()?
     };
+    let codegen = codegen_options_from_env(capture_clif)?;
     Ok(build_dumping(
         front,
         sources,
         &roots,
-        capture_clif,
+        codegen,
         options,
         dump_dir().as_deref(),
     )?)
 }
 
-/// [`build`] with the MIR options `mir`, writing the determinism dumps to
-/// `dump` if it is given.
+/// [`build`] with the MIR options `mir` and the code-generation options
+/// `codegen`, writing the determinism dumps to `dump` if it is given.
 fn build_dumping(
     front: &Frontend,
     sources: &SourceMap,
     roots: &Roots<'_>,
-    capture_clif: bool,
+    codegen: CodegenOptions,
     mir: MirOptions,
     dump: Option<&Path>,
 ) -> Result<Result<Built, Vec<Diagnostic>>, Ice> {
+    let capture_clif = codegen.capture_clif;
     let lowered = lower(front, sources, roots, mir)?;
     if let Some(dir) = dump {
         write_mir_dumps(dir, &lowered.units)?;
@@ -168,8 +231,11 @@ fn build_dumping(
         ..jit_options(capture_clif)
     };
     // The dump captures CLIF too; code generation is the same either way.
-    let capture = capture_clif || dump.is_some();
-    let mut jit = match compile_with(&lowered.units, capture, options) {
+    let codegen = CodegenOptions {
+        capture_clif: capture_clif || dump.is_some(),
+        ..codegen
+    };
+    let mut jit = match compile_with(&lowered.units, codegen, options) {
         Ok(jit) => jit,
         Err(JitError::UnresolvedSymbols(symbols)) => {
             let mut diagnostics = unresolved(front, &symbols)?;
@@ -724,16 +790,10 @@ fn jit_options(capture_clif: bool) -> JitOptions {
 
 fn compile_with(
     units: &[MirModule],
-    capture_clif: bool,
+    codegen: CodegenOptions,
     options: JitOptions,
 ) -> Result<Jit, JitError> {
-    let mut jit = Jit::configured(
-        cheby_codegen_clif::CodegenOptions {
-            capture_clif,
-            ..cheby_codegen_clif::CodegenOptions::default()
-        },
-        options,
-    )?;
+    let mut jit = Jit::configured(codegen, options)?;
     jit.compile(units)?;
     Ok(jit)
 }
@@ -842,7 +902,12 @@ fn main() {
             ["keys", "table", "size"],
             ["size", "keys", "table"],
         ] {
-            let mut jit = compile_with(&lowered.units, false, JitOptions::from_env()).unwrap();
+            let mut jit = compile_with(
+                &lowered.units,
+                CodegenOptions::default(),
+                JitOptions::from_env(),
+            )
+            .unwrap();
             let order: Vec<ConstInfo> = order.iter().map(|n| by_name(n)).collect();
             let diagnostics = cheby_consteval::evaluate(&mut jit, &order, &config).unwrap();
             assert!(diagnostics.is_empty(), "{diagnostics:?}");
@@ -999,7 +1064,7 @@ fn main() {
                 &front,
                 &out.sources,
                 &roots,
-                false,
+                CodegenOptions::default(),
                 MirOptions::default(),
                 None,
             )
@@ -1034,7 +1099,7 @@ fn main() {
             &front,
             &out.sources,
             &Roots::Constants,
-            false,
+            CodegenOptions::default(),
             MirOptions::default(),
             Some(&dumps),
         )
@@ -1060,7 +1125,7 @@ fn main() {
             &front,
             &out.sources,
             &Roots::Constants,
-            false,
+            CodegenOptions::default(),
             MirOptions::default(),
             Some(&dumps),
         )
@@ -1098,7 +1163,7 @@ fn main() {
             &front,
             &out.sources,
             &Roots::Constants,
-            false,
+            CodegenOptions::default(),
             MirOptions::default(),
             None,
         )
@@ -1232,24 +1297,131 @@ fn main() {
         Rejected(String),
     }
 
-    /// The MIR of every root of the package at `dir` (its `main`, its tests
-    /// on native, its constants) under `mir`.
-    fn every_root_dump(dir: &Path, mir: MirOptions) -> RootDump {
+    /// The MIR units of every root of the package at `dir` (its `main`,
+    /// its tests on native, its constants) under `mir`, or the sorted
+    /// codes of the front end's errors. An internal error fails the test.
+    #[expect(
+        clippy::panic_in_result_fn,
+        reason = "`Err` is a rejection by the front end; an internal error fails the test"
+    )]
+    fn every_root_units(dir: &Path, mir: MirOptions) -> Result<Vec<MirModule>, String> {
         let mut out = CheckOutput::default();
         let front = crate::front_end(dir, frontend::Mode::Build, &mut out).unwrap();
         let Some((front, package)) = front.filter(|_| !out.has_errors()) else {
             let mut found = codes(&out);
             found.sort();
             found.dedup();
-            return RootDump::Rejected(found.join(", "));
+            return Err(found.join(", "));
         };
         let main = front
             .local_module(&cheby_package::ModulePath::root(&package))
             .and_then(|m| front.main_of(m));
-        let units = lower_every_root_with(&front, &out.sources, main, mir).unwrap();
+        let units = lower_every_root_with(&front, &out.sources, main, mir)
+            .unwrap_or_else(|ice| panic!("{}: {ice}", dir.display()));
         assert!(!units.is_empty(), "{}", dir.display());
-        let texts: Vec<String> = units.iter().map(|u| cheby_mir::dump(u).unwrap()).collect();
-        RootDump::Mir(texts.join("\n"))
+        Ok(units)
+    }
+
+    /// The MIR of every root of the package at `dir` (its `main`, its tests
+    /// on native, its constants) under `mir`.
+    fn every_root_dump(dir: &Path, mir: MirOptions) -> RootDump {
+        match every_root_units(dir, mir) {
+            Ok(units) => {
+                let texts: Vec<String> =
+                    units.iter().map(|u| cheby_mir::dump(u).unwrap()).collect();
+                RootDump::Mir(texts.join("\n"))
+            }
+            Err(codes) => RootDump::Rejected(codes),
+        }
+    }
+
+    /// The example packages under `docs/examples`, sorted.
+    fn example_dirs() -> Vec<PathBuf> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples");
+        let mut dirs: Vec<PathBuf> = std::fs::read_dir(&root)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|dir| dir.join("cheby.toml").is_file())
+            .collect();
+        dirs.sort();
+        dirs
+    }
+
+    /// D-698, plan §2.4 and gate 2. Rules checked: with the unwind pass on
+    /// (the default), every unit of every example whose front end passes
+    /// (its `main`, its tests on native and its constants) passes
+    /// `Stage::Unwound`: every instruction that may unwind has an edge to
+    /// the pad of exactly what it leaves held, nothing else has one, pads
+    /// end in `resume` with nothing held, and every Cheby-ABI function has
+    /// its entry pad. With `CHEBY_UNWIND_EDGES=off` the pass does not run:
+    /// no function that is not `precounted` has an edge, an entry pad or a
+    /// `resume` (a precounted intrinsic body keeps the edges it was
+    /// generated with, which code generation under `off` ignores). The
+    /// examples the front end rejects are computed, skipped and printed.
+    #[test]
+    fn unwound_examples() {
+        let dirs = example_dirs();
+        let off = MirOptions {
+            unwind_edges: false,
+            ..MirOptions::default()
+        };
+        let mut checked = 0_usize;
+        let mut edges = 0_usize;
+        let mut skipped = Vec::new();
+        for dir in &dirs {
+            let name = dir.file_name().unwrap().to_string_lossy().into_owned();
+            let units = match every_root_units(dir, MirOptions::default()) {
+                Ok(units) => units,
+                Err(codes) => {
+                    skipped.push(format!("{name} (the front end reports {codes})"));
+                    continue;
+                }
+            };
+            for unit in &units {
+                if let Err(errors) = cheby_mir::validate(unit, cheby_mir::Stage::Unwound) {
+                    panic!("{name}: {}: {}", unit.path, errors.join("\n  "));
+                }
+                edges += unit
+                    .functions
+                    .iter()
+                    .flat_map(|f| f.blocks.iter())
+                    .map(|b| b.unwind.len())
+                    .sum::<usize>();
+            }
+            let Ok(units) = every_root_units(dir, off) else {
+                panic!("{name}: the front end rejects it the second time");
+            };
+            for unit in &units {
+                for f in unit.functions.iter().filter(|f| !f.precounted) {
+                    let text = cheby_mir::dump_function(unit, f).unwrap();
+                    // The string table may quote any text.
+                    let code = text
+                        .lines()
+                        .filter(|line| !line.trim_start().starts_with("str#"));
+                    let mut found = code.filter(|l| l.contains("unwind") || l.contains("resume"));
+                    assert!(
+                        found.next().is_none()
+                            && f.entry_unwind.is_none()
+                            && f.blocks.iter().all(|b| b.unwind.is_empty()),
+                        "{name}: edges with CHEBY_UNWIND_EDGES=off:\n{text}"
+                    );
+                }
+            }
+            checked += 1;
+        }
+        eprintln!(
+            "unwound_examples: {checked} examples checked ({edges} unwind edges), {} skipped:",
+            skipped.len()
+        );
+        for line in &skipped {
+            eprintln!("  {line}");
+        }
+        assert!(edges > 0);
+        assert!(
+            checked * 2 > dirs.len(),
+            "only {checked} of {} examples checked",
+            dirs.len()
+        );
     }
 
     /// `CHEBY_RC=naive` keeps M1's naive counting selectable (D-718). Until
@@ -1259,13 +1431,7 @@ fn main() {
     /// front end rejects today are skipped and printed with their codes.
     #[test]
     fn rc_modes_give_the_same_mir_for_every_example() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples");
-        let mut dirs: Vec<PathBuf> = std::fs::read_dir(&root)
-            .unwrap()
-            .map(|entry| entry.unwrap().path())
-            .filter(|dir| dir.join("cheby.toml").is_file())
-            .collect();
-        dirs.sort();
+        let dirs = example_dirs();
         let naive = MirOptions {
             rc: cheby_mir::RcMode::Naive,
             ..MirOptions::default()
@@ -1305,6 +1471,41 @@ fn main() {
             compared * 2 > dirs.len(),
             "only {compared} of {} examples compared",
             dirs.len()
+        );
+    }
+
+    /// Plan §2.4: `CHEBY_UNWIND` names a backend by
+    /// `UnwindBackend::parse`, empty is `off`, and anything else is the
+    /// driver error of the plan. GAP(unwind-backend-switch)
+    #[test]
+    fn unwind_switch_values() {
+        assert_eq!(parse_unwind_backend("").unwrap(), UnwindBackend::Off);
+        assert_eq!(parse_unwind_backend("off").unwrap(), UnwindBackend::Off);
+        assert_eq!(parse_unwind_backend("flag").unwrap(), UnwindBackend::Flag);
+        assert_eq!(
+            parse_unwind_backend("try_call").unwrap(),
+            UnwindBackend::TryCall
+        );
+        let Err(e) = parse_unwind_backend("bogus") else {
+            panic!("bogus is not a backend");
+        };
+        assert_eq!(
+            e.to_string(),
+            "CHEBY_UNWIND must be off, flag or try_call, not \"bogus\""
+        );
+        assert!(parse_unwind_backend("Flag").is_err());
+        // The two crates name the edges switch alike; the MIR crate does
+        // not depend on the runtime.
+        assert_eq!(
+            MirOptions::UNWIND_EDGES_ENV,
+            cheby_runtime::abi::UNWIND_EDGES_ENV
+        );
+        assert_eq!(
+            codegen_options_from_env(true).unwrap(),
+            CodegenOptions {
+                capture_clif: true,
+                ..CodegenOptions::default()
+            }
         );
     }
 }

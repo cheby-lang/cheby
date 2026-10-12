@@ -425,3 +425,78 @@ fn an_unfinished_repl_entry_is_reported_at_the_end_of_input() {
     );
     assert_eq!(out.status, Some(0));
 }
+
+/// Runs `cheby` in `dir` with `env` added and `stdin` piped in.
+#[expect(
+    clippy::unwrap_used,
+    reason = "a test helper: failing to spawn `cheby` fails the test"
+)]
+fn cheby_env(dir: &Path, args: &[&str], env: &[(&str, &str)], stdin: Option<&[u8]>) -> RunOutput {
+    let mut cmd = Command::new(CHEBY);
+    cmd.arg("--color=never")
+        .args(args)
+        .current_dir(dir)
+        .env("NO_COLOR", "1")
+        .envs(env.iter().copied());
+    process::run(cmd, stdin, TIMEOUT).unwrap()
+}
+
+/// D-658: an invalid `CHEBY_THREADS` stops `cheby run` before `main`, and
+/// `cheby test` and the REPL before they start, with the same line and
+/// status 1.
+#[test]
+fn an_invalid_thread_count_stops_run_test_and_repl() {
+    let line = "error: CHEBY_THREADS must be a whole number of at least 1, not \"four\"\n";
+    let env = [("CHEBY_THREADS", "four")];
+    let hello = repo_root().join("docs/examples/001_hello_world");
+    let out = cheby_env(&hello, &["run"], &env, None);
+    assert_eq!(out.stderr, line);
+    assert_eq!(out.stdout, "");
+    assert_eq!(out.status, Some(1));
+    let dir = package(
+        "threads_test",
+        &[
+            MANIFEST,
+            (
+                "src/main.cheby",
+                "//! One test.\n\nfn main() {\n  Nil\n}\n\ntest \"runs\" {\n  assert 1 + 1 == 2\n}\n",
+            ),
+        ],
+    );
+    let out = cheby_env(&dir, &["test"], &env, None);
+    assert_eq!(out.stderr, line);
+    assert_eq!(out.stdout, "");
+    assert_eq!(out.status, Some(1));
+    let out = cheby_env(&dir, &["repl"], &env, Some(b""));
+    assert_eq!(out.stderr, line);
+    assert_eq!(out.status, Some(1));
+    // A valid count runs, including one above the cap.
+    for threads in ["1", "2", "9999"] {
+        let out = cheby_env(&hello, &["run"], &[("CHEBY_THREADS", threads)], None);
+        assert_eq!(out.stdout, "Hello, world!\n", "{threads}");
+        assert_eq!(out.status, Some(0), "{threads}: {}", out.stderr);
+        let out = cheby_env(&dir, &["test"], &[("CHEBY_THREADS", threads)], None);
+        assert_eq!(out.status, Some(0), "{threads}: {}", out.stdout);
+    }
+}
+
+/// Plan §2.4: the REPL compiles with the unwinding backend `CHEBY_UNWIND`
+/// selects, so an invalid one stops it when the session starts.
+#[test]
+fn an_invalid_unwinding_backend_stops_the_repl() {
+    let dir = Path::new(TMP).join(format!("repl-unwind-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let out = cheby_env(
+        &dir,
+        &["repl"],
+        &[("CHEBY_UNWIND", "bogus")],
+        Some(b"1 + 1\n"),
+    );
+    std::fs::remove_dir_all(&dir).ok();
+    assert_eq!(
+        out.stderr,
+        "error: CHEBY_UNWIND must be off, flag or try_call, not \"bogus\"\n"
+    );
+    assert_eq!(out.stdout, "");
+    assert_eq!(out.status, Some(1));
+}

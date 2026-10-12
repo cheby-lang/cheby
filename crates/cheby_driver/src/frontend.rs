@@ -45,7 +45,8 @@ use cheby_iface::{
     DepView, Globals, Ice, InterfaceSet, ItemSig, ModuleId, ModuleInfo, ModuleInterface,
     ModuleTable, PackageId, builtin, encode,
 };
-use cheby_mir::{ForeignSig, foreign_sig};
+use cheby_mir::ForeignSig;
+use cheby_mir::repr::foreign_sig_with_context;
 use cheby_package::graph::{Graph, reachable, topological_order};
 use cheby_package::{ModulePath, Targets};
 use cheby_resolve::ResolvedModule;
@@ -112,7 +113,7 @@ pub(crate) fn native_bindings(
         let Some(ItemSig::Fn(sig)) = iface.item(index).map(|i| &i.sig) else {
             continue;
         };
-        let sig = foreign_sig(sig, globals);
+        let sig = foreign_sig_with_context(sig, globals, item.attrs.std_context);
         out.push((symbol.into(), NativeBinding { sig, span }));
     }
     out

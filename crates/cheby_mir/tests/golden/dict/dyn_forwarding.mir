@@ -1,4 +1,5 @@
 fn dyn_forward Show::show for dyn app::shape::Shape(_0: value, _1: value) -> value check str#0 {
+  entry unwind bb3
   str#0 = "<builtin>"
 bb0:
   drop _0
@@ -11,9 +12,18 @@ bb0:
   dup _4
   drop _1
   tail_call _3(_4)
+bb1:
+  resume
+bb2:
+  drop _0
+  goto bb1()
+bb3:
+  drop _1
+  goto bb2()
 }
 
 fn dyn_forward app::shape::Shape::area for dyn app::shape::Shape(_0: value, _1: value) -> value check str#0 {
+  entry unwind bb3
   str#0 = "src/shape.cheby:4:6"
 bb0:
   drop _0
@@ -26,6 +36,14 @@ bb0:
   dup _4
   drop _1
   tail_call _3(_4)
+bb1:
+  resume
+bb2:
+  drop _0
+  goto bb1()
+bb3:
+  drop _1
+  goto bb2()
 }
 
 static#0 desc app::circle$Circle = desc_nominal(str#0, str#1) str#0 = "Circle" str#1 = "app::circle"

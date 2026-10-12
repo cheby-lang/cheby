@@ -11,6 +11,8 @@
 //!   lowering reports no diagnostics (D-554); its only error is an
 //!   internal one.
 //! - [`rc`]: naive dup/drop placement by the last-use rule (D7, D-205).
+//! - [`unwind`]: unwind edges to shared cleanup pads, after counting
+//!   (D-698), with the ownership simulation it shares with the validator.
 //! - [`validate`] and [`dump`]: the validator and the stable text form.
 
 pub mod abi;
@@ -26,6 +28,7 @@ pub mod lower;
 #[cfg(test)]
 mod lower_tests;
 pub mod options;
+mod ownership;
 pub mod rc;
 pub mod reach;
 pub mod repr;
@@ -33,8 +36,11 @@ pub mod repr;
 mod test_support;
 #[cfg(test)]
 mod tests;
+pub mod unwind;
 #[cfg(test)]
 mod unwind_ir_tests;
+#[cfg(test)]
+mod unwind_tests;
 pub mod validate;
 #[cfg(test)]
 mod validate_tests;
@@ -59,10 +65,10 @@ pub use reach::{Program, Reach, Root, reachable};
 pub use repr::{CType, ForeignSig, Repr, ctype_of, foreign_sig, repr_of};
 pub use validate::{Stage, validate};
 
-/// Validates a freshly lowered unit, inserts reference counts, and
-/// validates again with the ownership check: the pipeline every unit goes
-/// through before codegen. [`count_and_check_with`] with the default
-/// options.
+/// Validates a freshly lowered unit, inserts reference counts and the
+/// unwind edges (D-698), and validates again with the ownership and
+/// unwinding checks: the pipeline every unit goes through before codegen.
+/// [`count_and_check_with`] with the default options.
 ///
 /// # Errors
 ///

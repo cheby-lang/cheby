@@ -1,36 +1,55 @@
 module app
 
 fn app::plain() -> value check str#0 {
+  entry unwind bb1
   str#0 = "src/main.cheby:5:4"
   str#1 = "src/main.cheby:6:3"
 bb0:
-  panic explicit at str#1
+  panic explicit at str#1 ; unwind bb1
+bb1:
+  resume
 }
 
 fn app::with_message(_0: value) -> value check str#0 {
+  entry unwind bb2
   str#0 = "src/main.cheby:9:4"
   str#1 = "src/main.cheby:10:3"
 bb0:
-  panic explicit _0 at str#1
+  panic explicit _0 at str#1 ; unwind bb2
+bb1:
+  resume
+bb2:
+  drop _0
+  goto bb1()
 }
 
 fn app::unfinished() -> value check str#0 {
+  entry unwind bb1
   str#0 = "src/main.cheby:13:4"
   str#1 = "src/main.cheby:14:3"
 bb0:
-  panic todo at str#1
+  panic todo at str#1 ; unwind bb1
+bb1:
+  resume
 }
 
 fn app::unfinished_as() -> value check str#0 {
+  entry unwind bb1
   str#0 = "src/main.cheby:17:4"
   str#1 = "area of a dot"
   str#2 = "src/main.cheby:18:3"
 bb0:
   _0: value = const str#1
-  panic todo _0 at str#2
+  panic todo _0 at str#2 ; unwind bb2
+bb1:
+  resume
+bb2:
+  drop _0
+  goto bb1()
 }
 
 fn app::check(_0: bool) -> value check str#0 {
+  entry unwind bb3
   str#0 = "src/main.cheby:21:4"
   str#1 = "assertion failed: b"
   str#2 = "src/main.cheby:22:10"
@@ -39,19 +58,25 @@ bb0:
 bb1:
   return const nil
 bb2:
-  _1: value = call_runtime str_with_capacity(borrow const int 64)
-  _2: value = call_runtime str_append(_1, borrow const str#1)
-  panic assert _2 at str#2
+  _1: value = call_runtime str_with_capacity(borrow const int 64) ; unwind bb3
+  _2: value = call_runtime str_append(_1, borrow const str#1) ; unwind bb3
+  panic assert _2 at str#2 ; unwind bb4
+bb3:
+  resume
+bb4:
+  drop _2
+  goto bb3()
 }
 
 fn app::check_ints(_0: value) -> value check str#0 {
+  entry unwind bb4
   str#0 = "src/main.cheby:25:4"
   str#1 = "assertion failed: list::length(items) == 3"
   str#2 = "\n  left: "
   str#3 = "\n right: "
   str#4 = "src/main.cheby:26:10"
 bb0:
-  _1: value = call std::list::length(_0)
+  _1: value = call std::list::length(_0) ; unwind bb3
   _2: int = unbox int _1
   drop _1
   _3: bool = compare eq int _2, const int 3
@@ -59,24 +84,51 @@ bb0:
 bb1:
   return const nil
 bb2:
-  _4: value = call_runtime str_with_capacity(borrow const int 64)
-  _5: value = call_runtime str_append(_4, borrow const str#1)
-  _6: value = call_runtime str_append(_5, borrow const str#2)
-  _7: value = box int _2
-  _8: value = call_runtime debug(borrow _7)
+  _4: value = call_runtime str_with_capacity(borrow const int 64) ; unwind bb3
+  _5: value = call_runtime str_append(_4, borrow const str#1) ; unwind bb3
+  _6: value = call_runtime str_append(_5, borrow const str#2) ; unwind bb3
+  _7: value = box int _2 ; unwind bb5
+  _8: value = call_runtime debug(borrow _7) ; unwind bb6
   drop _7
-  _9: value = call_runtime str_append(_6, borrow _8)
+  _9: value = call_runtime str_append(_6, borrow _8) ; unwind bb7
   drop _8
-  _10: value = call_runtime str_append(_9, borrow const str#3)
+  _10: value = call_runtime str_append(_9, borrow const str#3) ; unwind bb3
   _11: value = box int const int 3
-  _12: value = call_runtime debug(borrow _11)
+  _12: value = call_runtime debug(borrow _11) ; unwind bb9
   drop _11
-  _13: value = call_runtime str_append(_10, borrow _12)
+  _13: value = call_runtime str_append(_10, borrow _12) ; unwind bb10
   drop _12
-  panic assert _13 at str#4
+  panic assert _13 at str#4 ; unwind bb11
+bb3:
+  resume
+bb4:
+  drop _0
+  goto bb3()
+bb5:
+  drop _6
+  goto bb3()
+bb6:
+  drop _7
+  goto bb5()
+bb7:
+  drop _8
+  goto bb3()
+bb8:
+  drop _10
+  goto bb3()
+bb9:
+  drop _11
+  goto bb8()
+bb10:
+  drop _12
+  goto bb3()
+bb11:
+  drop _13
+  goto bb3()
 }
 
 fn app::check_strings(_0: value, _1: value) -> value check str#0 {
+  entry unwind bb5
   str#0 = "src/main.cheby:29:4"
   str#1 = "assertion failed: "
   str#2 = "different "
@@ -92,27 +144,60 @@ bb1:
   drop _1
   return const nil
 bb2:
-  _4: value = call_runtime str_with_capacity(borrow const int 64)
-  _5: value = call_runtime str_append(_4, borrow const str#1)
+  _4: value = call_runtime str_with_capacity(borrow const int 64) ; unwind bb5
+  _5: value = call_runtime str_append(_4, borrow const str#1) ; unwind bb5
   _6: value = const str#2
   dup _0
-  _7: value = call std::string::add(_6, _0)
-  _8: value = call_runtime str_append(_5, borrow _7)
+  _7: value = call std::string::add(_6, _0) ; unwind bb6
+  _8: value = call_runtime str_append(_5, borrow _7) ; unwind bb7
   drop _7
-  _9: value = call_runtime str_append(_8, borrow const str#3)
-  _10: value = call_runtime debug(borrow _0)
+  _9: value = call_runtime str_append(_8, borrow const str#3) ; unwind bb5
+  _10: value = call_runtime debug(borrow _0) ; unwind bb8
   drop _0
-  _11: value = call_runtime str_append(_9, borrow _10)
+  _11: value = call_runtime str_append(_9, borrow _10) ; unwind bb10
   drop _10
-  _12: value = call_runtime str_append(_11, borrow const str#4)
-  _13: value = call_runtime debug(borrow _1)
+  _12: value = call_runtime str_append(_11, borrow const str#4) ; unwind bb9
+  _13: value = call_runtime debug(borrow _1) ; unwind bb11
   drop _1
-  _14: value = call_runtime str_append(_12, borrow _13)
+  _14: value = call_runtime str_append(_12, borrow _13) ; unwind bb12
   drop _13
-  panic assert _14 at str#5
+  panic assert _14 at str#5 ; unwind bb13
+bb3:
+  resume
+bb4:
+  drop _0
+  goto bb3()
+bb5:
+  drop _1
+  goto bb4()
+bb6:
+  drop _5
+  goto bb5()
+bb7:
+  drop _7
+  goto bb5()
+bb8:
+  drop _9
+  goto bb5()
+bb9:
+  drop _1
+  goto bb3()
+bb10:
+  drop _10
+  goto bb9()
+bb11:
+  drop _12
+  goto bb9()
+bb12:
+  drop _13
+  goto bb3()
+bb13:
+  drop _14
+  goto bb3()
 }
 
 fn app::check_order(_0: value, _1: value) -> value check str#0 {
+  entry unwind bb5
   str#0 = "src/main.cheby:33:4"
   str#1 = "assertion failed: a < b"
   str#2 = "\n  left: "
@@ -121,7 +206,7 @@ fn app::check_order(_0: value, _1: value) -> value check str#0 {
 bb0:
   dup _0
   dup _1
-  _2: value = call std::string::compare(_0, _1)
+  _2: value = call std::string::compare(_0, _1) ; unwind bb5
   _3: int = read_tag _2 of order
   drop _2
   _4: bool = compare eq int _3, const int 0
@@ -131,52 +216,81 @@ bb1:
   drop _1
   return const nil
 bb2:
-  _5: value = call_runtime str_with_capacity(borrow const int 64)
-  _6: value = call_runtime str_append(_5, borrow const str#1)
-  _7: value = call_runtime str_append(_6, borrow const str#2)
-  _8: value = call_runtime debug(borrow _0)
+  _5: value = call_runtime str_with_capacity(borrow const int 64) ; unwind bb5
+  _6: value = call_runtime str_append(_5, borrow const str#1) ; unwind bb5
+  _7: value = call_runtime str_append(_6, borrow const str#2) ; unwind bb5
+  _8: value = call_runtime debug(borrow _0) ; unwind bb6
   drop _0
-  _9: value = call_runtime str_append(_7, borrow _8)
+  _9: value = call_runtime str_append(_7, borrow _8) ; unwind bb8
   drop _8
-  _10: value = call_runtime str_append(_9, borrow const str#3)
-  _11: value = call_runtime debug(borrow _1)
+  _10: value = call_runtime str_append(_9, borrow const str#3) ; unwind bb7
+  _11: value = call_runtime debug(borrow _1) ; unwind bb9
   drop _1
-  _12: value = call_runtime str_append(_10, borrow _11)
+  _12: value = call_runtime str_append(_10, borrow _11) ; unwind bb10
   drop _11
-  panic assert _12 at str#4
+  panic assert _12 at str#4 ; unwind bb11
+bb3:
+  resume
+bb4:
+  drop _0
+  goto bb3()
+bb5:
+  drop _1
+  goto bb4()
+bb6:
+  drop _7
+  goto bb5()
+bb7:
+  drop _1
+  goto bb3()
+bb8:
+  drop _8
+  goto bb7()
+bb9:
+  drop _10
+  goto bb7()
+bb10:
+  drop _11
+  goto bb3()
+bb11:
+  drop _12
+  goto bb3()
 }
 
 fn app::main() -> value check str#0 {
+  entry unwind bb1
   str#0 = "src/main.cheby:37:4"
   str#1 = "x"
   str#2 = "a"
   str#3 = "b"
 bb0:
-  _0: value = call app::plain()
+  _0: value = call app::plain() ; unwind bb1
   _1: int = unbox int _0
   drop _0
   _2: value = const str#1
-  _3: value = call app::with_message(_2)
+  _3: value = call app::with_message(_2) ; unwind bb1
   _4: int = unbox int _3
   drop _3
-  _5: value = call app::unfinished()
+  _5: value = call app::unfinished() ; unwind bb1
   _6: int = unbox int _5
   drop _5
-  _7: value = call app::unfinished_as()
+  _7: value = call app::unfinished_as() ; unwind bb1
   _8: int = unbox int _7
   drop _7
-  _9: value = call app::check(const bool true)
+  _9: value = call app::check(const bool true) ; unwind bb1
   drop _9
-  _10: value = call std::list::new()
-  _11: value = call app::check_ints(_10)
+  _10: value = call std::list::new() ; unwind bb1
+  _11: value = call app::check_ints(_10) ; unwind bb1
   drop _11
   _12: value = const str#2
   _13: value = const str#3
-  _14: value = call app::check_strings(_12, _13)
+  _14: value = call app::check_strings(_12, _13) ; unwind bb1
   drop _14
   _15: value = const str#2
   _16: value = const str#3
   tail_call app::check_order(_15, _16)
+bb1:
+  resume
 }
 
 callee app::plain() -> value

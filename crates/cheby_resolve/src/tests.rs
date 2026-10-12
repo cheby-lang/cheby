@@ -130,7 +130,52 @@ const SHIPPED: &[(&str, &str)] = &[
     ("option", STD_OPTION),
     ("map", STD_MAP),
     ("std_attrs", STD_ATTRS),
+    ("std_ctx", STD_CTX),
 ];
+
+/// A std module with the std-only attribute `@std_context` (D-482, D-692).
+const STD_CTX: &str = r#"//! The std-only attribute `@std_context`.
+
+@std_context
+@external(native, "cheby_ctx_kernel")
+@external(js, "./ctx.mjs", "kernel")
+pub fn kernel(count: Int) -> Int
+
+@std_context
+@external(native, "cheby_ctx_with_body")
+pub fn with_body(count: Int) -> Int {
+  count
+}
+
+@external(native, "cheby_ctx_plain")
+pub fn plain(count: Int) -> Int
+
+@std_context
+@external(js, "./ctx.mjs", "js_only")
+pub fn js_only(count: Int) -> Int
+
+@std_context
+pub fn no_external(count: Int) -> Int {
+  count
+}
+
+@std_context(count)
+@external(native, "cheby_ctx_arguments")
+pub fn arguments(count: Int) -> Int
+
+@std_context
+@std_context
+@external(native, "cheby_ctx_twice")
+pub fn twice(count: Int) -> Int
+
+@std_context
+pub type Handle {
+  Handle(Int),
+}
+
+@std_context
+pub const limit: Int = 1
+"#;
 
 /// A std module with the std-only attributes (D-482).
 const STD_ATTRS: &str = r#"//! Std-only attributes.
@@ -843,6 +888,65 @@ fn std_only_attributes() {
         app.items
             .iter()
             .all(|i| i.attrs.clamped.is_empty() && i.attrs.hooks.is_none())
+    );
+}
+
+/// `@std_context` takes no arguments and is allowed only on a function
+/// with an `@external`, and only in the standard library; elsewhere it is
+/// an unknown attribute (D-482, D-692).
+#[test]
+fn std_context_attribute() {
+    let b = build(&[(
+        "",
+        "import std::std_ctx\n\n@std_context\n@external(native, \"cheby_app_kernel\")\nfn kernel(count: Int) -> Int\n\nfn main() {\n  Nil\n}\n",
+    )]);
+    assert_eq!(
+        b.messages(),
+        [
+            "E0045: `@std_context` is not allowed on a constant",
+            "E0045: `@std_context` is not allowed on a function",
+            "E0045: `@std_context` is not allowed on a type",
+            "E0045: `@std_context` takes no arguments",
+            "E0045: duplicate `@std_context` attribute",
+            // Outside the standard library it is unknown (§4.8).
+            "E0045: unknown attribute `@std_context`",
+        ]
+    );
+    let std = b.resolved("std::std_ctx");
+    let context = |name: &str| {
+        std.items
+            .iter()
+            .find(|i| b.globals.names.get(i.name) == name)
+            .unwrap()
+            .attrs
+            .std_context
+    };
+    for name in ["kernel", "with_body", "js_only", "twice"] {
+        assert!(context(name), "{name}");
+    }
+    for name in ["plain", "no_external", "arguments", "Handle", "limit"] {
+        assert!(!context(name), "{name}");
+    }
+    // Neither the type nor its constructor carries it.
+    let handles: Vec<bool> = std
+        .items
+        .iter()
+        .filter(|i| b.globals.names.get(i.name) == "Handle")
+        .map(|i| i.attrs.std_context)
+        .collect();
+    assert_eq!(handles, [false, false]);
+    let app = b.resolved("app");
+    assert!(app.items.iter().all(|i| !i.attrs.std_context));
+    // The misplaced attribute says where it belongs.
+    let misplaced = b
+        .diags
+        .iter()
+        .find(|d| d.message == "`@std_context` is not allowed on a function")
+        .unwrap();
+    assert!(
+        format!("{misplaced:?}")
+            .contains("`@std_context` applies to functions with an `@external` attribute"),
+        "{misplaced:?}"
     );
 }
 

@@ -19,7 +19,10 @@
 //!
 //! Every counted local is therefore consumed exactly once on every path
 //! that returns or tail-calls, so nothing is pending at a tail call.
-//! Paths ending in `panic` leak their live locals in M1 (no unwinding).
+//! What is live at a `panic`, or at any instruction that may unwind, is
+//! released by the cleanup pads of the unwind pass, which runs after this
+//! one ([`crate::unwind`], D-698); without it (`CHEBY_UNWIND_EDGES=off`)
+//! it leaks, as in M1.
 
 use std::collections::BTreeMap;
 

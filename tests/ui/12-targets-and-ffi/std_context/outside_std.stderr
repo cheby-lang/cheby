@@ -1,0 +1,16 @@
+error[E0045]: unknown attribute `@std_context`
+ --> tests/ui/12-targets-and-ffi/std_context/outside_std.cheby:8:1
+  |
+8 | @std_context
+  | ^^^^^^^^^^^^
+  |
+  = help: the attributes are `@external`, `@target`, `@blocking`, `@async` and `@deprecated`
+
+error[E0045]: unknown attribute `@std_context`
+  --> tests/ui/12-targets-and-ffi/std_context/outside_std.cheby:12:1
+   |
+12 | @std_context
+   | ^^^^^^^^^^^^
+   |
+   = help: the attributes are `@external`, `@target`, `@blocking`, `@async` and `@deprecated`
+

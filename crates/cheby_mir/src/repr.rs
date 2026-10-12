@@ -242,14 +242,27 @@ pub fn ctype_of(ty: Ty, globals: &Globals, is_result: bool) -> CType {
     }
 }
 
-/// The C signature of an `@external(native, …)` function (§12.5.1).
+/// The C signature of an `@external(native, …)` function (§12.5.1). The
+/// same as [`foreign_sig_with_context`] with `context: false`.
 #[must_use]
 pub fn foreign_sig(sig: &FnSig, globals: &Globals) -> ForeignSig {
+    foreign_sig_with_context(sig, globals, false)
+}
+
+/// The C signature of an `@external(native, …)` function (§12.5.1), with a
+/// leading `ptr` when the function is a `@std_context` kernel: such a kernel
+/// receives the running fiber's context first, before the Cheby parameters
+/// (D-692). Every comparison of C signatures for one symbol (E0054, D-455)
+/// uses this function, so a binding of a context kernel's symbol without the
+/// attribute differs in its parameters instead of shifting them by one.
+/// GAP(const-ctx-operand).
+#[must_use]
+pub fn foreign_sig_with_context(sig: &FnSig, globals: &Globals, context: bool) -> ForeignSig {
+    let ctx = context.then_some(CType::Ptr);
     ForeignSig {
-        params: sig
-            .params
-            .iter()
-            .map(|p| ctype_of(p.ty, globals, false))
+        params: ctx
+            .into_iter()
+            .chain(sig.params.iter().map(|p| ctype_of(p.ty, globals, false)))
             .collect(),
         ret: ctype_of(sig.ret, globals, true),
     }
@@ -285,5 +298,46 @@ mod tests {
         assert!(CType::I64.accepts(Repr::I64));
         assert!(!CType::Ptr.accepts(Repr::Int));
         assert_eq!(CType::Void.repr(), None);
+    }
+
+    /// A `@std_context` kernel's C signature starts with the context pointer
+    /// (D-692); `foreign_sig` is the same function without it.
+    #[test]
+    fn context_kernels_take_a_leading_pointer() {
+        use cheby_iface::{Generics, ParamSig, sym};
+        let globals = Globals::new();
+        let sig = FnSig {
+            generics: Generics::empty(),
+            params: [Ty::INT, Ty::STRING]
+                .iter()
+                .map(|&ty| ParamSig { name: sym::T, ty })
+                .collect(),
+            ret: Ty::BOOL,
+            clamped: Box::new([]),
+        };
+        let plain = ForeignSig {
+            params: vec![CType::I64, CType::Ptr],
+            ret: CType::Bool,
+        };
+        let context = ForeignSig {
+            params: vec![CType::Ptr, CType::I64, CType::Ptr],
+            ret: CType::Bool,
+        };
+        assert_eq!(foreign_sig(&sig, &globals), plain);
+        assert_eq!(foreign_sig_with_context(&sig, &globals, false), plain);
+        assert_eq!(foreign_sig_with_context(&sig, &globals, true), context);
+        let nullary = FnSig {
+            generics: Generics::empty(),
+            params: Box::new([]),
+            ret: Ty::NIL,
+            clamped: Box::new([]),
+        };
+        assert_eq!(
+            foreign_sig_with_context(&nullary, &globals, true),
+            ForeignSig {
+                params: vec![CType::Ptr],
+                ret: CType::Void,
+            }
+        );
     }
 }
