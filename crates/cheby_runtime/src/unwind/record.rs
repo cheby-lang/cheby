@@ -38,8 +38,8 @@ pub(crate) struct UnwindState {
 pub(crate) enum UnwindRecord {
     /// A panic, with its report.
     Panic(PanicReport),
-    /// A cancellation; its target is the fiber's (U5).
-    #[expect(dead_code, reason = "cancellation arrives with package U5")]
+    /// A cancellation; its target is the fiber's, under its fiber lock
+    /// (D-706, `fiber_ops::cancel`).
     Cancel,
 }
 
@@ -47,10 +47,12 @@ pub(crate) enum UnwindRecord {
 /// (D-699), then in the fiber's responsible scope (D-666, architecture
 /// §6.6): the innermost scope the fiber has open, a root's `main` or test
 /// body inside `scope` included, else the scope it was spawned into. The
-/// scope keeps it as its first cause if it has none, so the first panic by
-/// start wins, whoever ends first. A fiber with neither scope (a root
-/// outside every scope, an isolated entry) records nothing in a scope: its
-/// catch point reports the panic.
+/// scope keeps it as its first cause if it has none and is not cancelled
+/// from outside, so the first panic by start wins, whoever ends first, and
+/// then cancels itself before this fiber unwinds (D-666, D-667,
+/// `ScopeState::record_panic`). A fiber with neither scope (a root outside
+/// every scope, an isolated entry) records nothing in a scope: its catch
+/// point reports the panic.
 ///
 /// If the fiber is already unwinding, the new panic is dropped and
 /// recorded nowhere: no user code runs while a fiber unwinds (ADR-0029),
@@ -78,6 +80,20 @@ pub(crate) fn start_panic(ctx: &ExecCtx, report: PanicReport) {
     };
     if let (Some(scope), Some(copy)) = (scope, copy) {
         scope.record_panic(&copy);
+    }
+}
+
+/// Records a cancellation as the fiber's unwinding when it is delivered
+/// (D-688, D-699), unless a record is already in flight: a fiber that is
+/// unwinding goes on unwinding with its first cause. A cancellation is
+/// recorded in no scope: its target is the fiber's, under its fiber lock
+/// (D-706). A cancelled fiber is never reported as panicked (D-178): its
+/// record says `Cancel`, which no catch point prints. Entered with no
+/// runtime lock held.
+pub(crate) fn start_cancel(ctx: &ExecCtx) {
+    let mut record = ctx.unwinding.record.lock();
+    if record.is_none() {
+        *record = Some(UnwindRecord::Cancel);
     }
 }
 

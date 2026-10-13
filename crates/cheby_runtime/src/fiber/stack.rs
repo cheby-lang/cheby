@@ -441,7 +441,7 @@ impl StackPool {
     /// slots, the whole slot is released, and it is handed out again only
     /// when no warm slot is free (D-677, ADR-0032).
     ///
-    /// GAP(stack-release-range): D-677 says only that "pages below a depth
+    /// (D-749) D-677 says only that "pages below a depth
     /// watermark are released on reuse". The released range is everything
     /// from the usable bottom up to the warm top, not just the pages the
     /// fiber touched, and the release happens here, when the slot joins the

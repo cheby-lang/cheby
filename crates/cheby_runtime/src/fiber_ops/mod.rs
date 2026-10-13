@@ -27,19 +27,56 @@
 //! std function ([`needs_scheduler`]): a fatal error, not a panic, because
 //! `scope` would catch a panic and mislead.
 //!
+//! - [`cancel`]: cancellation (D-667, D-706): the subtree walk, the check a
+//!   fiber makes before it parks, and the publication of its wait node.
+//!
 //! [`FiberConc`] is the structured-concurrency part of a fiber's control
-//! block (D-685): the scope it was spawned into, the scopes it has open and
-//! why the last one it closed failed. The innermost of those scopes is the
-//! one a panic of the fiber is recorded in when it starts (D-666,
-//! `unwind::record::start_panic`). The fiber lock with the cancellation
-//! target and the wait node other fibers reach (architecture §3.1) belongs
-//! to cancellation, which arrives with package U5.
+//! block (D-685): the scope it was spawned into, the scopes it has open,
+//! why the last one it closed failed, and the fiber lock (architecture
+//! §3.1, D-706) over its cancellation target and its wait-node pointer. The
+//! innermost of its open scopes is the one a panic of the fiber is recorded
+//! in when it starts (D-666, `unwind::record::start_panic`).
+//!
+//! # Locks
+//!
+//! The runtime's locks, in the order they may be taken (architecture §7.5,
+//! D-706); a lock is never taken while a later one in this list is held,
+//! and none is held across a switch (I-5), except the one a parking fiber
+//! hands to `park`, which its worker releases after the switch:
+//!
+//! 1. scope locks ([`scope::ScopeState`]), a parent's before a child's;
+//! 2. or a channel lock ([`channel`]) or a join cell's lock
+//!    ([`base::JoinCell`]): never held together with a scope lock;
+//! 3. the fiber lock ([`FiberConc`]): a leaf. Nothing else is locked while
+//!    it is held, it is never held while user code runs, and `sched::wake`
+//!    is never called under it (a wake can take a worker's queue lock);
+//! 4. the unwind record's lock (`unwind::record`): a leaf too, taken with
+//!    no other lock held.
+//!
+//! The fiber's own locks of [`FiberConc`] (its spawn scope, open scopes and
+//! last failure) are taken only by the fiber itself and never with another
+//! lock held.
+//!
+//! A raise takes a scope lock to record its panic (`start_panic`) and runs
+//! the cancellation walk ([`cancel::cancel`]), and `parking_lot`'s mutexes
+//! are not reentrant. So `unwind::record::start_panic`,
+//! `unwind::record::start_cancel` and [`cancel::cancel`] are entered with
+//! no runtime lock held (scope, channel, join cell, fiber, record); every
+//! raise site of this module and of `sched` releases its locks first, and
+//! [`scope::ScopeState::record_panic`] releases the scope's lock before it
+//! calls [`cancel::cancel`]. The walk holds a scope's lock while it takes
+//! each member's fiber lock, and never acts on a member after releasing
+//! that scope's lock: a member can then leave, retire and have its slot
+//! reused.
 
 pub(crate) mod base;
+pub(crate) mod cancel;
 pub(crate) mod channel;
 pub(crate) mod join;
 pub(crate) mod scope;
 pub(crate) mod spawn;
+#[cfg(test)]
+pub(crate) mod testing;
 
 use std::sync::Arc;
 
@@ -54,13 +91,17 @@ use self::scope::ScopeState;
 
 /// The structured-concurrency fields of a fiber control block (D-685).
 ///
-/// Only the owning fiber reads or writes them (other fibers reach a fiber
-/// only through its scope, its join cell and its channels), so each lock is
-/// always free when it is taken; the locks make the block `Sync`, which it
-/// must be for the scheduler, at the cost of one uncontended atomic each.
-/// No guard is held across a switch (I-5).
+/// The fiber lock ([`cancel::FiberLock`], architecture §3.1, D-706) guards
+/// the only state other fibers touch: the cancellation target and the
+/// wait-node pointer, which the cancellation walk writes and reads. Every
+/// other field is read and written by the owning fiber only, so its lock
+/// is always free when it is taken; those locks make the block `Sync`,
+/// which it must be for the scheduler, at the cost of one uncontended
+/// atomic each. No guard is held across a switch (I-5).
 #[derive(Debug, Default)]
 pub(crate) struct FiberConc {
+    /// The fiber lock: the cancellation target and the wait node.
+    pub(crate) lock: cancel::FiberLock,
     /// The scope the fiber was spawned into; `None` for a root fiber and an
     /// isolated entry.
     spawn_scope: Mutex<Option<Arc<ScopeState>>>,
@@ -311,5 +352,11 @@ impl Drop for Owned {
     }
 }
 
+#[cfg(test)]
+mod cancel_races;
+#[cfg(test)]
+mod cancel_tests;
+#[cfg(test)]
+mod models;
 #[cfg(test)]
 mod tests;

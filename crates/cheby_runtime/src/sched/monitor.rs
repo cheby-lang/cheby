@@ -10,7 +10,7 @@
 //! long kernel yields when the kernel returns. Only while some other fiber
 //! waits in a run queue: a lone running fiber is left alone, since a yield
 //! would only move it off its worker's warm caches
-//! (GAP(preempt-only-when-waiting); no program can observe the
+//! (D-737; no program can observe the
 //! difference). The migration stress mode preempts lone fibers too, so
 //! that every long-running program migrates between workers.
 //!

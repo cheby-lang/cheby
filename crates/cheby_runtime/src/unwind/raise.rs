@@ -12,6 +12,12 @@
 //!   by the slow paths) have no Rust frame to unwind:
 //!   [`raise_from_runtime`] records the panic, sets the flag and returns
 //!   (D-700).
+//! - A cancellation (D-102, D-688) is raised the same two ways: by a
+//!   kernel that would park, or a scope's close passing it through
+//!   ([`raise_cancel`]), and by the slow path's step 3
+//!   ([`cancel_from_runtime`]). Its record says `Cancel`, which no catch
+//!   point reports as a panic (D-178), and the flag's value is the
+//!   cancellation's.
 //!
 //! Code compiled without unwind edges (`CHEBY_UNWIND_EDGES=off`, D-742's
 //! measurement switch) cannot unwind: a raise in such a fiber flushes
@@ -66,6 +72,42 @@ pub(crate) fn raise(ctx: Option<*mut ExecCtx>, report: PanicReport) -> ! {
     }
     record::start_panic(fiber, report);
     std::panic::resume_unwind(Box::new(ChebyUnwind))
+}
+
+/// Delivers a cancellation from runtime code (D-102, D-688, D-706): records
+/// it ([`record::start_cancel`], unless a record is in flight) and unwinds
+/// the Rust frames above to the entry point's guard, which sets the flag to
+/// its cancellation value (`unwind_flag::CANCEL`, D-733). Raised by a
+/// kernel that would park (`send`, `receive`, `join`) and by a scope's
+/// close that passes a cancellation through. In a fiber compiled without
+/// unwind edges it ends the process with [`EDGELESS_FATAL`], which names an
+/// unwinding, not a panic (GAP(edgeless-panics)). Entered with no runtime
+/// lock held.
+pub(crate) fn raise_cancel(ctx: Option<*mut ExecCtx>) -> ! {
+    let ctx = running(ctx)
+        .unwrap_or_else(|| fatal(format_args!("a cancellation happened outside of any entry")));
+    // SAFETY: `running` returns the running fiber's control block, alive
+    // while it runs; only shared references to it are made.
+    let fiber = unsafe { &*ctx };
+    if !fiber.unwind_edges() {
+        edgeless(None);
+    }
+    record::start_cancel(fiber);
+    std::panic::resume_unwind(Box::new(ChebyUnwind))
+}
+
+/// Delivers a cancellation found by the stack slow path (D-688, step 3)
+/// from its outermost Rust frame, as [`raise_from_runtime`] does a panic:
+/// records it, sets the flag and returns, so no Rust unwinding runs at the
+/// entry check (D-700), and generated code runs its entry pad. In a fiber
+/// compiled without unwind edges it ends the process with
+/// [`EDGELESS_FATAL`] (GAP(edgeless-panics)).
+pub(crate) fn cancel_from_runtime(fiber: &ExecCtx) {
+    if !fiber.unwind_edges() {
+        edgeless(None);
+    }
+    record::start_cancel(fiber);
+    super::guard::set_flag(fiber);
 }
 
 /// Hands a panic raised by generated code's own call into the runtime

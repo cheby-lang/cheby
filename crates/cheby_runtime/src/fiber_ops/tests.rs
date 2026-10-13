@@ -35,73 +35,93 @@ use crate::sched::{AfterSwitch, park};
 use crate::values;
 
 /// The operation codes of test closures: their first capture.
-mod op {
+pub(super) mod op {
     /// `[op, tx, n]`: sends 0 to n - 1 on `tx`; returns `Nil`.
-    pub(super) const SEND_RANGE: i64 = 0;
+    pub(in crate::fiber_ops) const SEND_RANGE: i64 = 0;
     /// `[op, value]`: returns `value`.
-    pub(super) const RETURN: i64 = 1;
+    pub(in crate::fiber_ops) const RETURN: i64 = 1;
     /// `[op, tx, value, yields]`: yields `yields` times, then sends `value`
     /// on `tx`; returns `Nil`.
-    pub(super) const YIELD_SEND: i64 = 2;
+    pub(in crate::fiber_ops) const YIELD_SEND: i64 = 2;
     /// `[op, fiber]`: joins `fiber` and returns its value.
-    pub(super) const JOIN: i64 = 3;
+    pub(in crate::fiber_ops) const JOIN: i64 = 3;
     /// `[op, scope, tx, value]`: yields, then spawns a `YIELD_SEND` of
     /// `value` on `tx` into `scope`; returns `Nil`.
-    pub(super) const SPAWN_SEND: i64 = 4;
+    pub(in crate::fiber_ops) const SPAWN_SEND: i64 = 4;
     /// `[op, tx, value]`: sends `value` on `tx` and returns the result.
-    pub(super) const SEND: i64 = 5;
+    pub(in crate::fiber_ops) const SEND: i64 = 5;
     /// `[op, rx]`: receives on `rx` and returns the result.
-    pub(super) const RECEIVE: i64 = 6;
+    pub(in crate::fiber_ops) const RECEIVE: i64 = 6;
     /// `[op, yields]`: yields `yields` times, then returns a new `String`.
-    pub(super) const MAKE: i64 = 7;
+    pub(in crate::fiber_ops) const MAKE: i64 = 7;
     /// `[op]`: panics, which under the flag backend returns with the flag
     /// set, as generated code's trampoline would.
-    pub(super) const PANIC: i64 = 8;
+    pub(in crate::fiber_ops) const PANIC: i64 = 8;
     /// `[op]`: makes a new `String`, then lets the fiber allocate nothing
     /// more (D-536), so that marking the result shared raises; returns the
     /// string.
-    pub(super) const MAKE_EXHAUSTED: i64 = 9;
+    pub(in crate::fiber_ops) const MAKE_EXHAUSTED: i64 = 9;
     /// `[op, message, location]`: panics with the `String`s `message` at
     /// `location`, as generated code's `panic as` does.
-    pub(super) const PANIC_WITH: i64 = 10;
+    pub(in crate::fiber_ops) const PANIC_WITH: i64 = 10;
     /// `[op, rx, message, location]`: receives on `rx`, then panics as
     /// `PANIC_WITH` does.
-    pub(super) const RECEIVE_THEN_PANIC: i64 = 11;
+    pub(in crate::fiber_ops) const RECEIVE_THEN_PANIC: i64 = 11;
     /// `[op]`: overflows the stack, as a large function's entry check
     /// would, and stores the bytes of stack the raise path used in
     /// [`super::OVERFLOW_STACK_USED`].
-    pub(super) const OVERFLOW: i64 = 12;
+    pub(in crate::fiber_ops) const OVERFLOW: i64 = 12;
     /// `[op, scope]`: spawns a `RETURN` of 1 into `scope` and returns the
     /// `Fiber`.
-    pub(super) const SPAWN_INTO: i64 = 13;
+    pub(in crate::fiber_ops) const SPAWN_INTO: i64 = 13;
     /// `[op, message, location]`: opens a scope of its own, spawns a
     /// `PANIC_WITH` into it, closes it, and returns the message of the
     /// scope's failure, or `"no failure"`.
-    pub(super) const NESTED_PANIC: i64 = 14;
+    pub(in crate::fiber_ops) const NESTED_PANIC: i64 = 14;
+    /// `[op, yields]`: yields `yields` times, then returns `Nil`.
+    pub(in crate::fiber_ops) const YIELD_RETURN: i64 = 15;
+    /// `[op, yields, message, location]`: yields `yields` times, then
+    /// panics as `PANIC_WITH` does.
+    pub(in crate::fiber_ops) const PANIC_AFTER: i64 = 16;
+    /// `[op, rx, yields]`: yields `yields` times, opens a scope, spawns a
+    /// `RECEIVE` on `rx` into it and closes it; returns `Nil`, or with the
+    /// flag set when the close passed a cancellation through.
+    pub(in crate::fiber_ops) const NESTED_RECEIVE: i64 = 17;
+    /// `[op, tx, receivers, fiber]`: yields until the channel of `tx` has
+    /// `receivers` waiting receivers and the join cell of the `Fiber`
+    /// `fiber` has a waiting joiner, then overflows as `OVERFLOW` does.
+    pub(in crate::fiber_ops) const OVERFLOW_WHEN: i64 = 18;
+    /// `[op]`: runs entry checks, yielding between them, until one delivers
+    /// a cancellation; returns with the flag set.
+    pub(in crate::fiber_ops) const CHECK_UNTIL_CANCELLED: i64 = 19;
 }
 
 /// The stack the raise path of the last `OVERFLOW` used, in bytes.
-static OVERFLOW_STACK_USED: AtomicUsize = AtomicUsize::new(0);
+pub(super) static OVERFLOW_STACK_USED: AtomicUsize = AtomicUsize::new(0);
+
+/// The stack the raise path of the last `OVERFLOW_WHEN` used, in bytes,
+/// the cancellation walk of its scope included.
+pub(super) static OVERFLOW_WHEN_STACK_USED: AtomicUsize = AtomicUsize::new(0);
 
 /// Lets the fiber `me` allocate at most `extra` more bytes, scratch
 /// included (D-536).
-fn limit_to(me: &ExecCtx, extra: u64) {
+pub(super) fn limit_to(me: &ExecCtx, extra: u64) {
     let live = u64::try_from(me.domain().live_bytes()).unwrap_or(u64::MAX);
     let scratch = me.scratch().0.load(std::sync::atomic::Ordering::Relaxed);
     me.set_budget(live.saturating_add(scratch).saturating_add(extra));
 }
 
-fn ctx_of(me: &ExecCtx) -> *mut ExecCtx {
+pub(super) fn ctx_of(me: &ExecCtx) -> *mut ExecCtx {
     ptr::from_ref(me).cast_mut()
 }
 
-fn int(word: Word) -> i64 {
+pub(super) fn int(word: Word) -> i64 {
     // SAFETY: tagged integers only.
     unsafe { values::word_to_i64(word) }
 }
 
 /// Yields `times` times, so other fibers run.
-fn yield_now(me: &ExecCtx, times: i64) {
+pub(super) fn yield_now(me: &ExecCtx, times: i64) {
     for _ in 0..times {
         park(me, AfterSwitch::Requeue);
     }
@@ -109,6 +129,10 @@ fn yield_now(me: &ExecCtx, times: i64) {
 
 /// The trampoline of test closures, with `cb$tramp$0`'s ABI: the closure
 /// is borrowed, the result owned.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one arm per operation code, read side by side"
+)]
 unsafe extern "C" fn t0(ctx: *mut ExecCtx, function: u64) -> u64 {
     // SAFETY: the running fiber's control block.
     let me = unsafe { &*ctx };
@@ -203,6 +227,54 @@ unsafe extern "C" fn t0(ctx: *mut ExecCtx, function: u64) -> u64 {
                     values::string(&message)
                 }
             }
+            op::YIELD_RETURN => {
+                yield_now(me, int(word(1)));
+                values::nil()
+            }
+            op::PANIC_AFTER => {
+                yield_now(me, int(word(1)));
+                cheby_rt_panic(ctx, PanicKind::Explicit.code(), word(2), word(3));
+                0
+            }
+            op::NESTED_RECEIVE => {
+                yield_now(me, int(word(2)));
+                let scope = open(me);
+                drop_word(spawn(
+                    me,
+                    scope,
+                    &[values::int_word(op::RECEIVE), dup(word(1))],
+                ));
+                // A close that passes a cancellation through returns with
+                // the flag set, which this op returns with.
+                close(me, scope);
+                if me.unwind.load(Ordering::Acquire) == 0 {
+                    values::nil()
+                } else {
+                    0
+                }
+            }
+            op::OVERFLOW_WHEN => {
+                let chan =
+                    Arc::clone(&handles::payload::<SenderEnd>(word(1), HandleKind::Sender).0);
+                let receivers = usize::try_from(int(word(2))).unwrap();
+                let cell = cell_of(word(3));
+                while chan.counts().2 != receivers || cell.joiners() != 1 {
+                    yield_now(me, 1);
+                }
+                drop((chan, cell));
+                let used = stack_used(|| {
+                    // SAFETY: as in `OVERFLOW`.
+                    crate::panic::cheby_rt_stack_slow_frame(ctx, 0, u64::MAX);
+                });
+                OVERFLOW_WHEN_STACK_USED.store(used, Ordering::SeqCst);
+                0
+            }
+            op::CHECK_UNTIL_CANCELLED => {
+                while !testing::entry_check(me) {
+                    yield_now(me, 1);
+                }
+                0
+            }
             _ => values::nil(),
         }
     }
@@ -210,7 +282,7 @@ unsafe extern "C" fn t0(ctx: *mut ExecCtx, function: u64) -> u64 {
 
 /// An entry configuration in test mode with the test trampoline and a
 /// fresh domain.
-fn config(domain: &Arc<Domain>) -> EntryConfig {
+pub(super) fn config(domain: &Arc<Domain>) -> EntryConfig {
     EntryConfig {
         stack_size: 1 << 20,
         callbacks: Callbacks {
@@ -224,7 +296,7 @@ fn config(domain: &Arc<Domain>) -> EntryConfig {
 
 /// Runs `body` as a root fiber on a runtime of `threads` workers and
 /// returns its outcome and its domain, after the runtime has stopped.
-fn outcome(
+pub(super) fn outcome(
     threads: usize,
     body: impl FnOnce(&ExecCtx) -> u64 + Send + 'static,
 ) -> (EntryOutcome, Arc<Domain>) {
@@ -232,7 +304,7 @@ fn outcome(
 }
 
 /// [`outcome`] for an entry of `mode`.
-fn outcome_with(
+pub(super) fn outcome_with(
     threads: usize,
     mode: EntryMode,
     body: impl FnOnce(&ExecCtx) -> u64 + Send + 'static,
@@ -250,9 +322,25 @@ fn outcome_with(
     (outcome, domain)
 }
 
+/// [`outcome`] on a runtime whose migration stress mode is `stress`
+/// (D-687), as `CHEBY_RT_STRESS_MIGRATE=1` sets it.
+pub(super) fn outcome_stressed(
+    threads: usize,
+    stress: bool,
+    body: impl FnOnce(&ExecCtx) -> u64 + Send + 'static,
+) -> (EntryOutcome, Arc<Domain>) {
+    let runtime = testing::tuned(threads, stress, true);
+    let domain = Domain::new();
+    let outcome = testing::start_root_with(&runtime, &config(&domain), body)
+        .recv_timeout(HANG)
+        .expect("the root fiber hung");
+    runtime.shutdown();
+    (outcome, domain)
+}
+
 /// Runs `body` as a root fiber, requires that it returns, and checks that
 /// nothing leaked.
-fn run(threads: usize, body: impl FnOnce(&ExecCtx) -> u64 + Send + 'static) -> u64 {
+pub(super) fn run(threads: usize, body: impl FnOnce(&ExecCtx) -> u64 + Send + 'static) -> u64 {
     let (outcome, domain) = outcome(threads, body);
     let EntryOutcome::Returned(word) = outcome else {
         panic!("the root fiber did not return: {outcome:?}");
@@ -262,7 +350,7 @@ fn run(threads: usize, body: impl FnOnce(&ExecCtx) -> u64 + Send + 'static) -> u
 }
 
 /// The two ends of a new channel, owned.
-fn channel(me: &ExecCtx, capacity: i64) -> (Word, Word) {
+pub(super) fn channel(me: &ExecCtx, capacity: i64) -> (Word, Word) {
     // SAFETY: the running fiber's context; the pair is owned and its
     // elements are taken over with a reference each.
     unsafe {
@@ -277,7 +365,7 @@ fn channel(me: &ExecCtx, capacity: i64) -> (Word, Word) {
 }
 
 /// Takes a `Result` apart: the payload, owned, and the result dropped.
-fn result(word: Word) -> Result<Word, Word> {
+pub(super) fn result(word: Word) -> Result<Word, Word> {
     // SAFETY: an owned, live `Result`.
     unsafe {
         let parts = values::read_result(word);
@@ -291,32 +379,32 @@ fn result(word: Word) -> Result<Word, Word> {
 }
 
 /// `channel::send` from the root, with `value` borrowed.
-fn send(me: &ExecCtx, tx: Word, value: Word) -> Result<Word, Word> {
+pub(super) fn send(me: &ExecCtx, tx: Word, value: Word) -> Result<Word, Word> {
     // SAFETY: the running fiber's context, a live `Sender` and value.
     result(unsafe { cheby_channel_send(ctx_of(me), tx, value) })
 }
 
 /// `channel::receive` from the root.
-fn receive(me: &ExecCtx, rx: Word) -> Result<Word, Word> {
+pub(super) fn receive(me: &ExecCtx, rx: Word) -> Result<Word, Word> {
     // SAFETY: the running fiber's context and a live `Receiver`.
     result(unsafe { cheby_channel_receive(ctx_of(me), rx) })
 }
 
 /// Opens a scope.
-fn open(me: &ExecCtx) -> Word {
+pub(super) fn open(me: &ExecCtx) -> Word {
     // SAFETY: the running fiber's context.
     unsafe { cheby_rt_scope_open(ctx_of(me), false, 0, 0) }
 }
 
 /// Closes a scope, consuming its handle.
-fn close(me: &ExecCtx, scope: Word) -> bool {
+pub(super) fn close(me: &ExecCtx, scope: Word) -> bool {
     // SAFETY: the running fiber's context and the handle its open gave.
     unsafe { cheby_rt_scope_close(ctx_of(me), scope, false) }
 }
 
 /// Closes a scope whose body unwound, as `scope_run`'s pad does: clears
 /// the flag, then closes with `unwound`, consuming the handle.
-fn close_unwound(me: &ExecCtx, scope: Word) -> bool {
+pub(super) fn close_unwound(me: &ExecCtx, scope: Word) -> bool {
     assert_ne!(
         me.unwind.load(Ordering::Acquire),
         0,
@@ -328,7 +416,7 @@ fn close_unwound(me: &ExecCtx, scope: Word) -> bool {
 }
 
 /// `take_failure` after a scope failed: its kind, message and location.
-fn failure_of(me: &ExecCtx) -> (i64, String, String) {
+pub(super) fn failure_of(me: &ExecCtx) -> (i64, String, String) {
     // SAFETY: the running fiber's context, right after a failed close.
     let failure = unsafe { cheby_fiber_take_failure(ctx_of(me)) };
     // SAFETY: a live tuple.
@@ -339,13 +427,13 @@ fn failure_of(me: &ExecCtx) -> (i64, String, String) {
 }
 
 /// The join cell of a borrowed `Fiber` handle.
-fn cell_of(fiber: Word) -> Arc<JoinCell> {
+pub(super) fn cell_of(fiber: Word) -> Arc<JoinCell> {
     // SAFETY: a live `Fiber` handle, borrowed.
     Arc::clone(&unsafe { handles::payload::<FiberHandle>(fiber, HandleKind::Fiber) }.0)
 }
 
 /// Waits, yielding, until the fiber of `cell` has ended with `Failed`.
-fn wait_until_failed(me: &ExecCtx, cell: &JoinCell) {
+pub(super) fn wait_until_failed(me: &ExecCtx, cell: &JoinCell) {
     for _ in 0..1_000_000 {
         if cell.outcome() == Outcome::Failed {
             return;
@@ -356,7 +444,7 @@ fn wait_until_failed(me: &ExecCtx, cell: &JoinCell) {
 }
 
 /// A fresh `String`, owned.
-fn string(text: &str) -> Word {
+pub(super) fn string(text: &str) -> Word {
     values::string(text)
 }
 
@@ -366,7 +454,7 @@ const PAINT: u8 = 0xA5;
 const PAINTED: usize = 128 << 10;
 /// The most stack the raise path may use (D-700), as `unwind::tests`
 /// bounds it.
-const RAISE_BOUND: usize = 32 << 10;
+pub(super) const RAISE_BOUND: usize = 32 << 10;
 
 /// Paints `PAINTED` bytes of the stack below the caller's frame and
 /// returns their addresses (as `unwind::tests` measures the raise path).
@@ -385,7 +473,7 @@ fn paint() -> std::ops::Range<usize> {
 /// The bytes of stack that `raise` used: from the measuring frame down to
 /// the lowest painted byte it overwrote.
 #[inline(never)]
-fn stack_used(raise: impl FnOnce()) -> usize {
+pub(super) fn stack_used(raise: impl FnOnce()) -> usize {
     let top = crate::panic::stack_position();
     let area = paint();
     raise();
@@ -404,7 +492,7 @@ fn stack_used(raise: impl FnOnce()) -> usize {
 
 /// Spawns a test closure with `captures` (an operation code first, each
 /// capture given away) into `scope`; returns the `Fiber` handle, owned.
-fn spawn(me: &ExecCtx, scope: Word, captures: &[Word]) -> Word {
+pub(super) fn spawn(me: &ExecCtx, scope: Word, captures: &[Word]) -> Word {
     let function = closure(captures);
     // SAFETY: the running fiber's context, a live scope and closure.
     let fiber = unsafe { cheby_fiber_sys_spawn(ctx_of(me), scope, function) };
@@ -413,26 +501,26 @@ fn spawn(me: &ExecCtx, scope: Word, captures: &[Word]) -> Word {
     fiber
 }
 
-fn dup(word: Word) -> Word {
+pub(super) fn dup(word: Word) -> Word {
     // SAFETY: a live value.
     unsafe { rc::dup(word) };
     word
 }
 
-fn drop_word(word: Word) {
+pub(super) fn drop_word(word: Word) {
     // SAFETY: an owned reference to a live value.
     unsafe { rc::drop(word) };
 }
 
 /// The text of a borrowed `String`.
-fn text(word: Word) -> String {
+pub(super) fn text(word: Word) -> String {
     // SAFETY: a live `String`.
     unsafe { values::str_of(word) }.to_owned()
 }
 
 /// Waits, yielding, until the channel of `tx` has `senders` waiting
 /// senders and `receivers` waiting receivers.
-fn wait_for_waiters(me: &ExecCtx, tx: Word, senders: usize, receivers: usize) {
+pub(super) fn wait_for_waiters(me: &ExecCtx, tx: Word, senders: usize, receivers: usize) {
     // SAFETY: a live `Sender`, borrowed.
     let chan = Arc::clone(&unsafe { handles::payload::<SenderEnd>(tx, HandleKind::Sender) }.0);
     for _ in 0..1_000_000 {
@@ -873,7 +961,7 @@ fn a_stack_that_cannot_be_mapped_makes_spawn_panic() {
 }
 
 /// The handle of a fiber that failed, owned, with its cell failed by hand.
-fn failed_fiber(me: &ExecCtx) -> Word {
+pub(super) fn failed_fiber(me: &ExecCtx) -> Word {
     let cell = Arc::new(super::base::JoinCell::default());
     assert_eq!(cell.finish(Outcome::Failed), None);
     // SAFETY: the running fiber's context.
@@ -1226,8 +1314,8 @@ fn spawn_into_an_ended_scope_raises_while_the_spawners_scope_has_members() {
             let spawner = spawn(me, scope, &[values::int_word(op::SPAWN_INTO), kept]);
             let cell = cell_of(spawner);
             wait_until_failed(me, &cell);
-            // The scope still waits for `waiting`; let it return.
-            assert_eq!(send(me, tx, values::int_word(9)), Ok(values::nil()));
+            // The spawner's panic cancelled the scope (D-667): `waiting`
+            // unwinds out of its receive, and the close waits for it.
             assert!(!close(me, scope));
             let (_, message, location) = failure_of(me);
             assert_eq!(message, "spawn into a scope that has ended");
@@ -1290,8 +1378,12 @@ fn a_panic_while_unwinding_is_recorded_nowhere() {
             me,
             crate::panic::PanicReport::new(PanicKind::Explicit, Some("second"), "b:2:2"),
         );
-        // The inner scope has no cause: it succeeds.
-        assert!(close(me, inner));
+        // The inner scope has no cause, but the outer one cancelled itself
+        // when its cause was recorded (D-667), so the inner close passes
+        // the cancellation through: it raises, and the fiber goes on
+        // unwinding with its first record.
+        assert!(!close(me, inner));
+        assert_ne!(me.unwind.load(Ordering::Acquire), 0);
         match crate::unwind::record::take_unwound(me) {
             Some(crate::unwind::record::UnwindRecord::Panic(report)) => {
                 assert_eq!(report.message, "first");

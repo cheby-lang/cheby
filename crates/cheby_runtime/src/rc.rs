@@ -11,6 +11,7 @@ use std::sync::atomic::{Ordering, fence};
 
 use crate::abi::{self, Word};
 use crate::alloc;
+use crate::ctx::ExecCtx;
 use crate::object::{load_rc, ptr_to_word, shared_rc, store_rc, word_to_ptr};
 
 /// Adds a reference to `value`.
@@ -26,14 +27,31 @@ pub unsafe extern "C" fn cheby_rt_dup(value: Word) {
 
 /// Removes a reference to `value`, freeing it when none remain.
 ///
+/// `ctx` is the running fiber's control block, which generated code always
+/// passes (GAP(drop-with-ctx)): a free then reads the block cache through
+/// the control block's record and charges `ctx`'s domain, with no
+/// thread-local lookup (D-739). It may be null, and then the free looks
+/// the running fiber up, as [`drop`] does.
+///
 /// # Safety
 ///
-/// `value` is a tagged integer or a word pointing to a live object, and the
-/// caller owns the reference it gives up.
+/// `ctx` is null or the control block of the fiber running on this
+/// thread; `value` is a tagged integer or a word pointing to a live
+/// object, and the caller owns the reference it gives up.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_rt_drop(value: Word) {
+pub unsafe extern "C" fn cheby_rt_drop(ctx: *mut ExecCtx, value: Word) {
+    if abi::is_tagged_int(value) || value == 0 {
+        return;
+    }
     // SAFETY: forwarded from the caller.
-    unsafe { drop(value) };
+    unsafe { alloc::check_live(value, "`drop`") };
+    let obj = word_to_ptr(value);
+    // SAFETY: `obj` is a live object and the caller gives up a reference.
+    if unsafe { release(obj) } {
+        // SAFETY: that was the last reference; `ctx` is null or the
+        // running fiber's control block (forwarded from the caller).
+        unsafe { alloc::free_in(ctx.as_ref(), obj) };
+    }
 }
 
 /// Adds a reference to `value`. See [`cheby_rt_dup`]. The common case, a
@@ -113,12 +131,13 @@ unsafe fn dup_slow(obj: *mut u8, rc: i32) {
     }
 }
 
-/// Removes a reference to `value`, freeing it when none remain. See
-/// [`cheby_rt_drop`].
+/// Removes a reference to `value`, freeing it when none remain: the Rust
+/// callers' [`cheby_rt_drop`], which looks the running fiber up.
 ///
 /// # Safety
 ///
-/// As for [`cheby_rt_drop`].
+/// `value` is a tagged integer or a word pointing to a live object, and the
+/// caller owns the reference it gives up.
 #[inline]
 pub unsafe fn drop(value: Word) {
     if abi::is_tagged_int(value) || value == 0 {
@@ -802,7 +821,7 @@ mod overflow_oom_tests {
             ctx.set_budget(u64::MAX);
             let (reached, all_shared) = all_shared_or_static(parent);
             // SAFETY: the test's reference to a static object: a no-op.
-            unsafe { cheby_rt_drop(parent) };
+            unsafe { cheby_rt_drop(std::ptr::null_mut(), parent) };
             *out.lock().unwrap_or_else(PoisonError::into_inner) = Some(Seen {
                 reached,
                 all_shared,
@@ -889,15 +908,68 @@ mod overflow_oom_tests {
 
 #[cfg(test)]
 mod tests {
+    use std::ptr;
+    use std::sync::Arc;
+
     use super::*;
     use crate::alloc::tests::{serial, tuple};
-    use crate::alloc::{LEAK_CHECK_ENABLED, live_objects};
+    use crate::alloc::{Domain, LEAK_CHECK_ENABLED, live_objects};
+    use crate::entry::{EntryConfig, EntryMode, EntryOutcome, current_fiber, run_task};
     use crate::object::cheby_rt_static_true;
     use crate::string::tests::StaticImage;
 
     fn count(word: Word) -> i32 {
         // SAFETY: tests only pass live objects.
         unsafe { load_rc(word_to_ptr(word)) }
+    }
+
+    /// GAP(drop-with-ctx): generated code's drop passes its fiber's control
+    /// block. A free through it, of a leaf or of a value with fields,
+    /// charges that fiber's domain, and its block cache is read through
+    /// the control block's record (D-739; debug builds check that the
+    /// fiber is current).
+    #[test]
+    #[cfg_attr(miri, ignore = "runs an entry thread")]
+    fn a_drop_given_its_fibers_ctx_frees_into_its_domain() {
+        let domain = Domain::new();
+        let config = EntryConfig {
+            domain: Arc::clone(&domain),
+            ..EntryConfig::new(EntryMode::Test)
+        };
+        let task = || {
+            let Some(ctx) = current_fiber() else {
+                return 1;
+            };
+            let me = ptr::from_ref(ctx).cast_mut();
+            let pair = tuple(&[crate::values::string("a"), crate::values::string("b")]);
+            let leaf = crate::values::string("leaf");
+            if ctx.domain().live_objects() != 4 {
+                return 2;
+            }
+            // SAFETY: live objects owned here; `me` is the running fiber.
+            unsafe {
+                cheby_rt_dup(pair);
+                cheby_rt_drop(me, pair);
+            }
+            if (ctx.domain().live_objects(), count(pair)) != (4, 1) {
+                return 3;
+            }
+            // SAFETY: the last references: the tuple and its fields, then
+            // the leaf, are freed.
+            unsafe {
+                cheby_rt_drop(me, pair);
+                cheby_rt_drop(me, leaf);
+                cheby_rt_drop(me, abi::tag_int(7).unwrap_or(0));
+            }
+            if (ctx.domain().live_objects(), ctx.domain().live_bytes()) != (0, 0) {
+                return 4;
+            }
+            0
+        };
+        // SAFETY: the task frees everything it allocates.
+        let outcome = unsafe { run_task(&config, task) }.unwrap();
+        assert_eq!(outcome, EntryOutcome::Returned(0));
+        assert_eq!((domain.live_objects(), domain.live_bytes()), (0, 0));
     }
 
     #[test]
@@ -907,7 +979,7 @@ mod tests {
             // SAFETY: tagged integers are never dereferenced.
             unsafe {
                 cheby_rt_dup(word);
-                cheby_rt_drop(word);
+                cheby_rt_drop(ptr::null_mut(), word);
             }
         }
     }
@@ -919,15 +991,15 @@ mod tests {
         // SAFETY: a static object; count operations are no-ops.
         unsafe {
             cheby_rt_dup(word);
-            cheby_rt_drop(word);
-            cheby_rt_drop(word);
+            cheby_rt_drop(ptr::null_mut(), word);
+            cheby_rt_drop(ptr::null_mut(), word);
         }
         assert_eq!(cheby_rt_static_true.header(), before);
         let image = StaticImage::new("static");
         // SAFETY: a static string object in a live buffer.
         unsafe {
             cheby_rt_dup(image.word());
-            cheby_rt_drop(image.word());
+            cheby_rt_drop(ptr::null_mut(), image.word());
             assert_eq!(load_rc(word_to_ptr(image.word())), abi::RC_STATIC);
         }
     }
@@ -942,10 +1014,10 @@ mod tests {
             cheby_rt_dup(word);
             cheby_rt_dup(word);
             assert_eq!(count(word), 3);
-            cheby_rt_drop(word);
-            cheby_rt_drop(word);
+            cheby_rt_drop(ptr::null_mut(), word);
+            cheby_rt_drop(ptr::null_mut(), word);
             assert_eq!(count(word), 1);
-            cheby_rt_drop(word);
+            cheby_rt_drop(ptr::null_mut(), word);
         }
         assert_eq!(live_objects(), before);
     }
@@ -982,7 +1054,7 @@ mod tests {
             store_rc(word_to_ptr(word), i32::MAX);
             cheby_rt_dup(word);
             assert_eq!(count(word), abi::RC_STATIC);
-            cheby_rt_drop(word);
+            cheby_rt_drop(ptr::null_mut(), word);
             assert_eq!(count(word), abi::RC_STATIC);
         }
         // Static now: never freed and no longer counted.
@@ -999,9 +1071,9 @@ mod tests {
             store_rc(word_to_ptr(word), -1);
             cheby_rt_dup(word);
             assert_eq!(count(word), -2);
-            cheby_rt_drop(word);
+            cheby_rt_drop(ptr::null_mut(), word);
             assert_eq!(count(word), -1);
-            cheby_rt_drop(word);
+            cheby_rt_drop(ptr::null_mut(), word);
         }
         assert_eq!(live_objects(), before);
     }

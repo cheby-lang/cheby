@@ -11,8 +11,7 @@
 //! 2. joins the scope `owner` under its lock: a scope that has ended makes
 //!    the spawn panic with `spawn into a scope that has ended` (D-666,
 //!    D-732); otherwise a member slot is reserved, so the scope waits for
-//!    the fiber from now on, and a scope that has failed makes the fiber
-//!    start cancelled, never calling `f` (D-666);
+//!    the fiber from now on;
 //! 3. without a runtime, ends the program (D-692);
 //! 4. takes a reference to `f` for the fiber;
 //! 5. creates the fiber on a slot of the default 8 MiB (D-125, D-677),
@@ -24,14 +23,25 @@
 //! and `leave` release the scope's lock before they return, and a raise
 //! takes the spawner's own responsible scope's lock to record its panic
 //! (D-666).
-//! 6. records the fiber in its slot and queues it to the worker's runnext
-//!    slot, so it runs when the spawner blocks (architecture §3.5).
+//!
+//! 6. records the fiber in its slot, which tells whether the scope has
+//!    failed or is being cancelled, read under the scope's lock: then the
+//!    fiber gets its target before it is first queued, so it starts
+//!    cancelled and never calls `f` (D-666; survey-u5 §2.3, hazard 2: a
+//!    walk between the reservation and this step found the slot without
+//!    its fiber). A scope whose enclosing scope has failed or is being
+//!    cancelled counts as cancelled too, before the walk reaches it, with
+//!    the outermost such scope as the target (D-667). A walk after this
+//!    step reaches the fiber as a member.
+//!    Then it queues the fiber to the worker's runnext slot, so it runs
+//!    when the spawner blocks (architecture §3.5). A fiber that never calls
+//!    `f` releases it (D-670) and joins as failed (D-666).
 
 use std::sync::Arc;
 
 use super::base::{Base, FiberHandle, JoinCell, fiber_main};
 use super::scope::{Membership, state_of};
-use super::{Owned, needs_scheduler, running};
+use super::{Owned, cancel, needs_scheduler, running};
 use crate::abi::{PanicKind, Word};
 use crate::alloc::OUT_OF_MEMORY;
 use crate::ctx::ExecCtx;
@@ -86,7 +96,7 @@ unsafe fn spawn(ctx: *mut ExecCtx, owner: Word, function: Word, stack_size: usiz
     // what it marked stays shared together with all it reaches.
     unsafe { rc::mark_shared(function) };
     // 2. Join the scope.
-    let (slot, cancelled) = match scope.join() {
+    let slot = match scope.join() {
         Membership::Ended => {
             drop(handle);
             raise_panic(
@@ -95,7 +105,7 @@ unsafe fn spawn(ctx: *mut ExecCtx, owner: Word, function: Word, stack_size: usiz
                 Some("spawn into a scope that has ended"),
             )
         }
-        Membership::Member { index, cancelled } => (index, cancelled),
+        Membership::Member(index) => index,
     };
     // 3. The no-runtime rule.
     if me.sched.runtime().is_none() {
@@ -111,7 +121,6 @@ unsafe fn spawn(ctx: *mut ExecCtx, owner: Word, function: Word, stack_size: usiz
         cell,
         scope: Arc::clone(&scope),
         slot,
-        cancelled,
     };
     let start: StartFn = Box::new(move |ctx| {
         // SAFETY: `ctx` is the new fiber's control block, running on this
@@ -120,8 +129,20 @@ unsafe fn spawn(ctx: *mut ExecCtx, owner: Word, function: Word, stack_size: usiz
     });
     match sched::create_fiber(me, stack_size, start) {
         Ok(fiber) => {
-            // 6. Record and queue it.
-            scope.fill(slot, fiber);
+            // 6. Record it, give it its target if its scope is being
+            // cancelled, and queue it.
+            // GAP(chain-cancellation). An enclosing scope that has failed
+            // or is being cancelled cancels this one too, before the walk
+            // reaches it (`cancel::check_chain`, review finding
+            // CONC-W2-1); the outermost is the target (D-667).
+            let failed = scope.fill(slot, fiber);
+            let target = cancel::outermost_failing(scope.parent().cloned())
+                .or_else(|| failed.then(|| Arc::clone(&scope)));
+            if let Some(target) = target {
+                // SAFETY: the fiber was just created and is not queued yet,
+                // so it cannot have run, let alone retired.
+                cancel::set_target(unsafe { fiber.ctx() }, &target);
+            }
             sched::schedule_new(fiber, true);
             handle.into_word()
         }

@@ -34,6 +34,7 @@
 mod fiber;
 mod idle;
 mod monitor;
+mod wait;
 mod worker;
 
 use std::ffi::OsStr;
@@ -46,7 +47,10 @@ use std::time::Instant;
 use crossbeam_deque::Injector;
 use parking_lot::Mutex;
 
-pub(crate) use fiber::{AfterSwitch, FiberRef, FiberSched, StartFn, Unlock, park};
+pub(crate) use fiber::{
+    AfterSwitch, FiberRef, FiberSched, StartFn, Unlock, begin_park, cancel_park, park,
+};
+pub(crate) use wait::{WaitHeader, WaitNode, WaitQueue, WaitState};
 
 use self::fiber::FiberParams;
 use self::idle::Idle;

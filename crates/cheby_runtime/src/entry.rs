@@ -1003,7 +1003,9 @@ mod tests {
         // SAFETY: `ctx` is the running entry's.
         let context = unsafe { &*ctx };
         // Every reason is taken; outside constant evaluation none has an
-        // effect yet, and the frame fits.
+        // effect here, and the frame fits: CANCEL without a target is
+        // stale, since a cancellation is delivered from the fiber's target
+        // (D-688, `fiber_ops::cancel::check`), and this entry has none.
         for reason in [
             reason::SAFEPOINT,
             reason::CANCEL,

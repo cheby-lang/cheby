@@ -20,7 +20,11 @@
 //! cannot see `PARKING`, since the lock is released after the switch; a
 //! waker that takes no lock (timers, cancellation, the blocking pool) turns
 //! it into `PARKING_WOKEN`, and the worker enqueues the fiber itself once
-//! the switch is complete.
+//! the switch is complete. A fiber that parks in a cancellable wait stores
+//! `PARKING` earlier, with [`begin_park`], before the cancellation walk can
+//! reach its wait node (survey-u5 §2.3, hazard 1), and `park` then leaves
+//! the state as it finds it; [`cancel_park`] stores `RUNNING` back if the
+//! fiber does not park after all.
 //!
 //! # Ownership of the cells
 //!
@@ -287,6 +291,27 @@ impl<'a> Unlock<'a> {
     }
 }
 
+/// Makes PARKING visible before a wait node is published (survey-u5 §2.3,
+/// hazard 1): a fiber about to park in a cancellable wait calls it before
+/// it links its node where the cancellation walk or a lockless waker can
+/// reach it, so that a wake that wins the node finds the fiber `PARKING`
+/// (and turns it into `PARKING_WOKEN`) and is never lost. A fiber that
+/// then decides not to park calls [`cancel_park`], which stores `RUNNING`
+/// back. Only the fiber itself calls it, while it runs.
+pub(crate) fn begin_park(me: &ExecCtx) {
+    me.sched.state.store(state::PARKING, Ordering::SeqCst);
+}
+
+/// Undoes [`begin_park`] for a fiber that did not park after all, because
+/// it found itself cancelled when it tried to publish its node: stores
+/// `RUNNING` back. No waker can have seen the fiber `PARKING` meanwhile: a
+/// lockless waker reaches a fiber only through a published node, and a
+/// waker that takes the channel's or join cell's lock waits for the lock
+/// the fiber still holds.
+pub(crate) fn cancel_park(me: &ExecCtx) {
+    me.sched.state.store(state::RUNNING, Ordering::SeqCst);
+}
+
 /// Suspends the running fiber `me` and runs `after` on its worker once its
 /// registers are saved (D-687, architecture §3.4). Returns when the fiber
 /// is resumed, maybe on another worker, except after [`AfterSwitch::Exit`],
@@ -305,7 +330,16 @@ pub(crate) fn park(me: &ExecCtx, after: AfterSwitch<'_>) {
     };
     let ends = matches!(after, AfterSwitch::Exit);
     if matches!(after, AfterSwitch::Park(_)) {
-        me.sched.state.store(state::PARKING, Ordering::SeqCst);
+        // `RUNNING -> PARKING`, unless `begin_park` stored `PARKING`
+        // already and a lockless waker may have turned it into
+        // `PARKING_WOKEN` since: that wake must stand, and the worker
+        // requeues the fiber after the switch.
+        let _ = me.sched.state.compare_exchange(
+            state::RUNNING,
+            state::PARKING,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
     }
     let after = ManuallyDrop::new(after);
     let message = ptr::from_ref::<AfterSwitch<'_>>(&after).expose_provenance();

@@ -1,0 +1,39 @@
+// @mode: run-fail
+// @decisions: D-668, D-732
+// @milestone: M2
+//! A fiber that joins a failed fiber of another scope is not being
+//! cancelled, so `join` panics with `joined fiber failed`. The reference
+//! implementation reports the panic at `<unknown location>` (§10.3,
+//! §11.6).
+
+import std::channel
+import std::fiber
+import std::io
+
+fn fail_after(start: channel::Receiver<Nil>, text: String) -> Int {
+  let _ = channel::receive(start)
+  panic as text
+}
+
+fn main() {
+  let (tx, rx) = channel::new::<fiber::Fiber<Int>>(1)
+  let (go_tx, go_rx) = channel::new::<Nil>(1)
+  let first = {
+    use owner <- fiber::scope()
+    let doomed = fiber::spawn(owner, fn() { fail_after(go_rx, "doomed") })
+    let assert Ok(Nil) = channel::send(tx, doomed)
+    let assert Ok(Nil) = channel::send(go_tx, Nil)
+    Nil
+  }
+  case first {
+    Ok(_) => io::println("the first scope returned Ok")
+    Err(failure) => {
+      let text = fiber::message(failure)
+      io::println("the first scope failed: {text}")
+    }
+  }
+  let assert Ok(doomed) = channel::receive(rx)
+  io::println("joining from outside the scope")
+  let value = fiber::join(doomed)
+  io::println("never printed: {value}")
+}

@@ -12,7 +12,7 @@ function u0:24(i64, i64) -> i64 tail {
     gv2 = symbol colocated userextname5
     sig0 = (i64, i64) system_v
     sig1 = (i64) system_v
-    sig2 = (i64) system_v
+    sig2 = (i64, i64) system_v
     sig3 = (i64, i64, i64) -> i64 system_v
     fn0 = u0:4 sig0
     fn1 = u0:1 sig1
@@ -94,7 +94,7 @@ block26:
     brif v36, block28, block27
 
 block27 cold:
-    call fn2(v8)
+    call fn2(v1, v8)
     jump block28
 
 block28:
@@ -129,7 +129,7 @@ block32:
     brif v48, block34, block33
 
 block33 cold:
-    call fn2(v2)
+    call fn2(v1, v2)
     jump block34
 
 block34:
@@ -146,11 +146,11 @@ block35:
     jump block5(v53)
 
 block9 cold:
-    call fn2(v50)
+    call fn2(v1, v50)
     jump block8
 
 block8 cold:
-    call fn2(v49)  ; v49 = 3
+    call fn2(v1, v49)  ; v49 = 3
     jump block6
 
 block2:
@@ -176,7 +176,7 @@ block38:
     brif v62, block40, block39
 
 block39 cold:
-    call fn2(v2)
+    call fn2(v1, v2)
     jump block40
 
 block40:
@@ -193,11 +193,11 @@ block41:
     jump block5(v67)
 
 block11 cold:
-    call fn2(v64)
+    call fn2(v1, v64)
     jump block10
 
 block10 cold:
-    call fn2(v63)  ; v63 = 5
+    call fn2(v1, v63)  ; v63 = 5
     jump block6
 
 block3:
@@ -223,7 +223,7 @@ block44:
     brif v76, block46, block45
 
 block45 cold:
-    call fn2(v2)
+    call fn2(v1, v2)
     jump block46
 
 block46:
@@ -240,11 +240,11 @@ block47:
     jump block5(v81)
 
 block13 cold:
-    call fn2(v78)
+    call fn2(v1, v78)
     jump block12
 
 block12 cold:
-    call fn2(v77)  ; v77 = 7
+    call fn2(v1, v77)  ; v77 = 7
     jump block6
 
 block4:
@@ -300,7 +300,7 @@ block55:
     brif v103, block57, block56
 
 block56 cold:
-    call fn2(v2)
+    call fn2(v1, v2)
     jump block57
 
 block57:
@@ -318,15 +318,15 @@ block5(v0: i64):
     return v0
 
 block15 cold:
-    call fn2(v83)
+    call fn2(v1, v83)
     jump block14
 
 block14 cold:
-    call fn2(v82)  ; v82 = 1
+    call fn2(v1, v82)  ; v82 = 1
     jump block6
 
 block7 cold:
-    call fn2(v2)
+    call fn2(v1, v2)
     jump block6
 
 block6 cold:
@@ -352,7 +352,7 @@ function u0:25(i64, i64, i64) -> i64 tail {
     sig0 = (i64, i64) system_v
     sig1 = (i64, i64) -> i64 tail
     sig2 = (i64, i64, i64, i64) -> i8 uext system_v
-    sig3 = (i64) system_v
+    sig3 = (i64, i64) system_v
     fn0 = u0:4 sig0
     fn1 = u0:20 sig2
     fn2 = u0:2 sig3
@@ -413,7 +413,7 @@ block15:
     brif v25, block17, block16
 
 block16 cold:
-    call fn2(v10)
+    call fn2(v0, v10)
     jump block17
 
 block17:
@@ -439,7 +439,7 @@ block20:
     brif v34, block22, block21
 
 block21 cold:
-    call fn2(v13)
+    call fn2(v0, v13)
     jump block22
 
 block22:
@@ -449,23 +449,23 @@ block22:
     return v37
 
 block4 cold:
-    call fn2(v2)
+    call fn2(v0, v2)
     jump block1
 
 block6 cold:
-    call fn2(v13)
+    call fn2(v0, v13)
     jump block5
 
 block5 cold:
-    call fn2(v10)
+    call fn2(v0, v10)
     jump block1
 
 block3 cold:
-    call fn2(v2)
+    call fn2(v0, v2)
     jump block2
 
 block2 cold:
-    call fn2(v1)
+    call fn2(v0, v1)
     jump block1
 
 block1 cold:
@@ -483,7 +483,7 @@ function u0:26(i64, i64) -> i64 tail {
     gv1 = symbol colocated userextname2
     sig0 = (i64, i64) system_v
     sig1 = (i64, i64) -> i64 tail
-    sig2 = (i64) system_v
+    sig2 = (i64, i64) system_v
     fn0 = u0:4 sig0
     fn1 = u0:2 sig2
 
@@ -508,7 +508,7 @@ block0:
     return_call_indirect sig1, v8(v0, v1)
 
 block2 cold:
-    call fn1(v1)
+    call fn1(v0, v1)
     jump block1
 
 block1 cold:
@@ -532,7 +532,7 @@ function u0:27(i64, i64) -> i64 tail {
     sig0 = (i64, i64) system_v
     sig1 = (i64, i64) system_v
     sig2 = (i64) system_v
-    sig3 = (i64) system_v
+    sig3 = (i64, i64) system_v
     fn0 = u0:4 sig0
     fn1 = u0:22 sig1
     fn2 = u0:2 sig3
@@ -587,7 +587,7 @@ block10:
     brif v19, block12, block11
 
 block11 cold:
-    call fn2(v1)
+    call fn2(v0, v1)
     jump block12
 
 block12:
@@ -595,7 +595,7 @@ block12:
     return v20
 
 block2 cold:
-    call fn2(v1)
+    call fn2(v0, v1)
     jump block1
 
 block1 cold:
@@ -620,7 +620,7 @@ function u0:28(i64, i64) -> i64 tail {
     gv4 = symbol colocated userextname7
     sig0 = (i64, i64) system_v
     sig1 = (i64) system_v
-    sig2 = (i64) system_v
+    sig2 = (i64, i64) system_v
     fn0 = u0:4 sig0
     fn1 = u0:1 sig1
     fn2 = u0:2 sig2
@@ -700,7 +700,7 @@ block18:
     brif v36, block20, block19
 
 block19 cold:
-    call fn2(v8)
+    call fn2(v1, v8)
     jump block20
 
 block20:
@@ -735,7 +735,7 @@ block24:
     brif v48, block26, block25
 
 block25 cold:
-    call fn2(v2)
+    call fn2(v1, v2)
     jump block26
 
 block26:
@@ -765,7 +765,7 @@ block29:
     brif v58, block31, block30
 
 block30 cold:
-    call fn2(v2)
+    call fn2(v1, v2)
     jump block31
 
 block31:
@@ -795,7 +795,7 @@ block34:
     brif v68, block36, block35
 
 block35 cold:
-    call fn2(v2)
+    call fn2(v1, v2)
     jump block36
 
 block36:
@@ -854,7 +854,7 @@ block44:
     brif v90, block46, block45
 
 block45 cold:
-    call fn2(v2)
+    call fn2(v1, v2)
     jump block46
 
 block46:
@@ -864,7 +864,7 @@ block5(v0: i64):
     return v0
 
 block7 cold:
-    call fn2(v2)
+    call fn2(v1, v2)
     jump block6
 
 block6 cold:
@@ -881,7 +881,7 @@ function u0:29(i64, i64, i64) -> i64 tail {
     gv0 = symbol colocated userextname0
     gv1 = symbol colocated userextname3
     sig0 = (i64, i64) system_v
-    sig1 = (i64) system_v
+    sig1 = (i64, i64) system_v
     sig2 = (i64, i64) -> i64 tail
     fn0 = u0:4 sig0
     fn1 = u0:2 sig1
@@ -924,7 +924,7 @@ block9:
     brif v16, block11, block10
 
 block10 cold:
-    call fn1(v1)
+    call fn1(v0, v1)
     jump block11
 
 block11:
@@ -933,11 +933,11 @@ block11:
     return_call_indirect sig2, v18(v0, v2)
 
 block3 cold:
-    call fn1(v2)
+    call fn1(v0, v2)
     jump block2
 
 block2 cold:
-    call fn1(v1)
+    call fn1(v0, v1)
     jump block1
 
 block1 cold:
@@ -954,7 +954,7 @@ function u0:30(i64, i64, i64, i64) -> i64 tail {
     gv0 = symbol colocated userextname0
     gv1 = symbol colocated userextname3
     sig0 = (i64, i64) system_v
-    sig1 = (i64) system_v
+    sig1 = (i64, i64) system_v
     sig2 = (i64, i64, i64) -> i64 tail
     fn0 = u0:4 sig0
     fn1 = u0:2 sig1
@@ -997,7 +997,7 @@ block10:
     brif v17, block12, block11
 
 block11 cold:
-    call fn1(v1)
+    call fn1(v0, v1)
     jump block12
 
 block12:
@@ -1006,15 +1006,15 @@ block12:
     return_call_indirect sig2, v19(v0, v2, v3)
 
 block4 cold:
-    call fn1(v3)
+    call fn1(v0, v3)
     jump block3
 
 block3 cold:
-    call fn1(v2)
+    call fn1(v0, v2)
     jump block2
 
 block2 cold:
-    call fn1(v1)
+    call fn1(v0, v1)
     jump block1
 
 block1 cold:
@@ -1031,7 +1031,7 @@ function u0:31(i64, i64, i64) -> i64 tail {
     gv0 = symbol colocated userextname0
     gv1 = symbol colocated userextname3
     sig0 = (i64, i64) system_v
-    sig1 = (i64) system_v
+    sig1 = (i64, i64) system_v
     sig2 = (i64, i64) -> i64 tail
     fn0 = u0:4 sig0
     fn1 = u0:2 sig1
@@ -1074,7 +1074,7 @@ block9:
     brif v16, block11, block10
 
 block10 cold:
-    call fn1(v1)
+    call fn1(v0, v1)
     jump block11
 
 block11:
@@ -1083,11 +1083,11 @@ block11:
     return_call_indirect sig2, v18(v0, v2)
 
 block3 cold:
-    call fn1(v2)
+    call fn1(v0, v2)
     jump block2
 
 block2 cold:
-    call fn1(v1)
+    call fn1(v0, v1)
     jump block1
 
 block1 cold:
@@ -1140,7 +1140,7 @@ block1 cold:
 function u0:33(i64) -> i64 system_v {
     gv0 = symbol colocated userextname0
     sig0 = (i64) -> i64 tail
-    sig1 = (i64) system_v
+    sig1 = (i64, i64) system_v
     fn0 = u0:2 sig1
 
 block2(v0: i64):
@@ -1175,7 +1175,7 @@ block6:
     brif v12, block8, block7
 
 block7 cold:
-    call fn0(v3)
+    call fn0(v0, v3)
     jump block8
 
 block8:

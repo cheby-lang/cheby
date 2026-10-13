@@ -4,24 +4,31 @@
 //! kernel `take_failure` that tells `std::fiber::scope` why a scope failed.
 //!
 //! A scope's state ([`ScopeState`]) is shared by its `Scope` handle (kind
-//! 43), the fibers spawned into it and the scopes nested in it. Its lock
-//! guards the members, the nested scopes, the first cause and the `ended`
-//! flag. Lock order (architecture §7.5): a parent's lock before a child's;
-//! a scope lock is never held together with a channel lock, and never
-//! across a switch (I-5): the owner waiting in close hands it to `park`.
+//! 43), the fibers spawned into it and the scopes nested in it. It knows
+//! its parent, its owner (the fiber that opened it) and its depth; its lock
+//! guards the members, the nested scopes, the first cause and the
+//! `cancelled` and `ended` flags. Lock order (architecture §7.5, the
+//! module documentation of `fiber_ops`): a parent's lock before a child's,
+//! then a fiber lock; a scope lock is never held together with a channel
+//! lock, and never across a switch (I-5): the owner waiting in close hands
+//! it to `park`.
 //!
 //! A scope's first cause is the first panic, by start, of a fiber
 //! responsible to it: a member, or the body of the fiber that opened it
 //! (D-666). The panic is recorded when it starts
 //! ([`ScopeState::record_panic`], called by `unwind::record::start_panic`),
 //! before the panicking fiber unwinds, so a panic that starts later never
-//! replaces it, whichever fiber ends first. Cancelling the other members at
-//! that moment belongs to cancellation (package U5).
+//! replaces it, whichever fiber ends first; at that moment the scope is
+//! cancelled (`cancel::cancel`, D-667), which reaches every other member,
+//! the owner and every scope nested inside. A scope cancelled from outside
+//! records no cause: its fibers' panics are caused by the cancellation
+//! (D-178).
 
 use std::sync::{Arc, Weak};
 
 use parking_lot::Mutex;
 
+use super::cancel::{self, AtClose};
 use super::{Failure, Owned, needs_scheduler, running};
 use crate::abi::Word;
 use crate::ctx::ExecCtx;
@@ -29,6 +36,7 @@ use crate::handles::{self, HandleKind, HandlePayload};
 use crate::panic::{PanicReport, fatal};
 use crate::sched::{AfterSwitch, FiberRef, Unlock, park, wake};
 use crate::unwind::guard::guarded;
+use crate::unwind::raise::raise_cancel;
 use crate::unwind::record::{UnwindRecord, take_record};
 use crate::values;
 
@@ -41,6 +49,14 @@ pub(crate) struct ScopeState {
     /// that fiber's innermost open scope, else the scope it was spawned
     /// into.
     parent: Option<Arc<ScopeState>>,
+    /// The fiber that opened the scope and closes it. It cannot end before
+    /// the scope has ended (I-7), so the walk may reach it while it holds
+    /// the scope's lock and finds the scope not ended.
+    owner: FiberRef,
+    /// The number of proper ancestors: 0 for a scope without a parent. Of
+    /// two scopes on one chain of parents, the outer has the smaller depth,
+    /// which is how a fiber's outermost target is chosen (D-667).
+    depth: u32,
     /// The scope's slot among its parent's nested scopes, set by the open
     /// once it is linked; only the fiber that opened the scope reads it,
     /// at the close.
@@ -53,10 +69,15 @@ struct ScopeInner {
     /// The fibers spawned into the scope that have not left it yet.
     members: Members,
     /// The scopes opened inside its region that have not closed yet, for
-    /// cancellation's walk of a subtree (U5).
+    /// cancellation's walk of a subtree.
     nested: Nested,
     /// The first panic of the scope (D-666).
     first_cause: Option<Failure>,
+    /// Set by the cancellation walk, or inherited from the parent when the
+    /// scope links (survey-u5 §2.3, hazard 3): the scope's fibers are being
+    /// cancelled, so a spawn into it starts cancelled, and a panic in it is
+    /// not its first cause unless it was the cause of the cancellation.
+    cancelled: bool,
     /// Set by the close once every member has left: spawning panics from
     /// then on (D-666).
     ended: bool,
@@ -83,7 +104,7 @@ enum Slot {
     Free,
     /// Reserved by a spawn that has not created its fiber yet.
     Reserved,
-    /// Held by a member fiber, which cancellation (U5) reaches through it.
+    /// Held by a member fiber, which cancellation reaches through it.
     Member(FiberRef),
 }
 
@@ -179,31 +200,103 @@ impl Nested {
 pub(crate) enum Membership {
     /// The scope has ended: the spawn panics (D-666).
     Ended,
-    /// A member slot; `cancelled` when the scope has failed, so the new
-    /// fiber is cancelled before it starts (D-666).
-    Member {
-        /// The slot.
-        index: usize,
-        /// Whether the scope has failed.
-        cancelled: bool,
-    },
+    /// A reserved member slot. Whether the new fiber starts cancelled is
+    /// learned when the slot is filled ([`ScopeState::fill`]).
+    Member(usize),
 }
 
 impl ScopeState {
-    fn new(parent: Option<Arc<Self>>) -> Self {
+    /// A scope opened by `owner` inside `parent`.
+    pub(crate) fn new(parent: Option<Arc<Self>>, owner: FiberRef) -> Self {
+        let depth = parent
+            .as_ref()
+            .map_or(0, |parent| parent.depth.saturating_add(1));
         Self {
             inner: Mutex::new(ScopeInner::default()),
             parent,
+            owner,
+            depth,
             nested_slot: Mutex::new(None),
         }
     }
 
-    /// Links the new scope `state` into its parent's nested scopes.
-    fn link(state: &Arc<Self>) {
+    /// The number of proper ancestors of the scope.
+    pub(crate) fn depth(&self) -> u32 {
+        self.depth
+    }
+
+    /// The scope enclosing the opening fiber's position when it opened.
+    pub(crate) fn parent(&self) -> Option<&Arc<Self>> {
+        self.parent.as_ref()
+    }
+
+    /// Whether the scope has failed or is being cancelled, read under its
+    /// lock: it has a first cause, whose walk is about to run or running,
+    /// or a walk has marked it (`cancel::check_chain`).
+    pub(crate) fn failing(&self) -> bool {
+        let inner = self.inner.lock();
+        inner.cancelled || inner.first_cause.is_some()
+    }
+
+    /// Links the new scope `state` into its parent's nested scopes. Under
+    /// the parent's lock (then the new scope's, parent before child) the
+    /// new scope inherits whether the parent is being cancelled (survey-u5
+    /// §2.3, hazard 3): a walk that visited the parent before the link set
+    /// the opener's target already, and the new scope must not accept
+    /// spawns as if it were not cancelled; a walk after the link finds it
+    /// among the parent's nested scopes.
+    pub(crate) fn link(state: &Arc<Self>) {
         if let Some(parent) = &state.parent {
-            let index = parent.inner.lock().nested.insert(Arc::downgrade(state));
+            let index = {
+                let mut outer = parent.inner.lock();
+                let index = outer.nested.insert(Arc::downgrade(state));
+                if outer.cancelled || outer.first_cause.is_some() {
+                    state.inner.lock().cancelled = true;
+                }
+                index
+            };
             *state.nested_slot.lock() = Some(index);
         }
+    }
+
+    /// Cancellation's walk at this scope (`cancel::cancel`, D-667, D-706),
+    /// under its lock: does nothing if the scope has ended; otherwise marks
+    /// it cancelled, reaches every member and the owner under their fiber
+    /// locks (`cancel::reach`), adds to `won` the fibers whose wait node the
+    /// walk won, and adds every nested scope still alive to `nested`. The
+    /// caller wakes `won` after this returns, with no lock held.
+    pub(crate) fn cancel_step(
+        &self,
+        target: &Arc<Self>,
+        won: &mut Vec<FiberRef>,
+        nested: &mut Vec<Arc<Self>>,
+    ) {
+        let mut inner = self.inner.lock();
+        if inner.ended {
+            return;
+        }
+        inner.cancelled = true;
+        let members = inner.members.slots.iter().filter_map(|slot| match slot {
+            Slot::Member(fiber) => Some(*fiber),
+            Slot::Free | Slot::Reserved => None,
+        });
+        for fiber in members.chain(std::iter::once(self.owner)) {
+            // SAFETY: a member that has not left is not retired, since it
+            // leaves under this lock before it ends; the owner closes the
+            // scope, which has not ended under this lock, before it can
+            // end (I-7). Neither is used after the lock is released.
+            if cancel::reach(unsafe { fiber.ctx() }, target) {
+                won.push(fiber);
+            }
+        }
+        nested.extend(
+            inner
+                .nested
+                .slots
+                .iter()
+                .flatten()
+                .filter_map(Weak::upgrade),
+        );
     }
 
     /// Unlinks the closing scope from its parent's nested scopes.
@@ -229,37 +322,46 @@ impl ScopeState {
         if inner.ended {
             return Membership::Ended;
         }
-        let cancelled = inner.first_cause.is_some();
-        Membership::Member {
-            index: inner.members.reserve(),
-            cancelled,
-        }
+        Membership::Member(inner.members.reserve())
     }
 
-    /// Records `report` as the scope's first cause if it has none (D-666),
-    /// under the scope's lock. Returns whether it recorded. Called by
+    /// Records `report` as the scope's first cause if it has none and is
+    /// not cancelled from outside (D-666, architecture §6.6), under the
+    /// scope's lock, then, after releasing that lock, cancels the scope
+    /// (`cancel::cancel`, D-667) at that moment, before the panicking fiber
+    /// unwinds: so a member that joins the panicking fiber is always being
+    /// cancelled by then (D-668). Returns whether it recorded. Called by
     /// `record::start_panic` after the record's lock is released, for the
     /// top of `open_scopes` (a root's body inside `scope` included), else
     /// the spawn scope; a fiber with neither records nothing. Entered with
-    /// no runtime lock held, and holds only the scope's lock; from U5 on it
-    /// releases the scope's lock before it calls `cancel` (plan §0
-    /// 'Locks'). It allocates only the copy of the report's two texts, and
-    /// only when it records.
-    pub(crate) fn record_panic(&self, report: &PanicReport) -> bool {
-        let mut inner = self.inner.lock();
-        if inner.first_cause.is_some() {
-            return false;
+    /// no runtime lock held (plan §0 'Locks'). It allocates only the copy
+    /// of the report's two texts and the walk's worklists, and only when it
+    /// records.
+    pub(crate) fn record_panic(self: &Arc<Self>, report: &PanicReport) -> bool {
+        {
+            let mut inner = self.inner.lock();
+            if inner.first_cause.is_some() || inner.cancelled {
+                return false;
+            }
+            inner.first_cause = Some(Failure::panic(
+                report.message.clone(),
+                report.location.clone(),
+            ));
         }
-        inner.first_cause = Some(Failure::panic(
-            report.message.clone(),
-            report.location.clone(),
-        ));
+        cancel::cancel(self);
         true
     }
 
-    /// Records the fiber of the reserved slot `index`.
-    pub(crate) fn fill(&self, index: usize, fiber: FiberRef) {
-        self.inner.lock().members.fill(index, fiber);
+    /// Records the fiber of the reserved slot `index`, and returns whether
+    /// the scope has failed or is being cancelled, read under the same lock
+    /// (survey-u5 §2.3, hazard 2): a walk that ran since the reservation
+    /// found the slot without its fiber, so the spawner gives the new fiber
+    /// its target before it is first scheduled (D-666), and its function
+    /// is never called.
+    pub(crate) fn fill(&self, index: usize, fiber: FiberRef) -> bool {
+        let mut inner = self.inner.lock();
+        inner.members.fill(index, fiber);
+        inner.cancelled || inner.first_cause.is_some()
     }
 
     /// Leaves the member slot `index`: the member has ended, or its spawn
@@ -338,7 +440,7 @@ pub unsafe extern "C" fn cheby_rt_scope_open(
             fatal(format_args!("fiber::timeout is not supported yet"));
         }
         let parent = me.conc.responsible_scope();
-        let state = Arc::new(ScopeState::new(parent));
+        let state = Arc::new(ScopeState::new(parent, FiberRef::from_ctx(me)));
         // SAFETY: `ctx` is the running fiber's. If the allocation raises,
         // nothing is open yet and the payload box is dropped.
         let handle = unsafe {
@@ -361,17 +463,35 @@ pub unsafe extern "C" fn cheby_rt_scope_open(
 /// 1. waits, without interruption, until every member has left;
 /// 2. pops the scope from the fiber's open scopes, marks it ended and
 ///    unlinks it from its parent;
-/// 3. decides from the scope's first cause (D-666), recorded when the
-///    first panic of a member or of the body started. When the body
-///    unwound (`unwound`), the close takes the fiber's record, which ends
-///    the unwinding; the body's panic becomes the cause only if none was
-///    recorded. Without a cause the scope succeeded and the result is
-///    true; with one it is stored for `take_failure` and the result is
-///    false, so that `scope_run` returns the static `Err(Nil)`. Nothing is
-///    printed (D-701).
+/// 3. gives the fiber the outermost of its proper ancestors that has failed
+///    or is being cancelled as its target (`cancel::check_chain`), then
+///    reads and clears the fiber's cancellation target under its fiber
+///    lock (D-706, `cancel::at_close`), so that a cancellation of an outer
+///    scope running at the same time is ordered with the decision and
+///    never lost:
+///    - a proper ancestor of this scope is the target: the cancellation
+///      passes through (D-667). The close takes the body's record if it
+///      unwound (a panic after the cancellation was requested is not
+///      reported, D-178) and raises the cancellation again, after
+///      releasing the handle, so the scope never returns (I-7);
+///    - this scope is the target: the target and the CANCEL reason are
+///      cleared, and the scope returns per its first cause, as below; a
+///      later outer cancellation finds no target, sets its own and is
+///      delivered at the next entry check;
+///    - otherwise it decides from the scope's first cause (D-666),
+///      recorded when the first panic of a member or of the body started.
+///      When the body unwound (`unwound`), the close takes the fiber's
+///      record, which ends the unwinding; the body's panic becomes the
+///      cause only if none was recorded. Without a cause the scope
+///      succeeded and the result is true; with one it is stored for
+///      `take_failure` and the result is false, so that `scope_run`
+///      returns the static `Err(Nil)`. Nothing is printed (D-701).
 ///
-/// A cancellation passing through re-raises from here once package U5
-/// brings it; until then a cancellation record here is a broken invariant.
+/// A body that unwound for this scope's own cancellation without a first
+/// cause can only come from the test hook
+/// (`fiber_ops::testing::cancel_running_fiber_at_next_entry`) until timeouts
+/// arrive (T1, whose expired limit is such a cause): the scope then fails
+/// as an expired limit does, kind 1 with empty texts.
 ///
 /// # Safety
 ///
@@ -408,21 +528,47 @@ pub unsafe extern "C" fn cheby_rt_scope_close(
         // 2. Pop, end, unlink.
         me.conc.pop_scope(&state);
         state.unlink();
-        // 3. Decide. The body's own panic was recorded in this scope when
-        // it started, unless an earlier one was; the record is taken
-        // either way.
-        let unwound_cause = if unwound {
+        // 3. Decide, after the target. GAP(chain-cancellation): a
+        // cancellation of an enclosing scope reached this fiber when that
+        // scope was marked, even if the walk has not set its target yet
+        // (`cancel::check_chain`, review finding CONC-W2-1): it becomes the
+        // target here, so the close passes it through at every thread
+        // count. The body's own panic was recorded
+        // in this scope when it started, unless an earlier one was; the
+        // record is taken either way.
+        if let Some(outer) = cancel::outermost_failing(state.parent().cloned()) {
+            cancel::set_target(me, &outer);
+        }
+        let target = cancel::at_close(me, &state);
+        let record = if unwound {
             match take_record(me) {
-                Some(UnwindRecord::Panic(report)) => {
-                    Some(Failure::panic(report.message, report.location))
-                }
-                Some(UnwindRecord::Cancel) => fatal(format_args!(
-                    "a cancellation reached a scope (cancellation arrives with package U5)"
-                )),
+                Some(record) => Some(record),
                 None => fatal(format_args!("a scope's body unwound without a record")),
             }
         } else {
             None
+        };
+        if target == AtClose::Outer {
+            // The cancellation passes through (D-667): nothing of the body's
+            // unwinding is reported, and no lock is held.
+            drop(record);
+            drop(state);
+            drop(handle);
+            raise_cancel(Some(ctx));
+        }
+        let unwound_cause = match record {
+            Some(UnwindRecord::Panic(report)) => {
+                Some(Failure::panic(report.message, report.location))
+            }
+            Some(UnwindRecord::Cancel) if target == AtClose::This => Some(Failure {
+                kind: 1,
+                message: String::new(),
+                location: String::new(),
+            }),
+            Some(UnwindRecord::Cancel) => fatal(format_args!(
+                "a cancellation reached a scope that is not its target"
+            )),
+            None => None,
         };
         drop(handle);
         match own_cause.or(unwound_cause) {
@@ -476,15 +622,29 @@ mod tests {
 
     use super::ScopeState;
     use crate::abi::PanicKind;
+    use crate::ctx::{ExecCtx, FiberInit, reason};
     use crate::fiber_ops::Failure;
+    use crate::fiber_ops::cancel::hooks;
     use crate::panic::PanicReport;
+    use crate::sched::FiberRef;
 
-    /// D-666: a scope records its first cause once; a later panic leaves it
-    /// as it is, and the scope's parent and nested scopes record nothing.
+    /// An owner for scopes that no fiber runs: an isolated block.
+    fn owner() -> Box<ExecCtx> {
+        Box::new(ExecCtx::new(FiberInit::placeholder()))
+    }
+
+    /// D-666, D-667: a scope records its first cause once and cancels
+    /// itself, which targets its owner; a later panic leaves the cause as
+    /// it is, and the scope's parent records nothing. A scope cancelled
+    /// from outside records no cause.
     #[test]
-    fn record_panic_records_once() {
-        let parent = Arc::new(ScopeState::new(None));
-        let scope = Arc::new(ScopeState::new(Some(Arc::clone(&parent))));
+    fn cancel_record_panic_records_once_and_cancels_the_scope() {
+        let me = owner();
+        let parent = Arc::new(ScopeState::new(None, FiberRef::from_ctx(&me)));
+        let scope = Arc::new(ScopeState::new(
+            Some(Arc::clone(&parent)),
+            FiberRef::from_ctx(&me),
+        ));
         ScopeState::link(&scope);
         let first = PanicReport::new(PanicKind::Explicit, Some("first"), "a.cheby:1:2");
         let second = PanicReport::new(PanicKind::Todo, None, "b.cheby:3:4");
@@ -495,17 +655,54 @@ mod tests {
             scope.inner.lock().first_cause,
             Some(Failure::panic("first".to_owned(), "a.cheby:1:2".to_owned()))
         );
+        assert!(scope.inner.lock().cancelled);
+        assert!(hooks::target(&me).is_some_and(|target| Arc::ptr_eq(&target, &scope)));
+        assert!(crate::ctx::pending(&me, reason::CANCEL));
+        assert_eq!(parent.inner.lock().first_cause, None);
+        assert!(!parent.inner.lock().cancelled);
+        // The parent is cancelled now: its owner's target becomes the outer
+        // scope (the outermost wins), and the child, cancelled from outside
+        // already, records nothing new.
+        crate::fiber_ops::cancel::cancel(&parent);
+        assert!(hooks::target(&me).is_some_and(|target| Arc::ptr_eq(&target, &parent)));
+        assert!(!parent.record_panic(&second));
         assert_eq!(parent.inner.lock().first_cause, None);
         scope.unlink();
+        hooks::clear_target(&me);
+    }
+
+    /// Survey-u5 §2.3, hazard 3: a scope linked under a cancelled parent is
+    /// cancelled itself, so it records no cause and a spawn into it starts
+    /// cancelled.
+    #[test]
+    fn cancel_link_inherits_the_parents_cancellation() {
+        let me = owner();
+        let parent = Arc::new(ScopeState::new(None, FiberRef::from_ctx(&me)));
+        crate::fiber_ops::cancel::cancel(&parent);
+        let child = Arc::new(ScopeState::new(
+            Some(Arc::clone(&parent)),
+            FiberRef::from_ctx(&me),
+        ));
+        ScopeState::link(&child);
+        assert!(child.inner.lock().cancelled);
+        let report = PanicReport::new(PanicKind::Explicit, Some("late"), "a.cheby:1:2");
+        assert!(!child.record_panic(&report));
+        assert_eq!(child.depth(), 1);
+        child.unlink();
+        hooks::clear_target(&me);
     }
 
     /// Opens `count` sibling scopes under one parent, all open at once,
     /// then closes them oldest first; returns the time the closes took.
     fn close_siblings(count: usize) -> Duration {
-        let parent = Arc::new(ScopeState::new(None));
+        let me = owner();
+        let parent = Arc::new(ScopeState::new(None, FiberRef::from_ctx(&me)));
         let children: Vec<Arc<ScopeState>> = (0..count)
             .map(|_| {
-                let child = Arc::new(ScopeState::new(Some(Arc::clone(&parent))));
+                let child = Arc::new(ScopeState::new(
+                    Some(Arc::clone(&parent)),
+                    FiberRef::from_ctx(&me),
+                ));
                 ScopeState::link(&child);
                 child
             })
@@ -518,7 +715,10 @@ mod tests {
         let took = started.elapsed();
         assert_eq!(parent.nested_count(), 0);
         // The freed slots are used again.
-        let again = Arc::new(ScopeState::new(Some(Arc::clone(&parent))));
+        let again = Arc::new(ScopeState::new(
+            Some(Arc::clone(&parent)),
+            FiberRef::from_ctx(&me),
+        ));
         ScopeState::link(&again);
         assert_eq!(parent.inner.lock().nested.slots.len(), count);
         again.unlink();

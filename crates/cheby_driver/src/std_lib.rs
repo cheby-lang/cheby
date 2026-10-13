@@ -186,8 +186,6 @@ pub const PLANNED_STD_MODULES: &[&str] = &[
 /// fibers exist (D-754). Each entry's comment names what its test needs
 /// and the M2 package that brings it.
 pub const PENDING_SPEC_TESTS: &[(&str, &str, &str)] = &[
-    // A fiber's panic cancels the body: cancellation (U5).
-    ("fiber", "a panic in a fiber cancels the body", "M2"),
     // `spawn_with_stack`: lifecycle (L1).
     ("fiber", "a fiber can have a larger stack", "M2"),
     // `spawn_detached`: lifecycle (L1).

@@ -11,10 +11,17 @@
 //! `CHEBY_RT_STATS=1` is set ([`report`]), which is how the in-place paths
 //! are shown to be hit in the examples. The counters are a developer
 //! tool, not program behavior: nothing a program observes depends on them.
+//!
+//! Events are counted only on demand (D-768): when `CHEBY_RT_STATS=1` is
+//! set or a test turns counting on ([`count_events`]). Otherwise
+//! recording one costs a relaxed load of a process-wide flag
+//! ([`counting`]) and nothing else, not even the lookup of the current
+//! domain. The domains' allocation and byte accounting (D-564, D-617,
+//! D-691) is not an event and is always on.
 
 use std::fmt::Write as _;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::time::Duration;
 
 use crossbeam_utils::CachePadded;
@@ -177,10 +184,13 @@ impl Stats {
     }
 }
 
-/// Records `event` in the current accounting domain: the running fiber's,
-/// or a host thread's.
+/// Records `event` in the current accounting domain, the running fiber's
+/// or a host thread's, when events are counted ([`counting`], D-768).
+#[inline]
 pub(crate) fn record(event: Event) {
-    crate::alloc::record_event(event);
+    if counting() {
+        crate::alloc::record_event(event);
+    }
 }
 
 /// Whether `CHEBY_RT_STATS=1` asks `cheby run` for the counters (read once
@@ -189,6 +199,58 @@ pub(crate) fn record(event: Event) {
 pub fn enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var_os("CHEBY_RT_STATS").is_some_and(|value| value == "1"))
+}
+
+/// [`COUNTING`] before its first read.
+const COUNTING_UNKNOWN: u8 = 0;
+/// [`COUNTING`] when events are not counted.
+const COUNTING_OFF: u8 = 1;
+/// [`COUNTING`] when events are counted.
+const COUNTING_ON: u8 = 2;
+
+/// Whether events are counted, process-wide (D-768): unknown until the
+/// first [`counting`] reads [`enabled`], then on or off; [`count_events`]
+/// turns it on for good.
+static COUNTING: AtomicU8 = AtomicU8::new(COUNTING_UNKNOWN);
+
+/// Whether the runtime counts events now (D-768): when `CHEBY_RT_STATS=1`
+/// is set, or since a test called [`count_events`]. One relaxed load of a
+/// process-wide flag on every path after the first. A stale read can only
+/// miss events while a test turns counting on, and a test reads only the
+/// events it caused after turning it on.
+#[inline]
+#[must_use]
+pub fn counting() -> bool {
+    match COUNTING.load(Ordering::Relaxed) {
+        COUNTING_ON => true,
+        COUNTING_OFF => false,
+        _ => counting_first(),
+    }
+}
+
+/// [`counting`]'s first read: settles the flag from [`enabled`] unless a
+/// test has turned it on meanwhile.
+#[cold]
+#[inline(never)]
+fn counting_first() -> bool {
+    let state = if enabled() { COUNTING_ON } else { COUNTING_OFF };
+    match COUNTING.compare_exchange(
+        COUNTING_UNKNOWN,
+        state,
+        Ordering::Relaxed,
+        Ordering::Relaxed,
+    ) {
+        Ok(_) => state == COUNTING_ON,
+        Err(current) => current == COUNTING_ON,
+    }
+}
+
+/// Turns event counting on for the rest of the process, whatever
+/// `CHEBY_RT_STATS` says (D-768): the tests that read counters call it
+/// first. Counting never turns off again, so tests running in parallel
+/// cannot turn it off under each other.
+pub fn count_events() {
+    COUNTING.store(COUNTING_ON, Ordering::Relaxed);
 }
 
 /// A duration in milliseconds with three decimals.
@@ -233,8 +295,22 @@ mod tests {
         }
     }
 
+    /// D-768: a test turns counting on for good, whatever the first read
+    /// of `CHEBY_RT_STATS` settled.
+    #[test]
+    fn a_test_turns_counting_on() {
+        let _ = counting();
+        count_events();
+        assert!(counting());
+        assert_eq!(COUNTING.load(Ordering::Relaxed), COUNTING_ON);
+        // A first read that loses to the test keeps counting on.
+        assert!(counting_first());
+        assert!(counting());
+    }
+
     #[test]
     fn records_go_to_the_current_domain() {
+        count_events();
         let domain = crate::alloc::Domain::new();
         crate::alloc::with_domain(std::sync::Arc::clone(&domain), || {
             record(Event::ListPushInPlace);
@@ -255,6 +331,7 @@ mod tests {
         use crate::alloc::{current_domain, live};
         use crate::helpers::{cheby_rt_str_append, cheby_rt_str_with_capacity};
         use crate::{rc, values};
+        count_events();
         let domain = current_domain();
         let count = |event| domain.stats().count(event);
         let before = live();

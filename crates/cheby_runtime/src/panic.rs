@@ -121,12 +121,24 @@ pub(crate) unsafe fn report_of(kind: u32, message: Word, location: Word) -> Pani
     }
 }
 
+/// What the body of the slow paths found ([`stack_slow`]); 0, the guard's
+/// sentinel, when a raise inside it (the deadline) set the flag already.
+mod found {
+    /// Nothing more to do: return to the function.
+    pub(super) const NOTHING: u8 = 0;
+    /// The stack overflowed.
+    pub(super) const OVERFLOW: u8 = 1;
+    /// The fiber is cancelled (D-688, step 3).
+    pub(super) const CANCEL: u8 = 2;
+}
+
 /// The slow path of the function-entry stack check: called when the stack
 /// pointer is below `ctx.stack_limit`. Handles the pending interrupt
 /// reasons in the order of D-688 (safepoint, cancellation, deadline,
-/// yield; the deadline and the yield have an effect so far), lowers the
-/// soft limit of a fiber that goes deeper (D-677), and returns, or panics
-/// with [`PanicKind::StackOverflow`] if the hard limit is reached.
+/// yield; the safepoint has no effect yet), lowers the soft limit of a
+/// fiber that goes deeper (D-677), and returns; or delivers a cancellation
+/// or panics with [`PanicKind::StackOverflow`] if the hard limit is
+/// reached, both by setting the unwind flag and returning (D-700, D-733).
 ///
 /// # Safety
 ///
@@ -135,10 +147,30 @@ pub(crate) unsafe fn report_of(kind: u32, message: Word, location: Word) -> Pani
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_rt_stack_slow(ctx: *mut ExecCtx, location: Word) {
     // SAFETY: forwarded from the caller.
-    let overflowed = guarded(Some(ctx), || unsafe { stack_slow(ctx, 0) });
-    if overflowed {
+    let found = guarded(Some(ctx), || unsafe { stack_slow(ctx, 0) });
+    // SAFETY: forwarded from the caller.
+    unsafe { act(ctx, location, found) }
+}
+
+/// Acts on what the body of a slow path found, from the slow path's
+/// outermost frame, so that no Rust unwinding runs at the entry check
+/// (D-700).
+///
+/// # Safety
+///
+/// As for [`cheby_rt_stack_slow`].
+unsafe fn act(ctx: *mut ExecCtx, location: Word, found: u8) {
+    match found {
         // SAFETY: forwarded from the caller.
-        unsafe { overflow(ctx, location) }
+        found::OVERFLOW => unsafe { overflow(ctx, location) },
+        found::CANCEL => {
+            // SAFETY: forwarded from the caller; the slow path's body found
+            // the context, so it is not null.
+            if let Some(fiber) = unsafe { ctx.as_ref() } {
+                crate::unwind::raise::cancel_from_runtime(fiber);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -166,11 +198,9 @@ pub unsafe extern "C" fn cheby_rt_stack_slow_frame(
 ) {
     let needed = frame_size.saturating_add(LARGE_FRAME_MARGIN);
     // SAFETY: forwarded from the caller.
-    let overflowed = guarded(Some(ctx), || unsafe { stack_slow(ctx, needed) });
-    if overflowed {
-        // SAFETY: forwarded from the caller.
-        unsafe { overflow(ctx, location) }
-    }
+    let found = guarded(Some(ctx), || unsafe { stack_slow(ctx, needed) });
+    // SAFETY: forwarded from the caller.
+    unsafe { act(ctx, location, found) }
 }
 
 /// Raises the stack overflow both slow paths found, from their outermost
@@ -188,14 +218,15 @@ unsafe fn overflow(ctx: *mut ExecCtx, location: Word) {
 }
 
 /// The body of both slow paths: handles the pending interrupt, then
-/// returns whether fewer than `needed` bytes are left above the real
-/// limit, a stack overflow. Runs in the slow paths' guard: the deadline of
-/// constant evaluation raises inside it.
+/// returns what it found: a cancellation to deliver, or whether fewer than
+/// `needed` bytes are left above the real limit, a stack overflow. Runs in
+/// the slow paths' guard: the deadline of constant evaluation raises inside
+/// it.
 ///
 /// # Safety
 ///
 /// As for [`cheby_rt_stack_slow`].
-unsafe fn stack_slow(ctx: *mut ExecCtx, needed: u64) -> bool {
+unsafe fn stack_slow(ctx: *mut ExecCtx, needed: u64) -> u8 {
     // SAFETY: forwarded from the caller.
     let Some(context) = (unsafe { ctx.as_ref() }) else {
         fatal(format_args!(
@@ -207,9 +238,18 @@ unsafe fn stack_slow(ctx: *mut ExecCtx, needed: u64) -> bool {
     if reasons != 0 {
         context.count_interrupt();
     }
-    // 2. A safepoint stops the fiber, and 3. a cancellation unwinds it;
-    // both are accepted and ignored until the runtime stops fibers and
-    // cancels scopes.
+    // 2. A safepoint stops the fiber: accepted and ignored until the
+    // runtime stops fibers (L1).
+    // 3. A cancellation unwinds it (D-688, D-706), skipping the later
+    // steps. It is level-triggered from the target, read under the fiber
+    // lock whether or not CANCEL was among the reasons: the walk sets the
+    // target before it requests CANCEL, so a reason lost in a race cannot
+    // drop it. A fiber that is unwinding already goes on with its record.
+    if crate::fiber_ops::cancel::check(context).is_err()
+        && !crate::unwind::record::unwinding(context)
+    {
+        return found::CANCEL;
+    }
     // 4. The constant-evaluation deadline (D-195, D-536). A request that
     // finds the deadline not passed yet is ignored; the watchdog repeats
     // it.
@@ -236,9 +276,9 @@ unsafe fn stack_slow(ctx: *mut ExecCtx, needed: u64) -> bool {
             if low < context.real_stack_limit() {
                 context.lower_soft_limit(low);
             }
-            false
+            found::NOTHING
         }
-        _ => true,
+        _ => found::OVERFLOW,
     }
 }
 

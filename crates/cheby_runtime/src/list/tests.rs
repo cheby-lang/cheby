@@ -441,6 +441,7 @@ fn helpers_follow_the_ownership_of_plan_4_1() {
 #[test]
 fn owned_slices_reuse_a_unique_root() {
     use crate::stats::Event;
+    crate::stats::count_events();
     balanced(|| {
         let domain = crate::alloc::current_domain();
         let count = |event| domain.stats().count(event);
@@ -482,6 +483,7 @@ fn owned_slices_reuse_a_unique_root() {
 #[test]
 fn pushes_are_counted_by_path() {
     use crate::stats::Event;
+    crate::stats::count_events();
     balanced(|| {
         let domain = crate::alloc::current_domain();
         let count = |event| domain.stats().count(event);

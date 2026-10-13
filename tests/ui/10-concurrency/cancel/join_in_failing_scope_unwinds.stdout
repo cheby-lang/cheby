@@ -1,0 +1,3 @@
+panicked at tests/ui/10-concurrency/cancel/join_in_failing_scope_unwinds.cheby:15:3:
+the sibling failed
+the joiner reported: Err(Nil)

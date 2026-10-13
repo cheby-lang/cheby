@@ -556,8 +556,7 @@ impl Translator<'_, '_> {
     /// `cheby_rt_drop`. With `checked_rc`, always the runtime call.
     pub(crate) fn drop_value(&mut self, v: Value) -> Result<(), CodegenError> {
         if self.opts.checked_rc {
-            self.runtime_call(RuntimeFunc::Drop, &[v])?;
-            return Ok(());
+            return self.drop_call(v);
         }
         let object = self.b.create_block();
         let fast = self.b.create_block();
@@ -579,9 +578,19 @@ impl Translator<'_, '_> {
         let static_object = self.b.ins().icmp_imm_s(IntCC::Equal, rc, 0);
         self.b.ins().brif(static_object, done, &[], slow, &[]);
         self.b.switch_to_block(slow);
-        self.runtime_call(RuntimeFunc::Drop, &[v])?;
+        self.drop_call(v)?;
         self.b.ins().jump(done, &[]);
         self.b.switch_to_block(done);
+        Ok(())
+    }
+
+    /// The out-of-line drop of the uniform word `v`:
+    /// `cheby_rt_drop(ctx, v)`, given the function's `ctx` so that the
+    /// free path reads the block cache through the control block
+    /// (GAP(drop-with-ctx), D-739).
+    pub(crate) fn drop_call(&mut self, v: Value) -> Result<(), CodegenError> {
+        let ctx = self.ctx()?;
+        self.runtime_call(RuntimeFunc::Drop, &[ctx, v])?;
         Ok(())
     }
 

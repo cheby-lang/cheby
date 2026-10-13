@@ -568,7 +568,8 @@ impl Translator<'_, '_> {
                         "the entry pad drops {local:?}, which is not a parameter"
                     ))
                 })?;
-            self.runtime_call(RuntimeFunc::Drop, &[value])?;
+            // `ctx` is the outer function's first parameter (`outer_entry`).
+            self.drop_call(value)?;
         }
         self.unwind_resume()
     }
@@ -665,7 +666,7 @@ impl Translator<'_, '_> {
                 if self.in_pad {
                     // A pad is cold: its drops call the runtime out of
                     // line, which keeps it small.
-                    self.runtime_call(RuntimeFunc::Drop, &[v])?;
+                    self.drop_call(v)?;
                 } else {
                     self.drop_value(v)?;
                 }

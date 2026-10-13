@@ -1,0 +1,3 @@
+the outer scope failed
+report: Err(Nil)
+send after the scope: Err(Nil)

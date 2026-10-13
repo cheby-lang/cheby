@@ -1043,6 +1043,67 @@ fn flag_pads_follow_their_sources() {
     );
 }
 
+/// GAP(drop-with-ctx): `cheby_rt_drop` takes the function's `ctx` first,
+/// so that the free path reads the block cache through the control block
+/// (D-739). Every call of it passes the entry block's `ctx`: the pads'
+/// drops, and with `checked_rc` every drop.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn drops_pass_their_functions_ctx() {
+    let cx = CodegenCx {
+        layouts: &BuiltinLayouts,
+    };
+    for checked_rc in [false, true] {
+        let opts = CodegenOptions {
+            checked_rc,
+            ..CodegenOptions::default()
+        };
+        let units = [edges_unit()];
+        let mut m = module();
+        let mut decls = Decls::new(cranelift_module::Module::isa(&m)).unwrap();
+        declare(&mut m, &mut decls, &units, &cx, &opts).unwrap();
+        let (id, signature) = decls.runtime(runtime::RuntimeFunc::Drop).unwrap();
+        assert_eq!(signature.params.len(), 2, "{signature}");
+        assert!(signature.returns.is_empty(), "{signature}");
+        let clif = translate(&units[0], &units[0].functions[0], &decls, &cx, &opts).unwrap();
+        let text = decls.describe(&clif);
+        let drop_ref = format!(" = u0:{} sig", id.as_u32());
+        let name = text
+            .lines()
+            .find_map(|line| {
+                let (name, rest) = line.trim().split_once(" = ")?;
+                format!(" = {rest}")
+                    .starts_with(&drop_ref)
+                    .then(|| name.to_owned())
+            })
+            .unwrap_or_else(|| panic!("no reference to `cheby_rt_drop`:\n{text}"));
+        // The entry block's first parameter is `ctx`.
+        let ctx = text
+            .lines()
+            .find_map(|line| {
+                let params = line.strip_prefix("block")?.split_once('(')?.1;
+                Some(params.split_once(':')?.0.to_owned())
+            })
+            .unwrap();
+        let call = format!("call {name}(");
+        let calls: Vec<&str> = text
+            .lines()
+            .map(str::trim)
+            .filter(|line| line.starts_with(&call))
+            .collect();
+        assert!(calls.len() >= 2, "checked_rc {checked_rc}:\n{text}");
+        for line in calls {
+            assert!(
+                line.starts_with(&format!("{call}{ctx}, ")),
+                "checked_rc {checked_rc}: {line}\n{text}"
+            );
+        }
+    }
+}
+
 /// `f() { _0 = call g() unwind bb1; return nil }  bb1: resume`, and
 /// `g() -> ret { return 0 }`, both Cheby functions: `f` calls `g`, whose
 /// MIR result is `ret`, with an unwind edge.

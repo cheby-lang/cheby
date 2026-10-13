@@ -23,7 +23,9 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
-/// The environment variable that turns on the runtime's counters (D-635).
+/// The environment variable that turns on the runtime's counters (D-635):
+/// its events are counted only when it is set (D-768), so the timed runs
+/// do not pay for them.
 const STATS_ENV: &str = "CHEBY_RT_STATS";
 
 /// The command's options.

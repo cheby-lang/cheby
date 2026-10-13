@@ -37,10 +37,11 @@
 //! it while it runs (D-686).
 //!
 //! A fiber of a runtime has its block at the top of its stack slot (D-677)
-//! with the scheduler's fields (`sched`); the structured-concurrency
-//! (`conc`) and unwinding (`unwinding`) parts are placeholders their
-//! packages fill (plan §2.4). An isolated entry's block is on the heap and
-//! has no runtime.
+//! with the scheduler's fields (`sched`), the structured-concurrency part
+//! (`conc`: its scopes and the fiber lock over its cancellation target and
+//! wait node, the only state other fibers touch, D-706) and the record of
+//! the unwinding in flight (`unwinding`). An isolated entry's block is on
+//! the heap and has no runtime.
 //!
 //! # Stack limits
 //!
@@ -68,11 +69,15 @@ use crate::unwind::UnwindState;
 
 /// The reasons for an interrupt (D-688), bits of the FCB's reason word.
 pub mod reason {
-    /// The scheduler asks the fiber to yield (D-028). Accepted and ignored
-    /// until the scheduler exists.
+    /// The scheduler asks the fiber to yield (D-028, D-688): the slow path
+    /// puts a fiber of a runtime back in a run queue; an isolated entry
+    /// ignores it.
     pub const YIELD: u32 = 1;
-    /// The fiber's scope is cancelled (D-688). Accepted and ignored until
-    /// cancellation exists.
+    /// A cancellation reached the fiber (D-688): the walk sets the fiber's
+    /// target, then requests it, so the next entry check takes the slow
+    /// path, whose step 3 delivers the cancellation from the target
+    /// (`fiber_ops::cancel::check`). A scope's close clears it with its own
+    /// target ([`super::clear_reason`]).
     pub const CANCEL: u32 = 2;
     /// Constant evaluation's deadline may have passed (D-195, D-536).
     pub const DEADLINE: u32 = 4;
@@ -144,7 +149,10 @@ pub struct ExecCtx {
     outcome: Option<Sender<EntryOutcome>>,
     /// The scheduler's fields (D-689).
     pub(crate) sched: FiberSched,
-    /// Structured concurrency: scope, join and the fiber lock (plan §2.4).
+    /// Structured concurrency: the fiber's scopes, and the fiber lock over
+    /// its cancellation target and wait node (D-706). After the
+    /// generated-code view, like every field added since: no `abi::CTX_*`
+    /// offset depends on it.
     pub(crate) conc: FiberConc,
     /// The unwinding in flight (plan §2.4).
     pub(crate) unwinding: UnwindState,
@@ -397,6 +405,24 @@ pub(crate) fn take(ctx: &ExecCtx) -> u32 {
     ctx.stack_limit
         .store(ctx.soft_limit.load(Ordering::Relaxed), Ordering::SeqCst);
     ctx.reasons.swap(0, Ordering::SeqCst)
+}
+
+/// Clears the pending `reason` bit of the fiber `ctx` without taking the
+/// others (D-688): a `fetch_and` of its complement. A scope's close calls
+/// it for [`reason::CANCEL`] once it has cleared its own cancellation
+/// target (D-706, architecture §7.5 step 3), so that a request the walk
+/// made is not delivered again after the cancellation it stood for has
+/// ended. The forced stack limit, if any, stays: the next entry check then
+/// takes the slow path once and finds nothing to do.
+pub(crate) fn clear_reason(ctx: &ExecCtx, reason: u32) {
+    ctx.reasons.fetch_and(!reason, Ordering::SeqCst);
+}
+
+/// Whether the reason bit `reason` is pending for the fiber `ctx`, without
+/// taking it.
+#[cfg(test)]
+pub(crate) fn pending(ctx: &ExecCtx, reason: u32) -> bool {
+    ctx.reasons.load(Ordering::SeqCst) & reason != 0
 }
 
 #[cfg(test)]

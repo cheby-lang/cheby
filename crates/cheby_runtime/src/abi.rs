@@ -433,7 +433,7 @@ pub mod sym {
     pub const ALLOC: &str = "cheby_rt_alloc";
     /// `void cheby_rt_dup(uint64_t value)`.
     pub const DUP: &str = "cheby_rt_dup";
-    /// `void cheby_rt_drop(uint64_t value)`.
+    /// `void cheby_rt_drop(ExecCtx *ctx, uint64_t value)` (GAP(drop-with-ctx)).
     pub const DROP: &str = "cheby_rt_drop";
     /// `_Noreturn void cheby_rt_panic(ExecCtx *ctx, uint32_t kind, uint64_t message, uint64_t location)`.
     pub const PANIC: &str = "cheby_rt_panic";

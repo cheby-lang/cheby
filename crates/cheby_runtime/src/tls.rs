@@ -21,7 +21,8 @@
 //! - the current fiber: the control block ([`ExecCtx`]) of the fiber
 //!   running on this thread, or null;
 //! - the shard index: which shard of an accounting domain's counters this
-//!   thread charges (D-691);
+//!   thread charges (D-691), exclusive to it when it runs fibers and one
+//!   is free (GAP(single-writer-shards));
 //! - the host slot: what a thread that runs no fiber charges and counts
 //!   (its current accounting domain and scratch counts), M1's per-thread
 //!   behavior for host code;
@@ -41,7 +42,7 @@ use std::cell::{Cell, RefCell};
 use std::hint::black_box;
 use std::ptr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use crate::abi::Word;
 use crate::alloc::{BlockCache, Domain, Quarantine};
@@ -62,11 +63,86 @@ pub(crate) struct Host {
 /// A shard index not assigned yet.
 const NO_SHARD: usize = usize::MAX;
 
+/// The shard of accounting domains a thread charges (D-691), and whether it
+/// tried to claim an exclusive one. An index below `alloc::shard_count()`
+/// is exclusive: this thread holds that bit of [`EXCLUSIVE`] and is the
+/// only thread that charges that shard of any domain, so it charges it
+/// with plain relaxed stores (GAP(single-writer-shards)). Any other index
+/// is shared and charged with atomic adds. The exclusive bit is given
+/// back when the thread ends.
+#[derive(Debug)]
+struct ShardSlot {
+    index: Cell<usize>,
+    tried_exclusive: Cell<bool>,
+}
+
+impl Drop for ShardSlot {
+    fn drop(&mut self) {
+        let index = self.index.get();
+        if index < crate::alloc::shard_count() {
+            // Release: this thread's last charges to the shard happen
+            // before the next holder's first (`claim_exclusive`).
+            EXCLUSIVE.fetch_and(!exclusive_bit(index), Ordering::Release);
+        }
+    }
+}
+
+/// The exclusive shards held by live threads, one bit per index below
+/// `alloc::shard_count()` (at most 64).
+static EXCLUSIVE: AtomicU64 = AtomicU64::new(0);
+
+/// The bit of [`EXCLUSIVE`] for the exclusive shard `index` (below 64).
+fn exclusive_bit(index: usize) -> u64 {
+    u32::try_from(index)
+        .ok()
+        .and_then(|shift| 1_u64.checked_shl(shift))
+        .unwrap_or(0)
+}
+
+/// Claims a free exclusive shard for this thread, or `None` when every one
+/// is held. Acquire: the previous holder's charges to it happen before
+/// this thread's (its `ShardSlot::drop`).
+fn claim_exclusive() -> Option<usize> {
+    let count = crate::alloc::shard_count();
+    let all = u64::MAX >> 64_usize.saturating_sub(count).min(63);
+    let mut held = EXCLUSIVE.load(Ordering::Relaxed);
+    loop {
+        let free = !held & all;
+        if free == 0 {
+            return None;
+        }
+        let bit = free.isolate_lowest_one();
+        match EXCLUSIVE.compare_exchange_weak(
+            held,
+            held | bit,
+            Ordering::Acquire,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => return usize::try_from(bit.trailing_zeros()).ok(),
+            Err(now) => held = now,
+        }
+    }
+}
+
+/// A new shared shard index: past the exclusive ones, distinct per call;
+/// a domain reduces it to one of its shared shards.
+fn next_shared_shard() -> usize {
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    // Below `NO_SHARD`, whatever the count.
+    let sequence = NEXT.fetch_add(1, Ordering::Relaxed) & (usize::MAX >> 2);
+    crate::alloc::shard_count().saturating_add(sequence)
+}
+
 thread_local! {
     /// The control block of the fiber running on this thread, or null.
     static CURRENT_FIBER: Cell<*mut ExecCtx> = const { Cell::new(ptr::null_mut()) };
     /// The shard of accounting domains this thread charges (D-691).
-    static SHARD: Cell<usize> = const { Cell::new(NO_SHARD) };
+    static SHARD: ShardSlot = const {
+        ShardSlot {
+            index: Cell::new(NO_SHARD),
+            tried_exclusive: Cell::new(false),
+        }
+    };
     /// The host slot.
     static HOST: Host = const {
         Host {
@@ -102,11 +178,10 @@ pub(crate) fn current_fiber() -> *mut ExecCtx {
 /// record is cleared, so a control block holds the address only while it
 /// is current here. The address is recomputed at every call, so a fiber
 /// that migrates holds its new thread's cache from its first instruction
-/// there (D-686). GAP(fcb-thread-cache-address): D-686 says every access
-/// goes through an accessor; reading this recorded address from the
-/// control block is read as allowed, because the hazard D-686 names (an
-/// address reused after a switch to another thread) cannot arise: the
-/// record is rewritten at every switch-in and the readers never suspend.
+/// there (D-686). Reading this recorded address from the control block is
+/// allowed (D-739): the hazard D-686 names (an address reused after a
+/// switch to another thread) cannot arise, because the record is
+/// rewritten at every switch-in and the readers never suspend.
 ///
 /// # Safety
 ///
@@ -126,31 +201,65 @@ pub(crate) unsafe fn set_current_fiber(fiber: *mut ExecCtx) -> *mut ExecCtx {
     }
     // SAFETY: forwarded from the caller.
     if let Some(ctx) = unsafe { black_box(fiber).as_ref() } {
-        ctx.set_shard(shard_index());
+        ctx.set_shard(fiber_shard_index());
         let cache = CACHE.try_with(ptr::from_ref).unwrap_or(ptr::null());
         ctx.set_block_cache(black_box(cache));
     }
     black_box(previous)
 }
 
-/// The shard of accounting domains this thread charges (D-691). Each
-/// thread gets the next index the first time it asks; a domain reduces it
-/// modulo its number of shards.
+/// The shard of accounting domains this thread charges (D-691). A thread
+/// that runs fibers claims an exclusive shard the first time one becomes
+/// current on it ([`set_current_fiber`]), while one is free
+/// (GAP(single-writer-shards)); any other thread, and a fiber thread
+/// beyond the number of shards, gets a shared index the first time it
+/// asks, distinct per thread, which a domain reduces to one of its shared
+/// shards. During thread teardown, a shared index.
 #[inline(never)]
 pub(crate) fn shard_index() -> usize {
-    static NEXT: AtomicUsize = AtomicUsize::new(0);
     SHARD
-        .try_with(|cell| {
-            let index = cell.get();
+        .try_with(|slot| {
+            let index = slot.index.get();
             if index != NO_SHARD {
                 return index;
             }
-            // Below `NO_SHARD`, whatever the count.
-            let index = NEXT.fetch_add(1, Ordering::Relaxed) & (usize::MAX >> 1);
-            cell.set(index);
+            let index = next_shared_shard();
+            slot.index.set(index);
             index
         })
-        .unwrap_or(0)
+        .unwrap_or_else(|_| crate::alloc::shard_count())
+}
+
+/// [`shard_index`] for a thread a fiber becomes current on: the first time,
+/// it claims an exclusive shard if one is free (GAP(single-writer-shards)).
+fn fiber_shard_index() -> usize {
+    SHARD
+        .try_with(|slot| {
+            if !slot.tried_exclusive.replace(true)
+                && let Some(index) = claim_exclusive()
+            {
+                slot.index.set(index);
+                return index;
+            }
+            let index = slot.index.get();
+            if index != NO_SHARD {
+                return index;
+            }
+            let index = next_shared_shard();
+            slot.index.set(index);
+            index
+        })
+        .unwrap_or_else(|_| crate::alloc::shard_count())
+}
+
+/// Whether this thread holds the exclusive shard `index`: the condition
+/// under which it may charge that shard with plain stores (debug checks).
+#[inline(never)]
+pub(crate) fn holds_exclusive_shard(index: usize) -> bool {
+    index < crate::alloc::shard_count()
+        && SHARD
+            .try_with(|slot| slot.index.get() == index)
+            .unwrap_or(false)
 }
 
 /// Calls `f` with this thread's host slot; `None` during thread teardown.

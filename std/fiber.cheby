@@ -116,6 +116,21 @@ test "a panic in the body is caught by its scope" {
   assert message(failure) == "boom"
 }
 
+test "a panic in a fiber cancels the body" {
+  let (keep, never) = channel::new::<Int>(1)
+  let outcome = {
+    use owner <- scope()
+    spawn(owner, fn() { panic as "first" })
+    // Nothing is ever sent on `never`, so only the cancellation ends
+    // this wait.
+    channel::receive(never)
+  }
+  let assert Err(failure) = outcome
+  assert message(failure) == "first"
+  // Unwinding the body released `never`, the only `Receiver`.
+  assert channel::send(keep, 1) == Err(1)
+}
+
 test "a nested scope keeps a fiber's panic to itself" {
   let outcome = {
     use outer <- scope()

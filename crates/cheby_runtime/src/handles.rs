@@ -8,7 +8,7 @@
 //! value of an external type (D-233, D-590), through the kinds' `handle`
 //! flag ([`CustomKind::handle`]).
 //!
-//! GAP(handle-object-shape): the objects of kinds 40 to 43 are 24 bytes:
+//! (D-750) The objects of kinds 40 to 43 are 24 bytes:
 //! the header, a pointer to the boxed Rust payload ([`HandlePayload`]), and
 //! a pointer to the payload's vtable. The payload is shared by every copy
 //! of the value (copies share the object), so it is `Send + Sync`. When the

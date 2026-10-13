@@ -12,7 +12,8 @@ pub enum RuntimeFunc {
     Alloc,
     /// `void cheby_rt_dup(uint64_t value)`.
     Dup,
-    /// `void cheby_rt_drop(uint64_t value)`.
+    /// `void cheby_rt_drop(ExecCtx *ctx, uint64_t value)`: the free path
+    /// reads the block cache through `ctx` (GAP(drop-with-ctx)).
     Drop,
     /// `void cheby_rt_panic(ExecCtx *ctx, uint32_t kind, uint64_t message, uint64_t location)`:
     /// records the panic, sets the flag and returns (D-733).
@@ -143,9 +144,9 @@ impl RuntimeFunc {
             Self::Alloc | Self::StrAppend | Self::ListPush | Self::ListAppend => {
                 (&[Ptr, U64, U64], U64)
             }
-            Self::Dup | Self::Drop => (&[Ptr], Void),
+            Self::Dup => (&[Ptr], Void),
             Self::Panic => (&[Ptr, U32, Ptr, Ptr], Void),
-            Self::StackSlow | Self::EffectCheck => (&[Ptr, Ptr], Void),
+            Self::Drop | Self::StackSlow | Self::EffectCheck => (&[Ptr, Ptr], Void),
             Self::BoxI64 | Self::StrWithCapacity => (&[Ptr, I64], U64),
             Self::BoxU64 | Self::ConstMissing | Self::Debug => (&[Ptr, U64], U64),
             Self::BoxF64 => (&[Ptr, F64], U64),

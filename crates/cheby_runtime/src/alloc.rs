@@ -30,7 +30,10 @@
 //! A domain's counters are sharded (D-691): each thread charges its own
 //! cache line, and reading sums the shards, which is exact whenever no
 //! thread is charging the domain meanwhile (at exit, at a test's end, or
-//! during a constant evaluation, which runs on one thread).
+//! during a constant evaluation, which runs on one thread). A thread that
+//! runs fibers holds an exclusive shard while one is free, and charges it
+//! with plain relaxed stores; other threads share the remaining shards
+//! and charge them with atomic adds (GAP(single-writer-shards)).
 //!
 //! # Poisoning
 //!
@@ -122,7 +125,9 @@ pub(crate) fn shard_count() -> usize {
 impl Default for Domain {
     fn default() -> Self {
         Self {
-            shards: (0..shard_count())
+            // The exclusive shards, then as many shared ones
+            // (GAP(single-writer-shards)).
+            shards: (0..shard_count().saturating_mul(2))
                 .map(|_| CachePadded::new(Shard::default()))
                 .collect(),
             peak: AtomicI64::new(0),
@@ -141,12 +146,22 @@ impl Domain {
         Arc::new(Self::default())
     }
 
-    /// The shard of index `index`, reduced modulo the number of shards (a
-    /// power of two).
-    fn shard(&self, index: usize) -> &Shard {
-        let mask = self.shards.len().saturating_sub(1);
-        match self.shards.get(index & mask) {
-            Some(shard) => shard,
+    /// The shard of index `index` (`tls::shard_index`), and whether it is
+    /// exclusive to the charging thread (GAP(single-writer-shards)): an
+    /// index below the number of exclusive shards is one, and any other
+    /// is reduced to one of the shared shards that follow them (a power
+    /// of two).
+    fn shard(&self, index: usize) -> (&Shard, bool) {
+        let exclusive = self.shards.len() / 2;
+        let (slot, alone) = match index.checked_sub(exclusive) {
+            None => (index, true),
+            Some(shared) => (
+                exclusive.saturating_add(shared & exclusive.saturating_sub(1)),
+                false,
+            ),
+        };
+        match self.shards.get(slot) {
+            Some(shard) => (shard, alone),
             None => fatal(format_args!("an accounting domain has no shards")),
         }
     }
@@ -209,11 +224,31 @@ impl Domain {
         self.system_refused.store(true, Ordering::Relaxed);
     }
 
-    /// Adds `objects` and `bytes` to shard `index`.
+    /// Adds `objects` and `bytes` to shard `index`. An exclusive shard has
+    /// one writer, the thread that holds it, so it is charged with a
+    /// relaxed load and store, which cost less than an atomic add even
+    /// uncontended (GAP(single-writer-shards)); readers sum relaxed loads
+    /// as before. A shared shard takes atomic adds.
     fn charge(&self, index: usize, objects: i64, bytes: i64) {
-        let shard = self.shard(index);
-        shard.objects.fetch_add(objects, Ordering::Relaxed);
-        let before = shard.bytes.fetch_add(bytes, Ordering::Relaxed);
+        let (shard, alone) = self.shard(index);
+        let before = if alone {
+            debug_assert!(
+                tls::holds_exclusive_shard(index),
+                "an exclusive shard charged by a thread that does not hold it"
+            );
+            let count = shard.objects.load(Ordering::Relaxed);
+            shard
+                .objects
+                .store(count.wrapping_add(objects), Ordering::Relaxed);
+            let before = shard.bytes.load(Ordering::Relaxed);
+            shard
+                .bytes
+                .store(before.wrapping_add(bytes), Ordering::Relaxed);
+            before
+        } else {
+            shard.objects.fetch_add(objects, Ordering::Relaxed);
+            shard.bytes.fetch_add(bytes, Ordering::Relaxed)
+        };
         let now = before.saturating_add(bytes);
         // Most allocations stay under the shard's high: a load of its own
         // line, not a write.
@@ -328,7 +363,8 @@ fn charge(objects: i64, bytes: u64) {
 }
 
 /// Records `event` in the counters of the current domain; during thread
-/// teardown, when the host slot is gone, does nothing.
+/// teardown, when the host slot is gone, does nothing. `stats::record`
+/// calls it only when events are counted (D-768).
 pub(crate) fn record_event(event: Event) {
     with_charged(current_fiber(), |domain, shard| {
         domain.stats.record(shard, event);
@@ -529,7 +565,7 @@ pub fn alloc_object(size: u64, header: u64) -> *mut u8 {
     // One `tls.rs` accessor call finds both the fiber and a cached block
     // (GATE1-1). A fiber under a memory budget checks it before anything
     // is taken, in `alloc_in`.
-    let (ctx, cached, tried) = with_fiber_cache(|ctx, cache| {
+    let (ctx, cached, tried) = with_fiber_cache(None, |ctx, cache| {
         let unlimited = ctx.is_none_or(|ctx| ctx.budget() == u64::MAX) && !refusal_armed();
         match (cache, class) {
             (Some(cache), Some(class)) if unlimited => (ctx, cache.take(class), true),
@@ -672,14 +708,17 @@ fn test_refuses() -> bool {
 }
 
 /// Writes the header of a fresh block of `layout` and charges it to
-/// `ctx`'s domain, or without a fiber to the host's.
+/// `ctx`'s domain, or without a fiber to the host's, counting the
+/// allocation when events are counted (D-768).
 fn init_object(ctx: Option<&ExecCtx>, ptr: *mut u8, layout: Layout, header: u64) -> *mut u8 {
     // SAFETY: the allocation is at least 8 bytes and 8-aligned.
     unsafe { object::write_field(ptr, 0, header) };
     let bytes = i64::try_from(layout.size()).unwrap_or(i64::MAX);
     with_charged(ctx, |domain, shard| {
         domain.charge(shard, 1, bytes);
-        domain.stats.record(shard, Event::Alloc);
+        if crate::stats::counting() {
+            domain.stats.record(shard, Event::Alloc);
+        }
     });
     ptr
 }
@@ -893,6 +932,21 @@ impl Pending {
 /// references remain).
 pub(crate) unsafe fn free(obj: *mut u8) {
     // SAFETY: forwarded from the caller.
+    unsafe { free_in(None, obj) };
+}
+
+/// [`free`] by the fiber `ctx`, given by a caller that has its control
+/// block: generated code's `cheby_rt_drop` (GAP(drop-with-ctx)). The block
+/// cache is then read through the control block's record and the domain
+/// charged through `ctx`, with no `tls.rs` accessor call (D-739). With
+/// `None` the running fiber and the cache are looked up, as [`free`] does.
+///
+/// # Safety
+///
+/// As for [`free`]; `ctx`, when given, is the control block of the fiber
+/// running on this thread.
+pub(crate) unsafe fn free_in(ctx: Option<&ExecCtx>, obj: *mut u8) {
+    // SAFETY: forwarded from the caller.
     let (scan, id) = unsafe { scan_and_layout(obj) };
     // A scan count of 0 outside the runtime-defined kinds (26 to 63) is an
     // object that probably owns no reference: a string, a boxed number, or
@@ -900,12 +954,12 @@ pub(crate) unsafe fn free(obj: *mut u8) {
     if scan == 0
         && !(abi::layout::CUSTOM_FIRST..=abi::layout::BUILTIN_RESERVED_END).contains(&id)
         // SAFETY: forwarded from the caller.
-        && unsafe { free_leaf(obj) }
+        && unsafe { free_leaf(ctx, obj) }
     {
         return;
     }
     let mut pending = Pending::new(object::ptr_to_word(obj));
-    let (ctx, (objects, bytes)) = with_fiber_cache(|ctx, cache| {
+    let (ctx, (objects, bytes)) = with_fiber_cache(ctx, |ctx, cache| {
         // SAFETY: forwarded from the caller; every word pushed later is an
         // object whose count reached zero.
         (ctx, unsafe { drain(&mut pending, cache) })
@@ -919,8 +973,8 @@ pub(crate) unsafe fn free(obj: *mut u8) {
 ///
 /// # Safety
 ///
-/// As for [`free`].
-unsafe fn free_leaf(obj: *mut u8) -> bool {
+/// As for [`free_in`].
+unsafe fn free_leaf(ctx: Option<&ExecCtx>, obj: *mut u8) -> bool {
     // SAFETY: forwarded from the caller.
     let shape = unsafe { shape_of(obj) };
     let Children::Fields { count: 0, .. } = shape.children else {
@@ -928,7 +982,7 @@ unsafe fn free_leaf(obj: *mut u8) -> bool {
         return false;
     };
     let layout = object_layout(shape.size);
-    let ctx = with_fiber_cache(|ctx, cache| {
+    let ctx = with_fiber_cache(ctx, |ctx, cache| {
         // SAFETY: allocated by `alloc_object` with this size, which
         // `shape_of` recomputes exactly, and no reference remains.
         unsafe { release_block(obj, layout, cache) };
@@ -941,10 +995,29 @@ unsafe fn free_leaf(obj: *mut u8) -> bool {
 /// Calls `f` with the control block of the fiber running on this thread
 /// and this thread's block cache, borrowed for the call: `None` when no
 /// fiber runs, and no cache when it is in use (a finalizer freeing
-/// directly) or gone (thread teardown). One `tls.rs` accessor call
-/// (GATE1-1). `f` never suspends (D-686).
-fn with_fiber_cache<'a, R>(f: impl FnOnce(Option<&'a ExecCtx>, Option<&mut BlockCache>) -> R) -> R {
+/// directly) or gone (thread teardown). Given `known`, the running fiber's
+/// control block, the cache comes from its record and no `tls.rs`
+/// accessor is called (D-739, GAP(drop-with-ctx)); otherwise one accessor
+/// call finds both (GATE1-1). `f` never suspends (D-686).
+fn with_fiber_cache<'a, R>(
+    known: Option<&'a ExecCtx>,
+    f: impl FnOnce(Option<&'a ExecCtx>, Option<&mut BlockCache>) -> R,
+) -> R {
     let mut f = Some(f);
+    if let Some(ctx) = known {
+        let result = tls::with_cache_of(Some(ctx), |cache| {
+            let f = f.take()?;
+            let mut cache = cache.try_borrow_mut().ok();
+            Some(f(Some(ctx), cache.as_deref_mut()))
+        })
+        .flatten();
+        return match (result, f.take()) {
+            (Some(result), _) => result,
+            // Thread teardown: the cache is gone.
+            (None, Some(f)) => f(Some(ctx), None),
+            (None, None) => fatal(format_args!("the block cache's closure returned nothing")),
+        };
+    }
     let result = tls::with_fiber_and_cache(|fiber, cache| {
         let f = f.take()?;
         // SAFETY: as in `entry::current_fiber`: the current fiber is null
@@ -1996,13 +2069,13 @@ pub(crate) mod tests {
         };
         let word = crate::values::int_word(i64::MAX);
         // SAFETY: the only reference: the object is freed (and poisoned).
-        unsafe { rc::cheby_rt_drop(word) };
+        unsafe { rc::cheby_rt_drop(std::ptr::null_mut(), word) };
         // SAFETY: deliberately not: each operation reaches a freed object,
         // which the poisoning mode must catch before touching it.
         unsafe {
             match operation.as_str() {
                 "dup" => rc::cheby_rt_dup(word),
-                "drop" => rc::cheby_rt_drop(word),
+                "drop" => rc::cheby_rt_drop(std::ptr::null_mut(), word),
                 "read" => {
                     let _ = crate::values::word_to_i64(word);
                 }

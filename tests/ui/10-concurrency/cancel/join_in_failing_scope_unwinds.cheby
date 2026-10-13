@@ -1,0 +1,37 @@
+// @mode: run-pass
+// @decisions: D-668, D-178
+// @milestone: M2
+//! A member that joins a sibling which panics is cancelled with their
+//! scope, so its `join` unwinds instead of returning or panicking. The
+//! scope reports the sibling's panic, never `joined fiber failed`
+//! (§10.3, §10.7).
+
+import std::channel
+import std::fiber
+import std::io
+
+fn fail_after(start: channel::Receiver<Nil>, text: String) -> Int {
+  let _ = channel::receive(start)
+  panic as text
+}
+
+fn main() {
+  let (go_tx, go_rx) = channel::new::<Nil>(1)
+  let (report_tx, report_rx) = channel::new::<Int>(1)
+  let outcome = {
+    use owner <- fiber::scope()
+    let sibling = fiber::spawn(owner, fn() { fail_after(go_rx, "the sibling failed") })
+    let _ = fiber::spawn(owner, fn() {
+      let assert Ok(Nil) = channel::send(go_tx, Nil)
+      let value = fiber::join(sibling)
+      channel::send(report_tx, value)
+    })
+    Nil
+  }
+  case outcome {
+    Ok(_) => io::println("the scope returned Ok")
+    Err(failure) => io::println("{failure}")
+  }
+  let reported = channel::receive(report_rx)
+  io::println("the joiner reported: {reported:?}")
+}
