@@ -223,6 +223,12 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-770     | A raise in code built with `CHEBY_UNWIND_EDGES=off` reports, then exits 101 once                    |
 | D-776     | C1 missed D-766 (11.0% and 13.5% below `base`); accepted, measured again after Perceus              |
 | D-777     | Pad chains in each function's own direction; package U6 fixes the quadratic pads                    |
+| D-778     | P1 improves when head's RC geometric mean beats M1's baseline, each within 3%                       |
+| D-779     | Borrowing is inferred across a build's units; test builds may get other masks                       |
+| D-780     | P5 splits list, map, interpolation and tuple literals; general splitting later                      |
+| D-781     | P6 adds a nightly workflow for the fuzz targets; H1 extends it                                      |
+| D-782     | L1 tears down a test's detached fibers in the sequential runner                                     |
+| D-786     | A fiber blocked inline in IO is skipped at exit until the blocking pool (I1)                        |
 
 ## Open questions
 
