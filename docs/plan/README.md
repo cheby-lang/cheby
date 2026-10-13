@@ -57,7 +57,7 @@ M5 is listed as a milestone so it has exit criteria, but its work starts as soon
 
 ## Plan decisions
 
-Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-plan), D-284 onward in [M0 foundation](../decisions/LOG.md#2026-10-04-m0-foundation), D-418 onward in [Diagnostics](../decisions/LOG.md#2026-10-06-diagnostics), and the plan-level ones of [M1 syntax layer](../decisions/LOG.md#2026-10-07-m1-syntax-layer), [M1 vertical slice](../decisions/LOG.md#2026-10-07-m1-vertical-slice), [Open items](../decisions/LOG.md#2026-10-07-open-items), [M1 front end](../decisions/LOG.md#2026-10-10-m1-front-end), [M1 back-end plan](../decisions/LOG.md#2026-10-10-m1-back-end-plan), [M1 back end, wave 1](../decisions/LOG.md#2026-10-10-m1-back-end-wave-1), [M1 back end, wave 2](../decisions/LOG.md#2026-10-10-m1-back-end-wave-2), [M1 back end, wave 3](../decisions/LOG.md#2026-10-10-m1-back-end-wave-3), [M1 back end, wave 4](../decisions/LOG.md#2026-10-11-m1-back-end-wave-4), [M1 back end, wave 5](../decisions/LOG.md#2026-10-11-m1-back-end-wave-5), [M1 back end, wave 6](../decisions/LOG.md#2026-10-11-m1-back-end-wave-6), [M1 exit](../decisions/LOG.md#2026-10-11-m1-exit), [M2 design](../decisions/LOG.md#2026-10-11-m2-design) and [M2 checkpoint 1](../decisions/LOG.md#2026-10-12-m2-checkpoint-1):
+Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-plan), D-284 onward in [M0 foundation](../decisions/LOG.md#2026-10-04-m0-foundation), D-418 onward in [Diagnostics](../decisions/LOG.md#2026-10-06-diagnostics), and the plan-level ones of [M1 syntax layer](../decisions/LOG.md#2026-10-07-m1-syntax-layer), [M1 vertical slice](../decisions/LOG.md#2026-10-07-m1-vertical-slice), [Open items](../decisions/LOG.md#2026-10-07-open-items), [M1 front end](../decisions/LOG.md#2026-10-10-m1-front-end), [M1 back-end plan](../decisions/LOG.md#2026-10-10-m1-back-end-plan), [M1 back end, wave 1](../decisions/LOG.md#2026-10-10-m1-back-end-wave-1), [M1 back end, wave 2](../decisions/LOG.md#2026-10-10-m1-back-end-wave-2), [M1 back end, wave 3](../decisions/LOG.md#2026-10-10-m1-back-end-wave-3), [M1 back end, wave 4](../decisions/LOG.md#2026-10-11-m1-back-end-wave-4), [M1 back end, wave 5](../decisions/LOG.md#2026-10-11-m1-back-end-wave-5), [M1 back end, wave 6](../decisions/LOG.md#2026-10-11-m1-back-end-wave-6), [M1 exit](../decisions/LOG.md#2026-10-11-m1-exit), [M2 design](../decisions/LOG.md#2026-10-11-m2-design), [M2 checkpoint 1](../decisions/LOG.md#2026-10-12-m2-checkpoint-1), [M2 checkpoint 2 plan](../decisions/LOG.md#2026-10-12-m2-checkpoint-2-plan) and [M2 checkpoint 2](../decisions/LOG.md#2026-10-14-m2-checkpoint-2):
 
 | Decision  | Summary                                                                                             |
 | --------- | --------------------------------------------------------------------------------------------------- |
@@ -211,15 +211,18 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-733     | Unwinding by return-flag propagation (ADR-0061); U4 deletes the `try_call` prototype                |
 | D-735     | Unwinding misses D-702's 3% compile reference; a package after U4 reduces the cost                  |
 | D-741     | A pending spec test of a later milestone may be absent too                                          |
-| D-742     | Temporary `CHEBY_UNWIND` until U4; `CHEBY_UNWIND_EDGES=off` stays                                   |
+| D-742     | `CHEBY_UNWIND_EDGES=off` is the measurement switch; `CHEBY_UNWIND` is gone since U4 (D-733)         |
 | D-747     | Thread variant trials take the base goldens; the harness adds `@threads=N` for its own N            |
 | D-748     | `CHEBY_HARNESS_SCALE` multiplies the harness timeouts, from 1 to 100                                |
 | D-754     | Temporary std subset of checkpoint 1: stub kernels until T1 and L1                                  |
 | D-759     | `bench-compile`'s RC column leaves out drops in unwind cleanup pads                                 |
 | D-760     | RC group accepted on its geometric mean; a later package brings each benchmark within 3% of M1      |
-| D-766     | C1's target: build throughput no more than 10% below `base` at 100k and 1M                          |
+| D-766     | C1's target: build throughput no more than 10% below `base` at 100k and 1M (missed, D-776)          |
 | D-767     | C1 keeps the never-raise kernel table; it does not count toward the target                          |
 | D-768     | `CHEBY_RT_STATS` event counters count only on demand                                                |
+| D-770     | A raise in code built with `CHEBY_UNWIND_EDGES=off` reports, then exits 101 once                    |
+| D-776     | C1 missed D-766 (11.0% and 13.5% below `base`); accepted, measured again after Perceus              |
+| D-777     | Pad chains in each function's own direction; package U6 fixes the quadratic pads                    |
 
 ## Open questions
 
