@@ -23,16 +23,18 @@
 //!    nothing.
 //!
 //! The pass is per function, deterministic (D-264: pads are created in
-//! block and statement order, memoized in ordered maps) and linear in the
-//! size of the function times the size of its pad sets.
+//! block and statement order, from sites sorted that way, and their memo
+//! is never iterated) and linear in the size of the function times the
+//! size of its pad sets. What its simulation found at each site is kept
+//! for the validation that follows (`Recorded`,
+//! GAP(unwound-validation-split)).
 //!
 //! The code generator lowers every edge with the return flag (D-733), and
 //! `CHEBY_UNWIND_EDGES=off` skips this pass for D-702's measurement
 //! (D-742).
 
-use std::collections::BTreeMap;
-
 use cheby_iface::{Ice, Idx};
+use rustc_hash::FxHashMap;
 
 use crate::ir::{
     Abi, Block, BlockId, Const, Function, Local, MirModule, Operand, Rvalue, Stmt, Terminator,
@@ -41,9 +43,9 @@ use crate::ownership::{self, Counts, Observer};
 use crate::repr::Repr;
 
 /// Whether `stmt` may start or pass on an unwinding (D-698): a Cheby
-/// call; every foreign call (a kernel can run out of memory; a table of
-/// kernels that never raise is a later optimization); a runtime helper
-/// with [`crate::RuntimeFn::may_unwind`]; an `alloc`; a `box` that may
+/// call; a foreign call (a kernel can run out of memory), except one of
+/// the kernels that never raise ([`crate::never_raise`], D-767); a runtime
+/// helper with [`crate::RuntimeFn::may_unwind`]; an `alloc`; a `box` that may
 /// allocate; a `load_const` (its cold path forces the constant); checked
 /// arithmetic. Never `dup` or `drop` (a drop aborts on a panic, D-171; a
 /// count overflow makes the object static, D-454), field reads, compares
@@ -62,10 +64,10 @@ pub fn stmt_may_unwind(stmt: &Stmt) -> bool {
 pub fn rvalue_may_unwind(value: &Rvalue) -> bool {
     match value {
         Rvalue::Call { .. }
-        | Rvalue::CallForeign { .. }
         | Rvalue::Alloc { .. }
         | Rvalue::LoadConst(_)
         | Rvalue::Checked { .. } => true,
+        Rvalue::CallForeign { symbol, .. } => !crate::never_raise::never_raises(symbol),
         Rvalue::CallRuntime { func, .. } => func.may_unwind(),
         Rvalue::Box { value, from } => box_may_allocate(value, *from),
         Rvalue::Use(_)
@@ -154,14 +156,37 @@ pub fn insert_module(module: &mut MirModule) -> Result<(), Ice> {
 /// An [`Ice`] if the reference counts of `f` do not balance, or `f` is
 /// malformed.
 pub fn insert(f: &mut Function) -> Result<(), Ice> {
+    match insert_recording(f)? {
+        Ok(_) => Ok(()),
+        Err(errors) => Err(Ice::new(format!(
+            "the unwind pass needs balanced reference counts:\n  {}",
+            errors.join("\n  ")
+        ))),
+    }
+}
+
+/// [`insert`], returning what the pass's ownership simulation found: the
+/// state at every unwind site, which `validate`'s pad check compares each
+/// pad chain with, or the broken ownership rules, with `f` left as it was
+/// (GAP(unwound-validation-split)).
+///
+/// # Errors
+///
+/// An [`Ice`] if `f` is malformed.
+pub(crate) fn insert_recording(f: &mut Function) -> Result<Result<Recorded, Vec<String>>, Ice> {
     let mut sites = Sites::default();
     ownership::simulate(f, &mut sites)?;
     if !sites.errors.is_empty() {
-        return Err(Ice::new(format!(
-            "the unwind pass needs balanced reference counts:\n  {}",
-            sites.errors.join("\n  ")
-        )));
+        return Ok(Err(sites.errors));
     }
+    let mut recorded = Recorded {
+        sites: sites.found,
+        locals: sites.locals,
+    };
+    // Each instruction is reported once, so the keys are unique.
+    recorded
+        .sites
+        .sort_unstable_by_key(|site| (site.block, site.at));
     let mut pads = Pads::new(f.blocks.len());
     if f.entry_unwind.is_none() && f.abi == Abi::Cheby {
         let mut params = Vec::new();
@@ -173,23 +198,28 @@ pub fn insert(f: &mut Function) -> Result<(), Ice> {
         params.sort_unstable();
         f.entry_unwind = Some(pads.pad(&params)?);
     }
-    // In block and statement order, so pads are numbered deterministically.
-    let mut new_edges: BTreeMap<BlockId, Vec<(u32, BlockId)>> = BTreeMap::new();
-    for ((block, at), owned) in sites.found {
-        let b = f.block(block)?;
-        if b.unwind_target(at).is_some() {
+    // In block and statement order, so pads are numbered deterministically
+    // (D-264); the sites are sorted, so each block's new edges are
+    // consecutive.
+    let mut new_edges: Vec<(BlockId, u32, BlockId)> = Vec::new();
+    for site in &recorded.sites {
+        let b = f.block(site.block)?;
+        if b.unwind_target(site.at).is_some() {
             continue;
         }
-        let at = u32::try_from(at).map_err(|_| Ice::new("a block too large to number"))?;
-        let pad = pads.pad(&owned)?;
-        new_edges.entry(block).or_default().push((at, pad));
+        let at = u32::try_from(site.at).map_err(|_| Ice::new("a block too large to number"))?;
+        let pad = pads.pad(recorded.locals_of(site)?)?;
+        new_edges.push((site.block, at, pad));
     }
-    for (block, edges) in new_edges {
+    for group in new_edges.chunk_by(|a, b| a.0 == b.0) {
+        let Some(&(block, _, _)) = group.first() else {
+            continue;
+        };
         let b = f
             .blocks
             .get_mut(block)
             .ok_or_else(|| Ice::new("an unwind site in an unknown block"))?;
-        b.unwind.extend(edges);
+        b.unwind.extend(group.iter().map(|&(_, at, pad)| (at, pad)));
         b.unwind.sort_unstable_by_key(|&(at, _)| at);
     }
     for (n, block) in pads.blocks.into_iter().enumerate() {
@@ -198,15 +228,59 @@ pub fn insert(f: &mut Function) -> Result<(), Ice> {
             return Err(Ice::new("the unwind pass numbered a pad wrongly"));
         }
     }
-    Ok(())
+    Ok(Ok(recorded))
+}
+
+/// One unwind site the simulation reported: an instruction (the
+/// terminator when `at` is the number of statements) and the range of
+/// [`Recorded::locals`] it leaves held.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SiteState {
+    block: BlockId,
+    at: usize,
+    start: usize,
+    end: usize,
+}
+
+/// What the unwind pass's ownership simulation found in one function
+/// (GAP(unwound-validation-split)): what an unwinding leaves held at
+/// every instruction that may unwind or has an edge, from the state
+/// before the instruction. `validate`'s pad check compares each pad chain
+/// with it instead of simulating the counts a second time.
+#[derive(Debug, Default)]
+pub(crate) struct Recorded {
+    /// Sorted by block and instruction.
+    sites: Vec<SiteState>,
+    /// Every site's owned multiset, ascending, one after the other.
+    locals: Vec<Local>,
+}
+
+impl Recorded {
+    /// What an unwinding out of instruction `at` of `block` leaves held,
+    /// ascending with repeats, if the simulation reported that
+    /// instruction.
+    pub(crate) fn state(&self, block: BlockId, at: usize) -> Option<&[Local]> {
+        let i = self
+            .sites
+            .binary_search_by_key(&(block, at), |site| (site.block, site.at))
+            .ok()?;
+        self.locals_of(self.sites.get(i)?).ok()
+    }
+
+    fn locals_of(&self, site: &SiteState) -> Result<&[Local], Ice> {
+        self.locals
+            .get(site.start..site.end)
+            .ok_or_else(|| Ice::new("an unwind site's state out of range"))
+    }
 }
 
 /// The unwind sites of a function and what an unwinding leaves held at
-/// each, from the ownership simulation.
+/// each, from the ownership simulation, in the order the simulation
+/// reaches them.
 #[derive(Default)]
 struct Sites {
-    /// By block and instruction, so pads are created in that order.
-    found: BTreeMap<(BlockId, usize), Vec<Local>>,
+    found: Vec<SiteState>,
+    locals: Vec<Local>,
     errors: Vec<String>,
 }
 
@@ -216,7 +290,14 @@ impl Observer for Sites {
     }
 
     fn unwinds(&mut self, block: BlockId, at: usize, state: &Counts) {
-        self.found.insert((block, at), state.owned());
+        let start = self.locals.len();
+        state.extend_owned(&mut self.locals);
+        self.found.push(SiteState {
+            block,
+            at,
+            start,
+            end: self.locals.len(),
+        });
     }
 
     fn wants_unwinds(&self) -> bool {
@@ -226,22 +307,24 @@ impl Observer for Sites {
 
 /// The pads created for one function, memoized as a trie: the pad that
 /// drops `l` and continues to `below` is created once per `(below, l)`.
+/// The trie is a hash map, never iterated: pad ids come from the order of
+/// creation (D-264).
 struct Pads {
     /// The id of the first new block: the function's blocks come first.
     first: usize,
     /// `pad({})`, once created.
     resume: Option<BlockId>,
-    chain: BTreeMap<(BlockId, Local), BlockId>,
+    chain: FxHashMap<(BlockId, Local), BlockId>,
     /// The new blocks, in id order from `first`.
     blocks: Vec<Block>,
 }
 
 impl Pads {
-    const fn new(first: usize) -> Self {
+    fn new(first: usize) -> Self {
         Self {
             first,
             resume: None,
-            chain: BTreeMap::new(),
+            chain: FxHashMap::default(),
             blocks: Vec::new(),
         }
     }

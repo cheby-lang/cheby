@@ -12,7 +12,12 @@
 //!   (GAP(edgeless-panics)).
 //! - `record`: [`UnwindState`], the record of the unwinding in flight in
 //!   a fiber's control block (D-685), and the catch points' accessors.
+//! - `entry_slow`: the entry check's slow paths that release a function's
+//!   counted parameters themselves when they start an unwinding
+//!   (GAP(entry-unwind-helper)), so code generation need not translate the
+//!   entry-only pad chain.
 
+pub(crate) mod entry_slow;
 pub(crate) mod flag;
 pub(crate) mod guard;
 pub(crate) mod raise;
@@ -1017,6 +1022,9 @@ mod tests {
     const SWITCH: &str = "the context switch, in assembly";
     const FIRST_FRAME: &str = "the first frame of a fiber, in assembly";
     const NO_FIBERS: &str = "ends the process: no fibers on this target";
+    const RELEASES: &str = "calls the guarded slow path, which sets the flag and returns, tests the \
+                            flag, then releases words only through `rc::drop`, which never raises \
+                            (D-171, GAP(entry-unwind-helper))";
 
     /// The `extern "C"` functions of the crate that never unwind, with the
     /// reason, by file (relative to `src/`) and name (`$name` inside a
@@ -1025,6 +1033,16 @@ mod tests {
         ("rc.rs", "cheby_rt_dup", DUP),
         ("rc.rs", "cheby_rt_drop", DROP),
         ("panic.rs", "cheby_rt_panic", RAISES_ITSELF),
+        (
+            "unwind/entry_slow.rs",
+            "cheby_rt_stack_slow_unwind",
+            RELEASES,
+        ),
+        (
+            "unwind/entry_slow.rs",
+            "cheby_rt_stack_slow_frame_unwind",
+            RELEASES,
+        ),
         ("helpers.rs", "cheby_rt_str_eq", READS),
         ("helpers.rs", "cheby_rt_fmod_f64", ARITHMETIC),
         ("helpers.rs", "cheby_rt_fmod_f32", ARITHMETIC),
@@ -1300,6 +1318,80 @@ mod tests {
         assert!(
             stale.is_empty(),
             "NEVER_UNWINDS names functions that do not exist: {stale:?}"
+        );
+    }
+
+    /// The symbols of `cheby_mir::never_raise::NEVER_RAISE_KERNELS`, read
+    /// from its source at run time (the MIR crate is not a dependency, and
+    /// `include_str!` would stop this crate from compiling without the
+    /// file): one `"cheby_…",` per line between the list's opening line
+    /// and its `];`.
+    fn never_raise_kernels() -> Vec<String> {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../cheby_mir/src/never_raise.rs"
+        );
+        let source = std::fs::read_to_string(path).unwrap_or_else(|error| {
+            panic!(
+                "cannot read the MIR's never-raise table {path} ({error}); \
+                 `never_raise_table_matches` cross-checks it (D-767)"
+            )
+        });
+        let open = "pub const NEVER_RAISE_KERNELS: &[&str] = &[";
+        let (_, body) = source
+            .split_once(open)
+            .unwrap_or_else(|| panic!("{path} has no `{open}`"));
+        let (list, _) = body
+            .split_once("];")
+            .unwrap_or_else(|| panic!("{path}: the table has no closing `];`"));
+        list.lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with("//"))
+            .map(|line| {
+                line.strip_prefix('"')
+                    .and_then(|rest| rest.strip_suffix("\","))
+                    .unwrap_or_else(|| panic!("{path}: `{line}` is not `\"cheby_…\",`"))
+                    .to_owned()
+            })
+            .collect()
+    }
+
+    /// D-767: every kernel of the MIR's never-raise table, whose foreign
+    /// calls get no unwind edge, is a registered kernel that is on
+    /// `NEVER_UNWINDS` by its exported symbol, and none can suspend (a
+    /// fiber or channel kernel, a scope helper): after cancellation
+    /// (D-688) a kernel that parks can raise. The list is sorted, as the
+    /// MIR searches it.
+    #[test]
+    fn never_raise_table_matches() {
+        let table = never_raise_kernels();
+        assert!(!table.is_empty(), "the never-raise table is empty");
+        assert!(
+            table.windows(2).all(|pair| pair[0] < pair[1]),
+            "the never-raise table is not sorted and unique: {table:?}"
+        );
+        let registered: Vec<&str> = crate::symbols().into_iter().map(|(name, _)| name).collect();
+        let mut suspending = Vec::new();
+        crate::fiber_ops::kernels(&mut suspending);
+        let mut wrong = Vec::new();
+        for symbol in &table {
+            if !registered.contains(&symbol.as_str()) {
+                wrong.push(format!("{symbol}: not a registered kernel"));
+            }
+            if !NEVER_UNWINDS.iter().any(|(_, name, _)| name == symbol) {
+                wrong.push(format!("{symbol}: not on NEVER_UNWINDS"));
+            }
+            let can_suspend = suspending.iter().any(|(name, _)| name == symbol)
+                || ["cheby_fiber_", "cheby_channel_", "cheby_rt_scope_"]
+                    .iter()
+                    .any(|prefix| symbol.starts_with(prefix));
+            if can_suspend {
+                wrong.push(format!("{symbol}: a kernel that can suspend"));
+            }
+        }
+        assert!(
+            wrong.is_empty(),
+            "crates/cheby_mir/src/never_raise.rs lists kernels that may raise: {wrong:#?}"
         );
     }
 

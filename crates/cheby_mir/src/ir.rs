@@ -346,7 +346,7 @@ pub struct Function {
     pub entry_unwind: Option<BlockId>,
     /// The body was generated with its counts already in place (std
     /// intrinsics, D-693): the RC pass leaves it alone and the unwind pass
-    /// keeps its edges. GAP(intrinsic-precounted).
+    /// keeps its edges (D-744).
     pub precounted: bool,
 }
 
@@ -507,7 +507,7 @@ pub enum Const {
     /// The running fiber's context as a C pointer: only as the first
     /// operand of a `CallForeign` of a `@std_context` kernel (D-692), whose
     /// first C parameter is [`crate::CType::Ptr`]. [`Repr::U64`], never
-    /// counted. GAP(const-ctx-operand).
+    /// counted (D-745).
     Ctx,
     /// The runtime's static `Err(Nil)`, `cheby_rt_static_err_nil` (D-693).
     /// [`Repr::Value`].

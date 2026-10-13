@@ -16,14 +16,11 @@ bb2:
   dup _5
   drop _4
   _6: value = call _5(_3) ; unwind bb3
-  call_foreign "cheby_io_eprintln"(borrow _6) -> void ; unwind bb4
+  call_foreign "cheby_io_eprintln"(borrow _6) -> void
   drop _6
   return const i64 1
 bb3:
   resume
-bb4:
-  drop _6
-  goto bb3()
 }
 
 static#0 desc app$List<String> = desc/1(builtin_desc list, builtin_desc string)

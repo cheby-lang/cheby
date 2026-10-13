@@ -260,7 +260,7 @@ bb6:
 }
 
 /// The body passes the checks of lowering and of reference counting as
-/// generated (`precounted`, GAP(intrinsic-precounted)), and `count_and_check`
+/// generated (`precounted`, D-744), and `count_and_check`
 /// leaves it as it is. Once the unwind pass runs inside `count_and_check`,
 /// it keeps the body's own edges and entry pad (plan §2.4).
 #[test]
@@ -320,7 +320,7 @@ fn intrinsic_outside_std_is_an_ice() {
 }
 
 /// The wrapper of a `@std_context` kernel passes `ctx` first, and its C
-/// signature starts with `ptr` (D-692, GAP(const-ctx-operand)). It starts
+/// signature starts with `ptr` (D-692, D-745). It starts
 /// with the effect check, since `std::fiber` is not a module whose kernels
 /// constants may run (D-537). `cheby_jit`'s `tests::std_context` builds
 /// this exact MIR by hand and runs it.

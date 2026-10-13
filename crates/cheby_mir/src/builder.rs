@@ -321,7 +321,7 @@ impl FunctionBuilder {
     }
 
     /// Marks the body as generated with its counts in place (D-693):
-    /// the RC pass leaves it alone. GAP(intrinsic-precounted).
+    /// the RC pass leaves it alone (D-744).
     pub const fn set_precounted(&mut self) {
         self.precounted = true;
     }

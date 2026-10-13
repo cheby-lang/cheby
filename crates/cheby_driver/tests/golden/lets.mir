@@ -117,7 +117,7 @@ fn std::io::print(_0: value) -> value check str#0 {
   str#1 = "cheby_io_print"
 bb0:
   call_runtime effect_check(borrow const str#1) ; unwind bb2
-  call_foreign "cheby_io_print"(borrow _0) -> void ; unwind bb2
+  call_foreign "cheby_io_print"(borrow _0) -> void
   drop _0
   return const nil
 bb1:
@@ -133,7 +133,7 @@ fn std::io::println(_0: value) -> value check str#0 {
   str#1 = "cheby_io_println"
 bb0:
   call_runtime effect_check(borrow const str#1) ; unwind bb2
-  call_foreign "cheby_io_println"(borrow _0) -> void ; unwind bb2
+  call_foreign "cheby_io_println"(borrow _0) -> void
   drop _0
   return const nil
 bb1:
@@ -149,7 +149,7 @@ fn std::io::eprintln(_0: value) -> value check str#0 {
   str#1 = "cheby_io_eprintln"
 bb0:
   call_runtime effect_check(borrow const str#1) ; unwind bb2
-  call_foreign "cheby_io_eprintln"(borrow _0) -> void ; unwind bb2
+  call_foreign "cheby_io_eprintln"(borrow _0) -> void
   drop _0
   return const nil
 bb1:

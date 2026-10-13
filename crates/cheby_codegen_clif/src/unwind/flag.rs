@@ -15,9 +15,20 @@
 //!   when they unwound: `brif result, cont, pad`;
 //! - `cheby_rt_panic`, which records the panic, sets the flag and returns:
 //!   `jump pad`;
-//! - `resume`: `return 0` (zero of each result type), in every ABI.
+//! - `resume`: `return 0` (zero of each result type), in every ABI;
+//! - the entry check's slow path of a function whose entry pad drops at
+//!   most four counted parameters: `r = call
+//!   cheby_rt_stack_slow_unwind(ctx, loc, n, p0, p1, p2, p3); brif r,
+//!   resume, bb0`, where the helper has released the parameters when it
+//!   returns nonzero, and `resume` is the entry pad chain's last block; the
+//!   entry-only part of the chain is not translated, and a large frame's
+//!   outer function does the same through
+//!   `cheby_rt_stack_slow_frame_unwind` (GAP(entry-unwind-helper)). With
+//!   more counted parameters the slow path is a C call with the flag's
+//!   test, and the chain is translated.
 //!
-//! The lowering is the one D-702 measured, with no further optimization.
+//! The lowering is the one D-702 measured, with the entry check's
+//! releasing slow path of D-735's compile-cost work.
 //!
 //! It depends on the uniform word never being 0. One path breaks that
 //! today: a foreign function whose result is an external type hands its
@@ -149,6 +160,38 @@ impl Translator<'_, '_> {
             zeros.push(zero);
         }
         self.b.ins().return_(&zeros);
+        Ok(())
+    }
+
+    /// The entry check's releasing slow path (GAP(entry-unwind-helper)):
+    /// `r = call f(leading…, n, p0, p1, p2, p3); brif r, resume, next`,
+    /// where `n` is the number of `words` and the unused `p`s are 0. It
+    /// ends the current block.
+    pub(crate) fn releasing_slow_call(
+        &mut self,
+        f: RuntimeFunc,
+        leading: &[Value],
+        words: &[Value],
+        resume: ir::Block,
+        next: ir::Block,
+    ) -> Result<(), CodegenError> {
+        let most = usize::try_from(abi::ENTRY_UNWIND_WORDS)
+            .map_err(|_| CodegenError::ice("the helper's word count does not fit"))?;
+        let unused = most
+            .checked_sub(words.len())
+            .ok_or_else(|| CodegenError::ice("more counted words than the entry helper takes"))?;
+        let count = i64::try_from(words.len())
+            .map_err(|_| CodegenError::ice("the helper's word count does not fit"))?;
+        let count = self.b.ins().iconst(types::I32, count);
+        let mut args = leading.to_vec();
+        args.push(count);
+        args.extend_from_slice(words);
+        if unused > 0 {
+            let zero = self.b.ins().iconst(types::I64, 0);
+            args.extend(std::iter::repeat_n(zero, unused));
+        }
+        let unwound = self.runtime_value(f, &args)?;
+        self.b.ins().brif(unwound, resume, &[], next, &[]);
         Ok(())
     }
 

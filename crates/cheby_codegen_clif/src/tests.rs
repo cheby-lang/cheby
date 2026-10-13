@@ -485,13 +485,30 @@ fn foreign_imports_by_address_allow_new_signatures() {
     );
 }
 
-/// The runtime functions of the slice (plan §2.1): their C types, indexes
-/// 24 to 26, the helpers they implement, and the static `Err(Nil)`.
+/// The runtime functions of the slice (plan §2.1) and the entry check's
+/// releasing slow paths (GAP(entry-unwind-helper)): their C types, indexes
+/// 24 to 28, the helpers they implement, and the static `Err(Nil)`.
 #[test]
 fn slice_runtime_functions() {
     use cheby_mir::RuntimeFn;
     use runtime::{RuntimeFunc, STATIC_DATA};
+    let words = [CType::Ptr; 4];
+    let plain: Vec<CType> = [CType::Ptr, CType::Ptr, CType::U32]
+        .into_iter()
+        .chain(words)
+        .collect();
+    let frame: Vec<CType> = [CType::Ptr, CType::Ptr, CType::U64, CType::U32]
+        .into_iter()
+        .chain(words)
+        .collect();
     let expected = [
+        (RuntimeFunc::StackSlowUnwind, 27, &plain[..], CType::U32),
+        (
+            RuntimeFunc::StackSlowFrameUnwind,
+            28,
+            &frame[..],
+            CType::U32,
+        ),
         (
             RuntimeFunc::StackSlowFrame,
             24,
@@ -517,10 +534,10 @@ fn slice_runtime_functions() {
         assert_eq!(f.ctypes(), (params, ret), "{f:?}");
         assert!(f.on_demand(), "{f:?}");
     }
-    assert_eq!(RuntimeFunc::ALL.len(), 27);
+    assert_eq!(RuntimeFunc::ALL.len(), 29);
     assert_eq!(
         RuntimeFunc::ALL.iter().filter(|f| f.on_demand()).count(),
-        3,
+        5,
         "only the M2 functions are declared on demand"
     );
     assert_eq!(
@@ -757,9 +774,10 @@ fn default_options_and_the_frame_size() {
 }
 
 /// Under the return flag (D-733), the pads of the unwind pass (D-698) are
-/// translated as cold blocks: the entry check's slow path and the foreign
-/// call with an edge load the flag and branch to them, the pad drops out
-/// of line and `resume` returns 0. The same function without the pads has
+/// translated as cold blocks: the foreign call with an edge loads the flag
+/// and branches to them, the entry check's releasing slow path branches on
+/// its result to `resume` (GAP(entry-unwind-helper)), the pad drops out of
+/// line and `resume` returns 0. The same function without the pads has
 /// none of it.
 #[test]
 #[cfg_attr(
@@ -813,7 +831,13 @@ fn unwind_pads_are_translated_as_cold_blocks() {
         cheby_runtime::abi::CTX_UNWIND
     );
     assert_eq!(plain.matches(&load_flag).count(), 0, "{plain}");
-    assert_eq!(padded_text.matches(&load_flag).count(), 2, "{padded_text}");
+    // The foreign call's; the entry check goes through the releasing slow
+    // path, which tests its own result (GAP(entry-unwind-helper)).
+    assert_eq!(padded_text.matches(&load_flag).count(), 1, "{padded_text}");
+    assert!(
+        padded_text.contains("= cheby_rt_stack_slow_unwind"),
+        "{padded_text}"
+    );
     // The pad's drop is a plain call: one more call than the inline drop's
     // slow path makes.
     assert_eq!(
@@ -990,9 +1014,11 @@ fn the_flag_lowers_every_edge() {
     );
     // With edges.
     let loads = flag.matches(&load_flag).count();
-    // The entry check's slow path and the foreign call; the Cheby call,
-    // the allocation and the panic do not load the flag.
-    assert_eq!(loads, 2, "{flag}");
+    // The foreign call; the Cheby call, the allocation, the panic and the
+    // entry check's releasing slow path (GAP(entry-unwind-helper)) do not
+    // load the flag.
+    assert_eq!(loads, 1, "{flag}");
+    assert!(flag.contains("= cheby_rt_stack_slow_unwind"), "{flag}");
     assert!(flag.contains(" cold:"), "{flag}");
     assert!(
         !flag.contains(&format!("trap user{}", func::TRAP_NORETURN)),
@@ -1003,9 +1029,109 @@ fn the_flag_lowers_every_edge() {
     assert!(!flag.contains("icmp_imm sgt"), "{flag}");
     // The two panics (the checked add's and the terminator's) and the
     // two calls whose result is tested branch to a pad: six `brif`s on
-    // top of the dup's two and the entry check's one, the add's
-    // overflow test and the two flag loads.
+    // top of the dup's two and the entry check's two (its compare and
+    // its helper's result), the add's overflow test and the flag load.
     assert!(flag.matches("brif").count() >= 6, "{flag}");
+}
+
+/// `f(_0: Int, _1 … _n: Value)`, whose body drops its counted parameters
+/// and returns `Nil`, given its entry pad by the unwind pass (D-698).
+fn counted_params_unit(n: u32) -> MirModule {
+    let mut u = unit();
+    let local = cheby_mir::Local::from_u32;
+    let function = &mut u.functions[0];
+    let reprs = std::iter::once(Repr::Int).chain((0..n).map(|_| Repr::Value));
+    function.locals = IndexVec::from_raw(
+        reprs
+            .clone()
+            .map(|repr| LocalDecl {
+                repr,
+                name: None,
+                ty: None,
+            })
+            .collect(),
+    )
+    .unwrap();
+    function.params = (0..=n).map(local).collect();
+    function.blocks = IndexVec::from_raw(vec![Block {
+        params: Vec::new(),
+        stmts: (1..=n).map(|l| Stmt::Drop(local(l))).collect(),
+        term: Terminator::Return(Operand::Const(Const::Nil)),
+        unwind: Vec::new(),
+    }])
+    .unwrap();
+    cheby_mir::unwind::insert(function).unwrap();
+    u.callees[0].sig.params = reprs.collect();
+    u
+}
+
+/// GAP(entry-unwind-helper): the entry check's slow path of a function
+/// with at most four counted parameters is `r = call
+/// cheby_rt_stack_slow_unwind(ctx, loc, n, p…, 0…); brif r, resume, bb0`,
+/// with no flag load, no continuation block and no translated entry pad
+/// chain; with five, it calls `cheby_rt_stack_slow`, loads the flag and
+/// translates the chain, whose drops call `cheby_rt_drop` out of line.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn entry_unwind_through_the_releasing_slow_path() {
+    let opts = CodegenOptions::default();
+    let load_flag = format!(
+        "load.i32 notrap aligned v0+{}",
+        cheby_runtime::abi::CTX_UNWIND
+    );
+    for n in [0, 1, 4] {
+        let text = clif_of(&[counted_params_unit(n)], &opts);
+        let lines: Vec<&str> = text.lines().map(str::trim).collect();
+        let at = lines
+            .iter()
+            .position(|line| line.contains("= call fn") && line.contains("(v0, "))
+            .unwrap_or_else(|| panic!("{n}: no helper call in:\n{text}"));
+        let call = lines[at];
+        let result = call.split(" = ").next().unwrap();
+        // The parameters after `ctx` and the `Int` are `v2` on, and the
+        // unused words are one zero.
+        let words: Vec<String> = (0..n).map(|i| format!("v{}", i + 2)).collect();
+        assert!(
+            words.iter().all(|word| call.contains(word.as_str())),
+            "{n}: {call}"
+        );
+        assert!(
+            lines[at + 1].starts_with(&format!("brif {result}, block"))
+                && lines[at + 1].ends_with(", block0"),
+            "{n}: the result goes to `resume` or the body:\n{text}"
+        );
+        assert!(
+            text.contains(&format!("iconst.i32 {n}")),
+            "{n}: the count:\n{text}"
+        );
+        assert!(
+            text.lines()
+                .any(|l| l.ends_with("= cheby_rt_stack_slow_unwind")),
+            "{n}: {text}"
+        );
+        assert!(
+            !text.lines().any(|l| l.ends_with("= cheby_rt_stack_slow")),
+            "{n}: {text}"
+        );
+        assert!(!text.contains(&load_flag), "{n}: no flag load:\n{text}");
+        // Only the shared `resume` of the entry pad chain is translated:
+        // its `return 0` is the only return of 0 besides the body's.
+        assert_eq!(text.matches("return").count(), 2, "{n}: {text}");
+    }
+    let five = clif_of(&[counted_params_unit(5)], &opts);
+    assert!(
+        five.lines().any(|l| l.ends_with("= cheby_rt_stack_slow")),
+        "{five}"
+    );
+    assert!(!five.contains("stack_slow_unwind"), "{five}");
+    assert_eq!(five.matches(&load_flag).count(), 1, "{five}");
+    assert!(
+        five.lines().any(|l| l.ends_with("= cheby_rt_drop")),
+        "{five}"
+    );
 }
 
 /// A pad is translated even when only an unwind edge reaches it, and
@@ -1252,13 +1378,14 @@ fn unboxed_result_call_tests_the_flag_not_the_result() {
         !unboxed.contains(&format!("brif {result},")),
         "the unboxed result {result} is never tested:\n{unboxed}"
     );
-    // The entry check's slow path and the call.
-    assert_eq!(unboxed.matches(&load_flag).count(), 2, "{unboxed}");
+    // Only the call: the entry check's releasing slow path tests its own
+    // result (GAP(entry-unwind-helper)).
+    assert_eq!(unboxed.matches(&load_flag).count(), 1, "{unboxed}");
     let uniform = clif_of(&[unboxed_call_unit(Repr::Value)], &opts);
     let (_, result, next) = call_and_next(&uniform);
     assert!(
         next.starts_with(&format!("brif {result},")),
         "a uniform word is tested:\n{uniform}"
     );
-    assert_eq!(uniform.matches(&load_flag).count(), 1, "{uniform}");
+    assert_eq!(uniform.matches(&load_flag).count(), 0, "{uniform}");
 }

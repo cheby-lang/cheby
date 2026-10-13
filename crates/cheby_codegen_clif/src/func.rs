@@ -253,6 +253,17 @@ fn reverse_postorder(func: &Function, roots: &[BlockId]) -> Result<Vec<BlockId>,
 ///
 /// An ICE if a block of the chain holds anything else.
 fn pad_chain_drops(func: &Function, pad: BlockId) -> Result<Vec<Local>, CodegenError> {
+    pad_chain(func, pad).map(|(drops, _)| drops)
+}
+
+/// The locals the pad chain from `pad` drops, in order, and its last
+/// block, the `resume` ([`pad_chain_drops`]).
+///
+/// # Errors
+///
+/// An ICE if a block of the chain holds anything but drops, a `goto` of
+/// the next pad and a `resume`.
+fn pad_chain(func: &Function, pad: BlockId) -> Result<(Vec<Local>, BlockId), CodegenError> {
     let mut drops = Vec::new();
     let mut at = pad;
     // A chain visits each block at most once.
@@ -267,7 +278,7 @@ fn pad_chain_drops(func: &Function, pad: BlockId) -> Result<Vec<Local>, CodegenE
             drops.push(*local);
         }
         match &block.term {
-            Terminator::Resume => return Ok(drops),
+            Terminator::Resume => return Ok((drops, at)),
             Terminator::Goto { target, args } if args.is_empty() => at = *target,
             _ => {
                 return Err(CodegenError::ice(format!(
@@ -277,6 +288,42 @@ fn pad_chain_drops(func: &Function, pad: BlockId) -> Result<Vec<Local>, CodegenE
         }
     }
     Err(CodegenError::ice("the entry pad chain loops"))
+}
+
+/// How the entry check's slow path of a function releases its counted
+/// parameters itself (GAP(entry-unwind-helper), refining D-698 and D-743).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct EntryRelease {
+    /// The positions in [`Function::params`] of the words the entry pad
+    /// drops, in its order: at most [`abi::ENTRY_UNWIND_WORDS`].
+    params: Vec<usize>,
+    /// The entry pad chain's last block, the shared `resume` that the slow
+    /// block branches to when the helper started an unwinding.
+    resume: BlockId,
+}
+
+/// Whether `func`'s entry check goes through a releasing slow path
+/// (`cheby_rt_stack_slow_unwind`, or the frame variant for a large frame),
+/// and with which words: when its entry pad (D-698, D-752) is a chain of
+/// at most [`abi::ENTRY_UNWIND_WORDS`] drops of parameters ending in
+/// `resume`. The slow block then calls the helper and branches on its
+/// result to `resume` or to the body, and codegen does not translate the
+/// entry-only part of the chain; the MIR keeps its entry pad
+/// (GAP(entry-unwind-helper)). Otherwise, as with more counted parameters
+/// or a precounted body's own entry pad (D-744), the chain is translated
+/// as before. `None` too for a function without an entry pad.
+pub(crate) fn entry_release(func: &Function) -> Option<EntryRelease> {
+    let pad = func.entry_unwind?;
+    let (drops, resume) = pad_chain(func, pad).ok()?;
+    let most = usize::try_from(abi::ENTRY_UNWIND_WORDS).ok()?;
+    if drops.len() > most {
+        return None;
+    }
+    let params = drops
+        .iter()
+        .map(|local| func.params.iter().position(|p| p == local))
+        .collect::<Option<Vec<usize>>>()?;
+    Some(EntryRelease { params, resume })
 }
 
 /// For each block, whether only unwinding reaches it: it is reachable from
@@ -350,20 +397,30 @@ impl Translator<'_, '_> {
             }
             self.blocks.push(cl);
         }
-        // The entry pad, when the entry check that unwinds to it is made.
-        let entry_pad = if self.checks_entry(check) {
-            self.func.entry_unwind
+        // The entry check's unwinding, when the check is made: through the
+        // releasing slow path to the entry pad chain's `resume`
+        // (GAP(entry-unwind-helper)), or else to the translated entry pad.
+        let (release, entry_pad) = if self.checks_entry(check) {
+            match entry_release(self.func) {
+                Some(release) => (Some(release), None),
+                None => (None, self.func.entry_unwind),
+            }
         } else {
-            None
+            (None, None)
         };
-        self.entry(check, entry_pad)?;
+        self.entry(check, entry_pad, release.as_ref())?;
         // Reverse postorder translates a definition before its uses, as a
         // block's dominators come before it. Unreachable blocks are never
         // translated (their CLIF blocks stay out of the layout): no
         // reachable block jumps to one, and their uses need not be
         // dominated. The order follows the unwind edges too, from the
-        // entry pad as well as from `bb0`.
-        let mut roots: Vec<BlockId> = entry_pad.into_iter().collect();
+        // entry pad as well as from `bb0`. With the releasing slow path,
+        // only the chain's `resume` is a root: the rest of the chain is
+        // translated only where other edges reach it.
+        let mut roots: Vec<BlockId> = entry_pad
+            .into_iter()
+            .chain(release.map(|r| r.resume))
+            .collect();
         roots.push(BlockId::from_u32(0));
         for id in reverse_postorder(self.func, &roots)? {
             let block = self.func.block(id)?;
@@ -404,9 +461,16 @@ impl Translator<'_, '_> {
 
     /// The entry block: the parameters, the stack check of a Cheby
     /// function (unless `check` is [`EntryCheck::None`]), then a jump to
-    /// `bb0`. With `entry_pad`, the check's slow path unwinds to it
-    /// (D-698).
-    fn entry(&mut self, check: EntryCheck, entry_pad: Option<BlockId>) -> Result<(), CodegenError> {
+    /// `bb0`. With `release`, the check's slow path releases the counted
+    /// parameters itself and branches to the chain's `resume` when it
+    /// started an unwinding (GAP(entry-unwind-helper)); with `entry_pad`,
+    /// it unwinds to that pad (D-698).
+    fn entry(
+        &mut self,
+        check: EntryCheck,
+        entry_pad: Option<BlockId>,
+        release: Option<&EntryRelease>,
+    ) -> Result<(), CodegenError> {
         let entry = self.b.create_block();
         self.b.append_block_params_for_function_params(entry);
         self.b.switch_to_block(entry);
@@ -453,6 +517,20 @@ impl Translator<'_, '_> {
             self.b.ins().brif(below, slow, &[], first, &[]);
             self.b.switch_to_block(slow);
             let loc = self.string(loc)?;
+            if let Some(release) = release {
+                // GAP(entry-unwind-helper): the helper releases the
+                // parameters when it starts an unwinding.
+                let words = Self::param_words(release, rest)?;
+                let resume = self.block(release.resume)?;
+                self.releasing_slow_call(
+                    RuntimeFunc::StackSlowUnwind,
+                    &[ctx, loc],
+                    &words,
+                    resume,
+                    first,
+                )?;
+                return Ok(());
+            }
             if let Some(pad) = entry_pad {
                 // D-698: an overflow unwinds to the entry pad.
                 let pad = self.block(pad)?;
@@ -517,6 +595,27 @@ impl Translator<'_, '_> {
         let loc = self.string(loc)?;
         let size = self.b.ins().iconst(types::I64, i64::from(frame_size));
         let args = [ctx, loc, size];
+        if let Some(release) = entry_release(self.func) {
+            // GAP(entry-unwind-helper): the helper releases the parameters
+            // when it starts an unwinding, and the outer function resumes
+            // from a cold block of its own.
+            let words = Self::param_words(&release, params.get(1..).unwrap_or_default())?;
+            let resume = self.b.create_block();
+            self.b.set_cold_block(resume);
+            self.releasing_slow_call(
+                RuntimeFunc::StackSlowFrameUnwind,
+                &args,
+                &words,
+                resume,
+                call,
+            )?;
+            self.b.switch_to_block(call);
+            let signature = self.decls.func(self.func.key)?.sig.clone();
+            let f = self.func_ref(inner, &signature, true);
+            self.b.ins().return_call(f, &params);
+            self.b.switch_to_block(resume);
+            return self.unwind_resume();
+        }
         let outer_pad = if let Some(pad) = self.func.entry_unwind {
             // D-698: an overflow unwinds to the outer function's own pad,
             // which drops what the body's entry pad would drop.
@@ -572,6 +671,20 @@ impl Translator<'_, '_> {
             self.drop_call(value)?;
         }
         self.unwind_resume()
+    }
+
+    /// The values of the parameters `release` names, from `params`, the
+    /// function's parameters after `ctx`.
+    fn param_words(release: &EntryRelease, params: &[Value]) -> Result<Vec<Value>, CodegenError> {
+        release
+            .params
+            .iter()
+            .map(|&n| {
+                params.get(n).copied().ok_or_else(|| {
+                    CodegenError::ice("the entry pad drops a parameter the function lacks")
+                })
+            })
+            .collect()
     }
 
     pub(crate) fn ctx(&self) -> Result<Value, CodegenError> {

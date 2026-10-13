@@ -47,7 +47,7 @@ pub fn insert_module(module: &mut MirModule) -> Result<(), Ice> {
 }
 
 /// Inserts `dup` and `drop` into `f`. A `precounted` body (D-693) already
-/// has its counts and is left alone. GAP(intrinsic-precounted).
+/// has its counts and is left alone (D-744).
 ///
 /// # Errors
 ///

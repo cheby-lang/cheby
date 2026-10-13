@@ -94,8 +94,8 @@ impl BodyCx<'_, '_> {
             // named counted value is a use of `x` (D-205, §9.2 guarantee 3:
             // a program keeps a handle alive by using it again), so the
             // value moves into a fresh local here, which the RC pass then
-            // drops: `x`'s last use is this statement, not an earlier one.
-            // GAP(wildcard-let-use).
+            // drops: `x`'s last use is this statement, not an earlier one
+            // (D-736).
             PatKind::Wild => {
                 let named = matches!(self.expr_data(init)?.kind, ExprKind::Local(_));
                 if named && matches!(op, Operand::Local(_)) && self.repr_of(init_ty) == Repr::Value

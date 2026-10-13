@@ -713,9 +713,11 @@ impl Decls {
         Ok(())
     }
 
-    /// Declares `cb$big$…`, the unchecked inner body of the function `key`,
-    /// whose frame turned out to be large (D-679), with `key`'s signature,
-    /// and the runtime function its outer function's slow path calls.
+    /// Declares `cb$big$…`, the unchecked inner body of the function
+    /// `function`, whose frame turned out to be large (D-679), with its
+    /// signature, and the runtime function its outer function's slow path
+    /// calls: the releasing one when its entry pad allows it
+    /// (GAP(entry-unwind-helper), [`crate::func::entry_release`]).
     /// [`crate::define`] calls it after compiling a batch, for each large
     /// function in declaration order, so the ids are the same in every
     /// build (D-264). Declaring the same body again (a batch retried after
@@ -727,10 +729,15 @@ impl Decls {
     pub(crate) fn declare_large_frame_body<M: Module>(
         &mut self,
         module: &mut M,
-        key: FnKey,
+        function: &Function,
     ) -> Result<FuncId, CodegenError> {
-        self.declare_runtime_func(module, RuntimeFunc::StackSlowFrame)?;
-        let decl = self.func(key)?;
+        let slow = if crate::func::entry_release(function).is_some() {
+            RuntimeFunc::StackSlowFrameUnwind
+        } else {
+            RuntimeFunc::StackSlowFrame
+        };
+        self.declare_runtime_func(module, slow)?;
+        let decl = self.func(function.key)?;
         let symbol = mangle::large_frame_body(&decl.symbol);
         let signature = decl.sig.clone();
         let id = module
@@ -741,13 +748,19 @@ impl Decls {
     }
 
     /// Declares the on-demand runtime functions the helpers of `unit`'s
-    /// code call (D-693).
+    /// code call (D-693), and the entry check's releasing slow path when a
+    /// function's entry pad allows it (GAP(entry-unwind-helper)).
     fn declare_unit_runtime<M: Module>(
         &mut self,
         module: &mut M,
         unit: &MirModule,
     ) -> Result<(), CodegenError> {
         for function in &unit.functions {
+            if function.abi == cheby_mir::Abi::Cheby
+                && crate::func::entry_release(function).is_some()
+            {
+                self.declare_runtime_func(module, RuntimeFunc::StackSlowUnwind)?;
+            }
             for block in &function.blocks {
                 for stmt in &block.stmts {
                     if let Stmt::Assign {

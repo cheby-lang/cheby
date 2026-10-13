@@ -36,6 +36,7 @@ use crate::object::{
 };
 use crate::panic::{cheby_rt_panic, cheby_rt_stack_slow, cheby_rt_stack_slow_frame};
 use crate::rc::{cheby_rt_drop, cheby_rt_dup};
+use crate::unwind::entry_slow::{cheby_rt_stack_slow_frame_unwind, cheby_rt_stack_slow_unwind};
 use crate::{bytes, consteval, desc, env, fiber_ops, hamt, io, list, num, text};
 
 /// The address of a static object.
@@ -49,7 +50,7 @@ fn data<T>(object: &'static T) -> *const u8 {
     clippy::as_conversions,
     reason = "taking the address of a function needs an `as` cast"
 )]
-fn runtime_symbols() -> [(&'static str, *const u8); 37] {
+fn runtime_symbols() -> [(&'static str, *const u8); 39] {
     [
         (sym::ALLOC, cheby_rt_alloc as *const u8),
         (sym::DUP, cheby_rt_dup as *const u8),
@@ -97,6 +98,14 @@ fn runtime_symbols() -> [(&'static str, *const u8); 37] {
         (sym::SCOPE_OPEN, cheby_rt_scope_open as *const u8),
         (sym::SCOPE_CLOSE, cheby_rt_scope_close as *const u8),
         (sym::STATIC_ERR_NIL, data(&cheby_rt_static_err_nil)),
+        (
+            sym::STACK_SLOW_UNWIND,
+            cheby_rt_stack_slow_unwind as *const u8,
+        ),
+        (
+            sym::STACK_SLOW_FRAME_UNWIND,
+            cheby_rt_stack_slow_frame_unwind as *const u8,
+        ),
     ]
 }
 

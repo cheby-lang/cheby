@@ -177,7 +177,7 @@ impl CType {
     /// Whether the running fiber's context ([`crate::Const::Ctx`]) may be
     /// passed as this C type: only a pointer. Only the first operand of a
     /// foreign call may be `ctx`, the `@std_context` kernel's first
-    /// parameter (D-692). GAP(const-ctx-operand).
+    /// parameter (D-692, D-745).
     #[must_use]
     pub const fn accepts_ctx(self) -> bool {
         matches!(self, Self::Ptr)
@@ -254,8 +254,8 @@ pub fn foreign_sig(sig: &FnSig, globals: &Globals) -> ForeignSig {
 /// receives the running fiber's context first, before the Cheby parameters
 /// (D-692). Every comparison of C signatures for one symbol (E0054, D-455)
 /// uses this function, so a binding of a context kernel's symbol without the
-/// attribute differs in its parameters instead of shifting them by one.
-/// GAP(const-ctx-operand).
+/// attribute differs in its parameters instead of shifting them by one
+/// (D-745).
 #[must_use]
 pub fn foreign_sig_with_context(sig: &FnSig, globals: &Globals, context: bool) -> ForeignSig {
     let ctx = context.then_some(CType::Ptr);

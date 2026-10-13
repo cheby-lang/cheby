@@ -22,14 +22,8 @@ pub(crate) fn set(ctx: &ExecCtx, flag: u32) {
 }
 
 /// The unwind flag of `ctx`: [`unwind_flag::NONE`] when no unwinding is in
-/// flight.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "tests read it; the entry check's releasing slow path will (D-698)"
-    )
-)]
+/// flight. The entry check's releasing slow paths read it after the
+/// guarded slow path returned (`super::entry_slow`).
 pub(crate) fn get(ctx: &ExecCtx) -> u32 {
     ctx.unwind.load(Ordering::Acquire)
 }

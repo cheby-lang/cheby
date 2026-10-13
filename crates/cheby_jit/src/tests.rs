@@ -1111,6 +1111,7 @@ fn compile_speed_probe() {
 }
 
 mod control;
+mod entry_unwind;
 mod large_frame;
 mod objects;
 mod repl;

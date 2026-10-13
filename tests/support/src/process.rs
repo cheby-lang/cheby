@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 /// Multiplies the harnesses' timeouts (D-722).
 pub const HARNESS_SCALE_ENV: &str = "CHEBY_HARNESS_SCALE";
 
-/// The largest `CHEBY_HARNESS_SCALE` (GAP(harness-scale)).
+/// The largest `CHEBY_HARNESS_SCALE` (D-748).
 pub const MAX_HARNESS_SCALE: u32 = 100;
 
 /// The factor `CHEBY_HARNESS_SCALE` sets ([`parse_harness_scale`]).
@@ -31,7 +31,7 @@ pub fn harness_scale() -> Result<u32, String> {
 /// from 1 to 100, written in decimal digits, with surrounding whitespace
 /// ignored. Unset or empty is 1, as an empty value of the other harness
 /// variables is no setting (D-567). Anything else is an error
-/// (GAP(harness-scale)).
+/// (D-748).
 ///
 /// # Errors
 ///

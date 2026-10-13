@@ -12,7 +12,8 @@
 use cheby_iface::Ice;
 
 use crate::ir::MirModule;
-use crate::validate::{Stage, validate};
+use crate::unwind::Recorded;
+use crate::validate::{Stage, validate, validate_recorded};
 
 /// How reference counts are inserted (D-273, D-718).
 ///
@@ -50,6 +51,13 @@ pub struct MirOptions {
     /// function gets new edges (a `precounted` body keeps its own), and
     /// the units are validated at [`Stage::Counted`].
     pub unwind_edges: bool,
+    /// Whether the validation after the unwind pass runs the full,
+    /// independent ownership simulation as well as checking each pad chain
+    /// against the states the pass recorded
+    /// (GAP(unwound-validation-split), D-698, D-735). `true` by default in
+    /// debug builds, so in every test run; `false` in release builds,
+    /// where the pass's simulation is the only one. No variable sets it.
+    pub full_ownership_check: bool,
 }
 
 impl Default for MirOptions {
@@ -57,6 +65,7 @@ impl Default for MirOptions {
         Self {
             rc: RcMode::Perceus,
             unwind_edges: true,
+            full_ownership_check: cfg!(debug_assertions),
         }
     }
 }
@@ -93,6 +102,7 @@ impl MirOptions {
         Ok(Self {
             rc,
             unwind_edges: Self::unwind_edges_from_env()?,
+            ..Self::default()
         })
     }
 
@@ -152,6 +162,12 @@ impl MirOptions {
 /// the last pass, D-262), and validates again: at [`Stage::Unwound`] after
 /// the unwind pass, at [`Stage::Counted`] without it.
 ///
+/// With the pass, its ownership simulation is the check of the counts
+/// (GAP(unwound-validation-split)): a broken rule it finds is reported as
+/// invalid MIR after reference counting, and the validation after the
+/// pass checks each pad chain against the states it recorded, adding the
+/// full simulation only when `options.full_ownership_check`.
+///
 /// # Errors
 ///
 /// An [`Ice`] listing the validator's findings.
@@ -165,13 +181,45 @@ pub fn count_and_check_with(module: &mut MirModule, options: &MirOptions) -> Res
         RcMode::Perceus | RcMode::Naive => crate::rc::insert_module(module)?,
     }
     if options.unwind_edges {
-        // The unwind pass simulates the counts itself and refuses
-        // unbalanced ones; `Stage::Unwound` checks everything `Counted`
-        // does, so the unit is validated once more, not twice.
-        crate::unwind::insert_module(module)?;
-        validate(module, Stage::Unwound).map_err(|e| report("after the unwind pass", e))
+        // The unwind pass simulates the counts itself; `Stage::Unwound`
+        // checks everything else `Counted` does, so the unit is validated
+        // once more, not twice.
+        let recorded = unwind_recording(module)?;
+        validate_recorded(module, &recorded, options.full_ownership_check)
+            .map_err(|e| report("after the unwind pass", e))
     } else {
         validate(module, Stage::Counted).map_err(|e| report("after reference counting", e))
+    }
+}
+
+/// Runs the unwind pass over every function of `module` and returns what
+/// its simulation recorded for each, in order
+/// (GAP(unwound-validation-split)).
+///
+/// # Errors
+///
+/// An [`Ice`] listing the broken ownership rules the simulation found, as
+/// invalid MIR after reference counting (each function is left as it
+/// was), or for malformed MIR.
+pub(crate) fn unwind_recording(module: &mut MirModule) -> Result<Vec<Recorded>, Ice> {
+    let mut recorded = Vec::with_capacity(module.functions.len());
+    let mut errors = Vec::new();
+    for f in &mut module.functions {
+        match crate::unwind::insert_recording(f)? {
+            Ok(states) => recorded.push(states),
+            Err(found) => {
+                let name = format!("{:?}", f.key);
+                errors.extend(found.into_iter().map(|e| format!("{name}: {e}")));
+            }
+        }
+    }
+    if errors.is_empty() {
+        Ok(recorded)
+    } else {
+        Err(Ice::new(format!(
+            "invalid MIR after reference counting:\n  {}",
+            errors.join("\n  ")
+        )))
     }
 }
 
@@ -207,6 +255,9 @@ mod tests {
         let options = MirOptions::default();
         assert_eq!(options.rc, RcMode::Perceus);
         assert!(options.unwind_edges);
+        // Every test run checks ownership with the full simulation
+        // (GAP(unwound-validation-split)).
+        assert_eq!(options.full_ownership_check, cfg!(debug_assertions));
         assert_eq!(RcMode::default(), RcMode::Perceus);
     }
 }

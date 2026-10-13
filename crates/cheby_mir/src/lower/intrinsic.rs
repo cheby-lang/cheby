@@ -14,7 +14,7 @@
 //! `Err(Nil)`; why the scope failed stays in the fiber.
 //!
 //! The body is generated with its reference counts and its unwind edges in
-//! place (`Function::precounted`, GAP(intrinsic-precounted)): the RC pass
+//! place (`Function::precounted`, D-744): the RC pass
 //! leaves it alone and the unwind pass keeps its edges and its entry pad.
 
 use cheby_iface::{FnSig, Ice, builtin};

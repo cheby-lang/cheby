@@ -308,6 +308,12 @@ pub mod unwind_flag {
     pub const CANCEL: u32 = 2;
 }
 
+/// The most counted words the entry check's releasing slow paths
+/// ([`sym::STACK_SLOW_UNWIND`], [`sym::STACK_SLOW_FRAME_UNWIND`]) take in
+/// registers (GAP(entry-unwind-helper)). Code generation keeps the
+/// translated entry pad chain for a function with more counted parameters.
+pub const ENTRY_UNWIND_WORDS: u32 = 4;
+
 /// D-742's measurement switch: `CHEBY_UNWIND_EDGES=off` skips the unwind
 /// pass, and a raise in code built so ends the process
 /// (GAP(edgeless-panics)).
@@ -540,6 +546,17 @@ pub mod sym {
     /// Data: the static `Err(Nil)` the `scope_run` intrinsic returns on
     /// failure (D-693).
     pub const STATIC_ERR_NIL: &str = "cheby_rt_static_err_nil";
+    /// `uint32_t cheby_rt_stack_slow_unwind(ExecCtx *ctx, uint64_t location, uint32_t count,
+    /// uint64_t p0, uint64_t p1, uint64_t p2, uint64_t p3)`: the entry check's slow path of a
+    /// function with at most four counted parameters (GAP(entry-unwind-helper)). Runs
+    /// [`STACK_SLOW`]; when that started an unwinding, releases `p0` to `p(count-1)` and
+    /// returns 1, else returns 0 and leaves them untouched.
+    pub const STACK_SLOW_UNWIND: &str = "cheby_rt_stack_slow_unwind";
+    /// `uint32_t cheby_rt_stack_slow_frame_unwind(ExecCtx *ctx, uint64_t location,
+    /// uint64_t frame_size, uint32_t count, uint64_t p0, uint64_t p1, uint64_t p2, uint64_t p3)`:
+    /// [`STACK_SLOW_UNWIND`] for the outer function of a large frame, through
+    /// [`STACK_SLOW_FRAME`] (D-743, GAP(entry-unwind-helper)).
+    pub const STACK_SLOW_FRAME_UNWIND: &str = "cheby_rt_stack_slow_frame_unwind";
     /// Std externals whose bodies the compiler generates (D-693). Never
     /// registered.
     pub const INTRINSICS: [&str; 1] = ["cheby_rt_scope_run"];
@@ -611,7 +628,7 @@ pub mod sym {
     /// order `symbols()` lists them first. Kernels
     /// (`cheby_<module>_<function>`) follow in `symbols()`; they come from
     /// each kernel module's registration (plan §4.3.3).
-    pub const ALL: [&str; 60] = [
+    pub const ALL: [&str; 62] = [
         ALLOC,
         DUP,
         DROP,
@@ -649,6 +666,8 @@ pub mod sym {
         SCOPE_OPEN,
         SCOPE_CLOSE,
         STATIC_ERR_NIL,
+        STACK_SLOW_UNWIND,
+        STACK_SLOW_FRAME_UNWIND,
         DESC_SYMBOLS[0],
         DESC_SYMBOLS[1],
         DESC_SYMBOLS[2],
@@ -836,7 +855,7 @@ mod tests {
             assert_eq!(sym::desc_symbol(name), Some(symbol));
         }
         assert_eq!(sym::desc_symbol("dyn"), None);
-        assert_eq!(sym::ALL.get(37..), Some(&sym::DESC_SYMBOLS[..]));
+        assert_eq!(sym::ALL.get(39..), Some(&sym::DESC_SYMBOLS[..]));
         assert_eq!(
             [
                 layout::SENDER,

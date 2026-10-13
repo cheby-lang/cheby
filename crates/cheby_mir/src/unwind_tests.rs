@@ -11,9 +11,11 @@ use crate::ir::{
 use crate::options::{MirOptions, count_and_check_with};
 use crate::repr::{CType, ForeignSig, Repr};
 use crate::test_support::lower_source;
-use crate::unwind::{insert, rvalue_may_unwind, stmt_may_unwind, terminator_may_unwind};
+use crate::unwind::{
+    insert, insert_recording, rvalue_may_unwind, stmt_may_unwind, terminator_may_unwind,
+};
 use crate::unwind_ir_tests::{builder, module, scope_run};
-use crate::validate::{Stage, validate};
+use crate::validate::{Stage, validate, validate_recorded};
 use crate::{FunctionBuilder, dump};
 
 fn local(l: Local) -> Operand {
@@ -538,37 +540,321 @@ fn unwind_rule_a_pad_does_not_use_its_instructions_result() {
             pad.as_u32()
         ),
     );
-    rejected(
-        &own_result,
-        &format!(
-            "_2 is used in bb{} where its definition does not dominate",
+    let found = recorded_errors(calls(), |f| {
+        let pad = add_block(
+            f,
+            vec![Stmt::Drop(Local::from_u32(2))],
+            Terminator::Goto {
+                target: bb(2),
+                args: Vec::new(),
+            },
+        );
+        set_edge(f, 0, 1, pad);
+    });
+    assert!(
+        found.contains(&format!(
+            "bb{} uses _2, the result of bb0 statement 1",
             pad.as_u32()
-        ),
+        )),
+        "{found}"
     );
-    // A local defined after the edge in the same block is not defined
-    // in its pad either.
+    // A local defined after the edge in the same block is not defined in
+    // its pad either. A canonical pad is left out of the dominance graph
+    // (D-735), so the ownership states, taken before the instruction,
+    // catch it: in both modes (GAP(unwound-validation-split)).
     let mut later = f;
-    let pad = add_block(
-        &mut later,
-        vec![Stmt::Drop(Local::from_u32(3))],
-        Terminator::Goto {
-            target: bb(2),
-            args: Vec::new(),
-        },
-    );
-    set_edge(&mut later, 0, 1, pad);
+    let add_later = |f: &mut Function| {
+        let pad = add_block(
+            f,
+            vec![Stmt::Drop(Local::from_u32(3))],
+            Terminator::Goto {
+                target: bb(2),
+                args: Vec::new(),
+            },
+        );
+        set_edge(f, 0, 1, pad);
+        pad
+    };
+    let pad = add_later(&mut later);
     rejected(
         &later,
         &format!(
-            "_3 is used in bb{} where its definition does not dominate",
+            "bb{} statement 0: _3 is used without a reference (holds 0, needs 1)",
             pad.as_u32()
         ),
+    );
+    let found = recorded_errors(calls(), |f| {
+        add_later(f);
+    });
+    assert!(
+        found.contains(&format!(
+            "bb0 statement 1 unwinds to bb{}, which drops {{_0, _3}}, but an unwinding there leaves {{_0}} held",
+            pad.as_u32()
+        )),
+        "{found}"
+    );
+}
+
+/// Runs the unwind pass on `f` keeping what its simulation recorded,
+/// applies `change`, and validates the result as a release build does,
+/// against the recorded states without the full simulation
+/// (GAP(unwound-validation-split)).
+fn recorded_errors(mut f: Function, change: impl FnOnce(&mut Function)) -> String {
+    let recorded = insert_recording(&mut f).unwrap().unwrap();
+    change(&mut f);
+    validate_recorded(&module(vec![f]), &[recorded], false)
+        .err()
+        .unwrap_or_default()
+        .join("\n")
+}
+
+// GAP(unwound-validation-split): a pad chain that drops another multiset
+// than the ownership at its edge fails `Stage::Unwound` in both modes:
+// the full simulation, and the check against the pass's recorded states.
+#[test]
+fn unwind_rule_a_pad_chain_dropping_another_multiset_fails_in_both_modes() {
+    assert_eq!(recorded_errors(calls(), |_| {}), "");
+    assert_eq!(recorded_errors(helpers(), |_| {}), "");
+    // bb4, the alloc's pad, drops _0 instead of _2.
+    let wrong_local = |f: &mut Function| {
+        f.blocks.get_mut(bb(4)).unwrap().stmts = vec![Stmt::Drop(Local::from_u32(0))];
+    };
+    let mut full = unwound(calls());
+    wrong_local(&mut full);
+    rejected(
+        &full,
+        "reference counts differ between the predecessors of bb2",
+    );
+    let found = recorded_errors(calls(), wrong_local);
+    assert!(
+        found.contains(
+            "bb0 statement 2 unwinds to bb4, which drops {_0, _0}, but an unwinding there leaves {_0, _2} held (D-698)"
+        ),
+        "{found}"
+    );
+    // The alloc unwinds to the call's pad, which drops one value too few.
+    let short = |f: &mut Function| set_edge(f, 0, 2, bb(2));
+    let mut full = unwound(calls());
+    short(&mut full);
+    rejected(
+        &full,
+        "reference counts differ between the predecessors of bb2",
+    );
+    let found = recorded_errors(calls(), short);
+    assert!(
+        found.contains(
+            "bb0 statement 2 unwinds to bb2, which drops {_0}, but an unwinding there leaves {_0, _2} held"
+        ),
+        "{found}"
+    );
+    // The entry pad drops only one of the two parameters.
+    let entry = |f: &mut Function| f.entry_unwind = Some(bb(2));
+    let mut full = unwound(calls());
+    entry(&mut full);
+    rejected(
+        &full,
+        "reference counts differ between the predecessors of bb2",
+    );
+    let found = recorded_errors(calls(), entry);
+    assert!(
+        found.contains(
+            "the entry check unwinds to bb2, which drops {_0}, but an unwinding there leaves {_0, _1} held"
+        ),
+        "{found}"
+    );
+    // A pad that drops one value twice; and one that is not a chain of
+    // drops at all, which only the pass's own pads must be.
+    let twice = |f: &mut Function| {
+        let pad = add_block(
+            f,
+            vec![Stmt::Drop(Local::from_u32(2))],
+            Terminator::Goto {
+                target: bb(4),
+                args: Vec::new(),
+            },
+        );
+        set_edge(f, 0, 2, pad);
+    };
+    let mut full = unwound(calls());
+    twice(&mut full);
+    rejected(&full, "_2 is used without a reference (holds 0, needs 1)");
+    let found = recorded_errors(calls(), twice);
+    assert!(
+        found.contains("which drops {_0, _2, _2}, but an unwinding there leaves {_0, _2} held"),
+        "{found}"
+    );
+    let not_a_chain = |f: &mut Function| {
+        let pad = add_block(
+            f,
+            vec![
+                Stmt::Drop(Local::from_u32(2)),
+                Stmt::Drop(Local::from_u32(0)),
+            ],
+            Terminator::Goto {
+                target: bb(1),
+                args: Vec::new(),
+            },
+        );
+        set_edge(f, 0, 2, pad);
+    };
+    let found = recorded_errors(calls(), not_a_chain);
+    assert!(
+        found.contains(
+            "bb0 statement 2 unwinds to bb5, which is not a chain of drops ending in resume"
+        ),
+        "{found}"
+    );
+}
+
+/// The pipeline gives the same MIR with and without the full simulation,
+/// and accepts it both ways (GAP(unwound-validation-split)).
+#[test]
+fn unwind_release_validation_accepts_what_the_full_one_does() {
+    // Before counting: `_2 = alloc (_0, _0); _3 = call _1(_2);
+    // foreign cheby_io_println(_3); return _3`.
+    let mut b = builder(0);
+    let x = b.add_param(Repr::Value, None, None).unwrap();
+    let callee = b.add_param(Repr::Value, None, None).unwrap();
+    let pair = b
+        .assign(
+            Repr::Value,
+            Rvalue::Alloc {
+                layout: LayoutRef::Tuple(2),
+                fields: vec![local(x), local(x)],
+            },
+        )
+        .unwrap();
+    let result = b
+        .assign(
+            Repr::Value,
+            Rvalue::Call {
+                callee: Callee::Indirect(callee),
+                args: vec![local(pair)],
+            },
+        )
+        .unwrap();
+    b.push(Stmt::Eval(println(local(result)))).unwrap();
+    b.terminate(Terminator::Return(local(result))).unwrap();
+    let function = b.finish().unwrap();
+    let mut dumps = Vec::new();
+    for full_ownership_check in [false, true] {
+        let options = MirOptions {
+            full_ownership_check,
+            ..MirOptions::default()
+        };
+        let mut m = module(vec![function.clone()]);
+        count_and_check_with(&mut m, &options).unwrap();
+        dumps.push(dump::dump(&m).unwrap());
+    }
+    assert_eq!(dumps[0], dumps[1]);
+    assert!(dumps[0].contains("; unwind bb"), "{}", dumps[0]);
+}
+
+/// The pipeline reports what its unwind pass's simulation finds as invalid
+/// MIR after reference counting (GAP(unwound-validation-split)).
+#[test]
+fn unwind_pipeline_reports_unbalanced_counts_after_reference_counting() {
+    let mut f = calls();
+    // `_0` is used once more than it is held.
+    let block = f.blocks.get_mut(bb(0)).unwrap();
+    block.stmts.retain(|s| *s != Stmt::Dup(Local::from_u32(0)));
+    let mut m = module(vec![f]);
+    let err = crate::options::unwind_recording(&mut m)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains("invalid MIR after reference counting"),
+        "{err}"
+    );
+    assert!(
+        err.contains("bb0 statement 1: _0 is used without a reference (holds 0, needs 1)"),
+        "{err}"
+    );
+    // The pass left the function as it was.
+    assert!(!dump::dump(&m).unwrap().contains("unwind"));
+}
+
+/// A void foreign call of `cheby_io_println`, which never raises
+/// (D-767).
+fn println(text: Operand) -> Rvalue {
+    Rvalue::CallForeign {
+        symbol: "cheby_io_println".into(),
+        sig: ForeignSig {
+            params: vec![CType::Ptr],
+            ret: CType::Void,
+        },
+        args: vec![text],
+    }
+}
+
+// D-767: a foreign call of a kernel on the never-raise table has no unwind
+// edge, and the validator refuses one; any other kernel's call has one.
+#[test]
+fn unwind_never_raising_kernels_get_no_edge() {
+    for &symbol in crate::never_raise::NEVER_RAISE_KERNELS {
+        let call = Rvalue::CallForeign {
+            symbol: symbol.into(),
+            sig: ForeignSig {
+                params: Vec::new(),
+                ret: CType::Void,
+            },
+            args: Vec::new(),
+        };
+        assert!(!rvalue_may_unwind(&call), "{symbol}");
+    }
+    // `_0` is printed, then passed to a kernel that may raise.
+    let mut b = builder(0);
+    let message = b.add_param(Repr::Value, None, None).unwrap();
+    b.push(Stmt::Eval(println(local(message)))).unwrap();
+    let raw = b
+        .assign(
+            Repr::Int,
+            Rvalue::CallForeign {
+                symbol: "cheby_kernel".into(),
+                sig: ForeignSig {
+                    params: vec![CType::Ptr],
+                    ret: CType::I64,
+                },
+                args: vec![local(message)],
+            },
+        )
+        .unwrap();
+    b.push(Stmt::Drop(message)).unwrap();
+    let boxed = b
+        .assign(
+            Repr::Value,
+            Rvalue::Box {
+                value: local(raw),
+                from: Repr::Int,
+            },
+        )
+        .unwrap();
+    b.terminate(Terminator::Return(local(boxed))).unwrap();
+    let before = b.finish().unwrap();
+    let f = unwound(before.clone());
+    let edges: Vec<u32> = f
+        .blocks
+        .get(bb(0))
+        .unwrap()
+        .unwind
+        .iter()
+        .map(|&(at, _)| at)
+        .collect();
+    // The kernel (statement 1) and the box (statement 3), not the print.
+    assert_eq!(edges, [1, 3], "{}", text(&f));
+    accepted(&f);
+    assert_eq!(recorded_errors(before, |_| {}), "");
+    let mut with_edge = f;
+    set_edge(&mut with_edge, 0, 0, bb(2));
+    rejected(
+        &with_edge,
+        "bb0 statement 0 has an unwind edge, but this statement cannot unwind (D-698)",
     );
 }
 
 // Rule: every Cheby-ABI function has its entry pad after the pass; a
 // C-ABI function, which has no entry check, has none
-// (GAP(c-abi-entry-pad)).
+// (D-752).
 #[test]
 fn unwind_rule_entry_pads() {
     let f = unwound(calls());

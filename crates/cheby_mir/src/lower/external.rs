@@ -18,7 +18,7 @@
 //! The kernel of a `@std_context` function receives the running fiber's
 //! context first (D-692): the wrapper passes `Const::Ctx` as the first
 //! operand of its `CallForeign`, whose C signature starts with `ptr`
-//! (`foreign_sig_with_context`, GAP(const-ctx-operand)). A std external
+//! (`foreign_sig_with_context`, D-745). A std external
 //! whose symbol is a std intrinsic gets the intrinsic's generated body
 //! instead of a foreign call (D-693, `intrinsic.rs`).
 
@@ -69,7 +69,7 @@ pub(super) fn lower_wrapper(
     let mut args = Vec::with_capacity(sig.params.len().saturating_add(1));
     if ext.context {
         // The running fiber's context, the kernel's first argument
-        // (D-692). GAP(const-ctx-operand).
+        // (D-692, D-745).
         args.push(Operand::Const(Const::Ctx));
     }
     for p in &sig.params {

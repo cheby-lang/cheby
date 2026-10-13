@@ -38,10 +38,26 @@
 //! instruction that unwinds to it, and every Cheby-ABI function has its
 //! entry pad. Reuse tokens do not exist yet, so the rule that each is
 //! consumed once on every path, pads included, waits for them.
+//!
+//! Canonical pads, blocks `drop _l; goto <pad>` or `resume` that lead
+//! only to `resume` and that normal control flow does not reach, are left
+//! out of the dominance graph and the representation walk (D-735): what
+//! they drop is checked against ownership states, which hold only counted
+//! locals that every path to the edge defined.
+//!
+//! GAP(unwound-validation-split): the pipeline
+//! ([`crate::count_and_check_with`]) validates a unit after the unwind
+//! pass with the states the pass's own simulation recorded at each site:
+//! each edge's pad chain (its drops, then `goto`, then `resume`) must
+//! drop exactly what an unwinding leaves held there, and the entry pad's
+//! the counted parameters. The independent second simulation runs where
+//! [`crate::MirOptions::full_ownership_check`] says, by default in debug
+//! builds and so in every test run. [`validate`] on its own always runs
+//! the full simulation.
 
 mod dom;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use cheby_iface::{Ice, Idx};
 
@@ -56,7 +72,7 @@ use crate::ir::{
 use crate::layout::LayoutDesc;
 use crate::ownership::{self, Observer};
 use crate::repr::{CType, Repr};
-use crate::unwind::{stmt_may_unwind, terminator_may_unwind};
+use crate::unwind::{Recorded, stmt_may_unwind, terminator_may_unwind};
 
 /// Which invariants hold at this point of the pipeline.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -78,19 +94,52 @@ pub enum Stage {
 ///
 /// The list of problems, if any.
 pub fn validate(module: &MirModule, stage: Stage) -> Result<(), Vec<String>> {
+    validate_with(module, stage, None, true)
+}
+
+/// [`validate`] at [`Stage::Unwound`] of a unit the unwind pass has just
+/// run on, with what its simulation recorded for each function, in order
+/// (module documentation). `simulate` adds the independent full
+/// simulation.
+///
+/// # Errors
+///
+/// The list of problems, if any.
+pub(crate) fn validate_recorded(
+    module: &MirModule,
+    recorded: &[Recorded],
+    simulate: bool,
+) -> Result<(), Vec<String>> {
+    validate_with(module, Stage::Unwound, Some(recorded), simulate)
+}
+
+fn validate_with(
+    module: &MirModule,
+    stage: Stage,
+    recorded: Option<&[Recorded]>,
+    simulate: bool,
+) -> Result<(), Vec<String>> {
     let mut errors = Vec::new();
     check_module(module, &mut errors);
-    for f in &module.functions {
+    if recorded.is_some_and(|r| r.len() != module.functions.len()) {
+        errors.push("internal: the unwind pass recorded another number of functions".to_owned());
+    }
+    for (n, f) in module.functions.iter().enumerate() {
         let mut cx = FnCx {
             module,
             f,
             errors: Vec::new(),
+            recorded: recorded.and_then(|r| r.get(n)),
+            simulate,
+            pads: Vec::new(),
         };
         if let Err(ice) = cx.check(stage) {
             cx.errors.push(format!("internal: {ice}"));
         }
-        let name = key_label(f.key);
-        errors.extend(cx.errors.into_iter().map(|e| format!("{name}: {e}")));
+        if !cx.errors.is_empty() {
+            let name = key_label(f.key);
+            errors.extend(cx.errors.into_iter().map(|e| format!("{name}: {e}")));
+        }
     }
     if errors.is_empty() {
         Ok(())
@@ -254,6 +303,14 @@ struct FnCx<'a> {
     module: &'a MirModule,
     f: &'a Function,
     errors: Vec<String>,
+    /// What the unwind pass's simulation recorded, when the pipeline
+    /// validates right after it: the pad chains are checked against it.
+    recorded: Option<&'a Recorded>,
+    /// Whether to run the full ownership simulation.
+    simulate: bool,
+    /// By block index: a canonical pad (module documentation), left out
+    /// of the dominance graph and the representation walk.
+    pads: Vec<bool>,
 }
 
 /// Where a local is defined: its block and position (`None` for a
@@ -273,26 +330,121 @@ impl FnCx<'_> {
         if !self.check_cfg() {
             return Ok(());
         }
-        self.check_unwind_shape(stage);
-        if stage == Stage::Unwound {
-            self.check_unwind_rules();
+        let normal = normally_reachable(self.f);
+        self.check_unwind_shape(stage, &normal);
+        if self.counted(stage) {
+            self.pads = canonical_pads(self.f, &normal)?;
+        }
+        let reachable = (stage == Stage::Unwound).then(|| reachable_with_unwinding(self.f));
+        if let Some(reachable) = &reachable {
+            self.check_unwind_rules(reachable);
         }
         self.check_dominance(&defs)?;
         self.check_reprs(stage)?;
         if self.counted(stage) && self.errors.is_empty() {
-            self.check_ownership()?;
+            if let (Some(recorded), Some(reachable)) = (self.recorded, &reachable) {
+                self.check_pad_chains(recorded, reachable)?;
+            }
+            if self.simulate {
+                self.check_ownership()?;
+            }
         }
         Ok(())
     }
 
+    /// Whether block `id` is a canonical pad.
+    fn is_pad(&self, id: BlockId) -> bool {
+        self.pads.get(id.index()).copied().unwrap_or(false)
+    }
+
+    /// The pad check of GAP(unwound-validation-split) (module
+    /// documentation): every edge of a block the simulation reached, and
+    /// the entry pad, against the recorded states. A pad of a generated
+    /// body (D-744) that is not canonical was checked by the pass's own
+    /// simulation, which followed that body's edges.
+    fn check_pad_chains(&mut self, recorded: &Recorded, reachable: &[bool]) -> Result<(), Ice> {
+        let f = self.f;
+        if let Some(pad) = f.entry_unwind {
+            let mut params = Vec::new();
+            for &p in &f.params {
+                if f.local(p)?.repr == Repr::Value {
+                    params.push(p);
+                }
+            }
+            params.sort_unstable();
+            self.check_pad_chain(pad, &params, || "the entry check".to_owned());
+        }
+        for (id, block) in f.blocks.iter_enumerated() {
+            if !reachable.get(id.index()).copied().unwrap_or(false) {
+                continue;
+            }
+            for &(at, pad) in &block.unwind {
+                let Ok(i) = usize::try_from(at) else {
+                    continue;
+                };
+                let what = || format!("bb{} statement {i}", id.as_u32());
+                match recorded.state(id, i) {
+                    Some(held) => self.check_pad_chain(pad, held, what),
+                    None => self.err(format!(
+                        "{} has an unwind edge the unwind pass did not record (D-698)",
+                        what()
+                    )),
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The chain from `pad` drops exactly the multiset `held` (ascending,
+    /// with repeats) and resumes.
+    fn check_pad_chain(&mut self, pad: BlockId, held: &[Local], what: impl Fn() -> String) {
+        let f = self.f;
+        if !self.is_pad(pad) {
+            if !f.precounted {
+                self.err(format!(
+                    "{} unwinds to bb{}, which is not a chain of drops ending in resume (D-698)",
+                    what(),
+                    pad.as_u32()
+                ));
+            }
+            return;
+        }
+        let mut dropped = Vec::new();
+        let mut at = pad;
+        // A canonical pad leads to `resume` without a cycle.
+        while let Some(block) = f.blocks.get(at) {
+            match (block.stmts.as_slice(), &block.term) {
+                ([Stmt::Drop(l)], Terminator::Goto { target, .. }) => {
+                    dropped.push(*l);
+                    at = *target;
+                }
+                _ => break,
+            }
+        }
+        // The unwind pass drops the newest local first, so its chains come
+        // out descending.
+        dropped.reverse();
+        if !dropped.is_sorted() {
+            dropped.sort_unstable();
+        }
+        if dropped != held {
+            self.err(format!(
+                "{} unwinds to bb{}, which drops {}, but an unwinding there leaves {} held (D-698)",
+                what(),
+                pad.as_u32(),
+                ownership::set_text(&dropped),
+                ownership::set_text(held)
+            ));
+        }
+    }
+
     /// The rules of [`Stage::Unwound`] beyond the shape (D-698): see the
     /// module documentation. Pad sets are checked with the ownership.
-    fn check_unwind_rules(&mut self) {
+    fn check_unwind_rules(&mut self, reachable: &[bool]) {
         let f = self.f;
         if f.abi == Abi::Cheby && f.entry_unwind.is_none() {
             self.err("a Cheby-ABI function needs its entry pad after the unwind pass (D-698)");
         }
-        let reachable = reachable_with_unwinding(f);
         for (id, block) in f.blocks.iter_enumerated() {
             let len = block.stmts.len();
             for &(at, pad) in &block.unwind {
@@ -321,7 +473,7 @@ impl FnCx<'_> {
                     ));
                 }
             }
-            if !reachable.contains(&id) {
+            if !reachable.get(id.index()).copied().unwrap_or(false) {
                 continue;
             }
             let mut edges = block.unwind.iter().map(|&(at, _)| at).peekable();
@@ -354,30 +506,31 @@ impl FnCx<'_> {
     }
 
     /// The shape of unwinding (D-698): see the module documentation.
-    fn check_unwind_shape(&mut self, stage: Stage) {
+    fn check_unwind_shape(&mut self, stage: Stage, normal: &[bool]) {
         let f = self.f;
         let early = stage != Stage::Unwound && !f.precounted;
-        let pad_ok = |cx: &mut Self, what: &str, pad: BlockId| match f.blocks.get(pad) {
-            None => cx.err(format!("{what} unwinds to unknown bb{}", pad.as_u32())),
-            Some(_) if pad.as_u32() == 0 => {
-                cx.err(format!("{what} unwinds to the entry block"));
-            }
-            Some(target) if !target.params.is_empty() => cx.err(format!(
-                "{what} unwinds to bb{}, which takes parameters",
-                pad.as_u32()
-            )),
-            Some(_) => {}
+        // `what` is formatted only for a message.
+        let pad_ok = |cx: &mut Self, what: &dyn Fn() -> String, pad: BlockId| {
+            let problem = match f.blocks.get(pad) {
+                None => format!("unknown bb{}", pad.as_u32()),
+                Some(_) if pad.as_u32() == 0 => "the entry block".to_owned(),
+                Some(target) if !target.params.is_empty() => {
+                    format!("bb{}, which takes parameters", pad.as_u32())
+                }
+                Some(_) => return,
+            };
+            cx.err(format!("{} unwinds to {problem}", what()));
         };
         if let Some(pad) = f.entry_unwind {
             if early {
                 self.err("an entry pad before the unwind pass");
             }
-            // GAP(c-abi-entry-pad): entry thunks and trampolines have no
-            // entry check to unwind from.
+            // Entry thunks and trampolines have no entry check to unwind
+            // from (D-752).
             if f.abi == Abi::C {
                 self.err("a C-ABI function has no entry check, so no entry pad");
             }
-            pad_ok(self, "the entry check", pad);
+            pad_ok(self, &|| "the entry check".to_owned(), pad);
         }
         for (id, block) in f.blocks.iter_enumerated() {
             if early && !block.unwind.is_empty() {
@@ -403,7 +556,7 @@ impl FnCx<'_> {
                         id.as_u32()
                     ));
                 }
-                pad_ok(self, &format!("bb{} statement {at}", id.as_u32()), pad);
+                pad_ok(self, &|| format!("bb{} statement {at}", id.as_u32()), pad);
             }
             if early && block.term == Terminator::Resume {
                 self.err(format!("bb{} resumes before the unwind pass", id.as_u32()));
@@ -411,9 +564,8 @@ impl FnCx<'_> {
         }
         // `resume` and `clear_unwind` run only while unwinding: in blocks
         // that only pads lead to.
-        let normal = normally_reachable(f);
         for (id, block) in f.blocks.iter_enumerated() {
-            if !normal.contains(&id) {
+            if !normal.get(id.index()).copied().unwrap_or(false) {
                 continue;
             }
             if block.term == Terminator::Resume {
@@ -494,20 +646,23 @@ impl FnCx<'_> {
         Ok(())
     }
 
-    /// Every local defined exactly once; returns the definition sites.
-    fn check_definitions(&mut self) -> Option<BTreeMap<Local, DefSite>> {
+    /// Every local defined exactly once; returns the definition sites, by
+    /// local index.
+    fn check_definitions(&mut self) -> Option<Vec<Option<DefSite>>> {
         let f = self.f;
-        let mut sites: BTreeMap<Local, DefSite> = BTreeMap::new();
+        let mut sites: Vec<Option<DefSite>> = vec![None; f.locals.len()];
         let mut ok = true;
         let entry = BlockId::from_u32(0);
-        let mut define = |cx: &mut Self, l: Local, site: DefSite| {
-            if cx.f.locals.get(l).is_none() {
+        let mut define = |cx: &mut Self, l: Local, site: DefSite| match sites.get_mut(l.index()) {
+            None => {
                 cx.err(format!("unknown local _{}", l.as_u32()));
                 ok = false;
-            } else if sites.insert(l, site).is_some() {
+            }
+            Some(Some(_)) => {
                 cx.err(format!("_{} is defined more than once", l.as_u32()));
                 ok = false;
             }
+            Some(slot) => *slot = Some(site),
         };
         for &p in &f.params {
             define(self, p, (entry, None));
@@ -567,12 +722,15 @@ impl FnCx<'_> {
     }
 
     /// Every use dominated by its definition, over the blocks split at
-    /// their unwind edges ([`Segments`]).
-    fn check_dominance(&mut self, defs: &BTreeMap<Local, DefSite>) -> Result<(), Ice> {
+    /// their unwind edges ([`Segments`]), canonical pads left out.
+    fn check_dominance(&mut self, defs: &[Option<DefSite>]) -> Result<(), Ice> {
         let f = self.f;
-        let segments = Segments::new(f)?;
+        let segments = Segments::new(f, &self.pads)?;
         let dom = Dominance::from_successors(&segments.succs)?;
         for (id, block) in f.blocks.iter_enumerated() {
+            if self.is_pad(id) {
+                continue;
+            }
             let check = |cx: &mut Self, l: Local, at: usize| {
                 let use_node = segments.use_node(id, at);
                 // Unreachable code has no dominators; its uses are not
@@ -580,7 +738,7 @@ impl FnCx<'_> {
                 if !dom.is_reachable(use_node) {
                     return;
                 }
-                let Some(&(def_block, def_pos)) = defs.get(&l) else {
+                let Some(&Some((def_block, def_pos))) = defs.get(l.index()) else {
                     cx.err(format!("_{} is used but never defined", l.as_u32()));
                     return;
                 };
@@ -728,7 +886,7 @@ impl FnCx<'_> {
                 }
                 for (n, (arg, &ctype)) in args.iter().zip(&sig.params).enumerate() {
                     // The fiber's context of a `@std_context` kernel
-                    // (D-692). GAP(const-ctx-operand).
+                    // (D-692, D-745).
                     if n == 0 && *arg == Operand::Const(Const::Ctx) {
                         if !ctype.accepts_ctx() {
                             self.err(format!("ctx passed as {ctype}"));
@@ -1035,6 +1193,11 @@ impl FnCx<'_> {
     fn check_reprs(&mut self, stage: Stage) -> Result<(), Ice> {
         let f = self.f;
         for (id, block) in f.blocks.iter_enumerated() {
+            // A canonical pad drops counted locals and jumps without
+            // arguments ([`canonical_pads`]).
+            if self.is_pad(id) {
+                continue;
+            }
             for stmt in &block.stmts {
                 match stmt {
                     Stmt::Assign { dst, value } => {
@@ -1170,40 +1333,48 @@ struct Segments {
 }
 
 impl Segments {
-    fn new(f: &Function) -> Result<Self, Ice> {
+    /// The segments of `f`, without the canonical pads `pads` marks by
+    /// block index: they get no node, and an edge to one does not split
+    /// its block.
+    fn new(f: &Function, pads: &[bool]) -> Result<Self, Ice> {
         let n = f.blocks.len();
+        let is_pad = |b: BlockId| pads.get(b.index()).copied().unwrap_or(false);
         let mut first = Vec::with_capacity(n);
         let mut edges = Vec::with_capacity(n);
+        let mut splits: Vec<Vec<(usize, BlockId)>> = Vec::with_capacity(n);
         let mut next = 1_usize;
-        for block in &f.blocks {
+        for (id, block) in f.blocks.iter_enumerated() {
+            if is_pad(id) {
+                first.push(NO_NODE);
+                edges.push(Vec::new());
+                splits.push(Vec::new());
+                continue;
+            }
             first.push(next);
             // Out-of-range pads are shape errors, reported elsewhere.
-            let mut at: Vec<usize> = block
+            let mut here: Vec<(usize, BlockId)> = block
                 .unwind
                 .iter()
-                .filter(|&&(_, pad)| pad.index() < n)
-                .filter_map(|&(i, _)| usize::try_from(i).ok())
+                .filter(|&&(_, pad)| pad.index() < n && !is_pad(pad))
+                .filter_map(|&(i, pad)| Some((usize::try_from(i).ok()?, pad)))
                 .collect();
-            at.sort_unstable();
-            next = next.saturating_add(at.len()).saturating_add(1);
-            edges.push(at);
+            here.sort_unstable_by_key(|&(i, _)| i);
+            next = next.saturating_add(here.len()).saturating_add(1);
+            edges.push(here.iter().map(|&(i, _)| i).collect());
+            splits.push(here);
         }
-        let node = |b: BlockId| first.get(b.index()).copied();
+        let node = |b: BlockId| first.get(b.index()).copied().filter(|&n| n != NO_NODE);
         let mut succs: Vec<Vec<usize>> = vec![Vec::new(); next];
         let entry = succs
             .first_mut()
             .ok_or_else(|| Ice::new("segments without an entry node"))?;
         entry.extend(node(BlockId::from_u32(0)));
         entry.extend(f.entry_unwind.and_then(node));
-        for (id, block) in f.blocks.iter_enumerated() {
+        for ((id, block), pads) in f.blocks.iter_enumerated().zip(&splits) {
+            if is_pad(id) {
+                continue;
+            }
             let base = node(id).ok_or_else(|| Ice::new("a block without a node"))?;
-            let mut pads: Vec<(usize, BlockId)> = block
-                .unwind
-                .iter()
-                .filter(|&&(_, pad)| pad.index() < n)
-                .filter_map(|&(i, pad)| Some((usize::try_from(i).ok()?, pad)))
-                .collect();
-            pads.sort_unstable_by_key(|&(i, _)| i);
             for (j, &(_, pad)) in pads.iter().enumerate() {
                 let out = succs
                     .get_mut(base.saturating_add(j))
@@ -1226,7 +1397,7 @@ impl Segments {
 
     fn base(&self, b: BlockId) -> (usize, &[usize]) {
         (
-            self.first.get(b.index()).copied().unwrap_or(usize::MAX),
+            self.first.get(b.index()).copied().unwrap_or(NO_NODE),
             self.edges.get(b.index()).map_or(&[], Vec::as_slice),
         )
     }
@@ -1255,15 +1426,94 @@ fn block_uses(block: &Block, local: Local) -> bool {
         || block.term.uses().iter().any(|&(l, _)| l == local)
 }
 
+/// No node in [`Segments`]: a canonical pad's.
+const NO_NODE: usize = usize::MAX;
+
+/// The canonical pads of `f`, by block index (module documentation): a
+/// block without parameters or unwind edges that normal control flow
+/// (`normal`, by block index) does not reach, and that is either `resume`
+/// or `drop _l; goto <canonical pad>` without arguments, `_l` counted.
+/// The chain below one ends in `resume`.
+///
+/// # Errors
+///
+/// An [`Ice`] for an unknown local.
+fn canonical_pads(f: &Function, normal: &[bool]) -> Result<Vec<bool>, Ice> {
+    /// The state of a block in the walk.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Mark {
+        Unknown,
+        OnPath,
+        Pad,
+        Other,
+    }
+    let n = f.blocks.len();
+    let mut mark = vec![Mark::Unknown; n];
+    let mut path = Vec::new();
+    for start in 0..n {
+        let mut at = start;
+        // Follow the chain below `start` until its end is known, then
+        // mark the path walked by that end; no recursion over long
+        // chains.
+        let end = loop {
+            match mark.get(at).copied() {
+                Some(Mark::Pad) => break Mark::Pad,
+                // `OnPath` is a cycle: no `resume` below.
+                Some(Mark::Other | Mark::OnPath) | None => break Mark::Other,
+                Some(Mark::Unknown) => {}
+            }
+            let Some(block) = BlockId::from_usize(at).and_then(|id| f.blocks.get(id)) else {
+                break Mark::Other;
+            };
+            let candidate = block.params.is_empty()
+                && block.unwind.is_empty()
+                && !normal.get(at).copied().unwrap_or(true);
+            let next = match (block.stmts.as_slice(), &block.term) {
+                _ if !candidate => None,
+                ([], Terminator::Resume) => {
+                    if let Some(m) = mark.get_mut(at) {
+                        *m = Mark::Pad;
+                    }
+                    break Mark::Pad;
+                }
+                ([Stmt::Drop(l)], Terminator::Goto { target, args })
+                    if args.is_empty() && f.local(*l)?.repr == Repr::Value =>
+                {
+                    Some(target.index())
+                }
+                _ => None,
+            };
+            let Some(next) = next else {
+                if let Some(m) = mark.get_mut(at) {
+                    *m = Mark::Other;
+                }
+                break Mark::Other;
+            };
+            if let Some(m) = mark.get_mut(at) {
+                *m = Mark::OnPath;
+            }
+            path.push(at);
+            at = next;
+        };
+        for b in path.drain(..) {
+            if let Some(m) = mark.get_mut(b) {
+                *m = end;
+            }
+        }
+    }
+    Ok(mark.into_iter().map(|m| m == Mark::Pad).collect())
+}
+
 /// The blocks reached from `bb0` and the entry pad through
-/// [`Function::successors`]: normal flow and unwinding.
-fn reachable_with_unwinding(f: &Function) -> BTreeSet<BlockId> {
-    let mut seen = BTreeSet::new();
+/// [`Function::successors`], normal flow and unwinding, by block index.
+fn reachable_with_unwinding(f: &Function) -> Vec<bool> {
+    let mut seen = vec![false; f.blocks.len()];
     let mut work = vec![BlockId::from_u32(0)];
     work.extend(f.entry_unwind);
     while let Some(id) = work.pop() {
-        if f.blocks.get(id).is_none() || !seen.insert(id) {
-            continue;
+        match seen.get_mut(id.index()) {
+            Some(s) if !*s => *s = true,
+            _ => continue,
         }
         work.extend(f.successors(id).unwrap_or_default());
     }
@@ -1298,16 +1548,18 @@ fn stmt_locals(stmt: &Stmt) -> Vec<Local> {
 
 /// The blocks reached from `bb0` through normal successors only, without
 /// taking an unwind edge or the entry pad.
-fn normally_reachable(f: &Function) -> BTreeSet<BlockId> {
-    let mut seen = BTreeSet::new();
+fn normally_reachable(f: &Function) -> Vec<bool> {
+    let mut seen = vec![false; f.blocks.len()];
     let mut work = vec![BlockId::from_u32(0)];
     while let Some(id) = work.pop() {
         let Some(block) = f.blocks.get(id) else {
             continue;
         };
-        if seen.insert(id) {
-            work.extend(block.term.successors());
+        match seen.get_mut(id.index()) {
+            Some(s) if !*s => *s = true,
+            _ => continue,
         }
+        work.extend(block.term.successors());
     }
     seen
 }

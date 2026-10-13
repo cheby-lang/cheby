@@ -30,7 +30,9 @@
 //! callee's slot (D-043, [`CallMode::Indirect`]). Entry thunks use the
 //! platform C convention and are the only way the host enters generated
 //! code. Every Cheby-ABI function starts with the stack-limit check of
-//! D-124, whose slow path is `cheby_rt_stack_slow(ctx, location)`. The
+//! D-124, whose slow path is `cheby_rt_stack_slow(ctx, location)`, or
+//! `cheby_rt_stack_slow_unwind`, which also releases up to four counted
+//! parameters when it starts an unwinding (GAP(entry-unwind-helper)). The
 //! check runs after the prologue has allocated the frame, so a function
 //! whose frame exceeds [`CodegenOptions::large_frame_threshold`] (64 KiB)
 //! is compiled as two (D-679): an outer function with its symbol and a
@@ -338,7 +340,7 @@ pub fn define_with_stats<M: Module>(
     let mut large = Vec::new();
     for (index, (&(_, function, _), (_, code))) in todo.iter().zip(&first).enumerate() {
         if is_large_frame(function, code, opts) {
-            large.push((index, decls.declare_large_frame_body(module, function.key)?));
+            large.push((index, decls.declare_large_frame_body(module, function)?));
         }
     }
     let shared: &Decls = decls;

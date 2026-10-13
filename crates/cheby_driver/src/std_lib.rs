@@ -181,10 +181,12 @@ pub const PLANNED_STD_MODULES: &[&str] = &[
 /// that milestone the entry fails the guard, and so does an entry whose
 /// test is in `std/`.
 ///
-/// M2's first slice ships `std::fiber`, `std::channel` and
+/// M2's first slice shipped `std::fiber`, `std::channel` and
 /// `std::duration` before cancellation, timers, selectors and detached
-/// fibers exist (D-754). Each entry's comment names what its test needs
-/// and the M2 package that brings it.
+/// fibers existed (D-754). Cancellation's spec tests have since moved into
+/// `std/`; the entries left wait for timers, selectors and the fiber
+/// lifecycle. Each entry's comment names what its test needs and the M2
+/// package that brings it.
 pub const PENDING_SPEC_TESTS: &[(&str, &str, &str)] = &[
     // `spawn_with_stack`: lifecycle (L1).
     ("fiber", "a fiber can have a larger stack", "M2"),

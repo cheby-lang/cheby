@@ -12,7 +12,8 @@
 //!   internal one.
 //! - [`rc`]: naive dup/drop placement by the last-use rule (D7, D-205).
 //! - [`unwind`]: unwind edges to shared cleanup pads, after counting
-//!   (D-698), with the ownership simulation it shares with the validator.
+//!   (D-698), with the ownership simulation it shares with the validator;
+//!   [`never_raise`]: the std kernels whose calls get no edge (D-767).
 //! - [`validate`] and [`dump`]: the validator and the stable text form.
 
 pub mod abi;
@@ -27,6 +28,7 @@ mod liveness;
 pub mod lower;
 #[cfg(test)]
 mod lower_tests;
+pub mod never_raise;
 pub mod options;
 mod ownership;
 pub mod rc;

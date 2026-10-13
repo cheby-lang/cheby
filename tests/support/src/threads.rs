@@ -4,7 +4,7 @@
 //! same expectation and the same goldens: with `CHEBY_THREADS` unset (the
 //! base trial, named as before), with `CHEBY_THREADS=1` and with
 //! `CHEBY_THREADS=2`. The variants are named `<name>@threads=N` and
-//! `<name>::test@threads=N` (GAP(thread-variant-names)). A `skip-run`
+//! `<name>::test@threads=N` (D-747). A `skip-run`
 //! example's trials only check it or stay pending, so they get no
 //! variants.
 //!
@@ -54,7 +54,7 @@ impl Variant {
 
     /// The name of the variant of the trial `base`: `base` itself for the
     /// unset variant, `base@threads=N` otherwise
-    /// (GAP(thread-variant-names)).
+    /// (D-747).
     #[must_use]
     pub fn trial_name(self, base: &str) -> String {
         match self {
@@ -77,7 +77,7 @@ pub fn variants() -> Result<Vec<Variant>, String> {
 /// [`VARIANTS`], plus `Threads(n)` when `outer`, the harness's own
 /// `CHEBY_THREADS`, is a whole number `n` of at least 1 that is neither 1
 /// nor 2, written in decimal digits with surrounding whitespace ignored
-/// (GAP(thread-variant-names)). Unset or empty adds nothing, as D-658
+/// (D-747). Unset or empty adds nothing, as D-658
 /// reads an empty value as no setting.
 ///
 /// # Errors

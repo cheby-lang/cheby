@@ -59,19 +59,27 @@ pub enum RuntimeFunc {
     /// `uint64_t cheby_rt_list_slice_owned(ExecCtx *ctx, uint64_t list, int64_t start, int64_t end)`.
     ListSliceOwned,
     /// `void cheby_rt_stack_slow_frame(ExecCtx *ctx, uint64_t location, uint64_t frame_size)`:
-    /// the slow path of a large function's entry check (D-679).
-    /// (D-743).
+    /// the slow path of a large function's entry check (D-679, D-743).
     StackSlowFrame,
     /// `uint64_t cheby_rt_scope_open(ExecCtx *ctx, bool timed, int64_t seconds, int64_t nanoseconds)`
     /// (D-693).
     ScopeOpen,
     /// `bool cheby_rt_scope_close(ExecCtx *ctx, uint64_t scope, bool unwound)` (D-693).
     ScopeClose,
+    /// `uint32_t cheby_rt_stack_slow_unwind(ExecCtx *ctx, uint64_t location, uint32_t count,
+    /// uint64_t p0, uint64_t p1, uint64_t p2, uint64_t p3)`: the entry check's slow path that
+    /// releases up to four counted parameters itself when it starts an unwinding, and then
+    /// returns nonzero (GAP(entry-unwind-helper)).
+    StackSlowUnwind,
+    /// `uint32_t cheby_rt_stack_slow_frame_unwind(ExecCtx *ctx, uint64_t location,
+    /// uint64_t frame_size, uint32_t count, uint64_t p0, uint64_t p1, uint64_t p2, uint64_t p3)`:
+    /// the same for a large function's outer entry (D-743, GAP(entry-unwind-helper)).
+    StackSlowFrameUnwind,
 }
 
 impl RuntimeFunc {
     /// Every runtime function, in declaration order ([`Self::index`]).
-    pub const ALL: [Self; 27] = [
+    pub const ALL: [Self; 29] = [
         Self::Alloc,
         Self::Dup,
         Self::Drop,
@@ -99,6 +107,8 @@ impl RuntimeFunc {
         Self::StackSlowFrame,
         Self::ScopeOpen,
         Self::ScopeClose,
+        Self::StackSlowUnwind,
+        Self::StackSlowFrameUnwind,
     ];
 
     /// The symbol.
@@ -132,6 +142,8 @@ impl RuntimeFunc {
             Self::StackSlowFrame => sym::STACK_SLOW_FRAME,
             Self::ScopeOpen => sym::SCOPE_OPEN,
             Self::ScopeClose => sym::SCOPE_CLOSE,
+            Self::StackSlowUnwind => sym::STACK_SLOW_UNWIND,
+            Self::StackSlowFrameUnwind => sym::STACK_SLOW_FRAME_UNWIND,
         }
     }
 
@@ -161,6 +173,8 @@ impl RuntimeFunc {
             Self::StackSlowFrame => (&[Ptr, Ptr, U64], Void),
             Self::ScopeOpen => (&[Ptr, Bool, I64, I64], U64),
             Self::ScopeClose => (&[Ptr, U64, Bool], Bool),
+            Self::StackSlowUnwind => (&[Ptr, Ptr, U32, Ptr, Ptr, Ptr, Ptr], U32),
+            Self::StackSlowFrameUnwind => (&[Ptr, Ptr, U64, U32, Ptr, Ptr, Ptr, Ptr], U32),
         }
     }
 
@@ -171,7 +185,11 @@ impl RuntimeFunc {
     pub const fn on_demand(self) -> bool {
         matches!(
             self,
-            Self::StackSlowFrame | Self::ScopeOpen | Self::ScopeClose
+            Self::StackSlowFrame
+                | Self::ScopeOpen
+                | Self::ScopeClose
+                | Self::StackSlowUnwind
+                | Self::StackSlowFrameUnwind
         )
     }
 
@@ -206,6 +224,8 @@ impl RuntimeFunc {
             Self::StackSlowFrame => 24,
             Self::ScopeOpen => 25,
             Self::ScopeClose => 26,
+            Self::StackSlowUnwind => 27,
+            Self::StackSlowFrameUnwind => 28,
         }
     }
 
