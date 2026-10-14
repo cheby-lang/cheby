@@ -193,8 +193,8 @@ fn timer_armed_after_stop_never_fires() {
     assert!(!handle.cancel());
 }
 
-/// C4: the thread count's target is the worker count until set; this wave
-/// stores the target only (T1n starts and retires workers in wave 3).
+/// C4: the thread count is the worker count until set, then the count set
+/// (`thread_count_tests` checks the workers that start and retire).
 #[test]
 #[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
 fn timer_seam_reports_the_thread_target_and_fiber_stack() {

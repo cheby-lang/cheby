@@ -189,7 +189,7 @@ pub(crate) struct FiberInit {
     pub(crate) callbacks: Callbacks,
     /// Whether its code was compiled with unwind edges: false only under
     /// `CHEBY_UNWIND_EDGES=off` (D-742), where a raise ends the process
-    /// (GAP(edgeless-panics)).
+    /// (D-770).
     pub(crate) unwind_edges: bool,
     /// The scheduler's fields: [`FiberSched::isolated`] outside a runtime.
     pub(crate) sched: FiberSched,
@@ -315,7 +315,7 @@ impl ExecCtx {
 
     /// Whether the fiber's code was compiled with unwind edges: false only
     /// under `CHEBY_UNWIND_EDGES=off`, D-742's measurement switch, where a
-    /// raise ends the process instead of unwinding (GAP(edgeless-panics)).
+    /// raise ends the process instead of unwinding (D-770).
     #[must_use]
     pub fn unwind_edges(&self) -> bool {
         self.unwind_edges

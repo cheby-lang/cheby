@@ -198,13 +198,15 @@ fn static_print(decls: &Decls, unit: &MirModule, object: &StaticObject) -> Strin
 }
 
 /// The item whose redefinition replaces the function `key`: its own code,
-/// its value shim, its closures, its constant initializer and their entry.
+/// its value shim, its closures and continuations, its constant
+/// initializer and their entry.
 const fn owner_of(key: FnKey) -> Option<DefId> {
     match key {
         FnKey::Item(def)
         | FnKey::ValueShim(def)
         | FnKey::ConstInit(def)
         | FnKey::Closure { owner: def, .. }
+        | FnKey::Continuation { owner: def, .. }
         | FnKey::Entry(EntryKind::Const(def)) => Some(def),
         _ => None,
     }
@@ -717,7 +719,7 @@ impl Decls {
     /// `function`, whose frame turned out to be large (D-679), with its
     /// signature, and the runtime function its outer function's slow path
     /// calls: the releasing one when its entry pad allows it
-    /// (GAP(entry-unwind-helper), [`crate::func::entry_release`]).
+    /// (D-775, [`crate::func::entry_release`]).
     /// [`crate::define`] calls it after compiling a batch, for each large
     /// function in declaration order, so the ids are the same in every
     /// build (D-264). Declaring the same body again (a batch retried after
@@ -749,7 +751,7 @@ impl Decls {
 
     /// Declares the on-demand runtime functions the helpers of `unit`'s
     /// code call (D-693), and the entry check's releasing slow path when a
-    /// function's entry pad allows it (GAP(entry-unwind-helper)).
+    /// function's entry pad allows it (D-775).
     fn declare_unit_runtime<M: Module>(
         &mut self,
         module: &mut M,
@@ -791,6 +793,14 @@ impl Decls {
                 match self.test_ordinals.get(&owner) {
                     Some(&ordinal) => mangle::test_closure(&name.module, ordinal, index),
                     None => mangle::closure(&name, index),
+                }
+            }
+            // Named as the owner's closures are (D-780).
+            FnKey::Continuation { owner, index } => {
+                let name = self.def_name(unit, owner)?;
+                match self.test_ordinals.get(&owner) {
+                    Some(&ordinal) => mangle::test_continuation(&name.module, ordinal, index),
+                    None => mangle::continuation(&name, index),
                 }
             }
             FnKey::ConstInit(def) => mangle::item(Kind::Cinit, &self.def_name(unit, def)?),

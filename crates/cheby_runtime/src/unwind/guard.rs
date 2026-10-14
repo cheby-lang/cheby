@@ -10,7 +10,7 @@
 //! [`Unwound::UNWOUND`] sentinel, and generated code tests the flag after
 //! the call and runs its cleanup pad. In code compiled without unwind
 //! edges, which would not test the flag, it ends the process instead
-//! (GAP(edgeless-panics)).
+//! (D-770).
 //!
 //! Any other Rust panic stays fatal, as before the guards: the panic hook
 //! has printed it, and the process aborts.
@@ -105,7 +105,7 @@ fn deliver<R: Unwound>(ctx: Option<*mut ExecCtx>) -> R {
         // The raise paths end an edgeless fiber's panic before it unwinds;
         // whatever else reaches a guard there ends the same way, before the
         // sentinel returns into code that does not test the flag
-        // (GAP(edgeless-panics)).
+        // (D-770).
         let report = match record::take_record(fiber) {
             Some(UnwindRecord::Panic(report)) => Some(report),
             Some(UnwindRecord::Cancel) | None => None,

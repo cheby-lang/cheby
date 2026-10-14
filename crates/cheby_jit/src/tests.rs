@@ -1114,6 +1114,7 @@ mod borrow;
 mod control;
 mod entry_unwind;
 mod large_frame;
+mod literals;
 mod objects;
 mod repl;
 mod scalars;

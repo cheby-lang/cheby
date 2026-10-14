@@ -310,13 +310,13 @@ pub mod unwind_flag {
 
 /// The most counted words the entry check's releasing slow paths
 /// ([`sym::STACK_SLOW_UNWIND`], [`sym::STACK_SLOW_FRAME_UNWIND`]) take in
-/// registers (GAP(entry-unwind-helper)). Code generation keeps the
+/// registers (D-775). Code generation keeps the
 /// translated entry pad chain for a function with more counted parameters.
 pub const ENTRY_UNWIND_WORDS: u32 = 4;
 
 /// D-742's measurement switch: `CHEBY_UNWIND_EDGES=off` skips the unwind
 /// pass, and a raise in code built so ends the process
-/// (GAP(edgeless-panics)).
+/// (D-770).
 pub const UNWIND_EDGES_ENV: &str = "CHEBY_UNWIND_EDGES";
 
 /// Exit statuses of a program (§10.10, D-182). Entry thunks for `main`
@@ -439,7 +439,7 @@ pub mod sym {
     pub const ALLOC: &str = "cheby_rt_alloc";
     /// `void cheby_rt_dup(uint64_t value)`.
     pub const DUP: &str = "cheby_rt_dup";
-    /// `void cheby_rt_drop(ExecCtx *ctx, uint64_t value)` (GAP(drop-with-ctx)).
+    /// `void cheby_rt_drop(ExecCtx *ctx, uint64_t value)` (D-772).
     pub const DROP: &str = "cheby_rt_drop";
     /// `_Noreturn void cheby_rt_panic(ExecCtx *ctx, uint32_t kind, uint64_t message, uint64_t location)`.
     pub const PANIC: &str = "cheby_rt_panic";
@@ -548,14 +548,14 @@ pub mod sym {
     pub const STATIC_ERR_NIL: &str = "cheby_rt_static_err_nil";
     /// `uint32_t cheby_rt_stack_slow_unwind(ExecCtx *ctx, uint64_t location, uint32_t count,
     /// uint64_t p0, uint64_t p1, uint64_t p2, uint64_t p3)`: the entry check's slow path of a
-    /// function with at most four counted parameters (GAP(entry-unwind-helper)). Runs
+    /// function with at most four counted parameters (D-775). Runs
     /// [`STACK_SLOW`]; when that started an unwinding, releases `p0` to `p(count-1)` and
     /// returns 1, else returns 0 and leaves them untouched.
     pub const STACK_SLOW_UNWIND: &str = "cheby_rt_stack_slow_unwind";
     /// `uint32_t cheby_rt_stack_slow_frame_unwind(ExecCtx *ctx, uint64_t location,
     /// uint64_t frame_size, uint32_t count, uint64_t p0, uint64_t p1, uint64_t p2, uint64_t p3)`:
     /// [`STACK_SLOW_UNWIND`] for the outer function of a large frame, through
-    /// [`STACK_SLOW_FRAME`] (D-743, GAP(entry-unwind-helper)).
+    /// [`STACK_SLOW_FRAME`] (D-743, D-775).
     pub const STACK_SLOW_FRAME_UNWIND: &str = "cheby_rt_stack_slow_frame_unwind";
     /// Std externals whose bodies the compiler generates (D-693). Never
     /// registered.

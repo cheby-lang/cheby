@@ -34,7 +34,8 @@
 //!   `const_init <path>`, `test <path>`, `entry main(<path>)`,
 //!   `entry test(<path>)`, `entry const(<path>)`, `entry repl(<n>)`,
 //!   `trampoline <n>`, `tuple_dict_fn <iface fn>/<arity>`,
-//!   `dyn_forward <iface fn> for dyn <interface>`.
+//!   `dyn_forward <iface fn> for dyn <interface>`,
+//!   `continuation <owner>#<n>` (D-780).
 //! - Constants: `int N`, `float F`, `bool B`, `<sized repr> N`, `str#N`,
 //!   `nil`, `ctor <path>`, `fn <path>`, `code <key>`, `empty_list`,
 //!   `static#N`, `builtin_desc <name>`, `ctx` (the fiber's context, only
@@ -46,7 +47,9 @@
 //! - Rvalues: `<operand>`, `call <callee>(<args>)`,
 //!   `call_foreign "<symbol>"(borrow <args>) -> <ctype>`,
 //!   `call_runtime <helper>(<args>)` with `borrow ` before each borrowed
-//!   argument, `alloc <layout>(<fields>)`, `field _N.<i> of <layout>`,
+//!   argument, `alloc <layout>(<fields>)`, `alloc_placeholder <layout>`,
+//!   `init_field _N.<i> of <layout> = <op>` (D-720),
+//!   `field _N.<i> of <layout>`,
 //!   `read_layout _N`, `load_const <path>`, `box <repr> <op>`,
 //!   `unbox <repr> <op>`, `checked <op> <repr> <a>, <b> at str#K`,
 //!   `compare <op> <repr> <a>, <b>`, `float_arith <op> <repr> <a>, <b>`,
@@ -319,6 +322,9 @@ fn key_text(m: &MirModule, key: FnKey) -> Result<String, Ice> {
             def(m, iface_fn)?,
             def(m, dyn_iface)?
         ),
+        FnKey::Continuation { owner, index } => {
+            format!("continuation {}#{index}", def(m, owner)?)
+        }
     })
 }
 
@@ -443,6 +449,18 @@ fn rvalue(m: &MirModule, value: &Rvalue) -> Result<String, Ice> {
         Rvalue::Alloc { layout: l, fields } => {
             format!("alloc {}({})", layout(m, *l)?, operands(m, fields, "")?)
         }
+        Rvalue::AllocPlaceholder { layout: l } => format!("alloc_placeholder {}", layout(m, *l)?),
+        Rvalue::InitField {
+            obj,
+            layout: l,
+            field,
+            value,
+        } => format!(
+            "init_field {}.{field} of {} = {}",
+            local(*obj),
+            layout(m, *l)?,
+            operand(m, value)?
+        ),
         Rvalue::Field {
             base,
             layout: l,

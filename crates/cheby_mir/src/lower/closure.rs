@@ -319,14 +319,16 @@ struct Captures<'c> {
     dicts: &'c [usize],
 }
 
-/// The item that owns the closures of a body with key `key`: the item,
-/// constant or test whose body it is, or the owner of an enclosing
-/// closure.
-fn owner_of(key: FnKey) -> Result<DefId, Ice> {
+/// The item that owns the closures and continuations of a body with key
+/// `key`: the item, constant or test whose body it is, or the owner of an
+/// enclosing closure or continuation (D-780).
+pub(super) fn owner_of(key: FnKey) -> Result<DefId, Ice> {
     match key {
-        FnKey::Item(d) | FnKey::ConstInit(d) | FnKey::Test(d) | FnKey::Closure { owner: d, .. } => {
-            Ok(d)
-        }
+        FnKey::Item(d)
+        | FnKey::ConstInit(d)
+        | FnKey::Test(d)
+        | FnKey::Closure { owner: d, .. }
+        | FnKey::Continuation { owner: d, .. } => Ok(d),
         other => Err(Ice::new(format!("a closure inside {other:?}"))),
     }
 }

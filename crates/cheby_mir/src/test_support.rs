@@ -33,10 +33,10 @@ use cheby_iface::DefId;
 use crate::borrow::{
     BorrowMask, BuildFacts, IfaceEligibility, Masks, collect_facts, infer, infer_build,
 };
+use crate::lower::{lower_items_split, lower_tests_split};
 use crate::{
     Defs, EntryKind, EntryRequest, LowerCx, MirModule, MirOptions, Program, Root, Stage,
-    count_lowered_with, dump, dump_function, lower_entries, lower_items, lower_tests, reachable,
-    validate,
+    count_lowered_with, dump, dump_function, lower_entries, reachable, validate,
 };
 
 /// What [`lower_source`] produced.
@@ -62,6 +62,10 @@ pub(crate) enum Mode {
     Counted,
     /// Only the validation at `Stage::Lowered`.
     Uncounted,
+    /// As `Counted`, with large literals cut once their piece reaches
+    /// `size` instead of [`crate::lower::SPLIT_SIZE`] (D-780), so small
+    /// literals show the continuations.
+    Split { size: usize },
     /// As `Uncounted`, then borrowing inference over all the units
     /// ([`crate::borrow`]), with the units left as lowered. With
     /// `reach_all`, every function of every loaded module is lowered, not
@@ -263,6 +267,14 @@ pub(crate) fn lower_source_on_stack(files: &[(&str, &str)], stack: usize, setup:
 /// `cheby test` builds them (G4).
 pub(crate) fn lower_source_with_tests(files: &[(&str, &str)]) -> Lowered {
     lower_package_with("app", files, true, None, Mode::Counted)
+        .unwrap_or_else(|errors| panic!("front-end errors: {errors}"))
+}
+
+/// [`lower_source`] (with the `test` blocks when `with_tests`, as
+/// [`lower_source_with_tests`]) whose large literals are cut once their
+/// piece in a function reaches `size` statements and blocks (D-780).
+pub(crate) fn lower_source_split(files: &[(&str, &str)], size: usize, with_tests: bool) -> Lowered {
+    lower_package_with("app", files, with_tests, None, Mode::Split { size })
         .unwrap_or_else(|errors| panic!("front-end errors: {errors}"))
 }
 
@@ -576,9 +588,14 @@ fn back_end(
             },
             sources,
         };
-        push(lower_items(thir, &|def| reach_all || reach.contains(def), &cx).unwrap());
+        let wanted = |def| reach_all || reach.contains(def);
+        let split = match mode {
+            Mode::Split { size } => Some(size),
+            Mode::Counted | Mode::Uncounted | Mode::Inferred { .. } => None,
+        };
+        push(lower_items_split(thir, &wanted, &cx, split).unwrap());
         if tests.iter().any(|&(m, _)| m == id) {
-            push(lower_tests(thir, &cx).unwrap());
+            push(lower_tests_split(thir, &cx, split).unwrap());
         }
     }
     let mut all: Vec<ModuleId> = order.to_vec();
@@ -628,7 +645,7 @@ fn finish(
         }
         // As a build does it (D-779): every unit lowered, then the masks
         // inferred over all of them and written into each, then counting.
-        Mode::Counted => {
+        Mode::Counted | Mode::Split { .. } => {
             let found = infer_build(units, per_unit).unwrap();
             for unit in units.iter_mut() {
                 if let Err(ice) = count_lowered_with(unit, &MirOptions::default()) {

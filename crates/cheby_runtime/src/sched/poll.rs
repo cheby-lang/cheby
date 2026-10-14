@@ -164,8 +164,8 @@ impl Driver {
         }
     }
 
-    /// Whether a worker polls now (for tests).
-    #[cfg(test)]
+    /// Whether a worker polls now: a worker that retires wakes another one
+    /// when nobody does.
     pub(super) fn polling(&self) -> bool {
         self.deadline.load(Ordering::SeqCst) != NOT_POLLING
     }

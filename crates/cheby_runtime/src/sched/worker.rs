@@ -30,16 +30,55 @@
 //! Once a halt has started (D-073, D-708) the worker takes no fiber: its
 //! loop ends before the next search, and a fiber that switches back with
 //! `AfterSwitch::Freeze` is left frozen.
+//!
+//! # Started and retired workers (D-657, D-689, GAP(retired-worker-slots))
+//!
+//! A runtime has [`MAX_THREADS`] worker slots, filled lazily: a slot gets
+//! its [`WorkerShared`] when a worker first starts there, and keeps it for
+//! the runtime's life, so the index a fiber last ran on (its
+//! `sched.worker()`) always names a slot, also after that worker retired.
+//! `set_thread_count` starts workers at once in free slots, lowest first,
+//! and retires the live workers with the highest indexes. A slot's
+//! [`life`] word moves so:
+//!
+//! ```text
+//! LIVE --set_thread_count lowers the count--> RETIRING --raised again--> LIVE
+//! RETIRING --the worker, at its next scheduling point--> LEAVING
+//! LEAVING --its pinned fibers are gone, the count is still lower--> DEAD
+//! LEAVING --the count went up meanwhile, or the runtime stops--> LIVE (the same thread rejoins)
+//! DEAD --set_thread_count raises the count--> LIVE (a new thread)
+//! ```
+//!
+//! The retiring worker's running fiber gets a yield request
+//! ([`crate::ctx::reason::YIELD`], never `SAFEPOINT`, which is the halt's,
+//! C-5), so even a lone fiber (D-737) gives the worker back at its next
+//! entry check or suspension. The request comes from `retire_worker` if it
+//! sees the fiber running, and otherwise from the worker itself when it
+//! resumes a fiber while `RETIRING` (`run_fiber`), and again when a fiber
+//! leaves its last kernel callback on a retiring or leaving worker
+//! (`leave_callback`). Then, at the top of its loop, the worker
+//! moves its runnext fiber and its deque to the global queue, as
+//! `hand_off_before_blocking` does before a blocking call, ends its search,
+//! leaves `Idle`, and wakes a parked worker for those fibers and, if it
+//! held the poller, to hold it next. While fibers are pinned to it (a
+//! kernel callback on their stacks, D-687) it keeps running them from its
+//! targeted queue, parked aside from the poller in between, and takes no
+//! other fiber. Then it marks its slot `DEAD` and its thread ends; the
+//! runtime's stop and halt join it like every other worker (C-7). A stop
+//! that is not a halt runs every runnable fiber first, so a worker that is
+//! retiring when it begins stays, and one that is leaving rejoins; both end
+//! as live workers do, once nothing is runnable.
 
 use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
 use crossbeam_deque::{Steal, Stealer};
 use parking_lot::Mutex;
 
 use super::fiber::{self, AfterSwitch, FiberRef, state};
 use super::park::Parker;
-use super::{Shared, Where};
+use super::{MAX_THREADS, Shared, Where};
 use crate::ctx::ExecCtx;
 use crate::fiber::{Saved, StackPool, switch};
 use crate::panic::fatal;
@@ -47,6 +86,101 @@ use crate::tls;
 
 /// How often the global queue is checked first (Go's 61).
 const GLOBAL_FIRST_EVERY: u64 = 61;
+
+/// The values of a worker slot's life word (module documentation).
+pub(super) mod life {
+    /// A worker takes fibers there.
+    pub(in crate::sched) const LIVE: u8 = 0;
+    /// Its worker retires at its next scheduling point, unless the thread
+    /// count goes up first.
+    pub(in crate::sched) const RETIRING: u8 = 1;
+    /// Its worker has left `Idle` and runs only the fibers pinned to it.
+    pub(in crate::sched) const LEAVING: u8 = 2;
+    /// No worker runs there: never started, or its thread has ended or is
+    /// ending and no longer uses the slot.
+    pub(in crate::sched) const DEAD: u8 = 3;
+}
+
+/// A runtime's worker slots (GAP(retired-worker-slots)): [`MAX_THREADS`]
+/// of them, each filled the first time a worker starts there and never
+/// emptied, so an index stays valid for the runtime's life.
+pub(super) struct Workers {
+    slots: Box<[OnceLock<Box<WorkerShared>>]>,
+    /// One more than the highest index ever filled.
+    filled: AtomicUsize,
+}
+
+impl std::fmt::Debug for Workers {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Workers")
+            .field("filled", &self.filled())
+            .finish_non_exhaustive()
+    }
+}
+
+impl Workers {
+    /// No slot filled yet.
+    pub(super) fn new() -> Self {
+        Self {
+            slots: (0..MAX_THREADS).map(|_| OnceLock::new()).collect(),
+            filled: AtomicUsize::new(0),
+        }
+    }
+
+    /// The worker of slot `index`, if one ever started there.
+    pub(super) fn get(&self, index: usize) -> Option<&WorkerShared> {
+        self.slots.get(index)?.get().map(|worker| &**worker)
+    }
+
+    /// The worker of slot `index`, made now if the slot was never filled;
+    /// `None` past [`MAX_THREADS`].
+    pub(super) fn fill(&self, index: usize) -> Option<&WorkerShared> {
+        let worker = self
+            .slots
+            .get(index)?
+            .get_or_init(|| Box::new(WorkerShared::new()));
+        self.filled
+            .fetch_max(index.saturating_add(1), Ordering::SeqCst);
+        Some(worker)
+    }
+
+    /// One more than the highest index ever filled: the range a search
+    /// over the workers covers.
+    pub(super) fn filled(&self) -> usize {
+        self.filled.load(Ordering::SeqCst)
+    }
+
+    /// Every filled slot with its index, live or not.
+    pub(super) fn indexed(&self) -> impl Iterator<Item = (usize, &WorkerShared)> {
+        (0..self.filled()).filter_map(|index| self.get(index).map(|worker| (index, worker)))
+    }
+
+    /// Every filled slot's worker, live or not.
+    pub(super) fn iter(&self) -> impl Iterator<Item = &WorkerShared> {
+        self.indexed().map(|(_, worker)| worker)
+    }
+
+    /// The number of slots whose life is `LIVE`.
+    pub(super) fn live(&self) -> usize {
+        self.iter()
+            .filter(|worker| worker.life() == life::LIVE)
+            .count()
+    }
+
+    /// The first live slot after `index`, going round, other than `index`
+    /// itself: where the migration stress mode moves a fiber (D-687).
+    pub(super) fn next_live_after(&self, index: usize) -> Option<usize> {
+        let count = self.filled();
+        (1..count)
+            .map(|step| index.wrapping_add(step).checked_rem(count).unwrap_or(0))
+            .find(|&other| {
+                other != index
+                    && self
+                        .get(other)
+                        .is_some_and(|worker| worker.life() == life::LIVE)
+            })
+    }
+}
 
 /// A worker's part of the shared runtime.
 pub(crate) struct WorkerShared {
@@ -79,6 +213,11 @@ pub(crate) struct WorkerShared {
     /// ([`WorkerShared::wait_for_monitor`]), so the monitor never touches
     /// a retired control block, whichever worker retires it (I-8).
     looking: AtomicBool,
+    /// One of [`life`]'s values.
+    life: AtomicU8,
+    /// The fibers pinned to it now (D-687): a retiring worker stays until
+    /// none is left.
+    pinned: AtomicUsize,
 }
 
 // SAFETY: `local` and `saved` are used only by the worker's own thread
@@ -111,7 +250,86 @@ impl WorkerShared {
             resumes: AtomicU64::new(0),
             gate: Mutex::new(()),
             looking: AtomicBool::new(false),
+            life: AtomicU8::new(life::DEAD),
+            pinned: AtomicUsize::new(0),
         }
+    }
+
+    /// The slot's life: one of [`life`]'s values.
+    pub(super) fn life(&self) -> u8 {
+        self.life.load(Ordering::SeqCst)
+    }
+
+    /// Marks a free slot live for a worker about to start there. Under the
+    /// runtime's thread registry lock, on a `DEAD` slot.
+    pub(super) fn set_live(&self) {
+        self.life.store(life::LIVE, Ordering::SeqCst);
+    }
+
+    /// Asks a live worker to retire; false if it was not live.
+    pub(super) fn request_retire(&self) -> bool {
+        self.life
+            .compare_exchange(
+                life::LIVE,
+                life::RETIRING,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            )
+            .is_ok()
+    }
+
+    /// Takes back a retirement the worker has not acted on yet; false if
+    /// it was not retiring.
+    pub(super) fn cancel_retire(&self) -> bool {
+        self.life
+            .compare_exchange(
+                life::RETIRING,
+                life::LIVE,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            )
+            .is_ok()
+    }
+
+    /// The worker acts on its retirement; false if it was taken back.
+    fn begin_leaving(&self) -> bool {
+        self.life
+            .compare_exchange(
+                life::RETIRING,
+                life::LEAVING,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            )
+            .is_ok()
+    }
+
+    /// Whether a fiber running on this worker may queue a fiber in its
+    /// runnext slot or deque: not once it has drained them to leave.
+    pub(super) fn takes_local(&self) -> bool {
+        matches!(self.life(), life::LIVE | life::RETIRING)
+    }
+
+    /// A fiber running on this worker became pinned (D-687).
+    pub(super) fn pin(&self) {
+        self.pinned.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// A fiber pinned to this worker, and running on it, is no longer
+    /// pinned. Returns whether the worker is retiring or leaving: the fiber
+    /// must then be asked to yield, since nothing else moves a fiber that
+    /// computes alone (D-737) off a worker that must end (D-657).
+    pub(super) fn unpin(&self) -> bool {
+        let _ = self
+            .pinned
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |count| {
+                count.checked_sub(1)
+            });
+        matches!(self.life(), life::RETIRING | life::LEAVING)
+    }
+
+    /// The number of fibers pinned to it now.
+    pub(super) fn pinned(&self) -> usize {
+        self.pinned.load(Ordering::SeqCst)
     }
 
     /// The cell of the worker's own context.
@@ -153,9 +371,24 @@ impl WorkerShared {
         })
     }
 
-    /// Queues a fiber only this worker may run.
-    pub(super) fn push_targeted(&self, fiber: FiberRef) {
-        self.targeted.lock().push_back(fiber);
+    /// Queues a fiber only this worker may run, or gives it back if the
+    /// worker has ended (`DEAD`, decided under the same lock as its last
+    /// look at the queue).
+    pub(super) fn push_targeted(&self, fiber: FiberRef) -> Result<(), FiberRef> {
+        let mut targeted = self.targeted.lock();
+        if self.life() == life::DEAD {
+            return Err(fiber);
+        }
+        targeted.push_back(fiber);
+        Ok(())
+    }
+
+    /// Marks the slot `DEAD` under the targeted queue's lock and returns
+    /// what that queue still held: after this no fiber is queued here.
+    pub(super) fn end(&self) -> Vec<FiberRef> {
+        let mut targeted = self.targeted.lock();
+        self.life.store(life::DEAD, Ordering::SeqCst);
+        targeted.drain(..).collect()
     }
 
     fn has_targeted(&self) -> bool {
@@ -275,6 +508,19 @@ impl Worker<'_> {
             if self.shared.halting() {
                 break;
             }
+            // `set_thread_count` retires this worker at its next
+            // scheduling point (D-657, D-689): here, between two fibers.
+            // Not once the runtime stops: a stop runs every runnable fiber
+            // to its end (`Runtime::shutdown`), and a worker that left now
+            // could hand fibers to the global queue after the live workers
+            // ended (review finding CONC3-3 of gate 3). A halt ended the
+            // loop above.
+            if self.me.life() == life::RETIRING && !self.shared.stopping() {
+                if self.leave() {
+                    break;
+                }
+                continue;
+            }
             self.tick = self.tick.wrapping_add(1);
             if let Some(fiber) = self.find_runnable() {
                 if self.searching {
@@ -362,7 +608,9 @@ impl Worker<'_> {
                 return None;
             }
         }
-        let count = self.shared.workers.len();
+        // The steal range covers the filled slots; a worker that left has
+        // emptied its deque and is skipped (GAP(retired-worker-slots)).
+        let count = self.shared.workers.filled();
         let start = usize::try_from(self.next_random())
             .unwrap_or(0)
             .checked_rem(count)
@@ -375,6 +623,9 @@ impl Worker<'_> {
             let Some(other) = self.shared.worker(victim) else {
                 continue;
             };
+            if !other.takes_local() {
+                continue;
+            }
             if let Some(fiber) = retry(|| other.stealer.steal_batch_and_pop(local)) {
                 return Some(fiber);
             }
@@ -397,7 +648,9 @@ impl Worker<'_> {
             // Work only this worker may run can arrive after its last look
             // and before it registered as parked; the pusher then found it
             // unparked and woke nobody (module `idle`).
-            if self.me.has_targeted() || shared.stopping() {
+            // A retirement wakes the worker without taking it out of the
+            // parked list: it takes itself out and retires.
+            if self.me.has_targeted() || shared.stopping() || self.me.life() == life::RETIRING {
                 return !shared.idle.unpark_self(self.index);
             }
             // In the poller, if no other worker holds it, until a wake or
@@ -408,6 +661,73 @@ impl Worker<'_> {
                 return true;
             }
         }
+    }
+
+    /// Retires this worker (module documentation; D-689): hands its runnext
+    /// fiber and deque to the global queue, ends its search, leaves
+    /// `Idle`, runs the fibers pinned to it until none is left, then ends.
+    /// Returns whether the thread ends; false if the retirement was taken
+    /// back, or the thread count went up meanwhile and the worker rejoins.
+    fn leave(&mut self) -> bool {
+        if !self.me.begin_leaving() {
+            return false;
+        }
+        let shared = self.shared;
+        // 1. The fibers waiting here go where every live worker finds
+        //    them, as before a blocking call (`hand_off_before_blocking`).
+        let mut moved = false;
+        if let Some(next) = self.me.take_next() {
+            shared.injector.push(next);
+            moved = true;
+        }
+        // SAFETY: the worker loop runs on the worker's own thread, and the
+        // reference ends with this block.
+        let local = unsafe { self.me.local() };
+        while let Some(fiber) = local.pop() {
+            shared.injector.push(fiber);
+            moved = true;
+        }
+        // 2. Out of the idle protocol: no longer searching, no longer
+        //    counted, never notified again.
+        if self.searching {
+            self.searching = false;
+            shared.idle.transition_worker_from_searching();
+        }
+        shared.idle.remove_worker(self.index);
+        // 3. A live worker takes the moved fibers, and, if nobody polls
+        //    (this one held the poller, and the wake that retires it took
+        //    it out), a parked one wakes to hold it: it parks again and
+        //    finds the poller free (D-680).
+        if moved || shared.work_pending() {
+            shared.notify_parked();
+        }
+        if !shared.driver.polling()
+            && let Some(index) = shared.idle.any_parked()
+            && let Some(other) = shared.worker(index)
+        {
+            other.unpark(shared);
+        }
+        // 4. The fibers pinned here run only here (D-687).
+        loop {
+            if shared.halting() {
+                // The halt joins this thread; its fibers stay frozen.
+                return true;
+            }
+            let next = self.me.targeted.lock().pop_front();
+            if let Some(fiber) = next {
+                // A new time slice for the monitor's samples (D-688).
+                self.tick = self.tick.wrapping_add(1);
+                self.from_runnext = false;
+                self.run_fiber(fiber);
+                continue;
+            }
+            if self.me.pinned() == 0 || shared.stopping() {
+                break;
+            }
+            self.me.parker.park_aside();
+        }
+        // 5. End, or rejoin if the count went up while it was leaving.
+        shared.leave_or_rejoin(self.index)
     }
 
     /// Runs `fiber` until it switches back, then runs its action.
@@ -433,6 +753,18 @@ impl Worker<'_> {
             self.me.resumes.store(self.tick, Ordering::Relaxed);
         }
         self.me.running.store(fiber.as_ptr(), Ordering::SeqCst);
+        // A retirement that came after the loop's look at the life word
+        // (review finding CONC3-1 of gate 3). Dekker's pattern, every
+        // access sequentially consistent: this worker stores `running` and
+        // then loads its life; `Shared::retire_worker` stores `RETIRING`
+        // and then loads `running`. So either that look sees this fiber and
+        // asks it to yield, or this load sees `RETIRING` and asks here: the
+        // fiber gives the worker back at its next entry check even when it
+        // runs alone (D-737). Not during a stop, when a retiring worker
+        // stays (`run`).
+        if self.me.life() == life::RETIRING && !self.shared.stopping() {
+            crate::ctx::request(ctx, crate::ctx::reason::YIELD);
+        }
         self.shared.monitor.kick();
         // SAFETY: the fiber's context was saved by its last park (or made
         // by `prepare`) and nothing else resumes it: it was taken from a

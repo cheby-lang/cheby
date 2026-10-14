@@ -85,14 +85,9 @@ struct Sample {
 
 /// The body of the monitor thread.
 pub(super) fn main(shared: &Shared) {
-    let now = Instant::now();
-    let mut samples = vec![
-        Sample {
-            resumes: u64::MAX,
-            since: now,
-        };
-        shared.workers.len()
-    ];
+    // One sample per worker slot, grown as slots fill
+    // (GAP(retired-worker-slots)).
+    let mut samples: Vec<Sample> = Vec::new();
     loop {
         {
             let mut guard = shared.monitor.lock.lock();
@@ -126,7 +121,22 @@ pub(super) fn main(shared: &Shared) {
         // In the migration stress mode a lone fiber yields too, so that it
         // moves between workers (D-687).
         let waiting = shared.stress_migrate || shared.fibers_waiting();
-        for (worker, sample) in shared.workers.iter().zip(samples.iter_mut()) {
+        samples.resize(
+            shared.workers.filled(),
+            Sample {
+                resumes: u64::MAX,
+                since: now,
+            },
+        );
+        for (index, worker) in shared.workers.indexed() {
+            let Some(sample) = samples.get_mut(index) else {
+                continue;
+            };
+            // A slot whose worker has ended runs nothing.
+            if worker.life() == super::worker::life::DEAD {
+                sample.resumes = u64::MAX;
+                continue;
+            }
             let gate = worker.gate().lock();
             worker.set_looking(true);
             let running = worker.running();

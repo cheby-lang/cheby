@@ -70,11 +70,12 @@ use crate::repr::Repr;
 /// Whether `stmt` may start or pass on an unwinding (D-698): a Cheby
 /// call; a foreign call (a kernel can run out of memory), except one of
 /// the kernels that never raise ([`crate::never_raise`], D-767); a runtime
-/// helper with [`crate::RuntimeFn::may_unwind`]; an `alloc`; a `box` that may
-/// allocate; a `load_const` (its cold path forces the constant); checked
-/// arithmetic. Never `dup` or `drop` (a drop aborts on a panic, D-171; a
-/// count overflow makes the object static, D-454), field reads, compares
-/// and the other pure operations.
+/// helper with [`crate::RuntimeFn::may_unwind`]; an `alloc` or
+/// `alloc_placeholder`; a `box` that may allocate; a `load_const` (its
+/// cold path forces the constant); checked arithmetic. Never `dup` or
+/// `drop` (a drop aborts on a panic, D-171; a count overflow makes the
+/// object static, D-454), field reads and stores (`init_field`, D-720),
+/// compares and the other pure operations.
 #[must_use]
 pub fn stmt_may_unwind(stmt: &Stmt) -> bool {
     match stmt {
@@ -90,12 +91,14 @@ pub fn rvalue_may_unwind(value: &Rvalue) -> bool {
     match value {
         Rvalue::Call { .. }
         | Rvalue::Alloc { .. }
+        | Rvalue::AllocPlaceholder { .. }
         | Rvalue::LoadConst(_)
         | Rvalue::Checked { .. } => true,
         Rvalue::CallForeign { symbol, .. } => !crate::never_raise::never_raises(symbol),
         Rvalue::CallRuntime { func, .. } => func.may_unwind(),
         Rvalue::Box { value, from } => box_may_allocate(value, *from),
         Rvalue::Use(_)
+        | Rvalue::InitField { .. }
         | Rvalue::Field { .. }
         | Rvalue::ReadLayout { .. }
         | Rvalue::Unbox { .. }

@@ -1,5 +1,5 @@
-//! The entry check's releasing slow paths (GAP(entry-unwind-helper),
-//! refining D-698 and D-743).
+//! The entry check's releasing slow paths (D-775, refining D-698 and
+//! D-743).
 //!
 //! Every Cheby function starts with the stack check of D-124. Its slow
 //! path may start an unwinding (a stack overflow, a cancellation, the
@@ -30,7 +30,7 @@ use crate::panic::{cheby_rt_stack_slow, cheby_rt_stack_slow_frame, fatal};
 use crate::rc;
 
 /// The entry check's slow path for a function with at most four counted
-/// parameters (GAP(entry-unwind-helper)). Calls [`cheby_rt_stack_slow`]; if
+/// parameters (D-775). Calls [`cheby_rt_stack_slow`]; if
 /// that started an unwinding (the flag is set: overflow, cancellation,
 /// deadline), releases `p0..p(count-1)` and returns 1; else returns 0 and
 /// leaves them untouched. Never raises itself.
@@ -59,7 +59,7 @@ pub unsafe extern "C" fn cheby_rt_stack_slow_unwind(
 
 /// [`cheby_rt_stack_slow_unwind`] for the outer function of a large frame
 /// of `frame_size` bytes, through [`cheby_rt_stack_slow_frame`] (D-743,
-/// GAP(entry-unwind-helper)).
+/// D-775).
 ///
 /// # Safety
 ///

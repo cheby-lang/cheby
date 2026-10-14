@@ -87,6 +87,20 @@ fn mangled_names_do_not_collide() {
         mangle::large_frame_body(&mangle::item(Kind::Fn, &name("a", "b"))),
         mangle::item(Kind::Fn, &name("big::fn::a", "b"))
     );
+    // D-780's continuations, named as closures are under their own kind
+    // (GAP(continuation-symbol)).
+    assert_eq!(
+        mangle::continuation(&name("app::data", "build"), 3),
+        "cb$cont$app$data$build$3"
+    );
+    assert_eq!(
+        mangle::test_continuation("app::data", 2, 0),
+        "cb$cont$test$app$data$2$0"
+    );
+    assert_ne!(
+        mangle::continuation(&name("app", "build"), 0),
+        mangle::closure(&name("app", "build"), 0)
+    );
     // D-454's layout words, D-523's statics.
     assert_eq!(
         mangle::item(Kind::Layout, &name("geo", "Circle")),
@@ -1376,4 +1390,77 @@ fn unboxed_result_call_tests_the_flag_not_the_result() {
         "a uniform word is tested:\n{uniform}"
     );
     assert_eq!(uniform.matches(&load_flag).count(), 0, "{uniform}");
+}
+
+/// `f(x) { t = alloc_placeholder tuple/<arity>; init_field t.<last> = x;
+/// return t }`, without counts or edges.
+fn placeholder_unit(arity: u32) -> MirModule {
+    use cheby_mir::{LayoutRef, Local, Rvalue};
+    let mut u = unit();
+    let function = &mut u.functions[0];
+    function.locals = IndexVec::from_raw(
+        [Repr::Value, Repr::Value]
+            .into_iter()
+            .map(|repr| LocalDecl {
+                repr,
+                name: None,
+                ty: None,
+            })
+            .collect(),
+    )
+    .unwrap();
+    let layout = LayoutRef::Tuple(arity);
+    function.blocks = IndexVec::from_raw(vec![Block {
+        params: Vec::new(),
+        stmts: vec![
+            Stmt::Assign {
+                dst: Local::from_u32(1),
+                value: Rvalue::AllocPlaceholder { layout },
+            },
+            Stmt::Eval(Rvalue::InitField {
+                obj: Local::from_u32(1),
+                layout,
+                field: arity.checked_sub(1).unwrap(),
+                value: Operand::Local(Local::from_u32(0)),
+            }),
+        ],
+        term: Terminator::Return(Operand::Local(Local::from_u32(1))),
+        unwind: Vec::new(),
+    }])
+    .unwrap();
+    u
+}
+
+/// D-720's placeholder tuple (GAP(tuple-init-field)): one `cheby_rt_alloc`
+/// and a loop that stores the static `Nil` in every field, whatever the
+/// arity, then a plain store of the field at its offset, after the
+/// escaped count above 254 fields (D-279, D-555).
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn placeholder_tuples_fill_in_a_loop_and_store_fields_in_place() {
+    let opts = CodegenOptions::default();
+    let small = clif_of(&[placeholder_unit(40)], &opts);
+    let large = clif_of(&[placeholder_unit(100_000)], &opts);
+    for text in [&small, &large] {
+        assert_eq!(text.matches("icmp ule").count(), 1, "{text}");
+        assert!(text.contains(cheby_runtime::abi::sym::STATIC_NIL), "{text}");
+    }
+    // The same code for 40 fields and for 100k, but for the constants and
+    // the escaped count's constant and store at +8.
+    assert_eq!(
+        small.lines().count().checked_add(2),
+        Some(large.lines().count()),
+        "{small}\n{large}"
+    );
+    assert!(
+        !small.contains(", v8+8 ") && large.contains(", v8+8 "),
+        "{large}"
+    );
+    // Field 39 of 40 at 8 + 39 * 8; field 99999 of 100k after the count,
+    // at 8 + 8 + 99999 * 8 = 0xc3508.
+    assert!(small.contains("v1, v8+320\n"), "{small}");
+    assert!(large.contains("v1, v8+0x000c_3508\n"), "{large}");
 }

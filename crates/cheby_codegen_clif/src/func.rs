@@ -819,6 +819,16 @@ impl Translator<'_, '_> {
                 self.b.ins().ireduce(types::I32, id)
             }
             Rvalue::Alloc { layout, fields } => self.alloc(*layout, fields)?,
+            Rvalue::AllocPlaceholder { layout } => self.alloc_placeholder(*layout)?,
+            Rvalue::InitField {
+                obj,
+                layout,
+                field,
+                value,
+            } => {
+                self.init_field(*obj, *layout, *field, value)?;
+                return Ok(None);
+            }
             Rvalue::Field {
                 base,
                 layout,

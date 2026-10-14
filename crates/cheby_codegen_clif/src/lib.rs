@@ -32,7 +32,7 @@
 //! code. Every Cheby-ABI function starts with the stack-limit check of
 //! D-124, whose slow path is `cheby_rt_stack_slow(ctx, location)`, or
 //! `cheby_rt_stack_slow_unwind`, which also releases up to four counted
-//! parameters when it starts an unwinding (GAP(entry-unwind-helper)). The
+//! parameters when it starts an unwinding (D-775). The
 //! check runs after the prologue has allocated the frame, so a function
 //! whose frame exceeds [`CodegenOptions::large_frame_threshold`] (64 KiB)
 //! is compiled as two (D-679): an outer function with its symbol and a
@@ -166,7 +166,7 @@ pub struct CodegenOptions {
     /// JIT copies it into the runtime's entry and run configurations, so a
     /// raise in a fiber compiled without edges ends the process with its
     /// report instead of returning into code that tests no flag
-    /// (GAP(edgeless-panics)).
+    /// (D-770).
     pub unwind_edges: bool,
     /// The frame size in bytes above which a function is split into an
     /// outer function, which checks the stack for its whole frame, and an

@@ -184,19 +184,41 @@ impl FiberSched {
         self.callback_depth.load(Ordering::Relaxed) > 0
     }
 
-    /// A kernel starts calling a closure on this fiber (D-687): pins it.
-    /// Only the fiber itself calls this.
+    /// A kernel starts calling a closure on this fiber (D-687): pins it to
+    /// the worker it runs on, which counts it, so that the worker does not
+    /// end while the fiber needs it (D-689). Only the fiber itself calls
+    /// this, while it runs.
     pub(crate) fn enter_callback(&self) {
         let depth = self.callback_depth.load(Ordering::Relaxed);
         self.callback_depth
             .store(depth.saturating_add(1), Ordering::Relaxed);
+        if depth == 0 {
+            self.with_worker(super::worker::WorkerShared::pin);
+        }
     }
 
-    /// The closure a kernel called returned (D-687).
-    pub(crate) fn leave_callback(&self) {
+    /// The closure a kernel called returned (D-687); the outermost one
+    /// unpins the fiber. Returns whether the fiber was unpinned on a worker
+    /// that is retiring or leaving: [`leave_callback`] then asks it to
+    /// yield.
+    #[must_use = "a fiber unpinned on a leaving worker must be asked to yield (`leave_callback`)"]
+    fn unpin_callback(&self) -> bool {
         let depth = self.callback_depth.load(Ordering::Relaxed);
         self.callback_depth
             .store(depth.saturating_sub(1), Ordering::Relaxed);
+        depth == 1
+            && self
+                .with_worker(super::worker::WorkerShared::unpin)
+                .unwrap_or(false)
+    }
+
+    /// Runs `act` on the worker slot the fiber runs on, if it has a
+    /// runtime.
+    fn with_worker<R>(&self, act: impl FnOnce(&super::worker::WorkerShared) -> R) -> Option<R> {
+        self.runtime
+            .as_ref()
+            .and_then(|runtime| runtime.worker(self.worker()))
+            .map(act)
     }
 
     /// Whether the fiber is blocked inline in a system call (D-786).
@@ -227,6 +249,21 @@ impl FiberSched {
         // SAFETY: forwarded from the caller: only the retiring worker uses
         // the cell now.
         unsafe { (*self.slot.get()).take() }
+    }
+}
+
+/// The closure a kernel called on fiber `me` returned (D-687); the
+/// outermost one unpins it. Only the fiber itself calls this, while it
+/// runs.
+///
+/// If its worker is retiring or leaving, the fiber is asked to yield
+/// (never to freeze, C-5): unpinned now, it must give that worker back at
+/// its next suspension point (D-657), and nothing else would ask a fiber
+/// that computes alone (D-737; review finding CONC3-2 of gate 3). It then
+/// goes on on a live worker.
+pub(crate) fn leave_callback(me: &ExecCtx) {
+    if me.sched.unpin_callback() {
+        crate::ctx::request(me, crate::ctx::reason::YIELD);
     }
 }
 

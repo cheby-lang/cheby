@@ -11,6 +11,8 @@
 //! None of them can fail or raise; each runs its body in `guarded` all the
 //! same (D-697), as every kernel does.
 
+use std::sync::Arc;
+
 use crate::ctx::ExecCtx;
 use crate::fiber_ops::running;
 use crate::sched::{MAX_THREADS, Shared};
@@ -84,10 +86,10 @@ fn thread_count(shared: &Shared) -> usize {
     shared.thread_count()
 }
 
-/// Sets the runtime's target thread count (the scheduler's C4 seam), already
-/// clamped. Until package T1n (wave 3) starts and retires workers to meet
-/// it (D-689), this stores the target only, an interim that never ships.
-fn set_thread_count(shared: &Shared, count: usize) {
+/// Sets the runtime's thread count (the scheduler's C4 seam), already
+/// clamped: new workers start at once, and removed ones retire at their
+/// next scheduling point (D-657, D-689); it waits for no fiber.
+fn set_thread_count(shared: &Arc<Shared>, count: usize) {
     shared.set_thread_count(count);
 }
 

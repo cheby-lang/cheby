@@ -22,7 +22,7 @@
 //!   running on this thread, or null;
 //! - the shard index: which shard of an accounting domain's counters this
 //!   thread charges (D-691), exclusive to it when it runs fibers and one
-//!   is free (GAP(single-writer-shards));
+//!   is free (D-773);
 //! - the host slot: what a thread that runs no fiber charges and counts
 //!   (its current accounting domain and scratch counts), M1's per-thread
 //!   behavior for host code;
@@ -67,7 +67,7 @@ const NO_SHARD: usize = usize::MAX;
 /// tried to claim an exclusive one. An index below `alloc::shard_count()`
 /// is exclusive: this thread holds that bit of [`EXCLUSIVE`] and is the
 /// only thread that charges that shard of any domain, so it charges it
-/// with plain relaxed stores (GAP(single-writer-shards)). Any other index
+/// with plain relaxed stores (D-773). Any other index
 /// is shared and charged with atomic adds. The exclusive bit is given
 /// back when the thread ends.
 #[derive(Debug)]
@@ -211,7 +211,7 @@ pub(crate) unsafe fn set_current_fiber(fiber: *mut ExecCtx) -> *mut ExecCtx {
 /// The shard of accounting domains this thread charges (D-691). A thread
 /// that runs fibers claims an exclusive shard the first time one becomes
 /// current on it ([`set_current_fiber`]), while one is free
-/// (GAP(single-writer-shards)); any other thread, and a fiber thread
+/// (D-773); any other thread, and a fiber thread
 /// beyond the number of shards, gets a shared index the first time it
 /// asks, distinct per thread, which a domain reduces to one of its shared
 /// shards. During thread teardown, a shared index.
@@ -231,7 +231,7 @@ pub(crate) fn shard_index() -> usize {
 }
 
 /// [`shard_index`] for a thread a fiber becomes current on: the first time,
-/// it claims an exclusive shard if one is free (GAP(single-writer-shards)).
+/// it claims an exclusive shard if one is free (D-773).
 fn fiber_shard_index() -> usize {
     SHARD
         .try_with(|slot| {

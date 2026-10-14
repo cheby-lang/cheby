@@ -20,9 +20,16 @@
 //!   worker that finds such work after it registered as parked takes itself
 //!   back with [`Idle::unpark_self`].
 //!
+//! - **Live workers** (D-689, GAP(retired-worker-slots)). The number of
+//!   workers follows `set_thread_count`: a started worker joins as unparked
+//!   ([`Idle::add_worker`]), and a retiring one leaves once it no longer
+//!   searches ([`Idle::remove_worker`]), so the half-the-workers rule and
+//!   the notify check count only the workers that take fibers.
+//!
 //! Every operation on the word is sequentially consistent, and the list of
-//! parked workers is only changed under its lock together with the word,
-//! so the count of unparked workers is exact under that lock.
+//! parked workers and the worker count are only changed under its lock
+//! together with the word, so the count of unparked workers is exact under
+//! that lock.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -42,8 +49,9 @@ pub(crate) struct Idle {
     state: AtomicUsize,
     /// The parked workers, by index.
     sleepers: Mutex<Vec<usize>>,
-    /// The number of workers, at most 1024.
-    workers: usize,
+    /// The number of live workers, at most 1024; changed under the
+    /// sleepers' lock.
+    workers: AtomicUsize,
 }
 
 /// The searching count of a state word.
@@ -62,15 +70,48 @@ impl Idle {
         Self {
             state: AtomicUsize::new(workers << UNPARK_SHIFT),
             sleepers: Mutex::new(Vec::with_capacity(workers)),
-            workers,
+            workers: AtomicUsize::new(workers),
         }
+    }
+
+    /// The number of live workers.
+    pub(crate) fn workers(&self) -> usize {
+        self.workers.load(Ordering::SeqCst)
+    }
+
+    /// Counts a started worker (or one that rejoins): live, unparked and
+    /// not searching.
+    pub(crate) fn add_worker(&self) {
+        let sleepers = self.sleepers.lock();
+        self.workers.fetch_add(1, Ordering::SeqCst);
+        self.state.fetch_add(ONE_UNPARKED, Ordering::SeqCst);
+        drop(sleepers);
+    }
+
+    /// Stops counting worker `worker`, which retires: it no longer
+    /// searches (the caller ended its search first), and it is taken out
+    /// of the parked list if it is still there.
+    pub(crate) fn remove_worker(&self, worker: usize) {
+        let mut sleepers = self.sleepers.lock();
+        if let Some(at) = sleepers.iter().position(|&w| w == worker) {
+            sleepers.swap_remove(at);
+        } else {
+            self.state.fetch_sub(ONE_UNPARKED, Ordering::SeqCst);
+        }
+        self.workers.fetch_sub(1, Ordering::SeqCst);
+    }
+
+    /// A parked worker, if any, left in the list: the one to wake so that
+    /// it takes the poller over from a worker that retires.
+    pub(crate) fn any_parked(&self) -> Option<usize> {
+        self.sleepers.lock().last().copied()
     }
 
     /// Whether a notification should wake a worker: nobody searches and
     /// some worker is parked.
     fn notify_should_wake(&self) -> bool {
         let state = self.state.load(Ordering::SeqCst);
-        searching(state) == 0 && unparked(state) < self.workers
+        searching(state) == 0 && unparked(state) < self.workers()
     }
 
     /// The parked worker to wake after work was pushed, now counted as
@@ -102,7 +143,7 @@ impl Idle {
     /// Makes a worker searching, unless half the workers already search.
     pub(crate) fn transition_worker_to_searching(&self) -> bool {
         let state = self.state.load(Ordering::SeqCst);
-        if searching(state).saturating_mul(2) >= self.workers {
+        if searching(state).saturating_mul(2) >= self.workers() {
             return false;
         }
         self.state.fetch_add(1, Ordering::SeqCst);
@@ -188,5 +229,34 @@ mod tests {
         // One worker may always search.
         let one = Idle::new(1);
         assert!(one.transition_worker_to_searching());
+    }
+
+    /// GAP(retired-worker-slots): started and retired workers change the
+    /// live count, so the notify check and the half rule follow them.
+    #[test]
+    fn thread_count_idle_follows_started_and_retired_workers() {
+        let idle = Idle::new(0);
+        idle.add_worker();
+        assert_eq!(idle.workers(), 1);
+        // Every worker is awake: nobody to notify.
+        assert_eq!(idle.worker_to_notify(), None);
+        idle.add_worker();
+        assert!(!idle.transition_worker_to_parked(1, false));
+        assert_eq!(idle.any_parked(), Some(1));
+        // Worker 1 retires while parked; worker 0 while awake.
+        idle.remove_worker(1);
+        assert_eq!(idle.any_parked(), None);
+        assert_eq!(idle.workers(), 1);
+        assert_eq!(idle.worker_to_notify(), None);
+        idle.remove_worker(0);
+        assert_eq!(idle.workers(), 0);
+        assert_eq!(unparked(idle.state.load(Ordering::SeqCst)), 0);
+        // A restarted worker counts again; with four, two may search.
+        for _ in 0..4 {
+            idle.add_worker();
+        }
+        assert!(idle.transition_worker_to_searching());
+        assert!(idle.transition_worker_to_searching());
+        assert!(!idle.transition_worker_to_searching());
     }
 }

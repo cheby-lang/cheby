@@ -375,7 +375,7 @@ fn preemption_latency(pinned: bool) -> Duration {
         }
         let waited = started.elapsed();
         if pinned {
-            me.sched.leave_callback();
+            leave_callback(me);
         }
         if flag.load(Ordering::SeqCst) {
             u64::try_from(waited.as_micros()).unwrap_or(u64::MAX)
@@ -467,7 +467,7 @@ fn pinned_fibers_stay_and_the_stress_mode_migrates_the_others() {
             park(me, AfterSwitch::Requeue);
             assert_eq!(me.sched.worker(), before, "a pinned fiber moved");
         }
-        me.sched.leave_callback();
+        leave_callback(me);
         let mut moves = 0;
         for _ in 0..100 {
             let before = me.sched.worker();
@@ -604,7 +604,7 @@ fn a_child_fibers_panic_unwinds_only_that_fiber() {
     runtime.shutdown();
 }
 
-/// GAP(edgeless-panics): a fiber spawned by a root whose code was compiled
+/// D-770: a fiber spawned by a root whose code was compiled
 /// without unwind edges runs that code too, so its panic ends the process
 /// with its report, the fatal error and the status 101, while the root
 /// waits. The test runs itself in a child process.
@@ -665,7 +665,7 @@ fn edgeless_spawned_fibers_inherit_their_spawners_setting() {
     assert!(!stderr.contains("the root ended"), "{stderr}");
 }
 
-/// GAP(edgeless-panics): when several fibers raise at once on different
+/// D-770: when several fibers raise at once on different
 /// workers in code compiled without unwind edges, the process still ends
 /// once, with one report, one fatal line and the status 101, as at one
 /// worker (plan §0 'Determinism'). Eight fibers on four workers wait until

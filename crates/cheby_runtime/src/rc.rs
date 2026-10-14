@@ -28,7 +28,7 @@ pub unsafe extern "C" fn cheby_rt_dup(value: Word) {
 /// Removes a reference to `value`, freeing it when none remain.
 ///
 /// `ctx` is the running fiber's control block, which generated code always
-/// passes (GAP(drop-with-ctx)): a free then reads the block cache through
+/// passes (D-772): a free then reads the block cache through
 /// the control block's record and charges `ctx`'s domain, with no
 /// thread-local lookup (D-739). It may be null, and then the free looks
 /// the running fiber up, as [`drop`] does.
@@ -923,7 +923,7 @@ mod tests {
         unsafe { load_rc(word_to_ptr(word)) }
     }
 
-    /// GAP(drop-with-ctx): generated code's drop passes its fiber's control
+    /// D-772: generated code's drop passes its fiber's control
     /// block. A free through it, of a leaf or of a value with fields,
     /// charges that fiber's domain, and its block cache is read through
     /// the control block's record (D-739; debug builds check that the

@@ -90,6 +90,27 @@ fn constant_tagged(value: &Operand, from: Repr) -> Option<i64> {
     Some(fits.wrapping_shl(1) | 1)
 }
 
+/// The offset of field `field` of a tuple of `layout`, the same as its
+/// shape's ([`Translator::shape`]: above [`abi::SCAN_MAX`] fields the
+/// escaped count comes first, D-279, D-555), without building the shape,
+/// whose size is the arity.
+fn tuple_field_offset(layout: LayoutRef, field: u32) -> Result<i32, CodegenError> {
+    let LayoutRef::Tuple(arity) = layout else {
+        return Err(CodegenError::ice(format!("{layout:?} is not a tuple")));
+    };
+    if field >= arity {
+        return Err(CodegenError::ice(format!(
+            "field {field} of a tuple of {arity}"
+        )));
+    }
+    let index = match escaped_count_index(layout, u64::from(arity)) {
+        None => u64::from(field),
+        Some(0) => u64::from(field).saturating_add(1),
+        Some(_) => return Err(CodegenError::ice("a tuple's escaped count is not first")),
+    };
+    offset(index, i64::from(abi::FIRST_FIELD_OFFSET))
+}
+
 fn size_of(fields: &[(i32, Repr)], first: i64) -> Result<i64, CodegenError> {
     let words = i64::try_from(fields.len()).map_err(|_| CodegenError::ice("too many fields"))?;
     words
@@ -254,6 +275,81 @@ impl Translator<'_, '_> {
         Ok(object)
     }
 
+    /// A new tuple of `layout` whose every field is the static `Nil`
+    /// (D-720, GAP(tuple-init-field)): the header and `cheby_rt_alloc` as
+    /// in [`Self::alloc`], then a loop that stores the placeholder in each
+    /// field slot, so the code does not grow with the arity.
+    pub(crate) fn alloc_placeholder(&mut self, layout: LayoutRef) -> Result<Value, CodegenError> {
+        if !matches!(layout, LayoutRef::Tuple(_)) {
+            return Err(CodegenError::ice(format!(
+                "`alloc_placeholder` of {layout:?}, which is not a tuple"
+            )));
+        }
+        let shape = self.shape(layout)?;
+        let (Some(&(first, _)), Some(&(last, _))) = (shape.fields.first(), shape.fields.last())
+        else {
+            return Err(CodegenError::ice("`alloc_placeholder` of an empty tuple"));
+        };
+        // The slots are contiguous: the loop below steps through them.
+        let span = i64::try_from(shape.fields.len().saturating_sub(1))
+            .ok()
+            .and_then(|n| n.checked_mul(WORD_SIZE));
+        if span != i64::from(last).checked_sub(i64::from(first)) {
+            return Err(CodegenError::ice(format!(
+                "the fields of {layout:?} are not contiguous"
+            )));
+        }
+        let HeaderSource::Fixed(word) = shape.header else {
+            return Err(CodegenError::ice("a tuple's header is not fixed"));
+        };
+        let ctx = self.ctx()?;
+        let header = self.b.ins().iconst(types::I64, word.cast_signed());
+        let size = self.b.ins().iconst(types::I64, shape.size);
+        let object = self.edge_runtime_value(RuntimeFunc::Alloc, &[ctx, size, header])?;
+        if let Some((at, count)) = shape.escaped {
+            let tagged = abi::tag_int(i64::try_from(count).unwrap_or(i64::MAX))
+                .ok_or_else(|| CodegenError::ice("a field count out of range"))?;
+            let tagged = self.b.ins().iconst(types::I64, tagged.cast_signed());
+            self.b
+                .ins()
+                .store(MemFlagsData::trusted(), tagged, object, at);
+        }
+        let nil = self.static_object(abi::sym::STATIC_NIL)?;
+        let start = self.b.ins().iadd_imm_s(object, i64::from(first));
+        let end = self.b.ins().iadd_imm_s(object, i64::from(last));
+        let fill = self.b.create_block();
+        let slot = self.b.append_block_param(fill, types::I64);
+        let done = self.b.create_block();
+        self.b.ins().jump(fill, &[BlockArg::Value(start)]);
+        self.b.switch_to_block(fill);
+        self.b.ins().store(MemFlagsData::trusted(), nil, slot, 0);
+        let next = self.b.ins().iadd_imm_s(slot, WORD_SIZE);
+        let more = self.b.ins().icmp(IntCC::UnsignedLessThanOrEqual, next, end);
+        self.b
+            .ins()
+            .brif(more, fill, &[BlockArg::Value(next)], done, &[]);
+        self.b.switch_to_block(done);
+        Ok(object)
+    }
+
+    /// Stores the owned `value` into field `field` of `obj`, a tuple of
+    /// `layout` still holding the placeholder there (D-720): a plain store,
+    /// since the placeholder holds no reference. The offset is computed
+    /// directly, so a store costs the same whatever the arity.
+    pub(crate) fn init_field(
+        &mut self,
+        obj: Local,
+        layout: LayoutRef,
+        field: u32,
+        value: &Operand,
+    ) -> Result<(), CodegenError> {
+        let offset = tuple_field_offset(layout, field)?;
+        let object = self.local(obj)?;
+        let value = self.operand(value)?;
+        self.store_field(object, offset, Repr::Value, value);
+        Ok(())
+    }
+
     /// Stores a field in its 8-byte slot: uniform words and 64-bit numbers
     /// as they are, narrower integers and `Bool` extended to 64 bits by
     /// their signedness, an `F32` in the low 4 bytes with the rest zero
@@ -282,13 +378,19 @@ impl Translator<'_, '_> {
         layout: LayoutRef,
         field: u32,
     ) -> Result<Value, CodegenError> {
-        let shape = self.shape(layout)?;
-        let &(offset, repr) = usize::try_from(field)
-            .ok()
-            .and_then(|n| shape.fields.get(n))
-            .ok_or_else(|| {
-                CodegenError::ice(format!("`field` {field} of {layout:?} does not exist"))
-            })?;
+        // A tuple's offset without its shape, whose size is the arity
+        // (D-720's tuples can be large).
+        let (offset, repr) = if let LayoutRef::Tuple(_) = layout {
+            (tuple_field_offset(layout, field)?, Repr::Value)
+        } else {
+            let shape = self.shape(layout)?;
+            *usize::try_from(field)
+                .ok()
+                .and_then(|n| shape.fields.get(n))
+                .ok_or_else(|| {
+                    CodegenError::ice(format!("`field` {field} of {layout:?} does not exist"))
+                })?
+        };
         let base = self.local(base)?;
         Ok(self
             .b
@@ -587,7 +689,7 @@ impl Translator<'_, '_> {
     /// The out-of-line drop of the uniform word `v`:
     /// `cheby_rt_drop(ctx, v)`, given the function's `ctx` so that the
     /// free path reads the block cache through the control block
-    /// (GAP(drop-with-ctx), D-739).
+    /// (D-772, D-739).
     pub(crate) fn drop_call(&mut self, v: Value) -> Result<(), CodegenError> {
         let ctx = self.ctx()?;
         self.runtime_call(RuntimeFunc::Drop, &[ctx, v])?;

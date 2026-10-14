@@ -9,7 +9,9 @@
 //! whole string again. `{x}` is the text of `x`'s `show` function (the
 //! callee the checker resolved; a `String` is its own text), `{x:?}` the
 //! runtime's debug text of `x` as a uniform word (§3.13). Values are
-//! evaluated left to right (§5.3.2), each right before it is appended.
+//! evaluated left to right (§5.3.2), each right before it is appended. A
+//! large string continues in continuations that take the buffer (D-780,
+//! `split.rs`).
 
 use cheby_diag::Span;
 use cheby_iface::{Ice, Ty};
@@ -18,6 +20,7 @@ use cheby_types::thir::{Callee, ExprId, InterpPart};
 use crate::abi::abi_sig;
 use crate::ir::{Const, Operand, RuntimeFn, Rvalue};
 use crate::lower::body::BodyCx;
+use crate::lower::split::Items;
 use crate::repr::Repr;
 
 /// The bytes reserved for each interpolated value, beyond the literal
@@ -31,7 +34,7 @@ impl BodyCx<'_, '_> {
         &mut self,
         parts: &[InterpPart],
         _ty: Ty,
-        _span: Span,
+        span: Span,
     ) -> Result<Option<Operand>, Ice> {
         match parts {
             [] => return self.string_const("").map(Some),
@@ -51,6 +54,8 @@ impl BodyCx<'_, '_> {
             capacity = capacity.saturating_add(len);
         }
         let capacity = i64::try_from(capacity).map_err(|_| Ice::new("string too long"))?;
+        // A large string continues in continuations (D-780, `split.rs`).
+        let mut chain = self.chain(span);
         let mut acc = self.define(
             Repr::Value,
             Rvalue::CallRuntime {
@@ -58,12 +63,15 @@ impl BodyCx<'_, '_> {
                 args: vec![Operand::Const(Const::Int(capacity))],
             },
         )?;
-        for part in parts {
+        for (k, part) in parts.iter().enumerate() {
+            if self.split_due(&chain) {
+                acc = self.split_cut(&mut chain, k, Operand::Local(acc), Items::Interp(parts))?;
+            }
             let piece = match part {
                 InterpPart::Text(text) => self.string_const(text)?,
                 InterpPart::Value { expr, debug, show } => {
                     let Some(piece) = self.interp_value(*expr, *debug, show.as_ref())? else {
-                        return Ok(None);
+                        return self.split_finish(chain, None);
                     };
                     piece
                 }
@@ -76,7 +84,7 @@ impl BodyCx<'_, '_> {
                 },
             )?;
         }
-        Ok(Some(Operand::Local(acc)))
+        self.split_finish(chain, Some(Operand::Local(acc)))
     }
 
     /// The text of the value `expr`: its debug text for `{x:?}`, else the

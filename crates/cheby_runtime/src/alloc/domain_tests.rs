@@ -13,7 +13,7 @@ use crate::stats::Event;
 fn shards_are_a_power_of_two_up_to_64() {
     let domain = Domain::new();
     let shards = domain.shards.len();
-    // As many shared shards as exclusive ones (GAP(single-writer-shards)).
+    // As many shared shards as exclusive ones (D-773).
     assert_eq!(shards, 2 * shard_count());
     let exclusive = shard_count();
     assert!(
@@ -147,7 +147,7 @@ fn four_threads_count_exactly_in_one_domain() {
     assert!(domain.peak_bytes() >= 3334 * 8, "{}", domain.peak_bytes());
 }
 
-/// GAP(single-writer-shards): more fiber threads than exclusive shards,
+/// D-773: more fiber threads than exclusive shards,
 /// and host threads beside them, charge one domain at once. The threads
 /// that hold an exclusive shard charge it with plain stores, the others
 /// share the shared shards with atomic adds, and the totals are exact.
@@ -254,7 +254,7 @@ fn more_threads_than_shards_count_exactly() {
 
 /// A thread that runs fibers charges an exclusive shard that it holds, or
 /// when every one is held a shared one; a host thread charges a shared
-/// one (GAP(single-writer-shards)).
+/// one (D-773).
 #[test]
 fn a_fiber_thread_charges_a_shard_it_holds() {
     assert!(

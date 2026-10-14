@@ -56,6 +56,8 @@ pub struct FunctionBuilder {
     entry_unwind: Option<BlockId>,
     precounted: bool,
     current: BlockId,
+    /// The statements pushed so far, over every block.
+    stmts: usize,
 }
 
 impl FunctionBuilder {
@@ -81,7 +83,16 @@ impl FunctionBuilder {
             entry_unwind: None,
             precounted: false,
             current,
+            stmts: 0,
         })
+    }
+
+    /// The size of the function so far: its statements and its blocks
+    /// (each block's terminator). Lowering splits a large literal by it
+    /// (D-780).
+    #[must_use]
+    pub fn size(&self) -> usize {
+        self.stmts.saturating_add(self.blocks.len())
     }
 
     /// The function's key.
@@ -226,6 +237,7 @@ impl FunctionBuilder {
             return Err(Ice::new(format!("statement after the end of {current:?}")));
         }
         block.stmts.push(stmt);
+        self.stmts = self.stmts.saturating_add(1);
         Ok(())
     }
 

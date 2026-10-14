@@ -57,8 +57,9 @@ pub struct MirModule {
     /// The module's path (`std::io`) for `Code` and `Tests`; empty for
     /// `Entries`.
     pub path: Box<str>,
-    /// In order: items by `DefIndex`, each followed by its closures in
-    /// creation order, then the value shims the unit needs by `DefId`,
+    /// In order: items by `DefIndex`, each followed by its closures and
+    /// continuations in the order they were finished, then the value
+    /// shims the unit needs by `DefId`,
     /// then the tuple dictionary functions by interface function and
     /// arity; entry thunks in the order given.
     pub functions: Vec<Function>,
@@ -121,10 +122,25 @@ impl MirModule {
             .ok_or_else(|| Ice::new(format!("MIR unit has no name for {def:?}")))
     }
 
-    /// The function with key `key`, if this unit defines it.
+    /// The function with key `key`, if this unit defines it. A linear
+    /// search: a pass that looks up many keys builds
+    /// [`MirModule::function_index`] once instead.
     #[must_use]
     pub fn function(&self, key: FnKey) -> Option<&Function> {
         self.functions.iter().find(|f| f.key == key)
+    }
+
+    /// The position in [`MirModule::functions`] of every key the unit
+    /// defines (the first one, for a key defined twice), so that a unit
+    /// with thousands of continuations (D-780) is not searched once per
+    /// call.
+    #[must_use]
+    pub fn function_index(&self) -> rustc_hash::FxHashMap<FnKey, usize> {
+        let mut index = rustc_hash::FxHashMap::default();
+        for (n, f) in self.functions.iter().enumerate() {
+            index.entry(f.key).or_insert(n);
+        }
+        index
     }
 
     /// The layout of a constructor `layout`, from [`MirModule::layouts`]
@@ -280,6 +296,17 @@ pub enum FnKey {
     /// where the function's field depends on `J` (D-524, D-602). Uniform
     /// signature.
     DynForward { iface_fn: DefId, dyn_iface: DefId },
+    /// The rest of a large literal of `owner`'s body, or of the body of a
+    /// closure or continuation of it, split off by lowering (D-780,
+    /// GAP(continuation-symbol)): numbered in creation order within the
+    /// owner, apart from its closures. Cheby ABI with a signature of its
+    /// own ([`Function::sig`]): the partly built value first, then the
+    /// free locals and dictionaries the rest needs, each in its own
+    /// representation; never borrowing (it is not an item, D-715). Called
+    /// only through [`Callee::Code`] from its own unit: the first by the
+    /// function holding the literal, each later one by a tail call of
+    /// the one before.
+    Continuation { owner: DefId, index: u32 },
 }
 
 impl FnKey {
@@ -446,7 +473,8 @@ pub enum Stmt {
         value: Rvalue,
     },
     /// A call whose result is `void`: a foreign function returning `Nil`,
-    /// or a runtime helper without a result ([`RuntimeFn::ret`]).
+    /// or a runtime helper without a result ([`RuntimeFn::ret`]); or the
+    /// store of one field of a tuple being filled ([`Rvalue::InitField`]).
     Eval(Rvalue),
     /// One more reference. A no-op at run time for tagged integers and
     /// static objects.
@@ -630,6 +658,29 @@ pub enum Rvalue {
         layout: LayoutRef,
         fields: Vec<Operand>,
     },
+    /// A new tuple ([`LayoutRef::Tuple`]) whose every field is the static
+    /// `Nil`, a placeholder that holds no reference: the start of a tuple
+    /// literal above [`crate::lower::TUPLE_INIT_THRESHOLD`] fields, which
+    /// [`Rvalue::InitField`] then fills one field at a time (D-720,
+    /// GAP(tuple-init-field)). Dropping it while partly filled releases
+    /// the fields stored so far and nothing for the placeholders, so an
+    /// unwinding in the middle of the literal needs no other cleanup.
+    /// Owned result; may unwind (out of memory), like [`Rvalue::Alloc`].
+    AllocPlaceholder { layout: LayoutRef },
+    /// Stores the owned `value` into field `field` of `obj`, a tuple of
+    /// `layout` that [`Rvalue::AllocPlaceholder`] made in this function, or
+    /// the first parameter of a [`FnKey::Continuation`] that continues the
+    /// same literal (D-780), still holding the placeholder there. `obj` is
+    /// borrowed and keeps its one reference, so no other reference can see
+    /// the store. Only evaluated for effect ([`Stmt::Eval`]); each field
+    /// of an object is stored once. Never unwinds. P2's reuse must not
+    /// treat a tuple being filled as a reuse candidate.
+    InitField {
+        obj: Local,
+        layout: LayoutRef,
+        field: u32,
+        value: Operand,
+    },
     /// Field `field` (declaration order) of `base`, which is borrowed. A
     /// [`Repr::Value`] result is borrowed from the base, so the RC pass
     /// dups it right after the definition.
@@ -788,10 +839,14 @@ impl Rvalue {
                 }
             }
             Self::Alloc { fields, .. } => operand_uses(fields, UseKind::Owned, &mut out),
+            Self::InitField { obj, value, .. } => {
+                out.push((*obj, UseKind::Borrowed));
+                operand_uses(std::slice::from_ref(value), UseKind::Owned, &mut out);
+            }
             Self::Field { base, .. } | Self::ReadLayout { base } => {
                 out.push((*base, UseKind::Borrowed));
             }
-            Self::LoadConst(_) => {}
+            Self::LoadConst(_) | Self::AllocPlaceholder { .. } => {}
             Self::Box { value, .. }
             | Self::Unbox { value, .. }
             | Self::FloatNeg { value, .. }
@@ -830,8 +885,9 @@ impl Rvalue {
             }
             Self::CallForeign { args, .. } | Self::CallRuntime { args, .. } => args.clone(),
             Self::Alloc { fields, .. } => fields.clone(),
+            Self::InitField { obj, value, .. } => vec![Operand::Local(*obj), value.clone()],
             Self::Field { base, .. } | Self::ReadLayout { base } => vec![Operand::Local(*base)],
-            Self::LoadConst(_) => Vec::new(),
+            Self::LoadConst(_) | Self::AllocPlaceholder { .. } => Vec::new(),
             Self::Checked { lhs, rhs, .. }
             | Self::Compare { lhs, rhs, .. }
             | Self::FloatArith { lhs, rhs, .. }

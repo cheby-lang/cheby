@@ -64,6 +64,7 @@ mod dom;
 use std::collections::BTreeSet;
 
 use cheby_iface::{Ice, Idx};
+use rustc_hash::FxHashMap;
 
 use self::dom::Dominance;
 
@@ -128,9 +129,13 @@ fn validate_with(
     if recorded.is_some_and(|r| r.len() != module.functions.len()) {
         errors.push("internal: the unwind pass recorded another number of functions".to_owned());
     }
+    // `Callee::Code` keys are looked up once per call: indexed, so a unit
+    // with thousands of continuations (D-780) is not searched per call.
+    let index = module.function_index();
     for (n, f) in module.functions.iter().enumerate() {
         let mut cx = FnCx {
             module,
+            index: &index,
             f,
             errors: Vec::new(),
             recorded: recorded.and_then(|r| r.get(n)),
@@ -305,6 +310,8 @@ fn check_static(m: &MirModule, n: usize, s: &StaticObject, errors: &mut Vec<Stri
 
 struct FnCx<'a> {
     module: &'a MirModule,
+    /// [`MirModule::function_index`] of `module`.
+    index: &'a FxHashMap<FnKey, usize>,
     f: &'a Function,
     errors: Vec<String>,
     /// What the unwind pass's simulation recorded, when the pipeline
@@ -345,6 +352,7 @@ impl FnCx<'_> {
         }
         self.check_dominance(&defs)?;
         self.check_reprs(stage)?;
+        self.check_init_fields();
         if self.counted(stage) && self.errors.is_empty() {
             if let (Some(recorded), Some(reachable)) = (self.recorded, &reachable) {
                 self.check_pad_chains(recorded, reachable)?;
@@ -635,6 +643,12 @@ impl FnCx<'_> {
             self.err(format!("unknown string str#{}", loc.as_u32()));
         }
         self.check_borrow()?;
+        if let FnKey::Continuation { .. } = f.key {
+            match f.params.first() {
+                Some(&p) if f.local(p)?.repr == Repr::Value => {}
+                _ => self.err("a continuation takes the value being built first (D-780)"),
+            }
+        }
         if let Some(fixed) = fixed_sig(f.key) {
             let sig = f.sig()?;
             if sig != fixed {
@@ -680,6 +694,83 @@ impl FnCx<'_> {
             }
         }
         Ok(())
+    }
+
+    /// The tuples filled one field at a time (D-720,
+    /// GAP(tuple-init-field)): each `init_field` stores into a fresh
+    /// object, one this function made with `alloc_placeholder` of the same
+    /// layout, or the first parameter of a continuation (D-780), which
+    /// takes the partly filled tuple, always with one layout; each field of
+    /// an object is stored once; and no `dup` ever shares an object that is
+    /// being filled, so no other reference sees a store.
+    fn check_init_fields(&mut self) {
+        let f = self.f;
+        let mut fresh: FxHashMap<Local, LayoutRef> = FxHashMap::default();
+        for block in &f.blocks {
+            for stmt in &block.stmts {
+                if let Stmt::Assign {
+                    dst,
+                    value: Rvalue::AllocPlaceholder { layout },
+                } = stmt
+                {
+                    fresh.insert(*dst, *layout);
+                }
+            }
+        }
+        let carried = match (f.key, f.params.first()) {
+            (FnKey::Continuation { .. }, Some(&p)) => Some(p),
+            _ => None,
+        };
+        let mut carried_layout: Option<LayoutRef> = None;
+        let mut stored: BTreeSet<(Local, u32)> = BTreeSet::new();
+        for (id, block) in f.blocks.iter_enumerated() {
+            for stmt in &block.stmts {
+                let Stmt::Eval(Rvalue::InitField {
+                    obj, layout, field, ..
+                }) = stmt
+                else {
+                    continue;
+                };
+                let fresh_here = match fresh.get(obj) {
+                    Some(made) => made == layout,
+                    None if Some(*obj) == carried => {
+                        *carried_layout.get_or_insert(*layout) == *layout
+                    }
+                    None => false,
+                };
+                if !fresh_here {
+                    self.err(format!(
+                        "bb{} stores field {field} of _{}, which is not a fresh {layout:?} being filled (D-720)",
+                        id.as_u32(),
+                        obj.as_u32()
+                    ));
+                }
+                if !stored.insert((*obj, *field)) {
+                    self.err(format!(
+                        "bb{} stores field {field} of _{} a second time (D-720)",
+                        id.as_u32(),
+                        obj.as_u32()
+                    ));
+                }
+            }
+        }
+        if stored.is_empty() {
+            return;
+        }
+        let filled: BTreeSet<Local> = stored.iter().map(|&(obj, _)| obj).collect();
+        for (id, block) in f.blocks.iter_enumerated() {
+            for stmt in &block.stmts {
+                if let Stmt::Dup(l) = stmt
+                    && filled.contains(l)
+                {
+                    self.err(format!(
+                        "bb{} shares _{}, a tuple being filled field by field (D-720)",
+                        id.as_u32(),
+                        l.as_u32()
+                    ));
+                }
+            }
+        }
     }
 
     /// Every local defined exactly once; returns the definition sites, by
@@ -867,8 +958,9 @@ impl FnCx<'_> {
             }
             Callee::Code(key) => {
                 let sig = self
-                    .module
-                    .function(*key)
+                    .index
+                    .get(key)
+                    .and_then(|&n| self.module.functions.get(n))
                     .and_then(|f| f.sig().ok())
                     .or_else(|| fixed_sig(*key));
                 if sig.is_none() {
@@ -956,6 +1048,32 @@ impl FnCx<'_> {
             Rvalue::Alloc { layout, fields } => {
                 self.check_alloc(*layout, fields);
                 Some(Repr::Value)
+            }
+            Rvalue::AllocPlaceholder { layout } => {
+                if !matches!(layout, LayoutRef::Tuple(n) if *n > 0) {
+                    self.err(format!(
+                        "alloc_placeholder of {layout:?}, which is not a tuple (D-720)"
+                    ));
+                }
+                Some(Repr::Value)
+            }
+            Rvalue::InitField {
+                obj,
+                layout,
+                field,
+                value,
+            } => {
+                // Where `obj` comes from and that each field is stored
+                // once: `check_init_fields`.
+                self.expect_repr(&Operand::Local(*obj), Repr::Value, "init_field object");
+                match layout {
+                    LayoutRef::Tuple(n) if field < n => {}
+                    _ => self.err(format!(
+                        "init_field {field} of {layout:?}, which is not a tuple field (D-720)"
+                    )),
+                }
+                self.expect_repr(value, Repr::Value, "init_field value");
+                None
             }
             Rvalue::Field {
                 base,
@@ -1570,12 +1688,14 @@ fn reachable_with_unwinding(f: &Function) -> Vec<bool> {
     seen
 }
 
-/// Whether `value` is a call without a result: a foreign function
-/// returning `void` or a runtime helper returning nothing.
+/// Whether `value` is evaluated only for effect: a call without a result
+/// (a foreign function returning `void`, a runtime helper returning
+/// nothing) or a field store ([`Rvalue::InitField`], D-720).
 fn is_void_call(value: &Rvalue) -> bool {
     match value {
         Rvalue::CallForeign { sig, .. } => sig.ret == CType::Void,
         Rvalue::CallRuntime { func, .. } => func.ret().is_none(),
+        Rvalue::InitField { .. } => true,
         _ => false,
     }
 }

@@ -13,7 +13,7 @@ pub enum RuntimeFunc {
     /// `void cheby_rt_dup(uint64_t value)`.
     Dup,
     /// `void cheby_rt_drop(ExecCtx *ctx, uint64_t value)`: the free path
-    /// reads the block cache through `ctx` (GAP(drop-with-ctx)).
+    /// reads the block cache through `ctx` (D-772).
     Drop,
     /// `void cheby_rt_panic(ExecCtx *ctx, uint32_t kind, uint64_t message, uint64_t location)`:
     /// records the panic, sets the flag and returns (D-733).
@@ -69,11 +69,11 @@ pub enum RuntimeFunc {
     /// `uint32_t cheby_rt_stack_slow_unwind(ExecCtx *ctx, uint64_t location, uint32_t count,
     /// uint64_t p0, uint64_t p1, uint64_t p2, uint64_t p3)`: the entry check's slow path that
     /// releases up to four counted parameters itself when it starts an unwinding, and then
-    /// returns nonzero (GAP(entry-unwind-helper)).
+    /// returns nonzero (D-775).
     StackSlowUnwind,
     /// `uint32_t cheby_rt_stack_slow_frame_unwind(ExecCtx *ctx, uint64_t location,
     /// uint64_t frame_size, uint32_t count, uint64_t p0, uint64_t p1, uint64_t p2, uint64_t p3)`:
-    /// the same for a large function's outer entry (D-743, GAP(entry-unwind-helper)).
+    /// the same for a large function's outer entry (D-743, D-775).
     StackSlowFrameUnwind,
 }
 

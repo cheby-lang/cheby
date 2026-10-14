@@ -435,6 +435,18 @@ impl BodyCx<'_, '_> {
         Ok(used.into_iter().collect())
     }
 
+    /// The dictionary parameters of the enclosing item that a call of
+    /// `callee` needs, by index, sorted: for an interpolated value's
+    /// `show`, whose dictionaries are the part's, not its expression's, when
+    /// a continuation carries the rest of the string (D-780).
+    pub(super) fn callee_dict_params(&self, callee: &Callee) -> Result<Vec<usize>, Ice> {
+        let mut used = BTreeSet::new();
+        for d in callee_dicts(callee) {
+            self.dict_uses(d, &mut used)?;
+        }
+        Ok(used.into_iter().collect())
+    }
+
     /// Adds the dictionary parameters `dict` needs to `out`.
     fn dict_uses(&self, dict: &Dict, out: &mut BTreeSet<usize>) -> Result<(), Ice> {
         let mut stack = vec![dict];

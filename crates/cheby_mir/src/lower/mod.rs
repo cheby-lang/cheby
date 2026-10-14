@@ -46,6 +46,9 @@ mod pat;
 mod scalar;
 #[cfg(test)]
 mod scalar_tests;
+mod split;
+#[cfg(test)]
+mod split_tests;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -55,6 +58,7 @@ use cheby_types::thir;
 
 pub use entry::{EntryRequest, lower_entries};
 pub use intrinsic::{Intrinsic, intrinsic_symbols};
+pub use split::{SPLIT_SIZE, STATEMENT_BUDGET, TUPLE_INIT_THRESHOLD};
 
 use crate::abi::abi_sig;
 use crate::defs::Defs;
@@ -115,6 +119,11 @@ pub(crate) struct Pending {
     functions: Vec<Function>,
     /// The next closure index per owner.
     closures: BTreeMap<DefId, u32>,
+    /// The next continuation index per owner (D-780).
+    continuations: BTreeMap<DefId, u32>,
+    /// Where large literals are cut, when a test asks for another size
+    /// than [`split::SPLIT_SIZE`].
+    split: Option<usize>,
     /// Top-level functions whose [`FnKey::ValueShim`] the unit defines.
     shims: BTreeSet<DefId>,
     /// The [`FnKey::TupleDictFn`] codes the unit defines, by interface
@@ -130,6 +139,11 @@ pub(crate) struct Pending {
 }
 
 impl Pending {
+    /// The size at which a literal's piece is cut (D-780).
+    pub(crate) fn split_size(&self) -> usize {
+        self.split.unwrap_or(split::SPLIT_SIZE)
+    }
+
     /// Adds a function made while lowering the current item, such as a
     /// closure body.
     pub(crate) fn add_function(&mut self, f: Function) {
@@ -148,6 +162,21 @@ impl Pending {
             .checked_add(1)
             .ok_or_else(|| Ice::new("too many closures"))?;
         Ok(FnKey::Closure { owner, index })
+    }
+
+    /// A new continuation key of `owner`, numbered in creation order
+    /// (D-780, GAP(continuation-symbol)).
+    ///
+    /// # Errors
+    ///
+    /// An [`Ice`] if `owner` has too many continuations.
+    pub(crate) fn continuation_key(&mut self, owner: DefId) -> Result<FnKey, Ice> {
+        let next = self.continuations.entry(owner).or_insert(0);
+        let index = *next;
+        *next = next
+            .checked_add(1)
+            .ok_or_else(|| Ice::new("too many continuations"))?;
+        Ok(FnKey::Continuation { owner, index })
     }
 
     /// Asks for the [`FnKey::ValueShim`] of `def` in this unit (D-453).
@@ -239,12 +268,51 @@ pub fn lower_items(
     wanted: &dyn Fn(DefId) -> bool,
     cx: &LowerCx<'_>,
 ) -> Result<MirModule, Ice> {
+    lower_items_with(module, wanted, cx, Pending::default())
+}
+
+/// [`lower_items`] with large literals cut at `split` (D-780), or at
+/// [`SPLIT_SIZE`] for `None`: for tests.
+#[cfg(test)]
+pub(crate) fn lower_items_split(
+    module: &thir::Module,
+    wanted: &dyn Fn(DefId) -> bool,
+    cx: &LowerCx<'_>,
+    split: Option<usize>,
+) -> Result<MirModule, Ice> {
+    let pending = Pending {
+        split,
+        ..Pending::default()
+    };
+    lower_items_with(module, wanted, cx, pending)
+}
+
+/// [`lower_tests`] with large literals cut at `split`, as
+/// [`lower_items_split`].
+#[cfg(test)]
+pub(crate) fn lower_tests_split(
+    module: &thir::Module,
+    cx: &LowerCx<'_>,
+    split: Option<usize>,
+) -> Result<MirModule, Ice> {
+    let pending = Pending {
+        split,
+        ..Pending::default()
+    };
+    lower_tests_with(module, cx, pending)
+}
+
+fn lower_items_with(
+    module: &thir::Module,
+    wanted: &dyn Fn(DefId) -> bool,
+    cx: &LowerCx<'_>,
+    mut pending: Pending,
+) -> Result<MirModule, Ice> {
     let mut fns: Vec<&thir::FnDef> = module.fns.iter().filter(|f| wanted(f.def)).collect();
     fns.sort_by_key(|f| f.def);
     let mut consts: Vec<&thir::ConstDef> = module.consts.iter().filter(|c| wanted(c.def)).collect();
     consts.sort_by_key(|c| c.def);
     let mut functions = Vec::new();
-    let mut pending = Pending::default();
     // Items in `DefIndex` order: merge functions and constants.
     let mut fi = fns.into_iter().peekable();
     let mut ci = consts.into_iter().peekable();
@@ -289,10 +357,17 @@ pub fn lower_items(
 ///
 /// As [`lower_module`].
 pub fn lower_tests(module: &thir::Module, cx: &LowerCx<'_>) -> Result<MirModule, Ice> {
+    lower_tests_with(module, cx, Pending::default())
+}
+
+fn lower_tests_with(
+    module: &thir::Module,
+    cx: &LowerCx<'_>,
+    mut pending: Pending,
+) -> Result<MirModule, Ice> {
     let mut tests: Vec<&thir::TestDef> = module.tests.iter().collect();
     tests.sort_by_key(|t| t.def);
     let mut functions = Vec::new();
-    let mut pending = Pending::default();
     for t in tests {
         let lowered = body::lower_body(FnKey::Test(t.def), t.span, &t.body, 0, cx, &mut pending)?;
         functions.push(lowered);
@@ -496,7 +571,10 @@ fn collect_defs(f: &Function, m: &mut Mentions) {
             }
             match value {
                 Rvalue::Call { callee: c, .. } => callee(c, m),
-                Rvalue::Alloc { layout, .. } | Rvalue::Field { layout, .. } => {
+                Rvalue::Alloc { layout, .. }
+                | Rvalue::AllocPlaceholder { layout }
+                | Rvalue::InitField { layout, .. }
+                | Rvalue::Field { layout, .. } => {
                     if let LayoutRef::Ctor(d) = layout {
                         m.ctors.insert(*d);
                     }
@@ -569,6 +647,7 @@ fn key_defs(key: FnKey, out: &mut BTreeSet<DefId>) {
         FnKey::Item(d)
         | FnKey::ValueShim(d)
         | FnKey::Closure { owner: d, .. }
+        | FnKey::Continuation { owner: d, .. }
         | FnKey::ConstInit(d)
         | FnKey::Test(d)
         | FnKey::TupleDictFn { iface_fn: d, .. }

@@ -1160,7 +1160,7 @@ proptest! {
 
 // ---------------------------------------------------------------------
 // A system refusal in the middle of an in-place update
-// (GAP(system-refusal-leak))
+// (D-771)
 
 /// `main`'s thunk: fills a unique list's first leaf in place, then pushes
 /// once more with the next system allocation refused. The push has taken
@@ -1180,7 +1180,7 @@ unsafe extern "C" fn pushes_until_the_system_refuses(ctx: *mut crate::ctx::ExecC
     unsafe { cheby_rt_list_push(ctx, xs, abi::tag_int(M as i64).unwrap()) }
 }
 
-/// GAP(system-refusal-leak): an out-of-memory panic caused by a refusal of
+/// D-771: an out-of-memory panic caused by a refusal of
 /// the system allocator marks the build's domain, and `run_main` exits 101
 /// without the leak check, which would have found the list in flight and
 /// exited 102, and counts the skip.

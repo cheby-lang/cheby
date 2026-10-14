@@ -51,11 +51,13 @@ pub enum Kind {
     DynFwd,
     /// The unchecked inner body of a function with a large frame (D-679).
     Big,
+    /// A continuation of a large literal (D-780, GAP(continuation-symbol)).
+    Cont,
 }
 
 impl Kind {
     /// Every kind.
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 19] = [
         Self::Fn,
         Self::Slot,
         Self::Shim,
@@ -74,6 +76,7 @@ impl Kind {
         Self::TupleFn,
         Self::DynFwd,
         Self::Big,
+        Self::Cont,
     ];
 
     /// The word in the symbol.
@@ -98,6 +101,7 @@ impl Kind {
             Self::TupleFn => "tfn",
             Self::DynFwd => "dynfwd",
             Self::Big => "big",
+            Self::Cont => "cont",
         }
     }
 }
@@ -151,6 +155,26 @@ pub fn test_closure(module: &str, ordinal: u32, index: u32) -> String {
     format!(
         "{PREFIX}{}$test${}${ordinal}${index}",
         Kind::Clo.word(),
+        path_part(module)
+    )
+}
+
+/// `cb$cont$<module path>$<owner>$<n>`: continuation `n` of the item or
+/// constant `owner` (D-780, GAP(continuation-symbol)), named as its
+/// closures are ([`closure`]) under a kind of its own.
+#[must_use]
+pub fn continuation(owner: &DefName, index: u32) -> String {
+    format!("{}${index}", item(Kind::Cont, owner))
+}
+
+/// `cb$cont$test$<module path>$<ordinal>$<n>`: continuation `n` of the
+/// test with that ordinal in its module, named as its closures are
+/// ([`test_closure`], D-780).
+#[must_use]
+pub fn test_continuation(module: &str, ordinal: u32, index: u32) -> String {
+    format!(
+        "{PREFIX}{}$test${}${ordinal}${index}",
+        Kind::Cont.word(),
         path_part(module)
     )
 }

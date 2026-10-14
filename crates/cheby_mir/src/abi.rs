@@ -100,7 +100,8 @@ pub fn trampoline_sig(arity: u32) -> AbiSig {
 /// The signature of a key whose signature does not depend on any item's
 /// declaration: constant initializers and test bodies take nothing and
 /// return a uniform word; entries and trampolines as above. `None` for
-/// items, whose signatures come from their declarations, and for the
+/// items, whose signatures come from their declarations, for
+/// continuations (D-780), whose signatures are their own, and for the
 /// uniform keys ([`FnKey::is_uniform`]: shims, closures, tuple dictionary
 /// functions and `dyn` forwarders), whose arity the key does not hold;
 /// the validator checks that they have [`uniform_sig`] of some arity.
@@ -116,7 +117,8 @@ pub fn fixed_sig(key: FnKey) -> Option<AbiSig> {
         | FnKey::ValueShim(_)
         | FnKey::Closure { .. }
         | FnKey::TupleDictFn { .. }
-        | FnKey::DynForward { .. } => None,
+        | FnKey::DynForward { .. }
+        | FnKey::Continuation { .. } => None,
     }
 }
 

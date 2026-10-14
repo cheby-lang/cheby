@@ -23,7 +23,7 @@
 //!   returns nonzero, and `resume` is the entry pad chain's last block; the
 //!   entry-only part of the chain is not translated, and a large frame's
 //!   outer function does the same through
-//!   `cheby_rt_stack_slow_frame_unwind` (GAP(entry-unwind-helper)). With
+//!   `cheby_rt_stack_slow_frame_unwind` (D-775). With
 //!   more counted parameters the slow path is a C call with the flag's
 //!   test, and the chain is translated.
 //!
@@ -163,7 +163,7 @@ impl Translator<'_, '_> {
         Ok(())
     }
 
-    /// The entry check's releasing slow path (GAP(entry-unwind-helper)):
+    /// The entry check's releasing slow path (D-775):
     /// `r = call f(leading…, n, p0, p1, p2, p3); brif r, resume, next`,
     /// where `n` is the number of `words` and the unused `p`s are 0. It
     /// ends the current block.

@@ -67,16 +67,7 @@ impl Parker {
     /// poller; otherwise on the condition variable. Returns at once if
     /// notified since the last park. The caller re-checks why it parked.
     pub(super) fn park(&self, shared: &Shared) {
-        if self
-            .state
-            .compare_exchange(
-                state::NOTIFIED,
-                state::EMPTY,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            )
-            .is_ok()
-        {
+        if self.take_notified() {
             return;
         }
         if let Some(mut poller) = shared.driver.try_hold() {
@@ -86,6 +77,28 @@ impl Parker {
         } else {
             self.park_condvar();
         }
+    }
+
+    /// Blocks the calling worker until [`Parker::unpark`] on the condition
+    /// variable only, never in the poller: a retiring worker that waits for
+    /// its pinned fibers (D-687, D-689) leaves the poller to the live
+    /// workers. Returns at once if notified since the last park.
+    pub(super) fn park_aside(&self) {
+        if !self.take_notified() {
+            self.park_condvar();
+        }
+    }
+
+    /// Consumes a notification made since the last park, if any.
+    fn take_notified(&self) -> bool {
+        self.state
+            .compare_exchange(
+                state::NOTIFIED,
+                state::EMPTY,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            )
+            .is_ok()
     }
 
     /// Blocks in the poller the caller holds.

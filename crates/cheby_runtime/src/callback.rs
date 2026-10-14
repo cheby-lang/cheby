@@ -79,7 +79,7 @@ pub unsafe fn call(closure: Word, args: &[Word]) -> Word {
             )),
         }
     };
-    fiber.sched.leave_callback();
+    crate::sched::leave_callback(fiber);
     // The trampoline caught an unwinding (D-699) and returned 0: the
     // kernel's frames unwind to its guard (D-697).
     rethrow_if_unwinding(fiber);

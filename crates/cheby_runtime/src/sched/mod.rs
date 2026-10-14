@@ -56,7 +56,8 @@ use crossbeam_deque::Injector;
 use parking_lot::Mutex;
 
 pub(crate) use fiber::{
-    AfterSwitch, FiberRef, FiberSched, StartFn, Unlock, Unlocks, begin_park, cancel_park, park,
+    AfterSwitch, FiberRef, FiberSched, StartFn, Unlock, Unlocks, begin_park, cancel_park,
+    leave_callback, park,
 };
 pub(crate) use lifecycle::terminate;
 pub use lifecycle::{DetachedGroup, TeardownReport};
@@ -66,7 +67,7 @@ pub(crate) use wait::{WaitHeader, WaitNode, WaitQueue, WaitState};
 use self::fiber::FiberParams;
 use self::idle::Idle;
 use self::monitor::MonitorWake;
-use self::worker::WorkerShared;
+use self::worker::{WorkerShared, Workers, life};
 use crate::alloc;
 use crate::ctx::{ExecCtx, FiberInit};
 use crate::entry::{
@@ -206,8 +207,14 @@ pub(crate) enum Where {
 
 /// What every thread of a runtime shares.
 pub(crate) struct Shared {
-    /// The workers, by index.
-    workers: Box<[WorkerShared]>,
+    /// The worker slots, by index (GAP(retired-worker-slots)).
+    workers: Workers,
+    /// The join handle of every worker thread started and not joined yet,
+    /// with its slot (C-7): `set_thread_count` adds to it from a fiber,
+    /// and the host's stop and halt drain and join it. Its lock also
+    /// serializes starting and retiring workers; it is taken before a
+    /// worker's gate, the idle list or a targeted queue, never under them.
+    threads: Mutex<Vec<(usize, JoinHandle<()>)>>,
     /// The global queue.
     injector: Injector<FiberRef>,
     /// Which workers are parked or searching.
@@ -267,7 +274,7 @@ pub(crate) struct Shared {
 impl fmt::Debug for Shared {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Shared")
-            .field("workers", &self.workers.len())
+            .field("workers", &self.workers.live())
             .field("live", &self.live.load(Ordering::Relaxed))
             .field("stopping", &self.stopping.load(Ordering::Relaxed))
             .field("timers", &self.timers_pending())
@@ -276,7 +283,8 @@ impl fmt::Debug for Shared {
 }
 
 impl Shared {
-    /// Worker `index`.
+    /// Worker slot `index`, if a worker ever started there; it stays for
+    /// the runtime's life (GAP(retired-worker-slots)).
     fn worker(&self, index: usize) -> Option<&WorkerShared> {
         self.workers.get(index)
     }
@@ -332,18 +340,181 @@ impl Shared {
         self.fiber_stack
     }
 
-    /// C4: the thread count's target (D-657): the worker count until
-    /// [`Shared::set_thread_count`] sets one.
+    /// C4: the thread count (D-657): the worker count until
+    /// [`Shared::set_thread_count`] sets one, then the count it set, so a
+    /// count just set is the count read next (runtime.md's example), while
+    /// the workers it retires finish their fibers' slices.
     pub(crate) fn thread_count(&self) -> usize {
         self.thread_target.load(Ordering::SeqCst)
     }
 
-    /// C4: sets the thread count's target; the caller clamps it to 1 to
-    /// [`MAX_THREADS`] (D-657, D-658). In checkpoint 3's wave 1 this stores
-    /// the target only, an interim that never ships: package T1n (wave 3)
-    /// starts and retires workers to meet it.
-    pub(crate) fn set_thread_count(&self, count: usize) {
+    /// C4: sets the thread count to `count`, clamped to 1 to
+    /// [`MAX_THREADS`] (D-298, D-657), without waiting for any fiber
+    /// (D-689, `worker`'s module documentation): new workers start at
+    /// once, in the lowest free slots, after taking back the retirements
+    /// not acted on yet; the live workers with the highest indexes retire
+    /// at their next scheduling point, through a per-worker flag and a
+    /// `YIELD` request on the fiber each runs, never `SAFEPOINT` (C-5).
+    /// Once the runtime stops or halts it only records the count. Callable
+    /// from a fiber (the kernel) and from the host, with no runtime lock
+    /// held. If the system refuses a thread, the runtime goes on with the
+    /// workers it has (GAP(retired-worker-slots)).
+    pub(crate) fn set_thread_count(self: &Arc<Self>, count: usize) {
+        let count = count.clamp(1, MAX_THREADS);
+        let mut threads = self.threads.lock();
         self.thread_target.store(count, Ordering::SeqCst);
+        if self.stopping() {
+            return;
+        }
+        // The threads of retired workers that have ended: joining them
+        // does not block.
+        let (ended, running): (Vec<_>, Vec<_>) = std::mem::take(&mut *threads)
+            .into_iter()
+            .partition(|(_, handle)| handle.is_finished());
+        *threads = running;
+        for (_, handle) in ended {
+            handle.join().ok();
+        }
+        let live: Vec<usize> = self
+            .workers
+            .indexed()
+            .filter(|(_, worker)| worker.life() == life::LIVE)
+            .map(|(index, _)| index)
+            .collect();
+        if count > live.len() {
+            let mut needed = count.saturating_sub(live.len());
+            for (_, worker) in self.workers.indexed() {
+                if needed == 0 {
+                    break;
+                }
+                if worker.cancel_retire() {
+                    needed = needed.saturating_sub(1);
+                }
+            }
+            for index in 0..MAX_THREADS {
+                if needed == 0 {
+                    break;
+                }
+                let free = self
+                    .worker(index)
+                    .is_none_or(|worker| worker.life() == life::DEAD);
+                if !free {
+                    continue;
+                }
+                if self.start_worker(index, &mut threads).is_err() {
+                    break;
+                }
+                needed = needed.saturating_sub(1);
+            }
+            // Slots still `LEAVING` cover the rest: their workers rejoin
+            // instead of ending (`leave_or_rejoin`).
+        } else {
+            let extra = live.len().saturating_sub(count);
+            for &index in live.iter().rev().take(extra) {
+                self.retire_worker(index);
+            }
+        }
+    }
+
+    /// Starts a worker thread in free slot `index` (never started, or
+    /// `DEAD`), under the thread registry's lock, whose guard is
+    /// `threads`.
+    ///
+    /// # Errors
+    ///
+    /// The system's error if the thread cannot start; the slot stays free.
+    fn start_worker(
+        self: &Arc<Self>,
+        index: usize,
+        threads: &mut Vec<(usize, JoinHandle<()>)>,
+    ) -> std::io::Result<()> {
+        let Some(worker) = self.workers.fill(index) else {
+            return Err(std::io::Error::other("no worker slot left"));
+        };
+        // The slot's last thread, if any, no longer uses it: it marked it
+        // `DEAD` last, under this lock (`leave_or_rejoin`).
+        worker.set_live();
+        self.idle.add_worker();
+        let shared = Arc::clone(self);
+        match std::thread::Builder::new()
+            .name(format!("cheby-worker-{index}"))
+            .spawn(move || worker::main(&shared, index))
+        {
+            Ok(handle) => {
+                threads.push((index, handle));
+                Ok(())
+            }
+            Err(error) => {
+                drop(worker.end());
+                self.idle.remove_worker(index);
+                Err(error)
+            }
+        }
+    }
+
+    /// Asks live worker `index` to retire at its next scheduling point:
+    /// sets its flag, asks the fiber it runs to yield (D-737 leaves a lone
+    /// fiber alone; a retirement does not), and wakes it if it is parked.
+    fn retire_worker(&self, index: usize) {
+        let Some(worker) = self.worker(index) else {
+            return;
+        };
+        if !worker.request_retire() {
+            return;
+        }
+        self.look_at_running(index, |fiber| {
+            if let Some(fiber) = fiber {
+                crate::ctx::request(fiber, crate::ctx::reason::YIELD);
+            }
+        });
+        worker.unpark(self);
+    }
+
+    /// The last step of worker `index`'s retirement, once no fiber is
+    /// pinned to it or the runtime stops: the worker rejoins as live and
+    /// false is returned if the live workers are fewer than the thread
+    /// count now (it went up while this one was leaving) and the runtime
+    /// runs on, or if the runtime stops without halting: a stop runs every
+    /// runnable fiber to its end (`Runtime::shutdown`), and the live
+    /// workers may have ended before this one handed its fibers to the
+    /// global queue, so it ends as a live worker does, once nothing is
+    /// runnable (review finding CONC3-3 of gate 3). Otherwise its slot
+    /// becomes `DEAD`, a fiber still queued for it goes to the global
+    /// queue, and true is returned: the thread must end without touching
+    /// the slot again. Under the thread registry's lock, so no new thread
+    /// starts in the slot before this returns.
+    fn leave_or_rejoin(&self, index: usize) -> bool {
+        let threads = self.threads.lock();
+        let Some(worker) = self.worker(index) else {
+            return true;
+        };
+        let rejoin = if self.halting() {
+            false
+        } else if self.stopping() {
+            true
+        } else {
+            self.workers.live() < self.thread_count()
+        };
+        if rejoin {
+            worker.set_live();
+            self.idle.add_worker();
+            return false;
+        }
+        let left = worker.end();
+        drop(threads);
+        if !left.is_empty() {
+            for fiber in left {
+                // SAFETY: a queued fiber is not retired.
+                if unsafe { fiber.ctx() }.sched.pinned() {
+                    crate::panic::fatal(format_args!(
+                        "a fiber pinned to a retired worker was left behind"
+                    ));
+                }
+                self.injector.push(fiber);
+            }
+            self.notify_parked();
+        }
+        true
     }
 
     /// Whether a halt has started (D-073, D-708).
@@ -407,7 +578,7 @@ impl Shared {
     /// control block that may have been retired (I-8). Only the halt asks
     /// (C-5).
     fn request_safepoints(&self) {
-        for index in 0..self.workers.len() {
+        for index in 0..self.workers.filled() {
             self.look_at_running(index, |fiber| {
                 if let Some(fiber) = fiber {
                     crate::ctx::request(fiber, crate::ctx::reason::SAFEPOINT);
@@ -426,7 +597,11 @@ impl Shared {
 
     /// Whether any queue a thief can reach holds a fiber.
     fn work_pending(&self) -> bool {
-        !self.injector.is_empty() || self.workers.iter().any(WorkerShared::has_stealable)
+        !self.injector.is_empty()
+            || self
+                .workers
+                .iter()
+                .any(|worker| worker.takes_local() && worker.has_stealable())
     }
 
     /// Whether any fiber waits in a run queue, so that preempting a running
@@ -453,7 +628,7 @@ impl Shared {
     /// set its flag calls it, so it never waits for the next timer). Each
     /// woken worker re-checks the flags before it parks again.
     pub(crate) fn wake_idle(&self) {
-        for worker in &self.workers {
+        for worker in self.workers.iter() {
             worker.unpark(self);
         }
         // The poll holder's parker woke it above; this wake also covers a
@@ -461,13 +636,27 @@ impl Shared {
         self.driver.wake();
     }
 
-    /// Queues a fiber only worker `index` may run, waking it if parked.
+    /// Queues a fiber only worker `index` may run, waking it if parked. A
+    /// worker that is leaving is out of `Idle` and is woken directly; one
+    /// that has ended takes no fiber, so an unpinned one (the migration
+    /// stress mode's) goes to the global queue instead.
     fn push_targeted(&self, index: usize, fiber: FiberRef) {
         let Some(worker) = self.worker(index) else {
             crate::panic::fatal(format_args!("a fiber's worker does not exist"));
         };
-        worker.push_targeted(fiber);
-        if self.idle.unpark_specific(index) {
+        if let Err(fiber) = worker.push_targeted(fiber) {
+            // SAFETY: a runnable fiber is not retired.
+            if unsafe { fiber.ctx() }.sched.pinned() {
+                crate::panic::fatal(format_args!("a fiber is pinned to a retired worker"));
+            }
+            self.injector.push(fiber);
+            self.notify_parked();
+            return;
+        }
+        // The push happened before this read; a worker stores `LEAVING`
+        // before it looks at its queue, so either it sees the fiber or
+        // this read sees it leaving.
+        if self.idle.unpark_specific(index) || worker.life() == life::LEAVING {
             worker.unpark(self);
         }
     }
@@ -480,21 +669,21 @@ impl Shared {
     fn schedule(&self, fiber: FiberRef, from: Option<usize>, place: Where) {
         // SAFETY: a runnable fiber is not retired.
         let sched = &unsafe { fiber.ctx() }.sched;
-        let count = self.workers.len();
         if sched.pinned() {
             self.push_targeted(sched.worker(), fiber);
             return;
         }
-        if self.stress_migrate && count > 1 {
-            let target = sched
-                .worker()
-                .wrapping_add(1)
-                .checked_rem(count)
-                .unwrap_or(0);
+        // To the next live worker, if there is another one.
+        if self.stress_migrate
+            && let Some(target) = self.workers.next_live_after(sched.worker())
+        {
             self.push_targeted(target, fiber);
             return;
         }
-        let here = from.and_then(|index| self.worker(index));
+        // A worker that has drained its queues to leave takes no more.
+        let here = from
+            .and_then(|index| self.worker(index))
+            .filter(|worker| worker.takes_local());
         match (place, here) {
             (Where::Next, Some(worker)) => {
                 if let Some(old) = worker.put_next(fiber) {
@@ -717,7 +906,7 @@ fn stress_from_env() -> bool {
 /// Dropping it stops it like [`Runtime::shutdown`].
 pub struct Runtime {
     shared: Arc<Shared>,
-    workers: Vec<JoinHandle<()>>,
+    /// The monitor's thread; the workers' are in [`Shared`] (C-7).
     monitor: Option<JoinHandle<()>>,
     /// The code its fibers may run (D-708).
     code: Mutex<Vec<CodeToken>>,
@@ -760,9 +949,11 @@ impl Runtime {
         }
         let driver = poll::Driver::new().map_err(RuntimeError::Spawn)?;
         let shared = Arc::new(Shared {
-            workers: (0..threads).map(|_| WorkerShared::new()).collect(),
+            workers: Workers::new(),
+            threads: Mutex::new(Vec::with_capacity(threads)),
             injector: Injector::new(),
-            idle: Idle::new(threads),
+            // Each worker joins as it starts.
+            idle: Idle::new(0),
             stopping: AtomicBool::new(false),
             live: AtomicUsize::new(0),
             next_id: AtomicU64::new(1),
@@ -789,18 +980,18 @@ impl Runtime {
         });
         let mut runtime = Self {
             shared,
-            workers: Vec::with_capacity(threads),
             monitor: None,
             code: Mutex::new(Vec::new()),
             finished: false,
         };
-        for index in 0..threads {
-            let shared = Arc::clone(&runtime.shared);
-            let handle = std::thread::Builder::new()
-                .name(format!("cheby-worker-{index}"))
-                .spawn(move || worker::main(&shared, index))
-                .map_err(RuntimeError::Spawn)?;
-            runtime.workers.push(handle);
+        {
+            let mut handles = runtime.shared.threads.lock();
+            for index in 0..threads {
+                runtime
+                    .shared
+                    .start_worker(index, &mut handles)
+                    .map_err(RuntimeError::Spawn)?;
+            }
         }
         let shared = Arc::clone(&runtime.shared);
         let monitor = std::thread::Builder::new()
@@ -811,10 +1002,11 @@ impl Runtime {
         Ok(runtime)
     }
 
-    /// The number of worker threads.
+    /// The number of live worker threads: those that take fibers, without
+    /// the ones a lower thread count retires.
     #[must_use]
     pub fn threads(&self) -> usize {
-        self.shared.workers.len()
+        self.shared.workers.live()
     }
 
     /// Keeps `code` alive until the runtime has stopped (D-708). Attach
@@ -1033,9 +1225,12 @@ impl Runtime {
     /// inline in a system call (D-786), which are left running, detached;
     /// returns whether there was one. With `freeze`, asks the fibers that
     /// still run to freeze (`SAFEPOINT`) on every round, for the halt.
+    /// The workers `set_thread_count` started are among them, and those it
+    /// retired too (C-7): the caller set the stop or halt flag first, so
+    /// no worker starts or rejoins after the registry is drained.
     fn join_workers(&mut self, freeze: bool) -> bool {
         let mut pending: Vec<(usize, JoinHandle<()>)> =
-            self.workers.drain(..).enumerate().collect();
+            std::mem::take(&mut *self.shared.threads.lock());
         let mut stuck = false;
         let mut round = 0_u32;
         while !pending.is_empty() {
@@ -1107,5 +1302,7 @@ mod poll_tests;
 pub(crate) mod testing;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod thread_count_tests;
 #[cfg(test)]
 mod timer_tests;

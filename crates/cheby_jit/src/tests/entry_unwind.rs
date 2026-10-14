@@ -1,5 +1,5 @@
 //! The entry check's releasing slow path under the JIT
-//! (GAP(entry-unwind-helper), refining D-698 and D-743): a function with at
+//! (D-775, refining D-698 and D-743): a function with at
 //! most four counted parameters calls `cheby_rt_stack_slow_unwind` (the
 //! outer function of a large frame `cheby_rt_stack_slow_frame_unwind`),
 //! which releases them itself when it starts an unwinding; a function with
