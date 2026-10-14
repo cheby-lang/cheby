@@ -229,6 +229,7 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-781     | P6 adds a nightly workflow for the fuzz targets; H1 extends it                                      |
 | D-782     | L1 tears down a test's detached fibers in the sequential runner                                     |
 | D-786     | A fiber blocked inline in IO is skipped at exit until the blocking pool (I1)                        |
+| D-787     | Borrowing also in package-visible functions, never in `pub` ones                                    |
 
 ## Open questions
 

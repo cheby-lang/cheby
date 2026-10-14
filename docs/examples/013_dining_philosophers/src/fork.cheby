@@ -10,7 +10,12 @@
 //!
 //! A `Fork` holds both ends of its channel. As long as anyone can still
 //! use a fork, its channel has a `Sender` and a `Receiver`, so it never
-//! closes and picking up and putting down always succeed.
+//! closes and picking up and putting down always succeed. A binding
+//! lets go of its value right after its last use, though, and reading
+//! one field is a use of the whole fork. So `pick_up` and `put_down`
+//! keep their `fork` until the channel operation has finished:
+//! otherwise putting down the last reference to a fork would release
+//! its `Receiver` first, and the token would have nowhere to go.
 
 import std::channel
 import std::duration
@@ -42,6 +47,8 @@ fn pick_up(fork: Fork) {
   // `fork` holds a `Sender` for this channel, so the channel cannot
   // close, and the token always comes back eventually.
   let assert Ok(Nil) = channel::receive(fork.from_table)
+  // Keeps the fork, and with it the `Sender`, until the token is here.
+  let _ = fork
 }
 
 /// Puts `fork` back on the table. Only the fiber holding the fork may
@@ -50,6 +57,8 @@ fn put_down(fork: Fork) {
   // The token is in this fiber's hand, so the buffer is empty and this
   // does not block.
   let assert Ok(Nil) = channel::send(fork.to_table, Nil)
+  // Keeps the fork, and with it the `Receiver`, until the token is back.
+  let _ = fork
 }
 
 test "a fork that is put down can be picked up again" {
