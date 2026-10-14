@@ -568,7 +568,7 @@ fn strip_line_ending(mut line: Vec<u8>) -> Vec<u8> {
 /// then ends at once with status 1, printing nothing (D-306, spec §13.5).
 /// The host's thread runs no entry, so there is no fiber to stop and no
 /// host to tell: the failure goes back to its caller
-/// (GAP(termination-off-entry), D-709).
+/// (D-709, D-801).
 pub fn read_input_line() -> io::Result<Option<String>> {
     flush_stdout()?;
     Ok(read_line_unflushed()

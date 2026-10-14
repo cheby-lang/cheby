@@ -69,7 +69,7 @@
 //! A unit counted on its own ([`crate::count_and_check`]: the JIT's tests,
 //! a REPL session, per-unit goldens) is never inferred and stays
 //! all-owned. A REPL session borrows nothing in any unit it lowers, std
-//! and package modules included (GAP(borrow-off-in-repl)), and neither
+//! and package modules included (D-808), and neither
 //! does a build under `CHEBY_RC=naive` ([`crate::MirOptions::borrows`]),
 //! which keeps naive counting the oracle of D-718.
 //!
@@ -97,7 +97,7 @@
 //! 5. Its declared type ([`crate::LocalDecl::ty`]) is handle-free
 //!    ([`Defs::handle_free`]); a dictionary has no declared type and is
 //!    never borrowed.
-//! 6. Profitability (GAP(borrow-profitability)): no use consumes it. A
+//! 6. Profitability (D-806): no use consumes it. A
 //!    use consumes when it returns the parameter, stores it (`Alloc`),
 //!    moves it (`Use`), passes it as a `Goto` argument, in an owned
 //!    position of a runtime helper, to `list_slice` at its last use (which
@@ -113,7 +113,7 @@
 //!    operand, or a local defined as `_n = const …`, as lowering writes a
 //!    string literal), the caller's own borrowed parameter, or a borrowed
 //!    projection of one (a chain of `field` reads from it;
-//!    GAP(borrowed-projections), which the counting implements).
+//!    D-807, which the counting implements).
 //!    Otherwise that position becomes owned. A tail call is never turned
 //!    into a call to fit a mask.
 //!
@@ -129,7 +129,7 @@
 //! never a `drop`, and it is not in any cleanup pad, the entry pad
 //! included ([`crate::Function::owned_params`]). A `field` result of a
 //! borrowed parameter or of a borrowed projection is a borrowed projection
-//! too, with the same rule (GAP(borrowed-projections);
+//! too, with the same rule (D-807;
 //! [`crate::Function::borrowed_locals`]). A call passes a borrowed
 //! position without giving up a reference, so the caller drops an
 //! argument it no longer needs after the call, and its cleanup pad

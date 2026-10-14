@@ -20,7 +20,7 @@
 //!   worker that finds such work after it registered as parked takes itself
 //!   back with [`Idle::unpark_self`].
 //!
-//! - **Live workers** (D-689, GAP(retired-worker-slots)). The number of
+//! - **Live workers** (D-689, D-795). The number of
 //!   workers follows `set_thread_count`: a started worker joins as unparked
 //!   ([`Idle::add_worker`]), and a retiring one leaves once it no longer
 //!   searches ([`Idle::remove_worker`]), so the half-the-workers rule and
@@ -231,7 +231,7 @@ mod tests {
         assert!(one.transition_worker_to_searching());
     }
 
-    /// GAP(retired-worker-slots): started and retired workers change the
+    /// D-795: started and retired workers change the
     /// live count, so the notify check and the half rule follow them.
     #[test]
     fn thread_count_idle_follows_started_and_retired_workers() {

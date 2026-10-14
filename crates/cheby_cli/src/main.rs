@@ -324,7 +324,7 @@ fn run(out: Out, options: cheby_driver::RunOptions) -> ExitCode {
         Err(e) => return out.error(e.message()),
     };
     out.diagnostics(program.output());
-    // GAP(freeze-only-cli): the process exits right after `main`, so a
+    // D-797: the process exits right after `main`, so a
     // build without the leak check freezes the fibers left instead of
     // tearing them down (D-073, D-708); a debug build tears them down so
     // that the leak check sees what they held (D-710).

@@ -454,7 +454,7 @@ impl Program {
     /// Chooses what happens to the fibers left when `main` has returned
     /// (D-073, D-708): [`AtExit::Teardown`] unless set. Only `cheby run`,
     /// whose process exits next, asks for [`AtExit::Freeze`], and only in
-    /// a build without the leak check (GAP(freeze-only-cli)).
+    /// a build without the leak check (D-797).
     pub const fn set_at_exit(&mut self, at_exit: AtExit) {
         self.config.at_exit = at_exit;
     }
@@ -512,7 +512,7 @@ pub fn prepare_run(root: &Path, options: RunOptions) -> Result<Prepared, Error> 
     // usage messages are the same on every machine and for every module
     // path that is run (D-369).
     // The root package's `[runtime]` stacks (D-660); the runtime rounds
-    // them up to its page size (GAP(runtime-table-bytes)).
+    // them up to its page size (D-796).
     let config = RunConfig {
         args: options.args,
         program_name: package,

@@ -1,6 +1,6 @@
 //! Tests of large literals (D-720, D-780): tuples filled one field at a
-//! time (GAP(tuple-init-field)) and literals split into chains of
-//! continuations (GAP(continuation-symbol)), from source through
+//! time (D-810) and literals split into chains of
+//! continuations (D-811), from source through
 //! `test_support`: the shapes by string checks, two goldens under
 //! `tests/golden/data/` (`CHEBY_BLESS=1` rewrites them), the validator on
 //! hand-built forms, and the structural guard of the statement budget.
@@ -97,7 +97,7 @@ fn a_tuple_at_the_threshold_is_one_alloc() {
 /// Each field is computed, boxed and stored before the next one is
 /// computed: between two stores there is one checked add and one box, and
 /// an unwinding out of either releases only the tuple, whose placeholders
-/// hold nothing (GAP(tuple-init-field)).
+/// hold nothing (D-810).
 #[test]
 fn tuple_fields_are_stored_before_the_next_is_computed() {
     let n = 40;

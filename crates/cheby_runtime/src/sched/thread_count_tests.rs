@@ -1,5 +1,5 @@
 //! Tests of `set_thread_count`'s mechanics (D-657, D-689,
-//! GAP(retired-worker-slots)): workers started at once and retired at
+//! D-795): workers started at once and retired at
 //! their next scheduling point, under load, with a pinned fiber (D-687),
 //! with the poll holder (D-680), with a lone spinning fiber (D-737), and
 //! joined by the runtime's stop and halt (C-7).

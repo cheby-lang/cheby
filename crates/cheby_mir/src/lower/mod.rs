@@ -165,7 +165,7 @@ impl Pending {
     }
 
     /// A new continuation key of `owner`, numbered in creation order
-    /// (D-780, GAP(continuation-symbol)).
+    /// (D-780, D-811).
     ///
     /// # Errors
     ///

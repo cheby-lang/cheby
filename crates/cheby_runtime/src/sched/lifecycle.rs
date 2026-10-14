@@ -2,7 +2,7 @@
 //! D-723, D-782 to D-786): detached fibers and their groups, teardown, the
 //! halt at a safepoint, and termination as an outcome (D-709).
 //!
-//! # Groups (GAP(detached-groups))
+//! # Groups (D-799)
 //!
 //! A [`DetachedGroup`] holds the detached fibers of one root: `main`'s
 //! (`run_main`), one test's (`cheby test`, D-782), later one REPL
@@ -15,7 +15,7 @@
 //! chooses, and the runtime tears every group down when it shuts down.
 //!
 //! Each member is a detached fiber and its **base scope**
-//! (GAP(detached-base-scope), `fiber_ops::detached`): a parentless scope,
+//! (D-798, `fiber_ops::detached`): a parentless scope,
 //! owned by the fiber, its spawn scope, the root of every scope it opens.
 //!
 //! # Teardown (D-708, D-710, D-723)
@@ -27,7 +27,7 @@
 //! its cleanup pads, and every scope it has open passes the cancellation
 //! through (D-667), so none returns `Err` to user code. A detached spawn
 //! into a closing group starts cancelled and never calls its function
-//! (GAP(detached-spawn-while-closing)). A fiber blocked inline in a system
+//! (D-800). A fiber blocked inline in a system
 //! call (standard input, file IO, until I1's blocking pool) cannot be
 //! stopped: the teardown skips it and counts it (D-786), and with it the
 //! fibers of the same member's subtree that wait for it, such as a
@@ -65,7 +65,7 @@ use crate::panic::fatal;
 const TEARDOWN_POLL: Duration = Duration::from_millis(5);
 
 /// The detached fibers of one root: `main`, one test, later one REPL
-/// session (GAP(detached-groups)).
+/// session (D-799).
 pub struct DetachedGroup {
     /// The members and the closing flag: a leaf lock, taken with no scope,
     /// channel or fiber lock held.
@@ -87,7 +87,7 @@ struct GroupInner {
     /// waited for from it.
     left: usize,
     /// Set by a teardown until the group is empty: a detached spawn into
-    /// the group starts cancelled (GAP(detached-spawn-while-closing)).
+    /// the group starts cancelled (D-800).
     closing: bool,
 }
 
@@ -170,7 +170,7 @@ impl DetachedGroup {
     /// teardown that started since the reservation did not see the fiber,
     /// so the spawner gives it its base as its target before it is first
     /// queued, and its function is never called
-    /// (GAP(detached-spawn-while-closing)). A teardown after this finds it.
+    /// (D-800). A teardown after this finds it.
     pub(crate) fn fill(&self, index: usize, fiber: FiberRef, base: Arc<ScopeState>) -> bool {
         let mut inner = self.inner.lock();
         let Some(slot @ GroupSlot::Reserved) = inner.slots.get_mut(index) else {
@@ -374,8 +374,8 @@ impl Runtime {
     /// meanwhile (`halted`). Once every remaining member's subtree is
     /// parked except fibers blocked inline in a system call, on two polls
     /// in a row, those members are skipped and the blocked fibers counted
-    /// (D-786; GAP(inline-io-waiters): D-786 names the marked fiber, and
-    /// the fibers that wait in a scope's close for it are skipped with it,
+    /// (D-786, D-804: D-786 names the marked fiber, and D-804 skips with it
+    /// the fibers that wait in a scope's close for it,
     /// counted once by the marked fibers). From the host only, with no runtime
     /// lock held. Runs no user code (ADR-0029).
     pub fn teardown(&self, group: &DetachedGroup) -> TeardownReport {
@@ -433,7 +433,7 @@ impl Runtime {
     /// releases the code tokens (D-073, D-708). At a normal exit only
     /// `cheby run` without the leak check halts, right before the process
     /// exits; after a termination (D-709) every host completes the halt
-    /// (GAP(freeze-only-cli)). `Drop` and `shutdown` of a runtime whose
+    /// (D-797). `Drop` and `shutdown` of a runtime whose
     /// halt has started complete the halt and never tear down.
     pub fn halt(mut self) {
         self.shared.begin_halt();
@@ -542,7 +542,7 @@ impl Shared {
 /// - **Off every entry** (a host thread): a broken invariant. A host that
 ///   writes on its own thread, such as the REPL's flush before reading a
 ///   line, gets the failure as an error instead and ends with status 1
-///   itself (GAP(termination-off-entry), `io::read_input_line`).
+///   itself (D-801, `io::read_input_line`).
 ///
 /// Entered with no runtime lock held.
 pub(crate) fn terminate(status: i32) -> ! {

@@ -25,7 +25,7 @@
 //!   (D-671): the instant it fires at is never later than `Instant::now()`.
 //!   Firing runs no Cheby code (ADR-0029). The poll holder, a worker that
 //!   is about to search, and the monitor on every tick fire timers
-//!   (GAP(monitor-fires-timers)).
+//!   (D-789).
 //! - **Locks**: the heap's lock is a leaf. It may be taken under a channel
 //!   lock (a `select` arms its timer under its channels' locks), and
 //!   nothing is taken while it is held. An entry's own lock, which guards
@@ -450,7 +450,7 @@ impl Shared {
     }
 
     /// Fires every timer due at `now`, after releasing the heap lock
-    /// (GAP(monitor-fires-timers)). The monitor calls it on every tick, the
+    /// (D-789). The monitor calls it on every tick, the
     /// poll holder after each poll, and a worker before it searches; firing
     /// never runs Cheby code. A fiber a target wakes goes to the global
     /// queue (none of these threads runs a fiber), which makes

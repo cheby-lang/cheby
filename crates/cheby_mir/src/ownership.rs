@@ -26,7 +26,7 @@
 //!
 //! Borrowed locals (D-715, [`crate::Function::borrowed_locals`]): a
 //! borrowed parameter, and a `field` result of a borrowed local (a
-//! borrowed projection, GAP(borrowed-projections)), hold no reference of
+//! borrowed projection, D-807), hold no reference of
 //! their own and stay alive for the whole call: the caller's reference
 //! keeps them. They start at 0, a borrowed use of one needs no reference,
 //! a `dup` of one is always allowed, and an owned use needs the

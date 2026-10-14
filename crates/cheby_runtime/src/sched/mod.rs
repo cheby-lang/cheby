@@ -207,7 +207,7 @@ pub(crate) enum Where {
 
 /// What every thread of a runtime shares.
 pub(crate) struct Shared {
-    /// The worker slots, by index (GAP(retired-worker-slots)).
+    /// The worker slots, by index (D-795).
     workers: Workers,
     /// The join handle of every worker thread started and not joined yet,
     /// with its slot (C-7): `set_thread_count` adds to it from a fiber,
@@ -244,7 +244,7 @@ pub(crate) struct Shared {
     fiber_stack: usize,
     /// The thread count's target ([`Shared::set_thread_count`]).
     thread_target: AtomicUsize,
-    /// The group of `run_root`'s roots (GAP(detached-groups)).
+    /// The group of `run_root`'s roots (D-799).
     default_group: Arc<DetachedGroup>,
     /// Every group a root ran in, for the teardown at shutdown; a leaf
     /// lock.
@@ -284,7 +284,7 @@ impl fmt::Debug for Shared {
 
 impl Shared {
     /// Worker slot `index`, if a worker ever started there; it stays for
-    /// the runtime's life (GAP(retired-worker-slots)).
+    /// the runtime's life (D-795).
     fn worker(&self, index: usize) -> Option<&WorkerShared> {
         self.workers.get(index)
     }
@@ -358,7 +358,7 @@ impl Shared {
     /// Once the runtime stops or halts it only records the count. Callable
     /// from a fiber (the kernel) and from the host, with no runtime lock
     /// held. If the system refuses a thread, the runtime goes on with the
-    /// workers it has (GAP(retired-worker-slots)).
+    /// workers it has (D-795).
     pub(crate) fn set_thread_count(self: &Arc<Self>, count: usize) {
         let count = count.clamp(1, MAX_THREADS);
         let mut threads = self.threads.lock();
@@ -522,7 +522,7 @@ impl Shared {
         self.halting.load(Ordering::SeqCst)
     }
 
-    /// The runtime's default group: `run_root`'s roots' (GAP(detached-groups)).
+    /// The runtime's default group: `run_root`'s roots' (D-799).
     pub(crate) fn default_group(&self) -> &Arc<DetachedGroup> {
         &self.default_group
     }
@@ -851,7 +851,7 @@ pub(crate) fn create_fiber(
     };
     let fiber =
         fiber::create(shared, spawner.sched.worker(), params, start).map_err(SpawnError::Stack)?;
-    // The spawner's group (GAP(detached-groups)), as its domain.
+    // The spawner's group (D-799), as its domain.
     let group = spawner
         .conc
         .group()
@@ -1106,7 +1106,7 @@ impl Runtime {
         let (sender, receiver) = mpsc::channel();
         // D-709: a termination sends every waiting host `Exited`; once one
         // has halted the runtime, a new root never runs and its host gets
-        // `Exited` at once (GAP(termination-late-root)).
+        // `Exited` at once (D-802).
         let root = self.shared.next_root.fetch_add(1, Ordering::Relaxed);
         if !self.shared.register_root(root, sender.clone()) {
             let status = self.shared.exit_status().unwrap_or(crate::abi::status::ERR);

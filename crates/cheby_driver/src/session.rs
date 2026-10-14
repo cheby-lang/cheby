@@ -142,7 +142,7 @@ pub struct Session {
     options: SessionOptions,
     /// The MIR options every entry is lowered with, read once when the
     /// session starts (`CHEBY_RC`, plan §2.3), with borrowing off
-    /// (GAP(borrow-off-in-repl)).
+    /// (D-808).
     mir: MirOptions,
     sources: SourceMap,
     front: Frontend,
@@ -236,7 +236,7 @@ impl Session {
     pub fn start(dir: &Path, options: SessionOptions) -> Result<Start, Error> {
         cheby_runtime::sched::threads_from_env().map_err(|e| Error::new(e.to_string()))?;
         // No borrowing in any unit a session lowers, std and package
-        // modules included (D-715, GAP(borrow-off-in-repl)): a later batch
+        // modules included (D-715, D-808): a later batch
         // could tail-call a function compiled with a mask its slot could
         // not change. Each unit is counted on its own anyway, which never
         // infers; the switch says so where the options are made.
@@ -2270,7 +2270,7 @@ mod tests {
         assert!(printed[8].contains("<repl:9>:1:1"), "{}", printed[8]);
     }
 
-    /// No unit a session lowers borrows (D-715, GAP(borrow-off-in-repl)):
+    /// No unit a session lowers borrows (D-715, D-808):
     /// the session's options turn borrowing off whatever `CHEBY_RC` says,
     /// and a function that a build would borrow in (a package-visible
     /// function that only reads its `String`) runs, then is redefined with

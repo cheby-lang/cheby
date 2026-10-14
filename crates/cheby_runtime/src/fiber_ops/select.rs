@@ -11,7 +11,7 @@
 //! the value with `take_selected` before it calls the mapping function
 //! (D-205, D-670).
 //!
-//! GAP(selector-kernel-names): the kernels are `sys_new`,
+//! D-793: the kernels are `sys_new`,
 //! `sys_add_receive`, `sys_add_after`, `sys_wait` and `take_selected`, all
 //! `@std_context`, bound as `cheby_selector_<name>` (D-755's pattern).
 //!
@@ -37,7 +37,7 @@
 //!    sharing one header on the heap (`sched::WaitNode::sharing`); it
 //!    publishes that header under its fiber lock (`cancel::publish`), also
 //!    when there is no receive arm or no arm at all, so the cancellation
-//!    walk and a teardown can wake every select (GAP(select-always-publishes));
+//!    walk and a teardown can wake every select (D-792);
 //!    it arms one timer for the earliest timer arm; and it parks with
 //!    every channel lock (`AfterSwitch::ParkAll`).
 //! 5. Woken, it unpublishes, unlinks each node under its channel's lock and
@@ -55,7 +55,7 @@
 //! start, so arms of equal spans have equal deadlines. Several timer arms
 //! with the same, shortest span arm one timer for the first of them in the
 //! random order, which is a uniform choice among them
-//! (GAP(select-equal-timers)).
+//! (D-791).
 //!
 //! **Locks** (`fiber_ops` module documentation): the channel locks in
 //! address order, each once, then the fiber lock (to publish) and the
@@ -293,7 +293,7 @@ enum Kind {
     },
     /// A timer arm: its deadline, from this `select`'s start (D-673), and
     /// its span in nanoseconds, which orders the timer arms: arms of equal
-    /// spans have equal deadlines (GAP(select-equal-timers)).
+    /// spans have equal deadlines (D-791).
     After(Deadline, i128),
 }
 
@@ -609,7 +609,7 @@ unsafe fn wait(ctx: *mut ExecCtx, selector: Word) -> Word {
 
 /// The earliest deadline among `arms`' timer arms and the index of its
 /// arm: the shortest span, and among equal spans the first in the random
-/// `order`, a uniform choice among them (GAP(select-equal-timers)). `None`
+/// `order`, a uniform choice among them (D-791). `None`
 /// when no timer arm has a deadline to wait for.
 fn earliest_timer(arms: &[Arm], order: &[usize]) -> Option<(Instant, usize)> {
     let mut earliest: Option<(Instant, i128, usize)> = None;

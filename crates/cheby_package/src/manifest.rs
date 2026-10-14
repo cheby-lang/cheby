@@ -18,7 +18,7 @@
 //!   (8 MiB by default) and `main-stack` (64 MiB by default), in the form
 //!   of `memory-limit` and from 1 MiB to 16 GiB. Any other key or value is
 //!   E0036. The manifest stores bytes; the runtime rounds up to its page
-//!   size (GAP(runtime-table-bytes)).
+//!   size (D-796).
 //! - `[dependencies]`: each entry is checked, and then the table is
 //!   rejected, because dependencies arrive in M5 (§13.4).
 //!
@@ -64,7 +64,7 @@ pub struct Manifest {
     /// `[runtime] fiber-stack`: the stack reservation in bytes of every
     /// fiber that does not set its own (D-660);
     /// [`Manifest::DEFAULT_FIBER_STACK`] when not given. Not yet rounded to
-    /// pages: the runtime does that (GAP(runtime-table-bytes)).
+    /// pages: the runtime does that (D-796).
     pub fiber_stack: u64,
     /// `[runtime] main-stack`: the stack reservation in bytes of the root
     /// fiber running `main` and of each test (D-660);
@@ -564,7 +564,7 @@ impl Reader<'_> {
     /// A stack size of `[runtime]`: `memory-limit`'s form (D-536), from
     /// [`Manifest::MIN_STACK`] to [`Manifest::MAX_STACK`] (D-660). Reports
     /// E0036 and returns `None` for anything else. The size is kept in
-    /// bytes, unrounded (GAP(runtime-table-bytes)).
+    /// bytes, unrounded (D-796).
     fn stack_size(
         &mut self,
         value: &Spanned<DeValue<'_>>,
@@ -575,7 +575,7 @@ impl Reader<'_> {
         if (Manifest::MIN_STACK..=Manifest::MAX_STACK).contains(&size) {
             return Some(size);
         }
-        // GAP(runtime-table-bytes): the range message's wording.
+        // The range message's wording is D-796's.
         let diag = self.diag(
             format!("{what} must be from 1MiB to 16GiB"),
             value.span(),

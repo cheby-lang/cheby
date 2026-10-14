@@ -14,7 +14,7 @@
 //! lower bound ("never earlier than the limit"), with limits of at least
 //! 10 ms (plan §0 'Determinism').
 //!
-//! GAP(timer-cancels-only): a firing only cancels the scope, and the close
+//! D-790: a firing only cancels the scope, and the close
 //! decides `TimedOut` from the body's unwinding (`scope.rs`).
 
 use std::collections::BTreeMap;

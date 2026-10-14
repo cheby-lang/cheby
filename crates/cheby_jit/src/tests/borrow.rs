@@ -155,7 +155,7 @@ fn borrow_panic_in_a_borrowing_callee_is_released_by_the_caller() {
 /// A borrowed projection passed on borrowed, then a panic further down:
 /// `g(borrow t) { i = field t.0; r = call h(borrow i); return r }` and
 /// `h(borrow x)` panics. Neither `g` nor `h` counts anything; the caller
-/// releases the whole tuple (GAP(borrowed-projections)).
+/// releases the whole tuple (D-807).
 #[test]
 #[cfg_attr(
     windows,

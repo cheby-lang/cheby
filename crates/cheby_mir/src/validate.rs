@@ -697,7 +697,7 @@ impl FnCx<'_> {
     }
 
     /// The tuples filled one field at a time (D-720,
-    /// GAP(tuple-init-field)): each `init_field` stores into a fresh
+    /// D-810): each `init_field` stores into a fresh
     /// object, one this function made with `alloc_placeholder` of the same
     /// layout, or the first parameter of a continuation (D-780), which
     /// takes the partly filled tuple, always with one layout; each field of

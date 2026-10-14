@@ -31,7 +31,7 @@
 //! loop ends before the next search, and a fiber that switches back with
 //! `AfterSwitch::Freeze` is left frozen.
 //!
-//! # Started and retired workers (D-657, D-689, GAP(retired-worker-slots))
+//! # Started and retired workers (D-657, D-689, D-795)
 //!
 //! A runtime has [`MAX_THREADS`] worker slots, filled lazily: a slot gets
 //! its [`WorkerShared`] when a worker first starts there, and keeps it for
@@ -101,7 +101,7 @@ pub(super) mod life {
     pub(in crate::sched) const DEAD: u8 = 3;
 }
 
-/// A runtime's worker slots (GAP(retired-worker-slots)): [`MAX_THREADS`]
+/// A runtime's worker slots (D-795): [`MAX_THREADS`]
 /// of them, each filled the first time a worker starts there and never
 /// emptied, so an index stays valid for the runtime's life.
 pub(super) struct Workers {
@@ -609,7 +609,7 @@ impl Worker<'_> {
             }
         }
         // The steal range covers the filled slots; a worker that left has
-        // emptied its deque and is skipped (GAP(retired-worker-slots)).
+        // emptied its deque and is skipped (D-795).
         let count = self.shared.workers.filled();
         let start = usize::try_from(self.next_random())
             .unwrap_or(0)

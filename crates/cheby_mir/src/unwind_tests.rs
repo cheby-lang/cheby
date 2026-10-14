@@ -1172,7 +1172,7 @@ fn unwind_direction_oldest_first_release_is_descending() {
 
 #[test]
 fn unwind_direction_made_and_released_in_order_is_nested() {
-    // GAP(pad-chain-nested): local 0 held throughout, locals 1..=n made
+    // D-788: local 0 held throughout, locals 1..=n made
     // in order (each site holds a prefix) and released in the same order
     // (each site holds a suffix). Each direction shares only one of the
     // two halves and builds about n²/2 pads for the other.
@@ -1191,7 +1191,7 @@ fn unwind_direction_made_and_released_in_order_is_nested() {
 
 #[test]
 fn unwind_direction_released_one_at_a_time_in_any_order_is_nested() {
-    // GAP(pad-chain-nested): locals 0..n made in order, then released one
+    // D-788: locals 0..n made in order, then released one
     // at a time in a scrambled order (37k mod n), each from the middle of
     // what is held: each set holds one local fewer than the one before.
     let n = 200;

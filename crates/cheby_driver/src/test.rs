@@ -577,7 +577,7 @@ const WRITE_FAILURE_STATUS: i32 = 1;
 /// holds, maybe while a later test runs, which would hide a leak of that
 /// test (review finding ROB2-2 of gate 2). So a test that starts while one
 /// of these groups is not empty gets no leak check either; it is skipped
-/// and counted (GAP(inline-io-later-checks)).
+/// and counted (D-805).
 #[derive(Debug, Default)]
 struct StuckGroups(Vec<Arc<DetachedGroup>>);
 
@@ -882,7 +882,7 @@ fn std_module_tests(
 /// program during the test `name` of `module` (D-306, D-709). The
 /// self-test stops there, as `cheby test` does (D-783), but says why: it
 /// is a developer tool, whose report would otherwise end without a word
-/// (GAP(std-self-test-termination)).
+/// (D-803).
 fn terminated(module: &str, name: &str, status: i32) -> Error {
     Error::new(format!(
         "the std self-test stopped: a write failed during test {module} \"{name}\", \

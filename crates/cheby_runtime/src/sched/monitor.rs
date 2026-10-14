@@ -15,7 +15,7 @@
 //! that every long-running program migrates between workers.
 //!
 //! On every tick it also fires the timers that are due
-//! (GAP(monitor-fires-timers), D-682): nobody polls while every worker runs
+//! (D-682, D-789): nobody polls while every worker runs
 //! a fiber, and D-737 leaves a lone fiber alone, so without this a
 //! `timeout` around CPU-bound work at one thread would never fire. A fiber
 //! a timer wakes goes to the global queue, which makes the next tick
@@ -86,7 +86,7 @@ struct Sample {
 /// The body of the monitor thread.
 pub(super) fn main(shared: &Shared) {
     // One sample per worker slot, grown as slots fill
-    // (GAP(retired-worker-slots)).
+    // (D-795).
     let mut samples: Vec<Sample> = Vec::new();
     loop {
         {
@@ -105,7 +105,7 @@ pub(super) fn main(shared: &Shared) {
             break;
         }
         let now = Instant::now();
-        // GAP(monitor-fires-timers): with every worker running a lone
+        // D-789: with every worker running a lone
         // CPU-bound fiber nobody polls, so the monitor fires what is due
         // itself, with no lock held and no Cheby code run. A fiber a timer
         // wakes goes to the global queue, so `fibers_waiting` below sees

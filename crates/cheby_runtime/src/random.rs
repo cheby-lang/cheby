@@ -21,10 +21,10 @@ pub(crate) fn kernels(out: &mut Vec<(&'static str, *const u8)>) {
 pub(crate) const COMPLETE: &[&str] = &["random"];
 
 /// `random::host_bits`, private: 64 bits from the host's random source,
-/// fresh on every call (D-656). GAP(host-random-failure): a source that
+/// fresh on every call (D-656). A source that
 /// fails is a broken host, not a condition a program can handle (the page
 /// says no call fails or panics), so it ends the program with a fatal
-/// runtime error naming the operating system's error.
+/// runtime error naming the operating system's error (D-794).
 #[unsafe(no_mangle)]
 pub extern "C" fn cheby_random_host_bits() -> u64 {
     guarded(None, || {

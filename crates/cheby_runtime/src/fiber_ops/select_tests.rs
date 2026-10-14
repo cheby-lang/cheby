@@ -424,7 +424,7 @@ fn select_chooses_among_ready_arms_without_favoring_one() {
 }
 
 /// selector.md, "a selector without arms waits until it is cancelled"
-/// (D-673), and C-1 (GAP(select-always-publishes)): a select without arms
+/// (D-673), and C-1 (D-792): a select without arms
 /// publishes its wait, so the cancellation walk of its scope wins it and
 /// wakes it; it unwinds and returns nothing.
 #[test]
@@ -433,7 +433,7 @@ fn select_without_arms_waits_until_it_is_cancelled() {
     cancelled_while_waiting(empty);
 }
 
-/// C-1 (GAP(select-always-publishes)): a select with only a long timer arm
+/// C-1 (D-792): a select with only a long timer arm
 /// is woken by the cancellation walk, unwinds, and its timer is cancelled.
 #[test]
 #[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
@@ -1025,7 +1025,7 @@ fn select_timer_races_the_cancellation_walk() {
     }
 }
 
-/// GAP(select-equal-timers): two timer arms of the same span have the same
+/// D-791: two timer arms of the same span have the same
 /// deadline; the select arms one timer and chooses either arm. Over 64
 /// selects both are chosen (each misses with probability 2⁻⁶⁴); none fires
 /// before its span.

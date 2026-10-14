@@ -19,7 +19,7 @@
 //!
 //! Borrowed locals (D-715, [`Function::borrowed_locals`]) hold no
 //! reference: a borrowed parameter, and a `field` result of a borrowed
-//! local (a borrowed projection, GAP(borrowed-projections), which changes
+//! local (a borrowed projection, D-807, which changes
 //! rule 4 for it). Each owned use of one gets a `dup` (rule 1 as if it
 //! were always live afterwards), and rules 2, 3, 4 and 5 never drop or
 //! `dup` it otherwise: the caller's reference keeps it alive for the whole

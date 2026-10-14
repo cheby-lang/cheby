@@ -107,7 +107,7 @@ pub fn select<E>(selector: Selector<E>) -> E
 
 Waits until at least one arm of `selector` is ready, takes exactly one value from exactly one ready arm, and returns that arm's mapped result (§10.6, D-041, D-673). It has one parameter, so it is piped bare: `|> selector::select` (D-244).
 
-- **Choice.** When several arms are ready, `select` chooses one of them uniformly at random, so it favors none (D-041, D-673).
+- **Choice.** When several arms are ready, `select` chooses one of them uniformly at random, so it favors none (D-041, D-673). Timer arms with the same earliest deadline are ready together, and `select` chooses among them the same way (D-791).
 - **Handoff.** While `select` waits, it counts as a receiver on the channel of every receive arm. A sender on a capacity-0 channel hands its value to the waiting selector instead of blocking, and its `send` returns `Ok(Nil)` once the selector has chosen that arm. Values of the arms that were not chosen stay in their channels, and their senders keep waiting (D-206).
 - **Mapping.** `select` calls the chosen arm's mapping function exactly once, on the calling fiber, after the value has been taken, and returns its result. Before that call, `select` releases its reference to the selector, and so to every receiver it holds (D-205, D-670). A panic in the mapping function is a panic of the calling fiber at that point, and the value taken is released by unwinding.
 - **No arms.** A selector without arms is never ready, so `select` waits until the fiber is cancelled, and never returns (D-673). If the program then deadlocks as a whole, it ends with status 103 (the Deadlock bullet of [`std::fiber`](fiber.md), §10.4, D-724).

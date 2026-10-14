@@ -451,7 +451,7 @@ fn runtime_defaults() {
 }
 
 /// D-660, D-536: `[runtime]`'s sizes take `memory-limit`'s form, in
-/// bytes and unrounded (GAP(runtime-table-bytes)); one key alone leaves the
+/// bytes and unrounded (D-796); one key alone leaves the
 /// other at its default.
 #[test]
 fn runtime_sizes_parse() {

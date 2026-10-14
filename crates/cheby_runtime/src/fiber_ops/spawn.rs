@@ -80,8 +80,8 @@ pub unsafe extern "C" fn cheby_fiber_sys_spawn(ctx: *mut ExecCtx, owner: Word, f
 /// The stack of `fiber::spawn_with_stack(owner, stack_bytes, f)` (D-659,
 /// D-660, D-677): `stack_bytes` clamped to 1 MiB to 16 GiB, a negative
 /// request counting as zero (D-298), then rounded up to a whole number of
-/// pages of `page` bytes (a power of two). GAP(runtime-table-bytes): the
-/// runtime, not the manifest or std, rounds to its page size.
+/// pages of `page` bytes (a power of two). The runtime, not the manifest
+/// or std, rounds to its page size (D-796).
 pub(crate) fn requested_stack_size(stack_bytes: i64, page: usize) -> usize {
     let clamped = clamp_user_size(u64::try_from(stack_bytes).unwrap_or(0));
     let page = page.max(1);

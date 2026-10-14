@@ -277,7 +277,7 @@ impl BodyCx<'_, '_> {
     }
 
     /// A tuple of more than [`TUPLE_INIT_THRESHOLD`] `elems` (D-720,
-    /// GAP(tuple-init-field)): one allocation of placeholders, then each
+    /// D-810): one allocation of placeholders, then each
     /// element computed, boxed and stored before the next, so only the
     /// tuple and one element are live; a large one continues in
     /// continuations that take the partly filled tuple (D-780).

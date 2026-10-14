@@ -379,7 +379,7 @@ fn detached_survives_its_spawners_failed_scope() {
     }
 }
 
-/// GAP(detached-groups): a detached fiber that a detached fiber spawns
+/// D-799: a detached fiber that a detached fiber spawns
 /// joins the same group, and a teardown waits for both.
 #[test]
 #[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]

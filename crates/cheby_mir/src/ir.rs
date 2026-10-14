@@ -298,7 +298,7 @@ pub enum FnKey {
     DynForward { iface_fn: DefId, dyn_iface: DefId },
     /// The rest of a large literal of `owner`'s body, or of the body of a
     /// closure or continuation of it, split off by lowering (D-780,
-    /// GAP(continuation-symbol)): numbered in creation order within the
+    /// D-811): numbered in creation order within the
     /// owner, apart from its closures. Cheby ABI with a signature of its
     /// own ([`Function::sig`]): the partly built value first, then the
     /// free locals and dictionaries the rest needs, each in its own
@@ -662,7 +662,7 @@ pub enum Rvalue {
     /// `Nil`, a placeholder that holds no reference: the start of a tuple
     /// literal above [`crate::lower::TUPLE_INIT_THRESHOLD`] fields, which
     /// [`Rvalue::InitField`] then fills one field at a time (D-720,
-    /// GAP(tuple-init-field)). Dropping it while partly filled releases
+    /// D-810). Dropping it while partly filled releases
     /// the fields stored so far and nothing for the placeholders, so an
     /// unwinding in the middle of the literal needs no other cleanup.
     /// Owned result; may unwind (out of memory), like [`Rvalue::Alloc`].

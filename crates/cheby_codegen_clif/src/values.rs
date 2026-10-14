@@ -276,7 +276,7 @@ impl Translator<'_, '_> {
     }
 
     /// A new tuple of `layout` whose every field is the static `Nil`
-    /// (D-720, GAP(tuple-init-field)): the header and `cheby_rt_alloc` as
+    /// (D-720, D-810): the header and `cheby_rt_alloc` as
     /// in [`Self::alloc`], then a loop that stores the placeholder in each
     /// field slot, so the code does not grow with the arity.
     pub(crate) fn alloc_placeholder(&mut self, layout: LayoutRef) -> Result<Value, CodegenError> {

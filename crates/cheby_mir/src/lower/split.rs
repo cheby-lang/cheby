@@ -6,14 +6,14 @@
 //!   ([`crate::ir::Rvalue::AllocPlaceholder`]); each field is then
 //!   computed, boxed and stored ([`crate::ir::Rvalue::InitField`]) before
 //!   the next one is computed, so only the tuple and the field being
-//!   computed are live (GAP(tuple-init-field)). A smaller tuple keeps its
+//!   computed are live (D-810). A smaller tuple keeps its
 //!   one `alloc` of all its fields, so ordinary code does not change.
 //! - A list, interpolation or tuple literal (a map is built from a list
 //!   literal of pairs) whose lowering has added [`SPLIT_SIZE`] statements
 //!   and blocks ([`crate::builder::FunctionBuilder::size`]) to the
 //!   function it is lowered in is cut before its next item: the rest goes
 //!   into a private [`crate::ir::FnKey::Continuation`] of the body's owner (D-780,
-//!   GAP(continuation-symbol)). A continuation takes the value built so
+//!   D-811). A continuation takes the value built so
 //!   far (the list, the string buffer, the partly filled tuple) and then
 //!   the locals and dictionaries the rest of the literal uses, in
 //!   [`LocalId`] order and then bound order, each in its own
@@ -50,7 +50,7 @@ use crate::lower::closure::{free_locals, owner_of};
 use crate::repr::Repr;
 
 /// Tuple literals of more fields than this are filled one field at a
-/// time (D-720, GAP(tuple-init-field)); smaller ones are one `alloc`.
+/// time (D-720, D-810); smaller ones are one `alloc`.
 pub const TUPLE_INIT_THRESHOLD: usize = 32;
 
 /// The statements and blocks of a literal's items that one function holds

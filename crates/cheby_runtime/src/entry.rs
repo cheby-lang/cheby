@@ -644,7 +644,7 @@ fn wait(
 /// What `run_main` does with the fibers left when `main` has returned
 /// (D-073, D-708).
 ///
-/// GAP(freeze-only-cli): at a normal exit only `cheby run`, right before
+/// D-797: at a normal exit only `cheby run`, right before
 /// the process exits, asks for [`AtExit::Freeze`], and only in a build
 /// without the debug leak check; every in-process host tears down (D-708).
 /// A termination (D-709) halts in every host whatever this says.
@@ -790,7 +790,7 @@ pub unsafe fn run_main(entry: EntryFn, config: RunConfig) -> Result<i32, Runtime
         consts: None,
         unwind_edges: config.unwind_edges,
     };
-    // `main`'s detached fibers (GAP(detached-groups)).
+    // `main`'s detached fibers (D-799).
     let group = DetachedGroup::new();
     let started = Instant::now();
     let outcome = match &runtime {
@@ -917,7 +917,7 @@ fn exit_status(outcome: &EntryOutcome, flushed: bool) -> Result<i32, RuntimeErro
 
 /// Stops `run_main`'s runtime once standard output is flushed and the
 /// status fixed (`status`), as `at_exit` asks (D-073, D-708,
-/// GAP(freeze-only-cli)), and returns the status that stands with how the
+/// D-797), and returns the status that stands with how the
 /// runtime stopped:
 ///
 /// - the status is fixed in the runtime first, so a termination from now

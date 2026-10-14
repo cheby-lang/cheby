@@ -146,7 +146,7 @@ pub(crate) struct FiberConc {
     /// a select's arms (D-673, D-695).
     pub(crate) select: select::SelectState,
     /// The group the detached fibers it spawns join
-    /// (GAP(detached-groups)): a root's is given by its host
+    /// (D-799): a root's is given by its host
     /// (`Runtime::run_root_in`, the runtime's default group for
     /// `run_root`), and a spawned fiber inherits its spawner's, as it
     /// inherits its domain (D-691). Set before the fiber is first queued;

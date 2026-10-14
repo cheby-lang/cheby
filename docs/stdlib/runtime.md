@@ -18,7 +18,7 @@ None of these functions can fail. Their results depend on the machine and on how
 pub fn thread_count() -> Int
 ```
 
-Returns the number of OS threads the scheduler runs fibers on now, from 1 to 1024.
+Returns the thread count last set, at start or by `set_thread_count`, from 1 to 1024. That is the number of OS threads the scheduler runs fibers on, except while removed threads are still stopping (§10.2) and after the system refused a thread, when the scheduler goes on with the threads it has (D-795).
 
 - **Cost:** O(1). Informative.
 

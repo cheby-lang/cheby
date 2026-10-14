@@ -92,7 +92,7 @@ pub(crate) fn start_root_with(
         .unwrap()
 }
 
-/// [`start_root_with`] for a root in `group` (GAP(detached-groups)).
+/// [`start_root_with`] for a root in `group` (D-799).
 pub(crate) fn start_root_in(
     runtime: &Runtime,
     config: &EntryConfig,

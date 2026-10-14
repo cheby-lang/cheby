@@ -88,7 +88,7 @@ fn mangled_names_do_not_collide() {
         mangle::item(Kind::Fn, &name("big::fn::a", "b"))
     );
     // D-780's continuations, named as closures are under their own kind
-    // (GAP(continuation-symbol)).
+    // (D-811).
     assert_eq!(
         mangle::continuation(&name("app::data", "build"), 3),
         "cb$cont$app$data$build$3"
@@ -1431,7 +1431,7 @@ fn placeholder_unit(arity: u32) -> MirModule {
     u
 }
 
-/// D-720's placeholder tuple (GAP(tuple-init-field)): one `cheby_rt_alloc`
+/// D-720's placeholder tuple (D-810): one `cheby_rt_alloc`
 /// and a loop that stores the static `Nil` in every field, whatever the
 /// arity, then a plain store of the field at its offset, after the
 /// escaped count above 254 fields (D-279, D-555).

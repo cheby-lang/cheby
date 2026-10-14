@@ -293,7 +293,7 @@ fn lifecycle_teardown_nested_scopes_three_deep() {
     }
 }
 
-/// GAP(detached-spawn-while-closing): a detached spawn into a group that
+/// D-800: a detached spawn into a group that
 /// is being torn down starts cancelled: its function never runs, and it
 /// still leaves the group, which the teardown waits for.
 #[test]

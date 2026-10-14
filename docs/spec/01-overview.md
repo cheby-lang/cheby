@@ -135,7 +135,7 @@ The reference implementation is written in Rust (D-010). A single mid-level IR f
 
 There is no interpreter tier. Generic code uses a uniform boxed representation, with small integers tagged and unboxed (D-021).
 
-Each module is compiled separately into an interface artifact and cached code. A module is recompiled when it changes, and its dependents only when an interface they use changes. Debug builds optimize only within a module, and release builds may also specialize and inline across modules within a budget (D-249, D-251). The build model is described in [§13.12](13-tooling.md#1312-build-model).
+Each module is compiled separately into an interface artifact and cached code. A module is recompiled when it changes, and its dependents only when an interface they use changes, or, inside a package, when the borrow mask of a package-visible function they call changes (D-812). Debug builds specialize and inline only within a module, and release builds may also specialize and inline across modules within a budget (D-249, D-251). The build model is described in [§13.12](13-tooling.md#1312-build-model).
 
 ## 1.6 Stability and licensing
 

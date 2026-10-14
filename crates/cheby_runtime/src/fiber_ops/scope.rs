@@ -26,8 +26,8 @@
 //!
 //! A **timed scope** is the scope of `fiber::timeout` (D-671): its open
 //! arms a timer ([`ScopeTimer`]) whose firing cancels the scope, with the
-//! scope as the target, and nothing else. GAP(timer-cancels-only): the
-//! firing records no first cause. `TimedOut` is decided by the close, from
+//! scope as the target, and nothing else. The firing records no first
+//! cause (D-790). `TimedOut` is decided by the close, from
 //! the body's unwinding: a body that unwound for this scope's own
 //! cancellation, with no first cause, fails as an expired limit (kind 1,
 //! empty texts). So an `f` that returns before the cancellation reaches it
@@ -81,7 +81,7 @@ pub(crate) struct ScopeState {
     /// opened the scope touches it.
     timer: Mutex<Option<TimerHandle>>,
     /// Whether this is a detached fiber's base scope
-    /// (GAP(detached-base-scope)): parentless, owned by the detached fiber,
+    /// (D-798): parentless, owned by the detached fiber,
     /// its spawn scope, the root of every scope it opens; it never has
     /// members, records no first cause (D-669) and is ended by the
     /// fiber's base frame ([`ScopeState::end_base`]).
@@ -92,7 +92,7 @@ pub(crate) struct ScopeState {
 /// so a timer still in the heap keeps no scope alive, and when it fires it
 /// cancels the scope, if the scope still exists, with the scope as the
 /// target (`cancel::cancel`, D-667), and does nothing else.
-/// GAP(timer-cancels-only): it records no first cause, so `TimedOut` comes
+/// D-790: it records no first cause, so `TimedOut` comes
 /// from the close (module documentation). It runs with no runtime lock
 /// held (`TimerTarget`), and a scope that has ended is skipped by the walk
 /// (`ScopeState::cancel_step`), so a firing that loses the race to the
@@ -268,7 +268,7 @@ impl ScopeState {
     }
 
     /// The base scope of the detached fiber `owner`
-    /// (GAP(detached-base-scope)): no parent, so depth 0, and no
+    /// (D-798): no parent, so depth 0, and no
     /// cancellation of the spawner's scopes reaches it (D-669, D-671).
     /// Every scope the fiber opens hangs below it, so a teardown cancels
     /// the fiber and everything it started with `cancel::cancel(&base)`
@@ -456,7 +456,7 @@ impl ScopeState {
     pub(crate) fn record_panic(self: &Arc<Self>, report: &PanicReport) -> bool {
         // D-669: a panic at a detached fiber's top level is reported by its
         // base frame, not recorded in its base scope, and cancels nothing
-        // (GAP(detached-base-scope)).
+        // (D-798).
         if self.base {
             return false;
         }
@@ -645,7 +645,7 @@ pub unsafe extern "C" fn cheby_rt_scope_open(
 ///
 /// A body that unwound for this scope's own cancellation without a first
 /// cause is an expired limit: only a timed scope's timer cancels a scope
-/// without recording a cause (GAP(timer-cancels-only); the test hook
+/// without recording a cause (D-790; the test hook
 /// `fiber_ops::testing::cancel_running_fiber_at_next_entry` acts as one).
 /// The scope then fails with kind 1 and empty texts, which `fiber::timeout`
 /// reads as `TimedOut` (D-671). Each outcome of spec §10.8 follows: a body

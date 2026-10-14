@@ -51,7 +51,7 @@ pub enum Kind {
     DynFwd,
     /// The unchecked inner body of a function with a large frame (D-679).
     Big,
-    /// A continuation of a large literal (D-780, GAP(continuation-symbol)).
+    /// A continuation of a large literal (D-780, D-811).
     Cont,
 }
 
@@ -160,7 +160,7 @@ pub fn test_closure(module: &str, ordinal: u32, index: u32) -> String {
 }
 
 /// `cb$cont$<module path>$<owner>$<n>`: continuation `n` of the item or
-/// constant `owner` (D-780, GAP(continuation-symbol)), named as its
+/// constant `owner` (D-780, D-811), named as its
 /// closures are ([`closure`]) under a kind of its own.
 #[must_use]
 pub fn continuation(owner: &DefName, index: u32) -> String {

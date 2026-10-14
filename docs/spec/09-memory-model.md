@@ -15,7 +15,7 @@ Identity is not observable. There is no pointer equality, and `==` is always str
 On native targets, every heap value carries a reference count (D-005):
 
 - The compiler inserts increments and decrements precisely, so that a value is freed as soon as the last reference to it is gone, not at the end of a scope.
-- Borrowing is inferred by the compiler, which removes increment/decrement pairs where it can prove they are unnecessary. There are no user annotations for ownership or borrowing (D-072). Borrowing is inferred only for calls within one module. Calls across modules use a fixed owned convention, so editing a function body never changes how other modules call it ([§13.12.3](13-tooling.md#13123-interface-artifacts-and-recompilation)) (D-250).
+- Borrowing is inferred by the compiler, which removes increment/decrement pairs where it can prove they are unnecessary. There are no user annotations for ownership or borrowing (D-072). Borrowing is inferred over all the units of a build (D-779). A `pub` function, and so every call across a package boundary, uses a fixed owned convention, so editing a function body never changes how other packages call it (D-250, D-812). Inside a package, a package-visible function may be borrowed (D-787). Editing its body can then change how the package's other modules call it, and those modules are recompiled with it ([§13.12.3](13-tooling.md#13123-interface-artifacts-and-recompilation)) (D-812).
 - Small integers and other immediate values are not heap-allocated and are not counted (D-021).
 
 What is heap-allocated, and when counts change, is an implementation detail. The only observable guarantees are:

@@ -3,7 +3,7 @@
 //! workers, a push wakes the holder through the waker, and a new earlier
 //! timer shortens the holder's wait.
 //!
-//! The monitor's own firing (GAP(monitor-fires-timers)) is switched off in
+//! The monitor's own firing (D-789) is switched off in
 //! these runtimes, so only a worker can fire a timer, and the targets
 //! record which thread fired them. Time is asserted only as a lower bound
 //! and a cap of 5 s (plan §0 'Determinism').

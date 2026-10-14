@@ -62,7 +62,7 @@ pub struct MirOptions {
     /// Whether a build infers borrowing across its units (D-715, D-779;
     /// [`crate::borrow`]); `true` by default. A REPL session sets it to
     /// `false` for every unit it lowers, std and package modules included
-    /// (GAP(borrow-off-in-repl)): a later batch could tail-call a function
+    /// (D-808): a later batch could tail-call a function
     /// compiled with a mask that its slot cannot change. Borrowing needs
     /// [`RcMode::Perceus`] too ([`MirOptions::borrows`]).
     pub borrow: bool,
@@ -86,7 +86,7 @@ impl MirOptions {
     /// Whether a build with these options infers borrowing (D-715): with
     /// [`MirOptions::borrow`] and under [`RcMode::Perceus`] only, so naive
     /// counting stays the MIR before borrowing, the oracle of D-718
-    /// (GAP(borrow-off-in-repl)).
+    /// (D-808).
     #[must_use]
     pub const fn borrows(&self) -> bool {
         self.borrow && matches!(self.rc, RcMode::Perceus)
@@ -316,7 +316,7 @@ mod tests {
     #[test]
     fn borrow_only_with_perceus_and_the_switch() {
         // D-715, D-718: naive counting is the MIR before borrowing, and a
-        // REPL session turns borrowing off (GAP(borrow-off-in-repl)).
+        // REPL session turns borrowing off (D-808).
         let options = MirOptions::default();
         assert!(options.borrow && options.borrows());
         let naive = MirOptions {

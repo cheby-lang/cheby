@@ -1,7 +1,7 @@
 //! Large literals under the JIT (D-720, D-780): tuples filled one field
-//! at a time from a placeholder allocation (GAP(tuple-init-field)), and
+//! at a time from a placeholder allocation (D-810), and
 //! literals continued in chains of continuations
-//! (GAP(continuation-symbol)). Hand-built MIR in the shapes lowering
+//! (D-811). Hand-built MIR in the shapes lowering
 //! makes, counted and given unwind edges by the real pipeline
 //! (`cheby_mir::count_and_check`), compiled with the checked count
 //! operations. A panic in the middle of a tuple, or in continuation `k`,

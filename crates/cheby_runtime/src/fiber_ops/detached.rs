@@ -3,8 +3,8 @@
 //! detached fiber.
 //!
 //! A detached fiber belongs to no scope of its spawner: it joins its
-//! spawner's group (`sched::DetachedGroup`, GAP(detached-groups)) and gets
-//! a **base scope** of its own (GAP(detached-base-scope)): a parentless
+//! spawner's group (`sched::DetachedGroup`, D-799) and gets
+//! a **base scope** of its own (D-798): a parentless
 //! scope (depth 0) owned by the fiber and set as its spawn scope. Every
 //! scope the fiber opens hangs below it, so:
 //!
@@ -33,7 +33,7 @@
 //!    the fiber in its slot, which tells whether the group is closing: then
 //!    the fiber gets its base as its target before it is first queued, so
 //!    it starts cancelled and never calls `f`, and still leaves the group
-//!    (GAP(detached-spawn-while-closing));
+//!    (D-800);
 //! 6. queues it to the worker's runnext slot, as `sys_spawn` does.
 //!
 //! Every raise happens with no lock held.
@@ -142,7 +142,7 @@ unsafe fn spawn_detached(ctx: *mut ExecCtx, function: Word) {
             new.conc.set_spawn_scope(Some(Arc::clone(&base)));
             if group.fill(slot, fiber, Arc::clone(&base)) {
                 // A teardown of the group is running: the fiber starts
-                // cancelled (GAP(detached-spawn-while-closing)).
+                // cancelled (D-800).
                 cancel::set_target(new, &base);
             }
             drop(base);

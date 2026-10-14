@@ -174,7 +174,7 @@ impl Function {
     /// By local index, whether the local is borrowed (D-715): a counted
     /// parameter that [`Function::borrow`] borrows, or a counted `field`
     /// result of a borrowed local, a borrowed projection
-    /// (GAP(borrowed-projections)). A borrowed local holds no reference: the
+    /// (D-807). A borrowed local holds no reference: the
     /// caller's reference keeps it alive for the whole call, and the objects
     /// reachable from it are immutable and shared (their count is at least
     /// two for anything that would update them in place). It gets a `dup`

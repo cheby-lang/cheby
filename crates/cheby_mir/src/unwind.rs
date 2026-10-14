@@ -24,7 +24,7 @@
 //!    releases them in the same order holds growing prefixes and then
 //!    shrinking suffixes, which neither direction shares;
 //!    [`Direction::Nested`] builds each set on the pad of another set that
-//!    holds one local fewer (GAP(pad-chain-nested)), so it also shares a
+//!    holds one local fewer (D-788), so it also shares a
 //!    function that releases its locals one at a time in any order.
 //!    The direction is the first of ascending, descending and nested
 //!    with the fewest pads, by an exact count of the trie nodes each would
@@ -358,7 +358,7 @@ pub(crate) enum Direction {
     /// `pad(S)` drops the oldest local of `S` first, and the trie grows
     /// from `resume` through the locals newest first.
     Descending,
-    /// GAP(pad-chain-nested): equal sets share one pad, and each set is
+    /// D-788: equal sets share one pad, and each set is
     /// built on the pad of a smaller set: one that holds one local fewer
     /// (tried for its newest local, its oldest, then each newest first),
     /// else the larger of the sets of the sites before and after it that

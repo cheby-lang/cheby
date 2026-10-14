@@ -91,7 +91,7 @@ priv fn depth(tree: Tree) -> Int {{
     // `build`'s only parameter is a raw `Int`, which is not counted.
     assert_eq!(of(&m, "app::build"), BorrowMask::OWNED);
     // Counted as a build counts it: the subtrees are borrowed projections
-    // (GAP(borrowed-projections)) passed on borrowed, so `sum` has no
+    // (D-807) passed on borrowed, so `sum` has no
     // `dup` at all and drops only its calls' boxed results.
     let built = lower_source(&[("", source.as_str())]);
     let sum = built.function("app", "app::sum");

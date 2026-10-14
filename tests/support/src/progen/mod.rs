@@ -10,7 +10,7 @@
 //! every CI run, and the fuzz target `fuzz/fuzz_targets/rc_differential.rs`
 //! drives the generator from the fuzzer's bytes (D-781).
 //!
-//! GAP(progen-in-test-support): the generator lives in the workspace's
+//! D-809: the generator lives in the workspace's
 //! test-support crate on stable Rust, not in `fuzz/`, so that the seeded
 //! differential runs on every CI run and the nightly fuzz target shares
 //! it.

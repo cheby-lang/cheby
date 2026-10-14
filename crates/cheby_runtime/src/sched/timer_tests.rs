@@ -1,5 +1,5 @@
 //! Tests of the timers in a running runtime (D-682, D-652): a fiber woken
-//! by its timer, firing while every worker spins (GAP(monitor-fires-timers)),
+//! by its timer, firing while every worker spins (D-789),
 //! and the timers at stop (C7).
 //!
 //! Time is asserted only as a lower bound ("never earlier than the
@@ -80,7 +80,7 @@ fn timer_wakes_a_parked_fiber() {
     }
 }
 
-/// GAP(monitor-fires-timers): every worker runs a fiber that spins through
+/// D-789: every worker runs a fiber that spins through
 /// the function-entry check and never parks, so no worker polls; the
 /// monitor fires the timer, the fiber it wakes goes to the global queue, and
 /// the next tick preempts a spinner so that it runs, at one and at two
