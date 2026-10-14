@@ -60,6 +60,7 @@ fn unit(params: &[Repr], locals: Vec<Repr>, blocks: Vec<Block>, strings: Vec<Str
         entry_loc: Some(StrId::from_u32(0)),
         entry_unwind: None,
         precounted: false,
+        borrow: cheby_mir::borrow::BorrowMask::OWNED,
     };
     MirModule {
         unit: UnitKind::Code(ModuleId::from_u32(1)),
@@ -67,11 +68,7 @@ fn unit(params: &[Repr], locals: Vec<Repr>, blocks: Vec<Block>, strings: Vec<Str
         functions: vec![function],
         callees: vec![CalleeDecl {
             def: f,
-            sig: AbiSig {
-                abi: Abi::Cheby,
-                params: params.to_vec(),
-                ret: Repr::Value,
-            },
+            sig: AbiSig::owned(Abi::Cheby, params.to_vec(), Repr::Value),
         }],
         layouts: Vec::new(),
         foreign_layouts: Vec::new(),

@@ -6,7 +6,7 @@
 //! fiber then ends normally, and the cleanup pads have released its
 //! objects (D-713). In code compiled without unwind edges
 //! (`CHEBY_UNWIND_EDGES=off`, D-742) a panic ends the process instead
-//! (GAP(edgeless-panics), [`crate::unwind::raise`]).
+//! (D-770, [`crate::unwind::raise`]).
 //!
 //! What happens next is the host's policy: `cheby run` exits with 101
 //! (D-182), `cheby test` records a failure and prints the report in its
@@ -238,8 +238,16 @@ unsafe fn stack_slow(ctx: *mut ExecCtx, needed: u64) -> u8 {
     if reasons != 0 {
         context.count_interrupt();
     }
-    // 2. A safepoint stops the fiber: accepted and ignored until the
-    // runtime stops fibers (L1).
+    // 2. A halt (D-073, D-708) freezes the fiber here, whatever else is
+    // pending: `SAFEPOINT` forced this slow path, and the halt flag is read
+    // too, so a fiber resumed just before the halt began freezes at its
+    // next entry check. It is never resumed.
+    if let Some(runtime) = context.sched.runtime()
+        && runtime.halting()
+    {
+        sched::park(context, AfterSwitch::Freeze);
+        fatal(format_args!("a frozen fiber was resumed"));
+    }
     // 3. A cancellation unwinds it (D-688, D-706), skipping the later
     // steps. It is level-triggered from the target, read under the fiber
     // lock whether or not CANCEL was among the reasons: the walk sets the
@@ -307,7 +315,8 @@ unsafe fn location_text(location: Word) -> String {
 /// internal error, never a Cheby panic: it means generated code or the
 /// runtime broke the ABI.
 pub(crate) fn fatal(message: fmt::Arguments<'_>) -> ! {
-    io::write_stderr(&format!("fatal runtime error: {message}\n"));
+    // The process aborts next whether the message could be written.
+    let _ = io::try_write_stderr(&format!("fatal runtime error: {message}\n"));
     std::process::abort()
 }
 

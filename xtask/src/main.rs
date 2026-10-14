@@ -60,10 +60,12 @@ enum Cmd {
     },
     /// Generate a synthetic benchmark project
     GenBench {
-        /// Approximate number of lines
+        /// Approximate number of lines; for a `huge_*` shape, the number of
+        /// elements of its one literal
         #[arg(long, default_value_t = 100_000)]
         lines: usize,
-        /// small, large, deep, wide or generic
+        /// small, large, deep, wide or generic, or one of the opt-in literal
+        /// shapes `huge_list`, `huge_interpolation`, `huge_map` or `huge_tuple`
         #[arg(long, default_value = "small")]
         shape: Shape,
         #[arg(long, default_value_t = 1)]

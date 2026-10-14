@@ -1,22 +1,16 @@
-fn app::pick(_0: value) -> value check str#0 {
-  entry unwind bb11
+fn app::pick(borrow _0: value) -> value check str#0 {
+  entry unwind bb10
   str#0 = "src/main.cheby:3:4"
 bb0:
   _1: value = field _0.0 of tuple/2
-  dup _1
   _2: int = unbox int _1
-  drop _1
   switch _2 [0 => bb1, _ => bb2]
 bb1:
   _3: value = field _0.1 of tuple/2
-  dup _3
-  drop _0
   _4: int = unbox int _3
-  drop _3
   _5: bool = compare lt int _4, const int 5
   branch _5, bb3, bb4
 bb2:
-  drop _0
   _7: bool = compare lt int _2, const int 5
   branch _7, bb7, bb8
 bb3:
@@ -36,7 +30,4 @@ bb9(_8: int):
   return _9
 bb10:
   resume
-bb11:
-  drop _0
-  goto bb10()
 }

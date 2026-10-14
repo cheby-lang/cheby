@@ -31,7 +31,9 @@
 //!    create; the others are counted only when ascending creates more than
 //!    a linear bound ([`plan_pads`]), so the common case costs one walk.
 //! 4. A function with a function-entry check (every [`Abi::Cheby`]
-//!    function) gets `entry_unwind = pad(its counted parameters)`, built
+//!    function) gets `entry_unwind = pad(the counted parameters it owns)`
+//!    ([`Function::owned_params`]: a borrowed one holds nothing, D-715),
+//!    built
 //!    first and in the function's direction. C-ABI functions (entry thunks
 //!    and trampolines) have no entry check, so no entry pad, but their
 //!    calls get edges like any other (D-752).
@@ -215,15 +217,8 @@ pub(crate) fn insert_recording(f: &mut Function) -> Result<Result<Recorded, Vec<
     // deterministically (D-264). The direction is chosen from all of them
     // before any pad is built (D-777).
     let entry = f.entry_unwind.is_none() && f.abi == Abi::Cheby;
-    let mut params = Vec::new();
-    if entry {
-        for &p in &f.params {
-            if f.local(p)?.repr == Repr::Value {
-                params.push(p);
-            }
-        }
-        params.sort_unstable();
-    }
+    // Borrowed parameters hold nothing to release (D-715).
+    let params = if entry { f.owned_params()? } else { Vec::new() };
     let mut sets: Vec<&[Local]> = Vec::with_capacity(recorded.sites.len().saturating_add(1));
     if entry {
         sets.push(&params);

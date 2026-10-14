@@ -789,4 +789,6 @@ pub fn parse_file(
 }
 
 #[cfg(test)]
+mod lifecycle_tests;
+#[cfg(test)]
 mod tests;

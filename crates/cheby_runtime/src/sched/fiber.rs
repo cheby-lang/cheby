@@ -12,7 +12,13 @@
 //! PARKING --a waker that takes no lock--> PARKING_WOKEN --worker--> RUNNABLE
 //! PARKED --wake--> RUNNABLE
 //! RUNNING --park(Exit)--> DONE
+//! RUNNING --park(Freeze), during a halt--> FROZEN
 //! ```
+//!
+//! A halt (D-073, D-708) freezes every fiber that runs at its next entry
+//! check: it switches away with [`AfterSwitch::Freeze`] and is never
+//! resumed, requeued or retired; its slot, control block and wait nodes
+//! stay as they are, since nothing runs afterwards.
 //!
 //! `PARKING` covers the moment between the fiber's decision to park and the
 //! worker's post-switch step: the fiber's registers are not saved yet, so
@@ -40,7 +46,7 @@ use std::fmt;
 use std::mem::ManuallyDrop;
 use std::ptr::{self, NonNull};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicUsize, Ordering};
 
 use parking_lot::lock_api::RawMutex as _;
 
@@ -65,6 +71,8 @@ pub(crate) mod state {
     pub(crate) const PARKED: u8 = 4;
     /// Finished: never runs again.
     pub(crate) const DONE: u8 = 5;
+    /// Frozen by a halt: never runs again, and is never retired (D-708).
+    pub(crate) const FROZEN: u8 = 6;
 }
 
 /// What a fiber runs when it first starts: a function of its own control
@@ -85,6 +93,10 @@ pub(crate) struct FiberSched {
     /// Kernel callbacks on its stack; above 0 the fiber is pinned to its
     /// worker (D-687).
     callback_depth: AtomicU32,
+    /// Set while the fiber is blocked inline in a system call (standard
+    /// input, file IO, until I1's blocking pool): a teardown and a halt
+    /// cannot stop it, so they skip it and count it (D-786).
+    blocking: AtomicBool,
     /// Its registers while it is not running.
     saved: UnsafeCell<Saved>,
     /// The slot it lives in, taken by the worker that retires it.
@@ -124,6 +136,7 @@ impl FiberSched {
             state: AtomicU8::new(state::RUNNING),
             worker: AtomicUsize::new(0),
             callback_depth: AtomicU32::new(0),
+            blocking: AtomicBool::new(false),
             saved: UnsafeCell::new(Saved::EMPTY),
             slot: UnsafeCell::new(None),
             start: UnsafeCell::new(None),
@@ -138,6 +151,7 @@ impl FiberSched {
             state: AtomicU8::new(state::RUNNABLE),
             worker: AtomicUsize::new(worker),
             callback_depth: AtomicU32::new(0),
+            blocking: AtomicBool::new(false),
             saved: UnsafeCell::new(Saved::EMPTY),
             slot: UnsafeCell::new(None),
             start: UnsafeCell::new(Some(start)),
@@ -183,6 +197,19 @@ impl FiberSched {
         let depth = self.callback_depth.load(Ordering::Relaxed);
         self.callback_depth
             .store(depth.saturating_sub(1), Ordering::Relaxed);
+    }
+
+    /// Whether the fiber is blocked inline in a system call (D-786).
+    /// Callable from any thread that keeps the control block alive.
+    pub(crate) fn blocking(&self) -> bool {
+        self.blocking.load(Ordering::SeqCst)
+    }
+
+    /// Marks the fiber as blocked, or no longer blocked, inline in a
+    /// system call (D-786). Only the fiber itself calls it, around the
+    /// call.
+    pub(crate) fn set_blocking(&self, blocking: bool) {
+        self.blocking.store(blocking, Ordering::SeqCst);
     }
 
     /// The cell of the fiber's saved registers.
@@ -258,6 +285,9 @@ pub(crate) enum AfterSwitch<'a> {
     /// The fiber finished, returned or unwound: its slot goes back to the
     /// pool.
     Exit,
+    /// A halt froze the fiber (D-073, D-708): it is never resumed,
+    /// requeued or retired, and nothing of it is released.
+    Freeze,
 }
 
 /// Several mutexes given up like [`Unlock`], released by the worker after
@@ -363,7 +393,7 @@ pub(crate) fn park(me: &ExecCtx, after: AfterSwitch<'_>) {
     let Some(worker) = shared.worker(me.sched.worker()) else {
         fatal(format_args!("a fiber's worker does not exist"));
     };
-    let ends = matches!(after, AfterSwitch::Exit);
+    let ends = matches!(after, AfterSwitch::Exit | AfterSwitch::Freeze);
     if matches!(after, AfterSwitch::Park(_) | AfterSwitch::ParkAll(_)) {
         // `RUNNING -> PARKING`, unless `begin_park` stored `PARKING`
         // already and a lockless waker may have turned it into
@@ -392,7 +422,7 @@ pub(crate) fn park(me: &ExecCtx, after: AfterSwitch<'_>) {
         switch::switch(me.sched.saved(), to, message);
     }
     if ends {
-        fatal(format_args!("a finished fiber was resumed"));
+        fatal(format_args!("a finished or frozen fiber was resumed"));
     }
     if cfg!(debug_assertions) && tls::current_fiber() != ptr::from_ref(me).cast_mut() {
         fatal(format_args!(

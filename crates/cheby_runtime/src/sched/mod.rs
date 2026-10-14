@@ -28,11 +28,16 @@
 //! - **Windows** (D-714): there is no switch, so [`Runtime::new`] returns
 //!   [`RuntimeError::Unsupported`] and hosts use the thread backend.
 //!
-//! Shutdown in the slice: no fiber outlives the root that started it yet,
-//! so stopping a runtime is joining its idle workers and its monitor.
+//! - **Lifecycle** (D-073, D-708 to D-710, `lifecycle`): detached fibers
+//!   live in groups ([`DetachedGroup`]) and outlive their roots; stopping a
+//!   runtime ([`Runtime::shutdown`], `Drop`) tears every group down, then
+//!   joins the workers and the monitor, then releases the code tokens. A
+//!   halt ([`Runtime::halt`]) freezes every fiber instead, and a
+//!   termination (D-709) starts one.
 
 mod fiber;
 mod idle;
+mod lifecycle;
 mod monitor;
 mod park;
 mod poll;
@@ -42,8 +47,8 @@ mod worker;
 
 use std::ffi::OsStr;
 use std::fmt;
-use std::sync::atomic::{self, AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, mpsc};
+use std::sync::atomic::{self, AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Weak, mpsc};
 use std::thread::JoinHandle;
 use std::time::Instant;
 
@@ -53,6 +58,8 @@ use parking_lot::Mutex;
 pub(crate) use fiber::{
     AfterSwitch, FiberRef, FiberSched, StartFn, Unlock, Unlocks, begin_park, cancel_park, park,
 };
+pub(crate) use lifecycle::terminate;
+pub use lifecycle::{DetachedGroup, TeardownReport};
 pub(crate) use timer::{Deadline, TimerHandle, TimerTarget, deadline_after};
 pub(crate) use wait::{WaitHeader, WaitNode, WaitQueue, WaitState};
 
@@ -183,6 +190,9 @@ impl fmt::Debug for CodeToken {
     }
 }
 
+/// [`Shared`]'s exit status before one is fixed.
+const NO_STATUS: i64 = i64::MIN;
+
 /// Where [`Shared::schedule`] puts a runnable fiber that is not pinned.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Where {
@@ -227,6 +237,25 @@ pub(crate) struct Shared {
     fiber_stack: usize,
     /// The thread count's target ([`Shared::set_thread_count`]).
     thread_target: AtomicUsize,
+    /// The group of `run_root`'s roots (GAP(detached-groups)).
+    default_group: Arc<DetachedGroup>,
+    /// Every group a root ran in, for the teardown at shutdown; a leaf
+    /// lock.
+    groups: Mutex<Vec<Weak<DetachedGroup>>>,
+    /// Set once by a halt (D-073, D-708): workers take no fiber, a fiber
+    /// freezes at its next entry check, and no timer fires.
+    halting: AtomicBool,
+    /// The program's exit status once fixed, by a termination (D-709) or
+    /// by `run_main` after its flush (D-785); [`NO_STATUS`] until then.
+    /// The first one wins.
+    exit_status: AtomicI64,
+    /// Set by a termination (D-709).
+    terminated: AtomicBool,
+    /// The hosts waiting for a root's outcome, by root number: a
+    /// termination sends each of them `Exited` (D-709). A leaf lock.
+    roots: Mutex<Vec<(u64, mpsc::Sender<EntryOutcome>)>>,
+    /// The next root number.
+    next_root: AtomicU64,
     /// Test hooks of the monitor.
     #[cfg(test)]
     probe: testing::MonitorProbe,
@@ -252,8 +281,27 @@ impl Shared {
         self.workers.get(index)
     }
 
+    /// Whether the runtime stops or halts: idle workers and the monitor
+    /// end, and a timer armed now never fires.
     fn stopping(&self) -> bool {
-        self.stopping.load(Ordering::SeqCst)
+        self.stopping.load(Ordering::SeqCst) || self.halting()
+    }
+
+    /// Starts a halt (D-073, D-708), once or again: from now on no worker
+    /// takes a fiber, every running fiber freezes at its next entry check
+    /// (`SAFEPOINT`, requested through the monitor's gate), no timer fires,
+    /// the idle workers, the poll holder and the monitor wake to end, and a
+    /// teardown waiting on a group stops waiting. Joining the threads is
+    /// the host's ([`Runtime::halt`]). Callable from a fiber (a
+    /// termination) and from the host, with no runtime lock held.
+    pub(crate) fn begin_halt(&self) {
+        self.halting.store(true, Ordering::SeqCst);
+        self.request_safepoints();
+        self.wake_idle();
+        self.monitor.stop();
+        for group in self.live_groups() {
+            group.wake_teardown();
+        }
     }
 
     fn next_fiber_id(&self) -> u64 {
@@ -296,6 +344,84 @@ impl Shared {
     /// starts and retires workers to meet it.
     pub(crate) fn set_thread_count(&self, count: usize) {
         self.thread_target.store(count, Ordering::SeqCst);
+    }
+
+    /// Whether a halt has started (D-073, D-708).
+    pub(crate) fn halting(&self) -> bool {
+        self.halting.load(Ordering::SeqCst)
+    }
+
+    /// The runtime's default group: `run_root`'s roots' (GAP(detached-groups)).
+    pub(crate) fn default_group(&self) -> &Arc<DetachedGroup> {
+        &self.default_group
+    }
+
+    /// Remembers `group` for the teardown at shutdown, once; forgets the
+    /// groups that no longer exist.
+    fn register_group(&self, group: &Arc<DetachedGroup>) {
+        if Arc::ptr_eq(group, &self.default_group) {
+            return;
+        }
+        let mut groups = self.groups.lock();
+        groups.retain(|known| known.strong_count() > 0);
+        if !groups
+            .iter()
+            .any(|known| std::ptr::eq(known.as_ptr(), Arc::as_ptr(group)))
+        {
+            groups.push(Arc::downgrade(group));
+        }
+    }
+
+    /// Reads worker `index`'s running fiber through the monitor's gate
+    /// (I-8) and gives it to `look`, or `None` when the worker runs none.
+    /// The worker clears its running fiber and then waits while a look is
+    /// in progress before the fiber can be queued, woken or retired, so
+    /// the control block lives while `look` runs; `look` uses only its
+    /// atomics.
+    fn look_at_running<R>(&self, index: usize, look: impl FnOnce(Option<&ExecCtx>) -> R) -> R {
+        let Some(worker) = self.worker(index) else {
+            return look(None);
+        };
+        let gate = worker.gate().lock();
+        worker.set_looking(true);
+        let running = worker.running();
+        // SAFETY: read after `looking` was set: the fiber cannot be
+        // retired before `looking` is cleared below
+        // (`WorkerShared::wait_for_monitor`), and only its atomics are used.
+        let result = look(unsafe { running.as_ref() });
+        worker.set_looking(false);
+        drop(gate);
+        result
+    }
+
+    /// Whether worker `index` runs a fiber blocked inline in a system
+    /// call (D-786).
+    fn worker_blocked(&self, index: usize) -> bool {
+        self.look_at_running(index, |fiber| {
+            fiber.is_some_and(|fiber| fiber.sched.blocking())
+        })
+    }
+
+    /// Asks every running fiber to stop at its next entry check
+    /// (`SAFEPOINT`, D-073, D-708), through the monitor's gate, never on a
+    /// control block that may have been retired (I-8). Only the halt asks
+    /// (C-5).
+    fn request_safepoints(&self) {
+        for index in 0..self.workers.len() {
+            self.look_at_running(index, |fiber| {
+                if let Some(fiber) = fiber {
+                    crate::ctx::request(fiber, crate::ctx::reason::SAFEPOINT);
+                }
+            });
+        }
+    }
+
+    /// Every group that still exists: the default group first, then the
+    /// others in the order their first root ran.
+    fn live_groups(&self) -> Vec<Arc<DetachedGroup>> {
+        let mut live = vec![Arc::clone(&self.default_group)];
+        live.extend(self.groups.lock().iter().filter_map(Weak::upgrade));
+        live
     }
 
     /// Whether any queue a thief can reach holds a fiber.
@@ -443,6 +569,35 @@ pub(crate) unsafe fn wake(fiber: FiberRef, from_running: bool) -> bool {
     true
 }
 
+/// Hands the fibers waiting on the running fiber's worker to the other
+/// workers before that fiber blocks the worker inline in a system call
+/// (standard input, file IO; D-786, until I1's blocking pool), as Go's
+/// `entersyscall` hands its P off: the runnext slot's fiber, which no
+/// thief takes, goes to the global queue, and an idle worker is woken to
+/// take it and to steal from the local deque. Without this a fiber woken
+/// just before the call (a `send` that wakes `main`, then `io::read_line`)
+/// waited until the call returned (review finding ROB2-1 of gate 2).
+/// Fibers pinned to the worker (D-687) stay: only it may run them. Does
+/// nothing for an isolated entry, which has no runtime.
+pub(crate) fn hand_off_before_blocking(me: &ExecCtx) {
+    let Some(shared) = me.sched.runtime() else {
+        return;
+    };
+    // `me` runs on this thread, so this is its worker, and the runnext
+    // slot and deque are this thread's.
+    let Some(worker) = shared.worker(me.sched.worker()) else {
+        return;
+    };
+    let next = worker.take_next();
+    let waiting = next.is_some() || worker.has_stealable();
+    if let Some(next) = next {
+        shared.injector.push(next);
+    }
+    if waiting {
+        shared.notify_parked();
+    }
+}
+
 /// Why [`spawn_fiber`] could not start a fiber.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SpawnError {
@@ -475,7 +630,7 @@ pub(crate) fn spawn_fiber(
 /// records it where it must be known before it can run, then calls
 /// [`schedule_new`]. Its control block takes the spawner's entry mode,
 /// hash seed, accounting domain (D-691), trampolines (D-526) and whether
-/// its code has unwind edges (GAP(edgeless-panics)); it has no host to
+/// its code has unwind edges (D-770); it has no host to
 /// report to. On an error, `start` is dropped
 /// without running.
 ///
@@ -499,13 +654,23 @@ pub(crate) fn create_fiber(
             domain: Arc::clone(spawner.domain()),
             consts: None,
             callbacks: spawner.callbacks(),
-            // A fiber runs code of its spawner's build (GAP(edgeless-panics)).
+            // A fiber runs code of its spawner's build (D-770).
             unwind_edges: spawner.unwind_edges(),
             ..FiberInit::placeholder()
         },
         stack_size,
     };
-    fiber::create(shared, spawner.sched.worker(), params, start).map_err(SpawnError::Stack)
+    let fiber =
+        fiber::create(shared, spawner.sched.worker(), params, start).map_err(SpawnError::Stack)?;
+    // The spawner's group (GAP(detached-groups)), as its domain.
+    let group = spawner
+        .conc
+        .group()
+        .unwrap_or_else(|| Arc::clone(shared.default_group()));
+    // SAFETY: the fiber was just created and is not queued yet: nothing
+    // else knows it.
+    unsafe { fiber.ctx() }.conc.set_group(Some(group));
+    Ok(fiber)
 }
 
 /// Queues a fiber [`create_fiber`] made. With `next` it takes the current
@@ -556,6 +721,9 @@ pub struct Runtime {
     monitor: Option<JoinHandle<()>>,
     /// The code its fibers may run (D-708).
     code: Mutex<Vec<CodeToken>>,
+    /// Whether it has stopped or halted: `shutdown`, `halt` and `Drop` run
+    /// once.
+    finished: bool,
 }
 
 impl fmt::Debug for Runtime {
@@ -607,6 +775,13 @@ impl Runtime {
             driver,
             fiber_stack: config.fiber_stack,
             thread_target: AtomicUsize::new(threads),
+            default_group: DetachedGroup::new(),
+            groups: Mutex::new(Vec::new()),
+            halting: AtomicBool::new(false),
+            exit_status: AtomicI64::new(NO_STATUS),
+            terminated: AtomicBool::new(false),
+            roots: Mutex::new(Vec::new()),
+            next_root: AtomicU64::new(0),
             #[cfg(test)]
             probe: testing::MonitorProbe::default(),
             #[cfg(test)]
@@ -617,6 +792,7 @@ impl Runtime {
             workers: Vec::with_capacity(threads),
             monitor: None,
             code: Mutex::new(Vec::new()),
+            finished: false,
         };
         for index in 0..threads {
             let shared = Arc::clone(&runtime.shared);
@@ -676,9 +852,26 @@ impl Runtime {
         entry: EntryFn,
         config: &EntryConfig,
     ) -> Result<EntryOutcome, RuntimeError> {
+        let group = Arc::clone(self.shared.default_group());
+        // SAFETY: forwarded from the caller.
+        unsafe { self.run_root_with(entry, config, group) }
+    }
+
+    /// [`Runtime::run_root`] with the root in `group`.
+    ///
+    /// # Safety
+    ///
+    /// As for [`Runtime::run_root`].
+    unsafe fn run_root_with(
+        &self,
+        entry: EntryFn,
+        config: &EntryConfig,
+        group: Arc<DetachedGroup>,
+    ) -> Result<EntryOutcome, RuntimeError> {
         let started = Instant::now();
-        let receiver = self.spawn_root(
+        let receiver = self.spawn_root_in(
             config,
+            group,
             Box::new(move |ctx| {
                 // SAFETY: the caller guarantees that `entry` is an entry
                 // thunk whose code stays valid while it runs; `ctx` is the
@@ -691,11 +884,23 @@ impl Runtime {
         Ok(outcome)
     }
 
-    /// Starts a root fiber that runs `body` and reports its word, or its
-    /// panic, to the returned receiver.
+    /// Starts a root fiber in the default group that runs `body` and
+    /// reports its word, or its panic, to the returned receiver.
+    #[cfg(test)]
     fn spawn_root(
         &self,
         config: &EntryConfig,
+        body: Box<dyn FnOnce(*mut ExecCtx) -> u64 + Send>,
+    ) -> Result<mpsc::Receiver<EntryOutcome>, RuntimeError> {
+        self.spawn_root_in(config, Arc::clone(self.shared.default_group()), body)
+    }
+
+    /// Starts a root fiber in `group` that runs `body` and reports its
+    /// word, or its panic, to the returned receiver.
+    fn spawn_root_in(
+        &self,
+        config: &EntryConfig,
+        group: Arc<DetachedGroup>,
         body: Box<dyn FnOnce(*mut ExecCtx) -> u64 + Send>,
     ) -> Result<mpsc::Receiver<EntryOutcome>, RuntimeError> {
         if config.stack_size < MIN_STACK_SIZE {
@@ -707,6 +912,15 @@ impl Runtime {
         // memory (D-642).
         alloc::ensure_reserve();
         let (sender, receiver) = mpsc::channel();
+        // D-709: a termination sends every waiting host `Exited`; once one
+        // has halted the runtime, a new root never runs and its host gets
+        // `Exited` at once (GAP(termination-late-root)).
+        let root = self.shared.next_root.fetch_add(1, Ordering::Relaxed);
+        if !self.shared.register_root(root, sender.clone()) {
+            let status = self.shared.exit_status().unwrap_or(crate::abi::status::ERR);
+            sender.send(EntryOutcome::Exited(status)).ok();
+            return Ok(receiver);
+        }
         let seed = match &config.mode {
             EntryMode::ConstEval(limits) => limits.seed,
             EntryMode::Run | EntryMode::Test | EntryMode::Repl => generic::process_seed(),
@@ -739,47 +953,152 @@ impl Runtime {
             if let Some(sender) = me.outcome() {
                 sender.send(outcome).ok();
             }
+            if let Some(runtime) = me.sched.runtime() {
+                runtime.unregister_root(root);
+            }
         });
-        let fiber = fiber::create(&self.shared, 0, params, start).map_err(RuntimeError::Stack)?;
+        let fiber = match fiber::create(&self.shared, 0, params, start) {
+            Ok(fiber) => fiber,
+            Err(error) => {
+                self.shared.unregister_root(root);
+                return Err(RuntimeError::Stack(error));
+            }
+        };
+        // SAFETY: the fiber was just created and is not queued yet.
+        unsafe { fiber.ctx() }.conc.set_group(Some(group));
         self.shared.schedule(fiber, None, Where::Global);
         Ok(receiver)
     }
 
-    /// Stops the runtime: its workers finish the fibers that are runnable,
-    /// then every thread is joined, and only then are the code tokens
-    /// released (D-708). Call it from the host, never from one of its
-    /// fibers.
+    /// Stops the runtime (D-708): tears every group down (the default
+    /// group, then each group a root ran in), so no detached fiber is left;
+    /// its workers finish the fibers that are runnable, then every thread
+    /// is joined, and only then are the code tokens released. A runtime
+    /// whose halt has started (a termination, D-709) completes the halt
+    /// instead and tears nothing down. Call it from the host, never from
+    /// one of its fibers. Dropping the runtime does the same.
     pub fn shutdown(mut self) {
-        self.stop();
+        self.finish();
+    }
+
+    /// The body of [`Runtime::shutdown`], `Drop` and [`Runtime::halt`]:
+    /// runs once.
+    fn finish(&mut self) {
+        if self.finished {
+            return;
+        }
+        self.finished = true;
+        if !self.shared.halting() {
+            for group in self.shared.live_groups() {
+                if self.teardown(&group).halted {
+                    break;
+                }
+            }
+        }
+        if self.shared.halting() {
+            self.complete_halt();
+        } else {
+            self.stop();
+        }
     }
 
     /// Stops the runtime (C7): sets `stopping`, which makes every later
     /// [`Shared::arm_timer`] return a handle that never fires; wakes every
     /// parked worker and the monitor; joins every thread; then drops every
     /// timer entry unfired ([`Shared::clear_timers`]) and only then the
-    /// code tokens (D-708). A fiber still parked stays parked: the
-    /// lifecycle (package L1r) adds teardown and the halt on top.
+    /// code tokens (D-708). A worker whose fiber is blocked inline in a
+    /// system call (D-786) is never joined: the halt flag is set, so that
+    /// fiber freezes when the call returns, and the code tokens and timers
+    /// are kept (leaked), since that worker may still run the code.
     fn stop(&mut self) {
         self.shared.stopping.store(true, Ordering::SeqCst);
         self.shared.wake_idle();
         self.shared.monitor.stop();
-        for handle in self.workers.drain(..) {
-            handle.join().ok();
+        let stuck = self.join_workers(false);
+        if stuck {
+            self.shared.halting.store(true, Ordering::SeqCst);
         }
         if let Some(monitor) = self.monitor.take() {
             monitor.join().ok();
         }
+        if stuck {
+            std::mem::forget(std::mem::take(&mut *self.code.lock()));
+            return;
+        }
         self.shared.clear_timers();
+        self.code.lock().clear();
+    }
+
+    /// Joins every worker thread except those whose fiber is blocked
+    /// inline in a system call (D-786), which are left running, detached;
+    /// returns whether there was one. With `freeze`, asks the fibers that
+    /// still run to freeze (`SAFEPOINT`) on every round, for the halt.
+    fn join_workers(&mut self, freeze: bool) -> bool {
+        let mut pending: Vec<(usize, JoinHandle<()>)> =
+            self.workers.drain(..).enumerate().collect();
+        let mut stuck = false;
+        let mut round = 0_u32;
+        while !pending.is_empty() {
+            if freeze {
+                self.shared.request_safepoints();
+            }
+            let mut still = Vec::with_capacity(pending.len());
+            for (index, handle) in pending {
+                if handle.is_finished() {
+                    handle.join().ok();
+                } else if self.shared.worker_blocked(index) {
+                    // Detached: never joined (D-786).
+                    drop(handle);
+                    stuck = true;
+                } else {
+                    still.push((index, handle));
+                }
+            }
+            pending = still;
+            if pending.is_empty() {
+                break;
+            }
+            round = round.saturating_add(1);
+            if round < 64 {
+                std::thread::yield_now();
+            } else {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        }
+        stuck
+    }
+
+    /// Completes a started halt (D-073, D-708): asks every running fiber
+    /// to freeze until each worker has ended, joins every thread (the
+    /// workers, among them the poll holder, and the monitor), so that no
+    /// timer fires and no fiber runs afterwards (C-4), and releases the
+    /// code tokens last. Frozen fibers' slots, control blocks, wait nodes
+    /// and timer entries are left as they are. A worker whose fiber is
+    /// blocked inline in a system call (D-786) is never joined, and the
+    /// code tokens are then kept (leaked): its fiber freezes when the call
+    /// returns.
+    fn complete_halt(&mut self) {
+        self.shared.begin_halt();
+        let stuck = self.join_workers(true);
+        if let Some(monitor) = self.monitor.take() {
+            monitor.join().ok();
+        }
+        if stuck {
+            std::mem::forget(std::mem::take(&mut *self.code.lock()));
+            return;
+        }
         self.code.lock().clear();
     }
 }
 
 impl Drop for Runtime {
     fn drop(&mut self) {
-        self.stop();
+        self.finish();
     }
 }
 
+#[cfg(test)]
+mod lifecycle_tests;
 #[cfg(test)]
 mod park_models;
 #[cfg(test)]

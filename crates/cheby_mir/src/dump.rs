@@ -62,12 +62,18 @@
 //!   <layout>(<consts>)` followed by ` str#K = "<text>"` per string of
 //!   its own table, per static in id order. A blank line separates them
 //!   from the functions when there are any.
+//! - Borrowing (D-715) reuses the `borrow ` prefix: a borrowed parameter
+//!   prints as `borrow _N: <repr>` in its function's header, a borrowed
+//!   argument of a call or tail call as `borrow <op>`, and a borrowed
+//!   parameter of a callee line as `borrow <repr>`. A function, call and
+//!   callee that borrow nothing print as before borrowing existed.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use cheby_iface::Ice;
 
+use crate::borrow::BorrowMask;
 use crate::ir::{
     Abi, BlockId, BuiltinLayout, Callee, Const, EntryKind, FnKey, Function, LayoutRef, Local,
     MirModule, Operand, Rvalue, Stmt, TagType, Terminator, UnitKind, UseKind,
@@ -104,7 +110,13 @@ pub fn dump(module: &MirModule) -> Result<String, Ice> {
         layout_line(&mut tail, module, "foreign_layout", desc)?;
     }
     for decl in &module.callees {
-        let params: Vec<&str> = decl.sig.params.iter().map(|r| r.name()).collect();
+        let params: Vec<String> = decl
+            .sig
+            .params
+            .iter()
+            .enumerate()
+            .map(|(n, r)| format!("{}{}", borrow_prefix(decl.sig.borrow, n), r.name()))
+            .collect();
         let _ = writeln!(
             tail,
             "callee {}({}) -> {}",
@@ -194,7 +206,15 @@ fn dump_function_into(out: &mut String, m: &MirModule, f: &Function) -> Result<(
     let params = f
         .params
         .iter()
-        .map(|&p| Ok(format!("{}: {}", local(p), f.local(p)?.repr)))
+        .enumerate()
+        .map(|(n, &p)| {
+            Ok(format!(
+                "{}{}: {}",
+                borrow_prefix(f.borrow, n),
+                local(p),
+                f.local(p)?.repr
+            ))
+        })
         .collect::<Result<Vec<_>, Ice>>()?
         .join(", ");
     let _ = write!(out, "fn {key}{abi}({params}) -> {}", f.ret);
@@ -341,6 +361,22 @@ fn operand(m: &MirModule, op: &Operand) -> Result<String, Ice> {
     }
 }
 
+/// `borrow ` for a parameter or argument at `n` that `mask` borrows.
+fn borrow_prefix(mask: BorrowMask, n: usize) -> &'static str {
+    if mask.is_borrowed(n) { "borrow " } else { "" }
+}
+
+/// The arguments of a Cheby call, each borrowed one after `borrow `.
+fn call_args(m: &MirModule, c: &Callee, args: &[Operand]) -> Result<String, Ice> {
+    let mask = c.borrow_mask();
+    Ok(args
+        .iter()
+        .enumerate()
+        .map(|(n, op)| Ok(format!("{}{}", borrow_prefix(mask, n), operand(m, op)?)))
+        .collect::<Result<Vec<_>, Ice>>()?
+        .join(", "))
+}
+
 fn operands(m: &MirModule, ops: &[Operand], prefix: &str) -> Result<String, Ice> {
     Ok(ops
         .iter()
@@ -351,7 +387,7 @@ fn operands(m: &MirModule, ops: &[Operand], prefix: &str) -> Result<String, Ice>
 
 fn callee(m: &MirModule, c: &Callee) -> Result<String, Ice> {
     Ok(match c {
-        Callee::Direct(d) => def(m, *d)?,
+        Callee::Direct(d) | Callee::Borrowing(d, _) => def(m, *d)?,
         Callee::Code(key) => format!("<{}>", key_text(m, *key)?),
         Callee::Indirect(l) => local(*l),
     })
@@ -382,7 +418,7 @@ fn rvalue(m: &MirModule, value: &Rvalue) -> Result<String, Ice> {
     Ok(match value {
         Rvalue::Use(op) => operand(m, op)?,
         Rvalue::Call { callee: c, args } => {
-            format!("call {}({})", callee(m, c)?, operands(m, args, "")?)
+            format!("call {}({})", callee(m, c)?, call_args(m, c, args)?)
         }
         Rvalue::CallForeign { symbol, sig, args } => format!(
             "call_foreign \"{}\"({}) -> {}",
@@ -465,7 +501,7 @@ fn terminator(m: &MirModule, term: &Terminator) -> Result<String, Ice> {
     Ok(match term {
         Terminator::Return(op) => format!("return {}", operand(m, op)?),
         Terminator::TailCall { callee: c, args } => {
-            format!("tail_call {}({})", callee(m, c)?, operands(m, args, "")?)
+            format!("tail_call {}({})", callee(m, c)?, call_args(m, c, args)?)
         }
         Terminator::Goto { target, args } => {
             format!("goto bb{}({})", target.as_u32(), operands(m, args, "")?)

@@ -1,0 +1,96 @@
+# Scheduled checks on a pinned, dated nightly toolchain (D-721, D-781).
+#
+# D-277 pins every other job to stable 1.99.0. This workflow alone uses a
+# dated nightly, because cargo-fuzz (and later the sanitizers and Miri)
+# need one. The date is pinned so that a run never changes because the
+# nightly did, and it is at least 1.99-nightly, the workspace's
+# `rust-version` (nightly-2026-10-01 is 1.101.0-nightly). fuzz/Cargo.toml
+# names the same toolchain.
+#
+# - `fuzz`: a bounded run of each of the four `cargo fuzz` targets
+#   (fuzz/fuzz_targets): `lex`, `parse` and `check` from seed corpora made
+#   of the examples and the UI tests, and `rc_differential`, naive
+#   reference counting against Perceus on generated programs (D-718),
+#   which runs a debug `cheby` built with the stable toolchain and copied
+#   aside first. A finding fails the job and uploads fuzz/artifacts.
+#
+# Package H1 adds D-721's sanitizer (TSan, ASan) and Miri jobs here. A
+# scheduled run never blocks a pull request.
+
+name: Nightly
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: Seconds each fuzz target runs
+        required: false
+        default: "900"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  NIGHTLY: nightly-2026-10-01
+  FUZZ_SECONDS: ${{ github.event.inputs.seconds || '900' }}
+
+jobs:
+  fuzz:
+    name: fuzz (${{ matrix.target }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [lex, parse, check, rc_differential]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.0"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-10-01
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            fuzz
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --version 0.13.2 --locked
+      - name: Seed the corpus with the examples and the UI tests
+        if: matrix.target != 'rc_differential'
+        run: |
+          mkdir -p "fuzz/corpus/${{ matrix.target }}"
+          for f in docs/examples/*/src/*.cheby; do
+            cp "$f" "fuzz/corpus/${{ matrix.target }}/$(echo "$f" | tr / _)"
+          done
+          find tests/ui -name '*.cheby' | while read -r f; do
+            cp "$f" "fuzz/corpus/${{ matrix.target }}/$(echo "$f" | tr / _)"
+          done
+      - name: Build the debug cheby that rc_differential runs
+        if: matrix.target == 'rc_differential'
+        run: |
+          cargo build -p cheby_cli --locked
+          mkdir -p "$RUNNER_TEMP/rc"
+          cp target/debug/cheby "$RUNNER_TEMP/rc/cheby"
+          echo "CHEBY_DIFF_BIN=$RUNNER_TEMP/rc/cheby" >> "$GITHUB_ENV"
+      - name: Fuzz ${{ matrix.target }} for ${{ env.FUZZ_SECONDS }} seconds
+        working-directory: fuzz
+        run: >-
+          cargo +${{ env.NIGHTLY }} fuzz run ${{ matrix.target }} --
+          -max_total_time=${{ env.FUZZ_SECONDS }} -timeout=600
+      - name: Upload findings
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}
+          if-no-files-found: ignore

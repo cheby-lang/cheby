@@ -1,0 +1,27 @@
+// @mode: run-pass
+// @decisions: D-073, D-669, D-708, D-710
+// @milestone: M2
+//! `main` returns while a detached fiber waits in `channel::receive` for a
+//! value that never comes. The program ends with status 0 and prints
+//! nothing more: detached fibers still running when `main` has finished
+//! are killed, which no program can tell from a teardown (§10.4, §10.10).
+
+import std::channel
+import std::fiber
+import std::io
+
+fn wait_forever(ready: channel::Sender<Nil>) -> Result<Int, Nil> {
+  let (keep, never) = channel::new::<Int>(1)
+  let assert Ok(Nil) = channel::send(ready, Nil)
+  let got = channel::receive(never)
+  let _ = channel::send(keep, 0)
+  got
+}
+
+fn main() {
+  let (ready_tx, ready_rx) = channel::new::<Nil>(0)
+  fiber::spawn_detached(fn() { wait_forever(ready_tx) })
+  let assert Ok(Nil) = channel::receive(ready_rx)
+  io::println("the detached fiber is waiting")
+  io::println("main returns")
+}

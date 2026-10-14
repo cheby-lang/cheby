@@ -159,11 +159,11 @@ fn runtime_helper_signatures() {
 #[test]
 fn cheby_signatures_start_with_ctx() {
     let s = sig::signature(
-        &AbiSig {
-            abi: Abi::Cheby,
-            params: vec![Repr::Int, Repr::Bool, Repr::Float],
-            ret: Repr::Value,
-        },
+        &AbiSig::owned(
+            Abi::Cheby,
+            vec![Repr::Int, Repr::Bool, Repr::Float],
+            Repr::Value,
+        ),
         CallConv::SystemV,
     );
     assert_eq!(s.call_conv, CallConv::Tail);
@@ -273,6 +273,7 @@ fn unit() -> MirModule {
         entry_loc: Some(StrId::from_u32(0)),
         entry_unwind: None,
         precounted: false,
+        borrow: cheby_mir::borrow::BorrowMask::OWNED,
     };
     MirModule {
         unit: UnitKind::Code(ModuleId::from_u32(1)),
@@ -280,11 +281,7 @@ fn unit() -> MirModule {
         functions: vec![function],
         callees: vec![CalleeDecl {
             def: f,
-            sig: AbiSig {
-                abi: Abi::Cheby,
-                params: vec![Repr::Value],
-                ret: Repr::Value,
-            },
+            sig: AbiSig::owned(Abi::Cheby, vec![Repr::Value], Repr::Value),
         }],
         layouts: Vec::new(),
         foreign_layouts: Vec::new(),
@@ -404,14 +401,11 @@ fn labs_unit(index: u32, params: &[CType]) -> MirModule {
             entry_loc: Some(StrId::from_u32(0)),
             entry_unwind: None,
             precounted: false,
+            borrow: cheby_mir::borrow::BorrowMask::OWNED,
         }],
         callees: vec![CalleeDecl {
             def: g,
-            sig: AbiSig {
-                abi: Abi::Cheby,
-                params: Vec::new(),
-                ret: Repr::Value,
-            },
+            sig: AbiSig::owned(Abi::Cheby, Vec::new(), Repr::Value),
         }],
         layouts: Vec::new(),
         foreign_layouts: Vec::new(),
@@ -486,7 +480,7 @@ fn foreign_imports_by_address_allow_new_signatures() {
 }
 
 /// The runtime functions of the slice (plan §2.1) and the entry check's
-/// releasing slow paths (GAP(entry-unwind-helper)): their C types, indexes
+/// releasing slow paths (D-775): their C types, indexes
 /// 24 to 28, the helpers they implement, and the static `Err(Nil)`.
 #[test]
 fn slice_runtime_functions() {
@@ -647,6 +641,7 @@ fn slice_forms_unit() -> MirModule {
         entry_loc: Some(StrId::from_u32(0)),
         entry_unwind: Some(BlockId::from_u32(2)),
         precounted: true,
+        borrow: cheby_mir::borrow::BorrowMask::OWNED,
     };
     MirModule {
         unit: UnitKind::Code(ModuleId::from_u32(1)),
@@ -654,11 +649,7 @@ fn slice_forms_unit() -> MirModule {
         functions: vec![function],
         callees: vec![CalleeDecl {
             def: f,
-            sig: AbiSig {
-                abi: Abi::Cheby,
-                params: vec![Repr::Bool],
-                ret: Repr::Value,
-            },
+            sig: AbiSig::owned(Abi::Cheby, vec![Repr::Bool], Repr::Value),
         }],
         layouts: Vec::new(),
         foreign_layouts: Vec::new(),
@@ -776,7 +767,7 @@ fn default_options_and_the_frame_size() {
 /// Under the return flag (D-733), the pads of the unwind pass (D-698) are
 /// translated as cold blocks: the foreign call with an edge loads the flag
 /// and branches to them, the entry check's releasing slow path branches on
-/// its result to `resume` (GAP(entry-unwind-helper)), the pad drops out of
+/// its result to `resume` (D-775), the pad drops out of
 /// line and `resume` returns 0. The same function without the pads has
 /// none of it.
 #[test]
@@ -832,7 +823,7 @@ fn unwind_pads_are_translated_as_cold_blocks() {
     );
     assert_eq!(plain.matches(&load_flag).count(), 0, "{plain}");
     // The foreign call's; the entry check goes through the releasing slow
-    // path, which tests its own result (GAP(entry-unwind-helper)).
+    // path, which tests its own result (D-775).
     assert_eq!(padded_text.matches(&load_flag).count(), 1, "{padded_text}");
     assert!(
         padded_text.contains("= cheby_rt_stack_slow_unwind"),
@@ -1015,7 +1006,7 @@ fn the_flag_lowers_every_edge() {
     // With edges.
     let loads = flag.matches(&load_flag).count();
     // The foreign call; the Cheby call, the allocation, the panic and the
-    // entry check's releasing slow path (GAP(entry-unwind-helper)) do not
+    // entry check's releasing slow path (D-775) do not
     // load the flag.
     assert_eq!(loads, 1, "{flag}");
     assert!(flag.contains("= cheby_rt_stack_slow_unwind"), "{flag}");
@@ -1065,7 +1056,7 @@ fn counted_params_unit(n: u32) -> MirModule {
     u
 }
 
-/// GAP(entry-unwind-helper): the entry check's slow path of a function
+/// D-775: the entry check's slow path of a function
 /// with at most four counted parameters is `r = call
 /// cheby_rt_stack_slow_unwind(ctx, loc, n, p…, 0…); brif r, resume, bb0`,
 /// with no flag load, no continuation block and no translated entry pad
@@ -1169,7 +1160,7 @@ fn flag_pads_follow_their_sources() {
     );
 }
 
-/// GAP(drop-with-ctx): `cheby_rt_drop` takes the function's `ctx` first,
+/// D-772: `cheby_rt_drop` takes the function's `ctx` first,
 /// so that the free path reads the block cache through the control block
 /// (D-739). Every call of it passes the entry block's `ctx`: the pads'
 /// drops, and with `checked_rc` every drop.
@@ -1233,7 +1224,6 @@ fn drops_pass_their_functions_ctx() {
 /// `f() { _0 = call g() unwind bb1; return nil }  bb1: resume`, and
 /// `g() -> ret { return 0 }`, both Cheby functions: `f` calls `g`, whose
 /// MIR result is `ret`, with an unwind edge.
-#[expect(clippy::too_many_lines, reason = "one hand-built MIR unit")]
 fn unboxed_call_unit(ret: Repr) -> MirModule {
     use cheby_mir::{BlockId, Callee, Local, Rvalue};
     let f = def(1, 0);
@@ -1281,6 +1271,7 @@ fn unboxed_call_unit(ret: Repr) -> MirModule {
         entry_loc: Some(StrId::from_u32(0)),
         entry_unwind: Some(BlockId::from_u32(1)),
         precounted: false,
+        borrow: cheby_mir::borrow::BorrowMask::OWNED,
     };
     let g_fn = Function {
         key: FnKey::Item(g),
@@ -1300,12 +1291,9 @@ fn unboxed_call_unit(ret: Repr) -> MirModule {
         entry_loc: Some(StrId::from_u32(0)),
         entry_unwind: None,
         precounted: false,
+        borrow: cheby_mir::borrow::BorrowMask::OWNED,
     };
-    let sig = |ret| AbiSig {
-        abi: Abi::Cheby,
-        params: Vec::new(),
-        ret,
-    };
+    let sig = |ret| AbiSig::owned(Abi::Cheby, Vec::new(), ret);
     MirModule {
         unit: UnitKind::Code(ModuleId::from_u32(1)),
         path: "app".into(),
@@ -1379,7 +1367,7 @@ fn unboxed_result_call_tests_the_flag_not_the_result() {
         "the unboxed result {result} is never tested:\n{unboxed}"
     );
     // Only the call: the entry check's releasing slow path tests its own
-    // result (GAP(entry-unwind-helper)).
+    // result (D-775).
     assert_eq!(unboxed.matches(&load_flag).count(), 1, "{unboxed}");
     let uniform = clif_of(&[unboxed_call_unit(Repr::Value)], &opts);
     let (_, result, next) = call_and_next(&uniform);

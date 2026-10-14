@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use cheby_iface::{Ice, IndexVec};
+use cheby_iface::{Ice, Idx, IndexVec};
 
 use crate::ir::{Block, BlockId, Function, Local, Stmt};
 use crate::repr::Repr;
@@ -17,9 +17,18 @@ pub(crate) struct Liveness {
     pub live_out: IndexVec<BlockId, LocalSet>,
 }
 
-/// Whether `local` is counted.
+/// Whether `local` is counted. A borrowed local (D-715) is counted too:
+/// it is live where it is used, but holds no reference of its own
+/// ([`is_borrowed_local`]).
 pub(crate) fn counted(f: &Function, local: Local) -> Result<bool, Ice> {
     Ok(f.local(local)?.repr == Repr::Value)
+}
+
+/// Whether `local` is borrowed in `borrowed`, a
+/// [`Function::borrowed_locals`] result (D-715).
+#[must_use]
+pub(crate) fn is_borrowed_local(borrowed: &[bool], local: Local) -> bool {
+    borrowed.get(local.index()).copied().unwrap_or(false)
 }
 
 /// The local a statement defines.

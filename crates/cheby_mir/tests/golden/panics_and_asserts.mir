@@ -10,17 +10,14 @@ bb1:
   resume
 }
 
-fn app::with_message(_0: value) -> value check str#0 {
-  entry unwind bb2
+fn app::with_message(borrow _0: value) -> value check str#0 {
+  entry unwind bb1
   str#0 = "src/main.cheby:9:4"
   str#1 = "src/main.cheby:10:3"
 bb0:
-  panic explicit _0 at str#1 ; unwind bb2
+  panic explicit _0 at str#1 ; unwind bb1
 bb1:
   resume
-bb2:
-  drop _0
-  goto bb1()
 }
 
 fn app::unfinished() -> value check str#0 {
@@ -127,8 +124,8 @@ bb11:
   goto bb3()
 }
 
-fn app::check_strings(_0: value, _1: value) -> value check str#0 {
-  entry unwind bb5
+fn app::check_strings(_0: value, borrow _1: value) -> value check str#0 {
+  entry unwind bb4
   str#0 = "src/main.cheby:29:4"
   str#1 = "assertion failed: "
   str#2 = "different "
@@ -141,57 +138,49 @@ bb0:
   branch _3, bb1, bb2
 bb1:
   drop _0
-  drop _1
   return const nil
 bb2:
-  _4: value = call_runtime str_with_capacity(borrow const int 64) ; unwind bb5
-  _5: value = call_runtime str_append(_4, borrow const str#1) ; unwind bb5
+  _4: value = call_runtime str_with_capacity(borrow const int 64) ; unwind bb4
+  _5: value = call_runtime str_append(_4, borrow const str#1) ; unwind bb4
   _6: value = const str#2
   dup _0
-  _7: value = call std::string::add(_6, _0) ; unwind bb6
-  _8: value = call_runtime str_append(_5, borrow _7) ; unwind bb7
+  _7: value = call std::string::add(_6, _0) ; unwind bb5
+  _8: value = call_runtime str_append(_5, borrow _7) ; unwind bb6
   drop _7
-  _9: value = call_runtime str_append(_8, borrow const str#3) ; unwind bb5
-  _10: value = call_runtime debug(borrow _0) ; unwind bb8
+  _9: value = call_runtime str_append(_8, borrow const str#3) ; unwind bb4
+  _10: value = call_runtime debug(borrow _0) ; unwind bb7
   drop _0
-  _11: value = call_runtime str_append(_9, borrow _10) ; unwind bb10
+  _11: value = call_runtime str_append(_9, borrow _10) ; unwind bb8
   drop _10
-  _12: value = call_runtime str_append(_11, borrow const str#4) ; unwind bb9
-  _13: value = call_runtime debug(borrow _1) ; unwind bb11
-  drop _1
-  _14: value = call_runtime str_append(_12, borrow _13) ; unwind bb12
+  _12: value = call_runtime str_append(_11, borrow const str#4) ; unwind bb3
+  _13: value = call_runtime debug(borrow _1) ; unwind bb9
+  _14: value = call_runtime str_append(_12, borrow _13) ; unwind bb10
   drop _13
-  panic assert _14 at str#5 ; unwind bb13
+  panic assert _14 at str#5 ; unwind bb11
 bb3:
   resume
 bb4:
   drop _0
   goto bb3()
 bb5:
-  drop _1
+  drop _5
   goto bb4()
 bb6:
-  drop _5
-  goto bb5()
-bb7:
   drop _7
-  goto bb5()
-bb8:
+  goto bb4()
+bb7:
   drop _9
-  goto bb5()
+  goto bb4()
+bb8:
+  drop _10
+  goto bb3()
 bb9:
-  drop _1
+  drop _12
   goto bb3()
 bb10:
-  drop _10
-  goto bb9()
-bb11:
-  drop _12
-  goto bb9()
-bb12:
   drop _13
   goto bb3()
-bb13:
+bb11:
   drop _14
   goto bb3()
 }
@@ -267,8 +256,7 @@ bb0:
   _0: value = call app::plain() ; unwind bb1
   _1: int = unbox int _0
   drop _0
-  _2: value = const str#1
-  _3: value = call app::with_message(_2) ; unwind bb1
+  _3: value = call app::with_message(borrow const str#1) ; unwind bb1
   _4: int = unbox int _3
   drop _3
   _5: value = call app::unfinished() ; unwind bb1
@@ -283,8 +271,7 @@ bb0:
   _11: value = call app::check_ints(_10) ; unwind bb1
   drop _11
   _12: value = const str#2
-  _13: value = const str#3
-  _14: value = call app::check_strings(_12, _13) ; unwind bb1
+  _14: value = call app::check_strings(_12, borrow const str#3) ; unwind bb1
   drop _14
   _15: value = const str#2
   _16: value = const str#3
@@ -294,12 +281,12 @@ bb1:
 }
 
 callee app::plain() -> value
-callee app::with_message(value) -> value
+callee app::with_message(borrow value) -> value
 callee app::unfinished() -> value
 callee app::unfinished_as() -> value
 callee app::check(bool) -> value
 callee app::check_ints(value) -> value
-callee app::check_strings(value, value) -> value
+callee app::check_strings(value, borrow value) -> value
 callee app::check_order(value, value) -> value
 callee std::list::new() -> value
 callee std::list::length(value) -> value

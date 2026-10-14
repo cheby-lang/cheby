@@ -42,8 +42,11 @@
 //! `CHEBY_UNWIND_EDGES` (`off` turns the unwind pass off, D-698; unset or
 //! empty keeps it), and [`codegen_options`] carries the latter into
 //! [`CodegenOptions::unwind_edges`], so the runtime knows code compiled
-//! without edges (GAP(edgeless-panics)). Every unit is counted with
-//! `cheby_mir::count_and_check_with`. The dumps for goldens use the
+//! without edges (D-770). A build lowers and checks every unit first,
+//! then, unless `CHEBY_RC=naive` (`MirOptions::borrows`), infers the
+//! borrow masks across all of them and writes them into each (D-715,
+//! D-779, D-787), and only then counts each unit with
+//! `cheby_mir::count_lowered_with`. The dumps for goldens use the
 //! defaults, so they do not depend on the environment. These are hidden
 //! developer switches, honored by release builds too, so `bench-run` can
 //! measure every mode (D-702); an invalid value is a driver error (D-746,
@@ -59,8 +62,8 @@ use cheby_iface::{DefId, DepView, Ice, ModuleId};
 use cheby_jit::{Jit, JitError, JitOptions};
 use cheby_mir::reach::{Reach, Root, reachable_with_hooks};
 use cheby_mir::{
-    Defs, EntryKind, EntryRequest, LowerCx, MirModule, MirOptions, Program, Stmt, UnitKind,
-    count_and_check_with, lower_entries, lower_items, lower_tests,
+    Defs, EntryKind, EntryRequest, LowerCx, MirModule, MirOptions, Program, Stmt, UnitKind, borrow,
+    check_lowered, count_lowered_with, lower_entries, lower_items, lower_tests,
 };
 use cheby_package::Target;
 use cheby_types::thir;
@@ -117,7 +120,7 @@ pub(crate) fn mir_options_from_env() -> Result<MirOptions, Error> {
 /// The code-generation options of a build or a REPL session compiled with
 /// the MIR options `mir`: [`CodegenOptions::unwind_edges`] follows
 /// `mir.unwind_edges` (`CHEBY_UNWIND_EDGES`, D-742), so the JIT tells the
-/// runtime when code has no edges (GAP(edgeless-panics)). A CLIF dump
+/// runtime when code has no edges (D-770). A CLIF dump
 /// (`capture_clif`) compiles with the default MIR options, so dumps do not
 /// depend on the environment (D-264).
 pub(crate) fn codegen_options(mir: MirOptions, capture_clif: bool) -> CodegenOptions {
@@ -431,10 +434,9 @@ fn lower(
         }
     }
     // Lowering a module reads only its THIR and the interfaces (D-246), so
-    // the modules are lowered, counted and checked in parallel on rayon's
-    // global pool (G1, D-263). The results are taken in build order, so
-    // the units and the error reported do not depend on the thread count
-    // (D-264).
+    // the modules are lowered and checked in parallel on rayon's global
+    // pool (G1, D-263). The results are taken in build order, so the units
+    // and the error reported do not depend on the thread count (D-264).
     let jobs: Vec<(ModuleId, Option<&Vec<&thir::TestDef>>)> = front
         .order
         .iter()
@@ -443,7 +445,7 @@ fn lower(
         .collect();
     let lowered: Vec<Result<ModuleUnits, Ice>> = jobs
         .par_iter()
-        .map(|&(module, selected)| lower_module(front, sources, &reach, module, selected, mir))
+        .map(|&(module, selected)| lower_module(front, sources, &reach, module, selected))
         .collect();
     let mut units = Vec::new();
     for result in lowered {
@@ -452,25 +454,81 @@ fn lower(
         }
     }
     if !entries.is_empty() {
-        units.push(lower_entry_unit(front, sources, &entries, mir)?);
+        units.push(lower_entry_unit(front, sources, &entries)?);
+    }
+    // Every unit is lowered before any is counted: the borrow masks come
+    // from the whole build (D-779).
+    if mir.borrows() {
+        infer_borrowing(front, &mut units)?;
+    }
+    let counted: Vec<Result<(), Ice>> = units
+        .par_iter_mut()
+        .map(|unit| count_lowered_with(unit, &mir))
+        .collect();
+    for result in counted {
+        result?;
     }
     Ok(Lowered { units, reach })
 }
 
-/// The code unit and the tests unit of one module, each counted and
+/// Borrowing inference across a build's lowered units (D-715, D-779,
+/// D-787): the facts of every unit, the masks of each code unit's module
+/// from its interfaces and THIR (in parallel, each module on its own), and
+/// then the whole build's masks written into every unit, its tests units
+/// and the entries unit included ([`cheby_mir::borrow::apply`]). A
+/// `cheby test` build infers over its tests units too, so its code units
+/// may get other masks than a `cheby run` build's; `cheby run`'s code
+/// never depends on tests (D-779).
+fn infer_borrowing(front: &Frontend, units: &mut [MirModule]) -> Result<(), Ice> {
+    let facts = {
+        let refs: Vec<&MirModule> = units.iter().collect();
+        borrow::collect_facts(&refs)
+    };
+    let found: Vec<Result<borrow::Masks, Ice>> = units
+        .par_iter()
+        .map(|unit| unit_masks(front, unit, &facts))
+        .collect();
+    let mut masks = borrow::Masks::new();
+    for result in found {
+        masks.extend(result?);
+    }
+    let applied: Vec<Result<(), Ice>> = units
+        .par_iter_mut()
+        .map(|unit| borrow::apply(unit, &masks))
+        .collect();
+    applied.into_iter().collect()
+}
+
+/// The masks [`borrow::infer`] gives `unit` if it is a code unit, read
+/// with its module's interfaces (D-246) and THIR.
+fn unit_masks(
+    front: &Frontend,
+    unit: &MirModule,
+    facts: &borrow::BuildFacts,
+) -> Result<borrow::Masks, Ice> {
+    let UnitKind::Code(module) = unit.unit else {
+        return Ok(borrow::Masks::new());
+    };
+    let checked = checked(front, module)?;
+    let readable = DepView::new(&front.set, &checked.deps);
+    let eligibility =
+        borrow::IfaceEligibility::new(own_defs(front, module, &readable)?, &checked.thir);
+    Ok(borrow::infer(unit, facts, &eligibility))
+}
+
+/// The code unit and the tests unit of one module, each lowered and
 /// checked; `None` where the build needs no such unit.
 type ModuleUnits = [Option<Result<MirModule, Ice>>; 2];
 
 /// Lowers `module`: its items that `reach` contains into its code unit,
-/// and its `selected` tests into its tests unit, each counted and checked
-/// with the MIR options `mir`.
+/// and its `selected` tests into its tests unit, each checked as lowered
+/// ([`check_lowered`]); counting waits for the whole build (D-779).
 fn lower_module(
     front: &Frontend,
     sources: &SourceMap,
     reach: &Reach,
     module: ModuleId,
     selected: Option<&Vec<&thir::TestDef>>,
-    mir: MirOptions,
 ) -> Result<ModuleUnits, Ice> {
     let checked = checked(front, module)?;
     let own = front
@@ -488,8 +546,8 @@ fn lower_module(
         sources,
     };
     let counted = |lowered: Result<MirModule, Ice>| {
-        lowered.and_then(|mut unit| {
-            count_and_check_with(&mut unit, &mir)?;
+        lowered.and_then(|unit| {
+            check_lowered(&unit)?;
             Ok(unit)
         })
     };
@@ -610,13 +668,12 @@ fn hooks_of(front: &Frontend, module: ModuleId) -> Result<Vec<DefId>, Ice> {
     Ok(out)
 }
 
-/// The entry unit with the thunks of `entries` (D-137, D-453), counted
-/// and checked with the MIR options `mir`.
+/// The entry unit with the thunks of `entries` (D-137, D-453), checked as
+/// lowered; counting waits for the whole build (D-779).
 fn lower_entry_unit(
     front: &Frontend,
     sources: &SourceMap,
     entries: &[EntryRequest<'_>],
-    mir: MirOptions,
 ) -> Result<MirModule, Ice> {
     let mut all: Vec<ModuleId> = front.order.clone();
     all.sort_unstable();
@@ -630,8 +687,8 @@ fn lower_entry_unit(
         },
         sources,
     };
-    let mut unit = lower_entries(entries, &cx)?;
-    count_and_check_with(&mut unit, &mir)?;
+    let unit = lower_entries(entries, &cx)?;
+    check_lowered(&unit)?;
     Ok(unit)
 }
 
@@ -1248,14 +1305,6 @@ fn main() {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// What [`every_root_dump`] gives.
-    enum RootDump {
-        /// The MIR of every root, as one dump.
-        Mir(String),
-        /// The codes of the front end's errors.
-        Rejected(String),
-    }
-
     /// The MIR units of every root of the package at `dir` (its `main`,
     /// its tests on native, its constants) under `mir`, or the sorted
     /// codes of the front end's errors. An internal error fails the test.
@@ -1279,19 +1328,6 @@ fn main() {
             .unwrap_or_else(|ice| panic!("{}: {ice}", dir.display()));
         assert!(!units.is_empty(), "{}", dir.display());
         Ok(units)
-    }
-
-    /// The MIR of every root of the package at `dir` (its `main`, its tests
-    /// on native, its constants) under `mir`.
-    fn every_root_dump(dir: &Path, mir: MirOptions) -> RootDump {
-        match every_root_units(dir, mir) {
-            Ok(units) => {
-                let texts: Vec<String> =
-                    units.iter().map(|u| cheby_mir::dump(u).unwrap()).collect();
-                RootDump::Mir(texts.join("\n"))
-            }
-            Err(codes) => RootDump::Rejected(codes),
-        }
     }
 
     /// The example packages under `docs/examples`, sorted.
@@ -1383,44 +1419,74 @@ fn main() {
         );
     }
 
-    /// `CHEBY_RC=naive` keeps M1's naive counting selectable (D-718). Until
-    /// the Perceus passes land both modes give the same MIR: every example
-    /// that passes the front end lowers its `main`, its tests and its
-    /// constants in both modes with identical dumps. The examples the
-    /// front end rejects today are skipped and printed with their codes.
+    /// `CHEBY_RC=naive` keeps M1's naive counting selectable (D-718) as the
+    /// oracle of borrowing (D-715): for every example that passes the front
+    /// end, its `main`, its tests and its constants lower in both modes to
+    /// MIR that validates after the unwind pass, naive MIR is the MIR
+    /// before borrowing (Perceus with borrowing off, the pipeline before
+    /// P1), and no naive unit borrows anything. Perceus borrows in some
+    /// example. The examples the front end rejects today are skipped and
+    /// printed with their codes.
     #[test]
-    fn rc_modes_give_the_same_mir_for_every_example() {
+    fn rc_modes_validate_and_naive_mir_is_the_mir_before_borrowing() {
         let dirs = example_dirs();
         let naive = MirOptions {
             rc: cheby_mir::RcMode::Naive,
             ..MirOptions::default()
         };
-        let perceus = MirOptions {
-            rc: cheby_mir::RcMode::Perceus,
+        let before_borrowing = MirOptions {
+            borrow: false,
             ..MirOptions::default()
         };
         let mut compared = 0_usize;
+        let mut borrowing = Vec::new();
         let mut skipped = Vec::new();
-        for dir in &dirs {
-            let name = dir.file_name().unwrap().to_string_lossy().into_owned();
-            match every_root_dump(dir, naive) {
-                RootDump::Mir(text) => {
-                    let RootDump::Mir(other) = every_root_dump(dir, perceus) else {
-                        panic!("{name}: the front end rejects it the second time");
-                    };
-                    assert!(
-                        text == other,
-                        "{name}: the MIR differs between the RC modes"
-                    );
-                    compared += 1;
-                }
-                RootDump::Rejected(codes) => {
-                    skipped.push(format!("{name} (the front end reports {codes})"));
+        let check = |name: &str, units: &[MirModule]| {
+            for unit in units {
+                if let Err(errors) = cheby_mir::validate(unit, cheby_mir::Stage::Unwound) {
+                    panic!("{name}: {}: {}", unit.path, errors.join("\n  "));
                 }
             }
+        };
+        for dir in &dirs {
+            let name = dir.file_name().unwrap().to_string_lossy().into_owned();
+            let naive_units = match every_root_units(dir, naive) {
+                Ok(units) => units,
+                Err(codes) => {
+                    skipped.push(format!("{name} (the front end reports {codes})"));
+                    continue;
+                }
+            };
+            let Ok(perceus_units) = every_root_units(dir, MirOptions::default()) else {
+                panic!("{name}: the front end rejects it the second time");
+            };
+            let Ok(owned_units) = every_root_units(dir, before_borrowing) else {
+                panic!("{name}: the front end rejects it the third time");
+            };
+            check(&name, &naive_units);
+            check(&name, &perceus_units);
+            assert!(
+                !naive_units.iter().any(cheby_mir::borrow::borrows_anything),
+                "{name}: naive MIR borrows"
+            );
+            let dump = |units: &[MirModule]| -> Vec<String> {
+                units.iter().map(|u| cheby_mir::dump(u).unwrap()).collect()
+            };
+            assert!(
+                dump(&naive_units) == dump(&owned_units),
+                "{name}: naive MIR differs from the MIR before borrowing"
+            );
+            if perceus_units
+                .iter()
+                .any(cheby_mir::borrow::borrows_anything)
+            {
+                borrowing.push(name);
+            }
+            compared += 1;
         }
         eprintln!(
-            "rc_modes: {compared} examples compared, {} skipped:",
+            "rc_modes: {compared} examples compared, {} with borrowing, {} skipped:",
+            borrowing.len(),
             skipped.len()
         );
         for line in &skipped {
@@ -1431,11 +1497,12 @@ fn main() {
             "only {compared} of {} examples compared",
             dirs.len()
         );
+        assert!(!borrowing.is_empty(), "no example borrows anything");
     }
 
     /// D-742: `CHEBY_UNWIND_EDGES` is the one unwinding switch, and code
     /// generation carries the MIR's setting into
-    /// [`CodegenOptions::unwind_edges`] (GAP(edgeless-panics)); a CLIF dump
+    /// [`CodegenOptions::unwind_edges`] (D-770); a CLIF dump
     /// compiles with the defaults.
     #[test]
     fn unwind_edges_switch_reaches_the_codegen_options() {

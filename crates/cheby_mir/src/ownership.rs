@@ -24,6 +24,19 @@
 //!
 //! The entry pad starts with the parameters, as `bb0` does.
 //!
+//! Borrowed locals (D-715, [`crate::Function::borrowed_locals`]): a
+//! borrowed parameter, and a `field` result of a borrowed local (a
+//! borrowed projection, GAP(borrowed-projections)), hold no reference of
+//! their own and stay alive for the whole call: the caller's reference
+//! keeps them. They start at 0, a borrowed use of one needs no reference,
+//! a `dup` of one is always allowed, and an owned use needs the
+//! references its `dup`s gave. So a borrowed parameter consumed without a
+//! `dup`, dropped, or released by a pad is an error, and a borrowed
+//! position of a tail call fed an owned local leaves that local held at
+//! the jump. Borrowed locals live in a per-function table, outside the
+//! counts copied at every unwind site, so they add nothing to D-735's
+//! hot path.
+//!
 //! [`RuntimeFn::params`]: crate::RuntimeFn::params
 
 use std::fmt;
@@ -32,6 +45,7 @@ use std::fmt::Write as _;
 use cheby_iface::{Ice, Idx};
 
 use crate::ir::{BlockId, Function, Local, Rvalue, Stmt, Terminator, UseKind};
+use crate::liveness::is_borrowed_local;
 use crate::repr::Repr;
 
 /// The references each counted local holds on one path.
@@ -193,6 +207,7 @@ pub(crate) fn simulate(f: &Function, observer: &mut impl Observer) -> Result<(),
         entry_state: vec![None; blocks],
         from: vec![None; blocks],
         work: Vec::new(),
+        borrowed: f.borrowed_locals()?,
     }
     .run()
 }
@@ -239,6 +254,9 @@ struct Sim<'a, O> {
     /// index.
     from: Vec<Option<Site>>,
     work: Vec<BlockId>,
+    /// By local index, the borrowed locals (module documentation); empty
+    /// when the function borrows nothing.
+    borrowed: Vec<bool>,
 }
 
 impl<O: Observer> Sim<'_, O> {
@@ -246,13 +264,17 @@ impl<O: Observer> Sim<'_, O> {
         Ok(self.f.local(l)?.repr == Repr::Value)
     }
 
+    /// Whether `l` is a borrowed local (D-715).
+    fn is_borrowed(&self, l: Local) -> bool {
+        is_borrowed_local(&self.borrowed, l)
+    }
+
     fn run(mut self) -> Result<(), Ice> {
         let f = self.f;
         let mut start = Counts::default();
-        for &p in &f.params {
-            if self.counted(p)? {
-                start.set(p, 1);
-            }
+        // A borrowed parameter holds nothing (D-715).
+        for p in f.owned_params()? {
+            start.set(p, 1);
         }
         let bb0 = BlockId::from_u32(0);
         if let Some(pad) = f.entry_unwind {
@@ -310,7 +332,11 @@ impl<O: Observer> Sim<'_, O> {
                 Stmt::Assign { dst, value } => {
                     self.consume(&mut st, &value.uses(), at)?;
                     if self.counted(*dst)? {
-                        if value.result_is_borrowed() {
+                        if self.is_borrowed(*dst) {
+                            // A borrowed projection: alive for the whole
+                            // call, holding nothing.
+                            st.set(*dst, 0);
+                        } else if value.result_is_borrowed() {
                             st.set(*dst, 0);
                             let base = match value {
                                 Rvalue::Field { base, .. } => Some(*base),
@@ -379,7 +405,7 @@ impl<O: Observer> Sim<'_, O> {
     /// dup, which needs the base still alive.
     fn dup(&mut self, st: &mut Counts, l: Local, at: Site) {
         let c = st.count(l);
-        if c >= 1 || st.borrow_alive(l) {
+        if c >= 1 || self.is_borrowed(l) || st.borrow_alive(l) {
             st.set(l, c.saturating_add(1));
         } else {
             self.observer.error(format!(
@@ -428,7 +454,8 @@ impl<O: Observer> Sim<'_, O> {
     }
 
     /// Applies the uses of one instruction: borrowed uses need a reference
-    /// that survives the instruction, owned uses consume one each.
+    /// that survives the instruction (a borrowed local's caller holds it,
+    /// D-715), owned uses consume one each.
     fn consume(&mut self, st: &mut Counts, uses: &[(Local, UseKind)], at: Site) -> Result<(), Ice> {
         // Per local: owned uses and whether it is borrowed, in ascending
         // local order (an instruction has few operands).
@@ -451,8 +478,9 @@ impl<O: Observer> Sim<'_, O> {
         per.sort_unstable_by_key(|e| e.0);
         for (l, owned, borrowed) in per {
             let have = st.count(l);
-            let need = owned.saturating_add(i64::from(borrowed));
-            if have >= need && need > 0 {
+            let kept = self.is_borrowed(l);
+            let need = owned.saturating_add(i64::from(borrowed && !kept));
+            if have >= need && (need > 0 || kept) {
                 st.set(l, have.saturating_sub(owned));
             } else {
                 self.observer.error(format!(

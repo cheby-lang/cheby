@@ -69,7 +69,7 @@ use crate::fiber::StackError;
 use crate::generic;
 use crate::io;
 use crate::panic::{PanicReport, stack_position};
-use crate::sched::{FiberSched, Runtime, RuntimeConfig};
+use crate::sched::{CodeToken, DetachedGroup, FiberSched, Runtime, RuntimeConfig};
 use crate::stats;
 use crate::tls;
 use crate::unwind;
@@ -209,6 +209,14 @@ pub enum EntryOutcome {
     /// The entry panicked: it unwound to its catch point and its thread or
     /// fiber ended (D-699, D-713).
     Panicked(PanicReport),
+    /// The program ended with this status while the entry ran (D-709): a
+    /// write failed (D-306). The fibers of a runtime are frozen and its
+    /// halt has started; the host completes it ([`Runtime::halt`]), drops
+    /// no Cheby value of that runtime and keeps the entry's code alive
+    /// until the halt returns. An isolated entry's thread is parked for
+    /// good: its host keeps (leaks) the code it runs and every value it may
+    /// reach.
+    Exited(i32),
 }
 
 /// A failure of the runtime itself, not of the program.
@@ -567,13 +575,22 @@ unsafe fn spawn_entry(
         })
         .map_err(RuntimeError::Spawn)?;
     // A panicked entry unwound to its catch point, and its thread ends like
-    // a returned one's (D-713).
-    let result = if let Ok(outcome) = wait(&receiver, deadline, &interrupter) {
-        thread.join().map_err(|_| RuntimeError::EntryLost)?;
-        Ok(outcome)
-    } else {
-        thread.join().ok();
-        Err(RuntimeError::EntryLost)
+    // a returned one's (D-713). A terminated entry's thread is parked for
+    // good (D-709): it is never joined, and keeps its control block and
+    // everything it holds.
+    let result = match wait(&receiver, deadline, &interrupter) {
+        Ok(outcome @ EntryOutcome::Exited(_)) => {
+            drop(thread);
+            Ok(outcome)
+        }
+        Ok(outcome) => {
+            thread.join().map_err(|_| RuntimeError::EntryLost)?;
+            Ok(outcome)
+        }
+        Err(_) => {
+            thread.join().ok();
+            Err(RuntimeError::EntryLost)
+        }
     };
     stats_domain.stats().add_entry(started.elapsed());
     result
@@ -671,12 +688,20 @@ pub struct RunConfig {
     /// [`EntryConfig::unwind_edges`]). The JIT fills it from its code
     /// generation options.
     pub unwind_edges: bool,
+    /// The token of the code `main` runs (a JIT's, [`CodeToken`]), which
+    /// the run's runtime holds as [`Runtime::attach`] does: released once
+    /// every thread of the runtime is joined, and kept (leaked) when a
+    /// worker whose fiber is blocked inline in a system call is never
+    /// joined (D-786), since that worker returns into the code when the
+    /// call returns (D-708, I-6). `None` for code that lives for the
+    /// whole process.
+    pub code: Option<CodeToken>,
 }
 
 impl Default for RunConfig {
     /// No arguments, the default root and fiber stacks, no trampolines,
     /// the calling thread's current accounting domain, `CHEBY_THREADS`'s
-    /// thread count, unwind edges and a teardown at exit.
+    /// thread count, unwind edges, a teardown at exit and no code token.
     fn default() -> Self {
         Self {
             args: Vec::new(),
@@ -688,6 +713,7 @@ impl Default for RunConfig {
             domain: alloc::current_domain(),
             threads: None,
             unwind_edges: true,
+            code: None,
         }
     }
 }
@@ -727,7 +753,10 @@ impl Default for RunConfig {
 /// # Safety
 ///
 /// As for [`run_entry`]: `entry` must be a `main` entry thunk with the
-/// [`EntryFn`] ABI, and its code must stay valid until this returns.
+/// [`EntryFn`] ABI, and its code must stay valid until this returns. Code
+/// that can be freed (a JIT's) must also come with its token in
+/// `config.code`: a worker left blocked inline in a system call (D-786) is
+/// never joined and returns into the code after this has returned.
 pub unsafe fn run_main(entry: EntryFn, config: RunConfig) -> Result<i32, RuntimeError> {
     let runtime = match Runtime::new(&RuntimeConfig {
         threads: config.threads,
@@ -742,6 +771,16 @@ pub unsafe fn run_main(entry: EntryFn, config: RunConfig) -> Result<i32, Runtime
         }
         Err(error) => return Err(error),
     };
+    // The runtime holds the code's token from now on, and keeps it if a
+    // worker is left blocked inline in a system call (D-786, I-6); on the
+    // thread backend this function holds it.
+    let code = match (&runtime, config.code) {
+        (Some(runtime), Some(code)) => {
+            runtime.attach(code);
+            None
+        }
+        (_, code) => code,
+    };
     let domain = config.domain;
     let entry_config = EntryConfig {
         stack_size: config.root_stack_size,
@@ -751,15 +790,30 @@ pub unsafe fn run_main(entry: EntryFn, config: RunConfig) -> Result<i32, Runtime
         consts: None,
         unwind_edges: config.unwind_edges,
     };
+    // `main`'s detached fibers (GAP(detached-groups)).
+    let group = DetachedGroup::new();
     let started = Instant::now();
     let outcome = match &runtime {
         // SAFETY: the caller guarantees `run_root`'s preconditions for
         // `entry`: its code stays valid until this function returns, which
         // is after the runtime stopped below.
-        Some(runtime) => unsafe { runtime.run_root(entry, &entry_config) },
+        Some(runtime) => unsafe { runtime.run_root_in(entry, &entry_config, &group) },
         // SAFETY: as above, for `run_entry`.
         None => unsafe { run_entry(entry, &entry_config) },
     };
+    // A termination (D-709): the program ends with its status at once.
+    // The world is halted (the thread backend's entry thread is parked
+    // for good), nothing more is printed, and there are no stats and no
+    // leak check: frozen fibers hold objects (D-306).
+    if let Ok(EntryOutcome::Exited(status)) = outcome {
+        if let Some(runtime) = runtime {
+            runtime.halt();
+        }
+        // The thread backend's entry thread is never joined: its code is
+        // kept (leaked) for it.
+        std::mem::forget(code);
+        return Ok(status);
+    }
     // The exit sequence (§10.10's note): flush standard output and fix the
     // status, then stop the runtime, then the stats report, then the leak
     // check. The root's catch point already printed a panic report (D-701).
@@ -767,38 +821,80 @@ pub unsafe fn run_main(entry: EntryFn, config: RunConfig) -> Result<i32, Runtime
         let flushed = io::flush_stdout().is_ok();
         exit_status(&outcome, flushed).map(|status| (outcome, status, flushed))
     });
-    if let Some(runtime) = runtime {
-        stop_at_exit(runtime, config.at_exit);
+    let (outcome, status, flushed) = match fixed {
+        Ok(fixed) => fixed,
+        Err(error) => {
+            if let Some(runtime) = runtime {
+                runtime.shutdown();
+            }
+            return Err(error);
+        }
+    };
+    let (status, stopped) = match runtime {
+        Some(runtime) => stop_at_exit(runtime, &group, status, config.at_exit),
+        None => (status, Stopped::Clean),
+    };
+    // A termination once `main` had ended (D-785): the fixed status
+    // stands, the halt has run, and nothing more is printed.
+    if stopped == Stopped::Terminated {
+        return Ok(status);
     }
-    let (outcome, status, flushed) = fixed?;
-    // D-771: after the system allocator refused a
-    // request of the build's domain, the update it stopped may have leaked
-    // the structure in flight, which the program did not leak: the check
-    // is skipped and the skip counted, as D-710 skips it for a fiber stuck
-    // on the blocking pool.
-    let check_leaks = !(LEAK_CHECK_ENABLED && domain.system_refused());
+    // D-771: after the system allocator refused a request of the build's
+    // domain, the update it stopped may have leaked the structure in
+    // flight, which the program did not leak; D-786: a fiber blocked
+    // inline in a system call was skipped by the teardown and holds its
+    // objects; frozen fibers hold theirs (D-708). In each case the check
+    // is skipped and the skip counted (D-710).
+    let skip = domain.system_refused() || stopped != Stopped::Clean;
+    let check_leaks = !(LEAK_CHECK_ENABLED && skip);
     if !check_leaks {
         domain.stats().skip_leak_check();
     }
-    if stats::enabled() {
-        io::write_stderr(&stats::report(
+    // The host's own writes: a failure ends the program with 1, printing
+    // nothing more (D-306).
+    if stats::enabled()
+        && io::try_write_stderr(&stats::report(
             started.elapsed(),
             domain.peak_bytes(),
             domain.stats(),
-        ));
+        ))
+        .is_err()
+    {
+        return Ok(status::ERR);
     }
     // A failed flush gives 1 and skips the check (D-306, D-346); after a
     // panic the cleanup pads released the root's objects, and a leak turns
     // 101 into 102 (D-710).
     let checked = flushed || matches!(outcome, EntryOutcome::Panicked(_));
+    let live = domain.live_objects();
     if checked
         && check_leaks
-        && let Some(report) = leak_report(domain.live_objects())
+        && let Some(mut report) = leak_report(live)
     {
-        io::write_stderr(&report);
+        // D-711, D-784: the leaked runtime kinds, right after D-458's line.
+        if let Some(kinds) = alloc::leaked_kinds_line(domain.live_kinds(), live) {
+            report.push_str(&kinds);
+            report.push('\n');
+        }
+        if io::try_write_stderr(&report).is_err() {
+            return Ok(status::ERR);
+        }
         return Ok(status::LEAK_CHECK);
     }
     Ok(status)
+}
+
+/// How `run_main`'s runtime stopped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Stopped {
+    /// Torn down, every thread joined: the leak check may run.
+    Clean,
+    /// Torn down, except fibers blocked inline in a system call (D-786).
+    Skipped,
+    /// Frozen (D-073, D-708).
+    Frozen,
+    /// A termination happened (D-709) and the runtime halted.
+    Terminated,
 }
 
 /// The exit status of `main`'s `outcome`, fixed right after standard
@@ -810,6 +906,7 @@ pub unsafe fn run_main(entry: EntryFn, config: RunConfig) -> Result<i32, Runtime
 /// [`RuntimeError::InvalidStatus`] for any other raw status.
 fn exit_status(outcome: &EntryOutcome, flushed: bool) -> Result<i32, RuntimeError> {
     match *outcome {
+        EntryOutcome::Exited(status) => Ok(status),
         EntryOutcome::Panicked(_) => Ok(status::PANIC),
         EntryOutcome::Returned(_) if !flushed => Ok(status::ERR),
         EntryOutcome::Returned(0) => Ok(status::SUCCESS),
@@ -818,15 +915,52 @@ fn exit_status(outcome: &EntryOutcome, flushed: bool) -> Result<i32, RuntimeErro
     }
 }
 
-/// Stops `run_main`'s runtime once the status is fixed, as `at_exit` asks
-/// (D-073, D-708). This wave both choices shut the runtime down as before:
-/// no fiber outlives `main` until detached fibers exist. Package L1r makes
-/// [`AtExit::Teardown`] tear the root's detached fibers down and
-/// [`AtExit::Freeze`] freeze them (GAP(freeze-only-cli)).
-fn stop_at_exit(runtime: Runtime, at_exit: AtExit) {
-    match at_exit {
-        AtExit::Teardown | AtExit::Freeze => runtime.shutdown(),
+/// Stops `run_main`'s runtime once standard output is flushed and the
+/// status fixed (`status`), as `at_exit` asks (D-073, D-708,
+/// GAP(freeze-only-cli)), and returns the status that stands with how the
+/// runtime stopped:
+///
+/// - the status is fixed in the runtime first, so a termination from now
+///   on leaves it (D-785), and one that came first wins (D-709);
+/// - [`AtExit::Teardown`] tears `main`'s group down (D-708, D-710), then
+///   shuts the runtime down; a termination during the teardown stops it,
+///   and the halt completes instead;
+/// - [`AtExit::Freeze`] halts: the detached fibers freeze where they stand.
+fn stop_at_exit(
+    runtime: Runtime,
+    group: &DetachedGroup,
+    status: i32,
+    at_exit: AtExit,
+) -> (i32, Stopped) {
+    let shared = runtime.shared_handle();
+    let status = shared.fix_status(status);
+    if shared.terminated() {
+        runtime.halt();
+        return (status, Stopped::Terminated);
     }
+    let stopped = match at_exit {
+        AtExit::Freeze => {
+            runtime.halt();
+            Stopped::Frozen
+        }
+        AtExit::Teardown => {
+            let report = runtime.teardown(group);
+            if report.halted {
+                runtime.halt();
+            } else {
+                runtime.shutdown();
+            }
+            if report.skipped > 0 {
+                Stopped::Skipped
+            } else {
+                Stopped::Clean
+            }
+        }
+    };
+    if shared.terminated() {
+        return (status, Stopped::Terminated);
+    }
+    (status, stopped)
 }
 
 /// The leak-check failure printed when `live` objects remain at exit, or

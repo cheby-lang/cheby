@@ -4,8 +4,16 @@
 //! Standard output goes through Rust's `stdout()`, which is line-buffered;
 //! standard error through `stderr()`, which is not buffered. When a write
 //! or a flush fails, the program ends at once with status 1 and prints
-//! nothing (D-306). Rust ignores `SIGPIPE`, so a closed pipe arrives here
-//! as an `EPIPE` error.
+//! nothing (D-306): a termination (D-709, `sched::terminate`), which the
+//! running entry's host receives as `EntryOutcome::Exited(1)` while the
+//! runtime halts; the runtime never ends the process itself. Rust ignores
+//! `SIGPIPE`, so a closed pipe arrives here as an `EPIPE` error.
+//!
+//! Standard input and file IO block the calling worker inline until I1's
+//! blocking pool: the fiber is marked for the call's duration, so a
+//! teardown and a halt skip it and count it (D-786), and the fibers
+//! waiting on its worker are handed to the other workers first
+//! (`sched::hand_off_before_blocking`).
 //!
 //! A standard stream that was closed when the program started behaves as a
 //! null device: writes succeed and are discarded, and reads see end of
@@ -284,7 +292,7 @@ pub unsafe extern "C" fn cheby_io_sys_read_file(path: Word) -> Word {
     guarded(None, || {
         // SAFETY: forwarded from the caller.
         let path = unsafe { str_arg(path) };
-        match std::fs::read(path) {
+        match blocking(|| std::fs::read(path)) {
             Ok(data) => text_result(&data, |text| text),
             Err(error) => file_err(path, &error),
         }
@@ -301,7 +309,10 @@ pub unsafe extern "C" fn cheby_io_sys_read_file_bytes(path: Word) -> Word {
     guarded(None, || {
         // SAFETY: forwarded from the caller.
         let path = unsafe { str_arg(path) };
-        lift_file(path, std::fs::read(path).map(|data| values::bytes(&data)))
+        lift_file(
+            path,
+            blocking(|| std::fs::read(path)).map(|data| values::bytes(&data)),
+        )
     })
 }
 
@@ -316,7 +327,10 @@ pub unsafe extern "C" fn cheby_io_sys_write_file(path: Word, text: Word) -> Word
     guarded(None, || {
         // SAFETY: forwarded from the caller.
         let (path, text) = unsafe { (str_arg(path), str_arg(text)) };
-        lift_file(path, std::fs::write(path, text).map(|()| values::nil()))
+        lift_file(
+            path,
+            blocking(|| std::fs::write(path, text)).map(|()| values::nil()),
+        )
     })
 }
 
@@ -331,7 +345,10 @@ pub unsafe extern "C" fn cheby_io_sys_write_file_bytes(path: Word, data: Word) -
     guarded(None, || {
         // SAFETY: forwarded from the caller.
         let (path, data) = unsafe { (str_arg(path), values::bytes_of(data)) };
-        lift_file(path, std::fs::write(path, data).map(|()| values::nil()))
+        lift_file(
+            path,
+            blocking(|| std::fs::write(path, data)).map(|()| values::nil()),
+        )
     })
 }
 
@@ -440,8 +457,9 @@ unsafe fn write_kernel(stream: Stream, text: Word, newline: bool) {
         }
         Stream::Stderr => write_text(&mut io::stderr().lock(), bytes, newline),
     };
+    // The stream's lock was released at the end of its statement.
     if written.is_err() {
-        exit_after_write_failure();
+        terminate(abi::status::ERR);
     }
 }
 
@@ -479,10 +497,10 @@ pub fn flush_stdout() -> io::Result<()> {
 }
 
 /// Flushes standard output before standard input is read (D-346), ending
-/// the program with status 1 when it cannot (D-306).
+/// the program with status 1 when it cannot (D-306, D-709).
 fn flush_before_read() {
     if flush_stdout().is_err() {
-        exit_after_write_failure();
+        terminate(abi::status::ERR);
     }
 }
 
@@ -491,11 +509,40 @@ fn flush_before_read() {
 /// `\n` or `\r\n` is removed (D-305). `Ok(None)` at the end of input.
 fn read_raw_line() -> io::Result<Option<Vec<u8>>> {
     flush_before_read();
+    read_line_unflushed()
+}
+
+/// Reads the next line of standard input as [`read_raw_line`] does, once
+/// standard output has been flushed.
+fn read_line_unflushed() -> io::Result<Option<Vec<u8>>> {
     let mut line = Vec::new();
-    if io::stdin().lock().read_until(b'\n', &mut line)? == 0 {
+    if blocking(|| io::stdin().lock().read_until(b'\n', &mut line))? == 0 {
         return Ok(None);
     }
     Ok(Some(strip_line_ending(line)))
+}
+
+/// Runs `call`, a system call that blocks the calling thread inline
+/// (standard input, file IO), with the running fiber, if any, marked as
+/// blocked in it for the call's duration (D-786): until I1's blocking pool,
+/// a teardown and a halt cannot stop such a fiber, so they skip it and
+/// count it, and the worker it blocks is never joined.
+fn blocking<R>(call: impl FnOnce() -> R) -> R {
+    /// Clears the mark, also if `call` unwinds.
+    struct Mark<'a>(&'a crate::ctx::ExecCtx);
+    impl Drop for Mark<'_> {
+        fn drop(&mut self) {
+            self.0.sched.set_blocking(false);
+        }
+    }
+    let mark = crate::entry::current_fiber().map(|fiber| {
+        fiber.sched.set_blocking(true);
+        crate::sched::hand_off_before_blocking(fiber);
+        Mark(fiber)
+    });
+    let result = call();
+    drop(mark);
+    result
 }
 
 /// Removes a final `\n` or `\r\n` (D-305). A lone `\r` stays.
@@ -511,33 +558,49 @@ fn strip_line_ending(mut line: Vec<u8>) -> Vec<u8> {
 
 /// Reads the next line of standard input for the REPL, through the same
 /// buffered reader as `io::read_line` (D-548), after flushing standard
-/// output (ending the program with status 1 when that fails, D-306). The
-/// line has no ending (D-305), invalid UTF-8 is replaced with U+FFFD, and
-/// the result is `None` at the end of input or when standard input cannot
-/// be read (D-575).
-#[must_use]
-pub fn read_input_line() -> Option<String> {
-    read_raw_line()
+/// output. The line has no ending (D-305), invalid UTF-8 is replaced with
+/// U+FFFD, and the result is `Ok(None)` at the end of input or when
+/// standard input cannot be read (D-575).
+///
+/// # Errors
+///
+/// The flush's error when standard output cannot be flushed: the REPL
+/// then ends at once with status 1, printing nothing (D-306, spec §13.5).
+/// The host's thread runs no entry, so there is no fiber to stop and no
+/// host to tell: the failure goes back to its caller
+/// (GAP(termination-off-entry), D-709).
+pub fn read_input_line() -> io::Result<Option<String>> {
+    flush_stdout()?;
+    Ok(read_line_unflushed()
         .ok()
         .flatten()
-        .map(|line| String::from_utf8_lossy(&line).into_owned())
+        .map(|line| String::from_utf8_lossy(&line).into_owned()))
 }
 
 /// Writes `text` to standard error at once, ending the program on failure
-/// (D-306). For the runtime's own reports, such as panics.
+/// (D-306, D-709: a termination). For the runtime's own reports on an
+/// entry, such as panics.
 pub(crate) fn write_stderr(text: &str) {
-    if io::stderr().lock().write_all(text.as_bytes()).is_err() {
-        exit_after_write_failure();
+    if try_write_stderr(text).is_err() {
+        terminate(abi::status::ERR);
     }
 }
 
-/// Ends the program with status 1, printing nothing (D-306).
-#[expect(
-    clippy::exit,
-    reason = "D-306: a failed write ends the program at once with status 1"
-)]
-pub(crate) fn exit_after_write_failure() -> ! {
-    std::process::exit(abi::status::ERR)
+/// Writes `text` to standard error at once. For a host's thread, which
+/// runs no entry and ends with status 1 itself on a failure (D-306), and
+/// for the runtime's last words before the process ends anyway.
+///
+/// # Errors
+///
+/// The write's IO error.
+pub(crate) fn try_write_stderr(text: &str) -> io::Result<()> {
+    io::stderr().lock().write_all(text.as_bytes())
+}
+
+/// Ends the program with `status`, printing nothing more (D-306, D-709):
+/// a termination, which the running entry's host receives as an outcome.
+fn terminate(status: i32) -> ! {
+    crate::sched::terminate(status)
 }
 
 #[cfg(test)]

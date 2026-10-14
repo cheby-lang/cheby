@@ -135,9 +135,10 @@ pub(super) fn reach(fiber: &ExecCtx, target: &Arc<ScopeState>) -> bool {
 /// releases the scope lock, wakes the won fibers and goes on with the
 /// nested scopes. Never acts on a member after releasing its scope's lock
 /// (a member can retire). An explicit worklist: no recursion in Rust or
-/// over the scope tree (D-700's headroom). Detached fibers belong to no
-/// scope, so no walk reaches them (D-669). Entered with no runtime lock
-/// held.
+/// over the scope tree (D-700's headroom). A detached fiber belongs to no
+/// scope of its spawner, only to its own parentless base scope, so only a
+/// teardown's walk of that base reaches it (D-669,
+/// GAP(detached-base-scope)). Entered with no runtime lock held.
 pub(crate) fn cancel(target: &Arc<ScopeState>) {
     let mut scopes = vec![Arc::clone(target)];
     let mut won: Vec<FiberRef> = Vec::new();

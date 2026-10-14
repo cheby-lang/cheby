@@ -65,7 +65,7 @@ pub use layout::{FieldDesc, LayoutDesc, ctor_layout, type_key, type_layouts};
 pub use lower::{
     EntryRequest, LowerCx, lower_entries, lower_fn, lower_items, lower_module, lower_tests,
 };
-pub use options::{MirOptions, RcMode, count_and_check_with};
+pub use options::{MirOptions, RcMode, check_lowered, count_and_check_with, count_lowered_with};
 pub use reach::{Program, Reach, Root, reachable};
 pub use repr::{CType, ForeignSig, Repr, ctype_of, foreign_sig, repr_of};
 pub use validate::{Stage, validate};
@@ -73,7 +73,9 @@ pub use validate::{Stage, validate};
 /// Validates a freshly lowered unit, inserts reference counts and the
 /// unwind edges (D-698), and validates again with the ownership and
 /// unwinding checks: the pipeline every unit goes through before codegen.
-/// [`count_and_check_with`] with the default options.
+/// [`count_and_check_with`] with the default options. A unit counted on
+/// its own is never inferred, so it borrows only what
+/// [`borrow::apply`] wrote into it (D-715, D-779).
 ///
 /// # Errors
 ///

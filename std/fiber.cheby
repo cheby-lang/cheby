@@ -224,9 +224,7 @@ test "a fiber can have a larger stack" {
   assert outcome == Ok(100000)
 }
 
-/// Starts a detached fiber that calls `f` (D-669). Until the lifecycle
-/// work of M2 lands, it ends the program with a fatal runtime error
-/// (D-754).
+/// Starts a detached fiber that calls `f` (D-669).
 @std_context
 @external(native, "cheby_fiber_sys_spawn_detached")
 @external(js, "./fiber.mjs", "sys_spawn_detached")
@@ -240,6 +238,12 @@ fn sys_spawn_detached<T>(f: fn() -> T)
 /// detached fibers end with the test (D-723).
 pub fn spawn_detached<T>(f: fn() -> T) {
   sys_spawn_detached(f)
+}
+
+test "a detached fiber runs on its own" {
+  let (tx, rx) = channel::new::<Int>(0)
+  spawn_detached(fn() { channel::send(tx, 5) })
+  assert channel::receive(rx) == Ok(5)
 }
 
 // Joining

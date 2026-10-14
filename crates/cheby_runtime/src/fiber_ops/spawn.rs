@@ -1,6 +1,6 @@
 //! Starting a fiber (D-666, D-670, D-677, architecture §5.4): the kernels
-//! `sys_spawn` and `sys_spawn_with_stack` of `std::fiber`, and the stub of
-//! `sys_spawn_detached` (D-754), which package L1r replaces.
+//! `sys_spawn` and `sys_spawn_with_stack` of `std::fiber`
+//! (`sys_spawn_detached` is `detached`'s).
 //!
 //! `sys_spawn_with_stack(owner, stack_bytes, f)` is `sys_spawn` with a
 //! stack of `stack_bytes`, clamped to 1 MiB to 16 GiB and rounded up to
@@ -56,7 +56,6 @@ use crate::alloc::OUT_OF_MEMORY;
 use crate::ctx::ExecCtx;
 use crate::fiber::stack::{MAX_STACK, clamp_user_size};
 use crate::handles::{self, HandleKind};
-use crate::panic::fatal;
 use crate::rc;
 use crate::sched::{self, Shared, SpawnError, StartFn};
 use crate::unwind::guard::guarded;
@@ -238,21 +237,6 @@ pub unsafe extern "C" fn cheby_fiber_sys_spawn_with_stack(
     guarded(Some(ctx), || unsafe {
         spawn(ctx, owner, f, Some(size), "fiber::spawn_with_stack")
     })
-}
-
-/// `fiber::sys_spawn_detached`, private, which `fiber::spawn_detached`
-/// calls. A stub until package L1 (D-754): it ends the program with
-/// `fatal runtime error: fiber::spawn_detached is not supported yet`.
-///
-/// # Safety
-///
-/// `ctx` is the running fiber's context; `f` is borrowed and not read.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_fiber_sys_spawn_detached(ctx: *mut ExecCtx, f: Word) {
-    guarded(Some(ctx), || -> () {
-        let _ = f;
-        fatal(format_args!("fiber::spawn_detached is not supported yet"))
-    });
 }
 
 #[cfg(test)]

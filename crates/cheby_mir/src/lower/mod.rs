@@ -474,7 +474,8 @@ fn finish_unit(
 fn collect_defs(f: &Function, m: &mut Mentions) {
     key_defs(f.key, &mut m.defs);
     let callee = |c: &Callee, m: &mut Mentions| match c {
-        Callee::Direct(d) => {
+        // Lowering writes only `Direct`; the inference adds `Borrowing`.
+        Callee::Direct(d) | Callee::Borrowing(d, _) => {
             m.direct.insert(*d);
         }
         Callee::Code(key) => key_defs(*key, &mut m.defs),

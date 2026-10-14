@@ -92,6 +92,26 @@ pub(crate) fn start_root_with(
         .unwrap()
 }
 
+/// [`start_root_with`] for a root in `group` (GAP(detached-groups)).
+pub(crate) fn start_root_in(
+    runtime: &Runtime,
+    config: &EntryConfig,
+    group: &std::sync::Arc<super::DetachedGroup>,
+    body: impl FnOnce(&ExecCtx) -> u64 + Send + 'static,
+) -> mpsc::Receiver<EntryOutcome> {
+    runtime.shared.register_group(group);
+    runtime
+        .spawn_root_in(
+            config,
+            std::sync::Arc::clone(group),
+            Box::new(move |ctx| {
+                // SAFETY: `ctx` is the root fiber's live control block.
+                body(unsafe { &*ctx })
+            }),
+        )
+        .unwrap()
+}
+
 /// Runs `body` as a root fiber on the smallest stack and returns its word;
 /// panics if it panics or hangs.
 pub(crate) fn root(runtime: &Runtime, body: impl FnOnce(&ExecCtx) -> u64 + Send + 'static) -> u64 {
@@ -171,9 +191,16 @@ pub(crate) struct MonitorProbe {
     /// Whether the monitor leaves due timers to the workers, so that a
     /// test sees the poller fire them.
     pub(crate) skip_timers: std::sync::atomic::AtomicBool,
+    /// Fibers a halt froze (D-708).
+    pub(crate) frozen: std::sync::atomic::AtomicUsize,
 }
 
 impl MonitorProbe {
+    /// A worker left a fiber frozen.
+    pub(crate) fn froze(&self) {
+        self.frozen.fetch_add(1, Ordering::SeqCst);
+    }
+
     /// A control block was written at `fcb`.
     pub(crate) fn created(&self, fcb: *mut ExecCtx) {
         self.retired.lock().remove(&fcb.addr());

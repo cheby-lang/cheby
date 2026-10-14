@@ -80,6 +80,12 @@ pub(crate) struct ScopeState {
     /// is linked and cancelled by the close (step 2); only the fiber that
     /// opened the scope touches it.
     timer: Mutex<Option<TimerHandle>>,
+    /// Whether this is a detached fiber's base scope
+    /// (GAP(detached-base-scope)): parentless, owned by the detached fiber,
+    /// its spawn scope, the root of every scope it opens; it never has
+    /// members, records no first cause (D-669) and is ended by the
+    /// fiber's base frame ([`ScopeState::end_base`]).
+    base: bool,
 }
 
 /// The target of a timed scope's timer (D-671): it holds the scope weakly,
@@ -257,7 +263,36 @@ impl ScopeState {
             depth,
             nested_slot: Mutex::new(None),
             timer: Mutex::new(None),
+            base: false,
         }
+    }
+
+    /// The base scope of the detached fiber `owner`
+    /// (GAP(detached-base-scope)): no parent, so depth 0, and no
+    /// cancellation of the spawner's scopes reaches it (D-669, D-671).
+    /// Every scope the fiber opens hangs below it, so a teardown cancels
+    /// the fiber and everything it started with `cancel::cancel(&base)`
+    /// (D-708, D-710).
+    pub(crate) fn new_base(owner: FiberRef) -> Self {
+        Self {
+            base: true,
+            ..Self::new(None, owner)
+        }
+    }
+
+    /// Ends a detached fiber's base scope, under its lock: its base frame
+    /// calls it before it leaves its group and retires, so a teardown's
+    /// walk that comes later skips the scope (`cancel_step`) and never
+    /// reaches the retired owner. A base scope has no members.
+    pub(crate) fn end_base(&self) {
+        let mut inner = self.inner.lock();
+        if !self.base || !inner.members.is_empty() {
+            drop(inner);
+            fatal(format_args!(
+                "a scope that is not an empty base scope was ended as one"
+            ));
+        }
+        inner.ended = true;
     }
 
     /// The number of proper ancestors of the scope.
@@ -339,6 +374,47 @@ impl ScopeState {
         );
     }
 
+    /// The teardown's survey at this scope (D-786, `sched::lifecycle`),
+    /// under its lock, with no other lock held: returns false, doing
+    /// nothing, if the scope has ended; otherwise calls `look` on the owner
+    /// and on every member, then adds every nested scope still alive to
+    /// `nested`. `look`'s flag says whether a walk from a base scope
+    /// reaches the fiber here first: true for the members and for a base
+    /// scope's owner, false for the owner of any other scope, which is a
+    /// member of an enclosing scope or that base's owner. `look` may read
+    /// only atomics of the control block and takes no lock: a member that
+    /// has not left is not retired, and the owner cannot end before the
+    /// scope has ended (I-7).
+    pub(crate) fn survey_step(
+        &self,
+        look: &mut dyn FnMut(&ExecCtx, bool),
+        nested: &mut Vec<Arc<Self>>,
+    ) -> bool {
+        let inner = self.inner.lock();
+        if inner.ended {
+            return false;
+        }
+        // SAFETY: as in `cancel_step`: neither the owner nor a member that
+        // has not left can be retired while this lock is held and the scope
+        // has not ended, and neither reference outlives the lock.
+        look(unsafe { self.owner.ctx() }, self.base);
+        for slot in &inner.members.slots {
+            if let Slot::Member(fiber) = slot {
+                // SAFETY: as above.
+                look(unsafe { fiber.ctx() }, true);
+            }
+        }
+        nested.extend(
+            inner
+                .nested
+                .slots
+                .iter()
+                .flatten()
+                .filter_map(Weak::upgrade),
+        );
+        true
+    }
+
     /// Unlinks the closing scope from its parent's nested scopes.
     fn unlink(&self) {
         if let Some(parent) = &self.parent
@@ -378,6 +454,12 @@ impl ScopeState {
     /// of the report's two texts and the walk's worklists, and only when it
     /// records.
     pub(crate) fn record_panic(self: &Arc<Self>, report: &PanicReport) -> bool {
+        // D-669: a panic at a detached fiber's top level is reported by its
+        // base frame, not recorded in its base scope, and cancels nothing
+        // (GAP(detached-base-scope)).
+        if self.base {
+            return false;
+        }
         {
             let mut inner = self.inner.lock();
             if inner.first_cause.is_some() || inner.cancelled {

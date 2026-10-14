@@ -44,8 +44,8 @@ bb4:
   resume
 }
 
-fn app::strings(_0: value) -> value check str#0 {
-  entry unwind bb7
+fn app::strings(borrow _0: value) -> value check str#0 {
+  entry unwind bb6
   str#0 = "src/main.cheby:30:4"
   str#1 = "a"
   str#2 = "b"
@@ -53,11 +53,9 @@ bb0:
   _1: bool = call_runtime str_eq(borrow _0, borrow const str#1)
   branch _1, bb1, bb2
 bb1:
-  drop _0
   goto bb3(const int 1)
 bb2:
   _3: bool = call_runtime str_eq(borrow _0, borrow const str#2)
-  drop _0
   branch _3, bb4, bb5
 bb3(_2: int):
   _4: value = box int _2 ; unwind bb6
@@ -68,7 +66,4 @@ bb5:
   goto bb3(const int 3)
 bb6:
   resume
-bb7:
-  drop _0
-  goto bb6()
 }

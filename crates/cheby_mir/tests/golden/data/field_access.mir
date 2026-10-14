@@ -1,36 +1,26 @@
 module app
 
-fn app::y(_0: value) -> value check str#0 {
-  entry unwind bb2
+fn app::y(borrow _0: value) -> value check str#0 {
+  entry unwind bb1
   str#0 = "src/main.cheby:23:4"
 bb0:
   _1: int = field _0.1 of ctor app::Point
-  drop _0
   _2: value = box int _1 ; unwind bb1
   return _2
 bb1:
   resume
-bb2:
-  drop _0
-  goto bb1()
 }
 
-fn app::value(_0: value) -> value check str#0 {
-  entry unwind bb2
+fn app::value(borrow _0: value) -> value check str#0 {
+  entry unwind bb1
   str#0 = "src/main.cheby:27:4"
 bb0:
   _1: value = field _0.0 of ctor app::Labeled
-  dup _1
-  drop _0
   _2: int = unbox int _1
-  drop _1
   _3: value = box int _2 ; unwind bb1
   return _3
 bb1:
   resume
-bb2:
-  drop _0
-  goto bb1()
 }
 
 fn app::name(_0: value) -> value check str#0 {
@@ -48,28 +38,23 @@ bb2:
   goto bb1()
 }
 
-fn app::pages(_0: value) -> value check str#0 {
-  entry unwind bb5
+fn app::pages(borrow _0: value) -> value check str#0 {
+  entry unwind bb4
   str#0 = "src/main.cheby:35:4"
 bb0:
   _1: int = read_tag _0 of app::Item
   switch _1 [0 => bb1, _ => bb2]
 bb1:
   _3: int = field _0.1 of ctor app::Book
-  drop _0
   goto bb3(_3)
 bb2:
   _4: int = field _0.3 of ctor app::Disc
-  drop _0
   goto bb3(_4)
 bb3(_2: int):
   _5: value = box int _2 ; unwind bb4
   return _5
 bb4:
   resume
-bb5:
-  drop _0
-  goto bb4()
 }
 
 fn app::title(_0: value) -> value check str#0 {
@@ -105,44 +90,56 @@ fn app::main() -> value check str#0 {
   str#3 = "b"
 bb0:
   _0: value = alloc ctor app::Point(const int 1, const int 2) ; unwind bb1
-  _1: value = call app::y(_0) ; unwind bb1
+  _1: value = call app::y(borrow _0) ; unwind bb2
+  drop _0
   _2: int = unbox int _1
   drop _1
   _3: value = box int const int 1
   _4: value = const str#1
-  _5: value = alloc ctor app::Labeled(_3, _4) ; unwind bb3
-  _6: value = call app::value(_5) ; unwind bb1
+  _5: value = alloc ctor app::Labeled(_3, _4) ; unwind bb4
+  _6: value = call app::value(borrow _5) ; unwind bb5
+  drop _5
   _7: int = unbox int _6
   drop _6
   _8: value = const str#2
-  _9: value = alloc ctor app::Circle(_8, const int 1) ; unwind bb4
+  _9: value = alloc ctor app::Circle(_8, const int 1) ; unwind bb6
   _10: value = call app::name(_9) ; unwind bb1
   drop _10
   _11: value = const str#3
-  _12: value = alloc ctor app::Book(_11, const int 10) ; unwind bb5
-  _13: value = call app::pages(_12) ; unwind bb1
+  _12: value = alloc ctor app::Book(_11, const int 10) ; unwind bb7
+  _13: value = call app::pages(borrow _12) ; unwind bb8
+  drop _12
   _14: int = unbox int _13
   drop _13
   _15: value = const str#3
-  _16: value = alloc ctor app::Book(_15, const int 10) ; unwind bb6
+  _16: value = alloc ctor app::Book(_15, const int 10) ; unwind bb9
   _17: value = call app::title(_16) ; unwind bb1
   drop _17
   return const nil
 bb1:
   resume
 bb2:
-  drop _3
+  drop _0
   goto bb1()
 bb3:
-  drop _4
-  goto bb2()
-bb4:
-  drop _8
+  drop _3
   goto bb1()
+bb4:
+  drop _4
+  goto bb3()
 bb5:
-  drop _11
+  drop _5
   goto bb1()
 bb6:
+  drop _8
+  goto bb1()
+bb7:
+  drop _11
+  goto bb1()
+bb8:
+  drop _12
+  goto bb1()
+bb9:
   drop _15
   goto bb1()
 }
@@ -153,8 +150,8 @@ layout ctor app::Circle: Shape.Circle tag 0 key 057c1db0258c1332 record [name: v
 layout ctor app::Rect: Shape.Rect tag 1 key 057c1db0258c1332 record [width: int @16, height: int @24, name: value @8]
 layout ctor app::Book: Item.Book tag 0 key 4129d47b6d44f414 record [title: value @8, pages: int @16]
 layout ctor app::Disc: Item.Disc tag 1 key 4129d47b6d44f414 record [label: value @8, title: value @16, minutes: int @24, pages: int @32]
-callee app::y(value) -> value
-callee app::value(value) -> value
+callee app::y(borrow value) -> value
+callee app::value(borrow value) -> value
 callee app::name(value) -> value
-callee app::pages(value) -> value
+callee app::pages(borrow value) -> value
 callee app::title(value) -> value

@@ -458,6 +458,12 @@ impl Shared {
     /// CPU-bound fiber (D-737) and `timeout` cancels CPU-bound work at every
     /// thread count (§10.8). Returns how many fired.
     pub(crate) fn fire_due(&self, now: Instant) -> usize {
+        // C-4: once a halt has started no timer fires, at any of the three
+        // sites; the halt joins every thread that fires, and the entries of
+        // frozen fibers stay in the heap, never dereferenced (D-708).
+        if self.halting() {
+            return 0;
+        }
         self.timers.fire_due(now)
     }
 

@@ -291,7 +291,8 @@ fn pad_chain(func: &Function, pad: BlockId) -> Result<(Vec<Local>, BlockId), Cod
 }
 
 /// How the entry check's slow path of a function releases its counted
-/// parameters itself (GAP(entry-unwind-helper), refining D-698 and D-743).
+/// parameters itself (D-775, refining D-698 and D-743): those its entry
+/// pad drops, which leaves out the borrowed ones (D-715).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct EntryRelease {
     /// The positions in [`Function::params`] of the words the entry pad
@@ -309,7 +310,7 @@ pub(crate) struct EntryRelease {
 /// `resume`. The slow block then calls the helper and branches on its
 /// result to `resume` or to the body, and codegen does not translate the
 /// entry-only part of the chain; the MIR keeps its entry pad
-/// (GAP(entry-unwind-helper)). Otherwise, as with more counted parameters
+/// (D-775). Otherwise, as with more counted parameters
 /// or a precounted body's own entry pad (D-744), the chain is translated
 /// as before. `None` too for a function without an entry pad.
 pub(crate) fn entry_release(func: &Function) -> Option<EntryRelease> {
@@ -399,7 +400,7 @@ impl Translator<'_, '_> {
         }
         // The entry check's unwinding, when the check is made: through the
         // releasing slow path to the entry pad chain's `resume`
-        // (GAP(entry-unwind-helper)), or else to the translated entry pad.
+        // (D-775), or else to the translated entry pad.
         let (release, entry_pad) = if self.checks_entry(check) {
             match entry_release(self.func) {
                 Some(release) => (Some(release), None),
@@ -463,7 +464,7 @@ impl Translator<'_, '_> {
     /// function (unless `check` is [`EntryCheck::None`]), then a jump to
     /// `bb0`. With `release`, the check's slow path releases the counted
     /// parameters itself and branches to the chain's `resume` when it
-    /// started an unwinding (GAP(entry-unwind-helper)); with `entry_pad`,
+    /// started an unwinding (D-775); with `entry_pad`,
     /// it unwinds to that pad (D-698).
     fn entry(
         &mut self,
@@ -518,7 +519,7 @@ impl Translator<'_, '_> {
             self.b.switch_to_block(slow);
             let loc = self.string(loc)?;
             if let Some(release) = release {
-                // GAP(entry-unwind-helper): the helper releases the
+                // D-775: the helper releases the
                 // parameters when it starts an unwinding.
                 let words = Self::param_words(release, rest)?;
                 let resume = self.block(release.resume)?;
@@ -596,7 +597,7 @@ impl Translator<'_, '_> {
         let size = self.b.ins().iconst(types::I64, i64::from(frame_size));
         let args = [ctx, loc, size];
         if let Some(release) = entry_release(self.func) {
-            // GAP(entry-unwind-helper): the helper releases the parameters
+            // D-775: the helper releases the parameters
             // when it starts an unwinding, and the outer function resumes
             // from a cold block of its own.
             let words = Self::param_words(&release, params.get(1..).unwrap_or_default())?;
@@ -1124,10 +1125,18 @@ impl Translator<'_, '_> {
         // the call (D-734).
         let ret;
         let target = match callee {
-            Callee::Direct(def) => {
+            // A borrowing call differs only in which `dup` and `drop` run
+            // around it (D-715): the slot is keyed by the declaration's
+            // ABI signature, its mask included (D-456).
+            Callee::Direct(def) | Callee::Borrowing(def, _) => {
                 let decl = self.unit.callee(*def).ok_or_else(|| {
                     CodegenError::ice(format!("callee {def:?} has no declaration in its unit"))
                 })?;
+                if decl.sig.borrow != callee.borrow_mask() {
+                    return Err(CodegenError::ice(format!(
+                        "a call of {def:?} with another borrow mask than its declaration"
+                    )));
+                }
                 let abi_sig = decl.sig.clone();
                 ret = abi_sig.ret;
                 match self.opts.call_mode {
@@ -1200,7 +1209,7 @@ impl Translator<'_, '_> {
     /// Calls `cheby_rt_panic(ctx, kind, message or 0, loc)`. With `pad`,
     /// the unwinding continues there (D-698, D-733). Without one (code
     /// compiled without unwind edges, D-742), the runtime does not return
-    /// into the code (GAP(edgeless-panics)), and a trap follows the call.
+    /// into the code (D-770), and a trap follows the call.
     fn panic(
         &mut self,
         kind: PanicKind,

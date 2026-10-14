@@ -9,12 +9,12 @@
 //!   into the flag and a sentinel.
 //! - `raise`: `raise_panic` starts a Cheby panic from runtime code, and
 //!   ends the process in code compiled without unwind edges
-//!   (GAP(edgeless-panics)).
+//!   (D-770).
 //! - `record`: [`UnwindState`], the record of the unwinding in flight in
 //!   a fiber's control block (D-685), and the catch points' accessors.
 //! - `entry_slow`: the entry check's slow paths that release a function's
 //!   counted parameters themselves when they start an unwinding
-//!   (GAP(entry-unwind-helper)), so code generation need not translate the
+//!   (D-775), so code generation need not translate the
 //!   entry-only pad chain.
 
 pub(crate) mod entry_slow;
@@ -139,6 +139,9 @@ mod tests {
         match outcome {
             EntryOutcome::Panicked(report) => report,
             EntryOutcome::Returned(word) => panic!("expected a panic, the entry returned {word}"),
+            EntryOutcome::Exited(status) => {
+                panic!("expected a panic, the program ended with status {status}")
+            }
         }
     }
 
@@ -1024,7 +1027,7 @@ mod tests {
     const NO_FIBERS: &str = "ends the process: no fibers on this target";
     const RELEASES: &str = "calls the guarded slow path, which sets the flag and returns, tests the \
                             flag, then releases words only through `rc::drop`, which never raises \
-                            (D-171, GAP(entry-unwind-helper))";
+                            (D-171, D-775)";
 
     /// The `extern "C"` functions of the crate that never unwind, with the
     /// reason, by file (relative to `src/`) and name (`$name` inside a

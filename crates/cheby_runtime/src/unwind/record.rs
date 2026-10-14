@@ -139,7 +139,8 @@ pub(crate) fn take_record(ctx: &ExecCtx) -> Option<UnwindRecord> {
 /// `EntryOutcome::Panicked`. `None` when the entry returned normally.
 ///
 /// Standard output is flushed first, as a panic always did (D-449); a
-/// failed flush ends the program as a failed write does (D-306).
+/// failed flush ends the program as a failed write does (D-306): a
+/// termination (D-709), which the entry's host receives as its outcome.
 pub(crate) fn finish_entry(ctx: &ExecCtx) -> Option<PanicReport> {
     let report = match take_unwound(ctx)? {
         UnwindRecord::Panic(report) => report,
@@ -151,7 +152,7 @@ pub(crate) fn finish_entry(ctx: &ExecCtx) -> Option<PanicReport> {
         )),
     };
     if io::flush_stdout().is_err() {
-        io::exit_after_write_failure();
+        crate::sched::terminate(crate::abi::status::ERR);
     }
     match ctx.entry_mode() {
         EntryMode::Run | EntryMode::Repl => io::write_stderr(&report.to_string()),

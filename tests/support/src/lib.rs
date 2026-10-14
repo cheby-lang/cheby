@@ -10,6 +10,7 @@ pub mod golden;
 pub mod milestone;
 pub mod platform;
 pub mod process;
+pub mod progen;
 pub mod repl;
 pub mod threads;
 pub mod ui;

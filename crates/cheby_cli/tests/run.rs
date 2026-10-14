@@ -370,6 +370,231 @@ fn later_unreported_stdout_failures_exit_with_one() {
     assert_eq!(status, Some(1), "{stderr}");
 }
 
+/// Runs `cheby <command>` (`run` or `test`) on a package whose root
+/// module is `source`, with standard error a pipe whose reading end is
+/// closed before the program starts (so a write to it fails, D-306) and
+/// `CHEBY_THREADS=4`. Returns the status (`None` if it had to be killed
+/// after 30 s) and standard output.
+#[expect(
+    clippy::unwrap_used,
+    reason = "a test helper: failing to spawn or talk to `cheby` fails the test"
+)]
+fn with_broken_stderr(command: &str, name: &str, source: &str) -> (Option<i32>, String) {
+    use std::io::Read as _;
+    use std::process::Stdio;
+
+    let dir = package(name, &[MANIFEST, ("src/main.cheby", source)]);
+    let mut child = Command::new(CHEBY)
+        .args(["--color=never", command])
+        .current_dir(&dir)
+        .env("NO_COLOR", "1")
+        .env("CHEBY_THREADS", "4")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    drop(child.stderr.take());
+    let mut stdout = child.stdout.take().unwrap();
+    let reader = std::thread::spawn(move || {
+        let mut text = String::new();
+        stdout.read_to_string(&mut text).unwrap();
+        text
+    });
+    let start = std::time::Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status.code();
+        }
+        if start.elapsed() > Duration::from_secs(30) {
+            child.kill().unwrap();
+            child.wait().unwrap();
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    (status, reader.join().unwrap())
+}
+
+/// D-306 and D-709: a detached fiber whose write to standard error fails
+/// while `main` still runs ends the program at once with status 1, and
+/// nothing more is printed: `main`, which waits in `channel::receive` for
+/// good, never prints its last line, and no leak check runs.
+#[test]
+fn a_detached_write_failure_while_main_runs_exits_with_one() {
+    let (status, stdout) = with_broken_stderr(
+        "run",
+        "detached_write_failure",
+        "//! A detached fiber writes to a broken standard error while `main` waits.\n\n\
+         import std::channel\nimport std::fiber\nimport std::io\n\n\
+         fn main() {\n  let (keep, never) = channel::new::<Int>(1)\n  \
+         io::println(\"main waits\")\n  \
+         fiber::spawn_detached(fn() { io::eprintln(\"this line is lost\") })\n  \
+         let got = channel::receive(never)\n  \
+         io::println(\"never printed: {got:?}\")\n  \
+         let _ = channel::send(keep, 0)\n}\n",
+    );
+    assert_eq!(stdout, "main waits\n");
+    assert_eq!(status, Some(1));
+}
+
+/// D-785: a write that fails in a detached fiber after `main` has
+/// returned, once standard output is flushed and the exit status fixed,
+/// leaves that status (0 here) and prints nothing more.
+///
+/// The fiber writes a 4 MiB line to standard error, a pipe this test does
+/// not read, so the write blocks inside the output call once the pipe is
+/// full, where no safepoint or cancellation reaches it. `main` sleeps
+/// 100 ms on a timer, prints its line to standard output and returns, and
+/// the host flushes standard output and fixes the status 0. The exit
+/// then waits for the fiber: a teardown (D-710) or a halt (D-073, D-708)
+/// stops a fiber only at its next safepoint. The test checks that the
+/// process is still waiting 300 ms after `main`'s line, then closes the
+/// pipe, so the blocked write fails after the status was fixed.
+#[test]
+fn a_detached_write_failure_after_main_returned_keeps_the_status() {
+    use std::io::{BufRead as _, BufReader, Read as _};
+    use std::process::Stdio;
+
+    let dir = package(
+        "late_write_failure",
+        &[
+            MANIFEST,
+            (
+                "src/main.cheby",
+                "//! A detached fiber's write to standard error fails after `main` returned.\n\n\
+                 import std::duration\nimport std::fiber\nimport std::io\nimport std::selector\n\
+                 import std::string\n\n\
+                 fn main() {\n  let line = string::repeat(\"x\", 4 * 1024 * 1024)\n  \
+                 fiber::spawn_detached(fn() { io::eprintln(line) })\n  \
+                 selector::new()\n  |> selector::after(_, duration::milliseconds(100), fn() { Nil })\n  \
+                 |> selector::select\n  \
+                 io::println(\"main returns\")\n}\n",
+            ),
+        ],
+    );
+    let mut child = Command::new(CHEBY)
+        .args(["--color=never", "run"])
+        .current_dir(&dir)
+        .env("NO_COLOR", "1")
+        .env("CHEBY_THREADS", "4")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let blocked = child.stderr.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let mut first = String::new();
+    stdout.read_line(&mut first).unwrap();
+    assert_eq!(first, "main returns\n");
+    std::thread::sleep(Duration::from_millis(300));
+    let waiting = child.try_wait().unwrap().is_none();
+    drop(blocked);
+    let start = std::time::Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status.code();
+        }
+        if start.elapsed() > Duration::from_secs(30) {
+            child.kill().unwrap();
+            child.wait().unwrap();
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    let mut rest = String::new();
+    stdout.read_to_string(&mut rest).unwrap();
+    assert!(
+        waiting,
+        "the process exited before its blocked write failed: {status:?}"
+    );
+    assert_eq!(rest, "");
+    assert_eq!(status, Some(0));
+}
+
+/// D-783: a write that fails during `cheby test` stops the run at once.
+/// Nothing more is printed, not the failing test's line, not the next
+/// test's, not the summary, and `cheby test` exits with 1.
+#[test]
+fn a_write_failure_ends_cheby_test_with_one() {
+    let (status, stdout) = with_broken_stderr(
+        "test",
+        "test_write_failure",
+        "//! The second test writes to a broken standard error.\n\n\
+         import std::io\n\n\
+         fn main() {\n  Nil\n}\n\n\
+         test \"first\" {\n  assert 1 + 1 == 2\n}\n\n\
+         test \"writes\" {\n  io::eprintln(\"this line is lost\")\n}\n\n\
+         test \"third\" {\n  io::println(\"never printed\")\n}\n",
+    );
+    assert_eq!(stdout, "test app \"first\" ... ok\n");
+    assert_eq!(status, Some(1));
+}
+
+/// D-711 and D-784: a debug build names the leaked runtime kinds on a line
+/// after D-458's. A `Receiver` whose last reference sits in its own
+/// channel's buffer is a cycle a program can build: the `Sender` goes and
+/// closes the channel, but the buffer keeps `Mail(rx)` until the last
+/// `Receiver` goes (D-670), which never happens. The leak is one
+/// `<Receiver>` and one `Mail`. The bless guard keeps leak lines out of UI
+/// goldens (D-445), so this test pins the line.
+#[cfg(debug_assertions)]
+#[test]
+fn a_leaked_receiver_is_named_after_the_leak_line() {
+    let dir = package(
+        "leaked_kinds",
+        &[
+            MANIFEST,
+            (
+                "src/main.cheby",
+                "//! Leaks a receiver that its own channel's buffer holds.\n\nimport std::channel\n\ntype Mail {\n  Mail(channel::Receiver<Mail>)\n}\n\nfn main() {\n  let (tx, rx) = channel::new(1)\n  let _ = channel::send(tx, Mail(rx))\n  Nil\n}\n",
+            ),
+        ],
+    );
+    let out = cheby(&dir, &["run"]);
+    assert_eq!(out.stdout, "");
+    assert_eq!(
+        out.stderr,
+        "error: leak check failed: 2 objects are still live at exit\n\
+         note: leaked 1 <Receiver>, and 1 object of other kinds\n"
+    );
+    assert_eq!(out.status, Some(102));
+}
+
+/// D-784 in `cheby test`: a passing test that leaks a runtime-kind object
+/// fails with D-458's line followed by the kinds line in its failure
+/// block, counted from the test's own delta (D-711).
+#[cfg(debug_assertions)]
+#[test]
+fn a_test_that_leaks_a_receiver_names_it_in_its_block() {
+    let dir = package(
+        "leaked_kinds_test",
+        &[
+            MANIFEST,
+            (
+                "src/main.cheby",
+                "//! A test leaks a receiver that its own channel's buffer holds.\n\n\
+                 import std::channel\n\n\
+                 type Mail {\n  Mail(channel::Receiver<Mail>)\n}\n\n\
+                 fn main() {\n  Nil\n}\n\n\
+                 test \"leaks a receiver\" {\n  let (tx, rx) = channel::new(1)\n  \
+                 assert channel::send(tx, Mail(rx)) == Ok(Nil)\n}\n",
+            ),
+        ],
+    );
+    let out = cheby(&dir, &["test"]);
+    assert_eq!(
+        out.stdout,
+        "test app \"leaks a receiver\" ... FAILED\n\n\
+         ---- app \"leaks a receiver\" ----\n\
+         error: leak check failed: 2 objects are still live at exit\n\
+         note: leaked 1 <Receiver>, and 1 object of other kinds\n\n\
+         test result: FAILED. 0 passed; 1 failed; 0 filtered out\n"
+    );
+    assert_eq!(out.status, Some(1));
+}
+
 /// A `case` with ten list patterns of about 2,000 elements each, longest
 /// first, compiles and runs: the decision tree recurses per tested
 /// element, and the compiler runs on a thread whose stack is large enough
@@ -504,7 +729,7 @@ fn an_invalid_unwind_edges_switch_stops_the_repl() {
 }
 
 /// The fatal line of a raise in code compiled without unwind edges
-/// (GAP(edgeless-panics)).
+/// (D-770).
 const EDGELESS: &str = "fatal runtime error: an unwinding in code compiled without unwind edges (CHEBY_UNWIND_EDGES=off)\n";
 
 /// D-742: `CHEBY_UNWIND_EDGES=off` compiles without the unwind pass, and a
@@ -522,7 +747,7 @@ fn hello_world_runs_without_unwind_edges() {
     assert_eq!(out.status, Some(0));
 }
 
-/// GAP(edgeless-panics): a panic in code compiled with
+/// D-770: a panic in code compiled with
 /// `CHEBY_UNWIND_EDGES=off` flushes standard output, prints its report,
 /// then the fatal line, and ends the process with a nonzero status, never
 /// by a signal: the code has no edges to unwind by.
@@ -560,7 +785,7 @@ fn a_panic_without_unwind_edges_is_fatal_with_its_report() {
     assert_eq!(out.status, Some(101), "{}", out.stderr);
 }
 
-/// GAP(edgeless-panics): constant evaluation carries the setting like
+/// D-770: constant evaluation carries the setting like
 /// `cheby run`, so under `CHEBY_UNWIND_EDGES=off` `cheby check` of a
 /// package whose constant panics ends with the fatal line and a nonzero
 /// status, never by a signal.
@@ -593,4 +818,207 @@ fn a_panicking_constant_without_unwind_edges_is_fatal() {
         out.stderr
     );
     assert_eq!(out.status, Some(1), "{}", out.stderr);
+}
+
+/// Runs `cheby <command>` (`run` or `test`) on a package whose root
+/// module is `source`, at `CHEBY_THREADS=threads`, with standard input a
+/// pipe that stays open and never gets data. Returns the status (`None` if
+/// it had to be killed after 30 s) and standard output.
+#[expect(
+    clippy::unwrap_used,
+    reason = "a test helper: failing to spawn or talk to `cheby` fails the test"
+)]
+fn with_open_stdin(
+    command: &str,
+    name: &str,
+    source: &str,
+    threads: &str,
+) -> (Option<i32>, String) {
+    use std::io::Read as _;
+    use std::process::Stdio;
+
+    let dir = package(name, &[MANIFEST, ("src/main.cheby", source)]);
+    let mut child = Command::new(CHEBY)
+        .args(["--color=never", command])
+        .current_dir(&dir)
+        .env("NO_COLOR", "1")
+        .env("CHEBY_THREADS", threads)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let stdin = child.stdin.take();
+    let mut stdout = child.stdout.take().unwrap();
+    let reader = std::thread::spawn(move || {
+        let mut text = String::new();
+        stdout.read_to_string(&mut text).unwrap();
+        text
+    });
+    let start = std::time::Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status.code();
+        }
+        if start.elapsed() > Duration::from_secs(30) {
+            child.kill().unwrap();
+            child.wait().unwrap();
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    drop(stdin);
+    (status, reader.join().unwrap())
+}
+
+/// A detached fiber that waits in a scope's close for a scoped child
+/// blocked in `io::read_line`, in `main` and in a test.
+const SCOPED_READER: &str = "//! A detached fiber waits for a scoped child blocked in `io::read_line`.\n\n\
+    import std::channel\nimport std::duration\nimport std::fiber\nimport std::io\n\n\
+    fn leave_a_reader() -> Nil {\n  fiber::spawn_detached(fn() {\n    let _ = {\n      \
+    use owner <- fiber::scope()\n      let _ = fiber::spawn(owner, fn() { io::read_line() })\n      \
+    Nil\n    }\n    Nil\n  })\n  let (keep, never) = channel::new::<Nil>(1)\n  \
+    let _ = fiber::timeout(duration::milliseconds(200), fn() { channel::receive(never) })\n  \
+    let _ = channel::send(keep, Nil)\n  Nil\n}\n\n\
+    fn main() {\n  leave_a_reader()\n  io::println(\"main done\")\n}\n\n\
+    test \"a test leaves a reader\" {\n  leave_a_reader()\n  assert True\n}\n\n\
+    test \"the next test runs\" {\n  assert 1 + 1 == 2\n}\n";
+
+/// D-786 (review finding CONC-W2-1 of gate 2): the teardown skips a
+/// detached fiber that waits for a scoped child blocked inline in
+/// `io::read_line`, so `cheby run` exits with 0 while standard input stays
+/// open. Before the fix it waited for the read. Two workers or more: with
+/// one, the blocked call holds the only worker, and `main` with it, until
+/// I1's blocking pool.
+#[test]
+fn a_detached_fiber_waiting_for_a_blocked_reader_does_not_hold_up_run() {
+    for threads in ["2", "4"] {
+        let (status, stdout) = with_open_stdin("run", "scoped_reader_run", SCOPED_READER, threads);
+        assert_eq!(status, Some(0), "CHEBY_THREADS={threads}: {stdout}");
+        assert_eq!(stdout, "main done\n", "CHEBY_THREADS={threads}");
+    }
+}
+
+/// D-786, D-782: the same in `cheby test`: the first test's teardown
+/// skips the detached fiber, the next test runs, and `cheby test` exits
+/// with 0 (two workers or more, as above).
+#[test]
+fn a_detached_fiber_waiting_for_a_blocked_reader_does_not_hold_up_test() {
+    for threads in ["2", "4"] {
+        let (status, stdout) =
+            with_open_stdin("test", "scoped_reader_test", SCOPED_READER, threads);
+        assert_eq!(status, Some(0), "CHEBY_THREADS={threads}: {stdout}");
+        assert!(
+            stdout.contains("\"the next test runs\" ... ok"),
+            "CHEBY_THREADS={threads}: {stdout}"
+        );
+    }
+}
+
+/// A detached reader that wakes `main`, then blocks in `io::read_line`.
+const SIGNALLING_READER: &str = "//! A detached reader signals `main`, then blocks in `io::read_line`.\n\n\
+    import std::channel\nimport std::fiber\nimport std::io\n\n\
+    fn reader(ready: channel::Sender<Nil>) -> Nil {\n  \
+    let assert Ok(Nil) = channel::send(ready, Nil)\n  let _ = io::read_line()\n  Nil\n}\n\n\
+    fn main() {\n  let (ready_tx, ready_rx) = channel::new::<Nil>(1)\n  \
+    fiber::spawn_detached(fn() { reader(ready_tx) })\n  \
+    let assert Ok(Nil) = channel::receive(ready_rx)\n  io::println(\"main returns\")\n}\n\n\
+    test \"a test leaves a reader\" {\n  let (ready_tx, ready_rx) = channel::new::<Nil>(1)\n  \
+    fiber::spawn_detached(fn() { reader(ready_tx) })\n  \
+    assert channel::receive(ready_rx) == Ok(Nil)\n}\n\n\
+    test \"the next test runs\" {\n  assert 1 + 1 == 2\n}\n";
+
+/// D-786 (review finding ROB2-1 of gate 2): a fiber that wakes `main` and
+/// then blocks its worker inline in `io::read_line` hands `main` to
+/// another worker first, so `main` prints and the program exits with 0
+/// while standard input stays open. Before the fix `main` waited in the
+/// blocked worker's runnext slot until the read returned. Two workers or
+/// more: with one, the blocked call holds the only worker until I1's
+/// blocking pool.
+#[test]
+fn a_reader_that_wakes_main_then_blocks_hands_main_off() {
+    for threads in ["2", "4"] {
+        let (status, stdout) =
+            with_open_stdin("run", "signalling_reader_run", SIGNALLING_READER, threads);
+        assert_eq!(status, Some(0), "CHEBY_THREADS={threads}: {stdout}");
+        assert_eq!(stdout, "main returns\n", "CHEBY_THREADS={threads}");
+        let (status, stdout) =
+            with_open_stdin("test", "signalling_reader_test", SIGNALLING_READER, threads);
+        assert_eq!(status, Some(0), "CHEBY_THREADS={threads}: {stdout}");
+        assert!(
+            stdout.contains("\"the next test runs\" ... ok"),
+            "CHEBY_THREADS={threads}: {stdout}"
+        );
+    }
+}
+
+/// ROB2-1: in a reader pipeline, a line is echoed as soon as it arrives,
+/// not when the next one does: the reader sends the line over a
+/// capacity-0 channel, which wakes `main` into its worker's runnext slot,
+/// and then blocks in `io::read_line` for the next line.
+#[test]
+fn a_reader_pipeline_echoes_each_line_before_the_next_arrives() {
+    use std::io::{BufRead as _, BufReader, Write as _};
+    use std::process::Stdio;
+
+    let dir = package(
+        "reader_pipeline",
+        &[
+            MANIFEST,
+            (
+                "src/main.cheby",
+                "//! A reader fiber sends each line to `main`, which echoes it.\n\n\
+                 import std::channel\nimport std::fiber\nimport std::io\n\n\
+                 fn read_all(lines: channel::Sender<String>) -> Nil {\n  case io::read_line() {\n    \
+                 Ok(Some(line)) => {\n      let assert Ok(Nil) = channel::send(lines, line)\n      \
+                 read_all(lines)\n    }\n    _ => Nil\n  }\n}\n\n\
+                 fn echo(lines: channel::Receiver<String>) -> Nil {\n  case channel::receive(lines) {\n    \
+                 Ok(line) => {\n      io::println(\"echo {line}\")\n      echo(lines)\n    }\n    \
+                 Err(_) => Nil\n  }\n}\n\n\
+                 fn main() {\n  let (lines_tx, lines_rx) = channel::new::<String>(0)\n  let _ = {\n    \
+                 use owner <- fiber::scope()\n    let _ = fiber::spawn(owner, fn() { read_all(lines_tx) })\n    \
+                 echo(lines_rx)\n  }\n  Nil\n}\n",
+            ),
+        ],
+    );
+    for threads in ["2", "4"] {
+        let mut child = Command::new(CHEBY)
+            .args(["--color=never", "run"])
+            .current_dir(&dir)
+            .env("NO_COLOR", "1")
+            .env("CHEBY_THREADS", threads)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        let stdout = BufReader::new(child.stdout.take().unwrap());
+        let (lines, received) = std::sync::mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            for line in stdout.lines() {
+                let Ok(line) = line else { break };
+                if lines.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        let mut echoed = Vec::new();
+        for word in ["one", "two"] {
+            stdin.write_all(format!("{word}\n").as_bytes()).unwrap();
+            stdin.flush().unwrap();
+            // The next line is not sent before this one is echoed.
+            let line = received.recv_timeout(Duration::from_secs(30));
+            echoed.push(line.clone());
+            if line.as_deref() != Ok(&format!("echo {word}")) {
+                child.kill().ok();
+                child.wait().ok();
+                panic!("CHEBY_THREADS={threads}: {word} was not echoed: {echoed:?}");
+            }
+        }
+        drop(stdin);
+        let status = child.wait().unwrap();
+        reader.join().unwrap();
+        assert_eq!(status.code(), Some(0), "CHEBY_THREADS={threads}");
+    }
 }

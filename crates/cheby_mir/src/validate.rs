@@ -5,7 +5,9 @@
 //! Structure: one definition per local, every use dominated by its
 //! definition, block parameters matching `goto` arguments, call arguments
 //! matching callee signatures (direct callees from
-//! [`MirModule::callees`]), representations of every operand and result,
+//! [`MirModule::callees`], their borrow masks included, D-715; a borrow
+//! mask only on a top-level function's counted parameters),
+//! representations of every operand and result,
 //! and where the C ABI and tail calls may appear. After RC insertion
 //! ([`Stage::Counted`]), ownership: on every path that returns or
 //! tail-calls, each counted local is consumed exactly once more than it is
@@ -50,7 +52,9 @@
 //! pass with the states the pass's own simulation recorded at each site:
 //! each edge's pad chain (its drops, then `goto`, then `resume`) must
 //! drop exactly what an unwinding leaves held there, and the entry pad's
-//! the counted parameters. The independent second simulation runs where
+//! the counted parameters the function owns
+//! ([`Function::owned_params`]: a borrowed one holds nothing, D-715). The
+//! independent second simulation runs where
 //! [`crate::MirOptions::full_ownership_check`] says, by default in debug
 //! builds and so in every test run. [`validate`] on its own always runs
 //! the full simulation.
@@ -365,13 +369,8 @@ impl FnCx<'_> {
     fn check_pad_chains(&mut self, recorded: &Recorded, reachable: &[bool]) -> Result<(), Ice> {
         let f = self.f;
         if let Some(pad) = f.entry_unwind {
-            let mut params = Vec::new();
-            for &p in &f.params {
-                if f.local(p)?.repr == Repr::Value {
-                    params.push(p);
-                }
-            }
-            params.sort_unstable();
+            // Borrowed parameters hold nothing to release (D-715).
+            let params = f.owned_params()?;
             self.check_pad_chain(pad, &params, || "the entry check".to_owned());
         }
         for (id, block) in f.blocks.iter_enumerated() {
@@ -635,6 +634,7 @@ impl FnCx<'_> {
         {
             self.err(format!("unknown string str#{}", loc.as_u32()));
         }
+        self.check_borrow()?;
         if let Some(fixed) = fixed_sig(f.key) {
             let sig = f.sig()?;
             if sig != fixed {
@@ -647,6 +647,36 @@ impl FnCx<'_> {
                 self.err(format!(
                     "signature {sig:?}, expected the uniform convention (D-453)"
                 ));
+            }
+        }
+        Ok(())
+    }
+
+    /// The function's borrow mask (D-715): only a top-level Cheby function
+    /// that is not `precounted` borrows, and only counted parameters it
+    /// has.
+    fn check_borrow(&mut self) -> Result<(), Ice> {
+        let f = self.f;
+        if f.borrow.is_owned() {
+            return Ok(());
+        }
+        if !matches!(f.key, FnKey::Item(_)) || f.abi != Abi::Cheby || f.precounted {
+            self.err(format!(
+                "borrows {:?}, but only a top-level function that is not precounted may borrow (D-715)",
+                f.borrow
+            ));
+        }
+        for i in f.borrow.indices() {
+            match f.params.get(i) {
+                Some(&p) if f.local(p)?.repr == Repr::Value => {}
+                Some(&p) => self.err(format!(
+                    "borrows parameter {i} (_{}), which is not counted (D-715)",
+                    p.as_u32()
+                )),
+                None => self.err(format!(
+                    "borrows parameter {i}, but has {} (D-715)",
+                    f.params.len()
+                )),
             }
         }
         Ok(())
@@ -814,10 +844,24 @@ impl FnCx<'_> {
 
     fn callee_sig(&mut self, callee: &Callee) -> Option<AbiSig> {
         let sig = match callee {
-            Callee::Direct(def) => {
+            Callee::Direct(def) | Callee::Borrowing(def, _) => {
                 let sig = self.module.callee(*def).map(|d| d.sig.clone());
-                if sig.is_none() {
-                    self.err(format!("direct callee {def:?} has no declaration"));
+                let mask = callee.borrow_mask();
+                match &sig {
+                    None => self.err(format!("direct callee {def:?} has no declaration")),
+                    // The mask is part of the ABI signature (D-715): a call
+                    // with another one would release what the callee holds,
+                    // or leak what it does not.
+                    Some(decl) if decl.borrow != mask => self.err(format!(
+                        "call of {def:?} borrows {mask:?}, but its declaration borrows {:?} (D-715)",
+                        decl.borrow
+                    )),
+                    Some(_) => {}
+                }
+                if matches!(callee, Callee::Borrowing(..)) && mask.is_owned() {
+                    self.err(format!(
+                        "a borrowing call of {def:?} that borrows nothing (D-715)"
+                    ));
                 }
                 sig
             }

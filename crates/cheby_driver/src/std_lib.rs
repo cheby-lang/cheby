@@ -192,14 +192,10 @@ pub const PLANNED_STD_MODULES: &[&str] = &[
 ///
 /// M2's first slice shipped `std::fiber`, `std::channel` and
 /// `std::duration` before cancellation, timers, selectors and detached
-/// fibers existed (D-754). The spec tests of cancellation, timers,
-/// selectors and `spawn_with_stack` have since moved into `std/`; the
-/// entry left waits for detached fibers. Each entry's comment names what
-/// its test needs and the M2 package that brings it.
-pub const PENDING_SPEC_TESTS: &[(&str, &str, &str)] = &[
-    // `spawn_detached`: lifecycle (L1).
-    ("fiber", "a detached fiber runs on its own", "M2"),
-];
+/// fibers existed (D-754). Their spec tests have all moved into `std/`
+/// since, so the list is empty (D-728). An entry's comment names what its
+/// test needs and the package that brings it.
+pub const PENDING_SPEC_TESTS: &[(&str, &str, &str)] = &[];
 
 /// The shipped module at `path` (under `std`).
 #[must_use]

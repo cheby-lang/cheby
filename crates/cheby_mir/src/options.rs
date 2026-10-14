@@ -18,8 +18,9 @@ use crate::validate::{Stage, validate, validate_recorded};
 /// How reference counts are inserted (D-273, D-718).
 ///
 /// Naive counting stays selectable as the differential oracle of the
-/// Perceus passes. Until those passes land, both modes run the same naive
-/// pass, so their MIR is identical (D-746).
+/// Perceus passes. Both modes run the same placement pass; Perceus adds
+/// the borrowing a build infers (D-715, [`MirOptions::borrows`]), so
+/// naive MIR is the MIR before borrowing (D-746).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum RcMode {
     /// The optimized passes (D-273); the default.
@@ -53,11 +54,18 @@ pub struct MirOptions {
     pub unwind_edges: bool,
     /// Whether the validation after the unwind pass runs the full,
     /// independent ownership simulation as well as checking each pad chain
-    /// against the states the pass recorded
-    /// (GAP(unwound-validation-split), D-698, D-735). `true` by default in
-    /// debug builds, so in every test run; `false` in release builds,
-    /// where the pass's simulation is the only one. No variable sets it.
+    /// against the states the pass recorded (D-774, D-698, D-735). `true`
+    /// by default in debug builds, so in every test run; `false` in
+    /// release builds, where the pass's simulation is the only one. No
+    /// variable sets it.
     pub full_ownership_check: bool,
+    /// Whether a build infers borrowing across its units (D-715, D-779;
+    /// [`crate::borrow`]); `true` by default. A REPL session sets it to
+    /// `false` for every unit it lowers, std and package modules included
+    /// (GAP(borrow-off-in-repl)): a later batch could tail-call a function
+    /// compiled with a mask that its slot cannot change. Borrowing needs
+    /// [`RcMode::Perceus`] too ([`MirOptions::borrows`]).
+    pub borrow: bool,
 }
 
 impl Default for MirOptions {
@@ -66,6 +74,7 @@ impl Default for MirOptions {
             rc: RcMode::Perceus,
             unwind_edges: true,
             full_ownership_check: cfg!(debug_assertions),
+            borrow: true,
         }
     }
 }
@@ -73,6 +82,15 @@ impl Default for MirOptions {
 impl MirOptions {
     /// The environment variable that selects the reference-counting mode.
     pub const RC_ENV: &'static str = "CHEBY_RC";
+
+    /// Whether a build with these options infers borrowing (D-715): with
+    /// [`MirOptions::borrow`] and under [`RcMode::Perceus`] only, so naive
+    /// counting stays the MIR before borrowing, the oracle of D-718
+    /// (GAP(borrow-off-in-repl)).
+    #[must_use]
+    pub const fn borrows(&self) -> bool {
+        self.borrow && matches!(self.rc, RcMode::Perceus)
+    }
 
     /// The environment variable that turns the unwind pass off, for the
     /// measurement of D-702 (`cheby_runtime::abi::UNWIND_EDGES_ENV`; this
@@ -110,7 +128,7 @@ impl MirOptions {
     /// the measurement baseline of D-702, honored by every build, release
     /// included); unset or empty keeps it on. Code compiled without edges
     /// unwinds nowhere: a raise in it ends the process with its report
-    /// (GAP(edgeless-panics)).
+    /// (D-770).
     ///
     /// # Errors
     ///
@@ -156,28 +174,63 @@ impl MirOptions {
     }
 }
 
+fn report(stage: &str, errors: &[String]) -> Ice {
+    Ice::new(format!("invalid MIR {stage}:\n  {}", errors.join("\n  ")))
+}
+
 /// [`count_and_check`](crate::count_and_check) with options: validates a
-/// freshly lowered unit, inserts reference counts as `options.rc` says,
-/// then, when `options.unwind_edges`, the unwind edges and pads (D-698,
-/// the last pass, D-262), and validates again: at [`Stage::Unwound`] after
-/// the unwind pass, at [`Stage::Counted`] without it.
-///
-/// With the pass, its ownership simulation is the check of the counts
-/// (GAP(unwound-validation-split)): a broken rule it finds is reported as
-/// invalid MIR after reference counting, and the validation after the
-/// pass checks each pad chain against the states it recorded, adding the
-/// full simulation only when `options.full_ownership_check`.
+/// freshly lowered unit ([`check_lowered`]), then counts it
+/// ([`count_lowered_with`]). The unit is counted on its own, so it is
+/// never inferred: what it borrows was written by
+/// [`crate::borrow::apply`], if anything.
 ///
 /// # Errors
 ///
 /// An [`Ice`] listing the validator's findings.
 pub fn count_and_check_with(module: &mut MirModule, options: &MirOptions) -> Result<(), Ice> {
-    let report = |stage: &str, errors: Vec<String>| {
-        Ice::new(format!("invalid MIR {stage}:\n  {}", errors.join("\n  ")))
-    };
-    validate(module, Stage::Lowered).map_err(|e| report("after lowering", e))?;
+    check_lowered(module)?;
+    count_lowered_with(module, options)
+}
+
+/// Validates a freshly lowered unit at [`Stage::Lowered`], the first step
+/// of [`count_and_check_with`], which a build runs on every unit before
+/// it infers borrowing across them (D-779).
+///
+/// # Errors
+///
+/// An [`Ice`] listing the validator's findings.
+pub fn check_lowered(module: &MirModule) -> Result<(), Ice> {
+    validate(module, Stage::Lowered).map_err(|e| report("after lowering", &e))
+}
+
+/// The rest of [`count_and_check_with`], for a unit [`check_lowered`]
+/// accepted (and [`crate::borrow::apply`] may have changed since): inserts
+/// reference counts as `options.rc` says, then, when
+/// `options.unwind_edges`, the unwind edges and pads (D-698, the last
+/// pass, D-262), and validates again: at [`Stage::Unwound`] after the
+/// unwind pass, at [`Stage::Counted`] without it.
+///
+/// With the pass, its ownership simulation is the check of the counts
+/// (D-774): a broken rule it finds is reported as invalid MIR after
+/// reference counting, and the validation after the pass checks each pad
+/// chain against the states it recorded, adding the full simulation only
+/// when `options.full_ownership_check`. A unit that borrows something
+/// under options that do not borrow ([`MirOptions::borrows`]) is an
+/// internal error.
+///
+/// # Errors
+///
+/// An [`Ice`] listing the validator's findings.
+pub fn count_lowered_with(module: &mut MirModule, options: &MirOptions) -> Result<(), Ice> {
+    if !options.borrows() && crate::borrow::borrows_anything(module) {
+        return Err(Ice::new(format!(
+            "a unit of {} borrows, but its options do not (D-715)",
+            module.path
+        )));
+    }
     match options.rc {
-        // Identical until the Perceus passes land (D-718).
+        // The same placement pass in both modes; Perceus differs only by
+        // the borrowing the build inferred before (D-715, D-718).
         RcMode::Perceus | RcMode::Naive => crate::rc::insert_module(module)?,
     }
     if options.unwind_edges {
@@ -186,15 +239,14 @@ pub fn count_and_check_with(module: &mut MirModule, options: &MirOptions) -> Res
         // once more, not twice.
         let recorded = unwind_recording(module)?;
         validate_recorded(module, &recorded, options.full_ownership_check)
-            .map_err(|e| report("after the unwind pass", e))
+            .map_err(|e| report("after the unwind pass", &e))
     } else {
-        validate(module, Stage::Counted).map_err(|e| report("after reference counting", e))
+        validate(module, Stage::Counted).map_err(|e| report("after reference counting", &e))
     }
 }
 
 /// Runs the unwind pass over every function of `module` and returns what
-/// its simulation recorded for each, in order
-/// (GAP(unwound-validation-split)).
+/// its simulation recorded for each, in order (D-774).
 ///
 /// # Errors
 ///
@@ -256,8 +308,26 @@ mod tests {
         assert_eq!(options.rc, RcMode::Perceus);
         assert!(options.unwind_edges);
         // Every test run checks ownership with the full simulation
-        // (GAP(unwound-validation-split)).
+        // (D-774).
         assert_eq!(options.full_ownership_check, cfg!(debug_assertions));
         assert_eq!(RcMode::default(), RcMode::Perceus);
+    }
+
+    #[test]
+    fn borrow_only_with_perceus_and_the_switch() {
+        // D-715, D-718: naive counting is the MIR before borrowing, and a
+        // REPL session turns borrowing off (GAP(borrow-off-in-repl)).
+        let options = MirOptions::default();
+        assert!(options.borrow && options.borrows());
+        let naive = MirOptions {
+            rc: RcMode::Naive,
+            ..MirOptions::default()
+        };
+        assert!(!naive.borrows());
+        let repl = MirOptions {
+            borrow: false,
+            ..MirOptions::default()
+        };
+        assert!(!repl.borrows());
     }
 }

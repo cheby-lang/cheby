@@ -63,7 +63,8 @@ use cheby_runtime::alloc::Domain;
 use cheby_runtime::entry::{Tramp0, Tramp1, Tramp2, Tramp3, Tramp4};
 use cheby_runtime::layout::{self as rt_layout, FieldKind, LayoutInfo};
 use cheby_runtime::{
-    Callbacks, CodeToken, EntryConfig, EntryFn, EntryOutcome, RunConfig, Runtime, RuntimeError,
+    Callbacks, CodeToken, DetachedGroup, EntryConfig, EntryFn, EntryOutcome, RunConfig, Runtime,
+    RuntimeError,
 };
 
 mod memory;
@@ -261,8 +262,19 @@ impl Drop for CodeKeepAlive {
             // its thunk returned, or panicked and unwound out of the
             // generated frames, D-733); and this is the last token, so no
             // `Runtime` that ran its code as fibers holds it, and a runtime
-            // releases its tokens only after its workers stopped (D-708).
-            // Without this, cranelift-jit keeps finalized memory forever.
+            // releases its tokens only once none of its fibers can run
+            // again (D-708, I-6): `shutdown` and `Drop` first tear down
+            // every group of detached fibers, cancelling and unwinding each
+            // member until the group is empty (D-710, D-723), then stop
+            // and join the workers; a halt instead freezes every fiber at a
+            // safepoint, where it never runs again, and joins every thread,
+            // the poll holder included (D-073, D-709). Either way the
+            // tokens go last. A worker whose fiber is blocked inline in a
+            // system call (D-786) is never joined, and its runtime then
+            // keeps (leaks) its tokens, so this never runs while such a
+            // worker can return into the code. `run_main`'s runtime holds a
+            // token too (`Entry::run_main`). Without this, cranelift-jit
+            // keeps finalized memory forever.
             unsafe { module.free_memory() };
         }
     }
@@ -414,7 +426,7 @@ impl Jit {
     /// Whether the code this JIT compiles has unwind edges
     /// ([`CodegenOptions::unwind_edges`], D-742), which every entry it runs
     /// records in its control block: a raise in a fiber whose code has
-    /// none ends the process with its report (GAP(edgeless-panics)).
+    /// none ends the process with its report (D-770).
     /// Constant evaluation and the REPL copy it into the configurations
     /// of the entries they build, as [`Entry::run`] does.
     #[must_use]
@@ -990,6 +1002,32 @@ impl Entry<'_> {
         unsafe { runtime.run_root(self.thunk, &config) }.map_err(JitError::Runtime)
     }
 
+    /// [`Entry::run_root`] in `group`: the detached fibers that the entry
+    /// or its fibers spawn join `group`, which the host tears down when it
+    /// is done with them ([`Runtime::teardown`]), as `cheby test` does
+    /// after each test (D-723, D-782). The runtime keeps the JIT's code
+    /// alive until it stops, as for [`Entry::run_root`], so a detached
+    /// fiber that outlives the entry may still run it after the `Jit` is
+    /// dropped.
+    ///
+    /// # Errors
+    ///
+    /// [`JitError::Runtime`] if the entry cannot run.
+    pub fn run_root_in(
+        self,
+        runtime: &Runtime,
+        config: &EntryConfig,
+        group: &Arc<DetachedGroup>,
+    ) -> Result<EntryOutcome, JitError> {
+        let config = self.config(config);
+        runtime.attach(self.jit.code_token());
+        // SAFETY: as in `run_root`: an entry thunk with the `EntryFn` ABI
+        // built by the JIT, whose code and data the runtime keeps alive
+        // through the token attached above while its fibers, detached ones
+        // in `group` included, may run them.
+        unsafe { runtime.run_root_in(self.thunk, &config, group) }.map_err(JitError::Runtime)
+    }
+
     /// `config` with the JIT's trampolines, domain and `unwind_edges`.
     fn config(&self, config: &EntryConfig) -> EntryConfig {
         EntryConfig {
@@ -1017,10 +1055,20 @@ impl Entry<'_> {
             callbacks: self.jit.callbacks(),
             domain: self.jit.domain(),
             unwind_edges: self.jit.unwind_edges(),
+            code: Some(self.jit.code_token()),
             ..config
         };
-        // SAFETY: as in `run`; `run_main` stops its runtime before it
-        // returns.
+        // SAFETY: as in `run`; and the runtime `run_main` makes for the run
+        // holds the JIT's code token, so the `Jit` may be dropped once it
+        // returns: it tears down `main`'s detached fibers (cancelled and
+        // unwound until their group is empty, D-710), or under
+        // `AtExit::Freeze` freezes them at a safepoint, and after a
+        // termination completes the halt (D-073, D-708, D-709), and it
+        // joins every thread of the runtime, releasing the token after the
+        // joins. The one exception is a worker whose fiber is blocked
+        // inline in a system call (D-786): it is never joined, and the
+        // runtime then keeps (leaks) the token, so the code that worker
+        // returns into stays mapped.
         unsafe { cheby_runtime::run_main(self.thunk, config) }.map_err(JitError::Runtime)
     }
 }

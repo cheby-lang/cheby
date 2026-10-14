@@ -28,10 +28,15 @@ use cheby_resolve::{
 use cheby_syntax::SyntaxTree;
 use cheby_types::{Tests, TypesInput, build_interface, check_bodies_with, thir};
 
-use crate::borrow::{BorrowMask, IfaceEligibility, collect_facts, infer};
+use cheby_iface::DefId;
+
+use crate::borrow::{
+    BorrowMask, BuildFacts, IfaceEligibility, Masks, collect_facts, infer, infer_build,
+};
 use crate::{
-    Defs, EntryKind, EntryRequest, LowerCx, MirModule, Program, Root, Stage, count_and_check, dump,
-    dump_function, lower_entries, lower_items, lower_tests, reachable, validate,
+    Defs, EntryKind, EntryRequest, LowerCx, MirModule, MirOptions, Program, Root, Stage,
+    count_lowered_with, dump, dump_function, lower_entries, lower_items, lower_tests, reachable,
+    validate,
 };
 
 /// What [`lower_source`] produced.
@@ -42,28 +47,26 @@ pub(crate) struct Lowered {
     /// `_uncounted` and `_inferred` helpers stop after the validation at
     /// `Stage::Lowered`.
     pub units: Vec<MirModule>,
-    /// What borrowing inference gave (D-715, D-779): the mask of every
-    /// function that borrows something, by its path (`app::sum`). Empty
-    /// unless an `_inferred` helper built the units.
+    /// What borrowing inference gave (D-715, D-779, D-787): the mask of
+    /// every function that borrows something, by its path (`app::sum`).
+    /// Empty for the `_uncounted` helpers.
     pub masks: BTreeMap<String, BorrowMask>,
 }
 
 /// What the back end of a test build does after lowering each unit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Mode {
-    /// Reference counts, unwind edges and validation, as `cheby run`.
+    /// As `cheby run`: borrowing inferred over all the units and written
+    /// into them (D-779), then reference counts, unwind edges and
+    /// validation.
     Counted,
     /// Only the validation at `Stage::Lowered`.
     Uncounted,
     /// As `Uncounted`, then borrowing inference over all the units
-    /// ([`crate::borrow`]); `package_visible` is
-    /// [`crate::borrow::IfaceEligibility::with_package_visible`]. With
+    /// ([`crate::borrow`]), with the units left as lowered. With
     /// `reach_all`, every function of every loaded module is lowered, not
     /// only what `main` reaches.
-    Inferred {
-        package_visible: bool,
-        reach_all: bool,
-    },
+    Inferred { reach_all: bool },
 }
 
 impl Lowered {
@@ -279,29 +282,25 @@ pub(crate) fn lower_source_with_tests_uncounted(files: &[(&str, &str)]) -> Lower
 
 /// The uncounted units of package `package` (with its tests when
 /// `with_tests`) and the borrow masks inference gives over all of them
-/// ([`Lowered::masks`], D-779).
+/// ([`Lowered::masks`], D-779, D-787).
 pub(crate) fn lower_package_inferred(
     package: &str,
     files: &[(&str, &str)],
     with_tests: bool,
-    package_visible: bool,
 ) -> Result<Lowered, String> {
     lower_package_with(
         package,
         files,
         with_tests,
         None,
-        Mode::Inferred {
-            package_visible,
-            reach_all: false,
-        },
+        Mode::Inferred { reach_all: false },
     )
 }
 
 /// The masks of every function of every shipped std module, as a build
 /// that lowers all of them sees it (no tests units): a package `app`
 /// that imports each module.
-pub(crate) fn lower_std_inferred(package_visible: bool) -> Result<Lowered, String> {
+pub(crate) fn lower_std_inferred() -> Result<Lowered, String> {
     let imports: Vec<String> = shipped()
         .into_iter()
         .map(|(path, _)| format!("import std::{path}"))
@@ -312,17 +311,13 @@ pub(crate) fn lower_std_inferred(package_visible: bool) -> Result<Lowered, Strin
         &[("", source.as_str())],
         false,
         None,
-        Mode::Inferred {
-            package_visible,
-            reach_all: true,
-        },
+        Mode::Inferred { reach_all: true },
     )
 }
 
-/// [`lower_package_inferred`] for package `app`, `priv` functions only
-/// (P1a's reading; D-787's is `package_visible`); front-end errors panic.
+/// [`lower_package_inferred`] for package `app`; front-end errors panic.
 pub(crate) fn lower_source_inferred(files: &[(&str, &str)], with_tests: bool) -> Lowered {
-    lower_package_inferred("app", files, with_tests, false)
+    lower_package_inferred("app", files, with_tests)
         .unwrap_or_else(|errors| panic!("front-end errors: {errors}"))
 }
 
@@ -549,12 +544,8 @@ fn back_end(
     roots.extend(tests.iter().map(|&(_, t)| Root::Test(t)));
     let reach = reachable(&program, &roots).unwrap();
     let mut units = Vec::new();
-    let mut push = |mut unit: MirModule| {
-        if mode == Mode::Counted {
-            if let Err(ice) = count_and_check(&mut unit) {
-                panic!("{ice}\n{}", dump(&unit).unwrap_or_default());
-            }
-        } else if let Err(errors) = validate(&unit, Stage::Lowered) {
+    let mut push = |unit: MirModule| {
+        if let Err(errors) = validate(&unit, Stage::Lowered) {
             panic!(
                 "invalid lowered MIR:\n  {}\n{}",
                 errors.join("\n  "),
@@ -611,45 +602,72 @@ fn back_end(
         info: Some(&t.entry),
     }));
     push(lower_entries(&requests, &cx).unwrap());
-    let masks = match mode {
-        Mode::Inferred {
-            package_visible, ..
-        } => infer_all(&units, checked, set, modules, globals, package_visible),
-        Mode::Counted | Mode::Uncounted => BTreeMap::new(),
+    let per_unit = |unit: &MirModule, facts: &BuildFacts| {
+        Ok::<_, cheby_iface::Ice>(infer_unit(unit, facts, checked, set, modules, globals))
     };
+    let masks = finish(&mut units, mode, &per_unit);
     (units, masks)
 }
 
-/// Borrowing inference over a build's lowered units, as a driver runs it
-/// (D-779): the facts of every unit, then each code unit with its own
-/// module's interfaces. Masks by function path.
-fn infer_all(
-    units: &[MirModule],
+/// After lowering every unit: the borrowing inference and the counting
+/// that `mode` asks for (D-779). The masks by function path.
+fn finish(
+    units: &mut [MirModule],
+    mode: Mode,
+    per_unit: &dyn Fn(&MirModule, &BuildFacts) -> Result<Masks, cheby_iface::Ice>,
+) -> BTreeMap<String, BorrowMask> {
+    let masks = match mode {
+        Mode::Inferred { .. } => {
+            let refs: Vec<&MirModule> = units.iter().collect();
+            let facts = collect_facts(&refs);
+            let mut found = BTreeMap::new();
+            for unit in units.iter() {
+                found.extend(per_unit(unit, &facts).unwrap());
+            }
+            found
+        }
+        // As a build does it (D-779): every unit lowered, then the masks
+        // inferred over all of them and written into each, then counting.
+        Mode::Counted => {
+            let found = infer_build(units, per_unit).unwrap();
+            for unit in units.iter_mut() {
+                if let Err(ice) = count_lowered_with(unit, &MirOptions::default()) {
+                    panic!("{ice}\n{}", dump(unit).unwrap_or_default());
+                }
+            }
+            found
+        }
+        Mode::Uncounted => BTreeMap::new(),
+    };
+    masks
+        .into_iter()
+        .map(|(def, mask)| {
+            let path = units.iter().find_map(|u| u.name(def).ok()).unwrap().path();
+            (path, mask)
+        })
+        .collect()
+}
+
+/// The masks [`infer`] gives a lowered code unit of the build (D-779,
+/// D-787); nothing for another unit.
+fn infer_unit(
+    unit: &MirModule,
+    facts: &BuildFacts,
     checked: &BTreeMap<ModuleId, (thir::Module, Vec<ModuleId>)>,
     set: &InterfaceSet,
     modules: &ModuleTable,
     globals: &Globals,
-    package_visible: bool,
-) -> BTreeMap<String, BorrowMask> {
-    let refs: Vec<&MirModule> = units.iter().collect();
-    let facts = collect_facts(&refs);
-    let mut out = BTreeMap::new();
-    for unit in units {
-        let crate::UnitKind::Code(id) = unit.unit else {
-            continue;
-        };
-        let (thir, dep_ids) = &checked[&id];
-        let readable = DepView::new(set, dep_ids);
-        let defs = Defs {
-            own: set.get(id),
-            deps: &readable,
-            modules,
-            globals,
-        };
-        let eligibility = IfaceEligibility::new(defs, thir).with_package_visible(package_visible);
-        for (def, mask) in infer(unit, &facts, &eligibility) {
-            out.insert(unit.name(def).unwrap().path(), mask);
-        }
-    }
-    out
+) -> BTreeMap<DefId, BorrowMask> {
+    let crate::UnitKind::Code(id) = unit.unit else {
+        return BTreeMap::new();
+    };
+    let (thir, dep_ids) = &checked[&id];
+    let readable = DepView::new(set, dep_ids);
+    let defs = Defs {
+        own: set.get(id),
+        deps: &readable,
+        modules,
+        globals,
+    };
+    infer(unit, facts, &IfaceEligibility::new(defs, thir))
 }

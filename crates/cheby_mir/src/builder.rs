@@ -390,6 +390,7 @@ impl FunctionBuilder {
             entry_loc: self.entry_loc,
             entry_unwind: self.entry_unwind,
             precounted: self.precounted,
+            borrow: crate::borrow::BorrowMask::OWNED,
         })
     }
 }

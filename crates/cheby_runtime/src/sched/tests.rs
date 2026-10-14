@@ -246,6 +246,48 @@ fn a_ping_pong_through_runnext_lets_the_local_deque_run() {
     }
 }
 
+/// D-688, §10.1 (review finding ROB2-3 of gate 2): on one worker, a chain
+/// of fibers that each spawn their successor into the runnext slot and
+/// end does not starve a fiber waiting in the local deque. A preemption
+/// lands after the spawn, so the yield never breaks the chain; every 61st
+/// round the worker takes the deque before the slot, as it takes the
+/// global queue first.
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+fn a_spawn_chain_through_runnext_lets_the_local_deque_run() {
+    /// Where the chain gives up waiting for the deque's fiber.
+    const LIMIT: u64 = 100_000;
+    /// One link: ends the chain once the deque's fiber has run (or at
+    /// `LIMIT`), reporting its index; otherwise spawns the next link into
+    /// the runnext slot, then runs an entry check.
+    fn link(fiber: &ExecCtx, index: u64, ran: Arc<AtomicBool>, done: Arc<Mailbox>) {
+        if ran.load(Ordering::SeqCst) || index >= LIMIT {
+            done.send(index, false);
+            return;
+        }
+        spawn(fiber, true, move |next| link(next, index + 1, ran, done));
+        entry_check(fiber);
+    }
+    let runtime = runtime(1);
+    let steps = root(&runtime, |me| {
+        let done = Arc::new(Mailbox::default());
+        let stop = Arc::new(AtomicBool::new(false));
+        {
+            let stop = Arc::clone(&stop);
+            spawn(me, false, move |_| stop.store(true, Ordering::SeqCst));
+        }
+        {
+            let (stop, done) = (Arc::clone(&stop), Arc::clone(&done));
+            spawn(me, true, move |fiber| link(fiber, 0, stop, done));
+        }
+        done.receive(me)
+    });
+    assert!(
+        steps < 1_000,
+        "the deque's fiber ran only after {steps} links of the chain"
+    );
+}
+
 /// D-689: idle workers steal from the deque of the worker that spawns.
 #[test]
 #[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]

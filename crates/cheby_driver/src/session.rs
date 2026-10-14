@@ -141,7 +141,8 @@ impl std::fmt::Debug for Start {
 pub struct Session {
     options: SessionOptions,
     /// The MIR options every entry is lowered with, read once when the
-    /// session starts (`CHEBY_RC`, plan §2.3).
+    /// session starts (`CHEBY_RC`, plan §2.3), with borrowing off
+    /// (GAP(borrow-off-in-repl)).
     mir: MirOptions,
     sources: SourceMap,
     front: Frontend,
@@ -234,7 +235,15 @@ impl Session {
     /// compiler's `CHEBY_RC` and `CHEBY_UNWIND_EDGES`.
     pub fn start(dir: &Path, options: SessionOptions) -> Result<Start, Error> {
         cheby_runtime::sched::threads_from_env().map_err(|e| Error::new(e.to_string()))?;
-        let mir = crate::backend::mir_options_from_env()?;
+        // No borrowing in any unit a session lowers, std and package
+        // modules included (D-715, GAP(borrow-off-in-repl)): a later batch
+        // could tail-call a function compiled with a mask its slot could
+        // not change. Each unit is counted on its own anyway, which never
+        // infers; the switch says so where the options are made.
+        let mir = MirOptions {
+            borrow: false,
+            ..crate::backend::mir_options_from_env()?
+        };
         let codegen = crate::backend::codegen_options(mir, false);
         let mut sources = SourceMap::new();
         let mut diagnostics = Vec::new();
@@ -746,7 +755,7 @@ impl Session {
         };
         // The entry carries whether the session's code has unwind edges
         // (D-742): under `CHEBY_UNWIND_EDGES=off` a raise ends the process
-        // with its report (GAP(edgeless-panics)).
+        // with its report (D-770).
         let config = EntryConfig {
             stack_size: cheby_runtime::entry::DEFAULT_ROOT_STACK_SIZE,
             unwind_edges: self.jit.unwind_edges(),
@@ -764,6 +773,15 @@ impl Session {
             EntryOutcome::Panicked(_) => {
                 self.jit.revert_repoints()?;
                 return Ok(false);
+            }
+            // A write failed (D-306, D-709): the entry's isolated thread is
+            // parked for good, so the code it runs is kept (leaked) and no
+            // value it may reach is dropped. The session ends with the
+            // status and prints nothing more (spec §13.5): the REPL is the
+            // host here, and nothing else of the process may run.
+            EntryOutcome::Exited(status) => {
+                std::mem::forget(self.jit.code_token());
+                std::process::exit(status)
             }
         };
         self.kept.push(word);
@@ -2250,6 +2268,47 @@ mod tests {
         assert_eq!(printed[7], "20 : Int\n");
         assert!(printed[8].starts_with("error[E0042]"), "{}", printed[8]);
         assert!(printed[8].contains("<repl:9>:1:1"), "{}", printed[8]);
+    }
+
+    /// No unit a session lowers borrows (D-715, GAP(borrow-off-in-repl)):
+    /// the session's options turn borrowing off whatever `CHEBY_RC` says,
+    /// and a function that a build would borrow in (a package-visible
+    /// function that only reads its `String`) runs, then is redefined with
+    /// the same signature, through its all-owned slot. Counting a unit that
+    /// borrows under these options would be an internal error.
+    #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+    )]
+    fn borrow_off_in_every_unit_a_session_lowers() {
+        std::thread::Builder::new()
+            .stack_size(256 << 20)
+            .spawn(|| {
+                let dir = std::env::temp_dir();
+                let Start::Ready(mut session, _) =
+                    Session::start(&dir, SessionOptions::default()).unwrap()
+                else {
+                    panic!("the session did not start");
+                };
+                assert!(!session.mir.borrow && !session.mir.borrows());
+                let mut printed = Vec::new();
+                for entry in [
+                    "fn check(s: String) -> Bool {\n  s == \"x\"\n}",
+                    "check(\"x\")",
+                    "fn check(s: String) -> Bool {\n  s == \"y\"\n}",
+                    "check(\"x\")",
+                ] {
+                    let mut out = Buffer::default();
+                    session.eval(entry, &mut out).unwrap();
+                    printed.push(out.text);
+                }
+                assert_eq!(printed[1], "True : Bool\n");
+                assert_eq!(printed[3], "False : Bool\n");
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 
     /// `--deny-warnings` refuses an entry with a warning (D-549).

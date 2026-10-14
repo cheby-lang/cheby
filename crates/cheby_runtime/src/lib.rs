@@ -75,5 +75,5 @@ pub use entry::{
 };
 pub use layout::{FieldInfo, FieldKind, LayoutError, LayoutInfo, LayoutKind};
 pub use panic::PanicReport;
-pub use sched::{CodeToken, Runtime, RuntimeConfig};
+pub use sched::{CodeToken, DetachedGroup, Runtime, RuntimeConfig, TeardownReport};
 pub use symbols::{complete_modules, symbols};

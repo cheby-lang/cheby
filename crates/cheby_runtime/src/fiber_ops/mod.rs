@@ -9,6 +9,8 @@
 //!   of the parts of `std::fiber` that later packages bring.
 //! - [`base`]: `fiber_main`, the base frame of a spawned fiber (D-694), and
 //!   the join cell its result goes to (D-707).
+//! - [`detached`]: the kernel `sys_spawn_detached` and the base frame of a
+//!   detached fiber, with its base scope (D-669, D-694).
 //! - [`join`]: the kernel `sys_join` (D-668, D-707).
 //! - [`channel`]: Go's `hchan` (D-704): the kernels `new`, `send` and
 //!   `receive`, and the handles' finalizers (D-672).
@@ -69,7 +71,15 @@
 //!    taken only by an idle worker, with `try_lock`, and is out of reach
 //!    of this module.)
 //! 5. the unwind record's lock (`unwind::record`): a leaf too, taken with
-//!    no other lock held.
+//!    no other lock held;
+//! 6. a detached group's lock (`sched::DetachedGroup`): a leaf, taken with
+//!    no scope, channel or fiber lock held, and nothing is taken under it
+//!    (a teardown cancels after releasing it); the runtime's registries of
+//!    groups and of waiting root hosts (`sched`) are leaves too.
+//!
+//! A teardown, a halt and a termination (`sched::lifecycle`) are entered
+//! with no runtime lock held, like `start_panic`, `start_cancel` and
+//! [`cancel::cancel`] below.
 //!
 //! The fiber's own locks of [`FiberConc`] (its spawn scope, open scopes and
 //! last failure) are taken only by the fiber itself and never with another
@@ -90,6 +100,7 @@
 pub(crate) mod base;
 pub(crate) mod cancel;
 pub(crate) mod channel;
+pub(crate) mod detached;
 pub(crate) mod join;
 pub(crate) mod scope;
 pub(crate) mod select;
@@ -105,6 +116,7 @@ use crate::abi::Word;
 use crate::ctx::ExecCtx;
 use crate::panic::fatal;
 use crate::rc;
+use crate::sched::DetachedGroup;
 
 use self::scope::ScopeState;
 
@@ -133,6 +145,13 @@ pub(crate) struct FiberConc {
     /// The value the last `select` chose and the random state that orders
     /// a select's arms (D-673, D-695).
     pub(crate) select: select::SelectState,
+    /// The group the detached fibers it spawns join
+    /// (GAP(detached-groups)): a root's is given by its host
+    /// (`Runtime::run_root_in`, the runtime's default group for
+    /// `run_root`), and a spawned fiber inherits its spawner's, as it
+    /// inherits its domain (D-691). Set before the fiber is first queued;
+    /// `None` for an isolated entry.
+    group: Mutex<Option<Arc<DetachedGroup>>>,
 }
 
 /// Why a scope failed (architecture §5.3), as `take_failure` reports it.
@@ -212,6 +231,16 @@ impl FiberConc {
     /// Takes why the last scope closed on this fiber failed.
     pub(crate) fn take_last_failure(&self) -> Option<Failure> {
         self.last_failure.lock().take()
+    }
+
+    /// The group the detached fibers the fiber spawns join.
+    pub(crate) fn group(&self) -> Option<Arc<DetachedGroup>> {
+        self.group.lock().clone()
+    }
+
+    /// Records the fiber's group, before it is first queued.
+    pub(crate) fn set_group(&self, group: Option<Arc<DetachedGroup>>) {
+        *self.group.lock() = group;
     }
 }
 
@@ -309,7 +338,7 @@ fn all() -> [Entry; 13] {
         ),
         (
             "cheby_fiber_sys_spawn_detached",
-            spawn::cheby_fiber_sys_spawn_detached as *const u8,
+            detached::cheby_fiber_sys_spawn_detached as *const u8,
             &["Word"],
             "()",
         ),
@@ -408,6 +437,8 @@ impl Drop for Owned {
 mod cancel_races;
 #[cfg(test)]
 mod cancel_tests;
+#[cfg(test)]
+pub(crate) mod detached_tests;
 #[cfg(test)]
 mod models;
 #[cfg(test)]

@@ -22,7 +22,7 @@
 //! Code compiled without unwind edges (`CHEBY_UNWIND_EDGES=off`, D-742's
 //! measurement switch) cannot unwind: a raise in such a fiber flushes
 //! standard output, prints the report and ends the process
-//! ([`edgeless`], GAP(edgeless-panics)).
+//! ([`edgeless`], D-770).
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -40,7 +40,7 @@ use super::record;
 pub(crate) struct ChebyUnwind;
 
 /// The last words of a process whose fiber raised in code compiled without
-/// unwind edges (GAP(edgeless-panics)).
+/// unwind edges (D-770).
 pub(crate) const EDGELESS_FATAL: &str =
     "an unwinding in code compiled without unwind edges (CHEBY_UNWIND_EDGES=off)";
 
@@ -81,7 +81,7 @@ pub(crate) fn raise(ctx: Option<*mut ExecCtx>, report: PanicReport) -> ! {
 /// kernel that would park (`send`, `receive`, `join`) and by a scope's
 /// close that passes a cancellation through. In a fiber compiled without
 /// unwind edges it ends the process with [`EDGELESS_FATAL`], which names an
-/// unwinding, not a panic (GAP(edgeless-panics)). Entered with no runtime
+/// unwinding, not a panic (D-770). Entered with no runtime
 /// lock held.
 pub(crate) fn raise_cancel(ctx: Option<*mut ExecCtx>) -> ! {
     let ctx = running(ctx)
@@ -101,7 +101,7 @@ pub(crate) fn raise_cancel(ctx: Option<*mut ExecCtx>) -> ! {
 /// records it, sets the flag and returns, so no Rust unwinding runs at the
 /// entry check (D-700), and generated code runs its entry pad. In a fiber
 /// compiled without unwind edges it ends the process with
-/// [`EDGELESS_FATAL`] (GAP(edgeless-panics)).
+/// [`EDGELESS_FATAL`] (D-770).
 pub(crate) fn cancel_from_runtime(fiber: &ExecCtx) {
     if !fiber.unwind_edges() {
         edgeless(None);
@@ -137,7 +137,7 @@ pub(crate) unsafe fn raise_from_runtime(ctx: *mut ExecCtx, report: PanicReport) 
 }
 
 /// Ends the process for a raise in code compiled without unwind edges
-/// (GAP(edgeless-panics), refining D-742 and D-733): such code does not
+/// (D-770, refining D-742 and D-733): such code does not
 /// test the flag, so returning into it would go on as if nothing had
 /// happened, or trap without a report. It flushes standard output, prints
 /// the panic's `report` to standard error, whatever the entry's mode (a
@@ -156,7 +156,7 @@ pub(crate) unsafe fn raise_from_runtime(ctx: *mut ExecCtx, report: PanicReport) 
 #[inline(never)]
 #[expect(
     clippy::exit,
-    reason = "GAP(edgeless-panics): the process ends with the panic status, not a signal"
+    reason = "D-770: the process ends with the panic status, not a signal"
 )]
 pub(crate) fn edgeless(report: Option<&PanicReport>) -> ! {
     /// Set by the first caller, which ends the process.
@@ -169,10 +169,15 @@ pub(crate) fn edgeless(report: Option<&PanicReport>) -> ! {
     }
     // The process ends below whether the flush worked.
     let _ = io::flush_stdout();
-    if let Some(report) = report {
-        io::write_stderr(&report.to_string());
+    // D-770 keeps this process exit, so a write that fails here ends the
+    // process at once with status 1, as D-306 says, rather than halting a
+    // runtime that this thread may not belong to.
+    let report = report.map_or_else(String::new, ToString::to_string);
+    if io::try_write_stderr(&report).is_err()
+        || io::try_write_stderr(&format!("fatal runtime error: {EDGELESS_FATAL}\n")).is_err()
+    {
+        std::process::exit(crate::abi::status::ERR)
     }
-    io::write_stderr(&format!("fatal runtime error: {EDGELESS_FATAL}\n"));
     std::process::exit(crate::abi::status::PANIC)
 }
 

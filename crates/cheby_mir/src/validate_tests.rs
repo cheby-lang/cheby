@@ -7,6 +7,7 @@ use cheby_diag::{FileId, Span, TextRange};
 use cheby_iface::{DefId, DefIndex, IndexVec, ModuleId};
 
 use crate::abi::AbiSig;
+use crate::borrow::BorrowMask;
 use crate::builder::FunctionBuilder;
 use crate::ir::{
     Abi, ArithOp, BitOp, BuiltinDesc, Callee, CalleeDecl, CmpOp, Const, DefName, FnKey, Function,
@@ -106,11 +107,7 @@ fn module(functions: Vec<Function>, statics: Vec<StaticObject>) -> MirModule {
         functions,
         callees: vec![CalleeDecl {
             def: def(1),
-            sig: AbiSig {
-                abi: Abi::Cheby,
-                params: vec![Repr::Value],
-                ret: Repr::Value,
-            },
+            sig: AbiSig::owned(Abi::Cheby, vec![Repr::Value], Repr::Value),
         }],
         layouts: vec![
             desc(def(PAIR), def(PAIR_TY), 0, &[Repr::Value, Repr::Int]),
@@ -1248,4 +1245,242 @@ callee app::f1(value) -> value
 "#
     );
     assert_eq!(dump(&m).unwrap(), expected);
+}
+
+// Borrowing (D-715): the validator's cross-checks of a borrowed parameter
+// against counting, the callee declarations, tail calls and the entry pad.
+
+/// The mask that borrows parameter 0.
+fn first_borrowed() -> BorrowMask {
+    BorrowMask::OWNED.with(0)
+}
+
+/// [`module`] whose callee `app::f1` borrows its one parameter.
+fn borrowing_module(functions: Vec<Function>) -> MirModule {
+    let mut m = module(functions, Vec::new());
+    for decl in &mut m.callees {
+        decl.sig.borrow = first_borrowed();
+    }
+    m
+}
+
+/// `app::f1(borrow _0: value)` with the body `body` writes.
+fn borrower(body: impl FnOnce(&mut FunctionBuilder, Local)) -> Function {
+    let mut b = builder_for(FnKey::Item(def(1)));
+    let p = b.add_param(Repr::Value, None, None).unwrap();
+    body(&mut b, p);
+    let mut f = b.finish().unwrap();
+    f.borrow = first_borrowed();
+    f
+}
+
+fn errors_at(m: &MirModule, stage: Stage) -> String {
+    validate(m, stage).err().unwrap_or_default().join("\n")
+}
+
+#[test]
+fn borrow_validate_borrowed_parameter_consumed_without_a_dup() {
+    // `return _0` gives away a reference the function does not hold.
+    let returns = borrower(|b, p| b.terminate(Terminator::Return(local(p))).unwrap());
+    let m = borrowing_module(vec![returns.clone()]);
+    validate(&m, Stage::Lowered).unwrap();
+    let errors = errors_at(&m, Stage::Counted);
+    assert!(
+        errors.contains("_0 is used without a reference (holds 0, needs 1)"),
+        "{errors}"
+    );
+    // A drop of it is the same mistake.
+    let drops = borrower(|b, p| {
+        b.push(Stmt::Drop(p)).unwrap();
+        b.terminate(Terminator::Return(nil())).unwrap();
+    });
+    let errors = errors_at(&borrowing_module(vec![drops]), Stage::Counted);
+    assert!(
+        errors.contains("_0 is used without a reference"),
+        "{errors}"
+    );
+    // The RC pass gives the return its `dup` and drops nothing.
+    let mut counted = borrowing_module(vec![returns]);
+    rc::insert_module(&mut counted).unwrap();
+    validate(&counted, Stage::Counted).unwrap();
+    let text = dump(&counted).unwrap();
+    assert!(
+        text.contains("fn app::f1(borrow _0: value)") && text.contains("  dup _0\n  return _0"),
+        "{text}"
+    );
+    assert!(!text.contains("drop _0"), "{text}");
+}
+
+#[test]
+fn borrow_validate_call_mask_differs_from_its_callee_declaration() {
+    let call = |callee: Callee| {
+        let mut b = builder();
+        let p = b.add_param(Repr::Value, None, None).unwrap();
+        b.assign(
+            Repr::Value,
+            Rvalue::Call {
+                callee,
+                args: vec![local(p)],
+            },
+        )
+        .unwrap();
+        b.terminate(Terminator::Return(nil())).unwrap();
+        b.finish().unwrap()
+    };
+    // A borrowing call of an all-owned callee.
+    let m = module(
+        vec![call(Callee::Borrowing(def(1), first_borrowed()))],
+        Vec::new(),
+    );
+    let errors = errors_at(&m, Stage::Lowered);
+    assert!(
+        errors.contains("borrows BorrowMask(1), but its declaration borrows BorrowMask(0) (D-715)"),
+        "{errors}"
+    );
+    // An all-owned call of a borrowing callee.
+    let m = borrowing_module(vec![call(Callee::Direct(def(1)))]);
+    let errors = errors_at(&m, Stage::Lowered);
+    assert!(
+        errors.contains("borrows BorrowMask(0), but its declaration borrows BorrowMask(1) (D-715)"),
+        "{errors}"
+    );
+    // A borrowing call that borrows nothing.
+    let mut m = module(
+        vec![call(Callee::Borrowing(def(1), BorrowMask::OWNED))],
+        Vec::new(),
+    );
+    let errors = errors_at(&m, Stage::Lowered);
+    assert!(errors.contains("borrows nothing (D-715)"), "{errors}");
+    // And a body whose mask differs from its own declaration.
+    m.functions = vec![borrower(|b, _| {
+        b.terminate(Terminator::Return(nil())).unwrap();
+    })];
+    let errors = errors_at(&m, Stage::Lowered);
+    assert!(
+        errors.contains("differs from its callee declaration"),
+        "{errors}"
+    );
+    // The matching call is fine, and the argument stays the caller's.
+    let mut m = borrowing_module(vec![call(Callee::Borrowing(def(1), first_borrowed()))]);
+    validate(&m, Stage::Lowered).unwrap();
+    rc::insert_module(&mut m).unwrap();
+    validate(&m, Stage::Counted).unwrap();
+    let text = dump(&m).unwrap();
+    assert!(
+        text.contains("call app::f1(borrow _0)\n  drop _0"),
+        "{text}"
+    );
+}
+
+#[test]
+fn borrow_validate_owned_local_in_a_borrowed_tail_position() {
+    // `f0` owns `_0` and jumps to `f1`, which borrows it: nothing would
+    // release it after the jump (D-015).
+    let jump = || {
+        let mut b = builder();
+        let p = b.add_param(Repr::Value, None, None).unwrap();
+        b.terminate(Terminator::TailCall {
+            callee: Callee::Borrowing(def(1), first_borrowed()),
+            args: vec![local(p)],
+        })
+        .unwrap();
+        b.finish().unwrap()
+    };
+    let m = borrowing_module(vec![jump()]);
+    validate(&m, Stage::Lowered).unwrap();
+    let errors = errors_at(&m, Stage::Counted);
+    assert!(
+        errors.contains("bb0 terminator: _0 still holds 1 reference(s)"),
+        "{errors}"
+    );
+    // The RC pass refuses to place it.
+    let mut m = borrowing_module(vec![jump()]);
+    let ice = rc::insert_module(&mut m).unwrap_err();
+    assert!(
+        ice.to_string()
+            .contains("a borrowed use in a moving terminator"),
+        "{ice}"
+    );
+    // A borrowed parameter or a constant fits the position.
+    let mut passes_on = borrower(|b, p| {
+        b.terminate(Terminator::TailCall {
+            callee: Callee::Borrowing(def(1), first_borrowed()),
+            args: vec![local(p)],
+        })
+        .unwrap();
+    });
+    passes_on.key = FnKey::Item(def(2));
+    let mut m = borrowing_module(vec![passes_on]);
+    m.callees.push(CalleeDecl {
+        def: def(2),
+        sig: AbiSig {
+            borrow: first_borrowed(),
+            ..AbiSig::owned(Abi::Cheby, vec![Repr::Value], Repr::Value)
+        },
+    });
+    validate(&m, Stage::Lowered).unwrap();
+    rc::insert_module(&mut m).unwrap();
+    validate(&m, Stage::Counted).unwrap();
+}
+
+#[test]
+fn borrow_validate_entry_pad_drops_a_borrowed_parameter() {
+    let mut f = borrower(|b, _| b.terminate(Terminator::Return(nil())).unwrap());
+    let recorded = crate::unwind::insert_recording(&mut f).unwrap().unwrap();
+    // The pass's entry pad releases nothing: `_0` is the caller's.
+    let resume = f.entry_unwind.unwrap();
+    assert_eq!(f.block(resume).unwrap().term, Terminator::Resume);
+    let m = borrowing_module(vec![f.clone()]);
+    crate::validate::validate_recorded(&m, std::slice::from_ref(&recorded), true).unwrap();
+    // An entry pad that drops it.
+    let pad = f
+        .blocks
+        .push(crate::ir::Block {
+            params: Vec::new(),
+            stmts: vec![Stmt::Drop(Local::from_u32(0))],
+            term: Terminator::Goto {
+                target: resume,
+                args: Vec::new(),
+            },
+            unwind: Vec::new(),
+        })
+        .unwrap();
+    f.entry_unwind = Some(pad);
+    let m = borrowing_module(vec![f]);
+    let errors = crate::validate::validate_recorded(&m, std::slice::from_ref(&recorded), false)
+        .unwrap_err()
+        .join("\n");
+    assert!(
+        errors.contains("which drops {_0}, but an unwinding there leaves {} held"),
+        "{errors}"
+    );
+    let errors = errors_at(&m, Stage::Unwound);
+    assert!(
+        errors.contains("_0 is used without a reference (holds 0, needs 1)"),
+        "{errors}"
+    );
+}
+
+#[test]
+fn borrow_validate_mask_only_on_counted_parameters_of_items() {
+    // A raw parameter holds no reference to borrow.
+    let mut b = builder_for(FnKey::Item(def(3)));
+    b.add_param(Repr::Int, None, None).unwrap();
+    b.terminate(Terminator::Return(nil())).unwrap();
+    let mut f = b.finish().unwrap();
+    f.borrow = first_borrowed();
+    rejected(f.clone(), "which is not counted (D-715)");
+    // A parameter the function does not have.
+    f.borrow = BorrowMask::OWNED.with(5);
+    rejected(f, "borrows parameter 5, but has 1 (D-715)");
+    // Only a top-level function borrows.
+    let mut b = builder_for(FnKey::ValueShim(def(3)));
+    b.add_param(Repr::Value, None, None).unwrap();
+    b.terminate(Terminator::Return(nil())).unwrap();
+    let mut shim = b.finish().unwrap();
+    shim.borrow = first_borrowed();
+    rejected(
+        shim,
+        "only a top-level function that is not precounted may borrow",
+    );
 }

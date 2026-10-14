@@ -80,6 +80,7 @@ fn function(
         entry_loc: (abi == Abi::Cheby).then(|| StrId::from_u32(0)),
         entry_unwind: None,
         precounted: false,
+        borrow: cheby_mir::borrow::BorrowMask::OWNED,
     }
 }
 
@@ -116,11 +117,7 @@ fn ret(n: u32) -> Terminator {
 }
 
 fn cheby_sig(params: &[Repr]) -> AbiSig {
-    AbiSig {
-        abi: Abi::Cheby,
-        params: params.to_vec(),
-        ret: Repr::Value,
-    }
+    AbiSig::owned(Abi::Cheby, params.to_vec(), Repr::Value)
 }
 
 fn code_unit(
@@ -203,6 +200,9 @@ fn returned(outcome: EntryOutcome) -> u64 {
     match outcome {
         EntryOutcome::Returned(word) => word,
         EntryOutcome::Panicked(report) => panic!("the entry panicked: {report:?}"),
+        // No runtime here: the isolated entry's thread is parked for good
+        // (D-709), and a parked thread runs none of the JIT's code again.
+        EntryOutcome::Exited(status) => panic!("the entry ended the program with status {status}"),
     }
 }
 
@@ -366,7 +366,7 @@ impl Prog {
     /// [`Prog::compile`] after the unwind pass: code that unwinds by the
     /// return flag (D-733). Every test that expects a panic uses it, since
     /// a raise in code without unwind edges ends the process
-    /// (GAP(edgeless-panics)).
+    /// (D-770).
     fn compile_unwound(self) -> Jit {
         self.compile_unwound_with(CodegenOptions::default(), JitOptions::from_env())
     }
@@ -1110,6 +1110,7 @@ fn compile_speed_probe() {
     println!("compile_speed_probe: {:?}", start.elapsed());
 }
 
+mod borrow;
 mod control;
 mod entry_unwind;
 mod large_frame;

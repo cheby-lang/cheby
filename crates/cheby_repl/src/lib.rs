@@ -164,7 +164,14 @@ fn piped(session: &mut Session, streams: &mut Streams) {
             CONTINUATION
         };
         streams.stdout(prompt);
-        let Some(line) = cheby_runtime::io::read_input_line() else {
+        // A flush that fails before the read ends the REPL with status 1,
+        // printing nothing (D-306, spec §13.5): this host thread runs no
+        // entry, so the runtime hands the failure back
+        // (GAP(termination-off-entry), D-709).
+        let Ok(read) = cheby_runtime::io::read_input_line() else {
+            exit_after_write_failure();
+        };
+        let Some(line) = read else {
             streams.stdout("\n");
             finish(session, &entry, streams);
             break;

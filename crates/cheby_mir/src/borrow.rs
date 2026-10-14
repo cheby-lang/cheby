@@ -1,8 +1,12 @@
-//! Borrowing inference (D-715, D-072, D-250) as a pure analysis over
-//! lowered MIR ([`crate::Stage::Lowered`], before reference counting).
-//! It decides which parameters of a module's functions would be
-//! borrowed; it changes no MIR. Wiring the masks into the IR, the ABI
-//! signature, counting and the driver is a later step (P1b).
+//! Borrowing inference (D-715, D-072, D-250, D-787) over lowered MIR
+//! ([`crate::Stage::Lowered`], before reference counting): which
+//! parameters of a module's functions are borrowed ([`infer`]), and the
+//! rewrite that puts the masks into a unit ([`apply`]): into the
+//! functions' [`crate::Function::borrow`], into the ABI signatures of the
+//! unit's callees ([`crate::AbiSig::borrow`], so into the slot key,
+//! D-456), and into its call sites ([`Callee::Borrowing`]). Counting then
+//! treats a borrowed parameter as holding no reference
+//! ([`crate::rc`], [`crate::ownership`]).
 //!
 //! # API
 //!
@@ -32,12 +36,16 @@
 //! pub struct IfaceEligibility<'a> { /* private */ }
 //! impl<'a> IfaceEligibility<'a> {
 //!     pub fn new(defs: Defs<'a>, thir: &thir::Module) -> Self;
-//!     pub const fn with_package_visible(self, on: bool) -> Self;
 //! }
 //! impl Eligibility for IfaceEligibility<'_> { … }
 //! pub fn externals(thir: &thir::Module) -> BTreeSet<DefId>;
 //! pub fn infer(module: &MirModule, facts: &BuildFacts, eligibility: &dyn Eligibility)
 //!     -> BTreeMap<DefId, BorrowMask>;
+//! pub fn apply(unit: &mut MirModule, masks: &BTreeMap<DefId, BorrowMask>) -> Result<(), Ice>;
+//! pub type Masks = BTreeMap<DefId, BorrowMask>;
+//! pub fn infer_build(units: &mut [MirModule],
+//!     infer_unit: &dyn Fn(&MirModule, &BuildFacts) -> Result<Masks, Ice>) -> Result<Masks, Ice>;
+//! pub fn borrows_anything(unit: &MirModule) -> bool;
 //! ```
 //!
 //! Bit `i` of a [`BorrowMask`] is parameter `i` in `Function::params`
@@ -51,20 +59,35 @@
 //! [`infer`] runs per code unit, with an [`Eligibility`] for that unit's
 //! module ([`IfaceEligibility`] over the unit's [`Defs`] and the module's
 //! THIR), and returns the masks of the functions that borrow something.
-//! A function missing from the result is all-owned. Counting follows.
-//! The analysis is deterministic (D-264): it iterates only ordered maps
-//! and sets, and the unit's own function order.
+//! A function missing from the result is all-owned. [`apply`] then writes
+//! the build's masks into every unit, the tests units and the entries
+//! unit included, and counting follows ([`infer_build`] does the first
+//! two steps in order; the driver runs them in parallel). The analysis
+//! is deterministic (D-264): it iterates only ordered maps and sets, and
+//! the unit's own function order.
+//!
+//! A unit counted on its own ([`crate::count_and_check`]: the JIT's tests,
+//! a REPL session, per-unit goldens) is never inferred and stays
+//! all-owned. A REPL session borrows nothing in any unit it lowers, std
+//! and package modules included (GAP(borrow-off-in-repl)), and neither
+//! does a build under `CHEBY_RC=naive` ([`crate::MirOptions::borrows`]),
+//! which keeps naive counting the oracle of D-718.
+//!
+//! D-779 (inference across the build's units): a `cheby test` build
+//! infers over its tests units too, so its code units may get other
+//! masks than a `cheby run` build's; `cheby run`'s code never depends on
+//! tests.
 //!
 //! # The rules (survey-perceus §2.2)
 //!
 //! A parameter is borrowed only if all of these hold:
 //!
 //! 1. Its function is a `FnKey::Item` of the unit's own module that the
-//!    [`Eligibility`] calls private and not an `@external` wrapper; the
-//!    body is not `precounted` (D-693) and has no foreign call (the shape
-//!    of a wrapper, D-525). No unit of another module names it
-//!    ([`BuildFacts::named_by_other_module`]; D-250's owned convention
-//!    across modules).
+//!    [`Eligibility`] calls private (not `pub`, D-787) and not an
+//!    `@external` wrapper; the body is not `precounted` (D-693) and has no
+//!    foreign call (the shape of a wrapper, D-525). Other modules of the
+//!    package may call a package-visible function: they call it with its
+//!    mask, which they depend on (D-787 refines D-250 here).
 //! 2. No unit of the build uses the function as a value: no value shim,
 //!    `Const::FnValue`, `Const::Code` or `Callee::Code` of it, statics
 //!    included ([`BuildFacts::used_as_value`]).
@@ -100,29 +123,34 @@
 //! callers when its mask shrinks: a fixed point, which exists because
 //! the masks only decrease.
 //!
-//! # What the counting must do (P1b)
+//! # What the counting does
 //!
 //! A borrowed parameter holds no reference: a `dup` at each owned use,
-//! never a `drop`, and it is not in any cleanup pad. A `field` result of a
+//! never a `drop`, and it is not in any cleanup pad, the entry pad
+//! included ([`crate::Function::owned_params`]). A `field` result of a
 //! borrowed parameter or of a borrowed projection is a borrowed projection
-//! too, with the same rule. A call passes a borrowed position without
-//! giving up a reference, so the caller drops an argument it no longer
-//! needs after the call. A tail call passes a local defined as a constant
-//! in a borrowed position as that constant (the static object needs no
-//! reference and outlives the callee), so the caller holds nothing at
-//! the jump. Every unit that names a borrowing function (its
-//! code unit, its tests unit, the entries unit) gets the mask in its
-//! `CalleeDecl` and its call sites.
+//! too, with the same rule (GAP(borrowed-projections);
+//! [`crate::Function::borrowed_locals`]). A call passes a borrowed
+//! position without giving up a reference, so the caller drops an
+//! argument it no longer needs after the call, and its cleanup pad
+//! releases the argument if the callee unwinds. A tail call passes a
+//! local defined as a constant in a borrowed position as that constant
+//! ([`apply`] substitutes it: the static object needs no reference and
+//! outlives the callee), so the caller holds nothing at the jump. Every
+//! unit that names a borrowing function (its code unit, its tests unit,
+//! the entries unit, and under D-787 the units of other modules of the
+//! package) gets the mask in its `CalleeDecl` and its call sites.
 //!
 //! Visibility (D-787, refining D-715): parameters may be borrowed in `priv`
-//! and package-visible functions, never in `pub` ones.
-//! [`IfaceEligibility::with_package_visible`]`(true)` is that reading; the
-//! default here, `priv` only (D-162), is P1a's earlier reading, kept until
-//! P1b makes D-787 the only behavior. D-787 also lets other modules of the
-//! package call a package-visible function with its mask (they depend on
-//! it, M3's code cache included); the exclusion of a function named by
-//! another module's unit ([`BuildFacts::named_by_other_module`]) is the
-//! owned convention of D-250 that P1b lifts for package-visible functions.
+//! and package-visible functions, never in `pub` ones, whose ABI the code
+//! of other packages is compiled against. A body edit can therefore
+//! change the mask, and so the ABI signature, of a package-visible
+//! function that other modules of the package call; they depend on it
+//! (M3's code cache included). The inference of one module reads no other
+//! module's masks: a call into another module's borrowing function counts
+//! as consuming the caller's parameter there, and a tail call into it
+//! from another unit with anything but a constant keeps that position
+//! owned ([`BuildFacts::tail_owned`]).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -207,7 +235,8 @@ impl BuildFacts {
     }
 
     /// Whether a code or tests unit of a module other than `def`'s names
-    /// `def` as a callee.
+    /// `def` as a callee. Informative: under D-787 such a call does not
+    /// stop `def` from borrowing; the caller uses its mask.
     #[must_use]
     pub fn named_by_other_module(&self, def: DefId) -> bool {
         self.foreign.contains(&def)
@@ -265,10 +294,10 @@ pub fn collect_facts(units: &[&MirModule]) -> BuildFacts {
                 }
                 if let Terminator::TailCall { callee, args } = &block.term {
                     value_callee(callee, &mut facts.values);
-                    if let Callee::Direct(g) = callee
+                    if let Some(g) = callee.direct()
                         && unit.unit != UnitKind::Code(g.module)
                     {
-                        let entry = facts.tail_owned.entry(*g).or_default();
+                        let entry = facts.tail_owned.entry(g).or_default();
                         for (j, arg) in args.iter().enumerate() {
                             let constant = match arg {
                                 Operand::Const(_) => true,
@@ -325,8 +354,8 @@ fn term_operands(term: &Terminator) -> Vec<&Operand> {
 /// external wrappers, and whether a parameter's declared type is
 /// handle-free (D-715).
 pub trait Eligibility {
-    /// Whether `def` is a function only its own module's units can call
-    /// (D-787).
+    /// Whether `def` is a function of this module that only its own
+    /// package can call: `priv` or package-visible, not `pub` (D-787).
     fn is_private_item(&self, def: DefId) -> bool;
 
     /// Whether `def` has an `@external` (its function is a wrapper of a
@@ -345,29 +374,18 @@ pub trait Eligibility {
 pub struct IfaceEligibility<'a> {
     defs: Defs<'a>,
     externals: BTreeSet<DefId>,
-    package_visible: bool,
 }
 
 impl<'a> IfaceEligibility<'a> {
     /// The eligibility of the module `defs.own`, whose checked THIR is
-    /// `thir`.
+    /// `thir`: its `priv` and package-visible functions, never its `pub`
+    /// ones (D-787).
     #[must_use]
     pub fn new(defs: Defs<'a>, thir: &thir::Module) -> Self {
         Self {
             defs,
             externals: externals(thir),
-            package_visible: false,
         }
-    }
-
-    /// With `on`, a package-visible function counts as private too: D-787's
-    /// reading, which P1b makes the only one. Sound here only with
-    /// [`BuildFacts::named_by_other_module`] (which [`infer`] always
-    /// checks). Off by default.
-    #[must_use]
-    pub const fn with_package_visible(mut self, on: bool) -> Self {
-        self.package_visible = on;
-        self
     }
 }
 
@@ -383,8 +401,8 @@ impl Eligibility for IfaceEligibility<'_> {
             item.kind == DefKind::Fn
                 && matches!(item.sig, ItemSig::Fn(_))
                 && match item.vis {
-                    Vis::Priv => true,
-                    Vis::Package => self.package_visible,
+                    // D-787: not `pub`.
+                    Vis::Priv | Vis::Package => true,
                     Vis::Pub => false,
                 }
         })
@@ -577,8 +595,7 @@ fn initial_mask(
         && eligibility.is_private_item(def)
         && !eligibility.is_external_wrapper(def)
         && !has_foreign_call(f)
-        && !facts.used_as_value(def)
-        && !facts.named_by_other_module(def);
+        && !facts.used_as_value(def);
     if !eligible {
         return BorrowMask::OWNED;
     }
@@ -643,7 +660,7 @@ fn scan(f: &Function) -> Node {
         let uses = block.term.uses();
         match &block.term {
             Terminator::TailCall { callee, args } => {
-                if let Callee::Direct(g) = callee {
+                if let Some(g) = callee.direct() {
                     for (j, arg) in args.iter().enumerate() {
                         let kind = match arg {
                             Operand::Const(_) => TailArg::Const,
@@ -655,7 +672,7 @@ fn scan(f: &Function) -> Node {
                                 .map_or(TailArg::Owned, |&i| TailArg::Param(i)),
                         };
                         scan.node.sites.push(Site {
-                            callee: *g,
+                            callee: g,
                             pos: j,
                             arg: kind,
                         });
@@ -751,7 +768,7 @@ impl Scan<'_> {
         for (j, arg) in args.iter().enumerate() {
             let Some(l) = arg.local() else { continue };
             let c = match callee {
-                Callee::Direct(g) => Consumer::Unless(*g, j),
+                Callee::Direct(g) | Callee::Borrowing(g, _) => Consumer::Unless(*g, j),
                 Callee::Code(_) | Callee::Indirect(_) => Consumer::Always,
             };
             self.consume(l, c, at, uses);
@@ -833,4 +850,172 @@ fn projection_roots(f: &Function, params: &BTreeMap<Local, usize>) -> BTreeMap<L
         }
     }
     roots
+}
+
+/// The masks of the functions that borrow something, by def; a function
+/// missing from it is all-owned.
+pub type Masks = BTreeMap<DefId, BorrowMask>;
+
+/// Infers the masks of a build's lowered units and writes them into every
+/// unit (D-779): [`collect_facts`] over all of `units`, `infer_unit` for
+/// each code unit (normally [`infer`] with the unit's
+/// [`IfaceEligibility`]), then [`apply`] to each unit with the masks of
+/// the whole build. Returns those masks. Sequential; the driver runs the
+/// same steps in parallel.
+///
+/// # Errors
+///
+/// What `infer_unit` or [`apply`] returns.
+pub fn infer_build(
+    units: &mut [MirModule],
+    infer_unit: &dyn Fn(&MirModule, &BuildFacts) -> Result<Masks, Ice>,
+) -> Result<Masks, Ice> {
+    let facts = {
+        let refs: Vec<&MirModule> = units.iter().collect();
+        collect_facts(&refs)
+    };
+    let mut masks = BTreeMap::new();
+    for unit in units.iter() {
+        if matches!(unit.unit, UnitKind::Code(_)) {
+            masks.extend(infer_unit(unit, &facts)?);
+        }
+    }
+    for unit in units.iter_mut() {
+        apply(unit, &masks)?;
+    }
+    Ok(masks)
+}
+
+/// Writes the build's `masks` (from [`infer`] over every code unit) into
+/// `unit`, a lowered unit of the same build (D-715): each borrowing
+/// function's [`Function::borrow`], the [`crate::AbiSig::borrow`] of each
+/// borrowing callee in [`MirModule::callees`] (so its ABI signature and
+/// slot key, D-456), and each call or tail call of one, which becomes
+/// [`Callee::Borrowing`]. A local defined as a constant (`_n = const …`)
+/// in a borrowed position is replaced by that constant, which needs no
+/// reference; its definition goes when nothing else reads it. In a tail
+/// call this is what lets the caller hold nothing at the jump (rule 7);
+/// in a call it saves the caller's `drop` after the call.
+///
+/// # Errors
+///
+/// An [`Ice`] for a mask that names a parameter the callee does not have.
+pub fn apply(unit: &mut MirModule, masks: &BTreeMap<DefId, BorrowMask>) -> Result<(), Ice> {
+    if masks.is_empty() {
+        return Ok(());
+    }
+    for decl in &mut unit.callees {
+        if let Some(&mask) = masks.get(&decl.def) {
+            if mask.indices().any(|i| i >= decl.sig.params.len()) {
+                return Err(Ice::new(format!(
+                    "the borrow mask {mask:?} of {:?} names a parameter it does not have",
+                    decl.def
+                )));
+            }
+            decl.sig.borrow = mask;
+        }
+    }
+    for f in &mut unit.functions {
+        if let FnKey::Item(def) = f.key
+            && let Some(&mask) = masks.get(&def)
+        {
+            f.borrow = mask;
+        }
+        apply_to_calls(f, masks);
+    }
+    Ok(())
+}
+
+/// The call sites of `f`: see [`apply`].
+fn apply_to_calls(f: &mut Function, masks: &BTreeMap<DefId, BorrowMask>) {
+    let rewrite = |callee: &mut Callee| {
+        if let Callee::Direct(g) = *callee
+            && let Some(&mask) = masks.get(&g)
+            && !mask.is_owned()
+        {
+            *callee = Callee::Borrowing(g, mask);
+        }
+        callee.borrow_mask()
+    };
+    // The value of each local defined as a constant.
+    let consts: BTreeMap<Local, Const> = f
+        .blocks
+        .iter()
+        .flat_map(|b| &b.stmts)
+        .filter_map(|s| match s {
+            Stmt::Assign {
+                dst,
+                value: Rvalue::Use(Operand::Const(c)),
+            } => Some((*dst, c.clone())),
+            _ => None,
+        })
+        .collect();
+    let substitute = |mask: BorrowMask, args: &mut [Operand], replaced: &mut BTreeSet<Local>| {
+        for (j, arg) in args.iter_mut().enumerate() {
+            if mask.is_borrowed(j)
+                && let Operand::Local(l) = *arg
+                && let Some(c) = consts.get(&l)
+            {
+                *arg = Operand::Const(c.clone());
+                replaced.insert(l);
+            }
+        }
+    };
+    let mut replaced = BTreeSet::new();
+    for block in &mut f.blocks {
+        for stmt in &mut block.stmts {
+            if let Stmt::Assign {
+                value: Rvalue::Call { callee, args },
+                ..
+            }
+            | Stmt::Eval(Rvalue::Call { callee, args }) = stmt
+            {
+                let mask = rewrite(callee);
+                substitute(mask, args, &mut replaced);
+            }
+        }
+        if let Terminator::TailCall { callee, args } = &mut block.term {
+            let mask = rewrite(callee);
+            substitute(mask, args, &mut replaced);
+        }
+    }
+    if replaced.is_empty() {
+        return;
+    }
+    // The constants nothing reads any more.
+    let mut read = BTreeSet::new();
+    for block in &f.blocks {
+        for stmt in &block.stmts {
+            if let Stmt::Assign { value, .. } | Stmt::Eval(value) = stmt {
+                read.extend(value.operands().iter().filter_map(Operand::local));
+            }
+        }
+        read.extend(
+            term_operands(&block.term)
+                .into_iter()
+                .filter_map(Operand::local),
+        );
+        if let Terminator::TailCall {
+            callee: Callee::Indirect(l),
+            ..
+        } = &block.term
+        {
+            read.insert(*l);
+        }
+    }
+    for block in &mut f.blocks {
+        block.stmts.retain(|s| match s {
+            Stmt::Assign { dst, .. } => !replaced.contains(dst) || read.contains(dst),
+            _ => true,
+        });
+    }
+}
+
+/// Whether `unit` borrows anything (D-715): a function's mask or a
+/// callee's (each call's mask is its callee's, which the validator
+/// checks).
+#[must_use]
+pub fn borrows_anything(unit: &MirModule) -> bool {
+    unit.functions.iter().any(|f| !f.borrow.is_owned())
+        || unit.callees.iter().any(|d| !d.sig.borrow.is_owned())
 }

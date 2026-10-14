@@ -1,0 +1,4 @@
+test ui_test "leaves detached fibers behind" ... ok
+test ui_test "starts with none of them left" ... ok
+
+test result: ok. 2 passed; 0 failed; 0 filtered out

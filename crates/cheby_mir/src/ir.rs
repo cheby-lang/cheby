@@ -12,6 +12,7 @@ use cheby_diag::Span;
 use cheby_iface::{DefId, Ice, Idx, IndexVec, ModuleId, Name, Ty};
 
 use crate::abi::AbiSig;
+use crate::borrow::BorrowMask;
 use crate::layout::LayoutDesc;
 use crate::repr::{ForeignSig, Repr};
 
@@ -61,8 +62,9 @@ pub struct MirModule {
     /// then the tuple dictionary functions by interface function and
     /// arity; entry thunks in the order given.
     pub functions: Vec<Function>,
-    /// Every [`Callee::Direct`] target, own module or not, sorted by
-    /// `DefId`, with its signature from [`crate::abi::abi_sig`]. The
+    /// Every [`Callee::Direct`] and [`Callee::Borrowing`] target, own
+    /// module or not, sorted by `DefId`, with its signature from
+    /// [`crate::abi::abi_sig`] and its borrow mask (D-715). The
     /// validator and codegen take callee signatures from here, so neither
     /// needs the callee's MIR.
     pub callees: Vec<CalleeDecl>,
@@ -348,6 +350,11 @@ pub struct Function {
     /// intrinsics, D-693): the RC pass leaves it alone and the unwind pass
     /// keeps its edges (D-744).
     pub precounted: bool,
+    /// The parameters the function borrows (D-715), in [`Function::params`]
+    /// order: part of its signature ([`Function::sig`]).
+    /// [`BorrowMask::OWNED`] from lowering; the borrowing inference sets it
+    /// on top-level functions ([`crate::borrow::apply`]).
+    pub borrow: BorrowMask,
 }
 
 impl Function {
@@ -741,6 +748,26 @@ fn operand_uses(ops: &[Operand], kind: UseKind, out: &mut Vec<(Local, UseKind)>)
     out.extend(ops.iter().filter_map(Operand::local).map(|l| (l, kind)));
 }
 
+/// The uses of a Cheby call's callee and arguments: an indirect callee is
+/// owned, an argument is borrowed where a [`Callee::Borrowing`] mask says
+/// so (D-715) and owned otherwise.
+fn call_uses(callee: &Callee, args: &[Operand], out: &mut Vec<(Local, UseKind)>) {
+    if let Callee::Indirect(f) = callee {
+        out.push((*f, UseKind::Owned));
+    }
+    let mask = callee.borrow_mask();
+    for (n, arg) in args.iter().enumerate() {
+        if let Some(l) = arg.local() {
+            let kind = if mask.is_borrowed(n) {
+                UseKind::Borrowed
+            } else {
+                UseKind::Owned
+            };
+            out.push((l, kind));
+        }
+    }
+}
+
 impl Rvalue {
     /// The locals the rvalue reads, in operand order, with how it uses
     /// them. A local may appear more than once.
@@ -749,12 +776,7 @@ impl Rvalue {
         let mut out = Vec::new();
         match self {
             Self::Use(op) => operand_uses(std::slice::from_ref(op), UseKind::Owned, &mut out),
-            Self::Call { callee, args } => {
-                if let Callee::Indirect(f) = callee {
-                    out.push((*f, UseKind::Owned));
-                }
-                operand_uses(args, UseKind::Owned, &mut out);
-            }
+            Self::Call { callee, args } => call_uses(callee, args, &mut out),
             Self::CallForeign { args, .. } => operand_uses(args, UseKind::Borrowed, &mut out),
             Self::CallRuntime { func, args } => {
                 let params = func.params();
@@ -830,8 +852,17 @@ impl Rvalue {
 pub enum Callee {
     /// A top-level Cheby function, always through its indirection slot
     /// (D-043), even in the same module. Its signature is in
-    /// [`MirModule::callees`].
+    /// [`MirModule::callees`]. Every argument is owned.
     Direct(DefId),
+    /// [`Callee::Direct`] of a function that borrows the parameters its
+    /// mask names (D-715): the call passes those arguments without giving
+    /// up a reference ([`UseKind::Borrowed`]), and the caller keeps and
+    /// later releases them. The mask is never [`BorrowMask::OWNED`] and
+    /// equals the one in the callee's [`CalleeDecl`], which is part of its
+    /// ABI signature and slot key (D-456). The borrowing inference writes
+    /// it after lowering ([`crate::borrow::apply`]); lowering writes only
+    /// `Direct`.
+    Borrowing(DefId, BorrowMask),
     /// A function by key that is not called through a slot: a shim or
     /// closure body of this unit, or a constant initializer or test body
     /// (from an entry thunk).
@@ -840,13 +871,39 @@ pub enum Callee {
     Indirect(Local),
 }
 
+impl Callee {
+    /// The top-level function a [`Callee::Direct`] or [`Callee::Borrowing`]
+    /// calls through its slot.
+    #[must_use]
+    pub const fn direct(&self) -> Option<DefId> {
+        match self {
+            Self::Direct(def) | Self::Borrowing(def, _) => Some(*def),
+            Self::Code(_) | Self::Indirect(_) => None,
+        }
+    }
+
+    /// Which arguments the call borrows (D-715): a
+    /// [`Callee::Borrowing`]'s mask, [`BorrowMask::OWNED`] otherwise.
+    #[must_use]
+    pub const fn borrow_mask(&self) -> BorrowMask {
+        match self {
+            Self::Borrowing(_, mask) => *mask,
+            Self::Direct(_) | Self::Code(_) | Self::Indirect(_) => BorrowMask::OWNED,
+        }
+    }
+}
+
 /// How a block ends.
 #[derive(Clone, PartialEq, Debug)]
 pub enum Terminator {
     /// Returns an owned value.
     Return(Operand),
     /// A Cheby-to-Cheby tail call (D-015): Cranelift `return_call` or
-    /// `return_call_indirect`. Owned arguments.
+    /// `return_call_indirect`. Owned arguments, except the positions a
+    /// [`Callee::Borrowing`] borrows, which receive a constant, the
+    /// caller's own borrowed parameter or a borrowed projection of one
+    /// (D-715): the caller's frame is gone after the jump, so it holds
+    /// nothing there.
     TailCall {
         callee: Callee,
         args: Vec<Operand>,
@@ -890,12 +947,7 @@ impl Terminator {
         let mut out = Vec::new();
         match self {
             Self::Return(op) => operand_uses(std::slice::from_ref(op), UseKind::Owned, &mut out),
-            Self::TailCall { callee, args } => {
-                if let Callee::Indirect(f) = callee {
-                    out.push((*f, UseKind::Owned));
-                }
-                operand_uses(args, UseKind::Owned, &mut out);
-            }
+            Self::TailCall { callee, args } => call_uses(callee, args, &mut out),
             Self::Goto { args, .. } => operand_uses(args, UseKind::Owned, &mut out),
             Self::Branch { cond, .. } => {
                 operand_uses(std::slice::from_ref(cond), UseKind::Borrowed, &mut out);

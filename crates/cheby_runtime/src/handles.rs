@@ -125,6 +125,8 @@ pub(crate) const SELECTOR_EMPTY: i64 = 2;
 pub(crate) fn new_selector_node(words: [Word; SELECTOR_WORDS]) -> Word {
     register();
     let obj = alloc::alloc_object(SELECTOR_SIZE, abi::header(abi::RC_UNIQUE, 0, ids::SELECTOR));
+    #[cfg(debug_assertions)]
+    alloc::count_new_kind(None, ids::SELECTOR);
     let mut offset = object::to_usize(abi::HEADER_SIZE);
     for word in words {
         // SAFETY: a fresh node of `SELECTOR_SIZE` bytes: its five words
@@ -244,6 +246,10 @@ pub(crate) unsafe fn new_handle<P: HandlePayload>(
     register();
     // SAFETY: forwarded from the caller.
     let obj = unsafe { alloc::alloc_for(ctx, HANDLE_SIZE, abi::header(1, 0, kind.id())) };
+    // SAFETY: forwarded from the caller: null or the running fiber's
+    // control block, live while it runs.
+    #[cfg(debug_assertions)]
+    alloc::count_new_kind(unsafe { ctx.as_ref() }, kind.id());
     let data = Box::into_raw(payload).cast::<()>();
     // SAFETY: a fresh 24-byte, 8-aligned object: the payload pointer goes
     // at offset 8, the vtable pointer at 16.
@@ -678,5 +684,60 @@ pub(crate) mod tests {
                 "{operation}: {stderr}"
             );
         }
+    }
+
+    /// Debug builds count the live objects of each runtime kind per
+    /// domain (D-711): one per handle and selector node made, one less
+    /// when it is freed, and `leaked_kinds_line` names what is left
+    /// (D-784).
+    #[test]
+    fn live_kinds_count_each_runtime_kind() {
+        let domain = Domain::new();
+        let finalized = Arc::new(AtomicUsize::new(0));
+        with_domain(Arc::clone(&domain), || {
+            let mut words: Vec<Word> = KINDS
+                .iter()
+                .map(|kind| counted(*kind, &finalized, Vec::new()))
+                .collect();
+            let receiver = counted(HandleKind::Receiver, &finalized, Vec::new());
+            let empty = selector([
+                int_word(0),
+                int_word(2),
+                int_word(0),
+                int_word(0),
+                int_word(0),
+            ]);
+            words.push(empty);
+            let expected = if cfg!(debug_assertions) {
+                [1, 2, 1, 1, 1]
+            } else {
+                [0; 5]
+            };
+            assert_eq!(domain.live_kinds(), expected);
+            let line = alloc::leaked_kinds_line(domain.live_kinds(), domain.live_objects());
+            if cfg!(debug_assertions) {
+                assert_eq!(
+                    line.as_deref(),
+                    Some(
+                        "note: leaked 1 <Sender>, 2 <Receiver>, 1 <Fiber>, 1 <Scope>, 1 <Selector>"
+                    )
+                );
+            } else {
+                assert_eq!(line, None);
+            }
+            release(words);
+            let other = string("other");
+            if cfg!(debug_assertions) {
+                assert_eq!(domain.live_kinds(), [0, 1, 0, 0, 0]);
+                assert_eq!(
+                    alloc::leaked_kinds_line(domain.live_kinds(), domain.live_objects()).as_deref(),
+                    Some("note: leaked 1 <Receiver>, and 1 object of other kinds")
+                );
+            }
+            release([receiver, other]);
+        });
+        assert_eq!(domain.live_kinds(), [0; 5]);
+        assert_eq!(domain.live_objects(), 0);
+        assert_eq!(alloc::leaked_kinds_line(domain.live_kinds(), 0), None);
     }
 }

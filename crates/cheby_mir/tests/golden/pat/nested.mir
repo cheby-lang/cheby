@@ -1,27 +1,20 @@
-fn app::deep(_0: value) -> value check str#0 {
-  entry unwind bb11
+fn app::deep(borrow _0: value) -> value check str#0 {
+  entry unwind bb10
   str#0 = "src/main.cheby:8:4"
 bb0:
   _1: int = read_tag _0 of app::Tree
   switch _1 [1 => bb1, _ => bb2]
 bb1:
   _2: value = field _0.0 of ctor app::Node
-  dup _2
   _3: int = read_tag _2 of app::Tree
-  drop _2
   switch _3 [1 => bb3, _ => bb4]
 bb2:
-  drop _0
   goto bb8()
 bb3:
-  drop _0
   goto bb5()
 bb4:
   _4: value = field _0.2 of ctor app::Node
-  dup _4
-  drop _0
   _5: int = read_tag _4 of app::Tree
-  drop _4
   switch _5 [1 => bb6, _ => bb7]
 bb5:
   goto bb9(const bool true)
@@ -36,7 +29,4 @@ bb9(_6: bool):
   return _7
 bb10:
   resume
-bb11:
-  drop _0
-  goto bb10()
 }

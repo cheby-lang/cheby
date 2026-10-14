@@ -1,0 +1,5 @@
+the timeout returned Err(TimedOut): True
+the scope failed: the other fiber fails
+first: Ok("spawned inside the timeout")
+second: Ok("spawned inside the failing scope")
+a send after both cancellations: Err(1)

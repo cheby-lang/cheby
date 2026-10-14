@@ -33,7 +33,7 @@
 //! during a constant evaluation, which runs on one thread). A thread that
 //! runs fibers holds an exclusive shard while one is free, and charges it
 //! with plain relaxed stores; other threads share the remaining shards
-//! and charge them with atomic adds (GAP(single-writer-shards)).
+//! and charge them with atomic adds (D-773).
 //!
 //! # Poisoning
 //!
@@ -89,13 +89,70 @@ pub struct Domain {
     peak: AtomicI64,
     stats: Stats,
     /// Whether the system allocator refused a request of a fiber or host
-    /// thread charging this domain (GAP(system-refusal-leak)): the update
+    /// thread charging this domain (D-771): the update
     /// in flight may then have leaked what it held, so `run_main` skips
     /// the debug leak check.
     system_refused: AtomicBool,
+    /// The live objects of each runtime kind, Sender to Selector (layouts
+    /// 40 to 44), for D-711's line; debug builds only, so release builds
+    /// pay nothing (D-784). Not sharded: only handle constructors and the
+    /// free worklist's custom-kind branch touch it.
+    #[cfg(debug_assertions)]
+    kinds: [AtomicI64; RUNTIME_KINDS],
     /// How often a charge summed the shards to sample the peak.
     #[cfg(test)]
     samples: std::sync::atomic::AtomicU64,
+}
+
+/// The number of runtime kinds whose live objects debug builds count per
+/// domain (D-711): `Sender`, `Receiver`, `Fiber`, `Scope` and `Selector`,
+/// the layouts 40 to 44, in that order.
+pub const RUNTIME_KINDS: usize = 5;
+
+/// The debug text of each runtime kind, in kind order (D-233, D-784).
+const RUNTIME_KIND_NAMES: [&str; RUNTIME_KINDS] =
+    ["<Sender>", "<Receiver>", "<Fiber>", "<Scope>", "<Selector>"];
+
+/// The index of the runtime kind of layout `id` among the counted kinds,
+/// or `None` for any other layout.
+#[cfg(debug_assertions)]
+fn runtime_kind_index(id: abi::LayoutId) -> Option<usize> {
+    id.checked_sub(abi::layout::SENDER)
+        .and_then(|index| usize::try_from(index).ok())
+        .filter(|&index| index < RUNTIME_KINDS)
+}
+
+/// D-711's line, which follows D-458's when the debug leak check fails:
+/// the counts of the leaked objects of each runtime kind, in kind order,
+/// then the other leaked objects, for example `note: leaked 1 <Receiver>,
+/// and 1 object of other kinds` (D-784). The tail is left out when every
+/// leaked object is of a runtime kind. `kinds` are the live objects of
+/// each runtime kind ([`Domain::live_kinds`], or a test's delta of it) and
+/// `live` all live objects, those included. `None` when no runtime-kind
+/// object leaked, and always in a release build, which does not count
+/// kinds.
+#[must_use]
+pub fn leaked_kinds_line(kinds: [i64; RUNTIME_KINDS], live: i64) -> Option<String> {
+    if !cfg!(debug_assertions) {
+        return None;
+    }
+    let mut parts = Vec::new();
+    let mut counted: i64 = 0;
+    for (count, name) in kinds.into_iter().zip(RUNTIME_KIND_NAMES) {
+        if count > 0 {
+            parts.push(format!("{count} {name}"));
+            counted = counted.saturating_add(count);
+        }
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    match live.saturating_sub(counted) {
+        1 => parts.push("and 1 object of other kinds".to_owned()),
+        others if others > 1 => parts.push(format!("and {others} objects of other kinds")),
+        _ => {}
+    }
+    Some(format!("note: leaked {}", parts.join(", ")))
 }
 
 /// One shard of a domain's counters.
@@ -126,13 +183,15 @@ impl Default for Domain {
     fn default() -> Self {
         Self {
             // The exclusive shards, then as many shared ones
-            // (GAP(single-writer-shards)).
+            // (D-773).
             shards: (0..shard_count().saturating_mul(2))
                 .map(|_| CachePadded::new(Shard::default()))
                 .collect(),
             peak: AtomicI64::new(0),
             stats: Stats::default(),
             system_refused: AtomicBool::new(false),
+            #[cfg(debug_assertions)]
+            kinds: Default::default(),
             #[cfg(test)]
             samples: std::sync::atomic::AtomicU64::new(0),
         }
@@ -147,7 +206,7 @@ impl Domain {
     }
 
     /// The shard of index `index` (`tls::shard_index`), and whether it is
-    /// exclusive to the charging thread (GAP(single-writer-shards)): an
+    /// exclusive to the charging thread (D-773): an
     /// index below the number of exclusive shards is one, and any other
     /// is reduced to one of the shared shards that follow them (a power
     /// of two).
@@ -174,6 +233,37 @@ impl Domain {
             .iter()
             .map(|shard| shard.objects.load(Ordering::Relaxed))
             .fold(0, i64::wrapping_add)
+    }
+
+    /// Live objects of the runtime kinds 40 to 44 (Sender, Receiver,
+    /// Fiber, Scope, Selector), counted in debug builds only; zeros in
+    /// release builds (D-711). They are among [`Domain::live_objects`].
+    #[cfg(debug_assertions)]
+    #[must_use]
+    pub fn live_kinds(&self) -> [i64; RUNTIME_KINDS] {
+        self.kinds
+            .each_ref()
+            .map(|count| count.load(Ordering::Relaxed))
+    }
+
+    /// Live objects of the runtime kinds 40 to 44 (Sender, Receiver,
+    /// Fiber, Scope, Selector), counted in debug builds only; zeros in
+    /// release builds (D-711).
+    #[cfg(not(debug_assertions))]
+    #[must_use]
+    pub fn live_kinds(&self) -> [i64; RUNTIME_KINDS] {
+        [0; RUNTIME_KINDS]
+    }
+
+    /// Adds `delta` to the live objects of the runtime kinds (debug builds
+    /// only, D-711).
+    #[cfg(debug_assertions)]
+    fn count_kinds(&self, delta: &[i64; RUNTIME_KINDS]) {
+        for (count, &delta) in self.kinds.iter().zip(delta) {
+            if delta != 0 {
+                count.fetch_add(delta, Ordering::Relaxed);
+            }
+        }
     }
 
     /// Bytes of those objects: the sum of the shards.
@@ -210,7 +300,7 @@ impl Domain {
     }
 
     /// Whether the system allocator refused a request charged to this
-    /// domain (GAP(system-refusal-leak)). An in-place update of a list,
+    /// domain (D-771). An in-place update of a list,
     /// map or text that it stopped halfway may have leaked the structure
     /// in flight, so the debug leak check after such a run would report a
     /// leak the program did not make.
@@ -227,7 +317,7 @@ impl Domain {
     /// Adds `objects` and `bytes` to shard `index`. An exclusive shard has
     /// one writer, the thread that holds it, so it is charged with a
     /// relaxed load and store, which cost less than an atomic add even
-    /// uncontended (GAP(single-writer-shards)); readers sum relaxed loads
+    /// uncontended (D-773); readers sum relaxed loads
     /// as before. A shared shard takes atomic adds.
     fn charge(&self, index: usize, objects: i64, bytes: i64) {
         let (shard, alone) = self.shard(index);
@@ -490,6 +580,16 @@ pub unsafe fn freeze(word: Word) {
                 let mut visit = |child: Word| list.push(child);
                 // SAFETY: a live object of this kind.
                 unsafe { (kind.children)(word, &mut visit) };
+                // A runtime kind cannot reach a constant (E0077); should
+                // one, it leaves the kind counts with the object.
+                #[cfg(debug_assertions)]
+                {
+                    // SAFETY: a live heap object.
+                    let (_, id) = unsafe { scan_and_layout(obj) };
+                    let mut delta = [0; RUNTIME_KINDS];
+                    tally_kind(&mut delta, id, -1);
+                    charge_kinds(current_fiber(), &delta);
+                }
             }
         }
         // SAFETY: a live heap object; its count is written only by this
@@ -509,6 +609,14 @@ pub(crate) unsafe fn leave_domain(obj: *mut u8) {
     let shape = unsafe { shape_of(obj) };
     // The allocation's size, as `alloc_object` charged it.
     charge(-1, to_u64(object_layout(shape.size).size()));
+    #[cfg(debug_assertions)]
+    {
+        // SAFETY: forwarded from the caller.
+        let (_, id) = unsafe { scan_and_layout(obj) };
+        let mut delta = [0; RUNTIME_KINDS];
+        tally_kind(&mut delta, id, -1);
+        charge_kinds(current_fiber(), &delta);
+    }
 }
 
 /// Allocates an object for generated code: `size` bytes including the
@@ -617,7 +725,7 @@ fn alloc_from(ctx: Option<&ExecCtx>, size: u64, header: u64, try_cache: bool) ->
 
 /// Ends a request of `request` bytes that the system allocator refused,
 /// as [`out_of_memory`] says, after marking the domain `ctx` charges
-/// (GAP(system-refusal-leak)): the refusal may stop an in-place update
+/// (D-771): the refusal may stop an in-place update
 /// halfway and leak the structure in flight, so `run_main` skips the
 /// debug leak check of that domain and counts the skip.
 fn system_refused(ctx: Option<&ExecCtx>, request: u64) -> ! {
@@ -641,7 +749,7 @@ static REFUSAL_ARMED: AtomicBool = AtomicBool::new(false);
 /// arms the calling thread (the tests of this crate share the process), and
 /// while it is armed that thread's allocations bypass the block cache, so
 /// the next one reaches the system path, which tests and clears the flag
-/// and then ends the request as a refusal does (GAP(system-refusal-leak)).
+/// and then ends the request as a refusal does (D-771).
 /// One thread is armed at a time: tests that arm it hold
 /// `alloc::tests::serial()`. It does not reach `alloc::scratch`, which
 /// grows with
@@ -863,6 +971,10 @@ struct Pending {
     inline: [MaybeUninit<Word>; PENDING_INLINE],
     len: usize,
     spill: Option<Vec<Word>>,
+    /// The objects of each runtime kind freed so far, negative, charged
+    /// with the objects once the free ends (debug builds only, D-711).
+    #[cfg(debug_assertions)]
+    kinds: [i64; RUNTIME_KINDS],
 }
 
 impl Pending {
@@ -874,6 +986,8 @@ impl Pending {
             inline,
             len: 1,
             spill: None,
+            #[cfg(debug_assertions)]
+            kinds: [0; RUNTIME_KINDS],
         }
     }
 
@@ -936,7 +1050,7 @@ pub(crate) unsafe fn free(obj: *mut u8) {
 }
 
 /// [`free`] by the fiber `ctx`, given by a caller that has its control
-/// block: generated code's `cheby_rt_drop` (GAP(drop-with-ctx)). The block
+/// block: generated code's `cheby_rt_drop` (D-772). The block
 /// cache is then read through the control block's record and the domain
 /// charged through `ctx`, with no `tls.rs` accessor call (D-739). With
 /// `None` the running fiber and the cache are looked up, as [`free`] does.
@@ -965,6 +1079,8 @@ pub(crate) unsafe fn free_in(ctx: Option<&ExecCtx>, obj: *mut u8) {
         (ctx, unsafe { drain(&mut pending, cache) })
     });
     charge_freed(ctx, objects, bytes);
+    #[cfg(debug_assertions)]
+    charge_kinds(ctx, &pending.kinds);
     pending.finish();
 }
 
@@ -997,7 +1113,7 @@ unsafe fn free_leaf(ctx: Option<&ExecCtx>, obj: *mut u8) -> bool {
 /// fiber runs, and no cache when it is in use (a finalizer freeing
 /// directly) or gone (thread teardown). Given `known`, the running fiber's
 /// control block, the cache comes from its record and no `tls.rs`
-/// accessor is called (D-739, GAP(drop-with-ctx)); otherwise one accessor
+/// accessor is called (D-739, D-772); otherwise one accessor
 /// call finds both (GATE1-1). `f` never suspends (D-686).
 fn with_fiber_cache<'a, R>(
     known: Option<&'a ExecCtx>,
@@ -1042,6 +1158,36 @@ fn with_fiber_cache<'a, R>(
 fn charge_freed(ctx: Option<&ExecCtx>, objects: i64, bytes: u64) {
     let bytes = i64::try_from(bytes).unwrap_or(i64::MAX).saturating_neg();
     with_charged(ctx, |domain, shard| domain.charge(shard, objects, bytes));
+}
+
+/// Adds `delta` to the live runtime-kind objects of the domain `ctx`
+/// charges, or without a fiber the host's (debug builds only, D-711), as
+/// [`charge_freed`] charges the objects.
+#[cfg(debug_assertions)]
+fn charge_kinds(ctx: Option<&ExecCtx>, delta: &[i64; RUNTIME_KINDS]) {
+    if delta.iter().any(|&count| count != 0) {
+        with_charged(ctx, |domain, _| domain.count_kinds(delta));
+    }
+}
+
+/// Adds `by` to `delta`'s count of the runtime kind of layout `id`, if it
+/// is one (debug builds only, D-711).
+#[cfg(debug_assertions)]
+fn tally_kind(delta: &mut [i64; RUNTIME_KINDS], id: abi::LayoutId, by: i64) {
+    if let Some(count) = runtime_kind_index(id).and_then(|index| delta.get_mut(index)) {
+        *count = count.saturating_add(by);
+    }
+}
+
+/// Counts a new object of the runtime kind of layout `id` (40 to 44) in
+/// the domain it was charged to: `ctx`'s, or the running fiber's, or
+/// without a fiber the host's, as [`alloc_for`] chooses (debug builds
+/// only, D-711). The handle constructors call it right after allocating.
+#[cfg(debug_assertions)]
+pub(crate) fn count_new_kind(ctx: Option<&ExecCtx>, id: abi::LayoutId) {
+    let mut delta = [0; RUNTIME_KINDS];
+    tally_kind(&mut delta, id, 1);
+    charge_kinds(ctx.or_else(current_fiber), &delta);
 }
 
 /// Releases one reference held by a dying object, queueing the child when
@@ -1096,6 +1242,13 @@ unsafe fn drain(list: &mut Pending, mut cache: Option<&mut BlockCache>) -> (i64,
                 }
             }
             Children::Custom(kind) => {
+                #[cfg(debug_assertions)]
+                {
+                    // SAFETY: `obj` is still a live object (its block is
+                    // released below).
+                    let (_, id) = unsafe { scan_and_layout(obj) };
+                    tally_kind(&mut list.kinds, id, -1);
+                }
                 let mut visit = |child: Word| {
                     // SAFETY: every word the kind visits, or its finalizer
                     // gives up, is a reference the dying object owns.
@@ -1544,6 +1697,37 @@ pub(crate) mod tests {
     use super::*;
     use crate::abi::layout as ids;
     use crate::object::write_field;
+
+    /// D-784's text: kinds in kind order with their debug text, the tail
+    /// for the other objects with its grammar, no tail when every leaked
+    /// object is of a runtime kind, and no line without a runtime kind.
+    #[test]
+    fn the_leaked_kinds_line_follows_d784() {
+        let line = |kinds, live| leaked_kinds_line(kinds, live);
+        if !cfg!(debug_assertions) {
+            assert_eq!(line([1, 0, 0, 0, 0], 3), None);
+            return;
+        }
+        assert_eq!(
+            line([0, 1, 0, 0, 0], 2).as_deref(),
+            Some("note: leaked 1 <Receiver>, and 1 object of other kinds")
+        );
+        assert_eq!(
+            line([1, 0, 2, 0, 0], 17).as_deref(),
+            Some("note: leaked 1 <Sender>, 2 <Fiber>, and 14 objects of other kinds")
+        );
+        assert_eq!(
+            line([0, 0, 0, 3, 1], 4).as_deref(),
+            Some("note: leaked 3 <Scope>, 1 <Selector>")
+        );
+        assert_eq!(line([0; RUNTIME_KINDS], 5), None);
+        // A test's delta may be negative for a kind it freed.
+        assert_eq!(line([-1, 0, 0, 0, 0], 2), None);
+        assert_eq!(
+            line([-1, 1, 0, 0, 0], 1).as_deref(),
+            Some("note: leaked 1 <Receiver>")
+        );
+    }
 
     /// Serializes the old tests that looked at the process-wide leak
     /// counter. Accounting domains make it unnecessary; new tests do not

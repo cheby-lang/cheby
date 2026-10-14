@@ -28,7 +28,7 @@
 //!    code has unwind edges ([`Jit::unwind_edges`]): under
 //!    `CHEBY_UNWIND_EDGES=off` (D-742) a panicking constant ends the
 //!    process with its report instead of returning into code that tests
-//!    no flag (GAP(edgeless-panics)).
+//!    no flag (D-770).
 //!    A top-level evaluation that runs out of time or memory (D-536) is
 //!    E0076 at that constant: the host's watchdog interrupts it at its next
 //!    function entry or tail call once its deadline passes, and an
@@ -174,6 +174,7 @@ pub fn evaluate_with(
                 };
                 diagnostics.extend(diagnostic);
             }
+            EntryOutcome::Exited(status) => return Err(exited(jit, status)),
         }
     }
     if diagnostics.is_empty()
@@ -224,7 +225,7 @@ pub fn debug_texts(jit: &Jit, defs: &[DefId]) -> Result<Vec<Option<String>>, Ice
         0
     };
     // The task calls the JIT's trampolines, so the entry carries whether
-    // the JIT's code has unwind edges (D-742, GAP(edgeless-panics)).
+    // the JIT's code has unwind edges (D-742, D-770).
     let config = EntryConfig {
         callbacks: jit.callbacks(),
         domain: jit.domain(),
@@ -241,6 +242,7 @@ pub fn debug_texts(jit: &Jit, defs: &[DefId]) -> Result<Vec<Option<String>>, Ice
             "printing a constant panicked: {}",
             report.message
         ))),
+        Ok(EntryOutcome::Exited(status)) => Err(exited(jit, status)),
         Err(e) => Err(Ice::new(format!("printing constants: {e}"))),
     }
 }
@@ -322,8 +324,21 @@ fn rebuild(jit: &Jit, slots: &[*mut u64]) -> Result<(), Ice> {
             "rebuilding the maps and sets of constants panicked: {}",
             report.message
         ))),
+        Ok(EntryOutcome::Exited(status)) => Err(exited(jit, status)),
         Err(e) => Err(Ice::new(format!("rebuilding constants: {e}"))),
     }
+}
+
+/// An isolated entry of constant evaluation ended the program with
+/// `status` (D-709): its thread is parked for good, so the JIT's code it
+/// runs and every value it may reach are kept (leaked) for the rest of the
+/// process. A constant cannot reach a write to standard output (E0077), so
+/// a termination here is a bug: an internal error.
+fn exited(jit: &Jit, status: i32) -> Ice {
+    std::mem::forget(jit.code_token());
+    Ice::new(format!(
+        "a constant's evaluation ended the program with status {status}"
+    ))
 }
 
 /// E0076 for a top-level evaluation of `top` that ran out of time or

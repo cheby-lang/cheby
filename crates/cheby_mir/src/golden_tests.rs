@@ -5,12 +5,14 @@
 //! The harness mirrors the driver's flow (G1) with an in-test
 //! `std/io.cheby`, like `cheby_types`' tests.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::borrow::{BuildFacts, IfaceEligibility, infer, infer_build};
 use crate::{
-    Defs, EntryKind, EntryRequest, LowerCx, MirModule, count_and_check, dump, lower_entries,
-    lower_module,
+    Defs, EntryKind, EntryRequest, LowerCx, MirModule, MirOptions, check_lowered,
+    count_lowered_with, dump, lower_entries, lower_module,
 };
 use cheby_diag::{Diagnostic, FileId, SourceMap};
 use cheby_iface::{
@@ -23,6 +25,7 @@ use cheby_resolve::{
     resolve_import_targets, resolve_module,
 };
 use cheby_syntax::SyntaxTree;
+use cheby_types::thir;
 use cheby_types::{TypesInput, build_interface, check_bodies};
 
 /// The slice's `std/io.cheby` (D-450).
@@ -157,6 +160,8 @@ fn build(package: &str, main: &str) -> String {
     }
     let mut set = InterfaceSet::new(builtin::interface(&globals));
     let mut units: Vec<MirModule> = Vec::new();
+    // Each module's THIR and dependencies, for the borrowing inference.
+    let mut checked: BTreeMap<ModuleId, (thir::Module, Vec<ModuleId>)> = BTreeMap::new();
     let mut main_entry = None;
     for node in order {
         let id = ModuleId::from_u32(node);
@@ -214,13 +219,14 @@ fn build(package: &str, main: &str) -> String {
             },
             sources: &sources,
         };
-        let mut unit = lower_module(&thir, &cx).unwrap();
-        count_and_check(&mut unit).unwrap();
+        let unit = lower_module(&thir, &cx).unwrap();
+        check_lowered(&unit).unwrap();
         units.push(unit);
         if id == root {
             main_entry = thir.fns.iter().find(|f| f.entry.is_some()).cloned();
         }
         set.insert(Arc::new(iface)).unwrap();
+        checked.insert(id, (thir, deps));
     }
     let main = main_entry.expect("the root module has a `main`");
     let all: Vec<ModuleId> = (1..modules.table.len())
@@ -236,7 +242,7 @@ fn build(package: &str, main: &str) -> String {
         },
         sources: &sources,
     };
-    let mut entries = lower_entries(
+    let entries = lower_entries(
         &[EntryRequest {
             kind: EntryKind::Main(main.def),
             info: main.entry.as_ref(),
@@ -244,8 +250,28 @@ fn build(package: &str, main: &str) -> String {
         &cx,
     )
     .unwrap();
-    count_and_check(&mut entries).unwrap();
+    check_lowered(&entries).unwrap();
     units.push(entries);
+    // As a build does it (D-779): the masks inferred over every unit and
+    // written into each, then counting.
+    let per_unit = |unit: &MirModule, facts: &BuildFacts| {
+        let crate::UnitKind::Code(id) = unit.unit else {
+            return Ok(BTreeMap::new());
+        };
+        let (thir, dep_ids) = &checked[&id];
+        let view = DepView::new(&set, dep_ids);
+        let readable = Defs {
+            own: set.get(id),
+            deps: &view,
+            modules: &modules.table,
+            globals: &globals,
+        };
+        Ok::<_, Ice>(infer(unit, facts, &IfaceEligibility::new(readable, thir)))
+    };
+    infer_build(&mut units, &per_unit).unwrap();
+    for unit in &mut units {
+        count_lowered_with(unit, &MirOptions::default()).unwrap();
+    }
     units
         .iter()
         .map(|u| dump(u).unwrap())

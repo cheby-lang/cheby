@@ -5,6 +5,7 @@
 use std::collections::BTreeMap;
 
 use crate::borrow::{BorrowMask, BuildFacts, collect_facts};
+use crate::dump;
 use crate::test_support::{
     lower_package_inferred, lower_source, lower_source_inferred, lower_source_uncounted,
     lower_source_with_tests_uncounted,
@@ -87,9 +88,24 @@ priv fn depth(tree: Tree) -> Int {{
     let m = masks(&source);
     assert_eq!(of(&m, "app::sum"), mask(&[0]), "{m:?}");
     assert_eq!(of(&m, "app::depth"), mask(&[0]), "{m:?}");
-    // `build` is package-visible: owned under the `priv`-only reading this
-    // test uses (D-787 borrows it; P1b switches the default).
+    // `build`'s only parameter is a raw `Int`, which is not counted.
     assert_eq!(of(&m, "app::build"), BorrowMask::OWNED);
+    // Counted as a build counts it: the subtrees are borrowed projections
+    // (GAP(borrowed-projections)) passed on borrowed, so `sum` has no
+    // `dup` at all and drops only its calls' boxed results.
+    let built = lower_source(&[("", source.as_str())]);
+    let sum = built.function("app", "app::sum");
+    assert!(sum.starts_with("fn app::sum(borrow _0: value)"), "{sum}");
+    assert!(!sum.contains("dup "), "{sum}");
+    for subtree in ["_0", "_3", "_5"] {
+        assert!(!sum.contains(&format!("drop {subtree}\n")), "{sum}");
+    }
+    assert!(sum.contains("call app::sum(borrow _3)"), "{sum}");
+    assert!(sum.contains("call app::sum(borrow _5)"), "{sum}");
+    // `main` keeps the tree across both calls and releases it once.
+    let main = built.function("app", "app::main");
+    assert!(main.contains("call app::sum(borrow _"), "{main}");
+    assert!(main.contains("call app::depth(borrow _"), "{main}");
 }
 
 #[test]
@@ -117,7 +133,8 @@ priv fn inner(s: String) -> Bool {
 }
 
 #[test]
-fn borrow_package_visible_function_only_in_the_alternative_reading() {
+fn borrow_package_visible_function_is_borrowed() {
+    // D-787: not `pub` is enough.
     let files = [(
         "",
         "import std::io
@@ -132,18 +149,16 @@ fn check(s: String) -> Bool {
 }
 ",
     )];
-    let default = lower_source_inferred(&files, false).masks;
-    assert_eq!(of(&default, "app::check"), BorrowMask::OWNED);
-    let wide = lower_package_inferred("app", &files, false, true)
-        .unwrap()
-        .masks;
-    assert_eq!(of(&wide, "app::check"), mask(&[0]), "{wide:?}");
+    let m = lower_source_inferred(&files, false).masks;
+    assert_eq!(of(&m, "app::check"), mask(&[0]), "{m:?}");
 }
 
 #[test]
-fn borrow_package_visible_function_named_by_another_module_is_owned() {
-    // The alternative reading still keeps D-250's owned convention for a
-    // function another module calls.
+fn borrow_package_visible_function_named_by_another_module_borrows() {
+    // D-787 refines D-250: a package-visible function that another module
+    // of the package calls may borrow, and that module's code calls it
+    // with its mask, in its callee declaration (the ABI signature and the
+    // slot key, D-715) and at the call site.
     let files = [
         (
             "",
@@ -175,11 +190,27 @@ fn helper(s: String) -> Bool {
 ",
         ),
     ];
-    let wide = lower_package_inferred("app", &files, false, true)
-        .unwrap()
-        .masks;
-    assert_eq!(of(&wide, "app::util::check"), BorrowMask::OWNED, "{wide:?}");
-    assert_eq!(of(&wide, "app::util::helper"), mask(&[0]), "{wide:?}");
+    let m = lower_package_inferred("app", &files, false).unwrap().masks;
+    assert_eq!(of(&m, "app::util::check"), mask(&[0]), "{m:?}");
+    assert_eq!(of(&m, "app::util::helper"), mask(&[0]), "{m:?}");
+    // `local` is `pub`: owned.
+    assert_eq!(of(&m, "app::util::local"), BorrowMask::OWNED, "{m:?}");
+    let built = crate::test_support::lower_package("app", &files).unwrap();
+    let app = dump(built.unit("app")).unwrap();
+    assert!(
+        app.contains("callee app::util::check(borrow value) -> value"),
+        "{app}"
+    );
+    // The literal is passed as the constant itself: nothing to release.
+    assert!(
+        app.contains("call app::util::check(borrow const str#"),
+        "{app}"
+    );
+    let util = dump(built.unit("app::util")).unwrap();
+    assert!(
+        util.contains("fn app::util::check(borrow _0: value)"),
+        "{util}"
+    );
 }
 
 #[test]
@@ -284,11 +315,11 @@ priv fn describe(error: Oops) -> String {
         })
         .expect("the entries unit holds `show`'s value shim");
     assert!(facts.used_as_value(show));
-    let wide = lower_package_inferred("app", &[("", source)], false, true)
+    let m = lower_package_inferred("app", &[("", source)], false)
         .unwrap()
         .masks;
-    assert_eq!(of(&wide, "app::show"), BorrowMask::OWNED, "{wide:?}");
-    assert_eq!(of(&wide, "app::describe"), mask(&[0]), "{wide:?}");
+    assert_eq!(of(&m, "app::show"), BorrowMask::OWNED, "{m:?}");
+    assert_eq!(of(&m, "app::describe"), mask(&[0]), "{m:?}");
 }
 
 #[test]
@@ -1045,13 +1076,21 @@ fn projections_saved(
     out
 }
 
-/// One build of the report: masks of both readings and the savings.
+/// One build of the report: the masks (D-787's reading) and the savings.
 struct Report {
     masks: BTreeMap<String, BorrowMask>,
-    wide: BTreeMap<String, BorrowMask>,
     saved: BTreeMap<String, u32>,
-    wide_saved: BTreeMap<String, u32>,
     test_masks: Option<BTreeMap<String, BorrowMask>>,
+}
+
+/// `units` as lowered, each counted on its own: all-owned, as before
+/// borrowing.
+fn counted_owned(units: &[crate::MirModule]) -> Vec<crate::MirModule> {
+    let mut counted = units.to_vec();
+    for unit in &mut counted {
+        crate::count_and_check(unit).unwrap();
+    }
+    counted
 }
 
 fn report_one(name: &str, files: &[(String, String)]) -> Result<Report, String> {
@@ -1060,17 +1099,13 @@ fn report_one(name: &str, files: &[(String, String)]) -> Result<Report, String> 
         .map(|(m, s)| (m.as_str(), s.as_str()))
         .collect();
     let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let counted = crate::test_support::lower_package(name, &refs)?;
-        let inferred = lower_package_inferred(name, &refs, false, false)?;
-        let wide = lower_package_inferred(name, &refs, false, true)?;
-        let saved = saved_pairs(&counted.units, &inferred.units, &inferred.masks);
-        let wide_saved = saved_pairs(&counted.units, &wide.units, &wide.masks);
-        let tests = lower_package_inferred(name, &refs, true, false).ok();
+        let inferred = lower_package_inferred(name, &refs, false)?;
+        let counted = counted_owned(&inferred.units);
+        let saved = saved_pairs(&counted, &inferred.units, &inferred.masks);
+        let tests = lower_package_inferred(name, &refs, true).ok();
         Ok::<_, String>(Report {
             masks: inferred.masks,
-            wide: wide.masks,
             saved,
-            wide_saved,
             test_masks: tests.map(|t| t.masks),
         })
     }));
@@ -1083,17 +1118,9 @@ fn report_one(name: &str, files: &[(String, String)]) -> Result<Report, String> 
 /// The report's section on every function of std, lowered in full.
 fn std_section() -> String {
     use std::fmt::Write as _;
-    let build = |package_visible: bool| {
-        let lowered = crate::test_support::lower_std_inferred(package_visible).unwrap();
-        let mut counted = lowered.units.clone();
-        for unit in &mut counted {
-            crate::count_and_check(unit).unwrap();
-        }
-        let saved = saved_pairs(&counted, &lowered.units, &lowered.masks);
-        (lowered.masks, saved)
-    };
-    let (own, own_saved) = build(false);
-    let (wide, wide_saved) = build(true);
+    let lowered = crate::test_support::lower_std_inferred().unwrap();
+    let counted = counted_owned(&lowered.units);
+    let saved = saved_pairs(&counted, &lowered.units, &lowered.masks);
     let mut text = String::new();
     let _ = writeln!(
         text,
@@ -1101,30 +1128,18 @@ fn std_section() -> String {
     );
     let _ = writeln!(
         text,
-        "`priv` reading: {} borrowing functions, about {} pairs. Package-visible reading: {} functions, about {} pairs.\n",
-        own.len(),
-        own_saved.values().sum::<u32>(),
-        wide.len(),
-        wide_saved.values().sum::<u32>()
+        "{} borrowing functions, about {} pairs.\n",
+        lowered.masks.len(),
+        saved.values().sum::<u32>(),
     );
-    let _ = writeln!(
-        text,
-        "| Function | `priv` reading | Pairs | Package-visible reading | Pairs |"
-    );
-    let _ = writeln!(text, "| --- | --- | --- | --- | --- |");
-    for (p, m) in &wide {
-        let own_m = own.get(p).copied().unwrap_or(BorrowMask::OWNED);
+    let _ = writeln!(text, "| Function | Mask | Pairs |");
+    let _ = writeln!(text, "| --- | --- | --- |");
+    for (p, m) in &lowered.masks {
         let _ = writeln!(
             text,
-            "| `{p}` | {} | {} | {} | {} |",
-            if own_m.is_owned() {
-                "owned".to_owned()
-            } else {
-                mask_text(own_m)
-            },
-            own_saved.get(p).copied().unwrap_or(0),
+            "| `{p}` | {} | {} |",
             mask_text(*m),
-            wide_saved.get(p).copied().unwrap_or(0),
+            saved.get(p).copied().unwrap_or(0),
         );
     }
     text.push('\n');
@@ -1154,10 +1169,8 @@ fn borrow_report_masks() {
     }
     let mut text = String::new();
     let mut std_masks: BTreeMap<String, BorrowMask> = BTreeMap::new();
-    let mut std_wide: BTreeMap<String, BorrowMask> = BTreeMap::new();
     let mut std_saved: BTreeMap<String, u32> = BTreeMap::new();
-    let mut std_wide_saved: BTreeMap<String, u32> = BTreeMap::new();
-    let mut totals = (0_usize, 0_u32, 0_usize, 0_u32);
+    let mut totals = (0_usize, 0_u32);
     for dir in &dirs {
         let label = dir.strip_prefix(&root).unwrap().display().to_string();
         let Some((name, files)) = program(dir) else {
@@ -1185,53 +1198,29 @@ fn borrow_report_masks() {
             let e = std_saved.entry(p.clone()).or_default();
             *e = (*e).max(s);
         }
-        for (p, &m) in report.wide.iter().filter(|(p, _)| p.starts_with("std::")) {
-            std_wide.insert(p.clone(), m);
-            let s = report.wide_saved.get(p).copied().unwrap_or(0);
-            let e = std_wide_saved.entry(p.clone()).or_default();
-            *e = (*e).max(s);
-        }
         let own = user(&report.masks);
-        let wide = user(&report.wide);
         let own_saved: u32 = own
             .iter()
             .map(|(p, _)| report.saved.get(p).copied().unwrap_or(0))
             .sum();
-        let wide_saved: u32 = wide
-            .iter()
-            .map(|(p, _)| report.wide_saved.get(p).copied().unwrap_or(0))
-            .sum();
         totals = (
             totals.0.saturating_add(own.len()),
             totals.1.saturating_add(own_saved),
-            totals.2.saturating_add(wide.len()),
-            totals.3.saturating_add(wide_saved),
         );
         let _ = writeln!(
             text,
-            "`priv` reading: {} borrowing functions, about {own_saved} pairs saved. Package-visible reading: {} functions, about {wide_saved} pairs.\n",
+            "{} borrowing functions, about {own_saved} pairs saved.\n",
             own.len(),
-            wide.len()
         );
-        if !wide.is_empty() {
-            let _ = writeln!(
-                text,
-                "| Function | `priv` reading | Pairs | Package-visible reading | Pairs |"
-            );
-            let _ = writeln!(text, "| --- | --- | --- | --- | --- |");
-            for (p, m) in &wide {
-                let own_m = report.masks.get(p).copied().unwrap_or(BorrowMask::OWNED);
+        if !own.is_empty() {
+            let _ = writeln!(text, "| Function | Mask | Pairs |");
+            let _ = writeln!(text, "| --- | --- | --- |");
+            for (p, m) in &own {
                 let _ = writeln!(
                     text,
-                    "| `{p}` | {} | {} | {} | {} |",
-                    if own_m.is_owned() {
-                        "owned".to_owned()
-                    } else {
-                        mask_text(own_m)
-                    },
-                    report.saved.get(p).copied().unwrap_or(0),
+                    "| `{p}` | {} | {} |",
                     mask_text(*m),
-                    report.wide_saved.get(p).copied().unwrap_or(0),
+                    report.saved.get(p).copied().unwrap_or(0),
                 );
             }
             text.push('\n');
@@ -1240,10 +1229,7 @@ fn borrow_report_masks() {
             Some(t) => {
                 let tm = user(t);
                 if tm != own {
-                    let _ = writeln!(
-                        text,
-                        "`cheby test` build (`priv` reading) differs: {tm:?}\n"
-                    );
+                    let _ = writeln!(text, "`cheby test` build differs: {tm:?}\n");
                 }
             }
             None => {
@@ -1257,36 +1243,24 @@ fn borrow_report_masks() {
     let mut head = String::new();
     let _ = writeln!(
         head,
-        "Totals over the examples and the RC programs (user code): `priv` reading {} functions, about {} pairs; package-visible reading {} functions, about {} pairs.\n",
-        totals.0, totals.1, totals.2, totals.3
+        "Totals over the examples and the RC programs (user code, D-787): {} functions, about {} pairs.\n",
+        totals.0, totals.1
     );
     let _ = writeln!(head, "### std (`cheby run` builds of the programs above)\n");
     let _ = writeln!(
         head,
-        "`priv` reading: {} borrowing functions, about {} pairs. Package-visible reading: {} functions, about {} pairs.\n",
+        "{} borrowing functions, about {} pairs.\n",
         std_masks.len(),
         std_saved.values().sum::<u32>(),
-        std_wide.len(),
-        std_wide_saved.values().sum::<u32>()
     );
-    let _ = writeln!(
-        head,
-        "| Function | `priv` reading | Pairs | Package-visible reading | Pairs |"
-    );
-    let _ = writeln!(head, "| --- | --- | --- | --- | --- |");
-    for (p, m) in &std_wide {
-        let own_m = std_masks.get(p).copied().unwrap_or(BorrowMask::OWNED);
+    let _ = writeln!(head, "| Function | Mask | Pairs |");
+    let _ = writeln!(head, "| --- | --- | --- |");
+    for (p, m) in &std_masks {
         let _ = writeln!(
             head,
-            "| `{p}` | {} | {} | {} | {} |",
-            if own_m.is_owned() {
-                "owned".to_owned()
-            } else {
-                mask_text(own_m)
-            },
-            std_saved.get(p).copied().unwrap_or(0),
+            "| `{p}` | {} | {} |",
             mask_text(*m),
-            std_wide_saved.get(p).copied().unwrap_or(0),
+            std_saved.get(p).copied().unwrap_or(0),
         );
     }
     head.push('\n');

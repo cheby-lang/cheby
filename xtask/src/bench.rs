@@ -35,6 +35,18 @@
 //! runs in this xtask, so for another commit run the command from that
 //! commit's tree), `--env KEY=VALUE` sets a variable for every child
 //! process, and `--json` writes the rows with the machine's metadata.
+//!
+//! `--shapes huge` selects the `huge_literals` shapes of `bench/gen`
+//! (D-720): one literal of n computed elements per project, for each kind
+//! (list, interpolation, map, tuple) at n = 25k, 50k, 100k and 200k
+//! ([`HUGE_SIZES`]), so that the build times give the slope per doubling.
+//! Alone it measures only those; it combines with sizes, as in
+//! `--shapes 10k,huge`. They are opt-in: with no `--shapes`, or with
+//! `--quick`, the default projects ([`SIZES`]) are measured exactly as
+//! before, so that later rows stay comparable with D-766's (D-776). Rows of
+//! 100k elements or more take one run each, and the 100k and 200k builds
+//! need gigabytes of memory before D-720's splitting (D-643). JSON rows of
+//! these shapes carry `elements`, the n of the literal.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -50,9 +62,10 @@ pub struct Args {
     /// Only the 10k-line projects
     #[arg(long, conflicts_with = "shapes")]
     quick: bool,
-    /// The project sizes to measure, such as `10k,100k,1m`
-    #[arg(long, value_delimiter = ',', value_parser = parse_size)]
-    shapes: Vec<usize>,
+    /// The project sizes to measure, such as `10k,100k,1m`; `huge` adds the
+    /// `huge_literals` shapes at 25k to 200k elements (D-720)
+    #[arg(long, value_delimiter = ',', value_parser = parse_selection)]
+    shapes: Vec<Selection>,
     /// The `cheby` binary to time, instead of building one
     #[arg(long)]
     cheby: Option<PathBuf>,
@@ -69,13 +82,43 @@ pub struct Args {
     summary: Option<PathBuf>,
 }
 
+/// One entry of `--shapes`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Selection {
+    /// The default projects of one size of [`SIZES`].
+    Lines(usize),
+    /// The `huge_literals` shapes at every size of [`HUGE_SIZES`].
+    Huge,
+}
+
+impl Selection {
+    /// The name `--shapes` takes.
+    fn name(self) -> String {
+        match self {
+            Self::Lines(lines) => size_name(lines),
+            Self::Huge => HUGE.to_owned(),
+        }
+    }
+}
+
+/// The `--shapes` entry that selects the `huge_literals` shapes.
+const HUGE: &str = "huge";
+
+/// Parses a `--shapes` entry: a project size or `huge`.
+fn parse_selection(text: &str) -> Result<Selection, String> {
+    if text == HUGE {
+        return Ok(Selection::Huge);
+    }
+    parse_size(text).map(Selection::Lines)
+}
+
 /// Parses a project size: `10k`, `100k` or `1m`.
 fn parse_size(text: &str) -> Result<usize, String> {
     SIZES
         .iter()
         .map(|&(lines, _)| lines)
         .find(|&lines| size_name(lines) == text)
-        .ok_or_else(|| format!("`{text}` is not a project size; use 10k, 100k or 1m"))
+        .ok_or_else(|| format!("`{text}` is not a project size; use 10k, 100k, 1m or huge"))
 }
 
 /// `10k`, `100k` or `1m`.
@@ -99,6 +142,37 @@ const SIZES: [(usize, &[Shape]); 3] = [
     (1_000_000, &[Shape::Large, Shape::Wide]),
 ];
 
+/// The elements of each literal under `--shapes huge`, for every shape of
+/// [`Shape::HUGE_LITERALS`] (D-720): each size doubles the last, so the
+/// ratio of two neighbors is the slope.
+const HUGE_SIZES: [usize; 4] = [25_000, 50_000, 100_000, 200_000];
+
+/// The projects to measure, in order: the lines (or, for the
+/// `huge_literals` shapes, the elements) and the shape.
+fn projects(quick: bool, shapes: &[Selection]) -> Vec<(usize, Shape)> {
+    let mut out = Vec::new();
+    for (lines, sized) in SIZES {
+        let wanted = if quick {
+            lines == 10_000
+        } else {
+            shapes.is_empty() || shapes.contains(&Selection::Lines(lines))
+        };
+        if wanted {
+            out.extend(sized.iter().map(|&shape| (lines, shape)));
+        }
+    }
+    if !quick && shapes.contains(&Selection::Huge) {
+        for elements in HUGE_SIZES {
+            out.extend(
+                Shape::HUGE_LITERALS
+                    .into_iter()
+                    .map(|shape| (elements, shape)),
+            );
+        }
+    }
+    out
+}
+
 /// Runs per measurement; the fastest counts.
 const RUNS: usize = 3;
 /// Runs per measurement on the 1M-line projects.
@@ -110,6 +184,8 @@ const RERUN_ENV: &str = "CHEBY_BENCH_RERUN";
 /// One row of the report.
 struct Row {
     lines: usize,
+    /// The literal's elements, for the `huge_literals` shapes.
+    elements: Option<usize>,
     shape: Shape,
     modules: usize,
     /// `cheby check` with `--jobs 1` and with the default.
@@ -155,59 +231,56 @@ pub fn run(root: &Path, args: &Args) -> Result<(), String> {
     }
     let load_before = crate::bench_run::load_average();
     let mut rows = Vec::new();
-    for (lines, shapes) in SIZES {
-        let wanted = if args.quick {
-            lines == 10_000
+    for (lines, shape) in projects(args.quick, &args.shapes) {
+        let huge = shape.is_huge_literal();
+        let runs = if lines >= 1_000_000 || (huge && lines >= 100_000) {
+            RUNS_1M
         } else {
-            args.shapes.is_empty() || args.shapes.contains(&lines)
+            RUNS
         };
-        if !wanted {
-            continue;
-        }
-        let runs = if lines >= 1_000_000 { RUNS_1M } else { RUNS };
-        for &shape in shapes {
-            let dir = base.join(format!("{lines}-{}", shape.name()));
-            let project = cheby_bench_gen::generate(&Config {
-                lines,
-                shape,
-                seed: 1,
-            });
-            project
-                .write(&dir)
-                .map_err(|e| format!("{}: {e}", dir.display()))?;
-            eprintln!("bench-compile: {lines} lines, shape `{}`", shape.name());
-            let mut check = [Duration::ZERO; 2];
-            let mut build = [(Duration::ZERO, Duration::ZERO); 2];
-            let mut size = BuildSize::default();
-            for (n, jobs) in [Some(1), None].into_iter().enumerate() {
-                let time = fastest(runs, || time_cheby(&cheby, &dir, jobs, "check", env))?;
-                let best = fastest_build(runs, || bench_build(&xtask, &dir, jobs, env))?;
-                if jobs == Some(1) {
-                    size = best.size;
-                }
-                if let (Some(c), Some(b)) = (check.get_mut(n), build.get_mut(n)) {
-                    *c = time;
-                    *b = (best.front, best.back);
-                }
+        let dir = base.join(format!("{lines}-{}", shape.name()));
+        let project = cheby_bench_gen::generate(&Config {
+            lines,
+            shape,
+            seed: 1,
+        });
+        project
+            .write(&dir)
+            .map_err(|e| format!("{}: {e}", dir.display()))?;
+        let unit = if huge { "elements" } else { "lines" };
+        eprintln!("bench-compile: {lines} {unit}, shape `{}`", shape.name());
+        let mut check = [Duration::ZERO; 2];
+        let mut build = [(Duration::ZERO, Duration::ZERO); 2];
+        let mut size = BuildSize::default();
+        for (n, jobs) in [Some(1), None].into_iter().enumerate() {
+            let time = fastest(runs, || time_cheby(&cheby, &dir, jobs, "check", env))?;
+            let best = fastest_build(runs, || bench_build(&xtask, &dir, jobs, env))?;
+            if jobs == Some(1) {
+                size = best.size;
             }
-            let edit_to_run = if shape == Shape::Wide {
-                Some(fastest(runs, || {
-                    edit_one_body(&dir)?;
-                    time_cheby(&cheby, &dir, None, "run", env)
-                })?)
-            } else {
-                None
-            };
-            rows.push(Row {
-                lines: project.lines(),
-                shape,
-                modules: project.modules(),
-                check,
-                build,
-                size,
-                edit_to_run,
-            });
+            if let (Some(c), Some(b)) = (check.get_mut(n), build.get_mut(n)) {
+                *c = time;
+                *b = (best.front, best.back);
+            }
         }
+        let edit_to_run = if shape == Shape::Wide {
+            Some(fastest(runs, || {
+                edit_one_body(&dir)?;
+                time_cheby(&cheby, &dir, None, "run", env)
+            })?)
+        } else {
+            None
+        };
+        rows.push(Row {
+            lines: project.lines(),
+            elements: huge.then_some(lines),
+            shape,
+            modules: project.modules(),
+            check,
+            build,
+            size,
+            edit_to_run,
+        });
     }
     let table = render(&rows);
     print!("{table}");
@@ -259,7 +332,7 @@ impl Row {
         let nanos = |d: Duration| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX);
         let [check_one, check_many] = self.check;
         let [(front_one, back_one), (front_many, back_many)] = self.build;
-        json!({
+        let mut row = json!({
             "lines": self.lines,
             "shape": self.shape.name(),
             "modules": self.modules,
@@ -269,7 +342,21 @@ impl Row {
             "code_bytes": self.size.code_bytes,
             "rc_ops": self.size.rc_ops,
             "edit_to_run_ns": self.edit_to_run.map(nanos),
-        })
+        });
+        // Only the `huge_literals` rows: the default rows keep their keys.
+        if let (Some(elements), Some(fields)) = (self.elements, row.as_object_mut()) {
+            fields.insert("elements".to_owned(), json!(elements));
+        }
+        row
+    }
+
+    /// The first column: the lines and the shape, or the elements of a
+    /// `huge_literals` shape.
+    fn label(&self) -> String {
+        match self.elements {
+            Some(elements) => format!("{elements} elements, `{}`", self.shape.name()),
+            None => format!("{} lines, `{}`", self.lines, self.shape.name()),
+        }
     }
 }
 
@@ -286,7 +373,7 @@ fn rerun_optimized(root: &Path, args: &Args) -> Result<(), String> {
         cmd.arg("--quick");
     }
     if !args.shapes.is_empty() {
-        let names: Vec<String> = args.shapes.iter().map(|&l| size_name(l)).collect();
+        let names: Vec<String> = args.shapes.iter().map(|s| s.name()).collect();
         cmd.arg("--shapes").arg(names.join(","));
     }
     // Paths are made absolute: the re-run starts in `root`.
@@ -498,9 +585,8 @@ fn render(rows: &[Row]) -> String {
         let latency = row.edit_to_run.map_or_else(|| "-".to_owned(), secs);
         let _ = writeln!(
             out,
-            "| {} lines, `{}` | {} | {} | {} | {} | {} | {} / {} | {} / {} | {} | {} | {} | {} | {} |",
-            row.lines,
-            row.shape.name(),
+            "| {} | {} | {} | {} | {} | {} | {} / {} | {} / {} | {} | {} | {} | {} | {} |",
+            row.label(),
             row.modules,
             secs(check_one),
             rate(row.lines, check_one),
@@ -549,6 +635,65 @@ mod tests {
         for (lines, _) in SIZES {
             assert_eq!(parse_size(&size_name(lines)), Ok(lines));
         }
+    }
+
+    #[test]
+    fn selections_parse_by_name() {
+        assert_eq!(parse_selection("huge"), Ok(Selection::Huge));
+        assert_eq!(parse_selection("100k"), Ok(Selection::Lines(100_000)));
+        assert!(parse_selection("huge_list").is_err());
+        assert!(parse_selection("25k").is_err());
+        for selection in [Selection::Huge, Selection::Lines(1_000_000)] {
+            assert_eq!(parse_selection(&selection.name()), Ok(selection));
+        }
+    }
+
+    /// `SIZES` is what D-766's and C1's rows measured (D-776), and the
+    /// `huge_literals` shapes come only with `--shapes huge`, at 25k, 50k,
+    /// 100k and 200k elements (D-720).
+    #[test]
+    fn huge_literals_are_opt_in() {
+        let names = |shapes: &[Shape]| shapes.iter().map(|s| s.name()).collect::<Vec<_>>();
+        let sizes: Vec<(usize, Vec<&str>)> = SIZES
+            .iter()
+            .map(|&(lines, shapes)| (lines, names(shapes)))
+            .collect();
+        assert_eq!(
+            sizes,
+            [
+                (10_000, vec!["small", "deep", "wide", "generic"]),
+                (100_000, vec!["small", "large", "wide"]),
+                (1_000_000, vec!["large", "wide"]),
+            ]
+        );
+
+        let every_size: Vec<(usize, Shape)> = SIZES
+            .iter()
+            .flat_map(|&(lines, shapes)| shapes.iter().map(move |&shape| (lines, shape)))
+            .collect();
+        assert_eq!(projects(false, &[]), every_size);
+        let quick: Vec<(usize, Shape)> = every_size
+            .iter()
+            .copied()
+            .filter(|&(lines, _)| lines == 10_000)
+            .collect();
+        assert_eq!(projects(true, &[]), quick);
+
+        let huge = projects(false, &[Selection::Huge]);
+        assert_eq!(huge.len(), 16);
+        for elements in [25_000, 50_000, 100_000, 200_000] {
+            let kinds: Vec<Shape> = huge
+                .iter()
+                .filter(|&&(n, _)| n == elements)
+                .map(|&(_, shape)| shape)
+                .collect();
+            assert_eq!(kinds, Shape::HUGE_LITERALS, "{elements}");
+        }
+
+        let both = projects(false, &[Selection::Huge, Selection::Lines(10_000)]);
+        let (first, rest) = both.split_at(quick.len());
+        assert_eq!(first, quick.as_slice());
+        assert_eq!(rest, huge.as_slice());
     }
 
     #[test]

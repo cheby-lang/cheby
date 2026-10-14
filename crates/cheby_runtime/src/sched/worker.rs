@@ -9,12 +9,13 @@
 //!    in the migration stress mode fibers moved off another worker); right
 //!    after a pinned fiber yielded, this queue comes after step 5 instead,
 //!    so the yield lets the worker's other fibers run;
-//! 2. every 61st round, the due timers, then the global queue first, so it
-//!    is never starved;
+//! 2. every 61st round, the due timers, then the global queue first, then
+//!    the local deque, so neither is starved;
 //! 3. its runnext slot: the fiber the running one woke just before it
 //!    blocked, which keeps a capacity-0 ping-pong on one worker; it
-//!    inherits the time slice, so the pair yields after one quantum and
-//!    cannot starve the deque (Go's `inheritTime`);
+//!    inherits the time slice, so the pair yields after one quantum (Go's
+//!    `inheritTime`); a chain of spawns through the slot, which never
+//!    yields between links, gives way to the deque at step 2;
 //! 4. its local Chase-Lev deque;
 //! 5. the global queue;
 //! 6. the due timers (D-682), then the global queue again;
@@ -25,6 +26,10 @@
 //! Then it parks until notified (`park`): in the runtime's poller if no
 //! other worker holds it, with the earliest timer's deadline as the limit,
 //! and otherwise on its own condition variable (D-680).
+//!
+//! Once a halt has started (D-073, D-708) the worker takes no fiber: its
+//! loop ends before the next search, and a fiber that switches back with
+//! `AfterSwitch::Freeze` is left frozen.
 
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
@@ -137,7 +142,8 @@ impl WorkerShared {
         })
     }
 
-    fn take_next(&self) -> Option<FiberRef> {
+    /// Empties the runnext slot and returns the fiber it held.
+    pub(super) fn take_next(&self) -> Option<FiberRef> {
         let old = self.runnext.swap(ptr::null_mut(), Ordering::AcqRel);
         ptr::NonNull::new(old).map(|old| {
             FiberRef::from_ctx(
@@ -264,6 +270,11 @@ pub(super) fn main(shared: &Shared, index: usize) {
 impl Worker<'_> {
     fn run(&mut self) {
         loop {
+            // A halt (D-073, D-708): take no fiber any more, not even a
+            // runnable one, so a requeued spinner is never resumed.
+            if self.shared.halting() {
+                break;
+            }
             self.tick = self.tick.wrapping_add(1);
             if let Some(fiber) = self.find_runnable() {
                 if self.searching {
@@ -309,6 +320,15 @@ impl Worker<'_> {
             // the fibers they wake go to the global queue.
             self.shared.fire_if_due();
             if let Some(fiber) = retry(|| self.shared.injector.steal()) {
+                return Some(fiber);
+            }
+            // The local deque before the runnext slot too: a chain of
+            // fibers that each spawn their successor into the slot and end
+            // never yields between links, so the slot alone would starve
+            // the deque on one worker (review finding ROB2-3 of gate 2).
+            // SAFETY: the worker loop runs on the worker's own thread, and
+            // the reference ends with this statement.
+            if let Some(fiber) = unsafe { self.me.local() }.pop() {
                 return Some(fiber);
             }
         }
@@ -452,6 +472,13 @@ impl Worker<'_> {
                 self.parked(fiber);
             }
             AfterSwitch::Exit => self.retire(fiber),
+            AfterSwitch::Freeze => {
+                // D-708: never resumed, requeued or retired; its slot,
+                // control block and wait nodes stay as they are.
+                ctx.sched.state().store(state::FROZEN, Ordering::SeqCst);
+                #[cfg(test)]
+                self.shared.probe.froze();
+            }
         }
     }
 

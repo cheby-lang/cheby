@@ -42,6 +42,7 @@
 use std::fmt::Write as _;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use cheby_diag::{Diagnostic, SourceMap};
 use cheby_iface::{DefId, Ice, ModuleId, PackageId};
@@ -51,7 +52,7 @@ use cheby_package::{Manifest, ModulePath};
 use cheby_runtime::entry::{
     DEFAULT_ROOT_STACK_SIZE, DEFAULT_STACK_SIZE, EntryConfig, EntryMode, EntryOutcome,
 };
-use cheby_runtime::{Runtime, RuntimeConfig, RuntimeError};
+use cheby_runtime::{DetachedGroup, Runtime, RuntimeConfig, RuntimeError};
 use cheby_types::thir;
 
 use crate::backend::{self, Roots, TestRoot};
@@ -174,6 +175,10 @@ pub struct TestReport {
     pub modules: Vec<ModuleTests>,
     /// How many tests the filter and `--module` left out.
     pub filtered_out: usize,
+    /// Whether a write that has no `Result` failed and so ended the run
+    /// (D-306, D-709): the run stopped at once, printed nothing more, and
+    /// `cheby test` exits with 1 (D-783).
+    pub terminated: bool,
 }
 
 /// Counts of one module or of a whole run.
@@ -212,15 +217,16 @@ impl TestReport {
         TestCounts::of(self.modules.iter().flat_map(|m| &m.tests))
     }
 
-    /// Whether every selected test passed (also when none was selected).
+    /// Whether every selected test passed (also when none was selected)
+    /// and no write failure ended the run.
     #[must_use]
     pub fn success(&self) -> bool {
         let counts = self.counts();
-        counts.failed == 0 && counts.not_built == 0
+        !self.terminated && counts.failed == 0 && counts.not_built == 0
     }
 
     /// The exit status: 0 when every selected test passed, 1 otherwise
-    /// (D-541, D-542).
+    /// (D-541, D-542), and 1 when a write failure ended the run (D-783).
     #[must_use]
     pub fn exit_status(&self) -> i32 {
         i32::from(!self.success())
@@ -435,11 +441,24 @@ impl TestProgram {
         let mut report = TestReport {
             modules: Vec::new(),
             filtered_out: self.filtered_out,
+            terminated: false,
         };
         let mut printed = false;
+        let mut stuck = StuckGroups::default();
         if let Some(jit) = &self.jit {
             for test in &self.tests {
-                let outcome = run_one(jit, runtime.as_ref(), test.def, self.stacks)?;
+                let outcome =
+                    match run_one(jit, runtime.as_ref(), test.def, self.stacks, &mut stuck)? {
+                        Ran::Done(outcome) => outcome,
+                        Ran::Exited(_) => {
+                            // D-783: the run stops at once and prints nothing
+                            // more; `cheby test` exits with 1. The halt is
+                            // completed while `jit` is still alive.
+                            complete_halt(runtime);
+                            report.terminated = true;
+                            return Ok(report);
+                        }
+                    };
                 out.write_all(
                     format!("{}\n", test_line(&test.module, &test.name, &outcome)).as_bytes(),
                 )
@@ -537,16 +556,61 @@ fn test_runtime(package: &str, stacks: Stacks) -> Result<Option<Runtime>, Error>
     }
 }
 
-/// Runs one test entry of `jit` as a root fiber of `runtime`, or on the
-/// thread backend without one, and reports how it ended.
+/// How running one test ended for the run.
+#[derive(Debug)]
+enum Ran {
+    /// The test ended with this outcome, and its detached fibers have
+    /// ended too.
+    Done(TestOutcome),
+    /// A write that has no `Result` failed while the test or one of its
+    /// fibers ran, and the program ended with this status (D-306, D-709):
+    /// the runtime's halt has started. The run stops (D-783).
+    Exited(i32),
+}
+
+/// D-306's status, which a termination that a teardown met carries.
+const WRITE_FAILURE_STATUS: i32 = 1;
+
+/// The groups of earlier tests on one runtime whose teardown skipped a
+/// fiber blocked inline in a system call (D-786). Such a fiber goes on
+/// when its call returns: it is cancelled, unwinds and releases what it
+/// holds, maybe while a later test runs, which would hide a leak of that
+/// test (review finding ROB2-2 of gate 2). So a test that starts while one
+/// of these groups is not empty gets no leak check either; it is skipped
+/// and counted (GAP(inline-io-later-checks)).
+#[derive(Debug, Default)]
+struct StuckGroups(Vec<Arc<DetachedGroup>>);
+
+impl StuckGroups {
+    /// Forgets the groups that are empty now, and returns whether one is
+    /// left.
+    fn any_live(&mut self) -> bool {
+        self.0.retain(|group| group.live() > 0);
+        !self.0.is_empty()
+    }
+}
+
+/// Runs one test entry of `jit` as a root fiber of `runtime` in a group
+/// of its own, or on the thread backend without one, and reports how it
+/// ended. With a runtime, the test's detached fibers are torn down when it
+/// has ended, in every build, before its objects are counted and before
+/// the next test starts (§13.6, D-723, D-782); its result is not touched
+/// when a termination halts the runtime meanwhile. `stuck` holds the
+/// groups of the earlier tests on `runtime` that a teardown left with a
+/// fiber blocked inline (D-786); the test's own joins them when it does.
 fn run_one(
     jit: &Jit,
     runtime: Option<&Runtime>,
     def: DefId,
     stacks: Stacks,
-) -> Result<TestOutcome, Error> {
+    stuck: &mut StuckGroups,
+) -> Result<Ran, Error> {
     let domain = jit.domain();
+    // Before the count: a fiber skipped earlier may release objects from
+    // now on (D-786).
+    let unsure = stuck.any_live();
     let before = domain.live_objects();
+    let kinds_before = domain.live_kinds();
     // A test runs on a stack as large as the root fiber that runs `main`
     // (D-125, D-596), the manifest's `main-stack` (D-660), so a test
     // behaves like the same code run from `main`.
@@ -555,8 +619,29 @@ fn run_one(
         ..EntryConfig::new(EntryMode::Test)
     };
     let entry = jit.entry(EntryKind::Test(def))?;
+    let mut skip_check = unsure;
     let outcome = match runtime {
-        Some(runtime) => entry.run_root(runtime, &config)?,
+        Some(runtime) => {
+            let group = DetachedGroup::new();
+            let outcome = entry.run_root_in(runtime, &config, &group)?;
+            if let EntryOutcome::Exited(status) = outcome {
+                return Ok(Ran::Exited(status));
+            }
+            // Until package T4, a detached fiber's panic report goes
+            // straight to standard error while the group is torn down.
+            let teardown = runtime.teardown(&group);
+            if teardown.halted {
+                // A detached fiber's write failed meanwhile: the halt has
+                // started, so nothing of the runtime is touched any more,
+                // the test's result included.
+                return Ok(Ran::Exited(WRITE_FAILURE_STATUS));
+            }
+            if teardown.skipped > 0 {
+                skip_check = true;
+                stuck.0.push(group);
+            }
+            outcome
+        }
         None => entry.run(&config)?,
     };
     // A test thunk returns the static `Nil` when the test passed, and the
@@ -564,16 +649,34 @@ fn run_one(
     // (D-529, D-595). Whether it panicked comes from the entry's catch
     // point, which reads the fiber's unwind record (D-699), never from the
     // word: under the flag backend an unwound thunk returns 0.
-    Ok(match outcome {
+    Ok(Ran::Done(match outcome {
         // The captured report goes into the failure block (D-701). As in
         // M1, a failing test gets no leak check.
         EntryOutcome::Panicked(report) => TestOutcome::Failed(report.to_string()),
+        // A detached fiber blocked inline in input or output was left
+        // running, with what it holds, by this test or an earlier one
+        // (`StuckGroups`): the leak check is skipped and counted (D-786).
+        EntryOutcome::Returned(word) if word == cheby_runtime::values::nil() && skip_check => {
+            domain.stats().skip_leak_check();
+            TestOutcome::Passed
+        }
         EntryOutcome::Returned(word) if word == cheby_runtime::values::nil() => {
             // D-541: a passing test must leave the build's accounting
-            // domain as it found it, or fail with D-458's message.
+            // domain as it found it, or fail with D-458's message and, when
+            // runtime kinds are among the leaked objects, D-711's line.
             let leaked = domain.live_objects().saturating_sub(before);
             match cheby_runtime::entry::leak_report(leaked.max(0)) {
-                Some(message) => TestOutcome::Failed(message),
+                Some(message) => {
+                    let after = domain.live_kinds();
+                    let mut kinds = after;
+                    for (kind, before) in kinds.iter_mut().zip(kinds_before) {
+                        *kind = kind.saturating_sub(before);
+                    }
+                    match cheby_runtime::alloc::leaked_kinds_line(kinds, leaked) {
+                        Some(line) => TestOutcome::Failed(format!("{message}{line}\n")),
+                        None => TestOutcome::Failed(message),
+                    }
+                }
                 None => TestOutcome::Passed,
             }
         }
@@ -592,7 +695,25 @@ fn run_one(
             });
             TestOutcome::Failed(format!("{text}\n"))
         }
-    })
+        // A write failed (D-306, D-709) on the thread backend: its entry
+        // thread is parked for good, so the JIT's code it may run is kept
+        // (leaked) for the rest of the process. With a runtime, `Exited`
+        // returned above.
+        EntryOutcome::Exited(status) => {
+            std::mem::forget(jit.code_token());
+            return Ok(Ran::Exited(status));
+        }
+    }))
+}
+
+/// Completes the halt that a termination started (D-709): every thread of
+/// `runtime` is joined and its fibers stay frozen. The caller keeps the
+/// `Jit` alive until this returns and drops no value of the runtime
+/// (D-073, D-708).
+fn complete_halt(runtime: Option<Runtime>) {
+    if let Some(runtime) = runtime {
+        runtime.halt();
+    }
 }
 
 /// The package name of the std self-test's synthetic package.
@@ -682,7 +803,7 @@ fn std_module_tests(
     // One runtime per module batch (D-690), stopped when it returns.
     // Std has no manifest: the default stacks (D-660).
     let runtime = test_runtime(STD_TEST_PACKAGE, Stacks::DEFAULT)?;
-    let runtime = runtime.as_ref();
+    let mut stuck = StuckGroups::default();
     let batch = match build_codes(front, sources, Roots::Tests(roots)) {
         Ok(jit) => jit,
         Err(codes) => {
@@ -690,7 +811,25 @@ fn std_module_tests(
             for &test in selected {
                 let alone = vec![TestRoot { module, test }];
                 let outcome = match build_codes(front, sources, Roots::Tests(alone)) {
-                    Ok(jit) => run_one(&jit, runtime, test.def, Stacks::DEFAULT)?,
+                    // `run_one` tears the test's detached fibers down
+                    // before it returns, so none of them can run this
+                    // test's code once `jit` is dropped here (D-708,
+                    // D-782); the runtime's token keeps the code until
+                    // the runtime stops anyway.
+                    Ok(jit) => match run_one(
+                        &jit,
+                        runtime.as_ref(),
+                        test.def,
+                        Stacks::DEFAULT,
+                        &mut stuck,
+                    )? {
+                        Ran::Done(outcome) => outcome,
+                        Ran::Exited(status) => {
+                            complete_halt(runtime);
+                            drop(jit);
+                            return Err(terminated(&path, &test.name, status));
+                        }
+                    },
                     Err(codes) => TestOutcome::NotBuilt(codes),
                 };
                 tests.push(TestResult {
@@ -713,9 +852,23 @@ fn std_module_tests(
     };
     let mut tests = Vec::with_capacity(selected.len());
     for &test in selected {
+        let outcome = match run_one(
+            &batch,
+            runtime.as_ref(),
+            test.def,
+            Stacks::DEFAULT,
+            &mut stuck,
+        )? {
+            Ran::Done(outcome) => outcome,
+            Ran::Exited(status) => {
+                complete_halt(runtime);
+                drop(batch);
+                return Err(terminated(&path, &test.name, status));
+            }
+        };
         tests.push(TestResult {
             name: test.name.to_string(),
-            outcome: run_one(&batch, runtime, test.def, Stacks::DEFAULT)?,
+            outcome,
         });
     }
     Ok(ModuleTests {
@@ -723,6 +876,18 @@ fn std_module_tests(
         not_built: None,
         tests,
     })
+}
+
+/// The error that stops the std self-test when a write failure ended the
+/// program during the test `name` of `module` (D-306, D-709). The
+/// self-test stops there, as `cheby test` does (D-783), but says why: it
+/// is a developer tool, whose report would otherwise end without a word
+/// (GAP(std-self-test-termination)).
+fn terminated(module: &str, name: &str, status: i32) -> Error {
+    Error::new(format!(
+        "the std self-test stopped: a write failed during test {module} \"{name}\", \
+         which ended the program with status {status}"
+    ))
 }
 
 /// A module none of whose selected tests built.
@@ -894,6 +1059,117 @@ mod stack_tests {
             u64::try_from(DEFAULT_STACK_SIZE).unwrap(),
             Manifest::DEFAULT_FIBER_STACK
         );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}
+
+#[cfg(all(test, unix))]
+mod stuck_tests {
+    //! D-786 in `cheby test`: a fiber that a teardown skipped goes on when
+    //! its system call returns, so the tests after it get no leak check
+    //! while it lives (`StuckGroups`).
+
+    use std::io::Write as _;
+    use std::time::{Duration, Instant};
+
+    use super::{PreparedTests, TestOptions, TestOutcome, prepare_test};
+
+    /// Test "a" leaves a detached fiber, holding 21 objects, blocked
+    /// opening a FIFO. Test "b" writes a marker file, on which the host
+    /// writes to the FIFO, so that fiber unwinds and releases what it
+    /// holds while "b" waits; "b" leaks a receiver. Test "c" leaks a
+    /// receiver too, once the fiber is gone. Before the fix, "b"'s check
+    /// counted the release against its own leak and passed; now "b"'s
+    /// check is skipped and counted, as "a"'s is, and "c"'s runs and
+    /// finds the leak (review finding ROB2-2 of gate 2).
+    #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+    )]
+    fn lifecycle_a_later_test_gets_no_leak_check_while_a_skipped_fiber_lives() {
+        let dir = std::env::temp_dir().join(format!("cheby_stuck_tests_{}", std::process::id()));
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        let fifo = dir.join("fifo");
+        let marker = dir.join("marker");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap();
+        assert!(made.success(), "mkfifo failed");
+        std::fs::write(
+            dir.join("cheby.toml"),
+            "name = \"app\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("src/main.cheby"),
+            format!(
+                "//! A skipped fiber releases its objects during a later test.\n\n\
+                 import std::channel\nimport std::duration\nimport std::fiber\nimport std::io\n\
+                 import std::list\nimport std::selector\n\n\
+                 type Mail {{\n  Mail(channel::Receiver<Mail>)\n}}\n\n\
+                 fn pause(ms: Int) -> Nil {{\n  selector::new()\n  \
+                 |> selector::after(_, duration::milliseconds(ms), fn() {{ Nil }})\n  \
+                 |> selector::select\n}}\n\n\
+                 fn main() {{\n  Nil\n}}\n\n\
+                 test \"a leaves a blocked reader\" {{\n  fiber::spawn_detached(fn() {{\n    \
+                 let held = list::map(list::range(0, 20), fn(i) {{ \"item {{i}}\" }})\n    \
+                 let _ = io::read_file(\"{fifo}\")\n    let _ = held\n    Nil\n  }})\n  \
+                 pause(200)\n  assert True\n}}\n\n\
+                 test \"b leaks a receiver\" {{\n  \
+                 let assert Ok(Nil) = io::write_file(\"{marker}\", \"b\")\n  \
+                 let (tx, rx) = channel::new(1)\n  let _ = channel::send(tx, Mail(rx))\n  \
+                 pause(500)\n  assert True\n}}\n\n\
+                 test \"c leaks a receiver too\" {{\n  let (tx, rx) = channel::new(1)\n  \
+                 let _ = channel::send(tx, Mail(rx))\n  assert True\n}}\n",
+                fifo = fifo.display(),
+                marker = marker.display(),
+            ),
+        )
+        .unwrap();
+        let PreparedTests::Ready(program) = prepare_test(&dir, &TestOptions::default()).unwrap()
+        else {
+            panic!("the tests did not build");
+        };
+        let domain = program.jit.as_ref().unwrap().domain();
+        let host = {
+            let (fifo, marker) = (fifo.clone(), marker.clone());
+            std::thread::spawn(move || {
+                let start = Instant::now();
+                while !marker.exists() {
+                    assert!(start.elapsed() < Duration::from_secs(10), "no marker");
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                let mut writer = std::fs::OpenOptions::new().write(true).open(&fifo).unwrap();
+                writer.write_all(b"x").unwrap();
+            })
+        };
+        let mut out = Vec::new();
+        let report = program.run(&mut out).unwrap();
+        host.join().unwrap();
+        let outcomes: Vec<(&str, bool)> = report
+            .modules
+            .iter()
+            .flat_map(|module| &module.tests)
+            .map(|test| (test.name.as_str(), test.outcome == TestOutcome::Passed))
+            .collect();
+        let leak_check = cheby_runtime::LEAK_CHECK_ENABLED;
+        assert_eq!(
+            outcomes,
+            [
+                ("a leaves a blocked reader", true),
+                ("b leaks a receiver", true),
+                ("c leaks a receiver too", !leak_check),
+            ],
+            "{}",
+            String::from_utf8_lossy(&out)
+        );
+        // "a"'s and "b"'s checks are skipped and counted (D-786).
+        assert_eq!(domain.stats().leak_checks_skipped(), 2);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

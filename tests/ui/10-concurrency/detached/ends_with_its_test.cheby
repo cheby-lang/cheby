@@ -1,0 +1,45 @@
+// @mode: run-pass
+// @command: test
+// @decisions: D-541, D-723, D-782
+// @milestone: M2
+//! A test's detached fibers end with the test: when it ends they are
+//! cancelled and unwound, in every build, before its objects are counted
+//! (§10.4, §13.6). The first test leaves one fiber waiting with a list it
+//! made and another one spinning and allocating, and still passes; the
+//! next test starts with neither left.
+
+import std::channel
+import std::fiber
+import std::list
+
+fn hold(ready: channel::Sender<Nil>) -> Result<Int, Nil> {
+  let kept = list::range(0, 100)
+  let (keep, never) = channel::new::<Int>(1)
+  let assert Ok(Nil) = channel::send(ready, Nil)
+  let got = channel::receive(never)
+  let _ = channel::send(keep, list::length(kept))
+  got
+}
+
+fn churn(n: Int) -> Int {
+  let made = list::range(0, n % 50)
+  churn(list::length(made) + 1)
+}
+
+fn spin(ready: channel::Sender<Nil>) -> Int {
+  let assert Ok(Nil) = channel::send(ready, Nil)
+  churn(0)
+}
+
+test "leaves detached fibers behind" {
+  let (ready_tx, ready_rx) = channel::new::<Nil>(2)
+  fiber::spawn_detached(fn() { hold(ready_tx) })
+  fiber::spawn_detached(fn() { spin(ready_tx) })
+  assert channel::receive(ready_rx) == Ok(Nil)
+  assert channel::receive(ready_rx) == Ok(Nil)
+}
+
+test "starts with none of them left" {
+  let numbers = list::range(0, 10)
+  assert list::length(numbers) == 10
+}
