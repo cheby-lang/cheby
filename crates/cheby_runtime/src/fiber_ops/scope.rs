@@ -23,8 +23,21 @@
 //! the owner and every scope nested inside. A scope cancelled from outside
 //! records no cause: its fibers' panics are caused by the cancellation
 //! (D-178).
+//!
+//! A **timed scope** is the scope of `fiber::timeout` (D-671): its open
+//! arms a timer ([`ScopeTimer`]) whose firing cancels the scope, with the
+//! scope as the target, and nothing else. GAP(timer-cancels-only): the
+//! firing records no first cause. `TimedOut` is decided by the close, from
+//! the body's unwinding: a body that unwound for this scope's own
+//! cancellation, with no first cause, fails as an expired limit (kind 1,
+//! empty texts). So an `f` that returns before the cancellation reaches it
+//! gives `Ok`, even when the limit has passed by then, and one that panics
+//! first gives its panic (D-671, spec §10.8). The close cancels the timer
+//! on every path (step 2), and a firing that loses the race to the scope's
+//! end does nothing, since the walk skips an ended scope.
 
 use std::sync::{Arc, Weak};
+use std::time::Instant;
 
 use parking_lot::Mutex;
 
@@ -34,7 +47,9 @@ use crate::abi::Word;
 use crate::ctx::ExecCtx;
 use crate::handles::{self, HandleKind, HandlePayload};
 use crate::panic::{PanicReport, fatal};
-use crate::sched::{AfterSwitch, FiberRef, Unlock, park, wake};
+use crate::sched::{
+    AfterSwitch, Deadline, FiberRef, TimerHandle, TimerTarget, Unlock, deadline_after, park, wake,
+};
 use crate::unwind::guard::guarded;
 use crate::unwind::raise::raise_cancel;
 use crate::unwind::record::{UnwindRecord, take_record};
@@ -61,6 +76,30 @@ pub(crate) struct ScopeState {
     /// once it is linked; only the fiber that opened the scope reads it,
     /// at the close.
     nested_slot: Mutex<Option<usize>>,
+    /// The timer of a timed scope (D-671), set by the open once the scope
+    /// is linked and cancelled by the close (step 2); only the fiber that
+    /// opened the scope touches it.
+    timer: Mutex<Option<TimerHandle>>,
+}
+
+/// The target of a timed scope's timer (D-671): it holds the scope weakly,
+/// so a timer still in the heap keeps no scope alive, and when it fires it
+/// cancels the scope, if the scope still exists, with the scope as the
+/// target (`cancel::cancel`, D-667), and does nothing else.
+/// GAP(timer-cancels-only): it records no first cause, so `TimedOut` comes
+/// from the close (module documentation). It runs with no runtime lock
+/// held (`TimerTarget`), and a scope that has ended is skipped by the walk
+/// (`ScopeState::cancel_step`), so a firing that loses the race to the
+/// close is harmless.
+#[derive(Debug)]
+struct ScopeTimer(Weak<ScopeState>);
+
+impl TimerTarget for ScopeTimer {
+    fn fire(&self) {
+        if let Some(scope) = self.0.upgrade() {
+            cancel::cancel(&scope);
+        }
+    }
 }
 
 /// The part of a scope under its lock.
@@ -217,6 +256,7 @@ impl ScopeState {
             owner,
             depth,
             nested_slot: Mutex::new(None),
+            timer: Mutex::new(None),
         }
     }
 
@@ -388,6 +428,19 @@ impl ScopeState {
     pub(crate) fn ended(&self) -> bool {
         self.inner.lock().ended
     }
+
+    /// Whether the scope holds a timer its close has not cancelled yet.
+    #[cfg(test)]
+    pub(crate) fn timed(&self) -> bool {
+        self.timer.lock().is_some()
+    }
+
+    /// Fires a timed scope's timer target for `scope` by hand, as the heap
+    /// would, whether or not a timer is armed (`timeout_tests`).
+    #[cfg(test)]
+    pub(crate) fn fire_timer_target(scope: &Arc<Self>) {
+        ScopeTimer(Arc::downgrade(scope)).fire();
+    }
 }
 
 /// The payload of a `Scope` handle (kind 43).
@@ -417,10 +470,16 @@ pub(crate) unsafe fn state_of(word: Word) -> Arc<ScopeState> {
 /// happens before anything is open.
 ///
 /// `timed` gives the scope a deadline `seconds` and `nanoseconds` from
-/// now, which only `fiber::timeout` asks for. Timers arrive with package
-/// T1, so until then a timed scope ends the program with `fatal runtime
-/// error: fiber::timeout is not supported yet` (D-754); a limit of zero or
-/// less never gets here (D-671).
+/// now (D-652's reading, `sched::deadline_after`), which only
+/// `fiber::timeout` asks for (D-671): once the scope is linked, a timer is
+/// armed whose firing cancels it ([`ScopeTimer`]). A deadline past the
+/// clock's range never comes and arms nothing, so the scope is untimed. A
+/// limit of zero or less never gets here, because `timeout` returns
+/// `Err(TimedOut)` without calling `f`; if one did, it would be a deadline
+/// of now. Without a runtime (D-692, architecture §5.1) a scope whose
+/// timer would be armed ends the program with a fatal runtime error naming
+/// `fiber::timeout`, before anything is open, while one that never times
+/// out opens untimed and runs `f`.
 ///
 /// # Safety
 ///
@@ -433,11 +492,20 @@ pub unsafe extern "C" fn cheby_rt_scope_open(
     nanoseconds: i64,
 ) -> Word {
     guarded(Some(ctx), || {
-        let _ = (seconds, nanoseconds);
         // SAFETY: forwarded from the caller.
         let me = unsafe { running(ctx) };
-        if timed {
-            fatal(format_args!("fiber::timeout is not supported yet"));
+        let deadline = if timed {
+            match deadline_after(seconds, nanoseconds) {
+                Deadline::At(at) => Some(at),
+                Deadline::Elapsed => Some(Instant::now()),
+                Deadline::Never => None,
+            }
+        } else {
+            None
+        };
+        let runtime = me.sched.runtime();
+        if deadline.is_some() && runtime.is_none() {
+            needs_scheduler("fiber::timeout");
         }
         let parent = me.conc.responsible_scope();
         let state = Arc::new(ScopeState::new(parent, FiberRef::from_ctx(me)));
@@ -451,6 +519,10 @@ pub unsafe extern "C" fn cheby_rt_scope_open(
             )
         };
         ScopeState::link(&state);
+        if let (Some(at), Some(runtime)) = (deadline, runtime) {
+            let target = Arc::new(ScopeTimer(Arc::downgrade(&state)));
+            *state.timer.lock() = Some(runtime.arm_timer(at, target));
+        }
         me.conc.push_scope(state);
         handle
     })
@@ -461,8 +533,10 @@ pub unsafe extern "C" fn cheby_rt_scope_open(
 /// §7.5):
 ///
 /// 1. waits, without interruption, until every member has left;
-/// 2. pops the scope from the fiber's open scopes, marks it ended and
-///    unlinks it from its parent;
+/// 2. pops the scope from the fiber's open scopes, unlinks it from its
+///    parent (step 1 marked it ended) and cancels its timer, if it is
+///    timed: on every path out, a return, a panic or the pass-through of an
+///    outer cancellation (D-671);
 /// 3. gives the fiber the outermost of its proper ancestors that has failed
 ///    or is being cancelled as its target (`cancel::check_chain`), then
 ///    reads and clears the fiber's cancellation target under its fiber
@@ -488,10 +562,17 @@ pub unsafe extern "C" fn cheby_rt_scope_open(
 ///      returns the static `Err(Nil)`. Nothing is printed (D-701).
 ///
 /// A body that unwound for this scope's own cancellation without a first
-/// cause can only come from the test hook
-/// (`fiber_ops::testing::cancel_running_fiber_at_next_entry`) until timeouts
-/// arrive (T1, whose expired limit is such a cause): the scope then fails
-/// as an expired limit does, kind 1 with empty texts.
+/// cause is an expired limit: only a timed scope's timer cancels a scope
+/// without recording a cause (GAP(timer-cancels-only); the test hook
+/// `fiber_ops::testing::cancel_running_fiber_at_next_entry` acts as one).
+/// The scope then fails with kind 1 and empty texts, which `fiber::timeout`
+/// reads as `TimedOut` (D-671). Each outcome of spec §10.8 follows: a body
+/// that returns, even after the timer fired, gives `Ok`; a panic that
+/// starts before the firing is the first cause (`Panicked`), and one that
+/// starts after it is the body's own record (`Panicked` too: the
+/// cancellation had not reached `f`); a body cancelled while it waits in a
+/// nested scope's close unwinds through it (D-667), and a panic of a fiber
+/// during that unwinding is not recorded (D-178), so the result is kind 1.
 ///
 /// # Safety
 ///
@@ -525,10 +606,15 @@ pub unsafe extern "C" fn cheby_rt_scope_close(
             inner.waiter = Some(FiberRef::from_ctx(me));
             park(me, AfterSwitch::Park(Some(Unlock::new(inner))));
         };
-        // 2. Pop, end, unlink.
+        // 2. Pop, unlink, and cancel the timer. A firing that already took
+        // the timer finds the scope ended, and its walk skips it.
         me.conc.pop_scope(&state);
         state.unlink();
-        // 3. Decide, after the target. GAP(chain-cancellation): a
+        let timer = state.timer.lock().take();
+        if let Some(timer) = timer {
+            timer.cancel();
+        }
+        // 3. Decide, after the target (D-769): a
         // cancellation of an enclosing scope reached this fiber when that
         // scope was marked, even if the walk has not set its target yet
         // (`cancel::check_chain`, review finding CONC-W2-1): it becomes the

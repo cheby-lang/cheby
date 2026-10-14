@@ -1,0 +1,6 @@
+with a timer arm: Ok("a1")
+with a timer arm, `a` empty: Ok("timer")
+with a `b` arm, `a` empty: Ok("b1")
+the base selector: Ok("a2")
+left in `b`: Ok("b2")
+<Selector>

@@ -113,8 +113,20 @@ pub const STD_MODULES: &[StdModule] = &[
         source: include_str!("../../../std/order.cheby"),
     },
     StdModule {
+        path: "random",
+        source: include_str!("../../../std/random.cheby"),
+    },
+    StdModule {
         path: "result",
         source: include_str!("../../../std/result.cheby"),
+    },
+    StdModule {
+        path: "runtime",
+        source: include_str!("../../../std/runtime.cheby"),
+    },
+    StdModule {
+        path: "selector",
+        source: include_str!("../../../std/selector.cheby"),
     },
     StdModule {
         path: "set",
@@ -162,9 +174,6 @@ pub const PLANNED_STD_MODULES: &[&str] = &[
     "ordered_multimap",
     "ordered_set",
     "process",
-    "random",
-    "runtime",
-    "selector",
     "sorted_map",
     "sorted_multimap",
     "sorted_set",
@@ -183,39 +192,13 @@ pub const PLANNED_STD_MODULES: &[&str] = &[
 ///
 /// M2's first slice shipped `std::fiber`, `std::channel` and
 /// `std::duration` before cancellation, timers, selectors and detached
-/// fibers existed (D-754). Cancellation's spec tests have since moved into
-/// `std/`; the entries left wait for timers, selectors and the fiber
-/// lifecycle. Each entry's comment names what its test needs and the M2
-/// package that brings it.
+/// fibers existed (D-754). The spec tests of cancellation, timers,
+/// selectors and `spawn_with_stack` have since moved into `std/`; the
+/// entry left waits for detached fibers. Each entry's comment names what
+/// its test needs and the M2 package that brings it.
 pub const PENDING_SPEC_TESTS: &[(&str, &str, &str)] = &[
-    // `spawn_with_stack`: lifecycle (L1).
-    ("fiber", "a fiber can have a larger stack", "M2"),
     // `spawn_detached`: lifecycle (L1).
     ("fiber", "a detached fiber runs on its own", "M2"),
-    // `timeout` with a positive limit: timers (T1).
-    (
-        "fiber",
-        "timeout returns the value of work that finishes in time",
-        "M2",
-    ),
-    // `timeout` with a positive limit: timers (T1).
-    ("fiber", "timeout cancels work that takes too long", "M2"),
-    // `timeout` with a positive limit: timers (T1).
-    ("fiber", "timeout reports a panic as Panicked", "M2"),
-    // `timeout` with a positive limit: timers (T1).
-    (
-        "fiber",
-        "a timeout cancels the scopes inside it without their returning",
-        "M2",
-    ),
-    // `fiber::timeout` with a positive limit: timers (T1).
-    ("channel", "a negative capacity counts as 0", "M2"),
-    // `std::selector`: timers and selectors (T1).
-    (
-        "channel",
-        "a blocked send fails when the last Receiver goes",
-        "M2",
-    ),
 ];
 
 /// The shipped module at `path` (under `std`).
@@ -402,17 +385,22 @@ mod tests {
         assert_eq!(STAGED_STD_MODULES, &[]);
     }
 
-    /// M2's first slice ships `std::fiber` and `std::channel`, and
-    /// `std::duration` with them, because `fiber::timeout` takes a
-    /// `Duration` (D-645, D-646). The rest of tier 2 stays planned, and
-    /// `std::http` is the unshipped module of the probes (D-729).
+    /// M2 ships tier 2's concurrency modules: `std::fiber` and
+    /// `std::channel`, `std::duration` with them, because `fiber::timeout`
+    /// takes a `Duration` (D-645, D-646), and with timers and selectors
+    /// `std::selector`, `std::random` and `std::runtime` (D-653, D-657,
+    /// D-673). The rest of tier 2 stays planned, and `std::http` is the
+    /// unshipped module of the probes (D-729).
     #[test]
-    fn m2_slice_modules_ship() {
-        for path in ["channel", "duration", "fiber"] {
+    fn m2_tier2_modules_ship() {
+        // The modules of timers and selectors first, then the first slice's.
+        for path in [
+            "random", "runtime", "selector", "channel", "duration", "fiber",
+        ] {
             assert!(find(path).is_some(), "std::{path} is not shipped");
             assert!(!is_planned(path), "std::{path} is still planned");
         }
-        for path in ["http", "random", "runtime", "selector"] {
+        for path in ["file", "http", "net", "process", "time"] {
             assert!(is_planned(path), "std::{path} is not planned");
             assert!(find(path).is_none(), "std::{path} is shipped");
         }

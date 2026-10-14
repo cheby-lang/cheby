@@ -1,0 +1,4 @@
+chosen: the 10 ms timer
+ready at once: a wait of zero
+ready at once: a negative wait
+a send after the selects: Err("late")

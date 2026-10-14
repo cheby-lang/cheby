@@ -1,0 +1,44 @@
+// @mode: run-pass
+// @decisions: D-659, D-660, D-125, D-298
+// @milestone: M2
+//! `fiber::spawn_with_stack` sets one fiber's stack in place of
+//! `fiber-stack = "1MiB"`: with 64 MiB the recursion that overflows the
+//! default fits, and a request of 0 bytes is clamped to 1 MiB, so it
+//! overflows (§10.1, §13.3).
+
+import std::fiber
+import std::io
+
+fn depth(n: Int) -> Int {
+  case n {
+    0 => 0
+    _ => 1 + depth(n - 1)
+  }
+}
+
+fn main() {
+  let large = {
+    use owner <- fiber::scope()
+    let deep = fiber::spawn_with_stack(owner, 64 * 1024 * 1024, fn() { depth(100_000) })
+    fiber::join(deep)
+  }
+  case large {
+    Ok(n) => io::println("64 MiB: {n}")
+    Err(failure) => {
+      let message = fiber::message(failure)
+      io::println("64 MiB: {message}")
+    }
+  }
+  let small = {
+    use owner <- fiber::scope()
+    let _ = fiber::spawn_with_stack(owner, 0, fn() { depth(100_000) })
+    "the body returned"
+  }
+  case small {
+    Ok(text) => io::println("0 bytes: {text}")
+    Err(failure) => {
+      let message = fiber::message(failure)
+      io::println("0 bytes: {message}")
+    }
+  }
+}

@@ -190,12 +190,12 @@ pub(crate) fn check(me: &ExecCtx) -> Result<(), Cancelled> {
 /// woken by a close) or the parent of the scope it closes (step 3 of a
 /// close). Entered with no runtime lock held.
 ///
-/// GAP(chain-cancellation): a fiber is being cancelled when it has a target
-/// or when a scope on its chain is marked. This is decided where a
-/// cancellation's effects can reach a fiber the walk has not reached yet:
-/// a join that finds the fiber failed (D-668), a `send` or `receive` woken
-/// by the channel's other end going away (it unwinds and takes nothing, as
-/// a cancelled wait does, D-670), step 3 of a scope's close (D-667), and a
+/// (D-769) A fiber is being cancelled when it has a target or when a scope
+/// on its chain is marked. This is decided where a cancellation's effects
+/// can reach a fiber the walk has not reached yet: a join that finds the
+/// fiber failed (D-668), a `send`, `receive` or `select` woken by the
+/// channel's other end going away (it unwinds and takes nothing, as a
+/// cancelled wait does, D-670), step 3 of a scope's close (D-667), and a
 /// spawn (D-666). Every other check reads the target alone.
 pub(crate) fn check_chain(me: &ExecCtx, from: Option<Arc<ScopeState>>) -> Result<(), Cancelled> {
     match outermost_failing(from) {
@@ -297,6 +297,12 @@ pub(crate) mod hooks {
     /// The fiber's target.
     pub(crate) fn target(fiber: &ExecCtx) -> Option<Arc<ScopeState>> {
         fiber.conc.lock.0.lock().target.clone()
+    }
+
+    /// Whether the fiber has published a wait node (it is parked, or about
+    /// to park, in a cancellable wait).
+    pub(crate) fn published(fiber: &ExecCtx) -> bool {
+        fiber.conc.lock.0.lock().wait.is_some()
     }
 
     /// Clears the fiber's target, as its target's close would.

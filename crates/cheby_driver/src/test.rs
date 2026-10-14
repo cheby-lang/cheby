@@ -48,7 +48,9 @@ use cheby_iface::{DefId, Ice, ModuleId, PackageId};
 use cheby_jit::Jit;
 use cheby_mir::EntryKind;
 use cheby_package::{Manifest, ModulePath};
-use cheby_runtime::entry::{DEFAULT_ROOT_STACK_SIZE, EntryConfig, EntryMode, EntryOutcome};
+use cheby_runtime::entry::{
+    DEFAULT_ROOT_STACK_SIZE, DEFAULT_STACK_SIZE, EntryConfig, EntryMode, EntryOutcome,
+};
 use cheby_runtime::{Runtime, RuntimeConfig, RuntimeError};
 use cheby_types::thir;
 
@@ -98,6 +100,26 @@ pub struct TestProgram {
     jit: Option<Jit>,
     tests: Vec<Selected>,
     filtered_out: usize,
+    /// The package's `[runtime]` stacks (D-660).
+    stacks: Stacks,
+}
+
+/// The stacks of a test run (D-660): each test's root fiber gets `main`,
+/// and the fibers it spawns get `fiber` unless they set their own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Stacks {
+    /// The manifest's `main-stack`, the stack of each test (D-125, D-596).
+    main: usize,
+    /// The manifest's `fiber-stack`, the runtime's default fiber stack.
+    fiber: usize,
+}
+
+impl Stacks {
+    /// The defaults, for a run without a manifest: the std self-test.
+    const DEFAULT: Self = Self {
+        main: DEFAULT_ROOT_STACK_SIZE,
+        fiber: DEFAULT_STACK_SIZE,
+    };
 }
 
 impl std::fmt::Debug for TestProgram {
@@ -107,6 +129,7 @@ impl std::fmt::Debug for TestProgram {
             .field("package", &self.package)
             .field("tests", &self.tests)
             .field("filtered_out", &self.filtered_out)
+            .field("stacks", &self.stacks)
             .finish_non_exhaustive()
     }
 }
@@ -373,12 +396,18 @@ pub fn prepare_test(root: &Path, options: &TestOptions) -> Result<PreparedTests,
             }
         }
     };
+    // The root package's `[runtime]` stacks (D-660).
+    let stacks = Stacks {
+        main: crate::stack_bytes(front.main_stack),
+        fiber: crate::stack_bytes(front.fiber_stack),
+    };
     Ok(PreparedTests::Ready(Box::new(TestProgram {
         output: out,
         package,
         jit,
         tests,
         filtered_out,
+        stacks,
     })))
 }
 
@@ -402,7 +431,7 @@ impl TestProgram {
             |e: std::io::Error| Error::new(format!("cannot write the test report: {e}"));
         // `env::program_name()` is the package name, as under `cheby run`
         // (D-369, D-578).
-        let runtime = test_runtime(&self.package)?;
+        let runtime = test_runtime(&self.package, self.stacks)?;
         let mut report = TestReport {
             modules: Vec::new(),
             filtered_out: self.filtered_out,
@@ -410,7 +439,7 @@ impl TestProgram {
         let mut printed = false;
         if let Some(jit) = &self.jit {
             for test in &self.tests {
-                let outcome = run_one(jit, runtime.as_ref(), test.def)?;
+                let outcome = run_one(jit, runtime.as_ref(), test.def, self.stacks)?;
                 out.write_all(
                     format!("{}\n", test_line(&test.module, &test.name, &outcome)).as_bytes(),
                 )
@@ -483,17 +512,19 @@ fn matches_filter(module: &str, name: &str, filter: Option<&str>) -> bool {
 }
 
 /// The runtime a test run's tests run on (D-690), with `package` as the
-/// program name (D-369, D-578), or `None` where fibers are not supported
-/// (D-714): the tests then run on the thread backend, with the program
-/// name set for isolated entries.
+/// program name (D-369, D-578) and `stacks.fiber` as the default stack of
+/// the fibers the tests spawn (D-660), or `None` where fibers are not
+/// supported (D-714): the tests then run on the thread backend, with the
+/// program name set for isolated entries.
 ///
 /// # Errors
 ///
 /// An [`Error`] with D-658's message for an invalid `CHEBY_THREADS`, or if
 /// the runtime's threads cannot start.
-fn test_runtime(package: &str) -> Result<Option<Runtime>, Error> {
+fn test_runtime(package: &str, stacks: Stacks) -> Result<Option<Runtime>, Error> {
     let config = RuntimeConfig {
         program_name: package.to_owned(),
+        fiber_stack: stacks.fiber,
         ..RuntimeConfig::default()
     };
     match Runtime::new(&config) {
@@ -508,14 +539,19 @@ fn test_runtime(package: &str) -> Result<Option<Runtime>, Error> {
 
 /// Runs one test entry of `jit` as a root fiber of `runtime`, or on the
 /// thread backend without one, and reports how it ended.
-fn run_one(jit: &Jit, runtime: Option<&Runtime>, def: DefId) -> Result<TestOutcome, Error> {
+fn run_one(
+    jit: &Jit,
+    runtime: Option<&Runtime>,
+    def: DefId,
+    stacks: Stacks,
+) -> Result<TestOutcome, Error> {
     let domain = jit.domain();
     let before = domain.live_objects();
     // A test runs on a stack as large as the root fiber that runs `main`
-    // (D-125, D-596), so a test behaves like the same code run from
-    // `main`.
+    // (D-125, D-596), the manifest's `main-stack` (D-660), so a test
+    // behaves like the same code run from `main`.
     let config = EntryConfig {
-        stack_size: DEFAULT_ROOT_STACK_SIZE,
+        stack_size: stacks.main,
         ..EntryConfig::new(EntryMode::Test)
     };
     let entry = jit.entry(EntryKind::Test(def))?;
@@ -644,7 +680,8 @@ fn std_module_tests(
         .map(|&test| TestRoot { module, test })
         .collect();
     // One runtime per module batch (D-690), stopped when it returns.
-    let runtime = test_runtime(STD_TEST_PACKAGE)?;
+    // Std has no manifest: the default stacks (D-660).
+    let runtime = test_runtime(STD_TEST_PACKAGE, Stacks::DEFAULT)?;
     let runtime = runtime.as_ref();
     let batch = match build_codes(front, sources, Roots::Tests(roots)) {
         Ok(jit) => jit,
@@ -653,7 +690,7 @@ fn std_module_tests(
             for &test in selected {
                 let alone = vec![TestRoot { module, test }];
                 let outcome = match build_codes(front, sources, Roots::Tests(alone)) {
-                    Ok(jit) => run_one(&jit, runtime, test.def)?,
+                    Ok(jit) => run_one(&jit, runtime, test.def, Stacks::DEFAULT)?,
                     Err(codes) => TestOutcome::NotBuilt(codes),
                 };
                 tests.push(TestResult {
@@ -678,7 +715,7 @@ fn std_module_tests(
     for &test in selected {
         tests.push(TestResult {
             name: test.name.to_string(),
-            outcome: run_one(&batch, runtime, test.def)?,
+            outcome: run_one(&batch, runtime, test.def, Stacks::DEFAULT)?,
         });
     }
     Ok(ModuleTests {
@@ -764,4 +801,99 @@ fn std_test_package(
             source,
         }],
     })
+}
+
+#[cfg(test)]
+mod stack_tests {
+    //! The `[runtime]` stacks reach every host that runs a root (D-660):
+    //! `cheby run`'s `RunConfig` and `cheby test`'s stacks, and the std
+    //! self-test keeps the defaults.
+
+    use std::path::PathBuf;
+
+    use cheby_package::Manifest;
+    use cheby_runtime::entry::{AtExit, DEFAULT_ROOT_STACK_SIZE, DEFAULT_STACK_SIZE};
+
+    use super::{PreparedTests, Stacks, TestOptions, prepare_test};
+    use crate::{Prepared, RunOptions, prepare_run};
+
+    /// A package `app` in a fresh temporary directory with a `main`, one
+    /// test and `runtime` as its `[runtime]` table's lines.
+    fn package(name: &str, runtime: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("cheby_stacks_{}_{name}", std::process::id()));
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(
+            dir.join("cheby.toml"),
+            format!("name = \"app\"\nversion = \"0.1.0\"\n\n[runtime]\n{runtime}"),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("src/main.cheby"),
+            "//! Root.\n\nfn main() {\n  assert 1 == 1\n}\n\ntest \"one\" {\n  assert 1 == 1\n}\n",
+        )
+        .unwrap();
+        dir
+    }
+
+    /// The `RunConfig` of `cheby run` and the stacks of `cheby test` for
+    /// the package at `dir`.
+    fn stacks_of(dir: &std::path::Path) -> (usize, usize, AtExit, Stacks) {
+        let Prepared::Ready(program) = prepare_run(dir, RunOptions::default()).unwrap() else {
+            panic!("the package did not build");
+        };
+        let PreparedTests::Ready(tests) = prepare_test(dir, &TestOptions::default()).unwrap()
+        else {
+            panic!("the tests did not build");
+        };
+        (
+            program.config.root_stack_size,
+            program.config.fiber_stack,
+            program.config.at_exit,
+            tests.stacks,
+        )
+    }
+
+    #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+    )]
+    fn runtime_stacks_reach_run_and_test() {
+        let dir = package("set", "fiber-stack = \"3MiB\"\nmain-stack = \"5MiB\"\n");
+        let (main, fiber, at_exit, stacks) = stacks_of(&dir);
+        assert_eq!((main, fiber), (5 << 20, 3 << 20));
+        assert_eq!(at_exit, AtExit::Teardown);
+        assert_eq!(
+            stacks,
+            Stacks {
+                main: 5 << 20,
+                fiber: 3 << 20
+            }
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+    )]
+    fn runtime_stacks_default_without_the_table() {
+        let dir = package("default", "");
+        let (main, fiber, _, stacks) = stacks_of(&dir);
+        assert_eq!((main, fiber), (DEFAULT_ROOT_STACK_SIZE, DEFAULT_STACK_SIZE));
+        assert_eq!(stacks, Stacks::DEFAULT);
+        assert_eq!(
+            u64::try_from(DEFAULT_ROOT_STACK_SIZE).unwrap(),
+            Manifest::DEFAULT_MAIN_STACK
+        );
+        assert_eq!(
+            u64::try_from(DEFAULT_STACK_SIZE).unwrap(),
+            Manifest::DEFAULT_FIBER_STACK
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }

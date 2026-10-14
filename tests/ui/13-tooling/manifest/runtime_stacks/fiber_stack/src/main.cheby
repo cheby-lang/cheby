@@ -1,0 +1,34 @@
+// @mode: run-pass
+// @decisions: D-659, D-660, D-125, D-666
+// @milestone: M2
+//! `fiber-stack = "1MiB"` gives every spawned fiber a stack of 1 MiB,
+//! while `main` keeps its own: the same non-tail recursion fits `main`'s
+//! stack and overflows the fiber's, whose panic becomes its scope's `Err`
+//! (§10.1, §10.3, §13.3).
+
+import std::fiber
+import std::io
+
+fn depth(n: Int) -> Int {
+  case n {
+    0 => 0
+    _ => 1 + depth(n - 1)
+  }
+}
+
+fn main() {
+  let n = depth(100_000)
+  io::println("main: {n}")
+  let outcome = {
+    use owner <- fiber::scope()
+    let _ = fiber::spawn(owner, fn() { depth(100_000) })
+    "the body returned"
+  }
+  case outcome {
+    Ok(text) => io::println("fiber: {text}")
+    Err(failure) => {
+      let message = fiber::message(failure)
+      io::println("fiber: {message}")
+    }
+  }
+}

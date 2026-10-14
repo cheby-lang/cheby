@@ -1,0 +1,22 @@
+// @mode: check-fail
+// @decisions: D-090, D-537, D-653, D-656
+// @milestone: M2
+//! The host functions of `std::random` reach its kernel, so a constant
+//! that calls `int_between` is E0077, while a constant drawn from a seeded
+//! generator beside it is computed (§4.5).
+
+import std::io
+import std::random
+
+const seeded_roll: Int = first_roll(42)
+
+const host_roll: Int = random::int_between(1, 6)
+
+fn first_roll(seed: Int) -> Int {
+  let (roll, _) = random::next_int_between(random::from_seed(seed), 1, 6)
+  roll
+}
+
+fn main() {
+  io::println("{seeded_roll} {host_roll}")
+}

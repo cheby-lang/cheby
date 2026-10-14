@@ -1,6 +1,6 @@
-//! The runtime side of `std::fiber` and `std::channel` (D-646, D-692 to
-//! D-694, D-704, D-707): scopes, spawning, the base frame of a spawned
-//! fiber, joining and channels.
+//! The runtime side of `std::fiber`, `std::channel` and `std::selector`
+//! (D-646, D-692 to D-695, D-704, D-707): scopes, spawning, the base frame
+//! of a spawned fiber, joining, channels and selectors.
 //!
 //! - [`scope`]: `cheby_rt_scope_open` and `cheby_rt_scope_close`, the two
 //!   runtime helpers of the `scope_run` intrinsic (D-693), and the kernel
@@ -29,6 +29,8 @@
 //!
 //! - [`cancel`]: cancellation (D-667, D-706): the subtree walk, the check a
 //!   fiber makes before it parks, and the publication of its wait node.
+//! - [`select`]: the kernels of `std::selector` (D-673, D-695): building
+//!   selectors, and the select wait over several channels and a timer.
 //!
 //! [`FiberConc`] is the structured-concurrency part of a fiber's control
 //! block (D-685): the scope it was spawned into, the scopes it has open,
@@ -46,11 +48,27 @@
 //!
 //! 1. scope locks ([`scope::ScopeState`]), a parent's before a child's;
 //! 2. or a channel lock ([`channel`]) or a join cell's lock
-//!    ([`base::JoinCell`]): never held together with a scope lock;
+//!    ([`base::JoinCell`]): never held together with a scope lock. A
+//!    `select` ([`select`]) holds several channel locks at once: it takes
+//!    the channels of its receive arms in address order, each once (two
+//!    arms on one channel share its lock), then the fiber lock to publish
+//!    its wait, and never a scope lock with them; it parks with all of
+//!    them (`AfterSwitch::ParkAll`) and, once woken, takes them again one
+//!    at a time to unlink its nodes;
 //! 3. the fiber lock ([`FiberConc`]): a leaf. Nothing else is locked while
 //!    it is held, it is never held while user code runs, and `sched::wake`
 //!    is never called under it (a wake can take a worker's queue lock);
-//! 4. the unwind record's lock (`unwind::record`): a leaf too, taken with
+//! 4. the timer heap's lock (`sched::timer`): a leaf. It may be taken
+//!    under channel locks (a `select` arms its timer under them) and
+//!    nothing is taken inside it; a timer entry's own lock is a leaf too,
+//!    never taken under the heap's. A timer fires only after the heap's
+//!    lock is released, with no runtime lock held, so a timer's target may
+//!    wake a fiber or run the cancellation walk; a winning
+//!    `TimerHandle::cancel` drops the target on the canceller's thread, so
+//!    a target's `Drop` takes no runtime lock. (The poll driver's lock is
+//!    taken only by an idle worker, with `try_lock`, and is out of reach
+//!    of this module.)
+//! 5. the unwind record's lock (`unwind::record`): a leaf too, taken with
 //!    no other lock held.
 //!
 //! The fiber's own locks of [`FiberConc`] (its spawn scope, open scopes and
@@ -74,6 +92,7 @@ pub(crate) mod cancel;
 pub(crate) mod channel;
 pub(crate) mod join;
 pub(crate) mod scope;
+pub(crate) mod select;
 pub(crate) mod spawn;
 #[cfg(test)]
 pub(crate) mod testing;
@@ -111,6 +130,9 @@ pub(crate) struct FiberConc {
     /// Why the scope that `scope_run` last closed on this fiber failed, for
     /// `take_failure` (architecture §5.3).
     last_failure: Mutex<Option<Failure>>,
+    /// The value the last `select` chose and the random state that orders
+    /// a select's arms (D-673, D-695).
+    pub(crate) select: select::SelectState,
 }
 
 /// Why a scope failed (architecture §5.3), as `take_failure` reports it.
@@ -194,7 +216,7 @@ impl FiberConc {
 }
 
 /// The std modules whose every kernel is registered here (plan §2.5).
-pub(crate) const COMPLETE: &[&str] = &["channel", "fiber"];
+pub(crate) const COMPLETE: &[&str] = &["channel", "fiber", "selector"];
 
 /// A kernel: its symbol, its address, its C parameter types after the
 /// context pointer, and its C result type.
@@ -205,14 +227,44 @@ type Entry = (
     &'static str,
 );
 
-/// Every kernel of `std::channel` and `std::fiber` (plan §2.5, and the
-/// stubs of plan §7 UQ-2's answer).
+/// Every kernel of `std::channel`, `std::fiber` and `std::selector` (plan
+/// §2.5, and the stubs of plan §7 UQ-2's answer).
 #[expect(
     clippy::as_conversions,
     reason = "taking the address of a function needs an `as` cast"
 )]
-fn all() -> [Entry; 8] {
+fn all() -> [Entry; 13] {
     [
+        (
+            "cheby_selector_sys_new",
+            select::cheby_selector_sys_new as *const u8,
+            &[],
+            "Word",
+        ),
+        (
+            "cheby_selector_sys_add_receive",
+            select::cheby_selector_sys_add_receive as *const u8,
+            &["Word", "Word", "Word"],
+            "Word",
+        ),
+        (
+            "cheby_selector_sys_add_after",
+            select::cheby_selector_sys_add_after as *const u8,
+            &["Word", "i64", "i64", "Word"],
+            "Word",
+        ),
+        (
+            "cheby_selector_sys_wait",
+            select::cheby_selector_sys_wait as *const u8,
+            &["Word"],
+            "Word",
+        ),
+        (
+            "cheby_selector_take_selected",
+            select::cheby_selector_take_selected as *const u8,
+            &["Word"],
+            "Word",
+        ),
         (
             "cheby_channel_new",
             channel::cheby_channel_new as *const u8,
@@ -264,8 +316,8 @@ fn all() -> [Entry; 8] {
     ]
 }
 
-/// Appends every `std::channel` and `std::fiber` kernel symbol and its
-/// address to `out`.
+/// Appends every `std::channel`, `std::fiber` and `std::selector` kernel
+/// symbol and its address to `out`.
 pub(crate) fn kernels(out: &mut Vec<(&'static str, *const u8)>) {
     out.extend(all().iter().map(|kernel| (kernel.0, kernel.1)));
 }
@@ -359,4 +411,10 @@ mod cancel_tests;
 #[cfg(test)]
 mod models;
 #[cfg(test)]
+mod select_models;
+#[cfg(test)]
+mod select_tests;
+#[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod timeout_tests;

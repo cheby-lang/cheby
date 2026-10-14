@@ -157,8 +157,9 @@ impl Mailbox {
 
 /// Test hooks of one runtime's monitor: a delay between reading a worker's
 /// running fiber and requesting a yield from it, which widens the window
-/// in which that fiber could be retired, and a count of requests aimed at
-/// a retired control block (which must stay 0, I-8).
+/// in which that fiber could be retired, a count of requests aimed at a
+/// retired control block (which must stay 0, I-8), and a switch that
+/// keeps it from firing timers.
 #[derive(Debug, Default)]
 pub(crate) struct MonitorProbe {
     /// Milliseconds the monitor sleeps before each request.
@@ -167,6 +168,9 @@ pub(crate) struct MonitorProbe {
     retired: parking_lot::Mutex<std::collections::HashSet<usize>>,
     /// Requests the monitor was about to make on a retired control block.
     pub(crate) stale: std::sync::atomic::AtomicUsize,
+    /// Whether the monitor leaves due timers to the workers, so that a
+    /// test sees the poller fire them.
+    pub(crate) skip_timers: std::sync::atomic::AtomicBool,
 }
 
 impl MonitorProbe {

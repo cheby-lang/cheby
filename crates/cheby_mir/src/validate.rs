@@ -45,7 +45,7 @@
 //! they drop is checked against ownership states, which hold only counted
 //! locals that every path to the edge defined.
 //!
-//! GAP(unwound-validation-split): the pipeline
+//! D-774: the pipeline
 //! ([`crate::count_and_check_with`]) validates a unit after the unwind
 //! pass with the states the pass's own simulation recorded at each site:
 //! each edge's pad chain (its drops, then `goto`, then `resume`) must
@@ -357,7 +357,7 @@ impl FnCx<'_> {
         self.pads.get(id.index()).copied().unwrap_or(false)
     }
 
-    /// The pad check of GAP(unwound-validation-split) (module
+    /// The pad check of D-774 (module
     /// documentation): every edge of a block the simulation reached, and
     /// the entry pad, against the recorded states. A pad of a generated
     /// body (D-744) that is not canonical was checked by the pass's own
@@ -396,7 +396,7 @@ impl FnCx<'_> {
     }
 
     /// The chain from `pad` drops exactly the multiset `held` (ascending,
-    /// with repeats) and resumes.
+    /// with repeats) and resumes, in any order.
     fn check_pad_chain(&mut self, pad: BlockId, held: &[Local], what: impl Fn() -> String) {
         let f = self.f;
         if !self.is_pad(pad) {
@@ -421,11 +421,17 @@ impl FnCx<'_> {
                 _ => break,
             }
         }
-        // The unwind pass drops the newest local first, so its chains come
-        // out descending.
-        dropped.reverse();
+        // The order is the function's pad direction (D-777): an ascending
+        // function's chains drop the newest local first and come out
+        // descending, so they are reversed; a descending function's drop the
+        // oldest first and come out ascending, so they are kept. Only a
+        // chain in neither order (a nested function's, or a generated
+        // body's, D-744) is sorted.
         if !dropped.is_sorted() {
-            dropped.sort_unstable();
+            dropped.reverse();
+            if !dropped.is_sorted() {
+                dropped.sort_unstable();
+            }
         }
         if dropped != held {
             self.err(format!(

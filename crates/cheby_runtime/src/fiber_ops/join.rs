@@ -46,7 +46,7 @@ pub unsafe extern "C" fn cheby_fiber_sys_join(ctx: *mut ExecCtx, fiber: Word) ->
         drop(cell);
         match joined {
             Ok(Joined::Value(value)) => value,
-            // GAP(chain-cancellation). Being cancelled is decided from the
+            // (D-769) Being cancelled is decided from the
             // joiner's position too: a fiber that failed because an
             // enclosing scope of the joiner was cancelled can end before
             // the walk reaches the joiner (review finding CONC-W2-1).

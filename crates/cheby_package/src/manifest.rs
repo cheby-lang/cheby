@@ -14,6 +14,11 @@
 //!   `time-limit = "10s"` (an integer followed by `ms` or `s`) and
 //!   `memory-limit = "1GiB"` (an integer followed by `KiB`, `MiB` or
 //!   `GiB`). Any other key or value is E0036.
+//! - `[runtime]`: the default stack reservations (D-660), `fiber-stack`
+//!   (8 MiB by default) and `main-stack` (64 MiB by default), in the form
+//!   of `memory-limit` and from 1 MiB to 16 GiB. Any other key or value is
+//!   E0036. The manifest stores bytes; the runtime rounds up to its page
+//!   size (GAP(runtime-table-bytes)).
 //! - `[dependencies]`: each entry is checked, and then the table is
 //!   rejected, because dependencies arrive in M5 (§13.4).
 //!
@@ -56,6 +61,15 @@ pub struct Manifest {
     /// evaluation may keep live at once (D-536, D-617);
     /// [`Manifest::DEFAULT_MEMORY_LIMIT`] when not given.
     pub const_eval_memory_limit: u64,
+    /// `[runtime] fiber-stack`: the stack reservation in bytes of every
+    /// fiber that does not set its own (D-660);
+    /// [`Manifest::DEFAULT_FIBER_STACK`] when not given. Not yet rounded to
+    /// pages: the runtime does that (GAP(runtime-table-bytes)).
+    pub fiber_stack: u64,
+    /// `[runtime] main-stack`: the stack reservation in bytes of the root
+    /// fiber running `main` and of each test (D-660);
+    /// [`Manifest::DEFAULT_MAIN_STACK`] when not given.
+    pub main_stack: u64,
     /// The `cheby.toml` file in the source map, for diagnostics about the
     /// package as a whole.
     pub file: FileId,
@@ -114,6 +128,19 @@ impl Manifest {
     /// The memory limit of one constant's evaluation when `[const-eval]`
     /// sets none (D-195, D-536): 1 GiB.
     pub const DEFAULT_MEMORY_LIMIT: u64 = 1 << 30;
+
+    /// `[runtime] fiber-stack` when not given (D-660): 8 MiB.
+    pub const DEFAULT_FIBER_STACK: u64 = 8 << 20;
+
+    /// `[runtime] main-stack` when not given (D-660): 64 MiB in the
+    /// reference implementation.
+    pub const DEFAULT_MAIN_STACK: u64 = 64 << 20;
+
+    /// The smallest stack `[runtime]` accepts (D-660): 1 MiB.
+    pub const MIN_STACK: u64 = 1 << 20;
+
+    /// The largest stack `[runtime]` accepts (D-660): 16 GiB.
+    pub const MAX_STACK: u64 = 16 << 30;
 
     /// Reads `cheby.toml` in `root`, adds it to `sources` as `cheby.toml`,
     /// and checks it. Problems with the manifest are pushed to
@@ -373,8 +400,11 @@ const TIME_UNITS: &[(&str, u64)] = &[("ms", 1), ("s", 1000)];
 const MEMORY_UNITS: &[(&str, u64)] = &[("KiB", 1 << 10), ("MiB", 1 << 20), ("GiB", 1 << 30)];
 
 /// The top-level keys, in the order §13.3 lists them, for help lines.
-const KNOWN_KEYS: &str =
-    "`name`, `version`, `description`, `licences`, `targets`, `[dependencies]` and `[const-eval]`";
+const KNOWN_KEYS: &str = "`name`, `version`, `description`, `licences`, `targets`, \
+     `[dependencies]`, `[const-eval]` and `[runtime]`";
+
+/// The help line of `[runtime]`'s errors (D-660).
+const RUNTIME_KEYS: &str = "the keys are `fiber-stack` and `main-stack`";
 
 impl Reader<'_> {
     fn diag(&self, message: impl Into<String>, at: Range<usize>, label: &str) -> Diagnostic {
@@ -395,6 +425,8 @@ impl Reader<'_> {
         let mut dependency_keys = Vec::new();
         let mut time_limit = Manifest::DEFAULT_TIME_LIMIT;
         let mut memory_limit = Manifest::DEFAULT_MEMORY_LIMIT;
+        let mut fiber_stack = Manifest::DEFAULT_FIBER_STACK;
+        let mut main_stack = Manifest::DEFAULT_MAIN_STACK;
         for (key, value) in table {
             match key.get_ref().as_ref() {
                 "name" => name = self.name(value),
@@ -403,6 +435,7 @@ impl Reader<'_> {
                 "description" => description = self.string(value, "`description`"),
                 "licences" => licences = self.licences(value),
                 "const-eval" => self.const_eval(value, &mut time_limit, &mut memory_limit),
+                "runtime" => self.runtime(value, &mut fiber_stack, &mut main_stack),
                 "dependencies" => {
                     (dependencies, dependency_keys) = self.dependencies(key, value);
                 }
@@ -444,6 +477,8 @@ impl Reader<'_> {
             dependencies,
             const_eval_time_limit: time_limit,
             const_eval_memory_limit: memory_limit,
+            fiber_stack,
+            main_stack,
             file: self.file,
         })
     }
@@ -486,10 +521,98 @@ impl Reader<'_> {
         }
     }
 
+    /// Reads `[runtime]` (D-660): sets the stack sizes it gives and reports
+    /// every other key and every bad value. Only the root package's table
+    /// takes effect; a dependency's would be checked the same way, but
+    /// dependencies are rejected until M5 (§13.4).
+    fn runtime(
+        &mut self,
+        value: &Spanned<DeValue<'_>>,
+        fiber_stack: &mut u64,
+        main_stack: &mut u64,
+    ) {
+        let Some(table) = value.get_ref().as_table() else {
+            self.wrong_type(value, "`runtime`", "a table");
+            return;
+        };
+        for (key, value) in table {
+            match key.get_ref().as_ref() {
+                "fiber-stack" => {
+                    if let Some(size) = self.stack_size(value, "`fiber-stack`", "8MiB") {
+                        *fiber_stack = size;
+                    }
+                }
+                "main-stack" => {
+                    if let Some(size) = self.stack_size(value, "`main-stack`", "64MiB") {
+                        *main_stack = size;
+                    }
+                }
+                other => {
+                    let diag = self
+                        .diag(
+                            format!("unknown key `{other}` in `[runtime]`"),
+                            key.span(),
+                            "unknown key",
+                        )
+                        .with_help(RUNTIME_KEYS);
+                    self.push(diag);
+                }
+            }
+        }
+    }
+
+    /// A stack size of `[runtime]`: `memory-limit`'s form (D-536), from
+    /// [`Manifest::MIN_STACK`] to [`Manifest::MAX_STACK`] (D-660). Reports
+    /// E0036 and returns `None` for anything else. The size is kept in
+    /// bytes, unrounded (GAP(runtime-table-bytes)).
+    fn stack_size(
+        &mut self,
+        value: &Spanned<DeValue<'_>>,
+        what: &str,
+        example: &str,
+    ) -> Option<u64> {
+        let size = self.amount(value, what, MEMORY_UNITS, example)?;
+        if (Manifest::MIN_STACK..=Manifest::MAX_STACK).contains(&size) {
+            return Some(size);
+        }
+        // GAP(runtime-table-bytes): the range message's wording.
+        let diag = self.diag(
+            format!("{what} must be from 1MiB to 16GiB"),
+            value.span(),
+            "",
+        );
+        self.push(diag);
+        None
+    }
+
     /// A limit written as a string: a positive integer followed by one of
     /// `units`, converted with the unit's factor. Reports E0036, with
     /// `example` in the help, and returns `None` for anything else.
     fn limit(
+        &mut self,
+        value: &Spanned<DeValue<'_>>,
+        what: &str,
+        units: &[(&str, u64)],
+        example: &str,
+    ) -> Option<u64> {
+        let limit = self.amount(value, what, units, example)?;
+        if limit == 0 {
+            let diag = self.diag(
+                format!("{what} must be greater than zero"),
+                value.span(),
+                "",
+            );
+            self.push(diag);
+            return None;
+        }
+        Some(limit)
+    }
+
+    /// An amount written as a string: an integer in decimal digits followed
+    /// by one of `units`, converted with the unit's factor, zero included.
+    /// Reports E0036, with `example` in the help, and returns `None` for a
+    /// value of another form or one that does not fit in 64 bits.
+    fn amount(
         &mut self,
         value: &Spanned<DeValue<'_>>,
         what: &str,
@@ -525,23 +648,11 @@ impl Reader<'_> {
             .parse::<u64>()
             .ok()
             .and_then(|n| n.checked_mul(factor));
-        match limit {
-            Some(0) => {
-                let diag = self.diag(
-                    format!("{what} must be greater than zero"),
-                    value.span(),
-                    "",
-                );
-                self.push(diag);
-                None
-            }
-            Some(limit) => Some(limit),
-            None => {
-                let diag = self.diag(format!("{what} `{text}` is too large"), value.span(), "");
-                self.push(diag);
-                None
-            }
+        if limit.is_none() {
+            let diag = self.diag(format!("{what} `{text}` is too large"), value.span(), "");
+            self.push(diag);
         }
+        limit
     }
 
     fn wrong_type(&mut self, value: &Spanned<DeValue<'_>>, what: &str, expected: &str) {

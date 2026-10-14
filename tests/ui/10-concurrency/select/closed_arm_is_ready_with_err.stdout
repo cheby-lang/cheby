@@ -1,0 +1,5 @@
+found ready: closed: Err(Nil)
+a send on the other arm's channel: Err(1)
+woken: closing: Err(Nil)
+a send on the other arm's channel: Err(2)
+a send on the channel the timeout waited on: Err(3)

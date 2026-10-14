@@ -1,0 +1,18 @@
+// @mode: run-pass
+// @decisions: D-657, D-232
+// @milestone: M2
+//! `thread_count` is from 1 to 1024 and `cpu_count` is at least 1,
+//! whatever the machine and `CHEBY_THREADS` are, so this program prints
+//! the same at every thread count (§10.2).
+
+import std::io
+import std::runtime
+
+fn main() {
+  let threads = runtime::thread_count()
+  let threads_in_range = threads >= 1 && threads <= 1_024
+  io::println("thread_count is from 1 to 1024: {threads_in_range}")
+  let cpus = runtime::cpu_count()
+  let cpus_at_least_one = cpus >= 1
+  io::println("cpu_count is at least 1: {cpus_at_least_one}")
+}

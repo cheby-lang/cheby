@@ -28,17 +28,42 @@ use cheby_resolve::{
 use cheby_syntax::SyntaxTree;
 use cheby_types::{Tests, TypesInput, build_interface, check_bodies_with, thir};
 
+use crate::borrow::{BorrowMask, IfaceEligibility, collect_facts, infer};
 use crate::{
-    Defs, EntryKind, EntryRequest, LowerCx, MirModule, Program, Root, count_and_check, dump,
-    dump_function, lower_entries, lower_items, lower_tests, reachable,
+    Defs, EntryKind, EntryRequest, LowerCx, MirModule, Program, Root, Stage, count_and_check, dump,
+    dump_function, lower_entries, lower_items, lower_tests, reachable, validate,
 };
 
 /// What [`lower_source`] produced.
 pub(crate) struct Lowered {
     /// The units, after reference counting and validation: one per needed
     /// module in build order, then the entries unit. Front-end errors
-    /// stop before lowering, which reports no diagnostics (D-554).
+    /// stop before lowering, which reports no diagnostics (D-554). The
+    /// `_uncounted` and `_inferred` helpers stop after the validation at
+    /// `Stage::Lowered`.
     pub units: Vec<MirModule>,
+    /// What borrowing inference gave (D-715, D-779): the mask of every
+    /// function that borrows something, by its path (`app::sum`). Empty
+    /// unless an `_inferred` helper built the units.
+    pub masks: BTreeMap<String, BorrowMask>,
+}
+
+/// What the back end of a test build does after lowering each unit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Mode {
+    /// Reference counts, unwind edges and validation, as `cheby run`.
+    Counted,
+    /// Only the validation at `Stage::Lowered`.
+    Uncounted,
+    /// As `Uncounted`, then borrowing inference over all the units
+    /// ([`crate::borrow`]); `package_visible` is
+    /// [`crate::borrow::IfaceEligibility::with_package_visible`]. With
+    /// `reach_all`, every function of every loaded module is lowered, not
+    /// only what `main` reaches.
+    Inferred {
+        package_visible: bool,
+        reach_all: bool,
+    },
 }
 
 impl Lowered {
@@ -217,7 +242,7 @@ pub(crate) fn lower_source(files: &[(&str, &str)]) -> Lowered {
 /// [`lower_source`] for a package named `package`; the front end's errors
 /// are `Err`, rendered as the CLI prints them.
 pub(crate) fn lower_package(package: &str, files: &[(&str, &str)]) -> Result<Lowered, String> {
-    lower_package_with(package, files, false, None)
+    lower_package_with(package, files, false, None, Mode::Counted)
 }
 
 /// [`lower_source`] whose back end (lowering, reference counting and
@@ -225,7 +250,7 @@ pub(crate) fn lower_package(package: &str, files: &[(&str, &str)]) -> Result<Low
 /// after running `setup` there; the front end runs on the caller's
 /// thread. For tests that the back end needs no deep stack.
 pub(crate) fn lower_source_on_stack(files: &[(&str, &str)], stack: usize, setup: fn()) -> Lowered {
-    lower_package_with("app", files, false, Some((stack, setup)))
+    lower_package_with("app", files, false, Some((stack, setup)), Mode::Counted)
         .unwrap_or_else(|errors| panic!("front-end errors: {errors}"))
 }
 
@@ -234,7 +259,70 @@ pub(crate) fn lower_source_on_stack(files: &[(&str, &str)], stack: usize, setup:
 /// and a test thunk per test after `main`'s in the entries unit, as
 /// `cheby test` builds them (G4).
 pub(crate) fn lower_source_with_tests(files: &[(&str, &str)]) -> Lowered {
-    lower_package_with("app", files, true, None)
+    lower_package_with("app", files, true, None, Mode::Counted)
+        .unwrap_or_else(|errors| panic!("front-end errors: {errors}"))
+}
+
+/// [`lower_source`] without reference counts: the units as lowered,
+/// validated at `Stage::Lowered` (what borrowing inference reads).
+pub(crate) fn lower_source_uncounted(files: &[(&str, &str)]) -> Lowered {
+    lower_package_with("app", files, false, None, Mode::Uncounted)
+        .unwrap_or_else(|errors| panic!("front-end errors: {errors}"))
+}
+
+/// [`lower_source_with_tests`] without reference counts, as
+/// [`lower_source_uncounted`].
+pub(crate) fn lower_source_with_tests_uncounted(files: &[(&str, &str)]) -> Lowered {
+    lower_package_with("app", files, true, None, Mode::Uncounted)
+        .unwrap_or_else(|errors| panic!("front-end errors: {errors}"))
+}
+
+/// The uncounted units of package `package` (with its tests when
+/// `with_tests`) and the borrow masks inference gives over all of them
+/// ([`Lowered::masks`], D-779).
+pub(crate) fn lower_package_inferred(
+    package: &str,
+    files: &[(&str, &str)],
+    with_tests: bool,
+    package_visible: bool,
+) -> Result<Lowered, String> {
+    lower_package_with(
+        package,
+        files,
+        with_tests,
+        None,
+        Mode::Inferred {
+            package_visible,
+            reach_all: false,
+        },
+    )
+}
+
+/// The masks of every function of every shipped std module, as a build
+/// that lowers all of them sees it (no tests units): a package `app`
+/// that imports each module.
+pub(crate) fn lower_std_inferred(package_visible: bool) -> Result<Lowered, String> {
+    let imports: Vec<String> = shipped()
+        .into_iter()
+        .map(|(path, _)| format!("import std::{path}"))
+        .collect();
+    let source = format!("{}\n\nfn main() {{\n  Nil\n}}\n", imports.join("\n"));
+    lower_package_with(
+        "app",
+        &[("", source.as_str())],
+        false,
+        None,
+        Mode::Inferred {
+            package_visible,
+            reach_all: true,
+        },
+    )
+}
+
+/// [`lower_package_inferred`] for package `app`, `priv` functions only
+/// (P1a's reading; D-787's is `package_visible`); front-end errors panic.
+pub(crate) fn lower_source_inferred(files: &[(&str, &str)], with_tests: bool) -> Lowered {
+    lower_package_inferred("app", files, with_tests, false)
         .unwrap_or_else(|errors| panic!("front-end errors: {errors}"))
 }
 
@@ -247,6 +335,7 @@ fn lower_package_with(
     files: &[(&str, &str)],
     with_tests: bool,
     back_end_thread: Option<(usize, fn())>,
+    mode: Mode,
 ) -> Result<Lowered, String> {
     let globals = Globals::new();
     let mut modules = ModuleTable::new();
@@ -389,10 +478,10 @@ fn lower_package_with(
     // The back end, as `cheby run` does it (D-510).
     let back_end = || {
         back_end(
-            package, &modules, &checked, &order, &set, &globals, &sources, with_tests,
+            package, &modules, &checked, &order, &set, &globals, &sources, with_tests, mode,
         )
     };
-    let units = match back_end_thread {
+    let (units, masks) = match back_end_thread {
         None => back_end(),
         Some((stack, setup)) => std::thread::scope(|scope| {
             std::thread::Builder::new()
@@ -407,11 +496,12 @@ fn lower_package_with(
                 .unwrap()
         }),
     };
-    Ok(Lowered { units })
+    Ok(Lowered { units, masks })
 }
 
 /// The back end of [`lower_package_with`]: the units, each counted and
-/// checked. An internal error panics with the unit's dump.
+/// checked or only validated as lowered (`mode`), and the borrow masks
+/// of [`Mode::Inferred`]. An internal error panics with the unit's dump.
 #[expect(
     clippy::too_many_arguments,
     reason = "what the front end of a test build produced"
@@ -425,7 +515,8 @@ fn back_end(
     globals: &Globals,
     sources: &SourceMap,
     with_tests: bool,
-) -> Vec<MirModule> {
+    mode: Mode,
+) -> (Vec<MirModule>, BTreeMap<String, BorrowMask>) {
     let root = modules.find(&ModulePath::root(package)).unwrap();
     let main = checked[&root]
         .0
@@ -459,13 +550,28 @@ fn back_end(
     let reach = reachable(&program, &roots).unwrap();
     let mut units = Vec::new();
     let mut push = |mut unit: MirModule| {
-        if let Err(ice) = count_and_check(&mut unit) {
-            panic!("{ice}\n{}", dump(&unit).unwrap_or_default());
+        if mode == Mode::Counted {
+            if let Err(ice) = count_and_check(&mut unit) {
+                panic!("{ice}\n{}", dump(&unit).unwrap_or_default());
+            }
+        } else if let Err(errors) = validate(&unit, Stage::Lowered) {
+            panic!(
+                "invalid lowered MIR:\n  {}\n{}",
+                errors.join("\n  "),
+                dump(&unit).unwrap_or_default()
+            );
         }
         units.push(unit);
     };
+    let reach_all = matches!(
+        mode,
+        Mode::Inferred {
+            reach_all: true,
+            ..
+        }
+    );
     for &id in order {
-        if !reach.needs_module(id) {
+        if !reach_all && !reach.needs_module(id) {
             continue;
         }
         let (thir, deps) = &checked[&id];
@@ -479,7 +585,7 @@ fn back_end(
             },
             sources,
         };
-        push(lower_items(thir, &|def| reach.contains(def), &cx).unwrap());
+        push(lower_items(thir, &|def| reach_all || reach.contains(def), &cx).unwrap());
         if tests.iter().any(|&(m, _)| m == id) {
             push(lower_tests(thir, &cx).unwrap());
         }
@@ -505,5 +611,45 @@ fn back_end(
         info: Some(&t.entry),
     }));
     push(lower_entries(&requests, &cx).unwrap());
-    units
+    let masks = match mode {
+        Mode::Inferred {
+            package_visible, ..
+        } => infer_all(&units, checked, set, modules, globals, package_visible),
+        Mode::Counted | Mode::Uncounted => BTreeMap::new(),
+    };
+    (units, masks)
+}
+
+/// Borrowing inference over a build's lowered units, as a driver runs it
+/// (D-779): the facts of every unit, then each code unit with its own
+/// module's interfaces. Masks by function path.
+fn infer_all(
+    units: &[MirModule],
+    checked: &BTreeMap<ModuleId, (thir::Module, Vec<ModuleId>)>,
+    set: &InterfaceSet,
+    modules: &ModuleTable,
+    globals: &Globals,
+    package_visible: bool,
+) -> BTreeMap<String, BorrowMask> {
+    let refs: Vec<&MirModule> = units.iter().collect();
+    let facts = collect_facts(&refs);
+    let mut out = BTreeMap::new();
+    for unit in units {
+        let crate::UnitKind::Code(id) = unit.unit else {
+            continue;
+        };
+        let (thir, dep_ids) = &checked[&id];
+        let readable = DepView::new(set, dep_ids);
+        let defs = Defs {
+            own: set.get(id),
+            deps: &readable,
+            modules,
+            globals,
+        };
+        let eligibility = IfaceEligibility::new(defs, thir).with_package_visible(package_visible);
+        for (def, mask) in infer(unit, &facts, &eligibility) {
+            out.insert(unit.name(def).unwrap().path(), mask);
+        }
+    }
+    out
 }

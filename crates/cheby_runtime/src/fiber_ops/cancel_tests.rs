@@ -95,7 +95,7 @@ unsafe extern "C" fn job_t0(ctx: *mut ExecCtx, function: u64) -> u64 {
 /// Spawns `job` into `scope` with the Cheby values `captures`, each given
 /// away to the closure; returns the `Fiber` handle, owned, and the job's
 /// key.
-fn spawn_job(
+pub(super) fn spawn_job(
     me: &ExecCtx,
     scope: Word,
     captures: &[Word],
@@ -108,7 +108,7 @@ fn spawn_job(
 }
 
 /// [`spawn_job`] that drops the `Fiber` handle at once.
-fn start_job(
+pub(super) fn start_job(
     me: &ExecCtx,
     scope: Word,
     captures: &[Word],
@@ -134,7 +134,7 @@ fn jobs_config(domain: &Arc<Domain>) -> EntryConfig {
 
 /// Runs `body` as a root fiber on `runtime` with a fresh domain; returns its
 /// outcome and the domain.
-fn outcome_on(
+pub(super) fn outcome_on(
     runtime: &Runtime,
     body: impl FnOnce(&ExecCtx) -> u64 + Send + 'static,
 ) -> (EntryOutcome, Arc<Domain>) {
@@ -147,7 +147,7 @@ fn outcome_on(
 
 /// Runs `body` as a root fiber on a new runtime of `threads` workers,
 /// requires that it returns `7` and checks that nothing leaked.
-fn run_jobs(threads: usize, body: impl FnOnce(&ExecCtx) -> u64 + Send + 'static) {
+pub(super) fn run_jobs(threads: usize, body: impl FnOnce(&ExecCtx) -> u64 + Send + 'static) {
     let runtime = testing::runtime(threads);
     let (outcome, domain) = outcome_on(&runtime, body);
     runtime.shutdown();
@@ -164,7 +164,7 @@ fn run_jobs(threads: usize, body: impl FnOnce(&ExecCtx) -> u64 + Send + 'static)
 }
 
 /// The thread counts most tests run at.
-const THREADS: [usize; 3] = [1, 2, 4];
+pub(super) const THREADS: [usize; 3] = [1, 2, 4];
 
 // ---------------------------------------------------------------------------
 // What fibers saw.
@@ -172,11 +172,11 @@ const THREADS: [usize; 3] = [1, 2, 4];
 /// What the fibers of one run saw, by name, compared with the design by
 /// the test thread.
 #[derive(Debug, Clone, Default)]
-struct Notes(Arc<Mutex<BTreeMap<String, String>>>);
+pub(super) struct Notes(Arc<Mutex<BTreeMap<String, String>>>);
 
 impl Notes {
     /// Notes `value`, in its `Debug` form, under `key`.
-    fn set(&self, key: &str, value: impl Debug) {
+    pub(super) fn set(&self, key: &str, value: impl Debug) {
         self.0
             .lock()
             .unwrap()
@@ -185,7 +185,12 @@ impl Notes {
 
     /// Requires every `(key, value)` of `expected`, where `value` is the
     /// `Debug` form of what was noted; reports every mismatch at once.
-    fn require(&self, threads: usize, expected: &[(&str, String)]) {
+    /// What was noted under `key`, in its `Debug` form.
+    pub(super) fn get(&self, key: &str) -> Option<String> {
+        self.0.lock().unwrap().get(key).cloned()
+    }
+
+    pub(super) fn require(&self, threads: usize, expected: &[(&str, String)]) {
         let seen = self.0.lock().unwrap();
         let wrong: Vec<String> = expected
             .iter()
@@ -206,29 +211,29 @@ impl Notes {
 }
 
 /// The `Debug` form of `value`, for [`Notes::require`].
-fn shown(value: impl Debug) -> String {
+pub(super) fn shown(value: impl Debug) -> String {
     format!("{value:?}")
 }
 
 /// A scope's failure as `take_failure` reports a panic.
-fn panic_failure(message: &str, location: &str) -> String {
+pub(super) fn panic_failure(message: &str, location: &str) -> String {
     shown((0_i64, message, location))
 }
 
 /// A gate one fiber opens after an event and others wait for, yielding:
 /// ordering by an event, never by timing.
 #[derive(Debug, Clone, Default)]
-struct Gate(Arc<AtomicBool>);
+pub(super) struct Gate(Arc<AtomicBool>);
 
 impl Gate {
-    fn open(&self) {
+    pub(super) fn open(&self) {
         self.0.store(true, Ordering::SeqCst);
     }
 
     /// Yields until the gate is open. Yielding is not an entry check, so no
     /// cancellation is delivered meanwhile: this stands for work the fiber
     /// does without calling a function.
-    fn wait(&self, me: &ExecCtx) {
+    pub(super) fn wait(&self, me: &ExecCtx) {
         for _ in 0..10_000_000 {
             if self.0.load(Ordering::SeqCst) {
                 return;
@@ -243,16 +248,16 @@ impl Gate {
 // Kernel calls that may unwind, as generated code makes them.
 
 /// A kernel's result, or the unwind flag it left set.
-type Step<T> = Result<T, u32>;
+pub(super) type Step<T> = Result<T, u32>;
 
 /// The running fiber's unwind flag.
-fn flag_of(me: &ExecCtx) -> u32 {
+pub(super) fn flag_of(me: &ExecCtx) -> u32 {
     flag::get(me)
 }
 
 /// `channel::receive`: `Ok` with the kernel's `Result` taken apart, or the
 /// flag when it raised.
-fn receive_step(me: &ExecCtx, rx: Word) -> Step<Result<Word, Word>> {
+pub(super) fn receive_step(me: &ExecCtx, rx: Word) -> Step<Result<Word, Word>> {
     // SAFETY: the running fiber's context and a live `Receiver`.
     let word = unsafe { cheby_channel_receive(ctx_of(me), rx) };
     match flag_of(me) {
@@ -262,7 +267,7 @@ fn receive_step(me: &ExecCtx, rx: Word) -> Step<Result<Word, Word>> {
 }
 
 /// `channel::send` of the borrowed `value`, as [`receive_step`].
-fn send_step(me: &ExecCtx, tx: Word, value: Word) -> Step<Result<Word, Word>> {
+pub(super) fn send_step(me: &ExecCtx, tx: Word, value: Word) -> Step<Result<Word, Word>> {
     // SAFETY: the running fiber's context, a live `Sender` and value.
     let word = unsafe { cheby_channel_send(ctx_of(me), tx, value) };
     match flag_of(me) {
@@ -282,7 +287,7 @@ fn join_step(me: &ExecCtx, fiber: Word) -> Step<Word> {
 }
 
 /// A note's text, noted as it is (its `Debug` form has no quotes).
-struct Shape(String);
+pub(super) struct Shape(String);
 
 impl Debug for Shape {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -293,7 +298,7 @@ impl Debug for Shape {
 /// What a step gave, for notes: `raised N` with the flag when it raised,
 /// else `Ok(…)` or `Err(…)` with the payload as an integer when it is one,
 /// `Nil`, or `a value`. Releases the payload.
-fn step_shape(step: Step<Result<Word, Word>>) -> Shape {
+pub(super) fn step_shape(step: Step<Result<Word, Word>>) -> Shape {
     Shape(match step {
         Err(raised) => format!("raised {raised}"),
         Ok(Ok(word)) => {
@@ -322,7 +327,7 @@ fn describe(word: Word) -> String {
 
 /// `panic as message` at `location`, as generated code raises it; returns
 /// the flag it left.
-fn panic_with(me: &ExecCtx, message: &str, location: &str) -> u32 {
+pub(super) fn panic_with(me: &ExecCtx, message: &str, location: &str) -> u32 {
     let (message, location) = (string(message), string(location));
     // SAFETY: the running fiber's context and live `String`s.
     unsafe { cheby_rt_panic(ctx_of(me), PanicKind::Explicit.code(), message, location) };
@@ -332,7 +337,7 @@ fn panic_with(me: &ExecCtx, message: &str, location: &str) -> u32 {
 }
 
 /// The entry check generated code makes; returns the flag after it.
-fn entry_check(me: &ExecCtx) -> u32 {
+pub(super) fn entry_check(me: &ExecCtx) -> u32 {
     testing::entry_check(me);
     flag_of(me)
 }
@@ -342,7 +347,7 @@ fn entry_check(me: &ExecCtx) -> u32 {
 /// When no unwinding is in flight, which the test's notes then report as a
 /// mismatch, it closes as the body's return would instead, so that a broken
 /// expectation fails the test and does not abort the test process.
-fn close_unwound(me: &ExecCtx, scope: Word) -> bool {
+pub(super) fn close_unwound(me: &ExecCtx, scope: Word) -> bool {
     if flag_of(me) == NONE {
         close(me, scope)
     } else {
@@ -351,7 +356,7 @@ fn close_unwound(me: &ExecCtx, scope: Word) -> bool {
 }
 
 /// The state of a borrowed `Scope` handle.
-fn state_of(scope: Word) -> Arc<ScopeState> {
+pub(super) fn state_of(scope: Word) -> Arc<ScopeState> {
     // SAFETY: a live `Scope` handle, borrowed.
     Arc::clone(&unsafe { handles::payload::<ScopeHandle>(scope, HandleKind::Scope) }.0)
 }
@@ -380,9 +385,9 @@ fn last_failure(me: &ExecCtx) -> Option<super::Failure> {
     me.conc.take_last_failure()
 }
 
-const CANCEL: u32 = unwind_flag::CANCEL;
-const PANIC: u32 = unwind_flag::PANIC;
-const NONE: u32 = unwind_flag::NONE;
+pub(super) const CANCEL: u32 = unwind_flag::CANCEL;
+pub(super) const PANIC: u32 = unwind_flag::PANIC;
+pub(super) const NONE: u32 = unwind_flag::NONE;
 
 // ---------------------------------------------------------------------------
 // I-7: an inner close waits, then passes through.
@@ -824,7 +829,7 @@ fn cancel_member_joining_a_failed_sibling_unwinds() {
 }
 
 /// Drops what a step gave, if anything.
-fn drop_shape(step: Step<Result<Word, Word>>) {
+pub(super) fn drop_shape(step: Step<Result<Word, Word>>) {
     if let Ok(Ok(word) | Err(word)) = step {
         drop_word(word);
     }
@@ -1024,7 +1029,7 @@ fn outside_joiner_scope(me: &ExecCtx, x: Word, ready_tx: Word, notes: &Notes) {
 /// Makes entry checks in a loop, yielding between them, as a fiber working
 /// in a loop of calls does, until one delivers a cancellation; returns
 /// whether one did (the flag is then set), giving up after many checks.
-fn until_cancelled(me: &ExecCtx) -> bool {
+pub(super) fn until_cancelled(me: &ExecCtx) -> bool {
     for _ in 0..10_000_000 {
         if entry_check(me) != NONE {
             return true;

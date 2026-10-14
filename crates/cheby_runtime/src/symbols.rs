@@ -5,7 +5,7 @@
 //! [`symbols`] lists the runtime's own symbols first, in the order of
 //! [`sym::ALL`], then every kernel module's kernels. Each kernel module
 //! (`io`, `num`, `list`, `text`, `bytes`, `env`, `hamt`, `consteval`,
-//! `fiber_ops`) registers its kernels through its own `kernels` function
+//! `fiber_ops`, `random`, `runtime_info`) registers its kernels through its own `kernels` function
 //! and names the std modules it implements completely in its `COMPLETE`,
 //! so kernel packages never edit this file.
 //!
@@ -37,7 +37,9 @@ use crate::object::{
 use crate::panic::{cheby_rt_panic, cheby_rt_stack_slow, cheby_rt_stack_slow_frame};
 use crate::rc::{cheby_rt_drop, cheby_rt_dup};
 use crate::unwind::entry_slow::{cheby_rt_stack_slow_frame_unwind, cheby_rt_stack_slow_unwind};
-use crate::{bytes, consteval, desc, env, fiber_ops, hamt, io, list, num, text};
+use crate::{
+    bytes, consteval, desc, env, fiber_ops, hamt, io, list, num, random, runtime_info, text,
+};
 
 /// The address of a static object.
 fn data<T>(object: &'static T) -> *const u8 {
@@ -124,6 +126,8 @@ pub fn symbols() -> Vec<(&'static str, *const u8)> {
     hamt::kernels(&mut out);
     consteval::kernels(&mut out);
     fiber_ops::kernels(&mut out);
+    random::kernels(&mut out);
+    runtime_info::kernels(&mut out);
     out
 }
 
@@ -141,6 +145,8 @@ pub fn complete_modules() -> Vec<&'static str> {
         hamt::COMPLETE,
         consteval::COMPLETE,
         fiber_ops::COMPLETE,
+        random::COMPLETE,
+        runtime_info::COMPLETE,
     ]
     .concat()
 }
@@ -416,20 +422,24 @@ mod tests {
         assert_eq!(registered.len(), 27 + 36 + 11 + 3);
     }
 
-    /// Every kernel of `std::channel` and `std::fiber` has the C signature
-    /// of its `@external` declaration in `std/` after the context pointer,
-    /// and every one is `@std_context` (plan §2.5, D-692). The intrinsic
-    /// `scope_run` has no kernel (D-693).
-    #[test]
-    fn fiber_and_channel_kernels_match_their_declarations() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std");
-        let mut declared = BTreeMap::new();
-        for module in ["channel", "fiber"] {
-            let source = std::fs::read_to_string(root.join(format!("{module}.cheby"))).unwrap();
-            let mut pending: Option<String> = None;
-            let mut context = false;
-            for line in source.lines() {
-                if line.trim_start().starts_with("@std_context") {
+    /// A kernel declaration: its native symbol, whether it is
+    /// `@std_context`, and its C signature.
+    type Declaration = (String, bool, (Vec<&'static str>, &'static str));
+
+    /// The kernel declarations of `source`: each `@external(native, …)`
+    /// symbol, whether `@std_context` came before it, and the C signature
+    /// of the `fn` that follows, whose header may span several lines
+    /// (`cheby fmt` puts each parameter of a long list on its own line). A
+    /// header ends where its parentheses balance.
+    fn kernel_declarations(source: &str) -> Vec<Declaration> {
+        let mut out = Vec::new();
+        let mut pending: Option<String> = None;
+        let mut context = false;
+        let mut header = String::new();
+        for line in source.lines() {
+            let trimmed = line.trim();
+            if header.is_empty() {
+                if trimmed.starts_with("@std_context") {
                     context = true;
                     continue;
                 }
@@ -437,19 +447,91 @@ mod tests {
                     pending = Some(symbol);
                     continue;
                 }
-                if let Some(signature) = c_signature(line) {
-                    if let Some(symbol) = pending.take()
-                        && !sym::INTRINSICS.contains(&symbol.as_str())
-                    {
-                        assert!(context, "{symbol} is not `@std_context`");
-                        declared.insert(symbol, signature);
-                    }
-                    context = false;
+                if !trimmed.starts_with("fn ") && !trimmed.starts_with("pub fn ") {
+                    continue;
                 }
+            }
+            header.push_str(trimmed);
+            header.push(' ');
+            let opened = header.matches('(').count();
+            if opened == 0 || opened != header.matches(')').count() {
+                continue;
+            }
+            if let Some(signature) = c_signature(&header) {
+                if let Some(symbol) = pending.take() {
+                    out.push((symbol, context, signature));
+                }
+                context = false;
+            }
+            header.clear();
+        }
+        out
+    }
+
+    #[test]
+    fn kernel_declarations_span_lines() {
+        let source = "@std_context\n@external(native, \"cheby_a\")\n@external(js, \"./a.mjs\", \"a\")\n\
+                      fn a<T>(\n  x: Selector<T>,\n  seconds: Int,\n  apply: fn() -> T,\n) -> Selector<T>\n\n\
+                      @external(native, \"cheby_b\")\nfn b() -> U64\n";
+        assert_eq!(
+            kernel_declarations(source),
+            [
+                (
+                    "cheby_a".to_owned(),
+                    true,
+                    (vec!["Word", "i64", "Word"], "Word")
+                ),
+                ("cheby_b".to_owned(), false, (vec![], "u64")),
+            ]
+        );
+    }
+
+    /// Every kernel of the tier-2 modules `std::channel`, `std::fiber`,
+    /// `std::selector`, `std::random` and `std::runtime` has the C signature
+    /// of its `@external` declaration in `std/`, after the context pointer
+    /// for a `@std_context` kernel, and carries `@std_context` exactly when
+    /// its native function takes that pointer (plan §2.5 and checkpoint 3's
+    /// §2.1, D-692): every kernel of `fiber_ops` and `runtime`'s
+    /// `thread_count` and `set_thread_count` do; `random`'s `host_bits` and
+    /// `runtime`'s `cpu_count` do not. The intrinsic `scope_run` has no
+    /// kernel (D-693).
+    #[test]
+    fn tier2_kernels_match_their_declarations() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std");
+        let mut declared = BTreeMap::new();
+        let mut declared_context = BTreeSet::new();
+        for module in ["channel", "fiber", "selector", "random", "runtime"] {
+            let source = std::fs::read_to_string(root.join(format!("{module}.cheby"))).unwrap();
+            for (symbol, context, signature) in kernel_declarations(&source) {
+                if sym::INTRINSICS.contains(&symbol.as_str()) {
+                    continue;
+                }
+                if context {
+                    declared_context.insert(symbol.clone());
+                }
+                assert!(
+                    declared.insert(symbol.clone(), signature).is_none(),
+                    "{symbol} is declared twice"
+                );
             }
         }
         let mut registered = BTreeMap::new();
-        for (name, params, result) in fiber_ops::signatures() {
+        let mut registered_context = BTreeSet::new();
+        let fiber_and_channel = fiber_ops::signatures();
+        registered_context.extend(fiber_and_channel.iter().map(|kernel| kernel.0.to_owned()));
+        registered_context.extend(
+            runtime_info::CONTEXT_KERNELS
+                .iter()
+                .map(|&name| name.to_owned()),
+        );
+        for (name, params, result) in [
+            fiber_and_channel,
+            random::signatures(),
+            runtime_info::signatures(),
+        ]
+        .into_iter()
+        .flatten()
+        {
             assert!(
                 registered
                     .insert(name.to_owned(), (params.to_vec(), result))
@@ -458,7 +540,13 @@ mod tests {
             );
         }
         assert_eq!(registered, declared);
-        assert_eq!(registered.len(), 8);
+        assert_eq!(
+            registered_context, declared_context,
+            "the kernels that take the context pointer and the `@std_context` declarations differ"
+        );
+        // channel and fiber 8, selector 5, random 1, runtime 3.
+        assert_eq!(registered.len(), 8 + 5 + 1 + 3);
+        assert_eq!(registered_context.len(), 8 + 5 + 2);
     }
 
     #[test]

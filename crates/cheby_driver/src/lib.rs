@@ -50,6 +50,7 @@ use cheby_iface::Ice;
 use cheby_jit::{Jit, JitError};
 use cheby_package::{MANIFEST_FILE, Manifest, ModulePath, PackageError, Targets};
 use cheby_runtime::RunConfig;
+use cheby_runtime::entry::AtExit;
 use cheby_syntax::SyntaxTree;
 
 mod backend;
@@ -449,6 +450,14 @@ impl Program {
     pub fn run(self) -> Result<i32, Error> {
         Ok(self.jit.entry(self.entry)?.run_main(self.config)?)
     }
+
+    /// Chooses what happens to the fibers left when `main` has returned
+    /// (D-073, D-708): [`AtExit::Teardown`] unless set. Only `cheby run`,
+    /// whose process exits next, asks for [`AtExit::Freeze`], and only in
+    /// a build without the leak check (GAP(freeze-only-cli)).
+    pub const fn set_at_exit(&mut self, at_exit: AtExit) {
+        self.config.at_exit = at_exit;
+    }
 }
 
 /// The outcome of [`run`].
@@ -502,9 +511,13 @@ pub fn prepare_run(root: &Path, options: RunOptions) -> Result<Prepared, Error> 
     // `env::program_name()` is the package's name under `cheby run`, so
     // usage messages are the same on every machine and for every module
     // path that is run (D-369).
+    // The root package's `[runtime]` stacks (D-660); the runtime rounds
+    // them up to its page size (GAP(runtime-table-bytes)).
     let config = RunConfig {
         args: options.args,
         program_name: package,
+        root_stack_size: stack_bytes(front.main_stack),
+        fiber_stack: stack_bytes(front.fiber_stack),
         ..RunConfig::default()
     };
     Ok(Prepared::Ready(Box::new(Program {
@@ -587,6 +600,13 @@ pub fn bench_build(dir: &Path) -> Result<BenchTimings, Error> {
         code_bytes: built.jit.code_stats().code_bytes,
         rc_ops: built.rc_ops.unwrap_or(0),
     })
+}
+
+/// A `[runtime]` stack size (D-660) as the runtime takes it: bytes, which
+/// the manifest kept within 1 MiB to 16 GiB; on a target whose addresses
+/// cannot hold it, the largest size, which the runtime clamps.
+pub(crate) fn stack_bytes(bytes: u64) -> usize {
+    usize::try_from(bytes).unwrap_or(usize::MAX)
 }
 
 /// `a::b::c` as a module path, if every segment is non-empty.

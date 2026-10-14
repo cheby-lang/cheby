@@ -1,0 +1,37 @@
+// @mode: run-pass
+// @decisions: D-103, D-652, D-673, D-646
+// @milestone: M2
+//! A timer arm is ready once its wait has passed since `select` started
+//! waiting, so of several timer arms the earliest is chosen when no other
+//! arm is ready, and a wait of zero or less is ready at once (§10.6,
+//! §10.8).
+
+import std::channel
+import std::duration
+import std::io
+import std::selector
+
+fn main() {
+  let (keep, never) = channel::new::<String>(0)
+  let timed =
+    selector::new()
+    |> selector::receive(_, never, fn(_) { "a message" })
+    |> selector::after(_, duration::seconds(10), fn() { "the 10 s timer" })
+    |> selector::after(_, duration::milliseconds(10), fn() { "the 10 ms timer" })
+    |> selector::select
+  io::println("chosen: {timed}")
+  let zero =
+    selector::new()
+    |> selector::after(_, duration::seconds(0), fn() { "a wait of zero" })
+    |> selector::select
+  io::println("ready at once: {zero}")
+  let negative =
+    selector::new()
+    |> selector::after(_, duration::milliseconds(-5), fn() { "a negative wait" })
+    |> selector::select
+  io::println("ready at once: {negative}")
+  // The first selector held the only `Receiver` of `never`, and `select`
+  // released it.
+  let sent = channel::send(keep, "late")
+  io::println("a send after the selects: {sent:?}")
+}

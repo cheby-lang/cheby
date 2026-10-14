@@ -34,6 +34,9 @@
 mod fiber;
 mod idle;
 mod monitor;
+mod park;
+mod poll;
+mod timer;
 mod wait;
 mod worker;
 
@@ -48,8 +51,9 @@ use crossbeam_deque::Injector;
 use parking_lot::Mutex;
 
 pub(crate) use fiber::{
-    AfterSwitch, FiberRef, FiberSched, StartFn, Unlock, begin_park, cancel_park, park,
+    AfterSwitch, FiberRef, FiberSched, StartFn, Unlock, Unlocks, begin_park, cancel_park, park,
 };
+pub(crate) use timer::{Deadline, TimerHandle, TimerTarget, deadline_after};
 pub(crate) use wait::{WaitHeader, WaitNode, WaitQueue, WaitState};
 
 use self::fiber::FiberParams;
@@ -58,7 +62,9 @@ use self::monitor::MonitorWake;
 use self::worker::WorkerShared;
 use crate::alloc;
 use crate::ctx::{ExecCtx, FiberInit};
-use crate::entry::{EntryConfig, EntryFn, EntryMode, EntryOutcome, MIN_STACK_SIZE, RuntimeError};
+use crate::entry::{
+    DEFAULT_STACK_SIZE, EntryConfig, EntryFn, EntryMode, EntryOutcome, MIN_STACK_SIZE, RuntimeError,
+};
 use crate::fiber::{StackError, switch};
 use crate::generic;
 use crate::tls;
@@ -121,7 +127,7 @@ pub fn threads_from_env() -> Result<usize, RuntimeError> {
 }
 
 /// How to make a [`Runtime`].
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct RuntimeConfig {
     /// The number of worker threads, clamped to 1 to [`MAX_THREADS`];
     /// `None` reads `CHEBY_THREADS` (D-658). In-process hosts, such as
@@ -131,6 +137,22 @@ pub struct RuntimeConfig {
     pub args: Vec<String>,
     /// The program name `std::env` reports; empty means "not set" (D-347).
     pub program_name: String,
+    /// The stack size in bytes of a fiber spawned without one (D-660's
+    /// `fiber-stack`); [`Shared::fiber_stack`] reports it.
+    pub fiber_stack: usize,
+}
+
+impl Default for RuntimeConfig {
+    /// `CHEBY_THREADS`' count, no arguments, no program name, and
+    /// [`DEFAULT_STACK_SIZE`] for spawned fibers.
+    fn default() -> Self {
+        Self {
+            threads: None,
+            args: Vec::new(),
+            program_name: String::new(),
+            fiber_stack: DEFAULT_STACK_SIZE,
+        }
+    }
 }
 
 /// Keeps a JIT's code memory alive (D-708, I-6): the memory is freed when
@@ -197,6 +219,14 @@ pub(crate) struct Shared {
     rescue: bool,
     /// The monitor's sleep.
     monitor: MonitorWake,
+    /// The timer heap (D-682).
+    timers: timer::Timers,
+    /// The poller one idle worker blocks in (D-680).
+    driver: poll::Driver,
+    /// The default stack size of a spawned fiber (D-660).
+    fiber_stack: usize,
+    /// The thread count's target ([`Shared::set_thread_count`]).
+    thread_target: AtomicUsize,
     /// Test hooks of the monitor.
     #[cfg(test)]
     probe: testing::MonitorProbe,
@@ -211,6 +241,7 @@ impl fmt::Debug for Shared {
             .field("workers", &self.workers.len())
             .field("live", &self.live.load(Ordering::Relaxed))
             .field("stopping", &self.stopping.load(Ordering::Relaxed))
+            .field("timers", &self.timers_pending())
             .finish_non_exhaustive()
     }
 }
@@ -247,6 +278,26 @@ impl Shared {
         &self.program_name
     }
 
+    /// The default stack of a spawned fiber (D-660's `fiber-stack`), as
+    /// [`RuntimeConfig::fiber_stack`] gave it.
+    pub(crate) fn fiber_stack(&self) -> usize {
+        self.fiber_stack
+    }
+
+    /// C4: the thread count's target (D-657): the worker count until
+    /// [`Shared::set_thread_count`] sets one.
+    pub(crate) fn thread_count(&self) -> usize {
+        self.thread_target.load(Ordering::SeqCst)
+    }
+
+    /// C4: sets the thread count's target; the caller clamps it to 1 to
+    /// [`MAX_THREADS`] (D-657, D-658). In checkpoint 3's wave 1 this stores
+    /// the target only, an interim that never ships: package T1n (wave 3)
+    /// starts and retires workers to meet it.
+    pub(crate) fn set_thread_count(&self, count: usize) {
+        self.thread_target.store(count, Ordering::SeqCst);
+    }
+
     /// Whether any queue a thief can reach holds a fiber.
     fn work_pending(&self) -> bool {
         !self.injector.is_empty() || self.workers.iter().any(WorkerShared::has_stealable)
@@ -267,8 +318,21 @@ impl Shared {
         if let Some(index) = self.idle.worker_to_notify()
             && let Some(worker) = self.worker(index)
         {
-            worker.unpark();
+            worker.unpark(self);
         }
+    }
+
+    /// Wakes every idle worker: those parked on their condition variables
+    /// and the one blocked in the poller (C-3: a stop or a halt that has
+    /// set its flag calls it, so it never waits for the next timer). Each
+    /// woken worker re-checks the flags before it parks again.
+    pub(crate) fn wake_idle(&self) {
+        for worker in &self.workers {
+            worker.unpark(self);
+        }
+        // The poll holder's parker woke it above; this wake also covers a
+        // holder between its parker's states.
+        self.driver.wake();
     }
 
     /// Queues a fiber only worker `index` may run, waking it if parked.
@@ -278,7 +342,7 @@ impl Shared {
         };
         worker.push_targeted(fiber);
         if self.idle.unpark_specific(index) {
-            worker.unpark();
+            worker.unpark(self);
         }
     }
 
@@ -526,6 +590,7 @@ impl Runtime {
         if !switch::SUPPORTED {
             return Err(RuntimeError::Unsupported);
         }
+        let driver = poll::Driver::new().map_err(RuntimeError::Spawn)?;
         let shared = Arc::new(Shared {
             workers: (0..threads).map(|_| WorkerShared::new()).collect(),
             injector: Injector::new(),
@@ -538,6 +603,10 @@ impl Runtime {
             stress_migrate: tuning.stress_migrate.unwrap_or_else(stress_from_env),
             rescue: tuning.rescue,
             monitor: MonitorWake::default(),
+            timers: timer::Timers::new(Instant::now()),
+            driver,
+            fiber_stack: config.fiber_stack,
+            thread_target: AtomicUsize::new(threads),
             #[cfg(test)]
             probe: testing::MonitorProbe::default(),
             #[cfg(test)]
@@ -684,11 +753,15 @@ impl Runtime {
         self.stop();
     }
 
+    /// Stops the runtime (C7): sets `stopping`, which makes every later
+    /// [`Shared::arm_timer`] return a handle that never fires; wakes every
+    /// parked worker and the monitor; joins every thread; then drops every
+    /// timer entry unfired ([`Shared::clear_timers`]) and only then the
+    /// code tokens (D-708). A fiber still parked stays parked: the
+    /// lifecycle (package L1r) adds teardown and the halt on top.
     fn stop(&mut self) {
         self.shared.stopping.store(true, Ordering::SeqCst);
-        for worker in &self.shared.workers {
-            worker.unpark();
-        }
+        self.shared.wake_idle();
         self.shared.monitor.stop();
         for handle in self.workers.drain(..) {
             handle.join().ok();
@@ -696,6 +769,7 @@ impl Runtime {
         if let Some(monitor) = self.monitor.take() {
             monitor.join().ok();
         }
+        self.shared.clear_timers();
         self.code.lock().clear();
     }
 }
@@ -707,6 +781,12 @@ impl Drop for Runtime {
 }
 
 #[cfg(test)]
+mod park_models;
+#[cfg(test)]
+mod poll_tests;
+#[cfg(test)]
 pub(crate) mod testing;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod timer_tests;

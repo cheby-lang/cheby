@@ -8,7 +8,7 @@
 //! ([`WaitHeader`]) starts at [`WaitState::Waiting`] and is settled exactly
 //! once, by a compare-and-swap: a waker, under the queue's lock, moves it
 //! to [`WaitState::Claimed`] or [`WaitState::Closed`]
-//! ([`WaitHeader::try_settle`]) before it touches the node's payload; the
+//! ([`WaitHeader::try_settle_arm`]) before it touches the node's payload; the
 //! cancellation walk, under the waiting fiber's lock, moves it to
 //! [`WaitState::Cancelled`] ([`WaitHeader::try_cancel`]). Whoever wins the
 //! swap is the node's only waker and wakes its fiber once, after releasing
@@ -25,12 +25,25 @@
 //! the header's state is atomic, since the walk reaches it under the fiber
 //! lock instead (through the fiber's published wait pointer,
 //! `fiber_ops::cancel::publish`).
+//!
+//! **Shared headers** (D-704, D-206, architecture §7.2 and §7.3). A
+//! `select` links one node per receive arm, each into its own channel's
+//! queue, and all of them share one header ([`WaitNode::sharing`]) that
+//! lives on the heap in an `Arc`, never on the fiber's stack: a timer entry
+//! and the fiber lock's published pointer reach it too, and a timer entry
+//! can outlive the select's frame (survey-t1 H2). Each node carries its
+//! arm's index, and whoever settles the shared header records that index
+//! in the same compare-and-swap ([`WaitHeader::try_settle_arm`]), so the
+//! first waker of any of the nodes (a sender, a channel's close, the
+//! select's timer) or the walk is the select's only waker, and the others'
+//! swaps fail: a waker skips such a node as it skips one the walk won. A
+//! node with its own header is arm 0.
 
 use std::cell::Cell;
 use std::fmt;
 use std::marker::PhantomPinned;
 use std::ptr::NonNull;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::fiber::FiberRef;
 use crate::ctx::ExecCtx;
@@ -75,16 +88,22 @@ impl WaitState {
 /// The part of a wait node that wakers and the cancellation walk share
 /// (module documentation).
 pub(crate) struct WaitHeader {
-    /// One of [`WaitState`]'s values.
-    state: AtomicU8,
+    /// One of [`WaitState`]'s values in the low byte, and above it the
+    /// index of the arm whose waker settled it (module documentation,
+    /// "Shared headers"); 0 above while `Waiting` and after a cancel.
+    state: AtomicU64,
     /// The waiting fiber.
     fiber: FiberRef,
 }
+
+/// The bits of [`WaitHeader`]'s word below the arm's index.
+const ARM_SHIFT: u32 = 8;
 
 impl fmt::Debug for WaitHeader {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("WaitHeader")
             .field("state", &self.state())
+            .field("arm", &self.arm())
             .field("fiber", &self.fiber)
             .finish()
     }
@@ -94,9 +113,38 @@ impl WaitHeader {
     /// A header of the waiting fiber `fiber`, in [`WaitState::Waiting`].
     pub(crate) fn new(fiber: &ExecCtx) -> Self {
         Self {
-            state: AtomicU8::new(WaitState::Waiting.bits()),
+            state: AtomicU64::new(u64::from(WaitState::Waiting.bits())),
             fiber: FiberRef::from_ctx(fiber),
         }
+    }
+
+    /// The state's low byte.
+    fn low(word: u64) -> u8 {
+        u8::try_from(word & 0xFF).unwrap_or(u8::MAX)
+    }
+
+    /// The index of the arm whose waker settled the header, read with
+    /// Acquire; 0 for a header that one node owns, and while it waits.
+    pub(crate) fn arm(&self) -> usize {
+        usize::try_from(self.state.load(Ordering::Acquire).wrapping_shr(ARM_SHIFT))
+            .unwrap_or(usize::MAX)
+    }
+
+    /// Waker side: `Waiting -> to` (`Claimed` or `Closed`) for the arm
+    /// `arm`, recorded in the same swap. False if the walk or another arm's
+    /// waker won the header first, and the waker then skips the node.
+    pub(crate) fn try_settle_arm(&self, to: WaitState, arm: usize) -> bool {
+        let arm = u64::try_from(arm)
+            .unwrap_or(u64::MAX)
+            .min(u64::MAX >> ARM_SHIFT);
+        self.state
+            .compare_exchange(
+                u64::from(WaitState::Waiting.bits()),
+                arm.wrapping_shl(ARM_SHIFT) | u64::from(to.bits()),
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
     }
 
     /// The waiting fiber.
@@ -109,20 +157,7 @@ impl WaitHeader {
     /// swap is ordered before that by the wake itself (the scheduler's
     /// state word and run queues, `sched::wake`).
     pub(crate) fn state(&self) -> WaitState {
-        WaitState::of(self.state.load(Ordering::Acquire))
-    }
-
-    /// Waker side: `Waiting -> to` (`Claimed` or `Closed`). False if a
-    /// canceller won the node first, which the waker then skips.
-    pub(crate) fn try_settle(&self, to: WaitState) -> bool {
-        self.state
-            .compare_exchange(
-                WaitState::Waiting.bits(),
-                to.bits(),
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            )
-            .is_ok()
+        WaitState::of(Self::low(self.state.load(Ordering::Acquire)))
     }
 
     /// Canceller side: `Waiting -> Cancelled`. False if a waker won the
@@ -130,8 +165,8 @@ impl WaitHeader {
     pub(crate) fn try_cancel(&self) -> bool {
         self.state
             .compare_exchange(
-                WaitState::Waiting.bits(),
-                WaitState::Cancelled.bits(),
+                u64::from(WaitState::Waiting.bits()),
+                u64::from(WaitState::Cancelled.bits()),
                 Ordering::AcqRel,
                 Ordering::Acquire,
             )
@@ -143,8 +178,14 @@ impl WaitHeader {
 /// carries (`T`), and the queue's links. Pinned on the waiting fiber's
 /// stack while it is linked.
 pub(crate) struct WaitNode<T> {
-    /// What wakers and the walk share.
+    /// What wakers and the walk share, unless `shared` names another.
     header: WaitHeader,
+    /// The header this node shares with the other nodes of one `select`
+    /// (module documentation), which outlives the node.
+    shared: Option<NonNull<WaitHeader>>,
+    /// The index of the node's arm in its `select`; 0 for a node that owns
+    /// its header.
+    arm: usize,
     /// What the wait carries: a channel waiter's value cell; nothing for a
     /// joiner.
     payload: T,
@@ -161,7 +202,8 @@ pub(crate) struct WaitNode<T> {
 impl<T> fmt::Debug for WaitNode<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("WaitNode")
-            .field("header", &self.header)
+            .field("header", self.header())
+            .field("arm", &self.arm)
             .field("linked", &self.linked.get())
             .finish_non_exhaustive()
     }
@@ -172,6 +214,8 @@ impl<T> WaitNode<T> {
     pub(crate) fn new(fiber: &ExecCtx, payload: T) -> Self {
         Self {
             header: WaitHeader::new(fiber),
+            shared: None,
+            arm: 0,
             payload,
             prev: Cell::new(None),
             next: Cell::new(None),
@@ -180,9 +224,42 @@ impl<T> WaitNode<T> {
         }
     }
 
-    /// The header wakers and the walk share.
+    /// An unlinked node of the arm `arm` of a `select` of the waiting fiber
+    /// `fiber`, carrying `payload` and sharing `header` with the select's
+    /// other nodes (module documentation).
+    ///
+    /// # Safety
+    ///
+    /// `header` is `fiber`'s and stays live (it is in an `Arc` the fiber
+    /// holds) until the node is unlinked for good and dropped.
+    pub(crate) unsafe fn sharing(
+        fiber: &ExecCtx,
+        header: &WaitHeader,
+        arm: usize,
+        payload: T,
+    ) -> Self {
+        Self {
+            shared: Some(NonNull::from(header)),
+            arm,
+            ..Self::new(fiber, payload)
+        }
+    }
+
+    /// The header wakers and the walk share: the node's own, or the one it
+    /// shares.
     pub(crate) fn header(&self) -> &WaitHeader {
-        &self.header
+        match self.shared {
+            // SAFETY: a shared header outlives the node (the contract of
+            // `sharing`).
+            Some(shared) => unsafe { shared.as_ref() },
+            None => &self.header,
+        }
+    }
+
+    /// The index of the node's arm.
+    #[cfg(test)]
+    pub(crate) fn arm(&self) -> usize {
+        self.arm
     }
 
     /// What the wait carries.
@@ -268,16 +345,17 @@ impl<T> WaitQueue<T> {
     }
 
     /// Unlinks nodes from the front until one settles to `to` (Claimed or
-    /// Closed), and returns that one; a node the walk cancelled is unlinked
-    /// and skipped (its fiber finds it unlinked). The caller is the
-    /// returned node's only waker: it may use the node's payload, then
-    /// wakes its fiber once, after releasing the lock, and touches the node
-    /// no more.
+    /// Closed), and returns that one; a node the walk cancelled, or whose
+    /// shared header another arm's waker won, is unlinked and skipped (its
+    /// fiber finds it unlinked). The caller is the returned node's only
+    /// waker: it may use the node's payload, then wakes its fiber once,
+    /// after releasing the lock, and touches the node no more.
     pub(crate) fn pop_settled(&mut self, to: WaitState) -> Option<NonNull<WaitNode<T>>> {
         while let Some(node) = self.pop_front() {
             // SAFETY: as in `pop_front`: the node's fiber needs the lock the
             // caller holds before it can leave the node's frame.
-            if unsafe { node.as_ref() }.header.try_settle(to) {
+            let waiter = unsafe { node.as_ref() };
+            if waiter.header().try_settle_arm(to, waiter.arm) {
                 return Some(node);
             }
         }
@@ -327,7 +405,7 @@ mod tests {
     use std::pin::pin;
     use std::ptr::NonNull;
 
-    use super::{WaitNode, WaitQueue, WaitState};
+    use super::{WaitHeader, WaitNode, WaitQueue, WaitState};
     use crate::ctx::{ExecCtx, FiberInit};
 
     /// The queue is FIFO, a node in the middle unlinks in O(1), and a node
@@ -371,5 +449,54 @@ mod tests {
         assert_eq!(queue.pop_front(), Some(d));
         assert!(queue.is_empty());
         assert_eq!(queue.pop_settled(WaitState::Closed), None);
+    }
+
+    /// Nodes of one `select` in two queues share a header: the first
+    /// waker wins it for its node's arm, recorded in the same swap; the
+    /// other queue's waker skips (and unlinks) the select's node there, and
+    /// the walk can no longer cancel it.
+    #[test]
+    fn select_nodes_share_one_header_with_one_winner() {
+        let ctx = ExecCtx::new(FiberInit::placeholder());
+        let header = std::sync::Arc::new(WaitHeader::new(&ctx));
+        // SAFETY: the header outlives the nodes, which are dropped first.
+        let left = pin!(unsafe { WaitNode::sharing(&ctx, &header, 3, 30_u8) });
+        // SAFETY: as above.
+        let right = pin!(unsafe { WaitNode::sharing(&ctx, &header, 5, 50_u8) });
+        let other = pin!(WaitNode::new(&ctx, 7_u8));
+        let (mut first, mut second) = (WaitQueue::default(), WaitQueue::default());
+        let [left, right, other] = [&*left, &*right, &*other].map(NonNull::from);
+        // SAFETY: pinned nodes on this frame, unlinked before it returns.
+        unsafe {
+            first.push_back(left);
+            second.push_back(right);
+            second.push_back(other);
+        }
+        assert_eq!(first.pop_settled(WaitState::Claimed), Some(left));
+        assert_eq!((header.state(), header.arm()), (WaitState::Claimed, 3));
+        // The other queue's waker skips the select's node and takes the
+        // next one.
+        assert_eq!(second.pop_settled(WaitState::Closed), Some(other));
+        assert!(second.is_empty());
+        assert!(!header.try_cancel());
+        assert_eq!((header.state(), header.arm()), (WaitState::Claimed, 3));
+        // SAFETY: as above.
+        let (left_ref, right_ref) = unsafe { (left.as_ref(), right.as_ref()) };
+        assert_eq!((left_ref.arm(), *left_ref.payload()), (3, 30));
+        assert_eq!((right_ref.arm(), *right_ref.payload()), (5, 50));
+        // SAFETY: as above.
+        unsafe { second.remove(right) };
+    }
+
+    /// A header the walk won records no arm, and no waker can settle it.
+    #[test]
+    fn select_header_cancelled_first_takes_no_arm() {
+        let ctx = ExecCtx::new(FiberInit::placeholder());
+        let header = WaitHeader::new(&ctx);
+        assert_eq!((header.state(), header.arm()), (WaitState::Waiting, 0));
+        assert!(header.try_cancel());
+        assert!(!header.try_settle_arm(WaitState::Claimed, 2));
+        assert!(!header.try_settle_arm(WaitState::Closed, 0));
+        assert_eq!((header.state(), header.arm()), (WaitState::Cancelled, 0));
     }
 }

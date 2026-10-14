@@ -4,6 +4,8 @@
 //! rejected function. Determinism (D-264): lowering twice gives identical
 //! dumps.
 
+use cheby_iface::Idx;
+
 use crate::ir::{
     Abi, Block, BlockId, Callee, Const, EntryKind, FnKey, Function, LayoutRef, Local, Operand,
     PanicKind, RuntimeFn, Rvalue, Stmt, Terminator,
@@ -12,7 +14,8 @@ use crate::options::{MirOptions, count_and_check_with};
 use crate::repr::{CType, ForeignSig, Repr};
 use crate::test_support::lower_source;
 use crate::unwind::{
-    insert, insert_recording, rvalue_may_unwind, stmt_may_unwind, terminator_may_unwind,
+    Direction, PadPlan, insert, insert_recording, plan_pads, rvalue_may_unwind, stmt_may_unwind,
+    terminator_may_unwind,
 };
 use crate::unwind_ir_tests::{builder, module, scope_run};
 use crate::validate::{Stage, validate, validate_recorded};
@@ -561,7 +564,7 @@ fn unwind_rule_a_pad_does_not_use_its_instructions_result() {
     // A local defined after the edge in the same block is not defined in
     // its pad either. A canonical pad is left out of the dominance graph
     // (D-735), so the ownership states, taken before the instruction,
-    // catch it: in both modes (GAP(unwound-validation-split)).
+    // catch it: in both modes (D-774).
     let mut later = f;
     let add_later = |f: &mut Function| {
         let pad = add_block(
@@ -598,7 +601,7 @@ fn unwind_rule_a_pad_does_not_use_its_instructions_result() {
 /// Runs the unwind pass on `f` keeping what its simulation recorded,
 /// applies `change`, and validates the result as a release build does,
 /// against the recorded states without the full simulation
-/// (GAP(unwound-validation-split)).
+/// (D-774).
 fn recorded_errors(mut f: Function, change: impl FnOnce(&mut Function)) -> String {
     let recorded = insert_recording(&mut f).unwrap().unwrap();
     change(&mut f);
@@ -608,7 +611,7 @@ fn recorded_errors(mut f: Function, change: impl FnOnce(&mut Function)) -> Strin
         .join("\n")
 }
 
-// GAP(unwound-validation-split): a pad chain that drops another multiset
+// D-774: a pad chain that drops another multiset
 // than the ownership at its edge fails `Stage::Unwound` in both modes:
 // the full simulation, and the check against the pass's recorded states.
 #[test]
@@ -707,7 +710,7 @@ fn unwind_rule_a_pad_chain_dropping_another_multiset_fails_in_both_modes() {
 }
 
 /// The pipeline gives the same MIR with and without the full simulation,
-/// and accepts it both ways (GAP(unwound-validation-split)).
+/// and accepts it both ways (D-774).
 #[test]
 fn unwind_release_validation_accepts_what_the_full_one_does() {
     // Before counting: `_2 = alloc (_0, _0); _3 = call _1(_2);
@@ -751,7 +754,7 @@ fn unwind_release_validation_accepts_what_the_full_one_does() {
 }
 
 /// The pipeline reports what its unwind pass's simulation finds as invalid
-/// MIR after reference counting (GAP(unwound-validation-split)).
+/// MIR after reference counting (D-774).
 #[test]
 fn unwind_pipeline_reports_unbalanced_counts_after_reference_counting() {
     let mut f = calls();
@@ -1079,4 +1082,258 @@ fn unwind_a_long_block_compiles_in_linear_time() {
             assert_eq!(released(f, pad), [Local::from_u32(0)]);
         }
     }
+}
+
+// The pad chain's direction, chosen per function (D-777). Finding
+// ROB-W3-1: with every chain built oldest local first, a function that
+// releases its locals in the order it made them built about n²/2 pads.
+
+/// What the chain from `pad` drops, in the order it drops them.
+fn drop_order(f: &Function, mut pad: BlockId) -> Vec<Local> {
+    let mut out = Vec::new();
+    loop {
+        let block = f.blocks.get(pad).unwrap();
+        match (block.stmts.as_slice(), &block.term) {
+            ([Stmt::Drop(l)], Terminator::Goto { target, .. }) => {
+                out.push(*l);
+                pad = *target;
+            }
+            ([], Terminator::Resume) => return out,
+            other => panic!("a pad {other:?}"),
+        }
+    }
+}
+
+/// What the chain from `pad` of `plan` (numbered from 0) drops, in the
+/// order it drops them.
+fn plan_drop_order(plan: &PadPlan, mut pad: BlockId) -> Vec<Local> {
+    let mut out = Vec::new();
+    loop {
+        let block = &plan.blocks[pad.index()];
+        match (block.stmts.as_slice(), &block.term) {
+            ([Stmt::Drop(l)], Terminator::Goto { target, .. }) => {
+                out.push(*l);
+                pad = *target;
+            }
+            ([], Terminator::Resume) => return out,
+            other => panic!("a pad {other:?}"),
+        }
+    }
+}
+
+fn locals(range: impl Iterator<Item = usize>) -> Vec<Local> {
+    range.map(|i| Local::from_usize(i).unwrap()).collect()
+}
+
+/// The pads [`plan_pads`] builds for `sets` in a function of `count`
+/// locals, after checking that each set's chain drops exactly that set.
+fn planned(count: usize, sets: &[Vec<Local>]) -> PadPlan {
+    let slices: Vec<&[Local]> = sets.iter().map(Vec::as_slice).collect();
+    let plan = plan_pads(0, count, &slices).unwrap();
+    assert_eq!(plan.pads.len(), sets.len());
+    for (set, &pad) in sets.iter().zip(&plan.pads) {
+        let mut dropped = plan_drop_order(&plan, pad);
+        dropped.sort_unstable();
+        assert_eq!(&dropped, set);
+    }
+    // Planning twice gives the same pads (D-264).
+    let again = plan_pads(0, count, &slices).unwrap();
+    assert_eq!(again.pads, plan.pads);
+    assert_eq!(again.blocks, plan.blocks);
+    plan
+}
+
+#[test]
+fn unwind_direction_newest_first_release_stays_ascending() {
+    // Locals 0..n made in order and released newest first: every set is a
+    // prefix, which D-698's ascending chains share.
+    let n = 200;
+    let mut sets: Vec<Vec<Local>> = (0..=n).map(|k| locals(0..k)).collect();
+    sets.extend((0..n).rev().map(|k| locals(0..k)));
+    let plan = planned(n, &sets);
+    assert_eq!(plan.direction, Direction::Ascending);
+    assert_eq!(plan.blocks.len(), n + 1);
+    let all = *plan.pads.get(n).unwrap();
+    assert_eq!(plan_drop_order(&plan, all), locals((0..n).rev()));
+}
+
+#[test]
+fn unwind_direction_oldest_first_release_is_descending() {
+    // Locals 0..n released oldest first with no unwind site while they
+    // are made: every set is a suffix, which descending chains share.
+    let n = 200;
+    let sets: Vec<Vec<Local>> = (0..=n).map(|k| locals(k..n)).collect();
+    let plan = planned(n, &sets);
+    assert_eq!(plan.direction, Direction::Descending);
+    assert_eq!(plan.blocks.len(), n + 1);
+    let all = *plan.pads.first().unwrap();
+    assert_eq!(plan_drop_order(&plan, all), locals(0..n));
+}
+
+#[test]
+fn unwind_direction_made_and_released_in_order_is_nested() {
+    // GAP(pad-chain-nested): local 0 held throughout, locals 1..=n made
+    // in order (each site holds a prefix) and released in the same order
+    // (each site holds a suffix). Each direction shares only one of the
+    // two halves and builds about n²/2 pads for the other.
+    let n = 200;
+    let with_base = |rest: Vec<Local>| {
+        let mut set = vec![Local::from_u32(0)];
+        set.extend(rest);
+        set
+    };
+    let mut sets: Vec<Vec<Local>> = (1..=n + 1).map(|k| with_base(locals(1..k))).collect();
+    sets.extend((2..=n + 1).map(|k| with_base(locals(k..=n))));
+    let plan = planned(n + 1, &sets);
+    assert_eq!(plan.direction, Direction::Nested);
+    assert!(plan.blocks.len() <= 2 * n + 2, "{} pads", plan.blocks.len());
+}
+
+#[test]
+fn unwind_direction_released_one_at_a_time_in_any_order_is_nested() {
+    // GAP(pad-chain-nested): locals 0..n made in order, then released one
+    // at a time in a scrambled order (37k mod n), each from the middle of
+    // what is held: each set holds one local fewer than the one before.
+    let n = 200;
+    let mut sets: Vec<Vec<Local>> = (0..=n).map(|k| locals(0..k)).collect();
+    let mut held = locals(0..n);
+    for k in 0..n {
+        let gone = Local::from_usize(37 * k % n).unwrap();
+        held.retain(|&l| l != gone);
+        sets.push(held.clone());
+    }
+    let plan = planned(n, &sets);
+    assert_eq!(plan.direction, Direction::Nested);
+    assert!(plan.blocks.len() <= 2 * n + 1, "{} pads", plan.blocks.len());
+}
+
+#[test]
+fn unwind_direction_tie_stays_ascending() {
+    // Sliding windows of 10 of 110 locals (released from the middle): no
+    // two windows share their oldest or their newest local, and no window
+    // contains its neighbour, so every way builds 10 pads per window. The
+    // count is above the linear bound, the others are counted, and
+    // ascending wins the tie. This shape stays quadratic in the window.
+    let (windows, width) = (100, 10);
+    let sets: Vec<Vec<Local>> = (0..windows).map(|i| locals(i..i + width)).collect();
+    let plan = planned(windows + width, &sets);
+    assert_eq!(plan.direction, Direction::Ascending);
+    assert_eq!(plan.blocks.len(), windows * width + 1);
+    let first = *plan.pads.first().unwrap();
+    assert_eq!(plan_drop_order(&plan, first), locals((0..width).rev()));
+}
+
+/// `n` results `_k = call _0(_0)` held, then each passed to `call _0(_k)`
+/// in the order they were made (`oldest_first`) or the reverse, before
+/// counting: every call may unwind, so the sites hold growing prefixes
+/// of the results and then what the releases left.
+fn made_then_released(n: usize, oldest_first: bool) -> Function {
+    let mut b = builder(0);
+    let x = b.add_param(Repr::Value, None, None).unwrap();
+    let mut made = Vec::new();
+    for _ in 0..n {
+        made.push(
+            b.assign(
+                Repr::Value,
+                Rvalue::Call {
+                    callee: Callee::Indirect(x),
+                    args: vec![local(x)],
+                },
+            )
+            .unwrap(),
+        );
+    }
+    if !oldest_first {
+        made.reverse();
+    }
+    for l in made {
+        b.assign(
+            Repr::Value,
+            Rvalue::Call {
+                callee: Callee::Indirect(x),
+                args: vec![local(l)],
+            },
+        )
+        .unwrap();
+    }
+    b.terminate(Terminator::Return(local(x))).unwrap();
+    b.finish().unwrap()
+}
+
+/// Counts `f` and runs the unwind pass, within the time budget of
+/// `unwind_a_long_block_compiles_in_linear_time`, and returns the result
+/// and its number of pads.
+fn unwound_in_budget(f: Function) -> (Function, usize) {
+    let mut m = module(vec![f]);
+    let before = m.functions[0].blocks.len();
+    let start = std::time::Instant::now();
+    count_and_check_with(&mut m, &MirOptions::default()).unwrap();
+    let took = start.elapsed();
+    assert!(took < std::time::Duration::from_secs(10), "{took:?}");
+    let f = m.functions.pop().unwrap();
+    let pads = f.blocks.len().checked_sub(before).unwrap();
+    (f, pads)
+}
+
+#[test]
+fn unwind_oldest_first_release_is_linear() {
+    let n = 300;
+    let (f, pads) = unwound_in_budget(made_then_released(n, true));
+    // 2n + c: one pad per local while they are made, one per release,
+    // the parameter's and `resume`.
+    assert!(pads <= 2 * n + 4, "{pads} pads:\n{}", text(&f));
+    // The first release leaves the parameter and the newer results.
+    let bb0 = f.blocks.get(bb(0)).unwrap();
+    let (_, pad) = *bb0.unwind.get(n).unwrap();
+    let mut held = vec![Local::from_u32(0)];
+    held.extend(locals(2..=n));
+    assert_eq!(released(&f, pad), held);
+}
+
+#[test]
+fn unwind_newest_first_release_still_shares() {
+    let n = 300;
+    let (f, pads) = unwound_in_budget(made_then_released(n, false));
+    assert!(pads <= n + 4, "{pads} pads:\n{}", text(&f));
+    // Ascending (D-698's shape): the newest local is dropped first.
+    let bb0 = f.blocks.get(bb(0)).unwrap();
+    let (_, pad) = *bb0.unwind.get(n).unwrap();
+    let order = drop_order(&f, pad);
+    assert_eq!(order.len(), n);
+    assert!(order.is_sorted_by(|a, b| a > b), "{order:?}");
+}
+
+/// ROB-W3-1's generator (`$S3/tools/u6_gen.py`): `f` holds `n` lists and
+/// sums their lengths in the order it made them.
+fn oldest_first_source(n: usize) -> String {
+    use std::fmt::Write as _;
+    let mut s = String::from("import std::io\nimport std::list\n\nfn f(n: Int) -> Int {\n");
+    for i in 0..n {
+        writeln!(s, "  let l{i} = [n, {i}]").unwrap();
+    }
+    s.push_str("  let t0 = list::length(l0)\n");
+    for (before, i) in (0..n).zip(1..n) {
+        writeln!(s, "  let t{i} = t{before} + list::length(l{i})").unwrap();
+    }
+    writeln!(s, "  t{}\n}}\n", n.checked_sub(1).unwrap()).unwrap();
+    s.push_str("fn main() {\n  let r = f(1)\n  io::println(\"{r}\")\n}\n");
+    s
+}
+
+#[test]
+fn unwind_oldest_first_release_from_source_is_linear() {
+    let n = 300;
+    let source = oldest_first_source(n);
+    let start = std::time::Instant::now();
+    let lowered = lower_source(&[("", &source)]);
+    let took = start.elapsed();
+    // Before D-777 this function had about n²/2 = 45,000 pads. The budget
+    // covers the whole front end and std in a debug build.
+    assert!(took < std::time::Duration::from_secs(60), "{took:?}");
+    let unit = lowered.unit("app");
+    validate(unit, Stage::Unwound).unwrap();
+    let f = lowered.function("app", "app::f");
+    let blocks = f.lines().filter(|l| l.starts_with("bb")).count();
+    println!("u6 source N={n}: {blocks} blocks in app::f, {took:?}");
+    assert!(blocks <= 2 * n + 8, "{blocks} blocks:\n{f}");
 }

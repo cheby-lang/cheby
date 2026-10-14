@@ -20,6 +20,25 @@
 //! children, so freeing, freezing and shared marking see them; it has no
 //! finalizer (architecture.md §7.3: one arm and the previous node).
 //!
+//! # Selector nodes
+//!
+//! A `Selector` is a persistent list of nodes (D-695), newest arm first,
+//! each node made by [`new_selector_node`] and owning its five words:
+//!
+//! | Word | Receive arm (tag 0)     | Timer arm (tag 1)       | Empty selector (tag 2) |
+//! | ---- | ----------------------- | ----------------------- | ---------------------- |
+//! | 0    | the previous node       | the previous node       | `Int` 0                |
+//! | 1    | `Int` 0                 | `Int` 1                 | `Int` 2                |
+//! | 2    | the `Receiver`          | the span's seconds      | `Int` 0                |
+//! | 3    | `Int` 0                 | the span's nanoseconds  | `Int` 0                |
+//! | 4    | the apply closure       | the apply closure       | `Int` 0                |
+//!
+//! Every list ends with an empty node (tag 2), which `selector::new`
+//! returns: an empty selector is a real kind-44 object, so it prints as
+//! `<Selector>` (selector.md). Integers are uniform `Int` words (tagged, or
+//! boxed outside 63 bits). The kernels of `fiber_ops::select` read the
+//! words.
+//!
 //! The kinds are registered once per process, from the layout table's
 //! builtin initialization ([`register`]), before any object exists.
 
@@ -87,6 +106,64 @@ pub(crate) const SELECTOR_WORDS: usize = 5;
 
 /// The size of a selector node: the header and its words.
 const SELECTOR_SIZE: u64 = 48;
+
+/// The tag of a selector node's receive arm (module documentation).
+pub(crate) const SELECTOR_RECEIVE: i64 = 0;
+
+/// The tag of a selector node's timer arm.
+pub(crate) const SELECTOR_AFTER: i64 = 1;
+
+/// The tag of the empty selector, which ends every list.
+pub(crate) const SELECTOR_EMPTY: i64 = 2;
+
+/// Allocates a selector node (kind 44) with count 1 that owns `words`
+/// (the layout of the module documentation), charged to the current
+/// domain: the running fiber's, or a host thread's. The one constructor of
+/// kind-44 objects. A request that cannot be served ends as
+/// [`alloc::out_of_memory`] says, and the words are then not released.
+#[must_use]
+pub(crate) fn new_selector_node(words: [Word; SELECTOR_WORDS]) -> Word {
+    register();
+    let obj = alloc::alloc_object(SELECTOR_SIZE, abi::header(abi::RC_UNIQUE, 0, ids::SELECTOR));
+    let mut offset = object::to_usize(abi::HEADER_SIZE);
+    for word in words {
+        // SAFETY: a fresh node of `SELECTOR_SIZE` bytes: its five words
+        // follow the header, each initialized here once.
+        unsafe { object::write_field(obj, offset, word) };
+        offset = offset.saturating_add(object::to_usize(abi::FIELD_SIZE));
+    }
+    object::ptr_to_word(obj)
+}
+
+/// The words of a live selector node, borrowed.
+///
+/// # Safety
+///
+/// `word` is a live selector node made by [`new_selector_node`].
+pub(crate) unsafe fn selector_words(word: Word) -> [Word; SELECTOR_WORDS] {
+    let obj = word_to_ptr(word);
+    if cfg!(debug_assertions) {
+        // SAFETY: forwarded from the caller; poisoning catches a freed
+        // node here.
+        unsafe { alloc::check_live(word, "reading a selector") };
+        // SAFETY: a live object.
+        let (_, id) = unsafe { scan_and_layout(obj) };
+        if id != ids::SELECTOR {
+            fatal(format_args!(
+                "reading a selector reached an object of layout {id}"
+            ));
+        }
+    }
+    let mut words = [0; SELECTOR_WORDS];
+    let mut offset = object::to_usize(abi::HEADER_SIZE);
+    for slot in &mut words {
+        // SAFETY: forwarded from the caller: the node's words follow its
+        // header.
+        *slot = unsafe { object::read_field(obj, offset) };
+        offset = offset.saturating_add(object::to_usize(abi::FIELD_SIZE));
+    }
+    words
+}
 
 /// How a handle object reaches its payload's type: written once by
 /// [`new_handle`], one static table per payload type.
@@ -314,7 +391,6 @@ pub(crate) mod tests {
     use super::*;
     use crate::alloc::{Domain, with_domain};
     use crate::generic::{self, Reached};
-    use crate::object::write_field;
     use crate::rc;
     use crate::values::{int_word, string, tuple};
 
@@ -350,15 +426,7 @@ pub(crate) mod tests {
 
     /// A selector node holding `words` (owned).
     pub(crate) fn selector(words: [Word; SELECTOR_WORDS]) -> Word {
-        register();
-        let obj = alloc::alloc_object(SELECTOR_SIZE, abi::header(1, 0, ids::SELECTOR));
-        let mut offset = 8_usize;
-        for word in words {
-            // SAFETY: initializing a fresh node's words.
-            unsafe { write_field(obj, offset, word) };
-            offset = offset.saturating_add(8);
-        }
-        object::ptr_to_word(obj)
+        new_selector_node(words)
     }
 
     pub(crate) const KINDS: [HandleKind; 4] = [

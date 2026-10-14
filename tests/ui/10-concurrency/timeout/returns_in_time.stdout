@@ -1,0 +1,3 @@
+quick work: Ok(42)
+equal to Ok(42): True
+work that waits: Ok(10)

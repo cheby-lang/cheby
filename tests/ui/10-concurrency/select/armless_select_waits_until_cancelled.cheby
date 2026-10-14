@@ -1,0 +1,42 @@
+// @mode: run-pass
+// @decisions: D-673, D-670, D-671
+// @milestone: M2
+//! A selector without arms is never ready, so `select` waits until the
+//! fiber is cancelled: by a timeout, or by the failure of its scope. It
+//! never returns (§10.6, §10.7).
+
+import std::duration
+import std::fiber
+import std::io
+import std::selector
+
+fn main() {
+  let timed = fiber::timeout(duration::milliseconds(10), fn() {
+    let text = selector::select(selector::new::<String>())
+    io::println("never printed: {text}")
+    text
+  })
+  case timed {
+    Ok(text) => io::println("the select returned {text}")
+    Err(fiber::TimedOut) => io::println("the timeout returned Err(TimedOut)")
+    Err(fiber::Panicked(failure)) => {
+      let text = fiber::message(failure)
+      io::println("the timeout returned Err(Panicked): {text}")
+    }
+  }
+
+  let failed = {
+    use owner <- fiber::scope()
+    let _ = fiber::spawn(owner, fn() { panic as "a member failed" })
+    let text = selector::select(selector::new::<String>())
+    io::println("never printed: {text}")
+    text
+  }
+  case failed {
+    Ok(text) => io::println("the select returned {text}")
+    Err(failure) => {
+      let text = fiber::message(failure)
+      io::println("the scope failed: {text}")
+    }
+  }
+}

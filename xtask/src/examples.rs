@@ -18,14 +18,10 @@ use std::process::Command;
 use cheby_test_support::example;
 
 /// The examples that import unshipped standard-library modules. M2's first
-/// slice ships `std::fiber`, `std::channel` and `std::duration`, so 005,
-/// 018, 022 and 028 left the list (D-729).
-const LATER_TIER: [&str; 4] = [
-    "009_counter_actor",
-    "013_dining_philosophers",
-    "019_supervisor",
-    "031_web_scraper",
-];
+/// slice shipped `std::fiber`, `std::channel` and `std::duration`, so 005,
+/// 018, 022 and 028 left the list (D-729), and with `std::selector`,
+/// `std::random` and `std::runtime` 009, 013 and 019 left it too.
+const LATER_TIER: [&str; 1] = ["031_web_scraper"];
 
 /// The example whose dependency cannot resolve yet.
 const DEPENDENCY: &str = "030_shop_service";
@@ -228,30 +224,36 @@ mod tests {
         assert!(judge("021_other", &outcome(&[], &[], "")).is_ok());
     }
 
-    /// The examples of M2's first slice are judged by the clean rule, and
-    /// the rest of the later tier still expects only E0038 (D-729).
+    /// The examples of M2's slices are judged by the clean rule, and the
+    /// rest of the later tier still expects only E0038 (D-729).
     #[test]
     fn the_slice_examples_left_the_later_tier() {
         for name in [
             "005_prime_sieve",
+            "009_counter_actor",
+            "013_dining_philosophers",
             "018_worker_pool",
+            "019_supervisor",
             "022_bank_accounts",
             "028_money_and_rationals",
         ] {
             assert!(!LATER_TIER.contains(&name), "{name}");
         }
-        let unshipped = "error[E0038]: the module `std::selector` is not supported yet\n";
+        let unshipped = "error[E0038]: the module `std::http` is not supported yet\n";
         let e0038 = Outcome {
             success: false,
             errors: vec![(
                 "E0038".to_owned(),
-                "the module `std::selector` is not supported yet".to_owned(),
+                "the module `std::http` is not supported yet".to_owned(),
             )],
             warnings: Vec::new(),
             text: unshipped.to_owned(),
         };
-        assert!(judge("009_counter_actor", &e0038).is_ok());
+        assert!(judge("031_web_scraper", &e0038).is_ok());
         let e0042 = outcome(&["E0042"], &[], "error[E0042]: ...\n");
-        assert!(judge("009_counter_actor", &e0042).is_err());
+        assert!(judge("031_web_scraper", &e0042).is_err());
+        // A former later-tier example that checks cleanly is judged clean.
+        assert!(judge("009_counter_actor", &outcome(&[], &[], "")).is_ok());
+        assert!(judge("009_counter_actor", &e0038).is_err());
     }
 }

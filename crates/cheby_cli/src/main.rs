@@ -30,6 +30,7 @@ use std::num::NonZeroUsize;
 use std::process::ExitCode;
 
 use cheby_diag::Colors;
+use cheby_runtime::entry::AtExit;
 use clap::{CommandFactory as _, FromArgMatches as _, Parser, Subcommand, ValueEnum};
 
 use crate::color::ColorWhen;
@@ -314,7 +315,7 @@ fn run(out: Out, options: cheby_driver::RunOptions) -> ExitCode {
         Ok(root) => root,
         Err(code) => return code,
     };
-    let program = match cheby_driver::prepare_run(&root, options) {
+    let mut program = match cheby_driver::prepare_run(&root, options) {
         Ok(cheby_driver::Prepared::Ready(program)) => program,
         Ok(cheby_driver::Prepared::CompileFailed(result)) => {
             out.diagnostics(&result);
@@ -323,6 +324,15 @@ fn run(out: Out, options: cheby_driver::RunOptions) -> ExitCode {
         Err(e) => return out.error(e.message()),
     };
     out.diagnostics(program.output());
+    // GAP(freeze-only-cli): the process exits right after `main`, so a
+    // build without the leak check freezes the fibers left instead of
+    // tearing them down (D-073, D-708); a debug build tears them down so
+    // that the leak check sees what they held (D-710).
+    program.set_at_exit(if cheby_runtime::LEAK_CHECK_ENABLED {
+        AtExit::Teardown
+    } else {
+        AtExit::Freeze
+    });
     match program.run() {
         Ok(status) => ExitCode::from(u8::try_from(status).unwrap_or(1)),
         Err(e) => out.error(e.message()),

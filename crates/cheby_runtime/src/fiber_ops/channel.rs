@@ -42,9 +42,19 @@
 //!   run Cheby code (D-171, D-672).
 //! - **Lock order**: the channel lock, then a waiter's fiber lock (its
 //!   publication); no other lock is taken while it is held, no Cheby value
-//!   is dropped and nothing is allocated under it, and nothing raises
-//!   while it is held. Selectors (later) lock several channels in address
-//!   order.
+//!   is dropped or allocated under it, and nothing raises while it is
+//!   held. A `select` (`fiber_ops::select`) locks the channels of its arms
+//!   in address order, each once, then its fiber lock to publish, and may
+//!   arm a timer under them (the timer heap's lock is a leaf).
+//! - **Selectors** (D-206, D-704): a waiting `select` links one node per
+//!   receive arm into the receivers' queues, all sharing one header
+//!   (`sched::WaitNode::sharing`), so it counts as a receiver: a `send`
+//!   hands its value to the first node whose shared header it wins, and
+//!   returns `Ok(Nil)` once the select has so chosen that arm; a node
+//!   whose header another arm won is skipped like a cancelled one, and the
+//!   sender goes on as if it were not there. `receive` and `select` share
+//!   the lock-level steps [`ChanInner::take_ready`],
+//!   [`ChanInner::link_receiver`] and [`ChanInner::unlink_receiver`].
 //! - **Cost**: O(1) per operation that does not wait (D-300), plus the
 //!   marking of a sent value; a cancelled waiter unlinks in O(1).
 
@@ -76,7 +86,7 @@ use crate::values;
 /// cell, holding a sender's value, which the claimer takes, or the value
 /// handed to a receiver; one reference, shared. Only the node's waker (the
 /// winner of its swap) or its own fiber touches the cell.
-type Waiter = WaitNode<UnsafeCell<Word>>;
+pub(super) type Waiter = WaitNode<UnsafeCell<Word>>;
 
 /// A channel (architecture §7.2).
 #[derive(Debug)]
@@ -84,9 +94,21 @@ pub(crate) struct Chan {
     inner: Mutex<ChanInner>,
 }
 
+/// What a receive finds ready under the channel lock
+/// ([`ChanInner::take_ready`]).
+#[derive(Debug)]
+pub(super) enum Ready {
+    /// A value, one reference now the receiver's, and the waiting sender
+    /// the take released, if any: the receiver wakes it once it has
+    /// released every lock ([`wake_settled`]).
+    Value(Word, Option<FiberRef>),
+    /// The channel is empty and its `Sender` is gone: `Err(Nil)` (D-180).
+    Closed,
+}
+
 /// The part of a channel under its lock.
 #[derive(Debug)]
-struct ChanInner {
+pub(super) struct ChanInner {
     /// The buffered values, oldest first: each one reference, shared.
     buf: VecDeque<Word>,
     /// How many values the buffer holds at most; 0 is a synchronous
@@ -131,6 +153,74 @@ impl Chan {
     pub(crate) fn counts(&self) -> (usize, usize, usize) {
         let inner = self.inner.lock();
         (inner.buf.len(), inner.sendq.len(), inner.recvq.len())
+    }
+
+    /// Takes the channel's lock (module documentation, "Lock order").
+    pub(super) fn lock(&self) -> parking_lot::MutexGuard<'_, ChanInner> {
+        self.inner.lock()
+    }
+}
+
+impl ChanInner {
+    /// The receive side's non-waiting step, shared by `receive` and
+    /// `select`: the oldest buffered value, refilling the buffer from the
+    /// first waiting sender (D-672); else a waiting sender's value
+    /// (capacity 0, or a buffer that was empty); else `Closed` once the
+    /// `Sender` is gone; else nothing is ready. A woken sender is returned
+    /// for the caller to wake after releasing its locks.
+    pub(super) fn take_ready(&mut self) -> Option<Ready> {
+        if let Some(value) = self.buf.pop_front() {
+            // A full buffer takes the first waiting sender's value.
+            let woken = self.sendq.pop_settled(WaitState::Claimed).map(|node| {
+                // SAFETY: won under the lock.
+                let waiter = unsafe { won(node) };
+                // SAFETY: as above: only this caller touches the cell.
+                self.buf.push_back(unsafe { waiter.payload().get().read() });
+                waiter.header().fiber()
+            });
+            return Some(Ready::Value(value, woken));
+        }
+        if let Some(node) = self.sendq.pop_settled(WaitState::Claimed) {
+            // SAFETY: won under the lock.
+            let waiter = unsafe { won(node) };
+            // SAFETY: as above.
+            let held = unsafe { waiter.payload().get().read() };
+            return Some(Ready::Value(held, Some(waiter.header().fiber())));
+        }
+        (!self.senders).then_some(Ready::Closed)
+    }
+
+    /// Links a receiving node at the end of the receivers' queue: a
+    /// `receive`'s own node, or one arm's node of a `select`.
+    ///
+    /// # Safety
+    ///
+    /// As for `WaitQueue::push_back`: `node` is pinned and unlinked, its
+    /// fiber is about to park with this channel's lock, and it does not
+    /// leave the node's frame (or drop the node) before
+    /// [`ChanInner::unlink_receiver`] has run under this lock.
+    pub(super) unsafe fn link_receiver(&mut self, node: NonNull<Waiter>) {
+        // SAFETY: forwarded from the caller.
+        unsafe { self.recvq.push_back(node) };
+    }
+
+    /// Unlinks the caller's receiving node if a waker has not already.
+    ///
+    /// # Safety
+    ///
+    /// As for `WaitQueue::remove`: `node` is the caller's own live node,
+    /// linked only into this channel's receivers' queue.
+    pub(super) unsafe fn unlink_receiver(&mut self, node: NonNull<Waiter>) {
+        // SAFETY: forwarded from the caller.
+        unsafe { self.recvq.remove(node) };
+    }
+}
+
+/// Wakes the sender a [`ChanInner::take_ready`] released, after every lock
+/// is released.
+pub(super) fn wake_released(woken: Option<FiberRef>) {
+    if let Some(fiber) = woken {
+        wake_settled(fiber, true);
     }
 }
 
@@ -348,7 +438,7 @@ unsafe fn send(ctx: *mut ExecCtx, sender: Word, value: Word) -> Word {
             // SAFETY: the waker settled the node and woke this fiber; the
             // value in it is still the sender's.
             let value = unsafe { Owned::new(node.payload().get().read()) };
-            // GAP(chain-cancellation). The close may come from the
+            // (D-769) The close may come from the
             // unwinding of a fiber that a cancellation of this fiber's
             // enclosing scope reached first (`cancel::check_chain`, review
             // finding CONC-W2-1): then this fiber is being cancelled too,
@@ -413,36 +503,15 @@ unsafe fn receive(ctx: *mut ExecCtx, receiver: Word) -> Word {
     // SAFETY: a live `Receiver` handle, borrowed; cloned as in `send`.
     let chan =
         Arc::clone(&unsafe { handles::payload::<ReceiverEnd>(receiver, HandleKind::Receiver) }.0);
-    let mut inner = chan.inner.lock();
-    if let Some(value) = inner.buf.pop_front() {
-        // A full buffer takes the first waiting sender's value.
-        let woken = inner.sendq.pop_settled(WaitState::Claimed).map(|node| {
-            // SAFETY: won under the lock.
-            let waiter = unsafe { won(node) };
-            // SAFETY: as above: only this caller touches the cell.
-            inner
-                .buf
-                .push_back(unsafe { waiter.payload().get().read() });
-            waiter.header().fiber()
-        });
-        drop(inner);
-        if let Some(fiber) = woken {
-            wake_settled(fiber, true);
+    let mut inner = chan.lock();
+    match inner.take_ready() {
+        Some(Ready::Value(value, woken)) => {
+            drop(inner);
+            wake_released(woken);
+            return ok(value);
         }
-        return ok(value);
-    }
-    if let Some(node) = inner.sendq.pop_settled(WaitState::Claimed) {
-        // SAFETY: won under the lock.
-        let waiter = unsafe { won(node) };
-        // SAFETY: as above.
-        let held = unsafe { waiter.payload().get().read() };
-        let fiber = waiter.header().fiber();
-        drop(inner);
-        wake_settled(fiber, true);
-        return ok(held);
-    }
-    if !inner.senders {
-        return cheby_rt_static_err_nil.word();
+        Some(Ready::Closed) => return cheby_rt_static_err_nil.word(),
+        None => {}
     }
     if me.sched.runtime().is_none() {
         drop(inner);
@@ -452,11 +521,11 @@ unsafe fn receive(ctx: *mut ExecCtx, receiver: Word) -> Word {
     let node = pin!(Waiter::new(me, UnsafeCell::new(0)));
     let link = NonNull::from(&*node);
     // SAFETY: as in `send`.
-    unsafe { inner.recvq.push_back(link) };
+    unsafe { inner.link_receiver(link) };
     // SAFETY: the node lives until after `unpublish` below.
     if unsafe { cancel::publish(me, node.header()) }.is_err() {
         // SAFETY: as in `send`.
-        unsafe { inner.recvq.remove(link) };
+        unsafe { inner.unlink_receiver(link) };
         drop(inner);
         cancel_park(me);
         raise_cancel(Some(ctx));
@@ -468,9 +537,8 @@ unsafe fn receive(ctx: *mut ExecCtx, receiver: Word) -> Word {
         // before waking this fiber, which orders the store before this
         // read (`WaitHeader::state`).
         WaitState::Claimed => ok(unsafe { node.payload().get().read() }),
-        // GAP(chain-cancellation), as in `send`: a waiter woken by a close
-        // while it is being cancelled unwinds and takes nothing (D-667,
-        // D-670).
+        // (D-769), as in `send`: a waiter woken by a close while it is
+        // being cancelled unwinds and takes nothing (D-667, D-670).
         WaitState::Closed => {
             if cancel::check_chain(me, me.conc.responsible_scope()).is_err() {
                 raise_cancel(Some(ctx));
@@ -480,7 +548,7 @@ unsafe fn receive(ctx: *mut ExecCtx, receiver: Word) -> Word {
         WaitState::Cancelled => {
             // SAFETY: as in `send`. The walk won the node, so no value was
             // handed to it: the receive takes nothing (D-670).
-            unsafe { chan.inner.lock().recvq.remove(link) };
+            unsafe { chan.lock().unlink_receiver(link) };
             raise_cancel(Some(ctx))
         }
         WaitState::Waiting => fatal(format_args!("a receiver woke while still waiting")),

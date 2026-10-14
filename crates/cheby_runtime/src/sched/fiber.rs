@@ -8,7 +8,7 @@
 //!
 //! ```text
 //! RUNNABLE --worker resumes it--> RUNNING --park(Requeue)--> RUNNABLE
-//! RUNNING --park(Park(lock))--> PARKING --worker, after the switch--> PARKED
+//! RUNNING --park(Park(lock) or ParkAll(locks))--> PARKING --worker, after the switch--> PARKED
 //! PARKING --a waker that takes no lock--> PARKING_WOKEN --worker--> RUNNABLE
 //! PARKED --wake--> RUNNABLE
 //! RUNNING --park(Exit)--> DONE
@@ -251,9 +251,43 @@ pub(crate) enum AfterSwitch<'a> {
     /// register itself as a waiter: wakers that take that lock see the
     /// fiber parked.
     Park(Option<Unlock<'a>>),
+    /// Park, then release every lock the fiber held to register itself as
+    /// a waiter in several places (a `select` over several channels), in
+    /// the reverse of the order they were given.
+    ParkAll(Unlocks<'a>),
     /// The fiber finished, returned or unwound: its slot goes back to the
     /// pool.
     Exit,
+}
+
+/// Several mutexes given up like [`Unlock`], released by the worker after
+/// the switch.
+#[derive(Debug, Default)]
+pub(crate) struct Unlocks<'a>(Vec<Unlock<'a>>);
+
+impl<'a> Unlocks<'a> {
+    /// No mutex yet.
+    pub(crate) fn new() -> Self {
+        Self(Vec::new())
+    }
+
+    /// Gives up `guard`: the mutex stays locked until the worker that
+    /// parks the fiber releases it, after the switch.
+    pub(crate) fn push<T: ?Sized>(&mut self, guard: parking_lot::MutexGuard<'a, T>) {
+        self.0.push(Unlock::new(guard));
+    }
+
+    /// Releases every mutex, the last given first.
+    ///
+    /// # Safety
+    ///
+    /// As for [`Unlock::unlock`], for each.
+    unsafe fn unlock(self) {
+        for unlock in self.0.into_iter().rev() {
+            // SAFETY: forwarded from the caller.
+            unsafe { unlock.unlock() };
+        }
+    }
 }
 
 /// A locked `parking_lot` mutex whose guard was given up so that the
@@ -319,7 +353,8 @@ pub(crate) fn cancel_park(me: &ExecCtx) {
 ///
 /// `me` must be the fiber running on this thread. No lock guard, `RefCell`
 /// borrow or thread-local-derived pointer may be held across the call
-/// (I-5): a lock is handed over in [`AfterSwitch::Park`] instead. Ends the
+/// (I-5): a lock is handed over in [`AfterSwitch::Park`] (several in
+/// [`AfterSwitch::ParkAll`]) instead. Ends the
 /// process for an isolated entry, which cannot suspend.
 pub(crate) fn park(me: &ExecCtx, after: AfterSwitch<'_>) {
     let Some(shared) = me.sched.runtime() else {
@@ -329,7 +364,7 @@ pub(crate) fn park(me: &ExecCtx, after: AfterSwitch<'_>) {
         fatal(format_args!("a fiber's worker does not exist"));
     };
     let ends = matches!(after, AfterSwitch::Exit);
-    if matches!(after, AfterSwitch::Park(_)) {
+    if matches!(after, AfterSwitch::Park(_) | AfterSwitch::ParkAll(_)) {
         // `RUNNING -> PARKING`, unless `begin_park` stored `PARKING`
         // already and a lockless waker may have turned it into
         // `PARKING_WOKEN` since: that wake must stand, and the worker
@@ -396,6 +431,16 @@ pub(super) unsafe fn release(unlock: Option<Unlock<'_>>) {
         // SAFETY: forwarded from the caller.
         unsafe { unlock.unlock() };
     }
+}
+
+/// Runs the action of [`AfterSwitch::ParkAll`]'s locks.
+///
+/// # Safety
+///
+/// As for [`Unlock::unlock`], for each lock.
+pub(super) unsafe fn release_all(unlocks: Unlocks<'_>) {
+    // SAFETY: forwarded from the caller.
+    unsafe { unlocks.unlock() };
 }
 
 /// What a new fiber's control block starts with, besides its stack.

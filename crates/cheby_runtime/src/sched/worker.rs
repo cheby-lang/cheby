@@ -9,28 +9,31 @@
 //!    in the migration stress mode fibers moved off another worker); right
 //!    after a pinned fiber yielded, this queue comes after step 5 instead,
 //!    so the yield lets the worker's other fibers run;
-//! 2. every 61st round, the global queue first, so it is never starved;
+//! 2. every 61st round, the due timers, then the global queue first, so it
+//!    is never starved;
 //! 3. its runnext slot: the fiber the running one woke just before it
 //!    blocked, which keeps a capacity-0 ping-pong on one worker; it
 //!    inherits the time slice, so the pair yields after one quantum and
 //!    cannot starve the deque (Go's `inheritTime`);
 //! 4. its local Chase-Lev deque;
 //! 5. the global queue;
-//! 6. as a searcher (at most half the workers search, Tokio's idle
+//! 6. the due timers (D-682), then the global queue again;
+//! 7. as a searcher (at most half the workers search, Tokio's idle
 //!    protocol): half the deque of each other worker, from a random one,
 //!    then the global queue again.
 //!
-//! Then it parks until notified.
+//! Then it parks until notified (`park`): in the runtime's poller if no
+//! other worker holds it, with the earliest timer's deadline as the limit,
+//! and otherwise on its own condition variable (D-680).
 
 use std::ptr;
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
-use std::thread::Thread;
 
 use crossbeam_deque::{Steal, Stealer};
 use parking_lot::Mutex;
 
 use super::fiber::{self, AfterSwitch, FiberRef, state};
+use super::park::Parker;
 use super::{Shared, Where};
 use crate::ctx::ExecCtx;
 use crate::fiber::{Saved, StackPool, switch};
@@ -51,8 +54,9 @@ pub(crate) struct WorkerShared {
     stealer: Stealer<FiberRef>,
     /// Fibers only this worker may run, never stolen.
     targeted: Mutex<std::collections::VecDeque<FiberRef>>,
-    /// The worker's thread, set by the thread itself before it can park.
-    thread: OnceLock<Thread>,
+    /// Where the worker's thread blocks while idle: in the poller or on a
+    /// condition variable (D-680).
+    parker: Parker,
     /// The worker's own context while a fiber runs. Only its thread uses
     /// it: the worker loop and the fiber it runs.
     saved: std::cell::UnsafeCell<Saved>,
@@ -96,7 +100,7 @@ impl WorkerShared {
             local: std::cell::UnsafeCell::new(local),
             stealer,
             targeted: Mutex::new(std::collections::VecDeque::new()),
-            thread: OnceLock::new(),
+            parker: Parker::default(),
             saved: std::cell::UnsafeCell::new(Saved::EMPTY),
             running: AtomicPtr::new(ptr::null_mut()),
             resumes: AtomicU64::new(0),
@@ -152,11 +156,17 @@ impl WorkerShared {
         !self.targeted.lock().is_empty()
     }
 
-    /// Wakes the worker's thread if it is parked in `std::thread::park`.
-    pub(super) fn unpark(&self) {
-        if let Some(thread) = self.thread.get() {
-            thread.unpark();
-        }
+    /// Wakes the worker's thread: from the poller, from its condition
+    /// variable, or, if it is not blocked, by making its next park return
+    /// at once.
+    pub(super) fn unpark(&self, shared: &Shared) {
+        self.parker.unpark(&shared.driver);
+    }
+
+    /// The worker's parker (for tests).
+    #[cfg(test)]
+    pub(super) fn parker(&self) -> &Parker {
+        &self.parker
     }
 
     /// Whether the worker's deque has fibers to steal.
@@ -234,9 +244,6 @@ pub(super) fn main(shared: &Shared, index: usize) {
     let Some(me) = shared.worker(index) else {
         return;
     };
-    // Before the worker can register as parked, so a notifier that finds
-    // it parked can always unpark it.
-    let _ = me.thread.set(std::thread::current());
     let seed = u64::try_from(index)
         .unwrap_or(0)
         .wrapping_mul(0x9e37_79b9_7f4a_7c15)
@@ -297,10 +304,13 @@ impl Worker<'_> {
         if !yielded && let Some(fiber) = self.me.targeted.lock().pop_front() {
             return Some(fiber);
         }
-        if self.tick.is_multiple_of(GLOBAL_FIRST_EVERY)
-            && let Some(fiber) = retry(|| self.shared.injector.steal())
-        {
-            return Some(fiber);
+        if self.tick.is_multiple_of(GLOBAL_FIRST_EVERY) {
+            // Due timers too, so that a busy worker fires them (D-682):
+            // the fibers they wake go to the global queue.
+            self.shared.fire_if_due();
+            if let Some(fiber) = retry(|| self.shared.injector.steal()) {
+                return Some(fiber);
+            }
         }
         if let Some(fiber) = self.me.take_next() {
             self.from_runnext = true;
@@ -316,6 +326,14 @@ impl Worker<'_> {
             return Some(fiber);
         }
         if yielded && let Some(fiber) = self.me.targeted.lock().pop_front() {
+            return Some(fiber);
+        }
+        // Before it searches or parks, the worker fires the timers that are
+        // due (D-682; one atomic read when none is armed). The fibers they
+        // wake go to the global queue, or to their worker if pinned.
+        if self.shared.fire_if_due()
+            && let Some(fiber) = retry(|| self.shared.injector.steal_batch_and_pop(local))
+        {
             return Some(fiber);
         }
         if !self.searching {
@@ -362,7 +380,10 @@ impl Worker<'_> {
             if self.me.has_targeted() || shared.stopping() {
                 return !shared.idle.unpark_self(self.index);
             }
-            std::thread::park();
+            // In the poller, if no other worker holds it, until a wake or
+            // the earliest timer, which it then fires; it stays registered
+            // as parked meanwhile, so a notifier can pick it (D-680).
+            self.me.parker.park(shared);
             if !shared.idle.is_parked(self.index) {
                 return true;
             }
@@ -423,21 +444,35 @@ impl Worker<'_> {
                 // SAFETY: the fiber locked it on this thread and handed it
                 // over; this is its only release.
                 unsafe { fiber::release(unlock) };
-                match ctx.sched.state().compare_exchange(
-                    state::PARKING,
-                    state::PARKED,
-                    Ordering::SeqCst,
-                    Ordering::SeqCst,
-                ) {
-                    Ok(_) => {}
-                    Err(state::PARKING_WOKEN) => {
-                        ctx.sched.state().store(state::RUNNABLE, Ordering::SeqCst);
-                        self.shared.schedule(fiber, Some(self.index), Where::Local);
-                    }
-                    Err(other) => fatal(format_args!("a parking fiber was in the state {other}")),
-                }
+                self.parked(fiber);
+            }
+            AfterSwitch::ParkAll(unlocks) => {
+                // SAFETY: as above, for each lock.
+                unsafe { fiber::release_all(unlocks) };
+                self.parked(fiber);
             }
             AfterSwitch::Exit => self.retire(fiber),
+        }
+    }
+
+    /// Ends a park once the fiber's locks are released: `PARKING` becomes
+    /// `PARKED`, or a fiber a lockless waker found `PARKING` is queued.
+    fn parked(&self, fiber: FiberRef) {
+        // SAFETY: the fiber has just switched away and is parking; it is
+        // not retired.
+        let ctx = unsafe { fiber.ctx() };
+        match ctx.sched.state().compare_exchange(
+            state::PARKING,
+            state::PARKED,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        ) {
+            Ok(_) => {}
+            Err(state::PARKING_WOKEN) => {
+                ctx.sched.state().store(state::RUNNABLE, Ordering::SeqCst);
+                self.shared.schedule(fiber, Some(self.index), Where::Local);
+            }
+            Err(other) => fatal(format_args!("a parking fiber was in the state {other}")),
         }
     }
 

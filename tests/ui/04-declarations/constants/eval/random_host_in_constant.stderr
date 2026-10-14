@@ -1,0 +1,8 @@
+error[E0077]: evaluating the constant `host_roll` reached an effect
+  --> tests/ui/04-declarations/constants/eval/random_host_in_constant.cheby:13:7
+   |
+13 | const host_roll: Int = random::int_between(1, 6)
+   |       ^^^^^^^^^ this constant is computed at compile time
+   |
+   = note: it reached the external function `cheby_random_host_bits`; only the kernels of `std::list`, `std::map`, `std::set`, `std::string`, `std::bytes` and the numeric modules run at compile time
+

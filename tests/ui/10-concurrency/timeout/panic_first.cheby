@@ -1,0 +1,50 @@
+// @mode: run-pass
+// @decisions: D-181, D-649, D-671, D-666
+// @milestone: M2
+//! When `f` panics before a cancellation reaches it, `timeout` returns
+//! `Err(Panicked(p))` with the panic, and prints nothing. A panic that a
+//! scope inside `f` catches is that scope's, so `f` still returns
+//! (§10.8).
+
+import std::duration
+import std::fiber
+import std::io
+
+fn describe(outcome: Result<String, fiber::Timeout>) -> String {
+  case outcome {
+    Ok(text) => "Ok: {text}"
+    Err(fiber::TimedOut) => "Err(TimedOut)"
+    Err(fiber::Panicked(failure)) => {
+      let text = fiber::message(failure)
+      "Err(Panicked): {text}"
+    }
+  }
+}
+
+/// Panics with `text`. Its return type is the result type of the `f`
+/// that calls it.
+fn fail(text: String) -> String {
+  panic as text
+}
+
+fn main() {
+  let crashed = fiber::timeout(duration::seconds(10), fn() { fail("crash") })
+  let crashed_text = describe(crashed)
+  io::println("f panics: {crashed_text}")
+  let caught = fiber::timeout(duration::seconds(10), fn() {
+    let inner = {
+      use owner <- fiber::scope()
+      let _ = fiber::spawn(owner, fn() { panic as "inner" })
+      "the body's value"
+    }
+    case inner {
+      Ok(text) => text
+      Err(failure) => {
+        let text = fiber::message(failure)
+        "the inner scope failed: {text}"
+      }
+    }
+  })
+  let caught_text = describe(caught)
+  io::println("a fiber of a scope in f panics: {caught_text}")
+}

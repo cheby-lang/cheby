@@ -1,0 +1,4 @@
+the first report is from the chosen arm's sender: True
+the other arm's value was still in its channel: True
+the two values differ: True
+the scope returned Ok(Nil)

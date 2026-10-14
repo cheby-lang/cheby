@@ -1,0 +1,21 @@
+// @mode: run-fail
+// @decisions: D-659, D-660, D-125
+// @milestone: M2
+//! `main-stack = "1MiB"` gives `main`'s root fiber a stack of 1 MiB: a
+//! non-tail recursion that fits the default 64 MiB overflows it and
+//! panics with `stack overflow` (§10.1, §11.8.1, §13.3).
+
+import std::io
+
+fn depth(n: Int) -> Int {
+  case n {
+    0 => 0
+    _ => 1 + depth(n - 1)
+  }
+}
+
+fn main() {
+  io::println("before the recursion")
+  let n = depth(100_000)
+  io::println("never printed: {n}")
+}

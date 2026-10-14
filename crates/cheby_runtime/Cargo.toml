@@ -13,6 +13,7 @@ crate-type = ["rlib", "staticlib"]
 [dependencies]
 crossbeam-deque.workspace = true
 crossbeam-utils.workspace = true
+getrandom.workspace = true
 libc.workspace = true
 mio.workspace = true
 parking_lot.workspace = true

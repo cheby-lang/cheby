@@ -14,6 +14,13 @@
 //! difference). The migration stress mode preempts lone fibers too, so
 //! that every long-running program migrates between workers.
 //!
+//! On every tick it also fires the timers that are due
+//! (GAP(monitor-fires-timers), D-682): nobody polls while every worker runs
+//! a fiber, and D-737 leaves a lone fiber alone, so without this a
+//! `timeout` around CPU-bound work at one thread would never fire. A fiber
+//! a timer wakes goes to the global queue, which makes the next tick
+//! preempt the fiber running on its worker.
+//!
 //! When every worker is idle the monitor backs off to 100 ms; a worker that
 //! wakes up, or a new root fiber, kicks it back to 10 ms. It also wakes a
 //! parked worker when the global queue holds fibers and nobody searches,
@@ -103,6 +110,18 @@ pub(super) fn main(shared: &Shared) {
             break;
         }
         let now = Instant::now();
+        // GAP(monitor-fires-timers): with every worker running a lone
+        // CPU-bound fiber nobody polls, so the monitor fires what is due
+        // itself, with no lock held and no Cheby code run. A fiber a timer
+        // wakes goes to the global queue, so `fibers_waiting` below sees
+        // it and the spinner on its worker is asked to yield (D-737).
+        #[cfg(test)]
+        let fire = !shared.probe.skip_timers.load(Ordering::SeqCst);
+        #[cfg(not(test))]
+        let fire = true;
+        if fire {
+            shared.fire_due(now);
+        }
         let mut busy = false;
         // In the migration stress mode a lone fiber yields too, so that it
         // moves between workers (D-687).
@@ -146,6 +165,9 @@ pub(super) fn main(shared: &Shared) {
         if queued && shared.rescue && shared.idle.num_searching() == 0 {
             shared.notify_parked();
         }
+        // While every worker is idle one of them holds the poller and
+        // fires timers on time, so pending timers do not keep the monitor
+        // at its short interval.
         if busy || queued {
             shared.monitor.backed_off.store(false, Ordering::SeqCst);
         } else {

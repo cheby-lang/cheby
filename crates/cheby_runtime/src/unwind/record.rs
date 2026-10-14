@@ -68,6 +68,9 @@ pub(crate) enum UnwindRecord {
 /// has been released before an out-of-memory report is built, so the
 /// copies have room.
 pub(crate) fn start_panic(ctx: &ExecCtx, report: PanicReport) {
+    // Any raise releases a value a `select` chose and its arm has not
+    // taken (architecture §7.3).
+    crate::fiber_ops::select::drop_selected(ctx);
     let scope = ctx.conc.responsible_scope();
     let copy = {
         let mut record = ctx.unwinding.record.lock();
@@ -91,6 +94,8 @@ pub(crate) fn start_panic(ctx: &ExecCtx, report: PanicReport) {
 /// record says `Cancel`, which no catch point prints. Entered with no
 /// runtime lock held.
 pub(crate) fn start_cancel(ctx: &ExecCtx) {
+    // As in `start_panic`.
+    crate::fiber_ops::select::drop_selected(ctx);
     let mut record = ctx.unwinding.record.lock();
     if record.is_none() {
         *record = Some(UnwindRecord::Cancel);

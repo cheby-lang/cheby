@@ -36,7 +36,7 @@
 //! | the CAS `RUNNING -> PARKING` before `after_switch`  | `sched/fiber.rs` `park`, for `AfterSwitch::Park`                                                  |
 //! | `Fiber::after_switch`                               | `sched/worker.rs` `Worker::run_fiber`, the `AfterSwitch::Park` arm                                |
 //! | `Fiber::wake`                                       | `sched/mod.rs` `wake`                                                                             |
-//! | `Node::try_settle`, `Node::try_cancel`, `Node::get` | `sched/wait.rs` `WaitHeader::try_settle`, `try_cancel`, `state`                                   |
+//! | `Node::try_settle`, `Node::try_cancel`, `Node::get` | `sched/wait.rs` `WaitHeader::try_settle_arm`, `try_cancel`, `state`                               |
 //! | unlink then settle; unlink if still linked          | `sched/wait.rs` `WaitQueue::pop_settled`; `WaitQueue::remove`                                     |
 //! | model 1: `close_step_3`                             | `fiber_ops/cancel.rs` `at_close`, from `fiber_ops/scope.rs` `cheby_rt_scope_close` (step 3)       |
 //! | model 1: the canceller                              | `fiber_ops/cancel.rs` `cancel` → `fiber_ops/scope.rs` `ScopeState::cancel_step` → `cancel::reach` |
@@ -262,7 +262,7 @@ impl Node {
         }
     }
 
-    /// `WaitHeader::try_settle(WaitState::Claimed)`.
+    /// `WaitHeader::try_settle_arm(WaitState::Claimed, 0)`.
     fn try_settle(&self) -> bool {
         self.state
             .compare_exchange(

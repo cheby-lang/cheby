@@ -1,0 +1,5 @@
+work that waits too long: Err(TimedOut)
+equal to Err(TimedOut): True
+a send after the timeout: Err(1)
+a limit of zero: Err(TimedOut)
+a negative limit: Err(TimedOut)

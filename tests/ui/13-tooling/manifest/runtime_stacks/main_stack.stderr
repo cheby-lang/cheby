@@ -1,0 +1,2 @@
+panicked at tests/ui/13-tooling/manifest/runtime_stacks/main_stack/src/main.cheby:10:4:
+stack overflow

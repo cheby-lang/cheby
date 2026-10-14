@@ -191,8 +191,8 @@ test "spawning into a scope that has ended panics" {
 }
 
 /// Starts a fiber in `owner` that calls `f`, with a stack of `stack_bytes`
-/// bytes (D-659, D-660). Until the lifecycle work of M2 lands, it ends the
-/// program with a fatal runtime error (D-754).
+/// bytes clamped to 1 MiB to 16 GiB and rounded up to the page size
+/// (D-659, D-660, D-677).
 @std_context
 @external(native, "cheby_fiber_sys_spawn_with_stack")
 @external(js, "./fiber.mjs", "sys_spawn_with_stack")
@@ -206,6 +206,22 @@ fn sys_spawn_with_stack<T>(owner: Scope, stack_bytes: Int, f: fn() -> T) -> Fibe
 @std_clamped(stack_bytes)
 pub fn spawn_with_stack<T>(owner: Scope, stack_bytes: Int, f: fn() -> T) -> Fiber<T> {
   sys_spawn_with_stack(owner, stack_bytes, f)
+}
+
+@target(native)
+test "a fiber can have a larger stack" {
+  fn depth(n) {
+    case n {
+      0 => 0
+      _ => 1 + depth(n - 1)
+    }
+  }
+  let outcome = {
+    use owner <- scope()
+    let deep = spawn_with_stack(owner, 64 * 1024 * 1024, fn() { depth(100000) })
+    join(deep)
+  }
+  assert outcome == Ok(100000)
 }
 
 /// Starts a detached fiber that calls `f` (D-669). Until the lifecycle
@@ -285,9 +301,7 @@ test "joining a failed fiber from outside its scope panics" {
 /// its panic when it panicked first, and `Err(TimedOut)` comes once
 /// `limit` has passed and everything in the scope has ended. A `limit` of
 /// zero or less has already passed, so `f` is not called (D-652).
-/// `timeout` releases `f` before it returns (D-670). Until the timers of
-/// M2 land, a positive `limit` ends the program with a fatal runtime
-/// error when the scope opens (D-754).
+/// `timeout` releases `f` before it returns (D-670).
 pub fn timeout<T>(limit: duration::Duration, f: fn() -> T) -> Result<T, Timeout> {
   case duration::compare(limit, duration::zero) {
     Greater => {
@@ -305,9 +319,45 @@ pub fn timeout<T>(limit: duration::Duration, f: fn() -> T) -> Result<T, Timeout>
   }
 }
 
+test "timeout returns the value of work that finishes in time" {
+  assert timeout(duration::seconds(10), fn() { 6 * 7 }) == Ok(42)
+}
+
+test "timeout cancels work that takes too long" {
+  let (keep, never) = channel::new::<Int>(1)
+  let outcome = timeout(duration::milliseconds(10), fn() { channel::receive(never) })
+  assert outcome == Err(TimedOut)
+  // `f` was released before `timeout` returned, and with it `never`.
+  assert channel::send(keep, 1) == Err(1)
+}
+
+test "timeout reports a panic as Panicked" {
+  let outcome = timeout(duration::seconds(10), fn() { panic as "crash" })
+  let assert Err(Panicked(failure)) = outcome
+  assert message(failure) == "crash"
+}
+
 test "a limit of zero times out without calling f" {
   let outcome = timeout(duration::seconds(0), fn() { panic as "not called" })
   assert outcome == Err(TimedOut)
+}
+
+test "a timeout cancels the scopes inside it without their returning" {
+  let (keep, never) = channel::new::<Int>(1)
+  let outcome = timeout(duration::milliseconds(10), fn() {
+    let inner = {
+      use owner <- scope()
+      spawn(owner, fn() { channel::receive(never) })
+    }
+    // Not reached: a scope that is cancelled from outside never
+    // returns.
+    case inner {
+      Ok(_) => "returned"
+      Err(_) => "failed"
+    }
+  })
+  assert outcome == Err(TimedOut)
+  assert channel::send(keep, 1) == Err(1)
 }
 
 // Panics
@@ -360,6 +410,16 @@ test "panics compare by message and location" {
 }
 
 // Tests of `std::channel` that need this module.
+
+test "a negative capacity counts as 0" {
+  let capacity = -1
+  let (tx, rx) = channel::new::<Int>(capacity)
+  // Nobody receives, so a send on a capacity-0 channel waits.
+  let attempt = timeout(duration::milliseconds(10), fn() { channel::send(tx, 1) })
+  assert attempt == Err(TimedOut)
+  // The cancelled send delivered nothing, and the only `Sender` is gone.
+  assert channel::receive(rx) == Err(Nil)
+}
 
 test "a capacity-0 send completes when a receiver takes the value" {
   let (tx, rx) = channel::new::<String>(0)

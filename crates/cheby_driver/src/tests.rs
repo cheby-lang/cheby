@@ -49,14 +49,11 @@ fn examples_pass_the_syntax_layer() {
 
 /// The examples that need std modules not shipped yet move to the
 /// milestone that ships those modules: their imports of them are E0038
-/// (D-451, D-480). M2's first slice ships `std::fiber`, `std::channel`
-/// and `std::duration`, so 005, 018, 022 and 028 left the list (D-729).
-const LATER_EXAMPLES: [&str; 4] = [
-    "009_counter_actor",
-    "013_dining_philosophers",
-    "019_supervisor",
-    "031_web_scraper",
-];
+/// (D-451, D-480). M2's first slice shipped `std::fiber`, `std::channel`
+/// and `std::duration`, so 005, 018, 022 and 028 left the list (D-729),
+/// and with `std::selector`, `std::random` and `std::runtime` 009, 013 and
+/// 019 left it too.
+const LATER_EXAMPLES: [&str; 1] = ["031_web_scraper"];
 
 /// The one example allowed a diagnostic in the clean check: 022 keeps the
 /// `todo` of `money::apply_interest`, which warns with W0009 on purpose
@@ -64,7 +61,7 @@ const LATER_EXAMPLES: [&str; 4] = [
 const TODO_EXAMPLE: &str = "022_bank_accounts";
 
 /// Every example of the M1 exit criterion, 020 and the examples of M2's
-/// first slice check with no diagnostics at all, warnings included
+/// slices check with no diagnostics at all, warnings included
 /// (D-477), except 022's one W0009 at `src/money.cheby` (D-663). The
 /// cross-target check covers every target the manifest declares, so this
 /// is the check for both targets (D-512).
@@ -91,7 +88,7 @@ fn examples_check_cleanly() {
         }
         checked += 1;
     }
-    assert_eq!(checked, 27);
+    assert_eq!(checked, 30);
 }
 
 /// An example that needs a std module of a later tier reports E0038 at
@@ -300,7 +297,7 @@ fn lowering_reports_no_e0038() {
             Err(e) => failures.push(format!("{name}: {e}")),
         }
     }
-    assert_eq!(lowered, 27, "{}", failures.join("\n"));
+    assert_eq!(lowered, 30, "{}", failures.join("\n"));
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/ui");
     let mut cases = Vec::new();
     collect_ui_tests(&root, &mut cases);

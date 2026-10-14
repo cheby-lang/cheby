@@ -178,7 +178,7 @@ pub struct EntryConfig {
     pub consts: Option<Arc<ConstTable>>,
     /// Whether the entry's code was compiled with unwind edges: false only
     /// under `CHEBY_UNWIND_EDGES=off` (D-742), where a raise in the entry,
-    /// or in a fiber it spawns, ends the process (GAP(edgeless-panics)).
+    /// or in a fiber it spawns, ends the process (D-770).
     /// Stored in its control block; the JIT fills it from its code
     /// generation options.
     pub unwind_edges: bool,
@@ -624,6 +624,25 @@ fn wait(
     }
 }
 
+/// What `run_main` does with the fibers left when `main` has returned
+/// (D-073, D-708).
+///
+/// GAP(freeze-only-cli): at a normal exit only `cheby run`, right before
+/// the process exits, asks for [`AtExit::Freeze`], and only in a build
+/// without the debug leak check; every in-process host tears down (D-708).
+/// A termination (D-709) halts in every host whatever this says.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum AtExit {
+    /// Tear the remaining fibers down: unwind them without running user
+    /// code, release what they hold, then stop the runtime (D-708, D-710).
+    /// Every in-process host asks for this.
+    #[default]
+    Teardown,
+    /// Freeze the remaining fibers where they stand and never reuse their
+    /// stacks, because the process exits next (D-073, D-708).
+    Freeze,
+}
+
 /// How `cheby run` runs `main`.
 #[derive(Debug, Clone)]
 pub struct RunConfig {
@@ -631,8 +650,15 @@ pub struct RunConfig {
     pub args: Vec<String>,
     /// The program name, `env::program_name()` (D-347).
     pub program_name: String,
-    /// The root fiber's stack (D-125).
+    /// The root fiber's stack (D-125): the manifest's `main-stack`
+    /// (D-660), [`DEFAULT_ROOT_STACK_SIZE`] by default.
     pub root_stack_size: usize,
+    /// The stack of every fiber spawned without a size of its own: the
+    /// manifest's `fiber-stack` (D-660), [`DEFAULT_STACK_SIZE`] by default.
+    pub fiber_stack: usize,
+    /// What happens to the fibers left when `main` has returned (D-073,
+    /// D-708); [`AtExit::Teardown`] by default.
+    pub at_exit: AtExit,
     /// The trampolines `main`'s kernels may call closures through (D-526).
     pub callbacks: Callbacks,
     /// The build's accounting domain, which the leak check reads.
@@ -648,14 +674,16 @@ pub struct RunConfig {
 }
 
 impl Default for RunConfig {
-    /// No arguments, the default root stack, no trampolines, the calling
-    /// thread's current accounting domain, `CHEBY_THREADS`'s thread count
-    /// and unwind edges.
+    /// No arguments, the default root and fiber stacks, no trampolines,
+    /// the calling thread's current accounting domain, `CHEBY_THREADS`'s
+    /// thread count, unwind edges and a teardown at exit.
     fn default() -> Self {
         Self {
             args: Vec::new(),
             program_name: String::new(),
             root_stack_size: DEFAULT_ROOT_STACK_SIZE,
+            fiber_stack: DEFAULT_STACK_SIZE,
+            at_exit: AtExit::Teardown,
             callbacks: Callbacks::default(),
             domain: alloc::current_domain(),
             threads: None,
@@ -675,13 +703,17 @@ impl Default for RunConfig {
 /// - In debug builds, 102 if objects of the build's domain are still live
 ///   when the status is 0 or 1 (D-458), unless the system allocator
 ///   refused a request of the domain, which skips the check and counts the
-///   skip (GAP(system-refusal-leak)). Constants frozen before `main`
-///   have left the domain, so every live object is a leak.
+///   skip (D-771). Constants frozen before `main` have left the domain,
+///   so every live object is a leak.
 ///
 /// `main` runs as the root fiber of a [`Runtime`] made for the run, with
-/// the program's arguments and `config.threads` workers (D-690); the
-/// runtime stops before the leak check. Where fibers are not supported
-/// (Windows until M6, D-714), `main` runs on the thread backend instead.
+/// the program's arguments, `config.threads` workers (D-690) and
+/// `config.fiber_stack` as the default stack of the fibers it spawns
+/// (D-660). Once `main` has ended, standard output is flushed and the
+/// status fixed, then the runtime stops as `config.at_exit` asks (D-073,
+/// D-708), then the stats report, then the leak check (§10.10's note).
+/// Where fibers are not supported (Windows until M6, D-714), `main` runs
+/// on the thread backend instead.
 ///
 /// With `CHEBY_RT_STATS=1` it first prints `main`'s wall time and the
 /// domain's counters to standard error ([`stats::report`]).
@@ -701,6 +733,7 @@ pub unsafe fn run_main(entry: EntryFn, config: RunConfig) -> Result<i32, Runtime
         threads: config.threads,
         args: config.args.clone(),
         program_name: config.program_name.clone(),
+        fiber_stack: config.fiber_stack,
     }) {
         Ok(runtime) => Some(runtime),
         Err(RuntimeError::Unsupported) => {
@@ -727,12 +760,18 @@ pub unsafe fn run_main(entry: EntryFn, config: RunConfig) -> Result<i32, Runtime
         // SAFETY: as above, for `run_entry`.
         None => unsafe { run_entry(entry, &entry_config) },
     };
+    // The exit sequence (§10.10's note): flush standard output and fix the
+    // status, then stop the runtime, then the stats report, then the leak
+    // check. The root's catch point already printed a panic report (D-701).
+    let fixed = outcome.and_then(|outcome| {
+        let flushed = io::flush_stdout().is_ok();
+        exit_status(&outcome, flushed).map(|status| (outcome, status, flushed))
+    });
     if let Some(runtime) = runtime {
-        runtime.shutdown();
+        stop_at_exit(runtime, config.at_exit);
     }
-    let outcome = outcome?;
-    let flushed = io::flush_stdout().is_ok();
-    // GAP(system-refusal-leak): after the system allocator refused a
+    let (outcome, status, flushed) = fixed?;
+    // D-771: after the system allocator refused a
     // request of the build's domain, the update it stopped may have leaked
     // the structure in flight, which the program did not leak: the check
     // is skipped and the skip counted, as D-710 skips it for a fiber stuck
@@ -748,38 +787,45 @@ pub unsafe fn run_main(entry: EntryFn, config: RunConfig) -> Result<i32, Runtime
             domain.stats(),
         ));
     }
-    let leaks = || {
-        if check_leaks {
-            leak_report(domain.live_objects())
-        } else {
-            None
-        }
-    };
-    match outcome {
-        // The cleanup pads released the root's objects, and a leak turns
-        // 101 into 102 (D-710).
-        EntryOutcome::Panicked(_) => match leaks() {
-            Some(report) => {
-                io::write_stderr(&report);
-                Ok(status::LEAK_CHECK)
-            }
-            None => Ok(status::PANIC),
-        },
+    // A failed flush gives 1 and skips the check (D-306, D-346); after a
+    // panic the cleanup pads released the root's objects, and a leak turns
+    // 101 into 102 (D-710).
+    let checked = flushed || matches!(outcome, EntryOutcome::Panicked(_));
+    if checked
+        && check_leaks
+        && let Some(report) = leak_report(domain.live_objects())
+    {
+        io::write_stderr(&report);
+        return Ok(status::LEAK_CHECK);
+    }
+    Ok(status)
+}
+
+/// The exit status of `main`'s `outcome`, fixed right after standard
+/// output was flushed (`flushed`): 101 after a panic, 1 after a failed
+/// flush (D-306, D-346), else the thunk's 0 or 1 (§10.10, D-182).
+///
+/// # Errors
+///
+/// [`RuntimeError::InvalidStatus`] for any other raw status.
+fn exit_status(outcome: &EntryOutcome, flushed: bool) -> Result<i32, RuntimeError> {
+    match *outcome {
+        EntryOutcome::Panicked(_) => Ok(status::PANIC),
         EntryOutcome::Returned(_) if !flushed => Ok(status::ERR),
-        EntryOutcome::Returned(raw) => {
-            let code = match raw {
-                0 => status::SUCCESS,
-                1 => status::ERR,
-                other => return Err(RuntimeError::InvalidStatus(other)),
-            };
-            match leaks() {
-                Some(report) => {
-                    io::write_stderr(&report);
-                    Ok(status::LEAK_CHECK)
-                }
-                None => Ok(code),
-            }
-        }
+        EntryOutcome::Returned(0) => Ok(status::SUCCESS),
+        EntryOutcome::Returned(1) => Ok(status::ERR),
+        EntryOutcome::Returned(other) => Err(RuntimeError::InvalidStatus(other)),
+    }
+}
+
+/// Stops `run_main`'s runtime once the status is fixed, as `at_exit` asks
+/// (D-073, D-708). This wave both choices shut the runtime down as before:
+/// no fiber outlives `main` until detached fibers exist. Package L1r makes
+/// [`AtExit::Teardown`] tear the root's detached fibers down and
+/// [`AtExit::Freeze`] freeze them (GAP(freeze-only-cli)).
+fn stop_at_exit(runtime: Runtime, at_exit: AtExit) {
+    match at_exit {
+        AtExit::Teardown | AtExit::Freeze => runtime.shutdown(),
     }
 }
 
@@ -1138,6 +1184,55 @@ mod tests {
         assert_eq!(abi::status::PANIC, 101);
     }
 
+    /// 0 when its runtime's default fiber stack is 3 MiB, else 1.
+    unsafe extern "C" fn reads_its_fiber_stack(ctx: *mut ExecCtx) -> u64 {
+        // SAFETY: the root fiber's live control block.
+        let me = unsafe { &*ctx };
+        let stack = me.sched.runtime().map(|runtime| runtime.fiber_stack());
+        // Without fibers (Windows until M6) there is no runtime to read.
+        u64::from(stack.is_some_and(|stack| stack != 3 << 20))
+    }
+
+    /// D-660: `run_main` gives its runtime `RunConfig.fiber_stack`; D-073,
+    /// D-708: both exit choices end a program whose fibers all ended
+    /// (package L1r makes them differ); the defaults are 8 MiB and a
+    /// teardown.
+    #[test]
+    fn run_main_passes_its_fiber_stack_and_exit_choice() {
+        let _guard = serial();
+        let defaults = RunConfig::default();
+        assert_eq!(defaults.fiber_stack, DEFAULT_STACK_SIZE);
+        assert_eq!(defaults.at_exit, AtExit::Teardown);
+        assert_eq!(AtExit::default(), AtExit::Teardown);
+        for at_exit in [AtExit::Teardown, AtExit::Freeze] {
+            let config = RunConfig {
+                fiber_stack: 3 << 20,
+                at_exit,
+                ..RunConfig::default()
+            };
+            assert_eq!(
+                run_main(reads_its_fiber_stack, config).unwrap(),
+                status::SUCCESS,
+                "{at_exit:?}"
+            );
+        }
+    }
+
+    /// §10.10, D-306: the status is fixed at the flush: 101 after a panic
+    /// whatever the flush did, 1 after a failed flush, else the thunk's.
+    #[test]
+    fn exit_statuses_are_fixed_at_the_flush() {
+        let returned = |raw| EntryOutcome::Returned(raw);
+        assert_eq!(super::exit_status(&returned(0), true).unwrap(), 0);
+        assert_eq!(super::exit_status(&returned(1), true).unwrap(), 1);
+        assert_eq!(super::exit_status(&returned(0), false).unwrap(), 1);
+        assert_eq!(super::exit_status(&returned(7), false).unwrap(), 1);
+        assert!(matches!(
+            super::exit_status(&returned(7), true),
+            Err(RuntimeError::InvalidStatus(7))
+        ));
+    }
+
     #[test]
     fn run_main_exits_101_after_a_panic() {
         let _guard = serial();
@@ -1378,7 +1473,7 @@ mod tests {
 
     /// The catch points of entries under the return flag (D-699, D-701,
     /// D-710, D-733), and code compiled without unwind edges
-    /// (GAP(edgeless-panics)).
+    /// (D-770).
     mod unwind {
         use super::*;
 
@@ -1519,7 +1614,7 @@ mod tests {
             }
         }
 
-        /// GAP(edgeless-panics): in code compiled without unwind edges, a
+        /// D-770: in code compiled without unwind edges, a
         /// panic, an out of memory, a stack overflow and a deadline each
         /// flush standard output, print the report (even in a test or a
         /// constant evaluation, whose hosts would capture it), and end the

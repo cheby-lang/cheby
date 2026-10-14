@@ -1,0 +1,74 @@
+// @mode: run-pass
+// @decisions: D-671, D-667, D-670, D-103
+// @milestone: M2
+//! A timeout cancels the scopes and timeouts that `f` has open with its
+//! own scope as the target, so they never return, and returns
+//! `Err(TimedOut)` once they have unwound. An inner timeout whose limit
+//! passes first returns to `f` as usual (§10.7, §10.8).
+
+import std::channel
+import std::duration
+import std::fiber
+import std::io
+
+fn describe(outcome: Result<String, fiber::Timeout>) -> String {
+  case outcome {
+    Ok(text) => "Ok: {text}"
+    Err(fiber::TimedOut) => "Err(TimedOut)"
+    Err(fiber::Panicked(failure)) => {
+      let text = fiber::message(failure)
+      "Err(Panicked): {text}"
+    }
+  }
+}
+
+fn describe_wait(outcome: Result<Result<Int, Nil>, fiber::Timeout>) -> String {
+  case outcome {
+    Ok(value) => "Ok({value:?})"
+    Err(fiber::TimedOut) => "Err(TimedOut)"
+    Err(fiber::Panicked(failure)) => {
+      let text = fiber::message(failure)
+      "Err(Panicked): {text}"
+    }
+  }
+}
+
+fn main() {
+  // Nothing is ever sent on `never`, so only a cancellation ends a wait
+  // on it.
+  let (keep, never) = channel::new::<Int>(1)
+  let around_scope = fiber::timeout(duration::milliseconds(10), fn() {
+    let inner = {
+      use owner <- fiber::scope()
+      let _ = fiber::spawn(owner, fn() { channel::receive(never) })
+      Nil
+    }
+    // Not reached: a scope that is cancelled from outside never returns.
+    let text = case inner {
+      Ok(_) => "the inner scope returned"
+      Err(_) => "the inner scope failed"
+    }
+    io::println("never printed: {text}")
+    text
+  })
+  let around_scope_text = describe(around_scope)
+  io::println("a timeout around a scope: {around_scope_text}")
+  let inner_first = fiber::timeout(duration::seconds(10), fn() {
+    describe_wait(fiber::timeout(duration::milliseconds(10), fn() { channel::receive(never) }))
+  })
+  let inner_first_text = describe(inner_first)
+  io::println("the inner limit passes first: {inner_first_text}")
+  let outer_first = fiber::timeout(duration::milliseconds(10), fn() {
+    let inner = fiber::timeout(duration::seconds(10), fn() { channel::receive(never) })
+    // Not reached: the outer timeout's cancellation unwinds through the
+    // inner one.
+    let text = describe_wait(inner)
+    io::println("never printed: the inner timeout returned {text}")
+    text
+  })
+  let outer_first_text = describe(outer_first)
+  io::println("the outer limit passes first: {outer_first_text}")
+  // Every `f` was released, and with them every reference to `never`.
+  let sent = channel::send(keep, 1)
+  io::println("a send after the timeouts: {sent:?}")
+}

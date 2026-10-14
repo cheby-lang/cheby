@@ -1,0 +1,44 @@
+// @mode: run-pass
+// @decisions: D-673, D-695, D-647
+// @milestone: M2
+//! A selector is an immutable value: adding an arm returns a new selector
+//! and leaves the one it was added to as it was, so selectors built from a
+//! common one wait on different arms. A selector prints as `<Selector>`
+//! (§10.6).
+
+import std::channel
+import std::duration
+import std::io
+import std::selector
+
+fn main() {
+  let (a_tx, a_rx) = channel::new::<String>(4)
+  let (b_tx, b_rx) = channel::new::<String>(4)
+  let assert Ok(Nil) = channel::send(a_tx, "a1")
+  let assert Ok(Nil) = channel::send(b_tx, "b1")
+  let base =
+    selector::new()
+    |> selector::receive(_, a_rx, fn(r) { r })
+  let with_b =
+    base
+    |> selector::receive(_, b_rx, fn(r) { r })
+  let with_timer =
+    base
+    |> selector::after(_, duration::milliseconds(10), fn() { Ok("timer") })
+  // Only `a` has a value, and a timer arm with a positive wait is not
+  // ready when `select` starts.
+  let first = selector::select(with_timer)
+  io::println("with a timer arm: {first:?}")
+  let second = selector::select(with_timer)
+  io::println("with a timer arm, `a` empty: {second:?}")
+  let third = selector::select(with_b)
+  io::println("with a `b` arm, `a` empty: {third:?}")
+  // Both channels have a value now, but `base` has no arm on `b`.
+  let assert Ok(Nil) = channel::send(a_tx, "a2")
+  let assert Ok(Nil) = channel::send(b_tx, "b2")
+  let fourth = selector::select(base)
+  io::println("the base selector: {fourth:?}")
+  let left = channel::receive(b_rx)
+  io::println("left in `b`: {left:?}")
+  io::println("{base:?}")
+}

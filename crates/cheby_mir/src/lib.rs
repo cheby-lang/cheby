@@ -17,6 +17,9 @@
 //! - [`validate`] and [`dump`]: the validator and the stable text form.
 
 pub mod abi;
+pub mod borrow;
+#[cfg(test)]
+mod borrow_tests;
 pub mod builder;
 mod defs;
 pub mod dump;

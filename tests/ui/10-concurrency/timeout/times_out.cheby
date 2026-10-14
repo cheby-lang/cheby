@@ -1,0 +1,51 @@
+// @mode: run-pass
+// @decisions: D-103, D-652, D-670, D-671, D-649
+// @milestone: M2
+//! Once the limit has passed, `timeout` cancels `f` and returns
+//! `Err(TimedOut)`, after releasing `f`. A limit of zero or less has
+//! already passed, so `f` is not called (§10.8).
+
+import std::channel
+import std::duration
+import std::fiber
+import std::io
+
+fn describe(outcome: Result<Result<Int, Nil>, fiber::Timeout>) -> String {
+  case outcome {
+    Ok(value) => "Ok({value:?})"
+    Err(fiber::TimedOut) => "Err(TimedOut)"
+    Err(fiber::Panicked(failure)) => {
+      let text = fiber::message(failure)
+      "Err(Panicked): {text}"
+    }
+  }
+}
+
+fn main() {
+  let (keep, never) = channel::new::<Int>(1)
+  let waited = fiber::timeout(duration::milliseconds(10), fn() { channel::receive(never) })
+  let waited_text = describe(waited)
+  io::println("work that waits too long: {waited_text}")
+  let equal = waited == Err(fiber::TimedOut)
+  io::println("equal to Err(TimedOut): {equal}")
+  // `f` was released before `timeout` returned, and with it `never`, the
+  // only `Receiver`.
+  let sent = channel::send(keep, 1)
+  io::println("a send after the timeout: {sent:?}")
+  let zero = fiber::timeout(duration::seconds(0), fn() {
+    io::println("never printed: a limit of zero")
+    channel::receive(never_called())
+  })
+  let zero_text = describe(zero)
+  io::println("a limit of zero: {zero_text}")
+  let negative = fiber::timeout(duration::milliseconds(-1), fn() {
+    io::println("never printed: a negative limit")
+    channel::receive(never_called())
+  })
+  let negative_text = describe(negative)
+  io::println("a negative limit: {negative_text}")
+}
+
+fn never_called() -> channel::Receiver<Int> {
+  panic as "not called"
+}

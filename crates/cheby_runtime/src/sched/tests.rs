@@ -755,6 +755,7 @@ fn fibers_read_their_runtimes_program_arguments() {
         threads: Some(1),
         args: vec!["a".to_owned(), "b".to_owned()],
         program_name: "prog".to_owned(),
+        ..RuntimeConfig::default()
     })
     .unwrap();
     let ok = root(&runtime, |_| {

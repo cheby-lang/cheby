@@ -1,0 +1,29 @@
+// @mode: run-pass
+// @decisions: D-041, D-206
+// @milestone: M2
+//! A `select` with a receive arm on a capacity-0 channel counts as a
+//! receiver, so a sender hands its value to it, and the sender's `send`
+//! returns `Ok(Nil)` once the select has chosen that arm (§10.6).
+
+import std::channel
+import std::fiber
+import std::io
+import std::selector
+
+fn main() {
+  let (tx, rx) = channel::new::<String>(0)
+  let (reports_tx, reports_rx) = channel::new::<Result<Nil, String>>(1)
+  let outcome = {
+    use owner <- fiber::scope()
+    let _ = fiber::spawn(owner, fn() {
+      let sent = channel::send(tx, "handed off")
+      channel::send(reports_tx, sent)
+    })
+    selector::new()
+    |> selector::receive(_, rx, fn(r) { r })
+    |> selector::select
+  }
+  io::println("the scope returned {outcome:?}")
+  let assert Ok(sent) = channel::receive(reports_rx)
+  io::println("the sender's send returned {sent:?}")
+}

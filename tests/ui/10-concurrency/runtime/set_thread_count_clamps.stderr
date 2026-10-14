@@ -1,0 +1,9 @@
+warning[W0013]: negative `count` passed to `set_thread_count`
+  --> tests/ui/10-concurrency/runtime/set_thread_count_clamps.cheby:12:29
+   |
+12 |   runtime::set_thread_count(-3)
+   |                             ^^ this `count` is negative
+   |
+   = note: `set_thread_count` clamps a `count` that is out of range, so a negative one acts like the smallest useful value
+   = help: pass the `count` you mean
+
