@@ -87,6 +87,9 @@ pub(super) fn lower_wrapper(
         symbol: ext.symbol.clone(),
         sig: fsig.clone(),
         args,
+        // An `@blocking` external runs on the blocking pool (D-683); code
+        // generation reads the flag.
+        blocking: ext.blocking,
     };
     let result = if fsig.ret == CType::Void {
         b.push(Stmt::Eval(call))?;

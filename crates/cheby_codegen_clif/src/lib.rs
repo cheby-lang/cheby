@@ -46,6 +46,11 @@
 //! the flag at `ctx+12`, with a branch to the edge's pad, a cold block
 //! (`unwind`).
 //!
+//! An `@blocking` foreign call (D-683) runs on the blocking pool through
+//! `cheby_rt_blocking_call` and a generated C-ABI shim `cb$blk$<symbol>`
+//! per symbol and C signature, defined once per JIT with the batch that
+//! first uses it (`blocking.rs`, GAP(blocking-shim)).
+//!
 //! REPL session items (E4, D-547) are registered with
 //! [`Decls::set_session_name`]: their symbols use the module `<repl>` and
 //! carry `$r<generation>`, and a redefinition that takes over an earlier
@@ -77,6 +82,7 @@
 //! [`CodegenOptions::checked_rc`] asks for the checked runtime calls.
 
 mod arith;
+mod blocking;
 mod data;
 mod decls;
 mod error;
@@ -332,6 +338,16 @@ pub fn define_with_stats<M: Module>(
     for result in results {
         first.push(result?);
     }
+    // The shims of the batch's `@blocking` calls (GAP(blocking-shim)), in
+    // declaration order; each is defined once per JIT, with the batch that
+    // declared it. They are a few instructions each, so they are compiled
+    // here rather than on the pool.
+    let mut shims = Vec::with_capacity(decls.pending_shims.len());
+    for (id, symbol, sig) in &decls.pending_shims {
+        let translated = blocking::translate_shim(decls, *id, symbol, sig)?;
+        let text = opts.capture_clif.then(|| decls.describe(&translated));
+        shims.push((*id, text, compile_function(module.isa(), translated)?));
+    }
     // D-679: a function whose frame is large becomes an outer function
     // with its symbol and an unchecked inner body. The bodies are declared
     // here, after every function compiled, in declaration order, so their
@@ -372,6 +388,10 @@ pub fn define_with_stats<M: Module>(
             compiled.push((Some(function.key), id, code));
         }
     }
+    for (id, text, code) in shims {
+        clif.extend(text);
+        compiled.push((None, id, code));
+    }
     // A function defined twice would fail after the data are defined,
     // which the module keeps: check first, so a failed batch defines
     // nothing.
@@ -386,6 +406,7 @@ pub fn define_with_stats<M: Module>(
     }
     data::define_pending(module, decls, cx)?;
     decls.defined_funcs.extend(ids);
+    decls.pending_shims.clear();
     let mut stats = DefineStats::default();
     for (key, id, code) in compiled {
         module

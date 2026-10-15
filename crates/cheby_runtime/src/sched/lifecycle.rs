@@ -13,6 +13,18 @@
 //! fiber, or by a scoped fiber of a test, lands in the same group. A
 //! root's end does not end its group: a host tears the group down when it
 //! chooses, and the runtime tears every group down when it shuts down.
+//! A test's group carries the test's capture ([`DetachedGroup::with_capture`],
+//! D-723), which its fibers' standard-stream writes reach through the group
+//! they inherit (`crate::capture`).
+//!
+//! # Roots a host does not block on
+//!
+//! [`Runtime::start_root_in`] starts a root and returns a [`RootHandle`]
+//! the host waits on when it chooses; [`Runtime::start_root_notify`]
+//! reports the root's end as `(tag, outcome)` on a [`RootDone`] the host
+//! shares among several roots (`cheby test`'s runner). Both register the
+//! group as [`Runtime::run_root_in`] does, and a root started after a
+//! termination never runs and reports `Exited` at once (D-802).
 //!
 //! Each member is a detached fiber and its **base scope**
 //! (D-798, `fiber_ops::detached`): a parentless scope,
@@ -45,15 +57,20 @@
 //! base scopes, and a member's control block is only read (an atomic)
 //! under it. A member is alive while it is in the group: it leaves under
 //! the group's lock as its last touch of shared state, before it retires.
+//! The group's list of roots reporting on a [`RootDone`] and each such
+//! root's own report are leaf locks too: a report is sent after both are
+//! released, and a termination reads the list after the roots' lock.
 
 use std::fmt;
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, mpsc};
-use std::time::Duration;
+use std::sync::{Arc, OnceLock, Weak, mpsc};
+use std::time::{Duration, Instant};
 
 use parking_lot::{Condvar, Mutex, MutexGuard};
 
 use super::{FiberRef, NO_STATUS, Runtime, Shared};
+use crate::alloc::Domain;
+use crate::capture::Capture;
 use crate::entry::{EntryConfig, EntryFn, EntryOutcome, RuntimeError};
 use crate::fiber_ops::cancel;
 use crate::fiber_ops::scope::ScopeState;
@@ -72,6 +89,13 @@ pub struct DetachedGroup {
     inner: Mutex<GroupInner>,
     /// Signalled when the group becomes empty.
     emptied: Condvar,
+    /// Where its fibers' standard-stream writes go: a test's capture
+    /// (D-723), never `main`'s or a REPL session's.
+    capture: Option<Arc<Capture>>,
+    /// The roots started in the group by [`Runtime::start_root_notify`]
+    /// that have not reported yet: a termination reports to them
+    /// (D-709). A leaf lock, taken with no other lock held.
+    notified: Mutex<Vec<Weak<RootNotice>>>,
 }
 
 /// The part of a group under its lock.
@@ -115,10 +139,30 @@ impl DetachedGroup {
     /// An empty group.
     #[must_use]
     pub fn new() -> Arc<Self> {
+        Self::make(None)
+    }
+
+    /// A group whose fibers' standard-stream writes go to `capture` (a
+    /// test's group, D-723): every fiber of the group, scoped, detached or
+    /// nested, reaches it through the group it inherits (D-799).
+    #[must_use]
+    pub fn with_capture(capture: Arc<Capture>) -> Arc<Self> {
+        Self::make(Some(capture))
+    }
+
+    /// An empty group with `capture`.
+    fn make(capture: Option<Arc<Capture>>) -> Arc<Self> {
         Arc::new(Self {
             inner: Mutex::new(GroupInner::default()),
             emptied: Condvar::new(),
+            capture,
+            notified: Mutex::new(Vec::new()),
         })
+    }
+
+    /// The group's capture, if any.
+    pub(crate) fn capture(&self) -> Option<&Arc<Capture>> {
+        self.capture.as_ref()
     }
 
     /// Detached fibers that have not left the group.
@@ -253,6 +297,143 @@ impl DetachedGroup {
         self.emptied.notify_all();
         drop(inner);
     }
+
+    /// Remembers a root started in the group that reports on a
+    /// [`RootDone`], so a termination reaches it; forgets the roots that
+    /// have reported.
+    fn remember_notice(&self, notice: &Arc<RootNotice>) {
+        let mut notified = self.notified.lock();
+        notified.retain(|known| known.strong_count() > 0);
+        notified.push(Arc::downgrade(notice));
+    }
+
+    /// The roots started in the group that report on a [`RootDone`] and
+    /// have not reported yet.
+    fn pending_notices(&self) -> Vec<Arc<RootNotice>> {
+        self.notified
+            .lock()
+            .iter()
+            .filter_map(Weak::upgrade)
+            .collect()
+    }
+}
+
+/// A root started by [`Runtime::start_root_in`]: the host waits for it
+/// when it chooses, so one host thread can start several roots and wait
+/// for them in any order.
+pub struct RootHandle {
+    /// Where the root, or a termination (D-709, D-802), sends its outcome.
+    receiver: mpsc::Receiver<EntryOutcome>,
+    /// The domain the root charges, which counts the entry's time.
+    domain: Arc<Domain>,
+    /// When the root was started.
+    started: Instant,
+    /// How long the root ran, set on its fiber when its thunk returns, so
+    /// a host that waits later counts the entry's own time.
+    took: Arc<OnceLock<Duration>>,
+}
+
+impl fmt::Debug for RootHandle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RootHandle").finish_non_exhaustive()
+    }
+}
+
+impl RootHandle {
+    /// Blocks until the root ends, and reports how, as
+    /// [`Runtime::run_root_in`] does.
+    ///
+    /// # Errors
+    ///
+    /// [`RuntimeError::EntryLost`] if the root fiber ends without an
+    /// outcome.
+    pub fn wait(self) -> Result<EntryOutcome, RuntimeError> {
+        let outcome = self.receiver.recv().map_err(|_| RuntimeError::EntryLost)?;
+        self.count();
+        Ok(outcome)
+    }
+
+    /// Counts the entry and its time in its domain, once it has ended.
+    fn count(&self) {
+        let time = self
+            .took
+            .get()
+            .copied()
+            .unwrap_or_else(|| self.started.elapsed());
+        self.domain.stats().add_entry(time);
+    }
+
+    /// Waits at most `timeout` for the root to end: `Ok` with what
+    /// [`RootHandle::wait`] would return once it has ended, `Err(self)`
+    /// while it still runs.
+    ///
+    /// # Errors
+    ///
+    /// The handle itself, while the root still runs.
+    pub fn wait_timeout(
+        self,
+        timeout: Duration,
+    ) -> Result<Result<EntryOutcome, RuntimeError>, Self> {
+        match self.receiver.recv_timeout(timeout) {
+            Ok(outcome) => {
+                self.count();
+                Ok(Ok(outcome))
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(self),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Ok(Err(RuntimeError::EntryLost)),
+        }
+    }
+}
+
+/// Where several roots report their end, each once, as `(tag, outcome)`:
+/// one host thread blocks on the receiver for any of k roots (`cheby
+/// test`'s runner), with no polling ([`Runtime::start_root_notify`]).
+pub type RootDone = mpsc::Sender<(usize, Result<EntryOutcome, RuntimeError>)>;
+
+/// The report of one root started by [`Runtime::start_root_notify`]: sent
+/// once, by whichever comes first of the root's end (on its fiber), a
+/// termination (D-709, through the root's group), the refusal of a root
+/// started after a termination (D-802), or the loss of a root that never
+/// ran (when its start closure is dropped unrun).
+struct RootNotice {
+    /// The host's tag for the root.
+    tag: usize,
+    /// The host's sender, taken by the first report.
+    done: Mutex<Option<RootDone>>,
+    /// The domain the root charges, which counts the entry's time.
+    domain: Arc<Domain>,
+    /// When the root was started.
+    started: Instant,
+}
+
+impl RootNotice {
+    /// Sends `outcome` with the tag, unless the root has reported already
+    /// or its start failed. Takes only the notice's own lock, a leaf, and
+    /// sends after releasing it.
+    fn report(&self, outcome: Result<EntryOutcome, RuntimeError>) {
+        let Some(done) = self.done.lock().take() else {
+            return;
+        };
+        if outcome.is_ok() {
+            self.domain.stats().add_entry(self.started.elapsed());
+        }
+        done.send((self.tag, outcome)).ok();
+    }
+
+    /// Never reports: the root did not start, and its host got the error.
+    fn disarm(&self) {
+        let done = self.done.lock().take();
+        drop(done);
+    }
+}
+
+impl Drop for RootNotice {
+    fn drop(&mut self) {
+        // The start closure that held the last reference was dropped
+        // without running the root, as `run_root_in`'s host then sees
+        // `EntryLost`.
+        self.report(Err(RuntimeError::EntryLost));
+    }
 }
 
 impl GroupInner {
@@ -360,6 +541,133 @@ impl Runtime {
         self.shared.register_group(group);
         // SAFETY: forwarded from the caller.
         unsafe { self.run_root_with(entry, config, Arc::clone(group)) }
+    }
+
+    /// [`Runtime::run_root_in`] without waiting: registers `group` (D-799)
+    /// and starts the root at once; the host waits for it through the
+    /// returned handle when it chooses. A root started after a termination
+    /// never runs, and its handle reports `Exited` at once (D-802).
+    ///
+    /// # Errors
+    ///
+    /// [`RuntimeError`] if the stack is too small or cannot be taken.
+    ///
+    /// # Safety
+    ///
+    /// As for [`Runtime::run_root`], for as long as the root and its
+    /// fibers may run, which can outlast this call.
+    pub unsafe fn start_root_in(
+        &self,
+        entry: EntryFn,
+        config: &EntryConfig,
+        group: &Arc<DetachedGroup>,
+    ) -> Result<RootHandle, RuntimeError> {
+        self.shared.register_group(group);
+        let started = Instant::now();
+        let took = Arc::new(OnceLock::new());
+        let on_fiber = Arc::clone(&took);
+        let receiver = self.spawn_root_in(
+            config,
+            Arc::clone(group),
+            Box::new(move |ctx| {
+                // SAFETY: the caller guarantees that `entry` is an entry
+                // thunk whose code stays valid while it runs; `ctx` is the
+                // root fiber's control block.
+                let word = unsafe { entry(ctx) };
+                on_fiber.set(started.elapsed()).ok();
+                word
+            }),
+        )?;
+        Ok(RootHandle {
+            receiver,
+            domain: Arc::clone(&config.domain),
+            started,
+            took,
+        })
+    }
+
+    /// [`Runtime::start_root_in`] that reports on `done` with `tag` instead
+    /// of returning a handle: exactly one `(tag, outcome)` when the root
+    /// ends, `Exited` when a termination ends it (D-709) or came before it
+    /// (D-802), `Err(EntryLost)` if it ends without an outcome. Nothing is
+    /// sent when this returns an error. A root that never ends sends
+    /// nothing: one still blocked in a system call when the host's stop
+    /// gives up on it (D-786, GAP(pool-wakes-only-running)), or frozen by
+    /// a halt that is not a termination.
+    ///
+    /// # Errors
+    ///
+    /// [`RuntimeError`] if the stack is too small or cannot be taken.
+    ///
+    /// # Safety
+    ///
+    /// As for [`Runtime::start_root_in`].
+    pub unsafe fn start_root_notify(
+        &self,
+        entry: EntryFn,
+        config: &EntryConfig,
+        group: &Arc<DetachedGroup>,
+        tag: usize,
+        done: RootDone,
+    ) -> Result<(), RuntimeError> {
+        self.shared.register_group(group);
+        let notice = Arc::new(RootNotice {
+            tag,
+            done: Mutex::new(Some(done)),
+            domain: Arc::clone(&config.domain),
+            started: Instant::now(),
+        });
+        // Before the root is registered: a termination that the
+        // registration does not see reaches the notice through the group.
+        group.remember_notice(&notice);
+        let on_fiber = Arc::clone(&notice);
+        let started = self.spawn_root_in(
+            config,
+            Arc::clone(group),
+            Box::new(move |ctx| {
+                // SAFETY: as in `start_root_in`.
+                let word = unsafe { entry(ctx) };
+                // SAFETY: `ctx` is this root fiber's live control block.
+                let me = unsafe { &*ctx };
+                // The root's catch point, as the fiber's own start does
+                // after this returns (D-699, D-701): it then finds no
+                // record and sends `Returned` to a receiver dropped below.
+                let outcome = match crate::unwind::record::finish_entry(me) {
+                    Some(report) => EntryOutcome::Panicked(report),
+                    None => EntryOutcome::Returned(word),
+                };
+                on_fiber.report(Ok(outcome));
+                drop(on_fiber);
+                word
+            }),
+        );
+        match started {
+            Ok(receiver) => {
+                // A root refused because a termination halted the runtime
+                // got `Exited` at once (D-802), and never runs; any other
+                // message here was reported already.
+                if let Ok(outcome) = receiver.try_recv() {
+                    notice.report(Ok(outcome));
+                }
+                Ok(())
+            }
+            Err(error) => {
+                notice.disarm();
+                Err(error)
+            }
+        }
+    }
+
+    /// The program's exit status once a termination happened (D-709), else
+    /// `None`: a host that keeps running entries (the REPL) reads it before
+    /// each one. Public form of the runtime's fixed status.
+    #[must_use]
+    pub fn exit_status(&self) -> Option<i32> {
+        if self.shared.terminated() {
+            self.shared.exit_status()
+        } else {
+            None
+        }
     }
 
     /// The state every thread of the runtime shares, for `run_main`, which
@@ -518,6 +826,14 @@ impl Shared {
             sender.send(EntryOutcome::Exited(status)).ok();
         }
         drop(roots);
+        // The roots that report on a `RootDone`: each was remembered in its
+        // group before its registration, so it is either reached here or
+        // refused at its registration (D-802).
+        for group in self.live_groups() {
+            for notice in group.pending_notices() {
+                notice.report(Ok(EntryOutcome::Exited(status)));
+            }
+        }
     }
 }
 

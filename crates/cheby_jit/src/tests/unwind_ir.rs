@@ -42,6 +42,7 @@ fn std_ctx_operand_is_the_running_context() {
                             ret: cheby_mir::CType::I64,
                         },
                         args: vec![Operand::Const(Const::Ctx), Operand::Const(Const::Int(41))],
+                        blocking: false,
                     },
                 ),
                 assign(

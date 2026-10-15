@@ -387,7 +387,7 @@ test "message is the panic's message line" {
 /// ending, and the message, so `main` returning `Err(p)` prints what the
 /// panic would have printed (§10.10, D-182, D-449, D-648).
 pub fn show(failure: Panic) -> String {
-  string::join(["panicked at ", failure.location, ":\n", failure.message], "")
+  "panicked at {failure.location}:\n{failure.message}"
 }
 
 test "a panic shows like a panic report" {

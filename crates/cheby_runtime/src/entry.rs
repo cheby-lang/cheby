@@ -691,9 +691,11 @@ pub struct RunConfig {
     /// The token of the code `main` runs (a JIT's, [`CodeToken`]), which
     /// the run's runtime holds as [`Runtime::attach`] does: released once
     /// every thread of the runtime is joined, and kept (leaked) when a
-    /// worker whose fiber is blocked inline in a system call is never
+    /// worker whose fiber is blocked inline in a system call (the blocking
+    /// pool could start no thread, GAP(pool-thread-refused)) is never
     /// joined (D-786), since that worker returns into the code when the
-    /// call returns (D-708, I-6). `None` for code that lives for the
+    /// call returns (D-708, I-6). A pool job holds its own clones of the
+    /// tokens (GAP(blocking-shim)). `None` for code that lives for the
     /// whole process.
     pub code: Option<CodeToken>,
 }
@@ -755,8 +757,9 @@ impl Default for RunConfig {
 /// As for [`run_entry`]: `entry` must be a `main` entry thunk with the
 /// [`EntryFn`] ABI, and its code must stay valid until this returns. Code
 /// that can be freed (a JIT's) must also come with its token in
-/// `config.code`: a worker left blocked inline in a system call (D-786) is
-/// never joined and returns into the code after this has returned.
+/// `config.code`: a worker left blocked inline in a system call (D-786,
+/// when the blocking pool could start no thread) is never joined and
+/// returns into the code after this has returned.
 pub unsafe fn run_main(entry: EntryFn, config: RunConfig) -> Result<i32, RuntimeError> {
     let runtime = match Runtime::new(&RuntimeConfig {
         threads: config.threads,
@@ -841,9 +844,10 @@ pub unsafe fn run_main(entry: EntryFn, config: RunConfig) -> Result<i32, Runtime
     }
     // D-771: after the system allocator refused a request of the build's
     // domain, the update it stopped may have leaked the structure in
-    // flight, which the program did not leak; D-786: a fiber blocked
-    // inline in a system call was skipped by the teardown and holds its
-    // objects; frozen fibers hold theirs (D-708). In each case the check
+    // flight, which the program did not leak; D-786: a fiber waiting on
+    // the blocking pool, or blocked inline in a system call, was skipped
+    // by the teardown and holds its objects (GAP(pool-in-the-survey));
+    // frozen fibers hold theirs (D-708). In each case the check
     // is skipped and the skip counted (D-710).
     let skip = domain.system_refused() || stopped != Stopped::Clean;
     let check_leaks = !(LEAK_CHECK_ENABLED && skip);
@@ -889,7 +893,9 @@ pub unsafe fn run_main(entry: EntryFn, config: RunConfig) -> Result<i32, Runtime
 enum Stopped {
     /// Torn down, every thread joined: the leak check may run.
     Clean,
-    /// Torn down, except fibers blocked inline in a system call (D-786).
+    /// Torn down, except fibers waiting on the blocking pool or blocked
+    /// inline in a system call (D-786), or a pinned fiber the stop left
+    /// alone (GAP(stop-ends-idle-worker)).
     Skipped,
     /// Frozen (D-073, D-708).
     Frozen,
@@ -950,7 +956,9 @@ fn stop_at_exit(
             } else {
                 runtime.shutdown();
             }
-            if report.skipped > 0 {
+            // A pinned fiber the stop left alone holds its objects as a
+            // skipped one does (GAP(stop-ends-idle-worker), UQ-5 (a)).
+            if report.skipped > 0 || shared.left_at_stop() > 0 {
                 Stopped::Skipped
             } else {
                 Stopped::Clean
@@ -1802,5 +1810,36 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// GAP(stop-ends-idle-worker) under UQ-5 (a), D-786, D-710 (gate 1's
+    /// review finding ROB4-W1-1): a pinned fiber that the stop left alone
+    /// and counted makes `run_main` skip its leak check, as a fiber the
+    /// teardown skipped does; a stop that left none keeps the check.
+    /// (`thread_count_a_pinned_fiber_woken_after_its_worker_ended_at_a_stop_is_left_and_counted`
+    /// shows how a stop counts one.)
+    #[test]
+    #[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+    fn a_fiber_left_at_the_stop_skips_the_leak_check() {
+        let new_runtime = || {
+            Runtime::new(&RuntimeConfig {
+                threads: Some(1),
+                ..RuntimeConfig::default()
+            })
+            .unwrap()
+        };
+        let clean = new_runtime();
+        let group = DetachedGroup::new();
+        assert_eq!(
+            stop_at_exit(clean, &group, 0, AtExit::Teardown),
+            (0, Stopped::Clean)
+        );
+        let left = new_runtime();
+        left.shared_handle().count_left_at_stop();
+        let group = DetachedGroup::new();
+        assert_eq!(
+            stop_at_exit(left, &group, 0, AtExit::Teardown),
+            (0, Stopped::Skipped)
+        );
     }
 }

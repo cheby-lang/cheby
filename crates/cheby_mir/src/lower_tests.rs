@@ -273,6 +273,7 @@ fn fixture() -> Fixture {
             symbol: "ext_int".into(),
             span: sp(file, 150),
             context: false,
+            blocking: false,
         }),
         body: None,
         entry: None,
@@ -334,6 +335,7 @@ fn fixture() -> Fixture {
             symbol: "say".into(),
             span: sp(file, 180),
             context: false,
+            blocking: false,
         }),
         body: None,
         entry: None,
@@ -845,6 +847,50 @@ bb1:
 }
 "#
     );
+}
+
+/// `@blocking` reaches MIR (D-042, D-683, GAP(blocking-shim)): the
+/// wrapper's foreign call carries the flag, which the dump prints only on
+/// that call, and the call keeps its unwind edge, since a cancellation
+/// raises after it returns. Every other foreign call dumps as before.
+#[test]
+fn a_blocking_external_marks_its_foreign_call() {
+    let lowered = crate::test_support::lower_source(&[(
+        "",
+        r#"//! A blocking external beside a plain one.
+
+@external(native, "slow_add")
+@external(js, "./ffi.mjs", "slow_add")
+@blocking
+fn slow_add(n: Int, x: Float) -> Int
+
+@external(native, "fast_add")
+@external(js, "./ffi.mjs", "fast_add")
+fn fast_add(n: Int, x: Float) -> Int
+
+fn main() {
+  let a = slow_add(1, 2.0)
+  let b = fast_add(a, 2.0)
+  let _ = b
+  Nil
+}
+"#,
+    )]);
+    let slow = lowered.function("app", "app::slow_add");
+    assert!(
+        slow.contains(
+            "_2: int = call_foreign blocking \"slow_add\"(borrow _0, borrow _1) -> i64 ; unwind bb1\n"
+        ),
+        "{slow}"
+    );
+    let fast = lowered.function("app", "app::fast_add");
+    assert!(
+        fast.contains(
+            "_2: int = call_foreign \"fast_add\"(borrow _0, borrow _1) -> i64 ; unwind bb1\n"
+        ),
+        "{fast}"
+    );
+    assert_eq!(lowered.dump().matches("blocking").count(), 1);
 }
 
 /// An external's scalar result is boxed into the uniform return; a `Nil`

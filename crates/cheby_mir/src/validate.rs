@@ -76,7 +76,7 @@ use crate::ir::{
 };
 use crate::layout::LayoutDesc;
 use crate::ownership::{self, Observer};
-use crate::repr::{CType, Repr};
+use crate::repr::{CType, ForeignSig, Repr};
 use crate::unwind::{Recorded, stmt_may_unwind, terminator_may_unwind};
 
 /// Which invariants hold at this point of the pipeline.
@@ -1008,6 +1008,43 @@ impl FnCx<'_> {
         }
     }
 
+    /// The representation a foreign call with the C signature `sig`
+    /// produces, after checking its arguments.
+    fn check_foreign(
+        &mut self,
+        sig: &ForeignSig,
+        args: &[Operand],
+        blocking: bool,
+    ) -> Option<Repr> {
+        if sig.params.len() != args.len() {
+            self.err("foreign call with the wrong number of arguments");
+        }
+        // A pool thread never receives the fiber's context (D-191,
+        // GAP(blocking-with-std-context)).
+        if blocking && args.contains(&Operand::Const(Const::Ctx)) {
+            self.err("a blocking foreign call passes ctx");
+        }
+        if sig.params.contains(&CType::Void) {
+            self.err("a foreign parameter of type void");
+        }
+        for (n, (arg, &ctype)) in args.iter().zip(&sig.params).enumerate() {
+            // The fiber's context of a `@std_context` kernel (D-692, D-745).
+            if n == 0 && *arg == Operand::Const(Const::Ctx) {
+                if !ctype.accepts_ctx() {
+                    self.err(format!("ctx passed as {ctype}"));
+                }
+                continue;
+            }
+            self.check_const(arg, false);
+            if let Some(r) = self.repr(arg)
+                && !ctype.accepts(r)
+            {
+                self.err(format!("foreign argument {r} passed as {ctype}"));
+            }
+        }
+        sig.ret.repr()
+    }
+
     /// The representation the rvalue produces, after checking its operands.
     fn check_rvalue(&mut self, value: &Rvalue) -> Option<Repr> {
         match value {
@@ -1019,31 +1056,12 @@ impl FnCx<'_> {
                 self.check_call(callee, args);
                 Some(Repr::Value)
             }
-            Rvalue::CallForeign { sig, args, .. } => {
-                if sig.params.len() != args.len() {
-                    self.err("foreign call with the wrong number of arguments");
-                }
-                if sig.params.contains(&CType::Void) {
-                    self.err("a foreign parameter of type void");
-                }
-                for (n, (arg, &ctype)) in args.iter().zip(&sig.params).enumerate() {
-                    // The fiber's context of a `@std_context` kernel
-                    // (D-692, D-745).
-                    if n == 0 && *arg == Operand::Const(Const::Ctx) {
-                        if !ctype.accepts_ctx() {
-                            self.err(format!("ctx passed as {ctype}"));
-                        }
-                        continue;
-                    }
-                    self.check_const(arg, false);
-                    if let Some(r) = self.repr(arg)
-                        && !ctype.accepts(r)
-                    {
-                        self.err(format!("foreign argument {r} passed as {ctype}"));
-                    }
-                }
-                sig.ret.repr()
-            }
+            Rvalue::CallForeign {
+                sig,
+                args,
+                blocking,
+                ..
+            } => self.check_foreign(sig, args, *blocking),
             Rvalue::CallRuntime { func, args } => self.check_runtime(*func, args),
             Rvalue::Alloc { layout, fields } => {
                 self.check_alloc(*layout, fields);

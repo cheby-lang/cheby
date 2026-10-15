@@ -824,7 +824,7 @@ fn code_tokens_are_released_after_the_runtime_stops() {
     let runtime = runtime(1);
     runtime.attach(token.clone());
     runtime.attach(token.clone());
-    assert_eq!(runtime.code.lock().len(), 1);
+    assert_eq!(runtime.shared.code.lock().len(), 1);
     assert!(token.same(&token.clone()));
     drop(token);
     assert!(!*freed.lock().unwrap());

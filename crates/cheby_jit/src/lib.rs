@@ -63,11 +63,13 @@ use cheby_runtime::alloc::Domain;
 use cheby_runtime::entry::{Tramp0, Tramp1, Tramp2, Tramp3, Tramp4};
 use cheby_runtime::layout::{self as rt_layout, FieldKind, LayoutInfo};
 use cheby_runtime::{
-    Callbacks, CodeToken, DetachedGroup, EntryConfig, EntryFn, EntryOutcome, RunConfig, Runtime,
-    RuntimeError,
+    Callbacks, CodeToken, DetachedGroup, EntryConfig, EntryFn, EntryOutcome, RootDone, RootHandle,
+    RunConfig, Runtime, RuntimeError,
 };
 
 mod memory;
+#[cfg(test)]
+mod start_root_tests;
 // The tests compile and run machine code. Windows support is M6 (D-545),
 // so they are not built there. Two attributes, not `all(test, …)`, so
 // Clippy still sees a test module (`allow-unwrap-in-tests`).
@@ -1028,11 +1030,68 @@ impl Entry<'_> {
         unsafe { runtime.run_root_in(self.thunk, &config, group) }.map_err(JitError::Runtime)
     }
 
+    /// [`Entry::run_root_in`] without waiting ([`Runtime::start_root_in`]),
+    /// keeping `config.domain`: the root and every fiber it starts charge
+    /// the caller's domain (a per-test domain, D-691, D-723), while the
+    /// JIT's trampolines and [`Jit::unwind_edges`] replace `config`'s as in
+    /// [`Entry::run_root_in`]. The runtime keeps the JIT's code alive until
+    /// it stops, so the root may outlive this call and the borrow of the
+    /// `Jit`; a returned word is valid only while the `Jit` lives.
+    ///
+    /// # Errors
+    ///
+    /// [`JitError::Runtime`] if the root cannot start.
+    pub fn start_root_in(
+        self,
+        runtime: &Runtime,
+        config: &EntryConfig,
+        group: &Arc<DetachedGroup>,
+    ) -> Result<RootHandle, JitError> {
+        let config = self.config_keeping_domain(config);
+        runtime.attach(self.jit.code_token());
+        // SAFETY: as in `run_root_in`: an entry thunk with the `EntryFn`
+        // ABI built by the JIT, whose code and data the runtime keeps alive
+        // through the token attached above for as long as the root and its
+        // fibers may run them, after this returns included.
+        unsafe { runtime.start_root_in(self.thunk, &config, group) }.map_err(JitError::Runtime)
+    }
+
+    /// [`Entry::start_root_in`] reporting on `done` with `tag`
+    /// ([`Runtime::start_root_notify`]): one host thread waits for any of
+    /// several roots on one receiver.
+    ///
+    /// # Errors
+    ///
+    /// [`JitError::Runtime`] if the root cannot start; nothing is sent on
+    /// `done` then.
+    pub fn start_root_notify(
+        self,
+        runtime: &Runtime,
+        config: &EntryConfig,
+        group: &Arc<DetachedGroup>,
+        tag: usize,
+        done: RootDone,
+    ) -> Result<(), JitError> {
+        let config = self.config_keeping_domain(config);
+        runtime.attach(self.jit.code_token());
+        // SAFETY: as in `start_root_in`.
+        unsafe { runtime.start_root_notify(self.thunk, &config, group, tag, done) }
+            .map_err(JitError::Runtime)
+    }
+
     /// `config` with the JIT's trampolines, domain and `unwind_edges`.
     fn config(&self, config: &EntryConfig) -> EntryConfig {
         EntryConfig {
-            callbacks: self.jit.callbacks(),
             domain: self.jit.domain(),
+            ..self.config_keeping_domain(config)
+        }
+    }
+
+    /// `config` with the JIT's trampolines and `unwind_edges`, and its own
+    /// domain.
+    fn config_keeping_domain(&self, config: &EntryConfig) -> EntryConfig {
+        EntryConfig {
+            callbacks: self.jit.callbacks(),
             unwind_edges: self.jit.unwind_edges(),
             ..config.clone()
         }

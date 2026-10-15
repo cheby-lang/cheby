@@ -269,6 +269,7 @@ fn unit() -> MirModule {
                     ret: CType::Void,
                 },
                 args: vec![Operand::Local(cheby_mir::Local::from_u32(0))],
+                blocking: false,
             }),
             Stmt::Drop(cheby_mir::Local::from_u32(0)),
         ],
@@ -395,6 +396,7 @@ fn labs_unit(index: u32, params: &[CType]) -> MirModule {
                     })
                 })
                 .collect(),
+            blocking: false,
         })],
         term: Terminator::Return(Operand::Const(Const::Nil)),
         unwind: Vec::new(),
@@ -493,6 +495,194 @@ fn foreign_imports_by_address_allow_new_signatures() {
     );
 }
 
+/// `g<index>(params…) { _r = call_foreign blocking "<symbol>"(params…) ;
+/// unwind bb1; _b = box _r ; unwind bb1; return _b }`, `bb1: resume`,
+/// precounted with its own edges, as the unwind pass would give an
+/// `@blocking` wrapper whose parameters are unboxed (GAP(blocking-shim)).
+fn blocking_fn(index: u32, symbol: &str, params: &[CType], ret: CType) -> MirModule {
+    use cheby_mir::{BlockId, Local, Rvalue};
+    let g = def(1, index);
+    let param_reprs: Vec<Repr> = params.iter().map(|c| c.repr().unwrap()).collect();
+    let ret_repr = ret.repr().unwrap();
+    let n = u32::try_from(params.len()).unwrap();
+    let boxed = n.checked_add(1).unwrap();
+    let locals = IndexVec::from_raw(
+        param_reprs
+            .iter()
+            .copied()
+            .chain([ret_repr, Repr::Value])
+            .map(|repr| LocalDecl {
+                repr,
+                name: None,
+                ty: None,
+            })
+            .collect(),
+    )
+    .unwrap();
+    let bb0 = Block {
+        params: Vec::new(),
+        stmts: vec![
+            Stmt::Assign {
+                dst: Local::from_u32(n),
+                value: Rvalue::CallForeign {
+                    symbol: symbol.into(),
+                    sig: ForeignSig {
+                        params: params.to_vec(),
+                        ret,
+                    },
+                    args: (0..n).map(|p| Operand::Local(Local::from_u32(p))).collect(),
+                    blocking: true,
+                },
+            },
+            Stmt::Assign {
+                dst: Local::from_u32(boxed),
+                value: Rvalue::Box {
+                    value: Operand::Local(Local::from_u32(n)),
+                    from: ret_repr,
+                },
+            },
+        ],
+        term: Terminator::Return(Operand::Local(Local::from_u32(boxed))),
+        unwind: vec![(0, BlockId::from_u32(1)), (1, BlockId::from_u32(1))],
+    };
+    let resume = Block {
+        params: Vec::new(),
+        stmts: Vec::new(),
+        term: Terminator::Resume,
+        unwind: Vec::new(),
+    };
+    let function = Function {
+        key: FnKey::Item(g),
+        abi: Abi::Cheby,
+        params: (0..n).map(Local::from_u32).collect(),
+        ret: Repr::Value,
+        locals,
+        blocks: IndexVec::from_raw(vec![bb0, resume]).unwrap(),
+        span: Span::new(FileId::new(0), TextRange::new(0, 0)),
+        strings: IndexVec::from_raw(vec!["a.cheby:1:4".into()]).unwrap(),
+        entry_loc: Some(StrId::from_u32(0)),
+        entry_unwind: Some(BlockId::from_u32(1)),
+        precounted: true,
+        borrow: cheby_mir::borrow::BorrowMask::OWNED,
+    };
+    MirModule {
+        unit: UnitKind::Code(ModuleId::from_u32(1)),
+        path: "app".into(),
+        functions: vec![function],
+        callees: vec![CalleeDecl {
+            def: g,
+            sig: AbiSig::owned(Abi::Cheby, param_reprs, Repr::Value),
+        }],
+        layouts: Vec::new(),
+        foreign_layouts: Vec::new(),
+        statics: Vec::new(),
+        names: vec![DefName {
+            def: g,
+            module: "app".into(),
+            item: format!("g{index}").into(),
+        }],
+    }
+}
+
+/// GAP(blocking-shim): an `@blocking` call spills its arguments to a stack
+/// array and calls `cheby_rt_blocking_call` with the address of the shim
+/// `cb$blk$<symbol>`, then tests the flag at `ctx+12`, never the result
+/// (D-734); the shim loads each argument by its C type and stores the
+/// result word. One shim serves every call of a symbol and C signature,
+/// across batches; a later signature of the symbol (a signature-free
+/// import, as a REPL redefinition may give) gets the next number. A unit
+/// without a blocking call never declares `cheby_rt_blocking_call`.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn blocking_calls_go_through_one_shim_per_symbol_and_signature() {
+    let cx = CodegenCx {
+        layouts: &BuiltinLayouts,
+    };
+    let opts = CodegenOptions {
+        capture_clif: true,
+        ..CodegenOptions::default()
+    };
+    let mut m = module();
+    let mut decls = Decls::new(cranelift_module::Module::isa(&m)).unwrap();
+    let int_float = [CType::I64, CType::F64];
+    let units = [
+        blocking_fn(0, "kern", &int_float, CType::I64),
+        blocking_fn(1, "kern", &int_float, CType::I64),
+    ];
+    declare(&mut m, &mut decls, &units, &cx, &opts).unwrap();
+    let clif = define(&mut m, &units, &mut decls, &cx, &opts).unwrap();
+    assert_eq!(clif.len(), 3, "two functions and one shim: {clif:#?}");
+    let load_flag = format!(
+        "load.i32 notrap aligned v0+{}",
+        cheby_runtime::abi::CTX_UNWIND
+    );
+    for text in &clif[..2] {
+        for needle in [
+            "= cheby_rt_blocking_call",
+            "= cb$blk$kern\n",
+            "func_addr",
+            "stack_addr",
+            "bitcast.i64",
+        ] {
+            assert!(text.contains(needle), "{needle:?} in:\n{text}");
+        }
+        // Two words: the `Int` at offset 0, the `Float`'s bits at 8.
+        assert!(text.contains("stack_addr.i64 ss0+8"), "{text}");
+        assert!(!text.contains("ss0+16"), "{text}");
+        // The edge after the blocking call tests the flag; the box tests
+        // its own result, and the entry check releases nothing.
+        assert_eq!(text.matches(&load_flag).count(), 1, "{text}");
+        assert!(
+            !text.contains("= kern"),
+            "the function calls the shim:\n{text}"
+        );
+    }
+    let shim = &clif[2];
+    assert!(shim.starts_with("; cb$blk$kern\n"), "{shim}");
+    for needle in ["= kern", "load.i64", "load.f64", "call_indirect", "store"] {
+        assert!(shim.contains(needle), "{needle:?} in:\n{shim}");
+    }
+    assert!(
+        !shim.contains("cheby_rt_"),
+        "the shim calls only the kernel:\n{shim}"
+    );
+
+    // A later batch: the same symbol and signature reuse the shim; another
+    // signature gets `cb$blk$kern$$1`.
+    let units = [
+        blocking_fn(2, "kern", &int_float, CType::I64),
+        blocking_fn(3, "kern", &[CType::F32], CType::F32),
+    ];
+    declare(&mut m, &mut decls, &units, &cx, &opts).unwrap();
+    let clif = define(&mut m, &units, &mut decls, &cx, &opts).unwrap();
+    assert_eq!(clif.len(), 3, "two functions and one new shim: {clif:#?}");
+    assert!(clif[0].contains("= cb$blk$kern\n"), "{}", clif[0]);
+    assert!(clif[1].contains("= cb$blk$kern$$1\n"), "{}", clif[1]);
+    assert!(clif[2].starts_with("; cb$blk$kern$$1\n"), "{}", clif[2]);
+    assert!(clif[2].contains("load.f32"), "{}", clif[2]);
+
+    // No blocking call, no `cheby_rt_blocking_call`.
+    let mut m = module();
+    let mut decls = Decls::new(cranelift_module::Module::isa(&m)).unwrap();
+    let units = [unit()];
+    declare(&mut m, &mut decls, &units, &cx, &opts).unwrap();
+    let text = define(&mut m, &units, &mut decls, &cx, &opts)
+        .unwrap()
+        .join("\n");
+    assert!(!text.contains("blocking"), "{text}");
+}
+
+/// The blocking shim's name (D-456: the kind first).
+#[test]
+fn blocking_shim_names() {
+    assert_eq!(mangle::blocking_shim("read_all", 0), "cb$blk$read_all");
+    assert_eq!(mangle::blocking_shim("read_all", 2), "cb$blk$read_all$$2");
+    assert_eq!(Kind::Blk.word(), "blk");
+}
+
 /// The runtime functions of the slice (plan §2.1) and the entry check's
 /// releasing slow paths (D-775): their C types, indexes
 /// 24 to 28, the helpers they implement, and the static `Err(Nil)`.
@@ -535,6 +725,14 @@ fn slice_runtime_functions() {
             &[CType::Ptr, CType::U64, CType::Bool][..],
             CType::Bool,
         ),
+        // GAP(blocking-shim): `cheby_rt_blocking_call(ctx, shim, args,
+        // nargs)`.
+        (
+            RuntimeFunc::BlockingCall,
+            29,
+            &[CType::Ptr, CType::Ptr, CType::Ptr, CType::U64][..],
+            CType::U64,
+        ),
     ];
     for (f, index, params, ret) in expected {
         assert_eq!(f.index(), index, "{f:?}");
@@ -542,10 +740,10 @@ fn slice_runtime_functions() {
         assert_eq!(f.ctypes(), (params, ret), "{f:?}");
         assert!(f.on_demand(), "{f:?}");
     }
-    assert_eq!(RuntimeFunc::ALL.len(), 29);
+    assert_eq!(RuntimeFunc::ALL.len(), 30);
     assert_eq!(
         RuntimeFunc::ALL.iter().filter(|f| f.on_demand()).count(),
-        5,
+        6,
         "only the M2 functions are declared on demand"
     );
     assert_eq!(
@@ -611,6 +809,7 @@ fn slice_forms_unit() -> MirModule {
                         ret: CType::I64,
                     },
                     args: vec![Operand::Const(Const::Ctx), Operand::Const(Const::Int(5))],
+                    blocking: false,
                 },
             },
             Stmt::ClearUnwind,
@@ -914,6 +1113,7 @@ fn edges_unit() -> MirModule {
                     ret: CType::Void,
                 },
                 args: vec![Operand::Local(local(1))],
+                blocking: false,
             }),
             Stmt::Assign {
                 dst: local(3),

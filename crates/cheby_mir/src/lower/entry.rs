@@ -369,6 +369,7 @@ fn report_result(
             ret: CType::Void,
         },
         args: vec![Operand::Local(text)],
+        blocking: false,
     }))?;
     b.terminate(Terminator::Return(status(STATUS_ERR)))?;
     Ok(())

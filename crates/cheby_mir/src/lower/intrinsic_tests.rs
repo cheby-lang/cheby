@@ -141,6 +141,7 @@ fn fixture(package: PackageId, scope_run_params: Option<&[Ty]>) -> Fixture {
             symbol: symbol.into(),
             span: sp(file, n.checked_add(32).unwrap()),
             context,
+            blocking: false,
         }),
         body: None,
         entry: None,

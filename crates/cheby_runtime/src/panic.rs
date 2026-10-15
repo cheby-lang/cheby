@@ -315,8 +315,9 @@ unsafe fn location_text(location: Word) -> String {
 /// internal error, never a Cheby panic: it means generated code or the
 /// runtime broke the ABI.
 pub(crate) fn fatal(message: fmt::Arguments<'_>) -> ! {
-    // The process aborts next whether the message could be written.
-    let _ = io::try_write_stderr(&format!("fatal runtime error: {message}\n"));
+    // The process aborts next whether the message could be written; it
+    // goes to the real stream, never to a capture nobody would replay.
+    let _ = io::write_last_words(&format!("fatal runtime error: {message}\n"));
     std::process::abort()
 }
 

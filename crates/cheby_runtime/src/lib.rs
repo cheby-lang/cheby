@@ -20,8 +20,9 @@
 //!   closures), [`consteval`] (constant evaluation's runtime side),
 //!   [`stats`] (counters of allocations and in-place updates), the private
 //!   `tls` (every thread-local of the crate, D-686), `unwind` (unwinding
-//!   by the return flag, D-733) and the private `fiber_ops`
-//!   (scopes, fibers and channels).
+//!   by the return flag, D-733), the private `fiber_ops`
+//!   (scopes, fibers and channels) and the private `pool` (the blocking
+//!   pool, D-683, whose fiber side is `sched::blocking`).
 //! - Kernels, by std module: [`io`], and the private modules `num`, `list`,
 //!   `text`, `bytes`, `env`, `random` (D-656), `runtime_info` (`std::runtime`,
 //!   D-657) and [`hamt`], each registering its symbols in [`symbols`] (plan
@@ -34,6 +35,7 @@ pub mod abi;
 pub mod alloc;
 mod bytes;
 pub mod callback;
+pub mod capture;
 #[doc(hidden)]
 pub mod consteval;
 pub mod ctx;
@@ -54,6 +56,7 @@ pub mod list;
 mod num;
 pub mod object;
 pub mod panic;
+mod pool;
 mod random;
 pub mod rc;
 mod runtime_info;
@@ -75,5 +78,7 @@ pub use entry::{
 };
 pub use layout::{FieldInfo, FieldKind, LayoutError, LayoutInfo, LayoutKind};
 pub use panic::PanicReport;
-pub use sched::{CodeToken, DetachedGroup, Runtime, RuntimeConfig, TeardownReport};
+pub use sched::{
+    CodeToken, DetachedGroup, RootDone, RootHandle, Runtime, RuntimeConfig, TeardownReport,
+};
 pub use symbols::{complete_modules, symbols};

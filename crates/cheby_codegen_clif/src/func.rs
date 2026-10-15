@@ -190,12 +190,15 @@ pub(crate) enum CallTarget {
 
 /// A C function that a statement with an unwind edge calls (D-698): a
 /// runtime function (a helper, `cheby_rt_alloc`, a boxing function,
-/// `cheby_rt_panic`, a stack slow path, `cheby_rt_const_missing`), or a
-/// foreign kernel by its symbol and C signature.
+/// `cheby_rt_panic`, a stack slow path, `cheby_rt_const_missing`), a
+/// foreign kernel by its symbol and C signature, or an `@blocking` foreign
+/// function, called on the blocking pool through its shim
+/// (`blocking.rs`, GAP(blocking-shim)).
 #[derive(Clone, Debug)]
 pub(crate) enum CCallee {
     Runtime(RuntimeFunc),
     Foreign { symbol: Box<str>, sig: ForeignSig },
+    Blocking { symbol: Box<str>, sig: ForeignSig },
 }
 
 pub(crate) fn unsupported(what: &str) -> CodegenError {
@@ -801,7 +804,30 @@ impl Translator<'_, '_> {
         Ok(Some(match value {
             Rvalue::Use(op) => self.operand(op)?,
             Rvalue::Call { callee, args } => return self.call(callee, args, false),
-            Rvalue::CallForeign { symbol, sig, args } => {
+            Rvalue::CallForeign {
+                symbol,
+                sig,
+                args,
+                blocking: true,
+            } => {
+                let vals = self.operands(args)?;
+                let callee = CCallee::Blocking {
+                    symbol: symbol.clone(),
+                    sig: sig.clone(),
+                };
+                // The edge tests the flag after the call, never the result,
+                // which may be 0 (D-734, `unwind/flag.rs`).
+                if let Some(pad) = self.pad {
+                    return self.unwind_c_call(&callee, &vals, pad);
+                }
+                return self.emit_c_call(&callee, &vals);
+            }
+            Rvalue::CallForeign {
+                symbol,
+                sig,
+                args,
+                blocking: false,
+            } => {
                 let vals = self.operands(args)?;
                 if let Some(pad) = self.pad {
                     let callee = CCallee::Foreign {
@@ -1097,6 +1123,7 @@ impl Translator<'_, '_> {
         match callee {
             CCallee::Runtime(f) => self.runtime_call(*f, args),
             CCallee::Foreign { symbol, sig } => self.foreign_call(symbol, sig, args),
+            CCallee::Blocking { symbol, sig } => self.blocking_call(symbol, sig, args),
         }
     }
 

@@ -355,6 +355,7 @@ fn kernels_call_closures_through_trampolines() {
                             ret: cheby_mir::CType::Ptr,
                         },
                         args: vec![op(0), op(1)],
+                        blocking: false,
                     },
                 ),
                 Stmt::Drop(local(0)),

@@ -186,6 +186,7 @@ fn helpers() -> Function {
                     ret: CType::I64,
                 },
                 args: vec![local(pushed)],
+                blocking: false,
             },
         )
         .unwrap();
@@ -295,6 +296,7 @@ fn unwind_classifies_what_may_unwind() {
                 ret: CType::Void,
             },
             args: Vec::new(),
+            blocking: false,
         },
         Rvalue::CallRuntime {
             func: RuntimeFn::EffectCheck,
@@ -787,6 +789,7 @@ fn println(text: Operand) -> Rvalue {
             ret: CType::Void,
         },
         args: vec![text],
+        blocking: false,
     }
 }
 
@@ -802,8 +805,21 @@ fn unwind_never_raising_kernels_get_no_edge() {
                 ret: CType::Void,
             },
             args: Vec::new(),
+            blocking: false,
         };
         assert!(!rvalue_may_unwind(&call), "{symbol}");
+        // GAP(blocking-shim): a blocking call raises a cancellation after
+        // it returns, whatever its symbol.
+        let blocking = Rvalue::CallForeign {
+            symbol: symbol.into(),
+            sig: ForeignSig {
+                params: Vec::new(),
+                ret: CType::Void,
+            },
+            args: Vec::new(),
+            blocking: true,
+        };
+        assert!(rvalue_may_unwind(&blocking));
     }
     // `_0` is printed, then passed to a kernel that may raise.
     let mut b = builder(0);
@@ -819,6 +835,7 @@ fn unwind_never_raising_kernels_get_no_edge() {
                     ret: CType::I64,
                 },
                 args: vec![local(message)],
+                blocking: false,
             },
         )
         .unwrap();

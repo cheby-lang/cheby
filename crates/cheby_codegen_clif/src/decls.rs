@@ -9,8 +9,9 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use cheby_iface::{DefId, ModuleId};
 use cheby_mir::{
-    AbiSig, BuiltinDesc, Const, DefName, EntryKind, FnKey, Function, LayoutDesc, LayoutRef,
-    MirModule, Operand, Rvalue, StaticKind, StaticObject, Stmt, StrId, Terminator, UnitKind,
+    AbiSig, BuiltinDesc, Const, DefName, EntryKind, FnKey, ForeignSig, Function, LayoutDesc,
+    LayoutRef, MirModule, Operand, Rvalue, StaticKind, StaticObject, Stmt, StrId, Terminator,
+    UnitKind,
 };
 use cheby_runtime::abi;
 
@@ -156,6 +157,16 @@ pub struct Decls {
     /// (the JIT's all-or-nothing batches).
     pub(crate) defined_data: FxHashSet<DataId>,
     pub(crate) defined_funcs: FxHashSet<FuncId>,
+    /// The shims of `@blocking` foreign calls (D-683, GAP(blocking-shim)),
+    /// by symbol and C signature, each defined once per JIT like a
+    /// trampoline (`blocking.rs`).
+    blocking_shims: FxHashMap<(Box<str>, ForeignSig), FuncId>,
+    /// How many shims each blocking symbol has, which numbers the next
+    /// one ([`mangle::blocking_shim`]).
+    blocking_variants: FxHashMap<Box<str>, u32>,
+    /// The shims declared and not defined yet, in declaration order:
+    /// [`crate::define`] defines them with its batch.
+    pub(crate) pending_shims: Vec<(FuncId, Box<str>, ForeignSig)>,
 }
 
 impl std::fmt::Debug for Decls {
@@ -322,6 +333,9 @@ impl Decls {
             pending_statics: Vec::new(),
             defined_data: FxHashSet::default(),
             defined_funcs: FxHashSet::default(),
+            blocking_shims: FxHashMap::default(),
+            blocking_variants: FxHashMap::default(),
+            pending_shims: Vec::new(),
         })
     }
 
@@ -525,6 +539,21 @@ impl Decls {
         self.foreign
             .get(symbol)
             .ok_or_else(|| CodegenError::ice(format!("foreign `{symbol}` was not declared")))
+    }
+
+    /// The shim of the blocking foreign function `symbol` called with the C
+    /// signature `sig` (`blocking.rs`).
+    pub(crate) fn blocking_shim(
+        &self,
+        symbol: &str,
+        sig: &ForeignSig,
+    ) -> Result<FuncId, CodegenError> {
+        self.blocking_shims
+            .get(&(Box::from(symbol), sig.clone()))
+            .copied()
+            .ok_or_else(|| {
+                CodegenError::ice(format!("the blocking shim of `{symbol}` was not declared"))
+            })
     }
 
     pub(crate) fn layout(&self, layout: LayoutRef) -> Result<&LayoutDecl, CodegenError> {
@@ -1265,13 +1294,27 @@ impl Decls {
         for block in &function.blocks {
             for stmt in &block.stmts {
                 let (Stmt::Assign {
-                    value: Rvalue::CallForeign { symbol, sig, .. },
+                    value:
+                        Rvalue::CallForeign {
+                            symbol,
+                            sig,
+                            blocking,
+                            ..
+                        },
                     ..
                 }
-                | Stmt::Eval(Rvalue::CallForeign { symbol, sig, .. })) = stmt
+                | Stmt::Eval(Rvalue::CallForeign {
+                    symbol,
+                    sig,
+                    blocking,
+                    ..
+                })) = stmt
                 else {
                     continue;
                 };
+                if *blocking {
+                    self.declare_blocking_shim(module, symbol, sig)?;
+                }
                 let signature = sig::foreign_signature(sig, self.call_conv);
                 if let Some(existing) = self.foreign.get(symbol) {
                     if let ForeignDecl::Function(_, existing) = existing
@@ -1305,6 +1348,36 @@ impl Decls {
                 self.foreign.insert(symbol.clone(), decl);
             }
         }
+        Ok(())
+    }
+
+    /// Declares the shim of the blocking foreign function `symbol` called
+    /// with the C signature `sig`, and `cheby_rt_blocking_call`, unless an
+    /// earlier unit or batch did (`blocking.rs`, GAP(blocking-shim)). The
+    /// first signature of a symbol names its shim `cb$blk$<symbol>`; a
+    /// later one, which only signature-free imports allow, gets the next
+    /// number ([`mangle::blocking_shim`]).
+    fn declare_blocking_shim<M: Module>(
+        &mut self,
+        module: &mut M,
+        symbol: &str,
+        sig: &ForeignSig,
+    ) -> Result<(), CodegenError> {
+        let key = (Box::<str>::from(symbol), sig.clone());
+        if self.blocking_shims.contains_key(&key) {
+            return Ok(());
+        }
+        self.declare_runtime_func(module, RuntimeFunc::BlockingCall)?;
+        let variant = self.blocking_variants.entry(key.0.clone()).or_insert(0);
+        let name = mangle::blocking_shim(symbol, *variant);
+        *variant = variant.saturating_add(1);
+        let signature = crate::blocking::shim_signature(self.call_conv);
+        let id = module
+            .declare_function(&name, Linkage::Local, &signature)
+            .map_err(|e| CodegenError::module(&e))?;
+        self.names.insert((0, id.as_u32()), name);
+        self.blocking_shims.insert(key.clone(), id);
+        self.pending_shims.push((id, key.0, key.1));
         Ok(())
     }
 }

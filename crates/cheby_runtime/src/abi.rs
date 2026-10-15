@@ -557,6 +557,13 @@ pub mod sym {
     /// [`STACK_SLOW_UNWIND`] for the outer function of a large frame, through
     /// [`STACK_SLOW_FRAME`] (D-743, D-775).
     pub const STACK_SLOW_FRAME_UNWIND: &str = "cheby_rt_stack_slow_frame_unwind";
+    /// `uint64_t cheby_rt_blocking_call(ExecCtx *ctx, void (*shim)(const uint64_t *args,
+    /// uint64_t *out), const uint64_t *args, size_t nargs)`: an `@blocking` call (D-683,
+    /// GAP(blocking-shim)). Copies the `nargs` argument words, runs `shim` on them on the
+    /// blocking pool while the fiber is parked (inline without a runtime), and returns the
+    /// word `shim` stored, unchanged; a cancellation that arrived meanwhile raises through
+    /// the flag at [`super::CTX_UNWIND`], never through the result, which may be 0 (D-670, D-734).
+    pub const BLOCKING_CALL: &str = "cheby_rt_blocking_call";
     /// Std externals whose bodies the compiler generates (D-693). Never
     /// registered.
     pub const INTRINSICS: [&str; 1] = ["cheby_rt_scope_run"];
@@ -628,7 +635,7 @@ pub mod sym {
     /// order `symbols()` lists them first. Kernels
     /// (`cheby_<module>_<function>`) follow in `symbols()`; they come from
     /// each kernel module's registration (plan §4.3.3).
-    pub const ALL: [&str; 62] = [
+    pub const ALL: [&str; 63] = [
         ALLOC,
         DUP,
         DROP,
@@ -668,6 +675,7 @@ pub mod sym {
         STATIC_ERR_NIL,
         STACK_SLOW_UNWIND,
         STACK_SLOW_FRAME_UNWIND,
+        BLOCKING_CALL,
         DESC_SYMBOLS[0],
         DESC_SYMBOLS[1],
         DESC_SYMBOLS[2],
@@ -855,7 +863,7 @@ mod tests {
             assert_eq!(sym::desc_symbol(name), Some(symbol));
         }
         assert_eq!(sym::desc_symbol("dyn"), None);
-        assert_eq!(sym::ALL.get(39..), Some(&sym::DESC_SYMBOLS[..]));
+        assert_eq!(sym::ALL.get(40..), Some(&sym::DESC_SYMBOLS[..]));
         assert_eq!(
             [
                 layout::SENDER,

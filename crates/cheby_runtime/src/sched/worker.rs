@@ -47,6 +47,7 @@
 //! LEAVING --its pinned fibers are gone, the count is still lower--> DEAD
 //! LEAVING --the count went up meanwhile, or the runtime stops--> LIVE (the same thread rejoins)
 //! DEAD --set_thread_count raises the count--> LIVE (a new thread)
+//! LIVE or RETIRING --a stop, nothing runnable, its targeted queue empty--> DEAD (final)
 //! ```
 //!
 //! The retiring worker's running fiber gets a yield request
@@ -67,7 +68,10 @@
 //! runtime's stop and halt join it like every other worker (C-7). A stop
 //! that is not a halt runs every runnable fiber first, so a worker that is
 //! retiring when it begins stays, and one that is leaving rejoins; both end
-//! as live workers do, once nothing is runnable.
+//! as live workers do, once nothing is runnable: under the targeted
+//! queue's lock with that queue empty, marking the slot `DEAD`, so a fiber
+//! pushed there afterwards goes to the global queue, or, if pinned, is left
+//! alone and counted (GAP(stop-ends-idle-worker)).
 
 use std::ptr;
 use std::sync::OnceLock;
@@ -391,6 +395,26 @@ impl WorkerShared {
         targeted.drain(..).collect()
     }
 
+    /// A live worker's end at a stop (GAP(stop-ends-idle-worker), D-795,
+    /// D-687): under the targeted queue's lock, marks the slot `DEAD` and
+    /// returns true if that queue is empty; otherwise returns false, and
+    /// the worker runs what it holds first. A push decides under the same
+    /// lock, so after this returns true every push here is rejected and
+    /// goes to the global queue (`Shared::push_targeted`), which the
+    /// pushing worker, still running, looks at before it can end. `DEAD`
+    /// stays: once stopping, `set_thread_count` only records the count (one
+    /// that looked at the flag just before the stop may still start a new
+    /// thread here, under the thread registry's lock, which the stop's join
+    /// then waits for; that thread ends here too).
+    pub(super) fn end_if_idle(&self) -> bool {
+        let targeted = self.targeted.lock();
+        if !targeted.is_empty() {
+            return false;
+        }
+        self.life.store(life::DEAD, Ordering::SeqCst);
+        true
+    }
+
     fn has_targeted(&self) -> bool {
         !self.targeted.lock().is_empty()
     }
@@ -502,6 +526,9 @@ pub(super) fn main(shared: &Shared, index: usize) {
 
 impl Worker<'_> {
     fn run(&mut self) {
+        // Whether the worker has looked for a fiber once more, at a stop,
+        // since it last saw a fiber waiting on the blocking pool.
+        let mut looked_after_stop = false;
         loop {
             // A halt (D-073, D-708): take no fiber any more, not even a
             // runnable one, so a requeued spinner is never resumed.
@@ -532,8 +559,35 @@ impl Worker<'_> {
                 self.run_fiber(fiber);
                 continue;
             }
+            // A stop (fixer-w3-1 of checkpoint 3): the worker ends only
+            // with its targeted queue empty, and marks its slot `DEAD` under
+            // that queue's lock, so no fiber is queued here after it ended
+            // (in the migration stress mode another worker sends its fibers
+            // here, D-687); otherwise it runs what arrived. A worker that was
+            // retiring when the stop began, or leaving and rejoined, ends
+            // here too. It does not end while a fiber of the runtime waits
+            // on the blocking pool, whose completion makes it runnable,
+            // unless the stop gave up on the pool; and once none waits, it
+            // looks once more: a pool thread queues its fiber, from outside
+            // the workers, before it lowers the count, so that fiber may
+            // have come after the look above (`blocking::holds_stop`,
+            // GAP(pool-wakes-only-running)).
             if self.shared.stopping() {
-                break;
+                if super::blocking::holds_stop(self.shared) {
+                    looked_after_stop = false;
+                    std::thread::yield_now();
+                    continue;
+                }
+                if !looked_after_stop {
+                    looked_after_stop = true;
+                    continue;
+                }
+                if self.me.end_if_idle() {
+                    #[cfg(test)]
+                    self.shared.probe.stop_exit(self.index);
+                    break;
+                }
+                continue;
             }
             self.searching = self.park();
         }

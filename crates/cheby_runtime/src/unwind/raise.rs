@@ -171,10 +171,11 @@ pub(crate) fn edgeless(report: Option<&PanicReport>) -> ! {
     let _ = io::flush_stdout();
     // D-770 keeps this process exit, so a write that fails here ends the
     // process at once with status 1, as D-306 says, rather than halting a
-    // runtime that this thread may not belong to.
+    // runtime that this thread may not belong to. Both lines go to the real
+    // stream, never to a capture that nobody would replay.
     let report = report.map_or_else(String::new, ToString::to_string);
-    if io::try_write_stderr(&report).is_err()
-        || io::try_write_stderr(&format!("fatal runtime error: {EDGELESS_FATAL}\n")).is_err()
+    if io::write_last_words(&report).is_err()
+        || io::write_last_words(&format!("fatal runtime error: {EDGELESS_FATAL}\n")).is_err()
     {
         std::process::exit(crate::abi::status::ERR)
     }

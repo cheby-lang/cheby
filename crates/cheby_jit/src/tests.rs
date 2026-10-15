@@ -657,6 +657,7 @@ fn calls_natives(symbols: &[&str]) -> Prog {
                     ret: cheby_mir::CType::Void,
                 },
                 args: Vec::new(),
+                blocking: false,
             })
         })
         .collect();
@@ -982,6 +983,7 @@ fn labs_wrapper(index: u32, params: &[cheby_mir::CType], args: &[i64], missing: 
                 ret: cheby_mir::CType::I64,
             },
             args: args.iter().map(sized).collect(),
+            blocking: false,
         },
     )];
     if missing {
@@ -992,6 +994,7 @@ fn labs_wrapper(index: u32, params: &[cheby_mir::CType], args: &[i64], missing: 
                 ret: cheby_mir::CType::Void,
             },
             args: Vec::new(),
+            blocking: false,
         }));
     }
     function(
@@ -1110,6 +1113,7 @@ fn compile_speed_probe() {
     println!("compile_speed_probe: {:?}", start.elapsed());
 }
 
+mod blocking;
 mod borrow;
 mod control;
 mod entry_unwind;

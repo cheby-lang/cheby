@@ -426,8 +426,16 @@ fn rvalue(m: &MirModule, value: &Rvalue) -> Result<String, Ice> {
         Rvalue::Call { callee: c, args } => {
             format!("call {}({})", callee(m, c)?, call_args(m, c, args)?)
         }
-        Rvalue::CallForeign { symbol, sig, args } => format!(
-            "call_foreign \"{}\"({}) -> {}",
+        // The marker appears only on an `@blocking` call, so the dumps of
+        // every other call are unchanged.
+        Rvalue::CallForeign {
+            symbol,
+            sig,
+            args,
+            blocking,
+        } => format!(
+            "call_foreign {}\"{}\"({}) -> {}",
+            if *blocking { "blocking " } else { "" },
             symbol.escape_debug(),
             operands(m, args, "borrow ")?,
             sig.ret

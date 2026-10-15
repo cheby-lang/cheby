@@ -308,23 +308,29 @@ fn fraction(value: Int, width: Int) -> String {
   case value, value % 10 {
     0, _ => ""
     _, 0 => fraction(value / 10, width - 1)
-    _, _ => string::add(".", string::pad_start(int::show(value), width, "0"))
+    _, _ => {
+      let digits = string::pad_start("{value}", width, "0")
+      ".{digits}"
+    }
   }
 }
 
 /// `whole` and the fraction `rest / 10^width`, then `unit`: `1.5ms`.
 fn in_unit(whole: String, rest: Int, width: Int, unit: String) -> String {
-  string::join([whole, fraction(rest, width), unit], "")
+  let digits = fraction(rest, width)
+  "{whole}{digits}{unit}"
 }
 
 /// The text of a span that is not negative, as `whole` seconds written
 /// as the decimal digits `whole` and `nanos` nanoseconds after them.
 fn unsigned_text(whole: String, nanos: Int) -> String {
+  let millis = nanos / 1_000_000
+  let micros = nanos / 1_000
   case {
     whole != "0" => in_unit(whole, nanos, 9, "s")
-    nanos >= 1_000_000 => in_unit(int::show(nanos / 1_000_000), nanos % 1_000_000, 6, "ms")
-    nanos >= 1_000 => in_unit(int::show(nanos / 1_000), nanos % 1_000, 3, "\u{b5}s")
-    _ => string::add(int::show(nanos), "ns")
+    nanos >= 1_000_000 => in_unit("{millis}", nanos % 1_000_000, 6, "ms")
+    nanos >= 1_000 => in_unit("{micros}", nanos % 1_000, 3, "\u{b5}s")
+    _ => "{nanos}ns"
   }
 }
 
@@ -338,21 +344,23 @@ pub fn show(d: Duration) -> String {
   case d.seconds < 0, d.nanoseconds {
     False, 0 => case d.seconds {
       0 => "0s"
-      _ => unsigned_text(int::show(d.seconds), 0)
+      _ => unsigned_text("{d.seconds}", 0)
     }
-    False, _ => unsigned_text(int::show(d.seconds), d.nanoseconds)
+    False, _ => unsigned_text("{d.seconds}", d.nanoseconds)
     True, 0 => {
       let tens = -(d.seconds / 10)
-      let last = int::show(-(d.seconds % 10))
+      let last = -(d.seconds % 10)
       let digits = case tens {
-        0 => last
-        _ => string::add(int::show(tens), last)
+        0 => "{last}"
+        _ => "{tens}{last}"
       }
-      string::add("-", unsigned_text(digits, 0))
+      let text = unsigned_text(digits, 0)
+      "-{text}"
     }
     True, _ => {
-      let whole = int::show(-(d.seconds + 1))
-      string::add("-", unsigned_text(whole, billion - d.nanoseconds))
+      let whole = -(d.seconds + 1)
+      let text = unsigned_text("{whole}", billion - d.nanoseconds)
+      "-{text}"
     }
   }
 }

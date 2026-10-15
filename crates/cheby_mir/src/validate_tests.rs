@@ -177,6 +177,37 @@ fn loc(b: &mut FunctionBuilder) -> StrId {
     b.string("src/main.cheby:2:3").unwrap()
 }
 
+// A blocking foreign call never passes the fiber's context: a pool thread
+// must not receive it (D-191, GAP(blocking-with-std-context)); the same
+// call without the flag is a `@std_context` kernel's and is accepted.
+#[test]
+fn a_blocking_call_takes_no_ctx() {
+    let call = |blocking: bool| {
+        assigning(&[], Repr::Int, |_| Rvalue::CallForeign {
+            symbol: "k".into(),
+            sig: crate::repr::ForeignSig {
+                params: vec![crate::repr::CType::Ptr, crate::repr::CType::I64],
+                ret: crate::repr::CType::I64,
+            },
+            args: vec![Operand::Const(Const::Ctx), int(1)],
+            blocking,
+        })
+    };
+    ok(call(false));
+    rejected(call(true), "a blocking foreign call passes ctx");
+    ok(assigning(&[Repr::Float], Repr::Int, |ps| {
+        Rvalue::CallForeign {
+            symbol: "k".into(),
+            sig: crate::repr::ForeignSig {
+                params: vec![crate::repr::CType::I64, crate::repr::CType::F64],
+                ret: crate::repr::CType::I64,
+            },
+            args: vec![int(1), local(ps[0])],
+            blocking: true,
+        }
+    }));
+}
+
 // Operators on raw values.
 
 #[test]

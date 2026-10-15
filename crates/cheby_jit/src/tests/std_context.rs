@@ -52,6 +52,7 @@ fn context_wrapper(p: &mut Prog) -> DefId {
                             ret: CType::I64,
                         },
                         args: vec![Operand::Const(Const::Ctx), op(0), op(1)],
+                        blocking: false,
                     },
                 ),
                 assign(

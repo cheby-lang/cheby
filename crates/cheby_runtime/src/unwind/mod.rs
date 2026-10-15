@@ -336,11 +336,14 @@ mod tests {
     #[test]
     fn an_io_kernel_raises_at_the_memory_limit() {
         let ran = on_flag_entry(EntryMode::Test, None, Callbacks::default(), |ctx| {
-            let read = kernel!("cheby_io_sys_read_file" as unsafe extern "C" fn(Word) -> Word);
+            let read = kernel!(
+                "cheby_io_sys_read_file" as unsafe extern "C" fn(*mut ExecCtx, Word) -> Word
+            );
             let path = values::string("/nonexistent/cheby/unwind/test");
             exhaust(ctx);
-            // SAFETY: a live string, borrowed.
-            let result = unsafe { read(path) };
+            // SAFETY: the running entry's context (an isolated entry: the
+            // read runs inline, D-692) and a live string, borrowed.
+            let result = unsafe { read(std::ptr::from_ref(ctx).cast_mut(), path) };
             let flag = flag_of(ctx);
             unlimit(ctx);
             // SAFETY: the test's reference.

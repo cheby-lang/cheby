@@ -36,6 +36,7 @@ use crate::object::{
 };
 use crate::panic::{cheby_rt_panic, cheby_rt_stack_slow, cheby_rt_stack_slow_frame};
 use crate::rc::{cheby_rt_drop, cheby_rt_dup};
+use crate::sched::blocking::cheby_rt_blocking_call;
 use crate::unwind::entry_slow::{cheby_rt_stack_slow_frame_unwind, cheby_rt_stack_slow_unwind};
 use crate::{
     bytes, consteval, desc, env, fiber_ops, hamt, io, list, num, random, runtime_info, text,
@@ -52,7 +53,7 @@ fn data<T>(object: &'static T) -> *const u8 {
     clippy::as_conversions,
     reason = "taking the address of a function needs an `as` cast"
 )]
-fn runtime_symbols() -> [(&'static str, *const u8); 39] {
+fn runtime_symbols() -> [(&'static str, *const u8); 40] {
     [
         (sym::ALLOC, cheby_rt_alloc as *const u8),
         (sym::DUP, cheby_rt_dup as *const u8),
@@ -108,6 +109,7 @@ fn runtime_symbols() -> [(&'static str, *const u8); 39] {
             sym::STACK_SLOW_FRAME_UNWIND,
             cheby_rt_stack_slow_frame_unwind as *const u8,
         ),
+        (sym::BLOCKING_CALL, cheby_rt_blocking_call as *const u8),
     ]
 }
 
@@ -380,27 +382,37 @@ mod tests {
 
     /// Every kernel of `std::string`, `std::bytes`, `std::io` and
     /// `std::env` has the C signature of its `@external` declaration in
-    /// `std/` (plan §6). The numeric modules check theirs in `num`'s tests.
+    /// `std/` (plan §6), after the context pointer for a `@std_context`
+    /// kernel, and carries `@std_context` exactly when its native function
+    /// takes that pointer (D-692): io's five suspending kernels, which run
+    /// on the blocking pool (D-683), and no other. The numeric modules
+    /// check theirs in `num`'s tests.
     #[test]
     fn text_bytes_io_and_env_kernels_match_their_declarations() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std");
         let mut declared = BTreeMap::new();
+        let mut declared_context = BTreeSet::new();
         for module in ["string", "bytes", "io", "env"] {
             let source = std::fs::read_to_string(root.join(format!("{module}.cheby"))).unwrap();
-            let mut pending: Option<String> = None;
-            for line in source.lines() {
-                if let Some(symbol) = native_symbols(line).pop() {
-                    pending = Some(symbol);
-                    continue;
+            for (symbol, context, signature) in kernel_declarations(&source) {
+                if context {
+                    declared_context.insert(symbol.clone());
                 }
-                if pending.is_some()
-                    && let Some(signature) = c_signature(line)
-                    && let Some(symbol) = pending.take()
-                {
-                    declared.insert(symbol, signature);
-                }
+                assert!(
+                    declared.insert(symbol.clone(), signature).is_none(),
+                    "{symbol} is declared twice"
+                );
             }
         }
+        let registered_context: BTreeSet<String> = io::CONTEXT_KERNELS
+            .iter()
+            .map(|&name| name.to_owned())
+            .collect();
+        assert_eq!(
+            registered_context, declared_context,
+            "the kernels that take the context pointer and the `@std_context` declarations differ"
+        );
+        assert_eq!(registered_context.len(), 5);
         let mut registered = BTreeMap::new();
         for (name, params, result) in [
             text::signatures(),

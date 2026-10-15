@@ -1,5 +1,5 @@
-//! Tests of the lifecycle (D-073, D-669, D-708 to D-710, D-723, D-782,
-//! D-785, D-786): teardown of a detached group wherever its fibers wait,
+//! Tests of the lifecycle (D-073, D-669, D-683, D-708 to D-710, D-723,
+//! D-782, D-785, D-786): teardown of a detached group wherever its fibers wait,
 //! the halt, termination as an outcome and the code tokens' order. They use
 //! the harness of `fiber_ops::detached_tests` (Rust actions run through a
 //! test trampoline), read `CHEBY_RT_STRESS_MIGRATE`, and run at 1, 2 and 4
@@ -493,10 +493,13 @@ fn child_within_limit(name: &str, child: &str) -> (std::process::ExitStatus, Str
     (status, stderr)
 }
 
-/// D-786: a detached fiber blocked inline in `io::read_line` on a pipe
-/// that stays open cannot be stopped: the teardown skips it and counts it,
-/// `shutdown` leaves its worker running, never joined, and the process
-/// exits promptly with status 0 (debug and release builds).
+/// D-786, GAP(pool-in-the-survey): a detached fiber waiting on the
+/// blocking pool in `io::read_line` on a pipe that stays open cannot be
+/// stopped: it stays marked while the job runs, so the teardown skips it
+/// and counts it; `shutdown` joins every worker (the fiber holds none),
+/// the job's completion later wakes nothing (GAP(pool-wakes-only-running)),
+/// and the process exits promptly with status 0 (debug and release
+/// builds). The name predates the pool, when the read blocked its worker.
 #[test]
 #[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
 fn lifecycle_teardown_skips_inline_io() {
@@ -508,7 +511,8 @@ fn lifecycle_teardown_skips_inline_io() {
         let group = DetachedGroup::new();
         let outcome = testing::start_root_in(&runtime, &config(&domain), &group, |me| {
             detach(me, |me| {
-                let line = crate::io::cheby_io_sys_read_line();
+                // SAFETY: the running fiber's context.
+                let line = unsafe { crate::io::cheby_io_sys_read_line(ctx_ptr(me)) };
                 release(line);
                 if unwinding(me) { 0 } else { values::nil() }
             });
@@ -532,10 +536,11 @@ fn lifecycle_teardown_skips_inline_io() {
     assert!(stderr.contains("skipped 1\n"), "{stderr}");
 }
 
-/// D-786 (review finding CONC-W2-1 of gate 2): the fiber blocked inline is
+/// D-786, D-804 (review finding CONC-W2-1 of gate 2): the blocked fiber is
 /// not a member but a scoped child of one. The detached fiber waits in its
-/// scope's close for a child blocked in `io::read_line` on a pipe that
-/// stays open, and a spinning sibling is cancelled and leaves. The
+/// scope's close for a child blocked in `io::read_line` (on the blocking
+/// pool, marked, GAP(pool-in-the-survey)) on a pipe that stays open, and a
+/// spinning sibling is cancelled and leaves. The
 /// teardown skips the member, counts the blocked child, and the process
 /// exits promptly with status 0. Before the fix the teardown polled until
 /// the read returned.
@@ -553,7 +558,8 @@ fn lifecycle_teardown_skips_a_scoped_child_blocked_in_inline_io() {
             detach(me, |me| {
                 let scope = open_scope(me);
                 release(spawn_into(me, scope, |me| {
-                    let line = crate::io::cheby_io_sys_read_line();
+                    // SAFETY: the running fiber's context.
+                    let line = unsafe { crate::io::cheby_io_sys_read_line(ctx_ptr(me)) };
                     release(line);
                     if unwinding(me) { 0 } else { values::nil() }
                 }));
@@ -582,9 +588,10 @@ fn lifecycle_teardown_skips_a_scoped_child_blocked_in_inline_io() {
     assert!(stderr.contains("skipped 1\n"), "{stderr}");
 }
 
-/// D-786: a teardown does not skip a member whose subtree still makes
-/// progress. The detached fiber waits in its scope's close for a child
-/// blocked in `io::read_line` and for a sibling that, once cancelled,
+/// D-786, D-804: a teardown does not skip a member whose subtree still
+/// makes progress. The detached fiber waits in its scope's close for a
+/// child blocked in `io::read_line` (on the blocking pool, marked) and for
+/// a sibling that, once cancelled,
 /// keeps running for 100 ms before it unwinds; the teardown waits for the
 /// sibling to leave (it ran past the 100 ms) before it skips the member.
 #[test]
@@ -603,7 +610,8 @@ fn lifecycle_teardown_waits_for_a_busy_sibling_of_a_blocked_fiber() {
             detach(me, move |me| {
                 let scope = open_scope(me);
                 release(spawn_into(me, scope, |me| {
-                    let line = crate::io::cheby_io_sys_read_line();
+                    // SAFETY: the running fiber's context.
+                    let line = unsafe { crate::io::cheby_io_sys_read_line(ctx_ptr(me)) };
                     release(line);
                     if unwinding(me) { 0 } else { values::nil() }
                 }));
@@ -634,6 +642,61 @@ fn lifecycle_teardown_waits_for_a_busy_sibling_of_a_blocked_fiber() {
         assert!(
             finished.load(Ordering::SeqCst),
             "the teardown skipped while a sibling still ran"
+        );
+        runtime.shutdown();
+        eprintln!("skipped {}", report.skipped);
+        return;
+    }
+    let (status, stderr) = child_within_limit(NAME, CHILD);
+    assert!(status.success(), "{status}: {stderr}");
+    assert!(stderr.contains("skipped 1\n"), "{stderr}");
+}
+
+/// GAP(pool-thread-refused), D-786: when the system refuses a blocking-pool
+/// thread and none runs, `io::read_line` runs inline on its worker, marked,
+/// with the hand-off: the teardown skips the reader and counts it,
+/// `shutdown` leaves that worker running, never joined, and the process
+/// exits promptly with status 0.
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+fn lifecycle_teardown_skips_io_inline_after_a_refused_pool_thread() {
+    const CHILD: &str = "CHEBY_RT_TEST_TEARDOWN_REFUSED_POOL";
+    const NAME: &str =
+        "sched::lifecycle_tests::lifecycle_teardown_skips_io_inline_after_a_refused_pool_thread";
+    if std::env::var_os(CHILD).is_some() {
+        let pool = crate::pool::Pool::global();
+        pool.refuse_threads(true);
+        let runtime = runtime(2);
+        let domain = Domain::new();
+        let group = DetachedGroup::new();
+        let outcome = testing::start_root_in(&runtime, &config(&domain), &group, |me| {
+            detach(me, |me| {
+                // SAFETY: the running fiber's context.
+                let line = unsafe { crate::io::cheby_io_sys_read_line(ctx_ptr(me)) };
+                release(line);
+                if unwinding(me) { 0 } else { values::nil() }
+            });
+            values::nil()
+        })
+        .recv_timeout(HANG)
+        .unwrap();
+        assert!(matches!(outcome, EntryOutcome::Returned(_)), "{outcome:?}");
+        wait_until(|| group.blocked() == 1);
+        // The submission counts a thread while it tries to start one, so
+        // both conditions are awaited, briefly.
+        let started = Instant::now();
+        while !(pool.threads() == 0 && (0..2).any(|index| runtime.shared.worker_blocked(index))) {
+            assert!(
+                started.elapsed() < Duration::from_secs(2),
+                "the read does not block a worker inline ({} pool threads)",
+                pool.threads()
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let report = runtime.teardown(&group);
+        assert_eq!(
+            (report.waited, report.skipped, report.halted),
+            (0, 1, false)
         );
         runtime.shutdown();
         eprintln!("skipped {}", report.skipped);

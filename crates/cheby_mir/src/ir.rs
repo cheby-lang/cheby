@@ -645,10 +645,19 @@ pub enum Rvalue {
     /// [`Repr::Value`] result.
     Call { callee: Callee, args: Vec<Operand> },
     /// A C-ABI call: borrowed arguments, an owned result (D-187).
+    ///
+    /// With `blocking`, the call of an `@blocking` external (D-042, D-683):
+    /// code generation runs the foreign function on the blocking pool
+    /// through a generated shim and `cheby_rt_blocking_call`, while the
+    /// fiber is parked (GAP(blocking-shim)). Such a call may always raise
+    /// (a cancellation after it returns), whatever its symbol, and never
+    /// takes the fiber's context ([`Const::Ctx`]): `@std_context` and
+    /// `@blocking` do not go together (GAP(blocking-with-std-context)).
     CallForeign {
         symbol: Box<str>,
         sig: ForeignSig,
         args: Vec<Operand>,
+        blocking: bool,
     },
     /// A runtime helper, with the ownership [`RuntimeFn`] documents.
     CallRuntime { func: RuntimeFn, args: Vec<Operand> },

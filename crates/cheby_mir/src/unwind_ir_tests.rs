@@ -199,6 +199,7 @@ fn context_wrapper() -> Function {
                     ret: CType::I64,
                 },
                 args: vec![Operand::Const(Const::Ctx), local(n)],
+                blocking: false,
             },
         )
         .unwrap();

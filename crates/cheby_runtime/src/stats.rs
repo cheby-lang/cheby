@@ -115,7 +115,7 @@ pub struct Stats {
     entry_nanos: AtomicU64,
     /// Debug leak checks skipped because the system allocator refused a
     /// request of the domain (D-771), or because a teardown left a fiber
-    /// blocked inline in input or output (D-786).
+    /// blocked in input or output, on the blocking pool or inline (D-786).
     leak_checks_skipped: AtomicU64,
 }
 
@@ -165,7 +165,7 @@ impl Stats {
 
     /// Counts a debug leak check that was skipped: the system allocator
     /// refused a request of the domain (D-771), or a teardown left a fiber
-    /// blocked inline in input or output (D-786).
+    /// blocked in input or output, on the blocking pool or inline (D-786).
     pub fn skip_leak_check(&self) {
         self.leak_checks_skipped.fetch_add(1, Ordering::Relaxed);
     }

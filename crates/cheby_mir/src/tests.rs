@@ -85,6 +85,7 @@ fn print(arg: Local) -> Stmt {
             ret: CType::Void,
         },
         args: vec![local(arg)],
+        blocking: false,
     })
 }
 

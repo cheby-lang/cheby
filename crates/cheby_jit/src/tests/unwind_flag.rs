@@ -458,6 +458,7 @@ fn unwind_flag_through_a_trampoline() {
             ret: CType::Ptr,
         },
         args,
+        blocking: false,
     };
     let f = p.item(
         0,

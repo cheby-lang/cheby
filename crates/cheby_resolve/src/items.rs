@@ -22,7 +22,10 @@
 //! of its module that implement its equality, hashing and debug printing,
 //! and `@std_context`, without arguments on a function with an `@external`,
 //! makes its native kernel receive the running fiber's context first.
-//! In any other package they are unknown attributes.
+//! In any other package they are unknown attributes. `@std_context` on a
+//! `@blocking` function is E0045, since a blocking kernel runs on a pool
+//! thread, which never receives the context (D-191,
+//! GAP(blocking-with-std-context)).
 
 use cheby_diag::{Diagnostic, Span, codes};
 use cheby_iface::{DefIndex, DefKind, Ice, IndexVec, Name, Namespace, PackageId, Vis};
@@ -549,7 +552,24 @@ impl Cx<'_, '_> {
             }
         }
         if let Some(span) = std_context {
-            if is_fn && has_external {
+            if let (true, Some(first)) = (out.blocking, blocking) {
+                // GAP(blocking-with-std-context): a blocking call runs its
+                // kernel on a pool thread, which must never receive the
+                // fiber's context (D-191, D-683). The function keeps
+                // `@blocking`.
+                self.diags.push(
+                    Diagnostic::new(
+                        codes::INVALID_ATTRIBUTE,
+                        "`@std_context` is not allowed on a `@blocking` function",
+                    )
+                    .with_primary(span, "")
+                    .with_secondary(first, "`@blocking` here")
+                    .with_note(
+                        "a blocking call runs on a pool thread, which never receives the \
+                         running fiber's context",
+                    ),
+                );
+            } else if is_fn && has_external {
                 out.std_context = true;
             } else {
                 self.misplaced(
@@ -1164,6 +1184,46 @@ mod tests {
         };
         assert!(blocking("a"));
         assert!(blocking("g"));
+    }
+
+    // GAP(blocking-with-std-context): `@std_context` hands the fiber's
+    // context to the kernel, and a blocking kernel runs on a pool thread
+    // (D-191), so the two never go together. In either order the function
+    // keeps `@blocking` and loses `@std_context`.
+    #[test]
+    fn blocking_with_std_context_is_e0045() {
+        let r = resolve_in(
+            PackageId::STD,
+            Targets::ALL,
+            "@external(native, \"a\")\n@blocking\n@std_context\nfn a()\n\n@external(native, \"b\")\n@std_context\n@blocking\nfn b()\n\n@external(native, \"c\")\n@std_context\nfn c()\n\n@external(native, \"d\")\n@blocking\nfn d()\n",
+        );
+        assert_eq!(
+            r.messages(),
+            [
+                "E0045: `@std_context` is not allowed on a `@blocking` function",
+                "E0045: `@std_context` is not allowed on a `@blocking` function",
+            ]
+        );
+        let attrs = |name: &str| {
+            let attrs = &r
+                .module
+                .items
+                .iter()
+                .find(|i| r.globals.names.get(i.name) == name)
+                .unwrap()
+                .attrs;
+            (attrs.blocking, attrs.std_context)
+        };
+        assert_eq!(attrs("a"), (true, false));
+        assert_eq!(attrs("b"), (true, false));
+        assert_eq!(attrs("c"), (false, true));
+        assert_eq!(attrs("d"), (true, false));
+        let labels: Vec<&str> = r.diags[0]
+            .labels
+            .iter()
+            .map(|l| l.message.as_str())
+            .collect();
+        assert_eq!(labels, ["", "`@blocking` here"]);
     }
 
     #[test]

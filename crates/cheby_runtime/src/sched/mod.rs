@@ -35,6 +35,7 @@
 //!   halt ([`Runtime::halt`]) freezes every fiber instead, and a
 //!   termination (D-709) starts one.
 
+pub(crate) mod blocking;
 mod fiber;
 mod idle;
 mod lifecycle;
@@ -60,7 +61,7 @@ pub(crate) use fiber::{
     leave_callback, park,
 };
 pub(crate) use lifecycle::terminate;
-pub use lifecycle::{DetachedGroup, TeardownReport};
+pub use lifecycle::{DetachedGroup, RootDone, RootHandle, TeardownReport};
 pub(crate) use timer::{Deadline, TimerHandle, TimerTarget, deadline_after};
 pub(crate) use wait::{WaitHeader, WaitNode, WaitQueue, WaitState};
 
@@ -263,6 +264,27 @@ pub(crate) struct Shared {
     roots: Mutex<Vec<(u64, mpsc::Sender<EntryOutcome>)>>,
     /// The next root number.
     next_root: AtomicU64,
+    /// The code the runtime's fibers may run (D-708): released by the
+    /// host's stop or halt once every worker is joined. A blocking-pool
+    /// job holds clones of these tokens while it runs (`blocking`), so
+    /// code a pool thread runs outlives a stop.
+    code: Mutex<Vec<CodeToken>>,
+    /// Pinned fibers woken after their worker ended at a stop, left alone
+    /// (GAP(stop-ends-idle-worker)); [`Shared::left_at_stop`] reads it.
+    left_at_stop: AtomicUsize,
+    /// Set once by the host's stop when it gives up on the fibers waiting
+    /// on the blocking pool (GAP(pool-wakes-only-running),
+    /// `blocking::poll_stop`): from then on a pool completion wakes
+    /// nothing, the workers end without waiting for it, and a blocking call
+    /// runs inline, as after a refused pool thread.
+    pool_given_up: AtomicBool,
+    /// This runtime's fibers that submitted a pool job whose completion
+    /// has not finished its wake yet (`blocking`): while it is above 0, a
+    /// worker does not end at a stop that has not given up.
+    pool_waiting: AtomicUsize,
+    /// The completions of this runtime's pool jobs so far: the stop gives
+    /// up only when none came between its two polls.
+    pool_done: AtomicU64,
     /// Test hooks of the monitor.
     #[cfg(test)]
     probe: testing::MonitorProbe,
@@ -522,6 +544,21 @@ impl Shared {
         self.halting.load(Ordering::SeqCst)
     }
 
+    /// How many pinned fibers a stop left alone after their worker ended
+    /// (GAP(stop-ends-idle-worker)). `run_main` reads it after the stop:
+    /// above 0, its leak check is skipped and the skip counted, as for a
+    /// fiber the teardown skipped (UQ-5 (a), D-786, D-710).
+    pub(crate) fn left_at_stop(&self) -> usize {
+        self.left_at_stop.load(Ordering::SeqCst)
+    }
+
+    /// A test hook: counts one more pinned fiber left alone at a stop, as
+    /// [`Shared::push_targeted`] does.
+    #[cfg(test)]
+    pub(crate) fn count_left_at_stop(&self) {
+        self.left_at_stop.fetch_add(1, Ordering::SeqCst);
+    }
+
     /// The runtime's default group: `run_root`'s roots' (D-799).
     pub(crate) fn default_group(&self) -> &Arc<DetachedGroup> {
         &self.default_group
@@ -566,10 +603,16 @@ impl Shared {
     }
 
     /// Whether worker `index` runs a fiber blocked inline in a system
-    /// call (D-786).
+    /// call (D-786): marked and `RUNNING`. A fiber parking on the blocking
+    /// pool is marked only once it is `PARKING` (`blocking::on_pool`), so
+    /// it is never taken for one (GAP(pool-wakes-only-running)); while the
+    /// look runs, its worker cannot requeue it.
     fn worker_blocked(&self, index: usize) -> bool {
         self.look_at_running(index, |fiber| {
-            fiber.is_some_and(|fiber| fiber.sched.blocking())
+            fiber.is_some_and(|fiber| {
+                fiber.sched.blocking()
+                    && fiber.sched.state().load(Ordering::SeqCst) == fiber::state::RUNNING
+            })
         })
     }
 
@@ -639,7 +682,9 @@ impl Shared {
     /// Queues a fiber only worker `index` may run, waking it if parked. A
     /// worker that is leaving is out of `Idle` and is woken directly; one
     /// that has ended takes no fiber, so an unpinned one (the migration
-    /// stress mode's) goes to the global queue instead.
+    /// stress mode's) goes to the global queue instead, and a pinned one
+    /// woken after its worker ended at a stop is left alone and counted
+    /// (GAP(stop-ends-idle-worker)).
     fn push_targeted(&self, index: usize, fiber: FiberRef) {
         let Some(worker) = self.worker(index) else {
             crate::panic::fatal(format_args!("a fiber's worker does not exist"));
@@ -647,6 +692,20 @@ impl Shared {
         if let Err(fiber) = worker.push_targeted(fiber) {
             // SAFETY: a runnable fiber is not retired.
             if unsafe { fiber.ctx() }.sched.pinned() {
+                // GAP(stop-ends-idle-worker): only its worker may run it
+                // (D-687), and that worker ended at the stop, which no host
+                // of Cheby code reaches (it tears its groups down first). As
+                // D-786 skips a stuck fiber, the fiber is never run, requeued
+                // or retired, its slot and control block stay, it is
+                // counted in `left_at_stop` (D-710: `run_main` reads the
+                // count after its stop, and skips its leak check and counts
+                // the skip when it is not 0), and the stop goes on. Outside a stop, a retiring worker
+                // stays while a fiber is pinned to it, so this is a broken
+                // invariant.
+                if self.stopping() {
+                    self.left_at_stop.fetch_add(1, Ordering::SeqCst);
+                    return;
+                }
                 crate::panic::fatal(format_args!("a fiber is pinned to a retired worker"));
             }
             self.injector.push(fiber);
@@ -908,8 +967,6 @@ pub struct Runtime {
     shared: Arc<Shared>,
     /// The monitor's thread; the workers' are in [`Shared`] (C-7).
     monitor: Option<JoinHandle<()>>,
-    /// The code its fibers may run (D-708).
-    code: Mutex<Vec<CodeToken>>,
     /// Whether it has stopped or halted: `shutdown`, `halt` and `Drop` run
     /// once.
     finished: bool,
@@ -973,6 +1030,11 @@ impl Runtime {
             terminated: AtomicBool::new(false),
             roots: Mutex::new(Vec::new()),
             next_root: AtomicU64::new(0),
+            code: Mutex::new(Vec::new()),
+            left_at_stop: AtomicUsize::new(0),
+            pool_given_up: AtomicBool::new(false),
+            pool_waiting: AtomicUsize::new(0),
+            pool_done: AtomicU64::new(0),
             #[cfg(test)]
             probe: testing::MonitorProbe::default(),
             #[cfg(test)]
@@ -981,7 +1043,6 @@ impl Runtime {
         let mut runtime = Self {
             shared,
             monitor: None,
-            code: Mutex::new(Vec::new()),
             finished: false,
         };
         {
@@ -1013,7 +1074,7 @@ impl Runtime {
     /// the token of every JIT whose code the runtime's fibers may run,
     /// before running its entries; attaching a token twice keeps one.
     pub fn attach(&self, code: CodeToken) {
-        let mut tokens = self.code.lock();
+        let mut tokens = self.shared.code.lock();
         if !tokens.iter().any(|token| token.same(&code)) {
             tokens.push(code);
         }
@@ -1165,7 +1226,13 @@ impl Runtime {
     /// Stops the runtime (D-708): tears every group down (the default
     /// group, then each group a root ran in), so no detached fiber is left;
     /// its workers finish the fibers that are runnable, then every thread
-    /// is joined, and only then are the code tokens released. A runtime
+    /// is joined, and only then are the code tokens released. A fiber that
+    /// waits on the blocking pool, before or during the stop, is runnable
+    /// once its job completes, and the workers wait for that, until two
+    /// polls 5 ms apart find every worker idle and no job completed
+    /// (GAP(pool-wakes-only-running)). A fiber still waiting then is never
+    /// resumed, as one blocked inline (D-786), and a root among them never
+    /// reports. A runtime
     /// whose halt has started (a termination, D-709) completes the halt
     /// instead and tears nothing down. Call it from the host, never from
     /// one of its fibers. Dropping the runtime does the same.
@@ -1198,10 +1265,14 @@ impl Runtime {
     /// [`Shared::arm_timer`] return a handle that never fires; wakes every
     /// parked worker and the monitor; joins every thread; then drops every
     /// timer entry unfired ([`Shared::clear_timers`]) and only then the
-    /// code tokens (D-708). A worker whose fiber is blocked inline in a
-    /// system call (D-786) is never joined: the halt flag is set, so that
-    /// fiber freezes when the call returns, and the code tokens and timers
-    /// are kept (leaked), since that worker may still run the code.
+    /// code tokens (D-708). The workers stay while a fiber waits on the
+    /// blocking pool, whose completion makes it runnable, until the join
+    /// gives up on the pool (`blocking::poll_stop`,
+    /// GAP(pool-wakes-only-running)). A worker whose fiber is blocked
+    /// inline in a system call (D-786) is never joined: the halt flag is
+    /// set, so that fiber freezes when the call returns, and the code
+    /// tokens and timers are kept (leaked), since that worker may still
+    /// run the code.
     fn stop(&mut self) {
         self.shared.stopping.store(true, Ordering::SeqCst);
         self.shared.wake_idle();
@@ -1214,11 +1285,11 @@ impl Runtime {
             monitor.join().ok();
         }
         if stuck {
-            std::mem::forget(std::mem::take(&mut *self.code.lock()));
+            std::mem::forget(std::mem::take(&mut *self.shared.code.lock()));
             return;
         }
         self.shared.clear_timers();
-        self.code.lock().clear();
+        self.shared.code.lock().clear();
     }
 
     /// Joins every worker thread except those whose fiber is blocked
@@ -1227,13 +1298,25 @@ impl Runtime {
     /// still run to freeze (`SAFEPOINT`) on every round, for the halt.
     /// The workers `set_thread_count` started are among them, and those it
     /// retired too (C-7): the caller set the stop or halt flag first, so
-    /// no worker starts or rejoins after the registry is drained.
+    /// no worker starts or rejoins after the registry is drained. Without
+    /// `freeze` (a stop), each round also polls the fibers waiting on the
+    /// blocking pool, which keep the workers, and gives up on them as
+    /// `blocking::poll_stop` says (GAP(pool-wakes-only-running)).
     fn join_workers(&mut self, freeze: bool) -> bool {
         let mut pending: Vec<(usize, JoinHandle<()>)> =
             std::mem::take(&mut *self.shared.threads.lock());
         let mut stuck = false;
         let mut round = 0_u32;
+        let mut pool_seen = None;
         while !pending.is_empty() {
+            if !freeze {
+                let idle = pending.iter().all(|(index, _)| {
+                    self.shared
+                        .worker(*index)
+                        .is_none_or(|worker| worker.running().is_null())
+                });
+                blocking::poll_stop(&self.shared, idle, &mut pool_seen);
+            }
             if freeze {
                 self.shared.request_safepoints();
             }
@@ -1279,10 +1362,10 @@ impl Runtime {
             monitor.join().ok();
         }
         if stuck {
-            std::mem::forget(std::mem::take(&mut *self.code.lock()));
+            std::mem::forget(std::mem::take(&mut *self.shared.code.lock()));
             return;
         }
-        self.code.lock().clear();
+        self.shared.code.lock().clear();
     }
 }
 

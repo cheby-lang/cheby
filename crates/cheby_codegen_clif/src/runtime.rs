@@ -75,11 +75,16 @@ pub enum RuntimeFunc {
     /// uint64_t frame_size, uint32_t count, uint64_t p0, uint64_t p1, uint64_t p2, uint64_t p3)`:
     /// the same for a large function's outer entry (D-743, D-775).
     StackSlowFrameUnwind,
+    /// `uint64_t cheby_rt_blocking_call(ExecCtx *ctx, void (*shim)(const uint64_t *, uint64_t *),
+    /// const uint64_t *args, uintptr_t nargs)`: runs an `@blocking` call's shim on the blocking
+    /// pool and returns its result word unchanged; a cancellation pending after the return
+    /// raises through the flag (D-683, GAP(blocking-shim)).
+    BlockingCall,
 }
 
 impl RuntimeFunc {
     /// Every runtime function, in declaration order ([`Self::index`]).
-    pub const ALL: [Self; 29] = [
+    pub const ALL: [Self; 30] = [
         Self::Alloc,
         Self::Dup,
         Self::Drop,
@@ -109,6 +114,7 @@ impl RuntimeFunc {
         Self::ScopeClose,
         Self::StackSlowUnwind,
         Self::StackSlowFrameUnwind,
+        Self::BlockingCall,
     ];
 
     /// The symbol.
@@ -144,6 +150,7 @@ impl RuntimeFunc {
             Self::ScopeClose => sym::SCOPE_CLOSE,
             Self::StackSlowUnwind => sym::STACK_SLOW_UNWIND,
             Self::StackSlowFrameUnwind => sym::STACK_SLOW_FRAME_UNWIND,
+            Self::BlockingCall => sym::BLOCKING_CALL,
         }
     }
 
@@ -175,6 +182,7 @@ impl RuntimeFunc {
             Self::ScopeClose => (&[Ptr, U64, Bool], Bool),
             Self::StackSlowUnwind => (&[Ptr, Ptr, U32, Ptr, Ptr, Ptr, Ptr], U32),
             Self::StackSlowFrameUnwind => (&[Ptr, Ptr, U64, U32, Ptr, Ptr, Ptr, Ptr], U32),
+            Self::BlockingCall => (&[Ptr, Ptr, Ptr, U64], U64),
         }
     }
 
@@ -190,6 +198,7 @@ impl RuntimeFunc {
                 | Self::ScopeClose
                 | Self::StackSlowUnwind
                 | Self::StackSlowFrameUnwind
+                | Self::BlockingCall
         )
     }
 
@@ -226,6 +235,7 @@ impl RuntimeFunc {
             Self::ScopeClose => 26,
             Self::StackSlowUnwind => 27,
             Self::StackSlowFrameUnwind => 28,
+            Self::BlockingCall => 29,
         }
     }
 

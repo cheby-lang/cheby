@@ -178,8 +178,10 @@ impl Mailbox {
 /// Test hooks of one runtime's monitor: a delay between reading a worker's
 /// running fiber and requesting a yield from it, which widens the window
 /// in which that fiber could be retired, a count of requests aimed at a
-/// retired control block (which must stay 0, I-8), and a switch that
-/// keeps it from firing timers.
+/// retired control block (which must stay 0, I-8), a switch that keeps
+/// it from firing timers, a hold on one worker right after it ended at a
+/// stop (GAP(stop-ends-idle-worker)), and a hold on the stop's give-up on
+/// the blocking pool (GAP(pool-wakes-only-running)).
 #[derive(Debug, Default)]
 pub(crate) struct MonitorProbe {
     /// Milliseconds the monitor sleeps before each request.
@@ -193,12 +195,38 @@ pub(crate) struct MonitorProbe {
     pub(crate) skip_timers: std::sync::atomic::AtomicBool,
     /// Fibers a halt froze (D-708).
     pub(crate) frozen: std::sync::atomic::AtomicUsize,
+    /// One more than the index of the worker that [`MonitorProbe::stop_exit`]
+    /// holds right after it ended at a stop; 0 holds none.
+    pub(crate) hold_stop_exit: std::sync::atomic::AtomicUsize,
+    /// Set by the held worker once it ended at the stop and waits.
+    pub(crate) stop_exit_held: std::sync::atomic::AtomicBool,
+    /// Lets the held worker go on (its thread then ends).
+    pub(crate) stop_exit_release: std::sync::atomic::AtomicBool,
+    /// Keeps the stop from giving up on the fibers waiting on the blocking
+    /// pool (GAP(pool-wakes-only-running)): its workers wait until none
+    /// waits, at most [`HANG`].
+    pub(crate) hold_pool: std::sync::atomic::AtomicBool,
 }
 
 impl MonitorProbe {
     /// A worker left a fiber frozen.
     pub(crate) fn froze(&self) {
         self.frozen.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// Worker `index` ended at a stop, its slot marked `DEAD`, and its
+    /// thread is about to end: if it is the one `hold_stop_exit` names, it
+    /// says so and waits for `stop_exit_release`, at most [`HANG`], so that
+    /// a test can make another worker push to it meanwhile.
+    pub(crate) fn stop_exit(&self, index: usize) {
+        if self.hold_stop_exit.load(Ordering::SeqCst) != index.saturating_add(1) {
+            return;
+        }
+        self.stop_exit_held.store(true, Ordering::SeqCst);
+        let begun = std::time::Instant::now();
+        while !self.stop_exit_release.load(Ordering::SeqCst) && begun.elapsed() < HANG {
+            std::thread::sleep(Duration::from_millis(1));
+        }
     }
 
     /// A control block was written at `fcb`.
@@ -221,6 +249,22 @@ impl MonitorProbe {
             self.stale.fetch_add(1, Ordering::SeqCst);
         }
     }
+}
+
+/// Whether `me`'s runtime has set its stop flag or halts.
+pub(crate) fn stopping(me: &ExecCtx) -> bool {
+    me.sched.runtime().is_some_and(|shared| shared.stopping())
+}
+
+/// Whether `shared` has set its stop flag or halts.
+pub(crate) fn runtime_stopping(shared: &super::Shared) -> bool {
+    shared.stopping()
+}
+
+/// Keeps `shared`'s stop from giving up on the fibers waiting on the
+/// blocking pool ([`MonitorProbe::hold_pool`]).
+pub(crate) fn hold_pool(shared: &super::Shared) {
+    shared.probe.hold_pool.store(true, Ordering::SeqCst);
 }
 
 /// The function-entry check generated code performs; returns whether the

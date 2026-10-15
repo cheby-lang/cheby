@@ -251,6 +251,7 @@ fn check_fn(
         symbol: symbol.into(),
         span,
         context: item.attrs.std_context,
+        blocking: item.attrs.blocking,
     });
     // Every top-level `main` is an entry point (D-137, D-448); a wrong
     // signature is E0050, reported with the signature.

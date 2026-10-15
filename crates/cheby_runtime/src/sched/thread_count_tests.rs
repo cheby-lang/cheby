@@ -104,6 +104,9 @@ mod failed {
     pub(super) const PINNED: u64 = 1 << 5;
     pub(super) const STAYED: u64 = 1 << 6;
     pub(super) const MOVED: u64 = 1 << 7;
+    pub(super) const REACHED: u64 = 1 << 8;
+    pub(super) const HELD: u64 = 1 << 9;
+    pub(super) const ENDED: u64 = 1 << 10;
 }
 
 /// What the ping-pong pairs of the load test share.
@@ -758,4 +761,189 @@ fn thread_count_a_stop_while_workers_retire_ends_every_fiber() {
             assert_eq!(Arc::strong_count(&shared), 1, "round {round}");
         }
     }
+}
+
+/// D-687, D-795 (fixer-w3-1 of checkpoint 3, GAP(stop-ends-idle-worker)):
+/// in the migration stress mode a fiber that yields goes to the targeted
+/// queue of another live worker, so a stop must not leave a fiber in the
+/// queue of a worker that has already ended. A live worker ends at a stop
+/// only under its targeted queue's lock with that queue empty, and marks
+/// its slot `DEAD` there, so a later push goes to the global queue, which
+/// the pushing worker looks at before it ends. Three roots yield until the
+/// runtime stops, which comes at varying moments; every fiber ends.
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+fn thread_count_a_stop_in_the_migration_stress_mode_strands_no_fiber() {
+    const ROUNDS: usize = 400;
+    for round in 0..ROUNDS {
+        let runtime = tuned(2, true, true);
+        let shared = Arc::clone(&runtime.shared);
+        let started = Arc::new(AtomicUsize::new(0));
+        for _ in 0..3_u64 {
+            let (probe, started) = (Arc::clone(&shared), Arc::clone(&started));
+            drop(start_root(&runtime, MIN_STACK_SIZE, move |me| {
+                started.fetch_add(1, Ordering::SeqCst);
+                while !probe.stopping() {
+                    if entry_check(me) {
+                        return 1;
+                    }
+                    park(me, AfterSwitch::Requeue);
+                }
+                0
+            }));
+        }
+        assert!(wait_until(|| started.load(Ordering::SeqCst) == 3));
+        std::thread::sleep(Duration::from_micros(
+            u64::try_from(round % 7).unwrap() * 300,
+        ));
+        let begun = Instant::now();
+        runtime.shutdown();
+        assert!(
+            begun.elapsed() < CAP,
+            "round {round}: the stop took {:?}",
+            begun.elapsed()
+        );
+        assert!(shared.threads.lock().is_empty(), "round {round}");
+        assert_eq!(
+            shared.live.load(Ordering::SeqCst),
+            0,
+            "round {round}: a runnable fiber was stranded"
+        );
+    }
+}
+
+/// D-687, D-795 (fixer-w3-1 of checkpoint 3, GAP(stop-ends-idle-worker)),
+/// without a race: fiber F runs on worker 0 while the runtime stops, and
+/// worker 1, idle, ends at the stop; the probe holds worker 1 right after
+/// its end while F yields. In the migration stress mode F's yield goes to
+/// another live worker, and worker 1's slot is `DEAD` now, so F goes to
+/// the global queue instead, worker 0 runs it, and no fiber is left.
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+fn thread_count_a_yield_after_a_worker_ended_at_a_stop_runs_on_a_live_one() {
+    let runtime = tuned(2, true, true);
+    let shared = Arc::clone(&runtime.shared);
+    // Worker 1's index plus one.
+    shared.probe.hold_stop_exit.store(2, Ordering::SeqCst);
+    let on_zero = Arc::new(AtomicBool::new(false));
+    let outcome = {
+        let (probe, on_zero) = (Arc::clone(&shared), Arc::clone(&on_zero));
+        start_root(&runtime, MIN_STACK_SIZE, move |me| {
+            let begun = Instant::now();
+            while me.sched.worker() != 0 {
+                if begun.elapsed() > CAP {
+                    return failed::REACHED;
+                }
+                park(me, AfterSwitch::Requeue);
+            }
+            on_zero.store(true, Ordering::SeqCst);
+            // Stays on worker 0 with no entry check, so no preemption
+            // moves it, until worker 1 has ended at the stop.
+            let begun = Instant::now();
+            while !probe.probe.stop_exit_held.load(Ordering::SeqCst) {
+                if begun.elapsed() > CAP {
+                    return failed::HELD;
+                }
+                std::hint::spin_loop();
+            }
+            let mut failures = 0;
+            if life_of(&probe, 1) != Some(life::DEAD) {
+                failures |= failed::ENDED;
+            }
+            park(me, AfterSwitch::Requeue);
+            if me.sched.worker() != 0 {
+                failures |= failed::MOVED;
+            }
+            probe.probe.stop_exit_release.store(true, Ordering::SeqCst);
+            failures
+        })
+    };
+    assert!(wait_until(|| on_zero.load(Ordering::SeqCst)));
+    let begun = Instant::now();
+    runtime.shutdown();
+    assert!(begun.elapsed() < CAP, "the stop took {:?}", begun.elapsed());
+    match outcome.try_recv() {
+        Ok(EntryOutcome::Returned(word)) => assert_eq!(word, 0, "failures {word:#b}"),
+        other => panic!("the yielding fiber did not end: {other:?}"),
+    }
+    assert!(shared.probe.stop_exit_held.load(Ordering::SeqCst));
+    assert_eq!(
+        shared.live.load(Ordering::SeqCst),
+        0,
+        "a fiber was stranded"
+    );
+    assert_eq!(shared.left_at_stop.load(Ordering::SeqCst), 0);
+    assert!(shared.threads.lock().is_empty());
+}
+
+/// GAP(stop-ends-idle-worker) under UQ-5 (a), D-687, D-786, D-710: a
+/// fiber pinned to its worker (a kernel callback on its stack) is parked
+/// when the host stops the runtime, and the host wakes it after that
+/// worker ended at the stop (a host-API case: hosts of Cheby code tear
+/// their groups down first). Only that worker may run it, so it is left
+/// alone and counted, never fatal; it never runs again, its control block
+/// stays, and the stop returns.
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+fn thread_count_a_pinned_fiber_woken_after_its_worker_ended_at_a_stop_is_left_and_counted() {
+    let runtime = tuned(2, false, true);
+    let shared = Arc::clone(&runtime.shared);
+    let gate = Arc::new(Mailbox::default());
+    // The worker the fiber is pinned to, plus one; 0 until then.
+    let pinned_on = Arc::new(AtomicUsize::new(0));
+    let resumed = Arc::new(AtomicBool::new(false));
+    let outcome = {
+        let (gate, pinned_on, resumed) = (
+            Arc::clone(&gate),
+            Arc::clone(&pinned_on),
+            Arc::clone(&resumed),
+        );
+        start_root(&runtime, MIN_STACK_SIZE, move |me| {
+            me.sched.enter_callback();
+            pinned_on.store(me.sched.worker() + 1, Ordering::SeqCst);
+            gate.receive(me);
+            resumed.store(true, Ordering::SeqCst);
+            leave_callback(me);
+            0
+        })
+    };
+    assert!(wait_until(|| pinned_on.load(Ordering::SeqCst) != 0));
+    let index = pinned_on.load(Ordering::SeqCst) - 1;
+    assert!(wait_until(|| {
+        shared.worker(index).is_some_and(|worker| {
+            worker.pinned() == 1 && worker.running().is_null() && !worker.has_waiting()
+        })
+    }));
+    shared
+        .probe
+        .hold_stop_exit
+        .store(index + 1, Ordering::SeqCst);
+    // The host's wake, on another thread, once the fiber's worker has
+    // ended at the stop and while the stop joins it.
+    let waker = {
+        let (shared, gate) = (Arc::clone(&shared), Arc::clone(&gate));
+        std::thread::spawn(move || {
+            let held = wait_until(|| shared.probe.stop_exit_held.load(Ordering::SeqCst));
+            let dead = life_of(&shared, index) == Some(life::DEAD);
+            if held {
+                gate.send(1, false);
+            }
+            let counted = shared.left_at_stop.load(Ordering::SeqCst);
+            shared.probe.stop_exit_release.store(true, Ordering::SeqCst);
+            (held, dead, counted)
+        })
+    };
+    let begun = Instant::now();
+    runtime.shutdown();
+    assert!(begun.elapsed() < CAP, "the stop took {:?}", begun.elapsed());
+    let (held, dead, counted) = waker.join().unwrap();
+    assert!(held, "the fiber's worker did not end at the stop");
+    assert!(dead, "the worker that ended at the stop is not DEAD");
+    assert_eq!(counted, 1, "the pinned fiber was not counted");
+    assert_eq!(shared.left_at_stop.load(Ordering::SeqCst), 1);
+    assert!(!resumed.load(Ordering::SeqCst), "the pinned fiber ran");
+    assert!(matches!(outcome.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    // Left alone: never run, requeued or retired.
+    assert_eq!(shared.live.load(Ordering::SeqCst), 1);
+    assert!(shared.threads.lock().is_empty());
 }

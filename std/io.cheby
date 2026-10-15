@@ -228,26 +228,31 @@ fn sys_write_stdout(text: String) -> Result<Nil, (Int, String)>
 fn sys_write_stderr(text: String) -> Result<Nil, (Int, String)>
 
 /// Flushes standard output, then reads one line from standard input.
+@std_context
 @external(native, "cheby_io_sys_read_line")
 @external(js, "./io.mjs", "sys_read_line")
 fn sys_read_line() -> Result<Option<String>, (Int, String)>
 
 /// Reads a whole file as UTF-8 text.
+@std_context
 @external(native, "cheby_io_sys_read_file")
 @external(js, "./io.mjs", "sys_read_file")
 fn sys_read_file(path: String) -> Result<String, (Int, String)>
 
 /// Reads a whole file as bytes.
+@std_context
 @external(native, "cheby_io_sys_read_file_bytes")
 @external(js, "./io.mjs", "sys_read_file_bytes")
 fn sys_read_file_bytes(path: String) -> Result<bytes::Bytes, (Int, String)>
 
 /// Writes a whole file from UTF-8 text.
+@std_context
 @external(native, "cheby_io_sys_write_file")
 @external(js, "./io.mjs", "sys_write_file")
 fn sys_write_file(path: String, text: String) -> Result<Nil, (Int, String)>
 
 /// Writes a whole file from bytes.
+@std_context
 @external(native, "cheby_io_sys_write_file_bytes")
 @external(js, "./io.mjs", "sys_write_file_bytes")
 fn sys_write_file_bytes(path: String, data: bytes::Bytes) -> Result<Nil, (Int, String)>

@@ -94,7 +94,12 @@ pub fn rvalue_may_unwind(value: &Rvalue) -> bool {
         | Rvalue::AllocPlaceholder { .. }
         | Rvalue::LoadConst(_)
         | Rvalue::Checked { .. } => true,
-        Rvalue::CallForeign { symbol, .. } => !crate::never_raise::never_raises(symbol),
+        // A blocking call raises a cancellation that arrived while it ran,
+        // after it returns, so it is never in the never-raise table's reach
+        // (GAP(blocking-shim)).
+        Rvalue::CallForeign {
+            symbol, blocking, ..
+        } => *blocking || !crate::never_raise::never_raises(symbol),
         Rvalue::CallRuntime { func, .. } => func.may_unwind(),
         Rvalue::Box { value, from } => box_may_allocate(value, *from),
         Rvalue::Use(_)
