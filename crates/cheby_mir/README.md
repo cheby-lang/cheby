@@ -1,0 +1,44 @@
+# cheby_mir
+
+The mid-level IR that feeds every backend (D-019), its lowering from typed bodies, and the passes that place and optimize reference counting: naive `dup`/`drop` in M1 (D-273) and Perceus borrowing, reuse and fusion in M2 (D-716), followed by unwind edges to shared cleanup pads (D-698). The validator checks every function after lowering and after the passes, and `dump` gives the stable text form that goldens pin.
+
+## Place in the pipeline
+
+`cheby_mir` depends on `cheby_diag`, `cheby_types`, `cheby_iface` and `cheby_resolve`. `cheby_codegen_clif`, `cheby_jit`, `cheby_consteval`, `cheby_driver` and the M4 `cheby_js` depend on it.
+
+- **Fed by** `cheby_types`: `lower` reads THIR and the interfaces the unit may see (D-246). Every THIR construct lowers, so lowering reports no diagnostics, and a construct it cannot lower is an internal compiler error (D-554). `reach` decides which items a run needs from its entry (D-510).
+- **Feeds** `cheby_codegen_clif` with units of MIR functions. `abi` is the single source of machine signatures, used by both lowering and code generation, so a slot, a `return_call` and its callee never disagree (D-453, ADR-0055). `layout` computes constructor layouts from interfaces alone, and `type_key` matches `cheby_runtime::layout::type_key` (D-559).
+- MIR is a control-flow graph of basic blocks per function, close to SSA, with operations at the level of the runtime model: allocate a constructor, read a field, test a tag, call directly, indirectly or in tail position, checked arithmetic, dictionary calls, `dyn` packaging, explicit `dup`, `drop`, `drop_reuse` and `reuse`, panics, and unwind edges.
+- The passes after lowering run in this order (architecture §2.5): borrowing inference over all the build's units (D-779), reference counting, reuse, fusion, the unwind pass, then validation. Each pass is deterministic, and a second, independent ownership simulation runs in debug builds and under test (D-262, D-774).
+- `MirOptions` selects the mode: `CHEBY_RC=naive` turns borrowing, reuse and fusion off for measurements (D-808), and `CHEBY_UNWIND_EDGES=off` drops the edges (D-770).
+
+## Layout
+
+| Module                                  | What it holds                                                                                                                                                                                                                                            |
+| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ir.rs`, `builder.rs`                   | The data model and the block-by-block function builder                                                                                                                                                                                                   |
+| `repr.rs`, `abi.rs`                     | Value representations, foreign signatures and the one source of machine signatures (D-453)                                                                                                                                                               |
+| `layout.rs`                             | Constructor layouts and type keys from interfaces                                                                                                                                                                                                        |
+| `defs.rs`                               | Reading the interfaces a unit may see                                                                                                                                                                                                                    |
+| `reach.rs`                              | The items a program needs, from its entry                                                                                                                                                                                                                |
+| `lower/`                                | THIR to MIR: bodies, expressions, patterns as decision trees, closures and free variables, dictionaries and `dyn` forwarders, interpolation, lists, scalars, panics, external wrappers, std intrinsics, entry thunks and large-literal splitting (D-780) |
+| `const_prop.rs`                         | Static constant locals become operands before counting                                                                                                                                                                                                   |
+| `borrow.rs`                             | Borrowing inference over lowered MIR (D-779, D-787)                                                                                                                                                                                                      |
+| `liveness.rs`, `rc.rs`                  | Backward liveness of counted locals and `dup`/`drop` by the last-use rule (D-205)                                                                                                                                                                        |
+| `reuse.rs`, `fuse.rs`                   | Reuse of a dropped object's block and dup/drop fusion (D-716)                                                                                                                                                                                            |
+| `ownership.rs`                          | The forward simulation of counts, shared by the unwind pass and the validator                                                                                                                                                                            |
+| `unwind.rs`                             | Unwind edges to chained, memoized cleanup pads (D-698, D-788)                                                                                                                                                                                            |
+| `never_raise.rs`, `kernels_in_place.rs` | Tables of std kernels that never raise and that update in place                                                                                                                                                                                          |
+| `validate/`                             | The validator, with dominance                                                                                                                                                                                                                            |
+| `dump.rs`, `stats.rs`                   | The text form and static counts for reports                                                                                                                                                                                                              |
+| `options.rs`                            | `MirOptions`, `RcMode` and the pipeline entry points                                                                                                                                                                                                     |
+
+## Tests
+
+The goldens under `tests/golden/` pin the lowering of specific constructs, one directory per area with its own README. A golden is written by a test through `test_support::lower_source` and re-blessed with `CHEBY_BLESS=1`. Review blessed changes like code.
+
+## Read more
+
+- [`docs/plan/architecture.md`](../../docs/plan/architecture.md) §2.5, and [ADR-0036](../../docs/adr/0036-last-use-release-of-bindings.md) and [ADR-0055](../../docs/adr/0055-native-calling-convention.md).
+- [`docs/plan/m1-core.md`](../../docs/plan/m1-core.md) phase D and [`docs/plan/m2-runtime.md`](../../docs/plan/m2-runtime.md) for the M2 passes.
+- [`crates/README.md`](../README.md) for the whole crate graph.
