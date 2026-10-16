@@ -12,7 +12,7 @@
 //! Every public function carries the bound `K: Compare` (D-385). The
 //! hooks of D-342 cannot have bounds (D-482), so they, and the
 //! package-visible helpers that the wrapping modules use, read the tree
-//! without `compare` and carry no bound (GAP(sorted-unbounded-helpers)).
+//! without `compare` and carry no bound (D-845).
 //! `insert`, `remove` and `upsert` rebuild the node they matched in the
 //! arm that matched it, and call a rotation only when the balance check
 //! fails.
@@ -63,16 +63,16 @@ test "sorted maps compare, hash and print by contents" {
 }
 
 // Helpers without the bound, for the hooks and the modules that wrap a
-// sorted map (GAP(sorted-unbounded-helpers))
+// sorted map (D-845)
 
 /// The entries in key order, without calling `compare` (hooks and wrapper
-/// modules). It has no bound (GAP(sorted-unbounded-helpers)).
+/// modules). It has no bound (D-845).
 fn entries<K, V>(m: SortedMap<K, V>) -> List<(K, V)> {
   fold_entries(m, [], fn(found, key, value) { list::push(found, (key, value)) })
 }
 
 /// Combines the entries in key order, without calling `compare`. It has no
-/// bound (GAP(sorted-unbounded-helpers)).
+/// bound (D-845).
 fn fold_entries<K, V, A>(m: SortedMap<K, V>, initial: A, f: fn(A, K, V) -> A) -> A {
   case m {
     Tip => initial
@@ -80,8 +80,7 @@ fn fold_entries<K, V, A>(m: SortedMap<K, V>, initial: A, f: fn(A, K, V) -> A) ->
   }
 }
 
-/// The number of entries, O(1). It has no bound
-/// (GAP(sorted-unbounded-helpers)).
+/// The number of entries, O(1). It has no bound (D-845).
 fn count_entries<K, V>(m: SortedMap<K, V>) -> Int {
   case m {
     Tip => 0

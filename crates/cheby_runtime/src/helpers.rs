@@ -34,7 +34,7 @@ pub unsafe extern "C" fn cheby_rt_str_with_capacity(ctx: *mut ExecCtx, cap: i64)
 /// `cheby_rt_str_append(ctx, acc, piece)`: `acc` followed by `piece`.
 /// Consumes `acc`, updated in place when it is unique and has room and
 /// moved or copied otherwise (D-316): to twice its capacity when unique,
-/// twice its length when shared or static (GAP(text-copy-capacity),
+/// twice its length when shared or static (D-849,
 /// refining D-577); borrows `piece`.
 /// Result owned. It consumes `acc` even when it raises (D-698): `append`
 /// raises only while it allocates, before it gives `acc` up.

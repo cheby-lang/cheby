@@ -275,7 +275,7 @@ pub unsafe extern "C" fn cheby_string_to_graphemes(text: Word) -> Word {
 /// `string::add`: `a` then `b`. In place when `a` is unique with room
 /// (D-525); otherwise a new object with room: twice `a`'s capacity when
 /// `a` is unique, twice its length when it is shared or static
-/// (GAP(text-copy-capacity), refining D-577), and at least the result's
+/// (D-849, refining D-577), and at least the result's
 /// length. O(n + m).
 ///
 /// # Safety

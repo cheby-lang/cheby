@@ -1,8 +1,7 @@
 //! Tests of reuse (D-716): the pass on programs as `cheby run` counts
 //! them, on hand-built MIR, its decisions (the reuse report's input), the
 //! parameters it keeps owned (D-806), and the validator's token rules
-//! (GAP(reuse-token-form), GAP(reuse-pairing-scope),
-//! GAP(reuse-and-large-tuples), GAP(reuse-owns-parameters)).
+//! (D-838, D-839, D-840, D-841).
 
 use cheby_diag::{FileId, Span, TextRange};
 use cheby_iface::{DefId, DefIndex, Idx, ModuleId};
@@ -782,7 +781,7 @@ fn reuse_borrowed_parameter_is_not_reused() {
 }
 
 /// Naive counting is the MIR before borrowing and reuse (D-808,
-/// GAP(reuse-token-form)), and so is Perceus with its passes off.
+/// D-838), and so is Perceus with its passes off.
 #[test]
 fn reuse_naive_mode_and_passes_off_have_no_reuse() {
     let naive = MirOptions {

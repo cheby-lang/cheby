@@ -111,7 +111,7 @@
 //!    A parameter whose `drop` the reuse pass would pair with an
 //!    allocation ([`crate::reuse::candidate_params`]) is consumed too:
 //!    borrowed, it would never be dropped, so its block never reused
-//!    (GAP(reuse-owns-parameters), refining D-806 and through it D-715).
+//!    (D-841, refining D-806 and through it D-715).
 //! 7. The tail-call fixed point (D-015): at every tail call in any unit,
 //!    the argument in a borrowed position of the callee is a constant (an
 //!    operand, or a local defined as `_n = const …`, as lowering writes a
@@ -647,7 +647,7 @@ fn scan_all(module: &MirModule, masks: &[BorrowMask]) -> Vec<Node> {
 /// The uses and tail calls of `f`, a function of `module`'s, parameters.
 /// When `eligible` (some parameter may borrow), a parameter whose drop the
 /// reuse pass would pair with an allocation counts as consumed
-/// ([`crate::reuse::candidate_params`], GAP(reuse-owns-parameters),
+/// ([`crate::reuse::candidate_params`], D-841,
 /// refining D-806): borrowed, it would never be dropped, so never reused.
 fn scan(module: &MirModule, f: &Function, eligible: bool) -> Node {
     let params: BTreeMap<Local, usize> = f

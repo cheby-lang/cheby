@@ -308,7 +308,7 @@ fn local(l: Local) -> String {
     format!("_{}", l.as_u32())
 }
 
-/// ` keep [_5 @0, _7 @2]`: a keep list (GAP(fusion-forms)), in its order;
+/// ` keep [_5 @0, _7 @2]`: a keep list (D-850), in its order;
 /// nothing when it is empty.
 fn keep_text(keep: &[(u32, Local)]) -> String {
     if keep.is_empty() {

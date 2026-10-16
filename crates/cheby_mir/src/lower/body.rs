@@ -145,7 +145,7 @@ impl<'a> BodyCx<'a, '_> {
     /// Defines a new local of `repr` as `value` in the current block.
     /// The local an `alloc` or a call defines gets the current expression's
     /// span as its site, which the builder keeps only when it records sites
-    /// for `--reuse-report` (D-717, GAP(reuse-report-lines)).
+    /// for `--reuse-report` (D-717, D-852).
     pub(super) fn define(&mut self, repr: Repr, value: Rvalue) -> Result<Local, Ice> {
         let site = self
             .site

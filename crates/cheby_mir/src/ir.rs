@@ -490,7 +490,7 @@ pub enum Stmt {
     /// One reference less; frees the object at zero.
     Drop(Local),
     /// `drop local of layout keep [...]`: a drop specialized by constructor
-    /// (D-716, GAP(fusion-forms)). `local` is an object of `layout` (a
+    /// (D-716, D-850). `local` is an object of `layout` (a
     /// [`LayoutRef::Ctor`] with fields or a [`LayoutRef::Tuple`]) that a
     /// field read pins ([`crate::fuse`]), and `keep` is a non-empty keep
     /// list ([`Keep`]). It means `dup p` for each kept projection `p`, then
@@ -510,7 +510,7 @@ pub enum Stmt {
     ClearUnwind,
 }
 
-/// A keep list (fusion, D-716, GAP(fusion-forms)): `(i, p)` pairs, each
+/// A keep list (fusion, D-716, D-850): `(i, p)` pairs, each
 /// `p` a counted local defined as `field x.i of layout`, a projection of
 /// the local `x` that a [`Rvalue::DropReuse`] or a specialized drop
 /// releases, with distinct indices `i`, in the order fusion folded them.
@@ -799,12 +799,11 @@ pub enum Rvalue {
     /// unique. The token is an owned [`Repr::Value`] local that only an
     /// [`Rvalue::AllocReuse`] consumes or a [`Stmt::Drop`] releases (a
     /// `drop` of 0 does nothing), also in cleanup pads. Only after
-    /// reference counting; never unwinds, like `drop` (D-171).
-    /// GAP(reuse-token-form).
+    /// reference counting; never unwinds, like `drop` (D-171, D-838).
     ///
     /// `keep` (fusion, [`crate::fuse`]): `(i, p)` pairs, each `p` a
     /// `field local.i of layout` projection (Perceus's keep list,
-    /// GAP(fusion-forms)). It means `dup p` for each pair, then the
+    /// D-850). It means `dup p` for each pair, then the
     /// `drop_reuse`: on a hit field `i`'s reference moves to `p` instead
     /// of being released, and on a miss each `p` gets its `dup`. Empty
     /// unless fusion folded `dup`s into it; see [`Keep`].
@@ -822,7 +821,7 @@ pub enum Rvalue {
     /// and `layout` have the same object size
     /// ([`crate::layout::object_size`]); both are a
     /// [`LayoutRef::Ctor`] or a [`LayoutRef::Tuple`]. Only after reference
-    /// counting. GAP(reuse-token-form).
+    /// counting (D-838).
     AllocReuse {
         token: Local,
         layout: LayoutRef,

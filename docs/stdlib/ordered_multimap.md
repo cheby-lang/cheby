@@ -14,7 +14,7 @@ pub type OrderedMultimap<K, V>
 - **Written in Cheby.** The module is written in Cheby over `std::ordered_map`, with no kernel of its own (D-336, D-338). Keys are hashed and compared by the runtime's built-in routines, and no `compare` of the key type is ever called.
 - **Equality, hashing and printing.** The module supplies its own `==`, hashing and debug printing through the standard-library-only attribute of D-342 (§3.13). Two ordered multimaps are `==` only when they have the same keys in the same order, and each key holds the same list of values in the same order. Their hash covers both orders (D-343). Debug printing writes `ordered_multimap::from_list([…])` with one debug-printed pair per value, in the order of `to_pairs` (D-344).
 - **Interfaces.** `OrderedMultimap<K, V>` satisfies `Show` when `K` and `V` do (D-344). It does not satisfy `Compare`.
-- **Costs.** For a multimap of n keys, a lookup takes O(log n), effectively constant as in `Map`, and an update takes O(log n). Iterating takes time in proportion to what it returns.
+- **Costs.** For a multimap of n keys, a lookup takes O(log n), effectively constant as in `Map`, and an update takes O(log n), except that an insert takes O(log n + log m), where m is the number of values of the key: one descent to the key and one push onto its list (D-846). Iterating takes time in proportion to what it returns.
 
 The map functions `values`, `upsert`, `map_values` and `merge` have no counterpart in tier 1. `get` and `to_pairs` reach the values, and a caller can rebuild a multimap with `fold`.
 
@@ -210,7 +210,7 @@ pub fn insert<K, V>(m: OrderedMultimap<K, V>, key: K, value: V) -> OrderedMultim
 
 Returns the multimap with `value` appended to the values of `key`. A new key goes at the end, and a key already present keeps its position (D-340).
 
-- **Cost:** O(log n), required (D-300).
+- **Cost:** O(log n + log m), where m is the number of values of `key`. Required (D-300, D-846).
 
 ```cheby
 test "insert appends a value and keeps the key's position" {

@@ -1,4 +1,4 @@
-//! Fusion (D-716, GAP(fusion-forms)): Perceus's dup and drop fusion and
+//! Fusion (D-716, D-850): Perceus's dup and drop fusion and
 //! drops specialized by constructor, after reuse and before the unwind
 //! pass (`rc::insert → reuse::insert → fuse::run → unwind::insert`,
 //! architecture §9.1), on Perceus counting only
@@ -15,7 +15,7 @@
 //!    path that ends in a `panic` needs none. This is sound because `b`
 //!    holds a reference until its release, which keeps `p` alive (the
 //!    ownership simulation's `borrow_alive`); no drop moves, so the
-//!    drop-position check (GAP(drop-position-check)) holds. Pads, built
+//!    drop-position check (D-851) holds. Pads, built
 //!    after this pass, then hold `b` alone where they held `p` and `b`.
 //! 2. **Cancelling.** `dup x` followed by `drop x` with nothing between
 //!    them but releases of other locals and `dup`s that do not need `x`

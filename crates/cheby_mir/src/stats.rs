@@ -11,7 +11,7 @@ use crate::ir::{BlockId, Function, Rvalue, Stmt};
 /// list holds. A pad is a block that normal control flow does not reach
 /// (only an unwind edge or the entry pad leads to it). `alloc_reuse` is
 /// an allocation, not a count operation, and is not counted
-/// (GAP(rc-column-forms)). Until checkpoint 4 the column counted the
+/// (D-843). Until checkpoint 4 the column counted the
 /// pads' drops too, against D-759's text (`.m2-work/slice4/P2/rc-column.md`).
 #[must_use]
 pub fn rc_ops(function: &Function) -> usize {

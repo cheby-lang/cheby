@@ -72,7 +72,7 @@ pub(crate) enum Mode {
     /// only what `main` reaches.
     Inferred { reach_all: bool },
     /// As `Counted`, counted with these options (fusion's tests compare
-    /// options, GAP(fusion-forms)).
+    /// options, D-850).
     CountedWith(MirOptions),
 }
 

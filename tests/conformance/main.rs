@@ -54,7 +54,7 @@
 //! several scheduler threads. `CHEBY_HARNESS_SCALE` multiplies the
 //! timeout (`cheby_test_support::process`).
 //!
-//! The naive-counting variant (D-718, GAP(naive-variant-env)): the run
+//! The naive-counting variant (D-718, D-853): the run
 //! trial and the `::test` trial of every example that is run also run as
 //! `<name>@rc=naive` and `<name>::test@rc=naive`, with `CHEBY_RC=naive`
 //! (D-746) and `CHEBY_THREADS` removed, with the base trial's expectation

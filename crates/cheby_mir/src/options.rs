@@ -80,8 +80,7 @@ pub struct MirOptions {
     /// constructor ([`crate::fuse`]), and whether static constant locals
     /// are propagated before counting ([`crate::const_prop`]); `true` by
     /// default. Both need [`RcMode::Perceus`] too ([`MirOptions::fuses`]),
-    /// so naive counting stays the oracle (D-718, D-808;
-    /// GAP(fusion-forms)).
+    /// so naive counting stays the oracle (D-718, D-808, D-850).
     pub fuse: bool,
     /// Whether lowering records the source sites of allocations and calls
     /// ([`crate::Function::sites`], [`crate::FunctionBuilder::record_site`])
@@ -120,7 +119,7 @@ impl MirOptions {
     /// Whether counting with these options reuses (D-716): with
     /// [`MirOptions::reuse`] and under [`RcMode::Perceus`] only, so naive
     /// counting stays the MIR before borrowing and reuse, the oracle of
-    /// D-718 (GAP(reuse-token-form): naive counting has no reuse).
+    /// D-718 (D-838: naive counting has no reuse).
     #[must_use]
     pub const fn reuses(&self) -> bool {
         self.reuse && matches!(self.rc, RcMode::Perceus)
@@ -129,7 +128,7 @@ impl MirOptions {
     /// Whether counting with these options fuses and propagates constants
     /// ([`MirOptions::fuse`]): under [`RcMode::Perceus`] only, so naive
     /// counting stays the MIR before borrowing, reuse, fusion and constant
-    /// propagation, the oracle of D-718 (D-808; GAP(fusion-forms)).
+    /// propagation, the oracle of D-718 (D-808, D-850).
     #[must_use]
     pub const fn fuses(&self) -> bool {
         self.fuse && matches!(self.rc, RcMode::Perceus)
@@ -286,8 +285,7 @@ pub fn count_lowered_with(module: &mut MirModule, options: &MirOptions) -> Resul
         )));
     }
     // Static constant locals become constant operands, so counting never
-    // counts them (D-454, D-539); naive counting keeps them
-    // (GAP(fusion-forms)).
+    // counts them (D-454, D-539); naive counting keeps them (D-850).
     if options.fuses() {
         crate::const_prop::run_module(module)?;
     }
@@ -297,13 +295,12 @@ pub fn count_lowered_with(module: &mut MirModule, options: &MirOptions) -> Resul
         RcMode::Perceus | RcMode::Naive => crate::rc::insert_module(module)?,
     }
     // Reuse pairs the drops counting placed, before the unwind pass gives
-    // the tokens their pads (D-716); naive counting has none
-    // (GAP(reuse-token-form)).
+    // the tokens their pads (D-716); naive counting has none (D-838).
     if options.reuses() {
         crate::reuse::insert_module(module)?;
     }
     // Fusion after reuse, so keep lists reach `drop_reuse`, and before the
-    // unwind pass, so pads see the fused counts (D-716; GAP(fusion-forms)).
+    // unwind pass, so pads see the fused counts (D-716, D-850).
     if options.fuses() {
         crate::fuse::run_module(module)?;
     }
@@ -390,7 +387,7 @@ mod tests {
     #[test]
     fn reuse_only_with_perceus_and_the_switch() {
         // D-716, D-718: naive counting is the MIR before borrowing and
-        // reuse (GAP(reuse-token-form)); the passes-off options keep the
+        // reuse (D-838); the passes-off options keep the
         // mode and turn both off.
         let options = MirOptions::default();
         assert!(options.reuse && options.reuses());
@@ -417,7 +414,7 @@ mod tests {
 
     #[test]
     fn fuse_only_with_perceus_and_the_switch() {
-        // D-716, D-808 (GAP(fusion-forms)): naive counting is the MIR
+        // D-716, D-808, D-850: naive counting is the MIR
         // before fusion and constant propagation too.
         let options = MirOptions::default();
         assert!(options.fuse && options.fuses());

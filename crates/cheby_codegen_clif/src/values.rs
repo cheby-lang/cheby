@@ -25,10 +25,10 @@ const U64_TAGGED_LIMIT: i64 = 1 << 62;
 
 /// The most value fields the hit path of a release with a keep list, or
 /// of a drop specialized by constructor, releases inline; more go through
-/// `cheby_rt_release_fields` (GAP(fusion-forms)).
+/// `cheby_rt_release_fields` (D-850).
 const INLINE_RELEASE_CAP: usize = 8;
 
-/// The slots of a release with a keep list (GAP(fusion-forms)): the
+/// The slots of a release with a keep list (D-850): the
 /// offsets of the kept fields, each a value field of `shape`, and those of
 /// the value fields not kept, in declaration order.
 fn kept_slots(
@@ -351,7 +351,7 @@ impl Translator<'_, '_> {
     /// dominates the drop. With `checked_rc`, the checked runtime entry,
     /// which also checks the header and the size.
     ///
-    /// With a keep list (GAP(fusion-forms)): on a hit the kept fields are
+    /// With a keep list (D-850): on a hit the kept fields are
     /// zeroed, their references moving to their projections, and the
     /// others released ([`Self::release_on_hit`]); on a miss each kept
     /// projection is `dup`'d before the reference is given up. With
@@ -491,7 +491,7 @@ impl Translator<'_, '_> {
         Ok(object)
     }
 
-    /// `dup` of each projection a keep list names (GAP(fusion-forms)): the
+    /// `dup` of each projection a keep list names (D-850): the
     /// miss path of a release with one, and its form under `checked_rc`.
     fn dup_kept(&mut self, keep: &[(u32, Local)]) -> Result<(), CodegenError> {
         for &(_, p) in keep {
@@ -501,7 +501,7 @@ impl Translator<'_, '_> {
         Ok(())
     }
 
-    /// The hit path of a release with a keep list (GAP(fusion-forms)): `v`
+    /// The hit path of a release with a keep list (D-850): `v`
     /// is unique. The slots `kept` hand their references to the kept
     /// projections; the value slots `rest` are released, inline when there
     /// are at most [`INLINE_RELEASE_CAP`], else by
@@ -543,7 +543,7 @@ impl Translator<'_, '_> {
     }
 
     /// `drop local of layout keep [...]`, a drop specialized by constructor
-    /// (D-716, GAP(fusion-forms)). Inline, an object of count 1 hands each
+    /// (D-716, D-850). Inline, an object of count 1 hands each
     /// kept field's reference to its projection, releases its other value
     /// fields ([`Self::release_on_hit`]) and frees its block through
     /// `cheby_rt_free_unique`; any other count first `dup`s each kept

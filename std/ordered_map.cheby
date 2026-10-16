@@ -300,7 +300,7 @@ test "values follow the order of their keys" {
 /// Returns the entries as pairs, in the map's order. It walks `order` and
 /// looks each key's value up in `index`: n lookups, each O(log n) and
 /// effectively constant, so the walk is O(n) in the same sense as `Map`'s
-/// costs (GAP(ordered-iteration-cost)).
+/// costs (D-848).
 pub fn to_list<K, V>(m: OrderedMap<K, V>) -> List<(K, V)> {
   fold(m, [], fn(found, key, value) { list::push(found, (key, value)) })
 }
@@ -312,7 +312,7 @@ test "to_list gives the entries in insertion order" {
 
 /// Combines the entries in the map's order, starting from `initial`. Like
 /// `to_list`, it looks each key's value up, effectively O(1) per entry
-/// (GAP(ordered-iteration-cost)).
+/// (D-848).
 pub fn fold<K, V, A>(m: OrderedMap<K, V>, initial: A, f: fn(A, K, V) -> A) -> A {
   let index = m.index
   sorted_map::fold_entries(m.order, initial, fn(found, _, key) {

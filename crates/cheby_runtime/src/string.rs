@@ -434,7 +434,7 @@ pub(crate) unsafe fn growth(text: Word, extra: u64, reuse: bool) -> Growth {
 /// append, so doubling the old capacity each time grew the capacity, not
 /// the contents, exponentially (out of memory after about 47 one-byte
 /// appends to a record's string field, gate 6's ROB6-3)
-/// (GAP(text-copy-capacity), refining D-577).
+/// (D-849, refining D-577).
 fn grown_capacity(path: Growth, len: u64, cap: u64, need: u64) -> u64 {
     match path {
         Growth::Grown => need.max(cap.saturating_mul(2)),

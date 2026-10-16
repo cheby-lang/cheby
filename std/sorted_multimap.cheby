@@ -7,7 +7,7 @@
 //! a value (D-364). Every function carries the bound `K: Compare` (D-385).
 //! The hooks and `value_pairs` carry none, as D-482 asks of hooks, and reach the
 //! tree only through `sorted_map`'s unbounded helpers
-//! (GAP(sorted-unbounded-helpers)).
+//! (D-845).
 
 import std::int
 import std::list
@@ -26,7 +26,7 @@ pub type SortedMultimap<K, V> {
 
 /// One pair per value, in key order and, within a key, in insertion order,
 /// without calling `compare` (the hooks and `to_pairs`).
-/// GAP(sorted-unbounded-helpers): no bound, as D-482 asks of hooks.
+/// It has no bound, as D-482 asks of hooks (D-845).
 priv fn value_pairs<K, V>(m: SortedMultimap<K, V>) -> List<(K, V)> {
   sorted_map::fold_entries(m.entries, [], fn(found, key, values) {
     list::fold(values, found, fn(more, value) { list::push(more, (key, value)) })
@@ -190,7 +190,7 @@ test "range includes start and excludes end" {
 /// a key that compares `Equal` to `key` is already present, the stored key
 /// stays (D-341). One descent of the tree and one push onto the key's list:
 /// O(log n + log m), where m is the number of values of the key
-/// (GAP(multimap-insert-cost), as `multimap::insert` states).
+/// (D-846, as `multimap::insert` states).
 pub fn insert<K: Compare, V>(m: SortedMultimap<K, V>, key: K, value: V) -> SortedMultimap<K, V> {
   // Taking the record apart first ends `m` before the tree changes, so a
   // multimap held only here reaches `upsert` unshared and its path can be

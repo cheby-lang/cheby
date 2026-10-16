@@ -79,7 +79,7 @@ const BOOM: [&str; 2] = [LOC, "boom"];
 
 /// `dst = read_layout held`: a use of a value the function holds across
 /// a call, right before its `drop`, so the drop follows the value's last
-/// use (GAP(drop-position-check)) while the value is still held at the
+/// use (D-851) while the value is still held at the
 /// call.
 fn touch(dst: u32, held: u32) -> Stmt {
     assign(dst, Rvalue::ReadLayout { base: local(held) })

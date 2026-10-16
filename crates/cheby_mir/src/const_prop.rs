@@ -1,4 +1,4 @@
-//! Static constants left uncounted (D-454, D-539; GAP(fusion-forms)): a
+//! Static constants left uncounted (D-454, D-539, D-850): a
 //! local defined as a static constant (a string literal, a nullary
 //! constructor's static object, a function value's static closure, the
 //! empty list, a static of the unit, a descriptor, `Nil`, `Err(Nil)`)
@@ -18,7 +18,7 @@
 //! callee, and a `use` that copies the local into another, so what reads
 //! a constant's fields or tag, and which locals are constants, stays as
 //! lowering made it: reuse proves layouts by those reads and never reuses
-//! a constant (GAP(reuse-pairing-scope)), and its decisions are the same
+//! a constant (D-839), and its decisions are the same
 //! with and without this pass. A panic's message keeps its local too (the
 //! path is cold). A definition no position reads any more is removed; one
 //! nothing read in the first place stays, as lowering made it. Raw

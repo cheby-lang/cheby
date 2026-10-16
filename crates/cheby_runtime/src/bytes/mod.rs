@@ -15,7 +15,7 @@
 //! and return it. A unique value that must grow moves into an object of
 //! twice its capacity, so a chain of pushes on a unique value runs in
 //! amortized O(1) per byte; a shared or static one is copied with twice
-//! its length (GAP(text-copy-capacity), refining D-577). `slice` keeps its range in place at count
+//! its length (D-849, refining D-577). `slice` keeps its range in place at count
 //! one, and returns the argument itself, shared, for the whole range.
 //!
 //! Positions (D-318, D-334): `get` and the reads give `None` for a

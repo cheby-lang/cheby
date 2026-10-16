@@ -179,6 +179,8 @@ For other types, `+ - * /` and unary `-` call the `add`, `sub`, `mul`, `div` and
 let full = first + " " + last
 ```
 
+_Note:_ on native, `+` on strings appends to its left operand in place when nothing else refers to it at run time and it has room ([§9.3](09-memory-model.md#93-reuse)) (D-525). A full operand is copied with twice its capacity, or more if the result needs it, so `acc + piece` repeated on an accumulator that nothing else refers to costs amortized O(1) per byte (D-577). An operand that is copied because something else refers to it or because it is static, such as a literal, gets twice its length instead, or more if the result needs it, so a string that stays shared does not double its capacity at every `+` (D-849).
+
 ### 5.4.4 Comparison
 
 - `a == b` and `a != b` use built-in structural equality ([§3.13](03-types.md#313-equality-hashing-and-debug-printing)) (D-033). Both operands must have the same type. Equality cannot be overloaded (D-047). It panics if it reaches a function value or a handle ([§3.13](03-types.md#313-equality-hashing-and-debug-printing)) (D-070, D-233).

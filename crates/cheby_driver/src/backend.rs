@@ -58,7 +58,7 @@
 //! side table that code generation never reads, and formats the report
 //! from the counted units ([`crate::reuse_report`]). Std and dependencies
 //! record nothing. The MIR and CLIF are the same with and without it
-//! (GAP(reuse-report-lines)).
+//! (D-852).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -169,7 +169,7 @@ pub(crate) fn build(
 /// [`build`], and with `reuse_report` also the text of `--reuse-report`
 /// in [`Built::reuse_report`] (D-717): lowering then records the sites of
 /// the package's own modules ([`MirOptions::record_sites`]), which changes
-/// no code (GAP(reuse-report-lines)). Under `CHEBY_RC=naive` nothing is
+/// no code (D-852). Under `CHEBY_RC=naive` nothing is
 /// recorded and the report is its one naive line.
 ///
 /// # Errors
@@ -306,7 +306,7 @@ fn build_dumping(
 
 /// D-759's RC operations of every function of `units`: `dup`, `drop` and
 /// `drop_reuse` outside unwind pads ([`cheby_mir::stats::rc_ops`]).
-/// GAP(rc-column-forms): until checkpoint 4 this counted the pads' drops
+/// D-843: until checkpoint 4 this counted the pads' drops
 /// too (`.m2-work/slice4/P2/rc-column.md`).
 fn rc_ops(units: &[MirModule]) -> u64 {
     let count: usize = units
@@ -1432,7 +1432,7 @@ fn main() {
         (mir, jit.take_clif())
     }
 
-    /// D-717, GAP(reuse-report-lines): `--reuse-report` changes no code.
+    /// D-717, D-852: `--reuse-report` changes no code.
     /// For every example the front end accepts, the build of its `main`
     /// and the build of its tests on native lower to byte-identical MIR
     /// dumps and compile to byte-identical CLIF with and without
@@ -1548,7 +1548,7 @@ fn main() {
     }
 
     /// Under naive counting nothing is reused, so the report is its one
-    /// line, and no site is recorded (D-746, GAP(reuse-report-lines)).
+    /// line, and no site is recorded (D-746, D-852).
     #[test]
     #[cfg_attr(
         windows,
@@ -1680,7 +1680,7 @@ fn main() {
     /// lower in both modes to MIR that validates after the unwind pass,
     /// naive MIR is the MIR before borrowing and reuse (Perceus with its
     /// passes off, [`MirOptions::perceus_passes_off`]; D-808,
-    /// GAP(reuse-token-form)), and no naive unit borrows or reuses
+    /// D-838), and no naive unit borrows or reuses
     /// anything. Perceus borrows in some example and reuses in some
     /// example. The examples the front end rejects today are skipped and
     /// printed with their codes.

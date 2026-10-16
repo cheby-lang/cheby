@@ -7,7 +7,7 @@
 //! operation, reuse included, call the runtime's checked entries. The
 //! third run is Perceus with `CHEBY_RT_POISON=0`, the only one that
 //! executes the inline count and reuse paths code generation emits
-//! (GAP(differential-reuse)). A debug `cheby` exits 102 when objects
+//! (D-844). A debug `cheby` exits 102 when objects
 //! leak (D-458), also after a panic (D-710), so every run is a leak check
 //! too.
 
@@ -221,9 +221,9 @@ pub fn differential_with(
     }
     let perceus = run(perceus, options.timeout, "the Perceus run")?;
 
-    // GAP(differential-reuse): poisoning sends every count and reuse
-    // operation through the runtime's checked entries, so only this run
-    // executes the inline paths (refines D-809).
+    // Poisoning sends every count and reuse operation through the
+    // runtime's checked entries, so only this run executes the inline
+    // paths (D-844, refining D-809).
     let mut poison_off = command(cheby, dir, "run");
     poison_off.env("CHEBY_RT_POISON", "0");
     let poison_off = run(

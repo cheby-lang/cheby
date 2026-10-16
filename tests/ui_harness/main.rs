@@ -29,7 +29,7 @@
 //! `CHEBY_RC=naive cargo test --test ui` runs the suite under naive
 //! counting (D-718), except a test whose flags include `--reuse-report`:
 //! its report describes Perceus, so it runs with `CHEBY_RC` removed
-//! (GAP(naive-variant-env)).
+//! (D-853).
 //!
 //! Strict runs (D-544): `CHEBY_MILESTONE` overrides `tests/milestone`,
 //! `CHEBY_PENDING=require` makes a failing pending test a failure unless
@@ -160,7 +160,7 @@ fn check_package(
         .env(POISON_ENV, "1");
     // The reuse report describes Perceus counting, so a test of it runs
     // with `CHEBY_RC` removed even when the harness runs under
-    // `CHEBY_RC=naive` (D-718, GAP(naive-variant-env)).
+    // `CHEBY_RC=naive` (D-718, D-853).
     if test
         .header
         .flags

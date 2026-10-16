@@ -54,7 +54,7 @@ The defaults run about one second each under `CHEBY_RC=naive` on a release build
 group twice from one binary: under `CHEBY_RC=naive` (no borrowing, reuse or fusion; D-808), which
 stands for M1's naive counting since M1's binary has none of these modules, and under Perceus. The
 naive reading becomes `baseline-collections.json`, the reference for M6's second measurement
-(D-336; GAP(collections-naive-reading)).
+(D-336, D-854).
 
 A group is a directory of `bench/runtime`, and its benchmarks are the subdirectories that hold a
 `cheby.toml`. A new group or benchmark needs no change to the command.

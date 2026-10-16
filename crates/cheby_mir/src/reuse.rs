@@ -10,9 +10,9 @@
 //! `alloc_reuse t, L'(…)` ([`Rvalue::DropReuse`], [`Rvalue::AllocReuse`]).
 //! The token `t` is an ordinary counted local: the unwind pass releases it
 //! in the pads of what may unwind between the two, and the ownership
-//! simulation checks it like any other local (GAP(reuse-token-form)).
+//! simulation checks it like any other local (D-838).
 //!
-//! # Pairing (GAP(reuse-pairing-scope))
+//! # Pairing (D-839)
 //!
 //! Per function, block by block in statement order (D-264):
 //!
@@ -32,7 +32,7 @@
 //! - A **sink** is an `alloc` of a constructor with fields or a tuple whose
 //!   object size ([`crate::layout::object_size`]) equals the source's. A
 //!   placeholder tuple (`alloc_placeholder`, D-810) is never a sink
-//!   (GAP(reuse-and-large-tuples)).
+//!   (D-840).
 //! - **In the source's block**, each sink takes the nearest unpaired source
 //!   of its size before it; each such source pairs once.
 //! - **Across blocks**, a source still unpaired at the end of its block
@@ -52,7 +52,7 @@
 //!
 //! A `precounted` body (D-693) is left alone.
 //!
-//! # Borrowing (GAP(reuse-owns-parameters))
+//! # Borrowing (D-841)
 //!
 //! A borrowed parameter is never dropped, so it can never be reused.
 //! [`candidate_params`] names the parameters whose drop would pair if they
@@ -248,7 +248,7 @@ fn make_sink(f: &mut Function, block: BlockId, at: usize, token: Local) -> Resul
 
 /// The counted parameters of `f`, a lowered function of `module` that
 /// borrows nothing yet, whose `drop` the counting and this pass would pair
-/// with an allocation if they were owned (GAP(reuse-owns-parameters),
+/// with an allocation if they were owned (D-841,
 /// refining D-806). Sorted.
 ///
 /// # Errors
@@ -385,7 +385,7 @@ pub(crate) fn tested_variants(
 }
 
 /// Whether a read of a field of `base` as `layout` in `block` proves that
-/// `base` is an object of `layout` (GAP(reuse-pairing-scope)). A tuple's
+/// `base` is an object of `layout` (D-839). A tuple's
 /// read does; a constructor's does when it is its type's only constructor
 /// ([`crate::LayoutDesc::only_ctor`]) or when an arm that tests `base` for
 /// it dominates `block` ([`tested_variants`]). A field every constructor

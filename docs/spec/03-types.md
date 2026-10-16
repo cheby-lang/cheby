@@ -198,7 +198,9 @@ The standard library also provides these collections. They are ordinary standard
 
 - A sorted collection is a persistent balanced tree with O(log n) lookup and update (D-331). It treats two keys as the same when `compare` returns `Equal`, and inserting such a key keeps the stored key and replaces only the value (D-341).
 - In an insertion-ordered collection, inserting a key that is already present keeps its position and replaces its value, and a key that is removed and inserted again moves to the end (D-340).
-- A multimap holds a `List<V>` under each key, in insertion order, with duplicates kept (D-332).
+- A multimap holds a `List<V>` under each key, in insertion order, with duplicates kept (D-332). Every key holds at least one value, so removing a key's last value removes the key, and looking up a missing key gives `[]` (D-364). A multimap's `size` counts its keys and its `count` counts its values (D-363).
+
+_Note:_ the reference implementation writes these seven collections in Cheby, with no runtime kernel of their own, and ships them from M2 (D-336, D-664).
 
 Their equality, hashing and debug printing are defined in [§3.13](#313-equality-hashing-and-debug-printing).
 
@@ -397,7 +399,7 @@ A `String` prints in double quotes with exactly the escapes that a string litera
 
 Some standard-library types print differently (D-342):
 
-- `Map`, `Set` and `multimap` values list their entries sorted by each entry's printed text, so the output is the same on every run despite the random iteration order (D-344). The texts are compared as UTF-8 bytes, which is the order of scalar values and of `String`'s `compare`, so `10` comes before `9`. A map entry's text is that of the pair `(key, value)`, and a nested collection counts with its own sorted text (D-587).
+- `Map`, `Set` and `multimap` values print as `map::from_list([…])`, `set::from_list([…])` and `multimap::from_list([…])`, so the text reads as the code that rebuilds the value (D-382). `Map` and `Set` list their entries sorted by each entry's printed text, so the output is the same on every run despite the random iteration order (D-344). The texts are compared as UTF-8 bytes, which is the order of scalar values and of `String`'s `compare`, so `10` comes before `9`. A map entry's text is that of the pair `(key, value)`, and a nested collection counts with its own sorted text (D-587). A `multimap` lists one pair per value: its keys sorted by their printed text, compared the same way, and each key's pairs in insertion order. Keys with the same printed text are ordered by the text of their pairs (D-847).
 - Sorted and insertion-ordered collections list their entries in their own order, not their internal tree or list nodes (D-342).
 - `io::Error` prints the same text as its `show`, a fixed message for each kind the standard library knows, and never the operating system's internal fields (D-345).
 

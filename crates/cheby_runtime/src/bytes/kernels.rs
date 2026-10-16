@@ -46,7 +46,7 @@ fn window<const N: usize>(data: &[u8], offset: i64) -> Option<[u8; N]> {
 /// Otherwise a new object with room: twice `data`'s capacity when it is
 /// unique, so a chain of pushes on a unique value grows by doubling and
 /// runs in amortized O(1) per byte, and twice its length when it is shared
-/// or static (GAP(text-copy-capacity), refining D-577); at least what the
+/// or static (D-849, refining D-577); at least what the
 /// result needs.
 ///
 /// # Safety

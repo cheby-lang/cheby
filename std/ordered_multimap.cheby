@@ -166,9 +166,9 @@ test "last is the newest key" {
 
 /// Returns the multimap with `value` appended to the values of `key`. A
 /// new key goes at the end, and a key already present keeps its place
-/// (D-340). GAP(multimap-insert-cost): O(log n + log m), m the number of
-/// values of `key`, as in `multimap`: the key's update is O(log n), and
-/// appending to its `List<V>` is O(log m).
+/// (D-340). It costs O(log n + log m) (D-846), m the number of values of
+/// `key`, as in `multimap`: the key's update is O(log n), and appending to
+/// its `List<V>` is O(log m).
 pub fn insert<K, V>(m: OrderedMultimap<K, V>, key: K, value: V) -> OrderedMultimap<K, V> {
   // Taking the record apart first ends `m` before the map changes, so a
   // multimap held only here reaches `upsert` unshared and can be updated

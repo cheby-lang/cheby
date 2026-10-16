@@ -138,7 +138,7 @@ pub(crate) struct Pending {
     trampolines: BTreeSet<u32>,
     /// Whether the unit's bodies record the source sites of their
     /// allocations and calls ([`Function::sites`]) for `--reuse-report`
-    /// (D-717, GAP(reuse-report-lines)). Off unless the driver asks, so
+    /// (D-717, D-852). Off unless the driver asks, so
     /// a build without the flag keeps no table.
     record_sites: bool,
 }

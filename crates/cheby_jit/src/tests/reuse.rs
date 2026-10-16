@@ -7,7 +7,7 @@
 //! panic between the two forms releases the token in the pad; `Some`
 //! takes the block of an `Ok`. Each test's JIT has its own domain, which
 //! ends with nothing alive: reuse keeps the domain's charges balanced. The
-//! counters `reuse hits` and `reuse misses` (GAP(reuse-counters)) are read
+//! counters `reuse hits` and `reuse misses` (D-842) are read
 //! from the domain. Run with `CHEBY_RT_POISON=0` and `=1` (D-458).
 
 use cheby_codegen_clif::CodegenOptions;
@@ -395,7 +395,7 @@ fn field_of(dst: u32, base: u32, layout: LayoutRef, i: u32) -> Stmt {
     )
 }
 
-/// `dst = drop_reuse local of layout keep [...]` (GAP(fusion-forms)).
+/// `dst = drop_reuse local of layout keep [...]` (D-850).
 fn drop_reuse_keep(dst: u32, local_: u32, layout: LayoutRef, keep: &[(u32, u32)]) -> Stmt {
     assign(
         dst,
@@ -408,7 +408,7 @@ fn drop_reuse_keep(dst: u32, local_: u32, layout: LayoutRef, keep: &[(u32, u32)]
 }
 
 /// `drop local of layout keep [...]`, a drop specialized by constructor
-/// (GAP(fusion-forms)).
+/// (D-850).
 fn drop_keep(local_: u32, layout: LayoutRef, keep: &[(u32, u32)]) -> Stmt {
     Stmt::DropKeep {
         local: local(local_),
@@ -563,7 +563,7 @@ fn reuse_keep_a_specialized_drop_of_a_count_of_2_gives_up_a_reference() {
 
 /// More than 8 value fields not kept: the hit path zeroes the kept one and
 /// releases the rest through `cheby_rt_release_fields`, then frees the
-/// block (the inline cap, GAP(fusion-forms)).
+/// block (the inline cap, D-850).
 #[test]
 #[cfg_attr(
     windows,

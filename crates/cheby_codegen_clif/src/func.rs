@@ -799,7 +799,7 @@ impl Translator<'_, '_> {
                     self.drop_value(v)?;
                 }
             }
-            // Never in a pad (D-735, GAP(fusion-forms)).
+            // Never in a pad (D-735, D-850).
             Stmt::DropKeep {
                 local,
                 layout,

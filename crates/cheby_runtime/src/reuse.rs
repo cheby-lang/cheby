@@ -15,7 +15,7 @@
 //! each domain's charges stay balanced.
 //!
 //! The counters `reuse hits` and `reuse misses` of `CHEBY_RT_STATS`
-//! (GAP(reuse-counters), refining D-768 and D-635): a miss is counted by
+//! (D-842, refining D-768 and D-635): a miss is counted by
 //! the distinct allocation entry [`cheby_rt_alloc_miss`], which costs what
 //! `cheby_rt_alloc` costs; a hit makes no call, so generated code loads
 //! the counting flag ([`crate::stats::counting_flag`]) and calls
@@ -27,7 +27,7 @@
 //! [`cheby_rt_alloc_reuse_checked`] instead, which check every header and
 //! that the object size the compiler computed is the one the runtime frees
 //! with, for the old object and the new one (the last guard of
-//! `cheby_mir::layout::object_size`, GAP(reuse-token-form)): a block freed
+//! `cheby_mir::layout::object_size`, D-838): a block freed
 //! with another size than it was allocated with is undefined behavior.
 
 use crate::abi::{self, Word};
@@ -61,7 +61,7 @@ pub unsafe extern "C" fn cheby_rt_release_fields(ctx: *mut ExecCtx, obj: Word) {
 
 /// Frees `obj`, a unique object of a constructor or tuple layout whose
 /// value fields the hit path of a drop specialized by constructor already
-/// released or moved to its kept projections (D-716, GAP(fusion-forms)):
+/// released or moved to its kept projections (D-716, D-850):
 /// the block only, charged to the domain as a free is. Never raises
 /// (D-171).
 ///

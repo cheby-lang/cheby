@@ -16,7 +16,7 @@
 //! must grow moves into a new object of twice its capacity, so a chain of
 //! `+` on a unique accumulator runs in amortized O(1) per byte appended; a
 //! shared or static text is copied with twice its length
-//! (GAP(text-copy-capacity), refining D-577). Either is at least what the
+//! (D-849, refining D-577). Either is at least what the
 //! result needs.
 //!
 //! Unicode (D-310, D-552): case mapping is

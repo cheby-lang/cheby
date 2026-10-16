@@ -34,7 +34,7 @@ pub const SCAN_MAX: u64 = 254;
 /// a layout whose size is not fixed (`String`, `Bytes`), a constructor the
 /// unit has no layout for, or a size that overflows.
 ///
-/// The one size function of reuse (D-716, GAP(reuse-token-form)): a block
+/// The one size function of reuse (D-716, D-838): a block
 /// is reused only for an object of the same size, because the runtime
 /// frees it with the size its new header implies, and code generation
 /// checks that its allocation sizes agree.
@@ -114,7 +114,7 @@ pub struct LayoutDesc {
     /// Whether it is its type's only constructor, read from the type's
     /// interface (D-246): then a field read of it proves its layout
     /// without a test of the tag, which the reuse pass needs
-    /// (GAP(reuse-pairing-scope), D-071).
+    /// (D-839, D-071).
     pub only_ctor: bool,
     /// In declaration order.
     pub fields: Vec<FieldDesc>,

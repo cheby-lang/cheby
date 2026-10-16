@@ -56,7 +56,7 @@ pub enum Event {
     /// It made a new root for a shared map or set.
     MapUpdateCopied,
     /// An `alloc_reuse` wrote over the block of a unique object that a
-    /// `drop_reuse` kept (D-716; GAP(reuse-counters)).
+    /// `drop_reuse` kept (D-716, D-842).
     ReuseHit,
     /// An `alloc_reuse` allocated, because the object its `drop_reuse`
     /// gave up was not unique.
@@ -263,7 +263,7 @@ fn counting_first() -> bool {
 /// a reuse hit makes no runtime call, so the code loads this byte and
 /// calls `cheby_rt_reuse_hit` out of line only when it is not
 /// [`COUNTING_OFF`] (counting on, or not settled yet, which the call
-/// settles). GAP(reuse-counters), refining D-768.
+/// settles). D-842, refining D-768.
 #[must_use]
 pub fn counting_flag() -> &'static AtomicU8 {
     &COUNTING

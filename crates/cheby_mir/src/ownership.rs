@@ -98,7 +98,7 @@ impl Counts {
     /// Forgets the borrow bases of locals that hold nothing, except the
     /// `field` results whose base still keeps them alive
     /// ([`Counts::borrow_alive`]): fusion sinks a projection's `dup` into a
-    /// successor that only its block enters (GAP(fusion-forms)), so the
+    /// successor that only its block enters (D-850), so the
     /// projection flows there holding nothing.
     fn retain_alive_borrows(&mut self) {
         let keep: Vec<bool> = self
@@ -139,7 +139,7 @@ impl Counts {
     /// reference: a `load_const` result always, a `field` result while its
     /// base holds one, or while its base is itself such a result (a
     /// projection of a projection whose `dup` fusion sank,
-    /// GAP(fusion-forms)). The chain is walked without recursion, at most
+    /// D-850). The chain is walked without recursion, at most
     /// once per entry.
     fn borrow_alive(&self, l: Local) -> bool {
         let mut at = l;
@@ -400,8 +400,7 @@ impl<O: Observer> Sim<'_, O> {
             let at = Site::Stmt(id, n);
             match stmt {
                 Stmt::Assign { dst, value } => {
-                    // A keep list is its `dup`s before the release
-                    // (GAP(fusion-forms)).
+                    // A keep list is its `dup`s before the release (D-850).
                     for &(_, p) in value.kept() {
                         self.dup(&mut st, p, at);
                     }
@@ -426,7 +425,7 @@ impl<O: Observer> Sim<'_, O> {
                 Stmt::Eval(value) => self.consume(&mut st, &value.uses(), at)?,
                 Stmt::Dup(l) => self.dup(&mut st, *l, at),
                 Stmt::Drop(l) => self.consume(&mut st, &[(*l, UseKind::Owned)], at)?,
-                // Its `dup`s, then the drop (GAP(fusion-forms)).
+                // Its `dup`s, then the drop (D-850).
                 Stmt::DropKeep { local, keep, .. } => {
                     for &(_, p) in keep {
                         self.dup(&mut st, p, at);
@@ -501,7 +500,7 @@ impl<O: Observer> Sim<'_, O> {
     /// predecessors brought.
     fn flow(&mut self, target: BlockId, mut st: Counts, from: Site) {
         // Into a block with one predecessor, a projection whose `dup`
-        // fusion sank keeps its base (GAP(fusion-forms)); where paths join,
+        // fusion sank keeps its base (D-850); where paths join,
         // only what holds a reference flows, so every predecessor brings
         // the same state.
         if self
@@ -590,7 +589,7 @@ impl<O: Observer> Sim<'_, O> {
                 ));
             }
         }
-        // GAP(fusion-forms): fusion sinks a projection's `dup` past its
+        // D-850: fusion sinks a projection's `dup` past its
         // borrowed uses, which its base's reference keeps valid.
         for l in projections {
             if !st.borrow_alive(l) {

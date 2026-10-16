@@ -19,19 +19,18 @@
 //! below one, the generator is extended, never the floor lowered: at
 //! least 30 of the 40 programs have a borrowed parameter in a generated
 //! function (D-715, D-787, D-809), and at least 25 have a `drop_reuse`
-//! in a generated function or a closure of one (D-716;
-//! GAP(differential-reuse), refining D-809). A separate run of 5 seeds
-//! with `CHEBY_RT_STATS=1` must count reuse hits, so that reuse happens
-//! at run time too, not only in the MIR.
+//! in a generated function or a closure of one (D-716, D-844). A
+//! separate run of 5 seeds with `CHEBY_RT_STATS=1` must count reuse hits,
+//! so that reuse happens at run time too, not only in the MIR.
 //!
 //! `progen_*` checks the generator itself on 200 seeds: each program
 //! checks with no diagnostic at all and finishes within the timeout.
 //!
-//! Until P4's `@rc=naive` conformance variant exists, this test is the
-//! oracle of borrowing and reuse (D-718). The packages stay under
-//! `CARGO_TARGET_TMPDIR/rc_differential/` for reproduction: run `cheby
-//! run` there with and without `CHEBY_RC=naive`, and with
-//! `CHEBY_RT_POISON=0`.
+//! With the `@rc=naive` conformance variant (D-853), this test is the
+//! oracle of borrowing and reuse on generated programs (D-718, D-844).
+//! The packages stay under `CARGO_TARGET_TMPDIR/rc_differential/` for
+//! reproduction: run `cheby run` there with and without `CHEBY_RC=naive`,
+//! and with `CHEBY_RT_POISON=0`.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -70,8 +69,8 @@ const DROP_REUSE: &str = "= drop_reuse _";
 
 /// The least number of the 40 programs that must have a `drop_reuse` in
 /// a generated function or a closure of one, so that the differential
-/// tests reuse (D-716). GAP(differential-reuse), refining D-809: if fewer
-/// do, the generator is extended, never this threshold.
+/// tests reuse (D-716, D-844). If fewer do, the generator is extended,
+/// never this threshold.
 const MIN_REUSING: usize = 25;
 
 /// The `CHEBY_RT_STATS` line of reuse hits (`crates/cheby_runtime/src/stats.rs`,

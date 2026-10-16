@@ -26,7 +26,7 @@ test "sorted maps compare, hash and print by contents" {
 }
 ```
 
-Every function carries the bound `K: Compare`, including those that never compare keys, so the module has one rule (D-385).
+Every function carries the bound `K: Compare`, including those that never compare keys, so the module has one rule (D-385). The rule binds the public functions. The hooks of equality, hashing and debug printing (D-342), and the package-visible helpers that other standard-library modules use to walk the entries, take no bound and never call `compare`: D-482 forbids bounds on hooks, and the walks need the entries without a `Compare` value (D-845).
 
 ## Building
 

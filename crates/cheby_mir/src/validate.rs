@@ -48,14 +48,14 @@
 //! or tuples of the same object size, and that neither a borrowed local
 //! nor a tuple being filled is reused (D-715, D-810).
 //!
-//! Fusion (D-716, GAP(fusion-forms)): a keep list (on a `drop_reuse` or a
+//! Fusion (D-716, D-850): a keep list (on a `drop_reuse` or a
 //! drop specialized by constructor) names counted `field` projections of
 //! the released local at their index in its layout, each index once,
 //! nothing borrowed; a specialized drop keeps something, is never in a
 //! cleanup pad, and a read pins its constructor as reuse's proofs do. The
 //! ownership simulation models each as its `dup`s, then the release.
 //! With the full ownership check (debug builds), no drop moves later
-//! (GAP(drop-position-check), `FnCx::check_drop_positions`).
+//! (D-851, `FnCx::check_drop_positions`).
 //!
 //! Canonical pads, blocks `drop _l; goto <pad>` or `resume` that lead
 //! only to `resume` and that normal control flow does not reach, are left
@@ -387,7 +387,7 @@ impl FnCx<'_> {
         Ok(())
     }
 
-    /// No drop moves later (D-716, D-205; GAP(drop-position-check)): in a
+    /// No drop moves later (D-716, D-205, D-851): in a
     /// block normal control flow reaches, between a counted local's last
     /// use (or its definition) and each statement that releases it (`drop`,
     /// `drop_reuse`, a specialized drop), nothing runs but `dup`, `drop`,
@@ -398,7 +398,7 @@ impl FnCx<'_> {
     /// hold a handle, so it needs no type facts. A reuse token's own `drop`
     /// is exempt: the token holds no reference and no handle (a childless
     /// block, or 0), and `reuse` holds it across calls into the arms that
-    /// rebuild (GAP(reuse-pairing-scope)); the drop of the matched value is
+    /// rebuild (D-839); the drop of the matched value is
     /// its `drop_reuse`, which the rule covers. Cleanup pads are exempt:
     /// they release what an unwinding leaves held (D-698). Run only with
     /// the full ownership check, so in debug builds (D-774): release
@@ -942,7 +942,7 @@ impl FnCx<'_> {
         false
     }
 
-    /// The reuse tokens (D-716, D-698, GAP(reuse-token-form)): only after
+    /// The reuse tokens (D-716, D-698, D-838): only after
     /// reference counting; a `drop_reuse` gives up an owned local that is
     /// not borrowed (D-715, D-807) and not a tuple being filled (D-810),
     /// and defines a token, a local without a source type; a token is used
@@ -989,7 +989,7 @@ impl FnCx<'_> {
                         value: Rvalue::AllocReuse { token, layout, .. },
                         ..
                     } => sinks.push((id, *token, *layout)),
-                    // A specialized drop (GAP(fusion-forms)): what a source
+                    // A specialized drop (D-850): what a source
                     // may not be, a non-empty keep list, and never in a
                     // cleanup pad (D-735).
                     Stmt::DropKeep {
@@ -1083,7 +1083,7 @@ impl FnCx<'_> {
 
     /// A specialized drop of `local` in block `id` keeps something and is
     /// in a block normal control flow reaches (`normal`, by block index):
-    /// never in a cleanup pad (D-735; GAP(fusion-forms)).
+    /// never in a cleanup pad (D-735, D-850).
     fn check_specialized_site(
         &mut self,
         id: BlockId,
@@ -1109,7 +1109,7 @@ impl FnCx<'_> {
     /// Each specialized drop in `specialized` (block, local, layout)
     /// releases the fields of its layout, so a read must pin the
     /// constructor there, as for reuse ([`crate::fuse::Pins`]): never a
-    /// shared field's read (D-071; GAP(fusion-forms)).
+    /// shared field's read (D-071, D-850).
     fn check_pinned(&mut self, specialized: &[(BlockId, Local, LayoutRef)]) -> Result<(), Ice> {
         if specialized.is_empty() {
             return Ok(());
@@ -1127,7 +1127,7 @@ impl FnCx<'_> {
         Ok(())
     }
 
-    /// The keep lists (fusion, D-716, GAP(fusion-forms)) of the releases
+    /// The keep lists (fusion, D-716, D-850) of the releases
     /// in `keeps`: each kept local is a counted `field x.i of L` projection
     /// of the released local `x` at its index `i` in the release's layout
     /// `L`, the indices are distinct, and no kept local is borrowed (D-715,
@@ -1973,7 +1973,7 @@ impl FnCx<'_> {
 }
 
 /// Whether `stmt` only releases or adds references, running nothing a
-/// handle could observe (GAP(drop-position-check)): `dup`, `drop`,
+/// handle could observe (D-851): `dup`, `drop`,
 /// `drop_reuse` and specialized drops.
 fn releases_only(stmt: &Stmt) -> bool {
     matches!(

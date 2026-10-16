@@ -46,7 +46,7 @@ fn hash<K, V>(m: Multimap<K, V>) -> Map<K, List<V>> {
 /// key in insertion order, so the text is the same on every run and rebuilds
 /// the multimap (D-344, D-382, D-587). The sort is stable (D-299). Two keys
 /// with the same debug text are ordered by the text of their pairs, so the
-/// map's order cannot show (GAP(multimap-debug-key-order)).
+/// map's order cannot show (D-847).
 fn debug<K, V>(m: Multimap<K, V>) -> String {
   let chunks = map::fold(m.entries, [], fn(found, key, values) {
     let pairs = list::map(values, fn(value) {

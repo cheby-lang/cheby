@@ -24,7 +24,7 @@
 //! The scheduler threads of the trials compete with each other, so the
 //! harness bounds its own parallelism ([`capped_test_threads`]).
 //!
-//! The naive-counting variant (D-718, GAP(naive-variant-env)): every run
+//! The naive-counting variant (D-718, D-853): every run
 //! and `::test` trial also runs as `<name>@rc=naive` and
 //! `<name>::test@rc=naive` ([`Variant::RcNaive`], [`with_rc_naive`]), with
 //! `CHEBY_RC=naive` (D-746) and the base trial's goldens, at the default
@@ -51,8 +51,7 @@ pub enum Variant {
     Unset,
     /// `CHEBY_THREADS=<n>`.
     Threads(u32),
-    /// `CHEBY_RC=naive` at the default thread count (D-718,
-    /// GAP(naive-variant-env)).
+    /// `CHEBY_RC=naive` at the default thread count (D-718, D-853).
     RcNaive,
 }
 
@@ -167,7 +166,7 @@ pub enum EnvChange {
 /// applied: `NO_COLOR=1`, the example's `env` file, `CHEBY_RT_POISON=1`,
 /// then `CHEBY_THREADS` set for a thread variant or removed for the others,
 /// then `CHEBY_RC` set to `naive` for [`Variant::RcNaive`] or removed for
-/// the others (GAP(naive-variant-env)). A later change wins over an
+/// the others (D-853). A later change wins over an
 /// earlier one of the same variable.
 #[must_use]
 pub fn child_env(example_env: &[(String, String)], variant: Variant) -> Vec<EnvChange> {

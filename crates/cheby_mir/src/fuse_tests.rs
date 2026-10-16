@@ -1,8 +1,8 @@
-//! Tests of fusion (D-716, GAP(fusion-forms)): dup sinking, cancelling,
+//! Tests of fusion (D-716, D-850): dup sinking, cancelling,
 //! keep lists and drops specialized by constructor on programs as
 //! `cheby run` counts them; static constants left uncounted; the forms'
 //! validation and dump; reuse's decisions unchanged by fusion; and the
-//! drop-position check (GAP(drop-position-check)) with its negatives.
+//! drop-position check (D-851) with its negatives.
 
 use cheby_diag::{FileId, Span, TextRange};
 use cheby_iface::{DefId, DefIndex, Idx, ModuleId};
@@ -493,7 +493,7 @@ fn normal_blocks(f: &Function) -> Vec<bool> {
 
 /// `bench-compile`'s RC column counts a specialized drop and a
 /// `drop_reuse` with a keep list as one operation each
-/// (GAP(rc-column-forms)).
+/// (D-843).
 #[test]
 fn fuse_rc_ops_count_a_specialized_drop_once() {
     let ops = |options: MirOptions| {
@@ -625,7 +625,7 @@ fn fuse_dump_syntax() {
     );
 }
 
-/// The forms check (GAP(fusion-forms)): a hand-counted specialized drop
+/// The forms check (D-850): a hand-counted specialized drop
 /// and a keep list are accepted, and modelled as their `dup`s, then the
 /// release.
 #[test]
@@ -758,7 +758,7 @@ fn fuse_validator_rejects_bad_keep_lists() {
     );
 }
 
-/// The drop-position check (GAP(drop-position-check)): a `drop` placed
+/// The drop-position check (D-851): a `drop` placed
 /// after a later call is rejected.
 #[test]
 fn drop_position_rejects_a_drop_moved_past_a_call() {
@@ -839,8 +839,8 @@ fn drop_position_rejects_a_drop_moved_across_blocks() {
 }
 
 /// A reuse token's own `drop` is exempt (it holds no reference and no
-/// handle; GAP(reuse-pairing-scope)): reuse holds it across calls into
-/// the arms that rebuild.
+/// handle; D-851): reuse holds it across calls into the arms that
+/// rebuild (D-839).
 #[test]
 fn drop_position_exempts_a_reuse_tokens_drop() {
     let t1 = LayoutRef::Tuple(1);

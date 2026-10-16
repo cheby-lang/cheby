@@ -1,6 +1,6 @@
 //! The std kernels that update their first argument in place when it is
 //! unique at run time (D-525), for the kernel lines of `--reuse-report`
-//! (D-717, GAP(reuse-report-lines)).
+//! (D-717, D-852).
 //!
 //! A call of one of these functions whose first argument is a local at its
 //! last use gets a line saying that the update is in place when that value

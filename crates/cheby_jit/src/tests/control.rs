@@ -207,7 +207,7 @@ fn capture_reader(key: FnKey) -> Function {
         straight(
             vec![
                 // The unused parameter goes first: no drop moves past a
-                // later instruction (GAP(drop-position-check)).
+                // later instruction (D-851).
                 Stmt::Drop(local(1)),
                 assign(
                     2,

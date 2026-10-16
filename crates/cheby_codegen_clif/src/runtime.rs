@@ -97,7 +97,7 @@ pub enum RuntimeFunc {
     AllocReuseChecked,
     /// `void cheby_rt_free_unique(ExecCtx *ctx, uint64_t obj)`: the hit path
     /// of a drop specialized by constructor frees the block whose fields
-    /// it released or kept (D-716, GAP(fusion-forms)).
+    /// it released or kept (D-716, D-850).
     FreeUnique,
 }
 

@@ -584,7 +584,7 @@ pub mod sym {
     /// when the allocation raised.
     pub const ALLOC_REUSE_CHECKED: &str = "cheby_rt_alloc_reuse_checked";
     /// `void cheby_rt_free_unique(ExecCtx *ctx, uint64_t obj)`: the hit path
-    /// of a drop specialized by constructor (D-716, GAP(fusion-forms)):
+    /// of a drop specialized by constructor (D-716, D-850):
     /// frees the block of a unique constructor or tuple object whose value
     /// fields generated code already released or moved to its kept
     /// projections, charging the domain as a free does.

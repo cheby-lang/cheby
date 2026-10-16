@@ -6,7 +6,7 @@
 //! `SortedMap<T, Nil>`. Every function carries the bound `T: Compare`
 //! (D-385). The hooks and `elements` carry none, as D-482 asks of hooks,
 //! and reach the tree only through `sorted_map`'s unbounded helpers
-//! (GAP(sorted-unbounded-helpers)).
+//! (D-845).
 
 import std::int
 import std::list
@@ -29,7 +29,7 @@ priv fn tree<T>(s: SortedSet<T>) -> sorted_map::SortedMap<T, Nil> {
 }
 
 /// The elements in order, without calling `compare` (the hooks).
-/// GAP(sorted-unbounded-helpers): no bound, as D-482 asks of hooks.
+/// It has no bound, as D-482 asks of hooks (D-845).
 priv fn elements<T>(s: SortedSet<T>) -> List<T> {
   sorted_map::fold_entries(tree(s), [], fn(found, item, _) { list::push(found, item) })
 }

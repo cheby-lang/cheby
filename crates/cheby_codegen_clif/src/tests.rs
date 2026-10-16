@@ -760,7 +760,7 @@ fn slice_runtime_functions() {
 }
 
 /// Reuse's runtime entries (D-716), inline and checked, and fusion's
-/// `cheby_rt_free_unique` (GAP(fusion-forms)): their C types and indexes
+/// `cheby_rt_free_unique` (D-850): their C types and indexes
 /// 30 to 35, all declared on demand, and the one size function's
 /// constants, which MIR mirrors from the runtime.
 #[test]

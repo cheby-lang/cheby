@@ -837,7 +837,7 @@ impl Decls {
                     {
                         self.declare_reuse(module)?;
                     }
-                    // A specialized drop's hit path (GAP(fusion-forms)).
+                    // A specialized drop's hit path (D-850).
                     if let Stmt::DropKeep { .. } = stmt {
                         self.declare_runtime_func(module, RuntimeFunc::ReleaseFields)?;
                         self.declare_runtime_func(module, RuntimeFunc::FreeUnique)?;

@@ -51,11 +51,17 @@ When the compiler can prove that a value is uniquely referenced at the point whe
 
 Reuse is an optimization. It never changes a program's result, because the old value is unreachable when it is reused. Implementations should reuse wherever they can, because Cheby has no mutable escape hatch and relies on reuse for performance (D-017, ADR-0007).
 
+A kernel, a standard-library function implemented in the runtime such as `list::push`, `map::insert` or `bytes::append`, may update an argument in place when nothing else refers to it at run time, and builds a new value otherwise (D-525).
+
 _Example:_ when `counts` is not used afterwards, this updates the map in place.
 
 ```cheby
 let updated = map::insert(counts, word, n + 1)
 ```
+
+A shared value ([§9.4](#94-sharing-across-threads)) is never reused (D-716). Reuse, and the optimizations that go with it, such as fusing count operations and releasing a value whose constructor is known while keeping the fields still in use, must not move the release of a value that may hold a handle past the point that guarantee 3 of [§9.2](#92-reference-counting) fixes (D-205, D-716).
+
+_Note:_ the reference implementation reuses the memory of a released value only for a new value of the same size, and only when a read of the old value's fields pins its constructor. A field that every variant of a type with several variants has, read with `x.name` ([§5.11.3](05-expressions.md#5113-field-access)) (D-071), pins no constructor, so it proves nothing about the layout. A static object, such as a constant's value, is never reused (D-838, D-839). A parameter whose memory would be reused is kept owned, never borrowed (D-841). Under Perceus counting it also cancels an increment that meets a decrement of the same value, releases a value whose constructor is known while keeping the fields still in use, and does not count a constant's value at all (D-850). Debug builds check that between a counted value's last use and each release of it, only count operations run, for every counted value, not only those that may hold a handle (D-851).
 
 Implementations provide a compiler flag that reports where reuse did or did not happen, for performance tuning (D-170). The flag and its output are tooling, outside this specification. The reference toolchain's flag is `--reuse-report` ([§13.1](13-tooling.md#131-the-cheby-command)) (D-717).
 

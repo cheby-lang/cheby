@@ -105,8 +105,7 @@ impl Liveness {
 
     /// Liveness by value uses ([`stmt_value_uses`]): a local is live where
     /// a later instruction still reads its value, whatever `dup`s and
-    /// releases come between. The drop-position check reads it
-    /// (GAP(drop-position-check)).
+    /// releases come between. The drop-position check reads it (D-851).
     pub(crate) fn compute_values(f: &Function) -> Result<Self, Ice> {
         Self::compute_by(f, stmt_value_uses)
     }

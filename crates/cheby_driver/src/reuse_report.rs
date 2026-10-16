@@ -2,7 +2,7 @@
 //! §13.1): one line per reuse candidate of the package's own code, written
 //! to standard error after the warnings and before anything runs.
 //!
-//! GAP(reuse-report-lines), refining D-717 (and D-170 through it):
+//! D-852, refining D-717 (and D-170 through it):
 //!
 //! - A line is `reuse: <file>:<line>:<col>: <text>`. The lines are sorted
 //!   by file, line and column (then by text), so the report never depends
@@ -580,7 +580,7 @@ impl<'f> Flow<'f> {
     /// when statement `at` of block `id` consumes `x`, so that the kernel
     /// there never finds it unique.
     ///
-    /// GAP(reuse-report-lines): survey-perceus §4.2 (UQ-21 (a)) wants a
+    /// D-852: survey-perceus §4.2 (UQ-21 (a)) wants a
     /// kernel line's argument to be "a local consumed by the call with no
     /// `dup` before it". Read literally, that also drops the line of a
     /// value lent to a call first (`set::contains(held, x)` before
