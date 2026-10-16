@@ -97,6 +97,10 @@ pub const STD_MODULES: &[StdModule] = &[
         source: include_str!("../../../std/map.cheby"),
     },
     StdModule {
+        path: "multimap",
+        source: include_str!("../../../std/multimap.cheby"),
+    },
+    StdModule {
         path: "nil",
         source: include_str!("../../../std/nil.cheby"),
     },
@@ -111,6 +115,18 @@ pub const STD_MODULES: &[StdModule] = &[
     StdModule {
         path: "order",
         source: include_str!("../../../std/order.cheby"),
+    },
+    StdModule {
+        path: "ordered_map",
+        source: include_str!("../../../std/ordered_map.cheby"),
+    },
+    StdModule {
+        path: "ordered_multimap",
+        source: include_str!("../../../std/ordered_multimap.cheby"),
+    },
+    StdModule {
+        path: "ordered_set",
+        source: include_str!("../../../std/ordered_set.cheby"),
     },
     StdModule {
         path: "random",
@@ -131,6 +147,18 @@ pub const STD_MODULES: &[StdModule] = &[
     StdModule {
         path: "set",
         source: include_str!("../../../std/set.cheby"),
+    },
+    StdModule {
+        path: "sorted_map",
+        source: include_str!("../../../std/sorted_map.cheby"),
+    },
+    StdModule {
+        path: "sorted_multimap",
+        source: include_str!("../../../std/sorted_multimap.cheby"),
+    },
+    StdModule {
+        path: "sorted_set",
+        source: include_str!("../../../std/sorted_set.cheby"),
     },
     StdModule {
         path: "string",
@@ -162,23 +190,9 @@ pub const STD_MODULES: &[StdModule] = &[
 pub const STAGED_STD_MODULES: &[StdModule] = &[];
 
 /// Modules the standard-library spec plans that `std/` does not ship yet:
-/// the rest of tier 1 (`docs/stdlib/`), tier 2 and tier 3
-/// (`docs/plan/stdlib.md`). Importing one is E0038, not E0039 (D-451).
-/// Sorted.
-pub const PLANNED_STD_MODULES: &[&str] = &[
-    "file",
-    "http",
-    "multimap",
-    "net",
-    "ordered_map",
-    "ordered_multimap",
-    "ordered_set",
-    "process",
-    "sorted_map",
-    "sorted_multimap",
-    "sorted_set",
-    "time",
-];
+/// the rest of tier 2 and tier 3 (`docs/plan/stdlib.md`). Importing one is
+/// E0038, not E0039 (D-451). Sorted.
+pub const PLANNED_STD_MODULES: &[&str] = &["file", "http", "net", "process", "time"];
 
 /// Spec tests of shipped modules that `std/` may lack while a milestone is
 /// in progress (D-728), as `(module, test name, milestone)`: the module's
@@ -402,12 +416,94 @@ mod tests {
         }
     }
 
+    /// M2 ships tier 1's seven collections, written in Cheby (D-664,
+    /// D-336). Each has its file in `std/`, is shipped and is no longer
+    /// planned, so importing it is no longer E0038 (D-480).
+    #[test]
+    fn m2_collections_ship() {
+        for path in [
+            "multimap",
+            "ordered_map",
+            "ordered_multimap",
+            "ordered_set",
+            "sorted_map",
+            "sorted_multimap",
+            "sorted_set",
+        ] {
+            assert!(
+                repo().join(display_path(path)).exists(),
+                "std/{path}.cheby is missing"
+            );
+            assert!(find(path).is_some(), "std::{path} is not shipped");
+            assert!(!is_planned(path), "std::{path} is still planned");
+        }
+    }
+
     /// The `test "name"` lines of a source or a stdlib-spec page.
     fn test_names(text: &str) -> Vec<&str> {
         text.lines()
             .filter_map(|line| line.strip_prefix("test \"")?.split_once("\" {"))
             .map(|(name, _)| name)
             .collect()
+    }
+
+    /// The std modules a source imports, by their `import std::…` lines:
+    /// `import std::ops::{Compare}` imports `ops`, `import std::json::tree`
+    /// imports `json::tree`.
+    fn std_imports(source: &str) -> Vec<&str> {
+        source
+            .lines()
+            .filter_map(|line| line.strip_prefix("import std::"))
+            .map(|rest| {
+                let rest = rest.split_once(" as ").map_or(rest, |(path, _)| path);
+                let rest = rest.split_once("::{").map_or(rest, |(path, _)| path);
+                rest.trim()
+            })
+            .collect()
+    }
+
+    /// Whether a test of `module`'s page, named `wanted` in `std/`, is in
+    /// `module` itself or in a module that imports it (D-479, D-630). A
+    /// test of the same name in an unrelated module does not count: the
+    /// seven collections' pages share many names with `std::map` and
+    /// `std::set`.
+    fn spec_test_present(modules: &[StdModule], module: &str, wanted: &str) -> bool {
+        modules.iter().any(|m| {
+            (m.path == module || std_imports(m.source).contains(&module))
+                && test_names(m.source).contains(&wanted)
+        })
+    }
+
+    #[test]
+    fn std_imports_name_modules() {
+        let source = "//! x\n\nimport std::json::tree\nimport std::list\n\
+                      import std::ops::{Add, Compare}\n\nfn f() {}\n";
+        assert_eq!(std_imports(source), ["json::tree", "list", "ops"]);
+    }
+
+    /// The guard is per module: a page test counts only in its own module
+    /// or in one that imports it.
+    #[test]
+    fn spec_tests_count_only_in_their_module_or_an_importer() {
+        let modules = [
+            StdModule {
+                path: "a",
+                source: "test \"new is empty\" {\n}\n",
+            },
+            StdModule {
+                path: "b",
+                source: "import std::c\n\ntest \"moved\" {\n}\n",
+            },
+            StdModule {
+                path: "c",
+                source: "test \"own\" {\n}\n",
+            },
+        ];
+        assert!(spec_test_present(&modules, "a", "new is empty"));
+        assert!(!spec_test_present(&modules, "c", "new is empty"));
+        assert!(spec_test_present(&modules, "c", "own"));
+        assert!(spec_test_present(&modules, "c", "moved"));
+        assert!(!spec_test_present(&modules, "a", "moved"));
     }
 
     /// A milestone `M0` to `M6` as its number.
@@ -439,7 +535,8 @@ mod tests {
     struct SpecTest<'a> {
         module: &'a str,
         name: &'a str,
-        /// Whether a std module has the test, under its name in `std/`.
+        /// Whether the page's module, or a std module that imports it, has
+        /// the test under its name in `std/`.
         present: bool,
     }
 
@@ -505,10 +602,11 @@ mod tests {
 
     /// Every test of the stdlib spec for a shipped module is in `std/`
     /// (H3, D-479), unless [`PENDING_SPEC_TESTS`] lists it for the
-    /// milestone in effect (D-728). A test that needs a module which
-    /// imports the tested one lives in that module (D-145), and two of them
-    /// are renamed there, because `std::list` holds both and test names are
-    /// unique in a module.
+    /// milestone in effect (D-728). The check is per module: a page's test
+    /// counts only in the page's module, or in a module that imports it,
+    /// where a test that needs that module lives (D-145, D-630). Two of
+    /// those are renamed there, because `std::list` holds both and test
+    /// names are unique in a module.
     #[test]
     fn stdlib_spec_tests_are_in_std() {
         const RENAMED: &[(&str, &str, &str)] = &[
@@ -544,9 +642,7 @@ mod tests {
                     .iter()
                     .find(|(m, n, _)| *m == module.as_str() && *n == name)
                     .map_or(name, |(_, _, renamed)| *renamed);
-                let present = STD_MODULES
-                    .iter()
-                    .any(|m| test_names(m.source).contains(&wanted));
+                let present = spec_test_present(STD_MODULES, module, wanted);
                 tests.push(SpecTest {
                     module,
                     name,

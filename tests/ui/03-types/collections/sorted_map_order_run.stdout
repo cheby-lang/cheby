@@ -1,0 +1,7 @@
+sorted_map::from_list([(1958, lisp), (1969, unix), (1972, c), (1995, java)])
+keys: [1958, 1969, 1972, 1995]
+same: True
+first: Some((1958, lisp)), last: Some((1995, java))
+sixties and seventies: [(1969, unix), (1972, c)]
+badges: 1, equal keys: True
+[(Badge { id: 7, label: "stored" }, "b")]

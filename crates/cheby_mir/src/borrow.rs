@@ -108,6 +108,10 @@
 //!    dead after it (and not read by it): counting without borrowing has
 //!    released the parameter by then, so the projection may be unique for
 //!    an in-place update (D-525, D-634), which borrowing would prevent.
+//!    A parameter whose `drop` the reuse pass would pair with an
+//!    allocation ([`crate::reuse::candidate_params`]) is consumed too:
+//!    borrowed, it would never be dropped, so its block never reused
+//!    (GAP(reuse-owns-parameters), refining D-806 and through it D-715).
 //! 7. The tail-call fixed point (D-015): at every tail call in any unit,
 //!    the argument in a borrowed position of the callee is a constant (an
 //!    operand, or a local defined as `_n = const …`, as lowering writes a
@@ -486,12 +490,12 @@ pub fn infer(
             _ => None,
         })
         .collect();
-    let nodes: Vec<Node> = module.functions.iter().map(scan).collect();
     let mut masks: Vec<BorrowMask> = module
         .functions
         .iter()
         .map(|f| initial_mask(f, own, facts, eligibility))
         .collect();
+    let nodes = scan_all(module, &masks);
     // Callers by callee, both function indexes.
     let mut by_callee: BTreeMap<usize, BTreeSet<usize>> = BTreeMap::new();
     for (n, node) in nodes.iter().enumerate() {
@@ -629,8 +633,23 @@ fn has_foreign_call(f: &Function) -> bool {
     })
 }
 
-/// The uses and tail calls of `f`'s parameters.
-fn scan(f: &Function) -> Node {
+/// [`scan`] of every function of `module`, each eligible when its initial
+/// mask borrows something.
+fn scan_all(module: &MirModule, masks: &[BorrowMask]) -> Vec<Node> {
+    module
+        .functions
+        .iter()
+        .zip(masks)
+        .map(|(f, mask)| scan(module, f, !mask.is_owned()))
+        .collect()
+}
+
+/// The uses and tail calls of `f`, a function of `module`'s, parameters.
+/// When `eligible` (some parameter may borrow), a parameter whose drop the
+/// reuse pass would pair with an allocation counts as consumed
+/// ([`crate::reuse::candidate_params`], GAP(reuse-owns-parameters),
+/// refining D-806): borrowed, it would never be dropped, so never reused.
+fn scan(module: &MirModule, f: &Function, eligible: bool) -> Node {
     let params: BTreeMap<Local, usize> = f
         .params
         .iter()
@@ -681,6 +700,22 @@ fn scan(f: &Function) -> Node {
                 scan.call(callee, args, at, &uses);
             }
             _ => scan.owned_uses(&uses, at),
+        }
+    }
+    // An error here keeps the parameter borrowable: reuse is an
+    // optimization, and borrowing stays sound either way.
+    let reused = if eligible {
+        crate::reuse::candidate_params(module, f).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    for p in reused {
+        if let Some(list) = scan
+            .params
+            .get(&p)
+            .and_then(|&i| scan.node.consumers.get_mut(i))
+        {
+            list.push(Consumer::Always);
         }
     }
     scan.node

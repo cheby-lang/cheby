@@ -89,8 +89,10 @@ pub fn stmt_may_unwind(stmt: &Stmt) -> bool {
 #[must_use]
 pub fn rvalue_may_unwind(value: &Rvalue) -> bool {
     match value {
+        // `alloc_reuse` allocates when its token is 0 (D-716).
         Rvalue::Call { .. }
         | Rvalue::Alloc { .. }
+        | Rvalue::AllocReuse { .. }
         | Rvalue::AllocPlaceholder { .. }
         | Rvalue::LoadConst(_)
         | Rvalue::Checked { .. } => true,
@@ -102,7 +104,9 @@ pub fn rvalue_may_unwind(value: &Rvalue) -> bool {
         } => *blocking || !crate::never_raise::never_raises(symbol),
         Rvalue::CallRuntime { func, .. } => func.may_unwind(),
         Rvalue::Box { value, from } => box_may_allocate(value, *from),
+        // `drop_reuse` releases as `drop` does (D-171).
         Rvalue::Use(_)
+        | Rvalue::DropReuse { .. }
         | Rvalue::InitField { .. }
         | Rvalue::Field { .. }
         | Rvalue::ReadLayout { .. }

@@ -16,8 +16,7 @@
 //!   with the names of its session (§13.5, D-547).
 //! - The only part of the support gate (D-451) left in the front end is
 //!   E0038 for an import of a standard-library module that the spec plans
-//!   but the toolchain does not ship yet (tier 2 and 3, and the tier-1
-//!   `multimap`, `sorted_*` and `ordered_*`). Paths through such an import
+//!   but the toolchain does not ship yet (tiers 2 and 3). Paths through such an import
 //!   are silent [`Res::Err`]. Every item and every construct resolves.
 //!
 //! Later phases read syntax only through `cheby_syntax::ast` views, keyed

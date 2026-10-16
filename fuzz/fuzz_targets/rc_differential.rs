@@ -1,9 +1,11 @@
 //! Naive reference counting against Perceus (D-718, D-781): each input
 //! chooses a program through `cheby_test_support::progen` (its bytes
-//! drive the generator's choices), and the program runs twice under the
-//! `cheby` that `CHEBY_DIFF_BIN` names, with `CHEBY_RC=naive` and with
-//! the default, both with `CHEBY_RT_POISON=1`. Standard output, standard
-//! error and the exit status must agree, and the status must be 0, or
+//! drive the generator's choices), and the program runs three times under
+//! the `cheby` that `CHEBY_DIFF_BIN` names: with `CHEBY_RC=naive` and with
+//! the default, both with `CHEBY_RT_POISON=1`, then with the default and
+//! `CHEBY_RT_POISON=0`, the only run that executes the inline count and
+//! reuse paths. Standard output, standard error and the exit status must
+//! agree, and the status must be 0, or
 //! 101 for a planted final panic, never 102 (a leak, D-458, D-710).
 //!
 //! An input whose program does not pass `cheby check` is rejected as
@@ -20,7 +22,7 @@
 //! CHEBY_DIFF_BIN=/tmp/rc/cheby cargo +nightly-2026-10-01 fuzz run rc_differential -- -max_total_time=1800
 //! ```
 //!
-//! Each execution starts `cheby` three times (check and two runs), so
+//! Each execution starts `cheby` four times (check and three runs), so
 //! expect a few executions per second.
 
 #![no_main]

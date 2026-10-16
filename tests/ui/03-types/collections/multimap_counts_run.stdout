@@ -1,0 +1,8 @@
+and: 2 5; cat: 1 7; hat: 4; the: 0 3 6 (keys 4, values 8)
+the: [0, 3, 6], dog: []
+and: 2 5; cat: 1 7; hat: 4 (keys 3, values 5)
+without has the: False
+and: 2 5; cat: 1 7; hat: 4; the: 0 3 6 (keys 4, values 8)
+and: 2 5; cat: 1 7; the: 0 3 6 (keys 3, values 7)
+pairs: 7
+keys: 40, values: 4000, under k7: 100, first: Some(7)

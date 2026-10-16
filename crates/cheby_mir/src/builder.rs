@@ -58,6 +58,12 @@ pub struct FunctionBuilder {
     current: BlockId,
     /// The statements pushed so far, over every block.
     stmts: usize,
+    /// Whether [`FunctionBuilder::record_site`] records anything
+    /// ([`crate::MirOptions::record_sites`]).
+    record_sites: bool,
+    /// The sites recorded so far, which [`FunctionBuilder::finish`] moves
+    /// into [`Function::sites`].
+    sites: Vec<(Local, Span)>,
 }
 
 impl FunctionBuilder {
@@ -84,7 +90,34 @@ impl FunctionBuilder {
             precounted: false,
             current,
             stmts: 0,
+            record_sites: false,
+            sites: Vec::new(),
         })
+    }
+
+    /// Makes [`FunctionBuilder::record_site`] record (`on`) or ignore its
+    /// sites; off by default. Lowering sets it from
+    /// [`crate::MirOptions::record_sites`], which `--reuse-report` sets
+    /// (D-717).
+    pub const fn set_record_sites(&mut self, on: bool) {
+        self.record_sites = on;
+    }
+
+    /// Whether [`FunctionBuilder::record_site`] records.
+    #[must_use]
+    pub const fn records_sites(&self) -> bool {
+        self.record_sites
+    }
+
+    /// Records `span` as the source site of `local`, the result of an
+    /// `alloc` or a call, for the reuse report (D-717): a no-op unless
+    /// [`FunctionBuilder::set_record_sites`] turned recording on.
+    /// [`FunctionBuilder::finish`] moves the sites into
+    /// [`Function::sites`], in the order recorded.
+    pub fn record_site(&mut self, local: Local, span: Span) {
+        if self.record_sites {
+            self.sites.push((local, span));
+        }
     }
 
     /// The size of the function so far: its statements and its blocks
@@ -403,6 +436,7 @@ impl FunctionBuilder {
             entry_unwind: self.entry_unwind,
             precounted: self.precounted,
             borrow: crate::borrow::BorrowMask::OWNED,
+            sites: self.sites,
         })
     }
 }

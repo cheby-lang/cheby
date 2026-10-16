@@ -354,6 +354,7 @@ fn every_symbol_of_a_redefined_item_carries_its_generation() {
         layout: LayoutRef::Ctor(ctor),
         name: format!("<repl:5>::{ctor_name}").into(),
         tag,
+        only_ctor: false,
         value_fields: u32::try_from(fields.len()).unwrap(),
         raw_fields: 0,
         fields,

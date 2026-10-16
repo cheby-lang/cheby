@@ -1,10 +1,15 @@
 //! The naive-versus-Perceus differential (D-718): `cheby check`, then
-//! two runs of the same package, compared.
+//! three runs of the same package, compared.
 //!
-//! A program's output cannot be captured in process, so both runs start
-//! `cheby` as a subprocess, with `CHEBY_RT_POISON=1` as the harnesses
-//! do. A debug `cheby` exits 102 when objects leak (D-458), also after
-//! a panic (D-710), so every run is a leak check too.
+//! A program's output cannot be captured in process, so every run starts
+//! `cheby` as a subprocess. The naive run and the first Perceus run set
+//! `CHEBY_RT_POISON=1`, as the harnesses do; poisoning makes every count
+//! operation, reuse included, call the runtime's checked entries. The
+//! third run is Perceus with `CHEBY_RT_POISON=0`, the only one that
+//! executes the inline count and reuse paths code generation emits
+//! (GAP(differential-reuse)). A debug `cheby` exits 102 when objects
+//! leak (D-458), also after a panic (D-710), so every run is a leak check
+//! too.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -48,11 +53,11 @@ pub enum DiffErrorKind {
     /// `cheby check` failed: a generator bug, or an input the fuzz
     /// target discards.
     NotChecked,
-    /// The two runs differ.
+    /// Two of the runs differ.
     Mismatch,
-    /// Both runs exited 102: objects leaked (D-458, D-710).
+    /// Every run exited 102: objects leaked (D-458, D-710).
     Leak,
-    /// Both runs ended with a status other than 0, or than 101 for a
+    /// Every run ended with a status other than 0, or than 101 for a
     /// planted panic.
     BadStatus,
     /// A command did not finish in time.
@@ -83,7 +88,13 @@ fn error(kind: DiffErrorKind, message: impl Into<String>) -> DiffError {
 }
 
 /// The variables that select what a run does; each run sets its own.
-const CONTROLLED: [&str; 3] = ["CHEBY_RC", "CHEBY_RT_POISON", "CHEBY_DUMP_DIR"];
+/// `CHEBY_RT_STATS` would add lines to standard error.
+const CONTROLLED: [&str; 4] = [
+    "CHEBY_RC",
+    "CHEBY_RT_POISON",
+    "CHEBY_DUMP_DIR",
+    "CHEBY_RT_STATS",
+];
 
 fn command(cheby: &Path, dir: &Path, verb: &str) -> Command {
     let mut cmd = Command::new(cheby);
@@ -108,8 +119,9 @@ fn run(cmd: Command, timeout: Duration, what: &str) -> Result<RunOutput, DiffErr
     Ok(out)
 }
 
-/// The first line where `a` and `b` differ, for a message.
-fn first_difference(a: &str, b: &str) -> String {
+/// The first line where `a` (of the run named `a_name`) and `b` differ,
+/// for a message.
+fn first_difference(a_name: &str, a: &str, b_name: &str, b: &str) -> String {
     let mut left = a.lines();
     let mut right = b.lines();
     let mut line = 1usize;
@@ -118,7 +130,7 @@ fn first_difference(a: &str, b: &str) -> String {
             (None, None) => return "the texts differ only in their line ends".to_owned(),
             (l, r) if l != r => {
                 return format!(
-                    "line {line}: naive {:?}, perceus {:?}",
+                    "line {line}: {a_name} {:?}, {b_name} {:?}",
                     l.unwrap_or("<end>"),
                     r.unwrap_or("<end>")
                 );
@@ -128,7 +140,42 @@ fn first_difference(a: &str, b: &str) -> String {
     }
 }
 
-/// [`super::differential`] with options, returning what both runs gave.
+/// `Err(Mismatch)` naming the first difference between two runs.
+fn compare(a_name: &str, a: &RunOutput, b_name: &str, b: &RunOutput) -> Result<(), DiffError> {
+    if a.status != b.status {
+        return Err(error(
+            DiffErrorKind::Mismatch,
+            format!(
+                "the status differs: {a_name} {}, {b_name} {}\n{a_name} stderr:\n{}\n{b_name} stderr:\n{}",
+                a.describe_status(),
+                b.describe_status(),
+                a.stderr,
+                b.stderr
+            ),
+        ));
+    }
+    if a.stdout != b.stdout {
+        return Err(error(
+            DiffErrorKind::Mismatch,
+            format!(
+                "standard output differs at {}",
+                first_difference(a_name, &a.stdout, b_name, &b.stdout)
+            ),
+        ));
+    }
+    if a.stderr != b.stderr {
+        return Err(error(
+            DiffErrorKind::Mismatch,
+            format!(
+                "standard error differs at {}",
+                first_difference(a_name, &a.stderr, b_name, &b.stderr)
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// [`super::differential`] with options, returning what every run gave.
 ///
 /// # Errors
 ///
@@ -174,36 +221,19 @@ pub fn differential_with(
     }
     let perceus = run(perceus, options.timeout, "the Perceus run")?;
 
-    if naive.status != perceus.status {
-        return Err(error(
-            DiffErrorKind::Mismatch,
-            format!(
-                "the status differs: naive {}, perceus {}\nnaive stderr:\n{}\nperceus stderr:\n{}",
-                naive.describe_status(),
-                perceus.describe_status(),
-                naive.stderr,
-                perceus.stderr
-            ),
-        ));
-    }
-    if naive.stdout != perceus.stdout {
-        return Err(error(
-            DiffErrorKind::Mismatch,
-            format!(
-                "standard output differs at {}",
-                first_difference(&naive.stdout, &perceus.stdout)
-            ),
-        ));
-    }
-    if naive.stderr != perceus.stderr {
-        return Err(error(
-            DiffErrorKind::Mismatch,
-            format!(
-                "standard error differs at {}",
-                first_difference(&naive.stderr, &perceus.stderr)
-            ),
-        ));
-    }
+    // GAP(differential-reuse): poisoning sends every count and reuse
+    // operation through the runtime's checked entries, so only this run
+    // executes the inline paths (refines D-809).
+    let mut poison_off = command(cheby, dir, "run");
+    poison_off.env("CHEBY_RT_POISON", "0");
+    let poison_off = run(
+        poison_off,
+        options.timeout,
+        "the Perceus run with poisoning off",
+    )?;
+
+    compare("naive", &naive, "perceus", &perceus)?;
+    compare("perceus", &perceus, "perceus-poison-off", &poison_off)?;
     let expected = if planted { 101 } else { 0 };
     match perceus.status {
         Some(status) if status == expected => Ok(DiffReport {
@@ -214,12 +244,12 @@ pub fn differential_with(
         }),
         Some(102) => Err(error(
             DiffErrorKind::Leak,
-            format!("both runs exited 102 (a leak):\n{}", perceus.stderr),
+            format!("every run exited 102 (a leak):\n{}", perceus.stderr),
         )),
         _ => Err(error(
             DiffErrorKind::BadStatus,
             format!(
-                "both runs ended with {}, expected exit code {expected}:\n{}",
+                "every run ended with {}, expected exit code {expected}:\n{}",
                 perceus.describe_status(),
                 perceus.stderr
             ),
@@ -234,12 +264,12 @@ mod tests {
     #[test]
     fn progen_first_difference_names_the_line() {
         assert_eq!(
-            first_difference("a\nb\n", "a\nc\n"),
+            first_difference("naive", "a\nb\n", "perceus", "a\nc\n"),
             "line 2: naive \"b\", perceus \"c\""
         );
         assert_eq!(
-            first_difference("a\n", "a\nb\n"),
-            "line 2: naive \"<end>\", perceus \"b\""
+            first_difference("perceus", "a\n", "perceus-poison-off", "a\nb\n"),
+            "line 2: perceus \"<end>\", perceus-poison-off \"b\""
         );
     }
 }

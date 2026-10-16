@@ -43,8 +43,11 @@ fn window<const N: usize>(data: &[u8], offset: i64) -> Option<[u8; N]> {
 /// `data` followed by the pieces `write` gives (`extra` bytes in all), in
 /// place when `data` is unique with room and `reuse` holds (D-316, D-525):
 /// the in-place result is `data` with one more reference for the caller.
-/// Otherwise a copy of doubled capacity, so a chain of pushes on a unique
-/// value grows by doubling and runs in amortized O(1) per byte.
+/// Otherwise a new object with room: twice `data`'s capacity when it is
+/// unique, so a chain of pushes on a unique value grows by doubling and
+/// runs in amortized O(1) per byte, and twice its length when it is shared
+/// or static (GAP(text-copy-capacity), refining D-577); at least what the
+/// result needs.
 ///
 /// # Safety
 ///

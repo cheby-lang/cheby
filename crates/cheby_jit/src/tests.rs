@@ -81,6 +81,7 @@ fn function(
         entry_unwind: None,
         precounted: false,
         borrow: cheby_mir::borrow::BorrowMask::OWNED,
+        sites: Vec::new(),
     }
 }
 
@@ -1121,6 +1122,7 @@ mod large_frame;
 mod literals;
 mod objects;
 mod repl;
+mod reuse;
 mod scalars;
 mod special;
 mod std_context;

@@ -1019,6 +1019,7 @@ mod tests {
     const DROP: &str = "a panic in a drop function aborts (D-171)";
     const RAISES_ITSELF: &str = "the outermost raise: hands the panic to the backend itself";
     const READS: &str = "reads its arguments and allocates nothing";
+    const COUNTS: &str = "adds one to a counter of the current domain (D-768)";
     const LIST_GET: &str = "reads an element whose index lowering checked";
     const STATIC: &str = "returns a static object";
     const ARITHMETIC: &str = "arithmetic on unboxed numbers";
@@ -1038,6 +1039,9 @@ mod tests {
     const NEVER_UNWINDS: &[(&str, &str, &str)] = &[
         ("rc.rs", "cheby_rt_dup", DUP),
         ("rc.rs", "cheby_rt_drop", DROP),
+        ("reuse.rs", "cheby_rt_release_fields", DROP),
+        ("reuse.rs", "cheby_rt_drop_reuse_checked", DROP),
+        ("reuse.rs", "cheby_rt_reuse_hit", COUNTS),
         ("panic.rs", "cheby_rt_panic", RAISES_ITSELF),
         (
             "unwind/entry_slow.rs",

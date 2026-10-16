@@ -14,7 +14,10 @@
 //! - [`unwind`]: unwind edges to shared cleanup pads, after counting
 //!   (D-698), with the ownership simulation it shares with the validator;
 //!   [`never_raise`]: the std kernels whose calls get no edge (D-767).
+//! - [`reuse`]: pairs drops with allocations of the same size so a
+//!   unique object's block is reused (D-716), after counting.
 //! - [`validate`] and [`dump`]: the validator and the stable text form.
+//! - [`stats`]: static counts for reports (D-759).
 
 pub mod abi;
 pub mod borrow;
@@ -37,6 +40,10 @@ mod ownership;
 pub mod rc;
 pub mod reach;
 pub mod repr;
+pub mod reuse;
+#[cfg(test)]
+mod reuse_tests;
+pub mod stats;
 #[cfg(test)]
 mod test_support;
 #[cfg(test)]

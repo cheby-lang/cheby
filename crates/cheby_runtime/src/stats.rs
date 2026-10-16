@@ -55,11 +55,17 @@ pub enum Event {
     MapUpdateInPlace,
     /// It made a new root for a shared map or set.
     MapUpdateCopied,
+    /// An `alloc_reuse` wrote over the block of a unique object that a
+    /// `drop_reuse` kept (D-716; GAP(reuse-counters)).
+    ReuseHit,
+    /// An `alloc_reuse` allocated, because the object its `drop_reuse`
+    /// gave up was not unique.
+    ReuseMiss,
 }
 
 impl Event {
     /// Every event, in report order.
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 15] = [
         Self::Alloc,
         Self::ListPushInPlace,
         Self::ListPushCopied,
@@ -73,6 +79,8 @@ impl Event {
         Self::TextKernelCopied,
         Self::MapUpdateInPlace,
         Self::MapUpdateCopied,
+        Self::ReuseHit,
+        Self::ReuseMiss,
     ];
 
     /// The event's name in reports.
@@ -92,6 +100,8 @@ impl Event {
             Self::TextKernelCopied => "string/bytes kernel copied",
             Self::MapUpdateInPlace => "map/set update in place",
             Self::MapUpdateCopied => "map/set update copied",
+            Self::ReuseHit => "reuse hits",
+            Self::ReuseMiss => "reuse misses",
         }
     }
 
@@ -206,8 +216,9 @@ pub fn enabled() -> bool {
 
 /// [`COUNTING`] before its first read.
 const COUNTING_UNKNOWN: u8 = 0;
-/// [`COUNTING`] when events are not counted.
-const COUNTING_OFF: u8 = 1;
+/// [`COUNTING`] when events are not counted. Generated code compares the
+/// flag's byte with it ([`counting_flag`]).
+pub const COUNTING_OFF: u8 = 1;
 /// [`COUNTING`] when events are counted.
 const COUNTING_ON: u8 = 2;
 
@@ -246,6 +257,16 @@ fn counting_first() -> bool {
         Ok(_) => state == COUNTING_ON,
         Err(current) => current == COUNTING_ON,
     }
+}
+
+/// The counting flag ([`counting`]) as a data symbol for generated code:
+/// a reuse hit makes no runtime call, so the code loads this byte and
+/// calls `cheby_rt_reuse_hit` out of line only when it is not
+/// [`COUNTING_OFF`] (counting on, or not settled yet, which the call
+/// settles). GAP(reuse-counters), refining D-768.
+#[must_use]
+pub fn counting_flag() -> &'static AtomicU8 {
+    &COUNTING
 }
 
 /// Turns event counting on for the rest of the process, whatever

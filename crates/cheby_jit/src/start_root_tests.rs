@@ -63,6 +63,7 @@ fn function(key: FnKey, abi: Abi, locals: usize, stmts: Vec<Stmt>, result: u32) 
         entry_unwind: None,
         precounted: false,
         borrow: cheby_mir::borrow::BorrowMask::OWNED,
+        sites: Vec::new(),
     }
 }
 

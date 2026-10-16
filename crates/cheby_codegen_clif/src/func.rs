@@ -126,6 +126,7 @@ fn build(
         panic_blocks: FxHashMap::default(),
         pad: None,
         in_pad: false,
+        tokens: FxHashSet::default(),
     };
     body(&mut t)?;
     t.b.seal_all_blocks();
@@ -178,6 +179,10 @@ pub(crate) struct Translator<'a, 'f> {
     /// Whether the MIR block being translated is a pad, whose drops call
     /// `cheby_rt_drop` out of line to keep the cold code small.
     in_pad: bool,
+    /// The reuse tokens translated so far (D-716): a `drop` of one may
+    /// find 0, which the inline drop must skip. A token is defined before
+    /// any use, so it is here before its `drop`.
+    pub(crate) tokens: FxHashSet<Local>,
 }
 
 /// Where a Cheby-ABI call goes: a known function, or an address with a
@@ -768,6 +773,9 @@ impl Translator<'_, '_> {
                     .rvalue(value)?
                     .ok_or_else(|| CodegenError::ice("a void call assigned to a local"))?;
                 self.bind(*dst, v)?;
+                if let Rvalue::DropReuse { .. } = value {
+                    self.tokens.insert(*dst);
+                }
             }
             Stmt::Eval(value) => {
                 if self.rvalue(value)?.is_some() {
@@ -782,8 +790,11 @@ impl Translator<'_, '_> {
                 let v = self.local(*local)?;
                 if self.in_pad {
                     // A pad is cold: its drops call the runtime out of
-                    // line, which keeps it small.
+                    // line, which keeps it small; `cheby_rt_drop` skips a
+                    // reuse token of 0.
                     self.drop_call(v)?;
+                } else if self.tokens.contains(local) {
+                    self.drop_token(v)?;
                 } else {
                     self.drop_value(v)?;
                 }
@@ -846,6 +857,12 @@ impl Translator<'_, '_> {
             }
             Rvalue::Alloc { layout, fields } => self.alloc(*layout, fields)?,
             Rvalue::AllocPlaceholder { layout } => self.alloc_placeholder(*layout)?,
+            Rvalue::DropReuse { local, layout } => self.drop_reuse(*local, *layout)?,
+            Rvalue::AllocReuse {
+                token,
+                layout,
+                fields,
+            } => self.alloc_reuse(*token, *layout, fields)?,
             Rvalue::InitField {
                 obj,
                 layout,

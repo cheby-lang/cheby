@@ -59,6 +59,7 @@ pub mod panic;
 mod pool;
 mod random;
 pub mod rc;
+pub mod reuse;
 mod runtime_info;
 pub mod sched;
 pub mod stats;

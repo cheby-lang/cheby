@@ -1,0 +1,58 @@
+// @mode: run-pass
+// @milestone: M2
+// @decisions: D-330, D-332, D-338, D-363, D-364, D-664
+//! `std::multimap` keeps every value of a key in insertion order, with
+//! duplicates (D-332). `size` counts keys and `count` counts values (D-363).
+//! A missing key reads as `[]`, and removing a key removes all its values,
+//! so no key is left without values (D-364). Old multimaps stay usable.
+
+import std::int
+import std::io
+import std::list
+import std::multimap
+import std::string
+
+fn line(m: multimap::Multimap<String, Int>) -> String {
+  let groups = list::map(multimap::to_sorted_list(m), fn((key, values)) {
+    let numbers = string::join(list::map(values, int::show), " ")
+    "{key}: {numbers}"
+  })
+  let text = string::join(groups, "; ")
+  let size = multimap::size(m)
+  let count = multimap::count(m)
+  "{text} (keys {size}, values {count})"
+}
+
+fn main() {
+  let words = string::split("the cat and the hat and the cat", " ")
+  let positions = list::fold(list::enumerate(words), multimap::new(), fn(found, (position, word)) {
+    multimap::insert(found, word, position)
+  })
+  io::println(line(positions))
+
+  let the = multimap::get(positions, "the")
+  let dog = multimap::get(positions, "dog")
+  io::println("the: {the:?}, dog: {dog:?}")
+
+  let without = multimap::remove(positions, "the")
+  io::println(line(without))
+  let has_the = multimap::has_key(without, "the")
+  io::println("without has the: {has_the}")
+  io::println(line(positions))
+
+  let repeated = multimap::filter(positions, fn(_, found) { list::length(found) > 1 })
+  io::println(line(repeated))
+  let pairs = list::length(multimap::to_pairs(repeated))
+  io::println("pairs: {pairs}")
+
+  // Four thousand values under forty keys.
+  let many = list::fold(list::range(0, 4000), multimap::new(), fn(found, n) {
+    let bucket = n % 40
+    multimap::insert(found, "k{bucket}", n)
+  })
+  let size = multimap::size(many)
+  let count = multimap::count(many)
+  let under = list::length(multimap::get(many, "k7"))
+  let first = list::first(multimap::get(many, "k7"))
+  io::println("keys: {size}, values: {count}, under k7: {under}, first: {first:?}")
+}

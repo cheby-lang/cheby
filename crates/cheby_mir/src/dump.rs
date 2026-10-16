@@ -420,6 +420,10 @@ fn layout(m: &MirModule, l: LayoutRef) -> Result<String, Ice> {
     })
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "one arm per rvalue, in declaration order"
+)]
 fn rvalue(m: &MirModule, value: &Rvalue) -> Result<String, Ice> {
     Ok(match value {
         Rvalue::Use(op) => operand(m, op)?,
@@ -458,6 +462,22 @@ fn rvalue(m: &MirModule, value: &Rvalue) -> Result<String, Ice> {
             format!("alloc {}({})", layout(m, *l)?, operands(m, fields, "")?)
         }
         Rvalue::AllocPlaceholder { layout: l } => format!("alloc_placeholder {}", layout(m, *l)?),
+        Rvalue::DropReuse {
+            local: x,
+            layout: l,
+        } => {
+            format!("drop_reuse {} of {}", local(*x), layout(m, *l)?)
+        }
+        Rvalue::AllocReuse {
+            token,
+            layout: l,
+            fields,
+        } => format!(
+            "alloc_reuse {}, {}({})",
+            local(*token),
+            layout(m, *l)?,
+            operands(m, fields, "")?
+        ),
         Rvalue::InitField {
             obj,
             layout: l,

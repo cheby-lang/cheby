@@ -1,0 +1,25 @@
+//! Builds the same stock of shelves in two ways, so `main` only compares,
+//! hashes and prints the multimaps it gets.
+
+import std::list
+import std::multimap
+
+/// The shelves, from one list of pairs.
+pub fn listed() -> multimap::Multimap<String, String> {
+  multimap::from_list([("b", "bolt"), ("a", "axe"), ("b", "brush"), ("c", "chisel")])
+}
+
+/// The same shelves, one insert at a time, with the keys in another order
+/// and one key removed and added again.
+pub fn stocked() -> multimap::Multimap<String, String> {
+  let start = multimap::from_list([("c", "chisel"), ("a", "axe"), ("b", "bolt")])
+  let without = multimap::remove(multimap::insert(start, "d", "drill"), "d")
+  list::fold([("b", "brush")], without, fn(found, (shelf, tool)) {
+    multimap::insert(found, shelf, tool)
+  })
+}
+
+/// The shelves with one value in another order.
+pub fn swapped() -> multimap::Multimap<String, String> {
+  multimap::from_list([("b", "brush"), ("a", "axe"), ("b", "bolt"), ("c", "chisel")])
+}

@@ -1,0 +1,4 @@
+sorted_map::from_list([("ada", 1), ("bob", 2), ("cy", 3), ("dee", 4)])
+sorted_map::from_list([("ada", 1), ("bob", 2), ("cy", 3), ("dee", 4)])
+sorted_map::from_list([("ada", 1), ("bob", 2), ("cy", 30), ("dee", 4)])
+same: True, different: True, distinct when hashed: 2

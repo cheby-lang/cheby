@@ -667,6 +667,186 @@ fn cheby_env(dir: &Path, args: &[&str], env: &[(&str, &str)], stdin: Option<&[u8
     process::run(cmd, stdin, TIMEOUT).unwrap()
 }
 
+/// The `name: N` line of a `CHEBY_RT_STATS=1` run's standard error.
+fn stat(stderr: &str, name: &str) -> Option<u64> {
+    stderr.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix(name)
+            .and_then(|rest| rest.strip_prefix(':'))
+            .and_then(|n| n.trim().parse().ok())
+    })
+}
+
+/// Reuse (D-716) in `std::sorted_map`'s `insert`, which rebuilds the
+/// matched node in nested arms that never use the matched map (gate 6's
+/// ROB6-1): with Perceus a loop of inserts and of replacing inserts counts
+/// reuse hits and allocates far less than naive counting, and both print
+/// the same. Run with poisoning off, so the inline reuse paths run.
+#[test]
+fn sorted_map_inserts_reuse_their_nodes() {
+    let dir = package(
+        "sorted_map_reuse",
+        &[
+            MANIFEST,
+            (
+                "src/main.cheby",
+                "//! Inserts into a sorted map, then replaces every value.\n\
+                 \n\
+                 import std::io\n\
+                 import std::list\n\
+                 import std::sorted_map\n\
+                 \n\
+                 fn main() {\n  \
+                   let keys = list::range(0, 2000)\n  \
+                   let grown = list::fold(keys, sorted_map::new(), fn(m, k) {\n    \
+                     sorted_map::insert(m, k * 7919 % 2000, k)\n  \
+                   })\n  \
+                   let replaced = list::fold(keys, grown, fn(m, k) { sorted_map::insert(m, k, k + 1) })\n  \
+                   let n = sorted_map::size(replaced)\n  \
+                   let total = sorted_map::fold(replaced, 0, fn(acc, _, v) { acc + v })\n  \
+                   io::println(\"{n} {total}\")\n\
+                 }\n",
+            ),
+        ],
+    );
+    let run = |rc: Option<&str>| {
+        let mut cmd = Command::new(CHEBY);
+        cmd.args(["--color=never", "run"])
+            .current_dir(&dir)
+            .env("NO_COLOR", "1")
+            .env("CHEBY_RT_STATS", "1")
+            .env("CHEBY_RT_POISON", "0")
+            .env_remove("CHEBY_DUMP_DIR");
+        match rc {
+            Some(mode) => cmd.env("CHEBY_RC", mode),
+            None => cmd.env_remove("CHEBY_RC"),
+        };
+        let out = process::run(cmd, None, TIMEOUT).unwrap_or_else(|e| panic!("{e:?}"));
+        assert_eq!(out.status, Some(0), "{}", out.stderr);
+        assert_eq!(out.stdout, "2000 2001000\n");
+        let allocations = stat(&out.stderr, "allocations");
+        let hits = stat(&out.stderr, "reuse hits");
+        (allocations.zip(hits), out.stderr)
+    };
+    let (Some((perceus, hits)), stderr) = run(None) else {
+        panic!("no stats lines")
+    };
+    let (Some((naive, naive_hits)), _) = run(Some("naive")) else {
+        panic!("no stats lines")
+    };
+    assert_eq!(naive_hits, 0, "naive counting never reuses");
+    assert!(hits > 0, "no reuse hits:\n{stderr}");
+    assert!(
+        perceus.saturating_mul(4) < naive,
+        "{perceus} allocations against naive's {naive}:\n{stderr}"
+    );
+}
+
+/// A field every variant holds at the same place (D-071) is read without a
+/// test of the variant, so the read proves no layout to reuse (the fix
+/// review's TOK-1): a `Circle` rebuilt as a larger `Rect` in later arms,
+/// and a `Rect` rebuilt as a smaller `Circle` in the read's block. With
+/// poisoning on, a size mismatch would be a fatal error; with it off, the
+/// inline reuse paths run. Both print what naive counting prints.
+#[test]
+fn a_shared_field_read_reuses_no_other_variant() {
+    let widen = package(
+        "shared_field_widen",
+        &[
+            MANIFEST,
+            (
+                "src/main.cheby",
+                "//! A small variant read through a shared field, rebuilt as a large one.\n\
+                 \n\
+                 import std::io\n\
+                 import std::list\n\
+                 \n\
+                 type Shape {\n  \
+                   Rect { name: String, width: Int, height: Int, depth: Int },\n  \
+                   Circle { name: String, radius: Int },\n\
+                 }\n\
+                 \n\
+                 fn widen(s: Shape, k: Int) -> Shape {\n  \
+                   let n = s.name\n  \
+                   case k % 3 {\n    \
+                     0 => Rect { name: n, width: k, height: k + 1, depth: k + 2 }\n    \
+                     1 => Rect { name: n, width: 0, height: 0, depth: k }\n    \
+                     _ => Circle { name: n, radius: k }\n  \
+                   }\n\
+                 }\n\
+                 \n\
+                 fn total(shapes: List<Shape>) -> Int {\n  \
+                   list::fold(shapes, 0, fn(acc, s) {\n    \
+                     case s {\n      \
+                       Circle { radius, .. } => acc + radius\n      \
+                       Rect { width, height, depth, .. } => acc + width + height + depth\n    \
+                     }\n  \
+                   })\n\
+                 }\n\
+                 \n\
+                 fn main() {\n  \
+                   let shapes = list::map(list::range(0, 2000), fn(i) { widen(Circle { name: \"c\", radius: i }, i) })\n  \
+                   let t = total(shapes)\n  \
+                   io::println(\"{t}\")\n\
+                 }\n",
+            ),
+        ],
+    );
+    let rename = package(
+        "shared_field_rename",
+        &[
+            MANIFEST,
+            (
+                "src/main.cheby",
+                "//! A large variant read through a shared field, rebuilt as a small one.\n\
+                 \n\
+                 import std::io\n\
+                 import std::list\n\
+                 \n\
+                 type Shape {\n  \
+                   Circle { name: String, radius: Int },\n  \
+                   Rect { name: String, width: Int, height: Int, depth: Int },\n\
+                 }\n\
+                 \n\
+                 fn rename(s: Shape) -> Shape {\n  \
+                   let n = s.name\n  \
+                   Circle { name: n, radius: 1 }\n\
+                 }\n\
+                 \n\
+                 fn main() {\n  \
+                   let shapes = list::map(list::range(0, 1000), fn(i) {\n    \
+                     case i % 2 {\n      \
+                       0 => Rect { name: \"r\", width: i, height: i, depth: i }\n      \
+                       _ => Circle { name: \"c\", radius: i }\n    \
+                     }\n  \
+                   })\n  \
+                   let renamed = list::map(shapes, rename)\n  \
+                   let total = list::fold(renamed, 0, fn(acc, s) {\n    \
+                     case s {\n      \
+                       Circle { radius, .. } => acc + radius\n      \
+                       Rect { width, .. } => acc + width\n    \
+                     }\n  \
+                   })\n  \
+                   io::println(\"{total}\")\n\
+                 }\n",
+            ),
+        ],
+    );
+    for (dir, expected) in [(&widen, "3333667\n"), (&rename, "1000\n")] {
+        for (rc, poison) in [("perceus", "1"), ("perceus", "0"), ("naive", "1")] {
+            let env = [("CHEBY_RC", rc), ("CHEBY_RT_POISON", poison)];
+            let out = cheby_env(dir, &["run"], &env, None);
+            assert_eq!(
+                (out.status, out.stdout.as_str()),
+                (Some(0), expected),
+                "{} with {rc}, poison {poison}:\n{}",
+                dir.display(),
+                out.stderr
+            );
+        }
+    }
+}
+
 /// D-658: an invalid `CHEBY_THREADS` stops `cheby run` before `main`, and
 /// `cheby test` and the REPL before they start, with the same line and
 /// status 1.

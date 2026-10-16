@@ -38,8 +38,15 @@
 //! ([`crate::unwind::stmt_may_unwind`]), every instruction that may unwind
 //! in a reachable block has an edge, a pad does not use the result of the
 //! instruction that unwinds to it, and every Cheby-ABI function has its
-//! entry pad. Reuse tokens do not exist yet, so the rule that each is
-//! consumed once on every path, pads included, waits for them.
+//! entry pad.
+//!
+//! Reuse (D-716): a reuse token is a counted local that `drop_reuse`
+//! defines, so the ownership simulation consumes it once on every path,
+//! pads included (D-698), with no rule of its own. The validator adds
+//! that the forms appear only after counting, that a token is used only by
+//! `alloc_reuse` or `drop`, that both layouts are constructors with fields
+//! or tuples of the same object size, and that neither a borrowed local
+//! nor a tuple being filled is reused (D-715, D-810).
 //!
 //! Canonical pads, blocks `drop _l; goto <pad>` or `resume` that lead
 //! only to `resume` and that normal control flow does not reach, are left
@@ -59,7 +66,7 @@
 //! builds and so in every test run. [`validate`] on its own always runs
 //! the full simulation.
 
-mod dom;
+pub(crate) mod dom;
 
 use std::collections::BTreeSet;
 
@@ -353,6 +360,7 @@ impl FnCx<'_> {
         self.check_dominance(&defs)?;
         self.check_reprs(stage)?;
         self.check_init_fields();
+        self.check_reuse(stage)?;
         if self.counted(stage) && self.errors.is_empty() {
             if let (Some(recorded), Some(reachable)) = (self.recorded, &reachable) {
                 self.check_pad_chains(recorded, reachable)?;
@@ -773,6 +781,164 @@ impl FnCx<'_> {
         }
     }
 
+    /// Whether `layout` may be reused (D-716): a constructor with fields
+    /// whose layout the unit knows, or a tuple, with a fixed object size
+    /// ([`crate::layout::object_size`]). Reports it otherwise.
+    fn check_reuse_layout(&mut self, what: &str, layout: LayoutRef) -> bool {
+        let shape = match layout {
+            LayoutRef::Ctor(_) => !self
+                .module
+                .layout(layout)
+                .is_some_and(|d| d.fields.is_empty()),
+            LayoutRef::Tuple(n) => n > 0,
+            _ => false,
+        };
+        if shape && crate::layout::object_size(self.module, layout).is_some() {
+            return true;
+        }
+        self.err(format!(
+            "{what} of {layout:?}, which is not a constructor with fields or a tuple (D-716)"
+        ));
+        false
+    }
+
+    /// The reuse tokens (D-716, D-698, GAP(reuse-token-form)): only after
+    /// reference counting; a `drop_reuse` gives up an owned local that is
+    /// not borrowed (D-715, D-807) and not a tuple being filled (D-810),
+    /// and defines a token, a local without a source type; a token is used
+    /// only as the token of an `alloc_reuse` or by a `drop`, never
+    /// `dup`'d, passed, returned, stored or a `goto` argument; an
+    /// `alloc_reuse` takes a token whose layout has the same object size
+    /// as its own. That each token is consumed once on every path, pads
+    /// included, is the ownership simulation's rule for every counted
+    /// local.
+    fn check_reuse(&mut self, stage: Stage) -> Result<(), Ice> {
+        let f = self.f;
+        let mut tokens: FxHashMap<Local, LayoutRef> = FxHashMap::default();
+        let mut sinks: Vec<(BlockId, Local, LayoutRef)> = Vec::new();
+        let mut sources: Vec<(BlockId, Local)> = Vec::new();
+        for (id, block) in f.blocks.iter_enumerated() {
+            for stmt in &block.stmts {
+                match stmt {
+                    Stmt::Assign {
+                        dst,
+                        value: Rvalue::DropReuse { local, layout },
+                    } => {
+                        tokens.insert(*dst, *layout);
+                        sources.push((id, *local));
+                        if f.local(*dst)?.ty.is_some() {
+                            self.err(format!(
+                                "bb{} defines the reuse token _{} with a source type (D-716)",
+                                id.as_u32(),
+                                dst.as_u32()
+                            ));
+                        }
+                    }
+                    Stmt::Assign {
+                        value: Rvalue::AllocReuse { token, layout, .. },
+                        ..
+                    } => sinks.push((id, *token, *layout)),
+                    _ => continue,
+                }
+                if !self.counted(stage) {
+                    self.err(format!(
+                        "bb{} reuses before reference-count insertion (D-716)",
+                        id.as_u32()
+                    ));
+                }
+            }
+        }
+        if tokens.is_empty() && sinks.is_empty() {
+            return Ok(());
+        }
+        let borrowed = f.borrowed_locals()?;
+        let filled: BTreeSet<Local> = f
+            .blocks
+            .iter()
+            .flat_map(|b| &b.stmts)
+            .filter_map(|s| match s {
+                Stmt::Eval(Rvalue::InitField { obj, .. }) => Some(*obj),
+                _ => None,
+            })
+            .chain(match (f.key, f.params.first()) {
+                (FnKey::Continuation { .. }, Some(&p)) => Some(p),
+                _ => None,
+            })
+            .collect();
+        for (id, local) in sources {
+            if crate::liveness::is_borrowed_local(&borrowed, local) {
+                self.err(format!(
+                    "bb{} reuses _{}, which is borrowed (D-715, D-716)",
+                    id.as_u32(),
+                    local.as_u32()
+                ));
+            }
+            if filled.contains(&local) {
+                self.err(format!(
+                    "bb{} reuses _{}, a tuple being filled field by field (D-810, D-716)",
+                    id.as_u32(),
+                    local.as_u32()
+                ));
+            }
+        }
+        for (id, token, layout) in sinks {
+            let Some(&from) = tokens.get(&token) else {
+                self.err(format!(
+                    "bb{} allocates with _{}, which is not a reuse token (D-716)",
+                    id.as_u32(),
+                    token.as_u32()
+                ));
+                continue;
+            };
+            let old = crate::layout::object_size(self.module, from);
+            let new = crate::layout::object_size(self.module, layout);
+            if old.is_none() || old != new {
+                self.err(format!(
+                    "bb{} reuses a {from:?} of {old:?} bytes for a {layout:?} of {new:?} bytes (D-716)",
+                    id.as_u32()
+                ));
+            }
+        }
+        self.check_token_uses(&tokens);
+        Ok(())
+    }
+
+    /// A reuse token (a key of `tokens`) is used only as the token of an
+    /// `alloc_reuse` or by a `drop` ([`FnCx::check_reuse`]).
+    fn check_token_uses(&mut self, tokens: &FxHashMap<Local, LayoutRef>) {
+        let f = self.f;
+        let is_token = |l: &Local| tokens.contains_key(l);
+        for (id, block) in f.blocks.iter_enumerated() {
+            for stmt in &block.stmts {
+                let misused: Vec<Local> = match stmt {
+                    Stmt::Drop(_) | Stmt::ClearUnwind => Vec::new(),
+                    Stmt::Dup(l) => vec![*l],
+                    Stmt::Assign {
+                        value: Rvalue::AllocReuse { fields, .. },
+                        ..
+                    } => fields.iter().filter_map(Operand::local).collect(),
+                    Stmt::Assign { value, .. } | Stmt::Eval(value) => {
+                        value.uses().into_iter().map(|(l, _)| l).collect()
+                    }
+                };
+                for l in misused.into_iter().filter(is_token) {
+                    self.err(format!(
+                        "bb{} uses the reuse token _{} other than by alloc_reuse or drop (D-716)",
+                        id.as_u32(),
+                        l.as_u32()
+                    ));
+                }
+            }
+            for (l, _) in block.term.uses().into_iter().filter(|(l, _)| is_token(l)) {
+                self.err(format!(
+                    "bb{} passes on the reuse token _{} (D-716, D-733)",
+                    id.as_u32(),
+                    l.as_u32()
+                ));
+            }
+        }
+    }
+
     /// Every local defined exactly once; returns the definition sites, by
     /// local index.
     fn check_definitions(&mut self) -> Option<Vec<Option<DefSite>>> {
@@ -1071,6 +1237,24 @@ impl FnCx<'_> {
                     self.err(format!(
                         "alloc_placeholder of {layout:?}, which is not a tuple (D-720)"
                     ));
+                }
+                Some(Repr::Value)
+            }
+            // Which locals are tokens, how they are used and the sizes:
+            // `check_reuse`.
+            Rvalue::DropReuse { local, layout } => {
+                self.expect_repr(&Operand::Local(*local), Repr::Value, "drop_reuse operand");
+                self.check_reuse_layout("drop_reuse", *layout);
+                Some(Repr::Value)
+            }
+            Rvalue::AllocReuse {
+                token,
+                layout,
+                fields,
+            } => {
+                self.expect_repr(&Operand::Local(*token), Repr::Value, "alloc_reuse token");
+                if self.check_reuse_layout("alloc_reuse", *layout) {
+                    self.check_alloc(*layout, fields);
                 }
                 Some(Repr::Value)
             }

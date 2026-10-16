@@ -62,7 +62,7 @@ use cheby_iface::{DefId, DepView, Ice, ModuleId};
 use cheby_jit::{Jit, JitError, JitOptions};
 use cheby_mir::reach::{Reach, Root, reachable_with_hooks};
 use cheby_mir::{
-    Defs, EntryKind, EntryRequest, LowerCx, MirModule, MirOptions, Program, Stmt, UnitKind, borrow,
+    Defs, EntryKind, EntryRequest, LowerCx, MirModule, MirOptions, Program, UnitKind, borrow,
     check_lowered, count_lowered_with, lower_entries, lower_items, lower_tests,
 };
 use cheby_package::Target;
@@ -249,15 +249,16 @@ fn build_dumping(
     Ok(Ok(Built { jit, rc_ops }))
 }
 
-/// The `dup` and `drop` statements of every function of `units`.
+/// D-759's RC operations of every function of `units`: `dup`, `drop` and
+/// `drop_reuse` outside unwind pads ([`cheby_mir::stats::rc_ops`]).
+/// GAP(rc-column-forms): until checkpoint 4 this counted the pads' drops
+/// too (`.m2-work/slice4/P2/rc-column.md`).
 fn rc_ops(units: &[MirModule]) -> u64 {
-    let count = units
+    let count: usize = units
         .iter()
         .flat_map(|unit| &unit.functions)
-        .flat_map(|function| function.blocks.iter())
-        .flat_map(|block| &block.stmts)
-        .filter(|stmt| matches!(stmt, Stmt::Dup(_) | Stmt::Drop(_)))
-        .count();
+        .map(cheby_mir::stats::rc_ops)
+        .sum();
     u64::try_from(count).unwrap_or(u64::MAX)
 }
 
@@ -1420,11 +1421,13 @@ fn main() {
     }
 
     /// `CHEBY_RC=naive` keeps M1's naive counting selectable (D-718) as the
-    /// oracle of borrowing (D-715): for every example that passes the front
-    /// end, its `main`, its tests and its constants lower in both modes to
-    /// MIR that validates after the unwind pass, naive MIR is the MIR
-    /// before borrowing (Perceus with borrowing off, the pipeline before
-    /// P1), and no naive unit borrows anything. Perceus borrows in some
+    /// oracle of borrowing (D-715) and reuse (D-716): for every example
+    /// that passes the front end, its `main`, its tests and its constants
+    /// lower in both modes to MIR that validates after the unwind pass,
+    /// naive MIR is the MIR before borrowing and reuse (Perceus with its
+    /// passes off, [`MirOptions::perceus_passes_off`]; D-808,
+    /// GAP(reuse-token-form)), and no naive unit borrows or reuses
+    /// anything. Perceus borrows in some example and reuses in some
     /// example. The examples the front end rejects today are skipped and
     /// printed with their codes.
     #[test]
@@ -1434,12 +1437,10 @@ fn main() {
             rc: cheby_mir::RcMode::Naive,
             ..MirOptions::default()
         };
-        let before_borrowing = MirOptions {
-            borrow: false,
-            ..MirOptions::default()
-        };
+        let before_borrowing = MirOptions::default().perceus_passes_off();
         let mut compared = 0_usize;
         let mut borrowing = Vec::new();
+        let mut reusing = Vec::new();
         let mut skipped = Vec::new();
         let check = |name: &str, units: &[MirModule]| {
             for unit in units {
@@ -1472,21 +1473,33 @@ fn main() {
             let dump = |units: &[MirModule]| -> Vec<String> {
                 units.iter().map(|u| cheby_mir::dump(u).unwrap()).collect()
             };
+            let naive_dump = dump(&naive_units);
             assert!(
-                dump(&naive_units) == dump(&owned_units),
-                "{name}: naive MIR differs from the MIR before borrowing"
+                naive_dump == dump(&owned_units),
+                "{name}: naive MIR differs from the MIR before borrowing and reuse"
+            );
+            assert!(
+                !naive_dump.iter().any(|text| text.contains("drop_reuse")),
+                "{name}: naive MIR reuses"
             );
             if perceus_units
                 .iter()
                 .any(cheby_mir::borrow::borrows_anything)
             {
-                borrowing.push(name);
+                borrowing.push(name.clone());
+            }
+            if dump(&perceus_units)
+                .iter()
+                .any(|text| text.contains("drop_reuse"))
+            {
+                reusing.push(name);
             }
             compared += 1;
         }
         eprintln!(
-            "rc_modes: {compared} examples compared, {} with borrowing, {} skipped:",
+            "rc_modes: {compared} examples compared, {} with borrowing, {} with reuse, {} skipped:",
             borrowing.len(),
+            reusing.len(),
             skipped.len()
         );
         for line in &skipped {
@@ -1498,6 +1511,7 @@ fn main() {
             dirs.len()
         );
         assert!(!borrowing.is_empty(), "no example borrows anything");
+        assert!(!reusing.is_empty(), "no example reuses anything");
     }
 
     /// D-742: `CHEBY_UNWIND_EDGES` is the one unwinding switch, and code

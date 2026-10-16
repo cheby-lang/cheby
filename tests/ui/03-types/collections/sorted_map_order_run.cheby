@@ -1,0 +1,50 @@
+// @mode: run-pass
+// @milestone: M2
+// @decisions: D-330, D-331, D-336, D-341, D-343, D-344
+//! A `SortedMap` iterates, shows and answers range, minimum and maximum
+//! queries in key order by the key type's `compare`, whatever order the
+//! keys came in (D-331). Two keys that compare `Equal` are one key: the
+//! stored key stays and only its value is replaced (D-341). Maps with the
+//! same entries are `==` however they were built (D-343).
+
+import std::int
+import std::io
+import std::list
+import std::sorted_map
+
+/// A key ordered by `id` alone, so two badges with the same `id` and
+/// different labels compare `Equal` without being `==`.
+type Badge { id: Int, label: String }
+
+fn compare(a: Badge, b: Badge) -> Order {
+  int::compare(a.id, b.id)
+}
+
+fn add(found: sorted_map::SortedMap<Int, String>, entry: (Int, String)) -> sorted_map::SortedMap<Int, String> {
+  let (year, name) = entry
+  sorted_map::insert(found, year, name)
+}
+
+fn main() {
+  let years = sorted_map::from_list([(1969, "unix"), (1972, "c"), (1958, "lisp"), (1995, "java")])
+  let backwards = list::fold([(1995, "java"), (1972, "c"), (1969, "unix")], sorted_map::new(), add)
+  let both = sorted_map::insert(backwards, 1958, "lisp")
+  let keys = sorted_map::keys(years)
+  let same = years == both
+  let first = sorted_map::first(years)
+  let last = sorted_map::last(years)
+  let middle = sorted_map::range(years, 1960, 1980)
+  io::println("{years}")
+  io::println("keys: {keys}")
+  io::println("same: {same}")
+  io::println("first: {first}, last: {last}")
+  io::println("sixties and seventies: {middle}")
+  let stored = Badge { id: 7, label: "stored" }
+  let later = Badge { id: 7, label: "later" }
+  let badges = sorted_map::insert(sorted_map::insert(sorted_map::new(), stored, "a"), later, "b")
+  let size = sorted_map::size(badges)
+  let equal_keys = compare(stored, later) == Equal
+  let entries = sorted_map::to_list(badges)
+  io::println("badges: {size}, equal keys: {equal_keys}")
+  io::println("{entries:?}")
+}

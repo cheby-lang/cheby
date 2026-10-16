@@ -382,6 +382,14 @@ pub struct Function {
     /// [`BorrowMask::OWNED`] from lowering; the borrowing inference sets it
     /// on top-level functions ([`crate::borrow::apply`]).
     pub borrow: BorrowMask,
+    /// The source spans of the locals an `alloc` or a call defines, in the
+    /// order lowering recorded them, for `--reuse-report` (D-717): filled
+    /// only when the lowering asked for it
+    /// ([`crate::FunctionBuilder::record_site`],
+    /// [`crate::MirOptions::record_sites`]), empty otherwise. Locals keep
+    /// their numbers through every pass. Code generation and dumps never
+    /// read it, so the code is the same with and without it.
+    pub sites: Vec<(Local, Span)>,
 }
 
 impl Function {
@@ -757,6 +765,35 @@ pub enum Rvalue {
     /// value of an ADT with more than one constructor, as an
     /// [`Repr::Int`], without embedding a user layout id (D-454, D-522).
     ReadTag { base: Operand, ty: TagType },
+    /// `drop_reuse local of layout` (D-716): gives up the owned `local`,
+    /// an object of `layout` (a [`LayoutRef::Ctor`] or
+    /// [`LayoutRef::Tuple`]), and yields a reuse token. When `local` is
+    /// unique (a heap object of count exactly 1), its value fields are
+    /// released and zeroed and the token is the object itself, a childless
+    /// object of count 1 whose header still says `layout`; otherwise one
+    /// reference is given up as [`Stmt::Drop`] does, and the token is 0.
+    /// A shared (negative count) or static (count 0) object is never
+    /// unique. The token is an owned [`Repr::Value`] local that only an
+    /// [`Rvalue::AllocReuse`] consumes or a [`Stmt::Drop`] releases (a
+    /// `drop` of 0 does nothing), also in cleanup pads. Only after
+    /// reference counting; never unwinds, like `drop` (D-171).
+    /// GAP(reuse-token-form).
+    DropReuse { local: Local, layout: LayoutRef },
+    /// `alloc_reuse token, layout(fields)` (D-716): a new object of
+    /// `layout` with owned `fields`, as [`Rvalue::Alloc`] makes one, in
+    /// the block of a nonzero `token` (its header and fields are
+    /// overwritten, and nothing is charged, since the block was), or
+    /// allocated as `alloc` does when `token` is 0, with `alloc`'s unwind
+    /// edge. Consumes the token. The token's [`Rvalue::DropReuse`] layout
+    /// and `layout` have the same object size
+    /// ([`crate::layout::object_size`]); both are a
+    /// [`LayoutRef::Ctor`] or a [`LayoutRef::Tuple`]. Only after reference
+    /// counting. GAP(reuse-token-form).
+    AllocReuse {
+        token: Local,
+        layout: LayoutRef,
+        fields: Vec<Operand>,
+    },
 }
 
 /// Bitwise operators ([`Rvalue::Bitwise`]).
@@ -848,6 +885,11 @@ impl Rvalue {
                 }
             }
             Self::Alloc { fields, .. } => operand_uses(fields, UseKind::Owned, &mut out),
+            Self::DropReuse { local, .. } => out.push((*local, UseKind::Owned)),
+            Self::AllocReuse { token, fields, .. } => {
+                out.push((*token, UseKind::Owned));
+                operand_uses(fields, UseKind::Owned, &mut out);
+            }
             Self::InitField { obj, value, .. } => {
                 out.push((*obj, UseKind::Borrowed));
                 operand_uses(std::slice::from_ref(value), UseKind::Owned, &mut out);
@@ -894,6 +936,13 @@ impl Rvalue {
             }
             Self::CallForeign { args, .. } | Self::CallRuntime { args, .. } => args.clone(),
             Self::Alloc { fields, .. } => fields.clone(),
+            Self::DropReuse { local, .. } => vec![Operand::Local(*local)],
+            Self::AllocReuse { token, fields, .. } => {
+                let mut out = Vec::with_capacity(fields.len().saturating_add(1));
+                out.push(Operand::Local(*token));
+                out.extend(fields.iter().cloned());
+                out
+            }
             Self::InitField { obj, value, .. } => vec![Operand::Local(*obj), value.clone()],
             Self::Field { base, .. } | Self::ReadLayout { base } => vec![Operand::Local(*base)],
             Self::LoadConst(_) | Self::AllocPlaceholder { .. } => Vec::new(),

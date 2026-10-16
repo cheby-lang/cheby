@@ -1,0 +1,32 @@
+// @mode: run-pass
+// @decisions: D-067, D-525, D-577
+//! `+` on a record's string field that stays shared copies the text at
+//! every step. Each copy is sized by the text's length, so 200 one-byte
+//! appends end with 200 bytes and finish (doubling the old capacity at
+//! every copy ran out of memory after about 47).
+
+import std::io
+import std::string
+
+type Mixed {
+  b: String,
+  d: Int,
+}
+
+fn bump(m: Mixed, k: Int) -> Mixed {
+  Mixed { b: m.b + "!", d: m.d + k }
+}
+
+fn spin(m: Mixed, n: Int) -> Mixed {
+  case n {
+    0 => m
+    _ => spin(bump(m, n), n - 1)
+  }
+}
+
+fn main() {
+  let m = spin(Mixed { b: "", d: 0 }, 200)
+  let length = string::length(m.b)
+  let d = m.d
+  io::println("{length} {d}")
+}

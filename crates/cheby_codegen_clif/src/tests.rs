@@ -289,6 +289,7 @@ fn unit() -> MirModule {
         entry_unwind: None,
         precounted: false,
         borrow: cheby_mir::borrow::BorrowMask::OWNED,
+        sites: Vec::new(),
     };
     MirModule {
         unit: UnitKind::Code(ModuleId::from_u32(1)),
@@ -418,6 +419,7 @@ fn labs_unit(index: u32, params: &[CType]) -> MirModule {
             entry_unwind: None,
             precounted: false,
             borrow: cheby_mir::borrow::BorrowMask::OWNED,
+            sites: Vec::new(),
         }],
         callees: vec![CalleeDecl {
             def: g,
@@ -564,6 +566,7 @@ fn blocking_fn(index: u32, symbol: &str, params: &[CType], ret: CType) -> MirMod
         entry_unwind: Some(BlockId::from_u32(1)),
         precounted: true,
         borrow: cheby_mir::borrow::BorrowMask::OWNED,
+        sites: Vec::new(),
     };
     MirModule {
         unit: UnitKind::Code(ModuleId::from_u32(1)),
@@ -739,10 +742,10 @@ fn slice_runtime_functions() {
         assert_eq!(f.ctypes(), (params, ret), "{f:?}");
         assert!(f.on_demand(), "{f:?}");
     }
-    assert_eq!(RuntimeFunc::ALL.len(), 30);
+    assert_eq!(RuntimeFunc::ALL.len(), 35);
     assert_eq!(
         RuntimeFunc::ALL.iter().filter(|f| f.on_demand()).count(),
-        6,
+        11,
         "only the M2 functions are declared on demand"
     );
     assert_eq!(
@@ -754,6 +757,58 @@ fn slice_runtime_functions() {
         (RuntimeFunc::ScopeClose, true)
     );
     assert!(STATIC_DATA.contains(&cheby_runtime::abi::sym::STATIC_ERR_NIL));
+}
+
+/// Reuse's runtime entries (D-716), inline and checked: their C types and
+/// indexes 30 to 34, all declared on demand, and the one size function's
+/// constants, which MIR mirrors from the runtime.
+#[test]
+fn reuse_runtime_functions() {
+    use runtime::{ON_DEMAND_DATA, RuntimeFunc};
+    let reuse = [
+        (
+            RuntimeFunc::ReleaseFields,
+            30,
+            &[CType::Ptr, CType::U64][..],
+            CType::Void,
+        ),
+        (RuntimeFunc::ReuseHit, 31, &[][..], CType::Void),
+        (
+            RuntimeFunc::AllocMiss,
+            32,
+            &[CType::Ptr, CType::U64, CType::U64][..],
+            CType::U64,
+        ),
+        (
+            RuntimeFunc::DropReuseChecked,
+            33,
+            &[CType::Ptr, CType::U64, CType::U64][..],
+            CType::U64,
+        ),
+        (
+            RuntimeFunc::AllocReuseChecked,
+            34,
+            &[CType::Ptr, CType::U64, CType::U64, CType::U64][..],
+            CType::U64,
+        ),
+    ];
+    for (f, index, params, ret) in reuse {
+        assert_eq!(f.index(), index, "{f:?}");
+        assert_eq!(RuntimeFunc::ALL[index], f);
+        assert_eq!(f.ctypes(), (params, ret), "{f:?}");
+        assert!(f.on_demand(), "{f:?}");
+    }
+    // The counting flag is data imported on demand (D-768).
+    assert_eq!(ON_DEMAND_DATA, [cheby_runtime::abi::sym::STATS_COUNTING]);
+    // The one size function of reuse is MIR's, with the runtime's rounding.
+    assert_eq!(
+        cheby_mir::layout::OBJECT_ALIGN,
+        cheby_runtime::abi::OBJECT_ALIGN
+    );
+    assert_eq!(
+        cheby_mir::layout::SCAN_MAX,
+        u64::from(cheby_runtime::abi::SCAN_MAX)
+    );
 }
 
 /// `f(_0: bool)` with every IR form of the slice: helper calls with
@@ -854,6 +909,7 @@ fn slice_forms_unit() -> MirModule {
         entry_unwind: Some(BlockId::from_u32(2)),
         precounted: true,
         borrow: cheby_mir::borrow::BorrowMask::OWNED,
+        sites: Vec::new(),
     };
     MirModule {
         unit: UnitKind::Code(ModuleId::from_u32(1)),
@@ -1437,6 +1493,7 @@ fn drops_pass_their_functions_ctx() {
 /// `f() { _0 = call g() unwind bb1; return nil }  bb1: resume`, and
 /// `g() -> ret { return 0 }`, both Cheby functions: `f` calls `g`, whose
 /// MIR result is `ret`, with an unwind edge.
+#[expect(clippy::too_many_lines, reason = "two hand-built MIR functions")]
 fn unboxed_call_unit(ret: Repr) -> MirModule {
     use cheby_mir::{BlockId, Callee, Local, Rvalue};
     let f = def(1, 0);
@@ -1485,6 +1542,7 @@ fn unboxed_call_unit(ret: Repr) -> MirModule {
         entry_unwind: Some(BlockId::from_u32(1)),
         precounted: false,
         borrow: cheby_mir::borrow::BorrowMask::OWNED,
+        sites: Vec::new(),
     };
     let g_fn = Function {
         key: FnKey::Item(g),
@@ -1505,6 +1563,7 @@ fn unboxed_call_unit(ret: Repr) -> MirModule {
         entry_unwind: None,
         precounted: false,
         borrow: cheby_mir::borrow::BorrowMask::OWNED,
+        sites: Vec::new(),
     };
     let sig = |ret| AbiSig::owned(Abi::Cheby, Vec::new(), ret);
     MirModule {

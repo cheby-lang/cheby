@@ -275,6 +275,188 @@ impl Translator<'_, '_> {
         Ok(object)
     }
 
+    /// The shape of a reused layout (D-716), after checking that its size
+    /// is the one MIR paired by ([`cheby_mir::layout::object_size`], the
+    /// one size function): the runtime frees the block with the size its
+    /// header implies, so a disagreement would be undefined behavior.
+    fn reuse_shape(&self, layout: LayoutRef) -> Result<Shape, CodegenError> {
+        let shape = self.shape(layout)?;
+        let size = u64::try_from(shape.size).ok();
+        let rounded = size.and_then(|s| {
+            s.max(abi::HEADER_SIZE)
+                .checked_next_multiple_of(abi::OBJECT_ALIGN)
+        });
+        let mir = cheby_mir::layout::object_size(self.unit, layout);
+        if rounded.is_none() || rounded != mir {
+            return Err(CodegenError::ice(format!(
+                "the size of {layout:?} is {rounded:?} bytes in code generation and {mir:?} in MIR"
+            )));
+        }
+        Ok(shape)
+    }
+
+    /// The header word of a new object of `shape`.
+    fn header_value(&mut self, shape: &Shape) -> Value {
+        match shape.header {
+            HeaderSource::Fixed(word) => self.b.ins().iconst(types::I64, word.cast_signed()),
+            HeaderSource::Word(data) => {
+                let address = self.data_address(data, true);
+                self.b
+                    .ins()
+                    .load(types::I64, MemFlagsData::trusted(), address, 0)
+            }
+        }
+    }
+
+    /// `drop_reuse local of layout` (D-716): the token. Inline, an object
+    /// of count 1 is kept: its value fields are released and zeroed by
+    /// `cheby_rt_release_fields` (only when the layout has any), and the
+    /// token is the object. A count above 1 is decremented, a static
+    /// object (count 0) is skipped, and a shared one (negative) goes to
+    /// `cheby_rt_drop`, as `drop` does; the token is then 0. The local is
+    /// an object, never a tagged integer: a field read of its layout
+    /// dominates the drop. With `checked_rc`, the checked runtime entry,
+    /// which also checks the header and the size.
+    pub(crate) fn drop_reuse(
+        &mut self,
+        local: Local,
+        layout: LayoutRef,
+    ) -> Result<Value, CodegenError> {
+        let shape = self.reuse_shape(layout)?;
+        let v = self.local(local)?;
+        let ctx = self.ctx()?;
+        if self.opts.checked_rc {
+            let size = self.b.ins().iconst(types::I64, shape.size);
+            return self.runtime_value(RuntimeFunc::DropReuseChecked, &[ctx, v, size]);
+        }
+        let has_values = shape.fields.iter().any(|&(_, r)| r == Repr::Value);
+        let hit = self.b.create_block();
+        let not_unique = self.b.create_block();
+        let fast = self.b.create_block();
+        let other = self.b.create_block();
+        let slow = self.b.create_block();
+        self.b.set_cold_block(slow);
+        let join = self.b.create_block();
+        let token = self.b.append_block_param(join, types::I64);
+        let zero = self.b.ins().iconst(types::I64, 0);
+        let rc = self.load_rc(v);
+        let unique = self
+            .b
+            .ins()
+            .icmp_imm_s(IntCC::Equal, rc, i64::from(abi::RC_UNIQUE));
+        self.b.ins().brif(unique, hit, &[], not_unique, &[]);
+        self.b.switch_to_block(hit);
+        if has_values {
+            self.runtime_call(RuntimeFunc::ReleaseFields, &[ctx, v])?;
+        }
+        self.b.ins().jump(join, &[BlockArg::Value(v)]);
+        self.b.switch_to_block(not_unique);
+        let shared_by_others = self.b.ins().icmp_imm_s(IntCC::SignedGreaterThan, rc, 1);
+        self.b.ins().brif(shared_by_others, fast, &[], other, &[]);
+        self.b.switch_to_block(fast);
+        let next = self.b.ins().iadd_imm_s(rc, -1);
+        self.store_rc(v, next);
+        self.b.ins().jump(join, &[BlockArg::Value(zero)]);
+        self.b.switch_to_block(other);
+        let static_object = self.b.ins().icmp_imm_s(IntCC::Equal, rc, 0);
+        self.b
+            .ins()
+            .brif(static_object, join, &[BlockArg::Value(zero)], slow, &[]);
+        self.b.switch_to_block(slow);
+        self.drop_call(v)?;
+        self.b.ins().jump(join, &[BlockArg::Value(zero)]);
+        self.b.switch_to_block(join);
+        Ok(token)
+    }
+
+    /// `alloc_reuse token, layout(fields)` (D-716): a nonzero token gets
+    /// the new header (it already has count 1 and was charged when it was
+    /// allocated) and the hit is counted out of line while the counting
+    /// flag is not off; a 0 token allocates through
+    /// `cheby_rt_alloc_miss`, with `alloc`'s unwind edge. Both then store
+    /// the fields as [`Self::alloc`] does. With `checked_rc`, the checked
+    /// runtime entry, which checks the token and both sizes.
+    pub(crate) fn alloc_reuse(
+        &mut self,
+        token: Local,
+        layout: LayoutRef,
+        fields: &[Operand],
+    ) -> Result<Value, CodegenError> {
+        let shape = self.reuse_shape(layout)?;
+        if shape.fields.len() != fields.len() {
+            return Err(CodegenError::ice(format!(
+                "`alloc_reuse` of {layout:?} with {} fields instead of {}",
+                fields.len(),
+                shape.fields.len()
+            )));
+        }
+        let t = self.local(token)?;
+        let ctx = self.ctx()?;
+        let header = self.header_value(&shape);
+        let size = self.b.ins().iconst(types::I64, shape.size);
+        let object = if self.opts.checked_rc {
+            self.edge_runtime_value(RuntimeFunc::AllocReuseChecked, &[ctx, t, size, header])?
+        } else {
+            let hit = self.b.create_block();
+            let count = self.b.create_block();
+            self.b.set_cold_block(count);
+            let miss = self.b.create_block();
+            let join = self.b.create_block();
+            let object = self.b.append_block_param(join, types::I64);
+            self.b.ins().brif(t, hit, &[], miss, &[]);
+            self.b.switch_to_block(hit);
+            self.b
+                .ins()
+                .store(MemFlagsData::trusted(), header, t, abi::HEADER_RC_OFFSET);
+            let flag_address = self.static_object(abi::sym::STATS_COUNTING)?;
+            let flag = self
+                .b
+                .ins()
+                .load(types::I8, MemFlagsData::trusted(), flag_address, 0);
+            let off =
+                self.b
+                    .ins()
+                    .icmp_imm_s(IntCC::Equal, flag, i64::from(abi::sym::COUNTING_OFF));
+            self.b
+                .ins()
+                .brif(off, join, &[BlockArg::Value(t)], count, &[]);
+            self.b.switch_to_block(count);
+            self.runtime_call(RuntimeFunc::ReuseHit, &[])?;
+            self.b.ins().jump(join, &[BlockArg::Value(t)]);
+            self.b.switch_to_block(miss);
+            let fresh = self.edge_runtime_value(RuntimeFunc::AllocMiss, &[ctx, size, header])?;
+            self.b.ins().jump(join, &[BlockArg::Value(fresh)]);
+            self.b.switch_to_block(join);
+            object
+        };
+        if let Some((at, count)) = shape.escaped {
+            let tagged = abi::tag_int(i64::try_from(count).unwrap_or(i64::MAX))
+                .ok_or_else(|| CodegenError::ice("a field count out of range"))?;
+            let tagged = self.b.ins().iconst(types::I64, tagged.cast_signed());
+            self.b
+                .ins()
+                .store(MemFlagsData::trusted(), tagged, object, at);
+        }
+        for (&(offset, repr), op) in shape.fields.iter().zip(fields) {
+            let value = self.operand(op)?;
+            self.store_field(object, offset, repr, value);
+        }
+        Ok(object)
+    }
+
+    /// A `drop` of a reuse token outside a pad (D-716): 0 is skipped,
+    /// anything else is dropped as [`Self::drop_value`] does.
+    pub(crate) fn drop_token(&mut self, v: Value) -> Result<(), CodegenError> {
+        let object = self.b.create_block();
+        let done = self.b.create_block();
+        self.b.ins().brif(v, object, &[], done, &[]);
+        self.b.switch_to_block(object);
+        self.drop_value(v)?;
+        self.b.ins().jump(done, &[]);
+        self.b.switch_to_block(done);
+        Ok(())
+    }
+
     /// A new tuple of `layout` whose every field is the static `Nil`
     /// (D-720, D-810): the header and `cheby_rt_alloc` as
     /// in [`Self::alloc`], then a loop that stores the placeholder in each

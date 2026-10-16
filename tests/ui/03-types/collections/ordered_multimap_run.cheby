@@ -1,0 +1,43 @@
+// @mode: run-pass
+// @milestone: M2
+// @decisions: D-332, D-338, D-340, D-343, D-363, D-364
+//! An ordered multimap groups values under keys in the order the keys were
+//! first inserted (D-338). Each key holds its values in insertion order,
+//! duplicates kept (D-332). `size` counts keys and `count` values (D-363),
+//! and a removed key is gone with all its values, so `get` gives `[]`
+//! (D-364). Removing a key and inserting it again moves it to the end
+//! (D-340).
+
+import std::io
+import std::list
+import std::ordered_multimap
+import std::string
+
+fn main() {
+  let words = string::split("bee ant bat cow ant ape bee", " ")
+  let by_letter = list::fold(words, ordered_multimap::new(), fn(m, word) {
+    ordered_multimap::insert(m, string::slice(word, 0, 1), word)
+  })
+  io::println("{by_letter}")
+  io::println("{by_letter:?}")
+  let keys = ordered_multimap::size(by_letter)
+  let values = ordered_multimap::count(by_letter)
+  io::println("keys: {keys}, values: {values}")
+
+  let groups = ordered_multimap::to_list(by_letter)
+  list::each(groups, fn((letter, found)) {
+    let joined = string::join(found, ",")
+    io::println("{letter}: {joined}")
+  })
+
+  let without_b = ordered_multimap::remove(by_letter, "b")
+  let gone = ordered_multimap::get(without_b, "b")
+  let left = ordered_multimap::count(without_b)
+  io::println("after removing b: {gone}, values left: {left}")
+
+  let back = ordered_multimap::insert(without_b, "b", "bug")
+  let order = ordered_multimap::keys(back)
+  io::println("keys after b comes back: {order}")
+  let same = back == by_letter
+  io::println("same as before: {same}")
+}

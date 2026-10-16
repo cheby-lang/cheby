@@ -564,6 +564,32 @@ pub mod sym {
     /// word `shim` stored, unchanged; a cancellation that arrived meanwhile raises through
     /// the flag at [`super::CTX_UNWIND`], never through the result, which may be 0 (D-670, D-734).
     pub const BLOCKING_CALL: &str = "cheby_rt_blocking_call";
+    /// `void cheby_rt_release_fields(ExecCtx *ctx, uint64_t obj)`: the hit
+    /// path of an inline `drop_reuse` (D-716): releases and zeroes the
+    /// value fields of a unique constructor or tuple object.
+    pub const RELEASE_FIELDS: &str = "cheby_rt_release_fields";
+    /// `void cheby_rt_reuse_hit(void)`: counts a reuse hit, out of line
+    /// behind [`STATS_COUNTING`] (D-716, D-768).
+    pub const REUSE_HIT: &str = "cheby_rt_reuse_hit";
+    /// `uint64_t cheby_rt_alloc_miss(ExecCtx *ctx, uint64_t size, uint64_t header)`:
+    /// [`ALLOC`] for an `alloc_reuse` whose token is 0, counting the miss.
+    pub const ALLOC_MISS: &str = "cheby_rt_alloc_miss";
+    /// `uint64_t cheby_rt_drop_reuse_checked(ExecCtx *ctx, uint64_t value, uint64_t size)`:
+    /// `drop_reuse` under checked counting: checks the header and the size,
+    /// returns the token (the object, or 0).
+    pub const DROP_REUSE_CHECKED: &str = "cheby_rt_drop_reuse_checked";
+    /// `uint64_t cheby_rt_alloc_reuse_checked(ExecCtx *ctx, uint64_t token, uint64_t size,
+    /// uint64_t header)`: `alloc_reuse` under checked counting: checks the
+    /// token and both sizes, writes the header over it or allocates; 0
+    /// when the allocation raised.
+    pub const ALLOC_REUSE_CHECKED: &str = "cheby_rt_alloc_reuse_checked";
+    /// Data: the runtime's event-counting flag, one byte
+    /// (`crate::stats::counting_flag`): not [`COUNTING_OFF`] while
+    /// counting is on or not yet settled.
+    pub const STATS_COUNTING: &str = "cheby_rt_stats_counting";
+    /// The value of the byte at [`STATS_COUNTING`] when events are not
+    /// counted (D-768).
+    pub const COUNTING_OFF: u8 = crate::stats::COUNTING_OFF;
     /// Std externals whose bodies the compiler generates (D-693). Never
     /// registered.
     pub const INTRINSICS: [&str; 1] = ["cheby_rt_scope_run"];
@@ -635,7 +661,7 @@ pub mod sym {
     /// order `symbols()` lists them first. Kernels
     /// (`cheby_<module>_<function>`) follow in `symbols()`; they come from
     /// each kernel module's registration (plan §4.3.3).
-    pub const ALL: [&str; 63] = [
+    pub const ALL: [&str; 69] = [
         ALLOC,
         DUP,
         DROP,
@@ -676,6 +702,12 @@ pub mod sym {
         STACK_SLOW_UNWIND,
         STACK_SLOW_FRAME_UNWIND,
         BLOCKING_CALL,
+        RELEASE_FIELDS,
+        REUSE_HIT,
+        ALLOC_MISS,
+        DROP_REUSE_CHECKED,
+        ALLOC_REUSE_CHECKED,
+        STATS_COUNTING,
         DESC_SYMBOLS[0],
         DESC_SYMBOLS[1],
         DESC_SYMBOLS[2],
@@ -863,7 +895,7 @@ mod tests {
             assert_eq!(sym::desc_symbol(name), Some(symbol));
         }
         assert_eq!(sym::desc_symbol("dyn"), None);
-        assert_eq!(sym::ALL.get(40..), Some(&sym::DESC_SYMBOLS[..]));
+        assert_eq!(sym::ALL.get(46..), Some(&sym::DESC_SYMBOLS[..]));
         assert_eq!(
             [
                 layout::SENDER,

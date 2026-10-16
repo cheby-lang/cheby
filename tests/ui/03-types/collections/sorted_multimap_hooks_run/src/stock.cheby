@@ -1,0 +1,28 @@
+//! Builds the same stock of shelves in two ways, so `main` only compares,
+//! hashes and prints the sorted multimaps it gets.
+
+import std::list
+import std::sorted_multimap
+
+/// The shelves, from one list of pairs.
+pub fn listed() -> sorted_multimap::SortedMultimap<String, String> {
+  sorted_multimap::from_list([("b", "bolt"), ("a", "axe"), ("b", "brush"), ("c", "chisel")])
+}
+
+/// The same shelves, one insert at a time, with the keys in another order
+/// and other keys added and removed again, so the tree has another shape.
+pub fn stocked() -> sorted_multimap::SortedMultimap<String, String> {
+  let start = sorted_multimap::from_list([("c", "chisel"), ("a", "axe"), ("b", "bolt")])
+  let crowded = list::fold(["d", "e", "f", "g"], start, fn(found, shelf) {
+    sorted_multimap::insert(found, shelf, "spare")
+  })
+  let without = list::fold(["g", "e", "d", "f"], crowded, fn(found, shelf) {
+    sorted_multimap::remove(found, shelf)
+  })
+  sorted_multimap::insert(without, "b", "brush")
+}
+
+/// The shelves with the values of one key in another order.
+pub fn swapped() -> sorted_multimap::SortedMultimap<String, String> {
+  sorted_multimap::from_list([("b", "brush"), ("a", "axe"), ("b", "bolt"), ("c", "chisel")])
+}

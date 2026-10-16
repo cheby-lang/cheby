@@ -1,0 +1,25 @@
+// @mode: run-pass
+// @milestone: M2
+// @decisions: D-338, D-342, D-343, D-344
+//! `==`, hashing and debug printing of a `SortedMultimap` go through its
+//! module's hooks also in a module that never calls a `sorted_multimap`
+//! function (§3.13). A skipped hook would fall back to the structural form:
+//! the debug text would show the record's fields instead of
+//! `sorted_multimap::from_list([…])`.
+
+import app::stock
+import std::io
+import std::set
+
+fn main() {
+  let listed = stock::listed()
+  let stocked = stock::stocked()
+  let swapped = stock::swapped()
+  io::println("{listed:?}")
+  io::println("{stocked:?}")
+  io::println("{swapped:?}")
+  let same = listed == stocked
+  let different = listed != swapped
+  let hashed = set::size(set::from_list([listed, stocked, swapped]))
+  io::println("same: {same}, different: {different}, distinct when hashed: {hashed}")
+}

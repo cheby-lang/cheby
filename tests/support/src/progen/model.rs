@@ -98,6 +98,11 @@ pub(crate) enum VariantKind {
 #[derive(Debug, Clone)]
 pub(crate) struct AdtDef {
     pub(crate) variants: Vec<VariantKind>,
+    /// Whether every variant is named and holds `k0: String` first, then
+    /// one more `Int` field than the variant before it: a field every
+    /// variant holds at the same place (D-071), on variants of different
+    /// sizes.
+    pub(crate) shared: bool,
 }
 
 /// The main module's record and sum types.
@@ -149,6 +154,23 @@ pub(crate) enum Shape {
     BodyCounter,
     /// Walks a list with `[x, ..rest]` in tail calls.
     ListWalk,
+    /// Takes a record or a sum-type value `x` and returns it rebuilt: a
+    /// record update whose base is `x` at its last use, or a `case` on
+    /// `x` whose arms build the matched variant again with one field
+    /// changed, so that Perceus can reuse `x`'s memory (D-716).
+    Rebuild,
+    /// A counter and a record or sum-type value `x` rebuilt on every
+    /// step: the recursive call takes the rebuilt `x` (a tail call), or
+    /// a recursive field of the matched variant is rebuilt around the
+    /// recursive call, as a tree insert does.
+    RebuildRec,
+}
+
+impl Shape {
+    /// Whether the shape rebuilds its parameter `x`.
+    pub(crate) fn rebuilds(self) -> bool {
+        matches!(self, Self::Rebuild | Self::RebuildRec)
+    }
 }
 
 /// `priv`, package-visible (no keyword) or `pub`.
@@ -180,7 +202,8 @@ pub(crate) struct FnDef {
     pub(crate) params: Vec<(String, Ty)>,
     pub(crate) ret: Ty,
     /// The index in `params` of the counter (`TailCounter`,
-    /// `BodyCounter`), whose argument is always a small literal.
+    /// `BodyCounter`, `RebuildRec`), whose argument is always a small
+    /// literal.
     pub(crate) counter: Option<usize>,
     /// An upper estimate of the work one call does, in body evaluations.
     pub(crate) cost: u64,

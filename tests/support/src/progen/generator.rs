@@ -9,6 +9,11 @@
 //! characters. A cost estimate per function keeps the work of one call
 //! under [`FN_BUDGET`].
 //!
+//! Rebuilds give Perceus something to reuse (D-716): the `Rebuild` and
+//! `RebuildRec` function shapes, `case` arms that build the matched
+//! variant again, record-update statements whose base nothing reads
+//! afterwards, and local loops that update a record accumulator.
+//!
 //! Integer overflow and division by zero may happen anywhere in a
 //! function; `main` calls each function inside `fiber::scope`, which
 //! turns such a panic into an `Err` that it prints. Only the planted
@@ -100,6 +105,9 @@ struct Var {
     ty: Ty,
     /// For a closure: the cost of one call.
     cost: u64,
+    /// A record update has used it as its base, so nothing picks it
+    /// again and that update stays its last use.
+    hidden: bool,
 }
 
 /// Which module is being generated.
@@ -130,6 +138,9 @@ pub(crate) struct Gen<'c> {
     safe: bool,
     /// The function whose body is being generated.
     current: Option<usize>,
+    /// How many rebuilds (record updates and variants built again from
+    /// a matched value) the generated functions hold.
+    rebuilds: usize,
 }
 
 /// The generated text of a package.
@@ -137,6 +148,9 @@ pub(crate) struct Output {
     pub(crate) main: String,
     pub(crate) helpers: Option<String>,
     pub(crate) planted: bool,
+    /// How many rebuilds the generated functions hold (for the
+    /// generator's own tests).
+    pub(crate) rebuilds: usize,
 }
 
 impl<'c> Gen<'c> {
@@ -151,12 +165,15 @@ impl<'c> Gen<'c> {
             indent: 0,
             module: Module::Main,
             imports: BTreeSet::new(),
-            fresh: 0,
+            // Above every function's number, so that a binder such as
+            // `h3` or `f3` never names a function (E0044: no shadowing).
+            fresh: cfg.functions.max(cfg.helper_functions),
             cost: 0,
             mult: 1,
             budget: u64::MAX,
             safe: false,
             current: None,
+            rebuilds: 0,
         }
     }
 
@@ -188,6 +205,7 @@ impl<'c> Gen<'c> {
             binder: id,
             ty,
             cost: 0,
+            hidden: false,
         });
         text
     }
@@ -208,6 +226,9 @@ impl<'c> Gen<'c> {
     fn pick_path(&mut self, ty: &Ty) -> Option<String> {
         let mut found: Vec<(usize, String)> = Vec::new();
         for (index, var) in self.env.iter().enumerate() {
+            if var.hidden {
+                continue;
+            }
             let mut paths = Vec::new();
             self.paths_of(&var.ty, "", ty, 2, &mut paths);
             found.extend(paths.into_iter().map(|p| (index, p)));
@@ -376,8 +397,28 @@ impl<'c> Gen<'c> {
                 };
                 variants.push(kind);
             }
-            self.types.adts.push(AdtDef { variants });
+            self.types.adts.push(AdtDef {
+                variants,
+                shared: false,
+            });
         }
+        // One more sum type, made without drawing from the source: its
+        // variants share `k0: String` at the same place and differ in
+        // size, so a `Rebuild` of it can read `x.k0` (D-071) and build
+        // another variant ([`Self::shared_rebuild`]).
+        let variants = (1..=3)
+            .map(|n| {
+                VariantKind::Named(
+                    std::iter::once(("k0".to_owned(), Ty::Str))
+                        .chain((1..=n).map(|f| (format!("k{f}"), Ty::Int)))
+                        .collect(),
+                )
+            })
+            .collect();
+        self.types.adts.push(AdtDef {
+            variants,
+            shared: true,
+        });
     }
 
     fn render_types(&self) -> String {
@@ -772,6 +813,9 @@ impl<'c> Gen<'c> {
     fn interpolation(&mut self) -> String {
         let mut refs: Vec<(usize, String)> = Vec::new();
         for (index, var) in self.env.iter().enumerate() {
+            if var.hidden {
+                continue;
+            }
             if var.ty.shows() {
                 refs.push((index, String::new()));
             } else if var.ty.debug_prints(&self.types) {
@@ -976,6 +1020,236 @@ impl<'c> Gen<'c> {
             }
             _ => self.leaf(&Ty::Rec(index), INLINE),
         }
+    }
+
+    // ---- Rebuilds (reuse, D-716) ----------------------------------------
+
+    /// The type a rebuild takes and returns: a sum type with a variant
+    /// that has fields, or a record.
+    fn rebuild_type(&mut self) -> Ty {
+        let adts: Vec<usize> = (0..self.types.adts.len())
+            .filter(|a| {
+                self.types
+                    .adts
+                    .get(*a)
+                    .is_some_and(|adt| adt.variants.iter().any(|v| !matches!(v, VariantKind::Unit)))
+            })
+            .collect();
+        if !adts.is_empty() && self.src.chance(50) {
+            let adt = self.src.pick(&adts).copied().unwrap_or(0);
+            return Ty::Adt(adt);
+        }
+        Ty::Rec(self.src.below(self.types.recs.len()))
+    }
+
+    /// Binds a new local of type `ty` that the code will read: its
+    /// placeholder and its name.
+    fn bind_read(&mut self, base: &str, ty: Ty) -> (String, String) {
+        let text = self.bind(base, ty);
+        let name = self.use_var(self.env.len().saturating_sub(1));
+        (text, name)
+    }
+
+    /// A value of type `ty` made from `old`, a value of the same type:
+    /// changed where that is cheap, `old` itself otherwise. It always
+    /// reads `old`.
+    fn changed(&mut self, ty: &Ty, old: &str) -> String {
+        match ty {
+            Ty::Int => format!("{old} + 1"),
+            Ty::Bool => format!("!({old})"),
+            Ty::Str => self.clip_text(&format!("{old} + \"a\"")),
+            Ty::List(item) if **item == Ty::Int => self.clip_list(&format!("[1, ..{old}]")),
+            Ty::List(item) if **item == Ty::Str => self.clip_list(&format!("[\"a\", ..{old}]")),
+            Ty::List(_) => {
+                let l = self.import("list");
+                format!("{l}::reverse({old})")
+            }
+            _ => old.to_owned(),
+        }
+    }
+
+    /// `RecN { ..base, k: v }`. The new value is often the old one
+    /// changed, and always for a record of one field, so that the update
+    /// reads a field of `base` (the read that tells Perceus its layout).
+    fn record_update(&mut self, index: usize, base: &str, sub: u32) -> String {
+        let fields = self
+            .types
+            .recs
+            .get(index)
+            .map(|r| r.fields.clone())
+            .unwrap_or_default();
+        let Some((name, ty)) = self.src.pick(&fields).cloned() else {
+            return base.to_owned();
+        };
+        let value = if fields.len() > 1 && self.src.chance(40) {
+            self.expr(&ty, sub, INLINE)
+        } else {
+            self.changed(&ty, &format!("{base}.{name}"))
+        };
+        self.rebuilds = self.rebuilds.saturating_add(1);
+        format!(
+            "{} {{ ..{base}, {name}: {value} }}",
+            self.types.rec_name(index)
+        )
+    }
+
+    /// `x` of type `ty` built again, at the current indentation: a record
+    /// update with `x` as its base, or a `case x` whose arms build the
+    /// matched variant again. With `rec` (a `RebuildRec` function and its
+    /// counter's name), each step calls the function again on the
+    /// rebuilt value, or around a recursive field.
+    fn rebuild(&mut self, ty: &Ty, x: &str, sub: u32, rec: Option<(&FnDef, &str)>) -> String {
+        match ty {
+            Ty::Rec(index) => {
+                let update = self.record_update(*index, x, sub);
+                match rec {
+                    Some((def, n)) => {
+                        let args = self.self_args(def, format!("{n} - 1"), Some(update));
+                        format!("{}({args})", def.name)
+                    }
+                    None => update,
+                }
+            }
+            Ty::Adt(adt) => {
+                let ind = self.ind();
+                let count = self.types.adts.get(*adt).map_or(0, |a| a.variants.len());
+                let arms = self.indented(|g| {
+                    let i = g.ind();
+                    (0..count)
+                        .map(|v| {
+                            let arm = g.scoped(|g| g.rebuild_arm(*adt, v, rec));
+                            format!("{i}{arm}")
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                });
+                format!("case {x} {{\n{arms}\n{ind}}}")
+            }
+            _ => x.to_owned(),
+        }
+    }
+
+    /// `pattern => body` for variant `v` of `adt`: the pattern binds
+    /// every field, and the body builds the same variant from them with
+    /// one field changed (D-716's "pattern-matching a value and
+    /// constructing a new value of the same shape in the same arm",
+    /// spec §9.3). With `rec`, the first field of the sum type itself is
+    /// rebuilt by a recursive call; without such a field, the rebuilt
+    /// value is passed to the recursive call. The caller scopes the
+    /// bindings.
+    fn rebuild_arm(&mut self, adt: usize, v: usize, rec: Option<(&FnDef, &str)>) -> String {
+        let kind = self
+            .types
+            .adts
+            .get(adt)
+            .and_then(|a| a.variants.get(v).cloned())
+            .unwrap_or(VariantKind::Unit);
+        let name = Types::variant_name(adt, v);
+        let tys: Vec<Ty> = match &kind {
+            VariantKind::Unit => return format!("{name} => {name}"),
+            VariantKind::Positional(tys) => tys.clone(),
+            VariantKind::Named(fields) => fields.iter().map(|(_, t)| t.clone()).collect(),
+        };
+        let bound: Vec<(String, String)> =
+            tys.iter().map(|t| self.bind_read("w", t.clone())).collect();
+        let change_at = self.src.below(tys.len());
+        let mut recursed = false;
+        let mut values = Vec::new();
+        for (i, (ty, (_, field))) in tys.iter().zip(&bound).enumerate() {
+            let value = match rec {
+                Some((def, n)) if !recursed && *ty == Ty::Adt(adt) => {
+                    recursed = true;
+                    let args = self.self_args(def, format!("{n} - 1"), Some(field.clone()));
+                    format!("{}({args})", def.name)
+                }
+                _ if i == change_at => self.changed(ty, field),
+                _ => field.clone(),
+            };
+            values.push(value);
+        }
+        let (pattern, built) = if let VariantKind::Named(fields) = &kind {
+            let pats: Vec<String> = fields
+                .iter()
+                .zip(&bound)
+                .map(|((f, _), (text, _))| format!("{f}: {text}"))
+                .collect();
+            let inits: Vec<String> = fields
+                .iter()
+                .zip(&values)
+                .map(|((f, _), value)| format!("{f}: {value}"))
+                .collect();
+            (
+                format!("{name} {{ {} }}", pats.join(", ")),
+                format!("{name} {{ {} }}", inits.join(", ")),
+            )
+        } else {
+            let pats: Vec<&str> = bound.iter().map(|(text, _)| text.as_str()).collect();
+            (
+                format!("{name}({})", pats.join(", ")),
+                format!("{name}({})", values.join(", ")),
+            )
+        };
+        self.rebuilds = self.rebuilds.saturating_add(1);
+        let body = match rec {
+            Some((def, n)) if !recursed => {
+                let args = self.self_args(def, format!("{n} - 1"), Some(built));
+                format!("{}({args})", def.name)
+            }
+            _ => built,
+        };
+        format!("{pattern} => {body}")
+    }
+
+    /// Whether sum type `adt` is the one whose variants share `k0`
+    /// ([`AdtDef::shared`]).
+    fn is_shared(&self, adt: usize) -> bool {
+        self.types.adts.get(adt).is_some_and(|a| a.shared)
+    }
+
+    /// The body of a `Rebuild` of `x`, of the shared-field sum type `adt`,
+    /// at the current indentation: `let w = x.k0` (D-071), the last use of
+    /// `x`, then a variant built from `w`, in the same block or in the
+    /// arms of a `case`, often of another size than `x`'s. The read names
+    /// no variant, so reuse must not take it for a proof of the first
+    /// variant's layout (the fix review's TOK-1); only naive counting's
+    /// output tells whether it did.
+    fn shared_rebuild(&mut self, adt: usize, x: &str, sub: u32) -> String {
+        let ind = self.ind();
+        let count = self.types.adts.get(adt).map_or(1, |a| a.variants.len());
+        let (text, w) = self.bind_read("w", Ty::Str);
+        let body = if self.src.chance(50) {
+            let v = self.src.below(count);
+            self.shared_variant(adt, v, &w, sub)
+        } else {
+            let cond = self.expr(&Ty::Bool, sub, INLINE);
+            let (a, b) = (self.src.below(count), self.src.below(count));
+            let first = self.shared_variant(adt, a, &w, sub);
+            let second = self.shared_variant(adt, b, &w, sub);
+            format!("case {{\n{ind}  {cond} => {first}\n{ind}  _ => {second}\n{ind}}}")
+        };
+        self.rebuilds = self.rebuilds.saturating_add(1);
+        format!("let {text} = {x}.k0\n{ind}{body}")
+    }
+
+    /// Variant `v` of the shared-field sum type `adt` with `k0: w` and new
+    /// `Int` fields.
+    fn shared_variant(&mut self, adt: usize, v: usize, w: &str, sub: u32) -> String {
+        let fields = match self.types.adts.get(adt).and_then(|a| a.variants.get(v)) {
+            Some(VariantKind::Named(fields)) => fields.clone(),
+            _ => Vec::new(),
+        };
+        let inits: Vec<String> = fields
+            .iter()
+            .map(|(f, ty)| {
+                let value = if f == "k0" {
+                    w.to_owned()
+                } else {
+                    self.sub_expr(ty, sub, INLINE)
+                };
+                format!("{f}: {value}")
+            })
+            .collect();
+        format!("{} {{ {} }}", Types::variant_name(adt, v), inits.join(", "))
     }
 
     fn map_expr(&mut self, depth: u32) -> String {
@@ -1418,7 +1692,13 @@ impl<'c> Gen<'c> {
     }
 
     fn adt_case(&mut self, ty: &Ty, sub: u32, ctx: Ctx) -> (String, Vec<String>) {
-        let adt = self.src.below(self.types.adts.len());
+        let adt = match ty {
+            Ty::Adt(own) if self.src.chance(60) => *own,
+            _ => self.src.below(self.types.adts.len()),
+        };
+        // A `case` that returns its subject's type may build the matched
+        // variant again in its arms (D-716).
+        let rebuild = *ty == Ty::Adt(adt) && self.src.chance(50);
         let subject = self.expr(&Ty::Adt(adt), sub, INLINE);
         let variants = self
             .types
@@ -1445,6 +1725,9 @@ impl<'c> Gen<'c> {
                 arms.push(arm);
             }
             let arm = self.scoped(|g| {
+                if rebuild {
+                    return g.rebuild_arm(adt, v, None);
+                }
                 let pattern = g.variant_pattern(&name, kind);
                 let body = g.arm(ty, sub, ctx);
                 format!("{pattern} => {body}")
@@ -1505,8 +1788,13 @@ impl<'c> Gen<'c> {
             usize::from(main),
             usize::from(!safe),
             usize::from(!safe),
+            weight(main, 2),
         ];
         match self.src.weighted(&weights) {
+            8 => match self.update_stmt(sub) {
+                Some(text) => text,
+                None => self.let_stmt(sub),
+            },
             1 => {
                 let (ta, tb) = (self.random_type(false), self.random_type(false));
                 let a = self.expr(&ta, sub, INLINE_UNKNOWN);
@@ -1540,7 +1828,9 @@ impl<'c> Gen<'c> {
                 format!("{ind}let {rec} {{ {field}: {b}, .. }} = {value}")
             }
             6 if self.src.chance(30) => {
-                let xs = self.expr(&Ty::list(Ty::Int), sub, INLINE);
+                // A `let assert` pattern gives no type, so `[]` may not
+                // be written.
+                let xs = self.expr(&Ty::list(Ty::Int), sub, INLINE_UNKNOWN);
                 let h = self.bind("h", Ty::Int);
                 let t = self.bind("t", Ty::list(Ty::Int));
                 format!("{ind}let assert [{h}, ..{t}] = {xs}")
@@ -1549,26 +1839,55 @@ impl<'c> Gen<'c> {
                 let cond = self.expr(&Ty::Bool, sub, INLINE);
                 format!("{ind}assert {cond}")
             }
-            _ => {
-                let ty = self.random_type(false);
-                let annotate = self.src.chance(40);
-                let value = self.expr(
-                    &ty,
-                    sub,
-                    Ctx {
-                        known: annotate,
-                        multi: true,
-                    },
-                );
-                let annotation = if annotate {
-                    format!(": {}", ty.render(&self.types))
-                } else {
-                    String::new()
-                };
-                let b = self.bind("v", ty);
-                format!("{ind}let {b}{annotation} = {value}")
-            }
+            _ => self.let_stmt(sub),
         }
+    }
+
+    /// `let v = e`, with or without a type annotation.
+    fn let_stmt(&mut self, sub: u32) -> String {
+        let ind = self.ind();
+        let ty = self.random_type(false);
+        let annotate = self.src.chance(40);
+        let value = self.expr(
+            &ty,
+            sub,
+            Ctx {
+                known: annotate,
+                multi: true,
+            },
+        );
+        let annotation = if annotate {
+            format!(": {}", ty.render(&self.types))
+        } else {
+            String::new()
+        };
+        let b = self.bind("v", ty);
+        format!("{ind}let {b}{annotation} = {value}")
+    }
+
+    /// `let v = RecN { ..r, k: e }` where `r` is a record local that
+    /// nothing reads afterwards, so the update is its last use and
+    /// Perceus may reuse it (spec §9.3, D-716). `None` if no record local
+    /// is in scope.
+    fn update_stmt(&mut self, sub: u32) -> Option<String> {
+        let found: Vec<(usize, usize)> = self
+            .env
+            .iter()
+            .enumerate()
+            .filter_map(|(i, var)| match var.ty {
+                Ty::Rec(index) if !var.hidden => Some((i, index)),
+                _ => None,
+            })
+            .collect();
+        let (var, index) = *self.src.pick(&found)?;
+        let ind = self.ind();
+        let base = self.use_var(var);
+        let update = self.record_update(index, &base, sub);
+        if let Some(v) = self.env.get_mut(var) {
+            v.hidden = true;
+        }
+        let b = self.bind("v", Ty::Rec(index));
+        Some(format!("{ind}let {b} = {update}"))
     }
 
     /// A local function that counts down, and a call of it.
@@ -1602,7 +1921,14 @@ impl<'c> Gen<'c> {
                 g.indented(|g| {
                     let i1 = g.ind();
                     let i2 = format!("{i1}  ");
-                    let next = g.indented(|g| g.expr(&ty, sub.saturating_sub(1), INLINE));
+                    // A record accumulator is often rebuilt from itself,
+                    // a bounded recursive rebuild that Perceus may reuse.
+                    let next = g.indented(|g| match ty {
+                        Ty::Rec(index) if g.src.chance(50) => {
+                            g.record_update(index, &acc_name, sub.saturating_sub(1))
+                        }
+                        _ => g.expr(&ty, sub.saturating_sub(1), INLINE),
+                    });
                     format!(
                         "{ind}fn {fname}({n}: Int, {acc}: {rendered}) -> {rendered} {{\n\
                          {i1}case {{\n\
@@ -1648,22 +1974,43 @@ impl<'c> Gen<'c> {
     // ---- Functions -------------------------------------------------------
 
     fn signature(&mut self, module: Option<&'static str>, name: String) -> FnDef {
-        let vis = match self.src.weighted(&[4, 4, 2]) {
+        let mut vis = match self.src.weighted(&[4, 4, 2]) {
             1 => Vis::Package,
             2 => Vis::Pub,
             _ => Vis::Priv,
         };
-        let builtin = vis == Vis::Pub || module.is_some();
-        let shape = match self.src.weighted(&[4, 2, 2, 2]) {
+        // Rebuilds take a record or a sum type of the main module.
+        let user = module.is_none() && !self.types.recs.is_empty();
+        let shape = match self
+            .src
+            .weighted(&[4, 2, 2, 2, weight(user, 3), weight(user, 3)])
+        {
             1 => Shape::TailCounter,
             2 => Shape::BodyCounter,
             3 => Shape::ListWalk,
+            4 => Shape::Rebuild,
+            5 => Shape::RebuildRec,
             _ => Shape::Plain,
         };
-        let ret = self.random_type(builtin);
+        if shape.rebuilds() && vis == Vis::Pub {
+            // A `pub` signature names only builtin types.
+            vis = Vis::Package;
+        }
+        let builtin = vis == Vis::Pub || module.is_some();
+        let ret = if shape.rebuilds() {
+            self.rebuild_type()
+        } else {
+            self.random_type(builtin)
+        };
         let mut params = Vec::new();
         let mut counter = None;
         match shape {
+            Shape::Rebuild => params.push(("x".to_owned(), ret.clone())),
+            Shape::RebuildRec => {
+                counter = Some(0);
+                params.push(("n".to_owned(), Ty::Int));
+                params.push(("x".to_owned(), ret.clone()));
+            }
             Shape::Plain => {}
             Shape::TailCounter | Shape::BodyCounter => {
                 counter = Some(0);
@@ -1705,8 +2052,8 @@ impl<'c> Gen<'c> {
             return String::new();
         };
         let iterations: u64 = match def.shape {
-            Shape::Plain => 1,
-            Shape::TailCounter | Shape::BodyCounter => COUNTER_TIMES,
+            Shape::Plain | Shape::Rebuild => 1,
+            Shape::TailCounter | Shape::BodyCounter | Shape::RebuildRec => COUNTER_TIMES,
             Shape::ListWalk => LIST_TIMES + 1,
         };
         self.env.clear();
@@ -1830,6 +2177,26 @@ impl<'c> Gen<'c> {
                     })
                 });
                 format!("{ind}case {xs} {{\n{i1}[] => {acc}\n{i1}{arm}\n{ind}}}")
+            }
+            Shape::Rebuild => {
+                let x = self.param(0);
+                let e = match def.ret {
+                    Ty::Adt(adt) if self.is_shared(adt) && self.src.chance(60) => {
+                        // Nothing reads `x` after `x.k0`, so it dies there.
+                        if let Some(v) = self.env.get_mut(0) {
+                            v.hidden = true;
+                        }
+                        self.scoped(|g| g.shared_rebuild(adt, &x, sub))
+                    }
+                    _ => self.rebuild(&def.ret, &x, sub, None),
+                };
+                format!("{ind}{e}")
+            }
+            Shape::RebuildRec => {
+                let n = self.param(0);
+                let x = self.param(1);
+                let e = self.indented(|g| g.rebuild(&def.ret, &x, sub, Some((def, &n))));
+                format!("{ind}case {{\n{i1}{n} <= 0 => {x}\n{i1}_ => {e}\n{ind}}}")
             }
         }
     }
@@ -2064,6 +2431,7 @@ impl<'c> Gen<'c> {
             main: self.resolve(&out),
             helpers: helpers.map(|h| self.resolve(&h)),
             planted,
+            rebuilds: self.rebuilds,
         }
     }
 

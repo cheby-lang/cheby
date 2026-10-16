@@ -44,6 +44,10 @@ impl RcMode {
 
 /// What the MIR pipeline does to a unit after lowering.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent switches of the pipeline, each read on its own"
+)]
 pub struct MirOptions {
     /// The reference-counting mode.
     pub rc: RcMode,
@@ -66,6 +70,17 @@ pub struct MirOptions {
     /// compiled with a mask that its slot cannot change. Borrowing needs
     /// [`RcMode::Perceus`] too ([`MirOptions::borrows`]).
     pub borrow: bool,
+    /// Whether counting pairs drops with allocations of the same size for
+    /// reuse (D-716, [`crate::reuse`]); `true` by default. Reuse needs
+    /// [`RcMode::Perceus`] too ([`MirOptions::reuses`]). A REPL session
+    /// keeps it: reuse changes no signature, and session values are
+    /// shared, so they never reuse.
+    pub reuse: bool,
+    /// Whether lowering records the source sites of allocations and calls
+    /// ([`crate::Function::sites`], [`crate::FunctionBuilder::record_site`])
+    /// for `--reuse-report` (D-717); `false` by default. It changes no
+    /// code and no dump.
+    pub record_sites: bool,
 }
 
 impl Default for MirOptions {
@@ -75,6 +90,8 @@ impl Default for MirOptions {
             unwind_edges: true,
             full_ownership_check: cfg!(debug_assertions),
             borrow: true,
+            reuse: true,
+            record_sites: false,
         }
     }
 }
@@ -90,6 +107,27 @@ impl MirOptions {
     #[must_use]
     pub const fn borrows(&self) -> bool {
         self.borrow && matches!(self.rc, RcMode::Perceus)
+    }
+
+    /// Whether counting with these options reuses (D-716): with
+    /// [`MirOptions::reuse`] and under [`RcMode::Perceus`] only, so naive
+    /// counting stays the MIR before borrowing and reuse, the oracle of
+    /// D-718 (GAP(reuse-token-form): naive counting has no reuse).
+    #[must_use]
+    pub const fn reuses(&self) -> bool {
+        self.reuse && matches!(self.rc, RcMode::Perceus)
+    }
+
+    /// These options with every Perceus pass off (borrowing and reuse):
+    /// counting them gives the MIR that naive counting must equal (D-808,
+    /// D-718). The mode, the unwind pass and the checks stay.
+    #[must_use]
+    pub const fn perceus_passes_off(&self) -> Self {
+        Self {
+            borrow: false,
+            reuse: false,
+            ..*self
+        }
     }
 
     /// The environment variable that turns the unwind pass off, for the
@@ -233,6 +271,12 @@ pub fn count_lowered_with(module: &mut MirModule, options: &MirOptions) -> Resul
         // the borrowing the build inferred before (D-715, D-718).
         RcMode::Perceus | RcMode::Naive => crate::rc::insert_module(module)?,
     }
+    // Reuse pairs the drops counting placed, before the unwind pass gives
+    // the tokens their pads (D-716); naive counting has none
+    // (GAP(reuse-token-form)).
+    if options.reuses() {
+        crate::reuse::insert_module(module)?;
+    }
     if options.unwind_edges {
         // The unwind pass simulates the counts itself; `Stage::Unwound`
         // checks everything else `Counted` does, so the unit is validated
@@ -311,6 +355,33 @@ mod tests {
         // (D-774).
         assert_eq!(options.full_ownership_check, cfg!(debug_assertions));
         assert_eq!(RcMode::default(), RcMode::Perceus);
+    }
+
+    #[test]
+    fn reuse_only_with_perceus_and_the_switch() {
+        // D-716, D-718: naive counting is the MIR before borrowing and
+        // reuse (GAP(reuse-token-form)); the passes-off options keep the
+        // mode and turn both off.
+        let options = MirOptions::default();
+        assert!(options.reuse && options.reuses());
+        assert!(!options.record_sites);
+        let naive = MirOptions {
+            rc: RcMode::Naive,
+            ..MirOptions::default()
+        };
+        assert!(!naive.reuses());
+        let off = options.perceus_passes_off();
+        assert_eq!(off.rc, RcMode::Perceus);
+        assert!(!off.borrows() && !off.reuses());
+        assert_eq!(off.unwind_edges, options.unwind_edges);
+        assert_eq!(
+            MirOptions {
+                borrow: false,
+                reuse: false,
+                ..options
+            },
+            off
+        );
     }
 
     #[test]

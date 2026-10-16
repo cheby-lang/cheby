@@ -1,0 +1,27 @@
+// @mode: run-pass
+// @milestone: M2
+// @decisions: D-333, D-337, D-342, D-343, D-344
+//! `==`, hashing and debug printing of a `SortedSet` go through its
+//! module's hooks also in a module that never calls a `sorted_set`
+//! function (§3.13). A skipped hook would fall back to the structural
+//! form: the debug text would show the tree instead of
+//! `sorted_set::from_list([…])`.
+
+import app::digits
+import std::io
+import std::set
+
+fn main() {
+  let listed = digits::listed()
+  let rebuilt = digits::rebuilt()
+  let shorter = digits::shorter()
+  io::println("{listed:?}")
+  io::println("{rebuilt:?}")
+  io::println("{shorter:?}")
+  let same = listed == rebuilt
+  let different = listed != shorter
+  let hashed = set::size(set::from_list([listed, rebuilt, shorter]))
+  io::println("same: {same}, different: {different}, distinct when hashed: {hashed}")
+  let nested = [rebuilt, shorter]
+  io::println("{nested:?}")
+}

@@ -52,13 +52,16 @@ use crate::func::{CCallee, CallTarget, Translator};
 use crate::runtime::RuntimeFunc;
 
 /// Whether `callee`'s result is 0 exactly when it unwound, so the code
-/// tests the result instead of loading the flag: `cheby_rt_alloc` and the
-/// boxing functions return an object, which is never 0.
+/// tests the result instead of loading the flag: `cheby_rt_alloc`, its
+/// reuse forms (D-716) and the boxing functions return an object, which is
+/// never 0.
 const fn tests_result(callee: &CCallee) -> bool {
     matches!(
         callee,
         CCallee::Runtime(
             RuntimeFunc::Alloc
+                | RuntimeFunc::AllocMiss
+                | RuntimeFunc::AllocReuseChecked
                 | RuntimeFunc::BoxI64
                 | RuntimeFunc::BoxU64
                 | RuntimeFunc::BoxF64

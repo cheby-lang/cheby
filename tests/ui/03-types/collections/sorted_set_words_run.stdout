@@ -1,0 +1,11 @@
+sorted_set::from_list([brown, dog, fox, jumps, lazy, over, quick, the])
+size: 8, first: Some(brown), last: Some(the)
+from f to p: [fox, jumps, lazy, over]
+sorted_set::from_list(["a", "e", "u"])
+union: [0, 2, 3, 4, 6, 8, 9, 10, 12, 14, 15, 16, 18]
+intersection: [0, 6, 12, 18], a subset: True
+difference: [2, 4, 8, 10, 14, 16]
+tasks: plan, write, ship
+after inserting replan: plan, write, ship, unchanged: True
+has a priority 3: True, without priority 2: plan, ship
+big: 2000, from Some(0) to Some(1999), hundreds: 20, rebuilt: True

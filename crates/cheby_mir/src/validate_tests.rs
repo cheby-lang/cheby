@@ -75,6 +75,7 @@ fn desc(ctor: DefId, ty: DefId, tag: u32, reprs: &[Repr]) -> LayoutDesc {
         layout: LayoutRef::Ctor(ctor),
         name: format!("app::f{}", ctor.index.as_u32()).into(),
         tag,
+        only_ctor: false,
         fields,
         value_fields: u32::try_from(values).unwrap(),
         raw_fields: u32::try_from(reprs.len().checked_sub(values).unwrap()).unwrap(),

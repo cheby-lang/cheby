@@ -4,8 +4,8 @@
 //! [`generate`] builds a well-typed, terminating Cheby package from a
 //! seed ([`generate_from_bytes`] from a fuzzer's bytes); [`differential`]
 //! checks it with `cheby check`, runs it with `cheby run` under
-//! `CHEBY_RC=naive` and under the default reference counting, and
-//! compares the two runs. The stable test
+//! `CHEBY_RC=naive` and under the default reference counting (Perceus),
+//! the latter also with poisoning off, and compares the three runs. The stable test
 //! `crates/cheby_cli/tests/rc_differential.rs` runs it on fixed seeds in
 //! every CI run, and the fuzz target `fuzz/fuzz_targets/rc_differential.rs`
 //! drives the generator from the fuzzer's bytes (D-781).
@@ -24,6 +24,13 @@
 //! optional planted panic at the end of `main`. Values are never
 //! handles, so every function is a candidate for borrowing (D-715,
 //! D-787).
+//!
+//! Programs also rebuild values, so that the differential covers reuse
+//! (D-716, spec §9.3): record updates whose base is at its last use,
+//! `case` arms that build the matched variant again with one field
+//! changed, and bounded recursive rebuilds (a record or a variant
+//! rebuilt on each step of a counted recursion, or a recursive field
+//! rebuilt around the recursive call, as a tree insert does).
 
 mod diff;
 mod generator;
@@ -109,7 +116,7 @@ fn package(seed: u64, output: generator::Output) -> Program {
     if let Some(helpers) = output.helpers {
         files.push(("src/helpers.cheby".to_owned(), helpers));
     }
-    let _ = output.planted;
+    let _ = (output.planted, output.rebuilds);
     Program { seed, files }
 }
 
@@ -174,9 +181,10 @@ pub fn write_package(program: &Program, dir: &Path) -> std::io::Result<()> {
 }
 
 /// Runs `cheby check`, then `cheby run` in `dir` under `CHEBY_RC=naive`
-/// and without it (`CHEBY_RT_POISON=1`), and compares stdout, stderr and
-/// the exit status; `Err` describes a program that does not check, the
-/// first difference, a status other than 0 or a planted 101, or a 102.
+/// and without it (both with `CHEBY_RT_POISON=1`), and once more without
+/// it and with `CHEBY_RT_POISON=0`, and compares stdout, stderr and the
+/// exit status; `Err` describes a program that does not check, the first
+/// difference, a status other than 0 or a planted 101, or a 102.
 /// `cheby` is always a path the caller gives (`CARGO_BIN_EXE_cheby`,
 /// `CHEBY_DIFF_BIN`).
 ///
@@ -191,7 +199,27 @@ pub fn differential(cheby: &Path, dir: &Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{GenConfig, generate, generate_from_bytes};
+    use super::{GenConfig, generate, generate_from_bytes, generator, source};
+
+    /// The seeds of `rc_differential`'s 40 programs
+    /// (`crates/cheby_cli/tests/rc_differential.rs`).
+    const DIFF_SEEDS: std::ops::Range<u64> = 1_000..1_040;
+
+    /// D-716 through the generator: most of the differential's programs
+    /// hold a rebuild (a record update of a value at its last use, or a
+    /// matched variant built again), so that `rc_differential`'s floor
+    /// of 25 programs with a `drop_reuse` has a margin.
+    #[test]
+    fn progen_most_programs_rebuild() {
+        let config = GenConfig::default();
+        let rebuilding = DIFF_SEEDS
+            .filter(|seed| {
+                let mut generator = generator::Gen::new(source::Source::Seeded(*seed), &config);
+                generator.program("test").rebuilds > 0
+            })
+            .count();
+        assert!(rebuilding >= 34, "only {rebuilding} of 40 programs rebuild");
+    }
 
     #[test]
     fn progen_same_seed_same_program() {

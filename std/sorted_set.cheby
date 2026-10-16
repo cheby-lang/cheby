@@ -1,0 +1,354 @@
+//! The sorted set `SortedSet<T>`, a persistent set that keeps its elements
+//! in order (D-333, D-337), written in Cheby with no runtime kernel
+//! (D-336).
+//!
+//! A set is the tree of `std::sorted_map` without values: a
+//! `SortedMap<T, Nil>`. Every function carries the bound `T: Compare`
+//! (D-385). The hooks and `elements` carry none, as D-482 asks of hooks,
+//! and reach the tree only through `sorted_map`'s unbounded helpers
+//! (GAP(sorted-unbounded-helpers)).
+
+import std::int
+import std::list
+import std::ops::{Compare}
+import std::set
+import std::sorted_map
+
+/// A persistent set ordered by its elements' `compare` (D-333, D-336,
+/// D-341). Equality, hashing and debug printing go through `equal`, `hash`
+/// and `debug` (D-342).
+@std_hooks(equal, hash, debug)
+pub type SortedSet<T> {
+  SortedSet(sorted_map::SortedMap<T, Nil>),
+}
+
+/// The tree behind a set.
+priv fn tree<T>(s: SortedSet<T>) -> sorted_map::SortedMap<T, Nil> {
+  let SortedSet(m) = s
+  m
+}
+
+/// The elements in order, without calling `compare` (the hooks).
+/// GAP(sorted-unbounded-helpers): no bound, as D-482 asks of hooks.
+priv fn elements<T>(s: SortedSet<T>) -> List<T> {
+  sorted_map::fold_entries(tree(s), [], fn(found, item, _) { list::push(found, item) })
+}
+
+/// Whether two sets hold the same elements, compared with `==` (D-343).
+fn equal<T>(a: SortedSet<T>, b: SortedSet<T>) -> Bool {
+  let same_size = sorted_map::count_entries(tree(a)) == sorted_map::count_entries(tree(b))
+  same_size && elements(a) == elements(b)
+}
+
+/// The elements in order: equal sets give equal lists (D-584).
+fn hash<T>(s: SortedSet<T>) -> List<T> {
+  elements(s)
+}
+
+/// `sorted_set::from_list([…])` with each element debug-printed (D-344).
+fn debug<T>(s: SortedSet<T>) -> String {
+  let items = elements(s)
+  "sorted_set::from_list({items:?})"
+}
+
+test "sorted sets compare, hash and print by contents" {
+  let built = from_list([3, 1, 2])
+  let grown = insert(from_list([2, 3]), 1)
+  assert built == grown
+  assert built != from_list([1, 2])
+  assert set::size(set::from_list([built, grown])) == 1
+  assert "{built:?}" == "sorted_set::from_list([1, 2, 3])"
+}
+
+// Building
+
+/// Returns an empty set.
+pub fn new<T: Compare>() -> SortedSet<T> {
+  SortedSet(sorted_map::new())
+}
+
+test "new is empty" {
+  let empty = new::<Int>()
+  assert is_empty(empty)
+  assert to_list(empty) == []
+}
+
+/// Returns a set of the given items, as if each were inserted in turn, so
+/// of several items that compare `Equal` the first is kept (D-341).
+pub fn from_list<T: Compare>(items: List<T>) -> SortedSet<T> {
+  list::fold(items, new(), fn(s, item) { insert(s, item) })
+}
+
+test "from_list sorts and drops duplicates" {
+  assert to_list(from_list(["pear", "apple", "pear"])) == ["apple", "pear"]
+}
+
+// Size
+
+/// Returns the number of elements, O(1).
+pub fn size<T: Compare>(s: SortedSet<T>) -> Int {
+  sorted_map::size(tree(s))
+}
+
+test "size counts distinct elements" {
+  assert size(from_list([1, 2, 1])) == 2
+  assert size(new::<Int>()) == 0
+}
+
+/// Tells whether the set has no elements.
+pub fn is_empty<T: Compare>(s: SortedSet<T>) -> Bool {
+  sorted_map::is_empty(tree(s))
+}
+
+test "is_empty tells an empty set" {
+  assert is_empty(new::<Int>())
+  assert !is_empty(from_list([1]))
+}
+
+// Lookup
+
+/// Tells whether some element compares `Equal` to `item`.
+pub fn contains<T: Compare>(s: SortedSet<T>, item: T) -> Bool {
+  sorted_map::has_key(tree(s), item)
+}
+
+test "contains looks an element up" {
+  let primes = from_list([2, 3, 5])
+  assert contains(primes, 3)
+  assert !contains(primes, 4)
+}
+
+/// Returns the smallest element, or `None` when the set is empty.
+pub fn first<T: Compare>(s: SortedSet<T>) -> Option<T> {
+  case sorted_map::first(tree(s)) {
+    Some((item, _)) => Some(item)
+    None => None
+  }
+}
+
+test "first is the smallest element" {
+  assert first(from_list([5, 2, 8])) == Some(2)
+  assert first(new::<Int>()) == None
+}
+
+/// Returns the largest element, or `None` when the set is empty.
+pub fn last<T: Compare>(s: SortedSet<T>) -> Option<T> {
+  case sorted_map::last(tree(s)) {
+    Some((item, _)) => Some(item)
+    None => None
+  }
+}
+
+test "last is the largest element" {
+  assert last(from_list([5, 2, 8])) == Some(8)
+  assert last(new::<Int>()) == None
+}
+
+/// Returns the elements that are at least `start` and less than `end`, in
+/// order (D-319), in O(log n + k) for k elements returned.
+pub fn range<T: Compare>(s: SortedSet<T>, start: T, end: T) -> List<T> {
+  list::map(sorted_map::range(tree(s), start, end), fn((item, _)) { item })
+}
+
+test "range includes start and excludes end" {
+  let odd = from_list([1, 3, 5, 7])
+  assert range(odd, 3, 7) == [3, 5]
+  assert range(odd, 2, 4) == [3]
+  assert range(odd, 7, 3) == []
+}
+
+// Updating
+
+/// Returns the set with `item` added. An element that compares `Equal` to
+/// `item` and is already present stays, so the set is unchanged (D-341).
+pub fn insert<T: Compare>(s: SortedSet<T>, item: T) -> SortedSet<T> {
+  SortedSet(sorted_map::insert(tree(s), item, Nil))
+}
+
+test "insert adds an element once" {
+  let start = from_list([1, 3])
+  let added = insert(start, 2)
+  assert to_list(added) == [1, 2, 3]
+  assert insert(added, 2) == added
+  assert to_list(start) == [1, 3]
+}
+
+// An element type for the next test, ordered by `id` alone. Two badges with
+// the same `id` and different labels compare `Equal` without being `==`.
+// Satisfaction is not a written use, so the test also names `compare`
+// (D-631).
+priv type Badge { id: Int, label: String }
+
+priv fn compare(a: Badge, b: Badge) -> Order {
+  int::compare(a.id, b.id)
+}
+
+test "elements that compare Equal are the same element" {
+  let stored = Badge { id: 1, label: "stored" }
+  let later = Badge { id: 1, label: "later" }
+  let badges = insert(from_list([stored]), later)
+  assert to_list(badges) == [stored]
+  assert contains(badges, Badge { id: 1, label: "other" })
+  assert compare(stored, later) == Equal
+}
+
+/// Returns the set without the element that compares `Equal` to `item`,
+/// or unchanged when there is no such element.
+pub fn remove<T: Compare>(s: SortedSet<T>, item: T) -> SortedSet<T> {
+  SortedSet(sorted_map::remove(tree(s), item))
+}
+
+test "remove drops an element and ignores a missing one" {
+  let digits = from_list([1, 2, 3])
+  assert remove(digits, 2) == from_list([1, 3])
+  assert remove(digits, 9) == digits
+}
+
+// Iterating
+
+/// Returns the elements in order. `from_list(to_list(s))` is `s`.
+pub fn to_list<T: Compare>(s: SortedSet<T>) -> List<T> {
+  sorted_map::keys(tree(s))
+}
+
+test "to_list gives the elements in order" {
+  assert to_list(from_list(["b", "c", "a"])) == ["a", "b", "c"]
+}
+
+/// Combines the elements in order, starting from `initial` and calling `f`
+/// once per element.
+pub fn fold<T: Compare, A>(s: SortedSet<T>, initial: A, f: fn(A, T) -> A) -> A {
+  sorted_map::fold(tree(s), initial, fn(found, item, _) { f(found, item) })
+}
+
+test "fold visits the elements in order" {
+  let letters = from_list(["b", "c", "a"])
+  assert fold(letters, "", fn(text, letter) { text + letter }) == "abc"
+}
+
+/// Calls `f` once per element, in order, for its effects.
+pub fn each<T: Compare>(s: SortedSet<T>, f: fn(T)) {
+  sorted_map::each(tree(s), fn(item, _) { f(item) })
+}
+
+test "each calls the function once per element" {
+  each(from_list([2, 4, 6]), fn(n) { assert n % 2 == 0 })
+}
+
+// Transforming
+
+/// Returns the elements for which `keep` returns `True`. `keep` is called
+/// once per element, in order, and `compare` is not called: O(n).
+pub fn filter<T: Compare>(s: SortedSet<T>, keep: fn(T) -> Bool) -> SortedSet<T> {
+  SortedSet(sorted_map::filter(tree(s), fn(item, _) { keep(item) }))
+}
+
+test "filter keeps the matching elements" {
+  let digits = from_list([1, 2, 3, 4])
+  assert to_list(filter(digits, fn(n) { n % 2 == 0 })) == [2, 4]
+}
+
+/// Returns the set of the results of `f`, called once per element in
+/// order. Results that compare `Equal` become one element, the first one
+/// produced (D-341).
+pub fn map<T: Compare, U: Compare>(s: SortedSet<T>, f: fn(T) -> U) -> SortedSet<U> {
+  fold(s, new(), fn(mapped, item) { insert(mapped, f(item)) })
+}
+
+test "map can merge elements" {
+  let digits = from_list([1, 2, 3, 4])
+  assert to_list(map(digits, fn(n) { n / 2 })) == [0, 1, 2]
+}
+
+// Combining
+
+/// Returns the elements that are in `s` or in `other`, in
+/// O(k log (n + k)) for k elements of `other`. Of two elements that
+/// compare `Equal`, the one from `s` is kept (D-341).
+pub fn union<T: Compare>(s: SortedSet<T>, other: SortedSet<T>) -> SortedSet<T> {
+  fold(other, s, fn(joined, item) { insert(joined, item) })
+}
+
+test "union joins two sets" {
+  let low = from_list([1, 2, 3])
+  let high = from_list([3, 4])
+  assert to_list(union(low, high)) == [1, 2, 3, 4]
+}
+
+/// Returns the elements of `s` that are also in `other`: a `filter` of
+/// `s` with one lookup in `other` per element, O(n log k).
+pub fn intersection<T: Compare>(s: SortedSet<T>, other: SortedSet<T>) -> SortedSet<T> {
+  filter(s, fn(item) { contains(other, item) })
+}
+
+test "intersection keeps the shared elements" {
+  let low = from_list([1, 2, 3])
+  let high = from_list([2, 3, 4])
+  assert to_list(intersection(low, high)) == [2, 3]
+}
+
+/// Returns the elements of `s` that are not in `other`: a `filter` of `s`
+/// with one lookup in `other` per element, O(n log k).
+pub fn difference<T: Compare>(s: SortedSet<T>, other: SortedSet<T>) -> SortedSet<T> {
+  filter(s, fn(item) { !contains(other, item) })
+}
+
+test "difference removes the elements of the second set" {
+  let low = from_list([1, 2, 3])
+  let high = from_list([2, 3, 4])
+  assert to_list(difference(low, high)) == [1]
+}
+
+/// Tells whether every element of `s` is in `other`, in O(n log k). A set
+/// larger than `other` is not a subset, since its elements are distinct.
+pub fn is_subset<T: Compare>(s: SortedSet<T>, other: SortedSet<T>) -> Bool {
+  size(s) <= size(other) && list::all(to_list(s), fn(item) { contains(other, item) })
+}
+
+test "is_subset checks every element" {
+  let small = from_list([1, 2])
+  let large = from_list([1, 2, 3])
+  assert is_subset(small, large)
+  assert !is_subset(large, small)
+  assert is_subset(new(), small)
+}
+
+// Text
+
+/// `sorted_set::from_list([…])` with the elements in order, each written
+/// with `show` (D-344, D-355). It makes `SortedSet<T>` satisfy `Show` when
+/// `T` does (§8.8, D-064).
+pub fn show<T: Compare + Show>(s: SortedSet<T>) -> String {
+  let items = to_list(s)
+  "sorted_set::from_list({items})"
+}
+
+test "a sorted set shows its elements in order" {
+  let words = from_list(["b", "a"])
+  assert show(words) == "sorted_set::from_list([a, b])"
+  assert "{words}" == "sorted_set::from_list([a, b])"
+}
+
+// The tree's own checks
+
+test "a set inserts many elements in order and removes them again" {
+  let evens = from_list(list::map(list::range(0, 500), fn(n) { (n * 7919) % 1000 / 2 * 2 }))
+  assert size(evens) == list::length(to_list(evens))
+  assert list::sort(to_list(evens)) == to_list(evens)
+  let fours = from_list(list::map(list::range(0, 250), fn(n) { n * 4 }))
+  let halved = fold(fours, evens, fn(left, n) { remove(left, n) })
+  assert list::all(to_list(halved), fn(n) { n % 4 == 2 })
+  assert size(halved) + size(intersection(evens, fours)) == size(evens)
+}
+
+test "intersection and difference split a set" {
+  let digits = from_list(list::range(0, 100))
+  let odd = from_list(list::filter(list::range(0, 200), fn(n) { n % 2 == 1 }))
+  let both = intersection(digits, odd)
+  let only = difference(digits, odd)
+  assert size(both) + size(only) == size(digits)
+  assert union(both, only) == digits
+  assert is_subset(both, odd)
+  assert is_subset(only, digits)
+  assert !is_subset(digits, odd)
+}

@@ -1,0 +1,304 @@
+//! The hashed multimap `Multimap<K, V>`, a persistent map from each key to
+//! the list of its values (D-330, D-332, D-338).
+//!
+//! It is written in Cheby over `std::map`, with no kernel of its own (D-338,
+//! D-664): a `Map<K, List<V>>` plus the total number of values, so `count` is
+//! O(1). Keys need no interface. They are compared with `==` and hashed like
+//! `Map`'s, and come in its per-process order (D-093), so `to_sorted_list`
+//! gives an order that is the same on every run. The values of a key stay in
+//! insertion order, and every key holds at least one value (D-364).
+//! Equality, hashing and debug printing go through the hooks `equal`, `hash`
+//! and `debug` (D-342): two multimaps compare by contents, and print the same
+//! on every run (D-344, D-382). `Multimap` does not satisfy `Show` (D-344).
+
+import std::list
+import std::map
+import std::map::{Map}
+import std::ops::{Compare}
+import std::set
+import std::string
+
+/// A persistent hashed map from each key to the list of its values, in
+/// insertion order (D-332). Opaque: `entries` holds no key with an empty
+/// list (D-364), and `total` is the number of values over every key.
+/// Equality, hashing and debug printing go through `equal`, `hash` and
+/// `debug` (D-342).
+@std_hooks(equal, hash, debug)
+pub type Multimap<K, V> {
+  entries: Map<K, List<V>>,
+  total: Int,
+}
+
+/// Whether two multimaps are `==`: the same keys, in any order, each with
+/// the same values in the same order. Equal maps have equal totals.
+fn equal<K, V>(a: Multimap<K, V>, b: Multimap<K, V>) -> Bool {
+  a.entries == b.entries
+}
+
+/// The map of values, which hashes by contents, so equal multimaps hash
+/// equally (D-584).
+fn hash<K, V>(m: Multimap<K, V>) -> Map<K, List<V>> {
+  m.entries
+}
+
+/// `multimap::from_list([…])` with one debug-printed pair per value: the keys
+/// sorted by their debug text, compared as UTF-8 bytes, and the pairs of each
+/// key in insertion order, so the text is the same on every run and rebuilds
+/// the multimap (D-344, D-382, D-587). The sort is stable (D-299). Two keys
+/// with the same debug text are ordered by the text of their pairs, so the
+/// map's order cannot show (GAP(multimap-debug-key-order)).
+fn debug<K, V>(m: Multimap<K, V>) -> String {
+  let chunks = map::fold(m.entries, [], fn(found, key, values) {
+    let pairs = list::map(values, fn(value) {
+      let pair = (key, value)
+      "{pair:?}"
+    })
+    list::push(found, ("{key:?}", string::join(pairs, ", ")))
+  })
+  let sorted = list::sort_with(chunks, fn((a, a_pairs), (b, b_pairs)) {
+    case string::compare(a, b) {
+      Equal => string::compare(a_pairs, b_pairs)
+      order => order
+    }
+  })
+  let texts = string::join(list::map(sorted, fn((_, text)) { text }), ", ")
+  "multimap::from_list([{texts}])"
+}
+
+test "multimaps compare by contents and print sorted" {
+  let built = from_list([("b", 3), ("a", 1), ("a", 2)])
+  let grown = insert(from_list([("b", 3), ("a", 1)]), "a", 2)
+  assert built == grown
+  assert built != from_list([("a", 2), ("a", 1), ("b", 3)])
+  assert set::size(set::from_list([built, grown])) == 1
+  assert "{built:?}" == "multimap::from_list([(\"a\", 1), (\"a\", 2), (\"b\", 3)])"
+}
+
+test "debug text sorts the keys by their text as bytes" {
+  let numbers = from_list([(9, "x"), (10, "y"), (9, "z")])
+  assert "{numbers:?}" == "multimap::from_list([(10, \"y\"), (9, \"x\"), (9, \"z\")])"
+  let empty = new::<Int, Int>()
+  assert "{empty:?}" == "multimap::from_list([])"
+}
+
+// Building
+
+/// Returns an empty multimap.
+pub fn new<K, V>() -> Multimap<K, V> {
+  Multimap { entries: map::new(), total: 0 }
+}
+
+test "new is empty" {
+  let empty = new::<String, Int>()
+  assert is_empty(empty)
+  assert to_list(empty) == []
+}
+
+/// Returns a multimap with every pair, as if each were inserted in turn, so
+/// repeated pairs give repeated values.
+pub fn from_list<K, V>(pairs: List<(K, V)>) -> Multimap<K, V> {
+  list::fold(pairs, new(), fn(found, (key, value)) { insert(found, key, value) })
+}
+
+test "from_list keeps every pair" {
+  let tags = from_list([("b", 1), ("a", 2), ("b", 1)])
+  assert to_sorted_list(tags) == [("a", [2]), ("b", [1, 1])]
+}
+
+// Size
+
+/// Returns the number of keys (D-301, D-363). `count` returns the number of
+/// values.
+pub fn size<K, V>(m: Multimap<K, V>) -> Int {
+  map::size(m.entries)
+}
+
+test "size counts keys" {
+  let tags = from_list([("a", 1), ("a", 2), ("b", 3)])
+  assert size(tags) == 2
+}
+
+/// Returns the total number of values, over every key (D-363), kept next to
+/// the map.
+pub fn count<K, V>(m: Multimap<K, V>) -> Int {
+  m.total
+}
+
+test "count counts values" {
+  let tags = from_list([("a", 1), ("a", 2), ("b", 3)])
+  assert count(tags) == 3
+}
+
+test "count follows inserts, removals and filters" {
+  let tags = from_list([("a", 1), ("a", 1), ("b", 2), ("c", 3)])
+  assert count(tags) == 4
+  assert count(remove(tags, "a")) == 2
+  assert count(remove(tags, "z")) == 4
+  assert count(filter(tags, fn(key, _) { key != "b" })) == 3
+  assert count(insert(tags, "b", 2)) == 5
+}
+
+/// Tells whether the multimap has no keys, and so no values.
+pub fn is_empty<K, V>(m: Multimap<K, V>) -> Bool {
+  map::is_empty(m.entries)
+}
+
+test "is_empty tells an empty multimap" {
+  assert is_empty(new::<String, Int>())
+  assert !is_empty(from_list([("a", 1)]))
+}
+
+// Lookup
+
+/// Returns the values stored under `key`, in insertion order, or `[]` when
+/// `key` is not in the multimap (D-364).
+pub fn get<K, V>(m: Multimap<K, V>, key: K) -> List<V> {
+  case map::get(m.entries, key) {
+    Some(values) => values
+    None => []
+  }
+}
+
+test "get returns every value of a key" {
+  let tags = from_list([("a", 1), ("b", 3), ("a", 2)])
+  assert get(tags, "a") == [1, 2]
+  assert get(tags, "z") == []
+}
+
+/// Tells whether `key` is in the multimap.
+pub fn has_key<K, V>(m: Multimap<K, V>, key: K) -> Bool {
+  map::has_key(m.entries, key)
+}
+
+test "has_key tells whether a key is present" {
+  let tags = from_list([("a", 1)])
+  assert has_key(tags, "a")
+  assert !has_key(tags, "b")
+}
+
+// Updating
+
+/// Returns the multimap with `value` appended to the values of `key`. A key
+/// that was not present gets the list `[value]`. One `upsert` and one
+/// `list::push`: O(log n + log m), where m is the number of values of `key`.
+pub fn insert<K, V>(m: Multimap<K, V>, key: K, value: V) -> Multimap<K, V> {
+  let entries = map::upsert(m.entries, key, fn(found) {
+    case found {
+      Some(values) => list::push(values, value)
+      None => [value]
+    }
+  })
+  Multimap { entries, total: m.total + 1 }
+}
+
+test "insert appends a value" {
+  let start = from_list([("a", 1)])
+  let again = insert(insert(start, "a", 1), "b", 2)
+  assert to_sorted_list(again) == [("a", [1, 1]), ("b", [2])]
+  assert get(start, "a") == [1]
+}
+
+/// Returns the multimap without `key` and without all of its values, or
+/// unchanged when `key` is not in it.
+pub fn remove<K, V>(m: Multimap<K, V>, key: K) -> Multimap<K, V> {
+  case map::get(m.entries, key) {
+    Some(values) => Multimap {
+      entries: map::remove(m.entries, key),
+      total: m.total - list::length(values),
+    }
+    None => m
+  }
+}
+
+test "remove drops a key with all its values" {
+  let tags = from_list([("a", 1), ("a", 2), ("b", 3)])
+  assert remove(tags, "a") == from_list([("b", 3)])
+  assert remove(tags, "z") == tags
+}
+
+// Iterating
+
+/// Returns the keys, each once, in the multimap's per-process order (D-093).
+pub fn keys<K, V>(m: Multimap<K, V>) -> List<K> {
+  map::keys(m.entries)
+}
+
+test "keys lists every key once" {
+  let tags = from_list([("b", 1), ("a", 2), ("b", 3)])
+  assert list::sort(keys(tags)) == ["a", "b"]
+}
+
+/// Returns each key with its values, in the multimap's per-process order of
+/// keys (D-093).
+pub fn to_list<K, V>(m: Multimap<K, V>) -> List<(K, List<V>)> {
+  map::to_list(m.entries)
+}
+
+test "to_list groups the values by key" {
+  let tags = from_list([("b", 1), ("a", 2), ("b", 3)])
+  assert list::sort(to_list(tags)) == [("a", [2]), ("b", [1, 3])]
+}
+
+/// Returns each key with its values, sorted by key, the same on every run
+/// (D-093, D-344). The values of each key stay in insertion order.
+pub fn to_sorted_list<K: Compare, V>(m: Multimap<K, V>) -> List<(K, List<V>)> {
+  map::to_sorted_list(m.entries)
+}
+
+test "to_sorted_list orders by key" {
+  let tags = from_list([("b", 3), ("a", 2), ("b", 1)])
+  assert to_sorted_list(tags) == [("a", [2]), ("b", [3, 1])]
+}
+
+/// Returns one pair per value: the keys in the multimap's per-process order
+/// (D-093), and the values of each key in insertion order.
+pub fn to_pairs<K, V>(m: Multimap<K, V>) -> List<(K, V)> {
+  map::fold(m.entries, [], fn(found, key, values) {
+    list::fold(values, found, fn(pairs, value) { list::push(pairs, (key, value)) })
+  })
+}
+
+test "to_pairs gives one pair per value" {
+  let tags = from_list([("b", 1), ("a", 2), ("b", 3)])
+  assert list::sort(to_pairs(tags)) == [("a", 2), ("b", 1), ("b", 3)]
+  assert from_list(to_pairs(tags)) == tags
+}
+
+/// Combines the keys, starting from `initial` and calling `f` once per key
+/// with all of its values, in the multimap's per-process order (D-093).
+pub fn fold<K, V, A>(m: Multimap<K, V>, initial: A, f: fn(A, K, List<V>) -> A) -> A {
+  map::fold(m.entries, initial, f)
+}
+
+test "fold visits each key once" {
+  let tags = from_list([("b", 1), ("a", 2), ("b", 3)])
+  assert fold(tags, 0, fn(total, _, values) { total + list::length(values) }) == 3
+  assert fold(tags, 0, fn(seen, _, _) { seen + 1 }) == 2
+}
+
+/// Calls `f` once per key, with all of its values, in the multimap's
+/// per-process order (D-093), for its effects.
+pub fn each<K, V>(m: Multimap<K, V>, f: fn(K, List<V>)) {
+  map::each(m.entries, f)
+}
+
+test "each sees every key with its values" {
+  let tags = from_list([("a", 1), ("b", 2), ("b", 3)])
+  each(tags, fn(_, values) { assert !list::is_empty(values) })
+}
+
+// Transforming
+
+/// Returns the keys, with all their values, for which `keep` returns `True`.
+/// `keep` is called once per key.
+pub fn filter<K, V>(m: Multimap<K, V>, keep: fn(K, List<V>) -> Bool) -> Multimap<K, V> {
+  let entries = map::filter(m.entries, keep)
+  let total = map::fold(entries, 0, fn(found, _, values) { found + list::length(values) })
+  Multimap { entries, total }
+}
+
+test "filter keeps whole keys" {
+  let tags = from_list([("a", 1), ("b", 2), ("b", 3)])
+  let repeated = filter(tags, fn(_, values) { list::length(values) > 1 })
+  assert repeated == from_list([("b", 2), ("b", 3)])
+}

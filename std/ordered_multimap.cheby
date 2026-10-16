@@ -1,0 +1,325 @@
+//! The insertion-ordered multimap `OrderedMultimap<K, V>`, a persistent map
+//! from each key to a list of values, in the order the keys were first
+//! inserted (D-332, D-338), written in Cheby over `std::ordered_map` with
+//! no runtime kernel (D-336, D-664).
+//!
+//! An ordered map holds each key's values as a `List<V>` in insertion
+//! order, duplicates kept (D-332), and the multimap keeps the total number
+//! of values next to it, so `count` is O(1). A key is present only while it
+//! has a value (D-364). Keys are hashed and compared by the runtime's
+//! built-in routines, and no `compare` of the key type is ever called.
+
+import std::list
+import std::ordered_map
+import std::set
+
+/// A persistent multimap in insertion order (D-332, D-338, D-340):
+/// `entries` maps each key to its values, never `[]` (D-364), and `total`
+/// is the number of values over every key. Equality, hashing and debug
+/// printing go through `equal`, `hash` and `debug` (D-342, D-343).
+@std_hooks(equal, hash, debug)
+pub type OrderedMultimap<K, V> {
+  entries: ordered_map::OrderedMap<K, List<V>>,
+  total: Int,
+}
+
+/// Whether two multimaps have the same keys in the same order, each with
+/// the same list of values, compared with `==` (D-343).
+fn equal<K, V>(a: OrderedMultimap<K, V>, b: OrderedMultimap<K, V>) -> Bool {
+  count(a) == count(b) && to_list(a) == to_list(b)
+}
+
+/// The keys in order with their values: equal multimaps give equal lists,
+/// and the hash covers both orders (D-343, D-584).
+fn hash<K, V>(m: OrderedMultimap<K, V>) -> List<(K, List<V>)> {
+  to_list(m)
+}
+
+/// `ordered_multimap::from_list([…])` with one debug-printed pair per
+/// value, in the order of `to_pairs` (D-344).
+fn debug<K, V>(m: OrderedMultimap<K, V>) -> String {
+  let pairs = to_pairs(m)
+  "ordered_multimap::from_list({pairs:?})"
+}
+
+test "ordered multimaps compare, hash and print by contents and order" {
+  let ab = from_list([("a", 1), ("b", 3), ("a", 2)])
+  let ba = from_list([("b", 3), ("a", 1), ("a", 2)])
+  let grown = insert(from_list([("a", 1), ("b", 3)]), "a", 2)
+  assert ab == grown
+  assert ab != ba
+  assert set::size(set::from_list([ab, grown, ba])) == 2
+  assert "{ba:?}" == "ordered_multimap::from_list([(\"b\", 3), (\"a\", 1), (\"a\", 2)])"
+}
+
+// Building
+
+/// Returns an empty multimap.
+pub fn new<K, V>() -> OrderedMultimap<K, V> {
+  OrderedMultimap { entries: ordered_map::new(), total: 0 }
+}
+
+test "new is empty" {
+  let empty = new::<String, Int>()
+  assert is_empty(empty)
+  assert to_list(empty) == []
+}
+
+/// Returns a multimap with every pair, as if each were inserted in turn:
+/// repeated pairs give repeated values, and each key takes the place of
+/// its first occurrence.
+pub fn from_list<K, V>(pairs: List<(K, V)>) -> OrderedMultimap<K, V> {
+  list::fold(pairs, new(), fn(built, (key, value)) { insert(built, key, value) })
+}
+
+test "from_list keeps every pair" {
+  let tags = from_list([("b", 1), ("a", 2), ("b", 1)])
+  assert to_list(tags) == [("b", [1, 1]), ("a", [2])]
+}
+
+// Size
+
+/// Returns the number of keys, O(1). `count` returns the number of values
+/// (D-363).
+pub fn size<K, V>(m: OrderedMultimap<K, V>) -> Int {
+  ordered_map::size(m.entries)
+}
+
+test "size counts keys" {
+  let tags = from_list([("a", 1), ("a", 2), ("b", 3)])
+  assert size(tags) == 2
+}
+
+/// Returns the total number of values over every key, O(1): the multimap
+/// keeps the total next to its map (D-363).
+pub fn count<K, V>(m: OrderedMultimap<K, V>) -> Int {
+  m.total
+}
+
+test "count counts values" {
+  let tags = from_list([("a", 1), ("a", 2), ("b", 3)])
+  assert count(tags) == 3
+}
+
+/// Tells whether the multimap has no keys, and so no values.
+pub fn is_empty<K, V>(m: OrderedMultimap<K, V>) -> Bool {
+  ordered_map::is_empty(m.entries)
+}
+
+test "is_empty tells an empty multimap" {
+  assert is_empty(new::<String, Int>())
+  assert !is_empty(from_list([("a", 1)]))
+}
+
+// Lookup
+
+/// Returns the values stored under `key`, in insertion order, or `[]` when
+/// `key` is not present (D-364).
+pub fn get<K, V>(m: OrderedMultimap<K, V>, key: K) -> List<V> {
+  case ordered_map::get(m.entries, key) {
+    Some(values) => values
+    None => []
+  }
+}
+
+test "get returns every value of a key" {
+  let tags = from_list([("a", 1), ("b", 3), ("a", 2)])
+  assert get(tags, "a") == [1, 2]
+  assert get(tags, "z") == []
+}
+
+/// Tells whether `key` is present.
+pub fn has_key<K, V>(m: OrderedMultimap<K, V>, key: K) -> Bool {
+  ordered_map::has_key(m.entries, key)
+}
+
+test "has_key tells whether a key is present" {
+  let tags = from_list([("a", 1)])
+  assert has_key(tags, "a")
+  assert !has_key(tags, "b")
+}
+
+/// Returns the oldest key still present, with its values.
+pub fn first<K, V>(m: OrderedMultimap<K, V>) -> Option<(K, List<V>)> {
+  ordered_map::first(m.entries)
+}
+
+test "first is the oldest key" {
+  let tags = from_list([("b", 3), ("a", 1), ("b", 4)])
+  assert first(tags) == Some(("b", [3, 4]))
+  assert first(new::<String, Int>()) == None
+}
+
+/// Returns the newest key, the one first inserted most recently, with its
+/// values.
+pub fn last<K, V>(m: OrderedMultimap<K, V>) -> Option<(K, List<V>)> {
+  ordered_map::last(m.entries)
+}
+
+test "last is the newest key" {
+  let tags = from_list([("b", 3), ("a", 1), ("b", 4)])
+  assert last(tags) == Some(("a", [1]))
+  assert last(new::<String, Int>()) == None
+}
+
+// Updating
+
+/// Returns the multimap with `value` appended to the values of `key`. A
+/// new key goes at the end, and a key already present keeps its place
+/// (D-340). GAP(multimap-insert-cost): O(log n + log m), m the number of
+/// values of `key`, as in `multimap`: the key's update is O(log n), and
+/// appending to its `List<V>` is O(log m).
+pub fn insert<K, V>(m: OrderedMultimap<K, V>, key: K, value: V) -> OrderedMultimap<K, V> {
+  let entries = ordered_map::upsert(m.entries, key, fn(found) {
+    case found {
+      Some(values) => list::push(values, value)
+      None => [value]
+    }
+  })
+  OrderedMultimap { entries, total: m.total + 1 }
+}
+
+test "insert appends a value and keeps the key's position" {
+  let start = from_list([("b", 1), ("a", 2)])
+  let again = insert(insert(start, "b", 1), "c", 3)
+  assert to_list(again) == [("b", [1, 1]), ("a", [2]), ("c", [3])]
+  assert get(start, "b") == [1]
+}
+
+/// Returns the multimap without `key` and all of its values, or unchanged
+/// when `key` is not present. The other keys keep their order, and a
+/// removed key inserted again goes at the end, with only the new value
+/// (D-340).
+pub fn remove<K, V>(m: OrderedMultimap<K, V>, key: K) -> OrderedMultimap<K, V> {
+  case ordered_map::get(m.entries, key) {
+    Some(values) => OrderedMultimap {
+      entries: ordered_map::remove(m.entries, key),
+      total: m.total - list::length(values),
+    }
+    None => m
+  }
+}
+
+test "remove then insert moves a key to the end" {
+  let start = from_list([("a", 1), ("a", 2), ("b", 3)])
+  let removed = remove(start, "a")
+  let back = insert(removed, "a", 9)
+  assert to_list(removed) == [("b", [3])]
+  assert to_list(back) == [("b", [3]), ("a", [9])]
+  assert remove(start, "z") == start
+}
+
+// Iterating
+
+/// Returns the keys in the multimap's order, each once.
+pub fn keys<K, V>(m: OrderedMultimap<K, V>) -> List<K> {
+  ordered_map::keys(m.entries)
+}
+
+test "keys come in insertion order" {
+  let tags = from_list([("b", 1), ("a", 2), ("b", 3)])
+  assert keys(tags) == ["b", "a"]
+}
+
+/// Returns each key with its values, in the multimap's order.
+pub fn to_list<K, V>(m: OrderedMultimap<K, V>) -> List<(K, List<V>)> {
+  ordered_map::to_list(m.entries)
+}
+
+test "to_list groups the values by key" {
+  let tags = from_list([("b", 1), ("a", 2), ("b", 3)])
+  assert to_list(tags) == [("b", [1, 3]), ("a", [2])]
+}
+
+/// Returns one pair per value, in the order of the keys and, within a key,
+/// in insertion order, O(n + t) for t values.
+pub fn to_pairs<K, V>(m: OrderedMultimap<K, V>) -> List<(K, V)> {
+  fold(m, [], fn(pairs, key, values) {
+    list::fold(values, pairs, fn(found, value) { list::push(found, (key, value)) })
+  })
+}
+
+test "to_pairs groups the pairs by key" {
+  let tags = from_list([("b", 1), ("a", 2), ("b", 3)])
+  assert to_pairs(tags) == [("b", 1), ("b", 3), ("a", 2)]
+}
+
+/// Combines the keys in the multimap's order, starting from `initial`,
+/// calling `f` once per key with all of its values.
+pub fn fold<K, V, A>(m: OrderedMultimap<K, V>, initial: A, f: fn(A, K, List<V>) -> A) -> A {
+  ordered_map::fold(m.entries, initial, f)
+}
+
+test "fold visits each key once in order" {
+  let tags = from_list([("b", 1), ("a", 2), ("b", 3)])
+  let text = fold(tags, "", fn(acc, key, values) {
+    let n = list::length(values)
+    acc + "{key}{n}"
+  })
+  assert text == "b2a1"
+}
+
+/// Calls `f` once per key, in the multimap's order, with all of its values,
+/// for its effects.
+pub fn each<K, V>(m: OrderedMultimap<K, V>, f: fn(K, List<V>)) {
+  ordered_map::each(m.entries, f)
+}
+
+test "each sees every key with its values" {
+  let tags = from_list([("a", 1), ("b", 2), ("b", 3)])
+  each(tags, fn(_, values) { assert !list::is_empty(values) })
+}
+
+// Transforming
+
+/// Returns the keys, with all their values, for which `keep` returns
+/// `True`, in the same order. `keep` is called once per key, in the
+/// multimap's order, O(n log n).
+pub fn filter<K, V>(m: OrderedMultimap<K, V>, keep: fn(K, List<V>) -> Bool) -> OrderedMultimap<K, V> {
+  let kept = ordered_map::filter(m.entries, keep)
+  let total = ordered_map::fold(kept, 0, fn(sum, _, values) { sum + list::length(values) })
+  OrderedMultimap { entries: kept, total }
+}
+
+test "filter keeps whole keys in order" {
+  let tags = from_list([("c", 1), ("c", 2), ("a", 3), ("b", 4), ("b", 5)])
+  let repeated = filter(tags, fn(_, values) { list::length(values) > 1 })
+  assert keys(repeated) == ["c", "b"]
+}
+
+// Text
+
+/// Writes `ordered_multimap::from_list([`, one pair per value in the order
+/// of `to_pairs` written with `show`, and `])` (D-355). It makes
+/// `OrderedMultimap<K, V>` satisfy `Show` when `K` and `V` do (D-064,
+/// D-344).
+pub fn show<K: Show, V: Show>(m: OrderedMultimap<K, V>) -> String {
+  let pairs = to_pairs(m)
+  "ordered_multimap::from_list({pairs})"
+}
+
+test "an ordered multimap shows one pair per value" {
+  let tags = from_list([("b", 3), ("a", 1), ("b", 4)])
+  assert show(tags) == "ordered_multimap::from_list([(b, 3), (b, 4), (a, 1)])"
+  assert "{tags}" == "ordered_multimap::from_list([(b, 3), (b, 4), (a, 1)])"
+}
+
+// Internal tests
+
+test "count follows inserts, removals and filters" {
+  let tags = from_list([("a", 1), ("b", 2), ("a", 3), ("c", 4), ("a", 5)])
+  assert count(tags) == 5
+  assert count(remove(tags, "a")) == 2
+  assert count(remove(tags, "z")) == 5
+  assert count(filter(tags, fn(key, _) { key != "b" })) == 4
+  assert count(from_list(to_pairs(tags))) == 5
+  assert from_list(to_pairs(tags)) == tags
+}
+
+test "many values under one key keep their order" {
+  let numbers = list::range(0, 500)
+  let grouped = list::fold(numbers, new(), fn(m, n) { insert(m, n % 3, n) })
+  assert keys(grouped) == [0, 1, 2]
+  assert count(grouped) == 500
+  assert get(grouped, 1) == list::filter(numbers, fn(n) { n % 3 == 1 })
+}

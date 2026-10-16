@@ -76,9 +76,9 @@ bb2:
   dup _3
   _4: value = field _0.1 of ctor linked_list::linked_list::Node
   dup _4
-  drop _0
-  _5: value = alloc tuple/2(_3, _4) ; unwind bb7
-  _6: value = alloc ctor Some(_5) ; unwind bb8
+  _7: value = drop_reuse _0 of ctor linked_list::linked_list::Node
+  _5: value = alloc_reuse _7, tuple/2(_3, _4) ; unwind bb8
+  _6: value = alloc ctor Some(_5) ; unwind bb9
   goto bb3(_6)
 bb3(_2: value):
   return _2
@@ -94,6 +94,9 @@ bb7:
   drop _4
   goto bb6()
 bb8:
+  drop _7
+  goto bb7()
+bb9:
   drop _5
   goto bb4()
 }

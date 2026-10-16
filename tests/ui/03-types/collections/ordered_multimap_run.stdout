@@ -1,0 +1,9 @@
+ordered_multimap::from_list([(b, bee), (b, bat), (b, bee), (a, ant), (a, ant), (a, ape), (c, cow)])
+ordered_multimap::from_list([("b", "bee"), ("b", "bat"), ("b", "bee"), ("a", "ant"), ("a", "ant"), ("a", "ape"), ("c", "cow")])
+keys: 3, values: 7
+b: bee,bat,bee
+a: ant,ant,ape
+c: cow
+after removing b: [], values left: 4
+keys after b comes back: [a, c, b]
+same as before: False

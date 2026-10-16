@@ -1084,6 +1084,70 @@ pub(crate) unsafe fn free_in(ctx: Option<&ExecCtx>, obj: *mut u8) {
     pending.finish();
 }
 
+/// Releases the reference each value field of `obj` holds and stores 0 in
+/// the field, so that `obj`, a unique object of a constructor or tuple
+/// layout that a reuse keeps (D-716, `crate::reuse`), owns nothing and
+/// its block can be written over or freed as a childless object. What
+/// the fields alone kept alive is freed as [`free_in`] frees, charged to
+/// `ctx`'s domain (or the running fiber's). Returns the size of `obj`'s
+/// allocation, or `None`, touching nothing, when `obj` is not of a
+/// constructor or tuple layout. Never raises: a panicking finalizer of a
+/// child ends the process, as in every free (D-171).
+///
+/// # Safety
+///
+/// `obj` points to a live heap object whose count is 1 and whose one
+/// reference the caller owns; `ctx`, when given, is the control block of
+/// the fiber running on this thread.
+pub(crate) unsafe fn release_fields(ctx: Option<&ExecCtx>, obj: *mut u8) -> Option<u64> {
+    // SAFETY: forwarded from the caller.
+    let (_, id) = unsafe { scan_and_layout(obj) };
+    let reusable = layout::get(id)
+        .is_some_and(|info| matches!(info.kind, LayoutKind::Ctor { .. } | LayoutKind::Tuple));
+    if !reusable {
+        return None;
+    }
+    // SAFETY: forwarded from the caller.
+    let shape = unsafe { shape_of(obj) };
+    let Children::Fields { first, count } = shape.children else {
+        return None;
+    };
+    let mut pending: Option<Pending> = None;
+    let mut offset = first;
+    for _ in 0..count {
+        // SAFETY: the shape lies within the object, which the caller owns
+        // uniquely, so no other reference reads the field.
+        let child = unsafe { read_field(obj, offset) };
+        // SAFETY: as above.
+        unsafe { object::write_field(obj, offset, 0) };
+        offset = offset.saturating_add(to_usize(abi::FIELD_SIZE));
+        if abi::is_tagged_int(child) || child == 0 {
+            continue;
+        }
+        // SAFETY: a value field holds an owned reference to a live object.
+        unsafe { check_live(child, "reusing an object") };
+        // SAFETY: as above; the field no longer holds it.
+        if unsafe { rc::release(word_to_ptr(child)) } {
+            match pending.as_mut() {
+                Some(list) => list.push(child),
+                None => pending = Some(Pending::new(child)),
+            }
+        }
+    }
+    if let Some(mut pending) = pending {
+        let (ctx, (objects, bytes)) = with_fiber_cache(ctx, |ctx, cache| {
+            // SAFETY: every word on the list is an object whose count
+            // reached zero.
+            (ctx, unsafe { drain(&mut pending, cache) })
+        });
+        charge_freed(ctx, objects, bytes);
+        #[cfg(debug_assertions)]
+        charge_kinds(ctx, &pending.kinds);
+        pending.finish();
+    }
+    Some(to_u64(object_layout(shape.size).size()))
+}
+
 /// Frees `obj` if it owns no reference and has no finalizer, with no
 /// worklist and no walk, and returns whether it did.
 ///

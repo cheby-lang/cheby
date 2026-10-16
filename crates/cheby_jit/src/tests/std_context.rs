@@ -253,6 +253,7 @@ fn std_context_scope_run_body_compiles() {
         layout: LayoutRef::Ctor(builtin::OK),
         name: "Ok".into(),
         tag: 0,
+        only_ctor: false,
         fields: vec![FieldDesc {
             name: None,
             repr: Repr::Value,

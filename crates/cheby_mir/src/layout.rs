@@ -17,6 +17,75 @@ use crate::repr::{Repr, repr_of};
 /// (D-279).
 const WORD: i32 = 8;
 
+/// The alignment every object's allocation is rounded to, in bytes: the
+/// runtime's `abi::OBJECT_ALIGN` (this crate does not depend on the
+/// runtime; a code generator test checks they agree).
+pub const OBJECT_ALIGN: u64 = 8;
+
+/// The most uniform fields an object's scan count holds: the runtime's
+/// `abi::SCAN_MAX`. An object of more stores the escape value as its scan
+/// count and a tagged field count in one more word (D-279, D-555).
+pub const SCAN_MAX: u64 = 254;
+
+/// The size in bytes of the allocation of an object of `layout`, as the
+/// runtime frees it: the header, every field slot (raw ones included), the
+/// escaped field count of an object with more than [`SCAN_MAX`] uniform
+/// fields, at least the header, rounded up to [`OBJECT_ALIGN`]. `None` for
+/// a layout whose size is not fixed (`String`, `Bytes`), a constructor the
+/// unit has no layout for, or a size that overflows.
+///
+/// The one size function of reuse (D-716, GAP(reuse-token-form)): a block
+/// is reused only for an object of the same size, because the runtime
+/// frees it with the size its new header implies, and code generation
+/// checks that its allocation sizes agree.
+#[must_use]
+pub fn object_size(module: &crate::ir::MirModule, layout: LayoutRef) -> Option<u64> {
+    let word = u64::try_from(WORD).ok()?;
+    let fields: u64 = match layout {
+        LayoutRef::Ctor(def) => match module.layout(layout) {
+            Some(desc) => u64::try_from(desc.fields.len()).ok()?,
+            // The builtin one-field constructors (D-454), which a unit may
+            // allocate without listing their layout.
+            None if [
+                cheby_iface::builtin::SOME,
+                cheby_iface::builtin::OK,
+                cheby_iface::builtin::ERR,
+            ]
+            .contains(&def) =>
+            {
+                1
+            }
+            None => return None,
+        },
+        LayoutRef::Builtin(b) => match b {
+            crate::ir::BuiltinLayout::BoxedInt
+            | crate::ir::BuiltinLayout::BoxedFloat
+            | crate::ir::BuiltinLayout::BoxedF32
+            | crate::ir::BuiltinLayout::BoxedU64 => 1,
+            crate::ir::BuiltinLayout::String | crate::ir::BuiltinLayout::Bytes => return None,
+        },
+        LayoutRef::Tuple(_)
+        | LayoutRef::Closure(_)
+        | LayoutRef::Dict { .. }
+        | LayoutRef::Dyn
+        | LayoutRef::Desc { .. }
+        | LayoutRef::DescNominal => {
+            let count = layout.uniform_fields()?;
+            let escaped = count > SCAN_MAX
+                && matches!(
+                    layout,
+                    LayoutRef::Tuple(_)
+                        | LayoutRef::Closure(_)
+                        | LayoutRef::Dict { .. }
+                        | LayoutRef::Desc { .. }
+                );
+            count.checked_add(u64::from(escaped))?
+        }
+    };
+    let size = fields.checked_mul(word)?.checked_add(word)?;
+    size.max(word).checked_next_multiple_of(OBJECT_ALIGN)
+}
+
 /// One field of a layout.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct FieldDesc {
@@ -42,6 +111,11 @@ pub struct LayoutDesc {
     pub name: Box<str>,
     /// The constructor's position among its type's constructors.
     pub tag: u32,
+    /// Whether it is its type's only constructor, read from the type's
+    /// interface (D-246): then a field read of it proves its layout
+    /// without a test of the tag, which the reuse pass needs
+    /// (GAP(reuse-pairing-scope), D-071).
+    pub only_ctor: bool,
     /// In declaration order.
     pub fields: Vec<FieldDesc>,
     pub value_fields: u32,
@@ -133,10 +207,15 @@ pub fn ctor_layout(ctor: DefId, defs: &Defs<'_>) -> Result<LayoutDesc, Ice> {
     let type_def = DefId::new(ctor.module, sig.ty);
     let type_path = defs.name(type_def)?;
     let ctor_path = defs.name(ctor)?;
+    let only_ctor = matches!(
+        &defs.item(type_def)?.sig,
+        ItemSig::Type(t) if matches!(&t.kind, TypeDefKind::Adt { ctors } if ctors.len() == 1)
+    );
     Ok(LayoutDesc {
         layout: LayoutRef::Ctor(ctor),
         name: ctor_path.path().into(),
         tag: sig.tag,
+        only_ctor,
         fields,
         value_fields,
         raw_fields,

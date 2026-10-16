@@ -780,6 +780,29 @@ impl Decls {
         Ok(id)
     }
 
+    /// Declares what reuse's code imports (D-716), once: its runtime
+    /// functions, checked and inline, and the counting flag
+    /// ([`crate::runtime::ON_DEMAND_DATA`]), in a fixed order, so the ids
+    /// are the same in every build (D-264).
+    fn declare_reuse<M: Module>(&mut self, module: &mut M) -> Result<(), CodegenError> {
+        for f in [
+            RuntimeFunc::ReleaseFields,
+            RuntimeFunc::ReuseHit,
+            RuntimeFunc::AllocMiss,
+            RuntimeFunc::DropReuseChecked,
+            RuntimeFunc::AllocReuseChecked,
+        ] {
+            self.declare_runtime_func(module, f)?;
+        }
+        for symbol in crate::runtime::ON_DEMAND_DATA {
+            if !self.static_data.contains_key(symbol) {
+                let id = self.data(module, symbol, Linkage::Import, false)?;
+                self.static_data.insert(symbol, id);
+            }
+        }
+        Ok(())
+    }
+
     /// Declares the on-demand runtime functions the helpers of `unit`'s
     /// code call (D-693), and the entry check's releasing slow path when a
     /// function's entry pad allows it (D-775).
@@ -806,6 +829,13 @@ impl Decls {
                         if f.on_demand() {
                             self.declare_runtime_func(module, f)?;
                         }
+                    }
+                    if let Stmt::Assign {
+                        value: Rvalue::DropReuse { .. } | Rvalue::AllocReuse { .. },
+                        ..
+                    } = stmt
+                    {
+                        self.declare_reuse(module)?;
                     }
                 }
             }

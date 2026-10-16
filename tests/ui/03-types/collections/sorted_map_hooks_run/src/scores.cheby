@@ -1,0 +1,27 @@
+//! Builds the same scores in two ways, so `main` only compares, hashes
+//! and prints the sorted maps it gets.
+
+import std::list
+import std::sorted_map
+
+/// The scores, from one list of pairs.
+pub fn listed() -> sorted_map::SortedMap<String, Int> {
+  sorted_map::from_list([("cy", 3), ("ada", 1), ("bob", 2), ("dee", 4)])
+}
+
+/// The same scores, one insert at a time in another order, with a key
+/// added and removed again and a value replaced, so the tree has another
+/// shape.
+pub fn grown() -> sorted_map::SortedMap<String, Int> {
+  let start = sorted_map::from_list([("dee", 4), ("bob", 20)])
+  let with_extra = sorted_map::insert(start, "eve", 5)
+  let without = sorted_map::remove(with_extra, "eve")
+  list::fold([("ada", 1), ("bob", 2), ("cy", 3)], without, fn(found, (name, score)) {
+    sorted_map::insert(found, name, score)
+  })
+}
+
+/// The scores with one value changed.
+pub fn changed() -> sorted_map::SortedMap<String, Int> {
+  sorted_map::insert(listed(), "cy", 30)
+}

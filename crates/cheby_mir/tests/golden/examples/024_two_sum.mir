@@ -169,21 +169,21 @@ bb4:
   drop _11
   _16: value = field _14.0 of ctor Some
   dup _16
-  drop _14
+  _28: value = drop_reuse _14 of ctor Some
   _17: int = unbox int _16
   drop _16
-  _18: value = box int _17 ; unwind bb7
-  _19: value = box int _6 ; unwind bb14
-  _20: value = alloc tuple/2(_18, _19) ; unwind bb15
-  _21: value = alloc ctor Some(_20) ; unwind bb16
+  _18: value = box int _17 ; unwind bb14
+  _19: value = box int _6 ; unwind bb16
+  _20: value = alloc tuple/2(_18, _19) ; unwind bb18
+  _21: value = alloc_reuse _28, ctor Some(_20) ; unwind bb20
   goto bb6(_21)
 bb5:
   drop _14
   _23: int = checked add int _6, const int 1 at str#2 ; unwind bb13
   _24: value = box int _23 ; unwind bb13
-  _25: value = box int _10 ; unwind bb17
-  _26: value = box int _6 ; unwind bb18
-  _27: value = call std::map::insert(_3, _25, _26) ; unwind bb20
+  _25: value = box int _10 ; unwind bb21
+  _26: value = box int _6 ; unwind bb22
+  _27: value = call std::map::insert(_3, _25, _26) ; unwind bb24
   tail_call _0(_11, _24, _27)
 bb6(_22: value):
   goto bb3(_22)
@@ -208,26 +208,38 @@ bb13:
   drop _11
   goto bb12()
 bb14:
-  drop _18
+  drop _28
   goto bb7()
 bb15:
-  drop _19
-  goto bb14()
-bb16:
-  drop _20
+  drop _18
   goto bb7()
+bb16:
+  drop _28
+  goto bb15()
 bb17:
-  drop _24
-  goto bb13()
+  drop _19
+  goto bb15()
 bb18:
-  drop _25
+  drop _28
   goto bb17()
 bb19:
+  drop _20
+  goto bb7()
+bb20:
+  drop _28
+  goto bb19()
+bb21:
+  drop _24
+  goto bb13()
+bb22:
+  drop _25
+  goto bb21()
+bb23:
   drop _11
   goto bb8()
-bb20:
+bb24:
   drop _24
-  goto bb19()
+  goto bb23()
 }
 
 fn two_sum::describe(_0: value, _1: int) -> value check str#0 {

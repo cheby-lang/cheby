@@ -21,9 +21,9 @@ const NONE: u32 = u32::MAX;
 
 /// Which node dominates which, for the nodes reachable from node 0. The
 /// validator's nodes are the blocks split at their unwind edges
-/// ([`super::Segments`]).
+/// ([`super::Segments`]); the reuse pass's are blocks ([`crate::reuse`]).
 #[derive(Debug)]
-pub(super) struct Dominance {
+pub(crate) struct Dominance {
     /// Each node's depth-first (preorder) number, by node index; `NONE`
     /// for an unreachable node.
     num: Vec<u32>,
@@ -33,6 +33,11 @@ pub(super) struct Dominance {
     /// Each reachable node's post-order number on the dominator tree, by
     /// depth-first number.
     post: Vec<u32>,
+    /// The node of each depth-first number.
+    order: Vec<usize>,
+    /// Each reachable node's immediate dominator's depth-first number, by
+    /// depth-first number (the entry's is its own).
+    idom: Vec<u32>,
 }
 
 impl Dominance {
@@ -43,7 +48,7 @@ impl Dominance {
     ///
     /// An [`Ice`] if a successor is out of range or the graph is too
     /// large to number.
-    pub(super) fn from_successors(succs: &[Vec<usize>]) -> Result<Self, Ice> {
+    pub(crate) fn from_successors(succs: &[Vec<usize>]) -> Result<Self, Ice> {
         let n = succs.len();
         let (order, parent) = preorder(succs)?;
         let mut num = vec![NONE; n];
@@ -64,17 +69,35 @@ impl Dominance {
         }
         let idom = immediate_dominators(&parent, &preds)?;
         let (pre, post) = tree_numbers(&idom)?;
-        Ok(Self { num, pre, post })
+        Ok(Self {
+            num,
+            pre,
+            post,
+            order,
+            idom,
+        })
+    }
+
+    /// The immediate dominator of node `b`: `None` for node 0 and for an
+    /// unreachable node. Walking these from a node visits each node that
+    /// dominates it, nearest first.
+    pub(crate) fn immediate_dominator(&self, b: usize) -> Option<usize> {
+        let n = self.number(b)?;
+        if n == 0 {
+            return None;
+        }
+        let &d = self.idom.get(n)?;
+        self.order.get(usize::try_from(d).ok()?).copied()
     }
 
     /// Whether node `b` is reachable from node 0.
-    pub(super) fn is_reachable(&self, b: usize) -> bool {
+    pub(crate) fn is_reachable(&self, b: usize) -> bool {
         self.num.get(b).is_some_and(|&r| r != NONE)
     }
 
     /// Whether node `a` dominates node `b` (every node dominates itself).
     /// False when either node is unreachable.
-    pub(super) fn dominates(&self, a: usize, b: usize) -> bool {
+    pub(crate) fn dominates(&self, a: usize, b: usize) -> bool {
         let (Some(a), Some(b)) = (self.number(a), self.number(b)) else {
             return false;
         };
@@ -351,6 +374,19 @@ mod tests {
                 let expected = want_b.as_ref().is_some_and(|s| s.contains(&a));
                 assert_eq!(d.dominates(a, b), expected, "{a} dominates {b}");
             }
+            // Walking the immediate dominators from `b` visits exactly the
+            // nodes that dominate it.
+            let mut walked = BTreeSet::new();
+            let mut x = want_b.as_ref().map(|_| b);
+            while let Some(n) = x {
+                assert!(walked.insert(n), "the walk from {b} repeats {n}");
+                x = d.immediate_dominator(n);
+            }
+            assert_eq!(
+                walked,
+                want_b.clone().unwrap_or_default(),
+                "the walk from {b}"
+            );
         }
     }
 

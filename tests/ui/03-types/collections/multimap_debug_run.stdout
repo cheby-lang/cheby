@@ -1,0 +1,7 @@
+multimap::from_list([("apple", 1), ("apple", 1), ("fig", 2), ("pear", 3), ("pear", 1)])
+multimap::from_list([("apple", 1), ("apple", 1), ("fig", 2), ("pear", 3), ("pear", 1)])
+== True, distinct when hashed: 1
+multimap::from_list([("apple", 1), ("apple", 1), ("fig", 2), ("pear", 1), ("pear", 3)])
+== False, distinct when hashed: 2
+multimap::from_list([(10, "ten"), (100, "hundred"), (9, "nine"), (9, "neun")])
+multimap::from_list([])
