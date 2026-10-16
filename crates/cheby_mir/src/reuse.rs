@@ -161,6 +161,7 @@ pub fn insert(module: &MirModule, f: &mut Function) -> Result<(), Ice> {
             value: Rvalue::DropReuse {
                 local: pair.local,
                 layout: pair.layout,
+                keep: Vec::new(),
             },
         };
         for &(block, at) in &pair.sinks {
@@ -311,7 +312,9 @@ fn reusable_size(module: &MirModule, layout: LayoutRef) -> Option<u64> {
 /// an exhaustive `case` the default). Such a block dominates every block
 /// it reaches without passing the switch again, and the local is defined
 /// once, before its tag is read, so a read there sees that constructor.
-fn tested_variants(
+/// Shared with fusion's drops specialized by constructor
+/// ([`crate::fuse`]): one predicate for what a read proves.
+pub(crate) fn tested_variants(
     module: &MirModule,
     f: &Function,
     dom: &Dominance,
@@ -389,8 +392,9 @@ fn tested_variants(
 /// holds at the same place is read once, with the layout of the first
 /// constructor and no test of the tag (D-071), and constructors that hold
 /// a field alike share one arm of the tag's switch: neither read proves a
-/// layout, since `base` may be a constructor of another size.
-fn pins(
+/// layout, since `base` may be a constructor of another size. Fusion's
+/// specialized drops use it too ([`crate::fuse`]).
+pub(crate) fn pins(
     module: &MirModule,
     tested: &FxHashMap<Local, Vec<(usize, Variant)>>,
     dom: &Dominance,
@@ -505,7 +509,7 @@ struct Facts {
 ///
 /// [`LayoutDesc::tag`]: crate::LayoutDesc::tag
 /// [`LayoutDesc::type_def`]: crate::LayoutDesc::type_def
-type Variant = (DefId, u32);
+pub(crate) type Variant = (DefId, u32);
 
 impl Facts {
     fn of(module: &MirModule, f: &Function) -> Result<Self, Ice> {

@@ -33,8 +33,7 @@ fn app::strings(_0: value) -> value check str#0 {
   str#1 = "b"
 bb0:
   _1: value = call_runtime list_push(const empty_list, _0) ; unwind bb1
-  _2: value = const str#1
-  _3: value = call_runtime list_push(_1, _2) ; unwind bb1
+  _3: value = call_runtime list_push(_1, const str#1) ; unwind bb1
   return _3
 bb1:
   resume
@@ -124,13 +123,10 @@ bb0:
   drop _0
   _1: value = call app::elements(const int 2) ; unwind bb1
   drop _1
-  _2: value = const str#1
-  _3: value = call app::strings(_2) ; unwind bb1
+  _3: value = call app::strings(const str#1) ; unwind bb1
   drop _3
-  _4: value = const str#1
-  _5: value = call_runtime list_push(const empty_list, _4) ; unwind bb1
-  _6: value = const str#2
-  _7: value = call app::push_found(_5, _6) ; unwind bb1
+  _5: value = call_runtime list_push(const empty_list, const str#1) ; unwind bb1
+  _7: value = call app::push_found(_5, const str#2) ; unwind bb1
   drop _7
   _8: value = box int const int 1
   _9: value = call_runtime list_push(const empty_list, _8) ; unwind bb1

@@ -1,0 +1,40 @@
+// @mode: run-pass
+// @milestone: M2
+// @decisions: D-717, D-170, D-716
+// @flags: --reuse-report
+//! Matching a value and building one of the same constructor in the same
+//! arm reuses it when it is unique (§9.3): each arm of `insert` that
+//! rebuilds a `Node` from the matched one reuses `tree`. The arm that
+//! builds a node from a `Leaf` has no dying value of its size, so it
+//! allocates.
+
+import std::io
+
+type Tree {
+  Leaf,
+  Node(Tree, Int, Tree),
+}
+
+fn insert(tree: Tree, key: Int) -> Tree {
+  case tree {
+    Leaf => Node(Leaf, key, Leaf)
+    Node(left, k, right) => case {
+      key < k => Node(insert(left, key), k, right)
+      key > k => Node(left, k, insert(right, key))
+      _ => tree
+    }
+  }
+}
+
+fn size(tree: Tree) -> Int {
+  case tree {
+    Leaf => 0
+    Node(left, _, right) => size(left) + 1 + size(right)
+  }
+}
+
+fn main() {
+  let tree = insert(insert(insert(Leaf, 2), 1), 3)
+  let keys = size(tree)
+  io::println("{keys} keys")
+}

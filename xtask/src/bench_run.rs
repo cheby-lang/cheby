@@ -15,6 +15,14 @@
 //! `bench/runtime/baseline-m1.json`), the table shows each median's change
 //! and the geometric mean of the ratios, and the command fails if a
 //! checksum or a size differs from the baseline's.
+//!
+//! With `--rust`, each benchmark of the `collections` group is followed by
+//! its Rust baselines (`bench/baselines`, D-664): rows
+//! `<name>@rust-<variant>`, each the same number of timed runs of
+//! `cheby_bench_baselines <name> <variant> <n>` at the size the Cheby
+//! program printed, which must print the Cheby program's checksum. The
+//! binary is built with `--release` first, or `--rust-bin` names a
+//! prebuilt one and cargo is not run for it.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -27,6 +35,15 @@ use serde_json::{Value, json};
 /// its events are counted only when it is set (D-768), so the timed runs
 /// do not pay for them.
 const STATS_ENV: &str = "CHEBY_RT_STATS";
+
+/// The group whose benchmarks have Rust baselines (D-664).
+const RUST_GROUP: &str = "collections";
+
+/// The package of the Rust baselines, `bench/baselines`.
+const RUST_PACKAGE: &str = "cheby_bench_baselines";
+
+/// What a Rust baseline's row adds to its benchmark's name.
+const RUST_MARK: &str = "@rust-";
 
 /// The command's options.
 #[derive(Debug, clap::Args)]
@@ -59,6 +76,14 @@ pub struct Args {
     /// Write the results as JSON to this file
     #[arg(long)]
     json: Option<PathBuf>,
+    /// Also time the Rust baselines of the `collections` group, built with
+    /// `--release` (rows `<name>@rust-<variant>`)
+    #[arg(long)]
+    rust: bool,
+    /// The prebuilt `cheby_bench_baselines` binary for `--rust` (implies
+    /// it); cargo is then not run for the baselines
+    #[arg(long)]
+    rust_bin: Option<PathBuf>,
 }
 
 /// Parses `KEY=VALUE`.
@@ -113,6 +138,10 @@ pub fn run(root: &Path, args: &Args) -> Result<(), String> {
         Some(path) => crate::absolute(path)?,
         None => crate::build_cheby_profile(root, true)?,
     };
+    let rust = rust_baselines(root, args)?;
+    if rust.is_some() && !benchmarks.iter().any(|(group, _)| group == RUST_GROUP) {
+        eprintln!("bench-run: --rust: only the `{RUST_GROUP}` group has Rust baselines");
+    }
     let mut env = args.env.clone();
     if let Some(threads) = args.threads {
         env.push(("CHEBY_THREADS".to_owned(), threads.to_string()));
@@ -127,7 +156,16 @@ pub fn run(root: &Path, args: &Args) -> Result<(), String> {
     for (group, dir) in &benchmarks {
         let name = file_name(dir);
         eprintln!("bench-run: {group}/{name}");
-        results.push(measure(&cheby, group, dir, &env, runs)?);
+        let measured = measure(&cheby, group, dir, &env, runs)?;
+        let mut baselines = Vec::new();
+        if let Some(rust) = rust.as_ref().filter(|_| group == RUST_GROUP) {
+            for (_, variant) in rust.variants.iter().filter(|(program, _)| *program == name) {
+                eprintln!("bench-run: {group}/{name}{RUST_MARK}{variant}");
+                baselines.push(measure_rust(&rust.bin, &measured, variant, runs)?);
+            }
+        }
+        results.push(measured);
+        results.append(&mut baselines);
     }
     let meta = Meta {
         commit,
@@ -140,8 +178,15 @@ pub fn run(root: &Path, args: &Args) -> Result<(), String> {
     let report = render(&results, baseline.as_ref());
     print!("{}", report.table);
     if let Some(out) = &args.json {
+        let mut meta = meta.to_json();
+        if let (Some(rust), Some(fields)) = (&rust, meta.as_object_mut()) {
+            fields.insert(
+                "rust_baselines".to_owned(),
+                json!(relative_to(root, &rust.bin)),
+            );
+        }
         let value = json!({
-            "meta": meta.to_json(),
+            "meta": meta,
             "results": results.iter().map(Measured::to_json).collect::<Vec<_>>(),
         });
         let text = serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?;
@@ -283,6 +328,124 @@ fn run_once(
         ));
     }
     Ok((elapsed, stdout, stderr))
+}
+
+/// The Rust baselines of `--rust`: the binary and the `(program, variant)`
+/// pairs its `--list` printed.
+struct RustBaselines {
+    bin: PathBuf,
+    variants: Vec<(String, String)>,
+}
+
+/// The Rust baselines when `--rust` or `--rust-bin` asks for them: the
+/// binary `--rust-bin` names, or `cheby_bench_baselines` built with
+/// `--release` here.
+fn rust_baselines(root: &Path, args: &Args) -> Result<Option<RustBaselines>, String> {
+    let bin = match (&args.rust_bin, args.rust) {
+        (Some(path), _) => crate::absolute(path)?,
+        (None, true) => build_rust_baselines(root)?,
+        (None, false) => return Ok(None),
+    };
+    let out = Command::new(&bin)
+        .arg("--list")
+        .output()
+        .map_err(|e| format!("cannot run {}: {e}", bin.display()))?;
+    if !out.status.success() {
+        return Err(format!(
+            "`{} --list` failed ({})\n{}",
+            bin.display(),
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+    let variants = parse_variants(&String::from_utf8_lossy(&out.stdout))?;
+    Ok(Some(RustBaselines { bin, variants }))
+}
+
+/// Builds `cheby_bench_baselines` with `--release` and returns its path.
+fn build_rust_baselines(root: &Path) -> Result<PathBuf, String> {
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
+    let status = Command::new(cargo)
+        .current_dir(root)
+        .args(["build", "--quiet", "--release", "--package", RUST_PACKAGE])
+        .status()
+        .map_err(|e| format!("cannot run cargo: {e}"))?;
+    if !status.success() {
+        return Err(format!("cannot build `{RUST_PACKAGE}`"));
+    }
+    let target =
+        std::env::var_os("CARGO_TARGET_DIR").map_or_else(|| root.join("target"), PathBuf::from);
+    let name = format!("{RUST_PACKAGE}{}", std::env::consts::EXE_SUFFIX);
+    Ok(target.join("release").join(name))
+}
+
+/// The `<program> <variant>` lines of `cheby_bench_baselines --list`.
+fn parse_variants(text: &str) -> Result<Vec<(String, String)>, String> {
+    text.lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            let words: Vec<&str> = line.split_whitespace().collect();
+            match words.as_slice() {
+                [program, variant] => Ok(((*program).to_owned(), (*variant).to_owned())),
+                _ => Err(format!(
+                    "`{RUST_PACKAGE} --list` printed `{line}`, not `<program> <variant>`"
+                )),
+            }
+        })
+        .collect()
+}
+
+/// Runs the Rust baseline `variant` of the benchmark measured as `of`
+/// `runs` times, at the size `of` printed. Every run must succeed and
+/// print the same checksum; `render` compares it with `of`'s.
+fn measure_rust(bin: &Path, of: &Measured, variant: &str, runs: usize) -> Result<Measured, String> {
+    let name = format!("{}{RUST_MARK}{variant}", of.name);
+    let mut cmd_args = vec![of.name.clone(), variant.to_owned()];
+    if let Some(n) = of.n {
+        cmd_args.push(n.to_string());
+    }
+    let mut times = Vec::with_capacity(runs);
+    let mut first: Option<(Option<u64>, String)> = None;
+    for _ in 0..runs {
+        let start = Instant::now();
+        let out = Command::new(bin)
+            .args(&cmd_args)
+            .output()
+            .map_err(|e| format!("cannot run {}: {e}", bin.display()))?;
+        let elapsed = start.elapsed();
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        if !out.status.success() {
+            return Err(format!(
+                "`{} {}` failed ({})\n{stdout}{}",
+                bin.display(),
+                cmd_args.join(" "),
+                out.status,
+                String::from_utf8_lossy(&out.stderr)
+            ));
+        }
+        let printed = parse_output(&stdout)
+            .ok_or_else(|| format!("{name} printed no `checksum: <n>` line:\n{stdout}"))?;
+        match &first {
+            Some(seen) if *seen != printed => {
+                return Err(format!(
+                    "{name} printed checksum {} and then {}",
+                    seen.1, printed.1
+                ));
+            }
+            Some(_) => {}
+            None => first = Some(printed),
+        }
+        times.push(elapsed);
+    }
+    let (n, checksum) = first.ok_or("no run")?;
+    Ok(Measured {
+        group: of.group.clone(),
+        name,
+        n,
+        runs: times,
+        checksum,
+        stats: json!({}),
+    })
 }
 
 /// The size and the checksum a benchmark printed: `size: <n>` (optional)
@@ -460,6 +623,18 @@ fn render(results: &[Measured], baseline: Option<&Baseline>) -> Report {
             (mean - 1.0) * 100.0
         );
     }
+    let factors = rust_factors(results, &mut mismatches);
+    if !factors.is_empty() {
+        table.push_str(
+            "\n| Benchmark | Rust variant | Cheby median | Rust median | Factor |\n\
+             | --------- | ------------ | ------------ | ----------- | ------ |\n",
+        );
+        table.push_str(&factors);
+        table.push_str(
+            "\nFactor: the Cheby program's median over the Rust baseline's, both timed from spawn \
+             to exit (D-664).\n",
+        );
+    }
     let runs = results.first().map_or(0, |m| m.runs.len());
     let _ = writeln!(
         table,
@@ -467,6 +642,50 @@ fn render(results: &[Measured], baseline: Option<&Baseline>) -> Report {
          enforced (D-718, D-702)."
     );
     Report { table, mismatches }
+}
+
+/// The rows of the factor table, one per Rust baseline in `results` whose
+/// benchmark was measured too. A baseline whose size or checksum differs
+/// from its benchmark's adds to `mismatches`.
+fn rust_factors(results: &[Measured], mismatches: &mut Vec<String>) -> String {
+    let secs = |d: Duration| format!("{:.3} s", d.as_secs_f64());
+    let mut rows = String::new();
+    for baseline in results {
+        let Some((program, variant)) = baseline.name.split_once(RUST_MARK) else {
+            continue;
+        };
+        let Some(of) = results
+            .iter()
+            .find(|m| m.group == baseline.group && m.name == program)
+        else {
+            continue;
+        };
+        if of.n != baseline.n || of.checksum != baseline.checksum {
+            mismatches.push(format!(
+                "{}/{}: size {} and checksum {}, but the Cheby program printed size {} and \
+                 checksum {}",
+                baseline.group,
+                baseline.name,
+                show_n(baseline.n),
+                baseline.checksum,
+                show_n(of.n),
+                of.checksum
+            ));
+        }
+        let factor = ratio(of.median(), baseline.median())
+            .map_or_else(|| "-".to_owned(), |r| format!("{r:.2}"));
+        let _ = writeln!(
+            rows,
+            "| {}/{} | {} | {} | {} | {} |",
+            of.group,
+            of.name,
+            variant,
+            secs(of.median()),
+            secs(baseline.median()),
+            factor
+        );
+    }
+    rows
 }
 
 fn show_n(n: Option<u64>) -> String {
@@ -736,5 +955,52 @@ mod tests {
             render(&[measured], Some(&baseline)).mismatches,
             Vec::<String>::new()
         );
+    }
+
+    #[test]
+    fn the_rust_baselines_list_parses() {
+        assert_eq!(
+            parse_variants("sorted_map rc\nsorted_map btree\n\n").unwrap(),
+            vec![
+                ("sorted_map".to_owned(), "rc".to_owned()),
+                ("sorted_map".to_owned(), "btree".to_owned())
+            ]
+        );
+        assert!(parse_variants("sorted_map\n").is_err());
+        assert!(parse_variants("a b c\n").is_err());
+    }
+
+    #[test]
+    fn a_rust_baseline_gets_a_factor_and_must_print_the_programs_checksum() {
+        let row = |name: &str, millis: u64, checksum: &str| Measured {
+            group: RUST_GROUP.to_owned(),
+            name: name.to_owned(),
+            n: Some(5),
+            runs: vec![Duration::from_millis(millis)],
+            checksum: checksum.to_owned(),
+            stats: json!({}),
+        };
+        let results = [
+            row("sorted_map", 900, "7"),
+            row("sorted_map@rust-rc", 300, "7"),
+            row("sorted_map@rust-btree", 100, "8"),
+        ];
+        let report = render(&results, None);
+        assert!(
+            report
+                .table
+                .contains("| collections/sorted_map | rc | 0.900 s | 0.300 s | 3.00 |"),
+            "{}",
+            report.table
+        );
+        assert!(
+            report
+                .table
+                .contains("| btree | 0.900 s | 0.100 s | 9.00 |"),
+            "{}",
+            report.table
+        );
+        assert_eq!(report.mismatches.len(), 1, "{:?}", report.mismatches);
+        assert!(report.mismatches[0].contains("sorted_map@rust-btree"));
     }
 }

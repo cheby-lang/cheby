@@ -64,8 +64,7 @@ fn app::captured(_0: value) -> value check str#0 {
 bb0:
   _1: value = call app::prefix() ; unwind bb2
   _2: value = alloc closure/2(const code <closure app::captured#0>, _1, _0) ; unwind bb3
-  _3: value = const str#1
-  tail_call _2(_3)
+  tail_call _2(const str#1)
 bb1:
   resume
 bb2:
@@ -81,9 +80,9 @@ fn closure app::captured#0(_0: value, _1: value) -> value check str#0 {
   str#0 = "src/main.cheby:23:11"
 bb0:
   _2: value = field _0.1 of closure/2
-  dup _2
   _3: value = field _0.2 of closure/2
   dup _3
+  dup _2
   drop _0
   tail_call app::add3(_2, _1, _3)
 bb1:

@@ -25,6 +25,12 @@
 //! command's output, and `// @flags: …` adds words after the subcommand
 //! (D-543).
 //!
+//! Every `cheby` inherits the harness's `CHEBY_RC`, so
+//! `CHEBY_RC=naive cargo test --test ui` runs the suite under naive
+//! counting (D-718), except a test whose flags include `--reuse-report`:
+//! its report describes Perceus, so it runs with `CHEBY_RC` removed
+//! (GAP(naive-variant-env)).
+//!
 //! Strict runs (D-544): `CHEBY_MILESTONE` overrides `tests/milestone`,
 //! `CHEBY_PENDING=require` makes a failing pending test a failure unless
 //! the file `CHEBY_PENDING_ALLOW` names lists it, and every `cheby` runs
@@ -44,6 +50,7 @@ use std::process::{Command, ExitCode};
 use std::time::Duration;
 
 use cheby_test_support::milestone::{Expectation, POISON_ENV, Setting, Verdicts};
+use cheby_test_support::threads::RC_ENV;
 use cheby_test_support::ui::{self, Layout, Mode, UiTest};
 use cheby_test_support::{bless_enabled, golden, platform, process, repo_root};
 use libtest_mimic::{Arguments, Trial};
@@ -59,6 +66,8 @@ const TIMEOUT: Duration = Duration::from_secs(180);
 const COMPILE_ERROR_EXIT: i32 = 1;
 /// Exit code of a program whose root fiber panics (D-182).
 const PANIC_EXIT: i32 = 101;
+/// The flag whose tests always run under Perceus counting (D-717).
+const REUSE_REPORT_FLAG: &str = "--reuse-report";
 
 fn main() -> ExitCode {
     let args = Arguments::from_args();
@@ -149,6 +158,17 @@ fn check_package(
         .current_dir(package)
         .env("NO_COLOR", "1")
         .env(POISON_ENV, "1");
+    // The reuse report describes Perceus counting, so a test of it runs
+    // with `CHEBY_RC` removed even when the harness runs under
+    // `CHEBY_RC=naive` (D-718, GAP(naive-variant-env)).
+    if test
+        .header
+        .flags
+        .iter()
+        .any(|flag| flag == REUSE_REPORT_FLAG)
+    {
+        cmd.env_remove(RC_ENV);
+    }
     if !input.args.is_empty() {
         cmd.arg("--").args(&input.args);
     }

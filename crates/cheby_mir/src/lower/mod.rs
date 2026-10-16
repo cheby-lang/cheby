@@ -136,9 +136,20 @@ pub(crate) struct Pending {
     statics: Vec<StaticObject>,
     /// Arities of the trampolines the program needs (plan §4.3.4).
     trampolines: BTreeSet<u32>,
+    /// Whether the unit's bodies record the source sites of their
+    /// allocations and calls ([`Function::sites`]) for `--reuse-report`
+    /// (D-717, GAP(reuse-report-lines)). Off unless the driver asks, so
+    /// a build without the flag keeps no table.
+    record_sites: bool,
 }
 
 impl Pending {
+    /// Whether the unit's bodies record their sites
+    /// ([`crate::FunctionBuilder::set_record_sites`]).
+    pub(crate) const fn records_sites(&self) -> bool {
+        self.record_sites
+    }
+
     /// The size at which a literal's piece is cut (D-780).
     pub(crate) fn split_size(&self) -> usize {
         self.split.unwrap_or(split::SPLIT_SIZE)
@@ -271,6 +282,29 @@ pub fn lower_items(
     lower_items_with(module, wanted, cx, Pending::default())
 }
 
+/// [`lower_items`] that, with `record_sites`, records in each body the
+/// source span of every local an allocation or a call defines
+/// ([`Function::sites`]) for `--reuse-report` (D-717). The span is the
+/// one of the innermost expression being lowered when the local is
+/// defined. Recording changes no MIR: the sites are a side table that
+/// code generation and the dumps never read.
+///
+/// # Errors
+///
+/// As [`lower_module`].
+pub fn lower_items_recording(
+    module: &thir::Module,
+    wanted: &dyn Fn(DefId) -> bool,
+    cx: &LowerCx<'_>,
+    record_sites: bool,
+) -> Result<MirModule, Ice> {
+    let pending = Pending {
+        record_sites,
+        ..Pending::default()
+    };
+    lower_items_with(module, wanted, cx, pending)
+}
+
 /// [`lower_items`] with large literals cut at `split` (D-780), or at
 /// [`SPLIT_SIZE`] for `None`: for tests.
 #[cfg(test)]
@@ -358,6 +392,23 @@ fn lower_items_with(
 /// As [`lower_module`].
 pub fn lower_tests(module: &thir::Module, cx: &LowerCx<'_>) -> Result<MirModule, Ice> {
     lower_tests_with(module, cx, Pending::default())
+}
+
+/// [`lower_tests`] that records sites as [`lower_items_recording`] does.
+///
+/// # Errors
+///
+/// As [`lower_module`].
+pub fn lower_tests_recording(
+    module: &thir::Module,
+    cx: &LowerCx<'_>,
+    record_sites: bool,
+) -> Result<MirModule, Ice> {
+    let pending = Pending {
+        record_sites,
+        ..Pending::default()
+    };
+    lower_tests_with(module, cx, pending)
 }
 
 fn lower_tests_with(

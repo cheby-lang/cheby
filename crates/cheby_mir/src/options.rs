@@ -76,6 +76,13 @@ pub struct MirOptions {
     /// keeps it: reuse changes no signature, and session values are
     /// shared, so they never reuse.
     pub reuse: bool,
+    /// Whether counting fuses `dup`s and drops and specializes drops by
+    /// constructor ([`crate::fuse`]), and whether static constant locals
+    /// are propagated before counting ([`crate::const_prop`]); `true` by
+    /// default. Both need [`RcMode::Perceus`] too ([`MirOptions::fuses`]),
+    /// so naive counting stays the oracle (D-718, D-808;
+    /// GAP(fusion-forms)).
+    pub fuse: bool,
     /// Whether lowering records the source sites of allocations and calls
     /// ([`crate::Function::sites`], [`crate::FunctionBuilder::record_site`])
     /// for `--reuse-report` (D-717); `false` by default. It changes no
@@ -91,6 +98,7 @@ impl Default for MirOptions {
             full_ownership_check: cfg!(debug_assertions),
             borrow: true,
             reuse: true,
+            fuse: true,
             record_sites: false,
         }
     }
@@ -118,14 +126,25 @@ impl MirOptions {
         self.reuse && matches!(self.rc, RcMode::Perceus)
     }
 
-    /// These options with every Perceus pass off (borrowing and reuse):
-    /// counting them gives the MIR that naive counting must equal (D-808,
-    /// D-718). The mode, the unwind pass and the checks stay.
+    /// Whether counting with these options fuses and propagates constants
+    /// ([`MirOptions::fuse`]): under [`RcMode::Perceus`] only, so naive
+    /// counting stays the MIR before borrowing, reuse, fusion and constant
+    /// propagation, the oracle of D-718 (D-808; GAP(fusion-forms)).
+    #[must_use]
+    pub const fn fuses(&self) -> bool {
+        self.fuse && matches!(self.rc, RcMode::Perceus)
+    }
+
+    /// These options with every Perceus pass off (borrowing, reuse,
+    /// fusion and constant propagation): counting them gives the MIR that
+    /// naive counting must equal (D-808, D-718). The mode, the unwind pass
+    /// and the checks stay.
     #[must_use]
     pub const fn perceus_passes_off(&self) -> Self {
         Self {
             borrow: false,
             reuse: false,
+            fuse: false,
             ..*self
         }
     }
@@ -266,6 +285,12 @@ pub fn count_lowered_with(module: &mut MirModule, options: &MirOptions) -> Resul
             module.path
         )));
     }
+    // Static constant locals become constant operands, so counting never
+    // counts them (D-454, D-539); naive counting keeps them
+    // (GAP(fusion-forms)).
+    if options.fuses() {
+        crate::const_prop::run_module(module)?;
+    }
     match options.rc {
         // The same placement pass in both modes; Perceus differs only by
         // the borrowing the build inferred before (D-715, D-718).
@@ -276,6 +301,11 @@ pub fn count_lowered_with(module: &mut MirModule, options: &MirOptions) -> Resul
     // (GAP(reuse-token-form)).
     if options.reuses() {
         crate::reuse::insert_module(module)?;
+    }
+    // Fusion after reuse, so keep lists reach `drop_reuse`, and before the
+    // unwind pass, so pads see the fused counts (D-716; GAP(fusion-forms)).
+    if options.fuses() {
+        crate::fuse::run_module(module)?;
     }
     if options.unwind_edges {
         // The unwind pass simulates the counts itself; `Stage::Unwound`
@@ -372,16 +402,35 @@ mod tests {
         assert!(!naive.reuses());
         let off = options.perceus_passes_off();
         assert_eq!(off.rc, RcMode::Perceus);
-        assert!(!off.borrows() && !off.reuses());
+        assert!(!off.borrows() && !off.reuses() && !off.fuses());
         assert_eq!(off.unwind_edges, options.unwind_edges);
         assert_eq!(
             MirOptions {
                 borrow: false,
                 reuse: false,
+                fuse: false,
                 ..options
             },
             off
         );
+    }
+
+    #[test]
+    fn fuse_only_with_perceus_and_the_switch() {
+        // D-716, D-808 (GAP(fusion-forms)): naive counting is the MIR
+        // before fusion and constant propagation too.
+        let options = MirOptions::default();
+        assert!(options.fuse && options.fuses());
+        let naive = MirOptions {
+            rc: RcMode::Naive,
+            ..MirOptions::default()
+        };
+        assert!(naive.fuse && !naive.fuses());
+        let off = MirOptions {
+            fuse: false,
+            ..MirOptions::default()
+        };
+        assert!(!off.fuses() && off.reuses() && off.borrows());
     }
 
     #[test]

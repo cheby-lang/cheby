@@ -170,13 +170,17 @@ test "last is the newest key" {
 /// values of `key`, as in `multimap`: the key's update is O(log n), and
 /// appending to its `List<V>` is O(log m).
 pub fn insert<K, V>(m: OrderedMultimap<K, V>, key: K, value: V) -> OrderedMultimap<K, V> {
-  let entries = ordered_map::upsert(m.entries, key, fn(found) {
+  // Taking the record apart first ends `m` before the map changes, so a
+  // multimap held only here reaches `upsert` unshared and can be updated
+  // in place (D-716).
+  let OrderedMultimap { entries, total } = m
+  let grown = ordered_map::upsert(entries, key, fn(found) {
     case found {
       Some(values) => list::push(values, value)
       None => [value]
     }
   })
-  OrderedMultimap { entries, total: m.total + 1 }
+  OrderedMultimap { entries: grown, total: total + 1 }
 }
 
 test "insert appends a value and keeps the key's position" {
@@ -192,9 +196,13 @@ test "insert appends a value and keeps the key's position" {
 /// (D-340).
 pub fn remove<K, V>(m: OrderedMultimap<K, V>, key: K) -> OrderedMultimap<K, V> {
   case ordered_map::get(m.entries, key) {
-    Some(values) => OrderedMultimap {
-      entries: ordered_map::remove(m.entries, key),
-      total: m.total - list::length(values),
+    Some(values) => {
+      // As in `insert`: `m` ends before the map changes (D-716).
+      let OrderedMultimap { entries, total } = m
+      OrderedMultimap {
+        entries: ordered_map::remove(entries, key),
+        total: total - list::length(values),
+      }
     }
     None => m
   }

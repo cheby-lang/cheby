@@ -1,0 +1,3 @@
+reuse: tests/ui/09-memory-model/reuse_report/rebuild_in_one_arm.cheby:20:13: building `Node` allocates: no value of the same size dies before it
+reuse: tests/ui/09-memory-model/reuse_report/rebuild_in_one_arm.cheby:22:18: building `Node` reuses `tree` when it is unique
+reuse: tests/ui/09-memory-model/reuse_report/rebuild_in_one_arm.cheby:23:18: building `Node` reuses `tree` when it is unique

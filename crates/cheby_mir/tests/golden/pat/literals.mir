@@ -7,20 +7,17 @@ fn app::ints(_0: int) -> value check str#0 {
 bb0:
   switch _0 [1 => bb1, 18446744073709551614 => bb2, 3 => bb3, _ => bb4]
 bb1:
-  _1: value = const str#1
-  goto bb5(_1)
+  goto bb5(const str#1)
 bb2:
   goto bb6()
 bb3:
   goto bb6()
 bb4:
-  _3: value = const str#2
-  goto bb5(_3)
+  goto bb5(const str#2)
 bb5(_2: value):
   return _2
 bb6:
-  _4: value = const str#3
-  goto bb5(_4)
+  goto bb5(const str#3)
 bb7:
   resume
 }
@@ -33,11 +30,9 @@ fn app::small(_0: i8) -> value check str#0 {
 bb0:
   switch _0 [255 => bb1, _ => bb2]
 bb1:
-  _1: value = const str#1
-  goto bb3(_1)
+  goto bb3(const str#1)
 bb2:
-  _3: value = const str#2
-  goto bb3(_3)
+  goto bb3(const str#2)
 bb3(_2: value):
   return _2
 bb4:

@@ -384,7 +384,7 @@ fn main() {
 
 /// The `.cheby` files of the example package in `dir` as `(module path
 /// under the package, text)`, and the package name from its manifest.
-fn example_sources(dir: &Path) -> (String, Vec<(String, String)>) {
+pub(crate) fn example_sources(dir: &Path) -> (String, Vec<(String, String)>) {
     fn walk(dir: &Path, prefix: &str, out: &mut Vec<(String, String)>) {
         let mut entries: Vec<_> = std::fs::read_dir(dir)
             .unwrap()

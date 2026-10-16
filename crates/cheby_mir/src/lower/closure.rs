@@ -216,6 +216,7 @@ impl BodyCx<'_, '_> {
     ) -> Result<Function, Ice> {
         let mut b = FunctionBuilder::new(key, Abi::Cheby, Repr::Value, span)?;
         b.set_entry_loc(&self.cx.location(span)?)?;
+        b.set_record_sites(self.pending.records_sites());
         let mut inner = BodyCx {
             cx: self.cx,
             body: self.body,
@@ -224,6 +225,7 @@ impl BodyCx<'_, '_> {
             locals: vec![None; self.body.locals.len()],
             pending: &mut *self.pending,
             dict_params: vec![None; self.dict_params.len()],
+            site: None,
         };
         inner.closure_body(shape, params, body)?;
         inner.b.finish()

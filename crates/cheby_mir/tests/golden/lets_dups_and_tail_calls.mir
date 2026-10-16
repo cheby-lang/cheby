@@ -71,16 +71,11 @@ fn app::main() -> value check str#0 {
   str#0 = "src/main.cheby:5:4"
   str#1 = "hi"
 bb0:
-  _0: value = const str#1
-  dup _0
-  _1: value = call std::io::println(_0) ; unwind bb2
+  _1: value = call std::io::println(const str#1) ; unwind bb1
   drop _1
-  tail_call app::shout(_0)
+  tail_call app::shout(const str#1)
 bb1:
   resume
-bb2:
-  drop _0
-  goto bb1()
 }
 
 fn app::shout(_0: value) -> value check str#0 {
@@ -95,8 +90,7 @@ bb0:
   _2: value = const str#1
   drop _2
   _3: value = _0
-  _4: value = const str#2
-  _5: value = call std::io::println(_4) ; unwind bb3
+  _5: value = call std::io::println(const str#2) ; unwind bb3
   drop _5
   tail_call std::io::eprintln(_3)
 bb1:

@@ -36,6 +36,7 @@ fn drop_reuse(dst: u32, local_: u32, layout: LayoutRef) -> Stmt {
         Rvalue::DropReuse {
             local: local(local_),
             layout,
+            keep: Vec::new(),
         },
     )
 }
@@ -378,6 +379,266 @@ fn reuse_a_panic_between_the_forms_frees_the_token_in_the_pad() {
         assert_eq!((allocations, hits, misses), (2, 0, 0), "checked: {checked}");
         if cheby_runtime::LEAK_CHECK_ENABLED {
             assert_eq!(live(&jit), 0, "the pad released the token");
+        }
+    }
+}
+
+/// `dst = field base.i of layout`.
+fn field_of(dst: u32, base: u32, layout: LayoutRef, i: u32) -> Stmt {
+    assign(
+        dst,
+        Rvalue::Field {
+            base: local(base),
+            layout,
+            field: i,
+        },
+    )
+}
+
+/// `dst = drop_reuse local of layout keep [...]` (GAP(fusion-forms)).
+fn drop_reuse_keep(dst: u32, local_: u32, layout: LayoutRef, keep: &[(u32, u32)]) -> Stmt {
+    assign(
+        dst,
+        Rvalue::DropReuse {
+            local: local(local_),
+            layout,
+            keep: keep.iter().map(|&(i, p)| (i, local(p))).collect(),
+        },
+    )
+}
+
+/// `drop local of layout keep [...]`, a drop specialized by constructor
+/// (GAP(fusion-forms)).
+fn drop_keep(local_: u32, layout: LayoutRef, keep: &[(u32, u32)]) -> Stmt {
+    Stmt::DropKeep {
+        local: local(local_),
+        layout,
+        keep: keep.iter().map(|&(i, p)| (i, local(p))).collect(),
+    }
+}
+
+/// A hit with a keep list: the kept field's reference moves to its
+/// projection instead of being released, and the block is written over:
+/// two allocations, one hit, and the inner object, now the result's
+/// field, keeps count 1.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn reuse_keep_a_hit_moves_the_kept_field_to_its_projection() {
+    for checked in [false, true] {
+        let mut p = Prog::default();
+        let target = program(
+            &mut p,
+            5,
+            vec![
+                alloc(0, T1, vec![nil()]),
+                alloc(1, T2, vec![op(0), nil()]),
+                field_of(2, 1, T2, 0),
+                drop_reuse_keep(3, 1, T2, &[(0, 2)]),
+                alloc_reuse(4, 3, T2, vec![op(2), nil()]),
+            ],
+            4,
+        );
+        let jit = compile(p, checked);
+        let word = returned(run_const(&jit, target));
+        assert_eq!(counts(&jit), (2, 1, 0), "checked: {checked}");
+        let inner = read_word(word, 8);
+        assert_eq!(rc_of(inner), 1, "checked: {checked}");
+        assert_eq!(layout_of(inner), abi::layout::TUPLE);
+        if cheby_runtime::LEAK_CHECK_ENABLED {
+            assert_eq!(live(&jit), 2, "the result and its field");
+        }
+        release_all(&jit, word);
+    }
+}
+
+/// A miss with a keep list on a value of count 2: the kept projection is
+/// `dup`'d and the base gives up one reference; the base's last
+/// reference then releases its own copy of the field.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn reuse_keep_a_miss_dups_the_kept_projection() {
+    for checked in [false, true] {
+        let mut p = Prog::default();
+        let target = program(
+            &mut p,
+            5,
+            vec![
+                alloc(0, T1, vec![nil()]),
+                alloc(1, T2, vec![op(0), nil()]),
+                Stmt::Dup(local(1)),
+                field_of(2, 1, T2, 0),
+                drop_reuse_keep(3, 1, T2, &[(0, 2)]),
+                Stmt::Drop(local(1)),
+                alloc_reuse(4, 3, T2, vec![op(2), nil()]),
+            ],
+            4,
+        );
+        let jit = compile(p, checked);
+        let word = returned(run_const(&jit, target));
+        assert_eq!(counts(&jit), (3, 0, 1), "checked: {checked}");
+        let inner = read_word(word, 8);
+        assert_eq!(rc_of(inner), 1, "checked: {checked}");
+        if cheby_runtime::LEAK_CHECK_ENABLED {
+            assert_eq!(live(&jit), 2, "the result and its field");
+        }
+        release_all(&jit, word);
+    }
+}
+
+/// A drop specialized by constructor on a unique object: the kept
+/// field's reference moves to its projection, the other value fields
+/// (heap objects) are released inline, and the block is freed through
+/// `cheby_rt_free_unique`.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn reuse_keep_a_specialized_drop_frees_the_block_and_keeps_the_field() {
+    let t3 = LayoutRef::Tuple(3);
+    for checked in [false, true] {
+        let mut p = Prog::default();
+        let target = program(
+            &mut p,
+            5,
+            vec![
+                alloc(0, T1, vec![nil()]),
+                alloc(1, T1, vec![nil()]),
+                alloc(2, t3, vec![op(0), op(1), nil()]),
+                field_of(3, 2, t3, 1),
+                drop_keep(2, t3, &[(1, 3)]),
+            ],
+            3,
+        );
+        let jit = compile(p, checked);
+        let word = returned(run_const(&jit, target));
+        assert_eq!(counts(&jit).0, 3, "checked: {checked}");
+        assert_eq!(rc_of(word), 1, "checked: {checked}");
+        assert_eq!(layout_of(word), abi::layout::TUPLE);
+        if cheby_runtime::LEAK_CHECK_ENABLED {
+            assert_eq!(live(&jit), 1, "only the kept field");
+        }
+        release_all(&jit, word);
+    }
+}
+
+/// A specialized drop of a value of count 2: the kept projection is
+/// `dup`'d and the count decremented; the last reference frees it later.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn reuse_keep_a_specialized_drop_of_a_count_of_2_gives_up_a_reference() {
+    for checked in [false, true] {
+        let mut p = Prog::default();
+        let target = program(
+            &mut p,
+            3,
+            vec![
+                alloc(0, T1, vec![nil()]),
+                alloc(1, T2, vec![op(0), nil()]),
+                Stmt::Dup(local(1)),
+                field_of(2, 1, T2, 0),
+                drop_keep(1, T2, &[(0, 2)]),
+                Stmt::Drop(local(1)),
+            ],
+            2,
+        );
+        let jit = compile(p, checked);
+        let word = returned(run_const(&jit, target));
+        assert_eq!(rc_of(word), 1, "checked: {checked}");
+        if cheby_runtime::LEAK_CHECK_ENABLED {
+            assert_eq!(live(&jit), 1, "only the kept field");
+        }
+        release_all(&jit, word);
+    }
+}
+
+/// More than 8 value fields not kept: the hit path zeroes the kept one and
+/// releases the rest through `cheby_rt_release_fields`, then frees the
+/// block (the inline cap, GAP(fusion-forms)).
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn reuse_keep_releases_more_than_eight_fields_out_of_line() {
+    let t10 = LayoutRef::Tuple(10);
+    for checked in [false, true] {
+        let mut p = Prog::default();
+        let mut stmts: Vec<Stmt> = (0..10).map(|n| alloc(n, T1, vec![nil()])).collect();
+        stmts.push(alloc(10, t10, (0..10).map(op).collect()));
+        stmts.push(field_of(11, 10, t10, 4));
+        stmts.push(drop_keep(10, t10, &[(4, 11)]));
+        let target = program(&mut p, 12, stmts, 11);
+        let jit = compile(p, checked);
+        let word = returned(run_const(&jit, target));
+        assert_eq!(rc_of(word), 1, "checked: {checked}");
+        if cheby_runtime::LEAK_CHECK_ENABLED {
+            assert_eq!(live(&jit), 1, "only the kept field");
+        }
+        release_all(&jit, word);
+    }
+}
+
+/// A specialized drop of a static object (count 0): nothing is released
+/// or freed, and the kept field, static too, needs no count. The arm of a
+/// switch on the tag pins `Err` (the validator requires it, D-071).
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn reuse_keep_a_specialized_drop_of_a_static_object_skips_it() {
+    for checked in [false, true] {
+        let mut p = Prog::default();
+        builtin_layouts(&mut p);
+        let err = LayoutRef::Ctor(builtin::ERR);
+        let f = p.item(
+            0,
+            "f",
+            &[],
+            &[Repr::Value, Repr::Value, Repr::Int],
+            vec![
+                block(
+                    vec![
+                        assign(0, Rvalue::Use(Operand::Const(Const::ErrNil))),
+                        assign(
+                            2,
+                            Rvalue::ReadTag {
+                                base: op(0),
+                                ty: TagType::Result,
+                            },
+                        ),
+                    ],
+                    Terminator::Switch {
+                        on: op(2),
+                        cases: vec![(1, BlockId::from_u32(1))],
+                        default: Some(BlockId::from_u32(2)),
+                    },
+                ),
+                block(
+                    vec![field_of(1, 0, err, 0), drop_keep(0, err, &[(0, 1)])],
+                    Terminator::Return(op(1)),
+                ),
+                block(vec![Stmt::Drop(local(0))], Terminator::Return(nil())),
+            ],
+            &[],
+        );
+        let target = p.call(f, Vec::new());
+        let jit = compile(p, checked);
+        let word = returned(run_const(&jit, target));
+        assert_eq!(word, static_nil(), "checked: {checked}");
+        assert_eq!(counts(&jit).0, 0, "checked: {checked}");
+        if cheby_runtime::LEAK_CHECK_ENABLED {
+            assert_eq!(live(&jit), 0);
         }
     }
 }

@@ -158,8 +158,7 @@ bb0:
   _1: value = call std::list::length(_0) ; unwind bb1
   _2: int = unbox int _1
   drop _1
-  _3: value = const str#1
-  _4: value = call app::text(_3, _2) ; unwind bb1
+  _4: value = call app::text(const str#1, _2) ; unwind bb1
   tail_call std::io::println(_4)
 bb1:
   resume

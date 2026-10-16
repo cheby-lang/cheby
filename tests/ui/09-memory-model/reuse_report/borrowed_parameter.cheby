@@ -1,0 +1,23 @@
+// @mode: run-pass
+// @milestone: M2
+// @decisions: D-717, D-170, D-716
+// @flags: --reuse-report
+//! A function that only reads a parameter borrows it from its caller
+//! (D-715), so a value built from its fields cannot reuse it: the caller
+//! still holds it and releases it later.
+
+import std::io
+
+type Pair { left: Int, right: Int }
+
+fn swap_and_show(p: Pair) -> Pair {
+  let swapped = Pair { left: p.right, right: p.left }
+  io::println("({p.left}, {p.right}) becomes ({swapped.left}, {swapped.right})")
+  swapped
+}
+
+fn main() {
+  let pair = Pair { left: 1, right: 2 }
+  let swapped = swap_and_show(pair)
+  io::println("{pair.left} {swapped.left}")
+}

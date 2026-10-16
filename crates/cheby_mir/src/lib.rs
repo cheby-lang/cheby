@@ -16,6 +16,10 @@
 //!   [`never_raise`]: the std kernels whose calls get no edge (D-767).
 //! - [`reuse`]: pairs drops with allocations of the same size so a
 //!   unique object's block is reused (D-716), after counting.
+//! - [`fuse`]: dup and drop fusion, keep lists and drops specialized by
+//!   constructor (D-716), after reuse; [`const_prop`]: static constant
+//!   locals become operands before counting (D-454). Both under Perceus
+//!   only ([`MirOptions::fuses`]).
 //! - [`validate`] and [`dump`]: the validator and the stable text form.
 //! - [`stats`]: static counts for reports (D-759).
 
@@ -24,11 +28,16 @@ pub mod borrow;
 #[cfg(test)]
 mod borrow_tests;
 pub mod builder;
+pub mod const_prop;
 mod defs;
 pub mod dump;
+pub mod fuse;
+#[cfg(test)]
+mod fuse_tests;
 #[cfg(test)]
 mod golden_tests;
 pub mod ir;
+pub mod kernels_in_place;
 pub mod layout;
 mod liveness;
 pub mod lower;

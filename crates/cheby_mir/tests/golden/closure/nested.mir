@@ -41,9 +41,9 @@ fn closure app::nest#1(_0: value, _1: value) -> value check str#0 {
   str#0 = "src/main.cheby:9:11"
 bb0:
   _2: value = field _0.1 of closure/2
-  dup _2
   _3: value = field _0.2 of closure/2
   dup _3
+  dup _2
   drop _0
   _4: value = alloc closure/3(const code <closure app::nest#2>, _2, _3, _1) ; unwind bb6
   return _4
@@ -71,11 +71,11 @@ fn closure app::nest#2(_0: value, _1: value) -> value check str#0 {
   str#0 = "src/main.cheby:9:19"
 bb0:
   _2: value = field _0.1 of closure/3
-  dup _2
   _3: value = field _0.2 of closure/3
-  dup _3
   _4: value = field _0.3 of closure/3
   dup _4
+  dup _2
+  dup _3
   drop _0
   tail_call app::join(_2, _3, _4, _1)
 bb1:

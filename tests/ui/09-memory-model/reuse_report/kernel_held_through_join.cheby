@@ -1,0 +1,95 @@
+// @mode: run-pass
+// @milestone: M2
+// @decisions: D-717, D-170, D-525, D-205
+// @flags: --reuse-report
+//! A value that reaches a kernel's call through a `case` join holds the
+//! kernel's first argument when every arm gives it a holder. The kernel
+//! then copies every time, and the call gets no kernel line: both arms
+//! project the same field of a live record (`both_items`), wrap the set
+//! (`both_some`) or name it again (`both_same`). When one arm holds
+//! nothing, the set can be unique there, and the line is printed
+//! (`one_some`). A record passed through a join and released there before
+//! the call no longer holds its field, and the line is printed too
+//! (`released_in_join`). A string that is a constant in every arm is
+//! never unique, so its call gets no line (`constant_in_both_arms`).
+
+import std::io
+import std::set
+
+type Bag { items: set::Set<Int>, k: Int }
+
+fn both_items(s: set::Set<Int>, n: Int) -> (set::Set<Int>, Int) {
+  let bag = Bag { items: s, k: 1 }
+  let items = case {
+    n > 0 => bag.items
+    _ => bag.items
+  }
+  let more = set::insert(items, n)
+  (more, bag.k)
+}
+
+fn both_some(s: set::Set<Int>, n: Int) -> (set::Set<Int>, Int) {
+  let held = case {
+    n > 0 => Some(s)
+    _ => Some(s)
+  }
+  let more = set::insert(s, n)
+  (more, size_of(held))
+}
+
+fn size_of(held: Option<set::Set<Int>>) -> Int {
+  case held {
+    Some(s) => set::size(s)
+    None => 0
+  }
+}
+
+fn both_same(s: set::Set<Int>, n: Int) -> (set::Set<Int>, Int) {
+  let t = case {
+    n > 0 => s
+    _ => s
+  }
+  let more = set::insert(s, n)
+  (more, set::size(t))
+}
+
+fn one_some(s: set::Set<Int>, n: Int) -> (set::Set<Int>, Int) {
+  let held = case {
+    n > 0 => Some(s)
+    _ => None
+  }
+  let more = set::insert(s, n)
+  (more, size_of(held))
+}
+
+fn released_in_join(s: set::Set<Int>, n: Int) -> (set::Set<Int>, Int) {
+  let bag = Bag { items: s, k: n }
+  let items = bag.items
+  let other = case n {
+    0 => bag
+    _ => bag
+  }
+  let k = other.k
+  let more = set::insert(items, n)
+  (more, k)
+}
+
+fn constant_in_both_arms(n: Int) -> String {
+  let (prefix, k) = case {
+    n > 0 => ("-", n)
+    _ => ("", n)
+  }
+  let text = prefix + "{k}"
+  text
+}
+
+fn main() {
+  let (a, i) = both_items(set::new(), 1)
+  let (b, j) = both_some(set::new(), 2)
+  let (c, k) = both_same(set::new(), 3)
+  let (d, l) = one_some(set::new(), 4)
+  let (e, m) = released_in_join(set::new(), 5)
+  let sizes = set::size(a) + set::size(b) + set::size(c) + set::size(d) + set::size(e)
+  let sign = constant_in_both_arms(3)
+  io::println("{sizes}: {i} {j} {k} {l} {m} {sign}")
+}

@@ -277,6 +277,19 @@ fn dump_function_into(out: &mut String, m: &MirModule, f: &Function) -> Result<(
                 Stmt::Drop(l) => {
                     let _ = write!(out, "drop {}", local(*l));
                 }
+                Stmt::DropKeep {
+                    local: x,
+                    layout: l,
+                    keep,
+                } => {
+                    let _ = write!(
+                        out,
+                        "drop {} of {}{}",
+                        local(*x),
+                        layout(m, *l)?,
+                        keep_text(keep)
+                    );
+                }
                 Stmt::ClearUnwind => out.push_str("clear_unwind"),
             }
             edge(out, i);
@@ -293,6 +306,19 @@ fn dump_function_into(out: &mut String, m: &MirModule, f: &Function) -> Result<(
 
 fn local(l: Local) -> String {
     format!("_{}", l.as_u32())
+}
+
+/// ` keep [_5 @0, _7 @2]`: a keep list (GAP(fusion-forms)), in its order;
+/// nothing when it is empty.
+fn keep_text(keep: &[(u32, Local)]) -> String {
+    if keep.is_empty() {
+        return String::new();
+    }
+    let items: Vec<String> = keep
+        .iter()
+        .map(|&(i, p)| format!("{} @{i}", local(p)))
+        .collect();
+    format!(" keep [{}]", items.join(", "))
 }
 
 fn def(m: &MirModule, d: cheby_iface::DefId) -> Result<String, Ice> {
@@ -465,8 +491,14 @@ fn rvalue(m: &MirModule, value: &Rvalue) -> Result<String, Ice> {
         Rvalue::DropReuse {
             local: x,
             layout: l,
+            keep,
         } => {
-            format!("drop_reuse {} of {}", local(*x), layout(m, *l)?)
+            format!(
+                "drop_reuse {} of {}{}",
+                local(*x),
+                layout(m, *l)?,
+                keep_text(keep)
+            )
         }
         Rvalue::AllocReuse {
             token,

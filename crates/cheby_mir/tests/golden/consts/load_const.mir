@@ -34,8 +34,7 @@ fn const_init app::label() -> value check str#0 {
   str#0 = "src/main.cheby:7:7"
   str#1 = "answer"
 bb0:
-  _0: value = const str#1
-  return _0
+  return const str#1
 bb1:
   resume
 }

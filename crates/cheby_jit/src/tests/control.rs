@@ -206,6 +206,9 @@ fn capture_reader(key: FnKey) -> Function {
         Repr::Value,
         straight(
             vec![
+                // The unused parameter goes first: no drop moves past a
+                // later instruction (GAP(drop-position-check)).
+                Stmt::Drop(local(1)),
                 assign(
                     2,
                     Rvalue::Field {
@@ -216,7 +219,6 @@ fn capture_reader(key: FnKey) -> Function {
                 ),
                 Stmt::Dup(local(2)),
                 Stmt::Drop(local(0)),
-                Stmt::Drop(local(1)),
             ],
             2,
         ),

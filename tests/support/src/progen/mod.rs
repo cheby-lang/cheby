@@ -55,7 +55,10 @@ pub struct GenConfig {
     pub helper_functions: usize,
     /// The most record types (at least 1).
     pub records: usize,
-    /// The most sum types (at least 1).
+    /// The most randomly drawn sum types (at least 1). Every program
+    /// also declares one more sum type, not counted here: the
+    /// shared-field type whose variants hold `k0` alike and differ in
+    /// size (`generator::shared_rebuild`, D-071).
     pub sums: usize,
     /// How deep expressions nest.
     pub max_depth: u32,

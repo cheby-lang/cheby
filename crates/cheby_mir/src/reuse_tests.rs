@@ -946,7 +946,14 @@ fn token_errors(rest: impl FnOnce(&mut FunctionBuilder, Local, Local) -> Operand
     let read = field(&mut b, x, layout, 0);
     b.push(Stmt::Dup(read)).unwrap();
     let token = b
-        .assign(Repr::Value, Rvalue::DropReuse { local: x, layout })
+        .assign(
+            Repr::Value,
+            Rvalue::DropReuse {
+                local: x,
+                layout,
+                keep: Vec::new(),
+            },
+        )
         .unwrap();
     let result = rest(&mut b, token, read);
     b.terminate(Terminator::Return(result)).unwrap();
@@ -1086,7 +1093,14 @@ fn reuse_validator_rejects_a_borrowed_or_filled_source() {
     let mut b = builder(FnKey::Item(def(0)));
     let x = b.add_param(Repr::Value, None, None).unwrap();
     let token = b
-        .assign(Repr::Value, Rvalue::DropReuse { local: x, layout })
+        .assign(
+            Repr::Value,
+            Rvalue::DropReuse {
+                local: x,
+                layout,
+                keep: Vec::new(),
+            },
+        )
         .unwrap();
     let made = alloc_reuse(&mut b, token, layout, vec![nil()]);
     b.terminate(Terminator::Return(Operand::Local(made)))
@@ -1113,7 +1127,14 @@ fn reuse_validator_rejects_a_borrowed_or_filled_source() {
         .unwrap();
     }
     let token = b
-        .assign(Repr::Value, Rvalue::DropReuse { local: obj, layout })
+        .assign(
+            Repr::Value,
+            Rvalue::DropReuse {
+                local: obj,
+                layout,
+                keep: Vec::new(),
+            },
+        )
         .unwrap();
     let made = alloc_reuse(&mut b, token, layout, nils(33));
     b.terminate(Terminator::Return(Operand::Local(made)))
@@ -1133,7 +1154,14 @@ fn reuse_validator_rejects_the_forms_before_counting() {
     let mut b = builder(FnKey::Item(def(0)));
     let x = b.add_param(Repr::Value, None, None).unwrap();
     let token = b
-        .assign(Repr::Value, Rvalue::DropReuse { local: x, layout })
+        .assign(
+            Repr::Value,
+            Rvalue::DropReuse {
+                local: x,
+                layout,
+                keep: Vec::new(),
+            },
+        )
         .unwrap();
     let made = alloc_reuse(&mut b, token, layout, vec![nil()]);
     b.terminate(Terminator::Return(Operand::Local(made)))
@@ -1148,10 +1176,15 @@ fn reuse_validator_rejects_the_forms_before_counting() {
 }
 
 /// The dump of both forms, which the reuse report's tests and the
-/// differential oracle read (plan §2.3).
+/// differential oracle read (plan §2.3), without fusion, which would fold
+/// the `dup` into a keep list (`fuse_tests`).
 #[test]
 fn reuse_dump_syntax() {
-    let (_, text) = counted(vec![rebuild(1, 1)], MirOptions::default());
+    let no_fusion = MirOptions {
+        fuse: false,
+        ..MirOptions::default()
+    };
+    let (_, text) = counted(vec![rebuild(1, 1)], no_fusion);
     assert!(
         text.contains("  dup _1\n  _3: value = drop_reuse _0 of tuple/1\n"),
         "{text}"

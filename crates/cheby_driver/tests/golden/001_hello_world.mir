@@ -6,34 +6,28 @@ fn std::io::hash(_0: value) -> value check str#0 {
   str#1 = ""
 bb0:
   _1: value = field _0.0 of ctor std::io::Error
-  dup _1
   _2: int = read_tag _1 of std::io::Kind
-  drop _1
   switch _2 [0 => bb1, 1 => bb2, 2 => bb3, _ => bb4]
 bb1:
   _16: value = drop_reuse _0 of ctor std::io::Error
   _3: value = box int const int 1
-  _4: value = const str#1
-  _5: value = alloc_reuse _16, tuple/2(_3, _4) ; unwind bb10
+  _5: value = alloc_reuse _16, tuple/2(_3, const str#1) ; unwind bb9
   goto bb5(_5)
 bb2:
   _17: value = drop_reuse _0 of ctor std::io::Error
   _7: value = box int const int 2
-  _8: value = const str#1
-  _9: value = alloc_reuse _17, tuple/2(_7, _8) ; unwind bb13
+  _9: value = alloc_reuse _17, tuple/2(_7, const str#1) ; unwind bb11
   goto bb5(_9)
 bb3:
   _18: value = drop_reuse _0 of ctor std::io::Error
   _10: value = box int const int 3
-  _11: value = const str#1
-  _12: value = alloc_reuse _18, tuple/2(_10, _11) ; unwind bb16
+  _12: value = alloc_reuse _18, tuple/2(_10, const str#1) ; unwind bb13
   goto bb5(_12)
 bb4:
   _13: value = box int const int 0
   _14: value = field _0.1 of ctor std::io::Error
-  dup _14
-  _19: value = drop_reuse _0 of ctor std::io::Error
-  _15: value = alloc_reuse _19, tuple/2(_13, _14) ; unwind bb19
+  _19: value = drop_reuse _0 of ctor std::io::Error keep [_14 @1]
+  _15: value = alloc_reuse _19, tuple/2(_13, _14) ; unwind bb16
   goto bb5(_15)
 bb5(_6: value):
   return _6
@@ -46,38 +40,29 @@ bb8:
   drop _3
   goto bb6()
 bb9:
-  drop _4
+  drop _16
   goto bb8()
 bb10:
-  drop _16
-  goto bb9()
-bb11:
   drop _7
   goto bb6()
-bb12:
-  drop _8
-  goto bb11()
-bb13:
+bb11:
   drop _17
-  goto bb12()
-bb14:
+  goto bb10()
+bb12:
   drop _10
   goto bb6()
-bb15:
-  drop _11
-  goto bb14()
-bb16:
+bb13:
   drop _18
-  goto bb15()
-bb17:
+  goto bb12()
+bb14:
   drop _13
   goto bb6()
-bb18:
+bb15:
   drop _14
-  goto bb17()
-bb19:
+  goto bb14()
+bb16:
   drop _19
-  goto bb18()
+  goto bb15()
 }
 
 fn std::io::equal(_0: value, _1: value) -> value check str#0 {
@@ -147,26 +132,20 @@ fn std::io::show(_0: value) -> value check str#0 {
   str#3 = "invalid UTF-8"
 bb0:
   _1: value = field _0.0 of ctor std::io::Error
-  dup _1
   _2: int = read_tag _1 of std::io::Kind
-  drop _1
   switch _2 [0 => bb1, 1 => bb2, 2 => bb3, _ => bb4]
 bb1:
   drop _0
-  _3: value = const str#1
-  goto bb5(_3)
+  goto bb5(const str#1)
 bb2:
   drop _0
-  _5: value = const str#2
-  goto bb5(_5)
+  goto bb5(const str#2)
 bb3:
   drop _0
-  _6: value = const str#3
-  goto bb5(_6)
+  goto bb5(const str#3)
 bb4:
   _7: value = field _0.1 of ctor std::io::Error
-  dup _7
-  drop _0
+  drop _0 of ctor std::io::Error keep [_7 @1]
   goto bb5(_7)
 bb5(_4: value):
   return _4
@@ -245,8 +224,7 @@ fn hello_world::main() -> value check str#0 {
   str#0 = "src/main.cheby:5:4"
   str#1 = "Hello, world!"
 bb0:
-  _0: value = const str#1
-  tail_call std::io::println(_0)
+  tail_call std::io::println(const str#1)
 bb1:
   resume
 }

@@ -59,6 +59,31 @@ pub unsafe extern "C" fn cheby_rt_release_fields(ctx: *mut ExecCtx, obj: Word) {
     }
 }
 
+/// Frees `obj`, a unique object of a constructor or tuple layout whose
+/// value fields the hit path of a drop specialized by constructor already
+/// released or moved to its kept projections (D-716, GAP(fusion-forms)):
+/// the block only, charged to the domain as a free is. Never raises
+/// (D-171).
+///
+/// # Safety
+///
+/// `ctx` is null or the control block of the fiber running on this
+/// thread; `obj` is a live heap object of a constructor or tuple layout
+/// whose count is 1, the caller owns and gives up that reference, and
+/// its value fields own nothing.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cheby_rt_free_unique(ctx: *mut ExecCtx, obj: Word) {
+    // SAFETY: forwarded from the caller.
+    unsafe { check_live(obj, "a specialized drop") };
+    // SAFETY: forwarded from the caller.
+    let freed = unsafe { crate::alloc::free_unique(ctx.as_ref(), word_to_ptr(obj)) };
+    if freed.is_none() {
+        fatal(format_args!(
+            "a specialized drop of an object that is not a constructor or a tuple"
+        ));
+    }
+}
+
 /// Counts one reuse hit (`CHEBY_RT_STATS`'s `reuse hits`) in the current
 /// accounting domain when events are counted. Generated code calls it out
 /// of line, only while the counting flag is not settled to off.

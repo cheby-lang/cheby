@@ -173,11 +173,16 @@ test "last is the newest key" {
 
 /// The map with `key`, which is not in it, added at the end under the next
 /// insertion number.
+/// The record is taken apart first, here and in `insert`, `remove` and
+/// `upsert`, so `m` ends before its maps change: a map held only by the
+/// caller reaches `map` and `sorted_map` unshared and is updated in place
+/// (D-716).
 fn add<K, V>(m: OrderedMap<K, V>, key: K, value: V) -> OrderedMap<K, V> {
+  let OrderedMap { index, order, next } = m
   OrderedMap {
-    index: map::insert(m.index, key, (m.next, value)),
-    order: sorted_map::insert(m.order, m.next, key),
-    next: m.next + 1,
+    index: map::insert(index, key, (next, value)),
+    order: sorted_map::insert(order, next, key),
+    next: next + 1,
   }
 }
 
@@ -185,7 +190,10 @@ fn add<K, V>(m: OrderedMap<K, V>, key: K, value: V) -> OrderedMap<K, V> {
 /// end, and a key already present keeps its place (D-340).
 pub fn insert<K, V>(m: OrderedMap<K, V>, key: K, value: V) -> OrderedMap<K, V> {
   case map::get(m.index, key) {
-    Some((place, _)) => OrderedMap { ..m, index: map::insert(m.index, key, (place, value)) }
+    Some((place, _)) => {
+      let OrderedMap { index, order, next } = m
+      OrderedMap { index: map::insert(index, key, (place, value)), order, next }
+    }
     None => add(m, key, value)
   }
 }
@@ -204,10 +212,13 @@ test "insert adds at the end and replaces in place" {
 /// at the end (D-340).
 pub fn remove<K, V>(m: OrderedMap<K, V>, key: K) -> OrderedMap<K, V> {
   case map::get(m.index, key) {
-    Some((place, _)) => OrderedMap {
-      ..m,
-      index: map::remove(m.index, key),
-      order: sorted_map::remove(m.order, place),
+    Some((place, _)) => {
+      let OrderedMap { index, order, next } = m
+      OrderedMap {
+        index: map::remove(index, key),
+        order: sorted_map::remove(order, place),
+        next,
+      }
     }
     None => m
   }
@@ -230,7 +241,8 @@ pub fn upsert<K, V>(m: OrderedMap<K, V>, key: K, update: fn(Option<V>) -> V) -> 
   case map::get(m.index, key) {
     Some((place, value)) => {
       let changed = update(Some(value))
-      OrderedMap { ..m, index: map::insert(m.index, key, (place, changed)) }
+      let OrderedMap { index, order, next } = m
+      OrderedMap { index: map::insert(index, key, (place, changed)), order, next }
     }
     None => add(m, key, update(None))
   }

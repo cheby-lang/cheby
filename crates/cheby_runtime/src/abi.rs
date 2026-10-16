@@ -583,6 +583,12 @@ pub mod sym {
     /// token and both sizes, writes the header over it or allocates; 0
     /// when the allocation raised.
     pub const ALLOC_REUSE_CHECKED: &str = "cheby_rt_alloc_reuse_checked";
+    /// `void cheby_rt_free_unique(ExecCtx *ctx, uint64_t obj)`: the hit path
+    /// of a drop specialized by constructor (D-716, GAP(fusion-forms)):
+    /// frees the block of a unique constructor or tuple object whose value
+    /// fields generated code already released or moved to its kept
+    /// projections, charging the domain as a free does.
+    pub const FREE_UNIQUE: &str = "cheby_rt_free_unique";
     /// Data: the runtime's event-counting flag, one byte
     /// (`crate::stats::counting_flag`): not [`COUNTING_OFF`] while
     /// counting is on or not yet settled.
@@ -661,7 +667,7 @@ pub mod sym {
     /// order `symbols()` lists them first. Kernels
     /// (`cheby_<module>_<function>`) follow in `symbols()`; they come from
     /// each kernel module's registration (plan §4.3.3).
-    pub const ALL: [&str; 69] = [
+    pub const ALL: [&str; 70] = [
         ALLOC,
         DUP,
         DROP,
@@ -707,6 +713,7 @@ pub mod sym {
         ALLOC_MISS,
         DROP_REUSE_CHECKED,
         ALLOC_REUSE_CHECKED,
+        FREE_UNIQUE,
         STATS_COUNTING,
         DESC_SYMBOLS[0],
         DESC_SYMBOLS[1],
@@ -895,7 +902,7 @@ mod tests {
             assert_eq!(sym::desc_symbol(name), Some(symbol));
         }
         assert_eq!(sym::desc_symbol("dyn"), None);
-        assert_eq!(sym::ALL.get(46..), Some(&sym::DESC_SYMBOLS[..]));
+        assert_eq!(sym::ALL.get(47..), Some(&sym::DESC_SYMBOLS[..]));
         assert_eq!(
             [
                 layout::SENDER,

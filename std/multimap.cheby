@@ -182,13 +182,17 @@ test "has_key tells whether a key is present" {
 /// that was not present gets the list `[value]`. One `upsert` and one
 /// `list::push`: O(log n + log m), where m is the number of values of `key`.
 pub fn insert<K, V>(m: Multimap<K, V>, key: K, value: V) -> Multimap<K, V> {
-  let entries = map::upsert(m.entries, key, fn(found) {
+  // Taking the record apart first ends `m` before the map changes, so a
+  // multimap held only here reaches `upsert` unshared and can be updated
+  // in place (D-716).
+  let Multimap { entries, total } = m
+  let grown = map::upsert(entries, key, fn(found) {
     case found {
       Some(values) => list::push(values, value)
       None => [value]
     }
   })
-  Multimap { entries, total: m.total + 1 }
+  Multimap { entries: grown, total: total + 1 }
 }
 
 test "insert appends a value" {
@@ -202,9 +206,13 @@ test "insert appends a value" {
 /// unchanged when `key` is not in it.
 pub fn remove<K, V>(m: Multimap<K, V>, key: K) -> Multimap<K, V> {
   case map::get(m.entries, key) {
-    Some(values) => Multimap {
-      entries: map::remove(m.entries, key),
-      total: m.total - list::length(values),
+    Some(values) => {
+      // As in `insert`: `m` ends before the map changes (D-716).
+      let Multimap { entries, total } = m
+      Multimap {
+        entries: map::remove(entries, key),
+        total: total - list::length(values),
+      }
     }
     None => m
   }

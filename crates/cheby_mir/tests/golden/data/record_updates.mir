@@ -58,8 +58,7 @@ fn app::relabeled(_0: value, _1: int) -> value check str#0 {
 bb0:
   _2: value = box int _1 ; unwind bb2
   _3: value = field _0.1 of ctor app::Labeled
-  dup _3
-  _5: value = drop_reuse _0 of ctor app::Labeled
+  _5: value = drop_reuse _0 of ctor app::Labeled keep [_3 @1]
   _4: value = alloc_reuse _5, ctor app::Labeled(_2, _3) ; unwind bb5
   return _4
 bb1:
@@ -130,26 +129,17 @@ bb0:
   _3: value = call app::aliased(_2) ; unwind bb1
   drop _3
   _4: value = box int const int 1
-  _5: value = const str#1
-  _6: value = alloc ctor app::Labeled(_4, _5) ; unwind bb3
+  _6: value = alloc ctor app::Labeled(_4, const str#1) ; unwind bb2
   _7: value = call app::relabeled(_6, const int 2) ; unwind bb1
   drop _7
-  _8: value = const str#2
-  _9: value = alloc ctor app::Circle(_8, const int 1) ; unwind bb4
-  _10: value = const str#3
-  _11: value = call app::renamed(_9, _10) ; unwind bb1
+  _9: value = alloc ctor app::Circle(const str#2, const int 1) ; unwind bb1
+  _11: value = call app::renamed(_9, const str#3) ; unwind bb1
   drop _11
   return const nil
 bb1:
   resume
 bb2:
   drop _4
-  goto bb1()
-bb3:
-  drop _5
-  goto bb2()
-bb4:
-  drop _8
   goto bb1()
 }
 

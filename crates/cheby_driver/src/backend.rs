@@ -51,8 +51,16 @@
 //! developer switches, honored by release builds too, so `bench-run` can
 //! measure every mode (D-702); an invalid value is a driver error (D-746,
 //! D-742).
+//!
+//! **The reuse report** (D-717): [`build_reporting`] with `reuse_report`
+//! lowers the package's own modules with [`MirOptions::record_sites`], so
+//! their bodies record the source site of each allocation and call in a
+//! side table that code generation never reads, and formats the report
+//! from the counted units ([`crate::reuse_report`]). Std and dependencies
+//! record nothing. The MIR and CLIF are the same with and without it
+//! (GAP(reuse-report-lines)).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use cheby_codegen_clif::CodegenOptions;
@@ -60,10 +68,11 @@ use cheby_consteval::{ConstEvalConfig, ConstInfo, ConstMode, ConstTypes};
 use cheby_diag::{Diagnostic, SourceMap, codes};
 use cheby_iface::{DefId, DepView, Ice, ModuleId};
 use cheby_jit::{Jit, JitError, JitOptions};
+use cheby_mir::lower::{lower_items_recording, lower_tests_recording};
 use cheby_mir::reach::{Reach, Root, reachable_with_hooks};
 use cheby_mir::{
-    Defs, EntryKind, EntryRequest, LowerCx, MirModule, MirOptions, Program, UnitKind, borrow,
-    check_lowered, count_lowered_with, lower_entries, lower_items, lower_tests,
+    Defs, EntryKind, EntryRequest, LowerCx, MirModule, MirOptions, Program, RcMode, UnitKind,
+    borrow, check_lowered, count_lowered_with, lower_entries,
 };
 use cheby_package::Target;
 use cheby_types::thir;
@@ -105,6 +114,9 @@ pub(crate) struct Built {
     /// and `drop` statements) of every MIR unit compiled, for `cargo xtask
     /// bench-compile` (D-718); `None` for the other roots.
     pub rc_ops: Option<u64>,
+    /// The text of `--reuse-report` (D-717, [`crate::reuse_report`]),
+    /// when the build was asked for it.
+    pub reuse_report: Option<String>,
 }
 
 /// The MIR options of a build, read from the environment once per build:
@@ -145,21 +157,41 @@ pub(crate) fn codegen_options(mir: MirOptions, capture_clif: bool) -> CodegenOpt
 ///
 /// An [`Error`] for an invalid option in the environment, or an internal
 /// compiler error.
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "the signature of plan §4.5, which callers build in place"
-)]
 pub(crate) fn build(
     front: &Frontend,
     sources: &SourceMap,
     roots: Roots<'_>,
     capture_clif: bool,
 ) -> Result<Result<Built, Vec<Diagnostic>>, Error> {
-    let options = if capture_clif {
+    build_reporting(front, sources, roots, capture_clif, false)
+}
+
+/// [`build`], and with `reuse_report` also the text of `--reuse-report`
+/// in [`Built::reuse_report`] (D-717): lowering then records the sites of
+/// the package's own modules ([`MirOptions::record_sites`]), which changes
+/// no code (GAP(reuse-report-lines)). Under `CHEBY_RC=naive` nothing is
+/// recorded and the report is its one naive line.
+///
+/// # Errors
+///
+/// As [`build`].
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "the signature of plan §4.5, which callers build in place"
+)]
+pub(crate) fn build_reporting(
+    front: &Frontend,
+    sources: &SourceMap,
+    roots: Roots<'_>,
+    capture_clif: bool,
+    reuse_report: bool,
+) -> Result<Result<Built, Vec<Diagnostic>>, Error> {
+    let mut options = if capture_clif {
         MirOptions::default()
     } else {
         mir_options_from_env()?
     };
+    options.record_sites = reuse_report && options.rc == RcMode::Perceus;
     let codegen = codegen_options(options, capture_clif);
     Ok(build_dumping(
         front,
@@ -168,11 +200,13 @@ pub(crate) fn build(
         codegen,
         options,
         dump_dir().as_deref(),
+        reuse_report,
     )?)
 }
 
 /// [`build`] with the MIR options `mir` and the code-generation options
-/// `codegen`, writing the determinism dumps to `dump` if it is given.
+/// `codegen`, writing the determinism dumps to `dump` if it is given, and
+/// the reuse report if `reuse_report` asks for it.
 fn build_dumping(
     front: &Frontend,
     sources: &SourceMap,
@@ -180,6 +214,7 @@ fn build_dumping(
     codegen: CodegenOptions,
     mir: MirOptions,
     dump: Option<&Path>,
+    reuse_report: bool,
 ) -> Result<Result<Built, Vec<Diagnostic>>, Ice> {
     let capture_clif = codegen.capture_clif;
     let lowered = lower(front, sources, roots, mir)?;
@@ -187,6 +222,22 @@ fn build_dumping(
         write_mir_dumps(dir, &lowered.units)?;
     }
     let rc_ops = matches!(roots, Roots::AllFunctions).then(|| rc_ops(&lowered.units));
+    let reuse_report = if reuse_report {
+        let local: BTreeSet<ModuleId> = local_modules(front).into_iter().collect();
+        Some(crate::reuse_report::report(
+            &lowered.units,
+            &local,
+            sources,
+            &front.globals.names,
+            &crate::reuse_report::Types {
+                table: &front.globals.types,
+                interfaces: &front.set,
+            },
+            mir.rc == RcMode::Naive,
+        )?)
+    } else {
+        None
+    };
     let check = matches!(roots, Roots::Constants);
     let options = JitOptions {
         stub_unresolved: check,
@@ -246,7 +297,11 @@ fn build_dumping(
     if let Some(dir) = dump {
         write_const_dump(front, &jit, dir, &evaluated)?;
     }
-    Ok(Ok(Built { jit, rc_ops }))
+    Ok(Ok(Built {
+        jit,
+        rc_ops,
+        reuse_report,
+    }))
 }
 
 /// D-759's RC operations of every function of `units`: `dup`, `drop` and
@@ -444,9 +499,14 @@ fn lower(
         .map(|&module| (module, tests.get(&module)))
         .filter(|&(module, selected)| reach.needs_module(module) || selected.is_some())
         .collect();
+    // Only the package's own modules record their sites for the reuse
+    // report (D-717); std and dependencies never do.
     let lowered: Vec<Result<ModuleUnits, Ice>> = jobs
         .par_iter()
-        .map(|&(module, selected)| lower_module(front, sources, &reach, module, selected))
+        .map(|&(module, selected)| {
+            let record_sites = mir.record_sites && local.contains(&module);
+            lower_module(front, sources, &reach, module, selected, record_sites)
+        })
         .collect();
     let mut units = Vec::new();
     for result in lowered {
@@ -523,13 +583,16 @@ type ModuleUnits = [Option<Result<MirModule, Ice>>; 2];
 
 /// Lowers `module`: its items that `reach` contains into its code unit,
 /// and its `selected` tests into its tests unit, each checked as lowered
-/// ([`check_lowered`]); counting waits for the whole build (D-779).
+/// ([`check_lowered`]); counting waits for the whole build (D-779). With
+/// `record_sites`, both units record the sites of `--reuse-report`
+/// (D-717).
 fn lower_module(
     front: &Frontend,
     sources: &SourceMap,
     reach: &Reach,
     module: ModuleId,
     selected: Option<&Vec<&thir::TestDef>>,
+    record_sites: bool,
 ) -> Result<ModuleUnits, Ice> {
     let checked = checked(front, module)?;
     let own = front
@@ -552,9 +615,14 @@ fn lower_module(
             Ok(unit)
         })
     };
-    let code = reach
-        .needs_module(module)
-        .then(|| counted(lower_items(&checked.thir, &|def| reach.contains(def), &cx)));
+    let code = reach.needs_module(module).then(|| {
+        counted(lower_items_recording(
+            &checked.thir,
+            &|def| reach.contains(def),
+            &cx,
+            record_sites,
+        ))
+    });
     let tests = selected.map(|selected| {
         // Only the selected tests: the others may reach items this build
         // does not lower.
@@ -564,7 +632,7 @@ fn lower_module(
             consts: Vec::new(),
             tests: selected.iter().map(|&t| t.clone()).collect(),
         };
-        counted(lower_tests(&only, &cx))
+        counted(lower_tests_recording(&only, &cx, record_sites))
     });
     Ok([code, tests])
 }
@@ -1084,6 +1152,7 @@ fn main() {
                 CodegenOptions::default(),
                 MirOptions::default(),
                 None,
+                false,
             )
             .unwrap() else {
                 panic!("the package did not build");
@@ -1119,6 +1188,7 @@ fn main() {
             CodegenOptions::default(),
             MirOptions::default(),
             Some(&dumps),
+            false,
         )
         .unwrap() else {
             panic!("the package did not build");
@@ -1145,6 +1215,7 @@ fn main() {
             CodegenOptions::default(),
             MirOptions::default(),
             Some(&dumps),
+            false,
         )
         .unwrap() else {
             panic!("the package did not build");
@@ -1183,6 +1254,7 @@ fn main() {
             CodegenOptions::default(),
             MirOptions::default(),
             None,
+            false,
         )
         .unwrap() else {
             panic!("007's constants did not evaluate");
@@ -1341,6 +1413,188 @@ fn main() {
             .collect();
         dirs.sort();
         dirs
+    }
+
+    /// The MIR dump of every unit of `units`, and their CLIF compiled with
+    /// the default options, native symbols nothing defines stubbed (020's
+    /// C library, plan §4.4).
+    fn dumps(units: &[MirModule]) -> (Vec<String>, Vec<String>) {
+        let mir = units.iter().map(|u| cheby_mir::dump(u).unwrap()).collect();
+        let codegen = CodegenOptions {
+            capture_clif: true,
+            ..CodegenOptions::default()
+        };
+        let options = JitOptions {
+            stub_unresolved: true,
+            ..JitOptions::default()
+        };
+        let mut jit = compile_with(units, codegen, options).unwrap();
+        (mir, jit.take_clif())
+    }
+
+    /// D-717, GAP(reuse-report-lines): `--reuse-report` changes no code.
+    /// For every example the front end accepts, the build of its `main`
+    /// and the build of its tests on native lower to byte-identical MIR
+    /// dumps and compile to byte-identical CLIF with and without
+    /// [`MirOptions::record_sites`]. With it, the package's own units
+    /// record sites and std's never do; without it, no unit records any.
+    /// The report of every build with sites is made without an error, and
+    /// some example reports a reuse and a kernel line.
+    #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+    )]
+    fn reuse_report_sites_change_no_dump() {
+        let recording = MirOptions {
+            record_sites: true,
+            ..MirOptions::default()
+        };
+        let (mut builds, mut reports, mut skipped) = (0_usize, String::new(), Vec::new());
+        let mut with_sites = 0_usize;
+        for dir in example_dirs() {
+            let name = dir.file_name().unwrap().to_string_lossy().into_owned();
+            let mut out = CheckOutput::default();
+            let front = crate::front_end(&dir, frontend::Mode::Build, &mut out).unwrap();
+            let Some((front, package)) = front.filter(|_| !out.has_errors()) else {
+                skipped.push(name);
+                continue;
+            };
+            let local: BTreeSet<ModuleId> = local_modules(&front).into_iter().collect();
+            let main = front
+                .local_module(&cheby_package::ModulePath::root(&package))
+                .and_then(|m| front.main_of(m));
+            let mut tests = Vec::new();
+            for &module in &local {
+                for test in &checked(&front, module).unwrap().thir.tests {
+                    if crate::test::on_native(&front, test) {
+                        tests.push(TestRoot { module, test });
+                    }
+                }
+            }
+            let mut roots = Vec::new();
+            if let Some(main) = main {
+                roots.push(Roots::Main(main));
+            }
+            if !tests.is_empty() {
+                roots.push(Roots::Tests(tests));
+            }
+            for roots in &roots {
+                let plain = lower(&front, &out.sources, roots, MirOptions::default())
+                    .unwrap()
+                    .units;
+                let sited = lower(&front, &out.sources, roots, recording).unwrap().units;
+                assert!(
+                    plain
+                        .iter()
+                        .flat_map(|u| &u.functions)
+                        .all(|f| f.sites.is_empty()),
+                    "{name}: sites recorded without the flag"
+                );
+                for unit in &sited {
+                    let own = unit.module().is_some_and(|m| local.contains(&m));
+                    assert!(
+                        own || unit.functions.iter().all(|f| f.sites.is_empty()),
+                        "{name}: {} records sites",
+                        unit.path
+                    );
+                }
+                if sited
+                    .iter()
+                    .flat_map(|u| &u.functions)
+                    .any(|f| !f.sites.is_empty())
+                {
+                    with_sites += 1;
+                }
+                let (plain_mir, plain_clif) = dumps(&plain);
+                let (sited_mir, sited_clif) = dumps(&sited);
+                assert!(!plain_clif.is_empty(), "{name}: no CLIF captured");
+                assert!(plain_mir == sited_mir, "{name}: the MIR dumps differ");
+                assert!(plain_clif == sited_clif, "{name}: the CLIF differs");
+                let report = crate::reuse_report::report(
+                    &sited,
+                    &local,
+                    &out.sources,
+                    &front.globals.names,
+                    &crate::reuse_report::Types {
+                        table: &front.globals.types,
+                        interfaces: &front.set,
+                    },
+                    false,
+                )
+                .unwrap();
+                assert!(
+                    report.lines().all(|l| l.starts_with("reuse: src/")),
+                    "{name}: {report}"
+                );
+                reports.push_str(&report);
+                builds += 1;
+            }
+        }
+        println!(
+            "reuse report: {builds} builds compared, {with_sites} with sites, skipped: {}",
+            skipped.join(", ")
+        );
+        assert!(builds >= 40, "only {builds} builds compared");
+        assert!(
+            with_sites >= builds.saturating_sub(5),
+            "only {with_sites} of {builds} builds record a site"
+        );
+        assert!(reports.contains("when it is unique\n"), "no reuse reported");
+        assert!(
+            reports.contains("at its last use: in place"),
+            "no kernel line reported"
+        );
+    }
+
+    /// Under naive counting nothing is reused, so the report is its one
+    /// line, and no site is recorded (D-746, GAP(reuse-report-lines)).
+    #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+    )]
+    fn reuse_report_under_naive_counting_is_one_line() {
+        let dir = package("reuse_naive", "", KEYS);
+        let (front, out) = front(&dir);
+        let main = front
+            .local_module(&cheby_package::ModulePath::root("app"))
+            .and_then(|m| front.main_of(m))
+            .unwrap();
+        let naive = MirOptions {
+            rc: RcMode::Naive,
+            ..MirOptions::default()
+        };
+        let perceus = MirOptions {
+            record_sites: true,
+            ..MirOptions::default()
+        };
+        for (mir, expected) in [
+            (naive, Some(crate::reuse_report::NAIVE_LINE)),
+            (perceus, None),
+        ] {
+            let Ok(built) = build_dumping(
+                &front,
+                &out.sources,
+                &Roots::Main(main),
+                CodegenOptions::default(),
+                mir,
+                None,
+                true,
+            )
+            .unwrap() else {
+                panic!("the package did not build");
+            };
+            let report = built.reuse_report.unwrap();
+            match expected {
+                Some(line) => assert_eq!(report, line),
+                None => assert!(
+                    report.starts_with("reuse: src/main.cheby:") && !report.contains("is off"),
+                    "{report}"
+                ),
+            }
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     /// D-698, plan §2.4 and gate 2. Rules checked: with the unwind pass on

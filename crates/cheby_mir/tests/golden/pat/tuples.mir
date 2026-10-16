@@ -3,8 +3,7 @@ fn app::pairs(_0: value) -> value check str#0 {
   str#0 = "src/main.cheby:80:4"
 bb0:
   _1: value = field _0.0 of ctor app::Pair
-  dup _1
-  drop _0
+  drop _0 of ctor app::Pair keep [_1 @0]
   return _1
 bb1:
   resume
@@ -18,11 +17,9 @@ fn app::destructure(_0: value) -> value check str#0 {
   str#0 = "src/main.cheby:122:4"
 bb0:
   _1: value = field _0.1 of tuple/2
-  dup _1
-  drop _0
+  drop _0 of tuple/2 keep [_1 @1]
   _2: value = field _1.0 of ctor app::Pair
-  dup _2
-  drop _1
+  drop _1 of ctor app::Pair keep [_2 @0]
   return _2
 bb1:
   resume
@@ -36,19 +33,15 @@ fn app::tuples(_0: value) -> value check str#0 {
   str#0 = "src/main.cheby:85:4"
 bb0:
   _1: value = field _0.0 of tuple/2
-  dup _1
   _2: int = unbox int _1
-  drop _1
   switch _2 [0 => bb1, 1 => bb2, _ => bb3]
 bb1:
   _3: value = field _0.1 of tuple/2
-  dup _3
-  drop _0
+  drop _0 of tuple/2 keep [_3 @1]
   goto bb4(_3)
 bb2:
   _5: value = field _0.1 of tuple/2
-  dup _5
-  drop _0
+  drop _0 of tuple/2 keep [_5 @1]
   goto bb4(_5)
 bb3:
   _6: value = field _0.1 of tuple/2

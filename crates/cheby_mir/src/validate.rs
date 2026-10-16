@@ -48,6 +48,15 @@
 //! or tuples of the same object size, and that neither a borrowed local
 //! nor a tuple being filled is reused (D-715, D-810).
 //!
+//! Fusion (D-716, GAP(fusion-forms)): a keep list (on a `drop_reuse` or a
+//! drop specialized by constructor) names counted `field` projections of
+//! the released local at their index in its layout, each index once,
+//! nothing borrowed; a specialized drop keeps something, is never in a
+//! cleanup pad, and a read pins its constructor as reuse's proofs do. The
+//! ownership simulation models each as its `dup`s, then the release.
+//! With the full ownership check (debug builds), no drop moves later
+//! (GAP(drop-position-check), `FnCx::check_drop_positions`).
+//!
 //! Canonical pads, blocks `drop _l; goto <pad>` or `resume` that lead
 //! only to `resume` and that normal control flow does not reach, are left
 //! out of the dominance graph and the representation walk (D-735): what
@@ -82,6 +91,7 @@ use crate::ir::{
     Terminator, UnitKind,
 };
 use crate::layout::LayoutDesc;
+use crate::liveness::{Liveness, stmt_def, stmt_value_uses};
 use crate::ownership::{self, Observer};
 use crate::repr::{CType, ForeignSig, Repr};
 use crate::unwind::{Recorded, stmt_may_unwind, terminator_may_unwind};
@@ -335,6 +345,10 @@ struct FnCx<'a> {
 /// parameter, defined before the first statement).
 type DefSite = (BlockId, Option<usize>);
 
+/// A release with a keep list ([`crate::ir::Keep`]): its block, the local
+/// it releases, its layout and the list.
+type KeepSite<'a> = (BlockId, Local, LayoutRef, &'a [(u32, Local)]);
+
 impl FnCx<'_> {
     fn err(&mut self, message: impl Into<String>) {
         self.errors.push(message.into());
@@ -367,6 +381,132 @@ impl FnCx<'_> {
             }
             if self.simulate {
                 self.check_ownership()?;
+                self.check_drop_positions()?;
+            }
+        }
+        Ok(())
+    }
+
+    /// No drop moves later (D-716, D-205; GAP(drop-position-check)): in a
+    /// block normal control flow reaches, between a counted local's last
+    /// use (or its definition) and each statement that releases it (`drop`,
+    /// `drop_reuse`, a specialized drop), nothing runs but `dup`, `drop`,
+    /// `drop_reuse`, specialized drops and block entry. Naive placement
+    /// satisfies it (each drop follows its local's last instruction, or
+    /// opens the successor of an edge), and so must every pass after
+    /// counting. It covers every counted local, not only those that may
+    /// hold a handle, so it needs no type facts. A reuse token's own `drop`
+    /// is exempt: the token holds no reference and no handle (a childless
+    /// block, or 0), and `reuse` holds it across calls into the arms that
+    /// rebuild (GAP(reuse-pairing-scope)); the drop of the matched value is
+    /// its `drop_reuse`, which the rule covers. Cleanup pads are exempt:
+    /// they release what an unwinding leaves held (D-698). Run only with
+    /// the full ownership check, so in debug builds (D-774): release
+    /// builds do not pay for it (D-776).
+    fn check_drop_positions(&mut self) -> Result<(), Ice> {
+        let f = self.f;
+        let normal = normally_reachable(f);
+        let n = f.blocks.len();
+        let mut preds: Vec<Vec<BlockId>> = vec![Vec::new(); n];
+        let mut tokens: BTreeSet<Local> = BTreeSet::new();
+        // By block: the nearest statement before each position that runs
+        // code, and where each local is used or defined.
+        let mut runs_before: Vec<Vec<Option<usize>>> = Vec::with_capacity(n);
+        let mut events: Vec<FxHashMap<Local, Vec<usize>>> = Vec::with_capacity(n);
+        for (id, block) in f.blocks.iter_enumerated() {
+            if normal.get(id.index()).copied().unwrap_or(false) {
+                for succ in block.term.successors() {
+                    let list = preds
+                        .get_mut(succ.index())
+                        .ok_or_else(|| Ice::new("a successor out of range"))?;
+                    if !list.contains(&id) {
+                        list.push(id);
+                    }
+                }
+            }
+            let mut before = Vec::with_capacity(block.stmts.len().saturating_add(1));
+            let mut last = None;
+            let mut here: FxHashMap<Local, Vec<usize>> = FxHashMap::default();
+            for (j, stmt) in block.stmts.iter().enumerate() {
+                before.push(last);
+                if !releases_only(stmt) {
+                    last = Some(j);
+                }
+                if let Stmt::Assign {
+                    dst,
+                    value: Rvalue::DropReuse { .. },
+                } = stmt
+                {
+                    tokens.insert(*dst);
+                }
+                for l in stmt_value_uses(f, stmt)?.into_iter().chain(stmt_def(stmt)) {
+                    here.entry(l).or_default().push(j);
+                }
+            }
+            before.push(last);
+            for (l, _) in block.term.uses() {
+                here.entry(l).or_default().push(block.stmts.len());
+            }
+            runs_before.push(before);
+            events.push(here);
+        }
+        // Where a local's value is still read later, a path that leaves it
+        // dead on one edge (a branch whose other successor reads it) drops
+        // it at the start of that edge's block: naive placement's edge
+        // drops (D-205). So a walk that reaches the end of a predecessor
+        // where the value is live stops there.
+        let values = Liveness::compute_values(f)?;
+        let cx = DropWalk {
+            f,
+            preds: &preds,
+            runs_before: &runs_before,
+            events: &events,
+        };
+        // Block ends already walked for a local, so each is walked once.
+        let mut walked: BTreeSet<(BlockId, Local)> = BTreeSet::new();
+        for (id, block) in f.blocks.iter_enumerated() {
+            if !normal.get(id.index()).copied().unwrap_or(false) {
+                continue;
+            }
+            for (j, stmt) in block.stmts.iter().enumerate() {
+                let Some(x) = released(stmt) else {
+                    continue;
+                };
+                if tokens.contains(&x) {
+                    continue;
+                }
+                let mut work = Vec::new();
+                match cx.back(id, j, x) {
+                    Back::Ok => {}
+                    Back::Ran(s) => self.err(format!(
+                        "bb{} statement {j} releases _{} after bb{} statement {s} runs past its last use (D-716, D-205)",
+                        id.as_u32(),
+                        x.as_u32(),
+                        id.as_u32()
+                    )),
+                    Back::Preds(b) => work.push(b),
+                }
+                while let Some(b) = work.pop() {
+                    for &p in cx.preds.get(b.index()).into_iter().flatten() {
+                        if !walked.insert((p, x))
+                            || values.live_out.get(p).is_some_and(|out| out.contains(&x))
+                        {
+                            continue;
+                        }
+                        // Past the end: the terminator's uses count.
+                        let end = f.block(p)?.stmts.len().saturating_add(1);
+                        match cx.back(p, end, x) {
+                            Back::Ok => {}
+                            Back::Ran(s) => self.err(format!(
+                                "bb{} statement {j} releases _{}, but on the path from bb{} statement {s} runs past its last use (D-716, D-205)",
+                                id.as_u32(),
+                                x.as_u32(),
+                                p.as_u32()
+                            )),
+                            Back::Preds(up) => work.push(up),
+                        }
+                    }
+                }
             }
         }
         Ok(())
@@ -817,15 +957,26 @@ impl FnCx<'_> {
         let mut tokens: FxHashMap<Local, LayoutRef> = FxHashMap::default();
         let mut sinks: Vec<(BlockId, Local, LayoutRef)> = Vec::new();
         let mut sources: Vec<(BlockId, Local)> = Vec::new();
+        let mut keeps: Vec<KeepSite<'_>> = Vec::new();
+        let mut specialized: Vec<(BlockId, Local, LayoutRef)> = Vec::new();
+        let mut normal: Option<Vec<bool>> = None;
         for (id, block) in f.blocks.iter_enumerated() {
             for stmt in &block.stmts {
                 match stmt {
                     Stmt::Assign {
                         dst,
-                        value: Rvalue::DropReuse { local, layout },
+                        value:
+                            Rvalue::DropReuse {
+                                local,
+                                layout,
+                                keep,
+                            },
                     } => {
                         tokens.insert(*dst, *layout);
                         sources.push((id, *local));
+                        if !keep.is_empty() {
+                            keeps.push((id, *local, *layout, keep.as_slice()));
+                        }
                         if f.local(*dst)?.ty.is_some() {
                             self.err(format!(
                                 "bb{} defines the reuse token _{} with a source type (D-716)",
@@ -838,6 +989,20 @@ impl FnCx<'_> {
                         value: Rvalue::AllocReuse { token, layout, .. },
                         ..
                     } => sinks.push((id, *token, *layout)),
+                    // A specialized drop (GAP(fusion-forms)): what a source
+                    // may not be, a non-empty keep list, and never in a
+                    // cleanup pad (D-735).
+                    Stmt::DropKeep {
+                        local,
+                        layout,
+                        keep,
+                    } => {
+                        sources.push((id, *local));
+                        keeps.push((id, *local, *layout, keep.as_slice()));
+                        specialized.push((id, *local, *layout));
+                        let normal = normal.get_or_insert_with(|| normally_reachable(f));
+                        self.check_specialized_site(id, *local, keep, normal);
+                    }
                     _ => continue,
                 }
                 if !self.counted(stage) {
@@ -848,10 +1013,12 @@ impl FnCx<'_> {
                 }
             }
         }
-        if tokens.is_empty() && sinks.is_empty() {
+        if tokens.is_empty() && sinks.is_empty() && keeps.is_empty() {
             return Ok(());
         }
         let borrowed = f.borrowed_locals()?;
+        self.check_keeps(&keeps, &borrowed)?;
+        self.check_pinned(&specialized)?;
         let filled: BTreeSet<Local> = f
             .blocks
             .iter()
@@ -881,7 +1048,20 @@ impl FnCx<'_> {
                 ));
             }
         }
-        for (id, token, layout) in sinks {
+        self.check_sinks(&tokens, &sinks);
+        self.check_token_uses(&tokens);
+        Ok(())
+    }
+
+    /// Each `alloc_reuse` of `sinks` (block, token, layout) takes a token
+    /// (a key of `tokens`, with its `drop_reuse`'s layout) of its own
+    /// object size (D-716).
+    fn check_sinks(
+        &mut self,
+        tokens: &FxHashMap<Local, LayoutRef>,
+        sinks: &[(BlockId, Local, LayoutRef)],
+    ) {
+        for &(id, token, layout) in sinks {
             let Some(&from) = tokens.get(&token) else {
                 self.err(format!(
                     "bb{} allocates with _{}, which is not a reuse token (D-716)",
@@ -899,7 +1079,113 @@ impl FnCx<'_> {
                 ));
             }
         }
-        self.check_token_uses(&tokens);
+    }
+
+    /// A specialized drop of `local` in block `id` keeps something and is
+    /// in a block normal control flow reaches (`normal`, by block index):
+    /// never in a cleanup pad (D-735; GAP(fusion-forms)).
+    fn check_specialized_site(
+        &mut self,
+        id: BlockId,
+        local: Local,
+        keep: &[(u32, Local)],
+        normal: &[bool],
+    ) {
+        if keep.is_empty() {
+            self.err(format!(
+                "bb{} specializes a drop of _{} that keeps nothing (D-716)",
+                id.as_u32(),
+                local.as_u32()
+            ));
+        }
+        if !normal.get(id.index()).copied().unwrap_or(false) {
+            self.err(format!(
+                "bb{} specializes a drop in a cleanup pad (D-735, D-716)",
+                id.as_u32()
+            ));
+        }
+    }
+
+    /// Each specialized drop in `specialized` (block, local, layout)
+    /// releases the fields of its layout, so a read must pin the
+    /// constructor there, as for reuse ([`crate::fuse::Pins`]): never a
+    /// shared field's read (D-071; GAP(fusion-forms)).
+    fn check_pinned(&mut self, specialized: &[(BlockId, Local, LayoutRef)]) -> Result<(), Ice> {
+        if specialized.is_empty() {
+            return Ok(());
+        }
+        let pins = crate::fuse::Pins::of(self.module, self.f)?;
+        for &(id, x, layout) in specialized {
+            if !pins.pins(self.module, x, layout, id) {
+                self.err(format!(
+                    "bb{} specializes a drop of _{} as {layout:?}, which no read pins (D-071, D-716)",
+                    id.as_u32(),
+                    x.as_u32()
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// The keep lists (fusion, D-716, GAP(fusion-forms)) of the releases
+    /// in `keeps`: each kept local is a counted `field x.i of L` projection
+    /// of the released local `x` at its index `i` in the release's layout
+    /// `L`, the indices are distinct, and no kept local is borrowed (D-715,
+    /// D-807: a borrowed projection holds no reference to move).
+    fn check_keeps(&mut self, keeps: &[KeepSite<'_>], borrowed: &[bool]) -> Result<(), Ice> {
+        if keeps.is_empty() {
+            return Ok(());
+        }
+        let f = self.f;
+        let mut projections: FxHashMap<Local, (Local, LayoutRef, u32)> = FxHashMap::default();
+        for stmt in f.blocks.iter().flat_map(|b| &b.stmts) {
+            if let Stmt::Assign {
+                dst,
+                value:
+                    Rvalue::Field {
+                        base,
+                        layout,
+                        field,
+                    },
+            } = stmt
+            {
+                projections.insert(*dst, (*base, *layout, *field));
+            }
+        }
+        for &(id, x, layout, keep) in keeps {
+            let mut seen = BTreeSet::new();
+            for &(i, p) in keep {
+                if !seen.insert(i) {
+                    self.err(format!(
+                        "bb{} keeps field {i} of _{} twice (D-716)",
+                        id.as_u32(),
+                        x.as_u32()
+                    ));
+                }
+                if projections.get(&p) != Some(&(x, layout, i)) {
+                    self.err(format!(
+                        "bb{} keeps _{} as field {i} of _{}, but it is not that field of {layout:?} (D-716)",
+                        id.as_u32(),
+                        p.as_u32(),
+                        x.as_u32()
+                    ));
+                }
+                if f.local(p)?.repr != Repr::Value {
+                    self.err(format!(
+                        "bb{} keeps the uncounted _{} (D-716)",
+                        id.as_u32(),
+                        p.as_u32()
+                    ));
+                }
+                if crate::liveness::is_borrowed_local(borrowed, p) {
+                    self.err(format!(
+                        "bb{} keeps _{}, which is borrowed (D-715, D-716)",
+                        id.as_u32(),
+                        p.as_u32()
+                    ));
+                }
+            }
+        }
         Ok(())
     }
 
@@ -913,13 +1199,19 @@ impl FnCx<'_> {
                 let misused: Vec<Local> = match stmt {
                     Stmt::Drop(_) | Stmt::ClearUnwind => Vec::new(),
                     Stmt::Dup(l) => vec![*l],
+                    Stmt::DropKeep { local, keep, .. } => std::iter::once(*local)
+                        .chain(keep.iter().map(|&(_, p)| p))
+                        .collect(),
                     Stmt::Assign {
                         value: Rvalue::AllocReuse { fields, .. },
                         ..
                     } => fields.iter().filter_map(Operand::local).collect(),
-                    Stmt::Assign { value, .. } | Stmt::Eval(value) => {
-                        value.uses().into_iter().map(|(l, _)| l).collect()
-                    }
+                    Stmt::Assign { value, .. } | Stmt::Eval(value) => value
+                        .uses()
+                        .into_iter()
+                        .map(|(l, _)| l)
+                        .chain(value.kept().iter().map(|&(_, p)| p))
+                        .collect(),
                 };
                 for l in misused.into_iter().filter(is_token) {
                     self.err(format!(
@@ -1242,7 +1534,7 @@ impl FnCx<'_> {
             }
             // Which locals are tokens, how they are used and the sizes:
             // `check_reuse`.
-            Rvalue::DropReuse { local, layout } => {
+            Rvalue::DropReuse { local, layout, .. } => {
                 self.expect_repr(&Operand::Local(*local), Repr::Value, "drop_reuse operand");
                 self.check_reuse_layout("drop_reuse", *layout);
                 Some(Repr::Value)
@@ -1598,6 +1890,12 @@ impl FnCx<'_> {
                             self.err(format!("dup or drop of uncounted _{}", l.as_u32()));
                         }
                     }
+                    // Which locals it keeps, its stage and what it may
+                    // release: `check_reuse`.
+                    Stmt::DropKeep { local, layout, .. } => {
+                        self.expect_repr(&Operand::Local(*local), Repr::Value, "specialized drop");
+                        self.check_reuse_layout("a specialized drop", *layout);
+                    }
                     Stmt::ClearUnwind => {
                         if !f.precounted {
                             self.err("clear_unwind outside a generated intrinsic body (D-693)");
@@ -1671,6 +1969,89 @@ impl FnCx<'_> {
     /// the simulation of [`crate::ownership`].
     fn check_ownership(&mut self) -> Result<(), Ice> {
         ownership::simulate(self.f, &mut ErrorSink(&mut self.errors))
+    }
+}
+
+/// Whether `stmt` only releases or adds references, running nothing a
+/// handle could observe (GAP(drop-position-check)): `dup`, `drop`,
+/// `drop_reuse` and specialized drops.
+fn releases_only(stmt: &Stmt) -> bool {
+    matches!(
+        stmt,
+        Stmt::Dup(_)
+            | Stmt::Drop(_)
+            | Stmt::DropKeep { .. }
+            | Stmt::Assign {
+                value: Rvalue::DropReuse { .. },
+                ..
+            }
+    )
+}
+
+/// The local `stmt` releases: a `drop`'s, a `drop_reuse`'s or a
+/// specialized drop's.
+fn released(stmt: &Stmt) -> Option<Local> {
+    match stmt {
+        Stmt::Drop(x)
+        | Stmt::DropKeep { local: x, .. }
+        | Stmt::Assign {
+            value: Rvalue::DropReuse { local: x, .. },
+            ..
+        } => Some(*x),
+        _ => None,
+    }
+}
+
+/// What walking back from a release finds ([`DropWalk::back`]).
+enum Back {
+    /// The local's last use or definition, with nothing run since.
+    Ok,
+    /// This statement ran after the local's last use.
+    Ran(usize),
+    /// Nothing ran and the local is not used in the block: its
+    /// predecessors decide.
+    Preds(BlockId),
+}
+
+/// The facts [`FnCx::check_drop_positions`] walks back over.
+struct DropWalk<'a> {
+    f: &'a Function,
+    /// By block index: its predecessors along normal control flow.
+    preds: &'a [Vec<BlockId>],
+    /// By block index, then position (the terminator's last): the nearest
+    /// earlier statement that runs code ([`releases_only`]).
+    runs_before: &'a [Vec<Option<usize>>],
+    /// By block index: the positions where each local is used or defined
+    /// (the terminator at the number of statements).
+    events: &'a [FxHashMap<Local, Vec<usize>>],
+}
+
+impl DropWalk<'_> {
+    /// Walks back from position `at` of block `b` (past its end, so its
+    /// terminator included, when `at` exceeds the number of statements) to
+    /// the last use or definition of `x`.
+    fn back(&self, b: BlockId, at: usize, x: Local) -> Back {
+        let before = self.runs_before.get(b.index());
+        let last = before.map_or(0, |v| v.len().saturating_sub(1));
+        let ran = before.and_then(|v| v.get(at.min(last))).copied().flatten();
+        let used = self
+            .events
+            .get(b.index())
+            .and_then(|e| e.get(&x))
+            .is_some_and(|ps| ps.iter().any(|&p| p < at && ran.is_none_or(|s| p >= s)));
+        if used {
+            return Back::Ok;
+        }
+        if let Some(s) = ran {
+            return Back::Ran(s);
+        }
+        let param = self
+            .f
+            .blocks
+            .get(b)
+            .is_some_and(|block| block.params.contains(&x))
+            || (b.index() == 0 && self.f.params.contains(&x));
+        if param { Back::Ok } else { Back::Preds(b) }
     }
 }
 
@@ -1906,13 +2287,20 @@ fn foreign_i64(value: &Rvalue, dst: Repr) -> bool {
     matches!(value, Rvalue::CallForeign { sig, .. } if sig.ret == CType::I64 && dst == Repr::I64)
 }
 
-/// The locals a statement reads, Dup and Drop included.
+/// The locals a statement reads, Dup and Drop included, and the locals of
+/// a keep list.
 fn stmt_locals(stmt: &Stmt) -> Vec<Local> {
     match stmt {
-        Stmt::Assign { value, .. } | Stmt::Eval(value) => {
-            value.uses().into_iter().map(|(l, _)| l).collect()
-        }
+        Stmt::Assign { value, .. } | Stmt::Eval(value) => value
+            .uses()
+            .into_iter()
+            .map(|(l, _)| l)
+            .chain(value.kept().iter().map(|&(_, p)| p))
+            .collect(),
         Stmt::Dup(l) | Stmt::Drop(l) => vec![*l],
+        Stmt::DropKeep { local, keep, .. } => std::iter::once(*local)
+            .chain(keep.iter().map(|&(_, p)| p))
+            .collect(),
         Stmt::ClearUnwind => Vec::new(),
     }
 }

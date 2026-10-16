@@ -1,0 +1,4 @@
+reuse: tests/ui/09-memory-model/reuse_report/in_a_test.cheby:14:3: building `Point` reuses `p` when it is unique
+reuse: tests/ui/09-memory-model/reuse_report/in_a_test.cheby:18:15: building `Point` allocates: no value of the same size dies before it
+reuse: tests/ui/09-memory-model/reuse_report/in_a_test.cheby:19:14: building `Point` reuses `start` when it is unique
+reuse: tests/ui/09-memory-model/reuse_report/in_a_test.cheby:20:25: building `Point` allocates: no value of the same size dies before it

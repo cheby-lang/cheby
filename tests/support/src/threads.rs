@@ -23,6 +23,14 @@
 //!
 //! The scheduler threads of the trials compete with each other, so the
 //! harness bounds its own parallelism ([`capped_test_threads`]).
+//!
+//! The naive-counting variant (D-718, GAP(naive-variant-env)): every run
+//! and `::test` trial also runs as `<name>@rc=naive` and
+//! `<name>::test@rc=naive` ([`Variant::RcNaive`], [`with_rc_naive`]), with
+//! `CHEBY_RC=naive` (D-746) and the base trial's goldens, at the default
+//! thread count (`CHEBY_THREADS` removed). Every other trial removes
+//! `CHEBY_RC`, so neither the example's `env` file nor the developer's
+//! shell can change how a trial counts references.
 
 use std::ffi::OsString;
 use std::process::Command;
@@ -32,7 +40,10 @@ use crate::milestone::POISON_ENV;
 /// The number of scheduler threads of a program (D-722).
 pub const THREADS_ENV: &str = "CHEBY_THREADS";
 
-/// One thread variant of a trial.
+/// The reference-counting mode of a program (D-746).
+pub const RC_ENV: &str = "CHEBY_RC";
+
+/// One variant of a trial: a thread count, or naive counting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Variant {
     /// `CHEBY_THREADS` removed: the base trial, which keeps the trial's
@@ -40,6 +51,9 @@ pub enum Variant {
     Unset,
     /// `CHEBY_THREADS=<n>`.
     Threads(u32),
+    /// `CHEBY_RC=naive` at the default thread count (D-718,
+    /// GAP(naive-variant-env)).
+    RcNaive,
 }
 
 /// The variants every run and `::test` trial runs in, base first (D-722).
@@ -53,15 +67,26 @@ impl Variant {
     }
 
     /// The name of the variant of the trial `base`: `base` itself for the
-    /// unset variant, `base@threads=N` otherwise
-    /// (D-747).
+    /// unset variant, `base@threads=N` for a thread count (D-747), and
+    /// `base@rc=naive` for naive counting.
     #[must_use]
     pub fn trial_name(self, base: &str) -> String {
         match self {
             Self::Unset => base.to_owned(),
             Self::Threads(n) => format!("{base}@threads={n}"),
+            Self::RcNaive => format!("{base}@rc=naive"),
         }
     }
+}
+
+/// `variants` followed by [`Variant::RcNaive`]: the variants the
+/// conformance harness runs every run and `::test` trial in.
+#[must_use]
+pub fn with_rc_naive(mut variants: Vec<Variant>) -> Vec<Variant> {
+    if !variants.contains(&Variant::RcNaive) {
+        variants.push(Variant::RcNaive);
+    }
+    variants
 }
 
 /// The variants of this run ([`parse_variants`] of the harness's own
@@ -113,17 +138,22 @@ pub fn parse_variants(outer: Option<OsString>) -> Result<Vec<Variant>, String> {
 }
 
 /// The thread counts of `variants` for the harness's summary line, such
-/// as `unset, 1, 2, 4`.
+/// as `unset, 1, 2, 4`, and `naive` last when naive counting runs: the
+/// naive trials run at the default thread count.
 #[must_use]
 pub fn describe(variants: &[Variant]) -> String {
-    variants
+    let mut threads: Vec<String> = variants
         .iter()
-        .map(|variant| match variant {
-            Variant::Unset => "unset".to_owned(),
-            Variant::Threads(n) => n.to_string(),
+        .filter_map(|variant| match variant {
+            Variant::Unset => Some("unset".to_owned()),
+            Variant::Threads(n) => Some(n.to_string()),
+            Variant::RcNaive => None,
         })
-        .collect::<Vec<_>>()
-        .join(", ")
+        .collect();
+    if variants.contains(&Variant::RcNaive) {
+        threads.push("unset with CHEBY_RC=naive".to_owned());
+    }
+    threads.join(", ")
 }
 
 /// One change to a child's environment.
@@ -135,8 +165,10 @@ pub enum EnvChange {
 
 /// The changes to a `cheby` child's environment, in the order they are
 /// applied: `NO_COLOR=1`, the example's `env` file, `CHEBY_RT_POISON=1`,
-/// then `CHEBY_THREADS` set for a variant or removed for the base trial.
-/// A later change wins over an earlier one of the same variable.
+/// then `CHEBY_THREADS` set for a thread variant or removed for the others,
+/// then `CHEBY_RC` set to `naive` for [`Variant::RcNaive`] or removed for
+/// the others (GAP(naive-variant-env)). A later change wins over an
+/// earlier one of the same variable.
 #[must_use]
 pub fn child_env(example_env: &[(String, String)], variant: Variant) -> Vec<EnvChange> {
     let mut changes = vec![EnvChange::Set("NO_COLOR".to_owned(), "1".to_owned())];
@@ -147,8 +179,12 @@ pub fn child_env(example_env: &[(String, String)], variant: Variant) -> Vec<EnvC
     );
     changes.push(EnvChange::Set(POISON_ENV.to_owned(), "1".to_owned()));
     changes.push(match variant {
-        Variant::Unset => EnvChange::Remove(THREADS_ENV.to_owned()),
+        Variant::Unset | Variant::RcNaive => EnvChange::Remove(THREADS_ENV.to_owned()),
         Variant::Threads(n) => EnvChange::Set(THREADS_ENV.to_owned(), n.to_string()),
+    });
+    changes.push(match variant {
+        Variant::RcNaive => EnvChange::Set(RC_ENV.to_owned(), "naive".to_owned()),
+        Variant::Unset | Variant::Threads(_) => EnvChange::Remove(RC_ENV.to_owned()),
     });
     changes
 }
@@ -203,10 +239,38 @@ mod tests {
         );
         assert!(Variant::Unset.is_base());
         assert!(!Variant::Threads(1).is_base());
+        assert!(!Variant::RcNaive.is_base());
+        assert_eq!(
+            Variant::RcNaive.trial_name("005_prime_sieve"),
+            "005_prime_sieve@rc=naive"
+        );
+        assert_eq!(
+            Variant::RcNaive.trial_name("005_prime_sieve::test"),
+            "005_prime_sieve::test@rc=naive"
+        );
+    }
+
+    /// The conformance harness adds the naive variant once, last, and
+    /// lists it after the thread counts.
+    #[test]
+    fn the_naive_variant_comes_last() {
+        let all = with_rc_naive(VARIANTS.to_vec());
+        assert_eq!(
+            all,
+            [
+                Variant::Unset,
+                Variant::Threads(1),
+                Variant::Threads(2),
+                Variant::RcNaive
+            ]
+        );
+        assert_eq!(with_rc_naive(all.clone()), all);
+        assert_eq!(describe(&all), "unset, 1, 2, unset with CHEBY_RC=naive");
     }
 
     /// The example's `env` file, then the poison switch, then the thread
-    /// count: neither the example nor the shell can change the last two.
+    /// count, then the counting mode: neither the example nor the shell can
+    /// change the last three.
     #[test]
     fn the_child_environment_order() {
         let example = vec![
@@ -215,6 +279,7 @@ mod tests {
             (THREADS_ENV.to_owned(), "7".to_owned()),
         ];
         let set = |k: &str, v: &str| EnvChange::Set(k.to_owned(), v.to_owned());
+        let remove = |k: &str| EnvChange::Remove(k.to_owned());
         assert_eq!(
             child_env(&example, Variant::Threads(2)),
             [
@@ -224,6 +289,7 @@ mod tests {
                 set(THREADS_ENV, "7"),
                 set(POISON_ENV, "1"),
                 set(THREADS_ENV, "2"),
+                remove(RC_ENV),
             ]
         );
         assert_eq!(
@@ -231,7 +297,17 @@ mod tests {
             [
                 set("NO_COLOR", "1"),
                 set(POISON_ENV, "1"),
-                EnvChange::Remove(THREADS_ENV.to_owned()),
+                remove(THREADS_ENV),
+                remove(RC_ENV),
+            ]
+        );
+        assert_eq!(
+            child_env(&[], Variant::RcNaive),
+            [
+                set("NO_COLOR", "1"),
+                set(POISON_ENV, "1"),
+                remove(THREADS_ENV),
+                set(RC_ENV, "naive"),
             ]
         );
     }
@@ -261,6 +337,19 @@ mod tests {
             final_value(Variant::Unset, POISON_ENV),
             Some(Some("1".into()))
         );
+        // Only the naive variant counts naively, whatever the example says.
+        let naive_example = vec![(RC_ENV.to_owned(), "naive".to_owned())];
+        let rc_of = |variant: Variant| {
+            let mut cmd = Command::new("cheby");
+            apply(&mut cmd, &child_env(&naive_example, variant));
+            cmd.get_envs()
+                .find(|(k, _)| *k == OsStr::new(RC_ENV))
+                .map(|(_, v)| v.map(OsStr::to_owned))
+        };
+        assert_eq!(rc_of(Variant::Unset), Some(None));
+        assert_eq!(rc_of(Variant::Threads(2)), Some(None));
+        assert_eq!(rc_of(Variant::RcNaive), Some(Some("naive".into())));
+        assert_eq!(final_value(Variant::RcNaive, THREADS_ENV), Some(None));
     }
 
     /// The harness's own `CHEBY_THREADS` adds a variant instead of being

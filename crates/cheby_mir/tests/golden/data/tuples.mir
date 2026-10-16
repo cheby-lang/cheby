@@ -40,8 +40,7 @@ fn app::main() -> value check str#0 {
   str#0 = "src/main.cheby:11:4"
   str#1 = "s"
 bb0:
-  _0: value = const str#1
-  _1: value = call app::triple(const int 1, const float 2.5, _0) ; unwind bb1
+  _1: value = call app::triple(const int 1, const float 2.5, const str#1) ; unwind bb1
   drop _1
   _2: value = call app::pair(const bool true) ; unwind bb1
   drop _2

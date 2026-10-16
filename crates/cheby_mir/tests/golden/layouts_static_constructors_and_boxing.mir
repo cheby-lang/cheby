@@ -107,8 +107,7 @@ bb0:
   _1: value = call app::same(const bool true) ; unwind bb1
   _2: bool = unbox bool _1
   drop _1
-  _3: value = const str#1
-  tail_call std::io::println(_3)
+  tail_call std::io::println(const str#1)
 bb1:
   resume
 }

@@ -4,10 +4,8 @@ fn dyn_forward Show::show for dyn app::shape::Shape(_0: value, _1: value) -> val
 bb0:
   drop _0
   _2: value = field _1.0 of dyn
-  dup _2
   _3: value = field _2.1 of dict/2+1
   dup _3
-  drop _2
   _4: value = field _1.1 of dyn
   dup _4
   drop _1
@@ -28,10 +26,8 @@ fn dyn_forward app::shape::Shape::area for dyn app::shape::Shape(_0: value, _1: 
 bb0:
   drop _0
   _2: value = field _1.0 of dyn
-  dup _2
   _3: value = field _2.2 of dict/2+1
   dup _3
-  drop _2
   _4: value = field _1.1 of dyn
   dup _4
   drop _1

@@ -71,8 +71,7 @@ fn hello_world::main() -> value check str#0 {
   str#0 = "src/main.cheby:8:4"
   str#1 = "hello"
 bb0:
-  _0: value = const str#1
-  tail_call std::io::println(_0)
+  tail_call std::io::println(const str#1)
 bb1:
   resume
 }

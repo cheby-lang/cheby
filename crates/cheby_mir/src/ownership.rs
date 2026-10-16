@@ -95,6 +95,21 @@ impl Counts {
             .retain(|(l, _)| held.binary_search_by_key(l, |&(h, _)| h).is_ok());
     }
 
+    /// Forgets the borrow bases of locals that hold nothing, except the
+    /// `field` results whose base still keeps them alive
+    /// ([`Counts::borrow_alive`]): fusion sinks a projection's `dup` into a
+    /// successor that only its block enters (GAP(fusion-forms)), so the
+    /// projection flows there holding nothing.
+    fn retain_alive_borrows(&mut self) {
+        let keep: Vec<bool> = self
+            .borrowed_from
+            .iter()
+            .map(|&(l, base)| self.count(l) >= 1 || (base.is_some() && self.borrow_alive(l)))
+            .collect();
+        let mut keep = keep.into_iter();
+        self.borrowed_from.retain(|_| keep.next().unwrap_or(false));
+    }
+
     /// The references `l` holds: 0 when it is absent.
     fn count(&self, l: Local) -> i64 {
         self.held
@@ -122,18 +137,26 @@ impl Counts {
 
     /// Whether `l` is a borrowed result whose base still holds a
     /// reference: a `load_const` result always, a `field` result while its
-    /// base holds one.
+    /// base holds one, or while its base is itself such a result (a
+    /// projection of a projection whose `dup` fusion sank,
+    /// GAP(fusion-forms)). The chain is walked without recursion, at most
+    /// once per entry.
     fn borrow_alive(&self, l: Local) -> bool {
-        let entry = self
-            .borrowed_from
-            .binary_search_by_key(&l, |&(b, _)| b)
-            .ok()
-            .and_then(|i| self.borrowed_from.get(i));
-        match entry {
-            Some(&(_, Some(base))) => self.count(base) >= 1,
-            Some(&(_, None)) => true,
-            None => false,
+        let mut at = l;
+        for _ in 0..=self.borrowed_from.len() {
+            let entry = self
+                .borrowed_from
+                .binary_search_by_key(&at, |&(b, _)| b)
+                .ok()
+                .and_then(|i| self.borrowed_from.get(i));
+            match entry {
+                Some(&(_, Some(base))) if self.count(base) >= 1 => return true,
+                Some(&(_, Some(base))) => at = base,
+                Some(&(_, None)) => return true,
+                None => return false,
+            }
         }
+        false
     }
 
     /// Records that `l` is borrowed from `base`.
@@ -208,8 +231,51 @@ pub(crate) fn simulate(f: &Function, observer: &mut impl Observer) -> Result<(),
         from: vec![None; blocks],
         work: Vec::new(),
         borrowed: f.borrowed_locals()?,
+        single_pred: single_predecessor(f)?,
     }
     .run()
+}
+
+/// By block index, whether the block has exactly one predecessor: one
+/// block whose normal successors or unwind edges lead to it (the function
+/// entry counts as the predecessor of `bb0` and of the entry pad).
+fn single_predecessor(f: &Function) -> Result<Vec<bool>, Ice> {
+    let n = f.blocks.len();
+    // By block index: the first predecessor seen, and whether another
+    // one was.
+    let mut first: Vec<Option<usize>> = vec![None; n];
+    let mut more = vec![false; n];
+    let mut see = |to: BlockId, from: usize| {
+        let t = to.index();
+        match first.get(t).copied() {
+            Some(None) => {
+                if let Some(slot) = first.get_mut(t) {
+                    *slot = Some(from);
+                }
+            }
+            Some(Some(p)) if p != from => {
+                if let Some(slot) = more.get_mut(t) {
+                    *slot = true;
+                }
+            }
+            _ => {}
+        }
+    };
+    // The function entry, as a block index no block has.
+    see(BlockId::from_u32(0), n);
+    if let Some(pad) = f.entry_unwind {
+        see(pad, n);
+    }
+    for (id, _) in f.blocks.iter_enumerated() {
+        for succ in f.successors(id)? {
+            see(succ, id.index());
+        }
+    }
+    Ok(first
+        .iter()
+        .zip(&more)
+        .map(|(p, m)| p.is_some() && !m)
+        .collect())
 }
 
 /// Where the simulation is, for messages. Formatted only when a message
@@ -257,6 +323,10 @@ struct Sim<'a, O> {
     /// By local index, the borrowed locals (module documentation); empty
     /// when the function borrows nothing.
     borrowed: Vec<bool>,
+    /// By block index, whether the block has one predecessor
+    /// ([`single_predecessor`]): only there may a projection flow in
+    /// holding nothing.
+    single_pred: Vec<bool>,
 }
 
 impl<O: Observer> Sim<'_, O> {
@@ -330,6 +400,11 @@ impl<O: Observer> Sim<'_, O> {
             let at = Site::Stmt(id, n);
             match stmt {
                 Stmt::Assign { dst, value } => {
+                    // A keep list is its `dup`s before the release
+                    // (GAP(fusion-forms)).
+                    for &(_, p) in value.kept() {
+                        self.dup(&mut st, p, at);
+                    }
                     self.consume(&mut st, &value.uses(), at)?;
                     if self.counted(*dst)? {
                         if self.is_borrowed(*dst) {
@@ -351,6 +426,13 @@ impl<O: Observer> Sim<'_, O> {
                 Stmt::Eval(value) => self.consume(&mut st, &value.uses(), at)?,
                 Stmt::Dup(l) => self.dup(&mut st, *l, at),
                 Stmt::Drop(l) => self.consume(&mut st, &[(*l, UseKind::Owned)], at)?,
+                // Its `dup`s, then the drop (GAP(fusion-forms)).
+                Stmt::DropKeep { local, keep, .. } => {
+                    for &(_, p) in keep {
+                        self.dup(&mut st, p, at);
+                    }
+                    self.consume(&mut st, &[(*local, UseKind::Owned)], at)?;
+                }
                 Stmt::ClearUnwind => {}
             }
         }
@@ -418,7 +500,20 @@ impl<O: Observer> Sim<'_, O> {
     /// Passes `st` to `target`, which must agree with what its earlier
     /// predecessors brought.
     fn flow(&mut self, target: BlockId, mut st: Counts, from: Site) {
-        st.retain_held_borrows();
+        // Into a block with one predecessor, a projection whose `dup`
+        // fusion sank keeps its base (GAP(fusion-forms)); where paths join,
+        // only what holds a reference flows, so every predecessor brings
+        // the same state.
+        if self
+            .single_pred
+            .get(target.index())
+            .copied()
+            .unwrap_or(false)
+        {
+            st.retain_alive_borrows();
+        } else {
+            st.retain_held_borrows();
+        }
         let Some(slot) = self.entry_state.get_mut(target.index()) else {
             // An unknown block: simulating it reports it.
             self.work.push(target);
@@ -476,15 +571,31 @@ impl<O: Observer> Sim<'_, O> {
             }
         }
         per.sort_unstable_by_key(|e| e.0);
+        // Borrowed uses of `field` results that hold nothing, whose base
+        // keeps them alive: checked after the instruction's owned uses, so
+        // an instruction that consumes the base cannot also read them.
+        let mut projections = Vec::new();
         for (l, owned, borrowed) in per {
             let have = st.count(l);
             let kept = self.is_borrowed(l);
             let need = owned.saturating_add(i64::from(borrowed && !kept));
             if have >= need && (need > 0 || kept) {
                 st.set(l, have.saturating_sub(owned));
+            } else if have == 0 && owned == 0 && borrowed {
+                projections.push(l);
             } else {
                 self.observer.error(format!(
                     "{at}: _{} is used without a reference (holds {have}, needs {need})",
+                    l.as_u32()
+                ));
+            }
+        }
+        // GAP(fusion-forms): fusion sinks a projection's `dup` past its
+        // borrowed uses, which its base's reference keeps valid.
+        for l in projections {
+            if !st.borrow_alive(l) {
+                self.observer.error(format!(
+                    "{at}: _{} is used without a reference (holds 0, needs 1)",
                     l.as_u32()
                 ));
             }
@@ -500,7 +611,7 @@ impl<O: Observer> Sim<'_, O> {
 fn unwind_state(f: &Function, st: &Counts, stmt: &Stmt) -> Result<Counts, Ice> {
     let consumed = match stmt {
         Stmt::Assign { value, .. } | Stmt::Eval(value) => consumed_on_unwind(value),
-        Stmt::Dup(_) | Stmt::Drop(_) | Stmt::ClearUnwind => Vec::new(),
+        Stmt::Dup(_) | Stmt::Drop(_) | Stmt::DropKeep { .. } | Stmt::ClearUnwind => Vec::new(),
     };
     let mut out = st.normalized();
     for (l, kind) in consumed {

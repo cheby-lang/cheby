@@ -6,8 +6,7 @@ fn app::show(_0: value) -> value check str#0 {
   str#1 = "a point"
 bb0:
   drop _0
-  _1: value = const str#1
-  return _1
+  return const str#1
 bb1:
   resume
 bb2:
@@ -149,8 +148,7 @@ bb0:
   _2: value = alloc ctor app::Point(const int 1, const int 2) ; unwind bb1
   _3: value = call app::user(_2) ; unwind bb1
   drop _3
-  _4: value = const str#2
-  _5: value = call app::only(_4) ; unwind bb1
+  _5: value = call app::only(const str#2) ; unwind bb1
   drop _5
   _6: value = call app::only_int(const int 3) ; unwind bb1
   drop _6

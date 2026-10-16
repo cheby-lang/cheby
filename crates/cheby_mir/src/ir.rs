@@ -489,10 +489,33 @@ pub enum Stmt {
     Dup(Local),
     /// One reference less; frees the object at zero.
     Drop(Local),
+    /// `drop local of layout keep [...]`: a drop specialized by constructor
+    /// (D-716, GAP(fusion-forms)). `local` is an object of `layout` (a
+    /// [`LayoutRef::Ctor`] with fields or a [`LayoutRef::Tuple`]) that a
+    /// field read pins ([`crate::fuse`]), and `keep` is a non-empty keep
+    /// list ([`Keep`]). It means `dup p` for each kept projection `p`, then
+    /// `drop local`: when `local` is unique, the kept fields' references
+    /// move to their projections, the other value fields are released and
+    /// the block is freed; otherwise each `p` is `dup`'d and `local` gives
+    /// up one reference. Only after reference counting, never in a cleanup
+    /// pad (D-735), never of a reuse token; never unwinds, like `drop`
+    /// (D-171).
+    DropKeep {
+        local: Local,
+        layout: LayoutRef,
+        keep: Keep,
+    },
     /// Clears the fiber's unwind flag (D-693); only in generated intrinsic
     /// bodies.
     ClearUnwind,
 }
+
+/// A keep list (fusion, D-716, GAP(fusion-forms)): `(i, p)` pairs, each
+/// `p` a counted local defined as `field x.i of layout`, a projection of
+/// the local `x` that a [`Rvalue::DropReuse`] or a specialized drop
+/// releases, with distinct indices `i`, in the order fusion folded them.
+/// Its ownership effect is a `dup p` of each pair before the release.
+pub type Keep = Vec<(u32, Local)>;
 
 /// An operand: a local or a constant.
 #[derive(Clone, PartialEq, Debug)]
@@ -778,7 +801,18 @@ pub enum Rvalue {
     /// `drop` of 0 does nothing), also in cleanup pads. Only after
     /// reference counting; never unwinds, like `drop` (D-171).
     /// GAP(reuse-token-form).
-    DropReuse { local: Local, layout: LayoutRef },
+    ///
+    /// `keep` (fusion, [`crate::fuse`]): `(i, p)` pairs, each `p` a
+    /// `field local.i of layout` projection (Perceus's keep list,
+    /// GAP(fusion-forms)). It means `dup p` for each pair, then the
+    /// `drop_reuse`: on a hit field `i`'s reference moves to `p` instead
+    /// of being released, and on a miss each `p` gets its `dup`. Empty
+    /// unless fusion folded `dup`s into it; see [`Keep`].
+    DropReuse {
+        local: Local,
+        layout: LayoutRef,
+        keep: Keep,
+    },
     /// `alloc_reuse token, layout(fields)` (D-716): a new object of
     /// `layout` with owned `fields`, as [`Rvalue::Alloc`] makes one, in
     /// the block of a nonzero `token` (its header and fields are
@@ -958,6 +992,30 @@ impl Rvalue {
     #[must_use]
     pub const fn result_is_borrowed(&self) -> bool {
         matches!(self, Self::Field { .. } | Self::LoadConst(_))
+    }
+
+    /// The keep list of a [`Rvalue::DropReuse`] ([`Keep`]); empty for every
+    /// other rvalue. Its locals are not in [`Rvalue::uses`]: each gets one
+    /// reference, as a `dup` does, before the release.
+    #[must_use]
+    pub fn kept(&self) -> &[(u32, Local)] {
+        match self {
+            Self::DropReuse { keep, .. } => keep,
+            _ => &[],
+        }
+    }
+}
+
+impl Stmt {
+    /// The keep list of the statement: a `drop_reuse`'s or a specialized
+    /// drop's ([`Keep`]); empty otherwise.
+    #[must_use]
+    pub fn kept(&self) -> &[(u32, Local)] {
+        match self {
+            Self::Assign { value, .. } | Self::Eval(value) => value.kept(),
+            Self::DropKeep { keep, .. } => keep,
+            Self::Dup(_) | Self::Drop(_) | Self::ClearUnwind => &[],
+        }
     }
 }
 

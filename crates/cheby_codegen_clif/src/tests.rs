@@ -742,10 +742,10 @@ fn slice_runtime_functions() {
         assert_eq!(f.ctypes(), (params, ret), "{f:?}");
         assert!(f.on_demand(), "{f:?}");
     }
-    assert_eq!(RuntimeFunc::ALL.len(), 35);
+    assert_eq!(RuntimeFunc::ALL.len(), 36);
     assert_eq!(
         RuntimeFunc::ALL.iter().filter(|f| f.on_demand()).count(),
-        11,
+        12,
         "only the M2 functions are declared on demand"
     );
     assert_eq!(
@@ -759,8 +759,9 @@ fn slice_runtime_functions() {
     assert!(STATIC_DATA.contains(&cheby_runtime::abi::sym::STATIC_ERR_NIL));
 }
 
-/// Reuse's runtime entries (D-716), inline and checked: their C types and
-/// indexes 30 to 34, all declared on demand, and the one size function's
+/// Reuse's runtime entries (D-716), inline and checked, and fusion's
+/// `cheby_rt_free_unique` (GAP(fusion-forms)): their C types and indexes
+/// 30 to 35, all declared on demand, and the one size function's
 /// constants, which MIR mirrors from the runtime.
 #[test]
 fn reuse_runtime_functions() {
@@ -790,6 +791,12 @@ fn reuse_runtime_functions() {
             34,
             &[CType::Ptr, CType::U64, CType::U64, CType::U64][..],
             CType::U64,
+        ),
+        (
+            RuntimeFunc::FreeUnique,
+            35,
+            &[CType::Ptr, CType::U64][..],
+            CType::Void,
         ),
     ];
     for (f, index, params, ret) in reuse {

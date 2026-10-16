@@ -80,7 +80,8 @@ use crate::repr::Repr;
 pub fn stmt_may_unwind(stmt: &Stmt) -> bool {
     match stmt {
         Stmt::Assign { value, .. } | Stmt::Eval(value) => rvalue_may_unwind(value),
-        Stmt::Dup(_) | Stmt::Drop(_) | Stmt::ClearUnwind => false,
+        // A specialized drop releases as `drop` does (D-171).
+        Stmt::Dup(_) | Stmt::Drop(_) | Stmt::DropKeep { .. } | Stmt::ClearUnwind => false,
     }
 }
 

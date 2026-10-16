@@ -83,6 +83,9 @@ enum Command {
         /// Treat every warning as an error and run nothing after one (D-549)
         #[arg(long)]
         deny_warnings: bool,
+        /// Print to stderr, before the program runs, where reuse in place happens or not and why (D-717)
+        #[arg(long)]
+        reuse_report: bool,
         /// Arguments passed to the program, after `--`
         #[arg(last = true)]
         args: Vec<String>,
@@ -103,6 +106,11 @@ enum Command {
         /// Treat every warning as an error and run no test after one (D-549)
         #[arg(long)]
         deny_warnings: bool,
+        /// Print to stderr, before the tests run, where reuse in place happens or not and why
+        /// (D-717); a test build may infer other borrowing than `cheby run`, so its report can
+        /// differ (D-779, D-813)
+        #[arg(long)]
+        reuse_report: bool,
     },
     /// Format source files (§13.7)
     Fmt {
@@ -204,6 +212,7 @@ fn run_command() -> ExitCode {
         Command::Run {
             module_path,
             deny_warnings,
+            reuse_report,
             args,
         } => run(
             out,
@@ -211,6 +220,7 @@ fn run_command() -> ExitCode {
                 module_path,
                 args,
                 deny_warnings,
+                reuse_report,
             },
         ),
         Command::Repl { deny_warnings } => {
@@ -220,12 +230,14 @@ fn run_command() -> ExitCode {
             filter,
             module,
             deny_warnings,
+            reuse_report,
         } => test(
             out,
             &cheby_driver::TestOptions {
                 filter,
                 module,
                 deny_warnings,
+                reuse_report,
             },
         ),
         Command::Fmt { .. } => out.not_yet("fmt", "M5"),
@@ -324,6 +336,8 @@ fn run(out: Out, options: cheby_driver::RunOptions) -> ExitCode {
         Err(e) => return out.error(e.message()),
     };
     out.diagnostics(program.output());
+    // `--reuse-report` (D-717): after the warnings, before `main` runs.
+    write_stderr(program.reuse_report());
     // D-797: the process exits right after `main`, so a
     // build without the leak check freezes the fibers left instead of
     // tearing them down (D-073, D-708); a debug build tears them down so
@@ -360,6 +374,8 @@ fn test(out: Out, options: &cheby_driver::TestOptions) -> ExitCode {
         Err(e) => return out.error(e.message()),
     };
     out.diagnostics(program.output());
+    // `--reuse-report` (D-717): after the warnings, before any test runs.
+    write_stderr(program.reuse_report());
     // The tests' captured output is replayed through the process's own
     // stdout and stderr, as the tests would have written it, each test's
     // before its line (D-723, ADR-0062). A failed write of the report or of
@@ -490,5 +506,38 @@ mod tests {
         assert!(Cli::try_parse_from(["cheby", "-j", "0", "check"]).is_err());
         assert!(Cli::try_parse_from(["cheby", "check", "--target", "wasm"]).is_err());
         assert!(Cli::try_parse_from(["cheby", "fmt", "--deny-warnings"]).is_err());
+    }
+
+    /// `--reuse-report` on `run` and `test` only (D-717), and before `--`
+    /// only: after it, it is the program's argument.
+    #[test]
+    fn parses_the_reuse_report_flag() {
+        let cli = Cli::try_parse_from(["cheby", "run", "--reuse-report"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Run {
+                reuse_report: true,
+                ..
+            }
+        ));
+        let cli = Cli::try_parse_from(["cheby", "run", "--", "--reuse-report"]).unwrap();
+        let Command::Run {
+            reuse_report, args, ..
+        } = cli.command
+        else {
+            panic!("not run");
+        };
+        assert!(!reuse_report);
+        assert_eq!(args, ["--reuse-report"]);
+        let cli = Cli::try_parse_from(["cheby", "test", "--reuse-report", "adds"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Test {
+                reuse_report: true,
+                ..
+            }
+        ));
+        assert!(Cli::try_parse_from(["cheby", "check", "--reuse-report"]).is_err());
+        assert!(Cli::try_parse_from(["cheby", "repl", "--reuse-report"]).is_err());
     }
 }

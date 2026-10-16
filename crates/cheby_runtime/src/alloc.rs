@@ -1148,6 +1148,42 @@ pub(crate) unsafe fn release_fields(ctx: Option<&ExecCtx>, obj: *mut u8) -> Opti
     Some(to_u64(object_layout(shape.size).size()))
 }
 
+/// Frees the block of `obj`, a unique object of a constructor or tuple
+/// layout whose value fields no longer own anything: generated code
+/// released each of them or moved it to a kept projection (a drop
+/// specialized by constructor, D-716, `crate::reuse`). The fields are not
+/// read. Charges `ctx`'s domain (or the running fiber's) as
+/// [`free_leaf`] does. Returns `None`, touching nothing, when `obj` is
+/// not of a constructor or tuple layout.
+///
+/// # Safety
+///
+/// `obj` points to a live heap object whose count is 1, whose one
+/// reference the caller owns and gives up, and whose value fields hold
+/// no reference the object owns; `ctx`, when given, is the control block
+/// of the fiber running on this thread.
+pub(crate) unsafe fn free_unique(ctx: Option<&ExecCtx>, obj: *mut u8) -> Option<()> {
+    // SAFETY: forwarded from the caller.
+    let (_, id) = unsafe { scan_and_layout(obj) };
+    let reusable = layout::get(id)
+        .is_some_and(|info| matches!(info.kind, LayoutKind::Ctor { .. } | LayoutKind::Tuple));
+    if !reusable {
+        return None;
+    }
+    // SAFETY: forwarded from the caller.
+    let shape = unsafe { shape_of(obj) };
+    let layout = object_layout(shape.size);
+    let ctx = with_fiber_cache(ctx, |ctx, cache| {
+        // SAFETY: allocated by `alloc_object` with this size, which
+        // `shape_of` recomputes exactly, and no reference remains: the
+        // caller gives up the only one, and the fields own nothing.
+        unsafe { release_block(obj, layout, cache) };
+        ctx
+    });
+    charge_freed(ctx, -1, to_u64(layout.size()));
+    Some(())
+}
+
 /// Frees `obj` if it owns no reference and has no finalizer, with no
 /// worklist and no walk, and returns whether it did.
 ///

@@ -799,6 +799,17 @@ impl Translator<'_, '_> {
                     self.drop_value(v)?;
                 }
             }
+            // Never in a pad (D-735, GAP(fusion-forms)).
+            Stmt::DropKeep {
+                local,
+                layout,
+                keep,
+            } => {
+                if self.in_pad {
+                    return Err(CodegenError::ice("a specialized drop in a cleanup pad"));
+                }
+                self.drop_keep(*local, *layout, keep)?;
+            }
             Stmt::ClearUnwind => {
                 // D-693: the fiber's unwind flag, a `u32` (D-685).
                 let ctx = self.ctx()?;
@@ -857,7 +868,11 @@ impl Translator<'_, '_> {
             }
             Rvalue::Alloc { layout, fields } => self.alloc(*layout, fields)?,
             Rvalue::AllocPlaceholder { layout } => self.alloc_placeholder(*layout)?,
-            Rvalue::DropReuse { local, layout } => self.drop_reuse(*local, *layout)?,
+            Rvalue::DropReuse {
+                local,
+                layout,
+                keep,
+            } => self.drop_reuse(*local, *layout, keep)?,
             Rvalue::AllocReuse {
                 token,
                 layout,

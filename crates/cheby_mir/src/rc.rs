@@ -75,7 +75,7 @@ pub fn insert(f: &mut Function) -> Result<(), Ice> {
     if f.blocks
         .iter()
         .flat_map(|b| &b.stmts)
-        .any(|s| matches!(s, Stmt::Dup(_) | Stmt::Drop(_)))
+        .any(|s| matches!(s, Stmt::Dup(_) | Stmt::Drop(_) | Stmt::DropKeep { .. }))
     {
         return Err(Ice::new("reference counts inserted twice"));
     }
@@ -102,7 +102,7 @@ pub fn insert(f: &mut Function) -> Result<(), Ice> {
         for (stmt, after) in block.stmts.iter().zip(&bl.after) {
             let uses = match stmt {
                 Stmt::Assign { value, .. } | Stmt::Eval(value) => value.uses(),
-                Stmt::Dup(_) | Stmt::Drop(_) => {
+                Stmt::Dup(_) | Stmt::Drop(_) | Stmt::DropKeep { .. } => {
                     return Err(Ice::new("reference counts inserted twice"));
                 }
                 // Touches no local (D-693).

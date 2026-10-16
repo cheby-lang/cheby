@@ -1,0 +1,12 @@
+reuse: tests/ui/09-memory-model/reuse_report/kernel_held_by_another_value.cheby:24:3: building a tuple of 2 allocates: no value of the same size dies before it
+reuse: tests/ui/09-memory-model/reuse_report/kernel_held_by_another_value.cheby:28:15: building a tuple of 2 allocates: no value of the same size dies before it
+reuse: tests/ui/09-memory-model/reuse_report/kernel_held_by_another_value.cheby:30:3: building a tuple of 2 allocates: no value of the same size dies before it
+reuse: tests/ui/09-memory-model/reuse_report/kernel_held_by_another_value.cheby:36:3: building a tuple of 2 allocates: no value of the same size dies before it
+reuse: tests/ui/09-memory-model/reuse_report/kernel_held_by_another_value.cheby:42:3: building a tuple of 2 allocates: no value of the same size dies before it
+reuse: tests/ui/09-memory-model/reuse_report/kernel_held_by_another_value.cheby:56:14: `set::insert` gets `s` at its last use: in place when it is unique at run time
+reuse: tests/ui/09-memory-model/reuse_report/kernel_held_by_another_value.cheby:57:3: building a tuple of 2 allocates: no value of the same size dies before it
+reuse: tests/ui/09-memory-model/reuse_report/kernel_held_by_another_value.cheby:64:7: building a tuple of 2 allocates: no value of the same size dies before it
+reuse: tests/ui/09-memory-model/reuse_report/kernel_held_by_another_value.cheby:66:10: building a tuple of 2 allocates: no value of the same size dies before it
+reuse: tests/ui/09-memory-model/reuse_report/kernel_held_by_another_value.cheby:73:18: `set::insert` gets `first` at its last use: in place when it is unique at run time
+reuse: tests/ui/09-memory-model/reuse_report/kernel_held_by_another_value.cheby:74:7: building a tuple of 2 allocates: no value of the same size dies before it
+reuse: tests/ui/09-memory-model/reuse_report/kernel_held_by_another_value.cheby:76:10: building a tuple of 2 allocates: no value of the same size dies before it

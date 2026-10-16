@@ -71,6 +71,9 @@ pub(crate) enum Mode {
     /// `reach_all`, every function of every loaded module is lowered, not
     /// only what `main` reaches.
     Inferred { reach_all: bool },
+    /// As `Counted`, counted with these options (fusion's tests compare
+    /// options, GAP(fusion-forms)).
+    CountedWith(MirOptions),
 }
 
 impl Lowered {
@@ -250,6 +253,16 @@ pub(crate) fn lower_source(files: &[(&str, &str)]) -> Lowered {
 /// are `Err`, rendered as the CLI prints them.
 pub(crate) fn lower_package(package: &str, files: &[(&str, &str)]) -> Result<Lowered, String> {
     lower_package_with(package, files, false, None, Mode::Counted)
+}
+
+/// [`lower_package`] counted with `options` instead of the defaults; the
+/// borrowing inference runs as in a build when they borrow.
+pub(crate) fn lower_package_options(
+    package: &str,
+    files: &[(&str, &str)],
+    options: MirOptions,
+) -> Result<Lowered, String> {
+    lower_package_with(package, files, false, None, Mode::CountedWith(options))
 }
 
 /// [`lower_source`] whose back end (lowering, reference counting and
@@ -591,7 +604,7 @@ fn back_end(
         let wanted = |def| reach_all || reach.contains(def);
         let split = match mode {
             Mode::Split { size } => Some(size),
-            Mode::Counted | Mode::Uncounted | Mode::Inferred { .. } => None,
+            Mode::Counted | Mode::Uncounted | Mode::Inferred { .. } | Mode::CountedWith(_) => None,
         };
         push(lower_items_split(thir, &wanted, &cx, split).unwrap());
         if tests.iter().any(|&(m, _)| m == id) {
@@ -645,10 +658,20 @@ fn finish(
         }
         // As a build does it (D-779): every unit lowered, then the masks
         // inferred over all of them and written into each, then counting.
-        Mode::Counted | Mode::Split { .. } => {
-            let found = infer_build(units, per_unit).unwrap();
+        Mode::Counted | Mode::Split { .. } | Mode::CountedWith(_) => {
+            let options = match mode {
+                Mode::CountedWith(options) => options,
+                _ => MirOptions::default(),
+            };
+            // A build infers borrowing only when its options borrow
+            // (D-808).
+            let found = if options.borrows() {
+                infer_build(units, per_unit).unwrap()
+            } else {
+                BTreeMap::new()
+            };
             for unit in units.iter_mut() {
-                if let Err(ice) = count_lowered_with(unit, &MirOptions::default()) {
+                if let Err(ice) = count_lowered_with(unit, &options) {
                     panic!("{ice}\n{}", dump(unit).unwrap_or_default());
                 }
             }

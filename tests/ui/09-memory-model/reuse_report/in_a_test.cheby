@@ -1,0 +1,21 @@
+// @mode: run-pass
+// @milestone: M2
+// @command: test
+// @decisions: D-717, D-170, D-716
+// @flags: --reuse-report
+//! `cheby test --reuse-report` reports the package's tests units as well
+//! as its code, before any test runs: a record update in a test body
+//! reuses its base. A test build may infer other borrowing than
+//! `cheby run` (D-779, D-813), so its report can differ.
+
+type Point { x: Int, y: Int }
+
+fn moved(p: Point) -> Point {
+  Point { ..p, x: p.x + 1 }
+}
+
+test "a point moves right" {
+  let start = Point { x: 0, y: 0 }
+  let next = Point { ..start, y: 5 }
+  assert moved(next) == Point { x: 1, y: 5 }
+}

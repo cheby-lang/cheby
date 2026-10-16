@@ -1041,6 +1041,7 @@ mod tests {
         ("rc.rs", "cheby_rt_drop", DROP),
         ("reuse.rs", "cheby_rt_release_fields", DROP),
         ("reuse.rs", "cheby_rt_drop_reuse_checked", DROP),
+        ("reuse.rs", "cheby_rt_free_unique", DROP),
         ("reuse.rs", "cheby_rt_reuse_hit", COUNTS),
         ("panic.rs", "cheby_rt_panic", RAISES_ITSELF),
         (

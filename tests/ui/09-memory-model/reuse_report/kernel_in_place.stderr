@@ -1,0 +1,2 @@
+reuse: tests/ui/09-memory-model/reuse_report/kernel_in_place.cheby:16:15: `set::insert` gets `held` at its last use: in place when it is unique at run time
+reuse: tests/ui/09-memory-model/reuse_report/kernel_in_place.cheby:16:15: `set::insert` gets a temporary value at its last use: in place when it is unique at run time

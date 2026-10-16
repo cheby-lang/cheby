@@ -22,6 +22,12 @@
 # - `std-tests`: checks and runs the standard library's own tests, one module
 #   at a time (D-479, D-542). Every std module builds and every test passes,
 #   so a failure fails CI.
+# - `rc-naive`: the UI tests and the standard library's tests under M1's
+#   naive reference counting, `CHEBY_RC=naive` (D-718, D-746), so reuse and
+#   the other Perceus passes never change what a program does. The UI tests
+#   of `--reuse-report` still run under Perceus (tests/ui/README.md). The
+#   examples run under naive counting in every `test` job, as the
+#   conformance harness's `@rc=naive` trials.
 # - `examples`: `cheby check` in every example directory, with the expected
 #   outcome of each (G6), and the determinism check: every example and the
 #   benchmark projects built with `--jobs 1` and the default from two paths,
@@ -111,6 +117,19 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Run the standard library's tests
         run: cargo xtask test-std
+
+  rc-naive:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.0"
+      - uses: Swatinem/rust-cache@v2
+      - name: UI tests under naive reference counting
+        run: CHEBY_RC=naive cargo test -p cheby_cli --test ui
+      - name: The standard library's tests under naive reference counting
+        run: CHEBY_RC=naive cargo xtask test-std
 
   examples:
     name: examples (${{ matrix.name }})

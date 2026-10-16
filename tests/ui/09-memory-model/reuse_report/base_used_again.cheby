@@ -1,0 +1,17 @@
+// @mode: run-pass
+// @milestone: M2
+// @decisions: D-717, D-170, D-716
+// @flags: --reuse-report
+//! A record update whose base is used again afterwards cannot reuse it:
+//! the old value must stay as it is, so the update allocates, and the
+//! report says why.
+
+import std::io
+
+type Counter { name: String, count: Int }
+
+fn main() {
+  let before = Counter { name: "visits", count: 1 }
+  let after = Counter { ..before, count: before.count + 1 }
+  io::println("{before.name}: {before.count}, then {after.count}")
+}

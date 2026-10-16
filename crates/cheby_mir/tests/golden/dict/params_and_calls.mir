@@ -46,8 +46,7 @@ bb0:
   _0: value = box int const int 1
   _1: value = call app::twice(const static#0, _0) ; unwind bb1
   drop _1
-  _2: value = const str#1
-  _3: value = call app::twice(const static#1, _2) ; unwind bb1
+  _3: value = call app::twice(const static#1, const str#1) ; unwind bb1
   drop _3
   return const nil
 bb1:

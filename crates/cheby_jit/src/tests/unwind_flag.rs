@@ -77,6 +77,14 @@ fn boom() -> Terminator {
 /// The strings [`boom`] uses: a location, then the message.
 const BOOM: [&str; 2] = [LOC, "boom"];
 
+/// `dst = read_layout held`: a use of a value the function holds across
+/// a call, right before its `drop`, so the drop follows the value's last
+/// use (GAP(drop-position-check)) while the value is still held at the
+/// call.
+fn touch(dst: u32, held: u32) -> Stmt {
+    assign(dst, Rvalue::ReadLayout { base: local(held) })
+}
+
 /// A Cheby call: `g` panics, and `f` holds an object across the call:
 /// `f() { s = alloc Some(Nil); r = call g(); drop s; return r }`.
 #[test]
@@ -91,7 +99,7 @@ fn unwind_flag_through_a_cheby_call() {
         0,
         "f",
         &[],
-        &[Repr::Value, Repr::Value],
+        &[Repr::Value, Repr::Value, Repr::U32],
         straight(
             vec![
                 some_nil(0),
@@ -102,6 +110,7 @@ fn unwind_flag_through_a_cheby_call() {
                         args: Vec::new(),
                     },
                 ),
+                touch(2, 0),
                 Stmt::Drop(local(0)),
             ],
             1,
@@ -147,7 +156,7 @@ fn unwind_flag_through_a_c_call() {
         0,
         "f",
         &[],
-        &[Repr::Value, Repr::Value, Repr::Bool, Repr::Value],
+        &[Repr::Value, Repr::Value, Repr::Bool, Repr::Value, Repr::U32],
         straight(
             vec![
                 some_nil(0),
@@ -166,6 +175,7 @@ fn unwind_flag_through_a_c_call() {
                     },
                 ),
                 Stmt::Drop(local(1)),
+                touch(4, 0),
                 Stmt::Drop(local(0)),
                 assign(
                     3,
@@ -232,7 +242,7 @@ fn unwind_flag_through_a_checked_overflow() {
         0,
         "f",
         &[Repr::Int],
-        &[Repr::Value, Repr::Int, Repr::Value],
+        &[Repr::Value, Repr::Int, Repr::Value, Repr::U32],
         straight(
             vec![
                 some_nil(1),
@@ -246,6 +256,7 @@ fn unwind_flag_through_a_checked_overflow() {
                         loc: StrId::from_u32(1),
                     },
                 ),
+                touch(4, 1),
                 Stmt::Drop(local(1)),
                 assign(
                     3,
@@ -311,8 +322,8 @@ fn unwind_flag_through_an_explicit_panic() {
     assert_unwound(&jit, &outcome, RtPanicKind::Explicit);
 }
 
-/// `deep(x) { s = alloc Some(Nil); dup x; r = call deep(x); drop s;
-/// drop x; return r }` and `start() { a = alloc Some(Nil); r = call
+/// `deep(x) { s = alloc Some(Nil); dup x; r = call deep(x); drop x;
+/// read_layout s; drop s; return r }` and `start() { a = alloc Some(Nil); r = call
 /// deep(a); return r }`: an endless recursion that overflows at an entry
 /// check, whose entry pad drops `x`; every caller's pad drops its `s` and
 /// `x`.
@@ -323,7 +334,7 @@ fn deep_program() -> (Prog, DefId) {
         0,
         "deep",
         &[Repr::Value],
-        &[Repr::Value, Repr::Value],
+        &[Repr::Value, Repr::Value, Repr::U32],
         straight(
             vec![
                 some_nil(1),
@@ -335,8 +346,9 @@ fn deep_program() -> (Prog, DefId) {
                         args: vec![op(0)],
                     },
                 ),
-                Stmt::Drop(local(1)),
                 Stmt::Drop(local(0)),
+                touch(3, 1),
+                Stmt::Drop(local(1)),
             ],
             2,
         ),

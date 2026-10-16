@@ -1,0 +1,2 @@
+reuse: tests/ui/09-memory-model/reuse_report/borrowed_parameter.cheby:14:17: building `Pair` does not reuse `p`: it is borrowed from the caller
+reuse: tests/ui/09-memory-model/reuse_report/borrowed_parameter.cheby:20:14: building `Pair` allocates: no value of the same size dies before it

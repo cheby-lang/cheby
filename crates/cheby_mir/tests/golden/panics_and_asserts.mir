@@ -142,9 +142,8 @@ bb1:
 bb2:
   _4: value = call_runtime str_with_capacity(borrow const int 64) ; unwind bb4
   _5: value = call_runtime str_append(_4, borrow const str#1) ; unwind bb4
-  _6: value = const str#2
   dup _0
-  _7: value = call std::string::add(_6, _0) ; unwind bb5
+  _7: value = call std::string::add(const str#2, _0) ; unwind bb5
   _8: value = call_runtime str_append(_5, borrow _7) ; unwind bb6
   drop _7
   _9: value = call_runtime str_append(_8, borrow const str#3) ; unwind bb4
@@ -270,12 +269,9 @@ bb0:
   _10: value = call std::list::new() ; unwind bb1
   _11: value = call app::check_ints(_10) ; unwind bb1
   drop _11
-  _12: value = const str#2
-  _14: value = call app::check_strings(_12, borrow const str#3) ; unwind bb1
+  _14: value = call app::check_strings(const str#2, borrow const str#3) ; unwind bb1
   drop _14
-  _15: value = const str#2
-  _16: value = const str#3
-  tail_call app::check_order(_15, _16)
+  tail_call app::check_order(const str#2, const str#3)
 bb1:
   resume
 }

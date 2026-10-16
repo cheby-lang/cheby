@@ -47,9 +47,9 @@ fn closure app::spinner#1(_0: value) -> value check str#0 {
   str#0 = "src/main.cheby:4:17"
 bb0:
   _1: value = field _0.1 of closure/2
-  dup _1
   _2: value = field _0.2 of closure/2
   dup _2
+  dup _1
   drop _0
   _3: int = unbox int _2
   drop _2

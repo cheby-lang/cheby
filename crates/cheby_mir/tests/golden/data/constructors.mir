@@ -140,8 +140,7 @@ fn app::main() -> value check str#0 {
 bb0:
   _0: value = call app::point() ; unwind bb1
   drop _0
-  _1: value = const str#1
-  _2: value = call app::mixed(_1) ; unwind bb1
+  _2: value = call app::mixed(const str#1) ; unwind bb1
   drop _2
   _3: value = call app::pair(const int 1) ; unwind bb1
   drop _3
@@ -151,8 +150,7 @@ bb0:
   drop _5
   _6: value = call app::some(const int 1) ; unwind bb1
   drop _6
-  _7: value = const str#2
-  _8: value = call app::ok(_7) ; unwind bb1
+  _8: value = call app::ok(const str#2) ; unwind bb1
   drop _8
   _9: value = call app::err(const int 2) ; unwind bb1
   drop _9

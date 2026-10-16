@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*", "bench/gen", "tests/support", "xtask"]
+members = ["crates/*", "bench/baselines", "bench/gen", "tests/support", "xtask"]
 # cargo-fuzz targets need a nightly toolchain and their own lockfile.
 exclude = ["fuzz"]
 

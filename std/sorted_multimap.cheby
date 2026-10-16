@@ -192,13 +192,17 @@ test "range includes start and excludes end" {
 /// O(log n + log m), where m is the number of values of the key
 /// (GAP(multimap-insert-cost), as `multimap::insert` states).
 pub fn insert<K: Compare, V>(m: SortedMultimap<K, V>, key: K, value: V) -> SortedMultimap<K, V> {
-  let entries = sorted_map::upsert(m.entries, key, fn(found) {
+  // Taking the record apart first ends `m` before the tree changes, so a
+  // multimap held only here reaches `upsert` unshared and its path can be
+  // rebuilt in place (D-716).
+  let SortedMultimap { entries, total } = m
+  let grown = sorted_map::upsert(entries, key, fn(found) {
     case found {
       Some(values) => list::push(values, value)
       None => [value]
     }
   })
-  SortedMultimap { entries, total: m.total + 1 }
+  SortedMultimap { entries: grown, total: total + 1 }
 }
 
 test "insert appends a value" {
@@ -231,9 +235,13 @@ test "values of keys that compare Equal share one list" {
 /// without all of its values, or unchanged when there is no such key.
 pub fn remove<K: Compare, V>(m: SortedMultimap<K, V>, key: K) -> SortedMultimap<K, V> {
   case sorted_map::get(m.entries, key) {
-    Some(values) => SortedMultimap {
-      entries: sorted_map::remove(m.entries, key),
-      total: m.total - list::length(values),
+    Some(values) => {
+      // As in `insert`: `m` ends before the tree changes (D-716).
+      let SortedMultimap { entries, total } = m
+      SortedMultimap {
+        entries: sorted_map::remove(entries, key),
+        total: total - list::length(values),
+      }
     }
     None => m
   }

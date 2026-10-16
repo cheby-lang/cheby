@@ -95,11 +95,15 @@ pub enum RuntimeFunc {
     /// `uint64_t cheby_rt_alloc_reuse_checked(ExecCtx *ctx, uint64_t token, uint64_t size,
     /// uint64_t header)`: `alloc_reuse` under `checked_rc`; 0 when it raised.
     AllocReuseChecked,
+    /// `void cheby_rt_free_unique(ExecCtx *ctx, uint64_t obj)`: the hit path
+    /// of a drop specialized by constructor frees the block whose fields
+    /// it released or kept (D-716, GAP(fusion-forms)).
+    FreeUnique,
 }
 
 impl RuntimeFunc {
     /// Every runtime function, in declaration order ([`Self::index`]).
-    pub const ALL: [Self; 35] = [
+    pub const ALL: [Self; 36] = [
         Self::Alloc,
         Self::Dup,
         Self::Drop,
@@ -135,6 +139,7 @@ impl RuntimeFunc {
         Self::AllocMiss,
         Self::DropReuseChecked,
         Self::AllocReuseChecked,
+        Self::FreeUnique,
     ];
 
     /// The symbol.
@@ -176,6 +181,7 @@ impl RuntimeFunc {
             Self::AllocMiss => sym::ALLOC_MISS,
             Self::DropReuseChecked => sym::DROP_REUSE_CHECKED,
             Self::AllocReuseChecked => sym::ALLOC_REUSE_CHECKED,
+            Self::FreeUnique => sym::FREE_UNIQUE,
         }
     }
 
@@ -191,7 +197,7 @@ impl RuntimeFunc {
             | Self::ListAppend
             | Self::AllocMiss
             | Self::DropReuseChecked => (&[Ptr, U64, U64], U64),
-            Self::ReleaseFields => (&[Ptr, U64], Void),
+            Self::ReleaseFields | Self::FreeUnique => (&[Ptr, U64], Void),
             Self::ReuseHit => (&[], Void),
             Self::AllocReuseChecked => (&[Ptr, U64, U64, U64], U64),
             Self::Dup => (&[Ptr], Void),
@@ -235,6 +241,7 @@ impl RuntimeFunc {
                 | Self::AllocMiss
                 | Self::DropReuseChecked
                 | Self::AllocReuseChecked
+                | Self::FreeUnique
         )
     }
 
@@ -277,6 +284,7 @@ impl RuntimeFunc {
             Self::AllocMiss => 32,
             Self::DropReuseChecked => 33,
             Self::AllocReuseChecked => 34,
+            Self::FreeUnique => 35,
         }
     }
 

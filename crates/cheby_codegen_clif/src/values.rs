@@ -23,6 +23,39 @@ const WORD_SIZE: i64 = 8;
 /// The smallest `U64` that does not fit a tagged word: 2^62 (D-521).
 const U64_TAGGED_LIMIT: i64 = 1 << 62;
 
+/// The most value fields the hit path of a release with a keep list, or
+/// of a drop specialized by constructor, releases inline; more go through
+/// `cheby_rt_release_fields` (GAP(fusion-forms)).
+const INLINE_RELEASE_CAP: usize = 8;
+
+/// The slots of a release with a keep list (GAP(fusion-forms)): the
+/// offsets of the kept fields, each a value field of `shape`, and those of
+/// the value fields not kept, in declaration order.
+fn kept_slots(
+    shape: &Shape,
+    layout: LayoutRef,
+    keep: &[(u32, Local)],
+) -> Result<(Vec<i32>, Vec<i32>), CodegenError> {
+    let mut kept = Vec::with_capacity(keep.len());
+    for &(i, _) in keep {
+        match usize::try_from(i).ok().and_then(|n| shape.fields.get(n)) {
+            Some(&(offset, Repr::Value)) => kept.push(offset),
+            _ => {
+                return Err(CodegenError::ice(format!(
+                    "a keep list names field {i} of {layout:?}, which is not a value field"
+                )));
+            }
+        }
+    }
+    let rest = shape
+        .fields
+        .iter()
+        .filter(|&&(offset, repr)| repr == Repr::Value && !kept.contains(&offset))
+        .map(|&(offset, _)| offset)
+        .collect();
+    Ok((kept, rest))
+}
+
 /// Where an allocation's header word comes from.
 enum HeaderSource {
     /// A fixed layout: the header is a constant.
@@ -317,18 +350,27 @@ impl Translator<'_, '_> {
     /// an object, never a tagged integer: a field read of its layout
     /// dominates the drop. With `checked_rc`, the checked runtime entry,
     /// which also checks the header and the size.
+    ///
+    /// With a keep list (GAP(fusion-forms)): on a hit the kept fields are
+    /// zeroed, their references moving to their projections, and the
+    /// others released ([`Self::release_on_hit`]); on a miss each kept
+    /// projection is `dup`'d before the reference is given up. With
+    /// `checked_rc`, the `dup`s and then the checked entry.
     pub(crate) fn drop_reuse(
         &mut self,
         local: Local,
         layout: LayoutRef,
+        keep: &[(u32, Local)],
     ) -> Result<Value, CodegenError> {
         let shape = self.reuse_shape(layout)?;
         let v = self.local(local)?;
         let ctx = self.ctx()?;
         if self.opts.checked_rc {
+            self.dup_kept(keep)?;
             let size = self.b.ins().iconst(types::I64, shape.size);
             return self.runtime_value(RuntimeFunc::DropReuseChecked, &[ctx, v, size]);
         }
+        let (kept, rest) = kept_slots(&shape, layout, keep)?;
         let has_values = shape.fields.iter().any(|&(_, r)| r == Repr::Value);
         let hit = self.b.create_block();
         let not_unique = self.b.create_block();
@@ -346,11 +388,16 @@ impl Translator<'_, '_> {
             .icmp_imm_s(IntCC::Equal, rc, i64::from(abi::RC_UNIQUE));
         self.b.ins().brif(unique, hit, &[], not_unique, &[]);
         self.b.switch_to_block(hit);
-        if has_values {
-            self.runtime_call(RuntimeFunc::ReleaseFields, &[ctx, v])?;
+        if keep.is_empty() {
+            if has_values {
+                self.runtime_call(RuntimeFunc::ReleaseFields, &[ctx, v])?;
+            }
+        } else {
+            self.release_on_hit(v, &kept, &rest, true)?;
         }
         self.b.ins().jump(join, &[BlockArg::Value(v)]);
         self.b.switch_to_block(not_unique);
+        self.dup_kept(keep)?;
         let shared_by_others = self.b.ins().icmp_imm_s(IntCC::SignedGreaterThan, rc, 1);
         self.b.ins().brif(shared_by_others, fast, &[], other, &[]);
         self.b.switch_to_block(fast);
@@ -442,6 +489,116 @@ impl Translator<'_, '_> {
             self.store_field(object, offset, repr, value);
         }
         Ok(object)
+    }
+
+    /// `dup` of each projection a keep list names (GAP(fusion-forms)): the
+    /// miss path of a release with one, and its form under `checked_rc`.
+    fn dup_kept(&mut self, keep: &[(u32, Local)]) -> Result<(), CodegenError> {
+        for &(_, p) in keep {
+            let value = self.local(p)?;
+            self.dup(value)?;
+        }
+        Ok(())
+    }
+
+    /// The hit path of a release with a keep list (GAP(fusion-forms)): `v`
+    /// is unique. The slots `kept` hand their references to the kept
+    /// projections; the value slots `rest` are released, inline when there
+    /// are at most [`INLINE_RELEASE_CAP`], else by
+    /// `cheby_rt_release_fields` after the kept slots are zeroed. With
+    /// `zero`, every value slot ends zeroed (a reuse token owns nothing);
+    /// without it, the inline path leaves them, since the block is freed
+    /// next without being read.
+    fn release_on_hit(
+        &mut self,
+        v: Value,
+        kept: &[i32],
+        rest: &[i32],
+        zero: bool,
+    ) -> Result<(), CodegenError> {
+        let inline = rest.len() <= INLINE_RELEASE_CAP;
+        if zero || !inline {
+            let null = self.b.ins().iconst(types::I64, 0);
+            for &offset in kept {
+                self.b.ins().store(MemFlagsData::trusted(), null, v, offset);
+            }
+        }
+        if !inline {
+            let ctx = self.ctx()?;
+            self.runtime_call(RuntimeFunc::ReleaseFields, &[ctx, v])?;
+            return Ok(());
+        }
+        for &offset in rest {
+            let child = self
+                .b
+                .ins()
+                .load(types::I64, MemFlagsData::trusted(), v, offset);
+            if zero {
+                let null = self.b.ins().iconst(types::I64, 0);
+                self.b.ins().store(MemFlagsData::trusted(), null, v, offset);
+            }
+            self.drop_value(child)?;
+        }
+        Ok(())
+    }
+
+    /// `drop local of layout keep [...]`, a drop specialized by constructor
+    /// (D-716, GAP(fusion-forms)). Inline, an object of count 1 hands each
+    /// kept field's reference to its projection, releases its other value
+    /// fields ([`Self::release_on_hit`]) and frees its block through
+    /// `cheby_rt_free_unique`; any other count first `dup`s each kept
+    /// projection, then gives up a reference as `drop` does: a count above
+    /// 1 is decremented, a static object (count 0) is skipped and a shared
+    /// one goes to `cheby_rt_drop`. A field read of `layout` pins the
+    /// object, so it is never a tagged integer. With `checked_rc`, the
+    /// `dup`s and the checked `drop`.
+    pub(crate) fn drop_keep(
+        &mut self,
+        local: Local,
+        layout: LayoutRef,
+        keep: &[(u32, Local)],
+    ) -> Result<(), CodegenError> {
+        let v = self.local(local)?;
+        if self.opts.checked_rc {
+            self.dup_kept(keep)?;
+            return self.drop_call(v);
+        }
+        let shape = self.shape(layout)?;
+        let (kept, rest) = kept_slots(&shape, layout, keep)?;
+        let ctx = self.ctx()?;
+        let hit = self.b.create_block();
+        let not_unique = self.b.create_block();
+        let fast = self.b.create_block();
+        let other = self.b.create_block();
+        let slow = self.b.create_block();
+        self.b.set_cold_block(slow);
+        let done = self.b.create_block();
+        let rc = self.load_rc(v);
+        let unique = self
+            .b
+            .ins()
+            .icmp_imm_s(IntCC::Equal, rc, i64::from(abi::RC_UNIQUE));
+        self.b.ins().brif(unique, hit, &[], not_unique, &[]);
+        self.b.switch_to_block(hit);
+        self.release_on_hit(v, &kept, &rest, false)?;
+        self.runtime_call(RuntimeFunc::FreeUnique, &[ctx, v])?;
+        self.b.ins().jump(done, &[]);
+        self.b.switch_to_block(not_unique);
+        self.dup_kept(keep)?;
+        let shared_by_others = self.b.ins().icmp_imm_s(IntCC::SignedGreaterThan, rc, 1);
+        self.b.ins().brif(shared_by_others, fast, &[], other, &[]);
+        self.b.switch_to_block(fast);
+        let next = self.b.ins().iadd_imm_s(rc, -1);
+        self.store_rc(v, next);
+        self.b.ins().jump(done, &[]);
+        self.b.switch_to_block(other);
+        let static_object = self.b.ins().icmp_imm_s(IntCC::Equal, rc, 0);
+        self.b.ins().brif(static_object, done, &[], slow, &[]);
+        self.b.switch_to_block(slow);
+        self.drop_call(v)?;
+        self.b.ins().jump(done, &[]);
+        self.b.switch_to_block(done);
+        Ok(())
     }
 
     /// A `drop` of a reuse token outside a pad (D-716): 0 is skipped,

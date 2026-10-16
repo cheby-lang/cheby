@@ -82,10 +82,8 @@ fn app::diff(_0: value, _1: value, _2: value) -> value check str#0 {
   str#0 = "src/main.cheby:18:4"
 bb0:
   _3: value = field _0.4 of dict/2+2
-  dup _3
   _4: value = field _3.1 of dict/1+0
   dup _4
-  drop _3
   dup _2
   _5: value = call _4(_1, _2) ; unwind bb5
   _6: value = field _0.3 of dict/2+2

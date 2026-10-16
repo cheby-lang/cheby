@@ -88,10 +88,8 @@ fn closure two_sum::main#0(_0: value, _1: value) -> value check str#0 {
 bb0:
   drop _0
   _2: value = field _1.0 of tuple/2
-  dup _2
   _3: value = field _1.1 of tuple/2
-  dup _3
-  drop _1
+  drop _1 of tuple/2 keep [_3 @1, _2 @0]
   _4: int = unbox int _3
   drop _3
   _5: value = call two_sum::describe(_2, _4) ; unwind bb1
@@ -138,9 +136,7 @@ fn closure two_sum::two_sum#0(_0: value, _1: value, _2: value, _3: value) -> val
   str#2 = "src/main.cheby:44:28"
 bb0:
   _4: value = field _0.1 of closure/1
-  dup _4
   _5: int = unbox int _4
-  drop _4
   _6: int = unbox int _2
   drop _2
   _7: int = call_runtime list_length(borrow _1)
@@ -168,8 +164,7 @@ bb4:
   drop _3
   drop _11
   _16: value = field _14.0 of ctor Some
-  dup _16
-  _28: value = drop_reuse _14 of ctor Some
+  _28: value = drop_reuse _14 of ctor Some keep [_16 @0]
   _17: int = unbox int _16
   drop _16
   _18: value = box int _17 ; unwind bb14
@@ -255,22 +250,17 @@ bb0:
   _2: value = alloc closure/0(const code <closure two_sum::describe#0>) ; unwind bb5
   dup _0
   _3: value = call std::list::map(_0, _2) ; unwind bb5
-  _4: value = const str#1
-  _5: value = call std::string::join(_3, _4) ; unwind bb5
+  _5: value = call std::string::join(_3, const str#1) ; unwind bb5
   _6: value = call two_sum::two_sum(_0, _1) ; unwind bb6
   _7: int = read_tag _6 of option
   switch _7 [0 => bb1, _ => bb2]
 bb1:
   _8: value = field _6.0 of ctor Some
-  dup _8
-  drop _6
+  drop _6 of ctor Some keep [_8 @0]
   _9: value = field _8.0 of tuple/2
-  dup _9
   _10: int = unbox int _9
-  drop _9
   _11: value = field _8.1 of tuple/2
-  dup _11
-  drop _8
+  drop _8 of tuple/2 keep [_11 @1]
   _12: int = unbox int _11
   drop _11
   _13: value = call_runtime str_with_capacity(borrow const int 86) ; unwind bb6

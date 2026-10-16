@@ -20,6 +20,11 @@
 //!   (D-554).
 //! - [`prepare_test`] and [`TestProgram::run`] are `cheby test` (G4,
 //!   D-541), and [`test_std`] tests the standard library itself (D-542).
+//! - With `--reuse-report` ([`RunOptions::reuse_report`],
+//!   [`TestOptions::reuse_report`]) the build also gives the reuse report
+//!   of the package's own code ([`Program::reuse_report`],
+//!   [`TestProgram::reuse_report`]; D-717), which the CLI prints after the
+//!   warnings and before anything runs.
 //! - [`dump_mir`] and [`dump_clif`] print the MIR and CLIF that running
 //!   the root module's `main` compiles, for goldens and the determinism
 //!   checks.
@@ -55,6 +60,7 @@ use cheby_syntax::SyntaxTree;
 
 mod backend;
 mod frontend;
+mod reuse_report;
 pub mod session;
 pub mod std_lib;
 mod test;
@@ -402,6 +408,9 @@ pub struct RunOptions {
     /// `--deny-warnings`: a warning stops the run before anything is
     /// compiled (D-549).
     pub deny_warnings: bool,
+    /// `--reuse-report`: the build also gives the reuse report
+    /// ([`Program::reuse_report`], D-717).
+    pub reuse_report: bool,
 }
 
 /// The outcome of [`prepare_run`].
@@ -421,6 +430,8 @@ pub struct Program {
     /// `main`'s entry, compiled into `jit`.
     entry: cheby_mir::EntryKind,
     config: RunConfig,
+    /// The text of `--reuse-report`, empty without the flag.
+    reuse_report: String,
 }
 
 impl fmt::Debug for Program {
@@ -429,6 +440,7 @@ impl fmt::Debug for Program {
             .field("output", &self.output)
             .field("jit", &self.jit)
             .field("config", &self.config)
+            .field("reuse_report", &self.reuse_report)
             .finish_non_exhaustive()
     }
 }
@@ -438,6 +450,14 @@ impl Program {
     #[must_use]
     pub const fn output(&self) -> &CheckOutput {
         &self.output
+    }
+
+    /// The reuse report of `--reuse-report` (D-717), to print to standard
+    /// error after the warnings and before the program runs: one line per
+    /// candidate, each with its newline, sorted; empty without the flag.
+    #[must_use]
+    pub fn reuse_report(&self) -> &str {
+        &self.reuse_report
     }
 
     /// Runs `main` and returns the exit status (§10.10, D-182): 0, 1 when
@@ -498,8 +518,15 @@ pub fn prepare_run(root: &Path, options: RunOptions) -> Result<Prepared, Error> 
     // E0053 for a native symbol nothing defines (D-532) and the
     // constant-evaluation errors of the constants `main` reaches (D-535)
     // stop the run.
-    let jit = match backend::build(&front, &out.sources, backend::Roots::Main(main), false)? {
-        Ok(built) => built.jit,
+    let built = backend::build_reporting(
+        &front,
+        &out.sources,
+        backend::Roots::Main(main),
+        false,
+        options.reuse_report,
+    )?;
+    let (jit, reuse_report) = match built {
+        Ok(built) => (built.jit, built.reuse_report.unwrap_or_default()),
         Err(diagnostics) => {
             report_back_end(&mut out, diagnostics);
             return Ok(Prepared::CompileFailed(out));
@@ -525,6 +552,7 @@ pub fn prepare_run(root: &Path, options: RunOptions) -> Result<Prepared, Error> 
         jit,
         entry,
         config,
+        reuse_report,
     })))
 }
 

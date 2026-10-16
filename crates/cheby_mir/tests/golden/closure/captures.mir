@@ -36,25 +36,17 @@ fn closure app::make#0(_0: value, _1: value) -> value check str#0 {
   str#0 = "src/main.cheby:7:3"
 bb0:
   _2: value = field _0.1 of closure/6
-  dup _2
   _3: int = unbox int _2
-  drop _2
   _4: value = field _0.2 of closure/6
-  dup _4
   _5: float = unbox float _4
-  drop _4
   _6: value = field _0.3 of closure/6
-  dup _6
   _7: bool = unbox bool _6
-  drop _6
   _8: value = field _0.4 of closure/6
-  dup _8
   _9: value = field _0.5 of closure/6
-  dup _9
   _10: u8 = unbox u8 _9
-  drop _9
   _11: value = field _0.6 of closure/6
   dup _11
+  dup _8
   drop _0
   _12: f32 = unbox f32 _11
   drop _11

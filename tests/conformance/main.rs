@@ -53,6 +53,16 @@
 //! has hardware threads, at least one, since every trial may start
 //! several scheduler threads. `CHEBY_HARNESS_SCALE` multiplies the
 //! timeout (`cheby_test_support::process`).
+//!
+//! The naive-counting variant (D-718, GAP(naive-variant-env)): the run
+//! trial and the `::test` trial of every example that is run also run as
+//! `<name>@rc=naive` and `<name>::test@rc=naive`, with `CHEBY_RC=naive`
+//! (D-746) and `CHEBY_THREADS` removed, with the base trial's expectation
+//! and goldens, so every example must give the same output under naive
+//! counting as under Perceus. Every other trial removes `CHEBY_RC`, so
+//! neither the example's `env` file nor the developer's shell changes
+//! how it counts. Blessing ignores the variant, as it ignores the thread
+//! variants.
 
 use std::path::Path;
 use std::process::{Command, ExitCode};
@@ -84,7 +94,7 @@ fn main() -> ExitCode {
             example::all(&root)?,
             Verdicts::from_env()?,
             process::scaled_timeout(TIMEOUT)?,
-            threads::variants()?,
+            threads::with_rc_naive(threads::variants()?),
         ))
     });
     let (current, examples, verdicts, timeout, variants) = match setup {
@@ -96,7 +106,7 @@ fn main() -> ExitCode {
     };
     let bless = bless_enabled();
     // So that a thread count the harness does not run cannot pass
-    // unnoticed (D-722).
+    // unnoticed (D-722); the naive-counting variant is listed last (D-718).
     eprintln!(
         "conformance harness: CHEBY_THREADS of the run trials: {}",
         threads::describe(&variants)

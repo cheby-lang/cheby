@@ -21,6 +21,17 @@ impl BodyCx<'_, '_> {
     /// block ended (the rest is unreachable).
     pub(super) fn expr(&mut self, id: ExprId, tail: bool) -> Result<Option<Operand>, Ice> {
         let e = self.expr_data(id)?;
+        // While `e` is lowered, its span is the site of the allocations and
+        // calls it makes itself (D-717); a subexpression sets its own and
+        // gives this one back.
+        let outer = self.site.replace(e.span);
+        let lowered = self.expr_kind(e, tail);
+        self.site = outer;
+        lowered
+    }
+
+    /// [`BodyCx::expr`] by the kind of `e`.
+    fn expr_kind(&mut self, e: &thir::Expr, tail: bool) -> Result<Option<Operand>, Ice> {
         let (ty, span) = (e.ty, e.span);
         match &e.kind {
             ExprKind::Lit(lit) => self.lit(lit, ty, span),

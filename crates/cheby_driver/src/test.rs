@@ -88,6 +88,11 @@ pub struct TestOptions {
     /// `--deny-warnings`: a warning stops the command before any test is
     /// compiled (D-549).
     pub deny_warnings: bool,
+    /// `--reuse-report`: the build also gives the reuse report of the
+    /// package's code and tests units ([`TestProgram::reuse_report`],
+    /// D-717). A test build can infer other borrow masks than `cheby run`
+    /// (D-779, D-813), so its report can differ.
+    pub reuse_report: bool,
 }
 
 /// The outcome of [`prepare_test`].
@@ -122,6 +127,8 @@ pub struct TestProgram {
     /// The runtime's thread count when an in-process host sets one
     /// ([`TestProgram::set_threads`]); `None` reads `CHEBY_THREADS`.
     threads: Option<usize>,
+    /// The text of `--reuse-report`, empty without the flag.
+    reuse_report: String,
 }
 
 /// The stacks of a test run (D-660): each test's root fiber gets `main`,
@@ -151,6 +158,7 @@ impl std::fmt::Debug for TestProgram {
             .field("filtered_out", &self.filtered_out)
             .field("stacks", &self.stacks)
             .field("threads", &self.threads)
+            .field("reuse_report", &self.reuse_report)
             .finish_non_exhaustive()
     }
 }
@@ -415,11 +423,22 @@ pub fn prepare_test(root: &Path, options: &TestOptions) -> Result<PreparedTests,
             }
         }
     }
+    let mut reuse_report = String::new();
     let jit = if roots.is_empty() {
         None
     } else {
-        match backend::build(&front, &out.sources, Roots::Tests(roots), false)? {
-            Ok(built) => Some(built.jit),
+        let built = backend::build_reporting(
+            &front,
+            &out.sources,
+            Roots::Tests(roots),
+            false,
+            options.reuse_report,
+        )?;
+        match built {
+            Ok(built) => {
+                reuse_report = built.reuse_report.unwrap_or_default();
+                Some(built.jit)
+            }
             Err(diagnostics) => {
                 crate::report_back_end(&mut out, diagnostics);
                 return Ok(PreparedTests::CompileFailed(out));
@@ -439,6 +458,7 @@ pub fn prepare_test(root: &Path, options: &TestOptions) -> Result<PreparedTests,
         filtered_out,
         stacks,
         threads: None,
+        reuse_report,
     })))
 }
 
@@ -447,6 +467,14 @@ impl TestProgram {
     #[must_use]
     pub const fn output(&self) -> &CheckOutput {
         &self.output
+    }
+
+    /// The reuse report of `--reuse-report` (D-717), to print to standard
+    /// error after the warnings and before any test runs; empty without the
+    /// flag or when no test is selected.
+    #[must_use]
+    pub fn reuse_report(&self) -> &str {
+        &self.reuse_report
     }
 
     /// Runs the tests on at most `threads` worker threads, and so at most

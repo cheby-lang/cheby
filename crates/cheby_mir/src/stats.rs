@@ -5,9 +5,10 @@ use cheby_iface::Idx;
 
 use crate::ir::{BlockId, Function, Rvalue, Stmt};
 
-/// D-759's RC-operations count of one function: its `dup`, `drop` and
-/// `drop_reuse` statements outside unwind cleanup pads, each one
-/// operation. A pad is a block that normal control flow does not reach
+/// D-759's RC-operations count of one function: its `dup`, `drop`,
+/// `drop_reuse` and specialized drop (`drop … keep […]`) statements
+/// outside unwind cleanup pads, each one operation, whatever its keep
+/// list holds. A pad is a block that normal control flow does not reach
 /// (only an unwind edge or the entry pad leads to it). `alloc_reuse` is
 /// an allocation, not a count operation, and is not counted
 /// (GAP(rc-column-forms)). Until checkpoint 4 the column counted the
@@ -25,6 +26,7 @@ pub fn rc_ops(function: &Function) -> usize {
                 stmt,
                 Stmt::Dup(_)
                     | Stmt::Drop(_)
+                    | Stmt::DropKeep { .. }
                     | Stmt::Assign {
                         value: Rvalue::DropReuse { .. },
                         ..

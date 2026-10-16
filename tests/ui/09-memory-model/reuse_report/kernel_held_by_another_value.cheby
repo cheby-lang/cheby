@@ -1,0 +1,96 @@
+// @mode: run-pass
+// @milestone: M2
+// @decisions: D-717, D-170, D-525
+// @flags: --reuse-report
+//! A kernel's first argument gets no kernel line when another value still
+//! holds it at the call, so that the kernel copies every time: a list
+//! built from it (`in_a_list`, `in_a_list_of_tuples`), a second name for
+//! it (`alias`), the result of a call that took it (`through_a_call`), or
+//! a closure that captures it and that the call itself stores (`stored`),
+//! or a list whose element it is that is still alive
+//! (`element_of_a_live_list`). A call whose result cannot hold it, as
+//! `set::contains` returns a `Bool`, leaves the line (`lent_first`), and
+//! so does a list released before the call, whose other element is
+//! another value (`elements_apart`).
+
+import std::io
+import std::list
+import std::map
+import std::set
+
+fn in_a_list(s: set::Set<Int>, n: Int) -> (set::Set<Int>, Int) {
+  let held = [s]
+  let more = set::insert(s, n)
+  (more, list::length(held))
+}
+
+fn in_a_list_of_tuples(s: set::Set<Int>, n: Int) -> (set::Set<Int>, Int) {
+  let held = [(s, 1)]
+  let more = set::insert(s, n)
+  (more, list::length(held))
+}
+
+fn alias(s: set::Set<Int>, n: Int) -> (set::Set<Int>, Int) {
+  let t = s
+  let more = set::insert(s, n)
+  (more, set::size(t))
+}
+
+fn through_a_call(s: set::Set<Int>, n: Int) -> (set::Set<Int>, Int) {
+  let held = wrap(s)
+  let more = set::insert(s, n)
+  (more, list::length(held))
+}
+
+fn wrap(s: set::Set<Int>) -> List<set::Set<Int>> {
+  [s]
+}
+
+fn stored(m: map::Map<Int, fn() -> Int>, n: Int) -> map::Map<Int, fn() -> Int> {
+  let more = map::insert(m, n, fn() { map::size(m) })
+  more
+}
+
+fn lent_first(s: set::Set<Int>, n: Int) -> (set::Set<Int>, Bool) {
+  let found = set::contains(s, n)
+  let more = set::insert(s, n)
+  (more, found)
+}
+
+fn element_of_a_live_list(held: List<set::Set<Int>>, n: Int) -> (set::Set<Int>, Int) {
+  case held {
+    [s] => {
+      let more = set::insert(s, n)
+      (more, list::length(held))
+    }
+    _ => (set::new(), 0)
+  }
+}
+
+fn elements_apart(s: set::Set<Int>, n: Int) -> (set::Set<Int>, Int) {
+  case pair(s) {
+    [first, second] => {
+      let more = set::insert(first, n)
+      (more, set::size(second))
+    }
+    _ => (set::new(), 0)
+  }
+}
+
+fn pair(s: set::Set<Int>) -> List<set::Set<Int>> {
+  [s, set::new()]
+}
+
+fn main() {
+  let (a, i) = in_a_list(set::new(), 1)
+  let (b, j) = in_a_list_of_tuples(set::new(), 2)
+  let (c, k) = alias(set::new(), 3)
+  let (d, l) = through_a_call(set::new(), 4)
+  let (e, found) = lent_first(set::new(), 5)
+  let count = map::size(stored(map::new(), 6))
+  let (f, o) = element_of_a_live_list([set::new()], 7)
+  let (g, q) = elements_apart(set::new(), 8)
+  let sizes = set::size(a) + set::size(b) + set::size(c) + set::size(d) + set::size(e)
+  let more = set::size(f) + set::size(g)
+  io::println("{sizes} {i} {j} {k} {l} {found} {count}, {more} {o} {q}")
+}

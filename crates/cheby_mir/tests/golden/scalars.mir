@@ -532,9 +532,7 @@ bb0:
   _37: value = call app::ne_options(borrow const ctor None, borrow const ctor None) ; unwind bb1
   _38: bool = unbox bool _37
   drop _37
-  _39: value = const str#1
-  _40: value = const str#2
-  _41: value = call app::lt_strings(_39, _40) ; unwind bb1
+  _41: value = call app::lt_strings(const str#1, const str#2) ; unwind bb1
   _42: bool = unbox bool _41
   drop _41
   _43: value = call app::money() ; unwind bb1
@@ -551,9 +549,7 @@ bb0:
   drop _48
   _50: bool = unbox bool _49
   drop _49
-  _51: value = const str#1
-  _52: value = const str#2
-  _53: value = call app::concat(_51, _52) ; unwind bb1
+  _53: value = call app::concat(const str#1, const str#2) ; unwind bb1
   drop _53
   _54: value = call app::money() ; unwind bb1
   _55: value = call app::money() ; unwind bb8

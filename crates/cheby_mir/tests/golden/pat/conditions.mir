@@ -28,19 +28,16 @@ bb0:
   _1: bool = compare lt int _0, const int 0
   branch _1, bb1, bb2
 bb1:
-  _2: value = const str#1
-  goto bb3(_2)
+  goto bb3(const str#1)
 bb2:
   _4: bool = compare eq int _0, const int 0
   branch _4, bb4, bb5
 bb3(_3: value):
   return _3
 bb4:
-  _5: value = const str#2
-  goto bb3(_5)
+  goto bb3(const str#2)
 bb5:
-  _6: value = const str#3
-  goto bb3(_6)
+  goto bb3(const str#3)
 bb6:
   resume
 }

@@ -1,0 +1,99 @@
+//! Runtime benchmark of the collections group: `std::sorted_set` (D-664).
+//!
+//! Two sets are built from two sequences of pseudo-random numbers. The
+//! first is searched for a third sequence, and half of its first
+//! sequence is removed from it. Then the two sets are intersected,
+//! subtracted and joined, and the union is folded in order. Only the loop
+//! holds a set while it changes, and the union is taken last, so each
+//! insert and remove can rebuild its path in place. The number of
+//! elements per set is the first program argument, and `main` prints a
+//! checksum that `bench/baselines` computes too.
+
+import std::env
+import std::int
+import std::io
+import std::sorted_set
+import std::sorted_set::{SortedSet}
+
+/// The number of elements per set when no argument is given.
+const default_size: Int = 300_000
+
+/// Elements are drawn below this bound.
+const key_space: Int = 1_000_000
+
+/// Keeps the checksum small.
+const modulus: Int = 1_000_000_007
+
+fn main() {
+  let n = size(env::args())
+  let first = build(sorted_set::new(), n, 42)
+  let second = build(sorted_set::new(), n, 7)
+  let hits = search(first, n, 99, 0)
+  let thinned = thin(first, n / 2, 42)
+  let both = sorted_set::intersection(thinned, second)
+  let only = sorted_set::difference(thinned, second)
+  let subset = case sorted_set::is_subset(both, second) {
+    True => 1
+    False => 0
+  }
+  let joined = sorted_set::union(thinned, second)
+  let folded = sorted_set::fold(joined, 0, fn(total, item) { (total * 31 + item) % modulus })
+  let sizes = mix(mix(mix(hits, sorted_set::size(both)), sorted_set::size(only)), subset)
+  let checksum = mix(mix(sizes, sorted_set::size(joined)), folded)
+  io::println("size: {n}")
+  io::println("checksum: {checksum}")
+}
+
+/// The size from the first program argument, or `default_size`.
+fn size(args: List<String>) -> Int {
+  case args {
+    [] => default_size
+    [first, ..] => {
+      let assert Ok(n) = int::parse(first)
+      n
+    }
+  }
+}
+
+/// The pseudo-random number after `seed`, from a linear congruential
+/// generator.
+fn next(seed: Int) -> Int {
+  (seed * 1_103_515_245 + 12_345) % 2_147_483_648
+}
+
+/// Adds `n` to the checksum `total`.
+fn mix(total: Int, n: Int) -> Int {
+  (total * 31 + n) % modulus
+}
+
+/// `s` with `count` elements of the sequence from `seed`.
+fn build(s: SortedSet<Int>, count: Int, seed: Int) -> SortedSet<Int> {
+  case count {
+    0 => s
+    _ => build(sorted_set::insert(s, seed % key_space), count - 1, next(seed))
+  }
+}
+
+/// Adds to `found` the number of the `count` elements of the sequence
+/// from `seed` that `s` contains.
+fn search(s: SortedSet<Int>, count: Int, seed: Int, found: Int) -> Int {
+  case count {
+    0 => found
+    _ => {
+      let hit = case sorted_set::contains(s, seed % key_space) {
+        True => 1
+        False => 0
+      }
+      search(s, count - 1, next(seed), found + hit)
+    }
+  }
+}
+
+/// `s` without `count` elements: every other element of the sequence from
+/// `seed`.
+fn thin(s: SortedSet<Int>, count: Int, seed: Int) -> SortedSet<Int> {
+  case count {
+    0 => s
+    _ => thin(sorted_set::remove(s, seed % key_space), count - 1, next(next(seed)))
+  }
+}

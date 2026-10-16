@@ -1,0 +1,19 @@
+// @mode: run-pass
+// @milestone: M2
+// @decisions: D-717, D-170, D-716
+// @flags: --reuse-report
+//! A record update whose base is a constant never reuses it: a constant's
+//! value is static and never unique (D-716). 019's
+//! `Policy { ..save_policy, backoff_ms: 1 }` gets this line. The
+//! constant's own initializer builds its value with nothing to reuse.
+
+import std::io
+
+type Policy { max_restarts: Int, backoff_ms: Int }
+
+const save_policy: Policy = Policy { max_restarts: 2, backoff_ms: 100 }
+
+fn main() {
+  let quick = Policy { ..save_policy, backoff_ms: 1 }
+  io::println("{quick.max_restarts} restarts, {quick.backoff_ms} ms apart")
+}

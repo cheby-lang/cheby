@@ -13,6 +13,7 @@ baseline's.
 | `<group>/<name>/`  | One benchmark: a Cheby package with `cheby.toml` and `src/`   |
 | `rc/`              | The RC group: reference counting and in-place updates (D-718) |
 | `fiber/`           | The fiber group: fibers, scopes and channels (M2)             |
+| `collections/`     | The collections group: the seven Cheby collections (D-664)    |
 | `baseline-m1.json` | M1's results for the RC group, the committed reference        |
 
 The RC group has five benchmarks:
@@ -34,6 +35,26 @@ ones D-702's plan names, so some run for less than half a second:
 | `ping_pong`    | 1,000,000 messages between two fibers over two channels of capacity 0            |
 | `sieve`        | the concurrent prime sieve of `005_prime_sieve`, to 2,000 primes                 |
 | `buffered_4x4` | 4,000,000 messages from four producers to four consumers over a buffered channel |
+
+The collections group has one benchmark per collection that std writes in Cheby with no runtime
+kernel (D-336). Each one is named after its module, keeps the collection held by nothing but the
+loop while it changes, so Perceus can rebuild paths in place, and has Rust baselines (below):
+
+| Benchmark          | Default   | What it does                                                                                      |
+| ------------------ | --------- | ------------------------------------------------------------------------------------------------- |
+| `sorted_map`       | 600,000   | inserts, lookups, every other key removed, `filter`, `range` and `fold`                           |
+| `sorted_set`       | 300,000   | two sets built, one searched and thinned, then `intersection`, `difference`, `is_subset`, `union` |
+| `sorted_multimap`  | 800,000   | values under about n/8 keys, lookups, keys removed, `to_pairs` folded                             |
+| `ordered_map`      | 450,000   | inserts, re-inserts that keep places, removes and re-inserts that move keys last (D-340), lookups |
+| `ordered_set`      | 700,000   | inserts with repeats, removes, lookups, `filter`, `first`, `last` and the order folded            |
+| `ordered_multimap` | 1,100,000 | as `sorted_multimap`, plus removed keys inserted again at the end                                 |
+| `multimap`         | 1,600,000 | as `sorted_multimap`, folded through `to_sorted_list`                                             |
+
+The defaults run about one second each under `CHEBY_RC=naive` on a release build. D-664 reads the
+group twice from one binary: under `CHEBY_RC=naive` (no borrowing, reuse or fusion; D-808), which
+stands for M1's naive counting since M1's binary has none of these modules, and under Perceus. The
+naive reading becomes `baseline-collections.json`, the reference for M6's second measurement
+(D-336; GAP(collections-naive-reading)).
 
 A group is a directory of `bench/runtime`, and its benchmarks are the subdirectories that hold a
 `cheby.toml`. A new group or benchmark needs no change to the command.
@@ -59,6 +80,8 @@ cargo xtask bench-run --group rc --threads 1 --runs 5 \
   --baseline bench/runtime/baseline-m1.json --json out.json
 cargo xtask bench-run --cheby path/to/cheby --commit 587f8a9   # another binary
 cargo xtask bench-run --env CHEBY_RC=naive                     # a variable for every run
+cargo xtask bench-run --group collections --rust               # with the Rust baselines
+cargo xtask bench-run --group collections --rust-bin path/to/cheby_bench_baselines
 ```
 
 A fiber benchmark must print the same checksum at every thread count. To check it, compare the run
@@ -94,6 +117,8 @@ noise, show in the group (release `cheby`, macOS arm64, quiet machine, checkpoin
 | `--commit SHA`    | The commit the measured binary was built from, for the metadata                             |
 | `--env K=V`       | Sets a variable for every run (repeatable)                                                  |
 | `--json OUT`      | Writes the results as JSON                                                                  |
+| `--rust`          | Also times the Rust baselines of the collections group, built with `--release`              |
+| `--rust-bin PATH` | Times the baselines with this prebuilt `cheby_bench_baselines` (implies `--rust`), no cargo |
 
 For each benchmark the command runs `cheby run` in its directory `--runs` times and times each run
 from spawn to exit, compilation included. It reports the median, the minimum and the maximum. Then it
@@ -111,6 +136,46 @@ baseline's.
 build rows also show `code KiB`, the machine code the JIT defined, and `RC ops`, the `dup` and `drop`
 statements of every MIR unit. It takes `--shapes 10k,100k,1m`, `--cheby PATH`, `--env K=V` and
 `--json OUT` as well.
+
+## The Rust baselines
+
+`bench/baselines` (the workspace crate `cheby_bench_baselines`, no dependencies) does the work of
+each collections benchmark in Rust. `cheby_bench_baselines <program> <variant> [n]` prints the same
+`size:` and `checksum:` lines as the Cheby program, and `n` defaults to the program's default size.
+Every variant computes the same checksum as the Cheby program; the crate's tests check small sizes,
+and `bench-run` checks the measured ones. `cheby_bench_baselines --list` prints one
+`<program> <variant>` line per baseline.
+
+| Variant      | Programs             | What it is                                                          |
+| ------------ | -------------------- | ------------------------------------------------------------------- |
+| `rc`         | all seven            | the tree of `std/sorted_map.cheby` with `Rc` nodes, persistent      |
+| `btree`      | the three `sorted_`  | std's `BTreeMap` and `BTreeSet`, mutable                            |
+| `hash-btree` | the three `ordered_` | a `HashMap` index of places and values, a `BTreeMap` order, mutable |
+| `hash-vec`   | `multimap`           | a `HashMap<K, Vec<V>>`, mutable                                     |
+
+`rc` is the weight-balanced tree step for step (Adams' tree, `delta` 3, `ratio` 2): each update
+copies the path it changes and shares the rest, as a runtime kernel would, since a collection stays
+persistent (D-039). Where std uses the runtime's `Map` (the ordered modules' index and `multimap`),
+`rc` uses the same tree in its place. Its lists of values are `Rc<Vec<_>>`, copied when they grow,
+as a persistent list would be. The hash maps of the mutable variants use a hasher with fixed keys,
+so a run's work does not depend on a random seed.
+
+With `--rust`, `bench-run` builds the crate with `cargo build --release` before the first run, and
+after each benchmark of the collections group times each of its variants `--runs` times, from spawn
+to exit, at the size the Cheby program printed. The rows are named `<name>@rust-<variant>` and carry
+the same median, minimum and maximum; they have no counters, since only `cheby` prints them. A
+variant must print the Cheby program's size and checksum, or the command fails after the tables.
+Below the main table, a second table gives each factor: the Cheby median over the Rust median.
+
+`--rust-bin PATH` uses a prebuilt `cheby_bench_baselines` instead and never runs cargo for it, so a
+quiet measurement builds nothing in its window:
+
+```sh
+cargo build --release -p cheby_cli -p cheby_bench_baselines
+cp target/release/cheby target/release/cheby_bench_baselines bin/
+cargo xtask bench-run --group collections --cheby bin/cheby --rust-bin bin/cheby_bench_baselines
+cargo xtask bench-run --group collections --cheby bin/cheby --env CHEBY_RC=naive
+```
 
 ## JSON
 
@@ -159,6 +224,9 @@ statements of every MIR unit. It takes `--shapes 10k,100k,1m`, `--cheby PATH`, `
 - `env` holds the `--env` variables and `CHEBY_THREADS` of `--threads`.
 - `n` is the size the program printed, or `null` if it printed none.
 - `checksum` is a string, as the program printed it.
+- With `--rust`, `meta` also holds `rust_baselines`, the path of the `cheby_bench_baselines` that
+  ran, and each baseline is a result named `<name>@rust-<variant>` in its benchmark's group, with
+  `stats` empty.
 
 ## How `baseline-m1.json` was recorded
 

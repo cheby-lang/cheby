@@ -22,30 +22,26 @@ bb0:
   _12: float = unbox float _11
   drop _11
   _13: value = field _9.0 of dyn
-  dup _13
   _14: value = field _9.1 of dyn
-  dup _14
   _15: value = field _13.0 of dict/2+1
   dup _15
-  drop _13
-  _16: value = alloc dict/0+0(_15) ; unwind bb8
+  _16: value = alloc dict/0+0(_15) ; unwind bb7
+  dup _14
   _17: value = alloc dyn(_16, _14) ; unwind bb9
   _18: value = field _9.0 of dyn
-  dup _18
   _19: value = field _9.1 of dyn
-  dup _19
   _20: value = field _18.3 of dict/2+1
   dup _20
-  drop _18
+  dup _19
   _21: value = alloc dyn(_20, _19) ; unwind bb12
   _22: value = call app::boxed(const static#12, _9) ; unwind bb14
   _23: bool = call_runtime equal(borrow _17, borrow _22, borrow const str#1) ; unwind bb15
   drop _17
   drop _22
   _24: value = field _21.0 of dyn
-  dup _24
   _25: value = field _21.1 of dyn
   dup _25
+  dup _24
   drop _21
   _26: value = field _24.1 of dict/1+0
   dup _26
@@ -71,14 +67,14 @@ bb6:
   drop _9
   goto bb1()
 bb7:
-  drop _14
+  drop _15
   goto bb6()
 bb8:
-  drop _15
-  goto bb7()
+  drop _14
+  goto bb6()
 bb9:
   drop _16
-  goto bb7()
+  goto bb8()
 bb10:
   drop _17
   goto bb6()
@@ -104,9 +100,9 @@ fn app::label(_0: value) -> value check str#0 {
   str#0 = "src/main.cheby:13:4"
 bb0:
   _1: value = field _0.0 of dyn
-  dup _1
   _2: value = field _0.1 of dyn
   dup _2
+  dup _1
   drop _0
   _3: value = field _1.1 of dict/2+1
   dup _3
