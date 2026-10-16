@@ -1,0 +1,14 @@
+warning[W0002]: unused binding `unused`
+  --> tests/ui/09-memory-model/reuse_report/sorted_after_warnings.cheby:30:7
+   |
+30 |   let unused = 1
+   |       ^^^^^^ never used
+   |
+   = help: if this is intentional, start the name with an underscore: `_unused`
+
+reuse: tests/ui/09-memory-model/reuse_report/sorted_after_warnings.cheby:20:14: building `Alpha` reuses `mark` when it is unique
+reuse: tests/ui/09-memory-model/reuse_report/sorted_after_warnings.cheby:20:14: building `Zed` reuses `mark` when it is unique
+reuse: tests/ui/09-memory-model/reuse_report/sorted_after_warnings.cheby:25:14: building `Some` allocates: no value of the same size dies before it
+reuse: tests/ui/09-memory-model/reuse_report/sorted_after_warnings.cheby:25:19: building a tuple of 2 allocates: no value of the same size dies before it
+reuse: tests/ui/09-memory-model/reuse_report/sorted_after_warnings.cheby:31:20: building `Zed` allocates: no value of the same size dies before it
+running

@@ -1,6 +1,6 @@
 // @mode: run-pass
 // @milestone: M2
-// @decisions: D-717, D-170, D-525, D-205
+// @decisions: D-717, D-170, D-525, D-205, D-852
 // @flags: --reuse-report
 //! A value that reaches a kernel's call through a `case` join holds the
 //! kernel's first argument when every arm gives it a holder. The kernel

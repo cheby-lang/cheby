@@ -1,0 +1,61 @@
+// @mode: run-pass
+// @milestone: M2
+// @decisions: D-838, D-839, D-717
+// @flags: --reuse-report
+//! Reuse writes a new object over a dying one of exactly the same size,
+//! whatever its constructor or type. A `Word` becomes a `Count` of two
+//! fields, or a tuple of two, in the `Word`'s memory. A `Count` of two
+//! fields never becomes a `Total` of one, which is smaller, nor a `Span`
+//! of three, which is larger: those allocate. `Empty` has no fields, so
+//! building it allocates nothing and gets no line.
+
+import std::io
+import std::string
+
+type Token {
+  Word(String, Int),
+  Count(Int, Int),
+  Total(Int),
+  Span(Int, Int, Int),
+  Empty,
+}
+
+fn step(token: Token) -> Token {
+  case token {
+    Word(text, at) => Count(string::length(text), at)
+    Count(n, at) => case {
+      n > at => Total(n)
+      n < at => Span(n, at, n + at)
+      _ => Empty
+    }
+    Total(n) => Total(n + 1)
+    Span(_, _, _) => Empty
+    Empty => Empty
+  }
+}
+
+fn split(token: Token) -> (String, Int) {
+  case token {
+    Word(text, at) => (text, at)
+    _ => ("", 0)
+  }
+}
+
+fn show(token: Token) -> String {
+  case token {
+    Word(text, at) => "Word({text}, {at})"
+    Count(n, at) => "Count({n}, {at})"
+    Total(n) => "Total({n})"
+    Span(a, b, c) => "Span({a}, {b}, {c})"
+    Empty => "Empty"
+  }
+}
+
+fn main() {
+  let counted = step(Word("cheby", 1))
+  let a = show(counted)
+  let b = show(step(counted))
+  let c = show(step(Count(1, 2)))
+  let (text, at) = split(Word("tuple", 3))
+  io::println("{a} {b} {c} {text} {at}")
+}

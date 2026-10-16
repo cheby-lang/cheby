@@ -1,0 +1,8 @@
+reuse: tests/ui/09-memory-model/reuse_report/nearest_source.cheby:18:3: building `Pair` reuses `b` when it is unique
+reuse: tests/ui/09-memory-model/reuse_report/nearest_source.cheby:24:15: building `Pair` reuses `b` when it is unique
+reuse: tests/ui/09-memory-model/reuse_report/nearest_source.cheby:25:16: building `Pair` reuses `a` when it is unique
+reuse: tests/ui/09-memory-model/reuse_report/nearest_source.cheby:26:3: building a tuple of 3 allocates: no value of the same size dies before it
+reuse: tests/ui/09-memory-model/reuse_report/nearest_source.cheby:30:15: building `Pair` allocates: no value of the same size dies before it
+reuse: tests/ui/09-memory-model/reuse_report/nearest_source.cheby:30:43: building `Pair` allocates: no value of the same size dies before it
+reuse: tests/ui/09-memory-model/reuse_report/nearest_source.cheby:31:23: building `Pair` allocates: no value of the same size dies before it
+reuse: tests/ui/09-memory-model/reuse_report/nearest_source.cheby:31:51: building `Pair` allocates: no value of the same size dies before it

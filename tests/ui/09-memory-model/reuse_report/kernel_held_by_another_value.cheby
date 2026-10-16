@@ -1,6 +1,6 @@
 // @mode: run-pass
 // @milestone: M2
-// @decisions: D-717, D-170, D-525
+// @decisions: D-717, D-170, D-525, D-852
 // @flags: --reuse-report
 //! A kernel's first argument gets no kernel line when another value still
 //! holds it at the call, so that the kernel copies every time: a list

@@ -1,6 +1,6 @@
 // @mode: run-pass
 // @milestone: M2
-// @decisions: D-717, D-170, D-716, D-525, D-205
+// @decisions: D-717, D-170, D-716, D-525, D-205, D-852
 // @flags: --reuse-report
 //! A kernel's first argument that another live value holds gets no kernel
 //! line, because the kernel copies it every time. Here that value is a

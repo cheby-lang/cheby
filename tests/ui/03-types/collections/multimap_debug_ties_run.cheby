@@ -1,0 +1,45 @@
+// @mode: run-pass
+// @milestone: M2
+// @decisions: D-847
+//! Keys that differ but print the same text are ordered by the text of their
+//! pairs, so the hashed map's per-process order never shows in a
+//! `Multimap`'s debug text (§3.13). The keys are `dyn` values that hold 7 at
+//! nine different integer types: they are nine keys, since values of
+//! different types are never equal, and each prints as `7`. A key's own
+//! pairs stay together and in insertion order, so `(7, "z"), (7, "b")` sorts
+//! by its first pair and is not split or sorted.
+
+import std::io
+import std::list
+import std::multimap
+
+interface Any
+
+fn main() {
+  let a: I8 = 7
+  let b: I16 = 7
+  let c: I32 = 7
+  let d: I64 = 7
+  let e: U8 = 7
+  let f: U16 = 7
+  let g: U32 = 7
+  let h: U64 = 7
+  let pairs: List<(dyn Any, String)> = [
+    (h, "c"),
+    (7, "z"),
+    (a, "g"),
+    (e, "a"),
+    (c, "h"),
+    (7, "b"),
+    (g, "e"),
+    (b, "d"),
+    (f, "i"),
+    (d, "f"),
+  ]
+  let forward = multimap::from_list(pairs)
+  let backward = multimap::from_list(list::reverse(pairs))
+  let keys = multimap::size(forward)
+  io::println("keys: {keys}")
+  io::println("{forward:?}")
+  io::println("{backward:?}")
+}

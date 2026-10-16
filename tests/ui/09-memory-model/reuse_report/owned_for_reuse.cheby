@@ -1,0 +1,30 @@
+// @mode: run-pass
+// @milestone: M2
+// @decisions: D-841, D-806, D-717
+// @flags: --reuse-report
+//! A parameter that a function only reads, here through fields that are
+//! not counted, would be borrowed from its caller (D-806). One whose
+//! release a value built from it would reuse stays owned instead, so
+//! `moved` updates `p` in place when it is unique. `swapped` reads `p`
+//! again after building a `Point`, so no release of `p` pairs with it,
+//! and `p` stays borrowed.
+
+import std::io
+
+type Point { x: Int, y: Int }
+
+fn moved(p: Point) -> Point {
+  Point { ..p, x: p.x + 1 }
+}
+
+fn swapped(p: Point) -> (Point, Int, Int) {
+  let q = Point { x: p.y, y: p.x }
+  (q, p.x, p.y)
+}
+
+fn main() {
+  let start = Point { x: 0, y: 5 }
+  let (turned, x, y) = swapped(start)
+  let next = moved(start)
+  io::println("({next.x}, {next.y}) ({turned.x}, {turned.y}) {x} {y}")
+}

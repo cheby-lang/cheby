@@ -1,6 +1,6 @@
 // @mode: run-pass
 // @milestone: M2
-// @decisions: D-332, D-342, D-344, D-382, D-587, D-664
+// @decisions: D-332, D-342, D-344, D-382, D-587, D-664, D-847
 //! A `Multimap` built in two orders that keep each key's values in the same
 //! order prints the same debug text: the keys sorted by their debug text as
 //! bytes, so `10` comes before `9`, and the values of each key in insertion

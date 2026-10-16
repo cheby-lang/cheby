@@ -1,5 +1,5 @@
 // @mode: run-pass
-// @decisions: D-067, D-525, D-577
+// @decisions: D-067, D-525, D-577, D-849
 //! `+` on a record's string field that stays shared copies the text at
 //! every step. Each copy is sized by the text's length, so 200 one-byte
 //! appends end with 200 bytes and finish (doubling the old capacity at

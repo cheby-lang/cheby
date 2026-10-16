@@ -1,0 +1,37 @@
+// @mode: run-pass
+// @milestone: M2
+// @decisions: D-852, D-717
+// @flags: --reuse-report
+//! The report comes after the warnings and before the program writes
+//! anything, and its lines are sorted by place, then by text, not built in
+//! the order the code is. The update of `moved` builds `Zed` or `Alpha`,
+//! tested in that order, and its `Alpha` line comes first. `wrapped`
+//! builds the inner tuple before the `Some` that holds it, and the `Some`
+//! line comes first, since it starts earlier on the line.
+
+import std::io
+
+type Mark {
+  Zed { label: String, at: Int },
+  Alpha { label: String, at: Int, width: Int },
+}
+
+fn moved(mark: Mark) -> Mark {
+  let next = Mark { ..mark, at: mark.at + 1 }
+  next
+}
+
+fn wrapped(n: Int) -> Option<(Int, Int)> {
+  let held = Some((n, n))
+  held
+}
+
+fn main() {
+  let unused = 1
+  let mark = moved(Zed { label: "z", at: 0 })
+  io::eprintln("running")
+  case wrapped(mark.at) {
+    Some((a, b)) => io::println("{mark.label} {a} {b}")
+    None => io::println("none")
+  }
+}

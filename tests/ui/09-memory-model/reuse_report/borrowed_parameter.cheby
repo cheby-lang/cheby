@@ -1,6 +1,6 @@
 // @mode: run-pass
 // @milestone: M2
-// @decisions: D-717, D-170, D-716
+// @decisions: D-717, D-170, D-716, D-852
 // @flags: --reuse-report
 //! A function that only reads a parameter borrows it from its caller
 //! (D-715), so a value built from its fields cannot reuse it: the caller

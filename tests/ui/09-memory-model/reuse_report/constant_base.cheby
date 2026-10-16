@@ -1,6 +1,6 @@
 // @mode: run-pass
 // @milestone: M2
-// @decisions: D-717, D-170, D-716
+// @decisions: D-717, D-170, D-716, D-839, D-852
 // @flags: --reuse-report
 //! A record update whose base is a constant never reuses it: a constant's
 //! value is static and never unique (D-716). 019's

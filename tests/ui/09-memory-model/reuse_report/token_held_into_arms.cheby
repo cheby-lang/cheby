@@ -1,0 +1,52 @@
+// @mode: run-pass
+// @milestone: M2
+// @decisions: D-839, D-717
+// @flags: --reuse-report
+//! Counting releases a matched node in the arm that reads its fields,
+//! before the inner `case` branches, while the nodes that replace it are
+//! built in that `case`'s arms. The released node's memory is held into
+//! the arms, and each arm that builds a `Node` reuses `tree`, even after
+//! a call. An arm that builds nothing releases the held memory.
+
+import std::io
+
+type Tree {
+  Leaf,
+  Node(Tree, Int, Tree),
+}
+
+fn insert(tree: Tree, key: Int) -> Tree {
+  case tree {
+    Leaf => Node(Leaf, key, Leaf)
+    Node(left, k, right) => case {
+      key < k => Node(insert(left, key), k, right)
+      key > k => Node(left, k, insert(right, key))
+      _ => Node(left, key, right)
+    }
+  }
+}
+
+fn cut(tree: Tree, key: Int) -> Tree {
+  case tree {
+    Leaf => Leaf
+    Node(left, k, right) => case {
+      key < k => Node(cut(left, key), k, right)
+      key > k => Node(left, k, cut(right, key))
+      _ => left
+    }
+  }
+}
+
+fn keys(tree: Tree) -> String {
+  case tree {
+    Leaf => ""
+    Node(left, k, right) => keys(left) + " {k}" + keys(right)
+  }
+}
+
+fn main() {
+  let tree = insert(insert(insert(insert(Leaf, 4), 2), 6), 5)
+  let before = keys(tree)
+  let after = keys(cut(tree, 6))
+  io::println("{before} |{after}")
+}

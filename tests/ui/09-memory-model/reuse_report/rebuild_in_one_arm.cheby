@@ -1,6 +1,6 @@
 // @mode: run-pass
 // @milestone: M2
-// @decisions: D-717, D-170, D-716
+// @decisions: D-717, D-170, D-716, D-839, D-852
 // @flags: --reuse-report
 //! Matching a value and building one of the same constructor in the same
 //! arm reuses it when it is unique (§9.3): each arm of `insert` that

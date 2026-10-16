@@ -1,6 +1,6 @@
 // @mode: run-pass
 // @milestone: M2
-// @decisions: D-717, D-170, D-716
+// @decisions: D-717, D-170, D-716, D-852
 // @flags: --reuse-report
 //! A record update whose base is used again afterwards cannot reuse it:
 //! the old value must stay as it is, so the update allocates, and the

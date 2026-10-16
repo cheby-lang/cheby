@@ -1,0 +1,33 @@
+// @mode: run-pass
+// @milestone: M2
+// @decisions: D-839, D-717
+// @flags: --reuse-report
+//! In one block, each new object reuses the nearest value of its size
+//! released before it that no other object has taken. `b` is used last,
+//! so it is released last, and the first `Pair` built after it reuses
+//! `b`, the second `a`. In `one`, only one `Pair` is built, and it
+//! takes `b`, not `a`.
+
+import std::io
+
+type Pair { left: Int, right: Int }
+
+fn one(a: Pair, b: Pair) -> Pair {
+  let x = a.left + a.right
+  let y = b.left + b.right
+  Pair { left: x, right: y }
+}
+
+fn two(a: Pair, b: Pair) -> (Pair, Pair, Int) {
+  let x = a.left + a.right
+  let y = b.left + b.right
+  let first = Pair { left: x, right: y }
+  let second = Pair { left: y, right: x }
+  (first, second, x)
+}
+
+fn main() {
+  let p = one(Pair { left: 1, right: 2 }, Pair { left: 3, right: 4 })
+  let (q, r, s) = two(Pair { left: 1, right: 2 }, Pair { left: 3, right: 4 })
+  io::println("{p.left} {p.right} {q.left} {r.left} {s}")
+}

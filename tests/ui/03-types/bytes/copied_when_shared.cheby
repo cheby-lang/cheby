@@ -1,0 +1,28 @@
+// @mode: run-pass
+// @decisions: D-849
+//! A `Bytes` that stays shared, because every version is kept in a list, is
+//! copied at every push. Each copy is sized by the value's length, not by
+//! its old capacity, so 200 one-byte pushes end with 200 bytes and finish.
+//! Doubling the old capacity at every copy would run out of memory after
+//! about 47 pushes.
+
+import std::bytes
+import std::bytes::{Bytes}
+import std::io
+import std::list
+
+fn grow(kept: List<Bytes>, data: Bytes, left: Int) -> List<Bytes> {
+  case left {
+    0 => list::push(kept, data)
+    _ => grow(list::push(kept, data), bytes::push(data, 7), left - 1)
+  }
+}
+
+fn main() {
+  let versions = grow([], bytes::new(), 200)
+  let count = list::length(versions)
+  let lengths = list::map(versions, bytes::length)
+  let total = list::fold(lengths, 0, fn(sum, n) { sum + n })
+  let last = list::last(lengths)
+  io::println("{count} {last:?} {total}")
+}

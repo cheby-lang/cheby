@@ -1,6 +1,6 @@
 // @mode: run-pass
 // @milestone: M2
-// @decisions: D-717, D-170, D-716, D-525
+// @decisions: D-717, D-170, D-716, D-525, D-852
 // @flags: --reuse-report
 //! A call of a std kernel that updates its first argument in place gets a
 //! line when that argument is at its last use, as 013's
