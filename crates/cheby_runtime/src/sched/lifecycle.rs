@@ -5,8 +5,10 @@
 //! # Groups (D-799)
 //!
 //! A [`DetachedGroup`] holds the detached fibers of one root: `main`'s
-//! (`run_main`), one test's (`cheby test`, D-782), later one REPL
-//! session's. A root runs in the group its host gives
+//! (`run_main`), one test's (`cheby test`, D-782), or a REPL session's,
+//! whose entries all run in its current group until a teardown at
+//! `:reload` opens a fresh one (D-712, GAP(repl-reload-teardown)). A root
+//! runs in the group its host gives
 //! ([`Runtime::run_root_in`]; [`Runtime::run_root`] uses the runtime's own
 //! default group), and every fiber inherits its spawner's group, as it
 //! inherits its domain (D-691), so a detached fiber spawned by a detached
@@ -39,9 +41,10 @@
 //! its cleanup pads, and every scope it has open passes the cancellation
 //! through (D-667), so none returns `Err` to user code. A detached spawn
 //! into a closing group starts cancelled and never calls its function
-//! (D-800). A fiber blocked inline in a system
-//! call (standard input, file IO, until I1's blocking pool) cannot be
-//! stopped: the teardown skips it and counts it (D-786), and with it the
+//! (D-800). A fiber blocked in a system call (standard input, file IO,
+//! `@blocking`), waiting on the blocking pool with D-786's mark set or
+//! running the call inline, cannot be stopped: the teardown skips it and
+//! counts it (D-786, GAP(pool-in-the-survey)), and with it the
 //! fibers of the same member's subtree that wait for it, such as a
 //! detached fiber waiting in a scope's close for a scoped child blocked in
 //! `io::read_line`. It looks for that state by surveying each member's
@@ -69,6 +72,7 @@ use std::time::{Duration, Instant};
 use parking_lot::{Condvar, Mutex, MutexGuard};
 
 use super::{FiberRef, NO_STATUS, Runtime, Shared};
+use crate::abi::Word;
 use crate::alloc::Domain;
 use crate::capture::Capture;
 use crate::entry::{EntryConfig, EntryFn, EntryOutcome, RuntimeError};
@@ -81,8 +85,8 @@ use crate::panic::fatal;
 /// not signal it.
 const TEARDOWN_POLL: Duration = Duration::from_millis(5);
 
-/// The detached fibers of one root: `main`, one test, later one REPL
-/// session (D-799).
+/// The detached fibers of one root: `main`, one test, or a REPL session
+/// between two teardowns (D-799, D-712).
 pub struct DetachedGroup {
     /// The members and the closing flag: a leaf lock, taken with no scope,
     /// channel or fiber lock held.
@@ -505,16 +509,17 @@ fn survey(base: &Arc<ScopeState>, found: &mut Survey) {
     }
 }
 
-/// What a teardown waited for. `skipped`: fibers blocked inline in a system
-/// call that it did not wait for (D-786). `halted`: a halt (a termination)
+/// What a teardown waited for. `skipped`: fibers blocked in a system call
+/// (on the blocking pool or inline) that it did not wait for (D-786,
+/// GAP(pool-in-the-survey)). `halted`: a halt (a termination)
 /// started during the teardown, which then stopped waiting; the host
 /// completes the halt.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TeardownReport {
     /// The detached fibers that left the group while the teardown ran.
     pub waited: usize,
-    /// The fibers blocked inline in a system call, left in the group
-    /// (D-786).
+    /// The fibers blocked in a system call (on the blocking pool or
+    /// inline), left in the group (D-786).
     pub skipped: usize,
     /// Whether a halt started during the teardown.
     pub halted: bool,
@@ -668,6 +673,24 @@ impl Runtime {
         } else {
             None
         }
+    }
+
+    /// Whether the channel of `receiver`, a live `Receiver` handle, has a
+    /// wait node linked in either of its queues. A diagnostic for tests,
+    /// never part of a program's behavior: after a REPL teardown, no node
+    /// of a cancelled fiber stays linked in a channel that a session value
+    /// still reaches (D-712, GAP(repl-asan-with-h1)). The reader is
+    /// `fiber_ops::channel`'s; this is its public path.
+    ///
+    /// # Safety
+    ///
+    /// `receiver` is a live `Receiver` handle; the caller holds a reference
+    /// to it for the call.
+    #[doc(hidden)]
+    #[must_use]
+    pub unsafe fn channel_has_waiters(receiver: Word) -> bool {
+        // SAFETY: forwarded from the caller.
+        unsafe { crate::fiber_ops::channel::channel_has_waiters(receiver) }
     }
 
     /// The state every thread of the runtime shares, for `run_main`, which

@@ -156,6 +156,46 @@ fn a_same_signature_redefinition_repoints_the_slot() {
     assert_eq!(run_const(&jit, run), EntryOutcome::Returned(false_word()));
 }
 
+/// D-712, gate 3's CONC-W3-1: a batch compiled unpublished leaves the
+/// slot its redefinition takes over on the old code, and names it as
+/// pending, until it is published; reverting drops what is still pending.
+#[test]
+fn an_unpublished_redefinition_keeps_the_old_code_until_published() {
+    let (mut jit, f, _, run) = first_two_entries();
+    let slot = jit.slot(f, &cheby_sig(&[])).unwrap();
+    assert_eq!(jit.slot_of(f), Some(slot));
+    let redefine = |jit: &mut Jit, entry: u32, generation: u32, ctor: DefId| {
+        let new = def(entry, 0);
+        jit.set_session_names([(new, session(entry, "f", generation, Some(f)))]);
+        jit.compile_unpublished(&[entry_unit(
+            entry,
+            vec![returns(new, &[], ctor)],
+            vec![(new, cheby_sig(&[]))],
+            vec![(new, &format!("<repl:{entry}>"), "f")],
+        )])
+        .unwrap();
+        new
+    };
+    let f2 = redefine(&mut jit, 3, 1, builtin::FALSE);
+    assert_eq!(jit.pending_repoints(), vec![(f2, slot)]);
+    assert_eq!(jit.slot_of(f2), Some(slot));
+    // Not published yet: the caller still reaches the old code.
+    assert_eq!(run_const(&jit, run), EntryOutcome::Returned(true_word()));
+    jit.publish_repoints(&[slot]).unwrap();
+    assert_eq!(jit.pending_repoints(), Vec::new());
+    assert_eq!(run_const(&jit, run), EntryOutcome::Returned(false_word()));
+    // Reverting puts the old code back.
+    jit.revert_repoints().unwrap();
+    assert_eq!(run_const(&jit, run), EntryOutcome::Returned(true_word()));
+    // Reverting a batch with a pending repoint drops it.
+    redefine(&mut jit, 4, 2, builtin::FALSE);
+    assert_eq!(jit.pending_repoints().len(), 1);
+    jit.revert_repoints().unwrap();
+    assert_eq!(jit.pending_repoints(), Vec::new());
+    jit.publish_all_repoints().unwrap();
+    assert_eq!(run_const(&jit, run), EntryOutcome::Returned(true_word()));
+}
+
 /// A redefinition with another signature gets its own slot `$r1`; the old
 /// caller keeps the old code, and a new caller reaches the new one.
 #[test]

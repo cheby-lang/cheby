@@ -1,0 +1,30 @@
+// @mode: run-pass
+// @command: test
+// @decisions: D-723
+// @milestone: M2
+//! Tests run at once, and each test's own output is written with its line,
+//! in source order, whatever order the tests finish in (§13.6). The first
+//! test waits on a timer before it prints, and the second prints at once,
+//! so the second finishes first; the first's output and line still come
+//! first, on both streams.
+
+import std::duration
+import std::io
+import std::selector
+
+fn pause(ms: Int) -> Nil {
+  selector::new()
+  |> selector::after(_, duration::milliseconds(ms), fn() { Nil })
+  |> selector::select
+}
+
+test "waits, then prints" {
+  pause(200)
+  io::println("the first test's output")
+  io::eprintln("the first test's error output")
+}
+
+test "prints at once" {
+  io::println("the second test's output")
+  io::eprintln("the second test's error output")
+}

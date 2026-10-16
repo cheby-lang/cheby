@@ -1048,17 +1048,20 @@ pub(super) fn until_cancelled(me: &ExecCtx) -> bool {
 /// depend on how far the walk has come, which would make it depend on the
 /// thread count.
 ///
-/// The root opens `s` with the members `m2`, which makes entry checks in a
-/// loop and holds the only `Sender` of `c`, and `o`, which opens `s2` with
-/// three members and then waits: `j1` joins `m2`, `j2` receives on `c`,
-/// and `j3` opens `c3` with a member `k` that receives on `c`, and closes
-/// `c3` as soon as its body returns. Then the root runs only the first step
-/// of `s`'s walk (`hooks::cancel_first_step`), so `s2` stays unvisited, as
-/// it is while the walk wakes `s`'s fibers: `m2` unwinds, which releases
-/// `c`'s `Sender` and fails `m2`. `j1` unwinds instead of panicking with
-/// `joined fiber failed`, `j2` and `k` unwind instead of returning
-/// `Err(Nil)`, and `j3`'s close of `c3` passes the cancellation through
-/// instead of returning. Only then does the root run the whole walk.
+/// The root opens `s` with the members `m2`, which tells the root it runs,
+/// then makes entry checks in a loop and holds the only `Sender` of `c`
+/// (without that report, the walk could reach `m2` before it starts, and
+/// it would end without running: review finding V5A-W3-1), and `o`, which
+/// opens `s2` with three members and then waits: `j1` joins `m2`, `j2`
+/// receives on `c`, and `j3` opens `c3` with a member `k` that receives on
+/// `c`, and closes `c3` as soon as its body returns. Then the root runs
+/// only the first step of `s`'s walk (`hooks::cancel_first_step`), so `s2`
+/// stays unvisited, as it is while the walk wakes `s`'s fibers: `m2`
+/// unwinds, which releases `c`'s `Sender` and fails `m2`. `j1` unwinds
+/// instead of panicking with `joined fiber failed`, `j2` and `k` unwind
+/// instead of returning `Err(Nil)`, and `j3`'s close of `c3` passes the
+/// cancellation through instead of returning. Only then does the root run
+/// the whole walk.
 #[test]
 #[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
 fn cancel_fibers_below_an_unvisited_scope_are_cancelled() {
@@ -1072,7 +1075,12 @@ fn cancel_fibers_below_an_unvisited_scope_are_cancelled() {
             let s = open(me);
             let s_state = state_of(s);
             let m2_notes = seen.clone();
-            let (m2, _) = spawn_job(me, s, &[dup(c_tx)], move |me, _| {
+            // `m2` reports that it runs before it loops: a walk that
+            // reaches a fiber before it starts ends it without calling its
+            // function (`fiber_main`), and the root's waits below do not
+            // need `m2` to have run (review finding V5A-W3-1).
+            let (m2, _) = spawn_job(me, s, &[dup(c_tx), dup(ready_tx)], move |me, words| {
+                drop_shape(send_step(me, words[1], values::nil()));
                 m2_notes.set("m2 delivered", until_cancelled(me));
                 0
             });
@@ -1088,10 +1096,10 @@ fn cancel_fibers_below_an_unvisited_scope_are_cancelled() {
                     0
                 },
             );
-            for name in ["ready 1", "ready 2", "ready 3"] {
+            for name in ["ready 1", "ready 2", "ready 3", "ready 4"] {
                 seen.set(name, step_shape(receive_step(me, ready_rx)));
             }
-            // `j1` is parked in `m2`'s cell, `j2` and `k` on `c`, whose
+            // `m2` runs its loop. `j1` is parked in `m2`'s cell, `j2` and `k` on `c`, whose
             // only `Sender` is `m2`'s once the root lets its own go.
             seen.set("j1 parked", wait_for_joiners(me, &m2_cell, 1));
             wait_for_waiters(me, c_tx, 0, 2);
@@ -1119,6 +1127,7 @@ fn cancel_fibers_below_an_unvisited_scope_are_cancelled() {
                 ("ready 1", "Ok(Nil)".to_owned()),
                 ("ready 2", "Ok(Nil)".to_owned()),
                 ("ready 3", "Ok(Nil)".to_owned()),
+                ("ready 4", "Ok(Nil)".to_owned()),
                 ("j1 parked", shown(true)),
                 ("m2 delivered", shown(true)),
                 ("j1 join", shown(Err::<(), _>(CANCEL))),

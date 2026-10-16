@@ -1,8 +1,9 @@
 //! REPL sessions (§13.5, G5, plan §8.3): the driver side of `cheby repl`.
 //!
 //! A [`Session`] holds the package's front end, the session's front-end
-//! state ([`ReplSession`]), one [`Jit`] for the whole session, and what it
-//! compiled and evaluated so far. [`Session::eval`] takes one entry:
+//! state ([`ReplSession`]), one [`Jit`] and one [`Runtime`] for the whole
+//! session (D-712, D-690), and what it compiled and evaluated so far.
+//! [`Session::eval`] takes one entry:
 //!
 //! 1. Its text becomes the source file `<repl:N>`. Declarations and
 //!    imports are parsed as a module; statements inside the wrapper
@@ -16,16 +17,20 @@
 //!    `cb$entry$repl$<N>`, and the thunks of new constants. Its items carry
 //!    their session names and generations (D-547, E4): a redefinition with
 //!    the same signature takes over the old slot, another gets a new one.
-//! 4. New constants are evaluated (E6); the body runs on its own stack as
-//!    the root of its entry (§13.5.4, D-457, `EntryMode::Repl`). A panic is
-//!    printed by the runtime, and the entry unwinds by the return flag: its
-//!    pads release what its frames held and its thread ends (D-712,
-//!    D-733). No leak check runs (D-458).
+//! 4. New constants are evaluated (E6); the body runs as a root fiber of
+//!    the session's runtime, on the package's `main-stack` (§13.5.4, D-660,
+//!    `EntryMode::Repl`), in the session's current group of detached
+//!    fibers (D-799), which keep running after the entry (D-194). A panic
+//!    is printed by the runtime, and the entry unwinds by the return flag:
+//!    its pads release what its frames held (D-712, D-733). No leak check
+//!    runs (D-458). Where fibers are not supported (Windows until M6,
+//!    D-714), the body runs isolated on its own thread instead.
 //! 5. The value of a final expression prints as `<debug text> : <type>`,
-//!    nothing for `Nil` (D-546); the values of the entry's `let`s go in
-//!    their slots (D-547). Only then is the entry committed: its names
-//!    join the session. An entry rejected after its code compiled gives the
-//!    slots it repointed back.
+//!    nothing for `Nil` (D-546); what the entry returned is marked shared
+//!    (D-705, D-712), and the values of the entry's `let`s go in their
+//!    slots with release stores (D-547). Only then is the entry committed:
+//!    its names join the session. An entry rejected after its code
+//!    compiled gives the slots it repointed back.
 //! 6. The definitions that used something the entry redefined with another
 //!    signature are checked again from their own text; those that still
 //!    check are compiled again and take over their slots, and the others
@@ -43,7 +48,12 @@
 //!   replaced with ` (stale)` after it (§13.5.5).
 //! - The commands (§13.5.3): [`Session::type_of`] (`:type`),
 //!   [`Session::enter_module`] (`:module`) and [`Session::reload`]
-//!   (`:reload`).
+//!   (`:reload`), which first tears the session's detached fibers down.
+//! - The session's end ([`Session::end`], or dropping it) tears down the
+//!   detached fibers of the current group and of every group a teardown
+//!   left stuck, then shuts the runtime down (§13.5.4, D-712). A
+//!   termination (D-709) between entries ends the process before the next
+//!   prompt ([`Session::exit_if_terminated`]).
 //!
 //! The session's front end loads every shipped std module (a synthetic
 //! package module imports them all), so any std import resolves without
@@ -62,7 +72,7 @@ use cheby_iface::{
     DefId, DefIndex, DepView, DisplayCx, Ice, InterfaceSet, ItemSig, ModuleId, ModuleInfo,
     ModuleInterface, Name, Namespace, PackageId, Vis,
 };
-use cheby_jit::{Jit, JitError, JitOptions};
+use cheby_jit::{Jit, JitError, JitOptions, SlotHandle};
 use cheby_mir::reach::{Reach, Root, reachable_with_hooks};
 use cheby_mir::repr::foreign_sig_with_context;
 use cheby_mir::{
@@ -75,7 +85,9 @@ use cheby_resolve::{
     Lookup, ModuleLookup, ResolveInput, ResolvedModule, StdCatalog, closest_name, collect_imports,
     cycle_diagnostic, resolve_import_targets,
 };
-use cheby_runtime::{EntryConfig, EntryMode, EntryOutcome};
+use cheby_runtime::{
+    DetachedGroup, EntryConfig, EntryMode, EntryOutcome, Runtime, RuntimeConfig, RuntimeError,
+};
 use cheby_syntax::SyntaxTree;
 use cheby_syntax::ast::{AstNode, SourceFile};
 use cheby_types::repl::{
@@ -108,6 +120,11 @@ pub struct SessionOptions {
     pub deny_warnings: bool,
     /// Whether diagnostics are colored (D-467).
     pub colors: Colors,
+    /// The number of worker threads of the session's runtime; `None`
+    /// reads `CHEBY_THREADS` (D-658), as `cheby repl` does. In-process
+    /// hosts that start several sessions at once, such as tests, bound it
+    /// (architecture §3.7).
+    pub threads: Option<usize>,
 }
 
 /// Where an entry's output goes.
@@ -170,8 +187,28 @@ pub struct Session {
     /// What `std::…` paths an import may name (D-451).
     known: Vec<&'static str>,
     /// Every word an entry returned: its bindings live in session slots,
-    /// so it is never freed (D-458: no leak check in the REPL).
+    /// so it is never freed (D-458: no leak check in the REPL). Each is
+    /// marked shared before its bindings are bound (D-705, D-712). Since
+    /// session values are never dropped, D-712's teardown "before any
+    /// session value is dropped" holds at every teardown.
     kept: Vec<u64>,
+    /// The session's runtime (D-690, D-712): every entry runs as a root
+    /// fiber of it, and the detached fibers an entry starts keep running
+    /// across entries (D-194). It holds the JIT's code token, so the code
+    /// stays alive while its fibers may run it (D-708). `None` where fibers
+    /// are not supported (Windows until M6, D-714): entries then run
+    /// isolated on the thread backend; and after a termination, once the
+    /// halt has completed.
+    runtime: Option<Runtime>,
+    /// The group of the detached fibers that entries start now (D-799).
+    /// Each teardown (`:reload`) opens a fresh one, so detached fibers
+    /// started later never join a group that a teardown left closing
+    /// (D-800, GAP(repl-reload-teardown)).
+    group: Arc<DetachedGroup>,
+    /// Groups whose teardown skipped members blocked in a system call
+    /// (D-786, D-804): they stay closing, and the session's end tears them
+    /// down again.
+    stuck: Vec<Arc<DetachedGroup>>,
     /// While a definition is checked again: the note its errors get.
     again_note: Option<String>,
     /// The package's root directory; `None` outside a package.
@@ -203,6 +240,41 @@ impl std::fmt::Debug for Session {
     }
 }
 
+impl Drop for Session {
+    /// Ends the session ([`Session::end`]) if its host did not: its
+    /// detached fibers are torn down and its runtime stops before the JIT
+    /// goes.
+    fn drop(&mut self) {
+        let _ = self.end();
+    }
+}
+
+/// The runtime of a session in the package `front` (D-690, D-712), with
+/// `threads` workers (`None`: `CHEBY_THREADS`), the package's name as the
+/// program name and its `fiber-stack` for spawned fibers (D-660); `None`
+/// where fibers are not supported (Windows until M6, D-714), so entries
+/// run isolated. The manifest's `[runtime]` table is read once, when the
+/// session starts: `:reload` compares module files only (D-625) and
+/// neither applies nor mentions a changed table
+/// (GAP(repl-runtime-table-at-start)).
+///
+/// # Errors
+///
+/// An [`Error`] if the runtime's threads cannot start.
+fn session_runtime(front: &Frontend, threads: Option<usize>) -> Result<Option<Runtime>, Error> {
+    let config = RuntimeConfig {
+        threads,
+        args: Vec::new(),
+        program_name: front.package_name.clone(),
+        fiber_stack: crate::stack_bytes(front.fiber_stack),
+    };
+    match Runtime::new(&config) {
+        Ok(runtime) => Ok(Some(runtime)),
+        Err(RuntimeError::Unsupported) => Ok(None),
+        Err(error) => Err(Error::new(error.to_string())),
+    }
+}
+
 /// An entry read and parsed, before it is checked.
 struct ReadEntry {
     /// `<repl:N>`.
@@ -230,9 +302,10 @@ impl Session {
     /// # Errors
     ///
     /// An [`Error`] for failures that are not diagnostics, among them an
-    /// invalid setting in the environment: `CHEBY_THREADS` (D-658), which
-    /// the REPL checks although its entries run isolated (D-713), and the
-    /// compiler's `CHEBY_RC` and `CHEBY_UNWIND_EDGES`.
+    /// invalid setting in the environment: `CHEBY_THREADS` (D-658), checked
+    /// first even when `options.threads` sets the count, and the
+    /// compiler's `CHEBY_RC` and `CHEBY_UNWIND_EDGES`; or if the session's
+    /// runtime cannot start its threads.
     pub fn start(dir: &Path, options: SessionOptions) -> Result<Start, Error> {
         cheby_runtime::sched::threads_from_env().map_err(|e| Error::new(e.to_string()))?;
         // No borrowing in any unit a session lowers, std and package
@@ -276,9 +349,15 @@ impl Session {
         }
         let warnings = render(&mut diagnostics, &sources);
         // `env::program_name()` is the package's name, as under `cheby
-        // run`, and `env::args()` is empty (D-578, D-612).
+        // run`, and `env::args()` is empty (D-578, D-612): for the
+        // runtime, which keeps its own (D-690), and for isolated entries
+        // (constant evaluation, and every entry on the thread backend).
         cheby_runtime::entry::set_program(Vec::new(), front.package_name.clone());
         let jit = Jit::configured(codegen, JitOptions::from_env())?;
+        let runtime = session_runtime(&front, options.threads)?;
+        if let Some(runtime) = &runtime {
+            runtime.attach(jit.code_token());
+        }
         let session = Self {
             options,
             mir,
@@ -300,8 +379,97 @@ impl Session {
             natives: Vec::new(),
             replaced: BTreeMap::new(),
             reloads: 0,
+            runtime,
+            group: DetachedGroup::new(),
+            stuck: Vec::new(),
         };
         Ok(Start::Ready(Box::new(session), warnings))
+    }
+
+    /// The exit status that a termination fixed (D-709), such as a
+    /// detached fiber's failed write to standard error (D-306), or `None`
+    /// while none happened. The REPL reads it before each prompt and after
+    /// each line it reads (GAP(repl-termination-between-entries)).
+    #[must_use]
+    pub fn exit_status(&self) -> Option<i32> {
+        self.runtime.as_ref().and_then(Runtime::exit_status)
+    }
+
+    /// Ends the process if a termination happened while no entry ran: the
+    /// session ends before the next prompt with the status the termination
+    /// fixed and prints nothing more, after completing the halt (D-709,
+    /// D-797, D-801, GAP(repl-termination-between-entries)).
+    pub fn exit_if_terminated(&mut self) {
+        if let Some(status) = self.exit_status() {
+            self.exit_after_termination(status);
+        }
+    }
+
+    /// Ends the process with `status` after a termination (D-709, D-797):
+    /// completes the runtime's halt, which joins every thread except one
+    /// blocked in a system call (D-786), then exits, dropping nothing:
+    /// no session value, and not the JIT, whose code a thread still blocked
+    /// may return into. On the thread backend, the entry's isolated thread
+    /// is parked for good, so the code it runs is kept (leaked).
+    fn exit_after_termination(&mut self, status: i32) -> ! {
+        match self.runtime.take() {
+            Some(runtime) => runtime.halt(),
+            None => std::mem::forget(self.jit.code_token()),
+        }
+        std::process::exit(status)
+    }
+
+    /// Tears the session's detached fibers down (D-712, D-194): cancels
+    /// and unwinds every member of the current group and waits until it is
+    /// empty, running no user code (ADR-0029). Members blocked in a system
+    /// call, on the blocking pool or inline, cannot be stopped: they are
+    /// skipped and counted (D-786, D-804), and their group stays closing,
+    /// so it goes to the stuck groups that the session's end tears down
+    /// again. Detached fibers started later join a fresh group either way
+    /// (GAP(repl-reload-teardown)). A skipped fiber parked on a standard
+    /// input read on the pool still takes the next line when its read
+    /// returns, and drops it as it unwinds: the REPL's prompt and a
+    /// session's detached readers share standard input in the order they
+    /// ask (D-548, GAP(repl-detached-stdin)). A teardown that meets a
+    /// termination's halt ends the process with its status.
+    fn tear_down_detached(&mut self) {
+        let Some(runtime) = &self.runtime else {
+            return;
+        };
+        let report = runtime.teardown(&self.group);
+        if report.halted {
+            let status = runtime
+                .exit_status()
+                .unwrap_or(cheby_runtime::abi::status::ERR);
+            self.exit_after_termination(status);
+        }
+        let old = std::mem::replace(&mut self.group, DetachedGroup::new());
+        if old.live() > 0 {
+            self.stuck.push(old);
+        }
+    }
+
+    /// Ends the session (§13.5.4, D-712): tears down the detached fibers of
+    /// the current group and of every stuck group, then shuts the runtime
+    /// down, which joins its threads and releases the JIT's code token
+    /// (D-708). Session values are never dropped (D-458), so they all
+    /// outlive the teardown. `Some(status)` when a termination happened,
+    /// before or during the teardown: the halt is then completed instead
+    /// (D-797), and the host ends with that status, printing nothing more.
+    /// Later calls do nothing; dropping the session calls it.
+    pub fn end(&mut self) -> Option<i32> {
+        let runtime = self.runtime.take()?;
+        for group in std::iter::once(&self.group).chain(&self.stuck) {
+            if runtime.teardown(group).halted {
+                break;
+            }
+        }
+        if let Some(status) = runtime.exit_status() {
+            runtime.halt();
+            return Some(status);
+        }
+        runtime.shutdown();
+        None
     }
 
     /// The session's front-end state: its names, redefinitions and stale
@@ -728,7 +896,10 @@ impl Session {
             )
         }));
         let built = self.lower(entry)?;
-        match self.jit.compile(&built.units) {
+        // The slots the entry's redefinitions take over keep their old code
+        // until the constants the new code reads are filled
+        // (`evaluate_and_publish`).
+        match self.jit.compile_unpublished(&built.units) {
             Ok(()) => {}
             Err(JitError::UnresolvedSymbols(symbols)) => {
                 let mut diagnostics = self.unresolved(&entry.checked, &symbols);
@@ -738,52 +909,68 @@ impl Session {
             Err(e) => return Err(e.into()),
         }
         self.repl.note_compiled(checked);
-        self.compiled.extend(built.items);
-        self.units.extend(built.modules);
+        self.compiled.extend(built.items.iter().copied());
+        self.units.extend(built.modules.iter().copied());
         self.const_thunks.extend(built.constants.iter().copied());
-        if !built.constants.is_empty() {
-            let mut diagnostics = self.evaluate(&built.constants, &built.reach, checked)?;
-            if !diagnostics.is_empty() {
-                self.jit.revert_repoints()?;
-                self.report(&mut diagnostics, out);
-                return Ok(false);
-            }
-            self.evaluated.extend(built.constants.iter().copied());
+        let mut diagnostics = self.evaluate_and_publish(&built, checked)?;
+        if !diagnostics.is_empty() {
+            self.jit.revert_repoints()?;
+            self.report(&mut diagnostics, out);
+            return Ok(false);
         }
+        self.evaluated.extend(built.constants.iter().copied());
         let Some(body) = &checked.body else {
             return Ok(true);
         };
-        // The entry carries whether the session's code has unwind edges
-        // (D-742): under `CHEBY_UNWIND_EDGES=off` a raise ends the process
-        // with its report (D-770).
+        // The entry runs on the package's `main-stack`, 64 MiB unless the
+        // manifest sets another size (D-660, D-613), read when the session
+        // started (GAP(repl-runtime-table-at-start)). It carries whether
+        // the session's code has unwind edges (D-742): under
+        // `CHEBY_UNWIND_EDGES=off` a raise ends the process with its
+        // report (D-770).
         let config = EntryConfig {
-            stack_size: cheby_runtime::entry::DEFAULT_ROOT_STACK_SIZE,
+            stack_size: crate::stack_bytes(self.front.main_stack),
             unwind_edges: self.jit.unwind_edges(),
             ..EntryConfig::new(EntryMode::Repl)
         };
-        let outcome = self
-            .jit
-            .entry(EntryKind::Repl(entry.number))?
-            .run(&config)?;
+        let thunk = self.jit.entry(EntryKind::Repl(entry.number))?;
+        // A root fiber of the session's runtime in its current group
+        // (D-712, D-799), with its own root scope (§13.5.4); the detached
+        // fibers it starts outlive it (D-194). Without a runtime (D-714),
+        // an isolated entry on the thread backend.
+        let outcome = match &self.runtime {
+            Some(runtime) => thunk.run_root_in(runtime, &config, &self.group)?,
+            None => thunk.run(&config)?,
+        };
         let word = match outcome {
             EntryOutcome::Returned(word) => word,
             // The runtime printed the report after flushing standard output;
-            // the entry unwound by the return flag, its pads released what
-            // its frames held, and its thread ended (D-712, D-733).
+            // the entry unwound by the return flag and its pads released
+            // what its frames held (D-712, D-733).
             EntryOutcome::Panicked(_) => {
                 self.jit.revert_repoints()?;
                 return Ok(false);
             }
-            // A write failed (D-306, D-709): the entry's isolated thread is
-            // parked for good, so the code it runs is kept (leaked) and no
-            // value it may reach is dropped. The session ends with the
-            // status and prints nothing more (spec §13.5): the REPL is the
-            // host here, and nothing else of the process may run.
-            EntryOutcome::Exited(status) => {
-                std::mem::forget(self.jit.code_token());
-                std::process::exit(status)
-            }
+            // A write failed (D-306, D-709), in the entry or in any fiber
+            // while it ran: the session ends with the status and prints
+            // nothing more (spec §13.5), after the halt (D-797).
+            EntryOutcome::Exited(status) => self.exit_after_termination(status),
         };
+        // Everything the entry returned is marked shared before any of it
+        // is bound (D-705, D-712): its bindings become session values that
+        // later entries and detached fibers read, and shared values are
+        // never updated or reused in place (D-716). The marking runs in
+        // the session's domain, the one the entry charged.
+        cheby_runtime::alloc::with_domain(self.jit.domain(), || {
+            // SAFETY: `word` is the thunk's live pair, kept forever. The
+            // entry's root has ended, and its outcome reached this thread
+            // through the runtime's channel (or the isolated thread's), so
+            // every write it made happens before this walk; an object of
+            // it that another fiber can reach was marked shared when it
+            // reached that fiber (D-705), so every object with a positive
+            // count is confined to this thread.
+            unsafe { cheby_runtime::rc::mark_shared(word) };
+        });
         self.kept.push(word);
         // SAFETY: the thunk returns the owned pair `(debug text, the body's
         // tuple)` (cheby_mir's REPL thunk), a live object, kept forever.
@@ -1127,7 +1314,9 @@ impl Session {
         Ok(())
     }
 
-    /// `:reload` (§13.5.3, D-098, D-547, D-625): reads the
+    /// `:reload` (§13.5.3, D-098, D-547, D-625): first tears the session's
+    /// detached fibers down, whatever follows (§13.5.4, D-712,
+    /// GAP(repl-reload-teardown)); then reads the
     /// package's module files again. Each module whose text changed, each
     /// new module, and each module of the package that imports one of them
     /// is checked again as a new module, all or nothing; its items get new
@@ -1147,6 +1336,12 @@ impl Session {
     ///
     /// An [`Error`] for an internal compiler error.
     pub fn reload(&mut self, out: &mut dyn Output) -> Result<(), Error> {
+        // Every `:reload` tears the session's detached fibers down first,
+        // also outside a package, when no module changed and when the
+        // reload is rejected; later detached fibers join a fresh group
+        // (D-712, D-194, D-799, GAP(repl-reload-teardown)). The JIT and the
+        // runtime stay.
+        self.tear_down_detached();
         let Some(root) = self.root.clone() else {
             out.stderr(&self.tool_error(
                 "`:reload` reloads the modules of the package, and this session has no package",
@@ -1828,6 +2023,120 @@ impl Session {
         Ok(out)
     }
 
+    /// Evaluates the batch's new constants and points the slots its
+    /// redefinitions take over at their new code, constants first
+    /// (GAP(repl-publish-after-constants), refines D-712, D-547, D-194).
+    ///
+    /// The session's detached fibers may call through a slot at any time
+    /// (D-194), and a constant read by code a detached fiber runs must be
+    /// filled, or the read is a fatal error outside constant evaluation.
+    /// So a slot gets its new code only once every constant that code
+    /// reads is evaluated, and a constant is evaluated only once every
+    /// slot its initializer reaches holds the new code, so that it sees
+    /// this entry's redefinitions as it did before. The two rules are
+    /// applied in rounds: the constants that are ready, then the slots
+    /// that are ready. A cycle between them (a constant whose initializer
+    /// reaches a redefinition whose new code reads it, statically) is left
+    /// to the old order: every slot first, then the constants. The first
+    /// round whose constants fail ends it with their diagnostics; the
+    /// caller then reverts the slots published so far.
+    fn evaluate_and_publish(
+        &mut self,
+        built: &Built,
+        entry: &CheckedEntry,
+    ) -> Result<Vec<Diagnostic>, Error> {
+        let mut waiting: Vec<DefId> = built.constants.clone();
+        let mut unpublished = self.jit.pending_repoints();
+        if !unpublished.is_empty() && !waiting.is_empty() {
+            let slots: Vec<SlotHandle> = unpublished.iter().map(|&(_, slot)| slot).collect();
+            // The slots each waiting constant's initializer reaches, and the
+            // waiting constants each redefinition's new code reads.
+            let calls: BTreeMap<DefId, Vec<SlotHandle>> = waiting
+                .iter()
+                .map(|&c| (c, self.slots_reached(&built.reach, c, &waiting, &slots)))
+                .collect();
+            let reads: BTreeMap<DefId, Vec<DefId>> = unpublished
+                .iter()
+                .map(|&(def, _)| (def, constants_read(&built.reach, def, &waiting)))
+                .collect();
+            loop {
+                let evaluable: Vec<DefId> = waiting
+                    .iter()
+                    .copied()
+                    .filter(|c| {
+                        calls.get(c).is_none_or(|reached| {
+                            reached
+                                .iter()
+                                .all(|slot| !unpublished.iter().any(|&(_, s)| s == *slot))
+                        })
+                    })
+                    .collect();
+                if !evaluable.is_empty() {
+                    let diagnostics = self.evaluate(&evaluable, &built.reach, entry)?;
+                    if !diagnostics.is_empty() {
+                        return Ok(diagnostics);
+                    }
+                    waiting.retain(|c| !evaluable.contains(c));
+                }
+                let publish: Vec<SlotHandle> = unpublished
+                    .iter()
+                    .filter(|&&(def, _)| {
+                        reads
+                            .get(&def)
+                            .is_none_or(|read| read.iter().all(|c| !waiting.contains(c)))
+                    })
+                    .map(|&(_, slot)| slot)
+                    .collect();
+                if !publish.is_empty() {
+                    self.jit.publish_repoints(&publish)?;
+                    unpublished.retain(|(_, slot)| !publish.contains(slot));
+                }
+                if (evaluable.is_empty() && publish.is_empty()) || waiting.is_empty() {
+                    break;
+                }
+            }
+        }
+        self.jit.publish_all_repoints()?;
+        if waiting.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.evaluate(&waiting, &built.reach, entry)
+    }
+
+    /// The slots among `slots` that the initializer of the constant `root`
+    /// may call through: every function its initializer reaches, through
+    /// functions and the initializers of the constants among `waiting`
+    /// that it forces (D-535), and the slot that function's callers load.
+    fn slots_reached(
+        &self,
+        reach: &Reach,
+        root: DefId,
+        waiting: &[DefId],
+        slots: &[SlotHandle],
+    ) -> Vec<SlotHandle> {
+        let mut found = Vec::new();
+        let mut seen = BTreeSet::from([root]);
+        let mut work: Vec<DefId> = reach.refers_to(root).collect();
+        while let Some(def) = work.pop() {
+            if !seen.insert(def) {
+                continue;
+            }
+            if reach.is_const(def) {
+                // An evaluated constant's initializer never runs again.
+                if !waiting.contains(&def) {
+                    continue;
+                }
+            } else if let Some(slot) = self.jit.slot_of(def)
+                && slots.contains(&slot)
+                && !found.contains(&slot)
+            {
+                found.push(slot);
+            }
+            work.extend(reach.refers_to(def));
+        }
+        found
+    }
+
     /// Evaluates `constants` (E6, D-535) with their seeds (D-538).
     fn evaluate(
         &mut self,
@@ -1902,6 +2211,29 @@ impl Session {
         };
         Ok(cheby_consteval::evaluate(&mut self.jit, &infos, &config)?)
     }
+}
+
+/// The constants among `waiting` that the code of the function `root` may
+/// read (GAP(repl-publish-after-constants)): those its body and the
+/// functions it reaches refer to. A read loads the constant's slot and
+/// never runs its initializer, so the walk does not enter initializers.
+fn constants_read(reach: &Reach, root: DefId, waiting: &[DefId]) -> Vec<DefId> {
+    let mut found = Vec::new();
+    let mut seen = BTreeSet::from([root]);
+    let mut work: Vec<DefId> = reach.refers_to(root).collect();
+    while let Some(def) = work.pop() {
+        if !seen.insert(def) {
+            continue;
+        }
+        if reach.is_const(def) {
+            if waiting.contains(&def) {
+                found.push(def);
+            }
+            continue;
+        }
+        work.extend(reach.refers_to(def));
+    }
+    found
 }
 
 /// The module source the REPL parses for the entry `text`: declarations
@@ -2210,10 +2542,29 @@ mod tests {
         }
     }
 
+    /// The options of an in-process test session: two workers, since the
+    /// tests run in parallel and each session starts a runtime (plan L2).
+    fn options() -> SessionOptions {
+        SessionOptions {
+            threads: Some(2),
+            ..SessionOptions::default()
+        }
+    }
+
+    /// Starts a session outside any package with `options`.
+    fn start(options: SessionOptions) -> Box<Session> {
+        let dir = std::env::temp_dir();
+        let Start::Ready(session, warnings) = Session::start(&dir, options).unwrap() else {
+            panic!("the session did not start");
+        };
+        assert_eq!(warnings, "");
+        session
+    }
+
     /// Runs `entries` in a session outside any package, on a thread with
     /// the command's stack (D-601), and returns what each printed.
     fn session(entries: &[&str]) -> Vec<String> {
-        session_with(SessionOptions::default(), entries)
+        session_with(options(), entries)
     }
 
     /// [`session`] with `options`.
@@ -2222,12 +2573,7 @@ mod tests {
         std::thread::Builder::new()
             .stack_size(256 << 20)
             .spawn(move || {
-                let dir = std::env::temp_dir();
-                let Start::Ready(mut session, warnings) = Session::start(&dir, options).unwrap()
-                else {
-                    panic!("the session did not start");
-                };
-                assert_eq!(warnings, "");
+                let mut session = start(options);
                 entries
                     .iter()
                     .map(|entry| {
@@ -2285,12 +2631,7 @@ mod tests {
         std::thread::Builder::new()
             .stack_size(256 << 20)
             .spawn(|| {
-                let dir = std::env::temp_dir();
-                let Start::Ready(mut session, _) =
-                    Session::start(&dir, SessionOptions::default()).unwrap()
-                else {
-                    panic!("the session did not start");
-                };
+                let mut session = start(options());
                 assert!(!session.mir.borrow && !session.mir.borrows());
                 let mut printed = Vec::new();
                 for entry in [
@@ -2320,7 +2661,7 @@ mod tests {
     fn denied_warnings_refuse_the_entry() {
         let options = SessionOptions {
             deny_warnings: true,
-            ..SessionOptions::default()
+            ..options()
         };
         let printed = session_with(
             options,
@@ -2335,6 +2676,194 @@ mod tests {
         assert!(printed[0].contains(crate::DENIED_NOTE), "{}", printed[0]);
         assert!(printed[1].starts_with("error[E0042]"), "{}", printed[1]);
         assert_eq!(printed[3], "1 : Int\n");
+    }
+
+    /// The `index`th value that the last committed entry bound: its
+    /// thunk's pair holds the debug text and the body's tuple, which holds
+    /// the shown value, then the bindings in order.
+    fn last_binding(session: &Session, index: usize) -> u64 {
+        let pair = *session.kept.last().unwrap();
+        // SAFETY: a kept pair, live for the session.
+        let tuple = unsafe { cheby_runtime::values::read_tuple(pair) }[1];
+        // SAFETY: as above.
+        let values = unsafe { cheby_runtime::values::read_tuple(tuple) };
+        values[1..][index]
+    }
+
+    /// Evaluates `entry` and returns what it printed.
+    fn eval(session: &mut Session, entry: &str) -> String {
+        let mut out = Buffer::default();
+        session.eval(entry, &mut out).unwrap();
+        out.text
+    }
+
+    /// D-705, D-712: a value is marked shared, with everything it reaches,
+    /// before it is bound as a session value, so its count is negative and
+    /// it is never updated or reused in place (D-716).
+    #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+    )]
+    fn session_values_are_marked_shared_before_they_are_bound() {
+        std::thread::Builder::new()
+            .stack_size(256 << 20)
+            .spawn(|| {
+                let mut session = start(options());
+                assert_eq!(eval(&mut session, "let xs = [[1, 2], [3]]"), "");
+                let xs = last_binding(&session, 0);
+                // SAFETY: a bound session value, kept for the session.
+                let count = unsafe { cheby_runtime::rc::count_of(xs) }.unwrap();
+                assert!(count < 0, "{count}");
+                assert_eq!(
+                    eval(&mut session, "xs"),
+                    "[[1, 2], [3]] : List<List<Int>>\n"
+                );
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// D-712, D-194 and GAP(repl-reload-teardown), GAP(repl-asan-with-h1):
+    /// a detached fiber parked in a capacity-0 `channel::send`, on a
+    /// channel whose `Receiver` is a session value and whose `Sender` only
+    /// the fiber holds, is torn down by `:reload`, here outside a package
+    /// (a tool error, which still tears down): its wait node is unlinked
+    /// from the channel, which the runtime's reader shows, its `Sender`
+    /// goes as it unwinds, and a later `receive` finds the channel closed.
+    /// Later detached fibers join a fresh group and run.
+    #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+    )]
+    fn session_reload_tears_down_a_parked_sender_and_unlinks_its_node() {
+        std::thread::Builder::new()
+            .stack_size(256 << 20)
+            .spawn(|| {
+                let mut session = start(options());
+                eval(&mut session, "import std::channel");
+                eval(&mut session, "import std::fiber");
+                let printed = eval(
+                    &mut session,
+                    "let rx = {\n  let (tx, receiver) = channel::new::<Int>(0)\n  \
+                     fiber::spawn_detached(fn() { channel::send(tx, 1) })\n  receiver\n}",
+                );
+                assert_eq!(printed, "");
+                let rx = last_binding(&session, 0);
+                let first = session.group.clone();
+                // The fiber parks in its send, linking its node; this waits
+                // for that, with a hang detector.
+                let start = std::time::Instant::now();
+                // SAFETY: `rx` is a live `Receiver`, a session value.
+                while !unsafe { Runtime::channel_has_waiters(rx) } {
+                    assert!(start.elapsed() < std::time::Duration::from_secs(60));
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+                assert_eq!(first.live(), 1);
+                let mut out = Buffer::default();
+                session.reload(&mut out).unwrap();
+                assert!(
+                    out.text.contains("this session has no package"),
+                    "{}",
+                    out.text
+                );
+                // SAFETY: as above.
+                assert!(!unsafe { Runtime::channel_has_waiters(rx) });
+                assert_eq!(first.live(), 0);
+                assert!(!Arc::ptr_eq(&first, &session.group));
+                assert!(session.stuck.is_empty());
+                assert_eq!(
+                    eval(&mut session, "channel::receive(rx)"),
+                    "Err(Nil) : Result<Int, Nil>\n"
+                );
+                eval(&mut session, "let (tx2, rx2) = channel::new::<Int>(1)");
+                eval(
+                    &mut session,
+                    "fiber::spawn_detached(fn() { channel::send(tx2, 2) })",
+                );
+                assert_eq!(
+                    eval(&mut session, "channel::receive(rx2)"),
+                    "Ok(2) : Result<Int, Nil>\n"
+                );
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// The entries of the redefinition test (plan L2; the CLI test
+    /// `repl_runtime_redefinition_under_stress` runs the same ones): a
+    /// detached fiber calls `f` through its slot in a loop while 200
+    /// entries redefine `f` with the same signature. It sends the number of
+    /// changes it saw once `f` returns 200, or `-1` if it ever saw an older
+    /// definition after a newer one.
+    fn redefinitions() -> Vec<String> {
+        let mut entries: Vec<String> = [
+            "import std::channel",
+            "import std::fiber",
+            "fn f() -> Int {\n  0\n}",
+            "fn watch(last: Int, changes: Int, done: channel::Sender<Int>) -> Int {\n  \
+             let now = f()\n  case {\n    now < last => {\n      \
+             let _ = channel::send(done, -1)\n      changes\n    }\n    \
+             now == 200 => {\n      let _ = channel::send(done, changes + 1)\n      \
+             changes\n    }\n    now > last => watch(now, changes + 1, done)\n    \
+             _ => watch(last, changes, done)\n  }\n}",
+            "let (done_tx, done_rx) = channel::new::<Int>(1)",
+            "fiber::spawn_detached(fn() { watch(0, 0, done_tx) })",
+        ]
+        .map(str::to_owned)
+        .to_vec();
+        entries.extend((1..=200).map(|n| format!("fn f() -> Int {{\n  {n}\n}}")));
+        entries
+    }
+
+    /// D-712: slots are repointed with release stores while a detached
+    /// fiber runs the code that loads them. The fiber sees only whole
+    /// words, never an older `f` after a newer one, and the last `f`.
+    fn redefinitions_under_a_detached_caller(threads: usize) {
+        for _ in 0..3 {
+            let printed = std::thread::Builder::new()
+                .stack_size(256 << 20)
+                .spawn(move || {
+                    let mut session = start(SessionOptions {
+                        threads: Some(threads),
+                        ..SessionOptions::default()
+                    });
+                    for entry in redefinitions() {
+                        assert_eq!(eval(&mut session, &entry), "", "{entry}");
+                    }
+                    eval(&mut session, "channel::receive(done_rx)")
+                })
+                .unwrap()
+                .join()
+                .unwrap();
+            let changes: i64 = printed
+                .strip_prefix("Ok(")
+                .and_then(|rest| rest.strip_suffix(") : Result<Int, Nil>\n"))
+                .and_then(|n| n.parse().ok())
+                .unwrap_or_else(|| panic!("{printed}"));
+            assert!((1..=200).contains(&changes), "{printed}");
+        }
+    }
+
+    #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+    )]
+    fn session_redefinitions_under_a_detached_caller_at_two_threads() {
+        redefinitions_under_a_detached_caller(2);
+    }
+
+    #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+    )]
+    fn session_redefinitions_under_a_detached_caller_at_four_threads() {
+        redefinitions_under_a_detached_caller(4);
     }
 
     #[test]
@@ -2382,12 +2911,7 @@ mod tests {
         let printed = std::thread::Builder::new()
             .stack_size(256 << 20)
             .spawn(|| {
-                let dir = std::env::temp_dir();
-                let Start::Ready(mut session, _) =
-                    Session::start(&dir, SessionOptions::default()).unwrap()
-                else {
-                    panic!("the session did not start");
-                };
+                let mut session = start(options());
                 let mut out = Buffer::default();
                 session.type_of("1 / 0", &mut out).unwrap();
                 session.type_of("let x = 1", &mut out).unwrap();

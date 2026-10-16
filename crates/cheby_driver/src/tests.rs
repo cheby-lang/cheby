@@ -1102,7 +1102,7 @@ fn tests_are_selected_and_counted() {
             panic!("the package does not compile");
         };
         let mut out = Vec::new();
-        let report = program.run(&mut out).unwrap();
+        let report = program.run(&mut out, &mut std::io::sink()).unwrap();
         (report, String::from_utf8(out).unwrap())
     };
     let (report, text) = run(&TestOptions::default());

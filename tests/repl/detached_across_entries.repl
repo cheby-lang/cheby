@@ -1,0 +1,13 @@
+// @milestone: M2
+// @decisions: D-194, D-712, D-799, D-660
+> import std::channel
+> import std::fiber
+> let (tx, rx) = channel::new::<Int>(1)
+> fiber::spawn_detached(fn() { channel::send(tx, 42) })
+> channel::receive(rx)
+Ok(42) : Result<Int, Nil>
+> fiber::scope(fn(s) {
+.   let child = fiber::spawn(s, fn() { 6 * 7 })
+.   fiber::join(child)
+. })
+Ok(42) : Result<Int, fiber::Panic>

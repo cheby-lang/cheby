@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use parking_lot::Mutex;
 
-use super::{Capture, Stream};
+use super::{Capture, Chunk, Stream};
 use crate::abi::{PanicKind, Word};
 use crate::alloc::Domain;
 use crate::ctx::ExecCtx;
@@ -106,11 +106,15 @@ fn returned(outcome: Result<EntryOutcome, RuntimeError>) -> Word {
     }
 }
 
-/// The text of each chunk, with its stream.
-fn texts(chunks: Vec<(Stream, Vec<u8>)>) -> Vec<(Stream, String)> {
+/// The text of each written chunk, with its stream; flushes are left out
+/// ([`capture_flushes_are_recorded_in_order`] checks them).
+fn texts(chunks: Vec<Chunk>) -> Vec<(Stream, String)> {
     chunks
         .into_iter()
-        .map(|(stream, bytes)| (stream, String::from_utf8(bytes).unwrap()))
+        .filter_map(|chunk| match chunk {
+            Chunk::Write(stream, bytes) => Some((stream, String::from_utf8(bytes).unwrap())),
+            Chunk::Flush => None,
+        })
         .collect()
 }
 
@@ -161,6 +165,38 @@ fn capture_route_takes_a_captured_fibers_writes() {
             [chunk(Stream::Stdout, "ab"), chunk(Stream::Stderr, "c")]
         );
         assert!(capture.take().is_empty(), "take leaves the capture empty");
+        finish(runtime, &domain);
+    }
+}
+
+/// D-723: a captured fiber's flush of standard output is recorded between
+/// its writes, once for flushes in a row, so the host's replay flushes
+/// where the program did; a host thread's flush is not taken.
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+fn capture_flushes_are_recorded_in_order() {
+    assert!(!super::flush(), "a host thread's flush is its own");
+    for threads in THREADS {
+        let runtime = runtime(threads);
+        let domain = Domain::new();
+        let capture = Capture::new();
+        let group = DetachedGroup::with_capture(Arc::clone(&capture));
+        let handle = start(&runtime, &config(&domain), &group, |_| {
+            let taken = super::route(Stream::Stdout, &[b"prompt"]).is_some()
+                && super::flush()
+                && super::flush()
+                && super::route(Stream::Stderr, &[b"after"]).is_some();
+            values::bool_word(taken)
+        });
+        assert_eq!(returned(handle.wait()), values::bool_word(true));
+        assert_eq!(
+            capture.take(),
+            [
+                Chunk::Write(Stream::Stdout, b"prompt".to_vec()),
+                Chunk::Flush,
+                Chunk::Write(Stream::Stderr, b"after".to_vec()),
+            ]
+        );
         finish(runtime, &domain);
     }
 }

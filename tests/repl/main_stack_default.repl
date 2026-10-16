@@ -1,0 +1,10 @@
+// @milestone: M2
+// @decisions: D-660, D-613
+> fn depth(n: Int) -> Int {
+.   case n {
+.     0 => 0
+.     _ => 1 + depth(n - 1)
+.   }
+. }
+> depth(100_000)
+100000 : Int

@@ -340,12 +340,12 @@ fn run(out: Out, options: cheby_driver::RunOptions) -> ExitCode {
 }
 
 /// `cheby test [FILTER] [--module PATH]` (§13.6, D-541): checks and
-/// compiles the package's selected tests, then runs them one after
-/// another and prints a line per test, a block per failure and a summary
-/// to stdout. Compile errors are printed and exit with 1 before any test
-/// runs; warnings are printed first, or, with `--deny-warnings`, stop it
-/// like errors (D-549). Exits with 0 when every selected test passes, 1
-/// otherwise.
+/// compiles the package's selected tests, then runs them, several at once
+/// (D-723), and prints each test's own output and a line per test in
+/// source order, a block per failure and a summary to stdout. Compile
+/// errors are printed and exit with 1 before any test runs; warnings are
+/// printed first, or, with `--deny-warnings`, stop it like errors (D-549).
+/// Exits with 0 when every selected test passes, 1 otherwise.
 fn test(out: Out, options: &cheby_driver::TestOptions) -> ExitCode {
     let root = match package_root(out) {
         Ok(root) => root,
@@ -360,10 +360,13 @@ fn test(out: Out, options: &cheby_driver::TestOptions) -> ExitCode {
         Err(e) => return out.error(e.message()),
     };
     out.diagnostics(program.output());
-    // Each line is written through the process's stdout, without holding
-    // its lock, so the tests' own output (written from their entries'
-    // threads) appears in order between the lines.
-    match program.run(&mut std::io::stdout()) {
+    // The tests' captured output is replayed through the process's own
+    // stdout and stderr, as the tests would have written it, each test's
+    // before its line (D-723, ADR-0062). A failed write of the report or of
+    // that output ends the run with 1 and prints nothing more
+    // (`terminated`, D-306, D-783); a tool error here is only a runtime
+    // that cannot start or run a test.
+    match program.run(&mut std::io::stdout(), &mut std::io::stderr()) {
         Ok(report) if report.success() => ExitCode::SUCCESS,
         Ok(_) => ExitCode::FAILURE,
         Err(e) => out.error(e.message()),

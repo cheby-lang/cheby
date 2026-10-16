@@ -72,6 +72,18 @@
 //! queue's lock with that queue empty, marking the slot `DEAD`, so a fiber
 //! pushed there afterwards goes to the global queue, or, if pinned, is left
 //! alone and counted (GAP(stop-ends-idle-worker)).
+//!
+//! # The slot cache (GAP(worker-slot-cache), D-677, D-749)
+//!
+//! A worker keeps up to four free stack slots for the fibers spawned by
+//! the fibers it runs: `retire` puts the slot of a spawned fiber it retired
+//! there (after D-749's deep release), and `fiber::create` takes from it
+//! when a fiber running on this worker spawns. A root started by a host
+//! takes its slot from the global pool and gives it back there. Only this worker's thread touches the cache, and
+//! it gives every cached slot back to the global pool before its thread
+//! ends and before its slot can be marked `DEAD`: at a halt, at a stop's
+//! exit, and when it retires. A slot a teardown skipped or a halt froze is
+//! never retired, so it never enters the cache (MEM-W1-1).
 
 use std::ptr;
 use std::sync::OnceLock;
@@ -84,6 +96,7 @@ use super::fiber::{self, AfterSwitch, FiberRef, state};
 use super::park::Parker;
 use super::{MAX_THREADS, Shared, Where};
 use crate::ctx::ExecCtx;
+use crate::fiber::stack::{SlotCache, StackError, StackSlot};
 use crate::fiber::{Saved, StackPool, switch};
 use crate::panic::fatal;
 use crate::tls;
@@ -222,11 +235,19 @@ pub(crate) struct WorkerShared {
     /// The fibers pinned to it now (D-687): a retiring worker stays until
     /// none is left.
     pinned: AtomicUsize,
+    /// Up to four free stack slots kept for this worker's own spawns
+    /// (GAP(worker-slot-cache)): filled by `Worker::retire`, taken by
+    /// `fiber::create` on this worker, and drained to the global pool
+    /// before the worker's thread ends (before its slot can be marked
+    /// `DEAD`, after which a new thread may start here) and at a halt. Only
+    /// the worker's own thread uses it.
+    cache: std::cell::UnsafeCell<SlotCache>,
 }
 
-// SAFETY: `local` and `saved` are used only by the worker's own thread
-// (the worker loop, and a fiber while that thread runs it); every other
-// field is atomic, locked or set once.
+// SAFETY: `local`, `saved` and `cache` are used only by the worker's own
+// thread (the worker loop, and a fiber while that thread runs it), and a
+// thread that later starts in the slot finds `cache` drained before the
+// slot was marked `DEAD`; every other field is atomic, locked or set once.
 unsafe impl Sync for WorkerShared {}
 
 impl std::fmt::Debug for WorkerShared {
@@ -256,12 +277,85 @@ impl WorkerShared {
             looking: AtomicBool::new(false),
             life: AtomicU8::new(life::DEAD),
             pinned: AtomicUsize::new(0),
+            cache: std::cell::UnsafeCell::new(SlotCache::new()),
         }
+    }
+
+    /// A stack slot of `bytes`' class for a fiber this worker's running
+    /// fiber spawns: from the worker's cache first, else from the global
+    /// pool (GAP(worker-slot-cache)).
+    ///
+    /// # Errors
+    ///
+    /// As [`StackPool::take`].
+    ///
+    /// # Safety
+    ///
+    /// Called on the worker's own thread, by the fiber it runs.
+    pub(super) unsafe fn take_cached_slot(&self, bytes: usize) -> Result<StackSlot, StackError> {
+        // SAFETY: forwarded from the caller: only this thread uses the
+        // cell, and the borrow ends with this call, before any switch.
+        let cache = unsafe { &mut *self.cache.get() };
+        StackPool::global().take_cached(cache, bytes)
+    }
+
+    /// Keeps the slot of a fiber this worker retired in its cache, after
+    /// D-749's deep release, or gives it back to the global pool when the
+    /// cache is full (GAP(worker-slot-cache)). Only a slot that may be
+    /// reused comes here (MEM-W1-1): never one a teardown skipped or a
+    /// halt froze, which is never retired.
+    ///
+    /// # Safety
+    ///
+    /// Called on the worker's own thread, by its loop.
+    unsafe fn cache_slot(&self, slot: StackSlot, watermark: usize) {
+        // SAFETY: forwarded from the caller, as in `take_cached_slot`.
+        let cache = unsafe { &mut *self.cache.get() };
+        StackPool::global().give_back_cached(cache, slot, watermark);
+    }
+
+    /// Gives every slot of the worker's cache back to the global pool.
+    ///
+    /// # Safety
+    ///
+    /// Called on the worker's own thread, by its loop, before its slot can
+    /// be marked `DEAD`.
+    unsafe fn drain_slot_cache(&self) {
+        // SAFETY: forwarded from the caller, as in `take_cached_slot`.
+        let cache = unsafe { &mut *self.cache.get() };
+        StackPool::global().drain_cache(cache);
+    }
+
+    /// The number of slots in the worker's cache (for tests).
+    ///
+    /// # Safety
+    ///
+    /// Called on the worker's own thread, or once no thread runs in the
+    /// slot and its last thread's writes are visible (it was joined, or
+    /// its slot was seen `DEAD`).
+    #[cfg(test)]
+    pub(super) unsafe fn cached_slots(&self) -> usize {
+        // SAFETY: forwarded from the caller: no other thread uses the cell
+        // while this shared borrow lives.
+        unsafe { &*self.cache.get() }.len()
     }
 
     /// The slot's life: one of [`life`]'s values.
     pub(super) fn life(&self) -> u8 {
         self.life.load(Ordering::SeqCst)
+    }
+
+    /// The slot's life read `Relaxed`, by the worker's own loop at its top
+    /// (S7's K1): a hint, never an exact answer. A retirement that races
+    /// the next resume is caught by `run_fiber`'s sequentially consistent
+    /// load after it stores `running` (D-795's Dekker pair with
+    /// `Shared::retire_worker`), which asks the fiber to yield. That load
+    /// comes before this one on the same thread, so this one cannot read
+    /// an older value than it did (read-read coherence): a `RETIRING` this
+    /// read misses costs at most one more fiber slice, whose own resume
+    /// sees it and asks again. A parked worker looks with `life` (`park`).
+    fn life_hint(&self) -> u8 {
+        self.life.load(Ordering::Relaxed)
     }
 
     /// Marks a free slot live for a worker about to start there. Under the
@@ -533,6 +627,7 @@ impl Worker<'_> {
             // A halt (D-073, D-708): take no fiber any more, not even a
             // runnable one, so a requeued spinner is never resumed.
             if self.shared.halting() {
+                self.drain_slot_cache();
                 break;
             }
             // `set_thread_count` retires this worker at its next
@@ -541,8 +636,9 @@ impl Worker<'_> {
             // to its end (`Runtime::shutdown`), and a worker that left now
             // could hand fibers to the global queue after the live workers
             // ended (review finding CONC3-3 of gate 3). A halt ended the
-            // loop above.
-            if self.me.life() == life::RETIRING && !self.shared.stopping() {
+            // loop above. A `Relaxed` read (`WorkerShared::life_hint`):
+            // `run_fiber`'s exact load covers the race with the next resume.
+            if self.me.life_hint() == life::RETIRING && !self.shared.stopping() {
                 if self.leave() {
                     break;
                 }
@@ -582,6 +678,9 @@ impl Worker<'_> {
                     looked_after_stop = true;
                     continue;
                 }
+                // Before the slot can be `DEAD`: a thread `set_thread_count`
+                // starts there afterwards would use the cache.
+                self.drain_slot_cache();
                 if self.me.end_if_idle() {
                     #[cfg(test)]
                     self.shared.probe.stop_exit(self.index);
@@ -722,6 +821,10 @@ impl Worker<'_> {
     /// `Idle`, runs the fibers pinned to it until none is left, then ends.
     /// Returns whether the thread ends; false if the retirement was taken
     /// back, or the thread count went up meanwhile and the worker rejoins.
+    /// Cold and never inlined (S7's K3), so `run_fiber` is inlined into
+    /// the loop alone.
+    #[cold]
+    #[inline(never)]
     fn leave(&mut self) -> bool {
         if !self.me.begin_leaving() {
             return false;
@@ -765,6 +868,7 @@ impl Worker<'_> {
         loop {
             if shared.halting() {
                 // The halt joins this thread; its fibers stay frozen.
+                self.drain_slot_cache();
                 return true;
             }
             let next = self.me.targeted.lock().pop_front();
@@ -780,11 +884,22 @@ impl Worker<'_> {
             }
             self.me.parker.park_aside();
         }
-        // 5. End, or rejoin if the count went up while it was leaving.
+        // 5. End, or rejoin if the count went up while it was leaving. The
+        //    cached slots go back first: once the slot is `DEAD`, a new
+        //    thread may start there and use the cache.
+        self.drain_slot_cache();
         shared.leave_or_rejoin(self.index)
     }
 
-    /// Runs `fiber` until it switches back, then runs its action.
+    /// Runs `fiber` until it switches back, then runs its action. Inlined
+    /// into the worker loop (S7's K3: outlined, with two call sites, it
+    /// cost a call and its spills on every resume); `leave`, its other
+    /// caller, is cold.
+    #[expect(
+        clippy::inline_always,
+        reason = "the resume path: MA's attribution (S7's K3) measured the outlined call"
+    )]
+    #[inline(always)]
     fn run_fiber(&mut self, fiber: FiberRef) {
         // SAFETY: a fiber in a run queue is not retired; only this worker
         // resumes it now.
@@ -901,6 +1016,7 @@ impl Worker<'_> {
         // SAFETY: as above.
         let slot = unsafe { ctx.sched.take_slot() };
         let watermark = ctx.real_stack_limit();
+        let spawned = ctx.sched.spawned();
         // SAFETY: the control block was written by `fiber::create` and is
         // dropped once, here; nothing refers to it any more: it is in no
         // queue, no monitor look that read it is in progress, and the
@@ -912,7 +1028,27 @@ impl Worker<'_> {
         let Some(slot) = slot else {
             return;
         };
-        StackPool::global().give_back(slot, watermark);
+        if !spawned {
+            // A root started by a host, on the main stack's class or
+            // another: the cache is for this worker's spawns, so its slot
+            // goes back to the global pool (GAP(worker-slot-cache), gate
+            // 3's MEM-W3-2).
+            StackPool::global().give_back(slot, watermark);
+            return;
+        }
+        // SAFETY: the worker loop runs on the worker's own thread.
+        unsafe { self.me.cache_slot(slot, watermark) };
+    }
+
+    /// Gives the worker's cached slots back to the global pool
+    /// (GAP(worker-slot-cache)): before its thread ends, and before its
+    /// slot can be marked `DEAD`, since a new thread may start there once
+    /// it is. So no slot stays in a cache across a stop, a halt or a
+    /// retirement.
+    fn drain_slot_cache(&self) {
+        // SAFETY: the worker loop runs on the worker's own thread, and the
+        // slot is not `DEAD` yet.
+        unsafe { self.me.drain_slot_cache() };
     }
 }
 

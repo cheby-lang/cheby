@@ -16,6 +16,13 @@
 //!   transcript.
 //! - Standard output is flushed before anything is written to standard
 //!   error (D-548), and a failed write ends the REPL with status 1 (D-306).
+//! - Entries run on the session's runtime, and the detached fibers they
+//!   start keep running between entries (D-194, D-712). A termination
+//!   while no entry runs, such as a detached fiber's failed write, ends the
+//!   REPL before the next prompt with its status, printing nothing more
+//!   (D-709, GAP(repl-termination-between-entries)). At the end of input
+//!   or `:quit`, the session ends: its detached fibers are torn down and
+//!   its runtime stops ([`Session::end`]).
 //!
 //! An entry that starts with `:` is a command (§13.5.3, [`HELP`]): `:type
 //! expr`, `:module path` (`:module` alone leaves the module), `:reload`,
@@ -86,6 +93,7 @@ pub fn run_colored(options: &ReplOptions, colors: Colors) -> ExitCode {
     let session_options = SessionOptions {
         deny_warnings: options.deny_warnings,
         colors,
+        threads: None,
     };
     let (mut session, warnings) = match Session::start(&dir, session_options) {
         Ok(Start::Ready(session, warnings)) => (session, warnings),
@@ -106,6 +114,12 @@ pub fn run_colored(options: &ReplOptions, colors: Colors) -> ExitCode {
     } else {
         piped(&mut session, &mut streams);
     }
+    // The session's end tears its detached fibers down and stops its
+    // runtime (§13.5.4, D-712); a termination before or during it ends
+    // the process with its status, printing nothing more (D-709, D-797).
+    if let Some(status) = session.end() {
+        exit_with(status);
+    }
     if cheby_runtime::io::flush_stdout().is_err() {
         return ExitCode::FAILURE;
     }
@@ -121,12 +135,15 @@ fn interactive(session: &mut Session, streams: &mut Streams) {
     };
     let mut entry = String::new();
     loop {
+        session.exit_if_terminated();
         let prompt = if entry.is_empty() {
             PROMPT
         } else {
             CONTINUATION
         };
-        let line = match editor.readline(prompt) {
+        let read = editor.readline(prompt);
+        session.exit_if_terminated();
+        let line = match read {
             Ok(line) => line,
             // Ctrl-C drops the entry being typed.
             Err(rustyline::error::ReadlineError::Interrupted) => {
@@ -158,6 +175,10 @@ fn interactive(session: &mut Session, streams: &mut Streams) {
 fn piped(session: &mut Session, streams: &mut Streams) {
     let mut entry = String::new();
     loop {
+        // A termination while no entry ran (a detached fiber's failed
+        // write, D-306, D-709) ends the session before the next prompt
+        // (GAP(repl-termination-between-entries)).
+        session.exit_if_terminated();
         let prompt = if entry.is_empty() {
             PROMPT
         } else {
@@ -167,10 +188,15 @@ fn piped(session: &mut Session, streams: &mut Streams) {
         // A flush that fails before the read ends the REPL with status 1,
         // printing nothing (D-306, spec §13.5): this host thread runs no
         // entry, so the runtime hands the failure back
-        // (D-801, D-709).
+        // (D-801, D-709). The read shares standard input with the
+        // session's detached fibers that read it, which take lines in the
+        // order they ask (D-548, GAP(repl-detached-stdin)).
         let Ok(read) = cheby_runtime::io::read_input_line() else {
             exit_after_write_failure();
         };
+        // And one that happened while the REPL waited for this line ends
+        // it before the line is echoed or run.
+        session.exit_if_terminated();
         let Some(line) = read else {
             streams.stdout("\n");
             finish(session, &entry, streams);
@@ -378,6 +404,16 @@ impl Output for Streams {
 )]
 fn exit_after_write_failure() -> ! {
     std::process::exit(1)
+}
+
+/// Ends the REPL with the status a termination fixed (D-709), printing
+/// nothing more: the session has completed its runtime's halt (D-797).
+#[expect(
+    clippy::exit,
+    reason = "D-709: the session ends with the termination's status"
+)]
+fn exit_with(status: i32) -> ! {
+    std::process::exit(status)
 }
 
 #[cfg(test)]

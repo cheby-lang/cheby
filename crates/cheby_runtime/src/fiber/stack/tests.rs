@@ -200,6 +200,39 @@ fn a_crowded_class_releases_whole_slots() {
     assert_eq!(pool.take(1).unwrap().top(), tops[FREE_KEEP - 1]);
 }
 
+/// GAP(stack-slot-limit), D-749, D-761 (gate 3's MEM-W3-1 and ROB-W3-2):
+/// after a burst of more fibers than [`FREE_KEEP`] that each wrote their
+/// whole warm part, the class keeps at most [`FREE_KEEP`] x [`WARM_KEEP`]
+/// written bytes in its free slots, D-761's 24 MiB; the rest are released
+/// whole.
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+fn a_burst_keeps_at_most_the_warm_budget_resident() {
+    const BUDGET: usize = 24 << 20;
+    const { assert!(FREE_KEEP * WARM_KEEP <= BUDGET) };
+    let pool = StackPool::new(false);
+    let page = os::page_size();
+    let slots: Vec<_> = (0..FREE_KEEP + 16).map(|_| pool.take(1).unwrap()).collect();
+    let warm: Vec<(usize, usize)> = slots
+        .iter()
+        .map(|slot| (slot.warm_top(page), slot.top()))
+        .collect();
+    for &(low, high) in &warm {
+        touch_pages(low, high);
+    }
+    // Given back as fibers that never lowered their first soft limit:
+    // nothing below the warm top to release, the warm part kept.
+    for slot in slots {
+        pool.give_back(slot, usize::MAX);
+    }
+    let kept: usize = warm
+        .iter()
+        .map(|&(low, high)| written_offsets(low, high).len() * page)
+        .sum();
+    assert!(kept <= FREE_KEEP * WARM_KEEP, "{kept} bytes kept");
+    assert!(kept <= BUDGET, "{kept} bytes kept");
+}
+
 /// The offsets from `low` of the pages of `[low, high)`, page-aligned,
 /// whose first byte is not zero: written by [`touch`] and not released.
 /// Contents, not `mincore`: with Linux's transparent huge pages a written
@@ -328,8 +361,12 @@ fn deep_slots_given_back_from_many_threads_stay_within_the_bound() {
     const THREADS: usize = 8;
     let pool = StackPool::new(false);
     let mut slots: Vec<_> = (0..2 * FREE_KEEP).map(|_| pool.take(1).unwrap()).collect();
+    // The lowest and the highest page of each: the watermark below makes
+    // every slot deep, and writing every page would make every slot
+    // resident for nothing.
     for slot in &slots {
-        touch_pages(slot.usable_bottom(), slot.top());
+        touch(slot.usable_bottom());
+        touch(slot.top() - 1);
     }
     let start = std::sync::Barrier::new(THREADS);
     std::thread::scope(|scope| {
@@ -413,6 +450,275 @@ fn the_global_pool_follows_the_build() {
     }
     assert_eq!(slot.guarded(), pool.guard_pages());
     pool.give_back(slot, 0);
+}
+
+/// GAP(stack-slot-counters): each way a slot is handed out or given back
+/// is counted once, when the runtime counts (D-768).
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+fn the_slot_counters_count_each_path() {
+    crate::stats::count_events();
+    let pool = StackPool::new(false);
+    assert_eq!(pool.slot_counts(), SlotCounts::default());
+    // FREE_KEEP + 1 fresh slots; given back shallow, all but the last stay
+    // warm and the last is released whole.
+    let slots: Vec<_> = (0..=FREE_KEEP).map(|_| pool.take(1).unwrap()).collect();
+    for slot in slots {
+        pool.give_back(slot, usize::MAX);
+    }
+    // Taken again: the warm ones first, then the one released whole.
+    let again: Vec<_> = (0..=FREE_KEEP).map(|_| pool.take(1).unwrap()).collect();
+    // A deep slot given back while the class has room.
+    let deep = pool.take(1).unwrap();
+    let low = deep.usable_bottom();
+    pool.give_back(deep, low);
+    let n = u64::try_from(FREE_KEEP).unwrap();
+    assert_eq!(
+        pool.slot_counts(),
+        SlotCounts {
+            taken_warm: n,
+            taken_cold: 1,
+            carved: n + 2,
+            released_whole: 1,
+            deep_released: 1,
+        }
+    );
+    drop(again);
+}
+
+/// GAP(worker-slot-cache): a cache serves its own class first, the most
+/// recently cached slot first, with its reservations ended; another class
+/// comes from the pool.
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+fn slot_cache_serves_its_class_most_recent_first() {
+    let pool = StackPool::new(false);
+    let mut cache = SlotCache::new();
+    assert_eq!(cache.len(), 0);
+    let mut a = pool.take(1 << 20).unwrap();
+    let b = pool.take(1 << 20).unwrap();
+    let small = pool.take(1).unwrap();
+    let (a_bottom, b_bottom, small_bottom) = (a.bottom(), b.bottom(), small.bottom());
+    let top = a.top();
+    a.reserve_top(200, 64).unwrap();
+    pool.give_back_cached(&mut cache, a, usize::MAX);
+    pool.give_back_cached(&mut cache, small, usize::MAX);
+    pool.give_back_cached(&mut cache, b, usize::MAX);
+    assert_eq!(cache.len(), 3);
+    // Nothing went to the pool's free lists.
+    assert_eq!(pool.counts(1 << 20).unwrap().free, 0);
+    assert_eq!(pool.counts(1).unwrap().free, 0);
+    let first = pool.take_cached(&mut cache, 1 << 20).unwrap();
+    assert_eq!(first.bottom(), b_bottom);
+    let second = pool.take_cached(&mut cache, (1 << 20) - 1).unwrap();
+    assert_eq!(second.bottom(), a_bottom);
+    assert_eq!(second.stack_top(), top, "the reservation ended");
+    assert_eq!(cache.len(), 1);
+    // No slot of this class is cached: a fresh one from the pool.
+    let third = pool.take_cached(&mut cache, 1 << 20).unwrap();
+    assert!(![a_bottom, b_bottom].contains(&third.bottom()));
+    assert_eq!(pool.counts(1 << 20).unwrap().carved, 3);
+    assert_eq!(
+        pool.take_cached(&mut cache, 1).unwrap().bottom(),
+        small_bottom
+    );
+    assert_eq!(cache.len(), 0);
+    assert_eq!(
+        pool.take_cached(&mut cache, MAX_STACK + 1).unwrap_err(),
+        StackError::TooLarge {
+            requested: MAX_STACK + 1
+        }
+    );
+}
+
+/// GAP(worker-slot-cache), D-749: a deep slot entering the cache has its
+/// pages below the warm top released first; a full cache gives the slot to
+/// the pool as `give_back` does, deep release included.
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+fn slot_cache_releases_deep_pages_and_overflows_to_the_pool() {
+    let pool = StackPool::new(false);
+    let page = os::page_size();
+    let mut cache = SlotCache::new();
+    let slots: Vec<_> = (0..=CACHE_SLOTS)
+        .map(|_| pool.take(8 << 20).unwrap())
+        .collect();
+    let ranges: Vec<(usize, usize, usize)> = slots
+        .iter()
+        .map(|slot| (slot.usable_bottom(), slot.warm_top(page), slot.top()))
+        .collect();
+    for slot in slots {
+        touch_pages(slot.usable_bottom(), slot.top());
+        let low = slot.usable_bottom();
+        pool.give_back_cached(&mut cache, slot, low);
+    }
+    assert_eq!(cache.len(), CACHE_SLOTS);
+    assert_eq!(
+        pool.counts(8 << 20).unwrap().free,
+        1,
+        "the fifth went to the pool"
+    );
+    for (index, &(low, warm, top)) in ranges.iter().enumerate() {
+        let below = written_offsets(low, warm);
+        assert!(below.is_empty(), "slot {index}: {below:?}");
+        assert!(resident(warm, top).iter().all(|&page| page), "slot {index}");
+    }
+    // A shallow slot keeps its pages: no system call.
+    let mut cache = SlotCache::new();
+    let slot = pool.take(8 << 20).unwrap();
+    let top = slot.top();
+    let used = top - (64 << 10);
+    touch_pages(used, top);
+    pool.give_back_cached(&mut cache, slot, used);
+    assert_eq!(peek(used), 1);
+}
+
+/// GAP(worker-slot-cache): draining gives every cached slot back to the
+/// pool's warm list, where `take` finds it.
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+fn slot_cache_drain_gives_every_slot_back() {
+    let pool = StackPool::new(false);
+    let mut cache = SlotCache::new();
+    let slots: Vec<_> = (0..CACHE_SLOTS).map(|_| pool.take(1).unwrap()).collect();
+    let mut bottoms: Vec<usize> = slots.iter().map(StackSlot::bottom).collect();
+    for slot in slots {
+        pool.give_back_cached(&mut cache, slot, usize::MAX);
+    }
+    pool.drain_cache(&mut cache);
+    assert_eq!(cache.len(), 0);
+    assert_eq!(pool.counts(1).unwrap().free, CACHE_SLOTS);
+    {
+        let state = pool.classes[0].lock();
+        assert_eq!((state.warm.len(), state.cold.len()), (CACHE_SLOTS, 0));
+    }
+    let mut again: Vec<usize> = (0..CACHE_SLOTS)
+        .map(|_| pool.take(1).unwrap().bottom())
+        .collect();
+    again.sort_unstable();
+    bottoms.sort_unstable();
+    assert_eq!(again, bottoms);
+    assert_eq!(pool.counts(1).unwrap().carved, CACHE_SLOTS);
+}
+
+/// GAP(worker-slot-cache), GAP(stack-slot-counters): a slot served by a
+/// cache counts as taken warm, and a deep one entering it as deep-released.
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+fn slot_cache_counts_as_warm() {
+    crate::stats::count_events();
+    let pool = StackPool::new(false);
+    let mut cache = SlotCache::new();
+    let slot = pool.take(1).unwrap();
+    let low = slot.usable_bottom();
+    pool.give_back_cached(&mut cache, slot, low);
+    let slot = pool.take_cached(&mut cache, 1).unwrap();
+    assert_eq!(
+        pool.slot_counts(),
+        SlotCounts {
+            taken_warm: 1,
+            carved: 1,
+            deep_released: 1,
+            ..SlotCounts::default()
+        }
+    );
+    pool.give_back(slot, usize::MAX);
+}
+
+/// The fields of the `/proc/self/smaps` entry of the mapping that holds
+/// `address`: its `VmFlags` line and its `Rss` in KiB.
+#[cfg(target_os = "linux")]
+fn smaps_entry(address: usize) -> Option<(String, u64)> {
+    let smaps = std::fs::read_to_string("/proc/self/smaps").unwrap();
+    let mut inside = false;
+    let mut rss = None;
+    for line in smaps.lines() {
+        let range = line
+            .split_whitespace()
+            .next()
+            .and_then(|first| first.split_once('-'))
+            .and_then(|(low, high)| {
+                Some((
+                    usize::from_str_radix(low, 16).ok()?,
+                    usize::from_str_radix(high, 16).ok()?,
+                ))
+            });
+        if let Some((low, high)) = range {
+            inside = (low..high).contains(&address);
+            rss = None;
+        } else if inside && let Some(kib) = line.strip_prefix("Rss:") {
+            rss = kib.trim().trim_end_matches("kB").trim().parse().ok();
+        } else if inside && let Some(flags) = line.strip_prefix("VmFlags:") {
+            return Some((flags.trim().to_owned(), rss.unwrap_or(0)));
+        }
+    }
+    None
+}
+
+/// Whether this kernel has transparent huge pages at all; without them
+/// `MADV_NOHUGEPAGE` fails with `EINVAL`, which the pool ignores (D-761).
+#[cfg(target_os = "linux")]
+fn kernel_has_thp() -> bool {
+    std::path::Path::new("/sys/kernel/mm/transparent_hugepage").exists()
+}
+
+/// D-761: every stack region is marked `MADV_NOHUGEPAGE` (`nh` in its
+/// `VmFlags`), also after a release with `MADV_DONTNEED`.
+#[test]
+#[cfg(target_os = "linux")]
+fn stack_regions_are_marked_no_huge_pages() {
+    if !kernel_has_thp() {
+        eprintln!("this kernel has no transparent huge pages: nothing to mark");
+        return;
+    }
+    let pool = StackPool::new(false);
+    let slot = pool.take(8 << 20).unwrap();
+    let (low, top) = (slot.usable_bottom(), slot.top());
+    let (flags, _) = smaps_entry(top - 1).expect("the slot's mapping is in smaps");
+    assert!(flags.split_whitespace().any(|flag| flag == "nh"), "{flags}");
+    touch_pages(low, top);
+    pool.give_back(slot, low);
+    let (flags, _) = smaps_entry(top - 1).expect("the slot's mapping is in smaps");
+    assert!(flags.split_whitespace().any(|flag| flag == "nh"), "{flags}");
+}
+
+/// Informative (D-761, plan S7c): the resident memory of 64 warm free
+/// slots of the default fiber class, each written over its whole warm
+/// part, printed straight to standard error (past the test harness's
+/// capture) for the Linux check's log. Without huge pages it is about
+/// 64 x 384 KiB, not 64 x 2 MiB.
+#[test]
+#[cfg(target_os = "linux")]
+fn stack_rss_of_64_warm_slots() {
+    use std::io::Write as _;
+    const SLOTS: usize = 64;
+    let pool = StackPool::new(false);
+    let slots: Vec<_> = (0..SLOTS).map(|_| pool.take(8 << 20).unwrap()).collect();
+    let probe = slots[0].top() - 1;
+    let low = slots.iter().map(StackSlot::bottom).min().unwrap();
+    let high = slots.iter().map(StackSlot::top).max().unwrap();
+    for slot in &slots {
+        touch_pages(slot.top() - WARM_KEEP, slot.top());
+    }
+    for slot in slots {
+        // A shallow watermark: the slot stays warm with its pages.
+        let watermark = slot.top() - WARM_BYTES;
+        pool.give_back(slot, watermark);
+    }
+    // `mincore` over the slots' own range is exact; the mapping's `Rss`
+    // may also hold a neighbouring region merged into the same mapping.
+    let page = u64::try_from(os::page_size()).unwrap();
+    let pages = u64::try_from(resident(low, high).iter().filter(|&&page| page).count()).unwrap();
+    let resident_kib = pages * page / 1024;
+    let (flags, rss) = smaps_entry(probe).expect("the slots' mapping is in smaps");
+    let line = format!(
+        "stack rss of {SLOTS} warm slots: {resident_kib} KiB resident in their range ({} KiB per slot; warm part {} KiB); mapping Rss {rss} KiB; thp {}; VmFlags {flags}\n",
+        resident_kib / u64::try_from(SLOTS).unwrap(),
+        WARM_KEEP >> 10,
+        kernel_has_thp(),
+    );
+    let _ = std::io::stderr().write_all(line.as_bytes());
+    assert!(resident_kib > 0, "{line}");
 }
 
 /// Runs this binary's `stack_child` test in a child process with the

@@ -6,7 +6,8 @@
 //! cancelled and unwound, in every build, before its objects are counted
 //! (§10.4, §13.6). The first test leaves one fiber waiting with a list it
 //! made and another one spinning and allocating, and still passes; the
-//! next test starts with neither left.
+//! next test, which may run beside it, passes too, and its count holds
+//! only its own objects.
 
 import std::channel
 import std::fiber

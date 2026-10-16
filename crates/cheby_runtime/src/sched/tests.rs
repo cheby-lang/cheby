@@ -535,6 +535,9 @@ fn slots_in_use(size: usize) -> usize {
 /// D-690 and D-713: a root fiber's word reaches the host; a root that
 /// panics unwinds to its catch point, is reported, and its slot goes back
 /// to the pool, never into quarantine; the runtime goes on running roots.
+/// The worker that retires a fiber keeps its slot in its cache, which
+/// goes back to the pool when the worker ends (GAP(worker-slot-cache)), so
+/// the pool's count is read after the stop.
 #[test]
 #[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
 fn roots_return_or_panic_and_the_runtime_goes_on() {
@@ -555,22 +558,19 @@ fn roots_return_or_panic_and_the_runtime_goes_on() {
         panic!("expected a panic");
     };
     assert_eq!(report.kind, PanicKind::DivisionByZero);
-    // The worker gives the slot back once the fiber has switched away for
-    // good, after the host heard of the panic.
-    let deadline = Instant::now() + HANG;
-    while slots_in_use(size) != in_use {
-        assert!(Instant::now() < deadline, "the slot was not given back");
-        std::thread::sleep(Duration::from_millis(1));
-    }
-    assert_eq!(
-        StackPool::global().counts(size).unwrap().quarantined,
-        quarantined
-    );
     assert_eq!(run(returns_seven, size), EntryOutcome::Returned(7));
     // SAFETY: as above.
     let too_small = unsafe { runtime.run_root(returns_seven, &config(4096)) };
     assert!(matches!(too_small, Err(RuntimeError::StackTooSmall { .. })));
     runtime.shutdown();
+    // The worker gave each slot back once its fiber had switched away for
+    // good, after the host heard of the outcome: into its cache, which it
+    // drained to the pool when it ended at the stop.
+    assert_eq!(slots_in_use(size), in_use, "a slot was not given back");
+    assert_eq!(
+        StackPool::global().counts(size).unwrap().quarantined,
+        quarantined
+    );
 }
 
 /// D-733 and D-713: a panic in a fiber that is not a root unwinds that

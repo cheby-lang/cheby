@@ -93,14 +93,22 @@ pub(crate) struct FiberSched {
     /// Kernel callbacks on its stack; above 0 the fiber is pinned to its
     /// worker (D-687).
     callback_depth: AtomicU32,
-    /// Set while the fiber is blocked inline in a system call (standard
-    /// input, file IO, until I1's blocking pool): a teardown and a halt
-    /// cannot stop it, so they skip it and count it (D-786).
+    /// Set while the fiber waits on a blocking-pool job (standard input,
+    /// file IO, `@blocking`; from before it parks until the pool thread
+    /// clears it, right before the wake) or runs such a call inline (no
+    /// runtime, or a refused pool thread): a teardown and a halt cannot
+    /// stop it, so they skip it and count it (D-786, D-683). A fiber with
+    /// the mark set is a pending pool job (`sched/blocking.rs`).
     blocking: AtomicBool,
     /// Its registers while it is not running.
     saved: UnsafeCell<Saved>,
     /// The slot it lives in, taken by the worker that retires it.
     slot: UnsafeCell<Option<StackSlot>>,
+    /// Whether a fiber running on a worker spawned it, so its slot may go
+    /// to the cache of the worker that retires it; a root started by a
+    /// host gives its slot back to the global pool (GAP(worker-slot-cache),
+    /// gate 3's MEM-W3-2).
+    spawned: bool,
     /// What it runs first, taken when it starts.
     start: UnsafeCell<Option<StartFn>>,
 }
@@ -139,12 +147,20 @@ impl FiberSched {
             blocking: AtomicBool::new(false),
             saved: UnsafeCell::new(Saved::EMPTY),
             slot: UnsafeCell::new(None),
+            spawned: false,
             start: UnsafeCell::new(None),
         }
     }
 
-    /// The fields of a new fiber of `runtime`, runnable on `worker`.
-    fn scheduled(id: u64, runtime: Arc<Shared>, worker: usize, start: StartFn) -> Self {
+    /// The fields of a new fiber of `runtime`, runnable on `worker`;
+    /// `spawned` when a fiber running on a worker of `runtime` spawns it.
+    fn scheduled(
+        id: u64,
+        runtime: Arc<Shared>,
+        worker: usize,
+        spawned: bool,
+        start: StartFn,
+    ) -> Self {
         Self {
             id,
             runtime: Some(runtime),
@@ -154,8 +170,16 @@ impl FiberSched {
             blocking: AtomicBool::new(false),
             saved: UnsafeCell::new(Saved::EMPTY),
             slot: UnsafeCell::new(None),
+            spawned,
             start: UnsafeCell::new(Some(start)),
         }
+    }
+
+    /// Whether a fiber running on a worker spawned this one: its slot may
+    /// then go to the cache of the worker that retires it
+    /// (GAP(worker-slot-cache)); a root's goes back to the global pool.
+    pub(super) const fn spawned(&self) -> bool {
+        self.spawned
     }
 
     /// The runtime the fiber belongs to, or `None` for an isolated entry.
@@ -221,15 +245,17 @@ impl FiberSched {
             .map(act)
     }
 
-    /// Whether the fiber is blocked inline in a system call (D-786).
-    /// Callable from any thread that keeps the control block alive.
+    /// Whether the fiber waits on a blocking-pool job or is blocked
+    /// inline in a system call (D-786, D-683). Callable from any thread
+    /// that keeps the control block alive.
     pub(crate) fn blocking(&self) -> bool {
         self.blocking.load(Ordering::SeqCst)
     }
 
-    /// Marks the fiber as blocked, or no longer blocked, inline in a
-    /// system call (D-786). Only the fiber itself calls it, around the
-    /// call.
+    /// Marks the fiber as blocked, or no longer blocked, in a system call
+    /// (D-786, D-683). The fiber sets it before it parks on a pool job
+    /// (or around a call it runs inline); the pool thread that ran the
+    /// job clears it, right before its wake (`sched/blocking.rs`).
     pub(crate) fn set_blocking(&self, blocking: bool) {
         self.blocking.store(blocking, Ordering::SeqCst);
     }
@@ -522,10 +548,15 @@ pub(crate) struct FiberParams {
 /// Creates a runnable fiber of `runtime` that runs `start`: takes a slot,
 /// places the control block at its top with a first soft limit
 /// [`WARM_BYTES`] below the top (D-677), and prepares its first frame. The
-/// fiber is not in any queue yet.
+/// fiber is not in any queue yet. `on_worker` is the worker of `runtime`
+/// the calling thread is, when a fiber running there spawns: the slot then
+/// comes from that worker's cache first (GAP(worker-slot-cache)). A root
+/// started by a host passes `None` and takes its slot from the global
+/// pool.
 pub(super) fn create(
     runtime: &Arc<Shared>,
     worker: usize,
+    on_worker: Option<usize>,
     params: FiberParams,
     start: StartFn,
 ) -> Result<FiberRef, StackError> {
@@ -537,7 +568,14 @@ pub(super) fn create(
         });
     }
     let pool = StackPool::global();
-    let mut slot = pool.take(params.stack_size)?;
+    let cache_of = on_worker.and_then(|index| runtime.worker(index));
+    let spawned = cache_of.is_some();
+    let mut slot = match cache_of {
+        // SAFETY: `on_worker` is the calling thread's worker (its running
+        // fiber spawns), the only thread that uses its cache.
+        Some(cache_of) => unsafe { cache_of.take_cached_slot(params.stack_size) }?,
+        None => pool.take(params.stack_size)?,
+    };
     let place = match slot.reserve_top(size_of::<ExecCtx>(), align_of::<ExecCtx>()) {
         Ok(place) => place,
         Err(error) => {
@@ -553,7 +591,7 @@ pub(super) fn create(
         soft_limit,
         hard_limit,
         stack_top,
-        sched: FiberSched::scheduled(id, Arc::clone(runtime), worker, start),
+        sched: FiberSched::scheduled(id, Arc::clone(runtime), worker, spawned, start),
         ..params.init
     };
     let fcb = place.cast::<ExecCtx>();

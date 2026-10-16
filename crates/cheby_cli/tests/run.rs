@@ -885,14 +885,14 @@ const SCOPED_READER: &str = "//! A detached fiber waits for a scoped child block
     test \"the next test runs\" {\n  assert 1 + 1 == 2\n}\n";
 
 /// D-786 (review finding CONC-W2-1 of gate 2): the teardown skips a
-/// detached fiber that waits for a scoped child blocked inline in
+/// detached fiber that waits for a scoped child blocked in
 /// `io::read_line`, so `cheby run` exits with 0 while standard input stays
-/// open. Before the fix it waited for the read. Two workers or more: with
-/// one, the blocked call holds the only worker, and `main` with it, until
-/// I1's blocking pool.
+/// open. Before the fix it waited for the read. At every thread count,
+/// one included: the child waits on the blocking pool, which holds no
+/// worker (D-683, GAP(pool-in-the-survey)).
 #[test]
 fn a_detached_fiber_waiting_for_a_blocked_reader_does_not_hold_up_run() {
-    for threads in ["2", "4"] {
+    for threads in ["1", "2", "4"] {
         let (status, stdout) = with_open_stdin("run", "scoped_reader_run", SCOPED_READER, threads);
         assert_eq!(status, Some(0), "CHEBY_THREADS={threads}: {stdout}");
         assert_eq!(stdout, "main done\n", "CHEBY_THREADS={threads}");
@@ -901,10 +901,10 @@ fn a_detached_fiber_waiting_for_a_blocked_reader_does_not_hold_up_run() {
 
 /// D-786, D-782: the same in `cheby test`: the first test's teardown
 /// skips the detached fiber, the next test runs, and `cheby test` exits
-/// with 0 (two workers or more, as above).
+/// with 0 (at every thread count, as above).
 #[test]
 fn a_detached_fiber_waiting_for_a_blocked_reader_does_not_hold_up_test() {
-    for threads in ["2", "4"] {
+    for threads in ["1", "2", "4"] {
         let (status, stdout) =
             with_open_stdin("test", "scoped_reader_test", SCOPED_READER, threads);
         assert_eq!(status, Some(0), "CHEBY_THREADS={threads}: {stdout}");
@@ -929,15 +929,16 @@ const SIGNALLING_READER: &str = "//! A detached reader signals `main`, then bloc
     test \"the next test runs\" {\n  assert 1 + 1 == 2\n}\n";
 
 /// D-786 (review finding ROB2-1 of gate 2): a fiber that wakes `main` and
-/// then blocks its worker inline in `io::read_line` hands `main` to
-/// another worker first, so `main` prints and the program exits with 0
-/// while standard input stays open. Before the fix `main` waited in the
-/// blocked worker's runnext slot until the read returned. Two workers or
-/// more: with one, the blocked call holds the only worker until I1's
-/// blocking pool.
+/// then blocks in `io::read_line` leaves `main` running, so `main` prints
+/// and the program exits with 0 while standard input stays open. Before
+/// the fix `main` waited in the blocked worker's runnext slot until the
+/// read returned. The reader now parks on the blocking pool and its worker
+/// runs `main`, at every thread count, one included (D-683); a reader
+/// blocked inline, after a refused pool thread, still hands `main` to
+/// another worker first (GAP(pool-thread-refused)).
 #[test]
 fn a_reader_that_wakes_main_then_blocks_hands_main_off() {
-    for threads in ["2", "4"] {
+    for threads in ["1", "2", "4"] {
         let (status, stdout) =
             with_open_stdin("run", "signalling_reader_run", SIGNALLING_READER, threads);
         assert_eq!(status, Some(0), "CHEBY_THREADS={threads}: {stdout}");
@@ -955,7 +956,8 @@ fn a_reader_that_wakes_main_then_blocks_hands_main_off() {
 /// ROB2-1: in a reader pipeline, a line is echoed as soon as it arrives,
 /// not when the next one does: the reader sends the line over a
 /// capacity-0 channel, which wakes `main` into its worker's runnext slot,
-/// and then blocks in `io::read_line` for the next line.
+/// and then waits in `io::read_line` for the next line, parked on the
+/// blocking pool (D-683), at every thread count.
 #[test]
 fn a_reader_pipeline_echoes_each_line_before_the_next_arrives() {
     use std::io::{BufRead as _, BufReader, Write as _};
@@ -981,7 +983,7 @@ fn a_reader_pipeline_echoes_each_line_before_the_next_arrives() {
             ),
         ],
     );
-    for threads in ["2", "4"] {
+    for threads in ["1", "2", "4"] {
         let mut child = Command::new(CHEBY)
             .args(["--color=never", "run"])
             .current_dir(&dir)

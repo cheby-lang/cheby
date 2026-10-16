@@ -83,6 +83,18 @@ impl Reach {
         self.items.iter().copied()
     }
 
+    /// Whether `def` is a reachable constant.
+    #[must_use]
+    pub fn is_const(&self, def: DefId) -> bool {
+        self.consts.contains(&def)
+    }
+
+    /// The items that the body of the reachable item `def` (a function's,
+    /// or a constant's initializer) refers to directly, sorted.
+    pub fn refers_to(&self, def: DefId) -> impl Iterator<Item = DefId> + '_ {
+        self.edges_of(def)
+    }
+
     /// The reachable constants in the dependency order of their
     /// initializers (D-535): a constant comes after every constant its
     /// initializer reaches, through functions included. Ties go by

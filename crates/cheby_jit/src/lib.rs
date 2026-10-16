@@ -15,10 +15,16 @@
 //!   their symbols carry `$r<generation>` (D-547), and a redefinition that
 //!   takes over an earlier definition repoints that slot once its batch is
 //!   finalized, so existing callers reach the new code
-//!   ([`Jit::revert_repoints`] undoes it for a rejected entry); one with
+//!   ([`Jit::revert_repoints`] undoes it for a rejected entry;
+//!   [`Jit::compile_unpublished`] leaves it to the REPL, which publishes
+//!   it once the constants the new code reads are filled); one with
 //!   another signature gets a new slot (D-456). [`Jit::slot`] and
 //!   [`Jit::repoint`] do the same by hand, and [`Jit::bind_values`] stores
-//!   the session values of prompt-level `let`s in constant slots.
+//!   the session values of prompt-level `let`s in constant slots. Slots
+//!   are written with release stores, since a REPL session's detached
+//!   fibers may run the JIT's code while a later entry compiles (D-712):
+//!   they call the old code or the new, and code is never freed while the
+//!   `Jit` lives.
 //! - The host never calls `tail`-convention code: it calls C-ABI entry
 //!   thunks ([`Jit::entry`]), which call the Cheby functions (D-453). An
 //!   [`Entry`] borrows its [`Jit`], so safe code cannot run an entry after
@@ -46,6 +52,7 @@
 
 use std::fmt;
 use std::mem::ManuallyDrop;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use cranelift_jit::{JITBuilder, JITModule};
@@ -307,6 +314,10 @@ pub struct Jit {
     /// The slots the last batch repointed, with the words they held
     /// before ([`Jit::revert_repoints`]).
     repointed: Vec<(cranelift_module::DataId, u64)>,
+    /// The repoints of the last batch not published yet: the slot, the
+    /// word of the new code and the redefinition
+    /// ([`Jit::compile_unpublished`]).
+    pending: Vec<(cranelift_module::DataId, u64, DefId)>,
     /// The code every batch that compiled defined ([`Jit::code_stats`]).
     code_stats: DefineStats,
 }
@@ -403,6 +414,7 @@ impl Jit {
             domain: Domain::new(),
             callbacks: Callbacks::default(),
             repointed: Vec::new(),
+            pending: Vec::new(),
             code_stats: DefineStats::default(),
         })
     }
@@ -463,6 +475,23 @@ impl Jit {
     /// A [`JitError`] if code generation fails or native symbols are
     /// missing ([`JitError::UnresolvedSymbols`], all of them).
     pub fn compile(&mut self, mirs: &[MirModule]) -> Result<(), JitError> {
+        self.compile_unpublished(mirs)?;
+        self.publish_all_repoints()
+    }
+
+    /// [`Jit::compile`], except that the slots its REPL redefinitions take
+    /// over keep their old code until [`Jit::publish_repoints`] (or
+    /// [`Jit::publish_all_repoints`]) points them at the new code. A REPL
+    /// session's detached fibers may call through those slots while the
+    /// batch's constants are evaluated, and the new code may read constants
+    /// that are still empty then (D-712, gate 3's CONC-W3-1), so the
+    /// session publishes a repoint only once every constant the new code
+    /// reads is filled ([`Jit::pending_repoints`]).
+    ///
+    /// # Errors
+    ///
+    /// As [`Jit::compile`]; a failed batch leaves nothing pending.
+    pub fn compile_unpublished(&mut self, mirs: &[MirModule]) -> Result<(), JitError> {
         let decls = self.decls.clone();
         let layouts = self.layouts.ids.clone();
         let result = self.compile_batch(mirs);
@@ -472,6 +501,7 @@ impl Jit {
             // it; its declarations stay in the module, unused.
             self.decls = decls;
             self.layouts.ids = layouts;
+            self.pending.clear();
         }
         result
     }
@@ -494,28 +524,95 @@ impl Jit {
         self.module
             .finalize_definitions()
             .map_err(|e| JitError::Codegen(CodegenError::Module(e.to_string())))?;
-        self.apply_repoints()?;
+        self.take_repoints()?;
         self.callbacks = self.find_callbacks();
         self.register_hooks(mirs)?;
         self.code_stats = self.code_stats.add(stats);
         Ok(())
     }
 
-    /// Points the slots that the batch's REPL redefinitions take over at
-    /// their new code (D-043), remembering what they held.
-    fn apply_repoints(&mut self) -> Result<(), JitError> {
+    /// Records the slots that the batch's REPL redefinitions take over,
+    /// with the words of their new code, as pending (D-043); the last
+    /// batch's repoints can no longer be reverted.
+    fn take_repoints(&mut self) -> Result<(), JitError> {
         self.repointed.clear();
-        for (slot, func) in self.decls.take_repoints() {
+        self.pending.clear();
+        for (slot, func, def) in self.decls.take_repoints() {
             let code = self.module.get_finalized_function(func);
             let word = u64::try_from(code.expose_provenance())
                 .map_err(|_| JitError::ice("an address does not fit in a word"))?;
+            self.pending.push((slot, word, def));
+        }
+        Ok(())
+    }
+
+    /// The REPL redefinitions of the last batch whose slots still hold the
+    /// old code ([`Jit::compile_unpublished`]), with those slots.
+    #[must_use]
+    pub fn pending_repoints(&self) -> Vec<(DefId, SlotHandle)> {
+        self.pending
+            .iter()
+            .map(|&(slot, _, def)| (def, SlotHandle { data: slot }))
+            .collect()
+    }
+
+    /// Points the pending slots among `slots` at their new code, with
+    /// release stores (D-712), remembering what they held
+    /// ([`Jit::revert_repoints`]). Slots that are not pending are ignored.
+    ///
+    /// # Errors
+    ///
+    /// An ICE if a slot's word cannot be written.
+    pub fn publish_repoints(&mut self, slots: &[SlotHandle]) -> Result<(), JitError> {
+        let (now, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut self.pending)
+            .into_iter()
+            .partition(|&(slot, _, _)| slots.contains(&SlotHandle { data: slot }));
+        self.pending = rest;
+        for (slot, word, _) in now {
             let old = self.write_slot(slot, word)?;
             self.repointed.push((slot, old));
         }
         Ok(())
     }
 
-    /// Writes `word` into the slot `slot` and returns what it held.
+    /// Points every pending slot at its new code ([`Jit::publish_repoints`]).
+    ///
+    /// # Errors
+    ///
+    /// An ICE if a slot's word cannot be written.
+    pub fn publish_all_repoints(&mut self) -> Result<(), JitError> {
+        let slots: Vec<SlotHandle> = self
+            .pending
+            .iter()
+            .map(|&(slot, _, _)| SlotHandle { data: slot })
+            .collect();
+        self.publish_repoints(&slots)
+    }
+
+    /// The slot the top-level function `def`'s code was last put in, whatever
+    /// its signature: the slot its callers load (D-043, D-456).
+    #[must_use]
+    pub fn slot_of(&self, def: DefId) -> Option<SlotHandle> {
+        self.decls
+            .slot_of(def)
+            .map(|decl| SlotHandle { data: decl.id })
+    }
+
+    /// Writes `word` into the slot `slot` with a release store and returns
+    /// what it held (D-712).
+    ///
+    /// Fibers of a REPL session's runtime may run this JIT's code while it
+    /// compiles (detached fibers, D-194), and their calls load the slot
+    /// with a plain aligned 8-byte load. Such a load is single-copy atomic
+    /// on x86-64 and aarch64, so a caller sees the old word or the new one,
+    /// never a mix, and calls the old code or the new; both stay valid,
+    /// since code is never freed while the `Jit` lives (D-625, D-626), and
+    /// the REPL publishes new code only once the constants it reads are
+    /// filled ([`Jit::compile_unpublished`]). The
+    /// release orders the new code's bytes, finalized and made visible to
+    /// every thread's instruction stream before this store (`finalize`'s
+    /// pipeline flush, `memory.rs`), and the data it reads before the word
+    /// that leads to it.
     fn write_slot(&mut self, slot: cranelift_module::DataId, word: u64) -> Result<u64, JitError> {
         let (address, size) = self.module.get_finalized_data(slot);
         if address.is_null() || size < 8 {
@@ -527,9 +624,18 @@ impl Jit {
         )]
         let pointer = address.cast_mut().cast::<u64>();
         // SAFETY: the slot is an 8-aligned, writable 8-byte data object of
-        // this JIT's module (declared writable and finalized), and `&mut
-        // self` keeps any entry of this JIT from running meanwhile.
-        let old = unsafe { pointer.replace(word) };
+        // this JIT's module (declared writable and finalized; a finalized
+        // writable segment stays mapped read-write until the JIT's memory
+        // is freed), valid for the reference's short life here. Rust code
+        // touches it only through atomics of this JIT (`write_slot` under
+        // `&mut self`, `slot_target`); generated code reads it with plain
+        // aligned loads, which are single-copy atomic on the supported
+        // targets (see above).
+        let atomic = unsafe { AtomicU64::from_ptr(pointer) };
+        // Only this JIT writes its slots, under `&mut self`: the word read
+        // here is the last one stored.
+        let old = atomic.load(Ordering::Relaxed);
+        atomic.store(word, Ordering::Release);
         Ok(old)
     }
 
@@ -552,13 +658,15 @@ impl Jit {
 
     /// Undoes the repointing of the last compiled batch: the REPL calls it
     /// when an entry whose code compiled is rejected afterwards, so that
-    /// existing callers keep the old code (all or nothing).
+    /// existing callers keep the old code (all or nothing). Repoints not
+    /// published yet are dropped.
     ///
     /// # Errors
     ///
     /// An ICE if a slot's word cannot be written.
     pub fn revert_repoints(&mut self) -> Result<(), JitError> {
-        for (slot, old) in std::mem::take(&mut self.repointed) {
+        self.pending.clear();
+        for (slot, old) in std::mem::take(&mut self.repointed).into_iter().rev() {
             self.write_slot(slot, old)?;
         }
         Ok(())
@@ -583,9 +691,12 @@ impl Jit {
             clippy::cast_ptr_alignment,
             reason = "code generation defines every data object with alignment 8"
         )]
-        let pointer = address.cast::<u64>();
-        // SAFETY: a finalized, 8-aligned data object of at least 8 bytes.
-        let word = unsafe { pointer.read() };
+        let pointer = address.cast_mut().cast::<u64>();
+        // SAFETY: a finalized, 8-aligned, writable data object of at least
+        // 8 bytes of this JIT's module, valid for the reference's short
+        // life here; Rust code writes it only with `write_slot`'s atomic
+        // store (D-712).
+        let word = unsafe { AtomicU64::from_ptr(pointer) }.load(Ordering::Acquire);
         Some(std::ptr::with_exposed_provenance(
             usize::try_from(word).ok()?,
         ))
@@ -750,10 +861,15 @@ impl Jit {
         (!address.is_null() && size >= 8).then_some(slot)
     }
 
-    /// Stores `word` in the slot of the constant `def`: the constant's
-    /// evaluated value, which code reads borrowed (E6). The slot holds the
-    /// reference; a value stored there must be static (frozen, D-539) or
-    /// stay alive for as long as code can read it.
+    /// Stores `word` in the slot of the constant `def` with a release store:
+    /// the constant's evaluated value, or a REPL session value (D-547),
+    /// which code reads borrowed (E6). The slot holds the reference; a
+    /// value stored there must be static (frozen, D-539) or stay alive for
+    /// as long as code can read it, and a session value is marked shared
+    /// first (D-705, D-712). Fibers of a REPL session may read a session
+    /// value's slot while a later entry rebinds it (D-194): their plain
+    /// aligned loads see the old word or the new one, and the release
+    /// orders the new value's object before the word that leads to it.
     ///
     /// # Errors
     ///
@@ -763,9 +879,14 @@ impl Jit {
             .const_slot(def)
             .ok_or_else(|| JitError::ice(format!("the constant {def:?} has no slot")))?;
         // SAFETY: the slot is an 8-aligned, writable 8-byte data object of
-        // this JIT's module (declared writable and finalized), and `&mut
-        // self` keeps any entry of this JIT from running meanwhile.
-        unsafe { slot.write(word) };
+        // this JIT's module (declared writable and finalized; it stays
+        // mapped read-write until the JIT's memory is freed), valid for the
+        // reference's short life here. Generated code reads it with plain
+        // aligned loads, single-copy atomic on x86-64 and aarch64. The
+        // only other Rust writes to a slot are the constant evaluator's
+        // lazy forcing (`cheby_runtime::consteval`), on the entry thread
+        // of an evaluation that `&mut self` here does not overlap.
+        unsafe { AtomicU64::from_ptr(slot) }.store(word, Ordering::Release);
         Ok(())
     }
 

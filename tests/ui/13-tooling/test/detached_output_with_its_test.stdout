@@ -1,0 +1,7 @@
+the test prints first
+the detached fiber prints
+test ui_test "has a detached fiber that prints" ... ok
+the second test prints
+test ui_test "prints at once" ... ok
+
+test result: ok. 2 passed; 0 failed; 0 filtered out

@@ -256,6 +256,19 @@ pub fn count_events() {
     COUNTING.store(COUNTING_ON, Ordering::Relaxed);
 }
 
+/// The report's lines for the stack slots (GAP(stack-slot-counters),
+/// extends D-635): process-wide, since the pool is (D-677), and counted
+/// only on demand like the events (D-768).
+fn slot_lines(counts: crate::fiber::stack::SlotCounts) -> [(&'static str, u64); 5] {
+    [
+        ("stack slots taken warm", counts.taken_warm),
+        ("stack slots taken cold", counts.taken_cold),
+        ("stack slots carved", counts.carved),
+        ("stack slots released whole", counts.released_whole),
+        ("stack slots deep-released", counts.deep_released),
+    ]
+}
+
 /// A duration in milliseconds with three decimals.
 fn millis(time: Duration) -> String {
     let micros = time.as_micros();
@@ -265,7 +278,8 @@ fn millis(time: Duration) -> String {
 /// The report `cheby run` prints to standard error after `main` when
 /// [`enabled`]: `main`'s wall time, the number and total wall time of the
 /// build's entries (its constants and `main`), the peak of live bytes,
-/// every counter of `stats`, one per line, and the leak checks skipped.
+/// every counter of `stats`, one per line, the process's stack-slot
+/// counters ([`slot_lines`]), and the leak checks skipped.
 #[must_use]
 pub fn report(main_time: Duration, peak_bytes: i64, stats: &Stats) -> String {
     let mut out = String::new();
@@ -278,6 +292,9 @@ pub fn report(main_time: Duration, peak_bytes: i64, stats: &Stats) -> String {
     );
     for event in Event::ALL {
         let _ = writeln!(out, "  {}: {}", event.name(), stats.count(event));
+    }
+    for (name, count) in slot_lines(crate::fiber::stack::StackPool::global().slot_counts()) {
+        let _ = writeln!(out, "  {name}: {count}");
     }
     let _ = writeln!(
         out,
@@ -417,6 +434,38 @@ mod tests {
         stats.skip_leak_check();
         let text = report(Duration::ZERO, 0, &stats);
         assert!(text.ends_with("  leak checks skipped: 1\n"), "{text}");
-        assert_eq!(text.lines().count(), 2 + Event::ALL.len());
+        assert_eq!(text.lines().count(), 2 + Event::ALL.len() + 5);
+        // GAP(stack-slot-counters): each in `bench-run`'s `<name>: <n>` form.
+        for name in [
+            "stack slots taken warm",
+            "stack slots taken cold",
+            "stack slots carved",
+            "stack slots released whole",
+            "stack slots deep-released",
+        ] {
+            let line = text
+                .lines()
+                .find(|line| line.trim_start().starts_with(&format!("{name}: ")))
+                .unwrap_or_else(|| panic!("no line for {name}: {text}"));
+            assert!(
+                line.rsplit_once(": ").unwrap().1.parse::<u64>().is_ok(),
+                "{line}"
+            );
+        }
+    }
+
+    /// GAP(stack-slot-counters): the report prints the counts it is given,
+    /// in order.
+    #[test]
+    fn the_slot_lines_follow_the_counts() {
+        let counts = crate::fiber::stack::SlotCounts {
+            taken_warm: 1,
+            taken_cold: 2,
+            carved: 3,
+            released_whole: 4,
+            deep_released: 5,
+        };
+        let values: Vec<u64> = slot_lines(counts).iter().map(|(_, n)| *n).collect();
+        assert_eq!(values, [1, 2, 3, 4, 5]);
     }
 }

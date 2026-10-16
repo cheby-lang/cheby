@@ -146,8 +146,9 @@ pub struct Decls {
     pub(crate) pending_strings: Vec<(DataId, Vec<u8>)>,
     pub(crate) pending_slots: Vec<(DataId, FuncId)>,
     /// Existing slots to point at new code once the batch is finalized: a
-    /// REPL redefinition with the same signature (D-043).
-    pub(crate) pending_repoints: Vec<(DataId, FuncId)>,
+    /// REPL redefinition with the same signature (D-043), with the
+    /// redefinition's item.
+    pub(crate) pending_repoints: Vec<(DataId, FuncId, DefId)>,
     /// `(layout, its declaration, value fields)` of layouts to define.
     pub(crate) pending_layouts: Vec<(LayoutRef, LayoutDecl, u32)>,
     pub(crate) pending_consts: Vec<DataId>,
@@ -457,8 +458,9 @@ impl Decls {
     }
 
     /// The slots to point at new code now that their batch is finalized,
-    /// with that code: REPL redefinitions that take over a slot (D-043).
-    pub fn take_repoints(&mut self) -> Vec<(DataId, FuncId)> {
+    /// with that code and the redefinition it is: REPL redefinitions that
+    /// take over a slot (D-043).
+    pub fn take_repoints(&mut self) -> Vec<(DataId, FuncId, DefId)> {
         std::mem::take(&mut self.pending_repoints)
     }
 
@@ -947,7 +949,7 @@ impl Decls {
         let takes_over = self.session.get(def).is_some_and(|n| n.reuse.is_some());
         if takes_over && let Some(slot) = self.slots.get_mut(&key) {
             slot.func = id;
-            self.pending_repoints.push((slot.id, id));
+            self.pending_repoints.push((slot.id, id, def));
             self.def_slots.insert(def, key);
             return Ok(());
         }

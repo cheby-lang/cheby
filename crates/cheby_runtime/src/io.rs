@@ -47,11 +47,15 @@
 //! program opens could take descriptor 1. Stdin kernels must read through
 //! `std::io::stdin()` to keep both layers.
 //!
-//! Standard input has one process-wide buffered reader, Rust's `Stdin`
-//! (D-474). `io::read_line` (`cheby_io_sys_read_line`) and the REPL
+//! Standard input has one process-wide buffered reader (D-474), this
+//! module's `STDIN`, which reads through Rust's `Stdin`.
+//! `io::read_line` (`cheby_io_sys_read_line`) and the REPL
 //! ([`read_input_line`], D-548) both read through it, so neither takes
-//! lines meant for the other. Each read flushes standard output first
-//! (D-346).
+//! lines meant for the other, and they take lines in the order they ask
+//! for them. Each read flushes standard output first (D-346). A line the
+//! reader already holds is served to a fiber at once, without the
+//! blocking pool (GAP(stdin-fast-path)); only a read that must wait for
+//! input goes to the pool.
 //!
 //! The `Result` kernels of `std::io` (`sys_*`) never end the program on an
 //! IO failure: they return `Err((kind, message))` (D-484), with kind 1 not
@@ -61,14 +65,16 @@
 //! platform, although Windows refuses to open one with "access denied"
 //! (`docs/stdlib/io.md`).
 
-use std::io::{self, BufRead, Write};
+use std::io::{self, Read, Write};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+use parking_lot::Mutex;
 
 use crate::abi::{self, Word, sym};
 use crate::capture::{self, Stream};
 use crate::ctx::ExecCtx;
-use crate::fiber_ops::cancel::Cancelled;
+use crate::fiber_ops::cancel::{self, Cancelled};
 use crate::panic::fatal;
 use crate::sched::blocking::run_blocking;
 use crate::unwind::guard::guarded;
@@ -329,10 +335,11 @@ pub unsafe extern "C" fn cheby_io_sys_write_stderr(text: Word) -> Word {
 /// through the process-wide reader (D-346, D-474): `Ok(Some(line))`
 /// without its ending (D-305), `Ok(None)` at the end of input, the
 /// invalid-data pair for a line that is not UTF-8, which is consumed
-/// (D-311), and the error pair when standard input cannot be read. The
-/// read runs on the blocking pool (D-683); a cancellation that arrives
-/// meanwhile is delivered once the line has been read, and the line is
-/// released (§10.7).
+/// (D-311), and the error pair when standard input cannot be read. A line
+/// the reader already holds is taken on the fiber (GAP(stdin-fast-path));
+/// otherwise the read runs on the blocking pool (D-683), and a
+/// cancellation that arrives meanwhile is delivered once the line has been
+/// read, and the line is released (§10.7).
 ///
 /// # Safety
 ///
@@ -343,11 +350,21 @@ pub unsafe extern "C" fn cheby_io_sys_read_line(ctx: *mut ExecCtx) -> Word {
     guarded(guard_ctx(ctx), || {
         flush_before_read();
         // SAFETY: forwarded from the caller.
-        let line = unsafe {
-            blocking_call(ctx, || {
-                read_line_unflushed().map_err(|error| Failure::of(&error))
-            })
-        };
+        let buffered = unsafe { ctx.as_ref() }.and_then(buffered_line);
+        let line = buffered.map_or_else(
+            || {
+                // Counted from before the job is submitted, so that no
+                // fast path takes a line before this read (D-548).
+                let waiter = Waiter::new();
+                // SAFETY: forwarded from the caller.
+                unsafe {
+                    blocking_call(ctx, move || {
+                        read_line_waiting(waiter).map_err(|error| Failure::of(&error))
+                    })
+                }
+            },
+            |line| Ok(Some(line)),
+        );
         match line {
             Ok(Some(line)) => text_result(&line, values::some),
             Ok(None) => values::ok(values::none()),
@@ -586,6 +603,11 @@ pub(crate) fn write_stream(stream: Stream, parts: &[&[u8]]) -> io::Result<()> {
 /// buffered so far was written (`io::write_stdout`, D-365, D-574).
 fn write_routed(stream: Stream, parts: &[&[u8]], flush: bool) -> io::Result<()> {
     if let Some(taken) = capture::route(stream, parts) {
+        // A captured `io::write_stdout` records its flush, which the
+        // host's replay makes (D-723).
+        if flush {
+            let _ = capture::flush();
+        }
         return taken;
     }
     match stream {
@@ -636,13 +658,14 @@ static STDOUT_FAILURE_REPORTED: AtomicBool = AtomicBool::new(false);
 /// an error again (D-306).
 ///
 /// A fiber whose output is captured has nothing of its own in standard
-/// output's buffer: its flush is a no-op that succeeds (D-723).
+/// output's buffer: its flush is recorded in its capture, for the host's
+/// replay, and succeeds (D-723).
 ///
 /// # Errors
 ///
 /// The flush's IO error, for example `EPIPE` when the reader has gone.
 pub fn flush_stdout() -> io::Result<()> {
-    if capture::captured() {
+    if capture::flush() {
         return Ok(());
     }
     // The load runs under the lock of the `match`'s scrutinee (D-684).
@@ -660,17 +683,188 @@ fn flush_before_read() {
     }
 }
 
-/// Reads the next line of standard input through the process-wide reader
-/// (D-474), once standard output has been flushed (D-346), without its
-/// ending: a final `\n` or `\r\n` is removed (D-305). `Ok(None)` at the
-/// end of input. It blocks the calling thread: a blocking-pool job, or the
-/// REPL's host thread.
-fn read_line_unflushed() -> io::Result<Option<Vec<u8>>> {
-    let mut line = Vec::new();
-    if io::stdin().lock().read_until(b'\n', &mut line)? == 0 {
-        return Ok(None);
+/// Standard input's one buffered reader (D-474): `io::read_line` and the
+/// REPL's [`read_input_line`] both take their lines from it, so neither
+/// takes lines meant for the other (D-548). It reads through
+/// `std::io::stdin()`, which keeps D-474's closed-stream layer. Its lock
+/// is a leaf (plan §0 'Locks'): a blocking-pool thread or the REPL's host
+/// thread holds it while it waits for input, and a fiber only tries it
+/// ([`serve_buffered`]), so no worker waits on it and no guard lives
+/// across a switch.
+static STDIN: Mutex<LineReader> = Mutex::new(LineReader::new());
+
+/// The reads of standard input that wait for [`STDIN`] to give them a
+/// line: a blocking-pool job submitted and not yet done, or the REPL's
+/// host thread in its read. While one waits, the fast path serves no
+/// line, so lines go out in the order the reads asked for them (D-548).
+static STDIN_WAITERS: AtomicUsize = AtomicUsize::new(0);
+
+/// How many bytes one read of standard input asks for: more than Rust's
+/// `Stdin` buffers (8 KiB), so the read goes straight to the descriptor
+/// when that buffer is empty, and a pipe's whole buffer fits.
+const STDIN_CHUNK: usize = 64 * 1024;
+
+/// Bytes read from standard input and not yet returned as lines.
+#[derive(Debug)]
+struct LineReader {
+    /// The bytes read; those before `start` were returned.
+    data: Vec<u8>,
+    /// Where the next line starts in `data`.
+    start: usize,
+    /// How many bytes from `start` on are known to hold no `\n`: a line
+    /// longer than one read is searched once, never again from its start
+    /// with each read, so reading it takes time linear in its length, as
+    /// `BufRead::read_until` did (gate 3's ROB-W3-1).
+    scanned: usize,
+    /// The bytes searched for `\n` so far (tests only).
+    #[cfg(test)]
+    searched: usize,
+}
+
+impl LineReader {
+    /// An empty reader.
+    const fn new() -> Self {
+        Self {
+            data: Vec::new(),
+            start: 0,
+            scanned: 0,
+            #[cfg(test)]
+            searched: 0,
+        }
     }
-    Ok(Some(strip_line_ending(line)))
+
+    /// The next line without its ending (D-305), if a whole line is
+    /// buffered; it never reads. Only the bytes after those already known
+    /// to hold no `\n` are searched.
+    fn buffered_line(&mut self) -> Option<Vec<u8>> {
+        let rest = self.data.get(self.start..)?;
+        let fresh = rest.get(self.scanned..)?;
+        #[cfg(test)]
+        {
+            self.searched = self.searched.saturating_add(fresh.len());
+        }
+        let Some(found) = fresh.iter().position(|&byte| byte == b'\n') else {
+            self.scanned = rest.len();
+            return None;
+        };
+        let end = self.scanned.saturating_add(found);
+        let line = strip_line_ending(rest.get(..=end)?.to_vec());
+        self.start = self.start.saturating_add(end).saturating_add(1);
+        self.scanned = 0;
+        if self.start >= self.data.len() {
+            self.data.clear();
+            self.start = 0;
+        }
+        Some(line)
+    }
+
+    /// The next line without its ending (D-305), reading `input` until a
+    /// whole line is buffered or the input ends: at the end, the unfinished
+    /// line, or `Ok(None)` when nothing is buffered. As
+    /// `BufRead::read_until`: an interrupted read is retried, and a failure
+    /// consumes the bytes of the unfinished line.
+    fn read_line(&mut self, input: &mut impl Read) -> io::Result<Option<Vec<u8>>> {
+        loop {
+            if let Some(line) = self.buffered_line() {
+                return Ok(Some(line));
+            }
+            self.data.drain(..self.start.min(self.data.len()));
+            self.start = 0;
+            let filled = self.data.len();
+            self.data.resize(filled.saturating_add(STDIN_CHUNK), 0);
+            let read = match self.data.get_mut(filled..) {
+                Some(free) => input.read(free),
+                None => Ok(0),
+            };
+            match read {
+                Ok(0) => {
+                    self.data.truncate(filled);
+                    self.scanned = 0;
+                    if self.data.is_empty() {
+                        return Ok(None);
+                    }
+                    return Ok(Some(strip_line_ending(std::mem::take(&mut self.data))));
+                }
+                Ok(count) => self.data.truncate(filled.saturating_add(count)),
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {
+                    self.data.truncate(filled);
+                }
+                Err(error) => {
+                    self.data.clear();
+                    self.scanned = 0;
+                    return Err(error);
+                }
+            }
+        }
+    }
+}
+
+/// One read of standard input waiting for [`STDIN`], counted in
+/// [`STDIN_WAITERS`] from its creation until it is dropped: when the read
+/// has its line, or with a job that never ran.
+#[derive(Debug)]
+struct Waiter(&'static AtomicUsize);
+
+impl Waiter {
+    /// Counts a read that waits for [`STDIN`].
+    fn new() -> Self {
+        Self::on(&STDIN_WAITERS)
+    }
+
+    /// Counts a read in `waiters`.
+    fn on(waiters: &'static AtomicUsize) -> Self {
+        waiters.fetch_add(1, Ordering::SeqCst);
+        Self(waiters)
+    }
+}
+
+impl Drop for Waiter {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// `io::read_line`'s fast path (GAP(stdin-fast-path), a D-731-kind
+/// optimization): a line [`STDIN`] already holds is taken on the fiber
+/// `me`, without a blocking-pool round trip. `None` sends the read to the
+/// pool: a cancellation is pending, which raises there before any line is
+/// taken (GAP(pool-check-before-submit)), or [`serve_buffered`] has no
+/// line to give. With a round trip per line, 100k piped lines took 23.21x
+/// checkpoint 3's time (MA's quiet reading); with this path, about 0.85x
+/// (I1t's busy reading, 64 KiB per pool read). A long line takes time
+/// linear in its length, since [`LineReader`] searches each byte once: a
+/// 64 MiB line read in 0.05 s (`cp4-w1` 0.03 s; 9.26 s while it was
+/// searched again with each read, gate 3's ROB-W3-1).
+fn buffered_line(me: &ExecCtx) -> Option<Vec<u8>> {
+    if cancel::check(me).is_err() {
+        return None;
+    }
+    serve_buffered(&STDIN, &STDIN_WAITERS)
+}
+
+/// A line `reader` already holds, if no read waits in `waiters` (it asked
+/// first, D-548) and no thread holds `reader` (it waits for input, and the
+/// caller must not). Never blocks.
+fn serve_buffered(reader: &Mutex<LineReader>, waiters: &AtomicUsize) -> Option<Vec<u8>> {
+    let mut reader = reader.try_lock()?;
+    if waiters.load(Ordering::SeqCst) != 0 {
+        return None;
+    }
+    reader.buffered_line()
+}
+
+/// Reads the next line of standard input through [`STDIN`] (D-474), once
+/// standard output has been flushed (D-346), without its ending: a final
+/// `\n` or `\r\n` is removed (D-305). `Ok(None)` at the end of input. It
+/// blocks the calling thread (a blocking-pool job, or the REPL's host
+/// thread) and ends `waiter`, its count in [`STDIN_WAITERS`], once it has
+/// its line, before it releases the reader.
+fn read_line_waiting(waiter: Waiter) -> io::Result<Option<Vec<u8>>> {
+    let mut reader = STDIN.lock();
+    let line = reader.read_line(&mut io::stdin());
+    drop(waiter);
+    drop(reader);
+    line
 }
 
 /// Runs `call`, a system call that blocks the calling thread inline, with
@@ -721,7 +915,8 @@ fn strip_line_ending(mut line: Vec<u8>) -> Vec<u8> {
 /// (D-709, D-801).
 pub fn read_input_line() -> io::Result<Option<String>> {
     flush_stdout()?;
-    Ok(inline_marked(read_line_unflushed)
+    let waiter = Waiter::new();
+    Ok(inline_marked(|| read_line_waiting(waiter))
         .ok()
         .flatten()
         .map(|line| String::from_utf8_lossy(&line).into_owned()))
@@ -1047,6 +1242,190 @@ mod tests {
         assert_eq!(strip(b"abc\r"), b"abc\r");
         assert_eq!(strip(b"\n"), b"");
         assert_eq!(strip(b"a\r\r\n"), b"a\r");
+    }
+
+    /// An input that gives its chunks one read at a time, each read
+    /// interrupted once first, and then fails with `error` or ends.
+    struct Chunks {
+        parts: std::collections::VecDeque<&'static [u8]>,
+        interrupt: bool,
+        error: Option<io::ErrorKind>,
+    }
+
+    impl Chunks {
+        fn new(chunks: &[&'static [u8]], error: Option<io::ErrorKind>) -> Self {
+            Self {
+                parts: chunks.iter().copied().collect(),
+                interrupt: false,
+                error,
+            }
+        }
+    }
+
+    impl Read for Chunks {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            self.interrupt = !self.interrupt;
+            if self.interrupt {
+                return Err(io::Error::from(io::ErrorKind::Interrupted));
+            }
+            match self.parts.pop_front() {
+                Some(chunk) => {
+                    let count = chunk.len().min(buf.len());
+                    buf[..count].copy_from_slice(&chunk[..count]);
+                    if count < chunk.len() {
+                        self.parts.push_front(&chunk[count..]);
+                    }
+                    Ok(count)
+                }
+                None => match self.error {
+                    Some(kind) => Err(io::Error::from(kind)),
+                    None => Ok(0),
+                },
+            }
+        }
+    }
+
+    /// Every line of `input` through one reader, as text.
+    fn lines_of(input: &mut Chunks) -> io::Result<Vec<String>> {
+        let mut reader = LineReader::new();
+        let mut lines = Vec::new();
+        while let Some(line) = reader.read_line(input)? {
+            lines.push(String::from_utf8(line).unwrap());
+        }
+        Ok(lines)
+    }
+
+    /// GAP(stdin-fast-path): the reader splits the input into the lines
+    /// `BufRead::read_until` gave, whatever the chunks: endings removed
+    /// (D-305), a lone `\r` kept, the unfinished last line returned at
+    /// the end, interrupted reads retried.
+    #[test]
+    fn stdin_fast_path_reader_splits_lines_across_chunks() {
+        let mut input = Chunks::new(
+            &[
+                b"fir",
+                b"st\n\r",
+                b"\nsec",
+                b"ond\r\r\n",
+                b"\n",
+                b"la",
+                b"st",
+            ],
+            None,
+        );
+        assert_eq!(
+            lines_of(&mut input).unwrap(),
+            ["first", "", "second\r", "", "last"]
+        );
+        let mut empty = Chunks::new(&[], None);
+        assert_eq!(lines_of(&mut empty).unwrap(), Vec::<String>::new());
+        // Several lines in one chunk: the first read buffers them all, and
+        // the rest are served without reading.
+        let mut reader = LineReader::new();
+        let mut one_chunk = Chunks::new(&[b"a\nb\r\nc\n"], None);
+        assert_eq!(
+            reader.read_line(&mut one_chunk).unwrap(),
+            Some(b"a".to_vec())
+        );
+        assert_eq!(reader.buffered_line(), Some(b"b".to_vec()));
+        assert_eq!(reader.buffered_line(), Some(b"c".to_vec()));
+        assert_eq!(reader.buffered_line(), None);
+        assert_eq!(reader.read_line(&mut one_chunk).unwrap(), None);
+        // A line longer than one chunk.
+        let long: &'static [u8] = Box::leak(vec![b'x'; STDIN_CHUNK * 2 + 3].into_boxed_slice());
+        let mut long_input = Chunks::new(&[long, b"\nend\n"], None);
+        let lines = lines_of(&mut long_input).unwrap();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].len(), STDIN_CHUNK * 2 + 3);
+        assert_eq!(lines[1], "end");
+    }
+
+    /// GAP(stdin-fast-path), gate 3's ROB-W3-1: a line much longer than one
+    /// read, arriving in small chunks, is searched for its end once: the
+    /// bytes searched stay linear in the input (at most twice its length
+    /// here, never once per chunk from the line's start), and lines after
+    /// it are split as before.
+    #[test]
+    fn stdin_fast_path_reader_searches_a_long_line_once() {
+        const LONG: usize = 4 << 20;
+        const CHUNK: usize = 4 << 10;
+        let long: &'static [u8] = Box::leak(vec![b'x'; LONG].into_boxed_slice());
+        let mut parts: Vec<&'static [u8]> = long.chunks(CHUNK).collect();
+        parts.push(b"\nshort\nend");
+        let mut input = Chunks::new(&parts, None);
+        let mut reader = LineReader::new();
+        let first = reader.read_line(&mut input).unwrap().unwrap();
+        assert_eq!(first.len(), LONG);
+        assert_eq!(
+            reader.read_line(&mut input).unwrap(),
+            Some(b"short".to_vec())
+        );
+        assert_eq!(reader.read_line(&mut input).unwrap(), Some(b"end".to_vec()));
+        assert_eq!(reader.read_line(&mut input).unwrap(), None);
+        assert!(
+            reader.searched <= 2 * (LONG + 10),
+            "{} bytes searched for {} bytes of input",
+            reader.searched,
+            LONG + 10
+        );
+    }
+
+    /// GAP(stdin-fast-path): a failing read consumes the unfinished line,
+    /// as `read_until` did, and keeps nothing of it for the next read; the
+    /// whole lines before it were already returned.
+    #[test]
+    fn stdin_fast_path_reader_failure_consumes_the_unfinished_line() {
+        let mut reader = LineReader::new();
+        let mut input = Chunks::new(&[b"whole\nhal"], Some(io::ErrorKind::BrokenPipe));
+        assert_eq!(
+            reader.read_line(&mut input).unwrap(),
+            Some(b"whole".to_vec())
+        );
+        assert_eq!(
+            reader.read_line(&mut input).unwrap_err().kind(),
+            io::ErrorKind::BrokenPipe
+        );
+        assert_eq!(reader.buffered_line(), None);
+        let mut after = Chunks::new(&[b"next\n"], None);
+        assert_eq!(
+            reader.read_line(&mut after).unwrap(),
+            Some(b"next".to_vec())
+        );
+    }
+
+    /// GAP(stdin-fast-path), D-548: the fast path serves a buffered line
+    /// only while no other read waits for the reader (it asked first) and
+    /// no thread holds the reader (it waits for input); a waiter counts
+    /// until it is dropped, also with a job that never ran.
+    #[test]
+    fn stdin_fast_path_serves_only_when_no_read_waits() {
+        static READER: Mutex<LineReader> = Mutex::new(LineReader::new());
+        static WAITERS: AtomicUsize = AtomicUsize::new(0);
+        let mut input = Chunks::new(&[b"one\ntwo\nthree\nfour\n"], None);
+        assert_eq!(
+            READER.lock().read_line(&mut input).unwrap(),
+            Some(b"one".to_vec())
+        );
+        assert_eq!(serve_buffered(&READER, &WAITERS), Some(b"two".to_vec()));
+        let waiter = Waiter::on(&WAITERS);
+        assert_eq!(serve_buffered(&READER, &WAITERS), None, "a read waits");
+        let job = move || drop(waiter);
+        drop(job);
+        assert_eq!(
+            WAITERS.load(Ordering::SeqCst),
+            0,
+            "a dropped job ends its count"
+        );
+        let held = READER.lock();
+        assert_eq!(
+            serve_buffered(&READER, &WAITERS),
+            None,
+            "the reader is held"
+        );
+        drop(held);
+        assert_eq!(serve_buffered(&READER, &WAITERS), Some(b"three".to_vec()));
+        assert_eq!(serve_buffered(&READER, &WAITERS), Some(b"four".to_vec()));
+        assert_eq!(serve_buffered(&READER, &WAITERS), None, "nothing buffered");
     }
 
     #[test]

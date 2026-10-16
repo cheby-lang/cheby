@@ -12,7 +12,10 @@
 //! fiber whose group has a capture becomes one chunk, in write order, and
 //! never fails; any other write (a host thread, an isolated entry, a fiber
 //! of a group without a capture) goes to the real stream. A captured
-//! fiber's flushes are no-ops ([`captured`]).
+//! fiber's flushes of standard output are recorded in order ([`flush`],
+//! [`Chunk::Flush`]) instead of made, so the host's replay flushes where
+//! the program did, and the bytes and their buffering are those of a run
+//! without the capture (D-723).
 //!
 //! # Locks
 //!
@@ -36,12 +39,25 @@ pub enum Stream {
     Stderr,
 }
 
+/// One event of a test's output, in the order the test made it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Chunk {
+    /// One write call's bytes, the parts joined.
+    Write(Stream, Vec<u8>),
+    /// A flush of standard output that the program made: `io::write_stdout`
+    /// (D-365), the flush before a read (D-346) or before a panic report is
+    /// taken (D-595). The host flushes there too when it replays the
+    /// chunks, so the bytes reach the stream when they would have without
+    /// the capture, also relative to standard error (D-723).
+    Flush,
+}
+
 /// One test's captured output: chunks in write order, one per write call
 /// (D-723, ADR-0062). Its lock is a leaf, never held across a switch.
 #[derive(Debug, Default)]
 pub struct Capture {
     /// The chunks written so far and not taken.
-    chunks: Mutex<Vec<(Stream, Vec<u8>)>>,
+    chunks: Mutex<Vec<Chunk>>,
 }
 
 impl Capture {
@@ -53,18 +69,27 @@ impl Capture {
 
     /// Takes the chunks written so far, in order; the host replays them.
     #[must_use]
-    pub fn take(&self) -> Vec<(Stream, Vec<u8>)> {
+    pub fn take(&self) -> Vec<Chunk> {
         std::mem::take(&mut *self.chunks.lock())
     }
 
     /// Appends one write's bytes, the parts joined, as one chunk. The bytes
     /// are copied before the lock is taken, so the lock covers only a push.
     fn append(&self, stream: Stream, parts: &[&[u8]]) {
-        let chunk = parts.concat();
-        if chunk.is_empty() {
+        let bytes = parts.concat();
+        if bytes.is_empty() {
             return;
         }
-        self.chunks.lock().push((stream, chunk));
+        self.chunks.lock().push(Chunk::Write(stream, bytes));
+    }
+
+    /// Appends a flush of standard output, unless the last chunk is one:
+    /// a second flush in a row writes nothing.
+    fn append_flush(&self) {
+        let mut chunks = self.chunks.lock();
+        if chunks.last() != Some(&Chunk::Flush) {
+            chunks.push(Chunk::Flush);
+        }
     }
 }
 
@@ -88,10 +113,26 @@ pub(crate) fn route(stream: Stream, parts: &[&[u8]]) -> Option<std::io::Result<(
     Some(Ok(()))
 }
 
-/// Whether the running fiber's writes are captured: its flushes are then
-/// no-ops.
+/// Whether the running fiber's writes are captured, for this crate's
+/// tests; the io funnel asks [`flush`] instead.
+#[cfg(test)]
 pub(crate) fn captured() -> bool {
     current().is_some()
+}
+
+/// Offers a flush of standard output by the running fiber to its group's
+/// capture: true when its writes are captured, and the flush is then
+/// recorded as a [`Chunk::Flush`] instead of made; false when the caller
+/// flushes the real stream. Never raises, never allocates a Cheby object.
+#[must_use = "a caller whose flush was not taken flushes the real stream"]
+pub fn flush() -> bool {
+    match current() {
+        Some(capture) => {
+            capture.append_flush();
+            true
+        }
+        None => false,
+    }
 }
 
 #[cfg(test)]

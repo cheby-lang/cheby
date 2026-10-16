@@ -89,7 +89,15 @@ use crate::values;
 pub(super) type Waiter = WaitNode<UnsafeCell<Word>>;
 
 /// A channel (architecture §7.2).
+///
+/// Aligned to 128 bytes (GAP(rob4-2-channel-fix), C2): the lock and the
+/// state it guards sit on cache lines of their own, apart from the `Arc`'s
+/// counts before them and from whatever the allocator puts next, so
+/// workers contending for the lock do not also bounce the lines of
+/// unrelated data. 128 bytes is the line pair Apple's and recent x86
+/// cores prefetch together.
 #[derive(Debug)]
+#[repr(align(128))]
 pub(crate) struct Chan {
     inner: Mutex<ChanInner>,
 }
@@ -312,6 +320,26 @@ impl HandlePayload for ReceiverEnd {
     }
 }
 
+/// Whether the channel of `receiver`, a live `Receiver` handle (kind 41),
+/// has a wait node linked in either of its queues, read under the
+/// channel lock. A diagnostic for tests, never part of a program's
+/// behavior: the REPL's check that a teardown unlinked the node of a
+/// cancelled fiber parked on a channel that a session value still
+/// reaches (D-712, GAP(repl-asan-with-h1)).
+///
+/// # Safety
+///
+/// `receiver` is a live `Receiver` handle; the caller holds a reference to
+/// it for the call.
+#[doc(hidden)]
+#[must_use]
+pub(crate) unsafe fn channel_has_waiters(receiver: Word) -> bool {
+    // SAFETY: forwarded from the caller.
+    let end = unsafe { handles::payload::<ReceiverEnd>(receiver, HandleKind::Receiver) };
+    let inner = end.0.lock();
+    !inner.recvq.is_empty() || !inner.sendq.is_empty()
+}
+
 /// `channel::new`: the two ends of a new channel that buffers up to
 /// `capacity` values; a negative capacity counts as 0 (D-298, D-672). The
 /// buffer grows with the values it holds, not with `capacity`.
@@ -374,9 +402,13 @@ pub unsafe extern "C" fn cheby_channel_send(ctx: *mut ExecCtx, sender: Word, val
 unsafe fn send(ctx: *mut ExecCtx, sender: Word, value: Word) -> Word {
     // SAFETY: forwarded from the caller.
     let me = unsafe { running(ctx) };
-    // SAFETY: a live `Sender` handle, borrowed. The channel is cloned so
-    // that nothing borrowed from the handle is held across a park.
-    let chan = Arc::clone(&unsafe { handles::payload::<SenderEnd>(sender, HandleKind::Sender) }.0);
+    // SAFETY: a live `Sender` handle, borrowed by the caller for the whole
+    // call (D-187). GAP(rob4-2-channel-fix): the paths that do not park use
+    // the channel through this borrow, with no `Arc` clone (C1); the path
+    // that parks takes its own reference first (`keep` below), so nothing
+    // only the handle keeps alive is used across the park.
+    let end = unsafe { handles::payload::<SenderEnd>(sender, HandleKind::Sender) };
+    let chan: &Chan = &end.0;
     // SAFETY: a live value, borrowed; every object it reaches with a
     // positive count is confined to this fiber (I-1). The reference taken
     // is the channel's once the value is enqueued or handed over.
@@ -409,6 +441,10 @@ unsafe fn send(ctx: *mut ExecCtx, sender: Word, value: Word) -> Word {
         drop(value);
         needs_scheduler("channel::send");
     }
+    // The channel's own reference for the park: the lock the worker
+    // releases after the switch, and the lock taken again after it, lie in
+    // the allocation `keep` holds, whatever happens to the handle.
+    let keep = Arc::clone(&end.0);
     begin_park(me);
     let node = pin!(Waiter::new(me, UnsafeCell::new(value.into_word())));
     let link = NonNull::from(&*node);
@@ -453,7 +489,7 @@ unsafe fn send(ctx: *mut ExecCtx, sender: Word, value: Word) -> Word {
             // SAFETY: this fiber's own node, which a waker may have
             // unlinked already; the lock is released at the end of the
             // statement.
-            unsafe { chan.inner.lock().sendq.remove(link) };
+            unsafe { keep.inner.lock().sendq.remove(link) };
             // SAFETY: the walk won the node, so no waker took the value:
             // it is still the sender's, not enqueued, and released here as
             // the cancellation unwinds (D-670).
@@ -500,9 +536,11 @@ pub unsafe extern "C" fn cheby_channel_receive(ctx: *mut ExecCtx, receiver: Word
 unsafe fn receive(ctx: *mut ExecCtx, receiver: Word) -> Word {
     // SAFETY: forwarded from the caller.
     let me = unsafe { running(ctx) };
-    // SAFETY: a live `Receiver` handle, borrowed; cloned as in `send`.
-    let chan =
-        Arc::clone(&unsafe { handles::payload::<ReceiverEnd>(receiver, HandleKind::Receiver) }.0);
+    // SAFETY: a live `Receiver` handle, borrowed by the caller for the
+    // whole call (D-187); borrowed without a clone, and cloned only on the
+    // path that parks, as in `send` (GAP(rob4-2-channel-fix)).
+    let end = unsafe { handles::payload::<ReceiverEnd>(receiver, HandleKind::Receiver) };
+    let chan: &Chan = &end.0;
     let mut inner = chan.lock();
     match inner.take_ready() {
         Some(Ready::Value(value, woken)) => {
@@ -517,6 +555,8 @@ unsafe fn receive(ctx: *mut ExecCtx, receiver: Word) -> Word {
         drop(inner);
         needs_scheduler("channel::receive");
     }
+    // The channel's own reference for the park, as in `send`.
+    let keep = Arc::clone(&end.0);
     begin_park(me);
     let node = pin!(Waiter::new(me, UnsafeCell::new(0)));
     let link = NonNull::from(&*node);
@@ -548,7 +588,7 @@ unsafe fn receive(ctx: *mut ExecCtx, receiver: Word) -> Word {
         WaitState::Cancelled => {
             // SAFETY: as in `send`. The walk won the node, so no value was
             // handed to it: the receive takes nothing (D-670).
-            unsafe { chan.lock().unlink_receiver(link) };
+            unsafe { keep.lock().unlink_receiver(link) };
             raise_cancel(Some(ctx))
         }
         WaitState::Waiting => fatal(format_args!("a receiver woke while still waiting")),
@@ -563,4 +603,92 @@ fn ok(value: Word) -> Word {
     let result = values::ok(value.word());
     let _ = value.into_word();
     result
+}
+
+#[cfg(test)]
+mod tests {
+    //! The channel's own reference on the path that parks
+    //! (GAP(rob4-2-channel-fix)) and the test-only wait-node reader.
+
+    use super::super::tests::{
+        channel, close, drop_word, dup, int, op, open, receive, run, send, spawn, wait_for_waiters,
+    };
+    use super::*;
+
+    /// C2: the channel's lock and state start a 128-byte line of their own
+    /// and fit in it.
+    #[test]
+    fn fiber_ops_channel_lock_has_its_own_lines() {
+        assert_eq!(std::mem::align_of::<Chan>(), 128);
+        assert!(std::mem::size_of::<Mutex<ChanInner>>() <= 128);
+        let chan = Arc::new(Chan::new(4));
+        assert_eq!((&raw const chan.inner).addr() % 128, 0);
+    }
+
+    /// The number of references to the channel of `tx`, a live `Sender`.
+    fn references(tx: Word) -> usize {
+        // SAFETY: a live `Sender`, borrowed.
+        Arc::strong_count(&unsafe { handles::payload::<SenderEnd>(tx, HandleKind::Sender) }.0)
+    }
+
+    /// C1: a send or receive that does not park takes no reference to the
+    /// channel; one that parks holds its own until it returns.
+    #[test]
+    #[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+    fn fiber_ops_channel_a_parked_send_holds_its_own_reference() {
+        run(2, |me| {
+            let (tx, rx) = channel(me, 1);
+            assert_eq!(references(tx), 2, "the two handles");
+            // Fills the buffer without parking.
+            assert!(send(me, tx, values::int_word(1)).is_ok());
+            assert_eq!(references(tx), 2);
+            let scope = open(me);
+            // A second send parks on the full buffer.
+            // The closure takes over the reference it captures.
+            let fiber = spawn(
+                me,
+                scope,
+                &[values::int_word(op::SEND), dup(tx), values::int_word(2)],
+            );
+            drop_word(fiber);
+            wait_for_waiters(me, tx, 1, 0);
+            assert_eq!(references(tx), 3, "the parked sender's own");
+            // SAFETY: a live `Receiver`, borrowed.
+            assert!(unsafe { channel_has_waiters(rx) });
+            assert_eq!(receive(me, rx).map(int), Ok(1));
+            assert_eq!(receive(me, rx).map(int), Ok(2));
+            assert!(close(me, scope));
+            assert_eq!(references(tx), 2, "given back when the send returned");
+            // SAFETY: as above.
+            assert!(!unsafe { channel_has_waiters(rx) });
+            drop_word(tx);
+            drop_word(rx);
+            0
+        });
+    }
+
+    /// The test-only reader (L2's, D-712, GAP(repl-asan-with-h1)) sees a
+    /// parked receiver, and nothing once it is gone.
+    #[test]
+    #[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+    fn fiber_ops_channel_has_waiters_sees_a_parked_receiver() {
+        run(2, |me| {
+            let (tx, rx) = channel(me, 0);
+            // SAFETY: a live `Receiver`, borrowed (every call below).
+            assert!(!unsafe { channel_has_waiters(rx) });
+            let scope = open(me);
+            let fiber = spawn(me, scope, &[values::int_word(op::RECEIVE), dup(rx)]);
+            wait_for_waiters(me, tx, 0, 1);
+            assert!(unsafe { channel_has_waiters(rx) });
+            assert_eq!(references(tx), 3, "the parked receiver's own");
+            assert!(send(me, tx, values::int_word(7)).is_ok());
+            assert!(close(me, scope));
+            assert!(!unsafe { channel_has_waiters(rx) });
+            assert_eq!(references(tx), 2);
+            drop_word(fiber);
+            drop_word(tx);
+            drop_word(rx);
+            0
+        });
+    }
 }

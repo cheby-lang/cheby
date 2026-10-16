@@ -9,9 +9,11 @@
 //! `Jit`, checks that the fiber goes on, and only then shuts the runtime
 //! down, which cancels and unwinds the fiber through the dropped JIT's
 //! code. The `run_main` tests go through `cheby run`'s path instead
-//! (`run`, `Program::run`): a detached fiber blocked inline in input or
-//! output is skipped (D-786), and its worker returns into the JIT's code
-//! after the `Jit` is dropped.
+//! (`run`, `Program::run`): a detached fiber waiting on the blocking pool
+//! for input or a file is skipped (D-786, D-683), the stop gives up on the
+//! pool, and the read returns on a pool thread after the `Jit` is dropped,
+//! whose completion wakes nothing, so no thread returns into the dropped
+//! JIT's code (GAP(pool-wakes-only-running)).
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -239,13 +241,16 @@ fn wait_child(child: &mut std::process::Child) -> Option<std::process::ExitStatu
 
 /// D-786, D-708, I-6 (review finding MEM-1 of gate 2): `cheby run`'s path
 /// (`run`, so `Program::run` and `Entry::run_main`) returns while a
-/// detached fiber of `main` is blocked inline in `io::read_line`: the
-/// teardown skips it and its worker is never joined. Then the `Jit` is
-/// dropped with the `Program`. The runtime `run_main` made holds the JIT's
-/// code token and keeps it for that worker, so when a line arrives the
-/// worker returns into code that is still mapped, and the process lives
-/// on. Before the fix the token was never attached and the child died of
-/// `SIGSEGV`. Run as a child process, whose standard input the test
+/// detached fiber of `main` waits in `io::read_line`: the teardown skips
+/// it (D-786), since it waits on the blocking pool with D-786's mark set,
+/// and the stop gives up on the pool after its two polls
+/// (GAP(pool-in-the-survey), GAP(pool-wakes-only-running)). Then the
+/// `Jit` is dropped with the `Program`. When a line arrives, the read
+/// returns on a pool thread (D-683), whose completion wakes nothing, so
+/// the fiber never resumes into the dropped JIT's code, and the process
+/// lives on. Before gate 2's fix the read blocked a worker inline, whose
+/// code token was never attached, and the child died of `SIGSEGV` when the
+/// worker returned. Run as a child process, whose standard input the test
 /// controls.
 #[test]
 #[cfg_attr(
@@ -290,7 +295,7 @@ fn lifecycle_run_main_keeps_the_code_a_blocked_worker_returns_into() {
     }
     assert_eq!(seen.last().map(String::as_str), Some("RUN RETURNED 0"));
     std::thread::sleep(Duration::from_millis(200));
-    // The blocked read returns now, after the `Jit` was dropped.
+    // The read returns now, on a pool thread, after the `Jit` was dropped.
     stdin.write_all(b"a line\n").unwrap();
     stdin.flush().unwrap();
     drop(stdin);
@@ -303,11 +308,14 @@ fn lifecycle_run_main_keeps_the_code_a_blocked_worker_returns_into() {
 }
 
 /// D-786, D-708, I-6 (review finding CONC-W2-2 of gate 2), in process: a
-/// detached fiber of `main` blocks inline opening a FIFO, the teardown
-/// skips it, `Program::run` returns and drops the `Jit`. Then the test
-/// opens the FIFO for writing: the stuck worker's call returns into the
-/// JIT's code, which the run's runtime kept, and the test process lives
-/// on. Before the fix the process died of `SIGSEGV` here.
+/// detached fiber of `main` waits while a pool thread opens a FIFO
+/// (D-683), the teardown skips it, `Program::run` returns and drops the
+/// `Jit`. Then the test opens the FIFO for writing: the read returns on
+/// the pool thread, whose completion wakes nothing once the stop gave up
+/// on the pool (GAP(pool-wakes-only-running)), so nothing returns into the
+/// dropped JIT's code, and the test process lives on. Before gate 2's fix
+/// a worker blocked inline returned into unmapped code and the process
+/// died of `SIGSEGV` here.
 #[test]
 #[cfg(unix)]
 fn lifecycle_program_run_keeps_the_code_of_a_worker_blocked_in_file_io() {
@@ -339,7 +347,7 @@ fn lifecycle_program_run_keeps_the_code_of_a_worker_blocked_in_file_io() {
         panic!("the package did not compile");
     };
     assert_eq!(program.run().unwrap(), 0);
-    // The `Jit` is gone. The open returns now, into the JIT's code.
+    // The `Jit` is gone. The open returns now, on the pool thread.
     let mut writer = std::fs::OpenOptions::new().write(true).open(&fifo).unwrap();
     writer.write_all(b"hello").unwrap();
     drop(writer);

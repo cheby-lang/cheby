@@ -171,6 +171,26 @@ pub unsafe fn is_unique(value: Word) -> bool {
     unsafe { load_rc(word_to_ptr(value)) == abi::RC_UNIQUE }
 }
 
+/// The count in `value`'s header: positive and local to one fiber, 0 for
+/// a static object, negative once shared (D-072, D-705); `None` for a
+/// tagged integer or 0. A diagnostic for tests, never part of a program's
+/// behavior: the REPL's check that a binding is marked shared (D-712).
+///
+/// # Safety
+///
+/// `value` is a tagged integer, 0, or a word pointing to a live object.
+#[doc(hidden)]
+#[must_use]
+pub unsafe fn count_of(value: Word) -> Option<i32> {
+    if abi::is_tagged_int(value) || value == 0 {
+        return None;
+    }
+    // SAFETY: forwarded from the caller.
+    unsafe { alloc::check_live(value, "reading a count") };
+    // SAFETY: as above.
+    Some(unsafe { load_rc(word_to_ptr(value)) })
+}
+
 /// Marks `word` and everything it reaches shared (D-072, D-705): each heap
 /// object with a positive, fiber-local count `c` gets the count `-c`, so
 /// from then on its references are counted atomically and it is never
@@ -1040,6 +1060,30 @@ mod tests {
             store_rc(word_to_ptr(word), -1);
             assert!(!is_unique(word));
             store_rc(word_to_ptr(word), 1);
+            drop(word);
+        }
+    }
+
+    /// L2-1 (wave 3): the test-only reader the REPL's session test uses to
+    /// check that a binding is marked shared (D-705, D-712): `None` for a
+    /// tagged integer and 0, the local count, 0 for a static object, and
+    /// the negative count once marked shared.
+    #[test]
+    fn count_of_reads_local_static_and_shared_counts() {
+        let word = tuple(&[]);
+        let image = StaticImage::new("static");
+        // SAFETY: live objects, 0 and a tagged integer; `word` is used only
+        // by this thread, and its last reference is dropped at the end.
+        unsafe {
+            assert_eq!(count_of(abi::tag_int(5).unwrap()), None);
+            assert_eq!(count_of(0), None);
+            assert_eq!(count_of(word), Some(1));
+            dup(word);
+            assert_eq!(count_of(word), Some(2));
+            drop(word);
+            assert_eq!(count_of(image.word()), Some(0));
+            mark_shared(word);
+            assert_eq!(count_of(word), Some(-1));
             drop(word);
         }
     }

@@ -453,8 +453,14 @@ impl Shared {
         let Some(worker) = self.workers.fill(index) else {
             return Err(std::io::Error::other("no worker slot left"));
         };
-        // The slot's last thread, if any, no longer uses it: it marked it
-        // `DEAD` last, under this lock (`leave_or_rejoin`).
+        // The slot's last thread, if any, no longer uses it: marking it
+        // `DEAD` was the last thing it did there, either under this lock
+        // when it retired (`leave_or_rejoin`) or, at a stop, under the
+        // slot's targeted-queue lock (`WorkerShared::end_if_idle`,
+        // GAP(stop-ends-idle-worker)). Once stopping, a thread starts here
+        // only if `set_thread_count` looked at the flag just before the
+        // stop; the stop's join waits for it, and it ends through the same
+        // stop exit as the others.
         worker.set_live();
         self.idle.add_worker();
         let shared = Arc::clone(self);
@@ -819,7 +825,8 @@ pub(crate) unsafe fn wake(fiber: FiberRef, from_running: bool) -> bool {
 
 /// Hands the fibers waiting on the running fiber's worker to the other
 /// workers before that fiber blocks the worker inline in a system call
-/// (standard input, file IO; D-786, until I1's blocking pool), as Go's
+/// (standard input, file IO, `@blocking`; D-786: when the blocking pool
+/// could start no thread, `sched/blocking.rs`), as Go's
 /// `entersyscall` hands its P off: the runnext slot's fiber, which no
 /// thief takes, goes to the global queue, and an idle worker is woken to
 /// take it and to steal from the local deque. Without this a fiber woken
@@ -908,8 +915,16 @@ pub(crate) fn create_fiber(
         },
         stack_size,
     };
-    let fiber =
-        fiber::create(shared, spawner.sched.worker(), params, start).map_err(SpawnError::Stack)?;
+    // A spawn on a worker of the runtime takes its slot from that worker's
+    // cache first (GAP(worker-slot-cache)).
+    let fiber = fiber::create(
+        shared,
+        spawner.sched.worker(),
+        current_worker(shared),
+        params,
+        start,
+    )
+    .map_err(SpawnError::Stack)?;
     // The spawner's group (D-799), as its domain.
     let group = spawner
         .conc
@@ -1210,7 +1225,9 @@ impl Runtime {
                 runtime.unregister_root(root);
             }
         });
-        let fiber = match fiber::create(&self.shared, 0, params, start) {
+        // A root started by a host takes its slot from the global pool
+        // (GAP(worker-slot-cache)).
+        let fiber = match fiber::create(&self.shared, 0, None, params, start) {
             Ok(fiber) => fiber,
             Err(error) => {
                 self.shared.unregister_root(root);
@@ -1351,10 +1368,12 @@ impl Runtime {
     /// workers, among them the poll holder, and the monitor), so that no
     /// timer fires and no fiber runs afterwards (C-4), and releases the
     /// code tokens last. Frozen fibers' slots, control blocks, wait nodes
-    /// and timer entries are left as they are. A worker whose fiber is
-    /// blocked inline in a system call (D-786) is never joined, and the
-    /// code tokens are then kept (leaked): its fiber freezes when the call
-    /// returns.
+    /// and timer entries are left as they are. A fiber waiting on the
+    /// blocking pool stays parked: its job's completion wakes nothing
+    /// during a halt. A worker whose fiber is blocked inline in a system
+    /// call (D-786: no pool thread could start) is never joined, and the
+    /// code tokens are then kept (leaked): its fiber freezes when the
+    /// call returns.
     fn complete_halt(&mut self) {
         self.shared.begin_halt();
         let stuck = self.join_workers(true);
@@ -1381,6 +1400,10 @@ mod lifecycle_tests;
 mod park_models;
 #[cfg(test)]
 mod poll_tests;
+#[cfg(test)]
+mod retire_models;
+#[cfg(test)]
+mod slot_cache_tests;
 #[cfg(test)]
 pub(crate) mod testing;
 #[cfg(test)]
