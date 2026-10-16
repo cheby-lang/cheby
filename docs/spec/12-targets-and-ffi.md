@@ -213,6 +213,8 @@ A package may declare the targets it supports with the optional `targets` field 
 
 `@blocking` has no effect on JS.
 
+_Note:_ no Cheby code runs on the pool's threads (D-191), so the reference implementation calls a `@blocking` function there through a generated shim that takes the arguments as machine words and returns the result widened to one word (D-818). How foreign code on a pool thread builds Cheby values through `cheby.h` ([§12.5.1](#1251-native-abi)), and how the owned result of a call whose fiber was cancelled meanwhile is released, wait for M3, which settles how a package supplies native foreign code (D-818). When the pool cannot take the call, as when the system refuses it a thread, the reference implementation runs the call on the fiber's own thread instead and blocks that thread ([§10.9](10-concurrency.md#109-blocking-io)) (D-815, D-817).
+
 ## 12.8 Tail calls
 
 The tail-call guarantee ([§5.15.3](05-expressions.md#5153-guaranteed-tail-calls)) does not cover calls to foreign functions, nor calls from foreign code back into Cheby. A tail call to a foreign function compiles to an ordinary call.

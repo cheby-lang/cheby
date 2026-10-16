@@ -136,7 +136,7 @@ pub struct External {
     /// The function carries `@blocking`: each call runs the foreign
     /// function on the blocking pool while the calling fiber is parked
     /// (D-042, D-683). The resolver never sets it together with `context`
-    /// (GAP(blocking-with-std-context)).
+    /// (D-819).
     pub blocking: bool,
 }
 

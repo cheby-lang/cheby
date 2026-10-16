@@ -808,7 +808,7 @@ fn unwind_never_raising_kernels_get_no_edge() {
             blocking: false,
         };
         assert!(!rvalue_may_unwind(&call), "{symbol}");
-        // GAP(blocking-shim): a blocking call raises a cancellation after
+        // D-818: a blocking call raises a cancellation after
         // it returns, whatever its symbol.
         let blocking = Rvalue::CallForeign {
             symbol: symbol.into(),

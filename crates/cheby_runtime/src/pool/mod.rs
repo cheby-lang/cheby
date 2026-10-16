@@ -23,7 +23,7 @@
 //! would ever take the queue: [`Pool::submit`] then hands every queued job
 //! back to the caller, which runs them inline on its worker with D-786's
 //! mark and the hand-off; with pool threads running, the job stays queued
-//! for them (GAP(pool-thread-refused)).
+//! for them (D-817).
 //!
 //! The queue's lock is a leaf (plan §0 'Locks'): no other lock is taken
 //! under it, and no job runs under it.
@@ -56,13 +56,13 @@ pub(crate) const THREAD_NAME: &str = "cheby-blocking";
 pub(crate) type Job = Box<dyn FnOnce() + Send + 'static>;
 
 /// What [`Pool::submit`] did with a job.
-#[must_use = "jobs handed back must run inline (GAP(pool-thread-refused))"]
+#[must_use = "jobs handed back must run inline (D-817)"]
 pub(crate) enum Submitted {
     /// A pool thread runs it, now or when one is free.
     Queued,
     /// The system refused a thread and none runs: every queued job, the
     /// submitted one among them, in queue order, for the caller to run
-    /// inline (GAP(pool-thread-refused)).
+    /// inline (D-817).
     Refused(Vec<Job>),
 }
 
@@ -167,7 +167,7 @@ impl Pool {
     /// Queues `job`: an idle thread takes it, or a new thread starts for
     /// it while there are fewer than the cap, or it waits for a busy
     /// thread. When the system refuses a new thread and no thread runs,
-    /// every queued job comes back (GAP(pool-thread-refused)).
+    /// every queued job comes back (D-817).
     pub(crate) fn submit(&'static self, job: Job) -> Submitted {
         let mut state = self.state.lock();
         state.queue.push_back(job);

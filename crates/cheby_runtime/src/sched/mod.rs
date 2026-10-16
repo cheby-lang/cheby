@@ -270,10 +270,10 @@ pub(crate) struct Shared {
     /// code a pool thread runs outlives a stop.
     code: Mutex<Vec<CodeToken>>,
     /// Pinned fibers woken after their worker ended at a stop, left alone
-    /// (GAP(stop-ends-idle-worker)); [`Shared::left_at_stop`] reads it.
+    /// (D-821); [`Shared::left_at_stop`] reads it.
     left_at_stop: AtomicUsize,
     /// Set once by the host's stop when it gives up on the fibers waiting
-    /// on the blocking pool (GAP(pool-wakes-only-running),
+    /// on the blocking pool (D-815,
     /// `blocking::poll_stop`): from then on a pool completion wakes
     /// nothing, the workers end without waiting for it, and a blocking call
     /// runs inline, as after a refused pool thread.
@@ -457,7 +457,7 @@ impl Shared {
         // `DEAD` was the last thing it did there, either under this lock
         // when it retired (`leave_or_rejoin`) or, at a stop, under the
         // slot's targeted-queue lock (`WorkerShared::end_if_idle`,
-        // GAP(stop-ends-idle-worker)). Once stopping, a thread starts here
+        // D-821). Once stopping, a thread starts here
         // only if `set_thread_count` looked at the flag just before the
         // stop; the stop's join waits for it, and it ends through the same
         // stop exit as the others.
@@ -551,9 +551,9 @@ impl Shared {
     }
 
     /// How many pinned fibers a stop left alone after their worker ended
-    /// (GAP(stop-ends-idle-worker)). `run_main` reads it after the stop:
+    /// (D-821). `run_main` reads it after the stop:
     /// above 0, its leak check is skipped and the skip counted, as for a
-    /// fiber the teardown skipped (UQ-5 (a), D-786, D-710).
+    /// fiber the teardown skipped (D-786, D-710).
     pub(crate) fn left_at_stop(&self) -> usize {
         self.left_at_stop.load(Ordering::SeqCst)
     }
@@ -611,7 +611,7 @@ impl Shared {
     /// Whether worker `index` runs a fiber blocked inline in a system
     /// call (D-786): marked and `RUNNING`. A fiber parking on the blocking
     /// pool is marked only once it is `PARKING` (`blocking::on_pool`), so
-    /// it is never taken for one (GAP(pool-wakes-only-running)); while the
+    /// it is never taken for one (D-815); while the
     /// look runs, its worker cannot requeue it.
     fn worker_blocked(&self, index: usize) -> bool {
         self.look_at_running(index, |fiber| {
@@ -690,7 +690,7 @@ impl Shared {
     /// that has ended takes no fiber, so an unpinned one (the migration
     /// stress mode's) goes to the global queue instead, and a pinned one
     /// woken after its worker ended at a stop is left alone and counted
-    /// (GAP(stop-ends-idle-worker)).
+    /// (D-821).
     fn push_targeted(&self, index: usize, fiber: FiberRef) {
         let Some(worker) = self.worker(index) else {
             crate::panic::fatal(format_args!("a fiber's worker does not exist"));
@@ -698,7 +698,7 @@ impl Shared {
         if let Err(fiber) = worker.push_targeted(fiber) {
             // SAFETY: a runnable fiber is not retired.
             if unsafe { fiber.ctx() }.sched.pinned() {
-                // GAP(stop-ends-idle-worker): only its worker may run it
+                // D-821: only its worker may run it
                 // (D-687), and that worker ended at the stop, which no host
                 // of Cheby code reaches (it tears its groups down first). As
                 // D-786 skips a stuck fiber, the fiber is never run, requeued
@@ -916,7 +916,7 @@ pub(crate) fn create_fiber(
         stack_size,
     };
     // A spawn on a worker of the runtime takes its slot from that worker's
-    // cache first (GAP(worker-slot-cache)).
+    // cache first (D-825).
     let fiber = fiber::create(
         shared,
         spawner.sched.worker(),
@@ -1226,7 +1226,7 @@ impl Runtime {
             }
         });
         // A root started by a host takes its slot from the global pool
-        // (GAP(worker-slot-cache)).
+        // (D-825).
         let fiber = match fiber::create(&self.shared, 0, None, params, start) {
             Ok(fiber) => fiber,
             Err(error) => {
@@ -1247,7 +1247,7 @@ impl Runtime {
     /// waits on the blocking pool, before or during the stop, is runnable
     /// once its job completes, and the workers wait for that, until two
     /// polls 5 ms apart find every worker idle and no job completed
-    /// (GAP(pool-wakes-only-running)). A fiber still waiting then is never
+    /// (D-815). A fiber still waiting then is never
     /// resumed, as one blocked inline (D-786), and a root among them never
     /// reports. A runtime
     /// whose halt has started (a termination, D-709) completes the halt
@@ -1285,7 +1285,7 @@ impl Runtime {
     /// code tokens (D-708). The workers stay while a fiber waits on the
     /// blocking pool, whose completion makes it runnable, until the join
     /// gives up on the pool (`blocking::poll_stop`,
-    /// GAP(pool-wakes-only-running)). A worker whose fiber is blocked
+    /// D-815). A worker whose fiber is blocked
     /// inline in a system call (D-786) is never joined: the halt flag is
     /// set, so that fiber freezes when the call returns, and the code
     /// tokens and timers are kept (leaked), since that worker may still
@@ -1318,7 +1318,7 @@ impl Runtime {
     /// no worker starts or rejoins after the registry is drained. Without
     /// `freeze` (a stop), each round also polls the fibers waiting on the
     /// blocking pool, which keep the workers, and gives up on them as
-    /// `blocking::poll_stop` says (GAP(pool-wakes-only-running)).
+    /// `blocking::poll_stop` says (D-815).
     fn join_workers(&mut self, freeze: bool) -> bool {
         let mut pending: Vec<(usize, JoinHandle<()>)> =
             std::mem::take(&mut *self.shared.threads.lock());

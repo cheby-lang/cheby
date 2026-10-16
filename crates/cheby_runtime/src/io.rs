@@ -17,7 +17,7 @@
 //! (`sched::blocking::run_blocking`), and build the Cheby result on the
 //! fiber once it runs again, charged to its domain. The fiber stays marked
 //! as blocked while it waits, so a teardown and a halt skip it and count
-//! it (D-786, GAP(pool-in-the-survey)). Without a runtime the call runs
+//! it (D-786, D-814). Without a runtime the call runs
 //! inline, marked (D-692). The flush before a read stays on the fiber, and
 //! a pool thread never flushes, terminates or makes a Cheby value.
 //!
@@ -54,7 +54,7 @@
 //! lines meant for the other, and they take lines in the order they ask
 //! for them. Each read flushes standard output first (D-346). A line the
 //! reader already holds is served to a fiber at once, without the
-//! blocking pool (GAP(stdin-fast-path)); only a read that must wait for
+//! blocking pool (D-823); only a read that must wait for
 //! input goes to the pool.
 //!
 //! The `Result` kernels of `std::io` (`sys_*`) never end the program on an
@@ -336,7 +336,7 @@ pub unsafe extern "C" fn cheby_io_sys_write_stderr(text: Word) -> Word {
 /// without its ending (D-305), `Ok(None)` at the end of input, the
 /// invalid-data pair for a line that is not UTF-8, which is consumed
 /// (D-311), and the error pair when standard input cannot be read. A line
-/// the reader already holds is taken on the fiber (GAP(stdin-fast-path));
+/// the reader already holds is taken on the fiber (D-823);
 /// otherwise the read runs on the blocking pool (D-683), and a
 /// cancellation that arrives meanwhile is delivered once the line has been
 /// read, and the line is released (§10.7).
@@ -824,11 +824,11 @@ impl Drop for Waiter {
     }
 }
 
-/// `io::read_line`'s fast path (GAP(stdin-fast-path), a D-731-kind
+/// `io::read_line`'s fast path (D-823, a D-731-kind
 /// optimization): a line [`STDIN`] already holds is taken on the fiber
 /// `me`, without a blocking-pool round trip. `None` sends the read to the
 /// pool: a cancellation is pending, which raises there before any line is
-/// taken (GAP(pool-check-before-submit)), or [`serve_buffered`] has no
+/// taken (D-816), or [`serve_buffered`] has no
 /// line to give. With a round trip per line, 100k piped lines took 23.21x
 /// checkpoint 3's time (MA's quiet reading); with this path, about 0.85x
 /// (I1t's busy reading, 64 KiB per pool read). A long line takes time
@@ -946,7 +946,7 @@ pub(crate) fn try_write_stderr(text: &str) -> io::Result<()> {
 /// Writes `text` to the real standard error, never to a capture: the
 /// runtime's last words before the process ends (a fatal runtime error,
 /// D-770's edgeless unwinding), which no host would replay
-/// (GAP(capture-skips-last-words)).
+/// (D-820).
 ///
 /// # Errors
 ///
@@ -1295,7 +1295,7 @@ mod tests {
         Ok(lines)
     }
 
-    /// GAP(stdin-fast-path): the reader splits the input into the lines
+    /// D-823: the reader splits the input into the lines
     /// `BufRead::read_until` gave, whatever the chunks: endings removed
     /// (D-305), a lone `\r` kept, the unfinished last line returned at
     /// the end, interrupted reads retried.
@@ -1340,7 +1340,7 @@ mod tests {
         assert_eq!(lines[1], "end");
     }
 
-    /// GAP(stdin-fast-path), gate 3's ROB-W3-1: a line much longer than one
+    /// D-823, gate 3's ROB-W3-1: a line much longer than one
     /// read, arriving in small chunks, is searched for its end once: the
     /// bytes searched stay linear in the input (at most twice its length
     /// here, never once per chunk from the line's start), and lines after
@@ -1370,7 +1370,7 @@ mod tests {
         );
     }
 
-    /// GAP(stdin-fast-path): a failing read consumes the unfinished line,
+    /// D-823: a failing read consumes the unfinished line,
     /// as `read_until` did, and keeps nothing of it for the next read; the
     /// whole lines before it were already returned.
     #[test]
@@ -1393,7 +1393,7 @@ mod tests {
         );
     }
 
-    /// GAP(stdin-fast-path), D-548: the fast path serves a buffered line
+    /// D-823, D-548: the fast path serves a buffered line
     /// only while no other read waits for the reader (it asked first) and
     /// no thread holds the reader (it waits for input); a waiter counts
     /// until it is dropped, also with a job that never ran.

@@ -256,7 +256,7 @@ pub fn count_events() {
     COUNTING.store(COUNTING_ON, Ordering::Relaxed);
 }
 
-/// The report's lines for the stack slots (GAP(stack-slot-counters),
+/// The report's lines for the stack slots (D-824,
 /// extends D-635): process-wide, since the pool is (D-677), and counted
 /// only on demand like the events (D-768).
 fn slot_lines(counts: crate::fiber::stack::SlotCounts) -> [(&'static str, u64); 5] {
@@ -435,7 +435,7 @@ mod tests {
         let text = report(Duration::ZERO, 0, &stats);
         assert!(text.ends_with("  leak checks skipped: 1\n"), "{text}");
         assert_eq!(text.lines().count(), 2 + Event::ALL.len() + 5);
-        // GAP(stack-slot-counters): each in `bench-run`'s `<name>: <n>` form.
+        // D-824: each in `bench-run`'s `<name>: <n>` form.
         for name in [
             "stack slots taken warm",
             "stack slots taken cold",
@@ -454,7 +454,7 @@ mod tests {
         }
     }
 
-    /// GAP(stack-slot-counters): the report prints the counts it is given,
+    /// D-824: the report prints the counts it is given,
     /// in order.
     #[test]
     fn the_slot_lines_follow_the_counts() {

@@ -21,7 +21,7 @@
 //! used too (D-762). That holds for an item import as well, such as
 //! `import std::int::{show}`, when none of its names is written: every
 //! import makes its module a dependency, so removing it would also give
-//! E0063 (GAP(satisfaction-item-imports)).
+//! E0063 (D-822).
 
 use cheby_diag::{Diagnostic, Span, codes};
 use cheby_iface::{ItemSig, ModuleInterface, Name, Namespace, PackageId, builtin};

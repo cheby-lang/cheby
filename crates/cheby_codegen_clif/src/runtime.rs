@@ -78,7 +78,7 @@ pub enum RuntimeFunc {
     /// `uint64_t cheby_rt_blocking_call(ExecCtx *ctx, void (*shim)(const uint64_t *, uint64_t *),
     /// const uint64_t *args, uintptr_t nargs)`: runs an `@blocking` call's shim on the blocking
     /// pool and returns its result word unchanged; a cancellation pending after the return
-    /// raises through the flag (D-683, GAP(blocking-shim)).
+    /// raises through the flag (D-683, D-818).
     BlockingCall,
 }
 

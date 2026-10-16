@@ -13,7 +13,7 @@
 //! for input or a file is skipped (D-786, D-683), the stop gives up on the
 //! pool, and the read returns on a pool thread after the `Jit` is dropped,
 //! whose completion wakes nothing, so no thread returns into the dropped
-//! JIT's code (GAP(pool-wakes-only-running)).
+//! JIT's code (D-815).
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -244,7 +244,7 @@ fn wait_child(child: &mut std::process::Child) -> Option<std::process::ExitStatu
 /// detached fiber of `main` waits in `io::read_line`: the teardown skips
 /// it (D-786), since it waits on the blocking pool with D-786's mark set,
 /// and the stop gives up on the pool after its two polls
-/// (GAP(pool-in-the-survey), GAP(pool-wakes-only-running)). Then the
+/// (D-814, D-815). Then the
 /// `Jit` is dropped with the `Program`. When a line arrives, the read
 /// returns on a pool thread (D-683), whose completion wakes nothing, so
 /// the fiber never resumes into the dropped JIT's code, and the process
@@ -312,7 +312,7 @@ fn lifecycle_run_main_keeps_the_code_a_blocked_worker_returns_into() {
 /// (D-683), the teardown skips it, `Program::run` returns and drops the
 /// `Jit`. Then the test opens the FIFO for writing: the read returns on
 /// the pool thread, whose completion wakes nothing once the stop gave up
-/// on the pool (GAP(pool-wakes-only-running)), so nothing returns into the
+/// on the pool (D-815), so nothing returns into the
 /// dropped JIT's code, and the test process lives on. Before gate 2's fix
 /// a worker blocked inline returned into unmapped code and the process
 /// died of `SIGSEGV` here.

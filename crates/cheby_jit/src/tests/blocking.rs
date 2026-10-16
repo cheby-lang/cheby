@@ -1,4 +1,4 @@
-//! `@blocking` calls under the JIT (D-042, D-683, GAP(blocking-shim)):
+//! `@blocking` calls under the JIT (D-042, D-683, D-818):
 //! hand-built wrappers whose foreign call carries the blocking flag, bound
 //! to Rust kernels with [`Jit::define_symbol`], since no package supplies
 //! native code before OQ-P9 (M3). The call goes through the generated shim

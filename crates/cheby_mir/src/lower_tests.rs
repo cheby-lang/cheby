@@ -849,7 +849,7 @@ bb1:
     );
 }
 
-/// `@blocking` reaches MIR (D-042, D-683, GAP(blocking-shim)): the
+/// `@blocking` reaches MIR (D-042, D-683, D-818): the
 /// wrapper's foreign call carries the flag, which the dump prints only on
 /// that call, and the call keeps its unwind edge, since a cancellation
 /// raises after it returns. Every other foreign call dumps as before.

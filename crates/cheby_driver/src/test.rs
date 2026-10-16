@@ -46,7 +46,7 @@
 //!
 //! The std self-test checks every shipped std module with its tests
 //! (`Tests::All`), then builds and runs one batch per module, one test at a
-//! time and uncaptured, through the same runner (GAP(test-std-sequential)).
+//! time and uncaptured, through the same runner (D-837).
 //! When a module's batch does not build, each of its tests is built alone,
 //! so the ones that build still run. A module or test that does not build
 //! is counted and reported with its codes; the other modules still run.
@@ -197,7 +197,7 @@ pub struct TestReport {
     pub filtered_out: usize,
     /// Whether a write that has no `Result` failed and so ended the run
     /// (D-306, D-709), or a write of the report or of a test's captured
-    /// output failed (GAP(test-replay-write-failure)): the run stopped at
+    /// output failed (D-834): the run stopped at
     /// once, printed nothing more, and `cheby test` exits with 1 (D-783).
     pub terminated: bool,
     /// How long the tests ran, from the first start to the last test's
@@ -467,7 +467,7 @@ impl TestProgram {
     ///
     /// A failed write to `out` or `err` ends the run at once: the runtime
     /// is halted, nothing more is written, and the report says
-    /// `terminated` (D-306, D-783, GAP(test-replay-write-failure)), as it
+    /// `terminated` (D-306, D-783, D-834), as it
     /// does after a termination of a test on the thread backend, whose
     /// writes are not captured.
     ///
@@ -517,7 +517,7 @@ impl TestProgram {
             match end {
                 Ok(RunEnd::Done) => {}
                 Ok(RunEnd::Exited { .. } | RunEnd::WriteFailed) => {
-                    // D-783, GAP(test-replay-write-failure): the run stops
+                    // D-783, D-834: the run stops
                     // at once and prints nothing more; `cheby test` exits
                     // with 1. The halt freezes the tests still running and
                     // is completed while `jit` is still alive.
@@ -663,7 +663,7 @@ enum RunEnd {
     /// completes the halt while the `Jit` lives.
     Exited { index: usize, status: i32 },
     /// The sink could not write a test's output or line
-    /// (GAP(test-replay-write-failure)): the run stops. The caller halts
+    /// (D-834): the run stops. The caller halts
     /// the runtime while the `Jit` lives.
     WriteFailed,
 }
@@ -679,7 +679,7 @@ type Sink<'s, T> = dyn FnMut(&T, TestOutcome, Vec<Chunk>) -> std::io::Result<()>
 struct Hooks {
     /// Refuses the start of the test at this index, as if no stack could
     /// be taken for it, whenever it returns true
-    /// (GAP(parallel-test-stack-retry)).
+    /// (D-836).
     refuse: Option<Box<dyn FnMut(usize) -> bool>>,
     /// When set, a line per step of the runner, in order: `started <index>
     /// bound <k> running <n>`, `refused <index> running <n>` and `ended
@@ -720,7 +720,7 @@ struct Runner<'a, 'h> {
     stacks: Stacks,
     /// Whether each test's output is captured (`cheby test`), or written
     /// to the real streams as it runs (the std self-test,
-    /// GAP(test-std-sequential)).
+    /// D-837).
     capture: bool,
     /// At most this many tests at once: 1 for the std self-test.
     limit: usize,
@@ -852,7 +852,7 @@ impl Runner<'_, '_> {
         loop {
             // Start tests while fewer run than the bound, read at each
             // start: the runtime's threads now, which a test may change
-            // (§13.6, GAP(process-state-in-parallel-tests)).
+            // (§13.6, D-835).
             while let Some(&entry) = entries.get(next_start) {
                 let bound = runtime.threads().min(self.limit).max(1);
                 if running >= bound {
@@ -866,7 +866,7 @@ impl Runner<'_, '_> {
                         put(&mut slots, index, Slot::Running(started));
                         running = running.saturating_add(1);
                     }
-                    // GAP(parallel-test-stack-retry): no stack for the
+                    // D-836: no stack for the
                     // test's root while other tests run, whose stacks come
                     // back when they end: wait for one, then start this
                     // test again. With none running, the test fails with
@@ -981,7 +981,7 @@ impl Runner<'_, '_> {
     /// A test's fibers run no user code after the teardown (ADR-0029), and
     /// a fiber the teardown skipped only unwinds, so nothing reaches the
     /// capture after this; its releases charge the test's own domain,
-    /// which no other test's check reads (GAP(per-test-domain-checks)).
+    /// which no other test's check reads (D-833).
     fn finish(
         &mut self,
         runtime: &Runtime,
@@ -1006,7 +1006,7 @@ impl Runner<'_, '_> {
         // not leak; D-786: the teardown skipped a fiber waiting on the
         // blocking pool or blocked inline, which holds its objects. Either
         // way the test's check is skipped and counted, and only this
-        // test's (GAP(per-test-domain-checks)).
+        // test's (D-833).
         let skip = teardown.skipped > 0 || started.domain.system_refused();
         let outcome = judge(outcome, &started.domain, Base::NONE, skip)?;
         if let Some(domains) = &mut self.hooks.domains {
@@ -1096,7 +1096,7 @@ fn judge(
 
 /// Completes the halt that a termination started (D-709), or halts a run
 /// that stops early (a failed write of the report or of captured output,
-/// GAP(test-replay-write-failure), or an internal error): every thread of
+/// D-834, or an internal error): every thread of
 /// `runtime` is joined and its fibers, the running tests' included, stay
 /// frozen. The caller keeps the `Jit` alive until this returns and drops
 /// no value of the runtime (D-073, D-708).
@@ -1246,7 +1246,7 @@ fn std_module_tests(
 
 /// Runs `tests` of `jit`, std module `path`'s, one at a time and
 /// uncaptured, each in an accounting domain of its own, through `cheby
-/// test`'s runner with a bound of one (D-542, GAP(test-std-sequential)),
+/// test`'s runner with a bound of one (D-542, D-837),
 /// and appends their results to `results`.
 ///
 /// # Errors
@@ -1480,7 +1480,7 @@ mod stuck_tests {
     //! D-786 in `cheby test`: a fiber that a teardown skipped goes on when
     //! its system call returns and releases what it holds into its own
     //! test's domain, so only that test's check is skipped and the tests
-    //! after it are checked (GAP(per-test-domain-checks), which supersedes
+    //! after it are checked (D-833, which supersedes
     //! D-805's skips of later checks).
 
     use std::io::Write as _;
@@ -1608,9 +1608,9 @@ mod stuck_tests {
 #[cfg(unix)]
 mod runner_tests {
     //! The parallel runner (D-723): retries of a start refused a stack
-    //! (GAP(parallel-test-stack-retry)), the bound read at each start
-    //! (GAP(process-state-in-parallel-tests)), and checks on a domain per
-    //! test (D-691, D-771, GAP(per-test-domain-checks)), with tests that
+    //! (D-836), the bound read at each start
+    //! (D-835), and checks on a domain per
+    //! test (D-691, D-771, D-833), with tests that
     //! run at once.
 
     use std::path::PathBuf;
@@ -1693,7 +1693,7 @@ mod runner_tests {
     const TWO_TESTS: &str = "test \"a waits\" {\n  pause(200)\n  assert True\n}\n\n\
          test \"b runs\" {\n  assert True\n}\n";
 
-    /// GAP(parallel-test-stack-retry): a start refused a stack while
+    /// D-836: a start refused a stack while
     /// another test runs waits for that test to end and is tried again;
     /// with no test running, the test fails with the runtime's text and
     /// the next one still runs.
@@ -1758,7 +1758,7 @@ mod runner_tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// §13.6, GAP(process-state-in-parallel-tests): the bound on the
+    /// §13.6, D-835: the bound on the
     /// tests running at once is the runtime's thread count when each test
     /// starts, so a test that lowers it holds back the tests that start
     /// after it, while those already running go on.
@@ -1802,7 +1802,7 @@ mod runner_tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// D-691, GAP(per-test-domain-checks): each test is checked on a domain
+    /// D-691, D-833: each test is checked on a domain
     /// of its own, so a test that leaks one object fails with the leak
     /// check's message while a test beside it allocates and frees a million
     /// strings, and that test passes.

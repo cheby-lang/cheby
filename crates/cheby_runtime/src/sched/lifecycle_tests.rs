@@ -493,11 +493,11 @@ fn child_within_limit(name: &str, child: &str) -> (std::process::ExitStatus, Str
     (status, stderr)
 }
 
-/// D-786, GAP(pool-in-the-survey): a detached fiber waiting on the
+/// D-786, D-814: a detached fiber waiting on the
 /// blocking pool in `io::read_line` on a pipe that stays open cannot be
 /// stopped: it stays marked while the job runs, so the teardown skips it
 /// and counts it; `shutdown` joins every worker (the fiber holds none),
-/// the job's completion later wakes nothing (GAP(pool-wakes-only-running)),
+/// the job's completion later wakes nothing (D-815),
 /// and the process exits promptly with status 0 (debug and release
 /// builds). The name predates the pool, when the read blocked its worker.
 #[test]
@@ -539,7 +539,7 @@ fn lifecycle_teardown_skips_inline_io() {
 /// D-786, D-804 (review finding CONC-W2-1 of gate 2): the blocked fiber is
 /// not a member but a scoped child of one. The detached fiber waits in its
 /// scope's close for a child blocked in `io::read_line` (on the blocking
-/// pool, marked, GAP(pool-in-the-survey)) on a pipe that stays open, and a
+/// pool, marked, D-814) on a pipe that stays open, and a
 /// spinning sibling is cancelled and leaves. The
 /// teardown skips the member, counts the blocked child, and the process
 /// exits promptly with status 0. Before the fix the teardown polled until
@@ -652,7 +652,7 @@ fn lifecycle_teardown_waits_for_a_busy_sibling_of_a_blocked_fiber() {
     assert!(stderr.contains("skipped 1\n"), "{stderr}");
 }
 
-/// GAP(pool-thread-refused), D-786: when the system refuses a blocking-pool
+/// D-817, D-786: when the system refuses a blocking-pool
 /// thread and none runs, `io::read_line` runs inline on its worker, marked,
 /// with the hand-off: the teardown skips the reader and counts it,
 /// `shutdown` leaves that worker running, never joined, and the process

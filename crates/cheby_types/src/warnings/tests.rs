@@ -242,7 +242,7 @@ fn satisfaction_uses_an_item_import_of_a_home_module_in_std() {
     // (the driver adds a graph edge for every import's module), so
     // removing `import std::int::{double}` would give E0063 (D-489): it is
     // used when none of its names is written
-    // (GAP(satisfaction-item-imports), D-762). With a written name, the
+    // (D-822, D-762). With a written name, the
     // module stays a dependency without the other names, which stay unused.
     let b = std_module(&format!("import std::int::{{double}}\n\n{INTERPOLATES}"));
     assert_eq!(b.codes(), Vec::<String>::new(), "{}", b.rendered());

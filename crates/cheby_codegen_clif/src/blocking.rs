@@ -1,4 +1,4 @@
-//! `@blocking` foreign calls (D-042, D-683, GAP(blocking-shim)).
+//! `@blocking` foreign calls (D-042, D-683, D-818).
 //!
 //! An `@blocking` call runs its foreign function on the blocking pool while
 //! the calling fiber is parked. The pool runs Rust code that knows nothing

@@ -106,7 +106,7 @@ pub(crate) struct FiberSched {
     slot: UnsafeCell<Option<StackSlot>>,
     /// Whether a fiber running on a worker spawned it, so its slot may go
     /// to the cache of the worker that retires it; a root started by a
-    /// host gives its slot back to the global pool (GAP(worker-slot-cache),
+    /// host gives its slot back to the global pool (D-825,
     /// gate 3's MEM-W3-2).
     spawned: bool,
     /// What it runs first, taken when it starts.
@@ -177,7 +177,7 @@ impl FiberSched {
 
     /// Whether a fiber running on a worker spawned this one: its slot may
     /// then go to the cache of the worker that retires it
-    /// (GAP(worker-slot-cache)); a root's goes back to the global pool.
+    /// (D-825); a root's goes back to the global pool.
     pub(super) const fn spawned(&self) -> bool {
         self.spawned
     }
@@ -550,7 +550,7 @@ pub(crate) struct FiberParams {
 /// [`WARM_BYTES`] below the top (D-677), and prepares its first frame. The
 /// fiber is not in any queue yet. `on_worker` is the worker of `runtime`
 /// the calling thread is, when a fiber running there spawns: the slot then
-/// comes from that worker's cache first (GAP(worker-slot-cache)). A root
+/// comes from that worker's cache first (D-825). A root
 /// started by a host passes `None` and takes its slot from the global
 /// pool.
 pub(super) fn create(

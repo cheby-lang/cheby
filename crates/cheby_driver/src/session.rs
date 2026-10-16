@@ -203,7 +203,7 @@ pub struct Session {
     /// The group of the detached fibers that entries start now (D-799).
     /// Each teardown (`:reload`) opens a fresh one, so detached fibers
     /// started later never join a group that a teardown left closing
-    /// (D-800, GAP(repl-reload-teardown)).
+    /// (D-800, D-827).
     group: Arc<DetachedGroup>,
     /// Groups whose teardown skipped members blocked in a system call
     /// (D-786, D-804): they stay closing, and the session's end tears them
@@ -256,7 +256,7 @@ impl Drop for Session {
 /// run isolated. The manifest's `[runtime]` table is read once, when the
 /// session starts: `:reload` compares module files only (D-625) and
 /// neither applies nor mentions a changed table
-/// (GAP(repl-runtime-table-at-start)).
+/// (D-830).
 ///
 /// # Errors
 ///
@@ -389,7 +389,7 @@ impl Session {
     /// The exit status that a termination fixed (D-709), such as a
     /// detached fiber's failed write to standard error (D-306), or `None`
     /// while none happened. The REPL reads it before each prompt and after
-    /// each line it reads (GAP(repl-termination-between-entries)).
+    /// each line it reads (D-828).
     #[must_use]
     pub fn exit_status(&self) -> Option<i32> {
         self.runtime.as_ref().and_then(Runtime::exit_status)
@@ -398,7 +398,7 @@ impl Session {
     /// Ends the process if a termination happened while no entry ran: the
     /// session ends before the next prompt with the status the termination
     /// fixed and prints nothing more, after completing the halt (D-709,
-    /// D-797, D-801, GAP(repl-termination-between-entries)).
+    /// D-797, D-801, D-828).
     pub fn exit_if_terminated(&mut self) {
         if let Some(status) = self.exit_status() {
             self.exit_after_termination(status);
@@ -426,11 +426,11 @@ impl Session {
     /// skipped and counted (D-786, D-804), and their group stays closing,
     /// so it goes to the stuck groups that the session's end tears down
     /// again. Detached fibers started later join a fresh group either way
-    /// (GAP(repl-reload-teardown)). A skipped fiber parked on a standard
+    /// (D-827). A skipped fiber parked on a standard
     /// input read on the pool still takes the next line when its read
     /// returns, and drops it as it unwinds: the REPL's prompt and a
     /// session's detached readers share standard input in the order they
-    /// ask (D-548, GAP(repl-detached-stdin)). A teardown that meets a
+    /// ask (D-548, D-829). A teardown that meets a
     /// termination's halt ends the process with its status.
     fn tear_down_detached(&mut self) {
         let Some(runtime) = &self.runtime else {
@@ -924,7 +924,7 @@ impl Session {
         };
         // The entry runs on the package's `main-stack`, 64 MiB unless the
         // manifest sets another size (D-660, D-613), read when the session
-        // started (GAP(repl-runtime-table-at-start)). It carries whether
+        // started (D-830). It carries whether
         // the session's code has unwind edges (D-742): under
         // `CHEBY_UNWIND_EDGES=off` a raise ends the process with its
         // report (D-770).
@@ -1316,7 +1316,7 @@ impl Session {
 
     /// `:reload` (§13.5.3, D-098, D-547, D-625): first tears the session's
     /// detached fibers down, whatever follows (§13.5.4, D-712,
-    /// GAP(repl-reload-teardown)); then reads the
+    /// D-827); then reads the
     /// package's module files again. Each module whose text changed, each
     /// new module, and each module of the package that imports one of them
     /// is checked again as a new module, all or nothing; its items get new
@@ -1339,7 +1339,7 @@ impl Session {
         // Every `:reload` tears the session's detached fibers down first,
         // also outside a package, when no module changed and when the
         // reload is rejected; later detached fibers join a fresh group
-        // (D-712, D-194, D-799, GAP(repl-reload-teardown)). The JIT and the
+        // (D-712, D-194, D-799, D-827). The JIT and the
         // runtime stay.
         self.tear_down_detached();
         let Some(root) = self.root.clone() else {
@@ -2025,7 +2025,7 @@ impl Session {
 
     /// Evaluates the batch's new constants and points the slots its
     /// redefinitions take over at their new code, constants first
-    /// (GAP(repl-publish-after-constants), refines D-712, D-547, D-194).
+    /// (D-832, which refines D-712, D-547, D-194).
     ///
     /// The session's detached fibers may call through a slot at any time
     /// (D-194), and a constant read by code a detached fiber runs must be
@@ -2214,7 +2214,7 @@ impl Session {
 }
 
 /// The constants among `waiting` that the code of the function `root` may
-/// read (GAP(repl-publish-after-constants)): those its body and the
+/// read (D-832): those its body and the
 /// functions it reaches refer to. A read loads the constant's slot and
 /// never runs its initializer, so the walk does not enter initializers.
 fn constants_read(reach: &Reach, root: DefId, waiting: &[DefId]) -> Vec<DefId> {
@@ -2725,7 +2725,7 @@ mod tests {
             .unwrap();
     }
 
-    /// D-712, D-194 and GAP(repl-reload-teardown), GAP(repl-asan-with-h1):
+    /// D-712, D-194, D-827 and D-831:
     /// a detached fiber parked in a capacity-0 `channel::send`, on a
     /// channel whose `Receiver` is a session value and whose `Sender` only
     /// the fiber holds, is torn down by `:reload`, here outside a package

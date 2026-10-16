@@ -1,5 +1,5 @@
 //! Tests of the per-worker slot cache's scheduler side
-//! (GAP(worker-slot-cache), refines D-677 and D-749): a worker keeps the
+//! (D-825, which refines D-677 and D-749): a worker keeps the
 //! slots of the fibers it retires, up to four, for the fibers its running
 //! fiber spawns; a root started by a host takes its slot from the global
 //! pool; and the cache is empty once the worker's thread ends, at a stop,
@@ -100,7 +100,7 @@ fn fill_cache(shared: &Shared, me: &ExecCtx) -> u64 {
     failures
 }
 
-/// GAP(worker-slot-cache), D-677, D-749: a worker keeps the slots of the
+/// D-825, D-677, D-749: a worker keeps the slots of the
 /// fibers it retires, at most four (the rest go to the global pool), and a
 /// fiber running on it spawns on one of them.
 #[test]
@@ -133,7 +133,7 @@ fn slot_cache_keeps_retired_slots_for_the_worker_s_spawns() {
     runtime.shutdown();
 }
 
-/// GAP(worker-slot-cache): a root started by a host takes its slot from the
+/// D-825: a root started by a host takes its slot from the
 /// global pool, never from a worker's cache, even when it runs on that
 /// worker.
 #[test]
@@ -158,7 +158,7 @@ fn slot_cache_a_root_started_by_the_host_uses_the_global_pool() {
     runtime.shutdown();
 }
 
-/// GAP(worker-slot-cache), gate 3's MEM-W3-2: a root's slot never enters
+/// D-825, gate 3's MEM-W3-2: a root's slot never enters
 /// the cache, whatever its class (here the REPL's and `cheby test`'s
 /// 64 MiB main stack, which no spawn would take): after four roots, the
 /// cache is empty and still serves this worker's spawns.
@@ -193,7 +193,7 @@ fn slot_cache_keeps_no_root_slot() {
     runtime.shutdown();
 }
 
-/// GAP(worker-slot-cache), D-708: a stop drains every worker's cache to the
+/// D-825, D-708: a stop drains every worker's cache to the
 /// global pool before the worker's thread ends.
 #[test]
 #[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
@@ -210,7 +210,7 @@ fn slot_cache_is_empty_after_a_stop() {
     assert_eq!(shared.live.load(Ordering::SeqCst), 0);
 }
 
-/// GAP(worker-slot-cache), D-708, MEM-W1-1: a halt drains every worker's
+/// D-825, D-708, MEM-W1-1: a halt drains every worker's
 /// cache to the global pool, and the slot of the fiber it froze is never
 /// retired, so it enters no cache.
 #[test]
@@ -248,7 +248,7 @@ fn slot_cache_is_empty_after_a_halt() {
 /// slots that worker's cache held.
 const NO_REPORT: u64 = u64::MAX;
 
-/// GAP(worker-slot-cache), D-795, D-687: a worker that retires drains its
+/// D-825, D-795, D-687: a worker that retires drains its
 /// cache before its slot is marked `DEAD` (a thread started there later
 /// would use the cache). A fiber pinned to the other worker spawns into
 /// that worker's runnext slot, which no thief takes, so the spawned fiber

@@ -536,7 +536,7 @@ fn slots_in_use(size: usize) -> usize {
 /// panics unwinds to its catch point, is reported, and its slot goes back
 /// to the pool, never into quarantine; the runtime goes on running roots.
 /// The worker that retires a fiber keeps its slot in its cache, which
-/// goes back to the pool when the worker ends (GAP(worker-slot-cache)), so
+/// goes back to the pool when the worker ends (D-825), so
 /// the pool's count is read after the stop.
 #[test]
 #[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]

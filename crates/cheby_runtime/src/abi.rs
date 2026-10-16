@@ -559,7 +559,7 @@ pub mod sym {
     pub const STACK_SLOW_FRAME_UNWIND: &str = "cheby_rt_stack_slow_frame_unwind";
     /// `uint64_t cheby_rt_blocking_call(ExecCtx *ctx, void (*shim)(const uint64_t *args,
     /// uint64_t *out), const uint64_t *args, size_t nargs)`: an `@blocking` call (D-683,
-    /// GAP(blocking-shim)). Copies the `nargs` argument words, runs `shim` on them on the
+    /// D-818). Copies the `nargs` argument words, runs `shim` on them on the
     /// blocking pool while the fiber is parked (inline without a runtime), and returns the
     /// word `shim` stored, unchanged; a cancellation that arrived meanwhile raises through
     /// the flag at [`super::CTX_UNWIND`], never through the result, which may be 0 (D-670, D-734).

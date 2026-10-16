@@ -49,7 +49,7 @@
 //! An `@blocking` foreign call (D-683) runs on the blocking pool through
 //! `cheby_rt_blocking_call` and a generated C-ABI shim `cb$blk$<symbol>`
 //! per symbol and C signature, defined once per JIT with the batch that
-//! first uses it (`blocking.rs`, GAP(blocking-shim)).
+//! first uses it (`blocking.rs`, D-818).
 //!
 //! REPL session items (E4, D-547) are registered with
 //! [`Decls::set_session_name`]: their symbols use the module `<repl>` and
@@ -338,7 +338,7 @@ pub fn define_with_stats<M: Module>(
     for result in results {
         first.push(result?);
     }
-    // The shims of the batch's `@blocking` calls (GAP(blocking-shim)), in
+    // The shims of the batch's `@blocking` calls (D-818), in
     // declaration order; each is defined once per JIT, with the batch that
     // declared it. They are a few instructions each, so they are compiled
     // here rather than on the pool.

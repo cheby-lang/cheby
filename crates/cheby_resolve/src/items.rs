@@ -24,8 +24,7 @@
 //! makes its native kernel receive the running fiber's context first.
 //! In any other package they are unknown attributes. `@std_context` on a
 //! `@blocking` function is E0045, since a blocking kernel runs on a pool
-//! thread, which never receives the context (D-191,
-//! GAP(blocking-with-std-context)).
+//! thread, which never receives the context (D-191, D-819).
 
 use cheby_diag::{Diagnostic, Span, codes};
 use cheby_iface::{DefIndex, DefKind, Ice, IndexVec, Name, Namespace, PackageId, Vis};
@@ -553,7 +552,7 @@ impl Cx<'_, '_> {
         }
         if let Some(span) = std_context {
             if let (true, Some(first)) = (out.blocking, blocking) {
-                // GAP(blocking-with-std-context): a blocking call runs its
+                // D-819: a blocking call runs its
                 // kernel on a pool thread, which must never receive the
                 // fiber's context (D-191, D-683). The function keeps
                 // `@blocking`.
@@ -1186,7 +1185,7 @@ mod tests {
         assert!(blocking("g"));
     }
 
-    // GAP(blocking-with-std-context): `@std_context` hands the fiber's
+    // D-819: `@std_context` hands the fiber's
     // context to the kernel, and a blocking kernel runs on a pool thread
     // (D-191), so the two never go together. In either order the function
     // keeps `@blocking` and loses `@std_context`.

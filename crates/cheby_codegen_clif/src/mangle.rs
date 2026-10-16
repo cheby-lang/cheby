@@ -54,7 +54,7 @@ pub enum Kind {
     /// A continuation of a large literal (D-780, D-811).
     Cont,
     /// The C-ABI shim through which the blocking pool calls an `@blocking`
-    /// foreign function (D-683, GAP(blocking-shim)).
+    /// foreign function (D-683, D-818).
     Blk,
 }
 
@@ -260,7 +260,7 @@ pub fn large_frame_body(owner: &str) -> String {
 
 /// `cb$blk$<foreign symbol>`: the shim through which the blocking pool
 /// calls the `@blocking` foreign function `symbol` (D-683,
-/// GAP(blocking-shim)); the kind comes first (D-456). A later call site of
+/// D-818); the kind comes first (D-456). A later call site of
 /// the same symbol with another C signature, which only signature-free
 /// imports allow (a REPL redefinition), gets `cb$blk$<symbol>$$<n>` with
 /// `n` from 1: a C symbol holds no `$$`.

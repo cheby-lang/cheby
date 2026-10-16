@@ -2,8 +2,8 @@
 //! test's output is captured and replayed in source order with the bytes
 //! and the order of a run one test after another; a failed write of that
 //! replay ends the run with 1 and prints nothing more
-//! (GAP(test-replay-write-failure)); tests that run at once share standard
-//! input (GAP(process-state-in-parallel-tests)); and tests that wait run
+//! (D-834); tests that run at once share standard
+//! input (D-835); and tests that wait run
 //! beside each other, so the run phase shrinks with the thread count.
 //!
 //! The run phase is the runner's own measure (`TestReport::run_time`,
@@ -108,7 +108,7 @@ fn test_parallel_one_pipe_keeps_each_tests_chunk_order() {
     }
 }
 
-/// GAP(test-replay-write-failure): a test's own write to a broken standard
+/// D-834: a test's own write to a broken standard
 /// error goes to its capture and does not fail the test; the replay's
 /// write of it fails, so the run stops there, prints nothing more (the
 /// rest of that test's output, its line, the later tests and the summary),
@@ -164,7 +164,7 @@ fn test_parallel_a_broken_stderr_during_replay_ends_the_run_with_one() {
     assert_eq!(status, Some(1));
 }
 
-/// GAP(process-state-in-parallel-tests): tests that run at once share
+/// D-835: tests that run at once share
 /// standard input and take its lines in an unspecified order; both
 /// finish, each with one of the lines.
 #[test]

@@ -368,7 +368,7 @@ fn main() {
 }
 "#;
 
-/// GAP(stdin-fast-path), D-474, D-305: 20001 piped lines, more than one
+/// D-823, D-474, D-305: 20001 piped lines, more than one
 /// read of the reader's buffer, the last one with no ending, reach the
 /// program whole and in order, whether a line was already buffered (taken
 /// on the fiber) or had to be waited for (on the blocking pool).

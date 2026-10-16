@@ -692,10 +692,10 @@ pub struct RunConfig {
     /// the run's runtime holds as [`Runtime::attach`] does: released once
     /// every thread of the runtime is joined, and kept (leaked) when a
     /// worker whose fiber is blocked inline in a system call (the blocking
-    /// pool could start no thread, GAP(pool-thread-refused)) is never
+    /// pool could start no thread, D-817) is never
     /// joined (D-786), since that worker returns into the code when the
     /// call returns (D-708, I-6). A pool job holds its own clones of the
-    /// tokens (GAP(blocking-shim)). `None` for code that lives for the
+    /// tokens (D-818). `None` for code that lives for the
     /// whole process.
     pub code: Option<CodeToken>,
 }
@@ -846,7 +846,7 @@ pub unsafe fn run_main(entry: EntryFn, config: RunConfig) -> Result<i32, Runtime
     // domain, the update it stopped may have leaked the structure in
     // flight, which the program did not leak; D-786: a fiber waiting on
     // the blocking pool, or blocked inline in a system call, was skipped
-    // by the teardown and holds its objects (GAP(pool-in-the-survey));
+    // by the teardown and holds its objects (D-814);
     // frozen fibers hold theirs (D-708). In each case the check
     // is skipped and the skip counted (D-710).
     let skip = domain.system_refused() || stopped != Stopped::Clean;
@@ -895,7 +895,7 @@ enum Stopped {
     Clean,
     /// Torn down, except fibers waiting on the blocking pool or blocked
     /// inline in a system call (D-786), or a pinned fiber the stop left
-    /// alone (GAP(stop-ends-idle-worker)).
+    /// alone (D-821).
     Skipped,
     /// Frozen (D-073, D-708).
     Frozen,
@@ -957,7 +957,7 @@ fn stop_at_exit(
                 runtime.shutdown();
             }
             // A pinned fiber the stop left alone holds its objects as a
-            // skipped one does (GAP(stop-ends-idle-worker), UQ-5 (a)).
+            // skipped one does (D-821).
             if report.skipped > 0 || shared.left_at_stop() > 0 {
                 Stopped::Skipped
             } else {
@@ -1812,7 +1812,7 @@ mod tests {
         }
     }
 
-    /// GAP(stop-ends-idle-worker) under UQ-5 (a), D-786, D-710 (gate 1's
+    /// D-821, D-786, D-710 (gate 1's
     /// review finding ROB4-W1-1): a pinned fiber that the stop left alone
     /// and counted makes `run_main` skip its leak check, as a fiber the
     /// teardown skipped does; a stop that left none keeps the check.

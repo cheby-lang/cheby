@@ -200,7 +200,7 @@ fn a_crowded_class_releases_whole_slots() {
     assert_eq!(pool.take(1).unwrap().top(), tops[FREE_KEEP - 1]);
 }
 
-/// GAP(stack-slot-limit), D-749, D-761 (gate 3's MEM-W3-1 and ROB-W3-2):
+/// D-749, D-761 (gate 3's MEM-W3-1 and ROB-W3-2):
 /// after a burst of more fibers than [`FREE_KEEP`] that each wrote their
 /// whole warm part, the class keeps at most [`FREE_KEEP`] x [`WARM_KEEP`]
 /// written bytes in its free slots, D-761's 24 MiB; the rest are released
@@ -452,7 +452,7 @@ fn the_global_pool_follows_the_build() {
     pool.give_back(slot, 0);
 }
 
-/// GAP(stack-slot-counters): each way a slot is handed out or given back
+/// D-824: each way a slot is handed out or given back
 /// is counted once, when the runtime counts (D-768).
 #[test]
 #[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
@@ -486,7 +486,7 @@ fn the_slot_counters_count_each_path() {
     drop(again);
 }
 
-/// GAP(worker-slot-cache): a cache serves its own class first, the most
+/// D-825: a cache serves its own class first, the most
 /// recently cached slot first, with its reservations ended; another class
 /// comes from the pool.
 #[test]
@@ -531,7 +531,7 @@ fn slot_cache_serves_its_class_most_recent_first() {
     );
 }
 
-/// GAP(worker-slot-cache), D-749: a deep slot entering the cache has its
+/// D-825, D-749: a deep slot entering the cache has its
 /// pages below the warm top released first; a full cache gives the slot to
 /// the pool as `give_back` does, deep release included.
 #[test]
@@ -573,7 +573,7 @@ fn slot_cache_releases_deep_pages_and_overflows_to_the_pool() {
     assert_eq!(peek(used), 1);
 }
 
-/// GAP(worker-slot-cache): draining gives every cached slot back to the
+/// D-825: draining gives every cached slot back to the
 /// pool's warm list, where `take` finds it.
 #[test]
 #[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
@@ -601,7 +601,7 @@ fn slot_cache_drain_gives_every_slot_back() {
     assert_eq!(pool.counts(1).unwrap().carved, CACHE_SLOTS);
 }
 
-/// GAP(worker-slot-cache), GAP(stack-slot-counters): a slot served by a
+/// D-825, D-824: a slot served by a
 /// cache counts as taken warm, and a deep one entering it as deep-released.
 #[test]
 #[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]

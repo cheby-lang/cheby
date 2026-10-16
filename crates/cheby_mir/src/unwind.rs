@@ -96,7 +96,7 @@ pub fn rvalue_may_unwind(value: &Rvalue) -> bool {
         | Rvalue::Checked { .. } => true,
         // A blocking call raises a cancellation that arrived while it ran,
         // after it returns, so it is never in the never-raise table's reach
-        // (GAP(blocking-shim)).
+        // (D-818).
         Rvalue::CallForeign {
             symbol, blocking, ..
         } => *blocking || !crate::never_raise::never_raises(symbol),

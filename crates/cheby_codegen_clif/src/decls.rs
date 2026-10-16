@@ -158,7 +158,7 @@ pub struct Decls {
     /// (the JIT's all-or-nothing batches).
     pub(crate) defined_data: FxHashSet<DataId>,
     pub(crate) defined_funcs: FxHashSet<FuncId>,
-    /// The shims of `@blocking` foreign calls (D-683, GAP(blocking-shim)),
+    /// The shims of `@blocking` foreign calls (D-683, D-818),
     /// by symbol and C signature, each defined once per JIT like a
     /// trampoline (`blocking.rs`).
     blocking_shims: FxHashMap<(Box<str>, ForeignSig), FuncId>,
@@ -1355,7 +1355,7 @@ impl Decls {
 
     /// Declares the shim of the blocking foreign function `symbol` called
     /// with the C signature `sig`, and `cheby_rt_blocking_call`, unless an
-    /// earlier unit or batch did (`blocking.rs`, GAP(blocking-shim)). The
+    /// earlier unit or batch did (`blocking.rs`, D-818). The
     /// first signature of a symbol names its shim `cb$blk$<symbol>`; a
     /// later one, which only signature-free imports allow, gets the next
     /// number ([`mangle::blocking_shim`]).

@@ -90,7 +90,7 @@ pub(super) type Waiter = WaitNode<UnsafeCell<Word>>;
 
 /// A channel (architecture §7.2).
 ///
-/// Aligned to 128 bytes (GAP(rob4-2-channel-fix), C2): the lock and the
+/// Aligned to 128 bytes (D-826, C2): the lock and the
 /// state it guards sit on cache lines of their own, apart from the `Arc`'s
 /// counts before them and from whatever the allocator puts next, so
 /// workers contending for the lock do not also bounce the lines of
@@ -325,7 +325,7 @@ impl HandlePayload for ReceiverEnd {
 /// channel lock. A diagnostic for tests, never part of a program's
 /// behavior: the REPL's check that a teardown unlinked the node of a
 /// cancelled fiber parked on a channel that a session value still
-/// reaches (D-712, GAP(repl-asan-with-h1)).
+/// reaches (D-712, D-831).
 ///
 /// # Safety
 ///
@@ -403,7 +403,7 @@ unsafe fn send(ctx: *mut ExecCtx, sender: Word, value: Word) -> Word {
     // SAFETY: forwarded from the caller.
     let me = unsafe { running(ctx) };
     // SAFETY: a live `Sender` handle, borrowed by the caller for the whole
-    // call (D-187). GAP(rob4-2-channel-fix): the paths that do not park use
+    // call (D-187). D-826: the paths that do not park use
     // the channel through this borrow, with no `Arc` clone (C1); the path
     // that parks takes its own reference first (`keep` below), so nothing
     // only the handle keeps alive is used across the park.
@@ -538,7 +538,7 @@ unsafe fn receive(ctx: *mut ExecCtx, receiver: Word) -> Word {
     let me = unsafe { running(ctx) };
     // SAFETY: a live `Receiver` handle, borrowed by the caller for the
     // whole call (D-187); borrowed without a clone, and cloned only on the
-    // path that parks, as in `send` (GAP(rob4-2-channel-fix)).
+    // path that parks, as in `send` (D-826).
     let end = unsafe { handles::payload::<ReceiverEnd>(receiver, HandleKind::Receiver) };
     let chan: &Chan = &end.0;
     let mut inner = chan.lock();
@@ -608,7 +608,7 @@ fn ok(value: Word) -> Word {
 #[cfg(test)]
 mod tests {
     //! The channel's own reference on the path that parks
-    //! (GAP(rob4-2-channel-fix)) and the test-only wait-node reader.
+    //! (D-826) and the test-only wait-node reader.
 
     use super::super::tests::{
         channel, close, drop_word, dup, int, op, open, receive, run, send, spawn, wait_for_waiters,
@@ -667,7 +667,7 @@ mod tests {
         });
     }
 
-    /// The test-only reader (L2's, D-712, GAP(repl-asan-with-h1)) sees a
+    /// The test-only reader (L2's, D-712, D-831) sees a
     /// parked receiver, and nothing once it is gone.
     #[test]
     #[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]

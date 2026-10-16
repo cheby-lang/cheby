@@ -763,7 +763,7 @@ fn thread_count_a_stop_while_workers_retire_ends_every_fiber() {
     }
 }
 
-/// D-687, D-795 (fixer-w3-1 of checkpoint 3, GAP(stop-ends-idle-worker)):
+/// D-687, D-795 (fixer-w3-1 of checkpoint 3, D-821):
 /// in the migration stress mode a fiber that yields goes to the targeted
 /// queue of another live worker, so a stop must not leave a fiber in the
 /// queue of a worker that has already ended. A live worker ends at a stop
@@ -812,7 +812,7 @@ fn thread_count_a_stop_in_the_migration_stress_mode_strands_no_fiber() {
     }
 }
 
-/// D-687, D-795 (fixer-w3-1 of checkpoint 3, GAP(stop-ends-idle-worker)),
+/// D-687, D-795 (fixer-w3-1 of checkpoint 3, D-821),
 /// without a race: fiber F runs on worker 0 while the runtime stops, and
 /// worker 1, idle, ends at the stop; the probe holds worker 1 right after
 /// its end while F yields. In the migration stress mode F's yield goes to
@@ -876,7 +876,7 @@ fn thread_count_a_yield_after_a_worker_ended_at_a_stop_runs_on_a_live_one() {
     assert!(shared.threads.lock().is_empty());
 }
 
-/// GAP(stop-ends-idle-worker) under UQ-5 (a), D-687, D-786, D-710: a
+/// D-821, D-687, D-786, D-710: a
 /// fiber pinned to its worker (a kernel callback on its stack) is parked
 /// when the host stops the runtime, and the host wakes it after that
 /// worker ended at the stop (a host-API case: hosts of Cheby code tear

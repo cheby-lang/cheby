@@ -88,7 +88,7 @@ impl Gate {
     }
 }
 
-/// An `@blocking` shim (GAP(blocking-shim)) whose one argument word is a
+/// An `@blocking` shim (D-818) whose one argument word is a
 /// [`Gate`]'s address: it waits at the gate, then returns 7.
 unsafe extern "C" fn gated_shim(args: *const u64, out: *mut u64) {
     // SAFETY: the test passes one word, the address of a gate it keeps
@@ -233,7 +233,7 @@ fn pool_idle_threads_exit_after_the_timeout() {
     wait_until(|| again.load(Ordering::SeqCst));
 }
 
-/// GAP(pool-thread-refused): a refused thread while another pool thread
+/// D-817: a refused thread while another pool thread
 /// runs queues the job behind it, never inline.
 #[test]
 fn pool_a_refused_thread_queues_behind_a_running_one() {
@@ -389,7 +389,7 @@ fn pool_a_cancellation_during_a_job_waits_for_it_and_drops_the_result() {
     assert_eq!(domain.live_objects(), 0, "objects leaked");
 }
 
-/// GAP(pool-check-before-submit): a fiber already targeted by a
+/// D-816: a fiber already targeted by a
 /// cancellation starts no job.
 #[test]
 #[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
@@ -434,7 +434,7 @@ fn pool_a_cancellation_pending_before_submission_starts_no_job() {
     assert_eq!(domain.live_objects(), 0, "objects leaked");
 }
 
-/// GAP(pool-thread-refused): when the system refuses a pool thread and
+/// D-817: when the system refuses a pool thread and
 /// none runs, the job runs inline on the fiber's worker, with D-786's
 /// mark set while it runs and cleared after.
 #[test]
@@ -491,7 +491,7 @@ fn pool_without_a_runtime_the_job_runs_inline() {
     assert_eq!(*seen.lock(), Some((true, true, false)));
 }
 
-/// GAP(pool-in-the-survey), survey-io risk 2: the pool thread clears the
+/// D-814, survey-io risk 2: the pool thread clears the
 /// mark before it wakes the fiber, so a woken fiber left in a run queue
 /// for longer than the teardown's 5 ms poll (its only worker is busy for
 /// 200 ms) is not counted as blocked, and the teardown waits for it.
@@ -555,7 +555,7 @@ fn pool_a_woken_fiber_left_queued_is_not_counted_as_blocked() {
     assert_eq!(domain.live_objects(), 0, "objects leaked");
 }
 
-/// D-670, D-683, D-734, GAP(blocking-shim): an `@blocking` call whose
+/// D-670, D-683, D-734, D-818: an `@blocking` call whose
 /// fiber is cancelled while the shim runs returns once the shim returns
 /// and raises through the flag (the call site tests the flag, never the
 /// result word).
@@ -605,7 +605,7 @@ fn pool_a_blocking_call_raises_a_cancellation_through_the_flag() {
     assert_eq!(domain.live_objects(), 0, "objects leaked");
 }
 
-/// An `@blocking` call returns the shim's word unchanged (GAP(blocking-shim)).
+/// An `@blocking` call returns the shim's word unchanged (D-818).
 #[test]
 #[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
 fn pool_a_blocking_call_returns_the_shims_word() {
@@ -624,7 +624,7 @@ fn pool_a_blocking_call_returns_the_shims_word() {
 // ---------------------------------------------------------------------
 // Roots that block while the host stops the runtime
 
-/// GAP(pool-wakes-only-running), D-708 (gate 1's review finding
+/// D-815, D-708 (gate 1's review finding
 /// CONC-W1-1): a root that makes a blocking call while the host's stop
 /// runs it runs to its end and reports. The call goes to the pool; the
 /// workers wait for it, and its completion wakes the root for them. (The
@@ -667,7 +667,7 @@ fn pool_a_root_that_blocks_during_a_stop_reports() {
     assert_eq!(domain.live_objects(), 0, "objects leaked");
 }
 
-/// GAP(pool-wakes-only-running), D-708 (gate 1's review finding
+/// D-815, D-708 (gate 1's review finding
 /// CONC-W1-1): a root waiting on a pool job when the host's stop begins is
 /// woken by the job's completion after the stop flag was set, and the
 /// workers, which waited for it, run it to its end. (The give-up is held,
@@ -715,7 +715,7 @@ fn pool_a_job_pending_when_a_stop_begins_wakes_its_root() {
     assert_eq!(domain.live_objects(), 0, "objects leaked");
 }
 
-/// GAP(pool-wakes-only-running), D-708 (gate 1's review finding
+/// D-815, D-708 (gate 1's review finding
 /// CONC-W1-1, its stress variant): eight roots that make quick blocking
 /// calls in a loop while the host stops the runtime all run to their end
 /// and report, at 1 to 4 workers: no completion's wake is lost to a worker
@@ -766,7 +766,7 @@ fn pool_roots_blocking_in_a_loop_all_report_after_a_stop() {
 // ---------------------------------------------------------------------
 // Stops and halts with a pending job (child processes)
 
-/// GAP(pool-wakes-only-running): a halt with a pending job wakes nothing
+/// D-815: a halt with a pending job wakes nothing
 /// when the job completes; the process exits promptly.
 #[test]
 #[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
@@ -792,7 +792,7 @@ fn pool_a_halt_with_a_pending_job_wakes_nothing() {
     assert!(stderr.contains("woke nothing\n"), "{stderr}");
 }
 
-/// GAP(pool-wakes-only-running): a runtime stopped (dropped) with a
+/// D-815: a runtime stopped (dropped) with a
 /// pending job wakes nothing when the job completes, and nothing touches
 /// the freed runtime's code; the process exits promptly.
 #[test]
@@ -844,7 +844,7 @@ fn pending_job() -> (crate::sched::Runtime, Arc<Gate>, Arc<Probe>) {
     (runtime, gate, probe)
 }
 
-/// GAP(blocking-shim), refines D-708: JIT code outlives every pool job
+/// D-818, refines D-708: JIT code outlives every pool job
 /// that runs it. A stop while a shim runs on a pool thread releases the
 /// runtime's code tokens, but the job holds clones, so the code's owner is
 /// dropped only after the job ends.

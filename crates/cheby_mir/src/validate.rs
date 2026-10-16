@@ -1019,8 +1019,7 @@ impl FnCx<'_> {
         if sig.params.len() != args.len() {
             self.err("foreign call with the wrong number of arguments");
         }
-        // A pool thread never receives the fiber's context (D-191,
-        // GAP(blocking-with-std-context)).
+        // A pool thread never receives the fiber's context (D-191, D-819).
         if blocking && args.contains(&Operand::Const(Const::Ctx)) {
             self.err("a blocking foreign call passes ctx");
         }

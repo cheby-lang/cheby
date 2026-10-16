@@ -7,7 +7,7 @@
 //! A [`DetachedGroup`] holds the detached fibers of one root: `main`'s
 //! (`run_main`), one test's (`cheby test`, D-782), or a REPL session's,
 //! whose entries all run in its current group until a teardown at
-//! `:reload` opens a fresh one (D-712, GAP(repl-reload-teardown)). A root
+//! `:reload` opens a fresh one (D-712, D-827). A root
 //! runs in the group its host gives
 //! ([`Runtime::run_root_in`]; [`Runtime::run_root`] uses the runtime's own
 //! default group), and every fiber inherits its spawner's group, as it
@@ -44,7 +44,7 @@
 //! (D-800). A fiber blocked in a system call (standard input, file IO,
 //! `@blocking`), waiting on the blocking pool with D-786's mark set or
 //! running the call inline, cannot be stopped: the teardown skips it and
-//! counts it (D-786, GAP(pool-in-the-survey)), and with it the
+//! counts it (D-786, D-814), and with it the
 //! fibers of the same member's subtree that wait for it, such as a
 //! detached fiber waiting in a scope's close for a scoped child blocked in
 //! `io::read_line`. It looks for that state by surveying each member's
@@ -511,7 +511,7 @@ fn survey(base: &Arc<ScopeState>, found: &mut Survey) {
 
 /// What a teardown waited for. `skipped`: fibers blocked in a system call
 /// (on the blocking pool or inline) that it did not wait for (D-786,
-/// GAP(pool-in-the-survey)). `halted`: a halt (a termination)
+/// D-814). `halted`: a halt (a termination)
 /// started during the teardown, which then stopped waiting; the host
 /// completes the halt.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -597,7 +597,7 @@ impl Runtime {
     /// (D-802), `Err(EntryLost)` if it ends without an outcome. Nothing is
     /// sent when this returns an error. A root that never ends sends
     /// nothing: one still blocked in a system call when the host's stop
-    /// gives up on it (D-786, GAP(pool-wakes-only-running)), or frozen by
+    /// gives up on it (D-786, D-815), or frozen by
     /// a halt that is not a termination.
     ///
     /// # Errors
@@ -679,7 +679,7 @@ impl Runtime {
     /// wait node linked in either of its queues. A diagnostic for tests,
     /// never part of a program's behavior: after a REPL teardown, no node
     /// of a cancelled fiber stays linked in a channel that a session value
-    /// still reaches (D-712, GAP(repl-asan-with-h1)). The reader is
+    /// still reaches (D-712, D-831). The reader is
     /// `fiber_ops::channel`'s; this is its public path.
     ///
     /// # Safety

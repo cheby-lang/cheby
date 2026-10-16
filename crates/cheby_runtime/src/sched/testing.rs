@@ -180,8 +180,8 @@ impl Mailbox {
 /// in which that fiber could be retired, a count of requests aimed at a
 /// retired control block (which must stay 0, I-8), a switch that keeps
 /// it from firing timers, a hold on one worker right after it ended at a
-/// stop (GAP(stop-ends-idle-worker)), and a hold on the stop's give-up on
-/// the blocking pool (GAP(pool-wakes-only-running)).
+/// stop (D-821), and a hold on the stop's give-up on
+/// the blocking pool (D-815).
 #[derive(Debug, Default)]
 pub(crate) struct MonitorProbe {
     /// Milliseconds the monitor sleeps before each request.
@@ -203,7 +203,7 @@ pub(crate) struct MonitorProbe {
     /// Lets the held worker go on (its thread then ends).
     pub(crate) stop_exit_release: std::sync::atomic::AtomicBool,
     /// Keeps the stop from giving up on the fibers waiting on the blocking
-    /// pool (GAP(pool-wakes-only-running)): its workers wait until none
+    /// pool (D-815): its workers wait until none
     /// waits, at most [`HANG`].
     pub(crate) hold_pool: std::sync::atomic::AtomicBool,
 }

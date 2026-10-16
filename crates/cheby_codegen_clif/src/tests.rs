@@ -498,7 +498,7 @@ fn foreign_imports_by_address_allow_new_signatures() {
 /// `g<index>(params…) { _r = call_foreign blocking "<symbol>"(params…) ;
 /// unwind bb1; _b = box _r ; unwind bb1; return _b }`, `bb1: resume`,
 /// precounted with its own edges, as the unwind pass would give an
-/// `@blocking` wrapper whose parameters are unboxed (GAP(blocking-shim)).
+/// `@blocking` wrapper whose parameters are unboxed (D-818).
 fn blocking_fn(index: u32, symbol: &str, params: &[CType], ret: CType) -> MirModule {
     use cheby_mir::{BlockId, Local, Rvalue};
     let g = def(1, index);
@@ -584,7 +584,7 @@ fn blocking_fn(index: u32, symbol: &str, params: &[CType], ret: CType) -> MirMod
     }
 }
 
-/// GAP(blocking-shim): an `@blocking` call spills its arguments to a stack
+/// D-818: an `@blocking` call spills its arguments to a stack
 /// array and calls `cheby_rt_blocking_call` with the address of the shim
 /// `cb$blk$<symbol>`, then tests the flag at `ctx+12`, never the result
 /// (D-734); the shim loads each argument by its C type and stores the
@@ -725,8 +725,7 @@ fn slice_runtime_functions() {
             &[CType::Ptr, CType::U64, CType::Bool][..],
             CType::Bool,
         ),
-        // GAP(blocking-shim): `cheby_rt_blocking_call(ctx, shim, args,
-        // nargs)`.
+        // D-818: `cheby_rt_blocking_call(ctx, shim, args, nargs)`.
         (
             RuntimeFunc::BlockingCall,
             29,

@@ -71,9 +71,9 @@
 //! as live workers do, once nothing is runnable: under the targeted
 //! queue's lock with that queue empty, marking the slot `DEAD`, so a fiber
 //! pushed there afterwards goes to the global queue, or, if pinned, is left
-//! alone and counted (GAP(stop-ends-idle-worker)).
+//! alone and counted (D-821).
 //!
-//! # The slot cache (GAP(worker-slot-cache), D-677, D-749)
+//! # The slot cache (D-825, D-677, D-749)
 //!
 //! A worker keeps up to four free stack slots for the fibers spawned by
 //! the fibers it runs: `retire` puts the slot of a spawned fiber it retired
@@ -236,7 +236,7 @@ pub(crate) struct WorkerShared {
     /// none is left.
     pinned: AtomicUsize,
     /// Up to four free stack slots kept for this worker's own spawns
-    /// (GAP(worker-slot-cache)): filled by `Worker::retire`, taken by
+    /// (D-825): filled by `Worker::retire`, taken by
     /// `fiber::create` on this worker, and drained to the global pool
     /// before the worker's thread ends (before its slot can be marked
     /// `DEAD`, after which a new thread may start here) and at a halt. Only
@@ -283,7 +283,7 @@ impl WorkerShared {
 
     /// A stack slot of `bytes`' class for a fiber this worker's running
     /// fiber spawns: from the worker's cache first, else from the global
-    /// pool (GAP(worker-slot-cache)).
+    /// pool (D-825).
     ///
     /// # Errors
     ///
@@ -301,7 +301,7 @@ impl WorkerShared {
 
     /// Keeps the slot of a fiber this worker retired in its cache, after
     /// D-749's deep release, or gives it back to the global pool when the
-    /// cache is full (GAP(worker-slot-cache)). Only a slot that may be
+    /// cache is full (D-825). Only a slot that may be
     /// reused comes here (MEM-W1-1): never one a teardown skipped or a
     /// halt froze, which is never retired.
     ///
@@ -489,7 +489,7 @@ impl WorkerShared {
         targeted.drain(..).collect()
     }
 
-    /// A live worker's end at a stop (GAP(stop-ends-idle-worker), D-795,
+    /// A live worker's end at a stop (D-821, D-795,
     /// D-687): under the targeted queue's lock, marks the slot `DEAD` and
     /// returns true if that queue is empty; otherwise returns false, and
     /// the worker runs what it holds first. A push decides under the same
@@ -667,7 +667,7 @@ impl Worker<'_> {
             // looks once more: a pool thread queues its fiber, from outside
             // the workers, before it lowers the count, so that fiber may
             // have come after the look above (`blocking::holds_stop`,
-            // GAP(pool-wakes-only-running)).
+            // D-815).
             if self.shared.stopping() {
                 if super::blocking::holds_stop(self.shared) {
                     looked_after_stop = false;
@@ -1031,7 +1031,7 @@ impl Worker<'_> {
         if !spawned {
             // A root started by a host, on the main stack's class or
             // another: the cache is for this worker's spawns, so its slot
-            // goes back to the global pool (GAP(worker-slot-cache), gate
+            // goes back to the global pool (D-825, gate
             // 3's MEM-W3-2).
             StackPool::global().give_back(slot, watermark);
             return;
@@ -1041,7 +1041,7 @@ impl Worker<'_> {
     }
 
     /// Gives the worker's cached slots back to the global pool
-    /// (GAP(worker-slot-cache)): before its thread ends, and before its
+    /// (D-825): before its thread ends, and before its
     /// slot can be marked `DEAD`, since a new thread may start there once
     /// it is. So no slot stays in a cache across a stop, a halt or a
     /// retirement.

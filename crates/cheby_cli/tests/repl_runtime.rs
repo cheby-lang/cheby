@@ -234,7 +234,7 @@ fn repl_runtime_end_of_input_with_a_detached_spinner_exits() {
     assert_eq!(status, Some(0), "{}", repl.output());
 }
 
-/// D-712, D-786, D-804 and GAP(repl-detached-stdin): `:quit` while a
+/// D-712, D-786, D-804 and D-829: `:quit` while a
 /// detached fiber is blocked in `io::read_line` on standard input that
 /// stays open ends the session with 0 within 5 s. The fiber first naps,
 /// so its read starts after the REPL is already reading the next line;
@@ -265,7 +265,7 @@ fn repl_runtime_quit_with_a_detached_reader_blocked_on_an_open_pipe_exits() {
     assert!(repl.output().ends_with("> :quit\n"), "{}", repl.output());
 }
 
-/// D-306, D-709 and GAP(repl-termination-between-entries): a detached
+/// D-306, D-709 and D-828: a detached
 /// fiber's write to a broken standard error, while no entry runs, ends the
 /// session with status 1 before the next prompt, printing nothing more:
 /// the next entry is never evaluated, so its value line never appears.
@@ -326,7 +326,7 @@ fn redefinitions_reading_new_constants() -> String {
     text
 }
 
-/// D-712, D-547, D-194 and GAP(repl-publish-after-constants) (gate 3's
+/// D-712, D-547, D-194 and D-832 (gate 3's
 /// CONC-W3-1): a redefinition's new code reaches a detached caller only
 /// once the constants it reads are filled, so the caller never reads an
 /// empty constant slot (a fatal error outside constant evaluation); a

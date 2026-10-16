@@ -7,7 +7,7 @@
 //!
 //! 1. reads its cancellation target (`cancel::check`): a fiber already
 //!    being cancelled starts no job, so no line is consumed and no file is
-//!    written (GAP(pool-check-before-submit));
+//!    written (D-816);
 //! 2. sets D-786's blocking mark (`FiberSched::set_blocking`), then stores
 //!    `PARKING` (`begin_park`), then submits the job, then parks
 //!    (`park(AfterSwitch::Park(None))`). It publishes no wait node: the
@@ -21,7 +21,7 @@
 //!    and only then wakes the fiber, then counts the job as done
 //!    ([`leave`]). A completion during a halt, or after a stop gave up on
 //!    the pool, wakes nothing, and the result is dropped with the job
-//!    (GAP(pool-wakes-only-running)): a stop releases the code tokens once
+//!    (D-815): a stop releases the code tokens once
 //!    its workers are joined, and a fiber parked on the pool holds no
 //!    worker, so a later wake could resume code that was freed. Until it
 //!    gives up, a stop keeps its workers while a fiber of the runtime
@@ -40,9 +40,9 @@
 //!    (§10.7, §12.7): a cancelled `read_line` consumed its line.
 //!
 //! The mark stays set from before the fiber parks until the pool thread
-//! clears it, right before the wake (GAP(pool-in-the-survey)), so the
-//! teardown's survey, D-804's two polls, D-805's later-check skips and
-//! `run_main`'s skip-and-count treat a fiber waiting on the pool as they
+//! clears it, right before the wake (D-814), so the
+//! teardown's survey, D-804's two polls, the per-test leak check (D-833)
+//! and `run_main`'s skip-and-count treat a fiber waiting on the pool as they
 //! treat one blocked inline (D-786, D-710). The pool thread, not the fiber,
 //! clears it: a woken fiber that waits in a run queue (behind a busy
 //! worker, for more than the teardown's 5 ms poll) is then parked or
@@ -53,7 +53,7 @@
 //! on the calling thread with the mark set for its duration, as before
 //! the pool. When the system refuses a pool thread and none runs, the job
 //! runs inline on the worker with the mark and the hand-off
-//! (`hand_off_before_blocking`, GAP(pool-thread-refused)).
+//! (`hand_off_before_blocking`, D-817).
 //!
 //! # For the deadlock detector (H1)
 //!
@@ -81,13 +81,13 @@ use crate::unwind::raise::raise_cancel;
 
 /// Runs `job` on the blocking pool while `me` is parked (D-683), or inline
 /// when `me` has no runtime (D-692) or the pool cannot start a thread
-/// (GAP(pool-thread-refused)). `Err(Cancelled)` when a cancellation was
-/// pending before the job (none ran, GAP(pool-check-before-submit)) or
+/// (D-817). `Err(Cancelled)` when a cancellation was
+/// pending before the job (none ran, D-816) or
 /// arrived during it (the result was dropped before any Cheby
 /// allocation). The blocking mark is set before `begin_park` and cleared
-/// by the pool thread before its wake (GAP(pool-in-the-survey)), which
+/// by the pool thread before its wake (D-814), which
 /// never happens during a halt or once a stop gave up on the pool; after
-/// that the job runs inline (GAP(pool-wakes-only-running)). A fiber with
+/// that the job runs inline (D-815). A fiber with
 /// the mark set is a pending pool job: H1's deadlock rule reads that
 /// (plan §2.6).
 ///
@@ -143,7 +143,7 @@ pub(crate) fn run_blocking_in<R: Send + 'static>(
     cancel::check(me)?;
     let result = match me.sched.runtime() {
         Some(runtime) if enter(runtime) => on_pool(pool, me, runtime, job, hooks),
-        // A stop gave up on the pool (GAP(pool-wakes-only-running)): the
+        // A stop gave up on the pool (D-815): the
         // call runs inline with D-786's mark and the hand-off, as after a
         // refused pool thread, and the stop's join treats it as D-786 says.
         Some(_) | None => inline(me, job),
@@ -160,7 +160,7 @@ pub(crate) fn run_blocking_in<R: Send + 'static>(
 
 /// Runs `job` inline on the calling thread with `me` marked as blocked in
 /// it (D-786), for an isolated entry (D-692) and for a fiber of a runtime
-/// whose stop gave up on the pool (GAP(pool-wakes-only-running)), after
+/// whose stop gave up on the pool (D-815), after
 /// handing off the fibers waiting on its worker.
 fn inline<R>(me: &ExecCtx, job: impl FnOnce() -> R) -> R {
     /// Clears the mark, also if `job` unwinds.
@@ -195,7 +195,7 @@ struct Completion<R> {
 impl<R> Completion<R> {
     /// Stores `result`, clears the fiber's mark, then wakes the fiber
     /// unless its runtime halts or its stop gave up on the pool
-    /// (GAP(pool-in-the-survey), GAP(pool-wakes-only-running)), and only
+    /// (D-814, D-815), and only
     /// then counts the job as done ([`leave`]). Runs on the pool thread
     /// with no lock held, or inline on the fiber's own worker after a
     /// refused thread.
@@ -216,7 +216,7 @@ impl<R> Completion<R> {
         // skipped or a halt froze keeps its slot, which is never retired
         // or reused (D-708, D-786). So the store below, also after a stop
         // or a halt began, writes into a slot that cannot be reused
-        // (GAP(pool-in-the-survey), which refines D-683's "must not write
+        // (D-814, which refines D-683's "must not write
         // into the fiber's slot" to that).
         let fiber = unsafe { self.fiber.ctx() };
         fiber.sched.set_blocking(false);
@@ -249,13 +249,13 @@ impl<R> Completion<R> {
 
 /// Whether a completion of `runtime`'s pool jobs wakes nothing: during a
 /// halt (D-073, D-708), or once its stop gave up on the pool
-/// (GAP(pool-wakes-only-running)), when its workers may have ended.
+/// (D-815), when its workers may have ended.
 fn wakes_nothing(runtime: &Shared) -> bool {
     runtime.halting() || runtime.pool_given_up.load(Ordering::SeqCst)
 }
 
 /// Counts a fiber of `runtime` as waiting on the pool, unless the
-/// runtime's stop gave up on the pool (GAP(pool-wakes-only-running)): then
+/// runtime's stop gave up on the pool (D-815): then
 /// returns false, and the call runs inline (D-786).
 fn enter(runtime: &Shared) -> bool {
     runtime.pool_waiting.fetch_add(1, Ordering::SeqCst);
@@ -275,7 +275,7 @@ fn leave(runtime: &Shared) {
 
 /// Whether a worker of `runtime` must not end at its stop yet because a
 /// fiber of the runtime waits on the pool and the stop has not given up on
-/// it (GAP(pool-wakes-only-running), D-708: a stop runs every runnable
+/// it (D-815, D-708: a stop runs every runnable
 /// fiber to its end, and the completion makes this one runnable). A worker
 /// that reads false looks for a fiber once more before it ends: a
 /// completion queues its fiber before it lowers the count ([`leave`]), so
@@ -288,7 +288,7 @@ pub(super) fn holds_stop(runtime: &Shared) -> bool {
 const STOP_POLL: Duration = Duration::from_millis(5);
 
 /// One poll of the host's stop while it joins its workers
-/// (GAP(pool-wakes-only-running)): the stop gives up on the pool when two
+/// (D-815): the stop gives up on the pool when two
 /// polls [`STOP_POLL`] apart find a fiber still waiting on it, every
 /// remaining worker `idle` (running no fiber) and no job completed between
 /// them (D-804's shape). Such a fiber waits on input that may never end and
@@ -341,7 +341,7 @@ fn on_pool<R: Send + 'static>(
     // stop's join never sees it `RUNNING` and marked, which is how it
     // tells a fiber blocked inline (D-786, `Shared::worker_blocked`) from
     // one parking on the pool, which it waits for
-    // (GAP(pool-wakes-only-running)).
+    // (D-815).
     begin_park(me);
     me.sched.set_blocking(true);
     match pool.submit(Box::new(move || {
@@ -402,7 +402,7 @@ pub(crate) fn code_tokens(runtime: &Shared) -> Vec<CodeToken> {
     runtime.code.lock().clone()
 }
 
-/// The runtime entry of an `@blocking` call (GAP(blocking-shim)): copies
+/// The runtime entry of an `@blocking` call (D-818): copies
 /// `nargs` words from `args`, clones the runtime's code tokens (on
 /// `Shared`) into the job, so the JIT code `shim` lives in outlives the job
 /// even if the runtime stops meanwhile, runs `shim` on the words through
@@ -438,7 +438,7 @@ pub unsafe extern "C" fn cheby_rt_blocking_call(
             // the fiber parks: the job owns Rust data only (D-683).
             unsafe { std::slice::from_raw_parts(args, nargs) }.to_vec()
         };
-        // The job holds the runtime's code tokens (GAP(blocking-shim),
+        // The job holds the runtime's code tokens (D-818,
         // refines D-708): a stop joins the workers, not the pool, and then
         // releases its tokens, so without these the code `shim` runs in
         // could be freed under the pool thread.

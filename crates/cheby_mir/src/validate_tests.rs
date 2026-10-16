@@ -178,7 +178,7 @@ fn loc(b: &mut FunctionBuilder) -> StrId {
 }
 
 // A blocking foreign call never passes the fiber's context: a pool thread
-// must not receive it (D-191, GAP(blocking-with-std-context)); the same
+// must not receive it (D-191, D-819); the same
 // call without the flag is a `@std_context` kernel's and is accepted.
 #[test]
 fn a_blocking_call_takes_no_ctx() {

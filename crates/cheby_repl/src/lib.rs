@@ -20,7 +20,7 @@
 //!   start keep running between entries (D-194, D-712). A termination
 //!   while no entry runs, such as a detached fiber's failed write, ends the
 //!   REPL before the next prompt with its status, printing nothing more
-//!   (D-709, GAP(repl-termination-between-entries)). At the end of input
+//!   (D-709, D-828). At the end of input
 //!   or `:quit`, the session ends: its detached fibers are torn down and
 //!   its runtime stops ([`Session::end`]).
 //!
@@ -177,7 +177,7 @@ fn piped(session: &mut Session, streams: &mut Streams) {
     loop {
         // A termination while no entry ran (a detached fiber's failed
         // write, D-306, D-709) ends the session before the next prompt
-        // (GAP(repl-termination-between-entries)).
+        // (D-828).
         session.exit_if_terminated();
         let prompt = if entry.is_empty() {
             PROMPT
@@ -190,7 +190,7 @@ fn piped(session: &mut Session, streams: &mut Streams) {
         // entry, so the runtime hands the failure back
         // (D-801, D-709). The read shares standard input with the
         // session's detached fibers that read it, which take lines in the
-        // order they ask (D-548, GAP(repl-detached-stdin)).
+        // order they ask (D-548, D-829).
         let Ok(read) = cheby_runtime::io::read_input_line() else {
             exit_after_write_failure();
         };

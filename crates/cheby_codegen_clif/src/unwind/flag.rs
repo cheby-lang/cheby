@@ -13,7 +13,7 @@
 //! - a C call: `load.i32 notrap aligned ctx+12; brif v, pad, cont`, except
 //!   `cheby_rt_alloc` and the boxing functions, whose result is 0 exactly
 //!   when they unwound: `brif result, cont, pad`. An `@blocking` call
-//!   (`cheby_rt_blocking_call`, GAP(blocking-shim)) always tests the flag:
+//!   (`cheby_rt_blocking_call`, D-818) always tests the flag:
 //!   its word is the foreign result, which may be 0 (D-734);
 //! - `cheby_rt_panic`, which records the panic, sets the flag and returns:
 //!   `jump pad`;

@@ -29,7 +29,7 @@
 //! - **No transparent huge pages** (D-761). On Linux every region is
 //!   `madvise(MADV_NOHUGEPAGE)`, so a warm free slot keeps its few written
 //!   pages, not a whole 2 MiB range.
-//! - **Counters** ([`SlotCounts`], GAP(stack-slot-counters)): slots taken
+//! - **Counters** ([`SlotCounts`], D-824): slots taken
 //!   warm, taken cold or carved, and released whole or deep, counted only
 //!   on demand (D-768) and printed by `CHEBY_RT_STATS=1`.
 //!
@@ -85,7 +85,7 @@ pub const WARM_KEEP: usize = WARM_BYTES + STACK_HEADROOM;
 /// The free slots a class keeps warm. A slot given back beyond them has
 /// all its pages released.
 ///
-/// GAP(stack-slot-limit): D-749's 64 is kept, with the numbers. A warm
+/// D-749's 64 is kept, with the numbers. A warm
 /// free slot holds the pages its fiber wrote above its warm top, up to
 /// [`WARM_KEEP`] (384 KiB), so a class keeps at most 64 x 384 KiB =
 /// 24 MiB resident in free slots, the budget D-761 counts. The limit
@@ -98,7 +98,7 @@ pub const WARM_KEEP: usize = WARM_BYTES + STACK_HEADROOM;
 /// 46 KiB deep peaked at 104 MiB with 1024 against 60 MiB with 64 at one
 /// thread, and after a burst of 1100 fibers that went deep, 1024 kept
 /// 338 MiB resident against 37 MiB for 64 (gate 3's review, MEM-W3-1 and
-/// ROB-W3-2). Which limit to log is the user's call.
+/// ROB-W3-2). Checkpoint 4a kept 64 on these numbers, with no new entry.
 pub const FREE_KEEP: usize = 64;
 
 /// The most a slot reserves at its top with [`StackSlot::reserve_top`].
@@ -326,7 +326,7 @@ pub struct ClassCounts {
 }
 
 /// What a pool's slots did, over every class, for `CHEBY_RT_STATS`
-/// (GAP(stack-slot-counters), extends D-635). Counted only on demand
+/// (D-824, extends D-635). Counted only on demand
 /// (D-768): while [`crate::stats::counting`] is off, every field stays 0.
 /// Every slot handed out is counted once, as taken warm, taken cold or
 /// carved.
@@ -375,7 +375,7 @@ fn count(counter: &AtomicU64) {
 const CACHE_SLOTS: usize = 4;
 
 /// Up to four free slots kept by one worker for its own spawns
-/// (GAP(worker-slot-cache), refines D-677 and D-749); touched only from
+/// (D-825, refines D-677 and D-749); touched only from
 /// that worker's thread, never counted against D-749's limit, drained
 /// when it ends.
 ///
@@ -473,7 +473,7 @@ impl StackPool {
     }
 
     /// What this pool's slots did so far, over every class
-    /// (GAP(stack-slot-counters)): all zero unless the runtime counts
+    /// (D-824): all zero unless the runtime counts
     /// (D-768). `CHEBY_RT_STATS=1` prints the global pool's.
     #[must_use]
     pub fn slot_counts(&self) -> SlotCounts {
@@ -627,7 +627,7 @@ impl StackPool {
     }
 
     /// `take`, served from `cache` first when it holds a slot of `bytes`'
-    /// class (GAP(worker-slot-cache)). A slot from the cache counts as
+    /// class (D-825). A slot from the cache counts as
     /// taken warm.
     ///
     /// # Errors
@@ -655,7 +655,7 @@ impl StackPool {
     /// `give_back` into `cache`: D-749's deep release first (by
     /// `watermark`, as in [`give_back`](Self::give_back)), then the slot
     /// is kept when the cache has room, else given back to the pool as
-    /// `give_back` does (GAP(worker-slot-cache)). The slot must come from
+    /// `give_back` does (D-825). The slot must come from
     /// this pool and may be reused (MEM-W1-1, see [`SlotCache`]).
     pub(crate) fn give_back_cached(
         &self,
@@ -690,7 +690,7 @@ impl StackPool {
         }
     }
 
-    /// Gives every cached slot back to the pool (GAP(worker-slot-cache)).
+    /// Gives every cached slot back to the pool (D-825).
     /// Their deep pages are released already, so each goes back as a slot
     /// no fiber ran on: warm while the class keeps fewer than
     /// [`FREE_KEEP`], else released whole.

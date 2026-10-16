@@ -36,7 +36,7 @@
 //!
 //! A third model checks a worker's exit at a stop against a completion
 //! (`sched/worker.rs` `Worker::run`, `sched/blocking.rs` `holds_stop` and
-//! `leave`, GAP(pool-wakes-only-running)): the worker runs the fiber the
+//! `leave`, D-815): the worker runs the fiber the
 //! completion queues before it ends. Its two twins (a completion that
 //! lowers the count before it queues, a worker that ends without looking
 //! again) strand the fiber.
@@ -287,7 +287,7 @@ enum StopVariant {
 
 /// A worker's exit at a stop against one pool completion
 /// (`sched/worker.rs` `Worker::run`'s stop exit, `sched/blocking.rs`
-/// `holds_stop` and `leave`, GAP(pool-wakes-only-running)): one fiber waits
+/// `holds_stop` and `leave`, D-815): one fiber waits
 /// on the pool when the stop flag is already set. The completion queues
 /// the fiber and then lowers the count; the worker does not end while the
 /// count is above 0, and after it reads 0 it looks once more. Whatever the

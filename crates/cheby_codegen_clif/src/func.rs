@@ -193,7 +193,7 @@ pub(crate) enum CallTarget {
 /// `cheby_rt_panic`, a stack slow path, `cheby_rt_const_missing`), a
 /// foreign kernel by its symbol and C signature, or an `@blocking` foreign
 /// function, called on the blocking pool through its shim
-/// (`blocking.rs`, GAP(blocking-shim)).
+/// (`blocking.rs`, D-818).
 #[derive(Clone, Debug)]
 pub(crate) enum CCallee {
     Runtime(RuntimeFunc),

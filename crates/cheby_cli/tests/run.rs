@@ -889,7 +889,7 @@ const SCOPED_READER: &str = "//! A detached fiber waits for a scoped child block
 /// `io::read_line`, so `cheby run` exits with 0 while standard input stays
 /// open. Before the fix it waited for the read. At every thread count,
 /// one included: the child waits on the blocking pool, which holds no
-/// worker (D-683, GAP(pool-in-the-survey)).
+/// worker (D-683, D-814).
 #[test]
 fn a_detached_fiber_waiting_for_a_blocked_reader_does_not_hold_up_run() {
     for threads in ["1", "2", "4"] {
@@ -935,7 +935,7 @@ const SIGNALLING_READER: &str = "//! A detached reader signals `main`, then bloc
 /// read returned. The reader now parks on the blocking pool and its worker
 /// runs `main`, at every thread count, one included (D-683); a reader
 /// blocked inline, after a refused pool thread, still hands `main` to
-/// another worker first (GAP(pool-thread-refused)).
+/// another worker first (D-817).
 #[test]
 fn a_reader_that_wakes_main_then_blocks_hands_main_off() {
     for threads in ["1", "2", "4"] {

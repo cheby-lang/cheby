@@ -35,7 +35,7 @@ test "thread_count is at least one" {
 pub fn set_thread_count(count: Int)
 ```
 
-Sets the number of OS threads the scheduler runs fibers on. The change takes effect without waiting for any fiber: added threads start taking fibers at once, and a removed thread stops after the fiber it runs reaches its next suspension point (§10.2). It applies to the whole program, including every `cheby test` test that runs at the same time (D-657).
+Sets the number of OS threads the scheduler runs fibers on. The change takes effect without waiting for any fiber: added threads start taking fibers at once, and a removed thread stops after the fiber it runs reaches its next suspension point (§10.2). It applies to the whole program, including every `cheby test` test that runs at the same time (D-657). In `cheby test` it also sets the bound of the tests started after it, which each test reads when it starts (§13.6, D-835).
 
 - **Clamps:** `count` to `1` to `1024`, so `0` or a negative count gives one thread (D-298).
 - **Cost:** O(n) in the change of the thread count, to start or stop threads. Informative.
