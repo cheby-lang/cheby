@@ -61,7 +61,7 @@ Where the decision log does not settle something that the spec needs, the spec m
 
 The identifier is `OQ-<chapter>-<n>`. Text that depends on an open question is written as if the proposal were accepted, but it is **provisional** until the question is settled in the decision log. When a question is settled, the marker is replaced by normative text that cites the new decision. If the decision differs from the proposal, the dependent text is rewritten.
 
-All gaps marked in the first draft were settled by D-126 to D-197, and later gaps are marked as they are found. The first draft's last open question, OQ-13-7, was settled by D-239. The M2 design left two open: OQ-10-11, the locations in a deadlock report, and OQ-13-8, deadlocks while tests run in parallel.
+All gaps marked in the first draft were settled by D-126 to D-197, and later gaps are marked as they are found. The first draft's last open question, OQ-13-7, was settled by D-239. The M2 design left two open, settled at H1's plan: OQ-10-11, the locations in a deadlock report, by D-856, and OQ-13-8, deadlocks while tests run in parallel, by D-857.
 
 ### Examples
 

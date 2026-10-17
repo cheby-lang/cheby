@@ -249,6 +249,12 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-853     | Every example also runs as `<name>@rc=naive`; CI job `rc-naive` runs UI and `test-std` naive        |
 | D-854     | The collections' naive reading is the 4b tree under `CHEBY_RC=naive`, M6's baseline                 |
 | D-855     | OQ-P13: a collection stays in Cheby within 1.5x of a persistent Rust tree, under Perceus            |
+| D-860     | A monitor thread surveys a domain's fibers twice to confirm a deadlock; pending counts per domain   |
+| D-862     | Until the push, local runs of the nightly job script are the sanitizer and Miri evidence            |
+| D-863     | Sanitizer reports only in dependencies are suppressed with a reason; Cheby's own are fixed          |
+| D-864     | The slot cache stays unless slower beyond the layout band in 4 of 5 rounds at a thread count        |
+| D-865     | Fusion sinks at most 8 `dup`s to a point where they neither cancel nor fold (ROB7-2)                |
+| D-866     | The inline reuse paths keep their compile cost; splitting long functions is the lever               |
 
 ## Open questions
 

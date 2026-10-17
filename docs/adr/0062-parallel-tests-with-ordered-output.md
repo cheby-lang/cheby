@@ -1,5 +1,5 @@
 ---
-status: accepted; refined by D-820, D-833
+status: accepted; refined by D-820, D-833, D-857, D-859
 date: 2026-10-11
 log: D-723
 ---

@@ -98,11 +98,20 @@ _Note:_ a fiber that the cancellation has not reached yet can still spawn a deta
 
 Detached fibers are the escape hatch for long-lived background work. Leaked detached fibers, and fibers blocked forever, are not collected (D-029). Erlang-style links, monitors and supervision are provided by a library on top of scopes and detached fibers (D-040).
 
-**Deadlock.** A program is **deadlocked** when no fiber is running or runnable, no timer is pending, no IO operation or `@blocking` foreign call is in progress ([§10.9](#109-blocking-io)), and the root fiber has not finished (D-724). No fiber can then make progress. Every build detects a deadlock and treats it as fatal:
+**Deadlock.** A program is **deadlocked** when no fiber is running or runnable, no timer is pending, no IO operation or `@blocking` foreign call is in progress ([§10.9](#109-blocking-io)), and the root fiber has not finished (D-724). No fiber can then make progress. `cheby test` applies this rule to each test's own fibers, and the REPL to the running entry and the detached fibers of the session (D-857). Every build detects a deadlock and treats it as fatal:
 
-- `cheby run` writes `fatal error: all fibers are blocked` to standard error, then one line per blocked fiber that names the operation it waits in and the location of that call, in a deterministic order, and exits with status `103` ([§10.10](#1010-program-entry-and-exit)).
-- A deadlock is not a panic. It cannot be caught by a scope or a timeout, and nothing unwinds before the exit.
-- `cheby test` fails the test with that report and goes on with the other tests ([§13.6](13-tooling.md#136-tests)). The REPL reports it and continues the session ([§13.5.4](13-tooling.md#1354-fibers-in-the-repl)).
+- `cheby run` fixes exit status `103`, flushes standard output, writes `fatal error: all fibers are blocked` to standard error, then one line per blocked fiber that names the operation it waits in and the location of that call, in a deterministic order, and ends the program with status `103` ([§10.10](#1010-program-entry-and-exit)) (D-859). A failed write after that leaves the status as it is (D-785).
+- A deadlock is not a panic. It cannot be caught by a scope or a timeout. In `cheby run`, nothing unwinds before the exit (D-859).
+- `cheby test` cancels the deadlocked test's root scope, so the test's fibers unwind. It fails that test with the report as its failure block and goes on with the other tests, which a deadlock of another test does not affect ([§13.6](13-tooling.md#136-tests)) (D-857, D-859).
+- The REPL cancels only the entry's root scope, so the entry's fibers unwind. The report also lists the session's blocked detached fibers, which keep waiting, and the session continues ([§13.5.4](13-tooling.md#1354-fibers-in-the-repl)) (D-859). Fibers that a `:reload` could not stop are left out of detection and of the report, so a later entry that deadlocks is still reported (D-857).
+
+**The report.** Its first line is `fatal error: all fibers are blocked`. Each further line is `  blocked in <operation> at <location>`, one per blocked fiber (D-858):
+
+- The operation is `channel::send`, `channel::receive`, `selector::select`, `fiber::join`, `fiber::scope` for a fiber waiting at the end of a scope, or `fiber::timeout` for a fiber waiting at the end of a timed scope (D-858).
+- The location is that of the innermost call on the fiber's stack whose function is not defined in package `std`. A function of `std` counts as `std` also where user code instantiates it. The location is written `<path>:<line>:<column>`, as in a panic report ([§11.6](11-errors-and-panics.md#116-panic-and-todo)), and is the start of the call: the callee's path for `f(x)`, the start of the chain for a pipe, and the `use` of a `use` statement. The search passes through `std` functions and the compiler's Cheby-convention shims, such as the one for a function used as a value. When it reaches the runtime or foreign code first, such as the runtime starting a spawned fiber's function or a foreign call, the location is `<unknown location>` (D-856).
+- Lines are sorted by path, compared as bytes, then by line and column as numbers, then by operation, and `<unknown location>` lines come last. Equal lines are all kept, and the report has no limit on its length. The order depends only on what the fibers wait in, never on fiber identities, workers or timing (D-858).
+
+_Note:_ a tail call replaces its caller's frame ([§5.15.3](05-expressions.md#5153-guaranteed-tail-calls)), so a wait reached through tail calls is reported at the innermost call still on the stack. A tail call from code outside `std` to `channel::send`, `channel::receive` or `fiber::join` keeps its caller's frame, so a function such as `fn() { channel::receive(rx) }` passed to `fiber::spawn` is reported at its `channel::receive`. `selector::select` keeps its tail call (D-861). Panics raised by standard-library operations still report `<unknown location>` (D-732).
 
 A root that has finished while detached fibers are blocked is not deadlocked: the program exits ([§10.10](#1010-program-entry-and-exit)).
 
@@ -127,7 +136,9 @@ fatal error: all fibers are blocked
   blocked in channel::receive at src/main.cheby:5:22
 ```
 
-> **Open (OQ-10-11):** How the runtime finds the location of the call a blocked fiber waits in. D-732 gives the panics of standard-library operations no caller location in M2, and a fiber blocked in `channel::receive`, `select`, `join` or at the end of a scope waits inside such an operation. _Proposed:_ the report gives the location of the innermost call outside package `std` on the blocked fiber's stack, found by mapping that frame's return address to its source location, and `<unknown location>` where none is found. The location in the example above is illustrative until a run produces it.
+The location in this example is illustrative until a run produces it.
+
+_Note:_ the reference implementation finds a location by mapping the return address of the fiber's innermost frame outside `std` to its call through a table the JIT records per call site (D-856). Its monitor thread confirms a deadlock by surveying the domain's fibers twice, and finds a deadlocked test among running ones within about 200 ms (D-860).
 
 ## 10.5 Channels
 

@@ -22,7 +22,7 @@ This chapter is informative. It summarizes the language and points to the normat
 | Algebraic data types as the only user-defined data type                       | [3](03-types.md), [4](04-declarations.md)             | D-022, D-035, D-082        |
 | Types opaque by default, `exposed` to publish constructors                    | [4](04-declarations.md)                               | D-035, D-048               |
 | Exhaustive `case` with guards, multiple subjects and a subjectless form       | [5](05-expressions.md), [6](06-patterns.md)           | D-052, D-109               |
-| Guaranteed tail calls, including mutual and indirect calls                    | [5](05-expressions.md), [12](12-targets-and-ffi.md)   | D-015, D-120               |
+| Guaranteed tail calls, including mutual and indirect calls                    | [5](05-expressions.md), [12](12-targets-and-ffi.md)   | D-015, D-120, D-861        |
 | Gleam-style `use` for callbacks, errors and resources                         | [5](05-expressions.md), [11](11-errors-and-panics.md) | D-018, D-023               |
 | Pipe operator `\|>` and function capture `f(a, _)`                            | [5](05-expressions.md)                                | D-050, D-244, D-245        |
 | Structural interfaces, satisfied implicitly by module functions               | [8](08-interfaces.md)                                 | D-020, D-061, D-063        |
@@ -32,7 +32,7 @@ This chapter is informative. It summarizes the language and points to the normat
 | Sorted and insertion-ordered maps, sets and multimaps in the standard library | [3](03-types.md)                                      | D-331, D-332, D-336, D-337 |
 | Fibers on an M:N scheduler, structured concurrency, channels, selectors       | [10](10-concurrency.md)                               | D-003, D-012, D-040, D-054 |
 | Scope bodies and timeouts on the calling fiber, nested cancellation           | [10](10-concurrency.md)                               | D-665, D-667               |
-| Deadlocks detected in every build, exit status 103                            | [10](10-concurrency.md)                               | D-724                      |
+| Deadlocks detected in every build, exit status 103                            | [10](10-concurrency.md), [13](13-tooling.md)          | D-724, D-856 to D-859      |
 | Compile-time evaluated constants                                              | [4](04-declarations.md)                               | D-090                      |
 | Inline `test` blocks                                                          | [4](04-declarations.md), [13](13-tooling.md)          | D-055                      |
 | Per-target FFI through `@external` and `@target`                              | [12](12-targets-and-ffi.md)                           | D-030, D-056               |

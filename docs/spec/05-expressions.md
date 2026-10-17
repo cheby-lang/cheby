@@ -591,6 +591,8 @@ Every call in tail position is a **tail call** and must not grow the stack (D-01
 
 Calls to `@external` functions are not covered by the guarantee ([§12.8](12-targets-and-ffi.md#128-tail-calls)).
 
+A tail call from code outside package `std` to `channel::send`, `channel::receive` or `fiber::join` must be compiled as a call followed by a return, so that the caller's frame stays on the stack and a deadlock report can give the caller's location ([§10.4](10-concurrency.md#104-detached-fibers)) (D-861). `channel::send` and `channel::receive` are `@external`, so the guarantee already does not cover them, and the call the user writes is the ordinary call of §12.8. For `fiber::join` the rule is an exception to the guarantee. It adds at most one frame per waiting fiber, because these three never call a function value, so no loop can grow the stack through them. `selector::select` keeps its tail call, since it calls the chosen arm's function in tail position and loops driven by `select` rely on that.
+
 ## 5.16 Pipe
 
 ```ebnf

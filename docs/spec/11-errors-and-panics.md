@@ -186,7 +186,7 @@ A panic affects only the fiber in which it happens (D-018):
 3. If the fiber is detached, its panic is printed to standard error as a panic report and nothing else happens ([§10.4](10-concurrency.md#104-detached-fibers)) (D-669).
 4. If the fiber is the root fiber running `main`, the program prints the panic and exits with status 101 ([§10.10](10-concurrency.md#1010-program-entry-and-exit), D-073, D-182).
 
-A deadlock ([§10.4](10-concurrency.md#104-detached-fibers)) is not a panic of any fiber. No scope or timeout can catch it, nothing unwinds, and the program exits with status `103` instead of `101`, so that scripts can tell the two apart (D-724).
+A deadlock ([§10.4](10-concurrency.md#104-detached-fibers)) is not a panic of any fiber. No scope or timeout can catch it. Under `cheby run`, nothing unwinds, and the program exits with status `103` instead of `101`, so that scripts can tell the two apart (D-724). `cheby test` and the REPL cancel the deadlocked root's scope instead ([§10.4](10-concurrency.md#104-detached-fibers)) (D-859).
 
 Structured concurrency is therefore the way to recover from panics: code that must survive a failure runs its risky part in a scope and inspects the `Result` (ADR-0019).
 
