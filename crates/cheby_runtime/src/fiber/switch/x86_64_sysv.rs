@@ -18,6 +18,7 @@
 use std::ffi::c_void;
 
 use super::{Saved, StackSlot, checked_top};
+use crate::fiber::sanitizer;
 
 /// The switch exists here.
 pub const SUPPORTED: bool = true;
@@ -59,6 +60,9 @@ pub unsafe fn prepare(
     arg: *mut c_void,
 ) -> Saved {
     let top = checked_top(slot, stack_top);
+    // GAP(sanitize-slot-unpoison): a reused slot may hold the redzones of
+    // frames that never returned.
+    sanitizer::unpoison_stack(slot.usable_bottom(), top.wrapping_sub(slot.usable_bottom()));
     let frame = top.wrapping_sub(size_of::<InitialFrame>());
     let pointer = std::ptr::with_exposed_provenance_mut::<InitialFrame>(frame);
     // SAFETY: `frame` is 16-aligned and its 64 bytes lie in the slot below

@@ -217,6 +217,13 @@ pub enum EntryOutcome {
     /// good: its host keeps (leaks) the code it runs and every value it may
     /// reach.
     Exited(i32),
+    /// The entry's domain deadlocked (D-724, D-857, D-859): the report as
+    /// written to standard error, every line ending in '\n'. Under `cheby
+    /// run` nothing unwound and the halt has started, as for
+    /// [`EntryOutcome::Exited`]; under `cheby test` and the REPL the
+    /// entry's base scope was cancelled and the root unwound to its catch
+    /// point.
+    Deadlocked(String),
 }
 
 /// A failure of the runtime itself, not of the program.
@@ -559,10 +566,7 @@ unsafe fn spawn_entry(
             // here, and the record says so, not the word (a `main` thunk's
             // 0 is success).
             // SAFETY: `ctx` is the live block made above.
-            let outcome = match unwind::record::finish_entry(unsafe { &*ctx }) {
-                Some(report) => EntryOutcome::Panicked(report),
-                None => EntryOutcome::Returned(word),
-            };
+            let outcome = unwind::record::finish_entry(unsafe { &*ctx }, word);
             entry_interrupter.clear();
             // SAFETY: null is always allowed.
             unsafe { tls::set_current_fiber(std::ptr::null_mut()) };
@@ -733,6 +737,10 @@ impl Default for RunConfig {
 ///   refused a request of the domain, which skips the check and counts the
 ///   skip (D-771). Constants frozen before `main` have left the domain,
 ///   so every live object is a leak.
+/// - 103 after a deadlock (D-724, D-859): the status is fixed first, then
+///   standard output is flushed and the runtime's report written to
+///   standard error, then the halt completes with nothing unwinding; no
+///   stats report and no leak check follow.
 ///
 /// `main` runs as the root fiber of a [`Runtime`] made for the run, with
 /// the program's arguments, `config.threads` workers (D-690) and
@@ -817,6 +825,11 @@ pub unsafe fn run_main(entry: EntryFn, config: RunConfig) -> Result<i32, Runtime
         std::mem::forget(code);
         return Ok(status);
     }
+    // A deadlock (D-724, D-859): the detector found `main`'s domain
+    // blocked and nothing unwound.
+    if let Ok(EntryOutcome::Deadlocked(report)) = &outcome {
+        return Ok(deadlocked(runtime, code, report));
+    }
     // The exit sequence (§10.10's note): flush standard output and fix the
     // status, then stop the runtime, then the stats report, then the leak
     // check. The root's catch point already printed a panic report (D-701).
@@ -888,6 +901,29 @@ pub unsafe fn run_main(entry: EntryFn, config: RunConfig) -> Result<i32, Runtime
     Ok(status)
 }
 
+/// `cheby run`'s action on a deadlock (D-724, D-859), on the host thread:
+/// fixes status 103 first, so that nothing later changes it (D-785); then
+/// flushes standard output and writes `report` to standard error, where a
+/// failure of either changes nothing (D-346, D-785); then completes the
+/// halt, which freezes the blocked fibers where they wait with nothing
+/// unwinding (D-708); and returns the status, with no `CHEBY_RT_STATS`
+/// report and no leak check, as after a termination. The thread backend
+/// never deadlocks: any wait there is a fatal error (D-692, D-714).
+fn deadlocked(runtime: Option<Runtime>, code: Option<CodeToken>, report: &str) -> i32 {
+    let status = runtime.as_ref().map_or(status::DEADLOCK, |runtime| {
+        runtime.shared_handle().fix_status(status::DEADLOCK)
+    });
+    io::flush_stdout().ok();
+    io::try_write_stderr(report).ok();
+    if let Some(runtime) = runtime {
+        runtime.halt();
+    }
+    // The runtime held the code's token and released it once its threads
+    // were joined; on the thread backend this function holds it.
+    drop(code);
+    status
+}
+
 /// How `run_main`'s runtime stopped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Stopped {
@@ -913,6 +949,9 @@ enum Stopped {
 fn exit_status(outcome: &EntryOutcome, flushed: bool) -> Result<i32, RuntimeError> {
     match *outcome {
         EntryOutcome::Exited(status) => Ok(status),
+        // `run_main` handles a deadlock before it flushes (D-859); this arm
+        // only keeps the match whole.
+        EntryOutcome::Deadlocked(_) => Ok(status::DEADLOCK),
         EntryOutcome::Panicked(_) => Ok(status::PANIC),
         EntryOutcome::Returned(_) if !flushed => Ok(status::ERR),
         EntryOutcome::Returned(0) => Ok(status::SUCCESS),

@@ -86,6 +86,11 @@ impl PollWake for MioWake {
 /// Nobody polls, in [`Driver::deadline`].
 const NOT_POLLING: u64 = 0;
 
+/// The longest timeout one poll is given (a day): far below every OS's
+/// limit (`kevent` refuses a timeout of 1.5e10 s with `EINVAL`), and long
+/// enough that the extra polls of a far deadline cost nothing.
+const MAX_POLL: Duration = Duration::from_hours(24);
+
 /// A runtime's poller and waker, and what the holder waits for.
 pub(super) struct Driver {
     /// The poller; held by the one idle worker that polls.
@@ -191,10 +196,13 @@ impl Driver {
         let timeout = if earliest == NO_TIMER {
             None
         } else {
-            // Past `Instant`'s range: no limit.
+            // Past `Instant`'s range: no limit. A deadline further away
+            // than the OS accepts (`kevent` refuses 1.5e10 s) is polled
+            // for in steps of `MAX_POLL`: the holder polls again after each
+            // (gate-1 review ROB1-2).
             timers
                 .instant(earliest)
-                .map(|at| at.saturating_duration_since(Instant::now()))
+                .map(|at| at.saturating_duration_since(Instant::now()).min(MAX_POLL))
         };
         if timeout != Some(Duration::ZERO)
             && let Err(error) = poller.poll(timeout)
@@ -262,16 +270,50 @@ mod tests {
             driver.poll(&mut **poller, &timers);
         }
         let far = Duration::from_secs(3600);
-        let _handle = timers.arm(Instant::now() + far, Arc::new(Nothing), || false);
+        let _handle = timers.arm(Instant::now() + far, Arc::new(Nothing), None, || false);
         driver.poll(&mut **driver.try_hold().unwrap(), &timers);
         // A deadline that has passed is not polled for at all.
-        let _past = timers.arm(Instant::now(), Arc::new(Nothing), || false);
+        let _past = timers.arm(Instant::now(), Arc::new(Nothing), None, || false);
         driver.poll(&mut **driver.try_hold().unwrap(), &timers);
         let timeouts = timeouts.lock();
         assert_eq!(timeouts.len(), 2);
         assert_eq!(timeouts[0], None);
         let limit = timeouts[1].unwrap();
         assert!(limit <= far && limit > far.saturating_sub(Duration::from_secs(60)));
+        assert!(!driver.polling());
+    }
+
+    /// A deadline like `fiber::timeout(duration::hours(9223372036), ..)`'s
+    /// (gate-1 review ROB1-2): within `Instant`'s range and the timers'
+    /// nanoseconds (1.5e10 s), but beyond what `kevent` accepts.
+    fn far_deadline() -> Instant {
+        Instant::now()
+            .checked_add(Duration::from_mins(250_000_000))
+            .unwrap()
+    }
+
+    /// Gate-1 review ROB1-2: a deadline further away than the OS accepts
+    /// is polled for in steps of at most a day.
+    #[test]
+    fn poller_clamps_a_far_deadline() {
+        let (driver, timeouts, _) = recorded();
+        let timers = Timers::new(Instant::now());
+        let _handle = timers.arm(far_deadline(), Arc::new(Nothing), None, || false);
+        driver.poll(&mut **driver.try_hold().unwrap(), &timers);
+        assert_eq!(timeouts.lock().as_slice(), &[Some(MAX_POLL)]);
+    }
+
+    /// Gate-1 review ROB1-2 with the system's poller: a far deadline is no
+    /// longer an invalid argument (the poll returns at the wake sent first,
+    /// where it was a fatal error before).
+    #[test]
+    #[cfg_attr(windows, ignore = "the poller on Windows is M6 (D-545, D-714)")]
+    fn poller_a_far_deadline_polls_the_system() {
+        let driver = Driver::new().unwrap();
+        let timers = Timers::new(Instant::now());
+        let _handle = timers.arm(far_deadline(), Arc::new(Nothing), None, || false);
+        driver.wake();
+        driver.poll(&mut **driver.try_hold().unwrap(), &timers);
         assert!(!driver.polling());
     }
 

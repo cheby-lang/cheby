@@ -15,8 +15,31 @@ use crate::ctx::ExecCtx;
 use crate::entry::{EntryConfig, EntryMode, EntryOutcome, MIN_STACK_SIZE};
 use crate::panic::{cheby_rt_stack_slow, stack_position};
 
-/// How long a test waits for an outcome before it calls it a hang.
-pub(crate) const HANG: Duration = Duration::from_secs(60);
+/// The factor `CHEBY_HARNESS_SCALE` sets for the runtime's own tests
+/// (D-722; GAP(runtime-test-hang-scale)): a whole number from 1 to 100,
+/// read as `tests/support/src/process.rs` reads it; unset, empty or
+/// invalid is 1 (the harnesses reject an invalid value themselves).
+fn harness_scale() -> u32 {
+    std::env::var("CHEBY_HARNESS_SCALE")
+        .ok()
+        .and_then(|text| text.trim().parse::<u32>().ok())
+        .filter(|scale| (1..=100).contains(scale))
+        .unwrap_or(1)
+}
+
+/// `d` times `CHEBY_HARNESS_SCALE` (1 to 100, default 1;
+/// GAP(runtime-test-hang-scale)): every wait of a runtime test that bounds
+/// how long something may take goes through it, so slow machines,
+/// emulators and sanitizer builds scale it.
+pub(crate) fn scaled(d: Duration) -> Duration {
+    d.saturating_mul(harness_scale())
+}
+
+/// `scaled(60 s)`: how long a test waits for an outcome before it calls it
+/// a hang. A function, not a constant, so that it scales (critique C4).
+pub(crate) fn hang() -> Duration {
+    scaled(Duration::from_secs(60))
+}
 
 /// Whether the tests run under an emulator, where only correctness is
 /// asserted (`CHEBY_RT_TEST_EMULATED=1`, set by the container and Rosetta
@@ -32,8 +55,21 @@ pub(crate) fn runtime(threads: usize) -> Runtime {
 
 /// A runtime of `threads` workers with the migration stress mode `stress`;
 /// without `rescue`, the monitor never wakes a worker for a queued fiber,
-/// so a lost wakeup hangs.
+/// so a lost wakeup hangs. Deadlock detection is off (D-860): the tests
+/// that use it wake fibers from the host (the [`Mailbox`], waits with a
+/// timeout), which the detector cannot see.
 pub(crate) fn tuned(threads: usize, stress: bool, rescue: bool) -> Runtime {
+    tuned_with(threads, stress, rescue, false)
+}
+
+/// As [`tuned`], with deadlock detection on (D-724, D-860), as in every
+/// shipped host.
+pub(crate) fn tuned_detecting(threads: usize, stress: bool, rescue: bool) -> Runtime {
+    tuned_with(threads, stress, rescue, true)
+}
+
+/// A runtime of `threads` workers with every [`Tuning`] knob given.
+fn tuned_with(threads: usize, stress: bool, rescue: bool, detect_deadlocks: bool) -> Runtime {
     Runtime::tuned(
         &RuntimeConfig {
             threads: Some(threads),
@@ -42,6 +78,7 @@ pub(crate) fn tuned(threads: usize, stress: bool, rescue: bool) -> Runtime {
         Tuning {
             stress_migrate: Some(stress),
             rescue,
+            detect_deadlocks,
         },
     )
     .unwrap()
@@ -108,6 +145,7 @@ pub(crate) fn start_root_in(
                 // SAFETY: `ctx` is the root fiber's live control block.
                 body(unsafe { &*ctx })
             }),
+            None,
         )
         .unwrap()
 }
@@ -115,7 +153,7 @@ pub(crate) fn start_root_in(
 /// Runs `body` as a root fiber on the smallest stack and returns its word;
 /// panics if it panics or hangs.
 pub(crate) fn root(runtime: &Runtime, body: impl FnOnce(&ExecCtx) -> u64 + Send + 'static) -> u64 {
-    match start_root(runtime, MIN_STACK_SIZE, body).recv_timeout(HANG) {
+    match start_root(runtime, MIN_STACK_SIZE, body).recv_timeout(hang()) {
         Ok(EntryOutcome::Returned(word)) => word,
         other => panic!("the root fiber did not return: {other:?}"),
     }
@@ -204,11 +242,96 @@ pub(crate) struct MonitorProbe {
     pub(crate) stop_exit_release: std::sync::atomic::AtomicBool,
     /// Keeps the stop from giving up on the fibers waiting on the blocking
     /// pool (D-815): its workers wait until none
-    /// waits, at most [`HANG`].
+    /// waits, at most [`hang`].
     pub(crate) hold_pool: std::sync::atomic::AtomicBool,
+    /// The deadlock detector surveys on every monitor pass, with no sleep
+    /// and no backoff (D-860).
+    pub(crate) eager_detection: std::sync::atomic::AtomicBool,
+    /// Surveys (pass 1 started) by domain address.
+    surveys: parking_lot::Mutex<std::collections::HashMap<usize, usize>>,
+    /// Surveys whose two passes agreed.
+    pub(crate) confirmations: std::sync::atomic::AtomicUsize,
+    /// Roots the detector reported, by domain address.
+    reports: parking_lot::Mutex<std::collections::HashMap<usize, usize>>,
+    /// Collect steps that walked the stack of a fiber that ran meanwhile
+    /// (critique RISK-2) and gave the report up: 0 unless a test makes
+    /// D-857's stuck-group wake land in the collect step.
+    pub(crate) walked_live: std::sync::atomic::AtomicUsize,
+    /// Run by the detector between its two passes.
+    between_passes: parking_lot::Mutex<Option<PassHook>>,
+    /// Run by the collect step before it locates a fiber's wait.
+    before_locate: parking_lot::Mutex<Option<PassHook>>,
+}
+
+/// A hook the detector runs between its two passes (a test's).
+#[derive(Clone)]
+pub(crate) struct PassHook(pub(crate) std::sync::Arc<dyn Fn() + Send + Sync>);
+
+impl std::fmt::Debug for PassHook {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("PassHook").finish_non_exhaustive()
+    }
 }
 
 impl MonitorProbe {
+    /// The detector started a survey of the domain at `domain`.
+    pub(crate) fn surveyed(&self, domain: usize) {
+        let mut surveys = self.surveys.lock();
+        let count = surveys.entry(domain).or_insert(0);
+        *count = count.saturating_add(1);
+    }
+
+    /// The surveys of the domain at `domain` so far.
+    pub(crate) fn surveys_of(&self, domain: usize) -> usize {
+        self.surveys.lock().get(&domain).copied().unwrap_or(0)
+    }
+
+    /// The detector's two passes agreed.
+    pub(crate) fn confirmed(&self) {
+        self.confirmations.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// The detector reported a root of the domain at `domain`.
+    pub(crate) fn reported(&self, domain: usize) {
+        let mut reports = self.reports.lock();
+        let count = reports.entry(domain).or_insert(0);
+        *count = count.saturating_add(1);
+    }
+
+    /// The roots of the domain at `domain` the detector reported so far.
+    pub(crate) fn reports_of(&self, domain: usize) -> usize {
+        self.reports.lock().get(&domain).copied().unwrap_or(0)
+    }
+
+    /// Runs the hook between the detector's passes, if any, with the
+    /// probe's lock released.
+    pub(crate) fn between_passes(&self) {
+        let hook = self.between_passes.lock().clone();
+        if let Some(hook) = hook {
+            (hook.0)();
+        }
+    }
+
+    /// Sets (or clears) the hook run between the detector's passes.
+    pub(crate) fn set_between_passes(&self, hook: Option<PassHook>) {
+        *self.between_passes.lock() = hook;
+    }
+
+    /// Runs the hook of the collect step, if any, with the probe's lock
+    /// released: under the scope lock of the fiber about to be located.
+    pub(crate) fn before_locate(&self) {
+        let hook = self.before_locate.lock().clone();
+        if let Some(hook) = hook {
+            (hook.0)();
+        }
+    }
+
+    /// Sets (or clears) the hook run by the collect step before it locates
+    /// a fiber's wait.
+    pub(crate) fn set_before_locate(&self, hook: Option<PassHook>) {
+        *self.before_locate.lock() = hook;
+    }
+
     /// A worker left a fiber frozen.
     pub(crate) fn froze(&self) {
         self.frozen.fetch_add(1, Ordering::SeqCst);
@@ -216,7 +339,7 @@ impl MonitorProbe {
 
     /// Worker `index` ended at a stop, its slot marked `DEAD`, and its
     /// thread is about to end: if it is the one `hold_stop_exit` names, it
-    /// says so and waits for `stop_exit_release`, at most [`HANG`], so that
+    /// says so and waits for `stop_exit_release`, at most [`hang`], so that
     /// a test can make another worker push to it meanwhile.
     pub(crate) fn stop_exit(&self, index: usize) {
         if self.hold_stop_exit.load(Ordering::SeqCst) != index.saturating_add(1) {
@@ -224,7 +347,7 @@ impl MonitorProbe {
         }
         self.stop_exit_held.store(true, Ordering::SeqCst);
         let begun = std::time::Instant::now();
-        while !self.stop_exit_release.load(Ordering::SeqCst) && begun.elapsed() < HANG {
+        while !self.stop_exit_release.load(Ordering::SeqCst) && begun.elapsed() < hang() {
             std::thread::sleep(Duration::from_millis(1));
         }
     }

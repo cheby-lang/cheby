@@ -65,12 +65,13 @@
 //! released, and a termination reads the list after the roots' lock.
 
 use std::fmt;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock, Weak, mpsc};
 use std::time::{Duration, Instant};
 
 use parking_lot::{Condvar, Mutex, MutexGuard};
 
+use super::deadlock::{PoolPending, RootEntry};
 use super::{FiberRef, NO_STATUS, Runtime, Shared};
 use crate::abi::Word;
 use crate::alloc::Domain;
@@ -100,6 +101,57 @@ pub struct DetachedGroup {
     /// that have not reported yet: a termination reports to them
     /// (D-709). A leaf lock, taken with no other lock held.
     notified: Mutex<Vec<Weak<RootNotice>>>,
+    /// The domains of the roots that started in the group (D-857): the
+    /// deadlock detector surveys the group for each. A leaf lock.
+    domains: Mutex<Vec<Weak<Domain>>>,
+    /// Set by a teardown that skipped members blocked in a system call
+    /// (D-786, D-804): the group is stuck, kept by the REPL until the
+    /// session ends (D-827), and left out of deadlock detection (D-857;
+    /// `sched/deadlock.rs`). Written under `jobs`' lock.
+    stuck: AtomicBool,
+    /// The blocking-pool jobs of the group's fibers that are counted in
+    /// their domain (`deadlock::PoolPending`): a stuck mark releases them
+    /// once. A leaf lock.
+    jobs: Mutex<TrackedJobs>,
+}
+
+/// The tracked pool jobs of a group ([`DetachedGroup::track_job`]): weak
+/// tokens, of which the finished ones are dropped in amortized O(1) per
+/// tracked job (gate-1 review ROB1-1; D-860: tracking costs O(1) at a
+/// submission).
+#[derive(Default)]
+struct TrackedJobs {
+    /// The tokens, finished ones included until the next compaction.
+    list: Vec<Weak<PoolPending>>,
+    /// The length at which the next tracking compacts `list`: twice the
+    /// live tokens found by the last compaction, at least
+    /// [`TrackedJobs::MIN_COMPACT`].
+    compact_at: usize,
+    /// The tokens the compactions examined, for the tests.
+    #[cfg(test)]
+    examined: usize,
+}
+
+impl TrackedJobs {
+    /// The smallest length that compacts.
+    const MIN_COMPACT: usize = 16;
+
+    /// Adds `job`, after dropping the finished tokens once the list has
+    /// grown to twice the live ones the last compaction kept: a
+    /// compaction that keeps L tokens is followed by at least
+    /// `max(L, MIN_COMPACT - L)` additions before the next one, so the
+    /// work is O(1) per addition, amortized.
+    fn push(&mut self, job: &Arc<PoolPending>) {
+        if self.list.len() >= self.compact_at.max(Self::MIN_COMPACT) {
+            #[cfg(test)]
+            {
+                self.examined = self.examined.saturating_add(self.list.len());
+            }
+            self.list.retain(|known| known.strong_count() > 0);
+            self.compact_at = self.list.len().saturating_mul(2);
+        }
+        self.list.push(Arc::downgrade(job));
+    }
 }
 
 /// The part of a group under its lock.
@@ -161,7 +213,82 @@ impl DetachedGroup {
             emptied: Condvar::new(),
             capture,
             notified: Mutex::new(Vec::new()),
+            domains: Mutex::new(Vec::new()),
+            stuck: AtomicBool::new(false),
+            jobs: Mutex::new(TrackedJobs::default()),
         })
+    }
+
+    /// Records `domain` as the domain of a root that starts in the group,
+    /// once (D-857): the detector finds every group of a domain so.
+    pub(super) fn add_domain(&self, domain: &Arc<Domain>) {
+        let mut domains = self.domains.lock();
+        domains.retain(|known| known.strong_count() > 0);
+        if !domains
+            .iter()
+            .any(|known| std::ptr::eq(known.as_ptr(), Arc::as_ptr(domain)))
+        {
+            domains.push(Arc::downgrade(domain));
+        }
+    }
+
+    /// Whether a root of `domain` started in the group.
+    pub(super) fn has_domain(&self, domain: &Arc<Domain>) -> bool {
+        self.domains
+            .lock()
+            .iter()
+            .any(|known| std::ptr::eq(known.as_ptr(), Arc::as_ptr(domain)))
+    }
+
+    /// Whether a teardown marked the group stuck (D-857, D-827).
+    pub(crate) fn stuck(&self) -> bool {
+        self.stuck.load(Ordering::SeqCst)
+    }
+
+    /// Marks the group stuck and takes its fibers' pending pool jobs out of
+    /// their domains' counts, each once (D-857 under UQ-12 (b);
+    /// `sched/deadlock.rs`): under the jobs' leaf lock, so a job registered
+    /// later finds the mark ([`DetachedGroup::track_job`]). Marking again
+    /// changes no count.
+    pub(super) fn mark_stuck(&self) {
+        let jobs = {
+            let mut jobs = self.jobs.lock();
+            self.stuck.store(true, Ordering::SeqCst);
+            std::mem::take(&mut jobs.list)
+        };
+        for job in jobs.iter().filter_map(Weak::upgrade) {
+            job.release();
+        }
+    }
+
+    /// Registers a pending pool job of one of the group's fibers, counted
+    /// in its domain: released at once if the group is stuck, so a stuck
+    /// group's jobs never hold detection off; otherwise kept until the
+    /// group is marked stuck or the job is gone. Forgets the jobs that are
+    /// gone, in amortized O(1) per call ([`TrackedJobs::push`]).
+    pub(super) fn track_job(&self, job: &Arc<PoolPending>) {
+        let mut jobs = self.jobs.lock();
+        if self.stuck.load(Ordering::SeqCst) {
+            drop(jobs);
+            job.release();
+            return;
+        }
+        jobs.push(job);
+    }
+
+    /// The tracked tokens now and the tokens the compactions examined so
+    /// far, for the tests.
+    #[cfg(test)]
+    pub(super) fn tracked_jobs(&self) -> (usize, usize) {
+        let jobs = self.jobs.lock();
+        (jobs.list.len(), jobs.examined)
+    }
+
+    /// The base scopes of the members for a deadlock survey, copied under
+    /// the group's lock, or `None` while a slot is reserved for a fiber
+    /// not created yet (busy).
+    pub(super) fn survey_bases(&self) -> Option<Vec<Arc<ScopeState>>> {
+        self.inner.lock().bases()
     }
 
     /// The group's capture, if any.
@@ -399,7 +526,7 @@ pub type RootDone = mpsc::Sender<(usize, Result<EntryOutcome, RuntimeError>)>;
 /// termination (D-709, through the root's group), the refusal of a root
 /// started after a termination (D-802), or the loss of a root that never
 /// ran (when its start closure is dropped unrun).
-struct RootNotice {
+pub(super) struct RootNotice {
     /// The host's tag for the root.
     tag: usize,
     /// The host's sender, taken by the first report.
@@ -414,7 +541,7 @@ impl RootNotice {
     /// Sends `outcome` with the tag, unless the root has reported already
     /// or its start failed. Takes only the notice's own lock, a leaf, and
     /// sends after releasing it.
-    fn report(&self, outcome: Result<EntryOutcome, RuntimeError>) {
+    pub(super) fn report(&self, outcome: Result<EntryOutcome, RuntimeError>) {
         let Some(done) = self.done.lock().take() else {
             return;
         };
@@ -582,6 +709,7 @@ impl Runtime {
                 on_fiber.set(started.elapsed()).ok();
                 word
             }),
+            None,
         )?;
         Ok(RootHandle {
             receiver,
@@ -625,26 +753,16 @@ impl Runtime {
         // Before the root is registered: a termination that the
         // registration does not see reaches the notice through the group.
         group.remember_notice(&notice);
-        let on_fiber = Arc::clone(&notice);
+        // The root's base frame reports its outcome on the notice
+        // (`Runtime::spawn_root_in`), after its catch point.
         let started = self.spawn_root_in(
             config,
             Arc::clone(group),
             Box::new(move |ctx| {
                 // SAFETY: as in `start_root_in`.
-                let word = unsafe { entry(ctx) };
-                // SAFETY: `ctx` is this root fiber's live control block.
-                let me = unsafe { &*ctx };
-                // The root's catch point, as the fiber's own start does
-                // after this returns (D-699, D-701): it then finds no
-                // record and sends `Returned` to a receiver dropped below.
-                let outcome = match crate::unwind::record::finish_entry(me) {
-                    Some(report) => EntryOutcome::Panicked(report),
-                    None => EntryOutcome::Returned(word),
-                };
-                on_fiber.report(Ok(outcome));
-                drop(on_fiber);
-                word
+                unsafe { entry(ctx) }
             }),
+            Some(Arc::clone(&notice)),
         );
         match started {
             Ok(receiver) => {
@@ -746,6 +864,12 @@ impl Runtime {
             match found {
                 Some(blocked) if inner.left == left && stuck_at == Some(left) => {
                     report.skipped = blocked;
+                    // The group stays closing with members blocked in a
+                    // system call: stuck, left out of deadlock detection,
+                    // its pending pool jobs out of their domains' counts
+                    // (D-857 under UQ-12 (b)). The mark takes only the
+                    // group's leaf job lock, never under the group's.
+                    MutexGuard::unlocked(&mut inner, || group.mark_stuck());
                     break;
                 }
                 Some(_) if inner.left == left => stuck_at = Some(left),
@@ -778,23 +902,25 @@ impl Shared {
     /// the roots' lock, which a termination takes after it set the halt
     /// flag, so a root is either registered before the termination sends
     /// `Exited` to every waiting host, or sees the flag.
-    pub(super) fn register_root(&self, root: u64, sender: mpsc::Sender<EntryOutcome>) -> bool {
+    pub(super) fn register_root(&self, root: Arc<RootEntry>) -> bool {
         let mut roots = self.roots.lock();
         if self.halting() {
             return false;
         }
-        roots.push((root, sender));
+        roots.push(root);
         true
     }
 
-    /// Forgets root `root`'s host: the root has reported its outcome.
+    /// Forgets root `root`'s host: the root has reported its outcome. The
+    /// registry keeps the roots in registration order (the detector lists
+    /// a domain's roots so).
     pub(super) fn unregister_root(&self, root: u64) {
         let removed = {
             let mut roots = self.roots.lock();
             roots
                 .iter()
-                .position(|(known, _)| *known == root)
-                .map(|at| roots.swap_remove(at))
+                .position(|known| known.id == root)
+                .map(|at| roots.remove(at))
         };
         drop(removed);
     }
@@ -845,8 +971,8 @@ impl Shared {
             return;
         }
         let roots = self.roots.lock();
-        for (_, sender) in roots.iter() {
-            sender.send(EntryOutcome::Exited(status)).ok();
+        for root in roots.iter() {
+            root.sender.send(EntryOutcome::Exited(status)).ok();
         }
         drop(roots);
         // The roots that report on a `RootDone`: each was remembered in its

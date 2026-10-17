@@ -82,6 +82,8 @@ fn function(
         precounted: false,
         borrow: cheby_mir::borrow::BorrowMask::OWNED,
         sites: Vec::new(),
+        call_locs: Vec::new(),
+        call_loc_strings: IndexVec::new(),
     }
 }
 
@@ -204,6 +206,7 @@ fn returned(outcome: EntryOutcome) -> u64 {
         // No runtime here: the isolated entry's thread is parked for good
         // (D-709), and a parked thread runs none of the JIT's code again.
         EntryOutcome::Exited(status) => panic!("the entry ended the program with status {status}"),
+        EntryOutcome::Deadlocked(report) => panic!("the entry deadlocked:\n{report}"),
     }
 }
 
@@ -1116,6 +1119,7 @@ fn compile_speed_probe() {
 
 mod blocking;
 mod borrow;
+mod code_map;
 mod control;
 mod entry_unwind;
 mod large_frame;

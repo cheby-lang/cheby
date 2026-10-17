@@ -359,6 +359,7 @@ impl FnCx<'_> {
         let Some(defs) = self.check_definitions() else {
             return Ok(());
         };
+        self.check_call_locs(&defs);
         if !self.check_cfg() {
             return Ok(());
         }
@@ -1263,6 +1264,45 @@ impl FnCx<'_> {
             }
         }
         ok.then_some(sites)
+    }
+
+    /// Every recorded call location (D-856) names a local that a call
+    /// defines and a string of [`Function::call_loc_strings`], and the
+    /// table is sorted by local, as code generation searches it.
+    fn check_call_locs(&mut self, defs: &[Option<DefSite>]) {
+        let f = self.f;
+        if !f
+            .call_locs
+            .windows(2)
+            .all(|w| matches!(w, [a, b] if a.0 < b.0))
+        {
+            self.err("the call locations are not sorted by local, each once");
+        }
+        for &(local, loc) in &f.call_locs {
+            let by_call = defs
+                .get(local.index())
+                .copied()
+                .flatten()
+                .and_then(|(block, at)| f.blocks.get(block)?.stmts.get(at?))
+                .is_some_and(|stmt| {
+                    matches!(
+                        stmt,
+                        Stmt::Assign {
+                            value: Rvalue::Call { .. },
+                            ..
+                        }
+                    )
+                });
+            if !by_call {
+                self.err(format!(
+                    "the call location of _{} names a local no call defines",
+                    local.as_u32()
+                ));
+            }
+            if f.call_loc_strings.get(loc).is_none() {
+                self.err(format!("unknown call location str#{}", loc.as_u32()));
+            }
+        }
     }
 
     /// Block references exist, `bb0` is not a target and has no

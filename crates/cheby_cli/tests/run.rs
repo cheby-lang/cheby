@@ -1204,3 +1204,108 @@ fn a_reader_pipeline_echoes_each_line_before_the_next_arrives() {
         assert_eq!(status.code(), Some(0), "CHEBY_THREADS={threads}");
     }
 }
+
+/// §10.4's example, verbatim: the root fiber still holds the `Sender`, so
+/// its receive can never complete.
+const DEADLOCK_EXAMPLE: &str = "import std::channel\n\n\
+     fn main() {\n  let (tx, rx) = channel::new::<Int>(0)\n  \
+     let assert Ok(n) = channel::receive(rx)\n  let _ = channel::send(tx, n)\n}\n";
+
+/// The report §10.4 gives for [`DEADLOCK_EXAMPLE`] (D-856, D-858).
+const DEADLOCK_EXAMPLE_REPORT: &str =
+    "fatal error: all fibers are blocked\n  blocked in channel::receive at src/main.cheby:5:22\n";
+
+/// Two scoped fibers each wait to receive from the other, and `main` waits
+/// at the end of their scope: both fibers wait at the same call.
+const DEADLOCK_TWO_FIBERS: &str = "//! Two fibers wait on each other.\n\n\
+     import std::channel\nimport std::fiber\n\n\
+     fn main() {\n  let (ping_tx, ping_rx) = channel::new::<Int>(0)\n  \
+     let (pong_tx, pong_rx) = channel::new::<Int>(0)\n  let outcome = {\n    \
+     use owner <- fiber::scope()\n    fiber::spawn(owner, fn() { relay(ping_rx, pong_tx) })\n    \
+     fiber::spawn(owner, fn() { relay(pong_rx, ping_tx) })\n    Nil\n  }\n  let _ = outcome\n}\n\n\
+     fn relay(from: channel::Receiver<Int>, to: channel::Sender<Int>) -> Result<Nil, Int> {\n  \
+     let assert Ok(n) = channel::receive(from)\n  channel::send(to, n + 1)\n}\n";
+
+/// The report of [`DEADLOCK_TWO_FIBERS`]: sorted by location, then by
+/// operation, with equal lines kept (D-858).
+const DEADLOCK_TWO_FIBERS_REPORT: &str = "fatal error: all fibers are blocked\n  \
+     blocked in fiber::scope at src/main.cheby:10:5\n  \
+     blocked in channel::receive at src/main.cheby:19:22\n  \
+     blocked in channel::receive at src/main.cheby:19:22\n";
+
+/// The environments every deadlock test runs its program in: the thread
+/// count inherited, 1, 2 and 4 workers, and 4 workers under D-687's
+/// migration stress. The report is the same in each (D-722, D-858).
+const DEADLOCK_ENVS: [&[(&str, &str)]; 5] = [
+    &[],
+    &[("CHEBY_THREADS", "1")],
+    &[("CHEBY_THREADS", "2")],
+    &[("CHEBY_THREADS", "4")],
+    &[("CHEBY_THREADS", "4"), ("CHEBY_RT_STRESS_MIGRATE", "1")],
+];
+
+/// D-724, D-856, D-858, D-859: §10.4's example, run as a package, writes
+/// exactly the report the spec gives, at `src/main.cheby:5:22`, prints
+/// nothing to standard output and exits with status 103, in every build
+/// (a `--release` run of this test drives a release `cheby`).
+#[test]
+fn deadlock_the_spec_example_exits_with_103() {
+    let dir = package(
+        "deadlock_example",
+        &[MANIFEST, ("src/main.cheby", DEADLOCK_EXAMPLE)],
+    );
+    let out = cheby(&dir, &["run"]);
+    assert_eq!(out.stderr, DEADLOCK_EXAMPLE_REPORT);
+    assert_eq!(out.stdout, "");
+    assert_eq!(out.status, Some(103), "{}", out.describe_status());
+}
+
+/// D-722, D-858: the report is the same at every thread count and under
+/// migration stress.
+#[test]
+fn deadlock_the_spec_example_reports_the_same_at_every_thread_count() {
+    let dir = package(
+        "deadlock_example_threads",
+        &[MANIFEST, ("src/main.cheby", DEADLOCK_EXAMPLE)],
+    );
+    for env in DEADLOCK_ENVS {
+        let out = cheby_env(&dir, &["run"], env, None);
+        assert_eq!(out.stderr, DEADLOCK_EXAMPLE_REPORT, "{env:?}");
+        assert_eq!(out.stdout, "", "{env:?}");
+        assert_eq!(out.status, Some(103), "{env:?}: {}", out.describe_status());
+    }
+}
+
+/// D-858: two fibers blocked at the same call give two equal lines, after
+/// `main`'s at its scope, whichever fiber parked first, at every thread
+/// count and under migration stress.
+#[test]
+fn deadlock_of_two_fibers_is_reported_in_order() {
+    let dir = package(
+        "deadlock_two_fibers",
+        &[MANIFEST, ("src/main.cheby", DEADLOCK_TWO_FIBERS)],
+    );
+    for env in DEADLOCK_ENVS {
+        let out = cheby_env(&dir, &["run"], env, None);
+        assert_eq!(out.stderr, DEADLOCK_TWO_FIBERS_REPORT, "{env:?}");
+        assert_eq!(out.status, Some(103), "{env:?}: {}", out.describe_status());
+    }
+}
+
+/// D-859: `cheby run` halts after a deadlock with nothing unwinding, so no
+/// leak check runs (a debug build would otherwise find the channel and
+/// its handles live, D-458) and no `CHEBY_RT_STATS` report follows, as
+/// after a termination: standard error holds the report and nothing else.
+#[test]
+fn deadlock_is_followed_by_no_leak_line_and_no_stats_report() {
+    let dir = package(
+        "deadlock_no_stats",
+        &[MANIFEST, ("src/main.cheby", DEADLOCK_EXAMPLE)],
+    );
+    for threads in ["1", "2"] {
+        let env = [("CHEBY_RT_STATS", "1"), ("CHEBY_THREADS", threads)];
+        let out = cheby_env(&dir, &["run"], &env, None);
+        assert_eq!(out.stderr, DEADLOCK_EXAMPLE_REPORT, "{env:?}");
+        assert_eq!(out.status, Some(103), "{env:?}: {}", out.describe_status());
+    }
+}

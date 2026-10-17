@@ -290,6 +290,8 @@ fn unit() -> MirModule {
         precounted: false,
         borrow: cheby_mir::borrow::BorrowMask::OWNED,
         sites: Vec::new(),
+        call_locs: Vec::new(),
+        call_loc_strings: IndexVec::new(),
     };
     MirModule {
         unit: UnitKind::Code(ModuleId::from_u32(1)),
@@ -420,6 +422,8 @@ fn labs_unit(index: u32, params: &[CType]) -> MirModule {
             precounted: false,
             borrow: cheby_mir::borrow::BorrowMask::OWNED,
             sites: Vec::new(),
+            call_locs: Vec::new(),
+            call_loc_strings: IndexVec::new(),
         }],
         callees: vec![CalleeDecl {
             def: g,
@@ -567,6 +571,8 @@ fn blocking_fn(index: u32, symbol: &str, params: &[CType], ret: CType) -> MirMod
         precounted: true,
         borrow: cheby_mir::borrow::BorrowMask::OWNED,
         sites: Vec::new(),
+        call_locs: Vec::new(),
+        call_loc_strings: IndexVec::new(),
     };
     MirModule {
         unit: UnitKind::Code(ModuleId::from_u32(1)),
@@ -917,6 +923,8 @@ fn slice_forms_unit() -> MirModule {
         precounted: true,
         borrow: cheby_mir::borrow::BorrowMask::OWNED,
         sites: Vec::new(),
+        call_locs: Vec::new(),
+        call_loc_strings: IndexVec::new(),
     };
     MirModule {
         unit: UnitKind::Code(ModuleId::from_u32(1)),
@@ -1550,6 +1558,8 @@ fn unboxed_call_unit(ret: Repr) -> MirModule {
         precounted: false,
         borrow: cheby_mir::borrow::BorrowMask::OWNED,
         sites: Vec::new(),
+        call_locs: Vec::new(),
+        call_loc_strings: IndexVec::new(),
     };
     let g_fn = Function {
         key: FnKey::Item(g),
@@ -1571,6 +1581,8 @@ fn unboxed_call_unit(ret: Repr) -> MirModule {
         precounted: false,
         borrow: cheby_mir::borrow::BorrowMask::OWNED,
         sites: Vec::new(),
+        call_locs: Vec::new(),
+        call_loc_strings: IndexVec::new(),
     };
     let sig = |ret| AbiSig::owned(Abi::Cheby, Vec::new(), ret);
     MirModule {

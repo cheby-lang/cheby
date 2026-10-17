@@ -4,12 +4,15 @@
 //!
 //! # The generated-code view
 //!
-//! Generated code reads only the fields with an `abi::CTX_*` offset, which
-//! are fixed (D-685): the stack limit at 0 (a `usize`), the mode at 8 (a
-//! `u32`) and the unwind flag at 12 (a `u32`, D-733). The view ends at
-//! byte 16, where the Rust part starts with the interrupt reasons; offsets
-//! 16 and 24 held the exit record of a prototype that is gone (D-763), so
-//! nothing generated reads past 16. The function-entry check compares the stack pointer with `stack_limit` and
+//! Generated code touches only the fields with an `abi::CTX_*` offset,
+//! which are fixed (D-685): it reads the stack limit at 0 (a `usize`), the
+//! mode at 8 (a `u32`) and the unwind flag at 12 (a `u32`, D-733), and it
+//! writes the wait-frame word at 16 (a `usize`, D-856;
+//! GAP(loc-ctx-wait-frame)) right before it calls a waiting kernel or
+//! `scope_close`. The view ends at byte 24, where the Rust part starts
+//! with the interrupt reasons; offsets 16 and 24 once held the exit record
+//! of a prototype that is gone (D-763), so nothing generated reads or
+//! writes anything else. The function-entry check compares the stack pointer with `stack_limit` and
 //! calls `cheby_rt_stack_slow` when it is below. Setting `stack_limit` to
 //! `usize::MAX` forces the next function entry into that slow path, which
 //! is how an interrupt reaches running code with the same single compare
@@ -101,7 +104,13 @@ pub struct ExecCtx {
     /// [`abi::unwind_flag`]'s values (D-685). Written only by the owning
     /// fiber; [`abi::unwind_flag::NONE`] while nothing unwinds.
     pub unwind: AtomicU32,
-    // The Rust part, from byte 16: generated code never reads it.
+    /// At [`abi::CTX_WAIT_FRAME`]: the frame pointer of the std function
+    /// that last called a waiting kernel or `scope_close` (D-856). Written
+    /// only by the owning fiber's generated code, right before the call,
+    /// and read by that fiber's kernels ([`ExecCtx::wait_frame`]); 0 until
+    /// the first such call.
+    wait_frame: AtomicUsize,
+    // The Rust part, from byte 24: generated code never reads it.
     /// Why an interrupt was requested: [`reason`] bits (D-688).
     reasons: AtomicU32,
     /// Whether the fiber's code was compiled with unwind edges (D-742).
@@ -161,8 +170,9 @@ pub struct ExecCtx {
 const _: () = assert!(offset_of!(ExecCtx, stack_limit) == 0 && abi::CTX_STACK_LIMIT == 0);
 const _: () = assert!(offset_of!(ExecCtx, mode) == 8 && abi::CTX_MODE == 8);
 const _: () = assert!(offset_of!(ExecCtx, unwind) == 12 && abi::CTX_UNWIND == 12);
-// The generated-code view ends at 16: the Rust part starts there.
-const _: () = assert!(offset_of!(ExecCtx, reasons) == 16);
+const _: () = assert!(offset_of!(ExecCtx, wait_frame) == 16 && abi::CTX_WAIT_FRAME == 16);
+// The generated-code view ends at 24: the Rust part starts there.
+const _: () = assert!(offset_of!(ExecCtx, reasons) == 24);
 
 /// What a new fiber control block starts with.
 #[derive(Debug)]
@@ -229,6 +239,7 @@ impl ExecCtx {
             stack_limit: AtomicUsize::new(init.soft_limit),
             mode: AtomicU32::new(mode),
             unwind: AtomicU32::new(abi::unwind_flag::NONE),
+            wait_frame: AtomicUsize::new(0),
             reasons: AtomicU32::new(0),
             unwind_edges: init.unwind_edges,
             soft_limit: AtomicUsize::new(init.soft_limit),
@@ -280,6 +291,33 @@ impl ExecCtx {
     #[must_use]
     pub(crate) fn hard_limit(&self) -> usize {
         self.hard_limit
+    }
+
+    /// The frame pointer the fiber's generated code stored at
+    /// [`abi::CTX_WAIT_FRAME`] right before its last call of a waiting
+    /// kernel or `scope_close` (D-856): the frame record of the std function
+    /// that made the call, where a deadlock report's walk starts
+    /// (`locate::locate`). 0 before the first such call. Read by the
+    /// fiber's own kernels, before they park.
+    #[must_use]
+    pub fn wait_frame(&self) -> usize {
+        self.wait_frame.load(Ordering::Relaxed)
+    }
+
+    /// Stores `frame` as generated code does, for tests that have no JIT.
+    #[cfg(test)]
+    pub(crate) fn set_wait_frame(&self, frame: usize) {
+        self.wait_frame.store(frame, Ordering::Relaxed);
+    }
+
+    /// The stack's lowest usable address and its top: the hard limit and
+    /// the position where the entry started (`hard_limit`, `stack_top`).
+    /// Every frame record of the fiber's Cheby code lies between them, so a
+    /// frame walk checks each frame pointer against them (D-856,
+    /// `locate::locate`). Both are fixed when the block is made.
+    #[must_use]
+    pub(crate) fn stack_bounds(&self) -> (usize, usize) {
+        (self.hard_limit, self.stack_top)
     }
 
     /// Lowers the soft limit so that `low` lies above it: from its distance
@@ -482,10 +520,29 @@ mod tests {
         assert_eq!(offset_of!(ExecCtx, stack_limit), 0);
         assert_eq!(offset_of!(ExecCtx, mode), 8);
         assert_eq!(offset_of!(ExecCtx, unwind), 12);
-        assert_eq!(offset_of!(ExecCtx, reasons), 16);
+        assert_eq!(offset_of!(ExecCtx, wait_frame), 16);
+        assert_eq!(offset_of!(ExecCtx, reasons), 24);
         let ctx = fcb();
         assert_eq!(ctx.unwind.load(Ordering::Relaxed), abi::unwind_flag::NONE);
         assert!(ctx.unwind_edges());
+    }
+
+    /// D-856: the wait-frame word starts at 0 and reads what generated code
+    /// stored; the stack bounds are the hard limit and the top.
+    #[test]
+    fn the_wait_frame_and_the_stack_bounds() {
+        let ctx = fcb();
+        assert_eq!(ctx.wait_frame(), 0);
+        ctx.set_wait_frame(0x8_0040);
+        assert_eq!(ctx.wait_frame(), 0x8_0040);
+        assert_eq!(ctx.stack_bounds(), (0x1000, 0x10_0000));
+        let ctx = ExecCtx::new(FiberInit {
+            soft_limit: 0x10_0000 - 0x1000,
+            hard_limit: 0x8_0000,
+            stack_top: 0x10_0000,
+            ..FiberInit::placeholder()
+        });
+        assert_eq!(ctx.stack_bounds(), (0x8_0000, 0x10_0000));
     }
 
     #[test]

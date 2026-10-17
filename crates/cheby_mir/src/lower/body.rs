@@ -38,6 +38,7 @@ pub(super) fn lower_body(
     let mut b = FunctionBuilder::new(key, Abi::Cheby, Repr::Value, span)?;
     b.set_entry_loc(&cx.location(span)?)?;
     b.set_record_sites(pending.records_sites());
+    b.set_record_call_locs(pending.records_call_locs());
     let mut lx = BodyCx {
         cx,
         body,
@@ -145,14 +146,20 @@ impl<'a> BodyCx<'a, '_> {
     /// Defines a new local of `repr` as `value` in the current block.
     /// The local an `alloc` or a call defines gets the current expression's
     /// span as its site, which the builder keeps only when it records sites
-    /// for `--reuse-report` (D-717, D-852).
+    /// for `--reuse-report` (D-717, D-852). A call's site is also its
+    /// location (D-856), which the builder keeps in units outside `std`.
     pub(super) fn define(&mut self, repr: Repr, value: Rvalue) -> Result<Local, Ice> {
+        let is_call = matches!(value, Rvalue::Call { .. });
         let site = self
             .site
-            .filter(|_| matches!(value, Rvalue::Alloc { .. } | Rvalue::Call { .. }));
+            .filter(|_| is_call || matches!(value, Rvalue::Alloc { .. }));
         let local = self.b.assign(repr, value)?;
         if let Some(site) = site {
             self.b.record_site(local, site);
+            if is_call && self.b.records_call_locs() {
+                let location = self.cx.location(site)?;
+                self.b.record_call_loc(local, &location)?;
+            }
         }
         Ok(local)
     }

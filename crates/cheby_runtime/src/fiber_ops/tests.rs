@@ -30,7 +30,7 @@ use crate::handles::{self, HandleKind};
 use crate::object::{load_rc, word_to_ptr};
 use crate::panic::cheby_rt_panic;
 use crate::rc;
-use crate::sched::testing::{self, HANG};
+use crate::sched::testing;
 use crate::sched::{AfterSwitch, park};
 use crate::values;
 
@@ -316,7 +316,7 @@ pub(super) fn outcome_with(
         ..config(&domain)
     };
     let outcome = testing::start_root_with(&runtime, &config, body)
-        .recv_timeout(HANG)
+        .recv_timeout(testing::hang())
         .expect("the root fiber hung");
     runtime.shutdown();
     (outcome, domain)
@@ -332,7 +332,7 @@ pub(super) fn outcome_stressed(
     let runtime = testing::tuned(threads, stress, true);
     let domain = Domain::new();
     let outcome = testing::start_root_with(&runtime, &config(&domain), body)
-        .recv_timeout(HANG)
+        .recv_timeout(testing::hang())
         .expect("the root fiber hung");
     runtime.shutdown();
     (outcome, domain)

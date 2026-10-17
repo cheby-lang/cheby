@@ -1,0 +1,3 @@
+fatal error: all fibers are blocked
+  blocked in fiber::scope at tests/ui/10-concurrency/deadlock/select_without_arms_is_unknown.cheby:16:5
+  blocked in selector::select at <unknown location>

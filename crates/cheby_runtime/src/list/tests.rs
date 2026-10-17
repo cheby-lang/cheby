@@ -24,6 +24,19 @@ use crate::abi::{self, Word};
 use crate::alloc::live;
 use crate::string::{new_string, to_rust_string};
 
+/// `normal`, or `miri` under Miri, which interprets every step: the size of
+/// a test whose checks hold at any size, cut for the nightly Miri job
+/// (D-721, GAP(miri-subset)).
+const fn sized(normal: i64, miri: i64) -> i64 {
+    if cfg!(miri) { miri } else { normal }
+}
+
+/// A property's cases: `normal`, or 4 under Miri, as the Miri job's
+/// `PROPTEST_CASES`, which an explicit count would override.
+const fn miri_cases(normal: u32) -> u32 {
+    if cfg!(miri) { 4 } else { normal }
+}
+
 // ---------------------------------------------------------------------
 // Elements and models
 
@@ -289,7 +302,7 @@ fn push_and_set_are_in_place_at_count_one_and_copy_when_shared() {
 #[test]
 fn prepend_is_in_place_at_count_one_and_copies_when_shared() {
     balanced(|| {
-        let n = 20_000_i64;
+        let n = sized(20_000, 2_000);
         let mut xs = ops::prepend(list(&[]), elem(n));
         let first_root = xs;
         let mut model = vec![n];
@@ -325,7 +338,7 @@ fn appending_many_small_lists_keeps_the_tree_shallow() {
     balanced(|| {
         let mut acc = list(&[]);
         let mut model = Vec::new();
-        for n in 0..3_000_i64 {
+        for n in 0..sized(3_000, 300) {
             let len = (n % 7) as usize;
             let piece: Vec<i64> = (0..len as i64).map(|k| n * 10 + k).collect();
             let other = list(&piece);
@@ -337,7 +350,7 @@ fn appending_many_small_lists_keeps_the_tree_shallow() {
         // ~9,000 elements: three levels when full, a little slack allowed.
         assert!(height(acc) <= 4, "height {}", height(acc));
         // Prepending element by element too.
-        for v in 0..1_000 {
+        for v in 0..sized(1_000, 100) {
             acc = ops::prepend(acc, elem(-v));
             model.insert(0, -v);
         }
@@ -388,10 +401,11 @@ fn freeing_a_million_elements_uses_no_stack() {
         .stack_size(64 * 1024)
         .spawn(|| {
             let before = live();
-            let xs = from_iter((0..1_000_000).map(|v| abi::tag_int(v).unwrap()));
-            let ys = ops::slice(root(xs), 10, 999_990);
+            let n = sized(1_000_000, 1_000);
+            let xs = from_iter((0..n).map(|v| abi::tag_int(v).unwrap()));
+            let ys = ops::slice(root(xs), 10, n as usize - 10);
             // SAFETY: a live list.
-            assert_eq!(unsafe { super::length(xs) }, 1_000_000);
+            assert_eq!(unsafe { super::length(xs) }, n as usize);
             release(root(xs));
             release(ys);
             assert_eq!(live(), before);
@@ -642,7 +656,12 @@ fn pushed(n: i64) -> Root {
 #[test]
 fn cost_slices_are_o1_views() {
     balanced(|| {
-        for n in [100, 10_000, 100_000] {
+        let sizes: &[i64] = if cfg!(miri) {
+            &[100, 2_000]
+        } else {
+            &[100, 10_000, 100_000]
+        };
+        for &n in sizes {
             let xs = pushed(n);
             let before = live();
             let outer = ops::slice(xs, 1, n as usize - 1);
@@ -661,7 +680,7 @@ fn cost_slices_are_o1_views() {
 #[test]
 fn cost_push_at_count_one_is_amortized_o1() {
     balanced(|| {
-        let n = 100_000_usize;
+        let n = sized(100_000, 1_000) as usize;
         let before = live();
         let xs = pushed(n as i64);
         // Every push reused the root and wrote along the right edge; the
@@ -683,7 +702,13 @@ fn cost_push_at_count_one_is_amortized_o1() {
 #[test]
 fn cost_get_and_set_are_o_log_n() {
     balanced(|| {
-        for n in [1_000, 100_000, 1_000_000] {
+        // Under Miri, sizes that still reach three levels (32^2 < 2,000).
+        let sizes: &[i64] = if cfg!(miri) {
+            &[1_000, 2_000]
+        } else {
+            &[1_000, 100_000, 1_000_000]
+        };
+        for &n in sizes {
             let xs = pushed(n);
             // The height is the number of nodes a lookup visits below the
             // root: ceil(log32 n) - 1 for a list built by pushing.
@@ -706,7 +731,12 @@ fn cost_get_and_set_are_o_log_n() {
 #[test]
 fn cost_append_and_prepend_are_o_log_n() {
     balanced(|| {
-        for n in [1_000, 100_000] {
+        let sizes: &[i64] = if cfg!(miri) {
+            &[1_000, 2_000]
+        } else {
+            &[1_000, 100_000]
+        };
+        for &n in sizes {
             let a = pushed(n);
             let b = pushed(n);
             let h = height(a).max(height(b));
@@ -864,7 +894,7 @@ fn apply(xs: Root, model: &mut Vec<i64>, op: &Op, shared: bool) -> Root {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig { cases: 48, ..ProptestConfig::default() })]
+    #![proptest_config(ProptestConfig { cases: miri_cases(48), ..ProptestConfig::default() })]
 
     /// Every operation against `Vec`, on lists up to 100,000 elements,
     /// including slices of slices, at count one and shared.
@@ -925,7 +955,7 @@ fn step() -> impl Strategy<Value = Step> {
 const VERSIONS: usize = 6;
 
 proptest! {
-    #![proptest_config(ProptestConfig { cases: 96, ..ProptestConfig::default() })]
+    #![proptest_config(ProptestConfig { cases: miri_cases(96), ..ProptestConfig::default() })]
 
     /// N live versions under random sharing, dropping and updating, each
     /// checked against its own model after every step; the domain returns
@@ -1143,7 +1173,7 @@ fn lists_compare_hash_and_print_through_their_root_kind() {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(64))]
+    #![proptest_config(ProptestConfig::with_cases(miri_cases(64)))]
 
     #[test]
     fn unique_matches_the_model(model in prop::collection::vec(0_i64..40, 0..300)) {
@@ -1186,6 +1216,7 @@ unsafe extern "C" fn pushes_until_the_system_refuses(ctx: *mut crate::ctx::ExecC
 /// exited 102, and counts the skip.
 #[test]
 #[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+#[cfg_attr(miri, ignore = "runs an entry thread")]
 fn system_refusal_skips_the_leak_check_and_exits_101() {
     let _guard = crate::alloc::tests::serial();
     let domain = crate::alloc::Domain::new();
@@ -1207,6 +1238,7 @@ fn system_refusal_skips_the_leak_check_and_exits_101() {
 /// The refusal hook refuses on the thread that armed it, and only once:
 /// the domain is marked, and the next request is served.
 #[test]
+#[cfg_attr(miri, ignore = "runs an entry thread")]
 fn system_refusal_is_one_request_of_the_arming_thread() {
     // The hook arms one thread of the process at a time.
     let _guard = crate::alloc::tests::serial();

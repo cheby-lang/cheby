@@ -579,7 +579,8 @@ mod tests {
     fn binary64_values_round_trip_and_midpoints_round_to_even() {
         let mut state = 0x5eed_u64;
         let mut values = vec![1.0, 5e-324, f64::MIN_POSITIVE, f64::MAX, 3.0, 0.1];
-        for _ in 0..20_000 {
+        // Fewer under Miri, which interprets every step (D-721).
+        for _ in 0..if cfg!(miri) { 100 } else { 20_000 } {
             state = state
                 .wrapping_mul(6_364_136_223_846_793_005)
                 .wrapping_add(1);

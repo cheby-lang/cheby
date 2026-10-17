@@ -1,0 +1,27 @@
+// @mode: run-fail
+// @exit: 1
+// @command: test
+// @decisions: D-724, D-856, D-857, D-858, D-859, D-723
+// @milestone: M2
+//! A test's domain holds its detached fibers (D-857): the test deadlocks
+//! while a detached fiber it started waits, and its failure block lists
+//! both. The detached fiber is then torn down as at every test's end, and
+//! the next test passes.
+
+import std::channel
+import std::fiber
+
+test "deadlocks with a detached fiber" {
+  let (keep, never) = channel::new::<Int>(0)
+  fiber::spawn_detached(fn() { channel::receive(never) })
+  let (tx, rx) = channel::new::<Int>(0)
+  let assert Ok(n) = channel::receive(rx)
+  assert channel::send(tx, n) == Ok(Nil)
+  assert channel::send(keep, n) == Ok(Nil)
+}
+
+test "runs after it" {
+  let (tx, rx) = channel::new::<Int>(1)
+  assert channel::send(tx, 7) == Ok(Nil)
+  assert channel::receive(rx) == Ok(7)
+}

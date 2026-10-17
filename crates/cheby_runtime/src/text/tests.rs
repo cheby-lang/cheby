@@ -36,6 +36,13 @@ use crate::{list, rc, values};
 // Helpers
 
 /// Runs `f` and checks that it leaves the domain as it found it.
+/// A property's cases: `normal`, or 4 under Miri, as the Miri job's
+/// `PROPTEST_CASES`, which an explicit count would override (D-721,
+/// GAP(miri-subset)).
+const fn miri_cases(normal: u32) -> u32 {
+    if cfg!(miri) { 4 } else { normal }
+}
+
 fn balanced(f: impl FnOnce()) {
     let before = live();
     f();
@@ -504,7 +511,7 @@ fn case_mapping_agrees_with_the_standard_library() {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig { cases: 512, ..ProptestConfig::default() })]
+    #![proptest_config(ProptestConfig { cases: miri_cases(512), ..ProptestConfig::default() })]
 
     /// Texts dense in sigmas, cased and uncased letters and
     /// `Case_Ignorable` code points (`'`, `.`, `:`, combining marks, a
@@ -596,8 +603,16 @@ fn kernels_accept_static_strings() {
 
 /// D-552: case mapping (the standard library) and grapheme segmentation
 /// (`unicode-segmentation`) follow one Unicode version, which
-/// `docs/stdlib/string.md` records.
+/// `docs/stdlib/string.md` records. The shipped build is the pinned stable
+/// toolchain's (D-277); the nightly of the sanitizer and Miri jobs (D-721)
+/// may bring a newer Unicode in its std, so those builds leave the check to
+/// the stable one (GAP(miri-subset)).
 #[test]
+#[cfg_attr(
+    any(cheby_sanitize = "address", cheby_sanitize = "thread", miri),
+    ignore = "the nightly of the sanitizer and Miri jobs (D-721) may follow a newer Unicode \
+              than unicode-segmentation; the stable build checks it (D-277, D-552)"
+)]
 fn unicode_versions_agree() {
     let (major, minor, update) = char::UNICODE_VERSION;
     assert_eq!(
@@ -803,7 +818,7 @@ fn reference_pad(text: &str, width: i64, pad: &str, start: bool) -> String {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig { cases: 256, ..ProptestConfig::default() })]
+    #![proptest_config(ProptestConfig { cases: miri_cases(256), ..ProptestConfig::default() })]
 
     #[test]
     fn split_matches_the_reference_and_join_inverts_it(
@@ -925,7 +940,7 @@ fn update(
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig { cases: 128, ..ProptestConfig::default() })]
+    #![proptest_config(ProptestConfig { cases: miri_cases(128), ..ProptestConfig::default() })]
 
     /// N live versions under random sharing, dropping and in-place-capable
     /// updates, each checked against its own model after every step; the

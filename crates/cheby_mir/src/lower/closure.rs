@@ -217,6 +217,7 @@ impl BodyCx<'_, '_> {
         let mut b = FunctionBuilder::new(key, Abi::Cheby, Repr::Value, span)?;
         b.set_entry_loc(&self.cx.location(span)?)?;
         b.set_record_sites(self.pending.records_sites());
+        b.set_record_call_locs(self.pending.records_call_locs());
         let mut inner = BodyCx {
             cx: self.cx,
             body: self.body,

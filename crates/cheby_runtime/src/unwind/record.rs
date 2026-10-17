@@ -18,7 +18,7 @@
 use parking_lot::Mutex;
 
 use crate::ctx::ExecCtx;
-use crate::entry::EntryMode;
+use crate::entry::{EntryMode, EntryOutcome};
 use crate::io;
 use crate::panic::PanicReport;
 
@@ -133,23 +133,35 @@ pub(crate) fn take_record(ctx: &ExecCtx) -> Option<UnwindRecord> {
     record
 }
 
-/// At an entry's catch point (isolated entries, and the root runner in
-/// `sched/`): takes the record, prints the report when the entry mode
-/// prints it (D-701: `Run`, `Repl`), and returns it for the host's
-/// `EntryOutcome::Panicked`. `None` when the entry returned normally.
+/// At an entry's catch point (isolated entries, and the root's base frame
+/// in `sched/`), once the thunk returned `word`: takes the record and
+/// returns the entry's outcome for its host.
 ///
-/// Standard output is flushed first, as a panic always did (D-449); a
-/// failed flush ends the program as a failed write does (D-306): a
-/// termination (D-709), which the entry's host receives as its outcome.
-pub(crate) fn finish_entry(ctx: &ExecCtx) -> Option<PanicReport> {
-    let report = match take_unwound(ctx)? {
+/// - No record: the entry returned, `Returned(word)`.
+/// - A panic: the report is printed when the entry mode prints it (D-701:
+///   `Run`, `Repl`) and returned as `Panicked`. Standard output is flushed
+///   first, as a panic always did (D-449); a failed flush ends the program
+///   as a failed write does (D-306): a termination (D-709), which the
+///   entry's host receives as its outcome.
+/// - A cancellation: legal only for a root the deadlock detector reported
+///   (D-859): its base scope was the target, which no frame of the entry
+///   holds, and the report stored on the root (`cancel::cancel_deadlocked_root`)
+///   is taken once here as `Deadlocked(report)`, printing nothing (the host
+///   writes it). Any other cancellation unwinds only to its target scope
+///   (D-699), which an entry's own frames hold, so reaching here is a
+///   broken invariant.
+pub(crate) fn finish_entry(ctx: &ExecCtx, word: u64) -> EntryOutcome {
+    let Some(record) = take_unwound(ctx) else {
+        return EntryOutcome::Returned(word);
+    };
+    let report = match record {
         UnwindRecord::Panic(report) => report,
-        // A cancellation unwinds only to its target scope (D-699), which an
-        // entry's own frames hold; it never reaches the entry's catch
-        // point.
-        UnwindRecord::Cancel => crate::panic::fatal(format_args!(
-            "a cancellation reached an entry's catch point"
-        )),
+        UnwindRecord::Cancel => match crate::fiber_ops::cancel::take_deadlock_report(ctx) {
+            Some(report) => return EntryOutcome::Deadlocked(report),
+            None => crate::panic::fatal(format_args!(
+                "a cancellation reached an entry's catch point"
+            )),
+        },
     };
     if io::flush_stdout().is_err() {
         crate::sched::terminate(crate::abi::status::ERR);
@@ -158,5 +170,5 @@ pub(crate) fn finish_entry(ctx: &ExecCtx) -> Option<PanicReport> {
         EntryMode::Run | EntryMode::Repl => io::write_stderr(&report.to_string()),
         EntryMode::Test | EntryMode::ConstEval(_) => {}
     }
-    Some(report)
+    EntryOutcome::Panicked(report)
 }

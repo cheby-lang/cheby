@@ -62,6 +62,8 @@ fn unit(params: &[Repr], locals: Vec<Repr>, blocks: Vec<Block>, strings: Vec<Str
         precounted: false,
         borrow: cheby_mir::borrow::BorrowMask::OWNED,
         sites: Vec::new(),
+        call_locs: Vec::new(),
+        call_loc_strings: IndexVec::new(),
     };
     MirModule {
         unit: UnitKind::Code(ModuleId::from_u32(1)),

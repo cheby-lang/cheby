@@ -56,6 +56,7 @@ use crossbeam_utils::CachePadded;
 
 use crate::abi::{self, Word};
 use crate::ctx::ExecCtx;
+use crate::fiber::sanitizer;
 use crate::layout::{self, CustomKind, LayoutKind};
 use crate::object::{
     self, load_rc, read_field, scan_and_layout, store_rc, to_u64, to_usize, word_to_ptr,
@@ -1645,7 +1646,13 @@ fn cached_block(ctx: Option<&ExecCtx>, layout: Layout) -> Option<*mut u8> {
 impl BlockCache {
     /// A cached free block of size class `class`, if there is one.
     fn take(&mut self, class: usize) -> Option<*mut u8> {
-        self.classes.get_mut(class)?.pop()
+        let block = self.classes.get_mut(class)?.pop()?;
+        // GAP(sanitize-block-cache): addressable again under the address
+        // cfg (`keep` poisoned it); a no-op otherwise.
+        if let Some(layout) = class_layout(class) {
+            sanitizer::unpoison(block, layout.size());
+        }
+        Some(block)
     }
 
     /// Keeps a free block of `layout`; false when the cache is full or has
@@ -1656,6 +1663,11 @@ impl BlockCache {
         };
         match self.classes.get_mut(class) {
             Some(blocks) if blocks.len() < CACHE_BLOCKS => {
+                // GAP(sanitize-block-cache): under the address cfg a use
+                // after free into a cached block is reported; the
+                // quarantine is not poisoned, since the runtime's own
+                // checks read its poisoned headers.
+                sanitizer::poison(obj, layout.size());
                 blocks.push(obj);
                 true
             }

@@ -30,7 +30,7 @@ use crate::alloc::Domain;
 use crate::ctx::ExecCtx;
 use crate::entry::{Callbacks, EntryConfig, EntryMode, EntryOutcome};
 use crate::generic::tests::{captures, closure};
-use crate::sched::testing::{self, HANG};
+use crate::sched::testing;
 use crate::sched::{AfterSwitch, DetachedGroup, Runtime, RuntimeConfig, park};
 use crate::values;
 
@@ -148,9 +148,18 @@ pub(crate) fn spin(me: &ExecCtx) -> Word {
 }
 
 /// Takes ownership of one reference to `word`, dup'd for the guard.
+///
+/// The guard is usually moved into a Rust closure that another fiber runs,
+/// where `mark_shared` at a spawn cannot reach it (D-705), so `word` is
+/// marked shared here first: two fibers on different workers then release
+/// it through the shared count (a data race under the thread sanitizer with
+/// migration otherwise, board items DLs/SZa-1 and SZa-2).
 pub(crate) fn hold(word: Word) -> Owned {
-    // SAFETY: a live value; the guard owns the reference taken here.
+    // SAFETY: a live value, either still confined to the calling fiber or
+    // already marked shared by an earlier `hold` (marking skips it then);
+    // the guard owns the reference taken here.
     unsafe {
+        crate::rc::mark_shared(word);
         crate::rc::dup(word);
         Owned::new(word)
     }
@@ -161,11 +170,14 @@ pub(crate) fn group_of(me: &ExecCtx) -> Arc<DetachedGroup> {
     me.conc.group().unwrap()
 }
 
-/// Yields until `ready` holds, or panics after [`HANG`].
+/// Yields until `ready` holds, or panics after [`testing::hang`].
 pub(crate) fn yield_until(me: &ExecCtx, ready: impl Fn() -> bool) {
     let started = Instant::now();
     while !ready() {
-        assert!(started.elapsed() < HANG, "a fiber waited too long");
+        assert!(
+            started.elapsed() < testing::hang(),
+            "a fiber waited too long"
+        );
         park(me, AfterSwitch::Requeue);
     }
 }
@@ -178,7 +190,7 @@ pub(crate) fn root_outcome(
     body: impl FnOnce(&ExecCtx) -> u64 + Send + 'static,
 ) -> EntryOutcome {
     testing::start_root_with(runtime, &config(domain), body)
-        .recv_timeout(HANG)
+        .recv_timeout(testing::hang())
         .expect("the root fiber hung")
 }
 
@@ -404,14 +416,14 @@ fn detached_spawned_by_a_detached_fiber_joins_its_group() {
             tx.send(group_of(me)).unwrap();
             values::nil()
         })
-        .recv_timeout(HANG)
+        .recv_timeout(testing::hang())
         .unwrap();
         assert!(matches!(outcome, EntryOutcome::Returned(_)), "{outcome:?}");
         let root_group = rx.recv().unwrap();
         assert!(Arc::ptr_eq(&root_group, &group));
         let started = Instant::now();
         while both.load(Ordering::SeqCst) < 2 {
-            assert!(started.elapsed() < HANG);
+            assert!(started.elapsed() < testing::hang());
             std::thread::sleep(Duration::from_millis(1));
         }
         assert_eq!(group.live(), 2);

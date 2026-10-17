@@ -55,12 +55,16 @@
 //! runs inline on the worker with the mark and the hand-off
 //! (`hand_off_before_blocking`, D-817).
 //!
-//! # For the deadlock detector (H1)
+//! # For the deadlock detector (D-857, D-860)
 //!
-//! D-724's "no blocking-pool job pending" is "no fiber of the runtime has
-//! the blocking mark set" (`FiberSched::blocking`): a fiber with the mark
-//! set is a pending pool job (or a job running inline), never deadlocked,
-//! and it needs no location in a deadlock report.
+//! A job is pending in its fiber's domain from before the submit until its
+//! completion has woken the fiber, or skipped the wake: `on_pool` takes a
+//! `deadlock::PoolPending` token, which raises the domain's pool count and
+//! is registered with the fiber's group, and the completion releases it
+//! after the wake. A stuck group's mark releases its jobs' tokens instead,
+//! each once (`sched/deadlock.rs`). A fiber with the blocking mark set (a
+//! pending job, or a job running inline) is never deadlocked, and it needs
+//! no location in a deadlock report.
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -68,6 +72,7 @@ use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 
+use super::deadlock::{self, PoolPending};
 use super::{
     AfterSwitch, CodeToken, FiberRef, Shared, begin_park, cancel_park, hand_off_before_blocking,
     park,
@@ -187,6 +192,9 @@ struct Completion<R> {
     fiber: FiberRef,
     /// The fiber's runtime, kept alive by the job.
     runtime: Arc<Shared>,
+    /// The job's place in its domain's pending count (D-857,
+    /// `sched/deadlock.rs`), released after the wake or the skip.
+    pending: Option<Arc<PoolPending>>,
     /// The test's probe.
     #[cfg(test)]
     probe: Option<Arc<Probe>>,
@@ -227,6 +235,7 @@ impl<R> Completion<R> {
                     .skipped
                     .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             }
+            self.release_pending();
             leave(&self.runtime);
             return;
         }
@@ -241,9 +250,20 @@ impl<R> Completion<R> {
         // wake, which may let the fiber run and retire. A fiber running
         // the job inline is `RUNNING`, and the wake does nothing.
         unsafe { super::wake(self.fiber, false) };
+        // After the wake: a deadlock survey that reads the domain's count
+        // as 0 finds the fiber runnable or resumed (D-857, D-860).
+        self.release_pending();
         // After the wake: a worker of a stop that reads the count as 0
         // finds the fiber queued when it looks again ([`holds_stop`]).
         leave(&self.runtime);
+    }
+
+    /// Takes the job out of its domain's pending count, unless its group's
+    /// stuck mark did already (`deadlock::PoolPending::release`).
+    fn release_pending(&self) {
+        if let Some(pending) = &self.pending {
+            pending.release();
+        }
     }
 }
 
@@ -304,7 +324,8 @@ pub(super) fn poll_stop(runtime: &Shared, idle: bool, seen: &mut Option<(Instant
     match *seen {
         Some((at, before)) if before == done => {
             #[cfg(test)]
-            if runtime.probe.hold_pool.load(Ordering::SeqCst) && at.elapsed() < super::testing::HANG
+            if runtime.probe.hold_pool.load(Ordering::SeqCst)
+                && at.elapsed() < super::testing::hang()
             {
                 return;
             }
@@ -324,10 +345,21 @@ fn on_pool<R: Send + 'static>(
     job: impl FnOnce() -> R + Send + 'static,
     hooks: &Hooks,
 ) -> R {
+    // D-857: the job is pending in the fiber's domain from before the
+    // submit until its completion has woken the fiber (or skipped the
+    // wake); a job of a stuck group is not counted (`sched/deadlock.rs`).
+    let pending = deadlock::counts_of(me).map(|counts| {
+        let pending = counts.pool_submitted();
+        if let Some(group) = me.conc.group() {
+            group.track_job(&pending);
+        }
+        pending
+    });
     let completion = Arc::new(Completion {
         result: Mutex::new(None),
         fiber: FiberRef::from_ctx(me),
         runtime: Arc::clone(runtime),
+        pending,
         #[cfg(test)]
         probe: hooks.probe.clone(),
     });

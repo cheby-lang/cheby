@@ -390,6 +390,22 @@ pub struct Function {
     /// their numbers through every pass. Code generation and dumps never
     /// read it, so the code is the same with and without it.
     pub sites: Vec<(Local, Span)>,
+    /// The location of each call this function makes, by the local the
+    /// call defines, in the order lowering defined them (D-856): the
+    /// start of the call expression, the site of [`Function::sites`]
+    /// (D-852), as an id into [`Function::call_loc_strings`]. Filled by
+    /// lowering for every `Rvalue::Call` it defines with a site in a unit
+    /// outside package `std`, whether or not sites are recorded. Code
+    /// generation tags each such call with its id, and the JIT maps the
+    /// call's return address to the location for a deadlock report. The
+    /// dumps never print it.
+    pub call_locs: Vec<(Local, StrId)>,
+    /// The text of each location of [`Function::call_locs`],
+    /// `path:line:col` (D-449), deduplicated, in first-use order. Kept
+    /// apart from [`Function::strings`], so the static strings code
+    /// generation defines, their ids and the dumps are the same with and
+    /// without it.
+    pub call_loc_strings: IndexVec<StrId, Box<str>>,
 }
 
 impl Function {

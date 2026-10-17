@@ -1,0 +1,16 @@
+// @mode: run-fail
+// @exit: 103
+// @decisions: D-724, D-856, D-858
+// @milestone: M2
+//! `channel::receive` is passed as a function value to `list::map`, called
+//! in a `let`. The search passes through `std`'s frames and the shim of the
+//! function value, so the report names the call of `list::map`.
+
+import std::channel
+import std::list
+
+fn main() {
+  let (tx, rx) = channel::new::<Int>(0)
+  let got = list::map([rx], channel::receive)
+  let _ = channel::send(tx, list::length(got))
+}

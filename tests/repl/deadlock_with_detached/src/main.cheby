@@ -1,0 +1,7 @@
+//! A package for the `deadlock_with_detached` transcript, whose `:reload`
+//! finds no module changed and still tears the session's detached fibers
+//! down after an entry deadlocked beside one of them.
+
+fn main() {
+  Nil
+}

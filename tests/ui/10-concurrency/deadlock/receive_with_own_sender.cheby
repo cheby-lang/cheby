@@ -1,0 +1,15 @@
+// @mode: run-fail
+// @exit: 103
+// @decisions: D-724, D-856, D-858, D-859
+// @milestone: M2
+//! §10.4's example: the root fiber still holds the `Sender`, so its
+//! receive can never complete. `cheby run` writes the deadlock report,
+//! which names the receive's call, and exits with status 103.
+
+import std::channel
+
+fn main() {
+  let (tx, rx) = channel::new::<Int>(0)
+  let assert Ok(n) = channel::receive(rx)
+  let _ = channel::send(tx, n)
+}

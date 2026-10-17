@@ -17,6 +17,18 @@
 //!    ownership simulation's `borrow_alive`); no drop moves, so the
 //!    drop-position check (D-851) holds. Pads, built
 //!    after this pass, then hold `b` alone where they held `p` and `b`.
+//!    Sinking is bounded (D-865): at most `SINK_CAP` (8) `dup`s arrive at
+//!    one point without cancelling or folding there. The arrivals at a
+//!    point are classified in definition order: a *cancel* meets the
+//!    `drop p` that step 2 pairs it with; a *fold candidate* arrives at a
+//!    release of its direct base and is the last arrival there of its
+//!    layout and field, the one `kept_before` takes for step 3; the rest
+//!    are *plain*. A move that is plain beyond the cap at any of its
+//!    points is not made at all, and its `dup` stays after the
+//!    definition: a move is all or nothing, because putting a `dup` back
+//!    at one point and not at another would leave a path with neither the
+//!    `dup` nor the drop. A pile of `dup`s at one release runs with every
+//!    projection live, which register allocation pays for (ROB7-2).
 //! 2. **Cancelling.** `dup x` followed by `drop x` with nothing between
 //!    them but releases of other locals and `dup`s that do not need `x`
 //!    alive cancel: the reference the `dup` adds is the one the `drop`
@@ -37,7 +49,7 @@
 //!
 //! A `precounted` body (D-693) is left alone.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use cheby_iface::{Ice, Idx};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -69,6 +81,20 @@ pub fn run_module(module: &mut MirModule) -> Result<(), Ice> {
 ///
 /// An [`Ice`] if `f` has unwind edges already, or is malformed.
 pub fn run(module: &MirModule, f: &mut Function) -> Result<(), Ice> {
+    run_with_cap(module, f, SINK_CAP)
+}
+
+/// The most `dup`s sinking moves to one point that neither cancel nor
+/// fold there (D-865, module documentation).
+pub(crate) const SINK_CAP: usize = 8;
+
+/// [`run`] with `cap` in place of [`SINK_CAP`], for tests that make the
+/// bound bite on small programs.
+///
+/// # Errors
+///
+/// As [`run`].
+pub(crate) fn run_with_cap(module: &MirModule, f: &mut Function, cap: usize) -> Result<(), Ice> {
     if f.precounted {
         return Ok(());
     }
@@ -76,7 +102,7 @@ pub fn run(module: &MirModule, f: &mut Function) -> Result<(), Ice> {
         return Err(Ice::new("fusion after the unwind pass"));
     }
     let facts = Facts::of(f)?;
-    sink(f, &facts)?;
+    sink(f, &facts, cap)?;
     cancel(f, &facts);
     keep(module, f, &facts)?;
     Ok(())
@@ -212,13 +238,60 @@ fn consumed(stmt: &Stmt) -> Vec<Local> {
 /// terminator when `at` is the number of statements).
 type Point = (BlockId, usize);
 
+/// By block index, the positions of the statements that consume or
+/// release each local ([`consumed`]), in increasing order: the index
+/// that lets each projection find its stop without scanning the block
+/// (sinking would otherwise cost the number of projections times the
+/// number of statements).
+struct Consumers(Vec<FxHashMap<Local, Vec<usize>>>);
+
+impl Consumers {
+    fn of(f: &Function) -> Self {
+        Self(
+            f.blocks
+                .iter()
+                .map(|block| {
+                    let mut at: FxHashMap<Local, Vec<usize>> = FxHashMap::default();
+                    for (k, stmt) in block.stmts.iter().enumerate() {
+                        for l in consumed(stmt) {
+                            let list = at.entry(l).or_default();
+                            if list.last() != Some(&k) {
+                                list.push(k);
+                            }
+                        }
+                    }
+                    at
+                })
+                .collect(),
+        )
+    }
+
+    /// The first position at or after `from` in `block` whose statement
+    /// consumes or releases one of `locals`.
+    fn first(&self, block: BlockId, locals: &[Local], from: usize) -> Option<usize> {
+        let at = self.0.get(block.index())?;
+        locals
+            .iter()
+            .filter_map(|l| {
+                let list = at.get(l)?;
+                list.get(list.partition_point(|&k| k < from)).copied()
+            })
+            .min()
+    }
+}
+
+/// One sinking move: the projection, its block, the position of its
+/// `dup`, and the points where the `dup` goes.
+type Move = (Local, BlockId, usize, Vec<Point>);
+
 /// Step 1 (module documentation): moves each projection's `dup` from
-/// after its definition to the points where it is first needed. The
-/// points are found on the function as counting left it, so the moves do
-/// not interact: a `dup` is never a stopping point.
-fn sink(f: &mut Function, facts: &Facts) -> Result<(), Ice> {
-    // (projection, its block, the position of its `dup`, where it goes).
-    let mut moves: Vec<(Local, BlockId, usize, Vec<Point>)> = Vec::new();
+/// after its definition to the points where it is first needed, except
+/// the moves [`cap_moves`] leaves out. The points are found on the
+/// function as counting left it, so the moves do not interact: a `dup` is
+/// never a stopping point.
+fn sink(f: &mut Function, facts: &Facts, cap: usize) -> Result<(), Ice> {
+    let consumers = Consumers::of(f);
+    let mut moves: Vec<Move> = Vec::new();
     for (id, block) in f.blocks.iter_enumerated() {
         for (j, stmt) in block.stmts.iter().enumerate() {
             let Stmt::Assign { dst: p, .. } = stmt else {
@@ -235,13 +308,14 @@ fn sink(f: &mut Function, facts: &Facts) -> Result<(), Ice> {
                 continue;
             }
             let start = at.saturating_add(1);
-            if let Some(points) = sink_points(f, facts, *p, id, start)?
+            if let Some(points) = sink_points(f, facts, &consumers, *p, id, start)?
                 && points != [(id, start)]
             {
                 moves.push((*p, id, at, points));
             }
         }
     }
+    let moves = cap_moves(f, facts, moves, cap)?;
     if moves.is_empty() {
         return Ok(());
     }
@@ -290,12 +364,132 @@ fn sink(f: &mut Function, facts: &Facts) -> Result<(), Ice> {
     Ok(())
 }
 
+/// The bound on sinking (D-865, module documentation): `moves` (in
+/// definition order) without each move that is plain beyond `cap` at any
+/// of its points. Only a point where more than `cap` moves arrive is
+/// classified, so a function with no such point keeps every move.
+fn cap_moves(f: &Function, facts: &Facts, moves: Vec<Move>, cap: usize) -> Result<Vec<Move>, Ice> {
+    // Per point, the indices of the moves that arrive there, in
+    // definition order (ordered, D-264).
+    let mut arrivals: BTreeMap<Point, Vec<usize>> = BTreeMap::new();
+    for (n, (_, _, _, points)) in moves.iter().enumerate() {
+        for &point in points {
+            arrivals.entry(point).or_default().push(n);
+        }
+    }
+    let local_of = |n: usize| {
+        moves
+            .get(n)
+            .map(|&(p, _, _, _)| p)
+            .ok_or_else(|| Ice::new("fusion: no such move"))
+    };
+    let mut made = vec![true; moves.len()];
+    for (&(b, k), list) in &arrivals {
+        if list.len() <= cap {
+            continue;
+        }
+        let stmts = &f.block(b)?.stmts;
+        // The arrivals that do not cancel, in definition order.
+        let mut stay: Vec<(usize, Local)> = Vec::with_capacity(list.len());
+        for &n in list {
+            let p = local_of(n)?;
+            if !cancels(stmts, &arrivals, facts, (b, k), n, p, &local_of)? {
+                stay.push((n, p));
+            }
+        }
+        // The fold candidates: the last arrival of each layout and field
+        // among the projections of the local released here, as
+        // `kept_before` takes them.
+        let released = match stmts.get(k) {
+            Some(Stmt::Drop(x)) => Some(*x),
+            Some(Stmt::Assign {
+                value: Rvalue::DropReuse { local, .. },
+                ..
+            }) => Some(*local),
+            _ => None,
+        };
+        let mut fields: FxHashSet<(LayoutRef, u32)> = FxHashSet::default();
+        let mut folds: FxHashSet<usize> = FxHashSet::default();
+        for &(n, p) in stay.iter().rev() {
+            if let Some(&(base, layout, field)) = facts.projections.get(&p)
+                && Some(base) == released
+                && fields.insert((layout, field))
+            {
+                folds.insert(n);
+            }
+        }
+        let mut plain = 0_usize;
+        for &(n, _) in &stay {
+            if folds.contains(&n) {
+                continue;
+            }
+            plain = plain.saturating_add(1);
+            if plain > cap
+                && let Some(slot) = made.get_mut(n)
+            {
+                *slot = false;
+            }
+        }
+    }
+    Ok(moves
+        .into_iter()
+        .zip(made)
+        .filter_map(|(m, keep)| keep.then_some(m))
+        .collect())
+}
+
+/// Whether the `dup` of `proj` (move `index`), arriving at `point`,
+/// cancels there in step 2: a `drop proj` follows over the statements
+/// [`cancel`] passes, and no other arrival that needs `proj` alive lands
+/// between.
+fn cancels(
+    stmts: &[Stmt],
+    arrivals: &BTreeMap<Point, Vec<usize>>,
+    facts: &Facts,
+    point: Point,
+    index: usize,
+    proj: Local,
+    local_of: &dyn Fn(usize) -> Result<Local, Ice>,
+) -> Result<bool, Ice> {
+    let (block, start) = point;
+    let mut pair = None;
+    for (pos, stmt) in stmts.iter().enumerate().skip(start) {
+        match stmt {
+            Stmt::Drop(other) if *other == proj => {
+                pair = Some(pos);
+                break;
+            }
+            Stmt::Drop(_) => {}
+            Stmt::Dup(other) if !facts.needs(*other, proj) => {}
+            Stmt::Assign {
+                value: Rvalue::DropReuse { local, keep, .. },
+                ..
+            } if *local != proj && keep.iter().all(|&(_, kept)| !facts.needs(kept, proj)) => {}
+            _ => break,
+        }
+    }
+    let Some(drop_at) = pair else {
+        return Ok(false);
+    };
+    // The `dup`s inserted between this one and the `drop`: later arrivals
+    // at this point, and every arrival up to the `drop`'s position.
+    for (&(_, at), list) in arrivals.range((block, start)..=(block, drop_at)) {
+        for &other in list {
+            if (at > start || other > index) && facts.needs(local_of(other)?, proj) {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
+}
+
 /// The points where the `dup` of projection `p` goes, walking forward from
 /// position `start` of `block` (module documentation), or `None` when a
 /// path reaches something that would leave it pending: then it stays.
 fn sink_points(
     f: &Function,
     facts: &Facts,
+    consumers: &Consumers,
     p: Local,
     block: BlockId,
     start: usize,
@@ -307,14 +501,7 @@ fn sink_points(
     let mut work = vec![(block, start)];
     while let Some((b, from)) = work.pop() {
         let blk = f.block(b)?;
-        if let Some(k) = blk
-            .stmts
-            .iter()
-            .enumerate()
-            .skip(from)
-            .find(|(_, s)| consumed(s).iter().any(stops_at))
-            .map(|(k, _)| k)
-        {
+        if let Some(k) = consumers.first(b, &stops, from) {
             points.push((b, k));
             continue;
         }

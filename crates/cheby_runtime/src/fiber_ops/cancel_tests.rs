@@ -46,7 +46,7 @@ use crate::generic::tests::captures;
 use crate::handles::{self, HandleKind};
 use crate::panic::{PanicReport, cheby_rt_panic};
 use crate::sched::Runtime;
-use crate::sched::testing::{self, HANG};
+use crate::sched::testing;
 use crate::unwind::flag;
 use crate::values;
 
@@ -140,7 +140,7 @@ pub(super) fn outcome_on(
 ) -> (EntryOutcome, Arc<Domain>) {
     let domain = Domain::new();
     let outcome = testing::start_root_with(runtime, &jobs_config(&domain), body)
-        .recv_timeout(HANG)
+        .recv_timeout(testing::hang())
         .expect("the root fiber hung");
     (outcome, domain)
 }

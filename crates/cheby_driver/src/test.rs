@@ -716,6 +716,9 @@ struct Hooks {
     /// When set, each judged test's index and accounting domain, in the
     /// order the tests ended.
     domains: Option<Vec<(usize, Arc<Domain>)>>,
+    /// When set, called with a test's index as soon as the host receives
+    /// that test's end, before its group is torn down.
+    ended: Option<Box<dyn FnMut(usize)>>,
 }
 
 impl Hooks {
@@ -728,6 +731,13 @@ impl Hooks {
     fn note(&mut self, line: impl FnOnce() -> String) {
         if let Some(log) = &mut self.log {
             log.push(line());
+        }
+    }
+
+    /// Tells the hook that test `index` has ended, when it is set.
+    fn end(&mut self, index: usize) {
+        if let Some(ended) = &mut self.ended {
+            ended(index);
         }
     }
 }
@@ -946,6 +956,7 @@ impl Runner<'_, '_> {
             };
             running = running.saturating_sub(1);
             self.hooks.note(|| format!("ended {index}"));
+            self.hooks.end(index);
             let ended = slots
                 .get_mut(index)
                 .map(|slot| std::mem::replace(slot, Slot::Written));
@@ -1078,6 +1089,11 @@ fn judge(
         // The captured report goes into the failure block (D-701). As in
         // M1, a failing test gets no leak check.
         EntryOutcome::Panicked(report) => TestOutcome::Failed(report.to_string()),
+        // The test's domain deadlocked (D-857): the runtime cancelled its
+        // root scope, so its fibers unwound, and `finish` tore its group
+        // down as at every test's end. The report is the failure block,
+        // and a failing test gets no leak check (D-859, D-541).
+        EntryOutcome::Deadlocked(report) => TestOutcome::Failed(report),
         EntryOutcome::Returned(word) if word == cheby_runtime::values::nil() && skip => {
             domain.stats().skip_leak_check();
             TestOutcome::Passed
@@ -1909,6 +1925,100 @@ mod runner_tests {
             "{text}"
         );
         assert_eq!(skipped(hooks.domains), [(0, 1), (1, 0), (2, 0)]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// D-857, D-859: a deadlock is judged per test, also while another test
+    /// runs. Test "a" deadlocks; test "b", which runs beside it, keeps
+    /// waiting on timers and the blocking pool until a marker file exists,
+    /// which the host writes only when it receives "a"'s end. So "a"'s end
+    /// is reported while "b" still runs, whatever the detector's latency,
+    /// and "b" then passes. "a"'s failure block is the report, with the
+    /// location of its receive, and no leak check runs for it (D-541).
+    #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+    )]
+    fn deadlock_of_a_test_is_reported_while_a_sibling_runs() {
+        let marker = std::env::temp_dir().join(format!(
+            "cheby_runner_{}_deadlock_marker",
+            std::process::id()
+        ));
+        if marker.exists() {
+            std::fs::remove_file(&marker).unwrap();
+        }
+        let body = format!(
+            "fn wait_for_marker(tries: Int) -> Bool {{\n  \
+             case io::read_file(\"{marker}\"), tries {{\n    \
+             Ok(_), _ => True\n    Err(_), 0 => False\n    Err(_), _ => {{\n      \
+             pause(5)\n      wait_for_marker(tries - 1)\n    }}\n  }}\n}}\n\n\
+             test \"a deadlocks\" {{\n  let (tx, rx) = channel::new::<Int>(0)\n  \
+             let assert Ok(n) = channel::receive(rx)\n  \
+             assert channel::send(tx, n) == Ok(Nil)\n}}\n\n\
+             test \"b runs until a has ended\" {{\n  assert wait_for_marker(12000)\n}}\n",
+            marker = marker.display(),
+        );
+        let (dir, program) = program(
+            "deadlock",
+            "import std::channel\nimport std::io\n",
+            &body,
+            2,
+        );
+        // The receive's line in the module the runner compiled.
+        let source = std::fs::read_to_string(dir.join("src/main.cheby")).unwrap();
+        let line = source
+            .lines()
+            .position(|line| line == "  let assert Ok(n) = channel::receive(rx)")
+            .unwrap()
+            + 1;
+        let mut hooks = Hooks {
+            log: Some(Vec::new()),
+            ended: Some(Box::new({
+                let marker = marker.clone();
+                move |index| {
+                    if index == 0 {
+                        std::fs::write(&marker, "a has ended").unwrap();
+                    }
+                }
+            })),
+            ..Hooks::default()
+        };
+        let (text, outcomes) = run(program, &mut hooks);
+        let report = format!(
+            "fatal error: all fibers are blocked\n  \
+             blocked in channel::receive at src/main.cheby:{line}:22\n"
+        );
+        assert_eq!(
+            outcomes,
+            [
+                (
+                    "a deadlocks".to_owned(),
+                    TestOutcome::Failed(report.clone())
+                ),
+                ("b runs until a has ended".to_owned(), TestOutcome::Passed),
+            ],
+            "{text}"
+        );
+        // Both tests started before either ended, and "a" ended first.
+        assert_eq!(
+            hooks.log.unwrap(),
+            [
+                "started 0 bound 2 running 0",
+                "started 1 bound 2 running 1",
+                "ended 0",
+                "ended 1",
+            ]
+        );
+        assert_eq!(
+            text,
+            format!(
+                "test app \"a deadlocks\" ... FAILED\ntest app \"b runs until a has ended\" ... ok\n\n\
+                 ---- app \"a deadlocks\" ----\n{report}\n\
+                 test result: FAILED. 1 passed; 1 failed; 0 filtered out\n"
+            )
+        );
+        std::fs::remove_file(&marker).unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -38,6 +38,26 @@ use crate::object::{self, to_u64, write_field};
 use crate::string::{new_string, to_rust_string};
 use crate::values;
 
+/// `normal`, or `miri` under Miri, which interprets every step: the size of
+/// a test whose checks hold at any size, cut for the nightly Miri job
+/// (D-721, GAP(miri-subset)).
+const fn sized(normal: i64, miri: i64) -> i64 {
+    if cfg!(miri) { miri } else { normal }
+}
+
+/// A property's cases: `normal`, or 4 under Miri, as the Miri job's
+/// `PROPTEST_CASES`, which an explicit count would override.
+const fn miri_cases(normal: u32) -> u32 {
+    if cfg!(miri) { 4 } else { normal }
+}
+
+/// The largest generated collection: `normal`, or `miri` under Miri, where
+/// a model check after each step over hundreds of colliding keys takes
+/// hours (D-721, GAP(miri-subset)).
+const fn miri_len(normal: usize, miri: usize) -> usize {
+    if cfg!(miri) { miri } else { normal }
+}
+
 // ---------------------------------------------------------------------
 // Keys, values and models
 
@@ -518,7 +538,7 @@ fn kernels_update_in_place_at_count_one_and_copy_when_shared() {
 #[test]
 fn a_unique_root_over_shared_nodes_copies_only_the_path() {
     balanced(|| {
-        let model: BTreeMap<Key, i64> = (0..5_000).map(|i| (Key::Int(i), i)).collect();
+        let model: BTreeMap<Key, i64> = (0..sized(5_000, 100)).map(|i| (Key::Int(i), i)).collect();
         let a = map_of(11, &model);
         // `b` is a second root sharing `a`'s top node.
         let b = {
@@ -598,27 +618,29 @@ fn bulk(family: usize, n: i64, mask: u64) {
 
 #[test]
 fn a_hundred_thousand_int_keys() {
-    bulk(0, 100_000, u64::MAX);
+    bulk(0, sized(100_000, 40), u64::MAX);
 }
 
 #[test]
 fn a_hundred_thousand_string_keys() {
-    bulk(1, 100_000, u64::MAX);
+    bulk(1, sized(100_000, 40), u64::MAX);
 }
 
 #[test]
 fn a_hundred_thousand_tuple_keys() {
-    bulk(2, 100_000, u64::MAX);
+    bulk(2, sized(100_000, 40), u64::MAX);
 }
 
 #[test]
 fn colliding_hashes_share_collision_nodes() {
     // Sixteen distinct hashes for 3,000 keys: every key lives in a
     // collision node of ~190 entries under a chain of single-child nodes.
-    bulk(0, 3_000, 0xF);
-    bulk(1, 2_000, 0xF << 60);
+    // Under Miri, enough keys to fill collision nodes past the trie's
+    // fan-out (D-721, GAP(miri-subset)).
+    bulk(0, sized(3_000, 100), 0xF);
+    bulk(1, sized(2_000, 100), 0xF << 60);
     // Every key has the same hash.
-    bulk(2, 300, 0);
+    bulk(2, sized(300, 40), 0);
 }
 
 // ---------------------------------------------------------------------
@@ -738,14 +760,14 @@ fn apply_set(s: Word, model: &mut BTreeSet<Key>, op: &Op) -> Word {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig { cases: 64, ..ProptestConfig::default() })]
+    #![proptest_config(ProptestConfig { cases: miri_cases(64), ..ProptestConfig::default() })]
 
     /// Random operations on a map and a set, each checked against its model
     /// after every step, with real hashes or forced collisions.
     #[test]
     fn operations_match_btree_models(
-        start in prop::collection::btree_map(key_strategy(), -50..50_i64, 0..400),
-        ops in prop::collection::vec(op(), 1..80),
+        start in prop::collection::btree_map(key_strategy(), -50..50_i64, 0..miri_len(400, 40)),
+        ops in prop::collection::vec(op(), 1..miri_len(80, 16)),
         mask in prop_oneof![Just(u64::MAX), Just(0x7_u64), Just(0x3_u64 << 61), Just(0)],
     ) {
         with_mask(mask, || balanced(|| {
@@ -795,15 +817,15 @@ fn step() -> impl Strategy<Value = Step> {
 const VERSIONS: usize = 6;
 
 proptest! {
-    #![proptest_config(ProptestConfig { cases: 96, ..ProptestConfig::default() })]
+    #![proptest_config(ProptestConfig { cases: miri_cases(96), ..ProptestConfig::default() })]
 
     /// N live versions under random sharing, dropping, insertion, removal
     /// and upsert, each checked against its own model after every step; the
     /// test's own accounting domain is back to zero at the end.
     #[test]
     fn versions_stay_independent(
-        start in prop::collection::btree_map(key_strategy(), -50..50_i64, 0..300),
-        steps in prop::collection::vec(step(), 1..60),
+        start in prop::collection::btree_map(key_strategy(), -50..50_i64, 0..miri_len(300, 30)),
+        steps in prop::collection::vec(step(), 1..miri_len(60, 12)),
         mask in prop_oneof![Just(u64::MAX), Just(0x3_u64)],
     ) {
         let domain = Domain::new();
@@ -884,16 +906,16 @@ fn walking_a_large_map_uses_no_stack() {
         .stack_size(64 * 1024)
         .spawn(|| {
             balanced(|| {
+                let n = sized(200_000, 300);
                 let m = ops::build(
                     Collection::Map,
                     2,
-                    (0..200_000)
-                        .map(|i| (abi::tag_int(i).unwrap(), Some(abi::tag_int(i).unwrap()))),
+                    (0..n).map(|i| (abi::tag_int(i).unwrap(), Some(abi::tag_int(i).unwrap()))),
                 );
                 let mut total = 0_i64;
                 // SAFETY: a live map.
                 unsafe { for_each_entry(m.word(), &mut |k, _| total += abi::untag_int(k)) };
-                assert_eq!(total, (0..200_000).sum::<i64>());
+                assert_eq!(total, (0..n).sum::<i64>());
                 drop_word(m.word());
             });
         })
@@ -992,7 +1014,7 @@ fn equality_of_deeply_nested_maps_uses_no_stack() {
 #[test]
 fn a_map_built_under_one_seed_is_read_extended_and_compared_under_another() {
     balanced(|| {
-        let model: BTreeMap<Key, i64> = (0..2_000)
+        let model: BTreeMap<Key, i64> = (0..sized(2_000, 60))
             .map(|i| (nth_key(i as usize % 3, i), i))
             .collect();
         let a = map_of(0xA, &model);
@@ -1434,7 +1456,7 @@ fn kernels_are_registered_with_their_std_symbols() {
 #[test]
 fn cost_lookups_allocate_nothing_and_updates_copy_one_path() {
     balanced(|| {
-        let n = 100_000;
+        let n = sized(100_000, 300);
         let model: BTreeMap<Key, i64> = (0..n).map(|i| (Key::Int(i), i)).collect();
         let m = map_of(21, &model);
         // Unique building allocates O(n) objects: at most one node per

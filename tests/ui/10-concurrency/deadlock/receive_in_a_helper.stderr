@@ -1,0 +1,2 @@
+fatal error: all fibers are blocked
+  blocked in channel::receive at tests/ui/10-concurrency/deadlock/receive_in_a_helper.cheby:12:13

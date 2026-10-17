@@ -298,6 +298,16 @@ pub const CTX_MODE_CONST_EVAL: u32 = 1;
 /// may unwind (D-733).
 pub const CTX_UNWIND: i32 = 12;
 
+/// Byte offset of the fiber control block's wait-frame word, a `usize`
+/// (D-856; GAP(loc-ctx-wait-frame)): the frame pointer of the std function
+/// that calls a waiting kernel (a `@std_context` kernel, D-692) or
+/// `scope_close` (D-693), stored by generated code right before that call.
+/// The waiting kernels copy it into the fiber's wait site when they park,
+/// and a deadlock report starts its frame walk there
+/// (`locate::locate`). Generated code only writes it; the Rust part of
+/// the block starts after it, at byte 24.
+pub const CTX_WAIT_FRAME: i32 = 16;
+
 /// The values of the unwind flag at [`CTX_UNWIND`] (D-685).
 pub mod unwind_flag {
     /// No unwinding in flight.
@@ -331,6 +341,9 @@ pub mod status {
     pub const PANIC: i32 = 101;
     /// Debug builds only: the program ended with live objects (D-458).
     pub const LEAK_CHECK: i32 = 102;
+    /// The program deadlocked: every fiber of its domain is blocked
+    /// (D-724, D-859).
+    pub const DEADLOCK: i32 = 103;
 }
 
 /// The kind of a panic, passed to `cheby_rt_panic` as a `u32`.
@@ -920,12 +933,27 @@ mod tests {
         }
     }
 
-    /// D-685, D-742: the generated-code view of the control block ends at
-    /// the unwind flag, and the measurement switch keeps its name.
+    /// D-685, D-742, D-856: the generated-code view of the control block
+    /// ends at the wait-frame word (GAP(loc-ctx-wait-frame)), the
+    /// measurement switch keeps its name, and a deadlock exits with 103
+    /// (D-724).
     #[test]
     fn the_control_blocks_offsets_and_the_unwind_switch() {
         assert_eq!(UNWIND_EDGES_ENV, "CHEBY_UNWIND_EDGES");
-        assert_eq!((CTX_STACK_LIMIT, CTX_MODE, CTX_UNWIND), (0, 8, 12));
+        assert_eq!(
+            (CTX_STACK_LIMIT, CTX_MODE, CTX_UNWIND, CTX_WAIT_FRAME),
+            (0, 8, 12, 16)
+        );
+        assert_eq!(
+            (
+                status::SUCCESS,
+                status::ERR,
+                status::PANIC,
+                status::LEAK_CHECK,
+                status::DEADLOCK
+            ),
+            (0, 1, 101, 102, 103)
+        );
         assert_eq!(
             (unwind_flag::NONE, unwind_flag::PANIC, unwind_flag::CANCEL),
             (0, 1, 2)

@@ -83,7 +83,26 @@
 //!
 //! The fiber's own locks of [`FiberConc`] (its spawn scope, open scopes and
 //! last failure) are taken only by the fiber itself and never with another
-//! lock held.
+//! lock held. The deadlock report's lock of a root (D-859) is a leaf: the
+//! detector's `cancel::cancel_deadlocked_root` takes it under the root's
+//! base scope lock, and the root takes it with no lock held.
+//!
+//! **Roots** (D-859, D-798's form): every root (`main`, a test, a REPL
+//! entry) has a parentless base scope of its own while its body runs
+//! ([`scope::open_root_base`], [`scope::close_root_base`]), its spawn
+//! scope, under which its own scopes nest. It never has members and records
+//! no first cause, so a program that does not deadlock sees nothing of it.
+//! A deadlock in `cheby test` or the REPL cancels it
+//! ([`cancel::cancel_deadlocked_root`]): the root and every scoped fiber
+//! unwind, every scope passes the cancellation through (D-667), and the
+//! root's catch point takes the report ([`cancel::take_deadlock_report`]).
+//!
+//! **Wait sites** (D-856, D-858): the five waiting kernels (`send`,
+//! `receive`, `join`, `select` and a scope's close) record the operation
+//! and the published wait frame (`ExecCtx::wait_frame`) in the fiber's
+//! scheduler block before they park (`FiberSched::note_wait`), copied at
+//! the park, and clear them when they resume; the blocking pool's park
+//! records nothing (a pending job, D-857).
 //!
 //! A raise takes a scope lock to record its panic (`start_panic`) and runs
 //! the cancellation walk ([`cancel::cancel`]), and `parking_lot`'s mutexes
@@ -133,8 +152,10 @@ use self::scope::ScopeState;
 pub(crate) struct FiberConc {
     /// The fiber lock: the cancellation target and the wait node.
     pub(crate) lock: cancel::FiberLock,
-    /// The scope the fiber was spawned into; `None` for a root fiber and an
-    /// isolated entry.
+    /// The scope the fiber was spawned into: a spawned fiber's scope, a
+    /// detached fiber's base scope (D-798), a root's base scope while its
+    /// body runs (D-859, `scope::open_root_base`); `None` for an isolated
+    /// entry.
     spawn_scope: Mutex<Option<Arc<ScopeState>>>,
     /// The scopes the fiber's frames have open, innermost last
     /// (architecture §7.5).
@@ -142,6 +163,11 @@ pub(crate) struct FiberConc {
     /// Why the scope that `scope_run` last closed on this fiber failed, for
     /// `take_failure` (architecture §5.3).
     last_failure: Mutex<Option<Failure>>,
+    /// The deadlock report of a root that the detector found deadlocked
+    /// (D-724, D-859), stored by `cancel::cancel_deadlocked_root` under the
+    /// root's base scope lock and taken once at the root's catch point
+    /// (`cancel::take_deadlock_report`). Its lock is a leaf.
+    deadlock_report: Mutex<Option<String>>,
     /// The value the last `select` chose and the random state that orders
     /// a select's arms (D-673, D-695).
     pub(crate) select: select::SelectState,
@@ -442,6 +468,8 @@ pub(crate) mod detached_tests;
 #[cfg(test)]
 mod models;
 #[cfg(test)]
+mod root_scope_tests;
+#[cfg(test)]
 mod select_models;
 #[cfg(test)]
 mod select_tests;
@@ -449,3 +477,5 @@ mod select_tests;
 mod tests;
 #[cfg(test)]
 mod timeout_tests;
+#[cfg(test)]
+mod wait_site_tests;

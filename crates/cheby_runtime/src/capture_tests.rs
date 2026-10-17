@@ -24,7 +24,7 @@ use crate::fiber_ops::detached_tests::{
     yield_until,
 };
 use crate::io::{cheby_io_eprint, cheby_io_eprintln, cheby_io_print, cheby_io_println};
-use crate::sched::testing::HANG;
+use crate::sched::testing;
 use crate::{DetachedGroup, RootDone, RootHandle, Runtime, values};
 
 const THREADS: [usize; 3] = [1, 2, 4];
@@ -517,7 +517,7 @@ fn root_handle_wait_timeout_returns_the_handle_while_the_root_runs() {
             Ok(outcome) => panic!("the root ended before its gate opened: {outcome:?}"),
         };
         gate.store(true, Ordering::SeqCst);
-        let Ok(outcome) = handle.wait_timeout(HANG) else {
+        let Ok(outcome) = handle.wait_timeout(testing::hang()) else {
             panic!("the root hung")
         };
         assert_eq!(returned(outcome), values::int_word(7));
@@ -556,12 +556,12 @@ fn root_handle_notify_reports_each_tag_once_in_completion_order() {
         ));
         for tag in [2_usize, 0, 3, 1] {
             gates[tag].store(true, Ordering::SeqCst);
-            let (got, outcome) = reports.recv_timeout(HANG).unwrap();
+            let (got, outcome) = reports.recv_timeout(testing::hang()).unwrap();
             assert_eq!(got, tag);
             let expected = values::int_word(i64::try_from(tag).unwrap());
             assert_eq!(returned(outcome), expected);
         }
-        let after = reports.recv_timeout(HANG);
+        let after = reports.recv_timeout(testing::hang());
         assert!(
             matches!(after, Err(mpsc::RecvTimeoutError::Disconnected)),
             "a root reported twice: {after:?}"
@@ -598,7 +598,7 @@ fn root_handle_notify_reports_a_panic_and_nothing_for_a_refused_start() {
             release(location);
             0
         });
-        let (tag, outcome) = reports.recv_timeout(HANG).unwrap();
+        let (tag, outcome) = reports.recv_timeout(testing::hang()).unwrap();
         assert_eq!(tag, 9);
         match outcome {
             Ok(EntryOutcome::Panicked(report)) => {
@@ -606,7 +606,10 @@ fn root_handle_notify_reports_a_panic_and_nothing_for_a_refused_start() {
             }
             other => panic!("the root did not panic: {other:?}"),
         }
-        assert!(reports.recv_timeout(HANG).is_err(), "a second report");
+        assert!(
+            reports.recv_timeout(testing::hang()).is_err(),
+            "a second report"
+        );
         let (done, reports) = mpsc::channel();
         let small = EntryConfig {
             stack_size: 16,
@@ -620,7 +623,7 @@ fn root_handle_notify_reports_a_panic_and_nothing_for_a_refused_start() {
         assert!(too_small, "{error:?}");
         assert!(unstarted(&refused), "the refused root ran");
         assert!(matches!(
-            reports.recv_timeout(HANG),
+            reports.recv_timeout(testing::hang()),
             Err(mpsc::RecvTimeoutError::Disconnected)
         ));
         finish(runtime, &domain);
@@ -653,11 +656,11 @@ fn root_handle_exit_status_after_a_detached_fibers_termination() {
             release(rx);
             panic!("the root went on after the termination: {got:?}");
         });
-        let (tag, outcome) = reports.recv_timeout(HANG).unwrap();
+        let (tag, outcome) = reports.recv_timeout(testing::hang()).unwrap();
         assert_eq!(tag, 4);
         let exited = matches!(outcome, Ok(EntryOutcome::Exited(3)));
         assert!(exited, "{outcome:?}");
-        let after = reports.recv_timeout(HANG);
+        let after = reports.recv_timeout(testing::hang());
         assert!(
             matches!(after, Err(mpsc::RecvTimeoutError::Disconnected)),
             "a second report: {after:?}"
@@ -674,7 +677,7 @@ fn root_handle_exit_status_after_a_detached_fibers_termination() {
         notify(&runtime, &config(&domain), &later, 8, done, |_| {
             panic!("a root ran after the termination")
         });
-        let (tag, outcome) = reports.recv_timeout(HANG).unwrap();
+        let (tag, outcome) = reports.recv_timeout(testing::hang()).unwrap();
         assert_eq!(tag, 8);
         let exited = matches!(outcome, Ok(EntryOutcome::Exited(3)));
         assert!(exited, "{outcome:?}");

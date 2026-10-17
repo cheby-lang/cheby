@@ -127,6 +127,7 @@ fn build(
         pad: None,
         in_pad: false,
         tokens: FxHashSet::default(),
+        call_tag: None,
     };
     body(&mut t)?;
     t.b.seal_all_blocks();
@@ -183,6 +184,10 @@ pub(crate) struct Translator<'a, 'f> {
     /// find 0, which the inline drop must skip. A token is defined before
     /// any use, so it is here before its `drop`.
     pub(crate) tokens: FxHashSet<Local>,
+    /// The location of the call being translated (D-856), from
+    /// [`Function::call_locs`]: the first Cheby call it emits takes it as
+    /// its debug tag ([`Translator::tag_call`]).
+    call_tag: Option<StrId>,
 }
 
 /// Where a Cheby-ABI call goes: a known function, or an address with a
@@ -769,9 +774,12 @@ impl Translator<'_, '_> {
     fn stmt(&mut self, stmt: &Stmt) -> Result<(), CodegenError> {
         match stmt {
             Stmt::Assign { dst, value } => {
-                let v = self
-                    .rvalue(value)?
-                    .ok_or_else(|| CodegenError::ice("a void call assigned to a local"))?;
+                if let Rvalue::Call { .. } = value {
+                    self.call_tag = self.call_loc(*dst);
+                }
+                let v = self.rvalue(value);
+                self.call_tag = None;
+                let v = v?.ok_or_else(|| CodegenError::ice("a void call assigned to a local"))?;
                 self.bind(*dst, v)?;
                 if let Rvalue::DropReuse { .. } = value {
                     self.tokens.insert(*dst);
@@ -833,6 +841,7 @@ impl Translator<'_, '_> {
                 blocking: true,
             } => {
                 let vals = self.operands(args)?;
+                self.store_wait_frame_for(args)?;
                 let callee = CCallee::Blocking {
                     symbol: symbol.clone(),
                     sig: sig.clone(),
@@ -851,6 +860,7 @@ impl Translator<'_, '_> {
                 blocking: false,
             } => {
                 let vals = self.operands(args)?;
+                self.store_wait_frame_for(args)?;
                 if let Some(pad) = self.pad {
                     let callee = CCallee::Foreign {
                         symbol: symbol.clone(),
@@ -1159,12 +1169,65 @@ impl Translator<'_, '_> {
         }
     }
 
-    /// A plain, non-tail call of Cheby code.
+    /// A plain, non-tail call of Cheby code, tagged with the location of
+    /// the call being translated ([`Translator::tag_call`]).
     pub(crate) fn emit_cheby_call(&mut self, target: CallTarget, args: &[Value]) -> ir::Inst {
-        match target {
+        let inst = match target {
             CallTarget::Direct(f) => self.b.ins().call(f, args),
             CallTarget::Indirect(s, code) => self.b.ins().call_indirect(s, code, args),
+        };
+        self.tag_call(inst);
+        inst
+    }
+
+    /// The location recorded for the call that defines `local`
+    /// ([`Function::call_locs`], sorted by local: lowering records each
+    /// call as it defines its local).
+    fn call_loc(&self, local: Local) -> Option<StrId> {
+        let locs = &self.func.call_locs;
+        locs.binary_search_by_key(&local, |&(l, _)| l)
+            .ok()
+            .and_then(|at| locs.get(at))
+            .map(|&(_, loc)| loc)
+    }
+
+    /// Gives `inst`, a non-tail Cheby call, the debug tag of the call
+    /// being translated, once (D-856): metadata only, the machine code is
+    /// the same. [`crate::compile_function`] pairs the tag with the call's
+    /// return offset.
+    fn tag_call(&mut self, inst: ir::Inst) {
+        if let Some(loc) = self.call_tag.take() {
+            self.b
+                .func
+                .debug_tags
+                .set(inst, [ir::DebugTag::User(loc.as_u32())]);
         }
+    }
+
+    /// Before a call of a waiting kernel (a `@std_context` kernel, whose
+    /// first operand is the control block, D-745), stores the frame
+    /// pointer of this function in the control block
+    /// ([`Translator::store_wait_frame`]).
+    fn store_wait_frame_for(&mut self, args: &[Operand]) -> Result<(), CodegenError> {
+        if let Some(Operand::Const(Const::Ctx)) = args.first() {
+            self.store_wait_frame()?;
+        }
+        Ok(())
+    }
+
+    /// Stores this function's frame pointer at
+    /// [`abi::CTX_WAIT_FRAME`] (GAP(loc-ctx-wait-frame), D-856): right
+    /// before a call of a `@std_context` kernel or of `scope_close`, so a
+    /// kernel that parks the fiber records where the walk for a deadlock
+    /// report starts. Frame pointers are kept in every function
+    /// (`isa.rs`), so the frame record at that address is this function's.
+    pub(crate) fn store_wait_frame(&mut self) -> Result<(), CodegenError> {
+        let ctx = self.ctx()?;
+        let fp = self.b.ins().get_frame_pointer(WORD);
+        self.b
+            .ins()
+            .store(MemFlagsData::trusted(), fp, ctx, abi::CTX_WAIT_FRAME);
+        Ok(())
     }
 
     /// A new block that continues the current one after a call: cold when
@@ -1262,8 +1325,11 @@ impl Translator<'_, '_> {
             }
         };
         if tail {
+            // A tail call leaves no frame of its caller to locate (D-015,
+            // D-856), so it carries no tag.
             return Ok(None);
         }
+        self.tag_call(inst);
         Ok(self.b.inst_results(inst).first().copied())
     }
 

@@ -259,7 +259,7 @@ mod tests {
     use crate::fiber_ops::join::cheby_fiber_sys_join;
     use crate::fiber_ops::tests::{close, config, ctx_of, drop_word, int, open};
     use crate::generic::tests::closure;
-    use crate::sched::testing::{self, HANG};
+    use crate::sched::testing;
     use crate::sched::{Runtime, RuntimeConfig};
     use crate::values;
 
@@ -329,7 +329,7 @@ mod tests {
             tx.send(sizes).unwrap();
             values::nil()
         })
-        .recv_timeout(HANG)
+        .recv_timeout(testing::hang())
         .expect("the root fiber hung");
         runtime.shutdown();
         assert!(

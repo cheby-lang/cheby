@@ -6,7 +6,7 @@
 //! Each race is run many times at several thread counts, with D-687's
 //! migration stress mode on at 2 and 4 workers. A race that the protocol
 //! loses shows as a hang (a fiber parked that nothing wakes, so a scope's
-//! close waits for ever: `HANG` fails the test), as a scope whose `Err`
+//! close waits for ever: `testing::hang()` fails the test), as a scope whose `Err`
 //! is not the first panic's, or as a leak. Every outcome below is the same
 //! whichever interleaving happens; only the interleaving varies, and no
 //! result depends on timing.

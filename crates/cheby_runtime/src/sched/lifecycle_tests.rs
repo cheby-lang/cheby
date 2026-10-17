@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use super::testing::{self, HANG};
+use super::testing;
 use super::{CodeToken, DetachedGroup, Shared};
 use crate::abi::Word;
 use crate::alloc::Domain;
@@ -39,11 +39,14 @@ fn ctx_ptr(me: &ExecCtx) -> *mut ExecCtx {
     std::ptr::from_ref(me).cast_mut()
 }
 
-/// Waits until `ready` holds on the host, or panics after [`HANG`].
+/// Waits until `ready` holds on the host, or panics after [`testing::hang()`].
 fn wait_until(ready: impl Fn() -> bool) {
     let started = Instant::now();
     while !ready() {
-        assert!(started.elapsed() < HANG, "the host waited too long");
+        assert!(
+            started.elapsed() < testing::hang(),
+            "the host waited too long"
+        );
         std::thread::sleep(Duration::from_millis(1));
     }
 }
@@ -69,7 +72,7 @@ fn teardown_case(
         count.store(start(me, flag), Ordering::SeqCst);
         values::nil()
     })
-    .recv_timeout(HANG)
+    .recv_timeout(testing::hang())
     .unwrap();
     assert!(matches!(outcome, EntryOutcome::Returned(_)), "{outcome:?}");
     let members = expected.load(Ordering::SeqCst);
@@ -311,7 +314,7 @@ fn lifecycle_teardown_a_spawn_into_a_closing_group_never_runs() {
                 // for one, so this fiber sees the group closing first.
                 let started = Instant::now();
                 while !group.closing() {
-                    assert!(started.elapsed() < HANG);
+                    assert!(started.elapsed() < testing::hang());
                     std::hint::spin_loop();
                 }
                 detach(me, move |_| {
@@ -353,7 +356,7 @@ fn lifecycle_shutdown_tears_every_group_down() {
                 });
                 values::nil()
             })
-            .recv_timeout(HANG)
+            .recv_timeout(testing::hang())
             .unwrap();
             assert!(matches!(outcome, EntryOutcome::Returned(_)), "{outcome:?}");
         }
@@ -369,7 +372,7 @@ fn lifecycle_shutdown_tears_every_group_down() {
             });
             values::nil()
         })
-        .recv_timeout(HANG)
+        .recv_timeout(testing::hang())
         .unwrap();
         assert!(matches!(outcome, EntryOutcome::Returned(_)), "{outcome:?}");
         wait_until(|| started.load(Ordering::SeqCst) == 3);
@@ -433,7 +436,7 @@ fn lifecycle_code_tokens_outlive_every_running_fiber() {
             });
             values::nil()
         })
-        .recv_timeout(HANG)
+        .recv_timeout(testing::hang())
         .unwrap();
         assert!(matches!(outcome, EntryOutcome::Returned(_)), "{outcome:?}");
         wait_until(|| spinning.load(Ordering::SeqCst));
@@ -518,7 +521,7 @@ fn lifecycle_teardown_skips_inline_io() {
             });
             values::nil()
         })
-        .recv_timeout(HANG)
+        .recv_timeout(testing::hang())
         .unwrap();
         assert!(matches!(outcome, EntryOutcome::Returned(_)), "{outcome:?}");
         wait_until(|| group.blocked() == 1);
@@ -569,7 +572,7 @@ fn lifecycle_teardown_skips_a_scoped_child_blocked_in_inline_io() {
             });
             values::nil()
         })
-        .recv_timeout(HANG)
+        .recv_timeout(testing::hang())
         .unwrap();
         assert!(matches!(outcome, EntryOutcome::Returned(_)), "{outcome:?}");
         wait_until(|| group.blocked() == 1);
@@ -606,6 +609,11 @@ fn lifecycle_teardown_waits_for_a_busy_sibling_of_a_blocked_fiber() {
         let group = DetachedGroup::new();
         let finished = Arc::new(AtomicBool::new(false));
         let done = Arc::clone(&finished);
+        // The sibling must have started before the teardown: a fiber
+        // cancelled before its first run never calls its function (D-666),
+        // so it would leave at once instead of running on.
+        let running = Arc::new(AtomicBool::new(false));
+        let started = Arc::clone(&running);
         let outcome = testing::start_root_in(&runtime, &config(&domain), &group, move |me| {
             detach(me, move |me| {
                 let scope = open_scope(me);
@@ -616,6 +624,7 @@ fn lifecycle_teardown_waits_for_a_busy_sibling_of_a_blocked_fiber() {
                     if unwinding(me) { 0 } else { values::nil() }
                 }));
                 release(spawn_into(me, scope, move |me| {
+                    started.store(true, Ordering::SeqCst);
                     until_cancelled(me);
                     // Busy after the cancellation, with no entry check.
                     let start = Instant::now();
@@ -630,10 +639,10 @@ fn lifecycle_teardown_waits_for_a_busy_sibling_of_a_blocked_fiber() {
             });
             values::nil()
         })
-        .recv_timeout(HANG)
+        .recv_timeout(testing::hang())
         .unwrap();
         assert!(matches!(outcome, EntryOutcome::Returned(_)), "{outcome:?}");
-        wait_until(|| group.blocked() == 1);
+        wait_until(|| group.blocked() == 1 && running.load(Ordering::SeqCst));
         let report = runtime.teardown(&group);
         assert_eq!(
             (report.waited, report.skipped, report.halted),
@@ -678,7 +687,7 @@ fn lifecycle_teardown_skips_io_inline_after_a_refused_pool_thread() {
             });
             values::nil()
         })
-        .recv_timeout(HANG)
+        .recv_timeout(testing::hang())
         .unwrap();
         assert!(matches!(outcome, EntryOutcome::Returned(_)), "{outcome:?}");
         wait_until(|| group.blocked() == 1);
@@ -737,7 +746,7 @@ fn lifecycle_halt_freezes_a_spinner_and_a_parked_fiber() {
             });
             values::nil()
         })
-        .recv_timeout(HANG)
+        .recv_timeout(testing::hang())
         .unwrap();
         assert!(matches!(outcome, EntryOutcome::Returned(_)), "{outcome:?}");
         wait_until(|| started.load(Ordering::SeqCst) == 2);
@@ -803,7 +812,7 @@ fn lifecycle_terminate_from_a_non_root_fiber() {
             release(rx);
             panic!("the root went on after the termination: {got:?}");
         })
-        .recv_timeout(HANG)
+        .recv_timeout(testing::hang())
         .unwrap();
         assert_eq!(outcome, EntryOutcome::Exited(3));
         assert_eq!(shared.exit_status(), Some(3));
@@ -811,7 +820,7 @@ fn lifecycle_terminate_from_a_non_root_fiber() {
         let late = testing::start_root_with(&runtime, &config(&domain), |_| {
             panic!("a root ran after the termination")
         })
-        .recv_timeout(HANG)
+        .recv_timeout(testing::hang())
         .unwrap();
         assert_eq!(late, EntryOutcome::Exited(3));
         runtime.halt();
@@ -861,14 +870,14 @@ fn lifecycle_terminate_during_teardown() {
                 // delivered before the write fails.
                 let started = Instant::now();
                 while crate::fiber_ops::cancel::hooks::target(me).is_none() {
-                    assert!(started.elapsed() < HANG);
+                    assert!(started.elapsed() < testing::hang());
                     std::hint::spin_loop();
                 }
                 crate::sched::terminate(1)
             });
             values::nil()
         })
-        .recv_timeout(HANG)
+        .recv_timeout(testing::hang())
         .unwrap();
         assert!(matches!(outcome, EntryOutcome::Returned(_)), "{outcome:?}");
         wait_until(|| ready.load(Ordering::SeqCst));
@@ -903,7 +912,7 @@ fn lifecycle_drop_after_terminate() {
                 yield_until(me, || group.parked() == 1);
                 crate::sched::terminate(2)
             })
-            .recv_timeout(HANG)
+            .recv_timeout(testing::hang())
             .unwrap();
             assert_eq!(outcome, EntryOutcome::Exited(2));
             if by_drop {

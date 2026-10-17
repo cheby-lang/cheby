@@ -28,6 +28,8 @@ pub mod borrow;
 #[cfg(test)]
 mod borrow_tests;
 pub mod builder;
+#[cfg(test)]
+mod call_locs_tests;
 pub mod const_prop;
 mod defs;
 pub mod dump;
@@ -65,6 +67,7 @@ mod unwind_tests;
 pub mod validate;
 #[cfg(test)]
 mod validate_tests;
+pub mod waits;
 
 pub use abi::{AbiSig, abi_sig, entry_sig, fixed_sig, is_uniform_sig, trampoline_sig, uniform_sig};
 pub use builder::FunctionBuilder;

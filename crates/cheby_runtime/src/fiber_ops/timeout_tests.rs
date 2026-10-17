@@ -35,7 +35,7 @@ use crate::ctx::{self, ExecCtx, reason};
 use crate::entry::{Callbacks, EntryConfig, EntryOutcome, run_entry};
 use crate::generic::tests::captures;
 use crate::panic::cheby_rt_panic;
-use crate::sched::testing::{self, HANG};
+use crate::sched::testing;
 use crate::unwind::flag;
 use crate::values;
 
@@ -97,7 +97,7 @@ fn run_root(threads: usize, body: impl FnOnce(&ExecCtx) -> u64 + Send + 'static)
         ..config(&domain)
     };
     let outcome = testing::start_root_with(&runtime, &config, body)
-        .recv_timeout(HANG)
+        .recv_timeout(testing::hang())
         .expect("the root fiber hung");
     runtime.shutdown();
     assert_eq!(
@@ -193,11 +193,12 @@ fn pending_timers(me: &ExecCtx) -> usize {
 /// Waits, with no entry check, until a cancellation has reached the running
 /// fiber (its target is set): work during which no cancellation is
 /// delivered (D-102). Yields to the scheduler between looks when `yields`
-/// is set, else spins on its worker. Returns false after [`HANG`].
+/// is set, else spins on its worker. Returns false after
+/// [`testing::hang`].
 fn wait_until_reached(me: &ExecCtx, yields: bool) -> bool {
     let started = Instant::now();
     while hooks::target(me).is_none() {
-        if started.elapsed() > HANG {
+        if started.elapsed() > testing::hang() {
             return false;
         }
         if yields {
@@ -334,7 +335,7 @@ fn timeout_a_firing_after_fs_panic_leaves_it_panicked() {
             // The unwinding takes its time: the timer fires meanwhile.
             let started = Instant::now();
             while pending_timers(me) != 0 {
-                assert!(started.elapsed() < HANG, "the timer never fired");
+                assert!(started.elapsed() < testing::hang(), "the timer never fired");
                 std::hint::spin_loop();
             }
             let succeeded = close_body(me, scope);

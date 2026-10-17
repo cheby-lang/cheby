@@ -7,7 +7,9 @@
 //! references, updated atomically. In M1 no object is ever shared, but the
 //! paths exist so that the counting rules are fixed from the start.
 
-use std::sync::atomic::{Ordering, fence};
+use std::sync::atomic::Ordering;
+#[cfg(not(cheby_sanitize = "thread"))]
+use std::sync::atomic::fence;
 
 use crate::abi::{self, Word};
 use crate::alloc;
@@ -317,7 +319,14 @@ pub(crate) unsafe fn release(obj: *mut u8) -> bool {
             let previous = unsafe { shared_rc(obj) }.fetch_add(1, Ordering::Release);
             if previous == -1 {
                 // Every other thread's last use happens before the free.
+                #[cfg(not(cheby_sanitize = "thread"))]
                 fence(Ordering::Acquire);
+                // GAP(sanitize-tsan-fences): ThreadSanitizer does not model
+                // a standalone fence, so its build acquires with a load of
+                // the count instead, as std's `Arc` does.
+                #[cfg(cheby_sanitize = "thread")]
+                // SAFETY: as above; the object is not freed yet.
+                let _ = unsafe { shared_rc(obj) }.load(Ordering::Acquire);
                 true
             } else {
                 false

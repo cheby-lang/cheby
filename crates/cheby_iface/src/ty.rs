@@ -143,7 +143,11 @@ impl TyInterner {
     pub fn new() -> Self {
         let pre: Vec<(Ty, &'static TyKind)> = preinterned()
             .into_iter()
-            .map(|(ty, kind)| (ty, &*Box::leak(Box::new(kind))))
+            .map(|(ty, kind)| {
+                let leaked: &'static TyKind = Box::leak(Box::new(kind));
+                crate::leak::intended(leaked);
+                (ty, leaked)
+            })
             .collect();
         let interner = Self {
             pre: pre.iter().map(|&(_, kind)| kind).collect(),
@@ -197,6 +201,7 @@ impl TyInterner {
             .and_then(|n| n.checked_add(self.preinterned()))
             .unwrap_or(u32::MAX));
         let leaked: &'static TyKind = Box::leak(Box::new(kind));
+        crate::leak::intended(leaked);
         shard_data.kinds.push(leaked);
         shard_data.map.insert(leaked, ty);
         ty

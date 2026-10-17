@@ -64,6 +64,15 @@ pub struct FunctionBuilder {
     /// The sites recorded so far, which [`FunctionBuilder::finish`] moves
     /// into [`Function::sites`].
     sites: Vec<(Local, Span)>,
+    /// Whether [`FunctionBuilder::record_call_loc`] records anything: on
+    /// in units outside package `std` (D-856).
+    record_call_locs: bool,
+    /// The call locations recorded so far ([`Function::call_locs`]).
+    call_locs: Vec<(Local, StrId)>,
+    /// Their texts ([`Function::call_loc_strings`]).
+    call_loc_strings: IndexVec<StrId, Box<str>>,
+    /// Lookup only; numbering is first-use order.
+    call_loc_ids: FxHashMap<Box<str>, StrId>,
 }
 
 impl FunctionBuilder {
@@ -92,7 +101,48 @@ impl FunctionBuilder {
             stmts: 0,
             record_sites: false,
             sites: Vec::new(),
+            record_call_locs: false,
+            call_locs: Vec::new(),
+            call_loc_strings: IndexVec::new(),
+            call_loc_ids: FxHashMap::default(),
         })
+    }
+
+    /// Makes [`FunctionBuilder::record_call_loc`] record (`on`) or ignore
+    /// its locations; off by default. Lowering turns it on in units
+    /// outside package `std` (D-856).
+    pub const fn set_record_call_locs(&mut self, on: bool) {
+        self.record_call_locs = on;
+    }
+
+    /// Whether [`FunctionBuilder::record_call_loc`] records.
+    #[must_use]
+    pub const fn records_call_locs(&self) -> bool {
+        self.record_call_locs
+    }
+
+    /// Records `location` (`path:line:col`) as the location of the call
+    /// that defines `local` (D-856): a no-op unless
+    /// [`FunctionBuilder::set_record_call_locs`] turned recording on.
+    /// [`FunctionBuilder::finish`] moves the locations into
+    /// [`Function::call_locs`] and [`Function::call_loc_strings`].
+    ///
+    /// # Errors
+    ///
+    /// An [`Ice`] if the table of location strings is full.
+    pub fn record_call_loc(&mut self, local: Local, location: &str) -> Result<(), Ice> {
+        if !self.record_call_locs {
+            return Ok(());
+        }
+        let id = if let Some(&id) = self.call_loc_ids.get(location) {
+            id
+        } else {
+            let id = self.call_loc_strings.push(location.into())?;
+            self.call_loc_ids.insert(location.into(), id);
+            id
+        };
+        self.call_locs.push((local, id));
+        Ok(())
     }
 
     /// Makes [`FunctionBuilder::record_site`] record (`on`) or ignore its
@@ -437,6 +487,8 @@ impl FunctionBuilder {
             precounted: self.precounted,
             borrow: crate::borrow::BorrowMask::OWNED,
             sites: self.sites,
+            call_locs: self.call_locs,
+            call_loc_strings: self.call_loc_strings,
         })
     }
 }

@@ -96,6 +96,7 @@ use super::fiber::{self, AfterSwitch, FiberRef, state};
 use super::park::Parker;
 use super::{MAX_THREADS, Shared, Where};
 use crate::ctx::ExecCtx;
+use crate::fiber::sanitizer;
 use crate::fiber::stack::{SlotCache, StackError, StackSlot};
 use crate::fiber::{Saved, StackPool, switch};
 use crate::panic::fatal;
@@ -790,12 +791,16 @@ impl Worker<'_> {
     /// stops. Returns whether it wakes up searching.
     fn park(&mut self) -> bool {
         let shared = self.shared;
-        if shared
+        let parked = shared
             .idle
-            .transition_worker_to_parked(self.index, self.searching)
-            && shared.work_pending()
-        {
+            .transition_worker_to_parked(self.index, self.searching);
+        if parked.last_searcher && shared.work_pending() {
             shared.notify_parked();
+        }
+        // D-860: the last unparked worker parks, so no fiber runs: the
+        // monitor surveys at once (the check-now flag), not on its ticks.
+        if parked.last_unparked && shared.detect_deadlocks && !shared.stopping() {
+            shared.monitor.check_now();
         }
         loop {
             // Work only this worker may run can arrive after its last look
@@ -905,6 +910,9 @@ impl Worker<'_> {
         // resumes it now.
         let ctx = unsafe { fiber.ctx() };
         ctx.sched.state().store(state::RUNNING, Ordering::SeqCst);
+        // D-860: one relaxed store on a line this resume already writes;
+        // the deadlock survey reads it after the state.
+        ctx.sched.count_resume();
         ctx.sched.set_worker(self.index);
         // SAFETY: the control block is live until this worker retires it,
         // which happens after it stops being current, below.
@@ -935,6 +943,9 @@ impl Worker<'_> {
             crate::ctx::request(ctx, crate::ctx::reason::YIELD);
         }
         self.shared.monitor.kick();
+        // SAFETY: only this worker uses the slot's cell while it resumes the
+        // fiber (as for the switch below).
+        let (slot_lo, slot_len) = unsafe { ctx.sched.slot_bounds() };
         // SAFETY: the fiber's context was saved by its last park (or made
         // by `prepare`) and nothing else resumes it: it was taken from a
         // queue, which hands it to exactly one worker. The worker's own
@@ -943,7 +954,10 @@ impl Worker<'_> {
         // borrows from a thread-local or lock (I-5).
         let message = unsafe {
             let to = (*ctx.sched.saved()).take();
-            switch::switch(self.me.saved(), to, 0)
+            sanitizer::before_resume(ctx.sched.san(), slot_lo, slot_len);
+            let message = switch::switch(self.me.saved(), to, 0);
+            sanitizer::after_resume(ctx.sched.san());
+            message
         };
         self.me.running.store(ptr::null_mut(), Ordering::SeqCst);
         // Before another worker can run the fiber, and so retire it, or
@@ -1017,6 +1031,7 @@ impl Worker<'_> {
         let slot = unsafe { ctx.sched.take_slot() };
         let watermark = ctx.real_stack_limit();
         let spawned = ctx.sched.spawned();
+        sanitizer::on_retire(ctx.sched.san());
         // SAFETY: the control block was written by `fiber::create` and is
         // dropped once, here; nothing refers to it any more: it is in no
         // queue, no monitor look that read it is in progress, and the

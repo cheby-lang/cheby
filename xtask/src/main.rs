@@ -23,6 +23,9 @@
 //!   against a baseline (D-718, D-702).
 //! - `check-examples`: runs `cheby check` in every example directory and
 //!   compares the outcome with the expected one (G6).
+//! - `sanitize`: the nightly workflow's thread-sanitizer, address-sanitizer
+//!   and Miri jobs, step by step, for the workflow and for local runs
+//!   (D-721, D-862).
 //! - `bench-build` (hidden): checks and compiles every function of a
 //!   package on `--jobs` threads and prints the times, the bytes of code
 //!   and the RC operations; `bench-compile` and `check-determinism` run it
@@ -34,6 +37,7 @@ mod bench_run;
 mod cross_check;
 mod determinism;
 mod examples;
+mod sanitize;
 
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
@@ -104,6 +108,9 @@ enum Cmd {
     BenchCompile(bench::Args),
     /// Measure the run time of the programs under `bench/runtime` (D-718)
     BenchRun(bench_run::Args),
+    /// Run the nightly workflow's sanitizer or Miri job, or some of its
+    /// steps, on the pinned nightly (D-721, D-862)
+    Sanitize(sanitize::Args),
     /// Check and compile every function of a package and print the front
     /// end's and the back end's times in nanoseconds, the bytes of machine
     /// code and the RC operations of the MIR
@@ -138,6 +145,7 @@ fn main() -> ExitCode {
         Cmd::TestStd { filter } => test_std(filter.as_deref()),
         Cmd::BenchCompile(args) => bench::run(&root, &args),
         Cmd::BenchRun(args) => bench_run::run(&root, &args),
+        Cmd::Sanitize(args) => sanitize::run(&root, &args),
         Cmd::BenchBuild { jobs, dir } => bench_build(jobs, &dir),
     };
     match result {

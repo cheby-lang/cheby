@@ -91,11 +91,15 @@ fn lists_compare_hash_and_print_element_by_element() {
         assert_eq!(text(with_fn), "[1, <fn>]");
         assert_eq!(hashed(with_fn), Err(Reached::Function));
         assert_eq!(eq(with_fn, with_fn), Err(Reached::Function));
-        let long = list((0..100_000).map(int_word).collect());
-        let long_again = prepended((0..100_000).map(int_word).collect());
+        // Under Miri, which interprets every step, a shorter list that
+        // still spans several tree levels (D-721, GAP(miri-subset)).
+        let n: i64 = if cfg!(miri) { 2_000 } else { 100_000 };
+        let long = list((0..n).map(int_word).collect());
+        let long_again = prepended((0..n).map(int_word).collect());
         assert_eq!(eq(long, long_again), Ok(true));
         assert_eq!(hashed(long), hashed(long_again));
-        assert!(text(long).ends_with(", 99998, 99999]"));
+        let end = format!(", {}, {}]", n.saturating_sub(2), n.saturating_sub(1));
+        assert!(text(long).ends_with(&end));
         release([
             pushed, shorter, changed, made_empty, nested, with_fn, long, long_again,
         ]);
@@ -553,7 +557,9 @@ fn sorted_groups_print_by_their_whole_text_without_recursion() {
 fn debug_text_is_written_into_a_string_object() {
     let domain = Domain::new();
     alloc::with_domain(Arc::clone(&domain), || {
-        let value = list((0..10_000).map(|n| some(int_word(n))).collect());
+        // A shorter list under Miri (D-721, GAP(miri-subset)).
+        let length: i64 = if cfg!(miri) { 500 } else { 10_000 };
+        let value = list((0..length).map(|n| some(int_word(n))).collect());
         // SAFETY: a live value.
         let object = unsafe { debug_object(value) };
         // SAFETY: a live string.
@@ -830,7 +836,8 @@ fn check_pair(shape: &Shape, a: &Tree, b: &Tree, how: usize) -> Result<(), TestC
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(256))]
+    // 4 cases under Miri, as the Miri job's `PROPTEST_CASES` (D-721).
+    #![proptest_config(ProptestConfig::with_cases(if cfg!(miri) { 4 } else { 256 }))]
 
     #[test]
     fn equal_values_hash_equally(a in tree(), b in tree(), how in 0_usize..3) {

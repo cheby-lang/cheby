@@ -31,6 +31,13 @@
 //! changed, and bounded recursive rebuilds (a record or a variant
 //! rebuilt on each step of a counted recursion, or a recursive field
 //! rebuilt around the recursive call, as a tree insert does).
+//!
+//! Most programs also hold a projection run (GAP(progen-projection-runs)):
+//! a function reading 9 to 14 projections of one record that it consumes
+//! after the record's last use, sometimes in one arm of a `case` only.
+//! Fusion sinks at most 8 `dup`s to one point that neither cancel nor
+//! fold there (D-865); the run goes beyond that bound, so the
+//! differential and the fuzz target reach it.
 
 mod diff;
 mod generator;
@@ -66,6 +73,13 @@ pub struct GenConfig {
     pub max_stmts: usize,
     /// The chance, in percent, that `main` ends with a planted panic.
     pub final_panic_percent: usize,
+    /// The chance, in percent, that the program holds a projection run:
+    /// a function that reads 9 to 14 projections of one record and
+    /// consumes them after the record's last use, sometimes in one arm of
+    /// a `case` only, so that fusion's bound on sinking (D-865) is
+    /// reached. It is drawn after every other choice, so the rest of the
+    /// program is the one this seed gives without it.
+    pub projection_run_percent: usize,
 }
 
 impl Default for GenConfig {
@@ -78,6 +92,7 @@ impl Default for GenConfig {
             max_depth: 3,
             max_stmts: 4,
             final_panic_percent: 30,
+            projection_run_percent: 60,
         }
     }
 }
@@ -119,7 +134,7 @@ fn package(seed: u64, output: generator::Output) -> Program {
     if let Some(helpers) = output.helpers {
         files.push(("src/helpers.cheby".to_owned(), helpers));
     }
-    let _ = (output.planted, output.rebuilds);
+    let _ = (output.planted, output.rebuilds, output.projection_runs);
     Program { seed, files }
 }
 
@@ -222,6 +237,60 @@ mod tests {
             })
             .count();
         assert!(rebuilding >= 34, "only {rebuilding} of 40 programs rebuild");
+    }
+
+    /// D-865 through the generator (GAP(progen-projection-runs)): many of
+    /// the differential's programs hold a projection run, so that
+    /// `rc_differential`'s floor of 10 has a margin.
+    #[test]
+    fn progen_many_programs_hold_a_projection_run() {
+        let config = GenConfig::default();
+        let holding = DIFF_SEEDS
+            .filter(|seed| {
+                let mut generator = generator::Gen::new(source::Source::Seeded(*seed), &config);
+                generator.program("test").projection_runs > 0
+            })
+            .count();
+        assert!(
+            holding >= 15,
+            "only {holding} of 40 programs hold a projection run"
+        );
+    }
+
+    /// The projection run is drawn after every other choice: without it,
+    /// a seed gives the same helpers and a main module whose lines all
+    /// appear, in order, in the one with it.
+    #[test]
+    fn progen_projection_run_is_drawn_last() {
+        let config = GenConfig::default();
+        let without = GenConfig {
+            projection_run_percent: 0,
+            ..GenConfig::default()
+        };
+        let mut added = 0;
+        for seed in 0..60 {
+            let with_run = generate(seed, &config);
+            let plain = generate(seed, &without);
+            assert_eq!(
+                with_run.file("src/helpers.cheby"),
+                plain.file("src/helpers.cheby"),
+                "seed {seed}"
+            );
+            let full = with_run.file("src/main.cheby").unwrap_or_default();
+            let base = plain.file("src/main.cheby").unwrap_or_default();
+            let mut lines = full.lines();
+            for line in base.lines() {
+                assert!(
+                    lines.any(|l| l == line),
+                    "seed {seed}: `{line}` is missing or out of order in:\n{full}"
+                );
+            }
+            if full != base {
+                assert!(full.contains("let result = f"), "seed {seed}");
+                added += 1;
+            }
+        }
+        assert!(added > 0);
     }
 
     #[test]

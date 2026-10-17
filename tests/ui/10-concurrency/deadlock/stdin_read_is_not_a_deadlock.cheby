@@ -1,0 +1,39 @@
+// @mode: run-pass
+// @decisions: D-724, D-857, D-683, D-692
+// @milestone: M2
+//! `main` receives the lines that a detached reader of standard input
+//! sends it. While the reader waits on the blocking pool for a line, every
+//! fiber is parked, which is no deadlock: the read is pending (§10.9).
+//! At the end of input the reader ends, its `Sender` with it, and `main`
+//! finds the channel closed.
+
+import std::channel
+import std::fiber
+import std::io
+
+fn read_all(lines: channel::Sender<String>) -> Nil {
+  case io::read_line() {
+    Ok(Some(line)) => {
+      let assert Ok(Nil) = channel::send(lines, line)
+      read_all(lines)
+    }
+    _ => Nil
+  }
+}
+
+fn echo(lines: channel::Receiver<String>, count: Int) -> Int {
+  case channel::receive(lines) {
+    Ok(line) => {
+      io::println("got {line}")
+      echo(lines, count + 1)
+    }
+    Err(_) => count
+  }
+}
+
+fn main() {
+  let (lines_tx, lines_rx) = channel::new::<String>(0)
+  fiber::spawn_detached(fn() { read_all(lines_tx) })
+  let count = echo(lines_rx, 0)
+  io::println("{count} lines")
+}

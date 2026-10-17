@@ -553,7 +553,8 @@ mod tests {
     fn exp_and_ln_bounds_hold() {
         let mut state = 7;
         let mut worst: f64 = 0.0;
-        for _ in 0..400 {
+        // Fewer under Miri, which interprets every step (D-721).
+        for _ in 0..if cfg!(miri) { 10 } else { 400 } {
             let x = uniform(&mut state, -660.0, 709.0);
             let (value, rel) = exp_core(Dd::from(x)).unwrap();
             worst = worst.max(ratio(value, value.hi.abs() * rel, &accurate::exp(x, 4)));
@@ -573,7 +574,8 @@ mod tests {
     fn trig_and_atan2_bounds_hold() {
         let mut state = 11;
         let mut worst: f64 = 0.0;
-        for _ in 0..300 {
+        // Fewer under Miri, which interprets every step (D-721).
+        for _ in 0..if cfg!(miri) { 10 } else { 300 } {
             let x = if next(&mut state) & 1 == 0 {
                 uniform(&mut state, -10.0, 10.0)
             } else {
@@ -596,7 +598,8 @@ mod tests {
     #[test]
     fn atan2_and_pow_agree_with_the_accurate_phase_on_hard_ranges() {
         let mut state = 5;
-        for _ in 0..300 {
+        // Fewer under Miri, which interprets every step (D-721).
+        for _ in 0..if cfg!(miri) { 10 } else { 300 } {
             let y = uniform(&mut state, -4.0, 4.0)
                 * pow2(nearest_i64(uniform(&mut state, -60.0, 60.0)));
             let x = uniform(&mut state, -4.0, 4.0);
@@ -623,7 +626,8 @@ mod tests {
     #[test]
     fn fast_results_are_the_accurate_ones() {
         let mut state = 3;
-        for _ in 0..300 {
+        // Fewer under Miri, which interprets every step (D-721).
+        for _ in 0..if cfg!(miri) { 10 } else { 300 } {
             let x = uniform(&mut state, -20.0, 20.0);
             let y = uniform(&mut state, -20.0, 20.0);
             if let Some(v) = exp(x) {

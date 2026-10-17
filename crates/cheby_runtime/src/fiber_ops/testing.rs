@@ -19,9 +19,14 @@ const _: fn(&ExecCtx) = cancel_running_fiber_at_next_entry;
 /// an expired limit does (kind 1, `cheby_rt_scope_close`). A fiber outside
 /// every scope has nothing that would catch a cancellation, so the hook
 /// ends the process there instead of letting it reach an entry's catch
-/// point.
+/// point; a root's base scope (D-859) counts as no scope here, since only
+/// a deadlock's cancellation targets it.
 pub(crate) fn cancel_running_fiber_at_next_entry(ctx: &ExecCtx) {
-    let Some(scope) = ctx.conc.responsible_scope() else {
+    let scope = ctx
+        .conc
+        .responsible_scope()
+        .filter(|scope| !scope.is_root_base());
+    let Some(scope) = scope else {
         fatal(format_args!(
             "cancel_running_fiber_at_next_entry needs a fiber inside a scope"
         ));

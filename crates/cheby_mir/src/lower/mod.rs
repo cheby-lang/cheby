@@ -53,7 +53,7 @@ mod split_tests;
 use std::collections::{BTreeMap, BTreeSet};
 
 use cheby_diag::{SourceMap, Span};
-use cheby_iface::{DefId, DisplayCx, Generics, Ice, ModuleId, Ty, display};
+use cheby_iface::{DefId, DisplayCx, Generics, Ice, ModuleId, PackageId, Ty, display};
 use cheby_types::thir;
 
 pub use entry::{EntryRequest, lower_entries};
@@ -141,6 +141,13 @@ pub(crate) struct Pending {
     /// (D-717, D-852). Off unless the driver asks, so
     /// a build without the flag keeps no table.
     record_sites: bool,
+    /// Whether the unit's bodies record the locations of their calls
+    /// ([`Function::call_locs`], D-856; [`Pending::for_module`]).
+    call_locs: bool,
+    /// Whether the unit is outside package `std`, so its tail calls of the
+    /// waits of [`crate::waits::FRAME_KEEPING_WAITS`] keep their frames
+    /// (D-861; [`Pending::for_module`]).
+    outside_std: bool,
 }
 
 impl Pending {
@@ -148,6 +155,36 @@ impl Pending {
     /// ([`crate::FunctionBuilder::set_record_sites`]).
     pub(crate) const fn records_sites(&self) -> bool {
         self.record_sites
+    }
+
+    /// Whether the unit's bodies record the locations of their calls
+    /// ([`crate::FunctionBuilder::set_record_call_locs`], D-856).
+    pub(crate) const fn records_call_locs(&self) -> bool {
+        self.call_locs
+    }
+
+    /// Whether the unit is outside package `std`, so its tail calls of the
+    /// waits of [`crate::waits::FRAME_KEEPING_WAITS`] are compiled as a
+    /// call and a return (D-861).
+    pub(crate) const fn outside_std(&self) -> bool {
+        self.outside_std
+    }
+
+    /// Sets [`Pending::records_call_locs`] and [`Pending::outside_std`]
+    /// for the code unit of `module`, or its tests unit (`tests`).
+    ///
+    /// # Errors
+    ///
+    /// An [`Ice`] if `module` is unknown.
+    fn for_module(mut self, module: ModuleId, tests: bool, cx: &LowerCx<'_>) -> Result<Self, Ice> {
+        self.outside_std = cx.defs.modules.try_get(module)?.package != PackageId::STD;
+        // GAP(loc-std-root): when std's own tests run (`cargo xtask
+        // test-std`), the calls of its test blocks and their closures are
+        // located like user code's, so a deadlocking std test names the
+        // line of its wait; std's other functions stay std. A user build
+        // never lowers std's tests, so this costs nothing there.
+        self.call_locs = self.outside_std || tests;
+        Ok(self)
     }
 
     /// The size at which a literal's piece is cut (D-780).
@@ -340,8 +377,9 @@ fn lower_items_with(
     module: &thir::Module,
     wanted: &dyn Fn(DefId) -> bool,
     cx: &LowerCx<'_>,
-    mut pending: Pending,
+    pending: Pending,
 ) -> Result<MirModule, Ice> {
+    let mut pending = pending.for_module(module.module, false, cx)?;
     let mut fns: Vec<&thir::FnDef> = module.fns.iter().filter(|f| wanted(f.def)).collect();
     fns.sort_by_key(|f| f.def);
     let mut consts: Vec<&thir::ConstDef> = module.consts.iter().filter(|c| wanted(c.def)).collect();
@@ -414,8 +452,9 @@ pub fn lower_tests_recording(
 fn lower_tests_with(
     module: &thir::Module,
     cx: &LowerCx<'_>,
-    mut pending: Pending,
+    pending: Pending,
 ) -> Result<MirModule, Ice> {
+    let mut pending = pending.for_module(module.module, true, cx)?;
     let mut tests: Vec<&thir::TestDef> = module.tests.iter().collect();
     tests.sort_by_key(|t| t.def);
     let mut functions = Vec::new();
@@ -442,7 +481,7 @@ fn lower_tests_with(
 ///
 /// As [`lower_module`].
 pub fn lower_fn(f: &thir::FnDef, cx: &LowerCx<'_>) -> Result<Vec<Function>, Ice> {
-    let mut pending = Pending::default();
+    let mut pending = Pending::default().for_module(f.def.module, false, cx)?;
     let item = lower_item(f, cx, &mut pending)?;
     let mut out = vec![item];
     out.append(&mut pending.functions);

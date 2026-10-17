@@ -175,6 +175,11 @@ pub fn evaluate_with(
                 diagnostics.extend(diagnostic);
             }
             EntryOutcome::Exited(status) => return Err(exited(jit, status)),
+            // A constant reaches no fiber operation (E0077), so its entry
+            // never parks and cannot deadlock (D-857).
+            EntryOutcome::Deadlocked(_) => {
+                return Err(Ice::new("a constant evaluation cannot deadlock (E0077)"));
+            }
         }
     }
     if diagnostics.is_empty()
@@ -243,6 +248,9 @@ pub fn debug_texts(jit: &Jit, defs: &[DefId]) -> Result<Vec<Option<String>>, Ice
             report.message
         ))),
         Ok(EntryOutcome::Exited(status)) => Err(exited(jit, status)),
+        Ok(EntryOutcome::Deadlocked(_)) => {
+            Err(Ice::new("a constant evaluation cannot deadlock (E0077)"))
+        }
         Err(e) => Err(Ice::new(format!("printing constants: {e}"))),
     }
 }
@@ -325,6 +333,9 @@ fn rebuild(jit: &Jit, slots: &[*mut u64]) -> Result<(), Ice> {
             report.message
         ))),
         Ok(EntryOutcome::Exited(status)) => Err(exited(jit, status)),
+        Ok(EntryOutcome::Deadlocked(_)) => {
+            Err(Ice::new("a constant evaluation cannot deadlock (E0077)"))
+        }
         Err(e) => Err(Ice::new(format!("rebuilding constants: {e}"))),
     }
 }

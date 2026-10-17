@@ -154,6 +154,40 @@ pub(crate) fn cancel(target: &Arc<ScopeState>) {
     }
 }
 
+/// Stores `report` on the root `root` and cancels its base scope `base`
+/// (D-724, D-859): the action of the deadlock detector for a root of
+/// `cheby test` or the REPL. The report is stored under the base's lock
+/// while the base has not ended (`ScopeState::store_deadlock_report`), so
+/// the root's block is live; then, with no lock held, [`cancel`] walks the
+/// base's subtree: the root and every fiber of its scopes get the base as
+/// their target, the outermost there is, so every scope's close, a
+/// `fiber::scope` or a `fiber::timeout`, passes the cancellation through
+/// (D-667), and the root unwinds to its catch point, which takes the report
+/// ([`take_deadlock_report`]) as the entry's `Deadlocked` outcome. A base
+/// that has ended (the root left its body meanwhile, which a confirmed
+/// deadlock rules out) is left alone and the report dropped.
+///
+/// Entered with no runtime lock held (the module documentation of
+/// `fiber_ops`); never runs Cheby code. `base` is the root base scope that
+/// [`super::scope::open_root_base`] opened for `root`; another scope is a
+/// broken invariant (`fatal`).
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "the seam signature of plan §2.1, which the detector calls"
+)]
+pub(crate) fn cancel_deadlocked_root(root: &FiberRef, base: &Arc<ScopeState>, report: String) {
+    if base.store_deadlock_report(*root, report) {
+        cancel(base);
+    }
+}
+
+/// The report [`cancel_deadlocked_root`] stored on the running root, taken
+/// once at its catch point (D-859): `None` when the root was not found
+/// deadlocked, and on every later call.
+pub(crate) fn take_deadlock_report(ctx: &ExecCtx) -> Option<String> {
+    ctx.conc.deadlock_report.lock().take()
+}
+
 /// Whether the running fiber must unwind for a cancellation: its target,
 /// read under its fiber lock (level-triggered, D-688). A CANCEL reason
 /// without a target is stale (the fiber's own close cleared both, or is

@@ -45,13 +45,15 @@ use std::ffi::c_void;
 use std::fmt;
 use std::mem::ManuallyDrop;
 use std::ptr::{self, NonNull};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock};
 
 use parking_lot::lock_api::RawMutex as _;
 
 use super::Shared;
+use super::deadlock::DomainCounts;
 use crate::ctx::{ExecCtx, FiberInit};
+use crate::fiber::sanitizer::{self, SanFiber};
 use crate::fiber::stack::WARM_BYTES;
 use crate::fiber::{Saved, StackError, StackPool, StackSlot, switch};
 use crate::panic::fatal;
@@ -73,6 +75,68 @@ pub(crate) mod state {
     pub(crate) const DONE: u8 = 5;
     /// Frozen by a halt: never runs again, and is never retired (D-708).
     pub(crate) const FROZEN: u8 = 6;
+}
+
+/// What a parked fiber waits in (D-858): the operation a deadlock report
+/// names for it. A waiting kernel records it with [`FiberSched::note_wait`]
+/// before it parks; the blocking pool's park records none (a pending job is
+/// never blocked, D-857).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub(crate) enum WaitOp {
+    /// `channel::send`, at capacity.
+    Send = 1,
+    /// `channel::receive`, on an empty channel.
+    Receive = 2,
+    /// `fiber::join`, on a fiber that has not finished.
+    Join = 3,
+    /// `selector::select`, with no arm ready.
+    Select = 4,
+    /// The end of a `fiber::scope`, waiting for its members.
+    Scope = 5,
+    /// The end of a `fiber::timeout`'s timed scope.
+    Timeout = 6,
+}
+
+impl WaitOp {
+    /// D-858's name: `channel::send`, `channel::receive`, `fiber::join`,
+    /// `selector::select`, `fiber::scope` or `fiber::timeout`.
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Send => "channel::send",
+            Self::Receive => "channel::receive",
+            Self::Join => "fiber::join",
+            Self::Select => "selector::select",
+            Self::Scope => "fiber::scope",
+            Self::Timeout => "fiber::timeout",
+        }
+    }
+
+    /// The byte the wait site stores for the operation (never 0).
+    const fn byte(self) -> u8 {
+        match self {
+            Self::Send => 1,
+            Self::Receive => 2,
+            Self::Join => 3,
+            Self::Select => 4,
+            Self::Scope => 5,
+            Self::Timeout => 6,
+        }
+    }
+
+    /// The operation stored as `byte`, or `None` for 0 (no wait) and any
+    /// value that is not one.
+    fn from_byte(byte: u8) -> Option<Self> {
+        match byte {
+            1 => Some(Self::Send),
+            2 => Some(Self::Receive),
+            3 => Some(Self::Join),
+            4 => Some(Self::Select),
+            5 => Some(Self::Scope),
+            6 => Some(Self::Timeout),
+            _ => None,
+        }
+    }
 }
 
 /// What a fiber runs when it first starts: a function of its own control
@@ -100,6 +164,24 @@ pub(crate) struct FiberSched {
     /// stop it, so they skip it and count it (D-786, D-683). A fiber with
     /// the mark set is a pending pool job (`sched/blocking.rs`).
     blocking: AtomicBool,
+    /// How many times a worker resumed it: the worker that resumes it
+    /// stores one more with `Relaxed` before the switch (D-860), the only
+    /// writer. The deadlock survey reads it after the state (`SeqCst`), so
+    /// a survey that sees a later `PARKED` sees the count of the resume
+    /// before it (`sched/deadlock.rs`).
+    resumes: AtomicU64,
+    /// The operation of its current wait (D-858): 0 for none, else a
+    /// [`WaitOp`]. Written by the fiber itself ([`FiberSched::note_wait`],
+    /// [`FiberSched::clear_wait`]) and read by the detector, so atomic
+    /// (critique RISK-1): a fiber read `PARKED` can be resumed at once.
+    wait_op: AtomicU8,
+    /// The published frame of its current wait, `ExecCtx::wait_frame()`
+    /// at the park (D-856): where the report's walk starts.
+    wait_frame: AtomicUsize,
+    /// Its domain's pending counts in its runtime (`sched/deadlock.rs`),
+    /// taken from the runtime's table on the first timer or pool job it
+    /// counts. Only the fiber itself fills it.
+    domain_counts: OnceLock<Arc<DomainCounts>>,
     /// Its registers while it is not running.
     saved: UnsafeCell<Saved>,
     /// The slot it lives in, taken by the worker that retires it.
@@ -111,6 +193,9 @@ pub(crate) struct FiberSched {
     spawned: bool,
     /// What it runs first, taken when it starts.
     start: UnsafeCell<Option<StartFn>>,
+    /// What the sanitizers know about it (D-721, `fiber/sanitizer.rs`);
+    /// zero-sized without `--cfg cheby_sanitize`.
+    san: SanFiber,
 }
 
 // SAFETY: the cells are used by one thread at a time (module
@@ -145,10 +230,15 @@ impl FiberSched {
             worker: AtomicUsize::new(0),
             callback_depth: AtomicU32::new(0),
             blocking: AtomicBool::new(false),
+            resumes: AtomicU64::new(0),
+            wait_op: AtomicU8::new(0),
+            wait_frame: AtomicUsize::new(0),
+            domain_counts: OnceLock::new(),
             saved: UnsafeCell::new(Saved::EMPTY),
             slot: UnsafeCell::new(None),
             spawned: false,
             start: UnsafeCell::new(None),
+            san: SanFiber::new(),
         }
     }
 
@@ -168,10 +258,15 @@ impl FiberSched {
             worker: AtomicUsize::new(worker),
             callback_depth: AtomicU32::new(0),
             blocking: AtomicBool::new(false),
+            resumes: AtomicU64::new(0),
+            wait_op: AtomicU8::new(0),
+            wait_frame: AtomicUsize::new(0),
+            domain_counts: OnceLock::new(),
             saved: UnsafeCell::new(Saved::EMPTY),
             slot: UnsafeCell::new(None),
             spawned,
             start: UnsafeCell::new(Some(start)),
+            san: SanFiber::new(),
         }
     }
 
@@ -260,6 +355,64 @@ impl FiberSched {
         self.blocking.store(blocking, Ordering::SeqCst);
     }
 
+    /// The fiber's number within its runtime, unique while the runtime
+    /// lives (0 for isolated entries): the survey's key, which a reused
+    /// slot address never aliases.
+    pub(crate) fn id(&self) -> u64 {
+        self.id
+    }
+
+    /// How many times a worker resumed the fiber (D-860). Read by the
+    /// detector after the state, which it reads with `SeqCst` first.
+    pub(crate) fn resumes(&self) -> u64 {
+        self.resumes.load(Ordering::Relaxed)
+    }
+
+    /// Counts one more resume: the worker that resumes the fiber, the only
+    /// writer, before the switch (D-860). A plain load and store, both
+    /// `Relaxed`: no read-modify-write on the park path.
+    pub(super) fn count_resume(&self) {
+        let resumes = self.resumes.load(Ordering::Relaxed);
+        self.resumes
+            .store(resumes.wrapping_add(1), Ordering::Relaxed);
+    }
+
+    /// Records what the fiber is about to wait in (D-858) and the
+    /// published frame its report's walk starts at (`ExecCtx::wait_frame()`,
+    /// D-856). Called by a waiting kernel before `begin_park`: both stores
+    /// are `Relaxed`, ordered before the park by `begin_park`'s (or
+    /// `park`'s) `SeqCst` store of the state, which the detector reads first.
+    /// Only the fiber itself calls it, while it runs.
+    pub(crate) fn note_wait(&self, op: WaitOp, frame: usize) {
+        self.wait_frame.store(frame, Ordering::Relaxed);
+        self.wait_op.store(op.byte(), Ordering::Relaxed);
+    }
+
+    /// Clears the wait site once the fiber resumed from its wait (or did not
+    /// park after all): `Relaxed` stores. Only the fiber itself calls it.
+    pub(crate) fn clear_wait(&self) {
+        self.wait_op.store(0, Ordering::Relaxed);
+        self.wait_frame.store(0, Ordering::Relaxed);
+    }
+
+    /// The operation and frame of the fiber's current wait, or `None`
+    /// when it records none. Read by the detector after it has read the
+    /// fiber's state `PARKED` (`SeqCst` first): `Relaxed` loads, so a value
+    /// read while the fiber is resumed may be stale or torn between the
+    /// two words; only the collect step, after the confirmation and with
+    /// the state and resume count re-checked under the fiber's scope lock,
+    /// acts on the frame (critique RISK-1, RISK-2).
+    pub(crate) fn wait_site(&self) -> Option<(WaitOp, usize)> {
+        let op = WaitOp::from_byte(self.wait_op.load(Ordering::Relaxed))?;
+        Some((op, self.wait_frame.load(Ordering::Relaxed)))
+    }
+
+    /// The cell of the fiber's domain's pending counts
+    /// (`deadlock::counts_of`).
+    pub(super) fn domain_counts(&self) -> &OnceLock<Arc<DomainCounts>> {
+        &self.domain_counts
+    }
+
     /// The cell of the fiber's saved registers.
     pub(super) fn saved(&self) -> *mut Saved {
         self.saved.get()
@@ -275,6 +428,24 @@ impl FiberSched {
         // SAFETY: forwarded from the caller: only the retiring worker uses
         // the cell now.
         unsafe { (*self.slot.get()).take() }
+    }
+
+    /// What the sanitizers know about the fiber (`fiber/sanitizer.rs`).
+    pub(super) fn san(&self) -> &SanFiber {
+        &self.san
+    }
+
+    /// The fiber's stack slot as its lowest address and its size, or
+    /// `(0, 0)` once it is taken, for the sanitizers' switch hooks.
+    ///
+    /// # Safety
+    ///
+    /// The caller is the worker that resumes or retires the fiber, which
+    /// does not run now.
+    pub(super) unsafe fn slot_bounds(&self) -> (usize, usize) {
+        // SAFETY: forwarded from the caller: only that worker uses the
+        // cell now.
+        unsafe { (*self.slot.get()).as_ref() }.map_or((0, 0), |slot| (slot.bottom(), slot.size()))
     }
 }
 
@@ -457,6 +628,9 @@ pub(crate) fn park(me: &ExecCtx, after: AfterSwitch<'_>) {
         fatal(format_args!("a fiber's worker does not exist"));
     };
     let ends = matches!(after, AfterSwitch::Exit | AfterSwitch::Freeze);
+    // A frozen fiber keeps its fake stack: it is never resumed, but it
+    // does not end (D-708).
+    let exiting = matches!(after, AfterSwitch::Exit);
     if matches!(after, AfterSwitch::Park(_) | AfterSwitch::ParkAll(_)) {
         // `RUNNING -> PARKING`, unless `begin_park` stored `PARKING`
         // already and a lockless waker may have turned it into
@@ -482,8 +656,10 @@ pub(crate) fn park(me: &ExecCtx, after: AfterSwitch<'_>) {
     // lock guard is held here (I-5).
     unsafe {
         let to = (*worker.saved()).take();
+        sanitizer::before_park(&me.sched.san, exiting);
         switch::switch(me.sched.saved(), to, message);
     }
+    sanitizer::after_park(&me.sched.san);
     if ends {
         fatal(format_args!("a finished or frozen fiber was resumed"));
     }
@@ -598,6 +774,8 @@ pub(super) fn create(
     // SAFETY: `place` is `size_of::<ExecCtx>()` bytes aligned for it at the
     // top of a slot this function owns, which nothing else uses.
     unsafe { fcb.as_ptr().write(ExecCtx::new(init)) };
+    // SAFETY: the block was written above and nothing else knows it yet.
+    sanitizer::on_create(&unsafe { fcb.as_ref() }.sched.san);
     // SAFETY: `stack_top` lies in `slot` below the control block and above
     // its hard limit; nothing else uses the stack below it until the fiber
     // ends; `fiber_start` never returns and uses `arg` only as the control
@@ -626,6 +804,7 @@ unsafe extern "C" fn fiber_start(arg: *mut c_void) -> ! {
     // SAFETY: `arg` is the control block `create` placed at the top of the
     // slot; it lives until the worker retires the fiber after `Exit`.
     let ctx = unsafe { &*fcb };
+    sanitizer::on_fiber_start(&ctx.sched.san);
     // SAFETY: the start function is set before the fiber is first
     // scheduled, and only the fiber itself, here, takes it.
     let start = unsafe { (*ctx.sched.start.get()).take() };

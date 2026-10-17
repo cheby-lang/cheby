@@ -43,7 +43,8 @@ use crate::handles::HandlePayload;
 use crate::panic::fatal;
 use crate::rc;
 use crate::sched::{
-    AfterSwitch, Unlock, WaitNode, WaitQueue, WaitState, begin_park, cancel_park, park, wake,
+    AfterSwitch, Unlock, WaitNode, WaitOp, WaitQueue, WaitState, begin_park, cancel_park, park,
+    wake,
 };
 use crate::unwind::raise::ChebyUnwind;
 use crate::unwind::record::{UnwindRecord, take_unwound};
@@ -131,6 +132,10 @@ impl JoinCell {
                 drop(state);
                 needs_scheduler("fiber::join");
             }
+            // The wait site (D-856, D-858), copied from the published frame
+            // of `cheby_fiber_sys_join`'s caller before the park; cleared on
+            // every way out of the wait below.
+            me.sched.note_wait(WaitOp::Join, me.wait_frame());
             begin_park(me);
             let node = pin!(WaitNode::new(me, ()));
             let link = NonNull::from(&*node);
@@ -146,9 +151,11 @@ impl JoinCell {
                 unsafe { state.joiners.remove(link) };
                 drop(state);
                 cancel_park(me);
+                me.sched.clear_wait();
                 return Err(Cancelled);
             }
             park(me, AfterSwitch::Park(Some(Unlock::new(state))));
+            me.sched.clear_wait();
             cancel::unpublish(me);
             match node.header().state() {
                 // `finish` ended the cell: read it again.

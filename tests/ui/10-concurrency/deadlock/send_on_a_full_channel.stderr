@@ -1,0 +1,2 @@
+fatal error: all fibers are blocked
+  blocked in channel::send at tests/ui/10-concurrency/deadlock/send_on_a_full_channel.cheby:13:24

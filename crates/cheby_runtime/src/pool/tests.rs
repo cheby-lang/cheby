@@ -25,18 +25,21 @@ use crate::fiber_ops::detached_tests::{config, detach, runtime, unwinding};
 use crate::sched::blocking::{
     Hooks, PARKING_WOKEN, Probe, cheby_rt_blocking_call, run_blocking, run_blocking_in,
 };
-use crate::sched::testing::{self, HANG};
+use crate::sched::testing;
 use crate::sched::{AfterSwitch, CodeToken, DetachedGroup, FiberRef, park};
 use crate::values;
 
 /// How long a child process may take, at most, to exit.
 const CHILD_LIMIT: Duration = Duration::from_secs(10);
 
-/// Waits until `ready` holds on the host, or panics after [`HANG`].
+/// Waits until `ready` holds on the host, or panics after [`testing::hang()`].
 fn wait_until(ready: impl Fn() -> bool) {
     let started = Instant::now();
     while !ready() {
-        assert!(started.elapsed() < HANG, "the host waited too long");
+        assert!(
+            started.elapsed() < testing::hang(),
+            "the host waited too long"
+        );
         thread::sleep(Duration::from_millis(1));
     }
 }
@@ -69,12 +72,12 @@ impl Gate {
         self.opened.notify_all();
     }
 
-    /// Waits until the gate is open; false after [`HANG`].
+    /// Waits until the gate is open; false after [`testing::hang()`].
     fn wait(&self) -> bool {
         let started = Instant::now();
         let mut open = self.open.lock();
         while !*open {
-            if started.elapsed() > HANG {
+            if started.elapsed() > testing::hang() {
                 return false;
             }
             self.opened.wait_for(&mut open, Duration::from_millis(100));
@@ -119,7 +122,7 @@ fn on_root(threads: usize, body: impl FnOnce(&ExecCtx) -> u64 + Send + 'static) 
     let runtime = runtime(threads);
     let domain = Domain::new();
     let outcome = testing::start_root_with(&runtime, &config(&domain), body)
-        .recv_timeout(HANG)
+        .recv_timeout(testing::hang())
         .expect("the root hung");
     let EntryOutcome::Returned(word) = outcome else {
         panic!("the root did not return: {outcome:?}");
@@ -361,7 +364,7 @@ fn pool_a_cancellation_during_a_job_waits_for_it_and_drops_the_result() {
         });
         values::nil()
     })
-    .recv_timeout(HANG)
+    .recv_timeout(testing::hang())
     .unwrap();
     assert!(matches!(root, EntryOutcome::Returned(_)), "{root:?}");
     wait_until(|| group.blocked() == 1);
@@ -407,7 +410,7 @@ fn pool_a_cancellation_pending_before_submission_starts_no_job() {
             r.store(true, Ordering::SeqCst);
             let started = Instant::now();
             while cancel::check(me).is_ok() {
-                assert!(started.elapsed() < HANG, "never cancelled");
+                assert!(started.elapsed() < testing::hang(), "never cancelled");
                 park(me, AfterSwitch::Requeue);
             }
             let result = run_blocking(me, move || j.store(true, Ordering::SeqCst));
@@ -419,7 +422,7 @@ fn pool_a_cancellation_pending_before_submission_starts_no_job() {
         });
         values::nil()
     })
-    .recv_timeout(HANG)
+    .recv_timeout(testing::hang())
     .unwrap();
     assert!(matches!(root, EntryOutcome::Returned(_)), "{root:?}");
     wait_until(|| ready.load(Ordering::SeqCst));
@@ -508,7 +511,7 @@ fn pool_a_woken_fiber_left_queued_is_not_counted_as_blocked() {
     let root = testing::start_root_in(&runtime, &config(&domain), &group, move |me| {
         detach(me, move |me| {
             let _ = run_blocking(me, move || {
-                let got = rx.recv_timeout(HANG).is_ok();
+                let got = rx.recv_timeout(testing::hang()).is_ok();
                 job_done.store(true, Ordering::SeqCst);
                 got
             });
@@ -517,7 +520,7 @@ fn pool_a_woken_fiber_left_queued_is_not_counted_as_blocked() {
         });
         values::nil()
     })
-    .recv_timeout(HANG)
+    .recv_timeout(testing::hang())
     .unwrap();
     assert!(matches!(root, EntryOutcome::Returned(_)), "{root:?}");
     wait_until(|| group.blocked() == 1);
@@ -549,7 +552,7 @@ fn pool_a_woken_fiber_left_queued_is_not_counted_as_blocked() {
     assert_eq!((report.waited, report.skipped), (1, 0));
     assert!(left.load(Ordering::SeqCst));
     assert!(spun.load(Ordering::SeqCst), "the teardown did not wait");
-    let hogged = hog.recv_timeout(HANG).unwrap();
+    let hogged = hog.recv_timeout(testing::hang()).unwrap();
     assert!(matches!(hogged, EntryOutcome::Returned(_)), "{hogged:?}");
     runtime.shutdown();
     assert_eq!(domain.live_objects(), 0, "objects leaked");
@@ -587,7 +590,7 @@ fn pool_a_blocking_call_raises_a_cancellation_through_the_flag() {
         });
         values::nil()
     })
-    .recv_timeout(HANG)
+    .recv_timeout(testing::hang())
     .unwrap();
     assert!(matches!(root, EntryOutcome::Returned(_)), "{root:?}");
     wait_until(|| group.blocked() == 1 && gate.running.load(Ordering::SeqCst));
@@ -645,7 +648,7 @@ fn pool_a_root_that_blocks_during_a_stop_reports() {
         // On its worker, with no entry check, until the stop set its flag.
         let waiting = Instant::now();
         while !testing::stopping(me) {
-            if waiting.elapsed() > HANG {
+            if waiting.elapsed() > testing::hang() {
                 return 0;
             }
             thread::sleep(Duration::from_millis(1));
@@ -659,7 +662,7 @@ fn pool_a_root_that_blocks_during_a_stop_reports() {
     });
     wait_until(|| started.load(Ordering::SeqCst));
     runtime.shutdown();
-    let outcome = root.recv_timeout(HANG);
+    let outcome = root.recv_timeout(testing::hang());
     assert!(
         matches!(outcome, Ok(EntryOutcome::Returned(5))),
         "the root's call did not run on the pool and report: {outcome:?}"
@@ -699,7 +702,7 @@ fn pool_a_job_pending_when_a_stop_begins_wakes_its_root() {
     let stopper = thread::spawn(move || runtime.shutdown());
     wait_until(|| testing::runtime_stopping(&shared));
     gate.open();
-    let outcome = root.recv_timeout(HANG);
+    let outcome = root.recv_timeout(testing::hang());
     stopper.join().unwrap();
     assert!(
         matches!(outcome, Ok(EntryOutcome::Returned(5))),
@@ -753,7 +756,7 @@ fn pool_roots_blocking_in_a_loop_all_report_after_a_stop() {
         thread::sleep(Duration::from_micros(200 + 300 * (round % 5)));
         runtime.shutdown();
         for (index, root) in roots.into_iter().enumerate() {
-            let outcome = root.recv_timeout(HANG);
+            let outcome = root.recv_timeout(testing::hang());
             assert!(
                 matches!(outcome, Ok(EntryOutcome::Returned(sum)) if sum == expected),
                 "round {round} ({threads} workers), root {index}: {outcome:?}"
@@ -837,7 +840,7 @@ fn pending_job() -> (crate::sched::Runtime, Arc<Gate>, Arc<Probe>) {
         });
         values::nil()
     })
-    .recv_timeout(HANG)
+    .recv_timeout(testing::hang())
     .unwrap();
     assert!(matches!(root, EntryOutcome::Returned(_)), "{root:?}");
     wait_until(|| group.blocked() == 1);

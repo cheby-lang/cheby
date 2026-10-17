@@ -1,0 +1,23 @@
+// @mode: run-fail
+// @exit: 1
+// @command: test
+// @decisions: D-724, D-856, D-857, D-858, D-859, D-541
+// @milestone: M2
+//! In `cheby test`, a test that deadlocks fails with the deadlock report as
+//! its failure block, and the test beside it still runs and passes.
+
+import std::channel
+
+fn double(n: Int) -> Int {
+  n * 2
+}
+
+test "deadlocks" {
+  let (tx, rx) = channel::new::<Int>(0)
+  let assert Ok(n) = channel::receive(rx)
+  assert channel::send(tx, n) == Ok(Nil)
+}
+
+test "passes" {
+  assert double(2) == 4
+}

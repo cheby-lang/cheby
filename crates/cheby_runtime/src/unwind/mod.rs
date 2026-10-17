@@ -142,6 +142,9 @@ mod tests {
             EntryOutcome::Exited(status) => {
                 panic!("expected a panic, the program ended with status {status}")
             }
+            EntryOutcome::Deadlocked(report) => {
+                panic!("expected a panic, the entry deadlocked:\n{report}")
+            }
         }
     }
 

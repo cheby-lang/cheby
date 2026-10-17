@@ -738,6 +738,23 @@ fn run_child(operation: &str, guard: Option<&str>) -> std::process::Output {
         Some(value) => command.env("CHEBY_RT_STACK_GUARD", value),
         None => command.env_remove("CHEBY_RT_STACK_GUARD"),
     };
+    // A sanitizer build's child (D-721) must die of the guard page's own
+    // signal, which the sanitizer would otherwise catch
+    // and turn into a report and an abort (D-863: an intended fault is
+    // told to the sanitizer, never suppressed).
+    for (variable, on) in [
+        ("ASAN_OPTIONS", cfg!(cheby_sanitize = "address")),
+        ("TSAN_OPTIONS", cfg!(cheby_sanitize = "thread")),
+    ] {
+        if on {
+            let ours = "handle_segv=0:handle_sigbus=0";
+            let options = match std::env::var(variable) {
+                Ok(caller) if !caller.is_empty() => format!("{caller}:{ours}"),
+                _ => ours.to_owned(),
+            };
+            command.env(variable, options);
+        }
+    }
     command.output().unwrap()
 }
 

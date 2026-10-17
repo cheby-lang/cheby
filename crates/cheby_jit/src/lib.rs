@@ -255,10 +255,17 @@ type SymbolTable = Arc<Mutex<FxHashMap<Box<str>, usize>>>;
 struct CodeKeepAlive {
     /// The module, once the `Jit` is dropped.
     module: Mutex<Option<JITModule>>,
+    /// The key of the JIT's functions in the process-wide code map
+    /// (D-856, GAP(loc-map-lifetime)): registered batch by batch, removed
+    /// with the memory.
+    code_owner: u64,
 }
 
 impl Drop for CodeKeepAlive {
     fn drop(&mut self) {
+        // The map forgets the ranges before their memory goes, so a later
+        // JIT's code at the same addresses is never taken for this one's.
+        cheby_runtime::locate::unregister_code(self.code_owner);
         let module = self
             .module
             .get_mut()
@@ -320,6 +327,10 @@ pub struct Jit {
     pending: Vec<(cranelift_module::DataId, u64, DefId)>,
     /// The code every batch that compiled defined ([`Jit::code_stats`]).
     code_stats: DefineStats,
+    /// Every range this JIT registered in the code map, in order, for the
+    /// tests of the map (`code_map_*`).
+    #[cfg(test)]
+    registered: Vec<cheby_runtime::locate::CodeRangeDesc>,
 }
 
 /// An indirection slot of a [`Jit`] (D-043): a writable word holding the
@@ -403,6 +414,7 @@ impl Jit {
             module,
             keep_alive: Arc::new(CodeKeepAlive {
                 module: Mutex::new(None),
+                code_owner: cheby_runtime::locate::new_code_owner(),
             }),
             decls,
             layouts: JitLayouts::default(),
@@ -416,6 +428,8 @@ impl Jit {
             repointed: Vec::new(),
             pending: Vec::new(),
             code_stats: DefineStats::default(),
+            #[cfg(test)]
+            registered: Vec::new(),
         })
     }
 
@@ -513,7 +527,7 @@ impl Jit {
         };
         cheby_codegen_clif::declare(&mut *self.module, &mut self.decls, mirs, &cx, &self.codegen)?;
         self.check_symbols()?;
-        let (clif, stats) = cheby_codegen_clif::define_with_stats(
+        let (clif, stats, defined) = cheby_codegen_clif::define_with_stats(
             &mut *self.module,
             mirs,
             &mut self.decls,
@@ -527,7 +541,41 @@ impl Jit {
         self.take_repoints()?;
         self.callbacks = self.find_callbacks();
         self.register_hooks(mirs)?;
+        // Last: a batch that failed registers nothing.
+        self.register_code(defined)?;
         self.code_stats = self.code_stats.add(stats);
+        Ok(())
+    }
+
+    /// Adds the batch's functions, finalized, to the process-wide code map
+    /// under this JIT's owner (D-856, GAP(loc-map-lifetime)): each one's
+    /// address, length, ABI and call locations, so a deadlock report can
+    /// map a return address to its call. Ranges of earlier batches stay,
+    /// REPL redefinitions included, since their code stays while the JIT's
+    /// memory lives (D-712).
+    fn register_code(
+        &mut self,
+        defined: Vec<cheby_codegen_clif::DefinedCode>,
+    ) -> Result<(), JitError> {
+        let mut ranges = Vec::with_capacity(defined.len());
+        for code in defined {
+            let start = self
+                .module
+                .get_finalized_function(code.id)
+                .expose_provenance();
+            if start == 0 {
+                return Err(JitError::ice("a defined function without its code"));
+            }
+            ranges.push(cheby_runtime::locate::CodeRangeDesc {
+                start,
+                len: code.len,
+                cheby_abi: code.cheby_abi,
+                sites: code.sites,
+            });
+        }
+        #[cfg(test)]
+        self.registered.extend(ranges.iter().cloned());
+        cheby_runtime::locate::register_code(self.keep_alive.code_owner, ranges);
         Ok(())
     }
 

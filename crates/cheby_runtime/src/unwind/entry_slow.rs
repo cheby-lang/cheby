@@ -138,7 +138,7 @@ mod tests {
     };
     use crate::fiber_ops::testing::cancel_running_fiber_at_next_entry;
     use crate::panic::stack_position;
-    use crate::sched::testing::{self, HANG};
+    use crate::sched::testing;
     use crate::{list, object, values};
 
     /// The numbers of counted words the tests give a helper.
@@ -232,7 +232,7 @@ mod tests {
             ..EntryConfig::new(EntryMode::Test)
         };
         let outcome = testing::start_root_with(&runtime, &config, body)
-            .recv_timeout(HANG)
+            .recv_timeout(testing::hang())
             .expect("the root fiber hung");
         runtime.shutdown();
         assert_eq!(domain.live_objects(), 0, "objects leaked");

@@ -46,6 +46,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use parking_lot::Mutex;
 
 use crate::entry::STACK_HEADROOM;
+#[cfg(cheby_sanitize = "address")]
+use crate::fiber::sanitizer;
 use crate::panic::fatal;
 
 /// The smallest class: 512 KiB, for the runtime's internal entries.
@@ -193,6 +195,10 @@ pub struct StackSlot {
     guard: usize,
     /// The bytes reserved at the top with [`StackSlot::reserve_top`].
     reserved: usize,
+    /// Whether the leak sanitizer scans the slot now
+    /// ([`sanitizer::scan_as_root`]); address sanitizer builds only.
+    #[cfg(cheby_sanitize = "address")]
+    scanned: std::sync::atomic::AtomicBool,
 }
 
 impl StackSlot {
@@ -283,6 +289,34 @@ impl StackSlot {
         }
         self.reserved = reserved;
         NonNull::new(std::ptr::with_exposed_provenance_mut(start)).ok_or(bad)
+    }
+
+    /// GAP(sanitize-lsan): has the leak sanitizer scan the slot's usable
+    /// part while it is handed out; a no-op without the address cfg.
+    fn scan_as_root(&self) {
+        #[cfg(cheby_sanitize = "address")]
+        if !self.scanned.swap(true, Ordering::Relaxed) {
+            sanitizer::scan_as_root(
+                self.usable_bottom(),
+                self.top().wrapping_sub(self.usable_bottom()),
+            );
+        }
+        #[cfg(not(cheby_sanitize = "address"))]
+        let _ = self;
+    }
+
+    /// Undoes [`scan_as_root`](Self::scan_as_root) when the slot is given
+    /// back, once.
+    fn stop_scanning(&self) {
+        #[cfg(cheby_sanitize = "address")]
+        if self.scanned.swap(false, Ordering::Relaxed) {
+            sanitizer::stop_scanning(
+                self.usable_bottom(),
+                self.top().wrapping_sub(self.usable_bottom()),
+            );
+        }
+        #[cfg(not(cheby_sanitize = "address"))]
+        let _ = self;
     }
 
     /// Releases the whole pages of `[low, high)` that lie inside the
@@ -518,12 +552,16 @@ impl StackPool {
         };
         drop(state);
         count(counter);
-        Ok(StackSlot {
+        let slot = StackSlot {
             bottom,
             size,
             guard: if self.guard_pages { self.page } else { 0 },
             reserved: 0,
-        })
+            #[cfg(cheby_sanitize = "address")]
+            scanned: std::sync::atomic::AtomicBool::new(false),
+        };
+        slot.scan_as_root();
+        Ok(slot)
     }
 
     /// Carves a fresh slot of `size` from the class's newest region,
@@ -582,6 +620,7 @@ impl StackPool {
         reason = "the pool takes the slot back, so the caller cannot use it again"
     )]
     pub fn give_back(&self, slot: StackSlot, watermark: usize) {
+        slot.stop_scanning();
         let Some(class) = class_index(slot.size).and_then(|index| self.classes.get(index)) else {
             fatal(format_args!(
                 "a stack slot of {} bytes is not a class",
@@ -646,6 +685,7 @@ impl StackPool {
                 // Its reservations ended when it was given back.
                 slot.reserved = 0;
                 count(&self.counters.taken_warm);
+                slot.scan_as_root();
                 return Ok(slot);
             }
         }
@@ -663,6 +703,7 @@ impl StackPool {
         slot: StackSlot,
         watermark: usize,
     ) {
+        slot.stop_scanning();
         if cache.len() >= CACHE_SLOTS {
             self.give_back(slot, watermark);
             return;

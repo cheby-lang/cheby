@@ -13,6 +13,18 @@
 #   the UI check tests whose golden has no front-end error, every
 #   conformance trial and the REPL suite, and the `cheby run` end-to-end
 #   tests are not built there.
+#   From M2 the rule extends to the runtime (D-714): `Runtime::new` returns
+#   `Unsupported` on Windows until M6, so the runtime's unit tests that
+#   switch stacks or run a `Runtime`, the blocking pool's tests and the
+#   `loom` models carry `#[cfg_attr(windows, ignore = …)]` there, and
+#   programs that start no fiber still run on the thread backend.
+#   Tests that need Unix pipes, a shell or FIFOs are not built on Windows
+#   (GAP(windows-unbuilt-tests)): `cheby_cli`'s tests/blocking_io.rs,
+#   tests/closed_streams.rs, tests/repl_runtime.rs and tests/test_parallel.rs
+#   (`#![cfg(unix)]`), besides tests/run.rs (`#![cfg(not(windows))]`, D-641);
+#   and `cheby_driver`'s runner and stuck-test modules in src/test.rs and
+#   the FIFO test in src/lifecycle_tests.rs. `cheby_jit`'s
+#   src/start_root_tests.rs is built there, and its one test is ignored.
 #   The harnesses follow tests/milestone (D-288); CI sets none of the
 #   strict-run variables (D-544).
 # - `fmt`: rustfmt, once, because formatting does not depend on the platform.
@@ -36,6 +48,11 @@
 # - `bench`: generates benchmark projects and reports, never enforces, the
 #   results (D-247), and times the compiler on them (I1): checking, checking
 #   with code generation, and the edit-to-run latency, in the step summary.
+# - `sanitize-cfg`: clippy of the runtime with each value of
+#   `--cfg cheby_sanitize` (`address`, `thread`) on stable, on Linux x86-64
+#   and macOS arm64, so the sanitizer annotations that only the nightly
+#   workflow runs (D-721, nightly.yml) cannot rot between its runs
+#   (GAP(sanitize-cfg-ci)). Only this step and nightly.yml pass the cfg.
 
 name: CI
 
@@ -192,3 +209,30 @@ jobs:
       - name: Compile speed (10k lines) on pull requests
         if: github.event_name != 'push'
         run: cargo xtask bench-compile --quick --summary "$GITHUB_STEP_SUMMARY"
+
+  sanitize-cfg:
+    name: sanitize-cfg (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-x86_64, os: ubuntu-24.04 }
+          - { name: macos-aarch64, os: macos-15 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.0"
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: sanitize-cfg
+      - name: Clippy of the runtime with each cheby_sanitize value
+        run: |
+          for s in address thread; do
+            echo "::group::cheby_sanitize=\"$s\""
+            RUSTFLAGS="-D warnings --cfg cheby_sanitize=\"$s\"" \
+              cargo clippy -p cheby_runtime --all-targets --locked
+            echo "::endgroup::"
+          done

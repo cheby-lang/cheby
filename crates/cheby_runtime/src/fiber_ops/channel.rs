@@ -75,8 +75,8 @@ use crate::object::{STATIC_OK_NIL, cheby_rt_static_err_nil};
 use crate::panic::fatal;
 use crate::rc;
 use crate::sched::{
-    AfterSwitch, FiberRef, Unlock, WaitNode, WaitQueue, WaitState, begin_park, cancel_park, park,
-    wake,
+    AfterSwitch, FiberRef, Unlock, WaitNode, WaitOp, WaitQueue, WaitState, begin_park, cancel_park,
+    park, wake,
 };
 use crate::unwind::guard::guarded;
 use crate::unwind::raise::raise_cancel;
@@ -445,6 +445,9 @@ unsafe fn send(ctx: *mut ExecCtx, sender: Word, value: Word) -> Word {
     // releases after the switch, and the lock taken again after it, lie in
     // the allocation `keep` holds, whatever happens to the handle.
     let keep = Arc::clone(&end.0);
+    // The wait site (D-856, D-858), copied from the published frame now,
+    // before the park; cleared on every way out of the wait below.
+    me.sched.note_wait(WaitOp::Send, me.wait_frame());
     begin_park(me);
     let node = pin!(Waiter::new(me, UnsafeCell::new(value.into_word())));
     let link = NonNull::from(&*node);
@@ -461,12 +464,14 @@ unsafe fn send(ctx: *mut ExecCtx, sender: Word, value: Word) -> Word {
         unsafe { inner.sendq.remove(link) };
         drop(inner);
         cancel_park(me);
+        me.sched.clear_wait();
         // SAFETY: nobody else saw the node: the value is still the
         // sender's, released here as the cancellation unwinds (D-670).
         drop(unsafe { Owned::new(node.payload().get().read()) });
         raise_cancel(Some(ctx));
     }
     park(me, AfterSwitch::Park(Some(Unlock::new(inner))));
+    me.sched.clear_wait();
     cancel::unpublish(me);
     match node.header().state() {
         WaitState::Claimed => STATIC_OK_NIL.word(),
@@ -557,6 +562,8 @@ unsafe fn receive(ctx: *mut ExecCtx, receiver: Word) -> Word {
     }
     // The channel's own reference for the park, as in `send`.
     let keep = Arc::clone(&end.0);
+    // The wait site, as in `send`.
+    me.sched.note_wait(WaitOp::Receive, me.wait_frame());
     begin_park(me);
     let node = pin!(Waiter::new(me, UnsafeCell::new(0)));
     let link = NonNull::from(&*node);
@@ -568,9 +575,11 @@ unsafe fn receive(ctx: *mut ExecCtx, receiver: Word) -> Word {
         unsafe { inner.unlink_receiver(link) };
         drop(inner);
         cancel_park(me);
+        me.sched.clear_wait();
         raise_cancel(Some(ctx));
     }
     park(me, AfterSwitch::Park(Some(Unlock::new(inner))));
+    me.sched.clear_wait();
     cancel::unpublish(me);
     match node.header().state() {
         // SAFETY: the waker stored the value after winning the node and

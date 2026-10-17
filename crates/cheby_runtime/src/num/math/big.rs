@@ -557,7 +557,8 @@ mod tests {
     fn binary64_values_round_trip() {
         let mut state = 0x5eed_u64;
         let mut values = vec![1.0, 5e-324, f64::MIN_POSITIVE, f64::MAX, 3.0, 0.1, -2.5];
-        for _ in 0..20_000 {
+        // Fewer under Miri, which interprets every step (D-721).
+        for _ in 0..if cfg!(miri) { 100 } else { 20_000 } {
             state = state
                 .wrapping_mul(6_364_136_223_846_793_005)
                 .wrapping_add(1);
@@ -620,7 +621,8 @@ mod tests {
     #[test]
     fn division_and_roots_agree_with_binary64() {
         let mut state = 0xabc_u64;
-        for _ in 0..2_000 {
+        // Fewer under Miri, which interprets every step (D-721).
+        for _ in 0..if cfg!(miri) { 20 } else { 2_000 } {
             state = state
                 .wrapping_mul(6_364_136_223_846_793_005)
                 .wrapping_add(1);

@@ -292,10 +292,43 @@ unsafe fn stack_slow(ctx: *mut ExecCtx, needed: u64) -> u8 {
 
 /// An address in the current frame, at or below the caller's stack
 /// pointer.
+#[cfg(not(all(
+    cheby_sanitize = "address",
+    not(windows),
+    any(target_arch = "aarch64", target_arch = "x86_64")
+)))]
 #[inline(never)]
 pub(crate) fn stack_position() -> usize {
     let marker = 0_u8;
     std::hint::black_box(std::ptr::from_ref(&marker)).addr()
+}
+
+/// An address in the current frame, at or below the caller's stack
+/// pointer: the stack pointer itself.
+///
+/// GAP(sanitize-stack-position): the address sanitizer's detection of uses
+/// after return moves a local whose address escapes to a fake stack on the
+/// heap, so the address of a local is no stack position there.
+#[cfg(all(
+    cheby_sanitize = "address",
+    not(windows),
+    any(target_arch = "aarch64", target_arch = "x86_64")
+))]
+#[inline(never)]
+pub(crate) fn stack_position() -> usize {
+    let sp: usize;
+    #[cfg(target_arch = "aarch64")]
+    // SAFETY: copies the stack pointer into a register; it reads and writes
+    // no memory, leaves the stack and the flags alone.
+    unsafe {
+        std::arch::asm!("mov {}, sp", out(reg) sp, options(nomem, nostack, preserves_flags));
+    }
+    #[cfg(target_arch = "x86_64")]
+    // SAFETY: as above, with `rsp`.
+    unsafe {
+        std::arch::asm!("mov {}, rsp", out(reg) sp, options(nomem, nostack, preserves_flags));
+    }
+    sp
 }
 
 /// The text of a location word.

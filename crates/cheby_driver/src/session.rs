@@ -951,6 +951,17 @@ impl Session {
                 self.jit.revert_repoints()?;
                 return Ok(false);
             }
+            // The session's domain deadlocked (D-857): the runtime cancelled
+            // only the entry's root scope, so the entry's fibers unwound,
+            // while the session's detached fibers keep waiting until
+            // `:reload` or the session's end (D-712). The report goes to
+            // standard error after standard output is flushed (D-548), and
+            // the entry is reverted as a panicked one (D-859).
+            EntryOutcome::Deadlocked(report) => {
+                out.stderr(&report);
+                self.jit.revert_repoints()?;
+                return Ok(false);
+            }
             // A write failed (D-306, D-709), in the entry or in any fiber
             // while it ran: the session ends with the status and prints
             // nothing more (spec §13.5), after the halt (D-797).
@@ -2791,6 +2802,102 @@ mod tests {
             .unwrap()
             .join()
             .unwrap();
+    }
+
+    /// D-857's stuck groups (the user's answer to UQ-12 (b)), D-859 and
+    /// D-827, at one and at two workers: an entry's detached fiber blocks
+    /// in a read of a FIFO on the blocking pool, which the test holds open
+    /// without writing, so `:reload` cannot stop it and keeps its group as
+    /// a stuck one. An entry that deadlocks later is still reported while
+    /// that read is pending, with no line for the stuck fiber; the entry is
+    /// reverted, so its binding does not exist, and the next entry runs.
+    /// Once the test writes to the FIFO, the read returns, and the
+    /// session's end stops the fiber and ends cleanly.
+    #[cfg(unix)]
+    #[test]
+    fn deadlock_after_a_stuck_group() {
+        for threads in [1, 2] {
+            deadlock_after_a_stuck_group_at(threads);
+        }
+    }
+
+    /// [`deadlock_after_a_stuck_group`] on `threads` workers.
+    #[cfg(unix)]
+    fn deadlock_after_a_stuck_group_at(threads: usize) {
+        use std::io::Write as _;
+
+        let dir = std::env::temp_dir().join(format!(
+            "cheby_session_stuck_{}_{threads}",
+            std::process::id()
+        ));
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+        std::fs::create_dir_all(&dir).unwrap();
+        let fifo = dir.join("fifo");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap();
+        assert!(made.success(), "mkfifo failed");
+        // Opening the FIFO to write waits until the fiber's read has opened
+        // it; the test then holds it open without writing, so the read
+        // waits on the blocking pool.
+        let opener = {
+            let fifo = fifo.clone();
+            std::thread::spawn(move || std::fs::OpenOptions::new().write(true).open(&fifo).unwrap())
+        };
+        std::thread::Builder::new()
+            .stack_size(256 << 20)
+            .spawn(move || {
+                let mut session = start(SessionOptions {
+                    threads: Some(threads),
+                    ..SessionOptions::default()
+                });
+                eval(&mut session, "import std::channel");
+                eval(&mut session, "import std::fiber");
+                eval(&mut session, "import std::io");
+                let spawn = format!(
+                    "fiber::spawn_detached(fn() {{ io::read_file(\"{}\") }})",
+                    fifo.display()
+                );
+                assert_eq!(eval(&mut session, &spawn), "");
+                let mut writer = opener.join().unwrap();
+                let first = Arc::clone(&session.group);
+                let mut out = Buffer::default();
+                session.reload(&mut out).unwrap();
+                assert!(
+                    out.text.contains("this session has no package"),
+                    "{}",
+                    out.text
+                );
+                // The fiber waits on the pool, so the teardown skipped it
+                // and its group is a stuck one (D-827).
+                assert_eq!(first.live(), 1);
+                assert_eq!(session.stuck.len(), 1);
+                assert_eq!(
+                    eval(&mut session, "let (tx, rx) = channel::new::<Int>(0)"),
+                    ""
+                );
+                assert_eq!(
+                    eval(&mut session, "let got = channel::receive(rx)"),
+                    "fatal error: all fibers are blocked\n  \
+                     blocked in channel::receive at <repl:6>:1:11\n",
+                    "CHEBY_THREADS={threads}"
+                );
+                // The read is still pending.
+                assert_eq!(first.live(), 1);
+                let reverted = eval(&mut session, "got");
+                assert!(reverted.starts_with("error[E0042]"), "{reverted}");
+                assert_eq!(eval(&mut session, "1 + 2"), "3 : Int\n");
+                writer.write_all(b"x").unwrap();
+                drop(writer);
+                assert_eq!(session.end(), None);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     /// The entries of the redefinition test (plan L2; the CLI test

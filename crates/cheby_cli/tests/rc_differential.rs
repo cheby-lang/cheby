@@ -14,12 +14,15 @@
 //! must end through `main`: status 0, or 101 when the generator planted
 //! the final panic, never 102 (a leak, D-458, D-710).
 //!
-//! The first Perceus run dumps its MIR (`CHEBY_DUMP_DIR`). Two floors
+//! The first Perceus run dumps its MIR (`CHEBY_DUMP_DIR`). Three floors
 //! keep the comparison from being vacuous, and when a program falls
 //! below one, the generator is extended, never the floor lowered: at
 //! least 30 of the 40 programs have a borrowed parameter in a generated
-//! function (D-715, D-787, D-809), and at least 25 have a `drop_reuse`
-//! in a generated function or a closure of one (D-716, D-844). A
+//! function (D-715, D-787, D-809), at least 25 have a `drop_reuse`
+//! in a generated function or a closure of one (D-716, D-844), and at
+//! least 10 hold a projection run, a generated function with 9 or more
+//! counted projections of one local, beyond the 8 `dup`s fusion sinks to
+//! one point (D-865, GAP(progen-projection-runs)). A
 //! separate run of 5 seeds with `CHEBY_RT_STATS=1` must count reuse hits,
 //! so that reuse happens at run time too, not only in the MIR.
 //!
@@ -32,6 +35,7 @@
 //! reproduction: run `cheby run` there with and without `CHEBY_RC=naive`,
 //! and with `CHEBY_RT_POISON=0`.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
@@ -72,6 +76,21 @@ const DROP_REUSE: &str = "= drop_reuse _";
 /// tests reuse (D-716, D-844). If fewer do, the generator is extended,
 /// never this threshold.
 const MIN_REUSING: usize = 25;
+
+/// The dump form of a counted projection (`crates/cheby_mir/src/dump.rs`):
+/// a statement `_N: value = field _B.I of <layout>`, read from `_B`.
+const PROJECTION: &str = ": value = field _";
+
+/// The fewest counted projections of one local that make a projection
+/// run: one more than the most `dup`s fusion sinks to one point without
+/// a cancel or a fold (D-865).
+const RUN_READS: usize = 9;
+
+/// The least number of the 40 programs that must hold a projection run
+/// in a generated function, so that the differential reaches fusion's
+/// bound (D-865, GAP(progen-projection-runs)). If fewer do, the generator
+/// is extended, never this threshold.
+const MIN_PROJECTING: usize = 10;
 
 /// The `CHEBY_RT_STATS` line of reuse hits (`crates/cheby_runtime/src/stats.rs`,
 /// P2): `  reuse hits: N` on standard error.
@@ -142,6 +161,33 @@ fn reuses_in_text(text: &str) -> usize {
     count
 }
 
+/// The generated functions of one dumped module text that hold a
+/// projection run: at least [`RUN_READS`] counted projections of one
+/// local.
+fn projection_runs_in_text(text: &str) -> usize {
+    let mut runs = 0usize;
+    let mut inside = false;
+    let mut reads: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut finish = |reads: &mut BTreeMap<&str, usize>| {
+        if reads.values().any(|&n| n >= RUN_READS) {
+            runs = runs.saturating_add(1);
+        }
+        reads.clear();
+    };
+    for line in text.lines() {
+        if line.starts_with("fn ") {
+            finish(&mut reads);
+            inside = generated_function(line);
+        } else if inside && let Some((_, rest)) = line.split_once(PROJECTION) {
+            let base = rest.split('.').next().unwrap_or("");
+            let n = reads.entry(base).or_default();
+            *n = n.saturating_add(1);
+        }
+    }
+    finish(&mut reads);
+    runs
+}
+
 #[expect(
     clippy::unwrap_used,
     reason = "a test helper: a bad CHEBY_HARNESS_SCALE fails the test"
@@ -203,6 +249,8 @@ struct DumpCounts {
     /// `drop_reuse` statements in the generated functions and their
     /// closures.
     reuses: usize,
+    /// Generated functions that hold a projection run.
+    projection_runs: usize,
 }
 
 #[expect(
@@ -228,6 +276,9 @@ fn dump_counts(dump: &Path) -> DumpCounts {
             .sum();
         counts.borrowed = counts.borrowed.saturating_add(borrowed);
         counts.reuses = counts.reuses.saturating_add(reuses_in_text(&text));
+        counts.projection_runs = counts
+            .projection_runs
+            .saturating_add(projection_runs_in_text(&text));
     }
     counts
 }
@@ -266,6 +317,7 @@ fn rc_differential_naive_and_perceus_agree_on_40_programs() {
     let mut planted = 0usize;
     let mut borrowing = 0usize;
     let mut reusing = 0usize;
+    let mut projecting = 0usize;
     let mut lines = 0usize;
     for (seed, (dir, outcome, counts)) in &results {
         match outcome {
@@ -277,15 +329,17 @@ fn rc_differential_naive_and_perceus_agree_on_40_programs() {
         }
         borrowing = borrowing.saturating_add(usize::from(counts.borrowed > 0));
         reusing = reusing.saturating_add(usize::from(counts.reuses > 0));
+        projecting = projecting.saturating_add(usize::from(counts.projection_runs > 0));
         println!(
-            "seed {seed}: {} borrowed parameters in generated functions, {} drop_reuse",
-            counts.borrowed, counts.reuses
+            "seed {seed}: {} borrowed parameters in generated functions, {} drop_reuse, \
+             {} projection runs",
+            counts.borrowed, counts.reuses, counts.projection_runs
         );
     }
     println!(
         "{} programs, {planted} with a planted panic, {lines} lines of output, \
          {borrowing} with a borrowed parameter in a generated function, \
-         {reusing} with a drop_reuse",
+         {reusing} with a drop_reuse, {projecting} with a projection run",
         results.len()
     );
     assert!(failures.is_empty(), "{}", failures.join("\n\n"));
@@ -299,6 +353,11 @@ fn rc_differential_naive_and_perceus_agree_on_40_programs() {
         reusing >= MIN_REUSING,
         "only {reusing} of 40 programs have a drop_reuse in a generated function \
          (at least {MIN_REUSING} must): extend the generator"
+    );
+    assert!(
+        projecting >= MIN_PROJECTING,
+        "only {projecting} of 40 programs hold a projection run in a generated function \
+         (at least {MIN_PROJECTING} must): extend the generator"
     );
 }
 
@@ -406,6 +465,29 @@ fn rc_differential_counts_the_dump_marker() {
                 fn closure progen::f1#0(_0: value) -> value {\n\
                 bb0:\n  _4: value = drop_reuse _2 of ctor progen::Sum0::S0B\n}\n";
     assert_eq!(reuses_in_text(text), 2);
+    let reads = |n: usize, base: usize| -> String {
+        (0..n)
+            .map(|i| {
+                let field = i.checked_rem(3).unwrap_or(0);
+                let dst = i.saturating_add(2);
+                format!("  _{dst}: value = field _{base}.{field} of ctor progen::Rec0\n")
+            })
+            .collect::<Vec<_>>()
+            .concat()
+    };
+    let text = format!(
+        "fn progen::f1(_0: value) -> value {{\nbb0:\n{}}}\n\
+         fn progen::f2(_0: value, _1: value) -> value {{\nbb0:\n{}{}}}\n\
+         fn progen::main() -> value {{\nbb0:\n{}}}\n\
+         fn progen::f3(_0: value) -> value {{\nbb0:\n{}}}\n",
+        reads(9, 0),
+        reads(5, 0),
+        reads(5, 1),
+        reads(12, 0),
+        reads(8, 0)
+    );
+    assert_eq!(projection_runs_in_text(&text), 1, "{text}");
+    assert_eq!(projection_runs_in_text(&reads(9, 0)), 0);
     assert_eq!(
         reuse_hits("runtime stats: main 1 ms\n  allocations: 9\n  reuse hits: 12\n"),
         Some(12)

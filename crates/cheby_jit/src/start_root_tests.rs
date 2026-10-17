@@ -64,6 +64,8 @@ fn function(key: FnKey, abi: Abi, locals: usize, stmts: Vec<Stmt>, result: u32) 
         precounted: false,
         borrow: cheby_mir::borrow::BorrowMask::OWNED,
         sites: Vec::new(),
+        call_locs: Vec::new(),
+        call_loc_strings: IndexVec::new(),
     }
 }
 

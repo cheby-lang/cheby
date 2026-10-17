@@ -194,6 +194,7 @@ impl Interner {
             .unwrap_or(u32::MAX);
         let name = Name(number);
         let leaked: &'static str = Box::leak(text.to_owned().into_boxed_str());
+        crate::leak::intended(leaked);
         shard_data.strings.push(leaked);
         shard_data.map.insert(leaked, name);
         name

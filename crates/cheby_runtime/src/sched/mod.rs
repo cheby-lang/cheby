@@ -36,6 +36,7 @@
 //!   termination (D-709) starts one.
 
 pub(crate) mod blocking;
+mod deadlock;
 mod fiber;
 mod idle;
 mod lifecycle;
@@ -57,7 +58,7 @@ use crossbeam_deque::Injector;
 use parking_lot::Mutex;
 
 pub(crate) use fiber::{
-    AfterSwitch, FiberRef, FiberSched, StartFn, Unlock, Unlocks, begin_park, cancel_park,
+    AfterSwitch, FiberRef, FiberSched, StartFn, Unlock, Unlocks, WaitOp, begin_park, cancel_park,
     leave_callback, park,
 };
 pub(crate) use lifecycle::terminate;
@@ -65,6 +66,7 @@ pub use lifecycle::{DetachedGroup, RootDone, RootHandle, TeardownReport};
 pub(crate) use timer::{Deadline, TimerHandle, TimerTarget, deadline_after};
 pub(crate) use wait::{WaitHeader, WaitNode, WaitQueue, WaitState};
 
+use self::deadlock::{DomainTable, RootEntry};
 use self::fiber::FiberParams;
 use self::idle::Idle;
 use self::monitor::MonitorWake;
@@ -235,6 +237,8 @@ pub(crate) struct Shared {
     /// Whether the monitor wakes a worker for a queued fiber that nobody
     /// looks for; only tests of the idle protocol turn it off.
     rescue: bool,
+    /// Whether the monitor detects deadlocks ([`Tuning::detect_deadlocks`]).
+    detect_deadlocks: bool,
     /// The monitor's sleep.
     monitor: MonitorWake,
     /// The timer heap (D-682).
@@ -259,9 +263,14 @@ pub(crate) struct Shared {
     exit_status: AtomicI64,
     /// Set by a termination (D-709).
     terminated: AtomicBool,
-    /// The hosts waiting for a root's outcome, by root number: a
-    /// termination sends each of them `Exited` (D-709). A leaf lock.
-    roots: Mutex<Vec<(u64, mpsc::Sender<EntryOutcome>)>>,
+    /// The registered roots, by root number, with the hosts waiting for
+    /// their outcome: a termination sends each of them `Exited` (D-709),
+    /// and the deadlock detector reads them (`deadlock::RootEntry`). A
+    /// leaf lock: entries are copied out under it and used after it.
+    roots: Mutex<Vec<Arc<RootEntry>>>,
+    /// Each domain's pending timers and pool jobs (D-857,
+    /// `deadlock::DomainTable`).
+    domains: DomainTable,
     /// The next root number.
     next_root: AtomicU64,
     /// The code the runtime's fibers may run (D-708): released by the
@@ -959,6 +968,10 @@ struct Tuning {
     stress_migrate: Option<bool>,
     /// See [`Shared::rescue`].
     rescue: bool,
+    /// Whether the monitor detects deadlocks (D-724, D-860): on in every
+    /// shipped host; runtime unit tests whose host wakes fibers (the test
+    /// mailbox, waits with a timeout) turn it off (`testing::tuned`).
+    detect_deadlocks: bool,
 }
 
 impl Default for Tuning {
@@ -966,6 +979,7 @@ impl Default for Tuning {
         Self {
             stress_migrate: None,
             rescue: true,
+            detect_deadlocks: true,
         }
     }
 }
@@ -1033,6 +1047,7 @@ impl Runtime {
             program_name: config.program_name.clone(),
             stress_migrate: tuning.stress_migrate.unwrap_or_else(stress_from_env),
             rescue: tuning.rescue,
+            detect_deadlocks: tuning.detect_deadlocks,
             monitor: MonitorWake::default(),
             timers: timer::Timers::new(Instant::now()),
             driver,
@@ -1044,6 +1059,7 @@ impl Runtime {
             exit_status: AtomicI64::new(NO_STATUS),
             terminated: AtomicBool::new(false),
             roots: Mutex::new(Vec::new()),
+            domains: DomainTable::default(),
             next_root: AtomicU64::new(0),
             code: Mutex::new(Vec::new()),
             left_at_stop: AtomicUsize::new(0),
@@ -1146,6 +1162,7 @@ impl Runtime {
                 // root fiber's control block.
                 unsafe { entry(ctx) }
             }),
+            None,
         )?;
         let outcome = receiver.recv().map_err(|_| RuntimeError::EntryLost)?;
         config.domain.stats().add_entry(started.elapsed());
@@ -1160,16 +1177,27 @@ impl Runtime {
         config: &EntryConfig,
         body: Box<dyn FnOnce(*mut ExecCtx) -> u64 + Send>,
     ) -> Result<mpsc::Receiver<EntryOutcome>, RuntimeError> {
-        self.spawn_root_in(config, Arc::clone(self.shared.default_group()), body)
+        self.spawn_root_in(config, Arc::clone(self.shared.default_group()), body, None)
     }
 
     /// Starts a root fiber in `group` that runs `body` and reports its
-    /// word, or its panic, to the returned receiver.
+    /// outcome to the returned receiver, or to `notice` when it has one
+    /// (`Runtime::start_root_notify`).
+    ///
+    /// The root's base frame (D-859, critique C5 and RISK-3): when the root
+    /// starts it opens its base scope (`scope::open_root_base`) and records
+    /// it in its registry entry, before its body; after the body returned
+    /// or unwound, the deadlock's cancellation included, it ends the base
+    /// under its lock (`scope::close_root_base`), then takes its outcome at
+    /// its catch point (`finish_entry`), reports it, unregisters, and
+    /// retires. The deadlock detector reads the root's control block only
+    /// under the base's lock while the base has not ended.
     fn spawn_root_in(
         &self,
         config: &EntryConfig,
         group: Arc<DetachedGroup>,
         body: Box<dyn FnOnce(*mut ExecCtx) -> u64 + Send>,
+        notice: Option<Arc<lifecycle::RootNotice>>,
     ) -> Result<mpsc::Receiver<EntryOutcome>, RuntimeError> {
         if config.stack_size < MIN_STACK_SIZE {
             return Err(RuntimeError::StackTooSmall {
@@ -1184,11 +1212,21 @@ impl Runtime {
         // has halted the runtime, a new root never runs and its host gets
         // `Exited` at once (D-802).
         let root = self.shared.next_root.fetch_add(1, Ordering::Relaxed);
-        if !self.shared.register_root(root, sender.clone()) {
+        let entry = Arc::new(RootEntry::new(
+            &self.shared,
+            root,
+            sender.clone(),
+            &config.domain,
+            matches!(config.mode, EntryMode::Run),
+        ));
+        if !self.shared.register_root(Arc::clone(&entry)) {
             let status = self.shared.exit_status().unwrap_or(crate::abi::status::ERR);
             sender.send(EntryOutcome::Exited(status)).ok();
             return Ok(receiver);
         }
+        // The detector finds the group's fibers through the domains of the
+        // roots that ran in it.
+        group.add_domain(&config.domain);
         let seed = match &config.mode {
             EntryMode::ConstEval(limits) => limits.seed,
             EntryMode::Run | EntryMode::Test | EntryMode::Repl => generic::process_seed(),
@@ -1208,22 +1246,31 @@ impl Runtime {
             stack_size: config.stack_size,
         };
         let start: StartFn = Box::new(move |ctx| {
-            let word = body(ctx);
             // SAFETY: `ctx` is this fiber's live control block.
             let me = unsafe { &*ctx };
-            // The root's catch point (D-699, D-701): an entry that unwound
-            // returns with the record in its control block, never told
-            // apart by the thunk's word (`main`'s 0 is success).
-            let outcome = match crate::unwind::record::finish_entry(me) {
-                Some(report) => EntryOutcome::Panicked(report),
-                None => EntryOutcome::Returned(word),
-            };
-            if let Some(sender) = me.outcome() {
-                sender.send(outcome).ok();
+            // The base frame (D-859): the base scope opens before the body.
+            let base = crate::fiber_ops::scope::open_root_base(me);
+            entry.start(FiberRef::from_ctx(me), base);
+            let word = body(ctx);
+            // ... and ends, under its lock, before the root reports,
+            // unregisters and retires (critique C5, RISK-3).
+            crate::fiber_ops::scope::close_root_base(me);
+            // The root's catch point (D-699, D-701, D-859): an entry that
+            // unwound returns with the record in its control block, never
+            // told apart by the thunk's word (`main`'s 0 is success).
+            let outcome = crate::unwind::record::finish_entry(me, word);
+            match notice {
+                Some(notice) => notice.report(Ok(outcome)),
+                None => {
+                    if let Some(sender) = me.outcome() {
+                        sender.send(outcome).ok();
+                    }
+                }
             }
             if let Some(runtime) = me.sched.runtime() {
                 runtime.unregister_root(root);
             }
+            drop(entry);
         });
         // A root started by a host takes its slot from the global pool
         // (D-825).
@@ -1394,6 +1441,8 @@ impl Drop for Runtime {
     }
 }
 
+#[cfg(test)]
+mod deadlock_tests;
 #[cfg(test)]
 mod lifecycle_tests;
 #[cfg(test)]

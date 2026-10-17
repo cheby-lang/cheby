@@ -13,7 +13,11 @@
 //!   the live count. Cancellation is lazy: a cancelled entry stays in the
 //!   heap until it is popped, or until a rebuild drops it when more than
 //!   half the heap is dead. So the heap's length is never "timers pending";
-//!   [`Shared::timers_pending`] reads the live count (D-724's seam, H1).
+//!   [`Shared::timers_pending`] reads the live count.
+//! - **Per-domain counts** (D-857, `sched/deadlock.rs`): an entry armed by
+//!   a fiber also counts as pending in the fiber's domain, from its arming
+//!   until its firing has **returned** (so after the wake it stands for)
+//!   or a cancel wins, which the deadlock detector reads.
 //! - **Order**: `(deadline, seq)`, so timers with equal deadlines fire in
 //!   the order they were armed (D-682).
 //! - **The due check** is lock-free: an atomic holds the earliest deadline
@@ -46,6 +50,8 @@ use std::time::{Duration, Instant};
 use parking_lot::Mutex;
 
 use super::Shared;
+use super::deadlock::{self, DomainCounts};
+use crate::tls;
 
 /// What a timer does when it fires: runs on a worker loop, the poll holder
 /// or the monitor, with no runtime lock held; never runs Cheby code and
@@ -128,17 +134,34 @@ struct TimerEntry {
     target: Mutex<Option<Arc<dyn TimerTarget>>>,
     /// The runtime's count of armed entries.
     live: Arc<AtomicUsize>,
+    /// The pending counts of the arming fiber's domain (D-857,
+    /// `sched/deadlock.rs`), set when the entry is armed by a fiber of the
+    /// runtime: its count rises when the entry is armed and falls once,
+    /// after the firing has returned ([`Timers::fire_due`]) or when a
+    /// cancel or a clear wins.
+    domain: Option<Arc<DomainCounts>>,
 }
 
 impl TimerEntry {
     /// Moves an armed entry to `to`. The one winner decrements the live
-    /// count and gets the target; everyone else gets `None`.
+    /// count and gets the target; everyone else gets `None`. The winner
+    /// also lowers the domain's count ([`TimerEntry::done`]): at once for a
+    /// cancel or a clear, after the target's `fire` for a firing.
     fn settle(&self, to: u8) -> Option<Arc<dyn TimerTarget>> {
         self.state
             .compare_exchange(state::ARMED, to, Ordering::SeqCst, Ordering::SeqCst)
             .ok()?;
         self.live.fetch_sub(1, Ordering::SeqCst);
         self.target.lock().take()
+    }
+
+    /// The winner of [`TimerEntry::settle`] is done with the entry: its
+    /// domain's pending count falls (D-857). For a firing, only after the
+    /// target's `fire` has returned, so after the wake it stands for.
+    fn done(&self) {
+        if let Some(domain) = &self.domain {
+            domain.timer_done();
+        }
     }
 
     fn is_armed(&self) -> bool {
@@ -162,7 +185,11 @@ impl TimerHandle {
     /// Armed -> Cancelled; false if it already fired or was cancelled. The
     /// winning call drops the entry's reference to its target here.
     pub(crate) fn cancel(&self) -> bool {
-        self.0.settle(state::CANCELLED).is_some()
+        let won = self.0.settle(state::CANCELLED).is_some();
+        if won {
+            self.0.done();
+        }
+        won
     }
 
     /// Whether the timer fired (for tests).
@@ -340,30 +367,38 @@ impl Timers {
             state: AtomicU8::new(state::CANCELLED),
             target: Mutex::new(None),
             live: Arc::clone(&self.live),
+            domain: None,
         }))
     }
 
     /// Arms a timer at `at` unless `stopping` says the runtime stops (read
     /// under the heap's lock, so a timer is either armed before
     /// [`Timers::clear`] takes the heap or never). Returns the handle and,
-    /// when armed, the deadline in nanoseconds since the epoch.
+    /// when armed, the deadline in nanoseconds since the epoch. When it
+    /// arms, `domain`'s pending count rises, under the heap's lock (D-857).
     pub(super) fn arm(
         &self,
         at: Instant,
         target: Arc<dyn TimerTarget>,
+        domain: Option<Arc<DomainCounts>>,
         stopping: impl FnOnce() -> bool,
     ) -> (TimerHandle, Option<u64>) {
         let entry = Arc::new(TimerEntry {
             state: AtomicU8::new(state::ARMED),
             target: Mutex::new(Some(target)),
             live: Arc::clone(&self.live),
+            domain,
         });
         let mut heap = self.heap.lock();
         if stopping() {
             drop(heap);
-            // Never armed: the target goes now, with no lock held.
+            // Never armed: the target goes now, with no lock held, and no
+            // domain counted it.
             drop(entry);
             return (self.never(), None);
+        }
+        if let Some(domain) = &entry.domain {
+            domain.timer_armed();
         }
         self.live.fetch_add(1, Ordering::SeqCst);
         heap.push(at, Arc::clone(&entry));
@@ -398,6 +433,10 @@ impl Timers {
         for entry in due {
             if let Some(target) = entry.settle(state::FIRED) {
                 target.fire();
+                // D-857: the domain's count falls only now, after the wake
+                // (or the cancellation walk) the firing stands for, never
+                // between the settle and the firing (survey-deadlock §2.4).
+                entry.done();
                 fired = fired.saturating_add(1);
             }
         }
@@ -414,7 +453,10 @@ impl Timers {
             entries
         };
         for entry in entries {
-            drop(entry.settle(state::CANCELLED));
+            if let Some(target) = entry.settle(state::CANCELLED) {
+                drop(target);
+                entry.done();
+            }
         }
     }
 
@@ -429,16 +471,36 @@ impl Shared {
     /// Arms a timer that fires `target` at `at`; after `stopping` it
     /// returns a handle that never fires (C7). A deadline earlier than the
     /// poll holder's wakes the holder, which recomputes its timeout.
+    ///
+    /// A timer armed by a fiber of this runtime counts as pending in the
+    /// fiber's domain until its firing has returned or a cancel wins
+    /// (D-857, `sched/deadlock.rs`); one armed off every fiber counts in no
+    /// domain.
     pub(crate) fn arm_timer(&self, at: Instant, target: Arc<dyn TimerTarget>) -> TimerHandle {
-        let (handle, armed) = self.timers.arm(at, target, || self.stopping());
+        let domain = self.arming_domain();
+        let (handle, armed) = self.timers.arm(at, target, domain, || self.stopping());
         if let Some(nanos) = armed {
             self.driver.timer_armed(nanos);
         }
         handle
     }
 
-    /// Live timers (armed, neither cancelled nor fired), for D-724's
-    /// detector (H1). Never the heap's length, which counts dead entries.
+    /// The pending counts of the domain of the fiber that runs on this
+    /// thread, if it is a fiber of this runtime (D-857).
+    fn arming_domain(&self) -> Option<Arc<DomainCounts>> {
+        // SAFETY: the current fiber's control block lives while it runs on
+        // this thread, and the reference ends with this function.
+        let me = unsafe { tls::current_fiber().as_ref() }?;
+        let runtime = me.sched.runtime()?;
+        if !std::ptr::eq(Arc::as_ptr(runtime), self) {
+            return None;
+        }
+        deadlock::counts_of(me)
+    }
+
+    /// Live timers (armed, neither cancelled nor fired) in the whole
+    /// runtime. Never the heap's length, which counts dead entries. The
+    /// deadlock detector reads each domain's count instead (D-857).
     pub(crate) fn timers_pending(&self) -> usize {
         self.timers.pending()
     }
@@ -517,7 +579,7 @@ mod tests {
     }
 
     fn arm(timers: &Timers, at: Instant, target: Arc<dyn TimerTarget>) -> TimerHandle {
-        timers.arm(at, target, || false).0
+        timers.arm(at, target, None, || false).0
     }
 
     fn armed_entry(live: &Arc<AtomicUsize>) -> Arc<TimerEntry> {
@@ -526,6 +588,7 @@ mod tests {
             state: AtomicU8::new(state::ARMED),
             target: Mutex::new(Some(Arc::new(Probe::default()))),
             live: Arc::clone(live),
+            domain: None,
         })
     }
 
@@ -767,7 +830,7 @@ mod tests {
         let timers = timers();
         let probe = Arc::new(Probe::default());
         let at = Instant::now();
-        let (handle, armed) = timers.arm(at, probe.clone(), || true);
+        let (handle, armed) = timers.arm(at, probe.clone(), None, || true);
         assert_eq!(armed, None);
         assert_eq!(Arc::strong_count(&probe), 1);
         assert_eq!(timers.pending(), 0);

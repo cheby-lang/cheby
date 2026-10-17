@@ -47,6 +47,12 @@ const MAX_TEXT: usize = 40;
 const FN_BUDGET: u64 = 6_000;
 /// The text of the planted panic.
 pub(crate) const PLANTED_TEXT: &str = "planted panic";
+/// The fewest projections a projection run reads: one more than the most
+/// `dup`s fusion sinks to one point without a cancel or a fold (D-865;
+/// GAP(progen-projection-runs)).
+pub(crate) const RUN_MIN: usize = 9;
+/// The most projections a projection run reads.
+pub(crate) const RUN_MAX: usize = 14;
 
 const WORDS: &[&str] = &[
     "a", "bc", "red", "tree", "x y", "", "seven", "Zed", "ok", "list", "-", "k=v",
@@ -141,6 +147,9 @@ pub(crate) struct Gen<'c> {
     /// How many rebuilds (record updates and variants built again from
     /// a matched value) the generated functions hold.
     rebuilds: usize,
+    /// How many projection runs ([`Self::projection_run`]) the program
+    /// holds.
+    projection_runs: usize,
 }
 
 /// The generated text of a package.
@@ -151,6 +160,9 @@ pub(crate) struct Output {
     /// How many rebuilds the generated functions hold (for the
     /// generator's own tests).
     pub(crate) rebuilds: usize,
+    /// How many projection runs the program holds (0 or 1; for the
+    /// generator's own tests).
+    pub(crate) projection_runs: usize,
 }
 
 impl<'c> Gen<'c> {
@@ -174,6 +186,7 @@ impl<'c> Gen<'c> {
             safe: false,
             current: None,
             rebuilds: 0,
+            projection_runs: 0,
         }
     }
 
@@ -2315,9 +2328,10 @@ impl<'c> Gen<'c> {
         (text, tys)
     }
 
-    /// `main`: values shared by the sections, one section per function,
-    /// and the planted panic.
-    fn main_fn(&mut self, planted: Option<&[Ty]>) -> String {
+    /// `main`'s lines: values shared by the sections and one section per
+    /// function; then, apart, the planted panic's lines, which end `main`
+    /// after a projection run's section ([`Self::projection_run`]).
+    fn main_fn(&mut self, planted: Option<&[Ty]>) -> (Vec<String>, Vec<String>) {
         self.env.clear();
         self.indent = 1;
         self.cost = 0;
@@ -2356,15 +2370,151 @@ impl<'c> Gen<'c> {
         for index in order {
             lines.push(self.section(index));
         }
+        let mut tail = Vec::new();
         if let Some(tys) = planted {
             self.safe = true;
             let args: Vec<String> = tys.iter().map(|t| self.expr(t, 1, INLINE)).collect();
             self.safe = false;
             let depth = self.src.range(1, 4);
-            lines.push(format!("  let last = finale({depth}, {})", args.join(", ")));
-            lines.push("  io::println(\"{last}\")".to_owned());
+            tail.push(format!("  let last = finale({depth}, {})", args.join(", ")));
+            tail.push("  io::println(\"{last}\")".to_owned());
         }
-        format!("fn main() {{\n{}\n}}\n", lines.join("\n"))
+        (lines, tail)
+    }
+
+    /// A projection run (GAP(progen-projection-runs), D-865), or nothing:
+    /// the text of a function `fN(x: RecK)` (or `fN(x: RecK, k: Int)`)
+    /// that reads [`RUN_MIN`] to [`RUN_MAX`] projections of `x` of one
+    /// boxed type, then returns them in a list after `x`'s last use, or
+    /// in one arm of a `case` on `k` whose other arm reads `x` again; and
+    /// `main`'s section that calls it. Fusion sinks every projection's
+    /// `dup` to `x`'s release, beyond its bound of 8 per point. A record
+    /// type with three `String` fields is added when no record holds a
+    /// boxed field. Called after every other choice is drawn.
+    fn projection_run(&mut self) -> Option<(String, String)> {
+        if !self.src.chance(self.cfg.projection_run_percent) {
+            return None;
+        }
+        let (rec, item, fields) = self.run_record()?;
+        let reads = self.src.range(RUN_MIN, RUN_MAX);
+        let branch = self.src.chance(40);
+        let main_fns = self.fns.iter().filter(|f| f.module.is_none()).count();
+        let name = format!("f{main_fns}");
+        let ret = Ty::list(item.clone());
+        let mut params = vec![("x".to_owned(), Ty::Rec(rec))];
+        if branch {
+            params.push(("k".to_owned(), Ty::Int));
+        }
+        let vis = if self.src.chance(50) {
+            Vis::Priv
+        } else {
+            Vis::Package
+        };
+        self.fns.push(FnDef {
+            module: None,
+            name: name.clone(),
+            vis,
+            shape: Shape::Plain,
+            params: params.clone(),
+            ret: ret.clone(),
+            counter: None,
+            cost: u64::try_from(reads).unwrap_or(u64::MAX).saturating_add(2),
+            uses: 1,
+        });
+        self.env.clear();
+        self.indent = 1;
+        let rendered: Vec<String> = params
+            .iter()
+            .map(|(p, ty)| {
+                let b = self.bind(p, ty.clone());
+                format!("{b}: {}", ty.render(&self.types))
+            })
+            .collect();
+        let mut lines = Vec::new();
+        let mut items = Vec::new();
+        for _ in 0..reads {
+            let field = self.src.pick(&fields).cloned().unwrap_or_default();
+            let x = self.use_var(0);
+            let v = self.bind("v", item.clone());
+            items.push(self.use_var(self.env.len().saturating_sub(1)));
+            lines.push(format!("  let {v} = {x}.{field}"));
+        }
+        let list = self.clip_list(&format!("[{}]", items.join(", ")));
+        if branch {
+            let k = self.use_var(1);
+            let x = self.use_var(0);
+            let field = self.src.pick(&fields).cloned().unwrap_or_default();
+            lines.push(format!(
+                "  case {k} {{\n    0 => {list}\n    _ => [{x}.{field}]\n  }}"
+            ));
+        } else {
+            lines.push(format!("  {list}"));
+        }
+        let text = format!(
+            "{}fn {name}({}) -> {} {{\n{}\n}}\n",
+            vis.keyword(),
+            rendered.join(", "),
+            ret.render(&self.types),
+            lines.join("\n")
+        );
+        let section = self.run_section(&name, rec, branch, &ret);
+        self.projection_runs = self.projection_runs.saturating_add(1);
+        Some((text, section))
+    }
+
+    /// `main`'s section of a projection run `name`: a record of `rec`
+    /// built from literals, and `k` mostly 0, so that the arm with the
+    /// run is the one that runs.
+    fn run_section(&mut self, name: &str, rec: usize, branch: bool, ret: &Ty) -> String {
+        self.env.clear();
+        self.indent = 2;
+        self.safe = true;
+        let arg = self.record_literal(rec, 1);
+        self.safe = false;
+        let call = if branch {
+            let k = self.src.pick(&["0", "0", "1"]).copied().unwrap_or("0");
+            format!("{name}({arg}, {k})")
+        } else {
+            format!("{name}({arg})")
+        };
+        let show = if ret.shows() {
+            "\"{result}\""
+        } else {
+            "\"{result:?}\""
+        };
+        format!("  run(\"{name}\", fn() {{\n    let result = {call}\n    {show}\n  }})")
+    }
+
+    /// The record a projection run reads, a boxed type of its fields and
+    /// the fields of that type; a new record type of three `String`
+    /// fields when no record holds a boxed field.
+    fn run_record(&mut self) -> Option<(usize, Ty, Vec<String>)> {
+        // Each record and boxed field type, with the fields of that type.
+        let mut found: Vec<(usize, Ty, Vec<String>)> = Vec::new();
+        for (index, rec) in self.types.recs.iter().enumerate() {
+            let mut seen: Vec<&Ty> = Vec::new();
+            for (_, ty) in &rec.fields {
+                if matches!(ty, Ty::Int | Ty::Bool) || seen.contains(&ty) {
+                    continue;
+                }
+                seen.push(ty);
+                let fields = rec
+                    .fields
+                    .iter()
+                    .filter(|(_, t)| t == ty)
+                    .map(|(f, _)| f.clone())
+                    .collect();
+                found.push((index, ty.clone(), fields));
+            }
+        }
+        if found.is_empty() {
+            let fields: Vec<String> = (0..3).map(|f| format!("k{f}")).collect();
+            found.push((self.types.recs.len(), Ty::Str, fields.clone()));
+            self.types.recs.push(RecDef {
+                fields: fields.into_iter().map(|f| (f, Ty::Str)).collect(),
+            });
+        }
+        self.src.pick(&found).cloned()
     }
 
     fn section(&mut self, index: usize) -> String {
@@ -2407,14 +2557,22 @@ impl<'c> Gen<'c> {
         let planted =
             self.cfg.final_panic_percent > 0 && self.src.chance(self.cfg.final_panic_percent);
         let finale = planted.then(|| self.finale());
-        let main = self.main_fn(finale.as_ref().map(|(_, tys)| tys.as_slice()));
+        let (mut lines, tail) = self.main_fn(finale.as_ref().map(|(_, tys)| tys.as_slice()));
+        // GAP(progen-projection-runs): drawn after every other choice, so
+        // that the rest of the program is what the seed gave before.
+        let run = self.projection_run();
+        if let Some((_, section)) = &run {
+            lines.push(section.clone());
+        }
+        lines.extend(tail);
+        let main = format!("fn main() {{\n{}\n}}\n", lines.join("\n"));
         let mut out = format!("//! A generated program ({seed_text}).\n");
         if planted {
             let _ = writeln!(out, "//! {}", super::PLANTED_MARKER);
         }
         out.push('\n');
         let mut body = self.render_types();
-        for text in &texts {
+        for text in texts.iter().chain(run.as_ref().map(|(text, _)| text)) {
             body.push_str(text);
             body.push('\n');
         }
@@ -2432,6 +2590,7 @@ impl<'c> Gen<'c> {
             helpers: helpers.map(|h| self.resolve(&h)),
             planted,
             rebuilds: self.rebuilds,
+            projection_runs: self.projection_runs,
         }
     }
 

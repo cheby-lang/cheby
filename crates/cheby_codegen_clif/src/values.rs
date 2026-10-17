@@ -815,6 +815,10 @@ impl Translator<'_, '_> {
             vals.push(self.ctx()?);
         }
         vals.extend(self.operands(args)?);
+        if let RuntimeFn::ScopeClose = helper {
+            // The wait at a scope's end (D-856).
+            self.store_wait_frame()?;
+        }
         let result = self.edge_runtime_call(f, &vals)?;
         match (helper.ret(), result) {
             (Some(_), Some(v)) => Ok(Some(v)),

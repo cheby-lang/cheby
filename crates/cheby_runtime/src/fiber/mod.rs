@@ -8,10 +8,15 @@
 //!   for a fresh stack, and [`SUPPORTED`](switch::SUPPORTED), which is
 //!   false on Windows until M6 (D-714).
 //!
+//! - [`sanitizer`]: what the address and thread sanitizers are told about
+//!   fiber switches and reused memory, under `--cfg cheby_sanitize` only
+//!   (D-721).
+//!
 //! Nothing here knows the fiber control block: a fresh stack starts with
 //! an opaque argument, and the scheduler places the block at the top of
 //! the slot with [`StackSlot::reserve_top`].
 
+pub(crate) mod sanitizer;
 pub mod stack;
 pub mod switch;
 

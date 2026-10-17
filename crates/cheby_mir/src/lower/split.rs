@@ -177,6 +177,7 @@ impl BodyCx<'_, '_> {
         let mut b = FunctionBuilder::new(key, Abi::Cheby, Repr::Value, chain.span)?;
         b.set_entry_loc(&self.cx.location(chain.span)?)?;
         b.set_record_sites(self.pending.records_sites());
+        b.set_record_call_locs(self.pending.records_call_locs());
         let fresh_locals = vec![None; self.body.locals.len()];
         let fresh_dicts = vec![None; self.dict_params.len()];
         let callee = Callee::Code(key);

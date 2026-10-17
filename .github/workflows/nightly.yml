@@ -1,21 +1,90 @@
 # Scheduled checks on a pinned, dated nightly toolchain (D-721, D-781).
 #
 # D-277 pins every other job to stable 1.99.0. This workflow alone uses a
-# dated nightly, because cargo-fuzz (and later the sanitizers and Miri)
-# need one. The date is pinned so that a run never changes because the
+# dated nightly, because cargo-fuzz, the sanitizers and Miri need one
+# (D-721). The date is pinned so that a run never changes because the
 # nightly did, and it is at least 1.99-nightly, the workspace's
 # `rust-version` (nightly-2026-10-01 is 1.101.0-nightly). fuzz/Cargo.toml
-# names the same toolchain.
+# and xtask/src/sanitize.rs (`NIGHTLY`) name the same toolchain. A
+# scheduled run never blocks a pull request.
 #
 # - `fuzz`: a bounded run of each of the four `cargo fuzz` targets
 #   (fuzz/fuzz_targets): `lex`, `parse` and `check` from seed corpora made
 #   of the examples and the UI tests, and `rc_differential`, naive
 #   reference counting against Perceus on generated programs (D-718),
 #   which runs a debug `cheby` built with the stable toolchain and copied
-#   aside first. A finding fails the job and uploads fuzz/artifacts.
+#   aside first. A finding fails the job and uploads fuzz/artifacts
+#   (D-781).
+# - `sanitizer (thread)` and `sanitizer (address)`: ThreadSanitizer and
+#   AddressSanitizer (with LeakSanitizer) on Linux x86-64 (D-721). Each runs
+#   `cargo xtask sanitize <s>`, the one driver that the local runs use too
+#   (GAP(sanitize-driver)); `cargo xtask sanitize <s> --list` prints its
+#   steps and their commands. Every step builds with `-Zbuild-std --target
+#   <host>`, `-Zsanitizer=<s>` and `--cfg cheby_sanitize="<s>"`, which turns
+#   on the runtime's annotations: each fiber switch is told to the
+#   sanitizer, and a stack slot is unpoisoned before it is reused. The steps
+#   run their tests one at a time with `CHEBY_HARNESS_SCALE=10` and
+#   `CHEBY_RT_TEST_EMULATED=1` (D-725, D-748): the runtime's unit tests with
+#   and without `CHEBY_RT_STRESS_MIGRATE=1`, `cheby_jit`'s tests, the
+#   deadlock UI tests at 4 and 2 threads under migration stress, the 2- and
+#   4-thread conformance trials under migration stress, and the REPL
+#   transcripts, `detached_reload.repl` included, under both sanitizers
+#   (D-831). The address job adds every example run with
+#   `CHEBY_RT_POISON=0`, the only runs that take the block cache and the
+#   inline reuse paths (D-844).
+#   JIT code is not instrumented (D-721): the sanitizers see the runtime,
+#   std and the compiler, and the harnesses' `CHEBY_RT_POISON=1` routes
+#   every count operation of generated code through the runtime.
+#   Options every step passes (the driver sets them; a caller's
+#   `ASAN_OPTIONS` or `TSAN_OPTIONS` comes after and wins):
+#   `allocator_may_return_null=1` under both, because the runtime's
+#   out-of-memory tests ask for impossible sizes on purpose and expect the
+#   allocator's null (D-642), which the sanitizers' allocators otherwise
+#   turn into an abort; `abort_on_error=1` and
+#   `detect_stack_use_after_return=1` for ASan; `halt_on_error=1` and
+#   `second_deadlock_stack=1` for TSan.
+#   The `loom` models are skipped (`--skip models::`), since loom switches
+#   stacks on its own (D-863).
+#   LeakSanitizer is on for the `jit` and `ui-deadlock` steps and off
+#   (`detect_leaks=0`, a per-step option, D-863) for `runtime` and
+#   `runtime-stress`, because the runtime's unit tests leak on purpose
+#   (frozen constants are immortal, leaked fixtures, child processes that
+#   end at a halt or a refusal without cleanup), and for `conformance`,
+#   `examples-poison-off` and `repl`, whose programs keep objects on fiber
+#   stacks it does not scan. The runtime's own leak check (exit 102, D-458)
+#   and its tests stay on everywhere (GAP(sanitize-lsan)). Under the address
+#   cfg the fiber stack slots are LeakSanitizer root regions while handed
+#   out, so objects held by fibers that a halt freezes are not reported
+#   (D-708, D-859).
+#   A report whose racing or faulting accesses lie in a dependency
+#   (crossbeam, the precompiled parts of std, loom's generator) gets one
+#   line with its reason in .github/tsan-suppressions.txt, which the driver
+#   passes through `TSAN_OPTIONS=suppressions=…`; a report in Cheby's own
+#   crates is fixed, never suppressed. Behavior a decision makes
+#   intentional, such as objects held by fibers that a halt freezes
+#   (D-708, D-859), is told to the sanitizer, never suppressed (D-863).
+#   An example that fails under ThreadSanitizer only because its own
+#   timeouts expire under the slowdown runs under AddressSanitizer only
+#   (D-863); `THREAD_TIMING_SKIPS` in xtask/src/sanitize.rs names each, and
+#   today it names none.
+# - `miri`: `cargo xtask sanitize miri`, the runtime's pure modules under
+#   Miri (D-721; GAP(miri-subset)): the ABI, values, strings, reference
+#   counting, the collections, text, bytes, numbers, the generic walks,
+#   layouts, allocation, the frame walk's tests and the timer tests written
+#   for Miri, with `-Zmiri-permissive-provenance -Zmiri-disable-isolation
+#   -Zmiri-ignore-leaks` and `PROPTEST_CASES=4`. Miri's leak check is off
+#   because Cheby objects hold each other as integer words, which it cannot
+#   follow, so objects made immortal on purpose (D-765) would be reported;
+#   the runtime's own accounting checks every test's leaks. Tests skipped
+#   for their size are listed with their reasons in xtask/src/sanitize.rs
+#   (`MIRI_GROUPS`); others take a smaller size under `cfg(miri)`. Fibers,
+#   the scheduler, the pool, io, entries and the `loom` models stay out.
 #
-# Package H1 adds D-721's sanitizer (TSan, ASan) and Miri jobs here. A
-# scheduled run never blocks a pull request.
+# Until the `runtime` branch is pushed, a local run of the same driver on
+# this nightly is the evidence (D-862, as D-781 did for fuzzing): both
+# sanitizers in a `linux/arm64` container and Miri on macOS arm64. Docker's
+# x86-64 emulation cannot start ThreadSanitizer, so the first scheduled run
+# is x86-64 ThreadSanitizer's first check.
 
 name: Nightly
 
@@ -93,4 +162,72 @@ jobs:
         with:
           name: fuzz-artifacts-${{ matrix.target }}
           path: fuzz/artifacts/${{ matrix.target }}
+          if-no-files-found: ignore
+
+  sanitizer:
+    name: sanitizer (${{ matrix.sanitizer }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: [thread, address]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.0"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-10-01
+          components: rust-src
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: sanitize-${{ matrix.sanitizer }}
+      - name: Install llvm-symbolizer
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm
+          llvm-symbolizer --version
+      - name: Lower the address-space randomization ThreadSanitizer maps around
+        if: matrix.sanitizer == 'thread'
+        run: sudo sysctl vm.mmap_rnd_bits=28
+      - name: cargo xtask sanitize ${{ matrix.sanitizer }}
+        run: >-
+          cargo xtask sanitize ${{ matrix.sanitizer }}
+          --log-dir "$RUNNER_TEMP/sanitize-logs"
+      - name: Upload the logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sanitize-${{ matrix.sanitizer }}-logs
+          path: ${{ runner.temp }}/sanitize-logs
+          if-no-files-found: ignore
+
+  miri:
+    name: miri
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.0"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-10-01
+          components: rust-src, miri
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: sanitize-miri
+      - name: cargo xtask sanitize miri
+        run: >-
+          cargo xtask sanitize miri --jobs 4
+          --log-dir "$RUNNER_TEMP/sanitize-logs"
+      - name: Upload the logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sanitize-miri-logs
+          path: ${{ runner.temp }}/sanitize-logs
           if-no-files-found: ignore

@@ -1,0 +1,34 @@
+// @mode: run-fail
+// @exit: 1
+// @command: test
+// @decisions: D-724, D-856, D-857, D-858, D-859, D-860, D-833
+// @milestone: M2
+//! A deadlock is judged per test (D-857). One test deadlocks in a helper
+//! while the other waits on a timer, which may run at the same time: only
+//! the first fails, with the report, and the timer's test passes.
+
+import std::channel
+import std::duration
+import std::selector
+
+fn wait_for(rx: channel::Receiver<Int>) -> Int {
+  let got = channel::receive(rx)
+  case got {
+    Ok(n) => n
+    Err(_) => 0
+  }
+}
+
+test "deadlocks in a helper" {
+  let (tx, rx) = channel::new::<Int>(0)
+  let n = wait_for(rx)
+  assert channel::send(tx, n) == Ok(Nil)
+}
+
+test "waits on a timer" {
+  let waited =
+    selector::new()
+    |> selector::after(_, duration::milliseconds(300), fn() { True })
+    |> selector::select
+  assert waited
+}

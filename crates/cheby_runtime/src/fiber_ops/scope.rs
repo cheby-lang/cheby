@@ -48,7 +48,8 @@ use crate::ctx::ExecCtx;
 use crate::handles::{self, HandleKind, HandlePayload};
 use crate::panic::{PanicReport, fatal};
 use crate::sched::{
-    AfterSwitch, Deadline, FiberRef, TimerHandle, TimerTarget, Unlock, deadline_after, park, wake,
+    AfterSwitch, Deadline, FiberRef, TimerHandle, TimerTarget, Unlock, WaitOp, deadline_after,
+    park, wake,
 };
 use crate::unwind::guard::guarded;
 use crate::unwind::raise::raise_cancel;
@@ -80,12 +81,22 @@ pub(crate) struct ScopeState {
     /// is linked and cancelled by the close (step 2); only the fiber that
     /// opened the scope touches it.
     timer: Mutex<Option<TimerHandle>>,
+    /// Whether the scope was opened timed, by `fiber::timeout` (D-671),
+    /// whatever its deadline: its close's wait is named `fiber::timeout` in
+    /// a deadlock report, any other's `fiber::scope` (D-858).
+    of_timeout: bool,
     /// Whether this is a detached fiber's base scope
     /// (D-798): parentless, owned by the detached fiber,
     /// its spawn scope, the root of every scope it opens; it never has
     /// members, records no first cause (D-669) and is ended by the
-    /// fiber's base frame ([`ScopeState::end_base`]).
+    /// fiber's base frame ([`ScopeState::end_base`]). A root's base scope
+    /// (D-859, [`open_root_base`]) is one too.
     base: bool,
+    /// Whether this is a root's base scope (D-859, [`open_root_base`]):
+    /// a base scope owned by a root, which only a deadlock's cancellation
+    /// targets (`cancel::cancel_deadlocked_root`), ended by the root's
+    /// base frame ([`close_root_base`]).
+    root: bool,
 }
 
 /// The target of a timed scope's timer (D-671): it holds the scope weakly,
@@ -263,7 +274,9 @@ impl ScopeState {
             depth,
             nested_slot: Mutex::new(None),
             timer: Mutex::new(None),
+            of_timeout: false,
             base: false,
+            root: false,
         }
     }
 
@@ -293,6 +306,54 @@ impl ScopeState {
             ));
         }
         inner.ended = true;
+    }
+
+    /// The base scope of the root `owner` (D-859, D-798's form): a base
+    /// scope ([`ScopeState::new_base`]) that is also marked as a root's.
+    fn new_root_base(owner: FiberRef) -> Self {
+        Self {
+            root: true,
+            ..Self::new_base(owner)
+        }
+    }
+
+    /// Whether this is a root's base scope ([`open_root_base`]).
+    pub(crate) fn is_root_base(&self) -> bool {
+        self.root
+    }
+
+    /// Stores `report` on the root `root` that owns this root base scope,
+    /// under the scope's lock, unless the scope has ended (D-859): then the
+    /// root has left its body, and may have retired, so nothing is stored
+    /// and the result is false. While the scope has not ended under its
+    /// lock, its owner is not retired: the root's base frame ends it
+    /// ([`close_root_base`]) before the root reports, unregisters and
+    /// retires. The report's lock is a leaf (the module documentation of
+    /// `fiber_ops`). A second report for one root is a broken invariant:
+    /// the detector reports a root once.
+    pub(crate) fn store_deadlock_report(&self, root: FiberRef, report: String) -> bool {
+        let inner = self.inner.lock();
+        if !self.root || self.owner != root {
+            drop(inner);
+            fatal(format_args!(
+                "a deadlock was reported on a scope that is not the root's base scope"
+            ));
+        }
+        if inner.ended {
+            return false;
+        }
+        // SAFETY: the owner of a root base scope that has not ended under
+        // this lock is not retired (above); the reference is not used after
+        // the lock is released.
+        let owner = unsafe { root.ctx() };
+        let mut slot = owner.conc.deadlock_report.lock();
+        if slot.is_some() {
+            drop(slot);
+            drop(inner);
+            fatal(format_args!("a root was reported deadlocked twice"));
+        }
+        *slot = Some(report);
+        true
     }
 
     /// The number of proper ancestors of the scope.
@@ -544,6 +605,59 @@ pub(crate) unsafe fn state_of(word: Word) -> Arc<ScopeState> {
     Arc::clone(&unsafe { handles::payload::<ScopeHandle>(word, HandleKind::Scope) }.0)
 }
 
+/// Opens the root's parentless base scope (D-859, D-798's form) and returns
+/// it: the "own root scope" of spec §13.5.4 and §13.6. The root's base
+/// frame (`sched`) calls it when the root starts, before its body runs, for
+/// `main`, a test and a REPL entry. The scope is owned by the root and set
+/// as its spawn scope, so the root's own scopes take it as their parent
+/// (one more level of depth, which only orders targets, D-667) and
+/// `FiberConc::spawn_scope` returns it. Like a detached fiber's base it has
+/// no parent, never has members and records no first cause (a panic of
+/// the root is reported by its catch point, D-701); only a deadlock's
+/// cancellation targets it (`cancel::cancel_deadlocked_root`), and it is
+/// the root of the detector's survey. A root that has a spawn scope
+/// already is a broken invariant.
+pub(crate) fn open_root_base(ctx: &ExecCtx) -> Arc<ScopeState> {
+    let base = Arc::new(ScopeState::new_root_base(FiberRef::from_ctx(ctx)));
+    {
+        let mut spawn_scope = ctx.conc.spawn_scope.lock();
+        if spawn_scope.is_some() {
+            drop(spawn_scope);
+            fatal(format_args!(
+                "a root's base scope was opened on a fiber that has a scope"
+            ));
+        }
+        *spawn_scope = Some(Arc::clone(&base));
+    }
+    base
+}
+
+/// Ends the root's base scope that [`open_root_base`] opened, under its
+/// lock, as [`ScopeState::end_base`] does for a detached fiber (D-859,
+/// D-798): the root's base frame calls it after the body returned or
+/// unwound, the deadlock's cancellation included, and before the root
+/// reports its outcome, unregisters and retires. From then on a
+/// cancellation's walk and a survey skip the scope (`cancel_step`,
+/// `survey_step`), so neither reaches the retired root, and a late
+/// deadlock report is not stored ([`ScopeState::store_deadlock_report`]).
+/// It also drops the root's cancellation target, as a fiber's end does. A
+/// second call, a root without a base scope, and a base scope with a
+/// member are broken invariants (`fatal`).
+pub(crate) fn close_root_base(ctx: &ExecCtx) {
+    let Some(base) = ctx.conc.spawn_scope.lock().take() else {
+        fatal(format_args!(
+            "a root's base scope was closed twice, or never opened"
+        ));
+    };
+    if !base.is_root_base() || base.owner != FiberRef::from_ctx(ctx) {
+        fatal(format_args!(
+            "a root's base scope was closed that is not its own"
+        ));
+    }
+    cancel::clear_at_end(ctx);
+    base.end_base();
+}
+
 /// Opens a scope for the running fiber and returns its handle, owned
 /// (D-693, architecture §7.5): its parent is the fiber's innermost open
 /// scope, else the scope the fiber was spawned into; it is linked into the
@@ -590,7 +704,10 @@ pub unsafe extern "C" fn cheby_rt_scope_open(
             needs_scheduler("fiber::timeout");
         }
         let parent = me.conc.responsible_scope();
-        let state = Arc::new(ScopeState::new(parent, FiberRef::from_ctx(me)));
+        let state = Arc::new(ScopeState {
+            of_timeout: timed,
+            ..ScopeState::new(parent, FiberRef::from_ctx(me))
+        });
         // SAFETY: `ctx` is the running fiber's. If the allocation raises,
         // nothing is open yet and the payload box is dropped.
         let handle = unsafe {
@@ -686,7 +803,18 @@ pub unsafe extern "C" fn cheby_rt_scope_close(
                 needs_scheduler("fiber::scope");
             }
             inner.waiter = Some(FiberRef::from_ctx(me));
+            // The wait site (D-856, D-858), copied from the frame
+            // `scope_run`'s body published before this call, before the
+            // park (`park`'s SeqCst store orders it), and cleared once the
+            // fiber runs again.
+            let op = if state.of_timeout {
+                WaitOp::Timeout
+            } else {
+                WaitOp::Scope
+            };
+            me.sched.note_wait(op, me.wait_frame());
             park(me, AfterSwitch::Park(Some(Unlock::new(inner))));
+            me.sched.clear_wait();
         };
         // 2. Pop, unlink, and cancel the timer. A firing that already took
         // the timer finds the scope ended, and its walk skips it.

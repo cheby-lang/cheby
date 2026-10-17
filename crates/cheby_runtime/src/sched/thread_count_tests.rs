@@ -17,7 +17,7 @@ use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use super::park::state as parker;
-use super::testing::{HANG, Mailbox, entry_check, root, runtime, spawn, start_root, tuned};
+use super::testing::{Mailbox, entry_check, hang, root, runtime, spawn, start_root, tuned};
 use super::worker::life;
 use super::{AfterSwitch, Shared, TimerTarget, leave_callback, park};
 use crate::ctx::ExecCtx;
@@ -518,7 +518,7 @@ fn thread_count_a_lone_spinning_fiber_gives_its_retiring_worker_back() {
             let start = me.sched.worker();
             first.store(start + 1, Ordering::SeqCst);
             let begun = Instant::now();
-            while me.sched.worker() == start && begun.elapsed() < HANG {
+            while me.sched.worker() == start && begun.elapsed() < hang() {
                 if entry_check(me) {
                     return u64::MAX;
                 }
@@ -629,11 +629,11 @@ fn thread_count_a_retirement_racing_the_next_resume_is_not_lost() {
     stop_all.store(true, Ordering::SeqCst);
     escape.store(true, Ordering::SeqCst);
     assert!(matches!(
-        pinned.recv_timeout(HANG),
+        pinned.recv_timeout(hang()),
         Ok(EntryOutcome::Returned(0))
     ));
     assert!(matches!(
-        cycling.recv_timeout(HANG),
+        cycling.recv_timeout(hang()),
         Ok(EntryOutcome::Returned(0))
     ));
     runtime.shutdown();

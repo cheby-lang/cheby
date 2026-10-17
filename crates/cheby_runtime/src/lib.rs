@@ -53,6 +53,9 @@ pub mod io;
 pub mod layout;
 #[doc(hidden)]
 pub mod list;
+pub mod locate;
+#[cfg(test)]
+mod locate_tests;
 mod num;
 pub mod object;
 pub mod panic;

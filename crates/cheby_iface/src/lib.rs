@@ -20,6 +20,7 @@ pub mod hash;
 mod ids;
 mod iface;
 mod index;
+mod leak;
 mod name;
 mod set;
 mod ty;

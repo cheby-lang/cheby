@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
 use super::testing::{
-    HANG, Mailbox, config, emulated, entry_check, root, runtime, spawn, start_root, tuned,
+    Mailbox, config, emulated, entry_check, hang, root, runtime, spawn, start_root, tuned,
 };
 use super::*;
 use crate::abi::PanicKind;
@@ -355,7 +355,7 @@ fn preemption_latency(pinned: bool) -> Duration {
     // Without preemption the loop would never end; natively 2 s is far
     // past the 50 ms D-688 allows, under an emulator only a hang counts.
     let give_up = if emulated() {
-        HANG
+        hang()
     } else {
         Duration::from_secs(2)
     };
@@ -637,7 +637,7 @@ fn edgeless_spawned_fibers_inherit_their_spawners_setting() {
             // Waits for ever: the child's panic ends the process first.
             Mailbox::default().receive(me)
         })
-        .recv_timeout(HANG);
+        .recv_timeout(hang());
         panic!("the root ended: {outcome:?}");
     }
     let out = std::process::Command::new(std::env::current_exe().unwrap())
@@ -715,7 +715,7 @@ fn edgeless_raises_on_several_workers_end_the_process_once() {
             // Waits for ever: the first panic ends the process.
             Mailbox::default().receive(me)
         })
-        .recv_timeout(HANG);
+        .recv_timeout(hang());
         panic!("the root ended: {outcome:?}");
     }
     for run in 0..RUNS {
@@ -775,13 +775,13 @@ fn deep_fibers_lower_their_soft_limit_and_overflow_at_the_hard_one() {
         let now = me.real_stack_limit();
         u64::from(now < first && now >= me.hard_limit())
     })
-    .recv_timeout(HANG)
+    .recv_timeout(hang())
     .unwrap();
     assert_eq!(lowered, EntryOutcome::Returned(1));
     let outcome = start_root(&runtime, DEFAULT_STACK_SIZE, |me| {
         recurse(me, u64::MAX >> 1)
     })
-    .recv_timeout(HANG)
+    .recv_timeout(hang())
     .unwrap();
     let EntryOutcome::Panicked(report) = outcome else {
         panic!("expected a stack overflow, got {outcome:?}");

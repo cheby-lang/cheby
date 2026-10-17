@@ -541,7 +541,8 @@ mod tests {
     }
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(20_000))]
+        // 4 cases under Miri, as the Miri job's `PROPTEST_CASES` (D-721).
+        #![proptest_config(ProptestConfig::with_cases(if cfg!(miri) { 4 } else { 20_000 }))]
 
         #[test]
         fn float_text_round_trips(bits: u64) {

@@ -84,8 +84,8 @@ use crate::object::cheby_rt_static_err_nil;
 use crate::panic::fatal;
 use crate::rc;
 use crate::sched::{
-    AfterSwitch, Deadline, TimerHandle, TimerTarget, Unlocks, WaitHeader, WaitNode, WaitState,
-    begin_park, cancel_park, deadline_after, park, wake,
+    AfterSwitch, Deadline, TimerHandle, TimerTarget, Unlocks, WaitHeader, WaitNode, WaitOp,
+    WaitState, begin_park, cancel_park, deadline_after, park, wake,
 };
 use crate::unwind::guard::guarded;
 use crate::unwind::raise::raise_cancel;
@@ -508,6 +508,9 @@ unsafe fn wait(ctx: *mut ExecCtx, selector: Word) -> Word {
         drop(guards);
         needs_scheduler("selector::select")
     };
+    // The wait site (D-856, D-858), copied from the published frame before
+    // the park; cleared on every way out of the wait below.
+    me.sched.note_wait(WaitOp::Select, me.wait_frame());
     begin_park(me);
     let header = Arc::new(WaitHeader::new(me));
     let nodes: Box<[Waiter]> = arms
@@ -540,6 +543,7 @@ unsafe fn wait(ctx: *mut ExecCtx, selector: Word) -> Word {
         }
         drop(guards);
         cancel_park(me);
+        me.sched.clear_wait();
         raise_cancel(Some(ctx));
     }
     let timer = earliest_timer(&arms, &order).map(|(at, arm)| {
@@ -554,7 +558,9 @@ unsafe fn wait(ctx: *mut ExecCtx, selector: Word) -> Word {
         unlocks.push(guard);
     }
     park(me, AfterSwitch::ParkAll(unlocks));
-    // Step 5: unpublish, unlink, cancel the timer, then decide.
+    // Step 5: clear the wait site, unpublish, unlink, cancel the timer,
+    // then decide.
+    me.sched.clear_wait();
     cancel::unpublish(me);
     for arm in &arms {
         if let Kind::Receive { chan, node, .. } = &arm.kind {

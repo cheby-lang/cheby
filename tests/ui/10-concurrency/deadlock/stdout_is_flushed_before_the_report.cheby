@@ -1,0 +1,17 @@
+// @mode: run-fail
+// @exit: 103
+// @decisions: D-724, D-856, D-858, D-859
+// @milestone: M2
+//! Text printed without a newline before a deadlock still reaches standard
+//! output: `cheby run` flushes it before it writes the report.
+
+import std::channel
+import std::io
+
+fn main() {
+  io::println("a whole line")
+  io::print("and text with no newline")
+  let (tx, rx) = channel::new::<Int>(0)
+  let assert Ok(n) = channel::receive(rx)
+  let _ = channel::send(tx, n)
+}

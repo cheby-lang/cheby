@@ -42,6 +42,15 @@ const UNPARK_SHIFT: u32 = 16;
 /// One unparked worker.
 const ONE_UNPARKED: usize = 1 << UNPARK_SHIFT;
 
+/// What [`Idle::transition_worker_to_parked`] found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Parked {
+    /// The worker was the last searcher: it re-checks every queue.
+    pub(crate) last_searcher: bool,
+    /// The worker was the last unparked one (D-860's trigger).
+    pub(crate) last_unparked: bool,
+}
+
 /// The idle state of a runtime's workers.
 #[derive(Debug)]
 pub(crate) struct Idle {
@@ -131,13 +140,19 @@ impl Idle {
     }
 
     /// Registers `worker` as parked. Returns whether it was the last
-    /// searcher, which must then re-check every queue.
-    pub(crate) fn transition_worker_to_parked(&self, worker: usize, is_searching: bool) -> bool {
+    /// searcher, which must then re-check every queue, and whether it was
+    /// the last unparked worker, exact under the sleepers' lock: the
+    /// deadlock detector's trigger (D-860), never a proof (a worker blocked
+    /// inline in a system call, or one that is leaving, is not parked).
+    pub(crate) fn transition_worker_to_parked(&self, worker: usize, is_searching: bool) -> Parked {
         let mut sleepers = self.sleepers.lock();
         let decrement = ONE_UNPARKED | usize::from(is_searching);
         let previous = self.state.fetch_sub(decrement, Ordering::SeqCst);
         sleepers.push(worker);
-        is_searching && searching(previous) == 1
+        Parked {
+            last_searcher: is_searching && searching(previous) == 1,
+            last_unparked: unparked(previous) == 1,
+        }
     }
 
     /// Makes a worker searching, unless half the workers already search.
@@ -199,12 +214,25 @@ mod tests {
     fn notify_wakes_a_parked_worker_only_when_nobody_searches() {
         let idle = Idle::new(2);
         assert_eq!(idle.worker_to_notify(), None);
-        assert!(!idle.transition_worker_to_parked(0, false));
+        assert_eq!(
+            idle.transition_worker_to_parked(0, false),
+            Parked {
+                last_searcher: false,
+                last_unparked: false,
+            }
+        );
         assert!(idle.transition_worker_to_searching());
         // Worker 1 searches: it will find the work.
         assert_eq!(idle.worker_to_notify(), None);
-        // It was the last searcher when it parks.
-        assert!(idle.transition_worker_to_parked(1, true));
+        // It was the last searcher, and the last unparked worker (D-860's
+        // trigger), when it parks.
+        assert_eq!(
+            idle.transition_worker_to_parked(1, true),
+            Parked {
+                last_searcher: true,
+                last_unparked: true,
+            }
+        );
         assert!(idle.is_parked(1));
         let woken = idle.worker_to_notify().unwrap();
         assert!(!idle.is_parked(woken));
@@ -241,7 +269,7 @@ mod tests {
         // Every worker is awake: nobody to notify.
         assert_eq!(idle.worker_to_notify(), None);
         idle.add_worker();
-        assert!(!idle.transition_worker_to_parked(1, false));
+        assert!(!idle.transition_worker_to_parked(1, false).last_searcher);
         assert_eq!(idle.any_parked(), Some(1));
         // Worker 1 retires while parked; worker 0 while awake.
         idle.remove_worker(1);
