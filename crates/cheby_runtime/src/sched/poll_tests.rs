@@ -6,19 +6,22 @@
 //! The monitor's own firing (D-789) is switched off in
 //! these runtimes, so only a worker can fire a timer, and the targets
 //! record which thread fired them. Time is asserted only as a lower bound
-//! and a cap of 5 s (plan §0 'Determinism').
+//! and a cap of 5 s times `CHEBY_HARNESS_SCALE` (plan §0 'Determinism').
 
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use super::park::state as parker;
-use super::testing::{Mailbox, start_root, tuned};
+use super::testing::{Mailbox, scaled, start_root, tuned};
 use super::{Runtime, TimerTarget};
 use crate::entry::{EntryOutcome, MIN_STACK_SIZE};
 
-/// How long a test waits for something that should happen at once.
-const CAP: Duration = Duration::from_secs(5);
+/// How long a test waits for something that should happen at once: 5 s
+/// times `CHEBY_HARNESS_SCALE` (GAP(runtime-test-hang-scale)).
+fn cap() -> Duration {
+    scaled(Duration::from_secs(5))
+}
 
 /// A runtime of `threads` workers whose monitor fires no timers; without
 /// `rescue` it wakes no worker for a queued fiber either.
@@ -32,11 +35,11 @@ fn quiet(threads: usize, rescue: bool) -> Runtime {
     runtime
 }
 
-/// Waits up to [`CAP`] for `ready`.
+/// Waits up to [`cap()`] for `ready`.
 fn wait_until(mut ready: impl FnMut() -> bool) -> bool {
     let start = Instant::now();
     while !ready() {
-        if start.elapsed() > CAP {
+        if start.elapsed() > cap() {
             return false;
         }
         std::thread::sleep(Duration::from_millis(1));
@@ -105,7 +108,7 @@ fn parked_on_a_timer(threads: usize) {
             u64::try_from(ran.saturating_duration_since(deadline).as_micros()).unwrap()
         })
     };
-    match outcome.recv_timeout(CAP) {
+    match outcome.recv_timeout(cap()) {
         Ok(EntryOutcome::Returned(late)) => {
             println!("poller: {threads} workers, the fiber ran {late} us after its deadline");
         }
@@ -144,7 +147,7 @@ fn poller_a_push_wakes_the_poll_holder() {
             "worker 0 never polled"
         );
         let outcome = start_root(&runtime, MIN_STACK_SIZE, move |_| round);
-        match outcome.recv_timeout(CAP) {
+        match outcome.recv_timeout(cap()) {
             Ok(EntryOutcome::Returned(word)) => assert_eq!(word, round),
             other => panic!("the push did not wake the poll holder: {other:?}"),
         }
@@ -181,7 +184,7 @@ fn poller_a_new_earlier_timer_shortens_the_wait() {
         .checked_add(Duration::from_millis(30))
         .unwrap();
     let _near = shared.arm_timer(deadline, Arc::new(Report(parking_lot::Mutex::new(sender))));
-    let Ok((fired, on)) = near.recv_timeout(CAP) else {
+    let Ok((fired, on)) = near.recv_timeout(cap()) else {
         panic!("the earlier timer did not shorten the holder's wait");
     };
     assert!(fired >= deadline, "the timer fired before its deadline");

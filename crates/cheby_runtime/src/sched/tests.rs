@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
 use super::testing::{
-    Mailbox, config, emulated, entry_check, hang, root, runtime, spawn, start_root, tuned,
+    Mailbox, config, emulated, entry_check, hang, root, runtime, scaled, spawn, start_root, tuned,
 };
 use super::*;
 use crate::abi::PanicKind;
@@ -188,12 +188,13 @@ fn ping_pong_stays_on_one_worker_through_runnext() {
 #[test]
 #[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
 fn a_ping_pong_through_runnext_lets_the_local_deque_run() {
-    /// How long the pair may run before it gives up waiting for the third
-    /// fiber; the third should run within a few quanta.
-    const BOUND: Duration = Duration::from_secs(10);
     const STOP: u64 = u64::MAX;
+    // How long the pair may run before it gives up waiting for the third
+    // fiber; the third should run within a few quanta
+    // (GAP(runtime-test-hang-scale)).
+    let bound = scaled(Duration::from_secs(10));
     let runtime = runtime(1);
-    let word = root(&runtime, |me| {
+    let word = root(&runtime, move |me| {
         let request = Arc::new(Mailbox::default());
         let reply = Arc::new(Mailbox::default());
         let done = Arc::new(Mailbox::default());
@@ -221,7 +222,7 @@ fn a_ping_pong_through_runnext_lets_the_local_deque_run() {
             );
             spawn(me, false, move |fiber| {
                 let mut round = 0;
-                while !stop.load(Ordering::SeqCst) && started.elapsed() < BOUND {
+                while !stop.load(Ordering::SeqCst) && started.elapsed() < bound {
                     entry_check(fiber);
                     request.send(round, true);
                     assert_eq!(reply.receive(fiber), round);
@@ -242,7 +243,7 @@ fn a_ping_pong_through_runnext_lets_the_local_deque_run() {
     let (stopped_by_third, waited) = (word & 1 == 1, Duration::from_millis(word >> 1));
     assert!(stopped_by_third, "the third fiber never ran in {waited:?}");
     if !emulated() {
-        assert!(waited < Duration::from_secs(2), "{waited:?}");
+        assert!(waited < scaled(Duration::from_secs(2)), "{waited:?}");
     }
 }
 
@@ -341,7 +342,7 @@ fn a_wake_racing_a_worker_going_idle_is_never_lost() {
             std::hint::spin_loop();
         }
         mailbox.send(round, false);
-        match outcome.recv_timeout(Duration::from_secs(10)) {
+        match outcome.recv_timeout(scaled(Duration::from_secs(10))) {
             Ok(EntryOutcome::Returned(word)) => assert_eq!(word, round),
             other => panic!("round {round}: the wakeup was lost: {other:?}"),
         }
@@ -357,7 +358,7 @@ fn preemption_latency(pinned: bool) -> Duration {
     let give_up = if emulated() {
         hang()
     } else {
-        Duration::from_secs(2)
+        scaled(Duration::from_secs(2))
     };
     let runtime = runtime(1);
     // A Rust panic cannot unwind out of a fiber, so the fiber reports

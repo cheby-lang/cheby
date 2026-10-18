@@ -9,8 +9,14 @@
 //!   stdin             optional input
 //!   args              optional, one argument per line
 //!   env               optional, KEY=VALUE per line
-//!   test.toml         milestone, skip-run, reason
+//!   test.toml         milestone, skip-run, reason, timing
 //! ```
+//!
+//! `timing` is an optional boolean, false by default. An example that sets
+//! it runs every one of its trials serially after the parallel batch of
+//! the conformance harness (D-725). Another type, or `timing = true` with
+//! `skip-run = true`, is an error, since a check-only example waits for
+//! nothing (GAP(timing-key-shape)).
 
 use std::path::{Path, PathBuf};
 
@@ -33,6 +39,9 @@ pub struct TestConfig {
     pub skip_run: bool,
     /// Why the example is not run.
     pub reason: Option<String>,
+    /// The example waits for real time, so its trials run serially after
+    /// the parallel batch (D-725).
+    pub timing: bool,
 }
 
 /// The inputs and goldens of one example run.
@@ -88,18 +97,21 @@ impl TestConfig {
     ///
     /// # Errors
     ///
-    /// Returns a message for invalid TOML, an unknown key, a missing
-    /// `milestone`, or `skip-run` without a `reason`.
+    /// Returns a message for invalid TOML, an unknown or ill-typed key, a
+    /// missing `milestone`, `skip-run` without a `reason`, or `timing`
+    /// with `skip-run`.
     pub fn parse(text: &str) -> Result<Self, String> {
         let table: toml::Table = text.parse().map_err(|e: toml::de::Error| e.to_string())?;
         let mut milestone = None;
         let mut skip_run = false;
         let mut reason = None;
+        let mut timing = false;
         for (key, value) in &table {
             match (key.as_str(), value) {
                 ("milestone", toml::Value::String(s)) => milestone = Some(s.parse()?),
                 ("skip-run", toml::Value::Boolean(b)) => skip_run = *b,
                 ("reason", toml::Value::String(s)) => reason = Some(s.clone()),
+                ("timing", toml::Value::Boolean(b)) => timing = *b,
                 _ => return Err(format!("unknown or ill-typed key `{key}`")),
             }
         }
@@ -107,12 +119,29 @@ impl TestConfig {
         if skip_run && reason.is_none() {
             return Err("`skip-run` needs a `reason`".to_owned());
         }
+        // GAP(timing-key-shape): a `skip-run` example is only checked, so
+        // it has no timing to protect.
+        if skip_run && timing {
+            return Err("`timing` has no effect on a `skip-run` example".to_owned());
+        }
         Ok(Self {
             milestone,
             skip_run,
             reason,
+            timing,
         })
     }
+}
+
+/// The names of the examples whose trials run serially after the parallel
+/// batch, in the order of `examples` (D-725).
+#[must_use]
+pub fn serial_names(examples: &[Example]) -> Vec<&str> {
+    examples
+        .iter()
+        .filter(|ex| ex.config.timing)
+        .map(|ex| ex.name.as_str())
+        .collect()
 }
 
 impl Example {
@@ -168,7 +197,7 @@ impl Example {
 
 #[cfg(test)]
 mod tests {
-    use super::TestConfig;
+    use super::{TestConfig, serial_names};
     use crate::milestone::Milestone;
 
     #[test]
@@ -176,7 +205,48 @@ mod tests {
         let c = TestConfig::parse("milestone = \"M2\"\n").unwrap();
         assert_eq!(c.milestone, Milestone::M2);
         assert!(!c.skip_run);
+        assert!(!c.timing);
         assert!(TestConfig::parse("milestone = \"M3\"\nskip-run = true\n").is_err());
         assert!(TestConfig::parse("milestone = \"M1\"\ncolour = 1\n").is_err());
+        // D-725, GAP(timing-key-shape).
+        assert!(
+            TestConfig::parse("milestone = \"M2\"\ntiming = true\n")
+                .unwrap()
+                .timing
+        );
+        assert!(
+            !TestConfig::parse("milestone = \"M2\"\ntiming = false\n")
+                .unwrap()
+                .timing
+        );
+        for bad in ["timing = \"yes\"\n", "timing = 1\n"] {
+            let err = TestConfig::parse(&format!("milestone = \"M2\"\n{bad}")).unwrap_err();
+            assert_eq!(err, "unknown or ill-typed key `timing`");
+        }
+        let err = TestConfig::parse(
+            "milestone = \"M3\"\nskip-run = true\nreason = \"a fixture\"\ntiming = true\n",
+        )
+        .unwrap_err();
+        assert_eq!(err, "`timing` has no effect on a `skip-run` example");
+        assert!(
+            !TestConfig::parse(
+                "milestone = \"M3\"\nskip-run = true\nreason = \"a fixture\"\ntiming = false\n"
+            )
+            .unwrap()
+            .timing
+        );
+    }
+
+    #[test]
+    fn the_timing_examples_are_the_three_of_d725() {
+        let examples = super::all(&crate::repo_root()).unwrap();
+        assert_eq!(
+            serial_names(&examples),
+            [
+                "009_counter_actor",
+                "013_dining_philosophers",
+                "019_supervisor"
+            ]
+        );
     }
 }

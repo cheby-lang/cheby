@@ -50,8 +50,13 @@
 #   `runtime-stress`, because the runtime's unit tests leak on purpose
 #   (frozen constants are immortal, leaked fixtures, child processes that
 #   end at a halt or a refusal without cleanup), and for `conformance`,
-#   `examples-poison-off` and `repl`, whose programs keep objects on fiber
-#   stacks it does not scan. The runtime's own leak check (exit 102, D-458)
+#   `examples-poison-off` and `repl`, whose programs keep objects for good
+#   on purpose: D-539 makes a constant's objects static, outside the
+#   runtime's leak check, and only the constant's slot `cb$const$…` in the
+#   JIT's data memory holds them, which LeakSanitizer does not scan
+#   (reading `duration::zero` alone gives a report); and the REPL never
+#   frees what its entries return, its session values (D-547), and runs no
+#   leak check (D-458). The runtime's own leak check (exit 102, D-458)
 #   and its tests stay on everywhere (GAP(sanitize-lsan)). Under the address
 #   cfg the fiber stack slots are LeakSanitizer root regions while handed
 #   out, so objects held by fibers that a halt freezes are not reported

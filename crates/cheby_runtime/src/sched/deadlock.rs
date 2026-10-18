@@ -65,8 +65,9 @@
 //! leaves its group closing; the REPL keeps such a group until the session
 //! ends (D-827). [`crate::sched::Runtime::teardown`] then marks the group
 //! stuck ([`DetachedGroup::mark_stuck`]): under the group's job lock (a
-//! leaf) it sets `stuck` and releases every token in the group's list, then
-//! empties the list. A token registered later ([`DetachedGroup::track_job`],
+//! leaf) it sets `stuck` and takes the group's list; after the lock it
+//! releases each token still alive (a gone token's completion released it
+//! already). A token registered later ([`DetachedGroup::track_job`],
 //! also under that lock) finds `stuck` set and is released at once, so a
 //! stuck group's job is never counted afterwards. The race with a
 //! completion is the token's swap: the completion's `release` and the mark's
@@ -145,7 +146,17 @@
 //!    stuck fiber whose call returns can wake it at any moment, even
 //!    during the walk. The walk's reads are relaxed atomic loads within
 //!    the fiber's mapped stack (`locate::LiveStack`), so such a race reads
-//!    stale words at worst, and the re-check then drops the line. So no
+//!    stale or new words, and the re-check then drops the line. The
+//!    re-check is ordered after the walk by an `Acquire` fence (board item
+//!    DLm-1): a word the walk read from the running fiber was written after
+//!    `Worker::run_fiber` stored `RUNNING` and the count, then stored
+//!    `running` and loaded `life` (all `SeqCst`; the load orders the
+//!    fiber's later stores after it on arm64, and x86-64 keeps stores in
+//!    order), so the re-check then reads `RUNNING` or a newer count. This
+//!    is a hardware argument, since the fiber's stack stores are plain
+//!    stores of JIT code: C11 and `loom` need a `Release` fence on the
+//!    resume path as well (the wave-2 model 6 checks that pair), which
+//!    D-860's one relaxed store per resume leaves out. So no
 //!    line is built from a stack that ran, and no control block is read
 //!    after the lock that keeps its fiber from retiring is released, woken
 //!    or not; a root's own block is
@@ -691,6 +702,10 @@ fn collect(
         // nothing in the domain, except D-857's stuck-group wake: a stuck
         // fiber whose call returns can wake this fiber through a shared
         // value at any time. The report is then given up (a failed survey).
+        // The fence orders the re-check after the walk's relaxed reads, so
+        // a word read from the running fiber's stack makes the re-check see
+        // its resume (module documentation, step 5; board item DLm-1).
+        std::sync::atomic::fence(Ordering::Acquire);
         if sched.state().load(Ordering::SeqCst) != state::PARKED || sched.resumes() != resumes {
             walked_live(shared);
             return false;

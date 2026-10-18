@@ -34,7 +34,7 @@ use crate::abi::{self, Word};
 use crate::alloc::{alloc_for, check_live, release_fields};
 use crate::ctx::ExecCtx;
 use crate::layout::{self, LayoutKind};
-use crate::object::{load_rc, ptr_to_word, read_field, to_usize, word_to_ptr};
+use crate::object::{load_rc, ptr_to_word, read_field, scan_and_layout, to_usize, word_to_ptr};
 use crate::panic::fatal;
 use crate::stats::{self, Event};
 
@@ -133,8 +133,14 @@ pub unsafe extern "C" fn cheby_rt_drop_reuse_checked(
     // SAFETY: forwarded from the caller.
     unsafe { check_live(value, "`drop_reuse`") };
     let obj = word_to_ptr(value);
+    // Only the header's upper half, the scan count and layout, which are
+    // never written after allocation: the count is the lower half, which
+    // other fibers change atomically while the object is shared, so a
+    // plain read of the whole word would race them (board item SZe-2 of
+    // wave 2). The count is read atomically below, as `check_live` does.
     // SAFETY: a live object.
-    let header = unsafe { read_field(obj, 0) };
+    let (scan, id) = unsafe { scan_and_layout(obj) };
+    let header = abi::header(0, scan, id);
     // SAFETY: a live object.
     let old = unsafe { reuse_size(header, Some(obj)) };
     if old != Some(size) {
@@ -356,5 +362,51 @@ mod tests {
             assert_eq!(domain.live_objects(), 0);
         });
         assert_eq!(domain.live_objects(), 0);
+    }
+
+    /// Board item SZe-2 (wave 2): the checked `drop_reuse` of a shared
+    /// object reads its count only atomically, so a fiber on another
+    /// worker that changes the count meanwhile does not race the check. It
+    /// read the whole header with a plain 8-byte load, which overlaps the
+    /// count, and the thread sanitizer reported that against the count's
+    /// atomic updates (the `thread` `conformance` step, 018, 022 and 009 at
+    /// 2 and 4 threads). This test is that case for the sanitizer's
+    /// `runtime` step; without a sanitizer it checks the counts.
+    #[test]
+    fn reuse_checked_drop_of_a_shared_object_races_no_count_update() {
+        const ROUNDS: usize = 20_000;
+        let domain = Domain::new();
+        crate::alloc::with_domain(Arc::clone(&domain), || {
+            let shared = tuple(&[int(4)]);
+            // SAFETY: a live object this thread owns; its count is atomic
+            // from now on, as for a value a spawn shares (D-705).
+            unsafe { crate::rc::mark_shared(shared) };
+            let other = std::thread::spawn(move || {
+                for _ in 0..ROUNDS {
+                    // SAFETY: the main thread holds a reference until it
+                    // has joined this thread; this one takes and gives up
+                    // its own.
+                    unsafe {
+                        crate::rc::dup(shared);
+                        crate::rc::cheby_rt_drop(std::ptr::null_mut(), shared);
+                    }
+                }
+            });
+            for _ in 0..ROUNDS {
+                // SAFETY: a second reference to the live object, which the
+                // checked `drop_reuse` gives up: the base reference keeps
+                // the count above 1, so it is a miss.
+                let token = unsafe {
+                    crate::rc::dup(shared);
+                    cheby_rt_drop_reuse_checked(std::ptr::null_mut(), shared, 16)
+                };
+                assert_eq!(token, 0, "a shared value misses");
+            }
+            other.join().unwrap();
+            assert_eq!(domain.live_objects(), 1);
+            // SAFETY: the base reference, the last one.
+            unsafe { crate::rc::cheby_rt_drop(std::ptr::null_mut(), shared) };
+            assert_eq!(domain.live_objects(), 0);
+        });
     }
 }

@@ -400,3 +400,65 @@ pub(crate) fn entry_check(ctx: &ExecCtx) -> bool {
     }
     crate::unwind::flag::get(ctx) != crate::abi::unwind_flag::NONE
 }
+
+/// GAP(runtime-test-hang-scale), review finding CONC-W2-1 of gate 2: no
+/// runtime test bounds how long something may take with a literal number
+/// of seconds that ignores `CHEBY_HARNESS_SCALE`. The scan matches the
+/// three forms such a bound took: a `recv_timeout` that calls a missing
+/// outcome a hang, an asserted upper bound on an elapsed time, and a
+/// deadline after which a test gives up. Far deadlines that a test arms
+/// and never waits for (`Instant::now() + Duration::from_secs(3600)` in
+/// the timer tests) are not bounds and do not match.
+#[test]
+fn hang_bounds_go_through_scaled() {
+    use std::path::{Path, PathBuf};
+
+    fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
+        let mut entries: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        entries.sort();
+        for path in entries {
+            if path.is_dir() {
+                rust_files(&path, out);
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
+                out.push(path);
+            }
+        }
+    }
+
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut files = Vec::new();
+    rust_files(&root, &mut files);
+    assert!(files.len() > 50, "{} files", files.len());
+    let unscaled = |line: &str| {
+        line.contains("recv_timeout(Duration::from_secs(")
+            || (line.contains("assert!(") && line.contains("< Duration::from_secs("))
+            || line.contains("let deadline = Instant::now() + Duration::from_secs(")
+    };
+    let mut found = Vec::new();
+    for file in &files {
+        let relative = file.strip_prefix(&root).unwrap();
+        // This test names the forms it looks for.
+        if relative == Path::new("sched/testing.rs") {
+            continue;
+        }
+        let source = std::fs::read_to_string(file).unwrap();
+        for (number, line) in source.lines().enumerate() {
+            if unscaled(line) {
+                found.push(format!(
+                    "{}:{}: {}",
+                    relative.display(),
+                    number + 1,
+                    line.trim()
+                ));
+            }
+        }
+    }
+    assert!(
+        found.is_empty(),
+        "time bounds that do not go through `scaled`:\n{}",
+        found.join("\n")
+    );
+}

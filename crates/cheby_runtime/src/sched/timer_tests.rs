@@ -3,14 +3,15 @@
 //! and the timers at stop (C7).
 //!
 //! Time is asserted only as a lower bound ("never earlier than the
-//! deadline", D-671) and a generous cap of 5 s; latencies are printed, as
+//! deadline", D-671) and a generous cap of 5 s times `CHEBY_HARNESS_SCALE`
+//! (GAP(runtime-test-hang-scale)); latencies are printed, as
 //! informative readings (plan §0 'Determinism').
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use super::testing::{Mailbox, entry_check, root, runtime, spawn, start_root};
+use super::testing::{Mailbox, entry_check, root, runtime, scaled, spawn, start_root};
 use super::{Runtime, TimerTarget};
 use crate::entry::{EntryOutcome, MIN_STACK_SIZE};
 
@@ -84,7 +85,7 @@ fn timer_wakes_a_parked_fiber() {
 /// the function-entry check and never parks, so no worker polls; the
 /// monitor fires the timer, the fiber it wakes goes to the global queue, and
 /// the next tick preempts a spinner so that it runs, at one and at two
-/// workers, within a cap of 5 s.
+/// workers, within a cap of 5 s (scaled).
 fn fires_while_every_worker_spins(threads: usize) -> Duration {
     let runtime = runtime(threads);
     let stop = Arc::new(AtomicBool::new(false));
@@ -108,12 +109,13 @@ fn fires_while_every_worker_spins(threads: usize) -> Duration {
             u64::try_from(ran.as_nanos()).unwrap()
         })
     };
-    let result = outcome.recv_timeout(Duration::from_secs(5));
+    let cap = scaled(Duration::from_secs(5));
+    let result = outcome.recv_timeout(cap);
     // Let the spinners end whatever happened, so the runtime can stop.
     stop.store(true, Ordering::SeqCst);
     let late = match result {
         Ok(EntryOutcome::Returned(nanos)) => Duration::from_nanos(nanos),
-        other => panic!("the sleeping fiber did not run within 5 s: {other:?}"),
+        other => panic!("the sleeping fiber did not run within {cap:?}: {other:?}"),
     };
     drop(runtime);
     late

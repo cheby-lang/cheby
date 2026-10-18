@@ -219,8 +219,11 @@ fn cancellation_pending(me: &ExecCtx) -> bool {
 /// The location of the tests' panics.
 const AT: &str = "src/main.cheby:2:3";
 
-/// A limit that never passes during a test.
-const LONG: Duration = Duration::from_secs(10);
+/// A limit that never passes during a test: 10 s times
+/// `CHEBY_HARNESS_SCALE` (GAP(runtime-test-hang-scale)).
+fn long() -> Duration {
+    testing::scaled(Duration::from_secs(10))
+}
 
 /// The shortest limit the tests use (plan §0 'Determinism').
 const SHORT: Duration = Duration::from_millis(10);
@@ -236,7 +239,7 @@ fn timeout_f_returns_first_and_the_close_cancels_the_timer() {
     for threads in THREADS {
         run_root(threads, |me| {
             let before = pending_timers(me);
-            let scope = open_timed(me, LONG);
+            let scope = open_timed(me, long());
             // SAFETY: a live `Scope` handle.
             let state = unsafe { state_of(scope) };
             assert!(state.timed());
@@ -308,7 +311,7 @@ fn timeout_fired_but_f_returned_before_its_next_entry_check_is_ok() {
 fn timeout_f_panics_before_firing_is_panicked_and_the_close_cancels_the_timer() {
     for threads in THREADS {
         run_root(threads, |me| {
-            let scope = open_timed(me, LONG);
+            let scope = open_timed(me, long());
             assert_eq!(pending_timers(me), 1);
             panic_with(me, "first", AT);
             assert!(raised(me));
@@ -452,7 +455,7 @@ fn timeout_the_close_cancels_the_timer_when_an_outer_cancellation_passes_through
     for threads in THREADS {
         run_root(threads, |me| {
             let outer = open(me);
-            let scope = open_timed(me, LONG);
+            let scope = open_timed(me, long());
             assert_eq!(pending_timers(me), 1);
             // SAFETY: a live `Scope` handle.
             let outer_state = unsafe { state_of(outer) };
@@ -481,7 +484,7 @@ fn timeout_the_close_cancels_the_timer_when_an_outer_cancellation_passes_through
 #[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
 fn timeout_a_firing_that_loses_the_race_to_ended_is_harmless() {
     run_root(1, |me| {
-        let scope = open_timed(me, LONG);
+        let scope = open_timed(me, long());
         // SAFETY: a live `Scope` handle.
         let state = unsafe { state_of(scope) };
         assert!(close_body(me, scope));

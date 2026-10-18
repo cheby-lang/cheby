@@ -32,8 +32,11 @@ use crate::values;
 
 const THREADS: [usize; 3] = [1, 2, 4];
 
-/// How long a child process may take, at most, to exit.
-const CHILD_LIMIT: Duration = Duration::from_secs(5);
+/// How long a child process may take, at most, to exit: 5 s times
+/// `CHEBY_HARNESS_SCALE` (GAP(runtime-test-hang-scale)).
+fn child_limit() -> Duration {
+    testing::scaled(Duration::from_secs(5))
+}
 
 fn ctx_ptr(me: &ExecCtx) -> *mut ExecCtx {
     std::ptr::from_ref(me).cast_mut()
@@ -462,7 +465,7 @@ fn lifecycle_code_tokens_outlive_every_running_fiber() {
 /// Runs this test binary's test `name` alone in a child process with the
 /// environment variable `child` set and standard input piped and kept
 /// open; returns its status and standard error, or panics if it does not
-/// exit within [`CHILD_LIMIT`].
+/// exit within [`child_limit()`].
 fn child_within_limit(name: &str, child: &str) -> (std::process::ExitStatus, String) {
     let mut process = Command::new(std::env::current_exe().unwrap())
         .args(["--exact", name, "--nocapture", "--test-threads=1"])
@@ -478,10 +481,10 @@ fn child_within_limit(name: &str, child: &str) -> (std::process::ExitStatus, Str
         if let Some(status) = process.try_wait().unwrap() {
             break status;
         }
-        if started.elapsed() > CHILD_LIMIT {
+        if started.elapsed() > child_limit() {
             process.kill().ok();
             process.wait().ok();
-            panic!("the child process did not exit within {CHILD_LIMIT:?}");
+            panic!("the child process did not exit within {:?}", child_limit());
         }
         std::thread::sleep(Duration::from_millis(5));
     };
@@ -696,7 +699,7 @@ fn lifecycle_teardown_skips_io_inline_after_a_refused_pool_thread() {
         let started = Instant::now();
         while !(pool.threads() == 0 && (0..2).any(|index| runtime.shared.worker_blocked(index))) {
             assert!(
-                started.elapsed() < Duration::from_secs(2),
+                started.elapsed() < testing::scaled(Duration::from_secs(2)),
                 "the read does not block a worker inline ({} pool threads)",
                 pool.threads()
             );
@@ -1082,10 +1085,13 @@ fn lifecycle_terminate_after_the_flush_keeps_the_status() {
         if let Some(status) = process.try_wait().unwrap() {
             break status;
         }
-        if started.elapsed() > CHILD_LIMIT {
+        if started.elapsed() > child_limit() {
             process.kill().ok();
             process.wait().ok();
-            panic!("the child process did not exit within {CHILD_LIMIT:?}: {seen}");
+            panic!(
+                "the child process did not exit within {:?}: {seen}",
+                child_limit()
+            );
         }
         std::thread::sleep(Duration::from_millis(5));
     };

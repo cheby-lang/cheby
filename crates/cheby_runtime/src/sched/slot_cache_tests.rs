@@ -13,14 +13,17 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use super::testing::{Mailbox, entry_check, root, runtime, spawn, start_root};
+use super::testing::{Mailbox, entry_check, root, runtime, scaled, spawn, start_root};
 use super::worker::life;
 use super::{AfterSwitch, Shared, leave_callback, park};
 use crate::ctx::ExecCtx;
 use crate::entry::EntryOutcome;
 
-/// How long a test waits for something that should happen soon.
-const CAP: Duration = Duration::from_secs(10);
+/// How long a test waits for something that should happen soon: 10 s
+/// times `CHEBY_HARNESS_SCALE` (GAP(runtime-test-hang-scale)).
+fn cap() -> Duration {
+    scaled(Duration::from_secs(10))
+}
 
 /// The slots a worker's cache holds at most.
 const CACHE_SLOTS: usize = 4;
@@ -58,11 +61,11 @@ fn cached_after_join(shared: &Shared) -> usize {
         .sum()
 }
 
-/// Waits in fiber `me`, yielding, up to [`CAP`] for `ready`.
+/// Waits in fiber `me`, yielding, up to [`cap()`] for `ready`.
 fn yield_until(me: &ExecCtx, mut ready: impl FnMut() -> bool) -> bool {
     let start = Instant::now();
     while !ready() {
-        if start.elapsed() > CAP {
+        if start.elapsed() > cap() {
             return false;
         }
         park(me, AfterSwitch::Requeue);
@@ -70,11 +73,11 @@ fn yield_until(me: &ExecCtx, mut ready: impl FnMut() -> bool) -> bool {
     true
 }
 
-/// Waits on the host up to [`CAP`] for `ready`.
+/// Waits on the host up to [`cap()`] for `ready`.
 fn wait_until(mut ready: impl FnMut() -> bool) -> bool {
     let start = Instant::now();
     while !ready() {
-        if start.elapsed() > CAP {
+        if start.elapsed() > cap() {
             return false;
         }
         std::thread::sleep(Duration::from_millis(1));
@@ -168,7 +171,7 @@ fn slot_cache_keeps_no_root_slot() {
     let runtime = runtime(1);
     let shared = Arc::clone(&runtime.shared);
     for _ in 0..CACHE_SLOTS {
-        let outcome = start_root(&runtime, 64 << 20, |_| 0).recv_timeout(CAP);
+        let outcome = start_root(&runtime, 64 << 20, |_| 0).recv_timeout(cap());
         assert!(
             matches!(outcome, Ok(EntryOutcome::Returned(0))),
             "{outcome:?}"
@@ -291,7 +294,7 @@ fn slot_cache_is_drained_when_its_worker_retires() {
             // Busy, with no entry check, so the other worker steals the
             // fiber and nothing preempts the root meanwhile.
             let begun = Instant::now();
-            while report.load(Ordering::SeqCst) == usize::MAX && begun.elapsed() < CAP {
+            while report.load(Ordering::SeqCst) == usize::MAX && begun.elapsed() < cap() {
                 std::hint::spin_loop();
             }
             let index = report.load(Ordering::SeqCst);

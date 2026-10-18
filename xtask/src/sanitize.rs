@@ -45,8 +45,12 @@
 //! `runtime` and `runtime-stress`, whose unit tests leak on purpose (frozen
 //! constants are immortal, leaked fixtures, child processes that end at a
 //! halt or a refusal without cleanup), and for `conformance`,
-//! `examples-poison-off` and `repl`, whose programs keep objects on fiber
-//! stacks the leak checker does not scan; the runtime's own leak check
+//! `examples-poison-off` and `repl`, whose programs keep objects for good
+//! on purpose: D-539 makes a constant's objects static, outside the
+//! runtime's leak check, and only the constant's slot `cb$const$…` in the
+//! JIT's data memory holds them, which the leak checker does not scan; and
+//! the REPL never frees what its entries return, its session values
+//! (D-547, no leak check in the REPL: D-458); the runtime's own leak check
 //! (status 102, D-458) stays on everywhere (GAP(sanitize-lsan)). Fiber stack
 //! slots are registered as root regions under the address cfg, so objects
 //! held by fibers a halt freezes are not reported (D-708, D-859). The leak
@@ -308,8 +312,10 @@ pub const MIRI_GROUPS: &[MiriGroup] = &[
 pub enum Leaks {
     /// `detect_leaks=1` on Linux.
     On,
-    /// `detect_leaks=0`: the programs keep objects on fiber stacks
-    /// the leak checker does not scan.
+    /// `detect_leaks=0`: the runtime's unit tests leak on purpose, programs
+    /// that read a constant hold its static objects (D-539) only in the
+    /// JIT's data memory, which the leak checker does not scan, and the
+    /// REPL never frees its session values (D-547, D-458).
     Off,
 }
 
@@ -1433,6 +1439,40 @@ mod tests {
         assert_eq!(with_caller("a=1", Some("b=2".to_owned()), ':'), "a=1:b=2");
         assert_eq!(with_caller("a=1", Some(" ".to_owned()), ':'), "a=1");
         assert_eq!(with_caller("-Za", None, ' '), "-Za");
+    }
+
+    /// D-863: a per-step option is named, with its cause, in the workflow's
+    /// header. Review finding MEM2-1 of gate 2: the header gave unscanned
+    /// fiber stacks as the cause for the program steps, which are root
+    /// regions under the address cfg; the reports come from D-539's static
+    /// constants, held only in the JIT's data memory, and from the REPL's
+    /// session values, which it never frees (D-547, D-458).
+    #[test]
+    fn the_header_names_why_leak_checking_is_off() {
+        let workflow =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../.github/workflows/nightly.yml");
+        let text = std::fs::read_to_string(&workflow).unwrap();
+        let paragraph: String = text
+            .lines()
+            .skip_while(|line| !line.starts_with("#   LeakSanitizer is on"))
+            .take_while(|line| !line.starts_with("#   A report whose"))
+            .map(|line| line.trim_start_matches('#').trim())
+            .collect::<Vec<_>>()
+            .join(" ");
+        for step in steps() {
+            assert!(
+                paragraph.contains(&format!("`{}`", step.name)),
+                "the header's LeakSanitizer paragraph does not name `{}`: {paragraph}",
+                step.name
+            );
+        }
+        for cause in ["D-539", "D-547", "cb$const$", "D-708, D-859"] {
+            assert!(paragraph.contains(cause), "no {cause}: {paragraph}");
+        }
+        assert!(
+            !paragraph.contains("stacks it does not scan"),
+            "{paragraph}"
+        );
     }
 
     #[test]

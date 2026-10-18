@@ -54,6 +54,22 @@
 //! several scheduler threads. `CHEBY_HARNESS_SCALE` multiplies the
 //! timeout (`cheby_test_support::process`).
 //!
+//! The serial group (D-725): every run trial and `::test` trial of an
+//! example whose `test.toml` sets `timing = true`, at every variant, the
+//! base trial included, runs one at a time after the parallel batch, so
+//! the real-time waits of 009, 013 and 019 do not compete with other
+//! trials (GAP(timing-serial-every-variant)). The serial group is a second
+//! libtest run on one thread, made only when some example sets `timing`.
+//! Filters, `--exact`, `--skip`, `--ignored` and `--list` apply to each
+//! batch, and each batch prints its own `running N tests` and
+//! `test result:` lines. After both, the harness prints one combined line,
+//! `conformance harness: <p> passed; <f> failed; <i> ignored; <x> filtered
+//! out (serial after the parallel batch: <n>)`, which counts every trial,
+//! and then the pending summary once (GAP(timing-serial-second-run)). The
+//! harness prints the serial examples next to its thread counts. D-725
+//! orders the trials, the `cheby` processes; the tests inside one `cheby
+//! test` still run in parallel (D-723).
+//!
 //! The naive-counting variant (D-718, D-853): the run
 //! trial and the `::test` trial of every example that is run also run as
 //! `<name>@rc=naive` and `<name>::test@rc=naive`, with `CHEBY_RC=naive`
@@ -111,6 +127,12 @@ fn main() -> ExitCode {
         "conformance harness: CHEBY_THREADS of the run trials: {}",
         threads::describe(&variants)
     );
+    let serial_names = example::serial_names(&examples).join(", ");
+    if !serial_names.is_empty() {
+        eprintln!(
+            "conformance harness: run serially after the parallel batch (D-725): {serial_names}"
+        );
+    }
     if let Some(reason) = platform::run_skip_reason() {
         eprintln!("conformance harness: runs and checks are ignored: {reason}");
     }
@@ -120,42 +142,93 @@ fn main() -> ExitCode {
         std::thread::available_parallelism().ok().map(Into::into),
     ));
 
-    let trials = examples
-        .into_iter()
-        .flat_map(|ex| {
-            // A `skip-run` example is only checked, and its `::test` trial
-            // stays pending, so it runs once, as the base trial.
-            let variants: &[Variant] = if ex.config.skip_run {
-                &[Variant::Unset]
-            } else {
-                &variants
-            };
-            variants
-                .iter()
-                .flat_map(|&variant| {
-                    let run = Run { variant, timeout };
-                    // Variants share the base trial's goldens, which only
-                    // the base trial blesses.
-                    let ignored = bless && !variant.is_base();
-                    [
-                        run_trial(ex.clone(), current, verdicts.clone(), bless, run),
-                        test_trial(ex.clone(), current, verdicts.clone(), run),
-                    ]
-                    .map(|trial| {
-                        if ignored {
-                            trial.with_ignored_flag(true)
-                        } else {
-                            trial
-                        }
-                    })
-                })
-                .collect::<Vec<_>>()
-        })
-        .collect();
+    // GAP(timing-serial-every-variant): every trial of a `timing` example,
+    // at every variant, goes to the serial group (D-725).
+    let mut parallel = Vec::new();
+    let mut serial = Vec::new();
+    for ex in examples {
+        let batch = if ex.config.timing {
+            &mut serial
+        } else {
+            &mut parallel
+        };
+        batch.extend(example_trials(
+            &ex, current, &verdicts, bless, timeout, &variants,
+        ));
+    }
 
-    let conclusion = libtest_mimic::run(&args, trials);
+    let mut conclusion = libtest_mimic::run(&args, parallel);
+    // GAP(timing-serial-second-run): the serial group runs after the
+    // parallel batch, one trial at a time on this thread, and the two
+    // conclusions are merged. No second run when no example sets `timing`.
+    let mut serial_run = 0;
+    if !serial.is_empty() {
+        let one_at_a_time = Arguments {
+            test_threads: Some(1),
+            ..args.clone()
+        };
+        let second = libtest_mimic::run(&one_at_a_time, serial);
+        serial_run = second
+            .num_passed
+            .saturating_add(second.num_failed)
+            .saturating_add(second.num_ignored);
+        let add = |a: &mut u64, b: u64| *a = a.saturating_add(b);
+        add(&mut conclusion.num_filtered_out, second.num_filtered_out);
+        add(&mut conclusion.num_passed, second.num_passed);
+        add(&mut conclusion.num_failed, second.num_failed);
+        add(&mut conclusion.num_ignored, second.num_ignored);
+        add(&mut conclusion.num_measured, second.num_measured);
+    }
+    if !args.list {
+        println!(
+            "conformance harness: {} passed; {} failed; {} ignored; {} filtered out \
+             (serial after the parallel batch: {serial_run})",
+            conclusion.num_passed,
+            conclusion.num_failed,
+            conclusion.num_ignored,
+            conclusion.num_filtered_out,
+        );
+    }
     verdicts.report("examples");
     conclusion.exit_code()
+}
+
+/// The run and `::test` trials of `ex`, at every variant. A `skip-run`
+/// example is only checked, and its `::test` trial stays pending, so it
+/// runs once, as the base trial.
+fn example_trials(
+    ex: &Example,
+    current: Setting,
+    verdicts: &Verdicts,
+    bless: bool,
+    timeout: Duration,
+    variants: &[Variant],
+) -> Vec<Trial> {
+    let variants: &[Variant] = if ex.config.skip_run {
+        &[Variant::Unset]
+    } else {
+        variants
+    };
+    variants
+        .iter()
+        .flat_map(|&variant| {
+            let run = Run { variant, timeout };
+            // Variants share the base trial's goldens, which only the base
+            // trial blesses.
+            let ignored = bless && !variant.is_base();
+            [
+                run_trial(ex.clone(), current, verdicts.clone(), bless, run),
+                test_trial(ex.clone(), current, verdicts.clone(), run),
+            ]
+            .map(|trial| {
+                if ignored {
+                    trial.with_ignored_flag(true)
+                } else {
+                    trial
+                }
+            })
+        })
+        .collect()
 }
 
 /// The trial that runs the example and compares its output with the

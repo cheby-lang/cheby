@@ -29,8 +29,11 @@ use crate::sched::testing;
 use crate::sched::{AfterSwitch, CodeToken, DetachedGroup, FiberRef, park};
 use crate::values;
 
-/// How long a child process may take, at most, to exit.
-const CHILD_LIMIT: Duration = Duration::from_secs(10);
+/// How long a child process may take, at most, to exit: 10 s times
+/// `CHEBY_HARNESS_SCALE` (GAP(runtime-test-hang-scale)).
+fn child_limit() -> Duration {
+    testing::scaled(Duration::from_secs(10))
+}
 
 /// Waits until `ready` holds on the host, or panics after [`testing::hang()`].
 fn wait_until(ready: impl Fn() -> bool) {
@@ -135,7 +138,7 @@ fn on_root(threads: usize, body: impl FnOnce(&ExecCtx) -> u64 + Send + 'static) 
 /// Runs this test binary's test `name` alone in a child process with the
 /// environment variable `child` set and standard input piped and kept
 /// open; returns its status and standard error, or panics if it does not
-/// exit within [`CHILD_LIMIT`].
+/// exit within [`child_limit()`].
 fn child(name: &str, child: &str) -> (std::process::ExitStatus, String) {
     let mut process = Command::new(std::env::current_exe().unwrap())
         .args(["--exact", name, "--nocapture", "--test-threads=1"])
@@ -151,10 +154,10 @@ fn child(name: &str, child: &str) -> (std::process::ExitStatus, String) {
         if let Some(status) = process.try_wait().unwrap() {
             break status;
         }
-        if started.elapsed() > CHILD_LIMIT {
+        if started.elapsed() > child_limit() {
             process.kill().ok();
             process.wait().ok();
-            panic!("the child process did not exit within {CHILD_LIMIT:?}");
+            panic!("the child process did not exit within {:?}", child_limit());
         }
         thread::sleep(Duration::from_millis(5));
     };
@@ -167,11 +170,15 @@ fn child(name: &str, child: &str) -> (std::process::ExitStatus, String) {
 }
 
 // ---------------------------------------------------------------------
-// The pool alone (private pools, no fibers)
+// The pool alone (private pools, no fibers). They run no fiber, but they
+// carry the Windows ignore all the same: testing.md's rule names the
+// blocking pool beside stack switches and schedulers (D-714;
+// GAP(windows-pool-tests)).
 
 /// D-683: with the cap reached, later jobs queue; they all run once the
 /// running ones return.
 #[test]
+#[cfg_attr(windows, ignore = "the blocking pool on Windows is M6 (D-545, D-714)")]
 fn pool_a_lowered_cap_queues_jobs() {
     let pool = Pool::private(2, Duration::from_secs(10));
     let gate = Gate::new();
@@ -193,6 +200,7 @@ fn pool_a_lowered_cap_queues_jobs() {
 
 /// D-683: jobs run in the order they were submitted (one thread).
 #[test]
+#[cfg_attr(windows, ignore = "the blocking pool on Windows is M6 (D-545, D-714)")]
 fn pool_jobs_run_in_fifo_order() {
     let pool = Pool::private(1, Duration::from_secs(10));
     let gate = Gate::new();
@@ -215,6 +223,7 @@ fn pool_jobs_run_in_fifo_order() {
 /// D-683: a thread ends after its idle timeout with no job, never
 /// earlier, and a later job starts a thread again.
 #[test]
+#[cfg_attr(windows, ignore = "the blocking pool on Windows is M6 (D-545, D-714)")]
 fn pool_idle_threads_exit_after_the_timeout() {
     const IDLE: Duration = Duration::from_millis(20);
     let pool = Pool::private(4, IDLE);
@@ -239,6 +248,7 @@ fn pool_idle_threads_exit_after_the_timeout() {
 /// D-817: a refused thread while another pool thread
 /// runs queues the job behind it, never inline.
 #[test]
+#[cfg_attr(windows, ignore = "the blocking pool on Windows is M6 (D-545, D-714)")]
 fn pool_a_refused_thread_queues_behind_a_running_one() {
     let pool = Pool::private(4, Duration::from_secs(10));
     let gate = Gate::new();
@@ -287,7 +297,8 @@ fn pool_another_fiber_runs_while_a_job_waits() {
         testing::spawn(me, false, move |_| {
             tx.send(()).ok();
         });
-        let got = run_blocking(me, move || rx.recv_timeout(Duration::from_secs(20)).is_ok());
+        let limit = testing::scaled(Duration::from_secs(20));
+        let got = run_blocking(me, move || rx.recv_timeout(limit).is_ok());
         u64::from(got == Ok(true))
     });
     assert_eq!(ok, 1, "the job waited for a fiber that never ran");

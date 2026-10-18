@@ -17,15 +17,18 @@ use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use super::park::state as parker;
-use super::testing::{Mailbox, entry_check, hang, root, runtime, spawn, start_root, tuned};
+use super::testing::{Mailbox, entry_check, hang, root, runtime, scaled, spawn, start_root, tuned};
 use super::worker::life;
 use super::{AfterSwitch, Shared, TimerTarget, leave_callback, park};
 use crate::ctx::ExecCtx;
 use crate::entry::{EntryOutcome, MIN_STACK_SIZE};
 use crate::runtime_info::{cheby_runtime_set_thread_count, cheby_runtime_thread_count};
 
-/// How long a test waits for something that should happen soon.
-const CAP: Duration = Duration::from_secs(10);
+/// How long a test waits for something that should happen soon: 10 s
+/// times `CHEBY_HARNESS_SCALE` (GAP(runtime-test-hang-scale)).
+fn cap() -> Duration {
+    scaled(Duration::from_secs(10))
+}
 
 /// The context argument a kernel gets from the running fiber.
 fn ctx_of(me: &ExecCtx) -> *mut ExecCtx {
@@ -59,11 +62,11 @@ fn life_of(shared: &Shared, index: usize) -> Option<u8> {
     shared.worker(index).map(super::worker::WorkerShared::life)
 }
 
-/// Waits on the host up to [`CAP`] for `ready`.
+/// Waits on the host up to [`cap()`] for `ready`.
 fn wait_until(mut ready: impl FnMut() -> bool) -> bool {
     let start = Instant::now();
     while !ready() {
-        if start.elapsed() > CAP {
+        if start.elapsed() > cap() {
             return false;
         }
         std::thread::sleep(Duration::from_millis(1));
@@ -71,11 +74,11 @@ fn wait_until(mut ready: impl FnMut() -> bool) -> bool {
     true
 }
 
-/// Waits in fiber `me`, yielding, up to [`CAP`] for `ready`.
+/// Waits in fiber `me`, yielding, up to [`cap()`] for `ready`.
 fn yield_until(me: &ExecCtx, mut ready: impl FnMut() -> bool) -> bool {
     let start = Instant::now();
     while !ready() {
-        if start.elapsed() > CAP {
+        if start.elapsed() > cap() {
             return false;
         }
         park(me, AfterSwitch::Requeue);
@@ -392,7 +395,7 @@ fn thread_count_the_poll_holder_retires_and_another_worker_polls() {
         .checked_add(Duration::from_millis(20))
         .unwrap();
     let _timer = shared.arm_timer(deadline, Arc::new(Report(parking_lot::Mutex::new(sender))));
-    let Ok((at, on)) = fired.recv_timeout(CAP) else {
+    let Ok((at, on)) = fired.recv_timeout(cap()) else {
         panic!("no worker fired the timer after the poll holder retired");
     };
     assert!(at >= deadline, "the timer fired before its deadline");
@@ -452,6 +455,20 @@ fn thread_count_shutdown_and_halt_join_workers_added_at_run_time() {
     }
     assert!(wait_until(|| started.load(Ordering::SeqCst) == SPINNERS));
     assert_eq!(os_threads(&shared), SPINNERS);
+    // A halt freezes only the fibers running on a worker (D-708); one in a
+    // run queue is never resumed and not counted. Every spinner has
+    // started, but while the added workers start one worker may run two
+    // in turn, and the monitor preempts the first because the second waits
+    // (D-688), so wait until each runs on a worker of its own: then none
+    // waits and none is preempted (V6-2, a race seen under emulation).
+    assert!(wait_until(|| {
+        shared
+            .workers
+            .iter()
+            .filter(|worker| !worker.running().is_null())
+            .count()
+            == SPINNERS
+    }));
     halted.halt();
     assert!(shared.threads.lock().is_empty());
     assert_eq!(shared.probe.frozen.load(Ordering::SeqCst), SPINNERS);
@@ -530,7 +547,7 @@ fn thread_count_a_lone_spinning_fiber_gives_its_retiring_worker_back() {
     assert!(wait_until(|| first.load(Ordering::SeqCst) != 0));
     let start = first.load(Ordering::SeqCst) - 1;
     retire_one(&shared, start);
-    match outcome.recv_timeout(CAP) {
+    match outcome.recv_timeout(cap()) {
         Ok(EntryOutcome::Returned(word)) => {
             assert_ne!(word, u64::MAX, "the spinner was stopped");
             assert_ne!(usize::try_from(word).unwrap(), start);
@@ -615,7 +632,9 @@ fn thread_count_a_retirement_racing_the_next_resume_is_not_lost() {
         }
         shared.set_thread_count(1);
         let begun = Instant::now();
-        while life_of(&shared, 1) != Some(life::DEAD) && begun.elapsed() < Duration::from_secs(1) {
+        while life_of(&shared, 1) != Some(life::DEAD)
+            && begun.elapsed() < scaled(Duration::from_secs(1))
+        {
             std::thread::sleep(Duration::from_micros(200));
         }
         if life_of(&shared, 1) != Some(life::DEAD) {
@@ -662,7 +681,7 @@ fn thread_count_an_unpinned_fiber_leaves_its_leaving_worker() {
                 (Arc::clone(&ready), Arc::clone(&gate), Arc::clone(&result));
             spawn(me, false, move |fiber| {
                 let begun = Instant::now();
-                while fiber.sched.worker() != 1 && begun.elapsed() < CAP {
+                while fiber.sched.worker() != 1 && begun.elapsed() < cap() {
                     park(fiber, AfterSwitch::Requeue);
                 }
                 let pinned_on = fiber.sched.worker();
@@ -672,7 +691,7 @@ fn thread_count_an_unpinned_fiber_leaves_its_leaving_worker() {
                 leave_callback(fiber);
                 // Computes alone, with entry checks, until it moves.
                 let begun = Instant::now();
-                while fiber.sched.worker() == pinned_on && begun.elapsed() < CAP {
+                while fiber.sched.worker() == pinned_on && begun.elapsed() < cap() {
                     if entry_check(fiber) {
                         break;
                     }
@@ -747,7 +766,7 @@ fn thread_count_a_stop_while_workers_retire_ends_every_fiber() {
             runtime.shutdown();
         }
         assert!(
-            begun.elapsed() < CAP,
+            begun.elapsed() < cap(),
             "round {round}: the stop took {:?}",
             begun.elapsed()
         );
@@ -799,7 +818,7 @@ fn thread_count_a_stop_in_the_migration_stress_mode_strands_no_fiber() {
         let begun = Instant::now();
         runtime.shutdown();
         assert!(
-            begun.elapsed() < CAP,
+            begun.elapsed() < cap(),
             "round {round}: the stop took {:?}",
             begun.elapsed()
         );
@@ -831,7 +850,7 @@ fn thread_count_a_yield_after_a_worker_ended_at_a_stop_runs_on_a_live_one() {
         start_root(&runtime, MIN_STACK_SIZE, move |me| {
             let begun = Instant::now();
             while me.sched.worker() != 0 {
-                if begun.elapsed() > CAP {
+                if begun.elapsed() > cap() {
                     return failed::REACHED;
                 }
                 park(me, AfterSwitch::Requeue);
@@ -841,7 +860,7 @@ fn thread_count_a_yield_after_a_worker_ended_at_a_stop_runs_on_a_live_one() {
             // moves it, until worker 1 has ended at the stop.
             let begun = Instant::now();
             while !probe.probe.stop_exit_held.load(Ordering::SeqCst) {
-                if begun.elapsed() > CAP {
+                if begun.elapsed() > cap() {
                     return failed::HELD;
                 }
                 std::hint::spin_loop();
@@ -861,7 +880,11 @@ fn thread_count_a_yield_after_a_worker_ended_at_a_stop_runs_on_a_live_one() {
     assert!(wait_until(|| on_zero.load(Ordering::SeqCst)));
     let begun = Instant::now();
     runtime.shutdown();
-    assert!(begun.elapsed() < CAP, "the stop took {:?}", begun.elapsed());
+    assert!(
+        begun.elapsed() < cap(),
+        "the stop took {:?}",
+        begun.elapsed()
+    );
     match outcome.try_recv() {
         Ok(EntryOutcome::Returned(word)) => assert_eq!(word, 0, "failures {word:#b}"),
         other => panic!("the yielding fiber did not end: {other:?}"),
@@ -935,7 +958,11 @@ fn thread_count_a_pinned_fiber_woken_after_its_worker_ended_at_a_stop_is_left_an
     };
     let begun = Instant::now();
     runtime.shutdown();
-    assert!(begun.elapsed() < CAP, "the stop took {:?}", begun.elapsed());
+    assert!(
+        begun.elapsed() < cap(),
+        "the stop took {:?}",
+        begun.elapsed()
+    );
     let (held, dead, counted) = waker.join().unwrap();
     assert!(held, "the fiber's worker did not end at the stop");
     assert!(dead, "the worker that ended at the stop is not DEAD");

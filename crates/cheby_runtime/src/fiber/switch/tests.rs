@@ -95,7 +95,8 @@ fn million_switches() {
     let elapsed = started.elapsed();
     println!("1,000,000 round trips in {elapsed:?}");
     if !emulated() {
-        assert!(elapsed < Duration::from_secs(10), "{elapsed:?}");
+        let bound = crate::sched::testing::scaled(Duration::from_secs(10));
+        assert!(elapsed < bound, "{elapsed:?}");
     }
     // SAFETY: the fiber is suspended forever and holds nothing to drop.
     drop(unsafe { Box::from_raw(pair) });

@@ -380,10 +380,13 @@ mod tests {
     }
 
     /// Whether a whole file is test-only code: a file named `tests.rs` or
-    /// `*_tests.rs`, or any file under a `tests/` directory. Such files are
-    /// compiled only into this crate's unit tests (their `mod` lines are
-    /// `#[cfg(test)]`), which run each test on a plain thread and never
-    /// switch fibers, so their thread-locals cannot be migrated.
+    /// `*_tests.rs`, a `loom` model file (`models.rs` or `*_models.rs`,
+    /// whose `UnsafeCell::with(|…| …)` the scan would otherwise match:
+    /// board item SZe-1 of wave 2), or any file under a `tests/` directory.
+    /// Such files are compiled only into this crate's unit tests (their
+    /// `mod` lines are `#[cfg(test)]`), which run each test on a plain
+    /// thread and never switch fibers, so their thread-locals cannot be
+    /// migrated.
     fn is_test_file(relative: &Path) -> bool {
         let name = relative
             .file_name()
@@ -391,6 +394,8 @@ mod tests {
             .unwrap_or("");
         name == "tests.rs"
             || name.ends_with("_tests.rs")
+            || name == "models.rs"
+            || name.ends_with("_models.rs")
             || relative
                 .parent()
                 .is_some_and(|dir| dir.components().any(|part| part.as_os_str() == "tests"))
@@ -436,7 +441,9 @@ mod tests {
     /// Test-only code is exempt (see [`is_test_file`] and
     /// [`non_test_part`]): today `hamt/tests.rs`,
     /// `alloc/temporaries_tests.rs` and the test modules of `consteval.rs`
-    /// and `entry.rs` declare thread-locals.
+    /// and `entry.rs` declare thread-locals, and `sched/deadlock_models.rs`
+    /// calls `loom`'s `UnsafeCell::with(|_| ())`, which the scan's text
+    /// match cannot tell from a thread-local's access.
     #[test]
     fn no_thread_local_outside_tls() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -494,7 +501,8 @@ mod tests {
                 "alloc/temporaries_tests.rs",
                 "consteval.rs",
                 "entry.rs",
-                "hamt/tests.rs"
+                "hamt/tests.rs",
+                "sched/deadlock_models.rs"
             ]
         );
     }

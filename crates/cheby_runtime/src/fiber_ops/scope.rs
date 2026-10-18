@@ -1029,7 +1029,8 @@ mod tests {
     fn closing_many_open_sibling_scopes_is_linear() {
         let took = close_siblings(200_000);
         if !crate::sched::testing::emulated() {
-            assert!(took < Duration::from_secs(2), "{took:?}");
+            let bound = crate::sched::testing::scaled(Duration::from_secs(2));
+            assert!(took < bound, "{took:?}");
         }
     }
 }

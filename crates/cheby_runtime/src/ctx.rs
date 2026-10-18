@@ -599,7 +599,8 @@ mod tests {
             reason::DEADLINE,
             reason::SAFEPOINT,
         ];
-        let deadline = Instant::now() + Duration::from_secs(120);
+        // GAP(runtime-test-hang-scale): the hang bound scales.
+        let deadline = Instant::now() + crate::sched::testing::scaled(Duration::from_secs(120));
         for round in 0..ROUNDS {
             let reason = reasons[usize::try_from(round % 4).unwrap()];
             request(&ctx, reason);
