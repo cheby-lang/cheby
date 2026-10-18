@@ -11,7 +11,7 @@ pub type Duration
 - **Written in Cheby.** The module has no kernels. Every function runs in constants (D-090), so `const deadline: Duration = duration::seconds(1)` works, and gives the same result on every target (D-232, D-650).
 - **Equality, hashing and printing.** `==` and hashing are the built-in structural ones, which compare spans because the representation is unique. Debug printing is the built-in one for records (D-134), such as `Duration { seconds: 1, nanoseconds: 500000000 }`. `show` gives the short text, such as `1.5s` (D-651).
 - **Interfaces.** `add`, `sub`, `neg`, `compare` and `show` make `Duration` satisfy `Add`, `Sub`, `Neg`, `Compare` and `Show` (§8.7, §8.8), so `a + b`, `a - b`, `-a`, `a < b` and `"{d}"` work. There is no `mul` or `div`, since a span times a span is not a span (§8.7). Scale a span by computing its count first, as in `duration::milliseconds(base_ms * 2)` (D-651).
-- **Waiting.** A function that waits for a `Duration`, such as `fiber::timeout` or `selector::after`, treats a span of zero or less as already elapsed, and a span too long for the runtime's clock as never elapsing (D-652).
+- **Waiting.** A function that waits for a `Duration`, such as `fiber::timeout` or `selector::after`, treats a span of zero or less as already elapsed, and a span longer than 2⁶³ − 1 nanoseconds, about 292 years, as never elapsing (D-652, D-891).
 
 Every function costs O(1). The costs are informative.
 

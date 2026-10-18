@@ -668,8 +668,9 @@ pub(crate) fn close_root_base(ctx: &ExecCtx) {
 /// `timed` gives the scope a deadline `seconds` and `nanoseconds` from
 /// now (D-652's reading, `sched::deadline_after`), which only
 /// `fiber::timeout` asks for (D-671): once the scope is linked, a timer is
-/// armed whose firing cancels it ([`ScopeTimer`]). A deadline past the
-/// clock's range never comes and arms nothing, so the scope is untimed. A
+/// armed whose firing cancels it ([`ScopeTimer`]). A limit longer than the
+/// runtime's cap (D-891) never comes and arms nothing, so the scope is
+/// untimed. A
 /// limit of zero or less never gets here, because `timeout` returns
 /// `Err(TimedOut)` without calling `f`; if one did, it would be a deadline
 /// of now. Without a runtime (D-692, architecture §5.1) a scope whose

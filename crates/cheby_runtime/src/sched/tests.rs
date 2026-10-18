@@ -393,18 +393,21 @@ fn preemption_latency(pinned: bool) -> Duration {
 /// 5 ms. The monitor and the worker are OS threads, so on a loaded machine
 /// one measurement can miss the bound by an OS scheduling delay (review
 /// finding R2-ROB-2): the bound must hold in one of five measurements, and
-/// the lower bound and the hang check in all of them.
+/// the lower bound and the hang check in all of them. The bound is scaled
+/// (D-872): CI's macOS runners stretch the monitor's 10 ms waits to 30 to
+/// 90 ms, and run at a higher scale (D-892).
 fn preempted_within_fifty_milliseconds(pinned: bool) {
+    let bound = scaled(Duration::from_millis(50));
     let mut missed = Vec::new();
     for _ in 0..5 {
         let waited = preemption_latency(pinned);
         assert!(waited >= Duration::from_millis(5), "{waited:?}");
-        if emulated() || waited < Duration::from_millis(50) {
+        if emulated() || waited < bound {
             return;
         }
         missed.push(waited);
     }
-    panic!("never preempted within 50 ms: {missed:?}");
+    panic!("never preempted within {bound:?}: {missed:?}");
 }
 
 #[test]
@@ -484,6 +487,8 @@ fn pinned_fibers_stay_and_the_stress_mode_migrates_the_others() {
 
 /// The monitor leaves a lone fiber alone, so it keeps its worker; in the
 /// migration stress mode it preempts it, and it moves between workers.
+/// The stress window is scaled (D-872), since it bounds how long two moves
+/// may take; the calm window asserts that nothing happens and is not.
 #[test]
 #[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
 fn lone_fibers_are_preempted_only_in_the_stress_mode() {
@@ -506,7 +511,7 @@ fn lone_fibers_are_preempted_only_in_the_stress_mode() {
     assert_eq!(moves, 0);
     let stressed = tuned(2, true, true);
     let moves = root(&stressed, move |me| {
-        loop_for(me, Duration::from_millis(200))
+        loop_for(me, scaled(Duration::from_millis(200)))
     });
     assert!(moves >= 2, "{moves}");
 }

@@ -435,6 +435,7 @@ fn hang_bounds_go_through_scaled() {
     let unscaled = |line: &str| {
         line.contains("recv_timeout(Duration::from_secs(")
             || (line.contains("assert!(") && line.contains("< Duration::from_secs("))
+            || (line.contains("assert!(") && line.contains("< Duration::from_millis("))
             || line.contains("let deadline = Instant::now() + Duration::from_secs(")
     };
     let mut found = Vec::new();

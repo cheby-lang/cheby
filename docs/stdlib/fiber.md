@@ -287,6 +287,7 @@ Calls `f` on the calling fiber, in a new scope, and cancels it if it has not fin
 - If `f` panics before a cancellation reaches it, `timeout` returns `Err(Panicked(p))` with the panic `p`, and prints nothing.
 - Otherwise, once `limit` has passed, `f` is cancelled (see [Cancellation](#cancellation)), and `timeout` returns `Err(TimedOut)` after every frame of `f` has unwound and every fiber in the scopes it opened has ended. A panic during that unwinding does not change the result. `Err(TimedOut)` never comes earlier than `limit` after the call.
 - A `limit` of zero or less has already passed: `timeout` returns `Err(TimedOut)` without calling `f`, on every target (D-652).
+- A `limit` longer than 2⁶³ − 1 nanoseconds, about 292 years, never passes: `timeout` calls `f` without a timer, on every target (D-652, D-891).
 - `timeout` releases `f` before it returns, whatever the result (D-670).
 - Fibers that `f` spawns into a scope opened outside `f`, whose `Scope` it captured, and detached fibers are not cancelled.
 

@@ -44,7 +44,7 @@ stdlib workstream: tier 1 before M1 ─► tier 2 before M2 ─► tier 3 before
 | M3 AOT and cache     | Object output, linking, DWARF line tables, interface artifacts on disk, global cache, cached-code loader, precompiled std  | all of the above through `cheby build --target native`, plus 020 and 031                  |
 | M4 JS                | JS emitter, link-time suspension analysis, JS runtime, handle RC on JS, source maps                                        | every example on Node with the same goldens as native                                     |
 | M5 Tooling           | `cheby fmt`, `cheby lsp`, `cheby doc`, `cheby new/add/update/fetch`                                                        | every example is a `cheby fmt` fixed point, doc examples run as tests, 030 passes (D-446) |
-| M6 v1                | Release profile, bundled lld, Windows, full platform matrix, budgets met                                                   | every example on every platform of D-074, in both profiles                                |
+| M6 v1                | Release profile, bundled lld, Windows, full platform matrix, budgets met                                                   | every example on every platform of D-074 and D-892, in both profiles                      |
 
 M5 is listed as a milestone so it has exit criteria, but its work starts as soon as M1's parser exists and runs in parallel with M2-M4 (D-099). [m5-tooling.md](m5-tooling.md) says which slice of it lands next to which milestone.
 
@@ -267,6 +267,7 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-888     | Every variant of a `timing` example runs in the serial group: 24 trials, 30 under 4 threads         |
 | D-889     | M2's reading misses D-247 by 9.3% to 9.6% (90.4k-90.7k lines/s per core), from unwinding; reported  |
 | D-890     | mimalloc v3 is the global allocator of `cheby` and AOT executables, not of sanitizer builds         |
+| D-892     | macOS on x86-64 is not supported; CI drops its job, and M6's matrix has five native platforms       |
 
 ## Open questions
 

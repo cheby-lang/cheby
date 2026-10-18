@@ -71,7 +71,7 @@ test "a closed channel's arm is ready with Err(Nil)" {
 pub fn after<E>(selector: Selector<E>, wait: duration::Duration, map: fn() -> E) -> Selector<E>
 ```
 
-Returns `selector` with a timer arm, which is ready once `wait` has passed since `select` started waiting (D-103, D-673). The clock starts anew in each `select` call, not when `after` is called, so a selector reused in a loop gives each wait its own timer. A `wait` of zero or less is ready at once (D-652). A selector may have several timer arms. A selector with only a timer arm is a sleep.
+Returns `selector` with a timer arm, which is ready once `wait` has passed since `select` started waiting (D-103, D-673). The clock starts anew in each `select` call, not when `after` is called, so a selector reused in a loop gives each wait its own timer. A `wait` of zero or less is ready at once, and one longer than 2⁶³ − 1 nanoseconds, about 292 years, is never ready (D-652, D-891). A selector may have several timer arms. A selector with only a timer arm is a sleep.
 
 - **Cost:** O(1). Informative.
 

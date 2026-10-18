@@ -541,8 +541,8 @@ fn timeout_an_elapsed_limit_is_a_deadline_of_now() {
     }
 }
 
-/// A limit beyond the clock's range never passes (D-652): the scope is
-/// untimed and arms nothing.
+/// A limit longer than the runtime's cap never passes (D-652, D-891): the
+/// scope is untimed and arms nothing.
 #[test]
 #[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
 fn timeout_a_limit_past_the_clock_arms_nothing() {
@@ -680,7 +680,7 @@ fn timeout_at_a_deadline_needs_the_scheduler_without_a_runtime() {
 /// A timed scope whose deadline never comes arms nothing, so it works
 /// without a runtime: it opens untimed, `f` runs and returns, and the
 /// result is `Ok` (D-692: only an operation that would arm a timer needs
-/// the scheduler; D-652).
+/// the scheduler; D-652). The cap of D-891 makes it so on every platform.
 #[test]
 fn timeout_never_deadline_without_a_runtime() {
     const NAME: &str = "timeout_never_deadline_without_a_runtime";

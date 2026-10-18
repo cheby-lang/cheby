@@ -474,7 +474,8 @@ mod tests {
                     .any(|pattern| text.contains(pattern))
             };
             if has(&source) && !has(checked) {
-                exempt.push(relative.display().to_string());
+                // `/` on every platform, so the list below holds on Windows.
+                exempt.push(relative.display().to_string().replace('\\', "/"));
             }
             for (number, line) in checked.lines().enumerate() {
                 if has(line) {

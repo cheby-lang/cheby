@@ -1,8 +1,11 @@
 # CI for the reference implementation (D-277, docs/plan/m0-foundation.md).
 #
 # - `test`: build, clippy and every test, including the conformance, UI and
-#   REPL harnesses, on the full platform matrix of D-074. M1 is judged on
-#   Linux and macOS (D-545). On Windows, until M6, CI runs only tests that
+#   REPL harnesses, on every platform of D-074 and D-892. The macOS job
+#   runs them at `CHEBY_HARNESS_SCALE=5`, because the hosted macOS VMs
+#   stretch 10 ms waits to 30 to 90 ms, past the runtime's preemption
+#   bounds (D-872, D-892). M1 is judged on Linux and macOS (D-545).
+#   On Windows, until M6, CI runs only tests that
 #   execute no generated code. A test that builds or runs JIT code is
 #   ignored there (`#[cfg_attr(windows, ignore = …)]`), and the JIT crate's
 #   own tests are not built there at all, its memory-reservation tests
@@ -90,8 +93,7 @@ jobs:
         include:
           - { name: linux-x86_64, os: ubuntu-24.04 }
           - { name: linux-aarch64, os: ubuntu-24.04-arm }
-          - { name: macos-x86_64, os: macos-15-intel }
-          - { name: macos-aarch64, os: macos-15 }
+          - { name: macos-aarch64, os: macos-15, scale: 5 }
           - { name: windows-x86_64, os: windows-2025 }
           - { name: windows-aarch64, os: windows-11-arm }
     runs-on: ${{ matrix.os }}
@@ -106,6 +108,8 @@ jobs:
       - run: cargo build --workspace --all-targets --locked
       - run: cargo clippy --workspace --all-targets --locked
       - run: cargo test --workspace --locked --no-fail-fast
+        env:
+          CHEBY_HARNESS_SCALE: ${{ matrix.scale || 1 }}
       - name: D-number coverage
         run: cargo xtask coverage
 

@@ -32,7 +32,7 @@
 //!
 //! - **Timers** (`sched/timer.rs`). `arm` raises D's count, under the heap's
 //!   lock, only when it really arms (a stopping runtime arms nothing, and a
-//!   span past the clock's range, `Deadline::Never`, never reaches `arm`);
+//!   span longer than D-891's cap, `Deadline::Never`, never reaches `arm`);
 //!   D is the arming fiber's domain, read on the arming fiber (a timer
 //!   armed off every fiber counts in no domain). The entry keeps the
 //!   counters. The count falls exactly once per armed entry, by whoever

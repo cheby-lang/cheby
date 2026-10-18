@@ -6,10 +6,10 @@ A Cheby program can be compiled for two families of targets: **native** code thr
 
 A **target** is either `native` or `js`. These two names are used in `@external` and `@target` attributes ([§12.5](#125-foreign-functions), [§12.6](#126-target-specific-code)).
 
-| Target   | Output                                                                               | Platforms                                                     | Debug info           |
-| -------- | ------------------------------------------------------------------------------------ | ------------------------------------------------------------- | -------------------- |
-| `native` | JIT code (REPL, `cheby run`) or object files linked into an executable (AOT) (D-007) | 64-bit macOS, Linux and Windows on x86_64 and aarch64 (D-074) | DWARF (D-074, D-184) |
-| `js`     | ES modules                                                                           | Node, Deno, Bun and browsers (D-074)                          | source maps (D-074)  |
+| Target   | Output                                                                               | Platforms                                                                           | Debug info           |
+| -------- | ------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------- | -------------------- |
+| `native` | JIT code (REPL, `cheby run`) or object files linked into an executable (AOT) (D-007) | 64-bit macOS on aarch64, and Linux and Windows on x86_64 and aarch64 (D-074, D-892) | DWARF (D-074, D-184) |
+| `js`     | ES modules                                                                           | Node, Deno, Bun and browsers (D-074)                                                | source maps (D-074)  |
 
 32-bit native platforms are not supported, because fiber stacks rely on large virtual-memory reservations (D-124, ADR-0032).
 

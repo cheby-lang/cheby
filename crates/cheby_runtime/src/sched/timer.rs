@@ -2,8 +2,8 @@
 //!
 //! - **Spans** cross from std as `(seconds, nanoseconds)` ([`deadline_after`],
 //!   D-652): a span of zero or less is [`Deadline::Elapsed`], and a span
-//!   whose end `Instant` cannot represent is [`Deadline::Never`], which arms
-//!   nothing.
+//!   longer than [`MAX_SPAN_NANOS`] is [`Deadline::Never`], which arms
+//!   nothing (D-891).
 //! - **Entries** are reference counted ([`TimerHandle`]): an entry outlives
 //!   the frame that armed it (a `select` woken by a channel returns while
 //!   its timer is still in the heap; D-708's frozen fibers leave timers
@@ -71,22 +71,27 @@ pub(crate) trait TimerTarget: Send + Sync {
 pub(crate) enum Deadline {
     /// The span was zero or less: the deadline has passed.
     Elapsed,
-    /// The span ends past `Instant`'s range: the deadline never comes, and
-    /// nothing is armed for it.
+    /// The span is longer than [`MAX_SPAN_NANOS`]: the deadline never comes,
+    /// and nothing is armed for it (D-891).
     Never,
     /// The span ends at this instant.
     At(Instant),
 }
 
 /// The deadline `(seconds, nanoseconds)` after now. `seconds < 0 ||
-/// (seconds == 0 && nanoseconds <= 0)` is `Elapsed`; a span past
-/// `Instant`'s range is `Never`.
+/// (seconds == 0 && nanoseconds <= 0)` is `Elapsed`; a span longer than
+/// [`MAX_SPAN_NANOS`] is `Never`.
 pub(crate) fn deadline_after(seconds: i64, nanoseconds: i64) -> Deadline {
     deadline_from(Instant::now(), seconds, nanoseconds)
 }
 
 /// The nanoseconds in a second.
 const NANOS_PER_SECOND: i128 = 1_000_000_000;
+
+/// The longest span that ends, in nanoseconds: 2⁶³ − 1, about 292 years
+/// (D-891). It is the same on every platform, though `Instant`'s own range
+/// is not: on Windows even `i64::MAX` seconds from now fits.
+const MAX_SPAN_NANOS: i128 = 0x7fff_ffff_ffff_ffff;
 
 /// [`deadline_after`] from `now`. Std passes both parts with the same sign
 /// (it truncates toward zero, D-652); a mixed pair is read as the sum of
@@ -100,6 +105,9 @@ fn deadline_from(now: Instant, seconds: i64, nanoseconds: i64) -> Deadline {
         .saturating_add(i128::from(nanoseconds));
     if total <= 0 {
         return Deadline::Elapsed;
+    }
+    if total > MAX_SPAN_NANOS {
+        return Deadline::Never;
     }
     let (Some(whole), Some(part)) = (
         total.checked_div(NANOS_PER_SECOND),
@@ -630,9 +638,20 @@ mod tests {
         assert!(matches!(deadline_after(0, 10_000_000), Deadline::At(at) if at > now));
     }
 
+    /// D-891: the cap is the same on every platform; on Windows, `Instant`
+    /// itself holds `i64::MAX` seconds from now.
     #[test]
-    fn timer_spans_beyond_instant_never_end_and_arm_nothing() {
+    fn timer_spans_beyond_the_cap_never_end_and_arm_nothing() {
         let now = Instant::now();
+        // The longest span that ends: 2⁶³ − 1 nanoseconds.
+        assert_eq!(
+            deadline_from(now, 9_223_372_036, 854_775_807),
+            Deadline::At(now + Duration::new(9_223_372_036, 854_775_807))
+        );
+        assert_eq!(
+            deadline_from(now, 9_223_372_036, 854_775_808),
+            Deadline::Never
+        );
         assert_eq!(deadline_from(now, i64::MAX, 999_999_999), Deadline::Never);
         assert_eq!(deadline_from(now, i64::MAX, i64::MAX), Deadline::Never);
         assert_eq!(deadline_after(i64::MAX, 0), Deadline::Never);

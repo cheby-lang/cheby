@@ -275,7 +275,7 @@ case fiber::timeout(duration::seconds(2), fn() { http::get(url) }) {
 - Fibers that `f` spawns into a scope opened outside `f`, whose `Scope` it captured, and detached fibers are not cancelled (D-671).
 - `timeout` releases `f` when the call returns, before it waits or returns (D-670).
 
-A function of the standard library that waits for a duration, such as `fiber::timeout` and `selector::after`, treats a duration of zero or less as already elapsed, and one longer than the runtime's clock can represent as one that never elapses (D-652).
+A function of the standard library that waits for a duration, such as `fiber::timeout` and `selector::after`, treats a duration of zero or less as already elapsed, and one longer than 2⁶³ − 1 nanoseconds, about 292 years, as one that never elapses, on every platform and target (D-652, D-891).
 
 On JS, a timeout cannot interrupt `f` between real suspension points, so a CPU-bound `f` may run past `d`, finish and return `Ok`. To bound CPU work on JS, the work must suspend, for example on a channel operation or a timer (D-185, D-232, [§12.4](12-targets-and-ffi.md#124-semantic-differences-between-targets)).
 

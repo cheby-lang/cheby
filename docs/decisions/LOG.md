@@ -1361,3 +1361,17 @@ Open:
 - How an AOT executable gets mimalloc: a `#[global_allocator]` in the runtime's staticlib, or a separate object at link time. M3's object-output work decides it; the JIT's rlib must not get a second global allocator.
 - D-890's numbers come from a loaded machine. M3's exit reading of D-247 on CI's Linux runner includes mimalloc, and the next quiet RC reading compares against the system allocator's `string_building` modes too.
 - Tree-sitter: no grammar change. `../zed-cheby` needs nothing.
+
+## 2026-10-18: Windows CI
+
+Goal: fix the runtime tests that failed on CI's Windows and macOS x86-64 runners: make the span that never elapses the same on every platform, and drop macOS on x86-64.
+
+- **D-891 The longest span that elapses**: The runtime's clock of D-652 represents spans up to 2⁶³ − 1 nanoseconds, about 292 years, on every platform and target. A function that waits for a longer span, such as `fiber::timeout` or `selector::after`, treats it as one that never elapses, so the runtime arms no timer for it. A span up to the cap waits for its full length. Why: Rust's `Instant` holds `i64::MAX` seconds from now on Windows but not on Unix, so a cap set by `Instant` made `fiber::timeout(duration::seconds(i64::MAX))` without a scheduler fatal on Windows only (D-692), and the timer tests failed there. A fixed cap gives every platform the same results. The cap is Go's longest `time.Duration`. Rejected: keeping `Instant`'s range and fixing the tests per platform, which leaves the difference visible to programs. Refines D-652.
+
+- **D-892 macOS on x86-64 is not supported**: The native targets are macOS on aarch64, and Linux and Windows on x86-64 and aarch64. CI drops its macOS x86-64 job, and M6's platform matrix has five native platforms. CI's macOS test job runs at `CHEBY_HARNESS_SCALE=5`, and the runtime's preemption tests scale their bounds, as D-872 already required. Why: the user decided to drop the platform after CI's macOS x86-64 runner failed a preemption test in two runs, each time a different one, with latencies near 100 ms where D-688 allows 50 ms. A probe on CI's runners then logged every monitor tick: the monitor never backed off while a fiber ran, and a plain 10 ms wait with no runtime took a median of 40 ms on the Intel runner and 36 ms on the Apple silicon one, against 10.08 ms on Linux. So the latencies come from the hosted macOS VMs' timers, on both architectures, and the macOS arm64 job had passed by chance. The scale keeps that job from flaking, and Linux still checks D-688's 50 ms unscaled. Rejected: keeping the Intel job at the same scale, which the user declined. Refines D-074, D-277, D-872.
+
+Open:
+
+- ~~`sched::tests::a_looping_fiber_is_preempted_within_fifty_milliseconds` failed on CI's macOS x86-64 runner, with 91 to 130 ms against D-687's 50 ms.~~ → D-892.
+- ~~The cause of the macOS x86-64 latencies is not explained. In both runs they were near 100 ms, which is the monitor's idle interval, so the monitor may stay backed off while a fiber runs. A review of `kick` and the backoff found no race, and a local run with every core oversubscribed did not reproduce it. A probe that logs the monitor's ticks on that runner decides it.~~ Done: the probe found no monitor bug; the hosted macOS VMs stretch 10 ms waits on both architectures (D-892).
+- Tree-sitter: no grammar change. `../zed-cheby` needs nothing.
