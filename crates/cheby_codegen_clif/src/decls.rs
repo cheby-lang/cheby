@@ -647,7 +647,7 @@ impl Decls {
                 .map_or("?", String::as_str);
             let _ = writeln!(out, "; {reference} = {symbol}");
         }
-        // GAP(loc-clif-text): the text leaves out the calls' location tags
+        // D-869: the text leaves out the calls' location tags
         // (D-856), which are metadata, so a dump is the same with and
         // without them (D-551).
         if func.debug_tags.is_empty() {

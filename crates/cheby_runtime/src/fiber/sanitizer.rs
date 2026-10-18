@@ -1,13 +1,13 @@
 //! What the address and thread sanitizers are told about fiber stacks and
 //! the runtime's own memory reuse (D-721, D-676).
 //!
-//! GAP(sanitize-cfg): a sanitizer build passes `-Zsanitizer=<s>` together
+//! D-875: a sanitizer build passes `-Zsanitizer=<s>` together
 //! with `--cfg cheby_sanitize="<s>"`, `"address"` or `"thread"`, declared in
 //! the workspace's `check-cfg`. Without that cfg every function here is an
 //! `#[inline(always)]` no-op and [`SanFiber`] is zero-sized, so ordinary
 //! builds compile to what they did before.
 //!
-//! GAP(sanitize-annotations): the scheduler switches stacks in two places,
+//! D-876: the scheduler switches stacks in two places,
 //! a worker resuming a fiber and a fiber parking back to its worker, and
 //! both sanitizers keep per-stack state they must be told about:
 //!
@@ -41,12 +41,12 @@
 //!
 //! The other sanitizer-only behavior lives where it applies: `switch`'s
 //! `prepare` unpoisons a reused slot before the first frame
-//! (GAP(sanitize-slot-unpoison), [`unpoison_stack`]),
+//! (D-877, [`unpoison_stack`]),
 //! `panic::stack_position` reads the stack pointer
-//! (GAP(sanitize-stack-position)), the block cache poisons the blocks it
-//! keeps (GAP(sanitize-block-cache), [`poison`] and [`unpoison`]), and the
+//! (D-878), the block cache poisons the blocks it
+//! keeps (D-880, [`poison`] and [`unpoison`]), and the
 //! shared count's last release loads where it would fence
-//! (GAP(sanitize-tsan-fences), `rc.rs`).
+//! (D-879, `rc.rs`).
 //!
 //! JIT code is not instrumented (D-721). The fields of [`SanFiber`] are
 //! atomics used with `Relaxed` only so that the type is `Send` and `Sync`
@@ -377,7 +377,7 @@ fn free_fake_stack(dead: *mut c_void) {
     }
 }
 
-/// GAP(sanitize-slot-unpoison): marks the stack `[low, low + len)`
+/// D-877: marks the stack `[low, low + len)`
 /// addressable before a fresh context's first frame is written. A fiber
 /// that exits never returns from its frames, so the redzones
 /// the address sanitizer poisoned in them stay in the slot, and the next fiber
@@ -402,7 +402,7 @@ pub(crate) fn unpoison_stack(low: usize, len: usize) {
     let _ = (low, len);
 }
 
-/// GAP(sanitize-block-cache): marks the `len` bytes at `block`
+/// D-880: marks the `len` bytes at `block`
 /// unaddressable while a free block waits in the block cache, so a use
 /// after free into a cached block is reported.
 #[inline(always)]
@@ -430,7 +430,7 @@ pub(crate) fn unpoison(block: *const u8, len: usize) {
     let _ = (block, len);
 }
 
-/// GAP(sanitize-lsan): makes the leak sanitizer scan the stack slot
+/// D-881: makes the leak sanitizer scan the stack slot
 /// `[low, low + len)` while a fiber may use it. Fiber stacks are `mmap`'d
 /// memory the sanitizer does not scan, so objects held only by a fiber
 /// that is parked, blocked in a pool job or frozen by a halt (D-708,

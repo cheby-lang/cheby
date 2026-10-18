@@ -8,7 +8,7 @@
 //! which are fixed (D-685): it reads the stack limit at 0 (a `usize`), the
 //! mode at 8 (a `u32`) and the unwind flag at 12 (a `u32`, D-733), and it
 //! writes the wait-frame word at 16 (a `usize`, D-856;
-//! GAP(loc-ctx-wait-frame)) right before it calls a waiting kernel or
+//! D-868) right before it calls a waiting kernel or
 //! `scope_close`. The view ends at byte 24, where the Rust part starts
 //! with the interrupt reasons; offsets 16 and 24 once held the exit record
 //! of a prototype that is gone (D-763), so nothing generated reads or
@@ -599,7 +599,7 @@ mod tests {
             reason::DEADLINE,
             reason::SAFEPOINT,
         ];
-        // GAP(runtime-test-hang-scale): the hang bound scales.
+        // D-872: the hang bound scales.
         let deadline = Instant::now() + crate::sched::testing::scaled(Duration::from_secs(120));
         for round in 0..ROUNDS {
             let reason = reasons[usize::try_from(round % 4).unwrap()];

@@ -291,7 +291,7 @@ impl StackSlot {
         NonNull::new(std::ptr::with_exposed_provenance_mut(start)).ok_or(bad)
     }
 
-    /// GAP(sanitize-lsan): has the leak sanitizer scan the slot's usable
+    /// D-881: has the leak sanitizer scan the slot's usable
     /// part while it is handed out; a no-op without the address cfg.
     fn scan_as_root(&self) {
         #[cfg(cheby_sanitize = "address")]

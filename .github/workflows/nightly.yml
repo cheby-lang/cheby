@@ -18,7 +18,7 @@
 # - `sanitizer (thread)` and `sanitizer (address)`: ThreadSanitizer and
 #   AddressSanitizer (with LeakSanitizer) on Linux x86-64 (D-721). Each runs
 #   `cargo xtask sanitize <s>`, the one driver that the local runs use too
-#   (GAP(sanitize-driver)); `cargo xtask sanitize <s> --list` prints its
+#   (D-882); `cargo xtask sanitize <s> --list` prints its
 #   steps and their commands. Every step builds with `-Zbuild-std --target
 #   <host>`, `-Zsanitizer=<s>` and `--cfg cheby_sanitize="<s>"`, which turns
 #   on the runtime's annotations: each fiber switch is told to the
@@ -57,7 +57,7 @@
 #   (reading `duration::zero` alone gives a report); and the REPL never
 #   frees what its entries return, its session values (D-547), and runs no
 #   leak check (D-458). The runtime's own leak check (exit 102, D-458)
-#   and its tests stay on everywhere (GAP(sanitize-lsan)). Under the address
+#   and its tests stay on everywhere (D-881). Under the address
 #   cfg the fiber stack slots are LeakSanitizer root regions while handed
 #   out, so objects held by fibers that a halt freezes are not reported
 #   (D-708, D-859).
@@ -73,7 +73,7 @@
 #   (D-863); `THREAD_TIMING_SKIPS` in xtask/src/sanitize.rs names each, and
 #   today it names none.
 # - `miri`: `cargo xtask sanitize miri`, the runtime's pure modules under
-#   Miri (D-721; GAP(miri-subset)): the ABI, values, strings, reference
+#   Miri (D-721; D-884): the ABI, values, strings, reference
 #   counting, the collections, text, bytes, numbers, the generic walks,
 #   layouts, allocation, the frame walk's tests and the timer tests written
 #   for Miri, with `-Zmiri-permissive-provenance -Zmiri-disable-isolation

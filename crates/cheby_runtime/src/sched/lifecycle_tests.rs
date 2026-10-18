@@ -33,7 +33,7 @@ use crate::values;
 const THREADS: [usize; 3] = [1, 2, 4];
 
 /// How long a child process may take, at most, to exit: 5 s times
-/// `CHEBY_HARNESS_SCALE` (GAP(runtime-test-hang-scale)).
+/// `CHEBY_HARNESS_SCALE` (D-872).
 fn child_limit() -> Duration {
     testing::scaled(Duration::from_secs(5))
 }

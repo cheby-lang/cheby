@@ -16,7 +16,7 @@ use crate::entry::{EntryConfig, EntryMode, EntryOutcome, MIN_STACK_SIZE};
 use crate::panic::{cheby_rt_stack_slow, stack_position};
 
 /// The factor `CHEBY_HARNESS_SCALE` sets for the runtime's own tests
-/// (D-722; GAP(runtime-test-hang-scale)): a whole number from 1 to 100,
+/// (D-722; D-872): a whole number from 1 to 100,
 /// read as `tests/support/src/process.rs` reads it; unset, empty or
 /// invalid is 1 (the harnesses reject an invalid value themselves).
 fn harness_scale() -> u32 {
@@ -28,7 +28,7 @@ fn harness_scale() -> u32 {
 }
 
 /// `d` times `CHEBY_HARNESS_SCALE` (1 to 100, default 1;
-/// GAP(runtime-test-hang-scale)): every wait of a runtime test that bounds
+/// D-872): every wait of a runtime test that bounds
 /// how long something may take goes through it, so slow machines,
 /// emulators and sanitizer builds scale it.
 pub(crate) fn scaled(d: Duration) -> Duration {
@@ -401,7 +401,7 @@ pub(crate) fn entry_check(ctx: &ExecCtx) -> bool {
     crate::unwind::flag::get(ctx) != crate::abi::unwind_flag::NONE
 }
 
-/// GAP(runtime-test-hang-scale), review finding CONC-W2-1 of gate 2: no
+/// D-872, review finding CONC-W2-1 of gate 2: no
 /// runtime test bounds how long something may take with a literal number
 /// of seconds that ignores `CHEBY_HARNESS_SCALE`. The scan matches the
 /// three forms such a bound took: a `recv_timeout` that calls a missing

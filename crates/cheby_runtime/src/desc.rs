@@ -107,7 +107,7 @@ impl StaticNominal {
     }
 
     /// Exposes the provenance of the name and the module path (MIRI-1,
-    /// GAP(miri-static-provenance)). A static initializer cannot turn an
+    /// D-885). A static initializer cannot turn an
     /// address into an integer, so the fields are pointers, and the
     /// runtime reads them back as integer words (`read_field`), which
     /// carry no provenance. Exposing is free at run time; only the

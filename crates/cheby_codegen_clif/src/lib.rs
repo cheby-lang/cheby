@@ -262,7 +262,7 @@ impl DefineStats {
 }
 
 /// One function that [`define_with_stats`] defined, for the JIT's map
-/// from code addresses to call locations (D-856, GAP(loc-map-lifetime)).
+/// from code addresses to call locations (D-856, D-867).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DefinedCode {
     /// The function, whose address the module gives once finalized.

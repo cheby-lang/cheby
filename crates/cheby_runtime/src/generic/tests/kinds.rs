@@ -92,7 +92,7 @@ fn lists_compare_hash_and_print_element_by_element() {
         assert_eq!(hashed(with_fn), Err(Reached::Function));
         assert_eq!(eq(with_fn, with_fn), Err(Reached::Function));
         // Under Miri, which interprets every step, a shorter list that
-        // still spans several tree levels (D-721, GAP(miri-subset)).
+        // still spans several tree levels (D-721, D-884).
         let n: i64 = if cfg!(miri) { 2_000 } else { 100_000 };
         let long = list((0..n).map(int_word).collect());
         let long_again = prepended((0..n).map(int_word).collect());
@@ -557,7 +557,7 @@ fn sorted_groups_print_by_their_whole_text_without_recursion() {
 fn debug_text_is_written_into_a_string_object() {
     let domain = Domain::new();
     alloc::with_domain(Arc::clone(&domain), || {
-        // A shorter list under Miri (D-721, GAP(miri-subset)).
+        // A shorter list under Miri (D-721, D-884).
         let length: i64 = if cfg!(miri) { 500 } else { 10_000 };
         let value = list((0..length).map(|n| some(int_word(n))).collect());
         // SAFETY: a live value.

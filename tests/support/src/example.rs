@@ -16,7 +16,7 @@
 //! it runs every one of its trials serially after the parallel batch of
 //! the conformance harness (D-725). Another type, or `timing = true` with
 //! `skip-run = true`, is an error, since a check-only example waits for
-//! nothing (GAP(timing-key-shape)).
+//! nothing (D-886).
 
 use std::path::{Path, PathBuf};
 
@@ -119,7 +119,7 @@ impl TestConfig {
         if skip_run && reason.is_none() {
             return Err("`skip-run` needs a `reason`".to_owned());
         }
-        // GAP(timing-key-shape): a `skip-run` example is only checked, so
+        // D-886: a `skip-run` example is only checked, so
         // it has no timing to protect.
         if skip_run && timing {
             return Err("`timing` has no effect on a `skip-run` example".to_owned());
@@ -208,7 +208,7 @@ mod tests {
         assert!(!c.timing);
         assert!(TestConfig::parse("milestone = \"M3\"\nskip-run = true\n").is_err());
         assert!(TestConfig::parse("milestone = \"M1\"\ncolour = 1\n").is_err());
-        // D-725, GAP(timing-key-shape).
+        // D-725, D-886.
         assert!(
             TestConfig::parse("milestone = \"M2\"\ntiming = true\n")
                 .unwrap()

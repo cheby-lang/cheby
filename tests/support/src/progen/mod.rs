@@ -32,7 +32,7 @@
 //! rebuilt on each step of a counted recursion, or a recursive field
 //! rebuilt around the recursive call, as a tree insert does).
 //!
-//! Most programs also hold a projection run (GAP(progen-projection-runs)):
+//! Most programs also hold a projection run (D-871):
 //! a function reading 9 to 14 projections of one record that it consumes
 //! after the record's last use, sometimes in one arm of a `case` only.
 //! Fusion sinks at most 8 `dup`s to one point that neither cancel nor
@@ -239,7 +239,7 @@ mod tests {
         assert!(rebuilding >= 34, "only {rebuilding} of 40 programs rebuild");
     }
 
-    /// D-865 through the generator (GAP(progen-projection-runs)): many of
+    /// D-865 through the generator (D-871): many of
     /// the differential's programs hold a projection run, so that
     /// `rc_differential`'s floor of 10 has a margin.
     #[test]

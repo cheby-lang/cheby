@@ -38,7 +38,7 @@ use crate::{list, rc, values};
 /// Runs `f` and checks that it leaves the domain as it found it.
 /// A property's cases: `normal`, or 4 under Miri, as the Miri job's
 /// `PROPTEST_CASES`, which an explicit count would override (D-721,
-/// GAP(miri-subset)).
+/// D-884).
 const fn miri_cases(normal: u32) -> u32 {
     if cfg!(miri) { 4 } else { normal }
 }
@@ -606,7 +606,7 @@ fn kernels_accept_static_strings() {
 /// `docs/stdlib/string.md` records. The shipped build is the pinned stable
 /// toolchain's (D-277); the nightly of the sanitizer and Miri jobs (D-721)
 /// may bring a newer Unicode in its std, so those builds leave the check to
-/// the stable one (GAP(miri-subset)).
+/// the stable one (D-884).
 #[test]
 #[cfg_attr(
     any(cheby_sanitize = "address", cheby_sanitize = "thread", miri),

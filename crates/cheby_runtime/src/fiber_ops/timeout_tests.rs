@@ -220,7 +220,7 @@ fn cancellation_pending(me: &ExecCtx) -> bool {
 const AT: &str = "src/main.cheby:2:3";
 
 /// A limit that never passes during a test: 10 s times
-/// `CHEBY_HARNESS_SCALE` (GAP(runtime-test-hang-scale)).
+/// `CHEBY_HARNESS_SCALE` (D-872).
 fn long() -> Duration {
     testing::scaled(Duration::from_secs(10))
 }

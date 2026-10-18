@@ -25,7 +25,7 @@ use crate::entry::{EntryOutcome, MIN_STACK_SIZE};
 use crate::runtime_info::{cheby_runtime_set_thread_count, cheby_runtime_thread_count};
 
 /// How long a test waits for something that should happen soon: 10 s
-/// times `CHEBY_HARNESS_SCALE` (GAP(runtime-test-hang-scale)).
+/// times `CHEBY_HARNESS_SCALE` (D-872).
 fn cap() -> Duration {
     scaled(Duration::from_secs(10))
 }

@@ -60,7 +60,7 @@ pub unsafe fn prepare(
     arg: *mut c_void,
 ) -> Saved {
     let top = checked_top(slot, stack_top);
-    // GAP(sanitize-slot-unpoison): a reused slot may hold the redzones of
+    // D-877: a reused slot may hold the redzones of
     // frames that never returned.
     sanitizer::unpoison_stack(slot.usable_bottom(), top.wrapping_sub(slot.usable_bottom()));
     let frame = top.wrapping_sub(size_of::<InitialFrame>());

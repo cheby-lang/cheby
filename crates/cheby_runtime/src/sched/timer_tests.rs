@@ -4,7 +4,7 @@
 //!
 //! Time is asserted only as a lower bound ("never earlier than the
 //! deadline", D-671) and a generous cap of 5 s times `CHEBY_HARNESS_SCALE`
-//! (GAP(runtime-test-hang-scale)); latencies are printed, as
+//! (D-872); latencies are printed, as
 //! informative readings (plan §0 'Determinism').
 
 use std::sync::Arc;

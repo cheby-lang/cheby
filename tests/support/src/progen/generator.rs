@@ -49,7 +49,7 @@ const FN_BUDGET: u64 = 6_000;
 pub(crate) const PLANTED_TEXT: &str = "planted panic";
 /// The fewest projections a projection run reads: one more than the most
 /// `dup`s fusion sinks to one point without a cancel or a fold (D-865;
-/// GAP(progen-projection-runs)).
+/// D-871).
 pub(crate) const RUN_MIN: usize = 9;
 /// The most projections a projection run reads.
 pub(crate) const RUN_MAX: usize = 14;
@@ -2382,7 +2382,7 @@ impl<'c> Gen<'c> {
         (lines, tail)
     }
 
-    /// A projection run (GAP(progen-projection-runs), D-865), or nothing:
+    /// A projection run (D-865, D-871), or nothing:
     /// the text of a function `fN(x: RecK)` (or `fN(x: RecK, k: Int)`)
     /// that reads [`RUN_MIN`] to [`RUN_MAX`] projections of `x` of one
     /// boxed type, then returns them in a list after `x`'s last use, or
@@ -2558,7 +2558,7 @@ impl<'c> Gen<'c> {
             self.cfg.final_panic_percent > 0 && self.src.chance(self.cfg.final_panic_percent);
         let finale = planted.then(|| self.finale());
         let (mut lines, tail) = self.main_fn(finale.as_ref().map(|(_, tys)| tys.as_slice()));
-        // GAP(progen-projection-runs): drawn after every other choice, so
+        // D-871: drawn after every other choice, so
         // that the rest of the program is what the seed gave before.
         let run = self.projection_run();
         if let Some((_, section)) = &run {

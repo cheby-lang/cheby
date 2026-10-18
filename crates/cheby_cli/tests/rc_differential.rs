@@ -22,7 +22,7 @@
 //! in a generated function or a closure of one (D-716, D-844), and at
 //! least 10 hold a projection run, a generated function with 9 or more
 //! counted projections of one local, beyond the 8 `dup`s fusion sinks to
-//! one point (D-865, GAP(progen-projection-runs)). A
+//! one point (D-865, D-871). A
 //! separate run of 5 seeds with `CHEBY_RT_STATS=1` must count reuse hits,
 //! so that reuse happens at run time too, not only in the MIR.
 //!
@@ -88,7 +88,7 @@ const RUN_READS: usize = 9;
 
 /// The least number of the 40 programs that must hold a projection run
 /// in a generated function, so that the differential reaches fusion's
-/// bound (D-865, GAP(progen-projection-runs)). If fewer do, the generator
+/// bound (D-865, D-871). If fewer do, the generator
 /// is extended, never this threshold.
 const MIN_PROJECTING: usize = 10;
 

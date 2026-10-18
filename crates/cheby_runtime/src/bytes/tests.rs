@@ -31,7 +31,7 @@ use crate::{list, rc, values};
 /// Runs `f` and checks that it leaves the domain as it found it.
 /// A property's cases: `normal`, or 4 under Miri, as the Miri job's
 /// `PROPTEST_CASES`, which an explicit count would override (D-721,
-/// GAP(miri-subset)).
+/// D-884).
 const fn miri_cases(normal: u32) -> u32 {
     if cfg!(miri) { 4 } else { normal }
 }

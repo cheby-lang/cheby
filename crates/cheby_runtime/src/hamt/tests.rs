@@ -40,7 +40,7 @@ use crate::values;
 
 /// `normal`, or `miri` under Miri, which interprets every step: the size of
 /// a test whose checks hold at any size, cut for the nightly Miri job
-/// (D-721, GAP(miri-subset)).
+/// (D-721, D-884).
 const fn sized(normal: i64, miri: i64) -> i64 {
     if cfg!(miri) { miri } else { normal }
 }
@@ -53,7 +53,7 @@ const fn miri_cases(normal: u32) -> u32 {
 
 /// The largest generated collection: `normal`, or `miri` under Miri, where
 /// a model check after each step over hundreds of colliding keys takes
-/// hours (D-721, GAP(miri-subset)).
+/// hours (D-721, D-884).
 const fn miri_len(normal: usize, miri: usize) -> usize {
     if cfg!(miri) { miri } else { normal }
 }
@@ -636,7 +636,7 @@ fn colliding_hashes_share_collision_nodes() {
     // Sixteen distinct hashes for 3,000 keys: every key lives in a
     // collision node of ~190 entries under a chain of single-child nodes.
     // Under Miri, enough keys to fill collision nodes past the trie's
-    // fan-out (D-721, GAP(miri-subset)).
+    // fan-out (D-721, D-884).
     bulk(0, sized(3_000, 100), 0xF);
     bulk(1, sized(2_000, 100), 0xF << 60);
     // Every key has the same hash.

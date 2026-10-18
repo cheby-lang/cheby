@@ -1,7 +1,7 @@
 //! Call locations in code generation (D-856): each located call's debug
 //! tag paired with its return offset, the tags leaving the machine code and
 //! the CLIF text unchanged, and the wait-frame store before the waiting
-//! kernels (GAP(loc-ctx-wait-frame)).
+//! kernels (D-868).
 
 use cranelift_codegen::control::ControlPlane;
 use cranelift_jit::{JITBuilder, JITModule};

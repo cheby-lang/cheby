@@ -178,7 +178,7 @@ impl Pending {
     /// An [`Ice`] if `module` is unknown.
     fn for_module(mut self, module: ModuleId, tests: bool, cx: &LowerCx<'_>) -> Result<Self, Ice> {
         self.outside_std = cx.defs.modules.try_get(module)?.package != PackageId::STD;
-        // GAP(loc-std-root): when std's own tests run (`cargo xtask
+        // D-870: when std's own tests run (`cargo xtask
         // test-std`), the calls of its test blocks and their closures are
         // located like user code's, so a deadlocking std test names the
         // line of its wait; std's other functions stay std. A user build

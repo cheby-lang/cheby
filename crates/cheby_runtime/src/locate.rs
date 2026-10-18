@@ -4,7 +4,7 @@
 //!
 //! # The code map
 //!
-//! GAP(loc-map-lifetime): one map serves the whole process. A JIT
+//! D-867: one map serves the whole process. A JIT
 //! registers each batch's functions with [`register_code`] after
 //! `finalize_definitions`, under an owner id from [`new_code_owner`], and
 //! removes them with [`unregister_code`] when its code memory is freed
@@ -58,7 +58,7 @@ pub struct CallSiteDesc {
 }
 
 /// One function of a JIT batch, as the JIT registers it after
-/// `finalize_definitions` (GAP(loc-map-lifetime)).
+/// `finalize_definitions` (D-867).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodeRangeDesc {
     /// The function's first byte.
@@ -366,7 +366,7 @@ pub fn new_code_owner() -> u64 {
 }
 
 /// Adds a finalized batch's functions to the process's map under `owner`
-/// (GAP(loc-map-lifetime)): called after `finalize_definitions`, never for
+/// (D-867): called after `finalize_definitions`, never for
 /// a batch that failed. A registered range a new one overlaps is removed.
 pub fn register_code(owner: u64, ranges: Vec<CodeRangeDesc>) {
     CODE_MAP

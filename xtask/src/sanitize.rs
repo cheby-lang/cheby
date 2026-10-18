@@ -1,7 +1,7 @@
 //! `cargo xtask sanitize <address|thread|miri>`: the sanitizer and Miri
 //! jobs of the nightly workflow (D-721), one driver for the workflow and for
 //! the local runs that stand as its evidence before the push (D-862;
-//! GAP(sanitize-driver)).
+//! D-882).
 //!
 //! Every step is a `cargo` command on the pinned nightly [`NIGHTLY`] (D-781).
 //! The driver edits no file, and it builds into its own target directory:
@@ -20,7 +20,7 @@
 //!   its own (D-863). The steps are [`STEPS`].
 //! - **miri**: `cargo +<nightly> miri test --locked -p cheby_runtime --lib`
 //!   over the subset of [`MIRI_GROUPS`], one step per group
-//!   (GAP(miri-subset)), with [`MIRIFLAGS`] and `PROPTEST_CASES=4`.
+//!   (D-884), with [`MIRIFLAGS`] and `PROPTEST_CASES=4`.
 //!   `--jobs <n>` runs n groups at once; Miri interprets each on one core.
 //!
 //! The harness steps (`ui-deadlock`, `conformance`, `repl`) and the
@@ -51,7 +51,7 @@
 //! JIT's data memory holds them, which the leak checker does not scan; and
 //! the REPL never frees what its entries return, its session values
 //! (D-547, no leak check in the REPL: D-458); the runtime's own leak check
-//! (status 102, D-458) stays on everywhere (GAP(sanitize-lsan)). Fiber stack
+//! (status 102, D-458) stays on everywhere (D-881). Fiber stack
 //! slots are registered as root regions under the address cfg, so objects
 //! held by fibers a halt freezes are not reported (D-708, D-859). The leak
 //! checker does not run on macOS, so
@@ -91,9 +91,9 @@ const HARNESS_SCALE: u32 = 10;
 /// `getcwd`; and Miri's leak check off, since Cheby objects hold each
 /// other as integer words, which Miri cannot follow, so every object a
 /// test makes immortal on purpose (a forgotten word, a count that
-/// overflowed to static, D-765) would be reported. The runtime's own
+/// overflowed to static, D-454) would be reported. The runtime's own
 /// accounting checks leaks instead: each test's domain returns to where it
-/// started (GAP(miri-subset)).
+/// started (D-884).
 pub const MIRIFLAGS: &str =
     "-Zmiri-permissive-provenance -Zmiri-disable-isolation -Zmiri-ignore-leaks";
 
@@ -186,7 +186,7 @@ pub struct MiriGroup {
     pub skips: &'static [(&'static str, &'static str)],
 }
 
-/// The Miri subset (GAP(miri-subset)): the runtime's pure modules, the
+/// The Miri subset (D-884): the runtime's pure modules, the
 /// frame-walk tests (`locate_tests`) and the timer tests written for Miri. The scheduler,
 /// the pool, io, entries and the `loom` models stay out: they switch
 /// stacks, start threads that park or call the poller, which Miri cannot
@@ -307,7 +307,7 @@ pub const MIRI_GROUPS: &[MiriGroup] = &[
     },
 ];
 
-/// Whether the leak checker runs in a step (GAP(sanitize-lsan)).
+/// Whether the leak checker runs in a step (D-881).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Leaks {
     /// `detect_leaks=1` on Linux.

@@ -26,7 +26,7 @@ use crate::string::{new_string, to_rust_string};
 
 /// `normal`, or `miri` under Miri, which interprets every step: the size of
 /// a test whose checks hold at any size, cut for the nightly Miri job
-/// (D-721, GAP(miri-subset)).
+/// (D-721, D-884).
 const fn sized(normal: i64, miri: i64) -> i64 {
     if cfg!(miri) { miri } else { normal }
 }

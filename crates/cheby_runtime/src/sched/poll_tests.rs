@@ -18,7 +18,7 @@ use super::{Runtime, TimerTarget};
 use crate::entry::{EntryOutcome, MIN_STACK_SIZE};
 
 /// How long a test waits for something that should happen at once: 5 s
-/// times `CHEBY_HARNESS_SCALE` (GAP(runtime-test-hang-scale)).
+/// times `CHEBY_HARNESS_SCALE` (D-872).
 fn cap() -> Duration {
     scaled(Duration::from_secs(5))
 }

@@ -136,8 +136,6 @@ fatal error: all fibers are blocked
   blocked in channel::receive at src/main.cheby:5:22
 ```
 
-The location in this example is illustrative until a run produces it.
-
 _Note:_ the reference implementation finds a location by mapping the return address of the fiber's innermost frame outside `std` to its call through a table the JIT records per call site (D-856). Its monitor thread confirms a deadlock by surveying the domain's fibers twice, and finds a deadlocked test among running ones within about 200 ms (D-860).
 
 ## 10.5 Channels

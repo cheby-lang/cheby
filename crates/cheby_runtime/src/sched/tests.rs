@@ -191,7 +191,7 @@ fn a_ping_pong_through_runnext_lets_the_local_deque_run() {
     const STOP: u64 = u64::MAX;
     // How long the pair may run before it gives up waiting for the third
     // fiber; the third should run within a few quanta
-    // (GAP(runtime-test-hang-scale)).
+    // (D-872).
     let bound = scaled(Duration::from_secs(10));
     let runtime = runtime(1);
     let word = root(&runtime, move |me| {

@@ -1647,7 +1647,7 @@ impl BlockCache {
     /// A cached free block of size class `class`, if there is one.
     fn take(&mut self, class: usize) -> Option<*mut u8> {
         let block = self.classes.get_mut(class)?.pop()?;
-        // GAP(sanitize-block-cache): addressable again under the address
+        // D-880: addressable again under the address
         // cfg (`keep` poisoned it); a no-op otherwise.
         if let Some(layout) = class_layout(class) {
             sanitizer::unpoison(block, layout.size());
@@ -1663,7 +1663,7 @@ impl BlockCache {
         };
         match self.classes.get_mut(class) {
             Some(blocks) if blocks.len() < CACHE_BLOCKS => {
-                // GAP(sanitize-block-cache): under the address cfg a use
+                // D-880: under the address cfg a use
                 // after free into a cached block is reported; the
                 // quarantine is not poisoned, since the runtime's own
                 // checks read its poisoned headers.

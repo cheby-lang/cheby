@@ -19,7 +19,7 @@
 #   `loom` models carry `#[cfg_attr(windows, ignore = …)]` there, and
 #   programs that start no fiber still run on the thread backend.
 #   Tests that need Unix pipes, a shell or FIFOs are not built on Windows
-#   (GAP(windows-unbuilt-tests)): `cheby_cli`'s tests/blocking_io.rs,
+#   (D-874): `cheby_cli`'s tests/blocking_io.rs,
 #   tests/closed_streams.rs, tests/repl_runtime.rs and tests/test_parallel.rs
 #   (`#![cfg(unix)]`), besides tests/run.rs (`#![cfg(not(windows))]`, D-641);
 #   and `cheby_driver`'s runner and stuck-test modules in src/test.rs and
@@ -52,7 +52,7 @@
 #   `--cfg cheby_sanitize` (`address`, `thread`) on stable, on Linux x86-64
 #   and macOS arm64, so the sanitizer annotations that only the nightly
 #   workflow runs (D-721, nightly.yml) cannot rot between its runs
-#   (GAP(sanitize-cfg-ci)). Only this step and nightly.yml pass the cfg.
+#   (D-883). Only this step and nightly.yml pass the cfg.
 
 name: CI
 

@@ -306,7 +306,7 @@ pub(crate) fn stack_position() -> usize {
 /// An address in the current frame, at or below the caller's stack
 /// pointer: the stack pointer itself.
 ///
-/// GAP(sanitize-stack-position): the address sanitizer's detection of uses
+/// D-878: the address sanitizer's detection of uses
 /// after return moves a local whose address escapes to a fake stack on the
 /// heap, so the address of a local is no stack position there.
 #[cfg(all(

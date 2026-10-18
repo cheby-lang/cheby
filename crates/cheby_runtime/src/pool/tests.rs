@@ -30,7 +30,7 @@ use crate::sched::{AfterSwitch, CodeToken, DetachedGroup, FiberRef, park};
 use crate::values;
 
 /// How long a child process may take, at most, to exit: 10 s times
-/// `CHEBY_HARNESS_SCALE` (GAP(runtime-test-hang-scale)).
+/// `CHEBY_HARNESS_SCALE` (D-872).
 fn child_limit() -> Duration {
     testing::scaled(Duration::from_secs(10))
 }
@@ -173,7 +173,7 @@ fn child(name: &str, child: &str) -> (std::process::ExitStatus, String) {
 // The pool alone (private pools, no fibers). They run no fiber, but they
 // carry the Windows ignore all the same: testing.md's rule names the
 // blocking pool beside stack switches and schedulers (D-714;
-// GAP(windows-pool-tests)).
+// D-873).
 
 /// D-683: with the cap reached, later jobs queue; they all run once the
 /// running ones return.

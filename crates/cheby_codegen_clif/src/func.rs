@@ -1216,7 +1216,7 @@ impl Translator<'_, '_> {
     }
 
     /// Stores this function's frame pointer at
-    /// [`abi::CTX_WAIT_FRAME`] (GAP(loc-ctx-wait-frame), D-856): right
+    /// [`abi::CTX_WAIT_FRAME`] (D-856, D-868): right
     /// before a call of a `@std_context` kernel or of `scope_close`, so a
     /// kernel that parks the fiber records where the walk for a deadlock
     /// report starts. Frame pointers are kept in every function

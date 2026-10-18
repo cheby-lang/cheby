@@ -58,14 +58,14 @@
 //! example whose `test.toml` sets `timing = true`, at every variant, the
 //! base trial included, runs one at a time after the parallel batch, so
 //! the real-time waits of 009, 013 and 019 do not compete with other
-//! trials (GAP(timing-serial-every-variant)). The serial group is a second
+//! trials (D-888). The serial group is a second
 //! libtest run on one thread, made only when some example sets `timing`.
 //! Filters, `--exact`, `--skip`, `--ignored` and `--list` apply to each
 //! batch, and each batch prints its own `running N tests` and
 //! `test result:` lines. After both, the harness prints one combined line,
 //! `conformance harness: <p> passed; <f> failed; <i> ignored; <x> filtered
 //! out (serial after the parallel batch: <n>)`, which counts every trial,
-//! and then the pending summary once (GAP(timing-serial-second-run)). The
+//! and then the pending summary once (D-887). The
 //! harness prints the serial examples next to its thread counts. D-725
 //! orders the trials, the `cheby` processes; the tests inside one `cheby
 //! test` still run in parallel (D-723).
@@ -142,7 +142,7 @@ fn main() -> ExitCode {
         std::thread::available_parallelism().ok().map(Into::into),
     ));
 
-    // GAP(timing-serial-every-variant): every trial of a `timing` example,
+    // D-888: every trial of a `timing` example,
     // at every variant, goes to the serial group (D-725).
     let mut parallel = Vec::new();
     let mut serial = Vec::new();
@@ -158,7 +158,7 @@ fn main() -> ExitCode {
     }
 
     let mut conclusion = libtest_mimic::run(&args, parallel);
-    // GAP(timing-serial-second-run): the serial group runs after the
+    // D-887: the serial group runs after the
     // parallel batch, one trial at a time on this thread, and the two
     // conclusions are merged. No second run when no example sets `timing`.
     let mut serial_run = 0;

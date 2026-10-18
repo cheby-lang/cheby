@@ -299,7 +299,7 @@ pub const CTX_MODE_CONST_EVAL: u32 = 1;
 pub const CTX_UNWIND: i32 = 12;
 
 /// Byte offset of the fiber control block's wait-frame word, a `usize`
-/// (D-856; GAP(loc-ctx-wait-frame)): the frame pointer of the std function
+/// (D-856; D-868): the frame pointer of the std function
 /// that calls a waiting kernel (a `@std_context` kernel, D-692) or
 /// `scope_close` (D-693), stored by generated code right before that call.
 /// The waiting kernels copy it into the fiber's wait site when they park,
@@ -934,7 +934,7 @@ mod tests {
     }
 
     /// D-685, D-742, D-856: the generated-code view of the control block
-    /// ends at the wait-frame word (GAP(loc-ctx-wait-frame)), the
+    /// ends at the wait-frame word (D-868), the
     /// measurement switch keeps its name, and a deadlock exits with 103
     /// (D-724).
     #[test]

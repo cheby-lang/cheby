@@ -1,5 +1,5 @@
 //! Tests of the code map and the frame-record walk (D-856,
-//! GAP(loc-map-lifetime)). Pure: no fiber, no JIT, no `mmap` and no `asm!`
+//! D-867). Pure: no fiber, no JIT, no `mmap` and no `asm!`
 //! except in `locate_strips_a_signed_return_address`, which Miri skips, so
 //! the rest run under Miri (D-721). Stacks are synthetic: a map from
 //! addresses to words, read through a reader that strips a fake

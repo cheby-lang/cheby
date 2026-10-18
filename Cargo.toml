@@ -71,7 +71,7 @@ windows-sys = "0.61"
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
 missing_debug_implementations = "warn"
-# GAP(sanitize-cfg): the sanitizer builds (D-721) pass
+# D-875: the sanitizer builds (D-721) pass
 # `--cfg cheby_sanitize="address"` or `"thread"` with `-Zsanitizer`;
 # `crates/cheby_runtime/src/fiber/sanitizer.rs` reads it.
 unexpected_cfgs = { level = "warn", check-cfg = [

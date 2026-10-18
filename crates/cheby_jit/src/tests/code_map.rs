@@ -1,4 +1,4 @@
-//! The JIT's part of the code map (D-856, GAP(loc-map-lifetime)): after
+//! The JIT's part of the code map (D-856, D-867): after
 //! each batch is finalized, every function it defined is registered with
 //! its address, length, ABI and the return offsets of its located calls;
 //! a failed batch registers nothing; a later batch adds ranges and moves

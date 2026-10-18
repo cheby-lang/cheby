@@ -10,7 +10,7 @@
 //! that behavior made intentional be told to the sanitizer, never
 //! suppressed, so each leaked entry is marked as one the checker ignores;
 //! what it owns (a type's argument list) stays reachable through it
-//! (GAP(sanitize-lsan)). Without the cfg this is a no-op.
+//! (D-881). Without the cfg this is a no-op.
 
 /// Marks `leaked`, an allocation leaked on purpose, as no leak for the leak
 /// sanitizer. A zero-sized value owns no allocation and is skipped.

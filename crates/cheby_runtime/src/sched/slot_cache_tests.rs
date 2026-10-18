@@ -20,7 +20,7 @@ use crate::ctx::ExecCtx;
 use crate::entry::EntryOutcome;
 
 /// How long a test waits for something that should happen soon: 10 s
-/// times `CHEBY_HARNESS_SCALE` (GAP(runtime-test-hang-scale)).
+/// times `CHEBY_HARNESS_SCALE` (D-872).
 fn cap() -> Duration {
     scaled(Duration::from_secs(10))
 }

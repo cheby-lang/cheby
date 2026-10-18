@@ -256,7 +256,7 @@ struct CodeKeepAlive {
     /// The module, once the `Jit` is dropped.
     module: Mutex<Option<JITModule>>,
     /// The key of the JIT's functions in the process-wide code map
-    /// (D-856, GAP(loc-map-lifetime)): registered batch by batch, removed
+    /// (D-856, D-867): registered batch by batch, removed
     /// with the memory.
     code_owner: u64,
 }
@@ -548,7 +548,7 @@ impl Jit {
     }
 
     /// Adds the batch's functions, finalized, to the process-wide code map
-    /// under this JIT's owner (D-856, GAP(loc-map-lifetime)): each one's
+    /// under this JIT's owner (D-856, D-867): each one's
     /// address, length, ABI and call locations, so a deadlock report can
     /// map a return address to its call. Ranges of earlier batches stay,
     /// REPL redefinitions included, since their code stays while the JIT's

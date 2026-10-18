@@ -243,7 +243,7 @@ impl StaticPair {
     /// The object's word. Also exposes the provenance of the static object
     /// in its field, which the runtime reads back as an integer word
     /// (`read_field`) and turns into a pointer with [`word_to_ptr`]
-    /// (MIRI-1, GAP(miri-static-provenance)). Exposing is free at run time.
+    /// (MIRI-1, D-885). Exposing is free at run time.
     #[must_use]
     pub fn word(&'static self) -> Word {
         let _ = self.field.expose_provenance();
