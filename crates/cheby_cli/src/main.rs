@@ -35,6 +35,14 @@ use clap::{CommandFactory as _, FromArgMatches as _, Parser, Subcommand, ValueEn
 
 use crate::color::ColorWhen;
 
+/// The global allocator of the toolchain and of the programs it runs:
+/// runtime objects are allocated through it (`cheby_runtime::alloc`).
+/// Sanitizer builds keep the system allocator, which the sanitizers
+/// intercept (D-721).
+#[cfg(not(any(cheby_sanitize = "address", cheby_sanitize = "thread")))]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 #[derive(Debug, Parser)]
 #[command(name = "cheby", version, about = "The Cheby toolchain")]
 struct Cli {

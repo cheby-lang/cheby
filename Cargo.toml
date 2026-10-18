@@ -51,6 +51,7 @@ getrandom = "0.3"
 libc = "0.2"
 libtest-mimic = "0.8"
 loom = "0.7"
+mimalloc = "0.1.52"
 mio = { version = "1", features = ["os-poll"] }
 parking_lot = "0.12"
 proptest = "1.11"

@@ -232,7 +232,7 @@ Native values (D-278, D-279):
 
 ## 3. Runtime
 
-`cheby_runtime` is Rust, built as an rlib for the JIT and as a staticlib for AOT linking. It exposes a C ABI to generated code.
+`cheby_runtime` is Rust, built as an rlib for the JIT and as a staticlib for AOT linking. It exposes a C ABI to generated code. Its objects are allocated through Rust's global allocator, which is mimalloc: `cheby_cli` sets it for the JIT, and from M3 every AOT executable links it too. Builds with `--cfg cheby_sanitize` keep the system allocator, which the sanitizers intercept (D-890).
 
 | Area                   | Milestone | Contents                                                                                                                                        |
 | ---------------------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |

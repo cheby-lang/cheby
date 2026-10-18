@@ -11,7 +11,7 @@ Detail level: workstreams with outcomes. This file is refined into tasks when M3
 ### 3.1 Object output and linking
 
 - Cranelift object output per module, from the same lowering as the JIT.
-- `cheby_runtime` as a staticlib linked into every executable.
+- `cheby_runtime` as a staticlib linked into every executable, with mimalloc as the executable's global allocator, as in `cheby` (D-890).
 - Linking with the system linker, `cc` or `link.exe` (D-088, D-261).
 - DWARF line tables by default, full debug info opt-in (D-184, D-259), and panic backtraces from them.
 - Foreign code supplied by packages, per OQ-P9, and the `cheby.h` header for it (D-187).

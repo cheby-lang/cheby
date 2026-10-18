@@ -53,6 +53,15 @@
 #   and macOS arm64, so the sanitizer annotations that only the nightly
 #   workflow runs (D-721, nightly.yml) cannot rot between its runs
 #   (D-883). Only this step and nightly.yml pass the cfg.
+# - The C compiler: `cheby_cli` links mimalloc as its global allocator
+#   (D-890), which libmimalloc-sys compiles from C during the build, as
+#   C++17 under MSVC. Every job that builds `cheby_cli` (`test`, `rc-naive`,
+#   `examples` and `bench`) first runs `.github/actions/c-compiler`. It
+#   installs nothing: it names the image's compiler (gcc on Ubuntu, Xcode's
+#   clang on macOS, MSVC's `cl.exe` for the runner's architecture on
+#   Windows, found through vswhere as the `cc` crate finds it) and fails
+#   before the build when there is none. `fmt`, `cross-check`, `std-tests`
+#   and `sanitize-cfg` build no `cheby_cli`.
 
 name: CI
 
@@ -93,6 +102,7 @@ jobs:
           toolchain: "1.99.0"
           components: clippy
       - uses: Swatinem/rust-cache@v2
+      - uses: ./.github/actions/c-compiler
       - run: cargo build --workspace --all-targets --locked
       - run: cargo clippy --workspace --all-targets --locked
       - run: cargo test --workspace --locked --no-fail-fast
@@ -143,6 +153,7 @@ jobs:
         with:
           toolchain: "1.99.0"
       - uses: Swatinem/rust-cache@v2
+      - uses: ./.github/actions/c-compiler
       - name: UI tests under naive reference counting
         run: CHEBY_RC=naive cargo test -p cheby_cli --test ui
       - name: The standard library's tests under naive reference counting
@@ -163,6 +174,7 @@ jobs:
         with:
           toolchain: "1.99.0"
       - uses: Swatinem/rust-cache@v2
+      - uses: ./.github/actions/c-compiler
       - name: cheby check in every example
         run: cargo xtask check-examples
       - name: Deterministic builds across thread counts and paths
@@ -176,6 +188,7 @@ jobs:
         with:
           toolchain: "1.99.0"
       - uses: Swatinem/rust-cache@v2
+      - uses: ./.github/actions/c-compiler
       - uses: actions/setup-node@v5
         with:
           node-version: 24

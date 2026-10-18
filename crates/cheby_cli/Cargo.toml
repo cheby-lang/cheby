@@ -21,6 +21,7 @@ cheby_lsp.workspace = true
 cheby_pkg.workspace = true
 cheby_repl.workspace = true
 cheby_runtime.workspace = true
+mimalloc.workspace = true
 
 [dev-dependencies]
 cheby_test_support.workspace = true

@@ -35,6 +35,8 @@
 #   JIT code is not instrumented (D-721): the sanitizers see the runtime,
 #   std and the compiler, and the harnesses' `CHEBY_RT_POISON=1` routes
 #   every count operation of generated code through the runtime.
+#   Under the cfg, `cheby` keeps the system allocator instead of mimalloc,
+#   because the sanitizers intercept only the system allocator (D-890).
 #   Options every step passes (the driver sets them; a caller's
 #   `ASAN_OPTIONS` or `TSAN_OPTIONS` comes after and wins):
 #   `allocator_may_return_null=1` under both, because the runtime's
@@ -84,6 +86,10 @@
 #   for their size are listed with their reasons in xtask/src/sanitize.rs
 #   (`MIRI_GROUPS`); others take a smaller size under `cfg(miri)`. Fibers,
 #   the scheduler, the pool, io, entries and the `loom` models stay out.
+# - The `rc_differential` fuzz job and both sanitizer jobs build
+#   `cheby_cli`, whose mimalloc libmimalloc-sys compiles from C, so they
+#   first run `.github/actions/c-compiler`, which checks the image's C
+#   compiler and installs nothing (D-890). Miri builds only the runtime.
 #
 # Until the `runtime` branch is pushed, a local run of the same driver on
 # this nightly is the evidence (D-862, as D-781 did for fuzzing): both
@@ -137,6 +143,8 @@ jobs:
           workspaces: |
             .
             fuzz
+      - uses: ./.github/actions/c-compiler
+        if: matrix.target == 'rc_differential'
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --version 0.13.2 --locked
       - name: Seed the corpus with the examples and the UI tests
@@ -189,6 +197,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: sanitize-${{ matrix.sanitizer }}
+      - uses: ./.github/actions/c-compiler
       - name: Install llvm-symbolizer
         run: |
           sudo apt-get update
