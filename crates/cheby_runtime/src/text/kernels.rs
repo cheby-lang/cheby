@@ -8,6 +8,7 @@ use super::ops::{self, Fill, int};
 use crate::abi::Word;
 use crate::list;
 use crate::panic::fatal;
+use crate::unwind::guard::{DropOnUnwind, guarded};
 use crate::{alloc, rc, string, values};
 
 /// The text of a borrowed `String` argument.
@@ -152,9 +153,11 @@ pub unsafe extern "C" fn cheby_string_grapheme_length(text: Word) -> i64 {
 /// `a` and `b` are live `String`s, borrowed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_string_compare(a: Word, b: Word) -> Word {
-    // SAFETY: forwarded from the caller.
-    let (a, b) = unsafe { (arg(a), arg(b)) };
-    values::order(a.as_bytes().cmp(b.as_bytes()))
+    guarded(None, || {
+        // SAFETY: forwarded from the caller.
+        let (a, b) = unsafe { (arg(a), arg(b)) };
+        values::order(a.as_bytes().cmp(b.as_bytes()))
+    })
 }
 
 /// `string::starts_with`. O(m) in the prefix.
@@ -201,14 +204,20 @@ pub unsafe extern "C" fn cheby_string_contains(text: Word, part: Word) -> bool {
 /// `text` and `separator` are live `String`s, borrowed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_string_split(text: Word, separator: Word) -> Word {
-    // SAFETY: forwarded from the caller.
-    let (whole, sep) = unsafe { (arg(text), arg(separator)) };
-    if !sep.is_empty() && !whole.contains(sep) {
-        // SAFETY: a live string; the list gets a reference of its own.
-        unsafe { rc::dup(text) };
-        return list::from_iter([text]);
-    }
-    string_list(ops::split(whole, sep))
+    guarded(None, || {
+        // SAFETY: forwarded from the caller.
+        let (whole, sep) = unsafe { (arg(text), arg(separator)) };
+        if !sep.is_empty() && !whole.contains(sep) {
+            // SAFETY: a live string; the list gets a reference of its own,
+            // released if the list cannot be allocated.
+            unsafe { rc::dup(text) };
+            let held = DropOnUnwind::new([text]);
+            let parts = list::from_iter([text]);
+            held.disarm();
+            return parts;
+        }
+        string_list(ops::split(whole, sep))
+    })
 }
 
 /// `string::split_once` (D-315): `Some((before, after))` or `None`.
@@ -218,12 +227,24 @@ pub unsafe extern "C" fn cheby_string_split(text: Word, separator: Word) -> Word
 /// `text` and `separator` are live `String`s, borrowed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_string_split_once(text: Word, separator: Word) -> Word {
-    // SAFETY: forwarded from the caller.
-    let (text, sep) = unsafe { (arg(text), arg(separator)) };
-    values::option(
-        ops::split_once(text, sep)
-            .map(|(before, after)| values::tuple(&[values::string(before), values::string(after)])),
-    )
+    guarded(None, || {
+        // SAFETY: forwarded from the caller.
+        let (text, sep) = unsafe { (arg(text), arg(separator)) };
+        let Some((before, after)) = ops::split_once(text, sep) else {
+            return values::option(None);
+        };
+        // Each new part is released if a later allocation fails.
+        let first = DropOnUnwind::new([values::string(before)]);
+        let second = DropOnUnwind::new([values::string(after)]);
+        let ([first_word], [second_word]) = (first.words(), second.words());
+        let pair = values::tuple(&[first_word, second_word]);
+        first.disarm();
+        second.disarm();
+        let held = DropOnUnwind::new([pair]);
+        let result = values::option(Some(pair));
+        held.disarm();
+        result
+    })
 }
 
 /// `string::to_code_points` (D-302). O(n).
@@ -234,7 +255,7 @@ pub unsafe extern "C" fn cheby_string_split_once(text: Word, separator: Word) ->
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_string_to_code_points(text: Word) -> Word {
     // SAFETY: forwarded from the caller.
-    string_list(ops::code_points(unsafe { arg(text) }))
+    guarded(None, || string_list(ops::code_points(unsafe { arg(text) })))
 }
 
 /// `string::to_graphemes` (D-302, D-310). O(n).
@@ -245,30 +266,35 @@ pub unsafe extern "C" fn cheby_string_to_code_points(text: Word) -> Word {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_string_to_graphemes(text: Word) -> Word {
     // SAFETY: forwarded from the caller.
-    string_list(ops::graphemes(unsafe { arg(text) }))
+    guarded(None, || string_list(ops::graphemes(unsafe { arg(text) })))
 }
 
 // ---------------------------------------------------------------------
 // Building
 
 /// `string::add`: `a` then `b`. In place when `a` is unique with room
-/// (D-525); otherwise a copy with doubled capacity. O(n + m).
+/// (D-525); otherwise a new object with room: twice `a`'s capacity when
+/// `a` is unique, twice its length when it is shared or static
+/// (D-849, refining D-577), and at least the result's
+/// length. O(n + m).
 ///
 /// # Safety
 ///
 /// `a` and `b` are live `String`s, borrowed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_string_add(a: Word, b: Word) -> Word {
-    // SAFETY: forwarded from the caller.
-    let piece = unsafe { arg(b) };
-    if piece.is_empty() {
-        // SAFETY: a live string; the caller gets a reference of its own.
-        unsafe { rc::dup(a) };
-        return a;
-    }
-    // SAFETY: a live string; `piece` is another object's text unless
-    // `a == b`, when nothing is reused.
-    unsafe { extend(a, cap(piece.len()), a != b, |write| write(piece.as_bytes())) }
+    guarded(None, || {
+        // SAFETY: forwarded from the caller.
+        let piece = unsafe { arg(b) };
+        if piece.is_empty() {
+            // SAFETY: a live string; the caller gets a reference of its own.
+            unsafe { rc::dup(a) };
+            return a;
+        }
+        // SAFETY: a live string; `piece` is another object's text unless
+        // `a == b`, when nothing is reused.
+        unsafe { extend(a, cap(piece.len()), a != b, |write| write(piece.as_bytes())) }
+    })
 }
 
 /// `string::join`: the parts with `separator` between each two. Two passes
@@ -280,37 +306,39 @@ pub unsafe extern "C" fn cheby_string_add(a: Word, b: Word) -> Word {
 /// borrowed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_string_join(parts: Word, separator: Word) -> Word {
-    // SAFETY: forwarded from the caller.
-    let sep = unsafe { arg(separator) };
-    let pieces = || {
-        // SAFETY: a live list, borrowed for the call.
-        let elements = unsafe { list::iter(parts) };
-        // SAFETY: its elements are live strings while the list lives.
-        elements.map(|part| unsafe { arg(part) })
-    };
-    let mut count = 0_usize;
-    let bytes = total(pieces().map(|part| {
-        count = count.saturating_add(1);
-        cap(part.len())
-    }));
-    if count == 1 {
-        // SAFETY: a live list of one live string.
-        if let Some(only) = unsafe { list::iter(parts) }.next() {
-            // SAFETY: the element is live; the caller gets a reference of
-            // its own.
-            unsafe { rc::dup(only) };
-            return only;
-        }
-    }
-    let seps = cap(sep.len()).checked_mul(cap(count.saturating_sub(1)));
-    let size = total([bytes, seps.unwrap_or(u64::MAX)]);
-    build(size, |write| {
-        for (index, part) in pieces().enumerate() {
-            if index > 0 {
-                write(sep.as_bytes());
+    guarded(None, || {
+        // SAFETY: forwarded from the caller.
+        let sep = unsafe { arg(separator) };
+        let pieces = || {
+            // SAFETY: a live list, borrowed for the call.
+            let elements = unsafe { list::iter(parts) };
+            // SAFETY: its elements are live strings while the list lives.
+            elements.map(|part| unsafe { arg(part) })
+        };
+        let mut count = 0_usize;
+        let bytes = total(pieces().map(|part| {
+            count = count.saturating_add(1);
+            cap(part.len())
+        }));
+        if count == 1 {
+            // SAFETY: a live list of one live string.
+            if let Some(only) = unsafe { list::iter(parts) }.next() {
+                // SAFETY: the element is live; the caller gets a reference
+                // of its own.
+                unsafe { rc::dup(only) };
+                return only;
             }
-            write(part.as_bytes());
         }
+        let seps = cap(sep.len()).checked_mul(cap(count.saturating_sub(1)));
+        let size = total([bytes, seps.unwrap_or(u64::MAX)]);
+        build(size, |write| {
+            for (index, part) in pieces().enumerate() {
+                if index > 0 {
+                    write(sep.as_bytes());
+                }
+                write(part.as_bytes());
+            }
+        })
     })
 }
 
@@ -322,25 +350,27 @@ pub unsafe extern "C" fn cheby_string_join(parts: Word, separator: Word) -> Word
 /// `text` is a live `String`, borrowed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_string_repeat(text: Word, count: i64) -> Word {
-    // SAFETY: forwarded from the caller.
-    let piece = unsafe { arg(text) };
-    if count == 1 {
-        // SAFETY: a live string; the caller gets a reference of its own.
-        unsafe { rc::dup(text) };
-        return text;
-    }
-    let count = if piece.is_empty() {
-        0
-    } else {
-        ops::clamp(count)
-    };
-    let size = cap(piece.len())
-        .checked_mul(cap(count))
-        .unwrap_or_else(|| alloc::out_of_memory(u64::MAX));
-    build(size, |write| {
-        for _ in 0..count {
-            write(piece.as_bytes());
+    guarded(None, || {
+        // SAFETY: forwarded from the caller.
+        let piece = unsafe { arg(text) };
+        if count == 1 {
+            // SAFETY: a live string; the caller gets a reference of its own.
+            unsafe { rc::dup(text) };
+            return text;
         }
+        let count = if piece.is_empty() {
+            0
+        } else {
+            ops::clamp(count)
+        };
+        let size = cap(piece.len())
+            .checked_mul(cap(count))
+            .unwrap_or_else(|| alloc::out_of_memory(u64::MAX));
+        build(size, |write| {
+            for _ in 0..count {
+                write(piece.as_bytes());
+            }
+        })
     })
 }
 
@@ -358,16 +388,18 @@ fn fill_bytes(fill: &Fill<'_>) -> u64 {
 /// `text` and `pad` are live `String`s, borrowed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_string_pad_start(text: Word, width: i64, pad: Word) -> Word {
-    // SAFETY: forwarded from the caller.
-    let (body, pad) = unsafe { (arg(text), arg(pad)) };
-    let Some(fill) = Fill::new(ops::length(body), width, pad) else {
-        // SAFETY: a live string; the caller gets a reference of its own.
-        unsafe { rc::dup(text) };
-        return text;
-    };
-    build(total([fill_bytes(&fill), cap(body.len())]), |write| {
-        fill.write(|piece| write(piece.as_bytes()));
-        write(body.as_bytes());
+    guarded(None, || {
+        // SAFETY: forwarded from the caller.
+        let (body, pad) = unsafe { (arg(text), arg(pad)) };
+        let Some(fill) = Fill::new(ops::length(body), width, pad) else {
+            // SAFETY: a live string; the caller gets a reference of its own.
+            unsafe { rc::dup(text) };
+            return text;
+        };
+        build(total([fill_bytes(&fill), cap(body.len())]), |write| {
+            fill.write(|piece| write(piece.as_bytes()));
+            write(body.as_bytes());
+        })
     })
 }
 
@@ -380,20 +412,22 @@ pub unsafe extern "C" fn cheby_string_pad_start(text: Word, width: i64, pad: Wor
 /// `text` and `pad` are live `String`s, borrowed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_string_pad_end(text: Word, width: i64, pad: Word) -> Word {
-    // SAFETY: forwarded from the caller.
-    let (body, pad_text) = unsafe { (arg(text), arg(pad)) };
-    let Some(fill) = Fill::new(ops::length(body), width, pad_text) else {
-        // SAFETY: a live string; the caller gets a reference of its own.
-        unsafe { rc::dup(text) };
-        return text;
-    };
-    // SAFETY: a live string; the pieces are `pad`'s text, outside `text`
-    // unless they are the same object, when nothing is reused.
-    unsafe {
-        extend(text, fill_bytes(&fill), text != pad, |write| {
-            fill.write(|piece| write(piece.as_bytes()));
-        })
-    }
+    guarded(None, || {
+        // SAFETY: forwarded from the caller.
+        let (body, pad_text) = unsafe { (arg(text), arg(pad)) };
+        let Some(fill) = Fill::new(ops::length(body), width, pad_text) else {
+            // SAFETY: a live string; the caller gets a reference of its own.
+            unsafe { rc::dup(text) };
+            return text;
+        };
+        // SAFETY: a live string; the pieces are `pad`'s text, outside `text`
+        // unless they are the same object, when nothing is reused.
+        unsafe {
+            extend(text, fill_bytes(&fill), text != pad, |write| {
+                fill.write(|piece| write(piece.as_bytes()));
+            })
+        }
+    })
 }
 
 // ---------------------------------------------------------------------
@@ -407,7 +441,7 @@ pub unsafe extern "C" fn cheby_string_pad_end(text: Word, width: i64, pad: Word)
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_string_trim(text: Word) -> Word {
     // SAFETY: forwarded from the caller; the range lies on boundaries.
-    unsafe { keep(text, ops::trim(arg(text)), true) }
+    guarded(None, || unsafe { keep(text, ops::trim(arg(text)), true) })
 }
 
 /// `string::trim_start` (D-373), in place at count one (D-525).
@@ -418,7 +452,9 @@ pub unsafe extern "C" fn cheby_string_trim(text: Word) -> Word {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_string_trim_start(text: Word) -> Word {
     // SAFETY: forwarded from the caller; the range lies on boundaries.
-    unsafe { keep(text, ops::trim_start(arg(text)), true) }
+    guarded(None, || unsafe {
+        keep(text, ops::trim_start(arg(text)), true)
+    })
 }
 
 /// `string::trim_end` (D-373), in place at count one (D-525).
@@ -429,7 +465,9 @@ pub unsafe extern "C" fn cheby_string_trim_start(text: Word) -> Word {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_string_trim_end(text: Word) -> Word {
     // SAFETY: forwarded from the caller; the range lies on boundaries.
-    unsafe { keep(text, ops::trim_end(arg(text)), true) }
+    guarded(None, || unsafe {
+        keep(text, ops::trim_end(arg(text)), true)
+    })
 }
 
 /// `string::remove_prefix` (D-373), in place at count one (D-525). O(m),
@@ -441,10 +479,10 @@ pub unsafe extern "C" fn cheby_string_trim_end(text: Word) -> Word {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_string_remove_prefix(text: Word, prefix: Word) -> Word {
     // SAFETY: forwarded from the caller; the range lies on boundaries.
-    unsafe {
+    guarded(None, || unsafe {
         let range = ops::remove_prefix(arg(text), arg(prefix));
         keep(text, range, text != prefix)
-    }
+    })
 }
 
 /// `string::remove_suffix` (D-373), in place at count one (D-525). O(m).
@@ -455,10 +493,10 @@ pub unsafe extern "C" fn cheby_string_remove_prefix(text: Word, prefix: Word) ->
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_string_remove_suffix(text: Word, suffix: Word) -> Word {
     // SAFETY: forwarded from the caller; the range lies on boundaries.
-    unsafe {
+    guarded(None, || unsafe {
         let range = ops::remove_suffix(arg(text), arg(suffix));
         keep(text, range, text != suffix)
-    }
+    })
 }
 
 /// `string::lowercase`: full Unicode case mapping, the same in every locale
@@ -469,9 +507,11 @@ pub unsafe extern "C" fn cheby_string_remove_suffix(text: Word, suffix: Word) ->
 /// `text` is a live `String`, borrowed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_string_lowercase(text: Word) -> Word {
-    // SAFETY: forwarded from the caller.
-    let text = unsafe { arg(text) };
-    build_chars(|| ops::lowercase(text))
+    guarded(None, || {
+        // SAFETY: forwarded from the caller.
+        let text = unsafe { arg(text) };
+        build_chars(|| ops::lowercase(text))
+    })
 }
 
 /// `string::uppercase`: full Unicode case mapping, such as `ß` to `SS`
@@ -482,9 +522,11 @@ pub unsafe extern "C" fn cheby_string_lowercase(text: Word) -> Word {
 /// `text` is a live `String`, borrowed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_string_uppercase(text: Word) -> Word {
-    // SAFETY: forwarded from the caller.
-    let text = unsafe { arg(text) };
-    build_chars(|| ops::uppercase(text))
+    guarded(None, || {
+        // SAFETY: forwarded from the caller.
+        let text = unsafe { arg(text) };
+        build_chars(|| ops::uppercase(text))
+    })
 }
 
 /// `string::reverse`: the code points in reverse order (D-302). O(n).
@@ -494,9 +536,11 @@ pub unsafe extern "C" fn cheby_string_uppercase(text: Word) -> Word {
 /// `text` is a live `String`, borrowed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_string_reverse(text: Word) -> Word {
-    // SAFETY: forwarded from the caller.
-    let text = unsafe { arg(text) };
-    build_chars(|| ops::reverse(text))
+    guarded(None, || {
+        // SAFETY: forwarded from the caller.
+        let text = unsafe { arg(text) };
+        build_chars(|| ops::reverse(text))
+    })
 }
 
 /// `string::slice`: code points `start..end`, clamped (D-298, D-319), in
@@ -508,7 +552,9 @@ pub unsafe extern "C" fn cheby_string_reverse(text: Word) -> Word {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_string_slice(text: Word, start: i64, end: i64) -> Word {
     // SAFETY: forwarded from the caller; the range lies on boundaries.
-    unsafe { keep(text, ops::slice(arg(text), start, end), true) }
+    guarded(None, || unsafe {
+        keep(text, ops::slice(arg(text), start, end), true)
+    })
 }
 
 // ---------------------------------------------------------------------
@@ -522,11 +568,22 @@ pub unsafe extern "C" fn cheby_string_slice(text: Word, start: i64, end: i64) ->
 /// `data` is a live `Bytes`, borrowed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_string_from_bytes(data: Word) -> Word {
-    // SAFETY: forwarded from the caller.
-    match std::str::from_utf8(unsafe { values::bytes_of(data) }) {
-        Ok(text) => values::ok(values::string(text)),
-        Err(_) => values::err_nil(),
-    }
+    guarded(None, || {
+        // SAFETY: forwarded from the caller.
+        match std::str::from_utf8(unsafe { values::bytes_of(data) }) {
+            Ok(text) => ok_owned(values::string(text)),
+            Err(_) => values::err_nil(),
+        }
+    })
+}
+
+/// `Ok(value)` of an owned value, which is released if the `Ok` cannot be
+/// allocated.
+fn ok_owned(value: Word) -> Word {
+    let held = DropOnUnwind::new([value]);
+    let result = values::ok(value);
+    held.disarm();
+    result
 }
 
 /// `string::to_code_point_values`: the scalar value of each code point.
@@ -537,12 +594,14 @@ pub unsafe extern "C" fn cheby_string_from_bytes(data: Word) -> Word {
 /// `text` is a live `String`, borrowed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_string_to_code_point_values(text: Word) -> Word {
-    // SAFETY: forwarded from the caller.
-    let text = unsafe { arg(text) };
-    list::from_iter(
-        text.chars()
-            .map(|c| values::int_word(i64::from(u32::from(c)))),
-    )
+    guarded(None, || {
+        // SAFETY: forwarded from the caller.
+        let text = unsafe { arg(text) };
+        list::from_iter(
+            text.chars()
+                .map(|c| values::int_word(i64::from(u32::from(c)))),
+        )
+    })
 }
 
 /// `string::from_code_point_values`: `Ok(text)`, or `Err(Nil)` when an
@@ -553,16 +612,18 @@ pub unsafe extern "C" fn cheby_string_to_code_point_values(text: Word) -> Word {
 /// `points` is a live `List<Int>`, borrowed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_string_from_code_point_values(points: Word) -> Word {
-    let scalars = || {
-        // SAFETY: a live list, borrowed for the call.
-        let elements = unsafe { list::iter(points) };
-        // SAFETY: its elements are live `Int` words while the list lives.
-        elements.map(|value| ops::scalar(unsafe { values::word_to_i64(value) }))
-    };
-    if scalars().any(|c| c.is_none()) {
-        return values::err_nil();
-    }
-    values::ok(build_chars(|| scalars().flatten()))
+    guarded(None, || {
+        let scalars = || {
+            // SAFETY: a live list, borrowed for the call.
+            let elements = unsafe { list::iter(points) };
+            // SAFETY: its elements are live `Int` words while the list lives.
+            elements.map(|value| ops::scalar(unsafe { values::word_to_i64(value) }))
+        };
+        if scalars().any(|c| c.is_none()) {
+            return values::err_nil();
+        }
+        ok_owned(build_chars(|| scalars().flatten()))
+    })
 }
 
 /// One kernel: symbol, address, C parameter types and C result type.

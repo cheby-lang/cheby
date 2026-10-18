@@ -1,0 +1,80 @@
+//! Runtime benchmark of the fiber group: spawning and joining fibers.
+//!
+//! The fibers are spawned into scopes of `batch` fibers each. Every fiber
+//! computes a number from its index, and the scope's body joins each
+//! fiber and adds up their values. The number of fibers is the first
+//! program argument, and `main` prints a checksum that does not depend on
+//! the order in which the fibers ran.
+
+import std::env
+import std::fiber
+import std::int
+import std::io
+import std::list
+
+/// The number of fibers when no argument is given.
+const default_size: Int = 100_000
+
+/// How many fibers one scope holds.
+const batch: Int = 1_000
+
+/// Keeps the checksum small.
+const modulus: Int = 1_000_000_007
+
+fn main() {
+  let n = size(env::args())
+  fn run(start, total) {
+    case {
+      start >= n => total
+      _ => {
+        let assert Ok(sum) = spawn_and_join(start, int::min(batch, n - start))
+        run(start + batch, (total * 31 + sum) % modulus)
+      }
+    }
+  }
+  let checksum = run(0, 0)
+  io::println("size: {n}")
+  io::println("checksum: {checksum}")
+}
+
+/// The size from the first program argument, or `default_size`.
+fn size(args: List<String>) -> Int {
+  case args {
+    [] => default_size
+    [first, ..] => {
+      let assert Ok(n) = int::parse(first)
+      n
+    }
+  }
+}
+
+/// Spawns one fiber for each index from `start` to `start + count - 1`
+/// into a new scope, joins them all and returns the sum of their values.
+/// The result is an `Err` only if a fiber panics.
+fn spawn_and_join(start: Int, count: Int) -> Result<Int, fiber::Panic> {
+  use scope <- fiber::scope()
+  fn spawn_all(i, fibers) {
+    case {
+      i == count => fibers
+      _ => {
+        let index = start + i
+        spawn_all(i + 1, [fiber::spawn(scope, fn() { work(index) }), ..fibers])
+      }
+    }
+  }
+  spawn_all(0, [])
+  |> list::fold(_, 0, fn(acc, child) { (acc + fiber::join(child)) % modulus })
+}
+
+/// The value of the fiber with this index.
+fn work(index: Int) -> Int {
+  (index * 7_919 + 13) % 1_000_003
+}
+
+test "one scope's sum is the sum of its fibers' values" {
+  assert spawn_and_join(0, 3) == Ok(work(0) + work(1) + work(2))
+}
+
+test "an empty scope sums to zero" {
+  assert spawn_and_join(5, 0) == Ok(0)
+}

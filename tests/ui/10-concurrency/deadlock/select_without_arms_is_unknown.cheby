@@ -1,0 +1,21 @@
+// @mode: run-fail
+// @exit: 103
+// @decisions: D-724, D-856, D-858, D-861, D-673
+// @milestone: M2
+//! A spawned fiber's function is a tail call to `selector::select` on a
+//! selector with no arms, which waits until the fiber is cancelled.
+//! `select` keeps its tail call, so the closure's frame is gone, and the
+//! next frame is the runtime's start of the fiber: its line says
+//! `<unknown location>` and comes last, after `main`'s at its scope.
+
+import std::fiber
+import std::selector
+
+fn main() {
+  let outcome = {
+    use owner <- fiber::scope()
+    fiber::spawn(owner, fn() { selector::select(selector::new::<Int>()) })
+    Nil
+  }
+  let _ = outcome
+}

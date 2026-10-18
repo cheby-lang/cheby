@@ -1,0 +1,38 @@
+// @mode: run-pass
+// @command: test
+// @decisions: D-723
+// @milestone: M2
+//! A detached fiber's panic report is part of its test's output: it is
+//! captured and written to standard error with that test's output, before
+//! the next test's, and the test itself passes (§10.4, §11.6, §13.6). The
+//! first test waits until its fiber has failed; the second writes to
+//! standard error at once.
+
+import std::channel
+import std::duration
+import std::fiber
+import std::io
+import std::selector
+
+fn pause(ms: Int) -> Nil {
+  selector::new()
+  |> selector::after(_, duration::milliseconds(ms), fn() { Nil })
+  |> selector::select
+}
+
+fn fail(done: channel::Sender<Nil>) -> Nil {
+  let _ = done
+  pause(100)
+  panic as "the detached fiber failed"
+}
+
+test "lets a detached fiber fail" {
+  let (done_tx, done_rx) = channel::new::<Nil>(1)
+  fiber::spawn_detached(fn() { fail(done_tx) })
+  io::eprintln("before the detached fiber fails")
+  assert channel::receive(done_rx) == Err(Nil)
+}
+
+test "writes to standard error at once" {
+  io::eprintln("the second test's error output")
+}

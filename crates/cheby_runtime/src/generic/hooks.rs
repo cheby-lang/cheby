@@ -6,8 +6,9 @@
 //! [`crate::layout::set_hooks`]. Each call gives the hook its own
 //! references to its arguments, so the hook may keep them, and a hook
 //! never sees a value it could update in place. A panic inside a hook
-//! parks the entry's thread like any other panic (D-457), abandoning the
-//! walk that called it.
+//! unwinds through the walk that called it, whose worklists are Rust
+//! values dropped on the way, to the entry point's guard (D-342, D-697,
+//! D-733).
 
 use crate::abi::Word;
 use crate::callback;

@@ -216,6 +216,8 @@ impl BodyCx<'_, '_> {
     ) -> Result<Function, Ice> {
         let mut b = FunctionBuilder::new(key, Abi::Cheby, Repr::Value, span)?;
         b.set_entry_loc(&self.cx.location(span)?)?;
+        b.set_record_sites(self.pending.records_sites());
+        b.set_record_call_locs(self.pending.records_call_locs());
         let mut inner = BodyCx {
             cx: self.cx,
             body: self.body,
@@ -224,6 +226,7 @@ impl BodyCx<'_, '_> {
             locals: vec![None; self.body.locals.len()],
             pending: &mut *self.pending,
             dict_params: vec![None; self.dict_params.len()],
+            site: None,
         };
         inner.closure_body(shape, params, body)?;
         inner.b.finish()
@@ -319,14 +322,16 @@ struct Captures<'c> {
     dicts: &'c [usize],
 }
 
-/// The item that owns the closures of a body with key `key`: the item,
-/// constant or test whose body it is, or the owner of an enclosing
-/// closure.
-fn owner_of(key: FnKey) -> Result<DefId, Ice> {
+/// The item that owns the closures and continuations of a body with key
+/// `key`: the item, constant or test whose body it is, or the owner of an
+/// enclosing closure or continuation (D-780).
+pub(super) fn owner_of(key: FnKey) -> Result<DefId, Ice> {
     match key {
-        FnKey::Item(d) | FnKey::ConstInit(d) | FnKey::Test(d) | FnKey::Closure { owner: d, .. } => {
-            Ok(d)
-        }
+        FnKey::Item(d)
+        | FnKey::ConstInit(d)
+        | FnKey::Test(d)
+        | FnKey::Closure { owner: d, .. }
+        | FnKey::Continuation { owner: d, .. } => Ok(d),
         other => Err(Ice::new(format!("a closure inside {other:?}"))),
     }
 }

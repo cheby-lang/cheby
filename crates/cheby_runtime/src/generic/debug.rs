@@ -25,6 +25,7 @@ use crate::desc::{self, Shape};
 use crate::hamt::{self, Collection};
 use crate::layout::{FieldKind, LayoutInfo};
 use crate::object::{ptr_to_word, read_field, to_usize, word_to_ptr};
+use crate::unwind::guard::DropOnUnwind;
 use crate::{rc, string};
 
 /// One piece of output still to write.
@@ -115,6 +116,19 @@ impl Printer {
             self.pending.push(Piece::ItemEnd);
         }
         self.pending.push(Piece::SortedEnd);
+    }
+}
+
+impl Drop for Printer {
+    /// Releases the hook texts still waiting when an unwinding leaves a walk
+    /// (D-697); a finished walk has written and released every one.
+    fn drop(&mut self) {
+        for piece in self.pending.drain() {
+            if let Piece::Owned(text) = piece {
+                // SAFETY: the walk owns each hook text it has not written.
+                unsafe { rc::drop(text) };
+            }
+        }
     }
 }
 
@@ -226,7 +240,17 @@ pub unsafe fn debug_object(word: Word) -> Word {
     };
     // SAFETY: forwarded from the caller.
     unsafe { walk(word, &mut sink) };
-    sink.word
+    std::mem::take(&mut sink.word)
+}
+
+impl Drop for ObjectSink {
+    /// Releases the text of a walk that a hook's panic unwound out of
+    /// (D-697); a finished walk has taken it.
+    fn drop(&mut self) {
+        // SAFETY: the sink owns its `String`, or holds 0, which `drop`
+        // skips.
+        unsafe { crate::rc::drop(self.word) };
+    }
 }
 
 /// Prints `word` into `out`.
@@ -235,16 +259,20 @@ pub unsafe fn debug_object(word: Word) -> Word {
 ///
 /// As for [`debug`].
 unsafe fn walk(word: Word, out: &mut dyn Sink) {
-    let mut stack = ScratchVec::of(Piece::Value(word));
+    // A `Printer` too, so the hook texts still on it are released if an
+    // unwinding leaves the walk.
+    let mut stack = Printer {
+        pending: ScratchVec::of(Piece::Value(word)),
+    };
     let mut printer = Printer::default();
     let mut ropes = Ropes::default();
-    while let Some(piece) = stack.pop() {
+    while let Some(piece) = stack.pending.pop() {
         match piece {
             Piece::Text(text) => ropes.put(out, &text),
             Piece::Value(word) => {
                 // SAFETY: every word on the stack is borrowed from `word`.
                 unsafe { step(word, &mut printer) };
-                stack.push_reversed(&mut printer.pending);
+                stack.pending.push_reversed(&mut printer.pending);
             }
             Piece::Quoted(text) => {
                 // SAFETY: a live `String` borrowed from `word`, which
@@ -264,13 +292,17 @@ unsafe fn walk(word: Word, out: &mut dyn Sink) {
                 chunked.finish();
             }
             Piece::Owned(text) => {
-                // SAFETY: the walk owns this live `String`; it is released
-                // once written and never read again.
-                unsafe {
-                    let bytes = string::text_bytes(text).unwrap_or_default();
-                    ropes.put(out, &String::from_utf8_lossy(bytes));
-                    rc::drop(text);
-                }
+                // Writing it may raise (a memory limit on the sink or on
+                // the sorted text), and the text is still released then
+                // (D-697).
+                let held = DropOnUnwind::new([text]);
+                // SAFETY: the walk owns this live `String` until it is
+                // released below.
+                let bytes = unsafe { string::text_bytes(text) }.unwrap_or_default();
+                ropes.put(out, &String::from_utf8_lossy(bytes));
+                held.disarm();
+                // SAFETY: as above; it is never read again.
+                unsafe { rc::drop(text) };
             }
             Piece::SortedStart => ropes.open_groups.push(ScratchVec::new()),
             Piece::ItemStart => {
@@ -511,8 +543,12 @@ unsafe fn step(word: Word, p: &mut Printer) {
                 // A type with hooks prints the text of its `debug` hook,
                 // as it is (D-342, D-345).
                 // SAFETY: a live value of a type with these hooks.
-                p.pending
-                    .push(Piece::Owned(unsafe { hooks::debug_text(hooks, word) }));
+                let text = unsafe { hooks::debug_text(hooks, word) };
+                // Growing the worklist may raise (a memory limit): the text
+                // is released then (D-697), and the printer owns it after.
+                let held = DropOnUnwind::new([text]);
+                p.pending.push(Piece::Owned(text));
+                held.disarm();
             } else {
                 ctor(word, info, p);
             }

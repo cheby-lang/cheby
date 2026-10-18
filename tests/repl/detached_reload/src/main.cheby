@@ -1,0 +1,6 @@
+//! A package for the `detached_reload` transcript, whose `:reload` finds
+//! no module changed and still tears the session's detached fibers down.
+
+fn main() {
+  Nil
+}

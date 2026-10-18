@@ -1,0 +1,42 @@
+// @mode: run-pass
+// @milestone: M2
+// @decisions: D-839, D-071, D-717
+// @flags: --reuse-report
+//! Reuse needs a read that pins the dying value's constructor. A field
+//! that every variant holds at the same place, read with `shape.label`
+//! (D-071), pins none: `shape` may be a `Box` or a `Dot`, of different
+//! sizes, so building a `Dot` from it allocates (`relabel`). A `case` arm
+//! that only `Dot` enters pins it, and the `Dot` built there reuses
+//! `shape` (`relabel_dot`).
+
+import std::io
+
+type Shape {
+  Dot { label: String, x: Int },
+  Box { label: String, x: Int, width: Int },
+}
+
+fn relabel(shape: Shape) -> Shape {
+  let label = shape.label
+  Dot { label: label + "!", x: 0 }
+}
+
+fn relabel_dot(shape: Shape) -> Shape {
+  case shape {
+    Dot { label, x } => Dot { label: label + "!", x }
+    Box { label, x, width } => Box { label: label + "!", x, width }
+  }
+}
+
+fn label_of(shape: Shape) -> String {
+  case shape {
+    Dot { label, .. } => label
+    Box { label, .. } => label
+  }
+}
+
+fn main() {
+  let a = label_of(relabel(Box { label: "box", x: 1, width: 2 }))
+  let b = label_of(relabel_dot(Dot { label: "dot", x: 3 }))
+  io::println("{a} {b}")
+}

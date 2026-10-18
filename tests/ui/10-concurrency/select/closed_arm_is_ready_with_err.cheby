@@ -1,0 +1,55 @@
+// @mode: run-pass
+// @decisions: D-180, D-041, D-670
+// @milestone: M2
+//! A receive arm on a closed, empty channel is ready, and passes
+//! `Err(Nil)` to its mapping function: when the channel is already closed
+//! as `select` starts, and when its last `Sender` goes while `select`
+//! waits (§10.6). Here the last `Sender` goes when a timeout cancels the
+//! function that holds it, so the second `select` most likely waits first,
+//! but it prints the same either way.
+
+import std::channel
+import std::duration
+import std::fiber
+import std::io
+import std::selector
+
+fn main() {
+  let (keep, open) = channel::new::<Int>(0)
+  let (_, closed) = channel::new::<Int>(0)
+  let found =
+    selector::new()
+    |> selector::receive(_, open, fn(r) { "open: {r:?}" })
+    |> selector::receive(_, closed, fn(r) { "closed: {r:?}" })
+    |> selector::select
+  io::println("found ready: {found}")
+  // `select` released the selector, which held the only `Receiver` of
+  // `open`.
+  let sent = channel::send(keep, 1)
+  io::println("a send on the other arm's channel: {sent:?}")
+
+  let (keep_waiting, still_open) = channel::new::<Int>(0)
+  let (closer, closing) = channel::new::<Int>(0)
+  let (keep_never, never) = channel::new::<Int>(1)
+  let outcome = {
+    use owner <- fiber::scope()
+    let _ = fiber::spawn(owner, fn() {
+      // Nothing is sent on `never`, so the timeout ends this wait, and
+      // releasing `f` drops `closer`, the last `Sender` of `closing`.
+      fiber::timeout(duration::milliseconds(20), fn() {
+        let _ = channel::receive(never)
+        channel::send(closer, 0)
+      })
+    })
+    selector::new()
+    |> selector::receive(_, still_open, fn(r) { "still open: {r:?}" })
+    |> selector::receive(_, closing, fn(r) { "closing: {r:?}" })
+    |> selector::select
+  }
+  let assert Ok(woken) = outcome
+  io::println("woken: {woken}")
+  let sent_waiting = channel::send(keep_waiting, 2)
+  io::println("a send on the other arm's channel: {sent_waiting:?}")
+  let sent_never = channel::send(keep_never, 3)
+  io::println("a send on the channel the timeout waited on: {sent_never:?}")
+}

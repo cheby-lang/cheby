@@ -1,0 +1,31 @@
+// @mode: run-pass
+// @decisions: D-666, D-667, D-176
+// @milestone: M2
+//! A member's panic cancels the scope's body, here blocked in a `receive`
+//! that nothing else would end. The body unwinds down to the `scope` call,
+//! which returns the member's panic as `Err`, and the panic is not printed
+//! (§10.3, §10.7).
+
+import std::channel
+import std::fiber
+import std::io
+
+fn main() {
+  let (tx, rx) = channel::new::<Int>(0)
+  let outcome = {
+    use owner <- fiber::scope()
+    let _ = fiber::spawn(owner, fn() { panic as "a member failed" })
+    // `main` keeps `tx` and sends nothing, so only the cancellation ends
+    // this wait.
+    let received = channel::receive(rx)
+    io::println("never printed: {received:?}")
+    received
+  }
+  case outcome {
+    Ok(_) => io::println("the body returned")
+    Err(failure) => io::println("{failure}")
+  }
+  // Unwinding the body released `rx`, the only `Receiver`.
+  let sent = channel::send(tx, 1)
+  io::println("send after the scope: {sent:?}")
+}

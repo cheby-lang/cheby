@@ -13,7 +13,7 @@ pub type OrderedMap<K, V>
 - **Written in Cheby.** The module is written in Cheby over `std::map` and `std::sorted_map`, with no kernel of its own (D-336). The representation is not specified. One that meets the costs below is a `Map` from each key to an insertion number and its value, plus a sorted map from insertion number to key. Keys are hashed and compared by the runtime's built-in routines, and no `compare` of the key type is ever called.
 - **Equality, hashing and printing.** Maps with the same entries in the same order can hold different insertion numbers, so the module supplies its own `==`, hashing and debug printing through the standard-library-only attribute of D-342 (§3.13). Two ordered maps are `==` only when they hold the same entries in the same order, and their hash covers the order (D-343). Debug printing writes `ordered_map::from_list([…])` with the entries in order, each one debug-printed (D-344).
 - **Interfaces.** `OrderedMap<K, V>` satisfies `Show` when `K` and `V` do (D-344). It does not satisfy `Compare`.
-- **Costs.** For a map of n entries, a lookup takes O(log n), effectively constant as in `Map`, and an update, including `remove`, takes O(log n). Iterating takes O(n).
+- **Costs.** For a map of n entries, a lookup takes O(log n), effectively constant as in `Map`, and an update, including `remove`, takes O(log n). Iterating takes O(n) in the same sense as `Map`'s costs: `to_list`, `values`, `fold`, `each` and `map_values` walk the insertion order and look each key's value up in the hashed index, so they make n lookups, each O(log n) and effectively constant (D-848).
 
 ```cheby
 test "ordered maps compare, hash and print by contents and order" {

@@ -12,9 +12,11 @@ pub enum RuntimeFunc {
     Alloc,
     /// `void cheby_rt_dup(uint64_t value)`.
     Dup,
-    /// `void cheby_rt_drop(uint64_t value)`.
+    /// `void cheby_rt_drop(ExecCtx *ctx, uint64_t value)`: the free path
+    /// reads the block cache through `ctx` (D-772).
     Drop,
-    /// `_Noreturn void cheby_rt_panic(ExecCtx *ctx, uint32_t kind, uint64_t message, uint64_t location)`.
+    /// `void cheby_rt_panic(ExecCtx *ctx, uint32_t kind, uint64_t message, uint64_t location)`:
+    /// records the panic, sets the flag and returns (D-733).
     Panic,
     /// `void cheby_rt_stack_slow(ExecCtx *ctx, uint64_t location)`.
     StackSlow,
@@ -56,11 +58,52 @@ pub enum RuntimeFunc {
     EffectCheck,
     /// `uint64_t cheby_rt_list_slice_owned(ExecCtx *ctx, uint64_t list, int64_t start, int64_t end)`.
     ListSliceOwned,
+    /// `void cheby_rt_stack_slow_frame(ExecCtx *ctx, uint64_t location, uint64_t frame_size)`:
+    /// the slow path of a large function's entry check (D-679, D-743).
+    StackSlowFrame,
+    /// `uint64_t cheby_rt_scope_open(ExecCtx *ctx, bool timed, int64_t seconds, int64_t nanoseconds)`
+    /// (D-693).
+    ScopeOpen,
+    /// `bool cheby_rt_scope_close(ExecCtx *ctx, uint64_t scope, bool unwound)` (D-693).
+    ScopeClose,
+    /// `uint32_t cheby_rt_stack_slow_unwind(ExecCtx *ctx, uint64_t location, uint32_t count,
+    /// uint64_t p0, uint64_t p1, uint64_t p2, uint64_t p3)`: the entry check's slow path that
+    /// releases up to four counted parameters itself when it starts an unwinding, and then
+    /// returns nonzero (D-775).
+    StackSlowUnwind,
+    /// `uint32_t cheby_rt_stack_slow_frame_unwind(ExecCtx *ctx, uint64_t location,
+    /// uint64_t frame_size, uint32_t count, uint64_t p0, uint64_t p1, uint64_t p2, uint64_t p3)`:
+    /// the same for a large function's outer entry (D-743, D-775).
+    StackSlowFrameUnwind,
+    /// `uint64_t cheby_rt_blocking_call(ExecCtx *ctx, void (*shim)(const uint64_t *, uint64_t *),
+    /// const uint64_t *args, uintptr_t nargs)`: runs an `@blocking` call's shim on the blocking
+    /// pool and returns its result word unchanged; a cancellation pending after the return
+    /// raises through the flag (D-683, D-818).
+    BlockingCall,
+    /// `void cheby_rt_release_fields(ExecCtx *ctx, uint64_t obj)`: the hit
+    /// path of an inline `drop_reuse` (D-716).
+    ReleaseFields,
+    /// `void cheby_rt_reuse_hit(void)`: counts a reuse hit, called only
+    /// while the counting flag is not off (D-768).
+    ReuseHit,
+    /// `uint64_t cheby_rt_alloc_miss(ExecCtx *ctx, uint64_t size, uint64_t header)`:
+    /// `Alloc` for an `alloc_reuse` whose token is 0, counting the miss.
+    AllocMiss,
+    /// `uint64_t cheby_rt_drop_reuse_checked(ExecCtx *ctx, uint64_t value, uint64_t size)`:
+    /// `drop_reuse` under `checked_rc`.
+    DropReuseChecked,
+    /// `uint64_t cheby_rt_alloc_reuse_checked(ExecCtx *ctx, uint64_t token, uint64_t size,
+    /// uint64_t header)`: `alloc_reuse` under `checked_rc`; 0 when it raised.
+    AllocReuseChecked,
+    /// `void cheby_rt_free_unique(ExecCtx *ctx, uint64_t obj)`: the hit path
+    /// of a drop specialized by constructor frees the block whose fields
+    /// it released or kept (D-716, D-850).
+    FreeUnique,
 }
 
 impl RuntimeFunc {
     /// Every runtime function, in declaration order ([`Self::index`]).
-    pub const ALL: [Self; 24] = [
+    pub const ALL: [Self; 36] = [
         Self::Alloc,
         Self::Dup,
         Self::Drop,
@@ -85,6 +128,18 @@ impl RuntimeFunc {
         Self::Debug,
         Self::EffectCheck,
         Self::ListSliceOwned,
+        Self::StackSlowFrame,
+        Self::ScopeOpen,
+        Self::ScopeClose,
+        Self::StackSlowUnwind,
+        Self::StackSlowFrameUnwind,
+        Self::BlockingCall,
+        Self::ReleaseFields,
+        Self::ReuseHit,
+        Self::AllocMiss,
+        Self::DropReuseChecked,
+        Self::AllocReuseChecked,
+        Self::FreeUnique,
     ];
 
     /// The symbol.
@@ -115,6 +170,18 @@ impl RuntimeFunc {
             Self::Debug => sym::DEBUG,
             Self::EffectCheck => sym::EFFECT_CHECK,
             Self::ListSliceOwned => sym::LIST_SLICE_OWNED,
+            Self::StackSlowFrame => sym::STACK_SLOW_FRAME,
+            Self::ScopeOpen => sym::SCOPE_OPEN,
+            Self::ScopeClose => sym::SCOPE_CLOSE,
+            Self::StackSlowUnwind => sym::STACK_SLOW_UNWIND,
+            Self::StackSlowFrameUnwind => sym::STACK_SLOW_FRAME_UNWIND,
+            Self::BlockingCall => sym::BLOCKING_CALL,
+            Self::ReleaseFields => sym::RELEASE_FIELDS,
+            Self::ReuseHit => sym::REUSE_HIT,
+            Self::AllocMiss => sym::ALLOC_MISS,
+            Self::DropReuseChecked => sym::DROP_REUSE_CHECKED,
+            Self::AllocReuseChecked => sym::ALLOC_REUSE_CHECKED,
+            Self::FreeUnique => sym::FREE_UNIQUE,
         }
     }
 
@@ -124,12 +191,18 @@ impl RuntimeFunc {
     pub const fn ctypes(self) -> (&'static [CType], CType) {
         use CType::{Bool, F32, F64, I64, Ptr, U32, U64, Void};
         match self {
-            Self::Alloc | Self::StrAppend | Self::ListPush | Self::ListAppend => {
-                (&[Ptr, U64, U64], U64)
-            }
-            Self::Dup | Self::Drop => (&[Ptr], Void),
+            Self::Alloc
+            | Self::StrAppend
+            | Self::ListPush
+            | Self::ListAppend
+            | Self::AllocMiss
+            | Self::DropReuseChecked => (&[Ptr, U64, U64], U64),
+            Self::ReleaseFields | Self::FreeUnique => (&[Ptr, U64], Void),
+            Self::ReuseHit => (&[], Void),
+            Self::AllocReuseChecked => (&[Ptr, U64, U64, U64], U64),
+            Self::Dup => (&[Ptr], Void),
             Self::Panic => (&[Ptr, U32, Ptr, Ptr], Void),
-            Self::StackSlow | Self::EffectCheck => (&[Ptr, Ptr], Void),
+            Self::Drop | Self::StackSlow | Self::EffectCheck => (&[Ptr, Ptr], Void),
             Self::BoxI64 | Self::StrWithCapacity => (&[Ptr, I64], U64),
             Self::BoxU64 | Self::ConstMissing | Self::Debug => (&[Ptr, U64], U64),
             Self::BoxF64 => (&[Ptr, F64], U64),
@@ -141,7 +214,35 @@ impl RuntimeFunc {
             Self::ListLength => (&[U64], I64),
             Self::ListGet => (&[U64, I64], U64),
             Self::ListSlice | Self::ListSliceOwned => (&[Ptr, U64, I64, I64], U64),
+            Self::StackSlowFrame => (&[Ptr, Ptr, U64], Void),
+            Self::ScopeOpen => (&[Ptr, Bool, I64, I64], U64),
+            Self::ScopeClose => (&[Ptr, U64, Bool], Bool),
+            Self::StackSlowUnwind => (&[Ptr, Ptr, U32, Ptr, Ptr, Ptr, Ptr], U32),
+            Self::StackSlowFrameUnwind => (&[Ptr, Ptr, U64, U32, Ptr, Ptr, Ptr, Ptr], U32),
+            Self::BlockingCall => (&[Ptr, Ptr, Ptr, U64], U64),
         }
+    }
+
+    /// Whether the function is declared only when a unit first uses it.
+    /// The functions M2 added are, so that the function ids, and with
+    /// them the CLIF, of code that does not use them stay as before.
+    #[must_use]
+    pub const fn on_demand(self) -> bool {
+        matches!(
+            self,
+            Self::StackSlowFrame
+                | Self::ScopeOpen
+                | Self::ScopeClose
+                | Self::StackSlowUnwind
+                | Self::StackSlowFrameUnwind
+                | Self::BlockingCall
+                | Self::ReleaseFields
+                | Self::ReuseHit
+                | Self::AllocMiss
+                | Self::DropReuseChecked
+                | Self::AllocReuseChecked
+                | Self::FreeUnique
+        )
     }
 
     /// The index in [`Self::ALL`].
@@ -172,6 +273,18 @@ impl RuntimeFunc {
             Self::Debug => 21,
             Self::EffectCheck => 22,
             Self::ListSliceOwned => 23,
+            Self::StackSlowFrame => 24,
+            Self::ScopeOpen => 25,
+            Self::ScopeClose => 26,
+            Self::StackSlowUnwind => 27,
+            Self::StackSlowFrameUnwind => 28,
+            Self::BlockingCall => 29,
+            Self::ReleaseFields => 30,
+            Self::ReuseHit => 31,
+            Self::AllocMiss => 32,
+            Self::DropReuseChecked => 33,
+            Self::AllocReuseChecked => 34,
+            Self::FreeUnique => 35,
         }
     }
 
@@ -193,13 +306,15 @@ impl RuntimeFunc {
             RuntimeFn::Equal => (Self::Equal, true),
             RuntimeFn::Debug => (Self::Debug, true),
             RuntimeFn::EffectCheck => (Self::EffectCheck, true),
+            RuntimeFn::ScopeOpen => (Self::ScopeOpen, true),
+            RuntimeFn::ScopeClose => (Self::ScopeClose, true),
         }
     }
 }
 
 /// The data symbols of the runtime's static objects generated code may
 /// reference, in declaration order.
-pub const STATIC_DATA: [&str; 8] = [
+pub const STATIC_DATA: [&str; 9] = [
     sym::STATIC_NIL,
     sym::STATIC_FALSE,
     sym::STATIC_TRUE,
@@ -208,7 +323,13 @@ pub const STATIC_DATA: [&str; 8] = [
     sym::STATIC_GREATER,
     sym::STATIC_NONE,
     sym::STATIC_EMPTY_LIST,
+    sym::STATIC_ERR_NIL,
 ];
+
+/// The runtime data generated code imports only when a unit first uses it,
+/// so that the data ids, and with them the CLIF, of code that does not use
+/// it stay as before: the counting flag of reuse hits (D-716, D-768).
+pub const ON_DEMAND_DATA: [&str; 1] = [sym::STATS_COUNTING];
 
 /// Every runtime symbol generated code may import, functions then data.
 /// The JIT checks that the runtime's symbol registry lists each one.
@@ -218,5 +339,6 @@ pub fn imported_symbols() -> Vec<&'static str> {
         .iter()
         .map(|f| f.symbol())
         .chain(STATIC_DATA)
+        .chain(ON_DEMAND_DATA)
         .collect()
 }

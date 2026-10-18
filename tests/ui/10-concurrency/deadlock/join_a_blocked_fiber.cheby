@@ -1,0 +1,22 @@
+// @mode: run-fail
+// @exit: 103
+// @decisions: D-724, D-856, D-858, D-861
+// @milestone: M2
+//! The body of `main`'s scope ends with a tail call to `fiber::join` on a
+//! child that waits for a value only `main` would send after the scope.
+//! The join keeps the body's frame, so the report names it, and the
+//! child's receive, in the order of their lines.
+
+import std::channel
+import std::fiber
+
+fn main() {
+  let (tx, rx) = channel::new::<Int>(0)
+  let outcome = {
+    use owner <- fiber::scope()
+    let child = fiber::spawn(owner, fn() { channel::receive(rx) })
+    fiber::join(child)
+  }
+  let _ = channel::send(tx, 0)
+  let _ = outcome
+}

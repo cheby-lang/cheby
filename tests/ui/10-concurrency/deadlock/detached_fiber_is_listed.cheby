@@ -1,0 +1,19 @@
+// @mode: run-fail
+// @exit: 103
+// @decisions: D-724, D-856, D-857, D-858, D-861
+// @milestone: M2
+//! `cheby run` judges every fiber of the program, detached ones included:
+//! `main` deadlocks while a detached fiber waits on a channel whose
+//! `Sender` `main` holds, and the report lists both.
+
+import std::channel
+import std::fiber
+
+fn main() {
+  let (keep, never) = channel::new::<Int>(0)
+  fiber::spawn_detached(fn() { channel::receive(never) })
+  let (tx, rx) = channel::new::<Int>(0)
+  let assert Ok(n) = channel::receive(rx)
+  let _ = channel::send(tx, n)
+  let _ = channel::send(keep, n)
+}

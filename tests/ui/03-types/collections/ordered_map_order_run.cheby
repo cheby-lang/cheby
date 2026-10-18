@@ -1,0 +1,65 @@
+// @mode: run-pass
+// @milestone: M2
+// @decisions: D-331, D-337, D-340, D-343, D-344
+//! An ordered map keeps its keys in the order they were first inserted.
+//! Inserting a key that is already present keeps its place and replaces
+//! its value, and removing a key and inserting it again moves it to the
+//! end (D-340). Two maps with the same entries in another order are not
+//! `==` and hash apart (D-343). `show` and debug printing follow the order
+//! (D-344).
+
+import std::io
+import std::list
+import std::ordered_map
+import std::ordered_map::{OrderedMap}
+import std::set
+import std::string
+
+fn line(m: OrderedMap<String, Int>) -> String {
+  let parts = list::map(ordered_map::to_list(m), fn((key, value)) { "{key}={value}" })
+  string::join(parts, " ")
+}
+
+fn main() {
+  let start = ordered_map::from_list([("c", 1), ("a", 2), ("b", 3)])
+  io::println(line(start))
+
+  let replaced = ordered_map::insert(start, "c", 10)
+  io::println(line(replaced))
+
+  let moved = ordered_map::insert(ordered_map::remove(replaced, "c"), "c", 20)
+  io::println(line(moved))
+
+  let grown = ordered_map::upsert(moved, "d", fn(_) { 4 })
+  let counted = ordered_map::upsert(grown, "a", fn(found) {
+    case found {
+      Some(n) => n * 100
+      None => 0
+    }
+  })
+  io::println(line(counted))
+
+  let same = replaced == ordered_map::from_list([("c", 10), ("a", 2), ("b", 3)])
+  let reordered = moved == ordered_map::from_list([("c", 20), ("a", 2), ("b", 3)])
+  io::println("same order: {same}, other order: {reordered}")
+  let again = ordered_map::insert(start, "c", 10)
+  let distinct = set::size(set::from_list([start, replaced, moved, again]))
+  io::println("distinct maps: {distinct}")
+
+  io::println("{moved}")
+  io::println("{moved:?}")
+
+  // A thousand keys: removing the even ones and inserting them again puts
+  // them after the odd ones, in the order they come back.
+  let numbers = list::range(0, 1000)
+  let built = ordered_map::from_list(list::map(numbers, fn(n) { ("k{n}", n) }))
+  let evens = list::filter(numbers, fn(n) { n % 2 == 0 })
+  let churned = list::fold(evens, built, fn(m, n) {
+    ordered_map::insert(ordered_map::remove(m, "k{n}"), "k{n}", n)
+  })
+  let order = ordered_map::values(churned)
+  let expected = list::append(list::filter(numbers, fn(n) { n % 2 == 1 }), evens)
+  let kept = order == expected
+  let size = ordered_map::size(churned)
+  io::println("churned keys: {size}, odd ones first: {kept}")
+}

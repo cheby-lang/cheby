@@ -1,0 +1,22 @@
+error[E0036]: `8MB` is not a valid `fiber-stack`
+ --> tests/ui/13-tooling/manifest/runtime_errors/wrong_form/cheby.toml:5:15
+  |
+5 | fiber-stack = "8MB"
+  |               ^^^^^
+  |
+  = help: write an integer followed by `KiB`, `MiB` or `GiB`, such as `"8MiB"`
+
+error[E0036]: `main-stack` must be a string
+ --> tests/ui/13-tooling/manifest/runtime_errors/wrong_form/cheby.toml:6:14
+  |
+6 | main-stack = 67108864
+  |              ^^^^^^^^ this is an integer
+
+error[E0036]: unknown key `stack-size` in `[runtime]`
+ --> tests/ui/13-tooling/manifest/runtime_errors/wrong_form/cheby.toml:7:1
+  |
+7 | stack-size = "8MiB"
+  | ^^^^^^^^^^ unknown key
+  |
+  = help: the keys are `fiber-stack` and `main-stack`
+

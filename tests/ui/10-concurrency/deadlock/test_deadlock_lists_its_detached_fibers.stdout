@@ -1,0 +1,9 @@
+test ui_test "deadlocks with a detached fiber" ... FAILED
+test ui_test "runs after it" ... ok
+
+---- ui_test "deadlocks with a detached fiber" ----
+fatal error: all fibers are blocked
+  blocked in channel::receive at tests/ui/10-concurrency/deadlock/test_deadlock_lists_its_detached_fibers.cheby:16:32
+  blocked in channel::receive at tests/ui/10-concurrency/deadlock/test_deadlock_lists_its_detached_fibers.cheby:18:22
+
+test result: FAILED. 1 passed; 1 failed; 0 filtered out

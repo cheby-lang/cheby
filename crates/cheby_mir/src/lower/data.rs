@@ -19,15 +19,18 @@
 //!   D-501): each field not listed is read from `base`, each listed one
 //!   is its new value. On a type with several constructors the tag picks
 //!   the constructor.
-//! - A tuple is an object of uniform words (plan §5.4).
+//! - A tuple is an object of uniform words (plan §5.4). One of more than
+//!   [`TUPLE_INIT_THRESHOLD`] fields is filled one field at a time and,
+//!   when large, continues in continuations (D-720, D-780, `split.rs`).
 
 use cheby_diag::Span;
 use cheby_iface::{CtorFields, DefId, Ice, ItemSig, Ty, builtin};
 use cheby_types::thir::{ExprId, UpdateField};
 
-use crate::ir::{BlockId, Const, LayoutRef, Local, Operand, Rvalue, TagType, Terminator};
+use crate::ir::{BlockId, Const, LayoutRef, Local, Operand, Rvalue, Stmt, TagType, Terminator};
 use crate::layout::{LayoutDesc, ctor_layout, type_layouts};
 use crate::lower::body::BodyCx;
+use crate::lower::split::{Items, TUPLE_INIT_THRESHOLD};
 use crate::repr::Repr;
 
 impl BodyCx<'_, '_> {
@@ -250,8 +253,11 @@ impl BodyCx<'_, '_> {
         &mut self,
         elems: &[ExprId],
         _ty: Ty,
-        _span: Span,
+        span: Span,
     ) -> Result<Option<Operand>, Ice> {
+        if elems.len() > TUPLE_INIT_THRESHOLD {
+            return self.tuple_by_field(elems, span);
+        }
         let mut fields = Vec::with_capacity(elems.len());
         for &elem in elems {
             let Some(op) = self.expr_as(elem, Repr::Value)? else {
@@ -268,6 +274,34 @@ impl BodyCx<'_, '_> {
             },
         )?;
         Ok(Some(Operand::Local(local)))
+    }
+
+    /// A tuple of more than [`TUPLE_INIT_THRESHOLD`] `elems` (D-720,
+    /// D-810): one allocation of placeholders, then each
+    /// element computed, boxed and stored before the next, so only the
+    /// tuple and one element are live; a large one continues in
+    /// continuations that take the partly filled tuple (D-780).
+    fn tuple_by_field(&mut self, elems: &[ExprId], span: Span) -> Result<Option<Operand>, Ice> {
+        let arity = u32::try_from(elems.len()).map_err(|_| Ice::new("tuple too large"))?;
+        let layout = LayoutRef::Tuple(arity);
+        let mut chain = self.chain(span);
+        let mut obj = self.define(Repr::Value, Rvalue::AllocPlaceholder { layout })?;
+        for (k, &elem) in elems.iter().enumerate() {
+            if self.split_due(&chain) {
+                obj = self.split_cut(&mut chain, k, Operand::Local(obj), Items::Tuple(elems))?;
+            }
+            let Some(value) = self.expr_as(elem, Repr::Value)? else {
+                return self.split_finish(chain, None);
+            };
+            let field = u32::try_from(k).map_err(|_| Ice::new("tuple too large"))?;
+            self.emit(Stmt::Eval(Rvalue::InitField {
+                obj,
+                layout,
+                field,
+                value,
+            }))?;
+        }
+        self.split_finish(chain, Some(Operand::Local(obj)))
     }
 
     /// A new object of the constructor `desc` from `fields`, in

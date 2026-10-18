@@ -2,7 +2,7 @@ entries
 
 fn entry main(app::main) [c] () -> i64 {
 bb0:
-  _0: value = call app::main()
+  _0: value = call app::main() ; unwind bb3
   _1: int = read_tag _0 of result
   _2: bool = compare eq int _1, const int 0
   branch _2, bb1, bb2
@@ -13,22 +13,30 @@ bb2:
   _3: value = field _0.0 of ctor Err
   dup _3
   drop _0
-  _4: value = call app::show(_3)
+  _4: value = call app::show(borrow _3) ; unwind bb4
+  drop _3
   call_foreign "cheby_io_eprintln"(borrow _4) -> void
   drop _4
   return const i64 1
+bb3:
+  resume
+bb4:
+  drop _3
+  goto bb3()
 }
 
 fn entry test(app::returns nil) [c] () -> value {
 bb0:
-  _0: value = call <test app::returns nil>()
+  _0: value = call <test app::returns nil>() ; unwind bb1
   drop _0
   return const nil
+bb1:
+  resume
 }
 
 fn entry test(app::returns ok) [c] () -> value {
 bb0:
-  _0: value = call <test app::returns ok>()
+  _0: value = call <test app::returns ok>() ; unwind bb3
   _1: int = read_tag _0 of result
   _2: bool = compare eq int _1, const int 0
   branch _2, bb1, bb2
@@ -39,13 +47,15 @@ bb2:
   _3: value = field _0.0 of ctor Err
   dup _3
   drop _0
-  _4: value = call std::string::show(_3)
+  _4: value = call std::string::show(_3) ; unwind bb3
   return _4
+bb3:
+  resume
 }
 
 fn entry test(app::returns an error without show) [c] () -> value {
 bb0:
-  _0: value = call <test app::returns an error without show>()
+  _0: value = call <test app::returns an error without show>() ; unwind bb3
   _1: int = read_tag _0 of result
   _2: bool = compare eq int _1, const int 0
   branch _2, bb1, bb2
@@ -56,42 +66,57 @@ bb2:
   _3: value = field _0.0 of ctor Err
   dup _3
   drop _0
-  _4: value = call_runtime debug(borrow _3)
+  _4: value = call_runtime debug(borrow _3) ; unwind bb4
   drop _3
   return _4
+bb3:
+  resume
+bb4:
+  drop _3
+  goto bb3()
 }
 
 fn trampoline 0 [c] (_0: value) -> value {
 bb0:
-  _1: value = call _0()
+  _1: value = call _0() ; unwind bb1
   return _1
+bb1:
+  resume
 }
 
 fn trampoline 1 [c] (_0: value, _1: value) -> value {
 bb0:
-  _2: value = call _0(_1)
+  _2: value = call _0(_1) ; unwind bb1
   return _2
+bb1:
+  resume
 }
 
 fn trampoline 2 [c] (_0: value, _1: value, _2: value) -> value {
 bb0:
-  _3: value = call _0(_1, _2)
+  _3: value = call _0(_1, _2) ; unwind bb1
   return _3
+bb1:
+  resume
 }
 
 fn trampoline 3 [c] (_0: value, _1: value, _2: value, _3: value) -> value {
 bb0:
-  _4: value = call _0(_1, _2, _3)
+  _4: value = call _0(_1, _2, _3) ; unwind bb1
   return _4
+bb1:
+  resume
 }
 
 fn trampoline 4 [c] (_0: value, _1: value, _2: value, _3: value, _4: value) -> value {
 bb0:
-  _5: value = call _0(_1, _2, _3, _4)
+  _5: value = call _0(_1, _2, _3, _4) ; unwind bb1
   return _5
+bb1:
+  resume
 }
 
 foreign_layout ctor Err: Result.Err tag 1 key 0b7d6449ba7cbef5 [value @8]
-callee app::show(value) -> value
+callee app::show(borrow value) -> value
 callee app::main() -> value
 callee std::string::show(value) -> value

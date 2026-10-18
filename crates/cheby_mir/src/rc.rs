@@ -17,9 +17,24 @@
 //! A `list_slice` whose list rule 2 would drop right after consumes the
 //! list instead (`list_slice_owned`), so a unique list is sliced in place.
 //!
+//! Borrowed locals (D-715, [`Function::borrowed_locals`]) hold no
+//! reference: a borrowed parameter, and a `field` result of a borrowed
+//! local (a borrowed projection, D-807, which changes
+//! rule 4 for it). Each owned use of one gets a `dup` (rule 1 as if it
+//! were always live afterwards), and rules 2, 3, 4 and 5 never drop or
+//! `dup` it otherwise: the caller's reference keeps it alive for the whole
+//! call. A call's borrowed argument is a borrowed use, so rule 2 drops an
+//! owned argument after the call when that was its last use. In a tail
+//! call, a borrowed position must receive a borrowed local or a constant:
+//! an owned local there has nothing left to drop it, which is an internal
+//! error.
+//!
 //! Every counted local is therefore consumed exactly once on every path
 //! that returns or tail-calls, so nothing is pending at a tail call.
-//! Paths ending in `panic` leak their live locals in M1 (no unwinding).
+//! What is live at a `panic`, or at any instruction that may unwind, is
+//! released by the cleanup pads of the unwind pass, which runs after this
+//! one ([`crate::unwind`], D-698); without it (`CHEBY_UNWIND_EDGES=off`)
+//! it leaks, as in M1.
 
 use std::collections::BTreeMap;
 
@@ -29,7 +44,7 @@ use crate::ir::{
     Block, BlockId, Function, Local, MirModule, Operand, RuntimeFn, Rvalue, Stmt, Terminator,
     UseKind,
 };
-use crate::liveness::{Liveness, LocalSet, counted, stmt_def};
+use crate::liveness::{Liveness, LocalSet, counted, is_borrowed_local, stmt_def};
 
 /// Inserts `dup` and `drop` into every function of `module`.
 ///
@@ -43,48 +58,61 @@ pub fn insert_module(module: &mut MirModule) -> Result<(), Ice> {
     Ok(())
 }
 
-/// Inserts `dup` and `drop` into `f`.
+/// Inserts `dup` and `drop` into `f`. A `precounted` body (D-693) already
+/// has its counts and is left alone (D-744).
 ///
 /// # Errors
 ///
-/// An [`Ice`] if `f` already has `dup` or `drop`, or is malformed.
+/// An [`Ice`] if `f` already has `dup` or `drop`, has unwind edges
+/// (they come after this pass, D-698), or is malformed.
 pub fn insert(f: &mut Function) -> Result<(), Ice> {
+    if f.precounted {
+        return Ok(());
+    }
+    if f.entry_unwind.is_some() || f.blocks.iter().any(|b| !b.unwind.is_empty()) {
+        return Err(Ice::new("unwind edges before reference counting"));
+    }
     if f.blocks
         .iter()
         .flat_map(|b| &b.stmts)
-        .any(|s| matches!(s, Stmt::Dup(_) | Stmt::Drop(_)))
+        .any(|s| matches!(s, Stmt::Dup(_) | Stmt::Drop(_) | Stmt::DropKeep { .. }))
     {
         return Err(Ice::new("reference counts inserted twice"));
     }
     let live = Liveness::compute(f)?;
+    let borrowed = f.borrowed_locals()?;
+    let held =
+        |l: Local| -> Result<bool, Ice> { Ok(counted(f, l)? && !is_borrowed_local(&borrowed, l)) };
     let mut new_blocks = Vec::with_capacity(f.blocks.len());
     let mut edge_drops: Vec<(BlockId, BlockId, Vec<Local>)> = Vec::new();
     for (id, block) in f.blocks.iter_enumerated() {
         let bl = live.block(f, id)?;
         let mut stmts = Vec::new();
         // Unused parameters: the function's in the entry block, the
-        // block's own everywhere.
+        // block's own everywhere. A borrowed one holds nothing to drop.
         let mut params: Vec<Local> = block.params.clone();
         if id.as_u32() == 0 {
             params.extend(f.params.iter().copied());
         }
         for p in params {
-            if counted(f, p)? && !bl.start.contains(&p) {
+            if held(p)? && !bl.start.contains(&p) {
                 stmts.push(Stmt::Drop(p));
             }
         }
         for (stmt, after) in block.stmts.iter().zip(&bl.after) {
             let uses = match stmt {
                 Stmt::Assign { value, .. } | Stmt::Eval(value) => value.uses(),
-                Stmt::Dup(_) | Stmt::Drop(_) => {
+                Stmt::Dup(_) | Stmt::Drop(_) | Stmt::DropKeep { .. } => {
                     return Err(Ice::new("reference counts inserted twice"));
                 }
+                // Touches no local (D-693).
+                Stmt::ClearUnwind => Vec::new(),
             };
-            let (before, mut post) = place(f, &uses, after)?;
+            let (before, mut post) = place(f, &borrowed, &uses, after)?;
             stmts.extend(before);
             stmts.push(own_dying_list(stmt, &mut post));
             if let (Some(dst), Stmt::Assign { value, .. }) = (stmt_def(stmt), stmt)
-                && counted(f, dst)?
+                && held(dst)?
             {
                 if value.result_is_borrowed() {
                     if after.contains(&dst) {
@@ -98,7 +126,7 @@ pub fn insert(f: &mut Function) -> Result<(), Ice> {
         }
         match &block.term {
             Terminator::Return(_) | Terminator::TailCall { .. } | Terminator::Goto { .. } => {
-                let (before, post) = place(f, &block.term.uses(), &bl.out)?;
+                let (before, post) = place(f, &borrowed, &block.term.uses(), &bl.out)?;
                 if !post.is_empty() {
                     return Err(Ice::new("a borrowed use in a moving terminator"));
                 }
@@ -113,7 +141,7 @@ pub fn insert(f: &mut Function) -> Result<(), Ice> {
                     let drops: Vec<Local> = bl
                         .before_term
                         .iter()
-                        .filter(|l| !succ_in.contains(l))
+                        .filter(|l| !succ_in.contains(l) && !is_borrowed_local(&borrowed, **l))
                         .copied()
                         .collect();
                     if !drops.is_empty() {
@@ -121,12 +149,15 @@ pub fn insert(f: &mut Function) -> Result<(), Ice> {
                     }
                 }
             }
-            Terminator::Panic { .. } | Terminator::Unreachable => {}
+            // Like a panic: what is live leaks until the unwind pass adds
+            // pads (D-698).
+            Terminator::Panic { .. } | Terminator::Unreachable | Terminator::Resume => {}
         }
         new_blocks.push(Block {
             params: block.params.clone(),
             stmts,
             term: block.term.clone(),
+            unwind: Vec::new(),
         });
     }
     place_edge_drops(f, new_blocks, edge_drops)
@@ -154,9 +185,12 @@ fn own_dying_list(stmt: &Stmt, post: &mut Vec<Stmt>) -> Stmt {
 }
 
 /// The statements to put before and after one instruction with `uses`,
-/// given the counted locals live after it.
+/// given the counted locals live after it and the borrowed locals
+/// ([`Function::borrowed_locals`]), which only ever get a `dup` per owned
+/// use.
 fn place(
     f: &Function,
+    borrowed_locals: &[bool],
     uses: &[(Local, UseKind)],
     live_after: &LocalSet,
 ) -> Result<(Vec<Stmt>, Vec<Stmt>), Ice> {
@@ -180,7 +214,9 @@ fn place(
     let mut after = Vec::new();
     for l in order {
         let (owned, borrowed) = counts.get(&l).copied().unwrap_or_default();
-        let live = live_after.contains(&l);
+        // A borrowed local is kept alive by the caller: never the last
+        // owner.
+        let live = live_after.contains(&l) || is_borrowed_local(borrowed_locals, l);
         // The last owned use takes the local's own reference, unless the
         // local is still needed: later, or borrowed by this instruction.
         let dups = if live || borrowed > 0 {
@@ -233,6 +269,7 @@ fn place_edge_drops(
                     target: to,
                     args: Vec::new(),
                 },
+                unwind: Vec::new(),
             });
             blocks
                 .get_mut(from.index())

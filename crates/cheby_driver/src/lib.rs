@@ -20,6 +20,11 @@
 //!   (D-554).
 //! - [`prepare_test`] and [`TestProgram::run`] are `cheby test` (G4,
 //!   D-541), and [`test_std`] tests the standard library itself (D-542).
+//! - With `--reuse-report` ([`RunOptions::reuse_report`],
+//!   [`TestOptions::reuse_report`]) the build also gives the reuse report
+//!   of the package's own code ([`Program::reuse_report`],
+//!   [`TestProgram::reuse_report`]; D-717), which the CLI prints after the
+//!   warnings and before anything runs.
 //! - [`dump_mir`] and [`dump_clif`] print the MIR and CLIF that running
 //!   the root module's `main` compiles, for goldens and the determinism
 //!   checks.
@@ -50,10 +55,12 @@ use cheby_iface::Ice;
 use cheby_jit::{Jit, JitError};
 use cheby_package::{MANIFEST_FILE, Manifest, ModulePath, PackageError, Targets};
 use cheby_runtime::RunConfig;
+use cheby_runtime::entry::AtExit;
 use cheby_syntax::SyntaxTree;
 
 mod backend;
 mod frontend;
+mod reuse_report;
 pub mod session;
 pub mod std_lib;
 mod test;
@@ -401,6 +408,9 @@ pub struct RunOptions {
     /// `--deny-warnings`: a warning stops the run before anything is
     /// compiled (D-549).
     pub deny_warnings: bool,
+    /// `--reuse-report`: the build also gives the reuse report
+    /// ([`Program::reuse_report`], D-717).
+    pub reuse_report: bool,
 }
 
 /// The outcome of [`prepare_run`].
@@ -420,6 +430,8 @@ pub struct Program {
     /// `main`'s entry, compiled into `jit`.
     entry: cheby_mir::EntryKind,
     config: RunConfig,
+    /// The text of `--reuse-report`, empty without the flag.
+    reuse_report: String,
 }
 
 impl fmt::Debug for Program {
@@ -428,6 +440,7 @@ impl fmt::Debug for Program {
             .field("output", &self.output)
             .field("jit", &self.jit)
             .field("config", &self.config)
+            .field("reuse_report", &self.reuse_report)
             .finish_non_exhaustive()
     }
 }
@@ -439,6 +452,14 @@ impl Program {
         &self.output
     }
 
+    /// The reuse report of `--reuse-report` (D-717), to print to standard
+    /// error after the warnings and before the program runs: one line per
+    /// candidate, each with its newline, sorted; empty without the flag.
+    #[must_use]
+    pub fn reuse_report(&self) -> &str {
+        &self.reuse_report
+    }
+
     /// Runs `main` and returns the exit status (§10.10, D-182): 0, 1 when
     /// `main` returns `Err` or output fails, 101 after a panic, and in
     /// debug builds 102 when objects leak (D-458).
@@ -448,6 +469,14 @@ impl Program {
     /// An [`Error`] if the runtime cannot run the entry.
     pub fn run(self) -> Result<i32, Error> {
         Ok(self.jit.entry(self.entry)?.run_main(self.config)?)
+    }
+
+    /// Chooses what happens to the fibers left when `main` has returned
+    /// (D-073, D-708): [`AtExit::Teardown`] unless set. Only `cheby run`,
+    /// whose process exits next, asks for [`AtExit::Freeze`], and only in
+    /// a build without the leak check (D-797).
+    pub const fn set_at_exit(&mut self, at_exit: AtExit) {
+        self.config.at_exit = at_exit;
     }
 }
 
@@ -489,8 +518,15 @@ pub fn prepare_run(root: &Path, options: RunOptions) -> Result<Prepared, Error> 
     // E0053 for a native symbol nothing defines (D-532) and the
     // constant-evaluation errors of the constants `main` reaches (D-535)
     // stop the run.
-    let jit = match backend::build(&front, &out.sources, backend::Roots::Main(main), false)? {
-        Ok(built) => built.jit,
+    let built = backend::build_reporting(
+        &front,
+        &out.sources,
+        backend::Roots::Main(main),
+        false,
+        options.reuse_report,
+    )?;
+    let (jit, reuse_report) = match built {
+        Ok(built) => (built.jit, built.reuse_report.unwrap_or_default()),
         Err(diagnostics) => {
             report_back_end(&mut out, diagnostics);
             return Ok(Prepared::CompileFailed(out));
@@ -502,9 +538,13 @@ pub fn prepare_run(root: &Path, options: RunOptions) -> Result<Prepared, Error> 
     // `env::program_name()` is the package's name under `cheby run`, so
     // usage messages are the same on every machine and for every module
     // path that is run (D-369).
+    // The root package's `[runtime]` stacks (D-660); the runtime rounds
+    // them up to its page size (D-796).
     let config = RunConfig {
         args: options.args,
         program_name: package,
+        root_stack_size: stack_bytes(front.main_stack),
+        fiber_stack: stack_bytes(front.fiber_stack),
         ..RunConfig::default()
     };
     Ok(Prepared::Ready(Box::new(Program {
@@ -512,6 +552,7 @@ pub fn prepare_run(root: &Path, options: RunOptions) -> Result<Prepared, Error> 
         jit,
         entry,
         config,
+        reuse_report,
     })))
 }
 
@@ -532,7 +573,7 @@ pub fn run(root: &Path, options: RunOptions) -> Result<RunResult, Error> {
     }
 }
 
-/// The times of [`bench_build`].
+/// The times of [`bench_build`], and the size of what it built.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BenchTimings {
     /// Loading, parsing and checking the package and the std modules it
@@ -541,6 +582,11 @@ pub struct BenchTimings {
     /// Lowering every function of the package to MIR and compiling it with
     /// the JIT.
     pub back_end: Duration,
+    /// The bytes of machine code the JIT defined (D-718).
+    pub code_bytes: u64,
+    /// The reference-count operations, `dup` and `drop` statements, of
+    /// every MIR unit compiled (D-718).
+    pub rc_ops: u64,
 }
 
 /// Checks the package at `dir` and generates code for every function of
@@ -566,17 +612,29 @@ pub fn bench_build(dir: &Path) -> Result<BenchTimings, Error> {
     let start = Instant::now();
     let built = backend::build(&front, &out.sources, backend::Roots::AllFunctions, false)?;
     let back_end = start.elapsed();
-    if let Err(diagnostics) = built {
-        out.diagnostics = diagnostics;
-        return Err(Error::new(format!(
-            "the back end cannot build the benchmark project:\n{}",
-            out.render()
-        )));
-    }
+    let built = match built {
+        Ok(built) => built,
+        Err(diagnostics) => {
+            out.diagnostics = diagnostics;
+            return Err(Error::new(format!(
+                "the back end cannot build the benchmark project:\n{}",
+                out.render()
+            )));
+        }
+    };
     Ok(BenchTimings {
         front_end: front_end_time,
         back_end,
+        code_bytes: built.jit.code_stats().code_bytes,
+        rc_ops: built.rc_ops.unwrap_or(0),
     })
+}
+
+/// A `[runtime]` stack size (D-660) as the runtime takes it: bytes, which
+/// the manifest kept within 1 MiB to 16 GiB; on a target whose addresses
+/// cannot hold it, the largest size, which the runtime clamps.
+pub(crate) fn stack_bytes(bytes: u64) -> usize {
+    usize::try_from(bytes).unwrap_or(usize::MAX)
 }
 
 /// `a::b::c` as a module path, if every segment is non-empty.
@@ -758,5 +816,7 @@ pub fn parse_file(
     })
 }
 
+#[cfg(test)]
+mod lifecycle_tests;
 #[cfg(test)]
 mod tests;

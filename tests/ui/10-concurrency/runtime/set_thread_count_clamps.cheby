@@ -1,0 +1,21 @@
+// @mode: run-pass
+// @decisions: D-657, D-175, D-298, D-303
+// @milestone: M2
+//! `set_thread_count` clamps its count to 1 to 1024, so a count of zero
+//! or less gives one thread, and a negative literal written for it is a
+//! warning. `thread_count` then returns the count that was set (§10.2).
+
+import std::io
+import std::runtime
+
+fn main() {
+  runtime::set_thread_count(-3)
+  let after_negative = runtime::thread_count()
+  io::println("after set_thread_count(-3): {after_negative}")
+  runtime::set_thread_count(0)
+  let after_zero = runtime::thread_count()
+  io::println("after set_thread_count(0): {after_zero}")
+  runtime::set_thread_count(2)
+  let after_two = runtime::thread_count()
+  io::println("after set_thread_count(2): {after_two}")
+}

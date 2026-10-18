@@ -1,0 +1,24 @@
+# ThreadSanitizer suppressions for the nightly workflow's `sanitizer (thread)`
+# job (D-721, D-863). `cargo xtask sanitize thread` passes this file through
+# `TSAN_OPTIONS=suppressions=…`.
+#
+# Only a report whose racing accesses (the top frames of each access) lie in
+# a dependency (crossbeam, the precompiled parts of Rust's std, loom's
+# generator) gets a line here, with a comment above it giving its reason and
+# the run that showed it. A report in Cheby's own crates is fixed, never
+# suppressed; behavior a decision makes intentional is told to the
+# sanitizer instead (D-863).
+#
+# Format: one `race:<function or module>` (or `thread:`, `mutex:`, ...) per
+# line; `#` starts a comment.
+
+# crossbeam-deque's work-stealing buffer: `Stealer::steal_batch_and_pop`
+# reads a slot speculatively (`Buffer::read`, deque.rs:107) while the owner's
+# `Worker::push` writes it (`Buffer::write`, deque.rs:97), and the stealer
+# then discards the value when its compare-and-swap of `front` fails. The
+# deque orders these with fences ThreadSanitizer does not model; both top
+# frames of each access are crossbeam's. Seen in `cargo xtask sanitize
+# thread --step runtime` on macOS arm64, 2026-10-17
+# (fiber_ops::select_tests::select_closed_arm_reads_the_chain: a worker's
+# find_runnable stealing while a fiber's spawn pushes).
+race:crossbeam_deque

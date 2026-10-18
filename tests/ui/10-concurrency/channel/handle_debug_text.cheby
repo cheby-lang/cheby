@@ -1,0 +1,22 @@
+// @mode: run-pass
+// @decisions: D-233, D-647
+// @milestone: M2
+//! Channel handles debug-print as placeholders, also inside other values,
+//! and never show identity or contents (§3.13, §9.5).
+
+import std::channel
+import std::io
+
+pub type Mailbox {
+  Mailbox(String, channel::Sender<Int>),
+}
+
+fn main() {
+  let (tx, rx) = channel::new::<Int>(1)
+  let assert Ok(Nil) = channel::send(tx, 1)
+  io::println("{tx:?} {rx:?}")
+  let both = [tx, tx]
+  io::println("{both:?}")
+  let box = Mailbox("inbox", tx)
+  io::println("{box:?}")
+}

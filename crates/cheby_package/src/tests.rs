@@ -435,6 +435,165 @@ error[E0036]: unknown key `stack-limit` in `[const-eval]`
     );
 }
 
+/// D-660: without `[runtime]` the stacks are 8 MiB for fibers and 64 MiB
+/// for the root fiber.
+#[test]
+fn runtime_defaults() {
+    let (manifest, rendered) = parse("name = \"app\"\nversion = \"0.1.0\"\n");
+    assert_eq!(rendered, "");
+    let manifest = manifest.unwrap();
+    assert_eq!(manifest.fiber_stack, 8 << 20);
+    assert_eq!(manifest.main_stack, 64 << 20);
+    assert_eq!(Manifest::DEFAULT_FIBER_STACK, 8 << 20);
+    assert_eq!(Manifest::DEFAULT_MAIN_STACK, 64 << 20);
+    assert_eq!(Manifest::MIN_STACK, 1 << 20);
+    assert_eq!(Manifest::MAX_STACK, 16 << 30);
+}
+
+/// D-660, D-536: `[runtime]`'s sizes take `memory-limit`'s form, in
+/// bytes and unrounded (D-796); one key alone leaves the
+/// other at its default.
+#[test]
+fn runtime_sizes_parse() {
+    let base = "name = \"app\"\nversion = \"0.1.0\"\n";
+    for (text, bytes) in [
+        ("1MiB", 1 << 20),
+        ("1024KiB", 1 << 20),
+        ("1025KiB", 1025 << 10),
+        ("0016MiB", 16 << 20),
+        ("256MiB", 256 << 20),
+        ("16GiB", 16 << 30),
+        ("16777216KiB", 16 << 30),
+    ] {
+        let (manifest, rendered) = parse(&format!(
+            "{base}[runtime]\nfiber-stack = \"{text}\"\nmain-stack = \"{text}\"\n"
+        ));
+        assert_eq!(rendered, "", "{text}");
+        let manifest = manifest.unwrap();
+        assert_eq!(manifest.fiber_stack, bytes, "{text}");
+        assert_eq!(manifest.main_stack, bytes, "{text}");
+    }
+    let (manifest, rendered) = parse(&format!("{base}[runtime]\nmain-stack = \"2MiB\"\n"));
+    assert_eq!(rendered, "");
+    let manifest = manifest.unwrap();
+    assert_eq!(manifest.fiber_stack, Manifest::DEFAULT_FIBER_STACK);
+    assert_eq!(manifest.main_stack, 2 << 20);
+    let (manifest, _) = parse(&format!("{base}[runtime]\nfiber-stack = \"3MiB\"\n"));
+    let manifest = manifest.unwrap();
+    assert_eq!(manifest.fiber_stack, 3 << 20);
+    assert_eq!(manifest.main_stack, Manifest::DEFAULT_MAIN_STACK);
+}
+
+/// D-660: a size outside 1 MiB to 16 GiB is E0036, zero included, and the
+/// manifest keeps the default.
+#[test]
+fn runtime_sizes_out_of_range() {
+    for (bad, expected) in [
+        (
+            "fiber-stack = \"0MiB\"",
+            "`fiber-stack` must be from 1MiB to 16GiB",
+        ),
+        (
+            "fiber-stack = \"1023KiB\"",
+            "`fiber-stack` must be from 1MiB to 16GiB",
+        ),
+        (
+            "main-stack = \"512KiB\"",
+            "`main-stack` must be from 1MiB to 16GiB",
+        ),
+        (
+            "main-stack = \"16777217KiB\"",
+            "`main-stack` must be from 1MiB to 16GiB",
+        ),
+        (
+            "fiber-stack = \"17GiB\"",
+            "`fiber-stack` must be from 1MiB to 16GiB",
+        ),
+        (
+            "fiber-stack = \"17179869184GiB\"",
+            "`fiber-stack` `17179869184GiB` is too large",
+        ),
+    ] {
+        let (manifest, rendered) = parse(&format!(
+            "name = \"app\"\nversion = \"0.1.0\"\n[runtime]\n{bad}\n"
+        ));
+        let manifest = manifest.unwrap();
+        assert_eq!(manifest.fiber_stack, Manifest::DEFAULT_FIBER_STACK);
+        assert_eq!(manifest.main_stack, Manifest::DEFAULT_MAIN_STACK);
+        assert!(
+            rendered.contains(&format!("error[E0036]: {expected}\n")),
+            "{bad}: {rendered}"
+        );
+        assert_eq!(rendered.matches("error[").count(), 1, "{rendered}");
+    }
+}
+
+/// D-660, D-536: a value of the wrong form is E0036.
+#[test]
+fn runtime_sizes_of_the_wrong_form() {
+    for (bad, expected) in [
+        (
+            "fiber-stack = \"8MB\"",
+            "`8MB` is not a valid `fiber-stack`",
+        ),
+        (
+            "fiber-stack = \"8 MiB\"",
+            "`8 MiB` is not a valid `fiber-stack`",
+        ),
+        ("main-stack = \"MiB\"", "`MiB` is not a valid `main-stack`"),
+        (
+            "main-stack = \"-1MiB\"",
+            "`-1MiB` is not a valid `main-stack`",
+        ),
+        (
+            "main-stack = \"1.5GiB\"",
+            "`1.5GiB` is not a valid `main-stack`",
+        ),
+        ("main-stack = \"64\"", "`64` is not a valid `main-stack`"),
+        ("fiber-stack = 8388608", "`fiber-stack` must be a string"),
+    ] {
+        let (manifest, rendered) = parse(&format!(
+            "name = \"app\"\nversion = \"0.1.0\"\n[runtime]\n{bad}\n"
+        ));
+        assert!(manifest.is_some());
+        assert!(
+            rendered.contains(&format!("error[E0036]: {expected}\n")),
+            "{bad}: {rendered}"
+        );
+        assert_eq!(rendered.matches("error[").count(), 1, "{rendered}");
+    }
+}
+
+/// D-660, D-444: any other key in `[runtime]` is E0036 with a help line
+/// naming the two keys, and `runtime` must be a table.
+#[test]
+fn runtime_unknown_keys_and_wrong_type() {
+    let (manifest, rendered) = parse(
+        "name = \"app\"\nversion = \"0.1.0\"\n\n[runtime]\nstack = \"8MiB\"\n\
+         fiber-stack = \"16MiB\"\n",
+    );
+    let manifest = manifest.unwrap();
+    assert_eq!(manifest.fiber_stack, 16 << 20);
+    assert_eq!(
+        rendered,
+        "\
+error[E0036]: unknown key `stack` in `[runtime]`
+ --> cheby.toml:5:1
+  |
+5 | stack = \"8MiB\"
+  | ^^^^^ unknown key
+  |
+  = help: the keys are `fiber-stack` and `main-stack`
+
+"
+    );
+    let (_, rendered) = parse("name = \"app\"\nversion = \"0.1.0\"\nruntime = \"8MiB\"\n");
+    assert!(
+        rendered.contains("error[E0036]: `runtime` must be a table"),
+        "{rendered}"
+    );
+}
+
 #[test]
 fn targets_default_to_both() {
     let (manifest, _) = parse("name = \"a\"\nversion = \"0.0.0\"\n");
@@ -545,7 +704,7 @@ error[E0036]: unknown key `colour` in `cheby.toml`
 2 | colour = 1
   | ^^^^^^ unknown key
   |
-  = help: the keys are `name`, `version`, `description`, `licences`, `targets`, `[dependencies]` and `[const-eval]`
+  = help: the keys are `name`, `version`, `description`, `licences`, `targets`, `[dependencies]`, `[const-eval]` and `[runtime]`
 
 "
     );

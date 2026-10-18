@@ -7,7 +7,8 @@
 //! package UI test, a directory with its own `cheby.toml`, must parse,
 //! since a package test cannot be `parse-fail`. Both parsers are held to
 //! that intent, so the check fails whenever they disagree on a file. The
-//! standard library's sources (`std/**/*.cheby`) must parse too (plan §0).
+//! standard library's sources (`std/**/*.cheby`) and the programs of the
+//! runtime benchmarks (`bench/runtime/**/*.cheby`) must parse too.
 //!
 //! REPL transcripts (`tests/repl/**/*.repl`, plan §8.3, D-546): each input
 //! entry (a `> ` line and its `. ` continuation lines; the expression of
@@ -15,6 +16,15 @@
 //! would hold them, and as statements, inside a function body, which
 //! covers expressions. The two parsers must agree on whether some form
 //! parses. The `.cheby` files of REPL package directories must parse.
+//!
+//! The code of the stdlib spec (D-662): every ` ```cheby ` block of
+//! `docs/stdlib/**/*.md` is parsed as a module's items (declarations,
+//! signatures without a body, `test` blocks and example functions), and
+//! both parsers must accept it. A failure names the block by the line of
+//! its first code line, `docs/stdlib/<module>.md:<line>`. Blocks are read
+//! as `CommonMark` reads fences, so a block shown inside a longer fence,
+//! such as the ` ````markdown ` sample of `docs/stdlib/README.md`, is that
+//! fence's text, not a block of its own.
 //!
 //! The compiler rejects a file if it is not UTF-8 or if `parse` reports a
 //! grammar error. Validation errors (class V) are not consulted: they are
@@ -66,6 +76,19 @@ enum Intent {
     Reject,
     /// One form of a REPL entry: judged with the entry's other form.
     ReplForm,
+    /// A ` ```cheby ` block of `docs/stdlib`, judged by [`judge_stdlib`].
+    StdlibBlock,
+}
+
+/// One ` ```cheby ` block of `docs/stdlib`, written out as a module.
+struct StdlibBlock {
+    /// `docs/stdlib/<module>.md:<line>`, the line of the block's first
+    /// code line.
+    shown: String,
+    /// The line of the page the block's first line is on.
+    first_line: usize,
+    /// The block's code, written out under `target/cross-check-stdlib`.
+    path: PathBuf,
 }
 
 /// One input entry of a REPL transcript, written out in both forms.
@@ -89,6 +112,10 @@ pub fn run(root: &Path, args: &Args) -> Result<(), String> {
             files.insert(form.clone(), Intent::ReplForm);
         }
     }
+    let blocks = stdlib_blocks(root)?;
+    for block in &blocks {
+        files.insert(block.path.clone(), Intent::StdlibBlock);
+    }
     add_also(&args.also, &mut files)?;
 
     let tree_sitter = if args.compiler_only {
@@ -103,14 +130,71 @@ pub fn run(root: &Path, args: &Args) -> Result<(), String> {
     };
 
     let mut mismatches = Vec::new();
+    let (ts_ok, compiler_ok) = judge_files(root, &files, tree_sitter.as_ref(), &mut mismatches)?;
+    let repl_ok = judge_repl(&entries, tree_sitter.as_ref(), &mut mismatches)?;
+    let stdlib_ok = judge_stdlib(&blocks, tree_sitter.as_ref(), &mut mismatches)?;
+
+    let short_rev = rev.get(..7).unwrap_or(&rev);
+    let ts_part = if tree_sitter.is_some() {
+        format!("tree-sitter-cheby {short_rev}: {ts_ok} as expected")
+    } else {
+        "tree-sitter-cheby: skipped (--compiler-only)".to_owned()
+    };
+    let line = format!(
+        "parser cross-check: {} files and {} REPL inputs; {ts_part}; compiler parser: \
+         {compiler_ok} as expected; REPL inputs: {repl_ok} as expected; {} mismatches",
+        files
+            .values()
+            .filter(|&&intent| matches!(intent, Intent::Parse | Intent::Reject))
+            .count(),
+        entries.len(),
+        mismatches.len()
+    );
+    let parsers = if tree_sitter.is_some() {
+        "both parsers"
+    } else {
+        "the compiler parser"
+    };
+    let stdlib_line = format!(
+        "docs/stdlib: {} blocks; {stdlib_ok} accepted by {parsers}",
+        blocks.len()
+    );
+    println!("{line}");
+    println!("{stdlib_line}");
+    for m in &mismatches {
+        println!("  {m}");
+    }
+    if let Some(summary) = &args.summary {
+        let mut text = format!("- {line}\n- {stdlib_line}\n");
+        for m in &mismatches {
+            let _ = writeln!(text, "  - {m}");
+        }
+        super::append(summary, &text)?;
+    }
+    if mismatches.is_empty() {
+        Ok(())
+    } else {
+        Err("parser cross-check failed".to_owned())
+    }
+}
+
+/// Judges the files that must parse or must be rejected (not the REPL
+/// forms and stdlib blocks, which have their own judges) and returns how
+/// many tree-sitter and the compiler parser treat as expected.
+fn judge_files(
+    root: &Path,
+    files: &BTreeMap<PathBuf, Intent>,
+    tree_sitter: Option<&BTreeMap<PathBuf, bool>>,
+    mismatches: &mut Vec<String>,
+) -> Result<(usize, usize), String> {
     let mut ts_ok: usize = 0;
     let mut compiler_ok: usize = 0;
-    for (path, intent) in &files {
-        if *intent == Intent::ReplForm {
+    for (path, intent) in files {
+        if matches!(intent, Intent::ReplForm | Intent::StdlibBlock) {
             continue;
         }
         let shown = display_relative(path, root);
-        if let Some(verdicts) = &tree_sitter {
+        if let Some(verdicts) = tree_sitter {
             let parsed = *verdicts
                 .get(path)
                 .ok_or_else(|| format!("tree-sitter reported nothing for {shown}"))?;
@@ -124,10 +208,10 @@ pub fn run(root: &Path, args: &Args) -> Result<(), String> {
                 (Intent::Reject, true) => mismatches.push(format!(
                     "{shown}: is `parse-fail`, but tree-sitter accepts it"
                 )),
-                (Intent::ReplForm, _) => {}
+                (Intent::ReplForm | Intent::StdlibBlock, _) => {}
             }
         }
-        match (intent, compiler_verdict(path)?) {
+        match (intent, compiler_verdict(path, 0)?) {
             (Intent::Parse, None) | (Intent::Reject, Some(_)) => {
                 compiler_ok = compiler_ok.saturating_add(1);
             }
@@ -137,48 +221,16 @@ pub fn run(root: &Path, args: &Args) -> Result<(), String> {
             (Intent::Reject, None) => mismatches.push(format!(
                 "{shown}: is `parse-fail`, but the compiler parser accepts it"
             )),
-            (Intent::ReplForm, _) => {}
+            (Intent::ReplForm | Intent::StdlibBlock, _) => {}
         }
     }
-    let repl_ok = judge_repl(&entries, tree_sitter.as_ref(), &mut mismatches)?;
-
-    let short_rev = rev.get(..7).unwrap_or(&rev);
-    let ts_part = if tree_sitter.is_some() {
-        format!("tree-sitter-cheby {short_rev}: {ts_ok} as expected")
-    } else {
-        "tree-sitter-cheby: skipped (--compiler-only)".to_owned()
-    };
-    let line = format!(
-        "parser cross-check: {} files and {} REPL inputs; {ts_part}; compiler parser: \
-         {compiler_ok} as expected; REPL inputs: {repl_ok} as expected; {} mismatches",
-        files
-            .values()
-            .filter(|&&intent| intent != Intent::ReplForm)
-            .count(),
-        entries.len(),
-        mismatches.len()
-    );
-    println!("{line}");
-    for m in &mismatches {
-        println!("  {m}");
-    }
-    if let Some(summary) = &args.summary {
-        let mut text = format!("- {line}\n");
-        for m in &mismatches {
-            let _ = writeln!(text, "  - {m}");
-        }
-        super::append(summary, &text)?;
-    }
-    if mismatches.is_empty() {
-        Ok(())
-    } else {
-        Err("parser cross-check failed".to_owned())
-    }
+    Ok((ts_ok, compiler_ok))
 }
 
 /// The compiler parser's verdict on a file: `None` if it parses, or the
-/// first grammar error as `line:col: message`.
-fn compiler_verdict(path: &Path) -> Result<Option<String>, String> {
+/// first grammar error as `line:col: message`, with `line_offset` added to
+/// the line (for a block taken from a longer file).
+fn compiler_verdict(path: &Path, line_offset: usize) -> Result<Option<String>, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let Ok(text) = String::from_utf8(bytes) else {
         return Ok(Some("the file is not valid UTF-8".to_owned()));
@@ -193,7 +245,12 @@ fn compiler_verdict(path: &Path) -> Result<Option<String>, String> {
         let at = error
             .primary_span()
             .and_then(|span| sources.location(span))
-            .map(|loc| format!("{}:{}: ", loc.line, loc.col))
+            .map(|loc| {
+                let line = usize::try_from(loc.line)
+                    .unwrap_or(usize::MAX)
+                    .saturating_add(line_offset);
+                format!("{line}:{}: ", loc.col)
+            })
             .unwrap_or_default();
         format!("{at}error[{}]: {}", error.code, error.message)
     }))
@@ -207,9 +264,13 @@ fn collect(root: &Path) -> Result<BTreeMap<PathBuf, Intent>, String> {
             files.insert(source, Intent::Parse);
         }
     }
-    // The standard library's sources and the `.cheby` files of REPL
-    // package directories must parse.
-    for dir in [root.join("std"), root.join("tests/repl")] {
+    // The standard library's sources, the `.cheby` files of REPL package
+    // directories and the runtime benchmarks' programs must parse.
+    for dir in [
+        root.join("std"),
+        root.join("tests/repl"),
+        root.join("bench/runtime"),
+    ] {
         if dir.exists() {
             for source in cheby_test_support::files_with_extension(&dir, "cheby")
                 .map_err(|e| format!("{}: {e}", dir.display()))?
@@ -265,7 +326,7 @@ fn judge_repl(
         let mut compiler = false;
         let mut ts = false;
         for form in &entry.forms {
-            compiler |= compiler_verdict(form)?.is_none();
+            compiler |= compiler_verdict(form, 0)?.is_none();
             if let Some(verdicts) = tree_sitter {
                 ts |= verdicts.get(form).copied().ok_or_else(|| {
                     format!("tree-sitter reported nothing for {}", form.display())
@@ -287,6 +348,146 @@ fn judge_repl(
         }
     }
     Ok(agree)
+}
+
+/// Checks that both parsers accept each block of `docs/stdlib` (D-662)
+/// and returns how many they do.
+fn judge_stdlib(
+    blocks: &[StdlibBlock],
+    tree_sitter: Option<&BTreeMap<PathBuf, bool>>,
+    mismatches: &mut Vec<String>,
+) -> Result<usize, String> {
+    let mut accepted: usize = 0;
+    for block in blocks {
+        let mut ok = true;
+        if let Some(verdicts) = tree_sitter {
+            let parsed = verdicts.get(&block.path).copied().ok_or_else(|| {
+                format!("tree-sitter reported nothing for {}", block.path.display())
+            })?;
+            if !parsed {
+                ok = false;
+                mismatches.push(format!(
+                    "{}: tree-sitter rejects the ```cheby block",
+                    block.shown
+                ));
+            }
+        }
+        // The page's line of the block's first line is 1 in the block.
+        let offset = block.first_line.saturating_sub(1);
+        if let Some(error) = compiler_verdict(&block.path, offset)? {
+            ok = false;
+            mismatches.push(format!(
+                "{}: the compiler parser rejects the ```cheby block: {error}",
+                block.shown
+            ));
+        }
+        if ok {
+            accepted = accepted.saturating_add(1);
+        }
+    }
+    Ok(accepted)
+}
+
+/// Every ` ```cheby ` block of `docs/stdlib/**/*.md`, in path order, each
+/// written to `target/cross-check-stdlib` as a module (D-662).
+fn stdlib_blocks(root: &Path) -> Result<Vec<StdlibBlock>, String> {
+    let dir = root.join("docs/stdlib");
+    let pages = cheby_test_support::files_with_extension(&dir, "md")
+        .map_err(|e| format!("{}: {e}", dir.display()))?;
+    let out = root.join("target/cross-check-stdlib");
+    if out.exists() {
+        std::fs::remove_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
+    }
+    std::fs::create_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
+    let mut blocks = Vec::new();
+    for page in &pages {
+        let text = std::fs::read_to_string(page).map_err(|e| format!("{}: {e}", page.display()))?;
+        let shown = display_relative(page, root);
+        for (first_line, code) in cheby_blocks(&text) {
+            let path = out.join(format!("{}.cheby", blocks.len()));
+            std::fs::write(&path, code).map_err(|e| format!("{}: {e}", path.display()))?;
+            blocks.push(StdlibBlock {
+                shown: format!("{shown}:{first_line}"),
+                first_line,
+                path,
+            });
+        }
+    }
+    Ok(blocks)
+}
+
+/// The fenced code blocks of a Markdown text whose info string is `cheby`,
+/// each with the line of its first code line. Fences follow `CommonMark`: a
+/// line indented at most three spaces that starts with three or more
+/// backticks or tildes opens a block, and a line of the same character, at
+/// least as long, with nothing after it, closes it, so a shorter fence
+/// inside a longer one is text. An unclosed block runs to the end of the
+/// text. The opening fence's indentation is removed from the code lines,
+/// up to its width.
+fn cheby_blocks(text: &str) -> Vec<(usize, String)> {
+    /// A fence: its indentation, character and length, and the rest of the
+    /// line after it.
+    fn fence(line: &str) -> Option<(usize, char, usize, &str)> {
+        let rest = line.trim_start_matches(' ');
+        let indent = line.len().saturating_sub(rest.len());
+        let c = rest.chars().next().filter(|c| *c == '`' || *c == '~')?;
+        let after = rest.trim_start_matches(c);
+        let len = rest.len().saturating_sub(after.len());
+        (indent <= 3 && len >= 3).then_some((indent, c, len, after))
+    }
+    struct Open {
+        indent: usize,
+        c: char,
+        len: usize,
+        cheby: bool,
+        first_line: usize,
+        code: String,
+    }
+    let mut blocks = Vec::new();
+    let mut open: Option<Open> = None;
+    for (n, line) in text.lines().enumerate() {
+        let number = n.saturating_add(1);
+        match (&mut open, fence(line)) {
+            (None, Some((indent, c, len, info))) => {
+                // A backtick fence's info string has no backtick.
+                if c == '`' && info.contains('`') {
+                    continue;
+                }
+                let cheby = info.split_whitespace().next() == Some("cheby");
+                open = Some(Open {
+                    indent,
+                    c,
+                    len,
+                    cheby,
+                    first_line: number.saturating_add(1),
+                    code: String::new(),
+                });
+            }
+            (Some(block), Some((_, c, len, after)))
+                if c == block.c && len >= block.len && after.trim().is_empty() =>
+            {
+                if block.cheby {
+                    blocks.push((block.first_line, std::mem::take(&mut block.code)));
+                }
+                open = None;
+            }
+            (Some(block), _) => {
+                let spaces = line
+                    .len()
+                    .saturating_sub(line.trim_start_matches(' ').len());
+                let strip = spaces.min(block.indent);
+                block.code.push_str(line.get(strip..).unwrap_or(line));
+                block.code.push('\n');
+            }
+            (None, None) => {}
+        }
+    }
+    if let Some(block) = open
+        && block.cheby
+    {
+        blocks.push((block.first_line, block.code));
+    }
+    blocks
 }
 
 /// The input entries of every REPL transcript under `tests/repl`, each
@@ -515,7 +716,47 @@ fn parse(
 
 #[cfg(test)]
 mod tests {
-    use super::transcript_inputs;
+    use super::{cheby_blocks, transcript_inputs};
+
+    #[test]
+    fn cheby_blocks_follow_commonmark_fences() {
+        let text = "# `std::list`\n\
+                    \n\
+                    ```cheby\n\
+                    pub fn get<T>(xs: List<T>, index: Int) -> Option<T>\n\
+                    ```\n\
+                    \n\
+                    ```text\n\
+                    not cheby\n\
+                    ```\n\
+                    ````markdown\n\
+                    ```cheby\n\
+                    shown inside a longer fence\n\
+                    ```\n\
+                    ````\n\
+                    \x20 ```cheby title\n\
+                    \x20 test \"a\" {\n\
+                    \x20   assert True\n\
+                    \x20 }\n\
+                    \x20 ```\n\
+                    ~~~cheby\n\
+                    fn tilde() {}\n\
+                    ~~~~\n\
+                    ```cheby\n\
+                    fn unclosed() {}\n";
+        assert_eq!(
+            cheby_blocks(text),
+            [
+                (
+                    4,
+                    "pub fn get<T>(xs: List<T>, index: Int) -> Option<T>\n".to_owned()
+                ),
+                (16, "test \"a\" {\n  assert True\n}\n".to_owned()),
+                (21, "fn tilde() {}\n".to_owned()),
+                (24, "fn unclosed() {}\n".to_owned()),
+            ]
+        );
+    }
 
     #[test]
     fn transcript_inputs_are_entries_with_continuations() {

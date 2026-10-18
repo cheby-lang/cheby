@@ -1,0 +1,8 @@
+test ui_test "deadlocks" ... FAILED
+test ui_test "passes" ... ok
+
+---- ui_test "deadlocks" ----
+fatal error: all fibers are blocked
+  blocked in channel::receive at tests/ui/10-concurrency/deadlock/test_deadlocks_beside_a_passing_test.cheby:17:22
+
+test result: FAILED. 1 passed; 1 failed; 0 filtered out

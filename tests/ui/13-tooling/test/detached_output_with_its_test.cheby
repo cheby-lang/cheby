@@ -1,0 +1,39 @@
+// @mode: run-pass
+// @command: test
+// @decisions: D-723
+// @milestone: M2
+//! A detached fiber's output belongs to the test that started it: it is
+//! written with that test's own output, before its line, while another
+//! test runs beside it (§10.4, §13.6). The first test's detached fiber
+//! prints after a wait, and the test ends once it has printed; the second
+//! test prints at once.
+
+import std::channel
+import std::duration
+import std::fiber
+import std::io
+import std::selector
+
+fn pause(ms: Int) -> Nil {
+  selector::new()
+  |> selector::after(_, duration::milliseconds(ms), fn() { Nil })
+  |> selector::select
+}
+
+fn report(done: channel::Sender<Nil>) -> Nil {
+  pause(100)
+  io::println("the detached fiber prints")
+  let assert Ok(Nil) = channel::send(done, Nil)
+  Nil
+}
+
+test "has a detached fiber that prints" {
+  let (done_tx, done_rx) = channel::new::<Nil>(1)
+  fiber::spawn_detached(fn() { report(done_tx) })
+  io::println("the test prints first")
+  assert channel::receive(done_rx) == Ok(Nil)
+}
+
+test "prints at once" {
+  io::println("the second test prints")
+}

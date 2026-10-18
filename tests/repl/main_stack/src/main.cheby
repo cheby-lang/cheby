@@ -1,0 +1,6 @@
+//! A package whose `[runtime]` table gives `main` and each REPL entry a
+//! stack of 1 MiB, for the `main_stack` transcript.
+
+fn main() {
+  Nil
+}

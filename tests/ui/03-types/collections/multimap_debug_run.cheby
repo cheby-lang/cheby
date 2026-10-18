@@ -1,0 +1,39 @@
+// @mode: run-pass
+// @milestone: M2
+// @decisions: D-332, D-342, D-344, D-382, D-587, D-664, D-847
+//! A `Multimap` built in two orders that keep each key's values in the same
+//! order prints the same debug text: the keys sorted by their debug text as
+//! bytes, so `10` comes before `9`, and the values of each key in insertion
+//! order (§3.13). The two compare `==` and hash alike through the module's
+//! hooks. Reversing the pairs reverses each key's values, so that multimap
+//! differs.
+
+import std::io
+import std::list
+import std::multimap
+import std::set
+
+fn main() {
+  let pairs = [("pear", 3), ("apple", 1), ("pear", 1), ("fig", 2), ("apple", 1)]
+  let forward = multimap::from_list(pairs)
+  let other_order = [("fig", 2), ("apple", 1), ("pear", 3), ("apple", 1), ("pear", 1)]
+  let interleaved = list::fold(other_order, multimap::new(), fn(found, (key, value)) {
+    multimap::insert(found, key, value)
+  })
+  io::println("{forward:?}")
+  io::println("{interleaved:?}")
+  let same = forward == interleaved
+  let together = set::size(set::from_list([forward, interleaved]))
+  io::println("== {same}, distinct when hashed: {together}")
+
+  let reversed = multimap::from_list(list::reverse(pairs))
+  io::println("{reversed:?}")
+  let equal = forward == reversed
+  let apart = set::size(set::from_list([forward, reversed]))
+  io::println("== {equal}, distinct when hashed: {apart}")
+
+  let numbers = multimap::from_list([(9, "nine"), (10, "ten"), (9, "neun"), (100, "hundred")])
+  io::println("{numbers:?}")
+  let empty = multimap::new::<Int, String>()
+  io::println("{empty:?}")
+}

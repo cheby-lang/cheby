@@ -31,11 +31,7 @@ fn unit(unit: UnitKind, functions: Vec<Function>) -> MirModule {
         functions,
         callees: vec![CalleeDecl {
             def: def(1),
-            sig: AbiSig {
-                abi: Abi::Cheby,
-                params: vec![Repr::Value],
-                ret: Repr::Value,
-            },
+            sig: AbiSig::owned(Abi::Cheby, vec![Repr::Value], Repr::Value),
         }],
         layouts: Vec::new(),
         foreign_layouts: Vec::new(),
@@ -89,6 +85,7 @@ fn print(arg: Local) -> Stmt {
             ret: CType::Void,
         },
         args: vec![local(arg)],
+        blocking: false,
     })
 }
 

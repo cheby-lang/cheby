@@ -1,0 +1,6 @@
+error[E0036]: `runtime` must be a table
+ --> tests/ui/13-tooling/manifest/runtime_errors/not_a_table/cheby.toml:3:11
+  |
+3 | runtime = "8MiB"
+  |           ^^^^^^ this is a string
+

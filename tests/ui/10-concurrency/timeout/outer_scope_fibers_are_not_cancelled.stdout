@@ -1,0 +1,4 @@
+the timeout returned Err(TimedOut): True
+the fiber spawned into the outer scope received: Ok(Ok(7))
+the outer scope returned Ok(Nil)
+a send after the timeout: Err(1)

@@ -1,0 +1,41 @@
+# cheby_driver
+
+The build driver: it runs the compiler's phases over a package (spec §13.12). It is the only crate that depends on every compiler crate, and every tool builds on it rather than on the phases directly. `check`, `prepare_run` and `prepare_test` are what `cheby check`, `cheby run` and `cheby test` call, `session` is the driver side of the REPL, and `dump_mir`, `dump_clif` and `bench_build` serve the goldens, the determinism checks and `cargo xtask bench-compile`.
+
+## Place in the pipeline
+
+`cheby_driver` depends on `cheby_diag`, `cheby_syntax`, `cheby_package`, `cheby_resolve`, `cheby_iface`, `cheby_types`, `cheby_mir`, `cheby_codegen_clif`, `cheby_jit`, `cheby_runtime`, `cheby_consteval`, and on the M3 and M4 skeletons `cheby_link` and `cheby_js`. `cheby_cli`, `cheby_repl`, `cheby_lsp` and `cheby_doc` depend on it, as do `xtask`, `bench/gen` and the fuzz targets.
+
+A build runs these steps, each in the crate named:
+
+1. **Phase A:** `cheby_package` reads `cheby.toml` and discovers the modules, and `cheby_syntax` lexes, parses and validates every file. An error here stops the later phases (D-452).
+2. **Front end:** `cheby_resolve` builds the import graph and resolves names, `cheby_types` builds interfaces in import order and checks bodies, independent modules in parallel on rayon's global pool (D-263), then the module-local and whole-package warnings run.
+3. **Back end**, for `run` and `test`: `cheby_mir` lowers the items reachable from `main` or the tests across modules (D-510), the RC passes run over all units, `cheby_codegen_clif` and `cheby_jit` compile one batch, and `cheby_consteval` evaluates the constants the code reaches. Unresolved native symbols (E0053) and constant errors are reported like compile errors before anything runs.
+4. **Running:** `main`, each test or each REPL entry runs as a root fiber of one `cheby_runtime::Runtime` per host run (D-690), with the exit statuses of §10.10 and the leak check of debug builds.
+
+Output is deterministic whatever the number of threads (D-264): results are merged in a fixed order, the first error in build order is reported, and diagnostics are sorted by `SourceMap::sort`. `configure_jobs` sizes the pool for `-j`.
+
+The standard library's sources in `std/` are embedded in the binary by `std_lib.rs` (D-450). A build parses and checks only the std modules its imports reach and the shipped home modules (D-447), and `test_std` runs std's own `test` blocks for `cargo xtask test-std` (D-479, D-599). A std module listed in `STAGED_STD_MODULES` is embedded but not loadable until it moves to `STD_MODULES` (D-486).
+
+## Layout
+
+| Module               | What it holds                                                                                                                                                          |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `lib.rs`             | `load_package`, `check`, `check_with`, `check_syntax`, `prepare_run`, `Program`, `run`, `dump_mir`, `dump_clif`, `bench_build`, `configure_jobs`, `render_diagnostics` |
+| `frontend.rs`        | The build graph and the front-end phases                                                                                                                               |
+| `backend.rs`         | MIR lowering, code generation, constant evaluation and running                                                                                                         |
+| `test.rs`            | `prepare_test`, `TestProgram` and `test_std`: `cheby test` (§13.6, D-541) and std's self-test                                                                          |
+| `session.rs`         | REPL sessions: checking each entry as the module `<repl:N>`, redefinition, `:module` and `:reload` (§13.5, D-606, D-625)                                               |
+| `std_lib.rs`         | The embedded standard library and its catalog                                                                                                                          |
+| `reuse_report.rs`    | `--reuse-report`: where reuse in place happens or not, and why (D-717)                                                                                                 |
+| `lifecycle_tests.rs` | Tests of runtime creation and shutdown per host                                                                                                                        |
+
+## Tests
+
+`tests/golden/` holds the MIR and CLIF dumps of `001_hello_world` and of the packages under `tests/packages/`, which `cargo xtask check-determinism` compares across thread counts and paths. Many tests of the compiler crates build whole packages through this crate, so a change to its public functions is visible across the workspace.
+
+## Read more
+
+- [`docs/plan/architecture.md`](../../docs/plan/architecture.md) §2, the pipeline, §4, driver, cache and processes, and §5, where the standard library lives.
+- [`docs/spec/13-tooling.md`](../../docs/spec/13-tooling.md).
+- [`crates/README.md`](../README.md) for the whole crate graph.

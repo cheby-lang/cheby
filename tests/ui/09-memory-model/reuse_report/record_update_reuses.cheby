@@ -1,0 +1,36 @@
+// @mode: run-pass
+// @milestone: M2
+// @decisions: D-717, D-170, D-716, D-839, D-852
+// @flags: --reuse-report
+//! A record update whose base is not used afterwards reuses the base's
+//! memory when it is unique, as 012's `Shape { ..current, origin: lower }`
+//! does. The update keeps the variant of its base, so the report has a
+//! line for each variant it may build, all at the update. The shape built
+//! in `main` has no dying value of its size to reuse.
+
+import std::io
+
+type Shape {
+  Circle { label: String, origin: Float, radius: Float },
+  Dot { label: String, origin: Float },
+}
+
+const ground: Float = 3.0
+
+fn sink(item: Shape) -> Shape {
+  fn step(current: Shape) {
+    case {
+      current.origin >= ground => current
+      _ => {
+        let lower = current.origin + 1.0
+        step(Shape { ..current, origin: lower })
+      }
+    }
+  }
+  step(item)
+}
+
+fn main() {
+  let landed = sink(Dot { label: "bird", origin: 0.0 })
+  io::println("{landed.label} lands at {landed.origin}")
+}

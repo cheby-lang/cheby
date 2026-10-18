@@ -1,0 +1,14 @@
+// @mode: run-fail
+// @exit: 1
+// @decisions: D-182, D-648
+// @milestone: M2
+//! `main` returning `Err` with a `fiber::Panic` prints, through
+//! `fiber::show`, the two lines the panic would have printed, and exits
+//! with status 1 (§10.10).
+
+import std::fiber
+
+fn main() -> Result<Nil, fiber::Panic> {
+  use _scope <- fiber::scope()
+  panic as "boom"
+}

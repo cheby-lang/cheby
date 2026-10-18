@@ -1,0 +1,25 @@
+//! Builds the same sets of digits in different ways, so `main` only
+//! compares, hashes and prints the sets it gets.
+
+import std::list
+import std::sorted_set
+
+/// The digits, from one list in order.
+pub fn listed() -> sorted_set::SortedSet<Int> {
+  sorted_set::from_list(list::range(0, 10))
+}
+
+/// The same digits, one insert at a time in another order, after twenty
+/// larger numbers were inserted and removed again, so the tree has
+/// another shape.
+pub fn rebuilt() -> sorted_set::SortedSet<Int> {
+  let crowded = list::fold(list::range(0, 30), sorted_set::new(), fn(found, n) {
+    sorted_set::insert(found, n * 7 % 30)
+  })
+  list::fold(list::range(10, 30), crowded, fn(found, n) { sorted_set::remove(found, n) })
+}
+
+/// The digits without 9.
+pub fn shorter() -> sorted_set::SortedSet<Int> {
+  sorted_set::remove(listed(), 9)
+}

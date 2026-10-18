@@ -1,0 +1,3 @@
+fatal error: all fibers are blocked
+  blocked in fiber::scope at tests/ui/10-concurrency/deadlock/tail_called_receive_in_a_spawned_closure.cheby:16:5
+  blocked in channel::receive at tests/ui/10-concurrency/deadlock/tail_called_receive_in_a_spawned_closure.cheby:17:32

@@ -72,7 +72,9 @@ const ROOT_TREE: usize = 8;
 const ROOT_OFFSET: usize = 16;
 const ROOT_LEN: usize = 24;
 /// Size of a root in bytes.
-const ROOT_SIZE: usize = 32;
+pub(super) const ROOT_SIZE: usize = 32;
+/// The most bytes one node takes: a branch, larger than any leaf.
+pub(super) const MAX_NODE_SIZE: usize = BRANCH_SIZE;
 
 /// The byte offset of slot `i` of a leaf or branch.
 const fn slot(i: usize) -> usize {
@@ -200,6 +202,8 @@ static ROOT_KIND: CustomKind = CustomKind {
     equal: Some(root_equal),
     hash: Some(root_hash),
     debug: Some(root_debug),
+    handle: false,
+    finalize: None,
 };
 
 /// The leaf kind: never a value of its own.
@@ -210,6 +214,8 @@ static LEAF_KIND: CustomKind = CustomKind {
     equal: None,
     hash: None,
     debug: None,
+    handle: false,
+    finalize: None,
 };
 
 /// The branch kind: never a value of its own.
@@ -220,6 +226,8 @@ static BRANCH_KIND: CustomKind = CustomKind {
     equal: None,
     hash: None,
     debug: None,
+    handle: false,
+    finalize: None,
 };
 
 /// Registers the three kinds once per process. Every entry point that may

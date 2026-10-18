@@ -1,0 +1,38 @@
+// @mode: run-pass
+// @milestone: M2
+// @decisions: D-337, D-339, D-340, D-343, D-344
+//! An ordered set is an ordered map without values (D-339): it keeps each
+//! element in the order it was first inserted, so it removes repeats from
+//! a list without reordering it. An element inserted again keeps its
+//! place, and one removed and inserted again goes to the end (D-340). Sets
+//! with the same elements in another order are not `==` (D-343).
+
+import std::io
+import std::ordered_set
+import std::string
+
+fn main() {
+  let words = string::split("the cat saw the dog and the cat ran", " ")
+  let seen = ordered_set::from_list(words)
+  io::println("{seen}")
+  let size = ordered_set::size(seen)
+  io::println("distinct words: {size}")
+
+  let again = ordered_set::insert(seen, "the")
+  let unchanged = again == seen
+  io::println("inserting a present word changes nothing: {unchanged}")
+
+  let moved = ordered_set::insert(ordered_set::remove(seen, "the"), "the")
+  io::println("{moved:?}")
+  let same = moved == seen
+  let equal_contents = ordered_set::is_subset(moved, seen) && ordered_set::is_subset(seen, moved)
+  io::println("same order: {same}, same elements: {equal_contents}")
+
+  let animals = ordered_set::from_list(["dog", "bird", "cat"])
+  let both = ordered_set::intersection(seen, animals)
+  let joined = ordered_set::union(seen, animals)
+  let rest = ordered_set::difference(seen, animals)
+  io::println("both: {both}")
+  io::println("joined: {joined}")
+  io::println("rest: {rest}")
+}

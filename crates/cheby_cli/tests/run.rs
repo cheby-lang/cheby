@@ -132,17 +132,18 @@ fn compile_errors_exit_with_one() {
             MANIFEST,
             (
                 "src/main.cheby",
-                "//! Unsupported.\n\nimport std::fiber\nimport std::io\n\nfn main() {\n  io::println(\"never\")\n}\n",
+                "//! Unsupported.\n\nimport std::http\nimport std::io\n\nfn main() {\n  io::println(\"never\")\n}\n",
             ),
         ],
     );
     let out = cheby(&dir, &["run"]);
     assert_eq!(out.stdout, "");
     // MIR lowering reports no E0038 since `dyn` lowers (D-554); an import
-    // of an unshipped std module stays E0038 (D-480).
+    // of an unshipped std module stays E0038 (D-480), and `std::http`
+    // stays unshipped until tier 3 (D-729).
     assert!(
         out.stderr
-            .starts_with("error[E0038]: the module `std::fiber` is not supported yet"),
+            .starts_with("error[E0038]: the module `std::http` is not supported yet"),
         "{}",
         out.stderr
     );
@@ -164,7 +165,7 @@ fn unsupported_constructs_reached_from_main_exit_with_one() {
             ),
             (
                 "src/pick.cheby",
-                "//! Reaches an unshipped module.\n\nimport std::fiber\n\npub fn pick(text: String) -> String {\n  text\n}\n",
+                "//! Reaches an unshipped module.\n\nimport std::http\n\npub fn pick(text: String) -> String {\n  text\n}\n",
             ),
         ],
     );
@@ -175,7 +176,7 @@ fn unsupported_constructs_reached_from_main_exit_with_one() {
     // (D-480).
     assert!(
         out.stderr.starts_with(
-            "error[E0038]: the module `std::fiber` is not supported yet\n --> src/pick.cheby:3:8\n"
+            "error[E0038]: the module `std::http` is not supported yet\n --> src/pick.cheby:3:8\n"
         ),
         "{}",
         out.stderr
@@ -369,6 +370,231 @@ fn later_unreported_stdout_failures_exit_with_one() {
     assert_eq!(status, Some(1), "{stderr}");
 }
 
+/// Runs `cheby <command>` (`run` or `test`) on a package whose root
+/// module is `source`, with standard error a pipe whose reading end is
+/// closed before the program starts (so a write to it fails, D-306) and
+/// `CHEBY_THREADS=4`. Returns the status (`None` if it had to be killed
+/// after 30 s) and standard output.
+#[expect(
+    clippy::unwrap_used,
+    reason = "a test helper: failing to spawn or talk to `cheby` fails the test"
+)]
+fn with_broken_stderr(command: &str, name: &str, source: &str) -> (Option<i32>, String) {
+    use std::io::Read as _;
+    use std::process::Stdio;
+
+    let dir = package(name, &[MANIFEST, ("src/main.cheby", source)]);
+    let mut child = Command::new(CHEBY)
+        .args(["--color=never", command])
+        .current_dir(&dir)
+        .env("NO_COLOR", "1")
+        .env("CHEBY_THREADS", "4")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    drop(child.stderr.take());
+    let mut stdout = child.stdout.take().unwrap();
+    let reader = std::thread::spawn(move || {
+        let mut text = String::new();
+        stdout.read_to_string(&mut text).unwrap();
+        text
+    });
+    let start = std::time::Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status.code();
+        }
+        if start.elapsed() > Duration::from_secs(30) {
+            child.kill().unwrap();
+            child.wait().unwrap();
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    (status, reader.join().unwrap())
+}
+
+/// D-306 and D-709: a detached fiber whose write to standard error fails
+/// while `main` still runs ends the program at once with status 1, and
+/// nothing more is printed: `main`, which waits in `channel::receive` for
+/// good, never prints its last line, and no leak check runs.
+#[test]
+fn a_detached_write_failure_while_main_runs_exits_with_one() {
+    let (status, stdout) = with_broken_stderr(
+        "run",
+        "detached_write_failure",
+        "//! A detached fiber writes to a broken standard error while `main` waits.\n\n\
+         import std::channel\nimport std::fiber\nimport std::io\n\n\
+         fn main() {\n  let (keep, never) = channel::new::<Int>(1)\n  \
+         io::println(\"main waits\")\n  \
+         fiber::spawn_detached(fn() { io::eprintln(\"this line is lost\") })\n  \
+         let got = channel::receive(never)\n  \
+         io::println(\"never printed: {got:?}\")\n  \
+         let _ = channel::send(keep, 0)\n}\n",
+    );
+    assert_eq!(stdout, "main waits\n");
+    assert_eq!(status, Some(1));
+}
+
+/// D-785: a write that fails in a detached fiber after `main` has
+/// returned, once standard output is flushed and the exit status fixed,
+/// leaves that status (0 here) and prints nothing more.
+///
+/// The fiber writes a 4 MiB line to standard error, a pipe this test does
+/// not read, so the write blocks inside the output call once the pipe is
+/// full, where no safepoint or cancellation reaches it. `main` sleeps
+/// 100 ms on a timer, prints its line to standard output and returns, and
+/// the host flushes standard output and fixes the status 0. The exit
+/// then waits for the fiber: a teardown (D-710) or a halt (D-073, D-708)
+/// stops a fiber only at its next safepoint. The test checks that the
+/// process is still waiting 300 ms after `main`'s line, then closes the
+/// pipe, so the blocked write fails after the status was fixed.
+#[test]
+fn a_detached_write_failure_after_main_returned_keeps_the_status() {
+    use std::io::{BufRead as _, BufReader, Read as _};
+    use std::process::Stdio;
+
+    let dir = package(
+        "late_write_failure",
+        &[
+            MANIFEST,
+            (
+                "src/main.cheby",
+                "//! A detached fiber's write to standard error fails after `main` returned.\n\n\
+                 import std::duration\nimport std::fiber\nimport std::io\nimport std::selector\n\
+                 import std::string\n\n\
+                 fn main() {\n  let line = string::repeat(\"x\", 4 * 1024 * 1024)\n  \
+                 fiber::spawn_detached(fn() { io::eprintln(line) })\n  \
+                 selector::new()\n  |> selector::after(_, duration::milliseconds(100), fn() { Nil })\n  \
+                 |> selector::select\n  \
+                 io::println(\"main returns\")\n}\n",
+            ),
+        ],
+    );
+    let mut child = Command::new(CHEBY)
+        .args(["--color=never", "run"])
+        .current_dir(&dir)
+        .env("NO_COLOR", "1")
+        .env("CHEBY_THREADS", "4")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let blocked = child.stderr.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let mut first = String::new();
+    stdout.read_line(&mut first).unwrap();
+    assert_eq!(first, "main returns\n");
+    std::thread::sleep(Duration::from_millis(300));
+    let waiting = child.try_wait().unwrap().is_none();
+    drop(blocked);
+    let start = std::time::Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status.code();
+        }
+        if start.elapsed() > Duration::from_secs(30) {
+            child.kill().unwrap();
+            child.wait().unwrap();
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    let mut rest = String::new();
+    stdout.read_to_string(&mut rest).unwrap();
+    assert!(
+        waiting,
+        "the process exited before its blocked write failed: {status:?}"
+    );
+    assert_eq!(rest, "");
+    assert_eq!(status, Some(0));
+}
+
+/// D-783: a write that fails during `cheby test` stops the run at once.
+/// Nothing more is printed, not the failing test's line, not the next
+/// test's, not the summary, and `cheby test` exits with 1.
+#[test]
+fn a_write_failure_ends_cheby_test_with_one() {
+    let (status, stdout) = with_broken_stderr(
+        "test",
+        "test_write_failure",
+        "//! The second test writes to a broken standard error.\n\n\
+         import std::io\n\n\
+         fn main() {\n  Nil\n}\n\n\
+         test \"first\" {\n  assert 1 + 1 == 2\n}\n\n\
+         test \"writes\" {\n  io::eprintln(\"this line is lost\")\n}\n\n\
+         test \"third\" {\n  io::println(\"never printed\")\n}\n",
+    );
+    assert_eq!(stdout, "test app \"first\" ... ok\n");
+    assert_eq!(status, Some(1));
+}
+
+/// D-711 and D-784: a debug build names the leaked runtime kinds on a line
+/// after D-458's. A `Receiver` whose last reference sits in its own
+/// channel's buffer is a cycle a program can build: the `Sender` goes and
+/// closes the channel, but the buffer keeps `Mail(rx)` until the last
+/// `Receiver` goes (D-670), which never happens. The leak is one
+/// `<Receiver>` and one `Mail`. The bless guard keeps leak lines out of UI
+/// goldens (D-445), so this test pins the line.
+#[cfg(debug_assertions)]
+#[test]
+fn a_leaked_receiver_is_named_after_the_leak_line() {
+    let dir = package(
+        "leaked_kinds",
+        &[
+            MANIFEST,
+            (
+                "src/main.cheby",
+                "//! Leaks a receiver that its own channel's buffer holds.\n\nimport std::channel\n\ntype Mail {\n  Mail(channel::Receiver<Mail>)\n}\n\nfn main() {\n  let (tx, rx) = channel::new(1)\n  let _ = channel::send(tx, Mail(rx))\n  Nil\n}\n",
+            ),
+        ],
+    );
+    let out = cheby(&dir, &["run"]);
+    assert_eq!(out.stdout, "");
+    assert_eq!(
+        out.stderr,
+        "error: leak check failed: 2 objects are still live at exit\n\
+         note: leaked 1 <Receiver>, and 1 object of other kinds\n"
+    );
+    assert_eq!(out.status, Some(102));
+}
+
+/// D-784 in `cheby test`: a passing test that leaks a runtime-kind object
+/// fails with D-458's line followed by the kinds line in its failure
+/// block, counted from the test's own delta (D-711).
+#[cfg(debug_assertions)]
+#[test]
+fn a_test_that_leaks_a_receiver_names_it_in_its_block() {
+    let dir = package(
+        "leaked_kinds_test",
+        &[
+            MANIFEST,
+            (
+                "src/main.cheby",
+                "//! A test leaks a receiver that its own channel's buffer holds.\n\n\
+                 import std::channel\n\n\
+                 type Mail {\n  Mail(channel::Receiver<Mail>)\n}\n\n\
+                 fn main() {\n  Nil\n}\n\n\
+                 test \"leaks a receiver\" {\n  let (tx, rx) = channel::new(1)\n  \
+                 assert channel::send(tx, Mail(rx)) == Ok(Nil)\n}\n",
+            ),
+        ],
+    );
+    let out = cheby(&dir, &["test"]);
+    assert_eq!(
+        out.stdout,
+        "test app \"leaks a receiver\" ... FAILED\n\n\
+         ---- app \"leaks a receiver\" ----\n\
+         error: leak check failed: 2 objects are still live at exit\n\
+         note: leaked 1 <Receiver>, and 1 object of other kinds\n\n\
+         test result: FAILED. 0 passed; 1 failed; 0 filtered out\n"
+    );
+    assert_eq!(out.status, Some(1));
+}
+
 /// A `case` with ten list patterns of about 2,000 elements each, longest
 /// first, compiles and runs: the decision tree recurses per tested
 /// element, and the compiler runs on a thread whose stack is large enough
@@ -424,4 +650,662 @@ fn an_unfinished_repl_entry_is_reported_at_the_end_of_input() {
         out.stderr
     );
     assert_eq!(out.status, Some(0));
+}
+
+/// Runs `cheby` in `dir` with `env` added and `stdin` piped in.
+#[expect(
+    clippy::unwrap_used,
+    reason = "a test helper: failing to spawn `cheby` fails the test"
+)]
+fn cheby_env(dir: &Path, args: &[&str], env: &[(&str, &str)], stdin: Option<&[u8]>) -> RunOutput {
+    let mut cmd = Command::new(CHEBY);
+    cmd.arg("--color=never")
+        .args(args)
+        .current_dir(dir)
+        .env("NO_COLOR", "1")
+        .envs(env.iter().copied());
+    process::run(cmd, stdin, TIMEOUT).unwrap()
+}
+
+/// The `name: N` line of a `CHEBY_RT_STATS=1` run's standard error.
+fn stat(stderr: &str, name: &str) -> Option<u64> {
+    stderr.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix(name)
+            .and_then(|rest| rest.strip_prefix(':'))
+            .and_then(|n| n.trim().parse().ok())
+    })
+}
+
+/// Reuse (D-716) in `std::sorted_map`'s `insert`, which rebuilds the
+/// matched node in nested arms that never use the matched map (gate 6's
+/// ROB6-1): with Perceus a loop of inserts and of replacing inserts counts
+/// reuse hits and allocates far less than naive counting, and both print
+/// the same. Run with poisoning off, so the inline reuse paths run.
+#[test]
+fn sorted_map_inserts_reuse_their_nodes() {
+    let dir = package(
+        "sorted_map_reuse",
+        &[
+            MANIFEST,
+            (
+                "src/main.cheby",
+                "//! Inserts into a sorted map, then replaces every value.\n\
+                 \n\
+                 import std::io\n\
+                 import std::list\n\
+                 import std::sorted_map\n\
+                 \n\
+                 fn main() {\n  \
+                   let keys = list::range(0, 2000)\n  \
+                   let grown = list::fold(keys, sorted_map::new(), fn(m, k) {\n    \
+                     sorted_map::insert(m, k * 7919 % 2000, k)\n  \
+                   })\n  \
+                   let replaced = list::fold(keys, grown, fn(m, k) { sorted_map::insert(m, k, k + 1) })\n  \
+                   let n = sorted_map::size(replaced)\n  \
+                   let total = sorted_map::fold(replaced, 0, fn(acc, _, v) { acc + v })\n  \
+                   io::println(\"{n} {total}\")\n\
+                 }\n",
+            ),
+        ],
+    );
+    let run = |rc: Option<&str>| {
+        let mut cmd = Command::new(CHEBY);
+        cmd.args(["--color=never", "run"])
+            .current_dir(&dir)
+            .env("NO_COLOR", "1")
+            .env("CHEBY_RT_STATS", "1")
+            .env("CHEBY_RT_POISON", "0")
+            .env_remove("CHEBY_DUMP_DIR");
+        match rc {
+            Some(mode) => cmd.env("CHEBY_RC", mode),
+            None => cmd.env_remove("CHEBY_RC"),
+        };
+        let out = process::run(cmd, None, TIMEOUT).unwrap_or_else(|e| panic!("{e:?}"));
+        assert_eq!(out.status, Some(0), "{}", out.stderr);
+        assert_eq!(out.stdout, "2000 2001000\n");
+        let allocations = stat(&out.stderr, "allocations");
+        let hits = stat(&out.stderr, "reuse hits");
+        (allocations.zip(hits), out.stderr)
+    };
+    let (Some((perceus, hits)), stderr) = run(None) else {
+        panic!("no stats lines")
+    };
+    let (Some((naive, naive_hits)), _) = run(Some("naive")) else {
+        panic!("no stats lines")
+    };
+    assert_eq!(naive_hits, 0, "naive counting never reuses");
+    assert!(hits > 0, "no reuse hits:\n{stderr}");
+    assert!(
+        perceus.saturating_mul(4) < naive,
+        "{perceus} allocations against naive's {naive}:\n{stderr}"
+    );
+}
+
+/// A field every variant holds at the same place (D-071) is read without a
+/// test of the variant, so the read proves no layout to reuse (the fix
+/// review's TOK-1): a `Circle` rebuilt as a larger `Rect` in later arms,
+/// and a `Rect` rebuilt as a smaller `Circle` in the read's block. With
+/// poisoning on, a size mismatch would be a fatal error; with it off, the
+/// inline reuse paths run. Both print what naive counting prints.
+#[test]
+fn a_shared_field_read_reuses_no_other_variant() {
+    let widen = package(
+        "shared_field_widen",
+        &[
+            MANIFEST,
+            (
+                "src/main.cheby",
+                "//! A small variant read through a shared field, rebuilt as a large one.\n\
+                 \n\
+                 import std::io\n\
+                 import std::list\n\
+                 \n\
+                 type Shape {\n  \
+                   Rect { name: String, width: Int, height: Int, depth: Int },\n  \
+                   Circle { name: String, radius: Int },\n\
+                 }\n\
+                 \n\
+                 fn widen(s: Shape, k: Int) -> Shape {\n  \
+                   let n = s.name\n  \
+                   case k % 3 {\n    \
+                     0 => Rect { name: n, width: k, height: k + 1, depth: k + 2 }\n    \
+                     1 => Rect { name: n, width: 0, height: 0, depth: k }\n    \
+                     _ => Circle { name: n, radius: k }\n  \
+                   }\n\
+                 }\n\
+                 \n\
+                 fn total(shapes: List<Shape>) -> Int {\n  \
+                   list::fold(shapes, 0, fn(acc, s) {\n    \
+                     case s {\n      \
+                       Circle { radius, .. } => acc + radius\n      \
+                       Rect { width, height, depth, .. } => acc + width + height + depth\n    \
+                     }\n  \
+                   })\n\
+                 }\n\
+                 \n\
+                 fn main() {\n  \
+                   let shapes = list::map(list::range(0, 2000), fn(i) { widen(Circle { name: \"c\", radius: i }, i) })\n  \
+                   let t = total(shapes)\n  \
+                   io::println(\"{t}\")\n\
+                 }\n",
+            ),
+        ],
+    );
+    let rename = package(
+        "shared_field_rename",
+        &[
+            MANIFEST,
+            (
+                "src/main.cheby",
+                "//! A large variant read through a shared field, rebuilt as a small one.\n\
+                 \n\
+                 import std::io\n\
+                 import std::list\n\
+                 \n\
+                 type Shape {\n  \
+                   Circle { name: String, radius: Int },\n  \
+                   Rect { name: String, width: Int, height: Int, depth: Int },\n\
+                 }\n\
+                 \n\
+                 fn rename(s: Shape) -> Shape {\n  \
+                   let n = s.name\n  \
+                   Circle { name: n, radius: 1 }\n\
+                 }\n\
+                 \n\
+                 fn main() {\n  \
+                   let shapes = list::map(list::range(0, 1000), fn(i) {\n    \
+                     case i % 2 {\n      \
+                       0 => Rect { name: \"r\", width: i, height: i, depth: i }\n      \
+                       _ => Circle { name: \"c\", radius: i }\n    \
+                     }\n  \
+                   })\n  \
+                   let renamed = list::map(shapes, rename)\n  \
+                   let total = list::fold(renamed, 0, fn(acc, s) {\n    \
+                     case s {\n      \
+                       Circle { radius, .. } => acc + radius\n      \
+                       Rect { width, .. } => acc + width\n    \
+                     }\n  \
+                   })\n  \
+                   io::println(\"{total}\")\n\
+                 }\n",
+            ),
+        ],
+    );
+    for (dir, expected) in [(&widen, "3333667\n"), (&rename, "1000\n")] {
+        for (rc, poison) in [("perceus", "1"), ("perceus", "0"), ("naive", "1")] {
+            let env = [("CHEBY_RC", rc), ("CHEBY_RT_POISON", poison)];
+            let out = cheby_env(dir, &["run"], &env, None);
+            assert_eq!(
+                (out.status, out.stdout.as_str()),
+                (Some(0), expected),
+                "{} with {rc}, poison {poison}:\n{}",
+                dir.display(),
+                out.stderr
+            );
+        }
+    }
+}
+
+/// D-658: an invalid `CHEBY_THREADS` stops `cheby run` before `main`, and
+/// `cheby test` and the REPL before they start, with the same line and
+/// status 1.
+#[test]
+fn an_invalid_thread_count_stops_run_test_and_repl() {
+    let line = "error: CHEBY_THREADS must be a whole number of at least 1, not \"four\"\n";
+    let env = [("CHEBY_THREADS", "four")];
+    let hello = repo_root().join("docs/examples/001_hello_world");
+    let out = cheby_env(&hello, &["run"], &env, None);
+    assert_eq!(out.stderr, line);
+    assert_eq!(out.stdout, "");
+    assert_eq!(out.status, Some(1));
+    let dir = package(
+        "threads_test",
+        &[
+            MANIFEST,
+            (
+                "src/main.cheby",
+                "//! One test.\n\nfn main() {\n  Nil\n}\n\ntest \"runs\" {\n  assert 1 + 1 == 2\n}\n",
+            ),
+        ],
+    );
+    let out = cheby_env(&dir, &["test"], &env, None);
+    assert_eq!(out.stderr, line);
+    assert_eq!(out.stdout, "");
+    assert_eq!(out.status, Some(1));
+    let out = cheby_env(&dir, &["repl"], &env, Some(b""));
+    assert_eq!(out.stderr, line);
+    assert_eq!(out.status, Some(1));
+    // A valid count runs, including one above the cap.
+    for threads in ["1", "2", "9999"] {
+        let out = cheby_env(&hello, &["run"], &[("CHEBY_THREADS", threads)], None);
+        assert_eq!(out.stdout, "Hello, world!\n", "{threads}");
+        assert_eq!(out.status, Some(0), "{threads}: {}", out.stderr);
+        let out = cheby_env(&dir, &["test"], &[("CHEBY_THREADS", threads)], None);
+        assert_eq!(out.status, Some(0), "{threads}: {}", out.stdout);
+    }
+}
+
+/// D-742: the REPL compiles with the unwind edges `CHEBY_UNWIND_EDGES`
+/// selects, so an invalid value stops it when the session starts, with
+/// the MIR options' error.
+#[test]
+fn an_invalid_unwind_edges_switch_stops_the_repl() {
+    let dir = Path::new(TMP).join(format!("repl-unwind-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let out = cheby_env(
+        &dir,
+        &["repl"],
+        &[("CHEBY_UNWIND_EDGES", "bogus")],
+        Some(b"1 + 1\n"),
+    );
+    std::fs::remove_dir_all(&dir).ok();
+    assert_eq!(
+        out.stderr,
+        "error: CHEBY_UNWIND_EDGES must be off or empty, not \"bogus\"\n"
+    );
+    assert_eq!(out.stdout, "");
+    assert_eq!(out.status, Some(1));
+}
+
+/// The fatal line of a raise in code compiled without unwind edges
+/// (D-770).
+const EDGELESS: &str = "fatal runtime error: an unwinding in code compiled without unwind edges (CHEBY_UNWIND_EDGES=off)\n";
+
+/// D-742: `CHEBY_UNWIND_EDGES=off` compiles without the unwind pass, and a
+/// program that does not panic runs as it does with it.
+#[test]
+fn hello_world_runs_without_unwind_edges() {
+    let out = cheby_env(
+        &repo_root().join("docs/examples/001_hello_world"),
+        &["run"],
+        &[("CHEBY_UNWIND_EDGES", "off")],
+        None,
+    );
+    assert_eq!(out.stderr, "");
+    assert_eq!(out.stdout, "Hello, world!\n");
+    assert_eq!(out.status, Some(0));
+}
+
+/// D-770: a panic in code compiled with
+/// `CHEBY_UNWIND_EDGES=off` flushes standard output, prints its report,
+/// then the fatal line, and ends the process with a nonzero status, never
+/// by a signal: the code has no edges to unwind by.
+#[test]
+fn a_panic_without_unwind_edges_is_fatal_with_its_report() {
+    let dir = package(
+        "edgeless_panic",
+        &[
+            MANIFEST,
+            (
+                "src/main.cheby",
+                "//! Prints, then panics.\n\nimport std::io\n\nfn main() {\n  io::println(\"before\")\n  panic as \"stop here\"\n}\n",
+            ),
+        ],
+    );
+    let out = cheby_env(&dir, &["run"], &[("CHEBY_UNWIND_EDGES", "off")], None);
+    assert_eq!(out.stdout, "before\n", "{}", out.stderr);
+    assert!(
+        out.stderr
+            .starts_with("panicked at src/main.cheby:7:3:\nstop here\n"),
+        "{}",
+        out.stderr
+    );
+    assert!(out.stderr.ends_with(EDGELESS), "{}", out.stderr);
+    assert!(
+        matches!(out.status, Some(code) if code != 0),
+        "{}: {}",
+        out.describe_status(),
+        out.stderr
+    );
+    // With the edges, the same program ends with the panic's status.
+    let out = cheby(&dir, &["run"]);
+    assert_eq!(out.stdout, "before\n");
+    assert!(!out.stderr.contains("fatal"), "{}", out.stderr);
+    assert_eq!(out.status, Some(101), "{}", out.stderr);
+}
+
+/// D-770: constant evaluation carries the setting like
+/// `cheby run`, so under `CHEBY_UNWIND_EDGES=off` `cheby check` of a
+/// package whose constant panics ends with the fatal line and a nonzero
+/// status, never by a signal.
+#[test]
+fn a_panicking_constant_without_unwind_edges_is_fatal() {
+    let dir = package(
+        "edgeless_const",
+        &[
+            MANIFEST,
+            (
+                "src/main.cheby",
+                "//! A constant that panics.\n\nimport std::io\n\nconst ratio: Int = 100 / parts()\n\nfn parts() -> Int {\n  0\n}\n\nfn main() {\n  io::println(\"main ran: {ratio}\")\n}\n",
+            ),
+        ],
+    );
+    let out = cheby_env(&dir, &["check"], &[("CHEBY_UNWIND_EDGES", "off")], None);
+    assert!(out.stderr.contains(EDGELESS), "{}", out.stderr);
+    assert!(
+        matches!(out.status, Some(code) if code != 0),
+        "{}: {}",
+        out.describe_status(),
+        out.stderr
+    );
+    // With the edges, the panic is E0075 at the constant (D-533).
+    let out = cheby(&dir, &["check"]);
+    assert!(
+        out.stderr
+            .starts_with("error[E0075]: evaluating the constant `ratio` panicked\n"),
+        "{}",
+        out.stderr
+    );
+    assert_eq!(out.status, Some(1), "{}", out.stderr);
+}
+
+/// Runs `cheby <command>` (`run` or `test`) on a package whose root
+/// module is `source`, at `CHEBY_THREADS=threads`, with standard input a
+/// pipe that stays open and never gets data. Returns the status (`None` if
+/// it had to be killed after 30 s) and standard output.
+#[expect(
+    clippy::unwrap_used,
+    reason = "a test helper: failing to spawn or talk to `cheby` fails the test"
+)]
+fn with_open_stdin(
+    command: &str,
+    name: &str,
+    source: &str,
+    threads: &str,
+) -> (Option<i32>, String) {
+    use std::io::Read as _;
+    use std::process::Stdio;
+
+    let dir = package(name, &[MANIFEST, ("src/main.cheby", source)]);
+    let mut child = Command::new(CHEBY)
+        .args(["--color=never", command])
+        .current_dir(&dir)
+        .env("NO_COLOR", "1")
+        .env("CHEBY_THREADS", threads)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let stdin = child.stdin.take();
+    let mut stdout = child.stdout.take().unwrap();
+    let reader = std::thread::spawn(move || {
+        let mut text = String::new();
+        stdout.read_to_string(&mut text).unwrap();
+        text
+    });
+    let start = std::time::Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status.code();
+        }
+        if start.elapsed() > Duration::from_secs(30) {
+            child.kill().unwrap();
+            child.wait().unwrap();
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    drop(stdin);
+    (status, reader.join().unwrap())
+}
+
+/// A detached fiber that waits in a scope's close for a scoped child
+/// blocked in `io::read_line`, in `main` and in a test.
+const SCOPED_READER: &str = "//! A detached fiber waits for a scoped child blocked in `io::read_line`.\n\n\
+    import std::channel\nimport std::duration\nimport std::fiber\nimport std::io\n\n\
+    fn leave_a_reader() -> Nil {\n  fiber::spawn_detached(fn() {\n    let _ = {\n      \
+    use owner <- fiber::scope()\n      let _ = fiber::spawn(owner, fn() { io::read_line() })\n      \
+    Nil\n    }\n    Nil\n  })\n  let (keep, never) = channel::new::<Nil>(1)\n  \
+    let _ = fiber::timeout(duration::milliseconds(200), fn() { channel::receive(never) })\n  \
+    let _ = channel::send(keep, Nil)\n  Nil\n}\n\n\
+    fn main() {\n  leave_a_reader()\n  io::println(\"main done\")\n}\n\n\
+    test \"a test leaves a reader\" {\n  leave_a_reader()\n  assert True\n}\n\n\
+    test \"the next test runs\" {\n  assert 1 + 1 == 2\n}\n";
+
+/// D-786 (review finding CONC-W2-1 of gate 2): the teardown skips a
+/// detached fiber that waits for a scoped child blocked in
+/// `io::read_line`, so `cheby run` exits with 0 while standard input stays
+/// open. Before the fix it waited for the read. At every thread count,
+/// one included: the child waits on the blocking pool, which holds no
+/// worker (D-683, D-814).
+#[test]
+fn a_detached_fiber_waiting_for_a_blocked_reader_does_not_hold_up_run() {
+    for threads in ["1", "2", "4"] {
+        let (status, stdout) = with_open_stdin("run", "scoped_reader_run", SCOPED_READER, threads);
+        assert_eq!(status, Some(0), "CHEBY_THREADS={threads}: {stdout}");
+        assert_eq!(stdout, "main done\n", "CHEBY_THREADS={threads}");
+    }
+}
+
+/// D-786, D-782: the same in `cheby test`: the first test's teardown
+/// skips the detached fiber, the next test runs, and `cheby test` exits
+/// with 0 (at every thread count, as above).
+#[test]
+fn a_detached_fiber_waiting_for_a_blocked_reader_does_not_hold_up_test() {
+    for threads in ["1", "2", "4"] {
+        let (status, stdout) =
+            with_open_stdin("test", "scoped_reader_test", SCOPED_READER, threads);
+        assert_eq!(status, Some(0), "CHEBY_THREADS={threads}: {stdout}");
+        assert!(
+            stdout.contains("\"the next test runs\" ... ok"),
+            "CHEBY_THREADS={threads}: {stdout}"
+        );
+    }
+}
+
+/// A detached reader that wakes `main`, then blocks in `io::read_line`.
+const SIGNALLING_READER: &str = "//! A detached reader signals `main`, then blocks in `io::read_line`.\n\n\
+    import std::channel\nimport std::fiber\nimport std::io\n\n\
+    fn reader(ready: channel::Sender<Nil>) -> Nil {\n  \
+    let assert Ok(Nil) = channel::send(ready, Nil)\n  let _ = io::read_line()\n  Nil\n}\n\n\
+    fn main() {\n  let (ready_tx, ready_rx) = channel::new::<Nil>(1)\n  \
+    fiber::spawn_detached(fn() { reader(ready_tx) })\n  \
+    let assert Ok(Nil) = channel::receive(ready_rx)\n  io::println(\"main returns\")\n}\n\n\
+    test \"a test leaves a reader\" {\n  let (ready_tx, ready_rx) = channel::new::<Nil>(1)\n  \
+    fiber::spawn_detached(fn() { reader(ready_tx) })\n  \
+    assert channel::receive(ready_rx) == Ok(Nil)\n}\n\n\
+    test \"the next test runs\" {\n  assert 1 + 1 == 2\n}\n";
+
+/// D-786 (review finding ROB2-1 of gate 2): a fiber that wakes `main` and
+/// then blocks in `io::read_line` leaves `main` running, so `main` prints
+/// and the program exits with 0 while standard input stays open. Before
+/// the fix `main` waited in the blocked worker's runnext slot until the
+/// read returned. The reader now parks on the blocking pool and its worker
+/// runs `main`, at every thread count, one included (D-683); a reader
+/// blocked inline, after a refused pool thread, still hands `main` to
+/// another worker first (D-817).
+#[test]
+fn a_reader_that_wakes_main_then_blocks_hands_main_off() {
+    for threads in ["1", "2", "4"] {
+        let (status, stdout) =
+            with_open_stdin("run", "signalling_reader_run", SIGNALLING_READER, threads);
+        assert_eq!(status, Some(0), "CHEBY_THREADS={threads}: {stdout}");
+        assert_eq!(stdout, "main returns\n", "CHEBY_THREADS={threads}");
+        let (status, stdout) =
+            with_open_stdin("test", "signalling_reader_test", SIGNALLING_READER, threads);
+        assert_eq!(status, Some(0), "CHEBY_THREADS={threads}: {stdout}");
+        assert!(
+            stdout.contains("\"the next test runs\" ... ok"),
+            "CHEBY_THREADS={threads}: {stdout}"
+        );
+    }
+}
+
+/// ROB2-1: in a reader pipeline, a line is echoed as soon as it arrives,
+/// not when the next one does: the reader sends the line over a
+/// capacity-0 channel, which wakes `main` into its worker's runnext slot,
+/// and then waits in `io::read_line` for the next line, parked on the
+/// blocking pool (D-683), at every thread count.
+#[test]
+fn a_reader_pipeline_echoes_each_line_before_the_next_arrives() {
+    use std::io::{BufRead as _, BufReader, Write as _};
+    use std::process::Stdio;
+
+    let dir = package(
+        "reader_pipeline",
+        &[
+            MANIFEST,
+            (
+                "src/main.cheby",
+                "//! A reader fiber sends each line to `main`, which echoes it.\n\n\
+                 import std::channel\nimport std::fiber\nimport std::io\n\n\
+                 fn read_all(lines: channel::Sender<String>) -> Nil {\n  case io::read_line() {\n    \
+                 Ok(Some(line)) => {\n      let assert Ok(Nil) = channel::send(lines, line)\n      \
+                 read_all(lines)\n    }\n    _ => Nil\n  }\n}\n\n\
+                 fn echo(lines: channel::Receiver<String>) -> Nil {\n  case channel::receive(lines) {\n    \
+                 Ok(line) => {\n      io::println(\"echo {line}\")\n      echo(lines)\n    }\n    \
+                 Err(_) => Nil\n  }\n}\n\n\
+                 fn main() {\n  let (lines_tx, lines_rx) = channel::new::<String>(0)\n  let _ = {\n    \
+                 use owner <- fiber::scope()\n    let _ = fiber::spawn(owner, fn() { read_all(lines_tx) })\n    \
+                 echo(lines_rx)\n  }\n  Nil\n}\n",
+            ),
+        ],
+    );
+    for threads in ["1", "2", "4"] {
+        let mut child = Command::new(CHEBY)
+            .args(["--color=never", "run"])
+            .current_dir(&dir)
+            .env("NO_COLOR", "1")
+            .env("CHEBY_THREADS", threads)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        let stdout = BufReader::new(child.stdout.take().unwrap());
+        let (lines, received) = std::sync::mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            for line in stdout.lines() {
+                let Ok(line) = line else { break };
+                if lines.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        let mut echoed = Vec::new();
+        for word in ["one", "two"] {
+            stdin.write_all(format!("{word}\n").as_bytes()).unwrap();
+            stdin.flush().unwrap();
+            // The next line is not sent before this one is echoed.
+            let line = received.recv_timeout(Duration::from_secs(30));
+            echoed.push(line.clone());
+            if line.as_deref() != Ok(&format!("echo {word}")) {
+                child.kill().ok();
+                child.wait().ok();
+                panic!("CHEBY_THREADS={threads}: {word} was not echoed: {echoed:?}");
+            }
+        }
+        drop(stdin);
+        let status = child.wait().unwrap();
+        reader.join().unwrap();
+        assert_eq!(status.code(), Some(0), "CHEBY_THREADS={threads}");
+    }
+}
+
+/// §10.4's example, verbatim: the root fiber still holds the `Sender`, so
+/// its receive can never complete.
+const DEADLOCK_EXAMPLE: &str = "import std::channel\n\n\
+     fn main() {\n  let (tx, rx) = channel::new::<Int>(0)\n  \
+     let assert Ok(n) = channel::receive(rx)\n  let _ = channel::send(tx, n)\n}\n";
+
+/// The report §10.4 gives for [`DEADLOCK_EXAMPLE`] (D-856, D-858).
+const DEADLOCK_EXAMPLE_REPORT: &str =
+    "fatal error: all fibers are blocked\n  blocked in channel::receive at src/main.cheby:5:22\n";
+
+/// Two scoped fibers each wait to receive from the other, and `main` waits
+/// at the end of their scope: both fibers wait at the same call.
+const DEADLOCK_TWO_FIBERS: &str = "//! Two fibers wait on each other.\n\n\
+     import std::channel\nimport std::fiber\n\n\
+     fn main() {\n  let (ping_tx, ping_rx) = channel::new::<Int>(0)\n  \
+     let (pong_tx, pong_rx) = channel::new::<Int>(0)\n  let outcome = {\n    \
+     use owner <- fiber::scope()\n    fiber::spawn(owner, fn() { relay(ping_rx, pong_tx) })\n    \
+     fiber::spawn(owner, fn() { relay(pong_rx, ping_tx) })\n    Nil\n  }\n  let _ = outcome\n}\n\n\
+     fn relay(from: channel::Receiver<Int>, to: channel::Sender<Int>) -> Result<Nil, Int> {\n  \
+     let assert Ok(n) = channel::receive(from)\n  channel::send(to, n + 1)\n}\n";
+
+/// The report of [`DEADLOCK_TWO_FIBERS`]: sorted by location, then by
+/// operation, with equal lines kept (D-858).
+const DEADLOCK_TWO_FIBERS_REPORT: &str = "fatal error: all fibers are blocked\n  \
+     blocked in fiber::scope at src/main.cheby:10:5\n  \
+     blocked in channel::receive at src/main.cheby:19:22\n  \
+     blocked in channel::receive at src/main.cheby:19:22\n";
+
+/// The environments every deadlock test runs its program in: the thread
+/// count inherited, 1, 2 and 4 workers, and 4 workers under D-687's
+/// migration stress. The report is the same in each (D-722, D-858).
+const DEADLOCK_ENVS: [&[(&str, &str)]; 5] = [
+    &[],
+    &[("CHEBY_THREADS", "1")],
+    &[("CHEBY_THREADS", "2")],
+    &[("CHEBY_THREADS", "4")],
+    &[("CHEBY_THREADS", "4"), ("CHEBY_RT_STRESS_MIGRATE", "1")],
+];
+
+/// D-724, D-856, D-858, D-859: §10.4's example, run as a package, writes
+/// exactly the report the spec gives, at `src/main.cheby:5:22`, prints
+/// nothing to standard output and exits with status 103, in every build
+/// (a `--release` run of this test drives a release `cheby`).
+#[test]
+fn deadlock_the_spec_example_exits_with_103() {
+    let dir = package(
+        "deadlock_example",
+        &[MANIFEST, ("src/main.cheby", DEADLOCK_EXAMPLE)],
+    );
+    let out = cheby(&dir, &["run"]);
+    assert_eq!(out.stderr, DEADLOCK_EXAMPLE_REPORT);
+    assert_eq!(out.stdout, "");
+    assert_eq!(out.status, Some(103), "{}", out.describe_status());
+}
+
+/// D-722, D-858: the report is the same at every thread count and under
+/// migration stress.
+#[test]
+fn deadlock_the_spec_example_reports_the_same_at_every_thread_count() {
+    let dir = package(
+        "deadlock_example_threads",
+        &[MANIFEST, ("src/main.cheby", DEADLOCK_EXAMPLE)],
+    );
+    for env in DEADLOCK_ENVS {
+        let out = cheby_env(&dir, &["run"], env, None);
+        assert_eq!(out.stderr, DEADLOCK_EXAMPLE_REPORT, "{env:?}");
+        assert_eq!(out.stdout, "", "{env:?}");
+        assert_eq!(out.status, Some(103), "{env:?}: {}", out.describe_status());
+    }
+}
+
+/// D-858: two fibers blocked at the same call give two equal lines, after
+/// `main`'s at its scope, whichever fiber parked first, at every thread
+/// count and under migration stress.
+#[test]
+fn deadlock_of_two_fibers_is_reported_in_order() {
+    let dir = package(
+        "deadlock_two_fibers",
+        &[MANIFEST, ("src/main.cheby", DEADLOCK_TWO_FIBERS)],
+    );
+    for env in DEADLOCK_ENVS {
+        let out = cheby_env(&dir, &["run"], env, None);
+        assert_eq!(out.stderr, DEADLOCK_TWO_FIBERS_REPORT, "{env:?}");
+        assert_eq!(out.status, Some(103), "{env:?}: {}", out.describe_status());
+    }
+}
+
+/// D-859: `cheby run` halts after a deadlock with nothing unwinding, so no
+/// leak check runs (a debug build would otherwise find the channel and
+/// its handles live, D-458) and no `CHEBY_RT_STATS` report follows, as
+/// after a termination: standard error holds the report and nothing else.
+#[test]
+fn deadlock_is_followed_by_no_leak_line_and_no_stats_report() {
+    let dir = package(
+        "deadlock_no_stats",
+        &[MANIFEST, ("src/main.cheby", DEADLOCK_EXAMPLE)],
+    );
+    for threads in ["1", "2"] {
+        let env = [("CHEBY_RT_STATS", "1"), ("CHEBY_THREADS", threads)];
+        let out = cheby_env(&dir, &["run"], &env, None);
+        assert_eq!(out.stderr, DEADLOCK_EXAMPLE_REPORT, "{env:?}");
+        assert_eq!(out.status, Some(103), "{env:?}: {}", out.describe_status());
+    }
 }

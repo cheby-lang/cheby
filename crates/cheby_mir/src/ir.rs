@@ -12,6 +12,7 @@ use cheby_diag::Span;
 use cheby_iface::{DefId, Ice, Idx, IndexVec, ModuleId, Name, Ty};
 
 use crate::abi::AbiSig;
+use crate::borrow::BorrowMask;
 use crate::layout::LayoutDesc;
 use crate::repr::{ForeignSig, Repr};
 
@@ -56,13 +57,15 @@ pub struct MirModule {
     /// The module's path (`std::io`) for `Code` and `Tests`; empty for
     /// `Entries`.
     pub path: Box<str>,
-    /// In order: items by `DefIndex`, each followed by its closures in
-    /// creation order, then the value shims the unit needs by `DefId`,
+    /// In order: items by `DefIndex`, each followed by its closures and
+    /// continuations in the order they were finished, then the value
+    /// shims the unit needs by `DefId`,
     /// then the tuple dictionary functions by interface function and
     /// arity; entry thunks in the order given.
     pub functions: Vec<Function>,
-    /// Every [`Callee::Direct`] target, own module or not, sorted by
-    /// `DefId`, with its signature from [`crate::abi::abi_sig`]. The
+    /// Every [`Callee::Direct`] and [`Callee::Borrowing`] target, own
+    /// module or not, sorted by `DefId`, with its signature from
+    /// [`crate::abi::abi_sig`] and its borrow mask (D-715). The
     /// validator and codegen take callee signatures from here, so neither
     /// needs the callee's MIR.
     pub callees: Vec<CalleeDecl>,
@@ -119,10 +122,25 @@ impl MirModule {
             .ok_or_else(|| Ice::new(format!("MIR unit has no name for {def:?}")))
     }
 
-    /// The function with key `key`, if this unit defines it.
+    /// The function with key `key`, if this unit defines it. A linear
+    /// search: a pass that looks up many keys builds
+    /// [`MirModule::function_index`] once instead.
     #[must_use]
     pub fn function(&self, key: FnKey) -> Option<&Function> {
         self.functions.iter().find(|f| f.key == key)
+    }
+
+    /// The position in [`MirModule::functions`] of every key the unit
+    /// defines (the first one, for a key defined twice), so that a unit
+    /// with thousands of continuations (D-780) is not searched once per
+    /// call.
+    #[must_use]
+    pub fn function_index(&self) -> rustc_hash::FxHashMap<FnKey, usize> {
+        let mut index = rustc_hash::FxHashMap::default();
+        for (n, f) in self.functions.iter().enumerate() {
+            index.entry(f.key).or_insert(n);
+        }
+        index
     }
 
     /// The layout of a constructor `layout`, from [`MirModule::layouts`]
@@ -278,6 +296,17 @@ pub enum FnKey {
     /// where the function's field depends on `J` (D-524, D-602). Uniform
     /// signature.
     DynForward { iface_fn: DefId, dyn_iface: DefId },
+    /// The rest of a large literal of `owner`'s body, or of the body of a
+    /// closure or continuation of it, split off by lowering (D-780,
+    /// D-811): numbered in creation order within the
+    /// owner, apart from its closures. Cheby ABI with a signature of its
+    /// own ([`Function::sig`]): the partly built value first, then the
+    /// free locals and dictionaries the rest needs, each in its own
+    /// representation; never borrowing (it is not an item, D-715). Called
+    /// only through [`Callee::Code`] from its own unit: the first by the
+    /// function holding the literal, each later one by a tail call of
+    /// the one before.
+    Continuation { owner: DefId, index: u32 },
 }
 
 impl FnKey {
@@ -341,9 +370,58 @@ pub struct Function {
     /// The location the function-entry stack check reports. Set for every
     /// [`Abi::Cheby`] function, `None` for [`Abi::C`].
     pub entry_loc: Option<StrId>,
+    /// The pad the function-entry check unwinds to (D-698); `None` before
+    /// the unwind pass.
+    pub entry_unwind: Option<BlockId>,
+    /// The body was generated with its counts already in place (std
+    /// intrinsics, D-693): the RC pass leaves it alone and the unwind pass
+    /// keeps its edges (D-744).
+    pub precounted: bool,
+    /// The parameters the function borrows (D-715), in [`Function::params`]
+    /// order: part of its signature ([`Function::sig`]).
+    /// [`BorrowMask::OWNED`] from lowering; the borrowing inference sets it
+    /// on top-level functions ([`crate::borrow::apply`]).
+    pub borrow: BorrowMask,
+    /// The source spans of the locals an `alloc` or a call defines, in the
+    /// order lowering recorded them, for `--reuse-report` (D-717): filled
+    /// only when the lowering asked for it
+    /// ([`crate::FunctionBuilder::record_site`],
+    /// [`crate::MirOptions::record_sites`]), empty otherwise. Locals keep
+    /// their numbers through every pass. Code generation and dumps never
+    /// read it, so the code is the same with and without it.
+    pub sites: Vec<(Local, Span)>,
+    /// The location of each call this function makes, by the local the
+    /// call defines, in the order lowering defined them (D-856): the
+    /// start of the call expression, the site of [`Function::sites`]
+    /// (D-852), as an id into [`Function::call_loc_strings`]. Filled by
+    /// lowering for every `Rvalue::Call` it defines with a site in a unit
+    /// outside package `std`, whether or not sites are recorded. Code
+    /// generation tags each such call with its id, and the JIT maps the
+    /// call's return address to the location for a deadlock report. The
+    /// dumps never print it.
+    pub call_locs: Vec<(Local, StrId)>,
+    /// The text of each location of [`Function::call_locs`],
+    /// `path:line:col` (D-449), deduplicated, in first-use order. Kept
+    /// apart from [`Function::strings`], so the static strings code
+    /// generation defines, their ids and the dumps are the same with and
+    /// without it.
+    pub call_loc_strings: IndexVec<StrId, Box<str>>,
 }
 
 impl Function {
+    /// The normal successors of `block` followed by its unwind pads, in
+    /// order (D-698), duplicates included.
+    ///
+    /// # Errors
+    ///
+    /// An [`Ice`] if there is no such block.
+    pub fn successors(&self, block: BlockId) -> Result<Vec<BlockId>, Ice> {
+        let b = self.block(block)?;
+        let mut out = b.term.successors();
+        out.extend(b.unwind.iter().map(|&(_, pad)| pad));
+        Ok(out)
+    }
+
     /// The local `local`.
     ///
     /// # Errors
@@ -391,6 +469,24 @@ pub struct Block {
     pub params: Vec<Local>,
     pub stmts: Vec<Stmt>,
     pub term: Terminator,
+    /// `(i, pad)`: statement `i`, or the terminator when
+    /// `i == stmts.len()`, may start or pass on an unwinding, and control
+    /// then goes to `pad`, where the statement's result is undefined
+    /// (D-698). Sorted by `i`, at most one entry per `i`. Empty until the
+    /// unwind pass.
+    pub unwind: Vec<(u32, BlockId)>,
+}
+
+impl Block {
+    /// The pad of statement `i` (or of the terminator, `i == stmts.len()`).
+    #[must_use]
+    pub fn unwind_target(&self, i: usize) -> Option<BlockId> {
+        let i = u32::try_from(i).ok()?;
+        self.unwind
+            .iter()
+            .find(|&&(at, _)| at == i)
+            .map(|&(_, pad)| pad)
+    }
 }
 
 /// A statement.
@@ -401,14 +497,41 @@ pub enum Stmt {
         value: Rvalue,
     },
     /// A call whose result is `void`: a foreign function returning `Nil`,
-    /// or a runtime helper without a result ([`RuntimeFn::ret`]).
+    /// or a runtime helper without a result ([`RuntimeFn::ret`]); or the
+    /// store of one field of a tuple being filled ([`Rvalue::InitField`]).
     Eval(Rvalue),
     /// One more reference. A no-op at run time for tagged integers and
     /// static objects.
     Dup(Local),
     /// One reference less; frees the object at zero.
     Drop(Local),
+    /// `drop local of layout keep [...]`: a drop specialized by constructor
+    /// (D-716, D-850). `local` is an object of `layout` (a
+    /// [`LayoutRef::Ctor`] with fields or a [`LayoutRef::Tuple`]) that a
+    /// field read pins ([`crate::fuse`]), and `keep` is a non-empty keep
+    /// list ([`Keep`]). It means `dup p` for each kept projection `p`, then
+    /// `drop local`: when `local` is unique, the kept fields' references
+    /// move to their projections, the other value fields are released and
+    /// the block is freed; otherwise each `p` is `dup`'d and `local` gives
+    /// up one reference. Only after reference counting, never in a cleanup
+    /// pad (D-735), never of a reuse token; never unwinds, like `drop`
+    /// (D-171).
+    DropKeep {
+        local: Local,
+        layout: LayoutRef,
+        keep: Keep,
+    },
+    /// Clears the fiber's unwind flag (D-693); only in generated intrinsic
+    /// bodies.
+    ClearUnwind,
 }
+
+/// A keep list (fusion, D-716, D-850): `(i, p)` pairs, each
+/// `p` a counted local defined as `field x.i of layout`, a projection of
+/// the local `x` that a [`Rvalue::DropReuse`] or a specialized drop
+/// releases, with distinct indices `i`, in the order fusion folded them.
+/// Its ownership effect is a `dup p` of each pair before the release.
+pub type Keep = Vec<(u32, Local)>;
 
 /// An operand: a local or a constant.
 #[derive(Clone, PartialEq, Debug)]
@@ -463,6 +586,14 @@ pub enum Const {
     /// The runtime's nominal descriptor of a builtin type,
     /// `cheby_rt_desc_<name>` (D-523).
     BuiltinDesc(BuiltinDesc),
+    /// The running fiber's context as a C pointer: only as the first
+    /// operand of a `CallForeign` of a `@std_context` kernel (D-692), whose
+    /// first C parameter is [`crate::CType::Ptr`]. [`Repr::U64`], never
+    /// counted (D-745).
+    Ctx,
+    /// The runtime's static `Err(Nil)`, `cheby_rt_static_err_nil` (D-693).
+    /// [`Repr::Value`].
+    ErrNil,
 }
 
 /// The builtin types with a runtime nominal descriptor
@@ -545,7 +676,9 @@ impl Const {
             | Self::Code(_)
             | Self::EmptyList
             | Self::Static(_)
-            | Self::BuiltinDesc(_) => Repr::Value,
+            | Self::BuiltinDesc(_)
+            | Self::ErrNil => Repr::Value,
+            Self::Ctx => Repr::U64,
         }
     }
 }
@@ -559,10 +692,19 @@ pub enum Rvalue {
     /// [`Repr::Value`] result.
     Call { callee: Callee, args: Vec<Operand> },
     /// A C-ABI call: borrowed arguments, an owned result (D-187).
+    ///
+    /// With `blocking`, the call of an `@blocking` external (D-042, D-683):
+    /// code generation runs the foreign function on the blocking pool
+    /// through a generated shim and `cheby_rt_blocking_call`, while the
+    /// fiber is parked (D-818). Such a call may always raise
+    /// (a cancellation after it returns), whatever its symbol, and never
+    /// takes the fiber's context ([`Const::Ctx`]): `@std_context` and
+    /// `@blocking` do not go together (D-819).
     CallForeign {
         symbol: Box<str>,
         sig: ForeignSig,
         args: Vec<Operand>,
+        blocking: bool,
     },
     /// A runtime helper, with the ownership [`RuntimeFn`] documents.
     CallRuntime { func: RuntimeFn, args: Vec<Operand> },
@@ -571,6 +713,29 @@ pub enum Rvalue {
     Alloc {
         layout: LayoutRef,
         fields: Vec<Operand>,
+    },
+    /// A new tuple ([`LayoutRef::Tuple`]) whose every field is the static
+    /// `Nil`, a placeholder that holds no reference: the start of a tuple
+    /// literal above [`crate::lower::TUPLE_INIT_THRESHOLD`] fields, which
+    /// [`Rvalue::InitField`] then fills one field at a time (D-720,
+    /// D-810). Dropping it while partly filled releases
+    /// the fields stored so far and nothing for the placeholders, so an
+    /// unwinding in the middle of the literal needs no other cleanup.
+    /// Owned result; may unwind (out of memory), like [`Rvalue::Alloc`].
+    AllocPlaceholder { layout: LayoutRef },
+    /// Stores the owned `value` into field `field` of `obj`, a tuple of
+    /// `layout` that [`Rvalue::AllocPlaceholder`] made in this function, or
+    /// the first parameter of a [`FnKey::Continuation`] that continues the
+    /// same literal (D-780), still holding the placeholder there. `obj` is
+    /// borrowed and keeps its one reference, so no other reference can see
+    /// the store. Only evaluated for effect ([`Stmt::Eval`]); each field
+    /// of an object is stored once. Never unwinds. P2's reuse must not
+    /// treat a tuple being filled as a reuse candidate.
+    InitField {
+        obj: Local,
+        layout: LayoutRef,
+        field: u32,
+        value: Operand,
     },
     /// Field `field` (declaration order) of `base`, which is borrowed. A
     /// [`Repr::Value`] result is borrowed from the base, so the RC pass
@@ -639,6 +804,45 @@ pub enum Rvalue {
     /// value of an ADT with more than one constructor, as an
     /// [`Repr::Int`], without embedding a user layout id (D-454, D-522).
     ReadTag { base: Operand, ty: TagType },
+    /// `drop_reuse local of layout` (D-716): gives up the owned `local`,
+    /// an object of `layout` (a [`LayoutRef::Ctor`] or
+    /// [`LayoutRef::Tuple`]), and yields a reuse token. When `local` is
+    /// unique (a heap object of count exactly 1), its value fields are
+    /// released and zeroed and the token is the object itself, a childless
+    /// object of count 1 whose header still says `layout`; otherwise one
+    /// reference is given up as [`Stmt::Drop`] does, and the token is 0.
+    /// A shared (negative count) or static (count 0) object is never
+    /// unique. The token is an owned [`Repr::Value`] local that only an
+    /// [`Rvalue::AllocReuse`] consumes or a [`Stmt::Drop`] releases (a
+    /// `drop` of 0 does nothing), also in cleanup pads. Only after
+    /// reference counting; never unwinds, like `drop` (D-171, D-838).
+    ///
+    /// `keep` (fusion, [`crate::fuse`]): `(i, p)` pairs, each `p` a
+    /// `field local.i of layout` projection (Perceus's keep list,
+    /// D-850). It means `dup p` for each pair, then the
+    /// `drop_reuse`: on a hit field `i`'s reference moves to `p` instead
+    /// of being released, and on a miss each `p` gets its `dup`. Empty
+    /// unless fusion folded `dup`s into it; see [`Keep`].
+    DropReuse {
+        local: Local,
+        layout: LayoutRef,
+        keep: Keep,
+    },
+    /// `alloc_reuse token, layout(fields)` (D-716): a new object of
+    /// `layout` with owned `fields`, as [`Rvalue::Alloc`] makes one, in
+    /// the block of a nonzero `token` (its header and fields are
+    /// overwritten, and nothing is charged, since the block was), or
+    /// allocated as `alloc` does when `token` is 0, with `alloc`'s unwind
+    /// edge. Consumes the token. The token's [`Rvalue::DropReuse`] layout
+    /// and `layout` have the same object size
+    /// ([`crate::layout::object_size`]); both are a
+    /// [`LayoutRef::Ctor`] or a [`LayoutRef::Tuple`]. Only after reference
+    /// counting (D-838).
+    AllocReuse {
+        token: Local,
+        layout: LayoutRef,
+        fields: Vec<Operand>,
+    },
 }
 
 /// Bitwise operators ([`Rvalue::Bitwise`]).
@@ -690,6 +894,26 @@ fn operand_uses(ops: &[Operand], kind: UseKind, out: &mut Vec<(Local, UseKind)>)
     out.extend(ops.iter().filter_map(Operand::local).map(|l| (l, kind)));
 }
 
+/// The uses of a Cheby call's callee and arguments: an indirect callee is
+/// owned, an argument is borrowed where a [`Callee::Borrowing`] mask says
+/// so (D-715) and owned otherwise.
+fn call_uses(callee: &Callee, args: &[Operand], out: &mut Vec<(Local, UseKind)>) {
+    if let Callee::Indirect(f) = callee {
+        out.push((*f, UseKind::Owned));
+    }
+    let mask = callee.borrow_mask();
+    for (n, arg) in args.iter().enumerate() {
+        if let Some(l) = arg.local() {
+            let kind = if mask.is_borrowed(n) {
+                UseKind::Borrowed
+            } else {
+                UseKind::Owned
+            };
+            out.push((l, kind));
+        }
+    }
+}
+
 impl Rvalue {
     /// The locals the rvalue reads, in operand order, with how it uses
     /// them. A local may appear more than once.
@@ -698,12 +922,7 @@ impl Rvalue {
         let mut out = Vec::new();
         match self {
             Self::Use(op) => operand_uses(std::slice::from_ref(op), UseKind::Owned, &mut out),
-            Self::Call { callee, args } => {
-                if let Callee::Indirect(f) = callee {
-                    out.push((*f, UseKind::Owned));
-                }
-                operand_uses(args, UseKind::Owned, &mut out);
-            }
+            Self::Call { callee, args } => call_uses(callee, args, &mut out),
             Self::CallForeign { args, .. } => operand_uses(args, UseKind::Borrowed, &mut out),
             Self::CallRuntime { func, args } => {
                 let params = func.params();
@@ -715,10 +934,19 @@ impl Rvalue {
                 }
             }
             Self::Alloc { fields, .. } => operand_uses(fields, UseKind::Owned, &mut out),
+            Self::DropReuse { local, .. } => out.push((*local, UseKind::Owned)),
+            Self::AllocReuse { token, fields, .. } => {
+                out.push((*token, UseKind::Owned));
+                operand_uses(fields, UseKind::Owned, &mut out);
+            }
+            Self::InitField { obj, value, .. } => {
+                out.push((*obj, UseKind::Borrowed));
+                operand_uses(std::slice::from_ref(value), UseKind::Owned, &mut out);
+            }
             Self::Field { base, .. } | Self::ReadLayout { base } => {
                 out.push((*base, UseKind::Borrowed));
             }
-            Self::LoadConst(_) => {}
+            Self::LoadConst(_) | Self::AllocPlaceholder { .. } => {}
             Self::Box { value, .. }
             | Self::Unbox { value, .. }
             | Self::FloatNeg { value, .. }
@@ -757,8 +985,16 @@ impl Rvalue {
             }
             Self::CallForeign { args, .. } | Self::CallRuntime { args, .. } => args.clone(),
             Self::Alloc { fields, .. } => fields.clone(),
+            Self::DropReuse { local, .. } => vec![Operand::Local(*local)],
+            Self::AllocReuse { token, fields, .. } => {
+                let mut out = Vec::with_capacity(fields.len().saturating_add(1));
+                out.push(Operand::Local(*token));
+                out.extend(fields.iter().cloned());
+                out
+            }
+            Self::InitField { obj, value, .. } => vec![Operand::Local(*obj), value.clone()],
             Self::Field { base, .. } | Self::ReadLayout { base } => vec![Operand::Local(*base)],
-            Self::LoadConst(_) => Vec::new(),
+            Self::LoadConst(_) | Self::AllocPlaceholder { .. } => Vec::new(),
             Self::Checked { lhs, rhs, .. }
             | Self::Compare { lhs, rhs, .. }
             | Self::FloatArith { lhs, rhs, .. }
@@ -772,6 +1008,30 @@ impl Rvalue {
     pub const fn result_is_borrowed(&self) -> bool {
         matches!(self, Self::Field { .. } | Self::LoadConst(_))
     }
+
+    /// The keep list of a [`Rvalue::DropReuse`] ([`Keep`]); empty for every
+    /// other rvalue. Its locals are not in [`Rvalue::uses`]: each gets one
+    /// reference, as a `dup` does, before the release.
+    #[must_use]
+    pub fn kept(&self) -> &[(u32, Local)] {
+        match self {
+            Self::DropReuse { keep, .. } => keep,
+            _ => &[],
+        }
+    }
+}
+
+impl Stmt {
+    /// The keep list of the statement: a `drop_reuse`'s or a specialized
+    /// drop's ([`Keep`]); empty otherwise.
+    #[must_use]
+    pub fn kept(&self) -> &[(u32, Local)] {
+        match self {
+            Self::Assign { value, .. } | Self::Eval(value) => value.kept(),
+            Self::DropKeep { keep, .. } => keep,
+            Self::Dup(_) | Self::Drop(_) | Self::ClearUnwind => &[],
+        }
+    }
 }
 
 /// What a Cheby-ABI call calls.
@@ -779,8 +1039,17 @@ impl Rvalue {
 pub enum Callee {
     /// A top-level Cheby function, always through its indirection slot
     /// (D-043), even in the same module. Its signature is in
-    /// [`MirModule::callees`].
+    /// [`MirModule::callees`]. Every argument is owned.
     Direct(DefId),
+    /// [`Callee::Direct`] of a function that borrows the parameters its
+    /// mask names (D-715): the call passes those arguments without giving
+    /// up a reference ([`UseKind::Borrowed`]), and the caller keeps and
+    /// later releases them. The mask is never [`BorrowMask::OWNED`] and
+    /// equals the one in the callee's [`CalleeDecl`], which is part of its
+    /// ABI signature and slot key (D-456). The borrowing inference writes
+    /// it after lowering ([`crate::borrow::apply`]); lowering writes only
+    /// `Direct`.
+    Borrowing(DefId, BorrowMask),
     /// A function by key that is not called through a slot: a shim or
     /// closure body of this unit, or a constant initializer or test body
     /// (from an entry thunk).
@@ -789,13 +1058,39 @@ pub enum Callee {
     Indirect(Local),
 }
 
+impl Callee {
+    /// The top-level function a [`Callee::Direct`] or [`Callee::Borrowing`]
+    /// calls through its slot.
+    #[must_use]
+    pub const fn direct(&self) -> Option<DefId> {
+        match self {
+            Self::Direct(def) | Self::Borrowing(def, _) => Some(*def),
+            Self::Code(_) | Self::Indirect(_) => None,
+        }
+    }
+
+    /// Which arguments the call borrows (D-715): a
+    /// [`Callee::Borrowing`]'s mask, [`BorrowMask::OWNED`] otherwise.
+    #[must_use]
+    pub const fn borrow_mask(&self) -> BorrowMask {
+        match self {
+            Self::Borrowing(_, mask) => *mask,
+            Self::Direct(_) | Self::Code(_) | Self::Indirect(_) => BorrowMask::OWNED,
+        }
+    }
+}
+
 /// How a block ends.
 #[derive(Clone, PartialEq, Debug)]
 pub enum Terminator {
     /// Returns an owned value.
     Return(Operand),
     /// A Cheby-to-Cheby tail call (D-015): Cranelift `return_call` or
-    /// `return_call_indirect`. Owned arguments.
+    /// `return_call_indirect`. Owned arguments, except the positions a
+    /// [`Callee::Borrowing`] borrows, which receive a constant, the
+    /// caller's own borrowed parameter or a borrowed projection of one
+    /// (D-715): the caller's frame is gone after the jump, so it holds
+    /// nothing there.
     TailCall {
         callee: Callee,
         args: Vec<Operand>,
@@ -819,14 +1114,17 @@ pub enum Terminator {
         cases: Vec<(u64, BlockId)>,
         default: Option<BlockId>,
     },
-    /// Panics at `loc`, with an optional borrowed `String` message. Live
-    /// locals leak in M1 (no unwinding, D-077 in M2).
+    /// Panics at `loc`, with an optional borrowed `String` message. The
+    /// unwind pass gives it an edge to the pad that releases the live
+    /// locals (D-698); without the pass they leak, as in M1.
     Panic {
         kind: PanicKind,
         message: Option<Operand>,
         loc: StrId,
     },
     Unreachable,
+    /// Leaves the function while unwinding (D-698).
+    Resume,
 }
 
 impl Terminator {
@@ -836,12 +1134,7 @@ impl Terminator {
         let mut out = Vec::new();
         match self {
             Self::Return(op) => operand_uses(std::slice::from_ref(op), UseKind::Owned, &mut out),
-            Self::TailCall { callee, args } => {
-                if let Callee::Indirect(f) = callee {
-                    out.push((*f, UseKind::Owned));
-                }
-                operand_uses(args, UseKind::Owned, &mut out);
-            }
+            Self::TailCall { callee, args } => call_uses(callee, args, &mut out),
             Self::Goto { args, .. } => operand_uses(args, UseKind::Owned, &mut out),
             Self::Branch { cond, .. } => {
                 operand_uses(std::slice::from_ref(cond), UseKind::Borrowed, &mut out);
@@ -854,18 +1147,21 @@ impl Terminator {
                     operand_uses(std::slice::from_ref(m), UseKind::Borrowed, &mut out);
                 }
             }
-            Self::Unreachable => {}
+            Self::Unreachable | Self::Resume => {}
         }
         out
     }
 
-    /// The successor blocks, in order, duplicates included.
+    /// The normal successor blocks, in order, duplicates included. Unwind
+    /// pads are the block's ([`Function::successors`]).
     #[must_use]
     pub fn successors(&self) -> Vec<BlockId> {
         match self {
-            Self::Return(_) | Self::TailCall { .. } | Self::Panic { .. } | Self::Unreachable => {
-                Vec::new()
-            }
+            Self::Return(_)
+            | Self::TailCall { .. }
+            | Self::Panic { .. }
+            | Self::Unreachable
+            | Self::Resume => Vec::new(),
             Self::Goto { target, .. } => vec![*target],
             Self::Branch { then_, else_, .. } => vec![*then_, *else_],
             Self::Switch { cases, default, .. } => cases
@@ -884,7 +1180,11 @@ impl Terminator {
             }
         };
         match self {
-            Self::Return(_) | Self::TailCall { .. } | Self::Panic { .. } | Self::Unreachable => {}
+            Self::Return(_)
+            | Self::TailCall { .. }
+            | Self::Panic { .. }
+            | Self::Unreachable
+            | Self::Resume => {}
             Self::Goto { target, .. } => swap(target),
             Self::Branch { then_, else_, .. } => {
                 swap(then_);
@@ -1010,11 +1310,19 @@ pub enum RuntimeFn {
     /// the running entry evaluates a constant (plan §7.4); a no-op
     /// otherwise. Evaluated for effect ([`Stmt::Eval`]).
     EffectCheck,
+    /// `(timed: Bool, seconds: Int, nanoseconds: Int) -> Scope`: opens a
+    /// scope (D-693). Result owned. May raise only out of memory, before
+    /// anything is open.
+    ScopeOpen,
+    /// `(scope: Value owned, unwound: Bool) -> Bool`: waits for the
+    /// scope's fibers, closes it and decides (D-693, D-666). Consumes the
+    /// scope even when it raises (D-698).
+    ScopeClose,
 }
 
 impl RuntimeFn {
     /// Every helper, in declaration order.
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 14] = [
         Self::StrWithCapacity,
         Self::StrAppend,
         Self::StrEq,
@@ -1027,13 +1335,23 @@ impl RuntimeFn {
         Self::Equal,
         Self::Debug,
         Self::EffectCheck,
+        Self::ScopeOpen,
+        Self::ScopeClose,
     ];
+
+    /// Whether a call of the helper may start or pass on an unwinding
+    /// (D-698): false for `StrEq`, `ListLength` and `ListGet`, true for
+    /// every other helper.
+    #[must_use]
+    pub const fn may_unwind(self) -> bool {
+        !matches!(self, Self::StrEq | Self::ListLength | Self::ListGet)
+    }
 
     /// The parameters: each one's representation and whether the helper
     /// consumes it ([`UseKind::Owned`]) or only reads it.
     #[must_use]
     pub const fn params(self) -> &'static [(Repr, UseKind)] {
-        use Repr::{Int, Value};
+        use Repr::{Bool, Int, Value};
         use UseKind::{Borrowed, Owned};
         match self {
             Self::StrWithCapacity => &[(Int, Borrowed)],
@@ -1045,6 +1363,8 @@ impl RuntimeFn {
             Self::ListGet => &[(Value, Borrowed), (Int, Borrowed)],
             Self::ListSlice => &[(Value, Borrowed), (Int, Borrowed), (Int, Borrowed)],
             Self::ListSliceOwned => &[(Value, Owned), (Int, Borrowed), (Int, Borrowed)],
+            Self::ScopeOpen => &[(Bool, Borrowed), (Int, Borrowed), (Int, Borrowed)],
+            Self::ScopeClose => &[(Value, Owned), (Bool, Borrowed)],
         }
     }
 
@@ -1060,8 +1380,9 @@ impl RuntimeFn {
             | Self::ListGet
             | Self::ListSlice
             | Self::ListSliceOwned
-            | Self::Debug => Some(Repr::Value),
-            Self::StrEq | Self::Equal => Some(Repr::Bool),
+            | Self::Debug
+            | Self::ScopeOpen => Some(Repr::Value),
+            Self::StrEq | Self::Equal | Self::ScopeClose => Some(Repr::Bool),
             Self::ListLength => Some(Repr::Int),
             Self::EffectCheck => None,
         }
@@ -1083,6 +1404,8 @@ impl RuntimeFn {
             Self::Equal => "equal",
             Self::Debug => "debug",
             Self::EffectCheck => "effect_check",
+            Self::ScopeOpen => "scope_open",
+            Self::ScopeClose => "scope_close",
         }
     }
 }

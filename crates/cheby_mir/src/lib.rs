@@ -11,30 +11,63 @@
 //!   lowering reports no diagnostics (D-554); its only error is an
 //!   internal one.
 //! - [`rc`]: naive dup/drop placement by the last-use rule (D7, D-205).
+//! - [`unwind`]: unwind edges to shared cleanup pads, after counting
+//!   (D-698), with the ownership simulation it shares with the validator;
+//!   [`never_raise`]: the std kernels whose calls get no edge (D-767).
+//! - [`reuse`]: pairs drops with allocations of the same size so a
+//!   unique object's block is reused (D-716), after counting.
+//! - [`fuse`]: dup and drop fusion, keep lists and drops specialized by
+//!   constructor (D-716), after reuse; [`const_prop`]: static constant
+//!   locals become operands before counting (D-454). Both under Perceus
+//!   only ([`MirOptions::fuses`]).
 //! - [`validate`] and [`dump`]: the validator and the stable text form.
+//! - [`stats`]: static counts for reports (D-759).
 
 pub mod abi;
+pub mod borrow;
+#[cfg(test)]
+mod borrow_tests;
 pub mod builder;
+#[cfg(test)]
+mod call_locs_tests;
+pub mod const_prop;
 mod defs;
 pub mod dump;
+pub mod fuse;
+#[cfg(test)]
+mod fuse_tests;
 #[cfg(test)]
 mod golden_tests;
 pub mod ir;
+pub mod kernels_in_place;
 pub mod layout;
 mod liveness;
 pub mod lower;
 #[cfg(test)]
 mod lower_tests;
+pub mod never_raise;
+pub mod options;
+mod ownership;
 pub mod rc;
 pub mod reach;
 pub mod repr;
+pub mod reuse;
+#[cfg(test)]
+mod reuse_tests;
+pub mod stats;
 #[cfg(test)]
 mod test_support;
 #[cfg(test)]
 mod tests;
+pub mod unwind;
+#[cfg(test)]
+mod unwind_ir_tests;
+#[cfg(test)]
+mod unwind_tests;
 pub mod validate;
 #[cfg(test)]
 mod validate_tests;
+pub mod waits;
 
 pub use abi::{AbiSig, abi_sig, entry_sig, fixed_sig, is_uniform_sig, trampoline_sig, uniform_sig};
 pub use builder::FunctionBuilder;
@@ -51,22 +84,21 @@ pub use layout::{FieldDesc, LayoutDesc, ctor_layout, type_key, type_layouts};
 pub use lower::{
     EntryRequest, LowerCx, lower_entries, lower_fn, lower_items, lower_module, lower_tests,
 };
+pub use options::{MirOptions, RcMode, check_lowered, count_and_check_with, count_lowered_with};
 pub use reach::{Program, Reach, Root, reachable};
 pub use repr::{CType, ForeignSig, Repr, ctype_of, foreign_sig, repr_of};
 pub use validate::{Stage, validate};
 
-/// Validates a freshly lowered unit, inserts reference counts, and
-/// validates again with the ownership check: the pipeline every unit goes
-/// through before codegen.
+/// Validates a freshly lowered unit, inserts reference counts and the
+/// unwind edges (D-698), and validates again with the ownership and
+/// unwinding checks: the pipeline every unit goes through before codegen.
+/// [`count_and_check_with`] with the default options. A unit counted on
+/// its own is never inferred, so it borrows only what
+/// [`borrow::apply`] wrote into it (D-715, D-779).
 ///
 /// # Errors
 ///
 /// An [`Ice`](cheby_iface::Ice) listing the validator's findings.
 pub fn count_and_check(module: &mut MirModule) -> Result<(), cheby_iface::Ice> {
-    let report = |stage: &str, errors: Vec<String>| {
-        cheby_iface::Ice::new(format!("invalid MIR {stage}:\n  {}", errors.join("\n  ")))
-    };
-    validate(module, Stage::Lowered).map_err(|e| report("after lowering", e))?;
-    rc::insert_module(module)?;
-    validate(module, Stage::Counted).map_err(|e| report("after reference counting", e))
+    count_and_check_with(module, &MirOptions::default())
 }

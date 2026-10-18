@@ -8,89 +8,275 @@
 //! requested, so the peak never passes the limit. Every buffer here grows
 //! through [`grow`], which
 //!
-//! - adds the new capacity to the bytes of scratch live on this thread and
-//!   checks the sum, with the domain's live bytes, against the budget
-//!   ([`crate::entry::check_budget`]) before it asks the system, and
+//! - adds the new capacity to the bytes of scratch live in the running
+//!   fiber and checks the sum, with the domain's live bytes, against the
+//!   budget ([`crate::entry::check_budget`]) before it asks the system,
+//!   and
 //! - asks with `try_reserve_exact`, so a request the system refuses ends
 //!   as [`super::out_of_memory`] says, never with an abort.
 //!
-//! The scratch of an entry lives on the entry's own thread, so the count
-//! is per thread. A buffer gives its bytes back when it is dropped; an
-//! abandoned entry parks its thread, so its count is never read again.
+//! The count is the running fiber's, kept in its control block (D-685); on
+//! a thread that runs no fiber it is the thread's, kept in `tls.rs`'s host
+//! slot. A buffer gives its bytes back when it is dropped; an abandoned
+//! entry never runs again, so its count is never read again.
 //!
 //! Kernels whose temporary is the size of their result write the result
 //! object straight away instead, and need no scratch.
+//!
+//! One walk is exempt (D-765): the one `rc::dup_slow` runs when a local
+//! count overflows, which `cheby_rt_dup` cannot let raise (it has no unwind
+//! edge). Its buffer ([`ScratchVec::unbudgeted`]) is neither charged nor
+//! checked against the budget, and a request the system refuses ends the
+//! process with the buffer's own fatal message instead of a panic.
 
-use std::cell::Cell;
 use std::collections::TryReserveError;
 use std::fmt;
 use std::ops::{Deref, DerefMut};
+use std::sync::atomic::Ordering;
 
-thread_local! {
-    /// The bytes of scratch capacity live on this thread.
-    static LIVE: Cell<u64> = const { Cell::new(0) };
-    /// The most bytes of scratch live on this thread since
-    /// [`reset_peak`], for tests that compare the memory a walk asks the
-    /// system for with what it accounts for.
-    static PEAK: Cell<u64> = const { Cell::new(0) };
-}
+use crate::ctx::ExecCtx;
+use crate::tls;
 
-/// The bytes of scratch capacity live on this thread, which the memory
-/// budget adds to the domain's live bytes.
+/// The bytes of scratch capacity live in the running fiber, or on this
+/// thread when it runs none. The memory budget adds the fiber's to the
+/// domain's live bytes ([`crate::entry::check_budget`]).
+#[cfg(test)]
 pub(crate) fn live() -> u64 {
-    LIVE.try_with(Cell::get).unwrap_or(0)
+    match super::current_fiber() {
+        Some(ctx) => ctx.scratch().0.load(Ordering::Relaxed),
+        None => tls::with_host(|host| host.scratch_live.get()).unwrap_or(0),
+    }
 }
 
-/// The most bytes of scratch live on this thread since [`reset_peak`].
+/// The most bytes of scratch live since [`reset_peak`], for tests that
+/// compare the memory a walk asks the system for with what it accounts
+/// for.
 #[cfg(test)]
 pub(crate) fn peak() -> u64 {
-    PEAK.try_with(Cell::get).unwrap_or(0)
+    match super::current_fiber() {
+        Some(ctx) => ctx.scratch().1.load(Ordering::Relaxed),
+        None => tls::with_host(|host| host.scratch_peak.get()).unwrap_or(0),
+    }
 }
 
 /// Restarts the peak at the scratch live now.
 #[cfg(test)]
 pub(crate) fn reset_peak() {
-    PEAK.try_with(|peak| peak.set(live())).ok();
+    let now = live();
+    match super::current_fiber() {
+        Some(ctx) => ctx.scratch().1.store(now, Ordering::Relaxed),
+        None => {
+            tls::with_host(|host| host.scratch_peak.set(now));
+        }
+    }
 }
 
-/// Moves this thread's count of live scratch from `old` to `new` bytes.
-fn recharge(old: u64, new: u64) {
-    LIVE.try_with(|live| {
-        let now = live.get().saturating_sub(old).saturating_add(new);
-        live.set(now);
-        PEAK.try_with(|peak| peak.set(peak.get().max(now))).ok();
-    })
-    .ok();
+/// Whose scratch count a buffer charges: found once, when the buffer first
+/// grows, so a buffer reads `tls.rs` once in its life rather than at every
+/// growth and again when it is dropped (GATE1-1: each accessor is a call
+/// that is never inlined, D-686).
+#[derive(Clone, Copy, Debug)]
+enum Owner {
+    /// The buffer has not grown yet and charges nothing.
+    None,
+    /// The control block of the fiber the buffer was grown on. A buffer
+    /// lives in that fiber's frames, which run only on that fiber, so the
+    /// block stays the right one, and live, even when the fiber moves to
+    /// another thread: it is the fiber's own, not the thread's.
+    /// It is read from `tls.rs` once and may be kept across a switch (a
+    /// debug hook that parks): D-686's rule covers thread state, not a
+    /// fiber's own control block (D-739).
+    Fiber(*const ExecCtx),
+    /// A thread that runs no fiber: its host slot.
+    Host,
+}
+
+/// How a buffer's growth is accounted for.
+#[derive(Clone, Copy, Debug)]
+enum Budget {
+    /// Charged to its owner's scratch and checked against the memory
+    /// budget; a refused request raises `out of memory`.
+    Charged,
+    /// Neither charged nor checked (D-765); a refused request ends the
+    /// process with this message.
+    Exempt(&'static str),
+}
+
+/// The bytes a buffer is charged with, and to whom. Dropping it gives the
+/// bytes back.
+#[derive(Debug)]
+struct Charge {
+    bytes: u64,
+    owner: Owner,
+    budget: Budget,
+}
+
+impl Charge {
+    /// Nothing charged yet.
+    const fn new() -> Self {
+        Self {
+            bytes: 0,
+            owner: Owner::None,
+            budget: Budget::Charged,
+        }
+    }
+
+    /// A charge that never charges anything (D-765): a refused request
+    /// ends the process with `refusal`.
+    const fn exempt(refusal: &'static str) -> Self {
+        Self {
+            bytes: 0,
+            owner: Owner::None,
+            budget: Budget::Exempt(refusal),
+        }
+    }
+
+    /// The fiber the buffer charges, `None` on a host thread; found on the
+    /// first call.
+    fn fiber<'a>(&mut self) -> Option<&'a ExecCtx> {
+        let ctx: Option<&'a ExecCtx> = match self.owner {
+            Owner::None => {
+                let ctx = super::current_fiber();
+                self.owner = ctx.map_or(Owner::Host, |ctx| Owner::Fiber(ctx));
+                return ctx;
+            }
+            // SAFETY: the control block of the fiber this buffer was grown
+            // on, which runs the code that owns the buffer (see `Owner`).
+            Owner::Fiber(ctx) => Some(unsafe { &*ctx }),
+            Owner::Host => None,
+        };
+        ctx
+    }
+
+    /// Moves the owner's count of live scratch from the bytes charged now
+    /// to `new` bytes.
+    fn recharge(&mut self, new: u64) {
+        let old = self.bytes;
+        let next = |live: u64| live.saturating_sub(old).saturating_add(new);
+        match self.fiber() {
+            Some(ctx) => {
+                // Only the owning fiber writes its counts.
+                let (live, peak) = ctx.scratch();
+                let now = next(live.load(Ordering::Relaxed));
+                live.store(now, Ordering::Relaxed);
+                peak.fetch_max(now, Ordering::Relaxed);
+            }
+            None => {
+                tls::with_host(|host| {
+                    let now = next(host.scratch_live.get());
+                    host.scratch_live.set(now);
+                    host.scratch_peak.set(host.scratch_peak.get().max(now));
+                });
+            }
+        }
+        self.bytes = new;
+    }
+}
+
+impl Drop for Charge {
+    fn drop(&mut self) {
+        if self.bytes != 0 {
+            self.recharge(0);
+        }
+    }
 }
 
 /// Grows a buffer of `cap` items of `item` bytes, holding `len`, so it has
 /// room for `extra` more: to twice its capacity, or more when `extra`
-/// needs it. `charged` is the bytes the buffer is charged with, and
-/// `reserve` asks the system for room for that many more items. A size
-/// that overflows, a size over constant evaluation's memory budget and a
-/// request the system refuses end as [`super::out_of_memory`] says.
+/// needs it. `charge` is what the buffer is charged with, and `reserve`
+/// asks the system for room for that many more items. A size that
+/// overflows, a size over constant evaluation's memory budget and a
+/// request the system refuses end as [`super::out_of_memory`] says. An
+/// exempt buffer (D-765) skips the budget and is never charged, and a size
+/// that overflows or a refused request end the process instead
+/// ([`refused`]).
 fn grow(
-    charged: &mut u64,
+    charge: &mut Charge,
     (len, cap, item): (usize, usize, usize),
     extra: usize,
     reserve: impl FnOnce(usize) -> Result<(), TryReserveError>,
 ) {
+    let budget = charge.budget;
     let Some(need) = len.checked_add(extra) else {
-        super::out_of_memory(u64::MAX)
+        refused(budget, u64::MAX)
     };
     let new_cap = need.max(cap.saturating_mul(2)).max(MIN_CAP);
     let bytes = new_cap
         .checked_mul(item)
         .and_then(|bytes| u64::try_from(bytes).ok())
         .unwrap_or(u64::MAX);
-    // The old buffer is still counted in the scratch live now, so a move
-    // that holds both for a moment fits the budget too.
-    crate::entry::check_budget(bytes);
-    if reserve(new_cap.saturating_sub(len)).is_err() {
-        super::out_of_memory(bytes);
+    if let Budget::Charged = budget {
+        // The old buffer is still counted in the scratch live now, so a
+        // move that holds both for a moment fits the budget too.
+        crate::entry::check_budget_of(charge.fiber(), bytes);
     }
-    recharge(*charged, bytes);
-    *charged = bytes;
+    if refusal_hook::refuses() || reserve(new_cap.saturating_sub(len)).is_err() {
+        refused(budget, bytes);
+    }
+    if let Budget::Charged = budget {
+        charge.recharge(bytes);
+    }
+}
+
+/// Ends a growth of `bytes` that cannot be served: a charged buffer's as
+/// [`super::out_of_memory`] says, an exempt one's with its fatal message
+/// (D-765), after the reserve is given back so that the message can still
+/// be written.
+fn refused(budget: Budget, bytes: u64) -> ! {
+    match budget {
+        Budget::Charged => super::out_of_memory(bytes),
+        Budget::Exempt(message) => {
+            super::release_reserve();
+            crate::panic::fatal(format_args!("{message}"))
+        }
+    }
+}
+
+/// The test hook that refuses a scratch growth as the system would: a
+/// buffer grows with `try_reserve_exact` through the global allocator, out
+/// of reach of `alloc.rs`'s own refusal hook.
+mod refusal_hook {
+    /// The thread whose next scratch growth is refused.
+    #[cfg(test)]
+    static NEXT: std::sync::Mutex<Option<std::thread::ThreadId>> = std::sync::Mutex::new(None);
+
+    /// Makes the next scratch growth on the calling thread fail as a
+    /// refusal of the system allocator would.
+    #[cfg(test)]
+    pub(super) fn refuse_next() {
+        *NEXT
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(std::thread::current().id());
+    }
+
+    /// Whether this growth is refused by [`refuse_next`], which it then
+    /// disarms.
+    #[cfg(test)]
+    pub(super) fn refuses() -> bool {
+        let mut next = NEXT
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let refuse = *next == Some(std::thread::current().id());
+        if refuse {
+            *next = None;
+        }
+        refuse
+    }
+
+    /// Never, outside tests.
+    #[cfg(not(test))]
+    #[inline]
+    pub(super) const fn refuses() -> bool {
+        false
+    }
+}
+
+/// Makes the next scratch growth on the calling thread fail as a refusal
+/// of the system allocator would, for the tests of what each walk does
+/// then (D-642, D-765).
+#[cfg(test)]
+pub(crate) fn refuse_next_scratch_growth() {
+    refusal_hook::refuse_next();
 }
 
 /// The smallest capacity a buffer grows to, in items.
@@ -100,7 +286,7 @@ const MIN_CAP: usize = 8;
 /// it grows only through its own methods, which account for the growth.
 pub(crate) struct ScratchVec<T> {
     items: Vec<T>,
-    charged: u64,
+    charge: Charge,
 }
 
 impl<T> ScratchVec<T> {
@@ -108,7 +294,19 @@ impl<T> ScratchVec<T> {
     pub(crate) const fn new() -> Self {
         Self {
             items: Vec::new(),
-            charged: 0,
+            charge: Charge::new(),
+        }
+    }
+
+    /// An empty vector that is exempt from the memory budget (D-765): its
+    /// growth is neither charged nor checked, so it never raises, and a
+    /// request the system refuses ends the process with
+    /// `fatal runtime error: {refusal}`. Only `rc::dup_slow`'s walk uses
+    /// it.
+    pub(crate) const fn unbudgeted(refusal: &'static str) -> Self {
+        Self {
+            items: Vec::new(),
+            charge: Charge::exempt(refusal),
         }
     }
 
@@ -130,7 +328,7 @@ impl<T> ScratchVec<T> {
             size_of::<T>().max(1),
         );
         let items = &mut self.items;
-        grow(&mut self.charged, shape, extra, |more| {
+        grow(&mut self.charge, shape, extra, |more| {
             items.try_reserve_exact(more)
         });
     }
@@ -178,12 +376,6 @@ impl<T> Default for ScratchVec<T> {
     }
 }
 
-impl<T> Drop for ScratchVec<T> {
-    fn drop(&mut self) {
-        recharge(self.charged, 0);
-    }
-}
-
 impl<T> Deref for ScratchVec<T> {
     type Target = [T];
 
@@ -207,10 +399,18 @@ impl<T: fmt::Debug> fmt::Debug for ScratchVec<T> {
 /// A string of scratch text. It derefs to `str`, which cannot grow; it
 /// grows only through [`ScratchString::push_str`], which accounts for the
 /// growth.
-#[derive(Default)]
 pub(crate) struct ScratchString {
     text: String,
-    charged: u64,
+    charge: Charge,
+}
+
+impl Default for ScratchString {
+    fn default() -> Self {
+        Self {
+            text: String::new(),
+            charge: Charge::new(),
+        }
+    }
 }
 
 impl ScratchString {
@@ -219,7 +419,7 @@ impl ScratchString {
         if self.text.capacity().saturating_sub(self.text.len()) < text.len() {
             let shape = (self.text.len(), self.text.capacity(), 1);
             let buffer = &mut self.text;
-            grow(&mut self.charged, shape, text.len(), |more| {
+            grow(&mut self.charge, shape, text.len(), |more| {
                 buffer.try_reserve_exact(more)
             });
         }
@@ -229,12 +429,6 @@ impl ScratchString {
     /// Removes the text, keeping the capacity.
     pub(crate) fn clear(&mut self) {
         self.text.clear();
-    }
-}
-
-impl Drop for ScratchString {
-    fn drop(&mut self) {
-        recharge(self.charged, 0);
     }
 }
 
@@ -273,6 +467,30 @@ mod tests {
         drop(items);
         drop(text);
         assert_eq!(live(), before);
+    }
+
+    /// D-765: an unbudgeted buffer grows like any other but charges
+    /// nothing, so neither the live count nor the peak moves.
+    #[test]
+    fn an_unbudgeted_buffer_charges_nothing() {
+        reset_peak();
+        let before = live();
+        let mut items = ScratchVec::unbudgeted("unused");
+        items.extend(0_u64..1_000);
+        assert!(items.items.capacity() >= 1_000);
+        assert_eq!((live(), peak()), (before, before));
+        drop(items);
+        assert_eq!(live(), before);
+    }
+
+    /// The refusal hook refuses one growth, on the thread that armed it.
+    #[test]
+    fn the_refusal_hook_refuses_once_on_its_own_thread() {
+        refuse_next_scratch_growth();
+        let elsewhere = std::thread::spawn(refusal_hook::refuses).join().unwrap();
+        assert!(!elsewhere);
+        assert!(refusal_hook::refuses());
+        assert!(!refusal_hook::refuses());
     }
 
     #[test]

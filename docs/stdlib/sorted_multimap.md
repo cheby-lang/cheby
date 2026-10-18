@@ -10,11 +10,11 @@ pub type SortedMultimap<K, V>
 
 - **Values.** Each key holds a `List<V>` in the order the values were inserted, with duplicates kept, so inserting `("a", 1)` twice gives `[1, 1]` (D-332). A key is present only while it has at least one value (D-364).
 - **Order.** `keys`, `to_list`, `to_pairs`, `fold`, `each`, `show` and debug printing go from the smallest key to the largest, by the key type's `compare`. The values of one key stay in insertion order.
-- **Keys.** Keys must satisfy `Compare`, and every function has the bound `K: Compare` (D-385). Two keys are the same key when `compare` returns `Equal`, even if they are not `==`. A value inserted under such a key joins the list of the key already stored, which stays (D-341). A `compare` that disagrees with `==` is a program bug (§8.7). The second example of [`insert`](#insert) shows what the multimap does with one.
+- **Keys.** Keys must satisfy `Compare`, and every public function has the bound `K: Compare` (D-385). The hooks of equality, hashing and debug printing take none and never call `compare` (D-845). Two keys are the same key when `compare` returns `Equal`, even if they are not `==`. A value inserted under such a key joins the list of the key already stored, which stays (D-341). A `compare` that disagrees with `==` is a program bug (§8.7). The second example of [`insert`](#insert) shows what the multimap does with one.
 - **Written in Cheby.** The module is written in Cheby over `std::sorted_map`, with no runtime kernel (D-336, D-338). Every comparison is an ordinary call to the key type's `compare` through the bound (§8.5), so a panic inside it unwinds through this module's functions like any other panic. The number and order of the calls to `compare` are not specified, but they are the same on every target (D-232, D-354).
 - **Equality, hashing and printing.** The module supplies its own `==`, hashing and debug printing through the standard-library-only attribute of D-342 (§3.13). Two sorted multimaps are `==` when they have the same keys, and each key holds the same list of values in the same order, and equal multimaps hash equally (D-343). Debug printing writes `sorted_multimap::from_list([…])` with one debug-printed pair per value, in the order of `to_pairs`, so the text rebuilds the same multimap (D-344).
 - **Interfaces.** `SortedMultimap<K, V>` satisfies `Show` when `K` and `V` do (D-344). It does not satisfy `Compare`.
-- **Costs.** For a multimap of n keys, a lookup or an update takes O(log n) time and calls `compare` O(log n) times. Iterating takes time in proportion to what it returns and never calls `compare`.
+- **Costs.** For a multimap of n keys, a lookup or an update takes O(log n) time and calls `compare` O(log n) times, except that an insert takes O(log n + log m), where m is the number of values of the key: one descent to the key and one push onto its list (D-846). Iterating takes time in proportion to what it returns and never calls `compare`.
 
 The map functions `values`, `upsert`, `map_values` and `merge` have no counterpart in tier 1. `get` and `to_pairs` reach the values, and a caller can rebuild a multimap with `fold`.
 
@@ -227,7 +227,7 @@ pub fn insert<K: Compare, V>(m: SortedMultimap<K, V>, key: K, value: V) -> Sorte
 
 Returns the multimap with `value` appended to the values of `key`. When a key that compares `Equal` to `key` is already present, the stored key stays (D-341).
 
-- **Cost:** O(log n), required (D-300).
+- **Cost:** O(log n + log m), where m is the number of values of `key`, with O(log n) calls to `compare`. Required (D-300, D-846).
 
 ```cheby
 test "insert appends a value" {

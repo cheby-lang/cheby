@@ -188,7 +188,7 @@ fn checked_arithmetic_matches_the_reference() {
                 runs.push((op, a, b, target));
             }
         }
-        let jit = p.compile();
+        let jit = p.compile_unwound();
         for (op, a, b, target) in runs {
             let what = format!("{a} {} {b} on {repr}", op.name());
             match (reference(op, a, b, repr), run_const(&jit, target)) {

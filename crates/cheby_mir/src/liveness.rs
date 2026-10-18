@@ -2,9 +2,9 @@
 
 use std::collections::BTreeSet;
 
-use cheby_iface::{Ice, IndexVec};
+use cheby_iface::{Ice, Idx, IndexVec};
 
-use crate::ir::{Block, BlockId, Function, Local, Stmt};
+use crate::ir::{Block, BlockId, Function, Local, Rvalue, Stmt};
 use crate::repr::Repr;
 
 /// A set of locals, ordered so iteration is deterministic.
@@ -17,26 +17,47 @@ pub(crate) struct Liveness {
     pub live_out: IndexVec<BlockId, LocalSet>,
 }
 
-/// Whether `local` is counted.
+/// Whether `local` is counted. A borrowed local (D-715) is counted too:
+/// it is live where it is used, but holds no reference of its own
+/// ([`is_borrowed_local`]).
 pub(crate) fn counted(f: &Function, local: Local) -> Result<bool, Ice> {
     Ok(f.local(local)?.repr == Repr::Value)
+}
+
+/// Whether `local` is borrowed in `borrowed`, a
+/// [`Function::borrowed_locals`] result (D-715).
+#[must_use]
+pub(crate) fn is_borrowed_local(borrowed: &[bool], local: Local) -> bool {
+    borrowed.get(local.index()).copied().unwrap_or(false)
 }
 
 /// The local a statement defines.
 pub(crate) const fn stmt_def(stmt: &Stmt) -> Option<Local> {
     match stmt {
         Stmt::Assign { dst, .. } => Some(*dst),
-        Stmt::Eval(_) | Stmt::Dup(_) | Stmt::Drop(_) => None,
+        Stmt::Eval(_)
+        | Stmt::Dup(_)
+        | Stmt::Drop(_)
+        | Stmt::DropKeep { .. }
+        | Stmt::ClearUnwind => None,
     }
 }
 
-/// The counted locals a statement reads (Dup and Drop included).
+/// The counted locals a statement reads (Dup and Drop included, and the
+/// locals of a keep list, which it `dup`s).
 pub(crate) fn stmt_uses(f: &Function, stmt: &Stmt) -> Result<Vec<Local>, Ice> {
     let all = match stmt {
-        Stmt::Assign { value, .. } | Stmt::Eval(value) => {
-            value.uses().into_iter().map(|(l, _)| l).collect()
-        }
+        Stmt::Assign { value, .. } | Stmt::Eval(value) => value
+            .uses()
+            .into_iter()
+            .map(|(l, _)| l)
+            .chain(value.kept().iter().map(|&(_, p)| p))
+            .collect(),
         Stmt::Dup(l) | Stmt::Drop(l) => vec![*l],
+        Stmt::DropKeep { local, keep, .. } => std::iter::once(*local)
+            .chain(keep.iter().map(|&(_, p)| p))
+            .collect(),
+        Stmt::ClearUnwind => Vec::new(),
     };
     filter_counted(f, all)
 }
@@ -56,16 +77,50 @@ pub(crate) fn term_uses(f: &Function, block: &Block) -> Result<Vec<Local>, Ice> 
     filter_counted(f, block.term.uses().into_iter().map(|(l, _)| l).collect())
 }
 
+/// The counted locals a statement uses for its value: [`stmt_uses`]
+/// without `dup`, `drop`, the released local of a `drop_reuse` or
+/// specialized drop, and keep lists, which only add or give up references.
+pub(crate) fn stmt_value_uses(f: &Function, stmt: &Stmt) -> Result<Vec<Local>, Ice> {
+    let all = match stmt {
+        Stmt::Assign {
+            value: Rvalue::DropReuse { .. },
+            ..
+        }
+        | Stmt::Dup(_)
+        | Stmt::Drop(_)
+        | Stmt::DropKeep { .. }
+        | Stmt::ClearUnwind => Vec::new(),
+        Stmt::Assign { value, .. } | Stmt::Eval(value) => {
+            value.uses().into_iter().map(|(l, _)| l).collect()
+        }
+    };
+    filter_counted(f, all)
+}
+
 impl Liveness {
     /// Computes liveness to a fixed point.
     pub(crate) fn compute(f: &Function) -> Result<Self, Ice> {
+        Self::compute_by(f, stmt_uses)
+    }
+
+    /// Liveness by value uses ([`stmt_value_uses`]): a local is live where
+    /// a later instruction still reads its value, whatever `dup`s and
+    /// releases come between. The drop-position check reads it (D-851).
+    pub(crate) fn compute_values(f: &Function) -> Result<Self, Ice> {
+        Self::compute_by(f, stmt_value_uses)
+    }
+
+    fn compute_by(
+        f: &Function,
+        uses_of: fn(&Function, &Stmt) -> Result<Vec<Local>, Ice>,
+    ) -> Result<Self, Ice> {
         let mut gen_sets = IndexVec::<BlockId, LocalSet>::new();
         let mut kill_sets = IndexVec::<BlockId, LocalSet>::new();
         for block in &f.blocks {
             let mut generated = LocalSet::new();
             let mut killed: LocalSet = block.params.iter().copied().collect();
             for stmt in &block.stmts {
-                for l in stmt_uses(f, stmt)? {
+                for l in uses_of(f, stmt)? {
                     if !killed.contains(&l) {
                         generated.insert(l);
                     }

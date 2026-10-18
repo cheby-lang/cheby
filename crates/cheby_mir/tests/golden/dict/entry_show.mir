@@ -1,6 +1,6 @@
 fn entry main(app::main) [c] () -> i64 {
 bb0:
-  _0: value = call app::main()
+  _0: value = call app::main() ; unwind bb3
   _1: int = read_tag _0 of result
   _2: bool = compare eq int _1, const int 0
   branch _2, bb1, bb2
@@ -15,10 +15,12 @@ bb2:
   _5: value = field _4.1 of dict/1+0
   dup _5
   drop _4
-  _6: value = call _5(_3)
+  _6: value = call _5(_3) ; unwind bb3
   call_foreign "cheby_io_eprintln"(borrow _6) -> void
   drop _6
   return const i64 1
+bb3:
+  resume
 }
 
 static#0 desc app$List<String> = desc/1(builtin_desc list, builtin_desc string)

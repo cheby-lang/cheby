@@ -1,0 +1,2 @@
+reuse: tests/ui/09-memory-model/reuse_report/constant_base.cheby:14:29: building `Policy` allocates: no value of the same size dies before it
+reuse: tests/ui/09-memory-model/reuse_report/constant_base.cheby:17:15: building `Policy` does not reuse `save_policy`: it is a constant

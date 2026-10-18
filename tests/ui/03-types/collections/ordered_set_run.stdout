@@ -1,0 +1,8 @@
+ordered_set::from_list([the, cat, saw, dog, and, ran])
+distinct words: 6
+inserting a present word changes nothing: True
+ordered_set::from_list(["cat", "saw", "dog", "and", "ran", "the"])
+same order: False, same elements: True
+both: ordered_set::from_list([cat, dog])
+joined: ordered_set::from_list([the, cat, saw, dog, and, ran, bird])
+rest: ordered_set::from_list([the, saw, and, ran])

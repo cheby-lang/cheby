@@ -16,8 +16,7 @@
 //!   with the names of its session (§13.5, D-547).
 //! - The only part of the support gate (D-451) left in the front end is
 //!   E0038 for an import of a standard-library module that the spec plans
-//!   but the toolchain does not ship yet (tier 2 and 3, and the tier-1
-//!   `multimap`, `sorted_*` and `ordered_*`). Paths through such an import
+//!   but the toolchain does not ship yet (tiers 2 and 3). Paths through such an import
 //!   are silent [`Res::Err`]. Every item and every construct resolves.
 //!
 //! Later phases read syntax only through `cheby_syntax::ast` views, keyed
@@ -151,6 +150,10 @@ pub struct ItemAttrs {
     /// The functions named by the standard library's `@std_hooks(equal_fn,
     /// hash_fn, debug_fn)` on a type, in that order (D-342, D-482).
     pub hooks: Option<[(Name, Span); 3]>,
+    /// The standard library's `@std_context` on a function with an
+    /// `@external`: its native kernel receives the running fiber's context
+    /// as its first C argument (D-692, D-482).
+    pub std_context: bool,
 }
 
 impl Default for ItemAttrs {
@@ -163,6 +166,7 @@ impl Default for ItemAttrs {
             deprecated: None,
             clamped: Vec::new(),
             hooks: None,
+            std_context: false,
         }
     }
 }

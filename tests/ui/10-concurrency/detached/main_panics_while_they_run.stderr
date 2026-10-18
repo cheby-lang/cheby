@@ -1,0 +1,2 @@
+panicked at tests/ui/10-concurrency/detached/main_panics_while_they_run.cheby:38:3:
+main fails

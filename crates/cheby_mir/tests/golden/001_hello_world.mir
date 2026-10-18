@@ -1,53 +1,79 @@
 module std::io
 
 fn std::io::print(_0: value) -> value check str#0 {
+  entry unwind bb2
   str#0 = "std/io.cheby:7:8"
   str#1 = "cheby_io_print"
 bb0:
-  call_runtime effect_check(borrow const str#1)
+  call_runtime effect_check(borrow const str#1) ; unwind bb2
   call_foreign "cheby_io_print"(borrow _0) -> void
   drop _0
   return const nil
+bb1:
+  resume
+bb2:
+  drop _0
+  goto bb1()
 }
 
 fn std::io::println(_0: value) -> value check str#0 {
+  entry unwind bb2
   str#0 = "std/io.cheby:12:8"
   str#1 = "cheby_io_println"
 bb0:
-  call_runtime effect_check(borrow const str#1)
+  call_runtime effect_check(borrow const str#1) ; unwind bb2
   call_foreign "cheby_io_println"(borrow _0) -> void
   drop _0
   return const nil
+bb1:
+  resume
+bb2:
+  drop _0
+  goto bb1()
 }
 
 fn std::io::eprint(_0: value) -> value check str#0 {
+  entry unwind bb2
   str#0 = "std/io.cheby:17:8"
   str#1 = "cheby_io_eprint"
 bb0:
-  call_runtime effect_check(borrow const str#1)
+  call_runtime effect_check(borrow const str#1) ; unwind bb2
   call_foreign "cheby_io_eprint"(borrow _0) -> void
   drop _0
   return const nil
+bb1:
+  resume
+bb2:
+  drop _0
+  goto bb1()
 }
 
 fn std::io::eprintln(_0: value) -> value check str#0 {
+  entry unwind bb2
   str#0 = "std/io.cheby:22:8"
   str#1 = "cheby_io_eprintln"
 bb0:
-  call_runtime effect_check(borrow const str#1)
+  call_runtime effect_check(borrow const str#1) ; unwind bb2
   call_foreign "cheby_io_eprintln"(borrow _0) -> void
   drop _0
   return const nil
+bb1:
+  resume
+bb2:
+  drop _0
+  goto bb1()
 }
 
 module hello_world
 
 fn hello_world::main() -> value check str#0 {
+  entry unwind bb1
   str#0 = "src/main.cheby:5:4"
   str#1 = "Hello, world!"
 bb0:
-  _0: value = const str#1
-  tail_call std::io::println(_0)
+  tail_call std::io::println(const str#1)
+bb1:
+  resume
 }
 
 callee std::io::println(value) -> value
@@ -56,39 +82,51 @@ entries
 
 fn entry main(hello_world::main) [c] () -> i64 {
 bb0:
-  _0: value = call hello_world::main()
+  _0: value = call hello_world::main() ; unwind bb1
   drop _0
   return const i64 0
+bb1:
+  resume
 }
 
 fn trampoline 0 [c] (_0: value) -> value {
 bb0:
-  _1: value = call _0()
+  _1: value = call _0() ; unwind bb1
   return _1
+bb1:
+  resume
 }
 
 fn trampoline 1 [c] (_0: value, _1: value) -> value {
 bb0:
-  _2: value = call _0(_1)
+  _2: value = call _0(_1) ; unwind bb1
   return _2
+bb1:
+  resume
 }
 
 fn trampoline 2 [c] (_0: value, _1: value, _2: value) -> value {
 bb0:
-  _3: value = call _0(_1, _2)
+  _3: value = call _0(_1, _2) ; unwind bb1
   return _3
+bb1:
+  resume
 }
 
 fn trampoline 3 [c] (_0: value, _1: value, _2: value, _3: value) -> value {
 bb0:
-  _4: value = call _0(_1, _2, _3)
+  _4: value = call _0(_1, _2, _3) ; unwind bb1
   return _4
+bb1:
+  resume
 }
 
 fn trampoline 4 [c] (_0: value, _1: value, _2: value, _3: value, _4: value) -> value {
 bb0:
-  _5: value = call _0(_1, _2, _3, _4)
+  _5: value = call _0(_1, _2, _3, _4) ; unwind bb1
   return _5
+bb1:
+  resume
 }
 
 callee hello_world::main() -> value

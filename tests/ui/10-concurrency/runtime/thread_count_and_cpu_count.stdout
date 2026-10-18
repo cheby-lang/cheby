@@ -1,0 +1,2 @@
+thread_count is from 1 to 1024: True
+cpu_count is at least 1: True

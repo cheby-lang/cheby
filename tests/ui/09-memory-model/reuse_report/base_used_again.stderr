@@ -1,0 +1,2 @@
+reuse: tests/ui/09-memory-model/reuse_report/base_used_again.cheby:14:16: building `Counter` allocates: no value of the same size dies before it
+reuse: tests/ui/09-memory-model/reuse_report/base_used_again.cheby:15:15: building `Counter` does not reuse `before`: it is used again later or released elsewhere

@@ -155,7 +155,8 @@ fn every_kind_of_path_uses_an_import() {
 fn satisfaction_does_not_use_an_import() {
     // `Int` gets its `show` from its home module without an import
     // (D-447, §7.6), so an import of `std::int` that nothing names is
-    // unused although the interpolation calls `int::show`.
+    // unused although the interpolation calls `int::show`. D-762 leaves a
+    // module of the local package so.
     let int = "//! Ints.\n\npub fn show(n: Int) -> String {\n  case n {\n    _ => \"n\"\n  }\n}\n";
     let b = build_with_std(
         &[("int", int)],
@@ -167,6 +168,106 @@ fn satisfaction_does_not_use_an_import() {
     assert_eq!(
         with_code(&b, "W0003"),
         ["unused import `std::int` [\"nothing in this module uses it\"]"],
+        "{}",
+        b.rendered()
+    );
+}
+
+/// A fake `std::int` with what satisfaction takes from it: `show` for
+/// interpolation, `compare` for `Compare`, and `double` to name.
+const STD_INT: &str = "//! Ints.\n\npub fn show(n: Int) -> String {\n  case n {\n    _ => \"n\"\n  }\n}\n\n\
+                       pub fn compare(a: Int, b: Int) -> Order {\n  case a == b {\n    _ => Equal\n  }\n}\n\n\
+                       pub fn double(n: Int) -> Int {\n  n\n}\n";
+
+/// A fake `std::ops` with `Compare`, and a fake `std::list` with a `sort`
+/// bounded by it.
+const STD_OPS: &str =
+    "//! Operators.\n\npub interface Compare {\n  fn compare(Self, Self) -> Order\n}\n";
+const STD_LIST: &str = "//! Lists.\n\nimport std::ops::{Compare}\n\n\
+                        pub fn sort<T: Compare>(xs: List<T>) -> List<T> {\n  xs\n}\n";
+
+/// Builds the fake std modules with `std::shown`, whose source is
+/// `shown`, and a local root module that calls `shown::label`.
+fn std_module(shown: &str) -> Build {
+    build_with_std(
+        &[
+            ("int", STD_INT),
+            ("ops", STD_OPS),
+            ("list", STD_LIST),
+            ("shown", &format!("//! Shown.\n\n{shown}")),
+        ],
+        &[(
+            "",
+            &module("import std::shown\n\npub fn f() -> String {\n  shown::label(1)\n}\n"),
+        )],
+    )
+}
+
+/// `label` interpolating an `Int`, the only use of `std::int`.
+const INTERPOLATES: &str = "pub fn label(n: Int) -> String {\n  \"{n}\"\n}\n";
+
+#[test]
+fn satisfaction_uses_a_home_module_import_in_std() {
+    // A std module depends only on what it imports (D-447): without
+    // `import std::int` the interpolation is E0063 (D-489), so with it the
+    // import is used (D-762), aliased or not.
+    let without = std_module(INTERPOLATES);
+    assert_eq!(errors(&without), ["E0063"], "{}", without.rendered());
+    for import in ["import std::int", "import std::int as ints"] {
+        let b = std_module(&format!("{import}\n\n{INTERPOLATES}"));
+        assert_eq!(
+            b.codes(),
+            Vec::<String>::new(),
+            "{import}: {}",
+            b.rendered()
+        );
+    }
+}
+
+#[test]
+fn every_satisfaction_uses_a_home_module_import_in_std() {
+    // `Compare` for `list::sort` over `Int` takes `int::compare` (D-762:
+    // every satisfaction, not only interpolation).
+    let body = "import std::int\nimport std::list\n\n\
+                pub fn label(n: Int) -> String {\n  case list::sort([n, 1]) {\n    _ => \"sorted\"\n  }\n}\n";
+    let b = std_module(body);
+    assert_eq!(b.codes(), Vec::<String>::new(), "{}", b.rendered());
+    let without = std_module(&body.replacen("import std::int\n", "", 1));
+    assert_eq!(errors(&without), ["E0063"], "{}", without.rendered());
+}
+
+#[test]
+fn satisfaction_uses_an_item_import_of_a_home_module_in_std() {
+    // An item import makes its module a dependency like a module import
+    // (the driver adds a graph edge for every import's module), so
+    // removing `import std::int::{double}` would give E0063 (D-489): it is
+    // used when none of its names is written
+    // (D-822, D-762). With a written name, the
+    // module stays a dependency without the other names, which stay unused.
+    let b = std_module(&format!("import std::int::{{double}}\n\n{INTERPOLATES}"));
+    assert_eq!(b.codes(), Vec::<String>::new(), "{}", b.rendered());
+    let b = std_module(
+        "import std::int::{double, show}\n\n\
+         pub fn label(n: Int) -> String {\n  let m = double(n)\n  \"{m}\"\n}\n",
+    );
+    assert_eq!(
+        with_code(&b, "W0003"),
+        ["unused import `show` from `std::int` [\"nothing in this module uses it\"]"],
+        "{}",
+        b.rendered()
+    );
+}
+
+#[test]
+fn an_unrelated_std_import_stays_unused() {
+    // Only an import of a home module that satisfaction takes a function
+    // from is used: `std::list` here serves nothing (D-762, D-515).
+    let b = std_module(&format!(
+        "import std::int\nimport std::list\n\n{INTERPOLATES}"
+    ));
+    assert_eq!(
+        with_code(&b, "W0003"),
+        ["unused import `std::list` [\"nothing in this module uses it\"]"],
         "{}",
         b.rendered()
     );
@@ -378,7 +479,8 @@ fn warnings_are_sorted_and_stable() {
 fn imports_of_planned_modules_are_not_unused() {
     // The import is E0038 (D-451) and paths through it are silent; it is
     // not also reported as unused, but the unused parameter still is.
-    let b = one("import std::fiber\n\npub fn f(unused: Int) {\n  fiber::yield_now()\n}\n");
+    // `std::http` stays unshipped until tier 3 (D-729).
+    let b = one("import std::http\n\npub fn f(unused: Int) {\n  http::get(\"x\")\n}\n");
     assert_eq!(b.codes(), ["E0038", "W0002"], "{}", b.rendered());
     assert_eq!(with_code(&b, "W0003"), Vec::<String>::new());
 }

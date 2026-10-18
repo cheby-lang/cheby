@@ -1,0 +1,10 @@
+// @mode: check-fail
+// @decisions: D-659, D-660
+// @milestone: M2
+//! A `[runtime]` stack above 16 GiB is E0036, even by one KiB (§13.3).
+
+import std::io
+
+fn main() {
+  io::println("hello")
+}

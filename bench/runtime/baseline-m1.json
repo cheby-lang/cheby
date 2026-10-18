@@ -1,0 +1,209 @@
+{
+  "meta": {
+    "arch": "aarch64",
+    "cheby": ".m2-work/slice/P0/m1-target/release/cheby",
+    "commit": "587f8a9",
+    "cores": 8,
+    "cpu": "Apple M3",
+    "date": "2026-10-12T02:23:18Z",
+    "env": {
+      "CHEBY_THREADS": "1"
+    },
+    "load": [
+      4.35,
+      4.65,
+      5.05
+    ],
+    "load_after": [
+      3.82,
+      4.49,
+      4.97
+    ],
+    "os": "macos",
+    "runs": 5,
+    "rustc": "rustc 1.99.0 (b940084d7 2026-09-28)",
+    "threads": 1
+  },
+  "results": [
+    {
+      "checksum": "583798564",
+      "group": "rc",
+      "max_ns": 925824625,
+      "median_ns": 920776958,
+      "min_ns": 912983958,
+      "n": 400000,
+      "name": "list_pipeline",
+      "runs_ns": [
+        913503916,
+        912983958,
+        925824625,
+        920986292,
+        920776958
+      ],
+      "stats": {
+        "counters": {
+          "allocations": 2262305,
+          "list push copied": 0,
+          "list push in place": 11999960,
+          "list update copied": 0,
+          "list update in place": 23999960,
+          "map/set update copied": 0,
+          "map/set update in place": 0,
+          "string append copied": 0,
+          "string append grown": 0,
+          "string append in place": 4,
+          "string/bytes kernel copied": 0,
+          "string/bytes kernel grown": 0,
+          "string/bytes kernel in place": 0
+        },
+        "entries_ms": 900.15,
+        "main_ms": 900.02,
+        "peak_bytes": 7227960
+      }
+    },
+    {
+      "checksum": "494844387",
+      "group": "rc",
+      "max_ns": 711900958,
+      "median_ns": 697205375,
+      "min_ns": 694951542,
+      "n": 4000000,
+      "name": "map_updates",
+      "runs_ns": [
+        711900958,
+        696300750,
+        694951542,
+        704601167,
+        697205375
+      ],
+      "stats": {
+        "counters": {
+          "allocations": 3140956,
+          "list push copied": 0,
+          "list push in place": 59513,
+          "list update copied": 0,
+          "list update in place": 119027,
+          "map/set update copied": 0,
+          "map/set update in place": 3993993,
+          "string append copied": 0,
+          "string append grown": 0,
+          "string append in place": 4,
+          "string/bytes kernel copied": 0,
+          "string/bytes kernel grown": 0,
+          "string/bytes kernel in place": 0
+        },
+        "entries_ms": 687.136,
+        "main_ms": 687.026,
+        "peak_bytes": 4042208
+      }
+    },
+    {
+      "checksum": "927950228",
+      "group": "rc",
+      "max_ns": 912009000,
+      "median_ns": 908442708,
+      "min_ns": 902531708,
+      "n": 15000,
+      "name": "record_updates",
+      "runs_ns": [
+        902531708,
+        912009000,
+        908250458,
+        908442708,
+        908580542
+      ],
+      "stats": {
+        "counters": {
+          "allocations": 17896391,
+          "list push copied": 0,
+          "list push in place": 14986998,
+          "list update copied": 0,
+          "list update in place": 29988998,
+          "map/set update copied": 0,
+          "map/set update in place": 0,
+          "string append copied": 0,
+          "string append grown": 0,
+          "string append in place": 4,
+          "string/bytes kernel copied": 0,
+          "string/bytes kernel grown": 0,
+          "string/bytes kernel in place": 0
+        },
+        "entries_ms": 901.079,
+        "main_ms": 900.933,
+        "peak_bytes": 114144
+      }
+    },
+    {
+      "checksum": "461641938",
+      "group": "rc",
+      "max_ns": 810583667,
+      "median_ns": 798403959,
+      "min_ns": 757793750,
+      "n": 4000000,
+      "name": "string_building",
+      "runs_ns": [
+        798403959,
+        810547042,
+        761916917,
+        810583667,
+        757793750
+      ],
+      "stats": {
+        "counters": {
+          "allocations": 16816007,
+          "list push copied": 0,
+          "list push in place": 4000000,
+          "list update copied": 0,
+          "list update in place": 4000000,
+          "map/set update copied": 0,
+          "map/set update in place": 0,
+          "string append copied": 0,
+          "string append grown": 0,
+          "string append in place": 20000004,
+          "string/bytes kernel copied": 0,
+          "string/bytes kernel grown": 36000,
+          "string/bytes kernel in place": 3960000
+        },
+        "entries_ms": 794.081,
+        "main_ms": 793.986,
+        "peak_bytes": 96648
+      }
+    },
+    {
+      "checksum": "298394241",
+      "group": "rc",
+      "max_ns": 1030668541,
+      "median_ns": 1020027709,
+      "min_ns": 1015494125,
+      "n": 2000000,
+      "name": "tree_inserts",
+      "runs_ns": [
+        1016368000,
+        1015494125,
+        1030668541,
+        1022205125,
+        1020027709
+      ],
+      "stats": {
+        "counters": {
+          "allocations": 35660815,
+          "list push copied": 0,
+          "list push in place": 0,
+          "list update copied": 0,
+          "list update in place": 0,
+          "map/set update copied": 0,
+          "map/set update in place": 0,
+          "string append copied": 0,
+          "string append grown": 0,
+          "string append in place": 4,
+          "string/bytes kernel copied": 0,
+          "string/bytes kernel grown": 0,
+          "string/bytes kernel in place": 0
+        },
+        "entries_ms": 1018.078,
+        "main_ms": 1017.963,
+        "peak_bytes": 634776
+      }
+    }
+  ]
+}

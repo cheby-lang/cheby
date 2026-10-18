@@ -1,0 +1,437 @@
+//! Fibers, scopes, joining, detached fibers, cancellation and timeouts
+//! (§10.1 to §10.4, §10.7, §10.8, D-646).
+//!
+//! `Scope` and `Fiber<T>` are handles: external types whose drop
+//! functions the runtime supplies (D-101, D-647, D-703). Every function
+//! here is written in Cheby over private `@std_context` kernels (D-692)
+//! and one compiler intrinsic, `scope_run` (D-693), none of which calls a
+//! Cheby closure, so D-484 holds (D-675). Kernels cannot build this
+//! module's records, so a `Panic` is built here from the texts the runtime
+//! keeps for the scope that failed (D-484, D-648). Each kernel and the
+//! intrinsic also declares its JS binding, written with the JS back end
+//! (D-661).
+
+import std::channel
+import std::duration
+import std::string
+
+// Types
+
+/// A scope that fibers are spawned into (§10.2, D-040). It prints as
+/// `<Scope>`, and `==` and hashing panic when they reach one (D-233,
+/// D-647).
+pub type Scope
+
+/// A fiber whose function returns a `T`, to be joined (§10.1, D-177). It
+/// prints as `<Fiber>`, and `==` and hashing panic when they reach one
+/// (D-233, D-647).
+pub type Fiber<T>
+
+/// The error of a failed scope: the message and the location of the first
+/// panic in the scope (D-178, D-473). It is opaque and plain data. Two
+/// panics are `==` when their messages and locations are equal, and its
+/// debug text is `Panic { message: "…", location: "…" }` (D-648). It
+/// satisfies `Show` through `show`.
+pub type Panic {
+  message: String,
+  location: String,
+}
+
+/// The error of `timeout`: the limit passed first, or `f` panicked first
+/// (D-181, D-199, D-649).
+pub exposed type Timeout {
+  TimedOut,
+  Panicked(Panic),
+}
+
+// Scopes
+
+/// Opens a scope, with a time limit of `seconds` and `nanoseconds` when
+/// `timed`, calls `body` with it on the calling fiber, waits for every
+/// fiber spawned into it and closes it. `Ok` holds `body`'s value; on
+/// `Err(Nil)` the cause stays in the fiber for `take_failure` (D-693).
+/// The compiler generates the body of this intrinsic, so no Cheby call
+/// comes between opening and closing the scope (D-665, D-666).
+@external(native, "cheby_rt_scope_run")
+@external(js, "./fiber.mjs", "scope_run")
+fn scope_run<T>(timed: Bool, seconds: Int, nanoseconds: Int, body: fn(Scope) -> T) -> Result<T, Nil>
+
+/// Why the scope that `scope_run` just closed failed: 0 for a panic and 1
+/// for an expired limit, then the panic's message and location (D-473,
+/// D-648, D-755).
+@std_context
+@external(native, "cheby_fiber_take_failure")
+@external(js, "./fiber.mjs", "take_failure")
+fn take_failure() -> (Int, String, String)
+
+/// Opens a new scope, calls `body` with it on the calling fiber, and
+/// returns `Ok` with `body`'s value once `body` has returned and every
+/// fiber spawned into the scope has ended (§10.2, D-040, D-665, D-666).
+/// The first member to panic makes the scope fail: the others are
+/// cancelled, and `scope` returns `Err` with that panic, which is not
+/// printed (D-176, D-178, D-701). When the scope fails, the value of
+/// `body` is released.
+pub fn scope<T>(body: fn(Scope) -> T) -> Result<T, Panic> {
+  case scope_run(False, 0, 0, body) {
+    Ok(value) => Ok(value)
+    Err(Nil) => {
+      // `message` is a function of this module, so no binding may take
+      // the name, and the pair is bound as `text` and `place` (D-051).
+      let (_, text, place) = take_failure()
+      Err(Panic { message: text, location: place })
+    }
+  }
+}
+
+test "a scope returns its body's value once its fibers have ended" {
+  let (tx, rx) = channel::new::<Int>(0)
+  let outcome = {
+    use owner <- scope()
+    spawn(owner, fn() { channel::send(tx, 1) })
+    channel::receive(rx)
+  }
+  assert outcome == Ok(Ok(1))
+}
+
+test "a scope waits for every fiber spawned into it" {
+  let (tx, rx) = channel::new::<Int>(3)
+  let outcome = {
+    use owner <- scope()
+    spawn(owner, fn() {
+      spawn(owner, fn() { channel::send(tx, 2) })
+    })
+    Nil
+  }
+  assert outcome == Ok(Nil)
+  assert channel::receive(rx) == Ok(2)
+  assert channel::receive(rx) == Err(Nil)
+}
+
+test "a panic in the body is caught by its scope" {
+  let outcome = {
+    use _scope <- scope()
+    panic as "boom"
+  }
+  let assert Err(failure) = outcome
+  assert message(failure) == "boom"
+}
+
+test "a panic in a fiber cancels the body" {
+  let (keep, never) = channel::new::<Int>(1)
+  let outcome = {
+    use owner <- scope()
+    spawn(owner, fn() { panic as "first" })
+    // Nothing is ever sent on `never`, so only the cancellation ends
+    // this wait.
+    channel::receive(never)
+  }
+  let assert Err(failure) = outcome
+  assert message(failure) == "first"
+  // Unwinding the body released `never`, the only `Receiver`.
+  assert channel::send(keep, 1) == Err(1)
+}
+
+test "a nested scope keeps a fiber's panic to itself" {
+  let outcome = {
+    use outer <- scope()
+    let inner = spawn(outer, fn() {
+      use owner <- scope()
+      spawn(owner, fn() { panic as "inner" })
+    })
+    case join(inner) {
+      Ok(_) => "no panic"
+      Err(failure) => message(failure)
+    }
+  }
+  assert outcome == Ok("inner")
+}
+
+test "fibers and scopes print as placeholders" {
+  let outcome = {
+    use owner <- scope()
+    let child = spawn(owner, fn() { Nil })
+    "{owner:?} {child:?}"
+  }
+  assert outcome == Ok("<Scope> <Fiber>")
+}
+
+// Spawning
+
+/// Starts a fiber in `owner` that calls `f`, with the default stack, and
+/// returns it at once. Panics with `spawn into a scope that has ended`
+/// when `owner` has ended (D-666, D-732, D-755).
+@std_context
+@external(native, "cheby_fiber_sys_spawn")
+@external(js, "./fiber.mjs", "sys_spawn")
+fn sys_spawn<T>(owner: Scope, f: fn() -> T) -> Fiber<T>
+
+/// Starts a new fiber in the scope `owner` that calls `f`, and returns the
+/// fiber at once. The new fiber runs concurrently with the caller,
+/// possibly in parallel, and has the default stack (§10.1, D-125). `f` is
+/// called exactly once, on the new fiber, and released no later than when
+/// the call returns or unwinds (D-205, D-670). If `owner` has failed or
+/// has been cancelled, `f` is never called (D-666). It panics with `spawn
+/// into a scope that has ended` when `owner` has ended (§10.3, D-666,
+/// D-732).
+pub fn spawn<T>(owner: Scope, f: fn() -> T) -> Fiber<T> {
+  sys_spawn(owner, f)
+}
+
+test "spawning into a scope that has ended panics" {
+  let assert Ok(ended) = {
+    use owner <- scope()
+    owner
+  }
+  let outcome = {
+    use _scope <- scope()
+    spawn(ended, fn() { Nil })
+  }
+  let assert Err(failure) = outcome
+  assert message(failure) == "spawn into a scope that has ended"
+}
+
+/// Starts a fiber in `owner` that calls `f`, with a stack of `stack_bytes`
+/// bytes clamped to 1 MiB to 16 GiB and rounded up to the page size
+/// (D-659, D-660, D-677).
+@std_context
+@external(native, "cheby_fiber_sys_spawn_with_stack")
+@external(js, "./fiber.mjs", "sys_spawn_with_stack")
+fn sys_spawn_with_stack<T>(owner: Scope, stack_bytes: Int, f: fn() -> T) -> Fiber<T>
+
+/// Like `spawn`, but the new fiber's stack reserves `stack_bytes` bytes of
+/// address space instead of the default; only touched pages use memory
+/// (D-124, D-125, D-659). `stack_bytes` is clamped to 1 MiB to 16 GiB and
+/// rounded up to the page size (D-298, D-660). On JS it has no effect
+/// (D-094, D-232).
+@std_clamped(stack_bytes)
+pub fn spawn_with_stack<T>(owner: Scope, stack_bytes: Int, f: fn() -> T) -> Fiber<T> {
+  sys_spawn_with_stack(owner, stack_bytes, f)
+}
+
+@target(native)
+test "a fiber can have a larger stack" {
+  fn depth(n) {
+    case n {
+      0 => 0
+      _ => 1 + depth(n - 1)
+    }
+  }
+  let outcome = {
+    use owner <- scope()
+    let deep = spawn_with_stack(owner, 64 * 1024 * 1024, fn() { depth(100000) })
+    join(deep)
+  }
+  assert outcome == Ok(100000)
+}
+
+/// Starts a detached fiber that calls `f` (D-669).
+@std_context
+@external(native, "cheby_fiber_sys_spawn_detached")
+@external(js, "./fiber.mjs", "sys_spawn_detached")
+fn sys_spawn_detached<T>(f: fn() -> T)
+
+/// Starts a new detached fiber that calls `f`, outside every scope, and
+/// returns at once (§10.4, D-040, D-669). Nobody waits for it and no
+/// cancellation reaches it. Its panic is printed as a panic report (§11.6,
+/// D-449, D-701). The program kills detached fibers still running when
+/// `main` and its scopes have finished (§10.10, D-073), and a test's
+/// detached fibers end with the test (D-723).
+pub fn spawn_detached<T>(f: fn() -> T) {
+  sys_spawn_detached(f)
+}
+
+test "a detached fiber runs on its own" {
+  let (tx, rx) = channel::new::<Int>(0)
+  spawn_detached(fn() { channel::send(tx, 5) })
+  assert channel::receive(rx) == Ok(5)
+}
+
+// Joining
+
+/// Waits until `fiber` has ended and returns its value. Panics with
+/// `joined fiber failed` when the fiber failed and the caller is not
+/// being cancelled with its scope (D-668, D-732, D-755).
+@std_context
+@external(native, "cheby_fiber_sys_join")
+@external(js, "./fiber.mjs", "sys_join")
+fn sys_join<T>(fiber: Fiber<T>) -> T
+
+/// Waits until `fiber` has ended and returns its value directly (D-177).
+/// Any fiber may join, any number of times, and each call returns the same
+/// value. If `fiber` panicked or was cancelled, `join` never returns: a
+/// joiner inside the fiber's scope is cancelled with it, and any other
+/// joiner panics with `joined fiber failed` (D-668).
+pub fn join<T>(fiber: Fiber<T>) -> T {
+  sys_join(fiber)
+}
+
+test "join returns the fiber's value every time" {
+  let outcome = {
+    use owner <- scope()
+    let answer = spawn(owner, fn() { 6 * 7 })
+    join(answer) + join(answer)
+  }
+  assert outcome == Ok(84)
+}
+
+test "joining a failed fiber from outside its scope panics" {
+  let (tx, rx) = channel::new::<Fiber<Never>>(1)
+  let (go_tx, go_rx) = channel::new::<Nil>(1)
+  let first = {
+    use owner <- scope()
+    let doomed = spawn(owner, fn() {
+      let _ = channel::receive(go_rx)
+      panic as "doomed"
+    })
+    let assert Ok(Nil) = channel::send(tx, doomed)
+    let assert Ok(Nil) = channel::send(go_tx, Nil)
+    Nil
+  }
+  let assert Err(_) = first
+  let assert Ok(doomed) = channel::receive(rx)
+  let second = {
+    use _scope <- scope()
+    join(doomed)
+  }
+  let assert Err(failure) = second
+  assert message(failure) == "joined fiber failed"
+}
+
+// Cancellation
+
+/// Calls `f` on the calling fiber, in a new scope, and cancels it if it
+/// has not finished within `limit` (§10.8, D-103, D-181, D-665, D-671).
+/// `Ok` holds `f`'s value when it returned first, `Err(Panicked(p))` holds
+/// its panic when it panicked first, and `Err(TimedOut)` comes once
+/// `limit` has passed and everything in the scope has ended. A `limit` of
+/// zero or less has already passed, so `f` is not called (D-652).
+/// `timeout` releases `f` before it returns (D-670).
+pub fn timeout<T>(limit: duration::Duration, f: fn() -> T) -> Result<T, Timeout> {
+  case duration::compare(limit, duration::zero) {
+    Greater => {
+      let seconds = duration::to_seconds(limit)
+      let nanoseconds = duration::to_nanoseconds(limit - duration::seconds(seconds))
+      case scope_run(True, seconds, nanoseconds, fn(_owner) { f() }) {
+        Ok(value) => Ok(value)
+        Err(Nil) => case take_failure() {
+          (0, text, place) => Err(Panicked(Panic { message: text, location: place }))
+          _ => Err(TimedOut)
+        }
+      }
+    }
+    _ => Err(TimedOut)
+  }
+}
+
+test "timeout returns the value of work that finishes in time" {
+  assert timeout(duration::seconds(10), fn() { 6 * 7 }) == Ok(42)
+}
+
+test "timeout cancels work that takes too long" {
+  let (keep, never) = channel::new::<Int>(1)
+  let outcome = timeout(duration::milliseconds(10), fn() { channel::receive(never) })
+  assert outcome == Err(TimedOut)
+  // `f` was released before `timeout` returned, and with it `never`.
+  assert channel::send(keep, 1) == Err(1)
+}
+
+test "timeout reports a panic as Panicked" {
+  let outcome = timeout(duration::seconds(10), fn() { panic as "crash" })
+  let assert Err(Panicked(failure)) = outcome
+  assert message(failure) == "crash"
+}
+
+test "a limit of zero times out without calling f" {
+  let outcome = timeout(duration::seconds(0), fn() { panic as "not called" })
+  assert outcome == Err(TimedOut)
+}
+
+test "a timeout cancels the scopes inside it without their returning" {
+  let (keep, never) = channel::new::<Int>(1)
+  let outcome = timeout(duration::milliseconds(10), fn() {
+    let inner = {
+      use owner <- scope()
+      spawn(owner, fn() { channel::receive(never) })
+    }
+    // Not reached: a scope that is cancelled from outside never
+    // returns.
+    case inner {
+      Ok(_) => "returned"
+      Err(_) => "failed"
+    }
+  })
+  assert outcome == Err(TimedOut)
+  assert channel::send(keep, 1) == Err(1)
+}
+
+// Panics
+
+/// Returns the message of the panic: exactly the message line of its
+/// panic report, without the `panicked at` line, the location or any
+/// prefix (§11.6, D-449, D-473).
+pub fn message(failure: Panic) -> String {
+  failure.message
+}
+
+test "message is the panic's message line" {
+  let outcome = {
+    use _scope <- scope()
+    todo as "later"
+  }
+  let assert Err(failure) = outcome
+  assert message(failure) == "not implemented: later"
+}
+
+/// Makes `Panic` satisfy `Show` (§8.8). The text is the panic report of
+/// §11.6 without its final line ending: `panicked at <location>:`, a line
+/// ending, and the message, so `main` returning `Err(p)` prints what the
+/// panic would have printed (§10.10, D-182, D-449, D-648).
+pub fn show(failure: Panic) -> String {
+  "panicked at {failure.location}:\n{failure.message}"
+}
+
+test "a panic shows like a panic report" {
+  let assert Err(failure) = {
+    use _scope <- scope()
+    panic as "boom"
+  }
+  let text = show(failure)
+  assert string::starts_with(text, "panicked at ")
+  assert string::ends_with(text, ":\nboom")
+  assert string::starts_with("{failure:?}", "Panic \{ message: \"boom\", location: \"")
+}
+
+test "panics compare by message and location" {
+  fn fail(text) {
+    let assert Err(failure) = {
+      use _scope <- scope()
+      panic as text
+    }
+    failure
+  }
+  assert fail("same") == fail("same")
+  assert fail("same") != fail("other")
+}
+
+// Tests of `std::channel` that need this module.
+
+test "a negative capacity counts as 0" {
+  let capacity = -1
+  let (tx, rx) = channel::new::<Int>(capacity)
+  // Nobody receives, so a send on a capacity-0 channel waits.
+  let attempt = timeout(duration::milliseconds(10), fn() { channel::send(tx, 1) })
+  assert attempt == Err(TimedOut)
+  // The cancelled send delivered nothing, and the only `Sender` is gone.
+  assert channel::receive(rx) == Err(Nil)
+}
+
+test "a capacity-0 send completes when a receiver takes the value" {
+  let (tx, rx) = channel::new::<String>(0)
+  let outcome = {
+    use owner <- scope()
+    let sender = spawn(owner, fn() { channel::send(tx, "hello") })
+    let received = channel::receive(rx)
+    (received, join(sender))
+  }
+  assert outcome == Ok((Ok("hello"), Ok(Nil)))
+}

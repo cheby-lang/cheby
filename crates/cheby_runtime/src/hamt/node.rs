@@ -195,6 +195,8 @@ static MAP_ROOT_KIND: CustomKind = CustomKind {
     equal: Some(compare::equal),
     hash: Some(compare::hash),
     debug: None,
+    handle: false,
+    finalize: None,
 };
 
 /// The set root kind.
@@ -205,6 +207,8 @@ static SET_ROOT_KIND: CustomKind = CustomKind {
     equal: Some(compare::equal),
     hash: Some(compare::hash),
     debug: None,
+    handle: false,
+    finalize: None,
 };
 
 /// Node kinds are never values of their own.
@@ -221,6 +225,8 @@ const fn node_kind(name: &'static str) -> CustomKind {
         equal: None,
         hash: None,
         debug: None,
+        handle: false,
+        finalize: None,
     }
 }
 

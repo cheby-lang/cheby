@@ -74,6 +74,7 @@ fn sum_item(p: &mut Prog) -> DefId {
                     then_: bb(2),
                     else_: bb(3),
                 },
+                unwind: Vec::new(),
             },
             block(
                 vec![assign(
@@ -154,6 +155,7 @@ fn name_item(p: &mut Prog) -> DefId {
                 params: vec![local(1)],
                 stmts: Vec::new(),
                 term: ret(1),
+                unwind: Vec::new(),
             },
             block(Vec::new(), Terminator::Unreachable),
         ],
@@ -204,6 +206,9 @@ fn capture_reader(key: FnKey) -> Function {
         Repr::Value,
         straight(
             vec![
+                // The unused parameter goes first: no drop moves past a
+                // later instruction (D-851).
+                Stmt::Drop(local(1)),
                 assign(
                     2,
                     Rvalue::Field {
@@ -214,7 +219,6 @@ fn capture_reader(key: FnKey) -> Function {
                 ),
                 Stmt::Dup(local(2)),
                 Stmt::Drop(local(0)),
-                Stmt::Drop(local(1)),
             ],
             2,
         ),

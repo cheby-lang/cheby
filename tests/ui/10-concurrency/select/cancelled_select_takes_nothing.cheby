@@ -1,0 +1,46 @@
+// @mode: run-pass
+// @decisions: D-670, D-673
+// @milestone: M2
+//! A `select` that is cancelled while it waits takes no value from any
+//! arm, and leaves the channel's later values for other receivers
+//! (§10.7).
+
+import std::channel
+import std::duration
+import std::fiber
+import std::io
+import std::selector
+
+fn main() {
+  let (tx, rx) = channel::new::<String>(1)
+  let (ready_tx, ready_rx) = channel::new::<Nil>(0)
+  let outcome = {
+    use owner <- fiber::scope()
+    let _ = fiber::spawn(owner, fn() {
+      let assert Ok(Nil) = channel::send(ready_tx, Nil)
+      // `main` keeps `tx` and sends only after the scope, and the timer
+      // arm waits far longer than the cancellation takes, so this select
+      // waits until it is cancelled.
+      selector::new()
+      |> selector::receive(_, rx, fn(r) { r })
+      |> selector::after(_, duration::seconds(10), fn() { Err(Nil) })
+      |> selector::select
+    })
+    let _ = fiber::spawn(owner, fn() {
+      let _ = channel::receive(ready_rx)
+      panic as "stop"
+    })
+    Nil
+  }
+  case outcome {
+    Ok(_) => io::println("the scope returned Ok")
+    Err(failure) => {
+      let text = fiber::message(failure)
+      io::println("the scope failed: {text}")
+    }
+  }
+  let sent = channel::send(tx, "kept")
+  io::println("sent: {sent:?}")
+  let received = channel::receive(rx)
+  io::println("received: {received:?}")
+}

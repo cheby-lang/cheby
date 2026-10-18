@@ -1,0 +1,138 @@
+//! Runtime benchmark of the collections group: `std::ordered_multimap`
+//! (D-664).
+//!
+//! Values go into an ordered multimap under pseudo-random keys, about
+//! eight values per key, each value its step number. Then keys are looked
+//! up, some keys are removed with all their values and inserted again
+//! with new values, which moves them to the end, and the first key,
+//! the last key and every pair in insertion order are folded. Only the
+//! loop holds the multimap while it changes, so each insert can rebuild
+//! its paths and append to its key's list in place. The number of values
+//! is the first program argument, and `main` prints a checksum that
+//! `bench/baselines` computes too.
+
+import std::env
+import std::int
+import std::io
+import std::list
+import std::ordered_multimap
+import std::ordered_multimap::{OrderedMultimap}
+
+/// The number of values when no argument is given.
+const default_size: Int = 1_100_000
+
+/// The number of values per key, on average.
+const values_per_key: Int = 8
+
+/// Keeps the checksum small.
+const modulus: Int = 1_000_000_007
+
+fn main() {
+  let n = size(env::args())
+  let keys = int::max(1, n / values_per_key)
+  let filled = fill(ordered_multimap::new(), 0, n, keys, 42)
+  let looked = look(filled, n / 2, keys, 7, 0)
+  let thinned = thin(filled, n / 16, keys, 99)
+  let refilled = refill(thinned, n / 16, keys, n, 99)
+  let folded = list::fold(ordered_multimap::to_pairs(refilled), 0, fn(total, (key, value)) {
+    (total * 31 + key * 7 + value) % modulus
+  })
+  let ends = mix(entry(ordered_multimap::first(refilled)), entry(ordered_multimap::last(refilled)))
+  let counts = mix(mix(looked, ordered_multimap::size(refilled)), ordered_multimap::count(refilled))
+  let checksum = mix(mix(counts, ends), folded)
+  io::println("size: {n}")
+  io::println("checksum: {checksum}")
+}
+
+/// The size from the first program argument, or `default_size`.
+fn size(args: List<String>) -> Int {
+  case args {
+    [] => default_size
+    [first, ..] => {
+      let assert Ok(n) = int::parse(first)
+      n
+    }
+  }
+}
+
+/// The pseudo-random number after `seed`, from a linear congruential
+/// generator.
+fn next(seed: Int) -> Int {
+  (seed * 1_103_515_245 + 12_345) % 2_147_483_648
+}
+
+/// Adds `n` to the checksum `total`.
+fn mix(total: Int, n: Int) -> Int {
+  (total * 31 + n) % modulus
+}
+
+/// A key and its number of values as one number, or 0 for none.
+fn entry(found: Option<(Int, List<Int>)>) -> Int {
+  case found {
+    Some((key, values)) => (key * 7 + list::length(values)) % modulus
+    None => 0
+  }
+}
+
+/// `m` with the steps `i` to `n` as values, each under the next key below
+/// `keys` of the sequence from `seed`.
+fn fill(
+  m: OrderedMultimap<Int, Int>,
+  i: Int,
+  n: Int,
+  keys: Int,
+  seed: Int,
+) -> OrderedMultimap<Int, Int> {
+  case i == n {
+    True => m
+    False => fill(ordered_multimap::insert(m, seed % keys, i), i + 1, n, keys, next(seed))
+  }
+}
+
+/// Adds to `total`, for each of `count` keys of the sequence from `seed`,
+/// seven times its number of values and its first value.
+fn look(m: OrderedMultimap<Int, Int>, count: Int, keys: Int, seed: Int, total: Int) -> Int {
+  case count {
+    0 => total
+    _ => {
+      let values = ordered_multimap::get(m, seed % keys)
+      let first = case list::first(values) {
+        Some(value) => value
+        None => 0
+      }
+      let found = (total + list::length(values) * 7 + first) % modulus
+      look(m, count - 1, keys, next(seed), found)
+    }
+  }
+}
+
+/// `m` without `count` keys of the sequence from `seed` and their values.
+fn thin(
+  m: OrderedMultimap<Int, Int>,
+  count: Int,
+  keys: Int,
+  seed: Int,
+) -> OrderedMultimap<Int, Int> {
+  case count {
+    0 => m
+    _ => thin(ordered_multimap::remove(m, seed % keys), count - 1, keys, next(seed))
+  }
+}
+
+/// `m` with `base` plus the count left as a value under each of `count`
+/// keys of the sequence from `seed`.
+fn refill(
+  m: OrderedMultimap<Int, Int>,
+  count: Int,
+  keys: Int,
+  base: Int,
+  seed: Int,
+) -> OrderedMultimap<Int, Int> {
+  case count {
+    0 => m
+    _ => {
+      let stored = ordered_multimap::insert(m, seed % keys, base + count)
+      refill(stored, count - 1, keys, base, next(seed))
+    }
+  }
+}

@@ -1,0 +1,4 @@
+test ui_test "lets a detached fiber fail" ... ok
+test ui_test "writes to standard error at once" ... ok
+
+test result: ok. 2 passed; 0 failed; 0 filtered out

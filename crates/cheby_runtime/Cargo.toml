@@ -11,13 +11,19 @@ publish = false
 crate-type = ["rlib", "staticlib"]
 
 [dependencies]
+crossbeam-deque.workspace = true
+crossbeam-utils.workspace = true
+getrandom.workspace = true
 libc.workspace = true
+mio.workspace = true
+parking_lot.workspace = true
 ryu.workspace = true
 siphasher.workspace = true
 unicode-segmentation.workspace = true
 
 [dev-dependencies]
 astro-float.workspace = true
+loom.workspace = true
 proptest.workspace = true
 
 [lints]

@@ -1,0 +1,4 @@
+fatal error: all fibers are blocked
+  blocked in fiber::scope at tests/ui/10-concurrency/deadlock/two_fibers_wait_on_each_other.cheby:18:5
+  blocked in channel::receive at tests/ui/10-concurrency/deadlock/two_fibers_wait_on_each_other.cheby:27:22
+  blocked in channel::receive at tests/ui/10-concurrency/deadlock/two_fibers_wait_on_each_other.cheby:32:22

@@ -1,0 +1,14 @@
+reuse: tests/ui/09-memory-model/reuse_report/kernel_held_through_join.cheby:22:13: building `Bag` allocates: no value of the same size dies before it
+reuse: tests/ui/09-memory-model/reuse_report/kernel_held_through_join.cheby:28:3: building a tuple of 2 reuses `bag` when it is unique
+reuse: tests/ui/09-memory-model/reuse_report/kernel_held_through_join.cheby:33:14: building `Some` allocates: no value of the same size dies before it
+reuse: tests/ui/09-memory-model/reuse_report/kernel_held_through_join.cheby:34:10: building `Some` allocates: no value of the same size dies before it
+reuse: tests/ui/09-memory-model/reuse_report/kernel_held_through_join.cheby:37:3: building a tuple of 2 allocates: no value of the same size dies before it
+reuse: tests/ui/09-memory-model/reuse_report/kernel_held_through_join.cheby:53:3: building a tuple of 2 allocates: no value of the same size dies before it
+reuse: tests/ui/09-memory-model/reuse_report/kernel_held_through_join.cheby:58:14: building `Some` allocates: no value of the same size dies before it
+reuse: tests/ui/09-memory-model/reuse_report/kernel_held_through_join.cheby:61:14: `set::insert` gets `s` at its last use: in place when it is unique at run time
+reuse: tests/ui/09-memory-model/reuse_report/kernel_held_through_join.cheby:62:3: building a tuple of 2 allocates: no value of the same size dies before it
+reuse: tests/ui/09-memory-model/reuse_report/kernel_held_through_join.cheby:66:13: building `Bag` allocates: no value of the same size dies before it
+reuse: tests/ui/09-memory-model/reuse_report/kernel_held_through_join.cheby:73:14: `set::insert` gets `items` at its last use: in place when it is unique at run time
+reuse: tests/ui/09-memory-model/reuse_report/kernel_held_through_join.cheby:74:3: building a tuple of 2 reuses `other` when it is unique
+reuse: tests/ui/09-memory-model/reuse_report/kernel_held_through_join.cheby:79:14: building a tuple of 2 allocates: no value of the same size dies before it
+reuse: tests/ui/09-memory-model/reuse_report/kernel_held_through_join.cheby:80:10: building a tuple of 2 allocates: no value of the same size dies before it

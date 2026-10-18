@@ -1,0 +1,100 @@
+//! Runtime benchmark of the collections group: `std::ordered_set`
+//! (D-664).
+//!
+//! Pseudo-random numbers below half the size go into an ordered set, so
+//! many repeat and keep their first place. A quarter as many are removed,
+//! the set is searched, the even elements are kept by `filter`, and the
+//! first element, the last one and the kept ones in insertion order are
+//! folded. Only the loop holds the set while it changes, so each insert
+//! and remove can rebuild its paths in place. The number of inserts is
+//! the first program argument, and `main` prints a checksum that
+//! `bench/baselines` computes too.
+
+import std::env
+import std::int
+import std::io
+import std::ordered_set
+import std::ordered_set::{OrderedSet}
+
+/// The number of inserts when no argument is given.
+const default_size: Int = 700_000
+
+/// Keeps the checksum small.
+const modulus: Int = 1_000_000_007
+
+fn main() {
+  let n = size(env::args())
+  let universe = int::max(1, n / 2)
+  let filled = fill(ordered_set::new(), n, universe, 42)
+  let thinned = thin(filled, n / 4, universe, 7)
+  let hits = search(thinned, n, universe, 99, 0)
+  let evens = ordered_set::filter(thinned, fn(item) { item % 2 == 0 })
+  let folded = ordered_set::fold(evens, 0, fn(total, item) { (total * 31 + item) % modulus })
+  let ends = mix(element(ordered_set::first(thinned)), element(ordered_set::last(thinned)))
+  let sizes = mix(mix(hits, ordered_set::size(thinned)), ordered_set::size(evens))
+  let checksum = mix(mix(sizes, ends), folded)
+  io::println("size: {n}")
+  io::println("checksum: {checksum}")
+}
+
+/// The size from the first program argument, or `default_size`.
+fn size(args: List<String>) -> Int {
+  case args {
+    [] => default_size
+    [first, ..] => {
+      let assert Ok(n) = int::parse(first)
+      n
+    }
+  }
+}
+
+/// The pseudo-random number after `seed`, from a linear congruential
+/// generator.
+fn next(seed: Int) -> Int {
+  (seed * 1_103_515_245 + 12_345) % 2_147_483_648
+}
+
+/// Adds `n` to the checksum `total`.
+fn mix(total: Int, n: Int) -> Int {
+  (total * 31 + n) % modulus
+}
+
+/// An element plus one, or 0 for none.
+fn element(found: Option<Int>) -> Int {
+  case found {
+    Some(item) => item + 1
+    None => 0
+  }
+}
+
+/// `s` with `count` elements below `universe` of the sequence from `seed`.
+fn fill(s: OrderedSet<Int>, count: Int, universe: Int, seed: Int) -> OrderedSet<Int> {
+  case count {
+    0 => s
+    _ => fill(ordered_set::insert(s, seed % universe), count - 1, universe, next(seed))
+  }
+}
+
+/// `s` without `count` elements below `universe` of the sequence from
+/// `seed`.
+fn thin(s: OrderedSet<Int>, count: Int, universe: Int, seed: Int) -> OrderedSet<Int> {
+  case count {
+    0 => s
+    _ => thin(ordered_set::remove(s, seed % universe), count - 1, universe, next(seed))
+  }
+}
+
+/// Adds to `found` the number of the `count` elements below `universe` of
+/// the sequence from `seed` that `s` contains.
+fn search(s: OrderedSet<Int>, count: Int, universe: Int, seed: Int, found: Int) -> Int {
+  case count {
+    0 => found
+    _ => {
+      let hit = case ordered_set::contains(s, seed % universe) {
+        True => 1
+        False => 0
+      }
+      search(s, count - 1, universe, next(seed), found + hit)
+    }
+  }
+}

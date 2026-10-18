@@ -1,0 +1,4 @@
+a timeout around a scope: Err(TimedOut)
+the inner limit passes first: Ok: Err(TimedOut)
+the outer limit passes first: Err(TimedOut)
+a send after the timeouts: Err(1)

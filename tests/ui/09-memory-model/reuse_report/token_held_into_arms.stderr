@@ -1,0 +1,7 @@
+reuse: tests/ui/09-memory-model/reuse_report/token_held_into_arms.cheby:20:13: building `Node` allocates: no value of the same size dies before it
+reuse: tests/ui/09-memory-model/reuse_report/token_held_into_arms.cheby:22:18: building `Node` reuses `tree` when it is unique
+reuse: tests/ui/09-memory-model/reuse_report/token_held_into_arms.cheby:23:18: building `Node` reuses `tree` when it is unique
+reuse: tests/ui/09-memory-model/reuse_report/token_held_into_arms.cheby:24:12: building `Node` reuses `tree` when it is unique
+reuse: tests/ui/09-memory-model/reuse_report/token_held_into_arms.cheby:33:18: building `Node` reuses `tree` when it is unique
+reuse: tests/ui/09-memory-model/reuse_report/token_held_into_arms.cheby:34:18: building `Node` reuses `tree` when it is unique
+reuse: tests/ui/09-memory-model/reuse_report/token_held_into_arms.cheby:43:29: `string::add` gets a temporary value at its last use: in place when it is unique at run time

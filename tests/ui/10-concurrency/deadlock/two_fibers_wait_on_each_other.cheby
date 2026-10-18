@@ -1,0 +1,34 @@
+// @mode: run-fail
+// @exit: 103
+// @decisions: D-724, D-856, D-858
+// @milestone: M2
+//! Two scoped fibers each wait to receive from the other before they send,
+//! and `main` waits at the end of their scope. The lines are sorted by
+//! location, whatever order the fibers were spawned and parked in: `main`'s
+//! scope comes first because its line comes first, and `pong`, spawned
+//! last, comes before `ping` (D-858).
+
+import std::channel
+import std::fiber
+
+fn main() {
+  let (ping_tx, ping_rx) = channel::new::<Int>(0)
+  let (pong_tx, pong_rx) = channel::new::<Int>(0)
+  let outcome = {
+    use owner <- fiber::scope()
+    fiber::spawn(owner, fn() { ping(ping_rx, pong_tx) })
+    fiber::spawn(owner, fn() { pong(pong_rx, ping_tx) })
+    Nil
+  }
+  let _ = outcome
+}
+
+fn pong(from: channel::Receiver<Int>, to: channel::Sender<Int>) -> Result<Nil, Int> {
+  let assert Ok(n) = channel::receive(from)
+  channel::send(to, n + 1)
+}
+
+fn ping(from: channel::Receiver<Int>, to: channel::Sender<Int>) -> Result<Nil, Int> {
+  let assert Ok(n) = channel::receive(from)
+  channel::send(to, n + 1)
+}

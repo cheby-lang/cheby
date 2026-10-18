@@ -1,0 +1,17 @@
+// @milestone: M2
+// @decisions: D-712, D-194, D-799, D-670
+> import std::channel
+> import std::fiber
+> let rx = {
+.   let (tx, receiver) = channel::new::<Int>(0)
+.   fiber::spawn_detached(fn() { channel::send(tx, 1) })
+.   receiver
+. }
+> :reload
+no module changed
+> channel::receive(rx)
+Err(Nil) : Result<Int, Nil>
+> let (tx2, rx2) = channel::new::<Int>(1)
+> fiber::spawn_detached(fn() { channel::send(tx2, 2) })
+> channel::receive(rx2)
+Ok(2) : Result<Int, Nil>

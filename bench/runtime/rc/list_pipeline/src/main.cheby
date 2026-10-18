@@ -1,0 +1,56 @@
+//! Runtime benchmark of the RC group: a pipeline of list operations.
+//!
+//! Each round builds the numbers below the size, then maps, filters,
+//! maps again and folds them. Every stage takes a list that nothing else
+//! holds, so the reference counts of the intermediate lists and their
+//! cells decide the time. The size is the first program argument, and
+//! `main` prints a checksum that does not depend on how the lists were
+//! freed.
+
+import std::env
+import std::int
+import std::io
+import std::list
+
+/// The size when no argument is given.
+const default_size: Int = 400_000
+
+/// How many times the pipeline runs.
+const rounds: Int = 10
+
+/// Keeps the checksum small.
+const modulus: Int = 1_000_000_007
+
+fn main() {
+  let n = size(env::args())
+  fn run(round, total) {
+    case {
+      round == rounds => total
+      _ => run(round + 1, (total + pipeline(n, round)) % modulus)
+    }
+  }
+  let checksum = run(0, 0)
+  io::println("size: {n}")
+  io::println("checksum: {checksum}")
+}
+
+/// The size from the first program argument, or `default_size`.
+fn size(args: List<String>) -> Int {
+  case args {
+    [] => default_size
+    [first, ..] => {
+      let assert Ok(n) = int::parse(first)
+      n
+    }
+  }
+}
+
+/// One round over the numbers below `n`; `salt` makes each round
+/// different.
+fn pipeline(n: Int, salt: Int) -> Int {
+  list::range(0, n)
+  |> list::map(_, fn(x) { x * 3 + salt })
+  |> list::filter(_, fn(x) { x % 2 == 0 })
+  |> list::map(_, fn(x) { x % 1000 })
+  |> list::fold(_, 0, fn(acc, x) { (acc * 31 + x) % modulus })
+}

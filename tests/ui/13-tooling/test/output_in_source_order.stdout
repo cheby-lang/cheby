@@ -1,0 +1,6 @@
+the first test's output
+test ui_test "waits, then prints" ... ok
+the second test's output
+test ui_test "prints at once" ... ok
+
+test result: ok. 2 passed; 0 failed; 0 filtered out

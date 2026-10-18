@@ -47,24 +47,24 @@ fn examples_pass_the_syntax_layer() {
     }
 }
 
-/// The examples that need tier-2 or tier-3 std modules move to the
+/// The examples that need std modules not shipped yet move to the
 /// milestone that ships those modules: their imports of them are E0038
-/// (D-451).
-const LATER_EXAMPLES: [&str; 8] = [
-    "005_prime_sieve",
-    "009_counter_actor",
-    "013_dining_philosophers",
-    "018_worker_pool",
-    "019_supervisor",
-    "022_bank_accounts",
-    "028_money_and_rationals",
-    "031_web_scraper",
-];
+/// (D-451, D-480). M2's first slice shipped `std::fiber`, `std::channel`
+/// and `std::duration`, so 005, 018, 022 and 028 left the list (D-729),
+/// and with `std::selector`, `std::random` and `std::runtime` 009, 013 and
+/// 019 left it too.
+const LATER_EXAMPLES: [&str; 1] = ["031_web_scraper"];
 
-/// Every example of the M1 exit criterion, and 020, checks with no
-/// diagnostics at all, warnings included (D-477). The cross-target check
-/// covers every target the manifest declares, so this is the check for
-/// both targets (D-512).
+/// The one example allowed a diagnostic in the clean check: 022 keeps the
+/// `todo` of `money::apply_interest`, which warns with W0009 on purpose
+/// (D-068, D-663).
+const TODO_EXAMPLE: &str = "022_bank_accounts";
+
+/// Every example of the M1 exit criterion, 020 and the examples of M2's
+/// slices check with no diagnostics at all, warnings included
+/// (D-477), except 022's one W0009 at `src/money.cheby` (D-663). The
+/// cross-target check covers every target the manifest declares, so this
+/// is the check for both targets (D-512).
 #[test]
 #[cfg_attr(
     windows,
@@ -78,16 +78,23 @@ fn examples_check_cleanly() {
             continue;
         }
         let out = check(&dir).unwrap();
-        assert_eq!(out.render(), "", "{name}");
+        let rendered = out.render();
+        if name == TODO_EXAMPLE {
+            let codes: Vec<String> = out.diagnostics.iter().map(|d| d.code.to_string()).collect();
+            assert_eq!(codes, ["W0009"], "{name}:\n{rendered}");
+            assert!(rendered.contains("src/money.cheby:"), "{name}:\n{rendered}");
+        } else {
+            assert_eq!(rendered, "", "{name}");
+        }
         checked += 1;
     }
-    assert_eq!(checked, 23);
+    assert_eq!(checked, 30);
 }
 
 /// An example that needs a std module of a later tier reports E0038 at
 /// each import of one, and nothing else: paths through such an import are
-/// silent, and its other code checks. 022 keeps its deliberate `todo`
-/// (W0009, D-068). 030 still stops after phase A (D-446).
+/// silent, and its other code checks. 030 still stops after phase A
+/// (D-446).
 #[test]
 #[cfg_attr(
     windows,
@@ -109,9 +116,6 @@ fn later_examples_report_only_unshipped_modules() {
         let mut imports = 0;
         for d in &out.diagnostics {
             let code = d.code.to_string();
-            if code == "W0009" && name == "022_bank_accounts" {
-                continue;
-            }
             let module = d
                 .message
                 .strip_prefix("the module `std::")
@@ -124,12 +128,6 @@ fn later_examples_report_only_unshipped_modules() {
             imports += 1;
         }
         assert!(imports > 0, "{name}");
-        let todos = out
-            .diagnostics
-            .iter()
-            .filter(|d| d.code.to_string() == "W0009")
-            .count();
-        assert_eq!(todos, usize::from(name == "022_bank_accounts"), "{name}");
     }
 }
 
@@ -299,7 +297,7 @@ fn lowering_reports_no_e0038() {
             Err(e) => failures.push(format!("{name}: {e}")),
         }
     }
-    assert_eq!(lowered, 23, "{}", failures.join("\n"));
+    assert_eq!(lowered, 30, "{}", failures.join("\n"));
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/ui");
     let mut cases = Vec::new();
     collect_ui_tests(&root, &mut cases);
@@ -540,13 +538,14 @@ fn missing_and_planned_std_modules() {
             MANIFEST,
             (
                 "src/main.cheby",
-                b"//! Imports.\n\nimport std::fiber\nimport std::ioo\n\nfn main() {\n  Nil\n}\n",
+                b"//! Imports.\n\nimport std::http\nimport std::ioo\n\nfn main() {\n  Nil\n}\n",
             ),
         ],
     );
     let rendered = check(&dir).unwrap().render();
+    // D-729: `std::http` stays unshipped until tier 3.
     assert!(
-        rendered.contains("error[E0038]: the module `std::fiber` is not supported yet"),
+        rendered.contains("error[E0038]: the module `std::http` is not supported yet"),
         "{rendered}"
     );
     assert!(
@@ -1103,7 +1102,7 @@ fn tests_are_selected_and_counted() {
             panic!("the package does not compile");
         };
         let mut out = Vec::new();
-        let report = program.run(&mut out).unwrap();
+        let report = program.run(&mut out, &mut std::io::sink()).unwrap();
         (report, String::from_utf8(out).unwrap())
     };
     let (report, text) = run(&TestOptions::default());

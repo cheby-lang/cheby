@@ -17,6 +17,16 @@
 //! | `deep`    | ~250 lines   | module `i - 1` only, one long chain      |
 //! | `wide`    | ~250 lines   | 1 to 4 of the first 8 modules            |
 //! | `generic` | ~250 lines   | like `small`, mostly generic functions   |
+//!
+//! The `huge_literals` shapes (D-720) are different: `huge_list`,
+//! `huge_interpolation`, `huge_map` and `huge_tuple` each generate one
+//! module whose single function builds one literal of n computed elements,
+//! where n is [`Config::lines`]. They are listed in
+//! [`Shape::HUGE_LITERALS`], not in [`Shape::ALL`], so that the projects of
+//! `bench-compile` and `check-determinism` stay what they were (D-776). The
+//! `huge` module describes them.
+
+mod huge;
 
 use std::fmt::Write as _;
 use std::io;
@@ -33,15 +43,32 @@ pub enum Shape {
     Deep,
     Wide,
     Generic,
+    /// One list literal of n computed elements (D-720).
+    HugeList,
+    /// One interpolation of n `Int` parts (D-720).
+    HugeInterpolation,
+    /// One map built from a list literal of n computed pairs (D-720).
+    HugeMap,
+    /// One tuple literal of n computed fields (D-720).
+    HugeTuple,
 }
 
 impl Shape {
+    /// The project shapes: many modules of small functions.
     pub const ALL: [Self; 5] = [
         Self::Small,
         Self::Large,
         Self::Deep,
         Self::Wide,
         Self::Generic,
+    ];
+
+    /// The `huge_literals` shapes, one per literal kind (D-720).
+    pub const HUGE_LITERALS: [Self; 4] = [
+        Self::HugeList,
+        Self::HugeInterpolation,
+        Self::HugeMap,
+        Self::HugeTuple,
     ];
 
     #[must_use]
@@ -52,6 +79,27 @@ impl Shape {
             Self::Deep => "deep",
             Self::Wide => "wide",
             Self::Generic => "generic",
+            Self::HugeList => "huge_list",
+            Self::HugeInterpolation => "huge_interpolation",
+            Self::HugeMap => "huge_map",
+            Self::HugeTuple => "huge_tuple",
+        }
+    }
+
+    /// Whether this is one of the [`Shape::HUGE_LITERALS`], whose
+    /// [`Config::lines`] is the literal's number of elements.
+    #[must_use]
+    pub const fn is_huge_literal(self) -> bool {
+        self.huge_kind().is_some()
+    }
+
+    const fn huge_kind(self) -> Option<huge::Kind> {
+        match self {
+            Self::HugeList => Some(huge::Kind::List),
+            Self::HugeInterpolation => Some(huge::Kind::Interpolation),
+            Self::HugeMap => Some(huge::Kind::Map),
+            Self::HugeTuple => Some(huge::Kind::Tuple),
+            Self::Small | Self::Large | Self::Deep | Self::Wide | Self::Generic => None,
         }
     }
 
@@ -69,16 +117,22 @@ impl FromStr for Shape {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Self::ALL
             .into_iter()
+            .chain(Self::HUGE_LITERALS)
             .find(|shape| shape.name() == s)
             .ok_or_else(|| {
-                format!("unknown shape `{s}`, expected small, large, deep, wide or generic")
+                format!(
+                    "unknown shape `{s}`, expected small, large, deep, wide, generic, \
+                     huge_list, huge_interpolation, huge_map or huge_tuple"
+                )
             })
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct Config {
-    /// Approximate number of lines to generate, over all modules.
+    /// Approximate number of lines to generate, over all modules. For the
+    /// [`Shape::HUGE_LITERALS`], the number of elements of the literal
+    /// (at least 2).
     pub lines: usize,
     pub shape: Shape,
     pub seed: u64,
@@ -141,6 +195,9 @@ impl Project {
 /// Generates a project.
 #[must_use]
 pub fn generate(config: &Config) -> Project {
+    if let Some(kind) = config.shape.huge_kind() {
+        return huge::generate(kind, config.lines, config.seed);
+    }
     let per_module = config.shape.module_lines();
     let count = config.lines.div_ceil(per_module).max(1);
     let mut rng = Rng::new(config.seed);
@@ -192,6 +249,10 @@ fn imports_of(shape: Shape, index: usize, rng: &mut Rng) -> Vec<usize> {
         }
         Shape::Small | Shape::Large | Shape::Generic => {
             (0..rng.below(5)).map(|_| rng.below(index)).collect()
+        }
+        // One module, which imports nothing.
+        Shape::HugeList | Shape::HugeInterpolation | Shape::HugeMap | Shape::HugeTuple => {
+            Vec::new()
         }
     };
     imports.sort_unstable();
@@ -426,11 +487,28 @@ impl Rng {
 mod tests {
     use super::*;
 
+    /// The size the tests give a `huge_literals` shape: its `lines` is the
+    /// literal's number of elements, which must stay small in tests.
+    const HUGE_TEST_ELEMENTS: usize = 300;
+
+    /// Every shape with the `lines` a test gives it: `lines` for the project
+    /// shapes, [`HUGE_TEST_ELEMENTS`] for the `huge_literals` shapes.
+    fn every_shape(lines: usize) -> impl Iterator<Item = (Shape, usize)> {
+        Shape::ALL
+            .into_iter()
+            .map(move |shape| (shape, lines))
+            .chain(
+                Shape::HUGE_LITERALS
+                    .into_iter()
+                    .map(|shape| (shape, HUGE_TEST_ELEMENTS)),
+            )
+    }
+
     #[test]
     fn same_config_same_output() {
-        for shape in Shape::ALL {
+        for (shape, lines) in every_shape(3_000) {
             let config = Config {
-                lines: 3_000,
+                lines,
                 shape,
                 seed: 7,
             };
@@ -472,7 +550,7 @@ mod tests {
     #[test]
     fn imports_only_earlier_modules() {
         let mut rng = Rng::new(3);
-        for shape in Shape::ALL {
+        for (shape, _) in every_shape(0) {
             for index in 0..300 {
                 for dep in imports_of(shape, index, &mut rng) {
                     assert!(dep < index);
@@ -489,9 +567,9 @@ mod tests {
         ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
     )]
     fn generated_projects_check_cleanly() {
-        for shape in Shape::ALL {
+        for (shape, lines) in every_shape(1_500) {
             let project = generate(&Config {
-                lines: 1_500,
+                lines,
                 shape,
                 seed: 11,
             });

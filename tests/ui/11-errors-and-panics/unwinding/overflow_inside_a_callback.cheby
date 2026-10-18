@@ -1,0 +1,20 @@
+// @mode: run-fail
+// @milestone: M2
+// @decisions: D-094, D-697, D-700
+//! A stack overflow inside a function that `list::map` calls unwinds to
+//! the callback's trampoline, then through the kernel's own frames to
+//! `main`, releasing the lists on the way (§11.8.1).
+
+import std::io
+import std::list
+
+fn deep(n: Int) -> Int {
+  let held = [n]
+  deep(n + 1) + list::length(held)
+}
+
+fn main() {
+  let labels = ["first", "second"]
+  let depths = list::map([1, 2], fn(start) { deep(start) })
+  io::println("not reached: {labels:?} {depths:?}")
+}

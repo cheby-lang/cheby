@@ -1,0 +1,24 @@
+// @mode: run-pass
+// @decisions: D-666, D-699
+// @milestone: M2
+//! A fiber's panic is recorded in its scope when it starts. `scope`
+//! returns it as `Err` once every fiber spawned into it has ended, and the
+//! panic is not printed (§10.3, D-666, D-699, D-701).
+
+import std::fiber
+import std::io
+
+fn main() {
+  let outcome = {
+    use owner <- fiber::scope()
+    let _ = fiber::spawn(owner, fn() { panic as "a member failed" })
+    "the body returned"
+  }
+  case outcome {
+    Ok(text) => io::println(text)
+    Err(failure) => {
+      io::println(fiber::message(failure))
+      io::println("{failure}")
+    }
+  }
+}

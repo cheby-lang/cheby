@@ -37,20 +37,28 @@ mod entry;
 mod expr;
 mod external;
 mod interp;
+mod intrinsic;
+#[cfg(test)]
+mod intrinsic_tests;
 mod list;
 mod panic;
 mod pat;
 mod scalar;
 #[cfg(test)]
 mod scalar_tests;
+mod split;
+#[cfg(test)]
+mod split_tests;
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use cheby_diag::{SourceMap, Span};
-use cheby_iface::{DefId, DisplayCx, Generics, Ice, ModuleId, Ty, display};
+use cheby_iface::{DefId, DisplayCx, Generics, Ice, ModuleId, PackageId, Ty, display};
 use cheby_types::thir;
 
 pub use entry::{EntryRequest, lower_entries};
+pub use intrinsic::{Intrinsic, intrinsic_symbols};
+pub use split::{SPLIT_SIZE, STATEMENT_BUDGET, TUPLE_INIT_THRESHOLD};
 
 use crate::abi::abi_sig;
 use crate::defs::Defs;
@@ -111,6 +119,11 @@ pub(crate) struct Pending {
     functions: Vec<Function>,
     /// The next closure index per owner.
     closures: BTreeMap<DefId, u32>,
+    /// The next continuation index per owner (D-780).
+    continuations: BTreeMap<DefId, u32>,
+    /// Where large literals are cut, when a test asks for another size
+    /// than [`split::SPLIT_SIZE`].
+    split: Option<usize>,
     /// Top-level functions whose [`FnKey::ValueShim`] the unit defines.
     shims: BTreeSet<DefId>,
     /// The [`FnKey::TupleDictFn`] codes the unit defines, by interface
@@ -123,9 +136,62 @@ pub(crate) struct Pending {
     statics: Vec<StaticObject>,
     /// Arities of the trampolines the program needs (plan §4.3.4).
     trampolines: BTreeSet<u32>,
+    /// Whether the unit's bodies record the source sites of their
+    /// allocations and calls ([`Function::sites`]) for `--reuse-report`
+    /// (D-717, D-852). Off unless the driver asks, so
+    /// a build without the flag keeps no table.
+    record_sites: bool,
+    /// Whether the unit's bodies record the locations of their calls
+    /// ([`Function::call_locs`], D-856; [`Pending::for_module`]).
+    call_locs: bool,
+    /// Whether the unit is outside package `std`, so its tail calls of the
+    /// waits of [`crate::waits::FRAME_KEEPING_WAITS`] keep their frames
+    /// (D-861; [`Pending::for_module`]).
+    outside_std: bool,
 }
 
 impl Pending {
+    /// Whether the unit's bodies record their sites
+    /// ([`crate::FunctionBuilder::set_record_sites`]).
+    pub(crate) const fn records_sites(&self) -> bool {
+        self.record_sites
+    }
+
+    /// Whether the unit's bodies record the locations of their calls
+    /// ([`crate::FunctionBuilder::set_record_call_locs`], D-856).
+    pub(crate) const fn records_call_locs(&self) -> bool {
+        self.call_locs
+    }
+
+    /// Whether the unit is outside package `std`, so its tail calls of the
+    /// waits of [`crate::waits::FRAME_KEEPING_WAITS`] are compiled as a
+    /// call and a return (D-861).
+    pub(crate) const fn outside_std(&self) -> bool {
+        self.outside_std
+    }
+
+    /// Sets [`Pending::records_call_locs`] and [`Pending::outside_std`]
+    /// for the code unit of `module`, or its tests unit (`tests`).
+    ///
+    /// # Errors
+    ///
+    /// An [`Ice`] if `module` is unknown.
+    fn for_module(mut self, module: ModuleId, tests: bool, cx: &LowerCx<'_>) -> Result<Self, Ice> {
+        self.outside_std = cx.defs.modules.try_get(module)?.package != PackageId::STD;
+        // D-870: when std's own tests run (`cargo xtask
+        // test-std`), the calls of its test blocks and their closures are
+        // located like user code's, so a deadlocking std test names the
+        // line of its wait; std's other functions stay std. A user build
+        // never lowers std's tests, so this costs nothing there.
+        self.call_locs = self.outside_std || tests;
+        Ok(self)
+    }
+
+    /// The size at which a literal's piece is cut (D-780).
+    pub(crate) fn split_size(&self) -> usize {
+        self.split.unwrap_or(split::SPLIT_SIZE)
+    }
+
     /// Adds a function made while lowering the current item, such as a
     /// closure body.
     pub(crate) fn add_function(&mut self, f: Function) {
@@ -144,6 +210,21 @@ impl Pending {
             .checked_add(1)
             .ok_or_else(|| Ice::new("too many closures"))?;
         Ok(FnKey::Closure { owner, index })
+    }
+
+    /// A new continuation key of `owner`, numbered in creation order
+    /// (D-780, D-811).
+    ///
+    /// # Errors
+    ///
+    /// An [`Ice`] if `owner` has too many continuations.
+    pub(crate) fn continuation_key(&mut self, owner: DefId) -> Result<FnKey, Ice> {
+        let next = self.continuations.entry(owner).or_insert(0);
+        let index = *next;
+        *next = next
+            .checked_add(1)
+            .ok_or_else(|| Ice::new("too many continuations"))?;
+        Ok(FnKey::Continuation { owner, index })
     }
 
     /// Asks for the [`FnKey::ValueShim`] of `def` in this unit (D-453).
@@ -199,20 +280,13 @@ impl Pending {
     }
 
     /// Records that a kernel may call a closure of `arity` arguments back
-    /// through a trampoline (plan §4.3.4).
-    #[expect(
-        dead_code,
-        reason = "entries carry trampolines 0-4 (D-561); kept for a unit that records its own"
-    )]
+    /// through a trampoline (plan §4.3.4): the unit then defines
+    /// `FnKey::Trampoline(arity)`, which the JIT defines once (D-561).
     pub(crate) fn need_trampoline(&mut self, arity: u32) {
         self.trampolines.insert(arity);
     }
 
     /// The trampoline arities recorded so far.
-    #[expect(
-        dead_code,
-        reason = "entries carry trampolines 0-4 (D-561); kept for a unit that records its own"
-    )]
     pub(crate) const fn trampolines(&self) -> &BTreeSet<u32> {
         &self.trampolines
     }
@@ -242,12 +316,75 @@ pub fn lower_items(
     wanted: &dyn Fn(DefId) -> bool,
     cx: &LowerCx<'_>,
 ) -> Result<MirModule, Ice> {
+    lower_items_with(module, wanted, cx, Pending::default())
+}
+
+/// [`lower_items`] that, with `record_sites`, records in each body the
+/// source span of every local an allocation or a call defines
+/// ([`Function::sites`]) for `--reuse-report` (D-717). The span is the
+/// one of the innermost expression being lowered when the local is
+/// defined. Recording changes no MIR: the sites are a side table that
+/// code generation and the dumps never read.
+///
+/// # Errors
+///
+/// As [`lower_module`].
+pub fn lower_items_recording(
+    module: &thir::Module,
+    wanted: &dyn Fn(DefId) -> bool,
+    cx: &LowerCx<'_>,
+    record_sites: bool,
+) -> Result<MirModule, Ice> {
+    let pending = Pending {
+        record_sites,
+        ..Pending::default()
+    };
+    lower_items_with(module, wanted, cx, pending)
+}
+
+/// [`lower_items`] with large literals cut at `split` (D-780), or at
+/// [`SPLIT_SIZE`] for `None`: for tests.
+#[cfg(test)]
+pub(crate) fn lower_items_split(
+    module: &thir::Module,
+    wanted: &dyn Fn(DefId) -> bool,
+    cx: &LowerCx<'_>,
+    split: Option<usize>,
+) -> Result<MirModule, Ice> {
+    let pending = Pending {
+        split,
+        ..Pending::default()
+    };
+    lower_items_with(module, wanted, cx, pending)
+}
+
+/// [`lower_tests`] with large literals cut at `split`, as
+/// [`lower_items_split`].
+#[cfg(test)]
+pub(crate) fn lower_tests_split(
+    module: &thir::Module,
+    cx: &LowerCx<'_>,
+    split: Option<usize>,
+) -> Result<MirModule, Ice> {
+    let pending = Pending {
+        split,
+        ..Pending::default()
+    };
+    lower_tests_with(module, cx, pending)
+}
+
+fn lower_items_with(
+    module: &thir::Module,
+    wanted: &dyn Fn(DefId) -> bool,
+    cx: &LowerCx<'_>,
+    pending: Pending,
+) -> Result<MirModule, Ice> {
+    let mut pending = pending.for_module(module.module, false, cx)?;
     let mut fns: Vec<&thir::FnDef> = module.fns.iter().filter(|f| wanted(f.def)).collect();
     fns.sort_by_key(|f| f.def);
     let mut consts: Vec<&thir::ConstDef> = module.consts.iter().filter(|c| wanted(c.def)).collect();
     consts.sort_by_key(|c| c.def);
     let mut functions = Vec::new();
-    let mut pending = Pending::default();
     // Items in `DefIndex` order: merge functions and constants.
     let mut fi = fns.into_iter().peekable();
     let mut ci = consts.into_iter().peekable();
@@ -292,10 +429,35 @@ pub fn lower_items(
 ///
 /// As [`lower_module`].
 pub fn lower_tests(module: &thir::Module, cx: &LowerCx<'_>) -> Result<MirModule, Ice> {
+    lower_tests_with(module, cx, Pending::default())
+}
+
+/// [`lower_tests`] that records sites as [`lower_items_recording`] does.
+///
+/// # Errors
+///
+/// As [`lower_module`].
+pub fn lower_tests_recording(
+    module: &thir::Module,
+    cx: &LowerCx<'_>,
+    record_sites: bool,
+) -> Result<MirModule, Ice> {
+    let pending = Pending {
+        record_sites,
+        ..Pending::default()
+    };
+    lower_tests_with(module, cx, pending)
+}
+
+fn lower_tests_with(
+    module: &thir::Module,
+    cx: &LowerCx<'_>,
+    pending: Pending,
+) -> Result<MirModule, Ice> {
+    let mut pending = pending.for_module(module.module, true, cx)?;
     let mut tests: Vec<&thir::TestDef> = module.tests.iter().collect();
     tests.sort_by_key(|t| t.def);
     let mut functions = Vec::new();
-    let mut pending = Pending::default();
     for t in tests {
         let lowered = body::lower_body(FnKey::Test(t.def), t.span, &t.body, 0, cx, &mut pending)?;
         functions.push(lowered);
@@ -319,7 +481,7 @@ pub fn lower_tests(module: &thir::Module, cx: &LowerCx<'_>) -> Result<MirModule,
 ///
 /// As [`lower_module`].
 pub fn lower_fn(f: &thir::FnDef, cx: &LowerCx<'_>) -> Result<Vec<Function>, Ice> {
-    let mut pending = Pending::default();
+    let mut pending = Pending::default().for_module(f.def.module, false, cx)?;
     let item = lower_item(f, cx, &mut pending)?;
     let mut out = vec![item];
     out.append(&mut pending.functions);
@@ -337,7 +499,15 @@ fn lower_item(f: &thir::FnDef, cx: &LowerCx<'_>, pending: &mut Pending) -> Resul
         .sum::<usize>();
     match (&f.native_external, &f.body) {
         // With a body too, the body is for the other targets (D-207, D-510).
-        (Some(ext), _) => external::lower_wrapper(f, ext, sig, cx),
+        (Some(ext), _) => {
+            if ext.context {
+                // A `@std_context` kernel may start a fiber, whose base
+                // frame calls its function through `cb$tramp$0` (D-692,
+                // D-526), so the unit that binds one defines it (D-561).
+                pending.need_trampoline(0);
+            }
+            external::lower_wrapper(f, ext, sig, cx)
+        }
         (None, Some(body)) => {
             body::lower_body(FnKey::Item(f.def), f.span, body, dicts, cx, pending)
         }
@@ -393,6 +563,7 @@ fn finish_unit(
     for &(iface_fn, dyn_iface) in &pending.dyn_forwards {
         functions.push(dict::dyn_forward(iface_fn, dyn_iface, cx)?);
     }
+    functions.extend(closure::trampolines(pending.trampolines())?);
     let statics = pending.statics;
     let mut m = Mentions::default();
     for f in &functions {
@@ -468,7 +639,8 @@ fn finish_unit(
 fn collect_defs(f: &Function, m: &mut Mentions) {
     key_defs(f.key, &mut m.defs);
     let callee = |c: &Callee, m: &mut Mentions| match c {
-        Callee::Direct(d) => {
+        // Lowering writes only `Direct`; the inference adds `Borrowing`.
+        Callee::Direct(d) | Callee::Borrowing(d, _) => {
             m.direct.insert(*d);
         }
         Callee::Code(key) => key_defs(*key, &mut m.defs),
@@ -489,7 +661,10 @@ fn collect_defs(f: &Function, m: &mut Mentions) {
             }
             match value {
                 Rvalue::Call { callee: c, .. } => callee(c, m),
-                Rvalue::Alloc { layout, .. } | Rvalue::Field { layout, .. } => {
+                Rvalue::Alloc { layout, .. }
+                | Rvalue::AllocPlaceholder { layout }
+                | Rvalue::InitField { layout, .. }
+                | Rvalue::Field { layout, .. } => {
                     if let LayoutRef::Ctor(d) = layout {
                         m.ctors.insert(*d);
                     }
@@ -524,7 +699,7 @@ fn collect_defs(f: &Function, m: &mut Mentions) {
                     operand(msg, m);
                 }
             }
-            Terminator::Unreachable => {}
+            Terminator::Unreachable | Terminator::Resume => {}
         }
     }
 }
@@ -551,7 +726,9 @@ fn const_defs(c: &Const, m: &mut Mentions) {
         | Const::Nil
         | Const::EmptyList
         | Const::Static(_)
-        | Const::BuiltinDesc(_) => {}
+        | Const::BuiltinDesc(_)
+        | Const::Ctx
+        | Const::ErrNil => {}
     }
 }
 
@@ -560,6 +737,7 @@ fn key_defs(key: FnKey, out: &mut BTreeSet<DefId>) {
         FnKey::Item(d)
         | FnKey::ValueShim(d)
         | FnKey::Closure { owner: d, .. }
+        | FnKey::Continuation { owner: d, .. }
         | FnKey::ConstInit(d)
         | FnKey::Test(d)
         | FnKey::TupleDictFn { iface_fn: d, .. }

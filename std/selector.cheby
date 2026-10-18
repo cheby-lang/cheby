@@ -1,0 +1,232 @@
+//! Waiting on several channels and timers at once (§10.6, D-041, D-673).
+//!
+//! A selector is an immutable value built from arms, each of which maps
+//! what it waits for to one result type, and `select` waits until an arm
+//! is ready and returns that arm's result. `Selector` is a handle: an
+//! external type whose drop function the runtime supplies (D-101, D-647,
+//! D-703). It is a persistent list of runtime nodes, one per arm, so
+//! building one is O(1) (D-695).
+//!
+//! `new`, `receive` and `after` are written in Cheby over private kernels
+//! that add an arm, since only a kernel can make a value of an external
+//! type (D-590). `select` is written in Cheby over a private kernel that
+//! waits and returns the chosen arm's function, which Cheby calls after
+//! the selector has been released, so no kernel calls a Cheby closure
+//! (D-205, D-484, D-670, D-695). The kernels receive the running fiber's
+//! context (D-692) and are named after D-755's pattern; no function here
+//! shares a name with a parameter of the module (D-051, D-483). Each
+//! kernel also declares its JS binding, written with the JS back end
+//! (D-661).
+
+import std::channel
+import std::duration
+import std::fiber
+
+// Types
+
+/// A set of arms to wait on, each mapping what it waits for to an `E`
+/// (§10.6, D-041). It is immutable: `receive` and `after` return a new
+/// selector and leave their argument usable, and each `select` of it waits
+/// anew (D-673). It prints as `<Selector>`, and `==` and hashing panic
+/// when they reach one (D-233, D-647). It keeps its receivers, and so
+/// their channels, alive while it exists.
+pub type Selector<E>
+
+// Building
+
+/// Returns a selector with no arms (D-695).
+@std_context
+@external(native, "cheby_selector_sys_new")
+@external(js, "./selector.mjs", "sys_new")
+fn sys_new<E>() -> Selector<E>
+
+/// Returns `selector` with a receive arm on `receiver` whose result is
+/// `apply()`, called after the value has been taken (D-695).
+@std_context
+@external(native, "cheby_selector_sys_add_receive")
+@external(js, "./selector.mjs", "sys_add_receive")
+fn sys_add_receive<T, E>(
+  selector: Selector<E>,
+  receiver: channel::Receiver<T>,
+  apply: fn() -> E,
+) -> Selector<E>
+
+/// Returns `selector` with a timer arm of `seconds` and `nanoseconds`,
+/// ready once that span has passed since `select` started waiting, and
+/// at once when it is zero or less, whose result is `apply()` (D-652,
+/// D-673, D-695).
+@std_context
+@external(native, "cheby_selector_sys_add_after")
+@external(js, "./selector.mjs", "sys_add_after")
+fn sys_add_after<E>(
+  selector: Selector<E>,
+  seconds: Int,
+  nanoseconds: Int,
+  apply: fn() -> E,
+) -> Selector<E>
+
+/// Waits until an arm of `selector` is ready, chooses one ready arm
+/// uniformly at random, takes its value into the calling fiber and
+/// returns its `apply` function (D-206, D-673, D-695). A selector without
+/// arms waits until the fiber is cancelled, and a cancelled wait takes
+/// nothing (D-670).
+@std_context
+@external(native, "cheby_selector_sys_wait")
+@external(js, "./selector.mjs", "sys_wait")
+fn sys_wait<E>(selector: Selector<E>) -> fn() -> E
+
+/// Moves the value that `sys_wait` took for a receive arm on `receiver`
+/// out of the calling fiber, as `channel::receive` would return it:
+/// `Err(Nil)` for a closed and empty channel (D-180, D-695). `receiver`
+/// only fixes `T`.
+@std_context
+@external(native, "cheby_selector_take_selected")
+@external(js, "./selector.mjs", "take_selected")
+fn take_selected<T>(receiver: channel::Receiver<T>) -> Result<T, Nil>
+
+/// Returns a selector with no arms. `E` is usually inferred from the arms
+/// added next (D-673).
+pub fn new<E>() -> Selector<E> {
+  sys_new()
+}
+
+test "selectors print as a placeholder" {
+  let waiting = new::<Int>()
+  assert "{waiting:?}" == "<Selector>"
+}
+
+/// Returns `selector` with an arm that receives from `receiver` and passes
+/// the result to `map`, as `channel::receive` would return it (D-180). The
+/// arm is ready when the channel has a buffered value, when a sender is
+/// waiting on a capacity-0 channel, or when the channel is closed and
+/// empty, in which case `map` gets `Err(Nil)` (D-180, D-206).
+pub fn receive<T, E>(
+  selector: Selector<E>,
+  receiver: channel::Receiver<T>,
+  map: fn(Result<T, Nil>) -> E,
+) -> Selector<E> {
+  // The arm's function releases `receiver` once it has taken the value,
+  // before `map` runs (D-205, D-670).
+  sys_add_receive(selector, receiver, fn() { map(take_selected(receiver)) })
+}
+
+test "select takes a value from a ready arm" {
+  let (tx, rx) = channel::new::<Int>(1)
+  let assert Ok(Nil) = channel::send(tx, 7)
+  let got =
+    new()
+    |> receive(_, rx, fn(r) { r })
+    |> select
+  assert got == Ok(7)
+}
+
+test "a closed channel's arm is ready with Err(Nil)" {
+  let (_, rx) = channel::new::<Int>(0)
+  let got =
+    new()
+    |> receive(_, rx, fn(r) { r })
+    |> select
+  assert got == Err(Nil)
+}
+
+/// Returns `selector` with a timer arm, which is ready once `wait` has
+/// passed since `select` started waiting, and whose result is `map()`
+/// (D-103, D-673). The clock starts anew in each `select` call. A `wait`
+/// of zero or less is ready at once (D-652). A selector may have several
+/// timer arms, and a selector with only a timer arm is a sleep.
+pub fn after<E>(selector: Selector<E>, wait: duration::Duration, map: fn() -> E) -> Selector<E> {
+  // The span goes to the runtime as whole seconds and the nanoseconds
+  // after them, as `fiber::timeout` passes its limit (D-652).
+  let seconds = duration::to_seconds(wait)
+  let nanoseconds = duration::to_nanoseconds(wait - duration::seconds(seconds))
+  sys_add_after(selector, seconds, nanoseconds, map)
+}
+
+test "a timer arm is ready once its time has passed" {
+  let (keep, never) = channel::new::<Int>(0)
+  let got =
+    new()
+    |> receive(_, never, fn(_) { "message" })
+    |> after(_, duration::milliseconds(10), fn() { "timer" })
+    |> select
+  assert got == "timer"
+  // `select` released the selector, which held the only `Receiver`.
+  assert channel::send(keep, 1) == Err(1)
+}
+
+test "a timer of zero is ready at once" {
+  let got =
+    new()
+    |> after(_, duration::milliseconds(0), fn() { 1 })
+    |> select
+  assert got == 1
+}
+
+// Waiting
+
+/// Waits until at least one arm of `selector` is ready, takes exactly one
+/// value from exactly one ready arm, chosen uniformly at random among the
+/// ready ones, and returns that arm's mapped result (§10.6, D-041, D-206,
+/// D-673). The mapping function is called exactly once, on the calling
+/// fiber, after `selector`, and with it every receiver it holds, has been
+/// released (D-205, D-670); a panic in it is a panic of the calling fiber.
+/// A selector without arms waits until the fiber is cancelled, and a
+/// cancelled `select` takes no value from any arm (D-670, D-673).
+pub fn select<E>(selector: Selector<E>) -> E {
+  let chosen = sys_wait(selector)
+  chosen()
+}
+
+test "a waiting selector takes a handoff on a capacity-0 channel" {
+  let (tx, rx) = channel::new::<Int>(0)
+  let outcome = {
+    use owner <- fiber::scope()
+    fiber::spawn(owner, fn() { channel::send(tx, 3) })
+    new()
+    |> receive(_, rx, fn(r) { r })
+    |> select
+  }
+  assert outcome == Ok(Ok(3))
+}
+
+test "select chooses among ready arms without favoring one" {
+  let (_, left) = channel::new::<Nil>(0)
+  let (_, right) = channel::new::<Nil>(0)
+  let choose =
+    new()
+    |> receive(_, left, fn(_) { True })
+    |> receive(_, right, fn(_) { False })
+  fn count(remaining, lefts) {
+    case remaining {
+      0 => lefts
+      _ => case select(choose) {
+        True => count(remaining - 1, lefts + 1)
+        False => count(remaining - 1, lefts)
+      }
+    }
+  }
+  let lefts = count(200, 0)
+  assert lefts > 0 && lefts < 200
+}
+
+test "a selector without arms waits until it is cancelled" {
+  let waited = fiber::timeout(duration::milliseconds(10), fn() { select(new::<Nil>()) })
+  assert waited == Err(fiber::TimedOut)
+}
+
+// Tests of `std::channel` that need this module.
+
+test "a blocked send fails when the last Receiver goes" {
+  let (tx, rx) = channel::new::<Int>(0)
+  let outcome = {
+    use owner <- fiber::scope()
+    let sender = fiber::spawn(owner, fn() { channel::send(tx, 9) })
+    // Give the sender time to block, then drop the only `Receiver`.
+    new()
+    |> after(_, duration::milliseconds(10), fn() { Nil })
+    |> select
+    let _ = rx
+    fiber::join(sender)
+  }
+  assert outcome == Ok(Err(9))
+}

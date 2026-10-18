@@ -1,0 +1,235 @@
+//! Random numbers from the host's random source and from seeded
+//! generators (D-226, D-653 to D-656).
+//!
+//! The module keeps no state of its own (D-653). A `Generator` is
+//! SplitMix64 over a `U64` of state that the value itself holds, and every
+//! draw from one is defined bit for bit, so a seed gives the same numbers
+//! on every run and every target (D-232, D-655). The one kernel is the
+//! private `host_bits`, which returns 64 bits from the host's random
+//! source; everything else is written in Cheby over it and over `U64`
+//! arithmetic (D-656). The seeded functions therefore run in constants,
+//! and a constant that reaches a host function is E0077 (D-090, D-537).
+//! The kernel also declares its JS binding, written with the JS back end
+//! (D-661).
+
+import std::float
+import std::int
+import std::u64
+
+// Types
+
+/// A seeded random-number generator: SplitMix64 over 64 bits of state
+/// (D-655). It is opaque and plain data, so two generators are `==`
+/// exactly when they will draw the same numbers, and its debug text is
+/// the record's.
+pub type Generator {
+  state: U64,
+}
+
+/// What SplitMix64 adds to the state at each step (D-655).
+const increment: U64 = 0x9E37_79B9_7F4A_7C15
+
+/// The multiplier of SplitMix64's first mixing step (D-655).
+const first_multiplier: U64 = 0xBF58_476D_1CE4_E5B9
+
+/// The multiplier of SplitMix64's second mixing step (D-655).
+const second_multiplier: U64 = 0x94D0_49BB_1331_11EB
+
+/// 2⁵³, the number of fractions `next_fraction` can return (D-655).
+const fractions: Float = 9_007_199_254_740_992.0
+
+// The host source
+
+/// Returns 64 bits from the host's random source: the operating system's
+/// on native, `crypto.getRandomValues` on JS (D-656). No promise of
+/// cryptographic strength is made.
+@external(native, "cheby_random_host_bits")
+@external(js, "./random.mjs", "host_bits")
+fn host_bits() -> U64
+
+/// Returns an integer from `low` to `high`, both included, drawn from the
+/// host's random source with every integer in that range equally likely.
+/// When `high` is less than `low`, it draws from `high` to `low` (D-297,
+/// D-654). It is `next_int_between(from_host(), low, high)` without the
+/// generator. On JS it panics when the drawn integer is outside
+/// ±(2⁵³−1), which needs a bound outside that range (D-037).
+pub fn int_between(low: Int, high: Int) -> Int {
+  let (drawn, _) = next_int_between(from_host(), low, high)
+  drawn
+}
+
+test "int_between stays within its bounds" {
+  let roll = int_between(1, 6)
+  assert roll >= 1 && roll <= 6
+  assert int_between(0, 0) == 0
+  let reversed = int_between(10, 5)
+  assert reversed >= 5 && reversed <= 10
+}
+
+/// Returns a `Float` from `0.0` up to but not including `1.0`, drawn from
+/// the host's random source: one of the 2⁵³ values `k / 2⁵³`, each equally
+/// likely. It is `next_fraction(from_host())` without the generator
+/// (D-655).
+pub fn fraction() -> Float {
+  let (drawn, _) = next_fraction(from_host())
+  drawn
+}
+
+test "fraction is at least zero and below one" {
+  let x = fraction()
+  assert x >= 0.0 && x < 1.0
+}
+
+/// Returns a generator whose state is 64 bits from the host's random
+/// source (D-656).
+pub fn from_host() -> Generator {
+  Generator { state: host_bits() }
+}
+
+// Seeded generators
+
+/// Returns the generator whose state is the 64 bits of `seed` in two's
+/// complement (D-655). Every `Int` is a valid seed, and different seeds
+/// give different generators.
+pub fn from_seed(seed: Int) -> Generator {
+  Generator { state: bits_of(seed) }
+}
+
+test "a seed always gives the same numbers" {
+  let (first, _) = next_int_between(from_seed(42), 1, 6)
+  let (again, _) = next_int_between(from_seed(42), 1, 6)
+  assert first == again
+  assert from_seed(42) == from_seed(42)
+  assert from_seed(42) != from_seed(43)
+}
+
+/// The 64 bits of `n` in two's complement.
+fn bits_of(n: Int) -> U64 {
+  case n >= 0 {
+    True => {
+      let assert Ok(bits) = u64::from_int(n)
+      bits
+    }
+    False => {
+      // `-(n + 1)` cannot overflow, and `max_value` minus it is the
+      // two's-complement bits of `n`.
+      let assert Ok(complement) = u64::from_int(-(n + 1))
+      u64::max_value - complement
+    }
+  }
+}
+
+/// The `Int` whose two's-complement bits are `bits`, the inverse of
+/// `bits_of`. On JS it panics outside ±(2⁵³−1) (D-037).
+fn int_of(bits: U64) -> Int {
+  case int::from_u64(bits) {
+    Ok(n) => n
+    Err(Nil) => {
+      let assert Ok(complement) = int::from_u64(u64::max_value - bits)
+      -complement - 1
+    }
+  }
+}
+
+@target(native)
+test "seeds are the two's-complement bits of every Int" {
+  assert bits_of(-1) == u64::max_value
+  assert int_of(u64::max_value) == -1
+  assert int_of(bits_of(int::min_value)) == int::min_value
+  assert int_of(bits_of(int::max_value)) == int::max_value
+  assert int_of(bits_of(0)) == 0
+}
+
+/// One step of SplitMix64: its output and the generator after it
+/// (D-655).
+fn step(generator: Generator) -> (U64, Generator) {
+  let state = u64::wrapping_add(generator.state, increment)
+  let mixed = u64::wrapping_mul(state ^ (state >> 30), first_multiplier)
+  let remixed = u64::wrapping_mul(mixed ^ (mixed >> 27), second_multiplier)
+  (remixed ^ (remixed >> 31), Generator { state: state })
+}
+
+/// Steps `generator` until an output is at least `threshold`, and returns
+/// that output and the generator after it (D-655).
+fn step_until(generator: Generator, threshold: U64) -> (U64, Generator) {
+  let (output, next) = step(generator)
+  case output >= threshold {
+    True => (output, next)
+    False => step_until(next, threshold)
+  }
+}
+
+/// Returns an integer from `low` to `high`, both included, and the
+/// generator that comes after it, with every integer in the range equally
+/// likely. When `high` is less than `low`, it draws from `high` to `low`
+/// (D-297, D-654). The draw is SplitMix64's, mapped to the range by
+/// rejecting outputs below `(2⁶⁴ − span) % span` and taking
+/// `low + x % span`, where `span` is the number of integers in the range
+/// modulo 2⁶⁴; a span of all 2⁶⁴ integers takes one output as it is
+/// (D-655). On JS it panics when the drawn integer is outside ±(2⁵³−1),
+/// which needs a bound outside that range (D-037).
+pub fn next_int_between(generator: Generator, low: Int, high: Int) -> (Int, Generator) {
+  let start = bits_of(int::min(low, high))
+  let span = u64::wrapping_add(u64::wrapping_sub(bits_of(int::max(low, high)), start), 1)
+  case span {
+    0 => {
+      let (output, next) = step(generator)
+      (int_of(output), next)
+    }
+    _ => {
+      let (output, next) = step_until(generator, u64::wrapping_neg(span) % span)
+      // The sum wraps exactly as two's-complement `Int` addition would,
+      // and the result lies between the bounds, so it never overflows.
+      (int_of(u64::wrapping_add(start, output % span)), next)
+    }
+  }
+}
+
+test "next_int_between rolls a die from a seed" {
+  fn roll(generator, count, rolls) {
+    case count {
+      0 => rolls
+      _ => {
+        let (n, next) = next_int_between(generator, 1, 6)
+        roll(next, count - 1, [..rolls, n])
+      }
+    }
+  }
+  assert roll(from_seed(42), 10, []) == [2, 2, 1, 1, 5, 1, 2, 3, 2, 3]
+  assert roll(from_seed(2026), 5, []) == [2, 6, 3, 1, 4]
+}
+
+test "next_int_between treats its bounds alike in either order" {
+  let generator = from_seed(7)
+  assert next_int_between(generator, 6, 1) == next_int_between(generator, 1, 6)
+  let (zero, _) = next_int_between(generator, 0, 0)
+  assert zero == 0
+}
+
+@target(native)
+test "next_int_between covers the widest ranges" {
+  let generator = from_seed(1)
+  // All 2⁶⁴ integers: one output, read as an `Int`.
+  let (output, after_one) = step(generator)
+  assert next_int_between(generator, int::min_value, int::max_value) == (int_of(output), after_one)
+  let (wide, _) = next_int_between(generator, int::min_value, int::max_value - 1)
+  assert wide < int::max_value
+  let (top, _) = next_int_between(generator, int::max_value, int::max_value)
+  assert top == int::max_value
+}
+
+/// Returns a `Float` from `0.0` up to but not including `1.0`, and the
+/// generator that comes after it. It takes one step and returns the
+/// output's top 53 bits divided by 2⁵³, which is exact (D-655).
+pub fn next_fraction(generator: Generator) -> (Float, Generator) {
+  let (output, next) = step(generator)
+  let assert Ok(top) = int::from_u64(output >> 11)
+  (float::from_int(top) / fractions, next)
+}
+
+test "next_fraction draws from a seed" {
+  let (a, after) = next_fraction(from_seed(42))
+  let (b, _) = next_fraction(after)
+  assert a == 0.7415648787718233
+  assert b == 0.1599103928769201
+}

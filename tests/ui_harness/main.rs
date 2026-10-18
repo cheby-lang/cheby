@@ -25,10 +25,18 @@
 //! command's output, and `// @flags: …` adds words after the subcommand
 //! (D-543).
 //!
+//! Every `cheby` inherits the harness's `CHEBY_RC`, so
+//! `CHEBY_RC=naive cargo test --test ui` runs the suite under naive
+//! counting (D-718), except a test whose flags include `--reuse-report`:
+//! its report describes Perceus, so it runs with `CHEBY_RC` removed
+//! (D-853).
+//!
 //! Strict runs (D-544): `CHEBY_MILESTONE` overrides `tests/milestone`,
 //! `CHEBY_PENDING=require` makes a failing pending test a failure unless
 //! the file `CHEBY_PENDING_ALLOW` names lists it, and every `cheby` runs
 //! with `CHEBY_RT_POISON=1` (see `cheby_test_support::milestone`).
+//! `CHEBY_HARNESS_SCALE` multiplies the timeout (D-722,
+//! `cheby_test_support::process`).
 //!
 //! On Windows, the tests that run JIT-compiled code are ignored until M6
 //! (D-545, `cheby_test_support::platform`): `run-pass` and `run-fail`
@@ -42,6 +50,7 @@ use std::process::{Command, ExitCode};
 use std::time::Duration;
 
 use cheby_test_support::milestone::{Expectation, POISON_ENV, Setting, Verdicts};
+use cheby_test_support::threads::RC_ENV;
 use cheby_test_support::ui::{self, Layout, Mode, UiTest};
 use cheby_test_support::{bless_enabled, golden, platform, process, repo_root};
 use libtest_mimic::{Arguments, Trial};
@@ -50,18 +59,28 @@ const CHEBY: &str = env!("CARGO_BIN_EXE_cheby");
 const TMP: &str = env!("CARGO_TARGET_TMPDIR");
 /// Generous, because `03-types/equality/deep_nested_maps` peaks at 2.3 GB
 /// and, run beside the other tests, took over 60 s on CI's Intel macOS
-/// runner. A test that hangs still fails, just later.
+/// runner. A test that hangs still fails, just later. `CHEBY_HARNESS_SCALE`
+/// multiplies it (D-722).
 const TIMEOUT: Duration = Duration::from_secs(180);
 /// Exit code of `cheby check` when the package has errors.
 const COMPILE_ERROR_EXIT: i32 = 1;
 /// Exit code of a program whose root fiber panics (D-182).
 const PANIC_EXIT: i32 = 101;
+/// The flag whose tests always run under Perceus counting (D-717).
+const REUSE_REPORT_FLAG: &str = "--reuse-report";
 
 fn main() -> ExitCode {
     let args = Arguments::from_args();
     let root = repo_root();
-    let setup = Setting::read(&root).and_then(|m| Ok((m, ui::all(&root)?, Verdicts::from_env()?)));
-    let (current, tests, verdicts) = match setup {
+    let setup = Setting::read(&root).and_then(|m| {
+        Ok((
+            m,
+            ui::all(&root)?,
+            Verdicts::from_env()?,
+            process::scaled_timeout(TIMEOUT)?,
+        ))
+    });
+    let (current, tests, verdicts, timeout) = match setup {
         Ok(setup) => setup,
         Err(message) => {
             eprintln!("UI harness: {message}");
@@ -83,7 +102,7 @@ fn main() -> ExitCode {
             let name = test.name.clone();
             let skipped = platform::runs_skipped() && test.builds_a_jit();
             Trial::test(name.clone(), move || {
-                let result = run_test(&test, bless && expectation != Expectation::Fail);
+                let result = run_test(&test, bless && expectation != Expectation::Fail, timeout);
                 verdicts.judge(&name, test.header.milestone, expectation, result)?;
                 Ok(())
             })
@@ -99,9 +118,9 @@ fn main() -> ExitCode {
     conclusion.exit_code()
 }
 
-fn run_test(test: &UiTest, bless: bool) -> Result<(), String> {
+fn run_test(test: &UiTest, bless: bool, timeout: Duration) -> Result<(), String> {
     let (package, files) = make_package(test)?;
-    let result = check_package(test, bless, &package, &files);
+    let result = check_package(test, bless, &package, &files, timeout);
     // Best effort: a leftover package only costs disk space, and the
     // directory is this process's own (see `packages_dir`).
     let _ = std::fs::remove_dir_all(&package);
@@ -120,6 +139,7 @@ fn check_package(
     bless: bool,
     package: &Path,
     files: &[ShownFile],
+    timeout: Duration,
 ) -> Result<(), String> {
     let mode = test.header.mode;
     let command = if mode.runs() {
@@ -138,10 +158,21 @@ fn check_package(
         .current_dir(package)
         .env("NO_COLOR", "1")
         .env(POISON_ENV, "1");
+    // The reuse report describes Perceus counting, so a test of it runs
+    // with `CHEBY_RC` removed even when the harness runs under
+    // `CHEBY_RC=naive` (D-718, D-853).
+    if test
+        .header
+        .flags
+        .iter()
+        .any(|flag| flag == REUSE_REPORT_FLAG)
+    {
+        cmd.env_remove(RC_ENV);
+    }
     if !input.args.is_empty() {
         cmd.arg("--").args(&input.args);
     }
-    let out = process::run(cmd, input.stdin.as_deref(), TIMEOUT)?;
+    let out = process::run(cmd, input.stdin.as_deref(), timeout)?;
     let stdout = rewrite_paths(&out.stdout, package, files);
     let stderr = rewrite_paths(&out.stderr, package, files);
 

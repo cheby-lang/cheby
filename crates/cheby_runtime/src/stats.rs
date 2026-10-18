@@ -3,7 +3,7 @@
 //!
 //! Every [`crate::alloc::Domain`] holds a [`Stats`]. The operations that
 //! may update a value in place record an [`Event`] in the current
-//! thread's domain: whether a list push, a list update, a string append,
+//! domain (the running fiber's, or a host thread's): whether a list push, a list update, a string append,
 //! a string or bytes kernel, or a map or set update changed its unique
 //! argument in place, grew it (unique, but out of room) or copied it
 //! (shared). Tests read the counters of their own domain, so they may run
@@ -11,11 +11,20 @@
 //! `CHEBY_RT_STATS=1` is set ([`report`]), which is how the in-place paths
 //! are shown to be hit in the examples. The counters are a developer
 //! tool, not program behavior: nothing a program observes depends on them.
+//!
+//! Events are counted only on demand (D-768): when `CHEBY_RT_STATS=1` is
+//! set or a test turns counting on ([`count_events`]). Otherwise
+//! recording one costs a relaxed load of a process-wide flag
+//! ([`counting`]) and nothing else, not even the lookup of the current
+//! domain. The domains' allocation and byte accounting (D-564, D-617,
+//! D-691) is not an event and is always on.
 
 use std::fmt::Write as _;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::time::Duration;
+
+use crossbeam_utils::CachePadded;
 
 /// An event the runtime counts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,11 +55,17 @@ pub enum Event {
     MapUpdateInPlace,
     /// It made a new root for a shared map or set.
     MapUpdateCopied,
+    /// An `alloc_reuse` wrote over the block of a unique object that a
+    /// `drop_reuse` kept (D-716, D-842).
+    ReuseHit,
+    /// An `alloc_reuse` allocated, because the object its `drop_reuse`
+    /// gave up was not unique.
+    ReuseMiss,
 }
 
 impl Event {
     /// Every event, in report order.
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 15] = [
         Self::Alloc,
         Self::ListPushInPlace,
         Self::ListPushCopied,
@@ -64,6 +79,8 @@ impl Event {
         Self::TextKernelCopied,
         Self::MapUpdateInPlace,
         Self::MapUpdateCopied,
+        Self::ReuseHit,
+        Self::ReuseMiss,
     ];
 
     /// The event's name in reports.
@@ -83,6 +100,8 @@ impl Event {
             Self::TextKernelCopied => "string/bytes kernel copied",
             Self::MapUpdateInPlace => "map/set update in place",
             Self::MapUpdateCopied => "map/set update copied",
+            Self::ReuseHit => "reuse hits",
+            Self::ReuseMiss => "reuse misses",
         }
     }
 
@@ -96,18 +115,43 @@ impl Event {
     }
 }
 
-/// The counters of one accounting domain.
-#[derive(Debug, Default)]
+/// The counters of one accounting domain, sharded like the domain's own
+/// (D-691): an event is counted in the shard of the thread that records
+/// it, and reading sums the shards.
+#[derive(Debug)]
 pub struct Stats {
-    counts: [AtomicU64; Event::ALL.len()],
+    shards: Box<[CachePadded<[AtomicU64; Event::ALL.len()]>]>,
     entries: AtomicU64,
     entry_nanos: AtomicU64,
+    /// Debug leak checks skipped because the system allocator refused a
+    /// request of the domain (D-771), or because a teardown left a fiber
+    /// blocked in input or output, on the blocking pool or inline (D-786).
+    leak_checks_skipped: AtomicU64,
+}
+
+impl Default for Stats {
+    fn default() -> Self {
+        Self {
+            shards: (0..crate::alloc::shard_count())
+                .map(|_| CachePadded::new(std::array::from_fn(|_| AtomicU64::new(0))))
+                .collect(),
+            entries: AtomicU64::new(0),
+            entry_nanos: AtomicU64::new(0),
+            leak_checks_skipped: AtomicU64::new(0),
+        }
+    }
 }
 
 impl Stats {
-    /// Adds one to `event`'s counter.
-    pub(crate) fn record(&self, event: Event) {
-        if let Some(count) = self.counts.get(event.index()) {
+    /// Adds one to `event`'s counter in shard `shard` (reduced modulo the
+    /// number of shards, a power of two).
+    pub(crate) fn record(&self, shard: usize, event: Event) {
+        let mask = self.shards.len().saturating_sub(1);
+        if let Some(count) = self
+            .shards
+            .get(shard & mask)
+            .and_then(|counts| counts.get(event.index()))
+        {
             count.fetch_add(1, Ordering::Relaxed);
         }
     }
@@ -129,18 +173,37 @@ impl Stats {
         )
     }
 
+    /// Counts a debug leak check that was skipped: the system allocator
+    /// refused a request of the domain (D-771), or a teardown left a fiber
+    /// blocked in input or output, on the blocking pool or inline (D-786).
+    pub fn skip_leak_check(&self) {
+        self.leak_checks_skipped.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// How many debug leak checks of the domain were skipped.
+    #[must_use]
+    pub fn leak_checks_skipped(&self) -> u64 {
+        self.leak_checks_skipped.load(Ordering::Relaxed)
+    }
+
     /// How often `event` happened.
     #[must_use]
     pub fn count(&self, event: Event) -> u64 {
-        self.counts
-            .get(event.index())
-            .map_or(0, |count| count.load(Ordering::Relaxed))
+        self.shards
+            .iter()
+            .filter_map(|counts| counts.get(event.index()))
+            .map(|count| count.load(Ordering::Relaxed))
+            .fold(0, u64::wrapping_add)
     }
 }
 
-/// Records `event` in the current thread's accounting domain.
+/// Records `event` in the current accounting domain, the running fiber's
+/// or a host thread's, when events are counted ([`counting`], D-768).
+#[inline]
 pub(crate) fn record(event: Event) {
-    crate::alloc::with_current_stats(|stats| stats.record(event));
+    if counting() {
+        crate::alloc::record_event(event);
+    }
 }
 
 /// Whether `CHEBY_RT_STATS=1` asks `cheby run` for the counters (read once
@@ -151,6 +214,82 @@ pub fn enabled() -> bool {
     *ENABLED.get_or_init(|| std::env::var_os("CHEBY_RT_STATS").is_some_and(|value| value == "1"))
 }
 
+/// [`COUNTING`] before its first read.
+const COUNTING_UNKNOWN: u8 = 0;
+/// [`COUNTING`] when events are not counted. Generated code compares the
+/// flag's byte with it ([`counting_flag`]).
+pub const COUNTING_OFF: u8 = 1;
+/// [`COUNTING`] when events are counted.
+const COUNTING_ON: u8 = 2;
+
+/// Whether events are counted, process-wide (D-768): unknown until the
+/// first [`counting`] reads [`enabled`], then on or off; [`count_events`]
+/// turns it on for good.
+static COUNTING: AtomicU8 = AtomicU8::new(COUNTING_UNKNOWN);
+
+/// Whether the runtime counts events now (D-768): when `CHEBY_RT_STATS=1`
+/// is set, or since a test called [`count_events`]. One relaxed load of a
+/// process-wide flag on every path after the first. A stale read can only
+/// miss events while a test turns counting on, and a test reads only the
+/// events it caused after turning it on.
+#[inline]
+#[must_use]
+pub fn counting() -> bool {
+    match COUNTING.load(Ordering::Relaxed) {
+        COUNTING_ON => true,
+        COUNTING_OFF => false,
+        _ => counting_first(),
+    }
+}
+
+/// [`counting`]'s first read: settles the flag from [`enabled`] unless a
+/// test has turned it on meanwhile.
+#[cold]
+#[inline(never)]
+fn counting_first() -> bool {
+    let state = if enabled() { COUNTING_ON } else { COUNTING_OFF };
+    match COUNTING.compare_exchange(
+        COUNTING_UNKNOWN,
+        state,
+        Ordering::Relaxed,
+        Ordering::Relaxed,
+    ) {
+        Ok(_) => state == COUNTING_ON,
+        Err(current) => current == COUNTING_ON,
+    }
+}
+
+/// The counting flag ([`counting`]) as a data symbol for generated code:
+/// a reuse hit makes no runtime call, so the code loads this byte and
+/// calls `cheby_rt_reuse_hit` out of line only when it is not
+/// [`COUNTING_OFF`] (counting on, or not settled yet, which the call
+/// settles). D-842, refining D-768.
+#[must_use]
+pub fn counting_flag() -> &'static AtomicU8 {
+    &COUNTING
+}
+
+/// Turns event counting on for the rest of the process, whatever
+/// `CHEBY_RT_STATS` says (D-768): the tests that read counters call it
+/// first. Counting never turns off again, so tests running in parallel
+/// cannot turn it off under each other.
+pub fn count_events() {
+    COUNTING.store(COUNTING_ON, Ordering::Relaxed);
+}
+
+/// The report's lines for the stack slots (D-824,
+/// extends D-635): process-wide, since the pool is (D-677), and counted
+/// only on demand like the events (D-768).
+fn slot_lines(counts: crate::fiber::stack::SlotCounts) -> [(&'static str, u64); 5] {
+    [
+        ("stack slots taken warm", counts.taken_warm),
+        ("stack slots taken cold", counts.taken_cold),
+        ("stack slots carved", counts.carved),
+        ("stack slots released whole", counts.released_whole),
+        ("stack slots deep-released", counts.deep_released),
+    ]
+}
+
 /// A duration in milliseconds with three decimals.
 fn millis(time: Duration) -> String {
     let micros = time.as_micros();
@@ -159,8 +298,9 @@ fn millis(time: Duration) -> String {
 
 /// The report `cheby run` prints to standard error after `main` when
 /// [`enabled`]: `main`'s wall time, the number and total wall time of the
-/// build's entries (its constants and `main`), the peak of live bytes, and
-/// every counter of `stats`, one per line.
+/// build's entries (its constants and `main`), the peak of live bytes,
+/// every counter of `stats`, one per line, the process's stack-slot
+/// counters ([`slot_lines`]), and the leak checks skipped.
 #[must_use]
 pub fn report(main_time: Duration, peak_bytes: i64, stats: &Stats) -> String {
     let mut out = String::new();
@@ -174,6 +314,14 @@ pub fn report(main_time: Duration, peak_bytes: i64, stats: &Stats) -> String {
     for event in Event::ALL {
         let _ = writeln!(out, "  {}: {}", event.name(), stats.count(event));
     }
+    for (name, count) in slot_lines(crate::fiber::stack::StackPool::global().slot_counts()) {
+        let _ = writeln!(out, "  {name}: {count}");
+    }
+    let _ = writeln!(
+        out,
+        "  leak checks skipped: {}",
+        stats.leak_checks_skipped()
+    );
     out
 }
 
@@ -188,8 +336,22 @@ mod tests {
         }
     }
 
+    /// D-768: a test turns counting on for good, whatever the first read
+    /// of `CHEBY_RT_STATS` settled.
+    #[test]
+    fn a_test_turns_counting_on() {
+        let _ = counting();
+        count_events();
+        assert!(counting());
+        assert_eq!(COUNTING.load(Ordering::Relaxed), COUNTING_ON);
+        // A first read that loses to the test keeps counting on.
+        assert!(counting_first());
+        assert!(counting());
+    }
+
     #[test]
     fn records_go_to_the_current_domain() {
+        count_events();
         let domain = crate::alloc::Domain::new();
         crate::alloc::with_domain(std::sync::Arc::clone(&domain), || {
             record(Event::ListPushInPlace);
@@ -210,6 +372,7 @@ mod tests {
         use crate::alloc::{current_domain, live};
         use crate::helpers::{cheby_rt_str_append, cheby_rt_str_with_capacity};
         use crate::{rc, values};
+        count_events();
         let domain = current_domain();
         let count = |event| domain.stats().count(event);
         let before = live();
@@ -277,7 +440,7 @@ mod tests {
     #[test]
     fn the_report_lists_every_counter() {
         let stats = Stats::default();
-        stats.record(Event::StrAppendGrown);
+        stats.record(0, Event::StrAppendGrown);
         stats.add_entry(Duration::from_micros(2_000));
         stats.add_entry(Duration::from_micros(12_345));
         let text = report(Duration::from_micros(12_345), 640, &stats);
@@ -288,6 +451,42 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("  string append grown: 1\n"), "{text}");
-        assert_eq!(text.lines().count(), 1 + Event::ALL.len());
+        assert!(text.ends_with("  leak checks skipped: 0\n"), "{text}");
+        stats.skip_leak_check();
+        let text = report(Duration::ZERO, 0, &stats);
+        assert!(text.ends_with("  leak checks skipped: 1\n"), "{text}");
+        assert_eq!(text.lines().count(), 2 + Event::ALL.len() + 5);
+        // D-824: each in `bench-run`'s `<name>: <n>` form.
+        for name in [
+            "stack slots taken warm",
+            "stack slots taken cold",
+            "stack slots carved",
+            "stack slots released whole",
+            "stack slots deep-released",
+        ] {
+            let line = text
+                .lines()
+                .find(|line| line.trim_start().starts_with(&format!("{name}: ")))
+                .unwrap_or_else(|| panic!("no line for {name}: {text}"));
+            assert!(
+                line.rsplit_once(": ").unwrap().1.parse::<u64>().is_ok(),
+                "{line}"
+            );
+        }
+    }
+
+    /// D-824: the report prints the counts it is given,
+    /// in order.
+    #[test]
+    fn the_slot_lines_follow_the_counts() {
+        let counts = crate::fiber::stack::SlotCounts {
+            taken_warm: 1,
+            taken_cold: 2,
+            carved: 3,
+            released_whole: 4,
+            deep_released: 5,
+        };
+        let values: Vec<u64> = slot_lines(counts).iter().map(|(_, n)| *n).collect();
+        assert_eq!(values, [1, 2, 3, 4, 5]);
     }
 }

@@ -1,0 +1,3 @@
+main lets the detached fiber go
+the detached fiber has ended: Err(Nil)
+main returns

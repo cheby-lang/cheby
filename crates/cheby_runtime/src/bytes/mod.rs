@@ -12,9 +12,10 @@
 //! `push_i8` and the `push_<int>_<order>` kernels add to their `Bytes`
 //! argument in place when its count is exactly one, it has room, and no
 //! other argument is the same object (D-563's alias rule), then `dup` it
-//! and return it. A value that must grow is copied into an object of
-//! doubled capacity, so a chain of pushes on a unique value runs in
-//! amortized O(1) per byte. `slice` keeps its range in place at count
+//! and return it. A unique value that must grow moves into an object of
+//! twice its capacity, so a chain of pushes on a unique value runs in
+//! amortized O(1) per byte; a shared or static one is copied with twice
+//! its length (D-849, refining D-577). `slice` keeps its range in place at count
 //! one, and returns the argument itself, shared, for the whole range.
 //!
 //! Positions (D-318, D-334): `get` and the reads give `None` for a

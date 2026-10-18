@@ -1,0 +1,53 @@
+// @mode: run-pass
+// @decisions: D-669, D-671
+// @milestone: M2
+//! No cancellation reaches a detached fiber. One spawned inside
+//! `fiber::timeout`, and one spawned inside a scope whose other fiber
+//! panics, keep running after the timeout and the failing scope have
+//! cancelled the code that spawned them, and later send to `main`
+//! (§10.4, §10.8).
+
+import std::channel
+import std::duration
+import std::fiber
+import std::io
+
+fn later(start: channel::Receiver<Nil>, out: channel::Sender<String>, text: String) -> Nil {
+  let assert Ok(Nil) = channel::receive(start)
+  let assert Ok(Nil) = channel::send(out, text)
+  Nil
+}
+
+fn main() {
+  let (keep, never) = channel::new::<Int>(1)
+  let (out_tx, out_rx) = channel::new::<String>(2)
+  let (first_tx, first_rx) = channel::new::<Nil>(1)
+  let (second_tx, second_rx) = channel::new::<Nil>(1)
+  let timed = fiber::timeout(duration::milliseconds(10), fn() {
+    fiber::spawn_detached(fn() { later(first_rx, out_tx, "spawned inside the timeout") })
+    channel::receive(never)
+  })
+  let timed_out = timed == Err(fiber::TimedOut)
+  io::println("the timeout returned Err(TimedOut): {timed_out}")
+  let failed = {
+    use owner <- fiber::scope()
+    fiber::spawn_detached(fn() { later(second_rx, out_tx, "spawned inside the failing scope") })
+    let _ = fiber::spawn(owner, fn() { panic as "the other fiber fails" })
+    channel::receive(never)
+  }
+  case failed {
+    Ok(_) => io::println("the scope returned Ok")
+    Err(failure) => {
+      let text = fiber::message(failure)
+      io::println("the scope failed: {text}")
+    }
+  }
+  let assert Ok(Nil) = channel::send(first_tx, Nil)
+  let first = channel::receive(out_rx)
+  io::println("first: {first:?}")
+  let assert Ok(Nil) = channel::send(second_tx, Nil)
+  let second = channel::receive(out_rx)
+  io::println("second: {second:?}")
+  let sent = channel::send(keep, 1)
+  io::println("a send after both cancellations: {sent:?}")
+}

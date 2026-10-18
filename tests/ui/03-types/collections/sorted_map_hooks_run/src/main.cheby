@@ -1,0 +1,26 @@
+// @mode: run-pass
+// @milestone: M2
+// @decisions: D-330, D-331, D-336, D-341, D-342, D-343, D-344
+//! `==`, hashing and debug printing of a `SortedMap` go through its
+//! module's hooks also in a module that never calls a `sorted_map` function
+//! (§3.13). The two maps hold the same entries in trees of different
+//! shapes, so a skipped hook would fall back to structural `==`, and the
+//! debug text would show the tree's nodes instead of
+//! `sorted_map::from_list([…])`.
+
+import app::scores
+import std::io
+import std::set
+
+fn main() {
+  let listed = scores::listed()
+  let grown = scores::grown()
+  let changed = scores::changed()
+  io::println("{listed:?}")
+  io::println("{grown:?}")
+  io::println("{changed:?}")
+  let same = listed == grown
+  let different = listed != changed
+  let hashed = set::size(set::from_list([listed, grown, changed]))
+  io::println("same: {same}, different: {different}, distinct when hashed: {hashed}")
+}

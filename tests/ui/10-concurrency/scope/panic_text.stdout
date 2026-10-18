@@ -1,0 +1,5 @@
+boom "quoted"
+Panic { message: "boom \"quoted\"", location: "tests/ui/10-concurrency/scope/panic_text.cheby:15:5" }
+panicked at tests/ui/10-concurrency/scope/panic_text.cheby:15:5:
+boom "quoted"
+True False

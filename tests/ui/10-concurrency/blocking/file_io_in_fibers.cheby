@@ -1,0 +1,37 @@
+// @mode: run-pass
+// @decisions: D-683, D-684, D-692
+// @milestone: M2
+//! Fibers of one scope write and read back their own files at once. Each
+//! file call suspends only its own fiber while a thread of the blocking
+//! pool runs it, and the result is made on the fiber once it runs again
+//! (§10.9). The fibers are joined in a fixed order, and only `main`
+//! prints, so the output is the same at every thread count.
+
+import std::fiber
+import std::io
+import std::list
+
+fn round_trip(n: Int) -> String {
+  let path = "fiber_{n}.txt"
+  case io::write_file(path, "written by fiber {n}") {
+    Ok(_) => case io::read_file(path) {
+      Ok(text) => text
+      Err(reason) => io::show(reason)
+    }
+    Err(reason) => io::show(reason)
+  }
+}
+
+fn main() {
+  let outcome = {
+    use owner <- fiber::scope()
+    let fibers = list::map([1, 2, 3, 4], fn(n) {
+      fiber::spawn(owner, fn() { round_trip(n) })
+    })
+    list::each(fibers, fn(child) { io::println(fiber::join(child)) })
+  }
+  case outcome {
+    Ok(_) => io::println("every fiber is done")
+    Err(_) => io::println("a fiber panicked")
+  }
+}

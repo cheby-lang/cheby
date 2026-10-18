@@ -1,0 +1,9 @@
+reuse: tests/ui/09-memory-model/reuse_report/same_size_any_constructor.cheby:25:23: building `Count` reuses `token` when it is unique
+reuse: tests/ui/09-memory-model/reuse_report/same_size_any_constructor.cheby:27:17: building `Total` allocates: no value of the same size dies before it
+reuse: tests/ui/09-memory-model/reuse_report/same_size_any_constructor.cheby:28:17: building `Span` allocates: no value of the same size dies before it
+reuse: tests/ui/09-memory-model/reuse_report/same_size_any_constructor.cheby:31:17: building `Total` reuses `token` when it is unique
+reuse: tests/ui/09-memory-model/reuse_report/same_size_any_constructor.cheby:39:23: building a tuple of 2 reuses `token` when it is unique
+reuse: tests/ui/09-memory-model/reuse_report/same_size_any_constructor.cheby:40:10: building a tuple of 2 allocates: no value of the same size dies before it
+reuse: tests/ui/09-memory-model/reuse_report/same_size_any_constructor.cheby:55:22: building `Word` allocates: no value of the same size dies before it
+reuse: tests/ui/09-memory-model/reuse_report/same_size_any_constructor.cheby:58:21: building `Count` allocates: no value of the same size dies before it
+reuse: tests/ui/09-memory-model/reuse_report/same_size_any_constructor.cheby:59:26: building `Word` allocates: no value of the same size dies before it

@@ -1,0 +1,46 @@
+// @mode: run-pass
+// @decisions: D-683, D-684, D-692
+// @milestone: M2
+//! A scoped reader fiber reads standard input to its end and sends each
+//! line over a capacity-0 channel, and `main` echoes it. While the reader
+//! waits on the blocking pool for its next line, `main` runs (§10.9), also
+//! at one thread. The channel closes when the reader ends, which ends the
+//! echo.
+
+import std::channel
+import std::fiber
+import std::io
+
+fn read_all(lines: channel::Sender<String>, count: Int) -> Int {
+  case io::read_line() {
+    Ok(Some(line)) => {
+      let assert Ok(Nil) = channel::send(lines, line)
+      read_all(lines, count + 1)
+    }
+    _ => count
+  }
+}
+
+fn echo(lines: channel::Receiver<String>) -> Nil {
+  case channel::receive(lines) {
+    Ok(line) => {
+      io::println("echo {line}")
+      echo(lines)
+    }
+    Err(_) => Nil
+  }
+}
+
+fn main() {
+  let (lines_tx, lines_rx) = channel::new::<String>(0)
+  let outcome = {
+    use owner <- fiber::scope()
+    let reader = fiber::spawn(owner, fn() { read_all(lines_tx, 0) })
+    echo(lines_rx)
+    fiber::join(reader)
+  }
+  case outcome {
+    Ok(count) => io::println("{count} lines")
+    Err(_) => io::println("a fiber panicked")
+  }
+}

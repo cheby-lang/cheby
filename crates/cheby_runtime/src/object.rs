@@ -209,6 +209,66 @@ pub static cheby_rt_static_greater: StaticObject = StaticObject::new(layout::GRE
 #[unsafe(no_mangle)]
 pub static cheby_rt_static_none: StaticObject = StaticObject::new(layout::NONE);
 
+/// A static object with one value field holding another static object: the
+/// header, with count [`abi::RC_STATIC`] and scan count 1, then the field.
+#[derive(Debug)]
+#[repr(C, align(8))]
+pub struct StaticPair {
+    // As in `StaticObject`: an `UnsafeCell` keeps the object in writable
+    // memory, which the atomic count load requires. It is never written.
+    header: UnsafeCell<u64>,
+    /// The field: the address of a static object, which is its word. A
+    /// pointer, since a static's initializer cannot turn an address into
+    /// an integer.
+    field: *const StaticObject,
+}
+
+// SAFETY: neither the header nor the field is ever written after
+// initialization (the count is `RC_STATIC`, which every count operation
+// checks before writing, and the field of a static object is never
+// updated in place), and the field points to a `Sync` static, so sharing
+// the object between threads only ever shares reads.
+unsafe impl Sync for StaticPair {}
+
+impl StaticPair {
+    /// A static object of the given layout whose one field is `field`.
+    #[must_use]
+    pub const fn new(layout: LayoutId, field: &'static StaticObject) -> Self {
+        Self {
+            header: UnsafeCell::new(abi::header(abi::RC_STATIC, 1, layout)),
+            field: std::ptr::from_ref(field),
+        }
+    }
+
+    /// The object's word. Also exposes the provenance of the static object
+    /// in its field, which the runtime reads back as an integer word
+    /// (`read_field`) and turns into a pointer with [`word_to_ptr`]
+    /// (MIRI-1, D-885). Exposing is free at run time.
+    #[must_use]
+    pub fn word(&'static self) -> Word {
+        let _ = self.field.expose_provenance();
+        ptr_to_word(std::ptr::from_ref(self).cast::<u8>())
+    }
+
+    /// The object's header word.
+    #[must_use]
+    pub fn header(&self) -> u64 {
+        // SAFETY: the header is never written after initialization.
+        unsafe { self.header.get().read() }
+    }
+}
+
+/// The static `Err(Nil)` the `scope_run` intrinsic returns when its body
+/// failed (D-693): the cause stays in the fiber, so the value carries
+/// nothing and catching allocates nothing.
+#[unsafe(no_mangle)]
+pub static cheby_rt_static_err_nil: StaticPair = StaticPair::new(layout::ERR, &cheby_rt_static_nil);
+
+/// A static `Ok(Nil)`, which `channel::send` returns when it succeeds, so
+/// that a send allocates nothing for its result. Runtime code only: no
+/// symbol of generated code names it.
+pub(crate) static STATIC_OK_NIL: StaticPair = StaticPair::new(layout::OK, &cheby_rt_static_nil);
+
 /// The static object of a builtin nullary constructor, by layout id.
 #[must_use]
 pub fn static_ctor(id: LayoutId) -> Option<&'static StaticObject> {
@@ -258,6 +318,21 @@ mod tests {
             assert_eq!(unsafe { load_rc(word_to_ptr(word)) }, abi::RC_STATIC);
         }
         assert!(static_ctor(layout::SOME).is_none());
+    }
+
+    #[test]
+    fn the_static_err_nil_holds_the_static_nil() {
+        let word = cheby_rt_static_err_nil.word();
+        assert_eq!(word % 8, 0);
+        let header = cheby_rt_static_err_nil.header();
+        assert_eq!(header, abi::header(abi::RC_STATIC, 1, layout::ERR));
+        // SAFETY: the word points to a live static object with one field.
+        unsafe {
+            assert_eq!(scan_and_layout(word_to_ptr(word)), (1, layout::ERR));
+            assert_eq!(load_rc(word_to_ptr(word)), abi::RC_STATIC);
+            assert_eq!(read_field(word_to_ptr(word), 8), nil());
+        }
+        assert_eq!(std::mem::size_of::<StaticPair>(), 16);
     }
 
     #[test]

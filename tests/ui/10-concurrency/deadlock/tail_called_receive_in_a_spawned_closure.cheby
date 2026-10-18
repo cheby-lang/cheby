@@ -1,0 +1,22 @@
+// @mode: run-fail
+// @exit: 103
+// @decisions: D-724, D-856, D-858, D-861
+// @milestone: M2
+//! A spawned fiber's function is a tail call to `channel::receive`. A tail
+//! call from code outside `std` to a receive keeps its caller's frame, so
+//! the report names the receive in the closure, not `<unknown location>`.
+//! `main` waits at the end of the scope, at its `use`.
+
+import std::channel
+import std::fiber
+
+fn main() {
+  let (tx, rx) = channel::new::<Int>(0)
+  let outcome = {
+    use owner <- fiber::scope()
+    fiber::spawn(owner, fn() { channel::receive(rx) })
+    Nil
+  }
+  let _ = channel::send(tx, 0)
+  let _ = outcome
+}

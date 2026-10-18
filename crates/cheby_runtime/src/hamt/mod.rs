@@ -44,6 +44,7 @@ pub use node::{Collection, EMPTY_MAP, EMPTY_SET, StaticRoot};
 
 use crate::abi::Word;
 use crate::panic::fatal;
+use crate::unwind::guard::DropOnUnwind;
 use node::{Root, drop_word};
 use ops::Entries;
 
@@ -112,6 +113,9 @@ pub unsafe fn rebuild_with_seed(map: Word, seed: u64) -> Word {
     if root.count() == 0 || root.seed() == seed {
         return map;
     }
+    // A key's hash hook may raise while the new trie is built: `build`
+    // releases what it holds, and the old map is still given up (D-697).
+    let held = DropOnUnwind::new([map]);
     let entries = Entries::new(root, coll).map(|(key, value)| {
         node::dup_word(key);
         if let Some(value) = value {
@@ -120,6 +124,7 @@ pub unsafe fn rebuild_with_seed(map: Word, seed: u64) -> Word {
         (key, value)
     });
     let rebuilt = ops::build(coll, seed, entries);
+    held.disarm();
     drop_word(map);
     rebuilt.word()
 }

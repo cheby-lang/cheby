@@ -30,7 +30,26 @@
 //! callee's slot (D-043, [`CallMode::Indirect`]). Entry thunks use the
 //! platform C convention and are the only way the host enters generated
 //! code. Every Cheby-ABI function starts with the stack-limit check of
-//! D-124, whose slow path is `cheby_rt_stack_slow(ctx, location)`.
+//! D-124, whose slow path is `cheby_rt_stack_slow(ctx, location)`, or
+//! `cheby_rt_stack_slow_unwind`, which also releases up to four counted
+//! parameters when it starts an unwinding (D-775). The
+//! check runs after the prologue has allocated the frame, so a function
+//! whose frame exceeds [`CodegenOptions::large_frame_threshold`] (64 KiB)
+//! is compiled as two (D-679): an outer function with its symbol and a
+//! small frame, whose check accounts for the whole frame with the slow
+//! path `cheby_rt_stack_slow_frame(ctx, location, frame_size)`, and an
+//! unchecked inner body `cb$big$…` that the outer one `return_call`s.
+//! [`define`] learns the frame size from the first compilation.
+//!
+//! Unwinding is return-flag propagation (D-733, ADR-0061): every unwind
+//! edge of the MIR (D-698) is lowered to a test of the call's result or of
+//! the flag at `ctx+12`, with a branch to the edge's pad, a cold block
+//! (`unwind`).
+//!
+//! An `@blocking` foreign call (D-683) runs on the blocking pool through
+//! `cheby_rt_blocking_call` and a generated C-ABI shim `cb$blk$<symbol>`
+//! per symbol and C signature, defined once per JIT with the batch that
+//! first uses it (`blocking.rs`, D-818).
 //!
 //! REPL session items (E4, D-547) are registered with
 //! [`Decls::set_session_name`]: their symbols use the module `<repl>` and
@@ -63,16 +82,20 @@
 //! [`CodegenOptions::checked_rc`] asks for the checked runtime calls.
 
 mod arith;
+mod blocking;
 mod data;
 mod decls;
 mod error;
 mod func;
 pub mod isa;
 mod layout;
+#[cfg(test)]
+mod locs_tests;
 pub mod mangle;
 pub mod runtime;
 mod session;
 pub mod sig;
+mod unwind;
 mod values;
 
 #[cfg(test)]
@@ -85,7 +108,8 @@ use cranelift_codegen::ir;
 use cranelift_codegen::isa::TargetIsa;
 use cranelift_module::{Module, ModuleReloc};
 
-use cheby_mir::MirModule;
+use cheby_mir::{MirModule, StrId};
+use cheby_runtime::locate::CallSiteDesc;
 
 pub use decls::{Decls, FuncDecl, SlotDecl, SlotKey};
 pub use error::CodegenError;
@@ -128,6 +152,10 @@ pub enum ForeignImport {
 
 /// What code generation emits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent switches, each set by its own caller"
+)]
 pub struct CodegenOptions {
     pub call_mode: CallMode,
     pub foreign_import: ForeignImport,
@@ -141,7 +169,26 @@ pub struct CodegenOptions {
     /// mode (plan §4.3.4), instead of the inline fast paths that skip
     /// tagged integers and static objects and update the count in place.
     pub checked_rc: bool,
+    /// Whether the MIR was compiled with unwind edges, that is without
+    /// `CHEBY_UNWIND_EDGES=off` (D-742); `true` by default. Code generation
+    /// does not read it: it lowers whatever edges the MIR has (D-733). The
+    /// JIT copies it into the runtime's entry and run configurations, so a
+    /// raise in a fiber compiled without edges ends the process with its
+    /// report instead of returning into code that tests no flag
+    /// (D-770).
+    pub unwind_edges: bool,
+    /// The frame size in bytes above which a function is split into an
+    /// outer function, which checks the stack for its whole frame, and an
+    /// unchecked inner body `cb$big$…` (D-679). Only consulted when
+    /// [`CodegenOptions::stack_check`] is set. Tests lower it to split
+    /// small functions.
+    pub large_frame_threshold: u32,
 }
+
+/// The default [`CodegenOptions::large_frame_threshold`]: 64 KiB (D-679).
+/// The ordinary entry check runs after the prologue, so a frame up to this
+/// size must fit in the stack headroom together with the slow path.
+pub const LARGE_FRAME_THRESHOLD: u32 = 64 << 10;
 
 impl Default for CodegenOptions {
     fn default() -> Self {
@@ -151,6 +198,8 @@ impl Default for CodegenOptions {
             stack_check: true,
             capture_clif: false,
             checked_rc: false,
+            unwind_edges: true,
+            large_frame_threshold: LARGE_FRAME_THRESHOLD,
         }
     }
 }
@@ -190,9 +239,65 @@ pub fn declare<M: Module>(
     decls.declare_units(module, mirs, opts.foreign_import)
 }
 
+/// What one call of [`define_with_stats`] defined: the size of the machine
+/// code it installed, for `cargo xtask bench-compile` (D-718).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DefineStats {
+    /// The bytes of machine code of the functions defined, without
+    /// alignment padding or data objects.
+    pub code_bytes: u64,
+    /// How many functions were defined.
+    pub functions: u64,
+}
+
+impl DefineStats {
+    /// The sum of `self` and `other`, saturating.
+    #[must_use]
+    pub const fn add(self, other: Self) -> Self {
+        Self {
+            code_bytes: self.code_bytes.saturating_add(other.code_bytes),
+            functions: self.functions.saturating_add(other.functions),
+        }
+    }
+}
+
+/// One function that [`define_with_stats`] defined, for the JIT's map
+/// from code addresses to call locations (D-856, D-867).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DefinedCode {
+    /// The function, whose address the module gives once finalized.
+    pub id: cranelift_module::FuncId,
+    /// Its machine code's length in bytes.
+    pub len: u32,
+    /// Whether it has the Cheby ABI ([`CompiledFunction::cheby_abi`]).
+    pub cheby_abi: bool,
+    /// Its calls with a location, by return offset, sorted
+    /// ([`CompiledFunction::call_sites`]).
+    pub sites: Vec<CallSiteDesc>,
+}
+
 /// Defines the data objects declared by [`declare`] and every function of
 /// `mirs`, in declaration order. Returns the CLIF text of each function
 /// when [`CodegenOptions::capture_clif`] is set.
+///
+/// [`define_with_stats`] also returns the size of the code defined.
+///
+/// # Errors
+///
+/// A [`CodegenError`] if translation or compilation fails.
+pub fn define<M: Module>(
+    module: &mut M,
+    mirs: &[MirModule],
+    decls: &mut Decls,
+    cx: &CodegenCx<'_>,
+    opts: &CodegenOptions,
+) -> Result<Vec<String>, CodegenError> {
+    define_with_stats(module, mirs, decls, cx, opts).map(|(clif, _, _)| clif)
+}
+
+/// [`define`], returning also what it defined: the bytes of machine code
+/// and the number of functions (D-718), and each function defined, in
+/// definition order, with its length, ABI and call locations (D-856).
 ///
 /// Every function is translated and compiled before anything is defined,
 /// so a translation or compilation error leaves `module` without any
@@ -205,16 +310,22 @@ pub fn declare<M: Module>(
 /// reported (the first failing function in declaration order) do not
 /// depend on the number of threads (D-264).
 ///
+/// A function whose frame exceeds [`CodegenOptions::large_frame_threshold`]
+/// is then compiled again as two (D-679): its outer function, defined with
+/// its id, and its inner body `cb$big$…`, declared here in declaration
+/// order and defined right after it. Both count in [`DefineStats`], and
+/// with [`CodegenOptions::capture_clif`] both texts replace the first one.
+///
 /// # Errors
 ///
 /// A [`CodegenError`] if translation or compilation fails.
-pub fn define<M: Module>(
+pub fn define_with_stats<M: Module>(
     module: &mut M,
     mirs: &[MirModule],
     decls: &mut Decls,
     cx: &CodegenCx<'_>,
     opts: &CodegenOptions,
-) -> Result<Vec<String>, CodegenError> {
+) -> Result<(Vec<String>, DefineStats, Vec<DefinedCode>), CodegenError> {
     use rayon::prelude::*;
 
     // The functions to define, each once, in declaration order.
@@ -231,8 +342,8 @@ pub fn define<M: Module>(
             todo.push((unit, function, decl.id));
         }
     }
-    let isa = module.isa();
     let shared: &Decls = decls;
+    let isa = module.isa();
     // `collect` keeps the order of `todo` whatever the thread count.
     let results: Vec<Result<(Option<String>, CompiledFunction), CodegenError>> = todo
         .par_iter()
@@ -242,18 +353,76 @@ pub fn define<M: Module>(
             Ok((text, compile_function(isa, translated)?))
         })
         .collect();
+    let mut first = Vec::with_capacity(results.len());
+    for result in results {
+        first.push(result?);
+    }
+    // The shims of the batch's `@blocking` calls (D-818), in
+    // declaration order; each is defined once per JIT, with the batch that
+    // declared it. They are a few instructions each, so they are compiled
+    // here rather than on the pool.
+    let mut shims = Vec::with_capacity(decls.pending_shims.len());
+    for (id, symbol, sig) in &decls.pending_shims {
+        let translated = blocking::translate_shim(decls, *id, symbol, sig)?;
+        let text = opts.capture_clif.then(|| decls.describe(&translated));
+        shims.push((*id, text, compile_function(module.isa(), translated)?));
+    }
+    // D-679: a function whose frame is large becomes an outer function
+    // with its symbol and an unchecked inner body. The bodies are declared
+    // here, after every function compiled, in declaration order, so their
+    // ids are the same in every build (D-264); then the large functions
+    // are translated and compiled again, in parallel.
+    let mut large = Vec::new();
+    for (index, (&(_, function, _), (_, code))) in todo.iter().zip(&first).enumerate() {
+        if is_large_frame(function, code, opts) {
+            large.push((index, decls.declare_large_frame_body(module, function)?));
+        }
+    }
+    let shared: &Decls = decls;
+    let isa = module.isa();
+    let split: Vec<Result<LargeFrame, CodegenError>> = large
+        .par_iter()
+        .map(|&(index, inner)| {
+            let &(unit, function, _) = todo
+                .get(index)
+                .ok_or_else(|| CodegenError::ice("a large frame out of the batch"))?;
+            compile_large_frame(isa, unit, function, shared, opts, inner)
+        })
+        .collect();
+    let mut split_by_index = rustc_hash::FxHashMap::default();
+    for (&(index, inner), result) in large.iter().zip(split) {
+        split_by_index.insert(index, (inner, result?));
+    }
     let mut clif = Vec::new();
-    let mut compiled = Vec::with_capacity(results.len());
-    for ((_, function, id), result) in todo.iter().zip(results) {
-        let (text, code) = result?;
+    // `(key, MIR function, id, code)`; the key is `None` for an inner body
+    // and the function `None` for a shim.
+    let mut compiled = Vec::with_capacity(todo.len().saturating_add(large.len()));
+    for (index, (&(_, function, id), (text, code))) in todo.iter().zip(first).enumerate() {
+        if let Some((inner, split)) = split_by_index.remove(&index) {
+            clif.extend(split.outer_text);
+            clif.extend(split.inner_text);
+            compiled.push((Some(function.key), Some(function), id, split.outer));
+            compiled.push((None, Some(function), inner, split.inner));
+        } else {
+            clif.extend(text);
+            compiled.push((Some(function.key), Some(function), id, code));
+        }
+    }
+    for (id, text, code) in shims {
         clif.extend(text);
-        compiled.push((function.key, *id, code));
+        compiled.push((None, None, id, code));
+    }
+    // What the JIT's code map needs (D-856), built before anything is
+    // defined, so a missing location string fails the batch whole.
+    let mut defined = Vec::with_capacity(compiled.len());
+    for &(_, function, id, ref code) in &compiled {
+        defined.push(defined_code(function, id, code)?);
     }
     // A function defined twice would fail after the data are defined,
     // which the module keeps: check first, so a failed batch defines
     // nothing.
     let mut ids = rustc_hash::FxHashSet::default();
-    for &(_, id, _) in &compiled {
+    for &(_, _, id, _) in &compiled {
         if decls.defined_funcs.contains(&id) || !ids.insert(id) {
             return Err(CodegenError::ice(format!(
                 "the function `{}` is defined twice",
@@ -263,13 +432,55 @@ pub fn define<M: Module>(
     }
     data::define_pending(module, decls, cx)?;
     decls.defined_funcs.extend(ids);
-    for (key, id, code) in compiled {
+    decls.pending_shims.clear();
+    let mut stats = DefineStats::default();
+    for (key, _, id, code) in compiled {
         module
             .define_function_bytes(id, code.align, &code.bytes, &code.relocs)
             .map_err(|e| CodegenError::module(&e))?;
-        decls.mark_defined(key)?;
+        if let Some(key) = key {
+            decls.mark_defined(key)?;
+        }
+        stats = stats.add(DefineStats {
+            code_bytes: u64::try_from(code.bytes.len()).unwrap_or(u64::MAX),
+            functions: 1,
+        });
     }
-    Ok(clif)
+    Ok((clif, stats, defined))
+}
+
+/// The code map's entry of `code`, the function `id` compiled from
+/// `function` (`None` for a shim, which has no calls with a location).
+///
+/// # Errors
+///
+/// An ICE if the code is too long or a call's location is not in
+/// `function`'s table.
+fn defined_code(
+    function: Option<&cheby_mir::Function>,
+    id: cranelift_module::FuncId,
+    code: &CompiledFunction,
+) -> Result<DefinedCode, CodegenError> {
+    let len = u32::try_from(code.bytes.len())
+        .map_err(|_| CodegenError::ice("a function's code is longer than 4 GiB"))?;
+    let mut sites = Vec::with_capacity(code.call_sites.len());
+    for &(ret_offset, loc) in &code.call_sites {
+        let location = function
+            .and_then(|f| f.call_loc_strings.get(loc))
+            .ok_or_else(|| {
+                CodegenError::ice(format!("a call's location str#{} is unknown", loc.as_u32()))
+            })?;
+        sites.push(CallSiteDesc {
+            ret_offset,
+            location: location.to_string(),
+        });
+    }
+    Ok(DefinedCode {
+        id,
+        len,
+        cheby_abi: code.cheby_abi,
+        sites,
+    })
 }
 
 /// Defines the data objects declared since the last [`define`] outside any
@@ -287,11 +498,77 @@ pub fn define_data<M: Module>(
     data::define_pending(module, decls, cx)
 }
 
+/// Whether `function`, compiled to `code`, has a large frame and is split
+/// into an outer function and an inner body (D-679): a Cheby function with
+/// the entry check whose frame exceeds
+/// [`CodegenOptions::large_frame_threshold`].
+fn is_large_frame(
+    function: &cheby_mir::Function,
+    code: &CompiledFunction,
+    opts: &CodegenOptions,
+) -> bool {
+    function.abi == cheby_mir::Abi::Cheby
+        && opts.stack_check
+        && code.frame_size > opts.large_frame_threshold
+}
+
+/// A function with a large frame, compiled as two (D-679).
+struct LargeFrame {
+    outer: CompiledFunction,
+    inner: CompiledFunction,
+    outer_text: Option<String>,
+    inner_text: Option<String>,
+}
+
+/// Translates and compiles `function` as its inner body `inner`, then its
+/// outer function with the inner body's frame size.
+fn compile_large_frame(
+    isa: &dyn TargetIsa,
+    unit: &MirModule,
+    function: &cheby_mir::Function,
+    decls: &Decls,
+    opts: &CodegenOptions,
+    inner: cranelift_module::FuncId,
+) -> Result<LargeFrame, CodegenError> {
+    let body = func::translate_large_frame_body(unit, function, decls, opts, inner)?;
+    let inner_text = opts.capture_clif.then(|| decls.describe(&body));
+    let inner_code = compile_function(isa, body)?;
+    let outer = func::translate_large_frame_outer(
+        unit,
+        function,
+        decls,
+        opts,
+        inner,
+        inner_code.frame_size,
+    )?;
+    let outer_text = opts.capture_clif.then(|| decls.describe(&outer));
+    Ok(LargeFrame {
+        outer: compile_function(isa, outer)?,
+        inner: inner_code,
+        outer_text,
+        inner_text,
+    })
+}
+
 /// The machine code of one function, ready for `define_function_bytes`.
 pub struct CompiledFunction {
     pub bytes: Vec<u8>,
     pub align: u64,
     pub relocs: Vec<ModuleReloc>,
+    /// The bytes the prologue allocates below the frame pointer: spill
+    /// slots, stack slots, saved registers and outgoing arguments
+    /// (Cranelift's `frame_to_fp_offset`). It decides whether the function
+    /// has a large frame (D-679).
+    pub frame_size: u32,
+    /// The return offset of each call with a location (D-856), with the
+    /// location's id in [`cheby_mir::Function::call_loc_strings`], sorted
+    /// by offset: each call's debug tag paired with its return address.
+    pub call_sites: Vec<(u32, StrId)>,
+    /// Whether the function has the Cheby ABI (Cranelift's `tail`
+    /// convention): a deadlock report's walk passes through such a frame,
+    /// and stops at a C-ABI one (entry thunks, trampolines, `@blocking`
+    /// shims).
+    pub cheby_abi: bool,
 }
 
 impl std::fmt::Debug for CompiledFunction {
@@ -300,8 +577,45 @@ impl std::fmt::Debug for CompiledFunction {
             .field("len", &self.bytes.len())
             .field("align", &self.align)
             .field("relocs", &self.relocs.len())
+            .field("frame_size", &self.frame_size)
+            .field("call_sites", &self.call_sites.len())
+            .field("cheby_abi", &self.cheby_abi)
             .finish()
     }
+}
+
+/// Pairs each call's `Post` debug tag at its offset in `tags` with the
+/// call's return offset, the greatest of `returns` (sorted, as Cranelift
+/// records them) at or below it: the instructions that reclaim stack
+/// arguments or load stack results may sit between the return address and
+/// the tag (survey-locations §1.7). `Pre` tags, which Cranelift copies to
+/// a call's argument moves, are ignored. The result is sorted by return
+/// offset, each call once.
+///
+/// # Errors
+///
+/// An ICE if a tag has no call at or before it.
+fn pair_call_sites(
+    returns: &[u32],
+    tags: impl Iterator<Item = (u32, bool, u32)>,
+) -> Result<Vec<(u32, StrId)>, CodegenError> {
+    let mut sites = Vec::new();
+    for (offset, post, tag) in tags {
+        if !post {
+            continue;
+        }
+        let at = returns.partition_point(|&r| r <= offset);
+        let ret = at
+            .checked_sub(1)
+            .and_then(|i| returns.get(i))
+            .ok_or_else(|| {
+                CodegenError::ice(format!("a call's location tag at {offset} follows no call"))
+            })?;
+        sites.push((*ret, StrId::from_u32(tag)));
+    }
+    sites.sort_by_key(|&(ret, _)| ret);
+    sites.dedup();
+    Ok(sites)
 }
 
 /// Compiles one translated function for `isa`. Needs no `&mut Module`, so
@@ -319,6 +633,7 @@ pub fn compile_function(
         return Err(CodegenError::ice("a translated function has no user name"));
     };
     let func_id = cranelift_module::FuncId::from_u32(name.index);
+    let cheby_abi = func.signature.call_conv == cranelift_codegen::isa::CallConv::Tail;
     let mut ctx = cranelift_codegen::Context::for_function(func);
     if let Err(e) = ctx.compile(isa, &mut ControlPlane::default()) {
         let message = cranelift_codegen::print_errors::pretty_error(e.func, e.inner);
@@ -328,6 +643,11 @@ pub fn compile_function(
         .compiled_code()
         .ok_or_else(|| CodegenError::ice("Cranelift returned no code"))?;
     let align = u64::from(compiled.buffer.alignment).max(FUNCTION_ALIGN);
+    let frame_size = compiled
+        .buffer
+        .frame_layout()
+        .ok_or_else(|| CodegenError::ice("Cranelift returned no frame layout"))?
+        .frame_to_fp_offset;
     let bytes = compiled.code_buffer().to_vec();
     let relocs = compiled
         .buffer
@@ -335,9 +655,25 @@ pub fn compile_function(
         .iter()
         .map(|r| ModuleReloc::from_mach_reloc(r, &ctx.func, func_id))
         .collect();
+    let call_sites = if ctx.func.debug_tags.is_empty() {
+        Vec::new()
+    } else {
+        let returns: Vec<u32> = compiled.buffer.call_sites().map(|s| s.ret_addr).collect();
+        let tags = compiled.buffer.debug_tags().flat_map(|list| {
+            let post = list.pos == cranelift_codegen::MachDebugTagPos::Post;
+            list.tags.iter().filter_map(move |tag| match tag {
+                ir::DebugTag::User(id) => Some((list.offset, post, *id)),
+                ir::DebugTag::StackSlot(_) => None,
+            })
+        });
+        pair_call_sites(&returns, tags)?
+    };
     Ok(CompiledFunction {
         bytes,
         align,
         relocs,
+        frame_size,
+        call_sites,
+        cheby_abi,
     })
 }

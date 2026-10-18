@@ -29,6 +29,13 @@ use crate::{list, rc, values};
 // Helpers
 
 /// Runs `f` and checks that it leaves the domain as it found it.
+/// A property's cases: `normal`, or 4 under Miri, as the Miri job's
+/// `PROPTEST_CASES`, which an explicit count would override (D-721,
+/// D-884).
+const fn miri_cases(normal: u32) -> u32 {
+    if cfg!(miri) { 4 } else { normal }
+}
+
 fn balanced(f: impl FnOnce()) {
     let before = live();
     f();
@@ -691,7 +698,7 @@ fn small_bytes() -> impl Strategy<Value = Vec<u8>> {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig { cases: 256, ..ProptestConfig::default() })]
+    #![proptest_config(ProptestConfig { cases: miri_cases(256), ..ProptestConfig::default() })]
 
     /// Every push writes `to_be_bytes`/`to_le_bytes`, and every read
     /// inverts it at any offset, with `None` exactly where the window
@@ -863,7 +870,7 @@ fn update(
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig { cases: 128, ..ProptestConfig::default() })]
+    #![proptest_config(ProptestConfig { cases: miri_cases(128), ..ProptestConfig::default() })]
 
     /// N live versions under random sharing, dropping and in-place-capable
     /// updates, each checked against its own model after every step; the

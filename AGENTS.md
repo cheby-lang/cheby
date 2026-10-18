@@ -4,7 +4,7 @@ Guidance for coding agents working in this repository.
 
 ## What this repository is
 
-The home of the Cheby programming language and its reference implementation, in the phase before 1.0. Milestone M1, the single-fiber core, is done (see the `Status` section of `docs/plan/m1-core.md`). M2, the runtime, is next, and `tests/milestone` names it.
+The home of the Cheby programming language and its reference implementation, in the phase before 1.0. Milestones M1, the single-fiber core, and M2, the runtime, are done (see the `Status` sections of `docs/plan/m1-core.md` and `docs/plan/m2-runtime.md`). M3, AOT output and the build cache, is next, and `tests/milestone` names it.
 
 Design documents:
 
@@ -112,7 +112,7 @@ Follow `docs/plan/`, especially `architecture.md`, `testing.md` and the file of 
 - The locality rule (D-246): type-checking a module may use only the interfaces of its dependencies, never their bodies.
 - The parser is hand-written over a lossless CST (D-272, D-280).
 - Gaps found while implementing go into the decision log and the spec before the code relies on an answer. Never resolve them with ad-hoc compiler behavior.
-- Plan-level open questions in `docs/plan/README.md` (OQ-P7 to OQ-P9 and OQ-P11 to OQ-P14) need a decision before the tasks that depend on them start.
+- Plan-level open questions in `docs/plan/README.md` (OQ-P9, OQ-P11, OQ-P12 and OQ-P14) need a decision before the tasks that depend on them start.
 
 ### Building and testing
 

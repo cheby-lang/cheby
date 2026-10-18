@@ -1,0 +1,25 @@
+// @mode: run-pass
+// @milestone: M2
+// @decisions: D-342, D-343, D-584
+//! `==`, hashing and debug printing of an ordered map go through its
+//! module's hooks even in a module that never calls the module's
+//! functions (D-342, D-584). Two maps with the same entries in the same
+//! order are `==` and hash alike although their insertion numbers differ,
+//! and the same entries in another order are not `==` (D-343).
+
+import app::build
+import std::io
+import std::set
+
+fn main() {
+  let listed = build::listed()
+  let grown = build::grown()
+  let reversed = build::reversed()
+  let same = listed == grown
+  let different = listed != reversed
+  io::println("listed == grown: {same}, listed != reversed: {different}")
+  let distinct = set::size(set::from_list([listed, grown, reversed]))
+  io::println("distinct maps: {distinct}")
+  io::println("{grown:?}")
+  io::println("{reversed:?}")
+}

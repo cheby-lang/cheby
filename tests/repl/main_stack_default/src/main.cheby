@@ -1,0 +1,7 @@
+//! The `main_stack` package without its `[runtime]` table, for the
+//! `main_stack_default` transcript: each REPL entry gets the default
+//! 64 MiB stack.
+
+fn main() {
+  Nil
+}

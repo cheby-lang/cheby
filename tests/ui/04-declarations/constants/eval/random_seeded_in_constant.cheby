@@ -1,0 +1,37 @@
+// @mode: run-pass
+// @decisions: D-090, D-653, D-655, D-656
+// @milestone: M2
+//! The seeded functions of `std::random` are written in Cheby over no
+//! kernel, so they run in constants, and a seed gives the same numbers
+//! when a constant is computed as when the program runs (§4.5).
+
+import std::io
+import std::random
+
+const rolls: List<Int> = roll(random::from_seed(42), 10, [])
+
+const fraction: Float = first_fraction(42)
+
+fn roll(generator: random::Generator, count: Int, drawn: List<Int>) -> List<Int> {
+  case count {
+    0 => drawn
+    _ => {
+      let (n, next) = random::next_int_between(generator, 1, 6)
+      roll(next, count - 1, [..drawn, n])
+    }
+  }
+}
+
+fn first_fraction(seed: Int) -> Float {
+  let (x, _) = random::next_fraction(random::from_seed(seed))
+  x
+}
+
+fn main() {
+  io::println("{rolls:?}")
+  let again = roll(random::from_seed(42), 10, [])
+  let same = again == rolls
+  io::println("the same at run time: {same}")
+  let exact = fraction == 0.7415648787718233
+  io::println("the first fraction of seed 42 is 0.7415648787718233: {exact}")
+}

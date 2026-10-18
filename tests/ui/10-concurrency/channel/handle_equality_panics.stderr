@@ -1,0 +1,11 @@
+warning[W0011]: `==` on a type that contains a handle
+  --> tests/ui/10-concurrency/channel/handle_equality_panics.cheby:14:14
+   |
+14 |   let same = tx == tx
+   |              ^^^^^^^^ `channel::Sender<Int>` is an external type
+   |
+   = note: `==` and `!=` panic when they reach a handle value at run time
+   = help: compare the parts that can be compared
+
+panicked at tests/ui/10-concurrency/channel/handle_equality_panics.cheby:14:14:
+equality or hashing reached a function value or a handle

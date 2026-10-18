@@ -1,0 +1,2 @@
+panicked at tests/ui/10-concurrency/cancel/first_panic_wins.cheby:28:40:
+first

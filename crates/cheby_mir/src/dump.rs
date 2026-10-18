@@ -17,25 +17,39 @@
 //!
 //! - The header: `module <path>`, `tests <path>` or `entries`.
 //! - Each function: `fn <key>[ [c] ](<params>) -> <repr>[ check str#K] {`,
-//!   then the string table `str#N = "<text>"`, then blocks
-//!   `bbN(<params>):` with statements `_N: <repr> = <rvalue>`,
-//!   `<rvalue>` (evaluated for effect), `dup _N`, `drop _N` and one
-//!   terminator, then `}`. The hidden `ctx` parameter is not printed.
+//!   then the line `entry unwind bbN` when the function has an entry pad
+//!   and the line `precounted` when its body was generated with its
+//!   counts (D-698, D-693), then the string table `str#N = "<text>"`, then
+//!   blocks `bbN(<params>):` with statements `_N: <repr> = <rvalue>`,
+//!   `<rvalue>` (evaluated for effect), `dup _N`, `drop _N`,
+//!   `clear_unwind` and one terminator, then `}`. A statement or
+//!   terminator with an unwind edge ends with ` ; unwind bbN`. The hidden
+//!   `ctx` parameter is not printed. A function without edges, entry pad
+//!   or `precounted` prints exactly as before they existed.
+//! - Terminators: `return <op>`, `tail_call <callee>(<args>)`,
+//!   `goto bbN(<args>)`, `branch <op>, bbN, bbM`,
+//!   `switch <op> [<v> => bbN, …, _ => bbM]`,
+//!   `panic <kind>[ <op>] at str#K`, `unreachable`, `resume`.
 //! - Keys: `<item path>`, `shim <path>`, `closure <owner>#<n>`,
 //!   `const_init <path>`, `test <path>`, `entry main(<path>)`,
 //!   `entry test(<path>)`, `entry const(<path>)`, `entry repl(<n>)`,
 //!   `trampoline <n>`, `tuple_dict_fn <iface fn>/<arity>`,
-//!   `dyn_forward <iface fn> for dyn <interface>`.
+//!   `dyn_forward <iface fn> for dyn <interface>`,
+//!   `continuation <owner>#<n>` (D-780).
 //! - Constants: `int N`, `float F`, `bool B`, `<sized repr> N`, `str#N`,
 //!   `nil`, `ctor <path>`, `fn <path>`, `code <key>`, `empty_list`,
-//!   `static#N`, `builtin_desc <name>`.
+//!   `static#N`, `builtin_desc <name>`, `ctx` (the fiber's context, only
+//!   as a foreign call's first argument) and `static Err(Nil)`.
+//!   An operand prints a constant as `const <constant>`.
 //! - Layouts: `string`, `bytes`, `boxed_int`, `boxed_float`, `boxed_f32`,
 //!   `boxed_u64`, `ctor <path>`, `tuple/N`, `closure/N`,
 //!   `dict/<fns>+<embedded>`, `dyn`, `desc/N`, `desc_nominal`.
 //! - Rvalues: `<operand>`, `call <callee>(<args>)`,
 //!   `call_foreign "<symbol>"(borrow <args>) -> <ctype>`,
 //!   `call_runtime <helper>(<args>)` with `borrow ` before each borrowed
-//!   argument, `alloc <layout>(<fields>)`, `field _N.<i> of <layout>`,
+//!   argument, `alloc <layout>(<fields>)`, `alloc_placeholder <layout>`,
+//!   `init_field _N.<i> of <layout> = <op>` (D-720),
+//!   `field _N.<i> of <layout>`,
 //!   `read_layout _N`, `load_const <path>`, `box <repr> <op>`,
 //!   `unbox <repr> <op>`, `checked <op> <repr> <a>, <b> at str#K`,
 //!   `compare <op> <repr> <a>, <b>`, `float_arith <op> <repr> <a>, <b>`,
@@ -51,14 +65,21 @@
 //!   <layout>(<consts>)` followed by ` str#K = "<text>"` per string of
 //!   its own table, per static in id order. A blank line separates them
 //!   from the functions when there are any.
+//! - Borrowing (D-715) reuses the `borrow ` prefix: a borrowed parameter
+//!   prints as `borrow _N: <repr>` in its function's header, a borrowed
+//!   argument of a call or tail call as `borrow <op>`, and a borrowed
+//!   parameter of a callee line as `borrow <repr>`. A function, call and
+//!   callee that borrow nothing print as before borrowing existed.
 
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use cheby_iface::Ice;
 
+use crate::borrow::BorrowMask;
 use crate::ir::{
-    Abi, BuiltinLayout, Callee, Const, EntryKind, FnKey, Function, LayoutRef, Local, MirModule,
-    Operand, Rvalue, Stmt, TagType, Terminator, UnitKind, UseKind,
+    Abi, BlockId, BuiltinLayout, Callee, Const, EntryKind, FnKey, Function, LayoutRef, Local,
+    MirModule, Operand, Rvalue, Stmt, TagType, Terminator, UnitKind, UseKind,
 };
 use crate::layout::LayoutDesc;
 use crate::repr::Repr;
@@ -92,7 +113,13 @@ pub fn dump(module: &MirModule) -> Result<String, Ice> {
         layout_line(&mut tail, module, "foreign_layout", desc)?;
     }
     for decl in &module.callees {
-        let params: Vec<&str> = decl.sig.params.iter().map(|r| r.name()).collect();
+        let params: Vec<String> = decl
+            .sig
+            .params
+            .iter()
+            .enumerate()
+            .map(|(n, r)| format!("{}{}", borrow_prefix(decl.sig.borrow, n), r.name()))
+            .collect();
         let _ = writeln!(
             tail,
             "callee {}({}) -> {}",
@@ -182,7 +209,15 @@ fn dump_function_into(out: &mut String, m: &MirModule, f: &Function) -> Result<(
     let params = f
         .params
         .iter()
-        .map(|&p| Ok(format!("{}: {}", local(p), f.local(p)?.repr)))
+        .enumerate()
+        .map(|(n, &p)| {
+            Ok(format!(
+                "{}{}: {}",
+                borrow_prefix(f.borrow, n),
+                local(p),
+                f.local(p)?.repr
+            ))
+        })
         .collect::<Result<Vec<_>, Ice>>()?
         .join(", ");
     let _ = write!(out, "fn {key}{abi}({params}) -> {}", f.ret);
@@ -190,6 +225,12 @@ fn dump_function_into(out: &mut String, m: &MirModule, f: &Function) -> Result<(
         let _ = write!(out, " check str#{}", loc.as_u32());
     }
     out.push_str(" {\n");
+    if let Some(pad) = f.entry_unwind {
+        let _ = writeln!(out, "  entry unwind bb{}", pad.as_u32());
+    }
+    if f.precounted {
+        out.push_str("  precounted\n");
+    }
     for (id, text) in f.strings.iter_enumerated() {
         let _ = writeln!(out, "  str#{} = \"{}\"", id.as_u32(), text.escape_debug());
     }
@@ -205,7 +246,19 @@ fn dump_function_into(out: &mut String, m: &MirModule, f: &Function) -> Result<(
             let _ = write!(out, "({params})");
         }
         out.push_str(":\n");
-        for stmt in &block.stmts {
+        // By instruction, the first edge of each, as `unwind_target` reads
+        // them, without a search per statement; also for edges that are
+        // not sorted yet (a dump of invalid MIR).
+        let mut edges: BTreeMap<u32, BlockId> = BTreeMap::new();
+        for &(i, pad) in &block.unwind {
+            edges.entry(i).or_insert(pad);
+        }
+        let edge = |out: &mut String, i: usize| {
+            if let Some(pad) = u32::try_from(i).ok().and_then(|i| edges.get(&i)) {
+                let _ = write!(out, " ; unwind bb{}", pad.as_u32());
+            }
+        };
+        for (i, stmt) in block.stmts.iter().enumerate() {
             out.push_str("  ");
             match stmt {
                 Stmt::Assign { dst, value } => {
@@ -224,11 +277,27 @@ fn dump_function_into(out: &mut String, m: &MirModule, f: &Function) -> Result<(
                 Stmt::Drop(l) => {
                     let _ = write!(out, "drop {}", local(*l));
                 }
+                Stmt::DropKeep {
+                    local: x,
+                    layout: l,
+                    keep,
+                } => {
+                    let _ = write!(
+                        out,
+                        "drop {} of {}{}",
+                        local(*x),
+                        layout(m, *l)?,
+                        keep_text(keep)
+                    );
+                }
+                Stmt::ClearUnwind => out.push_str("clear_unwind"),
             }
+            edge(out, i);
             out.push('\n');
         }
         out.push_str("  ");
         out.push_str(&terminator(m, &block.term)?);
+        edge(out, block.stmts.len());
         out.push('\n');
     }
     out.push_str("}\n");
@@ -237,6 +306,19 @@ fn dump_function_into(out: &mut String, m: &MirModule, f: &Function) -> Result<(
 
 fn local(l: Local) -> String {
     format!("_{}", l.as_u32())
+}
+
+/// ` keep [_5 @0, _7 @2]`: a keep list (D-850), in its order;
+/// nothing when it is empty.
+fn keep_text(keep: &[(u32, Local)]) -> String {
+    if keep.is_empty() {
+        return String::new();
+    }
+    let items: Vec<String> = keep
+        .iter()
+        .map(|&(i, p)| format!("{} @{i}", local(p)))
+        .collect();
+    format!(" keep [{}]", items.join(", "))
 }
 
 fn def(m: &MirModule, d: cheby_iface::DefId) -> Result<String, Ice> {
@@ -266,6 +348,9 @@ fn key_text(m: &MirModule, key: FnKey) -> Result<String, Ice> {
             def(m, iface_fn)?,
             def(m, dyn_iface)?
         ),
+        FnKey::Continuation { owner, index } => {
+            format!("continuation {}#{index}", def(m, owner)?)
+        }
     })
 }
 
@@ -283,6 +368,8 @@ fn constant(m: &MirModule, c: &Const) -> Result<String, Ice> {
         Const::EmptyList => "empty_list".to_owned(),
         Const::Static(id) => format!("static#{}", id.as_u32()),
         Const::BuiltinDesc(d) => format!("builtin_desc {}", d.name()),
+        Const::Ctx => "ctx".to_owned(),
+        Const::ErrNil => "static Err(Nil)".to_owned(),
     })
 }
 
@@ -306,6 +393,22 @@ fn operand(m: &MirModule, op: &Operand) -> Result<String, Ice> {
     }
 }
 
+/// `borrow ` for a parameter or argument at `n` that `mask` borrows.
+fn borrow_prefix(mask: BorrowMask, n: usize) -> &'static str {
+    if mask.is_borrowed(n) { "borrow " } else { "" }
+}
+
+/// The arguments of a Cheby call, each borrowed one after `borrow `.
+fn call_args(m: &MirModule, c: &Callee, args: &[Operand]) -> Result<String, Ice> {
+    let mask = c.borrow_mask();
+    Ok(args
+        .iter()
+        .enumerate()
+        .map(|(n, op)| Ok(format!("{}{}", borrow_prefix(mask, n), operand(m, op)?)))
+        .collect::<Result<Vec<_>, Ice>>()?
+        .join(", "))
+}
+
 fn operands(m: &MirModule, ops: &[Operand], prefix: &str) -> Result<String, Ice> {
     Ok(ops
         .iter()
@@ -316,7 +419,7 @@ fn operands(m: &MirModule, ops: &[Operand], prefix: &str) -> Result<String, Ice>
 
 fn callee(m: &MirModule, c: &Callee) -> Result<String, Ice> {
     Ok(match c {
-        Callee::Direct(d) => def(m, *d)?,
+        Callee::Direct(d) | Callee::Borrowing(d, _) => def(m, *d)?,
         Callee::Code(key) => format!("<{}>", key_text(m, *key)?),
         Callee::Indirect(l) => local(*l),
     })
@@ -343,14 +446,26 @@ fn layout(m: &MirModule, l: LayoutRef) -> Result<String, Ice> {
     })
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "one arm per rvalue, in declaration order"
+)]
 fn rvalue(m: &MirModule, value: &Rvalue) -> Result<String, Ice> {
     Ok(match value {
         Rvalue::Use(op) => operand(m, op)?,
         Rvalue::Call { callee: c, args } => {
-            format!("call {}({})", callee(m, c)?, operands(m, args, "")?)
+            format!("call {}({})", callee(m, c)?, call_args(m, c, args)?)
         }
-        Rvalue::CallForeign { symbol, sig, args } => format!(
-            "call_foreign \"{}\"({}) -> {}",
+        // The marker appears only on an `@blocking` call, so the dumps of
+        // every other call are unchanged.
+        Rvalue::CallForeign {
+            symbol,
+            sig,
+            args,
+            blocking,
+        } => format!(
+            "call_foreign {}\"{}\"({}) -> {}",
+            if *blocking { "blocking " } else { "" },
             symbol.escape_debug(),
             operands(m, args, "borrow ")?,
             sig.ret
@@ -372,6 +487,40 @@ fn rvalue(m: &MirModule, value: &Rvalue) -> Result<String, Ice> {
         Rvalue::Alloc { layout: l, fields } => {
             format!("alloc {}({})", layout(m, *l)?, operands(m, fields, "")?)
         }
+        Rvalue::AllocPlaceholder { layout: l } => format!("alloc_placeholder {}", layout(m, *l)?),
+        Rvalue::DropReuse {
+            local: x,
+            layout: l,
+            keep,
+        } => {
+            format!(
+                "drop_reuse {} of {}{}",
+                local(*x),
+                layout(m, *l)?,
+                keep_text(keep)
+            )
+        }
+        Rvalue::AllocReuse {
+            token,
+            layout: l,
+            fields,
+        } => format!(
+            "alloc_reuse {}, {}({})",
+            local(*token),
+            layout(m, *l)?,
+            operands(m, fields, "")?
+        ),
+        Rvalue::InitField {
+            obj,
+            layout: l,
+            field,
+            value,
+        } => format!(
+            "init_field {}.{field} of {} = {}",
+            local(*obj),
+            layout(m, *l)?,
+            operand(m, value)?
+        ),
         Rvalue::Field {
             base,
             layout: l,
@@ -430,7 +579,7 @@ fn terminator(m: &MirModule, term: &Terminator) -> Result<String, Ice> {
     Ok(match term {
         Terminator::Return(op) => format!("return {}", operand(m, op)?),
         Terminator::TailCall { callee: c, args } => {
-            format!("tail_call {}({})", callee(m, c)?, operands(m, args, "")?)
+            format!("tail_call {}({})", callee(m, c)?, call_args(m, c, args)?)
         }
         Terminator::Goto { target, args } => {
             format!("goto bb{}({})", target.as_u32(), operands(m, args, "")?)
@@ -459,5 +608,6 @@ fn terminator(m: &MirModule, term: &Terminator) -> Result<String, Ice> {
             format!("panic {}{msg} at str#{}", kind.name(), loc.as_u32())
         }
         Terminator::Unreachable => "unreachable".to_owned(),
+        Terminator::Resume => "resume".to_owned(),
     })
 }

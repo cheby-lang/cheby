@@ -1,51 +1,63 @@
 module app
 
 fn const_init app::base() -> value check str#0 {
+  entry unwind bb1
   str#0 = "src/main.cheby:3:7"
 bb0:
   _0: value = box int const int 40
   return _0
+bb1:
+  resume
 }
 
 fn const_init app::answer() -> value check str#0 {
+  entry unwind bb1
   str#0 = "src/main.cheby:5:7"
   str#1 = "src/main.cheby:5:21"
 bb0:
-  _0: value = load_const app::base
+  _0: value = load_const app::base ; unwind bb1
   dup _0
   _1: int = unbox int _0
   drop _0
-  _2: value = call app::two()
+  _2: value = call app::two() ; unwind bb1
   _3: int = unbox int _2
   drop _2
-  _4: int = checked add int _1, _3 at str#1
-  _5: value = box int _4
+  _4: int = checked add int _1, _3 at str#1 ; unwind bb1
+  _5: value = box int _4 ; unwind bb1
   return _5
+bb1:
+  resume
 }
 
 fn const_init app::label() -> value check str#0 {
+  entry unwind bb1
   str#0 = "src/main.cheby:7:7"
   str#1 = "answer"
 bb0:
-  _0: value = const str#1
-  return _0
+  return const str#1
+bb1:
+  resume
 }
 
 fn app::two() -> value check str#0 {
+  entry unwind bb1
   str#0 = "src/main.cheby:9:4"
 bb0:
   _0: value = box int const int 2
   return _0
+bb1:
+  resume
 }
 
 fn app::main() -> value check str#0 {
+  entry unwind bb3
   str#0 = "src/main.cheby:13:4"
   str#1 = "assertion failed: "
   str#2 = "\n  left: "
   str#3 = "\n right: "
   str#4 = "src/main.cheby:14:10"
 bb0:
-  _0: value = load_const app::answer
+  _0: value = load_const app::answer ; unwind bb3
   dup _0
   _1: int = unbox int _0
   drop _0
@@ -54,25 +66,54 @@ bb0:
 bb1:
   return const nil
 bb2:
-  _3: value = call_runtime str_with_capacity(borrow const int 64)
-  _4: value = call_runtime str_append(_3, borrow const str#1)
-  _5: value = load_const app::label
+  _3: value = call_runtime str_with_capacity(borrow const int 64) ; unwind bb3
+  _4: value = call_runtime str_append(_3, borrow const str#1) ; unwind bb3
+  _5: value = load_const app::label ; unwind bb4
   dup _5
-  _6: value = call_runtime str_append(_4, borrow _5)
+  _6: value = call_runtime str_append(_4, borrow _5) ; unwind bb5
   drop _5
-  _7: value = call_runtime str_append(_6, borrow const str#2)
-  _8: value = box int _1
-  _9: value = call_runtime debug(borrow _8)
+  _7: value = call_runtime str_append(_6, borrow const str#2) ; unwind bb3
+  _8: value = box int _1 ; unwind bb6
+  _9: value = call_runtime debug(borrow _8) ; unwind bb7
   drop _8
-  _10: value = call_runtime str_append(_7, borrow _9)
+  _10: value = call_runtime str_append(_7, borrow _9) ; unwind bb8
   drop _9
-  _11: value = call_runtime str_append(_10, borrow const str#3)
+  _11: value = call_runtime str_append(_10, borrow const str#3) ; unwind bb3
   _12: value = box int const int 42
-  _13: value = call_runtime debug(borrow _12)
+  _13: value = call_runtime debug(borrow _12) ; unwind bb10
   drop _12
-  _14: value = call_runtime str_append(_11, borrow _13)
+  _14: value = call_runtime str_append(_11, borrow _13) ; unwind bb11
   drop _13
-  panic assert _14 at str#4
+  panic assert _14 at str#4 ; unwind bb12
+bb3:
+  resume
+bb4:
+  drop _4
+  goto bb3()
+bb5:
+  drop _5
+  goto bb3()
+bb6:
+  drop _7
+  goto bb3()
+bb7:
+  drop _8
+  goto bb6()
+bb8:
+  drop _9
+  goto bb3()
+bb9:
+  drop _11
+  goto bb3()
+bb10:
+  drop _12
+  goto bb9()
+bb11:
+  drop _13
+  goto bb3()
+bb12:
+  drop _14
+  goto bb3()
 }
 
 callee app::two() -> value

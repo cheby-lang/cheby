@@ -21,6 +21,17 @@ impl BodyCx<'_, '_> {
     /// block ended (the rest is unreachable).
     pub(super) fn expr(&mut self, id: ExprId, tail: bool) -> Result<Option<Operand>, Ice> {
         let e = self.expr_data(id)?;
+        // While `e` is lowered, its span is the site of the allocations and
+        // calls it makes itself (D-717); a subexpression sets its own and
+        // gives this one back.
+        let outer = self.site.replace(e.span);
+        let lowered = self.expr_kind(e, tail);
+        self.site = outer;
+        lowered
+    }
+
+    /// [`BodyCx::expr`] by the kind of `e`.
+    fn expr_kind(&mut self, e: &thir::Expr, tail: bool) -> Result<Option<Operand>, Ice> {
         let (ty, span) = (e.ty, e.span);
         match &e.kind {
             ExprKind::Lit(lit) => self.lit(lit, ty, span),
@@ -168,11 +179,32 @@ impl BodyCx<'_, '_> {
         if tail && self.b.abi() == Abi::Cheby {
             // Every Cheby function returns a uniform word, so the callee's
             // result is ours unchanged (D-453, D-015).
-            self.terminate(Terminator::TailCall { callee, args: ops })?;
+            if self.keeps_wait_frame(def)? {
+                // A tail-called wait keeps its caller's frame, which gives
+                // a deadlock report its location (D-861, D-856).
+                let result = self.define(Repr::Value, Rvalue::Call { callee, args: ops })?;
+                self.terminate(Terminator::Return(Operand::Local(result)))?;
+            } else {
+                self.terminate(Terminator::TailCall { callee, args: ops })?;
+            }
             return Ok(None);
         }
         let result = self.define(Repr::Value, Rvalue::Call { callee, args: ops })?;
         self.from_uniform(Operand::Local(result), ret_ty).map(Some)
+    }
+
+    /// Whether a tail call of `def` from this body is compiled as a call
+    /// and a return (D-861): the body is outside package `std` and `def`
+    /// is one of std's [`crate::waits::FRAME_KEEPING_WAITS`].
+    fn keeps_wait_frame(&self, def: cheby_iface::DefId) -> Result<bool, Ice> {
+        if !self.pending.outside_std()
+            || def.module == cheby_iface::ModuleId::BUILTIN
+            || self.cx.defs.modules.try_get(def.module)?.package != cheby_iface::PackageId::STD
+        {
+            return Ok(false);
+        }
+        let name = self.cx.defs.name(def)?;
+        Ok(crate::waits::keeps_frame(&name.module, &name.item))
     }
 
     /// A block: its statements, then its tail (`Nil` when missing, §5.1).

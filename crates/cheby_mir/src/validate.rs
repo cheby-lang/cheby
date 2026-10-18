@@ -5,29 +5,96 @@
 //! Structure: one definition per local, every use dominated by its
 //! definition, block parameters matching `goto` arguments, call arguments
 //! matching callee signatures (direct callees from
-//! [`MirModule::callees`]), representations of every operand and result,
+//! [`MirModule::callees`], their borrow masks included, D-715; a borrow
+//! mask only on a top-level function's counted parameters),
+//! representations of every operand and result,
 //! and where the C ABI and tail calls may appear. After RC insertion
 //! ([`Stage::Counted`]), ownership: on every path that returns or
 //! tail-calls, each counted local is consumed exactly once more than it is
 //! duplicated.
+//!
+//! Unwinding (D-698) is checked for its shape at every stage: unwind edges
+//! sorted by statement with at most one per statement and none past the
+//! terminator, pads that exist, are not `bb0` and take no parameters,
+//! `resume` and `clear_unwind` only in blocks that normal control flow
+//! does not reach, `clear_unwind` only in a `precounted` body (D-693),
+//! no entry pad in a C-ABI function, which has no entry check, and `ctx`
+//! only as the first argument of a foreign call (D-692). Before
+//! [`Stage::Unwound`], only a `precounted` body has edges, an entry pad or
+//! `resume`; such a body is checked with its counts from
+//! [`Stage::Lowered`] on.
+//!
+//! The CFG of dominance and ownership follows [`Function::successors`]:
+//! the normal successors, the unwind edges and the entry pad. For
+//! dominance each block is split at its unwind edges ([`Segments`]), so a
+//! pad sees only what is defined before the instruction that unwinds to
+//! it, never that instruction's result. Ownership is the simulation of
+//! [`crate::ownership`]: an unwind edge carries what an unwinding leaves
+//! held at its instruction, so each pad's owned set must equal the
+//! ownership state at every source, and `resume`, like `return`, leaves
+//! nothing held.
+//!
+//! At [`Stage::Unwound`] also (D-698): each edge's instruction may unwind
+//! ([`crate::unwind::stmt_may_unwind`]), every instruction that may unwind
+//! in a reachable block has an edge, a pad does not use the result of the
+//! instruction that unwinds to it, and every Cheby-ABI function has its
+//! entry pad.
+//!
+//! Reuse (D-716): a reuse token is a counted local that `drop_reuse`
+//! defines, so the ownership simulation consumes it once on every path,
+//! pads included (D-698), with no rule of its own. The validator adds
+//! that the forms appear only after counting, that a token is used only by
+//! `alloc_reuse` or `drop`, that both layouts are constructors with fields
+//! or tuples of the same object size, and that neither a borrowed local
+//! nor a tuple being filled is reused (D-715, D-810).
+//!
+//! Fusion (D-716, D-850): a keep list (on a `drop_reuse` or a
+//! drop specialized by constructor) names counted `field` projections of
+//! the released local at their index in its layout, each index once,
+//! nothing borrowed; a specialized drop keeps something, is never in a
+//! cleanup pad, and a read pins its constructor as reuse's proofs do. The
+//! ownership simulation models each as its `dup`s, then the release.
+//! With the full ownership check (debug builds), no drop moves later
+//! (D-851, `FnCx::check_drop_positions`).
+//!
+//! Canonical pads, blocks `drop _l; goto <pad>` or `resume` that lead
+//! only to `resume` and that normal control flow does not reach, are left
+//! out of the dominance graph and the representation walk (D-735): what
+//! they drop is checked against ownership states, which hold only counted
+//! locals that every path to the edge defined.
+//!
+//! D-774: the pipeline
+//! ([`crate::count_and_check_with`]) validates a unit after the unwind
+//! pass with the states the pass's own simulation recorded at each site:
+//! each edge's pad chain (its drops, then `goto`, then `resume`) must
+//! drop exactly what an unwinding leaves held there, and the entry pad's
+//! the counted parameters the function owns
+//! ([`Function::owned_params`]: a borrowed one holds nothing, D-715). The
+//! independent second simulation runs where
+//! [`crate::MirOptions::full_ownership_check`] says, by default in debug
+//! builds and so in every test run. [`validate`] on its own always runs
+//! the full simulation.
 
-mod dom;
+pub(crate) mod dom;
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::fmt::Write as _;
+use std::collections::BTreeSet;
 
 use cheby_iface::{Ice, Idx};
+use rustc_hash::FxHashMap;
 
 use self::dom::Dominance;
 
 use crate::abi::{AbiSig, fixed_sig, is_uniform_sig};
 use crate::ir::{
-    Abi, ArithOp, BlockId, BuiltinLayout, Callee, CmpOp, Const, FnKey, Function, LayoutRef, Local,
-    MirModule, Operand, RuntimeFn, Rvalue, StaticKind, StaticObject, Stmt, TagType, Terminator,
-    UnitKind, UseKind,
+    Abi, ArithOp, Block, BlockId, BuiltinLayout, Callee, CmpOp, Const, FnKey, Function, LayoutRef,
+    Local, MirModule, Operand, RuntimeFn, Rvalue, StaticKind, StaticObject, Stmt, TagType,
+    Terminator, UnitKind,
 };
 use crate::layout::LayoutDesc;
-use crate::repr::{CType, Repr};
+use crate::liveness::{Liveness, stmt_def, stmt_value_uses};
+use crate::ownership::{self, Observer};
+use crate::repr::{CType, ForeignSig, Repr};
+use crate::unwind::{Recorded, stmt_may_unwind, terminator_may_unwind};
 
 /// Which invariants hold at this point of the pipeline.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -36,6 +103,10 @@ pub enum Stage {
     Lowered,
     /// After [`crate::rc::insert`]: reference counts balance.
     Counted,
+    /// After the unwind pass (D-698): counts balance, every instruction
+    /// that may unwind has its edge to the pad of what it leaves held, and
+    /// nothing else has one.
+    Unwound,
 }
 
 /// Checks `module`. Returns every problem found, each prefixed with the
@@ -45,19 +116,56 @@ pub enum Stage {
 ///
 /// The list of problems, if any.
 pub fn validate(module: &MirModule, stage: Stage) -> Result<(), Vec<String>> {
+    validate_with(module, stage, None, true)
+}
+
+/// [`validate`] at [`Stage::Unwound`] of a unit the unwind pass has just
+/// run on, with what its simulation recorded for each function, in order
+/// (module documentation). `simulate` adds the independent full
+/// simulation.
+///
+/// # Errors
+///
+/// The list of problems, if any.
+pub(crate) fn validate_recorded(
+    module: &MirModule,
+    recorded: &[Recorded],
+    simulate: bool,
+) -> Result<(), Vec<String>> {
+    validate_with(module, Stage::Unwound, Some(recorded), simulate)
+}
+
+fn validate_with(
+    module: &MirModule,
+    stage: Stage,
+    recorded: Option<&[Recorded]>,
+    simulate: bool,
+) -> Result<(), Vec<String>> {
     let mut errors = Vec::new();
     check_module(module, &mut errors);
-    for f in &module.functions {
+    if recorded.is_some_and(|r| r.len() != module.functions.len()) {
+        errors.push("internal: the unwind pass recorded another number of functions".to_owned());
+    }
+    // `Callee::Code` keys are looked up once per call: indexed, so a unit
+    // with thousands of continuations (D-780) is not searched per call.
+    let index = module.function_index();
+    for (n, f) in module.functions.iter().enumerate() {
         let mut cx = FnCx {
             module,
+            index: &index,
             f,
             errors: Vec::new(),
+            recorded: recorded.and_then(|r| r.get(n)),
+            simulate,
+            pads: Vec::new(),
         };
         if let Err(ice) = cx.check(stage) {
             cx.errors.push(format!("internal: {ice}"));
         }
-        let name = key_label(f.key);
-        errors.extend(cx.errors.into_iter().map(|e| format!("{name}: {e}")));
+        if !cx.errors.is_empty() {
+            let name = key_label(f.key);
+            errors.extend(cx.errors.into_iter().map(|e| format!("{name}: {e}")));
+        }
     }
     if errors.is_empty() {
         Ok(())
@@ -219,13 +327,27 @@ fn check_static(m: &MirModule, n: usize, s: &StaticObject, errors: &mut Vec<Stri
 
 struct FnCx<'a> {
     module: &'a MirModule,
+    /// [`MirModule::function_index`] of `module`.
+    index: &'a FxHashMap<FnKey, usize>,
     f: &'a Function,
     errors: Vec<String>,
+    /// What the unwind pass's simulation recorded, when the pipeline
+    /// validates right after it: the pad chains are checked against it.
+    recorded: Option<&'a Recorded>,
+    /// Whether to run the full ownership simulation.
+    simulate: bool,
+    /// By block index: a canonical pad (module documentation), left out
+    /// of the dominance graph and the representation walk.
+    pads: Vec<bool>,
 }
 
 /// Where a local is defined: its block and position (`None` for a
 /// parameter, defined before the first statement).
 type DefSite = (BlockId, Option<usize>);
+
+/// A release with a keep list ([`crate::ir::Keep`]): its block, the local
+/// it releases, its layout and the list.
+type KeepSite<'a> = (BlockId, Local, LayoutRef, &'a [(u32, Local)]);
 
 impl FnCx<'_> {
     fn err(&mut self, message: impl Into<String>) {
@@ -237,15 +359,390 @@ impl FnCx<'_> {
         let Some(defs) = self.check_definitions() else {
             return Ok(());
         };
+        self.check_call_locs(&defs);
         if !self.check_cfg() {
             return Ok(());
         }
+        let normal = normally_reachable(self.f);
+        self.check_unwind_shape(stage, &normal);
+        if self.counted(stage) {
+            self.pads = canonical_pads(self.f, &normal)?;
+        }
+        let reachable = (stage == Stage::Unwound).then(|| reachable_with_unwinding(self.f));
+        if let Some(reachable) = &reachable {
+            self.check_unwind_rules(reachable);
+        }
         self.check_dominance(&defs)?;
         self.check_reprs(stage)?;
-        if stage == Stage::Counted && self.errors.is_empty() {
-            self.check_ownership()?;
+        self.check_init_fields();
+        self.check_reuse(stage)?;
+        if self.counted(stage) && self.errors.is_empty() {
+            if let (Some(recorded), Some(reachable)) = (self.recorded, &reachable) {
+                self.check_pad_chains(recorded, reachable)?;
+            }
+            if self.simulate {
+                self.check_ownership()?;
+                self.check_drop_positions()?;
+            }
         }
         Ok(())
+    }
+
+    /// No drop moves later (D-716, D-205, D-851): in a
+    /// block normal control flow reaches, between a counted local's last
+    /// use (or its definition) and each statement that releases it (`drop`,
+    /// `drop_reuse`, a specialized drop), nothing runs but `dup`, `drop`,
+    /// `drop_reuse`, specialized drops and block entry. Naive placement
+    /// satisfies it (each drop follows its local's last instruction, or
+    /// opens the successor of an edge), and so must every pass after
+    /// counting. It covers every counted local, not only those that may
+    /// hold a handle, so it needs no type facts. A reuse token's own `drop`
+    /// is exempt: the token holds no reference and no handle (a childless
+    /// block, or 0), and `reuse` holds it across calls into the arms that
+    /// rebuild (D-839); the drop of the matched value is
+    /// its `drop_reuse`, which the rule covers. Cleanup pads are exempt:
+    /// they release what an unwinding leaves held (D-698). Run only with
+    /// the full ownership check, so in debug builds (D-774): release
+    /// builds do not pay for it (D-776).
+    fn check_drop_positions(&mut self) -> Result<(), Ice> {
+        let f = self.f;
+        let normal = normally_reachable(f);
+        let n = f.blocks.len();
+        let mut preds: Vec<Vec<BlockId>> = vec![Vec::new(); n];
+        let mut tokens: BTreeSet<Local> = BTreeSet::new();
+        // By block: the nearest statement before each position that runs
+        // code, and where each local is used or defined.
+        let mut runs_before: Vec<Vec<Option<usize>>> = Vec::with_capacity(n);
+        let mut events: Vec<FxHashMap<Local, Vec<usize>>> = Vec::with_capacity(n);
+        for (id, block) in f.blocks.iter_enumerated() {
+            if normal.get(id.index()).copied().unwrap_or(false) {
+                for succ in block.term.successors() {
+                    let list = preds
+                        .get_mut(succ.index())
+                        .ok_or_else(|| Ice::new("a successor out of range"))?;
+                    if !list.contains(&id) {
+                        list.push(id);
+                    }
+                }
+            }
+            let mut before = Vec::with_capacity(block.stmts.len().saturating_add(1));
+            let mut last = None;
+            let mut here: FxHashMap<Local, Vec<usize>> = FxHashMap::default();
+            for (j, stmt) in block.stmts.iter().enumerate() {
+                before.push(last);
+                if !releases_only(stmt) {
+                    last = Some(j);
+                }
+                if let Stmt::Assign {
+                    dst,
+                    value: Rvalue::DropReuse { .. },
+                } = stmt
+                {
+                    tokens.insert(*dst);
+                }
+                for l in stmt_value_uses(f, stmt)?.into_iter().chain(stmt_def(stmt)) {
+                    here.entry(l).or_default().push(j);
+                }
+            }
+            before.push(last);
+            for (l, _) in block.term.uses() {
+                here.entry(l).or_default().push(block.stmts.len());
+            }
+            runs_before.push(before);
+            events.push(here);
+        }
+        // Where a local's value is still read later, a path that leaves it
+        // dead on one edge (a branch whose other successor reads it) drops
+        // it at the start of that edge's block: naive placement's edge
+        // drops (D-205). So a walk that reaches the end of a predecessor
+        // where the value is live stops there.
+        let values = Liveness::compute_values(f)?;
+        let cx = DropWalk {
+            f,
+            preds: &preds,
+            runs_before: &runs_before,
+            events: &events,
+        };
+        // Block ends already walked for a local, so each is walked once.
+        let mut walked: BTreeSet<(BlockId, Local)> = BTreeSet::new();
+        for (id, block) in f.blocks.iter_enumerated() {
+            if !normal.get(id.index()).copied().unwrap_or(false) {
+                continue;
+            }
+            for (j, stmt) in block.stmts.iter().enumerate() {
+                let Some(x) = released(stmt) else {
+                    continue;
+                };
+                if tokens.contains(&x) {
+                    continue;
+                }
+                let mut work = Vec::new();
+                match cx.back(id, j, x) {
+                    Back::Ok => {}
+                    Back::Ran(s) => self.err(format!(
+                        "bb{} statement {j} releases _{} after bb{} statement {s} runs past its last use (D-716, D-205)",
+                        id.as_u32(),
+                        x.as_u32(),
+                        id.as_u32()
+                    )),
+                    Back::Preds(b) => work.push(b),
+                }
+                while let Some(b) = work.pop() {
+                    for &p in cx.preds.get(b.index()).into_iter().flatten() {
+                        if !walked.insert((p, x))
+                            || values.live_out.get(p).is_some_and(|out| out.contains(&x))
+                        {
+                            continue;
+                        }
+                        // Past the end: the terminator's uses count.
+                        let end = f.block(p)?.stmts.len().saturating_add(1);
+                        match cx.back(p, end, x) {
+                            Back::Ok => {}
+                            Back::Ran(s) => self.err(format!(
+                                "bb{} statement {j} releases _{}, but on the path from bb{} statement {s} runs past its last use (D-716, D-205)",
+                                id.as_u32(),
+                                x.as_u32(),
+                                p.as_u32()
+                            )),
+                            Back::Preds(up) => work.push(up),
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether block `id` is a canonical pad.
+    fn is_pad(&self, id: BlockId) -> bool {
+        self.pads.get(id.index()).copied().unwrap_or(false)
+    }
+
+    /// The pad check of D-774 (module
+    /// documentation): every edge of a block the simulation reached, and
+    /// the entry pad, against the recorded states. A pad of a generated
+    /// body (D-744) that is not canonical was checked by the pass's own
+    /// simulation, which followed that body's edges.
+    fn check_pad_chains(&mut self, recorded: &Recorded, reachable: &[bool]) -> Result<(), Ice> {
+        let f = self.f;
+        if let Some(pad) = f.entry_unwind {
+            // Borrowed parameters hold nothing to release (D-715).
+            let params = f.owned_params()?;
+            self.check_pad_chain(pad, &params, || "the entry check".to_owned());
+        }
+        for (id, block) in f.blocks.iter_enumerated() {
+            if !reachable.get(id.index()).copied().unwrap_or(false) {
+                continue;
+            }
+            for &(at, pad) in &block.unwind {
+                let Ok(i) = usize::try_from(at) else {
+                    continue;
+                };
+                let what = || format!("bb{} statement {i}", id.as_u32());
+                match recorded.state(id, i) {
+                    Some(held) => self.check_pad_chain(pad, held, what),
+                    None => self.err(format!(
+                        "{} has an unwind edge the unwind pass did not record (D-698)",
+                        what()
+                    )),
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The chain from `pad` drops exactly the multiset `held` (ascending,
+    /// with repeats) and resumes, in any order.
+    fn check_pad_chain(&mut self, pad: BlockId, held: &[Local], what: impl Fn() -> String) {
+        let f = self.f;
+        if !self.is_pad(pad) {
+            if !f.precounted {
+                self.err(format!(
+                    "{} unwinds to bb{}, which is not a chain of drops ending in resume (D-698)",
+                    what(),
+                    pad.as_u32()
+                ));
+            }
+            return;
+        }
+        let mut dropped = Vec::new();
+        let mut at = pad;
+        // A canonical pad leads to `resume` without a cycle.
+        while let Some(block) = f.blocks.get(at) {
+            match (block.stmts.as_slice(), &block.term) {
+                ([Stmt::Drop(l)], Terminator::Goto { target, .. }) => {
+                    dropped.push(*l);
+                    at = *target;
+                }
+                _ => break,
+            }
+        }
+        // The order is the function's pad direction (D-777): an ascending
+        // function's chains drop the newest local first and come out
+        // descending, so they are reversed; a descending function's drop the
+        // oldest first and come out ascending, so they are kept. Only a
+        // chain in neither order (a nested function's, or a generated
+        // body's, D-744) is sorted.
+        if !dropped.is_sorted() {
+            dropped.reverse();
+            if !dropped.is_sorted() {
+                dropped.sort_unstable();
+            }
+        }
+        if dropped != held {
+            self.err(format!(
+                "{} unwinds to bb{}, which drops {}, but an unwinding there leaves {} held (D-698)",
+                what(),
+                pad.as_u32(),
+                ownership::set_text(&dropped),
+                ownership::set_text(held)
+            ));
+        }
+    }
+
+    /// The rules of [`Stage::Unwound`] beyond the shape (D-698): see the
+    /// module documentation. Pad sets are checked with the ownership.
+    fn check_unwind_rules(&mut self, reachable: &[bool]) {
+        let f = self.f;
+        if f.abi == Abi::Cheby && f.entry_unwind.is_none() {
+            self.err("a Cheby-ABI function needs its entry pad after the unwind pass (D-698)");
+        }
+        for (id, block) in f.blocks.iter_enumerated() {
+            let len = block.stmts.len();
+            for &(at, pad) in &block.unwind {
+                let Ok(i) = usize::try_from(at) else {
+                    continue;
+                };
+                let what = match block.stmts.get(i) {
+                    Some(stmt) if !stmt_may_unwind(stmt) => Some("statement"),
+                    None if i == len && !terminator_may_unwind(&block.term) => Some("terminator"),
+                    _ => None,
+                };
+                if let Some(what) = what {
+                    self.err(format!(
+                        "bb{} statement {i} has an unwind edge, but this {what} cannot unwind (D-698)",
+                        id.as_u32()
+                    ));
+                }
+                if let Some(Stmt::Assign { dst, .. }) = block.stmts.get(i)
+                    && f.blocks.get(pad).is_some_and(|p| block_uses(p, *dst))
+                {
+                    self.err(format!(
+                        "bb{} uses _{}, the result of bb{} statement {i}, which an unwinding leaves undefined (D-698)",
+                        pad.as_u32(),
+                        dst.as_u32(),
+                        id.as_u32()
+                    ));
+                }
+            }
+            if !reachable.get(id.index()).copied().unwrap_or(false) {
+                continue;
+            }
+            let mut edges = block.unwind.iter().map(|&(at, _)| at).peekable();
+            for (n, stmt) in block.stmts.iter().enumerate() {
+                while edges
+                    .next_if(|&at| usize::try_from(at).is_ok_and(|at| at < n))
+                    .is_some()
+                {}
+                let has_edge = edges.peek().and_then(|&at| usize::try_from(at).ok()) == Some(n);
+                if stmt_may_unwind(stmt) && !has_edge {
+                    self.err(format!(
+                        "bb{} statement {n} may unwind but has no unwind edge (D-698)",
+                        id.as_u32()
+                    ));
+                }
+            }
+            if terminator_may_unwind(&block.term) && block.unwind_target(len).is_none() {
+                self.err(format!(
+                    "bb{} terminator may unwind but has no unwind edge (D-698)",
+                    id.as_u32()
+                ));
+            }
+        }
+    }
+
+    /// Whether the function has its counts at `stage`: after RC, or a
+    /// `precounted` body from lowering on (D-693).
+    fn counted(&self, stage: Stage) -> bool {
+        stage != Stage::Lowered || self.f.precounted
+    }
+
+    /// The shape of unwinding (D-698): see the module documentation.
+    fn check_unwind_shape(&mut self, stage: Stage, normal: &[bool]) {
+        let f = self.f;
+        let early = stage != Stage::Unwound && !f.precounted;
+        // `what` is formatted only for a message.
+        let pad_ok = |cx: &mut Self, what: &dyn Fn() -> String, pad: BlockId| {
+            let problem = match f.blocks.get(pad) {
+                None => format!("unknown bb{}", pad.as_u32()),
+                Some(_) if pad.as_u32() == 0 => "the entry block".to_owned(),
+                Some(target) if !target.params.is_empty() => {
+                    format!("bb{}, which takes parameters", pad.as_u32())
+                }
+                Some(_) => return,
+            };
+            cx.err(format!("{} unwinds to {problem}", what()));
+        };
+        if let Some(pad) = f.entry_unwind {
+            if early {
+                self.err("an entry pad before the unwind pass");
+            }
+            // Entry thunks and trampolines have no entry check to unwind
+            // from (D-752).
+            if f.abi == Abi::C {
+                self.err("a C-ABI function has no entry check, so no entry pad");
+            }
+            pad_ok(self, &|| "the entry check".to_owned(), pad);
+        }
+        for (id, block) in f.blocks.iter_enumerated() {
+            if early && !block.unwind.is_empty() {
+                self.err(format!(
+                    "bb{} has unwind edges before the unwind pass",
+                    id.as_u32()
+                ));
+            }
+            if !block
+                .unwind
+                .windows(2)
+                .all(|w| matches!(w, [a, b] if a.0 < b.0))
+            {
+                self.err(format!(
+                    "the unwind edges of bb{} are not sorted by statement without duplicates",
+                    id.as_u32()
+                ));
+            }
+            for &(at, pad) in &block.unwind {
+                if usize::try_from(at).map_or(true, |at| at > block.stmts.len()) {
+                    self.err(format!(
+                        "bb{} has an unwind edge for statement {at}, past its terminator",
+                        id.as_u32()
+                    ));
+                }
+                pad_ok(self, &|| format!("bb{} statement {at}", id.as_u32()), pad);
+            }
+            if early && block.term == Terminator::Resume {
+                self.err(format!("bb{} resumes before the unwind pass", id.as_u32()));
+            }
+        }
+        // `resume` and `clear_unwind` run only while unwinding: in blocks
+        // that only pads lead to.
+        for (id, block) in f.blocks.iter_enumerated() {
+            if !normal.get(id.index()).copied().unwrap_or(false) {
+                continue;
+            }
+            if block.term == Terminator::Resume {
+                self.err(format!(
+                    "bb{} resumes, but normal control flow reaches it",
+                    id.as_u32()
+                ));
+            }
+            if block.stmts.contains(&Stmt::ClearUnwind) {
+                self.err(format!(
+                    "bb{} clears the unwind flag, but normal control flow reaches it",
+                    id.as_u32()
+                ));
+            }
+        }
     }
 
     fn check_abi(&mut self) -> Result<(), Ice> {
@@ -294,6 +791,13 @@ impl FnCx<'_> {
         {
             self.err(format!("unknown string str#{}", loc.as_u32()));
         }
+        self.check_borrow()?;
+        if let FnKey::Continuation { .. } = f.key {
+            match f.params.first() {
+                Some(&p) if f.local(p)?.repr == Repr::Value => {}
+                _ => self.err("a continuation takes the value being built first (D-780)"),
+            }
+        }
         if let Some(fixed) = fixed_sig(f.key) {
             let sig = f.sig()?;
             if sig != fixed {
@@ -311,20 +815,440 @@ impl FnCx<'_> {
         Ok(())
     }
 
-    /// Every local defined exactly once; returns the definition sites.
-    fn check_definitions(&mut self) -> Option<BTreeMap<Local, DefSite>> {
+    /// The function's borrow mask (D-715): only a top-level Cheby function
+    /// that is not `precounted` borrows, and only counted parameters it
+    /// has.
+    fn check_borrow(&mut self) -> Result<(), Ice> {
         let f = self.f;
-        let mut sites: BTreeMap<Local, DefSite> = BTreeMap::new();
+        if f.borrow.is_owned() {
+            return Ok(());
+        }
+        if !matches!(f.key, FnKey::Item(_)) || f.abi != Abi::Cheby || f.precounted {
+            self.err(format!(
+                "borrows {:?}, but only a top-level function that is not precounted may borrow (D-715)",
+                f.borrow
+            ));
+        }
+        for i in f.borrow.indices() {
+            match f.params.get(i) {
+                Some(&p) if f.local(p)?.repr == Repr::Value => {}
+                Some(&p) => self.err(format!(
+                    "borrows parameter {i} (_{}), which is not counted (D-715)",
+                    p.as_u32()
+                )),
+                None => self.err(format!(
+                    "borrows parameter {i}, but has {} (D-715)",
+                    f.params.len()
+                )),
+            }
+        }
+        Ok(())
+    }
+
+    /// The tuples filled one field at a time (D-720,
+    /// D-810): each `init_field` stores into a fresh
+    /// object, one this function made with `alloc_placeholder` of the same
+    /// layout, or the first parameter of a continuation (D-780), which
+    /// takes the partly filled tuple, always with one layout; each field of
+    /// an object is stored once; and no `dup` ever shares an object that is
+    /// being filled, so no other reference sees a store.
+    fn check_init_fields(&mut self) {
+        let f = self.f;
+        let mut fresh: FxHashMap<Local, LayoutRef> = FxHashMap::default();
+        for block in &f.blocks {
+            for stmt in &block.stmts {
+                if let Stmt::Assign {
+                    dst,
+                    value: Rvalue::AllocPlaceholder { layout },
+                } = stmt
+                {
+                    fresh.insert(*dst, *layout);
+                }
+            }
+        }
+        let carried = match (f.key, f.params.first()) {
+            (FnKey::Continuation { .. }, Some(&p)) => Some(p),
+            _ => None,
+        };
+        let mut carried_layout: Option<LayoutRef> = None;
+        let mut stored: BTreeSet<(Local, u32)> = BTreeSet::new();
+        for (id, block) in f.blocks.iter_enumerated() {
+            for stmt in &block.stmts {
+                let Stmt::Eval(Rvalue::InitField {
+                    obj, layout, field, ..
+                }) = stmt
+                else {
+                    continue;
+                };
+                let fresh_here = match fresh.get(obj) {
+                    Some(made) => made == layout,
+                    None if Some(*obj) == carried => {
+                        *carried_layout.get_or_insert(*layout) == *layout
+                    }
+                    None => false,
+                };
+                if !fresh_here {
+                    self.err(format!(
+                        "bb{} stores field {field} of _{}, which is not a fresh {layout:?} being filled (D-720)",
+                        id.as_u32(),
+                        obj.as_u32()
+                    ));
+                }
+                if !stored.insert((*obj, *field)) {
+                    self.err(format!(
+                        "bb{} stores field {field} of _{} a second time (D-720)",
+                        id.as_u32(),
+                        obj.as_u32()
+                    ));
+                }
+            }
+        }
+        if stored.is_empty() {
+            return;
+        }
+        let filled: BTreeSet<Local> = stored.iter().map(|&(obj, _)| obj).collect();
+        for (id, block) in f.blocks.iter_enumerated() {
+            for stmt in &block.stmts {
+                if let Stmt::Dup(l) = stmt
+                    && filled.contains(l)
+                {
+                    self.err(format!(
+                        "bb{} shares _{}, a tuple being filled field by field (D-720)",
+                        id.as_u32(),
+                        l.as_u32()
+                    ));
+                }
+            }
+        }
+    }
+
+    /// Whether `layout` may be reused (D-716): a constructor with fields
+    /// whose layout the unit knows, or a tuple, with a fixed object size
+    /// ([`crate::layout::object_size`]). Reports it otherwise.
+    fn check_reuse_layout(&mut self, what: &str, layout: LayoutRef) -> bool {
+        let shape = match layout {
+            LayoutRef::Ctor(_) => !self
+                .module
+                .layout(layout)
+                .is_some_and(|d| d.fields.is_empty()),
+            LayoutRef::Tuple(n) => n > 0,
+            _ => false,
+        };
+        if shape && crate::layout::object_size(self.module, layout).is_some() {
+            return true;
+        }
+        self.err(format!(
+            "{what} of {layout:?}, which is not a constructor with fields or a tuple (D-716)"
+        ));
+        false
+    }
+
+    /// The reuse tokens (D-716, D-698, D-838): only after
+    /// reference counting; a `drop_reuse` gives up an owned local that is
+    /// not borrowed (D-715, D-807) and not a tuple being filled (D-810),
+    /// and defines a token, a local without a source type; a token is used
+    /// only as the token of an `alloc_reuse` or by a `drop`, never
+    /// `dup`'d, passed, returned, stored or a `goto` argument; an
+    /// `alloc_reuse` takes a token whose layout has the same object size
+    /// as its own. That each token is consumed once on every path, pads
+    /// included, is the ownership simulation's rule for every counted
+    /// local.
+    fn check_reuse(&mut self, stage: Stage) -> Result<(), Ice> {
+        let f = self.f;
+        let mut tokens: FxHashMap<Local, LayoutRef> = FxHashMap::default();
+        let mut sinks: Vec<(BlockId, Local, LayoutRef)> = Vec::new();
+        let mut sources: Vec<(BlockId, Local)> = Vec::new();
+        let mut keeps: Vec<KeepSite<'_>> = Vec::new();
+        let mut specialized: Vec<(BlockId, Local, LayoutRef)> = Vec::new();
+        let mut normal: Option<Vec<bool>> = None;
+        for (id, block) in f.blocks.iter_enumerated() {
+            for stmt in &block.stmts {
+                match stmt {
+                    Stmt::Assign {
+                        dst,
+                        value:
+                            Rvalue::DropReuse {
+                                local,
+                                layout,
+                                keep,
+                            },
+                    } => {
+                        tokens.insert(*dst, *layout);
+                        sources.push((id, *local));
+                        if !keep.is_empty() {
+                            keeps.push((id, *local, *layout, keep.as_slice()));
+                        }
+                        if f.local(*dst)?.ty.is_some() {
+                            self.err(format!(
+                                "bb{} defines the reuse token _{} with a source type (D-716)",
+                                id.as_u32(),
+                                dst.as_u32()
+                            ));
+                        }
+                    }
+                    Stmt::Assign {
+                        value: Rvalue::AllocReuse { token, layout, .. },
+                        ..
+                    } => sinks.push((id, *token, *layout)),
+                    // A specialized drop (D-850): what a source
+                    // may not be, a non-empty keep list, and never in a
+                    // cleanup pad (D-735).
+                    Stmt::DropKeep {
+                        local,
+                        layout,
+                        keep,
+                    } => {
+                        sources.push((id, *local));
+                        keeps.push((id, *local, *layout, keep.as_slice()));
+                        specialized.push((id, *local, *layout));
+                        let normal = normal.get_or_insert_with(|| normally_reachable(f));
+                        self.check_specialized_site(id, *local, keep, normal);
+                    }
+                    _ => continue,
+                }
+                if !self.counted(stage) {
+                    self.err(format!(
+                        "bb{} reuses before reference-count insertion (D-716)",
+                        id.as_u32()
+                    ));
+                }
+            }
+        }
+        if tokens.is_empty() && sinks.is_empty() && keeps.is_empty() {
+            return Ok(());
+        }
+        let borrowed = f.borrowed_locals()?;
+        self.check_keeps(&keeps, &borrowed)?;
+        self.check_pinned(&specialized)?;
+        let filled: BTreeSet<Local> = f
+            .blocks
+            .iter()
+            .flat_map(|b| &b.stmts)
+            .filter_map(|s| match s {
+                Stmt::Eval(Rvalue::InitField { obj, .. }) => Some(*obj),
+                _ => None,
+            })
+            .chain(match (f.key, f.params.first()) {
+                (FnKey::Continuation { .. }, Some(&p)) => Some(p),
+                _ => None,
+            })
+            .collect();
+        for (id, local) in sources {
+            if crate::liveness::is_borrowed_local(&borrowed, local) {
+                self.err(format!(
+                    "bb{} reuses _{}, which is borrowed (D-715, D-716)",
+                    id.as_u32(),
+                    local.as_u32()
+                ));
+            }
+            if filled.contains(&local) {
+                self.err(format!(
+                    "bb{} reuses _{}, a tuple being filled field by field (D-810, D-716)",
+                    id.as_u32(),
+                    local.as_u32()
+                ));
+            }
+        }
+        self.check_sinks(&tokens, &sinks);
+        self.check_token_uses(&tokens);
+        Ok(())
+    }
+
+    /// Each `alloc_reuse` of `sinks` (block, token, layout) takes a token
+    /// (a key of `tokens`, with its `drop_reuse`'s layout) of its own
+    /// object size (D-716).
+    fn check_sinks(
+        &mut self,
+        tokens: &FxHashMap<Local, LayoutRef>,
+        sinks: &[(BlockId, Local, LayoutRef)],
+    ) {
+        for &(id, token, layout) in sinks {
+            let Some(&from) = tokens.get(&token) else {
+                self.err(format!(
+                    "bb{} allocates with _{}, which is not a reuse token (D-716)",
+                    id.as_u32(),
+                    token.as_u32()
+                ));
+                continue;
+            };
+            let old = crate::layout::object_size(self.module, from);
+            let new = crate::layout::object_size(self.module, layout);
+            if old.is_none() || old != new {
+                self.err(format!(
+                    "bb{} reuses a {from:?} of {old:?} bytes for a {layout:?} of {new:?} bytes (D-716)",
+                    id.as_u32()
+                ));
+            }
+        }
+    }
+
+    /// A specialized drop of `local` in block `id` keeps something and is
+    /// in a block normal control flow reaches (`normal`, by block index):
+    /// never in a cleanup pad (D-735, D-850).
+    fn check_specialized_site(
+        &mut self,
+        id: BlockId,
+        local: Local,
+        keep: &[(u32, Local)],
+        normal: &[bool],
+    ) {
+        if keep.is_empty() {
+            self.err(format!(
+                "bb{} specializes a drop of _{} that keeps nothing (D-716)",
+                id.as_u32(),
+                local.as_u32()
+            ));
+        }
+        if !normal.get(id.index()).copied().unwrap_or(false) {
+            self.err(format!(
+                "bb{} specializes a drop in a cleanup pad (D-735, D-716)",
+                id.as_u32()
+            ));
+        }
+    }
+
+    /// Each specialized drop in `specialized` (block, local, layout)
+    /// releases the fields of its layout, so a read must pin the
+    /// constructor there, as for reuse ([`crate::fuse::Pins`]): never a
+    /// shared field's read (D-071, D-850).
+    fn check_pinned(&mut self, specialized: &[(BlockId, Local, LayoutRef)]) -> Result<(), Ice> {
+        if specialized.is_empty() {
+            return Ok(());
+        }
+        let pins = crate::fuse::Pins::of(self.module, self.f)?;
+        for &(id, x, layout) in specialized {
+            if !pins.pins(self.module, x, layout, id) {
+                self.err(format!(
+                    "bb{} specializes a drop of _{} as {layout:?}, which no read pins (D-071, D-716)",
+                    id.as_u32(),
+                    x.as_u32()
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// The keep lists (fusion, D-716, D-850) of the releases
+    /// in `keeps`: each kept local is a counted `field x.i of L` projection
+    /// of the released local `x` at its index `i` in the release's layout
+    /// `L`, the indices are distinct, and no kept local is borrowed (D-715,
+    /// D-807: a borrowed projection holds no reference to move).
+    fn check_keeps(&mut self, keeps: &[KeepSite<'_>], borrowed: &[bool]) -> Result<(), Ice> {
+        if keeps.is_empty() {
+            return Ok(());
+        }
+        let f = self.f;
+        let mut projections: FxHashMap<Local, (Local, LayoutRef, u32)> = FxHashMap::default();
+        for stmt in f.blocks.iter().flat_map(|b| &b.stmts) {
+            if let Stmt::Assign {
+                dst,
+                value:
+                    Rvalue::Field {
+                        base,
+                        layout,
+                        field,
+                    },
+            } = stmt
+            {
+                projections.insert(*dst, (*base, *layout, *field));
+            }
+        }
+        for &(id, x, layout, keep) in keeps {
+            let mut seen = BTreeSet::new();
+            for &(i, p) in keep {
+                if !seen.insert(i) {
+                    self.err(format!(
+                        "bb{} keeps field {i} of _{} twice (D-716)",
+                        id.as_u32(),
+                        x.as_u32()
+                    ));
+                }
+                if projections.get(&p) != Some(&(x, layout, i)) {
+                    self.err(format!(
+                        "bb{} keeps _{} as field {i} of _{}, but it is not that field of {layout:?} (D-716)",
+                        id.as_u32(),
+                        p.as_u32(),
+                        x.as_u32()
+                    ));
+                }
+                if f.local(p)?.repr != Repr::Value {
+                    self.err(format!(
+                        "bb{} keeps the uncounted _{} (D-716)",
+                        id.as_u32(),
+                        p.as_u32()
+                    ));
+                }
+                if crate::liveness::is_borrowed_local(borrowed, p) {
+                    self.err(format!(
+                        "bb{} keeps _{}, which is borrowed (D-715, D-716)",
+                        id.as_u32(),
+                        p.as_u32()
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// A reuse token (a key of `tokens`) is used only as the token of an
+    /// `alloc_reuse` or by a `drop` ([`FnCx::check_reuse`]).
+    fn check_token_uses(&mut self, tokens: &FxHashMap<Local, LayoutRef>) {
+        let f = self.f;
+        let is_token = |l: &Local| tokens.contains_key(l);
+        for (id, block) in f.blocks.iter_enumerated() {
+            for stmt in &block.stmts {
+                let misused: Vec<Local> = match stmt {
+                    Stmt::Drop(_) | Stmt::ClearUnwind => Vec::new(),
+                    Stmt::Dup(l) => vec![*l],
+                    Stmt::DropKeep { local, keep, .. } => std::iter::once(*local)
+                        .chain(keep.iter().map(|&(_, p)| p))
+                        .collect(),
+                    Stmt::Assign {
+                        value: Rvalue::AllocReuse { fields, .. },
+                        ..
+                    } => fields.iter().filter_map(Operand::local).collect(),
+                    Stmt::Assign { value, .. } | Stmt::Eval(value) => value
+                        .uses()
+                        .into_iter()
+                        .map(|(l, _)| l)
+                        .chain(value.kept().iter().map(|&(_, p)| p))
+                        .collect(),
+                };
+                for l in misused.into_iter().filter(is_token) {
+                    self.err(format!(
+                        "bb{} uses the reuse token _{} other than by alloc_reuse or drop (D-716)",
+                        id.as_u32(),
+                        l.as_u32()
+                    ));
+                }
+            }
+            for (l, _) in block.term.uses().into_iter().filter(|(l, _)| is_token(l)) {
+                self.err(format!(
+                    "bb{} passes on the reuse token _{} (D-716, D-733)",
+                    id.as_u32(),
+                    l.as_u32()
+                ));
+            }
+        }
+    }
+
+    /// Every local defined exactly once; returns the definition sites, by
+    /// local index.
+    fn check_definitions(&mut self) -> Option<Vec<Option<DefSite>>> {
+        let f = self.f;
+        let mut sites: Vec<Option<DefSite>> = vec![None; f.locals.len()];
         let mut ok = true;
         let entry = BlockId::from_u32(0);
-        let mut define = |cx: &mut Self, l: Local, site: DefSite| {
-            if cx.f.locals.get(l).is_none() {
+        let mut define = |cx: &mut Self, l: Local, site: DefSite| match sites.get_mut(l.index()) {
+            None => {
                 cx.err(format!("unknown local _{}", l.as_u32()));
                 ok = false;
-            } else if sites.insert(l, site).is_some() {
+            }
+            Some(Some(_)) => {
                 cx.err(format!("_{} is defined more than once", l.as_u32()));
                 ok = false;
             }
+            Some(slot) => *slot = Some(site),
         };
         for &p in &f.params {
             define(self, p, (entry, None));
@@ -340,6 +1264,45 @@ impl FnCx<'_> {
             }
         }
         ok.then_some(sites)
+    }
+
+    /// Every recorded call location (D-856) names a local that a call
+    /// defines and a string of [`Function::call_loc_strings`], and the
+    /// table is sorted by local, as code generation searches it.
+    fn check_call_locs(&mut self, defs: &[Option<DefSite>]) {
+        let f = self.f;
+        if !f
+            .call_locs
+            .windows(2)
+            .all(|w| matches!(w, [a, b] if a.0 < b.0))
+        {
+            self.err("the call locations are not sorted by local, each once");
+        }
+        for &(local, loc) in &f.call_locs {
+            let by_call = defs
+                .get(local.index())
+                .copied()
+                .flatten()
+                .and_then(|(block, at)| f.blocks.get(block)?.stmts.get(at?))
+                .is_some_and(|stmt| {
+                    matches!(
+                        stmt,
+                        Stmt::Assign {
+                            value: Rvalue::Call { .. },
+                            ..
+                        }
+                    )
+                });
+            if !by_call {
+                self.err(format!(
+                    "the call location of _{} names a local no call defines",
+                    local.as_u32()
+                ));
+            }
+            if f.call_loc_strings.get(loc).is_none() {
+                self.err(format!("unknown call location str#{}", loc.as_u32()));
+            }
+        }
     }
 
     /// Block references exist, `bb0` is not a target and has no
@@ -383,27 +1346,32 @@ impl FnCx<'_> {
         self.errors.len() == before
     }
 
-    fn check_dominance(&mut self, defs: &BTreeMap<Local, DefSite>) -> Result<(), Ice> {
+    /// Every use dominated by its definition, over the blocks split at
+    /// their unwind edges ([`Segments`]), canonical pads left out.
+    fn check_dominance(&mut self, defs: &[Option<DefSite>]) -> Result<(), Ice> {
         let f = self.f;
-        let dom = Dominance::new(f)?;
+        let segments = Segments::new(f, &self.pads)?;
+        let dom = Dominance::from_successors(&segments.succs)?;
         for (id, block) in f.blocks.iter_enumerated() {
-            // Unreachable blocks have no dominators; their uses are not
-            // checked.
-            if !dom.is_reachable(id) {
+            if self.is_pad(id) {
                 continue;
             }
-            let check = |cx: &mut Self, l: Local, at: Option<usize>| {
-                let Some(&(def_block, def_pos)) = defs.get(&l) else {
+            let check = |cx: &mut Self, l: Local, at: usize| {
+                let use_node = segments.use_node(id, at);
+                // Unreachable code has no dominators; its uses are not
+                // checked.
+                if !dom.is_reachable(use_node) {
+                    return;
+                }
+                let Some(&Some((def_block, def_pos))) = defs.get(l.index()) else {
                     cx.err(format!("_{} is used but never defined", l.as_u32()));
                     return;
                 };
-                let ok = if def_block == id {
-                    match (def_pos, at) {
-                        (Some(d), Some(u)) => d < u,
-                        (None, _) | (Some(_), None) => true,
-                    }
+                let def_node = segments.def_node(def_block, def_pos);
+                let ok = if def_node == use_node {
+                    def_pos.is_none_or(|d| d < at)
                 } else {
-                    dom.dominates(def_block, id)
+                    dom.dominates(def_node, use_node)
                 };
                 if !ok {
                     cx.err(format!(
@@ -415,11 +1383,11 @@ impl FnCx<'_> {
             };
             for (n, stmt) in block.stmts.iter().enumerate() {
                 for l in stmt_locals(stmt) {
-                    check(self, l, Some(n));
+                    check(self, l, n);
                 }
             }
             for (l, _) in block.term.uses() {
-                check(self, l, None);
+                check(self, l, block.stmts.len());
             }
         }
         Ok(())
@@ -456,23 +1424,41 @@ impl FnCx<'_> {
             Operand::Const(Const::Static(id)) if self.module.static_object(*id).is_none() => {
                 self.err(format!("unknown static#{}", id.as_u32()));
             }
+            Operand::Const(Const::Ctx) => {
+                self.err("ctx appears only as the first argument of a foreign call (D-692)");
+            }
             _ => {}
         }
     }
 
     fn callee_sig(&mut self, callee: &Callee) -> Option<AbiSig> {
         let sig = match callee {
-            Callee::Direct(def) => {
+            Callee::Direct(def) | Callee::Borrowing(def, _) => {
                 let sig = self.module.callee(*def).map(|d| d.sig.clone());
-                if sig.is_none() {
-                    self.err(format!("direct callee {def:?} has no declaration"));
+                let mask = callee.borrow_mask();
+                match &sig {
+                    None => self.err(format!("direct callee {def:?} has no declaration")),
+                    // The mask is part of the ABI signature (D-715): a call
+                    // with another one would release what the callee holds,
+                    // or leak what it does not.
+                    Some(decl) if decl.borrow != mask => self.err(format!(
+                        "call of {def:?} borrows {mask:?}, but its declaration borrows {:?} (D-715)",
+                        decl.borrow
+                    )),
+                    Some(_) => {}
+                }
+                if matches!(callee, Callee::Borrowing(..)) && mask.is_owned() {
+                    self.err(format!(
+                        "a borrowing call of {def:?} that borrows nothing (D-715)"
+                    ));
                 }
                 sig
             }
             Callee::Code(key) => {
                 let sig = self
-                    .module
-                    .function(*key)
+                    .index
+                    .get(key)
+                    .and_then(|&n| self.module.functions.get(n))
                     .and_then(|f| f.sig().ok())
                     .or_else(|| fixed_sig(*key));
                 if sig.is_none() {
@@ -520,6 +1506,42 @@ impl FnCx<'_> {
         }
     }
 
+    /// The representation a foreign call with the C signature `sig`
+    /// produces, after checking its arguments.
+    fn check_foreign(
+        &mut self,
+        sig: &ForeignSig,
+        args: &[Operand],
+        blocking: bool,
+    ) -> Option<Repr> {
+        if sig.params.len() != args.len() {
+            self.err("foreign call with the wrong number of arguments");
+        }
+        // A pool thread never receives the fiber's context (D-191, D-819).
+        if blocking && args.contains(&Operand::Const(Const::Ctx)) {
+            self.err("a blocking foreign call passes ctx");
+        }
+        if sig.params.contains(&CType::Void) {
+            self.err("a foreign parameter of type void");
+        }
+        for (n, (arg, &ctype)) in args.iter().zip(&sig.params).enumerate() {
+            // The fiber's context of a `@std_context` kernel (D-692, D-745).
+            if n == 0 && *arg == Operand::Const(Const::Ctx) {
+                if !ctype.accepts_ctx() {
+                    self.err(format!("ctx passed as {ctype}"));
+                }
+                continue;
+            }
+            self.check_const(arg, false);
+            if let Some(r) = self.repr(arg)
+                && !ctype.accepts(r)
+            {
+                self.err(format!("foreign argument {r} passed as {ctype}"));
+            }
+        }
+        sig.ret.repr()
+    }
+
     /// The representation the rvalue produces, after checking its operands.
     fn check_rvalue(&mut self, value: &Rvalue) -> Option<Repr> {
         match value {
@@ -531,27 +1553,60 @@ impl FnCx<'_> {
                 self.check_call(callee, args);
                 Some(Repr::Value)
             }
-            Rvalue::CallForeign { sig, args, .. } => {
-                if sig.params.len() != args.len() {
-                    self.err("foreign call with the wrong number of arguments");
-                }
-                if sig.params.contains(&CType::Void) {
-                    self.err("a foreign parameter of type void");
-                }
-                for (arg, &ctype) in args.iter().zip(&sig.params) {
-                    self.check_const(arg, false);
-                    if let Some(r) = self.repr(arg)
-                        && !ctype.accepts(r)
-                    {
-                        self.err(format!("foreign argument {r} passed as {ctype}"));
-                    }
-                }
-                sig.ret.repr()
-            }
+            Rvalue::CallForeign {
+                sig,
+                args,
+                blocking,
+                ..
+            } => self.check_foreign(sig, args, *blocking),
             Rvalue::CallRuntime { func, args } => self.check_runtime(*func, args),
             Rvalue::Alloc { layout, fields } => {
                 self.check_alloc(*layout, fields);
                 Some(Repr::Value)
+            }
+            Rvalue::AllocPlaceholder { layout } => {
+                if !matches!(layout, LayoutRef::Tuple(n) if *n > 0) {
+                    self.err(format!(
+                        "alloc_placeholder of {layout:?}, which is not a tuple (D-720)"
+                    ));
+                }
+                Some(Repr::Value)
+            }
+            // Which locals are tokens, how they are used and the sizes:
+            // `check_reuse`.
+            Rvalue::DropReuse { local, layout, .. } => {
+                self.expect_repr(&Operand::Local(*local), Repr::Value, "drop_reuse operand");
+                self.check_reuse_layout("drop_reuse", *layout);
+                Some(Repr::Value)
+            }
+            Rvalue::AllocReuse {
+                token,
+                layout,
+                fields,
+            } => {
+                self.expect_repr(&Operand::Local(*token), Repr::Value, "alloc_reuse token");
+                if self.check_reuse_layout("alloc_reuse", *layout) {
+                    self.check_alloc(*layout, fields);
+                }
+                Some(Repr::Value)
+            }
+            Rvalue::InitField {
+                obj,
+                layout,
+                field,
+                value,
+            } => {
+                // Where `obj` comes from and that each field is stored
+                // once: `check_init_fields`.
+                self.expect_repr(&Operand::Local(*obj), Repr::Value, "init_field object");
+                match layout {
+                    LayoutRef::Tuple(n) if field < n => {}
+                    _ => self.err(format!(
+                        "init_field {field} of {layout:?}, which is not a tuple field (D-720)"
+                    )),
+                }
+                self.expect_repr(value, Repr::Value, "init_field value");
+                None
             }
             Rvalue::Field {
                 base,
@@ -839,6 +1894,11 @@ impl FnCx<'_> {
     fn check_reprs(&mut self, stage: Stage) -> Result<(), Ice> {
         let f = self.f;
         for (id, block) in f.blocks.iter_enumerated() {
+            // A canonical pad drops counted locals and jumps without
+            // arguments ([`canonical_pads`]).
+            if self.is_pad(id) {
+                continue;
+            }
             for stmt in &block.stmts {
                 match stmt {
                     Stmt::Assign { dst, value } => {
@@ -863,11 +1923,22 @@ impl FnCx<'_> {
                         self.check_rvalue(value);
                     }
                     Stmt::Dup(l) | Stmt::Drop(l) => {
-                        if stage == Stage::Lowered {
+                        if !self.counted(stage) {
                             self.err("dup or drop before reference-count insertion");
                         }
                         if f.local(*l)?.repr != Repr::Value {
                             self.err(format!("dup or drop of uncounted _{}", l.as_u32()));
+                        }
+                    }
+                    // Which locals it keeps, its stage and what it may
+                    // release: `check_reuse`.
+                    Stmt::DropKeep { local, layout, .. } => {
+                        self.expect_repr(&Operand::Local(*local), Repr::Value, "specialized drop");
+                        self.check_reuse_layout("a specialized drop", *layout);
+                    }
+                    Stmt::ClearUnwind => {
+                        if !f.precounted {
+                            self.err("clear_unwind outside a generated intrinsic body (D-693)");
                         }
                     }
                 }
@@ -907,6 +1978,7 @@ impl FnCx<'_> {
                 self.expect_repr(cond, Repr::Bool, "branch condition");
             }
             Terminator::Switch { on, cases, .. } => {
+                self.check_const(on, false);
                 if let Some(r) = self.repr(on)
                     && !(r == Repr::U32 || r.is_signed_int() || r.is_unsigned_int())
                 {
@@ -927,181 +1999,325 @@ impl FnCx<'_> {
                     self.expect_repr(m, Repr::Value, "panic message");
                 }
             }
-            Terminator::Unreachable => {}
+            // Where it may appear is part of the unwinding shape.
+            Terminator::Unreachable | Terminator::Resume => {}
         }
         Ok(())
     }
 
-    /// Reference counts balance on every path (D7).
+    /// Reference counts balance on every path, pads included (D7, D-698):
+    /// the simulation of [`crate::ownership`].
     fn check_ownership(&mut self) -> Result<(), Ice> {
-        let f = self.f;
-        let counted = |l: Local| f.local(l).map(|d| d.repr == Repr::Value);
-        let mut entry_state: BTreeMap<BlockId, Counts> = BTreeMap::new();
-        let mut start = Counts::default();
-        for &p in &f.params {
-            if counted(p)? {
-                start.held.insert(p, 1);
-            }
-        }
-        let bb0 = BlockId::from_u32(0);
-        entry_state.insert(bb0, start);
-        let mut work = vec![bb0];
-        let mut visited = BTreeSet::new();
-        while let Some(id) = work.pop() {
-            if !visited.insert(id) {
-                continue;
-            }
-            let block = f.block(id)?;
-            let mut st = entry_state.get(&id).cloned().unwrap_or_default();
-            for &p in &block.params {
-                if counted(p)? {
-                    st.held.insert(p, 1);
-                }
-            }
-            let at = |n: usize| format!("bb{} statement {n}", id.as_u32());
-            for (n, stmt) in block.stmts.iter().enumerate() {
-                match stmt {
-                    Stmt::Assign { dst, value } => {
-                        self.consume(&mut st, &value.uses(), &at(n))?;
-                        if counted(*dst)? {
-                            if value.result_is_borrowed() {
-                                st.held.insert(*dst, 0);
-                                let base = match value {
-                                    Rvalue::Field { base, .. } => Some(*base),
-                                    _ => None,
-                                };
-                                st.borrowed_from.insert(*dst, base);
-                            } else {
-                                st.held.insert(*dst, 1);
-                            }
-                        }
-                    }
-                    Stmt::Eval(value) => self.consume(&mut st, &value.uses(), &at(n))?,
-                    Stmt::Dup(l) => {
-                        // A `field` or `load_const` result holds nothing
-                        // until its dup, which needs the base still alive.
-                        let ok = match (st.held.get(l).copied(), st.borrowed_from.get(l)) {
-                            (Some(c), _) if c >= 1 => true,
-                            (Some(0), Some(Some(base))) => {
-                                st.held.get(base).is_some_and(|&c| c >= 1)
-                            }
-                            (Some(0), Some(None)) => true,
-                            _ => false,
-                        };
-                        match st.held.get_mut(l) {
-                            Some(c) if ok => *c = c.saturating_add(1),
-                            _ => self.err(format!(
-                                "{}: dup of _{} which holds no reference",
-                                at(n),
-                                l.as_u32()
-                            )),
-                        }
-                    }
-                    Stmt::Drop(l) => self.consume(&mut st, &[(*l, UseKind::Owned)], &at(n))?,
-                }
-            }
-            let here = format!("bb{} terminator", id.as_u32());
-            match &block.term {
-                Terminator::Return(_) | Terminator::TailCall { .. } => {
-                    self.consume(&mut st, &block.term.uses(), &here)?;
-                    for (l, c) in &st.held {
-                        if *c != 0 {
-                            self.err(format!(
-                                "{here}: _{} still holds {c} reference(s)",
-                                l.as_u32()
-                            ));
-                        }
-                    }
-                }
-                Terminator::Goto { target, .. } => {
-                    self.consume(&mut st, &block.term.uses(), &here)?;
-                    self.flow(&mut entry_state, &mut work, *target, &st);
-                }
-                Terminator::Branch { .. } | Terminator::Switch { .. } => {
-                    self.consume(&mut st, &block.term.uses(), &here)?;
-                    for succ in block.term.successors() {
-                        self.flow(&mut entry_state, &mut work, succ, &st);
-                    }
-                }
-                Terminator::Panic { .. } | Terminator::Unreachable => {}
-            }
-        }
-        Ok(())
-    }
-
-    fn flow(
-        &mut self,
-        entry_state: &mut BTreeMap<BlockId, Counts>,
-        work: &mut Vec<BlockId>,
-        target: BlockId,
-        st: &Counts,
-    ) {
-        let mut normalized = st.clone();
-        normalized.held.retain(|_, c| *c != 0);
-        normalized
-            .borrowed_from
-            .retain(|l, _| normalized.held.contains_key(l));
-        match entry_state.get(&target) {
-            Some(existing) if *existing != normalized => self.err(format!(
-                "reference counts differ between the predecessors of bb{}",
-                target.as_u32()
-            )),
-            Some(_) => {}
-            None => {
-                entry_state.insert(target, normalized);
-                work.push(target);
-            }
-        }
-    }
-
-    /// Applies the uses of one instruction: borrowed uses need a reference
-    /// that survives the instruction, owned uses consume one each.
-    fn consume(&mut self, st: &mut Counts, uses: &[(Local, UseKind)], at: &str) -> Result<(), Ice> {
-        let mut per: BTreeMap<Local, (i64, bool)> = BTreeMap::new();
-        for &(l, kind) in uses {
-            if self.f.local(l)?.repr != Repr::Value {
-                continue;
-            }
-            let e = per.entry(l).or_insert((0, false));
-            match kind {
-                UseKind::Owned => e.0 = e.0.saturating_add(1),
-                UseKind::Borrowed => e.1 = true,
-            }
-        }
-        for (l, (owned, borrowed)) in per {
-            let have = st.held.get(&l).copied();
-            let need = owned.saturating_add(i64::from(borrowed));
-            match have {
-                Some(c) if c >= need && need > 0 => {
-                    st.held.insert(l, c.saturating_sub(owned));
-                }
-                _ => {
-                    let mut msg = format!("{at}: _{} is used without a reference", l.as_u32());
-                    if let Some(c) = have {
-                        let _ = write!(msg, " (holds {c}, needs {need})");
-                    }
-                    self.err(msg);
-                }
-            }
-        }
-        Ok(())
+        ownership::simulate(self.f, &mut ErrorSink(&mut self.errors))
     }
 }
 
-/// The references each counted local holds on one path.
-#[derive(Clone, Default, PartialEq, Eq, Debug)]
-struct Counts {
-    held: BTreeMap<Local, i64>,
-    /// Locals defined by `field` (with their base) or `load_const`.
-    borrowed_from: BTreeMap<Local, Option<Local>>,
+/// Whether `stmt` only releases or adds references, running nothing a
+/// handle could observe (D-851): `dup`, `drop`,
+/// `drop_reuse` and specialized drops.
+fn releases_only(stmt: &Stmt) -> bool {
+    matches!(
+        stmt,
+        Stmt::Dup(_)
+            | Stmt::Drop(_)
+            | Stmt::DropKeep { .. }
+            | Stmt::Assign {
+                value: Rvalue::DropReuse { .. },
+                ..
+            }
+    )
 }
 
-/// Whether `value` is a call without a result: a foreign function
-/// returning `void` or a runtime helper returning nothing.
+/// The local `stmt` releases: a `drop`'s, a `drop_reuse`'s or a
+/// specialized drop's.
+fn released(stmt: &Stmt) -> Option<Local> {
+    match stmt {
+        Stmt::Drop(x)
+        | Stmt::DropKeep { local: x, .. }
+        | Stmt::Assign {
+            value: Rvalue::DropReuse { local: x, .. },
+            ..
+        } => Some(*x),
+        _ => None,
+    }
+}
+
+/// What walking back from a release finds ([`DropWalk::back`]).
+enum Back {
+    /// The local's last use or definition, with nothing run since.
+    Ok,
+    /// This statement ran after the local's last use.
+    Ran(usize),
+    /// Nothing ran and the local is not used in the block: its
+    /// predecessors decide.
+    Preds(BlockId),
+}
+
+/// The facts [`FnCx::check_drop_positions`] walks back over.
+struct DropWalk<'a> {
+    f: &'a Function,
+    /// By block index: its predecessors along normal control flow.
+    preds: &'a [Vec<BlockId>],
+    /// By block index, then position (the terminator's last): the nearest
+    /// earlier statement that runs code ([`releases_only`]).
+    runs_before: &'a [Vec<Option<usize>>],
+    /// By block index: the positions where each local is used or defined
+    /// (the terminator at the number of statements).
+    events: &'a [FxHashMap<Local, Vec<usize>>],
+}
+
+impl DropWalk<'_> {
+    /// Walks back from position `at` of block `b` (past its end, so its
+    /// terminator included, when `at` exceeds the number of statements) to
+    /// the last use or definition of `x`.
+    fn back(&self, b: BlockId, at: usize, x: Local) -> Back {
+        let before = self.runs_before.get(b.index());
+        let last = before.map_or(0, |v| v.len().saturating_sub(1));
+        let ran = before.and_then(|v| v.get(at.min(last))).copied().flatten();
+        let used = self
+            .events
+            .get(b.index())
+            .and_then(|e| e.get(&x))
+            .is_some_and(|ps| ps.iter().any(|&p| p < at && ran.is_none_or(|s| p >= s)));
+        if used {
+            return Back::Ok;
+        }
+        if let Some(s) = ran {
+            return Back::Ran(s);
+        }
+        let param = self
+            .f
+            .blocks
+            .get(b)
+            .is_some_and(|block| block.params.contains(&x))
+            || (b.index() == 0 && self.f.params.contains(&x));
+        if param { Back::Ok } else { Back::Preds(b) }
+    }
+}
+
+/// Collects the ownership simulation's findings.
+struct ErrorSink<'a>(&'a mut Vec<String>);
+
+impl Observer for ErrorSink<'_> {
+    fn error(&mut self, message: String) {
+        self.0.push(message);
+    }
+}
+
+/// The CFG of a function with each block split at its unwind edges
+/// (D-698), for dominance. Node 0 is the function's entry, where its
+/// parameters are defined; it goes to `bb0` and to the entry pad. A block
+/// with edges at instructions `i1 < … < ik` has `k + 1` nodes: node `j`
+/// holds the result of instruction `ij` (none for `j = 0`), the
+/// instructions after it, and the operands of `i(j+1)`, whose edge leaves
+/// from it; the last node ends with the terminator's normal successors. So
+/// a pad sees what is defined before the instruction that unwinds to it,
+/// not that instruction's result.
+struct Segments {
+    /// Each block's first node, by block index.
+    first: Vec<usize>,
+    /// Each block's edge positions, sorted.
+    edges: Vec<Vec<usize>>,
+    /// Each node's successors.
+    succs: Vec<Vec<usize>>,
+}
+
+impl Segments {
+    /// The segments of `f`, without the canonical pads `pads` marks by
+    /// block index: they get no node, and an edge to one does not split
+    /// its block.
+    fn new(f: &Function, pads: &[bool]) -> Result<Self, Ice> {
+        let n = f.blocks.len();
+        let is_pad = |b: BlockId| pads.get(b.index()).copied().unwrap_or(false);
+        let mut first = Vec::with_capacity(n);
+        let mut edges = Vec::with_capacity(n);
+        let mut splits: Vec<Vec<(usize, BlockId)>> = Vec::with_capacity(n);
+        let mut next = 1_usize;
+        for (id, block) in f.blocks.iter_enumerated() {
+            if is_pad(id) {
+                first.push(NO_NODE);
+                edges.push(Vec::new());
+                splits.push(Vec::new());
+                continue;
+            }
+            first.push(next);
+            // Out-of-range pads are shape errors, reported elsewhere.
+            let mut here: Vec<(usize, BlockId)> = block
+                .unwind
+                .iter()
+                .filter(|&&(_, pad)| pad.index() < n && !is_pad(pad))
+                .filter_map(|&(i, pad)| Some((usize::try_from(i).ok()?, pad)))
+                .collect();
+            here.sort_unstable_by_key(|&(i, _)| i);
+            next = next.saturating_add(here.len()).saturating_add(1);
+            edges.push(here.iter().map(|&(i, _)| i).collect());
+            splits.push(here);
+        }
+        let node = |b: BlockId| first.get(b.index()).copied().filter(|&n| n != NO_NODE);
+        let mut succs: Vec<Vec<usize>> = vec![Vec::new(); next];
+        let entry = succs
+            .first_mut()
+            .ok_or_else(|| Ice::new("segments without an entry node"))?;
+        entry.extend(node(BlockId::from_u32(0)));
+        entry.extend(f.entry_unwind.and_then(node));
+        for ((id, block), pads) in f.blocks.iter_enumerated().zip(&splits) {
+            if is_pad(id) {
+                continue;
+            }
+            let base = node(id).ok_or_else(|| Ice::new("a block without a node"))?;
+            for (j, &(_, pad)) in pads.iter().enumerate() {
+                let out = succs
+                    .get_mut(base.saturating_add(j))
+                    .ok_or_else(|| Ice::new("a segment out of range"))?;
+                out.extend(node(pad));
+                out.push(base.saturating_add(j).saturating_add(1));
+            }
+            let last = succs
+                .get_mut(base.saturating_add(pads.len()))
+                .ok_or_else(|| Ice::new("a segment out of range"))?;
+            // Unknown targets are CFG errors, reported before.
+            last.extend(block.term.successors().into_iter().filter_map(node));
+        }
+        Ok(Self {
+            first,
+            edges,
+            succs,
+        })
+    }
+
+    fn base(&self, b: BlockId) -> (usize, &[usize]) {
+        (
+            self.first.get(b.index()).copied().unwrap_or(NO_NODE),
+            self.edges.get(b.index()).map_or(&[], Vec::as_slice),
+        )
+    }
+
+    /// The node where instruction `at` of `b` reads its operands.
+    fn use_node(&self, b: BlockId, at: usize) -> usize {
+        let (base, edges) = self.base(b);
+        base.saturating_add(edges.partition_point(|&e| e < at))
+    }
+
+    /// The node where a local defined at `site` becomes defined: node 0
+    /// for a function parameter, a block's first node for its parameters.
+    fn def_node(&self, b: BlockId, at: Option<usize>) -> usize {
+        let (base, edges) = self.base(b);
+        match at {
+            None if b.index() == 0 => 0,
+            None => base,
+            Some(at) => base.saturating_add(edges.partition_point(|&e| e <= at)),
+        }
+    }
+}
+
+/// Whether a statement or the terminator of `block` reads `local`.
+fn block_uses(block: &Block, local: Local) -> bool {
+    block.stmts.iter().any(|s| stmt_locals(s).contains(&local))
+        || block.term.uses().iter().any(|&(l, _)| l == local)
+}
+
+/// No node in [`Segments`]: a canonical pad's.
+const NO_NODE: usize = usize::MAX;
+
+/// The canonical pads of `f`, by block index (module documentation): a
+/// block without parameters or unwind edges that normal control flow
+/// (`normal`, by block index) does not reach, and that is either `resume`
+/// or `drop _l; goto <canonical pad>` without arguments, `_l` counted.
+/// The chain below one ends in `resume`.
+///
+/// # Errors
+///
+/// An [`Ice`] for an unknown local.
+fn canonical_pads(f: &Function, normal: &[bool]) -> Result<Vec<bool>, Ice> {
+    /// The state of a block in the walk.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Mark {
+        Unknown,
+        OnPath,
+        Pad,
+        Other,
+    }
+    let n = f.blocks.len();
+    let mut mark = vec![Mark::Unknown; n];
+    let mut path = Vec::new();
+    for start in 0..n {
+        let mut at = start;
+        // Follow the chain below `start` until its end is known, then
+        // mark the path walked by that end; no recursion over long
+        // chains.
+        let end = loop {
+            match mark.get(at).copied() {
+                Some(Mark::Pad) => break Mark::Pad,
+                // `OnPath` is a cycle: no `resume` below.
+                Some(Mark::Other | Mark::OnPath) | None => break Mark::Other,
+                Some(Mark::Unknown) => {}
+            }
+            let Some(block) = BlockId::from_usize(at).and_then(|id| f.blocks.get(id)) else {
+                break Mark::Other;
+            };
+            let candidate = block.params.is_empty()
+                && block.unwind.is_empty()
+                && !normal.get(at).copied().unwrap_or(true);
+            let next = match (block.stmts.as_slice(), &block.term) {
+                _ if !candidate => None,
+                ([], Terminator::Resume) => {
+                    if let Some(m) = mark.get_mut(at) {
+                        *m = Mark::Pad;
+                    }
+                    break Mark::Pad;
+                }
+                ([Stmt::Drop(l)], Terminator::Goto { target, args })
+                    if args.is_empty() && f.local(*l)?.repr == Repr::Value =>
+                {
+                    Some(target.index())
+                }
+                _ => None,
+            };
+            let Some(next) = next else {
+                if let Some(m) = mark.get_mut(at) {
+                    *m = Mark::Other;
+                }
+                break Mark::Other;
+            };
+            if let Some(m) = mark.get_mut(at) {
+                *m = Mark::OnPath;
+            }
+            path.push(at);
+            at = next;
+        };
+        for b in path.drain(..) {
+            if let Some(m) = mark.get_mut(b) {
+                *m = end;
+            }
+        }
+    }
+    Ok(mark.into_iter().map(|m| m == Mark::Pad).collect())
+}
+
+/// The blocks reached from `bb0` and the entry pad through
+/// [`Function::successors`], normal flow and unwinding, by block index.
+fn reachable_with_unwinding(f: &Function) -> Vec<bool> {
+    let mut seen = vec![false; f.blocks.len()];
+    let mut work = vec![BlockId::from_u32(0)];
+    work.extend(f.entry_unwind);
+    while let Some(id) = work.pop() {
+        match seen.get_mut(id.index()) {
+            Some(s) if !*s => *s = true,
+            _ => continue,
+        }
+        work.extend(f.successors(id).unwrap_or_default());
+    }
+    seen
+}
+
+/// Whether `value` is evaluated only for effect: a call without a result
+/// (a foreign function returning `void`, a runtime helper returning
+/// nothing) or a field store ([`Rvalue::InitField`], D-720).
 fn is_void_call(value: &Rvalue) -> bool {
     match value {
         Rvalue::CallForeign { sig, .. } => sig.ret == CType::Void,
         Rvalue::CallRuntime { func, .. } => func.ret().is_none(),
+        Rvalue::InitField { .. } => true,
         _ => false,
     }
 }
@@ -1111,12 +2327,38 @@ fn foreign_i64(value: &Rvalue, dst: Repr) -> bool {
     matches!(value, Rvalue::CallForeign { sig, .. } if sig.ret == CType::I64 && dst == Repr::I64)
 }
 
-/// The locals a statement reads, Dup and Drop included.
+/// The locals a statement reads, Dup and Drop included, and the locals of
+/// a keep list.
 fn stmt_locals(stmt: &Stmt) -> Vec<Local> {
     match stmt {
-        Stmt::Assign { value, .. } | Stmt::Eval(value) => {
-            value.uses().into_iter().map(|(l, _)| l).collect()
-        }
+        Stmt::Assign { value, .. } | Stmt::Eval(value) => value
+            .uses()
+            .into_iter()
+            .map(|(l, _)| l)
+            .chain(value.kept().iter().map(|&(_, p)| p))
+            .collect(),
         Stmt::Dup(l) | Stmt::Drop(l) => vec![*l],
+        Stmt::DropKeep { local, keep, .. } => std::iter::once(*local)
+            .chain(keep.iter().map(|&(_, p)| p))
+            .collect(),
+        Stmt::ClearUnwind => Vec::new(),
     }
+}
+
+/// The blocks reached from `bb0` through normal successors only, without
+/// taking an unwind edge or the entry pad.
+fn normally_reachable(f: &Function) -> Vec<bool> {
+    let mut seen = vec![false; f.blocks.len()];
+    let mut work = vec![BlockId::from_u32(0)];
+    while let Some(id) = work.pop() {
+        let Some(block) = f.blocks.get(id) else {
+            continue;
+        };
+        match seen.get_mut(id.index()) {
+            Some(s) if !*s => *s = true,
+            _ => continue,
+        }
+        work.extend(block.term.successors());
+    }
+    seen
 }

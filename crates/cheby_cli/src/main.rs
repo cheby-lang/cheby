@@ -30,9 +30,18 @@ use std::num::NonZeroUsize;
 use std::process::ExitCode;
 
 use cheby_diag::Colors;
+use cheby_runtime::entry::AtExit;
 use clap::{CommandFactory as _, FromArgMatches as _, Parser, Subcommand, ValueEnum};
 
 use crate::color::ColorWhen;
+
+/// The global allocator of the toolchain and of the programs it runs:
+/// runtime objects are allocated through it (`cheby_runtime::alloc`).
+/// Sanitizer builds keep the system allocator, which the sanitizers
+/// intercept (D-721).
+#[cfg(not(any(cheby_sanitize = "address", cheby_sanitize = "thread")))]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 #[derive(Debug, Parser)]
 #[command(name = "cheby", version, about = "The Cheby toolchain")]
@@ -82,6 +91,9 @@ enum Command {
         /// Treat every warning as an error and run nothing after one (D-549)
         #[arg(long)]
         deny_warnings: bool,
+        /// Print to stderr, before the program runs, where reuse in place happens or not and why (D-717)
+        #[arg(long)]
+        reuse_report: bool,
         /// Arguments passed to the program, after `--`
         #[arg(last = true)]
         args: Vec<String>,
@@ -102,6 +114,11 @@ enum Command {
         /// Treat every warning as an error and run no test after one (D-549)
         #[arg(long)]
         deny_warnings: bool,
+        /// Print to stderr, before the tests run, where reuse in place happens or not and why
+        /// (D-717); a test build may infer other borrowing than `cheby run`, so its report can
+        /// differ (D-779, D-813)
+        #[arg(long)]
+        reuse_report: bool,
     },
     /// Format source files (§13.7)
     Fmt {
@@ -203,6 +220,7 @@ fn run_command() -> ExitCode {
         Command::Run {
             module_path,
             deny_warnings,
+            reuse_report,
             args,
         } => run(
             out,
@@ -210,6 +228,7 @@ fn run_command() -> ExitCode {
                 module_path,
                 args,
                 deny_warnings,
+                reuse_report,
             },
         ),
         Command::Repl { deny_warnings } => {
@@ -219,12 +238,14 @@ fn run_command() -> ExitCode {
             filter,
             module,
             deny_warnings,
+            reuse_report,
         } => test(
             out,
             &cheby_driver::TestOptions {
                 filter,
                 module,
                 deny_warnings,
+                reuse_report,
             },
         ),
         Command::Fmt { .. } => out.not_yet("fmt", "M5"),
@@ -314,7 +335,7 @@ fn run(out: Out, options: cheby_driver::RunOptions) -> ExitCode {
         Ok(root) => root,
         Err(code) => return code,
     };
-    let program = match cheby_driver::prepare_run(&root, options) {
+    let mut program = match cheby_driver::prepare_run(&root, options) {
         Ok(cheby_driver::Prepared::Ready(program)) => program,
         Ok(cheby_driver::Prepared::CompileFailed(result)) => {
             out.diagnostics(&result);
@@ -323,6 +344,17 @@ fn run(out: Out, options: cheby_driver::RunOptions) -> ExitCode {
         Err(e) => return out.error(e.message()),
     };
     out.diagnostics(program.output());
+    // `--reuse-report` (D-717): after the warnings, before `main` runs.
+    write_stderr(program.reuse_report());
+    // D-797: the process exits right after `main`, so a
+    // build without the leak check freezes the fibers left instead of
+    // tearing them down (D-073, D-708); a debug build tears them down so
+    // that the leak check sees what they held (D-710).
+    program.set_at_exit(if cheby_runtime::LEAK_CHECK_ENABLED {
+        AtExit::Teardown
+    } else {
+        AtExit::Freeze
+    });
     match program.run() {
         Ok(status) => ExitCode::from(u8::try_from(status).unwrap_or(1)),
         Err(e) => out.error(e.message()),
@@ -330,12 +362,12 @@ fn run(out: Out, options: cheby_driver::RunOptions) -> ExitCode {
 }
 
 /// `cheby test [FILTER] [--module PATH]` (§13.6, D-541): checks and
-/// compiles the package's selected tests, then runs them one after
-/// another and prints a line per test, a block per failure and a summary
-/// to stdout. Compile errors are printed and exit with 1 before any test
-/// runs; warnings are printed first, or, with `--deny-warnings`, stop it
-/// like errors (D-549). Exits with 0 when every selected test passes, 1
-/// otherwise.
+/// compiles the package's selected tests, then runs them, several at once
+/// (D-723), and prints each test's own output and a line per test in
+/// source order, a block per failure and a summary to stdout. Compile
+/// errors are printed and exit with 1 before any test runs; warnings are
+/// printed first, or, with `--deny-warnings`, stop it like errors (D-549).
+/// Exits with 0 when every selected test passes, 1 otherwise.
 fn test(out: Out, options: &cheby_driver::TestOptions) -> ExitCode {
     let root = match package_root(out) {
         Ok(root) => root,
@@ -350,10 +382,15 @@ fn test(out: Out, options: &cheby_driver::TestOptions) -> ExitCode {
         Err(e) => return out.error(e.message()),
     };
     out.diagnostics(program.output());
-    // Each line is written through the process's stdout, without holding
-    // its lock, so the tests' own output (written from their entries'
-    // threads) appears in order between the lines.
-    match program.run(&mut std::io::stdout()) {
+    // `--reuse-report` (D-717): after the warnings, before any test runs.
+    write_stderr(program.reuse_report());
+    // The tests' captured output is replayed through the process's own
+    // stdout and stderr, as the tests would have written it, each test's
+    // before its line (D-723, ADR-0062). A failed write of the report or of
+    // that output ends the run with 1 and prints nothing more
+    // (`terminated`, D-306, D-783); a tool error here is only a runtime
+    // that cannot start or run a test.
+    match program.run(&mut std::io::stdout(), &mut std::io::stderr()) {
         Ok(report) if report.success() => ExitCode::SUCCESS,
         Ok(_) => ExitCode::FAILURE,
         Err(e) => out.error(e.message()),
@@ -477,5 +514,38 @@ mod tests {
         assert!(Cli::try_parse_from(["cheby", "-j", "0", "check"]).is_err());
         assert!(Cli::try_parse_from(["cheby", "check", "--target", "wasm"]).is_err());
         assert!(Cli::try_parse_from(["cheby", "fmt", "--deny-warnings"]).is_err());
+    }
+
+    /// `--reuse-report` on `run` and `test` only (D-717), and before `--`
+    /// only: after it, it is the program's argument.
+    #[test]
+    fn parses_the_reuse_report_flag() {
+        let cli = Cli::try_parse_from(["cheby", "run", "--reuse-report"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Run {
+                reuse_report: true,
+                ..
+            }
+        ));
+        let cli = Cli::try_parse_from(["cheby", "run", "--", "--reuse-report"]).unwrap();
+        let Command::Run {
+            reuse_report, args, ..
+        } = cli.command
+        else {
+            panic!("not run");
+        };
+        assert!(!reuse_report);
+        assert_eq!(args, ["--reuse-report"]);
+        let cli = Cli::try_parse_from(["cheby", "test", "--reuse-report", "adds"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Test {
+                reuse_report: true,
+                ..
+            }
+        ));
+        assert!(Cli::try_parse_from(["cheby", "check", "--reuse-report"]).is_err());
+        assert!(Cli::try_parse_from(["cheby", "repl", "--reuse-report"]).is_err());
     }
 }

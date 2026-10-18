@@ -1,0 +1,29 @@
+// @mode: run-pass
+// @decisions: D-449, D-669, D-694, D-701
+// @milestone: M2
+//! A detached fiber's panic is printed as a panic report where its
+//! unwinding ends, and reaches nobody else: `main` goes on and the
+//! program exits with status 0 (§10.4, §11.6). The fiber's function holds
+//! the `Sender` of `done` until it has unwound, so `main` prints its last
+//! lines only after the fiber failed.
+
+import std::channel
+import std::fiber
+import std::io
+
+fn fail(start: channel::Receiver<Nil>, done: channel::Sender<Nil>) -> Nil {
+  let _ = done
+  let assert Ok(Nil) = channel::receive(start)
+  panic as "the detached fiber failed"
+}
+
+fn main() {
+  let (go_tx, go_rx) = channel::new::<Nil>(0)
+  let (done_tx, done_rx) = channel::new::<Nil>(1)
+  fiber::spawn_detached(fn() { fail(go_rx, done_tx) })
+  io::println("main lets the detached fiber go")
+  let assert Ok(Nil) = channel::send(go_tx, Nil)
+  let ended = channel::receive(done_rx)
+  io::println("the detached fiber has ended: {ended:?}")
+  io::println("main returns")
+}

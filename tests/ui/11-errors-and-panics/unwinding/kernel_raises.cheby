@@ -1,0 +1,21 @@
+// @mode: run-fail
+// @milestone: M2
+// @decisions: D-556, D-697, D-698
+//! `set::from_list` on functions panics inside the runtime's kernel when
+//! it hashes the first one. The kernel's guard hands the unwinding back to
+//! the Cheby frames, which release what they hold (§11.8).
+
+import std::io
+import std::set
+
+fn double(n: Int) -> Int {
+  n * 2
+}
+
+fn main() {
+  let note = "hashing"
+  let handlers = [double, fn(n) { n + 1 }]
+  let unique = set::from_list(handlers)
+  let size = set::size(unique)
+  io::println("{note}: {size}")
+}

@@ -1,0 +1,3 @@
+panicked at tests/ui/10-concurrency/cancel/member_panic_cancels_body.cheby:17:40:
+a member failed
+send after the scope: Err(1)

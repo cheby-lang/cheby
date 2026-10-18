@@ -1,0 +1,43 @@
+// @mode: run-pass
+// @milestone: M2
+// @decisions: D-852, D-717, D-525
+// @flags: --reuse-report
+//! A kernel line is a claim about one function: `add` gets a line for
+//! `set::insert`, although `main` still holds `empty` across the call, so
+//! the kernel copies it there. A kernel call in tail position gets no line
+//! (`add_last`). A first argument that the call also passes as its second
+//! gets no line (`doubled`), while two different lists do (`joined`).
+
+import std::io
+import std::list
+import std::set
+
+fn add(s: set::Set<Int>, n: Int) -> set::Set<Int> {
+  let more = set::insert(s, n)
+  more
+}
+
+fn add_last(s: set::Set<Int>, n: Int) -> set::Set<Int> {
+  set::insert(s, n)
+}
+
+fn doubled(xs: List<Int>) -> List<Int> {
+  let both = list::append(xs, xs)
+  both
+}
+
+fn joined(xs: List<Int>, ys: List<Int>) -> List<Int> {
+  let both = list::append(xs, ys)
+  both
+}
+
+fn main() {
+  let empty: set::Set<Int> = set::new()
+  let one = add(empty, 1)
+  let two = add_last(one, 2)
+  let before = set::size(empty)
+  let after = set::size(two)
+  let twice = list::length(doubled([1, 2]))
+  let both = list::length(joined([1, 2], [3]))
+  io::println("{before} {after} {twice} {both}")
+}

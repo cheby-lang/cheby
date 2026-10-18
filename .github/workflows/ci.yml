@@ -1,8 +1,11 @@
 # CI for the reference implementation (D-277, docs/plan/m0-foundation.md).
 #
 # - `test`: build, clippy and every test, including the conformance, UI and
-#   REPL harnesses, on the full platform matrix of D-074. M1 is judged on
-#   Linux and macOS (D-545). On Windows, until M6, CI runs only tests that
+#   REPL harnesses, on every platform of D-074 and D-892. The macOS job
+#   runs them at `CHEBY_HARNESS_SCALE=5`, because the hosted macOS VMs
+#   stretch 10 ms waits to 30 to 90 ms, past the runtime's preemption
+#   bounds (D-872, D-892). M1 is judged on Linux and macOS (D-545).
+#   On Windows, until M6, CI runs only tests that
 #   execute no generated code. A test that builds or runs JIT code is
 #   ignored there (`#[cfg_attr(windows, ignore = …)]`), and the JIT crate's
 #   own tests are not built there at all, its memory-reservation tests
@@ -13,6 +16,18 @@
 #   the UI check tests whose golden has no front-end error, every
 #   conformance trial and the REPL suite, and the `cheby run` end-to-end
 #   tests are not built there.
+#   From M2 the rule extends to the runtime (D-714): `Runtime::new` returns
+#   `Unsupported` on Windows until M6, so the runtime's unit tests that
+#   switch stacks or run a `Runtime`, the blocking pool's tests and the
+#   `loom` models carry `#[cfg_attr(windows, ignore = …)]` there, and
+#   programs that start no fiber still run on the thread backend.
+#   Tests that need Unix pipes, a shell or FIFOs are not built on Windows
+#   (D-874): `cheby_cli`'s tests/blocking_io.rs,
+#   tests/closed_streams.rs, tests/repl_runtime.rs and tests/test_parallel.rs
+#   (`#![cfg(unix)]`), besides tests/run.rs (`#![cfg(not(windows))]`, D-641);
+#   and `cheby_driver`'s runner and stuck-test modules in src/test.rs and
+#   the FIFO test in src/lifecycle_tests.rs. `cheby_jit`'s
+#   src/start_root_tests.rs is built there, and its one test is ignored.
 #   The harnesses follow tests/milestone (D-288); CI sets none of the
 #   strict-run variables (D-544).
 # - `fmt`: rustfmt, once, because formatting does not depend on the platform.
@@ -22,6 +37,12 @@
 # - `std-tests`: checks and runs the standard library's own tests, one module
 #   at a time (D-479, D-542). Every std module builds and every test passes,
 #   so a failure fails CI.
+# - `rc-naive`: the UI tests and the standard library's tests under M1's
+#   naive reference counting, `CHEBY_RC=naive` (D-718, D-746), so reuse and
+#   the other Perceus passes never change what a program does. The UI tests
+#   of `--reuse-report` still run under Perceus (tests/ui/README.md). The
+#   examples run under naive counting in every `test` job, as the
+#   conformance harness's `@rc=naive` trials.
 # - `examples`: `cheby check` in every example directory, with the expected
 #   outcome of each (G6), and the determinism check: every example and the
 #   benchmark projects built with `--jobs 1` and the default from two paths,
@@ -30,6 +51,20 @@
 # - `bench`: generates benchmark projects and reports, never enforces, the
 #   results (D-247), and times the compiler on them (I1): checking, checking
 #   with code generation, and the edit-to-run latency, in the step summary.
+# - `sanitize-cfg`: clippy of the runtime with each value of
+#   `--cfg cheby_sanitize` (`address`, `thread`) on stable, on Linux x86-64
+#   and macOS arm64, so the sanitizer annotations that only the nightly
+#   workflow runs (D-721, nightly.yml) cannot rot between its runs
+#   (D-883). Only this step and nightly.yml pass the cfg.
+# - The C compiler: `cheby_cli` links mimalloc as its global allocator
+#   (D-890), which libmimalloc-sys compiles from C during the build, as
+#   C++17 under MSVC. Every job that builds `cheby_cli` (`test`, `rc-naive`,
+#   `examples` and `bench`) first runs `.github/actions/c-compiler`. It
+#   installs nothing: it names the image's compiler (gcc on Ubuntu, Xcode's
+#   clang on macOS, MSVC's `cl.exe` for the runner's architecture on
+#   Windows, found through vswhere as the `cc` crate finds it) and fails
+#   before the build when there is none. `fmt`, `cross-check`, `std-tests`
+#   and `sanitize-cfg` build no `cheby_cli`.
 
 name: CI
 
@@ -58,8 +93,7 @@ jobs:
         include:
           - { name: linux-x86_64, os: ubuntu-24.04 }
           - { name: linux-aarch64, os: ubuntu-24.04-arm }
-          - { name: macos-x86_64, os: macos-15-intel }
-          - { name: macos-aarch64, os: macos-15 }
+          - { name: macos-aarch64, os: macos-15, scale: 5 }
           - { name: windows-x86_64, os: windows-2025 }
           - { name: windows-aarch64, os: windows-11-arm }
     runs-on: ${{ matrix.os }}
@@ -70,9 +104,12 @@ jobs:
           toolchain: "1.99.0"
           components: clippy
       - uses: Swatinem/rust-cache@v2
+      - uses: ./.github/actions/c-compiler
       - run: cargo build --workspace --all-targets --locked
       - run: cargo clippy --workspace --all-targets --locked
       - run: cargo test --workspace --locked --no-fail-fast
+        env:
+          CHEBY_HARNESS_SCALE: ${{ matrix.scale || 1 }}
       - name: D-number coverage
         run: cargo xtask coverage
 
@@ -112,6 +149,20 @@ jobs:
       - name: Run the standard library's tests
         run: cargo xtask test-std
 
+  rc-naive:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.0"
+      - uses: Swatinem/rust-cache@v2
+      - uses: ./.github/actions/c-compiler
+      - name: UI tests under naive reference counting
+        run: CHEBY_RC=naive cargo test -p cheby_cli --test ui
+      - name: The standard library's tests under naive reference counting
+        run: CHEBY_RC=naive cargo xtask test-std
+
   examples:
     name: examples (${{ matrix.name }})
     strategy:
@@ -127,6 +178,7 @@ jobs:
         with:
           toolchain: "1.99.0"
       - uses: Swatinem/rust-cache@v2
+      - uses: ./.github/actions/c-compiler
       - name: cheby check in every example
         run: cargo xtask check-examples
       - name: Deterministic builds across thread counts and paths
@@ -140,6 +192,7 @@ jobs:
         with:
           toolchain: "1.99.0"
       - uses: Swatinem/rust-cache@v2
+      - uses: ./.github/actions/c-compiler
       - uses: actions/setup-node@v5
         with:
           node-version: 24
@@ -173,3 +226,30 @@ jobs:
       - name: Compile speed (10k lines) on pull requests
         if: github.event_name != 'push'
         run: cargo xtask bench-compile --quick --summary "$GITHUB_STEP_SUMMARY"
+
+  sanitize-cfg:
+    name: sanitize-cfg (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-x86_64, os: ubuntu-24.04 }
+          - { name: macos-aarch64, os: macos-15 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.0"
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: sanitize-cfg
+      - name: Clippy of the runtime with each cheby_sanitize value
+        run: |
+          for s in address thread; do
+            echo "::group::cheby_sanitize=\"$s\""
+            RUSTFLAGS="-D warnings --cfg cheby_sanitize=\"$s\"" \
+              cargo clippy -p cheby_runtime --all-targets --locked
+            echo "::endgroup::"
+          done

@@ -1,0 +1,36 @@
+// @mode: run-pass
+// @decisions: D-040, D-665, D-666
+// @milestone: M2
+//! `fiber::scope` returns its body's value only once every fiber spawned
+//! into it has ended, including fibers that other fibers of the scope
+//! spawn into it while it waits (§10.2).
+
+import std::channel
+import std::fiber
+import std::io
+import std::list
+
+fn main() {
+  let (tx, rx) = channel::new::<Int>(6)
+  let outcome = {
+    use owner <- fiber::scope()
+    list::each([1, 2, 3], fn(n) {
+      let _ = fiber::spawn(owner, fn() {
+        let assert Ok(Nil) = channel::send(tx, n * 10)
+        fiber::spawn(owner, fn() { channel::send(tx, n) })
+      })
+    })
+    "body done"
+  }
+  io::println("{outcome:?}")
+  // Every send has happened, so all six values are buffered, in an order
+  // that depends on scheduling: sum them.
+  fn total(sum, count) {
+    case channel::receive(rx) {
+      Ok(n) => total(sum + n, count + 1)
+      Err(Nil) => (sum, count)
+    }
+  }
+  let received = total(0, 0)
+  io::println("{received:?}")
+}

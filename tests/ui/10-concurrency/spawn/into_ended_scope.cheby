@@ -1,0 +1,19 @@
+// @mode: run-fail
+// @decisions: D-666, D-732
+// @milestone: M2
+//! Spawning into a scope that has ended panics, because no fiber may
+//! outlive its scope (§10.3). The reference implementation reports the
+//! panic at `<unknown location>`, like the panics of kernels (§11.6).
+
+import std::fiber
+import std::io
+
+fn main() {
+  let assert Ok(ended) = {
+    use owner <- fiber::scope()
+    owner
+  }
+  io::println("the scope has ended")
+  let _ = fiber::spawn(ended, fn() { io::println("never") })
+  io::println("never printed")
+}

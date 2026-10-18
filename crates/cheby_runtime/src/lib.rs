@@ -12,13 +12,21 @@
 //!   (`String` and `Bytes` objects), [`generic`] (structural equality,
 //!   hashing and debug text), [`desc`] (type descriptors and the builtin
 //!   nominal descriptors).
-//! - Running code: [`panic`](mod@panic), [`ctx`], [`entry`] (entries, the
-//!   current entry, exit statuses), [`callback`] (kernels calling
+//! - Running code: [`panic`](mod@panic), [`ctx`] (the fiber control
+//!   block and interrupt reasons, D-685, D-688), [`entry`] (entries, the
+//!   current entry, exit statuses), [`sched`] (the M:N scheduler: one
+//!   [`Runtime`] per host run, its workers, run queues and monitor,
+//!   D-689, D-690), [`callback`] (kernels calling
 //!   closures), [`consteval`] (constant evaluation's runtime side),
-//!   [`stats`] (counters of allocations and in-place updates).
+//!   [`stats`] (counters of allocations and in-place updates), the private
+//!   `tls` (every thread-local of the crate, D-686), `unwind` (unwinding
+//!   by the return flag, D-733), the private `fiber_ops`
+//!   (scopes, fibers and channels) and the private `pool` (the blocking
+//!   pool, D-683, whose fiber side is `sched::blocking`).
 //! - Kernels, by std module: [`io`], and the private modules `num`, `list`,
-//!   `text`, `bytes`, `env` and [`hamt`], each registering its symbols in
-//!   [`symbols`] (plan §4.3.3).
+//!   `text`, `bytes`, `env`, `random` (D-656), `runtime_info` (`std::runtime`,
+//!   D-657) and [`hamt`], each registering its symbols in [`symbols`] (plan
+//!   §4.3.3).
 //!
 //! Every C-ABI entry point is `extern "C"`, so an internal Rust panic
 //! aborts rather than unwinding through JIT frames.
@@ -27,28 +35,43 @@ pub mod abi;
 pub mod alloc;
 mod bytes;
 pub mod callback;
+pub mod capture;
 #[doc(hidden)]
 pub mod consteval;
 pub mod ctx;
 pub mod desc;
 pub mod entry;
 mod env;
+pub mod fiber;
+pub(crate) mod fiber_ops;
 pub mod generic;
 #[doc(hidden)]
 pub mod hamt;
+pub(crate) mod handles;
 mod helpers;
 pub mod io;
 pub mod layout;
 #[doc(hidden)]
 pub mod list;
+pub mod locate;
+#[cfg(test)]
+mod locate_tests;
 mod num;
 pub mod object;
 pub mod panic;
+mod pool;
+mod random;
 pub mod rc;
+pub mod reuse;
+mod runtime_info;
+pub mod sched;
 pub mod stats;
 pub mod string;
 mod symbols;
 mod text;
+mod tls;
+#[doc(hidden)]
+pub mod unwind;
 pub mod values;
 
 pub use alloc::{LEAK_CHECK_ENABLED, live_objects};
@@ -59,4 +82,7 @@ pub use entry::{
 };
 pub use layout::{FieldInfo, FieldKind, LayoutError, LayoutInfo, LayoutKind};
 pub use panic::PanicReport;
+pub use sched::{
+    CodeToken, DetachedGroup, RootDone, RootHandle, Runtime, RuntimeConfig, TeardownReport,
+};
 pub use symbols::{complete_modules, symbols};

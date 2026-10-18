@@ -82,7 +82,7 @@ pub(crate) fn module_warnings(
     if uses::thir_is_complete(input, thir) {
         let thir_refs = uses::thir_refs(thir);
         let hooks = uses::hook_refs(own, input.module);
-        out.extend(imports::unused_imports(input, own, &paths));
+        out.extend(imports::unused_imports(input, own, &paths, &thir_refs));
         let refs = items::item_refs(input, &paths, &thir_refs, &hooks);
         out.extend(items::unused_private(input, own, &refs));
     }

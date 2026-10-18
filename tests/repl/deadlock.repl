@@ -1,0 +1,26 @@
+// @milestone: M2
+// @decisions: D-724, D-856, D-857, D-858, D-859, D-861, D-546, D-548
+> import std::channel
+> let (tx, rx) = channel::new::<Int>(0)
+> channel::receive(rx)
+fatal error: all fibers are blocked
+  blocked in channel::receive at <repl:3>:1:1
+> 1 + 2
+3 : Int
+> import std::io
+> fn wait_for(from: channel::Receiver<Int>) -> Result<Int, Nil> {
+.   io::print("waiting: ")
+.   let got = channel::receive(from)
+.   got
+. }
+> wait_for(rx)
+waiting: fatal error: all fibers are blocked
+  blocked in channel::receive at <repl:6>:3:13
+> fn wait_for(from: channel::Receiver<Int>) -> Result<Int, Nil> {
+.   channel::receive(from)
+. }
+> wait_for(rx)
+fatal error: all fibers are blocked
+  blocked in channel::receive at <repl:8>:2:3
+> "the session continues"
+"the session continues" : String

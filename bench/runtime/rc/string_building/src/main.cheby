@@ -1,0 +1,66 @@
+//! Runtime benchmark of the RC group: building strings.
+//!
+//! Each line is built by interpolation and appended to a text that
+//! nothing else holds, so the append can grow it in place. Every
+//! thousand lines the text is measured and started again, and its lines
+//! are split apart and joined back once. The number of lines is the
+//! first program argument, and `main` prints a checksum of the lengths.
+
+import std::env
+import std::int
+import std::io
+import std::list
+import std::string
+
+/// The number of lines when no argument is given.
+const default_size: Int = 4_000_000
+
+/// How many lines a text holds before it is measured.
+const lines_per_text: Int = 1_000
+
+/// Keeps the checksum small.
+const modulus: Int = 1_000_000_007
+
+fn main() {
+  let lines = size(env::args())
+  fn run(line, text, total) {
+    case {
+      line == lines => mix(total, measure(text))
+      line % lines_per_text == 0 => run(line + 1, describe(line), mix(total, measure(text)))
+      _ => run(line + 1, string::add(text, describe(line)), total)
+    }
+  }
+  let checksum = run(0, "", 0)
+  io::println("size: {lines}")
+  io::println("checksum: {checksum}")
+}
+
+/// The size from the first program argument, or `default_size`.
+fn size(args: List<String>) -> Int {
+  case args {
+    [] => default_size
+    [first, ..] => {
+      let assert Ok(n) = int::parse(first)
+      n
+    }
+  }
+}
+
+/// The line for number `n`, ending in a newline.
+fn describe(n: Int) -> String {
+  let square = n * n % 10_007
+  "line {n}: {square}\n"
+}
+
+/// Adds `n` to the checksum `total`.
+fn mix(total: Int, n: Int) -> Int {
+  (total * 31 + n) % modulus
+}
+
+/// The length of `text`, plus the number of its lines and the length of
+/// the text they join back into.
+fn measure(text: String) -> Int {
+  let parts = string::split(text, "\n")
+  let joined = string::join(parts, ";")
+  string::length(text) * 7 + list::length(parts) * 3 + string::length(joined)
+}

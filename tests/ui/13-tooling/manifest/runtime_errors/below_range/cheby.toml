@@ -1,0 +1,6 @@
+name = "app"
+version = "0.1.0"
+
+[runtime]
+fiber-stack = "1023KiB"
+main-stack = "0MiB"

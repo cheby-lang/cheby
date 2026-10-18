@@ -1,0 +1,2 @@
+reuse: tests/ui/09-memory-model/reuse_report/kernel_claim_about_one_function.cheby:16:14: `set::insert` gets `s` at its last use: in place when it is unique at run time
+reuse: tests/ui/09-memory-model/reuse_report/kernel_claim_about_one_function.cheby:30:14: `list::append` gets `xs` at its last use: in place when it is unique at run time

@@ -1,0 +1,11 @@
+sorted_multimap::from_list([(and, 2), (and, 5), (bat, 7), (cat, 1), (hat, 4), (the, 0), (the, 3), (the, 6)])
+keys: [and, bat, cat, hat, the], size: 5, count: 8
+the: [0, 3, 6], dog: [], has dog: False
+first: Some((and, [2, 5])), last: Some((the, [0, 3, 6])), from b to d: [(bat, [7]), (cat, [1])]
+without and: size 4, count 6, has and: False
+repeated: sorted_multimap::from_list([(and, 2), (and, 5), (the, 0), (the, 3), (the, 6)]), count 5
+sorted_multimap::from_list([("x", 1), ("x", 1)]), values: [1, 1]
+rebuilt from its pairs: True
+shelves: [bottom, top], on shelf 2: [lamp, vase]
+keys: 100, values: 5000, under 0: 50
+last under 99: Some(4999)

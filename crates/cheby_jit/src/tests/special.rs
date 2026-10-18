@@ -109,7 +109,7 @@ fn the_same_recursion_without_tail_calls_overflows() {
     p.declare(even, "even", &[Repr::Int]);
     p.declare(odd, "odd", &[Repr::Int]);
     let target = p.call(even, vec![Operand::Const(Const::Int(TEN_MILLION))]);
-    let jit = p.compile();
+    let jit = p.compile_unwound();
     let outcome = run_with_stack(&jit, target, cheby_runtime::entry::DEFAULT_STACK_SIZE);
     let EntryOutcome::Panicked(report) = outcome else {
         panic!("ten million nested calls returned: {outcome:?}");
@@ -355,6 +355,7 @@ fn kernels_call_closures_through_trampolines() {
                             ret: cheby_mir::CType::Ptr,
                         },
                         args: vec![op(0), op(1)],
+                        blocking: false,
                     },
                 ),
                 Stmt::Drop(local(0)),
@@ -569,7 +570,7 @@ fn equality_on_functions_panics_at_its_location() {
         &[LOC],
     );
     let target = p.call(f, Vec::new());
-    let jit = p.compile();
+    let jit = p.compile_unwound();
     let EntryOutcome::Panicked(report) = run_const(&jit, target) else {
         panic!("comparing a closure did not panic");
     };

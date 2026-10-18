@@ -23,7 +23,11 @@
 //! code segment, makes it read-execute (with BTI on Linux aarch64 when
 //! asked), makes data read-only or keeps it read-write, and flushes the
 //! pipelines of every thread, as cranelift-jit's provider does. A finalized
-//! segment is never written again; later batches get new segments.
+//! segment is never written again, and its protection never changes again;
+//! later batches get new segments. So a batch can be compiled while fibers
+//! run the code of earlier ones, as a REPL session's detached fibers do
+//! (D-712): only the read-write slots of earlier batches change, through
+//! the JIT's release stores (`Jit::write_slot`, `Jit::set_const`).
 //!
 //! The reservation is released by `free_memory` and on drop.
 

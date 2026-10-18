@@ -1,0 +1,773 @@
+//! The sorted map `SortedMap<K, V>`, a persistent map ordered by key
+//! (D-331, D-337).
+//!
+//! The map is a weight-balanced tree written in Cheby, with no runtime
+//! kernel (D-336): Adams' tree with the parameters of Haskell's
+//! `Data.Map`, `delta` 3 and `ratio` 2. Each node stores the size of its
+//! subtree, so `size` is O(1), and `link` and `concat` join trees without
+//! comparing keys, so `filter` takes O(n). The tree's height is O(log n),
+//! and every recursion here follows it, so no function grows the stack
+//! with the map's size (D-094).
+//!
+//! Every public function carries the bound `K: Compare` (D-385). The
+//! hooks of D-342 cannot have bounds (D-482), so they, and the
+//! package-visible helpers that the wrapping modules use, read the tree
+//! without `compare` and carry no bound (D-845).
+//! `insert`, `remove` and `upsert` rebuild the node they matched in the
+//! arm that matched it, and call a rotation only when the balance check
+//! fails.
+
+import std::int
+import std::list
+import std::ops::{Compare}
+import std::set
+import std::string
+
+/// A persistent map ordered by key, a weight-balanced tree (D-331, D-336).
+/// `Bin` holds the size of its subtree, the key, the value, and the
+/// subtrees of the smaller and the larger keys. Equality, hashing and
+/// debug printing go through `equal`, `hash` and `debug` (D-342, D-343,
+/// D-344).
+@std_hooks(equal, hash, debug)
+pub type SortedMap<K, V> {
+  Tip,
+  Bin(Int, K, V, SortedMap<K, V>, SortedMap<K, V>),
+}
+
+/// Whether two maps hold the same entries, keys and values compared with
+/// `==`, however their trees are shaped (D-343).
+fn equal<K, V>(a: SortedMap<K, V>, b: SortedMap<K, V>) -> Bool {
+  count_entries(a) == count_entries(b) && entries(a) == entries(b)
+}
+
+/// The entries in key order, which the runtime hashes: equal maps give
+/// equal lists (D-584).
+fn hash<K, V>(m: SortedMap<K, V>) -> List<(K, V)> {
+  entries(m)
+}
+
+/// `sorted_map::from_list([…])` with the entries in key order, each one
+/// debug-printed (D-344).
+fn debug<K, V>(m: SortedMap<K, V>) -> String {
+  let pairs = entries(m)
+  "sorted_map::from_list({pairs:?})"
+}
+
+test "sorted maps compare, hash and print by contents" {
+  let built = from_list([("a", 1), ("b", 2)])
+  let grown = insert(from_list([("b", 2)]), "a", 1)
+  assert built == grown
+  assert built != from_list([("a", 1), ("b", 3)])
+  assert set::size(set::from_list([built, grown])) == 1
+  assert "{built:?}" == "sorted_map::from_list([(\"a\", 1), (\"b\", 2)])"
+}
+
+// Helpers without the bound, for the hooks and the modules that wrap a
+// sorted map (D-845)
+
+/// The entries in key order, without calling `compare` (hooks and wrapper
+/// modules). It has no bound (D-845).
+fn entries<K, V>(m: SortedMap<K, V>) -> List<(K, V)> {
+  fold_entries(m, [], fn(found, key, value) { list::push(found, (key, value)) })
+}
+
+/// Combines the entries in key order, without calling `compare`. It has no
+/// bound (D-845).
+fn fold_entries<K, V, A>(m: SortedMap<K, V>, initial: A, f: fn(A, K, V) -> A) -> A {
+  case m {
+    Tip => initial
+    Bin(_, k, x, l, r) => fold_entries(r, f(fold_entries(l, initial, f), k, x), f)
+  }
+}
+
+/// The number of entries, O(1). It has no bound (D-845).
+fn count_entries<K, V>(m: SortedMap<K, V>) -> Int {
+  case m {
+    Tip => 0
+    Bin(n, _, _, _, _) => n
+  }
+}
+
+test "the helpers read the tree in key order" {
+  let scores = from_list([("b", 2), ("c", 3), ("a", 1)])
+  assert entries(scores) == [("a", 1), ("b", 2), ("c", 3)]
+  assert fold_entries(scores, "", fn(text, key, _) { text + key }) == "abc"
+  assert count_entries(scores) == 3
+  assert count_entries(new::<String, Int>()) == 0
+  assert entries(new::<String, Int>()) == []
+}
+
+// Building
+
+/// Returns an empty map.
+pub fn new<K: Compare, V>() -> SortedMap<K, V> {
+  Tip
+}
+
+test "new is empty" {
+  let empty = new::<String, Int>()
+  assert is_empty(empty)
+  assert to_list(empty) == []
+}
+
+/// Returns a map with the given pairs, as if each pair were inserted in
+/// turn: the last value wins for a repeated key (D-329), and among keys
+/// that compare `Equal` the first one is kept (D-341).
+pub fn from_list<K: Compare, V>(pairs: List<(K, V)>) -> SortedMap<K, V> {
+  list::fold(pairs, Tip, fn(m, (key, value)) { insert(m, key, value) })
+}
+
+test "from_list sorts by key and keeps the last duplicate" {
+  let fruit = from_list([("pear", 1), ("apple", 2), ("pear", 3)])
+  assert to_list(fruit) == [("apple", 2), ("pear", 3)]
+}
+
+// Size
+
+/// Returns the number of keys, O(1).
+pub fn size<K: Compare, V>(m: SortedMap<K, V>) -> Int {
+  count_entries(m)
+}
+
+test "size counts keys" {
+  assert size(from_list([("a", 1), ("b", 2), ("a", 3)])) == 2
+  assert size(new::<String, Int>()) == 0
+}
+
+/// Tells whether the map has no keys.
+pub fn is_empty<K: Compare, V>(m: SortedMap<K, V>) -> Bool {
+  case m {
+    Tip => True
+    Bin(_, _, _, _, _) => False
+  }
+}
+
+test "is_empty tells an empty map" {
+  assert is_empty(new::<String, Int>())
+  assert !is_empty(from_list([("a", 1)]))
+}
+
+// Lookup
+
+/// Returns the value stored under the key that compares `Equal` to `key`.
+pub fn get<K: Compare, V>(m: SortedMap<K, V>, key: K) -> Option<V> {
+  case m {
+    Tip => None
+    Bin(_, k, x, l, r) => case Compare::compare(key, k) {
+      Less => get(l, key)
+      Greater => get(r, key)
+      Equal => Some(x)
+    }
+  }
+}
+
+test "get looks a key up" {
+  let ages = from_list([("ada", 36), ("alan", 41)])
+  assert get(ages, "ada") == Some(36)
+  assert get(ages, "grace") == None
+}
+
+/// Tells whether some key compares `Equal` to `key`.
+pub fn has_key<K: Compare, V>(m: SortedMap<K, V>, key: K) -> Bool {
+  case m {
+    Tip => False
+    Bin(_, k, _, l, r) => case Compare::compare(key, k) {
+      Less => has_key(l, key)
+      Greater => has_key(r, key)
+      Equal => True
+    }
+  }
+}
+
+test "has_key tells whether a key is present" {
+  let ages = from_list([("ada", 36)])
+  assert has_key(ages, "ada")
+  assert !has_key(ages, "alan")
+}
+
+/// Returns the entry with the smallest key, the leftmost node.
+pub fn first<K: Compare, V>(m: SortedMap<K, V>) -> Option<(K, V)> {
+  case m {
+    Tip => None
+    Bin(_, k, x, Tip, _) => Some((k, x))
+    Bin(_, _, _, l, _) => first(l)
+  }
+}
+
+test "first is the smallest key" {
+  let ages = from_list([("bob", 2), ("ada", 1), ("cy", 3)])
+  assert first(ages) == Some(("ada", 1))
+  assert first(new::<String, Int>()) == None
+}
+
+/// Returns the entry with the largest key, the rightmost node.
+pub fn last<K: Compare, V>(m: SortedMap<K, V>) -> Option<(K, V)> {
+  case m {
+    Tip => None
+    Bin(_, k, x, _, Tip) => Some((k, x))
+    Bin(_, _, _, _, r) => last(r)
+  }
+}
+
+test "last is the largest key" {
+  let ages = from_list([("bob", 2), ("ada", 1), ("cy", 3)])
+  assert last(ages) == Some(("cy", 3))
+  assert last(new::<String, Int>()) == None
+}
+
+/// Returns the entries whose keys are at least `start` and less than
+/// `end`, in key order (D-319). It visits only the subtrees that can hold
+/// such keys, so it takes O(log n + k) for k entries.
+pub fn range<K: Compare, V>(m: SortedMap<K, V>, start: K, end: K) -> List<(K, V)> {
+  fn visit(tree: SortedMap<K, V>, found: List<(K, V)>) -> List<(K, V)> {
+    case tree {
+      Tip => found
+      Bin(_, k, x, l, r) => {
+        let after_start = Compare::compare(k, start) != Less
+        let before_end = Compare::compare(k, end) == Less
+        let with_left = case after_start {
+          True => visit(l, found)
+          False => found
+        }
+        let with_here = case after_start && before_end {
+          True => list::push(with_left, (k, x))
+          False => with_left
+        }
+        case before_end {
+          True => visit(r, with_here)
+          False => with_here
+        }
+      }
+    }
+  }
+  visit(m, [])
+}
+
+test "range includes start and excludes end" {
+  let letters = from_list([(1, "a"), (3, "c"), (5, "e"), (7, "g")])
+  assert range(letters, 3, 7) == [(3, "c"), (5, "e")]
+  assert range(letters, 2, 4) == [(3, "c")]
+  assert range(letters, 7, 3) == []
+}
+
+// Updating
+
+/// Returns the map with `value` stored under `key`. When a key that
+/// compares `Equal` to `key` is already present, the stored key stays and
+/// only its value is replaced (D-341).
+pub fn insert<K: Compare, V>(m: SortedMap<K, V>, key: K, value: V) -> SortedMap<K, V> {
+  case m {
+    Tip => Bin(1, key, value, Tip, Tip)
+    Bin(n, k, x, l, r) => case Compare::compare(key, k) {
+      Less => {
+        let grown = insert(l, key, value)
+        let sl = count_entries(grown)
+        let sr = count_entries(r)
+        case balanced(sl, sr) {
+          True => Bin(sl + sr + 1, k, x, grown, r)
+          False => rotate_right(k, x, grown, r)
+        }
+      }
+      Greater => {
+        let grown = insert(r, key, value)
+        let sl = count_entries(l)
+        let sr = count_entries(grown)
+        case balanced(sl, sr) {
+          True => Bin(sl + sr + 1, k, x, l, grown)
+          False => rotate_left(k, x, l, grown)
+        }
+      }
+      Equal => Bin(n, k, value, l, r)
+    }
+  }
+}
+
+test "insert adds or replaces" {
+  let start = from_list([("a", 1)])
+  let added = insert(start, "b", 2)
+  let replaced = insert(added, "a", 10)
+  assert to_list(replaced) == [("a", 10), ("b", 2)]
+  assert to_list(start) == [("a", 1)]
+}
+
+/// A key ordered by `id` alone. Two badges with the same `id` and
+/// different labels compare `Equal` without being `==`.
+priv type Badge { id: Int, label: String }
+
+priv fn compare(a: Badge, b: Badge) -> Order {
+  int::compare(a.id, b.id)
+}
+
+test "keys that compare Equal are the same key" {
+  let stored = Badge { id: 1, label: "stored" }
+  let later = Badge { id: 1, label: "later" }
+  assert compare(stored, later) == Equal
+  let badges = insert(insert(new(), stored, "a"), later, "b")
+  assert size(badges) == 1
+  assert to_list(badges) == [(stored, "b")]
+  assert get(badges, Badge { id: 1, label: "other" }) == Some("b")
+}
+
+/// Returns the map without the key that compares `Equal` to `key`, or a
+/// map with the same entries when there is no such key.
+pub fn remove<K: Compare, V>(m: SortedMap<K, V>, key: K) -> SortedMap<K, V> {
+  case m {
+    Tip => Tip
+    Bin(_, k, x, l, r) => case Compare::compare(key, k) {
+      Less => {
+        let shrunk = remove(l, key)
+        let sl = count_entries(shrunk)
+        let sr = count_entries(r)
+        case balanced(sl, sr) {
+          True => Bin(sl + sr + 1, k, x, shrunk, r)
+          False => rotate_left(k, x, shrunk, r)
+        }
+      }
+      Greater => {
+        let shrunk = remove(r, key)
+        let sl = count_entries(l)
+        let sr = count_entries(shrunk)
+        case balanced(sl, sr) {
+          True => Bin(sl + sr + 1, k, x, l, shrunk)
+          False => rotate_right(k, x, l, shrunk)
+        }
+      }
+      Equal => glue(l, r)
+    }
+  }
+}
+
+test "remove drops a key and ignores a missing one" {
+  let pair = from_list([("a", 1), ("b", 2)])
+  assert remove(pair, "a") == from_list([("b", 2)])
+  assert remove(pair, "z") == pair
+}
+
+/// Calls `update` once, with `Some` of the value stored under `key` or
+/// `None`, and stores its result under `key`, in one descent. A key
+/// already present stays (D-341).
+pub fn upsert<K: Compare, V>(m: SortedMap<K, V>, key: K, update: fn(Option<V>) -> V) -> SortedMap<K, V> {
+  case m {
+    Tip => Bin(1, key, update(None), Tip, Tip)
+    Bin(n, k, x, l, r) => case Compare::compare(key, k) {
+      Less => {
+        let grown = upsert(l, key, update)
+        let sl = count_entries(grown)
+        let sr = count_entries(r)
+        case balanced(sl, sr) {
+          True => Bin(sl + sr + 1, k, x, grown, r)
+          False => rotate_right(k, x, grown, r)
+        }
+      }
+      Greater => {
+        let grown = upsert(r, key, update)
+        let sl = count_entries(l)
+        let sr = count_entries(grown)
+        case balanced(sl, sr) {
+          True => Bin(sl + sr + 1, k, x, l, grown)
+          False => rotate_left(k, x, l, grown)
+        }
+      }
+      Equal => Bin(n, k, update(Some(x)), l, r)
+    }
+  }
+}
+
+test "upsert updates or inserts through one function" {
+  fn bump(previous: Option<Int>) -> Int {
+    case previous {
+      Some(n) => n + 1
+      None => 1
+    }
+  }
+  let once = upsert(from_list([("a", 1)]), "a", bump)
+  let twice = upsert(once, "b", bump)
+  assert to_list(twice) == [("a", 2), ("b", 1)]
+}
+
+/// Returns the entries of both maps, as if each entry of `other` were
+/// inserted into `m`: on a shared key the value from `other` wins, and the
+/// key stored in `m` stays (D-341).
+pub fn merge<K: Compare, V>(m: SortedMap<K, V>, other: SortedMap<K, V>) -> SortedMap<K, V> {
+  fold_entries(other, m, fn(merged, key, value) { insert(merged, key, value) })
+}
+
+test "merge prefers the second map on shared keys" {
+  let base = from_list([("a", 1), ("b", 2)])
+  let changes = from_list([("b", 20), ("c", 30)])
+  assert to_list(merge(base, changes)) == [("a", 1), ("b", 20), ("c", 30)]
+}
+
+// Iterating
+
+/// Returns the keys in order, without calling `compare`.
+pub fn keys<K: Compare, V>(m: SortedMap<K, V>) -> List<K> {
+  fold_entries(m, [], fn(found, key, _) { list::push(found, key) })
+}
+
+test "keys come in key order" {
+  let scores = from_list([("b", 2), ("c", 3), ("a", 1)])
+  assert keys(scores) == ["a", "b", "c"]
+}
+
+/// Returns the values in the order of their keys, without calling
+/// `compare`.
+pub fn values<K: Compare, V>(m: SortedMap<K, V>) -> List<V> {
+  fold_entries(m, [], fn(found, _, value) { list::push(found, value) })
+}
+
+test "values follow the order of their keys" {
+  let scores = from_list([("b", 2), ("c", 3), ("a", 1)])
+  assert values(scores) == [1, 2, 3]
+}
+
+/// Returns the entries as pairs, in key order, without calling `compare`.
+/// `from_list(to_list(m))` is `m`.
+pub fn to_list<K: Compare, V>(m: SortedMap<K, V>) -> List<(K, V)> {
+  entries(m)
+}
+
+test "to_list gives the entries in key order" {
+  let scores = from_list([("b", 2), ("a", 1)])
+  assert to_list(scores) == [("a", 1), ("b", 2)]
+}
+
+/// Combines the entries in key order, starting from `initial` and calling
+/// `f` once per entry, without calling `compare`.
+pub fn fold<K: Compare, V, A>(m: SortedMap<K, V>, initial: A, f: fn(A, K, V) -> A) -> A {
+  fold_entries(m, initial, f)
+}
+
+test "fold visits the keys in order" {
+  let scores = from_list([("b", 2), ("c", 3), ("a", 1)])
+  assert fold(scores, "", fn(text, key, _) { text + key }) == "abc"
+  assert fold(scores, 0, fn(total, _, value) { total + value }) == 6
+}
+
+/// Calls `f` once per entry, in key order, for its effects, without
+/// calling `compare`.
+pub fn each<K: Compare, V>(m: SortedMap<K, V>, f: fn(K, V)) {
+  case m {
+    Tip => Nil
+    Bin(_, k, x, l, r) => {
+      each(l, f)
+      f(k, x)
+      each(r, f)
+    }
+  }
+}
+
+test "each calls the function once per entry" {
+  let lengths = from_list([("a", 1), ("bb", 2)])
+  each(lengths, fn(key, value) { assert string::length(key) == value })
+}
+
+// Transforming
+
+/// Returns a map with the same keys, each value replaced by `f` of its key
+/// and value. `f` is called once per entry, in key order. The tree keeps
+/// its shape, so `compare` is not called.
+pub fn map_values<K: Compare, V, W>(m: SortedMap<K, V>, f: fn(K, V) -> W) -> SortedMap<K, W> {
+  case m {
+    Tip => Tip
+    Bin(n, k, x, l, r) => {
+      let left = map_values(l, f)
+      let value = f(k, x)
+      let right = map_values(r, f)
+      Bin(n, k, value, left, right)
+    }
+  }
+}
+
+test "map_values keeps the keys" {
+  let counts = from_list([("a", 1), ("b", 2)])
+  let labels = map_values(counts, fn(key, value) { "{key}={value}" })
+  assert to_list(labels) == [("a", "a=1"), ("b", "b=2")]
+}
+
+/// Returns the entries for which `keep` returns `True`. `keep` is called
+/// once per entry, in key order. The kept subtrees are joined with `link`
+/// and `concat`, which never compare keys, so `filter` takes O(n).
+pub fn filter<K: Compare, V>(m: SortedMap<K, V>, keep: fn(K, V) -> Bool) -> SortedMap<K, V> {
+  case m {
+    Tip => Tip
+    Bin(_, k, x, l, r) => {
+      let kept_left = filter(l, keep)
+      let here = keep(k, x)
+      let kept_right = filter(r, keep)
+      case here {
+        True => link(k, x, kept_left, kept_right)
+        False => concat(kept_left, kept_right)
+      }
+    }
+  }
+}
+
+test "filter keeps the matching entries" {
+  let counts = from_list([("a", 1), ("b", 2), ("c", 3)])
+  let odd = filter(counts, fn(_, value) { value % 2 == 1 })
+  assert keys(odd) == ["a", "c"]
+}
+
+// Text
+
+/// Makes `SortedMap<K, V>` satisfy `Show` when `K` and `V` do (§8.8,
+/// D-064, D-344): `sorted_map::from_list([`, the entries in key order as
+/// pairs written with `show`, and `])` (D-355).
+pub fn show<K: Compare + Show, V: Show>(m: SortedMap<K, V>) -> String {
+  let pairs = list::show(to_list(m))
+  "sorted_map::from_list({pairs})"
+}
+
+test "a sorted map shows its entries in key order" {
+  let scores = from_list([("b", 2), ("a", 1)])
+  assert show(scores) == "sorted_map::from_list([(a, 1), (b, 2)])"
+  assert "{scores}" == "sorted_map::from_list([(a, 1), (b, 2)])"
+}
+
+// The tree
+
+/// The weight of one side against the other that the tree allows.
+const delta: Int = 3
+
+/// The bound between a single and a double rotation.
+const ratio: Int = 2
+
+/// Whether subtrees of sizes `a` and `b` may be the two sides of a node.
+priv fn balanced(a: Int, b: Int) -> Bool {
+  a + b <= 1 || (a <= delta * b && b <= delta * a)
+}
+
+/// A node over `l` and `r`, with its size.
+priv fn node<K, V>(k: K, x: V, l: SortedMap<K, V>, r: SortedMap<K, V>) -> SortedMap<K, V> {
+  Bin(count_entries(l) + count_entries(r) + 1, k, x, l, r)
+}
+
+/// A node over `l` and `r`, rotated when one side outweighs the other.
+/// The sides were balanced and one changed by one entry, or they were
+/// joined by `link` or `concat`.
+priv fn balance<K, V>(k: K, x: V, l: SortedMap<K, V>, r: SortedMap<K, V>) -> SortedMap<K, V> {
+  let sl = count_entries(l)
+  let sr = count_entries(r)
+  case {
+    sl + sr <= 1 => Bin(sl + sr + 1, k, x, l, r)
+    sr > delta * sl => rotate_left(k, x, l, r)
+    sl > delta * sr => rotate_right(k, x, l, r)
+    _ => Bin(sl + sr + 1, k, x, l, r)
+  }
+}
+
+/// A node over `l` and a heavier `r`, by a single or a double rotation to
+/// the left.
+priv fn rotate_left<K, V>(k: K, x: V, l: SortedMap<K, V>, r: SortedMap<K, V>) -> SortedMap<K, V> {
+  case r {
+    Tip => node(k, x, l, r)
+    Bin(_, kr, xr, rl, rr) => case count_entries(rl) < ratio * count_entries(rr) {
+      True => node(kr, xr, node(k, x, l, rl), rr)
+      False => case rl {
+        Tip => node(kr, xr, node(k, x, l, rl), rr)
+        Bin(_, km, xm, ml, mr) => node(km, xm, node(k, x, l, ml), node(kr, xr, mr, rr))
+      }
+    }
+  }
+}
+
+/// A node over a heavier `l` and `r`, by a single or a double rotation to
+/// the right.
+priv fn rotate_right<K, V>(k: K, x: V, l: SortedMap<K, V>, r: SortedMap<K, V>) -> SortedMap<K, V> {
+  case l {
+    Tip => node(k, x, l, r)
+    Bin(_, kl, xl, ll, lr) => case count_entries(lr) < ratio * count_entries(ll) {
+      True => node(kl, xl, ll, node(k, x, lr, r))
+      False => case lr {
+        Tip => node(kl, xl, ll, node(k, x, lr, r))
+        Bin(_, km, xm, ml, mr) => node(km, xm, node(kl, xl, ll, ml), node(k, x, mr, r))
+      }
+    }
+  }
+}
+
+/// Joins the two sides of a removed node: balanced trees, all keys of `l`
+/// before all keys of `r`. The larger side gives up its nearest entry as
+/// the new node.
+priv fn glue<K, V>(l: SortedMap<K, V>, r: SortedMap<K, V>) -> SortedMap<K, V> {
+  case l, r {
+    Tip, _ => r
+    _, Tip => l
+    Bin(sl, kl, xl, ll, lr), Bin(sr, kr, xr, rl, rr) => case sl > sr {
+      True => {
+        let (km, xm, rest) = max_view(kl, xl, ll, lr)
+        balance(km, xm, rest, r)
+      }
+      False => {
+        let (km, xm, rest) = min_view(kr, xr, rl, rr)
+        balance(km, xm, l, rest)
+      }
+    }
+  }
+}
+
+/// The smallest entry of the node `k`, `x`, `l`, `r`, and the tree
+/// without it.
+priv fn min_view<K, V>(k: K, x: V, l: SortedMap<K, V>, r: SortedMap<K, V>) -> (K, V, SortedMap<K, V>) {
+  case l {
+    Tip => (k, x, r)
+    Bin(_, kl, xl, ll, lr) => {
+      let (km, xm, rest) = min_view(kl, xl, ll, lr)
+      (km, xm, balance(k, x, rest, r))
+    }
+  }
+}
+
+/// The largest entry of the node `k`, `x`, `l`, `r`, and the tree without
+/// it.
+priv fn max_view<K, V>(k: K, x: V, l: SortedMap<K, V>, r: SortedMap<K, V>) -> (K, V, SortedMap<K, V>) {
+  case r {
+    Tip => (k, x, l)
+    Bin(_, kr, xr, rl, rr) => {
+      let (km, xm, rest) = max_view(kr, xr, rl, rr)
+      (km, xm, balance(k, x, l, rest))
+    }
+  }
+}
+
+/// The tree with the entry `k`, `x` before all its keys.
+priv fn insert_min<K, V>(k: K, x: V, m: SortedMap<K, V>) -> SortedMap<K, V> {
+  case m {
+    Tip => Bin(1, k, x, Tip, Tip)
+    Bin(_, ky, y, l, r) => balance(ky, y, insert_min(k, x, l), r)
+  }
+}
+
+/// The tree with the entry `k`, `x` after all its keys.
+priv fn insert_max<K, V>(k: K, x: V, m: SortedMap<K, V>) -> SortedMap<K, V> {
+  case m {
+    Tip => Bin(1, k, x, Tip, Tip)
+    Bin(_, ky, y, l, r) => balance(ky, y, l, insert_max(k, x, r))
+  }
+}
+
+/// A tree of `l`, the entry `k`, `x` and `r`, whose keys are in that
+/// order, for subtrees of any sizes. It never compares keys.
+priv fn link<K, V>(k: K, x: V, l: SortedMap<K, V>, r: SortedMap<K, V>) -> SortedMap<K, V> {
+  case l, r {
+    Tip, _ => insert_min(k, x, r)
+    _, Tip => insert_max(k, x, l)
+    Bin(sl, kl, xl, ll, lr), Bin(sr, kr, xr, rl, rr) => case {
+      delta * sl < sr => balance(kr, xr, link(k, x, l, rl), rr)
+      delta * sr < sl => balance(kl, xl, ll, link(k, x, lr, r))
+      _ => node(k, x, l, r)
+    }
+  }
+}
+
+/// A tree of `l` and `r`, whose keys are in that order, for trees of any
+/// sizes. It never compares keys.
+priv fn concat<K, V>(l: SortedMap<K, V>, r: SortedMap<K, V>) -> SortedMap<K, V> {
+  case l, r {
+    Tip, _ => r
+    _, Tip => l
+    Bin(sl, kl, xl, ll, lr), Bin(sr, kr, xr, rl, rr) => case {
+      delta * sl < sr => balance(kr, xr, concat(l, rl), rr)
+      delta * sr < sl => balance(kl, xl, ll, concat(lr, r))
+      _ => glue(l, r)
+    }
+  }
+}
+
+// Tests of the tree
+
+test "the tree stays balanced through random inserts and removes" {
+  // Whether every node of `m` has its size, sides of which neither weighs
+  // more than three times the other (written out here, not through
+  // `balanced`), and keys at least `low` and less than `high`, in order.
+  fn valid(m: SortedMap<Int, Int>, low: Int, high: Int) -> Bool {
+    case m {
+      Tip => True
+      Bin(n, k, _, l, r) => {
+        let sl = count_entries(l)
+        let sr = count_entries(r)
+        let weighed = sl + sr <= 1 || (sl <= 3 * sr && sr <= 3 * sl)
+        let here = n == sl + sr + 1 && weighed && low <= k && k < high
+        here && valid(l, low, k) && valid(r, k + 1, high)
+      }
+    }
+  }
+  fn next(seed: Int) -> Int {
+    (seed * 1103515245 + 12345) % 2147483648
+  }
+  // Inserts or removes `count` pseudo-random keys below 500 in `m` and in
+  // the reference `seen`, one remove for two inserts, checking the tree
+  // after each step.
+  fn churn(
+    m: SortedMap<Int, Int>,
+    seen: set::Set<Int>,
+    seed: Int,
+    count: Int,
+  ) -> (SortedMap<Int, Int>, set::Set<Int>) {
+    case count {
+      0 => (m, seen)
+      _ => {
+        let key = seed / 65536 % 500
+        let (changed, changed_keys) = case count % 3 {
+          0 => (remove(m, key), set::remove(seen, key))
+          _ => (insert(m, key, key * 2), set::insert(seen, key))
+        }
+        assert valid(changed, 0, 500)
+        assert count_entries(changed) == set::size(changed_keys)
+        churn(changed, changed_keys, next(seed), count - 1)
+      }
+    }
+  }
+  let (grown, grown_keys) = churn(new(), set::new(), 7, 900)
+  assert keys(grown) == list::sort(set::to_list(grown_keys))
+  assert list::all(keys(grown), fn(key) { get(grown, key) == Some(key * 2) })
+  let shrunk = list::fold(keys(grown), grown, fn(m, key) {
+    case key % 2 {
+      0 => remove(m, key)
+      _ => m
+    }
+  })
+  assert valid(shrunk, 0, 500)
+  assert list::all(keys(shrunk), fn(key) { key % 2 == 1 })
+  let thirds = filter(grown, fn(key, _) { key % 3 == 0 })
+  assert valid(thirds, 0, 500)
+  assert keys(thirds) == list::filter(keys(grown), fn(key) { key % 3 == 0 })
+  assert valid(map_values(grown, fn(_, value) { value + 1 }), 0, 500)
+  let ascending = from_list(list::map(list::range(0, 1000), fn(n) { (n, n) }))
+  assert valid(ascending, 0, 1000)
+  assert size(ascending) == 1000
+}
+
+test "sizes count each key once" {
+  let words = from_list([("b", 2), ("a", 1), ("c", 3)])
+  assert size(insert(words, "a", 10)) == 3
+  assert size(upsert(words, "b", fn(_) { 0 })) == 3
+  assert size(upsert(words, "d", fn(_) { 4 })) == 4
+  assert size(remove(words, "z")) == 3
+  assert size(remove(words, "b")) == 2
+  assert size(merge(words, from_list([("c", 30), ("d", 4)]))) == 4
+  assert size(filter(words, fn(_, value) { value > 1 })) == 2
+  assert size(map_values(words, fn(_, value) { value * 2 })) == 3
+}
+
+test "filter and map_values never call compare" {
+  // A tree whose keys go down from left to right, the reverse of what
+  // `compare` would build: an operation that compared keys would put them
+  // back in order, or miss them.
+  fn negated(m: SortedMap<Int, Int>) -> SortedMap<Int, Int> {
+    case m {
+      Tip => Tip
+      Bin(n, k, x, l, r) => Bin(n, 0 - k, x, negated(l), negated(r))
+    }
+  }
+  let backwards = negated(from_list(list::map(list::range(0, 100), fn(n) { (n, n) })))
+  let downward = list::map(list::range(0, 100), fn(n) { 0 - n })
+  assert keys(backwards) == downward
+  assert get(backwards, -99) == None
+  let even = filter(backwards, fn(_, value) { value % 2 == 0 })
+  assert keys(even) == list::filter(downward, fn(key) { key % 2 == 0 })
+  assert keys(filter(backwards, fn(_, _) { True })) == downward
+  assert keys(map_values(backwards, fn(key, _) { key })) == downward
+  assert values(map_values(backwards, fn(key, value) { key + value })) == list::repeat(0, 100)
+}

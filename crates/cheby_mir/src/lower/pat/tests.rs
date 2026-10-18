@@ -504,10 +504,31 @@ fn main() {
     );
     let never = lowered.function("app", "app::never");
     assert_eq!(count(&never, "  panic "), 2, "{never}");
-    assert!(
-        !never.contains("return") && !never.contains("goto"),
-        "{never}"
-    );
+    // No block that normal control flow reaches returns or jumps to a
+    // join; the cleanup pads of the unwind pass (D-698), which only an
+    // unwinding reaches, end in `goto` and `resume`.
+    let unit = lowered.unit("app");
+    let f = unit
+        .functions
+        .iter()
+        .find(|f| crate::dump_function(unit, f).unwrap() == never)
+        .unwrap();
+    let mut seen = BTreeSet::new();
+    let mut work = vec![crate::BlockId::from_u32(0)];
+    while let Some(id) = work.pop() {
+        if seen.insert(id) {
+            work.extend(f.blocks.get(id).unwrap().term.successors());
+        }
+    }
+    for id in seen {
+        assert!(
+            !matches!(
+                f.blocks.get(id).unwrap().term,
+                crate::Terminator::Return(_) | crate::Terminator::Goto { .. }
+            ),
+            "{never}"
+        );
+    }
 }
 
 #[test]
@@ -870,4 +891,29 @@ fn few_list_lengths_keep_one_switch() {
         panic!("expected one decision, got {}", decisions.len());
     };
     assert_eq!(count_tests(&decision.tree), 1);
+}
+
+/// `let _ = b` is the last use of `b` (D-205, §9.2 guarantee 3), so `b`
+/// is released after the call before it, not at the function's entry
+/// (board S6b-1: a `Receiver` kept alive with `let _ = rx`).
+#[test]
+fn a_wildcard_let_of_a_name_is_its_last_use() {
+    let src = "//! A wildcard let.\n\nimport std::string\n\nfn wild(a: String, b: String) -> Int {\n  \
+               let n = string::length(a)\n  let _ = b\n  n\n}\n\nfn main() {\n  \
+               let _ = wild(\"x\", \"y\")\n}\n";
+    let wild = lower(src).function("app", "app::wild");
+    let lines: Vec<&str> = wild.lines().collect();
+    let at = |needle: &str| {
+        lines
+            .iter()
+            .position(|l| l.contains(needle))
+            .unwrap_or_else(|| panic!("no {needle:?} in:\n{wild}"))
+    };
+    let call = at("string");
+    let moved = at("= _1");
+    assert!(call < moved, "`b` is used before the call:\n{wild}");
+    assert!(
+        !lines[..call].iter().any(|l| l.trim() == "drop _1"),
+        "`b` is released before its last use:\n{wild}"
+    );
 }

@@ -1,0 +1,42 @@
+// @mode: run-pass
+// @milestone: M2
+// @decisions: D-717, D-170, D-716, D-525, D-205, D-852
+// @flags: --reuse-report
+//! A kernel's first argument that another live value holds gets no kernel
+//! line, because the kernel copies it every time. Here that value is a
+//! record still alive at the call (`kept`) or a tuple used after it
+//! (`paired`). Taking the record apart first ends it before the call, and
+//! the kernel line is printed (`apart`).
+
+import std::io
+import std::set
+
+type Bag { name: String, items: set::Set<Int> }
+
+fn kept(bag: Bag, n: Int) -> Bag {
+  let items = bag.items
+  let more = set::insert(items, n)
+  Bag { name: bag.name, items: more }
+}
+
+fn apart(bag: Bag, n: Int) -> Bag {
+  let Bag { name, items } = bag
+  let more = set::insert(items, n)
+  Bag { name, items: more }
+}
+
+fn paired(items: set::Set<Int>, n: Int) -> (set::Set<Int>, set::Set<Int>) {
+  let old = (items, n)
+  let more = set::insert(items, n)
+  let (before, _) = old
+  (before, more)
+}
+
+fn main() {
+  let first = kept(Bag { name: "kept", items: set::new() }, 1)
+  let second = apart(Bag { name: "apart", items: set::new() }, 2)
+  let (before, after) = paired(set::new(), 3)
+  let sizes = set::size(first.items) + set::size(second.items)
+  let pair = set::size(before) + set::size(after)
+  io::println("{first.name} and {second.name}: {sizes}, paired: {pair}")
+}

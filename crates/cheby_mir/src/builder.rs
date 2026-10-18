@@ -16,6 +16,25 @@ struct OpenBlock {
     params: Vec<Local>,
     stmts: Vec<Stmt>,
     term: Option<Terminator>,
+    /// Sorted by statement index, at most one per index ([`Block::unwind`]).
+    unwind: Vec<(u32, BlockId)>,
+}
+
+impl OpenBlock {
+    /// Gives statement `i` (the terminator when `i == stmts.len()`) the
+    /// unwind edge `pad`, keeping the edges sorted.
+    fn add_unwind(&mut self, i: usize, pad: BlockId) -> Result<(), Ice> {
+        let at = u32::try_from(i).map_err(|_| Ice::new("too many MIR statements in a block"))?;
+        match self.unwind.binary_search_by_key(&at, |&(n, _)| n) {
+            Ok(_) => Err(Ice::new(format!(
+                "statement {i} already has an unwind edge"
+            ))),
+            Err(pos) => {
+                self.unwind.insert(pos, (at, pad));
+                Ok(())
+            }
+        }
+    }
 }
 
 /// Builds a [`Function`]. Statements go to the current block; a block is
@@ -34,7 +53,26 @@ pub struct FunctionBuilder {
     /// Lookup only; numbering is first-use order.
     string_ids: FxHashMap<Box<str>, StrId>,
     entry_loc: Option<StrId>,
+    entry_unwind: Option<BlockId>,
+    precounted: bool,
     current: BlockId,
+    /// The statements pushed so far, over every block.
+    stmts: usize,
+    /// Whether [`FunctionBuilder::record_site`] records anything
+    /// ([`crate::MirOptions::record_sites`]).
+    record_sites: bool,
+    /// The sites recorded so far, which [`FunctionBuilder::finish`] moves
+    /// into [`Function::sites`].
+    sites: Vec<(Local, Span)>,
+    /// Whether [`FunctionBuilder::record_call_loc`] records anything: on
+    /// in units outside package `std` (D-856).
+    record_call_locs: bool,
+    /// The call locations recorded so far ([`Function::call_locs`]).
+    call_locs: Vec<(Local, StrId)>,
+    /// Their texts ([`Function::call_loc_strings`]).
+    call_loc_strings: IndexVec<StrId, Box<str>>,
+    /// Lookup only; numbering is first-use order.
+    call_loc_ids: FxHashMap<Box<str>, StrId>,
 }
 
 impl FunctionBuilder {
@@ -57,8 +95,87 @@ impl FunctionBuilder {
             strings: IndexVec::new(),
             string_ids: FxHashMap::default(),
             entry_loc: None,
+            entry_unwind: None,
+            precounted: false,
             current,
+            stmts: 0,
+            record_sites: false,
+            sites: Vec::new(),
+            record_call_locs: false,
+            call_locs: Vec::new(),
+            call_loc_strings: IndexVec::new(),
+            call_loc_ids: FxHashMap::default(),
         })
+    }
+
+    /// Makes [`FunctionBuilder::record_call_loc`] record (`on`) or ignore
+    /// its locations; off by default. Lowering turns it on in units
+    /// outside package `std` (D-856).
+    pub const fn set_record_call_locs(&mut self, on: bool) {
+        self.record_call_locs = on;
+    }
+
+    /// Whether [`FunctionBuilder::record_call_loc`] records.
+    #[must_use]
+    pub const fn records_call_locs(&self) -> bool {
+        self.record_call_locs
+    }
+
+    /// Records `location` (`path:line:col`) as the location of the call
+    /// that defines `local` (D-856): a no-op unless
+    /// [`FunctionBuilder::set_record_call_locs`] turned recording on.
+    /// [`FunctionBuilder::finish`] moves the locations into
+    /// [`Function::call_locs`] and [`Function::call_loc_strings`].
+    ///
+    /// # Errors
+    ///
+    /// An [`Ice`] if the table of location strings is full.
+    pub fn record_call_loc(&mut self, local: Local, location: &str) -> Result<(), Ice> {
+        if !self.record_call_locs {
+            return Ok(());
+        }
+        let id = if let Some(&id) = self.call_loc_ids.get(location) {
+            id
+        } else {
+            let id = self.call_loc_strings.push(location.into())?;
+            self.call_loc_ids.insert(location.into(), id);
+            id
+        };
+        self.call_locs.push((local, id));
+        Ok(())
+    }
+
+    /// Makes [`FunctionBuilder::record_site`] record (`on`) or ignore its
+    /// sites; off by default. Lowering sets it from
+    /// [`crate::MirOptions::record_sites`], which `--reuse-report` sets
+    /// (D-717).
+    pub const fn set_record_sites(&mut self, on: bool) {
+        self.record_sites = on;
+    }
+
+    /// Whether [`FunctionBuilder::record_site`] records.
+    #[must_use]
+    pub const fn records_sites(&self) -> bool {
+        self.record_sites
+    }
+
+    /// Records `span` as the source site of `local`, the result of an
+    /// `alloc` or a call, for the reuse report (D-717): a no-op unless
+    /// [`FunctionBuilder::set_record_sites`] turned recording on.
+    /// [`FunctionBuilder::finish`] moves the sites into
+    /// [`Function::sites`], in the order recorded.
+    pub fn record_site(&mut self, local: Local, span: Span) {
+        if self.record_sites {
+            self.sites.push((local, span));
+        }
+    }
+
+    /// The size of the function so far: its statements and its blocks
+    /// (each block's terminator). Lowering splits a large literal by it
+    /// (D-780).
+    #[must_use]
+    pub fn size(&self) -> usize {
+        self.stmts.saturating_add(self.blocks.len())
     }
 
     /// The function's key.
@@ -203,6 +320,7 @@ impl FunctionBuilder {
             return Err(Ice::new(format!("statement after the end of {current:?}")));
         }
         block.stmts.push(stmt);
+        self.stmts = self.stmts.saturating_add(1);
         Ok(())
     }
 
@@ -251,6 +369,67 @@ impl FunctionBuilder {
         Ok(())
     }
 
+    /// Gives the statement pushed last in the current block the unwind
+    /// edge `pad` (D-698).
+    ///
+    /// # Errors
+    ///
+    /// An [`Ice`] if the current block has no statement, is already
+    /// terminated, or its last statement already has an edge.
+    pub fn unwind_last(&mut self, pad: BlockId) -> Result<(), Ice> {
+        let current = self.current;
+        let block = self.open(current)?;
+        if block.term.is_some() {
+            return Err(Ice::new(format!(
+                "an unwind edge for a statement of {current:?}, which is terminated"
+            )));
+        }
+        let Some(last) = block.stmts.len().checked_sub(1) else {
+            return Err(Ice::new(format!(
+                "an unwind edge in {current:?}, which has no statement"
+            )));
+        };
+        block.add_unwind(last, pad)
+    }
+
+    /// Gives the terminator of `block`, once set, the unwind edge `pad`
+    /// (D-698).
+    ///
+    /// # Errors
+    ///
+    /// An [`Ice`] if `block` is unknown, not yet terminated, or its
+    /// terminator already has an edge.
+    pub fn unwind_terminator(&mut self, block: BlockId, pad: BlockId) -> Result<(), Ice> {
+        let open = self.open(block)?;
+        if open.term.is_none() {
+            return Err(Ice::new(format!(
+                "an unwind edge for the terminator of {block:?}, which has none yet"
+            )));
+        }
+        let at = open.stmts.len();
+        open.add_unwind(at, pad)
+    }
+
+    /// Sets the pad the function-entry check unwinds to (D-698).
+    pub const fn set_entry_unwind(&mut self, pad: BlockId) {
+        self.entry_unwind = Some(pad);
+    }
+
+    /// Marks the body as generated with its counts in place (D-693):
+    /// the RC pass leaves it alone (D-744).
+    pub const fn set_precounted(&mut self) {
+        self.precounted = true;
+    }
+
+    /// Pushes [`Stmt::ClearUnwind`] (D-693).
+    ///
+    /// # Errors
+    ///
+    /// An [`Ice`] if the current block is terminated.
+    pub fn clear_unwind(&mut self) -> Result<(), Ice> {
+        self.push(Stmt::ClearUnwind)
+    }
+
     /// The id of `text` in the string table, adding it on first use.
     ///
     /// # Errors
@@ -291,6 +470,7 @@ impl FunctionBuilder {
                 params: open.params,
                 stmts: open.stmts,
                 term,
+                unwind: open.unwind,
             })?;
         }
         Ok(Function {
@@ -303,6 +483,12 @@ impl FunctionBuilder {
             span: self.span,
             strings: self.strings,
             entry_loc: self.entry_loc,
+            entry_unwind: self.entry_unwind,
+            precounted: self.precounted,
+            borrow: crate::borrow::BorrowMask::OWNED,
+            sites: self.sites,
+            call_locs: self.call_locs,
+            call_loc_strings: self.call_loc_strings,
         })
     }
 }

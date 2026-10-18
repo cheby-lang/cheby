@@ -1,0 +1,76 @@
+// @mode: run-pass
+// @milestone: M2
+// @decisions: D-333, D-336, D-337, D-341, D-344, D-355
+//! `SortedSet<T>`: elements kept in their `compare` order whatever the
+//! insertion order, ranges, the set operations, `show` and debug text, and
+//! an element type whose `compare` keeps the element already stored (§3.8).
+
+import std::int
+import std::io
+import std::list
+import std::sorted_set
+import std::sorted_set::{SortedSet}
+import std::string
+
+/// A task ordered by its priority alone, so two tasks of one priority are
+/// the same element (D-341).
+type Task { priority: Int, name: String }
+
+fn compare(a: Task, b: Task) -> Order {
+  int::compare(a.priority, b.priority)
+}
+
+fn names(tasks: SortedSet<Task>) -> String {
+  string::join(list::map(sorted_set::to_list(tasks), fn(task) { task.name }), ", ")
+}
+
+fn main() {
+  let text = "the quick brown fox jumps over the lazy dog"
+  let words = sorted_set::from_list(string::split(text, " "))
+  io::println("{words}")
+  let size = sorted_set::size(words)
+  let first = sorted_set::first(words)
+  let last = sorted_set::last(words)
+  io::println("size: {size}, first: {first}, last: {last}")
+  let middle = sorted_set::range(words, "f", "p")
+  io::println("from f to p: {middle}")
+  let vowels = sorted_set::from_list(["u", "e", "a", "e"])
+  io::println("{vowels:?}")
+
+  let evens = sorted_set::from_list(list::map(list::range(0, 10), fn(n) { n * 2 }))
+  let threes = sorted_set::from_list(list::map(list::range(0, 7), fn(n) { n * 3 }))
+  let either = sorted_set::to_list(sorted_set::union(evens, threes))
+  let both = sorted_set::intersection(evens, threes)
+  let only = sorted_set::to_list(sorted_set::difference(evens, threes))
+  let shared = sorted_set::to_list(both)
+  let subset = sorted_set::is_subset(both, evens)
+  io::println("union: {either}")
+  io::println("intersection: {shared}, a subset: {subset}")
+  io::println("difference: {only}")
+
+  let tasks = sorted_set::from_list([
+    Task { priority: 2, name: "write" },
+    Task { priority: 1, name: "plan" },
+    Task { priority: 2, name: "rewrite" },
+    Task { priority: 3, name: "ship" },
+  ])
+  let again = sorted_set::insert(tasks, Task { priority: 1, name: "replan" })
+  let unchanged = again == tasks
+  let found = sorted_set::contains(tasks, Task { priority: 3, name: "anything" })
+  let fewer = sorted_set::remove(tasks, Task { priority: 2, name: "other" })
+  let listed = names(tasks)
+  let listed_again = names(again)
+  let listed_fewer = names(fewer)
+  io::println("tasks: {listed}")
+  io::println("after inserting replan: {listed_again}, unchanged: {unchanged}")
+  io::println("has a priority 3: {found}, without priority 2: {listed_fewer}")
+
+  // Two thousand numbers inserted out of order.
+  let big = sorted_set::from_list(list::map(list::range(0, 2000), fn(n) { n * 7 % 2000 }))
+  let big_size = sorted_set::size(big)
+  let low = sorted_set::first(big)
+  let high = sorted_set::last(big)
+  let hundreds = sorted_set::size(sorted_set::filter(big, fn(n) { n % 100 == 0 }))
+  let rebuilt = sorted_set::from_list(list::range(0, 2000)) == big
+  io::println("big: {big_size}, from {low} to {high}, hundreds: {hundreds}, rebuilt: {rebuilt}")
+}

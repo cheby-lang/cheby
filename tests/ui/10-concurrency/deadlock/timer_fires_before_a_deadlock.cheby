@@ -1,0 +1,24 @@
+// @mode: run-fail
+// @exit: 103
+// @decisions: D-724, D-856, D-857, D-858, D-860
+// @milestone: M2
+//! `main` first waits on a selector whose only arm is a timer. That is no
+//! deadlock, since the timer is pending until it fires and wakes `main`.
+//! Then `main` waits on a channel whose `Sender` it holds, a real deadlock:
+//! the report follows the timer's output.
+
+import std::channel
+import std::duration
+import std::io
+import std::selector
+
+fn main() {
+  let waited =
+    selector::new()
+    |> selector::after(_, duration::milliseconds(50), fn() { "the timer fired" })
+    |> selector::select
+  io::println(waited)
+  let (tx, rx) = channel::new::<Int>(0)
+  let assert Ok(n) = channel::receive(rx)
+  let _ = channel::send(tx, n)
+}

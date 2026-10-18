@@ -49,11 +49,18 @@ pub enum Kind {
     TupleFn,
     /// The code of a `dyn` dictionary's forwarding entry (D-560).
     DynFwd,
+    /// The unchecked inner body of a function with a large frame (D-679).
+    Big,
+    /// A continuation of a large literal (D-780, D-811).
+    Cont,
+    /// The C-ABI shim through which the blocking pool calls an `@blocking`
+    /// foreign function (D-683, D-818).
+    Blk,
 }
 
 impl Kind {
     /// Every kind.
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 20] = [
         Self::Fn,
         Self::Slot,
         Self::Shim,
@@ -71,6 +78,9 @@ impl Kind {
         Self::Layout,
         Self::TupleFn,
         Self::DynFwd,
+        Self::Big,
+        Self::Cont,
+        Self::Blk,
     ];
 
     /// The word in the symbol.
@@ -94,6 +104,9 @@ impl Kind {
             Self::Layout => "layout",
             Self::TupleFn => "tfn",
             Self::DynFwd => "dynfwd",
+            Self::Big => "big",
+            Self::Cont => "cont",
+            Self::Blk => "blk",
         }
     }
 }
@@ -147,6 +160,26 @@ pub fn test_closure(module: &str, ordinal: u32, index: u32) -> String {
     format!(
         "{PREFIX}{}$test${}${ordinal}${index}",
         Kind::Clo.word(),
+        path_part(module)
+    )
+}
+
+/// `cb$cont$<module path>$<owner>$<n>`: continuation `n` of the item or
+/// constant `owner` (D-780, D-811), named as its
+/// closures are ([`closure`]) under a kind of its own.
+#[must_use]
+pub fn continuation(owner: &DefName, index: u32) -> String {
+    format!("{}${index}", item(Kind::Cont, owner))
+}
+
+/// `cb$cont$test$<module path>$<ordinal>$<n>`: continuation `n` of the
+/// test with that ordinal in its module, named as its closures are
+/// ([`test_closure`], D-780).
+#[must_use]
+pub fn test_continuation(module: &str, ordinal: u32, index: u32) -> String {
+    format!(
+        "{PREFIX}{}$test${}${ordinal}${index}",
+        Kind::Cont.word(),
         path_part(module)
     )
 }
@@ -212,6 +245,32 @@ pub fn dyn_forward(iface_fn: &DefName, dyn_iface: &DefName) -> String {
         path_part(&dyn_iface.module),
         path_part(&dyn_iface.item)
     )
+}
+
+/// `cb$big$<owner without cb$>`: the unchecked inner body of the function
+/// whose symbol is `owner`, when its frame is large (D-679). The outer
+/// function keeps `owner`, so slots and callers are unchanged. The kind
+/// comes first, as in every symbol (D-456), so the name never collides
+/// with another kind's (D-751).
+#[must_use]
+pub fn large_frame_body(owner: &str) -> String {
+    let owner = owner.strip_prefix(PREFIX).unwrap_or(owner);
+    format!("{PREFIX}{}${owner}", Kind::Big.word())
+}
+
+/// `cb$blk$<foreign symbol>`: the shim through which the blocking pool
+/// calls the `@blocking` foreign function `symbol` (D-683,
+/// D-818); the kind comes first (D-456). A later call site of
+/// the same symbol with another C signature, which only signature-free
+/// imports allow (a REPL redefinition), gets `cb$blk$<symbol>$$<n>` with
+/// `n` from 1: a C symbol holds no `$$`.
+#[must_use]
+pub fn blocking_shim(symbol: &str, variant: u32) -> String {
+    if variant == 0 {
+        format!("{PREFIX}{}${symbol}", Kind::Blk.word())
+    } else {
+        format!("{PREFIX}{}${symbol}$${variant}", Kind::Blk.word())
+    }
 }
 
 /// `cb$str$<owner without cb$>$<n>`: string `n` of the function whose

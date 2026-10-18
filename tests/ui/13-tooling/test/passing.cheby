@@ -2,7 +2,7 @@
 // @command: test
 // @decisions: D-055, D-140, D-541, D-543, D-578, D-598
 //! Passing tests each print an `ok` line when they finish, in source order,
-//! then a summary. A test's own output is not captured, so it comes before
+//! then a summary. A test's own output is captured and written just before
 //! the test's line, and `env::program_name` is the package's name.
 
 import std::env

@@ -1,0 +1,4 @@
+before the detached fiber fails
+panicked at tests/ui/13-tooling/test/detached_panic_is_captured.cheby:26:3:
+the detached fiber failed
+the second test's error output

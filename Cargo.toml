@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*", "bench/gen", "tests/support", "xtask"]
+members = ["crates/*", "bench/baselines", "bench/gen", "tests/support", "xtask"]
 # cargo-fuzz targets need a nightly toolchain and their own lockfile.
 exclude = ["fuzz"]
 
@@ -45,8 +45,15 @@ cranelift-frontend = "0.135"
 cranelift-jit = "0.135"
 cranelift-module = "0.135"
 cranelift-native = "0.135"
+crossbeam-deque = "0.8"
+crossbeam-utils = "0.8"
+getrandom = "0.3"
 libc = "0.2"
 libtest-mimic = "0.8"
+loom = "0.7"
+mimalloc = "0.1.52"
+mio = { version = "1", features = ["os-poll"] }
+parking_lot = "0.12"
 proptest = "1.11"
 rayon = "1.12"
 rustc-hash = "2.1"
@@ -65,6 +72,12 @@ windows-sys = "0.61"
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
 missing_debug_implementations = "warn"
+# D-875: the sanitizer builds (D-721) pass
+# `--cfg cheby_sanitize="address"` or `"thread"` with `-Zsanitizer`;
+# `crates/cheby_runtime/src/fiber/sanitizer.rs` reads it.
+unexpected_cfgs = { level = "warn", check-cfg = [
+  'cfg(cheby_sanitize, values("address", "thread"))',
+] }
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }

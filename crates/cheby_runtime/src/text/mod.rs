@@ -12,9 +12,12 @@
 //! `trim_start`, `trim_end`, `remove_prefix`, `remove_suffix` and `slice`
 //! change their text argument in place when its count is exactly one, no
 //! other argument is the same object, and (for the appending ones) its
-//! capacity suffices, then `dup` it and return it. A text that must grow
-//! is copied into an object of doubled capacity, so a chain of `+` on a
-//! unique accumulator runs in amortized O(1) per byte appended.
+//! capacity suffices, then `dup` it and return it. A unique text that
+//! must grow moves into a new object of twice its capacity, so a chain of
+//! `+` on a unique accumulator runs in amortized O(1) per byte appended; a
+//! shared or static text is copied with twice its length
+//! (D-849, refining D-577). Either is at least what the
+//! result needs.
 //!
 //! Unicode (D-310, D-552): case mapping is
 //! the Rust standard library's full mapping (`str::to_lowercase`,

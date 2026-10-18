@@ -351,7 +351,9 @@ fn operator_calls() {
     let add = f(&l, "add_money");
     assert!(add.contains("= call app::add("), "{add}");
     assert!(add.contains("tail_call app::add("), "{add}");
-    assert!(f(&l, "neg_money").contains("tail_call app::neg(_0)"));
+    // `neg` and `neg_money` borrow their money (D-715): the tail call
+    // passes the caller's own borrowed parameter.
+    assert!(f(&l, "neg_money").contains("tail_call app::neg(borrow _0)"));
 }
 
 /// `&&` and `||` branch and join through a block parameter; the right
@@ -554,7 +556,8 @@ fn result_main_prints_errors_by_show() {
     );
     assert!(main.contains("read_tag _0 of result"), "{main}");
     assert!(main.contains("field _0.0 of ctor Err"), "{main}");
-    assert!(main.contains("call app::show(_3)"), "{main}");
+    // `show` borrows the error (D-715).
+    assert!(main.contains("call app::show(borrow _3)"), "{main}");
     assert!(
         main.contains("call_foreign \"cheby_io_eprintln\"(borrow _4) -> void"),
         "{main}"

@@ -1,0 +1,12 @@
+error[E0036]: `fiber-stack` must be from 1MiB to 16GiB
+ --> tests/ui/13-tooling/manifest/runtime_errors/above_range/cheby.toml:5:15
+  |
+5 | fiber-stack = "17GiB"
+  |               ^^^^^^^
+
+error[E0036]: `main-stack` must be from 1MiB to 16GiB
+ --> tests/ui/13-tooling/manifest/runtime_errors/above_range/cheby.toml:6:14
+  |
+6 | main-stack = "16777217KiB"
+  |              ^^^^^^^^^^^^^
+

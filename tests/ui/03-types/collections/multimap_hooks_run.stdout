@@ -1,0 +1,4 @@
+multimap::from_list([("a", "axe"), ("b", "bolt"), ("b", "brush"), ("c", "chisel")])
+multimap::from_list([("a", "axe"), ("b", "bolt"), ("b", "brush"), ("c", "chisel")])
+multimap::from_list([("a", "axe"), ("b", "brush"), ("b", "bolt"), ("c", "chisel")])
+same: True, different: True, distinct when hashed: 2

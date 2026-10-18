@@ -4,10 +4,10 @@
 //!
 //! [`symbols`] lists the runtime's own symbols first, in the order of
 //! [`sym::ALL`], then every kernel module's kernels. Each kernel module
-//! (`io`, `num`, `list`, `text`, `bytes`, `env`, `hamt`, `consteval`)
-//! registers its kernels through its own `kernels` function and names the
-//! std modules it implements completely in its `COMPLETE`, so kernel
-//! packages never edit this file.
+//! (`io`, `num`, `list`, `text`, `bytes`, `env`, `hamt`, `consteval`,
+//! `fiber_ops`, `random`, `runtime_info`) registers its kernels through its own `kernels` function
+//! and names the std modules it implements completely in its `COMPLETE`,
+//! so kernel packages never edit this file.
 //!
 //! A module that defines runtime kinds (`layout::register_builtin`, ids
 //! 26-63) also registers them from its `kernels` function: the JIT calls
@@ -20,6 +20,7 @@ use std::ptr;
 use crate::abi::sym;
 use crate::alloc::cheby_rt_alloc;
 use crate::consteval::{cheby_rt_const_missing, cheby_rt_effect_check, cheby_rt_unresolved};
+use crate::fiber_ops::scope::{cheby_rt_scope_close, cheby_rt_scope_open};
 use crate::helpers::{
     cheby_rt_box_f32, cheby_rt_box_f64, cheby_rt_box_i64, cheby_rt_box_u64, cheby_rt_debug,
     cheby_rt_equal, cheby_rt_fmod_f32, cheby_rt_fmod_f64, cheby_rt_str_append, cheby_rt_str_eq,
@@ -30,12 +31,20 @@ use crate::list::{
     cheby_rt_list_slice, cheby_rt_list_slice_owned, cheby_rt_static_empty_list,
 };
 use crate::object::{
-    cheby_rt_static_equal, cheby_rt_static_false, cheby_rt_static_greater, cheby_rt_static_less,
-    cheby_rt_static_nil, cheby_rt_static_none, cheby_rt_static_true,
+    cheby_rt_static_equal, cheby_rt_static_err_nil, cheby_rt_static_false, cheby_rt_static_greater,
+    cheby_rt_static_less, cheby_rt_static_nil, cheby_rt_static_none, cheby_rt_static_true,
 };
-use crate::panic::{cheby_rt_panic, cheby_rt_stack_slow};
+use crate::panic::{cheby_rt_panic, cheby_rt_stack_slow, cheby_rt_stack_slow_frame};
 use crate::rc::{cheby_rt_drop, cheby_rt_dup};
-use crate::{bytes, consteval, desc, env, hamt, io, list, num, text};
+use crate::reuse::{
+    cheby_rt_alloc_miss, cheby_rt_alloc_reuse_checked, cheby_rt_drop_reuse_checked,
+    cheby_rt_free_unique, cheby_rt_release_fields, cheby_rt_reuse_hit,
+};
+use crate::sched::blocking::cheby_rt_blocking_call;
+use crate::unwind::entry_slow::{cheby_rt_stack_slow_frame_unwind, cheby_rt_stack_slow_unwind};
+use crate::{
+    bytes, consteval, desc, env, fiber_ops, hamt, io, list, num, random, runtime_info, text,
+};
 
 /// The address of a static object.
 fn data<T>(object: &'static T) -> *const u8 {
@@ -48,7 +57,7 @@ fn data<T>(object: &'static T) -> *const u8 {
     clippy::as_conversions,
     reason = "taking the address of a function needs an `as` cast"
 )]
-fn runtime_symbols() -> [(&'static str, *const u8); 33] {
+fn runtime_symbols() -> [(&'static str, *const u8); 47] {
     [
         (sym::ALLOC, cheby_rt_alloc as *const u8),
         (sym::DUP, cheby_rt_dup as *const u8),
@@ -89,6 +98,35 @@ fn runtime_symbols() -> [(&'static str, *const u8); 33] {
             sym::LIST_SLICE_OWNED,
             cheby_rt_list_slice_owned as *const u8,
         ),
+        (
+            sym::STACK_SLOW_FRAME,
+            cheby_rt_stack_slow_frame as *const u8,
+        ),
+        (sym::SCOPE_OPEN, cheby_rt_scope_open as *const u8),
+        (sym::SCOPE_CLOSE, cheby_rt_scope_close as *const u8),
+        (sym::STATIC_ERR_NIL, data(&cheby_rt_static_err_nil)),
+        (
+            sym::STACK_SLOW_UNWIND,
+            cheby_rt_stack_slow_unwind as *const u8,
+        ),
+        (
+            sym::STACK_SLOW_FRAME_UNWIND,
+            cheby_rt_stack_slow_frame_unwind as *const u8,
+        ),
+        (sym::BLOCKING_CALL, cheby_rt_blocking_call as *const u8),
+        (sym::RELEASE_FIELDS, cheby_rt_release_fields as *const u8),
+        (sym::REUSE_HIT, cheby_rt_reuse_hit as *const u8),
+        (sym::ALLOC_MISS, cheby_rt_alloc_miss as *const u8),
+        (
+            sym::DROP_REUSE_CHECKED,
+            cheby_rt_drop_reuse_checked as *const u8,
+        ),
+        (
+            sym::ALLOC_REUSE_CHECKED,
+            cheby_rt_alloc_reuse_checked as *const u8,
+        ),
+        (sym::FREE_UNIQUE, cheby_rt_free_unique as *const u8),
+        (sym::STATS_COUNTING, data(crate::stats::counting_flag())),
     ]
 }
 
@@ -106,6 +144,9 @@ pub fn symbols() -> Vec<(&'static str, *const u8)> {
     env::kernels(&mut out);
     hamt::kernels(&mut out);
     consteval::kernels(&mut out);
+    fiber_ops::kernels(&mut out);
+    random::kernels(&mut out);
+    runtime_info::kernels(&mut out);
     out
 }
 
@@ -122,6 +163,9 @@ pub fn complete_modules() -> Vec<&'static str> {
         env::COMPLETE,
         hamt::COMPLETE,
         consteval::COMPLETE,
+        fiber_ops::COMPLETE,
+        random::COMPLETE,
+        runtime_info::COMPLETE,
     ]
     .concat()
 }
@@ -149,6 +193,21 @@ mod tests {
         let unique: BTreeSet<_> = names.iter().collect();
         assert_eq!(unique.len(), names.len(), "a symbol is registered twice");
         assert!(symbols().iter().all(|(_, address)| !address.is_null()));
+        // Intrinsics get compiler-generated bodies, never a runtime
+        // symbol (D-693).
+        for intrinsic in sym::INTRINSICS {
+            assert!(!names.contains(&intrinsic), "{intrinsic} is registered");
+        }
+    }
+
+    #[test]
+    fn the_static_err_nil_symbol_points_to_its_object() {
+        let table = symbols();
+        let address = table
+            .iter()
+            .find(|(name, _)| *name == sym::STATIC_ERR_NIL)
+            .map(|(_, address)| *address);
+        assert_eq!(address, Some(data(&cheby_rt_static_err_nil)));
     }
 
     #[test]
@@ -235,10 +294,12 @@ mod tests {
         let mut errors = Vec::new();
         let mut report = String::new();
         for (module, symbols) in &declared {
+            // Intrinsics get compiler-generated bodies and are never
+            // registered (D-693).
             let missing: Vec<&str> = symbols
                 .iter()
                 .map(String::as_str)
-                .filter(|symbol| !registered.contains(symbol))
+                .filter(|symbol| !registered.contains(symbol) && !sym::INTRINSICS.contains(symbol))
                 .collect();
             writeln!(
                 report,
@@ -318,12 +379,14 @@ mod tests {
             _ => None,
         })?;
         let (params, result) = rest.split_at(close);
+        // A local `fn` of a test block may leave its parameter types to
+        // inference: it declares no kernel.
         let params = params
             .split(',')
             .map(str::trim)
             .filter(|param| !param.is_empty())
-            .map(|param| c_type(param.split_once(':').unwrap().1.trim()))
-            .collect();
+            .map(|param| Some(c_type(param.split_once(':')?.1.trim())))
+            .collect::<Option<Vec<_>>>()?;
         let result = result
             .get(1..)?
             .trim()
@@ -336,27 +399,37 @@ mod tests {
 
     /// Every kernel of `std::string`, `std::bytes`, `std::io` and
     /// `std::env` has the C signature of its `@external` declaration in
-    /// `std/` (plan §6). The numeric modules check theirs in `num`'s tests.
+    /// `std/` (plan §6), after the context pointer for a `@std_context`
+    /// kernel, and carries `@std_context` exactly when its native function
+    /// takes that pointer (D-692): io's five suspending kernels, which run
+    /// on the blocking pool (D-683), and no other. The numeric modules
+    /// check theirs in `num`'s tests.
     #[test]
     fn text_bytes_io_and_env_kernels_match_their_declarations() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std");
         let mut declared = BTreeMap::new();
+        let mut declared_context = BTreeSet::new();
         for module in ["string", "bytes", "io", "env"] {
             let source = std::fs::read_to_string(root.join(format!("{module}.cheby"))).unwrap();
-            let mut pending: Option<String> = None;
-            for line in source.lines() {
-                if let Some(symbol) = native_symbols(line).pop() {
-                    pending = Some(symbol);
-                    continue;
+            for (symbol, context, signature) in kernel_declarations(&source) {
+                if context {
+                    declared_context.insert(symbol.clone());
                 }
-                if pending.is_some()
-                    && let Some(signature) = c_signature(line)
-                    && let Some(symbol) = pending.take()
-                {
-                    declared.insert(symbol, signature);
-                }
+                assert!(
+                    declared.insert(symbol.clone(), signature).is_none(),
+                    "{symbol} is declared twice"
+                );
             }
         }
+        let registered_context: BTreeSet<String> = io::CONTEXT_KERNELS
+            .iter()
+            .map(|&name| name.to_owned())
+            .collect();
+        assert_eq!(
+            registered_context, declared_context,
+            "the kernels that take the context pointer and the `@std_context` declarations differ"
+        );
+        assert_eq!(registered_context.len(), 5);
         let mut registered = BTreeMap::new();
         for (name, params, result) in [
             text::signatures(),
@@ -376,6 +449,133 @@ mod tests {
         }
         assert_eq!(registered, declared);
         assert_eq!(registered.len(), 27 + 36 + 11 + 3);
+    }
+
+    /// A kernel declaration: its native symbol, whether it is
+    /// `@std_context`, and its C signature.
+    type Declaration = (String, bool, (Vec<&'static str>, &'static str));
+
+    /// The kernel declarations of `source`: each `@external(native, …)`
+    /// symbol, whether `@std_context` came before it, and the C signature
+    /// of the `fn` that follows, whose header may span several lines
+    /// (`cheby fmt` puts each parameter of a long list on its own line). A
+    /// header ends where its parentheses balance.
+    fn kernel_declarations(source: &str) -> Vec<Declaration> {
+        let mut out = Vec::new();
+        let mut pending: Option<String> = None;
+        let mut context = false;
+        let mut header = String::new();
+        for line in source.lines() {
+            let trimmed = line.trim();
+            if header.is_empty() {
+                if trimmed.starts_with("@std_context") {
+                    context = true;
+                    continue;
+                }
+                if let Some(symbol) = native_symbols(line).pop() {
+                    pending = Some(symbol);
+                    continue;
+                }
+                if !trimmed.starts_with("fn ") && !trimmed.starts_with("pub fn ") {
+                    continue;
+                }
+            }
+            header.push_str(trimmed);
+            header.push(' ');
+            let opened = header.matches('(').count();
+            if opened == 0 || opened != header.matches(')').count() {
+                continue;
+            }
+            if let Some(signature) = c_signature(&header) {
+                if let Some(symbol) = pending.take() {
+                    out.push((symbol, context, signature));
+                }
+                context = false;
+            }
+            header.clear();
+        }
+        out
+    }
+
+    #[test]
+    fn kernel_declarations_span_lines() {
+        let source = "@std_context\n@external(native, \"cheby_a\")\n@external(js, \"./a.mjs\", \"a\")\n\
+                      fn a<T>(\n  x: Selector<T>,\n  seconds: Int,\n  apply: fn() -> T,\n) -> Selector<T>\n\n\
+                      @external(native, \"cheby_b\")\nfn b() -> U64\n";
+        assert_eq!(
+            kernel_declarations(source),
+            [
+                (
+                    "cheby_a".to_owned(),
+                    true,
+                    (vec!["Word", "i64", "Word"], "Word")
+                ),
+                ("cheby_b".to_owned(), false, (vec![], "u64")),
+            ]
+        );
+    }
+
+    /// Every kernel of the tier-2 modules `std::channel`, `std::fiber`,
+    /// `std::selector`, `std::random` and `std::runtime` has the C signature
+    /// of its `@external` declaration in `std/`, after the context pointer
+    /// for a `@std_context` kernel, and carries `@std_context` exactly when
+    /// its native function takes that pointer (plan §2.5 and checkpoint 3's
+    /// §2.1, D-692): every kernel of `fiber_ops` and `runtime`'s
+    /// `thread_count` and `set_thread_count` do; `random`'s `host_bits` and
+    /// `runtime`'s `cpu_count` do not. The intrinsic `scope_run` has no
+    /// kernel (D-693).
+    #[test]
+    fn tier2_kernels_match_their_declarations() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std");
+        let mut declared = BTreeMap::new();
+        let mut declared_context = BTreeSet::new();
+        for module in ["channel", "fiber", "selector", "random", "runtime"] {
+            let source = std::fs::read_to_string(root.join(format!("{module}.cheby"))).unwrap();
+            for (symbol, context, signature) in kernel_declarations(&source) {
+                if sym::INTRINSICS.contains(&symbol.as_str()) {
+                    continue;
+                }
+                if context {
+                    declared_context.insert(symbol.clone());
+                }
+                assert!(
+                    declared.insert(symbol.clone(), signature).is_none(),
+                    "{symbol} is declared twice"
+                );
+            }
+        }
+        let mut registered = BTreeMap::new();
+        let mut registered_context = BTreeSet::new();
+        let fiber_and_channel = fiber_ops::signatures();
+        registered_context.extend(fiber_and_channel.iter().map(|kernel| kernel.0.to_owned()));
+        registered_context.extend(
+            runtime_info::CONTEXT_KERNELS
+                .iter()
+                .map(|&name| name.to_owned()),
+        );
+        for (name, params, result) in [
+            fiber_and_channel,
+            random::signatures(),
+            runtime_info::signatures(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            assert!(
+                registered
+                    .insert(name.to_owned(), (params.to_vec(), result))
+                    .is_none(),
+                "{name} twice"
+            );
+        }
+        assert_eq!(registered, declared);
+        assert_eq!(
+            registered_context, declared_context,
+            "the kernels that take the context pointer and the `@std_context` declarations differ"
+        );
+        // channel and fiber 8, selector 5, random 1, runtime 3.
+        assert_eq!(registered.len(), 8 + 5 + 1 + 3);
+        assert_eq!(registered_context.len(), 8 + 5 + 2);
     }
 
     #[test]

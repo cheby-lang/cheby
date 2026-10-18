@@ -1,0 +1,2 @@
+fatal error: all fibers are blocked
+  blocked in channel::receive at tests/ui/10-concurrency/deadlock/stdout_is_flushed_before_the_report.cheby:15:22

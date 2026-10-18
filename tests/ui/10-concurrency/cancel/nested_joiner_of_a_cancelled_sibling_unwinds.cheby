@@ -1,0 +1,93 @@
+// @mode: run-pass
+// @decisions: D-667, D-668
+// @milestone: M2
+//! A fiber in a scope nested in a failing scope is being cancelled from the
+//! moment that scope fails, so when it joins a sibling of its scope's
+//! opener that the cancellation ended, it unwinds instead of panicking
+//! with `joined fiber failed` (§10.3, §10.7). Many parked members make the
+//! runtime's cancellation of the failing scope take long, so the joined
+//! fiber often ends before the cancellation has reached the nested scope.
+//! The output is the same at every thread count.
+
+import std::channel
+import std::fiber
+import std::io
+
+fn spin(k: Int) -> Int {
+  case {
+    k > 2000000000 => k
+    _ => spin(k + 1)
+  }
+}
+
+fn park_many(scope: fiber::Scope, rx: channel::Receiver<Int>, n: Int) -> Nil {
+  case n {
+    0 => Nil
+    _ => {
+      let _ = fiber::spawn(scope, fn() { channel::receive(rx) })
+      park_many(scope, rx, n - 1)
+    }
+  }
+}
+
+fn round(parked: Int) -> Int {
+  let (tx, rx) = channel::new::<Int>(0)
+  let (report_tx, report_rx) = channel::new::<String>(1000)
+  let (ready_tx, ready_rx) = channel::new::<Nil>(10)
+  let _ = {
+    use s <- fiber::scope()
+    park_many(s, rx, parked)
+    let spinner = fiber::spawn(s, fn() { spin(0) })
+    let _ = fiber::spawn(s, fn() {
+      let _ = {
+        use inner <- fiber::scope()
+        let _ = fiber::spawn(inner, fn() {
+          let joined = {
+            use _c <- fiber::scope()
+            let _ = channel::send(ready_tx, Nil)
+            fiber::join(spinner)
+          }
+          case joined {
+            Ok(_) => channel::send(report_tx, "joined a value")
+            Err(failure) => {
+              let message = fiber::message(failure)
+              channel::send(report_tx, message)
+            }
+          }
+        })
+        channel::receive(rx)
+      }
+      Nil
+    })
+    let _ = fiber::spawn(s, fn() {
+      let _ = channel::receive(ready_rx)
+      panic as "first"
+    })
+    channel::receive(rx)
+  }
+  let _ = channel::send(tx, 0)
+  let _ = channel::send(report_tx, "end")
+  fn count(found) {
+    case channel::receive(report_rx) {
+      Ok("end") => found
+      Ok(message) => {
+        io::println("the joiner returned: {message}")
+        count(found + 1)
+      }
+      Err(Nil) => found
+    }
+  }
+  count(0)
+}
+
+fn rounds(r: Int, total: Int, bad: Int) -> Int {
+  case {
+    r >= total => bad
+    _ => rounds(r + 1, total, bad + round(400))
+  }
+}
+
+fn main() {
+  let bad = rounds(0, 100, 0)
+  io::println("joiners that returned: {bad}")
+}

@@ -1,0 +1,11 @@
+// @mode: check-fail
+// @decisions: D-659, D-660, D-536
+// @milestone: M2
+//! A `[runtime]` stack below 1 MiB is E0036, and so is a stack of zero,
+//! which is a size like any other here, not "no limit" (§13.3).
+
+import std::io
+
+fn main() {
+  io::println("hello")
+}

@@ -1,0 +1,23 @@
+// @mode: run-fail
+// @exit: 103
+// @decisions: D-724, D-856, D-858
+// @milestone: M2
+//! `main` calls a helper in a `let`, so the helper's frame stays on the
+//! stack while its receive waits. The report names the receive's call in
+//! the helper: the innermost call outside `std` on the fiber's stack.
+
+import std::channel
+
+fn wait_for(rx: channel::Receiver<Int>) -> Int {
+  let got = channel::receive(rx)
+  case got {
+    Ok(n) => n
+    Err(_) => 0
+  }
+}
+
+fn main() {
+  let (tx, rx) = channel::new::<Int>(0)
+  let n = wait_for(rx)
+  let _ = channel::send(tx, n)
+}

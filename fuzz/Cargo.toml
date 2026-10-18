@@ -1,16 +1,25 @@
-# Fuzz targets for the syntax layer (docs/plan/testing.md §8, A2, A8) and
-# the type checker (§8: no panics on any parsed input).
+# Fuzz targets for the syntax layer (docs/plan/testing.md §8, A2, A8), the
+# type checker (§8: no panics on any parsed input) and naive reference
+# counting against Perceus (D-718, D-781).
 #
-# Excluded from the workspace, because cargo-fuzz needs a nightly toolchain:
+# Excluded from the workspace, because cargo-fuzz needs a nightly toolchain.
+# The scheduled workflow (.github/workflows/nightly.yml, D-781) pins the
+# dated nightly below; it must be at least 1.99-nightly, the workspace's
+# `rust-version`:
 #
-#   cargo +nightly fuzz run lex
-#   cargo +nightly fuzz run parse
-#   cargo +nightly fuzz run check
+#   cargo +nightly-2026-10-01 fuzz run lex
+#   cargo +nightly-2026-10-01 fuzz run parse
+#   cargo +nightly-2026-10-01 fuzz run check
+#   CHEBY_DIFF_BIN=<copy of a debug cheby> cargo +nightly-2026-10-01 fuzz run rc_differential
 #
 # `lex` and `parse` check that lexing and parsing never panic, terminate,
 # and keep every byte of the input (the tree prints back the input
 # exactly). `check` runs the whole front end on a one-module package and
 # fails on an internal compiler error, a panic or a stack overflow.
+# `rc_differential` generates a program from the input
+# (`cheby_test_support::progen`) and runs it under `CHEBY_RC=naive` and
+# under the default with the `cheby` that `CHEBY_DIFF_BIN` names; the two
+# runs must agree and end with 0, or 101 for a planted panic.
 
 [package]
 name = "cheby_fuzz"
@@ -26,6 +35,7 @@ cargo-fuzz = true
 cheby_diag = { path = "../crates/cheby_diag" }
 cheby_driver = { path = "../crates/cheby_driver" }
 cheby_syntax = { path = "../crates/cheby_syntax" }
+cheby_test_support = { path = "../tests/support" }
 libfuzzer-sys = "0.4"
 
 [[bin]]
@@ -45,6 +55,13 @@ bench = false
 [[bin]]
 name = "check"
 path = "fuzz_targets/check.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "rc_differential"
+path = "fuzz_targets/rc_differential.rs"
 test = false
 doc = false
 bench = false

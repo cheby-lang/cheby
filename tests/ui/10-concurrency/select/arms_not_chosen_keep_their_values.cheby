@@ -1,0 +1,55 @@
+// @mode: run-pass
+// @decisions: D-041, D-206, D-673
+// @milestone: M2
+//! A `select` over two capacity-0 channels, each with a sender, takes
+//! exactly one value from exactly one arm. Only the chosen arm's sender
+//! returns from `send`. The other value stays in its channel, and its
+//! sender keeps waiting until a `receive` takes it (§10.6). Which arm is
+//! chosen is random, so nothing printed names it.
+
+import std::channel
+import std::fiber
+import std::io
+import std::selector
+
+/// Sends `name` on `tx`, then reports it on `reports` once the send has
+/// returned.
+fn send_and_report(
+  tx: channel::Sender<String>,
+  name: String,
+  reports: channel::Sender<String>,
+) -> Result<Nil, String> {
+  let assert Ok(Nil) = channel::send(tx, name)
+  channel::send(reports, name)
+}
+
+fn main() {
+  let (left_tx, left_rx) = channel::new::<String>(0)
+  let (right_tx, right_rx) = channel::new::<String>(0)
+  let (reports_tx, reports_rx) = channel::new::<String>(2)
+  let outcome = {
+    use owner <- fiber::scope()
+    let _ = fiber::spawn(owner, fn() { send_and_report(left_tx, "left", reports_tx) })
+    let _ = fiber::spawn(owner, fn() { send_and_report(right_tx, "right", reports_tx) })
+    let both =
+      selector::new()
+      |> selector::receive(_, left_rx, fn(r) { r })
+      |> selector::receive(_, right_rx, fn(r) { r })
+    let assert Ok(chosen) = selector::select(both)
+    // The other sender is still blocked in `send`, so the only report
+    // that can come now is the chosen sender's.
+    let assert Ok(first) = channel::receive(reports_rx)
+    let first_is_chosen = first == chosen
+    io::println("the first report is from the chosen arm's sender: {first_is_chosen}")
+    let other = case chosen {
+      "left" => channel::receive(right_rx)
+      _ => channel::receive(left_rx)
+    }
+    let assert Ok(second) = channel::receive(reports_rx)
+    let kept = other == Ok(second)
+    io::println("the other arm's value was still in its channel: {kept}")
+    let different = chosen != second
+    io::println("the two values differ: {different}")
+  }
+  io::println("the scope returned {outcome:?}")
+}

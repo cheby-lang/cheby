@@ -1,0 +1,8 @@
+test ui_test "deadlocks in a helper" ... FAILED
+test ui_test "waits on a timer" ... ok
+
+---- ui_test "deadlocks in a helper" ----
+fatal error: all fibers are blocked
+  blocked in channel::receive at tests/ui/10-concurrency/deadlock/test_deadlocks_while_another_waits_on_a_timer.cheby:15:13
+
+test result: FAILED. 1 passed; 1 failed; 0 filtered out

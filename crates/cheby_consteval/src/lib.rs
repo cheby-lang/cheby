@@ -20,7 +20,15 @@
 //!    any other panic, with the panic's message and location in a note.
 //!    The constants that the failed one was computing for are not
 //!    reported again, and those that read a failed constant later stop
-//!    without a report of their own.
+//!    without a report of their own. A panicked evaluation unwinds by the
+//!    return flag through its thunk, a forced constant's included,
+//!    releasing what its frames hold, and its thread ends (D-713, D-733).
+//!    The table then holds the constants still in progress for
+//!    [`ConstTable::abandon`]. Every entry here carries whether the JIT's
+//!    code has unwind edges ([`Jit::unwind_edges`]): under
+//!    `CHEBY_UNWIND_EDGES=off` (D-742) a panicking constant ends the
+//!    process with its report instead of returning into code that tests
+//!    no flag (D-770).
 //!    A top-level evaluation that runs out of time or memory (D-536) is
 //!    E0076 at that constant: the host's watchdog interrupts it at its next
 //!    function entry or tail call once its deadline passes, and an
@@ -166,6 +174,12 @@ pub fn evaluate_with(
                 };
                 diagnostics.extend(diagnostic);
             }
+            EntryOutcome::Exited(status) => return Err(exited(jit, status)),
+            // A constant reaches no fiber operation (E0077), so its entry
+            // never parks and cannot deadlock (D-857).
+            EntryOutcome::Deadlocked(_) => {
+                return Err(Ice::new("a constant evaluation cannot deadlock (E0077)"));
+            }
         }
     }
     if diagnostics.is_empty()
@@ -215,9 +229,12 @@ pub fn debug_texts(jit: &Jit, defs: &[DefId]) -> Result<Vec<Option<String>>, Ice
         *out.lock().unwrap_or_else(PoisonError::into_inner) = printed;
         0
     };
+    // The task calls the JIT's trampolines, so the entry carries whether
+    // the JIT's code has unwind edges (D-742, D-770).
     let config = EntryConfig {
         callbacks: jit.callbacks(),
         domain: jit.domain(),
+        unwind_edges: jit.unwind_edges(),
         ..EntryConfig::new(EntryMode::Test)
     };
     // SAFETY: the trampolines are `jit`'s, and the words its frozen
@@ -230,6 +247,10 @@ pub fn debug_texts(jit: &Jit, defs: &[DefId]) -> Result<Vec<Option<String>>, Ice
             "printing a constant panicked: {}",
             report.message
         ))),
+        Ok(EntryOutcome::Exited(status)) => Err(exited(jit, status)),
+        Ok(EntryOutcome::Deadlocked(_)) => {
+            Err(Ice::new("a constant evaluation cannot deadlock (E0077)"))
+        }
         Err(e) => Err(Ice::new(format!("printing constants: {e}"))),
     }
 }
@@ -289,6 +310,7 @@ fn rebuild(jit: &Jit, slots: &[*mut u64]) -> Result<(), Ice> {
     let config = EntryConfig {
         callbacks: jit.callbacks(),
         domain: jit.domain(),
+        unwind_edges: jit.unwind_edges(),
         ..EntryConfig::new(EntryMode::ConstEval(ConstEvalLimits {
             seed,
             ..ConstEvalLimits::default()
@@ -310,8 +332,24 @@ fn rebuild(jit: &Jit, slots: &[*mut u64]) -> Result<(), Ice> {
             "rebuilding the maps and sets of constants panicked: {}",
             report.message
         ))),
+        Ok(EntryOutcome::Exited(status)) => Err(exited(jit, status)),
+        Ok(EntryOutcome::Deadlocked(_)) => {
+            Err(Ice::new("a constant evaluation cannot deadlock (E0077)"))
+        }
         Err(e) => Err(Ice::new(format!("rebuilding constants: {e}"))),
     }
+}
+
+/// An isolated entry of constant evaluation ended the program with
+/// `status` (D-709): its thread is parked for good, so the JIT's code it
+/// runs and every value it may reach are kept (leaked) for the rest of the
+/// process. A constant cannot reach a write to standard output (E0077), so
+/// a termination here is a bug: an internal error.
+fn exited(jit: &Jit, status: i32) -> Ice {
+    std::mem::forget(jit.code_token());
+    Ice::new(format!(
+        "a constant's evaluation ended the program with status {status}"
+    ))
 }
 
 /// E0076 for a top-level evaluation of `top` that ran out of time or

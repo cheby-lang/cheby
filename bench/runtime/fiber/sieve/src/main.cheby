@@ -1,0 +1,90 @@
+//! Runtime benchmark of the fiber group: the concurrent prime sieve of
+//! the example `005_prime_sieve`, run much further.
+//!
+//! One fiber generates the numbers 2, 3, 4 and so on, and each prime
+//! found adds a filter fiber to a pipeline of channels of capacity 0. The
+//! pipeline grows to one fiber per prime, and most numbers pass through
+//! many filters. The number of primes is the first program argument, and
+//! `main` prints a checksum of the primes in order.
+
+import std::channel
+import std::env
+import std::fiber
+import std::int
+import std::io
+import std::list
+
+/// The number of primes when no argument is given.
+const default_size: Int = 2_000
+
+/// Keeps the checksum small.
+const modulus: Int = 1_000_000_007
+
+fn main() {
+  let n = size(env::args())
+  let assert Ok(found) = primes(n)
+  let checksum = list::fold(found, 0, fn(acc, prime) { (acc * 31 + prime) % modulus })
+  io::println("size: {n}")
+  io::println("checksum: {checksum}")
+}
+
+/// The size from the first program argument, or `default_size`.
+fn size(args: List<String>) -> Int {
+  case args {
+    [] => default_size
+    [first, ..] => {
+      let assert Ok(n) = int::parse(first)
+      n
+    }
+  }
+}
+
+/// Returns the first `count` primes, in increasing order. The result is
+/// an `Err` only if a fiber in the pipeline panics.
+fn primes(count: Int) -> Result<List<Int>, fiber::Panic> {
+  use scope <- fiber::scope()
+
+  // Takes the next `remaining` primes from `numbers` and adds them to
+  // `found`.
+  fn sieve(numbers, remaining, found) {
+    case remaining {
+      // `numbers` is dropped here, which shuts the pipeline down.
+      0 => found
+      _ => {
+        let assert Ok(prime) = channel::receive(numbers)
+        let (tx, rx) = channel::new::<Int>(0)
+        fiber::spawn(scope, fn() { filter(numbers, tx, prime) })
+        sieve(rx, remaining - 1, [..found, prime])
+      }
+    }
+  }
+
+  let (naturals_tx, naturals_rx) = channel::new::<Int>(0)
+  fiber::spawn(scope, fn() { generate(naturals_tx, 2) })
+  sieve(naturals_rx, count, [])
+}
+
+/// Sends `n`, `n + 1`, `n + 2` and so on, until nobody receives them.
+fn generate(output: channel::Sender<Int>, n: Int) {
+  case channel::send(output, n) {
+    Ok(_) => generate(output, n + 1)
+    Err(_) => Nil
+  }
+}
+
+/// Passes on the numbers from `input` that `prime` does not divide, until
+/// either end of the pipeline goes away.
+fn filter(input: channel::Receiver<Int>, output: channel::Sender<Int>, prime: Int) {
+  case channel::receive(input) {
+    Ok(n) when n % prime == 0 => filter(input, output, prime)
+    Ok(n) => case channel::send(output, n) {
+      Ok(_) => filter(input, output, prime)
+      Err(_) => Nil
+    }
+    Err(_) => Nil
+  }
+}
+
+test "the first ten primes" {
+  assert primes(10) == Ok([2, 3, 5, 7, 11, 13, 17, 19, 23, 29])
+}

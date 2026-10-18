@@ -4,24 +4,35 @@
 //! as `map::upsert` or a caller of `@std_hooks` (D-484), calls [`call`],
 //! which reaches the closure through the running entry's trampoline of the
 //! right arity (`cb$tramp$<n>`, C ABI: `u64 (ctx*, u64 closure, u64 a0,
-//! …)`) with the entry's context. A panic inside the closure parks the
-//! entry's thread like any other panic (D-457): no Rust frame of the kernel
-//! ever runs again, so a kernel must not hold anything that needs dropping
-//! for correctness across the call, except memory that the abandoned entry
-//! leaks anyway.
+//! …)`) with the entry's context.
+//!
+//! A panic inside the closure: the trampoline is a catch point (D-699)
+//! that returns while the fiber unwinds; [`call`] then rethrows the
+//! `ChebyUnwind` marker, so the kernel's own frames unwind with their
+//! `Drop`s to the kernel's guard, which hands the unwinding back to
+//! generated code by the return flag (D-697, D-733). A kernel must not
+//! hold an owned word across the call without a drop guard (`map::upsert`
+//! has one).
+//!
+//! While the closure runs, the fiber is pinned to its worker (D-687): the
+//! kernel's frames below it are tier-1 code written for one thread, so if
+//! the closure suspends, the fiber resumes on the same thread.
 
 use crate::abi::Word;
 use crate::entry;
 use crate::panic::fatal;
+use crate::unwind::raise::rethrow_if_unwinding;
 
 /// The most arguments a closure called from a kernel may take (D-526).
 pub const MAX_ARITY: usize = 4;
 
 /// Calls `closure` with `args` and returns its result: the closure is
-/// borrowed, the arguments are owned (given to the closure), the result is
-/// owned. Ends the process if no entry runs on this thread, if the entry
-/// has no trampoline of this arity, or if there are more than four
-/// arguments.
+/// borrowed, the arguments are owned (given to the closure, also when it
+/// panics), the result is owned. Ends the process if no entry runs on this
+/// thread, if the entry has no trampoline of this arity, or if there are
+/// more than four arguments. When the closure panics, it does not return:
+/// it rethrows the unwinding through the caller's Rust frames to the
+/// kernel's guard (module documentation).
 ///
 /// # Safety
 ///
@@ -30,7 +41,9 @@ pub const MAX_ARITY: usize = 4;
 /// uniform word of its parameter's type.
 #[must_use]
 pub unsafe fn call(closure: Word, args: &[Word]) -> Word {
-    let (Some(ctx), Some(callbacks)) = (entry::current_ctx(), entry::callbacks()) else {
+    // One current-fiber lookup: the trampolines come from its control
+    // block (D-686, GATE1-1).
+    let Some(ctx) = entry::current_ctx() else {
         fatal(format_args!(
             "a kernel called a closure outside of any entry"
         ));
@@ -41,10 +54,17 @@ pub unsafe fn call(closure: Word, args: &[Word]) -> Word {
             args.len()
         ))
     };
+    // D-687: the fiber is pinned to its worker while the kernel's frames
+    // are on its stack, so they resume on the thread they started on.
+    // SAFETY: `ctx` is the running fiber's control block, live while it
+    // runs; the reference ends with this call.
+    let fiber = unsafe { &*ctx };
+    let callbacks = fiber.callbacks();
+    fiber.sched.enter_callback();
     // SAFETY: the trampolines come from the entry's configuration, whose
     // ABI the host guarantees (`run_entry`'s contract); `ctx` is the running
     // entry's; the closure and arguments are as the caller guarantees.
-    unsafe {
+    let result = unsafe {
         match *args {
             [] => callbacks.t0.unwrap_or_else(|| missing())(ctx, closure),
             [a0] => callbacks.t1.unwrap_or_else(|| missing())(ctx, closure, a0),
@@ -58,7 +78,12 @@ pub unsafe fn call(closure: Word, args: &[Word]) -> Word {
                 args.len()
             )),
         }
-    }
+    };
+    crate::sched::leave_callback(fiber);
+    // The trampoline caught an unwinding (D-699) and returned 0: the
+    // kernel's frames unwind to its guard (D-697).
+    rethrow_if_unwinding(fiber);
+    result
 }
 
 #[cfg(test)]

@@ -1,0 +1,39 @@
+// @mode: run-fail
+// @decisions: D-073, D-708, D-710
+// @milestone: M2
+//! `main` panics while one detached fiber waits in `channel::receive` and
+//! another spins. The program prints `main`'s panic report and nothing
+//! else, and exits with status 101: the detached fibers end with the
+//! program without a report of their own, and leave nothing behind
+//! (§10.10, §11.6).
+
+import std::channel
+import std::fiber
+import std::io
+
+fn wait_forever(ready: channel::Sender<Nil>) -> Result<Int, Nil> {
+  let (keep, never) = channel::new::<Int>(1)
+  let assert Ok(Nil) = channel::send(ready, Nil)
+  let got = channel::receive(never)
+  let _ = channel::send(keep, 0)
+  got
+}
+
+fn count(n: Int) -> Int {
+  count((n + 1) % 1000)
+}
+
+fn spin(ready: channel::Sender<Nil>) -> Int {
+  let assert Ok(Nil) = channel::send(ready, Nil)
+  count(0)
+}
+
+fn main() {
+  let (ready_tx, ready_rx) = channel::new::<Nil>(2)
+  fiber::spawn_detached(fn() { wait_forever(ready_tx) })
+  fiber::spawn_detached(fn() { spin(ready_tx) })
+  let assert Ok(Nil) = channel::receive(ready_rx)
+  let assert Ok(Nil) = channel::receive(ready_rx)
+  io::println("both detached fibers run")
+  panic as "main fails"
+}

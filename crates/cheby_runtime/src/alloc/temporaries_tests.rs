@@ -12,7 +12,7 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use super::{Domain, current_live_bytes, scratch};
+use super::{Domain, scratch};
 use crate::abi::Word;
 use crate::entry::{self, EntryConfig, EntryMode, EntryOutcome};
 use crate::{generic, rc, values};
@@ -24,11 +24,17 @@ thread_local! {
     /// Whether freed blocks may be kept in the quarantine or the block
     /// cache ([`super::keeps_freed_blocks`]). A measuring thread turns it
     /// off, so the memory it holds is the memory that is live.
-    pub(super) static KEEP_FREED: Cell<bool> = const { Cell::new(true) };
+    static KEEP_FREED: Cell<bool> = const { Cell::new(true) };
     /// The bytes this thread holds: allocated here, less those freed here.
     static HELD: Cell<i64> = const { Cell::new(0) };
     /// The most bytes this thread held since [`reset_peak`].
     static PEAK: Cell<i64> = const { Cell::new(0) };
+}
+
+/// Whether freed blocks may be kept on this thread
+/// ([`super::keeps_freed_blocks`]).
+pub(super) fn keeps_freed() -> bool {
+    KEEP_FREED.try_with(Cell::get).unwrap_or(true)
 }
 
 fn count(bytes: usize, grows: bool) {
@@ -115,7 +121,7 @@ fn unaccounted(input: fn() -> Word, kernel: fn(Word) -> Word) -> i64 {
         domain.reset_peak();
         scratch::reset_peak();
         reset_peak();
-        let (start, live) = (held(), current_live_bytes());
+        let (start, live) = (held(), super::current_domain().live_bytes());
         let output = kernel(input);
         let system = PEAK.try_with(Cell::get).unwrap_or(0).saturating_sub(start);
         let counted = domain.peak_bytes().saturating_sub(live);

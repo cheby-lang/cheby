@@ -1,0 +1,22 @@
+// @mode: run-pass
+// @decisions: D-177, D-670, D-674
+// @milestone: M2
+//! `join` waits for a fiber and returns its value directly. Any fiber may
+//! join, any number of times, and each call returns the same value
+//! (§10.3).
+
+import std::fiber
+import std::io
+import std::list
+
+fn main() {
+  let outcome = {
+    use owner <- fiber::scope()
+    let squares = list::map([1, 2, 3, 4], fn(n) { fiber::spawn(owner, fn() { n * n }) })
+    let words = fiber::spawn(owner, fn() { ["fibers", "share", "results"] })
+    let watcher = fiber::spawn(owner, fn() { list::length(fiber::join(words)) })
+    let total = list::fold(squares, 0, fn(sum, square) { sum + fiber::join(square) })
+    (total, fiber::join(words), fiber::join(words), fiber::join(watcher))
+  }
+  io::println("{outcome:?}")
+}

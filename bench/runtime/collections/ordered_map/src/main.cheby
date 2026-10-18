@@ -1,0 +1,123 @@
+//! Runtime benchmark of the collections group: `std::ordered_map`
+//! (D-664).
+//!
+//! Pseudo-random keys go into an ordered map, each with its step number
+//! as the value. A quarter of them are inserted again, which keeps their
+//! places, and another quarter are removed and inserted again, which
+//! moves them to the end (D-340). Then keys are looked up, and the first
+//! entry, the last entry and every entry in insertion order are folded.
+//! Only the loop holds the map while it changes, so each update can
+//! rebuild its paths in place. The number of keys is the first program
+//! argument, and `main` prints a checksum that `bench/baselines` computes
+//! too.
+
+import std::env
+import std::int
+import std::io
+import std::ordered_map
+import std::ordered_map::{OrderedMap}
+
+/// The number of keys when no argument is given.
+const default_size: Int = 450_000
+
+/// Keys are drawn below this bound.
+const key_space: Int = 1_000_000
+
+/// Keeps the checksum small.
+const modulus: Int = 1_000_000_007
+
+fn main() {
+  let n = size(env::args())
+  let built = build(ordered_map::new(), 0, n, 42)
+  let refreshed = refresh(built, n / 4, n, 42)
+  let moved = shuffle(refreshed, n / 4, 42)
+  let looked = look(moved, n, 7, 0)
+  let folded = ordered_map::fold(moved, 0, fn(total, key, value) {
+    (total * 31 + key * 7 + value) % modulus
+  })
+  let ends = mix(entry(ordered_map::first(moved)), entry(ordered_map::last(moved)))
+  let checksum = mix(mix(mix(looked, ordered_map::size(moved)), ends), folded)
+  io::println("size: {n}")
+  io::println("checksum: {checksum}")
+}
+
+/// The size from the first program argument, or `default_size`.
+fn size(args: List<String>) -> Int {
+  case args {
+    [] => default_size
+    [first, ..] => {
+      let assert Ok(n) = int::parse(first)
+      n
+    }
+  }
+}
+
+/// The pseudo-random number after `seed`, from a linear congruential
+/// generator.
+fn next(seed: Int) -> Int {
+  (seed * 1_103_515_245 + 12_345) % 2_147_483_648
+}
+
+/// Adds `n` to the checksum `total`.
+fn mix(total: Int, n: Int) -> Int {
+  (total * 31 + n) % modulus
+}
+
+/// An entry's key and value as one number, or 0 for none.
+fn entry(found: Option<(Int, Int)>) -> Int {
+  case found {
+    Some((key, value)) => (key * 7 + value) % modulus
+    None => 0
+  }
+}
+
+/// `m` with the keys of steps `i` to `n` of the sequence from `seed`, each
+/// stored with its step.
+fn build(m: OrderedMap<Int, Int>, i: Int, n: Int, seed: Int) -> OrderedMap<Int, Int> {
+  case i == n {
+    True => m
+    False => build(ordered_map::insert(m, seed % key_space, i), i + 1, n, next(seed))
+  }
+}
+
+/// `m` with `count` keys of the sequence from `seed` stored again, with
+/// `base` plus the count left as the value. Keys present keep their
+/// places.
+fn refresh(m: OrderedMap<Int, Int>, count: Int, base: Int, seed: Int) -> OrderedMap<Int, Int> {
+  case count {
+    0 => m
+    _ => {
+      let stored = ordered_map::insert(m, seed % key_space, base + count)
+      refresh(stored, count - 1, base, next(seed))
+    }
+  }
+}
+
+/// `m` with `count` keys, every other key of the sequence from `seed`,
+/// removed and inserted again with the count left as the value, which
+/// moves them to the end.
+fn shuffle(m: OrderedMap<Int, Int>, count: Int, seed: Int) -> OrderedMap<Int, Int> {
+  case count {
+    0 => m
+    _ => {
+      let key = seed % key_space
+      let moved = ordered_map::insert(ordered_map::remove(m, key), key, count)
+      shuffle(moved, count - 1, next(next(seed)))
+    }
+  }
+}
+
+/// Adds to `total` the value of each of `count` keys of the sequence from
+/// `seed`, or 1 for a key that is missing.
+fn look(m: OrderedMap<Int, Int>, count: Int, seed: Int, total: Int) -> Int {
+  case count {
+    0 => total
+    _ => {
+      let found = case ordered_map::get(m, seed % key_space) {
+        Some(value) => value
+        None => 1
+      }
+      look(m, count - 1, next(seed), (total + found) % modulus)
+    }
+  }
+}

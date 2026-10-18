@@ -1,0 +1,33 @@
+// @mode: run-pass
+// @decisions: D-671, D-667
+// @milestone: M2
+//! A fiber that `f` spawns into a scope opened outside `f`, whose `Scope`
+//! it captured, is not inside the timeout, so it keeps running after the
+//! timeout has cancelled `f` (§10.8).
+
+import std::channel
+import std::duration
+import std::fiber
+import std::io
+
+fn main() {
+  let (keep, never) = channel::new::<Int>(1)
+  let (tx, rx) = channel::new::<Int>(1)
+  let (back_tx, back_rx) = channel::new::<Result<Int, Nil>>(1)
+  let outcome = {
+    use owner <- fiber::scope()
+    let timed = fiber::timeout(duration::milliseconds(10), fn() {
+      let _ = fiber::spawn(owner, fn() { channel::send(back_tx, channel::receive(rx)) })
+      channel::receive(never)
+    })
+    let timed_out = timed == Err(fiber::TimedOut)
+    io::println("the timeout returned Err(TimedOut): {timed_out}")
+    // The fiber is still waiting for this value.
+    let assert Ok(Nil) = channel::send(tx, 7)
+    let back = channel::receive(back_rx)
+    io::println("the fiber spawned into the outer scope received: {back:?}")
+  }
+  io::println("the outer scope returned {outcome:?}")
+  let sent = channel::send(keep, 1)
+  io::println("a send after the timeout: {sent:?}")
+}

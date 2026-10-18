@@ -45,7 +45,8 @@ use cheby_iface::{
     DepView, Globals, Ice, InterfaceSet, ItemSig, ModuleId, ModuleInfo, ModuleInterface,
     ModuleTable, PackageId, builtin, encode,
 };
-use cheby_mir::{ForeignSig, foreign_sig};
+use cheby_mir::ForeignSig;
+use cheby_mir::repr::foreign_sig_with_context;
 use cheby_package::graph::{Graph, reachable, topological_order};
 use cheby_package::{ModulePath, Targets};
 use cheby_resolve::ResolvedModule;
@@ -80,6 +81,12 @@ pub(crate) struct Frontend {
     pub const_eval_time_limit: std::time::Duration,
     /// The local package's `[const-eval] memory-limit` in bytes (D-536).
     pub const_eval_memory_limit: u64,
+    /// The local package's `[runtime] fiber-stack` in bytes (D-660): the
+    /// default stack of the fibers its runs and tests spawn.
+    pub fiber_stack: u64,
+    /// The local package's `[runtime] main-stack` in bytes (D-660): the
+    /// stack of `main`'s root fiber and of each test.
+    pub main_stack: u64,
     /// Per module id: its imports, as written. For the REPL's `:module`,
     /// which puts a module's imports in scope (§13.5.3).
     pub imports: Vec<Vec<ImportRequest>>,
@@ -112,7 +119,7 @@ pub(crate) fn native_bindings(
         let Some(ItemSig::Fn(sig)) = iface.item(index).map(|i| &i.sig) else {
             continue;
         };
-        let sig = foreign_sig(sig, globals);
+        let sig = foreign_sig_with_context(sig, globals, item.attrs.std_context);
         out.push((symbol.into(), NativeBinding { sig, span }));
     }
     out
@@ -1074,6 +1081,8 @@ fn run_inner(
     let local_targets = package.manifest.targets;
     let const_eval_time_limit = package.manifest.const_eval_time_limit;
     let const_eval_memory_limit = package.manifest.const_eval_memory_limit;
+    let fiber_stack = package.manifest.fiber_stack;
+    let main_stack = package.manifest.main_stack;
     for module in package.modules {
         modules.add(ModuleInfo {
             path: module.path,
@@ -1310,6 +1319,8 @@ fn run_inner(
         package_name,
         const_eval_time_limit,
         const_eval_memory_limit,
+        fiber_stack,
+        main_stack,
         imports,
         import_targets: targets,
         module_natives,

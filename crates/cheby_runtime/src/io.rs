@@ -4,8 +4,30 @@
 //! Standard output goes through Rust's `stdout()`, which is line-buffered;
 //! standard error through `stderr()`, which is not buffered. When a write
 //! or a flush fails, the program ends at once with status 1 and prints
-//! nothing (D-306). Rust ignores `SIGPIPE`, so a closed pipe arrives here
-//! as an `EPIPE` error.
+//! nothing (D-306): a termination (D-709, `sched::terminate`), which the
+//! running entry's host receives as `EntryOutcome::Exited(1)` while the
+//! runtime halts; the runtime never ends the process itself. Rust ignores
+//! `SIGPIPE`, so a closed pipe arrives here as an `EPIPE` error.
+//!
+//! Standard input and file IO run on the blocking pool (D-683): the five
+//! suspending kernels (`sys_read_line`, `sys_read_file`,
+//! `sys_read_file_bytes`, `sys_write_file`, `sys_write_file_bytes`) are
+//! `@std_context` kernels (D-692) that copy their arguments to Rust data,
+//! park their fiber while a pool thread makes the system call
+//! (`sched::blocking::run_blocking`), and build the Cheby result on the
+//! fiber once it runs again, charged to its domain. The fiber stays marked
+//! as blocked while it waits, so a teardown and a halt skip it and count
+//! it (D-786, D-814). Without a runtime the call runs
+//! inline, marked (D-692). The flush before a read stays on the fiber, and
+//! a pool thread never flushes, terminates or makes a Cheby value.
+//!
+//! Every write to a standard stream goes through one funnel,
+//! `write_stream`, which offers it to the running fiber's capture first
+//! (`capture::route`, D-723) and otherwise writes the whole text under the
+//! stream's lock (D-684), which is never held across a switch; D-574's
+//! state changes only under the stdout lock, and only for text that
+//! reached the real stream. A stalled stdout pipe still stalls the fibers
+//! that print (D-684).
 //!
 //! A standard stream that was closed when the program started behaves as a
 //! null device: writes succeed and are discarded, and reads see end of
@@ -25,11 +47,15 @@
 //! program opens could take descriptor 1. Stdin kernels must read through
 //! `std::io::stdin()` to keep both layers.
 //!
-//! Standard input has one process-wide buffered reader, Rust's `Stdin`
-//! (D-474). `io::read_line` (`cheby_io_sys_read_line`) and the REPL
+//! Standard input has one process-wide buffered reader (D-474), this
+//! module's `STDIN`, which reads through Rust's `Stdin`.
+//! `io::read_line` (`cheby_io_sys_read_line`) and the REPL
 //! ([`read_input_line`], D-548) both read through it, so neither takes
-//! lines meant for the other. Each read flushes standard output first
-//! (D-346).
+//! lines meant for the other, and they take lines in the order they ask
+//! for them. Each read flushes standard output first (D-346). A line the
+//! reader already holds is served to a fiber at once, without the
+//! blocking pool (D-823); only a read that must wait for
+//! input goes to the pool.
 //!
 //! The `Result` kernels of `std::io` (`sys_*`) never end the program on an
 //! IO failure: they return `Err((kind, message))` (D-484), with kind 1 not
@@ -39,12 +65,20 @@
 //! platform, although Windows refuses to open one with "access denied"
 //! (`docs/stdlib/io.md`).
 
-use std::io::{self, BufRead, Write};
+use std::io::{self, Read, Write};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+use parking_lot::Mutex;
 
 use crate::abi::{self, Word, sym};
+use crate::capture::{self, Stream};
+use crate::ctx::ExecCtx;
+use crate::fiber_ops::cancel::{self, Cancelled};
 use crate::panic::fatal;
+use crate::sched::blocking::run_blocking;
+use crate::unwind::guard::guarded;
+use crate::unwind::raise::raise_cancel;
 use crate::{string, values};
 
 /// Appends the `std::io` kernels this module implements, with their
@@ -162,25 +196,75 @@ fn io_err(error: &io::Error) -> Word {
     err_pair(kind_code(error), &os_message(error))
 }
 
-/// The `Err` pair of a failed operation on the file at `path`. Windows
-/// refuses to open a directory as a file with "access denied", but naming
-/// a directory is another failure, not `io::is_permission_denied`, on
-/// every platform (`docs/stdlib/io.md`).
-fn file_err(path: &str, error: &io::Error) -> Word {
-    let kind = match kind_code(error) {
-        KIND_PERMISSION_DENIED if Path::new(path).is_dir() => KIND_OTHER,
-        kind => kind,
-    };
-    err_pair(kind, &os_message(error))
+/// A failed IO operation as Rust data: its kind code (D-484) and the
+/// operating system's message (D-573). A blocking-pool job makes it, so
+/// that the job returns Rust data only; the fiber turns it into the `Err`
+/// pair ([`Failure::word`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Failure {
+    kind: i64,
+    message: String,
 }
 
-/// `Ok(value)` for a successful operation on the file at `path`, the
-/// `Err` pair otherwise.
-fn lift_file(path: &str, outcome: io::Result<Word>) -> Word {
-    match outcome {
-        Ok(value) => values::ok(value),
-        Err(error) => file_err(path, &error),
+impl Failure {
+    /// The failure of an IO error.
+    fn of(error: &io::Error) -> Self {
+        Self {
+            kind: kind_code(error),
+            message: os_message(error),
+        }
     }
+
+    /// The failure of an operation on the file at `path`. Windows refuses
+    /// to open a directory as a file with "access denied", but naming a
+    /// directory is another failure, not `io::is_permission_denied`, on
+    /// every platform (`docs/stdlib/io.md`). The directory test is a
+    /// system call, so it runs in the job, with the operation.
+    fn of_file(path: &str, error: &io::Error) -> Self {
+        let kind = match kind_code(error) {
+            KIND_PERMISSION_DENIED if Path::new(path).is_dir() => KIND_OTHER,
+            kind => kind,
+        };
+        Self {
+            kind,
+            message: os_message(error),
+        }
+    }
+
+    /// The `Err` pair, made on the fiber.
+    fn word(&self) -> Word {
+        err_pair(self.kind, &self.message)
+    }
+}
+
+/// Runs `job`, a blocking system call over Rust data, through the blocking
+/// pool while the fiber of `ctx` is parked (D-683), or inline when `ctx`
+/// is null (a Rust caller with no fiber, as the unit tests of this file
+/// are). A cancellation pending before the job, or delivered during it,
+/// raises once the job has returned, and its result is released first
+/// (D-670): nothing of it reaches the program.
+///
+/// # Safety
+///
+/// `ctx` is null or the running fiber's context.
+unsafe fn blocking_call<R: Send + 'static>(
+    ctx: *mut ExecCtx,
+    job: impl FnOnce() -> R + Send + 'static,
+) -> R {
+    // SAFETY: forwarded from the caller.
+    let Some(me) = (unsafe { ctx.as_ref() }) else {
+        return job();
+    };
+    match run_blocking(me, job) {
+        Ok(result) => result,
+        Err(Cancelled) => raise_cancel(Some(ctx)),
+    }
+}
+
+/// The context a guard of a suspending kernel gets: `None` for a null
+/// `ctx`, when the current fiber is used.
+fn guard_ctx(ctx: *mut ExecCtx) -> Option<*mut ExecCtx> {
+    (!ctx.is_null()).then_some(ctx)
 }
 
 /// `Ok(value)` for a successful operation, the `Err` pair otherwise.
@@ -219,21 +303,16 @@ unsafe fn str_arg<'a>(text: Word) -> &'a str {
 /// `text` is a live `String`, borrowed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_io_sys_write_stdout(text: Word) -> Word {
-    // SAFETY: forwarded from the caller.
-    let bytes = unsafe { str_arg(text) }.as_bytes();
-    let mut out = io::stdout().lock();
-    match out.write_all(bytes).and_then(|()| out.flush()) {
-        Ok(()) => {
-            // Everything buffered so far is written: no reported text is
-            // left over.
-            STDOUT_FAILURE_REPORTED.store(false, Ordering::Relaxed);
-            values::ok_nil()
+    guarded(None, || {
+        // SAFETY: forwarded from the caller.
+        let bytes = unsafe { str_arg(text) }.as_bytes();
+        // D-574's state is stored under the stdout lock (D-684), which is
+        // released before the result is allocated.
+        match write_routed(Stream::Stdout, &[bytes], true) {
+            Ok(()) => values::ok_nil(),
+            Err(error) => io_err(&error),
         }
-        Err(error) => {
-            STDOUT_FAILURE_REPORTED.store(true, Ordering::Relaxed);
-            io_err(&error)
-        }
-    }
+    })
 }
 
 /// `io::write_stderr`'s kernel: writes `text` to standard error, which is
@@ -244,78 +323,167 @@ pub unsafe extern "C" fn cheby_io_sys_write_stdout(text: Word) -> Word {
 /// `text` is a live `String`, borrowed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_io_sys_write_stderr(text: Word) -> Word {
-    // SAFETY: forwarded from the caller.
-    let bytes = unsafe { str_arg(text) }.as_bytes();
-    lift(io::stderr().lock().write_all(bytes).map(|()| values::nil()))
+    guarded(None, || {
+        // SAFETY: forwarded from the caller.
+        let bytes = unsafe { str_arg(text) }.as_bytes();
+        let written = write_stream(Stream::Stderr, &[bytes]);
+        lift(written.map(|()| values::nil()))
+    })
 }
 
 /// `io::read_line`'s kernel: flushes standard output, then reads one line
 /// through the process-wide reader (D-346, D-474): `Ok(Some(line))`
 /// without its ending (D-305), `Ok(None)` at the end of input, the
 /// invalid-data pair for a line that is not UTF-8, which is consumed
-/// (D-311), and the error pair when standard input cannot be read.
+/// (D-311), and the error pair when standard input cannot be read. A line
+/// the reader already holds is taken on the fiber (D-823);
+/// otherwise the read runs on the blocking pool (D-683), and a
+/// cancellation that arrives meanwhile is delivered once the line has been
+/// read, and the line is released (§10.7).
+///
+/// # Safety
+///
+/// `ctx` is the running fiber's context, or null for a Rust caller with no
+/// fiber.
 #[unsafe(no_mangle)]
-pub extern "C" fn cheby_io_sys_read_line() -> Word {
-    match read_raw_line() {
-        Ok(Some(line)) => text_result(&line, values::some),
-        Ok(None) => values::ok(values::none()),
-        Err(error) => io_err(&error),
-    }
+pub unsafe extern "C" fn cheby_io_sys_read_line(ctx: *mut ExecCtx) -> Word {
+    guarded(guard_ctx(ctx), || {
+        flush_before_read();
+        // SAFETY: forwarded from the caller.
+        let buffered = unsafe { ctx.as_ref() }.and_then(buffered_line);
+        let line = buffered.map_or_else(
+            || {
+                // Counted from before the job is submitted, so that no
+                // fast path takes a line before this read (D-548).
+                let waiter = Waiter::new();
+                // SAFETY: forwarded from the caller.
+                unsafe {
+                    blocking_call(ctx, move || {
+                        read_line_waiting(waiter).map_err(|error| Failure::of(&error))
+                    })
+                }
+            },
+            |line| Ok(Some(line)),
+        );
+        match line {
+            Ok(Some(line)) => text_result(&line, values::some),
+            Ok(None) => values::ok(values::none()),
+            Err(failure) => failure.word(),
+        }
+    })
 }
 
 /// `io::read_file`'s kernel: the whole file as UTF-8 text, kept exactly,
-/// including a leading byte-order mark (D-311, D-366).
+/// including a leading byte-order mark (D-311, D-366). The read runs on
+/// the blocking pool (D-683).
 ///
 /// # Safety
 ///
-/// `path` is a live `String`, borrowed.
+/// `ctx` is the running fiber's context, or null for a Rust caller with no
+/// fiber; `path` is a live `String`, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_io_sys_read_file(path: Word) -> Word {
-    // SAFETY: forwarded from the caller.
-    let path = unsafe { str_arg(path) };
-    match std::fs::read(path) {
-        Ok(data) => text_result(&data, |text| text),
-        Err(error) => file_err(path, &error),
-    }
+pub unsafe extern "C" fn cheby_io_sys_read_file(ctx: *mut ExecCtx, path: Word) -> Word {
+    guarded(guard_ctx(ctx), || {
+        // SAFETY: forwarded from the caller.
+        let path = unsafe { str_arg(path) }.to_owned();
+        // SAFETY: forwarded from the caller.
+        match unsafe { blocking_call(ctx, move || read_file(&path)) } {
+            Ok(data) => text_result(&data, |text| text),
+            Err(failure) => failure.word(),
+        }
+    })
 }
 
-/// `io::read_file_bytes`'s kernel: the whole file as `Bytes` (D-311).
+/// `io::read_file_bytes`'s kernel: the whole file as `Bytes` (D-311). The
+/// read runs on the blocking pool (D-683).
 ///
 /// # Safety
 ///
-/// `path` is a live `String`, borrowed.
+/// `ctx` is the running fiber's context, or null for a Rust caller with no
+/// fiber; `path` is a live `String`, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_io_sys_read_file_bytes(path: Word) -> Word {
-    // SAFETY: forwarded from the caller.
-    let path = unsafe { str_arg(path) };
-    lift_file(path, std::fs::read(path).map(|data| values::bytes(&data)))
+pub unsafe extern "C" fn cheby_io_sys_read_file_bytes(ctx: *mut ExecCtx, path: Word) -> Word {
+    guarded(guard_ctx(ctx), || {
+        // SAFETY: forwarded from the caller.
+        let path = unsafe { str_arg(path) }.to_owned();
+        // SAFETY: forwarded from the caller.
+        match unsafe { blocking_call(ctx, move || read_file(&path)) } {
+            Ok(data) => values::ok(values::bytes(&data)),
+            Err(failure) => failure.word(),
+        }
+    })
 }
 
 /// `io::write_file`'s kernel: creates or replaces the file with `text`
-/// as UTF-8, with no byte-order mark (D-328).
+/// as UTF-8, with no byte-order mark (D-328). The write runs on the
+/// blocking pool (D-683).
 ///
 /// # Safety
 ///
-/// `path` and `text` are live `String`s, borrowed.
+/// `ctx` is the running fiber's context, or null for a Rust caller with no
+/// fiber; `path` and `text` are live `String`s, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_io_sys_write_file(path: Word, text: Word) -> Word {
-    // SAFETY: forwarded from the caller.
-    let (path, text) = unsafe { (str_arg(path), str_arg(text)) };
-    lift_file(path, std::fs::write(path, text).map(|()| values::nil()))
+pub unsafe extern "C" fn cheby_io_sys_write_file(
+    ctx: *mut ExecCtx,
+    path: Word,
+    text: Word,
+) -> Word {
+    guarded(guard_ctx(ctx), || {
+        // SAFETY: forwarded from the caller.
+        let (path, text) = unsafe { (str_arg(path).to_owned(), str_arg(text).to_owned()) };
+        // SAFETY: forwarded from the caller.
+        match unsafe { blocking_call(ctx, move || write_file(&path, text.as_bytes())) } {
+            Ok(()) => values::ok(values::nil()),
+            Err(failure) => failure.word(),
+        }
+    })
 }
 
 /// `io::write_file_bytes`'s kernel: creates or replaces the file with
-/// `data` (D-328).
+/// `data` (D-328). The write runs on the blocking pool (D-683).
 ///
 /// # Safety
 ///
-/// `path` is a live `String` and `data` a live `Bytes`, borrowed.
+/// `ctx` is the running fiber's context, or null for a Rust caller with no
+/// fiber; `path` is a live `String` and `data` a live `Bytes`, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_io_sys_write_file_bytes(path: Word, data: Word) -> Word {
-    // SAFETY: forwarded from the caller.
-    let (path, data) = unsafe { (str_arg(path), values::bytes_of(data)) };
-    lift_file(path, std::fs::write(path, data).map(|()| values::nil()))
+pub unsafe extern "C" fn cheby_io_sys_write_file_bytes(
+    ctx: *mut ExecCtx,
+    path: Word,
+    data: Word,
+) -> Word {
+    guarded(guard_ctx(ctx), || {
+        // SAFETY: forwarded from the caller.
+        let (path, data) = unsafe { (str_arg(path).to_owned(), values::bytes_of(data).to_vec()) };
+        // SAFETY: forwarded from the caller.
+        match unsafe { blocking_call(ctx, move || write_file(&path, &data)) } {
+            Ok(()) => values::ok(values::nil()),
+            Err(failure) => failure.word(),
+        }
+    })
 }
+
+/// A blocking-pool job: the whole file at `path`.
+fn read_file(path: &str) -> Result<Vec<u8>, Failure> {
+    std::fs::read(path).map_err(|error| Failure::of_file(path, &error))
+}
+
+/// A blocking-pool job: creates or replaces the file at `path` with
+/// `data`.
+fn write_file(path: &str, data: &[u8]) -> Result<(), Failure> {
+    std::fs::write(path, data).map_err(|error| Failure::of_file(path, &error))
+}
+
+/// The `std::io` kernels that take the running fiber's context
+/// (`@std_context`, D-692): those that run on the blocking pool.
+#[cfg(test)]
+pub(crate) const CONTEXT_KERNELS: [&str; 5] = [
+    "cheby_io_sys_read_line",
+    "cheby_io_sys_read_file",
+    "cheby_io_sys_read_file_bytes",
+    "cheby_io_sys_write_file",
+    "cheby_io_sys_write_file_bytes",
+];
 
 /// One kernel: symbol, address, C parameter types and C result type.
 type Entry = (
@@ -393,13 +561,8 @@ pub(crate) fn signatures() -> Vec<(&'static str, &'static [&'static str], &'stat
     out
 }
 
-#[derive(Debug, Clone, Copy)]
-enum Stream {
-    Stdout,
-    Stderr,
-}
-
-/// Writes a string object to a stream, ending the program on failure.
+/// Writes a string object to a stream, then `\n` if `newline` (on every
+/// platform), ending the program on failure. Never raises (D-767).
 ///
 /// # Safety
 ///
@@ -411,28 +574,72 @@ unsafe fn write_kernel(stream: Stream, text: Word, newline: bool) {
             "an output kernel received a value that is not a String: {text:#x}"
         ));
     };
-    let written = match stream {
-        Stream::Stdout => {
-            let mut out = io::stdout().lock();
-            // This text has no `Result`: if it is lost, a later failing
-            // flush ends the program again (D-306, D-346). The excuse of
-            // D-574 covers only text already reported.
-            STDOUT_FAILURE_REPORTED.store(false, Ordering::Relaxed);
-            write_text(&mut out, bytes, newline)
-        }
-        Stream::Stderr => write_text(&mut io::stderr().lock(), bytes, newline),
-    };
-    if written.is_err() {
-        exit_after_write_failure();
+    let parts: &[&[u8]] = if newline { &[bytes, b"\n"] } else { &[bytes] };
+    // The stream's lock is released when the funnel returns.
+    if write_stream(stream, parts).is_err() {
+        terminate(abi::status::ERR);
     }
 }
 
-/// Writes `bytes`, then `\n` if `newline`. The line ending is `\n` on
-/// every platform.
-fn write_text(out: &mut impl Write, bytes: &[u8], newline: bool) -> io::Result<()> {
-    out.write_all(bytes)?;
-    if newline {
-        out.write_all(b"\n")?;
+/// Every write to a standard stream that the runtime makes, offered to
+/// `capture::route` first: a write of a fiber whose group captures its
+/// output is taken there, never fails, and leaves D-574's state alone,
+/// since it never enters standard output's buffer. Any other write (a
+/// host thread's, an isolated entry's, an uncaptured fiber's) writes its
+/// parts in order under the stream's lock, as one call (D-684). Text that
+/// enters standard output's buffer this way ends D-574's excuse, under
+/// the lock: it has no `Result`, so if it is lost a later failing flush
+/// ends the program again (D-306, D-346).
+///
+/// # Errors
+///
+/// The real stream's write error.
+pub(crate) fn write_stream(stream: Stream, parts: &[&[u8]]) -> io::Result<()> {
+    write_routed(stream, parts, false)
+}
+
+/// [`write_stream`]; with `flush`, standard output is also flushed under
+/// the same lock, and D-574's state then records whether everything
+/// buffered so far was written (`io::write_stdout`, D-365, D-574).
+fn write_routed(stream: Stream, parts: &[&[u8]], flush: bool) -> io::Result<()> {
+    if let Some(taken) = capture::route(stream, parts) {
+        // A captured `io::write_stdout` records its flush, which the
+        // host's replay makes (D-723).
+        if flush {
+            let _ = capture::flush();
+        }
+        return taken;
+    }
+    match stream {
+        Stream::Stdout => {
+            let mut out = io::stdout().lock();
+            if flush {
+                write_and_flush(out, parts, &STDOUT_FAILURE_REPORTED)
+            } else {
+                STDOUT_FAILURE_REPORTED.store(false, Ordering::Relaxed);
+                write_parts(&mut out, parts)
+            }
+        }
+        Stream::Stderr => write_parts(&mut io::stderr().lock(), parts),
+    }
+}
+
+/// `io::write_stdout`'s real write: writes `parts` through `out`, the
+/// locked stream, flushes it, and stores in `reported` (D-574's state)
+/// whether that failed, all before `out`, and with it the lock, is
+/// dropped (D-684): a failure is reported to the program, and a success
+/// leaves no reported text over (D-365).
+fn write_and_flush(mut out: impl Write, parts: &[&[u8]], reported: &AtomicBool) -> io::Result<()> {
+    let written = write_parts(&mut out, parts).and_then(|()| out.flush());
+    reported.store(written.is_err(), Ordering::Relaxed);
+    drop(out);
+    written
+}
+
+/// Writes `parts` in order.
+fn write_parts(out: &mut impl Write, parts: &[&[u8]]) -> io::Result<()> {
+    for part in parts {
+        out.write_all(part)?;
     }
     Ok(())
 }
@@ -450,10 +657,18 @@ static STDOUT_FAILURE_REPORTED: AtomicBool = AtomicBool::new(false);
 /// `print` or `println` adds text, the excuse ends, and a failing flush is
 /// an error again (D-306).
 ///
+/// A fiber whose output is captured has nothing of its own in standard
+/// output's buffer: its flush is recorded in its capture, for the host's
+/// replay, and succeeds (D-723).
+///
 /// # Errors
 ///
 /// The flush's IO error, for example `EPIPE` when the reader has gone.
 pub fn flush_stdout() -> io::Result<()> {
+    if capture::flush() {
+        return Ok(());
+    }
+    // The load runs under the lock of the `match`'s scrutinee (D-684).
     match io::stdout().lock().flush() {
         Err(_) if STDOUT_FAILURE_REPORTED.load(Ordering::Relaxed) => Ok(()),
         other => other,
@@ -461,23 +676,217 @@ pub fn flush_stdout() -> io::Result<()> {
 }
 
 /// Flushes standard output before standard input is read (D-346), ending
-/// the program with status 1 when it cannot (D-306).
+/// the program with status 1 when it cannot (D-306, D-709).
 fn flush_before_read() {
     if flush_stdout().is_err() {
-        exit_after_write_failure();
+        terminate(abi::status::ERR);
     }
 }
 
-/// Reads the next line of standard input through the process-wide reader,
-/// after flushing standard output (D-346), without its ending: a final
-/// `\n` or `\r\n` is removed (D-305). `Ok(None)` at the end of input.
-fn read_raw_line() -> io::Result<Option<Vec<u8>>> {
-    flush_before_read();
-    let mut line = Vec::new();
-    if io::stdin().lock().read_until(b'\n', &mut line)? == 0 {
-        return Ok(None);
+/// Standard input's one buffered reader (D-474): `io::read_line` and the
+/// REPL's [`read_input_line`] both take their lines from it, so neither
+/// takes lines meant for the other (D-548). It reads through
+/// `std::io::stdin()`, which keeps D-474's closed-stream layer. Its lock
+/// is a leaf (plan §0 'Locks'): a blocking-pool thread or the REPL's host
+/// thread holds it while it waits for input, and a fiber only tries it
+/// ([`serve_buffered`]), so no worker waits on it and no guard lives
+/// across a switch.
+static STDIN: Mutex<LineReader> = Mutex::new(LineReader::new());
+
+/// The reads of standard input that wait for [`STDIN`] to give them a
+/// line: a blocking-pool job submitted and not yet done, or the REPL's
+/// host thread in its read. While one waits, the fast path serves no
+/// line, so lines go out in the order the reads asked for them (D-548).
+static STDIN_WAITERS: AtomicUsize = AtomicUsize::new(0);
+
+/// How many bytes one read of standard input asks for: more than Rust's
+/// `Stdin` buffers (8 KiB), so the read goes straight to the descriptor
+/// when that buffer is empty, and a pipe's whole buffer fits.
+const STDIN_CHUNK: usize = 64 * 1024;
+
+/// Bytes read from standard input and not yet returned as lines.
+#[derive(Debug)]
+struct LineReader {
+    /// The bytes read; those before `start` were returned.
+    data: Vec<u8>,
+    /// Where the next line starts in `data`.
+    start: usize,
+    /// How many bytes from `start` on are known to hold no `\n`: a line
+    /// longer than one read is searched once, never again from its start
+    /// with each read, so reading it takes time linear in its length, as
+    /// `BufRead::read_until` did (gate 3's ROB-W3-1).
+    scanned: usize,
+    /// The bytes searched for `\n` so far (tests only).
+    #[cfg(test)]
+    searched: usize,
+}
+
+impl LineReader {
+    /// An empty reader.
+    const fn new() -> Self {
+        Self {
+            data: Vec::new(),
+            start: 0,
+            scanned: 0,
+            #[cfg(test)]
+            searched: 0,
+        }
     }
-    Ok(Some(strip_line_ending(line)))
+
+    /// The next line without its ending (D-305), if a whole line is
+    /// buffered; it never reads. Only the bytes after those already known
+    /// to hold no `\n` are searched.
+    fn buffered_line(&mut self) -> Option<Vec<u8>> {
+        let rest = self.data.get(self.start..)?;
+        let fresh = rest.get(self.scanned..)?;
+        #[cfg(test)]
+        {
+            self.searched = self.searched.saturating_add(fresh.len());
+        }
+        let Some(found) = fresh.iter().position(|&byte| byte == b'\n') else {
+            self.scanned = rest.len();
+            return None;
+        };
+        let end = self.scanned.saturating_add(found);
+        let line = strip_line_ending(rest.get(..=end)?.to_vec());
+        self.start = self.start.saturating_add(end).saturating_add(1);
+        self.scanned = 0;
+        if self.start >= self.data.len() {
+            self.data.clear();
+            self.start = 0;
+        }
+        Some(line)
+    }
+
+    /// The next line without its ending (D-305), reading `input` until a
+    /// whole line is buffered or the input ends: at the end, the unfinished
+    /// line, or `Ok(None)` when nothing is buffered. As
+    /// `BufRead::read_until`: an interrupted read is retried, and a failure
+    /// consumes the bytes of the unfinished line.
+    fn read_line(&mut self, input: &mut impl Read) -> io::Result<Option<Vec<u8>>> {
+        loop {
+            if let Some(line) = self.buffered_line() {
+                return Ok(Some(line));
+            }
+            self.data.drain(..self.start.min(self.data.len()));
+            self.start = 0;
+            let filled = self.data.len();
+            self.data.resize(filled.saturating_add(STDIN_CHUNK), 0);
+            let read = match self.data.get_mut(filled..) {
+                Some(free) => input.read(free),
+                None => Ok(0),
+            };
+            match read {
+                Ok(0) => {
+                    self.data.truncate(filled);
+                    self.scanned = 0;
+                    if self.data.is_empty() {
+                        return Ok(None);
+                    }
+                    return Ok(Some(strip_line_ending(std::mem::take(&mut self.data))));
+                }
+                Ok(count) => self.data.truncate(filled.saturating_add(count)),
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {
+                    self.data.truncate(filled);
+                }
+                Err(error) => {
+                    self.data.clear();
+                    self.scanned = 0;
+                    return Err(error);
+                }
+            }
+        }
+    }
+}
+
+/// One read of standard input waiting for [`STDIN`], counted in
+/// [`STDIN_WAITERS`] from its creation until it is dropped: when the read
+/// has its line, or with a job that never ran.
+#[derive(Debug)]
+struct Waiter(&'static AtomicUsize);
+
+impl Waiter {
+    /// Counts a read that waits for [`STDIN`].
+    fn new() -> Self {
+        Self::on(&STDIN_WAITERS)
+    }
+
+    /// Counts a read in `waiters`.
+    fn on(waiters: &'static AtomicUsize) -> Self {
+        waiters.fetch_add(1, Ordering::SeqCst);
+        Self(waiters)
+    }
+}
+
+impl Drop for Waiter {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// `io::read_line`'s fast path (D-823, a D-731-kind
+/// optimization): a line [`STDIN`] already holds is taken on the fiber
+/// `me`, without a blocking-pool round trip. `None` sends the read to the
+/// pool: a cancellation is pending, which raises there before any line is
+/// taken (D-816), or [`serve_buffered`] has no
+/// line to give. With a round trip per line, 100k piped lines took 23.21x
+/// checkpoint 3's time (MA's quiet reading); with this path, about 0.85x
+/// (I1t's busy reading, 64 KiB per pool read). A long line takes time
+/// linear in its length, since [`LineReader`] searches each byte once: a
+/// 64 MiB line read in 0.05 s (`cp4-w1` 0.03 s; 9.26 s while it was
+/// searched again with each read, gate 3's ROB-W3-1).
+fn buffered_line(me: &ExecCtx) -> Option<Vec<u8>> {
+    if cancel::check(me).is_err() {
+        return None;
+    }
+    serve_buffered(&STDIN, &STDIN_WAITERS)
+}
+
+/// A line `reader` already holds, if no read waits in `waiters` (it asked
+/// first, D-548) and no thread holds `reader` (it waits for input, and the
+/// caller must not). Never blocks.
+fn serve_buffered(reader: &Mutex<LineReader>, waiters: &AtomicUsize) -> Option<Vec<u8>> {
+    let mut reader = reader.try_lock()?;
+    if waiters.load(Ordering::SeqCst) != 0 {
+        return None;
+    }
+    reader.buffered_line()
+}
+
+/// Reads the next line of standard input through [`STDIN`] (D-474), once
+/// standard output has been flushed (D-346), without its ending: a final
+/// `\n` or `\r\n` is removed (D-305). `Ok(None)` at the end of input. It
+/// blocks the calling thread (a blocking-pool job, or the REPL's host
+/// thread) and ends `waiter`, its count in [`STDIN_WAITERS`], once it has
+/// its line, before it releases the reader.
+fn read_line_waiting(waiter: Waiter) -> io::Result<Option<Vec<u8>>> {
+    let mut reader = STDIN.lock();
+    let line = reader.read_line(&mut io::stdin());
+    drop(waiter);
+    drop(reader);
+    line
+}
+
+/// Runs `call`, a system call that blocks the calling thread inline, with
+/// the running fiber, if any, marked as blocked in it for the call's
+/// duration (D-786): the REPL's prompt read, which runs on its host
+/// thread (D-548, D-575), never on the blocking pool.
+fn inline_marked<R>(call: impl FnOnce() -> R) -> R {
+    /// Clears the mark, also if `call` unwinds.
+    struct Mark<'a>(&'a crate::ctx::ExecCtx);
+    impl Drop for Mark<'_> {
+        fn drop(&mut self) {
+            self.0.sched.set_blocking(false);
+        }
+    }
+    let mark = crate::entry::current_fiber().map(|fiber| {
+        fiber.sched.set_blocking(true);
+        crate::sched::hand_off_before_blocking(fiber);
+        Mark(fiber)
+    });
+    let result = call();
+    drop(mark);
+    result
 }
 
 /// Removes a final `\n` or `\r\n` (D-305). A lone `\r` stays.
@@ -493,33 +902,63 @@ fn strip_line_ending(mut line: Vec<u8>) -> Vec<u8> {
 
 /// Reads the next line of standard input for the REPL, through the same
 /// buffered reader as `io::read_line` (D-548), after flushing standard
-/// output (ending the program with status 1 when that fails, D-306). The
-/// line has no ending (D-305), invalid UTF-8 is replaced with U+FFFD, and
-/// the result is `None` at the end of input or when standard input cannot
-/// be read (D-575).
-#[must_use]
-pub fn read_input_line() -> Option<String> {
-    read_raw_line()
+/// output. The line has no ending (D-305), invalid UTF-8 is replaced with
+/// U+FFFD, and the result is `Ok(None)` at the end of input or when
+/// standard input cannot be read (D-575).
+///
+/// # Errors
+///
+/// The flush's error when standard output cannot be flushed: the REPL
+/// then ends at once with status 1, printing nothing (D-306, spec §13.5).
+/// The host's thread runs no entry, so there is no fiber to stop and no
+/// host to tell: the failure goes back to its caller
+/// (D-709, D-801).
+pub fn read_input_line() -> io::Result<Option<String>> {
+    flush_stdout()?;
+    let waiter = Waiter::new();
+    Ok(inline_marked(|| read_line_waiting(waiter))
         .ok()
         .flatten()
-        .map(|line| String::from_utf8_lossy(&line).into_owned())
+        .map(|line| String::from_utf8_lossy(&line).into_owned()))
 }
 
 /// Writes `text` to standard error at once, ending the program on failure
-/// (D-306). For the runtime's own reports, such as panics.
+/// (D-306, D-709: a termination). For the runtime's own reports on an
+/// entry, such as panics: through [`write_stream`], so a captured fiber's
+/// report goes to its capture.
 pub(crate) fn write_stderr(text: &str) {
-    if io::stderr().lock().write_all(text.as_bytes()).is_err() {
-        exit_after_write_failure();
+    if try_write_stderr(text).is_err() {
+        terminate(abi::status::ERR);
     }
 }
 
-/// Ends the program with status 1, printing nothing (D-306).
-#[expect(
-    clippy::exit,
-    reason = "D-306: a failed write ends the program at once with status 1"
-)]
-pub(crate) fn exit_after_write_failure() -> ! {
-    std::process::exit(abi::status::ERR)
+/// Writes `text` to standard error at once, through [`write_stream`]. For
+/// a host's thread, which runs no entry and ends with status 1 itself on a
+/// failure (D-306), and for reports on an entry.
+///
+/// # Errors
+///
+/// The write's IO error.
+pub(crate) fn try_write_stderr(text: &str) -> io::Result<()> {
+    write_stream(Stream::Stderr, &[text.as_bytes()])
+}
+
+/// Writes `text` to the real standard error, never to a capture: the
+/// runtime's last words before the process ends (a fatal runtime error,
+/// D-770's edgeless unwinding), which no host would replay
+/// (D-820).
+///
+/// # Errors
+///
+/// The write's IO error.
+pub(crate) fn write_last_words(text: &str) -> io::Result<()> {
+    io::stderr().lock().write_all(text.as_bytes())
+}
+
+/// Ends the program with `status`, printing nothing more (D-306, D-709):
+/// a termination, which the running entry's host receives as an outcome.
+fn terminate(status: i32) -> ! {
+    crate::sched::terminate(status)
 }
 
 #[cfg(test)]
@@ -529,9 +968,9 @@ mod tests {
     #[test]
     fn println_appends_a_newline() {
         let mut out = Vec::new();
-        write_text(&mut out, b"Hello, world!", true).unwrap();
-        write_text(&mut out, b"a", false).unwrap();
-        write_text(&mut out, b"", true).unwrap();
+        write_parts(&mut out, &[b"Hello, world!", b"\n"]).unwrap();
+        write_parts(&mut out, &[b"a"]).unwrap();
+        write_parts(&mut out, &[b"", b"\n"]).unwrap();
         assert_eq!(out, b"Hello, world!\na\n");
     }
 
@@ -546,7 +985,55 @@ mod tests {
                 Ok(())
             }
         }
-        assert!(write_text(&mut Closed, b"x", true).is_err());
+        assert!(write_parts(&mut Closed, &[b"x", b"\n"]).is_err());
+    }
+
+    /// D-684, D-574: `io::write_stdout` stores its failure state before it
+    /// releases the stdout lock, so no `print` of another fiber runs
+    /// between the failed write and the store. The stand-in for the locked
+    /// stream records the state when it is dropped, which is the unlock.
+    #[test]
+    fn write_stdout_stores_its_flag_under_the_lock() {
+        use std::sync::Arc;
+        struct Locked {
+            fail: bool,
+            reported: Arc<AtomicBool>,
+            at_unlock: Arc<std::sync::Mutex<Option<bool>>>,
+        }
+        impl Write for Locked {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                if self.fail {
+                    Err(io::Error::from(io::ErrorKind::BrokenPipe))
+                } else {
+                    Ok(())
+                }
+            }
+        }
+        impl Drop for Locked {
+            fn drop(&mut self) {
+                *self.at_unlock.lock().unwrap() = Some(self.reported.load(Ordering::Relaxed));
+            }
+        }
+        let reported = Arc::new(AtomicBool::new(false));
+        for fail in [true, false, true] {
+            let at_unlock = Arc::new(std::sync::Mutex::new(None));
+            let locked = Locked {
+                fail,
+                reported: Arc::clone(&reported),
+                at_unlock: Arc::clone(&at_unlock),
+            };
+            let written = write_and_flush(locked, &[b"text"], &reported);
+            assert_eq!(written.is_err(), fail);
+            assert_eq!(
+                *at_unlock.lock().unwrap(),
+                Some(fail),
+                "stored after the unlock"
+            );
+            assert_eq!(reported.load(Ordering::Relaxed), fail);
+        }
     }
 
     use crate::alloc::live;
@@ -611,27 +1098,34 @@ mod tests {
         word == values::nil()
     }
 
+    /// No fiber: the kernels run their jobs inline.
+    const NO_FIBER: *mut ExecCtx = std::ptr::null_mut();
+
     fn read_file(path: &str) -> Result<String, (i64, String)> {
-        // SAFETY: live string arguments.
+        // SAFETY: live string arguments, and no fiber.
         outcome(
-            with_strings(&[path], |w| unsafe { cheby_io_sys_read_file(w[0]) }),
+            with_strings(&[path], |w| unsafe {
+                cheby_io_sys_read_file(NO_FIBER, w[0])
+            }),
             text,
         )
     }
 
     fn read_file_bytes(path: &str) -> Result<Vec<u8>, (i64, String)> {
-        // SAFETY: live string arguments.
+        // SAFETY: live string arguments, and no fiber.
         outcome(
-            with_strings(&[path], |w| unsafe { cheby_io_sys_read_file_bytes(w[0]) }),
+            with_strings(&[path], |w| unsafe {
+                cheby_io_sys_read_file_bytes(NO_FIBER, w[0])
+            }),
             bytes,
         )
     }
 
     fn write_file(path: &str, contents: &str) -> Result<bool, (i64, String)> {
-        // SAFETY: live string arguments.
+        // SAFETY: live string arguments, and no fiber.
         outcome(
             with_strings(&[path, contents], |w| unsafe {
-                cheby_io_sys_write_file(w[0], w[1])
+                cheby_io_sys_write_file(NO_FIBER, w[0], w[1])
             }),
             is_nil,
         )
@@ -639,9 +1133,9 @@ mod tests {
 
     fn write_file_bytes(path: &str, data: &[u8]) -> Result<bool, (i64, String)> {
         let data = values::bytes(data);
-        // SAFETY: live arguments.
+        // SAFETY: live arguments, and no fiber.
         let result = with_strings(&[path], |w| unsafe {
-            cheby_io_sys_write_file_bytes(w[0], data)
+            cheby_io_sys_write_file_bytes(NO_FIBER, w[0], data)
         });
         // SAFETY: owned by the test.
         unsafe { rc::drop(data) };
@@ -750,6 +1244,190 @@ mod tests {
         assert_eq!(strip(b"a\r\r\n"), b"a\r");
     }
 
+    /// An input that gives its chunks one read at a time, each read
+    /// interrupted once first, and then fails with `error` or ends.
+    struct Chunks {
+        parts: std::collections::VecDeque<&'static [u8]>,
+        interrupt: bool,
+        error: Option<io::ErrorKind>,
+    }
+
+    impl Chunks {
+        fn new(chunks: &[&'static [u8]], error: Option<io::ErrorKind>) -> Self {
+            Self {
+                parts: chunks.iter().copied().collect(),
+                interrupt: false,
+                error,
+            }
+        }
+    }
+
+    impl Read for Chunks {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            self.interrupt = !self.interrupt;
+            if self.interrupt {
+                return Err(io::Error::from(io::ErrorKind::Interrupted));
+            }
+            match self.parts.pop_front() {
+                Some(chunk) => {
+                    let count = chunk.len().min(buf.len());
+                    buf[..count].copy_from_slice(&chunk[..count]);
+                    if count < chunk.len() {
+                        self.parts.push_front(&chunk[count..]);
+                    }
+                    Ok(count)
+                }
+                None => match self.error {
+                    Some(kind) => Err(io::Error::from(kind)),
+                    None => Ok(0),
+                },
+            }
+        }
+    }
+
+    /// Every line of `input` through one reader, as text.
+    fn lines_of(input: &mut Chunks) -> io::Result<Vec<String>> {
+        let mut reader = LineReader::new();
+        let mut lines = Vec::new();
+        while let Some(line) = reader.read_line(input)? {
+            lines.push(String::from_utf8(line).unwrap());
+        }
+        Ok(lines)
+    }
+
+    /// D-823: the reader splits the input into the lines
+    /// `BufRead::read_until` gave, whatever the chunks: endings removed
+    /// (D-305), a lone `\r` kept, the unfinished last line returned at
+    /// the end, interrupted reads retried.
+    #[test]
+    fn stdin_fast_path_reader_splits_lines_across_chunks() {
+        let mut input = Chunks::new(
+            &[
+                b"fir",
+                b"st\n\r",
+                b"\nsec",
+                b"ond\r\r\n",
+                b"\n",
+                b"la",
+                b"st",
+            ],
+            None,
+        );
+        assert_eq!(
+            lines_of(&mut input).unwrap(),
+            ["first", "", "second\r", "", "last"]
+        );
+        let mut empty = Chunks::new(&[], None);
+        assert_eq!(lines_of(&mut empty).unwrap(), Vec::<String>::new());
+        // Several lines in one chunk: the first read buffers them all, and
+        // the rest are served without reading.
+        let mut reader = LineReader::new();
+        let mut one_chunk = Chunks::new(&[b"a\nb\r\nc\n"], None);
+        assert_eq!(
+            reader.read_line(&mut one_chunk).unwrap(),
+            Some(b"a".to_vec())
+        );
+        assert_eq!(reader.buffered_line(), Some(b"b".to_vec()));
+        assert_eq!(reader.buffered_line(), Some(b"c".to_vec()));
+        assert_eq!(reader.buffered_line(), None);
+        assert_eq!(reader.read_line(&mut one_chunk).unwrap(), None);
+        // A line longer than one chunk.
+        let long: &'static [u8] = Box::leak(vec![b'x'; STDIN_CHUNK * 2 + 3].into_boxed_slice());
+        let mut long_input = Chunks::new(&[long, b"\nend\n"], None);
+        let lines = lines_of(&mut long_input).unwrap();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].len(), STDIN_CHUNK * 2 + 3);
+        assert_eq!(lines[1], "end");
+    }
+
+    /// D-823, gate 3's ROB-W3-1: a line much longer than one
+    /// read, arriving in small chunks, is searched for its end once: the
+    /// bytes searched stay linear in the input (at most twice its length
+    /// here, never once per chunk from the line's start), and lines after
+    /// it are split as before.
+    #[test]
+    fn stdin_fast_path_reader_searches_a_long_line_once() {
+        const LONG: usize = 4 << 20;
+        const CHUNK: usize = 4 << 10;
+        let long: &'static [u8] = Box::leak(vec![b'x'; LONG].into_boxed_slice());
+        let mut parts: Vec<&'static [u8]> = long.chunks(CHUNK).collect();
+        parts.push(b"\nshort\nend");
+        let mut input = Chunks::new(&parts, None);
+        let mut reader = LineReader::new();
+        let first = reader.read_line(&mut input).unwrap().unwrap();
+        assert_eq!(first.len(), LONG);
+        assert_eq!(
+            reader.read_line(&mut input).unwrap(),
+            Some(b"short".to_vec())
+        );
+        assert_eq!(reader.read_line(&mut input).unwrap(), Some(b"end".to_vec()));
+        assert_eq!(reader.read_line(&mut input).unwrap(), None);
+        assert!(
+            reader.searched <= 2 * (LONG + 10),
+            "{} bytes searched for {} bytes of input",
+            reader.searched,
+            LONG + 10
+        );
+    }
+
+    /// D-823: a failing read consumes the unfinished line,
+    /// as `read_until` did, and keeps nothing of it for the next read; the
+    /// whole lines before it were already returned.
+    #[test]
+    fn stdin_fast_path_reader_failure_consumes_the_unfinished_line() {
+        let mut reader = LineReader::new();
+        let mut input = Chunks::new(&[b"whole\nhal"], Some(io::ErrorKind::BrokenPipe));
+        assert_eq!(
+            reader.read_line(&mut input).unwrap(),
+            Some(b"whole".to_vec())
+        );
+        assert_eq!(
+            reader.read_line(&mut input).unwrap_err().kind(),
+            io::ErrorKind::BrokenPipe
+        );
+        assert_eq!(reader.buffered_line(), None);
+        let mut after = Chunks::new(&[b"next\n"], None);
+        assert_eq!(
+            reader.read_line(&mut after).unwrap(),
+            Some(b"next".to_vec())
+        );
+    }
+
+    /// D-823, D-548: the fast path serves a buffered line
+    /// only while no other read waits for the reader (it asked first) and
+    /// no thread holds the reader (it waits for input); a waiter counts
+    /// until it is dropped, also with a job that never ran.
+    #[test]
+    fn stdin_fast_path_serves_only_when_no_read_waits() {
+        static READER: Mutex<LineReader> = Mutex::new(LineReader::new());
+        static WAITERS: AtomicUsize = AtomicUsize::new(0);
+        let mut input = Chunks::new(&[b"one\ntwo\nthree\nfour\n"], None);
+        assert_eq!(
+            READER.lock().read_line(&mut input).unwrap(),
+            Some(b"one".to_vec())
+        );
+        assert_eq!(serve_buffered(&READER, &WAITERS), Some(b"two".to_vec()));
+        let waiter = Waiter::on(&WAITERS);
+        assert_eq!(serve_buffered(&READER, &WAITERS), None, "a read waits");
+        let job = move || drop(waiter);
+        drop(job);
+        assert_eq!(
+            WAITERS.load(Ordering::SeqCst),
+            0,
+            "a dropped job ends its count"
+        );
+        let held = READER.lock();
+        assert_eq!(
+            serve_buffered(&READER, &WAITERS),
+            None,
+            "the reader is held"
+        );
+        drop(held);
+        assert_eq!(serve_buffered(&READER, &WAITERS), Some(b"three".to_vec()));
+        assert_eq!(serve_buffered(&READER, &WAITERS), Some(b"four".to_vec()));
+        assert_eq!(serve_buffered(&READER, &WAITERS), None, "nothing buffered");
+    }
+
     #[test]
     fn write_stderr_reports_success() {
         let before = live();
@@ -786,7 +1464,8 @@ mod tests {
         print(cheby_io_eprintln, "line>>");
         let mut lines = Vec::new();
         loop {
-            match outcome(cheby_io_sys_read_line(), |option| {
+            // SAFETY: no fiber: the read runs inline.
+            match outcome(unsafe { cheby_io_sys_read_line(NO_FIBER) }, |option| {
                 // SAFETY: a live `Option<String>`.
                 unsafe { values::read_option(option) }.map(text)
             }) {

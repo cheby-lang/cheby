@@ -1,0 +1,2 @@
+f panics: Err(Panicked): crash
+a fiber of a scope in f panics: Ok: the inner scope failed: inner

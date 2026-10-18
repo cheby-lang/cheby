@@ -1,0 +1,81 @@
+// @mode: run-pass
+// @milestone: M2
+// @decisions: D-332, D-338, D-341, D-363, D-364, D-355
+//! `SortedMultimap<K, V>`: the values of a key in insertion order with
+//! repeats kept, keys in `compare` order, `size` against `count`, a key
+//! removed with all its values, `show` and debug text, and a key type
+//! whose `compare` keeps the key already stored (§3.8).
+
+import std::int
+import std::io
+import std::list
+import std::sorted_multimap
+import std::sorted_multimap::{SortedMultimap}
+import std::string
+
+/// A shelf ordered by its number alone, so two shelves with one number are
+/// the same key (D-341).
+type Shelf { number: Int, label: String }
+
+fn compare(a: Shelf, b: Shelf) -> Order {
+  int::compare(a.number, b.number)
+}
+
+fn positions(words: List<String>) -> SortedMultimap<String, Int> {
+  list::fold(list::enumerate(words), sorted_multimap::new(), fn(found, (position, word)) {
+    sorted_multimap::insert(found, word, position)
+  })
+}
+
+fn main() {
+  let index = positions(string::split("the cat and the hat and the bat", " "))
+  io::println("{index}")
+  let keys = sorted_multimap::keys(index)
+  let size = sorted_multimap::size(index)
+  let count = sorted_multimap::count(index)
+  io::println("keys: {keys}, size: {size}, count: {count}")
+  let the = sorted_multimap::get(index, "the")
+  let dog = sorted_multimap::get(index, "dog")
+  let has_dog = sorted_multimap::has_key(index, "dog")
+  io::println("the: {the}, dog: {dog}, has dog: {has_dog}")
+  let first = sorted_multimap::first(index)
+  let last = sorted_multimap::last(index)
+  let between = sorted_multimap::range(index, "b", "d")
+  io::println("first: {first}, last: {last}, from b to d: {between}")
+
+  let fewer = sorted_multimap::remove(index, "and")
+  let fewer_size = sorted_multimap::size(fewer)
+  let fewer_count = sorted_multimap::count(fewer)
+  let has_and = sorted_multimap::has_key(fewer, "and")
+  io::println("without and: size {fewer_size}, count {fewer_count}, has and: {has_and}")
+  let repeated = sorted_multimap::filter(index, fn(_, found) { list::length(found) > 1 })
+  let repeated_count = sorted_multimap::count(repeated)
+  io::println("repeated: {repeated}, count {repeated_count}")
+
+  let once = sorted_multimap::insert(sorted_multimap::new(), "x", 1)
+  let twice = sorted_multimap::insert(once, "x", 1)
+  let twice_values = sorted_multimap::get(twice, "x")
+  io::println("{twice:?}, values: {twice_values}")
+  let round_trip = sorted_multimap::from_list(sorted_multimap::to_pairs(index)) == index
+  io::println("rebuilt from its pairs: {round_trip}")
+
+  let shelves = sorted_multimap::from_list([
+    (Shelf { number: 2, label: "top" }, "lamp"),
+    (Shelf { number: 1, label: "bottom" }, "boots"),
+    (Shelf { number: 2, label: "upper" }, "vase"),
+  ])
+  let labels = list::map(sorted_multimap::keys(shelves), fn(shelf) { shelf.label })
+  let on_two = sorted_multimap::get(shelves, Shelf { number: 2, label: "any" })
+  io::println("shelves: {labels}, on shelf 2: {on_two}")
+
+  // Five thousand values under a hundred keys.
+  let many = list::fold(list::range(0, 5000), sorted_multimap::new(), fn(found, n) {
+    sorted_multimap::insert(found, n % 100, n)
+  })
+  let many_size = sorted_multimap::size(many)
+  let many_count = sorted_multimap::count(many)
+  let under_zero = list::length(sorted_multimap::get(many, 0))
+  let last_of_99 = list::last(sorted_multimap::get(many, 99))
+  io::println("keys: {many_size}, values: {many_count}, under 0: {under_zero}")
+  io::println("last under 99: {last_of_99}")
+}

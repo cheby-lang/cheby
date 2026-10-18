@@ -1,0 +1,63 @@
+// @mode: run-pass
+// @decisions: D-185, D-688
+// @milestone: M2
+//! A capacity-0 ping-pong between two fibers does not keep a third
+//! runnable fiber from running, at any thread count: native preemption
+//! guarantees that no fiber holds a thread indefinitely, and only JS may
+//! starve one (§10.1, §12.4). Here the third fiber is what stops the
+//! ping-pong, so the program ends only if it runs.
+
+import std::channel
+import std::fiber
+import std::io
+
+fn main() {
+  let (ab_tx, ab_rx) = channel::new::<Int>(0)
+  let (ba_tx, ba_rx) = channel::new::<Int>(0)
+  let (go_tx, go_rx) = channel::new::<Int>(1)
+  let outcome = {
+    use owner <- fiber::scope()
+    // B: answers every number with the next one, until it gets -1.
+    fiber::spawn(owner, fn() {
+      fn answer() {
+        case channel::receive(ab_rx) {
+          Ok(-1) => Nil
+          Ok(n) => case channel::send(ba_tx, n + 1) {
+            Ok(_) => answer()
+            Err(_) => Nil
+          }
+          Err(_) => Nil
+        }
+      }
+      answer()
+    })
+    // C: waits for the go signal, then stops B.
+    fiber::spawn(owner, fn() {
+      let assert Ok(_) = channel::receive(go_rx)
+      let _ = channel::send(ab_tx, -1)
+      Nil
+    })
+    // A: pings B, and after ten rounds lets C go.
+    fiber::spawn(owner, fn() {
+      fn ping(n) {
+        let _ = case n == 10 {
+          True => channel::send(go_tx, 1)
+          False => Ok(Nil)
+        }
+        case channel::send(ab_tx, n) {
+          Ok(_) => case channel::receive(ba_rx) {
+            Ok(m) => ping(m)
+            Err(_) => n
+          }
+          Err(_) => n
+        }
+      }
+      ping(0)
+    })
+    Nil
+  }
+  case outcome {
+    Ok(_) => io::println("stopped")
+    Err(_) => io::println("panicked")
+  }
+}

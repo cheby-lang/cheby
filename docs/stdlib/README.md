@@ -4,7 +4,7 @@ Status: **draft**, pre-1.0. Breaking changes are allowed until 1.0 (D-075).
 
 This directory specifies the standard library, one file per module (D-204, D-220). The language specification in [`../spec/`](../spec/) fixes the language and the semantics the runtime provides. This specification fixes the names, signatures and behavior of the modules under `std`. Where a rule comes from a logged decision, the decision is cited as `(D-NNN)`.
 
-The library is written in tiers, each before the milestone that needs it (D-276). This draft covers **tier 1**, the modules M1 needs (D-294). Tier 2 (fibers, channels, selectors, durations, randomness) and tier 3 (files, networking, HTTP, time, processes) are specified in later sessions.
+The library is written in tiers, each before the milestone that needs it (D-276). **Tier 1** holds the modules M1 needs (D-294), and **tier 2** the modules of the runtime milestone M2: fibers, channels, selectors, durations, randomness and the scheduler's settings (D-645). Tier 3 (files, networking, HTTP, time, processes) is specified in a later session.
 
 ## Modules
 
@@ -37,6 +37,21 @@ The library is written in tiers, each before the milestone that needs it (D-276)
 A submodule's file sits in a directory named after its parent, following the import path (D-351).
 
 `Bool`, `Nil` and `Order` are declared in `std::bool`, `std::nil` and `std::order`, with the functions drafted in their files (D-353).
+
+### Tier 2
+
+| Module                         | Contents                                                  |
+| ------------------------------ | --------------------------------------------------------- |
+| [`std::fiber`](fiber.md)       | scopes, spawning, joining, timeouts and panics of fibers  |
+| [`std::channel`](channel.md)   | bounded channels, with their `Sender` and `Receiver` ends |
+| [`std::selector`](selector.md) | waiting on several channels and timers at once            |
+| [`std::duration`](duration.md) | `Duration`, spans of time with nanosecond resolution      |
+| [`std::random`](random.md)     | random numbers from the host and from seeded generators   |
+| [`std::runtime`](runtime.md)   | the scheduler's thread count and the machine's CPU count  |
+
+These files fix the names that chapter 10 of the language specification left provisional (D-174, D-199, D-646).
+
+Tier 2 is implemented on native in M2. Its JS side comes with M4: until then every kernel and intrinsic of a tier-2 module declares its `@external(js, …)` binding to a `.mjs` file that does not exist yet, as tier 1 does, so every function exists on both targets for the cross-target check (D-450, D-661). `std::duration` and the seeded half of `std::random` are written in Cheby with no kernels, so they run in constants (D-650, D-656).
 
 ## Entry format
 
@@ -71,12 +86,14 @@ test "get reads by position" {
 - **Example.** At least one `test` block. The examples are written as if the module that contains them imports every module they name, as in `import std::list`. Test names are unique within a file, so a whole file's examples can run as one test module. A test that holds on only one target carries `@target(…)` ([§12.6](../spec/12-targets-and-ffi.md#126-target-specific-code)).
 - **Environment-dependent examples.** A function whose result depends on the environment, such as standard input and output, files or the operating system, cannot have a deterministic test. Its example is a top-level function introduced by `_Example_, not a \`test\` because …:`. Where the function can fail, a `test` that checks only the failure, which is the same everywhere, is added when one exists.
 
-Fields that do not apply are left out. Every `cheby` block in this directory must parse with the tree-sitter grammar, as the examples do.
+Fields that do not apply are left out. Every `cheby` block in this directory must parse as module items with the compiler's parser and with the tree-sitter grammar, as the examples do, and `cargo xtask cross-check` checks this. Validation errors, such as a signature without a body (E0046), are not consulted (D-424, D-662).
 
 The implementation keeps its `test` blocks in the standard library's source files, next to the code they test. A build of a user package neither checks nor runs them, and testing the standard library itself checks and runs them (§13.6, D-479). Every test of this specification is among them (D-542):
 
 - A test of `std::M` that needs a module `N` which imports `M` lives in `N`, since imports between std modules must be acyclic (D-145). It goes under the comment "Tests of `std::M` that need this module." and keeps its name and body, with module prefixes adjusted. When two moved tests would share a name in `N`, each gets its module's name in front, as "int add is plus as a function" and "float add is plus as a function" in `std::list`. A test that needs `N` only to show or compare a builtin type goes to a module that already depends on that type's home module, so `nil.md`'s "Nil shows as Nil" lives in `std::result` (D-630).
 - A helper item of a test, such as a `priv` type, function or import, is named by a written path in a test. User builds skip the tests but still resolve their written paths, which count as uses, while a use through satisfaction does not count. So a helper used only through satisfaction is also named once, as `std::json`'s test "list encodes each element with its type's to_json" does with an extra `assert list(points) == array(points, to_json)`. Otherwise a user package that imports the module would get W0003 or W0004 in std (D-631).
+- A test is written so that it checks unchanged, apart from module prefixes, in the std module where it lives. So it binds no name that module declares, since a binding must not reuse the name of a top-level function or constant of its module (D-051, D-062): the tests of `std::fiber` bind a scope as `owner`, never `scope` (D-662).
+- A module may ship before all of its behavior exists. A test of a shipped module that cannot pass yet is listed as pending, with the milestone that delivers it, and the spec-test guard accepts it as absent while that milestone is in progress or still to come (D-741). An entry fails the guard once its milestone has ended, and at any time when its test is present, when it names no spec test of a shipped module, or when it repeats another entry (D-728, D-741).
 
 ## Conventions
 
@@ -94,7 +111,7 @@ These rules apply to every module. Entries do not repeat them.
 - On native targets, any function that allocates panics with `out of memory` when its result cannot be allocated, as `string::repeat`, `pad_start` and `pad_end` can with a large count or width ([§11.8.2](../spec/11-errors-and-panics.md#1182-out-of-memory), D-642). Entries do not list this panic.
 - **Counts are clamped.** A count, width or length outside its useful range is clamped, so `list::take(xs, -1)` is `[]` and `list::take(xs, 100)` on a shorter list is the whole list (D-298).
 - **Indexes are not counts.** An index outside `0` to `length - 1`, including a negative one, makes the function return `None` or leave its input unchanged, as the entry says. Indexes never count from the end (D-318).
-- **Ranges exclude their end.** A range given as `start` and `end` includes `start` and excludes `end` (D-319).
+- **Ranges exclude their end.** A range given as `start` and `end` includes `start` and excludes `end` (D-319). A pair of bounds given as `low` and `high`, as in `int::clamp` and `random::int_between`, includes both, and is not a range of positions (D-654).
 - An error type whose cases an outside specification fixes is `exposed` (`json::Error`). One whose cases follow the operating system is opaque, with predicate functions and `show` (`io::Error`) (D-304, ADR-0051).
 
 ### Names
@@ -120,7 +137,8 @@ A function that visits elements calls its callback exactly once per element, fro
 
 - `List`, `Map`, `Set` and every collection in this library compare with `==` by contents. Insertion-ordered collections also compare their order (D-343).
 - The sorted, insertion-ordered and multimap collections are written in Cheby (D-336), and supply their own equality, hashing and debug printing through the standard-library-only attribute `@std_hooks` (D-342, D-482, §3.13, §4.8).
-- Debug printing of `Map`, `Set` and `multimap` lists entries sorted by their printed text, compared as UTF-8 bytes (D-344, D-587). These three types do not satisfy `Show`. The sorted and insertion-ordered collections satisfy `Show` when their elements do (D-344).
+- Debug printing of `Map` and `Set` lists entries sorted by their printed text, compared as UTF-8 bytes (D-344, D-587). A `multimap` sorts its keys by their printed text and keeps each key's pairs in insertion order. Keys with the same printed text are ordered by the text of their pairs (D-847). These three types do not satisfy `Show`. The sorted and insertion-ordered collections satisfy `Show` when their elements do (D-344).
+- The handles of tier 2, `channel::Sender`, `channel::Receiver`, `fiber::Scope`, `fiber::Fiber` and `selector::Selector`, are external types of their modules. They print as `<Sender>`, `<Receiver>`, `<Scope>`, `<Fiber>` and `<Selector>`, `==` and hashing panic when they reach one, and no constant may hold one (§3.13, D-233, D-647).
 
 `show` of `List`, `Option`, `Result`, tuples and the sorted and insertion-ordered collections uses the punctuation of debug printing (D-134), with each element written by its own `show`, so strings inside appear without quotes: `[1, 2]`, `[a, b]` for `["a", "b"]`, `Some(3)`, `Err(not found)`, `(1, a)`, and `sorted_map::from_list([(a, 1), (b, 2)])` (D-355).
 

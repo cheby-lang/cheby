@@ -1,0 +1,44 @@
+// @mode: run-pass
+// @decisions: D-103, D-181, D-649, D-671
+// @milestone: M2
+//! `timeout` returns `Ok` with `f`'s value when `f` returns within the
+//! limit, also when `f` waits, spawns and joins in a scope of its own, and
+//! its result compares with `==` (§10.8).
+
+import std::channel
+import std::duration
+import std::fiber
+import std::io
+
+fn describe(outcome: Result<Int, fiber::Timeout>) -> String {
+  case outcome {
+    Ok(value) => "Ok({value})"
+    Err(fiber::TimedOut) => "Err(TimedOut)"
+    Err(fiber::Panicked(failure)) => {
+      let text = fiber::message(failure)
+      "Err(Panicked): {text}"
+    }
+  }
+}
+
+fn main() {
+  let quick = fiber::timeout(duration::seconds(10), fn() { 6 * 7 })
+  let quick_text = describe(quick)
+  io::println("quick work: {quick_text}")
+  let equal = quick == Ok(42)
+  io::println("equal to Ok(42): {equal}")
+  let (tx, rx) = channel::new::<Int>(0)
+  let waited = fiber::timeout(duration::seconds(10), fn() {
+    let inner = {
+      use owner <- fiber::scope()
+      let _ = fiber::spawn(owner, fn() { channel::send(tx, 5) })
+      channel::receive(rx)
+    }
+    case inner {
+      Ok(Ok(n)) => n * 2
+      _ => 0
+    }
+  })
+  let waited_text = describe(waited)
+  io::println("work that waits: {waited_text}")
+}

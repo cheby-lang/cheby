@@ -9,8 +9,9 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use cheby_iface::{DefId, ModuleId};
 use cheby_mir::{
-    AbiSig, BuiltinDesc, Const, DefName, EntryKind, FnKey, Function, LayoutDesc, LayoutRef,
-    MirModule, Operand, Rvalue, StaticKind, StaticObject, Stmt, StrId, Terminator, UnitKind,
+    AbiSig, BuiltinDesc, Const, DefName, EntryKind, FnKey, ForeignSig, Function, LayoutDesc,
+    LayoutRef, MirModule, Operand, Rvalue, StaticKind, StaticObject, Stmt, StrId, Terminator,
+    UnitKind,
 };
 use cheby_runtime::abi;
 
@@ -110,7 +111,9 @@ pub struct Decls {
     funcs: FxHashMap<FnKey, FuncDecl>,
     slots: FxHashMap<SlotKey, SlotDecl>,
     strings: FxHashMap<(FnKey, StrId), DataId>,
-    runtime: Vec<(FuncId, Signature)>,
+    /// By [`RuntimeFunc::index`]; `None` for a function declared on demand
+    /// ([`RuntimeFunc::on_demand`]) that no unit has used yet.
+    runtime: Vec<Option<(FuncId, Signature)>>,
     static_data: FxHashMap<&'static str, DataId>,
     foreign: FxHashMap<Box<str>, ForeignDecl>,
     test_ordinals: FxHashMap<DefId, u32>,
@@ -143,8 +146,9 @@ pub struct Decls {
     pub(crate) pending_strings: Vec<(DataId, Vec<u8>)>,
     pub(crate) pending_slots: Vec<(DataId, FuncId)>,
     /// Existing slots to point at new code once the batch is finalized: a
-    /// REPL redefinition with the same signature (D-043).
-    pub(crate) pending_repoints: Vec<(DataId, FuncId)>,
+    /// REPL redefinition with the same signature (D-043), with the
+    /// redefinition's item.
+    pub(crate) pending_repoints: Vec<(DataId, FuncId, DefId)>,
     /// `(layout, its declaration, value fields)` of layouts to define.
     pub(crate) pending_layouts: Vec<(LayoutRef, LayoutDecl, u32)>,
     pub(crate) pending_consts: Vec<DataId>,
@@ -154,6 +158,16 @@ pub struct Decls {
     /// (the JIT's all-or-nothing batches).
     pub(crate) defined_data: FxHashSet<DataId>,
     pub(crate) defined_funcs: FxHashSet<FuncId>,
+    /// The shims of `@blocking` foreign calls (D-683, D-818),
+    /// by symbol and C signature, each defined once per JIT like a
+    /// trampoline (`blocking.rs`).
+    blocking_shims: FxHashMap<(Box<str>, ForeignSig), FuncId>,
+    /// How many shims each blocking symbol has, which numbers the next
+    /// one ([`mangle::blocking_shim`]).
+    blocking_variants: FxHashMap<Box<str>, u32>,
+    /// The shims declared and not defined yet, in declaration order:
+    /// [`crate::define`] defines them with its batch.
+    pub(crate) pending_shims: Vec<(FuncId, Box<str>, ForeignSig)>,
 }
 
 impl std::fmt::Debug for Decls {
@@ -196,13 +210,15 @@ fn static_print(decls: &Decls, unit: &MirModule, object: &StaticObject) -> Strin
 }
 
 /// The item whose redefinition replaces the function `key`: its own code,
-/// its value shim, its closures, its constant initializer and their entry.
+/// its value shim, its closures and continuations, its constant
+/// initializer and their entry.
 const fn owner_of(key: FnKey) -> Option<DefId> {
     match key {
         FnKey::Item(def)
         | FnKey::ValueShim(def)
         | FnKey::ConstInit(def)
         | FnKey::Closure { owner: def, .. }
+        | FnKey::Continuation { owner: def, .. }
         | FnKey::Entry(EntryKind::Const(def)) => Some(def),
         _ => None,
     }
@@ -318,6 +334,9 @@ impl Decls {
             pending_statics: Vec::new(),
             defined_data: FxHashSet::default(),
             defined_funcs: FxHashSet::default(),
+            blocking_shims: FxHashMap::default(),
+            blocking_variants: FxHashMap::default(),
+            pending_shims: Vec::new(),
         })
     }
 
@@ -439,8 +458,9 @@ impl Decls {
     }
 
     /// The slots to point at new code now that their batch is finalized,
-    /// with that code: REPL redefinitions that take over a slot (D-043).
-    pub fn take_repoints(&mut self) -> Vec<(DataId, FuncId)> {
+    /// with that code and the redefinition it is: REPL redefinitions that
+    /// take over a slot (D-043).
+    pub fn take_repoints(&mut self) -> Vec<(DataId, FuncId, DefId)> {
         std::mem::take(&mut self.pending_repoints)
     }
 
@@ -500,8 +520,14 @@ impl Decls {
     pub(crate) fn runtime(&self, f: RuntimeFunc) -> Result<(FuncId, &Signature), CodegenError> {
         self.runtime
             .get(f.index())
+            .and_then(Option::as_ref)
             .map(|(id, s)| (*id, s))
-            .ok_or_else(|| CodegenError::ice("runtime functions were not declared"))
+            .ok_or_else(|| {
+                CodegenError::ice(format!(
+                    "the runtime function `{}` was not declared",
+                    f.symbol()
+                ))
+            })
     }
 
     pub(crate) fn static_data(&self, symbol: &str) -> Result<DataId, CodegenError> {
@@ -515,6 +541,21 @@ impl Decls {
         self.foreign
             .get(symbol)
             .ok_or_else(|| CodegenError::ice(format!("foreign `{symbol}` was not declared")))
+    }
+
+    /// The shim of the blocking foreign function `symbol` called with the C
+    /// signature `sig` (`blocking.rs`).
+    pub(crate) fn blocking_shim(
+        &self,
+        symbol: &str,
+        sig: &ForeignSig,
+    ) -> Result<FuncId, CodegenError> {
+        self.blocking_shims
+            .get(&(Box::from(symbol), sig.clone()))
+            .copied()
+            .ok_or_else(|| {
+                CodegenError::ice(format!("the blocking shim of `{symbol}` was not declared"))
+            })
     }
 
     pub(crate) fn layout(&self, layout: LayoutRef) -> Result<&LayoutDecl, CodegenError> {
@@ -606,7 +647,16 @@ impl Decls {
                 .map_or("?", String::as_str);
             let _ = writeln!(out, "; {reference} = {symbol}");
         }
-        let _ = write!(out, "{}", func.display());
+        // D-869: the text leaves out the calls' location tags
+        // (D-856), which are metadata, so a dump is the same with and
+        // without them (D-551).
+        if func.debug_tags.is_empty() {
+            let _ = write!(out, "{}", func.display());
+        } else {
+            let mut untagged = func.clone();
+            untagged.debug_tags.clear();
+            let _ = write!(out, "{}", untagged.display());
+        }
         out
     }
 
@@ -621,6 +671,9 @@ impl Decls {
             for function in &unit.functions {
                 self.declare_function(module, unit, function)?;
             }
+        }
+        for unit in mirs {
+            self.declare_unit_runtime(module, unit)?;
         }
         for unit in mirs {
             for desc in &unit.layouts {
@@ -660,18 +713,146 @@ impl Decls {
         if !self.runtime.is_empty() {
             return Ok(());
         }
+        self.runtime = vec![None; RuntimeFunc::ALL.len()];
         for f in RuntimeFunc::ALL {
-            let (params, ret) = f.ctypes();
-            let signature = sig::c_signature(params, ret, self.call_conv);
-            let id = module
-                .declare_function(f.symbol(), Linkage::Import, &signature)
-                .map_err(|e| CodegenError::module(&e))?;
-            self.names.insert((0, id.as_u32()), f.symbol().to_owned());
-            self.runtime.push((id, signature));
+            if !f.on_demand() {
+                self.declare_runtime_func(module, f)?;
+            }
         }
         for symbol in STATIC_DATA {
             let id = self.data(module, symbol, Linkage::Import, false)?;
             self.static_data.insert(symbol, id);
+        }
+        Ok(())
+    }
+
+    /// Declares the runtime function `f` if it is not declared yet: the
+    /// eager ones once per session, the on-demand ones when a unit first
+    /// uses them ([`RuntimeFunc::on_demand`]).
+    pub(crate) fn declare_runtime_func<M: Module>(
+        &mut self,
+        module: &mut M,
+        f: RuntimeFunc,
+    ) -> Result<(), CodegenError> {
+        let slot = self
+            .runtime
+            .get(f.index())
+            .ok_or_else(|| CodegenError::ice("runtime functions were not declared"))?;
+        if slot.is_some() {
+            return Ok(());
+        }
+        let (params, ret) = f.ctypes();
+        let signature = sig::c_signature(params, ret, self.call_conv);
+        let id = module
+            .declare_function(f.symbol(), Linkage::Import, &signature)
+            .map_err(|e| CodegenError::module(&e))?;
+        self.names.insert((0, id.as_u32()), f.symbol().to_owned());
+        let slot = self
+            .runtime
+            .get_mut(f.index())
+            .ok_or_else(|| CodegenError::ice("runtime functions were not declared"))?;
+        *slot = Some((id, signature));
+        Ok(())
+    }
+
+    /// Declares `cb$big$…`, the unchecked inner body of the function
+    /// `function`, whose frame turned out to be large (D-679), with its
+    /// signature, and the runtime function its outer function's slow path
+    /// calls: the releasing one when its entry pad allows it
+    /// (D-775, [`crate::func::entry_release`]).
+    /// [`crate::define`] calls it after compiling a batch, for each large
+    /// function in declaration order, so the ids are the same in every
+    /// build (D-264). Declaring the same body again (a batch retried after
+    /// its [`Decls`] were restored) gives back the same id.
+    ///
+    /// # Errors
+    ///
+    /// An ICE if `key` was never declared, or the module's error.
+    pub(crate) fn declare_large_frame_body<M: Module>(
+        &mut self,
+        module: &mut M,
+        function: &Function,
+    ) -> Result<FuncId, CodegenError> {
+        let slow = if crate::func::entry_release(function).is_some() {
+            RuntimeFunc::StackSlowFrameUnwind
+        } else {
+            RuntimeFunc::StackSlowFrame
+        };
+        self.declare_runtime_func(module, slow)?;
+        let decl = self.func(function.key)?;
+        let symbol = mangle::large_frame_body(&decl.symbol);
+        let signature = decl.sig.clone();
+        let id = module
+            .declare_function(&symbol, Linkage::Local, &signature)
+            .map_err(|e| CodegenError::module(&e))?;
+        self.names.insert((0, id.as_u32()), symbol);
+        Ok(id)
+    }
+
+    /// Declares what reuse's code imports (D-716), once: its runtime
+    /// functions, checked and inline, and the counting flag
+    /// ([`crate::runtime::ON_DEMAND_DATA`]), in a fixed order, so the ids
+    /// are the same in every build (D-264).
+    fn declare_reuse<M: Module>(&mut self, module: &mut M) -> Result<(), CodegenError> {
+        for f in [
+            RuntimeFunc::ReleaseFields,
+            RuntimeFunc::ReuseHit,
+            RuntimeFunc::AllocMiss,
+            RuntimeFunc::DropReuseChecked,
+            RuntimeFunc::AllocReuseChecked,
+        ] {
+            self.declare_runtime_func(module, f)?;
+        }
+        for symbol in crate::runtime::ON_DEMAND_DATA {
+            if !self.static_data.contains_key(symbol) {
+                let id = self.data(module, symbol, Linkage::Import, false)?;
+                self.static_data.insert(symbol, id);
+            }
+        }
+        Ok(())
+    }
+
+    /// Declares the on-demand runtime functions the helpers of `unit`'s
+    /// code call (D-693), and the entry check's releasing slow path when a
+    /// function's entry pad allows it (D-775).
+    fn declare_unit_runtime<M: Module>(
+        &mut self,
+        module: &mut M,
+        unit: &MirModule,
+    ) -> Result<(), CodegenError> {
+        for function in &unit.functions {
+            if function.abi == cheby_mir::Abi::Cheby
+                && crate::func::entry_release(function).is_some()
+            {
+                self.declare_runtime_func(module, RuntimeFunc::StackSlowUnwind)?;
+            }
+            for block in &function.blocks {
+                for stmt in &block.stmts {
+                    if let Stmt::Assign {
+                        value: Rvalue::CallRuntime { func, .. },
+                        ..
+                    }
+                    | Stmt::Eval(Rvalue::CallRuntime { func, .. }) = stmt
+                    {
+                        let (f, _) = RuntimeFunc::of(*func);
+                        if f.on_demand() {
+                            self.declare_runtime_func(module, f)?;
+                        }
+                    }
+                    if let Stmt::Assign {
+                        value: Rvalue::DropReuse { .. } | Rvalue::AllocReuse { .. },
+                        ..
+                    } = stmt
+                    {
+                        self.declare_reuse(module)?;
+                    }
+                    // A specialized drop's hit path (D-850).
+                    if let Stmt::DropKeep { .. } = stmt {
+                        self.declare_runtime_func(module, RuntimeFunc::ReleaseFields)?;
+                        self.declare_runtime_func(module, RuntimeFunc::FreeUnique)?;
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -687,6 +868,14 @@ impl Decls {
                 match self.test_ordinals.get(&owner) {
                     Some(&ordinal) => mangle::test_closure(&name.module, ordinal, index),
                     None => mangle::closure(&name, index),
+                }
+            }
+            // Named as the owner's closures are (D-780).
+            FnKey::Continuation { owner, index } => {
+                let name = self.def_name(unit, owner)?;
+                match self.test_ordinals.get(&owner) {
+                    Some(&ordinal) => mangle::test_continuation(&name.module, ordinal, index),
+                    None => mangle::continuation(&name, index),
                 }
             }
             FnKey::ConstInit(def) => mangle::item(Kind::Cinit, &self.def_name(unit, def)?),
@@ -804,7 +993,7 @@ impl Decls {
         let takes_over = self.session.get(def).is_some_and(|n| n.reuse.is_some());
         if takes_over && let Some(slot) = self.slots.get_mut(&key) {
             slot.func = id;
-            self.pending_repoints.push((slot.id, id));
+            self.pending_repoints.push((slot.id, id, def));
             self.def_slots.insert(def, key);
             return Ok(());
         }
@@ -1113,8 +1302,9 @@ impl Decls {
             Const::Static(id) => StaticWord::Data(nth(statics, id.as_u32(), "static")?),
             Const::Str(id) => StaticWord::Data(nth(strings, id.as_u32(), "string")?),
             Const::BuiltinDesc(desc) => StaticWord::Data(self.builtin_desc(*desc)?),
+            Const::ErrNil => StaticWord::Data(self.static_data(abi::sym::STATIC_ERR_NIL)?),
             Const::Code(key) => StaticWord::Code(self.func(*key)?.id),
-            Const::Int(_) | Const::Float(_) | Const::Bool(_) | Const::Sized { .. } => {
+            Const::Int(_) | Const::Float(_) | Const::Bool(_) | Const::Sized { .. } | Const::Ctx => {
                 return Err(CodegenError::ice(format!(
                     "a static object holds the raw constant {field:?}"
                 )));
@@ -1150,13 +1340,27 @@ impl Decls {
         for block in &function.blocks {
             for stmt in &block.stmts {
                 let (Stmt::Assign {
-                    value: Rvalue::CallForeign { symbol, sig, .. },
+                    value:
+                        Rvalue::CallForeign {
+                            symbol,
+                            sig,
+                            blocking,
+                            ..
+                        },
                     ..
                 }
-                | Stmt::Eval(Rvalue::CallForeign { symbol, sig, .. })) = stmt
+                | Stmt::Eval(Rvalue::CallForeign {
+                    symbol,
+                    sig,
+                    blocking,
+                    ..
+                })) = stmt
                 else {
                     continue;
                 };
+                if *blocking {
+                    self.declare_blocking_shim(module, symbol, sig)?;
+                }
                 let signature = sig::foreign_signature(sig, self.call_conv);
                 if let Some(existing) = self.foreign.get(symbol) {
                     if let ForeignDecl::Function(_, existing) = existing
@@ -1192,6 +1396,36 @@ impl Decls {
         }
         Ok(())
     }
+
+    /// Declares the shim of the blocking foreign function `symbol` called
+    /// with the C signature `sig`, and `cheby_rt_blocking_call`, unless an
+    /// earlier unit or batch did (`blocking.rs`, D-818). The
+    /// first signature of a symbol names its shim `cb$blk$<symbol>`; a
+    /// later one, which only signature-free imports allow, gets the next
+    /// number ([`mangle::blocking_shim`]).
+    fn declare_blocking_shim<M: Module>(
+        &mut self,
+        module: &mut M,
+        symbol: &str,
+        sig: &ForeignSig,
+    ) -> Result<(), CodegenError> {
+        let key = (Box::<str>::from(symbol), sig.clone());
+        if self.blocking_shims.contains_key(&key) {
+            return Ok(());
+        }
+        self.declare_runtime_func(module, RuntimeFunc::BlockingCall)?;
+        let variant = self.blocking_variants.entry(key.0.clone()).or_insert(0);
+        let name = mangle::blocking_shim(symbol, *variant);
+        *variant = variant.saturating_add(1);
+        let signature = crate::blocking::shim_signature(self.call_conv);
+        let id = module
+            .declare_function(&name, Linkage::Local, &signature)
+            .map_err(|e| CodegenError::module(&e))?;
+        self.names.insert((0, id.as_u32()), name);
+        self.blocking_shims.insert(key.clone(), id);
+        self.pending_shims.push((id, key.0, key.1));
+        Ok(())
+    }
 }
 
 /// The constants a terminator reads.
@@ -1202,7 +1436,7 @@ fn terminator_consts(term: &Terminator) -> Vec<&Const> {
         Terminator::Branch { cond, .. } => vec![cond],
         Terminator::Switch { on, .. } => vec![on],
         Terminator::Panic { message, .. } => message.iter().collect(),
-        Terminator::Unreachable => Vec::new(),
+        Terminator::Unreachable | Terminator::Resume => Vec::new(),
     };
     ops.into_iter()
         .filter_map(|op| match op {

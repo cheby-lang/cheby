@@ -24,6 +24,19 @@ use crate::abi::{self, Word};
 use crate::alloc::live;
 use crate::string::{new_string, to_rust_string};
 
+/// `normal`, or `miri` under Miri, which interprets every step: the size of
+/// a test whose checks hold at any size, cut for the nightly Miri job
+/// (D-721, D-884).
+const fn sized(normal: i64, miri: i64) -> i64 {
+    if cfg!(miri) { miri } else { normal }
+}
+
+/// A property's cases: `normal`, or 4 under Miri, as the Miri job's
+/// `PROPTEST_CASES`, which an explicit count would override.
+const fn miri_cases(normal: u32) -> u32 {
+    if cfg!(miri) { 4 } else { normal }
+}
+
 // ---------------------------------------------------------------------
 // Elements and models
 
@@ -289,7 +302,7 @@ fn push_and_set_are_in_place_at_count_one_and_copy_when_shared() {
 #[test]
 fn prepend_is_in_place_at_count_one_and_copies_when_shared() {
     balanced(|| {
-        let n = 20_000_i64;
+        let n = sized(20_000, 2_000);
         let mut xs = ops::prepend(list(&[]), elem(n));
         let first_root = xs;
         let mut model = vec![n];
@@ -325,7 +338,7 @@ fn appending_many_small_lists_keeps_the_tree_shallow() {
     balanced(|| {
         let mut acc = list(&[]);
         let mut model = Vec::new();
-        for n in 0..3_000_i64 {
+        for n in 0..sized(3_000, 300) {
             let len = (n % 7) as usize;
             let piece: Vec<i64> = (0..len as i64).map(|k| n * 10 + k).collect();
             let other = list(&piece);
@@ -337,7 +350,7 @@ fn appending_many_small_lists_keeps_the_tree_shallow() {
         // ~9,000 elements: three levels when full, a little slack allowed.
         assert!(height(acc) <= 4, "height {}", height(acc));
         // Prepending element by element too.
-        for v in 0..1_000 {
+        for v in 0..sized(1_000, 100) {
             acc = ops::prepend(acc, elem(-v));
             model.insert(0, -v);
         }
@@ -388,10 +401,11 @@ fn freeing_a_million_elements_uses_no_stack() {
         .stack_size(64 * 1024)
         .spawn(|| {
             let before = live();
-            let xs = from_iter((0..1_000_000).map(|v| abi::tag_int(v).unwrap()));
-            let ys = ops::slice(root(xs), 10, 999_990);
+            let n = sized(1_000_000, 1_000);
+            let xs = from_iter((0..n).map(|v| abi::tag_int(v).unwrap()));
+            let ys = ops::slice(root(xs), 10, n as usize - 10);
             // SAFETY: a live list.
-            assert_eq!(unsafe { super::length(xs) }, 1_000_000);
+            assert_eq!(unsafe { super::length(xs) }, n as usize);
             release(root(xs));
             release(ys);
             assert_eq!(live(), before);
@@ -441,6 +455,7 @@ fn helpers_follow_the_ownership_of_plan_4_1() {
 #[test]
 fn owned_slices_reuse_a_unique_root() {
     use crate::stats::Event;
+    crate::stats::count_events();
     balanced(|| {
         let domain = crate::alloc::current_domain();
         let count = |event| domain.stats().count(event);
@@ -482,6 +497,7 @@ fn owned_slices_reuse_a_unique_root() {
 #[test]
 fn pushes_are_counted_by_path() {
     use crate::stats::Event;
+    crate::stats::count_events();
     balanced(|| {
         let domain = crate::alloc::current_domain();
         let count = |event| domain.stats().count(event);
@@ -640,7 +656,12 @@ fn pushed(n: i64) -> Root {
 #[test]
 fn cost_slices_are_o1_views() {
     balanced(|| {
-        for n in [100, 10_000, 100_000] {
+        let sizes: &[i64] = if cfg!(miri) {
+            &[100, 2_000]
+        } else {
+            &[100, 10_000, 100_000]
+        };
+        for &n in sizes {
             let xs = pushed(n);
             let before = live();
             let outer = ops::slice(xs, 1, n as usize - 1);
@@ -659,7 +680,7 @@ fn cost_slices_are_o1_views() {
 #[test]
 fn cost_push_at_count_one_is_amortized_o1() {
     balanced(|| {
-        let n = 100_000_usize;
+        let n = sized(100_000, 1_000) as usize;
         let before = live();
         let xs = pushed(n as i64);
         // Every push reused the root and wrote along the right edge; the
@@ -681,7 +702,13 @@ fn cost_push_at_count_one_is_amortized_o1() {
 #[test]
 fn cost_get_and_set_are_o_log_n() {
     balanced(|| {
-        for n in [1_000, 100_000, 1_000_000] {
+        // Under Miri, sizes that still reach three levels (32^2 < 2,000).
+        let sizes: &[i64] = if cfg!(miri) {
+            &[1_000, 2_000]
+        } else {
+            &[1_000, 100_000, 1_000_000]
+        };
+        for &n in sizes {
             let xs = pushed(n);
             // The height is the number of nodes a lookup visits below the
             // root: ceil(log32 n) - 1 for a list built by pushing.
@@ -704,7 +731,12 @@ fn cost_get_and_set_are_o_log_n() {
 #[test]
 fn cost_append_and_prepend_are_o_log_n() {
     balanced(|| {
-        for n in [1_000, 100_000] {
+        let sizes: &[i64] = if cfg!(miri) {
+            &[1_000, 2_000]
+        } else {
+            &[1_000, 100_000]
+        };
+        for &n in sizes {
             let a = pushed(n);
             let b = pushed(n);
             let h = height(a).max(height(b));
@@ -862,7 +894,7 @@ fn apply(xs: Root, model: &mut Vec<i64>, op: &Op, shared: bool) -> Root {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig { cases: 48, ..ProptestConfig::default() })]
+    #![proptest_config(ProptestConfig { cases: miri_cases(48), ..ProptestConfig::default() })]
 
     /// Every operation against `Vec`, on lists up to 100,000 elements,
     /// including slices of slices, at count one and shared.
@@ -923,7 +955,7 @@ fn step() -> impl Strategy<Value = Step> {
 const VERSIONS: usize = 6;
 
 proptest! {
-    #![proptest_config(ProptestConfig { cases: 96, ..ProptestConfig::default() })]
+    #![proptest_config(ProptestConfig { cases: miri_cases(96), ..ProptestConfig::default() })]
 
     /// N live versions under random sharing, dropping and updating, each
     /// checked against its own model after every step; the domain returns
@@ -1085,7 +1117,9 @@ fn unique_of_a_view_reads_only_the_view() {
 unsafe extern "C" fn unique_of_functions(_: *mut crate::ctx::ExecCtx) -> u64 {
     let f = crate::generic::tests::closure(&[]);
     let xs = from_iter([f]);
-    // SAFETY: the kernel borrows its list; it panics, so nothing returns.
+    // SAFETY: the kernel borrows its list. It panics: its guard sets the
+    // flag and returns the sentinel, which goes back to the entry's catch
+    // point at once (D-733).
     unsafe { cheby_list_unique(xs) }
 }
 
@@ -1139,7 +1173,7 @@ fn lists_compare_hash_and_print_through_their_root_kind() {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(64))]
+    #![proptest_config(ProptestConfig::with_cases(miri_cases(64)))]
 
     #[test]
     fn unique_matches_the_model(model in prop::collection::vec(0_i64..40, 0..300)) {
@@ -1152,4 +1186,85 @@ proptest! {
             release(xs);
         });
     }
+}
+
+// ---------------------------------------------------------------------
+// A system refusal in the middle of an in-place update
+// (D-771)
+
+/// `main`'s thunk: fills a unique list's first leaf in place, then pushes
+/// once more with the next system allocation refused. The push has taken
+/// the list over (D-738's preflight passed: there is no budget), so the
+/// refusal stops the update halfway and the list in flight leaks. The
+/// helper's guard sets the flag and returns its sentinel (D-733), and the
+/// thunk returns at once.
+unsafe extern "C" fn pushes_until_the_system_refuses(ctx: *mut crate::ctx::ExecCtx) -> u64 {
+    let mut xs = empty();
+    for v in 0..M {
+        // SAFETY: `ctx` is the running entry's; `xs` is a live list owned
+        // here and given up, the element a tagged integer.
+        xs = unsafe { cheby_rt_list_push(ctx, xs, abi::tag_int(v as i64).unwrap()) };
+    }
+    crate::alloc::refuse_next_system_allocation();
+    // SAFETY: as above. The sentinel goes back to the entry's catch point.
+    unsafe { cheby_rt_list_push(ctx, xs, abi::tag_int(M as i64).unwrap()) }
+}
+
+/// D-771: an out-of-memory panic caused by a refusal of
+/// the system allocator marks the build's domain, and `run_main` exits 101
+/// without the leak check, which would have found the list in flight and
+/// exited 102, and counts the skip.
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+#[cfg_attr(miri, ignore = "runs an entry thread")]
+fn system_refusal_skips_the_leak_check_and_exits_101() {
+    let _guard = crate::alloc::tests::serial();
+    let domain = crate::alloc::Domain::new();
+    let config = crate::entry::RunConfig {
+        domain: std::sync::Arc::clone(&domain),
+        threads: Some(1),
+        ..crate::entry::RunConfig::default()
+    };
+    // SAFETY: a test thunk with the `EntryFn` ABI whose code is static.
+    let status = unsafe { crate::entry::run_main(pushes_until_the_system_refuses, config) };
+    assert_eq!(status.unwrap(), abi::status::PANIC);
+    assert!(domain.system_refused());
+    if crate::alloc::LEAK_CHECK_ENABLED {
+        assert!(domain.live_objects() > 0, "the update in flight leaked");
+        assert_eq!(domain.stats().leak_checks_skipped(), 1);
+    }
+}
+
+/// The refusal hook refuses on the thread that armed it, and only once:
+/// the domain is marked, and the next request is served.
+#[test]
+#[cfg_attr(miri, ignore = "runs an entry thread")]
+fn system_refusal_is_one_request_of_the_arming_thread() {
+    // The hook arms one thread of the process at a time.
+    let _guard = crate::alloc::tests::serial();
+    let domain = crate::alloc::Domain::new();
+    let config = crate::entry::EntryConfig {
+        domain: std::sync::Arc::clone(&domain),
+        ..crate::entry::EntryConfig::new(crate::entry::EntryMode::Test)
+    };
+    let task = || {
+        // Armed for this thread: another thread's request is served.
+        crate::alloc::refuse_next_system_allocation();
+        let other = std::thread::spawn(|| from_iter([abi::tag_int(1).unwrap()]))
+            .join()
+            .unwrap();
+        drop_word(other);
+        let _ = from_iter([abi::tag_int(2).unwrap()]);
+        0
+    };
+    // SAFETY: the task handles only words it makes.
+    let outcome = unsafe { crate::entry::run_task(&config, task) }.unwrap();
+    let crate::entry::EntryOutcome::Panicked(report) = outcome else {
+        panic!("expected a panic, got {outcome:?}");
+    };
+    assert_eq!(report.message, crate::alloc::OUT_OF_MEMORY);
+    assert!(domain.system_refused());
+    // Disarmed: the next request on this thread is served.
+    let served = from_iter([abi::tag_int(3).unwrap()]);
+    drop_word(served);
 }

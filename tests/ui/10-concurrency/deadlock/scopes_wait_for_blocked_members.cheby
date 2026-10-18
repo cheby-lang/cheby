@@ -1,0 +1,33 @@
+// @mode: run-fail
+// @exit: 103
+// @decisions: D-724, D-856, D-858
+// @milestone: M2
+//! Two nested scopes wait at their ends for members that cannot finish:
+//! `main`'s scope waits for a fiber whose own scope, in a helper, waits for
+//! a fiber blocked in a receive. Each scope's line names its `use`.
+
+import std::channel
+import std::fiber
+
+fn wait_inside(rx: channel::Receiver<Int>) -> Int {
+  let inner = {
+    use owner <- fiber::scope()
+    fiber::spawn(owner, fn() { channel::receive(rx) })
+    0
+  }
+  case inner {
+    Ok(n) => n
+    Err(_) => -1
+  }
+}
+
+fn main() {
+  let (tx, rx) = channel::new::<Int>(0)
+  let outer = {
+    use owner <- fiber::scope()
+    fiber::spawn(owner, fn() { wait_inside(rx) })
+    Nil
+  }
+  let _ = channel::send(tx, 0)
+  let _ = outer
+}

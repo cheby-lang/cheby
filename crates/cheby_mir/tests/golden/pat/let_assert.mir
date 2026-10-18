@@ -1,4 +1,5 @@
 fn app::asserting(_0: value) -> value check str#0 {
+  entry unwind bb5
   str#0 = "src/main.cheby:127:4"
   str#1 = "`let assert` pattern did not match\n  value: "
   str#2 = "src/main.cheby:128:14"
@@ -7,22 +8,36 @@ bb0:
   switch _1 [0 => bb1, _ => bb2]
 bb1:
   _2: value = field _0.0 of ctor Some
-  dup _2
-  drop _0
+  drop _0 of ctor Some keep [_2 @0]
   return _2
 bb2:
   goto bb3()
 bb3:
-  _3: value = call_runtime str_with_capacity(borrow const int 64)
-  _4: value = call_runtime str_append(_3, borrow const str#1)
-  _5: value = call_runtime debug(borrow _0)
+  _3: value = call_runtime str_with_capacity(borrow const int 64) ; unwind bb5
+  _4: value = call_runtime str_append(_3, borrow const str#1) ; unwind bb5
+  _5: value = call_runtime debug(borrow _0) ; unwind bb6
   drop _0
-  _6: value = call_runtime str_append(_4, borrow _5)
+  _6: value = call_runtime str_append(_4, borrow _5) ; unwind bb7
   drop _5
-  panic let_assert _6 at str#2
+  panic let_assert _6 at str#2 ; unwind bb8
+bb4:
+  resume
+bb5:
+  drop _0
+  goto bb4()
+bb6:
+  drop _4
+  goto bb5()
+bb7:
+  drop _5
+  goto bb4()
+bb8:
+  drop _6
+  goto bb4()
 }
 
 fn app::asserting_with(_0: value) -> value check str#0 {
+  entry unwind bb5
   str#0 = "src/main.cheby:132:4"
   str#1 = "`let assert` pattern did not match: "
   str#2 = "need a value"
@@ -33,21 +48,32 @@ bb0:
   switch _1 [0 => bb1, _ => bb2]
 bb1:
   _2: value = field _0.0 of ctor Some
-  dup _2
-  drop _0
+  drop _0 of ctor Some keep [_2 @0]
   return _2
 bb2:
   goto bb3()
 bb3:
-  _3: value = call_runtime str_with_capacity(borrow const int 64)
-  _4: value = call_runtime str_append(_3, borrow const str#1)
-  _5: value = const str#2
-  _6: value = call_runtime str_append(_4, borrow _5)
-  drop _5
-  _7: value = call_runtime str_append(_6, borrow const str#3)
-  _8: value = call_runtime debug(borrow _0)
+  _3: value = call_runtime str_with_capacity(borrow const int 64) ; unwind bb5
+  _4: value = call_runtime str_append(_3, borrow const str#1) ; unwind bb5
+  _6: value = call_runtime str_append(_4, borrow const str#2) ; unwind bb5
+  _7: value = call_runtime str_append(_6, borrow const str#3) ; unwind bb5
+  _8: value = call_runtime debug(borrow _0) ; unwind bb6
   drop _0
-  _9: value = call_runtime str_append(_7, borrow _8)
+  _9: value = call_runtime str_append(_7, borrow _8) ; unwind bb7
   drop _8
-  panic let_assert _9 at str#4
+  panic let_assert _9 at str#4 ; unwind bb8
+bb4:
+  resume
+bb5:
+  drop _0
+  goto bb4()
+bb6:
+  drop _7
+  goto bb5()
+bb7:
+  drop _8
+  goto bb4()
+bb8:
+  drop _9
+  goto bb4()
 }

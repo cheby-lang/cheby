@@ -1,0 +1,36 @@
+// @mode: run-pass
+// @decisions: D-666, D-178
+// @milestone: M2
+//! A failed scope reports its first panic. A panic that the resulting
+//! cancellation causes is not reported, and neither panic is printed
+//! (§10.3).
+
+import std::channel
+import std::fiber
+import std::io
+
+fn main() {
+  let (gate_tx, gate_rx) = channel::new::<Nil>(0)
+  let (stuck_tx, stuck_rx) = channel::new::<Nil>(0)
+  let outcome = {
+    use owner <- fiber::scope()
+    // Spawned first, but it can panic only once `gate` has closed.
+    let _ = fiber::spawn(owner, fn() {
+      let _ = channel::receive(gate_rx)
+      panic as "second"
+    })
+    // Holds the last `Sender` of `gate` until the cancellation unwinds it:
+    // `main` keeps `stuck_tx` and sends nothing.
+    let _ = fiber::spawn(owner, fn() {
+      let _ = channel::receive(stuck_rx)
+      channel::send(gate_tx, Nil)
+    })
+    let _ = fiber::spawn(owner, fn() { panic as "first" })
+    Nil
+  }
+  case outcome {
+    Ok(_) => io::println("the scope returned Ok")
+    Err(failure) => io::println("{failure}")
+  }
+  let _ = channel::send(stuck_tx, Nil)
+}

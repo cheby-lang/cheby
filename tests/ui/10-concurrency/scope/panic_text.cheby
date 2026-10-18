@@ -1,0 +1,28 @@
+// @mode: run-pass
+// @decisions: D-178, D-473, D-648
+// @milestone: M2
+//! The `fiber::Panic` that a failed scope returns holds the panic's
+//! message and location. Its debug text escapes both like strings, `show`
+//! is the panic report without its last line ending, and two panics are
+//! equal when both texts are (§10.2, §11.6).
+
+import std::fiber
+import std::io
+
+fn fail(text: String) -> fiber::Panic {
+  let assert Err(failure) = {
+    use _scope <- fiber::scope()
+    panic as text
+  }
+  failure
+}
+
+fn main() {
+  let failure = fail("boom \"quoted\"")
+  io::println(fiber::message(failure))
+  io::println("{failure:?}")
+  io::println("{failure}")
+  let equal = fail("same") == fail("same")
+  let different = fail("same") == fail("other")
+  io::println("{equal} {different}")
+}

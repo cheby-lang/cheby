@@ -1,0 +1,45 @@
+// @mode: run-pass
+// @decisions: D-673, D-103, D-180
+// @milestone: M2
+//! A selector is a value that can be selected any number of times, and a
+//! timer arm's clock starts anew in each `select`, not when `after` added
+//! the arm. So after a pause longer than the timer arm's wait, a buffered
+//! value is still the only ready arm (§10.6).
+
+import std::channel
+import std::duration
+import std::io
+import std::selector
+
+/// Waits for `wait`: a selector with only a timer arm is a sleep. It
+/// orders nothing here; it only lets more time pass than the timer arm
+/// below waits.
+fn pause(wait: duration::Duration) {
+  selector::new()
+  |> selector::after(_, wait, fn() { Nil })
+  |> selector::select
+}
+
+fn main() {
+  let (tx, rx) = channel::new::<Int>(3)
+  let assert Ok(Nil) = channel::send(tx, 1)
+  let assert Ok(Nil) = channel::send(tx, 2)
+  let events =
+    selector::new()
+    |> selector::receive(_, rx, fn(r) {
+      case r {
+        Ok(n) => "value {n}"
+        Err(Nil) => "closed"
+      }
+    })
+    |> selector::after(_, duration::milliseconds(10), fn() { "timer" })
+  pause(duration::milliseconds(30))
+  io::println(selector::select(events))
+  io::println(selector::select(events))
+  io::println(selector::select(events))
+  io::println(selector::select(events))
+  // The last use of `tx`: the channel closes with one value buffered.
+  let assert Ok(Nil) = channel::send(tx, 3)
+  io::println(selector::select(events))
+  io::println(selector::select(events))
+}

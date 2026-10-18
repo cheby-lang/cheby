@@ -1,0 +1,308 @@
+//! The insertion-ordered set `OrderedSet<T>`, a persistent set that keeps
+//! its elements in the order they were first inserted (D-337, D-339),
+//! written in Cheby over `std::ordered_map` with no runtime kernel (D-336,
+//! D-664).
+//!
+//! A set is an ordered map from each element to `Nil`, so it has the
+//! map's representation and its order rules: an element already present
+//! keeps its place, and a removed element inserted again goes at the end
+//! (D-340). Elements are hashed and compared by the runtime's built-in
+//! routines, and no `compare` of the element type is ever called.
+
+import std::list
+import std::ordered_map
+import std::set
+
+/// A persistent set in insertion order (D-337, D-339, D-340): an ordered
+/// map whose values are all `Nil`. Equality, hashing and debug printing go
+/// through `equal`, `hash` and `debug` (D-342, D-343).
+@std_hooks(equal, hash, debug)
+pub type OrderedSet<T> {
+  items: ordered_map::OrderedMap<T, Nil>,
+}
+
+/// Whether two sets hold the same elements in the same order, compared
+/// with `==` (D-343).
+fn equal<T>(a: OrderedSet<T>, b: OrderedSet<T>) -> Bool {
+  size(a) == size(b) && to_list(a) == to_list(b)
+}
+
+/// The elements in order: equal sets give equal lists, and the hash covers
+/// the order (D-343, D-584).
+fn hash<T>(s: OrderedSet<T>) -> List<T> {
+  to_list(s)
+}
+
+/// `ordered_set::from_list([…])` with the elements in order, each one
+/// debug-printed (D-344).
+fn debug<T>(s: OrderedSet<T>) -> String {
+  let items = to_list(s)
+  "ordered_set::from_list({items:?})"
+}
+
+test "ordered sets compare, hash and print by contents and order" {
+  let abc = from_list(["a", "b", "c"])
+  let cba = from_list(["c", "b", "a"])
+  let grown = insert(from_list(["a", "b"]), "c")
+  assert abc == grown
+  assert abc != cba
+  assert set::size(set::from_list([abc, grown, cba])) == 2
+  assert "{cba:?}" == "ordered_set::from_list([\"c\", \"b\", \"a\"])"
+}
+
+// Building
+
+/// Returns an empty set.
+pub fn new<T>() -> OrderedSet<T> {
+  OrderedSet { items: ordered_map::new() }
+}
+
+test "new is empty" {
+  let empty = new::<Int>()
+  assert is_empty(empty)
+  assert to_list(empty) == []
+}
+
+/// Returns a set of the given items, as if each were inserted in turn, so
+/// a repeated item keeps the place of its first occurrence (D-340).
+pub fn from_list<T>(items: List<T>) -> OrderedSet<T> {
+  list::fold(items, new(), fn(built, item) { insert(built, item) })
+}
+
+test "from_list drops duplicates and keeps first positions" {
+  assert to_list(from_list(["pear", "apple", "pear"])) == ["pear", "apple"]
+}
+
+// Size
+
+/// Returns the number of elements, O(1).
+pub fn size<T>(s: OrderedSet<T>) -> Int {
+  ordered_map::size(s.items)
+}
+
+test "size counts distinct elements" {
+  assert size(from_list([1, 2, 1])) == 2
+  assert size(new::<Int>()) == 0
+}
+
+/// Tells whether the set has no elements.
+pub fn is_empty<T>(s: OrderedSet<T>) -> Bool {
+  ordered_map::is_empty(s.items)
+}
+
+test "is_empty tells an empty set" {
+  assert is_empty(new::<Int>())
+  assert !is_empty(from_list([1]))
+}
+
+// Lookup
+
+/// Tells whether `item` is in the set.
+pub fn contains<T>(s: OrderedSet<T>, item: T) -> Bool {
+  ordered_map::has_key(s.items, item)
+}
+
+test "contains looks an element up" {
+  let primes = from_list([5, 2, 3])
+  assert contains(primes, 3)
+  assert !contains(primes, 4)
+}
+
+/// The element of an entry of the underlying map.
+fn element<T>(found: Option<(T, Nil)>) -> Option<T> {
+  case found {
+    Some((item, _)) => Some(item)
+    None => None
+  }
+}
+
+/// Returns the element that comes first in the set's order, the oldest
+/// element still present.
+pub fn first<T>(s: OrderedSet<T>) -> Option<T> {
+  element(ordered_map::first(s.items))
+}
+
+test "first is the oldest element" {
+  let seen = from_list([5, 2, 8])
+  assert first(seen) == Some(5)
+  assert first(remove(seen, 5)) == Some(2)
+  assert first(new::<Int>()) == None
+}
+
+/// Returns the element that comes last in the set's order, the one
+/// inserted most recently.
+pub fn last<T>(s: OrderedSet<T>) -> Option<T> {
+  element(ordered_map::last(s.items))
+}
+
+test "last is the newest element" {
+  assert last(from_list([5, 2, 8])) == Some(8)
+  assert last(new::<Int>()) == None
+}
+
+// Updating
+
+/// Returns the set with `item` added at the end, or the set unchanged when
+/// `item` is already in it, so the element keeps its place (D-340).
+pub fn insert<T>(s: OrderedSet<T>, item: T) -> OrderedSet<T> {
+  case contains(s, item) {
+    True => s
+    False => OrderedSet { items: ordered_map::insert(s.items, item, Nil) }
+  }
+}
+
+test "insert adds at the end and keeps an existing position" {
+  let start = from_list([3, 1])
+  let added = insert(start, 2)
+  assert to_list(added) == [3, 1, 2]
+  assert insert(added, 3) == added
+  assert to_list(start) == [3, 1]
+}
+
+/// Returns the set without `item`, or unchanged when `item` is not in it.
+/// The other elements keep their order, and a removed element inserted
+/// again goes at the end (D-340).
+pub fn remove<T>(s: OrderedSet<T>, item: T) -> OrderedSet<T> {
+  OrderedSet { items: ordered_map::remove(s.items, item) }
+}
+
+test "remove then insert moves an element to the end" {
+  let start = from_list([1, 2, 3])
+  let removed = remove(start, 1)
+  let back = insert(removed, 1)
+  assert to_list(removed) == [2, 3]
+  assert to_list(back) == [2, 3, 1]
+  assert back != start
+  assert remove(start, 9) == start
+}
+
+// Iterating
+
+/// Returns the elements in the set's order, O(n).
+pub fn to_list<T>(s: OrderedSet<T>) -> List<T> {
+  ordered_map::keys(s.items)
+}
+
+test "to_list gives the elements in insertion order" {
+  assert to_list(from_list(["b", "c", "a"])) == ["b", "c", "a"]
+}
+
+/// Combines the elements in the set's order, starting from `initial`.
+pub fn fold<T, A>(s: OrderedSet<T>, initial: A, f: fn(A, T) -> A) -> A {
+  list::fold(to_list(s), initial, f)
+}
+
+test "fold visits the elements in insertion order" {
+  let letters = from_list(["b", "c", "a"])
+  assert fold(letters, "", fn(text, letter) { text + letter }) == "bca"
+}
+
+/// Calls `f` once per element, in the set's order, for its effects.
+pub fn each<T>(s: OrderedSet<T>, f: fn(T)) {
+  list::each(to_list(s), f)
+}
+
+test "each calls the function once per element" {
+  each(from_list([6, 2, 4]), fn(n) { assert n % 2 == 0 })
+}
+
+// Transforming
+
+/// Returns the elements for which `keep` returns `True`, in the same order.
+/// `keep` is called once per element, in the set's order, O(n log n).
+pub fn filter<T>(s: OrderedSet<T>, keep: fn(T) -> Bool) -> OrderedSet<T> {
+  OrderedSet { items: ordered_map::filter(s.items, fn(item, _) { keep(item) }) }
+}
+
+test "filter keeps the matching elements in order" {
+  let digits = from_list([4, 1, 2, 3])
+  assert to_list(filter(digits, fn(n) { n % 2 == 0 })) == [4, 2]
+}
+
+/// Returns the set of the results of `f`, in the order of the elements
+/// they came from. `f` is called once per element, in the set's order, and
+/// a result already present keeps the place where it first appeared.
+pub fn map<T, U>(s: OrderedSet<T>, f: fn(T) -> U) -> OrderedSet<U> {
+  from_list(list::map(to_list(s), f))
+}
+
+test "map can merge elements" {
+  let digits = from_list([4, 1, 2, 3])
+  assert to_list(map(digits, fn(n) { n / 2 })) == [2, 0, 1]
+}
+
+// Combining
+
+/// Returns the elements of `s` in their order, followed by the elements of
+/// `other` that are not in `s`, in `other`'s order.
+pub fn union<T>(s: OrderedSet<T>, other: OrderedSet<T>) -> OrderedSet<T> {
+  fold(other, s, fn(joined, item) { insert(joined, item) })
+}
+
+test "union appends the new elements of the second set" {
+  let first_set = from_list([3, 1])
+  let second_set = from_list([2, 1, 4])
+  assert to_list(union(first_set, second_set)) == [3, 1, 2, 4]
+}
+
+/// Returns the elements of `s` that are also in `other`, in `s`'s order.
+pub fn intersection<T>(s: OrderedSet<T>, other: OrderedSet<T>) -> OrderedSet<T> {
+  filter(s, fn(item) { contains(other, item) })
+}
+
+test "intersection keeps the order of the first set" {
+  let first_set = from_list([3, 2, 1])
+  let second_set = from_list([1, 2, 4])
+  assert to_list(intersection(first_set, second_set)) == [2, 1]
+}
+
+/// Returns the elements of `s` that are not in `other`, in `s`'s order.
+pub fn difference<T>(s: OrderedSet<T>, other: OrderedSet<T>) -> OrderedSet<T> {
+  filter(s, fn(item) { !contains(other, item) })
+}
+
+test "difference removes the elements of the second set" {
+  let first_set = from_list([3, 2, 1])
+  let second_set = from_list([2, 4])
+  assert to_list(difference(first_set, second_set)) == [3, 1]
+}
+
+/// Tells whether every element of `s` is in `other`, ignoring order.
+pub fn is_subset<T>(s: OrderedSet<T>, other: OrderedSet<T>) -> Bool {
+  list::all(to_list(s), fn(item) { contains(other, item) })
+}
+
+test "is_subset ignores order" {
+  let small = from_list([2, 1])
+  let large = from_list([1, 2, 3])
+  assert is_subset(small, large)
+  assert !is_subset(large, small)
+  assert is_subset(new(), small)
+}
+
+// Text
+
+/// Writes `ordered_set::from_list([`, the elements in order written with
+/// `show`, and `])` (D-355). It makes `OrderedSet<T>` satisfy `Show` when
+/// `T` does (D-064, D-344).
+pub fn show<T: Show>(s: OrderedSet<T>) -> String {
+  let items = to_list(s)
+  "ordered_set::from_list({items})"
+}
+
+test "an ordered set shows its elements in order" {
+  let words = from_list(["b", "a"])
+  assert show(words) == "ordered_set::from_list([b, a])"
+  assert "{words}" == "ordered_set::from_list([b, a])"
+}
+
+// Internal tests
+
+test "an element removed and inserted again goes to the end" {
+  let start = from_list(list::range(0, 100))
+  let moved = list::fold(list::range(0, 50), start, fn(s, n) { insert(remove(s, n), n) })
+  assert to_list(moved) == list::append(list::range(50, 100), list::range(0, 50))
+  assert size(moved) == 100
+  assert first(moved) == Some(50)
+  assert last(moved) == Some(49)
+}

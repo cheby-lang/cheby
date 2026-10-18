@@ -1,0 +1,23 @@
+// @milestone: M2
+// @decisions: D-712, D-724, D-827, D-831, D-856, D-857, D-858, D-859, D-861
+> import std::channel
+> import std::fiber
+> let keep = {
+.   let (sender, never) = channel::new::<Int>(0)
+.   fiber::spawn_detached(fn() { channel::receive(never) })
+.   sender
+. }
+> let (tx, rx) = channel::new::<Int>(0)
+> channel::receive(rx)
+fatal error: all fibers are blocked
+  blocked in channel::receive at <repl:3>:3:32
+  blocked in channel::receive at <repl:5>:1:1
+> :reload
+no module changed
+> channel::send(keep, 1)
+Err(1) : Result<Nil, Int>
+> channel::receive(rx)
+fatal error: all fibers are blocked
+  blocked in channel::receive at <repl:7>:1:1
+> "the session continues"
+"the session continues" : String

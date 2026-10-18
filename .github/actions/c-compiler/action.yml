@@ -1,0 +1,57 @@
+# Checks the C compiler that libmimalloc-sys builds mimalloc with (D-890).
+#
+# `cheby_cli` links mimalloc as its global allocator, and the `cc` crate
+# compiles it from C during the build: with `cc` on Linux and macOS (gcc
+# on the Ubuntu images, Xcode's clang on the macOS ones), and with MSVC's
+# `cl.exe` on Windows, as C++17. The hosted images ship these compilers,
+# so this step installs nothing. It names the compiler in the log, and it
+# fails with a clear message before the build when an image no longer has
+# one. On Windows, `cc` finds MSVC through vswhere without a developer
+# prompt, so the step looks it up the same way, for the runner's
+# architecture.
+
+name: C compiler
+description: Check the C compiler that mimalloc is built with
+
+runs:
+  using: composite
+  steps:
+    - name: C compiler (Linux, macOS)
+      if: runner.os != 'Windows'
+      shell: bash
+      run: |
+        if ! command -v cc >/dev/null; then
+          echo "::error::no \`cc\` on PATH; libmimalloc-sys needs a C compiler (D-890)"
+          exit 1
+        fi
+        cc --version
+    - name: C compiler (Windows, MSVC)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $arch = if ($env:RUNNER_ARCH -eq 'ARM64') { 'arm64' } else { 'x64' }
+        $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+        if (-not (Test-Path $vswhere)) {
+          Write-Output "::error::no vswhere.exe; libmimalloc-sys needs MSVC (D-890)"
+          exit 1
+        }
+        # No `-requires` component ID: the step looks for the file the
+        # build runs, `cl.exe` for this architecture, so it fails only when
+        # the build would.
+        $vs = & $vswhere -latest -products * -property installationPath
+        if (-not $vs) {
+          Write-Output "::error::no Visual Studio installation; libmimalloc-sys needs MSVC (D-890)"
+          exit 1
+        }
+        $cl = Get-ChildItem "$vs\VC\Tools\MSVC\*\bin\Host*\$arch\cl.exe" -ErrorAction SilentlyContinue |
+          Sort-Object FullName | Select-Object -Last 1
+        if (-not $cl) {
+          Write-Output "::error::no cl.exe for $arch under $vs; libmimalloc-sys needs MSVC (D-890)"
+          exit 1
+        }
+        Write-Output "Visual Studio: $vs"
+        Write-Output "cl.exe: $($cl.FullName)"
+        # cl.exe prints its version banner to stderr and its usage when it
+        # is given no input; only the banner is wanted.
+        & $cl.FullName 2>&1 | Select-Object -First 1
+        exit 0

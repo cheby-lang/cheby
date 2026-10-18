@@ -1,0 +1,38 @@
+// @mode: run-pass
+// @decisions: D-054, D-087, D-672
+// @milestone: M2
+//! A capacity-0 channel hands each value from a sender straight to a
+//! receiver: the send completes only when the receiver takes the value.
+//! When the fiber's last `Sender` goes, the receiver gets `Err(Nil)`
+//! (§10.5.1, §10.5.2).
+
+import std::channel
+import std::fiber
+import std::io
+
+fn count_up(tx: channel::Sender<Int>, n: Int, last: Int) {
+  case n > last {
+    True => Nil
+    False => {
+      let assert Ok(Nil) = channel::send(tx, n)
+      count_up(tx, n + 1, last)
+    }
+  }
+}
+
+fn total(rx: channel::Receiver<Int>, sum: Int) -> Int {
+  case channel::receive(rx) {
+    Ok(n) => total(rx, sum + n)
+    Err(Nil) => sum
+  }
+}
+
+fn main() {
+  let (tx, rx) = channel::new::<Int>(0)
+  let outcome = {
+    use owner <- fiber::scope()
+    fiber::spawn(owner, fn() { count_up(tx, 1, 1000) })
+    total(rx, 0)
+  }
+  io::println("{outcome:?}")
+}

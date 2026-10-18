@@ -1,0 +1,50 @@
+//! The scheduler's settings as a program sees them: the number of OS
+//! threads that run fibers, and the machine's CPU cores (§10.2, D-175,
+//! D-657).
+//!
+//! Every function is a kernel (D-657). `thread_count` and
+//! `set_thread_count` receive the running fiber's context, because they
+//! read and change its runtime (D-692); without a runtime the count is 1
+//! and setting it does nothing. `cpu_count` is an ordinary kernel. None of
+//! them runs in constants: reaching one while computing a constant is
+//! E0077 (D-090, D-537). Each also declares its JS binding, written with
+//! the JS back end (D-661).
+
+// Threads
+
+/// Returns the number of OS threads the scheduler runs fibers on now,
+/// from 1 to 1024 (D-657, D-658).
+@std_context
+@external(native, "cheby_runtime_thread_count")
+@external(js, "./runtime.mjs", "thread_count")
+pub fn thread_count() -> Int
+
+test "thread_count is at least one" {
+  let count = thread_count()
+  assert count >= 1 && count <= 1_024
+}
+
+/// Sets the number of OS threads the scheduler runs fibers on, for the
+/// whole program (§10.2, D-657). `count` is clamped to 1 to 1024, so 0 or
+/// a negative count gives one thread (D-298). Added threads start taking
+/// fibers at once, and a removed thread stops after the fiber it runs
+/// reaches its next suspension point (D-689). On JS it has no effect.
+@std_context
+@external(native, "cheby_runtime_set_thread_count")
+@external(js, "./runtime.mjs", "set_thread_count")
+@std_clamped(count)
+pub fn set_thread_count(count: Int)
+
+// The machine
+
+/// Returns the number of CPU cores the program may use, at least 1, as
+/// Rust's `std::thread::available_parallelism` reports it, and 1 when the
+/// system reports nothing (D-657). It is the default thread count, before
+/// the clamp to 1024.
+@external(native, "cheby_runtime_cpu_count")
+@external(js, "./runtime.mjs", "cpu_count")
+pub fn cpu_count() -> Int
+
+test "cpu_count is at least one" {
+  assert cpu_count() >= 1
+}

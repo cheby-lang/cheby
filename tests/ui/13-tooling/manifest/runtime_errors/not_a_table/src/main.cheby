@@ -1,0 +1,11 @@
+// @mode: check-fail
+// @decisions: D-659, D-660
+// @milestone: M2
+//! `runtime` in `cheby.toml` is a table, `[runtime]`; any other value is
+//! E0036 (§13.3).
+
+import std::io
+
+fn main() {
+  io::println("hello")
+}

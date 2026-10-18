@@ -2,6 +2,9 @@
 //!
 //! 1. The benchmark generator: each shape is generated into two different
 //!    directories and the trees are compared (D-291).
+//!    The `huge_*` shapes (one literal of [`HUGE_ELEMENTS`] computed
+//!    elements of each kind) are generated too, so that the continuations
+//!    lowering splits a large literal into (D-720, D-780) are compared.
 //! 2. The compiler: every example and a generated project of each shape is
 //!    copied under two different absolute paths and built in each, once
 //!    with `--jobs 1` and once with the default number of threads. Each
@@ -27,6 +30,13 @@ use cheby_test_support::example;
 const BUILDS: [(&str, &str, Option<usize>); 2] =
     [("a", "a", Some(1)), ("b", "b/nested/deeper", None)];
 
+/// The elements of each `huge_*` project (D-720's literal kinds, kept out
+/// of `--lines`): large enough that lowering splits every kind into
+/// several continuations (D-780), whose numbers and split points must not
+/// depend on the path or on `--jobs` (D-264), yet small enough to build
+/// in seconds.
+const HUGE_ELEMENTS: usize = 2_000;
+
 pub fn run(root: &Path, lines: usize, filter: Option<&str>) -> Result<(), String> {
     let base = root.join("target/determinism");
     if base.exists() {
@@ -36,9 +46,11 @@ pub fn run(root: &Path, lines: usize, filter: Option<&str>) -> Result<(), String
 
     // The generator.
     let mut projects: Vec<(String, PathBuf)> = Vec::new();
-    for shape in Shape::ALL {
+    for shape in Shape::ALL.into_iter().chain(Shape::HUGE_LITERALS) {
         let lines = if shape == Shape::Large {
             lines.max(40_000)
+        } else if shape.is_huge_literal() {
+            HUGE_ELEMENTS
         } else {
             lines
         };

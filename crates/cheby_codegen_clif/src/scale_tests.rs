@@ -58,6 +58,12 @@ fn unit(params: &[Repr], locals: Vec<Repr>, blocks: Vec<Block>, strings: Vec<Str
         span: Span::new(FileId::new(0), TextRange::new(0, 0)),
         strings: IndexVec::from_raw(all_strings).unwrap(),
         entry_loc: Some(StrId::from_u32(0)),
+        entry_unwind: None,
+        precounted: false,
+        borrow: cheby_mir::borrow::BorrowMask::OWNED,
+        sites: Vec::new(),
+        call_locs: Vec::new(),
+        call_loc_strings: IndexVec::new(),
     };
     MirModule {
         unit: UnitKind::Code(ModuleId::from_u32(1)),
@@ -65,11 +71,7 @@ fn unit(params: &[Repr], locals: Vec<Repr>, blocks: Vec<Block>, strings: Vec<Str
         functions: vec![function],
         callees: vec![CalleeDecl {
             def: f,
-            sig: AbiSig {
-                abi: Abi::Cheby,
-                params: params.to_vec(),
-                ret: Repr::Value,
-            },
+            sig: AbiSig::owned(Abi::Cheby, params.to_vec(), Repr::Value),
         }],
         layouts: Vec::new(),
         foreign_layouts: Vec::new(),
@@ -135,6 +137,7 @@ fn literal(n: usize, computed: bool) -> MirModule {
         params: Vec::new(),
         stmts,
         term: Terminator::Return(acc),
+        unwind: Vec::new(),
     };
     unit(&[Repr::Int], locals, vec![block], strings)
 }
@@ -223,11 +226,13 @@ fn blocks_translate_in_dominance_order() {
                 target: BlockId::from_u32(2),
                 args: Vec::new(),
             },
+            unwind: Vec::new(),
         },
         Block {
             params: vec![local(1)],
             stmts: Vec::new(),
             term: Terminator::Return(Operand::Local(local(1))),
+            unwind: Vec::new(),
         },
         Block {
             params: Vec::new(),
@@ -242,6 +247,7 @@ fn blocks_translate_in_dominance_order() {
                 target: BlockId::from_u32(1),
                 args: vec![Operand::Local(local(2))],
             },
+            unwind: Vec::new(),
         },
         Block {
             params: Vec::new(),
@@ -250,6 +256,7 @@ fn blocks_translate_in_dominance_order() {
                 value: Rvalue::Use(Operand::Const(Const::Nil)),
             }],
             term: Terminator::Return(Operand::Local(local(3))),
+            unwind: Vec::new(),
         },
     ];
     let unit = unit(

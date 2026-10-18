@@ -1,0 +1,15 @@
+// @mode: run-fail
+// @exit: 103
+// @decisions: D-724, D-856, D-858
+// @milestone: M2
+//! A send on a full channel waits for a receiver. `main` holds the only
+//! `Receiver` and is the one sending, so the report names its second send.
+
+import std::channel
+
+fn main() {
+  let (tx, rx) = channel::new::<Int>(1)
+  let assert Ok(Nil) = channel::send(tx, 1)
+  let assert Ok(Nil) = channel::send(tx, 2)
+  let _ = channel::receive(rx)
+}

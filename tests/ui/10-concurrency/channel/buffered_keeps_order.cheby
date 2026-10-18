@@ -1,0 +1,25 @@
+// @mode: run-pass
+// @decisions: D-054, D-672, D-692
+// @milestone: M2
+//! A buffered channel takes sends without a receiver while it has room,
+//! and delivers values in the order they were enqueued (§10.5).
+
+import std::channel
+import std::io
+
+fn main() {
+  let (tx, rx) = channel::new::<String>(3)
+  let assert Ok(Nil) = channel::send(tx, "first")
+  let assert Ok(Nil) = channel::send(tx, "second")
+  let assert Ok(Nil) = channel::send(tx, "third")
+  fn drain() {
+    case channel::receive(rx) {
+      Ok(text) => {
+        io::println(text)
+        drain()
+      }
+      Err(Nil) => io::println("closed")
+    }
+  }
+  drain()
+}

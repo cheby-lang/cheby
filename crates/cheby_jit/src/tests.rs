@@ -78,6 +78,12 @@ fn function(
         span: span(),
         strings: IndexVec::from_raw(table).unwrap(),
         entry_loc: (abi == Abi::Cheby).then(|| StrId::from_u32(0)),
+        entry_unwind: None,
+        precounted: false,
+        borrow: cheby_mir::borrow::BorrowMask::OWNED,
+        sites: Vec::new(),
+        call_locs: Vec::new(),
+        call_loc_strings: IndexVec::new(),
     }
 }
 
@@ -98,6 +104,7 @@ fn block(stmts: Vec<Stmt>, term: Terminator) -> Block {
         params: Vec::new(),
         stmts,
         term,
+        unwind: Vec::new(),
     }
 }
 
@@ -113,11 +120,7 @@ fn ret(n: u32) -> Terminator {
 }
 
 fn cheby_sig(params: &[Repr]) -> AbiSig {
-    AbiSig {
-        abi: Abi::Cheby,
-        params: params.to_vec(),
-        ret: Repr::Value,
-    }
+    AbiSig::owned(Abi::Cheby, params.to_vec(), Repr::Value)
 }
 
 fn code_unit(
@@ -200,6 +203,10 @@ fn returned(outcome: EntryOutcome) -> u64 {
     match outcome {
         EntryOutcome::Returned(word) => word,
         EntryOutcome::Panicked(report) => panic!("the entry panicked: {report:?}"),
+        // No runtime here: the isolated entry's thread is parked for good
+        // (D-709), and a parked thread runs none of the JIT's code again.
+        EntryOutcome::Exited(status) => panic!("the entry ended the program with status {status}"),
+        EntryOutcome::Deadlocked(report) => panic!("the entry deadlocked:\n{report}"),
     }
 }
 
@@ -346,6 +353,32 @@ impl Prog {
     fn compile(self) -> Jit {
         let mut jit = Jit::new().unwrap();
         jit.compile(&self.units()).unwrap();
+        jit
+    }
+
+    /// The units with their unwind edges and pads (D-698), as the driver's
+    /// pipeline gives them, checked at `Stage::Unwound`.
+    fn unwound_units(self) -> [MirModule; 2] {
+        let mut units = self.units();
+        for unit in &mut units {
+            cheby_mir::unwind::insert_module(unit).unwrap();
+            cheby_mir::validate(unit, cheby_mir::Stage::Unwound).unwrap();
+        }
+        units
+    }
+
+    /// [`Prog::compile`] after the unwind pass: code that unwinds by the
+    /// return flag (D-733). Every test that expects a panic uses it, since
+    /// a raise in code without unwind edges ends the process
+    /// (D-770).
+    fn compile_unwound(self) -> Jit {
+        self.compile_unwound_with(CodegenOptions::default(), JitOptions::from_env())
+    }
+
+    /// [`Prog::compile_unwound`] with `codegen` and `options`.
+    fn compile_unwound_with(self, codegen: CodegenOptions, options: JitOptions) -> Jit {
+        let mut jit = Jit::configured(codegen, options).unwrap();
+        jit.compile(&self.unwound_units()).unwrap();
         jit
     }
 }
@@ -574,7 +607,7 @@ fn panics_report_kind_and_location() {
         &["src/main.cheby:3:5"],
     );
     let target = p.call(f, Vec::new());
-    let jit = p.compile();
+    let jit = p.compile_unwound();
     let EntryOutcome::Panicked(report) = run_const(&jit, target) else {
         panic!("the entry returned");
     };
@@ -606,7 +639,7 @@ fn the_entry_check_catches_stack_overflow() {
         &[],
     );
     let target = p.call(f, Vec::new());
-    let jit = p.compile();
+    let jit = p.compile_unwound();
     let EntryOutcome::Panicked(report) = run_with_stack(&jit, target, 1 << 20) else {
         panic!("the recursion returned");
     };
@@ -628,6 +661,7 @@ fn calls_natives(symbols: &[&str]) -> Prog {
                     ret: cheby_mir::CType::Void,
                 },
                 args: Vec::new(),
+                blocking: false,
             })
         })
         .collect();
@@ -676,15 +710,13 @@ fn missing_native_symbols_are_all_reported() {
 fn unresolved_symbols_can_be_stubbed() {
     let mut p = calls_natives(&["cheby_test_missing_b", "cheby_test_missing_a"]);
     let target = p.call(def(1, 0), Vec::new());
-    let mut jit = Jit::configured(
+    let jit = p.compile_unwound_with(
         CodegenOptions::default(),
         JitOptions {
             stub_unresolved: true,
             ..JitOptions::from_env()
         },
-    )
-    .unwrap();
-    jit.compile(&p.units()).unwrap();
+    );
     let EntryOutcome::Panicked(report) = run_const(&jit, target) else {
         panic!("a stub returned");
     };
@@ -955,6 +987,7 @@ fn labs_wrapper(index: u32, params: &[cheby_mir::CType], args: &[i64], missing: 
                 ret: cheby_mir::CType::I64,
             },
             args: args.iter().map(sized).collect(),
+            blocking: false,
         },
     )];
     if missing {
@@ -965,6 +998,7 @@ fn labs_wrapper(index: u32, params: &[cheby_mir::CType], args: &[i64], missing: 
                 ret: cheby_mir::CType::Void,
             },
             args: Vec::new(),
+            blocking: false,
         }));
     }
     function(
@@ -1083,8 +1117,18 @@ fn compile_speed_probe() {
     println!("compile_speed_probe: {:?}", start.elapsed());
 }
 
+mod blocking;
+mod borrow;
+mod code_map;
 mod control;
+mod entry_unwind;
+mod large_frame;
+mod literals;
 mod objects;
 mod repl;
+mod reuse;
 mod scalars;
 mod special;
+mod std_context;
+mod unwind_flag;
+mod unwind_ir;

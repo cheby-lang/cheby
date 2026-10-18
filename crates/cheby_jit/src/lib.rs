@@ -15,19 +15,33 @@
 //!   their symbols carry `$r<generation>` (D-547), and a redefinition that
 //!   takes over an earlier definition repoints that slot once its batch is
 //!   finalized, so existing callers reach the new code
-//!   ([`Jit::revert_repoints`] undoes it for a rejected entry); one with
+//!   ([`Jit::revert_repoints`] undoes it for a rejected entry;
+//!   [`Jit::compile_unpublished`] leaves it to the REPL, which publishes
+//!   it once the constants the new code reads are filled); one with
 //!   another signature gets a new slot (D-456). [`Jit::slot`] and
 //!   [`Jit::repoint`] do the same by hand, and [`Jit::bind_values`] stores
-//!   the session values of prompt-level `let`s in constant slots.
+//!   the session values of prompt-level `let`s in constant slots. Slots
+//!   are written with release stores, since a REPL session's detached
+//!   fibers may run the JIT's code while a later entry compiles (D-712):
+//!   they call the old code or the new, and code is never freed while the
+//!   `Jit` lives.
 //! - The host never calls `tail`-convention code: it calls C-ABI entry
 //!   thunks ([`Jit::entry`]), which call the Cheby functions (D-453). An
 //!   [`Entry`] borrows its [`Jit`], so safe code cannot run an entry after
 //!   its code is freed; [`Entry::run_main`] runs `main`'s thunk with the
-//!   exit-status policy of §10.10. Every run gets the JIT's trampolines
-//!   ([`Jit::callbacks`], D-526) and its accounting domain ([`Jit::domain`]).
+//!   exit-status policy of §10.10, and [`Entry::run_root`] runs an entry
+//!   as a root fiber of a [`Runtime`] (D-690). Every run gets the JIT's
+//!   trampolines ([`Jit::callbacks`], D-526), its accounting domain
+//!   ([`Jit::domain`]) and whether its code has unwind edges
+//!   ([`Jit::unwind_edges`], D-742). An entry that panics unwinds by the
+//!   return flag (D-733): its frames release what they hold, and its
+//!   thread ends.
 //! - Code and data live in one reservation of 1 GiB of address space per
 //!   `Jit`, committed segment by segment as batches need it (see
-//!   `memory.rs`). Dropping a [`Jit`] frees it.
+//!   `memory.rs`). Dropping a [`Jit`] hands the memory to its
+//!   [`CodeToken`]s, and the last of them frees it ([`Jit::code_token`],
+//!   D-708): a runtime that runs the JIT's code as fibers holds one until
+//!   its fibers have stopped.
 //! - Runtime symbols resolve through `cheby_runtime::symbols()`; other
 //!   native symbols of `@external(native, …)` through the symbols defined
 //!   with [`Jit::define_symbol`] and then the process's dynamic symbol
@@ -38,6 +52,7 @@
 
 use std::fmt;
 use std::mem::ManuallyDrop;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use cranelift_jit::{JITBuilder, JITModule};
@@ -45,7 +60,8 @@ use cranelift_module::Module;
 use rustc_hash::FxHashMap;
 
 use cheby_codegen_clif::{
-    CodegenCx, CodegenError, CodegenOptions, Decls, LayoutIds, SessionName, builtin_layout_id,
+    CodegenCx, CodegenError, CodegenOptions, Decls, DefineStats, LayoutIds, SessionName,
+    builtin_layout_id,
 };
 use cheby_iface::{DefId, Ice};
 use cheby_mir::{AbiSig, EntryKind, FnKey, LayoutDesc, LayoutRef, MirModule, Repr};
@@ -53,9 +69,14 @@ use cheby_runtime::abi::sym;
 use cheby_runtime::alloc::Domain;
 use cheby_runtime::entry::{Tramp0, Tramp1, Tramp2, Tramp3, Tramp4};
 use cheby_runtime::layout::{self as rt_layout, FieldKind, LayoutInfo};
-use cheby_runtime::{Callbacks, EntryConfig, EntryFn, EntryOutcome, RunConfig, RuntimeError};
+use cheby_runtime::{
+    Callbacks, CodeToken, DetachedGroup, EntryConfig, EntryFn, EntryOutcome, RootDone, RootHandle,
+    RunConfig, Runtime, RuntimeError,
+};
 
 mod memory;
+#[cfg(test)]
+mod start_root_tests;
 // The tests compile and run machine code. Windows support is M6 (D-545),
 // so they are not built there. Two attributes, not `all(test, …)`, so
 // Clippy still sees a test module (`allow-unwrap-in-tests`).
@@ -228,11 +249,62 @@ pub struct CodeMemory {
 /// `Send` for Cranelift's lookup function.
 type SymbolTable = Arc<Mutex<FxHashMap<Box<str>, usize>>>;
 
+/// The code and data memory of a [`Jit`] after the `Jit` is dropped
+/// (D-708): [`Jit`]'s `Drop` moves its module here, and the last
+/// [`CodeToken`] (or the `Jit` itself, if it handed none out) frees it.
+struct CodeKeepAlive {
+    /// The module, once the `Jit` is dropped.
+    module: Mutex<Option<JITModule>>,
+    /// The key of the JIT's functions in the process-wide code map
+    /// (D-856, D-867): registered batch by batch, removed
+    /// with the memory.
+    code_owner: u64,
+}
+
+impl Drop for CodeKeepAlive {
+    fn drop(&mut self) {
+        // The map forgets the ranges before their memory goes, so a later
+        // JIT's code at the same addresses is never taken for this one's.
+        cheby_runtime::locate::unregister_code(self.code_owner);
+        let module = self
+            .module
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some(module) = module {
+            // SAFETY: no code of the JIT can run any more: the `Jit` is
+            // dropped, so no `Entry` borrows it and no isolated entry runs
+            // its code (running one returns only after its thread ended:
+            // its thunk returned, or panicked and unwound out of the
+            // generated frames, D-733); and this is the last token, so no
+            // `Runtime` that ran its code as fibers holds it, and a runtime
+            // releases its tokens only once none of its fibers can run
+            // again (D-708, I-6): `shutdown` and `Drop` first tear down
+            // every group of detached fibers, cancelling and unwinding each
+            // member until the group is empty (D-710, D-723), then stop
+            // and join the workers; a halt instead freezes every fiber at a
+            // safepoint, where it never runs again, and joins every thread,
+            // the poll holder included (D-073, D-709). Either way the
+            // tokens go last. A worker whose fiber is blocked inline in a
+            // system call (D-786) is never joined, and its runtime then
+            // keeps (leaks) its tokens, so this never runs while such a
+            // worker can return into the code. `run_main`'s runtime holds a
+            // token too (`Entry::run_main`). Without this, cranelift-jit
+            // keeps finalized memory forever.
+            unsafe { module.free_memory() };
+        }
+    }
+}
+
 /// A JIT session: the module, the declarations of every batch so far, and
-/// the registered layouts. Dropping it frees its code and data.
+/// the registered layouts. Dropping it frees its code and data, or hands
+/// them to its outstanding [`CodeToken`]s (D-708).
 pub struct Jit {
-    /// Taken only by `Drop`, which frees its memory.
+    /// Taken only by `Drop`, which moves it into `keep_alive`.
     module: ManuallyDrop<JITModule>,
+    /// What frees the module's memory once the `Jit` and every token are
+    /// gone.
+    keep_alive: Arc<CodeKeepAlive>,
     decls: Decls,
     layouts: JitLayouts,
     codegen: CodegenOptions,
@@ -249,6 +321,16 @@ pub struct Jit {
     /// The slots the last batch repointed, with the words they held
     /// before ([`Jit::revert_repoints`]).
     repointed: Vec<(cranelift_module::DataId, u64)>,
+    /// The repoints of the last batch not published yet: the slot, the
+    /// word of the new code and the redefinition
+    /// ([`Jit::compile_unpublished`]).
+    pending: Vec<(cranelift_module::DataId, u64, DefId)>,
+    /// The code every batch that compiled defined ([`Jit::code_stats`]).
+    code_stats: DefineStats,
+    /// Every range this JIT registered in the code map, in order, for the
+    /// tests of the map (`code_map_*`).
+    #[cfg(test)]
+    registered: Vec<cheby_runtime::locate::CodeRangeDesc>,
 }
 
 /// An indirection slot of a [`Jit`] (D-043): a writable word holding the
@@ -330,6 +412,10 @@ impl Jit {
         let decls = Decls::new(module.isa())?;
         Ok(Self {
             module,
+            keep_alive: Arc::new(CodeKeepAlive {
+                module: Mutex::new(None),
+                code_owner: cheby_runtime::locate::new_code_owner(),
+            }),
             decls,
             layouts: JitLayouts::default(),
             codegen: options,
@@ -340,7 +426,40 @@ impl Jit {
             domain: Domain::new(),
             callbacks: Callbacks::default(),
             repointed: Vec::new(),
+            pending: Vec::new(),
+            code_stats: DefineStats::default(),
+            #[cfg(test)]
+            registered: Vec::new(),
         })
+    }
+
+    /// The machine code defined so far: its bytes and its functions, summed
+    /// over every batch that compiled (D-718, `cargo xtask bench-compile`).
+    #[must_use]
+    pub const fn code_stats(&self) -> DefineStats {
+        self.code_stats
+    }
+
+    /// A token that keeps this JIT's code and data memory alive after the
+    /// `Jit` is dropped (D-708): the memory is freed by the last of the
+    /// `Jit` and its tokens. A [`Runtime`] whose fibers run this JIT's code
+    /// holds one ([`Runtime::attach`]) until its fibers have stopped.
+    #[must_use]
+    pub fn code_token(&self) -> CodeToken {
+        let keep_alive: Arc<CodeKeepAlive> = Arc::clone(&self.keep_alive);
+        let keep_alive: Arc<dyn Send + Sync> = keep_alive;
+        CodeToken::new(keep_alive)
+    }
+
+    /// Whether the code this JIT compiles has unwind edges
+    /// ([`CodegenOptions::unwind_edges`], D-742), which every entry it runs
+    /// records in its control block: a raise in a fiber whose code has
+    /// none ends the process with its report (D-770).
+    /// Constant evaluation and the REPL copy it into the configurations
+    /// of the entries they build, as [`Entry::run`] does.
+    #[must_use]
+    pub const fn unwind_edges(&self) -> bool {
+        self.codegen.unwind_edges
     }
 
     /// Makes the native symbol `name` resolve to `address` in later
@@ -370,6 +489,23 @@ impl Jit {
     /// A [`JitError`] if code generation fails or native symbols are
     /// missing ([`JitError::UnresolvedSymbols`], all of them).
     pub fn compile(&mut self, mirs: &[MirModule]) -> Result<(), JitError> {
+        self.compile_unpublished(mirs)?;
+        self.publish_all_repoints()
+    }
+
+    /// [`Jit::compile`], except that the slots its REPL redefinitions take
+    /// over keep their old code until [`Jit::publish_repoints`] (or
+    /// [`Jit::publish_all_repoints`]) points them at the new code. A REPL
+    /// session's detached fibers may call through those slots while the
+    /// batch's constants are evaluated, and the new code may read constants
+    /// that are still empty then (D-712, gate 3's CONC-W3-1), so the
+    /// session publishes a repoint only once every constant the new code
+    /// reads is filled ([`Jit::pending_repoints`]).
+    ///
+    /// # Errors
+    ///
+    /// As [`Jit::compile`]; a failed batch leaves nothing pending.
+    pub fn compile_unpublished(&mut self, mirs: &[MirModule]) -> Result<(), JitError> {
         let decls = self.decls.clone();
         let layouts = self.layouts.ids.clone();
         let result = self.compile_batch(mirs);
@@ -379,6 +515,7 @@ impl Jit {
             // it; its declarations stay in the module, unused.
             self.decls = decls;
             self.layouts.ids = layouts;
+            self.pending.clear();
         }
         result
     }
@@ -390,7 +527,7 @@ impl Jit {
         };
         cheby_codegen_clif::declare(&mut *self.module, &mut self.decls, mirs, &cx, &self.codegen)?;
         self.check_symbols()?;
-        let clif = cheby_codegen_clif::define(
+        let (clif, stats, defined) = cheby_codegen_clif::define_with_stats(
             &mut *self.module,
             mirs,
             &mut self.decls,
@@ -401,27 +538,129 @@ impl Jit {
         self.module
             .finalize_definitions()
             .map_err(|e| JitError::Codegen(CodegenError::Module(e.to_string())))?;
-        self.apply_repoints()?;
+        self.take_repoints()?;
         self.callbacks = self.find_callbacks();
         self.register_hooks(mirs)?;
+        // Last: a batch that failed registers nothing.
+        self.register_code(defined)?;
+        self.code_stats = self.code_stats.add(stats);
         Ok(())
     }
 
-    /// Points the slots that the batch's REPL redefinitions take over at
-    /// their new code (D-043), remembering what they held.
-    fn apply_repoints(&mut self) -> Result<(), JitError> {
+    /// Adds the batch's functions, finalized, to the process-wide code map
+    /// under this JIT's owner (D-856, D-867): each one's
+    /// address, length, ABI and call locations, so a deadlock report can
+    /// map a return address to its call. Ranges of earlier batches stay,
+    /// REPL redefinitions included, since their code stays while the JIT's
+    /// memory lives (D-712).
+    fn register_code(
+        &mut self,
+        defined: Vec<cheby_codegen_clif::DefinedCode>,
+    ) -> Result<(), JitError> {
+        let mut ranges = Vec::with_capacity(defined.len());
+        for code in defined {
+            let start = self
+                .module
+                .get_finalized_function(code.id)
+                .expose_provenance();
+            if start == 0 {
+                return Err(JitError::ice("a defined function without its code"));
+            }
+            ranges.push(cheby_runtime::locate::CodeRangeDesc {
+                start,
+                len: code.len,
+                cheby_abi: code.cheby_abi,
+                sites: code.sites,
+            });
+        }
+        #[cfg(test)]
+        self.registered.extend(ranges.iter().cloned());
+        cheby_runtime::locate::register_code(self.keep_alive.code_owner, ranges);
+        Ok(())
+    }
+
+    /// Records the slots that the batch's REPL redefinitions take over,
+    /// with the words of their new code, as pending (D-043); the last
+    /// batch's repoints can no longer be reverted.
+    fn take_repoints(&mut self) -> Result<(), JitError> {
         self.repointed.clear();
-        for (slot, func) in self.decls.take_repoints() {
+        self.pending.clear();
+        for (slot, func, def) in self.decls.take_repoints() {
             let code = self.module.get_finalized_function(func);
             let word = u64::try_from(code.expose_provenance())
                 .map_err(|_| JitError::ice("an address does not fit in a word"))?;
+            self.pending.push((slot, word, def));
+        }
+        Ok(())
+    }
+
+    /// The REPL redefinitions of the last batch whose slots still hold the
+    /// old code ([`Jit::compile_unpublished`]), with those slots.
+    #[must_use]
+    pub fn pending_repoints(&self) -> Vec<(DefId, SlotHandle)> {
+        self.pending
+            .iter()
+            .map(|&(slot, _, def)| (def, SlotHandle { data: slot }))
+            .collect()
+    }
+
+    /// Points the pending slots among `slots` at their new code, with
+    /// release stores (D-712), remembering what they held
+    /// ([`Jit::revert_repoints`]). Slots that are not pending are ignored.
+    ///
+    /// # Errors
+    ///
+    /// An ICE if a slot's word cannot be written.
+    pub fn publish_repoints(&mut self, slots: &[SlotHandle]) -> Result<(), JitError> {
+        let (now, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut self.pending)
+            .into_iter()
+            .partition(|&(slot, _, _)| slots.contains(&SlotHandle { data: slot }));
+        self.pending = rest;
+        for (slot, word, _) in now {
             let old = self.write_slot(slot, word)?;
             self.repointed.push((slot, old));
         }
         Ok(())
     }
 
-    /// Writes `word` into the slot `slot` and returns what it held.
+    /// Points every pending slot at its new code ([`Jit::publish_repoints`]).
+    ///
+    /// # Errors
+    ///
+    /// An ICE if a slot's word cannot be written.
+    pub fn publish_all_repoints(&mut self) -> Result<(), JitError> {
+        let slots: Vec<SlotHandle> = self
+            .pending
+            .iter()
+            .map(|&(slot, _, _)| SlotHandle { data: slot })
+            .collect();
+        self.publish_repoints(&slots)
+    }
+
+    /// The slot the top-level function `def`'s code was last put in, whatever
+    /// its signature: the slot its callers load (D-043, D-456).
+    #[must_use]
+    pub fn slot_of(&self, def: DefId) -> Option<SlotHandle> {
+        self.decls
+            .slot_of(def)
+            .map(|decl| SlotHandle { data: decl.id })
+    }
+
+    /// Writes `word` into the slot `slot` with a release store and returns
+    /// what it held (D-712).
+    ///
+    /// Fibers of a REPL session's runtime may run this JIT's code while it
+    /// compiles (detached fibers, D-194), and their calls load the slot
+    /// with a plain aligned 8-byte load. Such a load is single-copy atomic
+    /// on x86-64 and aarch64, so a caller sees the old word or the new one,
+    /// never a mix, and calls the old code or the new; both stay valid,
+    /// since code is never freed while the `Jit` lives (D-625, D-626), and
+    /// the REPL publishes new code only once the constants it reads are
+    /// filled ([`Jit::compile_unpublished`]). The
+    /// release orders the new code's bytes, finalized and made visible to
+    /// every thread's instruction stream before this store (`finalize`'s
+    /// pipeline flush, `memory.rs`), and the data it reads before the word
+    /// that leads to it.
     fn write_slot(&mut self, slot: cranelift_module::DataId, word: u64) -> Result<u64, JitError> {
         let (address, size) = self.module.get_finalized_data(slot);
         if address.is_null() || size < 8 {
@@ -433,9 +672,18 @@ impl Jit {
         )]
         let pointer = address.cast_mut().cast::<u64>();
         // SAFETY: the slot is an 8-aligned, writable 8-byte data object of
-        // this JIT's module (declared writable and finalized), and `&mut
-        // self` keeps any entry of this JIT from running meanwhile.
-        let old = unsafe { pointer.replace(word) };
+        // this JIT's module (declared writable and finalized; a finalized
+        // writable segment stays mapped read-write until the JIT's memory
+        // is freed), valid for the reference's short life here. Rust code
+        // touches it only through atomics of this JIT (`write_slot` under
+        // `&mut self`, `slot_target`); generated code reads it with plain
+        // aligned loads, which are single-copy atomic on the supported
+        // targets (see above).
+        let atomic = unsafe { AtomicU64::from_ptr(pointer) };
+        // Only this JIT writes its slots, under `&mut self`: the word read
+        // here is the last one stored.
+        let old = atomic.load(Ordering::Relaxed);
+        atomic.store(word, Ordering::Release);
         Ok(old)
     }
 
@@ -458,13 +706,15 @@ impl Jit {
 
     /// Undoes the repointing of the last compiled batch: the REPL calls it
     /// when an entry whose code compiled is rejected afterwards, so that
-    /// existing callers keep the old code (all or nothing).
+    /// existing callers keep the old code (all or nothing). Repoints not
+    /// published yet are dropped.
     ///
     /// # Errors
     ///
     /// An ICE if a slot's word cannot be written.
     pub fn revert_repoints(&mut self) -> Result<(), JitError> {
-        for (slot, old) in std::mem::take(&mut self.repointed) {
+        self.pending.clear();
+        for (slot, old) in std::mem::take(&mut self.repointed).into_iter().rev() {
             self.write_slot(slot, old)?;
         }
         Ok(())
@@ -489,9 +739,12 @@ impl Jit {
             clippy::cast_ptr_alignment,
             reason = "code generation defines every data object with alignment 8"
         )]
-        let pointer = address.cast::<u64>();
-        // SAFETY: a finalized, 8-aligned data object of at least 8 bytes.
-        let word = unsafe { pointer.read() };
+        let pointer = address.cast_mut().cast::<u64>();
+        // SAFETY: a finalized, 8-aligned, writable data object of at least
+        // 8 bytes of this JIT's module, valid for the reference's short
+        // life here; Rust code writes it only with `write_slot`'s atomic
+        // store (D-712).
+        let word = unsafe { AtomicU64::from_ptr(pointer) }.load(Ordering::Acquire);
         Some(std::ptr::with_exposed_provenance(
             usize::try_from(word).ok()?,
         ))
@@ -656,10 +909,15 @@ impl Jit {
         (!address.is_null() && size >= 8).then_some(slot)
     }
 
-    /// Stores `word` in the slot of the constant `def`: the constant's
-    /// evaluated value, which code reads borrowed (E6). The slot holds the
-    /// reference; a value stored there must be static (frozen, D-539) or
-    /// stay alive for as long as code can read it.
+    /// Stores `word` in the slot of the constant `def` with a release store:
+    /// the constant's evaluated value, or a REPL session value (D-547),
+    /// which code reads borrowed (E6). The slot holds the reference; a
+    /// value stored there must be static (frozen, D-539) or stay alive for
+    /// as long as code can read it, and a session value is marked shared
+    /// first (D-705, D-712). Fibers of a REPL session may read a session
+    /// value's slot while a later entry rebinds it (D-194): their plain
+    /// aligned loads see the old word or the new one, and the release
+    /// orders the new value's object before the word that leads to it.
     ///
     /// # Errors
     ///
@@ -669,9 +927,14 @@ impl Jit {
             .const_slot(def)
             .ok_or_else(|| JitError::ice(format!("the constant {def:?} has no slot")))?;
         // SAFETY: the slot is an 8-aligned, writable 8-byte data object of
-        // this JIT's module (declared writable and finalized), and `&mut
-        // self` keeps any entry of this JIT from running meanwhile.
-        unsafe { slot.write(word) };
+        // this JIT's module (declared writable and finalized; it stays
+        // mapped read-write until the JIT's memory is freed), valid for the
+        // reference's short life here. Generated code reads it with plain
+        // aligned loads, single-copy atomic on x86-64 and aarch64. The
+        // only other Rust writes to a slot are the constant evaluator's
+        // lazy forcing (`cheby_runtime::consteval`), on the entry thread
+        // of an evaluation that `&mut self` here does not overlap.
+        unsafe { AtomicU64::from_ptr(slot) }.store(word, Ordering::Release);
         Ok(())
     }
 
@@ -827,15 +1090,16 @@ fn process_defines(_symbol: &str) -> bool {
 impl Drop for Jit {
     fn drop(&mut self) {
         // SAFETY: `module` is taken exactly once, here, and never used
-        // again.
+        // again by the `Jit`.
         let module = unsafe { ManuallyDrop::take(&mut self.module) };
-        // SAFETY: no code of this JIT can run after this: every `Entry`
-        // borrows the `Jit`, so none outlives it, and running one returns
-        // only after its thunk returned or panicked. A panicked entry's
-        // thread is parked forever inside the runtime and never resumes
-        // into this code. Without this, cranelift-jit keeps finalized
-        // memory forever.
-        unsafe { module.free_memory() };
+        // The memory is freed when the last holder of the keep-alive goes:
+        // this `Jit`, right below, or the last `CodeToken` a runtime holds
+        // until its fibers have stopped (D-708, I-6).
+        *self
+            .keep_alive
+            .module
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(module);
     }
 }
 
@@ -870,7 +1134,8 @@ impl Entry<'_> {
     }
 
     /// Runs the entry on its own stack and reports how it ended, with the
-    /// JIT's trampolines and accounting domain in place of `config`'s. A
+    /// JIT's trampolines, accounting domain and [`Jit::unwind_edges`] in
+    /// place of `config`'s. A
     /// returned word may point into the `Jit`'s data (a static string or
     /// constructor) and is valid only while the `Jit` lives.
     ///
@@ -878,33 +1143,160 @@ impl Entry<'_> {
     ///
     /// [`JitError::Runtime`] if the entry cannot run.
     pub fn run(self, config: &EntryConfig) -> Result<EntryOutcome, JitError> {
-        let config = EntryConfig {
-            callbacks: self.jit.callbacks(),
-            domain: self.jit.domain(),
-            ..config.clone()
-        };
+        let config = self.config(config);
         // SAFETY: `thunk` is an entry thunk with the `EntryFn` ABI built by
         // the JIT (see `Jit::entry`), and the borrow of the `Jit` keeps its
         // code and data alive until this returns.
         unsafe { cheby_runtime::run_entry(self.thunk, &config) }.map_err(JitError::Runtime)
     }
 
-    /// Runs `main`'s entry thunk under `cheby run`'s policy (§10.10,
-    /// D-182), with the JIT's trampolines and accounting domain in place
-    /// of `config`'s, and returns the exit status: 0 or 1 from the program,
-    /// 101 after a panic, 102 in debug builds when objects of the domain
-    /// leak (D-458).
+    /// Runs the entry as a root fiber of `runtime` (D-690) and reports how
+    /// it ended, with the JIT's trampolines, accounting domain and
+    /// [`Jit::unwind_edges`] in place of `config`'s. The runtime keeps the
+    /// JIT's code alive until it stops ([`Jit::code_token`]). A returned
+    /// word is valid as for [`Entry::run`].
     ///
     /// # Errors
     ///
     /// [`JitError::Runtime`] if the entry cannot run.
+    pub fn run_root(
+        self,
+        runtime: &Runtime,
+        config: &EntryConfig,
+    ) -> Result<EntryOutcome, JitError> {
+        let config = self.config(config);
+        runtime.attach(self.jit.code_token());
+        // SAFETY: `thunk` is an entry thunk with the `EntryFn` ABI built by
+        // the JIT (see `Jit::entry`), and `runtime` holds the JIT's code
+        // token, so its code and data stay alive while the runtime's
+        // fibers may run it.
+        unsafe { runtime.run_root(self.thunk, &config) }.map_err(JitError::Runtime)
+    }
+
+    /// [`Entry::run_root`] in `group`: the detached fibers that the entry
+    /// or its fibers spawn join `group`, which the host tears down when it
+    /// is done with them ([`Runtime::teardown`]), as `cheby test` does
+    /// after each test (D-723, D-782). The runtime keeps the JIT's code
+    /// alive until it stops, as for [`Entry::run_root`], so a detached
+    /// fiber that outlives the entry may still run it after the `Jit` is
+    /// dropped.
+    ///
+    /// # Errors
+    ///
+    /// [`JitError::Runtime`] if the entry cannot run.
+    pub fn run_root_in(
+        self,
+        runtime: &Runtime,
+        config: &EntryConfig,
+        group: &Arc<DetachedGroup>,
+    ) -> Result<EntryOutcome, JitError> {
+        let config = self.config(config);
+        runtime.attach(self.jit.code_token());
+        // SAFETY: as in `run_root`: an entry thunk with the `EntryFn` ABI
+        // built by the JIT, whose code and data the runtime keeps alive
+        // through the token attached above while its fibers, detached ones
+        // in `group` included, may run them.
+        unsafe { runtime.run_root_in(self.thunk, &config, group) }.map_err(JitError::Runtime)
+    }
+
+    /// [`Entry::run_root_in`] without waiting ([`Runtime::start_root_in`]),
+    /// keeping `config.domain`: the root and every fiber it starts charge
+    /// the caller's domain (a per-test domain, D-691, D-723), while the
+    /// JIT's trampolines and [`Jit::unwind_edges`] replace `config`'s as in
+    /// [`Entry::run_root_in`]. The runtime keeps the JIT's code alive until
+    /// it stops, so the root may outlive this call and the borrow of the
+    /// `Jit`; a returned word is valid only while the `Jit` lives.
+    ///
+    /// # Errors
+    ///
+    /// [`JitError::Runtime`] if the root cannot start.
+    pub fn start_root_in(
+        self,
+        runtime: &Runtime,
+        config: &EntryConfig,
+        group: &Arc<DetachedGroup>,
+    ) -> Result<RootHandle, JitError> {
+        let config = self.config_keeping_domain(config);
+        runtime.attach(self.jit.code_token());
+        // SAFETY: as in `run_root_in`: an entry thunk with the `EntryFn`
+        // ABI built by the JIT, whose code and data the runtime keeps alive
+        // through the token attached above for as long as the root and its
+        // fibers may run them, after this returns included.
+        unsafe { runtime.start_root_in(self.thunk, &config, group) }.map_err(JitError::Runtime)
+    }
+
+    /// [`Entry::start_root_in`] reporting on `done` with `tag`
+    /// ([`Runtime::start_root_notify`]): one host thread waits for any of
+    /// several roots on one receiver.
+    ///
+    /// # Errors
+    ///
+    /// [`JitError::Runtime`] if the root cannot start; nothing is sent on
+    /// `done` then.
+    pub fn start_root_notify(
+        self,
+        runtime: &Runtime,
+        config: &EntryConfig,
+        group: &Arc<DetachedGroup>,
+        tag: usize,
+        done: RootDone,
+    ) -> Result<(), JitError> {
+        let config = self.config_keeping_domain(config);
+        runtime.attach(self.jit.code_token());
+        // SAFETY: as in `start_root_in`.
+        unsafe { runtime.start_root_notify(self.thunk, &config, group, tag, done) }
+            .map_err(JitError::Runtime)
+    }
+
+    /// `config` with the JIT's trampolines, domain and `unwind_edges`.
+    fn config(&self, config: &EntryConfig) -> EntryConfig {
+        EntryConfig {
+            domain: self.jit.domain(),
+            ..self.config_keeping_domain(config)
+        }
+    }
+
+    /// `config` with the JIT's trampolines and `unwind_edges`, and its own
+    /// domain.
+    fn config_keeping_domain(&self, config: &EntryConfig) -> EntryConfig {
+        EntryConfig {
+            callbacks: self.jit.callbacks(),
+            unwind_edges: self.jit.unwind_edges(),
+            ..config.clone()
+        }
+    }
+
+    /// Runs `main`'s entry thunk under `cheby run`'s policy (§10.10,
+    /// D-182), with the JIT's trampolines, accounting domain and
+    /// [`Jit::unwind_edges`] in place of `config`'s, and returns the exit
+    /// status: 0 or 1
+    /// from the program, 101 after a panic, 102 in debug builds when
+    /// objects of the domain leak (D-458). `main` runs as the root fiber of
+    /// a runtime made for the run (D-690).
+    ///
+    /// # Errors
+    ///
+    /// [`JitError::Runtime`] if the runtime cannot start (an invalid
+    /// `CHEBY_THREADS`, D-658) or the entry cannot run.
     pub fn run_main(self, config: RunConfig) -> Result<i32, JitError> {
         let config = RunConfig {
             callbacks: self.jit.callbacks(),
             domain: self.jit.domain(),
+            unwind_edges: self.jit.unwind_edges(),
+            code: Some(self.jit.code_token()),
             ..config
         };
-        // SAFETY: as in `run`.
+        // SAFETY: as in `run`; and the runtime `run_main` makes for the run
+        // holds the JIT's code token, so the `Jit` may be dropped once it
+        // returns: it tears down `main`'s detached fibers (cancelled and
+        // unwound until their group is empty, D-710), or under
+        // `AtExit::Freeze` freezes them at a safepoint, and after a
+        // termination completes the halt (D-073, D-708, D-709), and it
+        // joins every thread of the runtime, releasing the token after the
+        // joins. The one exception is a worker whose fiber is blocked
+        // inline in a system call (D-786): it is never joined, and the
+        // runtime then keeps (leaks) the token, so the code that worker
+        // returns into stays mapped.
         unsafe { cheby_runtime::run_main(self.thunk, config) }.map_err(JitError::Runtime)
     }
 }

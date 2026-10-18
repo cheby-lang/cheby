@@ -27,18 +27,12 @@ use super::node::{Collection, Root};
 use super::ops::{Candidate, Entries, candidate, find_hashed};
 use crate::abi::{PanicKind, Word};
 use crate::generic::{self, Cx, Hasher};
-use crate::panic::panic_current;
+use crate::unwind::raise::raise_panic;
 
 /// The first byte of a hashed map or set, after the generic routine's own
 /// marks (1-11).
 const MARK_MAP: u8 = 16;
 const MARK_SET: u8 = 17;
-
-#[cfg(test)]
-thread_local! {
-    /// Tests force collisions by masking key hashes.
-    pub(super) static HASH_MASK: std::cell::Cell<u64> = const { std::cell::Cell::new(u64::MAX) };
-}
 
 /// The hash of a borrowed key under a collection's seed. A key that holds
 /// a function panics with `EqualityOnFunction` (D-233).
@@ -46,13 +40,15 @@ pub(super) fn key_hash(key: Word, seed: u64) -> u64 {
     // SAFETY: keys are live words borrowed for the call.
     match unsafe { generic::hash_with_seed(key, seed) } {
         Ok(hash) => masked(hash),
-        Err(generic::Reached::Function) => panic_current(PanicKind::EqualityOnFunction, None),
+        Err(generic::Reached::Function) => raise_panic(None, PanicKind::EqualityOnFunction, None),
     }
 }
 
+/// Tests force collisions by masking key hashes, with a mask kept in
+/// `tls.rs` (D-686).
 #[cfg(test)]
 fn masked(hash: u64) -> u64 {
-    hash & HASH_MASK.with(std::cell::Cell::get)
+    hash & crate::tls::hash_mask()
 }
 
 #[cfg(not(test))]
@@ -66,7 +62,7 @@ pub(super) fn keys_equal(a: Word, b: Word) -> bool {
     // SAFETY: keys are live words borrowed for the call.
     match unsafe { generic::equal(a, b) } {
         Ok(same) => same,
-        Err(generic::Reached::Function) => panic_current(PanicKind::EqualityOnFunction, None),
+        Err(generic::Reached::Function) => raise_panic(None, PanicKind::EqualityOnFunction, None),
     }
 }
 

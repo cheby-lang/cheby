@@ -37,6 +37,8 @@ pub(super) fn lower_body(
     };
     let mut b = FunctionBuilder::new(key, Abi::Cheby, Repr::Value, span)?;
     b.set_entry_loc(&cx.location(span)?)?;
+    b.set_record_sites(pending.records_sites());
+    b.set_record_call_locs(pending.records_call_locs());
     let mut lx = BodyCx {
         cx,
         body,
@@ -45,6 +47,7 @@ pub(super) fn lower_body(
         locals: vec![None; body.locals.len()],
         pending,
         dict_params: Vec::new(),
+        site: None,
     };
     lx.run(dicts)?;
     lx.b.finish()
@@ -67,6 +70,10 @@ pub(super) struct BodyCx<'a, 'cx> {
     /// parameters in its own body, the closure's captures in a closure
     /// that uses them, `None` for one a closure does not capture.
     pub(super) dict_params: Vec<Option<Local>>,
+    /// The span of the innermost expression being lowered
+    /// ([`BodyCx::expr`]): the site [`BodyCx::define`] records for an
+    /// allocation or a call when the builder records sites (D-717).
+    pub(super) site: Option<Span>,
 }
 
 impl<'a> BodyCx<'a, '_> {
@@ -137,8 +144,24 @@ impl<'a> BodyCx<'a, '_> {
     }
 
     /// Defines a new local of `repr` as `value` in the current block.
+    /// The local an `alloc` or a call defines gets the current expression's
+    /// span as its site, which the builder keeps only when it records sites
+    /// for `--reuse-report` (D-717, D-852). A call's site is also its
+    /// location (D-856), which the builder keeps in units outside `std`.
     pub(super) fn define(&mut self, repr: Repr, value: Rvalue) -> Result<Local, Ice> {
-        self.b.assign(repr, value)
+        let is_call = matches!(value, Rvalue::Call { .. });
+        let site = self
+            .site
+            .filter(|_| is_call || matches!(value, Rvalue::Alloc { .. }));
+        let local = self.b.assign(repr, value)?;
+        if let Some(site) = site {
+            self.b.record_site(local, site);
+            if is_call && self.b.records_call_locs() {
+                let location = self.cx.location(site)?;
+                self.b.record_call_loc(local, &location)?;
+            }
+        }
+        Ok(local)
     }
 
     /// Appends a statement to the current block.

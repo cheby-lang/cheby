@@ -15,12 +15,16 @@
 //! an interface function are the parser's E0045, so they never reach this
 //! pass (D-514).
 //!
-//! The standard library may also write two attributes of its own
-//! (§4.8, D-298, D-303, D-342, D-482): `@std_clamped(param, …)` on a
-//! function names the count parameters it clamps, and
+//! The standard library may also write three attributes of its own
+//! (§4.8, D-298, D-303, D-342, D-482, D-692): `@std_clamped(param, …)` on a
+//! function names the count parameters it clamps,
 //! `@std_hooks(equal_fn, hash_fn, debug_fn)` on a type names the functions
-//! of its module that implement its equality, hashing and debug printing.
-//! In any other package they are unknown attributes.
+//! of its module that implement its equality, hashing and debug printing,
+//! and `@std_context`, without arguments on a function with an `@external`,
+//! makes its native kernel receive the running fiber's context first.
+//! In any other package they are unknown attributes. `@std_context` on a
+//! `@blocking` function is E0045, since a blocking kernel runs on a pool
+//! thread, which never receives the context (D-191, D-819).
 
 use cheby_diag::{Diagnostic, Span, codes};
 use cheby_iface::{DefIndex, DefKind, Ice, IndexVec, Name, Namespace, PackageId, Vis};
@@ -79,8 +83,8 @@ const ATTRIBUTE_LIST: &str =
 /// The attributes every package may write (§4.8).
 const ATTRIBUTES: [&str; 5] = ["external", "target", "blocking", "async", "deprecated"];
 
-/// The attributes only the standard library may write (D-482).
-const STD_ATTRIBUTES: [&str; 2] = ["std_clamped", "std_hooks"];
+/// The attributes only the standard library may write (D-482, D-692).
+const STD_ATTRIBUTES: [&str; 3] = ["std_clamped", "std_hooks", "std_context"];
 
 /// Why a function without a body can end up on no target.
 const BODILESS: &str = "a function without a body exists only on the targets of its \
@@ -389,6 +393,7 @@ impl Cx<'_, '_> {
         let mut target: Option<Target> = None;
         let mut blocking: Option<Span> = None;
         let mut is_async: Option<Span> = None;
+        let mut std_context: Option<Span> = None;
         for attr in attrs {
             let span = attr.significant_span();
             let Some(name) = attr.name() else { continue };
@@ -452,7 +457,7 @@ impl Cx<'_, '_> {
                     target = Some(t);
                     self.item_target = Some((t, span));
                 }
-                "blocking" | "async" => {
+                "blocking" | "async" | "std_context" => {
                     if !args.is_empty() || attr.arg_list().is_some() {
                         self.diags.push(
                             Diagnostic::new(
@@ -463,10 +468,10 @@ impl Cx<'_, '_> {
                         );
                         continue;
                     }
-                    if known == "blocking" {
-                        blocking = Some(span);
-                    } else {
-                        is_async = Some(span);
+                    match known {
+                        "blocking" => blocking = Some(span),
+                        "async" => is_async = Some(span),
+                        _ => std_context = Some(span),
                     }
                 }
                 "deprecated" => {
@@ -542,6 +547,35 @@ impl Cx<'_, '_> {
                     "async",
                     placement,
                     Some("`@async` applies to functions with an `@external(js, …)` attribute"),
+                );
+            }
+        }
+        if let Some(span) = std_context {
+            if let (true, Some(first)) = (out.blocking, blocking) {
+                // D-819: a blocking call runs its
+                // kernel on a pool thread, which must never receive the
+                // fiber's context (D-191, D-683). The function keeps
+                // `@blocking`.
+                self.diags.push(
+                    Diagnostic::new(
+                        codes::INVALID_ATTRIBUTE,
+                        "`@std_context` is not allowed on a `@blocking` function",
+                    )
+                    .with_primary(span, "")
+                    .with_secondary(first, "`@blocking` here")
+                    .with_note(
+                        "a blocking call runs on a pool thread, which never receives the \
+                         running fiber's context",
+                    ),
+                );
+            } else if is_fn && has_external {
+                out.std_context = true;
+            } else {
+                self.misplaced(
+                    span,
+                    "std_context",
+                    placement,
+                    Some("`@std_context` applies to functions with an `@external` attribute"),
                 );
             }
         }
@@ -1149,6 +1183,46 @@ mod tests {
         };
         assert!(blocking("a"));
         assert!(blocking("g"));
+    }
+
+    // D-819: `@std_context` hands the fiber's
+    // context to the kernel, and a blocking kernel runs on a pool thread
+    // (D-191), so the two never go together. In either order the function
+    // keeps `@blocking` and loses `@std_context`.
+    #[test]
+    fn blocking_with_std_context_is_e0045() {
+        let r = resolve_in(
+            PackageId::STD,
+            Targets::ALL,
+            "@external(native, \"a\")\n@blocking\n@std_context\nfn a()\n\n@external(native, \"b\")\n@std_context\n@blocking\nfn b()\n\n@external(native, \"c\")\n@std_context\nfn c()\n\n@external(native, \"d\")\n@blocking\nfn d()\n",
+        );
+        assert_eq!(
+            r.messages(),
+            [
+                "E0045: `@std_context` is not allowed on a `@blocking` function",
+                "E0045: `@std_context` is not allowed on a `@blocking` function",
+            ]
+        );
+        let attrs = |name: &str| {
+            let attrs = &r
+                .module
+                .items
+                .iter()
+                .find(|i| r.globals.names.get(i.name) == name)
+                .unwrap()
+                .attrs;
+            (attrs.blocking, attrs.std_context)
+        };
+        assert_eq!(attrs("a"), (true, false));
+        assert_eq!(attrs("b"), (true, false));
+        assert_eq!(attrs("c"), (false, true));
+        assert_eq!(attrs("d"), (true, false));
+        let labels: Vec<&str> = r.diags[0]
+            .labels
+            .iter()
+            .map(|l| l.message.as_str())
+            .collect();
+        assert_eq!(labels, ["", "`@blocking` here"]);
     }
 
     #[test]

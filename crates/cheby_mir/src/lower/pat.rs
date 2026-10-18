@@ -22,12 +22,13 @@ pub(crate) mod tree;
 
 use cheby_diag::Span;
 use cheby_iface::{Ice, Ty};
-use cheby_types::thir::{self, Arm, ExprId, PatKind};
+use cheby_types::thir::{self, Arm, ExprId, ExprKind, PatKind};
 
-use crate::ir::{Local, Operand};
+use crate::ir::{Local, Operand, Rvalue};
 use crate::lower::body::BodyCx;
 use crate::lower::pat::emit::{ArmPlan, OnFail, Then};
 use crate::lower::pat::tree::{Input, bound_locals, decide};
+use crate::repr::Repr;
 
 impl BodyCx<'_, '_> {
     /// `case subjects { arms }` of type `ty`; `tail` marks §5.15.2 tail
@@ -89,8 +90,20 @@ impl BodyCx<'_, '_> {
                 self.bind_local(*id, op)?;
                 Ok(Some(()))
             }
-            // The value is unused; the RC pass drops it.
-            PatKind::Wild => Ok(Some(())),
+            // The value is unused; the RC pass drops it. `let _ = x` of a
+            // named counted value is a use of `x` (D-205, §9.2 guarantee 3:
+            // a program keeps a handle alive by using it again), so the
+            // value moves into a fresh local here, which the RC pass then
+            // drops: `x`'s last use is this statement, not an earlier one
+            // (D-736).
+            PatKind::Wild => {
+                let named = matches!(self.expr_data(init)?.kind, ExprKind::Local(_));
+                if named && matches!(op, Operand::Local(_)) && self.repr_of(init_ty) == Repr::Value
+                {
+                    self.define(Repr::Value, Rvalue::Use(op))?;
+                }
+                Ok(Some(()))
+            }
             _ => {
                 let value = self.as_local(op, self.repr_of(init_ty))?;
                 self.destructure(pat, value, init_ty, OnFail::Unreachable)

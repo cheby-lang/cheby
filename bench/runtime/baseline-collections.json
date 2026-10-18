@@ -1,0 +1,337 @@
+{
+  "meta": {
+    "arch": "aarch64",
+    "cheby": ".m2-work/slice4/measure4b/bin/cheby-head",
+    "commit": "efb067e",
+    "cores": 8,
+    "cpu": "Apple M3",
+    "date": "2026-10-16T18:38:08Z",
+    "env": {
+      "CHEBY_RC": "naive"
+    },
+    "load": [
+      2.34,
+      2.72,
+      3.11
+    ],
+    "load_after": [
+      2.28,
+      2.65,
+      3.07
+    ],
+    "os": "macos",
+    "runs": 5,
+    "rustc": "rustc 1.99.0 (b940084d7 2026-09-28)",
+    "threads": null
+  },
+  "results": [
+    {
+      "checksum": "463814910",
+      "group": "collections",
+      "max_ns": 1006306667,
+      "median_ns": 982518750,
+      "min_ns": 966071750,
+      "n": 1600000,
+      "name": "multimap",
+      "runs_ns": [
+        982518750,
+        966071750,
+        984182583,
+        979070959,
+        1006306667
+      ],
+      "stats": {
+        "counters": {
+          "allocations": 12526040,
+          "leak checks skipped": 0,
+          "list push copied": 0,
+          "list push in place": 3544902,
+          "list update copied": 121348,
+          "list update in place": 4880020,
+          "map/set update copied": 0,
+          "map/set update in place": 1678586,
+          "reuse hits": 0,
+          "reuse misses": 0,
+          "stack slots carved": 1,
+          "stack slots deep-released": 0,
+          "stack slots released whole": 0,
+          "stack slots taken cold": 0,
+          "stack slots taken warm": 0,
+          "string append copied": 0,
+          "string append grown": 0,
+          "string append in place": 4,
+          "string/bytes kernel copied": 0,
+          "string/bytes kernel grown": 0,
+          "string/bytes kernel in place": 0
+        },
+        "entries_ms": 1008.69,
+        "main_ms": 1009.64,
+        "peak_bytes": 36955784
+      }
+    },
+    {
+      "checksum": "815628816",
+      "group": "collections",
+      "max_ns": 1032674958,
+      "median_ns": 1026156834,
+      "min_ns": 1010797208,
+      "n": 450000,
+      "name": "ordered_map",
+      "runs_ns": [
+        1026156834,
+        1032674958,
+        1010797208,
+        1028501250,
+        1022081792
+      ],
+      "stats": {
+        "counters": {
+          "allocations": 17349974,
+          "leak checks skipped": 0,
+          "list push copied": 0,
+          "list push in place": 0,
+          "list update copied": 0,
+          "list update in place": 0,
+          "map/set update copied": 0,
+          "map/set update in place": 787499,
+          "reuse hits": 0,
+          "reuse misses": 0,
+          "stack slots carved": 1,
+          "stack slots deep-released": 0,
+          "stack slots released whole": 0,
+          "stack slots taken cold": 0,
+          "stack slots taken warm": 0,
+          "string append copied": 0,
+          "string append grown": 0,
+          "string append in place": 4,
+          "string/bytes kernel copied": 0,
+          "string/bytes kernel grown": 0,
+          "string/bytes kernel in place": 0
+        },
+        "entries_ms": 978.365,
+        "main_ms": 978.361,
+        "peak_bytes": 37118904
+      }
+    },
+    {
+      "checksum": "492332172",
+      "group": "collections",
+      "max_ns": 1058516583,
+      "median_ns": 1057066042,
+      "min_ns": 1044382417,
+      "n": 1100000,
+      "name": "ordered_multimap",
+      "runs_ns": [
+        1058213167,
+        1054695459,
+        1058516583,
+        1057066042,
+        1044382417
+      ],
+      "stats": {
+        "counters": {
+          "allocations": 17838452,
+          "leak checks skipped": 0,
+          "list push copied": 977204,
+          "list push in place": 735699,
+          "list update copied": 1114668,
+          "list update in place": 2069635,
+          "map/set update copied": 0,
+          "map/set update in place": 1222831,
+          "reuse hits": 0,
+          "reuse misses": 0,
+          "stack slots carved": 1,
+          "stack slots deep-released": 0,
+          "stack slots released whole": 0,
+          "stack slots taken cold": 0,
+          "stack slots taken warm": 0,
+          "string append copied": 0,
+          "string append grown": 0,
+          "string append in place": 4,
+          "string/bytes kernel copied": 0,
+          "string/bytes kernel grown": 0,
+          "string/bytes kernel in place": 0
+        },
+        "entries_ms": 1046.051,
+        "main_ms": 1047.246,
+        "peak_bytes": 51022656
+      }
+    },
+    {
+      "checksum": "355957095",
+      "group": "collections",
+      "max_ns": 878888166,
+      "median_ns": 869198666,
+      "min_ns": 848572667,
+      "n": 700000,
+      "name": "ordered_set",
+      "runs_ns": [
+        869198666,
+        878888166,
+        848572667,
+        876059917,
+        862271375
+      ],
+      "stats": {
+        "counters": {
+          "allocations": 13426838,
+          "leak checks skipped": 0,
+          "list push copied": 0,
+          "list push in place": 92009,
+          "list update copied": 0,
+          "list update in place": 184019,
+          "map/set update copied": 1,
+          "map/set update in place": 513694,
+          "reuse hits": 0,
+          "reuse misses": 0,
+          "stack slots carved": 1,
+          "stack slots deep-released": 0,
+          "stack slots released whole": 0,
+          "stack slots taken cold": 0,
+          "stack slots taken warm": 0,
+          "string append copied": 0,
+          "string append grown": 0,
+          "string append in place": 4,
+          "string/bytes kernel copied": 0,
+          "string/bytes kernel grown": 0,
+          "string/bytes kernel in place": 0
+        },
+        "entries_ms": 820.562,
+        "main_ms": 820.69,
+        "peak_bytes": 30928720
+      }
+    },
+    {
+      "checksum": "990918911",
+      "group": "collections",
+      "max_ns": 1024574791,
+      "median_ns": 1014487583,
+      "min_ns": 1000109291,
+      "n": 600000,
+      "name": "sorted_map",
+      "runs_ns": [
+        1024574791,
+        1000109291,
+        1014487583,
+        1004373333,
+        1019345458
+      ],
+      "stats": {
+        "counters": {
+          "allocations": 17849353,
+          "leak checks skipped": 0,
+          "list push copied": 0,
+          "list push in place": 2264,
+          "list update copied": 0,
+          "list update in place": 2264,
+          "map/set update copied": 0,
+          "map/set update in place": 0,
+          "reuse hits": 0,
+          "reuse misses": 0,
+          "stack slots carved": 1,
+          "stack slots deep-released": 0,
+          "stack slots released whole": 0,
+          "stack slots taken cold": 0,
+          "stack slots taken warm": 0,
+          "string append copied": 0,
+          "string append grown": 0,
+          "string append in place": 4,
+          "string/bytes kernel copied": 0,
+          "string/bytes kernel grown": 0,
+          "string/bytes kernel in place": 0
+        },
+        "entries_ms": 997.481,
+        "main_ms": 997.417,
+        "peak_bytes": 21668320
+      }
+    },
+    {
+      "checksum": "115350869",
+      "group": "collections",
+      "max_ns": 955920083,
+      "median_ns": 931329166,
+      "min_ns": 896378708,
+      "n": 800000,
+      "name": "sorted_multimap",
+      "runs_ns": [
+        918551625,
+        896378708,
+        955920083,
+        932692958,
+        931329166
+      ],
+      "stats": {
+        "counters": {
+          "allocations": 18039232,
+          "leak checks skipped": 0,
+          "list push copied": 0,
+          "list push in place": 1184825,
+          "list update copied": 60579,
+          "list update in place": 2093818,
+          "map/set update copied": 0,
+          "map/set update in place": 0,
+          "reuse hits": 0,
+          "reuse misses": 0,
+          "stack slots carved": 1,
+          "stack slots deep-released": 0,
+          "stack slots released whole": 0,
+          "stack slots taken cold": 0,
+          "stack slots taken warm": 0,
+          "string append copied": 0,
+          "string append grown": 0,
+          "string append in place": 4,
+          "string/bytes kernel copied": 0,
+          "string/bytes kernel grown": 0,
+          "string/bytes kernel in place": 0
+        },
+        "entries_ms": 926.167,
+        "main_ms": 926.158,
+        "peak_bytes": 27113448
+      }
+    },
+    {
+      "checksum": "958326257",
+      "group": "collections",
+      "max_ns": 1133721542,
+      "median_ns": 1131634209,
+      "min_ns": 1122277250,
+      "n": 300000,
+      "name": "sorted_set",
+      "runs_ns": [
+        1133721542,
+        1133204041,
+        1131634209,
+        1122277250,
+        1123618042
+      ],
+      "stats": {
+        "counters": {
+          "allocations": 20958049,
+          "leak checks skipped": 0,
+          "list push copied": 0,
+          "list push in place": 33505,
+          "list update copied": 0,
+          "list update in place": 67011,
+          "map/set update copied": 0,
+          "map/set update in place": 0,
+          "reuse hits": 0,
+          "reuse misses": 0,
+          "stack slots carved": 1,
+          "stack slots deep-released": 0,
+          "stack slots released whole": 0,
+          "stack slots taken cold": 0,
+          "stack slots taken warm": 0,
+          "string append copied": 0,
+          "string append grown": 0,
+          "string append in place": 4,
+          "string/bytes kernel copied": 0,
+          "string/bytes kernel grown": 0,
+          "string/bytes kernel in place": 0
+        },
+        "entries_ms": 1121.685,
+        "main_ms": 1121.62,
+        "peak_bytes": 25208224
+      }
+    }
+  ]
+}

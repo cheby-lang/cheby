@@ -196,10 +196,11 @@ pub unsafe fn to_rust_string(word: Word) -> Option<String> {
 
 /// Consumes a text object and returns one with the same contents and room
 /// for at least `extra` more bytes: the same object when it is unique (count
-/// one) and has room, otherwise a new unique one of capacity
-/// `max(len + extra, 2 * cap)`, after which the old one is released (freed
-/// when it was unique, left alone when shared or static). Ends the process
-/// if `text` is not a text object. A size that overflows fails as
+/// one) and has room, otherwise a new unique one ([`grown_capacity`]: of
+/// capacity `max(len + extra, 2 * cap)` when `text` was unique, `max(len +
+/// extra, 2 * len)` when it is copied), after which the old one is released
+/// (freed when it was unique, left alone when shared or static). Ends the
+/// process if `text` is not a text object. A size that overflows fails as
 /// [`alloc_text`] does.
 ///
 /// # Safety
@@ -224,11 +225,16 @@ pub unsafe fn reserve(text: Word, extra: u64) -> Word {
         alloc::out_of_memory(u64::MAX)
     };
     // SAFETY: a live object.
-    if need <= cap && unsafe { rc::is_unique(text) } {
+    let unique = unsafe { rc::is_unique(text) };
+    if need <= cap && unique {
         return text;
     }
-    let new_cap = need.max(cap.saturating_mul(2));
-    let new = alloc_text(new_cap, layout);
+    let path = if unique {
+        Growth::Grown
+    } else {
+        Growth::Copied
+    };
+    let new = alloc_text(grown_capacity(path, len, cap, need), layout);
     // SAFETY: both are live; the new object has room for `len` bytes and
     // does not overlap the old one.
     unsafe {
@@ -244,8 +250,9 @@ pub unsafe fn reserve(text: Word, extra: u64) -> Word {
 }
 
 /// Consumes a text object and returns it followed by `piece`, in place when
-/// it is unique and has room, otherwise in a new object grown by doubling
-/// ([`reserve`]). `piece` must not point into `text`'s own contents.
+/// it is unique and has room, otherwise in a new object of the capacity
+/// [`reserve`] gives (twice the old capacity for a unique text, twice the
+/// length for a copy). `piece` must not point into `text`'s own contents.
 ///
 /// # Safety
 ///
@@ -280,9 +287,11 @@ pub unsafe fn append(text: Word, piece: &[u8]) -> Word {
 /// room, so the caller may append in place (D-525): the caller then
 /// appends ([`append`] stays in place) and only afterwards adds the
 /// reference it returns with `rc::dup`. Otherwise it is a new unique object
-/// of capacity `max(len + extra, 2 * cap)` that the caller owns, so a chain
-/// of appends to a unique result grows by doubling. `text` keeps its
-/// reference either way. Ends the process if `text` is not a text object.
+/// that the caller owns, of capacity `max(len + extra, 2 * cap)` when
+/// `text` is unique and full, so a chain of appends to a unique result
+/// grows by doubling, and `max(len + extra, 2 * len)` when it is copied
+/// ([`grown_capacity`]). `text` keeps its reference either way. Ends the
+/// process if `text` is not a text object.
 /// A size that overflows fails as [`alloc_text`] does.
 ///
 /// The caller passes `reuse` false when another argument of its kernel is
@@ -318,7 +327,7 @@ pub unsafe fn with_room(text: Word, extra: u64, reuse: bool) -> (Word, bool) {
     if path == Growth::InPlace {
         return (text, true);
     }
-    let new = alloc_text(need.max(cap.saturating_mul(2)), layout);
+    let new = alloc_text(grown_capacity(path, len, cap, need), layout);
     // SAFETY: both are live; the new object has room for `len` bytes and
     // does not overlap the old one.
     unsafe {
@@ -412,6 +421,24 @@ pub(crate) unsafe fn growth(text: Word, extra: u64, reuse: bool) -> Growth {
         Growth::InPlace
     } else {
         Growth::Grown
+    }
+}
+
+/// The capacity of the new object a text of `len` bytes and capacity `cap`
+/// moves to when it needs room for `need >= len` bytes and `path` is not
+/// [`Growth::InPlace`]. A unique text that is full grows to
+/// `max(need, 2 * cap)` (D-577), so appends to a unique accumulator cost
+/// amortized O(1) per byte. A copy, of a shared or static text or under
+/// D-563's alias rule, gets `max(need, 2 * len)`: its old capacity says
+/// nothing about the copy, and a text that stays shared is copied at every
+/// append, so doubling the old capacity each time grew the capacity, not
+/// the contents, exponentially (out of memory after about 47 one-byte
+/// appends to a record's string field, gate 6's ROB6-3)
+/// (D-849, refining D-577).
+fn grown_capacity(path: Growth, len: u64, cap: u64, need: u64) -> u64 {
+    match path {
+        Growth::Grown => need.max(cap.saturating_mul(2)),
+        Growth::InPlace | Growth::Copied => need.max(len.saturating_mul(2)),
     }
 }
 
@@ -556,5 +583,37 @@ pub(crate) mod tests {
             }
         }
         assert_eq!(live_objects(), before);
+    }
+
+    /// A text copied because it is shared gets a capacity from its length,
+    /// not from its old capacity: 64 one-byte appends to a text that is
+    /// shared at every step, through `append` and through `with_room`, end
+    /// with a capacity below twice the length. Doubling the old capacity
+    /// ran out of memory after about 47 steps (gate 6's ROB6-3).
+    #[test]
+    fn copying_a_shared_text_sizes_it_by_its_length() {
+        // SAFETY: the test owns its references and passes them along.
+        unsafe {
+            let mut text = new_string("");
+            for _ in 0..64 {
+                rc::dup(text);
+                let next = append(text, b"!");
+                assert_ne!(next, text, "a shared text is copied");
+                rc::drop(text);
+                text = next;
+            }
+            assert_eq!(bytes(text).map(<[u8]>::len), Some(64));
+            assert!(capacity(text) <= 128, "capacity {}", capacity(text));
+            for _ in 0..64 {
+                let (next, same) = with_room(text, 1, false);
+                assert!(!same, "no reuse: a copy");
+                let next = append(next, b"?");
+                rc::drop(text);
+                text = next;
+            }
+            assert_eq!(bytes(text).map(<[u8]>::len), Some(128));
+            assert!(capacity(text) <= 256, "capacity {}", capacity(text));
+            rc::drop(text);
+        }
     }
 }

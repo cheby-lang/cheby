@@ -4,5 +4,5 @@ error[E0036]: unknown key `colour` in `cheby.toml`
 3 | colour = "red"
   | ^^^^^^ unknown key
   |
-  = help: the keys are `name`, `version`, `description`, `licences`, `targets`, `[dependencies]` and `[const-eval]`
+  = help: the keys are `name`, `version`, `description`, `licences`, `targets`, `[dependencies]`, `[const-eval]` and `[runtime]`
 

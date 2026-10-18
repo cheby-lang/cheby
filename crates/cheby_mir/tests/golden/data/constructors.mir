@@ -1,116 +1,162 @@
 module app
 
 fn app::first() -> value check str#0 {
+  entry unwind bb1
   str#0 = "src/main.cheby:26:4"
   str#1 = "first"
 bb0:
-  call_runtime effect_check(borrow const str#1)
-  _0: int = call_foreign "first"() -> i64
-  _1: value = box int _0
+  call_runtime effect_check(borrow const str#1) ; unwind bb1
+  _0: int = call_foreign "first"() -> i64 ; unwind bb1
+  _1: value = box int _0 ; unwind bb1
   return _1
+bb1:
+  resume
 }
 
 fn app::second() -> value check str#0 {
+  entry unwind bb1
   str#0 = "src/main.cheby:30:4"
   str#1 = "second"
 bb0:
-  call_runtime effect_check(borrow const str#1)
-  _0: int = call_foreign "second"() -> i64
-  _1: value = box int _0
+  call_runtime effect_check(borrow const str#1) ; unwind bb1
+  _0: int = call_foreign "second"() -> i64 ; unwind bb1
+  _1: value = box int _0 ; unwind bb1
   return _1
+bb1:
+  resume
 }
 
 fn app::point() -> value check str#0 {
+  entry unwind bb1
   str#0 = "src/main.cheby:32:4"
 bb0:
-  _0: value = call app::second()
+  _0: value = call app::second() ; unwind bb1
   _1: int = unbox int _0
   drop _0
-  _2: value = call app::first()
+  _2: value = call app::first() ; unwind bb1
   _3: int = unbox int _2
   drop _2
-  _4: value = alloc ctor app::Point(_3, _1)
+  _4: value = alloc ctor app::Point(_3, _1) ; unwind bb1
   return _4
+bb1:
+  resume
 }
 
 fn app::mixed(_0: value) -> value check str#0 {
+  entry unwind bb2
   str#0 = "src/main.cheby:36:4"
 bb0:
-  _1: value = alloc ctor app::Mixed(const int 3, _0, const float 0.5, const bool true)
+  _1: value = alloc ctor app::Mixed(const int 3, _0, const float 0.5, const bool true) ; unwind bb2
   return _1
+bb1:
+  resume
+bb2:
+  drop _0
+  goto bb1()
 }
 
 fn app::pair(_0: int) -> value check str#0 {
+  entry unwind bb1
   str#0 = "src/main.cheby:40:4"
 bb0:
-  _1: value = box int _0
-  _2: value = call app::second()
+  _1: value = box int _0 ; unwind bb1
+  _2: value = call app::second() ; unwind bb2
   _3: int = unbox int _2
   drop _2
-  _4: value = alloc ctor app::Pair(_1, _3)
+  _4: value = alloc ctor app::Pair(_1, _3) ; unwind bb2
   return _4
+bb1:
+  resume
+bb2:
+  drop _1
+  goto bb1()
 }
 
 fn app::circle() -> value check str#0 {
+  entry unwind bb1
   str#0 = "src/main.cheby:44:4"
 bb0:
-  _0: value = alloc ctor app::Circle(const float 2.5)
+  _0: value = alloc ctor app::Circle(const float 2.5) ; unwind bb1
   return _0
+bb1:
+  resume
 }
 
 fn app::dot() -> value check str#0 {
+  entry unwind bb1
   str#0 = "src/main.cheby:48:4"
 bb0:
   return const ctor app::Dot
+bb1:
+  resume
 }
 
 fn app::some(_0: int) -> value check str#0 {
+  entry unwind bb1
   str#0 = "src/main.cheby:52:4"
 bb0:
-  _1: value = box int _0
-  _2: value = alloc ctor Some(_1)
+  _1: value = box int _0 ; unwind bb1
+  _2: value = alloc ctor Some(_1) ; unwind bb2
   return _2
+bb1:
+  resume
+bb2:
+  drop _1
+  goto bb1()
 }
 
 fn app::ok(_0: value) -> value check str#0 {
+  entry unwind bb2
   str#0 = "src/main.cheby:56:4"
 bb0:
-  _1: value = alloc ctor Ok(_0)
+  _1: value = alloc ctor Ok(_0) ; unwind bb2
   return _1
+bb1:
+  resume
+bb2:
+  drop _0
+  goto bb1()
 }
 
 fn app::err(_0: int) -> value check str#0 {
+  entry unwind bb1
   str#0 = "src/main.cheby:60:4"
 bb0:
-  _1: value = box int _0
-  _2: value = alloc ctor Err(_1)
+  _1: value = box int _0 ; unwind bb1
+  _2: value = alloc ctor Err(_1) ; unwind bb2
   return _2
+bb1:
+  resume
+bb2:
+  drop _1
+  goto bb1()
 }
 
 fn app::main() -> value check str#0 {
+  entry unwind bb1
   str#0 = "src/main.cheby:64:4"
   str#1 = "m"
   str#2 = "yes"
 bb0:
-  _0: value = call app::point()
+  _0: value = call app::point() ; unwind bb1
   drop _0
-  _1: value = const str#1
-  _2: value = call app::mixed(_1)
+  _2: value = call app::mixed(const str#1) ; unwind bb1
   drop _2
-  _3: value = call app::pair(const int 1)
+  _3: value = call app::pair(const int 1) ; unwind bb1
   drop _3
-  _4: value = call app::circle()
+  _4: value = call app::circle() ; unwind bb1
   drop _4
-  _5: value = call app::dot()
+  _5: value = call app::dot() ; unwind bb1
   drop _5
-  _6: value = call app::some(const int 1)
+  _6: value = call app::some(const int 1) ; unwind bb1
   drop _6
-  _7: value = const str#2
-  _8: value = call app::ok(_7)
+  _8: value = call app::ok(const str#2) ; unwind bb1
   drop _8
-  _9: value = call app::err(const int 2)
+  _9: value = call app::err(const int 2) ; unwind bb1
   drop _9
   return const nil
+bb1:
+  resume
 }
 
 layout ctor app::Point: Point.Point tag 0 key ec11cf523cf6d065 record [x: int @8, y: int @16]

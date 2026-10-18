@@ -1,0 +1,4 @@
+reuse: tests/ui/09-memory-model/reuse_report/owned_for_reuse.cheby:17:3: building `Point` reuses `p` when it is unique
+reuse: tests/ui/09-memory-model/reuse_report/owned_for_reuse.cheby:21:11: building `Point` does not reuse `p`: it is borrowed from the caller
+reuse: tests/ui/09-memory-model/reuse_report/owned_for_reuse.cheby:22:3: building a tuple of 3 allocates: no value of the same size dies before it
+reuse: tests/ui/09-memory-model/reuse_report/owned_for_reuse.cheby:26:15: building `Point` allocates: no value of the same size dies before it

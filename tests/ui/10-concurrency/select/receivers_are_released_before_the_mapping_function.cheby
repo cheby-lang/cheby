@@ -1,0 +1,53 @@
+// @mode: run-pass
+// @decisions: D-205, D-670
+// @milestone: M2
+//! `select` releases the selector, and with it every receiver the selector
+//! holds, before it calls the chosen arm's mapping function (§10.6). Here
+//! the selector is the last holder of a capacity-0 channel's `Receiver`,
+//! so while the mapping function runs, a `send` on that channel finds no
+//! receiver and returns `Err(Nil)` at once. If a reference to the
+//! `Receiver` were still held, the send would block until its timeout.
+
+import std::channel
+import std::duration
+import std::fiber
+import std::io
+import std::selector
+
+/// Hands the select its value on `tx`, waits for `start`, then sends on
+/// `tx` again within a second and reports what that send returned.
+fn helper(
+  tx: channel::Sender<Nil>,
+  start: channel::Receiver<Nil>,
+  reports: channel::Sender<String>,
+) -> Result<Nil, String> {
+  let assert Ok(Nil) = channel::send(tx, Nil)
+  let _ = channel::receive(start)
+  let sent = fiber::timeout(duration::seconds(1), fn() { channel::send(tx, Nil) })
+  let text = case sent {
+    Ok(result) => "{result:?}"
+    Err(fiber::TimedOut) => "still blocked after 1 s"
+    Err(fiber::Panicked(_)) => "panicked"
+  }
+  channel::send(reports, text)
+}
+
+fn main() {
+  let (tx, rx) = channel::new::<Nil>(0)
+  let (start_tx, start_rx) = channel::new::<Nil>(1)
+  let (reports_tx, reports_rx) = channel::new::<String>(1)
+  let outcome = {
+    use owner <- fiber::scope()
+    let _ = fiber::spawn(owner, fn() { helper(tx, start_rx, reports_tx) })
+    // From here on the selector holds the only reference to `rx`.
+    let arm =
+      selector::new()
+      |> selector::receive(_, rx, fn(_) {
+        let assert Ok(Nil) = channel::send(start_tx, Nil)
+        channel::receive(reports_rx)
+      })
+    selector::select(arm)
+  }
+  let assert Ok(Ok(text)) = outcome
+  io::println("a send while the mapping function ran: {text}")
+}

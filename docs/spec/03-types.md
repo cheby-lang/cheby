@@ -44,9 +44,10 @@ These types are known to the compiler. The ones marked _prelude_ are in scope in
 | `Never`                             | the empty type                             | yes                         | [§3.10](#310-never)                   |
 | `Map<K, V>`, `Set<T>`               | persistent hash map and set                | no (`std::map`, `std::set`) | [§3.8](#38-list-map-and-set)          |
 | `Bytes`                             | immutable byte sequence                    | no (`std::bytes`)           | [§3.5](#35-string)                    |
-| `Sender<T>`, `Receiver<T>`          | channel handles                            | no (`std::channel`)         | [chapter 10](10-concurrency.md)       |
 
 `Never` is in the prelude (D-131), because it is a writable return type ([§3.10](#310-never)).
+
+The handles of the concurrency modules are not built-in types. `Sender<T>` and `Receiver<T>` are ordinary types of `std::channel`, `Fiber<T>` and `Scope` of `std::fiber`, and `Selector<E>` of `std::selector`, each declared without a body, so they are external types ([§12.5.3](12-targets-and-ffi.md#1253-external-types)) with drop functions ([§9.5](09-memory-model.md#95-handles-and-drop-functions)) (D-647).
 
 `Map`, `Set` and `Bytes` are known to the compiler like the prelude types, but they are not in the prelude (D-112, D-481). Each is named through its home module, `std::map`, `std::set` or `std::bytes`: `map::Map<K, V>` after `import std::map`, or `Map<K, V>` after `import std::map::{Map}`. Inside its home module the type is in scope unqualified ([§7.6](07-modules-and-packages.md#76-prelude)).
 
@@ -197,7 +198,9 @@ The standard library also provides these collections. They are ordinary standard
 
 - A sorted collection is a persistent balanced tree with O(log n) lookup and update (D-331). It treats two keys as the same when `compare` returns `Equal`, and inserting such a key keeps the stored key and replaces only the value (D-341).
 - In an insertion-ordered collection, inserting a key that is already present keeps its position and replaces its value, and a key that is removed and inserted again moves to the end (D-340).
-- A multimap holds a `List<V>` under each key, in insertion order, with duplicates kept (D-332).
+- A multimap holds a `List<V>` under each key, in insertion order, with duplicates kept (D-332). Every key holds at least one value, so removing a key's last value removes the key, and looking up a missing key gives `[]` (D-364). A multimap's `size` counts its keys and its `count` counts its values (D-363).
+
+_Note:_ the reference implementation writes these seven collections in Cheby, with no runtime kernel of their own, and ships them from M2 (D-336, D-664).
 
 Their equality, hashing and debug printing are defined in [§3.13](#313-equality-hashing-and-debug-printing).
 
@@ -384,7 +387,7 @@ Every type has built-in debug printing. Every type also has built-in structural 
 - Floats use reflexive equality ([§3.3.2](#332-float)) (D-069).
 - Two `dyn I` values are equal when they hold values of the same type, including all type arguments, and those values are equal ([§8.6.1](08-interfaces.md#861-type-descriptors)) (D-236). Their descriptors are compared by structure, never by address (D-530), and each nominal type in them by its declaration, not by its name (D-582). A `dyn` value that holds a `dyn` value counts as the inner value, for equality, hashing and debug printing alike (D-604).
 - Both operands must have the same type. Comparing values of different types is a compile error.
-- If a comparison reaches a function value or a handle (a `Sender`, `Receiver`, fiber or scope value, or a value of an external type), it panics (D-070, D-189, D-233). Identity is never compared ([§9.1](09-memory-model.md#91-values-and-sharing)). When the compiler knows statically that a compared type contains a function type or a handle type, it emits a warning (D-070, D-233). It looks through tuples, built-in collections and the fields of every constructor of a named type, with the type arguments in place. It stops at type parameters of the enclosing item, at `dyn` values and at standard-library types that compare through their own functions, and it handles recursive types (D-518).
+- If a comparison reaches a function value or a handle (a `Sender`, `Receiver`, `Fiber`, `Scope` or `Selector`, or a value of another external type), it panics (D-070, D-189, D-233). Identity is never compared ([§9.1](09-memory-model.md#91-values-and-sharing)). When the compiler knows statically that a compared type contains a function type or a handle type, it emits a warning (D-070, D-233). It looks through tuples, built-in collections and the fields of every constructor of a named type, with the type arguments in place. It stops at type parameters of the enclosing item, at `dyn` values and at standard-library types that compare through their own functions, and it handles recursive types (D-518).
 
 **Hashing** is consistent with equality: equal values hash equally. A `dyn` value's hash combines the hash of its descriptor with the hash of its value (D-236, D-530). A map or set hashes its entries independently of their order, and two maps or sets built with different seeds, such as one from a constant and one built at run time, compare and hash by their entries alone (D-538). Hashes are seeded per process (D-093), so hash values are not stable across runs and are not exposed as a stable API. Hashing panics on the same values as equality, so a value that contains a function or a handle cannot be a `Map` key or a `Set` element: inserting or looking it up panics (D-233).
 
@@ -396,7 +399,7 @@ A `String` prints in double quotes with exactly the escapes that a string litera
 
 Some standard-library types print differently (D-342):
 
-- `Map`, `Set` and `multimap` values list their entries sorted by each entry's printed text, so the output is the same on every run despite the random iteration order (D-344). The texts are compared as UTF-8 bytes, which is the order of scalar values and of `String`'s `compare`, so `10` comes before `9`. A map entry's text is that of the pair `(key, value)`, and a nested collection counts with its own sorted text (D-587).
+- `Map`, `Set` and `multimap` values print as `map::from_list([…])`, `set::from_list([…])` and `multimap::from_list([…])`, so the text reads as the code that rebuilds the value (D-382). `Map` and `Set` list their entries sorted by each entry's printed text, so the output is the same on every run despite the random iteration order (D-344). The texts are compared as UTF-8 bytes, which is the order of scalar values and of `String`'s `compare`, so `10` comes before `9`. A map entry's text is that of the pair `(key, value)`, and a nested collection counts with its own sorted text (D-587). A `multimap` lists one pair per value: its keys sorted by their printed text, compared the same way, and each key's pairs in insertion order. Keys with the same printed text are ordered by the text of their pairs (D-847).
 - Sorted and insertion-ordered collections list their entries in their own order, not their internal tree or list nodes (D-342).
 - `io::Error` prints the same text as its `show`, a fixed message for each kind the standard library knows, and never the operating system's internal fields (D-345).
 
@@ -404,8 +407,8 @@ Values without printable structure print as fixed placeholders (D-233):
 
 - A function value, whether a top-level function, a closure, a capture or a constructor used as a function, prints as `<fn>`.
 - A `Sender` prints as `<Sender>` and a `Receiver` as `<Receiver>`.
-- A fiber value prints as `<Fiber>` and a scope value as `<Scope>`. These names are provisional, like the rest of the fiber API (D-174).
-- A value of an external type ([§12.5.3](12-targets-and-ffi.md#1253-external-types)) prints as its unqualified type name in angle brackets, such as `<Db>`.
+- A `Fiber` prints as `<Fiber>`, a `Scope` as `<Scope>` and a `Selector` as `<Selector>` (D-647).
+- Any other value of an external type ([§12.5.3](12-targets-and-ffi.md#1253-external-types)) prints as its unqualified type name in angle brackets, such as `<Db>`.
 - A `dyn I` value prints as the debug form of the value inside it.
 
 Placeholders never show identity, addresses or contents, so identity stays unobservable ([§9.1](09-memory-model.md#91-values-and-sharing)). For example, `(1, fn(x) { x })` prints as `(1, <fn>)`.

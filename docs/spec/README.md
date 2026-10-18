@@ -22,7 +22,7 @@ This specification describes the Cheby programming language: its syntax, static 
 
 Appendix: [A. Grammar](appendix-a-grammar.md)
 
-The standard library is specified separately, one file per module, in [`../stdlib/`](../stdlib/) (D-204, D-220). This specification fixes the language and the semantics the runtime must provide. Standard-library names used in its examples, such as `fiber::scope` or `channel::new`, are provisional until the standard-library spec fixes them (D-174, D-199).
+The standard library is specified separately, one file per module, in [`../stdlib/`](../stdlib/) (D-204, D-220). This specification fixes the language and the semantics the runtime must provide. Standard-library names used in its examples are those of the standard-library spec where it specifies them, as it does for `fiber::scope` and `channel::new` (D-646). Names of modules it has not specified yet, such as `http::get`, are provisional until it does (D-174).
 
 ## Conventions
 
@@ -61,7 +61,7 @@ Where the decision log does not settle something that the spec needs, the spec m
 
 The identifier is `OQ-<chapter>-<n>`. Text that depends on an open question is written as if the proposal were accepted, but it is **provisional** until the question is settled in the decision log. When a question is settled, the marker is replaced by normative text that cites the new decision. If the decision differs from the proposal, the dependent text is rewritten.
 
-All gaps marked in the first draft were settled by D-126 to D-197, and later gaps are marked as they are found. No open questions remain: the last one, OQ-13-7, was settled by D-239.
+All gaps marked in the first draft were settled by D-126 to D-197, and later gaps are marked as they are found. The first draft's last open question, OQ-13-7, was settled by D-239. The M2 design left two open, settled at H1's plan: OQ-10-11, the locations in a deadlock report, by D-856, and OQ-13-8, deadlocks while tests run in parallel, by D-857.
 
 ### Examples
 

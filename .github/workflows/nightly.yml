@@ -1,0 +1,247 @@
+# Scheduled checks on a pinned, dated nightly toolchain (D-721, D-781).
+#
+# D-277 pins every other job to stable 1.99.0. This workflow alone uses a
+# dated nightly, because cargo-fuzz, the sanitizers and Miri need one
+# (D-721). The date is pinned so that a run never changes because the
+# nightly did, and it is at least 1.99-nightly, the workspace's
+# `rust-version` (nightly-2026-10-01 is 1.101.0-nightly). fuzz/Cargo.toml
+# and xtask/src/sanitize.rs (`NIGHTLY`) name the same toolchain. A
+# scheduled run never blocks a pull request.
+#
+# - `fuzz`: a bounded run of each of the four `cargo fuzz` targets
+#   (fuzz/fuzz_targets): `lex`, `parse` and `check` from seed corpora made
+#   of the examples and the UI tests, and `rc_differential`, naive
+#   reference counting against Perceus on generated programs (D-718),
+#   which runs a debug `cheby` built with the stable toolchain and copied
+#   aside first. A finding fails the job and uploads fuzz/artifacts
+#   (D-781).
+# - `sanitizer (thread)` and `sanitizer (address)`: ThreadSanitizer and
+#   AddressSanitizer (with LeakSanitizer) on Linux x86-64 (D-721). Each runs
+#   `cargo xtask sanitize <s>`, the one driver that the local runs use too
+#   (D-882); `cargo xtask sanitize <s> --list` prints its
+#   steps and their commands. Every step builds with `-Zbuild-std --target
+#   <host>`, `-Zsanitizer=<s>` and `--cfg cheby_sanitize="<s>"`, which turns
+#   on the runtime's annotations: each fiber switch is told to the
+#   sanitizer, and a stack slot is unpoisoned before it is reused. The steps
+#   run their tests one at a time with `CHEBY_HARNESS_SCALE=10` and
+#   `CHEBY_RT_TEST_EMULATED=1` (D-725, D-748): the runtime's unit tests with
+#   and without `CHEBY_RT_STRESS_MIGRATE=1`, `cheby_jit`'s tests, the
+#   deadlock UI tests at 4 and 2 threads under migration stress, the 2- and
+#   4-thread conformance trials under migration stress, and the REPL
+#   transcripts, `detached_reload.repl` included, under both sanitizers
+#   (D-831). The address job adds every example run with
+#   `CHEBY_RT_POISON=0`, the only runs that take the block cache and the
+#   inline reuse paths (D-844).
+#   JIT code is not instrumented (D-721): the sanitizers see the runtime,
+#   std and the compiler, and the harnesses' `CHEBY_RT_POISON=1` routes
+#   every count operation of generated code through the runtime.
+#   Under the cfg, `cheby` keeps the system allocator instead of mimalloc,
+#   because the sanitizers intercept only the system allocator (D-890).
+#   Options every step passes (the driver sets them; a caller's
+#   `ASAN_OPTIONS` or `TSAN_OPTIONS` comes after and wins):
+#   `allocator_may_return_null=1` under both, because the runtime's
+#   out-of-memory tests ask for impossible sizes on purpose and expect the
+#   allocator's null (D-642), which the sanitizers' allocators otherwise
+#   turn into an abort; `abort_on_error=1` and
+#   `detect_stack_use_after_return=1` for ASan; `halt_on_error=1` and
+#   `second_deadlock_stack=1` for TSan.
+#   The `loom` models are skipped (`--skip models::`), since loom switches
+#   stacks on its own (D-863).
+#   LeakSanitizer is on for the `jit` and `ui-deadlock` steps and off
+#   (`detect_leaks=0`, a per-step option, D-863) for `runtime` and
+#   `runtime-stress`, because the runtime's unit tests leak on purpose
+#   (frozen constants are immortal, leaked fixtures, child processes that
+#   end at a halt or a refusal without cleanup), and for `conformance`,
+#   `examples-poison-off` and `repl`, whose programs keep objects for good
+#   on purpose: D-539 makes a constant's objects static, outside the
+#   runtime's leak check, and only the constant's slot `cb$const$…` in the
+#   JIT's data memory holds them, which LeakSanitizer does not scan
+#   (reading `duration::zero` alone gives a report); and the REPL never
+#   frees what its entries return, its session values (D-547), and runs no
+#   leak check (D-458). The runtime's own leak check (exit 102, D-458)
+#   and its tests stay on everywhere (D-881). Under the address
+#   cfg the fiber stack slots are LeakSanitizer root regions while handed
+#   out, so objects held by fibers that a halt freezes are not reported
+#   (D-708, D-859).
+#   A report whose racing or faulting accesses lie in a dependency
+#   (crossbeam, the precompiled parts of std, loom's generator) gets one
+#   line with its reason in .github/tsan-suppressions.txt, which the driver
+#   passes through `TSAN_OPTIONS=suppressions=…`; a report in Cheby's own
+#   crates is fixed, never suppressed. Behavior a decision makes
+#   intentional, such as objects held by fibers that a halt freezes
+#   (D-708, D-859), is told to the sanitizer, never suppressed (D-863).
+#   An example that fails under ThreadSanitizer only because its own
+#   timeouts expire under the slowdown runs under AddressSanitizer only
+#   (D-863); `THREAD_TIMING_SKIPS` in xtask/src/sanitize.rs names each, and
+#   today it names none.
+# - `miri`: `cargo xtask sanitize miri`, the runtime's pure modules under
+#   Miri (D-721; D-884): the ABI, values, strings, reference
+#   counting, the collections, text, bytes, numbers, the generic walks,
+#   layouts, allocation, the frame walk's tests and the timer tests written
+#   for Miri, with `-Zmiri-permissive-provenance -Zmiri-disable-isolation
+#   -Zmiri-ignore-leaks` and `PROPTEST_CASES=4`. Miri's leak check is off
+#   because Cheby objects hold each other as integer words, which it cannot
+#   follow, so objects made immortal on purpose (D-765) would be reported;
+#   the runtime's own accounting checks every test's leaks. Tests skipped
+#   for their size are listed with their reasons in xtask/src/sanitize.rs
+#   (`MIRI_GROUPS`); others take a smaller size under `cfg(miri)`. Fibers,
+#   the scheduler, the pool, io, entries and the `loom` models stay out.
+# - The `rc_differential` fuzz job and both sanitizer jobs build
+#   `cheby_cli`, whose mimalloc libmimalloc-sys compiles from C, so they
+#   first run `.github/actions/c-compiler`, which checks the image's C
+#   compiler and installs nothing (D-890). Miri builds only the runtime.
+#
+# Until the `runtime` branch is pushed, a local run of the same driver on
+# this nightly is the evidence (D-862, as D-781 did for fuzzing): both
+# sanitizers in a `linux/arm64` container and Miri on macOS arm64. Docker's
+# x86-64 emulation cannot start ThreadSanitizer, so the first scheduled run
+# is x86-64 ThreadSanitizer's first check.
+
+name: Nightly
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: Seconds each fuzz target runs
+        required: false
+        default: "900"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  NIGHTLY: nightly-2026-10-01
+  FUZZ_SECONDS: ${{ github.event.inputs.seconds || '900' }}
+
+jobs:
+  fuzz:
+    name: fuzz (${{ matrix.target }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [lex, parse, check, rc_differential]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.0"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-10-01
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            fuzz
+      - uses: ./.github/actions/c-compiler
+        if: matrix.target == 'rc_differential'
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --version 0.13.2 --locked
+      - name: Seed the corpus with the examples and the UI tests
+        if: matrix.target != 'rc_differential'
+        run: |
+          mkdir -p "fuzz/corpus/${{ matrix.target }}"
+          for f in docs/examples/*/src/*.cheby; do
+            cp "$f" "fuzz/corpus/${{ matrix.target }}/$(echo "$f" | tr / _)"
+          done
+          find tests/ui -name '*.cheby' | while read -r f; do
+            cp "$f" "fuzz/corpus/${{ matrix.target }}/$(echo "$f" | tr / _)"
+          done
+      - name: Build the debug cheby that rc_differential runs
+        if: matrix.target == 'rc_differential'
+        run: |
+          cargo build -p cheby_cli --locked
+          mkdir -p "$RUNNER_TEMP/rc"
+          cp target/debug/cheby "$RUNNER_TEMP/rc/cheby"
+          echo "CHEBY_DIFF_BIN=$RUNNER_TEMP/rc/cheby" >> "$GITHUB_ENV"
+      - name: Fuzz ${{ matrix.target }} for ${{ env.FUZZ_SECONDS }} seconds
+        working-directory: fuzz
+        run: >-
+          cargo +${{ env.NIGHTLY }} fuzz run ${{ matrix.target }} --
+          -max_total_time=${{ env.FUZZ_SECONDS }} -timeout=600
+      - name: Upload findings
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}
+          if-no-files-found: ignore
+
+  sanitizer:
+    name: sanitizer (${{ matrix.sanitizer }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: [thread, address]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.0"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-10-01
+          components: rust-src
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: sanitize-${{ matrix.sanitizer }}
+      - uses: ./.github/actions/c-compiler
+      - name: Install llvm-symbolizer
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm
+          llvm-symbolizer --version
+      - name: Lower the address-space randomization ThreadSanitizer maps around
+        if: matrix.sanitizer == 'thread'
+        run: sudo sysctl vm.mmap_rnd_bits=28
+      - name: cargo xtask sanitize ${{ matrix.sanitizer }}
+        run: >-
+          cargo xtask sanitize ${{ matrix.sanitizer }}
+          --log-dir "$RUNNER_TEMP/sanitize-logs"
+      - name: Upload the logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sanitize-${{ matrix.sanitizer }}-logs
+          path: ${{ runner.temp }}/sanitize-logs
+          if-no-files-found: ignore
+
+  miri:
+    name: miri
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.0"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-10-01
+          components: rust-src, miri
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: sanitize-miri
+      - name: cargo xtask sanitize miri
+        run: >-
+          cargo xtask sanitize miri --jobs 4
+          --log-dir "$RUNNER_TEMP/sanitize-logs"
+      - name: Upload the logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sanitize-miri-logs
+          path: ${{ runner.temp }}/sanitize-logs
+          if-no-files-found: ignore

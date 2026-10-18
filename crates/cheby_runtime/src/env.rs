@@ -17,6 +17,7 @@ use crate::abi::Word;
 use crate::entry;
 use crate::list;
 use crate::panic::fatal;
+use crate::unwind::guard::{DropOnUnwind, guarded};
 use crate::{string, values};
 
 /// Appends every `std::env` kernel symbol and its address to `out`.
@@ -30,20 +31,24 @@ pub(crate) const COMPLETE: &[&str] = &["env"];
 /// `env::args`: the arguments, without the program name (D-347).
 #[unsafe(no_mangle)]
 pub extern "C" fn cheby_env_args() -> Word {
-    list::from_iter(entry::program_args().iter().map(|arg| values::string(arg)))
+    guarded(None, || {
+        list::from_iter(entry::program_args().iter().map(|arg| values::string(arg)))
+    })
 }
 
 /// `env::program_name`: the package's name under the toolchain (D-369),
 /// else the process's first argument, with invalid UTF-8 replaced.
 #[unsafe(no_mangle)]
 pub extern "C" fn cheby_env_program_name() -> Word {
-    let name = entry::program_name_if_set().unwrap_or_else(|| {
-        std::env::args_os()
-            .next()
-            .map(|first| lossy(&first))
-            .unwrap_or_default()
-    });
-    values::string(&name)
+    guarded(None, || {
+        let name = entry::program_name_if_set().unwrap_or_else(|| {
+            std::env::args_os()
+                .next()
+                .map(|first| lossy(&first))
+                .unwrap_or_default()
+        });
+        values::string(&name)
+    })
 }
 
 /// `env::get`: `Some(value)` for a set variable, `Some("")` when it is set
@@ -55,10 +60,17 @@ pub extern "C" fn cheby_env_program_name() -> Word {
 /// `name` is a live `String`, borrowed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_env_get(name: Word) -> Word {
-    // SAFETY: forwarded from the caller.
-    let name = unsafe { string::as_str_unchecked(name) }
-        .unwrap_or_else(|| fatal(format_args!("{name:#x} is not a String")));
-    values::option(variable(name).map(|value| values::string(&value)))
+    guarded(None, || {
+        // SAFETY: forwarded from the caller.
+        let name = unsafe { string::as_str_unchecked(name) }
+            .unwrap_or_else(|| fatal(format_args!("{name:#x} is not a String")));
+        let value = variable(name).map(|value| values::string(&value));
+        // The new string is released if its `Some` cannot be allocated.
+        let held = DropOnUnwind::new([value.unwrap_or(0)]);
+        let result = values::option(value);
+        held.disarm();
+        result
+    })
 }
 
 /// The value of the variable `name`, with invalid UTF-8 replaced, or

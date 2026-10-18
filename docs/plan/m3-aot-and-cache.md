@@ -11,10 +11,12 @@ Detail level: workstreams with outcomes. This file is refined into tasks when M3
 ### 3.1 Object output and linking
 
 - Cranelift object output per module, from the same lowering as the JIT.
-- `cheby_runtime` as a staticlib linked into every executable.
+- `cheby_runtime` as a staticlib linked into every executable, with mimalloc as the executable's global allocator, as in `cheby` (D-890).
 - Linking with the system linker, `cc` or `link.exe` (D-088, D-261).
 - DWARF line tables by default, full debug info opt-in (D-184, D-259), and panic backtraces from them.
 - Foreign code supplied by packages, per OQ-P9, and the `cheby.h` header for it (D-187).
+- Drop functions of user external types, run from the finalizer slot of M2's handle kinds, and `@blocking` foreign calls from packages, run on M2's blocking pool (D-101, D-647, D-683, D-703).
+- Executables unwind Rust frames with the platform unwinder. Cheby frames unwind by return-flag propagation, which keeps unwinding in the generated code itself, so the object writer and the cached-code loader carry nothing extra for them (D-733, ADR-0061).
 - `@external(native, …)` symbols resolved at link time instead of in the process.
 - An executable's entry that bypasses Rust's startup code reopens standard streams that are closed at start on the null device, so they behave as D-474 requires.
 
@@ -39,6 +41,11 @@ Detail level: workstreams with outcomes. This file is refined into tasks when M3
 ### 3.5 Tier-3 stdlib on native
 
 - `std::file`, `std::net`, `std::http`, `std::time`, `std::process` ([stdlib.md](stdlib.md#tier-3-before-m3-and-m4)).
+- Sockets register on M2's `mio` poller, through the seam M2 leaves for them, as `std::net` needs. They moved here from M2's workstream 2.6 (D-680, D-681).
+
+### 3.6 Differential fuzzing
+
+- The programs that M2's generator produces are also compared with expected values computed by a reference evaluator for the generator's subset, which [testing.md](testing.md#8-fuzzing) asked for from M2 (D-719).
 
 ## Exit criteria
 

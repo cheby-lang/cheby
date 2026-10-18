@@ -97,10 +97,24 @@ impl StaticNominal {
         }
     }
 
-    /// The descriptor's word.
+    /// The descriptor's word. Also exposes the provenance of the two
+    /// static strings it points to, so that [`names`], which reads their
+    /// addresses back as words, may turn them into usable pointers.
     #[must_use]
     pub fn word(&'static self) -> Word {
+        self.expose_strings();
         ptr_to_word(std::ptr::from_ref(self).cast::<u8>())
+    }
+
+    /// Exposes the provenance of the name and the module path (MIRI-1,
+    /// D-885). A static initializer cannot turn an
+    /// address into an integer, so the fields are pointers, and the
+    /// runtime reads them back as integer words (`read_field`), which
+    /// carry no provenance. Exposing is free at run time; only the
+    /// abstract machine (Miri) observes it.
+    fn expose_strings(&self) {
+        let _ = self.name.expose_provenance();
+        let _ = self.module.expose_provenance();
     }
 }
 
@@ -164,7 +178,10 @@ pub(crate) fn symbols() -> impl Iterator<Item = (&'static str, *const u8)> {
     sym::DESC_SYMBOLS
         .into_iter()
         .zip(BUILTINS)
-        .map(|(symbol, desc)| (symbol, std::ptr::from_ref(desc).cast::<u8>()))
+        .map(|(symbol, desc)| {
+            desc.expose_strings();
+            (symbol, std::ptr::from_ref(desc).cast::<u8>())
+        })
 }
 
 /// The builtin nominal descriptor `cheby_rt_desc_<name>`, by `<name>`

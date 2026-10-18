@@ -1,0 +1,3 @@
+fatal error: all fibers are blocked
+  blocked in channel::receive at tests/ui/10-concurrency/deadlock/detached_fiber_is_listed.cheby:14:32
+  blocked in channel::receive at tests/ui/10-concurrency/deadlock/detached_fiber_is_listed.cheby:16:22

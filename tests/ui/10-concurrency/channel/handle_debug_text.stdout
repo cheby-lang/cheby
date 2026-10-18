@@ -1,0 +1,3 @@
+<Sender> <Receiver>
+[<Sender>, <Sender>]
+Mailbox("inbox", <Sender>)

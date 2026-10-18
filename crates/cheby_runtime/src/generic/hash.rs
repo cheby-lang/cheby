@@ -263,7 +263,15 @@ pub unsafe fn hash(word: Word) -> Result<u64, Reached> {
 /// As for [`hash`].
 pub unsafe fn hash_with_seed(word: Word, seed: u64) -> Result<u64, Reached> {
     let mut hasher = Hasher::new(seed);
-    let mut stack = ScratchVec::of(Task::Value(word));
+    // The first step runs before the walk's stack exists: a leaf leaves no
+    // work, so no scratch buffer grows (GATE1-1).
+    // SAFETY: forwarded from the caller.
+    unsafe { step(word, &mut hasher) }?;
+    if hasher.pending.is_empty() {
+        return Ok(hasher.finish());
+    }
+    let mut stack = ScratchVec::new();
+    stack.push_reversed(&mut hasher.pending);
     while let Some(task) = stack.pop() {
         match task {
             // SAFETY: every word on the stack is borrowed from `word`, or

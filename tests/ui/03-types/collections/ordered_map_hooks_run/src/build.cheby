@@ -1,0 +1,23 @@
+//! Builds ordered maps for the root module, which never calls
+//! `std::ordered_map` itself.
+
+import std::ordered_map
+import std::ordered_map::{OrderedMap}
+
+/// `a`, `b` and `c` in that order, built by `from_list`.
+fn listed() -> OrderedMap<String, Int> {
+  ordered_map::from_list([("a", 1), ("b", 2), ("c", 3)])
+}
+
+/// The same entries in the same order, built by inserts after a removal,
+/// so their insertion numbers differ from `listed`'s.
+fn grown() -> OrderedMap<String, Int> {
+  let start = ordered_map::from_list([("z", 0), ("a", 1)])
+  let added = ordered_map::insert(ordered_map::remove(start, "z"), "b", 2)
+  ordered_map::insert(added, "c", 3)
+}
+
+/// The same entries in the reverse order.
+fn reversed() -> OrderedMap<String, Int> {
+  ordered_map::from_list([("c", 3), ("b", 2), ("a", 1)])
+}

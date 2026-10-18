@@ -214,9 +214,19 @@ pub mod layout {
     pub const MAP_FIRST: LayoutId = 32;
     /// The last id of map and set nodes.
     pub const MAP_LAST: LayoutId = 39;
+    /// A channel's sending handle (`std::channel`, D-703).
+    pub const SENDER: LayoutId = 40;
+    /// A channel's receiving handle (D-703).
+    pub const RECEIVER: LayoutId = 41;
+    /// A fiber handle (`std::fiber`, D-703).
+    pub const FIBER: LayoutId = 42;
+    /// A scope handle (D-703).
+    pub const SCOPE: LayoutId = 43;
+    /// A selector node (D-695, D-703).
+    pub const SELECTOR: LayoutId = 44;
     /// The first id of the runtime-defined kinds registered with
-    /// `layout::register_builtin` (list and map nodes, then 40 to 63
-    /// reserved).
+    /// `layout::register_builtin` (list and map nodes, the handle kinds 40
+    /// to 44, then 45 to 63 reserved).
     pub const CUSTOM_FIRST: LayoutId = LIST_FIRST;
     /// The last id reserved for builtin collection nodes (F3, F4).
     pub const BUILTIN_RESERVED_END: LayoutId = 63;
@@ -282,6 +292,43 @@ pub const CTX_MODE: i32 = 8;
 /// forbidden (§4.5, §13.9).
 pub const CTX_MODE_CONST_EVAL: u32 = 1;
 
+/// Byte offset of the fiber control block's unwind flag, a `u32` (D-685):
+/// [`unwind_flag::NONE`], [`unwind_flag::PANIC`] or
+/// [`unwind_flag::CANCEL`]. Generated code loads it after a C call that
+/// may unwind (D-733).
+pub const CTX_UNWIND: i32 = 12;
+
+/// Byte offset of the fiber control block's wait-frame word, a `usize`
+/// (D-856; D-868): the frame pointer of the std function
+/// that calls a waiting kernel (a `@std_context` kernel, D-692) or
+/// `scope_close` (D-693), stored by generated code right before that call.
+/// The waiting kernels copy it into the fiber's wait site when they park,
+/// and a deadlock report starts its frame walk there
+/// (`locate::locate`). Generated code only writes it; the Rust part of
+/// the block starts after it, at byte 24.
+pub const CTX_WAIT_FRAME: i32 = 16;
+
+/// The values of the unwind flag at [`CTX_UNWIND`] (D-685).
+pub mod unwind_flag {
+    /// No unwinding in flight.
+    pub const NONE: u32 = 0;
+    /// A panic is unwinding the fiber.
+    pub const PANIC: u32 = 1;
+    /// A cancellation is unwinding the fiber.
+    pub const CANCEL: u32 = 2;
+}
+
+/// The most counted words the entry check's releasing slow paths
+/// ([`sym::STACK_SLOW_UNWIND`], [`sym::STACK_SLOW_FRAME_UNWIND`]) take in
+/// registers (D-775). Code generation keeps the
+/// translated entry pad chain for a function with more counted parameters.
+pub const ENTRY_UNWIND_WORDS: u32 = 4;
+
+/// D-742's measurement switch: `CHEBY_UNWIND_EDGES=off` skips the unwind
+/// pass, and a raise in code built so ends the process
+/// (D-770).
+pub const UNWIND_EDGES_ENV: &str = "CHEBY_UNWIND_EDGES";
+
 /// Exit statuses of a program (§10.10, D-182). Entry thunks for `main`
 /// return [`status::SUCCESS`] or [`status::ERR`] as a raw `i64`.
 pub mod status {
@@ -294,6 +341,9 @@ pub mod status {
     pub const PANIC: i32 = 101;
     /// Debug builds only: the program ended with live objects (D-458).
     pub const LEAK_CHECK: i32 = 102;
+    /// The program deadlocked: every fiber of its domain is blocked
+    /// (D-724, D-859).
+    pub const DEADLOCK: i32 = 103;
 }
 
 /// The kind of a panic, passed to `cheby_rt_panic` as a `u32`.
@@ -402,7 +452,7 @@ pub mod sym {
     pub const ALLOC: &str = "cheby_rt_alloc";
     /// `void cheby_rt_dup(uint64_t value)`.
     pub const DUP: &str = "cheby_rt_dup";
-    /// `void cheby_rt_drop(uint64_t value)`.
+    /// `void cheby_rt_drop(ExecCtx *ctx, uint64_t value)` (D-772).
     pub const DROP: &str = "cheby_rt_drop";
     /// `_Noreturn void cheby_rt_panic(ExecCtx *ctx, uint32_t kind, uint64_t message, uint64_t location)`.
     pub const PANIC: &str = "cheby_rt_panic";
@@ -492,6 +542,76 @@ pub mod sym {
     /// build (D-532): takes no `ctx` and panics `ForbiddenEffect` through
     /// the current entry.
     pub const UNRESOLVED: &str = "cheby_rt_unresolved";
+    /// `void cheby_rt_stack_slow_frame(ExecCtx *ctx, uint64_t location, uint64_t frame_size)`:
+    /// the slow path of a large function's entry check (D-679), like
+    /// [`STACK_SLOW`] but accounting for the caller's frame of
+    /// `frame_size` bytes plus 64 KiB (D-743).
+    pub const STACK_SLOW_FRAME: &str = "cheby_rt_stack_slow_frame";
+    /// `uint64_t cheby_rt_scope_open(ExecCtx *ctx, bool timed, int64_t seconds, int64_t nanoseconds)`:
+    /// opens a scope for the `scope_run` intrinsic (D-693) and returns its
+    /// handle.
+    pub const SCOPE_OPEN: &str = "cheby_rt_scope_open";
+    /// `bool cheby_rt_scope_close(ExecCtx *ctx, uint64_t scope, bool unwound)`:
+    /// closes the scope `scope_run` opened (D-693), consuming the handle;
+    /// true when the scope succeeded, false when it caught a failure
+    /// (`scope_run` then returns the static `Err(Nil)`).
+    pub const SCOPE_CLOSE: &str = "cheby_rt_scope_close";
+    /// Data: the static `Err(Nil)` the `scope_run` intrinsic returns on
+    /// failure (D-693).
+    pub const STATIC_ERR_NIL: &str = "cheby_rt_static_err_nil";
+    /// `uint32_t cheby_rt_stack_slow_unwind(ExecCtx *ctx, uint64_t location, uint32_t count,
+    /// uint64_t p0, uint64_t p1, uint64_t p2, uint64_t p3)`: the entry check's slow path of a
+    /// function with at most four counted parameters (D-775). Runs
+    /// [`STACK_SLOW`]; when that started an unwinding, releases `p0` to `p(count-1)` and
+    /// returns 1, else returns 0 and leaves them untouched.
+    pub const STACK_SLOW_UNWIND: &str = "cheby_rt_stack_slow_unwind";
+    /// `uint32_t cheby_rt_stack_slow_frame_unwind(ExecCtx *ctx, uint64_t location,
+    /// uint64_t frame_size, uint32_t count, uint64_t p0, uint64_t p1, uint64_t p2, uint64_t p3)`:
+    /// [`STACK_SLOW_UNWIND`] for the outer function of a large frame, through
+    /// [`STACK_SLOW_FRAME`] (D-743, D-775).
+    pub const STACK_SLOW_FRAME_UNWIND: &str = "cheby_rt_stack_slow_frame_unwind";
+    /// `uint64_t cheby_rt_blocking_call(ExecCtx *ctx, void (*shim)(const uint64_t *args,
+    /// uint64_t *out), const uint64_t *args, size_t nargs)`: an `@blocking` call (D-683,
+    /// D-818). Copies the `nargs` argument words, runs `shim` on them on the
+    /// blocking pool while the fiber is parked (inline without a runtime), and returns the
+    /// word `shim` stored, unchanged; a cancellation that arrived meanwhile raises through
+    /// the flag at [`super::CTX_UNWIND`], never through the result, which may be 0 (D-670, D-734).
+    pub const BLOCKING_CALL: &str = "cheby_rt_blocking_call";
+    /// `void cheby_rt_release_fields(ExecCtx *ctx, uint64_t obj)`: the hit
+    /// path of an inline `drop_reuse` (D-716): releases and zeroes the
+    /// value fields of a unique constructor or tuple object.
+    pub const RELEASE_FIELDS: &str = "cheby_rt_release_fields";
+    /// `void cheby_rt_reuse_hit(void)`: counts a reuse hit, out of line
+    /// behind [`STATS_COUNTING`] (D-716, D-768).
+    pub const REUSE_HIT: &str = "cheby_rt_reuse_hit";
+    /// `uint64_t cheby_rt_alloc_miss(ExecCtx *ctx, uint64_t size, uint64_t header)`:
+    /// [`ALLOC`] for an `alloc_reuse` whose token is 0, counting the miss.
+    pub const ALLOC_MISS: &str = "cheby_rt_alloc_miss";
+    /// `uint64_t cheby_rt_drop_reuse_checked(ExecCtx *ctx, uint64_t value, uint64_t size)`:
+    /// `drop_reuse` under checked counting: checks the header and the size,
+    /// returns the token (the object, or 0).
+    pub const DROP_REUSE_CHECKED: &str = "cheby_rt_drop_reuse_checked";
+    /// `uint64_t cheby_rt_alloc_reuse_checked(ExecCtx *ctx, uint64_t token, uint64_t size,
+    /// uint64_t header)`: `alloc_reuse` under checked counting: checks the
+    /// token and both sizes, writes the header over it or allocates; 0
+    /// when the allocation raised.
+    pub const ALLOC_REUSE_CHECKED: &str = "cheby_rt_alloc_reuse_checked";
+    /// `void cheby_rt_free_unique(ExecCtx *ctx, uint64_t obj)`: the hit path
+    /// of a drop specialized by constructor (D-716, D-850):
+    /// frees the block of a unique constructor or tuple object whose value
+    /// fields generated code already released or moved to its kept
+    /// projections, charging the domain as a free does.
+    pub const FREE_UNIQUE: &str = "cheby_rt_free_unique";
+    /// Data: the runtime's event-counting flag, one byte
+    /// (`crate::stats::counting_flag`): not [`COUNTING_OFF`] while
+    /// counting is on or not yet settled.
+    pub const STATS_COUNTING: &str = "cheby_rt_stats_counting";
+    /// The value of the byte at [`STATS_COUNTING`] when events are not
+    /// counted (D-768).
+    pub const COUNTING_OFF: u8 = crate::stats::COUNTING_OFF;
+    /// Std externals whose bodies the compiler generates (D-693). Never
+    /// registered.
+    pub const INTRINSICS: [&str; 1] = ["cheby_rt_scope_run"];
     /// `void cheby_io_print(uint64_t text)`, `text` borrowed.
     pub const IO_PRINT: &str = "cheby_io_print";
     /// `void cheby_io_println(uint64_t text)`, `text` borrowed.
@@ -560,7 +680,7 @@ pub mod sym {
     /// order `symbols()` lists them first. Kernels
     /// (`cheby_<module>_<function>`) follow in `symbols()`; they come from
     /// each kernel module's registration (plan §4.3.3).
-    pub const ALL: [&str; 56] = [
+    pub const ALL: [&str; 70] = [
         ALLOC,
         DUP,
         DROP,
@@ -594,6 +714,20 @@ pub mod sym {
         CONST_MISSING,
         UNRESOLVED,
         LIST_SLICE_OWNED,
+        STACK_SLOW_FRAME,
+        SCOPE_OPEN,
+        SCOPE_CLOSE,
+        STATIC_ERR_NIL,
+        STACK_SLOW_UNWIND,
+        STACK_SLOW_FRAME_UNWIND,
+        BLOCKING_CALL,
+        RELEASE_FIELDS,
+        REUSE_HIT,
+        ALLOC_MISS,
+        DROP_REUSE_CHECKED,
+        ALLOC_REUSE_CHECKED,
+        FREE_UNIQUE,
+        STATS_COUNTING,
         DESC_SYMBOLS[0],
         DESC_SYMBOLS[1],
         DESC_SYMBOLS[2],
@@ -781,7 +915,49 @@ mod tests {
             assert_eq!(sym::desc_symbol(name), Some(symbol));
         }
         assert_eq!(sym::desc_symbol("dyn"), None);
-        assert_eq!(sym::ALL.get(33..), Some(&sym::DESC_SYMBOLS[..]));
+        assert_eq!(sym::ALL.get(47..), Some(&sym::DESC_SYMBOLS[..]));
+        assert_eq!(
+            [
+                layout::SENDER,
+                layout::RECEIVER,
+                layout::FIBER,
+                layout::SCOPE,
+                layout::SELECTOR
+            ],
+            [40, 41, 42, 43, 44]
+        );
+        // Intrinsics get generated bodies and are never registered (D-693).
+        for intrinsic in sym::INTRINSICS {
+            assert!(intrinsic.starts_with("cheby_rt_"));
+            assert!(!sym::ALL.contains(&intrinsic));
+        }
+    }
+
+    /// D-685, D-742, D-856: the generated-code view of the control block
+    /// ends at the wait-frame word (D-868), the
+    /// measurement switch keeps its name, and a deadlock exits with 103
+    /// (D-724).
+    #[test]
+    fn the_control_blocks_offsets_and_the_unwind_switch() {
+        assert_eq!(UNWIND_EDGES_ENV, "CHEBY_UNWIND_EDGES");
+        assert_eq!(
+            (CTX_STACK_LIMIT, CTX_MODE, CTX_UNWIND, CTX_WAIT_FRAME),
+            (0, 8, 12, 16)
+        );
+        assert_eq!(
+            (
+                status::SUCCESS,
+                status::ERR,
+                status::PANIC,
+                status::LEAK_CHECK,
+                status::DEADLOCK
+            ),
+            (0, 1, 101, 102, 103)
+        );
+        assert_eq!(
+            (unwind_flag::NONE, unwind_flag::PANIC, unwind_flag::CANCEL),
+            (0, 1, 2)
+        );
     }
 
     #[test]

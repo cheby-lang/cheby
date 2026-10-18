@@ -1,0 +1,77 @@
+// @mode: run-pass
+// @decisions: D-666
+// @milestone: M2
+//! A fiber spawned into a scope that has failed is cancelled before it
+//! starts, so its function is never called (§10.3). `main` spawns into the
+//! failing scope from outside it, once a member's unwinding has shown that
+//! the scope failed. Another member waits at the end of a nested scope for
+//! a fiber that the cancellation unwinds too, so the failing scope is
+//! usually still open then. If it has ended instead, the spawn panics, and
+//! the scope around it catches that. Either way the function is never
+//! called, and the output is the same.
+
+import std::channel
+import std::fiber
+import std::io
+
+fn main() {
+  let (scope_tx, scope_rx) = channel::new::<fiber::Scope>(1)
+  let (handoff_tx, handoff_rx) = channel::new::<channel::Sender<Nil>>(1)
+  let (closed_tx, closed_rx) = channel::new::<Nil>(0)
+  let (ready_tx, ready_rx) = channel::new::<Nil>(2)
+  let (stuck_tx, stuck_rx) = channel::new::<Nil>(0)
+  let (called_tx, called_rx) = channel::new::<String>(1)
+  // A `Sender` captured by the fibers below would live as long as the
+  // fiber that runs the failing scope, so `closed_tx` goes over a channel.
+  let assert Ok(Nil) = channel::send(handoff_tx, closed_tx)
+  let outcome = {
+    use outer <- fiber::scope()
+    let failing_fiber = fiber::spawn(outer, fn() {
+      let result = {
+        use failing <- fiber::scope()
+        let assert Ok(Nil) = channel::send(scope_tx, failing)
+        // Holds the last `Sender` of `closed` until the cancellation
+        // unwinds it.
+        let _ = fiber::spawn(failing, fn() {
+          let assert Ok(closed) = channel::receive(handoff_rx)
+          let assert Ok(Nil) = channel::send(ready_tx, Nil)
+          let _ = channel::receive(stuck_rx)
+          channel::send(closed, Nil)
+        })
+        // Waits at the end of `inner` for its fiber.
+        let _ = fiber::spawn(failing, fn() {
+          use inner <- fiber::scope()
+          fiber::spawn(inner, fn() {
+            let assert Ok(Nil) = channel::send(ready_tx, Nil)
+            channel::receive(stuck_rx)
+          })
+        })
+        let _ = fiber::spawn(failing, fn() {
+          let _ = channel::receive(ready_rx)
+          let _ = channel::receive(ready_rx)
+          panic as "the scope failed"
+        })
+        Nil
+      }
+      case result {
+        Ok(_) => "the scope returned Ok"
+        Err(failure) => fiber::message(failure)
+      }
+    })
+    let assert Ok(failing) = channel::receive(scope_rx)
+    // Only the cancellation releases the last `Sender` of `closed`, so
+    // this receive returns once `failing` has failed.
+    let _ = channel::receive(closed_rx)
+    let _ = {
+      use _attempt <- fiber::scope()
+      fiber::spawn(failing, fn() { channel::send(called_tx, "the function was called") })
+    }
+    fiber::join(failing_fiber)
+  }
+  io::println("{outcome:?}")
+  let called = channel::receive(called_rx)
+  io::println("called: {called:?}")
+  // `main` keeps `stuck_tx` until here, so nothing ends the waits on
+  // `stuck` but the cancellation.
+  let _ = channel::send(stuck_tx, Nil)
+}

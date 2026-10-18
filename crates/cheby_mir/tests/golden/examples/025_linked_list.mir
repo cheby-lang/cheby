@@ -1,35 +1,69 @@
 module linked_list::linked_list
 
 fn linked_list::linked_list::from_list(_0: value) -> value check str#0 {
+  entry unwind bb2
   str#0 = "src/linked_list.cheby:53:8"
 bb0:
-  _1: value = call std::list::reverse(_0)
+  _1: value = call std::list::reverse(_0) ; unwind bb1
   tail_call std::list::fold(_1, const ctor linked_list::linked_list::Empty, const fn linked_list::linked_list::push)
+bb1:
+  resume
+bb2:
+  drop _0
+  goto bb1()
 }
 
 fn linked_list::linked_list::to_list(_0: value) -> value check str#0 {
+  entry unwind bb2
   str#0 = "src/linked_list.cheby:60:8"
 bb0:
-  _1: value = alloc closure/0(const code <closure linked_list::linked_list::to_list#0>)
+  _1: value = alloc closure/0(const code <closure linked_list::linked_list::to_list#0>) ; unwind bb2
   tail_call linked_list::linked_list::fold(_0, const empty_list, _1)
+bb1:
+  resume
+bb2:
+  drop _0
+  goto bb1()
 }
 
 fn closure linked_list::linked_list::to_list#0(_0: value, _1: value, _2: value) -> value check str#0 {
+  entry unwind bb4
   str#0 = "src/linked_list.cheby:62:19"
 bb0:
   drop _0
-  _3: value = call_runtime list_push(_1, _2)
+  _3: value = call_runtime list_push(_1, _2) ; unwind bb1
   return _3
+bb1:
+  resume
+bb2:
+  drop _0
+  goto bb1()
+bb3:
+  drop _1
+  goto bb2()
+bb4:
+  drop _2
+  goto bb3()
 }
 
 fn linked_list::linked_list::push(_0: value, _1: value) -> value check str#0 {
+  entry unwind bb3
   str#0 = "src/linked_list.cheby:67:8"
 bb0:
-  _2: value = alloc ctor linked_list::linked_list::Node(_1, _0)
+  _2: value = alloc ctor linked_list::linked_list::Node(_1, _0) ; unwind bb3
   return _2
+bb1:
+  resume
+bb2:
+  drop _0
+  goto bb1()
+bb3:
+  drop _1
+  goto bb2()
 }
 
 fn linked_list::linked_list::pop(_0: value) -> value check str#0 {
+  entry unwind bb5
   str#0 = "src/linked_list.cheby:82:8"
 bb0:
   _1: int = read_tag _0 of linked_list::linked_list::LinkedList
@@ -39,18 +73,34 @@ bb1:
   goto bb3(const ctor None)
 bb2:
   _3: value = field _0.0 of ctor linked_list::linked_list::Node
-  dup _3
   _4: value = field _0.1 of ctor linked_list::linked_list::Node
-  dup _4
-  drop _0
-  _5: value = alloc tuple/2(_3, _4)
-  _6: value = alloc ctor Some(_5)
+  _7: value = drop_reuse _0 of ctor linked_list::linked_list::Node keep [_4 @1, _3 @0]
+  _5: value = alloc_reuse _7, tuple/2(_3, _4) ; unwind bb8
+  _6: value = alloc ctor Some(_5) ; unwind bb9
   goto bb3(_6)
 bb3(_2: value):
   return _2
+bb4:
+  resume
+bb5:
+  drop _0
+  goto bb4()
+bb6:
+  drop _3
+  goto bb4()
+bb7:
+  drop _4
+  goto bb6()
+bb8:
+  drop _7
+  goto bb7()
+bb9:
+  drop _5
+  goto bb4()
 }
 
 fn linked_list::linked_list::fold(_0: value, _1: value, _2: value) -> value check str#0 {
+  entry unwind bb7
   str#0 = "src/linked_list.cheby:96:8"
 bb0:
   _3: int = read_tag _0 of linked_list::linked_list::LinkedList
@@ -61,26 +111,51 @@ bb1:
   goto bb3(_1)
 bb2:
   _5: value = field _0.0 of ctor linked_list::linked_list::Node
-  dup _5
   _6: value = field _0.1 of ctor linked_list::linked_list::Node
-  dup _6
-  drop _0
+  drop _0 of ctor linked_list::linked_list::Node keep [_6 @1, _5 @0]
   dup _2
-  _7: value = call _2(_1, _5)
+  _7: value = call _2(_1, _5) ; unwind bb9
   tail_call linked_list::linked_list::fold(_6, _7, _2)
 bb3(_4: value):
   return _4
+bb4:
+  resume
+bb5:
+  drop _0
+  goto bb4()
+bb6:
+  drop _1
+  goto bb5()
+bb7:
+  drop _2
+  goto bb6()
+bb8:
+  drop _2
+  goto bb4()
+bb9:
+  drop _6
+  goto bb8()
 }
 
 fn linked_list::linked_list::length(_0: value) -> value check str#0 {
+  entry unwind bb2
   str#0 = "src/linked_list.cheby:105:8"
 bb0:
   _1: value = box int const int 0
-  _2: value = alloc closure/0(const code <closure linked_list::linked_list::length#0>)
+  _2: value = alloc closure/0(const code <closure linked_list::linked_list::length#0>) ; unwind bb3
   tail_call linked_list::linked_list::fold(_0, _1, _2)
+bb1:
+  resume
+bb2:
+  drop _0
+  goto bb1()
+bb3:
+  drop _1
+  goto bb2()
 }
 
 fn closure linked_list::linked_list::length#0(_0: value, _1: value, _2: value) -> value check str#0 {
+  entry unwind bb4
   str#0 = "src/linked_list.cheby:106:18"
   str#1 = "src/linked_list.cheby:106:39"
 bb0:
@@ -88,56 +163,115 @@ bb0:
   drop _2
   _3: int = unbox int _1
   drop _1
-  _4: int = checked add int _3, const int 1 at str#1
-  _5: value = box int _4
+  _4: int = checked add int _3, const int 1 at str#1 ; unwind bb1
+  _5: value = box int _4 ; unwind bb1
   return _5
+bb1:
+  resume
+bb2:
+  drop _0
+  goto bb1()
+bb3:
+  drop _1
+  goto bb2()
+bb4:
+  drop _2
+  goto bb3()
 }
 
 fn linked_list::linked_list::reverse(_0: value) -> value check str#0 {
+  entry unwind bb2
   str#0 = "src/linked_list.cheby:110:8"
 bb0:
   tail_call linked_list::linked_list::fold(_0, const ctor linked_list::linked_list::Empty, const fn linked_list::linked_list::push)
+bb1:
+  resume
+bb2:
+  drop _0
+  goto bb1()
 }
 
 fn linked_list::linked_list::map(_0: value, _1: value) -> value check str#0 {
+  entry unwind bb3
   str#0 = "src/linked_list.cheby:118:8"
 bb0:
-  _2: value = alloc closure/1(const code <closure linked_list::linked_list::map#0>, _1)
-  _3: value = call linked_list::linked_list::fold(_0, const ctor linked_list::linked_list::Empty, _2)
+  _2: value = alloc closure/1(const code <closure linked_list::linked_list::map#0>, _1) ; unwind bb3
+  _3: value = call linked_list::linked_list::fold(_0, const ctor linked_list::linked_list::Empty, _2) ; unwind bb1
   tail_call linked_list::linked_list::reverse(_3)
+bb1:
+  resume
+bb2:
+  drop _0
+  goto bb1()
+bb3:
+  drop _1
+  goto bb2()
 }
 
 fn closure linked_list::linked_list::map#0(_0: value, _1: value, _2: value) -> value check str#0 {
+  entry unwind bb4
   str#0 = "src/linked_list.cheby:123:21"
 bb0:
   _3: value = field _0.1 of closure/1
   dup _3
   drop _0
-  _4: value = call _3(_2)
-  _5: value = alloc ctor linked_list::linked_list::Node(_4, _1)
+  _4: value = call _3(_2) ; unwind bb5
+  _5: value = alloc ctor linked_list::linked_list::Node(_4, _1) ; unwind bb6
   return _5
+bb1:
+  resume
+bb2:
+  drop _0
+  goto bb1()
+bb3:
+  drop _1
+  goto bb2()
+bb4:
+  drop _2
+  goto bb3()
+bb5:
+  drop _1
+  goto bb1()
+bb6:
+  drop _4
+  goto bb5()
 }
 
 fn linked_list::linked_list::show(_0: value, _1: value) -> value check str#0 {
+  entry unwind bb3
   str#0 = "src/linked_list.cheby:133:8"
   str#1 = " -> "
   str#2 = "["
   str#3 = "]"
 bb0:
-  _2: value = call linked_list::linked_list::to_list(_1)
-  _3: value = alloc closure/1(const code <closure linked_list::linked_list::show#0>, _0)
-  _4: value = call std::list::map(_2, _3)
-  _5: value = const str#1
-  _6: value = call std::string::join(_4, _5)
-  _7: value = call_runtime str_with_capacity(borrow const int 18)
-  _8: value = call_runtime str_append(_7, borrow const str#2)
-  _9: value = call_runtime str_append(_8, borrow _6)
+  _2: value = call linked_list::linked_list::to_list(_1) ; unwind bb2
+  _3: value = alloc closure/1(const code <closure linked_list::linked_list::show#0>, _0) ; unwind bb4
+  _4: value = call std::list::map(_2, _3) ; unwind bb1
+  _6: value = call std::string::join(_4, const str#1) ; unwind bb1
+  _7: value = call_runtime str_with_capacity(borrow const int 18) ; unwind bb5
+  _8: value = call_runtime str_append(_7, borrow const str#2) ; unwind bb5
+  _9: value = call_runtime str_append(_8, borrow _6) ; unwind bb5
   drop _6
-  _10: value = call_runtime str_append(_9, borrow const str#3)
+  _10: value = call_runtime str_append(_9, borrow const str#3) ; unwind bb1
   return _10
+bb1:
+  resume
+bb2:
+  drop _0
+  goto bb1()
+bb3:
+  drop _1
+  goto bb2()
+bb4:
+  drop _2
+  goto bb2()
+bb5:
+  drop _6
+  goto bb1()
 }
 
 fn closure linked_list::linked_list::show#0(_0: value, _1: value) -> value check str#0 {
+  entry unwind bb3
   str#0 = "src/linked_list.cheby:138:21"
 bb0:
   _2: value = field _0.1 of closure/1
@@ -147,13 +281,33 @@ bb0:
   dup _3
   drop _2
   tail_call _3(_1)
+bb1:
+  resume
+bb2:
+  drop _0
+  goto bb1()
+bb3:
+  drop _1
+  goto bb2()
 }
 
 fn shim linked_list::linked_list::push(_0: value, _1: value, _2: value) -> value check str#0 {
+  entry unwind bb4
   str#0 = "src/linked_list.cheby:67:8"
 bb0:
   drop _0
   tail_call linked_list::linked_list::push(_1, _2)
+bb1:
+  resume
+bb2:
+  drop _0
+  goto bb1()
+bb3:
+  drop _1
+  goto bb2()
+bb4:
+  drop _2
+  goto bb3()
 }
 
 layout ctor linked_list::linked_list::Empty: LinkedList.Empty tag 0 key e72b401b32e712e8 []
@@ -171,22 +325,26 @@ callee std::string::join(value, value) -> value
 module linked_list
 
 fn linked_list::main() -> value check str#0 {
+  entry unwind bb1
   str#0 = "src/main.cheby:30:4"
 bb0:
   _0: value = box int const int 1
-  _1: value = call_runtime list_push(const empty_list, _0)
+  _1: value = call_runtime list_push(const empty_list, _0) ; unwind bb1
   _2: value = box int const int 2
-  _3: value = call_runtime list_push(_1, _2)
+  _3: value = call_runtime list_push(_1, _2) ; unwind bb1
   _4: value = box int const int 3
-  _5: value = call_runtime list_push(_3, _4)
+  _5: value = call_runtime list_push(_3, _4) ; unwind bb1
   _6: value = box int const int 4
-  _7: value = call_runtime list_push(_5, _6)
-  _8: value = call linked_list::linked_list::from_list(_7)
-  _9: value = call linked_list::report(_8)
+  _7: value = call_runtime list_push(_5, _6) ; unwind bb1
+  _8: value = call linked_list::linked_list::from_list(_7) ; unwind bb1
+  _9: value = call linked_list::report(_8) ; unwind bb1
   tail_call std::list::each(_9, const fn std::io::println)
+bb1:
+  resume
 }
 
 fn linked_list::report(_0: value) -> value check str#0 {
+  entry unwind bb5
   str#0 = "src/main.cheby:37:4"
   str#1 = "popped "
   str#2 = ", leaving "
@@ -202,123 +360,271 @@ fn linked_list::report(_0: value) -> value check str#0 {
 bb0:
   _1: value = box int const int 0
   dup _0
-  _2: value = call linked_list::linked_list::push(_0, _1)
+  _2: value = call linked_list::linked_list::push(_0, _1) ; unwind bb5
   dup _0
-  _3: value = call linked_list::linked_list::pop(_0)
+  _3: value = call linked_list::linked_list::pop(_0) ; unwind bb6
   _4: int = read_tag _3 of option
   switch _4 [0 => bb1, _ => bb2]
 bb1:
   _5: value = field _3.0 of ctor Some
-  dup _5
-  drop _3
+  drop _3 of ctor Some keep [_5 @0]
   _6: value = field _5.0 of tuple/2
-  dup _6
   _7: int = unbox int _6
-  drop _6
   _8: value = field _5.1 of tuple/2
-  dup _8
-  drop _5
-  _9: value = call_runtime str_with_capacity(borrow const int 49)
-  _10: value = call_runtime str_append(_9, borrow const str#1)
-  _11: value = call std::int::show(_7)
-  _12: value = call_runtime str_append(_10, borrow _11)
+  drop _5 of tuple/2 keep [_8 @1]
+  _9: value = call_runtime str_with_capacity(borrow const int 49) ; unwind bb7
+  _10: value = call_runtime str_append(_9, borrow const str#1) ; unwind bb7
+  _11: value = call std::int::show(_7) ; unwind bb8
+  _12: value = call_runtime str_append(_10, borrow _11) ; unwind bb9
   drop _11
-  _13: value = call_runtime str_append(_12, borrow const str#2)
-  _14: value = call linked_list::linked_list::show(const static#0, _8)
-  _15: value = call_runtime str_append(_13, borrow _14)
+  _13: value = call_runtime str_append(_12, borrow const str#2) ; unwind bb7
+  _14: value = call linked_list::linked_list::show(const static#0, _8) ; unwind bb10
+  _15: value = call_runtime str_append(_13, borrow _14) ; unwind bb11
   drop _14
   goto bb3(_15)
 bb2:
   drop _3
-  _17: value = const str#3
-  goto bb3(_17)
+  goto bb3(const str#3)
 bb3(_16: value):
   dup _0
-  _18: value = call linked_list::linked_list::reverse(_0)
-  _19: value = alloc closure/0(const code <closure linked_list::report#0>)
+  _18: value = call linked_list::linked_list::reverse(_0) ; unwind bb12
+  _19: value = alloc closure/0(const code <closure linked_list::report#0>) ; unwind bb13
   dup _0
-  _20: value = call linked_list::linked_list::map(_0, _19)
+  _20: value = call linked_list::linked_list::map(_0, _19) ; unwind bb13
   dup _0
-  _21: value = call linked_list::linked_list::length(_0)
+  _21: value = call linked_list::linked_list::length(_0) ; unwind bb14
   _22: int = unbox int _21
   drop _21
   dup _0
-  _23: value = call linked_list::sum(_0)
+  _23: value = call linked_list::sum(_0) ; unwind bb14
   _24: int = unbox int _23
   drop _23
   dup _0
-  _25: value = call linked_list::describe_opening(const static#0, _0)
-  _26: value = call_runtime str_with_capacity(borrow const int 25)
-  _27: value = call_runtime str_append(_26, borrow const str#4)
+  _25: value = call linked_list::describe_opening(const static#0, _0) ; unwind bb14
+  _26: value = call_runtime str_with_capacity(borrow const int 25) ; unwind bb15
+  _27: value = call_runtime str_append(_26, borrow const str#4) ; unwind bb15
   dup _0
-  _28: value = call linked_list::linked_list::show(const static#0, _0)
-  _29: value = call_runtime str_append(_27, borrow _28)
+  _28: value = call linked_list::linked_list::show(const static#0, _0) ; unwind bb16
+  _29: value = call_runtime str_append(_27, borrow _28) ; unwind bb17
   drop _28
-  _30: value = call_runtime list_push(const empty_list, _29)
-  _31: value = call_runtime str_with_capacity(borrow const int 26)
-  _32: value = call_runtime str_append(_31, borrow const str#5)
-  _33: value = call linked_list::linked_list::show(const static#0, _2)
-  _34: value = call_runtime str_append(_32, borrow _33)
+  _30: value = call_runtime list_push(const empty_list, _29) ; unwind bb15
+  _31: value = call_runtime str_with_capacity(borrow const int 26) ; unwind bb18
+  _32: value = call_runtime str_append(_31, borrow const str#5) ; unwind bb18
+  _33: value = call linked_list::linked_list::show(const static#0, _2) ; unwind bb24
+  _34: value = call_runtime str_append(_32, borrow _33) ; unwind bb25
   drop _33
-  _35: value = call_runtime list_push(_30, _34)
-  _36: value = call_runtime list_push(_35, _16)
-  _37: value = call_runtime str_with_capacity(borrow const int 26)
-  _38: value = call_runtime str_append(_37, borrow const str#6)
-  _39: value = call linked_list::linked_list::show(const static#0, _18)
-  _40: value = call_runtime str_append(_38, borrow _39)
+  _35: value = call_runtime list_push(_30, _34) ; unwind bb22
+  _36: value = call_runtime list_push(_35, _16) ; unwind bb28
+  _37: value = call_runtime str_with_capacity(borrow const int 26) ; unwind bb29
+  _38: value = call_runtime str_append(_37, borrow const str#6) ; unwind bb29
+  _39: value = call linked_list::linked_list::show(const static#0, _18) ; unwind bb33
+  _40: value = call_runtime str_append(_38, borrow _39) ; unwind bb34
   drop _39
-  _41: value = call_runtime list_push(_36, _40)
-  _42: value = call_runtime str_with_capacity(borrow const int 25)
-  _43: value = call_runtime str_append(_42, borrow const str#7)
-  _44: value = call linked_list::linked_list::show(const static#0, _20)
-  _45: value = call_runtime str_append(_43, borrow _44)
+  _41: value = call_runtime list_push(_36, _40) ; unwind bb31
+  _42: value = call_runtime str_with_capacity(borrow const int 25) ; unwind bb35
+  _43: value = call_runtime str_append(_42, borrow const str#7) ; unwind bb35
+  _44: value = call linked_list::linked_list::show(const static#0, _20) ; unwind bb38
+  _45: value = call_runtime str_append(_43, borrow _44) ; unwind bb39
   drop _44
-  _46: value = call_runtime list_push(_41, _45)
-  _47: value = call_runtime str_with_capacity(borrow const int 45)
-  _48: value = call_runtime str_append(_47, borrow const str#8)
-  _49: value = call std::int::show(_22)
-  _50: value = call_runtime str_append(_48, borrow _49)
+  _46: value = call_runtime list_push(_41, _45) ; unwind bb36
+  _47: value = call_runtime str_with_capacity(borrow const int 45) ; unwind bb40
+  _48: value = call_runtime str_append(_47, borrow const str#8) ; unwind bb40
+  _49: value = call std::int::show(_22) ; unwind bb41
+  _50: value = call_runtime str_append(_48, borrow _49) ; unwind bb42
   drop _49
-  _51: value = call_runtime str_append(_50, borrow const str#9)
-  _52: value = call std::int::show(_24)
-  _53: value = call_runtime str_append(_51, borrow _52)
+  _51: value = call_runtime str_append(_50, borrow const str#9) ; unwind bb40
+  _52: value = call std::int::show(_24) ; unwind bb43
+  _53: value = call_runtime str_append(_51, borrow _52) ; unwind bb44
   drop _52
-  _54: value = call_runtime list_push(_46, _53)
-  _55: value = call_runtime str_with_capacity(borrow const int 25)
-  _56: value = call_runtime str_append(_55, borrow const str#10)
-  _57: value = call_runtime str_append(_56, borrow _25)
+  _54: value = call_runtime list_push(_46, _53) ; unwind bb36
+  _55: value = call_runtime str_with_capacity(borrow const int 25) ; unwind bb45
+  _56: value = call_runtime str_append(_55, borrow const str#10) ; unwind bb45
+  _57: value = call_runtime str_append(_56, borrow _25) ; unwind bb45
   drop _25
-  _58: value = call_runtime list_push(_54, _57)
-  _59: value = call_runtime str_with_capacity(borrow const int 36)
-  _60: value = call_runtime str_append(_59, borrow const str#11)
-  _61: value = call linked_list::linked_list::show(const static#0, _0)
-  _62: value = call_runtime str_append(_60, borrow _61)
+  _58: value = call_runtime list_push(_54, _57) ; unwind bb5
+  _59: value = call_runtime str_with_capacity(borrow const int 36) ; unwind bb46
+  _60: value = call_runtime str_append(_59, borrow const str#11) ; unwind bb46
+  _61: value = call linked_list::linked_list::show(const static#0, _0) ; unwind bb48
+  _62: value = call_runtime str_append(_60, borrow _61) ; unwind bb49
   drop _61
-  _63: value = call_runtime list_push(_58, _62)
+  _63: value = call_runtime list_push(_58, _62) ; unwind bb4
   return _63
+bb4:
+  resume
+bb5:
+  drop _0
+  goto bb4()
+bb6:
+  drop _2
+  goto bb5()
+bb7:
+  drop _8
+  goto bb6()
+bb8:
+  drop _10
+  goto bb7()
+bb9:
+  drop _11
+  goto bb7()
+bb10:
+  drop _13
+  goto bb6()
+bb11:
+  drop _14
+  goto bb6()
+bb12:
+  drop _16
+  goto bb6()
+bb13:
+  drop _18
+  goto bb12()
+bb14:
+  drop _20
+  goto bb13()
+bb15:
+  drop _25
+  goto bb14()
+bb16:
+  drop _27
+  goto bb15()
+bb17:
+  drop _28
+  goto bb15()
+bb18:
+  drop _30
+  goto bb15()
+bb19:
+  drop _16
+  goto bb5()
+bb20:
+  drop _18
+  goto bb19()
+bb21:
+  drop _20
+  goto bb20()
+bb22:
+  drop _25
+  goto bb21()
+bb23:
+  drop _30
+  goto bb22()
+bb24:
+  drop _32
+  goto bb23()
+bb25:
+  drop _33
+  goto bb23()
+bb26:
+  drop _18
+  goto bb5()
+bb27:
+  drop _20
+  goto bb26()
+bb28:
+  drop _25
+  goto bb27()
+bb29:
+  drop _36
+  goto bb28()
+bb30:
+  drop _20
+  goto bb5()
+bb31:
+  drop _25
+  goto bb30()
+bb32:
+  drop _36
+  goto bb31()
+bb33:
+  drop _38
+  goto bb32()
+bb34:
+  drop _39
+  goto bb32()
+bb35:
+  drop _41
+  goto bb31()
+bb36:
+  drop _25
+  goto bb5()
+bb37:
+  drop _41
+  goto bb36()
+bb38:
+  drop _43
+  goto bb37()
+bb39:
+  drop _44
+  goto bb37()
+bb40:
+  drop _46
+  goto bb36()
+bb41:
+  drop _48
+  goto bb40()
+bb42:
+  drop _49
+  goto bb40()
+bb43:
+  drop _51
+  goto bb40()
+bb44:
+  drop _52
+  goto bb40()
+bb45:
+  drop _54
+  goto bb36()
+bb46:
+  drop _58
+  goto bb5()
+bb47:
+  drop _58
+  goto bb4()
+bb48:
+  drop _60
+  goto bb47()
+bb49:
+  drop _61
+  goto bb47()
 }
 
 fn closure linked_list::report#0(_0: value, _1: value) -> value check str#0 {
+  entry unwind bb3
   str#0 = "src/main.cheby:46:43"
   str#1 = "src/main.cheby:46:51"
 bb0:
   drop _0
   _2: int = unbox int _1
   drop _1
-  _3: int = checked mul int _2, _2 at str#1
-  _4: value = box int _3
+  _3: int = checked mul int _2, _2 at str#1 ; unwind bb1
+  _4: value = box int _3 ; unwind bb1
   return _4
+bb1:
+  resume
+bb2:
+  drop _0
+  goto bb1()
+bb3:
+  drop _1
+  goto bb2()
 }
 
 fn linked_list::sum(_0: value) -> value check str#0 {
+  entry unwind bb2
   str#0 = "src/main.cheby:68:4"
 bb0:
-  _1: value = alloc closure/0(const code <closure linked_list::sum#0>)
+  _1: value = alloc closure/0(const code <closure linked_list::sum#0>) ; unwind bb2
   _2: value = box int const int 0
   tail_call _1(_0, _2)
+bb1:
+  resume
+bb2:
+  drop _0
+  goto bb1()
 }
 
 fn closure linked_list::sum#0(_0: value, _1: value, _2: value) -> value check str#0 {
+  entry unwind bb7
   str#0 = "src/main.cheby:69:3"
   str#1 = "src/main.cheby:72:39"
 bb0:
@@ -332,21 +638,33 @@ bb1:
   goto bb3(_3)
 bb2:
   _6: value = field _1.0 of ctor linked_list::linked_list::Node
-  dup _6
   _7: int = unbox int _6
-  drop _6
   _8: value = field _1.1 of ctor linked_list::linked_list::Node
-  dup _8
-  drop _1
-  _9: int = checked add int _3, _7 at str#1
-  _10: value = box int _9
+  drop _1 of ctor linked_list::linked_list::Node keep [_8 @1]
+  _9: int = checked add int _3, _7 at str#1 ; unwind bb8
+  _10: value = box int _9 ; unwind bb8
   tail_call _0(_8, _10)
 bb3(_5: int):
-  _11: value = box int _5
+  _11: value = box int _5 ; unwind bb4
   return _11
+bb4:
+  resume
+bb5:
+  drop _0
+  goto bb4()
+bb6:
+  drop _1
+  goto bb5()
+bb7:
+  drop _2
+  goto bb6()
+bb8:
+  drop _8
+  goto bb5()
 }
 
 fn linked_list::describe_opening(_0: value, _1: value) -> value check str#0 {
+  entry unwind bb8
   str#0 = "src/main.cheby:81:4"
   str#1 = "empty"
   str#2 = "just "
@@ -358,67 +676,117 @@ bb0:
 bb1:
   drop _0
   drop _1
-  _3: value = const str#1
-  goto bb3(_3)
+  goto bb3(const str#1)
 bb2:
   _5: value = field _1.1 of ctor linked_list::linked_list::Node
-  dup _5
   _6: int = read_tag _5 of linked_list::linked_list::LinkedList
   switch _6 [0 => bb4, _ => bb5]
 bb3(_4: value):
   return _4
 bb4:
-  drop _5
   _7: value = field _1.0 of ctor linked_list::linked_list::Node
-  dup _7
-  drop _1
-  _8: value = call_runtime str_with_capacity(borrow const int 21)
-  _9: value = call_runtime str_append(_8, borrow const str#2)
+  drop _1 of ctor linked_list::linked_list::Node keep [_7 @0]
+  _8: value = call_runtime str_with_capacity(borrow const int 21) ; unwind bb9
+  _9: value = call_runtime str_append(_8, borrow const str#2) ; unwind bb9
   _10: value = field _0.1 of dict/1+0
   dup _10
   drop _0
-  _11: value = call _10(_7)
-  _12: value = call_runtime str_append(_9, borrow _11)
+  _11: value = call _10(_7) ; unwind bb10
+  _12: value = call_runtime str_append(_9, borrow _11) ; unwind bb11
   drop _11
   goto bb3(_12)
 bb5:
   _13: value = field _1.0 of ctor linked_list::linked_list::Node
-  dup _13
-  drop _1
+  drop _1 of ctor linked_list::linked_list::Node keep [_13 @0, _5 @1]
   _14: value = field _5.0 of ctor linked_list::linked_list::Node
-  dup _14
-  drop _5
-  _15: value = call_runtime str_with_capacity(borrow const int 49)
-  _16: value = call_runtime str_append(_15, borrow const str#3)
+  drop _5 of ctor linked_list::linked_list::Node keep [_14 @0]
+  _15: value = call_runtime str_with_capacity(borrow const int 49) ; unwind bb13
+  _16: value = call_runtime str_append(_15, borrow const str#3) ; unwind bb13
   _17: value = field _0.1 of dict/1+0
   dup _17
-  _18: value = call _17(_13)
-  _19: value = call_runtime str_append(_16, borrow _18)
+  _18: value = call _17(_13) ; unwind bb15
+  _19: value = call_runtime str_append(_16, borrow _18) ; unwind bb16
   drop _18
-  _20: value = call_runtime str_append(_19, borrow const str#4)
+  _20: value = call_runtime str_append(_19, borrow const str#4) ; unwind bb14
   _21: value = field _0.1 of dict/1+0
   dup _21
   drop _0
-  _22: value = call _21(_14)
-  _23: value = call_runtime str_append(_20, borrow _22)
+  _22: value = call _21(_14) ; unwind bb17
+  _23: value = call_runtime str_append(_20, borrow _22) ; unwind bb18
   drop _22
   goto bb3(_23)
+bb6:
+  resume
+bb7:
+  drop _0
+  goto bb6()
+bb8:
+  drop _1
+  goto bb7()
+bb9:
+  drop _7
+  goto bb7()
+bb10:
+  drop _9
+  goto bb6()
+bb11:
+  drop _11
+  goto bb6()
+bb12:
+  drop _13
+  goto bb7()
+bb13:
+  drop _14
+  goto bb12()
+bb14:
+  drop _14
+  goto bb7()
+bb15:
+  drop _16
+  goto bb14()
+bb16:
+  drop _18
+  goto bb14()
+bb17:
+  drop _20
+  goto bb6()
+bb18:
+  drop _22
+  goto bb6()
 }
 
 fn shim std::int::show(_0: value, _1: value) -> value check str#0 {
+  entry unwind bb3
   str#0 = "std/int.cheby:137:8"
 bb0:
   drop _0
   _2: int = unbox int _1
   drop _1
   tail_call std::int::show(_2)
+bb1:
+  resume
+bb2:
+  drop _0
+  goto bb1()
+bb3:
+  drop _1
+  goto bb2()
 }
 
 fn shim std::io::println(_0: value, _1: value) -> value check str#0 {
+  entry unwind bb3
   str#0 = "std/io.cheby:86:8"
 bb0:
   drop _0
   tail_call std::io::println(_1)
+bb1:
+  resume
+bb2:
+  drop _0
+  goto bb1()
+bb3:
+  drop _1
+  goto bb2()
 }
 
 foreign_layout ctor Some: Option.Some tag 0 key af80d07f7bb18e70 [value @8]
@@ -443,39 +811,51 @@ entries
 
 fn entry main(linked_list::main) [c] () -> i64 {
 bb0:
-  _0: value = call linked_list::main()
+  _0: value = call linked_list::main() ; unwind bb1
   drop _0
   return const i64 0
+bb1:
+  resume
 }
 
 fn trampoline 0 [c] (_0: value) -> value {
 bb0:
-  _1: value = call _0()
+  _1: value = call _0() ; unwind bb1
   return _1
+bb1:
+  resume
 }
 
 fn trampoline 1 [c] (_0: value, _1: value) -> value {
 bb0:
-  _2: value = call _0(_1)
+  _2: value = call _0(_1) ; unwind bb1
   return _2
+bb1:
+  resume
 }
 
 fn trampoline 2 [c] (_0: value, _1: value, _2: value) -> value {
 bb0:
-  _3: value = call _0(_1, _2)
+  _3: value = call _0(_1, _2) ; unwind bb1
   return _3
+bb1:
+  resume
 }
 
 fn trampoline 3 [c] (_0: value, _1: value, _2: value, _3: value) -> value {
 bb0:
-  _4: value = call _0(_1, _2, _3)
+  _4: value = call _0(_1, _2, _3) ; unwind bb1
   return _4
+bb1:
+  resume
 }
 
 fn trampoline 4 [c] (_0: value, _1: value, _2: value, _3: value, _4: value) -> value {
 bb0:
-  _5: value = call _0(_1, _2, _3, _4)
+  _5: value = call _0(_1, _2, _3, _4) ; unwind bb1
   return _5
+bb1:
+  resume
 }
 
 callee linked_list::main() -> value

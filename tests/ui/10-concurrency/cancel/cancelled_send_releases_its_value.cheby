@@ -1,0 +1,43 @@
+// @mode: run-pass
+// @decisions: D-670
+// @milestone: M2
+//! A `send` blocked on a capacity-0 channel that is cancelled has not
+//! enqueued its value, and unwinding releases the value. The value here is
+//! the only `Sender` of a probe channel, so the probe's `receive` returns
+//! `Err(Nil)` once it is released, and the leak check at exit finds nothing
+//! (§10.7, §10.5.3).
+
+import std::channel
+import std::fiber
+import std::io
+
+fn main() {
+  let (tx, rx) = channel::new::<channel::Sender<Int>>(0)
+  let (probe_tx, probe_rx) = channel::new::<Int>(0)
+  let (ready_tx, ready_rx) = channel::new::<Nil>(0)
+  let outcome = {
+    use owner <- fiber::scope()
+    let _ = fiber::spawn(owner, fn() {
+      let assert Ok(Nil) = channel::send(ready_tx, Nil)
+      // `main` keeps `rx` and receives only after the scope, so this send
+      // blocks until it is cancelled.
+      channel::send(tx, probe_tx)
+    })
+    let _ = fiber::spawn(owner, fn() {
+      let _ = channel::receive(ready_rx)
+      panic as "stop"
+    })
+    Nil
+  }
+  case outcome {
+    Ok(_) => io::println("the scope returned Ok")
+    Err(failure) => {
+      let text = fiber::message(failure)
+      io::println("the scope failed: {text}")
+    }
+  }
+  let delivered = channel::receive(rx)
+  io::println("delivered: {delivered:?}")
+  let probe = channel::receive(probe_rx)
+  io::println("probe: {probe:?}")
+}

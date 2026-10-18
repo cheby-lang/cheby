@@ -1,0 +1,8 @@
+reuse: tests/ui/09-memory-model/reuse_report/shared_field_pins_nothing.cheby:21:3: building `Dot` allocates: no value of the same size dies before it
+reuse: tests/ui/09-memory-model/reuse_report/shared_field_pins_nothing.cheby:21:16: `string::add` gets `label` at its last use: in place when it is unique at run time
+reuse: tests/ui/09-memory-model/reuse_report/shared_field_pins_nothing.cheby:26:25: building `Dot` reuses `shape` when it is unique
+reuse: tests/ui/09-memory-model/reuse_report/shared_field_pins_nothing.cheby:26:38: `string::add` gets `label` at its last use: in place when it is unique at run time
+reuse: tests/ui/09-memory-model/reuse_report/shared_field_pins_nothing.cheby:27:32: building `Box` reuses `shape` when it is unique
+reuse: tests/ui/09-memory-model/reuse_report/shared_field_pins_nothing.cheby:27:45: `string::add` gets `label` at its last use: in place when it is unique at run time
+reuse: tests/ui/09-memory-model/reuse_report/shared_field_pins_nothing.cheby:39:28: building `Box` allocates: no value of the same size dies before it
+reuse: tests/ui/09-memory-model/reuse_report/shared_field_pins_nothing.cheby:40:32: building `Dot` allocates: no value of the same size dies before it

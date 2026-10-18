@@ -1,0 +1,3 @@
+reuse: tests/ui/09-memory-model/reuse_report/record_update_reuses.cheby:26:14: building `Circle` reuses `current` when it is unique
+reuse: tests/ui/09-memory-model/reuse_report/record_update_reuses.cheby:26:14: building `Dot` reuses `current` when it is unique
+reuse: tests/ui/09-memory-model/reuse_report/record_update_reuses.cheby:34:21: building `Dot` allocates: no value of the same size dies before it
