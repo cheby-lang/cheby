@@ -265,6 +265,7 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-886     | `test.toml`'s `timing` is an optional boolean; a wrong type, or `timing` with `skip-run`, exits 2   |
 | D-887     | The serial group is a second libtest run on one thread, after the parallel batch; one summary line  |
 | D-888     | Every variant of a `timing` example runs in the serial group: 24 trials, 30 under 4 threads         |
+| D-889     | M2's reading misses D-247 by 9.3% to 9.6% (90.4k-90.7k lines/s per core), from unwinding; reported  |
 
 ## Open questions
 

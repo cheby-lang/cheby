@@ -149,7 +149,7 @@ M2 is judged on Linux and macOS. On Windows the runtime builds with stubs, progr
 
 ## Status
 
-Started. The design is logged: D-645 to D-732 in the [M2 design](../decisions/LOG.md#2026-10-11-m2-design) session, ADRs 0056 to 0060 and 0062, the tier-2 pages in `docs/stdlib/`, and the spec, diagnostics and plan changes that the entries list. D-676 settles OQ-P7 and D-680 settles OQ-P8. Package D0 is done.
+Done. The exit criteria were met at commit `29848fe`, the user approved the exit, and `tests/milestone` names M3 (D-288). Every exit criterion passes with `CHEBY_MILESTONE=M3`, and D-889 records the compile-speed reading against D-247. The design is logged: D-645 to D-732 in the [M2 design](../decisions/LOG.md#2026-10-11-m2-design) session, ADRs 0056 to 0060 and 0062, the tier-2 pages in `docs/stdlib/`, and the spec, diagnostics and plan changes that the entries list. D-676 settles OQ-P7 and D-680 settles OQ-P8. Package D0 is done.
 
 **Checkpoint 1 is reached** at `a1ae525` on the `runtime` branch, in four waves after the design commit `e54aae9`: `c300fdb` (wave 1: H0, P0, U1a, S1 and S2), `910f1e9` (wave 2: S3, S4, G1, U1b and S5), `2796420` (wave 3: S6a, S6b, U3, U2a and U2b) and `a1ae525` (wave 4: the verification, both backends through the M1 suite, and the fiber benchmarks). The user's answers are logged as D-733 to D-764 in the [M2 checkpoint 1](../decisions/LOG.md#2026-10-12-m2-checkpoint-1) session, with ADR-0061.
 
@@ -226,7 +226,14 @@ Checkpoint 4 is done. H1 is the critical path to M2's exit. Two parts of D-724's
 - The exit's compile reading, in D-644's form: 90.4k and 90.7k lines per second per core at 100k and 1M, 9.6% and 9.3% under D-247's 100k. Unwinding costs 10.7% and 10.5% in the same binary. The edit-to-run on 1M lines reads 0.496 s, under 500 ms by 4 ms, with 2 of 5 rounds over. D-247 stays as written, and the exit reports the miss.
 - The user accepted every proposal of the review, with no fix package. The detector's collect step relies on the ordering arm64 and x86-64 give a resumed fiber's stores, not on a C11 proof; the user accepted it as a known risk, and D-860 is unchanged. Telling LeakSanitizer about D-539's constants and the REPL's kept values, so the program steps can run it, is an Open item (D-881).
 
-Checkpoint 5 is done. M2's exit remains. Wave 5 checks every exit criterion with `CHEBY_MILESTONE=M3` and no allow list, cites the runs taken on `33dbaf8` during the review where the code is unchanged, and drafts the throughput entry (X1). Wave 6, after the user approves the exit, writes the exit's documents and moves `tests/milestone` to M3 (X2).
+Checkpoint 5 is done.
+
+**M2's exit is reached** at `29848fe`. Wave 5 checked every exit criterion with `CHEBY_MILESTONE=M3` and no allow list on `29848fe`, the docs commit after checkpoint 5's review. Its code equals `33dbaf8`'s, so the long runs taken on `33dbaf8` during the review stand for it, and the commands that read the documents ran on `29848fe` itself. The user approved the exit, and `tests/milestone` names M3 (D-288).
+
+- Every M1 and M2 test passes the strict run at M3 with no allow list: conformance 238, 24 of them in the serial group, UI 796 and REPL 33, at `CHEBY_THREADS` unset, 1 and 2, the UI tests also at 4 threads and under naive counting, and conformance at 4 threads under migration stress (296), on macOS arm64 with nothing else running and on Linux arm64. An x86-64 `cheby` under Rosetta passes the three strict harnesses at the default thread count (conformance 238, with its own trials at 1 and 2 threads and under naive counting, UI 796, REPL 33). No timing trial failed. Every example gives its golden at unset, 1 and 2 threads and the same output under naive counting, and the leak check reads zero after every passing run, after a panic too. The workspace's tests pass (3283), `cargo xtask test-std` passes 594 tests under Perceus and under naive counting, the pending spec tests are empty, and coverage is 402 of 542.
+- ThreadSanitizer and AddressSanitizer are clean on every step of the nightly job script in a `linux/arm64` container, strict at M3, and the Miri subset passes its 14 groups on macOS arm64 (D-862). JIT code is not instrumented (D-721). x86-64 is first checked by the scheduled workflow after the push.
+- The compile reading is D-889: 90.4k and 90.7k lines per second per core at 100k and 1M lines, under D-247's 100k by 9.6% and 9.3% because of unwinding. The edit-to-run reads 0.496 s, under 500 ms by 4 ms, so it is met only at the edge.
+- The workspace builds for both Windows targets without warnings; no Windows test ran (D-714). CI's x86-64, Windows and scheduled jobs have never run this branch.
 
 Changes against the plan:
 
@@ -295,3 +302,5 @@ Changes against the plan:
 - Rosetta's full strict run took 5 to 8 minutes, not the planned 40 to 60, on a warm target. Disk had 17 to 27 GiB free, not the plan's 50; no build failed for it.
 - PMc's window ran in three runs. A looping App Store agent contaminated rounds and stopped the first two, and the third ran after a reboot. Each run had a fresh 120-minute cap and the contamination counter was reset, by the user's choice, against the plan's one cap. W1 comes from the first run, and every other reading from the third. Run 3 used run 1's "before" snapshot, and one moved-aside round's cells were overwritten after the reset; no reading used it.
 - Checkpoint 5 added no package.
+- M2's exit ran its long checks (the Linux container, the sanitizer job, Rosetta, the loops, the runtime repeats and Miri) on `33dbaf8` during the user's review of checkpoint 5, and cited them for the docs commit through a code-equal rule that compares code with comments removed. The four container runs first failed because Docker Desktop was not running, and ran again on `29848fe`.
+- The exit stopped for the user's approval of its report before the exit's documents and the milestone bump.

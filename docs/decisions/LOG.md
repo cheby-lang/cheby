@@ -938,7 +938,7 @@ Goal: log the gaps that wave 6 of the M1 back end (the retirement of E0038 in MI
 
 Open:
 
-- The user pushes tree-sitter-cheby 1d891ef (branch `spec-conformance`), which CI's cross-check job must fetch, and bumps `rev` in `../zed-cheby/extension.toml` to it. `highlights.scm` needs no change.
+- ~~The user pushes tree-sitter-cheby 1d891ef (branch `spec-conformance`), which CI's cross-check job must fetch, and bumps `rev` in `../zed-cheby/extension.toml` to it. `highlights.scm` needs no change.~~ Done: `1d891ef` is on tree-sitter-cheby's `origin/main`, and `../zed-cheby` is pushed and pins `0dcbd0b`, a merge with the same content.
 - ~~The Windows CI jobs still run the JIT and runtime unit tests, the driver tests that compile and run examples, and the check-pass UI tests that evaluate constants through the JIT. None has run on Windows, so D-545 is unverified for them. W7-A or the user decides whether to gate them with `cfg(not(windows))`.~~ → D-641.
 - Optional: a dedicated "parenthesize the record" help for the two first-subject shapes of §5.9.6, which get generic E0013 errors (D-639).
 - Optional: W4-E's `path_uses` runs twice, a speed refactor.
@@ -961,7 +961,7 @@ Open:
 - A line with a syntax error at each of thousands of elements gets one diagnostic per element, each quoting the whole line: 12.5k elements take about 150 s.
 - ~~No full `cargo +nightly fuzz build` has run on the refreshed `fuzz/Cargo.lock`. Only `cargo metadata --locked` was checked, under 1.99.0 and nightly.~~ Done: `cargo +nightly-2026-10-01 fuzz build` builds the four targets without warnings (P6, checkpoint 3).
 - ~~The user approves the M1 exit, and `tests/milestone` then moves to M2 (D-288).~~ Done: the user approved the exit, and `tests/milestone` names M2.
-- Still open from earlier sessions: wave 6's push of tree-sitter-cheby 1d891ef with the `rev` bump in `../zed-cheby`, and the optional items of waves 5 and 6.
+- Still open from earlier sessions: ~~wave 6's push of tree-sitter-cheby 1d891ef with the `rev` bump in `../zed-cheby`~~ (done, see wave 6), and the optional items of waves 5 and 6.
 
 ## 2026-10-11: M2 design
 
@@ -1299,7 +1299,7 @@ Open:
 
 - ~~The slugs that H1's packages decide are logged after the user's review of H1's checkpoint report.~~ → D-867 to D-888
 - ~~spawn_join's verdict under D-864 and ROB7-2's quiet reading under D-865 strike the checkpoint-4b items when H1's window has run.~~ Done: both struck with the window's numbers.
-- M2's exit check, its throughput entry (D-644's form) and the move of `tests/milestone` to M3 follow H1's checkpoint.
+- ~~M2's exit check, its throughput entry (D-644's form) and the move of `tests/milestone` to M3 follow H1's checkpoint.~~ → D-889. Done: the exit criteria were met at `29848fe`, and `tests/milestone` names M3.
 - Tree-sitter: no grammar change. `../zed-cheby` needs nothing.
 
 ## 2026-10-18: M2 H1 checkpoint report
@@ -1335,5 +1335,17 @@ Open:
 - x86-64 ThreadSanitizer and AddressSanitizer are first checked by the scheduled workflow after the push (D-862); `container.sh` cannot run an amd64 sanitizer step until it has a per-platform rustup volume.
 - The detector's collect step relies on the hardware's ordering of a resumed fiber's stores after `run_fiber`'s SeqCst load, not on a C11 fence pair (DLm's model 6); a C11 proof needs a Release fence per resume, which D-860's one relaxed store per resume leaves out. The user accepted it as a known risk; D-860 is unchanged.
 - string_building reads +2.99% against M1 in H1's quiet window, met by 0.01 points: every configuration's rounds fall in two groups about 5% apart, so D-760's median of 5 round medians follows the group that holds three. The next quiet RC reading takes more rounds for it or separates the two groups. No owner.
-- M2's exit reports D-247's throughput miss in D-644's form; X1 drafts the entry from H1's quiet window: 90.4k and 90.7k lines per second per core at 100k and 1M lines, 9.6% and 9.3% under 100k, from unwinding (D-733, D-735, D-776), with H1 adding 0.5% to 0.6%. The edit-to-run reads 0.496 s, under 500 ms by 4 ms with 2 of 5 rounds over, so it is met only at the edge. D-247 stays as written, reported and not enforced until M6 (D-644); M3's exit reads both again.
+- ~~M2's exit reports D-247's throughput miss in D-644's form; X1 drafts the entry from H1's quiet window: 90.4k and 90.7k lines per second per core at 100k and 1M lines, 9.6% and 9.3% under 100k, from unwinding (D-733, D-735, D-776), with H1 adding 0.5% to 0.6%. The edit-to-run reads 0.496 s, under 500 ms by 4 ms with 2 of 5 rounds over, so it is met only at the edge. D-247 stays as written, reported and not enforced until M6 (D-644); M3's exit reads both again.~~ → D-889.
+- Tree-sitter: no grammar change. `../zed-cheby` needs nothing.
+
+## 2026-10-18: M2 exit
+
+Goal: log M2's exit: the compile-speed reading against D-247 that D-644 asks to report, the user's approval of the exit, the move of `tests/milestone` to M3, and the Open items M2 leaves.
+
+- **D-889 Throughput reading at M2 exit**: D-247's throughput budget stays as written, and M2 misses it. On the Apple M3 of D-640, on a quiet machine, `cargo xtask bench-compile` with a release build of `33dbaf8`, whose compiler code equals the exit tree's, measured 90.2k to 91.1k lines per second per core for checking with code generation on `bench/gen` projects of 100k and 1M lines, 90.4k and 90.7k as the geometric mean of each size's shapes, 9.6% and 9.3% under 100k, and 81k to 98k on projects of 10k lines. M1 read 104k to 107k (D-644), and `c300fdb`, the tree before unwinding, reads 104.7k and 105.4k in the same window. The cause is unwinding: the same binary with `CHEBY_UNWIND_EDGES=off` reads 101.3k at both sizes, so the unwind edges cost 10.7% and 10.5% of throughput and add 18.3% to the code, as D-733, D-735 and D-776 accepted; H1's checkpoint costs 0.5% and 0.6%. On 8 threads builds scale 3.5x to 3.6x on projects of 100k lines or more, except 3.2x on the 100k-line `large` project. Editing one function of the 1M-line `wide` project and running it took 0.496 s by the median of 5 rounds, from 0.490 s to 0.512 s with 2 rounds over 500 ms, so D-247's latency budget is met only at the edge; it stays with OQ-P11. The budgets stay reported, not enforced, until M6, and M3's exit reads both again on CI's Linux runner. Why: the user chose to report the miss and keep D-247 as written. Revising the budget to the measured rate was rejected, as D-640's revision was superseded once M1 met the budget, and a recovery package with C1's remaining levers before the exit was rejected, because the cost is the return flag's, which the user chose with its measured cost (D-733). Refines D-644.
+
+Open:
+
+- ~~The user approves the M2 exit, and `tests/milestone` then moves to M3 (D-288).~~ Done: the user approved the exit, and `tests/milestone` names M3.
+- Still open from earlier sessions: from M1's exit, the Rust-side buffers outside D-617's count, the line with thousands of syntax errors, and the optional items of M1's waves 5 and 6; from M2's design, D-731's optimizations (no owner), OQ-P9's external types and `@blocking` users (M3) and Windows fibers (M6); from checkpoint 1, R3-ROB-2 (M3); from checkpoint 3, general statement splitting and U6's residual (no owner); from checkpoint 4b, P3's follow-ups (no owner) and M6's second collections reading; from H1's checkpoint report, LeakSanitizer on the program steps, x86-64 sanitizers at the first push, the collect step's hardware argument and string_building's two-mode rounds.
 - Tree-sitter: no grammar change. `../zed-cheby` needs nothing.

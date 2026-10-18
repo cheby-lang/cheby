@@ -2,7 +2,7 @@
 
 Cheby is a statically typed, expression-oriented programming language with immutable data, lightweight fibers and deterministic memory management. Its syntax is inspired by Rust, its semantics by Gleam and Erlang, and its concurrency by Go. Programs compile to native code through Cranelift and to JavaScript.
 
-> **Status:** pre-1.0. The language specification is a draft. The reference implementation has finished milestone M1, the single-fiber core: `cheby check`, `run`, `test` and `repl` work through a Cranelift JIT, and fibers come in M2. Breaking changes are allowed until 1.0.
+> **Status:** pre-1.0. The language specification is a draft. The reference implementation has finished milestones M1, the single-fiber core, and M2, the runtime: `cheby check`, `run`, `test` and `repl` work through a Cranelift JIT, with fibers on an M:N scheduler, channels, selectors, scopes, deadlock detection and Perceus reference counting. AOT output and the build cache come in M3. Breaking changes are allowed until 1.0.
 
 ## A taste
 
