@@ -1,12 +1,12 @@
 // @mode: run-pass
-// @decisions: D-205, D-893
+// @decisions: D-205, D-893, D-894
 // @milestone: M2
-//! An owned slice releases the elements it cuts that only its list holds
-//! (§9.2), so a `Sender` walked out of a list with `[first, ..rest]`
-//! closes its channel at its last use, while `rest` is still alive. Before
-//! D-893, the second `receive` blocked forever. A slice made by a
-//! `std::list` function, which borrows its list, may keep the elements it
-//! cuts until the slice itself dies; the channel is closed by then.
+//! A slice of a list that dies where it is cut releases the elements it
+//! cuts that only that list holds (§9.2), so a `Sender` cut off a list
+//! closes its channel at its last use while the slice is still alive:
+//! after `[first, ..rest]` (D-893), and after `list::drop` or `list::take`
+//! on a list that dies at the call (D-894). Before those decisions, the
+//! second `receive` of each case blocked forever.
 
 import std::channel
 import std::io
@@ -27,20 +27,20 @@ fn walked_out() -> Nil {
   }
 }
 
-fn kept_by_a_shared_slice() -> Nil {
+fn cut_by_std_list() -> Nil {
   let (tx, rx) = channel::new::<Int>(1)
   let (other, _other_rx) = channel::new::<Int>(1)
+  let (last, last_rx) = channel::new::<Int>(1)
   let assert Ok(Nil) = channel::send(tx, 2)
-  let tail = list::drop([tx, other], 1)
-  let n = list::length(tail)
-  // `tail` is not used again, so the slice and the `Sender` it kept are
-  // released here.
+  let middle = list::take(list::drop([tx, other, last], 1), 1)
   let a = channel::receive(rx)
   let b = channel::receive(rx)
-  io::println("kept until the slice dies: {a:?} {b:?} {n}")
+  let c = channel::receive(last_rx)
+  let n = list::length(middle)
+  io::println("cut by std::list: {a:?} {b:?} {c:?} {n}")
 }
 
 fn main() {
   walked_out()
-  kept_by_a_shared_slice()
+  cut_by_std_list()
 }

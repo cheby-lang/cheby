@@ -566,6 +566,78 @@ fn owned_slices_release_the_elements_only_they_hold() {
     });
 }
 
+/// `list::drop`, `list::take` and `list::slice` on a list at count one,
+/// whose last reference is the `@external` wrapper's, cut it in place and
+/// release what they cut (D-894); on a shared list they are views.
+#[test]
+fn slicing_kernels_release_what_they_cut_at_count_one() {
+    balanced(|| {
+        for (start, end) in [(1, 4), (0, 2), (1, 3)] {
+            let xs = list(&[0, 1, 2, 3]);
+            let first = ops::get(xs, 0).unwrap();
+            let last = ops::get(xs, 3).unwrap();
+            dup_word(first);
+            dup_word(last);
+            // SAFETY: a live list, borrowed; the test plays the wrapper.
+            let cut = root(unsafe { cheby_list_slice(xs.word(), start, end) });
+            assert_eq!(cut, xs, "cut in place");
+            release(xs);
+            let model: Vec<i64> = (start..end).collect();
+            check(cut, &model);
+            // The test's own reference, and the list's if it kept the element.
+            let kept = |at: i64| i32::from(start <= at && at < end) + 1;
+            assert_eq!(count(first), kept(0));
+            assert_eq!(count(last), kept(3));
+            release(cut);
+            drop_word(first);
+            drop_word(last);
+        }
+        let xs = list(&[0, 1, 2, 3]);
+        let first = ops::get(xs, 0).unwrap();
+        dup_word(first);
+        // SAFETY: as above.
+        let tail = root(unsafe { cheby_list_drop(xs.word(), 1) });
+        let head = root(unsafe { cheby_list_take(tail.word(), 2) });
+        release(xs);
+        assert_eq!(count(first), 1, "`drop` released it");
+        check(tail, &[1, 2, 3]);
+        check(head, &[1, 2]);
+        release(tail);
+        release(head);
+        drop_word(first);
+        // `split_at` at count one: the back half reuses the root, and both
+        // halves keep their elements.
+        let xs = list(&[0, 1, 2, 3, 4, 5, 6]);
+        let first = ops::get(xs, 0).unwrap();
+        dup_word(first);
+        // SAFETY: as above.
+        let pair = unsafe { cheby_list_split_at(xs.word(), 2) };
+        release(xs);
+        // SAFETY: a live tuple.
+        let parts = unsafe { crate::values::read_tuple(pair) };
+        assert_eq!(parts[1], xs.word(), "the back half reuses the root");
+        check(root(parts[0]), &[0, 1]);
+        check(root(parts[1]), &[2, 3, 4, 5, 6]);
+        assert_eq!(count(first), 2, "the front half keeps it");
+        drop_word(pair);
+        drop_word(first);
+        // A shared list stays whole: the slice is a new view.
+        let xs = list(&[0, 1, 2, 3]);
+        let first = ops::get(xs, 0).unwrap();
+        dup_word(first);
+        dup_word(xs.word());
+        // SAFETY: as above.
+        let tail = root(unsafe { cheby_list_drop(xs.word(), 1) });
+        assert_ne!(tail, xs);
+        release(xs);
+        check(xs, &[0, 1, 2, 3]);
+        release(xs);
+        assert_eq!(count(first), 2, "the view still shares the leaf");
+        release(tail);
+        drop_word(first);
+    });
+}
+
 /// A push onto a unique list is counted as in place, onto a shared one as
 /// copied, and onto the empty list as neither.
 #[test]
@@ -632,6 +704,10 @@ fn kernels_read_and_cut_with_clamping() {
     balanced(|| {
         let xs = list(&[10, 20, 30, 40]);
         let word = xs.word();
+        // The test keeps using `xs` after each call, so it holds a second
+        // reference, as a caller that is not the list's last user does: at
+        // count one, the slicing kernels would cut it in place (D-894).
+        dup_word(word);
         // SAFETY (every kernel call): live borrowed arguments.
         unsafe {
             assert_eq!(cheby_list_length(word), 4);
@@ -677,6 +753,7 @@ fn kernels_read_and_cut_with_clamping() {
             }
         }
         check(xs, &[10, 20, 30, 40]);
+        release(xs);
         release(xs);
     });
 }

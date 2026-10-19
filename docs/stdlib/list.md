@@ -10,7 +10,7 @@ A `List` is a persistent, immutable RRB-tree vector, not a linked list (D-039, A
 
 The kernels have no effects, so compile-time evaluation runs them, and they may be called while a constant is computed (D-360, §4.5).
 
-The functions that return a changed list, such as `push`, `prepend`, `append` and `set`, update their first argument in place when it is unique (§9.3). A list built with `push` in a fold therefore costs amortized O(1) per element.
+The functions that return a changed list, such as `push`, `prepend`, `append` and `set`, update their first argument in place when it is unique (§9.3). A list built with `push` in a fold therefore costs amortized O(1) per element. `slice`, `take` and `drop` cut a unique list in place too, and release the elements they cut that no other list holds (§9.2); `split_at` reuses a unique list for its back half (D-894).
 
 Lists compare with `==` element by element and debug-print as `[1, 2]` (§3.13). `List<T>` satisfies `Compare` and `Show` when `T` does (§8.7, §8.8, D-064, D-136).
 

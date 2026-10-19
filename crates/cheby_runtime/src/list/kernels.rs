@@ -54,6 +54,21 @@ fn in_place(list: Root, alias: bool, op: impl FnOnce(Root) -> Root) -> Word {
     op(list).word()
 }
 
+/// Elements `start..end` of a borrowed list, clamped as by [`ops::slice`],
+/// for the slicing kernels. At count one the `@external` wrapper's
+/// reference is the list's last (see the module doc), so the list is cut
+/// in place as an owned slice is, releasing the elements it cuts (D-893,
+/// D-894); otherwise it is an O(1) view sharing the tree.
+fn slice_kernel(xs: Root, start: usize, end: usize) -> Word {
+    let len = ops::len(xs);
+    let end = end.min(len);
+    let start = start.min(end);
+    if start == end || (start == 0 && end == len) || !xs.is_unique() {
+        return ops::slice(xs, start, end).word();
+    }
+    in_place(xs, false, |xs| ops::slice_owned(xs, start, end))
+}
+
 // ---------------------------------------------------------------------
 // Runtime helpers for generated code (plan §4.3.1)
 
@@ -293,7 +308,8 @@ pub unsafe extern "C" fn cheby_list_set(xs: u64, index: i64, item: u64) -> u64 {
     })
 }
 
-/// `list::slice`, clamped (D-298). O(1).
+/// `list::slice`, clamped (D-298). O(1), or O(log n) in place at count
+/// one, where it releases the elements it cuts (D-894).
 ///
 /// # Safety
 ///
@@ -304,11 +320,11 @@ pub unsafe extern "C" fn cheby_list_slice(xs: u64, start: i64, end: i64) -> u64 
         // SAFETY: forwarded from the caller.
         let xs = unsafe { root(xs) };
         let len = ops::len(xs);
-        ops::slice(xs, ops::clamp(start, len), ops::clamp(end, len)).word()
+        slice_kernel(xs, ops::clamp(start, len), ops::clamp(end, len))
     })
 }
 
-/// `list::take`, clamped (D-298). O(1).
+/// `list::take`, clamped (D-298). As `list::slice`.
 ///
 /// # Safety
 ///
@@ -318,11 +334,11 @@ pub unsafe extern "C" fn cheby_list_take(xs: u64, count: i64) -> u64 {
     guarded(None, || {
         // SAFETY: forwarded from the caller.
         let xs = unsafe { root(xs) };
-        ops::slice(xs, 0, ops::clamp(count, ops::len(xs))).word()
+        slice_kernel(xs, 0, ops::clamp(count, ops::len(xs)))
     })
 }
 
-/// `list::drop`, clamped (D-298). O(1).
+/// `list::drop`, clamped (D-298). As `list::slice`.
 ///
 /// # Safety
 ///
@@ -333,11 +349,14 @@ pub unsafe extern "C" fn cheby_list_drop(xs: u64, count: i64) -> u64 {
         // SAFETY: forwarded from the caller.
         let xs = unsafe { root(xs) };
         let len = ops::len(xs);
-        ops::slice(xs, ops::clamp(count, len), len).word()
+        slice_kernel(xs, ops::clamp(count, len), len)
     })
 }
 
-/// `list::split_at`, clamped (D-298): the tuple `(take, drop)`. O(1).
+/// `list::split_at`, clamped (D-298): the tuple `(take, drop)`. O(1). At
+/// count one the back half reuses the list's root, so a split allocates
+/// the front's root and the tuple; it cuts nothing, since each element is
+/// in one half (D-894).
 ///
 /// # Safety
 ///
@@ -349,8 +368,10 @@ pub unsafe extern "C" fn cheby_list_split_at(xs: u64, count: i64) -> u64 {
         let xs = unsafe { root(xs) };
         let len = ops::len(xs);
         let count = ops::clamp(count, len);
+        // The front first: it shares the tree, which the back's in-place
+        // cut must then keep whole.
         let front = DropOnUnwind::new([ops::slice(xs, 0, count).word()]);
-        let back = DropOnUnwind::new([ops::slice(xs, count, len).word()]);
+        let back = DropOnUnwind::new([slice_kernel(xs, count, len)]);
         let ([front_word], [back_word]) = (front.words(), back.words());
         let pair = values::tuple(&[front_word, back_word]);
         front.disarm();

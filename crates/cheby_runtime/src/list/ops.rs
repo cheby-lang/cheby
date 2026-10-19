@@ -171,6 +171,11 @@ fn trimmed(view: View) -> Option<Node> {
 /// Applies `change` to an owned list's view, whose tree it receives owned.
 /// A unique root is rewritten in place and returned (unless the result is
 /// empty); a shared root gives up one reference and a new root is made.
+#[expect(
+    clippy::inline_always,
+    reason = "a `[x, ..rest]` step runs it; once the slicing kernels shared it with the pattern-step helper, it was left out of line, which made a walk a third slower (D-894)"
+)]
+#[inline(always)]
 fn update(list: Root, change: impl FnOnce(View) -> View) -> Root {
     if list.is_unique() {
         stats::record(Event::ListUpdateInPlace);
@@ -330,6 +335,11 @@ pub(crate) fn slice(list: Root, start: usize, end: usize) -> Root {
 /// only this list holds are released ([`narrow`]). So a pattern step on a
 /// unique list (`[x, ..rest]`) writes one slot and allocates nothing
 /// (D-634, D-893). O(log n).
+#[expect(
+    clippy::inline_always,
+    reason = "as `update`: the pattern-step helper and the slicing kernels both call it, and out of line it made a `[x, ..rest]` walk a third slower (D-894)"
+)]
+#[inline(always)]
 pub(crate) fn slice_owned(list: Root, start: usize, end: usize) -> Root {
     let len = list.len();
     let end = end.min(len);
