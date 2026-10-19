@@ -619,15 +619,27 @@ impl Node {
 
     /// The child holding element `i` (below the length), and the number of
     /// elements before that child. Starts at the radix position, a lower
-    /// bound because no child holds more than `M^height` elements, and
-    /// searches the size table from there.
+    /// bound because no child holds more than `M^height` elements, scans
+    /// forward a few children, which finds it in a balanced or nearly
+    /// balanced node, and searches the rest of the size table only after
+    /// that.
     pub(super) fn locate(self, i: usize) -> (usize, usize) {
+        /// Children scanned forward from the radix position before the
+        /// binary search.
+        const SCAN: usize = 4;
         let count = self.slots();
         let shift = BITS.saturating_mul(u32::try_from(self.height()).unwrap_or(u32::MAX));
         let guess = i.checked_shr(shift).unwrap_or(0);
         let (mut lo, mut hi) = (guess.min(count.saturating_sub(1)), count);
         if lo > 0 && self.size_at(lo.saturating_sub(1)) > i {
             lo = 0;
+        }
+        let scan_end = lo.saturating_add(SCAN).min(count);
+        while lo < scan_end && self.size_at(lo) <= i {
+            lo = lo.saturating_add(1);
+        }
+        if lo < scan_end {
+            hi = lo;
         }
         // The first child whose cumulative size exceeds `i`.
         while lo < hi {
