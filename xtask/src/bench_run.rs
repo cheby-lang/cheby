@@ -1,6 +1,7 @@
 //! `cargo xtask bench-run`: run-time numbers of the programs under
-//! `bench/runtime` (D-718, D-702, `bench/runtime/README.md`). Reported,
-//! never enforced, except that a checksum must match the baseline's.
+//! `bench/runtime` (D-718, D-702, `bench/runtime/README.md`). Reported;
+//! a checksum must match the baseline's, and a time is enforced only by
+//! `--fail-above` (D-895).
 //!
 //! Each group is a directory `bench/runtime/<group>/` whose subdirectories
 //! with a `cheby.toml` are the benchmarks. A benchmark prints `size: <n>`
@@ -16,13 +17,19 @@
 //! and the geometric mean of the ratios, and the command fails if a
 //! checksum or a size differs from the baseline's.
 //!
-//! With `--against PATH`, a second `cheby` (such as a build of the merge
-//! base) is timed too, its runs interleaved with the measured binary's so
-//! both see the same machine, and its medians are the baseline. With
+//! With `--against PATH`, a second `cheby` (such as a build of the base
+//! branch) is timed too, its runs interleaved with the measured binary's
+//! so both see the same machine, and its medians are the baseline. A
+//! benchmark that it cannot run, or for which it prints another size or
+//! checksum, gets no baseline: its row is reported with a note and left
+//! out of the gate (D-897). With
 //! `--fail-above PCT`, the command fails when the geometric mean of the
 //! ratios to the baseline, or the ratio of a benchmark that `--gate` names,
 //! is more than `PCT` percent above 1: the one case where a time is
-//! enforced, CI's `bench-gate` job (D-895).
+//! enforced, CI's `bench-gate` job (D-895). `--accepted-by D-NNN` names a
+//! decision that accepts such a slowdown, which is then only reported; with
+//! `--accepted-new-since LOG`, the decision must also be absent from that
+//! older log, so a change can only cite a decision it adds (D-896).
 //!
 //! With `--rust`, each benchmark of the `collections` group is followed by
 //! its Rust baselines (`bench/baselines`, D-664): rows
@@ -104,6 +111,16 @@ pub struct Args {
     /// too; repeatable
     #[arg(long, requires = "fail_above")]
     gate: Vec<String>,
+    /// A decision that accepts the slowdown, as `D-NNN`: what `--fail-above`
+    /// rejects is then reported and the command succeeds. The decision must
+    /// be in `docs/decisions/LOG.md` and not struck through; repeatable
+    /// (D-896)
+    #[arg(long, requires = "fail_above", value_name = "D-NNN")]
+    accepted_by: Vec<String>,
+    /// The base's decision log: each `--accepted-by` decision must be absent
+    /// from it, live or struck through, so it is new in the change (D-896)
+    #[arg(long, requires = "accepted_by", value_name = "LOG")]
+    accepted_new_since: Option<PathBuf>,
 }
 
 /// Parses `KEY=VALUE`.
@@ -156,6 +173,7 @@ pub fn run(root: &Path, args: &Args) -> Result<(), String> {
     if args.fail_above.is_some() && args.baseline.is_none() && args.against.is_none() {
         return Err("--fail-above needs --baseline or --against".to_owned());
     }
+    check_accepted(root, &args.accepted_by, args.accepted_new_since.as_deref())?;
     let mut baseline = args.baseline.as_deref().map(read_baseline).transpose()?;
     let cheby = match &args.cheby {
         Some(path) => crate::absolute(path)?,
@@ -176,30 +194,14 @@ pub fn run(root: &Path, args: &Args) -> Result<(), String> {
         (None, Some(_)) => "unknown".to_owned(),
     };
     let load_before = load_average();
-    let mut results = Vec::with_capacity(benchmarks.len());
-    let mut against_results = Vec::new();
-    for (group, dir) in &benchmarks {
-        let name = file_name(dir);
-        eprintln!("bench-run: {group}/{name}");
-        let measured = match &against {
-            Some(other) => {
-                let [base, measured] =
-                    measure_interleaved([other, &cheby], group, dir, &env, runs)?;
-                against_results.push(base);
-                measured
-            }
-            None => measure(&cheby, group, dir, &env, runs)?,
-        };
-        let mut baselines = Vec::new();
-        if let Some(rust) = rust.as_ref().filter(|_| group == RUST_GROUP) {
-            for (_, variant) in rust.variants.iter().filter(|(program, _)| *program == name) {
-                eprintln!("bench-run: {group}/{name}{RUST_MARK}{variant}");
-                baselines.push(measure_rust(&rust.bin, &measured, variant, runs)?);
-            }
-        }
-        results.push(measured);
-        results.append(&mut baselines);
-    }
+    let (results, against_results, notes) = measure_all(
+        &benchmarks,
+        &cheby,
+        against.as_deref(),
+        rust.as_ref(),
+        &env,
+        runs,
+    )?;
     let meta = Meta {
         commit,
         cheby: relative_to(root, &cheby),
@@ -208,11 +210,15 @@ pub fn run(root: &Path, args: &Args) -> Result<(), String> {
         runs,
         load_before,
     };
+    let mut notes = notes;
     if against.is_some() {
-        baseline = Some(as_baseline(&against_results));
+        baseline = Some(as_baseline(&against_results, &results, &mut notes));
     }
     let report = render(&results, baseline.as_ref());
     print!("{}", report.table);
+    for note in &notes {
+        println!("\nNote: {note}");
+    }
     let gate_failures = match (args.fail_above, &baseline) {
         (Some(pct), Some(baseline)) => gate(&results, baseline, pct, &args.gate)?,
         _ => Vec::new(),
@@ -228,28 +234,149 @@ pub fn run(root: &Path, args: &Args) -> Result<(), String> {
             &against_results,
         )?;
     }
-    verdict(&report.mismatches, &gate_failures, args.fail_above)
+    verdict(
+        &report.mismatches,
+        &gate_failures,
+        args.fail_above,
+        &args.accepted_by,
+    )
 }
 
-/// The medians of a run, as a baseline.
-fn as_baseline(results: &[Measured]) -> Baseline {
-    results
-        .iter()
-        .map(|m| {
-            (
-                (m.group.clone(), m.name.clone()),
-                (m.median(), m.n, m.checksum.clone()),
-            )
-        })
-        .collect()
+/// Checks that each decision `--accepted-by` names is a live entry of the
+/// decision log: `- **D-NNN …` at the start of a line, not struck through;
+/// and, with `new_since`, that the older log does not have it at all.
+fn check_accepted(root: &Path, ids: &[String], new_since: Option<&Path>) -> Result<(), String> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let read =
+        |path: &Path| std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()));
+    let log = read(&root.join("docs/decisions/LOG.md"))?;
+    let older = new_since.map(read).transpose()?;
+    ids.iter().try_for_each(|id| {
+        accepted_in(&log, id)?;
+        match &older {
+            Some(older) if in_log(older, id) => Err(format!(
+                "--accepted-by {id}: the base's log already has it; cite a decision this change adds"
+            )),
+            _ => Ok(()),
+        }
+    })
+}
+
+/// Whether `log` has an entry for `id`, live or struck through.
+fn in_log(log: &str, id: &str) -> bool {
+    let (live, struck) = (format!("- **{id} "), format!("- ~~**{id} "));
+    log.lines()
+        .any(|line| line.starts_with(&live) || line.starts_with(&struck))
+}
+
+/// Whether `log` holds the live entry `id` (see [`check_accepted`]).
+fn accepted_in(log: &str, id: &str) -> Result<(), String> {
+    let digits = id.strip_prefix("D-").unwrap_or_default();
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(format!(
+            "--accepted-by {id}: not a decision id such as D-893"
+        ));
+    }
+    let entry = format!("- **{id} ");
+    if log.lines().any(|line| line.starts_with(&entry)) {
+        Ok(())
+    } else {
+        Err(format!(
+            "--accepted-by {id}: no such decision in docs/decisions/LOG.md, or it is struck through"
+        ))
+    }
+}
+
+/// The `--against` binary's medians as a baseline, for the benchmarks
+/// where it printed the measured binary's size and checksum; each other
+/// one gets a note and no baseline, so it is reported only (D-897).
+fn as_baseline(against: &[Measured], measured: &[Measured], notes: &mut Vec<String>) -> Baseline {
+    let mut out = Baseline::new();
+    for base in against {
+        let same = measured
+            .iter()
+            .find(|m| m.group == base.group && m.name == base.name)
+            .is_some_and(|m| m.n == base.n && m.checksum == base.checksum);
+        if same {
+            out.insert(
+                (base.group.clone(), base.name.clone()),
+                (base.median(), base.n, base.checksum.clone()),
+            );
+        } else {
+            notes.push(format!(
+                "{}/{}: the base printed another size or checksum (size {}, checksum {}), so \
+                 this row has no baseline and is not gated",
+                base.group,
+                base.name,
+                show_n(base.n),
+                base.checksum
+            ));
+        }
+    }
+    out
+}
+
+/// What [`measure_all`] returns: the measured rows, the `--against`
+/// binary's rows, and notes on rows that have no baseline.
+type Measurements = (Vec<Measured>, Vec<Measured>, Vec<String>);
+
+/// Measures every benchmark, with the `--against` binary interleaved when
+/// there is one, and the Rust baselines after their benchmark. A benchmark
+/// the `--against` binary cannot run is measured alone, with a note.
+fn measure_all(
+    benchmarks: &[(String, PathBuf)],
+    cheby: &Path,
+    against: Option<&Path>,
+    rust: Option<&RustBaselines>,
+    env: &[(String, String)],
+    runs: usize,
+) -> Result<Measurements, String> {
+    let mut results = Vec::with_capacity(benchmarks.len());
+    let mut against_results = Vec::new();
+    let mut notes = Vec::new();
+    for (group, dir) in benchmarks {
+        let name = file_name(dir);
+        eprintln!("bench-run: {group}/{name}");
+        let probe = against.map(|other| run_once(other, dir, env, false));
+        let measured = match (against, probe) {
+            (Some(other), Some(Ok(_))) => {
+                let [base, measured] = measure_interleaved([other, cheby], group, dir, env, runs)?;
+                against_results.push(base);
+                measured
+            }
+            (Some(_), Some(Err(e))) => {
+                notes.push(format!(
+                    "{group}/{name}: the base cannot run it, so this row has no baseline and is \
+                     not gated: {}",
+                    e.lines().next().unwrap_or_default()
+                ));
+                measure(cheby, group, dir, env, runs)?
+            }
+            _ => measure(cheby, group, dir, env, runs)?,
+        };
+        let mut baselines = Vec::new();
+        if let Some(rust) = rust.filter(|_| group == RUST_GROUP) {
+            for (_, variant) in rust.variants.iter().filter(|(program, _)| *program == name) {
+                eprintln!("bench-run: {group}/{name}{RUST_MARK}{variant}");
+                baselines.push(measure_rust(&rust.bin, &measured, variant, runs)?);
+            }
+        }
+        results.push(measured);
+        results.append(&mut baselines);
+    }
+    Ok((results, against_results, notes))
 }
 
 /// The command's outcome: an error for a size or checksum that differs
-/// from the baseline's, or for what `--fail-above` rejected.
+/// from the baseline's, or for what `--fail-above` rejected unless a
+/// decision accepted it.
 fn verdict(
     mismatches: &[String],
     gate_failures: &[String],
     pct: Option<f64>,
+    accepted_by: &[String],
 ) -> Result<(), String> {
     if !mismatches.is_empty() {
         return Err(format!(
@@ -258,6 +385,14 @@ fn verdict(
         ));
     }
     if gate_failures.is_empty() {
+        Ok(())
+    } else if !accepted_by.is_empty() {
+        println!(
+            "\nSlower than the baseline by more than {}%, accepted by {} (D-896):\n\n- {}",
+            pct.unwrap_or_default(),
+            accepted_by.join(", "),
+            gate_failures.join("\n- ")
+        );
         Ok(())
     } else {
         Err(format!(
@@ -315,19 +450,23 @@ fn gate(
     gates: &[String],
 ) -> Result<Vec<String>, String> {
     let limit = 1.0 + pct / 100.0;
+    // The Rust baselines' rows time other programs, so they are never gated.
     let ratio_of = |m: &Measured| {
+        if m.name.contains(RUST_MARK) {
+            return None;
+        }
         baseline
             .get(&(m.group.clone(), m.name.clone()))
             .and_then(|(base, _, _)| ratio(m.median(), *base))
     };
     let mut failures = Vec::new();
     for name in gates {
-        let r = results
+        let row = results
             .iter()
             .find(|m| format!("{}/{}", m.group, m.name) == *name)
-            .and_then(ratio_of)
-            .ok_or_else(|| format!("--gate {name}: not measured against a baseline"))?;
-        if r > limit {
+            .ok_or_else(|| format!("--gate {name}: not measured"))?;
+        // A row with no baseline is reported only (D-897).
+        if let Some(r) = ratio_of(row).filter(|r| *r > limit) {
             failures.push(format!("{name}: {:+.1}%", (r - 1.0) * 100.0));
         }
     }
@@ -1153,6 +1292,54 @@ mod tests {
             "{failures:?}"
         );
         assert!(gate(&results, &baseline, 10.0, &["rc/c".to_owned()]).is_err());
+        // A gated row with no baseline, or a Rust row, is not gated.
+        baseline.remove(&("rc".to_owned(), "a".to_owned()));
+        assert_eq!(
+            gate(&results, &baseline, 10.0, &["rc/a".to_owned()]),
+            Ok(vec![])
+        );
+        let rust = [at("b", 95), at(&format!("b{RUST_MARK}std"), 500)];
+        assert_eq!(gate(&rust, &baseline, 10.0, &[]), Ok(vec![]));
+    }
+
+    #[test]
+    fn a_base_that_prints_another_checksum_gives_no_baseline() {
+        let at = |checksum: &str| Measured {
+            group: "rc".to_owned(),
+            name: "x".to_owned(),
+            n: Some(5),
+            runs: vec![Duration::from_millis(100)],
+            checksum: checksum.to_owned(),
+            stats: json!({}),
+        };
+        let mut notes = Vec::new();
+        assert_eq!(as_baseline(&[at("1")], &[at("1")], &mut notes).len(), 1);
+        assert_eq!(notes, Vec::<String>::new());
+        assert!(as_baseline(&[at("2")], &[at("1")], &mut notes).is_empty());
+        assert_eq!(notes.len(), 1, "{notes:?}");
+    }
+
+    #[test]
+    fn an_accepted_slowdown_passes_and_names_a_live_decision() {
+        let failures = vec!["rc/a: +20.0%".to_owned()];
+        assert!(verdict(&[], &failures, Some(10.0), &[]).is_err());
+        assert_eq!(
+            verdict(&[], &failures, Some(10.0), &["D-893".to_owned()]),
+            Ok(())
+        );
+        // A checksum that differs is never accepted, with or without a
+        // slowdown.
+        assert!(verdict(&["x".to_owned()], &[], Some(10.0), &["D-893".to_owned()]).is_err());
+        let accepted = ["D-893".to_owned()];
+        assert!(verdict(&["x".to_owned()], &failures, Some(10.0), &accepted).is_err());
+        let log = "- **D-893 Owned slices**: text.\n- ~~**D-12 Old**: text.~~ Superseded.\n";
+        assert_eq!(accepted_in(log, "D-893"), Ok(()));
+        assert!(accepted_in(log, "D-12").is_err(), "struck through");
+        assert!(accepted_in(log, "D-89").is_err(), "a prefix of another id");
+        assert!(accepted_in(log, "D-").is_err());
+        assert!(accepted_in(log, "893").is_err());
+        assert!(in_log(log, "D-893") && in_log(log, "D-12"));
+        assert!(!in_log(log, "D-89") && !in_log(log, "D-894"));
     }
 
     #[test]

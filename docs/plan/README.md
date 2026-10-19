@@ -271,6 +271,8 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-893     | An owned slice releases cut elements only it holds; borrowed slices stay views that may keep them   |
 | D-894     | `list::slice`, `take`, `drop` and `split_at` cut a list in place at its last use                    |
 | D-895     | CI's `bench-gate` fails a change that slows the RC group or `rc/list_pipeline` by more than 10%     |
+| D-896     | An `Accepted-Slowdown: D-NNN` trailer citing a decision the change adds passes the gate             |
+| D-897     | `bench-gate`: rows the base cannot run are ungated; runs on `main` are never cancelled              |
 
 ## Open questions
 
