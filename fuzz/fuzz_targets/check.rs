@@ -13,8 +13,16 @@
 //! mkdir -p corpus/check
 //! cp ../docs/examples/*/src/main.cheby corpus/check/ 2>/dev/null
 //! find ../tests/ui -name '*.cheby' -exec sh -c 'cp "$1" corpus/check/$(echo "$1" | tr / _)' _ {} \;
-//! cargo +nightly fuzz run check
+//! RUSTFLAGS='--cfg cheby_sanitize="address"' ASAN_OPTIONS=detect_leaks=0 \
+//!   cargo +nightly-2026-10-01 fuzz run check -- -rss_limit_mb=6144
 //! ```
+//!
+//! The cfg turns on the runtime's fiber annotations for the sanitizer.
+//! LeakSanitizer stays off: a check evaluates every constant, and the
+//! results it makes static are held only by the JIT's data memory, which
+//! LeakSanitizer does not scan. Every check builds new interners and new
+//! constants and keeps them, so each input keeps about 40 KB and a long
+//! run needs a higher RSS limit (D-898).
 
 #![no_main]
 

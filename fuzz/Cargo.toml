@@ -5,11 +5,16 @@
 # Excluded from the workspace, because cargo-fuzz needs a nightly toolchain.
 # The scheduled workflow (.github/workflows/nightly.yml, D-781) pins the
 # dated nightly below; it must be at least 1.99-nightly, the workspace's
-# `rust-version`:
+# `rust-version`. cargo-fuzz builds under AddressSanitizer, so the build
+# also needs `--cfg cheby_sanitize="address"`, which cargo-fuzz appends to
+# its own flags from `RUSTFLAGS`, for the runtime's fiber annotations and
+# the interners' leak marks. `check` runs without LeakSanitizer, because
+# evaluated constants are kept for good where it cannot see them (D-898):
 #
+#   export RUSTFLAGS='--cfg cheby_sanitize="address"'
 #   cargo +nightly-2026-10-01 fuzz run lex
 #   cargo +nightly-2026-10-01 fuzz run parse
-#   cargo +nightly-2026-10-01 fuzz run check
+#   ASAN_OPTIONS=detect_leaks=0 cargo +nightly-2026-10-01 fuzz run check -- -rss_limit_mb=6144
 #   CHEBY_DIFF_BIN=<copy of a debug cheby> cargo +nightly-2026-10-01 fuzz run rc_differential
 #
 # `lex` and `parse` check that lexing and parsing never panic, terminate,
