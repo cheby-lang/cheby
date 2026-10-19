@@ -1426,6 +1426,7 @@ Goal: make `std::json` parse, decode and write faster, in Cheby first, without c
 Open:
 
 - ~~Rewrite the parser over bytes~~ → D-900.
-- Rewrite the writer over one string, and the decoders with paths built only on error, each as its own measured step that keeps the std tests added in this session passing.
+- ~~Rewrite the writer over one string as its own measured step that keeps the std tests added in this session passing.~~ Done: `json::to_string` and `json::to_pretty_string` add each piece to the end of one string that nothing else refers to, so D-577 extends it in place, and keep the rest of each open array and object in a heap list of frames, as D-326 asks; a string with no byte to escape is added whole. On the Apple M3 of D-640 with a release `cheby`, medians of five interleaved runs against the parser step (14e5c8b), cheby-compare's `json_roundtrip` goes from 2.28 s to 1.51 s with its hash and from 2.11 s to 1.25 s without, with peak RSS unchanged at about 190 to 210 MB, and D-899's `roundtrip` goes from 0.81 s to 0.57 s and `value` from 0.66 s to 0.50 s. The output hashes are unchanged.
+- Rewrite the decoders with paths built only on error, as its own measured step that keeps the std tests added in this session passing.
 - After the rewrites, a static `Some(U8)` table for `bytes::get`, and narrow package-visible kernels if profiles still show them, each with its own decision.
 - Tree-sitter: no grammar change. `../zed-cheby` needs nothing.

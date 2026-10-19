@@ -8,11 +8,14 @@
 //! `std::json::tree`, because `std::json::decode` cannot import this module
 //! (D-361, ADR-0053). It scans the bytes of the text and builds a `Value`
 //! for `parse_value`, or the raw tree that decoders run over for `parse`.
-//! Neither parsing nor writing grows the stack with the nesting depth of a
-//! document (D-094, D-326).
+//! The writer adds each piece of text to the end of one string, and keeps
+//! the rest of each open array and object on a stack on the heap. Neither
+//! parsing nor writing grows the stack with the nesting depth of a document
+//! (D-094, D-326).
 
 // The module has a function named `list`, so it imports `std::list` under
 // another name (§7.5.1, D-062).
+import std::bytes
 import std::float
 import std::int
 import std::json::decode
@@ -239,84 +242,84 @@ test "to_string writes any Int, and one outside the safe range reads back as a F
   assert parse_value(text) == Ok(floats)
 }
 
-/// A step of writing a value: text to write, or a value to write at a depth
-/// of nesting.
-priv type Step {
-  Write(String),
-  Encode(Value, Int),
+/// The rest of an open array or object: the elements or members still to
+/// write, and the depth of nesting they are at.
+priv type Frame {
+  Items(List<Value>, Int),
+  Members(List<(String, Value)>, Int),
 }
 
-/// Writes `value` as text, indented when `pretty` is `True`. The steps still
-/// to take are a stack on the heap whose top is its last element.
+/// Writes `value` as text, indented when `pretty` is `True`. The open arrays
+/// and objects are a stack of frames on the heap whose top is its last
+/// element, and every piece is added to the end of one string, which no
+/// other value refers to, so each addition extends it in place (D-577).
 priv fn write(value: Value, pretty: Bool) -> String {
-  fn step(steps: List<Step>, parts: List<String>) -> String {
-    case steps {
-      [] => string::join(parts, "")
-      [..rest, Write(text)] => step(rest, lists::push(parts, text))
-      [..rest, Encode(Null, _)] => step(rest, lists::push(parts, "null"))
-      [..rest, Encode(Bool(True), _)] => step(rest, lists::push(parts, "true"))
-      [..rest, Encode(Bool(False), _)] => step(rest, lists::push(parts, "false"))
-      [..rest, Encode(Int(n), _)] => step(rest, lists::push(parts, int::show(n)))
-      [..rest, Encode(Float(x), _)] => step(rest, lists::push(parts, float_text(x)))
-      [..rest, Encode(String(text), _)] => step(rest, lists::push(parts, quote(text)))
-      [..rest, Encode(Array([]), _)] => step(rest, lists::push(parts, "[]"))
-      [..rest, Encode(Array(items), depth)] => {
-        step(array_steps(rest, items, depth, pretty), lists::push(parts, "["))
-      }
-      [..rest, Encode(Object([]), _)] => step(rest, lists::push(parts, "\{}"))
-      [..rest, Encode(Object(members), depth)] => {
-        step(object_steps(rest, members, depth, pretty), lists::push(parts, "\{"))
-      }
-    }
-  }
-  step([Encode(value, 0)], [])
+  write_value("", value, 0, pretty, [])
 }
 
-/// Adds the steps that write the elements of an array at `depth`, after its
-/// `[`, and its `]`. They are added last first, so the first is on top.
-priv fn array_steps(steps: List<Step>, items: List<Value>, depth: Int, pretty: Bool) -> List<Step> {
-  let closing = lists::push(steps, Write(line_break(pretty, depth) + "]"))
-  lists::fold_right(lists::enumerate(items), closing, fn(pending, (index, item)) {
-    let encoded = lists::push(pending, Encode(item, depth + 1))
-    lists::push(encoded, Write(separator(index, pretty, depth + 1)))
-  })
-}
-
-/// Adds the steps that write the members of an object at `depth`, after its
-/// `{`, and its `}`. They are added last first, so the first is on top.
-priv fn object_steps(
-  steps: List<Step>,
-  members: List<(String, Value)>,
+/// Adds `value`, at `depth`, to `out`, then goes on with `frames`.
+priv fn write_value(
+  out: String,
+  value: Value,
   depth: Int,
   pretty: Bool,
-) -> List<Step> {
-  let closing = lists::push(steps, Write(line_break(pretty, depth) + "}"))
-  let colon = case pretty {
-    True => ": "
-    False => ":"
+  frames: List<Frame>,
+) -> String {
+  case value {
+    Null => next(out + "null", frames, pretty)
+    Bool(True) => next(out + "true", frames, pretty)
+    Bool(False) => next(out + "false", frames, pretty)
+    Int(n) => next(out + int::show(n), frames, pretty)
+    Float(x) => next(out + float_text(x), frames, pretty)
+    String(text) => next(quote_into(out, text), frames, pretty)
+    Array([]) => next(out + "[]", frames, pretty)
+    Array([item, ..items]) => {
+      let inner = depth + 1
+      let opened = line_break(out + "[", pretty, inner)
+      write_value(opened, item, inner, pretty, lists::push(frames, Items(items, inner)))
+    }
+    Object([]) => next(out + "\{}", frames, pretty)
+    Object([(key, item), ..members]) => {
+      let inner = depth + 1
+      let opened = key_into(line_break(out + "\{", pretty, inner), key, pretty)
+      write_value(opened, item, inner, pretty, lists::push(frames, Members(members, inner)))
+    }
   }
-  lists::fold_right(lists::enumerate(members), closing, fn(pending, (index, (key, item))) {
-    let encoded = lists::push(pending, Encode(item, depth + 1))
-    let label = separator(index, pretty, depth + 1) + quote(key) + colon
-    lists::push(encoded, Write(label))
-  })
 }
 
-/// The text before the element or member at `index` of an array or object
-/// whose elements are at `depth`.
-priv fn separator(index: Int, pretty: Bool, depth: Int) -> String {
-  case index {
-    0 => line_break(pretty, depth)
-    _ => "," + line_break(pretty, depth)
+/// Goes on after a value: adds the next element or member of the innermost
+/// open array or object, or its closing bracket.
+priv fn next(out: String, frames: List<Frame>, pretty: Bool) -> String {
+  case frames {
+    [] => out
+    [..rest, Items([], depth)] => next(line_break(out, pretty, depth - 1) + "]", rest, pretty)
+    [..rest, Items([item, ..items], depth)] => {
+      let separated = line_break(out + ",", pretty, depth)
+      write_value(separated, item, depth, pretty, lists::push(rest, Items(items, depth)))
+    }
+    [..rest, Members([], depth)] => next(line_break(out, pretty, depth - 1) + "}", rest, pretty)
+    [..rest, Members([(key, item), ..members], depth)] => {
+      let separated = key_into(line_break(out + ",", pretty, depth), key, pretty)
+      write_value(separated, item, depth, pretty, lists::push(rest, Members(members, depth)))
+    }
   }
 }
 
-/// A line ending and the indentation of `depth`, or nothing when the text is
-/// compact.
-priv fn line_break(pretty: Bool, depth: Int) -> String {
+/// Adds the key of a member and the colon after it to `out`.
+priv fn key_into(out: String, key: String, pretty: Bool) -> String {
+  let quoted = quote_into(out, key)
   case pretty {
-    True => "\n" + string::repeat("  ", depth)
-    False => ""
+    True => quoted + ": "
+    False => quoted + ":"
+  }
+}
+
+/// Adds a line ending and the indentation of `depth` to `out`, or nothing
+/// when the text is compact.
+priv fn line_break(out: String, pretty: Bool, depth: Int) -> String {
+  case pretty {
+    True => out + "\n" + string::repeat("  ", depth)
+    False => out
   }
 }
 
@@ -326,6 +329,26 @@ priv fn float_text(x: Float) -> String {
   case float::is_finite(x) {
     True => float::show(x)
     False => "null"
+  }
+}
+
+/// Adds `text` between `"` to `out`, escaped as `quote` escapes it. Text
+/// with no byte to escape, the common case, is added whole.
+priv fn quote_into(out: String, text: String) -> String {
+  case needs_escape(bytes::from_string(text), 0) {
+    False => out + "\"" + text + "\""
+    True => out + quote(text)
+  }
+}
+
+/// Whether a byte of `data` from `index` on is `"`, `\` or a control
+/// character below U+0020 (D-398). Every byte of a code point above U+007F
+/// is 0x80 or more, so each byte of UTF-8 decides it alone.
+priv fn needs_escape(data: bytes::Bytes, index: Int) -> Bool {
+  case bytes::get(data, index) {
+    None => False
+    Some(byte) when byte < 0x20 || byte == 0x22 || byte == 0x5C => True
+    Some(_) => needs_escape(data, index + 1)
   }
 }
 
