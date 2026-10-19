@@ -3,11 +3,13 @@
 //! Typed data is read with the decoders of `std::json::decode` (D-320) and
 //! written with encoding functions that return a `Value`.
 //!
-//! The module is written in Cheby over the kernels of `std::string`,
-//! `std::int` and `std::float` (D-274). Parsing and decoding share the raw
-//! tree of `std::json::tree`, because `std::json::decode` cannot import this
-//! module (D-361, ADR-0053). Neither parsing nor writing grows the stack
-//! with the nesting depth of a document (D-094, D-326).
+//! The module is written in Cheby over the kernels of `std::bytes`,
+//! `std::string`, `std::int` and `std::float` (D-274). The parser lives in
+//! `std::json::tree`, because `std::json::decode` cannot import this module
+//! (D-361, ADR-0053). It scans the bytes of the text and builds a `Value`
+//! for `parse_value`, or the raw tree that decoders run over for `parse`.
+//! Neither parsing nor writing grows the stack with the nesting depth of a
+//! document (D-094, D-326).
 
 // The module has a function named `list`, so it imports `std::list` under
 // another name (§7.5.1, D-062).
@@ -396,8 +398,17 @@ test "parse decodes a document in one step" {
 /// `Float` (D-217, D-222, D-394). A syntax error gives the position at
 /// which `text` stops being JSON (D-324, D-326).
 pub fn parse_value(text: String) -> Result<Value, Error> {
-  case tree::parse(text) {
-    Ok(document) => Ok(tree::rebuild(document, open_tree, Array, Object))
+  let builder = tree::Builder {
+    null: Null,
+    bool: Bool,
+    int: Int,
+    float: Float,
+    string: String,
+    array: Array,
+    object: Object,
+  }
+  case tree::parse_with(text, builder) {
+    Ok(value) => Ok(value)
     Err((line, column)) => Err(Syntax(Position { line, column }))
   }
 }
@@ -702,19 +713,6 @@ test "decode_value decodes a value built in the program" {
   assert decode_value(Object([("year", Int(1965))]), year()) == Ok(1965)
   let problem = decode::Error { expected: "Int", found: "Float", path: ["year"] }
   assert decode_value(Object([("year", Float(1965.0))]), year()) == Err([problem])
-}
-
-/// Takes a node of the raw tree apart, for `tree::rebuild`.
-priv fn open_tree(node: tree::Tree) -> tree::Children<tree::Tree, Value> {
-  case node {
-    tree::Null => tree::Leaf(Null)
-    tree::Bool(flag) => tree::Leaf(Bool(flag))
-    tree::Int(n) => tree::Leaf(Int(n))
-    tree::Float(x) => tree::Leaf(Float(x))
-    tree::String(text) => tree::Leaf(String(text))
-    tree::Array(items) => tree::Items(items)
-    tree::Object(members) => tree::Members(members)
-  }
 }
 
 /// Takes a `Value` apart, for `tree::rebuild`.
