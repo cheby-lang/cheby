@@ -1,0 +1,46 @@
+// @mode: run-pass
+// @decisions: D-205, D-893, D-894
+// @milestone: M2
+//! A slice of a list that dies where it is cut releases the elements it
+//! cuts that only that list holds (§9.2), so a `Sender` cut off a list
+//! closes its channel at its last use while the slice is still alive:
+//! after `[first, ..rest]` (D-893), and after `list::drop` or `list::take`
+//! on a list that dies at the call (D-894). Before those decisions, the
+//! second `receive` of each case blocked forever.
+
+import std::channel
+import std::io
+import std::list
+
+fn walked_out() -> Nil {
+  let (tx, rx) = channel::new::<Int>(1)
+  let (other, _other_rx) = channel::new::<Int>(1)
+  case [tx, other] {
+    [first, ..rest] => {
+      let assert Ok(Nil) = channel::send(first, 1)
+      let a = channel::receive(rx)
+      let b = channel::receive(rx)
+      let n = list::length(rest)
+      io::println("walked out: {a:?} {b:?} {n}")
+    }
+    [] => Nil
+  }
+}
+
+fn cut_by_std_list() -> Nil {
+  let (tx, rx) = channel::new::<Int>(1)
+  let (other, _other_rx) = channel::new::<Int>(1)
+  let (last, last_rx) = channel::new::<Int>(1)
+  let assert Ok(Nil) = channel::send(tx, 2)
+  let middle = list::take(list::drop([tx, other, last], 1), 1)
+  let a = channel::receive(rx)
+  let b = channel::receive(rx)
+  let c = channel::receive(last_rx)
+  let n = list::length(middle)
+  io::println("cut by std::list: {a:?} {b:?} {c:?} {n}")
+}
+
+fn main() {
+  walked_out()
+  cut_by_std_list()
+}

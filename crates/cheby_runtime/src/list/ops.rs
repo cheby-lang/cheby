@@ -7,7 +7,7 @@
 
 use super::node::{M, MAX_NODE_SIZE, Node, ROOT_SIZE, Root, View, drop_word, dup_word, empty};
 use super::tree;
-use crate::abi::Word;
+use crate::abi::{self, Word};
 use crate::stats::{self, Event};
 
 /// The number of elements of a borrowed list.
@@ -70,9 +70,80 @@ pub(crate) fn append_bound(a: Root, b: Root) -> u64 {
     nodes_and_root(nodes)
 }
 
-/// [`slice_owned`]: at most a new root.
-pub(crate) fn slice_owned_bound() -> u64 {
-    nodes_and_root(0)
+/// [`slice_owned`] of `list` of height `h`: a cut of a unique tree may
+/// copy the shared nodes along its two edges ([`trimmed`]), a path each,
+/// and a root: at most `2 (h + 1)` nodes.
+pub(crate) fn slice_owned_bound(list: Root) -> u64 {
+    let h = tallest(&[list]);
+    nodes_and_root(h.saturating_add(1).saturating_mul(2))
+}
+
+/// The most slots [`narrow`] clears one by one; a larger cut restructures
+/// the tree instead. Below it, a pattern step writes one slot in place;
+/// above it, cutting whole subtrees is cheaper than clearing each slot.
+const CLEAR_MAX: usize = 4;
+
+/// What a cleared slot holds: a tagged `Int`, which owns nothing (D-521).
+/// It sits outside the view, so nothing reads it.
+const CLEARED: Word = match abi::tag_int(0) {
+    Some(word) => word,
+    None => panic!("0 is a tagged Int"),
+};
+
+/// `view` (its tree owned) narrowed to its elements `start..end`
+/// (`start <= end <= view.len`), releasing the cut elements that only this
+/// list holds (D-893, for D-205).
+///
+/// A cut of at most [`CLEAR_MAX`] elements overwrites each cut slot with
+/// [`CLEARED`] where every node on its path is unique, and keeps the
+/// offset: O(log n) per slot, no allocation, so a pattern step on a unique
+/// list writes one slot in place. A slot under a shared node is left
+/// alone: another list holds that node, and the element lives until the
+/// last list sharing it dies. A larger cut of a unique tree restructures
+/// it to hold exactly the view ([`trimmed`]), which releases whole
+/// subtrees and copies at most the shared nodes on its two edges; a larger
+/// cut of a shared tree keeps the view.
+fn narrow(view: View, start: usize, end: usize) -> View {
+    let len = end.saturating_sub(start);
+    let Some(tree) = view.tree else {
+        return View {
+            tree: None,
+            offset: 0,
+            len: 0,
+        };
+    };
+    if len == 0 {
+        tree.release();
+        return View {
+            tree: None,
+            offset: 0,
+            len: 0,
+        };
+    }
+    let offset = view.offset.saturating_add(start);
+    let view_end = view.offset.saturating_add(view.len);
+    let new_end = offset.saturating_add(len);
+    let cut = start.saturating_add(view_end.saturating_sub(new_end));
+    if cut <= CLEAR_MAX {
+        for i in (view.offset..offset).chain(new_end..view_end) {
+            tree::clear_if_unique(tree, i, CLEARED);
+        }
+    } else if tree.is_unique() {
+        return View {
+            tree: trimmed(View {
+                tree: Some(tree),
+                offset,
+                len,
+            }),
+            offset: 0,
+            len,
+        };
+    }
+    View {
+        tree: Some(tree),
+        offset,
+        len,
+    }
 }
 
 /// The tree holding exactly the view's elements, owned (the view's tree
@@ -100,6 +171,11 @@ fn trimmed(view: View) -> Option<Node> {
 /// Applies `change` to an owned list's view, whose tree it receives owned.
 /// A unique root is rewritten in place and returned (unless the result is
 /// empty); a shared root gives up one reference and a new root is made.
+#[expect(
+    clippy::inline_always,
+    reason = "a `[x, ..rest]` step runs it; once the slicing kernels shared it with the pattern-step helper, it was left out of line, which made a walk a third slower (D-894)"
+)]
+#[inline(always)]
 fn update(list: Root, change: impl FnOnce(View) -> View) -> Root {
     if list.is_unique() {
         stats::record(Event::ListUpdateInPlace);
@@ -225,7 +301,9 @@ pub(crate) fn append(a: Root, b: Root) -> Root {
 
 /// Elements `start..end` of a borrowed list, as a new view sharing its
 /// tree: O(1) (D-053). Both bounds are clamped to `0..=len`, and the
-/// result is empty when `end <= start` (D-298).
+/// result is empty when `end <= start` (D-298). The list it was cut from
+/// still holds the tree, so nothing is released here; an element outside
+/// the view lives until the last list sharing its node dies (D-893).
 pub(crate) fn slice(list: Root, start: usize, end: usize) -> Root {
     let view = list.view();
     let end = end.min(view.len);
@@ -253,7 +331,15 @@ pub(crate) fn slice(list: Root, start: usize, end: usize) -> Root {
 
 /// Elements `start..end` of an owned list, which is consumed: the same view
 /// as [`slice`], but a unique root is changed in place instead of a new
-/// one being allocated (and the old one freed). O(1).
+/// one being allocated (and the old one freed), and the cut elements that
+/// only this list holds are released ([`narrow`]). So a pattern step on a
+/// unique list (`[x, ..rest]`) writes one slot and allocates nothing
+/// (D-634, D-893). O(log n).
+#[expect(
+    clippy::inline_always,
+    reason = "as `update`: the pattern-step helper and the slicing kernels both call it, and out of line it made a `[x, ..rest]` walk a third slower (D-894)"
+)]
+#[inline(always)]
 pub(crate) fn slice_owned(list: Root, start: usize, end: usize) -> Root {
     let len = list.len();
     let end = end.min(len);
@@ -261,18 +347,7 @@ pub(crate) fn slice_owned(list: Root, start: usize, end: usize) -> Root {
     if start == 0 && end == len {
         return list;
     }
-    update(list, |view| {
-        let len = end.saturating_sub(start);
-        View {
-            tree: view.tree,
-            offset: if len == 0 {
-                0
-            } else {
-                view.offset.saturating_add(start)
-            },
-            len,
-        }
-    })
+    update(list, |view| narrow(view, start, end))
 }
 
 /// A count or index argument clamped to `0..=len` (D-298).

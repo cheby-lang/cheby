@@ -268,6 +268,11 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-889     | M2's reading misses D-247 by 9.3% to 9.6% (90.4k-90.7k lines/s per core), from unwinding; reported  |
 | D-890     | mimalloc v3 is the global allocator of `cheby` and AOT executables, not of sanitizer builds         |
 | D-892     | macOS on x86-64 is not supported; CI drops its job, and M6's matrix has five native platforms       |
+| D-893     | An owned slice releases cut elements only it holds; borrowed slices stay views that may keep them   |
+| D-894     | `list::slice`, `take`, `drop` and `split_at` cut a list in place at its last use                    |
+| D-895     | CI's `bench-gate` fails a change that slows the RC group or `rc/list_pipeline` by more than 10%     |
+| D-896     | An `Accepted-Slowdown: D-NNN` trailer citing a decision the change adds passes the gate             |
+| D-897     | `bench-gate`: rows the base cannot run are ungated; runs on `main` are never cancelled              |
 
 ## Open questions
 

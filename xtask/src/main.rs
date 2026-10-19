@@ -107,7 +107,7 @@ enum Cmd {
     /// Measure compile speed on generated projects (D-247)
     BenchCompile(bench::Args),
     /// Measure the run time of the programs under `bench/runtime` (D-718)
-    BenchRun(bench_run::Args),
+    BenchRun(Box<bench_run::Args>),
     /// Run the nightly workflow's sanitizer or Miri job, or some of its
     /// steps, on the pinned nightly (D-721, D-862)
     Sanitize(sanitize::Args),

@@ -3,8 +3,10 @@
 Cheby programs whose run time `cargo xtask bench-run` measures (D-718). They show what a change to
 reference counting, unwinding or the runtime costs at run time, against a baseline recorded before
 the change. D-702 reads the unwinding backends' numbers against a 3% reference. The numbers are
-reported, never enforced. The one thing the command checks is that each checksum matches the
-baseline's.
+reported, and enforced in one place only: CI's `bench-gate` job fails a change that makes the RC
+group, or `rc/list_pipeline` alone, more than 10% slower than its base, unless the change cites a
+decision that accepts the slowdown (D-895, D-896, below). Otherwise the one thing the command checks
+is that each checksum matches the baseline's.
 
 ## Layout
 
@@ -106,19 +108,24 @@ noise, show in the group (release `cheby`, macOS arm64, quiet machine, checkpoin
   channel's one lock, and a profile at four threads is dominated by that lock's slow path and the
   waits behind it. `ping_pong` keeps its time at every thread count and `sieve` scales.
 
-| Option            | Meaning                                                                                     |
-| ----------------- | ------------------------------------------------------------------------------------------- |
-| `--quick`         | One timed run per benchmark, unless `--runs` says otherwise                                 |
-| `--group G`       | `rc`, `fiber` or another directory of `bench/runtime`; `all` (the default) runs every group |
-| `--threads N`     | Sets `CHEBY_THREADS=N` for every run                                                        |
-| `--runs N`        | Timed runs per benchmark (default 5)                                                        |
-| `--baseline FILE` | Compares with the JSON of an earlier run                                                    |
-| `--cheby PATH`    | Measures this binary instead of building `cheby_cli` with `--release`                       |
-| `--commit SHA`    | The commit the measured binary was built from, for the metadata                             |
-| `--env K=V`       | Sets a variable for every run (repeatable)                                                  |
-| `--json OUT`      | Writes the results as JSON                                                                  |
-| `--rust`          | Also times the Rust baselines of the collections group, built with `--release`              |
-| `--rust-bin PATH` | Times the baselines with this prebuilt `cheby_bench_baselines` (implies `--rust`), no cargo |
+| Option                   | Meaning                                                                                     |
+| ------------------------ | ------------------------------------------------------------------------------------------- |
+| `--quick`                | One timed run per benchmark, unless `--runs` says otherwise                                 |
+| `--group G`              | `rc`, `fiber` or another directory of `bench/runtime`; `all` (the default) runs every group |
+| `--threads N`            | Sets `CHEBY_THREADS=N` for every run                                                        |
+| `--runs N`               | Timed runs per benchmark (default 5)                                                        |
+| `--baseline FILE`        | Compares with the JSON of an earlier run                                                    |
+| `--cheby PATH`           | Measures this binary instead of building `cheby_cli` with `--release`                       |
+| `--commit SHA`           | The commit the measured binary was built from, for the metadata                             |
+| `--env K=V`              | Sets a variable for every run (repeatable)                                                  |
+| `--json OUT`             | Writes the results as JSON                                                                  |
+| `--rust`                 | Also times the Rust baselines of the collections group, built with `--release`              |
+| `--rust-bin PATH`        | Times the baselines with this prebuilt `cheby_bench_baselines` (implies `--rust`), no cargo |
+| `--against PATH`         | Times this other `cheby` too, runs interleaved with the measured one's, as the baseline     |
+| `--fail-above P`         | Fails when the geometric mean, or a `--gate` benchmark, is over `P`% above the baseline     |
+| `--gate G/NAME`          | A benchmark whose own ratio `--fail-above` checks too (repeatable)                          |
+| `--accepted-by D`        | A live decision that accepts what `--fail-above` rejects, which is then a note (repeatable) |
+| `--accepted-new-since L` | Each `--accepted-by` decision must be absent from the decision log `L`, the base's          |
 
 For each benchmark the command runs `cheby run` in its directory `--runs` times and times each run
 from spawn to exit, compilation included. It reports the median, the minimum and the maximum. Then it
@@ -131,6 +138,37 @@ change `Δ%` against it, the checksum, the allocation count and the peak bytes. 
 the geometric mean of the ratios (median over baseline median) over the benchmarks the baseline
 holds. The command fails after printing the table if a size or a checksum differs from the
 baseline's.
+
+## The run-time gate
+
+CI's `bench-gate` job builds a release `cheby` for the change and for its base, and runs the command
+below. The base is the base-branch commit that a pull request's merge commit is built on, or the
+previous `main` of a push (`HEAD^1` when a force push left it unreachable). It is built from its own
+worktree, with its own toolchain.
+
+```sh
+cargo xtask bench-run --group rc --runs 7 --cheby target/release/cheby \
+  --against target/gate-base/release/cheby --fail-above 10 --gate rc/list_pipeline
+```
+
+`--against` times both binaries in turn, run by run, on the same runner, so their medians compare
+like for like even on a shared machine whose speed drifts; an absolute threshold would not. The
+command fails when the geometric mean of the five ratios, or `rc/list_pipeline`'s ratio, is above
+1.10 (D-895). `rc/list_pipeline` is gated on its own because list walks are the hottest path a
+change to the runtime can slow by accident: once, a second caller of a helper made the compiler
+stop inlining it, and walks got a third slower with no other sign. The JSON of `--json` holds the
+base's results under `against`. A benchmark that the base cannot run, or for which it prints
+another size or checksum, as when a change uses a new std function in it, gets no baseline: its row
+is reported with a note and left out of the gate (D-897).
+
+A slowdown can be intended, as when a correctness fix costs run time. A commit of the change then
+carries the git trailer `Accepted-Slowdown: D-NNN` in the last paragraph of its message, naming the
+decision-log entry that records the trade-off, which the change must add. The job reads the
+trailers of the change's non-merge commits with git's trailer parser and passes each value as
+written to `--accepted-by`, with `--accepted-new-since` and the base's log. A value that is not a
+live decision of the change's log, or one the base's log already has, fails the job. When they are
+valid, what the gate would reject is printed as a note and the job passes (D-896). A squash merge
+keeps the trailer only if its message keeps it.
 
 `cargo xtask bench-compile` reports compile speed on generated projects (D-247). Since D-718 its
 build rows also show `code KiB`, the machine code the JIT defined, and `RC ops`, the `dup` and `drop`

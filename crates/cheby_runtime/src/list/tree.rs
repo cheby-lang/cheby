@@ -116,6 +116,28 @@ pub(super) fn set(tree: Node, i: usize, elem: Word) -> Node {
     node
 }
 
+/// Replaces element `i` (below the length) with the immediate `word` and
+/// releases the old element, in place, when every node on its path is
+/// unique; returns whether it did. A shared node on the path leaves the
+/// tree unchanged: another tree holds that node and its elements.
+pub(super) fn clear_if_unique(tree: Node, i: usize, word: Word) -> bool {
+    let (mut node, mut i) = (tree, i);
+    loop {
+        if !node.is_unique() {
+            return false;
+        }
+        if node.is_leaf() {
+            let old = node.elem(i);
+            node.put_elem(i, word);
+            drop_word(old);
+            return true;
+        }
+        let (j, before) = node.locate(i);
+        node = node.child(j);
+        i = i.saturating_sub(before);
+    }
+}
+
 /// Appends the owned `elem` at the end. In place along the right edge at
 /// count one, so a unique tree grows without copying (amortized O(1)
 /// allocation per element, O(height) time).

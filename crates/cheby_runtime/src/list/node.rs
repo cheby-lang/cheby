@@ -4,8 +4,12 @@
 //! - **Root** (id 26, [`ROOT`]): the list value. Header, then the tree
 //!   (a leaf or branch word, 0 for none), the view's offset into the tree
 //!   and its length, both raw. A root is a view, so slicing allocates one
-//!   root and shares the tree (D-053). A heap root always has a length
-//!   above 0 and a tree; the empty list is the static root
+//!   root and shares the tree (D-053). An owned slice clears the slots it
+//!   cuts to the tagged `Int` 0 where their path is unique, or, for a cut
+//!   of more than four elements from a unique tree, rebuilds the tree to
+//!   hold just the slice (D-893); a slot under a shared node keeps its
+//!   element. A heap root always has a
+//!   length above 0 and a tree; the empty list is the static root
 //!   `cheby_rt_static_empty_list`.
 //! - **Leaf** (id 27, [`LEAF`]): header, a raw word holding the length
 //!   (low 32 bits) and the capacity (high 32 bits), then `capacity`
@@ -615,15 +619,27 @@ impl Node {
 
     /// The child holding element `i` (below the length), and the number of
     /// elements before that child. Starts at the radix position, a lower
-    /// bound because no child holds more than `M^height` elements, and
-    /// searches the size table from there.
+    /// bound because no child holds more than `M^height` elements, scans
+    /// forward a few children, which finds it in a balanced or nearly
+    /// balanced node, and searches the rest of the size table only after
+    /// that.
     pub(super) fn locate(self, i: usize) -> (usize, usize) {
+        /// Children scanned forward from the radix position before the
+        /// binary search.
+        const SCAN: usize = 4;
         let count = self.slots();
         let shift = BITS.saturating_mul(u32::try_from(self.height()).unwrap_or(u32::MAX));
         let guess = i.checked_shr(shift).unwrap_or(0);
         let (mut lo, mut hi) = (guess.min(count.saturating_sub(1)), count);
         if lo > 0 && self.size_at(lo.saturating_sub(1)) > i {
             lo = 0;
+        }
+        let scan_end = lo.saturating_add(SCAN).min(count);
+        while lo < scan_end && self.size_at(lo) <= i {
+            lo = lo.saturating_add(1);
+        }
+        if lo < scan_end {
+            hi = lo;
         }
         // The first child whose cumulative size exceeds `i`.
         while lo < hi {

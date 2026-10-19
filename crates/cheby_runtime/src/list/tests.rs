@@ -100,6 +100,15 @@ fn check(list: Root, model: &[i64]) {
     check_tree(tree);
 }
 
+/// The slot that an owned slice clears (D-893): the tagged `Int` 0.
+const CLEARED: Word = 1;
+
+/// The reference count of a heap element.
+fn count(word: Word) -> i32 {
+    // SAFETY: tests pass live heap objects.
+    unsafe { crate::object::load_rc(crate::object::word_to_ptr(word)) }
+}
+
 /// The structural invariants of a tree; returns its length.
 fn check_tree(node: Node) -> usize {
     let mut stack = vec![node];
@@ -492,6 +501,143 @@ fn owned_slices_reuse_a_unique_root() {
     });
 }
 
+/// An owned slice releases the elements it cuts that only its list holds
+/// (D-893), which is what lets a channel close at the last use of a sender
+/// walked out of a list (D-205). An element under a node that another list
+/// shares lives until the last list sharing it dies. Each case keeps its
+/// own reference to element 0 and watches its count.
+#[test]
+fn owned_slices_release_the_elements_only_they_hold() {
+    balanced(|| {
+        let null = std::ptr::null_mut();
+        // `[x, ..rest]` on a unique list: the cut slot is released in place.
+        let xs = list(&[0, 1, 2, 3]);
+        let first = ops::get(xs, 0).unwrap();
+        dup_word(first);
+        assert_eq!(count(first), 2);
+        // SAFETY: a live list, given up.
+        let rest = root(unsafe { cheby_rt_list_slice_owned(null, xs.word(), 1, 4) });
+        assert_eq!(rest, xs, "a unique root is reused");
+        assert_eq!(count(first), 1, "the cut element is released");
+        assert_eq!(tree::get(rest.view().tree.unwrap(), 0), CLEARED);
+        check(rest, &[1, 2, 3]);
+        release(rest);
+        drop_word(first);
+
+        // A shared list: nothing is copied, and the element stays while
+        // the slice shares the tree, even after the other holder is gone.
+        let xs = list(&[0, 1, 2, 3]);
+        let first = ops::get(xs, 0).unwrap();
+        dup_word(first);
+        dup_word(xs.word());
+        let before = live();
+        // SAFETY: as above; the test keeps its other reference.
+        let rest = root(unsafe { cheby_rt_list_slice_owned(null, xs.word(), 1, 4) });
+        assert_eq!(live() - before, 1, "only a root");
+        check(rest, &[1, 2, 3]);
+        release(xs);
+        assert_eq!(count(first), 2, "the slice still shares the leaf");
+        release(rest);
+        assert_eq!(count(first), 1);
+        drop_word(first);
+
+        // A unique root over a shared node: the slots under it are kept.
+        let xs = list(&(0..100).collect::<Vec<_>>());
+        let first = ops::get(xs, 0).unwrap();
+        dup_word(first);
+        let leaf = xs.view().tree.unwrap().child(0).dup();
+        let rest = ops::slice_owned(xs, 1, 100);
+        assert_eq!(count(first), 2, "the leaf is shared");
+        leaf.release();
+        release(rest);
+        drop_word(first);
+
+        // A cut larger than the in-place limit restructures a unique tree.
+        let model: Vec<i64> = (0..2_000).collect();
+        let xs = list(&model);
+        let first = ops::get(xs, 0).unwrap();
+        dup_word(first);
+        let rest = ops::slice_owned(xs, 500, 1_500);
+        assert_eq!(count(first), 1);
+        assert_eq!(rest.view().offset, 0, "the tree holds exactly the view");
+        check(rest, &model[500..1_500]);
+        release(rest);
+        drop_word(first);
+    });
+}
+
+/// `list::drop`, `list::take` and `list::slice` on a list at count one,
+/// whose last reference is the `@external` wrapper's, cut it in place and
+/// release what they cut (D-894); on a shared list they are views.
+#[test]
+fn slicing_kernels_release_what_they_cut_at_count_one() {
+    balanced(|| {
+        for (start, end) in [(1, 4), (0, 2), (1, 3)] {
+            let xs = list(&[0, 1, 2, 3]);
+            let first = ops::get(xs, 0).unwrap();
+            let last = ops::get(xs, 3).unwrap();
+            dup_word(first);
+            dup_word(last);
+            // SAFETY: a live list, borrowed; the test plays the wrapper.
+            let cut = root(unsafe { cheby_list_slice(xs.word(), start, end) });
+            assert_eq!(cut, xs, "cut in place");
+            release(xs);
+            let model: Vec<i64> = (start..end).collect();
+            check(cut, &model);
+            // The test's own reference, and the list's if it kept the element.
+            let kept = |at: i64| i32::from(start <= at && at < end) + 1;
+            assert_eq!(count(first), kept(0));
+            assert_eq!(count(last), kept(3));
+            release(cut);
+            drop_word(first);
+            drop_word(last);
+        }
+        let xs = list(&[0, 1, 2, 3]);
+        let first = ops::get(xs, 0).unwrap();
+        dup_word(first);
+        // SAFETY: as above.
+        let tail = root(unsafe { cheby_list_drop(xs.word(), 1) });
+        let head = root(unsafe { cheby_list_take(tail.word(), 2) });
+        release(xs);
+        assert_eq!(count(first), 1, "`drop` released it");
+        check(tail, &[1, 2, 3]);
+        check(head, &[1, 2]);
+        release(tail);
+        release(head);
+        drop_word(first);
+        // `split_at` at count one: the back half reuses the root, and both
+        // halves keep their elements.
+        let xs = list(&[0, 1, 2, 3, 4, 5, 6]);
+        let first = ops::get(xs, 0).unwrap();
+        dup_word(first);
+        // SAFETY: as above.
+        let pair = unsafe { cheby_list_split_at(xs.word(), 2) };
+        release(xs);
+        // SAFETY: a live tuple.
+        let parts = unsafe { crate::values::read_tuple(pair) };
+        assert_eq!(parts[1], xs.word(), "the back half reuses the root");
+        check(root(parts[0]), &[0, 1]);
+        check(root(parts[1]), &[2, 3, 4, 5, 6]);
+        assert_eq!(count(first), 2, "the front half keeps it");
+        drop_word(pair);
+        drop_word(first);
+        // A shared list stays whole: the slice is a new view.
+        let xs = list(&[0, 1, 2, 3]);
+        let first = ops::get(xs, 0).unwrap();
+        dup_word(first);
+        dup_word(xs.word());
+        // SAFETY: as above.
+        let tail = root(unsafe { cheby_list_drop(xs.word(), 1) });
+        assert_ne!(tail, xs);
+        release(xs);
+        check(xs, &[0, 1, 2, 3]);
+        release(xs);
+        assert_eq!(count(first), 2, "the view still shares the leaf");
+        release(tail);
+        drop_word(first);
+    });
+}
+
 /// A push onto a unique list is counted as in place, onto a shared one as
 /// copied, and onto the empty list as neither.
 #[test]
@@ -558,6 +704,10 @@ fn kernels_read_and_cut_with_clamping() {
     balanced(|| {
         let xs = list(&[10, 20, 30, 40]);
         let word = xs.word();
+        // The test keeps using `xs` after each call, so it holds a second
+        // reference, as a caller that is not the list's last user does: at
+        // count one, the slicing kernels would cut it in place (D-894).
+        dup_word(word);
         // SAFETY (every kernel call): live borrowed arguments.
         unsafe {
             assert_eq!(cheby_list_length(word), 4);
@@ -603,6 +753,7 @@ fn kernels_read_and_cut_with_clamping() {
             }
         }
         check(xs, &[10, 20, 30, 40]);
+        release(xs);
         release(xs);
     });
 }
@@ -674,6 +825,28 @@ fn cost_slices_are_o1_views() {
                 release(list);
             }
         }
+    });
+}
+
+/// An owned slice of a unique list writes in place: a walk with
+/// `[x, ..rest]` over it allocates nothing and clears each slot it cuts
+/// (D-634, D-893).
+#[test]
+fn cost_owned_slices_of_a_unique_list_allocate_nothing() {
+    balanced(|| {
+        let n = sized(10_000, 500) as usize;
+        let mut xs = pushed(n as i64);
+        let before = live();
+        for _ in 0..n - 1 {
+            xs = ops::slice_owned(xs, 1, usize::MAX);
+            assert!(live() <= before, "a step allocated");
+        }
+        let view = xs.view();
+        let tree = view.tree.unwrap();
+        for i in 0..view.offset {
+            assert_eq!(tree::get(tree, i), CLEARED, "slot {i} was cut");
+        }
+        release(xs);
     });
 }
 

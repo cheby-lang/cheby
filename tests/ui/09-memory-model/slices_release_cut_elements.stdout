@@ -1,0 +1,2 @@
+walked out: Ok(1) Err(Nil) 1
+cut by std::list: Ok(2) Err(Nil) Err(Nil) 1

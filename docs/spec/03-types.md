@@ -173,12 +173,12 @@ A tuple has at least two elements. `(x)` is a parenthesized expression, and ther
 
 `List<T>` is the built-in sequence type. It is a persistent, immutable RRB-tree vector (D-039), not a linked list. All elements have the same type `T`.
 
-| Operation                 | Cost (required, D-300)               |
-| ------------------------- | ------------------------------------ |
-| index, update at index    | O(log n), effectively constant       |
-| append at either end      | O(log n), amortized O(1) when unique |
-| concatenate, slice        | O(log n)                             |
-| `[first, ..rest]` pattern | O(1), `rest` is a slice view (D-053) |
+| Operation                 | Cost (required, D-300)                                                |
+| ------------------------- | --------------------------------------------------------------------- |
+| index, update at index    | O(log n), effectively constant                                        |
+| append at either end      | O(log n), amortized O(1) when unique                                  |
+| concatenate, slice        | O(log n)                                                              |
+| `[first, ..rest]` pattern | O(log n), effectively constant; `rest` is a slice view (D-053, D-893) |
 
 List literals and patterns are defined in [§5.13](05-expressions.md#513-list-literals) and [§6.6](06-patterns.md#66-list-patterns).
 

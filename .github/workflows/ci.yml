@@ -51,6 +51,17 @@
 # - `bench`: generates benchmark projects and reports, never enforces, the
 #   results (D-247), and times the compiler on them (I1): checking, checking
 #   with code generation, and the edit-to-run latency, in the step summary.
+# - `bench-gate`: the one run-time check that fails CI (D-895). It builds a
+#   release `cheby` for this commit and for its base (the base-branch commit
+#   a pull request's merge commit is built on, or the previous `main` on a
+#   push), each with its own toolchain, times `bench/runtime`'s RC group
+#   with both on the same runner, their runs interleaved, and fails when the
+#   geometric mean, or `rc/list_pipeline` alone, is more than 10% slower
+#   than the base. A benchmark the base cannot run, or for which it prints
+#   another checksum, is reported only (D-897). The table goes to the step
+#   summary. A non-merge commit of the change with the trailer
+#   `Accepted-Slowdown: D-NNN`, naming a live decision that the change
+#   itself adds, turns a failure into a note (D-896).
 # - `sanitize-cfg`: clippy of the runtime with each value of
 #   `--cfg cheby_sanitize` (`address`, `thread`) on stable, on Linux x86-64
 #   and macOS arm64, so the sanitizer annotations that only the nightly
@@ -59,7 +70,7 @@
 # - The C compiler: `cheby_cli` links mimalloc as its global allocator
 #   (D-890), which libmimalloc-sys compiles from C during the build, as
 #   C++17 under MSVC. Every job that builds `cheby_cli` (`test`, `rc-naive`,
-#   `examples` and `bench`) first runs `.github/actions/c-compiler`. It
+#   `examples`, `bench` and `bench-gate`) first runs `.github/actions/c-compiler`. It
 #   installs nothing: it names the image's compiler (gcc on Ubuntu, Xcode's
 #   clang on macOS, MSVC's `cl.exe` for the runner's architecture on
 #   Windows, found through vswhere as the `cc` crate finds it) and fails
@@ -76,9 +87,11 @@ on:
 permissions:
   contents: read
 
+# A newer push to a pull request cancels its older run. Runs on `main` are
+# never cancelled, so every merge is tested and gated (D-897).
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -226,6 +239,66 @@ jobs:
       - name: Compile speed (10k lines) on pull requests
         if: github.event_name != 'push'
         run: cargo xtask bench-compile --quick --summary "$GITHUB_STEP_SUMMARY"
+
+  bench-gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.0"
+      - uses: Swatinem/rust-cache@v2
+      - uses: ./.github/actions/c-compiler
+      - name: Find the base
+        run: |
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            base=$(git merge-base "origin/${{ github.base_ref }}" HEAD)
+          else
+            base="${{ github.event.before }}"
+            # A force push can leave `before` unreachable (or all zeros).
+            if ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+              base=$(git rev-parse HEAD^1)
+              echo "The push's previous head is unreachable; comparing with HEAD^1." \
+                >> "$GITHUB_STEP_SUMMARY"
+            fi
+          fi
+          echo "BASE=$base" >> "$GITHUB_ENV"
+          echo "### Run-time gate against $base" >> "$GITHUB_STEP_SUMMARY"
+      - name: Build both
+        run: |
+          git worktree add "$RUNNER_TEMP/base" "$BASE"
+          # From inside the worktree, so the base's own rust-toolchain.toml
+          # and cargo config apply; without `-D warnings`, which only the
+          # change itself must pass.
+          (cd "$RUNNER_TEMP/base" && RUSTFLAGS= cargo build --release --locked \
+            --package cheby_cli --target-dir "$GITHUB_WORKSPACE/target/gate-base")
+          cargo build --release --locked --package cheby_cli
+      - name: Time the RC group against the base
+        run: |
+          set -o pipefail
+          # The `Accepted-Slowdown` trailers of the change's own commits, as
+          # git parses them (key case-insensitive, last paragraph only). Each
+          # value goes to `--accepted-by` as written, which rejects one that
+          # is not a decision the change adds (D-896).
+          accepted=()
+          while IFS= read -r value; do
+            value=$(echo "$value" | xargs)
+            if [ -n "$value" ]; then
+              accepted+=(--accepted-by "$value")
+            fi
+          done < <(git log --no-merges \
+            --format='%(trailers:key=Accepted-Slowdown,valueonly,separator=%x0A)' \
+            "$BASE..HEAD" | sort -u)
+          if [ ${#accepted[@]} -gt 0 ]; then
+            accepted+=(--accepted-new-since "$RUNNER_TEMP/base/docs/decisions/LOG.md")
+          fi
+          cargo xtask bench-run --group rc --runs 7 --cheby target/release/cheby \
+            --against target/gate-base/release/cheby --commit "$GITHUB_SHA" \
+            --fail-above 10 --gate rc/list_pipeline "${accepted[@]}" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
 
   sanitize-cfg:
     name: sanitize-cfg (${{ matrix.name }})
