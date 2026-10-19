@@ -155,10 +155,11 @@ pub unsafe extern "C" fn cheby_rt_list_slice(
     })
 }
 
-/// `ListSlice` on a list that dies at the match: `list` owned; the O(1)
-/// view of [`cheby_rt_list_slice`], with the root changed in place when
-/// the list's count is one. `list` is consumed even when it raises, as
-/// [`cheby_rt_list_push`] says.
+/// `ListSlice` on a list that dies at the match: `list` owned; the list of
+/// [`cheby_rt_list_slice`], with the root changed in place when the
+/// list's count is one, and the cut elements that only this list holds
+/// released in place (D-634, D-893). `list` is consumed even when it
+/// raises, as [`cheby_rt_list_push`] says.
 ///
 /// # Safety
 ///
@@ -175,7 +176,7 @@ pub unsafe extern "C" fn cheby_rt_list_slice_owned(
         // SAFETY: forwarded from the caller.
         let list = unsafe { root(list) };
         // SAFETY: `ctx` is null or the running fiber's control block.
-        alloc::preflight(unsafe { ctx.as_ref() }, ops::slice_owned_bound);
+        alloc::preflight(unsafe { ctx.as_ref() }, || ops::slice_owned_bound(list));
         owned.disarm();
         let len = ops::len(list);
         ops::slice_owned(list, ops::clamp(start, len), ops::clamp(end, len)).word()

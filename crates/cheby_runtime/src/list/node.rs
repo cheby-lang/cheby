@@ -4,8 +4,12 @@
 //! - **Root** (id 26, [`ROOT`]): the list value. Header, then the tree
 //!   (a leaf or branch word, 0 for none), the view's offset into the tree
 //!   and its length, both raw. A root is a view, so slicing allocates one
-//!   root and shares the tree (D-053). A heap root always has a length
-//!   above 0 and a tree; the empty list is the static root
+//!   root and shares the tree (D-053). An owned slice clears the slots it
+//!   cuts to the tagged `Int` 0 where their path is unique, or, for a cut
+//!   of more than four elements from a unique tree, rebuilds the tree to
+//!   hold just the slice (D-893); a slot under a shared node keeps its
+//!   element. A heap root always has a
+//!   length above 0 and a tree; the empty list is the static root
 //!   `cheby_rt_static_empty_list`.
 //! - **Leaf** (id 27, [`LEAF`]): header, a raw word holding the length
 //!   (low 32 bits) and the capacity (high 32 bits), then `capacity`

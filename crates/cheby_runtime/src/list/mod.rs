@@ -1,6 +1,7 @@
 //! Persistent lists (F3, `std::list`): relaxed radix balanced trees of
-//! uniform words (D-039, ADR-0018) whose root is also a view, so slices
-//! are O(1) (D-053).
+//! uniform words (D-039, ADR-0018) whose root is also a view, so a pattern
+//! step on a unique list changes its root and one slot in place (D-053,
+//! D-634), releasing the element it cuts (D-893).
 //!
 //! - [`node`]: the objects (layout ids 26-28) and their [`CustomKind`]s,
 //!   and the static empty list `cheby_rt_static_empty_list`.

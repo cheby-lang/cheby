@@ -175,7 +175,7 @@ Its result type is `Result<T, Nil>` (D-179).
 
 ### 10.5.3 Closing
 
-There is no `close` function. A channel is closed exactly when its last `Sender` or its last `Receiver` is dropped (D-054, D-087). "Dropped" means the last reference to any handle of that kind is released, which the runtime detects precisely through reference counting ([§9.5](09-memory-model.md#95-handles-and-drop-functions)), on every target (D-100, ADR-0028). A binding releases its handle right after its last use ([§9.2](09-memory-model.md#92-reference-counting)) (D-205, ADR-0036), so a channel closes as soon as no code can use its last handle of that kind again, not when the enclosing function returns.
+There is no `close` function. A channel is closed exactly when its last `Sender` or its last `Receiver` is dropped (D-054, D-087). "Dropped" means the last reference to any handle of that kind is released, which the runtime detects precisely through reference counting ([§9.5](09-memory-model.md#95-handles-and-drop-functions)), on every target (D-100, ADR-0028). A binding releases its handle right after its last use ([§9.2](09-memory-model.md#92-reference-counting)) (D-205, ADR-0036), so a channel closes as soon as no code can use its last handle of that kind again, not when the enclosing function returns. The one exception is a handle cut from a list by a slice, which a slice may keep until it dies ([§9.2](09-memory-model.md#92-reference-counting)) (D-893).
 
 When the last `Receiver` of a channel is dropped, the values still in its buffer are released at once, on the fiber that dropped it, although senders may still hold the channel (D-670).
 

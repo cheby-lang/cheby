@@ -100,6 +100,15 @@ fn check(list: Root, model: &[i64]) {
     check_tree(tree);
 }
 
+/// The slot that an owned slice clears (D-893): the tagged `Int` 0.
+const CLEARED: Word = 1;
+
+/// The reference count of a heap element.
+fn count(word: Word) -> i32 {
+    // SAFETY: tests pass live heap objects.
+    unsafe { crate::object::load_rc(crate::object::word_to_ptr(word)) }
+}
+
 /// The structural invariants of a tree; returns its length.
 fn check_tree(node: Node) -> usize {
     let mut stack = vec![node];
@@ -492,6 +501,71 @@ fn owned_slices_reuse_a_unique_root() {
     });
 }
 
+/// An owned slice releases the elements it cuts that only its list holds
+/// (D-893), which is what lets a channel close at the last use of a sender
+/// walked out of a list (D-205). An element under a node that another list
+/// shares lives until the last list sharing it dies. Each case keeps its
+/// own reference to element 0 and watches its count.
+#[test]
+fn owned_slices_release_the_elements_only_they_hold() {
+    balanced(|| {
+        let null = std::ptr::null_mut();
+        // `[x, ..rest]` on a unique list: the cut slot is released in place.
+        let xs = list(&[0, 1, 2, 3]);
+        let first = ops::get(xs, 0).unwrap();
+        dup_word(first);
+        assert_eq!(count(first), 2);
+        // SAFETY: a live list, given up.
+        let rest = root(unsafe { cheby_rt_list_slice_owned(null, xs.word(), 1, 4) });
+        assert_eq!(rest, xs, "a unique root is reused");
+        assert_eq!(count(first), 1, "the cut element is released");
+        assert_eq!(tree::get(rest.view().tree.unwrap(), 0), CLEARED);
+        check(rest, &[1, 2, 3]);
+        release(rest);
+        drop_word(first);
+
+        // A shared list: nothing is copied, and the element stays while
+        // the slice shares the tree, even after the other holder is gone.
+        let xs = list(&[0, 1, 2, 3]);
+        let first = ops::get(xs, 0).unwrap();
+        dup_word(first);
+        dup_word(xs.word());
+        let before = live();
+        // SAFETY: as above; the test keeps its other reference.
+        let rest = root(unsafe { cheby_rt_list_slice_owned(null, xs.word(), 1, 4) });
+        assert_eq!(live() - before, 1, "only a root");
+        check(rest, &[1, 2, 3]);
+        release(xs);
+        assert_eq!(count(first), 2, "the slice still shares the leaf");
+        release(rest);
+        assert_eq!(count(first), 1);
+        drop_word(first);
+
+        // A unique root over a shared node: the slots under it are kept.
+        let xs = list(&(0..100).collect::<Vec<_>>());
+        let first = ops::get(xs, 0).unwrap();
+        dup_word(first);
+        let leaf = xs.view().tree.unwrap().child(0).dup();
+        let rest = ops::slice_owned(xs, 1, 100);
+        assert_eq!(count(first), 2, "the leaf is shared");
+        leaf.release();
+        release(rest);
+        drop_word(first);
+
+        // A cut larger than the in-place limit restructures a unique tree.
+        let model: Vec<i64> = (0..2_000).collect();
+        let xs = list(&model);
+        let first = ops::get(xs, 0).unwrap();
+        dup_word(first);
+        let rest = ops::slice_owned(xs, 500, 1_500);
+        assert_eq!(count(first), 1);
+        assert_eq!(rest.view().offset, 0, "the tree holds exactly the view");
+        check(rest, &model[500..1_500]);
+        release(rest);
+        drop_word(first);
+    });
+}
+
 /// A push onto a unique list is counted as in place, onto a shared one as
 /// copied, and onto the empty list as neither.
 #[test]
@@ -674,6 +748,28 @@ fn cost_slices_are_o1_views() {
                 release(list);
             }
         }
+    });
+}
+
+/// An owned slice of a unique list writes in place: a walk with
+/// `[x, ..rest]` over it allocates nothing and clears each slot it cuts
+/// (D-634, D-893).
+#[test]
+fn cost_owned_slices_of_a_unique_list_allocate_nothing() {
+    balanced(|| {
+        let n = sized(10_000, 500) as usize;
+        let mut xs = pushed(n as i64);
+        let before = live();
+        for _ in 0..n - 1 {
+            xs = ops::slice_owned(xs, 1, usize::MAX);
+            assert!(live() <= before, "a step allocated");
+        }
+        let view = xs.view();
+        let tree = view.tree.unwrap();
+        for i in 0..view.offset {
+            assert_eq!(tree::get(tree, i), CLEARED, "slot {i} was cut");
+        }
+        release(xs);
     });
 }
 
