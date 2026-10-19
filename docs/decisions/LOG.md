@@ -1385,6 +1385,6 @@ Goal: fix the deadlock where a `Sender` walked out of a list with `[first, ..res
 Open:
 
 - Recover the second descent per pattern step: a fused helper that moves the head out of a unique list in the same descent (it would extend D-520), and a forward scan from the radix guess in `Node::locate` instead of a binary search. Both are measured against the 1.27× of D-893.
-- Read `cargo xtask bench-run`'s `rc/list_pipeline` before and after D-893; its numbers above come from an external suite.
+- ~~Read `cargo xtask bench-run`'s `rc/list_pipeline` before and after D-893; its numbers above come from an external suite.~~ Done: on the Apple M3 of D-640, seven runs each, D-893 as first committed (d768f61) against `main` (20a7a73) took `rc/list_pipeline` from 0.852 s to 1.195 s (+40.3%), the RC group's geometric mean +8.1% and the collections group's +5.5%, led by `multimap` (+17.0%), `sorted_multimap` (+12.9%) and `ordered_multimap` (+11.4%). The external suite had understated the cost.
 - Whether `list::drop`, `list::take` and `list::slice` on a list that dies at the call should get owned variants, as patterns did in D-634, so that they release cut elements too.
 - Tree-sitter: no grammar change. `../zed-cheby` needs nothing.
