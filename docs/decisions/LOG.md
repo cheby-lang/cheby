@@ -1390,3 +1390,15 @@ Open:
 - ~~Read `cargo xtask bench-run`'s `rc/list_pipeline` before and after D-893; its numbers above come from an external suite.~~ Done: on the Apple M3 of D-640, seven runs each, D-893 as first committed (d768f61) against `main` (20a7a73) took `rc/list_pipeline` from 0.852 s to 1.195 s (+40.3%), the RC group's geometric mean +8.1% and the collections group's +5.5%, led by `multimap` (+17.0%), `sorted_multimap` (+12.9%) and `ordered_multimap` (+11.4%). The external suite had understated the cost.
 - ~~Whether `list::drop`, `list::take` and `list::slice` on a list that dies at the call should get owned variants, as patterns did in D-634, so that they release cut elements too.~~ → D-894.
 - Tree-sitter: no grammar change. `../zed-cheby` needs nothing.
+
+## 2026-10-19: Run-time regression gate
+
+Goal: make CI fail a change that slows list walks or the RC group by much, after an inlining change made `[x, ..rest]` walks a third slower without any test noticing.
+
+- **D-895 CI gates the RC group's run time against the base**: A CI job, `bench-gate`, builds a release `cheby` for the change and for its base, which is a pull request's merge base or the previous `main` of a push, on one runner. It runs `cargo xtask bench-run --group rc` with seven runs of each binary, interleaved run by run (`--against`), and fails when the geometric mean of the RC group's ratios, or `rc/list_pipeline`'s ratio alone, is more than 10% above the base's (`--fail-above 10 --gate rc/list_pipeline`). Every other benchmark and group stays reported, never enforced. Why: while D-894 was written, a second caller of `update` made the compiler stop inlining it, which made `[x, ..rest]` walks a third slower, and no test or check noticed; only a manual reading did. Timing both binaries in turn on one runner cancels most of a shared runner's drift, which an absolute threshold could not. 10% sits above the run-to-run spread seen on the Apple M3 of D-640 (about 3% on the group, 6% on one benchmark). Refines D-718.
+
+Open:
+
+- The gate's noise on GitHub's hosted runners is not measured yet. If it fails changes that do not touch the runtime, raise the runs or the threshold rather than drop it.
+- A pull request that changes an RC benchmark's program can make the base print another checksum, which fails the gate. Such a change then needs its baseline reading in the pull request instead.
+- Tree-sitter: no grammar change. `../zed-cheby` needs nothing.

@@ -51,6 +51,12 @@
 # - `bench`: generates benchmark projects and reports, never enforces, the
 #   results (D-247), and times the compiler on them (I1): checking, checking
 #   with code generation, and the edit-to-run latency, in the step summary.
+# - `bench-gate`: the one run-time check that fails CI (D-895). It builds a
+#   release `cheby` for this commit and for its base (a pull request's merge
+#   base, or the previous `main` on a push), times `bench/runtime`'s RC
+#   group with both on the same runner, their runs interleaved, and fails
+#   when the geometric mean, or `rc/list_pipeline` alone, is more than 10%
+#   slower than the base. The table goes to the step summary.
 # - `sanitize-cfg`: clippy of the runtime with each value of
 #   `--cfg cheby_sanitize` (`address`, `thread`) on stable, on Linux x86-64
 #   and macOS arm64, so the sanitizer annotations that only the nightly
@@ -59,7 +65,7 @@
 # - The C compiler: `cheby_cli` links mimalloc as its global allocator
 #   (D-890), which libmimalloc-sys compiles from C during the build, as
 #   C++17 under MSVC. Every job that builds `cheby_cli` (`test`, `rc-naive`,
-#   `examples` and `bench`) first runs `.github/actions/c-compiler`. It
+#   `examples`, `bench` and `bench-gate`) first runs `.github/actions/c-compiler`. It
 #   installs nothing: it names the image's compiler (gcc on Ubuntu, Xcode's
 #   clang on macOS, MSVC's `cl.exe` for the runner's architecture on
 #   Windows, found through vswhere as the `cc` crate finds it) and fails
@@ -226,6 +232,39 @@ jobs:
       - name: Compile speed (10k lines) on pull requests
         if: github.event_name != 'push'
         run: cargo xtask bench-compile --quick --summary "$GITHUB_STEP_SUMMARY"
+
+  bench-gate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.0"
+      - uses: Swatinem/rust-cache@v2
+      - uses: ./.github/actions/c-compiler
+      - name: Find the base
+        run: |
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            base=$(git merge-base "origin/${{ github.base_ref }}" HEAD)
+          else
+            base="${{ github.event.before }}"
+          fi
+          echo "BASE=$base" >> "$GITHUB_ENV"
+          echo "### Run-time gate against $base" >> "$GITHUB_STEP_SUMMARY"
+      - name: Build both
+        run: |
+          git worktree add "$RUNNER_TEMP/base" "$BASE"
+          cargo build --release --locked --package cheby_cli \
+            --manifest-path "$RUNNER_TEMP/base/Cargo.toml" --target-dir target/gate-base
+          cargo build --release --locked --package cheby_cli
+      - name: Time the RC group against the base
+        run: |
+          set -o pipefail
+          cargo xtask bench-run --group rc --runs 7 --cheby target/release/cheby \
+            --against target/gate-base/release/cheby --commit "$GITHUB_SHA" \
+            --fail-above 10 --gate rc/list_pipeline | tee -a "$GITHUB_STEP_SUMMARY"
 
   sanitize-cfg:
     name: sanitize-cfg (${{ matrix.name }})

@@ -3,8 +3,9 @@
 Cheby programs whose run time `cargo xtask bench-run` measures (D-718). They show what a change to
 reference counting, unwinding or the runtime costs at run time, against a baseline recorded before
 the change. D-702 reads the unwinding backends' numbers against a 3% reference. The numbers are
-reported, never enforced. The one thing the command checks is that each checksum matches the
-baseline's.
+reported, and enforced in one place only: CI's `bench-gate` job fails a change that makes the RC
+group, or `rc/list_pipeline` alone, more than 10% slower than its base (D-895, below). Otherwise
+the one thing the command checks is that each checksum matches the baseline's.
 
 ## Layout
 
@@ -119,6 +120,9 @@ noise, show in the group (release `cheby`, macOS arm64, quiet machine, checkpoin
 | `--json OUT`      | Writes the results as JSON                                                                  |
 | `--rust`          | Also times the Rust baselines of the collections group, built with `--release`              |
 | `--rust-bin PATH` | Times the baselines with this prebuilt `cheby_bench_baselines` (implies `--rust`), no cargo |
+| `--against PATH`  | Times this other `cheby` too, runs interleaved with the measured one's, as the baseline     |
+| `--fail-above P`  | Fails when the geometric mean, or a `--gate` benchmark, is over `P`% above the baseline     |
+| `--gate G/NAME`   | A benchmark whose own ratio `--fail-above` checks too (repeatable)                          |
 
 For each benchmark the command runs `cheby run` in its directory `--runs` times and times each run
 from spawn to exit, compilation included. It reports the median, the minimum and the maximum. Then it
@@ -131,6 +135,24 @@ change `Δ%` against it, the checksum, the allocation count and the peak bytes. 
 the geometric mean of the ratios (median over baseline median) over the benchmarks the baseline
 holds. The command fails after printing the table if a size or a checksum differs from the
 baseline's.
+
+## The run-time gate
+
+CI's `bench-gate` job builds a release `cheby` for the change and for its base, the merge base of a
+pull request or the previous `main` of a push, and runs:
+
+```sh
+cargo xtask bench-run --group rc --runs 7 --cheby target/release/cheby \
+  --against target/gate-base/release/cheby --fail-above 10 --gate rc/list_pipeline
+```
+
+`--against` times both binaries in turn, run by run, on the same runner, so their medians compare
+like for like even on a shared machine whose speed drifts; an absolute threshold would not. The
+command fails when the geometric mean of the five ratios, or `rc/list_pipeline`'s ratio, is above
+1.10 (D-895). `rc/list_pipeline` is gated on its own because list walks are the hottest path a
+change to the runtime can slow by accident: once, a second caller of a helper made the compiler
+stop inlining it, and walks got a third slower with no other sign. The JSON of `--json` holds the
+base's results under `against`.
 
 `cargo xtask bench-compile` reports compile speed on generated projects (D-247). Since D-718 its
 build rows also show `code KiB`, the machine code the JIT defined, and `RC ops`, the `dup` and `drop`

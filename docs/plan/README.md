@@ -270,6 +270,7 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-892     | macOS on x86-64 is not supported; CI drops its job, and M6's matrix has five native platforms       |
 | D-893     | An owned slice releases cut elements only it holds; borrowed slices stay views that may keep them   |
 | D-894     | `list::slice`, `take`, `drop` and `split_at` cut a list in place at its last use                    |
+| D-895     | CI's `bench-gate` fails a change that slows the RC group or `rc/list_pipeline` by more than 10%     |
 
 ## Open questions
 
