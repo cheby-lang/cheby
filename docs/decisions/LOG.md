@@ -1404,3 +1404,14 @@ Open:
 - The gate's noise on GitHub's hosted runners is not measured yet. If it fails changes that do not touch the runtime, raise the runs or the threshold rather than drop it.
 - ~~A pull request that changes an RC benchmark's program can make the base print another checksum, which fails the gate. Such a change then needs its baseline reading in the pull request instead.~~ → D-897.
 - Tree-sitter: no grammar change. `../zed-cheby` needs nothing.
+
+## 2026-10-19: The `check` fuzz target under LeakSanitizer
+
+Goal: make the nightly `fuzz (check)` job pass, after its first scheduled run failed on the initial corpus with LeakSanitizer reports of the interners' entries.
+
+- **D-898 How the fuzz targets build and run**: The nightly fuzz step sets `RUSTFLAGS='--cfg cheby_sanitize="address"'`, which cargo-fuzz appends to its own `-Zsanitizer=address`, and passes `-rss_limit_mb=6144` to every target. `check` also runs with `ASAN_OPTIONS=detect_leaks=0`, which cargo-fuzz merges with its own options, and the workflow's header says why. The commands in `fuzz/Cargo.toml` and `fuzz/fuzz_targets/check.rs` say the same. Why: `cargo fuzz` builds under AddressSanitizer, but without the cfg the runtime's fiber switches, which constant evaluation reaches, are not told to the sanitizer, and the interners' marks (D-881) are no-ops, so libFuzzer's leak check reported every name and type a check's dropped `Globals` leaves behind. With the cfg, a run over the seed corpus still reported a constant's result that D-539 makes static, held only by the JIT's data memory, which LeakSanitizer does not scan. That is the cause for which D-881 turns LeakSanitizer off for `conformance`, so `check` takes the same per-step option that D-863 allows. It goes through `ASAN_OPTIONS`, because libFuzzer's `-detect_leaks=0` only stops the check after each input and leaves the one at exit, which reported 174 MB of frozen constants after a 600-second run. Telling LeakSanitizer about frozen constants, which would keep it on, stays open as in D-881. Every input builds new interners and new constants and keeps them, about 40 KB, so RSS grows with the input count: 306 MB to 801 MB in 120 seconds at 31 inputs per second on Linux arm64, past libFuzzer's default 2048 MB within a 900-second run. The hosted runners have 16 GB. Sharing one `Globals` across inputs was rejected as a driver API change made only for the fuzzer. Refines D-781, applies D-863 and D-881.
+
+Open:
+
+- Telling LeakSanitizer about frozen constants (D-539), for example with `__lsan_ignore_object` in `alloc::freeze` under the address cfg, would let `check` and the sanitizer jobs' `conformance` step run with it on (D-881).
+- Tree-sitter: no grammar change. `../zed-cheby` needs nothing.

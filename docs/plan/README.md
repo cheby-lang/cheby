@@ -273,6 +273,7 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-895     | CI's `bench-gate` fails a change that slows the RC group or `rc/list_pipeline` by more than 10%     |
 | D-896     | An `Accepted-Slowdown: D-NNN` trailer citing a decision the change adds passes the gate             |
 | D-897     | `bench-gate`: rows the base cannot run are ungated; runs on `main` are never cancelled              |
+| D-898     | `cargo fuzz` builds with the address cfg and a 6 GB RSS limit; `check` runs without LeakSanitizer   |
 
 ## Open questions
 

@@ -14,7 +14,20 @@
 #   reference counting against Perceus on generated programs (D-718),
 #   which runs a debug `cheby` built with the stable toolchain and copied
 #   aside first. A finding fails the job and uploads fuzz/artifacts
-#   (D-781).
+#   (D-781). `cargo fuzz` builds under AddressSanitizer, so the step adds
+#   `--cfg cheby_sanitize="address"` to its `RUSTFLAGS`, which cargo-fuzz
+#   appends to its own: the fiber switches that constant evaluation makes
+#   are told to the sanitizer, and so are the interners' entries, leaked
+#   on purpose, as in the sanitizer jobs (D-898). LeakSanitizer is off
+#   for `check` (`ASAN_OPTIONS=detect_leaks=0`, which cargo-fuzz merges
+#   with its own and which also covers the check at exit that libFuzzer's
+#   `-detect_leaks=0` leaves on, D-898), as for `conformance` below:
+#   `cheby check` evaluates every constant (D-459), and the results that
+#   D-539 makes static are held only by the JIT's data memory, which
+#   LeakSanitizer does not scan. Every input of `check` builds new
+#   interners and new constants and keeps them, about 40 KB, so the run's
+#   RSS grows with the input count, and `-rss_limit_mb=6144` replaces
+#   libFuzzer's 2048 (D-898).
 # - `sanitizer (thread)` and `sanitizer (address)`: ThreadSanitizer and
 #   AddressSanitizer (with LeakSanitizer) on Linux x86-64 (D-721). Each runs
 #   `cargo xtask sanitize <s>`, the one driver that the local runs use too
@@ -166,9 +179,13 @@ jobs:
           echo "CHEBY_DIFF_BIN=$RUNNER_TEMP/rc/cheby" >> "$GITHUB_ENV"
       - name: Fuzz ${{ matrix.target }} for ${{ env.FUZZ_SECONDS }} seconds
         working-directory: fuzz
+        env:
+          RUSTFLAGS: '--cfg cheby_sanitize="address"'
+          ASAN_OPTIONS: ${{ matrix.target == 'check' && 'detect_leaks=0' || '' }}
         run: >-
           cargo +${{ env.NIGHTLY }} fuzz run ${{ matrix.target }} --
           -max_total_time=${{ env.FUZZ_SECONDS }} -timeout=600
+          -rss_limit_mb=6144
       - name: Upload findings
         if: failure()
         uses: actions/upload-artifact@v4
