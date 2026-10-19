@@ -16,6 +16,7 @@ is that each checksum matches the baseline's.
 | `rc/`              | The RC group: reference counting and in-place updates (D-718) |
 | `fiber/`           | The fiber group: fibers, scopes and channels (M2)             |
 | `collections/`     | The collections group: the seven Cheby collections (D-664)    |
+| `json/`            | The JSON group: parsing, decoding and writing JSON (D-899)    |
 | `baseline-m1.json` | M1's results for the RC group, the committed reference        |
 
 The RC group has five benchmarks:
@@ -57,6 +58,18 @@ group twice from one binary: under `CHEBY_RC=naive` (no borrowing, reuse or fusi
 stands for M1's naive counting since M1's binary has none of these modules, and under Perceus. The
 naive reading becomes `baseline-collections.json`, the reference for M6's second measurement
 (D-336, D-854).
+
+The JSON group times `std::json` on documents that each program writes itself, so it needs no input
+file (D-899). Both documents have escaped strings, `\u` escapes with surrogate pairs, floats with
+fractions and exponents, nested arrays and `null`; `value` also has integers past 2^53. Each program
+prints the FNV-1a hash of the text it writes last. The defaults ran 1.4 s and 1.6 s with `std::json`
+as it was when the group was added (release `cheby`, Apple M3). The group is reported, never gated,
+and has no baseline file:
+
+| Benchmark   | Default | What it does                                                                                                       |
+| ----------- | ------- | ------------------------------------------------------------------------------------------------------------------ |
+| `roundtrip` | 20,000  | records (4.7 MB) read with `json::parse` and record decoders, the active ones changed and written with `to_string` |
+| `value`     | 9,000   | items read with `parse_value`, written with `to_pretty_string`, and read back to an equal value                    |
 
 A group is a directory of `bench/runtime`, and its benchmarks are the subdirectories that hold a
 `cheby.toml`. A new group or benchmark needs no change to the command.

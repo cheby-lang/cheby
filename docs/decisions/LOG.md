@@ -1415,3 +1415,15 @@ Open:
 
 - Telling LeakSanitizer about frozen constants (D-539), for example with `__lsan_ignore_object` in `alloc::freeze` under the address cfg, would let `check` and the sanitizer jobs' `conformance` step run with it on (D-881).
 - Tree-sitter: no grammar change. `../zed-cheby` needs nothing.
+
+## 2026-10-19: Faster std::json
+
+Goal: make `std::json` parse, decode and write faster, in Cheby first, without changing what any of it returns or prints.
+
+- **D-899 A JSON group in the runtime benchmarks, reported and ungated**: `bench/runtime/json/` holds two programs that `cargo xtask bench-run --group json` times. `roundtrip` writes 20,000 records as JSON text (4.7 MB), reads them with `json::parse` and record decoders, changes the active ones and writes them with `json::to_string`. `value` writes 9,000 items, reads them with `json::parse_value`, writes the value with `json::to_pretty_string` and reads that back to an equal value. Each program writes its own input, with escaped strings, `\u` escapes with surrogate pairs, floats with fractions and exponents, nested arrays and `null`, and in `value` integers past 2^53, and prints the FNV-1a hash of the text it writes last. CI's `bench-gate` still runs only the RC group (D-895), so the JSON group is reported, never enforced, and has no baseline file. Why: the only JSON timing so far came from the external cheby-compare suite's `json_roundtrip`, which this repository cannot run and whose 15 MB input has no escapes, floats or pretty output. With `std::json` as it was when the group was added, on the Apple M3 of D-640 with a release `cheby`, `roundtrip` takes 1.37 s, of which writing the input is 0.08 s, and `value` takes 1.58 s, inside the 0.5 to 2 seconds that `bench/runtime/README.md` asks of a default. Gating the group was rejected for now: this session's rewrites change its times on purpose, and a gate on a second group would need its own threshold decision under D-895. Refines D-718.
+
+Open:
+
+- Rewrite the parser over bytes, the writer over one string, and the decoders with paths built only on error, each as its own measured step that keeps the std tests added in this session passing.
+- After the rewrites, a static `Some(U8)` table for `bytes::get`, and narrow package-visible kernels if profiles still show them, each with its own decision.
+- Tree-sitter: no grammar change. `../zed-cheby` needs nothing.

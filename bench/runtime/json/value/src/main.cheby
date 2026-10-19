@@ -1,0 +1,116 @@
+//! Runtime benchmark of the JSON group: untyped values.
+//!
+//! The program writes a document of items as compact JSON text, each item
+//! a few levels deep, with strings that need escapes, integers on both
+//! sides of 2^53, floats, booleans, `null` and empty arrays and objects.
+//! It reads the text with `json::parse_value`, writes the value with
+//! `json::to_pretty_string`, and reads that text back, which must give the
+//! same value. The number of items is the first program argument, and
+//! `main` prints the FNV-1a hash of the pretty text's bytes.
+
+import std::bytes
+import std::env
+import std::int
+import std::io
+import std::json
+import std::list
+import std::string
+
+/// The number of items when no argument is given.
+const default_size: Int = 9_000
+
+const fnv_offset: Int = 2166136261
+
+const fnv_prime: Int = 16777619
+
+fn main() {
+  let n = size(env::args())
+  let assert Ok(value) = json::parse_value(document(n))
+  let pretty = json::to_pretty_string(value)
+  let assert Ok(again) = json::parse_value(pretty)
+  // let assert, not assert: a failed == would print both whole values.
+  let assert True = again == value
+  let checksum = bytes::fold(bytes::from_string(pretty), fnv_offset, fnv1a_step)
+  io::println("size: {n}")
+  io::println("checksum: {checksum}")
+}
+
+/// The size from the first program argument, or `default_size`.
+fn size(args: List<String>) -> Int {
+  case args {
+    [] => default_size
+    [first, ..] => {
+      let assert Ok(n) = int::parse(first)
+      n
+    }
+  }
+}
+
+/// One step of FNV-1a over 32 bits. The product stays below 2^57.
+fn fnv1a_step(hash: Int, byte: U8) -> Int {
+  ((hash ^ int::from_u8(byte)) * fnv_prime) & 0xFFFF_FFFF
+}
+
+// Writing the input
+
+/// A pseudo-random number below 2^31 - 1 for item `i` and `salt`: two
+/// steps of the MINSTD generator from a seed made of both. Every product
+/// stays below 2^53.
+fn mix(i: Int, salt: Int) -> Int {
+  let seed = ((i + 1) * 7919 + salt * 104729) % 2147483647
+  seed * 48271 % 2147483647 * 48271 % 2147483647
+}
+
+/// The document: an object with the item count and an array of `n` items.
+fn document(n: Int) -> String {
+  let items = list::map(list::range(0, n), item_text)
+  "\{\"count\":{n},\"items\":[" + string::join(items, ",") + "]}"
+}
+
+/// Item `i` as compact JSON text.
+fn item_text(i: Int) -> String {
+  let kind = mix(i, 1) % 5
+  let small = mix(i, 2) % 100000 - 50000
+  let big = case i % 3 {
+    // Beyond 2^53, so it reads as a `Float`.
+    0 => "9007199254740993"
+    1 => "-9007199254740991"
+    _ => "{small}000000"
+  }
+  let ratio = mix(i, 3) % 10000
+  let values = list::map(list::range(0, mix(i, 4) % 8), fn(k) {
+    case k % 4 {
+      0 => int::show(mix(i, 10 + k) % 1000)
+      1 => "{k}.5e-3"
+      2 => "true"
+      _ => "null"
+    }
+  })
+  let matrix = list::map(list::range(0, mix(i, 5) % 4), fn(row) {
+    let cells = list::map(list::range(0, 3), fn(column) { int::show(row * 3 + column - i % 7) })
+    "[" + string::join(cells, ",") + "]"
+  })
+  let fields = [
+    "\"id\":{i}",
+    "\"kind\":\"k{kind}\"",
+    "\"label\":" + label_text(i),
+    "\"big\":{big}",
+    "\"ratio\":0.{ratio}",
+    "\"flags\":[true,false,null]",
+    "\"nested\":\{\"level\":\{\"values\":[" + string::join(values, ",") + r#"],"empty":{},"list":[]}}"#,
+    "\"matrix\":[" + string::join(matrix, ",") + "]",
+  ]
+  "\{" + string::join(fields, ",") + "}"
+}
+
+/// A JSON string for item `i`, some of them with escapes.
+fn label_text(i: Int) -> String {
+  let plain = "item {i} of kind " + int::show(mix(i, 6) % 50)
+  let escaped = case i % 4 {
+    0 => plain + r#" \"quoted\" \\ \/"#
+    1 => plain + r" line\nbreak\ttab \u00e9\u0001"
+    2 => plain + r" \ud83d\ude00 é"
+    _ => plain
+  }
+  "\"" + escaped + "\""
+}

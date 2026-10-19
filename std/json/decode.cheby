@@ -259,3 +259,10 @@ test "a decode error shows what was expected, found and where" {
   let top = Error { expected: "Array", found: "Null", path: [] }
   assert "{top}" == "expected Array, found Null"
 }
+
+test "a decode error's path is joined with dots, empty keys included" {
+  let empty_key = Error { expected: "Array", found: "Int", path: [""] }
+  assert show(empty_key) == "expected Array, found Int at "
+  let dotted = Error { expected: "Int", found: "Bool", path: ["a.b", "0", ""] }
+  assert show(dotted) == "expected Int, found Bool at a.b.0."
+}
