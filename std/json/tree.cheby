@@ -50,15 +50,6 @@ fn kind(value: Tree) -> String {
   }
 }
 
-/// Returns the value of the last member named `name`, as `decode::field` reads it (D-223).
-fn member(members: List<(String, Tree)>, name: String) -> Option<Tree> {
-  case members {
-    [] => None
-    [.., (key, value)] when key == name => Some(value)
-    [..front, _] => member(front, name)
-  }
-}
-
 // Converting
 
 /// What `rebuild` finds in one node of a document: a leaf already converted,
