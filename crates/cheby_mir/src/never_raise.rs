@@ -16,6 +16,7 @@
 /// No kernel that can suspend may be listed: it can raise a cancellation (D-688).
 pub const NEVER_RAISE_KERNELS: &[&str] = &[
     "cheby_bytes_get",
+    "cheby_bytes_json_plain_end",
     "cheby_bytes_length",
     "cheby_bytes_read_i8",
     "cheby_io_eprint",

@@ -432,34 +432,9 @@ priv fn close_container<T>(
 
 // Strings
 
-/// Returns the offset of the first byte from `i` that is `"`, `\`, a
-/// control character or past the end. It reads four bytes at a time while
-/// four remain. Every byte of a multi-byte UTF-8 sequence is at least 0x80,
-/// so none of them stops it.
+/// The end of the plain run from `i` (D-904).
 priv fn plain_end(data: bytes::Bytes, i: Int) -> Int {
-  case bytes::read_u32_le(data, i) {
-    Some(word) => case {
-      !is_plain(word & 0xFF) => i
-      !is_plain((word >> 8) & 0xFF) => i + 1
-      !is_plain((word >> 16) & 0xFF) => i + 2
-      !is_plain(word >> 24) => i + 3
-      _ => plain_end(data, i + 4)
-    }
-    None => plain_end_bytes(data, i)
-  }
-}
-
-/// Tells whether the byte `byte` can stand for itself in a string.
-priv fn is_plain(byte: U32) -> Bool {
-  byte >= 0x20 && byte != 0x22 && byte != 0x5C
-}
-
-/// Returns `plain_end`'s offset one byte at a time, in the last three bytes.
-priv fn plain_end_bytes(data: bytes::Bytes, i: Int) -> Int {
-  case bytes::get(data, i) {
-    Some(byte) when byte >= 0x20 && byte != 0x22 && byte != 0x5C => plain_end_bytes(data, i + 1)
-    _ => i
-  }
+  bytes::json_plain_end(data, i)
 }
 
 /// Returns the text of the bytes from `start` to `end`.

@@ -173,6 +173,30 @@ pub unsafe extern "C" fn cheby_bytes_get(data: Word, position: i64) -> Word {
         .map_or_else(values::none, |&byte| values::some_u8(byte))
 }
 
+/// `bytes::json_plain_end`, package-visible for `std::json`'s parser
+/// (D-900, D-904): the offset of the first byte at or after `from` that is
+/// `"`, `\` or below 0x20, or the length when there is none. `from` is
+/// clamped to `0..=length` as `slice` clamps its bounds (D-298, D-334).
+/// Every byte of a multi-byte UTF-8 sequence is 0x80 or more, so none of
+/// them stops the scan. O(k) in the bytes scanned; it allocates nothing
+/// and never raises.
+///
+/// # Safety
+///
+/// `data` is a live `Bytes`, borrowed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cheby_bytes_json_plain_end(data: Word, from: i64) -> i64 {
+    // SAFETY: forwarded from the caller.
+    let data = unsafe { arg(data) };
+    let start = clamp(from, data.len());
+    let rest = data.get(start..).unwrap_or_default();
+    let found = rest
+        .iter()
+        .position(|&byte| byte < 0x20 || byte == b'"' || byte == b'\\')
+        .unwrap_or(rest.len());
+    i64::try_from(start.saturating_add(found)).unwrap_or(i64::MAX)
+}
+
 /// `bytes::slice`: positions `start..end`, clamped (D-298, D-319, D-334),
 /// in place at count one (D-525). O(end - start); the whole of `data` is
 /// `data` itself, shared.
@@ -473,7 +497,7 @@ pub(super) fn all() -> Vec<Entry> {
             ]
         };
     }
-    let fixed: [Entry; 12] = [
+    let fixed: [Entry; 13] = [
         ("cheby_bytes_new", cheby_bytes_new as *const u8, &[], W),
         (
             "cheby_bytes_from_list",
@@ -494,6 +518,12 @@ pub(super) fn all() -> Vec<Entry> {
             I,
         ),
         ("cheby_bytes_get", cheby_bytes_get as *const u8, &[W, I], W),
+        (
+            "cheby_bytes_json_plain_end",
+            cheby_bytes_json_plain_end as *const u8,
+            &[W, I],
+            I,
+        ),
         (
             "cheby_bytes_slice",
             cheby_bytes_slice as *const u8,

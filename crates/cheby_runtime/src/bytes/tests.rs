@@ -236,6 +236,47 @@ fn get_and_read_i8_return_static_somes() {
     release(data);
 }
 
+/// `json_plain_end` stops at `"`, `\` and every byte below 0x20, never at
+/// a byte of 0x80 or more, clamps `from` as `slice` clamps its bounds, and
+/// allocates nothing (D-904).
+#[test]
+fn json_plain_end_stops_at_json_specials_and_clamps() {
+    let end = |bytes: &[u8], from: i64| {
+        let word = new_bytes(bytes);
+        let before = live();
+        // SAFETY: a live `Bytes`, borrowed.
+        let got = unsafe { cheby_bytes_json_plain_end(word, from) };
+        assert_eq!(live(), before, "json_plain_end allocates nothing");
+        release(word);
+        got
+    };
+    balanced(|| {
+        let text = "ab\"c\\d\u{1}é".as_bytes();
+        for (from, want) in [
+            (0, 2),
+            (3, 4),
+            (5, 6),
+            (7, 9),
+            (9, 9),
+            (99, 9),
+            (-4, 2),
+            (i64::MIN, 2),
+            (i64::MAX, 9),
+        ] {
+            assert_eq!(end(text, from), want, "from {from}");
+        }
+        assert_eq!(end(&[], 0), 0);
+        assert_eq!(end(&[], -1), 0);
+        assert_eq!(end(&[], 5), 0);
+        for byte in 0..=255_u8 {
+            let stops = byte < 0x20 || byte == b'"' || byte == b'\\';
+            let passed = i64::from(!stops);
+            assert_eq!(end(&[byte], 0), passed, "{byte:#x}");
+            assert_eq!(end(&[b'a', byte, b'"'], 0), 1 + passed, "{byte:#x}");
+        }
+    });
+}
+
 #[test]
 fn slice_clamps_its_bounds() {
     balanced(|| {
@@ -1024,10 +1065,10 @@ proptest! {
 #[test]
 fn every_kernel_is_registered_once() {
     let all = all();
-    assert_eq!(all.len(), 36);
+    assert_eq!(all.len(), 37);
     let mut names: Vec<_> = all.iter().map(|entry| entry.0).collect();
     names.sort_unstable();
     names.dedup();
-    assert_eq!(names.len(), 36);
+    assert_eq!(names.len(), 37);
     assert!(all.iter().all(|entry| !entry.1.is_null()));
 }

@@ -1,8 +1,9 @@
-//! `std::bytes` kernels (F2, D-095, D-316, D-334): the 36
+//! `std::bytes` kernels (F2, D-095, D-316, D-334): the 37
 //! `@external(native, …)` functions of `std/bytes.cheby`, over `Bytes`
-//! objects. A `Bytes` has the shape of a `String` with layout id 2
-//! (D-454): `len`, `cap`, then the bytes; [`crate::string`] holds the
-//! layout and the uniqueness-aware growth.
+//! objects. One of them, `json_plain_end`, is package-visible:
+//! `std::json`'s parser uses it (D-904). A `Bytes` has the shape of a
+//! `String` with layout id 2 (D-454): `len`, `cap`, then the bytes;
+//! [`crate::string`] holds the layout and the uniqueness-aware growth.
 //!
 //! - `kernels`: the C entry points. Arguments are borrowed and results
 //!   owned (D-187); results are built through [`crate::values`],

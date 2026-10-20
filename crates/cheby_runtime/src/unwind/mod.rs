@@ -1078,6 +1078,7 @@ mod tests {
         ("bytes/kernels.rs", "cheby_bytes_length", READS),
         ("bytes/kernels.rs", "cheby_bytes_get", READS_STATIC),
         ("bytes/kernels.rs", "cheby_bytes_read_i8", READS_STATIC),
+        ("bytes/kernels.rs", "cheby_bytes_json_plain_end", READS),
         ("num/int.rs", "$wfn", ARITHMETIC),
         ("num/int.rs", "wrapping_add", ARITHMETIC),
         ("num/int.rs", "wrapping_sub", ARITHMETIC),
