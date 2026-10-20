@@ -26,6 +26,7 @@ Detail level: workstreams with outcomes. This file is refined into tasks when M4
 ### 4.3 JS runtime (`runtime-js/`)
 
 - Collection and string kernels (D-274), equality, hashing and debug printing with the same type descriptors as native (D-237).
+- Measure `std::json` on Node. Its parser and writer work on UTF-8 bytes (D-900), so on JS each parsed or written string costs a UTF-8 decode or encode through `string::from_bytes` or `bytes::from_string`. If those conversions dominate, give the byte steps JS kernels that work on the string directly.
 - Cooperative fiber scheduler over generators, scopes, cancellation at real suspension points, channels, selectors and timers (§12.3.1, D-232).
 - Handle reference counting where Perceus would count, and the handle flag for values that may contain handles (D-100, D-172, ADR-0028).
 - Callbacks from foreign code as new detached fibers (D-191).
