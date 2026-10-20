@@ -20,8 +20,9 @@
 use proptest::prelude::*;
 
 use super::kernels::*;
-use crate::abi::Word;
+use crate::abi::{self, Word};
 use crate::alloc::live;
+use crate::object::{load_rc, word_to_ptr};
 use crate::string::{self, new_bytes, new_string};
 use crate::{list, rc, values};
 
@@ -183,6 +184,56 @@ fn get_reads_one_byte_or_none() {
         }
         assert_eq!(read(cheby_bytes_get, &[], 0, byte), None);
     });
+}
+
+/// `get` and `read_i8` return the static `Some` of their byte (D-902):
+/// nothing is allocated, a call gives the same word every time, counting
+/// never writes it, and `U8` and `I8` of one value share the object.
+#[test]
+fn get_and_read_i8_return_static_somes() {
+    let bytes: Vec<u8> = (0..=255).collect();
+    let data = new_bytes(&bytes);
+    let before = live();
+    for (i, &byte) in bytes.iter().enumerate() {
+        let position = i as i64;
+        // SAFETY: a live `Bytes`, borrowed, twice.
+        let (got, again) = unsafe {
+            (
+                cheby_bytes_get(data, position),
+                cheby_bytes_get(data, position),
+            )
+        };
+        assert_eq!(got, again, "one static object per byte");
+        // SAFETY: the word of a live object.
+        assert_eq!(unsafe { values::layout_of(got) }, Some(abi::layout::SOME));
+        // SAFETY: as above.
+        assert_eq!(unsafe { load_rc(word_to_ptr(got)) }, abi::RC_STATIC);
+        // SAFETY: a live `Option<U8>`; counting a static object writes
+        // nothing.
+        unsafe {
+            assert_eq!(values::read_option(got).map(values::word_to_u8), Some(byte));
+            rc::dup(got);
+            rc::drop(got);
+            rc::drop(got);
+            assert_eq!(load_rc(word_to_ptr(got)), abi::RC_STATIC);
+        }
+        // SAFETY: a live `Bytes`, borrowed.
+        let signed = unsafe { cheby_bytes_read_i8(data, position) };
+        // SAFETY: a live `Option<I8>`.
+        let value = unsafe { values::read_option(signed) }.map(|word| {
+            // SAFETY: a live `I8` word.
+            unsafe { values::word_to_i64(word) }
+        });
+        assert_eq!(value, Some(i64::from(byte.cast_signed())));
+        if byte < 128 {
+            assert_eq!(signed, got, "a U8 and an I8 of one value share it");
+        }
+    }
+    // SAFETY: a live `Bytes`, borrowed.
+    let outside = unsafe { cheby_bytes_get(data, 256) };
+    assert_eq!(outside, values::none());
+    assert_eq!(live(), before, "get and read_i8 allocate nothing");
+    release(data);
 }
 
 #[test]

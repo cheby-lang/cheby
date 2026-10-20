@@ -15,7 +15,9 @@
 /// raises: it is on the runtime's `NEVER_UNWINDS` list, which `never_raise_table_matches` checks.
 /// No kernel that can suspend may be listed: it can raise a cancellation (D-688).
 pub const NEVER_RAISE_KERNELS: &[&str] = &[
+    "cheby_bytes_get",
     "cheby_bytes_length",
+    "cheby_bytes_read_i8",
     "cheby_io_eprint",
     "cheby_io_eprintln",
     "cheby_io_print",

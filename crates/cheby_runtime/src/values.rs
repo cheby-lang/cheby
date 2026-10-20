@@ -146,6 +146,29 @@ pub fn some(value: Word) -> Word {
     one_field(layout::SOME, value)
 }
 
+/// `Some(byte)` of a `U8`: a static object, so nothing is allocated
+/// and nothing can raise (D-902).
+///
+/// The table holds every `U8`, so the fatal branch cannot run. It is fatal
+/// rather than an allocation because `bytes::get` runs unguarded on the
+/// never-raise table: an allocation could raise with no unwind edge.
+#[must_use]
+pub fn some_u8(byte: u8) -> Word {
+    object::static_some_small(i64::from(byte))
+        .unwrap_or_else(|| fatal(format_args!("no static Some for the U8 {byte}")))
+}
+
+/// `Some(value)` of an `I8`: a static object, so nothing is allocated
+/// and nothing can raise (D-902).
+///
+/// The table holds every `I8`, so the fatal branch cannot run; see
+/// [`some_u8`] for why it is fatal.
+#[must_use]
+pub fn some_i8(value: i8) -> Word {
+    object::static_some_small(i64::from(value))
+        .unwrap_or_else(|| fatal(format_args!("no static Some for the I8 {value}")))
+}
+
 /// The static `None`.
 #[must_use]
 pub fn none() -> Word {

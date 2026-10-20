@@ -275,6 +275,7 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-897     | `bench-gate`: rows the base cannot run are ungated; runs on `main` are never cancelled              |
 | D-898     | `cargo fuzz` builds with the address cfg and a 6 GB RSS limit; `check` runs without LeakSanitizer   |
 | D-899     | `bench/runtime/json/` times `std::json` (`roundtrip`, `value`); reported, never gated               |
+| D-902     | `bytes::get` and `bytes::read_i8` return static `Some` objects, so they never allocate or raise     |
 
 ## Open questions
 

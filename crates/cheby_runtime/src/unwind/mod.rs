@@ -1025,6 +1025,7 @@ mod tests {
     const COUNTS: &str = "adds one to a counter of the current domain (D-768)";
     const LIST_GET: &str = "reads an element whose index lowering checked";
     const STATIC: &str = "returns a static object";
+    const READS_STATIC: &str = "reads its arguments and returns a static object (D-902)";
     const ARITHMETIC: &str = "arithmetic on unboxed numbers";
     const FLOAT_MATH: &str = "float arithmetic whose Rust temporaries never raise";
     const PRINTS: &str = "a failed write exits (D-306) and nothing is allocated";
@@ -1075,6 +1076,8 @@ mod tests {
         ("text/kernels.rs", "cheby_string_ends_with", READS),
         ("text/kernels.rs", "cheby_string_contains", READS),
         ("bytes/kernels.rs", "cheby_bytes_length", READS),
+        ("bytes/kernels.rs", "cheby_bytes_get", READS_STATIC),
+        ("bytes/kernels.rs", "cheby_bytes_read_i8", READS_STATIC),
         ("num/int.rs", "$wfn", ARITHMETIC),
         ("num/int.rs", "wrapping_add", ARITHMETIC),
         ("num/int.rs", "wrapping_sub", ARITHMETIC),

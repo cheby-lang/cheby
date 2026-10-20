@@ -364,6 +364,42 @@ mod tests {
         assert_eq!(domain.live_objects(), 0);
     }
 
+    /// A static `Some` (D-902) is never unique, so its `drop_reuse` gives
+    /// no token and writes nothing, and the `alloc_reuse` that follows
+    /// allocates a new object.
+    #[test]
+    fn reuse_of_a_static_some_falls_back_to_allocating() {
+        let domain = Domain::new();
+        crate::alloc::with_domain(Arc::clone(&domain), || {
+            let some = crate::values::some_u8(7);
+            assert_eq!(size_of_object(some), Some(16));
+            // SAFETY: a live static object; giving up a reference to it
+            // writes nothing.
+            let token = unsafe { cheby_rt_drop_reuse_checked(std::ptr::null_mut(), some, 16) };
+            assert_eq!(token, 0, "a static object misses");
+            // SAFETY: as above.
+            unsafe {
+                assert_eq!(load_rc(word_to_ptr(some)), abi::RC_STATIC);
+                assert_eq!(read_field(word_to_ptr(some), 8), int(7));
+            }
+            let header = abi::header(abi::RC_UNIQUE, 1, abi::layout::SOME);
+            // SAFETY: a 0 token allocates a 16-byte `Some`, whose field the
+            // test stores.
+            let fresh =
+                unsafe { cheby_rt_alloc_reuse_checked(std::ptr::null_mut(), 0, 16, header) };
+            assert_ne!(fresh, some);
+            assert_eq!(domain.live_objects(), 1);
+            // SAFETY: the new object's one field, then its last reference.
+            unsafe {
+                crate::object::write_field(word_to_ptr(fresh), 8, int(8));
+                crate::rc::cheby_rt_drop(std::ptr::null_mut(), fresh);
+            }
+            assert_eq!(domain.live_objects(), 0);
+            // SAFETY: as above.
+            assert_eq!(unsafe { read_field(word_to_ptr(some), 8) }, int(7));
+        });
+    }
+
     /// Board item SZe-2 (wave 2): the checked `drop_reuse` of a shared
     /// object reads its count only atomically, so a fiber on another
     /// worker that changes the count meanwhile does not race the check. It
