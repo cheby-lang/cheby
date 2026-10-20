@@ -27,8 +27,9 @@ fn index(position: i64, len: usize) -> Option<usize> {
     usize::try_from(position).ok().filter(|&i| i < len)
 }
 
-/// A bound of `slice`, clamped to `0..=len` (D-298, D-334).
-fn clamp(bound: i64, len: usize) -> usize {
+/// A bound of `slice`, clamped to `0..=len` (D-298, D-334). Also clamps
+/// the bounds of `string::from_byte_range` (D-905).
+pub(crate) fn clamp(bound: i64, len: usize) -> usize {
     usize::try_from(bound).map_or(0, |bound| bound.min(len))
 }
 

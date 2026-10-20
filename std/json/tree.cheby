@@ -14,7 +14,10 @@
 //!
 //! The parser scans the UTF-8 bytes of the text by offset. It tracks no
 //! line or column: when the text is not JSON, it counts them from the start
-//! up to the offset of the error.
+//! up to the offset of the error. It reads the text of strings and numbers
+//! with the package-visible `string::from_byte_range` (D-905). The bytes
+//! are the UTF-8 of a `String` and every cut falls next to an ASCII byte,
+//! so no range holds invalid UTF-8.
 //!
 //! Nothing here grows the stack with the nesting depth of a document: the
 //! parser and `rebuild` keep the arrays and objects they are inside of in a
@@ -220,7 +223,7 @@ priv fn read_value<T>(
       case bytes::get(data, end) {
         // A string with no escape is a slice of the text.
         Some(0x22) => {
-          let text = text_of(data, i + 1, end)
+          let text = string::from_byte_range(data, i + 1, end)
           close_value(builder, data, builder.string(text), end + 1, frame, stack)
         }
         _ => case read_string(data, i + 1, end, []) {
@@ -318,7 +321,10 @@ priv fn read_key<T>(
     Some(0x22) => {
       let end = plain_end(data, i + 1)
       case bytes::get(data, end) {
-        Some(0x22) => read_colon(builder, data, end + 1, members, text_of(data, i + 1, end), stack)
+        Some(0x22) => {
+          let key = string::from_byte_range(data, i + 1, end)
+          read_colon(builder, data, end + 1, members, key, stack)
+        }
         _ => case read_string(data, i + 1, end, []) {
           Ok((key, after)) => read_colon(builder, data, after, members, key, stack)
           Err(offset) => Err(offset)
@@ -437,25 +443,20 @@ priv fn plain_end(data: bytes::Bytes, i: Int) -> Int {
   bytes::json_plain_end(data, i)
 }
 
-/// Returns the text of the bytes from `start` to `end`.
-priv fn text_of(data: bytes::Bytes, start: Int, end: Int) -> String {
-  // `data` is the UTF-8 of a `String`, and every cut falls next to an ASCII
-  // byte, so the slice is valid UTF-8.
-  let assert Ok(text) = string::from_bytes(bytes::slice(data, start, end))
-  text
-}
-
 /// Reads the rest of a string with an escape, from `i`. The text from
 /// `from` to `i` has no escape yet, and the text before it is in `parts`.
 priv fn read_string(data: bytes::Bytes, from: Int, i: Int, parts: List<String>) -> ReadString {
   case bytes::get(data, i) {
     // `"`
     Some(0x22) => {
-      let all = list::push(parts, text_of(data, from, i))
+      let all = list::push(parts, string::from_byte_range(data, from, i))
       Ok((string::join(all, ""), i + 1))
     }
     // `\`
-    Some(0x5C) => read_escape(data, i + 1, list::push(parts, text_of(data, from, i)))
+    Some(0x5C) => {
+      let all = list::push(parts, string::from_byte_range(data, from, i))
+      read_escape(data, i + 1, all)
+    }
     // Control characters must be escaped.
     Some(byte) when byte >= 0x20 => read_string(data, from, plain_end(data, i + 1), parts)
     _ => Err(i)
@@ -740,7 +741,7 @@ priv fn close_number<T>(
   frame: Frame<T>,
   stack: List<Frame<T>>,
 ) -> Parsed<T> {
-  let value = number(builder, text_of(data, start, end), integral)
+  let value = number(builder, string::from_byte_range(data, start, end), integral)
   close_value(builder, data, value, end, frame, stack)
 }
 

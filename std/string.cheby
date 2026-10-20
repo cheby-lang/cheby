@@ -353,6 +353,40 @@ test "from_bytes rejects invalid UTF-8" {
   assert from_bytes(bytes::from_list([0xED, 0xA0, 0x80])) == Err(Nil)
 }
 
+/// Returns the bytes of `data` from `start` up to but not including `end` as
+/// text, with both clamped as `bytes::slice` clamps them (D-298). Each
+/// invalid UTF-8 sequence becomes U+FFFD, and a byte-order mark at the start
+/// is kept as U+FEFF, as `from_bytes` keeps it (D-366). `std::json` reads the
+/// text of its strings and numbers with it (D-905).
+@external(native, "cheby_string_from_byte_range")
+@external(js, "./string.mjs", "from_byte_range")
+@std_clamped(start, end)
+fn from_byte_range(data: bytes::Bytes, start: Int, end: Int) -> String
+
+test "from_byte_range decodes a clamped range of bytes" {
+  let data = bytes::from_string("abcdefgé")
+  let negative = -1
+  assert from_byte_range(data, 0, 2) == "ab"
+  assert from_byte_range(data, negative, 2) == "ab"
+  assert from_byte_range(data, 5, 9) == "fgé"
+  assert from_byte_range(data, 6, 99) == "gé"
+  assert from_byte_range(data, 2, 2) == ""
+  assert from_byte_range(data, 3, 1) == ""
+  assert from_byte_range(bytes::new(), 0, 1) == ""
+}
+
+test "from_byte_range replaces invalid UTF-8" {
+  let data = bytes::from_string("abcdefgé")
+  assert from_byte_range(data, 7, 8) == "\u{FFFD}"
+  assert from_byte_range(data, 8, 9) == "\u{FFFD}"
+  assert from_byte_range(bytes::from_list([0x61, 0xFF, 0x62]), 0, 3) == "a\u{FFFD}b"
+  assert from_byte_range(bytes::from_list([0xED, 0xA0, 0x80]), 0, 3) == "\u{FFFD}\u{FFFD}\u{FFFD}"
+}
+
+test "from_byte_range keeps a leading byte-order mark" {
+  assert from_byte_range(bytes::from_list([0xEF, 0xBB, 0xBF, 0x78]), 0, 4) == "\u{FEFF}x"
+}
+
 /// Returns the Unicode scalar value of each code point of `text`, in order.
 @external(native, "cheby_string_to_code_point_values")
 @external(js, "./string.mjs", "to_code_point_values")

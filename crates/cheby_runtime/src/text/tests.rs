@@ -647,6 +647,56 @@ fn from_bytes_decodes_utf8() {
     });
 }
 
+/// D-905: `from_byte_range` clamps as `bytes::slice` does (D-298, D-334),
+/// replaces each invalid UTF-8 sequence with U+FFFD, and copies even the
+/// whole of `data`.
+#[test]
+fn from_byte_range_clamps_and_decodes_lossily() {
+    let range = |data: &[u8], start: i64, end: i64| {
+        let word = new_bytes(data);
+        // SAFETY: a live `Bytes`, borrowed.
+        let out = take(unsafe { cheby_string_from_byte_range(word, start, end) });
+        release(word);
+        out
+    };
+    balanced(|| {
+        let text = "abcdefgé".as_bytes();
+        for (start, end, want) in [
+            (0, 2, "ab"),
+            (-1, 2, "ab"),
+            (2, 2, ""),
+            (3, 1, ""),
+            (0, 0, ""),
+            (5, 9, "fgé"),
+            (7, 9, "é"),
+            (7, 8, "\u{FFFD}"),
+            (8, 9, "\u{FFFD}"),
+            (6, 99, "gé"),
+            (99, 100, ""),
+            (i64::MIN, i64::MAX, "abcdefgé"),
+            (i64::MAX, i64::MIN, ""),
+        ] {
+            assert_eq!(range(text, start, end), want, "{start}..{end}");
+        }
+        assert_eq!(range(&[], 0, 0), "");
+        assert_eq!(range(&[], -3, 3), "");
+        assert_eq!(range(b"a\xFFb", 0, 3), "a\u{FFFD}b");
+        let surrogate = [0xED, 0xA0, 0x80];
+        assert_eq!(range(&surrogate, 0, 3), "\u{FFFD}".repeat(3));
+        assert_eq!(range(&[0xF0, 0x9F, 0x98], 0, 3), "\u{FFFD}");
+        assert_eq!(range(b"\xEF\xBB\xBFx", 0, 4), "\u{FEFF}x");
+        // The whole of `data` is copied into a new `String`, never shared.
+        let word = new_bytes(b"whole");
+        // SAFETY: a live `Bytes`, borrowed.
+        let out = unsafe { cheby_string_from_byte_range(word, 0, 5) };
+        assert_ne!(out, word);
+        assert_eq!(take(out), "whole");
+        // SAFETY: a live `Bytes`.
+        assert_eq!(unsafe { values::bytes_of(word) }, b"whole");
+        release(word);
+    });
+}
+
 #[test]
 fn code_point_values_round_trip() {
     balanced(|| {

@@ -1,7 +1,7 @@
-//! `std::string` kernels (F2): the 28 `@external(native, …)` functions of
+//! `std::string` kernels (F2): the 29 `@external(native, …)` functions of
 //! `std/string.cheby`, over UTF-8 `String` objects ([`crate::string`]).
-//! One of them, `add_json_quoted`, is package-visible: `std::json`'s
-//! writer uses it (D-903).
+//! Two of them are package-visible: `std::json`'s writer uses
+//! `add_json_quoted` (D-903) and its parser `from_byte_range` (D-905).
 //!
 //! - `ops`: the semantics on Rust `&str`, with no objects: code-point
 //!   counts and positions (D-302), clamping (D-298), splitting (D-315),

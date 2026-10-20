@@ -278,6 +278,7 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-902     | `bytes::get` and `bytes::read_i8` return static `Some` objects, so they never allocate or raise     |
 | D-903     | Package-visible kernel `string::add_json_quoted` quotes and escapes `std::json`'s strings           |
 | D-904     | Package-visible kernel `bytes::json_plain_end` finds the plain runs of `std::json`'s strings        |
+| D-905     | Package-visible kernel `string::from_byte_range` reads `std::json`'s string and number texts        |
 
 ## Open questions
 

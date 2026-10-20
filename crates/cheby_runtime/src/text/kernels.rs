@@ -6,6 +6,7 @@
 
 use super::ops::{self, Fill, int};
 use crate::abi::Word;
+use crate::bytes::kernels::clamp;
 use crate::list;
 use crate::panic::fatal;
 use crate::unwind::guard::{DropOnUnwind, guarded};
@@ -659,6 +660,30 @@ pub unsafe extern "C" fn cheby_string_from_bytes(data: Word) -> Word {
     })
 }
 
+/// `string::from_byte_range`, package-visible for `std::json`'s parser:
+/// the bytes of `data` from `start` up to, not including, `end`, both
+/// clamped to `0..=length` as `bytes::slice` clamps them (D-298, D-334),
+/// as a new `String`. Empty when `end` is not above `start`. Each invalid
+/// UTF-8 sequence becomes U+FFFD, as `String::from_utf8_lossy` and JS's
+/// `TextDecoder` replace it; valid bytes are copied after one check, and a
+/// leading U+FEFF is kept as `string::from_bytes` keeps it (D-366), so the
+/// JS kernel needs `TextDecoder`'s `ignoreBOM: true` (D-905). Never shares
+/// `data`. O(end - start).
+///
+/// # Safety
+///
+/// `data` is a live `Bytes`, borrowed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cheby_string_from_byte_range(data: Word, start: i64, end: i64) -> Word {
+    guarded(None, || {
+        // SAFETY: forwarded from the caller.
+        let all = unsafe { values::bytes_of(data) };
+        let (start, end) = (clamp(start, all.len()), clamp(end, all.len()));
+        let range = all.get(start..end).unwrap_or_default();
+        values::string(&String::from_utf8_lossy(range))
+    })
+}
+
 /// `Ok(value)` of an owned value, which is released if the `Ok` cannot be
 /// allocated.
 fn ok_owned(value: Word) -> Word {
@@ -722,7 +747,7 @@ pub(super) type Entry = (
     reason = "taking the address of a function needs an `as` cast"
 )]
 #[expect(clippy::too_many_lines, reason = "one table row per kernel")]
-pub(super) fn all() -> [Entry; 28] {
+pub(super) fn all() -> [Entry; 29] {
     const W: &str = "Word";
     [
         (
@@ -874,6 +899,12 @@ pub(super) fn all() -> [Entry; 28] {
             "cheby_string_from_bytes",
             cheby_string_from_bytes as *const u8,
             &[W],
+            W,
+        ),
+        (
+            "cheby_string_from_byte_range",
+            cheby_string_from_byte_range as *const u8,
+            &[W, "i64", "i64"],
             W,
         ),
         (

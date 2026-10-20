@@ -79,17 +79,19 @@ test "get reads one byte" {
 /// D-904).
 @external(native, "cheby_bytes_json_plain_end")
 @external(js, "./bytes.mjs", "json_plain_end")
+@std_clamped(from)
 fn json_plain_end(data: Bytes, from: Int) -> Int
 
 test "json_plain_end finds the next quote, backslash or control byte" {
   let data = from_string("ab\"c\\d\u{1}é")
+  let negative = -4
   assert json_plain_end(data, 0) == 2
   assert json_plain_end(data, 3) == 4
   assert json_plain_end(data, 5) == 6
   assert json_plain_end(data, 7) == 9
   assert json_plain_end(data, 9) == 9
   assert json_plain_end(data, 99) == 9
-  assert json_plain_end(data, -4) == 2
+  assert json_plain_end(data, negative) == 2
   assert json_plain_end(from_list([0x7F, 0x80, 0xFF, 0x1F]), 0) == 3
   assert json_plain_end(new(), 0) == 0
 }

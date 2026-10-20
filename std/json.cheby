@@ -514,6 +514,12 @@ test "parse_value reads every escape and copies other code points" {
   assert parse_value(r#"{"a\nb": "\/", "": 1}"#) == Ok(key)
 }
 
+test "parse_value keeps a leading U+FEFF in keys, strings and runs before an escape" {
+  let text = "\{\"\u{FEFF}\": [\"\u{FEFF}x\", \"\u{FEFF}\\n\"]}"
+  let value = Object([("\u{FEFF}", Array([String("\u{FEFF}x"), String("\u{FEFF}\n")]))])
+  assert parse_value(text) == Ok(value)
+}
+
 test "a bad escape is an error at the first code point that no escape could have" {
   let cases = [
     (r#""\q""#, 1, 3),
