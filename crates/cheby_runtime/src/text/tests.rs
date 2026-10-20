@@ -359,6 +359,90 @@ fn add_concatenates() {
     });
 }
 
+/// D-903 (escapes of D-326, D-398): every byte below 0x20, `"` and `\`
+/// get an escape and every other byte is copied.
+#[test]
+fn add_json_quoted_quotes_and_escapes() {
+    balanced(|| {
+        let quoted = |out: &str, t: &str| s2(cheby_string_add_json_quoted, out, t);
+        assert_eq!(quoted("", ""), "\"\"");
+        assert_eq!(quoted("[", ""), "[\"\"");
+        assert_eq!(quoted("", "plain"), "\"plain\"");
+        assert_eq!(quoted("", "a\"b\\c/"), r#""a\"b\\c/""#);
+        let short = [(8, 'b'), (9, 't'), (10, 'n'), (12, 'f'), (13, 'r')];
+        for byte in 0_u8..0x20 {
+            let escape = short
+                .iter()
+                .find(|&&(b, _)| b == byte)
+                .map_or_else(|| format!("\\u{byte:04x}"), |&(_, c)| format!("\\{c}"));
+            let text = format!("x{}y", char::from(byte));
+            assert_eq!(quoted("o", &text), format!("o\"x{escape}y\""), "{byte:#x}");
+        }
+        let controls: String = (0_u8..0x20).map(char::from).collect();
+        let all = quoted("", &controls);
+        assert_eq!(all.len(), 2 + 27 * 6 + 5 * 2, "{all}");
+        let kept = "\u{7F}\u{80}\u{9F}é\u{2028}\u{2029}\u{FEFF}😀'<>&";
+        assert_eq!(quoted("", kept), format!("\"{kept}\""));
+        assert_eq!(quoted("", "é\n😀\""), "\"é\\n😀\\\"\"");
+    });
+}
+
+#[test]
+fn add_json_quoted_extends_a_unique_text_and_copies_others() {
+    balanced(|| {
+        let piece = new_string("d\"f");
+        let acc = roomy("abc", 16);
+        // SAFETY: live strings, borrowed by the kernel.
+        let same = as_wrapper(acc, |acc| unsafe {
+            cheby_string_add_json_quoted(acc, piece)
+        });
+        assert_eq!(same, acc, "a unique text with room is reused");
+        assert_eq!(text(same), r#"abc"d\"f""#);
+        // Without room: a copy with doubled capacity.
+        let small = new_string("xy");
+        // SAFETY: as above.
+        let grown = as_wrapper(small, |s| unsafe { cheby_string_add_json_quoted(s, piece) });
+        assert_ne!(grown, small);
+        // SAFETY: a live string.
+        assert_eq!(unsafe { string::capacity(grown) }, 8);
+        assert_eq!(take(grown), r#"xy"d\"f""#);
+        // A shared text is never changed.
+        let shared = roomy("abc", 16);
+        // SAFETY: a live string; the test keeps a second reference.
+        unsafe { rc::dup(shared) };
+        // SAFETY: live strings.
+        let out = as_wrapper(shared, |s| unsafe {
+            cheby_string_add_json_quoted(s, piece)
+        });
+        assert_ne!(out, shared);
+        assert_eq!(text(shared), "abc");
+        assert_eq!(take(out), r#"abc"d\"f""#);
+        // The same object twice, with one reference: no in-place write,
+        // with and without escapes.
+        let aliased = roomy("x\"y", 16);
+        // SAFETY: live strings.
+        let doubled = unsafe { cheby_string_add_json_quoted(aliased, aliased) };
+        assert_ne!(doubled, aliased);
+        assert_eq!(take(doubled), r#"x"y"x\"y""#);
+        assert_eq!(text(aliased), "x\"y");
+        let plain = roomy("ab", 16);
+        // SAFETY: live strings.
+        let doubled = unsafe { cheby_string_add_json_quoted(plain, plain) };
+        assert_ne!(doubled, plain);
+        assert_eq!(take(doubled), r#"ab"ab""#);
+        // A static text gets a new object.
+        let image = StaticImage::new("lit");
+        // SAFETY: a static string, borrowed; the result owned.
+        let from_static = unsafe { cheby_string_add_json_quoted(image.word(), image.word()) };
+        assert_eq!(take(from_static), r#"lit"lit""#);
+        release(same);
+        release(shared);
+        release(aliased);
+        release(plain);
+        release(piece);
+    });
+}
+
 #[test]
 fn join_puts_the_separator_between_parts() {
     balanced(|| {

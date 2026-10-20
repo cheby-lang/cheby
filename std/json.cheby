@@ -8,14 +8,14 @@
 //! `std::json::tree`, because `std::json::decode` cannot import this module
 //! (D-361, ADR-0053). It scans the bytes of the text and builds a `Value`
 //! for `parse_value`, or the raw tree that decoders run over for `parse`.
-//! The writer adds each piece of text to the end of one string, and keeps
-//! the rest of each open array and object on a stack on the heap. Neither
-//! parsing nor writing grows the stack with the nesting depth of a document
-//! (D-094, D-326).
+//! The writer adds each piece of text to the end of one string, each string
+//! quoted and escaped by the package-visible `string::add_json_quoted`
+//! (D-903), and keeps the rest of each open array and object on a stack on
+//! the heap. Neither parsing nor writing grows the stack with the nesting
+//! depth of a document (D-094, D-326).
 
 // The module has a function named `list`, so it imports `std::list` under
 // another name (§7.5.1, D-062).
-import std::bytes
 import std::float
 import std::int
 import std::json::decode
@@ -271,7 +271,7 @@ priv fn write_value(
     Bool(False) => next(out + "false", frames, pretty)
     Int(n) => next(out + int::show(n), frames, pretty)
     Float(x) => next(out + float_text(x), frames, pretty)
-    String(text) => next(quote_into(out, text), frames, pretty)
+    String(text) => next(string::add_json_quoted(out, text), frames, pretty)
     Array([]) => next(out + "[]", frames, pretty)
     Array([item, ..items]) => {
       let inner = depth + 1
@@ -307,7 +307,7 @@ priv fn next(out: String, frames: List<Frame>, pretty: Bool) -> String {
 
 /// Adds the key of a member and the colon after it to `out`.
 priv fn key_into(out: String, key: String, pretty: Bool) -> String {
-  let quoted = quote_into(out, key)
+  let quoted = string::add_json_quoted(out, key)
   case pretty {
     True => quoted + ": "
     False => quoted + ":"
@@ -329,61 +329,6 @@ priv fn float_text(x: Float) -> String {
   case float::is_finite(x) {
     True => float::show(x)
     False => "null"
-  }
-}
-
-/// Adds `text` between `"` to `out`, escaped as `quote` escapes it. Text
-/// with no byte to escape, the common case, is added whole.
-priv fn quote_into(out: String, text: String) -> String {
-  case needs_escape(bytes::from_string(text), 0) {
-    False => out + "\"" + text + "\""
-    True => out + quote(text)
-  }
-}
-
-/// Whether a byte of `data` from `index` on is `"`, `\` or a control
-/// character below U+0020 (D-398). Every byte of a code point above U+007F
-/// is 0x80 or more, so each byte of UTF-8 decides it alone.
-priv fn needs_escape(data: bytes::Bytes, index: Int) -> Bool {
-  case bytes::get(data, index) {
-    None => False
-    Some(byte) when byte < 0x20 || byte == 0x22 || byte == 0x5C => True
-    Some(_) => needs_escape(data, index + 1)
-  }
-}
-
-/// Writes `text` between `"`, escaping `"`, `\` and the control characters
-/// U+0000 to U+001F, and nothing else (D-326, D-398).
-priv fn quote(text: String) -> String {
-  let points = lists::fold(string::to_code_point_values(text), [0x22], escape)
-  // The escapes are ASCII and every other code point is copied, so the code
-  // points always form a string.
-  let assert Ok(quoted) = string::from_code_point_values(lists::push(points, 0x22))
-  quoted
-}
-
-/// Adds `point` to `points`, escaped as JSON text needs.
-priv fn escape(points: List<Int>, point: Int) -> List<Int> {
-  case point {
-    // `"` and `\`
-    0x22 | 0x5C => [..points, 0x5C, point]
-    // `\b`, `\f`, `\n`, `\r` and `\t`
-    0x08 => [..points, 0x5C, 0x62]
-    0x0C => [..points, 0x5C, 0x66]
-    0x0A => [..points, 0x5C, 0x6E]
-    0x0D => [..points, 0x5C, 0x72]
-    0x09 => [..points, 0x5C, 0x74]
-    // `\u00` and two lower-case hex digits
-    _ when point < 0x20 => [..points, 0x5C, 0x75, 0x30, 0x30, hex(point / 16), hex(point % 16)]
-    _ => lists::push(points, point)
-  }
-}
-
-/// Returns the code point of the lower-case hex digit for `digit`, 0 to 15.
-priv fn hex(digit: Int) -> Int {
-  case digit < 10 {
-    True => 0x30 + digit
-    False => 0x57 + digit
   }
 }
 
