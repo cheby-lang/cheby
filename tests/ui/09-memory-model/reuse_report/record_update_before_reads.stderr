@@ -1,0 +1,6 @@
+reuse: tests/ui/09-memory-model/reuse_report/record_update_before_reads.cheby:21:18: building `State` reuses `s` when it is unique
+reuse: tests/ui/09-memory-model/reuse_report/record_update_before_reads.cheby:21:33: `list::push` gets a temporary value at its last use: in place when it is unique at run time
+reuse: tests/ui/09-memory-model/reuse_report/record_update_before_reads.cheby:30:17: building `State` reuses `s` when it is unique
+reuse: tests/ui/09-memory-model/reuse_report/record_update_before_reads.cheby:30:37: `list::push` gets a temporary value at its last use: in place when it is unique at run time
+reuse: tests/ui/09-memory-model/reuse_report/record_update_before_reads.cheby:35:16: building `State` allocates: no value of the same size dies before it
+reuse: tests/ui/09-memory-model/reuse_report/record_update_before_reads.cheby:36:18: building `State` allocates: no value of the same size dies before it

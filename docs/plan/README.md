@@ -284,6 +284,7 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-908     | A pattern reads its elements and fields before its spreads, so a dying list is cut in place         |
 | D-909     | `list_uncons` reads a pattern's element and spread in one call, moving it out of a unique list      |
 | D-910     | Generated code reads a list's length from its root (offset 24 of D-563), now part of the ABI        |
+| D-911     | Field reads move before a sibling projection is consumed, so a dying record's list updates in place |
 
 ## Open questions
 

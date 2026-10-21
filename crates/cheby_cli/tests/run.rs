@@ -810,6 +810,79 @@ fn main() {
     assert_eq!(misses, 0, "{}", out.stderr);
 }
 
+/// Pushes onto a record's list field whose other fields are read after
+/// the push, the micro-benchmark of D-911: the reads move before the
+/// push, so the record ends there and each push gets a unique list
+/// and writes in place. Before, the record held the list across the push
+/// and every push but the first copied it. Both RC modes see the moved
+/// reads, so naive counting pushes in place too, without reuse. Field
+/// accesses (`step`) and a record update (`update`) each push 2000 times.
+/// Run with poisoning off, so the inline paths run.
+#[test]
+fn record_field_pushes_write_in_place() {
+    let dir = package(
+        "record_field_pushes",
+        &[
+            MANIFEST,
+            (
+                "src/main.cheby",
+                "//! Pushes onto a record's list field, reading its other fields after each push.\n\
+                 \n\
+                 import std::io\n\
+                 import std::list\n\
+                 \n\
+                 type State { items: List<Int>, count: Int, sum: Int }\n\
+                 \n\
+                 fn step(s: State, n: Int) -> State {\n  \
+                   case n {\n    \
+                     0 => s\n    \
+                     _ => {\n      \
+                       let next = State { items: list::push(s.items, n), count: s.count + 1, sum: s.sum + n }\n      \
+                       step(next, n - 1)\n    \
+                     }\n  \
+                   }\n\
+                 }\n\
+                 \n\
+                 fn update(s: State, n: Int) -> State {\n  \
+                   case n {\n    \
+                     0 => s\n    \
+                     _ => update(State { ..s, items: list::push(s.items, n), count: s.count + 1 }, n - 1)\n  \
+                   }\n\
+                 }\n\
+                 \n\
+                 fn main() {\n  \
+                   let a = step(State { items: [], count: 0, sum: 0 }, 2000)\n  \
+                   let b = update(State { items: [], count: 0, sum: 0 }, 2000)\n  \
+                   let lengths = list::length(a.items) + list::length(b.items)\n  \
+                   io::println(\"{lengths} {a.count} {a.sum} {b.count} {b.sum}\")\n\
+                 }\n",
+            ),
+        ],
+    );
+    for rc in [None, Some("naive")] {
+        let mut cmd = Command::new(CHEBY);
+        cmd.args(["--color=never", "run"])
+            .current_dir(&dir)
+            .env("NO_COLOR", "1")
+            .env("CHEBY_RT_STATS", "1")
+            .env("CHEBY_RT_POISON", "0")
+            .env_remove("CHEBY_DUMP_DIR");
+        match rc {
+            Some(mode) => cmd.env("CHEBY_RC", mode),
+            None => cmd.env_remove("CHEBY_RC"),
+        };
+        let out = process::run(cmd, None, TIMEOUT).unwrap_or_else(|e| panic!("{e:?}"));
+        assert_eq!(out.status, Some(0), "{rc:?}: {}", out.stderr);
+        assert_eq!(out.stdout, "4000 2000 2001000 2000 0\n");
+        assert_eq!(
+            stat(&out.stderr, "list push copied"),
+            Some(0),
+            "{rc:?}: {}",
+            out.stderr
+        );
+    }
+}
+
 /// A field every variant holds at the same place (D-071) is read without a
 /// test of the variant, so the read proves no layout to reuse (the fix
 /// review's TOK-1): a `Circle` rebuilt as a larger `Rect` in later arms,

@@ -1,0 +1,39 @@
+// @mode: run-pass
+// @milestone: M2
+// @decisions: D-717, D-525, D-205, D-715, D-852, D-911
+// @flags: --reuse-report
+//! A kernel's first argument read from a record gets the kernel line when
+//! the record is read only field by field after the call: those reads
+//! move before the call, so the record ends there and the kernel gets the
+//! field at its last use (`counted`). A record that may hold a handle,
+//! here a `Sender`, keeps its reads where they are, because ending it
+//! early would close the channel before the record's last use in the
+//! source (`held`). Its kernel gets no line.
+
+import std::channel
+import std::io
+import std::set
+
+type Bag { name: String, items: set::Set<Int> }
+
+type Held { name: String, items: set::Set<Int>, tx: channel::Sender<Int> }
+
+fn counted(bag: Bag, n: Int) -> Bag {
+  let items = bag.items
+  let more = set::insert(items, n)
+  Bag { name: bag.name, items: more }
+}
+
+fn held(h: Held, n: Int) -> (String, set::Set<Int>) {
+  let items = h.items
+  let more = set::insert(items, n)
+  (h.name, more)
+}
+
+fn main() {
+  let bag = counted(Bag { name: "counted", items: set::new() }, 1)
+  let (tx, _rx) = channel::new::<Int>(1)
+  let (name, items) = held(Held { name: "held", items: set::new(), tx }, 2)
+  let sizes = set::size(bag.items) + set::size(items)
+  io::println("{bag.name} and {name}: {sizes}")
+}
