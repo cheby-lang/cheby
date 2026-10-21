@@ -240,10 +240,10 @@ priv fn decode_items<T>(
     [] => (done, found)
     [item, ..tail] => case decoder {
       Leaf(expected, placeholder, accepts, take) => case accepts(item) {
-        True => decode_items(tail, decoder, index + 1, lists::push(done, take(item)), found)
+        True => decode_items(tail, decoder, index + 1, [..done, take(item)], found)
         False => {
           let more = both(found, mismatch_at(expected, item, ints::show(index)))
-          decode_items(tail, decoder, index + 1, lists::push(done, placeholder), more)
+          decode_items(tail, decoder, index + 1, [..done, placeholder], more)
         }
       }
       Decoder(decode_tree) => {
@@ -252,7 +252,7 @@ priv fn decode_items<T>(
           NoErrors => found
           _ => both(found, Under(ints::show(index), element_errors))
         }
-        decode_items(tail, decoder, index + 1, lists::push(done, element), more)
+        decode_items(tail, decoder, index + 1, [..done, element], more)
       }
     }
   }

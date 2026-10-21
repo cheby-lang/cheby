@@ -20,8 +20,9 @@
 //! so no range holds invalid UTF-8.
 //!
 //! Nothing here grows the stack with the nesting depth of a document: the
-//! parser and `rebuild` keep the arrays and objects they are inside of in a
-//! list on the heap, and every other loop is a tail call (D-094, D-326).
+//! parser keeps the arrays and objects it is inside of in a chain of cells
+//! on the heap, `rebuild` keeps its work in a list on the heap, and every
+//! other loop is a tail call (D-094, D-326).
 
 import std::bytes
 import std::float
@@ -127,13 +128,15 @@ type Builder<T> {
   object: fn(List<(String, T)>) -> T,
 }
 
-/// An array or object whose elements are still being read: the elements so
-/// far, and for an object the key of the member being read. `Top` stands
-/// outside the document's value.
-priv type Frame<T> {
+/// The arrays and objects whose elements are still being read, innermost
+/// first: the elements of each so far, and for an object the key of the
+/// member being read. `Top` stands outside the document's value. It is a
+/// chain of cells rather than a list, so opening and closing an array or
+/// object allocates or frees one cell and calls no list kernel.
+priv type Stack<T> {
   Top,
-  InArray(List<T>),
-  InObject(List<(String, T)>, String),
+  InArray(List<T>, Stack<T>),
+  InObject(List<(String, T)>, String, Stack<T>),
 }
 
 /// What reading a document gives: the value, or the byte offset of the
@@ -165,7 +168,7 @@ fn parse(text: String) -> Result<Tree, (Int, Int)> {
 /// just after its end when it ends too early (D-324).
 fn parse_with<T>(text: String, builder: Builder<T>) -> Result<T, (Int, Int)> {
   let data = bytes::from_string(text)
-  case read_value(builder, data, 0, Top, []) {
+  case read_value(builder, data, 0, Top) {
     Ok(value) => Ok(value)
     Err(offset) => Err(position(data, offset))
   }
@@ -189,80 +192,97 @@ priv fn position(data: bytes::Bytes, offset: Int) -> (Int, Int) {
   step(0, 1, 1)
 }
 
-/// Tells whether `byte` is an ASCII digit.
-priv fn is_digit(byte: U8) -> Bool {
-  byte >= 0x30 && byte <= 0x39
-}
-
 // Every function that expects the next token (`read_value`, `open_array`,
 // `open_object`, `read_key`, `read_colon`, `read_end`, `after_item` and
 // `after_member`) starts at a byte that may be whitespace, and moves past
 // spaces, tabs, line feeds and carriage returns, the only whitespace of
 // RFC 8259, by calling itself at the next byte.
+//
+// `read_colon` and `close_value` take the innermost cell of the stack apart
+// and build its new version in the same `case` arm or block, so Perceus
+// writes the new cell over the old one in place (D-838). Keep the rebuild
+// there. Reuse pairs only when the rebuild is in a block that only the
+// block taking the cell apart enters (D-839). A `let x = case ..` between
+// the two joins the arms, and then the old cell is freed and a new one
+// allocated: the results stay the same, and nothing warns. The test
+// `json_containers_reuse_their_cells` in `crates/cheby_cli/tests/run.rs`
+// counts the reuse hits of a parse and a write, and fails when a step loses
+// its reuse.
 
-/// Reads one value at `i` inside the array or object `frame`, with the
-/// arrays and objects around it in `stack`, the innermost last.
+/// Reads one value at `i` inside the arrays and objects of `stack`.
 priv fn read_value<T>(
   builder: Builder<T>,
   data: bytes::Bytes,
   i: Int,
-  frame: Frame<T>,
-  stack: List<Frame<T>>,
+  stack: Stack<T>,
 ) -> Parsed<T> {
   case bytes::get(data, i) {
     Some(0x20) | Some(0x0A) | Some(0x09) | Some(0x0D) => {
-      read_value(builder, data, i + 1, frame, stack)
+      read_value(builder, data, i + 1, stack)
     }
     // `{`
-    Some(0x7B) => open_object(builder, data, i + 1, frame, stack)
+    Some(0x7B) => open_object(builder, data, i + 1, stack)
     // `[`
-    Some(0x5B) => open_array(builder, data, i + 1, frame, stack)
+    Some(0x5B) => open_array(builder, data, i + 1, stack)
     // `"`
     Some(0x22) => {
-      let end = plain_end(data, i + 1)
+      let end = bytes::json_plain_end(data, i + 1)
       case bytes::get(data, end) {
         // A string with no escape is a slice of the text.
         Some(0x22) => {
           let text = string::from_byte_range(data, i + 1, end)
-          close_value(builder, data, builder.string(text), end + 1, frame, stack)
+          close_value(builder, data, builder.string(text), end + 1, stack)
         }
         _ => case read_string(data, i + 1, end, []) {
-          Ok((text, after)) => close_value(builder, data, builder.string(text), after, frame, stack)
+          Ok((text, after)) => close_value(builder, data, builder.string(text), after, stack)
           Err(offset) => Err(offset)
         }
       }
     }
-    // `t`, `f` and `n` start `true`, `false` and `null`
+    // `t`, `f` and `n` start `true`, `false` and `null`. The rest of each
+    // word is packed into an `Int`, its first byte lowest.
     Some(0x74) => {
-      read_word(builder, data, i, [0x74, 0x72, 0x75, 0x65], builder.bool(True), frame, stack)
+      let end = word_end(data, i + 1, 0x657572, 3)
+      case end == i + 4 {
+        True => close_value(builder, data, builder.bool(True), end, stack)
+        False => Err(end)
+      }
     }
     Some(0x66) => {
-      read_word(builder, data, i, [0x66, 0x61, 0x6C, 0x73, 0x65], builder.bool(False), frame, stack)
+      let end = word_end(data, i + 1, 0x65736C61, 4)
+      case end == i + 5 {
+        True => close_value(builder, data, builder.bool(False), end, stack)
+        False => Err(end)
+      }
     }
-    Some(0x6E) => read_word(builder, data, i, [0x6E, 0x75, 0x6C, 0x6C], builder.null, frame, stack)
+    Some(0x6E) => {
+      let end = word_end(data, i + 1, 0x6C6C75, 3)
+      case end == i + 4 {
+        True => close_value(builder, data, builder.null, end, stack)
+        False => Err(end)
+      }
+    }
     // `-` or a digit
-    Some(byte) when byte == 0x2D || is_digit(byte) => read_number(builder, data, i, frame, stack)
+    Some(0x2D) => read_integer_part(builder, data, i, i + 1, True, stack)
+    Some(byte) when byte >= 0x30 && byte <= 0x39 => {
+      read_integer_part(builder, data, i, i, False, stack)
+    }
     _ => Err(i)
   }
 }
 
-/// Matches the bytes of `word` one by one, then closes `value`.
-priv fn read_word<T>(
-  builder: Builder<T>,
-  data: bytes::Bytes,
-  i: Int,
-  word: List<U8>,
-  value: T,
-  frame: Frame<T>,
-  stack: List<Frame<T>>,
-) -> Parsed<T> {
-  case word {
-    [] => close_value(builder, data, value, i, frame, stack)
-    [wanted, ..word_rest] => case bytes::get(data, i) {
-      Some(found) when found == wanted => {
-        read_word(builder, data, i + 1, word_rest, value, frame, stack)
+/// Returns the offset of the first byte from `i` that is not the next byte
+/// of `rest`, the last `size` bytes of `true`, `false` or `null` packed
+/// into an `Int` with the first one lowest, or `i + size` when they all
+/// match.
+priv fn word_end(data: bytes::Bytes, i: Int, rest: Int, size: Int) -> Int {
+  case size {
+    0 => i
+    _ => case bytes::get(data, i) {
+      Some(byte) when int::from_u8(byte) == rest & 0xFF => {
+        word_end(data, i + 1, rest >> 8, size - 1)
       }
-      _ => Err(i)
+      _ => i
     }
   }
 }
@@ -272,61 +292,51 @@ priv fn open_array<T>(
   builder: Builder<T>,
   data: bytes::Bytes,
   i: Int,
-  frame: Frame<T>,
-  stack: List<Frame<T>>,
+  stack: Stack<T>,
 ) -> Parsed<T> {
   case bytes::get(data, i) {
     Some(0x20) | Some(0x0A) | Some(0x09) | Some(0x0D) => {
-      open_array(builder, data, i + 1, frame, stack)
+      open_array(builder, data, i + 1, stack)
     }
     // `]`
-    Some(0x5D) => close_value(builder, data, builder.array([]), i + 1, frame, stack)
-    _ => read_value(builder, data, i, InArray([]), list::push(stack, frame))
+    Some(0x5D) => close_value(builder, data, builder.array([]), i + 1, stack)
+    _ => read_value(builder, data, i, InArray([], stack))
   }
 }
 
-/// Starts an object after its `{`.
+/// Starts an object after its `{`. Its cell holds an empty key until
+/// `read_colon` writes the first member's key into it.
 priv fn open_object<T>(
   builder: Builder<T>,
   data: bytes::Bytes,
   i: Int,
-  frame: Frame<T>,
-  stack: List<Frame<T>>,
+  stack: Stack<T>,
 ) -> Parsed<T> {
   case bytes::get(data, i) {
     Some(0x20) | Some(0x0A) | Some(0x09) | Some(0x0D) => {
-      open_object(builder, data, i + 1, frame, stack)
+      open_object(builder, data, i + 1, stack)
     }
     // `}`
-    Some(0x7D) => close_value(builder, data, builder.object([]), i + 1, frame, stack)
-    _ => read_key(builder, data, i, [], list::push(stack, frame))
+    Some(0x7D) => close_value(builder, data, builder.object([]), i + 1, stack)
+    _ => read_key(builder, data, i, InObject([], "", stack))
   }
 }
 
-/// Reads a member's key, then its `:` and its value, with the earlier
-/// members of the object in `members`. The object's own frame is not on
-/// `stack`: `read_colon` passes it to `read_value` as its `frame`.
-priv fn read_key<T>(
-  builder: Builder<T>,
-  data: bytes::Bytes,
-  i: Int,
-  members: List<(String, T)>,
-  stack: List<Frame<T>>,
-) -> Parsed<T> {
+/// Reads a member's key, then its `:` and its value, in the object that is
+/// the innermost cell of `stack`.
+priv fn read_key<T>(builder: Builder<T>, data: bytes::Bytes, i: Int, stack: Stack<T>) -> Parsed<T> {
   case bytes::get(data, i) {
-    Some(0x20) | Some(0x0A) | Some(0x09) | Some(0x0D) => {
-      read_key(builder, data, i + 1, members, stack)
-    }
+    Some(0x20) | Some(0x0A) | Some(0x09) | Some(0x0D) => read_key(builder, data, i + 1, stack)
     // `"`
     Some(0x22) => {
-      let end = plain_end(data, i + 1)
+      let end = bytes::json_plain_end(data, i + 1)
       case bytes::get(data, end) {
         Some(0x22) => {
           let key = string::from_byte_range(data, i + 1, end)
-          read_colon(builder, data, end + 1, members, key, stack)
+          read_colon(builder, data, end + 1, key, stack)
         }
         _ => case read_string(data, i + 1, end, []) {
-          Ok((key, after)) => read_colon(builder, data, after, members, key, stack)
+          Ok((key, after)) => read_colon(builder, data, after, key, stack)
           Err(offset) => Err(offset)
         }
       }
@@ -335,39 +345,45 @@ priv fn read_key<T>(
   }
 }
 
-/// Reads the `:` after the member's key `key`, then its value.
+/// Reads the `:` after the member's key `key`, then its value. It writes
+/// `key` into the object's cell, which it takes apart and builds again, so
+/// Perceus updates the cell in place (D-838).
 priv fn read_colon<T>(
   builder: Builder<T>,
   data: bytes::Bytes,
   i: Int,
-  members: List<(String, T)>,
   key: String,
-  stack: List<Frame<T>>,
+  stack: Stack<T>,
 ) -> Parsed<T> {
   case bytes::get(data, i) {
     Some(0x20) | Some(0x0A) | Some(0x09) | Some(0x0D) => {
-      read_colon(builder, data, i + 1, members, key, stack)
+      read_colon(builder, data, i + 1, key, stack)
     }
     // `:`
-    Some(0x3A) => read_value(builder, data, i + 1, InObject(members, key), stack)
+    Some(0x3A) => {
+      let assert InObject(members, _, below) = stack
+      read_value(builder, data, i + 1, InObject(members, key, below))
+    }
     _ => Err(i)
   }
 }
 
-/// Adds the complete `value` to `frame`, and reads what follows it at `i`.
+/// Adds the complete `value` to the innermost array or object of `stack`,
+/// and reads what follows it at `i`. It takes the innermost cell apart and
+/// builds it again with the new element, so Perceus updates the cell in
+/// place (D-838).
 priv fn close_value<T>(
   builder: Builder<T>,
   data: bytes::Bytes,
   value: T,
   i: Int,
-  frame: Frame<T>,
-  stack: List<Frame<T>>,
+  stack: Stack<T>,
 ) -> Parsed<T> {
-  case frame {
+  case stack {
     Top => read_end(data, i, value)
-    InArray(items) => after_item(builder, data, i, list::push(items, value), stack)
-    InObject(members, key) => {
-      after_member(builder, data, i, list::push(members, (key, value)), stack)
+    InArray(items, below) => after_item(builder, data, i, InArray([..items, value], below))
+    InObject(members, key, below) => {
+      after_member(builder, data, i, InObject([..members, (key, value)], key, below))
     }
   }
 }
@@ -381,67 +397,49 @@ priv fn read_end<T>(data: bytes::Bytes, i: Int, value: T) -> Parsed<T> {
   }
 }
 
-/// Reads the `,` or `]` after an element of the array whose elements so far
-/// are `items`.
+/// Reads the `,` or `]` after an element of the array that is the innermost
+/// cell of `stack`.
 priv fn after_item<T>(
   builder: Builder<T>,
   data: bytes::Bytes,
   i: Int,
-  items: List<T>,
-  stack: List<Frame<T>>,
+  stack: Stack<T>,
 ) -> Parsed<T> {
   case bytes::get(data, i) {
-    Some(0x20) | Some(0x0A) | Some(0x09) | Some(0x0D) => {
-      after_item(builder, data, i + 1, items, stack)
-    }
+    Some(0x20) | Some(0x0A) | Some(0x09) | Some(0x0D) => after_item(builder, data, i + 1, stack)
     // `,`
-    Some(0x2C) => read_value(builder, data, i + 1, InArray(items), stack)
+    Some(0x2C) => read_value(builder, data, i + 1, stack)
     // `]`
-    Some(0x5D) => close_container(builder, data, builder.array(items), i + 1, stack)
+    Some(0x5D) => {
+      let assert InArray(items, below) = stack
+      close_value(builder, data, builder.array(items), i + 1, below)
+    }
     _ => Err(i)
   }
 }
 
-/// Reads the `,` or `}` after a member of the object whose members so far
-/// are `members`.
+/// Reads the `,` or `}` after a member of the object that is the innermost
+/// cell of `stack`.
 priv fn after_member<T>(
   builder: Builder<T>,
   data: bytes::Bytes,
   i: Int,
-  members: List<(String, T)>,
-  stack: List<Frame<T>>,
+  stack: Stack<T>,
 ) -> Parsed<T> {
   case bytes::get(data, i) {
-    Some(0x20) | Some(0x0A) | Some(0x09) | Some(0x0D) => {
-      after_member(builder, data, i + 1, members, stack)
-    }
+    Some(0x20) | Some(0x0A) | Some(0x09) | Some(0x0D) => after_member(builder, data, i + 1, stack)
     // `,`
-    Some(0x2C) => read_key(builder, data, i + 1, members, stack)
+    Some(0x2C) => read_key(builder, data, i + 1, stack)
     // `}`
-    Some(0x7D) => close_container(builder, data, builder.object(members), i + 1, stack)
+    Some(0x7D) => {
+      let assert InObject(members, _, below) = stack
+      close_value(builder, data, builder.object(members), i + 1, below)
+    }
     _ => Err(i)
   }
 }
 
-/// Closes the array or object `value`, which ends just before `i`, in the
-/// frame it was opened in, the last of `stack`.
-priv fn close_container<T>(
-  builder: Builder<T>,
-  data: bytes::Bytes,
-  value: T,
-  i: Int,
-  stack: List<Frame<T>>,
-) -> Parsed<T> {
-  let assert [..below, frame] = stack
-  close_value(builder, data, value, i, frame, below)
-}
-
 // Strings
-
-/// The end of the plain run from `i` (D-904).
-priv fn plain_end(data: bytes::Bytes, i: Int) -> Int {
-  bytes::json_plain_end(data, i)
-}
 
 /// Reads the rest of a string with an escape, from `i`. The text from
 /// `from` to `i` has no escape yet, and the text before it is in `parts`.
@@ -458,7 +456,9 @@ priv fn read_string(data: bytes::Bytes, from: Int, i: Int, parts: List<String>) 
       read_escape(data, i + 1, all)
     }
     // Control characters must be escaped.
-    Some(byte) when byte >= 0x20 => read_string(data, from, plain_end(data, i + 1), parts)
+    Some(byte) when byte >= 0x20 => {
+      read_string(data, from, bytes::json_plain_end(data, i + 1), parts)
+    }
     _ => Err(i)
   }
 }
@@ -588,26 +588,27 @@ priv fn hex_digit(byte: U8) -> Option<Int> {
 }
 
 // Numbers
+//
+// Digits are tested inline rather than through a helper, which saves about
+// 1% of a parse's instructions (D-906). Keep them inline.
 
-/// Reads a number that starts at `start`: an optional `-`, an integer part
-/// with no leading zeros, an optional fraction and an optional exponent.
-priv fn read_number<T>(
+/// Reads a number that starts at `start` from its integer part at `first`,
+/// after the `-` when `negative` is `True`. A number is an optional `-`, an
+/// integer part with no leading zeros, an optional fraction and an optional
+/// exponent.
+priv fn read_integer_part<T>(
   builder: Builder<T>,
   data: bytes::Bytes,
   start: Int,
-  frame: Frame<T>,
-  stack: List<Frame<T>>,
+  first: Int,
+  negative: Bool,
+  stack: Stack<T>,
 ) -> Parsed<T> {
-  let (first, negative) = case bytes::get(data, start) {
-    // `-`
-    Some(0x2D) => (start + 1, True)
-    _ => (start, False)
-  }
   case bytes::get(data, first) {
     // `0` is the whole integer part.
-    Some(0x30) => read_fraction(builder, data, start, first + 1, 0, negative, frame, stack)
-    Some(byte) when is_digit(byte) => {
-      read_integer(builder, data, start, first, 0, 0, negative, frame, stack)
+    Some(0x30) => read_fraction(builder, data, start, first + 1, 0, negative, stack)
+    Some(byte) when byte >= 0x30 && byte <= 0x39 => {
+      read_integer(builder, data, start, first, 0, 0, negative, stack)
     }
     _ => Err(first)
   }
@@ -625,18 +626,17 @@ priv fn read_integer<T>(
   value: Int,
   count: Int,
   negative: Bool,
-  frame: Frame<T>,
-  stack: List<Frame<T>>,
+  stack: Stack<T>,
 ) -> Parsed<T> {
   case bytes::get(data, i) {
-    Some(byte) when is_digit(byte) => {
+    Some(byte) when byte >= 0x30 && byte <= 0x39 => {
       let next = case count < 15 {
         True => value * 10 + int::from_u8(byte) - 0x30
         False => -1
       }
-      read_integer(builder, data, start, i + 1, next, count + 1, negative, frame, stack)
+      read_integer(builder, data, start, i + 1, next, count + 1, negative, stack)
     }
-    _ => read_fraction(builder, data, start, i, value, negative, frame, stack)
+    _ => read_fraction(builder, data, start, i, value, negative, stack)
   }
 }
 
@@ -649,20 +649,19 @@ priv fn read_fraction<T>(
   i: Int,
   value: Int,
   negative: Bool,
-  frame: Frame<T>,
-  stack: List<Frame<T>>,
+  stack: Stack<T>,
 ) -> Parsed<T> {
   case bytes::get(data, i) {
     // `.`
     Some(0x2E) => case bytes::get(data, i + 1) {
-      Some(byte) when is_digit(byte) => {
-        read_exponent(builder, data, start, skip_digits(data, i + 2), False, frame, stack)
+      Some(byte) when byte >= 0x30 && byte <= 0x39 => {
+        read_exponent(builder, data, start, skip_digits(data, i + 2), False, stack)
       }
       _ => Err(i + 1)
     }
     _ => case value >= 0 {
-      True => read_small_integer(builder, data, start, i, value, negative, frame, stack)
-      False => read_exponent(builder, data, start, i, True, frame, stack)
+      True => read_small_integer(builder, data, start, i, value, negative, stack)
+      False => read_exponent(builder, data, start, i, True, stack)
     }
   }
 }
@@ -676,18 +675,17 @@ priv fn read_small_integer<T>(
   i: Int,
   value: Int,
   negative: Bool,
-  frame: Frame<T>,
-  stack: List<Frame<T>>,
+  stack: Stack<T>,
 ) -> Parsed<T> {
   case bytes::get(data, i) {
     // `e` or `E`
-    Some(0x65) | Some(0x45) => read_exponent(builder, data, start, i, True, frame, stack)
+    Some(0x65) | Some(0x45) => read_exponent(builder, data, start, i, True, stack)
     _ => {
       let n = case negative {
         True => -value
         False => value
       }
-      close_value(builder, data, builder.int(n), i, frame, stack)
+      close_value(builder, data, builder.int(n), i, stack)
     }
   }
 }
@@ -700,8 +698,7 @@ priv fn read_exponent<T>(
   start: Int,
   i: Int,
   integral: Bool,
-  frame: Frame<T>,
-  stack: List<Frame<T>>,
+  stack: Stack<T>,
 ) -> Parsed<T> {
   case bytes::get(data, i) {
     // `e` or `E`
@@ -712,21 +709,21 @@ priv fn read_exponent<T>(
         _ => i + 1
       }
       case bytes::get(data, digits) {
-        Some(byte) when is_digit(byte) => {
+        Some(byte) when byte >= 0x30 && byte <= 0x39 => {
           let end = skip_digits(data, digits + 1)
-          close_number(builder, data, start, end, False, frame, stack)
+          close_number(builder, data, start, end, False, stack)
         }
         _ => Err(digits)
       }
     }
-    _ => close_number(builder, data, start, i, integral, frame, stack)
+    _ => close_number(builder, data, start, i, integral, stack)
   }
 }
 
 /// Returns the offset of the first byte from `i` that is not a digit.
 priv fn skip_digits(data: bytes::Bytes, i: Int) -> Int {
   case bytes::get(data, i) {
-    Some(byte) when is_digit(byte) => skip_digits(data, i + 1)
+    Some(byte) when byte >= 0x30 && byte <= 0x39 => skip_digits(data, i + 1)
     _ => i
   }
 }
@@ -738,11 +735,10 @@ priv fn close_number<T>(
   start: Int,
   end: Int,
   integral: Bool,
-  frame: Frame<T>,
-  stack: List<Frame<T>>,
+  stack: Stack<T>,
 ) -> Parsed<T> {
   let value = number(builder, string::from_byte_range(data, start, end), integral)
-  close_value(builder, data, value, end, frame, stack)
+  close_value(builder, data, value, end, stack)
 }
 
 /// Returns the value of a number's text. One without a fraction or an

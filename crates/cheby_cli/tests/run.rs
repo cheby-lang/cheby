@@ -742,6 +742,74 @@ fn sorted_map_inserts_reuse_their_nodes() {
     );
 }
 
+/// Reuse (D-838, D-839) in `std::json`'s parser and writer, which keep the
+/// open arrays and objects in a chain of cells and write each step's cell
+/// over the old one (D-906). Nothing else would notice if an edit to
+/// `std/json/tree.cheby` or `std/json.cheby` moved a rebuild out of the
+/// block that takes its cell apart: the results stay the same, and only
+/// the count of reuse hits drops. The document is an array of 1000
+/// objects, each with three members, one of them an array of three
+/// numbers. The parser rewrites the innermost cell once per value inside
+/// a container (7000) and once more per member for its key (3000); the
+/// writer rewrites it once per element or member after the first of each
+/// array and object (999 + 2000 + 2000). Run with poisoning off, so the
+/// inline reuse paths run.
+#[test]
+fn json_containers_reuse_their_cells() {
+    // The parser's steps, then the writer's.
+    const EXPECTED: u64 = 7000 + 3000 + 999 + 2000 + 2000;
+    let dir = package(
+        "json_reuse",
+        &[
+            MANIFEST,
+            (
+                "src/main.cheby",
+                r#"//! Reads a JSON document of 1000 objects and writes it back.
+
+import std::io
+import std::json
+import std::list
+import std::string
+
+fn main() {
+  let records = list::map(list::range(0, 1000), fn(n) {
+    "\{\"id\": {n}, \"tags\": [1, 2, 3], \"ok\": true}"
+  })
+  let text = "[" + string::join(records, ", ") + "]"
+  let assert Ok(value) = json::parse_value(text)
+  let written = json::to_string(value)
+  let size = string::length(written)
+  io::println("{size}")
+}
+"#,
+            ),
+        ],
+    );
+    let mut cmd = Command::new(CHEBY);
+    cmd.args(["--color=never", "run"])
+        .current_dir(&dir)
+        .env("NO_COLOR", "1")
+        .env("CHEBY_RT_STATS", "1")
+        .env("CHEBY_RT_POISON", "0")
+        .env_remove("CHEBY_RC")
+        .env_remove("CHEBY_DUMP_DIR");
+    let out = process::run(cmd, None, TIMEOUT).unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(out.status, Some(0), "{}", out.stderr);
+    assert_eq!(out.stdout, "35891\n");
+    let (Some(hits), Some(misses)) = (
+        stat(&out.stderr, "reuse hits"),
+        stat(&out.stderr, "reuse misses"),
+    ) else {
+        panic!("no reuse lines:\n{}", out.stderr)
+    };
+    assert!(
+        hits >= EXPECTED,
+        "{hits} reuse hits, expected at least {EXPECTED}:\n{}",
+        out.stderr
+    );
+    assert_eq!(misses, 0, "{}", out.stderr);
+}
+
 /// A field every variant holds at the same place (D-071) is read without a
 /// test of the variant, so the read proves no layout to reuse (the fix
 /// review's TOK-1): a `Circle` rebuilt as a larger `Rect` in later arms,

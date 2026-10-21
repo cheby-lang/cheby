@@ -242,65 +242,74 @@ test "to_string writes any Int, and one outside the safe range reads back as a F
   assert parse_value(text) == Ok(floats)
 }
 
-/// The rest of an open array or object: the elements or members still to
-/// write, and the depth of nesting they are at.
-priv type Frame {
-  Items(List<Value>, Int),
-  Members(List<(String, Value)>, Int),
+/// The open arrays and objects, innermost first: the elements or members
+/// of each still to write, and the depth of nesting they are at. `Done`
+/// stands outside the document's value. It is a chain of cells rather
+/// than a list, so moving on to the next element writes the innermost cell
+/// over in place (D-838).
+priv type Open {
+  Done,
+  Items(List<Value>, Int, Open),
+  Members(List<(String, Value)>, Int, Open),
 }
 
 /// Writes `value` as text, indented when `pretty` is `True`. The open arrays
-/// and objects are a stack of frames on the heap whose top is its last
-/// element, and every piece is added to the end of one string, which no
-/// other value refers to, so each addition extends it in place (D-577).
+/// and objects are a chain of cells on the heap, and every piece is added
+/// to the end of one string, which no other value refers to, so each
+/// addition extends it in place (D-577).
 priv fn write(value: Value, pretty: Bool) -> String {
-  write_value("", value, 0, pretty, [])
+  write_value("", value, 0, pretty, Done)
 }
 
-/// Adds `value`, at `depth`, to `out`, then goes on with `frames`.
-priv fn write_value(
-  out: String,
-  value: Value,
-  depth: Int,
-  pretty: Bool,
-  frames: List<Frame>,
-) -> String {
+/// Adds `value`, at `depth`, to `out`, then goes on with `open`.
+priv fn write_value(out: String, value: Value, depth: Int, pretty: Bool, open: Open) -> String {
   case value {
-    Null => next(out + "null", frames, pretty)
-    Bool(True) => next(out + "true", frames, pretty)
-    Bool(False) => next(out + "false", frames, pretty)
-    Int(n) => next(out + int::show(n), frames, pretty)
-    Float(x) => next(out + float_text(x), frames, pretty)
-    String(text) => next(string::add_json_quoted(out, text), frames, pretty)
-    Array([]) => next(out + "[]", frames, pretty)
+    Null => next(out + "null", open, pretty)
+    Bool(True) => next(out + "true", open, pretty)
+    Bool(False) => next(out + "false", open, pretty)
+    Int(n) => next(out + int::show(n), open, pretty)
+    Float(x) => next(out + float_text(x), open, pretty)
+    String(text) => next(string::add_json_quoted(out, text), open, pretty)
+    Array([]) => next(out + "[]", open, pretty)
     Array([item, ..items]) => {
       let inner = depth + 1
       let opened = line_break(out + "[", pretty, inner)
-      write_value(opened, item, inner, pretty, lists::push(frames, Items(items, inner)))
+      write_value(opened, item, inner, pretty, Items(items, inner, open))
     }
-    Object([]) => next(out + "\{}", frames, pretty)
+    Object([]) => next(out + "\{}", open, pretty)
     Object([(key, item), ..members]) => {
       let inner = depth + 1
       let opened = key_into(line_break(out + "\{", pretty, inner), key, pretty)
-      write_value(opened, item, inner, pretty, lists::push(frames, Members(members, inner)))
+      write_value(opened, item, inner, pretty, Members(members, inner, open))
     }
   }
 }
 
 /// Goes on after a value: adds the next element or member of the innermost
 /// open array or object, or its closing bracket.
-priv fn next(out: String, frames: List<Frame>, pretty: Bool) -> String {
-  case frames {
-    [] => out
-    [..rest, Items([], depth)] => next(line_break(out, pretty, depth - 1) + "]", rest, pretty)
-    [..rest, Items([item, ..items], depth)] => {
+///
+/// The arm that takes the innermost cell apart builds the cell for the rest
+/// of its elements, so Perceus writes it over the old one in place (D-838).
+/// Keep the rebuild in that arm. Reuse pairs only when the rebuild is in a
+/// block that only the block taking the cell apart enters (D-839). A
+/// `let x = case ..` between the two, such as a `case pretty` that picks the
+/// separator, joins the arms, and then the old cell is freed and a new one
+/// allocated: the output stays the same, and nothing warns. The test
+/// `json_containers_reuse_their_cells` in `crates/cheby_cli/tests/run.rs`
+/// counts the reuse hits of a write, and fails when this step loses its
+/// reuse.
+priv fn next(out: String, open: Open, pretty: Bool) -> String {
+  case open {
+    Done => out
+    Items([], depth, below) => next(line_break(out, pretty, depth - 1) + "]", below, pretty)
+    Items([item, ..items], depth, below) => {
       let separated = line_break(out + ",", pretty, depth)
-      write_value(separated, item, depth, pretty, lists::push(rest, Items(items, depth)))
+      write_value(separated, item, depth, pretty, Items(items, depth, below))
     }
-    [..rest, Members([], depth)] => next(line_break(out, pretty, depth - 1) + "}", rest, pretty)
-    [..rest, Members([(key, item), ..members], depth)] => {
+    Members([], depth, below) => next(line_break(out, pretty, depth - 1) + "}", below, pretty)
+    Members([(key, item), ..members], depth, below) => {
       let separated = key_into(line_break(out + ",", pretty, depth), key, pretty)
-      write_value(separated, item, depth, pretty, lists::push(rest, Members(members, depth)))
+      write_value(separated, item, depth, pretty, Members(members, depth, below))
     }
   }
 }
@@ -561,6 +570,10 @@ test "parse_value reads arrays, objects and the whitespace around them" {
       r#"{"é": [1, {"x": null}], "é": []}"#,
       Object([("é", Array([Int(1), Object([("x", Null)])])), ("é", Array([]))]),
     ),
+    (
+      r#"{"a": true, "\u0062\n": [false, null]}"#,
+      Object([("a", Bool(True)), ("b\n", Array([Bool(False), Null]))]),
+    ),
   ]
   lists::each(cases, fn((text, value)) { assert (text, parse_value(text)) == (text, Ok(value)) })
 }
@@ -581,6 +594,9 @@ test "parse_value rejects what RFC 8259 does not allow where it starts" {
     (r"{1: 2}", 1, 2),
     ("truex", 1, 5),
     ("nulL", 1, 4),
+    ("fxlse", 1, 2),
+    ("[tRue]", 1, 3),
+    ("[1, nulx]", 1, 8),
     ("NaN", 1, 1),
     ("'a'", 1, 1),
     (r#"["é", x]"#, 1, 7),
