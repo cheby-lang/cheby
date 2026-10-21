@@ -145,10 +145,23 @@ fn runtime_helper_signatures() {
     use cheby_mir::RuntimeFn;
     use runtime::RuntimeFunc;
     for helper in RuntimeFn::ALL {
+        // The element a `list_uncons` keeps is read from its stack slot.
+        if helper == RuntimeFn::ListUnconsHead {
+            continue;
+        }
         let (f, takes_ctx) = RuntimeFunc::of(helper);
         let (params, ret) = f.ctypes();
         let ctx = usize::from(takes_ctx);
-        assert_eq!(params.len(), helper.params().len() + ctx, "{helper:?}");
+        // `list_uncons` also takes the address it writes the element to.
+        let out = usize::from(matches!(
+            helper,
+            RuntimeFn::ListUncons | RuntimeFn::ListUnconsOwned
+        ));
+        assert_eq!(
+            params.len(),
+            helper.params().len() + ctx + out,
+            "{helper:?}"
+        );
         assert_eq!(ret == CType::Void, helper.ret().is_none(), "{helper:?}");
     }
     assert_eq!(
@@ -748,10 +761,10 @@ fn slice_runtime_functions() {
         assert_eq!(f.ctypes(), (params, ret), "{f:?}");
         assert!(f.on_demand(), "{f:?}");
     }
-    assert_eq!(RuntimeFunc::ALL.len(), 36);
+    assert_eq!(RuntimeFunc::ALL.len(), 38);
     assert_eq!(
         RuntimeFunc::ALL.iter().filter(|f| f.on_demand()).count(),
-        12,
+        14,
         "only the M2 functions are declared on demand"
     );
     assert_eq!(
@@ -1740,4 +1753,77 @@ fn placeholder_tuples_fill_in_a_loop_and_store_fields_in_place() {
     // at 8 + 8 + 99999 * 8 = 0xc3508.
     assert!(small.contains("v1, v8+320\n"), "{small}");
     assert!(large.contains("v1, v8+0x000c_3508\n"), "{large}");
+}
+
+/// `f(xs) { n = list_length(xs); rest = list_uncons(xs, 0, 1, n); x =
+/// list_uncons_head(); ... }`, counts left out (D-909, D-910).
+fn uncons_unit() -> MirModule {
+    use cheby_mir::{Local, RuntimeFn, Rvalue};
+    let mut u = unit();
+    let function = &mut u.functions[0];
+    function.locals = IndexVec::from_raw(
+        [Repr::Value, Repr::Int, Repr::Value, Repr::Value]
+            .into_iter()
+            .map(|repr| LocalDecl {
+                repr,
+                name: None,
+                ty: None,
+            })
+            .collect(),
+    )
+    .unwrap();
+    let l = Local::from_u32;
+    let call = |dst: u32, func: RuntimeFn, args: Vec<Operand>| Stmt::Assign {
+        dst: l(dst),
+        value: Rvalue::CallRuntime { func, args },
+    };
+    function.blocks = IndexVec::from_raw(vec![Block {
+        params: Vec::new(),
+        stmts: vec![
+            call(1, RuntimeFn::ListLength, vec![Operand::Local(l(0))]),
+            call(
+                2,
+                RuntimeFn::ListUncons,
+                vec![
+                    Operand::Local(l(0)),
+                    Operand::Const(Const::Int(0)),
+                    Operand::Const(Const::Int(1)),
+                    Operand::Local(l(1)),
+                ],
+            ),
+            call(3, RuntimeFn::ListUnconsHead, Vec::new()),
+        ],
+        term: Terminator::Return(Operand::Local(l(3))),
+        unwind: Vec::new(),
+    }])
+    .unwrap();
+    u
+}
+
+/// A list's length is a load of its root's length word, with no call
+/// (D-910), and a pattern step passes the address of one stack slot that
+/// the head is then loaded from (D-909).
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn list_lengths_load_and_steps_pass_a_slot() {
+    let text = clif_of(&[uncons_unit()], &CodegenOptions::default());
+    let off = cheby_runtime::abi::list::ROOT_LEN_OFFSET;
+    assert!(
+        text.contains(&format!("load.i64 notrap aligned v1+{off}\n")),
+        "{text}"
+    );
+    assert!(
+        !text.contains(cheby_runtime::abi::sym::LIST_LENGTH),
+        "{text}"
+    );
+    // One slot: its address is passed to the call, then read back.
+    assert_eq!(text.matches("explicit_slot 8").count(), 1, "{text}");
+    assert_eq!(text.matches("stack_addr.i64 ss0").count(), 2, "{text}");
+    assert!(
+        text.contains(cheby_runtime::abi::sym::LIST_UNCONS),
+        "{text}"
+    );
 }

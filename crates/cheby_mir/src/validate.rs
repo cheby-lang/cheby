@@ -57,6 +57,11 @@
 //! With the full ownership check (debug builds), no drop moves later
 //! (D-851, `FnCx::check_drop_positions`).
 //!
+//! A list pattern step read in one call (D-909): a `list_uncons` defines
+//! its result and the next statement of its block is the
+//! `list_uncons_head` that takes its element, which follows nothing else;
+//! `list_uncons_owned` appears only after counting.
+//!
 //! Canonical pads, blocks `drop _l; goto <pad>` or `resume` that lead
 //! only to `resume` and that normal control flow does not reach, are left
 //! out of the dominance graph and the representation walk (D-735): what
@@ -375,6 +380,7 @@ impl FnCx<'_> {
         self.check_dominance(&defs)?;
         self.check_reprs(stage)?;
         self.check_init_fields();
+        self.check_uncons(stage);
         self.check_reuse(stage)?;
         if self.counted(stage) && self.errors.is_empty() {
             if let (Some(recorded), Some(reachable)) = (self.recorded, &reachable) {
@@ -916,6 +922,78 @@ impl FnCx<'_> {
                         "bb{} shares _{}, a tuple being filled field by field (D-720)",
                         id.as_u32(),
                         l.as_u32()
+                    ));
+                }
+            }
+        }
+    }
+
+    /// A list pattern step read in one call (D-909): each `list_uncons`
+    /// and `list_uncons_owned` defines its result and is followed at once,
+    /// in its block, by the `list_uncons_head` that takes the element it
+    /// kept, and each `list_uncons_head` follows one; `list_uncons_owned`,
+    /// which the RC pass emits, only once counts are placed.
+    fn check_uncons(&mut self, stage: Stage) {
+        let f = self.f;
+        let counted = self.counted(stage);
+        for (id, block) in f.blocks.iter_enumerated() {
+            let funcs: Vec<Option<(RuntimeFn, bool)>> = block
+                .stmts
+                .iter()
+                .map(|stmt| match stmt {
+                    Stmt::Assign {
+                        value: Rvalue::CallRuntime { func, .. },
+                        ..
+                    } => Some((*func, true)),
+                    Stmt::Eval(Rvalue::CallRuntime { func, .. }) => Some((*func, false)),
+                    _ => None,
+                })
+                .collect();
+            for (j, &call) in funcs.iter().enumerate() {
+                let Some((func, assigned)) = call else {
+                    continue;
+                };
+                let uncons = matches!(func, RuntimeFn::ListUncons | RuntimeFn::ListUnconsOwned);
+                if !uncons && func != RuntimeFn::ListUnconsHead {
+                    continue;
+                }
+                if !assigned {
+                    self.err(format!(
+                        "bb{} statement {j}: call_runtime {} without its result (D-909)",
+                        id.as_u32(),
+                        func.name()
+                    ));
+                }
+                if func == RuntimeFn::ListUnconsOwned && !counted {
+                    self.err(format!(
+                        "bb{} statement {j}: list_uncons_owned before counting (D-909)",
+                        id.as_u32()
+                    ));
+                }
+                let paired = if uncons {
+                    matches!(
+                        j.checked_add(1).and_then(|k| funcs.get(k)),
+                        Some(Some((RuntimeFn::ListUnconsHead, _)))
+                    )
+                } else {
+                    matches!(
+                        j.checked_sub(1).and_then(|k| funcs.get(k)),
+                        Some(Some((
+                            RuntimeFn::ListUncons | RuntimeFn::ListUnconsOwned,
+                            _
+                        )))
+                    )
+                };
+                if !paired {
+                    let what = if uncons {
+                        "is not followed at once by list_uncons_head"
+                    } else {
+                        "does not follow a list_uncons at once"
+                    };
+                    self.err(format!(
+                        "bb{} statement {j}: call_runtime {} {what} (D-909)",
+                        id.as_u32(),
+                        func.name()
                     ));
                 }
             }
@@ -2014,7 +2092,8 @@ impl FnCx<'_> {
 
 /// Whether `stmt` only releases or adds references, running nothing a
 /// handle could observe (D-851): `dup`, `drop`,
-/// `drop_reuse` and specialized drops.
+/// `drop_reuse` and specialized drops, and the `list_uncons_head` that
+/// completes the instruction before it (D-909).
 fn releases_only(stmt: &Stmt) -> bool {
     matches!(
         stmt,
@@ -2022,7 +2101,14 @@ fn releases_only(stmt: &Stmt) -> bool {
             | Stmt::Drop(_)
             | Stmt::DropKeep { .. }
             | Stmt::Assign {
-                value: Rvalue::DropReuse { .. },
+                value: Rvalue::DropReuse { .. }
+                    // Completes the `list_uncons` before it and runs no
+                    // code: what counting releases after that instruction
+                    // follows it (D-909).
+                    | Rvalue::CallRuntime {
+                        func: RuntimeFn::ListUnconsHead,
+                        ..
+                    },
                 ..
             }
     )

@@ -350,6 +350,68 @@ pub(crate) fn slice_owned(list: Root, start: usize, end: usize) -> Root {
     update(list, |view| narrow(view, start, end))
 }
 
+/// Element `at` of a borrowed list (below its length), dup'd, and the
+/// view of elements `start..end`, clamped as by [`slice`]: a list
+/// pattern's element and spread in one call (D-909). The view is made
+/// first, so when its root cannot be allocated nothing is held.
+pub(crate) fn uncons(list: Root, at: usize, start: usize, end: usize) -> (Word, Root) {
+    let rest = slice(list, start, end);
+    let head = get(list, at).unwrap_or_else(|| {
+        crate::panic::fatal(format_args!(
+            "list index {at} out of range for length {}",
+            list.len()
+        ))
+    });
+    dup_word(head);
+    (head, rest)
+}
+
+/// [`uncons`] of an owned list, which is consumed: element `at`, owned,
+/// and [`slice_owned`] of `start..end` (D-909). When the slice is the list
+/// without `at`, at either end, and the root is unique, one descent moves
+/// the element out of its slot where every node on the path is unique (no
+/// `dup` and no `drop`: D-893's release of the cut element, done by a
+/// move) or dups it under a shared node, and the root becomes the view in
+/// place (D-634). Any other shape, or a shared root, is [`get`] and
+/// [`slice_owned`]. O(log n). The caller has run [`slice_owned_bound`]'s
+/// preflight, so nothing here raises.
+#[expect(
+    clippy::inline_always,
+    reason = "the pattern-step helper's only body, as `slice_owned` is (D-894)"
+)]
+#[inline(always)]
+pub(crate) fn uncons_owned(list: Root, at: usize, start: usize, end: usize) -> (Word, Root) {
+    let len = list.len();
+    let end = end.min(len);
+    let start = start.min(end);
+    let front = at == 0 && start == 1 && end == len;
+    let back = start == 0 && end == at && at.saturating_add(1) == len;
+    if (front || back) && len > 1 && list.is_unique() {
+        let view = list.view();
+        if let Some(tree) = view.tree {
+            stats::record(Event::ListUpdateInPlace);
+            let head = tree::take_or_get(tree, view.offset.saturating_add(at), CLEARED);
+            list.store(View {
+                tree: Some(tree),
+                offset: if front {
+                    view.offset.saturating_add(1)
+                } else {
+                    view.offset
+                },
+                len: len.saturating_sub(1),
+            });
+            return (head, list);
+        }
+    }
+    let head = get(list, at).unwrap_or_else(|| {
+        crate::panic::fatal(format_args!(
+            "list index {at} out of range for length {len}"
+        ))
+    });
+    dup_word(head);
+    (head, slice_owned(list, start, end))
+}
+
 /// A count or index argument clamped to `0..=len` (D-298).
 pub(crate) fn clamp(n: i64, len: usize) -> usize {
     usize::try_from(n).map_or(0, |n| n.min(len))

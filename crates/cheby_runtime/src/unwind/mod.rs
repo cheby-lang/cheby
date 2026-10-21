@@ -788,6 +788,21 @@ mod tests {
         assert_raised(&ran, &(0, 0));
     }
 
+    #[test]
+    fn list_uncons_owned_consumes_its_list_when_it_raises() {
+        let ran = consumes_when_raising(three, (|_| 0, Second::Owned), |ctx, list, _| {
+            let mut head: Word = 7;
+            // SAFETY: `list` is given up; `head` is writable.
+            let rest =
+                unsafe { list::cheby_rt_list_uncons_owned(ctx, list, 0, 1, 3, &raw mut head) };
+            // The element is written only when the call returns normally
+            // (D-909).
+            assert_eq!(head, 7);
+            rest
+        });
+        assert_raised(&ran, &(0, 0));
+    }
+
     // -----------------------------------------------------------------
     // Marking a value shared (D-705)
 

@@ -31,6 +31,7 @@ Detail level: workstreams with outcomes. This file is refined into tasks when M3
 ### 3.3 Cached code for `cheby run`
 
 - Machine code cached per module, shared with AOT (ADR-0047).
+- Cached and AOT code bakes in layout constants from `cheby_runtime::abi`, such as the list root's length offset `abi::list::ROOT_LEN_OFFSET` (D-910). The compiler version that keys the cache (D-255) must change whenever one of them does.
 - A loader of our own that maps cached code and relocates it against the indirection table, since Cranelift's JIT cannot reload code (D-254).
 - Changed modules are compiled lazily, one function on its first call, through the indirection table (D-043).
 

@@ -308,6 +308,16 @@ pub const CTX_UNWIND: i32 = 12;
 /// the block starts after it, at byte 24.
 pub const CTX_WAIT_FRAME: i32 = 16;
 
+/// List roots (D-563): the header (layout [`layout::LIST_FIRST`]), then
+/// the tree, the view's offset into it and the view's length, the last two
+/// raw. Generated code reads a list's length from its root (D-910), so the
+/// offset is part of the ABI between generated code and the runtime.
+pub mod list {
+    /// Byte offset of a root's length, a raw `u64`. The static empty list
+    /// holds 0 there.
+    pub const ROOT_LEN_OFFSET: i32 = 24;
+}
+
 /// The values of the unwind flag at [`CTX_UNWIND`] (D-685).
 pub mod unwind_flag {
     /// No unwinding in flight.
@@ -490,6 +500,8 @@ pub mod sym {
     /// consumes `a`, borrows `b` (W1-E).
     pub const LIST_APPEND: &str = "cheby_rt_list_append";
     /// `int64_t cheby_rt_list_length(uint64_t list)`, borrowed (W1-E).
+    /// Generated code reads the length inline instead
+    /// ([`super::list::ROOT_LEN_OFFSET`], D-910).
     pub const LIST_LENGTH: &str = "cheby_rt_list_length";
     /// `uint64_t cheby_rt_list_get(uint64_t list, int64_t index)`: the
     /// element, dup'd; the index is in range (W1-E).
@@ -602,6 +614,15 @@ pub mod sym {
     /// fields generated code already released or moved to its kept
     /// projections, charging the domain as a free does.
     pub const FREE_UNIQUE: &str = "cheby_rt_free_unique";
+    /// `uint64_t cheby_rt_list_uncons(ExecCtx *ctx, uint64_t list, int64_t at, int64_t start,
+    /// int64_t end, uint64_t *head)`: `LIST_GET` of `at`, written to `*head`, and the
+    /// `LIST_SLICE` of `start..end` it returns, in one call; list borrowed.
+    pub const LIST_UNCONS: &str = "cheby_rt_list_uncons";
+    /// `uint64_t cheby_rt_list_uncons_owned(ExecCtx *ctx, uint64_t list, int64_t at,
+    /// int64_t start, int64_t end, uint64_t *head)`: `LIST_UNCONS` of a list it
+    /// consumes, which moves the head out of a unique list in the descent that
+    /// cuts it.
+    pub const LIST_UNCONS_OWNED: &str = "cheby_rt_list_uncons_owned";
     /// Data: the runtime's event-counting flag, one byte
     /// (`crate::stats::counting_flag`): not [`COUNTING_OFF`] while
     /// counting is on or not yet settled.
@@ -680,7 +701,7 @@ pub mod sym {
     /// order `symbols()` lists them first. Kernels
     /// (`cheby_<module>_<function>`) follow in `symbols()`; they come from
     /// each kernel module's registration (plan §4.3.3).
-    pub const ALL: [&str; 70] = [
+    pub const ALL: [&str; 72] = [
         ALLOC,
         DUP,
         DROP,
@@ -727,6 +748,8 @@ pub mod sym {
         DROP_REUSE_CHECKED,
         ALLOC_REUSE_CHECKED,
         FREE_UNIQUE,
+        LIST_UNCONS,
+        LIST_UNCONS_OWNED,
         STATS_COUNTING,
         DESC_SYMBOLS[0],
         DESC_SYMBOLS[1],
@@ -915,7 +938,7 @@ mod tests {
             assert_eq!(sym::desc_symbol(name), Some(symbol));
         }
         assert_eq!(sym::desc_symbol("dyn"), None);
-        assert_eq!(sym::ALL.get(47..), Some(&sym::DESC_SYMBOLS[..]));
+        assert_eq!(sym::ALL.get(49..), Some(&sym::DESC_SYMBOLS[..]));
         assert_eq!(
             [
                 layout::SENDER,

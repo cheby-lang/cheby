@@ -116,6 +116,33 @@ pub(super) fn set(tree: Node, i: usize, elem: Word) -> Node {
     node
 }
 
+/// Element `i` (below the length), owned, in one descent: moved out and
+/// replaced with the immediate `word` when every node on its path is
+/// unique, so the tree no longer holds it; dup'd and left in place when a
+/// node on the path is shared (another tree holds that node and its
+/// elements).
+pub(super) fn take_or_get(tree: Node, i: usize, word: Word) -> Word {
+    let (mut node, mut i) = (tree, i);
+    let mut unique = node.is_unique();
+    // A branch of height `h` has children of height `h - 1`, so the
+    // height is read once.
+    let mut height = node.height();
+    while height > 0 {
+        let (j, before) = node.locate_at(i, height);
+        node = node.child(j);
+        i = i.saturating_sub(before);
+        unique = unique && node.is_unique();
+        height = height.saturating_sub(1);
+    }
+    let elem = node.elem(i);
+    if unique {
+        node.put_elem(i, word);
+    } else {
+        dup_word(elem);
+    }
+    elem
+}
+
 /// Replaces element `i` (below the length) with the immediate `word` and
 /// releases the old element, in place, when every node on its path is
 /// unique; returns whether it did. A shared node on the path leaves the

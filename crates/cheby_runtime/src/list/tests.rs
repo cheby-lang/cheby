@@ -1441,3 +1441,99 @@ fn system_refusal_is_one_request_of_the_arming_thread() {
     let served = from_iter([abi::tag_int(3).unwrap()]);
     drop_word(served);
 }
+
+/// `cheby_rt_list_uncons` gives the element, dup'd, and the view that
+/// `cheby_rt_list_get` and `cheby_rt_list_slice` give, and leaves the
+/// borrowed list as it was (D-909).
+#[test]
+fn borrowed_uncons_matches_get_and_slice() {
+    balanced(|| {
+        let null = std::ptr::null_mut();
+        for n in [1_i64, 2, 33, 1100] {
+            let model: Vec<i64> = (0..n).collect();
+            let xs = list(&model);
+            for (at, start, end) in [(0, 1, n), (n - 1, 0, n - 1), (0, 1, n - 1)] {
+                let mut head: Word = 0;
+                // SAFETY: a live list, borrowed; `head` is writable.
+                let rest =
+                    unsafe { cheby_rt_list_uncons(null, xs.word(), at, start, end, &raw mut head) };
+                assert_eq!(value(head), at, "n {n} at {at}");
+                drop_word(head);
+                let rest = root(rest);
+                check(
+                    rest,
+                    model
+                        .get(clamped(start, n)..clamped(end, n).max(clamped(start, n)))
+                        .unwrap(),
+                );
+                release(rest);
+                check(xs, &model);
+            }
+            release(xs);
+        }
+    });
+}
+
+/// A bound of `0..=n`, as the helpers clamp them.
+fn clamped(i: i64, n: i64) -> usize {
+    usize::try_from(i.clamp(0, n)).unwrap()
+}
+
+/// `cheby_rt_list_uncons_owned` gives the element and the rest
+/// that `cheby_rt_list_get` and `cheby_rt_list_slice_owned` give, front and
+/// back, on unique and shared lists of one to three levels: it moves the
+/// element out of a unique path (count unchanged, slot cleared) and dups it
+/// under a shared one, and every walk balances.
+#[test]
+fn uncons_matches_get_and_owned_slice() {
+    balanced(|| {
+        let null = std::ptr::null_mut();
+        for n in [1_i64, 2, 3, 33, 40, 1100] {
+            for shared in [false, true] {
+                for front in [true, false] {
+                    let model: Vec<i64> = (0..n).collect();
+                    let mut xs = list(&model);
+                    let keep = shared.then(|| {
+                        dup_word(xs.word());
+                        xs
+                    });
+                    let mut left = model.clone();
+                    while !left.is_empty() {
+                        let len = left.len() as i64;
+                        let (at, start, end) = if front {
+                            (0, 1, len)
+                        } else {
+                            (len - 1, 0, len - 1)
+                        };
+                        let mut head: Word = 0;
+                        // SAFETY: a live list, given up; `head` is writable.
+                        let rest = unsafe {
+                            cheby_rt_list_uncons_owned(
+                                null,
+                                xs.word(),
+                                at,
+                                start,
+                                end,
+                                &raw mut head,
+                            )
+                        };
+                        let want = if front {
+                            left.remove(0)
+                        } else {
+                            left.pop().unwrap()
+                        };
+                        assert_eq!(value(head), want, "n {n} shared {shared} front {front}");
+                        drop_word(head);
+                        xs = root(rest);
+                        check(xs, &left);
+                    }
+                    release(xs);
+                    if let Some(original) = keep {
+                        check(original, &model);
+                        release(original);
+                    }
+                }
+            }
+        }
+    });
+}

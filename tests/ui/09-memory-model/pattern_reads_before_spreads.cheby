@@ -1,0 +1,92 @@
+// @mode: run-pass
+// @decisions: D-205, D-893, D-908, D-909
+// @milestone: M2
+//! A list pattern reads its elements before its spreads, and a matched
+//! element's fields before a list among them is cut (D-908), so a spread
+//! is the list's last use: a list that dies at the match is cut in place,
+//! and an element it cuts or walks out that only it held is released at
+//! its last use while the spread is still alive (§9.2, D-893). Before
+//! D-908, a `receive` of each case blocked forever, because the spread
+//! still shared the slot holding the `Sender`. D-909 moves a bound
+//! element next to its spread out of the list in the same step.
+
+import std::channel
+import std::io
+import std::list
+
+type Frame {
+  Frame(List<channel::Sender<Int>>, Int),
+}
+
+fn last_walked_out() -> Nil {
+  let (other, _other_rx) = channel::new::<Int>(1)
+  let (tx, rx) = channel::new::<Int>(1)
+  case [other, tx] {
+    [..rest, last] => {
+      let assert Ok(Nil) = channel::send(last, 1)
+      let a = channel::receive(rx)
+      let b = channel::receive(rx)
+      let n = list::length(rest)
+      io::println("last walked out: {a:?} {b:?} {n}")
+    }
+    [] => Nil
+  }
+}
+
+fn cut_before_the_last() -> Nil {
+  let (first, _first_rx) = channel::new::<Int>(1)
+  let (cut, cut_rx) = channel::new::<Int>(1)
+  let (last, last_rx) = channel::new::<Int>(1)
+  case [first, cut, last] {
+    [..rest, _, x] => {
+      let assert Ok(Nil) = channel::send(x, 2)
+      let a = channel::receive(cut_rx)
+      let b = channel::receive(last_rx)
+      let n = list::length(rest)
+      io::println("cut before the last: {a:?} {b:?} {n}")
+    }
+    _ => Nil
+  }
+}
+
+fn first_before_the_spread() -> Nil {
+  let (tx, rx) = channel::new::<Int>(1)
+  let (other, _other_rx) = channel::new::<Int>(1)
+  let (end, end_rx) = channel::new::<Int>(1)
+  case [tx, other, end] {
+    [first, ..mid, last] => {
+      let assert Ok(Nil) = channel::send(first, 3)
+      let a = channel::receive(rx)
+      let b = channel::receive(rx)
+      let assert Ok(Nil) = channel::send(last, 4)
+      let c = channel::receive(end_rx)
+      let n = list::length(mid)
+      io::println("first before the spread: {a:?} {b:?} {c:?} {n}")
+    }
+    _ => Nil
+  }
+}
+
+fn frame_walked_out() -> Nil {
+  let (below_tx, _below_rx) = channel::new::<Int>(1)
+  let (tx, rx) = channel::new::<Int>(1)
+  let (other, _other_rx) = channel::new::<Int>(1)
+  case [Frame([below_tx], 0), Frame([tx, other], 3)] {
+    [..below, Frame([first, ..more], depth)] => {
+      let assert Ok(Nil) = channel::send(first, depth)
+      let a = channel::receive(rx)
+      let b = channel::receive(rx)
+      let n = list::length(more)
+      let m = list::length(below)
+      io::println("frame walked out: {a:?} {b:?} {n} {m}")
+    }
+    _ => Nil
+  }
+}
+
+fn main() {
+  last_walked_out()
+  cut_before_the_last()
+  first_before_the_spread()
+  frame_walked_out()
+}

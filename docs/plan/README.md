@@ -281,6 +281,9 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-905     | Package-visible kernel `string::from_byte_range` reads `std::json`'s string and number texts        |
 | D-906     | `std::json` keeps open arrays and objects in a chain of cells that each step rewrites in place      |
 | D-907     | Freeing reads a free-shape table; a fiber allocates and charges through its control block           |
+| D-908     | A pattern reads its elements and fields before its spreads, so a dying list is cut in place         |
+| D-909     | `list_uncons` reads a pattern's element and spread in one call, moving it out of a unique list      |
+| D-910     | Generated code reads a list's length from its root (offset 24 of D-563), now part of the ABI        |
 
 ## Open questions
 

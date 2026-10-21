@@ -170,6 +170,72 @@ pub unsafe extern "C" fn cheby_rt_list_slice(
     })
 }
 
+/// `ListUncons` (`[x, ..rest]` and `[..rest, x]`): the list borrowed;
+/// element `at` (in range: lowering checked the length), dup'd, written
+/// to `*head`, and the view of `start..end` returned, as
+/// [`cheby_rt_list_get`] and [`cheby_rt_list_slice`] would give them.
+/// `*head` is written only when it returns normally.
+///
+/// # Safety
+///
+/// `list` is a live list and `head` points to a writable word.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cheby_rt_list_uncons(
+    ctx: *mut ExecCtx,
+    list: u64,
+    at: i64,
+    start: i64,
+    end: i64,
+    head: *mut u64,
+) -> u64 {
+    guarded(Some(ctx), || {
+        // SAFETY: forwarded from the caller.
+        let list = unsafe { root(list) };
+        let len = ops::len(list);
+        let at = usize::try_from(at).unwrap_or(usize::MAX);
+        let (elem, rest) = ops::uncons(list, at, ops::clamp(start, len), ops::clamp(end, len));
+        // SAFETY: forwarded from the caller.
+        unsafe { head.write(elem) };
+        rest.word()
+    })
+}
+
+/// `ListUncons` on a list that dies at the match: `list` owned. One
+/// descent moves the head out of a unique list and the root becomes the
+/// view in place ([`ops::uncons_owned`]). `list` is consumed even when it
+/// raises, as [`cheby_rt_list_push`] says, and `*head` is then not
+/// written.
+///
+/// # Safety
+///
+/// `list` is a live list owned by the caller and given up; `head` points
+/// to a writable word.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cheby_rt_list_uncons_owned(
+    ctx: *mut ExecCtx,
+    list: u64,
+    at: i64,
+    start: i64,
+    end: i64,
+    head: *mut u64,
+) -> u64 {
+    guarded(Some(ctx), || {
+        let owned = DropOnUnwind::new([list]);
+        // SAFETY: forwarded from the caller.
+        let list = unsafe { root(list) };
+        // SAFETY: `ctx` is null or the running fiber's control block.
+        alloc::preflight(unsafe { ctx.as_ref() }, || ops::slice_owned_bound(list));
+        owned.disarm();
+        let len = ops::len(list);
+        let at = usize::try_from(at).unwrap_or(usize::MAX);
+        let (elem, rest) =
+            ops::uncons_owned(list, at, ops::clamp(start, len), ops::clamp(end, len));
+        // SAFETY: forwarded from the caller.
+        unsafe { head.write(elem) };
+        rest.word()
+    })
+}
+
 /// `ListSlice` on a list that dies at the match: `list` owned; the list of
 /// [`cheby_rt_list_slice`], with the root changed in place when the
 /// list's count is one, and the cut elements that only this list holds

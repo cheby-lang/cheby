@@ -14,8 +14,11 @@
 //!    successor (D-205); an edge into a block with other predecessors is
 //!    split first.
 //!
-//! A `list_slice` whose list rule 2 would drop right after consumes the
-//! list instead (`list_slice_owned`), so a unique list is sliced in place.
+//! A `list_slice` or `list_uncons` whose list rule 2 would drop right
+//! after consumes the list instead (`list_slice_owned`,
+//! `list_uncons_owned`), so a unique list is sliced in place (D-634,
+//! D-909). What rules 2 and 3 put after a `list_uncons` goes after the
+//! `list_uncons_head` that completes it, which must follow it at once.
 //!
 //! Borrowed locals (D-715, [`Function::borrowed_locals`]) hold no
 //! reference: a borrowed parameter, and a `field` result of a borrowed
@@ -99,6 +102,9 @@ pub fn insert(f: &mut Function) -> Result<(), Ice> {
                 stmts.push(Stmt::Drop(p));
             }
         }
+        // What goes after a `list_uncons`, held until its
+        // `list_uncons_head` is placed.
+        let mut held_post: Vec<Stmt> = Vec::new();
         for (stmt, after) in block.stmts.iter().zip(&bl.after) {
             let uses = match stmt {
                 Stmt::Assign { value, .. } | Stmt::Eval(value) => value.uses(),
@@ -122,8 +128,14 @@ pub fn insert(f: &mut Function) -> Result<(), Ice> {
                     post.push(Stmt::Drop(dst));
                 }
             }
+            if is_uncons(stmt) {
+                held_post.extend(post);
+                continue;
+            }
+            stmts.append(&mut held_post);
             stmts.extend(post);
         }
+        stmts.append(&mut held_post);
         match &block.term {
             Terminator::Return(_) | Terminator::TailCall { .. } | Terminator::Goto { .. } => {
                 let (before, post) = place(f, &borrowed, &block.term.uses(), &bl.out)?;
@@ -163,23 +175,42 @@ pub fn insert(f: &mut Function) -> Result<(), Ice> {
     place_edge_drops(f, new_blocks, edge_drops)
 }
 
-/// `stmt`, except that a `list_slice` whose list `post` drops right after
-/// (its last use) becomes `list_slice_owned`, which consumes the list
-/// instead, and that drop goes: a unique list then becomes its own slice
-/// in place, so walking a list with `[x, ..rest]` allocates nothing per
-/// element.
+/// Whether `stmt` is a `list_uncons`, which its `list_uncons_head`
+/// follows at once (D-909).
+fn is_uncons(stmt: &Stmt) -> bool {
+    matches!(
+        stmt,
+        Stmt::Assign {
+            value: Rvalue::CallRuntime {
+                func: RuntimeFn::ListUncons | RuntimeFn::ListUnconsOwned,
+                ..
+            },
+            ..
+        }
+    )
+}
+
+/// `stmt`, except that a `list_slice` or `list_uncons` whose list `post`
+/// drops right after (its last use) becomes `list_slice_owned` or
+/// `list_uncons_owned`, which consumes the list instead, and that drop
+/// goes: a unique list then becomes its own slice in place, so walking a
+/// list with `[x, ..rest]` allocates nothing per element (D-634, D-909).
 fn own_dying_list(stmt: &Stmt, post: &mut Vec<Stmt>) -> Stmt {
     let mut stmt = stmt.clone();
     if let Stmt::Assign {
         value: Rvalue::CallRuntime { func, args },
         ..
     } = &mut stmt
-        && *func == RuntimeFn::ListSlice
+        && matches!(*func, RuntimeFn::ListSlice | RuntimeFn::ListUncons)
         && let Some(&Operand::Local(list)) = args.first()
         && let Some(at) = post.iter().position(|s| *s == Stmt::Drop(list))
     {
         post.remove(at);
-        *func = RuntimeFn::ListSliceOwned;
+        *func = if *func == RuntimeFn::ListSlice {
+            RuntimeFn::ListSliceOwned
+        } else {
+            RuntimeFn::ListUnconsOwned
+        };
     }
     stmt
 }

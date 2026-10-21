@@ -5,7 +5,9 @@
 //! current block, which dominates the rest of the path, and the value is
 //! remembered for that path only ([`Env`]). Each read converts the value
 //! to its type's representation, so a uniform field holding an `Int` is
-//! unboxed once (D6).
+//! unboxed once (D6). At a leaf, the positions an arm binds are read level
+//! by level, every read of a level before its spreads, and an element next
+//! to a spread is read with it in one `list_uncons` (D-908, D-909).
 //!
 //! An arm reached from one leaf has its body lowered right there. An arm
 //! reached from several leaves (alternatives, or rows copied into several
@@ -19,6 +21,7 @@ use cheby_diag::Span;
 use cheby_iface::{Ice, Ty, TyKind};
 use cheby_resolve::LocalId;
 use cheby_types::thir::ExprId;
+use rustc_hash::FxHashMap;
 
 use crate::ir::{
     ArithOp, BlockId, Const, LayoutRef, Local, Operand, PanicKind, RuntimeFn, Rvalue, Terminator,
@@ -278,6 +281,7 @@ impl BodyCx<'_, '_> {
             .get(arm)
             .ok_or_else(|| Ice::new("a leaf for an unknown arm"))?;
         let (guard, locals) = (plan.guard, plan.locals.clone());
+        self.read_bound(m, bindings, &locals, &mut env)?;
         let mut values = Vec::with_capacity(locals.len());
         for id in &locals {
             let occ = bindings
@@ -636,6 +640,169 @@ impl BodyCx<'_, '_> {
             },
         )?;
         Ok(Operand::Local(at))
+    }
+
+    /// Reads the positions that `locals`, an arm's names, are bound to
+    /// (`bindings`), and their parents, in the current block, level by
+    /// level from the subjects down (D-908). Within a level every read (a
+    /// field, a tuple element or a list element) comes before any spread,
+    /// so a spread is its list's last read: a list that dies at the match
+    /// is cut in place (D-634) and the elements cut off it are released
+    /// there (D-893). A matched element's own fields are read before a
+    /// list among them is cut, so that list is unique when the element
+    /// was. Inside one pattern the order has no meaning in the source: the
+    /// match is the subject's last use (D-205).
+    ///
+    /// An element next to its list's spread, `x` in `[x, ..rest]` or
+    /// `[..rest, x]`, is read with the spread in one `list_uncons`
+    /// ([`Self::read_uncons`], D-909), which moves it out of a unique list.
+    fn read_bound(
+        &mut self,
+        m: &Match<'_>,
+        bindings: &[(LocalId, OccId)],
+        locals: &[LocalId],
+        env: &mut Env,
+    ) -> Result<(), Ice> {
+        // Each position to read, once, with its depth and whether it is a
+        // spread; parents before their children.
+        let mut todo: Vec<(usize, bool, OccId)> = Vec::new();
+        let mut queued = vec![false; m.decision.occs.len()];
+        for id in locals {
+            let occ = bindings
+                .iter()
+                .find(|(l, _)| l == id)
+                .map(|&(_, o)| o)
+                .ok_or_else(|| Ice::new("an alternative that does not bind every name"))?;
+            let mut chain = Vec::new();
+            let mut cur = Some(occ);
+            while let Some(o) = cur {
+                if queued.get(o.index()).copied().unwrap_or(true) {
+                    break;
+                }
+                if let Some(q) = queued.get_mut(o.index()) {
+                    *q = true;
+                }
+                chain.push(o);
+                cur = m.decision.occ(o)?.parent;
+            }
+            for o in chain.into_iter().rev() {
+                if env.vals.get(o.index()).copied().flatten().is_some() {
+                    continue;
+                }
+                let data = m.decision.occ(o)?;
+                let mut depth = 0_usize;
+                let mut up = data.parent;
+                while let Some(p) = up {
+                    depth = depth.saturating_add(1);
+                    up = m.decision.occ(p)?.parent;
+                }
+                todo.push((depth, matches!(data.step, Step::Slice { .. }), o));
+            }
+        }
+        // The unread elements next to a spread: the element before it, or
+        // the one after it.
+        let mut elems: FxHashMap<(OccId, Step), OccId> = FxHashMap::default();
+        for &(_, slice, o) in &todo {
+            let data = m.decision.occ(o)?;
+            if let (false, Some(parent), Step::Index(_) | Step::FromEnd(_)) =
+                (slice, data.parent, data.step)
+            {
+                elems.insert((parent, data.step), o);
+            }
+        }
+        let mut pairs: FxHashMap<OccId, OccId> = FxHashMap::default();
+        let mut fused = vec![false; m.decision.occs.len()];
+        for &(_, slice, o) in &todo {
+            let data = m.decision.occ(o)?;
+            let (true, Some(parent), Step::Slice { start, from_end }) =
+                (slice, data.parent, data.step)
+            else {
+                continue;
+            };
+            let before = start.checked_sub(1).map(Step::Index);
+            let after = (from_end > 0).then_some(Step::FromEnd(from_end));
+            let Some(&elem) = [before, after]
+                .into_iter()
+                .flatten()
+                .find_map(|step| elems.get(&(parent, step)))
+            else {
+                continue;
+            };
+            pairs.insert(o, elem);
+            if let Some(f) = fused.get_mut(elem.index()) {
+                *f = true;
+            }
+        }
+        todo.sort_by_key(|&(depth, slice, _)| (depth, slice));
+        for (_, _, o) in todo {
+            if fused.get(o.index()).copied().unwrap_or(false) {
+                continue;
+            }
+            match pairs.get(&o) {
+                Some(&elem) => self.read_uncons(m, o, elem, env)?,
+                None => {
+                    self.occ_value(m, o, env)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Reads the spread at `slice` and the element at `elem` next to it in
+    /// one step (D-909): `rest = list_uncons(list, at, start, end)` and,
+    /// right after it, `elem = list_uncons_head()`. The RC pass makes it
+    /// `list_uncons_owned` where the list dies (D-634).
+    fn read_uncons(
+        &mut self,
+        m: &Match<'_>,
+        slice: OccId,
+        elem: OccId,
+        env: &mut Env,
+    ) -> Result<(), Ice> {
+        let s = m.decision.occ(slice)?.clone();
+        let e = m.decision.occ(elem)?.clone();
+        let (Step::Slice { start, from_end }, Some(parent)) = (s.step, s.parent) else {
+            return Err(Ice::new("an uncons without its spread"));
+        };
+        if e.parent != Some(parent) {
+            return Err(Ice::new("an uncons of an element of another list"));
+        }
+        let list = self.occ_value(m, parent, env)?;
+        let end = self.len_minus(parent, list, from_end, env, m.span)?;
+        let at = match e.step {
+            Step::Index(i) => Operand::Const(Const::Int(i64::from(i))),
+            // `len - from_end`, the spread's end.
+            Step::FromEnd(_) => end.clone(),
+            _ => return Err(Ice::new("an uncons of a position that is not an element")),
+        };
+        let rest = self.define(
+            Repr::Value,
+            Rvalue::CallRuntime {
+                func: RuntimeFn::ListUncons,
+                args: vec![
+                    Operand::Local(list),
+                    at,
+                    Operand::Const(Const::Int(i64::from(start))),
+                    end,
+                ],
+            },
+        )?;
+        let head = self.define(
+            Repr::Value,
+            Rvalue::CallRuntime {
+                func: RuntimeFn::ListUnconsHead,
+                args: Vec::new(),
+            },
+        )?;
+        for (occ, ty, read) in [(elem, e.ty, head), (slice, s.ty, rest)] {
+            let want = self.repr_of(ty);
+            let value = self.to_repr(Operand::Local(read), Repr::Value, want, ty)?;
+            let local = self.as_local(value, want)?;
+            if let Some(slot) = env.vals.get_mut(occ.index()) {
+                *slot = Some(local);
+            }
+        }
+        Ok(())
     }
 
     /// The value at `occ` on this path, in its type's representation,

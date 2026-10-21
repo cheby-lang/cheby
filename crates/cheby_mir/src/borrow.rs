@@ -97,13 +97,15 @@
 //! 5. Its declared type ([`crate::LocalDecl::ty`]) is handle-free
 //!    ([`Defs::handle_free`]); a dictionary has no declared type and is
 //!    never borrowed.
-//! 6. Profitability (D-806): no use consumes it. A
-//!    use consumes when it returns the parameter, stores it (`Alloc`),
-//!    moves it (`Use`), passes it as a `Goto` argument, in an owned
-//!    position of a runtime helper, to `list_slice` at its last use (which
-//!    the RC pass makes `list_slice_owned`, D-634), in any position of a
-//!    `Callee::Code` or indirect call, or in a position of a direct call
-//!    that the callee does not borrow. Such a use of a counted projection
+//! 6. Profitability (D-806): no use consumes it. A use consumes when it
+//!    returns the parameter, stores it (`Alloc`), moves it (`Use`),
+//!    passes it as a `Goto` argument, in an owned position of a runtime
+//!    helper, to `list_slice` or `list_uncons` at its last use (which the
+//!    RC pass makes `list_slice_owned` or `list_uncons_owned`, D-634,
+//!    D-909), in any position of a `Callee::Code` or indirect call, or in
+//!    a position of a direct call that the callee does not borrow. Since
+//!    patterns read spreads last (D-908), a parameter matched with
+//!    `[..rest, x]` is consumed. Such a use of a counted projection
 //!    of the parameter consumes the parameter too when the parameter is
 //!    dead after it (and not read by it): counting without borrowing has
 //!    released the parameter by then, so the projection may be unique for
@@ -817,11 +819,12 @@ impl Scan<'_> {
         match value {
             Rvalue::Call { callee, args } => self.call(callee, args, at, &uses),
             Rvalue::CallRuntime {
-                func: RuntimeFn::ListSlice,
+                func: RuntimeFn::ListSlice | RuntimeFn::ListUncons,
                 args,
             } => {
                 // The list at its last use: the RC pass would slice it in
-                // place (`list_slice_owned`, D-634).
+                // place (`list_slice_owned` or `list_uncons_owned`, D-634,
+                // D-909).
                 if let Some(Operand::Local(list)) = args.first()
                     && (self.params.contains_key(list) || self.roots.contains_key(list))
                     && !self.live_after(*list, at)

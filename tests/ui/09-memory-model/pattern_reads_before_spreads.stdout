@@ -1,0 +1,4 @@
+last walked out: Ok(1) Err(Nil) 1
+cut before the last: Err(Nil) Ok(2) 1
+first before the spread: Ok(3) Err(Nil) Ok(4) 1
+frame walked out: Ok(3) Err(Nil) 1 1

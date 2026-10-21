@@ -603,7 +603,7 @@ fn the_builder_refuses_misplaced_edges() {
 
 #[test]
 fn the_scope_helpers() {
-    assert_eq!(RuntimeFn::ALL.len(), 14);
+    assert_eq!(RuntimeFn::ALL.len(), 17);
     assert_eq!(
         RuntimeFn::ScopeOpen.params(),
         [
@@ -629,7 +629,12 @@ fn the_scope_helpers() {
         .collect();
     assert_eq!(
         quiet,
-        [RuntimeFn::StrEq, RuntimeFn::ListLength, RuntimeFn::ListGet]
+        [
+            RuntimeFn::StrEq,
+            RuntimeFn::ListLength,
+            RuntimeFn::ListGet,
+            RuntimeFn::ListUnconsHead
+        ]
     );
     assert_eq!(Const::Ctx.repr(), Repr::U64);
     assert!(!Repr::U64.is_counted());
