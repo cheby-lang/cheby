@@ -1,0 +1,8 @@
+reuse: tests/ui/09-memory-model/reuse_report/kernel_list_pattern_step.cheby:22:7: building a tuple of 2 allocates: no value of the same size dies before it
+reuse: tests/ui/09-memory-model/reuse_report/kernel_list_pattern_step.cheby:24:11: building a tuple of 2 allocates: no value of the same size dies before it
+reuse: tests/ui/09-memory-model/reuse_report/kernel_list_pattern_step.cheby:32:18: `set::insert` gets `s` at its last use: in place when it is unique at run time
+reuse: tests/ui/09-memory-model/reuse_report/kernel_list_pattern_step.cheby:33:7: building a tuple of 2 allocates: no value of the same size dies before it
+reuse: tests/ui/09-memory-model/reuse_report/kernel_list_pattern_step.cheby:35:11: building a tuple of 2 allocates: no value of the same size dies before it
+reuse: tests/ui/09-memory-model/reuse_report/kernel_list_pattern_step.cheby:42:18: `list::push` gets `rest` at its last use: in place when it is unique at run time
+reuse: tests/ui/09-memory-model/reuse_report/kernel_list_pattern_step.cheby:53:7: building a tuple of 2 allocates: no value of the same size dies before it
+reuse: tests/ui/09-memory-model/reuse_report/kernel_list_pattern_step.cheby:55:11: building a tuple of 2 allocates: no value of the same size dies before it

@@ -99,11 +99,17 @@ pub enum RuntimeFunc {
     /// of a drop specialized by constructor frees the block whose fields
     /// it released or kept (D-716, D-850).
     FreeUnique,
+    /// `uint64_t cheby_rt_list_uncons(ExecCtx *ctx, uint64_t list, int64_t at, int64_t start,
+    /// int64_t end, uint64_t *head)`.
+    ListUncons,
+    /// `uint64_t cheby_rt_list_uncons_owned(ExecCtx *ctx, uint64_t list, int64_t at,
+    /// int64_t start, int64_t end, uint64_t *head)`.
+    ListUnconsOwned,
 }
 
 impl RuntimeFunc {
     /// Every runtime function, in declaration order ([`Self::index`]).
-    pub const ALL: [Self; 36] = [
+    pub const ALL: [Self; 38] = [
         Self::Alloc,
         Self::Dup,
         Self::Drop,
@@ -140,6 +146,8 @@ impl RuntimeFunc {
         Self::DropReuseChecked,
         Self::AllocReuseChecked,
         Self::FreeUnique,
+        Self::ListUncons,
+        Self::ListUnconsOwned,
     ];
 
     /// The symbol.
@@ -182,6 +190,8 @@ impl RuntimeFunc {
             Self::DropReuseChecked => sym::DROP_REUSE_CHECKED,
             Self::AllocReuseChecked => sym::ALLOC_REUSE_CHECKED,
             Self::FreeUnique => sym::FREE_UNIQUE,
+            Self::ListUncons => sym::LIST_UNCONS,
+            Self::ListUnconsOwned => sym::LIST_UNCONS_OWNED,
         }
     }
 
@@ -220,6 +230,7 @@ impl RuntimeFunc {
             Self::StackSlowUnwind => (&[Ptr, Ptr, U32, Ptr, Ptr, Ptr, Ptr], U32),
             Self::StackSlowFrameUnwind => (&[Ptr, Ptr, U64, U32, Ptr, Ptr, Ptr, Ptr], U32),
             Self::BlockingCall => (&[Ptr, Ptr, Ptr, U64], U64),
+            Self::ListUncons | Self::ListUnconsOwned => (&[Ptr, U64, I64, I64, I64, Ptr], U64),
         }
     }
 
@@ -242,6 +253,8 @@ impl RuntimeFunc {
                 | Self::DropReuseChecked
                 | Self::AllocReuseChecked
                 | Self::FreeUnique
+                | Self::ListUncons
+                | Self::ListUnconsOwned
         )
     }
 
@@ -285,6 +298,8 @@ impl RuntimeFunc {
             Self::DropReuseChecked => 33,
             Self::AllocReuseChecked => 34,
             Self::FreeUnique => 35,
+            Self::ListUncons => 36,
+            Self::ListUnconsOwned => 37,
         }
     }
 
@@ -308,6 +323,11 @@ impl RuntimeFunc {
             RuntimeFn::EffectCheck => (Self::EffectCheck, true),
             RuntimeFn::ScopeOpen => (Self::ScopeOpen, true),
             RuntimeFn::ScopeClose => (Self::ScopeClose, true),
+            // The head calls nothing: it loads the stack slot that the
+            // `list_uncons` right before it wrote (D-909), so it needs that
+            // call's declaration only.
+            RuntimeFn::ListUncons | RuntimeFn::ListUnconsHead => (Self::ListUncons, true),
+            RuntimeFn::ListUnconsOwned => (Self::ListUnconsOwned, true),
         }
     }
 }

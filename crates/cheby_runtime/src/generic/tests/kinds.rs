@@ -496,6 +496,7 @@ static TABLE: CustomKind = CustomKind {
     debug: Some(table_debug),
     handle: false,
     finalize: None,
+    shape: crate::layout::KindShape::Opaque,
 };
 
 /// An id unused by every runtime module.

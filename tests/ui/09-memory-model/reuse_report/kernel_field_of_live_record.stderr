@@ -1,7 +1,7 @@
-reuse: tests/ui/09-memory-model/reuse_report/kernel_field_of_live_record.cheby:19:3: building `Bag` reuses `bag` when it is unique
-reuse: tests/ui/09-memory-model/reuse_report/kernel_field_of_live_record.cheby:24:14: `set::insert` gets `items` at its last use: in place when it is unique at run time
 reuse: tests/ui/09-memory-model/reuse_report/kernel_field_of_live_record.cheby:25:3: building `Bag` reuses `bag` when it is unique
-reuse: tests/ui/09-memory-model/reuse_report/kernel_field_of_live_record.cheby:29:13: building a tuple of 2 allocates: no value of the same size dies before it
-reuse: tests/ui/09-memory-model/reuse_report/kernel_field_of_live_record.cheby:32:3: building a tuple of 2 reuses `old` when it is unique
-reuse: tests/ui/09-memory-model/reuse_report/kernel_field_of_live_record.cheby:36:20: building `Bag` allocates: no value of the same size dies before it
-reuse: tests/ui/09-memory-model/reuse_report/kernel_field_of_live_record.cheby:37:22: building `Bag` allocates: no value of the same size dies before it
+reuse: tests/ui/09-memory-model/reuse_report/kernel_field_of_live_record.cheby:30:14: `set::insert` gets `items` at its last use: in place when it is unique at run time
+reuse: tests/ui/09-memory-model/reuse_report/kernel_field_of_live_record.cheby:31:3: building `Bag` reuses `bag` when it is unique
+reuse: tests/ui/09-memory-model/reuse_report/kernel_field_of_live_record.cheby:35:13: building a tuple of 2 allocates: no value of the same size dies before it
+reuse: tests/ui/09-memory-model/reuse_report/kernel_field_of_live_record.cheby:38:3: building a tuple of 2 reuses `old` when it is unique
+reuse: tests/ui/09-memory-model/reuse_report/kernel_field_of_live_record.cheby:42:20: building `Bag` allocates: no value of the same size dies before it
+reuse: tests/ui/09-memory-model/reuse_report/kernel_field_of_live_record.cheby:43:22: building `Bag` allocates: no value of the same size dies before it

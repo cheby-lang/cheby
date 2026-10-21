@@ -598,7 +598,8 @@ impl<'f> Flow<'f> {
     ///   place), and another projection of the same field; a list
     ///   pattern's element (`list_get` at a constant index, which works as
     ///   a field's) and a view of a list (`list_slice`) count as
-    ///   projections of the list;
+    ///   projections of the list, and so does a fused step (`list_uncons`
+    ///   and its `list_uncons_head`, D-909), read as that slice and get;
     /// - a value built from the object or a holder: an owned field of an
     ///   `alloc`, `alloc_reuse` or `init_field` (records, tuples, variants,
     ///   closures' captures), and a list (`list_push`, `list_append`,
@@ -732,6 +733,15 @@ impl<'f> Flow<'f> {
         let stmts: Vec<&Stmt> = stmts_before(self.f, &call.before, call.id, call.at)
             .filter(|&(b, i, _)| (b, i) != (call.id, call.at))
             .map(|(_, _, stmt)| stmt)
+            .collect();
+        // A list pattern step read in one call (D-909) reads, for these
+        // rules, as the element read and the spread it replaced: `rest =
+        // list_uncons(l, at, s, e)` as `list_slice(l, s, e)` and the
+        // `list_uncons_head()` right after it as `list_get(l, at)`.
+        let stmts: Vec<Stmt> = stmts
+            .iter()
+            .enumerate()
+            .map(|(k, stmt)| unfused(stmt, k.checked_sub(1).and_then(|p| stmts.get(p).copied())))
             .collect();
         loop {
             let mut changed = false;
@@ -920,6 +930,42 @@ fn stmts_before<'f>(
             .enumerate()
             .map(move |(i, stmt)| (b, i, stmt))
     })
+}
+
+/// `stmt` with a fused list pattern step undone ([`Flow::holders`]):
+/// `prev` is the statement before it, if any.
+fn unfused(stmt: &Stmt, prev: Option<&Stmt>) -> Stmt {
+    let call = |s: &Stmt| match s {
+        Stmt::Assign {
+            dst,
+            value: Rvalue::CallRuntime { func, args },
+        } => Some((*dst, *func, args.clone())),
+        _ => None,
+    };
+    match call(stmt) {
+        Some((dst, RuntimeFn::ListUncons | RuntimeFn::ListUnconsOwned, args)) => {
+            let mut it = args.into_iter();
+            let (list, _at) = (it.next(), it.next());
+            Stmt::Assign {
+                dst,
+                value: Rvalue::CallRuntime {
+                    func: RuntimeFn::ListSlice,
+                    args: list.into_iter().chain(it).collect(),
+                },
+            }
+        }
+        Some((dst, RuntimeFn::ListUnconsHead, _)) => match prev.and_then(call) {
+            Some((_, RuntimeFn::ListUncons | RuntimeFn::ListUnconsOwned, args)) => Stmt::Assign {
+                dst,
+                value: Rvalue::CallRuntime {
+                    func: RuntimeFn::ListGet,
+                    args: args.into_iter().take(2).collect(),
+                },
+            },
+            _ => stmt.clone(),
+        },
+        _ => stmt.clone(),
+    }
 }
 
 /// What the report reads of the build's types: the type table and the

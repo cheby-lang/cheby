@@ -139,6 +139,13 @@ pub struct ExecCtx {
     /// thread's, set whenever it becomes the thread's current fiber
     /// (D-691).
     shard: AtomicUsize,
+    /// The address of that shard in the domain, with bit 0 set when the
+    /// shard is exclusive (`Domain::charge_slot`), set with `shard`, so a
+    /// charge through the control block skips the shard arithmetic and
+    /// the domain's bounds check (D-907). The address stays valid while
+    /// the control block lives: it keeps its domain alive, and a domain's
+    /// shards never move.
+    charge_slot: AtomicUsize,
     /// The block cache of the thread the fiber runs on, set with the shard
     /// whenever it becomes the thread's current fiber and cleared when it
     /// stops being current (`tls::set_current_fiber`); null when it is
@@ -251,6 +258,7 @@ impl ExecCtx {
             scratch_live: AtomicU64::new(0),
             scratch_peak: AtomicU64::new(0),
             shard: AtomicUsize::new(0),
+            charge_slot: AtomicUsize::new(init.domain.charge_slot(0)),
             block_cache: AtomicPtr::new(ptr::null_mut()),
             domain: init.domain,
             consts: init.consts,
@@ -397,6 +405,18 @@ impl ExecCtx {
     /// Makes the fiber charge `shard`: its thread's.
     pub(crate) fn set_shard(&self, shard: usize) {
         self.shard.store(shard, Ordering::Relaxed);
+        self.charge_slot
+            .store(self.domain.charge_slot(shard), Ordering::Relaxed);
+    }
+
+    /// The fiber's charge slot (see the field).
+    #[expect(
+        clippy::inline_always,
+        reason = "a step of every allocation and free by a fiber; the gain depends on it being inline (D-907)"
+    )]
+    #[inline(always)]
+    pub(crate) fn charge_slot(&self) -> usize {
+        self.charge_slot.load(Ordering::Relaxed)
     }
 
     /// The block cache of the thread the fiber is current on, or null (see

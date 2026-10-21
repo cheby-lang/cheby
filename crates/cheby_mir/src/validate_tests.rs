@@ -676,7 +676,13 @@ fn uniform_keys_have_the_uniform_signature() {
 /// representations, using the result if it has one.
 fn runtime_call(func: RuntimeFn) -> Function {
     let mut b = builder();
-    let mut args: Vec<Operand> = func
+    // A `list_uncons_head` takes the element of the `list_uncons` right
+    // before it (D-909).
+    let call = match func {
+        RuntimeFn::ListUnconsHead => RuntimeFn::ListUncons,
+        other => other,
+    };
+    let mut args: Vec<Operand> = call
         .params()
         .iter()
         .map(|&(r, _)| local(b.add_param(r, None, None).unwrap()))
@@ -685,7 +691,15 @@ fn runtime_call(func: RuntimeFn) -> Function {
         // The location is a static string.
         args[2] = Operand::Const(Const::Str(b.string("src/main.cheby:1:1").unwrap()));
     }
-    let result = b.call_runtime(func, args).unwrap();
+    let mut result = b.call_runtime(call, args).unwrap();
+    if matches!(call, RuntimeFn::ListUncons | RuntimeFn::ListUnconsOwned) {
+        let head = b
+            .call_runtime(RuntimeFn::ListUnconsHead, Vec::new())
+            .unwrap();
+        if func == RuntimeFn::ListUnconsHead {
+            result = head;
+        }
+    }
     match (result, func.ret()) {
         (Some(r), Some(Repr::Value)) => {
             b.terminate(Terminator::Return(local(r))).unwrap();
@@ -710,7 +724,10 @@ fn runtime_call(func: RuntimeFn) -> Function {
 #[test]
 fn runtime_calls_check_arity_reprs_and_results() {
     for func in RuntimeFn::ALL {
-        ok(runtime_call(func));
+        // Only counting emits it (`list_uncons_pairs`).
+        if func != RuntimeFn::ListUnconsOwned {
+            ok(runtime_call(func));
+        }
     }
     rejected(
         assigning(&[Repr::Value], Repr::Value, |p| Rvalue::CallRuntime {
@@ -761,6 +778,90 @@ fn runtime_calls_check_arity_reprs_and_results() {
     );
 }
 
+/// A `list_uncons` and its `list_uncons_head` (D-909): the head is the
+/// very next statement, follows nothing else, and both define a local;
+/// `list_uncons_owned` comes only from counting.
+#[test]
+fn list_uncons_pairs() {
+    let uncons = |b: &mut FunctionBuilder, list: Local, func: RuntimeFn| {
+        b.call_runtime(func, vec![local(list), int(0), int(1), int(2)])
+            .unwrap()
+            .unwrap()
+    };
+    let head = |b: &mut FunctionBuilder| {
+        b.call_runtime(RuntimeFn::ListUnconsHead, Vec::new())
+            .unwrap()
+            .unwrap()
+    };
+    // No head.
+    let mut b = builder();
+    let list = b.add_param(Repr::Value, None, None).unwrap();
+    let rest = uncons(&mut b, list, RuntimeFn::ListUncons);
+    b.terminate(Terminator::Return(local(rest))).unwrap();
+    rejected(
+        b.finish().unwrap(),
+        "call_runtime list_uncons is not followed at once by list_uncons_head (D-909)",
+    );
+    // A head with no uncons before it.
+    let mut b = builder();
+    let x = head(&mut b);
+    b.terminate(Terminator::Return(local(x))).unwrap();
+    rejected(
+        b.finish().unwrap(),
+        "call_runtime list_uncons_head does not follow a list_uncons at once (D-909)",
+    );
+    // A statement between them.
+    let mut b = builder();
+    let list = b.add_param(Repr::Value, None, None).unwrap();
+    let rest = uncons(&mut b, list, RuntimeFn::ListUncons);
+    let _len = b
+        .call_runtime(RuntimeFn::ListLength, vec![local(rest)])
+        .unwrap();
+    let x = head(&mut b);
+    b.terminate(Terminator::Return(local(x))).unwrap();
+    rejected(
+        b.finish().unwrap(),
+        "call_runtime list_uncons_head does not follow a list_uncons at once (D-909)",
+    );
+    // Without its result.
+    let mut b = builder();
+    let list = b.add_param(Repr::Value, None, None).unwrap();
+    b.push(Stmt::Eval(Rvalue::CallRuntime {
+        func: RuntimeFn::ListUncons,
+        args: vec![local(list), int(0), int(1), int(2)],
+    }))
+    .unwrap();
+    let x = head(&mut b);
+    b.terminate(Terminator::Return(local(x))).unwrap();
+    rejected(
+        b.finish().unwrap(),
+        "call_runtime list_uncons without its result (D-909)",
+    );
+    // The owned form before counting.
+    rejected(
+        runtime_call(RuntimeFn::ListUnconsOwned),
+        "list_uncons_owned before counting (D-909)",
+    );
+    // Counting consumes a list that dies at the step, and what it releases
+    // after the step (here the unused spread) follows the head.
+    let mut b = builder();
+    let list = b.add_param(Repr::Value, None, None).unwrap();
+    let _rest = uncons(&mut b, list, RuntimeFn::ListUncons);
+    let x = head(&mut b);
+    b.terminate(Terminator::Return(local(x))).unwrap();
+    let lines = counted(b.finish().unwrap());
+    assert_eq!(
+        lines,
+        [
+            "_1: value = call_runtime list_uncons_owned(_0, borrow const int 0, borrow const int 1, borrow const int 2)",
+            "_2: value = call_runtime list_uncons_head()",
+            "drop _1",
+            "return _2",
+        ],
+        "{lines:#?}"
+    );
+}
+
 /// Runs the RC pass on one function and returns its statements, without
 /// the string table, one line each; validates before and after.
 fn counted(f: Function) -> Vec<String> {
@@ -785,11 +886,16 @@ fn counted(f: Function) -> Vec<String> {
 #[test]
 fn runtime_helpers_follow_their_ownership() {
     for func in RuntimeFn::ALL {
+        // Counting makes it of a `list_uncons`, below.
+        if func == RuntimeFn::ListUnconsOwned {
+            continue;
+        }
         let lines = counted(runtime_call(func));
         // A slice of a list used for the last time consumes the list
         // instead of borrowing and dropping it (rc.rs).
         let func = match func {
             RuntimeFn::ListSlice => RuntimeFn::ListSliceOwned,
+            RuntimeFn::ListUncons => RuntimeFn::ListUnconsOwned,
             other => other,
         };
         let call = lines

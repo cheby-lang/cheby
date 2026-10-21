@@ -1,0 +1,67 @@
+// @mode: run-pass
+// @milestone: M2
+// @decisions: D-717, D-852, D-909
+// @flags: --reuse-report
+//! A list pattern step that reads its element and its spread in one call
+//! (D-909) holds, for the kernel lines, what the element read and the
+//! slice it replaces would hold. A spread still alive at the call holds
+//! the element it was cut from, so the element gets no kernel line
+//! (`element_while_rest_lives`), and gets one once the spread has died
+//! (`element_after_rest`). A spread passed to a kernel gets a line when
+//! the list died at the match (`rest_of_a_dead_list`), and none when the
+//! list is used again (`rest_of_a_live_list`).
+
+import std::io
+import std::list
+import std::set
+
+fn element_while_rest_lives(xs: List<set::Set<Int>>, n: Int) -> (set::Set<Int>, Int) {
+  case xs {
+    [s, ..rest] => {
+      let more = set::insert(s, n)
+      (more, list::length(rest))
+    }
+    [] => (set::new(), 0)
+  }
+}
+
+fn element_after_rest(xs: List<set::Set<Int>>, n: Int) -> (set::Set<Int>, Int) {
+  case xs {
+    [s, ..rest] => {
+      let k = list::length(rest)
+      let more = set::insert(s, n)
+      (more, k)
+    }
+    [] => (set::new(), 0)
+  }
+}
+
+fn rest_of_a_dead_list(xs: List<Int>, n: Int) -> List<Int> {
+  case xs {
+    [x, ..rest] => {
+      let more = list::push(rest, n + x)
+      more
+    }
+    [] => []
+  }
+}
+
+fn rest_of_a_live_list(xs: List<Int>, n: Int) -> (List<Int>, Int) {
+  case xs {
+    [x, ..rest] => {
+      let more = list::push(rest, n + x)
+      (more, list::length(xs))
+    }
+    [] => ([], 0)
+  }
+}
+
+fn main() {
+  let (a, i) = element_while_rest_lives([set::new(), set::new()], 1)
+  let (b, j) = element_after_rest([set::new(), set::new()], 2)
+  let c = rest_of_a_dead_list([1, 2], 3)
+  let (d, k) = rest_of_a_live_list([1, 2], 4)
+  let sizes = set::size(a) + set::size(b)
+  let lengths = list::length(c) + list::length(d)
+  io::println("{sizes} {i} {j} {lengths} {k}")
+}

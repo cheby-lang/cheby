@@ -28,7 +28,8 @@ use crate::helpers::{
 };
 use crate::list::{
     cheby_rt_list_append, cheby_rt_list_get, cheby_rt_list_length, cheby_rt_list_push,
-    cheby_rt_list_slice, cheby_rt_list_slice_owned, cheby_rt_static_empty_list,
+    cheby_rt_list_slice, cheby_rt_list_slice_owned, cheby_rt_list_uncons,
+    cheby_rt_list_uncons_owned, cheby_rt_static_empty_list,
 };
 use crate::object::{
     cheby_rt_static_equal, cheby_rt_static_err_nil, cheby_rt_static_false, cheby_rt_static_greater,
@@ -57,7 +58,7 @@ fn data<T>(object: &'static T) -> *const u8 {
     clippy::as_conversions,
     reason = "taking the address of a function needs an `as` cast"
 )]
-fn runtime_symbols() -> [(&'static str, *const u8); 47] {
+fn runtime_symbols() -> [(&'static str, *const u8); 49] {
     [
         (sym::ALLOC, cheby_rt_alloc as *const u8),
         (sym::DUP, cheby_rt_dup as *const u8),
@@ -126,6 +127,11 @@ fn runtime_symbols() -> [(&'static str, *const u8); 47] {
             cheby_rt_alloc_reuse_checked as *const u8,
         ),
         (sym::FREE_UNIQUE, cheby_rt_free_unique as *const u8),
+        (sym::LIST_UNCONS, cheby_rt_list_uncons as *const u8),
+        (
+            sym::LIST_UNCONS_OWNED,
+            cheby_rt_list_uncons_owned as *const u8,
+        ),
         (sym::STATS_COUNTING, data(crate::stats::counting_flag())),
     ]
 }
@@ -448,7 +454,7 @@ mod tests {
             );
         }
         assert_eq!(registered, declared);
-        assert_eq!(registered.len(), 27 + 36 + 11 + 3);
+        assert_eq!(registered.len(), 29 + 37 + 11 + 3);
     }
 
     /// A kernel declaration: its native symbol, whether it is

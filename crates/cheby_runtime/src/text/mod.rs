@@ -1,5 +1,7 @@
-//! `std::string` kernels (F2): the 27 `@external(native, …)` functions of
+//! `std::string` kernels (F2): the 29 `@external(native, …)` functions of
 //! `std/string.cheby`, over UTF-8 `String` objects ([`crate::string`]).
+//! Two of them are package-visible: `std::json`'s writer uses
+//! `add_json_quoted` (D-903) and its parser `from_byte_range` (D-905).
 //!
 //! - `ops`: the semantics on Rust `&str`, with no objects: code-point
 //!   counts and positions (D-302), clamping (D-298), splitting (D-315),
@@ -8,16 +10,16 @@
 //!   owned (D-187); results are built through [`crate::values`],
 //!   [`crate::string`] and `list::from_iter` (plan §4.3.4).
 //!
-//! In place at count one (D-525, plan §6): `add`, `pad_end`, `trim`,
-//! `trim_start`, `trim_end`, `remove_prefix`, `remove_suffix` and `slice`
-//! change their text argument in place when its count is exactly one, no
-//! other argument is the same object, and (for the appending ones) its
-//! capacity suffices, then `dup` it and return it. A unique text that
-//! must grow moves into a new object of twice its capacity, so a chain of
-//! `+` on a unique accumulator runs in amortized O(1) per byte appended; a
-//! shared or static text is copied with twice its length
-//! (D-849, refining D-577). Either is at least what the
-//! result needs.
+//! In place at count one (D-525, plan §6): `add`, `add_json_quoted`,
+//! `pad_end`, `trim`, `trim_start`, `trim_end`, `remove_prefix`,
+//! `remove_suffix` and `slice` change their text argument in place when
+//! its count is exactly one, no other argument is the same object, and
+//! (for the appending ones) its capacity suffices, then `dup` it and
+//! return it. A unique text that must grow moves into a new object of
+//! twice its capacity, so a chain of `+` on a unique accumulator runs in
+//! amortized O(1) per byte appended; a shared or static text is copied
+//! with twice its length (D-849, refining D-577). Either is at least what
+//! the result needs.
 //!
 //! Unicode (D-310, D-552): case mapping is
 //! the Rust standard library's full mapping (`str::to_lowercase`,

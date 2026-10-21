@@ -3,11 +3,16 @@
 //! Typed data is read with the decoders of `std::json::decode` (D-320) and
 //! written with encoding functions that return a `Value`.
 //!
-//! The module is written in Cheby over the kernels of `std::string`,
-//! `std::int` and `std::float` (D-274). Parsing and decoding share the raw
-//! tree of `std::json::tree`, because `std::json::decode` cannot import this
-//! module (D-361, ADR-0053). Neither parsing nor writing grows the stack
-//! with the nesting depth of a document (D-094, D-326).
+//! The module is written in Cheby over the kernels of `std::bytes`,
+//! `std::string`, `std::int` and `std::float` (D-274). The parser lives in
+//! `std::json::tree`, because `std::json::decode` cannot import this module
+//! (D-361, ADR-0053). It scans the bytes of the text and builds a `Value`
+//! for `parse_value`, or the raw tree that decoders run over for `parse`.
+//! The writer adds each piece of text to the end of one string, each string
+//! quoted and escaped by the package-visible `string::add_json_quoted`
+//! (D-903), and keeps the rest of each open array and object on a stack on
+//! the heap. Neither parsing nor writing grows the stack with the nesting
+//! depth of a document (D-094, D-326).
 
 // The module has a function named `list`, so it imports `std::list` under
 // another name (§7.5.1, D-062).
@@ -153,84 +158,177 @@ test "to_pretty_string indents by two spaces" {
   assert to_pretty_string(Int(1)) == "1"
 }
 
-/// A step of writing a value: text to write, or a value to write at a depth
-/// of nesting.
-priv type Step {
-  Write(String),
-  Encode(Value, Int),
+test "to_pretty_string puts each element on its own line at every depth" {
+  let value = Array([
+    Object([
+      ("a", Array([Int(1), Array([])])),
+      ("b\"\n", Object([("c", Null)])),
+    ]),
+    String("x\ny"),
+    Float(float::neg_infinity),
+  ])
+  let expected = string::join([
+    "[",
+    "  \{",
+    r#"    "a": ["#,
+    "      1,",
+    "      []",
+    "    ],",
+    r#"    "b\"\n": {"#,
+    r#"      "c": null"#,
+    "    }",
+    "  },",
+    r#"  "x\ny","#,
+    "  null",
+    "]",
+  ], "\n")
+  assert to_pretty_string(value) == expected
+  assert to_string(value) == r#"[{"a":[1,[]],"b\"\n":{"c":null}},"x\ny",null]"#
+  assert to_pretty_string(Array([])) == "[]"
+  assert to_pretty_string(Object([])) == "\{}"
+  assert to_pretty_string(String("a\tb")) == r#""a\tb""#
+  assert to_pretty_string(Array([Null])) == "[\n  null\n]"
 }
 
-/// Writes `value` as text, indented when `pretty` is `True`. The steps still
-/// to take are a stack on the heap whose top is its last element.
+test "to_string escapes every control character, in keys too, and nothing else" {
+  let assert Ok(controls) = string::from_code_point_values(lists::range(0, 32))
+  let escaped = string::join([
+    r"\u0000\u0001\u0002\u0003\u0004\u0005\u0006\u0007",
+    r"\b\t\n\u000b\f\r\u000e\u000f",
+    r"\u0010\u0011\u0012\u0013\u0014\u0015\u0016\u0017",
+    r"\u0018\u0019\u001a\u001b\u001c\u001d\u001e\u001f",
+  ], "")
+  assert to_string(String(controls)) == "\"" + escaped + "\""
+  // DEL, the C1 controls and the other non-ASCII code points stay as they
+  // are, as `JSON.stringify` writes them.
+  let kept = "\u{7F}\u{80}\u{9F}\u{A0}\u{2028}\u{2029}\u{FEFF}\u{10FFFF}/'<>&"
+  assert to_string(String(kept)) == "\"" + kept + "\""
+  assert to_string(String("")) == r#""""#
+  let keys = Object([("a\"b\n", String("\\")), ("\u{1F}", Null)])
+  assert to_string(keys) == r#"{"a\"b\n":"\\","\u001f":null}"#
+}
+
+test "to_string writes each float as float::show does" {
+  let cases = [
+    (0.1, "0.1"),
+    (0.30000000000000004, "0.30000000000000004"),
+    (100.0, "100.0"),
+    (-2.5, "-2.5"),
+    (123456.789, "123456.789"),
+    (0.001, "0.001"),
+    (1.0e-5, "0.00001"),
+    (1.0e-7, "1.0e-7"),
+    (1.0e15, "1000000000000000.0"),
+    (1.0e20, "100000000000000000000.0"),
+    (1.5e300, "1.5e300"),
+    (5.0e-324, "5.0e-324"),
+  ]
+  lists::each(cases, fn((x, text)) { assert (x, to_string(Float(x))) == (x, text) })
+  let non_finite = Array([
+    Float(float::nan),
+    Float(float::neg_infinity),
+    Float(float::infinity),
+    Int(1),
+  ])
+  assert to_string(non_finite) == "[null,null,null,1]"
+}
+
+@target(native)
+test "to_string writes any Int, and one outside the safe range reads back as a Float" {
+  let value = Array([Int(int::max_safe + 2), Int(int::min_value), Int(int::max_safe)])
+  let text = to_string(value)
+  assert text == "[9007199254740993,-9223372036854775808,9007199254740991]"
+  let floats = Array([Float(9007199254740992.0), Float(-9223372036854775808.0), Int(int::max_safe)])
+  assert parse_value(text) == Ok(floats)
+}
+
+/// The open arrays and objects, innermost first: the elements or members
+/// of each still to write, and the depth of nesting they are at. `Done`
+/// stands outside the document's value. It is a chain of cells rather
+/// than a list, so moving on to the next element writes the innermost cell
+/// over in place (D-838).
+priv type Open {
+  Done,
+  Items(List<Value>, Int, Open),
+  Members(List<(String, Value)>, Int, Open),
+}
+
+/// Writes `value` as text, indented when `pretty` is `True`. The open arrays
+/// and objects are a chain of cells on the heap, and every piece is added
+/// to the end of one string, which no other value refers to, so each
+/// addition extends it in place (D-577).
 priv fn write(value: Value, pretty: Bool) -> String {
-  fn step(steps: List<Step>, parts: List<String>) -> String {
-    case steps {
-      [] => string::join(parts, "")
-      [..rest, Write(text)] => step(rest, lists::push(parts, text))
-      [..rest, Encode(Null, _)] => step(rest, lists::push(parts, "null"))
-      [..rest, Encode(Bool(True), _)] => step(rest, lists::push(parts, "true"))
-      [..rest, Encode(Bool(False), _)] => step(rest, lists::push(parts, "false"))
-      [..rest, Encode(Int(n), _)] => step(rest, lists::push(parts, int::show(n)))
-      [..rest, Encode(Float(x), _)] => step(rest, lists::push(parts, float_text(x)))
-      [..rest, Encode(String(text), _)] => step(rest, lists::push(parts, quote(text)))
-      [..rest, Encode(Array([]), _)] => step(rest, lists::push(parts, "[]"))
-      [..rest, Encode(Array(items), depth)] => {
-        step(array_steps(rest, items, depth, pretty), lists::push(parts, "["))
-      }
-      [..rest, Encode(Object([]), _)] => step(rest, lists::push(parts, "\{}"))
-      [..rest, Encode(Object(members), depth)] => {
-        step(object_steps(rest, members, depth, pretty), lists::push(parts, "\{"))
-      }
+  write_value("", value, 0, pretty, Done)
+}
+
+/// Adds `value`, at `depth`, to `out`, then goes on with `open`.
+priv fn write_value(out: String, value: Value, depth: Int, pretty: Bool, open: Open) -> String {
+  case value {
+    Null => next(out + "null", open, pretty)
+    Bool(True) => next(out + "true", open, pretty)
+    Bool(False) => next(out + "false", open, pretty)
+    Int(n) => next(out + int::show(n), open, pretty)
+    Float(x) => next(out + float_text(x), open, pretty)
+    String(text) => next(string::add_json_quoted(out, text), open, pretty)
+    Array([]) => next(out + "[]", open, pretty)
+    Array([item, ..items]) => {
+      let inner = depth + 1
+      let opened = line_break(out + "[", pretty, inner)
+      write_value(opened, item, inner, pretty, Items(items, inner, open))
+    }
+    Object([]) => next(out + "\{}", open, pretty)
+    Object([(key, item), ..members]) => {
+      let inner = depth + 1
+      let opened = key_into(line_break(out + "\{", pretty, inner), key, pretty)
+      write_value(opened, item, inner, pretty, Members(members, inner, open))
     }
   }
-  step([Encode(value, 0)], [])
 }
 
-/// Adds the steps that write the elements of an array at `depth`, after its
-/// `[`, and its `]`. They are added last first, so the first is on top.
-priv fn array_steps(steps: List<Step>, items: List<Value>, depth: Int, pretty: Bool) -> List<Step> {
-  let closing = lists::push(steps, Write(line_break(pretty, depth) + "]"))
-  lists::fold_right(lists::enumerate(items), closing, fn(pending, (index, item)) {
-    let encoded = lists::push(pending, Encode(item, depth + 1))
-    lists::push(encoded, Write(separator(index, pretty, depth + 1)))
-  })
-}
-
-/// Adds the steps that write the members of an object at `depth`, after its
-/// `{`, and its `}`. They are added last first, so the first is on top.
-priv fn object_steps(
-  steps: List<Step>,
-  members: List<(String, Value)>,
-  depth: Int,
-  pretty: Bool,
-) -> List<Step> {
-  let closing = lists::push(steps, Write(line_break(pretty, depth) + "}"))
-  let colon = case pretty {
-    True => ": "
-    False => ":"
-  }
-  lists::fold_right(lists::enumerate(members), closing, fn(pending, (index, (key, item))) {
-    let encoded = lists::push(pending, Encode(item, depth + 1))
-    let label = separator(index, pretty, depth + 1) + quote(key) + colon
-    lists::push(encoded, Write(label))
-  })
-}
-
-/// The text before the element or member at `index` of an array or object
-/// whose elements are at `depth`.
-priv fn separator(index: Int, pretty: Bool, depth: Int) -> String {
-  case index {
-    0 => line_break(pretty, depth)
-    _ => "," + line_break(pretty, depth)
+/// Goes on after a value: adds the next element or member of the innermost
+/// open array or object, or its closing bracket.
+///
+/// The arm that takes the innermost cell apart builds the cell for the rest
+/// of its elements, so Perceus writes it over the old one in place (D-838).
+/// Keep the rebuild in that arm. Reuse pairs only when the rebuild is in a
+/// block that only the block taking the cell apart enters (D-839). A
+/// `let x = case ..` between the two, such as a `case pretty` that picks the
+/// separator, joins the arms, and then the old cell is freed and a new one
+/// allocated: the output stays the same, and nothing warns. The test
+/// `json_containers_reuse_their_cells` in `crates/cheby_cli/tests/run.rs`
+/// counts the reuse hits of a write, and fails when this step loses its
+/// reuse.
+priv fn next(out: String, open: Open, pretty: Bool) -> String {
+  case open {
+    Done => out
+    Items([], depth, below) => next(line_break(out, pretty, depth - 1) + "]", below, pretty)
+    Items([item, ..items], depth, below) => {
+      let separated = line_break(out + ",", pretty, depth)
+      write_value(separated, item, depth, pretty, Items(items, depth, below))
+    }
+    Members([], depth, below) => next(line_break(out, pretty, depth - 1) + "}", below, pretty)
+    Members([(key, item), ..members], depth, below) => {
+      let separated = key_into(line_break(out + ",", pretty, depth), key, pretty)
+      write_value(separated, item, depth, pretty, Members(members, depth, below))
+    }
   }
 }
 
-/// A line ending and the indentation of `depth`, or nothing when the text is
-/// compact.
-priv fn line_break(pretty: Bool, depth: Int) -> String {
+/// Adds the key of a member and the colon after it to `out`.
+priv fn key_into(out: String, key: String, pretty: Bool) -> String {
+  let quoted = string::add_json_quoted(out, key)
   case pretty {
-    True => "\n" + string::repeat("  ", depth)
-    False => ""
+    True => quoted + ": "
+    False => quoted + ":"
+  }
+}
+
+/// Adds a line ending and the indentation of `depth` to `out`, or nothing
+/// when the text is compact.
+priv fn line_break(out: String, pretty: Bool, depth: Int) -> String {
+  case pretty {
+    True => out + "\n" + string::repeat("  ", depth)
+    False => out
   }
 }
 
@@ -240,41 +338,6 @@ priv fn float_text(x: Float) -> String {
   case float::is_finite(x) {
     True => float::show(x)
     False => "null"
-  }
-}
-
-/// Writes `text` between `"`, escaping `"`, `\` and the control characters
-/// U+0000 to U+001F, and nothing else (D-326, D-398).
-priv fn quote(text: String) -> String {
-  let points = lists::fold(string::to_code_point_values(text), [0x22], escape)
-  // The escapes are ASCII and every other code point is copied, so the code
-  // points always form a string.
-  let assert Ok(quoted) = string::from_code_point_values(lists::push(points, 0x22))
-  quoted
-}
-
-/// Adds `point` to `points`, escaped as JSON text needs.
-priv fn escape(points: List<Int>, point: Int) -> List<Int> {
-  case point {
-    // `"` and `\`
-    0x22 | 0x5C => [..points, 0x5C, point]
-    // `\b`, `\f`, `\n`, `\r` and `\t`
-    0x08 => [..points, 0x5C, 0x62]
-    0x0C => [..points, 0x5C, 0x66]
-    0x0A => [..points, 0x5C, 0x6E]
-    0x0D => [..points, 0x5C, 0x72]
-    0x09 => [..points, 0x5C, 0x74]
-    // `\u00` and two lower-case hex digits
-    _ when point < 0x20 => [..points, 0x5C, 0x75, 0x30, 0x30, hex(point / 16), hex(point % 16)]
-    _ => lists::push(points, point)
-  }
-}
-
-/// Returns the code point of the lower-case hex digit for `digit`, 0 to 15.
-priv fn hex(digit: Int) -> Int {
-  case digit < 10 {
-    True => 0x30 + digit
-    False => 0x57 + digit
   }
 }
 
@@ -312,8 +375,17 @@ test "parse decodes a document in one step" {
 /// `Float` (D-217, D-222, D-394). A syntax error gives the position at
 /// which `text` stops being JSON (D-324, D-326).
 pub fn parse_value(text: String) -> Result<Value, Error> {
-  case tree::parse(text) {
-    Ok(document) => Ok(tree::rebuild(document, open_tree, Array, Object))
+  let builder = tree::Builder {
+    null: Null,
+    bool: Bool,
+    int: Int,
+    float: Float,
+    string: String,
+    array: Array,
+    object: Object,
+  }
+  case tree::parse_with(text, builder) {
+    Ok(value) => Ok(value)
     Err((line, column)) => Err(Syntax(Position { line, column }))
   }
 }
@@ -367,6 +439,253 @@ test "parse_value rounds numbers beyond the range of Float" {
   assert parse_value("-1e400") == Ok(Float(float::neg_infinity))
 }
 
+// The tests below pin the parser's results and error positions on the
+// edges of the grammar. Each table pairs a text with what `parse_value`
+// gives for it, and a failed assertion shows the text.
+
+test "parse_value reads numbers at the edges of Int and Float" {
+  let cases = [
+    ("0", Int(0)),
+    ("-0", Int(0)),
+    ("-1", Int(-1)),
+    ("1.5", Float(1.5)),
+    ("0.1", Float(0.1)),
+    ("1e+5", Float(100000.0)),
+    ("1E+2", Float(100.0)),
+    ("1E-2", Float(0.01)),
+    ("-1.25e3", Float(-1250.0)),
+    ("0.5e-3", Float(0.0005)),
+    ("123.456e-2", Float(1.23456)),
+    ("123456789012345", Int(123456789012345)),
+    ("1234567890123456", Int(1234567890123456)),
+    ("-1234567890123456", Int(-1234567890123456)),
+    ("9007199254740991", Int(9007199254740991)),
+    ("-9007199254740991", Int(-9007199254740991)),
+    ("9007199254740992", Float(9007199254740992.0)),
+    ("-9007199254740992", Float(-9007199254740992.0)),
+    ("10000000000000000", Float(10000000000000000.0)),
+    ("12345678901234567890", Float(12345678901234567890.0)),
+    ("1e400", Float(float::infinity)),
+    ("-1e400", Float(float::neg_infinity)),
+    ("[9007199254740991, -0]", Array([Int(9007199254740991), Int(0)])),
+  ]
+  lists::each(cases, fn((text, value)) { assert (text, parse_value(text)) == (text, Ok(value)) })
+  // `==` does not tell zeros apart, so their signs are read from the text.
+  fn written(text: String) -> String {
+    let assert Ok(value) = parse_value(text)
+    to_string(value)
+  }
+  assert written("-0.0") == "-0.0"
+  assert written("1e-400") == "0.0"
+  assert written("-1e-400") == "-0.0"
+}
+
+test "a malformed number is an error at the first code point that cannot continue it" {
+  let cases = [
+    ("-", 1, 2),
+    ("--1", 1, 2),
+    ("-a", 1, 2),
+    ("01", 1, 2),
+    ("1.", 1, 3),
+    ("1e", 1, 3),
+    ("1e+", 1, 4),
+    ("1e5x", 1, 4),
+    ("[-]", 1, 3),
+    ("[-a]", 1, 3),
+    ("[1.e5]", 1, 4),
+    ("[1e5.]", 1, 5),
+    ("[1.5e]", 1, 6),
+    ("[.5]", 1, 2),
+    ("[+1]", 1, 2),
+    ("[0x10]", 1, 3),
+    ("[00]", 1, 3),
+    ("[-01]", 1, 4),
+  ]
+  lists::each(cases, fn((text, line, column)) {
+    assert (text, parse_value(text)) == (text, Err(Syntax(Position { line, column })))
+  })
+}
+
+test "parse_value reads every escape and copies other code points" {
+  let cases = [
+    (r#""a\"b\\c\/d\b\f\n\r\t""#, "a\"b\\c/d\u{8}\u{C}\n\r\t"),
+    (r#""\u0041\u00e9""#, "Aé"),
+    (r#""\u0000\u001f\u007F\u0080\uFFFF""#, "\u{0}\u{1F}\u{7F}\u{80}\u{FFFF}"),
+    (r#""\uD83D\uDE00\ud83d\ude00""#, "\u{1F600}\u{1F600}"),
+    (r#""\udbff\udfff""#, "\u{10FFFF}"),
+    ("\"é\u{1F600}\u{7F}\u{FFFF}\u{10FFFF}\"", "é\u{1F600}\u{7F}\u{FFFF}\u{10FFFF}"),
+    (r#""""#, ""),
+  ]
+  lists::each(cases, fn((text, value)) {
+    assert (text, parse_value(text)) == (text, Ok(String(value)))
+  })
+  let key = Object([("a\nb", String("/")), ("", Int(1))])
+  assert parse_value(r#"{"a\nb": "\/", "": 1}"#) == Ok(key)
+}
+
+test "parse_value keeps a leading U+FEFF in keys, strings and runs before an escape" {
+  let text = "\{\"\u{FEFF}\": [\"\u{FEFF}x\", \"\u{FEFF}\\n\"]}"
+  let value = Object([("\u{FEFF}", Array([String("\u{FEFF}x"), String("\u{FEFF}\n")]))])
+  assert parse_value(text) == Ok(value)
+}
+
+test "a bad escape is an error at the first code point that no escape could have" {
+  let cases = [
+    (r#""\q""#, 1, 3),
+    ("\"\\é\"", 1, 3),
+    (r#""\U0041""#, 1, 3),
+    (r#""\u12G4""#, 1, 6),
+    (r#""\uD8""#, 1, 6),
+    (r#""\u""#, 1, 4),
+    // A high surrogate needs the escape of a low one right after it.
+    (r#""\ud800""#, 1, 8),
+    (r#""\ud800A""#, 1, 8),
+    (r#""\ud800x""#, 1, 8),
+    (r#""\ud800\x""#, 1, 9),
+    (r#""\ud800\u0041""#, 1, 10),
+    (r#""\ud800\ud800""#, 1, 11),
+    (r#""\ud83d\uDBFF""#, 1, 11),
+    (r#""\ud83d\ud""#, 1, 11),
+    // A low surrogate on its own fails at its second digit.
+    (r#""\udc00""#, 1, 5),
+    (r#""\uDC00""#, 1, 5),
+  ]
+  lists::each(cases, fn((text, line, column)) {
+    assert (text, parse_value(text)) == (text, Err(Syntax(Position { line, column })))
+  })
+}
+
+test "parse_value reads arrays, objects and the whitespace around them" {
+  let cases = [
+    ("true", Bool(True)),
+    ("false", Bool(False)),
+    ("null", Null),
+    (" [ 1 , 2 ] ", Array([Int(1), Int(2)])),
+    ("\t1\r\n", Int(1)),
+    ("[1] ", Array([Int(1)])),
+    ("[true,false,null]", Array([Bool(True), Bool(False), Null])),
+    (r"[[[[]]], {}, [{}]]", Array([Array([Array([Array([])])]), Object([]), Array([Object([])])])),
+    (r#"{"a" : 1 , "b":[ ] }"#, Object([("a", Int(1)), ("b", Array([]))])),
+    (
+      r#"{"é": [1, {"x": null}], "é": []}"#,
+      Object([("é", Array([Int(1), Object([("x", Null)])])), ("é", Array([]))]),
+    ),
+    (
+      r#"{"a": true, "\u0062\n": [false, null]}"#,
+      Object([("a", Bool(True)), ("b\n", Array([Bool(False), Null]))]),
+    ),
+  ]
+  lists::each(cases, fn((text, value)) { assert (text, parse_value(text)) == (text, Ok(value)) })
+}
+
+test "parse_value rejects what RFC 8259 does not allow where it starts" {
+  let cases = [
+    ("1 2", 1, 3),
+    ("[1 2]", 1, 4),
+    ("[1]x", 1, 4),
+    ("[1]]", 1, 4),
+    ("[1, 2,]", 1, 7),
+    ("[1,,2]", 1, 4),
+    ("[,1]", 1, 2),
+    (r#"{"a" 1}"#, 1, 6),
+    (r#"{"a": 1,}"#, 1, 9),
+    (r#"{"a":}"#, 1, 6),
+    (r"{,}", 1, 2),
+    (r"{1: 2}", 1, 2),
+    ("truex", 1, 5),
+    ("nulL", 1, 4),
+    ("fxlse", 1, 2),
+    ("[tRue]", 1, 3),
+    ("[1, nulx]", 1, 8),
+    ("NaN", 1, 1),
+    ("'a'", 1, 1),
+    (r#"["é", x]"#, 1, 7),
+    // Control characters must be escaped in strings.
+    ("\"a\u{1}b\"", 1, 3),
+    ("\"a\nb\"", 1, 3),
+    ("\"\u{7F}\u{1F}\"", 1, 3),
+    // Only space, tab, line feed and carriage return are whitespace, and
+    // there is no byte order mark.
+    ("\u{FEFF}1", 1, 1),
+    ("\u{C}1", 1, 1),
+    ("\u{A0}1", 1, 1),
+  ]
+  lists::each(cases, fn((text, line, column)) {
+    assert (text, parse_value(text)) == (text, Err(Syntax(Position { line, column })))
+  })
+}
+
+test "a syntax error counts lines at line feeds and columns in code points" {
+  let cases = [
+    ("\n\n  é  ", 3, 3),
+    ("\r\n[\r\n1\r\n]x", 4, 2),
+    (r#"["😀😀", ]"#, 1, 8),
+    ("[\"\u{10FFFF}\", ]", 1, 7),
+    ("é1", 1, 1),
+    (r#"{"é": 1,"# + "\n" + r#" "b" 2}"#, 2, 6),
+  ]
+  lists::each(cases, fn((text, line, column)) {
+    assert (text, parse_value(text)) == (text, Err(Syntax(Position { line, column })))
+  })
+}
+
+test "a text that ends too early is an error just after its end" {
+  let cases = [
+    ("", 1, 1),
+    ("  ", 1, 3),
+    ("[", 1, 2),
+    ("\{", 1, 2),
+    ("[1,", 1, 4),
+    ("[1,2", 1, 5),
+    ("[\n1,\n", 3, 1),
+    (r#"{"a""#, 1, 5),
+    (r#"{"a":1,"#, 1, 8),
+    (r#""abc"#, 1, 5),
+    ("tru", 1, 4),
+    ("nul", 1, 4),
+    ("fals", 1, 5),
+    ("-", 1, 2),
+    (r#""\"#, 1, 3),
+    (r#""\u12"#, 1, 6),
+    (r#""\ud83d"#, 1, 8),
+    (r#""\ud83d\ude0"#, 1, 13),
+  ]
+  lists::each(cases, fn((text, line, column)) {
+    assert (text, parse_value(text)) == (text, Err(Syntax(Position { line, column })))
+  })
+}
+
+test "parsing, writing and decode_value's conversion keep the stack flat at any depth" {
+  fn nest(value: Value, level: Int, wrap: fn(Value) -> Value) -> Value {
+    case level {
+      0 => value
+      _ => nest(wrap(value), level - 1, wrap)
+    }
+  }
+  let depth = 100000
+  let arrays = nest(Null, depth, fn(inner) { Array([inner]) })
+  let text = string::repeat("[", depth) + "null" + string::repeat("]", depth)
+  assert to_string(arrays) == text
+  let assert Ok(parsed) = parse_value(text)
+  assert to_string(parsed) == text
+  // success ignores its input, so these two check only the parse and
+  // decode_value's conversion to the raw tree at depth (D-361).
+  assert parse(text, decode::success(0)) == Ok(0)
+  assert decode_value(arrays, decode::success(0)) == Ok(0)
+  let open = string::repeat("[", depth)
+  assert parse_value(open) == Err(Syntax(Position { line: 1, column: depth + 1 }))
+  assert parse_value(open + "x") == Err(Syntax(Position { line: 1, column: depth + 1 }))
+  let objects = nest(Int(1), 10000, fn(inner) { Object([("a", Array([inner]))]) })
+  let object_text = string::repeat(r#"{"a":["#, 10000) + "1" + string::repeat("]}", 10000)
+  assert parse_value(object_text) == Ok(objects)
+  assert to_string(objects) == object_text
+  // Pretty text grows with the square of the depth, so it is checked less deep.
+  let pretty = nest(Int(1), 1000, fn(inner) { Object([("a", Array([inner]))]) })
+  let pretty_text = to_pretty_string(pretty)
+  assert lists::length(string::split(pretty_text, "\n")) == 4001
+  assert parse_value(pretty_text) == Ok(pretty)
+}
+
 /// Runs `decoder` on a value already parsed or built in the program, with
 /// paths starting at `value` itself (D-361).
 pub fn decode_value<T>(
@@ -384,19 +703,6 @@ test "decode_value decodes a value built in the program" {
   assert decode_value(Object([("year", Int(1965))]), year()) == Ok(1965)
   let problem = decode::Error { expected: "Int", found: "Float", path: ["year"] }
   assert decode_value(Object([("year", Float(1965.0))]), year()) == Err([problem])
-}
-
-/// Takes a node of the raw tree apart, for `tree::rebuild`.
-priv fn open_tree(node: tree::Tree) -> tree::Children<tree::Tree, Value> {
-  case node {
-    tree::Null => tree::Leaf(Null)
-    tree::Bool(flag) => tree::Leaf(Bool(flag))
-    tree::Int(n) => tree::Leaf(Int(n))
-    tree::Float(x) => tree::Leaf(Float(x))
-    tree::String(text) => tree::Leaf(String(text))
-    tree::Array(items) => tree::Items(items)
-    tree::Object(members) => tree::Members(members)
-  }
 }
 
 /// Takes a `Value` apart, for `tree::rebuild`.
@@ -593,4 +899,179 @@ test "failure reports what was expected" {
   assert parse("[2, 4]", decode::list(even())) == Ok([2, 4])
   let problem = decode::Error { expected: "EvenInt", found: "Int", path: ["1"] }
   assert parse("[2, 3]", decode::list(even())) == Err(Decode([problem]))
+}
+
+// A decode error, for the tests below. It is named in them, so user builds
+// do not report it unused (D-631).
+priv fn mismatch(expected: String, found: String, path: List<String>) -> decode::Error {
+  decode::Error { expected, found, path }
+}
+
+test "the errors of a list of records come in the order visited, with whole paths" {
+  fn author() -> decode::Decoder<String> {
+    use name <- decode::field("name", decode::string())
+    decode::success(name)
+  }
+  fn book() -> decode::Decoder<(String, Int, String)> {
+    use title <- decode::field("title", decode::string())
+    use year <- decode::field("year", decode::int())
+    use tags <- decode::field("tags", decode::list(decode::string()))
+    use name <- decode::field("author", author())
+    decode::success((title, year, string::join([name, ..tags], ", ")))
+  }
+  fn library() -> decode::Decoder<List<(String, Int, String)>> {
+    use books <- decode::field("books", decode::list(book()))
+    decode::success(books)
+  }
+  let dune = r#"  {"title": "Dune", "year": 1965, "tags": ["sf"], "author": {"name": "F. H."}}"#
+  let one = r#"{"books": ["# + dune + "]}"
+  assert parse(one, library()) == Ok([("Dune", 1965, "F. H., sf")])
+  let text = string::join([
+    r#"{"books": ["#,
+    dune + ",",
+    r#"  {"title": 2, "year": "1966", "tags": ["sf", 3, null], "author": {"name": 4}},"#,
+    r#"  {"tags": {}, "author": []},"#,
+    "  7",
+    "]}",
+  ], "\n")
+  let errors = [
+    mismatch("String", "Int", ["books", "1", "title"]),
+    mismatch("Int", "String", ["books", "1", "year"]),
+    mismatch("String", "Int", ["books", "1", "tags", "1"]),
+    mismatch("String", "Null", ["books", "1", "tags", "2"]),
+    mismatch("String", "Int", ["books", "1", "author", "name"]),
+    mismatch("Field", "Nothing", ["books", "2", "title"]),
+    mismatch("Field", "Nothing", ["books", "2", "year"]),
+    mismatch("Array", "Object", ["books", "2", "tags"]),
+    mismatch("Object", "Array", ["books", "2", "author"]),
+    mismatch("Object", "Int", ["books", "3"]),
+  ]
+  let assert Err(error) = parse(text, library())
+  assert error == Decode(errors)
+  let shown = string::join([
+    "unexpected JSON: expected String, found Int at books.1.title",
+    "expected Int, found String at books.1.year",
+    "expected String, found Int at books.1.tags.1",
+    "expected String, found Null at books.1.tags.2",
+    "expected String, found Int at books.1.author.name",
+    "expected Field, found Nothing at books.2.title",
+    "expected Field, found Nothing at books.2.year",
+    "expected Array, found Object at books.2.tags",
+    "expected Object, found Array at books.2.author",
+    "expected Object, found Int at books.3",
+  ], "; ")
+  assert show(error) == shown
+  let assert Ok(value) = parse_value(text)
+  assert decode_value(value, library()) == Err(errors)
+}
+
+test "a missing or wrong field gives next its decoder's placeholder" {
+  // `next` fails when it gets the placeholders, which shows what they are.
+  fn checked() -> decode::Decoder<Int> {
+    use title <- decode::field("title", decode::string())
+    use born <- decode::field("born", decode::optional(decode::int()))
+    use year <- decode::field("year", decode::float())
+    use tags <- decode::field("tags", decode::list(decode::string()))
+    case title, born, year, tags {
+      "", None, zero, [] when zero == 0.0 => decode::failure(0, "Missing")
+      "", Some(0), zero, [] when zero == 0.0 => decode::failure(0, "Wrong")
+      _, _, _, _ => decode::success(1)
+    }
+  }
+  let full = r#"{"title": "Dune", "born": 1920, "year": 1965, "tags": []}"#
+  assert parse(full, checked()) == Ok(1)
+  let missing = [
+    mismatch("Field", "Nothing", ["title"]),
+    mismatch("Field", "Nothing", ["born"]),
+    mismatch("Field", "Nothing", ["year"]),
+    mismatch("Field", "Nothing", ["tags"]),
+    mismatch("Missing", "Object", []),
+  ]
+  assert parse(r#"{"other": 1}"#, checked()) == Err(Decode(missing))
+  let wrong = [
+    mismatch("String", "Int", ["title"]),
+    mismatch("Int", "String", ["born"]),
+    mismatch("Float", "Null", ["year"]),
+    mismatch("Array", "Int", ["tags"]),
+    mismatch("Wrong", "Object", []),
+  ]
+  let text = r#"{"title": 1, "born": "x", "year": null, "tags": 5}"#
+  assert parse(text, checked()) == Err(Decode(wrong))
+  let not_object = [mismatch("Object", "Bool", []), mismatch("Missing", "Bool", [])]
+  assert parse("true", checked()) == Err(Decode(not_object))
+}
+
+test "optional_field gives its default for a missing key or a value that is not an object" {
+  fn count() -> decode::Decoder<Int> {
+    use n <- decode::optional_field("n", 5, decode::int())
+    case n {
+      5 => decode::failure(0, "Default")
+      0 => decode::failure(0, "Placeholder")
+      _ => decode::success(n)
+    }
+  }
+  assert parse(r#"{"n": 7}"#, count()) == Ok(7)
+  assert parse(r"{}", count()) == Err(Decode([mismatch("Default", "Object", [])]))
+  let not_object = [mismatch("Object", "Array", []), mismatch("Default", "Array", [])]
+  assert parse("[1]", count()) == Err(Decode(not_object))
+  let wrong = [mismatch("Int", "String", ["n"]), mismatch("Placeholder", "Object", [])]
+  assert parse(r#"{"n": "x"}"#, count()) == Err(Decode(wrong))
+  let null = [mismatch("Int", "Null", ["n"]), mismatch("Placeholder", "Object", [])]
+  assert parse(r#"{"n": null}"#, count()) == Err(Decode(null))
+  assert parse(r#"{"n": "x", "n": 3}"#, count()) == Ok(3)
+}
+
+test "an error equal to one already recorded is dropped" {
+  fn twice() -> decode::Decoder<(Int, Int)> {
+    use a <- decode::field("a", decode::int())
+    use b <- decode::field("a", decode::int())
+    decode::success((a, b))
+  }
+  assert parse(r"{}", twice()) == Err(Decode([mismatch("Field", "Nothing", ["a"])]))
+  assert parse(r#"{"a": "x"}"#, twice()) == Err(Decode([mismatch("Int", "String", ["a"])]))
+  let ints = decode::pairs(decode::int())
+  assert parse(r#"{"k": "x", "k": "y"}"#, ints) == Err(Decode([mismatch("Int", "String", ["k"])]))
+  let two = [mismatch("Int", "String", ["k"]), mismatch("Int", "Null", ["k"])]
+  assert parse(r#"{"k": "x", "j": 1, "k": null}"#, ints) == Err(Decode(two))
+}
+
+test "nested lists and pairs add each index and key to the path" {
+  let grid = decode::list(decode::list(decode::int()))
+  assert parse("[[1, 2], [], [3]]", grid) == Ok([[1, 2], [], [3]])
+  let cells = [
+    mismatch("Int", "String", ["0", "1"]),
+    mismatch("Int", "String", ["1", "0"]),
+    mismatch("Array", "Int", ["2"]),
+  ]
+  assert parse(r#"[[1, "a"], ["b"], 3]"#, grid) == Err(Decode(cells))
+  let groups = decode::pairs(decode::list(decode::int()))
+  let members = [
+    mismatch("Int", "String", ["k", "1"]),
+    mismatch("Array", "Int", [""]),
+    mismatch("Int", "Bool", ["a.b", "0"]),
+  ]
+  let assert Err(error) = parse(r#"{"k": [1, "x"], "": 2, "a.b": [true]}"#, groups)
+  assert error == Decode(members)
+  let shown = string::join([
+    "unexpected JSON: expected Int, found String at k.1",
+    "expected Array, found Int at ",
+    "expected Int, found Bool at a.b.0",
+  ], "; ")
+  assert show(error) == shown
+}
+
+test "float and int read the numbers parse_value reads" {
+  assert parse("-9007199254740991", decode::float()) == Ok(-9007199254740991.0)
+  let floats = decode::list(decode::float())
+  assert parse("[1, 2.5, -0, 1e400]", floats) == Ok([1.0, 2.5, 0.0, float::infinity])
+  assert parse("-0", decode::int()) == Ok(0)
+  assert parse("-9007199254740991", decode::int()) == Ok(-9007199254740991)
+  let problem = decode::Error { expected: "Int", found: "Float", path: [] }
+  assert parse("-9007199254740992", decode::int()) == Err(Decode([problem]))
+}
+
+@target(native)
+test "decode_value passes an Int outside the safe range to int and float" {
+  assert decode_value(Int(int::max_safe + 2), decode::int()) == Ok(int::max_safe + 2)
+  assert decode_value(Int(int::max_safe + 2), decode::float()) == Ok(9007199254740992.0)
 }

@@ -1,0 +1,158 @@
+fn app::first(_0: value) -> value check str#0 {
+  entry unwind bb5
+  str#0 = "src/main.cheby:9:4"
+  str#1 = "src/main.cheby:11:20"
+bb0:
+  _1: int = call_runtime list_length(borrow _0)
+  switch _1 [0 => bb1, _ => bb2]
+bb1:
+  drop _0
+  goto bb3(const int 0)
+bb2:
+  _3: value = call_runtime list_uncons_owned(_0, borrow const int 0, borrow const int 1, borrow _1) ; unwind bb4
+  _4: value = call_runtime list_uncons_head()
+  _5: int = unbox int _4
+  drop _4
+  _6: value = call std::list::length(_3) ; unwind bb4
+  _7: int = unbox int _6
+  drop _6
+  _8: int = checked add int _5, _7 at str#1 ; unwind bb4
+  goto bb3(_8)
+bb3(_2: int):
+  _9: value = box int _2 ; unwind bb4
+  return _9
+bb4:
+  resume
+bb5:
+  drop _0
+  goto bb4()
+}
+
+fn app::last(_0: value) -> value check str#0 {
+  entry unwind bb5
+  str#0 = "src/main.cheby:16:4"
+  str#1 = "src/main.cheby:17:3"
+  str#2 = "src/main.cheby:18:20"
+bb0:
+  _1: int = call_runtime list_length(borrow _0)
+  switch _1 [0 => bb1, _ => bb2]
+bb1:
+  drop _0
+  goto bb3(const int 0)
+bb2:
+  _3: int = checked sub int _1, const int 1 at str#1 ; unwind bb5
+  _4: value = call_runtime list_uncons_owned(_0, borrow _3, borrow const int 0, borrow _3) ; unwind bb4
+  _5: value = call_runtime list_uncons_head()
+  _6: int = unbox int _5
+  drop _5
+  _7: value = call std::list::length(_4) ; unwind bb4
+  _8: int = unbox int _7
+  drop _7
+  _9: int = checked add int _6, _8 at str#2 ; unwind bb4
+  goto bb3(_9)
+bb3(_2: int):
+  _10: value = box int _2 ; unwind bb4
+  return _10
+bb4:
+  resume
+bb5:
+  drop _0
+  goto bb4()
+}
+
+fn app::cut(_0: value) -> value check str#0 {
+  entry unwind bb5
+  str#0 = "src/main.cheby:23:4"
+  str#1 = "src/main.cheby:24:3"
+  str#2 = "src/main.cheby:25:23"
+bb0:
+  _1: int = call_runtime list_length(borrow _0)
+  switch _1 [0 => bb1, 1 => bb1, _ => bb2]
+bb1:
+  drop _0
+  goto bb3(const int 0)
+bb2:
+  _3: int = checked sub int _1, const int 1 at str#1 ; unwind bb5
+  _4: value = call_runtime list_get(borrow _0, borrow _3)
+  _5: int = unbox int _4
+  drop _4
+  _6: int = checked sub int _1, const int 2 at str#1 ; unwind bb5
+  _7: value = call_runtime list_slice_owned(_0, borrow const int 0, borrow _6) ; unwind bb4
+  _8: value = call std::list::length(_7) ; unwind bb4
+  _9: int = unbox int _8
+  drop _8
+  _10: int = checked add int _5, _9 at str#2 ; unwind bb4
+  goto bb3(_10)
+bb3(_2: int):
+  _11: value = box int _2 ; unwind bb4
+  return _11
+bb4:
+  resume
+bb5:
+  drop _0
+  goto bb4()
+}
+
+fn app::frames(_0: value) -> value check str#0 {
+  entry unwind bb8
+  str#0 = "src/main.cheby:30:4"
+  str#1 = "src/main.cheby:31:3"
+  str#2 = "src/main.cheby:33:7"
+bb0:
+  _1: int = call_runtime list_length(borrow _0)
+  switch _1 [0 => bb1, _ => bb2]
+bb1:
+  drop _0
+  goto bb3()
+bb2:
+  _2: int = checked sub int _1, const int 1 at str#1 ; unwind bb8
+  _3: value = call_runtime list_get(borrow _0, borrow _2)
+  _4: value = field _3.0 of ctor app::Frame
+  _5: int = call_runtime list_length(borrow _4)
+  switch _5 [0 => bb4, _ => bb5]
+bb3:
+  goto bb6(const int 0)
+bb4:
+  drop _0
+  drop _3
+  goto bb3()
+bb5:
+  _6: int = checked sub int _1, const int 1 at str#1 ; unwind bb9
+  _7: value = call_runtime list_slice_owned(_0, borrow const int 0, borrow _6) ; unwind bb10
+  _8: int = field _3.1 of ctor app::Frame
+  drop _3 of ctor app::Frame keep [_4 @0]
+  _9: value = call_runtime list_uncons_owned(_4, borrow const int 0, borrow const int 1, borrow _5) ; unwind bb11
+  _10: value = call_runtime list_uncons_head()
+  _11: int = unbox int _10
+  drop _10
+  _12: int = checked add int _11, _8 at str#2 ; unwind bb12
+  _13: value = call std::list::length(_9) ; unwind bb11
+  _14: int = unbox int _13
+  drop _13
+  _15: int = checked add int _12, _14 at str#2 ; unwind bb11
+  _16: value = call std::list::length(_7) ; unwind bb7
+  _17: int = unbox int _16
+  drop _16
+  _18: int = checked add int _15, _17 at str#2 ; unwind bb7
+  goto bb6(_18)
+bb6(_19: int):
+  _20: value = box int _19 ; unwind bb7
+  return _20
+bb7:
+  resume
+bb8:
+  drop _0
+  goto bb7()
+bb9:
+  drop _3
+  goto bb8()
+bb10:
+  drop _3
+  goto bb7()
+bb11:
+  drop _7
+  goto bb7()
+bb12:
+  drop _9
+  goto bb11()
+}

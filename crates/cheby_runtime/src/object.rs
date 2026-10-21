@@ -269,6 +269,78 @@ pub static cheby_rt_static_err_nil: StaticPair = StaticPair::new(layout::ERR, &c
 /// symbol of generated code names it.
 pub(crate) static STATIC_OK_NIL: StaticPair = StaticPair::new(layout::OK, &cheby_rt_static_nil);
 
+/// A static `Some` whose one field is a tagged integer: the header, with
+/// count [`abi::RC_STATIC`] and scan count 1, then the tagged word. The
+/// field is an integer, never a pointer, so the object needs no
+/// provenance.
+#[derive(Debug)]
+#[repr(C, align(8))]
+pub(crate) struct StaticSome {
+    // As in `StaticObject`: an `UnsafeCell` keeps the object in writable
+    // memory, which the atomic count load requires. It is never written.
+    header: UnsafeCell<u64>,
+    field: Word,
+}
+
+// SAFETY: neither the header nor the field is ever written after
+// initialization (the count is `RC_STATIC`, which every count operation
+// checks before writing, and a static object is never unique, so it is
+// never updated in place or reused), so sharing the object between threads
+// only ever shares reads.
+unsafe impl Sync for StaticSome {}
+
+impl StaticSome {
+    /// The object's word.
+    #[must_use]
+    pub(crate) fn word(&'static self) -> Word {
+        ptr_to_word(std::ptr::from_ref(self).cast::<u8>())
+    }
+}
+
+/// The smallest value [`STATIC_SOME_SMALL`] holds: `I8`'s minimum.
+const SOME_SMALL_MIN: i64 = -128;
+/// How many values [`STATIC_SOME_SMALL`] holds: `-128..=255`, every `I8`
+/// and every `U8`.
+const SOME_SMALL_COUNT: usize = 384;
+
+/// The static `Some(n)` of every tagged `n` in `-128..=255`, in order
+/// (D-902): the results of `bytes::get` and `bytes::read_i8`, which so
+/// allocate nothing. A `U8` and an `I8` of the same value have the same
+/// uniform word (D-521), so they share an object. Runtime code only: no
+/// symbol of generated code names them.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "a static's initializer cannot call `get_mut`; `i` stays below the length"
+)]
+static STATIC_SOME_SMALL: [StaticSome; SOME_SMALL_COUNT] = {
+    let mut table = [const {
+        StaticSome {
+            header: UnsafeCell::new(0),
+            field: 0,
+        }
+    }; SOME_SMALL_COUNT];
+    let mut i = 0;
+    let mut value = SOME_SMALL_MIN;
+    while i < SOME_SMALL_COUNT {
+        table[i] = StaticSome {
+            header: UnsafeCell::new(abi::header(abi::RC_STATIC, 1, layout::SOME)),
+            // `-128..=255` fits 63 bits, so the tag is exact.
+            field: value.wrapping_shl(1).cast_unsigned() | abi::TAG_INT,
+        };
+        i += 1;
+        value += 1;
+    }
+    table
+};
+
+/// The static `Some(n)` for `n` in `-128..=255` (D-902), or `None` for
+/// any other `n`.
+#[must_use]
+pub(crate) fn static_some_small(n: i64) -> Option<Word> {
+    let index = usize::try_from(n.checked_sub(SOME_SMALL_MIN)?).ok()?;
+    STATIC_SOME_SMALL.get(index).map(StaticSome::word)
+}
+
 /// The static object of a builtin nullary constructor, by layout id.
 #[must_use]
 pub fn static_ctor(id: LayoutId) -> Option<&'static StaticObject> {
@@ -333,6 +405,28 @@ mod tests {
             assert_eq!(read_field(word_to_ptr(word), 8), nil());
         }
         assert_eq!(std::mem::size_of::<StaticPair>(), 16);
+    }
+
+    /// Every value of `-128..=255` has a static `Some` holding its tagged
+    /// word, and no other value has one (D-902).
+    #[test]
+    fn the_static_somes_hold_every_byte() {
+        assert_eq!(std::mem::size_of::<StaticSome>(), 16);
+        for n in -128..=255 {
+            let word = static_some_small(n).unwrap();
+            assert_eq!(word % 8, 0);
+            assert_eq!(static_some_small(n), Some(word));
+            // SAFETY: the word points to a live static object with one
+            // field.
+            unsafe {
+                assert_eq!(scan_and_layout(word_to_ptr(word)), (1, layout::SOME));
+                assert_eq!(load_rc(word_to_ptr(word)), abi::RC_STATIC);
+                assert_eq!(read_field(word_to_ptr(word), 8), abi::tag_int(n).unwrap());
+            }
+        }
+        for n in [-129, 256, i64::MIN, i64::MAX] {
+            assert_eq!(static_some_small(n), None);
+        }
     }
 
     #[test]

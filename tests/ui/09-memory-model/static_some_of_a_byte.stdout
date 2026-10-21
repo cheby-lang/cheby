@@ -1,0 +1,8 @@
+printed: Some(20) Some(255) None Some(-1)
+equal: True
+after a match: Some(21) Some(20) Some(20)
+set: 2 True
+map: Some("twenty")
+list: [Some(20), Some(0)]
+constant: Some(7) True
+channel: Ok(Some(20))

@@ -1318,11 +1318,32 @@ pub enum RuntimeFn {
     /// scope's fibers, closes it and decides (D-693, D-666). Consumes the
     /// scope even when it raises (D-698).
     ScopeClose,
+    /// `(list borrowed, at: Int, start: Int, end: Int) -> List`: a list
+    /// pattern's element `at` next to its spread `start..end`, read in one
+    /// call (D-909), as [`Self::ListGet`] and [`Self::ListSlice`] would
+    /// read them: returns the view, and keeps the element, owned, for the
+    /// [`Self::ListUnconsHead`] that must be the very next statement of the
+    /// block (the validator checks it). Result owned. Only pattern
+    /// lowering emits it. The element is kept only when it returns
+    /// normally.
+    ListUncons,
+    /// `(list owned, at: Int, start: Int, end: Int) -> List`:
+    /// [`Self::ListUncons`] of a list used for the last time, which it
+    /// consumes: on a unique list, one descent moves the element out and
+    /// the root becomes the view in place. Only the RC pass emits it, for
+    /// a `ListUncons` whose list it would drop right after, as it does
+    /// [`Self::ListSliceOwned`]. Consumes the list even when it raises
+    /// (D-698).
+    ListUnconsOwned,
+    /// `() -> T`: the element that the [`Self::ListUncons`] or
+    /// [`Self::ListUnconsOwned`] right before it kept. Result owned. Runs
+    /// no code and cannot raise.
+    ListUnconsHead,
 }
 
 impl RuntimeFn {
     /// Every helper, in declaration order.
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 17] = [
         Self::StrWithCapacity,
         Self::StrAppend,
         Self::StrEq,
@@ -1337,6 +1358,9 @@ impl RuntimeFn {
         Self::EffectCheck,
         Self::ScopeOpen,
         Self::ScopeClose,
+        Self::ListUncons,
+        Self::ListUnconsOwned,
+        Self::ListUnconsHead,
     ];
 
     /// Whether a call of the helper may start or pass on an unwinding
@@ -1344,7 +1368,10 @@ impl RuntimeFn {
     /// every other helper.
     #[must_use]
     pub const fn may_unwind(self) -> bool {
-        !matches!(self, Self::StrEq | Self::ListLength | Self::ListGet)
+        !matches!(
+            self,
+            Self::StrEq | Self::ListLength | Self::ListGet | Self::ListUnconsHead
+        )
     }
 
     /// The parameters: each one's representation and whether the helper
@@ -1365,6 +1392,19 @@ impl RuntimeFn {
             Self::ListSliceOwned => &[(Value, Owned), (Int, Borrowed), (Int, Borrowed)],
             Self::ScopeOpen => &[(Bool, Borrowed), (Int, Borrowed), (Int, Borrowed)],
             Self::ScopeClose => &[(Value, Owned), (Bool, Borrowed)],
+            Self::ListUncons => &[
+                (Value, Borrowed),
+                (Int, Borrowed),
+                (Int, Borrowed),
+                (Int, Borrowed),
+            ],
+            Self::ListUnconsOwned => &[
+                (Value, Owned),
+                (Int, Borrowed),
+                (Int, Borrowed),
+                (Int, Borrowed),
+            ],
+            Self::ListUnconsHead => &[],
         }
     }
 
@@ -1380,6 +1420,9 @@ impl RuntimeFn {
             | Self::ListGet
             | Self::ListSlice
             | Self::ListSliceOwned
+            | Self::ListUncons
+            | Self::ListUnconsOwned
+            | Self::ListUnconsHead
             | Self::Debug
             | Self::ScopeOpen => Some(Repr::Value),
             Self::StrEq | Self::Equal | Self::ScopeClose => Some(Repr::Bool),
@@ -1406,6 +1449,9 @@ impl RuntimeFn {
             Self::EffectCheck => "effect_check",
             Self::ScopeOpen => "scope_open",
             Self::ScopeClose => "scope_close",
+            Self::ListUncons => "list_uncons",
+            Self::ListUnconsOwned => "list_uncons_owned",
+            Self::ListUnconsHead => "list_uncons_head",
         }
     }
 }

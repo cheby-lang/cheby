@@ -70,6 +70,32 @@ test "get reads one byte" {
   assert get(data, -1) == None
 }
 
+/// Returns the offset of the first byte at or after `from` that is `"`, `\`
+/// or below 0x20, or the length of `data` when there is none. `from` is
+/// clamped between 0 and the length of `data`, as `slice` clamps its bounds.
+/// Every byte of a multi-byte UTF-8 sequence is at least 0x80, so none of
+/// them stops it.
+/// `std::json`'s parser finds the plain runs of its strings with it (D-900,
+/// D-904).
+@external(native, "cheby_bytes_json_plain_end")
+@external(js, "./bytes.mjs", "json_plain_end")
+@std_clamped(from)
+fn json_plain_end(data: Bytes, from: Int) -> Int
+
+test "json_plain_end finds the next quote, backslash or control byte" {
+  let data = from_string("ab\"c\\d\u{1}é")
+  let negative = -4
+  assert json_plain_end(data, 0) == 2
+  assert json_plain_end(data, 3) == 4
+  assert json_plain_end(data, 5) == 6
+  assert json_plain_end(data, 7) == 9
+  assert json_plain_end(data, 9) == 9
+  assert json_plain_end(data, 99) == 9
+  assert json_plain_end(data, negative) == 2
+  assert json_plain_end(from_list([0x7F, 0x80, 0xFF, 0x1F]), 0) == 3
+  assert json_plain_end(new(), 0) == 0
+}
+
 /// Returns the bytes of `data` from `start` up to but not including `end` (D-319).
 @external(native, "cheby_bytes_slice")
 @external(js, "./bytes.mjs", "slice")

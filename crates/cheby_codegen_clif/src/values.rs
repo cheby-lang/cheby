@@ -3,7 +3,9 @@
 //! runtime helpers (D-520) and reference counting (D-273).
 
 use cranelift_codegen::ir::condcodes::IntCC;
-use cranelift_codegen::ir::{BlockArg, InstBuilder, MemFlagsData, Value, types};
+use cranelift_codegen::ir::{
+    BlockArg, InstBuilder, MemFlagsData, StackSlot, StackSlotData, StackSlotKind, Value, types,
+};
 
 use cheby_iface::{DefId, builtin};
 use cheby_mir::{BuiltinLayout, Const, LayoutRef, Local, Operand, Repr, RuntimeFn, TagType};
@@ -809,12 +811,43 @@ impl Translator<'_, '_> {
         helper: RuntimeFn,
         args: &[Operand],
     ) -> Result<Option<Value>, CodegenError> {
+        if let (RuntimeFn::ListLength, [list]) = (helper, args) {
+            // A root's length is a raw word (D-563), in the static empty
+            // list too: read inline (D-910).
+            let list = self.operand(list)?;
+            return Ok(Some(self.b.ins().load(
+                types::I64,
+                MemFlagsData::trusted(),
+                list,
+                abi::list::ROOT_LEN_OFFSET,
+            )));
+        }
+        if let RuntimeFn::ListUnconsHead = helper {
+            // The word the `list_uncons` right before it wrote (D-909).
+            let slot = self.uncons_slot.ok_or_else(|| {
+                CodegenError::ice("a `list_uncons_head` without its `list_uncons`")
+            })?;
+            return Ok(Some(self.b.ins().stack_load(
+                types::I64,
+                types::I64,
+                slot,
+                0,
+            )));
+        }
         let (f, takes_ctx) = RuntimeFunc::of(helper);
-        let mut vals = Vec::with_capacity(args.len().saturating_add(1));
+        let mut vals = Vec::with_capacity(args.len().saturating_add(2));
         if takes_ctx {
             vals.push(self.ctx()?);
         }
         vals.extend(self.operands(args)?);
+        if let RuntimeFn::ListUncons | RuntimeFn::ListUnconsOwned = helper {
+            // The address the element is written to: one word per
+            // function, which the `list_uncons_head` right after the call
+            // reads (D-909). A stack slot, not a second result register,
+            // so every target's C ABI passes it the same way.
+            let slot = self.make_uncons_slot();
+            vals.push(self.b.ins().stack_addr(types::I64, slot, 0));
+        }
         if let RuntimeFn::ScopeClose = helper {
             // The wait at a scope's end (D-856).
             self.store_wait_frame()?;
@@ -827,6 +860,19 @@ impl Translator<'_, '_> {
                 "the runtime helper {helper:?} and its C signature disagree on a result"
             ))),
         }
+    }
+
+    /// The stack slot where a `list_uncons` writes its element (D-909),
+    /// made at the function's first one.
+    fn make_uncons_slot(&mut self) -> StackSlot {
+        if let Some(slot) = self.uncons_slot {
+            return slot;
+        }
+        let slot =
+            self.b
+                .create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, 8, 3));
+        self.uncons_slot = Some(slot);
+        slot
     }
 
     /// A raw `from` value boxed canonically into a uniform word (D-521):

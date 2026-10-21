@@ -10,6 +10,8 @@
 //!   external wrappers and entry thunks. Every THIR construct lowers, so
 //!   lowering reports no diagnostics (D-554); its only error is an
 //!   internal one.
+//! - [`hoist`]: field reads move up to the consumption of a sibling
+//!   projection, at the end of lowering, under every RC mode (D-911).
 //! - [`rc`]: naive dup/drop placement by the last-use rule (D7, D-205).
 //! - [`unwind`]: unwind edges to shared cleanup pads, after counting
 //!   (D-698), with the ownership simulation it shares with the validator;
@@ -38,6 +40,9 @@ pub mod fuse;
 mod fuse_tests;
 #[cfg(test)]
 mod golden_tests;
+pub mod hoist;
+#[cfg(test)]
+mod hoist_tests;
 pub mod ir;
 pub mod kernels_in_place;
 pub mod layout;

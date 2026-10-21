@@ -147,11 +147,11 @@ bb1:
   drop _3
   goto bb3(const ctor None)
 bb2:
-  _9: value = call_runtime list_get(borrow _1, borrow const int 0)
-  _10: int = unbox int _9
-  drop _9
-  _11: value = call_runtime list_slice_owned(_1, borrow const int 1, borrow _7) ; unwind bb12
-  _12: int = checked sub int _5, _10 at str#1 ; unwind bb13
+  _9: value = call_runtime list_uncons_owned(_1, borrow const int 0, borrow const int 1, borrow _7) ; unwind bb12
+  _10: value = call_runtime list_uncons_head()
+  _11: int = unbox int _10
+  drop _10
+  _12: int = checked sub int _5, _11 at str#1 ; unwind bb13
   _13: value = box int _12 ; unwind bb13
   dup _3
   _14: value = call std::map::get(_3, _13) ; unwind bb13
@@ -162,7 +162,7 @@ bb3(_8: value):
 bb4:
   drop _0
   drop _3
-  drop _11
+  drop _9
   _16: value = field _14.0 of ctor Some
   _28: value = drop_reuse _14 of ctor Some keep [_16 @0]
   _17: int = unbox int _16
@@ -176,10 +176,10 @@ bb5:
   drop _14
   _23: int = checked add int _6, const int 1 at str#2 ; unwind bb13
   _24: value = box int _23 ; unwind bb13
-  _25: value = box int _10 ; unwind bb21
+  _25: value = box int _11 ; unwind bb21
   _26: value = box int _6 ; unwind bb22
   _27: value = call std::map::insert(_3, _25, _26) ; unwind bb24
-  tail_call _0(_11, _24, _27)
+  tail_call _0(_9, _24, _27)
 bb6(_22: value):
   goto bb3(_22)
 bb7:
@@ -200,7 +200,7 @@ bb12:
   drop _3
   goto bb8()
 bb13:
-  drop _11
+  drop _9
   goto bb12()
 bb14:
   drop _28
@@ -230,7 +230,7 @@ bb22:
   drop _25
   goto bb21()
 bb23:
-  drop _11
+  drop _9
   goto bb8()
 bb24:
   drop _24

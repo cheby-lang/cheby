@@ -1,0 +1,223 @@
+//! Runtime benchmark of the JSON group: a round trip through typed records.
+//!
+//! The program writes a document of records as JSON text, with escapes,
+//! floats, nested arrays, `null` and missing fields. It parses the text
+//! with record decoders, keeps the active records with changed fields,
+//! and writes them back with `json::to_string`. The number of records is
+//! the first program argument, and `main` prints the FNV-1a hash of the
+//! output's bytes.
+
+import std::bytes
+import std::env
+import std::int
+import std::io
+import std::json
+import std::json::decode
+import std::list
+import std::string
+
+/// The number of records when no argument is given.
+const default_size: Int = 20_000
+
+const fnv_offset: Int = 2166136261
+
+const fnv_prime: Int = 16777619
+
+type Address { street: String, city: String, zip: Int }
+
+type Record {
+  id: Int,
+  name: String,
+  active: Bool,
+  score: Float,
+  tags: List<String>,
+  address: Address,
+  history: List<(Int, Int)>,
+  note: Option<String>,
+}
+
+fn main() {
+  let n = size(env::args())
+  let text = document(n)
+  let assert Ok(records) = json::parse(text, decode::list(record_decoder()))
+  let kept = list::filter_map(records, fn(found) {
+    case found.active {
+      True => Some(encode(found))
+      False => None
+    }
+  })
+  let output = bytes::from_string(json::to_string(json::Array(kept)))
+  let checksum = bytes::fold(output, fnv_offset, fnv1a_step)
+  io::println("size: {n}")
+  io::println("checksum: {checksum}")
+}
+
+/// The size from the first program argument, or `default_size`.
+fn size(args: List<String>) -> Int {
+  case args {
+    [] => default_size
+    [first, ..] => {
+      let assert Ok(n) = int::parse(first)
+      n
+    }
+  }
+}
+
+/// One step of FNV-1a over 32 bits. The product stays below 2^57.
+fn fnv1a_step(hash: Int, byte: U8) -> Int {
+  ((hash ^ int::from_u8(byte)) * fnv_prime) & 0xFFFF_FFFF
+}
+
+// Writing the input
+
+/// A pseudo-random number below 2^31 - 1 for record `i` and `salt`: two
+/// steps of the MINSTD generator from a seed made of both. Every product
+/// stays below 2^53.
+fn mix(i: Int, salt: Int) -> Int {
+  let seed = ((i + 1) * 7919 + salt * 104729) % 2147483647
+  seed * 48271 % 2147483647 * 48271 % 2147483647
+}
+
+/// A syllable for a digit from 0 to 15.
+fn syllable(digit: Int) -> String {
+  case digit {
+    0 => "ka"
+    1 => "lo"
+    2 => "mi"
+    3 => "ne"
+    4 => "ru"
+    5 => "sa"
+    6 => "to"
+    7 => "vi"
+    8 => "ze"
+    9 => "po"
+    10 => "qu"
+    11 => "da"
+    12 => "fe"
+    13 => "gi"
+    14 => "ho"
+    _ => "ju"
+  }
+}
+
+/// A word of three syllables chosen by `seed`.
+fn word(seed: Int) -> String {
+  syllable(seed % 16) + syllable(seed / 16 % 16) + syllable(seed / 256 % 16)
+}
+
+/// The document: an array of `n` records, one per line.
+fn document(n: Int) -> String {
+  let lines = list::map(list::range(0, n), record_text)
+  "[\n" + string::join(lines, ",\n") + "\n]\n"
+}
+
+/// Record `i` as JSON text.
+fn record_text(i: Int) -> String {
+  let active = case mix(i, 1) % 3 {
+    0 => "false"
+    _ => "true"
+  }
+  let tags = list::map(list::range(0, mix(i, 2) % 4), fn(k) { "\"" + word(mix(i, 10 + k)) + "\"" })
+  let history = list::map(list::range(0, mix(i, 3) % 6), fn(k) {
+    let day = mix(i, 20 + k) % 366
+    let amount = mix(i, 30 + k) % 20001 - 10000
+    "[{day}, {amount}]"
+  })
+  let street = mix(i, 4) % 9000 + 100
+  let city = word(mix(i, 5))
+  let zip = mix(i, 6) % 90000 + 10000
+  let note = case i % 4 {
+    0 => r#", "note": null"#
+    1 => r#", "note": "see \/notes\/"# + int::show(i) + "\""
+    _ => ""
+  }
+  let fields = [
+    "\"id\": {i}",
+    "\"name\": " + name_text(i),
+    "\"active\": {active}",
+    "\"score\": " + score_text(i),
+    "\"tags\": [" + string::join(tags, ", ") + "]",
+    "\"address\": \{\"street\": \"{street} " + word(mix(i, 7)) + " street\", \"city\": \"{city}\", \"zip\": {zip}}",
+    "\"history\": [" + string::join(history, ", ") + "]",
+  ]
+  "\{" + string::join(fields, ", ") + note + "}"
+}
+
+/// The name of record `i` as a JSON string, some of them with escapes.
+fn name_text(i: Int) -> String {
+  let plain = word(mix(i, 8)) + " " + word(mix(i, 9))
+  let escaped = case {
+    i % 7 == 0 => plain + r#" \"jr\"\n"#
+    i % 11 == 0 => plain + r" caf\u00e9"
+    i % 13 == 0 => plain + r" \ud83d\ude00\t"
+    _ => plain
+  }
+  "\"" + escaped + "\""
+}
+
+/// The score of record `i` as a JSON number with a fraction or an exponent.
+fn score_text(i: Int) -> String {
+  let whole = mix(i, 11) % 1000
+  let fraction = string::pad_start(int::show(mix(i, 12) % 100), 2, "0")
+  case i % 5 {
+    0 => "-{whole}.{fraction}"
+    1 => "{whole}.{fraction}e-3"
+    2 => "{whole}E2"
+    _ => "{whole}.{fraction}"
+  }
+}
+
+// Decoding
+
+fn record_decoder() -> decode::Decoder<Record> {
+  use id <- decode::field("id", decode::int())
+  use name <- decode::field("name", decode::string())
+  use active <- decode::field("active", decode::bool())
+  use score <- decode::field("score", decode::float())
+  use tags <- decode::field("tags", decode::list(decode::string()))
+  use address <- decode::field("address", address_decoder())
+  use history <- decode::field("history", decode::list(entry_decoder()))
+  use note <- decode::optional_field("note", None, decode::optional(decode::string()))
+  decode::success(Record { id, name, active, score, tags, address, history, note })
+}
+
+fn address_decoder() -> decode::Decoder<Address> {
+  use street <- decode::field("street", decode::string())
+  use city <- decode::field("city", decode::string())
+  use zip <- decode::field("zip", decode::int())
+  decode::success(Address { street, city, zip })
+}
+
+/// A history entry, written as the array `[day, amount]`.
+fn entry_decoder() -> decode::Decoder<(Int, Int)> {
+  use pair <- decode::then(decode::list(decode::int()))
+  case pair {
+    [day, amount] => decode::success((day, amount))
+    _ => decode::failure((0, 0), "Entry")
+  }
+}
+
+// Encoding
+
+/// A kept record as written: `active` is gone, the score is scaled, the
+/// address is flattened, and the history gets named fields and a total.
+fn encode(found: Record) -> json::Value {
+  let total = list::fold(found.history, 0, fn(sum, (_, amount)) { sum + amount })
+  json::Object([
+    ("id", json::Int(found.id)),
+    ("name", json::String(found.name)),
+    ("score", json::Float(found.score * 1.5)),
+    ("tags", json::array(found.tags, json::String)),
+    ("street", json::String(found.address.street)),
+    ("city", json::String(found.address.city)),
+    ("zip", json::Int(found.address.zip)),
+    ("history", json::array(found.history, encode_entry)),
+    ("total", json::Int(total)),
+    ("note", json::nullable(found.note, json::String)),
+  ])
+}
+
+fn encode_entry(day_amount: (Int, Int)) -> json::Value {
+  let (day, amount) = day_amount
+  json::Object([("day", json::Int(day)), ("amount", json::Int(amount))])
+}

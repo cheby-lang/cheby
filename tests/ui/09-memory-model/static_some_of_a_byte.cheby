@@ -1,0 +1,53 @@
+// @mode: run-pass
+// @decisions: D-902
+// @milestone: M2
+//! `bytes::get` and `bytes::read_i8` return static `Some` objects (D-902).
+//! They behave as any other `Some`: they print, compare and hash as one,
+//! sit in collections and constants, and cross a channel. A `Some` built
+//! after a match on one is a new object, so the static one keeps its byte,
+//! even where another `Bytes` holds the same byte.
+
+import std::bytes
+import std::channel
+import std::io
+import std::map
+import std::set
+
+const first: Option<U8> = bytes::get(bytes::from_list([7, 8]), 0)
+
+fn bumped(data: bytes::Bytes, index: Int) -> Option<U8> {
+  case bytes::get(data, index) {
+    Some(byte) => Some(byte + 1)
+    None => None
+  }
+}
+
+fn main() {
+  let data = bytes::from_list([0, 20, 255])
+  let got = bytes::get(data, 1)
+  let last = bytes::get(data, 2)
+  let outside = bytes::get(data, 3)
+  let signed = bytes::read_i8(data, 2)
+  io::println("printed: {got:?} {last:?} {outside:?} {signed:?}")
+  let built: Option<U8> = Some(20)
+  let same = got == built && got == bytes::get(data, 1) && got != Some(21)
+  io::println("equal: {same}")
+  let up = bumped(data, 1)
+  let other = bytes::get(bytes::from_list([20]), 0)
+  io::println("after a match: {up:?} {got:?} {other:?}")
+  let found = set::from_list([got, built, other, outside])
+  let size = set::size(found)
+  let in_set = set::contains(found, Some(20))
+  io::println("set: {size} {in_set}")
+  let names = map::insert(map::new(), got, "twenty")
+  let named = map::get(names, built)
+  io::println("map: {named:?}")
+  let held = [got, bytes::get(data, 0)]
+  io::println("list: {held:?}")
+  let seven = first == Some(7)
+  io::println("constant: {first:?} {seven}")
+  let (tx, rx) = channel::new::<Option<U8>>(1)
+  let assert Ok(Nil) = channel::send(tx, got)
+  let received = channel::receive(rx)
+  io::println("channel: {received:?}")
+}

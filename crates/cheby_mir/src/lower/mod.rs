@@ -564,6 +564,11 @@ fn finish_unit(
         functions.push(dict::dyn_forward(iface_fn, dyn_iface, cx)?);
     }
     functions.extend(closure::trampolines(pending.trampolines())?);
+    // Field reads move up to the consumption of a sibling projection, so
+    // every RC mode and borrowing inference see them there (D-911).
+    for f in &mut functions {
+        crate::hoist::run(f, &|ty| cx.defs.handle_free(ty))?;
+    }
     let statics = pending.statics;
     let mut m = Mentions::default();
     for f in &functions {

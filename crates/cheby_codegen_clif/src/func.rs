@@ -9,7 +9,7 @@ use cranelift_codegen::ir::condcodes::IntCC;
 use cranelift_codegen::ir::immediates::{Ieee32, Ieee64, Imm64};
 use cranelift_codegen::ir::{
     self, BlockArg, ExtFuncData, ExternalName, FuncRef, GlobalValue, GlobalValueData, InstBuilder,
-    MemFlagsData, SigRef, Signature, TrapCode, UserExternalName, Value, types,
+    MemFlagsData, SigRef, Signature, StackSlot, TrapCode, UserExternalName, Value, types,
 };
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Switch};
 use cranelift_module::{DataId, FuncId};
@@ -128,6 +128,7 @@ fn build(
         in_pad: false,
         tokens: FxHashSet::default(),
         call_tag: None,
+        uncons_slot: None,
     };
     body(&mut t)?;
     t.b.seal_all_blocks();
@@ -188,6 +189,9 @@ pub(crate) struct Translator<'a, 'f> {
     /// [`Function::call_locs`]: the first Cheby call it emits takes it as
     /// its debug tag ([`Translator::tag_call`]).
     call_tag: Option<StrId>,
+    /// The stack slot where a `list_uncons` writes the element that the
+    /// `list_uncons_head` right after it reads, made at the first one.
+    pub(crate) uncons_slot: Option<StackSlot>,
 }
 
 /// Where a Cheby-ABI call goes: a known function, or an address with a

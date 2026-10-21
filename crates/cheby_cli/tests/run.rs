@@ -742,6 +742,147 @@ fn sorted_map_inserts_reuse_their_nodes() {
     );
 }
 
+/// Reuse (D-838, D-839) in `std::json`'s parser and writer, which keep the
+/// open arrays and objects in a chain of cells and write each step's cell
+/// over the old one (D-906). Nothing else would notice if an edit to
+/// `std/json/tree.cheby` or `std/json.cheby` moved a rebuild out of the
+/// block that takes its cell apart: the results stay the same, and only
+/// the count of reuse hits drops. The document is an array of 1000
+/// objects, each with three members, one of them an array of three
+/// numbers. The parser rewrites the innermost cell once per value inside
+/// a container (7000) and once more per member for its key (3000); the
+/// writer rewrites it once per element or member after the first of each
+/// array and object (999 + 2000 + 2000). Run with poisoning off, so the
+/// inline reuse paths run.
+#[test]
+fn json_containers_reuse_their_cells() {
+    // The parser's steps, then the writer's.
+    const EXPECTED: u64 = 7000 + 3000 + 999 + 2000 + 2000;
+    let dir = package(
+        "json_reuse",
+        &[
+            MANIFEST,
+            (
+                "src/main.cheby",
+                r#"//! Reads a JSON document of 1000 objects and writes it back.
+
+import std::io
+import std::json
+import std::list
+import std::string
+
+fn main() {
+  let records = list::map(list::range(0, 1000), fn(n) {
+    "\{\"id\": {n}, \"tags\": [1, 2, 3], \"ok\": true}"
+  })
+  let text = "[" + string::join(records, ", ") + "]"
+  let assert Ok(value) = json::parse_value(text)
+  let written = json::to_string(value)
+  let size = string::length(written)
+  io::println("{size}")
+}
+"#,
+            ),
+        ],
+    );
+    let mut cmd = Command::new(CHEBY);
+    cmd.args(["--color=never", "run"])
+        .current_dir(&dir)
+        .env("NO_COLOR", "1")
+        .env("CHEBY_RT_STATS", "1")
+        .env("CHEBY_RT_POISON", "0")
+        .env_remove("CHEBY_RC")
+        .env_remove("CHEBY_DUMP_DIR");
+    let out = process::run(cmd, None, TIMEOUT).unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(out.status, Some(0), "{}", out.stderr);
+    assert_eq!(out.stdout, "35891\n");
+    let (Some(hits), Some(misses)) = (
+        stat(&out.stderr, "reuse hits"),
+        stat(&out.stderr, "reuse misses"),
+    ) else {
+        panic!("no reuse lines:\n{}", out.stderr)
+    };
+    assert!(
+        hits >= EXPECTED,
+        "{hits} reuse hits, expected at least {EXPECTED}:\n{}",
+        out.stderr
+    );
+    assert_eq!(misses, 0, "{}", out.stderr);
+}
+
+/// Pushes onto a record's list field whose other fields are read after
+/// the push, the micro-benchmark of D-911: the reads move before the
+/// push, so the record ends there and each push gets a unique list
+/// and writes in place. Before, the record held the list across the push
+/// and every push but the first copied it. Both RC modes see the moved
+/// reads, so naive counting pushes in place too, without reuse. Field
+/// accesses (`step`) and a record update (`update`) each push 2000 times.
+/// Run with poisoning off, so the inline paths run.
+#[test]
+fn record_field_pushes_write_in_place() {
+    let dir = package(
+        "record_field_pushes",
+        &[
+            MANIFEST,
+            (
+                "src/main.cheby",
+                "//! Pushes onto a record's list field, reading its other fields after each push.\n\
+                 \n\
+                 import std::io\n\
+                 import std::list\n\
+                 \n\
+                 type State { items: List<Int>, count: Int, sum: Int }\n\
+                 \n\
+                 fn step(s: State, n: Int) -> State {\n  \
+                   case n {\n    \
+                     0 => s\n    \
+                     _ => {\n      \
+                       let next = State { items: list::push(s.items, n), count: s.count + 1, sum: s.sum + n }\n      \
+                       step(next, n - 1)\n    \
+                     }\n  \
+                   }\n\
+                 }\n\
+                 \n\
+                 fn update(s: State, n: Int) -> State {\n  \
+                   case n {\n    \
+                     0 => s\n    \
+                     _ => update(State { ..s, items: list::push(s.items, n), count: s.count + 1 }, n - 1)\n  \
+                   }\n\
+                 }\n\
+                 \n\
+                 fn main() {\n  \
+                   let a = step(State { items: [], count: 0, sum: 0 }, 2000)\n  \
+                   let b = update(State { items: [], count: 0, sum: 0 }, 2000)\n  \
+                   let lengths = list::length(a.items) + list::length(b.items)\n  \
+                   io::println(\"{lengths} {a.count} {a.sum} {b.count} {b.sum}\")\n\
+                 }\n",
+            ),
+        ],
+    );
+    for rc in [None, Some("naive")] {
+        let mut cmd = Command::new(CHEBY);
+        cmd.args(["--color=never", "run"])
+            .current_dir(&dir)
+            .env("NO_COLOR", "1")
+            .env("CHEBY_RT_STATS", "1")
+            .env("CHEBY_RT_POISON", "0")
+            .env_remove("CHEBY_DUMP_DIR");
+        match rc {
+            Some(mode) => cmd.env("CHEBY_RC", mode),
+            None => cmd.env_remove("CHEBY_RC"),
+        };
+        let out = process::run(cmd, None, TIMEOUT).unwrap_or_else(|e| panic!("{e:?}"));
+        assert_eq!(out.status, Some(0), "{rc:?}: {}", out.stderr);
+        assert_eq!(out.stdout, "4000 2000 2001000 2000 0\n");
+        assert_eq!(
+            stat(&out.stderr, "list push copied"),
+            Some(0),
+            "{rc:?}: {}",
+            out.stderr
+        );
+    }
+}
+
 /// A field every variant holds at the same place (D-071) is read without a
 /// test of the variant, so the read proves no layout to reuse (the fix
 /// review's TOK-1): a `Circle` rebuilt as a larger `Rect` in later arms,

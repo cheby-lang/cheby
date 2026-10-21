@@ -27,8 +27,9 @@ fn index(position: i64, len: usize) -> Option<usize> {
     usize::try_from(position).ok().filter(|&i| i < len)
 }
 
-/// A bound of `slice`, clamped to `0..=len` (D-298, D-334).
-fn clamp(bound: i64, len: usize) -> usize {
+/// A bound of `slice`, clamped to `0..=len` (D-298, D-334). Also clamps
+/// the bounds of `string::from_byte_range` (D-905).
+pub(crate) fn clamp(bound: i64, len: usize) -> usize {
     usize::try_from(bound).map_or(0, |bound| bound.min(len))
 }
 
@@ -158,22 +159,43 @@ pub unsafe extern "C" fn cheby_bytes_length(data: Word) -> i64 {
 }
 
 /// `bytes::get`: `Some(byte)`, or `None` outside `0..length` (D-318).
-/// O(1).
+/// O(1). Both results are static objects, so it allocates nothing and
+/// never raises (D-902).
 ///
 /// # Safety
 ///
 /// `data` is a live `Bytes`, borrowed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_bytes_get(data: Word, position: i64) -> Word {
-    guarded(None, || {
-        // SAFETY: forwarded from the caller.
-        let data = unsafe { arg(data) };
-        values::option(
-            index(position, data.len())
-                .and_then(|i| data.get(i))
-                .map(|&byte| values::u8_word(byte)),
-        )
-    })
+    // SAFETY: forwarded from the caller.
+    let data = unsafe { arg(data) };
+    index(position, data.len())
+        .and_then(|i| data.get(i))
+        .map_or_else(values::none, |&byte| values::some_u8(byte))
+}
+
+/// `bytes::json_plain_end`, package-visible for `std::json`'s parser
+/// (D-900, D-904): the offset of the first byte at or after `from` that is
+/// `"`, `\` or below 0x20, or the length when there is none. `from` is
+/// clamped to `0..=length` as `slice` clamps its bounds (D-298, D-334).
+/// Every byte of a multi-byte UTF-8 sequence is 0x80 or more, so none of
+/// them stops the scan. O(k) in the bytes scanned; it allocates nothing
+/// and never raises.
+///
+/// # Safety
+///
+/// `data` is a live `Bytes`, borrowed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cheby_bytes_json_plain_end(data: Word, from: i64) -> i64 {
+    // SAFETY: forwarded from the caller.
+    let data = unsafe { arg(data) };
+    let start = clamp(from, data.len());
+    let rest = data.get(start..).unwrap_or_default();
+    let found = rest
+        .iter()
+        .position(|&byte| byte < 0x20 || byte == b'"' || byte == b'\\')
+        .unwrap_or(rest.len());
+    i64::try_from(start.saturating_add(found)).unwrap_or(i64::MAX)
 }
 
 /// `bytes::slice`: positions `start..end`, clamped (D-298, D-319, D-334),
@@ -307,19 +329,18 @@ pub unsafe extern "C" fn cheby_bytes_push_i8(data: Word, value: i8) -> Word {
 }
 
 /// `bytes::read_i8`: the byte at `offset` in two's complement, or `None`
-/// outside `0..length` (D-318). O(1).
+/// outside `0..length` (D-318). O(1). Both results are static objects, so
+/// it allocates nothing and never raises (D-902).
 ///
 /// # Safety
 ///
 /// `data` is a live `Bytes`, borrowed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_bytes_read_i8(data: Word, offset: i64) -> Word {
-    guarded(None, || {
-        // SAFETY: forwarded from the caller.
-        let data = unsafe { arg(data) };
-        values::option(
-            window::<1>(data, offset).map(|bytes| values::i8_word(i8::from_be_bytes(bytes))),
-        )
+    // SAFETY: forwarded from the caller.
+    let data = unsafe { arg(data) };
+    window::<1>(data, offset).map_or_else(values::none, |bytes| {
+        values::some_i8(i8::from_be_bytes(bytes))
     })
 }
 
@@ -477,7 +498,7 @@ pub(super) fn all() -> Vec<Entry> {
             ]
         };
     }
-    let fixed: [Entry; 12] = [
+    let fixed: [Entry; 13] = [
         ("cheby_bytes_new", cheby_bytes_new as *const u8, &[], W),
         (
             "cheby_bytes_from_list",
@@ -498,6 +519,12 @@ pub(super) fn all() -> Vec<Entry> {
             I,
         ),
         ("cheby_bytes_get", cheby_bytes_get as *const u8, &[W, I], W),
+        (
+            "cheby_bytes_json_plain_end",
+            cheby_bytes_json_plain_end as *const u8,
+            &[W, I],
+            I,
+        ),
         (
             "cheby_bytes_slice",
             cheby_bytes_slice as *const u8,

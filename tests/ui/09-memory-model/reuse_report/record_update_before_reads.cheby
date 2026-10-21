@@ -1,0 +1,39 @@
+// @mode: run-pass
+// @milestone: M2
+// @decisions: D-717, D-525, D-716, D-839, D-852, D-911
+// @flags: --reuse-report
+//! A record rebuilt with a push onto its list field, whose other fields
+//! are read after the push, is reused, and the push gets the list at its
+//! last use: the reads move before the push, which ends the record there.
+//! Both forms do it, field accesses (`step`) and a record update
+//! (`update`), so each of their 1000 pushes writes in place when the
+//! record is unique, instead of copying the list.
+
+import std::io
+import std::list
+
+type State { items: List<Int>, count: Int, sum: Int }
+
+fn step(s: State, n: Int) -> State {
+  case n {
+    0 => s
+    _ => {
+      let next = State { items: list::push(s.items, n), count: s.count + 1, sum: s.sum + n }
+      step(next, n - 1)
+    }
+  }
+}
+
+fn update(s: State, n: Int) -> State {
+  case n {
+    0 => s
+    _ => update(State { ..s, items: list::push(s.items, n), count: s.count + 1 }, n - 1)
+  }
+}
+
+fn main() {
+  let a = step(State { items: [], count: 0, sum: 0 }, 1000)
+  let b = update(State { items: [], count: 0, sum: 0 }, 1000)
+  let lengths = list::length(a.items) + list::length(b.items)
+  io::println("{lengths} {a.count} {a.sum} {b.count} {b.sum}")
+}

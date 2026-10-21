@@ -120,7 +120,7 @@ A list pattern has at most one spread, in any position, with any number of fixed
 
 A pattern with `n` fixed items and no spread matches lists of length exactly `n`. With a spread, it matches lists of length at least `n`.
 
-The list bound by a spread shares structure with the subject. Binding it must not copy the elements, and copies at most O(log n) tree nodes, so recursing over a list with `[first, ..rest]` does work proportional to the list's length times an effectively constant O(log n) factor (D-053, ADR-0018). When the subject dies at the match, the elements the spread cuts that no other list holds are released at the match ([§9.2](09-memory-model.md#92-reference-counting)) (D-893).
+The list bound by a spread shares structure with the subject. Binding it must not copy the elements, and copies at most O(log n) tree nodes, so recursing over a list with `[first, ..rest]` does work proportional to the list's length times an effectively constant O(log n) factor (D-053, ADR-0018). When the matched list dies at the match, because it is the subject at its last use or is held only by such a value, the spread does not hold the elements the pattern cuts that no other list holds: an element bound to a name is released at that name's last use, and any other at the match ([§9.2](09-memory-model.md#92-reference-counting)) (D-893, D-908).
 
 ```cheby
 fn last_of(xs: List<Int>) -> Option<Int> {

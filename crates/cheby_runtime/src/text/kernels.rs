@@ -6,6 +6,7 @@
 
 use super::ops::{self, Fill, int};
 use crate::abi::Word;
+use crate::bytes::kernels::clamp;
 use crate::list;
 use crate::panic::fatal;
 use crate::unwind::guard::{DropOnUnwind, guarded};
@@ -297,6 +298,88 @@ pub unsafe extern "C" fn cheby_string_add(a: Word, b: Word) -> Word {
     })
 }
 
+/// Whether JSON text needs an escape for `byte` (D-326, D-398): `"`, `\`
+/// and the control characters below 0x20. Every byte of a multi-byte UTF-8
+/// sequence is 0x80 or more, so each byte decides it alone.
+const fn needs_json_escape(byte: u8) -> bool {
+    byte < 0x20 || byte == b'"' || byte == b'\\'
+}
+
+/// The JSON escape of `byte` and its length, or `None` when JSON text
+/// holds the byte as it is (D-326, D-398): `\"` and `\\`; `\b`, `\f`,
+/// `\n`, `\r` and `\t`; `\u00` and two lower-case hex digits for every
+/// other byte below 0x20.
+fn json_escape(byte: u8) -> Option<([u8; 6], usize)> {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let short = |c: u8| Some(([b'\\', c, 0, 0, 0, 0], 2));
+    let hex = |digit: u8| HEX.get(usize::from(digit)).copied().unwrap_or(b'0');
+    match byte {
+        b'"' | b'\\' => short(byte),
+        0x08 => short(b'b'),
+        0x0C => short(b'f'),
+        0x0A => short(b'n'),
+        0x0D => short(b'r'),
+        0x09 => short(b't'),
+        0x00..=0x1F => Some((
+            [b'\\', b'u', b'0', b'0', hex(byte >> 4), hex(byte & 0x0F)],
+            6,
+        )),
+        _ => None,
+    }
+}
+
+/// `string::add_json_quoted`, package-visible for `std::json`'s writer:
+/// `out`, then `"`, `text` escaped as JSON text and `"` (D-326, D-398). In
+/// place when `out` is unique with room, and grown as `string::add` grows
+/// it (D-577, D-849); never in place when `out` and `text` are the same
+/// object. Text with no byte to escape is written whole; otherwise the
+/// escaped length is measured first, then the plain runs and the escapes
+/// are written. O(n + m).
+///
+/// # Safety
+///
+/// `out` and `text` are live `String`s, borrowed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cheby_string_add_json_quoted(out: Word, text: Word) -> Word {
+    guarded(None, || {
+        // SAFETY: forwarded from the caller.
+        let piece = unsafe { arg(text) }.as_bytes();
+        let Some(first) = piece.iter().position(|&b| needs_json_escape(b)) else {
+            // SAFETY: a live string; `piece` is another object's text
+            // unless `out == text`, when nothing is reused.
+            return unsafe {
+                extend(out, total([cap(piece.len()), 2]), out != text, |write| {
+                    write(b"\"");
+                    write(piece);
+                    write(b"\"");
+                })
+            };
+        };
+        let rest = piece.get(first..).unwrap_or_default();
+        let escaped = rest
+            .iter()
+            .map(|&b| json_escape(b).map_or(1, |(_, n)| cap(n)));
+        let extra = total([cap(first), 2].into_iter().chain(escaped));
+        // SAFETY: as above.
+        unsafe {
+            extend(out, extra, out != text, |write| {
+                write(b"\"");
+                write(piece.get(..first).unwrap_or_default());
+                let mut from = 0_usize;
+                for (i, &b) in rest.iter().enumerate() {
+                    if let Some((escape, n)) = json_escape(b) {
+                        write(rest.get(from..i).unwrap_or_default());
+                        write(escape.get(..n).unwrap_or_default());
+                        from = i.saturating_add(1);
+                    }
+                }
+                write(rest.get(from..).unwrap_or_default());
+                write(b"\"");
+            })
+        }
+    })
+}
+
 /// `string::join`: the parts with `separator` between each two. Two passes
 /// over the list: the exact size, then the copy. O(result).
 ///
@@ -577,6 +660,30 @@ pub unsafe extern "C" fn cheby_string_from_bytes(data: Word) -> Word {
     })
 }
 
+/// `string::from_byte_range`, package-visible for `std::json`'s parser:
+/// the bytes of `data` from `start` up to, not including, `end`, both
+/// clamped to `0..=length` as `bytes::slice` clamps them (D-298, D-334),
+/// as a new `String`. Empty when `end` is not above `start`. Each invalid
+/// UTF-8 sequence becomes U+FFFD, as `String::from_utf8_lossy` and JS's
+/// `TextDecoder` replace it; valid bytes are copied after one check, and a
+/// leading U+FEFF is kept as `string::from_bytes` keeps it (D-366), so the
+/// JS kernel needs `TextDecoder`'s `ignoreBOM: true` (D-905). Never shares
+/// `data`. O(end - start).
+///
+/// # Safety
+///
+/// `data` is a live `Bytes`, borrowed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cheby_string_from_byte_range(data: Word, start: i64, end: i64) -> Word {
+    guarded(None, || {
+        // SAFETY: forwarded from the caller.
+        let all = unsafe { values::bytes_of(data) };
+        let (start, end) = (clamp(start, all.len()), clamp(end, all.len()));
+        let range = all.get(start..end).unwrap_or_default();
+        values::string(&String::from_utf8_lossy(range))
+    })
+}
+
 /// `Ok(value)` of an owned value, which is released if the `Ok` cannot be
 /// allocated.
 fn ok_owned(value: Word) -> Word {
@@ -640,7 +747,7 @@ pub(super) type Entry = (
     reason = "taking the address of a function needs an `as` cast"
 )]
 #[expect(clippy::too_many_lines, reason = "one table row per kernel")]
-pub(super) fn all() -> [Entry; 27] {
+pub(super) fn all() -> [Entry; 29] {
     const W: &str = "Word";
     [
         (
@@ -706,6 +813,12 @@ pub(super) fn all() -> [Entry; 27] {
         (
             "cheby_string_add",
             cheby_string_add as *const u8,
+            &[W, W],
+            W,
+        ),
+        (
+            "cheby_string_add_json_quoted",
+            cheby_string_add_json_quoted as *const u8,
             &[W, W],
             W,
         ),
@@ -786,6 +899,12 @@ pub(super) fn all() -> [Entry; 27] {
             "cheby_string_from_bytes",
             cheby_string_from_bytes as *const u8,
             &[W],
+            W,
+        ),
+        (
+            "cheby_string_from_byte_range",
+            cheby_string_from_byte_range as *const u8,
+            &[W, "i64", "i64"],
             W,
         ),
         (

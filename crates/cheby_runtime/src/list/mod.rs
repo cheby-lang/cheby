@@ -1,7 +1,8 @@
 //! Persistent lists (F3, `std::list`): relaxed radix balanced trees of
 //! uniform words (D-039, ADR-0018) whose root is also a view, so a pattern
 //! step on a unique list changes its root and one slot in place (D-053,
-//! D-634), releasing the element it cuts (D-893).
+//! D-634), releasing the element it cuts (D-893) or, when the pattern
+//! binds that element, moving it out in the same descent (D-909).
 //!
 //! - [`node`]: the objects (layout ids 26-28) and their [`CustomKind`]s,
 //!   and the static empty list `cheby_rt_static_empty_list`.
@@ -33,7 +34,8 @@ pub use kernels::{
     cheby_list_append, cheby_list_drop, cheby_list_get, cheby_list_length, cheby_list_prepend,
     cheby_list_push, cheby_list_set, cheby_list_slice, cheby_list_split_at, cheby_list_take,
     cheby_list_unique, cheby_rt_list_append, cheby_rt_list_get, cheby_rt_list_length,
-    cheby_rt_list_push, cheby_rt_list_slice, cheby_rt_list_slice_owned,
+    cheby_rt_list_push, cheby_rt_list_slice, cheby_rt_list_slice_owned, cheby_rt_list_uncons,
+    cheby_rt_list_uncons_owned,
 };
 pub use node::{StaticList, cheby_rt_static_empty_list};
 pub(crate) use ops::Iter;

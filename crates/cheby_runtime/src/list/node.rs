@@ -44,7 +44,7 @@ use std::sync::Once;
 use crate::abi::{self, LayoutId, Word};
 use crate::alloc;
 use crate::generic;
-use crate::layout::{self, CustomKind, LayoutInfo};
+use crate::layout::{self, CustomKind, KindShape, LayoutInfo};
 use crate::object::{self, ptr_to_word, read_field, to_u64, to_usize, word_to_ptr, write_field};
 use crate::panic::fatal;
 use crate::rc;
@@ -75,6 +75,8 @@ const BRANCH_SIZE: usize = SIZES + 8 * M;
 const ROOT_TREE: usize = 8;
 const ROOT_OFFSET: usize = 16;
 const ROOT_LEN: usize = 24;
+// Generated code reads the length there (D-910).
+const _: () = assert!(ROOT_LEN == 24 && abi::list::ROOT_LEN_OFFSET == 24);
 /// Size of a root in bytes.
 pub(super) const ROOT_SIZE: usize = 32;
 /// The most bytes one node takes: a branch, larger than any leaf.
@@ -208,6 +210,10 @@ static ROOT_KIND: CustomKind = CustomKind {
     debug: Some(root_debug),
     handle: false,
     finalize: None,
+    shape: KindShape::Fixed {
+        size: ROOT_SIZE,
+        fields: 1,
+    },
 };
 
 /// The leaf kind: never a value of its own.
@@ -220,6 +226,7 @@ static LEAF_KIND: CustomKind = CustomKind {
     debug: None,
     handle: false,
     finalize: None,
+    shape: KindShape::Counted { size: None },
 };
 
 /// The branch kind: never a value of its own.
@@ -232,6 +239,9 @@ static BRANCH_KIND: CustomKind = CustomKind {
     debug: None,
     handle: false,
     finalize: None,
+    shape: KindShape::Counted {
+        size: Some(BRANCH_SIZE),
+    },
 };
 
 /// Registers the three kinds once per process. Every entry point that may
@@ -265,6 +275,10 @@ pub struct StaticList {
     offset: u64,
     len: u64,
 }
+
+// A heap root's layout, which generated code reads the length from
+// (D-910).
+const _: () = assert!(std::mem::offset_of!(StaticList, len) == ROOT_LEN);
 
 // SAFETY: the header is never written (its count is `RC_STATIC`, which
 // every count operation checks before writing), and the fields are plain
@@ -624,11 +638,21 @@ impl Node {
     /// balanced node, and searches the rest of the size table only after
     /// that.
     pub(super) fn locate(self, i: usize) -> (usize, usize) {
+        self.locate_at(i, self.height())
+    }
+
+    /// [`Self::locate`] in a branch whose height the caller knows.
+    // Inline in every pattern step's descent and in `locate` (D-909). It
+    // carries no `expect(clippy::inline_always)`: the lint skips a body
+    // whose first statement is an item, here `SCAN`, so the expectation
+    // would go unfulfilled.
+    #[inline(always)]
+    pub(super) fn locate_at(self, i: usize, height: usize) -> (usize, usize) {
         /// Children scanned forward from the radix position before the
         /// binary search.
         const SCAN: usize = 4;
         let count = self.slots();
-        let shift = BITS.saturating_mul(u32::try_from(self.height()).unwrap_or(u32::MAX));
+        let shift = BITS.saturating_mul(u32::try_from(height).unwrap_or(u32::MAX));
         let guess = i.checked_shr(shift).unwrap_or(0);
         let (mut lo, mut hi) = (guess.min(count.saturating_sub(1)), count);
         if lo > 0 && self.size_at(lo.saturating_sub(1)) > i {

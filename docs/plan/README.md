@@ -274,6 +274,18 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-896     | An `Accepted-Slowdown: D-NNN` trailer citing a decision the change adds passes the gate             |
 | D-897     | `bench-gate`: rows the base cannot run are ungated; runs on `main` are never cancelled              |
 | D-898     | `cargo fuzz` builds with the address cfg and a 6 GB RSS limit; `check` runs without LeakSanitizer   |
+| D-899     | `bench/runtime/json/` times `std::json` (`roundtrip`, `value`); reported, never gated               |
+| D-902     | `bytes::get` and `bytes::read_i8` return static `Some` objects, so they never allocate or raise     |
+| D-903     | Package-visible kernel `string::add_json_quoted` quotes and escapes `std::json`'s strings           |
+| D-904     | Package-visible kernel `bytes::json_plain_end` finds the plain runs of `std::json`'s strings        |
+| D-905     | Package-visible kernel `string::from_byte_range` reads `std::json`'s string and number texts        |
+| D-906     | `std::json` keeps open arrays and objects in a chain of cells that each step rewrites in place      |
+| D-907     | Freeing reads a free-shape table; a fiber allocates and charges through its control block           |
+| D-908     | A pattern reads its elements and fields before its spreads, so a dying list is cut in place         |
+| D-909     | `list_uncons` reads a pattern's element and spread in one call, moving it out of a unique list      |
+| D-910     | Generated code reads a list's length from its root (offset 24 of D-563), now part of the ABI        |
+| D-911     | Field reads move before a sibling projection is consumed, so a dying record's list updates in place |
+| D-912     | `cheby run` keeps Cranelift's optimizer off; a one-field type keeps its own object                  |
 
 ## Open questions
 

@@ -1,12 +1,14 @@
 // @mode: run-pass
 // @milestone: M2
-// @decisions: D-717, D-170, D-716, D-525, D-205, D-852
+// @decisions: D-717, D-170, D-716, D-525, D-205, D-852, D-911
 // @flags: --reuse-report
 //! A kernel's first argument that another live value holds gets no kernel
 //! line, because the kernel copies it every time. Here that value is a
-//! record still alive at the call (`kept`) or a tuple used after it
-//! (`paired`). Taking the record apart first ends it before the call, and
-//! the kernel line is printed (`apart`).
+//! record still alive at the call, passed on whole after it (`kept`), or
+//! a tuple used after it (`paired`). Taking the record apart first ends it
+//! before the call, and the kernel line is printed (`apart`). A record
+//! read only field by field after the call ends before it too
+//! (`kernel_field_before_later_reads`).
 
 import std::io
 import std::set
@@ -16,7 +18,11 @@ type Bag { name: String, items: set::Set<Int> }
 fn kept(bag: Bag, n: Int) -> Bag {
   let items = bag.items
   let more = set::insert(items, n)
-  Bag { name: bag.name, items: more }
+  refill(bag, more)
+}
+
+fn refill(bag: Bag, items: set::Set<Int>) -> Bag {
+  Bag { ..bag, items }
 }
 
 fn apart(bag: Bag, n: Int) -> Bag {

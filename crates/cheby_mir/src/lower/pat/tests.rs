@@ -322,6 +322,111 @@ fn list_patterns_use_length_get_and_slice() {
     );
 }
 
+/// List pattern steps: positions read level by level, reads before
+/// spreads (D-908), and an element next to its spread read with it in one
+/// call (D-909).
+const STEPS: &str = r"//! List pattern steps.
+
+import std::list
+
+type Frame {
+  Frame(List<Int>, Int),
+}
+
+fn first(xs: List<Int>) -> Int {
+  case xs {
+    [x, ..rest] => x + list::length(rest)
+    [] => 0
+  }
+}
+
+fn last(xs: List<Int>) -> Int {
+  case xs {
+    [..rest, x] => x + list::length(rest)
+    [] => 0
+  }
+}
+
+fn cut(xs: List<Int>) -> Int {
+  case xs {
+    [..rest, _, x] => x + list::length(rest)
+    _ => 0
+  }
+}
+
+fn frames(stack: List<Frame>) -> Int {
+  case stack {
+    [..below, Frame([item, ..items], depth)] =>
+      item + depth + list::length(items) + list::length(below)
+    _ => 0
+  }
+}
+
+fn main() {
+  let _ = first([1, 2])
+  let _ = last([1, 2])
+  let _ = cut([1, 2, 3])
+  let _ = frames([Frame([1, 2], 3)])
+}
+";
+
+#[test]
+fn list_steps_read_their_element_and_spread_in_one_call() {
+    let lowered = lower(STEPS);
+    // The line index of the first line of `text` containing `needle`.
+    let at = |text: &str, needle: &str| {
+        text.lines()
+            .position(|l| l.contains(needle))
+            .unwrap_or_else(|| panic!("no {needle:?} in:\n{text}"))
+    };
+    for name in ["first", "last"] {
+        let f = lowered.function("app", &format!("app::{name}"));
+        let step = at(&f, "call_runtime list_uncons_owned(_0, ");
+        assert!(
+            f.lines()
+                .nth(step.saturating_add(1))
+                .is_some_and(|l| l.ends_with("= call_runtime list_uncons_head()")),
+            "{f}"
+        );
+        assert!(!f.contains("list_get") && !f.contains("list_slice"), "{f}");
+        // The list is consumed by the step (D-806, D-909).
+        assert!(f.starts_with(&format!("fn app::{name}(_0: value)")), "{f}");
+    }
+    // `[..rest, x]`: the element's index is the spread's end.
+    let last = lowered.function("app", "app::last");
+    assert!(
+        last.contains("list_uncons_owned(_0, borrow _3, borrow const int 0, borrow _3)"),
+        "{last}"
+    );
+    // `[..rest, _, x]`: `x` is not next to the spread, so it is read
+    // first and the spread, the list's last use, cuts the list in place
+    // and releases the element it cuts (D-893).
+    let cut = lowered.function("app", "app::cut");
+    assert!(
+        at(&cut, "call_runtime list_get(borrow _0") < at(&cut, "call_runtime list_slice_owned(_0"),
+        "{cut}"
+    );
+    // The frame's `depth` is read before its list is cut, so the list is
+    // cut in place when the frame was unique. The frame itself is read
+    // where its list's length is tested, a block before the spread, so
+    // that step is a `list_get` and an owned slice.
+    let frames = lowered.function("app", "app::frames");
+    let outer = at(&frames, "call_runtime list_slice_owned(_0, ");
+    let depth = at(&frames, ".1 of ctor app::Frame");
+    let inner = frames
+        .lines()
+        .enumerate()
+        .skip(outer.saturating_add(1))
+        .find(|(_, l)| l.contains("call_runtime list_uncons_owned("))
+        .map(|(n, _)| n);
+    assert!(outer < depth, "{frames}");
+    assert!(inner.is_some_and(|inner| depth < inner), "{frames}");
+    check_golden(
+        "pat/steps",
+        &functions(&lowered, &["first", "last", "cut", "frames"]),
+    );
+}
+
 #[test]
 fn alternatives_join_through_block_parameters_and_as_binds_the_whole() {
     let lowered = lower(FORMS);
