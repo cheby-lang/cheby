@@ -44,7 +44,7 @@ use std::sync::Once;
 use crate::abi::{self, LayoutId, Word};
 use crate::alloc;
 use crate::generic;
-use crate::layout::{self, CustomKind, LayoutInfo};
+use crate::layout::{self, CustomKind, KindShape, LayoutInfo};
 use crate::object::{self, ptr_to_word, read_field, to_u64, to_usize, word_to_ptr, write_field};
 use crate::panic::fatal;
 use crate::rc;
@@ -208,6 +208,10 @@ static ROOT_KIND: CustomKind = CustomKind {
     debug: Some(root_debug),
     handle: false,
     finalize: None,
+    shape: KindShape::Fixed {
+        size: ROOT_SIZE,
+        fields: 1,
+    },
 };
 
 /// The leaf kind: never a value of its own.
@@ -220,6 +224,7 @@ static LEAF_KIND: CustomKind = CustomKind {
     debug: None,
     handle: false,
     finalize: None,
+    shape: KindShape::Counted { size: None },
 };
 
 /// The branch kind: never a value of its own.
@@ -232,6 +237,9 @@ static BRANCH_KIND: CustomKind = CustomKind {
     debug: None,
     handle: false,
     finalize: None,
+    shape: KindShape::Counted {
+        size: Some(BRANCH_SIZE),
+    },
 };
 
 /// Registers the three kinds once per process. Every entry point that may

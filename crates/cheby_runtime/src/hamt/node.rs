@@ -197,6 +197,7 @@ static MAP_ROOT_KIND: CustomKind = CustomKind {
     debug: None,
     handle: false,
     finalize: None,
+    shape: layout::KindShape::Opaque,
 };
 
 /// The set root kind.
@@ -209,6 +210,7 @@ static SET_ROOT_KIND: CustomKind = CustomKind {
     debug: None,
     handle: false,
     finalize: None,
+    shape: layout::KindShape::Opaque,
 };
 
 /// Node kinds are never values of their own.
@@ -227,6 +229,7 @@ const fn node_kind(name: &'static str) -> CustomKind {
         debug: None,
         handle: false,
         finalize: None,
+        shape: layout::KindShape::Opaque,
     }
 }
 

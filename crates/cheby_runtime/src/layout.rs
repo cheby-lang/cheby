@@ -17,13 +17,23 @@
 //! 2^24 ids in all. Registering takes a lock; [`get`] takes none, because
 //! freeing reads the table to find an object's size.
 //!
+//! Next to it, the free-shape table ([`fast_word`], D-907) gives the first
+//! 16,384 ids one self-contained word each: where an object of the layout
+//! keeps its references and how large it is. Freeing reads that word
+//! instead of following [`get`]'s pointers and matching on the kind. It
+//! takes [`get`]'s path for a 0 word, which a higher id, a kind with a
+//! finalizer and one that declares no [`CustomKind::shape`] have, and for
+//! a tuple, closure, dictionary or descriptor in the escaped form. A
+//! constructor with more than 254 value fields is still freed from its
+//! word.
+//!
 //! Hashing never uses a layout id (D-538): ids depend on registration
 //! order. It uses [`LayoutInfo::type_key`] and [`LayoutInfo::tag`].
 
 use std::fmt;
 use std::hash::Hasher as _;
 use std::ptr;
-use std::sync::atomic::{AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock, PoisonError};
 
 use siphasher::sip::SipHasher13;
@@ -82,7 +92,8 @@ pub enum LayoutKind {
 
 /// A runtime-defined object kind (plan §4.3.2), such as a list or map
 /// node. The runtime frees, compares, hashes and prints such objects only
-/// through these functions.
+/// through these functions, except that a kind which declares a
+/// [`CustomKind::shape`] is freed from that shape (D-907).
 ///
 /// Each function receives the object's word and may assume it points to a
 /// live object of this kind. None of them may recurse into child values:
@@ -141,6 +152,38 @@ pub struct CustomKind {
     /// Safety: called only with an object of this kind whose count has
     /// reached zero, once.
     pub finalize: Option<Finalizer>,
+    /// Where an object of this kind keeps its references and how large it
+    /// is, in a form the free path reads from the free-shape table without
+    /// calling `size` and `children` (D-907). It must describe exactly
+    /// what those two functions compute, which debug builds check on
+    /// every free of an object of the kind. [`KindShape::Opaque`] keeps
+    /// the calls. A kind with a finalizer or a handle kind must be
+    /// opaque, and [`register_builtin`] refuses one that is not.
+    pub shape: KindShape,
+}
+
+/// The shape a runtime-defined kind declares for the free path
+/// ([`CustomKind::shape`], D-907).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KindShape {
+    /// No declared shape: freeing calls `size` and `children`.
+    Opaque,
+    /// Every object is `size` bytes and holds `fields` value fields from
+    /// offset 8.
+    Fixed {
+        /// The size in bytes, header included.
+        size: usize,
+        /// The value fields from offset 8.
+        fields: usize,
+    },
+    /// A raw meta word at offset 8, whose low 32 bits count the value
+    /// fields from offset 16: list leaves and branches.
+    Counted {
+        /// The size in bytes when every object has the same, or `None`
+        /// when it is 16 plus 8 times the meta word's high 32 bits, the
+        /// capacity.
+        size: Option<usize>,
+    },
 }
 
 /// A kind's finalizer ([`CustomKind::finalize`]): the dying object, and
@@ -591,8 +634,120 @@ fn builtins() -> &'static [Option<LayoutInfo>] {
         // before it allocates one. Registering takes the registration
         // lock, never this table.
         crate::handles::register();
+        for (id, info) in table.iter().enumerate() {
+            if let (Some(info), Ok(id)) = (info, LayoutId::try_from(id)) {
+                set_fast_word(id, info);
+            }
+        }
         table.into_boxed_slice()
     })
+}
+
+// The free-shape table (D-907) ------------------------------------------
+
+/// The ids the free-shape table covers: the builtins, the runtime-defined
+/// kinds and the first 16,320 user layouts. Objects of higher ids are
+/// freed through [`get`].
+pub(crate) const FAST_IDS: usize = 1 << 14;
+
+/// For each id below [`FAST_IDS`], a packed word that says where an
+/// object of the layout keeps its references and how large it is, read
+/// without a pointer chase through the table, or 0 when the id has no
+/// such word (not registered yet, or a kind that declares no shape): the
+/// free path then takes [`get`]. A word is written when its layout is
+/// registered, from the [`LayoutInfo`] alone, and never changes; the
+/// builtins' words when the layout table is first read, at the latest by
+/// the first free that takes [`get`]. Every word is
+/// self-contained, so a relaxed load is enough: a reader that sees 0 for
+/// an id registered meanwhile takes the slow path, which is just as
+/// correct. 128 KiB of zeroed static memory, of which only the pages of
+/// used ids are touched.
+static FAST: [AtomicU64; FAST_IDS] = [const { AtomicU64::new(0) }; FAST_IDS];
+
+/// The modes of a free-shape word (its low 3 bits) and its flag.
+pub(crate) mod fast {
+    /// A fixed size (bits 8-31) and `count` (bits 48-63) value fields
+    /// from offset 8: constructors, boxed numbers, `dyn` values, nominal
+    /// descriptors and kinds of [`super::KindShape::Fixed`].
+    pub(crate) const FIXED: u64 = 1;
+    /// A uniform object whose header's scan count is its field count from
+    /// offset 8: tuples, closures, dictionaries and descriptors. The
+    /// escaped form ([`crate::abi::SCAN_ESCAPE`]) takes the slow path.
+    pub(crate) const SCAN: u64 = 2;
+    /// A raw meta word at offset 8 whose low half counts the value fields
+    /// from offset 16; the size is fixed (bits 8-31) or, when that is 0,
+    /// 16 plus 8 times the meta word's high half
+    /// ([`super::KindShape::Counted`]).
+    pub(crate) const COUNTED: u64 = 3;
+    /// A `String` or `Bytes`, sized by its capacity, with no references.
+    pub(crate) const STRING: u64 = 4;
+    /// The mode bits.
+    pub(crate) const MODE: u64 = 7;
+    /// Set for a constructor or tuple layout, whose block a reuse may
+    /// keep (D-716).
+    pub(crate) const REUSABLE: u64 = 8;
+}
+
+/// The free-shape word of `id`, or 0.
+#[expect(
+    clippy::inline_always,
+    reason = "read on every free; the free paths' gain depends on it being inline (D-907)"
+)]
+#[inline(always)]
+pub(crate) fn fast_word(id: LayoutId) -> u64 {
+    match FAST.get(to_usize(u64::from(id))) {
+        Some(word) => word.load(Ordering::Relaxed),
+        None => 0,
+    }
+}
+
+/// Records the free-shape word of `id`, a layout being registered.
+fn set_fast_word(id: LayoutId, info: &LayoutInfo) {
+    if let Some(slot) = FAST.get(to_usize(u64::from(id))) {
+        slot.store(derive_fast_word(info), Ordering::Release);
+    }
+}
+
+/// A word of mode [`fast::FIXED`], or 0 when the size or the count does
+/// not fit its bits.
+fn fast_fixed(size: u64, count: u64, reusable: bool) -> u64 {
+    if size >= 1 << 24 || count >= 1 << 16 {
+        return 0;
+    }
+    let flag = if reusable { fast::REUSABLE } else { 0 };
+    fast::FIXED | (size << 8) | (count << 48) | flag
+}
+
+/// The free-shape word of a layout, or 0 when it has none.
+fn derive_fast_word(info: &LayoutInfo) -> u64 {
+    match info.kind {
+        LayoutKind::String | LayoutKind::Bytes => fast::STRING,
+        LayoutKind::Tuple => fast::SCAN | fast::REUSABLE,
+        LayoutKind::Closure | LayoutKind::Dict | LayoutKind::Desc => fast::SCAN,
+        LayoutKind::Ctor { .. } => info.fixed_size().map_or(0, |size| {
+            fast_fixed(size, u64::from(info.value_fields), true)
+        }),
+        LayoutKind::BoxedInt
+        | LayoutKind::BoxedU64
+        | LayoutKind::BoxedFloat
+        | LayoutKind::BoxedF32
+        | LayoutKind::Dyn
+        | LayoutKind::DescNominal => info.fixed_size().map_or(0, |size| {
+            fast_fixed(size, u64::from(info.value_fields), false)
+        }),
+        // A finalizer must run, so such a kind is never freed from its
+        // shape; `register_builtin` refuses the combination anyway.
+        LayoutKind::Custom(kind) if kind.finalize.is_some() || kind.handle => 0,
+        LayoutKind::Custom(kind) => match kind.shape {
+            KindShape::Fixed { size, fields } => fast_fixed(to_u64(size), to_u64(fields), false),
+            KindShape::Counted { size: None } => fast::COUNTED,
+            KindShape::Counted { size: Some(size) } if size < 1 << 24 => {
+                fast::COUNTED | (to_u64(size) << 8)
+            }
+            // No shape, or a fixed size too large for the word's bits.
+            KindShape::Opaque | KindShape::Counted { size: Some(_) } => 0,
+        },
+    }
 }
 
 /// Splits a user id into its chunk and slot indices.
@@ -628,6 +783,7 @@ fn store_user(id: LayoutId, info: LayoutInfo) -> Result<(), LayoutError> {
     // SAFETY: every chunk is a leaked slice of `CHUNK_SIZE` slots, never
     // freed, and `slot_index < CHUNK_SIZE`.
     let slot = unsafe { &*chunk.add(slot_index) };
+    set_fast_word(id, &info);
     slot.store(Box::into_raw(Box::new(info)), Ordering::Release);
     Ok(())
 }
@@ -694,9 +850,16 @@ pub fn register_builtin(id: LayoutId, info: LayoutInfo) -> Result<(), LayoutErro
             "id {id} is not reserved for runtime-defined kinds"
         )));
     };
+    if kind.shape != KindShape::Opaque && (kind.finalize.is_some() || kind.handle) {
+        return Err(LayoutError::Invalid(format!(
+            "`{}` has a finalizer or is a handle, so it cannot declare a shape",
+            info.name
+        )));
+    }
     let _guard = lock_next();
     let current = slot.load(Ordering::Acquire);
     if current.is_null() {
+        set_fast_word(id, &info);
         slot.store(Box::into_raw(Box::new(info)), Ordering::Release);
         return Ok(());
     }
@@ -742,6 +905,7 @@ pub static EXTERNAL_HANDLE: CustomKind = CustomKind {
     debug: None,
     handle: true,
     finalize: None,
+    shape: KindShape::Opaque,
 };
 
 impl LayoutInfo {
@@ -1033,6 +1197,7 @@ mod tests {
         debug: None,
         handle: false,
         finalize: None,
+        shape: KindShape::Opaque,
     };
 
     static KIND_B: CustomKind = CustomKind {
@@ -1044,6 +1209,7 @@ mod tests {
         debug: None,
         handle: false,
         finalize: None,
+        shape: KindShape::Opaque,
     };
 
     #[test]
@@ -1061,6 +1227,83 @@ mod tests {
         assert!(register_builtin(layout::STRING, LayoutInfo::custom(&KIND_B)).is_err());
         let ctor = LayoutInfo::ctor("t.C", 0, &[]);
         assert!(register_builtin(62, ctor).is_err());
+    }
+
+    unsafe fn no_finalize(_: Word, _: &mut dyn FnMut(Word)) {}
+
+    static SHAPED_WITH_FINALIZER: CustomKind = CustomKind {
+        name: "test node with a finalizer",
+        size: no_size,
+        children: no_children,
+        equal: None,
+        hash: None,
+        debug: None,
+        handle: false,
+        finalize: Some(no_finalize),
+        shape: KindShape::Fixed { size: 8, fields: 0 },
+    };
+
+    static SHAPED_HANDLE: CustomKind = CustomKind {
+        name: "test handle",
+        size: no_size,
+        children: no_children,
+        equal: None,
+        hash: None,
+        debug: None,
+        handle: true,
+        finalize: None,
+        shape: KindShape::Fixed { size: 8, fields: 0 },
+    };
+
+    /// A finalizer must run and a handle is compared as one, so neither
+    /// kind may be freed from a declared shape (D-907); the refusal comes
+    /// before the id is taken.
+    #[test]
+    fn kinds_with_a_finalizer_or_handles_declare_no_shape() {
+        for kind in [&SHAPED_WITH_FINALIZER, &SHAPED_HANDLE] {
+            let error = register_builtin(62, LayoutInfo::custom(kind)).unwrap_err();
+            assert!(
+                error.to_string().contains("cannot declare a shape"),
+                "{error}"
+            );
+        }
+        assert!(get(62).is_none());
+        assert_eq!(fast_word(62), 0);
+    }
+
+    /// The words of the shapes a kind may declare, and the opaque one.
+    #[test]
+    fn declared_shapes_make_their_words() {
+        let word = |shape| {
+            let kind = CustomKind { shape, ..KIND_A };
+            derive_fast_word(&LayoutInfo::custom(Box::leak(Box::new(kind))))
+        };
+        assert_eq!(word(KindShape::Opaque), 0);
+        assert_eq!(
+            word(KindShape::Fixed {
+                size: 32,
+                fields: 1
+            }),
+            fast::FIXED | (32 << 8) | (1 << 48)
+        );
+        assert_eq!(word(KindShape::Counted { size: None }), fast::COUNTED);
+        assert_eq!(
+            word(KindShape::Counted { size: Some(528) }),
+            fast::COUNTED | (528 << 8)
+        );
+        assert_eq!(
+            word(KindShape::Counted {
+                size: Some(1 << 24)
+            }),
+            0
+        );
+        assert_eq!(
+            word(KindShape::Fixed {
+                size: 8,
+                fields: 1 << 16
+            }),
+            0
+        );
     }
 
     #[test]

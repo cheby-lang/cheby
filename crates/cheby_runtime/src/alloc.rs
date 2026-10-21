@@ -3,7 +3,21 @@
 //! Every heap object is allocated 8-aligned through the global allocator.
 //! Its size is not stored: freeing recomputes it from the layout table, or
 //! from `cap` for strings and bytes, or from a runtime-defined kind's
-//! `size` function, exactly as allocation computed it.
+//! `size` function, exactly as allocation computed it. For the first
+//! 16,384 layout ids the free paths read the size and the value fields
+//! from one word of the free-shape table ([`layout::fast_word`]) instead,
+//! and take the layout table only when that word is 0 (D-907). Debug
+//! builds check every answer of the word against the layout table and the
+//! kind's own functions.
+//!
+//! An allocation by a fiber without a memory budget, from generated code
+//! or a kernel, takes a block of its size class from the block cache that
+//! the fiber's control block records (D-739), or else from the system
+//! allocator, and charges the domain through the charge slot the control
+//! block caches. Everything else, a budget, a host thread, a size beyond
+//! the cache's classes or a system refusal, takes the general path, which
+//! checks the budget, asks the system and raises as [`out_of_memory`] says
+//! (D-907).
 //!
 //! Freeing an object visits the references it owns (its leading value
 //! fields, or a runtime-defined kind's `children`) and releases each one,
@@ -315,6 +329,44 @@ impl Domain {
         self.system_refused.store(true, Ordering::Relaxed);
     }
 
+    /// The charge slot of shard `index`: the shard's address, with bit 0
+    /// set when it is exclusive. A fiber's control block caches the slot
+    /// of the shard it charges ([`ExecCtx::charge_slot`], D-907).
+    pub(crate) fn charge_slot(&self, index: usize) -> usize {
+        let (shard, alone) = self.shard(index);
+        std::ptr::from_ref(shard).expose_provenance() | usize::from(alone)
+    }
+
+    /// [`Domain::charge`] by the fiber `ctx`, whose domain this is,
+    /// through the charge slot its control block caches, with no shard
+    /// arithmetic and no bounds check (D-907).
+    #[expect(
+        clippy::inline_always,
+        reason = "a step of every allocation and free by a fiber; the gain depends on it being inline (D-907)"
+    )]
+    #[inline(always)]
+    fn charge_through(&self, ctx: &ExecCtx, objects: i64, bytes: i64) {
+        let slot = ctx.charge_slot();
+        debug_assert!(
+            std::ptr::eq(self, Arc::as_ptr(ctx.domain())),
+            "a fiber charged another domain through its charge slot"
+        );
+        debug_assert_eq!(
+            slot,
+            self.charge_slot(ctx.shard()),
+            "a fiber's charge slot is not its shard's"
+        );
+        // SAFETY: the slot of a shard of this domain, which `ctx` keeps
+        // alive through its `Arc`, and whose shards are never moved.
+        let shard = unsafe { &*std::ptr::with_exposed_provenance::<Shard>(slot & !1) };
+        let alone = slot & 1 != 0;
+        debug_assert!(
+            !alone || tls::holds_exclusive_shard(ctx.shard()),
+            "an exclusive shard charged by a thread that does not hold it"
+        );
+        self.charge_shard(shard, alone, objects, bytes);
+    }
+
     /// Adds `objects` and `bytes` to shard `index`. An exclusive shard has
     /// one writer, the thread that holds it, so it is charged with a
     /// relaxed load and store, which cost less than an atomic add even
@@ -322,11 +374,22 @@ impl Domain {
     /// as before. A shared shard takes atomic adds.
     fn charge(&self, index: usize, objects: i64, bytes: i64) {
         let (shard, alone) = self.shard(index);
+        debug_assert!(
+            !alone || tls::holds_exclusive_shard(index),
+            "an exclusive shard charged by a thread that does not hold it"
+        );
+        self.charge_shard(shard, alone, objects, bytes);
+    }
+
+    /// [`Domain::charge`] of `shard`, exclusive to this thread when
+    /// `alone`.
+    #[expect(
+        clippy::inline_always,
+        reason = "a step of every allocation and free by a fiber; the gain depends on it being inline (D-907)"
+    )]
+    #[inline(always)]
+    fn charge_shard(&self, shard: &Shard, alone: bool, objects: i64, bytes: i64) {
         let before = if alone {
-            debug_assert!(
-                tls::holds_exclusive_shard(index),
-                "an exclusive shard charged by a thread that does not hold it"
-            );
             let count = shard.objects.load(Ordering::Relaxed);
             shard
                 .objects
@@ -640,9 +703,138 @@ pub unsafe extern "C" fn cheby_rt_alloc(ctx: *mut ExecCtx, size: u64, header: u6
     // A request that cannot be served raises (D-642); under the flag
     // backend the result is then 0, which generated code tests (D-697).
     crate::unwind::guard::guarded(Some(ctx), || {
+        // The fast path cannot raise; it runs under the guard all the same,
+        // which costs nothing measurable and keeps one entry shape (D-697).
         // SAFETY: forwarded from the caller.
-        object::ptr_to_word(unsafe { alloc_for(ctx, size, header) })
+        let missed = match unsafe { ctx.as_ref() } {
+            Some(fiber) => match fast_alloc(fiber, size, header) {
+                Ok(obj) => return object::ptr_to_word(obj),
+                Err(missed) => missed,
+            },
+            None => FastMiss::NotTaken,
+        };
+        // SAFETY: forwarded from the caller.
+        object::ptr_to_word(unsafe { alloc_slow(ctx, size, header, missed) })
     })
+}
+
+/// [`cheby_rt_alloc`]'s general path, out of line: what [`fast_alloc`]
+/// did not serve.
+///
+/// # Safety
+///
+/// As for [`cheby_rt_alloc`].
+#[cold]
+#[inline(never)]
+unsafe fn alloc_slow(ctx: *mut ExecCtx, size: u64, header: u64, missed: FastMiss) -> *mut u8 {
+    // SAFETY: forwarded from the caller.
+    let fiber = unsafe { ctx.as_ref() }.or_else(current_fiber);
+    alloc_from(fiber, size, header, missed == FastMiss::NotTaken)
+}
+
+/// Why [`fast_alloc`] served no block.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FastMiss {
+    /// It did not apply: a memory budget, no class for the size, no
+    /// recorded cache or one in use, or `refuse_next_system_allocation`
+    /// armed. The general path tries the cache itself.
+    NotTaken,
+    /// The cache had no block and the system allocator refused one. The
+    /// general path skips the cache and asks the system again, which
+    /// raises and marks the domain if it refuses again (D-642, D-771).
+    Refused,
+}
+
+/// The block cache's size class of an object of `size` bytes, as
+/// [`try_object_layout`] rounds it, if it has one.
+#[expect(
+    clippy::inline_always,
+    reason = "a step of every allocation by a fiber; the gain depends on it being inline (D-907)"
+)]
+#[inline(always)]
+fn fast_class(size: u64) -> Option<usize> {
+    let rounded = size
+        .max(abi::HEADER_SIZE)
+        .checked_next_multiple_of(abi::OBJECT_ALIGN)?;
+    let class = to_usize(rounded / abi::OBJECT_ALIGN).checked_sub(1)?;
+    (class < CACHE_CLASSES).then_some(class)
+}
+
+/// The size in bytes of the blocks of size class `class`, as
+/// [`class_layout`] gives it.
+#[expect(
+    clippy::inline_always,
+    reason = "a step of every allocation by a fiber; the gain depends on it being inline (D-907)"
+)]
+#[inline(always)]
+const fn class_bytes(class: usize) -> usize {
+    class
+        .saturating_add(1)
+        .saturating_mul(to_usize(abi::OBJECT_ALIGN))
+}
+
+/// Allocates an object of `size` bytes with `header` for `ctx`, the fiber
+/// running on this thread, when it has no memory budget and the size has
+/// a class in the block cache: a block from the cache that its control
+/// block records (D-739), or on a miss from the system allocator, charged
+/// to its domain through its charge slot as [`init_object`] charges
+/// (D-907). It never raises: a system refusal is handed to the general
+/// path as [`FastMiss::Refused`].
+#[expect(
+    clippy::inline_always,
+    reason = "a step of every allocation by a fiber; the gain depends on it being inline (D-907)"
+)]
+#[inline(always)]
+fn fast_alloc(ctx: &ExecCtx, size: u64, header: u64) -> Result<*mut u8, FastMiss> {
+    if ctx.budget() != u64::MAX {
+        return Err(FastMiss::NotTaken);
+    }
+    let class = fast_class(size).ok_or(FastMiss::NotTaken)?;
+    debug_assert_eq!(
+        Some(class),
+        try_object_layout(size).and_then(size_class),
+        "the inline path's size class is not the block cache's"
+    );
+    debug_assert!(
+        current_fiber().is_some_and(|current| std::ptr::eq(current, ctx)),
+        "a block cache taken through a fiber that is not current on this thread"
+    );
+    // SAFETY: `ctx` is the fiber current on this thread (the callers'
+    // contract, checked in debug builds), whose recorded cache is null or
+    // this thread's, as in `tls::with_cache_of`; nothing here suspends.
+    let cache = unsafe { ctx.block_cache().as_ref() }.ok_or(FastMiss::NotTaken)?;
+    if let Some(missed) = fast_test_hook() {
+        return Err(missed);
+    }
+    let cached = cache
+        .try_borrow_mut()
+        .map_err(|_| FastMiss::NotTaken)?
+        .take(class);
+    let bytes = class_bytes(class);
+    let ptr = if let Some(ptr) = cached {
+        ptr
+    } else {
+        // SAFETY: a nonzero multiple of the alignment, of at most the
+        // largest class, which `class_layout` builds the same way.
+        let ptr = unsafe {
+            std::alloc::alloc(Layout::from_size_align_unchecked(
+                bytes,
+                to_usize(abi::OBJECT_ALIGN),
+            ))
+        };
+        if ptr.is_null() {
+            return Err(FastMiss::Refused);
+        }
+        ptr
+    };
+    // SAFETY: a block of at least 8 bytes, 8-aligned.
+    unsafe { object::write_field(ptr, 0, header) };
+    let domain = ctx.domain();
+    domain.charge_through(ctx, 1, i64::try_from(bytes).unwrap_or(i64::MAX));
+    if crate::stats::counting() {
+        domain.stats.record(ctx.shard(), Event::Alloc);
+    }
+    Ok(ptr)
 }
 
 /// [`cheby_rt_alloc`] for kernels that are given their fiber's control
@@ -669,27 +861,30 @@ pub(crate) unsafe fn alloc_for(ctx: *mut ExecCtx, size: u64, header: u64) -> *mu
 /// allocate through it.
 #[must_use]
 pub fn alloc_object(size: u64, header: u64) -> *mut u8 {
-    let layout = try_object_layout(size);
-    let class = layout.and_then(size_class);
-    // One `tls.rs` accessor call finds both the fiber and a cached block
-    // (GATE1-1). A fiber under a memory budget checks it before anything
-    // is taken, in `alloc_in`.
-    let (ctx, cached, tried) = with_fiber_cache(None, |ctx, cache| {
-        let unlimited = ctx.is_none_or(|ctx| ctx.budget() == u64::MAX) && !refusal_armed();
-        match (cache, class) {
-            (Some(cache), Some(class)) if unlimited => (ctx, cache.take(class), true),
-            _ => (ctx, None, false),
-        }
-    });
-    match (cached, layout) {
-        (Some(ptr), Some(layout)) => init_object(ctx, ptr, layout, header),
-        _ => alloc_from(ctx, size, header, !tried),
-    }
+    // A fiber's request finds its fiber with one accessor call, then
+    // reads the cache through the control block's record (D-739, D-907).
+    // Host code has no fiber, and `alloc_from` finds its cache with one
+    // more accessor call.
+    alloc_in(current_fiber(), size, header)
 }
 
-/// [`alloc_object`] for the fiber `ctx`, or for host code without one.
+/// [`alloc_object`] for the fiber `ctx`, the one running on this thread,
+/// or for host code without one: [`fast_alloc`] for a fiber, then the
+/// general path for what it did not serve.
+#[expect(
+    clippy::inline_always,
+    reason = "a step of every allocation by a kernel; the gain depends on it being inline (D-907)"
+)]
+#[inline(always)]
 fn alloc_in(ctx: Option<&ExecCtx>, size: u64, header: u64) -> *mut u8 {
-    alloc_from(ctx, size, header, true)
+    let missed = match ctx {
+        Some(ctx) => match fast_alloc(ctx, size, header) {
+            Ok(ptr) => return ptr,
+            Err(missed) => missed,
+        },
+        None => FastMiss::NotTaken,
+    };
+    alloc_from(ctx, size, header, missed == FastMiss::NotTaken)
 }
 
 /// Allocates as [`alloc_in`] says: checks the memory budget, then takes
@@ -771,6 +966,56 @@ pub(crate) fn refuse_system_allocation_after(allowed: u32) {
         .unwrap_or_else(std::sync::PoisonError::into_inner) =
         Some((std::thread::current().id(), allowed));
     REFUSAL_ARMED.store(true, Ordering::SeqCst);
+}
+
+/// The test hook of [`refuse_next_fast_allocation`]: the thread whose
+/// next request on the inline path is refused. `None` when nothing is
+/// armed.
+#[cfg(test)]
+static FAST_REFUSAL: std::sync::Mutex<Option<std::thread::ThreadId>> = std::sync::Mutex::new(None);
+
+/// Whether [`FAST_REFUSAL`] holds anything: a relaxed load before its
+/// lock.
+#[cfg(test)]
+static FAST_REFUSAL_ARMED: AtomicBool = AtomicBool::new(false);
+
+/// Makes the next request of the calling thread that [`fast_alloc`] would
+/// serve fail there as if its cache had no block and the system had
+/// refused one, so the general path asks the system once more (D-907).
+/// Unlike [`refuse_next_system_allocation`], it leaves the inline path on.
+/// Armed together with that hook, the second request is refused too. Tests
+/// that arm it hold `alloc::tests::serial()`.
+#[cfg(test)]
+pub(crate) fn refuse_next_fast_allocation() {
+    *FAST_REFUSAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(std::thread::current().id());
+    FAST_REFUSAL_ARMED.store(true, Ordering::SeqCst);
+}
+
+/// What the test hooks make of a request [`fast_alloc`] would serve:
+/// [`FastMiss::Refused`] once after `refuse_next_fast_allocation`,
+/// [`FastMiss::NotTaken`] while `refuse_next_system_allocation` is armed,
+/// so the request reaches the system path. Always `None` outside tests.
+#[inline]
+fn fast_test_hook() -> Option<FastMiss> {
+    #[cfg(test)]
+    {
+        if FAST_REFUSAL_ARMED.load(Ordering::Relaxed) {
+            let mut armed = FAST_REFUSAL
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if armed.is_some_and(|thread| thread == std::thread::current().id()) {
+                *armed = None;
+                FAST_REFUSAL_ARMED.store(false, Ordering::SeqCst);
+                return Some(FastMiss::Refused);
+            }
+        }
+        if refusal_armed() {
+            return Some(FastMiss::NotTaken);
+        }
+    }
+    None
 }
 
 /// Whether a refusal is armed for this thread, which makes its
@@ -1062,6 +1307,53 @@ pub(crate) unsafe fn free(obj: *mut u8) {
 /// running on this thread.
 pub(crate) unsafe fn free_in(ctx: Option<&ExecCtx>, obj: *mut u8) {
     // SAFETY: forwarded from the caller.
+    if let Some(fast) = unsafe { fast_shape(obj) } {
+        // The fields first: the worklist is made only when one of them
+        // dies with the object (D-907).
+        let mut pending: Option<Pending> = None;
+        let mut offset = fast.first;
+        for _ in 0..fast.count {
+            // SAFETY: the shape lies within the object.
+            let child = unsafe { read_field(obj, offset) };
+            offset = offset.wrapping_add(8);
+            if abi::is_tagged_int(child) || child == 0 {
+                continue;
+            }
+            // SAFETY: a value field holds an owned reference.
+            unsafe { check_live(child, "freeing an object") };
+            // SAFETY: the dying object owned this reference to a live
+            // object.
+            if unsafe { rc::release(word_to_ptr(child)) } {
+                match pending.as_mut() {
+                    Some(list) => list.push(child),
+                    None => pending = Some(Pending::new(child)),
+                }
+            }
+        }
+        let (ctx, (objects, bytes)) = with_fiber_cache(ctx, |ctx, mut cache| {
+            // SAFETY: allocated with this size, and no reference remains.
+            unsafe { release_sized(obj, fast.size, cache.as_deref_mut()) };
+            let drained = match pending.as_mut() {
+                // SAFETY: every word on the list is an object whose count
+                // reached zero.
+                Some(list) => unsafe { drain(list, cache) },
+                None => (0, 0),
+            };
+            (ctx, drained)
+        });
+        charge_freed(
+            ctx,
+            objects.saturating_sub(1),
+            bytes.saturating_add(to_u64(fast.size)),
+        );
+        if let Some(list) = pending {
+            #[cfg(debug_assertions)]
+            charge_kinds(ctx, &list.kinds);
+            list.finish();
+        }
+        return;
+    }
+    // SAFETY: forwarded from the caller.
     let (scan, id) = unsafe { scan_and_layout(obj) };
     // A scan count of 0 outside the runtime-defined kinds (26 to 63) is an
     // object that probably owns no reference: a string, a boxed number, or
@@ -1102,16 +1394,24 @@ pub(crate) unsafe fn free_in(ctx: Option<&ExecCtx>, obj: *mut u8) {
 /// the fiber running on this thread.
 pub(crate) unsafe fn release_fields(ctx: Option<&ExecCtx>, obj: *mut u8) -> Option<u64> {
     // SAFETY: forwarded from the caller.
-    let (_, id) = unsafe { scan_and_layout(obj) };
-    let reusable = layout::get(id)
-        .is_some_and(|info| matches!(info.kind, LayoutKind::Ctor { .. } | LayoutKind::Tuple));
-    if !reusable {
-        return None;
-    }
-    // SAFETY: forwarded from the caller.
-    let shape = unsafe { shape_of(obj) };
-    let Children::Fields { first, count } = shape.children else {
-        return None;
+    let (first, count, size) = match unsafe { fast_shape(obj) } {
+        Some(fast) if fast.reusable => (fast.first, to_u64(fast.count), to_u64(fast.size)),
+        _ => {
+            // SAFETY: forwarded from the caller.
+            let (_, id) = unsafe { scan_and_layout(obj) };
+            let reusable = layout::get(id).is_some_and(|info| {
+                matches!(info.kind, LayoutKind::Ctor { .. } | LayoutKind::Tuple)
+            });
+            if !reusable {
+                return None;
+            }
+            // SAFETY: forwarded from the caller.
+            let shape = unsafe { shape_of(obj) };
+            let Children::Fields { first, count } = shape.children else {
+                return None;
+            };
+            (first, count, to_u64(object_layout(shape.size).size()))
+        }
     };
     let mut pending: Option<Pending> = None;
     let mut offset = first;
@@ -1146,7 +1446,7 @@ pub(crate) unsafe fn release_fields(ctx: Option<&ExecCtx>, obj: *mut u8) -> Opti
         charge_kinds(ctx, &pending.kinds);
         pending.finish();
     }
-    Some(to_u64(object_layout(shape.size).size()))
+    Some(size)
 }
 
 /// Frees the block of `obj`, a unique object of a constructor or tuple
@@ -1164,6 +1464,19 @@ pub(crate) unsafe fn release_fields(ctx: Option<&ExecCtx>, obj: *mut u8) -> Opti
 /// no reference the object owns; `ctx`, when given, is the control block
 /// of the fiber running on this thread.
 pub(crate) unsafe fn free_unique(ctx: Option<&ExecCtx>, obj: *mut u8) -> Option<()> {
+    // SAFETY: forwarded from the caller.
+    if let Some(fast) = unsafe { fast_shape(obj) }
+        && fast.reusable
+    {
+        let ctx = with_fiber_cache(ctx, |ctx, cache| {
+            // SAFETY: allocated with this size, and no reference remains:
+            // the caller gives up the only one, and the fields own nothing.
+            unsafe { release_sized(obj, fast.size, cache) };
+            ctx
+        });
+        charge_freed(ctx, -1, to_u64(fast.size));
+        return Some(());
+    }
     // SAFETY: forwarded from the caller.
     let (_, id) = unsafe { scan_and_layout(obj) };
     let reusable = layout::get(id)
@@ -1214,13 +1527,20 @@ unsafe fn free_leaf(ctx: Option<&ExecCtx>, obj: *mut u8) -> bool {
 /// fiber runs, and no cache when it is in use (a finalizer freeing
 /// directly) or gone (thread teardown). Given `known`, the running fiber's
 /// control block, the cache comes from its record and no `tls.rs`
-/// accessor is called (D-739, D-772); otherwise one accessor
-/// call finds both (GATE1-1). `f` never suspends (D-686).
+/// accessor is called (D-739, D-772). Otherwise one accessor call finds
+/// the running fiber and the cache comes from its record (D-907); without
+/// a fiber, or with no cache recorded, a second accessor call finds the
+/// cache (GATE1-1). `f` never suspends (D-686).
 fn with_fiber_cache<'a, R>(
     known: Option<&'a ExecCtx>,
     f: impl FnOnce(Option<&'a ExecCtx>, Option<&mut BlockCache>) -> R,
 ) -> R {
     let mut f = Some(f);
+    // Without `known`, one accessor call finds the running fiber, whose
+    // record names the cache (D-739, D-907), so `f` is inlined here rather
+    // than passed to `tls::with_fiber_and_cache`. Host code, and a fiber
+    // with no cache recorded, call that accessor too.
+    let known = known.or_else(|| current_fiber().filter(|ctx| !ctx.block_cache().is_null()));
     if let Some(ctx) = known {
         let result = tls::with_cache_of(Some(ctx), |cache| {
             let f = f.take()?;
@@ -1258,6 +1578,10 @@ fn with_fiber_cache<'a, R>(
 /// objects of `bytes` bytes freed (a negative `objects`).
 fn charge_freed(ctx: Option<&ExecCtx>, objects: i64, bytes: u64) {
     let bytes = i64::try_from(bytes).unwrap_or(i64::MAX).saturating_neg();
+    if let Some(ctx) = ctx {
+        ctx.domain().charge_through(ctx, objects, bytes);
+        return;
+    }
     with_charged(ctx, |domain, shard| domain.charge(shard, objects, bytes));
 }
 
@@ -1330,6 +1654,22 @@ unsafe fn drain(list: &mut Pending, mut cache: Option<&mut BlockCache>) -> (i64,
     while let Some(word) = list.pop() {
         let obj = word_to_ptr(word);
         // SAFETY: `obj` is a live object with no references left.
+        if let Some(fast) = unsafe { fast_shape(obj) } {
+            let mut offset = fast.first;
+            for _ in 0..fast.count {
+                // SAFETY: the shape lies within the object.
+                let child = unsafe { read_field(obj, offset) };
+                offset = offset.wrapping_add(8);
+                // SAFETY: a value field holds an owned reference.
+                unsafe { release_child(child, list) };
+            }
+            objects = objects.saturating_sub(1);
+            bytes = bytes.saturating_add(to_u64(fast.size));
+            // SAFETY: allocated with this size, and no reference remains.
+            unsafe { release_sized(obj, fast.size, cache.as_deref_mut()) };
+            continue;
+        }
+        // SAFETY: `obj` is a live object with no references left.
         let shape = unsafe { shape_of(obj) };
         match shape.children {
             Children::Fields { first, count } => {
@@ -1398,6 +1738,197 @@ unsafe fn run_finalizer(
             kind.name
         ));
     }
+}
+
+/// An object's shape read from the free-shape table
+/// ([`layout::fast_word`], D-907): its value fields and its allocation
+/// size.
+#[derive(Clone, Copy, Debug)]
+struct Fast {
+    /// The byte offset of the first value field.
+    first: usize,
+    /// The number of value fields.
+    count: usize,
+    /// The allocation size, a multiple of 8.
+    size: usize,
+    /// Whether the layout is a constructor or a tuple, whose block a
+    /// reuse may keep (D-716).
+    reusable: bool,
+}
+
+/// The shape of `obj` from the free-shape table, or `None` when its
+/// layout has no word there or the object is in an escaped form: the
+/// caller then takes [`shape_of`]. Wherever it answers, it agrees with
+/// [`shape_of`] and the kind's own functions, which debug builds check on
+/// every call, and the object has no finalizer to run.
+///
+/// # Safety
+///
+/// `obj` points to a live object.
+#[expect(
+    clippy::inline_always,
+    reason = "a step of every free; the gain depends on it being inline (D-907)"
+)]
+#[inline(always)]
+unsafe fn fast_shape(obj: *mut u8) -> Option<Fast> {
+    // SAFETY: forwarded from the caller.
+    let fast = unsafe { fast_shape_unchecked(obj) };
+    #[cfg(debug_assertions)]
+    if let Some(fast) = fast {
+        // SAFETY: forwarded from the caller.
+        unsafe { check_fast_shape(obj, fast) };
+    }
+    fast
+}
+
+/// Ends the process unless `fast`, the free-shape table's answer for
+/// `obj`, gives what the layout table and the kind's own `size` and
+/// `children` give: the allocation size, the value fields (for a kind,
+/// the very words its `children` visits, in order), whether a reuse may
+/// keep the block, and no finalizer or debug kind count to skip (debug
+/// builds, D-907).
+///
+/// # Safety
+///
+/// `obj` points to a live object.
+#[cfg(debug_assertions)]
+#[inline(never)]
+unsafe fn check_fast_shape(obj: *mut u8, fast: Fast) {
+    // SAFETY: forwarded from the caller.
+    let (_, id) = unsafe { scan_and_layout(obj) };
+    let disagree = |what: &str| -> ! {
+        fatal(format_args!(
+            "the free-shape table disagrees with layout {id} on {what}: {fast:?}"
+        ))
+    };
+    // SAFETY: forwarded from the caller.
+    let shape = unsafe { shape_of(obj) };
+    if object_layout(shape.size).size() != fast.size {
+        disagree("the size");
+    }
+    let field = |index: usize| {
+        let offset = fast.first.saturating_add(index.saturating_mul(8));
+        // SAFETY: `offset` lies within the object: `shape_of` and the
+        // kind agree on the count, checked before any read.
+        unsafe { read_field(obj, offset) }
+    };
+    match shape.children {
+        Children::Fields { first, count } => {
+            if first != fast.first || to_usize(count) != fast.count {
+                disagree("the value fields");
+            }
+        }
+        Children::Custom(kind) => {
+            if kind.finalize.is_some() || runtime_kind_index(id).is_some() {
+                disagree("a finalizer or a counted kind");
+            }
+            let mut visited = Vec::new();
+            // SAFETY: a live object of this kind.
+            unsafe { (kind.children)(object::ptr_to_word(obj), &mut |word| visited.push(word)) };
+            if visited.len() != fast.count
+                || visited
+                    .iter()
+                    .enumerate()
+                    .any(|(index, &word)| word != field(index))
+            {
+                disagree("the value fields");
+            }
+        }
+    }
+    let reusable = layout::get(id)
+        .is_some_and(|info| matches!(info.kind, LayoutKind::Ctor { .. } | LayoutKind::Tuple));
+    if reusable != fast.reusable {
+        disagree("reuse");
+    }
+}
+
+/// [`fast_shape`] without the debug check.
+///
+/// # Safety
+///
+/// `obj` points to a live object.
+#[inline]
+unsafe fn fast_shape_unchecked(obj: *mut u8) -> Option<Fast> {
+    use layout::fast;
+    // SAFETY: forwarded from the caller.
+    let (scan, id) = unsafe { scan_and_layout(obj) };
+    let word = layout::fast_word(id);
+    let reusable = word & fast::REUSABLE != 0;
+    let fixed = to_usize((word >> 8) & 0x00FF_FFFF);
+    match word & fast::MODE {
+        fast::FIXED => Some(Fast {
+            first: 8,
+            count: to_usize(word >> 48),
+            size: fixed,
+            reusable,
+        }),
+        fast::SCAN if scan != abi::SCAN_ESCAPE => {
+            let count = usize::from(scan);
+            Some(Fast {
+                first: 8,
+                count,
+                size: count.wrapping_mul(8).wrapping_add(8),
+                reusable,
+            })
+        }
+        fast::COUNTED => {
+            // SAFETY: an object of this mode keeps its meta word at
+            // offset 8 (`KindShape::Counted`).
+            let meta = unsafe { read_field(obj, 8) };
+            let size = if fixed != 0 {
+                fixed
+            } else {
+                to_usize(meta >> 32).checked_mul(8)?.checked_add(16)?
+            };
+            Some(Fast {
+                first: 16,
+                count: to_usize(meta & 0xFFFF_FFFF),
+                size,
+                reusable,
+            })
+        }
+        fast::STRING => {
+            // SAFETY: strings and bytes have `cap` at this offset.
+            let cap = unsafe { read_field(obj, object::abi_offset(abi::string::CAP_OFFSET)) };
+            let size = usize::try_from(abi::string::alloc_size(cap)?).ok()?;
+            Some(Fast {
+                first: 8,
+                count: 0,
+                size,
+                reusable,
+            })
+        }
+        _ => None,
+    }
+}
+
+/// [`release_block`] of a block of `size` bytes, a multiple of 8 of at
+/// least 8 that [`fast_shape`] computed, inlined into the free paths
+/// (D-907).
+///
+/// # Safety
+///
+/// As for [`release_block`], with `size` the allocation's size.
+#[expect(
+    clippy::inline_always,
+    reason = "a step of every free; the gain depends on it being inline (D-907)"
+)]
+#[inline(always)]
+unsafe fn release_sized(obj: *mut u8, size: usize, cache: Option<&mut BlockCache>) {
+    if keeps_freed_blocks() && !poison_enabled() {
+        if let Some(cache) = cache
+            && cache.keep_sized(obj, size)
+        {
+            return;
+        }
+        // SAFETY: allocated with this size and the object alignment.
+        let layout = unsafe { Layout::from_size_align_unchecked(size, 8) };
+        // SAFETY: forwarded from the caller.
+        unsafe { std::alloc::dealloc(obj, layout) };
+        return;
+    }
+    // SAFETY: forwarded from the caller.
+    unsafe { release_block(obj, object_layout(to_u64(size)), cache) };
 }
 
 /// Where the references an object owns are.
@@ -1644,21 +2175,36 @@ fn cached_block(ctx: Option<&ExecCtx>, layout: Layout) -> Option<*mut u8> {
 }
 
 impl BlockCache {
-    /// A cached free block of size class `class`, if there is one.
+    /// A cached free block of size class `class`, if there is one. Inlined
+    /// into the fast paths (D-907).
+    #[expect(
+        clippy::inline_always,
+        reason = "a step of every allocation or free by a fiber; the gain depends on it being inline (D-907)"
+    )]
+    #[inline(always)]
     fn take(&mut self, class: usize) -> Option<*mut u8> {
         let block = self.classes.get_mut(class)?.pop()?;
         // D-880: addressable again under the address
-        // cfg (`keep` poisoned it); a no-op otherwise.
-        if let Some(layout) = class_layout(class) {
-            sanitizer::unpoison(block, layout.size());
-        }
+        // cfg (`keep_sized` poisoned it); a no-op otherwise.
+        sanitizer::unpoison(block, class_bytes(class));
         Some(block)
     }
 
-    /// Keeps a free block of `layout`; false when the cache is full or has
-    /// no class for it.
-    fn keep(&mut self, obj: *mut u8, layout: Layout) -> bool {
-        let Some(class) = size_class(layout) else {
+    /// Keeps a free block of `size` bytes, a nonzero multiple of the
+    /// alignment, inlined into the fast free paths (D-907); false when the
+    /// cache is full or has no class for it.
+    #[expect(
+        clippy::inline_always,
+        reason = "a step of every allocation or free by a fiber; the gain depends on it being inline (D-907)"
+    )]
+    #[inline(always)]
+    fn keep_sized(&mut self, obj: *mut u8, size: usize) -> bool {
+        let step = to_usize(abi::OBJECT_ALIGN);
+        debug_assert!(
+            size.is_multiple_of(step),
+            "a block of {size} bytes kept in the block cache"
+        );
+        let Some(class) = size.checked_div(step).and_then(|n| n.checked_sub(1)) else {
             return false;
         };
         match self.classes.get_mut(class) {
@@ -1667,12 +2213,18 @@ impl BlockCache {
                 // after free into a cached block is reported; the
                 // quarantine is not poisoned, since the runtime's own
                 // checks read its poisoned headers.
-                sanitizer::poison(obj, layout.size());
+                sanitizer::poison(obj, size);
                 blocks.push(obj);
                 true
             }
             _ => false,
         }
+    }
+
+    /// Keeps a free block of `layout`; false when the cache is full or has
+    /// no class for it.
+    fn keep(&mut self, obj: *mut u8, layout: Layout) -> bool {
+        size_class(layout).is_some() && self.keep_sized(obj, layout.size())
     }
 }
 
@@ -1795,6 +2347,9 @@ mod domain_tests;
 
 #[cfg(test)]
 mod finalize_tests;
+
+#[cfg(test)]
+mod free_shape_tests;
 
 #[cfg(test)]
 mod out_of_memory_tests;
@@ -2064,6 +2619,7 @@ pub(crate) mod tests {
         debug: None,
         handle: false,
         finalize: None,
+        shape: layout::KindShape::Opaque,
     };
 
     /// The id the test node registers at (unused by every runtime module;
@@ -2255,6 +2811,22 @@ pub(crate) mod tests {
         assert_eq!(size_class(layout(12)), None);
         for class in 0..CACHE_CLASSES {
             assert_eq!(class_layout(class).and_then(size_class), Some(class));
+            assert_eq!(
+                class_layout(class).map(|layout| layout.size()),
+                Some(class_bytes(class))
+            );
+        }
+    }
+
+    /// The inline path's size classes are the block cache's (D-907).
+    #[test]
+    fn the_inline_path_rounds_sizes_as_the_cache_does() {
+        for size in (0..=300).chain([u64::MAX - 7, u64::MAX]) {
+            assert_eq!(
+                fast_class(size),
+                try_object_layout(size).and_then(size_class),
+                "size {size}"
+            );
         }
     }
 

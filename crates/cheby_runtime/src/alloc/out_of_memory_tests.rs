@@ -287,3 +287,73 @@ fn the_debug_arena_builds_the_text_without_a_limit() {
         "{outcome:?}"
     );
 }
+
+/// Runs a task that arms [`super::refuse_next_fast_allocation`], and
+/// [`super::refuse_next_system_allocation`] too when `twice`, then
+/// allocates a tuple of two fields, a size the block cache has a class
+/// for, and frees it. Returns the outcome, the domain, whether the inline
+/// path reached its hook, and the live objects and bytes the allocation
+/// added, read by the task.
+fn refuse_on_the_inline_path(twice: bool) -> (EntryOutcome, Arc<Domain>, bool, (i64, i64)) {
+    // The hooks arm one thread of the process at a time.
+    let _guard = super::tests::serial();
+    let domain = Domain::new();
+    let config = EntryConfig {
+        domain: Arc::clone(&domain),
+        ..EntryConfig::new(EntryMode::Test)
+    };
+    let charged = Arc::new(std::sync::Mutex::new((0, 0)));
+    let task = {
+        let domain = Arc::clone(&domain);
+        let charged = Arc::clone(&charged);
+        move || {
+            super::refuse_next_fast_allocation();
+            if twice {
+                super::refuse_next_system_allocation();
+            }
+            let (objects, bytes) = (domain.live_objects(), domain.live_bytes());
+            let one = crate::abi::tag_int(1).unwrap();
+            let pair = super::tests::tuple(&[one, one]);
+            *charged.lock().unwrap() = (
+                domain.live_objects().saturating_sub(objects),
+                domain.live_bytes().saturating_sub(bytes),
+            );
+            // SAFETY: the only reference.
+            unsafe { rc::drop(pair) };
+            0
+        }
+    };
+    // SAFETY: the task builds and reads only its own runtime objects.
+    let outcome = unsafe { entry::run_task(&config, task) }.unwrap();
+    let reached = !super::FAST_REFUSAL_ARMED.load(std::sync::atomic::Ordering::SeqCst);
+    let charged = *charged.lock().unwrap();
+    (outcome, domain, reached, charged)
+}
+
+/// D-907: a refusal on the inline path that the general path's second
+/// request does not repeat raises nothing and leaves the domain unmarked,
+/// and the block is charged once, at its size class.
+#[test]
+#[cfg_attr(miri, ignore = "runs an entry thread")]
+fn a_refusal_the_retry_serves_raises_nothing() {
+    let (outcome, domain, reached, charged) = refuse_on_the_inline_path(false);
+    assert!(reached, "the inline path did not reach its hook");
+    assert!(matches!(outcome, EntryOutcome::Returned(0)), "{outcome:?}");
+    assert!(!domain.system_refused());
+    assert_eq!(charged, (1, 24));
+    assert_eq!(domain.live_objects(), 0);
+}
+
+/// D-907, D-771: when the second request is refused too, it raises
+/// `out of memory` and marks the domain.
+#[test]
+#[cfg_attr(miri, ignore = "runs an entry thread")]
+fn a_refusal_the_retry_repeats_raises_and_marks_the_domain() {
+    let (outcome, domain, reached, _) = refuse_on_the_inline_path(true);
+    assert!(reached, "the inline path did not reach its hook");
+    let EntryOutcome::Panicked(report) = outcome else {
+        panic!("expected a panic, got {outcome:?}");
+    };
+    assert_eq!(report.message, OUT_OF_MEMORY);
+    assert!(domain.system_refused());
+}

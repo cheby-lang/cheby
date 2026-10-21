@@ -350,6 +350,7 @@ const fn handle_kind(name: &'static str) -> CustomKind {
         debug: None,
         handle: true,
         finalize: Some(handle_finalize),
+        shape: layout::KindShape::Opaque,
     }
 }
 
@@ -368,6 +369,7 @@ static SELECTOR_KIND: CustomKind = CustomKind {
     debug: None,
     handle: true,
     finalize: None,
+    shape: layout::KindShape::Opaque,
 };
 
 /// Registers the five kinds once per process. The layout table's builtin

@@ -407,6 +407,7 @@ static BAG: CustomKind = CustomKind {
     debug: Some(bag_debug),
     handle: false,
     finalize: None,
+    shape: layout::KindShape::Opaque,
 };
 
 /// An id unused by every runtime module (45 to 63 are free; 40 to 44 are

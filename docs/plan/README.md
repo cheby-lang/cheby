@@ -280,6 +280,7 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-904     | Package-visible kernel `bytes::json_plain_end` finds the plain runs of `std::json`'s strings        |
 | D-905     | Package-visible kernel `string::from_byte_range` reads `std::json`'s string and number texts        |
 | D-906     | `std::json` keeps open arrays and objects in a chain of cells that each step rewrites in place      |
+| D-907     | Freeing reads a free-shape table; a fiber allocates and charges through its control block           |
 
 ## Open questions
 
