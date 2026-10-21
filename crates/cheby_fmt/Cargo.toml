@@ -11,5 +11,8 @@ publish = false
 cheby_diag.workspace = true
 cheby_syntax.workspace = true
 
+[dev-dependencies]
+cheby_test_support.workspace = true
+
 [lints]
 workspace = true

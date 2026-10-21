@@ -10,6 +10,8 @@
 //!   target only (D-550).
 //! - `-j N`/`--jobs N`, global, sets the number of worker threads of the
 //!   build, by default the available parallelism (D-551).
+//! - `cheby fmt [--check] [PATH…]` formats the package's sources, the
+//!   given files, or standard input for `-` (D-1031).
 //!
 //! Diagnostics go to stderr in the layout of D-418. Errors that are not
 //! about the program, such as a missing `cheby.toml`, are `error:` lines
@@ -23,6 +25,7 @@
 //! Color only adds escapes: the text is the same. Panic reports of a
 //! running program stay plain (D-449).
 
+mod build_id;
 mod color;
 
 use std::io::{IsTerminal as _, Write as _};
@@ -120,11 +123,15 @@ enum Command {
         #[arg(long)]
         reuse_report: bool,
     },
-    /// Format source files (§13.7)
+    /// Format source files (§13.7, D-1031)
     Fmt {
-        /// Exit non-zero if any file would change, without writing
+        /// List the files that would change and exit with 1 if any would, writing nothing
         #[arg(long)]
         check: bool,
+        /// Files to format, `-` for standard input to standard output; by default every
+        /// `.cheby` file under the package's `src/`
+        #[arg(value_name = "PATH")]
+        paths: Vec<std::path::PathBuf>,
     },
     /// Run the language server over stdio (§13.11)
     Lsp,
@@ -248,7 +255,7 @@ fn run_command() -> ExitCode {
                 reuse_report,
             },
         ),
-        Command::Fmt { .. } => out.not_yet("fmt", "M5"),
+        Command::Fmt { check, paths } => fmt(out, check, &paths),
         Command::Lsp => out.not_yet("lsp", "M5"),
         Command::Doc => out.not_yet("doc", "M5"),
         Command::Add => out.not_yet("add", "M5"),
@@ -420,6 +427,214 @@ fn explain(out: Out, code: &str) -> ExitCode {
     }
 }
 
+/// One source `cheby fmt` formats.
+struct FmtTarget {
+    /// The file, or `None` for standard input (`-`).
+    path: Option<std::path::PathBuf>,
+    /// How `--check` and errors name it: as given on the command line, or
+    /// relative to the package root (GAP(fmt-check-listing)).
+    display: String,
+}
+
+/// `cheby fmt [--check] [PATH…]` (§13.7, D-1031): formats every `.cheby`
+/// file under the package's `src/`, or the given files, at the formatter's
+/// width; `-` reads standard input and writes standard output. A file with
+/// a syntax error is reported with its diagnostics and left alone. A file
+/// is rewritten only when it changes, through a temporary file renamed in
+/// the same directory. With `--check`, nothing is written: the files that
+/// would change are listed on standard output, one per line. Exits with 1
+/// after any error, or with `--check` when a file would change.
+fn fmt(out: Out, check: bool, paths: &[std::path::PathBuf]) -> ExitCode {
+    let targets: Vec<FmtTarget> = if paths.is_empty() {
+        let root = match package_root(out) {
+            Ok(root) => root,
+            Err(code) => return code,
+        };
+        let src = root.join("src");
+        match package_sources(&src) {
+            Ok(files) => files
+                .into_iter()
+                .map(|path| FmtTarget {
+                    display: cheby_diag::display_path(&path, &root),
+                    path: Some(path),
+                })
+                .collect(),
+            Err(e) => return out.error(&format!("cannot read `{}`: {e}", src.display())),
+        }
+    } else {
+        paths
+            .iter()
+            .map(|path| FmtTarget {
+                display: path.display().to_string(),
+                path: (path.as_os_str() != "-").then(|| path.clone()),
+            })
+            .collect()
+    };
+    let mut failed = false;
+    let mut would_change = false;
+    for target in &targets {
+        match fmt_one(out, target, check) {
+            Ok(changed) if check && changed => {
+                would_change = true;
+                let mut stdout = std::io::stdout().lock();
+                if writeln!(stdout, "{}", target.display).is_err() {
+                    failed = true;
+                }
+            }
+            Ok(_) => {}
+            Err(()) => failed = true,
+        }
+    }
+    if failed || would_change {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+/// Formats one source. `Ok(true)` when formatting changes it; the change
+/// is written unless `check` is set. Errors are reported here.
+fn fmt_one(out: Out, target: &FmtTarget, check: bool) -> Result<bool, ()> {
+    let fail = |message: String| {
+        let _ = out.error(&message);
+    };
+    let text = if let Some(path) = &target.path {
+        std::fs::read_to_string(path)
+            .map_err(|e| fail(format!("cannot read `{}`: {e}", target.display)))?
+    } else {
+        let mut text = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin().lock(), &mut text)
+            .map_err(|e| fail(format!("cannot read standard input: {e}")))?;
+        text
+    };
+    let name = if target.path.is_some() {
+        target.display.as_str()
+    } else {
+        "<stdin>"
+    };
+    let mut sources = cheby_diag::SourceMap::new();
+    let file = sources
+        .add_file(name, text.as_str())
+        .map_err(|e| fail(e.to_string()))?;
+    let formatted = match cheby_fmt::format_file(file, &text, cheby_fmt::PROVISIONAL_WIDTH) {
+        Ok(formatted) => formatted,
+        Err(e) => {
+            write_stderr(&cheby_diag::render_all_with(
+                e.errors(),
+                &sources,
+                out.colors,
+            ));
+            return Err(());
+        }
+    };
+    let changed = formatted != text;
+    if check {
+        return Ok(changed);
+    }
+    match &target.path {
+        None => {
+            let mut stdout = std::io::stdout().lock();
+            stdout
+                .write_all(formatted.as_bytes())
+                .and_then(|()| stdout.flush())
+                .map_err(|e| fail(format!("cannot write standard output: {e}")))?;
+        }
+        Some(path) if changed => replace_file(path, &formatted)
+            .map_err(|e| fail(format!("cannot write `{}`: {e}", target.display)))?,
+        Some(_) => {}
+    }
+    Ok(changed)
+}
+
+/// Replaces `path`'s contents with `text` through a temporary file in the
+/// same directory, renamed over it, so a reader never sees half a file.
+/// The temporary file takes the original's permissions. A symbolic link
+/// is followed: its target is rewritten and the link stays a link. A
+/// read-only file is an error and is left alone (GAP(fmt-write-target)).
+fn replace_file(path: &std::path::Path, text: &str) -> std::io::Result<()> {
+    let path = std::fs::canonicalize(path)?;
+    if std::fs::metadata(&path)?.permissions().readonly() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "the file is read-only",
+        ));
+    }
+    let path = path.as_path();
+    let dir = path
+        .parent()
+        .ok_or_else(|| std::io::Error::other("the path names no file"))?;
+    let name = path
+        .file_name()
+        .ok_or_else(|| std::io::Error::other("the path names no file"))?;
+    let mut temp_name = std::ffi::OsString::from(".");
+    temp_name.push(name);
+    temp_name.push(format!(".fmt-{}.tmp", std::process::id()));
+    let temp = dir.join(temp_name);
+    let write = || -> std::io::Result<()> {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)?;
+        file.write_all(text.as_bytes())?;
+        file.sync_all()?;
+        drop(file);
+        let permissions = std::fs::metadata(path)?.permissions();
+        std::fs::set_permissions(&temp, permissions)?;
+        std::fs::rename(&temp, path)
+    };
+    let result = write();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+    result
+}
+
+/// Every `.cheby` file under `src`, sorted by path. Hidden entries are
+/// skipped, as module discovery skips them (D-208). Symbolic links are
+/// followed, but each directory and each file is visited once, under the
+/// first path that reaches it in sorted order, so a link cycle ends the
+/// walk instead of listing one file under many paths
+/// (GAP(fmt-source-walk)).
+fn package_sources(src: &std::path::Path) -> std::io::Result<Vec<std::path::PathBuf>> {
+    let mut files = Vec::new();
+    let mut seen_dirs = std::collections::BTreeSet::new();
+    let mut seen_files = std::collections::BTreeSet::new();
+    let mut dirs = vec![src.to_path_buf()];
+    while let Some(dir) = dirs.pop() {
+        if !seen_dirs.insert(std::fs::canonicalize(&dir)?) {
+            continue;
+        }
+        let mut entries = Vec::new();
+        for entry in std::fs::read_dir(&dir)? {
+            let entry = entry?;
+            if !entry.file_name().to_string_lossy().starts_with('.') {
+                entries.push(entry.path());
+            }
+        }
+        entries.sort();
+        let mut inner = Vec::new();
+        for path in entries {
+            // A dangling or looping link is neither a file nor a
+            // directory, and is skipped.
+            let Ok(meta) = std::fs::metadata(&path) else {
+                continue;
+            };
+            if meta.is_dir() {
+                inner.push(path);
+            } else if meta.is_file()
+                && path.extension().is_some_and(|e| e == "cheby")
+                && seen_files.insert(std::fs::canonicalize(&path)?)
+            {
+                files.push(path);
+            }
+        }
+        // Depth first, in sorted order.
+        dirs.extend(inner.into_iter().rev());
+    }
+    files.sort();
+    Ok(files)
+}
+
 /// Until a backend exists, building for it is an error that points to
 /// `cheby check` and `cheby run` (D-282).
 fn build(out: Out, target: Option<Target>) -> ExitCode {
@@ -547,5 +762,43 @@ mod tests {
         ));
         assert!(Cli::try_parse_from(["cheby", "check", "--reuse-report"]).is_err());
         assert!(Cli::try_parse_from(["cheby", "repl", "--reuse-report"]).is_err());
+    }
+
+    /// `cheby fmt [--check] [PATH…]` with `-` for standard input
+    /// (D-1031), the global flags, and no `--deny-warnings`.
+    #[test]
+    fn parses_the_fmt_arguments() {
+        let cli = Cli::try_parse_from(["cheby", "fmt"]).unwrap();
+        let Command::Fmt { check, paths } = cli.command else {
+            panic!("not fmt");
+        };
+        assert!(!check);
+        assert_eq!(paths, Vec::<std::path::PathBuf>::new());
+        let cli = Cli::try_parse_from([
+            "cheby",
+            "--color",
+            "never",
+            "-j",
+            "2",
+            "fmt",
+            "--check",
+            "src/a.cheby",
+            "-",
+            "b.cheby",
+        ])
+        .unwrap();
+        assert_eq!(cli.jobs.map(std::num::NonZeroUsize::get), Some(2));
+        let Command::Fmt { check, paths } = cli.command else {
+            panic!("not fmt");
+        };
+        assert!(check);
+        assert_eq!(
+            paths,
+            ["src/a.cheby", "-", "b.cheby"].map(std::path::PathBuf::from)
+        );
+        let cli = Cli::try_parse_from(["cheby", "fmt", "-", "--color=always"]).unwrap();
+        assert!(matches!(cli.command, Command::Fmt { check: false, .. }));
+        assert!(Cli::try_parse_from(["cheby", "fmt", "--deny-warnings", "-"]).is_err());
+        assert!(Cli::try_parse_from(["cheby", "fmt", "--width", "80"]).is_err());
     }
 }

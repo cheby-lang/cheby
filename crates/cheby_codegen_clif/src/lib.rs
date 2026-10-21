@@ -24,6 +24,18 @@
 //! signature, and `cheby_runtime::abi` for object headers, string images,
 //! context offsets and symbol names. This crate never calls the runtime.
 //!
+//! The code model is D-913's, one for the JIT, the cache and executables
+//! (ADR-0064): non-PIC code ([`isa::flags`]) for D-921's fixed ISA
+//! ([`isa::host_isa`]). Every generated symbol is referenced colocated, so
+//! text reaches it PC-relative. Runtime functions, runtime statics and
+//! foreign symbols are reached only through import words
+//! `cb$imp$<symbol>` (`Decls::import_word`'s read-only words with an
+//! `Abs8` data relocation), which code loads and then calls with
+//! `call_indirect` and the C signature, or uses as the static's address.
+//! No Cranelift libcall appears ([`isa::libcall_names`]). [`define`] checks
+//! every compiled function's relocations: text has only PC-relative ones,
+//! to generated symbols.
+//!
 //! Lowering rules (D-453): every Cheby-ABI function uses Cranelift's
 //! `tail` convention with the hidden `ctx` parameter first, and a tail call
 //! is `return_call` (D-015). Every call of a top-level function loads the
@@ -83,6 +95,8 @@
 
 mod arith;
 mod blocking;
+#[cfg(test)]
+mod code_model_tests;
 mod data;
 mod decls;
 mod error;
@@ -127,26 +141,31 @@ pub const FUNCTION_ALIGN: u64 = 16;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub enum CallMode {
     /// Load the callee's slot and call the address in it, so the REPL and
-    /// hot reloading can repoint the slot (D-043). The JIT's mode.
+    /// hot reloading can repoint the slot (D-043). The only mode used
+    /// between Cheby functions, in the JIT and in executables alike
+    /// (D-916).
     #[default]
     Indirect,
-    /// Call the callee's symbol directly (AOT, M3).
+    /// Call the callee's symbol directly. No build uses it (D-916: direct
+    /// calls are reconsidered with M6's release profile).
     Direct,
 }
 
-/// How generated code imports and calls an `@external(native, …)` symbol.
+/// How generated code declares an `@external(native, …)` symbol. In both
+/// modes code reaches the symbol only through its import word
+/// `cb$imp$<symbol>` and calls the loaded address with `call_indirect`
+/// and the call site's C signature (D-913, D-475).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub enum ForeignImport {
-    /// Import the symbol's address, with no signature, and call it with
-    /// `call_indirect` and the C signature of each call site. One module
-    /// can then hold several C signatures for one symbol, which the REPL
-    /// needs: a redefinition may change a binding's C signature, and a
-    /// failed batch leaves its declarations behind. The JIT's mode.
+    /// Declare the symbol with no signature. One module can then hold
+    /// several C signatures for one symbol, which the REPL needs: a
+    /// redefinition may change a binding's C signature, and a failed batch
+    /// leaves its declarations behind. The JIT's mode.
     #[default]
     Address,
-    /// Import the symbol as a function with its C signature. A module
+    /// Declare the symbol as a function with its C signature. A module
     /// holds one signature per symbol, which D-455 guarantees within a
-    /// program (AOT, M3).
+    /// program.
     Function,
 }
 
@@ -413,10 +432,11 @@ pub fn define_with_stats<M: Module>(
         compiled.push((None, None, id, code));
     }
     // What the JIT's code map needs (D-856), built before anything is
-    // defined, so a missing location string fails the batch whole.
+    // defined, so a missing location string or D-913's code model, checked
+    // on every compile, fails the batch whole.
     let mut defined = Vec::with_capacity(compiled.len());
     for &(_, function, id, ref code) in &compiled {
-        defined.push(defined_code(function, id, code)?);
+        defined.push(defined_code(&*module, decls, function, id, code)?);
     }
     // A function defined twice would fail after the data are defined,
     // which the module keeps: check first, so a failed batch defines
@@ -449,18 +469,112 @@ pub fn define_with_stats<M: Module>(
     Ok((clif, stats, defined))
 }
 
-/// The code map's entry of `code`, the function `id` compiled from
-/// `function` (`None` for a shim, which has no calls with a location).
+/// Whether a relocation of kind `kind` in text is PC-relative, the only
+/// kinds D-913's code model leaves there: on x86-64 `X86CallPCRel4`, for
+/// calls and for `lea` of colocated data alike (X0's caveat 3), and
+/// `X86PCRel4`; on aarch64 `Arm64Call` (`bl`) and the
+/// `adrp`+`add` pair `Aarch64AdrPrelPgHi21` and `Aarch64AddAbsLo12Nc`
+/// (a page offset, despite its name). Absolute kinds (`Abs4`, `Abs8`),
+/// GOT, PLT and TLS kinds are never PC-relative text in this model.
+const fn pc_relative(kind: cranelift_codegen::binemit::Reloc) -> bool {
+    use cranelift_codegen::binemit::Reloc;
+    matches!(
+        kind,
+        Reloc::X86PCRel4
+            | Reloc::X86CallPCRel4
+            | Reloc::Arm64Call
+            | Reloc::Aarch64AdrPrelPgHi21
+            | Reloc::Aarch64AddAbsLo12Nc
+    )
+}
+
+/// D-913's check of one compiled function's text, before anything is
+/// defined: every relocation is PC-relative ([`pc_relative`]) and names a
+/// generated symbol of `module`, never a libcall, a symbol the linker
+/// knows, or a runtime or foreign symbol (`Linkage::Import`), which only
+/// import words' data relocations name. One record then serves the JIT,
+/// the cache and executables (ADR-0064): text needs no absolute
+/// relocation, which PIE executables and arm64 Mach-O refuse.
 ///
 /// # Errors
 ///
-/// An ICE if the code is too long or a call's location is not in
-/// `function`'s table.
-fn defined_code(
+/// An ICE naming the function and the relocation.
+fn check_text_relocs<M: Module>(
+    module: &M,
+    decls: &Decls,
+    id: cranelift_module::FuncId,
+    code: &CompiledFunction,
+) -> Result<(), CodegenError> {
+    use cranelift_module::{Linkage, ModuleRelocTarget};
+    for reloc in &code.relocs {
+        let fail = |what: &str| {
+            CodegenError::ice(format!(
+                "the function `{}` has {what} at offset {} of its text (D-913)",
+                decls.func_name(id),
+                reloc.offset
+            ))
+        };
+        let target = match reloc.name {
+            ModuleRelocTarget::User {
+                namespace: 0,
+                index,
+            } => {
+                let target = cranelift_module::FuncId::from_u32(index);
+                let linkage = module.declarations().get_function_decl(target).linkage;
+                (decls.func_name(target).to_owned(), linkage)
+            }
+            ModuleRelocTarget::User {
+                namespace: 1,
+                index,
+            } => {
+                let target = cranelift_module::DataId::from_u32(index);
+                let linkage = module.declarations().get_data_decl(target).linkage;
+                (decls.data_name(target).to_owned(), linkage)
+            }
+            ModuleRelocTarget::LibCall(libcall) => {
+                return Err(fail(&format!("a relocation to the libcall `{libcall}`")));
+            }
+            ModuleRelocTarget::User { namespace, .. } => {
+                return Err(fail(&format!(
+                    "a relocation to a name of namespace {namespace}"
+                )));
+            }
+            ModuleRelocTarget::KnownSymbol(_) | ModuleRelocTarget::FunctionOffset(..) => {
+                return Err(fail(&format!("a relocation to `{}`", reloc.name)));
+            }
+        };
+        let (name, linkage) = target;
+        if !pc_relative(reloc.kind) {
+            return Err(fail(&format!(
+                "an absolute or unexpected `{:?}` relocation to `{name}`",
+                reloc.kind
+            )));
+        }
+        if linkage == Linkage::Import {
+            return Err(fail(&format!(
+                "a relocation to `{name}`, which only an import word may name"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// The code map's entry of `code`, the function `id` compiled from
+/// `function` (`None` for a shim, which has no calls with a location),
+/// once its text passed D-913's check ([`check_text_relocs`]).
+///
+/// # Errors
+///
+/// An ICE if the text has a relocation the code model forbids, the code
+/// is too long or a call's location is not in `function`'s table.
+fn defined_code<M: Module>(
+    module: &M,
+    decls: &Decls,
     function: Option<&cheby_mir::Function>,
     id: cranelift_module::FuncId,
     code: &CompiledFunction,
 ) -> Result<DefinedCode, CodegenError> {
+    check_text_relocs(module, decls, id, code)?;
     let len = u32::try_from(code.bytes.len())
         .map_err(|_| CodegenError::ice("a function's code is longer than 4 GiB"))?;
     let mut sites = Vec::with_capacity(code.call_sites.len());

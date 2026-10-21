@@ -59,6 +59,7 @@ use cheby_runtime::entry::AtExit;
 use cheby_syntax::SyntaxTree;
 
 mod backend;
+pub mod cache;
 mod frontend;
 mod reuse_report;
 pub mod session;
@@ -818,5 +819,7 @@ pub fn parse_file(
 
 #[cfg(test)]
 mod lifecycle_tests;
+#[cfg(test)]
+mod reads_tests;
 #[cfg(test)]
 mod tests;

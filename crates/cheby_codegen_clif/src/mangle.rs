@@ -56,11 +56,15 @@ pub enum Kind {
     /// The C-ABI shim through which the blocking pool calls an `@blocking`
     /// foreign function (D-683, D-818).
     Blk,
+    /// An import word: a read-only 8-byte word holding the address of a
+    /// runtime function, a runtime static or a foreign symbol, which
+    /// generated code loads (D-913, D-917).
+    Imp,
 }
 
 impl Kind {
     /// Every kind.
-    pub const ALL: [Self; 20] = [
+    pub const ALL: [Self; 21] = [
         Self::Fn,
         Self::Slot,
         Self::Shim,
@@ -81,6 +85,7 @@ impl Kind {
         Self::Big,
         Self::Cont,
         Self::Blk,
+        Self::Imp,
     ];
 
     /// The word in the symbol.
@@ -107,6 +112,7 @@ impl Kind {
             Self::Big => "big",
             Self::Cont => "cont",
             Self::Blk => "blk",
+            Self::Imp => "imp",
         }
     }
 }
@@ -271,6 +277,14 @@ pub fn blocking_shim(symbol: &str, variant: u32) -> String {
     } else {
         format!("{PREFIX}{}${symbol}$${variant}", Kind::Blk.word())
     }
+}
+
+/// `cb$imp$<symbol>`: the import word of the runtime or foreign symbol
+/// `symbol` (D-913, D-917), kept as written: the kind comes first, so it
+/// never equals another kind's symbol (D-456).
+#[must_use]
+pub fn import_word(symbol: &str) -> String {
+    format!("{PREFIX}{}${symbol}", Kind::Imp.word())
 }
 
 /// `cb$str$<owner without cb$>$<n>`: string `n` of the function whose

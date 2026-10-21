@@ -20,8 +20,10 @@ use crate::{
     ItemSig, ModuleInterface, ModuleTable, Namespace, Ty, TyKind, TypeDef, TypeDefKind, Vis,
 };
 
-/// The format version, first in every encoding.
-const MAGIC: &[u8] = b"CHBI\x01";
+/// The format tag and version, first in every encoding. Version 1 can be
+/// decoded as it is ([`crate::decode`], D-953): every list and string is
+/// length-prefixed and every optional field and enum is tagged.
+pub(crate) const MAGIC: &[u8] = b"CHBI\x01";
 
 /// SipHash-1-3 128 of an interface encoding, with zero keys.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -49,9 +51,70 @@ pub fn interface_hash(
     globals: &Globals,
 ) -> Result<InterfaceHash, Ice> {
     let bytes = encode(iface, deps, modules, globals)?;
+    Ok(hash_encoding(&bytes))
+}
+
+/// The interface hash of an encoding's bytes: SipHash-1-3 128 with zero
+/// keys (D-460). An artifact's reader checks its section H with it
+/// (D-953).
+#[must_use]
+pub fn hash_encoding(bytes: &[u8]) -> InterfaceHash {
     let mut hasher = SipHasher13::new_with_keys(0, 0);
-    hasher.write(&bytes);
-    Ok(InterfaceHash(hasher.finish128().as_bytes()))
+    hasher.write(bytes);
+    InterfaceHash(hasher.finish128().as_bytes())
+}
+
+/// The items of `iface` that its encoding holds, as the decoder numbers
+/// them (D-953): each non-`priv`, non-test, current top-level item in
+/// encoded order (namespace, then name bytes), each followed by its
+/// constructors or interface functions in declaration order.
+///
+/// An artifact's span section lists spans in this order, and the debug
+/// round trip (D-954) pairs the original items with the decoded ones by it.
+///
+/// # Errors
+///
+/// An [`Ice`] if a type's constructor or an interface's function is
+/// missing.
+pub fn encoded_order(iface: &ModuleInterface, globals: &Globals) -> Result<Vec<DefIndex>, Ice> {
+    let mut out = Vec::new();
+    for index in encoded_top_level(iface, globals) {
+        out.push(index);
+        let item = iface.items.try_get(index, "item")?;
+        let children: &[DefIndex] = match &item.sig {
+            ItemSig::Type(TypeDef {
+                kind: TypeDefKind::Adt { ctors },
+                ..
+            }) => ctors,
+            ItemSig::Interface(i) => &i.fns,
+            _ => &[],
+        };
+        for &child in children {
+            iface.items.try_get(child, "child item")?;
+            out.push(child);
+        }
+    }
+    Ok(out)
+}
+
+/// The top-level items `encode` writes, in its order.
+fn encoded_top_level(iface: &ModuleInterface, globals: &Globals) -> Vec<DefIndex> {
+    let mut keyed: Vec<(Namespace, &str, DefIndex)> = iface
+        .items
+        .iter_enumerated()
+        .filter(|(index, item)| {
+            item.parent.is_none()
+                && item.vis != Vis::Priv
+                && item.kind != DefKind::Test
+                && iface.is_current(*index)
+        })
+        .filter_map(|(index, item)| {
+            let ns = item.kind.namespace()?;
+            Some((ns, globals.names.get(item.name), index))
+        })
+        .collect();
+    keyed.sort_by(|a, b| (a.0, a.1.as_bytes()).cmp(&(b.0, b.1.as_bytes())));
+    keyed.into_iter().map(|(_, _, index)| index).collect()
 }
 
 /// The canonical, versioned encoding of `iface`, which refers to other
@@ -72,26 +135,12 @@ pub fn encode(
         modules,
         globals,
     };
-    let mut keyed: Vec<(Namespace, &str, DefIndex)> = iface
-        .items
-        .iter_enumerated()
-        .filter(|(index, item)| {
-            item.parent.is_none()
-                && item.vis != Vis::Priv
-                && item.kind != DefKind::Test
-                && iface.is_current(*index)
-        })
-        .filter_map(|(index, item)| {
-            let ns = item.kind.namespace()?;
-            Some((ns, globals.names.get(item.name), index))
-        })
-        .collect();
-    keyed.sort_by(|a, b| (a.0, a.1.as_bytes()).cmp(&(b.0, b.1.as_bytes())));
+    let keyed = encoded_top_level(iface, globals);
     let mut out = Out::default();
     out.bytes.extend_from_slice(MAGIC);
     out.path(&modules.try_get(iface.module)?.path);
     out.len(keyed.len())?;
-    for (_, _, index) in keyed {
+    for index in keyed {
         let item = iface.items.try_get(index, "item")?;
         enc.item(&mut out, item)?;
     }

@@ -74,7 +74,7 @@ pub fn scale_timeout(base: Duration, scale: u32) -> Duration {
     base.saturating_mul(scale)
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunOutput {
     /// The exit code, or `None` if the process was killed by a signal or
     /// by the timeout.

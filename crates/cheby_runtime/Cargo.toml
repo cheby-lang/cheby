@@ -6,9 +6,14 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish = false
+# Only to pass the runtime ID to the build scripts of direct dependents as
+# `DEP_CHEBY_RUNTIME_RUNTIME_ID` (D-930); `build.rs` links nothing.
+links = "cheby_runtime"
 
+# An rlib only: the runtime archive of executables is `cheby_rt_exe`
+# (D-928).
 [lib]
-crate-type = ["rlib", "staticlib"]
+crate-type = ["rlib"]
 
 [dependencies]
 crossbeam-deque.workspace = true
@@ -20,6 +25,9 @@ parking_lot.workspace = true
 ryu.workspace = true
 siphasher.workspace = true
 unicode-segmentation.workspace = true
+
+[build-dependencies]
+siphasher.workspace = true
 
 [dev-dependencies]
 astro-float.workspace = true

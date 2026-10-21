@@ -38,14 +38,22 @@
 //! `CHEBY_HARNESS_SCALE` multiplies the timeout (D-722,
 //! `cheby_test_support::process`).
 //!
+//! Every `cheby repl` gets `CHEBY_CACHE` set to one fresh owner-only
+//! directory in the system's temporary directory that the harness creates
+//! when it starts and deletes when the run ends, also after failing
+//! transcripts, overriding the developer's own value (D-959,
+//! `cheby_test_support::cache`).
+//!
 //! On Windows every transcript is ignored until M6 (D-545,
 //! `cheby_test_support::platform`).
 
 use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use cheby_test_support::cache::HarnessCache;
 use cheby_test_support::milestone::{Expectation, Milestone, POISON_ENV, Setting, Verdicts};
 use cheby_test_support::{
     bless_enabled, files_with_extension, golden, platform, process, repl, repo_root,
@@ -69,9 +77,13 @@ fn main() -> ExitCode {
             transcripts,
             Verdicts::from_env()?,
             process::scaled_timeout(TIMEOUT)?,
+            // D-959: one fresh cache for every child of this process,
+            // deleted when `main` and the last transcript that holds it are
+            // done, whatever the results.
+            Arc::new(HarnessCache::create("repl")?),
         ))
     });
-    let (current, transcripts, verdicts, timeout) = match setup {
+    let (current, transcripts, verdicts, timeout, cache) = match setup {
         Ok(setup) => setup,
         Err(message) => {
             eprintln!("REPL harness: {message}");
@@ -79,6 +91,7 @@ fn main() -> ExitCode {
         }
     };
     let bless = bless_enabled();
+    eprintln!("REPL harness: {}", cache.describe());
     if let Some(reason) = platform::run_skip_reason() {
         eprintln!("REPL harness: transcripts are ignored: {reason}");
     }
@@ -104,10 +117,10 @@ fn main() -> ExitCode {
                 Expectation::Pass
             };
             let verdicts = verdicts.clone();
+            let cache = Arc::clone(&cache);
             Trial::test(name.clone(), move || {
-                let result = header.and_then(|_| {
-                    run_transcript(&path, bless && expectation != Expectation::Fail, timeout)
-                });
+                let bless = bless && expectation != Expectation::Fail;
+                let result = header.and_then(|_| run_transcript(&path, bless, &cache, timeout));
                 verdicts
                     .judge(&name, milestone, expectation, result)
                     .map_err(Failed::from)
@@ -162,7 +175,12 @@ fn parse(text: &str) -> Transcript {
     t
 }
 
-fn run_transcript(path: &Path, bless: bool, timeout: Duration) -> Result<(), String> {
+fn run_transcript(
+    path: &Path,
+    bless: bool,
+    cache: &HarnessCache,
+    timeout: Duration,
+) -> Result<(), String> {
     let text = golden::read(path)?.ok_or_else(|| format!("{} is missing", path.display()))?;
     let (header, session) = repl::split(&text);
     repl::Header::parse(header)?;
@@ -175,7 +193,7 @@ fn run_transcript(path: &Path, bless: bool, timeout: Duration) -> Result<(), Str
     if package.join("cheby.toml").is_file() {
         copy_dir(&package, &scratch)?;
     }
-    let result = run_repl(&scratch, &transcript.input, timeout);
+    let result = run_repl(&scratch, &transcript.input, cache, timeout);
     let _ = std::fs::remove_dir_all(&scratch);
     let (status, output) = result?;
     // The prompt printed when the input ended.
@@ -263,7 +281,12 @@ fn copy_dir(from: &Path, to: &Path) -> Result<(), String> {
 
 /// Runs `cheby repl` in `cwd` with `input` on standard input and one pipe
 /// for standard output and standard error; returns its status and output.
-fn run_repl(cwd: &Path, input: &str, timeout: Duration) -> Result<(Option<i32>, String), String> {
+fn run_repl(
+    cwd: &Path,
+    input: &str,
+    cache: &HarnessCache,
+    timeout: Duration,
+) -> Result<(Option<i32>, String), String> {
     let (mut reader, writer) = std::io::pipe().map_err(|e| format!("cannot make a pipe: {e}"))?;
     let writer_err = writer
         .try_clone()
@@ -276,6 +299,7 @@ fn run_repl(cwd: &Path, input: &str, timeout: Duration) -> Result<(Option<i32>, 
         .stdin(Stdio::piped())
         .stdout(writer)
         .stderr(writer_err);
+    cache.apply(&mut cmd);
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("cannot start {cmd:?}: {e}"))?;

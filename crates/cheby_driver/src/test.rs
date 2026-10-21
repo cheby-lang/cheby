@@ -1396,7 +1396,7 @@ fn codes_in(front: &Frontend, module: ModuleId, diagnostics: &[Diagnostic]) -> O
 
 /// An in-memory package whose root module imports every shipped std
 /// module, so that one front-end run checks them all.
-fn std_test_package(
+pub(crate) fn std_test_package(
     sources: &mut SourceMap,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<Package, Error> {

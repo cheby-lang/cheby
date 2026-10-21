@@ -1,9 +1,13 @@
 //! Shared code for the conformance, UI and REPL harnesses and for `xtask`:
 //! milestones and expected-fail tracking, example, UI-test and transcript
 //! metadata, golden files, the platforms that skip run trials (D-545),
-//! running commands with a timeout scaled by `CHEBY_HARNESS_SCALE`, and the
-//! thread variants of the conformance trials (D-722, docs/plan/testing.md).
+//! running commands with a timeout scaled by `CHEBY_HARNESS_SCALE`, the
+//! thread variants of the conformance trials (D-722, docs/plan/testing.md),
+//! each harness's fresh `CHEBY_CACHE` (D-959) and the `@aot` trial of the
+//! conformance harness (D-1025).
 
+pub mod aot;
+pub mod cache;
 pub mod decisions;
 pub mod example;
 pub mod golden;

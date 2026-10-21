@@ -66,7 +66,7 @@ use std::path::{Path, PathBuf};
 use cheby_codegen_clif::CodegenOptions;
 use cheby_consteval::{ConstEvalConfig, ConstInfo, ConstMode, ConstTypes};
 use cheby_diag::{Diagnostic, SourceMap, codes};
-use cheby_iface::{DefId, DepView, Ice, ModuleId};
+use cheby_iface::{DefId, DepView, Ice, ModuleId, ReadLog};
 use cheby_jit::{Jit, JitError, JitOptions};
 use cheby_mir::lower::{lower_items_recording, lower_tests_recording};
 use cheby_mir::reach::{Reach, Root, reachable_with_hooks};
@@ -79,7 +79,7 @@ use cheby_types::thir;
 use rayon::prelude::*;
 
 use crate::Error;
-use crate::frontend::Frontend;
+use crate::frontend::{Frontend, hidden_reads};
 
 /// The environment variable naming the directory of the determinism dumps
 /// (plan §4.5).
@@ -276,6 +276,9 @@ fn build_dumping(
             memory_limit: front.const_eval_memory_limit,
             targets: front.package_targets,
         };
+        // GAP(reads-outside-module-phases): constant evaluation reads the
+        // types of the constants it evaluates directly, outside any view;
+        // constants are cached under their own keys (D-964, `cache.md` §6).
         let item = |def: DefId| {
             front
                 .set
@@ -415,9 +418,44 @@ fn jit_ice(e: JitError) -> Ice {
 }
 
 /// What [`lower`] produced.
-struct Lowered {
-    units: Vec<MirModule>,
-    reach: Reach,
+pub(crate) struct Lowered {
+    pub units: Vec<MirModule>,
+    pub reach: Reach,
+    /// Per module outside std that this build lowered: the hidden reads
+    /// of its units in lowering and borrow inference (D-955). The cache's
+    /// code and tests identities read them from wave 2 on (K3a).
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "D-955's lowering read sets; the cache keys read them from K3a on, tests today"
+        )
+    )]
+    pub reads: BTreeMap<ModuleId, UnitReads>,
+}
+
+/// The hidden reads of one module's units in lowering and borrow
+/// inference (D-955, `cache.md` §3.3's `Rc` and `Rt`): the modules their
+/// recording views handed out that are neither the module's direct
+/// imports, nor its front end's hidden reads ([`Checked::front_reads`]),
+/// nor std modules, nor the builtin module; sorted by id. `None` for a
+/// unit the build did not lower.
+///
+/// [`Checked::front_reads`]: crate::frontend::Checked::front_reads
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct UnitReads {
+    /// The code unit's: lowering and borrow inference.
+    pub code: Option<Vec<ModuleId>>,
+    /// The tests unit's: lowering (tests units get no masks of their
+    /// own).
+    pub tests: Option<Vec<ModuleId>>,
+}
+
+/// The logs of one module's recording views while it is lowered.
+#[derive(Default)]
+struct UnitLogs {
+    code: ReadLog,
+    tests: ReadLog,
 }
 
 /// The MIR units that running `main` needs, after reference counting and
@@ -434,8 +472,10 @@ pub(crate) fn lower_program(
 }
 
 /// Lowers what `roots` reach, counting and checking each unit with the
-/// MIR options `mir`.
-fn lower(
+/// MIR options `mir`. Each unit of a module outside std reads other
+/// modules through a recording view, and [`Lowered::reads`] holds what
+/// it read beyond its imports and its front end's reads (D-955).
+pub(crate) fn lower(
     front: &Frontend,
     sources: &SourceMap,
     roots: &Roots<'_>,
@@ -499,13 +539,22 @@ fn lower(
         .map(|&module| (module, tests.get(&module)))
         .filter(|&(module, selected)| reach.needs_module(module) || selected.is_some())
         .collect();
+    let logs = read_logs(front, &jobs);
     // Only the package's own modules record their sites for the reuse
     // report (D-717); std and dependencies never do.
     let lowered: Vec<Result<ModuleUnits, Ice>> = jobs
         .par_iter()
         .map(|&(module, selected)| {
             let record_sites = mir.record_sites && local.contains(&module);
-            lower_module(front, sources, &reach, module, selected, record_sites)
+            lower_module(
+                front,
+                sources,
+                &reach,
+                module,
+                selected,
+                record_sites,
+                logs.get(&module),
+            )
         })
         .collect();
     let mut units = Vec::new();
@@ -520,7 +569,7 @@ fn lower(
     // Every unit is lowered before any is counted: the borrow masks come
     // from the whole build (D-779).
     if mir.borrows() {
-        infer_borrowing(front, &mut units)?;
+        infer_borrowing(front, &mut units, &logs)?;
     }
     let counted: Vec<Result<(), Ice>> = units
         .par_iter_mut()
@@ -529,7 +578,68 @@ fn lower(
     for result in counted {
         result?;
     }
-    Ok(Lowered { units, reach })
+    let reads = unit_reads(front, &jobs, &reach, &logs)?;
+    Ok(Lowered {
+        units,
+        reach,
+        reads,
+    })
+}
+
+/// An empty read log per module of `jobs` outside std (D-955); std
+/// records nothing, since the build ID fixes it.
+fn read_logs(
+    front: &Frontend,
+    jobs: &[(ModuleId, Option<&Vec<&thir::TestDef>>)],
+) -> BTreeMap<ModuleId, UnitLogs> {
+    jobs.iter()
+        .filter(|&&(module, _)| {
+            front
+                .modules
+                .get(module)
+                .is_some_and(|info| info.package != cheby_iface::PackageId::STD)
+        })
+        .map(|&(module, _)| (module, UnitLogs::default()))
+        .collect()
+}
+
+/// The hidden reads of each lowered unit of the modules in `logs`
+/// (D-955): what its views handed out beyond the module's imports and
+/// its front end's hidden reads.
+fn unit_reads(
+    front: &Frontend,
+    jobs: &[(ModuleId, Option<&Vec<&thir::TestDef>>)],
+    reach: &Reach,
+    logs: &BTreeMap<ModuleId, UnitLogs>,
+) -> Result<BTreeMap<ModuleId, UnitReads>, Ice> {
+    let mut reads = BTreeMap::new();
+    for &(module, selected) in jobs {
+        let Some(log) = logs.get(&module) else {
+            continue;
+        };
+        let checked = checked(front, module)?;
+        let imports = front
+            .import_targets
+            .get(usize::try_from(module.as_u32()).map_err(|_| Ice::new("module id overflow"))?)
+            .map_or(&[][..], Vec::as_slice);
+        let hidden = |log: &ReadLog| {
+            hidden_reads(
+                &front.modules,
+                module,
+                log.modules(),
+                imports,
+                &checked.front_reads,
+            )
+        };
+        reads.insert(
+            module,
+            UnitReads {
+                code: reach.needs_module(module).then(|| hidden(&log.code)),
+                tests: selected.map(|_| hidden(&log.tests)),
+            },
+        );
+    }
+    Ok(reads)
 }
 
 /// Borrowing inference across a build's lowered units (D-715, D-779,
@@ -540,14 +650,24 @@ fn lower(
 /// `cheby test` build infers over its tests units too, so its code units
 /// may get other masks than a `cheby run` build's; `cheby run`'s code
 /// never depends on tests (D-779).
-fn infer_borrowing(front: &Frontend, units: &mut [MirModule]) -> Result<(), Ice> {
+fn infer_borrowing(
+    front: &Frontend,
+    units: &mut [MirModule],
+    logs: &BTreeMap<ModuleId, UnitLogs>,
+) -> Result<(), Ice> {
     let facts = {
         let refs: Vec<&MirModule> = units.iter().collect();
         borrow::collect_facts(&refs)
     };
     let found: Vec<Result<borrow::Masks, Ice>> = units
         .par_iter()
-        .map(|unit| unit_masks(front, unit, &facts))
+        .map(|unit| {
+            let log = match unit.unit {
+                UnitKind::Code(module) => logs.get(&module).map(|l| &l.code),
+                _ => None,
+            };
+            unit_masks(front, unit, &facts, log)
+        })
         .collect();
     let mut masks = borrow::Masks::new();
     for result in found {
@@ -561,20 +681,31 @@ fn infer_borrowing(front: &Frontend, units: &mut [MirModule]) -> Result<(), Ice>
 }
 
 /// The masks [`borrow::infer`] gives `unit` if it is a code unit, read
-/// with its module's interfaces (D-246) and THIR.
+/// with its module's interfaces (D-246) and THIR, through a view that
+/// records into `log` when one is given (D-955).
 fn unit_masks(
     front: &Frontend,
     unit: &MirModule,
     facts: &borrow::BuildFacts,
+    log: Option<&ReadLog>,
 ) -> Result<borrow::Masks, Ice> {
     let UnitKind::Code(module) = unit.unit else {
         return Ok(borrow::Masks::new());
     };
     let checked = checked(front, module)?;
-    let readable = DepView::new(&front.set, &checked.deps);
+    let readable = view_of(front, &checked.deps, log);
     let eligibility =
         borrow::IfaceEligibility::new(own_defs(front, module, &readable)?, &checked.thir);
     Ok(borrow::infer(unit, facts, &eligibility))
+}
+
+/// The view of `deps` in `front`'s interfaces, recording into `log` if
+/// one is given (D-955).
+fn view_of<'a>(front: &'a Frontend, deps: &'a [ModuleId], log: Option<&'a ReadLog>) -> DepView<'a> {
+    match log {
+        Some(log) => DepView::recording(&front.set, deps, log),
+        None => DepView::new(&front.set, deps),
+    }
 }
 
 /// The code unit and the tests unit of one module, each lowered and
@@ -585,7 +716,8 @@ type ModuleUnits = [Option<Result<MirModule, Ice>>; 2];
 /// and its `selected` tests into its tests unit, each checked as lowered
 /// ([`check_lowered`]); counting waits for the whole build (D-779). With
 /// `record_sites`, both units record the sites of `--reuse-report`
-/// (D-717).
+/// (D-717). With `logs`, each unit reads other modules through a view
+/// that records into its own log (D-955).
 fn lower_module(
     front: &Frontend,
     sources: &SourceMap,
@@ -593,22 +725,26 @@ fn lower_module(
     module: ModuleId,
     selected: Option<&Vec<&thir::TestDef>>,
     record_sites: bool,
+    logs: Option<&UnitLogs>,
 ) -> Result<ModuleUnits, Ice> {
     let checked = checked(front, module)?;
     let own = front
         .set
         .get(module)
         .ok_or_else(|| Ice::new(format!("module {module:?} has no interface")))?;
-    let deps = DepView::new(&front.set, &checked.deps);
-    let cx = LowerCx {
+    let code_deps = view_of(front, &checked.deps, logs.map(|l| &l.code));
+    let tests_deps = view_of(front, &checked.deps, logs.map(|l| &l.tests));
+    let cx_with = |deps| LowerCx {
         defs: Defs {
             own: Some(own),
-            deps: &deps,
+            deps,
             modules: &front.modules,
             globals: &front.globals,
         },
         sources,
     };
+    let cx = cx_with(&code_deps);
+    let tests_cx = cx_with(&tests_deps);
     let counted = |lowered: Result<MirModule, Ice>| {
         lowered.and_then(|unit| {
             check_lowered(&unit)?;
@@ -632,7 +768,7 @@ fn lower_module(
             consts: Vec::new(),
             tests: selected.iter().map(|&t| t.clone()).collect(),
         };
-        counted(lower_tests_recording(&only, &cx, record_sites))
+        counted(lower_tests_recording(&only, &tests_cx, record_sites))
     });
     Ok([code, tests])
 }

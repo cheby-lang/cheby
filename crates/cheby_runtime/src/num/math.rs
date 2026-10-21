@@ -350,37 +350,47 @@ fn exact_power(ax: f64, y: f64) -> Option<f64> {
 // ---------------------------------------------------------------------
 // The kernels
 
+// Each kernel is exported under the name `table` registers, so a linker
+// finds it by name as the JIT finds it by address (D-932).
+
 /// `float::pow` (D-396).
+#[unsafe(export_name = "cheby_float_pow")]
 extern "C" fn pow_kernel(x: f64, y: f64) -> f64 {
     pow(x, y)
 }
 
 /// `float::exp` (D-396).
+#[unsafe(export_name = "cheby_float_exp")]
 extern "C" fn exp_kernel(x: f64) -> f64 {
     exp(x)
 }
 
 /// `float::ln` (D-396).
+#[unsafe(export_name = "cheby_float_ln")]
 extern "C" fn ln_kernel(x: f64) -> f64 {
     ln(x)
 }
 
 /// `float::sin` (D-396).
+#[unsafe(export_name = "cheby_float_sin")]
 extern "C" fn sin_kernel(x: f64) -> f64 {
     trig(Trig::Sin, x)
 }
 
 /// `float::cos` (D-396).
+#[unsafe(export_name = "cheby_float_cos")]
 extern "C" fn cos_kernel(x: f64) -> f64 {
     trig(Trig::Cos, x)
 }
 
 /// `float::tan` (D-396).
+#[unsafe(export_name = "cheby_float_tan")]
 extern "C" fn tan_kernel(x: f64) -> f64 {
     trig(Trig::Tan, x)
 }
 
 /// `float::atan2` (D-396).
+#[unsafe(export_name = "cheby_float_atan2")]
 extern "C" fn atan2_kernel(y: f64, x: f64) -> f64 {
     atan2(y, x)
 }

@@ -1,0 +1,766 @@
+//! From the syntax tree to a [`Doc`]: the file's lines, imports sorted
+//! within their blocks, and item headers laid out at the width (D-1030).
+//!
+//! The formatter moves only whitespace, line breaks and blank lines. It
+//! never adds, removes or reorders a token, except that imports are sorted
+//! within their block and a list that breaks over lines gets a trailing
+//! comma, which it loses when it fits on one line. A line break it adds or
+//! removes is always one the parser ignores (D-231): inside `(`, `<` or a
+//! list's `{ }`, after a `,`, or after the `=` of a constant or an alias.
+//!
+//! What lies below an item header (bodies, expressions, patterns, types and
+//! statements) is printed verbatim for now: its source text with its own
+//! line structure, re-indented to the new indentation, never joined or
+//! split. So is any item with a comment or a line break where the header
+//! layout has no place for one. Wave 2 and 3 of the formatter lay those out.
+
+use std::collections::BTreeMap;
+
+use cheby_syntax::{SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken};
+
+use crate::doc::Doc;
+use crate::source::Source;
+
+/// The indentation of one nesting level (AGENTS.md: two spaces).
+const INDENT: usize = 2;
+
+/// How many nodes of each kind were laid out by the printer and how many
+/// were printed verbatim.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Coverage {
+    /// Nodes laid out by the printer, by kind.
+    pub laid_out: BTreeMap<SyntaxKind, u64>,
+    /// Nodes printed as verbatim source text, by kind, descendants included.
+    pub verbatim: BTreeMap<SyntaxKind, u64>,
+    /// Items (and imports and inner attributes) whose header could not be
+    /// laid out, so the whole item was printed verbatim.
+    pub verbatim_items: u64,
+}
+
+impl Coverage {
+    /// Adds `other`'s counts to these.
+    pub fn add(&mut self, other: &Self) {
+        for (kind, n) in &other.laid_out {
+            let slot = self.laid_out.entry(*kind).or_insert(0);
+            *slot = slot.saturating_add(*n);
+        }
+        for (kind, n) in &other.verbatim {
+            let slot = self.verbatim.entry(*kind).or_insert(0);
+            *slot = slot.saturating_add(*n);
+        }
+        self.verbatim_items = self.verbatim_items.saturating_add(other.verbatim_items);
+    }
+
+    fn laid_out(&mut self, kind: SyntaxKind) {
+        let slot = self.laid_out.entry(kind).or_insert(0);
+        *slot = slot.saturating_add(1);
+    }
+
+    fn verbatim(&mut self, node: SyntaxNode<'_>) {
+        for d in node.descendants() {
+            let slot = self.verbatim.entry(d.kind()).or_insert(0);
+            *slot = slot.saturating_add(1);
+        }
+    }
+}
+
+/// The delimiters of a comma-separated list, and whether a flat list has
+/// spaces inside them.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Delims {
+    /// `(a, b)`, `<A, B>` and `{A, B}` of an import list.
+    Tight,
+    /// `{ a, b }` of a type body.
+    Spaced,
+}
+
+/// One element of a newline-separated sequence: the file's top level or an
+/// interface body.
+struct Entry<'t> {
+    elem: SyntaxElement<'t>,
+    /// Line breaks between the previous entry and this one.
+    newlines: usize,
+}
+
+/// A comment on a line of its own inside a list.
+struct OwnLineComment<'t> {
+    text: &'t str,
+    blank_before: bool,
+}
+
+/// One element of a comma-separated list with its comments.
+struct ListItem<'t> {
+    leading: Vec<OwnLineComment<'t>>,
+    elem: SyntaxElement<'t>,
+    trailing: Option<&'t str>,
+    /// A blank line before the item, or before its first leading comment.
+    blank_before: bool,
+    /// A blank line between the leading comments and the element.
+    blank_after_leading: bool,
+}
+
+/// Formats a file's tree into a document.
+pub(crate) struct Formatter<'t> {
+    src: Source<'t>,
+    pub(crate) coverage: Coverage,
+}
+
+/// Whether `kind` is a comment of any kind.
+const fn is_comment(kind: SyntaxKind) -> bool {
+    matches!(
+        kind,
+        SyntaxKind::COMMENT | SyntaxKind::DOC_COMMENT | SyntaxKind::MODULE_DOC
+    )
+}
+
+/// A comment's text without trailing whitespace.
+fn comment_text(token: SyntaxToken<'_>) -> &str {
+    token.text().trim_end_matches([' ', '\t', '\r'])
+}
+
+/// Whether `kind` is neither trivia nor a line break.
+const fn is_significant(kind: SyntaxKind) -> bool {
+    !kind.is_trivia() && !matches!(kind, SyntaxKind::NEWLINE)
+}
+
+/// The text of `node`'s significant tokens, joined without spaces.
+fn compact_text(node: SyntaxNode<'_>) -> String {
+    node.tokens()
+        .filter(|t| is_significant(t.kind()))
+        .map(SyntaxToken::text)
+        .collect()
+}
+
+/// The text of `node`'s significant tokens, joined by single spaces.
+fn spaced_text(node: SyntaxNode<'_>) -> String {
+    node.tokens()
+        .filter(|t| is_significant(t.kind()))
+        .map(SyntaxToken::text)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Whether the printer puts no space before a header part of this kind.
+const fn tight_before(kind: SyntaxKind) -> bool {
+    matches!(
+        kind,
+        SyntaxKind::COLON
+            | SyntaxKind::COLON2
+            | SyntaxKind::TYPE_PARAM_LIST
+            | SyntaxKind::PARAM_LIST
+            | SyntaxKind::TYPE_LIST
+            | SyntaxKind::POS_FIELD_LIST
+            | SyntaxKind::ATTR_ARG_LIST
+            | SyntaxKind::IMPORT_LIST
+    )
+}
+
+/// Whether the printer puts no space after a header token of this kind.
+const fn tight_after(kind: SyntaxKind) -> bool {
+    matches!(
+        kind,
+        SyntaxKind::AT | SyntaxKind::AT_BANG | SyntaxKind::COLON2
+    )
+}
+
+/// The nodes whose children the header walk lays out.
+const fn is_header(kind: SyntaxKind) -> bool {
+    matches!(
+        kind,
+        SyntaxKind::FN_DECL
+            | SyntaxKind::TYPE_DECL
+            | SyntaxKind::ALIAS_DECL
+            | SyntaxKind::CONST_DECL
+            | SyntaxKind::INTERFACE_DECL
+            | SyntaxKind::TEST_DECL
+            | SyntaxKind::IMPORT_DECL
+            | SyntaxKind::MODULE_PATH
+            | SyntaxKind::IMPORT_ITEM
+            | SyntaxKind::RENAME
+            | SyntaxKind::TYPE_PARAM
+            | SyntaxKind::BOUND_LIST
+            | SyntaxKind::INTERFACE_REF
+            | SyntaxKind::PATH
+            | SyntaxKind::INNER_ATTR
+            | SyntaxKind::ATTR
+            | SyntaxKind::VISIBILITY
+            | SyntaxKind::RET_TYPE
+            | SyntaxKind::PARAM
+            | SyntaxKind::RECORD_FIELD
+            | SyntaxKind::VARIANT
+            | SyntaxKind::INTERFACE_FN
+    )
+}
+
+/// The comma-separated lists the printer lays out, with their delimiters.
+const fn list_delims(kind: SyntaxKind) -> Option<Delims> {
+    match kind {
+        SyntaxKind::TYPE_PARAM_LIST
+        | SyntaxKind::PARAM_LIST
+        | SyntaxKind::TYPE_LIST
+        | SyntaxKind::POS_FIELD_LIST
+        | SyntaxKind::ATTR_ARG_LIST
+        | SyntaxKind::IMPORT_LIST => Some(Delims::Tight),
+        SyntaxKind::VARIANT_LIST | SyntaxKind::RECORD_FIELD_LIST => Some(Delims::Spaced),
+        _ => None,
+    }
+}
+
+impl<'t> Formatter<'t> {
+    pub(crate) const fn new(src: Source<'t>) -> Self {
+        Self {
+            src,
+            coverage: Coverage {
+                laid_out: BTreeMap::new(),
+                verbatim: BTreeMap::new(),
+                verbatim_items: 0,
+            },
+        }
+    }
+
+    /// The whole file: its entries one per line, imports sorted within
+    /// their blocks, single blank lines kept, and one final line break.
+    /// GAP(fmt-empty-file): a file with nothing but whitespace formats to
+    /// the empty file, without a line break.
+    pub(crate) fn file(&mut self, root: SyntaxNode<'t>) -> Doc {
+        self.coverage.laid_out(root.kind());
+        let mut entries = entries(root, None);
+        sort_import_blocks(&mut entries);
+        if entries.is_empty() {
+            return Doc::Nil;
+        }
+        let mut docs = Vec::new();
+        self.lines(&entries, &mut docs);
+        docs.push(Doc::hardline());
+        Doc::concat(docs)
+    }
+
+    /// Entries one per line, a blank line where the source has one or
+    /// more, and a comment on the same line as the entry before it kept
+    /// there.
+    fn lines(&mut self, entries: &[Entry<'t>], docs: &mut Vec<Doc>) {
+        for (i, entry) in entries.iter().enumerate() {
+            if i > 0 {
+                match entry.newlines {
+                    0 => docs.push(Doc::text(" ")),
+                    1 => docs.push(Doc::hardline()),
+                    _ => {
+                        docs.push(Doc::hardline());
+                        docs.push(Doc::hardline());
+                    }
+                }
+            }
+            match entry.elem {
+                SyntaxElement::Token(token) if is_comment(token.kind()) => {
+                    if i > 0 && entry.newlines == 0 {
+                        docs.push(Doc::comment(comment_text(token)));
+                    } else {
+                        docs.push(Doc::text(comment_text(token)));
+                    }
+                }
+                SyntaxElement::Token(token) => docs.push(Doc::text(token.text())),
+                SyntaxElement::Node(node) => docs.push(self.item(node)),
+            }
+        }
+    }
+
+    /// An item, import or inner attribute: its header laid out, or the
+    /// whole node verbatim when the header has a comment or a line break
+    /// the layout has no place for.
+    fn item(&mut self, node: SyntaxNode<'t>) -> Doc {
+        let anchor = self.src.node_line_indent(node);
+        let saved = std::mem::take(&mut self.coverage);
+        let laid_out = if is_header(node.kind()) {
+            self.header(node, anchor)
+        } else {
+            None
+        };
+        let attempt = std::mem::replace(&mut self.coverage, saved);
+        if let Some(doc) = laid_out {
+            self.coverage.add(&attempt);
+            doc
+        } else {
+            self.coverage.verbatim_items = self.coverage.verbatim_items.saturating_add(1);
+            self.verbatim(node, anchor)
+        }
+    }
+
+    /// `node` as verbatim source text.
+    fn verbatim(&mut self, node: SyntaxNode<'t>, anchor: usize) -> Doc {
+        self.coverage.verbatim(node);
+        self.src.node(node, anchor)
+    }
+
+    /// Lays out a header-like node: leading doc comments and attributes on
+    /// lines of their own, then its parts on one line with single spaces,
+    /// the lists among them laid out at the width. `None` when the node has
+    /// a comment or a line break outside its lists and verbatim parts,
+    /// other than one line break after `=`.
+    fn header(&mut self, node: SyntaxNode<'t>, anchor: usize) -> Option<Doc> {
+        self.coverage.laid_out(node.kind());
+        let mut docs: Vec<Doc> = Vec::new();
+        // Line breaks since the last part, doc comment or attribute.
+        let mut newlines = 0usize;
+        // Whether anything was printed yet, and whether the header proper
+        // (after doc comments and attributes) started.
+        let mut any = false;
+        let mut started = false;
+        let mut prev: Option<SyntaxKind> = None;
+        for child in node.children_with_tokens() {
+            let kind = child.kind();
+            match kind {
+                SyntaxKind::WHITESPACE => continue,
+                SyntaxKind::NEWLINE => {
+                    newlines = newlines.saturating_add(1);
+                    continue;
+                }
+                SyntaxKind::COMMENT | SyntaxKind::MODULE_DOC => return None,
+                _ => {}
+            }
+            let leading = matches!(kind, SyntaxKind::DOC_COMMENT | SyntaxKind::ATTR);
+            if leading {
+                if started {
+                    return None;
+                }
+                if any && newlines >= 2 {
+                    docs.push(Doc::hardline());
+                }
+                let line = match child {
+                    SyntaxElement::Token(token) => Doc::text(comment_text(token)),
+                    SyntaxElement::Node(attr) => {
+                        let attr_anchor = self.src.node_line_indent(attr);
+                        self.header(attr, attr_anchor)?
+                    }
+                };
+                docs.push(line);
+                docs.push(Doc::hardline());
+                any = true;
+                newlines = 0;
+                continue;
+            }
+            // A part of the header proper.
+            let mut break_before = false;
+            if started && newlines > 0 {
+                if newlines == 1 && prev == Some(SyntaxKind::EQ) {
+                    break_before = true;
+                } else {
+                    return None;
+                }
+            } else if !started && any && newlines >= 2 {
+                docs.push(Doc::hardline());
+            }
+            let part = match child {
+                SyntaxElement::Token(token) => Doc::text(token.text()),
+                SyntaxElement::Node(part) => {
+                    let part_anchor = if break_before {
+                        self.src.node_line_indent(part)
+                    } else {
+                        anchor
+                    };
+                    self.part(part, part_anchor)?
+                }
+            };
+            if break_before {
+                docs.push(Doc::nest(INDENT, Doc::concat(vec![Doc::hardline(), part])));
+            } else {
+                let space = started && !tight_before(kind) && !prev.is_some_and(tight_after);
+                if space {
+                    docs.push(Doc::text(" "));
+                }
+                docs.push(part);
+            }
+            started = true;
+            any = true;
+            newlines = 0;
+            prev = Some(kind);
+        }
+        Some(Doc::concat(docs))
+    }
+
+    /// A node inside a header: a list, a nested header, an interface body,
+    /// or verbatim text.
+    fn part(&mut self, node: SyntaxNode<'t>, anchor: usize) -> Option<Doc> {
+        let kind = node.kind();
+        if let Some(delims) = list_delims(kind) {
+            return self.list(node, delims);
+        }
+        if kind == SyntaxKind::INTERFACE_BODY {
+            return self.interface_body(node);
+        }
+        if is_header(kind) {
+            return self.header(node, anchor);
+        }
+        Some(self.verbatim(node, anchor))
+    }
+
+    /// An element of a list: laid out when it is header-like, else (or when
+    /// its layout fails) verbatim.
+    fn element(&mut self, elem: SyntaxElement<'t>) -> Doc {
+        match elem {
+            SyntaxElement::Token(token) => Doc::text(token.text()),
+            SyntaxElement::Node(node) => {
+                let anchor = self.src.node_line_indent(node);
+                if !is_header(node.kind()) {
+                    return self.verbatim(node, anchor);
+                }
+                let saved = std::mem::take(&mut self.coverage);
+                let laid_out = self.header(node, anchor);
+                let attempt = std::mem::replace(&mut self.coverage, saved);
+                if let Some(doc) = laid_out {
+                    self.coverage.add(&attempt);
+                    doc
+                } else {
+                    self.verbatim(node, anchor)
+                }
+            }
+        }
+    }
+
+    /// A comma-separated list between delimiters. Flat when it fits and
+    /// has no comment, blank line or multi-line element; otherwise one
+    /// element per line with a trailing comma. `None` when a comment sits
+    /// where the layout has no place for it.
+    ///
+    /// GAP(fmt-trailing-comma): a laid-out list has a trailing comma exactly
+    /// when it is broken over lines (AGENTS.md's style), so the formatter
+    /// adds or removes that one comma. GAP(fmt-list-blank-lines): a blank
+    /// line kept between two elements (D-1030) breaks the list.
+    fn list(&mut self, node: SyntaxNode<'t>, delims: Delims) -> Option<Doc> {
+        self.coverage.laid_out(node.kind());
+        let children: Vec<SyntaxElement<'t>> = node.children_with_tokens().collect();
+        let (open, rest) = children.split_first()?;
+        let (close, inner) = rest.split_last()?;
+        let (open, close) = (open.as_token()?, close.as_token()?);
+        if !matches!(
+            open.kind(),
+            SyntaxKind::L_PAREN | SyntaxKind::LT | SyntaxKind::L_BRACE
+        ) || !matches!(
+            close.kind(),
+            SyntaxKind::R_PAREN | SyntaxKind::GT | SyntaxKind::R_BRACE
+        ) {
+            return None;
+        }
+        let parsed = parse_list(inner)?;
+        let open_text = Doc::text(open.text());
+        let close_text = Doc::text(close.text());
+        if parsed.items.is_empty() && parsed.dangling.is_empty() && parsed.open_comment.is_none() {
+            return Some(Doc::concat(vec![open_text, close_text]));
+        }
+        let elems: Vec<Doc> = parsed
+            .items
+            .iter()
+            .map(|item| self.element(item.elem))
+            .collect();
+        let forced = parsed.open_comment.is_some()
+            || !parsed.dangling.is_empty()
+            || parsed.items.iter().enumerate().any(|(i, item)| {
+                !item.leading.is_empty() || item.trailing.is_some() || (i > 0 && item.blank_before)
+            })
+            || elems.iter().any(Doc::has_hard_break);
+
+        if forced {
+            let mut body = Vec::new();
+            for (i, (item, elem)) in parsed.items.iter().zip(elems).enumerate() {
+                body.push(Doc::hardline());
+                if i > 0 && item.blank_before {
+                    body.push(Doc::hardline());
+                }
+                for (j, comment) in item.leading.iter().enumerate() {
+                    if j > 0 && comment.blank_before {
+                        body.push(Doc::hardline());
+                    }
+                    body.push(Doc::text(comment.text));
+                    body.push(Doc::hardline());
+                }
+                if item.blank_after_leading {
+                    body.push(Doc::hardline());
+                }
+                body.push(elem);
+                body.push(Doc::text(","));
+                if let Some(trailing) = item.trailing {
+                    body.push(Doc::text(" "));
+                    body.push(Doc::comment(trailing));
+                }
+            }
+            for (j, comment) in parsed.dangling.iter().enumerate() {
+                body.push(Doc::hardline());
+                if (j > 0 || !parsed.items.is_empty()) && comment.blank_before {
+                    body.push(Doc::hardline());
+                }
+                body.push(Doc::text(comment.text));
+            }
+            let mut docs = vec![open_text];
+            if let Some(comment) = parsed.open_comment {
+                docs.push(Doc::text(" "));
+                docs.push(Doc::comment(comment));
+            }
+            docs.push(Doc::nest(INDENT, Doc::concat(body)));
+            docs.push(Doc::hardline());
+            docs.push(close_text);
+            return Some(Doc::concat(docs));
+        }
+
+        let edge = || match delims {
+            Delims::Tight => Doc::softline(),
+            Delims::Spaced => Doc::line(),
+        };
+        let mut body = vec![edge()];
+        for (i, elem) in elems.into_iter().enumerate() {
+            if i > 0 {
+                body.push(Doc::text(","));
+                body.push(Doc::line());
+            }
+            body.push(elem);
+        }
+        body.push(Doc::if_break(Doc::text(","), Doc::Nil));
+        Some(Doc::group(Doc::concat(vec![
+            open_text,
+            Doc::nest(INDENT, Doc::concat(body)),
+            edge(),
+            close_text,
+        ])))
+    }
+
+    /// An interface body: `{}` when empty, else one function per line.
+    fn interface_body(&mut self, node: SyntaxNode<'t>) -> Option<Doc> {
+        self.coverage.laid_out(node.kind());
+        let children: Vec<SyntaxElement<'t>> = node.children_with_tokens().collect();
+        let (open, rest) = children.split_first()?;
+        let (close, _) = rest.split_last()?;
+        if open.kind() != SyntaxKind::L_BRACE || close.kind() != SyntaxKind::R_BRACE {
+            return None;
+        }
+        let mut entries = entries(node, Some((SyntaxKind::L_BRACE, SyntaxKind::R_BRACE)));
+        if entries.is_empty() {
+            return Some(Doc::text("{}"));
+        }
+        if entries.iter().any(|e| {
+            !matches!(e.elem, SyntaxElement::Node(n) if n.kind() == SyntaxKind::INTERFACE_FN)
+                && !is_comment(e.elem.kind())
+        }) {
+            return None;
+        }
+        let mut docs = vec![Doc::text("{")];
+        // A comment on the line of `{` stays there.
+        let mut start = 0;
+        if let Some(first) = entries.first()
+            && first.newlines == 0
+            && is_comment(first.elem.kind())
+        {
+            docs.push(Doc::text(" "));
+            docs.push(Doc::comment(first.elem.text().trim_end()));
+            start = 1;
+        }
+        let body_entries = entries.split_off(start);
+        if !body_entries.is_empty() {
+            let mut body = vec![Doc::hardline()];
+            self.interface_lines(&body_entries, &mut body);
+            docs.push(Doc::nest(INDENT, Doc::concat(body)));
+        }
+        docs.push(Doc::hardline());
+        docs.push(Doc::text("}"));
+        Some(Doc::concat(docs))
+    }
+
+    /// The lines of an interface body, as [`Self::lines`] but laying out
+    /// each function as a header, or verbatim when it cannot be. The first
+    /// entry starts a line of its own whatever the source had.
+    fn interface_lines(&mut self, entries: &[Entry<'t>], docs: &mut Vec<Doc>) {
+        for (i, entry) in entries.iter().enumerate() {
+            if i > 0 {
+                match entry.newlines {
+                    0 => docs.push(Doc::text(" ")),
+                    1 => docs.push(Doc::hardline()),
+                    _ => {
+                        docs.push(Doc::hardline());
+                        docs.push(Doc::hardline());
+                    }
+                }
+            }
+            match entry.elem {
+                SyntaxElement::Token(token) => {
+                    if i > 0 && entry.newlines == 0 {
+                        docs.push(Doc::comment(comment_text(token)));
+                    } else {
+                        docs.push(Doc::text(comment_text(token)));
+                    }
+                }
+                SyntaxElement::Node(node) => docs.push(self.element(SyntaxElement::Node(node))),
+            }
+        }
+    }
+}
+
+/// A list's contents split into elements and comments.
+struct ParsedList<'t> {
+    open_comment: Option<&'t str>,
+    items: Vec<ListItem<'t>>,
+    dangling: Vec<OwnLineComment<'t>>,
+}
+
+/// What the list walk read last, comments and line breaks aside.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Last {
+    Open,
+    Elem,
+    Comma,
+}
+
+/// Splits the elements between a list's delimiters into elements with
+/// their comments. `None` for a comment between an element and its comma,
+/// or two elements without a comma between them.
+fn parse_list<'t>(inner: &[SyntaxElement<'t>]) -> Option<ParsedList<'t>> {
+    let mut parsed = ParsedList {
+        open_comment: None,
+        items: Vec::new(),
+        dangling: Vec::new(),
+    };
+    let mut phase = Last::Open;
+    let mut newlines = 0usize;
+    let mut pending: Vec<OwnLineComment<'t>> = Vec::new();
+    // Whether the previous item's trailing comment came before its comma.
+    let mut comment_before_comma = false;
+    for &child in inner {
+        match child.kind() {
+            SyntaxKind::WHITESPACE => {}
+            SyntaxKind::NEWLINE => newlines = newlines.saturating_add(1),
+            kind if is_comment(kind) => {
+                let text = child.as_token().map_or("", comment_text);
+                if newlines == 0 {
+                    match phase {
+                        Last::Open => {
+                            if parsed.open_comment.is_some() {
+                                return None;
+                            }
+                            parsed.open_comment = Some(text);
+                        }
+                        Last::Elem | Last::Comma => {
+                            let item = parsed.items.last_mut()?;
+                            if item.trailing.is_some() || !pending.is_empty() {
+                                return None;
+                            }
+                            item.trailing = Some(text);
+                            comment_before_comma = phase == Last::Elem;
+                        }
+                    }
+                } else {
+                    pending.push(OwnLineComment {
+                        text,
+                        blank_before: newlines >= 2,
+                    });
+                }
+                newlines = 0;
+            }
+            SyntaxKind::COMMA => {
+                if phase != Last::Elem || comment_before_comma || !pending.is_empty() {
+                    return None;
+                }
+                phase = Last::Comma;
+                newlines = 0;
+            }
+            _ => {
+                if phase == Last::Elem {
+                    return None;
+                }
+                let blank_before = pending.first().map_or(newlines >= 2, |c| c.blank_before);
+                parsed.items.push(ListItem {
+                    blank_after_leading: !pending.is_empty() && newlines >= 2,
+                    leading: std::mem::take(&mut pending),
+                    elem: child,
+                    trailing: None,
+                    blank_before,
+                });
+                comment_before_comma = false;
+                phase = Last::Elem;
+                newlines = 0;
+            }
+        }
+    }
+    parsed.dangling = pending;
+    Some(parsed)
+}
+
+/// The children of `node` that are not whitespace or line breaks, each
+/// with the number of line breaks before it. With `delims`, the first and
+/// last children (the delimiters) are left out.
+fn entries<'t>(node: SyntaxNode<'t>, delims: Option<(SyntaxKind, SyntaxKind)>) -> Vec<Entry<'t>> {
+    let mut out = Vec::new();
+    let mut newlines = 0usize;
+    let children: Vec<SyntaxElement<'t>> = node.children_with_tokens().collect();
+    let inner = match delims {
+        Some(_) => children
+            .get(1..children.len().saturating_sub(1))
+            .unwrap_or(&[]),
+        None => &children[..],
+    };
+    for &child in inner {
+        match child.kind() {
+            SyntaxKind::WHITESPACE => {}
+            SyntaxKind::NEWLINE => newlines = newlines.saturating_add(1),
+            _ => {
+                out.push(Entry {
+                    elem: child,
+                    newlines,
+                });
+                newlines = 0;
+            }
+        }
+    }
+    out
+}
+
+/// Sorts each block of imports by its module path's text in byte order
+/// (D-1030). GAP(fmt-import-blocks): a block is a run of imports on
+/// consecutive lines with no blank line or comment between or after them;
+/// equal paths are ordered by the import's whole text.
+fn sort_import_blocks(entries: &mut [Entry<'_>]) {
+    let is_import = |e: &Entry<'_>| {
+        matches!(e.elem, SyntaxElement::Node(n)
+            if n.kind() == SyntaxKind::IMPORT_DECL
+                && !n.tokens().any(|t| is_comment(t.kind())))
+    };
+    let mut i = 0;
+    while i < entries.len() {
+        let Some(first) = entries.get(i) else { break };
+        if !is_import(first) {
+            i = i.saturating_add(1);
+            continue;
+        }
+        let mut end = i.saturating_add(1);
+        while let Some(next) = entries.get(end) {
+            if next.newlines == 1 && is_import(next) {
+                end = end.saturating_add(1);
+            } else {
+                break;
+            }
+        }
+        // An import followed by a comment on its own line keeps its place.
+        if entries
+            .get(end)
+            .is_some_and(|e| e.newlines == 0 && is_comment(e.elem.kind()))
+        {
+            end = end.saturating_sub(1);
+        }
+        if let Some(block) = entries.get_mut(i..end)
+            && block.len() > 1
+        {
+            let first_newlines = block.first().map_or(0, |e| e.newlines);
+            block.sort_by_cached_key(|e| match e.elem {
+                SyntaxElement::Node(n) => (import_path(n), spaced_text(n)),
+                SyntaxElement::Token(_) => (String::new(), String::new()),
+            });
+            for (k, e) in block.iter_mut().enumerate() {
+                e.newlines = if k == 0 { first_newlines } else { 1 };
+            }
+        }
+        i = end.max(i.saturating_add(1));
+    }
+}
+
+/// The text of an import's module path, such as `std::map`.
+fn import_path(node: SyntaxNode<'_>) -> String {
+    node.children()
+        .find(|c| c.kind() == SyntaxKind::MODULE_PATH)
+        .map(compact_text)
+        .unwrap_or_default()
+}

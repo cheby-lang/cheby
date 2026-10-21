@@ -554,7 +554,7 @@ fn load_const_reads_the_slot() {
     let (mut jit, target) = build();
     let clif = jit.take_clif().join("\n");
     assert!(clif.contains("= cb$const$app$LIMIT"), "{clif}");
-    assert!(clif.contains("= cheby_rt_const_missing"), "{clif}");
+    assert!(clif.contains("= cb$imp$cheby_rt_const_missing"), "{clif}");
     let slot = jit.const_slot(constant).unwrap();
     // SAFETY: the slot is a live, aligned word of the JIT.
     assert_eq!(unsafe { slot.read() }, 0);

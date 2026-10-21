@@ -18,7 +18,7 @@ Design documents:
 
 Implementation:
 
-- `crates/`: the Cargo workspace, 20 `cheby_*` crates (D-270, D-284). [`docs/plan/architecture.md`](docs/plan/architecture.md) describes each crate and the compiler pipeline.
+- `crates/`: the Cargo workspace, 21 `cheby_*` crates (D-270, D-284). [`docs/plan/architecture.md`](docs/plan/architecture.md) describes each crate and the compiler pipeline.
 - `std/`: the standard library's Cheby sources, with their `test` blocks next to the code (D-479).
 - `tests/`: the conformance, UI and REPL harnesses and their inputs, `tests/support` (shared harness code), `tests/milestone` and `tests/tree-sitter-cheby.rev`.
 - `xtask/`: developer commands, run as `cargo xtask <command>`.

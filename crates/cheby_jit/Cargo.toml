@@ -15,7 +15,6 @@ cheby_iface.workspace = true
 cranelift-codegen.workspace = true
 cranelift-jit.workspace = true
 cranelift-module.workspace = true
-cranelift-native.workspace = true
 rustc-hash.workspace = true
 wasmtime-internal-jit-icache-coherence.workspace = true
 

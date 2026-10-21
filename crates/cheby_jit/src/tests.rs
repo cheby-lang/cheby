@@ -1067,6 +1067,72 @@ fn batches_may_call_a_foreign_symbol_with_new_signatures() {
     assert_eq!(run_const(&jit, def(1, 101)), EntryOutcome::Returned(5));
 }
 
+/// Whether every import word `jit` declared is defined, with the words.
+fn words_defined(jit: &Jit) -> (bool, Vec<String>) {
+    let words = jit.decls.import_words();
+    let all = words.iter().all(|&(_, defined)| defined);
+    (all, words.iter().map(|&(s, _)| s.to_owned()).collect())
+}
+
+/// A batch that fails restores the JIT's declarations, so it leaves no
+/// import word declared and undefined (D-913): the next batch that uses
+/// the same symbol declares its word again and defines it, and a session's
+/// later batches share the words of its earlier ones
+/// (GAP(jit-import-words-per-session)).
+#[cfg(unix)]
+#[test]
+fn failed_batches_leave_no_import_word_undefined() {
+    use cheby_mir::CType;
+    let mut jit = Jit::new().unwrap();
+    // The first batch fails: nothing of it stays, the runtime's words
+    // included.
+    let failed = labs_batch(0, labs_wrapper(0, &[CType::I64], &[-3], true));
+    let err = jit.compile(&failed).unwrap_err();
+    assert!(matches!(err, JitError::UnresolvedSymbols(_)), "{err}");
+    assert_eq!(jit.decls.import_words(), Vec::<(&str, bool)>::new());
+    jit.compile(&labs_batch(1, labs_wrapper(1, &[CType::I64], &[-5], false)))
+        .unwrap();
+    let (all, words) = words_defined(&jit);
+    assert!(all, "{words:?}");
+    assert!(words.iter().any(|w| w == "labs"), "{words:?}");
+    assert!(words.iter().any(|w| w == sym::ALLOC), "{words:?}");
+    assert!(
+        !words.iter().any(|w| w == "cheby_no_such_symbol_anywhere"),
+        "{words:?}"
+    );
+    assert_eq!(run_const(&jit, def(1, 101)), EntryOutcome::Returned(5));
+    // A failure after a batch compiled keeps that batch's words, defined.
+    let err = jit
+        .compile(&labs_batch(2, labs_wrapper(2, &[CType::I64], &[-7], true)))
+        .unwrap_err();
+    assert!(matches!(err, JitError::UnresolvedSymbols(_)), "{err}");
+    assert_eq!(words_defined(&jit), (true, words.clone()));
+    // A later batch uses the session's word for `labs`.
+    jit.compile(&labs_batch(3, labs_wrapper(3, &[CType::I64], &[-9], false)))
+        .unwrap();
+    assert_eq!(words_defined(&jit), (true, words));
+    assert_eq!(run_const(&jit, def(1, 103)), EntryOutcome::Returned(9));
+    assert_eq!(run_const(&jit, def(1, 101)), EntryOutcome::Returned(5));
+}
+
+/// The JIT compiles for [`cheby_codegen_clif::isa::host_isa`], the
+/// target's fixed feature set (D-921), not the host's detected features.
+#[test]
+fn isa_fixed_the_jit_uses_the_fixed_isa() {
+    let jit = Jit::new().unwrap();
+    let fixed = cheby_codegen_clif::isa::host_isa().unwrap();
+    let flags = |isa: &dyn cranelift_codegen::isa::TargetIsa| -> Vec<String> {
+        isa.isa_flags().iter().map(ToString::to_string).collect()
+    };
+    assert_eq!(flags(jit.module.isa()), flags(&*fixed));
+    assert_eq!(
+        jit.module.isa().flags().to_string(),
+        fixed.flags().to_string()
+    );
+    assert_eq!(jit.module.isa().triple(), fixed.triple());
+    assert!(!jit.module.isa().flags().is_pic());
+}
+
 /// Compile speed of the debug toolchain (plan §4.4): translates and
 /// compiles 400 functions of 40 blocks each and prints the time. Run with
 /// `cargo test -p cheby_jit -- --ignored compile_speed_probe --nocapture`.

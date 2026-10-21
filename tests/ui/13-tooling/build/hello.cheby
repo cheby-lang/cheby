@@ -1,0 +1,12 @@
+// @mode: run-pass
+// @command: build
+// @milestone: M3
+// @decisions: D-1026, D-937
+//! `cheby build` builds the package's `main` into an executable, which
+//! prints the same output as `cheby run`.
+
+import std::io
+
+fn main() {
+  io::println("Hello from an executable!")
+}

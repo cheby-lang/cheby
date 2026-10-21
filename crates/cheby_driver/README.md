@@ -13,6 +13,8 @@ A build runs these steps, each in the crate named:
 3. **Back end**, for `run` and `test`: `cheby_mir` lowers the items reachable from `main` or the tests across modules (D-510), the RC passes run over all units, `cheby_codegen_clif` and `cheby_jit` compile one batch, and `cheby_consteval` evaluates the constants the code reaches. Unresolved native symbols (E0053) and constant errors are reported like compile errors before anything runs.
 4. **Running:** `main`, each test or each REPL entry runs as a root fiber of one `cheby_runtime::Runtime` per host run (D-690), with the exit statuses of §10.10 and the leak check of debug builds.
 
+Every phase that reads other modules' interfaces, outside std, reads them through a recording view (D-955): `Checked::front_reads` holds what resolution and checking read beyond a module's imports, and the back end's `Lowered::reads` what lowering and borrow inference read beyond those, per code unit and tests unit. Debug toolchains decode every interface they build and compare it with the original (D-954).
+
 Output is deterministic whatever the number of threads (D-264): results are merged in a fixed order, the first error in build order is reported, and diagnostics are sorted by `SourceMap::sort`. `configure_jobs` sizes the pool for `-j`.
 
 The standard library's sources in `std/` are embedded in the binary by `std_lib.rs` (D-450). A build parses and checks only the std modules its imports reach and the shipped home modules (D-447), and `test_std` runs std's own `test` blocks for `cargo xtask test-std` (D-479, D-599). A std module listed in `STAGED_STD_MODULES` is embedded but not loadable until it moves to `STD_MODULES` (D-486).
@@ -24,11 +26,13 @@ The standard library's sources in `std/` are embedded in the binary by `std_lib.
 | `lib.rs`             | `load_package`, `check`, `check_with`, `check_syntax`, `prepare_run`, `Program`, `run`, `dump_mir`, `dump_clif`, `bench_build`, `configure_jobs`, `render_diagnostics` |
 | `frontend.rs`        | The build graph and the front-end phases                                                                                                                               |
 | `backend.rs`         | MIR lowering, code generation, constant evaluation and running                                                                                                         |
+| `cache/`             | The build cache's store (D-956 to D-961, D-973): keys, blobs, records and hints, the location and permission checks, trimming and `CHEBY_CACHE_LOG`                    |
 | `test.rs`            | `prepare_test`, `TestProgram` and `test_std`: `cheby test` (§13.6, D-541) and std's self-test                                                                          |
 | `session.rs`         | REPL sessions: checking each entry as the module `<repl:N>`, redefinition, `:module` and `:reload` (§13.5, D-606, D-625)                                               |
 | `std_lib.rs`         | The embedded standard library and its catalog                                                                                                                          |
 | `reuse_report.rs`    | `--reuse-report`: where reuse in place happens or not, and why (D-717)                                                                                                 |
 | `lifecycle_tests.rs` | Tests of runtime creation and shutdown per host                                                                                                                        |
+| `reads_tests.rs`     | Tests of the recorded hidden reads (D-955)                                                                                                                             |
 
 ## Tests
 

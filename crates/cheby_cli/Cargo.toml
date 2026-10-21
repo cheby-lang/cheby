@@ -26,6 +26,12 @@ mimalloc.workspace = true
 [dev-dependencies]
 cheby_test_support.workspace = true
 libtest-mimic.workspace = true
+# `src/build_id.rs`'s tests include `build.rs` (D-957).
+siphasher.workspace = true
+
+# `build.rs` computes the build ID (D-957).
+[build-dependencies]
+siphasher.workspace = true
 
 # The harnesses live under tests/ at the repository root (docs/plan/testing.md),
 # but are test targets of this crate so that `cargo test` builds `cheby` first.

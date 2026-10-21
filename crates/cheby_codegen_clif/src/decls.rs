@@ -44,18 +44,38 @@ pub struct SlotKey {
     pub sig: AbiSig,
 }
 
-/// How a foreign symbol was imported ([`ForeignImport`]).
+/// How a foreign symbol was imported ([`ForeignImport`]): through its
+/// import word, which every call site loads and calls with its own C
+/// signature (D-913, D-475).
 #[derive(Clone, Debug)]
-pub(crate) enum ForeignDecl {
-    /// A function import with its one C signature.
-    Function(FuncId, Signature),
-    /// The symbol's address as a data import, called indirectly with each
-    /// call site's C signature.
+pub(crate) struct ForeignDecl {
+    /// The import word `cb$imp$<symbol>` ([`Decls::import_word`]).
+    pub(crate) word: DataId,
+    /// The one C signature of the symbol under
+    /// [`ForeignImport::Function`]; `None` under [`ForeignImport::Address`],
+    /// whose import carries no signature.
+    pub(crate) signature: Option<Signature>,
+}
+
+/// How [`Decls::import_word`] declares the symbol an import word holds,
+/// with `Linkage::Import`.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum ImportTarget<'s> {
+    /// A function with its C signature: a runtime function, or a foreign
+    /// symbol under [`ForeignImport::Function`].
+    Function(&'s Signature),
+    /// A symbol with no signature: a runtime static, or a foreign symbol
+    /// under [`ForeignImport::Address`]. A symbol the module already
+    /// declares (a runtime function named by an `@external`) keeps its
+    /// declaration.
+    Data,
+}
+
+/// The declaration an import word's data relocation names.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum ImportRef {
+    Func(FuncId),
     Data(DataId),
-    /// The address of a symbol the module already imports as a function
-    /// (a runtime function), called indirectly with each call site's C
-    /// signature. The declared signature is only needed to name it.
-    FunctionAddress(FuncId, Signature),
 }
 
 /// A declared indirection slot (D-043).
@@ -111,11 +131,19 @@ pub struct Decls {
     funcs: FxHashMap<FnKey, FuncDecl>,
     slots: FxHashMap<SlotKey, SlotDecl>,
     strings: FxHashMap<(FnKey, StrId), DataId>,
-    /// By [`RuntimeFunc::index`]; `None` for a function declared on demand
+    /// By [`RuntimeFunc::index`]: the function's import word and C
+    /// signature; `None` for a function declared on demand
     /// ([`RuntimeFunc::on_demand`]) that no unit has used yet.
-    runtime: Vec<Option<(FuncId, Signature)>>,
+    runtime: Vec<Option<(DataId, Signature)>>,
+    /// The runtime's static objects, by symbol: their `Linkage::Import`
+    /// declarations, which static objects' fields name (code loads their
+    /// import words instead).
     static_data: FxHashMap<&'static str, DataId>,
     foreign: FxHashMap<Box<str>, ForeignDecl>,
+    /// The import word `cb$imp$<symbol>` of every runtime function,
+    /// runtime static and foreign symbol declared so far, by symbol
+    /// (D-913). In the JIT the words of a session serve all its batches.
+    imports: FxHashMap<Box<str>, DataId>,
     test_ordinals: FxHashMap<DefId, u32>,
     next_test: FxHashMap<ModuleId, u32>,
     /// User constructor layouts (D-454).
@@ -143,6 +171,8 @@ pub struct Decls {
     /// The ABI signature of every slot, including slots a newer one of the
     /// same path replaced in `slots`.
     slot_sigs: FxHashMap<DataId, AbiSig>,
+    /// Import words to define, with the declaration each holds.
+    pub(crate) pending_imports: Vec<(DataId, ImportRef)>,
     pub(crate) pending_strings: Vec<(DataId, Vec<u8>)>,
     pub(crate) pending_slots: Vec<(DataId, FuncId)>,
     /// Existing slots to point at new code once the batch is finalized: a
@@ -315,6 +345,7 @@ impl Decls {
             runtime: Vec::new(),
             static_data: FxHashMap::default(),
             foreign: FxHashMap::default(),
+            imports: FxHashMap::default(),
             test_ordinals: FxHashMap::default(),
             next_test: FxHashMap::default(),
             layouts: FxHashMap::default(),
@@ -326,6 +357,7 @@ impl Decls {
             session: SessionNames::default(),
             def_slots: FxHashMap::default(),
             slot_sigs: FxHashMap::default(),
+            pending_imports: Vec::new(),
             pending_strings: Vec::new(),
             pending_slots: Vec::new(),
             pending_repoints: Vec::new(),
@@ -517,7 +549,8 @@ impl Decls {
             .ok_or_else(|| CodegenError::ice(format!("string {id:?} of {key:?} was not declared")))
     }
 
-    pub(crate) fn runtime(&self, f: RuntimeFunc) -> Result<(FuncId, &Signature), CodegenError> {
+    /// The import word of the runtime function `f` and its C signature.
+    pub(crate) fn runtime(&self, f: RuntimeFunc) -> Result<(DataId, &Signature), CodegenError> {
         self.runtime
             .get(f.index())
             .and_then(Option::as_ref)
@@ -528,6 +561,91 @@ impl Decls {
                     f.symbol()
                 ))
             })
+    }
+
+    /// The import word of the runtime or foreign symbol `symbol` (D-913).
+    pub(crate) fn import(&self, symbol: &str) -> Result<DataId, CodegenError> {
+        self.imports
+            .get(symbol)
+            .copied()
+            .ok_or_else(|| CodegenError::ice(format!("`{symbol}` has no import word")))
+    }
+
+    /// The symbol of every import word declared so far, sorted, each with
+    /// whether its word is defined in the module: for tests, which check
+    /// that a failed batch leaves no word declared and undefined.
+    #[must_use]
+    pub fn import_words(&self) -> Vec<(&str, bool)> {
+        let mut out: Vec<(&str, bool)> = self
+            .imports
+            .iter()
+            .map(|(symbol, id)| (symbol.as_ref(), self.defined_data.contains(id)))
+            .collect();
+        out.sort_unstable();
+        out
+    }
+
+    /// The import word `cb$imp$<symbol>` of the runtime or foreign symbol
+    /// `symbol` (D-913, D-917's `imp` kind): a read-only 8-byte data object,
+    /// `Linkage::Local`, defined by the next [`crate::define`] with one
+    /// `Abs8` data relocation to `symbol`, which is declared here with
+    /// `Linkage::Import` as `target` says. Code loads the word and calls
+    /// the address or uses it as the static's, so text never names a
+    /// runtime or foreign symbol. Every import word is declared here, once
+    /// per [`Decls`]: a JIT session's later batches use the words of its
+    /// earlier ones.
+    ///
+    /// GAP(jit-import-words-per-session): one JIT module holds every batch
+    /// of a session, so its words are declared once and shared by later
+    /// batches; objects get per-unit copies from wave 2 (D-917, D-918).
+    ///
+    /// Under [`ImportTarget::Function`] the symbol is declared as a
+    /// function each time, so a second signature for it is the module's
+    /// error, as before import words.
+    ///
+    /// # Errors
+    ///
+    /// The module's error if a declaration conflicts with an earlier one.
+    pub(crate) fn import_word<M: Module>(
+        &mut self,
+        module: &mut M,
+        symbol: &str,
+        target: ImportTarget<'_>,
+    ) -> Result<DataId, CodegenError> {
+        let declared = match target {
+            ImportTarget::Function(signature) => {
+                let id = module
+                    .declare_function(symbol, Linkage::Import, signature)
+                    .map_err(|e| CodegenError::module(&e))?;
+                self.names.insert((0, id.as_u32()), symbol.to_owned());
+                Some(ImportRef::Func(id))
+            }
+            ImportTarget::Data => None,
+        };
+        if let Some(&word) = self.imports.get(symbol) {
+            return Ok(word);
+        }
+        let declared = match declared {
+            Some(declared) => declared,
+            // A symbol the module already declares: a runtime function an
+            // `@external` names, or a declaration a failed batch left in
+            // the module after its tables were restored.
+            None => match module.get_name(symbol) {
+                Some(FuncOrDataId::Func(id)) => {
+                    self.names.insert((0, id.as_u32()), symbol.to_owned());
+                    ImportRef::Func(id)
+                }
+                Some(FuncOrDataId::Data(id)) => {
+                    self.names.insert((1, id.as_u32()), symbol.to_owned());
+                    ImportRef::Data(id)
+                }
+                None => ImportRef::Data(self.data(module, symbol, Linkage::Import, false)?),
+            },
+        };
+        let word = self.data(module, &mangle::import_word(symbol), Linkage::Local, false)?;
+        self.pending_imports.push((word, declared));
+        self.imports.insert(symbol.into(), word);
+        Ok(word)
     }
 
     pub(crate) fn static_data(&self, symbol: &str) -> Result<DataId, CodegenError> {
@@ -720,9 +838,22 @@ impl Decls {
             }
         }
         for symbol in STATIC_DATA {
-            let id = self.data(module, symbol, Linkage::Import, false)?;
-            self.static_data.insert(symbol, id);
+            self.declare_runtime_static(module, symbol)?;
         }
+        Ok(())
+    }
+
+    /// Declares the runtime static `symbol` (`Linkage::Import`), which
+    /// static objects' fields name, and its import word, which code loads
+    /// (D-913).
+    fn declare_runtime_static<M: Module>(
+        &mut self,
+        module: &mut M,
+        symbol: &'static str,
+    ) -> Result<(), CodegenError> {
+        let id = self.data(module, symbol, Linkage::Import, false)?;
+        self.static_data.insert(symbol, id);
+        self.import_word(module, symbol, ImportTarget::Data)?;
         Ok(())
     }
 
@@ -743,10 +874,9 @@ impl Decls {
         }
         let (params, ret) = f.ctypes();
         let signature = sig::c_signature(params, ret, self.call_conv);
-        let id = module
-            .declare_function(f.symbol(), Linkage::Import, &signature)
-            .map_err(|e| CodegenError::module(&e))?;
-        self.names.insert((0, id.as_u32()), f.symbol().to_owned());
+        // The function is declared first, in the order it always was, so
+        // the ids of generated functions do not move (D-264).
+        let id = self.import_word(module, f.symbol(), ImportTarget::Function(&signature))?;
         let slot = self
             .runtime
             .get_mut(f.index())
@@ -805,8 +935,7 @@ impl Decls {
         }
         for symbol in crate::runtime::ON_DEMAND_DATA {
             if !self.static_data.contains_key(symbol) {
-                let id = self.data(module, symbol, Linkage::Import, false)?;
-                self.static_data.insert(symbol, id);
+                self.declare_runtime_static(module, symbol)?;
             }
         }
         Ok(())
@@ -1152,8 +1281,10 @@ impl Decls {
         }
         for desc in descs {
             if !self.builtin_descs.contains_key(&desc) {
-                let id = self.data(module, &builtin_desc_symbol(desc), Linkage::Import, false)?;
+                let symbol = builtin_desc_symbol(desc);
+                let id = self.data(module, &symbol, Linkage::Import, false)?;
                 self.builtin_descs.insert(desc, id);
+                self.import_word(module, &symbol, ImportTarget::Data)?;
             }
         }
         Ok(())
@@ -1278,6 +1409,12 @@ impl Decls {
 
     /// The word a constant field of a static object holds; a string is one
     /// of the static's own (`strings`).
+    ///
+    /// GAP(static-fields-runtime-symbols): a field that holds a runtime
+    /// static (`Nil`, the empty list, a builtin constructor or descriptor)
+    /// names it with the static object's own `Abs8` data relocation, as an
+    /// import word does, since the field must hold the static's address
+    /// itself; only text goes through import words (D-913, D-917).
     fn static_word(
         &self,
         unit: &MirModule,
@@ -1326,11 +1463,12 @@ impl Decls {
             .ok_or_else(|| CodegenError::ice(format!("the constructor {def:?} is not nullary")))
     }
 
-    /// Declares the foreign symbols `function` calls. Under
-    /// [`ForeignImport::Function`] a symbol has one C signature per module;
-    /// under [`ForeignImport::Address`] the import carries no signature, so
-    /// call sites of one symbol may use different ones (a REPL
-    /// redefinition, or a failed batch whose declarations stay).
+    /// Declares the foreign symbols `function` calls, each with its import
+    /// word (D-913). Under [`ForeignImport::Function`] a symbol has one C
+    /// signature per module; under [`ForeignImport::Address`] the import
+    /// carries no signature, so call sites of one symbol may use different
+    /// ones (a REPL redefinition, or a failed batch whose declarations
+    /// stay).
     fn declare_foreign<M: Module>(
         &mut self,
         module: &mut M,
@@ -1363,7 +1501,7 @@ impl Decls {
                 }
                 let signature = sig::foreign_signature(sig, self.call_conv);
                 if let Some(existing) = self.foreign.get(symbol) {
-                    if let ForeignDecl::Function(_, existing) = existing
+                    if let Some(existing) = &existing.signature
                         && *existing != signature
                     {
                         return Err(CodegenError::Module(format!(
@@ -1372,24 +1510,21 @@ impl Decls {
                     }
                     continue;
                 }
+                // D-913: through its import word in both modes; the mode
+                // decides only how the symbol itself is declared.
                 let decl = match import {
-                    ForeignImport::Function => {
-                        let id = module
-                            .declare_function(symbol, Linkage::Import, &signature)
-                            .map_err(|e| CodegenError::module(&e))?;
-                        self.names.insert((0, id.as_u32()), symbol.to_string());
-                        ForeignDecl::Function(id, signature)
-                    }
-                    ForeignImport::Address => {
-                        if let Some(FuncOrDataId::Func(id)) = module.get_name(symbol) {
-                            // Already a function import (a runtime function
-                            // such as `cheby_rt_alloc`): take its address.
-                            let declared = module.declarations().get_function_decl(id);
-                            ForeignDecl::FunctionAddress(id, declared.signature.clone())
-                        } else {
-                            ForeignDecl::Data(self.data(module, symbol, Linkage::Import, false)?)
-                        }
-                    }
+                    ForeignImport::Function => ForeignDecl {
+                        word: self.import_word(
+                            module,
+                            symbol,
+                            ImportTarget::Function(&signature),
+                        )?,
+                        signature: Some(signature),
+                    },
+                    ForeignImport::Address => ForeignDecl {
+                        word: self.import_word(module, symbol, ImportTarget::Data)?,
+                        signature: None,
+                    },
                 };
                 self.foreign.insert(symbol.clone(), decl);
             }

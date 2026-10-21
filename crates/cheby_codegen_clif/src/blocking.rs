@@ -30,8 +30,8 @@
 
 use cranelift_codegen::ir::immediates::Imm64;
 use cranelift_codegen::ir::{
-    self, ExtFuncData, ExternalName, FuncRef, GlobalValueData, InstBuilder, MemFlagsData,
-    Signature, StackSlotData, StackSlotKind, Type, UserExternalName, Value, types,
+    self, ExternalName, GlobalValueData, InstBuilder, MemFlagsData, Signature, StackSlotData,
+    StackSlotKind, Type, UserExternalName, Value, types,
 };
 use cranelift_codegen::isa::CallConv;
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
@@ -40,7 +40,7 @@ use cranelift_module::FuncId;
 use cheby_mir::{CType, ForeignSig};
 
 use crate::CodegenError;
-use crate::decls::{Decls, ForeignDecl};
+use crate::decls::Decls;
 use crate::func::Translator;
 use crate::runtime::RuntimeFunc;
 use crate::sig::{self, WORD};
@@ -101,25 +101,6 @@ fn from_word(b: &mut FunctionBuilder<'_>, ty: CType, word: Value) -> Option<Valu
     })
 }
 
-/// A reference to the function `id` with `signature` in `b`'s function.
-fn import_function(
-    b: &mut FunctionBuilder<'_>,
-    id: FuncId,
-    signature: &Signature,
-    colocated: bool,
-) -> FuncRef {
-    let sig_ref = b.import_signature(signature.clone());
-    let name = b
-        .func
-        .declare_imported_user_function(UserExternalName::new(0, id.as_u32()));
-    b.import_function(ExtFuncData {
-        name: ExternalName::user(name),
-        signature: sig_ref,
-        colocated,
-        patchable: false,
-    })
-}
-
 /// Translates the shim `id` of the blocking foreign function `symbol` with
 /// the C signature `sig` ([`Decls::declare_blocking_shim`]): it loads each
 /// argument from `args[n]` as its C type, calls `symbol` the way a plain
@@ -160,32 +141,24 @@ pub(crate) fn translate_shim(
         // of its word.
         vals.push(b.ins().load(t, flags, args, word_offset(n)?));
     }
-    let inst = match decls.foreign(symbol)?.clone() {
-        ForeignDecl::Function(fid, signature) => {
-            let f = import_function(&mut b, fid, &signature, false);
-            b.ins().call(f, &vals)
-        }
-        ForeignDecl::Data(data) => {
-            let name = b
-                .func
-                .declare_imported_user_function(UserExternalName::new(1, data.as_u32()));
-            let gv = b.create_global_value(GlobalValueData::Symbol {
-                name: ExternalName::user(name),
-                offset: Imm64::new(0),
-                colocated: false,
-                tls: false,
-            });
-            let address = b.ins().symbol_value(WORD, gv);
-            let s = b.import_signature(sig::foreign_signature(sig, c));
-            b.ins().call_indirect(s, address, &vals)
-        }
-        ForeignDecl::FunctionAddress(fid, declared) => {
-            let f = import_function(&mut b, fid, &declared, false);
-            let address = b.ins().func_addr(WORD, f);
-            let s = b.import_signature(sig::foreign_signature(sig, c));
-            b.ins().call_indirect(s, address, &vals)
-        }
-    };
+    // D-913: the address from the symbol's import word, which is
+    // generated and colocated, called with the C signature.
+    let word = decls.foreign(symbol)?.word;
+    let name = b
+        .func
+        .declare_imported_user_function(UserExternalName::new(1, word.as_u32()));
+    let gv = b.create_global_value(GlobalValueData::Symbol {
+        name: ExternalName::user(name),
+        offset: Imm64::new(0),
+        colocated: true,
+        tls: false,
+    });
+    let at = b.ins().symbol_value(WORD, gv);
+    let address = b
+        .ins()
+        .load(WORD, MemFlagsData::trusted().with_readonly(), at, 0);
+    let s = b.import_signature(sig::foreign_signature(sig, c));
+    let inst = b.ins().call_indirect(s, address, &vals);
     let result = b.inst_results(inst).first().copied();
     let word = match (sig.ret, result) {
         (CType::Void, None) => b.ins().iconst(types::I64, 0),
@@ -238,7 +211,7 @@ impl Translator<'_, '_> {
         }
         let ctx = self.ctx()?;
         let args = self.b.ins().stack_addr(WORD, slot, 0);
-        let f = self.func_ref(shim, &shim_signature(self.decls.c_call_conv()), true);
+        let f = self.func_ref(shim, &shim_signature(self.decls.c_call_conv()));
         let shim = self.b.ins().func_addr(WORD, f);
         let count = i64::try_from(vals.len())
             .map_err(|_| CodegenError::ice("too many arguments for a blocking call"))?;

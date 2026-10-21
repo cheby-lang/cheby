@@ -15,7 +15,11 @@
 //!    parallel, and a module's bodies check in parallel too
 //!    (`cheby_types::check_bodies_with`). Each task stores its results by
 //!    module id; they are merged afterwards in the topological order, so
-//!    nothing depends on the schedule.
+//!    nothing depends on the schedule. A module outside std reads through
+//!    a recording view, and the modules it read beyond its imports are its
+//!    front end's hidden reads ([`Checked::front_reads`], D-955). A debug
+//!    toolchain decodes each interface right after building it and
+//!    compares it with the original (D-954).
 //! 5. Across the whole program, like a linker: every native symbol bound
 //!    by an `@external` has one C signature (E0054). The first binding of
 //!    each symbol in the topological order is kept for E0053 when
@@ -43,7 +47,7 @@ use cheby_diag::codes;
 use cheby_diag::{Diagnostic, FileId, SourceMap, Span};
 use cheby_iface::{
     DepView, Globals, Ice, InterfaceSet, ItemSig, ModuleId, ModuleInfo, ModuleInterface,
-    ModuleTable, PackageId, builtin, encode,
+    ModuleTable, PackageId, ReadLog, builtin, encode,
 };
 use cheby_mir::ForeignSig;
 use cheby_mir::repr::foreign_sig_with_context;
@@ -160,6 +164,14 @@ pub(crate) struct Checked {
     /// The module's transitive dependencies, sorted: what its phases may
     /// read (D-246, D-260).
     pub deps: Vec<ModuleId>,
+    /// The front end's hidden reads (D-955, `cache.md` §3.3's `R`): the
+    /// modules whose interfaces resolution, the interface and the bodies
+    /// read through the module's view that are neither the module's
+    /// direct imports, nor std modules (the build ID fixes std), nor the
+    /// builtin module; sorted by id. Empty for std modules, which record
+    /// nothing, and for REPL entries and reloads, which are never cached
+    /// (GAP(repl-reads-unrecorded), D-964).
+    pub front_reads: Vec<ModuleId>,
     pub thir: thir::Module,
     /// The module's interface (also in [`Frontend::set`] for the package's
     /// modules).
@@ -321,6 +333,30 @@ impl ModuleLookup for DriverLookup<'_> {
     }
 }
 
+/// The hidden reads among `read`, the modules a recording view of
+/// `module` handed out (D-955): those that are not `module` itself, a
+/// direct import (`imports`), a std module, the builtin module or one of
+/// `known` (an earlier phase's hidden reads). Sorted by id, as `read` is.
+pub(crate) fn hidden_reads(
+    modules: &ModuleTable,
+    module: ModuleId,
+    read: Vec<ModuleId>,
+    imports: &[ImportTarget],
+    known: &[ModuleId],
+) -> Vec<ModuleId> {
+    let mut hidden = read;
+    hidden.retain(|&m| {
+        m != module
+            && m != ModuleId::BUILTIN
+            && !imports.iter().any(|t| t.module() == Some(m))
+            && !known.contains(&m)
+            && modules
+                .get(m)
+                .is_some_and(|info| info.package != PackageId::STD)
+    });
+    hidden
+}
+
 fn index(module: ModuleId) -> Result<usize, Ice> {
     usize::try_from(module.as_u32()).map_err(|_| Ice::new("module id overflow"))
 }
@@ -469,6 +505,9 @@ pub(crate) fn check_extra_module(
     }
     Ok(Ok(Checked {
         deps,
+        // GAP(repl-reads-unrecorded): REPL entries are never cached
+        // (D-964), so their views record nothing.
+        front_reads: Vec::new(),
         thir,
         interface: Arc::new(iface),
         warnings: diags,
@@ -567,6 +606,9 @@ pub(crate) fn check_reloaded(
         if let Some(slot) = front.checked.get_mut(at) {
             *slot = Some(Checked {
                 deps,
+                // GAP(repl-reads-unrecorded): a reload is never cached
+                // (D-964), so its views record nothing.
+                front_reads: Vec::new(),
                 thir,
                 interface: iface,
                 warnings: Vec::new(),
@@ -752,13 +794,22 @@ impl BuildInputs<'_> {
         let tree = get(self.trees, id)?
             .as_ref()
             .ok_or_else(|| Ice::new(format!("module `{}` has no syntax tree", info.path)))?;
+        // Every phase reads other modules through one view, which records
+        // what it hands out (D-955); std records nothing, since the build
+        // ID fixes it.
+        let log = ReadLog::new();
+        let view = if info.package == PackageId::STD {
+            DepView::new(self.set, &deps)
+        } else {
+            DepView::recording(self.set, &deps, &log)
+        };
         let input = ResolveInput {
             module: id,
             package: info.package,
             tree,
             imports: get(self.imports, id)?,
             targets: get(self.targets, id)?,
-            deps: DepView::new(self.set, &deps),
+            deps: view,
             modules: self.modules,
             globals: self.globals,
             std: StdCatalog { known: self.known },
@@ -774,12 +825,19 @@ impl BuildInputs<'_> {
             package: info.package,
             tree,
             resolved: &resolved,
-            deps: DepView::new(self.set, &deps),
+            deps: view,
             modules: self.modules,
             globals: self.globals,
         };
         let (iface, diags) = build_interface(&types)?;
         early.extend(diags);
+        // D-954: a debug toolchain decodes every interface it encodes and
+        // compares it with the original. A module with an error in its
+        // declarations is never cached (D-964), so it is not checked
+        // (GAP(roundtrip-error-free-only)).
+        if cfg!(debug_assertions) && !early.iter().any(Diagnostic::is_error) {
+            cheby_iface::check_roundtrip(&iface, &view.unrecorded(), self.modules, self.globals)?;
+        }
         let natives = native_bindings(&resolved, &iface, self.globals);
         let iface = Arc::new(iface);
         self.set.publish(Arc::clone(&iface))?;
@@ -792,12 +850,15 @@ impl BuildInputs<'_> {
         let (thir, late) = check_bodies_with(&types, &iface, tests)?;
         let resolved =
             (self.mode == Mode::Check && info.package == PackageId::LOCAL).then_some(resolved);
+        let front_reads =
+            hidden_reads(self.modules, id, log.modules(), get(self.targets, id)?, &[]);
         Ok(ModuleOutput {
             early,
             natives,
             late,
             checked: Checked {
                 deps,
+                front_reads,
                 thir,
                 interface: iface,
                 warnings: Vec::new(),
@@ -1298,6 +1359,10 @@ fn run_inner(
                     package: PackageId::LOCAL,
                     tree,
                     resolved,
+                    // GAP(reads-outside-module-phases): the whole-package
+                    // warnings run over every module at once and record
+                    // nothing; the cache replays them from per-module
+                    // summaries (`cache.md` §4.10).
                     deps: DepView::new(&set, &module.deps),
                     modules: &modules,
                     globals: &globals,

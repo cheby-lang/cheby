@@ -1048,6 +1048,9 @@ mod tests {
     const SWITCH: &str = "the context switch, in assembly";
     const FIRST_FRAME: &str = "the first frame of a fiber, in assembly";
     const NO_FIBERS: &str = "ends the process: no fibers on this target";
+    const EXE_ENTRY: &str = "an executable's entry, called by C `main` with no Cheby frame below it: \
+                             `main` runs on a root fiber whose base catches every unwinding (D-699), \
+                             and a Rust panic aborts at this `extern \"C\"` boundary (D-925)";
     const RELEASES: &str = "calls the guarded slow path, which sets the flag and returns, tests the \
                             flag, then releases words only through `rc::drop`, which never raises \
                             (D-171, D-775)";
@@ -1119,6 +1122,7 @@ mod tests {
         ("fiber/switch/x86_64_sysv.rs", "switch", SWITCH),
         ("fiber/switch/x86_64_sysv.rs", "fiber_entry", FIRST_FRAME),
         ("fiber/switch/unsupported.rs", "switch", NO_FIBERS),
+        ("rt_main.rs", "cheby_rt_main", EXE_ENTRY),
     ];
 
     /// `source` with its comments, and with `strings` its string and

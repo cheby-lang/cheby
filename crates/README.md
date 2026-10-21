@@ -1,6 +1,6 @@
 # The crates
 
-The reference implementation of Cheby is one Cargo workspace of 20 `cheby_*` crates (D-270, D-284). This file says what each crate is for and how the crates depend on each other. Each crate has a `README.md` of its own with its layout. [`docs/plan/architecture.md`](../docs/plan/architecture.md) describes the pipeline, the intermediate representations and the runtime in depth, and is the source for anything this file leaves out.
+The reference implementation of Cheby is one Cargo workspace of 21 `cheby_*` crates (D-270, D-284, D-928). This file says what each crate is for and how the crates depend on each other. Each crate has a `README.md` of its own with its layout. [`docs/plan/architecture.md`](../docs/plan/architecture.md) describes the pipeline, the intermediate representations and the runtime in depth, and is the source for anything this file leaves out.
 
 Every crate is `publish = false`, shares the workspace's version, edition and lints, and is built, tested and linted by the commands in [`AGENTS.md`](../AGENTS.md).
 
@@ -29,6 +29,7 @@ MIR                         cheby_mir        lowering, borrowing, dup/drop, reus
   └──► JavaScript           cheby_js         (M4)
 
 running code                cheby_runtime    memory, kernels, fibers, channels, unwinding
+                            cheby_rt_exe     the runtime archive linked into executables (M3)
 ```
 
 `cheby_driver` runs the phases over a package and `cheby_cli` is the `cheby` binary that calls it. `cheby_diag` sits under everything and holds spans, the source map and diagnostics.
@@ -41,6 +42,7 @@ The crates depend on each other in pipeline order (D-284, D-465). The table list
 | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `cheby_diag`         | nothing internal                                                                                                                                                                                           |
 | `cheby_runtime`      | nothing internal                                                                                                                                                                                           |
+| `cheby_rt_exe`       | `cheby_runtime`, and the external `mimalloc` (D-928); nothing depends on it                                                                                                                                |
 | `cheby_syntax`       | `cheby_diag`                                                                                                                                                                                               |
 | `cheby_package`      | `cheby_diag`                                                                                                                                                                                               |
 | `cheby_iface`        | `cheby_diag`, `cheby_package`                                                                                                                                                                              |
@@ -60,7 +62,7 @@ The crates depend on each other in pipeline order (D-284, D-465). The table list
 | `cheby_pkg`          | `cheby_package`                                                                                                                                                                                            |
 | `cheby_cli`          | `cheby_diag`, `cheby_driver`, `cheby_repl`, `cheby_fmt`, `cheby_lsp`, `cheby_doc`, `cheby_pkg`, `cheby_runtime`                                                                                            |
 
-Read bottom-up, the layers are: `cheby_diag` and `cheby_runtime` at the bottom, then `cheby_syntax` and `cheby_package`, then `cheby_iface`, the vocabulary of every later phase, then `cheby_resolve`, `cheby_types` and `cheby_mir` in order, then the backends, then `cheby_driver`, then the tools and the binary.
+Read bottom-up, the layers are: `cheby_diag` and `cheby_runtime` at the bottom, then `cheby_syntax` and `cheby_package`, then `cheby_iface`, the vocabulary of every later phase, then `cheby_resolve`, `cheby_types` and `cheby_mir` in order, then the backends, then `cheby_driver`, then the tools and the binary. `cheby_rt_exe` stands apart: it wraps `cheby_runtime` into the archive that `cheby build` links into executables, and no crate depends on it (D-928, D-929).
 
 Three rules shape the graph:
 
@@ -83,17 +85,18 @@ Three rules shape the graph:
 | [`cheby_jit`](cheby_jit/README.md)                   | M1        | The Cranelift JIT, the indirection table, entries into generated code            |
 | [`cheby_consteval`](cheby_consteval/README.md)       | M1        | Compile-time evaluation of constants in the JIT                                  |
 | [`cheby_runtime`](cheby_runtime/README.md)           | M1, M2    | Native runtime: memory, kernels, generic operations, fibers, channels, unwinding |
+| [`cheby_rt_exe`](cheby_rt_exe/README.md)             | M3        | The runtime archive of executables: the runtime with mimalloc, as a staticlib    |
 | [`cheby_driver`](cheby_driver/README.md)             | M1        | Runs the phases over a package: `check`, `run`, `test`, REPL sessions, dumps     |
 | [`cheby_repl`](cheby_repl/README.md)                 | M1        | The interactive session of `cheby repl`                                          |
 | [`cheby_cli`](cheby_cli/README.md)                   | M1        | The `cheby` binary and the conformance, UI and REPL harnesses                    |
 | [`cheby_link`](cheby_link/README.md)                 | M3        | AOT object output and linker invocation (skeleton)                               |
 | [`cheby_js`](cheby_js/README.md)                     | M4        | JavaScript emitter and suspension analysis (skeleton)                            |
-| [`cheby_fmt`](cheby_fmt/README.md)                   | M5        | Formatter (skeleton)                                                             |
+| [`cheby_fmt`](cheby_fmt/README.md)                   | M3, M5    | Formatter (`cheby fmt`); its later parts land beside M3 (D-1029)                 |
 | [`cheby_lsp`](cheby_lsp/README.md)                   | M5        | Language server (skeleton)                                                       |
 | [`cheby_doc`](cheby_doc/README.md)                   | M5        | Documentation generator (skeleton)                                               |
 | [`cheby_pkg`](cheby_pkg/README.md)                   | M5        | Dependency resolution, lockfile and fetching (skeleton)                          |
 
-The milestone column names the milestone that gives the crate its first real contents. Milestones are described in [`docs/plan/README.md`](../docs/plan/README.md). M1 is done and M2 is in progress, so the M3 to M5 crates are three-line skeletons that exist so the workspace's shape is fixed from the start (D-284).
+The milestone column names the milestone that gives the crate its first real contents. Milestones are described in [`docs/plan/README.md`](../docs/plan/README.md). M1 and M2 are done and M3 is in progress. `cheby_rt_exe` and `cheby_fmt` have their first contents; the other crates of M3 to M5 are still three-line skeletons that exist so the workspace's shape is fixed from the start (D-284).
 
 ## Outside `crates/`
 

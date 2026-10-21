@@ -20,7 +20,6 @@ rustc-hash.workspace = true
 
 [dev-dependencies]
 cranelift-jit.workspace = true
-cranelift-native.workspace = true
 
 [lints]
 workspace = true

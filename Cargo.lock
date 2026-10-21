@@ -204,6 +204,7 @@ dependencies = [
  "clap",
  "libtest-mimic",
  "mimalloc",
+ "siphasher",
 ]
 
 [[package]]
@@ -218,7 +219,6 @@ dependencies = [
  "cranelift-frontend",
  "cranelift-jit",
  "cranelift-module",
- "cranelift-native",
  "rayon",
  "rustc-hash",
 ]
@@ -266,8 +266,10 @@ dependencies = [
  "cheby_runtime",
  "cheby_syntax",
  "cheby_types",
+ "libc",
  "rayon",
  "rustc-hash",
+ "siphasher",
 ]
 
 [[package]]
@@ -276,6 +278,7 @@ version = "0.0.0"
 dependencies = [
  "cheby_diag",
  "cheby_syntax",
+ "cheby_test_support",
 ]
 
 [[package]]
@@ -300,7 +303,6 @@ dependencies = [
  "cranelift-codegen",
  "cranelift-jit",
  "cranelift-module",
- "cranelift-native",
  "libc",
  "rustc-hash",
  "wasmtime-internal-jit-icache-coherence",
@@ -379,6 +381,15 @@ dependencies = [
  "cheby_package",
  "cheby_syntax",
  "rustc-hash",
+]
+
+[[package]]
+name = "cheby_rt_exe"
+version = "0.0.0"
+dependencies = [
+ "cheby_runtime",
+ "mimalloc",
+ "object",
 ]
 
 [[package]]
@@ -1004,6 +1015,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
 dependencies = [
  "autocfg",
+]
+
+[[package]]
+name = "object"
+version = "0.39.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2e5a6c098c7a3b6547378093f5cc30bc54fd361ce711e05293a5cc589562739b"
+dependencies = [
+ "memchr",
 ]
 
 [[package]]

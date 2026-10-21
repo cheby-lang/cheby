@@ -253,13 +253,9 @@ fn c_signatures_extend_narrow_integers() {
 }
 
 fn module() -> JITModule {
-    let isa = cranelift_native::builder()
-        .unwrap()
-        .finish(isa::flags().unwrap())
-        .unwrap();
     JITModule::new(JITBuilder::with_isa(
-        isa,
-        cranelift_module::default_libcall_names(),
+        isa::host_isa().unwrap(),
+        isa::libcall_names(),
     ))
 }
 
@@ -347,7 +343,8 @@ fn translation_is_pure_and_deterministic() {
     let text = decls.describe(&first);
     assert_eq!(text, decls.describe(&second));
     assert!(text.starts_with("; cb$fn$app$f\n"), "{text}");
-    assert!(text.contains("= cheby_io_print"), "{text}");
+    // D-913: the foreign symbol through its import word.
+    assert!(text.contains("= cb$imp$cheby_io_print"), "{text}");
     assert!(text.contains("= cb$str$fn$app$f$1"), "{text}");
     assert!(text.contains(" tail {"), "{text}");
     let compiled = compile_function(cranelift_module::Module::isa(&m), first).unwrap();
@@ -454,7 +451,8 @@ fn labs_unit(index: u32, params: &[CType]) -> MirModule {
 }
 
 /// Under `ForeignImport::Address` (the JIT's mode) a foreign symbol is a
-/// signature-free data import called with `call_indirect`, so later
+/// signature-free data import, whose address its import word holds
+/// (D-913), called with `call_indirect`, so later
 /// batches may call it with another C signature, as a REPL redefinition
 /// may (D-455 counts only the current definitions). Under
 /// `ForeignImport::Function` a module keeps one signature per symbol.
@@ -479,8 +477,10 @@ fn foreign_imports_by_address_allow_new_signatures() {
         declare(&mut m, &mut decls, &units, &cx, &jit).unwrap();
         let clif = define(&mut m, &units, &mut decls, &cx, &jit).unwrap();
         let text = clif.join("\n");
-        assert!(text.contains("= labs"), "{text}");
+        // D-913: the address loaded from the import word.
+        assert!(text.contains("= cb$imp$labs"), "{text}");
         assert!(text.contains("symbol_value"), "{text}");
+        assert!(text.contains("load.i64 notrap aligned readonly"), "{text}");
         assert!(text.contains("call_indirect"), "{text}");
     }
     assert_eq!(decls.foreign_symbols(), vec!["labs"]);
@@ -643,7 +643,7 @@ fn blocking_calls_go_through_one_shim_per_symbol_and_signature() {
     );
     for text in &clif[..2] {
         for needle in [
-            "= cheby_rt_blocking_call",
+            "= cb$imp$cheby_rt_blocking_call",
             "= cb$blk$kern\n",
             "func_addr",
             "stack_addr",
@@ -664,7 +664,13 @@ fn blocking_calls_go_through_one_shim_per_symbol_and_signature() {
     }
     let shim = &clif[2];
     assert!(shim.starts_with("; cb$blk$kern\n"), "{shim}");
-    for needle in ["= kern", "load.i64", "load.f64", "call_indirect", "store"] {
+    for needle in [
+        "= cb$imp$kern",
+        "load.i64",
+        "load.f64",
+        "call_indirect",
+        "store",
+    ] {
         assert!(shim.contains(needle), "{needle:?} in:\n{shim}");
     }
     assert!(
@@ -982,11 +988,11 @@ fn slice_forms_translate_with_their_edges() {
     let clif = translate(&units[0], &units[0].functions[0], &decls, &cx, &opts).unwrap();
     let text = decls.describe(&clif);
     for needle in [
-        "= cheby_rt_scope_open",
-        "= cheby_rt_scope_close",
-        "= cheby_rt_static_err_nil",
-        "= cheby_test_kernel",
-        "= cheby_rt_debug",
+        "= cb$imp$cheby_rt_scope_open",
+        "= cb$imp$cheby_rt_scope_close",
+        "= cb$imp$cheby_rt_static_err_nil",
+        "= cb$imp$cheby_test_kernel",
+        "= cb$imp$cheby_rt_debug",
         "iconst.i32 0",
         "iconst.i64 0",
         " cold:",
@@ -1122,14 +1128,14 @@ fn unwind_pads_are_translated_as_cold_blocks() {
     // path, which tests its own result (D-775).
     assert_eq!(padded_text.matches(&load_flag).count(), 1, "{padded_text}");
     assert!(
-        padded_text.contains("= cheby_rt_stack_slow_unwind"),
+        padded_text.contains("= cb$imp$cheby_rt_stack_slow_unwind"),
         "{padded_text}"
     );
     // The pad's drop is a plain call: one more call than the inline drop's
-    // slow path makes.
+    // slow path makes. Runtime calls go through import words (D-913).
     assert_eq!(
-        padded_text.matches("call fn").count(),
-        plain.matches("call fn").count() + 1,
+        padded_text.matches("call_indirect").count(),
+        plain.matches("call_indirect").count() + 1,
         "{padded_text}"
     );
     assert!(padded_text.contains("iconst.i64 0"), "{padded_text}");
@@ -1293,7 +1299,7 @@ fn the_flag_lowers_every_edge() {
     // Without edges: the code of a build without the unwind pass.
     assert!(!edgeless.contains(&load_flag), "{edgeless}");
     assert!(
-        !edgeless.contains("= cheby_rt_drop"),
+        !edgeless.contains("= cb$imp$cheby_rt_drop"),
         "the pads were translated:\n{edgeless}"
     );
     assert!(
@@ -1306,7 +1312,10 @@ fn the_flag_lowers_every_edge() {
     // entry check's releasing slow path (D-775) do not
     // load the flag.
     assert_eq!(loads, 1, "{flag}");
-    assert!(flag.contains("= cheby_rt_stack_slow_unwind"), "{flag}");
+    assert!(
+        flag.contains("= cb$imp$cheby_rt_stack_slow_unwind"),
+        "{flag}"
+    );
     assert!(flag.contains(" cold:"), "{flag}");
     assert!(
         !flag.contains(&format!("trap user{}", func::TRAP_NORETURN)),
@@ -1375,7 +1384,7 @@ fn entry_unwind_through_the_releasing_slow_path() {
         let lines: Vec<&str> = text.lines().map(str::trim).collect();
         let at = lines
             .iter()
-            .position(|line| line.contains("= call fn") && line.contains("(v0, "))
+            .position(|line| line.contains("= call_indirect") && line.contains("(v0, "))
             .unwrap_or_else(|| panic!("{n}: no helper call in:\n{text}"));
         let call = lines[at];
         let result = call.split(" = ").next().unwrap();
@@ -1397,11 +1406,13 @@ fn entry_unwind_through_the_releasing_slow_path() {
         );
         assert!(
             text.lines()
-                .any(|l| l.ends_with("= cheby_rt_stack_slow_unwind")),
+                .any(|l| l.ends_with("= cb$imp$cheby_rt_stack_slow_unwind")),
             "{n}: {text}"
         );
         assert!(
-            !text.lines().any(|l| l.ends_with("= cheby_rt_stack_slow")),
+            !text
+                .lines()
+                .any(|l| l.ends_with("= cb$imp$cheby_rt_stack_slow")),
             "{n}: {text}"
         );
         assert!(!text.contains(&load_flag), "{n}: no flag load:\n{text}");
@@ -1411,13 +1422,14 @@ fn entry_unwind_through_the_releasing_slow_path() {
     }
     let five = clif_of(&[counted_params_unit(5)], &opts);
     assert!(
-        five.lines().any(|l| l.ends_with("= cheby_rt_stack_slow")),
+        five.lines()
+            .any(|l| l.ends_with("= cb$imp$cheby_rt_stack_slow")),
         "{five}"
     );
     assert!(!five.contains("stack_slow_unwind"), "{five}");
     assert_eq!(five.matches(&load_flag).count(), 1, "{five}");
     assert!(
-        five.lines().any(|l| l.ends_with("= cheby_rt_drop")),
+        five.lines().any(|l| l.ends_with("= cb$imp$cheby_rt_drop")),
         "{five}"
     );
 }
@@ -1438,7 +1450,7 @@ fn flag_pads_follow_their_sources() {
     };
     let text = clif_of(&[edges_unit()], &opts);
     // Both pads and `resume` are there: two out-of-line drops in the pads.
-    assert!(text.contains("= cheby_rt_drop"), "{text}");
+    assert!(text.contains("= cb$imp$cheby_rt_drop"), "{text}");
     // Without the stack check there is no entry pad, and the function
     // still compiles.
     let unchecked = CodegenOptions {
@@ -1479,21 +1491,18 @@ fn drops_pass_their_functions_ctx() {
         let mut m = module();
         let mut decls = Decls::new(cranelift_module::Module::isa(&m)).unwrap();
         declare(&mut m, &mut decls, &units, &cx, &opts).unwrap();
-        let (id, signature) = decls.runtime(runtime::RuntimeFunc::Drop).unwrap();
+        let (_, signature) = decls.runtime(runtime::RuntimeFunc::Drop).unwrap();
         assert_eq!(signature.params.len(), 2, "{signature}");
         assert!(signature.returns.is_empty(), "{signature}");
         let clif = translate(&units[0], &units[0].functions[0], &decls, &cx, &opts).unwrap();
         let text = decls.describe(&clif);
-        let drop_ref = format!(" = u0:{} sig", id.as_u32());
-        let name = text
-            .lines()
-            .find_map(|line| {
-                let (name, rest) = line.trim().split_once(" = ")?;
-                format!(" = {rest}")
-                    .starts_with(&drop_ref)
-                    .then(|| name.to_owned())
-            })
-            .unwrap_or_else(|| panic!("no reference to `cheby_rt_drop`:\n{text}"));
+        // D-913: the drop is called through its import word, whose loaded
+        // address each call names.
+        let drops = word_loads(&text, "cb$imp$cheby_rt_drop");
+        assert!(
+            !drops.is_empty(),
+            "no reference to `cheby_rt_drop`:\n{text}"
+        );
         // The entry block's first parameter is `ctx`.
         let ctx = text
             .lines()
@@ -1502,20 +1511,63 @@ fn drops_pass_their_functions_ctx() {
                 Some(params.split_once(':')?.0.to_owned())
             })
             .unwrap();
-        let call = format!("call {name}(");
-        let calls: Vec<&str> = text
+        let calls: Vec<(&str, &str)> = text
             .lines()
             .map(str::trim)
-            .filter(|line| line.starts_with(&call))
+            .filter_map(|line| {
+                let rest = line.strip_prefix("call_indirect ")?;
+                let (_, rest) = rest.split_once(", ")?;
+                let (callee, args) = rest.split_once('(')?;
+                drops.contains(callee).then_some((line, args))
+            })
             .collect();
         assert!(calls.len() >= 2, "checked_rc {checked_rc}:\n{text}");
-        for line in calls {
+        for (line, args) in calls {
             assert!(
-                line.starts_with(&format!("{call}{ctx}, ")),
+                args.starts_with(&format!("{ctx}, ")),
                 "checked_rc {checked_rc}: {line}\n{text}"
             );
         }
     }
+}
+
+/// The values that hold the address loaded from the import word `word`
+/// in the CLIF `text` (D-913): `vA = symbol_value.i64 gvN` of the word's
+/// global value, then `vB = load.i64 notrap aligned readonly vA`.
+fn word_loads(text: &str, word: &str) -> std::collections::BTreeSet<String> {
+    let lines: Vec<&str> = text.lines().map(str::trim).collect();
+    let name = lines
+        .iter()
+        .find_map(|line| {
+            let (name, symbol) = line.strip_prefix("; ")?.split_once(" = ")?;
+            (symbol == word).then_some(name)
+        })
+        .unwrap_or_else(|| panic!("no `{word}` in:\n{text}"));
+    let gv = lines
+        .iter()
+        .find_map(|line| {
+            let (gv, rest) = line.split_once(" = ")?;
+            (rest == format!("symbol colocated {name}")).then_some(gv)
+        })
+        .unwrap_or_else(|| panic!("no global value of `{word}` in:\n{text}"));
+    let mut addresses = std::collections::BTreeSet::new();
+    for pair in lines.windows(2) {
+        let [at, load] = pair else { continue };
+        let Some((at, _)) = at
+            .split_once(" = ")
+            .filter(|(_, rest)| *rest == format!("symbol_value.i64 {gv}"))
+        else {
+            continue;
+        };
+        let Some((address, _)) = load
+            .split_once(" = ")
+            .filter(|(_, rest)| *rest == format!("load.i64 notrap aligned readonly {at}"))
+        else {
+            continue;
+        };
+        addresses.insert(address.to_owned());
+    }
+    addresses
 }
 
 /// `f() { _0 = call g() unwind bb1; return nil }  bb1: resume`, and
@@ -1631,12 +1683,23 @@ fn unboxed_call_unit(ret: Repr) -> MirModule {
 }
 
 /// The CLIF line of the call of `g` in `text`, its result, and the line
-/// after it.
+/// after it: the first `call_indirect` whose callee is not an address
+/// loaded from an import word (a runtime call, D-913).
 fn call_and_next(text: &str) -> (String, String, String) {
     let lines: Vec<&str> = text.lines().map(str::trim).collect();
+    let imported: Vec<&str> = lines
+        .iter()
+        .filter(|line| line.contains("= load.i64 notrap aligned readonly "))
+        .filter_map(|line| line.split(" = ").next())
+        .collect();
     let at = lines
         .iter()
-        .position(|line| line.contains("= call_indirect"))
+        .position(|line| {
+            line.contains("= call_indirect")
+                && !imported
+                    .iter()
+                    .any(|value| line.contains(&format!(", {value}(")))
+        })
         .unwrap_or_else(|| panic!("no call in:\n{text}"));
     let result = lines[at].split(" = ").next().unwrap().to_owned();
     let next = lines[at.checked_add(1).unwrap()].to_owned();
@@ -1745,14 +1808,16 @@ fn placeholder_tuples_fill_in_a_loop_and_store_fields_in_place() {
         Some(large.lines().count()),
         "{small}\n{large}"
     );
+    // The object is `v12`: the stack check's slow path and the allocation
+    // each load their import word first (D-913).
     assert!(
-        !small.contains(", v8+8 ") && large.contains(", v8+8 "),
+        !small.contains(", v12+8 ") && large.contains(", v12+8 "),
         "{large}"
     );
     // Field 39 of 40 at 8 + 39 * 8; field 99999 of 100k after the count,
     // at 8 + 8 + 99999 * 8 = 0xc3508.
-    assert!(small.contains("v1, v8+320\n"), "{small}");
-    assert!(large.contains("v1, v8+0x000c_3508\n"), "{large}");
+    assert!(small.contains("v1, v12+320\n"), "{small}");
+    assert!(large.contains("v1, v12+0x000c_3508\n"), "{large}");
 }
 
 /// `f(xs) { n = list_length(xs); rest = list_uncons(xs, 0, 1, n); x =

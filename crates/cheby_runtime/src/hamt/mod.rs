@@ -194,5 +194,12 @@ pub(crate) fn kernels(out: &mut Vec<(&'static str, *const u8)>) {
     out.extend(kernels::all());
 }
 
+/// Registers the map and set layouts (32-37) once per process, as
+/// [`kernels`] does: an executable's start calls it through
+/// `image::install`, since it never builds the symbol table (D-919).
+pub(crate) fn register_kinds() {
+    node::register();
+}
+
 /// The std modules whose every kernel is registered here.
 pub(crate) const COMPLETE: &[&str] = &["map", "set"];

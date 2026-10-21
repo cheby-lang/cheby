@@ -49,6 +49,9 @@ pub mod generic;
 pub mod hamt;
 pub(crate) mod handles;
 mod helpers;
+pub mod image;
+#[cfg(test)]
+mod image_tests;
 pub mod io;
 pub mod layout;
 #[doc(hidden)]
@@ -63,6 +66,14 @@ mod pool;
 mod random;
 pub mod rc;
 pub mod reuse;
+#[cfg(unix)]
+pub mod rt_main;
+#[cfg(test)]
+#[cfg(unix)]
+mod rt_main_tests;
+mod runtime_id;
+#[cfg(test)]
+mod runtime_id_tests;
 mod runtime_info;
 pub mod sched;
 pub mod stats;

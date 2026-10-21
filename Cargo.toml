@@ -53,6 +53,7 @@ libtest-mimic = "0.8"
 loom = "0.7"
 mimalloc = "0.1.52"
 mio = { version = "1", features = ["os-poll"] }
+object = { version = "0.39", default-features = false, features = ["read", "std"] }
 parking_lot = "0.12"
 proptest = "1.11"
 rayon = "1.12"

@@ -49,6 +49,13 @@
 //!   never a panic (D-532). Foreign symbols are imported by address, with
 //!   no signature, and called indirectly with each call site's C
 //!   signature, so batches may bind one symbol with different signatures.
+//! - The code model is the one the cache and executables use (D-913,
+//!   D-921, ADR-0064): the target's fixed ISA
+//!   ([`cheby_codegen_clif::isa::host_isa`]), never the host's detected
+//!   features, non-PIC, with every generated symbol colocated. Runtime and
+//!   foreign symbols are resolved into the session's import words
+//!   `cb$imp$<symbol>`, data the code loads, so no text holds a process
+//!   address. No libcall resolves ([`cheby_codegen_clif::isa::libcall_names`]).
 
 use std::fmt;
 use std::mem::ManuallyDrop;
@@ -387,12 +394,14 @@ impl Jit {
             checked_rc: jit.checked_rc,
             ..options
         };
-        let flags = cheby_codegen_clif::isa::flags()?;
-        let isa = cranelift_native::builder()
-            .map_err(|message| JitError::Host(message.to_owned()))?
-            .finish(flags)
-            .map_err(|e| JitError::Host(e.to_string()))?;
-        let mut builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
+        // D-921: the target's fixed feature set, never the host's detected
+        // features, so the JIT runs the code the cache and executables
+        // hold. D-913: no libcall resolves.
+        let isa = cheby_codegen_clif::isa::host_isa().map_err(|e| match e {
+            CodegenError::UnsupportedHost(message) => JitError::Host(message),
+            other => JitError::Codegen(other),
+        })?;
+        let mut builder = JITBuilder::with_isa(isa, cheby_codegen_clif::isa::libcall_names());
         builder.symbols(cheby_runtime::symbols());
         let symbols: SymbolTable = Arc::default();
         let table = Arc::clone(&symbols);

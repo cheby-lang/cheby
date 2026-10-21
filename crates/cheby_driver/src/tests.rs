@@ -1424,3 +1424,127 @@ fn configure_jobs_builds_the_global_pool_once() {
     let error = configure_jobs(Some(other)).unwrap_err();
     assert!(error.message().starts_with("cannot start"), "{error}");
 }
+
+/// Round-trips every interface of `front` (D-954) and checks that cut and
+/// mutated copies of each real encoding decode or fail, never panic
+/// (D-953, D-422). Returns the paths of the modules round-tripped.
+fn roundtrip_all(front: &frontend::Frontend) -> Vec<String> {
+    let mut done = Vec::new();
+    for &id in &front.order {
+        let checked = front.checked(id).unwrap();
+        let path = front.modules.get(id).unwrap().path.to_string();
+        let deps = cheby_iface::DepView::new(&front.set, &checked.deps);
+        cheby_iface::check_roundtrip(&checked.interface, &deps, &front.modules, &front.globals)
+            .unwrap_or_else(|ice| panic!("{path}: {}", ice.message()));
+        let bytes =
+            cheby_iface::encode(&checked.interface, &deps, &front.modules, &front.globals).unwrap();
+        let decode = |b: &[u8]| {
+            cheby_iface::decode_interface(
+                id,
+                checked.interface.package,
+                b,
+                &deps,
+                &front.modules,
+                &front.globals,
+            )
+        };
+        assert!(decode(&bytes).is_ok(), "{path}");
+        let step = (bytes.len() / 64).max(1);
+        for len in (0..bytes.len()).step_by(step) {
+            assert!(decode(&bytes[..len]).is_err(), "{path} cut to {len}");
+        }
+        for at in (0..bytes.len()).step_by(step) {
+            for value in [0x00, 0x03, 0xFF] {
+                let mut mutated = bytes.clone();
+                mutated[at] = value;
+                let _ = decode(&mutated);
+            }
+        }
+        done.push(path);
+    }
+    done
+}
+
+/// D-954: the interface of every module of every example and of every
+/// std module decodes to itself, spans aside. The front end already does
+/// this in debug builds; this test does it explicitly, so a release test
+/// run checks it too.
+#[test]
+fn iface_roundtrip_every_example_and_std() {
+    let mut example_modules = 0_usize;
+    for dir in examples() {
+        let name = dir.file_name().unwrap().to_string_lossy().into_owned();
+        if name == "030_shop_service" || LATER_EXAMPLES.contains(&name.as_str()) {
+            continue;
+        }
+        let mut out = CheckOutput::default();
+        let (front, _) = front_end(&dir, frontend::Mode::Build, &mut out)
+            .unwrap()
+            .unwrap();
+        assert!(!out.has_errors(), "{name}: {}", out.render());
+        example_modules += roundtrip_all(&front)
+            .iter()
+            .filter(|path| !path.starts_with("std::"))
+            .count();
+    }
+    let mut sources = SourceMap::new();
+    let mut diagnostics = Vec::new();
+    let package = test::std_test_package(&mut sources, &mut diagnostics).unwrap();
+    let front = frontend::run(
+        package,
+        frontend::Mode::StdTests,
+        &mut sources,
+        &mut diagnostics,
+    )
+    .unwrap();
+    assert!(
+        !diagnostics.iter().any(Diagnostic::is_error),
+        "std does not check"
+    );
+    let std_modules = roundtrip_all(&front)
+        .into_iter()
+        .filter(|p| p.starts_with("std::"))
+        .count();
+    assert_eq!(std_modules, std_lib::STD_MODULES.len());
+    println!(
+        "iface round trip: {example_modules} example modules in {} example builds, {std_modules} std modules",
+        examples().len() - 1 - LATER_EXAMPLES.len()
+    );
+    assert!(example_modules > 30);
+}
+
+/// D-954 and D-422: a public signature whose type nests deeper than any
+/// fixed bound checks, and its interface round-trips, both through a
+/// chain of 200 aliases and through 255 levels written out (the parser's
+/// bound is 256, D-441). Review R1: a decoder depth limit of 128 made
+/// both an internal compiler error in debug builds.
+#[test]
+fn iface_roundtrip_types_of_any_depth() {
+    use std::fmt::Write as _;
+    let mut src = String::from("//! Deep types.\n\nimport std::io\n\ntype A0 = Int\n");
+    for i in 1..=200 {
+        writeln!(src, "type A{i} = Option<A{}>", i - 1).unwrap();
+    }
+    let nested = format!("{}Int{}", "Option<".repeat(254), ">".repeat(254));
+    write!(
+        src,
+        "\npub fn wrap(x: A200) -> A200 {{\n  x\n}}\n\n\
+         pub fn wrap_written(x: {nested}) -> {nested} {{\n  x\n}}\n\n\
+         fn main() {{\n  io::println(\"ok\")\n}}\n"
+    )
+    .unwrap();
+    let dir = package(
+        "deep_types",
+        &[
+            ("cheby.toml", b"name = \"deep\"\nversion = \"0.1.0\"\n"),
+            ("src/main.cheby", src.as_bytes()),
+        ],
+    );
+    let mut out = CheckOutput::default();
+    let (front, _) = front_end(&dir, frontend::Mode::Build, &mut out)
+        .unwrap()
+        .unwrap();
+    assert!(!out.has_errors(), "{}", out.render());
+    assert!(roundtrip_all(&front).iter().any(|path| path == "deep"));
+    std::fs::remove_dir_all(&dir).unwrap();
+}

@@ -25,6 +25,23 @@
 //! command's output, and `// @flags: …` adds words after the subcommand
 //! (D-543).
 //!
+//! With `// @command: build` (D-1026), a run test builds the copied
+//! package with `cheby --color=never build -o <tmp>/<name>` and its
+//! `@flags`, into a fresh temporary directory removed at the end, never
+//! into the copy's `build/native/`. If the build succeeds, the harness runs
+//! the executable in the package's directory with the test's `.stdin` and
+//! `.args` (no `--`). The goldens are a run test's, standard error as the
+//! build's followed by the executable's; a failed build is the result
+//! itself, so a test can pin what `cheby build` reports. Such a test is
+//! never blessed: `CHEBY_BLESS=1` ignores it, and its goldens are written
+//! by hand. It is ignored on Windows until M6 (D-935).
+//!
+//! Every child, `cheby` or an executable, gets `CHEBY_CACHE` set to one
+//! fresh owner-only directory in the system's temporary directory that
+//! the harness creates when it starts and deletes when the run ends, also
+//! after failing tests, overriding the developer's own value (D-959,
+//! `cheby_test_support::cache`).
+//!
 //! Every `cheby` inherits the harness's `CHEBY_RC`, so
 //! `CHEBY_RC=naive cargo test --test ui` runs the suite under naive
 //! counting (D-718), except a test whose flags include `--reuse-report`:
@@ -47,12 +64,14 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
+use std::sync::Arc;
 use std::time::Duration;
 
+use cheby_test_support::cache::{FreshDir, HarnessCache};
 use cheby_test_support::milestone::{Expectation, POISON_ENV, Setting, Verdicts};
 use cheby_test_support::threads::RC_ENV;
-use cheby_test_support::ui::{self, Layout, Mode, UiTest};
-use cheby_test_support::{bless_enabled, golden, platform, process, repo_root};
+use cheby_test_support::ui::{self, Layout, Mode, RunCommand, RunInput, UiTest};
+use cheby_test_support::{aot, bless_enabled, golden, platform, process, repo_root};
 use libtest_mimic::{Arguments, Trial};
 
 const CHEBY: &str = env!("CARGO_BIN_EXE_cheby");
@@ -78,9 +97,13 @@ fn main() -> ExitCode {
             ui::all(&root)?,
             Verdicts::from_env()?,
             process::scaled_timeout(TIMEOUT)?,
+            // D-959: one fresh cache for every child of this process,
+            // deleted when `main` and the last test that holds it are done,
+            // whatever the tests' results.
+            Arc::new(HarnessCache::create("ui")?),
         ))
     });
-    let (current, tests, verdicts, timeout) = match setup {
+    let (current, tests, verdicts, timeout, cache) = match setup {
         Ok(setup) => setup,
         Err(message) => {
             eprintln!("UI harness: {message}");
@@ -88,10 +111,14 @@ fn main() -> ExitCode {
         }
     };
     let bless = bless_enabled();
+    eprintln!("UI harness: {}", cache.describe());
     if let Some(reason) = platform::run_skip_reason() {
         eprintln!(
             "UI harness: run tests, and check tests without a front-end error, are ignored: {reason}"
         );
+    }
+    if let Some(reason) = platform::executable_skip_reason() {
+        eprintln!("UI harness: tests with `// @command: build` are ignored: {reason}");
     }
 
     let trials = tests
@@ -99,10 +126,16 @@ fn main() -> ExitCode {
         .map(|test| {
             let expectation = current.expectation(test.header.milestone);
             let verdicts = verdicts.clone();
+            let cache = Arc::clone(&cache);
             let name = test.name.clone();
-            let skipped = platform::runs_skipped() && test.builds_a_jit();
+            // GAP(ui-build-bless): a build test is never blessed, so `cargo
+            // xtask bless` ignores it, as it ignores the `@aot` trials
+            // (D-853, D-1025), and its goldens are written by hand.
+            let skipped = (platform::runs_skipped() && test.builds_a_jit())
+                || (test.builds_an_executable() && (bless || platform::executables_skipped()));
             Trial::test(name.clone(), move || {
-                let result = run_test(&test, bless && expectation != Expectation::Fail, timeout);
+                let bless = bless && expectation != Expectation::Fail;
+                let result = run_test(&test, bless, &cache, timeout);
                 verdicts.judge(&name, test.header.milestone, expectation, result)?;
                 Ok(())
             })
@@ -118,9 +151,14 @@ fn main() -> ExitCode {
     conclusion.exit_code()
 }
 
-fn run_test(test: &UiTest, bless: bool, timeout: Duration) -> Result<(), String> {
+fn run_test(
+    test: &UiTest,
+    bless: bool,
+    cache: &HarnessCache,
+    timeout: Duration,
+) -> Result<(), String> {
     let (package, files) = make_package(test)?;
-    let result = check_package(test, bless, &package, &files, timeout);
+    let result = check_package(test, bless, &package, &files, cache, timeout);
     // Best effort: a leftover package only costs disk space, and the
     // directory is this process's own (see `packages_dir`).
     let _ = std::fs::remove_dir_all(&package);
@@ -139,40 +177,37 @@ fn check_package(
     bless: bool,
     package: &Path,
     files: &[ShownFile],
+    cache: &HarnessCache,
     timeout: Duration,
 ) -> Result<(), String> {
     let mode = test.header.mode;
-    let command = if mode.runs() {
-        test.header.command.name()
-    } else {
-        "check"
-    };
     let input = test.input()?;
-    let mut cmd = Command::new(CHEBY);
-    // `--color=never` and `NO_COLOR` keep goldens plain even if the
-    // developer's environment forces color (`CLICOLOR_FORCE`). Freed
-    // objects are poisoned, so a reference-count mistake stops the program
-    // where it happens (D-544).
-    cmd.args(["--color=never", command])
-        .args(&test.header.flags)
-        .current_dir(package)
-        .env("NO_COLOR", "1")
-        .env(POISON_ENV, "1");
-    // The reuse report describes Perceus counting, so a test of it runs
-    // with `CHEBY_RC` removed even when the harness runs under
-    // `CHEBY_RC=naive` (D-718, D-853).
-    if test
-        .header
-        .flags
-        .iter()
-        .any(|flag| flag == REUSE_REPORT_FLAG)
-    {
-        cmd.env_remove(RC_ENV);
-    }
-    if !input.args.is_empty() {
-        cmd.arg("--").args(&input.args);
-    }
-    let out = process::run(cmd, input.stdin.as_deref(), timeout)?;
+    let (what, out) = if mode.runs() && test.header.command == RunCommand::Build {
+        (
+            "`cheby build` and the executable".to_owned(),
+            build_and_run(test, package, &input, cache, timeout)?,
+        )
+    } else {
+        let command = if mode.runs() {
+            test.header.command.name()
+        } else {
+            "check"
+        };
+        let mut cmd = Command::new(CHEBY);
+        // `--color=never` keeps goldens plain even if the developer's
+        // environment forces color (`CLICOLOR_FORCE`).
+        cmd.args(["--color=never", command])
+            .args(&test.header.flags)
+            .current_dir(package);
+        child_env(&mut cmd, test, cache);
+        if !input.args.is_empty() {
+            cmd.arg("--").args(&input.args);
+        }
+        (
+            format!("`cheby {command}`"),
+            process::run(cmd, input.stdin.as_deref(), timeout)?,
+        )
+    };
     let stdout = rewrite_paths(&out.stdout, package, files);
     let stderr = rewrite_paths(&out.stderr, package, files);
 
@@ -183,14 +218,16 @@ fn check_package(
     };
     if out.status != Some(expected_exit) {
         return Err(format!(
-            "`cheby {command}`: expected exit code {expected_exit}, got {}\nstderr:\n{stderr}",
+            "{what}: expected exit code {expected_exit}, got {}\nstderr:\n{stderr}",
             out.describe_status()
         ));
     }
 
     let stderr_golden = test.golden("stderr");
     let stdout_golden = test.golden("stdout");
-    if bless {
+    // A build test's goldens are written by hand, never blessed (D-1026);
+    // the harness ignores it under `CHEBY_BLESS=1` anyway.
+    if bless && !test.builds_an_executable() {
         golden::write(&stderr_golden, &stderr, false)?;
         return golden::write(&stdout_golden, &stdout, false);
     }
@@ -204,6 +241,70 @@ fn check_package(
     golden::compare("stderr", &expected_stderr, &stderr)?;
     let expected_stdout = golden::read(&stdout_golden)?.unwrap_or_default();
     golden::compare("stdout", &expected_stdout, &stdout)
+}
+
+/// A build test (D-1026): `cheby --color=never build -o <tmp>/<name>` and
+/// the test's `@flags` in the copied package, then, if the build
+/// succeeded, the executable with the test's `.stdin` and `.args` in the
+/// package's directory. The result is what both printed, standard error
+/// as the build's followed by the executable's, or the failed build's own
+/// status and output, so a test can pin an error that `cheby build`
+/// reports (`aot::build_then_run`): GAP(ui-build-failed-build), a
+/// `run-fail` test with `// @exit: 1` pins E0053 at build time, as D-1026
+/// asks, the way a run test pins it under `cheby run`.
+///
+/// GAP(ui-build-output): the executable goes to a fresh temporary
+/// directory with `-o`, as the `@aot` trial's does (D-1025), never to
+/// `build/native/` of the copied package; the directory is removed at the
+/// end.
+fn build_and_run(
+    test: &UiTest,
+    package: &Path,
+    input: &RunInput,
+    cache: &HarnessCache,
+    timeout: Duration,
+) -> Result<process::RunOutput, String> {
+    let out_dir = FreshDir::create("cheby-ui-build")?;
+    let name = test.name.rsplit('/').next().unwrap_or("main");
+    let executable = out_dir.path().join(name);
+    let output = executable.to_string_lossy().into_owned();
+    aot::build_then_run(
+        || {
+            let mut cmd = Command::new(CHEBY);
+            cmd.args(["--color=never", "build", "-o", &output])
+                .args(&test.header.flags)
+                .current_dir(package);
+            child_env(&mut cmd, test, cache);
+            process::run(cmd, None, timeout)
+        },
+        || {
+            let mut cmd = Command::new(&executable);
+            cmd.args(&input.args).current_dir(package);
+            child_env(&mut cmd, test, cache);
+            process::run(cmd, input.stdin.as_deref(), timeout)
+        },
+    )
+}
+
+/// The environment of every child, `cheby` or a test's executable.
+/// `NO_COLOR` keeps goldens plain even if the developer's environment
+/// forces color (`CLICOLOR_FORCE`). Freed objects are poisoned, so a
+/// reference-count mistake stops the program where it happens (D-544).
+/// `CHEBY_CACHE` names the harness's own cache (D-959).
+fn child_env(cmd: &mut Command, test: &UiTest, cache: &HarnessCache) {
+    cmd.env("NO_COLOR", "1").env(POISON_ENV, "1");
+    cache.apply(cmd);
+    // The reuse report describes Perceus counting, so a test of it runs
+    // with `CHEBY_RC` removed even when the harness runs under
+    // `CHEBY_RC=naive` (D-718, D-853).
+    if test
+        .header
+        .flags
+        .iter()
+        .any(|flag| flag == REUSE_REPORT_FLAG)
+    {
+        cmd.env_remove(RC_ENV);
+    }
 }
 
 /// A file of the temporary package, relative to it with `/` separators,

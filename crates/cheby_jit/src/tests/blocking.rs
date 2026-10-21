@@ -172,6 +172,31 @@ fn compile(p: Prog, symbols: &[(&str, *const u8)]) -> Jit {
     jit
 }
 
+/// A missing symbol that only an `@blocking` call names, which only its
+/// shim's import word reaches (D-913), is reported before finalizing,
+/// never as a panic in Cranelift (D-532), and the failed batch leaves no
+/// import word behind.
+#[test]
+fn a_missing_blocking_symbol_is_reported_before_finalizing() {
+    let mut p = Prog::default();
+    blocking_item(
+        &mut p,
+        0,
+        "wait",
+        "cheby_test_missing_blocking",
+        &[CType::I64],
+        CType::I64,
+        None,
+    );
+    let mut jit = Jit::configured(CodegenOptions::default(), JitOptions::from_env()).unwrap();
+    let err = jit.compile(&p.unwound_units()).unwrap_err();
+    let JitError::UnresolvedSymbols(symbols) = &err else {
+        panic!("{err}");
+    };
+    assert_eq!(symbols, &["cheby_test_missing_blocking"]);
+    assert_eq!(jit.decls.import_words(), Vec::<(&str, bool)>::new());
+}
+
 /// A runtime with one worker: a fiber that blocked its worker would stop
 /// every other fiber.
 fn one_worker() -> Runtime {

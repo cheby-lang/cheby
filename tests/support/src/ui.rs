@@ -20,7 +20,10 @@
 //! - `@exit`: the expected exit code of `run-fail`, 101 by default.
 //! - `@command`: `test` makes a `run-pass` or `run-fail` test run
 //!   `cheby test` instead of `cheby run`, and its goldens hold that
-//!   command's output (D-543). `run` is the default.
+//!   command's output (D-543). `build` makes it build the package with
+//!   `cheby build` and run the executable, with the goldens of a run test,
+//!   standard error as the build's followed by the executable's (D-1026,
+//!   [`crate::aot`]). `run` is the default.
 //! - `@flags`: command-line words added after the subcommand, split at
 //!   whitespace, such as `--module app::util` (D-543).
 //!
@@ -92,7 +95,7 @@ impl Mode {
     }
 }
 
-/// The command a run test runs (D-543).
+/// The command a run test runs (D-543, D-1026).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RunCommand {
     /// `cheby run`.
@@ -100,6 +103,8 @@ pub enum RunCommand {
     Run,
     /// `cheby test`.
     Test,
+    /// `cheby build`, then the executable it wrote (D-1026).
+    Build,
 }
 
 impl RunCommand {
@@ -107,7 +112,10 @@ impl RunCommand {
         match s {
             "run" => Ok(Self::Run),
             "test" => Ok(Self::Test),
-            other => Err(format!("unknown command `{other}`, expected run or test")),
+            "build" => Ok(Self::Build),
+            other => Err(format!(
+                "unknown command `{other}`, expected run, test or build"
+            )),
         }
     }
 
@@ -117,6 +125,7 @@ impl RunCommand {
         match self {
             Self::Run => "run",
             Self::Test => "test",
+            Self::Build => "build",
         }
     }
 }
@@ -302,6 +311,17 @@ impl UiTest {
     }
 }
 
+impl UiTest {
+    /// Whether the test builds an executable with `cheby build`
+    /// (`// @command: build`, D-1026), so that it is ignored where
+    /// executables are not built ([`crate::platform::executables_skipped`],
+    /// D-935) and never blessed.
+    #[must_use]
+    pub fn builds_an_executable(&self) -> bool {
+        self.header.command == RunCommand::Build
+    }
+}
+
 /// The codes that only the back end reports: an unresolved native symbol
 /// and the constant-evaluation errors. `cheby check` reports them after it
 /// has built a JIT for the package's constants. E0069 is also a front-end
@@ -468,6 +488,19 @@ mod tests {
         assert_eq!(test.command, RunCommand::Test);
         assert_eq!(test.command.name(), "test");
         assert_eq!(test.flags, Vec::<String>::new());
+        // D-1026: only with a run mode.
+        let build = Header::parse("// @mode: run-pass\n// @command: build\n").unwrap();
+        assert_eq!(build.command, RunCommand::Build);
+        assert_eq!(build.command.name(), "build");
+        let fail = Header::parse("// @mode: run-fail\n// @command: build\n// @exit: 1\n").unwrap();
+        assert_eq!(fail.command, RunCommand::Build);
+        for mode in ["check-pass", "check-fail", "parse-fail"] {
+            let err =
+                Header::parse(&format!("// @mode: {mode}\n// @command: build\n")).unwrap_err();
+            assert!(err.contains("only allowed with `@mode: run-pass`"), "{err}");
+        }
+        let err = Header::parse("// @mode: run-pass\n// @command: link\n").unwrap_err();
+        assert_eq!(err, "unknown command `link`, expected run, test or build");
     }
 
     #[test]

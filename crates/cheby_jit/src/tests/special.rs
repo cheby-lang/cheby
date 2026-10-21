@@ -853,8 +853,8 @@ fn count_operations_are_inline_unless_checked() {
     let checked = clif(true);
     assert!(!checked.contains(" = band"), "{checked}");
     assert!(!checked.contains("store notrap aligned"), "{checked}");
-    assert!(checked.contains("= cheby_rt_dup"), "{checked}");
-    assert!(checked.contains("= cheby_rt_drop"), "{checked}");
+    assert!(checked.contains("= cb$imp$cheby_rt_dup"), "{checked}");
+    assert!(checked.contains("= cb$imp$cheby_rt_drop"), "{checked}");
 }
 
 /// `f(self) { drop self; return nil }`: a closure body of `owner`.

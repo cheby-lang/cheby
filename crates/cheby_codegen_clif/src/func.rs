@@ -21,7 +21,7 @@ use cheby_mir::{
 };
 use cheby_runtime::abi;
 
-use crate::decls::{Decls, ForeignDecl};
+use crate::decls::Decls;
 use crate::mangle::{self, Kind};
 use crate::runtime::RuntimeFunc;
 use crate::sig::{self, WORD, repr_type};
@@ -122,6 +122,7 @@ fn build(
         func_refs: FxHashMap::default(),
         data: FxHashMap::default(),
         sigs: FxHashMap::default(),
+        import_sigs: FxHashMap::default(),
         panics: Vec::new(),
         panic_blocks: FxHashMap::default(),
         pad: None,
@@ -167,6 +168,9 @@ pub(crate) struct Translator<'a, 'f> {
     pub(crate) func_refs: FxHashMap<FuncId, FuncRef>,
     pub(crate) data: FxHashMap<DataId, GlobalValue>,
     pub(crate) sigs: FxHashMap<AbiSig, SigRef>,
+    /// The C signature of each runtime function called so far, by its
+    /// import word (D-913).
+    pub(crate) import_sigs: FxHashMap<DataId, SigRef>,
     /// The cold blocks that panic with a kind at a location, created by
     /// checked operations and filled after the function's blocks, one per
     /// kind, location and unwind pad (`None` for a check without an edge).
@@ -629,7 +633,7 @@ impl Translator<'_, '_> {
             )?;
             self.b.switch_to_block(call);
             let signature = self.decls.func(self.func.key)?.sig.clone();
-            let f = self.func_ref(inner, &signature, true);
+            let f = self.func_ref(inner, &signature);
             self.b.ins().return_call(f, &params);
             self.b.switch_to_block(resume);
             return self.unwind_resume();
@@ -652,7 +656,7 @@ impl Translator<'_, '_> {
         self.b.ins().jump(call, &[]);
         self.b.switch_to_block(call);
         let signature = self.decls.func(self.func.key)?.sig.clone();
-        let f = self.func_ref(inner, &signature, true);
+        let f = self.func_ref(inner, &signature);
         self.b.ins().return_call(f, &params);
         if let Some((pad, outer_pad)) = outer_pad {
             self.outer_pad(pad, outer_pad, &params)?;
@@ -975,18 +979,28 @@ impl Translator<'_, '_> {
             Const::Nil => self.static_object(abi::sym::STATIC_NIL)?,
             Const::EmptyList => self.static_object(abi::sym::STATIC_EMPTY_LIST)?,
             Const::BuiltinDesc(desc) => {
-                let data = self.decls.builtin_desc(*desc)?;
-                self.data_address(data, false)
+                self.static_object(&crate::decls::builtin_desc_symbol(*desc))?
             }
             Const::StaticCtor(def) => {
-                let data = self.decls.ctor_object(*def)?;
-                let local = crate::layout::builtin_ctor_layout(*def).is_none();
-                self.data_address(data, local)
+                // A builtin constructor's static is the runtime's, reached
+                // through its import word (D-913); a user one's is
+                // generated, and colocated.
+                if let Some(id) =
+                    crate::layout::builtin_layout_id(&cheby_mir::LayoutRef::Ctor(*def))
+                {
+                    let symbol = abi::sym::static_ctor(id).ok_or_else(|| {
+                        CodegenError::ice(format!("the builtin constructor {def:?} is not nullary"))
+                    })?;
+                    self.static_object(symbol)?
+                } else {
+                    let data = self.decls.ctor_object(*def)?;
+                    self.data_address(data)
+                }
             }
             Const::FnValue(def) => {
                 let symbol = mangle::item(Kind::FnVal, &self.decls.def_name(self.unit, *def)?);
                 let data = self.decls.static_object(&symbol)?;
-                self.data_address(data, true)
+                self.data_address(data)
             }
             Const::Static(id) => {
                 let object = self
@@ -996,14 +1010,14 @@ impl Translator<'_, '_> {
                 let data = self
                     .decls
                     .static_object(&self.decls.static_symbol(object))?;
-                self.data_address(data, true)
+                self.data_address(data)
             }
             Const::Code(key) => {
                 // D-453: a code word is `address | 1`, so freeing skips it
                 // like a tagged integer; functions are aligned to 16.
                 let decl = self.decls.func(*key)?;
                 let (id, signature) = (decl.id, decl.sig.clone());
-                let f = self.func_ref(id, &signature, true);
+                let f = self.func_ref(id, &signature);
                 let address = self.b.ins().func_addr(WORD, f);
                 self.b.ins().bor_imm_u(address, 1)
             }
@@ -1017,15 +1031,30 @@ impl Translator<'_, '_> {
     /// The address of string `id` of this function: a static `String`.
     pub(crate) fn string(&mut self, id: StrId) -> Result<Value, CodegenError> {
         let data = self.decls.string(self.func.key, id)?;
-        Ok(self.data_address(data, true))
+        Ok(self.data_address(data))
     }
 
+    /// The address of the runtime's static object `symbol`, loaded from its
+    /// import word (D-913).
     pub(crate) fn static_object(&mut self, symbol: &str) -> Result<Value, CodegenError> {
-        let data = self.decls.static_data(symbol)?;
-        Ok(self.data_address(data, false))
+        let word = self.decls.import(symbol)?;
+        Ok(self.import_address(word))
     }
 
-    pub(crate) fn data_address(&mut self, data: DataId, colocated: bool) -> Value {
+    /// The address the import word `word` holds (D-913): the word's own
+    /// address, PC-relative since it is generated and colocated, then a
+    /// read-only load of the address its data relocation wrote.
+    pub(crate) fn import_address(&mut self, word: DataId) -> Value {
+        let at = self.data_address(word);
+        self.b
+            .ins()
+            .load(WORD, MemFlagsData::trusted().with_readonly(), at, 0)
+    }
+
+    /// The address of the generated data object `data`: colocated, so
+    /// text reaches it PC-relative (D-913). Runtime and foreign data are
+    /// reached through their import words ([`Self::import_address`]).
+    pub(crate) fn data_address(&mut self, data: DataId) -> Value {
         let gv = if let Some(&gv) = self.data.get(&data) {
             gv
         } else {
@@ -1036,7 +1065,7 @@ impl Translator<'_, '_> {
             let gv = self.b.create_global_value(GlobalValueData::Symbol {
                 name: ExternalName::user(name),
                 offset: Imm64::new(0),
-                colocated,
+                colocated: true,
                 tls: false,
             });
             self.data.insert(data, gv);
@@ -1045,12 +1074,10 @@ impl Translator<'_, '_> {
         self.b.ins().symbol_value(WORD, gv)
     }
 
-    pub(crate) fn func_ref(
-        &mut self,
-        id: FuncId,
-        signature: &Signature,
-        colocated: bool,
-    ) -> FuncRef {
+    /// A reference to the generated function `id`: colocated, so a direct
+    /// call is PC-relative (D-913). Runtime and foreign functions are
+    /// called through their import words ([`Self::import_address`]).
+    pub(crate) fn func_ref(&mut self, id: FuncId, signature: &Signature) -> FuncRef {
         if let Some(&f) = self.func_refs.get(&id) {
             return f;
         }
@@ -1062,7 +1089,7 @@ impl Translator<'_, '_> {
         let f = self.b.import_function(ExtFuncData {
             name: ExternalName::user(name),
             signature: sig_ref,
-            colocated,
+            colocated: true,
             patchable: false,
         });
         self.func_refs.insert(id, f);
@@ -1085,10 +1112,19 @@ impl Translator<'_, '_> {
         f: RuntimeFunc,
         args: &[Value],
     ) -> Result<Option<Value>, CodegenError> {
-        let (id, signature) = self.decls.runtime(f)?;
+        // D-913: through the function's import word, with its C signature,
+        // imported once per function like the function reference was.
+        let (word, signature) = self.decls.runtime(f)?;
         let signature = signature.clone();
-        let f = self.func_ref(id, &signature, false);
-        let inst = self.b.ins().call(f, args);
+        let callee = self.import_address(word);
+        let s = if let Some(&s) = self.import_sigs.get(&word) {
+            s
+        } else {
+            let s = self.b.import_signature(signature);
+            self.import_sigs.insert(word, s);
+            s
+        };
+        let inst = self.b.ins().call_indirect(s, callee, args);
         Ok(self.b.inst_results(inst).first().copied())
     }
 
@@ -1134,29 +1170,15 @@ impl Translator<'_, '_> {
         sig: &ForeignSig,
         vals: &[Value],
     ) -> Result<Option<Value>, CodegenError> {
-        let inst = match self.decls.foreign(symbol)?.clone() {
-            ForeignDecl::Function(id, signature) => {
-                let f = self.func_ref(id, &signature, false);
-                self.b.ins().call(f, vals)
-            }
-            // Signature-free imports: the call site's own C signature
-            // (`ForeignImport::Address`).
-            ForeignDecl::Data(id) => {
-                let address = self.data_address(id, false);
-                let s = self
-                    .b
-                    .import_signature(sig::foreign_signature(sig, self.decls.c_call_conv()));
-                self.b.ins().call_indirect(s, address, vals)
-            }
-            ForeignDecl::FunctionAddress(id, declared) => {
-                let f = self.func_ref(id, &declared, false);
-                let address = self.b.ins().func_addr(WORD, f);
-                let s = self
-                    .b
-                    .import_signature(sig::foreign_signature(sig, self.decls.c_call_conv()));
-                self.b.ins().call_indirect(s, address, vals)
-            }
-        };
+        // D-913, D-475: the address from the symbol's import word, called
+        // with the call site's own C signature (under
+        // `ForeignImport::Function` the symbol's one signature).
+        let word = self.decls.foreign(symbol)?.word;
+        let address = self.import_address(word);
+        let s = self
+            .b
+            .import_signature(sig::foreign_signature(sig, self.decls.c_call_conv()));
+        let inst = self.b.ins().call_indirect(s, address, vals);
         Ok(self.b.inst_results(inst).first().copied())
     }
 
@@ -1281,14 +1303,14 @@ impl Translator<'_, '_> {
                         // its slot, which is writable (no `readonly`).
                         let path = self.decls.slot_path(self.unit, *def)?;
                         let slot = self.decls.slot(&path, &abi_sig)?.id;
-                        let address = self.data_address(slot, true);
+                        let address = self.data_address(slot);
                         let code = self.b.ins().load(WORD, MemFlagsData::trusted(), address, 0);
                         CallTarget::Indirect(self.sig_ref(&abi_sig), code)
                     }
                     CallMode::Direct => {
                         let decl = self.decls.func(FnKey::Item(*def))?;
                         let (id, signature) = (decl.id, decl.sig.clone());
-                        CallTarget::Direct(self.func_ref(id, &signature, true))
+                        CallTarget::Direct(self.func_ref(id, &signature))
                     }
                 }
             }
@@ -1296,7 +1318,7 @@ impl Translator<'_, '_> {
                 let decl = self.decls.func(*key)?;
                 let (id, signature) = (decl.id, decl.sig.clone());
                 ret = decl.abi.ret;
-                CallTarget::Direct(self.func_ref(id, &signature, true))
+                CallTarget::Direct(self.func_ref(id, &signature))
             }
             Callee::Indirect(closure) => {
                 ret = Repr::Value;

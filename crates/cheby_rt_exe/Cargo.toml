@@ -1,0 +1,24 @@
+[package]
+name = "cheby_rt_exe"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+# The runtime archive `libcheby_rt_exe.a` that `cheby build` links into
+# executables (D-928, D-929). A staticlib only: nothing depends on it.
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+cheby_runtime.workspace = true
+mimalloc.workspace = true
+
+[dev-dependencies]
+# `tests/archive.rs` reads the archive's symbol table (D-932, D-1036).
+object.workspace = true
+
+[lints]
+workspace = true

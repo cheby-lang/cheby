@@ -17,13 +17,9 @@ use cheby_mir::{
 use crate::*;
 
 fn module() -> JITModule {
-    let isa = cranelift_native::builder()
-        .unwrap()
-        .finish(isa::flags().unwrap())
-        .unwrap();
     JITModule::new(JITBuilder::with_isa(
-        isa,
-        cranelift_module::default_libcall_names(),
+        isa::host_isa().unwrap(),
+        isa::libcall_names(),
     ))
 }
 

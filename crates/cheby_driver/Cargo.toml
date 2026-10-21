@@ -23,6 +23,11 @@ cheby_js.workspace = true
 cheby_consteval.workspace = true
 rayon.workspace = true
 rustc-hash.workspace = true
+siphasher.workspace = true
+
+# The cache root's owner check (D-959).
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
 
 [lints]
 workspace = true
