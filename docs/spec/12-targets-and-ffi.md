@@ -15,7 +15,9 @@ A **target** is either `native` or `js`. These two names are used in `@external`
 
 There are no operating-system targets in v1: `native` covers macOS, Linux and Windows alike, and there is no `@target(windows)` or similar (D-214, ADR-0039). The standard library and runtime hide operating-system differences. Foreign code that exists only on some operating systems must handle its own portability, typically with a small C shim that is linked on every native platform.
 
-Native debug info is DWARF on every platform in v1, including Windows. CodeView/PDB is added when the bundled linker lands ([§13.1](13-tooling.md#131-the-cheby-command)) (D-184, D-088). By default only line tables are emitted, which is enough for panic backtraces, and full debug info is opt-in ([§13.12.5](13-tooling.md#13125-build-profiles)) (D-259).
+Native debug info is DWARF on every platform in v1, including Windows. CodeView/PDB is added when the bundled linker lands ([§13.1](13-tooling.md#131-the-cheby-command)) (D-184, D-088). By default only line tables are emitted, for debuggers and profilers, and full debug info is opt-in ([§13.12.5](13-tooling.md#13125-build-profiles)) (D-259). The panic backtrace of [§11.6](11-errors-and-panics.md#116-panic-and-todo) needs no debug info (D-939).
+
+_Note:_ the reference implementation writes line tables into every object file it links. Linux executables keep them. Until the bundled linker, macOS executables are linked without a debug map, which would name the link's temporary object files by absolute path, so debuggers find no line tables in them there (D-264, D-938).
 
 ## 12.2 Native
 
@@ -92,8 +94,23 @@ A function declared without a body, with one or more `@external` attributes, is 
 @external(native, "cheby_sqlite_open")
 @external(js, "./sqlite.mjs", "open")
 @blocking
-pub fn open(path: String) -> Result<Db, String>
+priv fn open_raw(path: String) -> Db
+
+@external(native, "cheby_sqlite_open_error")
+@external(js, "./sqlite.mjs", "openError")
+priv fn open_error(db: Db) -> Option<String>
+
+/// Opens the database at `path`.
+pub fn open(path: String) -> Result<Db, String> {
+  let db = open_raw(path)
+  case open_error(db) {
+    None => Ok(db)
+    Some(message) => Err(message)
+  }
+}
 ```
+
+Here `open_raw` and `open_error` are foreign functions, and `open` is ordinary Cheby code over them. Native foreign code returns a value of an external type such as `Db` only as a function's direct result, never inside a `Result` or an `Option`, so the Cheby wrapper builds the `Result` ([§12.5.1](#1251-native-abi)) (D-948).
 
 - `@external(native, "symbol")` binds to a C-ABI symbol, linked into the program (D-030).
 - `@external(js, "module", "name")` binds to the named export of an ES module. A relative module path is resolved against the Cheby source file's location (D-030).
@@ -109,9 +126,11 @@ pub fn open(path: String) -> Result<Db, String>
 
 Native symbols follow three rules (D-455):
 
-- Every symbol named by `@external(native, …)` must be defined when the program is loaded or linked, by the Cheby runtime, a linked library or the process itself. Otherwise running or building the program is a compile error at the `@external`, even if the function is never called. Every missing symbol is reported, one error each, in the order of the `@external`s that name them (D-532). `cheby check` does not report it, because which symbols exist is known only at load or link time. When `cheby check` evaluates constants, a missing symbol is bound to a stub, and only a constant whose evaluation calls the stub is an error, like any forbidden effect during evaluation ([§4.5](04-declarations.md#45-constants)) (D-532).
+- Every symbol that an `@external(native, …)` of a reached function names, or of the drop function of a reached external type, must be defined when the program is loaded or linked. It may be defined by the Cheby runtime, by the package's native code or a library its `[native]` table names ([§12.5.4](#1254-native-code-in-packages)), or by the system libraries that every program links. Under `cheby run`, `cheby test` and the REPL, which run code in the `cheby` process, the process itself counts too (D-941, D-943). A function or type is reached when the `main` being run or built, a selected test or a REPL entry can use it, as code generation decides it (D-510). Otherwise running or building the program is a compile error at the `@external`, even if the reached function is never called at run time. The same rule decides for `cheby run`, `cheby test` and `cheby build`, before anything runs or is linked, and never from a linker's messages (D-943). Every missing symbol is reported, one error each, in the order of the `@external`s that name them (D-532). A missing symbol that only unreached functions name is not an error. `cheby check` does not report it, because which symbols exist is known only at load or link time. When `cheby check` evaluates constants, a missing symbol is bound to a stub, and only a constant whose evaluation calls the stub is an error, like any forbidden effect during evaluation ([§4.5](04-declarations.md#45-constants)) (D-532).
 - All `@external(native, …)` attributes of a program that name the same symbol, in any module or package including the standard library, must give it the same C signature ([§12.5.1](#1251-native-abi)). In the REPL, the program is the session's current definitions ([§13.5.2](13-tooling.md#1352-redefinition)) (D-475).
-- Symbols that start with `cheby_rt_` or `cb$` belong to the runtime and to generated code. Outside the standard library, an `@external(native, …)` must not name them.
+- Symbols that start with `cheby_rt_` or `cb$`, and every other symbol that the runtime exports, belong to the runtime and to generated code. Outside the standard library, an `@external(native, …)` must not name them, and a package's native code must not define them, which is a tool error before anything is linked or loaded (D-944). Other names that start with `cheby_`, such as `cheby_sqlite_open`, stay free.
+
+_Note:_ the reference implementation compiles every function of a module that the program reaches, so a module's code may name a missing symbol that only unreached functions use. It binds such a symbol to a stub of the runtime, which reach guarantees is never called (D-943, D-966). The `cheby` process may also define symbols, such as those of the toolchain's own libraries, that an executable does not link, so `cheby run` can accept a symbol that `cheby build` reports.
 
 _Note:_ the reference implementation compiles each native external to an ordinary Cheby function that makes the foreign call, so callers call it like any other function, and whether a function is external is not part of its module's interface (D-455).
 
@@ -129,12 +148,41 @@ On native targets, foreign functions use the C ABI of the platform (D-030). Para
 | external types ([§12.5.3](#1253-external-types)) | a pointer                                               |
 | any other type                                   | an opaque, reference-counted pointer to the Cheby value |
 
-Values such as `String`, `Bytes`, `List` and `Result` cross the native FFI as opaque pointers. The runtime ships a C header, `cheby.h`, with functions to inspect and build Cheby values and to increment and decrement their reference counts. The runtime representation itself stays private (D-187). The header has no functions for `dyn` values, type descriptors or the function packages passed for bounds, so `dyn` values stay opaque (D-237).
+Values such as `String`, `Bytes`, `List` and `Result` cross the native FFI as opaque pointers. The toolchain provides a C header, `cheby.h`, with functions to inspect and build Cheby values and to increment and decrement their reference counts, which a package's C sources include ([§12.5.4](#1254-native-code-in-packages)). The runtime representation itself stays private (D-187). The header declares the opaque type `cheby_value` and these functions, all named with the prefix `cheby_ffi_` (D-945):
+
+| Function                                                                                                                                            | Purpose                                                                                      |
+| --------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `cheby_value *cheby_ffi_dup(cheby_value *v)`                                                                                                        | adds a reference to `v` and returns it                                                       |
+| `void cheby_ffi_drop(cheby_value *v)`                                                                                                               | releases a reference                                                                         |
+| `cheby_value *cheby_ffi_string_new(const char *bytes, size_t len)`                                                                                  | a new `String`, with invalid UTF-8 replaced by U+FFFD (D-311)                                |
+| `const char *cheby_ffi_string_bytes(cheby_value *s, size_t *len)`                                                                                   | a `String`'s UTF-8 bytes, not NUL-terminated, valid while `s` is held                        |
+| `cheby_ffi_bytes_new`, `cheby_ffi_bytes_data`                                                                                                       | the same for `Bytes`                                                                         |
+| `cheby_ffi_int_new`, `cheby_ffi_int_get`, `cheby_ffi_float_new`, `cheby_ffi_float_get`, `cheby_ffi_bool_new`, `cheby_ffi_bool_get`, `cheby_ffi_nil` | scalars in generic positions, such as the elements of a list                                 |
+| `cheby_ffi_some`, `cheby_ffi_none`, `cheby_ffi_option_get`                                                                                          | build an `Option`, or read its payload, which is NULL for `None`                             |
+| `cheby_ffi_ok`, `cheby_ffi_err`, `cheby_ffi_result_is_ok`, `cheby_ffi_result_get`                                                                   | build a `Result`, or read which variant it is and its payload                                |
+| `cheby_value *cheby_ffi_list_new(cheby_value **items, size_t n)`, `cheby_ffi_list_length`, `cheby_ffi_list_get`                                     | build a `List` from its elements, or read its length and an element                          |
+| `int cheby_ffi_write_stdout(const char *bytes, size_t len)`, `cheby_ffi_write_stderr`                                                               | one write to standard output or standard error, returning `0`, or `-1` when the write failed |
+
+The header has no functions for user-defined types, tuples, maps, `dyn` values, type descriptors or the function packages passed for bounds, so those values stay opaque (D-187, D-237, D-945). Later versions of the header only add functions (D-945).
 
 Ownership follows one convention (D-187):
 
 - Arguments are borrowed for the duration of the call. Foreign code that keeps a reference after returning must increment its reference count.
 - Return values are owned by the caller. The foreign function transfers one reference to Cheby.
+- The same holds for the functions of `cheby.h`, and a function of `cheby.h` that takes a payload, such as `cheby_ffi_some` or `cheby_ffi_list_new`, takes ownership of it (D-945). Values that a function of `cheby.h` reads out, such as an element or a payload, are borrowed from the value they were read from.
+
+The functions of `cheby.h` follow these rules (D-945, D-946):
+
+- Passing a value of another type than a function expects is undefined behavior, as a wrong `@external` signature is. Runtimes built with debug assertions check it and stop with a fatal runtime error.
+- A NULL argument means no value. Functions that read return NULL or zero for it, and `cheby_ffi_drop` does nothing.
+- A function of `cheby.h` that cannot allocate returns NULL. When the foreign function then returns, Cheby releases its result if it is not NULL and panics with `out of memory` ([§11.8.2](11-errors-and-panics.md#1182-out-of-memory)). Inside a drop function, the failure is a fatal runtime error instead ([§9.5](09-memory-model.md#95-handles-and-drop-functions)) (D-642, D-946).
+- A function of `cheby.h` finds the running fiber itself, so foreign functions receive no context argument (D-946).
+- `cheby_ffi_write_stdout` and `cheby_ffi_write_stderr` write their bytes at once, in order with the program's other output and inside `cheby test`'s capture of each test's output. Output that foreign code writes through C's own `stdio` has no such guarantee ([§10.10](10-concurrency.md#1010-program-entry-and-exit)) (D-951).
+
+Results of foreign functions follow two more rules:
+
+- A foreign function whose result type is an external type returns its handle, which Cheby wraps as a value of that type even when it is NULL. The type's drop function is never called with NULL ([§12.5.3](#1253-external-types)). A foreign function whose result type is any other type that is passed as a pointer must not return NULL: if it does, the call panics with ``foreign function `<symbol>` returned null``, located at the `@external` function's declaration ([§11.6](11-errors-and-panics.md#116-panic-and-todo)) (D-947).
+- Native foreign code returns a value of an external type only as the function's direct result. Outside the standard library, an `@external(native, …)` whose result type holds an external type below its top level, such as `Result<Db, String>` or `Option<Db>`, is a compile error at the `@external`, because C code has no way to build such a value. Parameters may hold external types at any depth, as opaque values. A type parameter that a call instantiates with an external type is not checked (D-948).
 
 ### 12.5.2 JS ABI
 
@@ -167,10 +215,38 @@ A type declaration with no body declares an **external type**, whose values are 
 pub type Db
 ```
 
-- An external type has no constructors and no fields. Its values can only be created and inspected by foreign functions.
-- An `@external` on an external type names its **drop function** for that target, which is called with the handle when the last reference to it goes away (D-101, [§9.5](09-memory-model.md#95-handles-and-drop-functions)). Without one, the handle is simply forgotten. The exception is the handles of the standard library's concurrency modules, `Sender`, `Receiver`, `Fiber`, `Scope` and `Selector`: they are declared without an `@external`, and their drop functions are supplied by the runtime (D-647, D-703).
+- An external type has no constructors and no fields. Its values can only be created and inspected by foreign functions. Native foreign code creates one only as a function's direct result ([§12.5.1](#1251-native-abi)) (D-948).
+- An `@external` on an external type names its **drop function** for that target, which is called with the handle when the last reference to it goes away (D-101, [§9.5](09-memory-model.md#95-handles-and-drop-functions)). Without one, the handle is simply forgotten. The exception is the handles of the standard library: `Sender`, `Receiver`, `Fiber`, `Scope` and `Selector` of the concurrency modules, `File` of `std::file`, and `Listener` and `Connection` of `std::net`. They are declared without an `@external`, and their drop functions are supplied by the runtime (D-647, D-703, D-982).
+- A native drop function is a C function `void f(void *handle)`. It is called once, on the fiber that released the last reference, never with a NULL handle, and under the contract of [§9.5](09-memory-model.md#95-handles-and-drop-functions) (D-949).
 - External types have no structural equality and do not compare by identity, because identity differs between targets. `==` or hashing on a value that contains an external type panics, like function values (D-070, D-189, D-233). A value of an external type debug-prints as its type name in angle brackets, such as `<Db>` (D-233).
 - External types are handle types for reference counting on every target, including JS (D-100, ADR-0028).
+
+### 12.5.4 Native code in packages
+
+A package supplies the native code that its `@external(native, …)` functions name with the optional `[native]` table of its manifest ([§13.3](13-tooling.md#133-manifest)) (D-940):
+
+```toml
+[native]
+sources = ["src/sqlite_ffi.c"]
+libraries = ["sqlite3"]
+```
+
+- `sources` lists C source files by their paths relative to the package root. Each must end in `.c`, must exist, and must stay inside the package once `..` and symbolic links are resolved. A C file may sit under `src/` next to the module that binds it, and it is not a module ([§7.2](07-modules-and-packages.md#72-modules-and-files)).
+- `libraries` lists system libraries by the name that the linker takes after `-l`, such as `sqlite3` for `-lsqlite3`. Each is a non-empty string of ASCII letters, digits, `_`, `-`, `.` and `+`.
+- The table has no other keys. A violation of these rules is a compile error, like every error in the manifest, and so is a `[native]` table in a package whose `targets` leave out `native` (D-444, D-940).
+- Every command checks the table, but only the commands that run or link native code compile the C sources. `cheby check` compiles none (D-532, D-941).
+- There are no build scripts, no prebuilt archives and no source languages other than C. Each package's C sources are compiled in that package, dependencies included (D-940).
+- A C source includes `cheby.h` to build and inspect Cheby values ([§12.5.1](#1251-native-abi)) (D-945).
+
+The package's native code is part of the program wherever the program runs. An executable links the package's compiled C sources and its `libraries`. `cheby run`, `cheby test` and the REPL run code in the `cheby` process, so they load the same compiled sources and `libraries` as a shared library, and the symbols it defines count for the rules of [§12.5](#125-foreign-functions) as they do in an executable (D-941). A REPL `:reload` that finds a changed C source loads its new code, and code compiled before keeps calling the old ([§13.5.3](13-tooling.md#1353-commands)) (D-712, D-941).
+
+_Note:_ the reference implementation compiles each C source once, with the package root as the working directory, the environment variable `SOURCE_DATE_EPOCH` set to `0`, and fixed flags, so the object holds no path of the machine (D-942):
+
+```sh
+cc -c -O2 -fPIC -g0 -ffile-prefix-map=<package root>=. -ffile-prefix-map=<header dir>=cheby -I<header dir> -o <object> <source>
+```
+
+The compiler's output is shown only when it fails, which is a tool error that names the source. Compiled objects are cached, keyed by the source, the C compiler, the flags, `cheby.h` and every file the compile read (D-942). Under `cheby run`, each package with a `[native]` table becomes one shared library, built with `cc -shared -Wl,-z,defs` on Linux and `cc -dynamiclib` on macOS from the package's objects, its `libraries` and a small object that forwards the calls of `cheby.h` to the running `cheby`. It is loaded with `dlopen` and never unloaded (D-941).
 
 ## 12.6 Target-specific code
 
@@ -213,7 +289,13 @@ A package may declare the targets it supports with the optional `targets` field 
 
 `@blocking` has no effect on JS.
 
-_Note:_ no Cheby code runs on the pool's threads (D-191), so the reference implementation calls a `@blocking` function there through a generated shim that takes the arguments as machine words and returns the result widened to one word (D-818). How foreign code on a pool thread builds Cheby values through `cheby.h` ([§12.5.1](#1251-native-abi)), and how the owned result of a call whose fiber was cancelled meanwhile is released, wait for M3, which settles how a package supplies native foreign code (D-818). When the pool cannot take the call, as when the system refuses it a thread, the reference implementation runs the call on the fiber's own thread instead and blocks that thread ([§10.9](10-concurrency.md#109-blocking-io)) (D-815, D-817).
+A `@blocking` foreign function of a package runs on the pool as the standard library's do (D-950):
+
+- It may use `cheby.h` ([§12.5.1](#1251-native-abi)) as any foreign function may. The values it builds belong to the calling fiber, which stays suspended until the call returns. An allocation that fails is raised as the `out of memory` panic on the fiber when it resumes.
+- When the calling fiber was cancelled during the call, the fiber releases the call's owned result when it resumes, and then unwinds. A result of an external type is wrapped first, so its drop function runs on the fiber ([§9.5](09-memory-model.md#95-handles-and-drop-functions)) (D-171).
+- A call that the runtime abandons, because it gave up waiting for the pool or because the program ends, keeps running on its thread. From then on its calls of `cheby.h` that allocate return NULL, `cheby_ffi_drop` does nothing and the output functions return `-1`. Its result is never released, and its borrowed arguments stay readable until the process exits ([§10.10](10-concurrency.md#1010-program-entry-and-exit)) (D-815, D-950).
+
+_Note:_ no Cheby code runs on the pool's threads (D-191), so the reference implementation calls a `@blocking` function there through a generated shim that takes the arguments as machine words and returns the result widened to one word (D-818). While the call runs, the pool thread acts for the parked fiber, so the functions of `cheby.h` charge what they build to the fiber's memory (D-950). When the pool cannot take the call, as when the system refuses it a thread, the reference implementation runs the call on the fiber's own thread instead and blocks that thread ([§10.9](10-concurrency.md#109-blocking-io)) (D-815, D-817).
 
 ## 12.8 Tail calls
 

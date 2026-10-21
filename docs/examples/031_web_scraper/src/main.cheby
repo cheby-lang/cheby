@@ -14,10 +14,10 @@
 //!
 //! The crawl is in `crawl.cheby` and finding links in `html.cheby`.
 //!
-//! `std::http` belongs to a later tier of the standard library, which is
-//! not specified yet, so this example assumes `http::get(url)`, which
-//! returns `Result<http::Response, http::Error>`, a response with the
-//! fields `status: Int` and `body: String`.
+//! `http::get(url)` returns `Result<http::Response, http::Error>`. Every
+//! status is `Ok`, so a missing page is a response with the status
+//! `404`, not an error. `std::http` is specified in
+//! `docs/stdlib/http.md`.
 
 import std::duration
 import std::env

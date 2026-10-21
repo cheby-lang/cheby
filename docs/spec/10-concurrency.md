@@ -37,7 +37,7 @@ The scheduling order of runnable fibers is unspecified. Programs must not depend
 
 By default the scheduler uses one OS thread per CPU core, as `runtime::cpu_count()` reports it (D-175, D-657). The thread count is always from 1 to 1024, and it changes only timing and scheduling, never a result that does not depend on them (D-232). It can be overridden in two ways:
 
-- The environment variable `CHEBY_THREADS`, like Go's `GOMAXPROCS`. The runtime reads it once, before `main` starts, in `cheby run`, `cheby test` and the REPL alike. Unset or empty, it gives the default, capped at 1024. A decimal whole number of at least 1 sets the count, clamped to 1024: ASCII digits only, leading zeros allowed, with no sign and no surrounding whitespace, and a number too large for the machine word clamps too (D-740). Any other value stops the program before `main` runs, with `error: CHEBY_THREADS must be a whole number of at least 1, not "<value>"` on standard error and exit status `1`. It is independent of `-j`, which sizes the compiler's own workers ([§13.1](13-tooling.md#131-the-cheby-command)) (D-622, D-658).
+- The environment variable `CHEBY_THREADS`, like Go's `GOMAXPROCS`. The runtime reads it once, before `main` starts, in `cheby run`, `cheby test`, the REPL and executables alike (D-927). Unset or empty, it gives the default, capped at 1024. A decimal whole number of at least 1 sets the count, clamped to 1024: ASCII digits only, leading zeros allowed, with no sign and no surrounding whitespace, and a number too large for the machine word clamps too (D-740). Any other value stops the program before `main` runs, with `error: CHEBY_THREADS must be a whole number of at least 1, not "<value>"` on standard error and exit status `1`. It is independent of `-j`, which sizes the compiler's own workers ([§13.1](13-tooling.md#131-the-cheby-command)) (D-622, D-658).
 - The function `runtime::set_thread_count`, which clamps its argument to 1 to 1024 and applies to the whole program at once. Added threads start taking fibers at once, and a removed thread stops after its fiber reaches a suspension point (D-298, D-657).
 
 On JS, fibers share the one JS thread, so `runtime::thread_count()` is 1, `set_thread_count` has no effect and `CHEBY_THREADS` is not read (D-657).
@@ -47,13 +47,17 @@ On JS, fibers share the one JS thread, so `runtime::thread_count()` is 1, `set_t
 Every fiber belongs to a **scope** (D-040). A scope is opened with `use` ([§5.10](05-expressions.md#510-use)):
 
 ```cheby
-fn fetch_both(a: Url, b: Url) -> Result<(Page, Page), fiber::Panic> {
+type Fetched = Result<http::Response, http::Error>
+
+fn fetch_both(a: String, b: String) -> Result<(Fetched, Fetched), fiber::Panic> {
   use scope <- fiber::scope()
   let first = fiber::spawn(scope, fn() { http::get(a) })
   let second = fiber::spawn(scope, fn() { http::get(b) })
   (fiber::join(first), fiber::join(second))
 }
 ```
+
+`http::get` returns a `Result` of its own, so each fiber's value is a `Fetched`, and a failed request is an `Err` inside the scope's `Ok`, not a panic (D-1010).
 
 `fiber::scope` calls its body as an ordinary call on the calling fiber, with that fiber's stack. It does not start a fiber for the body, so values that the body captures or returns are not marked shared ([§9.4](09-memory-model.md#94-sharing-across-threads)) (D-665, ADR-0057). A scope's **members** are its body, which is the calling fiber's frames above the `scope` call, and the fibers spawned into it (D-666).
 
@@ -98,7 +102,7 @@ _Note:_ a fiber that the cancellation has not reached yet can still spawn a deta
 
 Detached fibers are the escape hatch for long-lived background work. Leaked detached fibers, and fibers blocked forever, are not collected (D-029). Erlang-style links, monitors and supervision are provided by a library on top of scopes and detached fibers (D-040).
 
-**Deadlock.** A program is **deadlocked** when no fiber is running or runnable, no timer is pending, no IO operation or `@blocking` foreign call is in progress ([§10.9](#109-blocking-io)), and the root fiber has not finished (D-724). No fiber can then make progress. `cheby test` applies this rule to each test's own fibers, and the REPL to the running entry and the detached fibers of the session (D-857). Every build detects a deadlock and treats it as fatal:
+**Deadlock.** A program is **deadlocked** when no fiber is running or runnable, no timer is pending, no IO operation or `@blocking` foreign call is in progress ([§10.9](#109-blocking-io)), and the root fiber has not finished (D-724). An IO operation is in progress while a fiber waits for it: a socket that no fiber waits on, such as an idle `net::Listener`, cannot wake anyone and does not count (D-984). No fiber can then make progress. `cheby test` applies this rule to each test's own fibers, and the REPL to the running entry and the detached fibers of the session (D-857). Every build detects a deadlock and treats it as fatal:
 
 - `cheby run` fixes exit status `103`, flushes standard output, writes `fatal error: all fibers are blocked` to standard error, then one line per blocked fiber that names the operation it waits in and the location of that call, in a deterministic order, and ends the program with status `103` ([§10.10](#1010-program-entry-and-exit)) (D-859). A failed write after that leaves the status as it is (D-785).
 - A deadlock is not a panic. It cannot be caught by a scope or a timeout. In `cheby run`, nothing unwinds before the exit (D-859).
@@ -249,7 +253,7 @@ Every cancellation has a **target**, an open scope: a failing scope targets itse
 
 A cancellation therefore stops only at the boundary of the scope it targets, and a scope cancelled from outside never returns.
 
-A cancelled operation takes and delivers nothing (D-670). A cancelled `send` has not enqueued its value, which unwinding releases, and a cancelled `receive`, `select` or `join` takes nothing, so no value is lost. Work that the runtime cannot interrupt, which is file IO, standard input and foreign calls marked `@blocking` ([§10.9](#109-blocking-io)), finishes first. The cancellation is delivered when it returns, and its result is released, so a timeout waits for that work (D-670, D-683). A fiber that a cancellation has already reached never starts such work: the call is cancelled before the work starts, so no line of standard input is consumed and no file is written (D-816).
+A cancelled operation takes and delivers nothing (D-670). A cancelled `send` has not enqueued its value, which unwinding releases, and a cancelled `receive`, `select` or `join` takes nothing, so no value is lost. A cancelled `net::accept` or `net::read` has taken nothing, and a cancelled `net::connect` leaves no connection. A cancelled `net::write` is the one exception: it may have sent a prefix of its data, and the connection stays usable (D-1000). Work that the runtime cannot interrupt, which is file IO, standard input, the lookup of a host name and foreign calls marked `@blocking` ([§10.9](#109-blocking-io)), finishes first. The cancellation is delivered when it returns, and its result is released, so a timeout waits for that work (D-670, D-683). A fiber that a cancellation has already reached never starts such work: the call is cancelled before the work starts, so no line of standard input is consumed and no file is written (D-816).
 
 A cancelled fiber is not reported as having panicked. Its scope reports the original cause.
 
@@ -261,10 +265,13 @@ The standard library provides timeouts built on cancellation (D-103):
 
 ```cheby
 case fiber::timeout(duration::seconds(2), fn() { http::get(url) }) {
-  Ok(page) => render(page)
+  Ok(Ok(page)) => render(page)
+  Ok(Err(_)) => render_failure()
   Err(_) => render_timeout()
 }
 ```
+
+The outer `Result` is the timeout's, and the inner one is `http::get`'s (D-1010).
 
 `fiber::timeout(d, f)` calls `f` in a new scope and returns `Result<T, fiber::Timeout>`, where `fiber::Timeout` is the exposed ADT `Timeout { TimedOut, Panicked(Panic) }` of `std::fiber`, with structural `==` (D-181, D-649). Like a scope's body, `f` is an ordinary call on the calling fiber, with that fiber's stack, so a deep recursion that works without `timeout` works inside it too (D-665, ADR-0057). The scope has no `Scope` value, so its only member is `f`. Fibers that `f` spawns into scopes it opens are inside the timeout, because those scopes are open in `f`'s frames ([§10.7](#107-cancellation)).
 
@@ -285,12 +292,13 @@ Selectors have a timer arm for deadlines ([§10.6](#106-selectors)). Timers use 
 
 On native targets, the runtime performs IO so that a blocking operation suspends only the calling fiber, not its OS thread (D-042):
 
-- Network IO and timers use an OS event poller (kqueue, epoll or IOCP) (D-680, ADR-0059). A fiber waiting on a socket is suspended until the poller reports it ready.
-- File IO, a read of standard input that must wait for input, and foreign functions marked `@blocking` ([§12.7](12-targets-and-ffi.md#127-blocking-foreign-calls)), run on a separate pool of blocking threads while the calling fiber is suspended (D-683, D-823). No Cheby code runs on those threads (D-191).
-- Work on the blocking pool cannot be interrupted. A cancellation that reaches its fiber meanwhile is delivered when the work returns, and the work's result is released ([§10.7](#107-cancellation)) (D-670, D-683).
+- Network IO and timers use an OS event poller (kqueue, epoll or IOCP) (D-680, ADR-0059). A fiber waiting on a socket is suspended until the poller reports it ready. The waits of `std::net` and `std::http`, such as accepting a connection, connecting, reading and writing, and `time::sleep`, are such waits, and a cancellation interrupts them at once ([§10.7](#107-cancellation)) (D-983, D-1000).
+- File IO, a read of standard input that must wait for input, the lookup of a host name when `std::net` or `std::http` connects or listens, and foreign functions marked `@blocking` ([§12.7](12-targets-and-ffi.md#127-blocking-foreign-calls)), run on a separate pool of blocking threads while the calling fiber is suspended (D-683, D-823, D-983). No Cheby code runs on those threads (D-191).
+- Work on the blocking pool cannot be interrupted. A cancellation that reaches its fiber meanwhile is delivered when the work returns, and the work's result is released ([§10.7](#107-cancellation)) (D-670, D-683). This holds for the lookup of a host name too (D-983, D-1000).
+- A `@blocking` foreign function of a package may build Cheby values with `cheby.h` while it runs on the pool, and they belong to the calling fiber ([§12.7](12-targets-and-ffi.md#127-blocking-foreign-calls)) (D-950).
 - Foreign functions without `@blocking` are assumed to return quickly, and are called directly on the fiber's thread (D-042).
 
-_Note:_ in the reference implementation, standard input has one process-wide buffered reader, which reads 64 KiB at a time and serves both `io::read_line` and the REPL's prompt ([§13.5.5](13-tooling.md#1355-prompt-output-and-standard-streams)). Reads take their lines in the order they ask for them. A fiber takes a line that the reader already holds on its own thread, without the blocking pool, unless a cancellation of the fiber is pending, another read is waiting for the reader, or another thread holds it. Only a read that must wait goes to the pool (D-548, D-823). When the system refuses the pool a thread and no pool thread runs, the work runs on the calling fiber's own thread instead, and blocks that thread (D-817).
+_Note:_ in the reference implementation, standard input has one process-wide buffered reader, which reads 64 KiB at a time and serves both `io::read_line` and the REPL's prompt ([§13.5.5](13-tooling.md#1355-prompt-output-and-standard-streams)). Reads take their lines in the order they ask for them. A fiber takes a line that the reader already holds on its own thread, without the blocking pool, unless a cancellation of the fiber is pending, another read is waiting for the reader, or another thread holds it. Only a read that must wait goes to the pool (D-548, D-823). A file opened for reading reads ahead the same way, in blocks of 64 KiB, so only a read that empties the handle's buffer goes to the pool. Writes to a file are not buffered: each write is one job on the pool, and it returns once the operating system has the data (D-994, D-995). When the system refuses the pool a thread and no pool thread runs, the work runs on the calling fiber's own thread instead, and blocks that thread (D-817).
 
 On the JS target, IO is performed through the host's asynchronous APIs, and a fiber waiting on IO is suspended in the same way ([§12.3](12-targets-and-ffi.md#123-javascript)).
 
@@ -305,11 +313,14 @@ A program runs a `main` function ([§4.2.1](04-declarations.md#421-main)) in a f
    - `0` if `main` returns `Nil` or `Ok(Nil)`,
    - `1` if `main` returns `Err(e)`, after printing `e` to standard error (D-073, D-182). `e` is printed with `Show` if its type satisfies `Show` ([§8.8](08-interfaces.md#88-standard-interfaces)), and with debug printing otherwise ([§3.13](03-types.md#313-equality-hashing-and-debug-printing)) (D-182). The text is followed by a newline and has no prefix, because the program chose it (D-529). A `fiber::Panic` shows as its panic report without the final line ending, so `main` returning `Err(p)` prints the same two lines that the panic would have printed (D-648),
    - `101` if the root fiber panics, after printing the panic ([§11.6](11-errors-and-panics.md#116-panic-and-todo)) (D-182, D-449),
-   - `103` if the program deadlocks, after printing the blocked fibers ([§10.4](#104-detached-fibers)) (D-724).
+   - `103` if the program deadlocks, after printing the blocked fibers ([§10.4](#104-detached-fibers)) (D-724),
+   - the status given to `process::exit`, when a fiber calls it: from `0` to `255` as given, and `255` for any other value. The program ends at once, as when a write fails below: the calling fiber stops where it is, the other fibers stop without unwinding, no drop function or other user code runs, and standard output is flushed (D-709, D-1022). Under `cheby test`, `process::exit` fails the calling test instead and the run goes on, and in the REPL it ends the session with that status ([§13.6](13-tooling.md#136-tests), [§13.5.4](13-tooling.md#1354-fibers-in-the-repl)) (D-1023).
+
+An executable that `cheby build` produces exits with the same statuses as `cheby run` for the same program (D-926).
 
 _Note:_ an implementation may instead cancel the detached fibers of item 3 and let them unwind, as debug toolchains of the reference implementation do to check for leaks. No user code runs while they unwind, the drop functions of user external types are not called, and standard output has been flushed and the exit status fixed before, so a program cannot observe the difference (D-073, D-710). For the same reason, a detached fiber that fails to write after that point, while it is being stopped, leaves the exit status as it is and prints nothing more (D-785).
 
-_Note:_ a toolchain built with debug assertions also checks, when `main` returns with status `0` or `1` and when the root fiber panics, that no objects are still live. If some are, it prints `error: leak check failed: N objects are still live at exit` to standard error, after the panic report if there is one, and exits with status `102` (D-458, D-710). The check is skipped when a fiber cannot be stopped because it waits on work on the blocking pool ([§10.9](#109-blocking-io)), or is blocked in such work on its own thread, as when the system refused the pool a thread, or waits only for such a fiber, as when it closes a scope whose child is blocked so (D-710, D-814, D-817). Such a fiber is left as it is, and the program still ends with the status already fixed (D-786, D-804). Work on the pool that has not returned does not hold the program back: once two polls 5 ms apart find a fiber still waiting on it, nothing else running and no work completed between them, the runtime gives up on the pool, and the work's result is dropped when it returns (D-815). The check is also skipped when a request for memory that the system refused ended in `out of memory` ([§11.8.2](11-errors-and-panics.md#1182-out-of-memory)), because the refusal can leave a value that was being updated in place unreachable, so a leak there never turns the status into `102` (D-771, D-907).
+_Note:_ a toolchain built with debug assertions, and the executables it builds, also check, when `main` returns with status `0` or `1` and when the root fiber panics, that no objects are still live. If some are, the program prints `error: leak check failed: N objects are still live at exit` to standard error, after the panic report if there is one, and exits with status `102` (D-458, D-710, D-926). The check is skipped when a fiber cannot be stopped because it waits on work on the blocking pool ([§10.9](#109-blocking-io)), or is blocked in such work on its own thread, as when the system refused the pool a thread, or waits only for such a fiber, as when it closes a scope whose child is blocked so (D-710, D-814, D-817). Such a fiber is left as it is, and the program still ends with the status already fixed (D-786, D-804). Work on the pool that has not returned does not hold the program back: once two polls 5 ms apart find a fiber still waiting on it, nothing else running and no work completed between them, the runtime gives up on the pool, and the work's result is dropped when it returns (D-815). A `@blocking` foreign call that the runtime gave up on, or that is still running when the runtime stops, is abandoned: it keeps running on its pool thread, its later `cheby.h` calls build nothing, release nothing and write nothing, its result is never released, and the arguments it borrowed stay readable until the process exits (D-950). The check is also skipped when a request for memory that the system refused ended in `out of memory` ([§11.8.2](11-errors-and-panics.md#1182-out-of-memory)), because the refusal can leave a value that was being updated in place unreachable, so a leak there never turns the status into `102` (D-771, D-907).
 
 `main` takes no parameters and no type parameters ([§4.2.1](04-declarations.md#421-main)) (D-491). A program reads its command-line arguments and environment variables through the standard-library module `std::env`, which any module may use (D-183). `env::args()` does not include the program name, which `env::program_name()` returns (D-347).
 
@@ -318,7 +329,10 @@ Standard output and standard error behave the same way on every target:
 - Standard output is line-buffered. It is also flushed before the program reads standard input, so a prompt written without a newline appears in time (D-346).
 - Standard error is not buffered (D-346).
 - One call that writes to a standard stream, such as `io::println`, writes its whole text at once, so the output of fibers that write at the same time never interleaves inside one call (D-684).
+- Foreign code writes to the standard streams in order with `io::println` only through `cheby_ffi_write_stdout` and `cheby_ffi_write_stderr` ([§12.5.1](12-targets-and-ffi.md#1251-native-abi)). Each call is one write, as above. It returns `-1` when the write fails, and never ends the program, as `io::write_stdout` returns `Err`. Output that foreign code writes through C's own `stdio` has no ordering guarantee with the program's other output (D-951).
 - All buffered output is flushed when the program ends, whatever its exit status (D-346).
 - When a write or flush that does not return a `Result`, such as `io::println`, cannot complete, for example because the reader of a pipe has gone, the program ends at once with exit status `1` and prints nothing (D-306).
 - After `io::write_stdout` returns `Err`, the text it could not write may stay unwritten, and a later flush of standard output that fails does not end the program, whether it is the flush at exit, before a panic report or before reading standard input. The `Err` has already reported that text, so a program that handles it keeps its exit status. This lasts until `io::print` or `io::println` adds text to standard output or a later `io::write_stdout` succeeds, after which the previous rule applies again (D-574).
 - A standard stream that is closed or missing when the program starts behaves as a null device: writes and flushes succeed and discard the text, and reads see the end of input. The previous rule applies only to streams that are open at start (D-474).
+
+These rules hold for executables as for `cheby run`. An executable ignores the `SIGPIPE` signal, so a write to a pipe or socket whose reader has gone fails as described above, or with an `Err`, and never kills the process (D-925).

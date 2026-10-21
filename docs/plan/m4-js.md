@@ -32,10 +32,16 @@ Detail level: workstreams with outcomes. This file is refined into tasks when M4
 - Callbacks from foreign code as new detached fibers (D-191).
 - IO through host asynchronous APIs, on Node first, then Deno, Bun and browsers (D-074). A standard stream that is closed or missing at start is a null device, and only failures of streams that were open at start end the program with status 1 (D-306, D-474).
 
+- The `.mjs` files of tier 3, whose bindings M3 declares, with `@async` where the host API returns a `Promise`. Every std `@async` kernel resolves with the `(kind, message)` error pair instead of rejecting (D-986). `std::http` binds `fetch` and the host's server API (D-1003).
+
 ### 4.4 Cross-target conformance
 
 - The harness runs every example on native and on Node and compares both against the same goldens.
 - The differential fuzzer compares native and JS output (testing.md §8), with the documented JS-only panics of §12.4 as the only allowed difference.
+
+### 4.5 The LSP core (M5 lane)
+
+- The LSP core lands with M4, starting no earlier than M3's third checkpoint, because it sits on the driver's front-end APIs that M3's cache rewrites. Its protocol questions are settled in its own design step ([m5-tooling.md](m5-tooling.md), D-1029).
 
 ## Exit criteria
 

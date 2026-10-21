@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: accepted; refined by D-914, D-923
 date: 2026-10-02
 log: D-254
 ---

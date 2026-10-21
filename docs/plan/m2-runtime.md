@@ -304,3 +304,4 @@ Changes against the plan:
 - Checkpoint 5 added no package.
 - M2's exit ran its long checks (the Linux container, the sanitizer job, Rosetta, the loops, the runtime repeats and Miri) on `33dbaf8` during the user's review of checkpoint 5, and cited them for the docs commit through a code-equal rule that compares code with comments removed. The four container runs first failed because Docker Desktop was not running, and ran again on `29848fe`.
 - The exit stopped for the user's approval of its report before the exit's documents and the milestone bump.
+- The M5 slices that [m5-tooling.md](m5-tooling.md) placed with M2, the formatter core, the LSP core and `cheby new`, did not land, and no decision moved them at the time. The M3 design records the slip: the formatter core and `cheby new` run beside M3, and the LSP core lands with M4, no earlier than M3's third checkpoint (D-1029).

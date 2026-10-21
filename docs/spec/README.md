@@ -22,7 +22,7 @@ This specification describes the Cheby programming language: its syntax, static 
 
 Appendix: [A. Grammar](appendix-a-grammar.md)
 
-The standard library is specified separately, one file per module, in [`../stdlib/`](../stdlib/) (D-204, D-220). This specification fixes the language and the semantics the runtime must provide. Standard-library names used in its examples are those of the standard-library spec where it specifies them, as it does for `fiber::scope` and `channel::new` (D-646). Names of modules it has not specified yet, such as `http::get`, are provisional until it does (D-174).
+The standard library is specified separately, one file per module, in [`../stdlib/`](../stdlib/) (D-204, D-220). This specification fixes the language and the semantics the runtime must provide. Standard-library names used in its examples are those of the standard-library spec where it specifies them, as it does for `fiber::scope`, `channel::new`, `file::with_create` and `http::get` (D-646, D-992, D-1009). Names of modules it has not specified yet are provisional until it does (D-174).
 
 ## Conventions
 
@@ -61,15 +61,15 @@ Where the decision log does not settle something that the spec needs, the spec m
 
 The identifier is `OQ-<chapter>-<n>`. Text that depends on an open question is written as if the proposal were accepted, but it is **provisional** until the question is settled in the decision log. When a question is settled, the marker is replaced by normative text that cites the new decision. If the decision differs from the proposal, the dependent text is rewritten.
 
-All gaps marked in the first draft were settled by D-126 to D-197, and later gaps are marked as they are found. The first draft's last open question, OQ-13-7, was settled by D-239. The M2 design left two open, settled at H1's plan: OQ-10-11, the locations in a deadlock report, by D-856, and OQ-13-8, deadlocks while tests run in parallel, by D-857.
+All gaps marked in the first draft were settled by D-126 to D-197, and later gaps are marked as they are found. The first draft's last open question, OQ-13-7, was settled by D-239. The M2 design left two open, settled at H1's plan: OQ-10-11, the locations in a deadlock report, by D-856, and OQ-13-8, deadlocks while tests run in parallel, by D-857. The M3 design left one open, OQ-11-4, the details of the panic backtrace, settled by D-1038 to D-1042.
 
 ### Examples
 
 Examples are written in Cheby with the formatting `cheby fmt` is expected to produce: two-space indentation, no semicolons, trailing commas in multi-line lists.
 
 ```cheby
-import std::list
 import std::io
+import std::list
 
 fn main() {
   [1, 2, 3]

@@ -15,7 +15,7 @@ Identity is not observable. There is no pointer equality, and `==` is always str
 On native targets, every heap value carries a reference count (D-005):
 
 - The compiler inserts increments and decrements precisely, so that a value is freed as soon as the last reference to it is gone, not at the end of a scope.
-- Borrowing is inferred by the compiler, which removes increment/decrement pairs where it can prove they are unnecessary. There are no user annotations for ownership or borrowing (D-072). Borrowing is inferred over all the units of a build (D-779). A `pub` function, and so every call across a package boundary, uses a fixed owned convention, so editing a function body never changes how other packages call it (D-250, D-812). Inside a package, a package-visible function may be borrowed (D-787). Editing its body can then change how the package's other modules call it, and those modules are recompiled with it ([§13.12.3](13-tooling.md#13123-interface-artifacts-and-recompilation)) (D-812).
+- Borrowing is inferred by the compiler, which removes increment/decrement pairs where it can prove they are unnecessary. There are no user annotations for ownership or borrowing (D-072). Borrowing is inferred over the units of a build that [§13.12.2](13-tooling.md#13122-units-of-compilation) names (D-779, D-968). A `pub` function, and so every call across a package boundary, uses a fixed owned convention, so editing a function body never changes how other packages call it (D-250, D-812). Inside a package, a package-visible function may be borrowed (D-787). Editing its body can then change how the package's other modules call it, and those modules are recompiled with it ([§13.12.3](13-tooling.md#13123-interface-artifacts-and-recompilation)) (D-812).
 - Small integers and other immediate values are not heap-allocated and are not counted (D-021).
 
 What is heap-allocated, and when counts change, is an implementation detail. The only observable guarantees are:
@@ -81,7 +81,7 @@ _Note:_ the reference implementation also marks the values bound at the REPL pro
 
 ## 9.5 Handles and drop functions
 
-Some runtime and FFI types are **handles**: channel `Sender` and `Receiver` values, `Fiber`, `Scope` and `Selector` values ([chapter 10](10-concurrency.md)), files, sockets, and external types declared with a drop function ([§12.5.3](12-targets-and-ffi.md#1253-external-types)) (D-101). The handles of the concurrency modules are external types of `std::channel`, `std::fiber` and `std::selector`, with drop functions (D-647).
+Some runtime and FFI types are **handles**: channel `Sender` and `Receiver` values, `Fiber`, `Scope` and `Selector` values ([chapter 10](10-concurrency.md)), files (`file::File`), sockets (`net::Listener` and `net::Connection`), and external types declared with a drop function ([§12.5.3](12-targets-and-ffi.md#1253-external-types)) (D-101). The handles of the concurrency modules are external types of `std::channel`, `std::fiber` and `std::selector`, with drop functions (D-647). The handles of files and sockets are external types of `std::file` and `std::net` in the same way: a `File`'s drop function closes the file, and a socket's closes the socket without waiting (D-982).
 
 - A handle type may have a **drop function**. It runs exactly once, when the last reference to the handle goes away (D-101).
 - Drop functions run deterministically on every target, including JS ([§9.8](#98-memory-on-the-js-target)) (D-100, ADR-0028).
@@ -90,11 +90,18 @@ Some runtime and FFI types are **handles**: channel `Sender` and `Receiver` valu
 - Handles have no structural equality or hash: `==` and hashing panic when they reach one, and a handle debug-prints as a placeholder such as `<Sender>` ([§3.13](03-types.md#313-equality-hashing-and-debug-printing)) (D-233).
 
 - A drop function runs on the fiber that released the last reference to the handle (D-171).
-- A panic inside a drop function aborts the whole process, because there is no sensible place to report it and continuing would silently leak the resource (D-171).
+- A panic inside a drop function aborts the whole process, because there is no sensible place to report it and continuing would silently leak the resource (D-171). For the same reason, a `cheby.h` function that cannot allocate while a drop function runs ends the process with the fatal runtime error `out of memory in a drop function`, instead of the `out of memory` panic it raises elsewhere ([§11.8.2](11-errors-and-panics.md#1182-out-of-memory), [§12.5.1](12-targets-and-ffi.md#1251-native-abi)) (D-946).
 
 Channels close when their last `Sender` or last `Receiver` is dropped ([§10.5](10-concurrency.md#105-channels)).
 
-_Note:_ the drop functions of the standard library's handles never block, suspend, panic or run Cheby code ([§10.5](10-concurrency.md#105-channels)) (D-672, D-703). The reference implementation runs them from M2, and the drop functions of user external types from M3 (D-703).
+The native drop function of a user external type is a C function `void f(void *handle)` ([§12.5.3](12-targets-and-ffi.md#1253-external-types)). Its contract is weaker than that of the standard library's drop functions, because C code cannot be checked (D-949):
+
+- It is called once, on the fiber that released the last reference, while that fiber runs or unwinds, and never with a NULL handle.
+- It may release Cheby values with `cheby_ffi_drop`, build values with `cheby.h`, and write with `cheby_ffi_write_stdout` and `cheby_ffi_write_stderr` ([§12.5.1](12-targets-and-ffi.md#1251-native-abi)).
+- It should return quickly, like every foreign call without `@blocking` ([§12.7](12-targets-and-ffi.md#127-blocking-foreign-calls)). If it blocks, it blocks its thread. A drop function cannot be `@blocking`.
+- It is not called for the handles that detached fibers still hold when the program ends ([§10.10](10-concurrency.md#1010-program-entry-and-exit)) (D-710).
+
+_Note:_ the drop functions of the standard library's handles never block, suspend, panic or run Cheby code ([§10.5](10-concurrency.md#105-channels)) (D-672, D-703). The reference implementation runs them from M2, and the drop functions of user external types from M3 (D-703, D-949). While a drop function runs, a `cheby_ffi_drop` that releases another handle queues its release behind the running one instead of starting a nested release, so a chain of handles that each hold the next does not grow the stack (D-949).
 
 ## 9.6 Reference cycles
 
@@ -110,7 +117,7 @@ Structured concurrency ([§10.3](10-concurrency.md#103-scopes)) prevents the mos
 
 The values of module constants are computed at compile time ([§4.5](04-declarations.md#45-constants)) and stored in the program image (D-090). They are shared by all fibers, are never reference counted, and are never freed. Reference count operations on a constant's value are no-ops.
 
-_Note:_ the JIT of the reference implementation evaluates constants in the process that runs the program, and makes each result static where it was built: its objects get count 0 and leave the leak check. A serialized image of the results comes with the build cache (D-539).
+_Note:_ the reference implementation stores each constant's result in the build cache as an image that describes values, not memory: no layout number, address or hash seed. Before `main` starts, every run installs the constants it reads from their images, fresh results included, as static objects with count 0 that leave the leak check, and executables install them the same way. A value that two constants share stays one value (D-539, D-979).
 
 ## 9.8 Memory on the JS target
 

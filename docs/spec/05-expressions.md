@@ -463,10 +463,12 @@ fn load_config(path: String) -> Result<Config, ConfigError> {
 }
 
 fn with_log(path: String) -> Result<Nil, io::Error> {
-  use handle <- file::with_open(path)
+  use handle <- file::with_create(path)
   file::write_line(handle, "started")
 }
 ```
+
+`file::with_create` creates or truncates the file, passes the handle to the callback and closes it when the callback returns (D-992, D-993).
 
 ## 5.11 Constructors and records
 

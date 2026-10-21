@@ -36,6 +36,7 @@ This chapter is informative. It summarizes the language and points to the normat
 | Compile-time evaluated constants                                              | [4](04-declarations.md)                               | D-090                      |
 | Inline `test` blocks                                                          | [4](04-declarations.md), [13](13-tooling.md)          | D-055                      |
 | Per-target FFI through `@external` and `@target`                              | [12](12-targets-and-ffi.md)                           | D-030, D-056               |
+| C sources and system libraries in a package, through the manifest             | [12](12-targets-and-ffi.md), [13](13-tooling.md)      | D-940, D-941               |
 
 ## 1.3 What Cheby deliberately does not have
 
@@ -136,7 +137,7 @@ The reference implementation is written in Rust (D-010). A single mid-level IR f
 
 There is no interpreter tier. Generic code uses a uniform boxed representation, with small integers tagged and unboxed (D-021).
 
-Each module is compiled separately into an interface artifact and cached code. A module is recompiled when it changes, and its dependents only when an interface they use changes, or, inside a package, when the borrow mask of a package-visible function they call changes (D-812). Debug builds specialize and inline only within a module, and release builds may also specialize and inline across modules within a budget (D-249, D-251). The build model is described in [§13.12](13-tooling.md#1312-build-model).
+Each module is compiled separately into an interface artifact and cached code. The JIT and the object output take the same cached code, so an executable runs what `cheby run` runs (D-914, D-915). A module is recompiled when it changes, and its dependents only when an interface they use changes, or, inside a package, when the borrow mask of a package-visible function they call changes (D-812). Debug builds specialize and inline only within a module, and release builds may also specialize and inline across modules within a budget (D-249, D-251). The build model is described in [§13.12](13-tooling.md#1312-build-model).
 
 ## 1.6 Stability and licensing
 

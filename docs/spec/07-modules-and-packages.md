@@ -32,7 +32,7 @@ There are no `mod` declarations. The file system is the single source of truth (
 
 The names of `.cheby` files and of directories under `src/` must be valid `LOWER` identifiers. Such files and directories whose names are not valid identifiers are a compile error, except for hidden files, which are ignored.
 
-Other files under `src/`, such as the JS helper modules named by `@external(js, "./…")`, are not modules. The naming rule does not apply to them, and module discovery ignores them (D-208). A JS build copies every file named by a relative `@external(js, …)` path into its output, at the same location relative to the compiled module ([§12.5](12-targets-and-ffi.md#125-foreign-functions)).
+Other files under `src/`, such as the JS helper modules named by `@external(js, "./…")` and the C sources that the manifest's `[native]` table lists ([§12.5.4](12-targets-and-ffi.md#1254-native-code-in-packages)), are not modules. The naming rule does not apply to them, and module discovery ignores them (D-208, D-940). A JS build copies every file named by a relative `@external(js, …)` path into its output, at the same location relative to the compiled module ([§12.5](12-targets-and-ffi.md#125-foreign-functions)).
 
 The package's **root module** is `src/main.cheby`. Its path is just the package name (`my_app`), and it cannot also be imported as `my_app::main` (D-142). Its `main` function is the program's default entry point. Any other module's `main` can be run by its module path, for example `cheby run my_app::tools::migrate` ([§4.2.1](04-declarations.md#421-main), D-137).
 

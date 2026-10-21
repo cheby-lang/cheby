@@ -1,6 +1,6 @@
 # `std::io`
 
-Standard input, standard output, standard error, and reading and writing whole files. File handles, directories and `file::with_open` (D-101) come in tier 3 (D-328).
+Standard input, standard output, standard error, and reading and writing whole files. File handles, directories and `file::with_open` (D-101) are in [`std::file`](file.md) (D-328, D-992).
 
 Every function that can fail returns `Result<T, Error>`, with the error type of this module (D-297):
 
@@ -167,7 +167,7 @@ fn count_lines(total: Int) -> Result<Int, io::Error> {
 
 ## Files
 
-A path is a `String`, and a relative path is resolved against the program's working directory. The text of an error does not include the path, so callers add it themselves, as the examples do with `"cannot read {path}: {reason}"`.
+A path is a `String`, and a relative path is resolved against the program's working directory. The text of an error does not include the path, so callers add it themselves, as the examples do with `"cannot read {path}: {reason}"`. A path that contains U+0000 gives an `Err` for which `is_invalid_input` holds, in every function of this section (D-981).
 
 ### `read_file`
 
@@ -252,9 +252,26 @@ test "write_file_bytes needs the directory to exist" {
 }
 ```
 
-What the file functions and `read_line` do on a host without a file system or standard input, such as a browser, is specified in tier 3 together with the JS side of every module.
+What the file functions and `read_line` do on a host without a file system or standard input, such as a browser, is OQ-P14, which M4 settles together with the JS side of every module. The direction is that they fail there with a new kind of error rather than panic.
 
 ## Errors
+
+Each kind of failure that has a predicate below has a fixed text, the same on every platform. Tier 1 has three of them, `is_not_found`, `is_permission_denied` and `is_invalid_data` (D-367). Tier 3 adds one for each kind that its functions cause (D-981):
+
+| Predicate                | Text                  | Caused by                                                               |
+| ------------------------ | --------------------- | ----------------------------------------------------------------------- |
+| `is_already_exists`      | `already exists`      | `file::create_dir`, `file::create_dir_all`                              |
+| `is_a_directory`         | `is a directory`      | `file::open`, `create`, `append` and `remove_file`                      |
+| `is_not_a_directory`     | `not a directory`     | `file::list_dir`, `remove_dir`, and a path through a file               |
+| `is_directory_not_empty` | `directory not empty` | `file::remove_dir`                                                      |
+| `is_connection_refused`  | `connection refused`  | `net::connect`, `http::get` and `http::send`                            |
+| `is_connection_reset`    | `connection reset`    | `net::read`, `write` and `shutdown_write`, `http::get` and `http::send` |
+| `is_address_in_use`      | `address in use`      | `net::listen` and `http::serve`                                         |
+| `is_host_not_found`      | `host not found`      | `net::listen`, `net::connect`, `http::get` and `http::send`             |
+| `is_closed`              | `closed`              | every `std::file` function on a handle                                  |
+| `is_invalid_input`       | `invalid input`       | `std::file`, `std::net`, `http::serve` and this module's file functions |
+
+`std::http` returns these through `http::io_error` (D-1016). Every other failure keeps the operating system's own message.
 
 ### `is_not_found`
 
@@ -275,7 +292,7 @@ test "a missing file is not found" {
 }
 ```
 
-These three are the predicates of tier 1 (D-367). Every other kind is reached through `show`, and its predicate comes with the tier-3 functions that can cause it.
+These three are the predicates of tier 1 (D-367). The ten after [`is_invalid_data`](#is_invalid_data) came with the tier-3 functions that can cause them (D-981). Every other kind is reached through `show`.
 
 ### `is_permission_denied`
 
@@ -323,13 +340,227 @@ fn check_invalid_text(path: String) -> Result<Nil, io::Error> {
 }
 ```
 
+### `is_already_exists`
+
+```cheby
+pub fn is_already_exists(error: Error) -> Bool
+```
+
+Tells whether `error` means that something already exists at a path where a directory was to be created. Its text is `already exists` (D-981).
+
+- **Cost:** O(1). Informative.
+
+_Example_, not a `test` because it changes the file system:
+
+```cheby
+fn ensure_dir(path: String) -> Result<Nil, io::Error> {
+  case file::create_dir(path) {
+    Ok(Nil) => Ok(Nil)
+    Err(reason) => case io::is_already_exists(reason) {
+      True => Ok(Nil)
+      False => Err(reason)
+    }
+  }
+}
+```
+
+### `is_a_directory`
+
+```cheby
+pub fn is_a_directory(error: Error) -> Bool
+```
+
+Tells whether `error` means that a path names a directory where a file was expected. Its text is `is a directory` (D-981).
+
+- **Cost:** O(1). Informative.
+
+_Example_, not a `test` because it needs a directory to exist:
+
+```cheby
+fn describe_open_failure(path: String) -> String {
+  case file::open(path) {
+    Ok(_) => "{path} can be read"
+    Err(reason) => case io::is_a_directory(reason) {
+      True => "{path} is a directory, not a file"
+      False => "cannot open {path}: {reason}"
+    }
+  }
+}
+```
+
+### `is_not_a_directory`
+
+```cheby
+pub fn is_not_a_directory(error: Error) -> Bool
+```
+
+Tells whether `error` means that a path names something other than a directory where a directory was expected, including a path that goes through a file. Its text is `not a directory` (D-981).
+
+- **Cost:** O(1). Informative.
+
+_Example_, not a `test` because it needs a file to exist:
+
+```cheby
+fn entries_or_none(path: String) -> Result<List<String>, io::Error> {
+  case file::list_dir(path) {
+    Ok(names) => Ok(names)
+    Err(reason) => case io::is_not_a_directory(reason) {
+      True => Ok([])
+      False => Err(reason)
+    }
+  }
+}
+```
+
+### `is_directory_not_empty`
+
+```cheby
+pub fn is_directory_not_empty(error: Error) -> Bool
+```
+
+Tells whether `error` means that a directory could not be removed because it has entries. Its text is `directory not empty` (D-981).
+
+- **Cost:** O(1). Informative.
+
+_Example_, not a `test` because it changes the file system:
+
+```cheby
+fn remove_if_empty(path: String) -> Result<Bool, io::Error> {
+  case file::remove_dir(path) {
+    Ok(Nil) => Ok(True)
+    Err(reason) => case io::is_directory_not_empty(reason) {
+      True => Ok(False)
+      False => Err(reason)
+    }
+  }
+}
+```
+
+### `is_connection_refused`
+
+```cheby
+pub fn is_connection_refused(error: Error) -> Bool
+```
+
+Tells whether `error` means that nothing listens at the address a connection was made to. Its text is `connection refused` (D-981).
+
+- **Cost:** O(1). Informative.
+
+_Example_, not a `test` because whether a port has a listener depends on the machine:
+
+```cheby
+fn server_is_up(port: Int) -> Result<Bool, io::Error> {
+  case net::connect("127.0.0.1", port) {
+    Ok(_) => Ok(True)
+    Err(reason) => case io::is_connection_refused(reason) {
+      True => Ok(False)
+      False => Err(reason)
+    }
+  }
+}
+```
+
+### `is_connection_reset`
+
+```cheby
+pub fn is_connection_reset(error: Error) -> Bool
+```
+
+Tells whether `error` means that the peer of a connection reset it, aborted it or went away while it was written to. Its text is `connection reset` (D-981).
+
+- **Cost:** O(1). Informative.
+
+_Example_, not a `test` because it needs a peer that goes away:
+
+```cheby
+fn send_or_report(connection: net::Connection, data: bytes::Bytes) -> String {
+  case net::write(connection, data) {
+    Ok(Nil) => "sent"
+    Err(reason) => case io::is_connection_reset(reason) {
+      True => "the peer went away"
+      False => "cannot send: {reason}"
+    }
+  }
+}
+```
+
+### `is_address_in_use`
+
+```cheby
+pub fn is_address_in_use(error: Error) -> Bool
+```
+
+Tells whether `error` means that another socket already listens on an address and port. Its text is `address in use` (D-981).
+
+- **Cost:** O(1). Informative.
+
+_Example_, not a `test` because which ports are taken depends on the machine:
+
+```cheby
+fn listen_or_explain(port: Int) -> Result<net::Listener, String> {
+  case net::listen("0.0.0.0", port) {
+    Ok(listener) => Ok(listener)
+    Err(reason) => case io::is_address_in_use(reason) {
+      True => Err("port {port} is taken")
+      False => Err("cannot listen on {port}: {reason}")
+    }
+  }
+}
+```
+
+### `is_host_not_found`
+
+```cheby
+pub fn is_host_not_found(error: Error) -> Bool
+```
+
+Tells whether `error` means that a host name could not be resolved. Every failure of name lookup is this one kind, including a temporary one, because resolvers' codes differ between platforms and their texts are not stable. Its text is `host not found` (D-981).
+
+- **Cost:** O(1). Informative.
+
+The _Example_ of [`net::connect`](net.md#connect) uses it.
+
+### `is_closed`
+
+```cheby
+pub fn is_closed(error: Error) -> Bool
+```
+
+Tells whether `error` means that a `file::File` was used after `file::close`, or after the `file::with_*` call that opened it returned (D-993). Its text is `closed` (D-981).
+
+- **Cost:** O(1). Informative.
+
+_Example_, not a `test` because it needs a file to exist:
+
+```cheby
+fn check_close_twice(path: String) -> Result<Nil, io::Error> {
+  use source <- result::try(file::open(path))
+  use _ <- result::try(file::close(source))
+  let assert Err(reason) = file::close(source)
+  assert io::is_closed(reason)
+  Ok(Nil)
+}
+```
+
+### `is_invalid_input`
+
+```cheby
+pub fn is_invalid_input(error: Error) -> Bool
+```
+
+Tells whether `error` means that an argument could not be used: a path that contains U+0000, a port outside 0 to 65535, or a `file::File` used in a mode it was not opened for, such as writing to a file opened for reading. Its text is `invalid input` (D-981).
+
+- **Cost:** O(1). Informative.
+
+The tests of [`file::open`](file.md#open) and [`net::listen`](net.md#listen) use it.
+
 ### `show`
 
 ```cheby
 pub fn show(error: Error) -> String
 ```
 
-Makes `Error` satisfy `Show` (§8.8). It gives a fixed message for each kind that has a predicate, the same on every platform: `not found`, `permission denied` and `invalid UTF-8`. For every other kind it gives the operating system's own message (D-345). Debug printing with `{e:?}` gives the same text and never the internal fields (§3.13). Neither includes the path.
+Makes `Error` satisfy `Show` (§8.8). It gives a fixed message for each kind that has a predicate, the same on every platform: `not found`, `permission denied` and `invalid UTF-8`, and the texts of tier 3's kinds in the table under [Errors](#errors) (D-981). For every other kind it gives the operating system's own message (D-345). Debug printing with `{e:?}` gives the same text and never the internal fields (§3.13). Neither includes the path.
 
 - **Cost:** O(1). Informative.
 

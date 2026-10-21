@@ -2,14 +2,14 @@
 
 One test per rule, grouped by spec chapter (D-275, [testing.md](../../docs/plan/testing.md#2-ui-tests)). A test is a single `.cheby` file, or a directory holding a whole package when the rule needs several modules or its own `cheby.toml`. Each test starts with `// @key: value` directives:
 
-| Directive    | Meaning                                                                                                            |
-| ------------ | ------------------------------------------------------------------------------------------------------------------ |
-| `@mode`      | `check-pass`, `check-fail`, `parse-fail`, `run-pass` or `run-fail` (required)                                      |
-| `@decisions` | decision-log entries the test pins, such as `D-244, D-245`, read by `cargo xtask coverage`                         |
-| `@milestone` | milestone in which the test must pass, `M1` by default                                                             |
-| `@exit`      | expected exit code of a `run-fail` test, `101` by default                                                          |
-| `@command`   | `test` makes a `run-pass` or `run-fail` test run `cheby test` instead of `cheby run` (D-543); `run` is the default |
-| `@flags`     | words added after the subcommand in every mode, split at whitespace, such as `--deny-warnings` or `--target js`    |
+| Directive    | Meaning                                                                                                                                    |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `@mode`      | `check-pass`, `check-fail`, `parse-fail`, `run-pass` or `run-fail` (required)                                                              |
+| `@decisions` | decision-log entries the test pins, such as `D-244, D-245`, read by `cargo xtask coverage`                                                 |
+| `@milestone` | milestone in which the test must pass, `M1` by default                                                                                     |
+| `@exit`      | expected exit code of a `run-fail` test, `101` by default                                                                                  |
+| `@command`   | `test` makes a run test use `cheby test` (D-543), `build` makes it use `cheby build` and run the executable (D-1026); `run` is the default |
+| `@flags`     | words added after the subcommand in every mode, split at whitespace, such as `--deny-warnings` or `--target js`                            |
 
 Goldens sit next to the test: `.stderr` for diagnostics (required for `check-fail` and `parse-fail`) and `.stdout` for program output. `parse-fail` files must also be rejected by `tree-sitter-cheby` (`cargo xtask cross-check`). Record goldens with `cargo xtask bless`.
 
@@ -19,16 +19,19 @@ Goldens sit next to the test: `.stderr` for diagnostics (required for `check-fai
 
 With `// @command: test`, the goldens hold the output of `cheby test` (D-541): its report on standard output, and warnings or compile errors on standard error. A test that fails makes `cheby test` exit with 1, so such a UI test is `run-fail` with `// @exit: 1`; a compile error also exits with 1. A `name.stdin` file works as for `cheby run`; `cheby test` takes no program arguments, so a `name.args` file beside such a test is an error.
 
+With `// @command: build`, a `run-pass` or `run-fail` test builds its package with `cheby build`, then runs the executable, and compares the same goldens as a run test (D-1026). It pins what `cheby build` reports, such as E0053 at build time, the names E0055 reserves and E0036's errors in the `[native]` table. The UI runner reads it from M3 on.
+
 ## Input of run tests
 
 A `run-pass` or `run-fail` test may have input files next to it, named like its goldens (D-543):
 
-| File         | Meaning                                                                                                |
-| ------------ | ------------------------------------------------------------------------------------------------------ |
-| `name.stdin` | fed to `cheby run` as standard input, byte for byte; without it, standard input is null (end of input) |
-| `name.args`  | the program's arguments, one per line (an empty line is an empty argument), passed after `--`          |
+| File         | Meaning                                                                                                 |
+| ------------ | ------------------------------------------------------------------------------------------------------- |
+| `name.stdin` | fed to `cheby run` as standard input, byte for byte; without it, standard input is null (end of input)  |
+| `name.args`  | the program's arguments, one per line (an empty line is an empty argument), passed after `--`           |
+| `name.env`   | `KEY=VALUE` lines applied to the child's environment, in the format of an example's `env` file (D-1043) |
 
-Input is data, so it sits beside the test like a golden, and `cargo xtask bless` never writes it. A test of another mode with an input file is an error. For a package test the files sit beside the directory, as `name.stdin` and `name.args`.
+Input is data, so it sits beside the test like a golden, and `cargo xtask bless` never writes it. A test of another mode with an input file is an error. For a package test the files sit beside the directory, as `name.stdin`, `name.args` and `name.env`. Every test without a `.env` file that sets it runs with `CHEBY_BACKTRACE` removed from its environment, so a developer's own setting never changes a golden (D-1043).
 
 ## Single-file tests
 

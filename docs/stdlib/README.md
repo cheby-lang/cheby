@@ -4,7 +4,7 @@ Status: **draft**, pre-1.0. Breaking changes are allowed until 1.0 (D-075).
 
 This directory specifies the standard library, one file per module (D-204, D-220). The language specification in [`../spec/`](../spec/) fixes the language and the semantics the runtime provides. This specification fixes the names, signatures and behavior of the modules under `std`. Where a rule comes from a logged decision, the decision is cited as `(D-NNN)`.
 
-The library is written in tiers, each before the milestone that needs it (D-276). **Tier 1** holds the modules M1 needs (D-294), and **tier 2** the modules of the runtime milestone M2: fibers, channels, selectors, durations, randomness and the scheduler's settings (D-645). Tier 3 (files, networking, HTTP, time, processes) is specified in a later session.
+The library is written in tiers, each before the milestone that needs it (D-276). **Tier 1** holds the modules M1 needs (D-294), and **tier 2** the modules of the runtime milestone M2: fibers, channels, selectors, durations, randomness and the scheduler's settings (D-645). **Tier 3** holds files, networking, HTTP, time and processes, whose native side comes with M3 and whose JS side comes with M4 (D-985, D-986, D-987).
 
 ## Modules
 
@@ -52,6 +52,18 @@ A submodule's file sits in a directory named after its parent, following the imp
 These files fix the names that chapter 10 of the language specification left provisional (D-174, D-199, D-646).
 
 Tier 2 is implemented on native in M2. Its JS side comes with M4: until then every kernel and intrinsic of a tier-2 module declares its `@external(js, …)` binding to a `.mjs` file that does not exist yet, as tier 1 does, so every function exists on both targets for the cross-target check (D-450, D-661). `std::duration` and the seeded half of `std::random` are written in Cheby with no kernels, so they run in constants (D-650, D-656).
+
+### Tier 3
+
+| Module                       | Contents                                                                                |
+| ---------------------------- | --------------------------------------------------------------------------------------- |
+| [`std::file`](file.md)       | file handles, reading and writing in pieces, scoped opening and directories             |
+| [`std::net`](net.md)         | TCP listeners and connections                                                           |
+| [`std::http`](http.md)       | an HTTP/1.1 client with HTTPS, a server, and response builders                          |
+| [`std::time`](time.md)       | `Timestamp` on the wall clock, `Instant` on the monotonic clock, RFC 3339 text, `sleep` |
+| [`std::process`](process.md) | `exit`                                                                                  |
+
+Tier 3 is implemented on native in M3, in the order `std::time`, `std::net`, `std::file`, `std::http` and `std::process` (D-987). Every public function is written in Cheby over private kernels, and `std::http` is written over `std::net` (D-985, D-1003). Kernels never call a Cheby closure. File operations run on the blocking pool, and socket waits and `time::sleep` on the runtime's poller and timers, where a cancellation interrupts them (D-983). The failures of tier 3 are `io::Error`s, with a predicate in `std::io` for each kind its functions cause, and `http::Error` for HTTP's own kinds (D-981, D-1016). As in tier 2, every kernel declares its JS binding now, and the `.mjs` files follow in M4 (D-986). What a host without files, sockets or processes does, such as a browser, is OQ-P14. No tier-3 kernel runs in constants, but the parts of `std::time` and `std::http` that are Cheby without kernels do (D-991).
 
 ## Entry format
 
@@ -138,7 +150,7 @@ A function that visits elements calls its callback exactly once per element, fro
 - `List`, `Map`, `Set` and every collection in this library compare with `==` by contents. Insertion-ordered collections also compare their order (D-343).
 - The sorted, insertion-ordered and multimap collections are written in Cheby (D-336), and supply their own equality, hashing and debug printing through the standard-library-only attribute `@std_hooks` (D-342, D-482, §3.13, §4.8).
 - Debug printing of `Map` and `Set` lists entries sorted by their printed text, compared as UTF-8 bytes (D-344, D-587). A `multimap` sorts its keys by their printed text and keeps each key's pairs in insertion order. Keys with the same printed text are ordered by the text of their pairs (D-847). These three types do not satisfy `Show`. The sorted and insertion-ordered collections satisfy `Show` when their elements do (D-344).
-- The handles of tier 2, `channel::Sender`, `channel::Receiver`, `fiber::Scope`, `fiber::Fiber` and `selector::Selector`, are external types of their modules. They print as `<Sender>`, `<Receiver>`, `<Scope>`, `<Fiber>` and `<Selector>`, `==` and hashing panic when they reach one, and no constant may hold one (§3.13, D-233, D-647).
+- The handles of tier 2, `channel::Sender`, `channel::Receiver`, `fiber::Scope`, `fiber::Fiber` and `selector::Selector`, and those of tier 3, `file::File`, `net::Listener` and `net::Connection`, are external types of their modules. They print as `<Sender>`, `<Receiver>`, `<Scope>`, `<Fiber>`, `<Selector>`, `<File>`, `<Listener>` and `<Connection>`, `==` and hashing panic when they reach one, and no constant may hold one (§3.13, D-233, D-647, D-982).
 
 `show` of `List`, `Option`, `Result`, tuples and the sorted and insertion-ordered collections uses the punctuation of debug printing (D-134), with each element written by its own `show`, so strings inside appear without quotes: `[1, 2]`, `[a, b]` for `["a", "b"]`, `Some(3)`, `Err(not found)`, `(1, a)`, and `sorted_map::from_list([(a, 1), (b, 2)])` (D-355).
 
