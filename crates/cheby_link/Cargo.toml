@@ -9,6 +9,17 @@ publish = false
 
 [dependencies]
 cheby_codegen_clif.workspace = true
+# Default features only: `x86`, `arm64` or `all-arch` would reach `cheby`
+# through `cheby_driver`, against D-936 (host architecture only).
+cranelift-codegen.workspace = true
+cranelift-module.workspace = true
+cranelift-object.workspace = true
+
+[dev-dependencies]
+cheby_diag.workspace = true
+cheby_iface.workspace = true
+cheby_mir.workspace = true
+object.workspace = true
 
 [lints]
 workspace = true

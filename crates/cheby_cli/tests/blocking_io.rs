@@ -28,6 +28,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use cheby_test_support::cache::{CACHE_ENV, HarnessCache};
 use cheby_test_support::process;
 
 const TMP: &str = env!("CARGO_TARGET_TMPDIR");
@@ -83,11 +84,14 @@ fn run(dir: &Path, threads: &str) -> process::RunOutput {
     reason = "a test helper: failing to spawn `cheby` fails the test"
 )]
 fn run_with_input(dir: &Path, threads: &str, input: Option<&[u8]>) -> process::RunOutput {
+    // A fresh build cache of this command (GAP(cache-tests-isolated)).
+    let cache = HarnessCache::create("cli-blocking-io").unwrap();
     let mut cmd = Command::new(cheby());
     cmd.args(["--color=never", "run"])
         .current_dir(dir)
         .env("NO_COLOR", "1")
         .env("CHEBY_THREADS", threads);
+    cache.apply(&mut cmd);
     process::run(cmd, input, PATIENCE).unwrap()
 }
 
@@ -100,6 +104,8 @@ struct Running {
     lines: Receiver<String>,
     stderr: Option<JoinHandle<String>>,
     threads: &'static str,
+    /// The child's build cache, deleted with this value.
+    _cache: HarnessCache,
 }
 
 impl Running {
@@ -109,10 +115,12 @@ impl Running {
         reason = "a test helper: failing to spawn `cheby` fails the test"
     )]
     fn start(dir: &Path, threads: &'static str) -> Self {
+        let cache = HarnessCache::create("cli-blocking-io").unwrap();
         let mut child = Command::new(cheby())
             .args(["--color=never", "run"])
             .current_dir(dir)
             .env("NO_COLOR", "1")
+            .env(CACHE_ENV, cache.path())
             .env("CHEBY_THREADS", threads)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -142,6 +150,7 @@ impl Running {
             lines,
             stderr: Some(stderr),
             threads,
+            _cache: cache,
         }
     }
 

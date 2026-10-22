@@ -15,6 +15,8 @@ A build runs these steps, each in the crate named:
 
 Every phase that reads other modules' interfaces, outside std, reads them through a recording view (D-955): `Checked::front_reads` holds what resolution and checking read beyond a module's imports, and the back end's `Lowered::reads` what lowering and borrow inference read beyond those, per code unit and tests unit. Debug toolchains decode every interface they build and compare it with the original (D-954).
 
+`cheby check`, `cheby run` and `cheby test` go through the build cache (`Cache`, D-955 to D-965). Each package module is looked up by its front key and its recorded reads; a hit publishes its interface decoded from the cached artifact and replays its stored diagnostics, and a miss is checked from source and its front record written, unless it has an error (D-964). Until cached code exists, a later phase still needs every module's checked bodies, so hits and the modules that read them are checked again from source, and debug toolchains compare the results with the cache's. The output never depends on the cache (D-268).
+
 Output is deterministic whatever the number of threads (D-264): results are merged in a fixed order, the first error in build order is reported, and diagnostics are sorted by `SourceMap::sort`. `configure_jobs` sizes the pool for `-j`.
 
 The standard library's sources in `std/` are embedded in the binary by `std_lib.rs` (D-450). A build parses and checks only the std modules its imports reach and the shipped home modules (D-447), and `test_std` runs std's own `test` blocks for `cargo xtask test-std` (D-479, D-599). A std module listed in `STAGED_STD_MODULES` is embedded but not loadable until it moves to `STD_MODULES` (D-486).
@@ -23,16 +25,18 @@ The standard library's sources in `std/` are embedded in the binary by `std_lib.
 
 | Module               | What it holds                                                                                                                                                          |
 | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `lib.rs`             | `load_package`, `check`, `check_with`, `check_syntax`, `prepare_run`, `Program`, `run`, `dump_mir`, `dump_clif`, `bench_build`, `configure_jobs`, `render_diagnostics` |
+| `lib.rs`             | Command entry points, cacheless and through a `Cache` (`check_cached`, `prepare_run_cached`), `load_package`, `Program`, the dumps, `bench_build`, `configure_jobs`    |
+| `build.rs`           | Std's source hashes, computed when `cheby` is built (D-963)                                                                                                            |
 | `frontend.rs`        | The build graph and the front-end phases                                                                                                                               |
 | `backend.rs`         | MIR lowering, code generation, constant evaluation and running                                                                                                         |
-| `cache/`             | The build cache's store (D-956 to D-961, D-973): keys, blobs, records and hints, the location and permission checks, trimming and `CHEBY_CACHE_LOG`                    |
+| `cache/`             | The build cache (D-955 to D-965, D-973): the store, keys, location, trimming, `CHEBY_CACHE_LOG`; `front.rs`, front records; `replay.rs`, stored diagnostics            |
 | `test.rs`            | `prepare_test`, `TestProgram` and `test_std`: `cheby test` (§13.6, D-541) and std's self-test                                                                          |
 | `session.rs`         | REPL sessions: checking each entry as the module `<repl:N>`, redefinition, `:module` and `:reload` (§13.5, D-606, D-625)                                               |
 | `std_lib.rs`         | The embedded standard library and its catalog                                                                                                                          |
 | `reuse_report.rs`    | `--reuse-report`: where reuse in place happens or not, and why (D-717)                                                                                                 |
 | `lifecycle_tests.rs` | Tests of runtime creation and shutdown per host                                                                                                                        |
 | `reads_tests.rs`     | Tests of the recorded hidden reads (D-955)                                                                                                                             |
+| `cache_tests.rs`     | Tests of front records, their keys and replay, and the cache-hit tests (D-973)                                                                                         |
 
 ## Tests
 

@@ -180,10 +180,12 @@ impl Store {
     }
 
     /// A fresh owner-only store in a new directory under `base`, deleted
-    /// when it is dropped.
+    /// when it is dropped. Temporary stores that killed commands left
+    /// under `base` are deleted first ([`sweep_dead_temporaries`]).
     pub(crate) fn temporary(base: &Path, build: BuildId) -> Result<Self, StoreError> {
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         create_private_dir_all(base)?;
+        sweep_dead_temporaries(base);
         let mut last = None;
         for _ in 0..64 {
             let n = COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -200,6 +202,85 @@ impl Store {
             last.unwrap_or_else(|| (base.to_path_buf(), io::Error::other("no attempt")));
         Err(StoreError::io(dir, error))
     }
+}
+
+/// GAP(cache-temporary-sweep): D-959 deletes a temporary store at exit,
+/// and the store's `Drop` does so on every exit that returns or unwinds.
+/// A signal such as SIGINT or SIGTERM ends the process without running
+/// it, and the directory stays. So a command that falls back first
+/// deletes, under `base`, every `cheby-cache-<pid>-<n>` directory that the
+/// effective user owns, that holds the store's README, and whose process
+/// no longer exists (`kill(pid, 0)` fails with `ESRCH`). The process's
+/// own stores, a live process's, another user's and anything else under
+/// `base` are never touched, and every failure is ignored: the sweep only
+/// tidies up. A process in another pid namespace that shares `base` looks
+/// dead, and its store may go; its writes are best effort and its reads
+/// then miss (GAP(cache-write-best-effort)). Windows sweeps nothing until
+/// M6 (D-935).
+#[cfg(unix)]
+fn sweep_dead_temporaries(base: &Path) {
+    use std::os::unix::fs::MetadataExt as _;
+    let Ok(entries) = fs::read_dir(base) else {
+        return;
+    };
+    // SAFETY: `geteuid` takes no arguments, cannot fail and touches no
+    // memory of ours.
+    let euid = unsafe { libc::geteuid() };
+    let own = std::process::id();
+    for entry in entries.flatten() {
+        let Some(pid) = entry.file_name().to_str().and_then(temporary_pid) else {
+            continue;
+        };
+        if pid == own {
+            continue;
+        }
+        let path = entry.path();
+        let owned_dir = fs::symlink_metadata(&path).is_ok_and(|m| m.is_dir() && m.uid() == euid);
+        if !owned_dir
+            || fs::read(path.join("README")).ok().as_deref()
+                != Some(super::store::README.as_bytes())
+            || process_alive(pid)
+        {
+            continue;
+        }
+        let _ = fs::remove_dir_all(&path);
+    }
+}
+
+/// Windows: nothing is swept until M6 (GAP(cache-temporary-sweep)).
+#[cfg(not(unix))]
+fn sweep_dead_temporaries(_base: &Path) {}
+
+/// The process id in a temporary store's name `cheby-cache-<pid>-<n>`, or
+/// `None` for any other name.
+#[cfg_attr(not(unix), expect(dead_code, reason = "Unix only until M6"))]
+pub(crate) fn temporary_pid(name: &str) -> Option<u32> {
+    let (pid, n) = name.strip_prefix("cheby-cache-")?.split_once('-')?;
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    if digits(pid) && digits(n) {
+        pid.parse().ok()
+    } else {
+        None
+    }
+}
+
+/// Whether the process `pid` exists: `kill(pid, 0)` succeeds or fails
+/// with anything but `ESRCH`, such as `EPERM` for another user's process.
+/// A pid that `pid_t` cannot hold, or 0, counts as alive, so it is never
+/// swept.
+#[cfg(unix)]
+fn process_alive(pid: u32) -> bool {
+    let Ok(pid) = libc::pid_t::try_from(pid) else {
+        return true;
+    };
+    if pid <= 0 {
+        return true;
+    }
+    // SAFETY: signal 0 sends nothing: `kill` only checks that the process
+    // exists and may be signalled, and touches no memory of ours. `pid` is
+    // positive, so it names one process, never a process group.
+    let result = unsafe { libc::kill(pid, 0) };
+    result == 0 || io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
 }
 
 /// Makes `builder` create an owner-only directory on Unix.

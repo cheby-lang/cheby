@@ -109,7 +109,10 @@
 //! starts and gives it to every child, `cheby` or an executable, as
 //! `CHEBY_CACHE`, overriding the developer's own value, after the example's
 //! `env`. It deletes the directory when the run ends, also after failing
-//! trials, and prints its path next to the thread counts.
+//! trials, and prints its path next to the thread counts. With
+//! `CHEBY_TEST_KEEP_CACHE=<absolute directory>` it uses that directory
+//! instead, creating it owner-only if needed, and never deletes it, so two
+//! runs share one cache (GAP(harness-kept-cache)).
 
 use std::path::Path;
 use std::process::{Command, ExitCode};

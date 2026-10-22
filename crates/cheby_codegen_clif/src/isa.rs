@@ -106,24 +106,44 @@ const AARCH64_V8_0: &[(&str, &str)] = &[
     ("use_bti", "false"),
 ];
 
-/// The fixed feature set of this build's target (D-921), as Cranelift ISA
-/// flags set on top of their defaults (every ISA flag defaults to off).
+/// The targets M3 generates code for, each with its fixed feature set
+/// (D-921), as Cranelift ISA flags set on top of their defaults (every ISA
+/// flag defaults to off). Every triple here is a valid literal, so
+/// Cranelift's lookup never panics on one.
 ///
 /// GAP(isa-windows-targets): the two Windows targets use x86-64-v2 and
 /// Armv8.0 until M6 settles their sets (D-935).
-const TARGET_FEATURES: &[(&str, &str)] = if cfg!(target_arch = "x86_64") {
-    X86_64_V2
-} else if cfg!(all(target_arch = "aarch64", target_os = "macos")) {
-    AARCH64_APPLE_M1
-} else {
-    AARCH64_V8_0
-};
+const TARGETS: &[(&str, &[(&str, &str)])] = &[
+    ("x86_64-unknown-linux-gnu", X86_64_V2),
+    ("x86_64-apple-darwin", X86_64_V2),
+    ("x86_64-pc-windows-msvc", X86_64_V2),
+    ("aarch64-unknown-linux-gnu", AARCH64_V8_0),
+    ("aarch64-apple-darwin", AARCH64_APPLE_M1),
+    ("aarch64-pc-windows-msvc", AARCH64_V8_0),
+];
 
 /// The ISA the JIT, the cache and executables compile for (D-921): the
-/// target this build of the compiler runs on, with [`flags`] and one fixed
-/// CPU feature set per target, written here, never the features the host
-/// detects. Code compiled on one machine then runs on every machine of the
-/// target, and the build ID covers the set because it is in the source.
+/// target this build of the compiler runs on, as [`isa_for`] builds it.
+///
+/// # Errors
+///
+/// [`CodegenError::UnsupportedHost`] on a target outside the six of
+/// [`isa_for`], and a [`CodegenError`] if Cranelift refuses a flag.
+pub fn host_isa() -> Result<OwnedTargetIsa, CodegenError> {
+    let triple = TARGET_TRIPLE.ok_or_else(|| {
+        CodegenError::UnsupportedHost(
+            "code generation supports x86-64 and aarch64 on Linux, macOS and Windows".to_owned(),
+        )
+    })?;
+    isa_for(triple)
+}
+
+/// The ISA for `triple` (D-921): [`flags`] and the target's one fixed CPU
+/// feature set, written here, never the features the host detects. Code
+/// compiled on one machine then runs on every machine of the target, and
+/// the build ID covers the set because it is in the source. Only the
+/// host's architecture is compiled into Cranelift (D-936), so a triple of
+/// another architecture is an error here, never a panic.
 ///
 /// GAP(isa-feature-flags): the exact Cranelift ISA flags per target, every
 /// other ISA flag at its default (off):
@@ -140,18 +160,22 @@ const TARGET_FEATURES: &[(&str, &str)] = if cfg!(target_arch = "x86_64") {
 ///
 /// # Errors
 ///
-/// [`CodegenError::UnsupportedHost`] on a target outside those six (or
-/// whose Cranelift backend is not built in), and a [`CodegenError`] if
+/// [`CodegenError::UnsupportedHost`] on a triple outside those six, or
+/// whose Cranelift backend is not built in, and a [`CodegenError`] if
 /// Cranelift refuses a flag.
-pub fn host_isa() -> Result<OwnedTargetIsa, CodegenError> {
-    let triple = TARGET_TRIPLE.ok_or_else(|| {
-        CodegenError::UnsupportedHost(
-            "code generation supports x86-64 and aarch64 on Linux, macOS and Windows".to_owned(),
-        )
-    })?;
+pub fn isa_for(triple: &str) -> Result<OwnedTargetIsa, CodegenError> {
+    let (triple, features) = TARGETS
+        .iter()
+        .find(|&&(known, _)| known == triple)
+        .copied()
+        .ok_or_else(|| {
+            CodegenError::UnsupportedHost(format!(
+                "{triple}: code generation supports x86-64 and aarch64 on Linux, macOS and Windows"
+            ))
+        })?;
     let mut builder = cranelift_codegen::isa::lookup_by_name(triple)
         .map_err(|e| CodegenError::UnsupportedHost(format!("{triple}: {e}")))?;
-    for &(name, value) in TARGET_FEATURES {
+    for &(name, value) in features {
         builder
             .set(name, value)
             .map_err(|e| CodegenError::ice(format!("Cranelift ISA flag `{name}`: {e}")))?;

@@ -1,14 +1,26 @@
-//! The program generator and the naive-versus-Perceus differential
-//! (D-718, D-719).
+//! The program generator, the reference evaluator and the differential
+//! of naive counting, Perceus and the evaluator (D-718, D-719, D-1028).
 //!
 //! [`generate`] builds a well-typed, terminating Cheby package from a
 //! seed ([`generate_from_bytes`] from a fuzzer's bytes); [`differential`]
 //! checks it with `cheby check`, runs it with `cheby run` under
 //! `CHEBY_RC=naive` and under the default reference counting (Perceus),
-//! the latter also with poisoning off, and compares the three runs. The stable test
-//! `crates/cheby_cli/tests/rc_differential.rs` runs it on fixed seeds in
-//! every CI run, and the fuzz target `fuzz/fuzz_targets/rc_differential.rs`
-//! drives the generator from the fuzzer's bytes (D-781).
+//! the latter also with poisoning off, compares the three runs, and
+//! compares the run they agree on with [`evaluate`]'s [`Expected`]. The
+//! stable test `crates/cheby_cli/tests/rc_differential.rs` runs it on
+//! fixed seeds ([`DIFF_SEEDS`]) in every CI run, and the fuzz target
+//! `fuzz/fuzz_targets/rc_differential.rs` drives the generator from the
+//! fuzzer's bytes (D-781).
+//!
+//! [`evaluate`] is the reference evaluator of the generator's subset
+//! (`eval.rs`, D-719, D-1028): it computes a program's standard output,
+//! exit status and, where it can predict it exactly, standard error from
+//! the spec and the standard-library pages, in process and without
+//! `cheby`, and refuses every construct outside the subset
+//! ([`EvalError::Unsupported`]). It covers every program of the
+//! generator's self-check seeds ([`CHECK_SEEDS`]). Where it and the
+//! compiler disagree, the spec decides: the disagreement is a finding,
+//! never a reason to change the evaluator.
 //!
 //! D-809: the generator lives in the workspace's
 //! test-support crate on stable Rust, not in `fuzz/`, so that the seeded
@@ -40,13 +52,25 @@
 //! differential and the fuzz target reach it.
 
 mod diff;
+mod eval;
 mod generator;
 mod model;
 mod source;
 
 use std::path::Path;
 
-pub use diff::{DiffError, DiffErrorKind, DiffOptions, DiffReport, differential_with};
+pub use diff::{
+    DiffError, DiffErrorKind, DiffOptions, DiffReport, differential_with, program_in, shared_cache,
+};
+pub use eval::{EvalError, Expected, evaluate};
+
+/// The seeds of `rc_differential`'s 40 programs
+/// (`crates/cheby_cli/tests/rc_differential.rs`).
+pub const DIFF_SEEDS: std::ops::Range<u64> = 1_000..1_040;
+
+/// The seeds of the generator's self-check: 200 programs that must check
+/// cleanly and finish under `cheby`, and that the evaluator must cover.
+pub const CHECK_SEEDS: std::ops::Range<u64> = 0..200;
 
 /// The line of the main module's documentation that marks a program
 /// whose `main` ends with a planted panic, so that it exits with 101.
@@ -201,10 +225,13 @@ pub fn write_package(program: &Program, dir: &Path) -> std::io::Result<()> {
 /// Runs `cheby check`, then `cheby run` in `dir` under `CHEBY_RC=naive`
 /// and without it (both with `CHEBY_RT_POISON=1`), and once more without
 /// it and with `CHEBY_RT_POISON=0`, and compares stdout, stderr and the
-/// exit status; `Err` describes a program that does not check, the first
-/// difference, a status other than 0 or a planted 101, or a 102.
-/// `cheby` is always a path the caller gives (`CARGO_BIN_EXE_cheby`,
-/// `CHEBY_DIFF_BIN`).
+/// exit status, then the run they agree on with [`evaluate`]; `Err`
+/// describes a program that does not check, the first difference, a
+/// status other than 0 or a planted 101, a 102, a difference from the
+/// evaluator, or a program the evaluator does not support. `cheby` is
+/// always a path the caller gives (`CARGO_BIN_EXE_cheby`,
+/// `CHEBY_DIFF_BIN`), and gets the process's fresh cache
+/// ([`shared_cache`]).
 ///
 /// # Errors
 ///
@@ -217,11 +244,7 @@ pub fn differential(cheby: &Path, dir: &Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{GenConfig, generate, generate_from_bytes, generator, source};
-
-    /// The seeds of `rc_differential`'s 40 programs
-    /// (`crates/cheby_cli/tests/rc_differential.rs`).
-    const DIFF_SEEDS: std::ops::Range<u64> = 1_000..1_040;
+    use super::{DIFF_SEEDS, GenConfig, generate, generate_from_bytes, generator, source};
 
     /// D-716 through the generator: most of the differential's programs
     /// hold a rebuild (a record update of a value at its last use, or a

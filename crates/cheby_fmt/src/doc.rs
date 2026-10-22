@@ -7,6 +7,14 @@
 //! lines become line breaks at the group's nesting. A [`Doc::hardline`]
 //! always breaks, and so does every group around it.
 //!
+//! [`Doc::flat`] prints its contents flat, every group in them included.
+//! [`Doc::choice`] holds two layouts of the same text and prints the first
+//! when its first line fits, measured with its groups flat unless they
+//! must break and with each choice in it taking whichever of its layouts
+//! fits; otherwise the second. That is how a list hugs its last element
+//! and a value moves to the line after its `=`. A measure tries at most
+//! [`CHOICE_TRIES`] first layouts, so nested choices stay cheap.
+//!
 //! [`Doc::verbatim`] carries source text that keeps its own line structure:
 //! its first line continues the current line, and each later line starts
 //! at the current nesting plus the line's source indentation relative to
@@ -18,6 +26,7 @@
 //! The printer never writes trailing whitespace outside string literals,
 //! never writes indentation on an empty line, and ends every line with LF.
 
+use std::cell::Cell;
 use std::rc::Rc;
 
 /// One line of a verbatim fragment after its first.
@@ -73,6 +82,14 @@ pub enum Doc {
     Comment(Rc<str>),
     /// A source fragment with its own line structure.
     Verbatim(Rc<Verbatim>),
+    /// The contents printed flat, every group in them included. Built only
+    /// around documents without a hard line break.
+    Flat(Rc<Doc>),
+    /// Two layouts of the same text: the first when its first line fits,
+    /// measured with every group in it flat unless it must break, else
+    /// the second. Inside a flat group, the first when it has no hard
+    /// line break, else the second. `true` when both always break a line.
+    Choice(Rc<Doc>, Rc<Doc>, bool),
 }
 
 impl Doc {
@@ -117,6 +134,44 @@ impl Doc {
         Self::Group(Rc::new(doc), breaks)
     }
 
+    /// `doc` printed flat, every group in it included.
+    #[must_use]
+    pub fn flat(doc: Self) -> Self {
+        Self::Flat(Rc::new(doc))
+    }
+
+    /// `first` when its first line fits, else `second` (see
+    /// [`Doc::Choice`]).
+    #[must_use]
+    pub fn choice(first: Self, second: Self) -> Self {
+        let breaks = first.has_hard_break() && second.has_hard_break();
+        Self::Choice(Rc::new(first), Rc::new(second), breaks)
+    }
+
+    /// The same document with its last group made to break: the group
+    /// itself, or the last part of a concatenation, recursively. A choice
+    /// expands to its first layout, or, when that is the flat layout, to
+    /// its second: a call's arguments expand to their hugging layout. A
+    /// document that ends in anything else is returned as it is.
+    #[must_use]
+    pub fn expand_last(&self) -> Self {
+        match self {
+            Self::Group(doc, _) => Self::Group(Rc::clone(doc), true),
+            Self::Choice(first, second, _) => match first.as_ref() {
+                Self::Flat(_) => second.expand_last(),
+                first => first.expand_last(),
+            },
+            Self::Concat(docs) => {
+                let mut parts: Vec<Self> = docs.to_vec();
+                if let Some(last) = parts.pop() {
+                    parts.push(last.expand_last());
+                }
+                Self::concat(parts)
+            }
+            other => other.clone(),
+        }
+    }
+
     /// `broken` inside a broken group, `flat` inside a flat one.
     #[must_use]
     pub fn if_break(broken: Self, flat: Self) -> Self {
@@ -147,8 +202,8 @@ impl Doc {
         match self {
             Self::Nil | Self::Text(_) | Self::Comment(_) | Self::Line | Self::SoftLine => false,
             Self::HardLine => true,
-            Self::Nest(_, doc) => doc.has_hard_break(),
-            Self::Group(_, breaks) => *breaks,
+            Self::Nest(_, doc) | Self::Flat(doc) => doc.has_hard_break(),
+            Self::Group(_, breaks) | Self::Choice(_, _, breaks) => *breaks,
             Self::IfBreak(broken, flat) => broken.has_hard_break() || flat.has_hard_break(),
             Self::Concat(docs) => docs.iter().any(Self::has_hard_break),
             Self::Verbatim(v) => !v.rest.is_empty(),
@@ -168,8 +223,25 @@ enum Mode {
 struct Cmd<'d> {
     indent: usize,
     mode: Mode,
+    /// Inside [`Doc::Flat`]: every group stays flat.
+    locked: bool,
     doc: &'d Doc,
 }
+
+/// Where a measure of [`Printer::fits`] stands.
+#[derive(Clone, Copy)]
+struct Measure {
+    /// Columns left on the line.
+    remaining: usize,
+    /// Whether the measured document wrote anything yet.
+    started: bool,
+}
+
+/// How many first layouts of choices one [`Printer::fits`] may try in
+/// all; once none are left, a choice is measured by its second layout,
+/// so nested choices cost a bounded number of measures, not two to the
+/// power of their depth.
+const CHOICE_TRIES: u32 = 64;
 
 /// The number of columns `text` takes.
 fn width(text: &str) -> usize {
@@ -186,6 +258,7 @@ pub fn print(doc: &Doc, width: usize) -> String {
         width,
         col: 0,
         pending_indent: None,
+        tries: Cell::new(CHOICE_TRIES),
     };
     printer.run(doc);
     printer.out
@@ -198,6 +271,9 @@ struct Printer {
     col: usize,
     /// Indentation still to be written before the next text of this line.
     pending_indent: Option<usize>,
+    /// The tries left to the current [`Printer::fits`] (see
+    /// [`CHOICE_TRIES`]).
+    tries: Cell<u32>,
 }
 
 impl Printer {
@@ -205,6 +281,7 @@ impl Printer {
         let mut stack = vec![Cmd {
             indent: 0,
             mode: Mode::Break,
+            locked: false,
             doc,
         }];
         while let Some(cmd) = stack.pop() {
@@ -223,21 +300,44 @@ impl Printer {
                 Doc::HardLine => self.newline(cmd.indent),
                 Doc::Nest(by, doc) => stack.push(Cmd {
                     indent: cmd.indent.saturating_add(*by),
-                    mode: cmd.mode,
                     doc,
+                    ..cmd
                 }),
                 Doc::Group(doc, breaks) => {
                     let flat = Cmd {
-                        indent: cmd.indent,
                         mode: Mode::Flat,
                         doc,
+                        ..cmd
                     };
-                    let mode = if !*breaks && self.fits(flat, &stack) {
+                    let mode = if cmd.locked || (!*breaks && self.fits(flat, &stack, false)) {
                         Mode::Flat
                     } else {
                         Mode::Break
                     };
                     stack.push(Cmd { mode, ..flat });
+                }
+                Doc::Flat(doc) => stack.push(Cmd {
+                    mode: Mode::Flat,
+                    locked: true,
+                    doc,
+                    ..cmd
+                }),
+                Doc::Choice(first, second, _) => {
+                    let doc = if cmd.mode == Mode::Flat {
+                        if first.has_hard_break() {
+                            second
+                        } else {
+                            first
+                        }
+                    } else {
+                        let candidate = Cmd { doc: first, ..cmd };
+                        if self.fits(candidate, &stack, true) {
+                            first
+                        } else {
+                            second
+                        }
+                    };
+                    stack.push(Cmd { doc, ..cmd });
                 }
                 Doc::IfBreak(broken, flat) => stack.push(Cmd {
                     doc: if cmd.mode == Mode::Break {
@@ -257,68 +357,164 @@ impl Printer {
         }
     }
 
-    /// Whether `next`, printed flat, and what follows it on `rest` up to
-    /// the next line break fit in the rest of the line.
-    fn fits(&self, next: Cmd<'_>, rest: &[Cmd<'_>]) -> bool {
+    /// Whether `next` and what follows it on `rest` up to the next line
+    /// break fit in the rest of the line. A group is measured in its
+    /// enclosing mode, or, with `first_line`, flat when it is part of
+    /// `next`; either way a group that must break is measured broken.
+    /// With `first_line`, a choice in `next` fits when either of its
+    /// layouts does, as the printer then takes the one that fits.
+    fn fits<'d>(&self, next: Cmd<'d>, rest: &[Cmd<'d>], first_line: bool) -> bool {
         let mut remaining = self.width.saturating_sub(self.col);
         if let Some(indent) = self.pending_indent {
             remaining = remaining.saturating_sub(indent);
         }
-        let mut stack = vec![next];
-        let mut rest = rest.iter().rev();
+        let measure = Measure {
+            remaining,
+            started: false,
+        };
+        self.tries.set(CHOICE_TRIES);
+        self.measure(measure, vec![(next, true)], rest, first_line)
+    }
+
+    /// The loop of [`Self::fits`]. `stack` holds pending documents, each
+    /// marked whether it is part of the measured `next`; `rest` follows
+    /// them.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one match over the document's variants, as in `run`, reads best whole"
+    )]
+    fn measure<'d>(
+        &self,
+        state: Measure,
+        mut stack: Vec<(Cmd<'d>, bool)>,
+        rest: &[Cmd<'d>],
+        first_line: bool,
+    ) -> bool {
+        let Measure {
+            mut remaining,
+            // Whether `next` wrote anything yet: with `first_line`, line
+            // breaks before its first text are skipped, so a layout that
+            // starts on a new line is measured by the line it writes.
+            mut started,
+        } = state;
+        let mut rest_len = rest.len();
         loop {
-            let cmd = match stack.pop() {
-                Some(cmd) => cmd,
-                None => match rest.next() {
-                    Some(cmd) => *cmd,
-                    None => return true,
-                },
+            let (cmd, own) = if let Some(entry) = stack.pop() {
+                entry
+            } else {
+                let Some(n) = rest_len.checked_sub(1) else {
+                    return true;
+                };
+                rest_len = n;
+                let Some(cmd) = rest.get(rest_len) else {
+                    return true;
+                };
+                (*cmd, false)
             };
+            let breaks_here = match cmd.doc {
+                Doc::HardLine => true,
+                Doc::Line | Doc::SoftLine => cmd.mode == Mode::Break,
+                _ => false,
+            };
+            if breaks_here {
+                if first_line && own && !started {
+                    remaining = self.width.saturating_sub(cmd.indent);
+                    continue;
+                }
+                return true;
+            }
             match cmd.doc {
                 // A comment at the end of a line cannot move, so it never
                 // makes a group break.
-                Doc::Nil | Doc::Comment(_) => {}
-                Doc::Text(text) => match remaining.checked_sub(width(text)) {
+                Doc::Nil | Doc::SoftLine | Doc::HardLine => {}
+                Doc::Comment(_) => started = true,
+                Doc::Text(text) => {
+                    started = true;
+                    match remaining.checked_sub(width(text)) {
+                        Some(left) => remaining = left,
+                        None => return false,
+                    }
+                }
+                Doc::Line => match remaining.checked_sub(1) {
                     Some(left) => remaining = left,
                     None => return false,
                 },
-                Doc::Line => match cmd.mode {
-                    Mode::Flat => match remaining.checked_sub(1) {
-                        Some(left) => remaining = left,
-                        None => return false,
+                Doc::Nest(by, doc) => stack.push((
+                    Cmd {
+                        indent: cmd.indent.saturating_add(*by),
+                        doc,
+                        ..cmd
                     },
-                    Mode::Break => return true,
-                },
-                Doc::SoftLine => {
-                    if cmd.mode == Mode::Break {
-                        return true;
+                    own,
+                )),
+                Doc::Group(doc, breaks) => stack.push((
+                    Cmd {
+                        mode: if cmd.locked {
+                            Mode::Flat
+                        } else if *breaks {
+                            Mode::Break
+                        } else if first_line && own {
+                            Mode::Flat
+                        } else {
+                            cmd.mode
+                        },
+                        doc,
+                        ..cmd
+                    },
+                    own,
+                )),
+                Doc::Flat(doc) => stack.push((
+                    Cmd {
+                        mode: Mode::Flat,
+                        locked: true,
+                        doc,
+                        ..cmd
+                    },
+                    own,
+                )),
+                Doc::Choice(first, second, _) => {
+                    if cmd.mode == Mode::Flat {
+                        let doc = if first.has_hard_break() {
+                            second
+                        } else {
+                            first
+                        };
+                        stack.push((Cmd { doc, ..cmd }, own));
+                    } else if self.tries.get() > 0 {
+                        // The printer takes the first layout that fits,
+                        // so the line fits when either does.
+                        self.tries.set(self.tries.get().saturating_sub(1));
+                        let mut alternative = stack.clone();
+                        alternative.push((Cmd { doc: first, ..cmd }, own));
+                        let state = Measure { remaining, started };
+                        let rest = rest.get(..rest_len).unwrap_or(&[]);
+                        if self.measure(state, alternative, rest, first_line) {
+                            return true;
+                        }
+                        stack.push((Cmd { doc: second, ..cmd }, own));
+                    } else {
+                        // Out of tries: the fallback layout.
+                        stack.push((Cmd { doc: second, ..cmd }, own));
                     }
                 }
-                Doc::HardLine => return true,
-                Doc::Nest(by, doc) => stack.push(Cmd {
-                    indent: cmd.indent.saturating_add(*by),
-                    mode: cmd.mode,
-                    doc,
-                }),
-                Doc::Group(doc, breaks) => stack.push(Cmd {
-                    mode: if *breaks { Mode::Break } else { cmd.mode },
-                    doc,
-                    ..cmd
-                }),
-                Doc::IfBreak(broken, flat) => stack.push(Cmd {
-                    doc: if cmd.mode == Mode::Break {
-                        broken
-                    } else {
-                        flat
+                Doc::IfBreak(broken, flat) => stack.push((
+                    Cmd {
+                        doc: if cmd.mode == Mode::Break {
+                            broken
+                        } else {
+                            flat
+                        },
+                        ..cmd
                     },
-                    ..cmd
-                }),
+                    own,
+                )),
                 Doc::Concat(docs) => {
                     for doc in docs.iter().rev() {
-                        stack.push(Cmd { doc, ..cmd });
+                        stack.push((Cmd { doc, ..cmd }, own));
                     }
                 }
                 Doc::Verbatim(v) => {
+                    started = true;
                     match remaining.checked_sub(width(&v.first)) {
                         Some(left) => remaining = left,
                         None => return false,
@@ -582,6 +778,54 @@ mod tests {
             t(")"),
         ]));
         assert_eq!(print(&doc, 80), "(\n  T<\n  >\n)");
+    }
+
+    #[test]
+    fn fmt_doc_flat_keeps_its_groups_flat() {
+        let doc = Doc::concat(vec![t("f"), Doc::flat(list(&["aaaa", "bbbb"]))]);
+        assert_eq!(print(&doc, 4), "f(aaaa, bbbb)");
+    }
+
+    #[test]
+    fn fmt_doc_choice_takes_the_first_layout_whose_first_line_fits() {
+        // `f(a, [` then the list broken, else every argument broken.
+        let hug = Doc::concat(vec![t("f(a, "), list(&["xx", "yy"]).expand_last(), t(")")]);
+        let broken = Doc::concat(vec![t("f"), list(&["a", "(xx, yy)"])]);
+        let doc = Doc::choice(hug, broken);
+        assert_eq!(print(&doc, 80), "f(a, (\n  xx,\n  yy,\n))");
+        assert_eq!(print(&doc, 6), "f(a, (\n  xx,\n  yy,\n))");
+        assert_eq!(print(&doc, 5), "f(\n  a,\n  (xx, yy),\n)");
+        // Inside a flat group, the first layout unless it must break.
+        let flat = Doc::group(Doc::choice(
+            t("one"),
+            Doc::concat(vec![Doc::hardline(), t("two")]),
+        ));
+        assert_eq!(print(&flat, 80), "one");
+    }
+
+    #[test]
+    fn fmt_doc_choice_measures_a_layout_that_starts_on_a_new_line() {
+        // The second layout starts with a line break: it is measured by
+        // the line it writes.
+        let next = Doc::nest(2, Doc::concat(vec![Doc::hardline(), t("value")]));
+        let doc = Doc::concat(vec![
+            t("x ="),
+            Doc::choice(t(" a_long_value"), Doc::choice(next, t(" fallback"))),
+        ]);
+        assert_eq!(print(&doc, 80), "x = a_long_value");
+        assert_eq!(print(&doc, 10), "x =\n  value");
+        assert_eq!(print(&doc, 6), "x = fallback");
+    }
+
+    #[test]
+    fn fmt_doc_nested_choices_are_bounded() {
+        // Two hundred nested choices whose first layouts never fit: the
+        // measure gives up on first layouts after its tries.
+        let mut doc = t("end");
+        for _ in 0..200 {
+            doc = Doc::choice(Doc::concat(vec![t("xxxxxxxx"), doc.clone()]), doc);
+        }
+        assert_eq!(print(&doc, 10), "end");
     }
 
     #[test]

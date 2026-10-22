@@ -130,6 +130,9 @@ pub struct Decls {
     frontend: TargetFrontendConfig,
     funcs: FxHashMap<FnKey, FuncDecl>,
     slots: FxHashMap<SlotKey, SlotDecl>,
+    /// In a unit alone, the slots of other units' functions that the
+    /// unit's code loads, declared with `Linkage::Import` (D-917).
+    imported_slots: FxHashMap<SlotKey, DataId>,
     strings: FxHashMap<(FnKey, StrId), DataId>,
     /// By [`RuntimeFunc::index`]: the function's import word and C
     /// signature; `None` for a function declared on demand
@@ -198,6 +201,12 @@ pub struct Decls {
     /// The shims declared and not defined yet, in declaration order:
     /// [`crate::define`] defines them with its batch.
     pub(crate) pending_shims: Vec<(FuncId, Box<str>, ForeignSig)>,
+    /// `Some` in the unit-alone mode of [`crate::compile_unit`] (D-917),
+    /// which the JIT never uses: the unit's own items that another unit
+    /// may name ([`crate::UnitCx::named_outside`]), whose functions and
+    /// slots are global hidden. `None` in the JIT's mode, where every
+    /// symbol is local.
+    alone: Option<FxHashSet<DefId>>,
 }
 
 impl std::fmt::Debug for Decls {
@@ -341,6 +350,7 @@ impl Decls {
             frontend: isa.frontend_config(),
             funcs: FxHashMap::default(),
             slots: FxHashMap::default(),
+            imported_slots: FxHashMap::default(),
             strings: FxHashMap::default(),
             runtime: Vec::new(),
             static_data: FxHashMap::default(),
@@ -369,7 +379,51 @@ impl Decls {
             blocking_shims: FxHashMap::default(),
             blocking_variants: FxHashMap::default(),
             pending_shims: Vec::new(),
+            alone: None,
         })
+    }
+
+    /// An empty table for one unit compiled alone ([`crate::compile_unit`],
+    /// D-917): `named_outside` holds the unit's own items that another unit
+    /// may name.
+    ///
+    /// # Errors
+    ///
+    /// As [`Decls::new`].
+    pub(crate) fn new_alone(
+        isa: &dyn TargetIsa,
+        named_outside: FxHashSet<DefId>,
+    ) -> Result<Self, CodegenError> {
+        let mut decls = Self::new(isa)?;
+        decls.alone = Some(named_outside);
+        Ok(decls)
+    }
+
+    /// Whether this table compiles one unit alone (D-917).
+    pub(crate) const fn is_alone(&self) -> bool {
+        self.alone.is_some()
+    }
+
+    /// The linkage of the function and slot of the unit's own item `def`
+    /// (D-917): global hidden in a unit alone when another unit may name
+    /// it (GAP(unit-alone-visibility)), local otherwise and always in the
+    /// JIT.
+    fn item_linkage(&self, def: DefId) -> Linkage {
+        match &self.alone {
+            Some(named) if named.contains(&def) => Linkage::Hidden,
+            Some(_) | None => Linkage::Local,
+        }
+    }
+
+    /// The linkage of the unit's own writable objects that other objects
+    /// patch or read (D-917, D-918): layout words, `cb$ctor$` statics and
+    /// constant slots, global hidden in a unit alone and local in the JIT.
+    const fn owned_data_linkage(&self) -> Linkage {
+        if self.alone.is_some() {
+            Linkage::Hidden
+        } else {
+            Linkage::Local
+        }
     }
 
     /// The platform's C calling convention.
@@ -408,6 +462,24 @@ impl Decls {
                 "no slot for `{path}` with signature {sig:?}; was its module compiled?"
             ))
         })
+    }
+
+    /// The data object of the slot that calls of the item at `path` with
+    /// signature `sig` load: a slot of this table's units, or, in a unit
+    /// alone, another unit's slot imported (D-917).
+    ///
+    /// # Errors
+    ///
+    /// An ICE if no such slot was declared.
+    pub(crate) fn slot_data(&self, path: &str, sig: &AbiSig) -> Result<DataId, CodegenError> {
+        let key = SlotKey {
+            path: path.into(),
+            sig: sig.clone(),
+        };
+        if let Some(&id) = self.imported_slots.get(&key) {
+            return Ok(id);
+        }
+        self.slot(path, sig).map(|slot| slot.id)
     }
 
     /// The slot `cb$const$…` of the constant `def`, if a compiled unit
@@ -648,6 +720,18 @@ impl Decls {
         Ok(word)
     }
 
+    /// Whether `symbol`, declared with `Linkage::Import`, is a generated
+    /// symbol of another unit that text may reach PC-relative (D-917):
+    /// only in a unit alone, a `cb$` name that is not the target of an
+    /// import word (a runtime or foreign symbol, which code reaches only
+    /// through its word, D-913) and not a libcall.
+    pub(crate) fn is_generated_import(&self, symbol: &str) -> bool {
+        self.is_alone()
+            && symbol.starts_with(mangle::PREFIX)
+            && !symbol.starts_with("cb$libcall$")
+            && !self.imports.contains_key(symbol)
+    }
+
     pub(crate) fn static_data(&self, symbol: &str) -> Result<DataId, CodegenError> {
         self.static_data
             .get(symbol)
@@ -785,9 +869,19 @@ impl Decls {
         import: ForeignImport,
     ) -> Result<(), CodegenError> {
         self.declare_runtime(module)?;
+        if self.is_alone() {
+            for unit in mirs {
+                self.number_imported_tests(unit);
+            }
+        }
         for unit in mirs {
             for function in &unit.functions {
                 self.declare_function(module, unit, function)?;
+            }
+        }
+        if self.is_alone() {
+            for unit in mirs {
+                self.declare_code_imports(module, unit)?;
             }
         }
         for unit in mirs {
@@ -796,6 +890,11 @@ impl Decls {
         for unit in mirs {
             for desc in &unit.layouts {
                 self.declare_layout(module, unit, desc)?;
+            }
+        }
+        if self.is_alone() {
+            for unit in mirs {
+                self.declare_layout_imports(module, unit)?;
             }
         }
         for unit in mirs {
@@ -1010,7 +1109,15 @@ impl Decls {
             FnKey::ConstInit(def) => mangle::item(Kind::Cinit, &self.def_name(unit, def)?),
             FnKey::Test(def) => {
                 let UnitKind::Tests(module) = unit.unit else {
-                    return Err(CodegenError::ice("a test body outside a tests unit"));
+                    // In a unit alone, the entries unit imports the test
+                    // bodies it calls, numbered before
+                    // ([`Decls::number_imported_tests`]).
+                    return match self.test_ordinals.get(&def) {
+                        Some(&ordinal) if self.is_alone() => {
+                            Ok(mangle::test(&self.def_name(unit, def)?.module, ordinal))
+                        }
+                        _ => Err(CodegenError::ice("a test body outside a tests unit")),
+                    };
                 };
                 let name = self.def_name(unit, def)?;
                 let next = self.next_test.entry(module).or_insert(0);
@@ -1074,12 +1181,20 @@ impl Decls {
         }
         let symbol = self.symbol(unit, key)?;
         let signature = sig::signature(&abi_sig, self.call_conv);
+        // D-917: in a unit alone, an item, test body or constant initializer
+        // that another unit may name is global hidden (the entries unit
+        // calls the last two directly); everything else, value shims and
+        // the other copies of D-918 included, is local.
+        let linkage = match key {
+            FnKey::Item(def) | FnKey::Test(def) | FnKey::ConstInit(def) => self.item_linkage(def),
+            _ => Linkage::Local,
+        };
         let id = module
-            .declare_function(&symbol, Linkage::Local, &signature)
+            .declare_function(&symbol, linkage, &signature)
             .map_err(|e| CodegenError::module(&e))?;
         self.names.insert((0, id.as_u32()), symbol.clone());
         if let FnKey::Item(def) = key {
-            self.declare_slot(module, unit, def, &abi_sig, id)?;
+            self.declare_slot(module, unit, def, &abi_sig, id, linkage)?;
         }
         for (sid, text) in function.strings.iter_enumerated() {
             let string_symbol = mangle::string(&symbol, sid);
@@ -1106,7 +1221,9 @@ impl Decls {
     /// when the session says it takes over an earlier definition, which is
     /// then repointed once the batch is finalized; otherwise a new slot,
     /// `cb$slot$<path>` with the generation of a session item, which
-    /// becomes the one later callers of that path and signature load.
+    /// becomes the one later callers of that path and signature load. The
+    /// slot's name carries the borrow mask when it is not all-owned
+    /// ([`mangle::slot`], D-917), and its linkage is its function's.
     fn declare_slot<M: Module>(
         &mut self,
         module: &mut M,
@@ -1114,6 +1231,7 @@ impl Decls {
         def: DefId,
         abi_sig: &AbiSig,
         id: FuncId,
+        linkage: Linkage,
     ) -> Result<(), CodegenError> {
         let key = SlotKey {
             path: self.slot_path(unit, def)?.into(),
@@ -1126,8 +1244,8 @@ impl Decls {
             self.def_slots.insert(def, key);
             return Ok(());
         }
-        let slot_symbol = mangle::item(Kind::Slot, &self.def_name(unit, def)?);
-        let slot = self.data(module, &slot_symbol, Linkage::Local, true)?;
+        let slot_symbol = mangle::slot(&self.def_name(unit, def)?, abi_sig.borrow);
+        let slot = self.data(module, &slot_symbol, linkage, true)?;
         self.pending_slots.push((slot, id));
         self.slot_sigs.insert(slot, abi_sig.clone());
         self.slots.insert(
@@ -1161,18 +1279,17 @@ impl Decls {
             return Ok(());
         }
         let name = self.def_name(unit, def)?;
-        let word = self.data(
-            module,
-            &mangle::item(Kind::Layout, &name),
-            Linkage::Local,
-            true,
-        )?;
+        let linkage = self.owned_data_linkage();
+        let word = self.data(module, &mangle::item(Kind::Layout, &name), linkage, true)?;
+        // D-920: an executable's start patches the `cb$ctor$` header, so
+        // in a unit alone the static is writable; the JIT fills it before
+        // any code runs and keeps it read-only.
         let ctor = if desc.fields.is_empty() {
             Some(self.data(
                 module,
                 &mangle::item(Kind::Ctor, &name),
-                Linkage::Local,
-                false,
+                linkage,
+                self.is_alone(),
             )?)
         } else {
             None
@@ -1181,6 +1298,154 @@ impl Decls {
         self.pending_layouts
             .push((desc.layout, decl.clone(), desc.value_fields));
         self.layouts.insert(desc.layout, decl);
+        Ok(())
+    }
+
+    /// In a unit alone (D-917), numbers the test bodies another unit
+    /// defines that `unit` names (the entries unit's test thunks), before
+    /// any function is declared: a test's symbol carries its ordinal in
+    /// its tests unit, which lowers its tests sorted by `DefId`, so the
+    /// ordinal is the test's rank among the tests of its module that this
+    /// unit names, sorted the same way. The entries unit and the tests
+    /// units of one build hold the same selected tests.
+    fn number_imported_tests(&mut self, unit: &MirModule) {
+        if matches!(unit.unit, UnitKind::Tests(_)) {
+            return;
+        }
+        let mut tests = std::collections::BTreeSet::new();
+        for function in &unit.functions {
+            if let FnKey::Entry(EntryKind::Test(def)) = function.key {
+                tests.insert(def);
+            }
+            for_each_code_key(function, |key| {
+                if let FnKey::Test(def) = key {
+                    tests.insert(def);
+                }
+            });
+        }
+        for def in tests {
+            if self.test_ordinals.contains_key(&def) {
+                continue;
+            }
+            let next = self.next_test.entry(def.module).or_insert(0);
+            self.test_ordinals.insert(def, *next);
+            *next = next.saturating_add(1);
+        }
+    }
+
+    /// In a unit alone (D-917), declares with `Linkage::Import` what
+    /// another unit defines and `unit`'s code reaches: the slot of every
+    /// direct callee whose function is not the unit's own, and the code of
+    /// every function the unit calls or names directly without defining it
+    /// (the entries unit's test bodies and constant initializers, the only
+    /// direct calls across units, D-916). Text reaches both PC-relative,
+    /// since every generated symbol is colocated (D-913).
+    ///
+    /// # Errors
+    ///
+    /// An ICE if the unit names code of another unit that has no fixed
+    /// signature, or the module's error.
+    fn declare_code_imports<M: Module>(
+        &mut self,
+        module: &mut M,
+        unit: &MirModule,
+    ) -> Result<(), CodegenError> {
+        for callee in &unit.callees {
+            let key = SlotKey {
+                path: self.slot_path(unit, callee.def)?.into(),
+                sig: callee.sig.clone(),
+            };
+            if self.slots.contains_key(&key) || self.imported_slots.contains_key(&key) {
+                continue;
+            }
+            let symbol = mangle::slot(&self.def_name(unit, callee.def)?, callee.sig.borrow);
+            let id = self.data(module, &symbol, Linkage::Import, true)?;
+            self.slot_sigs.insert(id, callee.sig.clone());
+            self.imported_slots.insert(key, id);
+        }
+        let mut keys = Vec::new();
+        for function in &unit.functions {
+            for_each_code_key(function, |key| keys.push(key));
+        }
+        for object in &unit.statics {
+            for field in &object.fields {
+                if let Const::Code(key) = field {
+                    keys.push(*key);
+                }
+            }
+        }
+        for key in keys {
+            if self.funcs.contains_key(&key) {
+                continue;
+            }
+            let abi_sig = cheby_mir::fixed_sig(key).ok_or_else(|| {
+                CodegenError::ice(format!(
+                    "the unit calls {key:?}, which another unit defines, directly"
+                ))
+            })?;
+            let symbol = self.symbol(unit, key)?;
+            let signature = sig::signature(&abi_sig, self.call_conv);
+            let id = module
+                .declare_function(&symbol, Linkage::Import, &signature)
+                .map_err(|e| CodegenError::module(&e))?;
+            self.names.insert((0, id.as_u32()), symbol.clone());
+            self.funcs.insert(
+                key,
+                FuncDecl {
+                    id,
+                    symbol,
+                    sig: signature,
+                    abi: abi_sig,
+                    // Another unit defines it: never defined here.
+                    defined: true,
+                },
+            );
+        }
+        Ok(())
+    }
+
+    /// In a unit alone (D-917), declares with `Linkage::Import` the
+    /// `cb$layout$` word and, for a nullary constructor, the `cb$ctor$`
+    /// static of every user constructor another unit declares that
+    /// `unit`'s code or statics use ([`MirModule::foreign_layouts`]): its
+    /// own unit defines them, global hidden, and an executable's start
+    /// patches them (D-920).
+    ///
+    /// # Errors
+    ///
+    /// The module's error, or an ICE if a def has no name in the unit.
+    fn declare_layout_imports<M: Module>(
+        &mut self,
+        module: &mut M,
+        unit: &MirModule,
+    ) -> Result<(), CodegenError> {
+        for desc in &unit.foreign_layouts {
+            let LayoutRef::Ctor(def) = desc.layout else {
+                continue;
+            };
+            if self.layouts.contains_key(&desc.layout) || builtin_layout_id(&desc.layout).is_some()
+            {
+                continue;
+            }
+            let name = self.def_name(unit, def)?;
+            let word = self.data(
+                module,
+                &mangle::item(Kind::Layout, &name),
+                Linkage::Import,
+                true,
+            )?;
+            let ctor = if desc.fields.is_empty() {
+                Some(self.data(
+                    module,
+                    &mangle::item(Kind::Ctor, &name),
+                    Linkage::Import,
+                    true,
+                )?)
+            } else {
+                None
+            };
+            self.layouts.insert(desc.layout, LayoutDecl { word, ctor });
+        }
         Ok(())
     }
 
@@ -1193,9 +1458,12 @@ impl Decls {
         unit: &MirModule,
     ) -> Result<(), CodegenError> {
         let mut defs = Vec::new();
+        // The constants this unit initializes, whose slots it defines.
+        let mut own = FxHashSet::default();
         for function in &unit.functions {
             if let FnKey::ConstInit(def) = function.key {
                 defs.push(def);
+                own.insert(def);
             }
             for block in &function.blocks {
                 for stmt in &block.stmts {
@@ -1222,7 +1490,15 @@ impl Decls {
                 continue;
             }
             let symbol = mangle::item(Kind::Const, &self.def_name(unit, def)?);
-            let id = self.data(module, &symbol, Linkage::Local, true)?;
+            // D-917, D-918: in a unit alone, the unit that initializes a
+            // constant defines its slot, global hidden, and every other unit
+            // that reads it imports the slot.
+            if self.is_alone() && !own.contains(&def) {
+                let id = self.data(module, &symbol, Linkage::Import, true)?;
+                self.consts.insert(def, id);
+                continue;
+            }
+            let id = self.data(module, &symbol, self.owned_data_linkage(), true)?;
             self.pending_consts.push(id);
             self.consts.insert(def, id);
         }
@@ -1560,6 +1836,43 @@ impl Decls {
         self.blocking_shims.insert(key.clone(), id);
         self.pending_shims.push((id, key.0, key.1));
         Ok(())
+    }
+}
+
+/// Calls `f` with the key of every function `function` calls directly
+/// ([`cheby_mir::Callee::Code`]) or names as a code word
+/// ([`Const::Code`]), in statement order.
+fn for_each_code_key(function: &Function, mut f: impl FnMut(FnKey)) {
+    use cheby_mir::Callee;
+    for block in &function.blocks {
+        for stmt in &block.stmts {
+            if let Stmt::Assign { value, .. } | Stmt::Eval(value) = stmt {
+                if let Rvalue::Call {
+                    callee: Callee::Code(key),
+                    ..
+                } = value
+                {
+                    f(*key);
+                }
+                for op in value.operands() {
+                    if let Operand::Const(Const::Code(key)) = op {
+                        f(key);
+                    }
+                }
+            }
+        }
+        if let Terminator::TailCall {
+            callee: Callee::Code(key),
+            ..
+        } = &block.term
+        {
+            f(*key);
+        }
+        for c in terminator_consts(&block.term) {
+            if let Const::Code(key) = c {
+                f(*key);
+            }
+        }
     }
 }
 

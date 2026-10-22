@@ -30,10 +30,15 @@
 //!   package on `--jobs` threads and prints the times, the bytes of code
 //!   and the RC operations; `bench-compile` and `check-determinism` run it
 //!   as a child process, since the size of rayon's global pool is fixed
-//!   once per process.
+//!   once per process. It uses no build cache (D-975).
+//!
+//! Every `cheby` a command starts gets one fresh `CHEBY_CACHE` of the
+//! `xtask` process ([`cache`]), so no command reads or fills the
+//! developer's cache (GAP(cache-tests-isolated)).
 
 mod bench;
 mod bench_run;
+mod cache;
 mod cross_check;
 mod determinism;
 mod examples;
@@ -148,6 +153,7 @@ fn main() -> ExitCode {
         Cmd::Sanitize(args) => sanitize::run(&root, &args),
         Cmd::BenchBuild { jobs, dir } => bench_build(jobs, &dir),
     };
+    cache::finish();
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => {

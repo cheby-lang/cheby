@@ -8,12 +8,15 @@
 //! string literals are never split. A source with a grammar error is never
 //! formatted.
 //!
-//! The formatter grows in parts (D-1029). This part lays out the file's
-//! lines, imports and item headers; bodies, expressions, patterns, types
-//! and statements are printed verbatim, with their own line structure, and
-//! later parts lay them out.
+//! The formatter grows in parts (D-1029). The first part laid out the
+//! file's lines, imports and item headers (`layout`); the second lays out
+//! the expressions, statements, patterns and types below them
+//! (`expr`). A node with a comment or a blank line where its layout has
+//! no place for one is still printed verbatim, with its own line
+//! structure; the third part removes that fallback.
 
 pub mod doc;
+mod expr;
 mod layout;
 mod source;
 
@@ -100,5 +103,7 @@ fn run(file: FileId, text: &str, width: usize) -> Result<(String, Coverage), For
     Ok((doc::print(&doc, width), formatter.coverage))
 }
 
+#[cfg(test)]
+mod expr_tests;
 #[cfg(test)]
 mod tests;

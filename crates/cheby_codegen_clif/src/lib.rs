@@ -36,6 +36,13 @@
 //! every compiled function's relocations: text has only PC-relative ones,
 //! to generated symbols.
 //!
+//! [`compile_unit`] compiles one unit alone, for code records and objects
+//! (D-914, D-917, D-918, D-920): what another unit may name is global
+//! hidden, what other units define is imported, code and statics fixed by
+//! their key are local copies, and layout words hold no layout id. In the
+//! JIT every symbol stays local. A slot whose signature borrows a
+//! parameter carries the mask in its name ([`mangle::slot`]) in both.
+//!
 //! Lowering rules (D-453): every Cheby-ABI function uses Cranelift's
 //! `tail` convention with the hidden `ctx` parameter first, and a tail call
 //! is `return_call` (D-015). Every call of a top-level function loads the
@@ -93,6 +100,8 @@
 //! call the runtime only on the slow paths, unless
 //! [`CodegenOptions::checked_rc`] asks for the checked runtime calls.
 
+#[cfg(test)]
+mod alone_tests;
 mod arith;
 mod blocking;
 #[cfg(test)]
@@ -106,12 +115,17 @@ mod layout;
 #[cfg(test)]
 mod locs_tests;
 pub mod mangle;
+mod modrec;
+pub mod record;
 pub mod runtime;
 mod session;
 pub mod sig;
+mod unit;
 mod unwind;
 mod values;
 
+#[cfg(test)]
+mod record_tests;
 #[cfg(test)]
 mod scale_tests;
 #[cfg(test)]
@@ -130,6 +144,7 @@ pub use error::CodegenError;
 pub use func::translate;
 pub use layout::{BuiltinLayouts, LayoutIds, builtin_ctor_layout, builtin_layout_id};
 pub use session::{SESSION_MODULE, SessionName};
+pub use unit::{UnitCode, UnitCx, compile_unit};
 
 /// The alignment every function is defined with. Bit 0 of a code address
 /// must be clear so a closure's code word `addr | 1` reads as a tagged
@@ -492,9 +507,11 @@ const fn pc_relative(kind: cranelift_codegen::binemit::Reloc) -> bool {
 /// defined: every relocation is PC-relative ([`pc_relative`]) and names a
 /// generated symbol of `module`, never a libcall, a symbol the linker
 /// knows, or a runtime or foreign symbol (`Linkage::Import`), which only
-/// import words' data relocations name. One record then serves the JIT,
-/// the cache and executables (ADR-0064): text needs no absolute
-/// relocation, which PIE executables and arm64 Mach-O refuse.
+/// import words' data relocations name. A generated `cb$` symbol another
+/// unit defines, which a unit alone imports (D-917), is allowed. One
+/// record then serves the JIT, the cache and executables (ADR-0064): text
+/// needs no absolute relocation, which PIE executables and arm64 Mach-O
+/// refuse.
 ///
 /// # Errors
 ///
@@ -550,7 +567,11 @@ fn check_text_relocs<M: Module>(
                 reloc.kind
             )));
         }
-        if linkage == Linkage::Import {
+        // D-917: in a unit alone, text reaches another unit's generated
+        // symbols (slots, layout words, `cb$ctor$` statics, constant slots,
+        // test bodies and constant initializers) as imports, PC-relative;
+        // runtime and foreign symbols stay behind import words.
+        if linkage == Linkage::Import && !decls.is_generated_import(&name) {
             return Err(fail(&format!(
                 "a relocation to `{name}`, which only an import word may name"
             )));

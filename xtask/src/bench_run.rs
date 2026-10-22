@@ -614,6 +614,7 @@ fn run_once(
     for (key, value) in env {
         cmd.env(key, value);
     }
+    crate::cache::apply(&mut cmd)?;
     if stats {
         cmd.env(STATS_ENV, "1");
     } else {

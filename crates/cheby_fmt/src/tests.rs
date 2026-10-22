@@ -30,8 +30,8 @@ fn fmt_empty_file() {
 
 #[test]
 fn fmt_trivia_one_final_newline_and_lf() {
-    assert_eq!(fmt("fn main() {\n}"), "fn main() {\n}\n");
-    assert_eq!(fmt("fn main() {\n}\n\n\n"), "fn main() {\n}\n");
+    assert_eq!(fmt("fn main() {\n}"), "fn main() {}\n");
+    assert_eq!(fmt("fn main() {\n  x\n}\n\n\n"), "fn main() {\n  x\n}\n");
     assert_eq!(fmt("fn main() {\r\n  x\r\n}\r\n"), "fn main() {\n  x\n}\n");
 }
 
@@ -74,9 +74,18 @@ fn fmt_trivia_strings_never_change() {
 
 #[test]
 fn fmt_trivia_long_string_not_split() {
+    // A string that does not fit moves to the next line, whole.
     let long = "x".repeat(150);
     let src = format!("const s: String = \"{long}\"\n");
-    assert_eq!(fmt_at(&src, 80), src);
+    assert_eq!(
+        fmt_at(&src, 80),
+        format!("const s: String =\n  \"{long}\"\n")
+    );
+    let src = format!("fn f() {{\n  g(\"{long}\")\n}}\n");
+    assert_eq!(
+        fmt_at(&src, 80),
+        format!("fn f() {{\n  g(\n    \"{long}\",\n  )\n}}\n")
+    );
 }
 
 #[test]
@@ -189,16 +198,25 @@ fn fmt_items_interface_and_const() {
     );
     assert_eq!(fmt("interface Marker {\n}\n"), "interface Marker {}\n");
     assert_eq!(fmt("const   k :Int=1 + 2\n"), "const k: Int = 1 + 2\n");
+    // The value is laid out (wave 2): the line break after `=` goes.
     assert_eq!(
         fmt("const xs: List<Int> =\n  [\n    1,\n  ]\n"),
-        "const xs: List<Int> =\n  [\n    1,\n  ]\n"
+        "const xs: List<Int> = [1]\n"
     );
 }
 
 #[test]
 fn fmt_items_bodies_reindented_relative() {
+    // Bodies are laid out at the item's indentation; a verbatim node keeps
+    // its lines relative to its first one (a comment between `-` and its
+    // number is an error the formatter keeps, D-470).
     let src = "  fn f(\n      a: Int) {\n      a\n  }\n";
-    assert_eq!(fmt(src), "fn f(a: Int) {\n    a\n}\n");
+    assert_eq!(fmt(src), "fn f(a: Int) {\n  a\n}\n");
+    let src = "fn f() {\n    g(-  // gap\n        1)\n}\n";
+    assert_eq!(
+        fmt(src),
+        "fn f() {\n  g(\n    -  // gap\n        1,\n  )\n}\n"
+    );
 }
 
 #[test]

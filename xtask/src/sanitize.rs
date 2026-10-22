@@ -1131,6 +1131,7 @@ fn examples_poison_off(cx: &Context, cheby: &Path, leaks: Leaks) -> Result<PassR
         let goldens = ex.goldens()?;
         let mut cmd = Command::new(cheby);
         cmd.arg("--color=never").arg("run").current_dir(&ex.dir);
+        crate::cache::apply(&mut cmd)?;
         if !goldens.args.is_empty() {
             cmd.arg("--").args(&goldens.args);
         }

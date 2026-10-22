@@ -58,7 +58,7 @@ pub(crate) const TMP_DIR: &str = "tmp";
 const TOUCH_AFTER: Duration = Duration::from_hours(1);
 
 /// The README at the root.
-const README: &str = "\
+pub(crate) const README: &str = "\
 This directory is the build cache of the Cheby toolchain (`cheby`).
 
 It holds compiled artifacts addressed by the hash of their inputs. Deleting

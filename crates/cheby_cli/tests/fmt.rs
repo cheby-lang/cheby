@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
+use cheby_test_support::cache::HarnessCache;
 use cheby_test_support::example::{self, Example};
 use cheby_test_support::process::{self, RunOutput};
 use cheby_test_support::{golden, repo_root};
@@ -26,17 +27,21 @@ const UNFORMATTED: &str = "//! A test package.\n\nimport std::list\nimport std::
 /// [`UNFORMATTED`] after `cheby fmt`.
 const FORMATTED: &str = "//! A test package.\n\nimport std::io\nimport std::list\n\nfn main() {\n  io::println(greeting())\n}\n\nfn greeting() -> String {\n  \"hi\"\n}\n";
 
-/// Runs `cheby --color=never <args>` in `dir` with `stdin`.
+/// Runs `cheby --color=never <args>` in `dir` with `stdin`, with a fresh
+/// `CHEBY_CACHE` of this process, deleted afterwards, so no run reads or
+/// fills the developer's cache (GAP(cache-tests-isolated)).
 #[expect(
     clippy::unwrap_used,
     reason = "a test helper: failing to spawn `cheby` fails the test"
 )]
 fn cheby(dir: &Path, args: &[&str], stdin: Option<&str>) -> RunOutput {
+    let cache = HarnessCache::create("fmt").unwrap();
     let mut cmd = Command::new(CHEBY);
     cmd.arg("--color=never")
         .args(args)
         .current_dir(dir)
         .env("NO_COLOR", "1");
+    cache.apply(&mut cmd);
     process::run(cmd, stdin.map(str::as_bytes), TIMEOUT).unwrap()
 }
 
@@ -290,26 +295,10 @@ fn copy_dir(from: &Path, to: &Path) {
     }
 }
 
-/// A fresh owner-only directory for the children's `CHEBY_CACHE`, so no
-/// run of this test touches the developer's cache (D-959).
-#[expect(clippy::unwrap_used, reason = "a test helper")]
-fn cache_dir() -> PathBuf {
-    let dir = Path::new(TMP).join("fmt").join("cache");
-    if dir.exists() {
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
-    std::fs::create_dir_all(&dir).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
-    }
-    dir
-}
-
 /// Runs `cheby <args>` in `dir` as the conformance harness runs an
 /// example: the example's `env`, freed objects poisoned (D-544), the
-/// default thread count and counting, and the test's own cache.
+/// default thread count and counting, and the test's own cache, a
+/// [`HarnessCache`] (GAP(cache-tests-isolated)).
 fn cheby_like_harness(
     dir: &Path,
     args: &[&str],
@@ -415,7 +404,8 @@ fn check_formatted_example(ex: &Example, cache: &Path) -> Result<(), String> {
 )]
 fn fmt_examples_keep_their_output() {
     let examples = example::all(&repo_root()).unwrap();
-    let cache = cache_dir();
+    let harness_cache = HarnessCache::create("fmt-examples").unwrap();
+    let cache = harness_cache.path().to_path_buf();
     let (timing, parallel): (Vec<&Example>, Vec<&Example>) =
         examples.iter().partition(|ex| ex.config.timing);
     let workers = std::thread::available_parallelism()

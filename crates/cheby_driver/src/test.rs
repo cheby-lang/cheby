@@ -73,9 +73,7 @@ use cheby_types::thir;
 
 use crate::backend::{self, Roots, TestRoot};
 use crate::frontend::{self, Frontend};
-use crate::{
-    CheckOutput, Error, Module, Package, front_end, parse_file, parse_module_path, std_lib,
-};
+use crate::{CheckOutput, Error, Module, Package, parse_file, parse_module_path, std_lib};
 
 /// Which tests `cheby test` runs (D-541).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -374,11 +372,34 @@ pub(crate) fn on_native(front: &Frontend, test: &thir::TestDef) -> bool {
 /// the package (D-597), and an [`Error`] for internal
 /// failures.
 pub fn prepare_test(root: &Path, options: &TestOptions) -> Result<PreparedTests, Error> {
+    prepare_test_inner(root, options, None)
+}
+
+/// [`prepare_test`] through the build cache, as `cheby test` runs it
+/// (D-955, D-965); what it prints and runs is the cacheless build's
+/// (D-268).
+///
+/// # Errors
+///
+/// As [`prepare_test`].
+pub fn prepare_test_cached(
+    root: &Path,
+    options: &TestOptions,
+    cache: &crate::Cache,
+) -> Result<PreparedTests, Error> {
+    prepare_test_inner(root, options, Some(cache))
+}
+
+fn prepare_test_inner(
+    root: &Path,
+    options: &TestOptions,
+    cache: Option<&crate::Cache>,
+) -> Result<PreparedTests, Error> {
     let mut out = CheckOutput {
         deny_warnings: options.deny_warnings,
         ..CheckOutput::default()
     };
-    let front = front_end(root, frontend::Mode::Build, &mut out)?;
+    let front = crate::front_end_for(root, frontend::Mode::Build, None, &mut out, cache)?;
     out.sources.sort(&mut out.diagnostics);
     let Some((front, package)) = front.filter(|_| !out.has_errors()) else {
         return Ok(PreparedTests::CompileFailed(out));
@@ -1410,6 +1431,7 @@ pub(crate) fn std_test_package(
     for module in std_lib::STD_MODULES {
         let _ = writeln!(text, "import std::{}", module.path);
     }
+    let hashes = crate::SourceHashes::of(text.as_bytes());
     let source = parse_file(sources, "src/main.cheby", text.into_bytes(), diagnostics)?;
     if source.has_syntax_errors {
         return Err(Ice::new("the std self-test's root module does not parse").into());
@@ -1420,6 +1442,7 @@ pub(crate) fn std_test_package(
         modules: vec![Module {
             path: ModulePath::root(STD_TEST_PACKAGE),
             source,
+            hashes,
         }],
     })
 }

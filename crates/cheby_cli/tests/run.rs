@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
+use cheby_test_support::cache::{CACHE_ENV, HarnessCache};
 use cheby_test_support::process::{self, RunOutput};
 use cheby_test_support::repo_root;
 
@@ -23,12 +24,24 @@ const TIMEOUT: Duration = Duration::from_secs(60);
     reason = "a test helper: failing to spawn `cheby` fails the test"
 )]
 fn cheby(dir: &Path, args: &[&str]) -> RunOutput {
+    let cache = fresh_cache();
     let mut cmd = Command::new(CHEBY);
     cmd.arg("--color=never")
         .args(args)
         .current_dir(dir)
         .env("NO_COLOR", "1");
+    cache.apply(&mut cmd);
     process::run(cmd, None, TIMEOUT).unwrap()
+}
+
+/// A fresh build cache for one `cheby` this file starts, deleted when the
+/// value is dropped (GAP(cache-tests-isolated)).
+#[expect(
+    clippy::unwrap_used,
+    reason = "a test helper: failing to create the directory fails the test"
+)]
+fn fresh_cache() -> HarnessCache {
+    HarnessCache::create("cli-run").unwrap()
 }
 
 #[expect(
@@ -96,6 +109,44 @@ fn a_named_module_runs() {
     let out = cheby(&dir, &["run", "app::tools::migrate"]);
     assert_eq!(out.stderr, "");
     assert_eq!(out.stdout, "migrating\n");
+    assert_eq!(out.status, Some(0));
+}
+
+/// A slot whose mask is in its name never shares a symbol with another
+/// item's slot (D-456, D-917, GAP(slot-mask-hex)). `app::m::f`, package
+/// visible and not `pub` (a `pub` function stays owned, D-812), borrows its
+/// parameter, and the module `app::m::f` (§7 lets a file and a directory
+/// share a name) holds an item `b1`. With D-917's one `$` before the mask,
+/// both slots were `cb$slot$app$m$f$b1`, and the JIT stopped with an
+/// internal error (wave 2 review, SND-1).
+#[test]
+fn a_masked_slot_and_a_nested_module_item_both_run() {
+    let dir = package(
+        "masked_slot",
+        &[
+            MANIFEST,
+            (
+                "src/main.cheby",
+                "//! Calls both functions.\n\nimport app::m\nimport app::m::f\nimport std::io\n\n\
+                 fn main() {\n  let a = m::f(m::Circle(2))\n  let b = f::b1(40)\n  \
+                 io::println(\"{a} {b}\")\n}\n",
+            ),
+            (
+                "src/m.cheby",
+                "//! Holds `f`, which borrows its parameter.\n\npub type Shape {\n  Circle(Int),\n  \
+                 Square(Int),\n}\n\nfn f(shape: Shape) -> Int {\n  case shape {\n    \
+                 Circle(r) => r\n    Square(s) => s\n  }\n}\n",
+            ),
+            (
+                "src/m/f.cheby",
+                "//! A module whose path and item spell `f`'s masked slot with one `$`.\n\n\
+                 pub fn b1(x: Int) -> Int {\n  x + 1\n}\n",
+            ),
+        ],
+    );
+    let out = cheby(&dir, &["run"]);
+    assert_eq!(out.stderr, "");
+    assert_eq!(out.stdout, "2 41\n");
     assert_eq!(out.status, Some(0));
 }
 
@@ -328,10 +379,12 @@ fn run_with_closed_stdout(name: &str, main_body: &str) -> (Option<i32>, String) 
         "//! Writes to a closed standard output.\n\nimport std::io\n\nfn until_err(n: Int) -> Int {{\n  case io::write_stdout(\"line\\n\") {{\n    Ok(_) => until_err(n + 1)\n    Err(_) => n\n  }}\n}}\n\nfn main() {{\n  let _ = io::read_line()\n  let n = until_err(0)\n  io::eprintln(\"failed after {{n}} writes\")\n{main_body}  io::eprintln(\"main returns\")\n}}\n"
     );
     let dir = package(name, &[MANIFEST, ("src/main.cheby", &source)]);
+    let cache = fresh_cache();
     let mut child = Command::new(CHEBY)
         .args(["--color=never", "run"])
         .current_dir(&dir)
         .env("NO_COLOR", "1")
+        .env(CACHE_ENV, cache.path())
         .env("CHEBY_RT_POISON", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -384,10 +437,12 @@ fn with_broken_stderr(command: &str, name: &str, source: &str) -> (Option<i32>, 
     use std::process::Stdio;
 
     let dir = package(name, &[MANIFEST, ("src/main.cheby", source)]);
+    let cache = fresh_cache();
     let mut child = Command::new(CHEBY)
         .args(["--color=never", command])
         .current_dir(&dir)
         .env("NO_COLOR", "1")
+        .env(CACHE_ENV, cache.path())
         .env("CHEBY_THREADS", "4")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -473,10 +528,12 @@ fn a_detached_write_failure_after_main_returned_keeps_the_status() {
             ),
         ],
     );
+    let cache = fresh_cache();
     let mut child = Command::new(CHEBY)
         .args(["--color=never", "run"])
         .current_dir(&dir)
         .env("NO_COLOR", "1")
+        .env(CACHE_ENV, cache.path())
         .env("CHEBY_THREADS", "4")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -632,10 +689,12 @@ fn long_list_patterns_do_not_overflow_the_compiler() {
 fn an_unfinished_repl_entry_is_reported_at_the_end_of_input() {
     let dir = Path::new(TMP).join(format!("repl-unfinished-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
+    let cache = fresh_cache();
     let mut cmd = Command::new(CHEBY);
     cmd.args(["--color=never", "repl"])
         .current_dir(&dir)
         .env("NO_COLOR", "1");
+    cache.apply(&mut cmd);
     let out = process::run(cmd, Some(b"1 + 1\nfn f() -> Int {\n"), TIMEOUT).unwrap();
     std::fs::remove_dir_all(&dir).ok();
     assert_eq!(
@@ -658,12 +717,14 @@ fn an_unfinished_repl_entry_is_reported_at_the_end_of_input() {
     reason = "a test helper: failing to spawn `cheby` fails the test"
 )]
 fn cheby_env(dir: &Path, args: &[&str], env: &[(&str, &str)], stdin: Option<&[u8]>) -> RunOutput {
+    let cache = fresh_cache();
     let mut cmd = Command::new(CHEBY);
     cmd.arg("--color=never")
         .args(args)
         .current_dir(dir)
         .env("NO_COLOR", "1")
         .envs(env.iter().copied());
+    cache.apply(&mut cmd);
     process::run(cmd, stdin, TIMEOUT).unwrap()
 }
 
@@ -710,6 +771,7 @@ fn sorted_map_inserts_reuse_their_nodes() {
         ],
     );
     let run = |rc: Option<&str>| {
+        let cache = fresh_cache();
         let mut cmd = Command::new(CHEBY);
         cmd.args(["--color=never", "run"])
             .current_dir(&dir)
@@ -717,6 +779,7 @@ fn sorted_map_inserts_reuse_their_nodes() {
             .env("CHEBY_RT_STATS", "1")
             .env("CHEBY_RT_POISON", "0")
             .env_remove("CHEBY_DUMP_DIR");
+        cache.apply(&mut cmd);
         match rc {
             Some(mode) => cmd.env("CHEBY_RC", mode),
             None => cmd.env_remove("CHEBY_RC"),
@@ -785,6 +848,7 @@ fn main() {
             ),
         ],
     );
+    let cache = fresh_cache();
     let mut cmd = Command::new(CHEBY);
     cmd.args(["--color=never", "run"])
         .current_dir(&dir)
@@ -793,6 +857,7 @@ fn main() {
         .env("CHEBY_RT_POISON", "0")
         .env_remove("CHEBY_RC")
         .env_remove("CHEBY_DUMP_DIR");
+    cache.apply(&mut cmd);
     let out = process::run(cmd, None, TIMEOUT).unwrap_or_else(|e| panic!("{e:?}"));
     assert_eq!(out.status, Some(0), "{}", out.stderr);
     assert_eq!(out.stdout, "35891\n");
@@ -860,6 +925,7 @@ fn record_field_pushes_write_in_place() {
         ],
     );
     for rc in [None, Some("naive")] {
+        let cache = fresh_cache();
         let mut cmd = Command::new(CHEBY);
         cmd.args(["--color=never", "run"])
             .current_dir(&dir)
@@ -867,6 +933,7 @@ fn record_field_pushes_write_in_place() {
             .env("CHEBY_RT_STATS", "1")
             .env("CHEBY_RT_POISON", "0")
             .env_remove("CHEBY_DUMP_DIR");
+        cache.apply(&mut cmd);
         match rc {
             Some(mode) => cmd.env("CHEBY_RC", mode),
             None => cmd.env_remove("CHEBY_RC"),
@@ -1159,10 +1226,12 @@ fn with_open_stdin(
     use std::process::Stdio;
 
     let dir = package(name, &[MANIFEST, ("src/main.cheby", source)]);
+    let cache = fresh_cache();
     let mut child = Command::new(CHEBY)
         .args(["--color=never", command])
         .current_dir(&dir)
         .env("NO_COLOR", "1")
+        .env(CACHE_ENV, cache.path())
         .env("CHEBY_THREADS", threads)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -1305,10 +1374,12 @@ fn a_reader_pipeline_echoes_each_line_before_the_next_arrives() {
         ],
     );
     for threads in ["1", "2", "4"] {
+        let cache = fresh_cache();
         let mut child = Command::new(CHEBY)
             .args(["--color=never", "run"])
             .current_dir(&dir)
             .env("NO_COLOR", "1")
+            .env(CACHE_ENV, cache.path())
             .env("CHEBY_THREADS", threads)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

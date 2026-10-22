@@ -20,6 +20,7 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use cheby_test_support::cache::{CACHE_ENV, HarnessCache};
 use cheby_test_support::process;
 
 const CHEBY: &str = env!("CARGO_BIN_EXE_cheby");
@@ -64,6 +65,9 @@ struct Repl {
     child: Child,
     stdin: Option<ChildStdin>,
     stdout: Arc<Mutex<Vec<u8>>>,
+    /// The session's build cache, deleted with this value
+    /// (GAP(cache-tests-isolated)).
+    _cache: HarnessCache,
 }
 
 impl Repl {
@@ -76,10 +80,12 @@ impl Repl {
         reason = "a test helper: failing to start `cheby` fails the test"
     )]
     fn start(name: &str, env: &[(&str, &str)], break_stderr: bool) -> Self {
+        let cache = HarnessCache::create("cli-repl-runtime").unwrap();
         let mut child = Command::new(CHEBY)
             .args(["--color=never", "repl"])
             .current_dir(scratch(name))
             .env("NO_COLOR", "1")
+            .env(CACHE_ENV, cache.path())
             .envs(env.iter().copied())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -113,6 +119,7 @@ impl Repl {
             child,
             stdin,
             stdout,
+            _cache: cache,
         }
     }
 
@@ -336,11 +343,13 @@ fn redefinitions_reading_new_constants() -> String {
 fn repl_runtime_a_redefinition_reads_its_new_constants_under_a_detached_caller() {
     for threads in ["1", "2", "4"] {
         let dir = scratch(&format!("new_constants_{threads}"));
+        let cache = HarnessCache::create("cli-repl-runtime").unwrap();
         let mut cmd = Command::new(CHEBY);
         cmd.args(["--color=never", "repl"])
             .current_dir(&dir)
             .env("NO_COLOR", "1")
             .env("CHEBY_THREADS", threads);
+        cache.apply(&mut cmd);
         let input = redefinitions_reading_new_constants();
         let out = process::run(cmd, Some(input.as_bytes()), scaled(ANSWER)).unwrap();
         assert_eq!(
@@ -406,12 +415,14 @@ fn redefinitions() -> String {
 #[test]
 fn repl_runtime_redefinition_under_stress() {
     let dir = scratch("stress");
+    let cache = HarnessCache::create("cli-repl-runtime").unwrap();
     let mut cmd = Command::new(CHEBY);
     cmd.args(["--color=never", "repl"])
         .current_dir(&dir)
         .env("NO_COLOR", "1")
         .env("CHEBY_RT_STRESS_MIGRATE", "1")
         .env("CHEBY_THREADS", "4");
+    cache.apply(&mut cmd);
     let input = redefinitions();
     let out = process::run(
         cmd,

@@ -5,7 +5,8 @@
 //! comes first, so a package or module named after a kind (`slot`, `str`,
 //! `fn`) cannot collide with another kind's symbol. A module path is
 //! joined with `$` (`std$io`); names never contain `$`, so the item, which
-//! is always the last part, is unambiguous.
+//! is always the last part, is unambiguous. A suffix after the item starts
+//! with `$$` ([`slot`]'s mask), which no `$`-joined path and item spell.
 
 use cheby_mir::{DefName, StrId};
 
@@ -60,11 +61,15 @@ pub enum Kind {
     /// runtime function, a runtime static or a foreign symbol, which
     /// generated code loads (D-913, D-917).
     Imp,
+    /// A module record `cb$mod$<module path>` (D-917, D-919).
+    Mod,
+    /// The program image `cb$image` (D-915, D-917, D-925).
+    Image,
 }
 
 impl Kind {
     /// Every kind.
-    pub const ALL: [Self; 21] = [
+    pub const ALL: [Self; 23] = [
         Self::Fn,
         Self::Slot,
         Self::Shim,
@@ -86,6 +91,8 @@ impl Kind {
         Self::Cont,
         Self::Blk,
         Self::Imp,
+        Self::Mod,
+        Self::Image,
     ];
 
     /// The word in the symbol.
@@ -113,8 +120,34 @@ impl Kind {
             Self::Cont => "cont",
             Self::Blk => "blk",
             Self::Imp => "imp",
+            Self::Mod => "mod",
+            Self::Image => "image",
         }
     }
+}
+
+/// `cb$image`, the program image (D-915, D-917, D-925): one per program,
+/// in the program object.
+pub const PROGRAM_IMAGE: &str = "cb$image";
+
+/// `cb$mod$<module path>`, the module record of a code unit (D-917,
+/// D-919), the path joined as D-456 joins it. GAP(module-record-per-unit):
+/// a tests unit's is [`tests_module_record`].
+#[must_use]
+pub fn module_record(module: &str) -> String {
+    format!("{PREFIX}{}${}", Kind::Mod.word(), path_part(module))
+}
+
+/// `cb$mod$test$<module path>`, the module record of a tests unit.
+///
+/// GAP(module-record-per-unit): a code unit's record holds
+/// `cb$mod$<path>` and a tests unit's `cb$mod$test$<path>`, as D-572 names
+/// tests' symbols, so a program that loads both has no clash. `test` is a
+/// keyword, which names no package or module (§2.4, §7.1), so no code
+/// unit's path starts with it. An entries unit gets no module record.
+#[must_use]
+pub fn tests_module_record(module: &str) -> String {
+    format!("{PREFIX}{}$test${}", Kind::Mod.word(), path_part(module))
 }
 
 /// A module path (`std::io`) as a symbol part (`std$io`).
@@ -134,6 +167,34 @@ pub fn item(kind: Kind, name: &DefName) -> String {
         path_part(&name.module),
         path_part(&name.item)
     )
+}
+
+/// `cb$slot$<module path>$<item>`, the indirection slot of a top-level
+/// function (D-043, D-456), followed by `$$b<mask>` when its ABI signature
+/// borrows a parameter (D-715, D-917), so a caller compiled against a
+/// stale mask fails to resolve instead of calling with the wrong
+/// convention.
+///
+/// GAP(slot-mask-hex): the mask is its `u64` (bit `i` is parameter `i`)
+/// in lowercase hex without leading zeros, after `$$b`, and the suffix
+/// comes last, after a REPL item's `$r<generation>`, which is part of its
+/// item name ([`crate::SessionName::versioned`]); the REPL never borrows
+/// (D-715), so the two never meet today. An all-owned slot keeps D-456's
+/// name. The separator is `$$`, not D-917's written `$`: with one `$`,
+/// the masked slot of item `f` in module `m` (`cb$slot$m$f$b1`) would be
+/// the plain slot of item `b1` in module `m::f`, and §7 lets both modules
+/// exist in one package. A module path joined with `$` never holds `$$`,
+/// and neither does an item name (a REPL item's `h$r2` included), so after
+/// the module path `$$` always starts the suffix, as it ends the path in
+/// [`static_object`].
+#[must_use]
+pub fn slot(name: &DefName, borrow: cheby_mir::borrow::BorrowMask) -> String {
+    let base = item(Kind::Slot, name);
+    if borrow.is_owned() {
+        base
+    } else {
+        format!("{base}$$b{:x}", borrow.0)
+    }
 }
 
 /// `cb$<kind>$<module path>$$<name>`: a static object of a unit (D-523),

@@ -211,6 +211,24 @@ pub const PLANNED_STD_MODULES: &[&str] = &["file", "http", "net", "process", "ti
 /// test needs and the package that brings it.
 pub const PENDING_SPEC_TESTS: &[(&str, &str, &str)] = &[];
 
+include!(concat!(env!("OUT_DIR"), "/std_hashes.rs"));
+
+/// The source hashes of the std module at `path` (under `std`), computed
+/// from its file when `cheby` was built (D-963,
+/// GAP(source-hash-width)); `None` for a path with no file.
+#[must_use]
+pub fn source_hashes(path: &str) -> Option<crate::SourceHashes> {
+    let at = STD_SOURCE_HASHES
+        .binary_search_by(|(p, _, _)| (*p).cmp(path))
+        .ok()?;
+    STD_SOURCE_HASHES
+        .get(at)
+        .map(|&(_, wide, narrow)| crate::SourceHashes {
+            sip128: crate::cache::Hash128(wide),
+            sip64: narrow,
+        })
+}
+
 /// The shipped module at `path` (under `std`).
 #[must_use]
 pub fn find(path: &str) -> Option<&'static StdModule> {
@@ -284,6 +302,39 @@ mod tests {
             let text = std::fs::read_to_string(repo().join(display_path(module.path))).unwrap();
             assert_eq!(text, module.source, "{} is stale", module.path);
         }
+    }
+
+    /// Every std constant of `build.rs` is the hash of the text `cheby`
+    /// embeds, both widths (D-963, D-538, GAP(source-hash-width)), and
+    /// every embedded module has one.
+    #[test]
+    fn front_source_hash_std_constants_match_embedded_text() {
+        let paths: Vec<&str> = STD_SOURCE_HASHES.iter().map(|(p, _, _)| *p).collect();
+        let mut listed: Vec<&str> = STD_MODULES
+            .iter()
+            .chain(STAGED_STD_MODULES)
+            .map(|m| m.path)
+            .collect();
+        listed.sort_unstable();
+        assert_eq!(paths, listed);
+        for module in STD_MODULES.iter().chain(STAGED_STD_MODULES) {
+            let hashes = source_hashes(module.path).unwrap();
+            assert_eq!(
+                hashes,
+                crate::SourceHashes::of(module.source.as_bytes()),
+                "{}",
+                module.path
+            );
+            assert_eq!(
+                hashes.sip64,
+                cheby_runtime::consteval::source_hash(module.source.as_bytes())
+            );
+            assert_eq!(
+                hashes.sip128,
+                crate::cache::Hash128::of(module.source.as_bytes())
+            );
+        }
+        assert_eq!(source_hashes("no_such_module"), None);
     }
 
     #[test]

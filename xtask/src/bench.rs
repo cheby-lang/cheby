@@ -413,6 +413,7 @@ fn time_cheby(
     for (key, value) in env {
         cmd.env(key, value);
     }
+    crate::cache::apply(&mut cmd)?;
     let start = Instant::now();
     let out = cmd
         .args(["--color=never", command])

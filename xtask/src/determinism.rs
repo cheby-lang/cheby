@@ -18,6 +18,11 @@
 //!    (`clif.txt`) and the constants' debug texts (`consts.txt`) (plan
 //!    §4.5). The commands' exit status and output are recorded too. The
 //!    two dump trees must be identical byte for byte.
+//! 3. The cache (D-972, first half): each build's `cheby check` writes a
+//!    fresh cache of its own, under its own absolute path; `CHEBY_DUMP_DIR`
+//!    bypasses reads and still writes (D-965). The two caches' `v1/blob/`
+//!    and `v1/rec/` trees must be identical byte for byte; `v1/hint/` is
+//!    left out. D-972's warm rebuild is K8's (M3 wave 10).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -94,8 +99,14 @@ pub fn run(root: &Path, lines: usize, filter: Option<&str>) -> Result<(), String
             copy_tree(dir, &copy)?;
             let out = base.join("out").join(label).join(name);
             std::fs::create_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
+            // A fresh cache of its own, under the build's own path (D-972).
+            let cache = cache_dir(&base, top, name);
             let mut check = Command::new(&cheby);
-            check.args(jobs_args(jobs)).args(["--color=never", "check"]);
+            check
+                .args(jobs_args(jobs))
+                .args(["--color=never", "check"])
+                .env("CHEBY_CACHE", &cache)
+                .env_remove("CHEBY_CACHE_LOG");
             record(
                 check,
                 &copy,
@@ -118,15 +129,46 @@ pub fn run(root: &Path, lines: usize, filter: Option<&str>) -> Result<(), String
                 println!("FAIL  {name}: {diff}");
             }
         }
+        match compare_caches(&base, name)? {
+            Ok(files) => println!("ok    {name}: cache, {files} blobs and records identical"),
+            Err(diff) => {
+                failures = failures.saturating_add(1);
+                println!("FAIL  {name}: cache {diff}");
+            }
+        }
     }
     println!(
         "compiler artifacts: {compared} projects built with --jobs 1 and the default from two \
-         paths; interfaces, MIR, CLIF, constants and command output compared"
+         paths into two fresh caches; interfaces, MIR, CLIF, constants, command output and the \
+         caches' blobs and records compared"
     );
     match failures {
         0 => Ok(()),
         n => Err(format!("{n} outputs are not deterministic")),
     }
+}
+
+/// D-972: compares the two builds' caches of `name`, their blobs and
+/// records byte for byte (hints are left out). `Ok(files)` when they are
+/// identical, `Err` with the first difference otherwise.
+fn compare_caches(base: &Path, name: &str) -> Result<Result<usize, String>, String> {
+    let [(_, top_a, _), (_, top_b, _)] = BUILDS;
+    let mut files: usize = 0;
+    for kind in ["v1/blob", "v1/rec"] {
+        let a = cache_dir(base, top_a, name).join(kind);
+        let b = cache_dir(base, top_b, name).join(kind);
+        files = files.saturating_add(count_files(&a)?);
+        if let Some(diff) = compare_dumps(&a, &b)? {
+            return Ok(Err(format!("{kind}: {diff}")));
+        }
+    }
+    Ok(Ok(files))
+}
+
+/// The cache of the build of `name` under `top`: a different absolute
+/// path for each build, fresh since `base` is removed first.
+fn cache_dir(base: &Path, top: &str, name: &str) -> PathBuf {
+    base.join("cache").join(top).join(name)
 }
 
 fn jobs_args(jobs: Option<usize>) -> Vec<String> {

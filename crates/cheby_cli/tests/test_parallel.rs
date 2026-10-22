@@ -25,6 +25,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use cheby_driver::{PreparedTests, TestOptions, TestOutcome, TestProgram, prepare_test};
+use cheby_test_support::cache::{CACHE_ENV, HarnessCache};
 use cheby_test_support::process::{self, RunOutput};
 
 const CHEBY: &str = env!("CARGO_BIN_EXE_cheby");
@@ -65,6 +66,8 @@ fn package(name: &str, source: &str) -> PathBuf {
     reason = "a test helper: failing to start the shell fails the test"
 )]
 fn cheby_test(dir: &Path, redirects: &str, threads: &str, stdin: Option<&[u8]>) -> RunOutput {
+    // A fresh build cache of this command (GAP(cache-tests-isolated)).
+    let cache = HarnessCache::create("cli-test-parallel").unwrap();
     let mut cmd = Command::new("/bin/sh");
     cmd.arg("-c")
         .arg(format!("exec \"$0\" --color=never test {redirects}"))
@@ -72,6 +75,7 @@ fn cheby_test(dir: &Path, redirects: &str, threads: &str, stdin: Option<&[u8]>) 
         .current_dir(dir)
         .env("NO_COLOR", "1")
         .env("CHEBY_THREADS", threads);
+    cache.apply(&mut cmd);
     process::run(cmd, stdin, PATIENCE).unwrap()
 }
 
@@ -127,10 +131,12 @@ fn test_parallel_a_broken_stderr_during_replay_ends_the_run_with_one() {
          test \"third\" {{\n  pause(1000)\n  io::println(\"never printed either\")\n}}\n"
     );
     let dir = package("broken_stderr", &source);
+    let cache = HarnessCache::create("cli-test-parallel").unwrap();
     let mut child = Command::new(CHEBY)
         .args(["--color=never", "test"])
         .current_dir(&dir)
         .env("NO_COLOR", "1")
+        .env(CACHE_ENV, cache.path())
         .env("CHEBY_THREADS", "4")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

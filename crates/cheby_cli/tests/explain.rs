@@ -6,6 +6,7 @@ use std::process::Command;
 use std::time::Duration;
 
 use cheby_diag::codes::ALL;
+use cheby_test_support::cache::HarnessCache;
 use cheby_test_support::process::{self, RunOutput};
 use cheby_test_support::repo_root;
 
@@ -17,10 +18,13 @@ const TIMEOUT: Duration = Duration::from_secs(60);
     reason = "a test helper: failing to spawn `cheby` fails the test"
 )]
 fn explain(code: &str) -> RunOutput {
+    // A fresh build cache of this test (GAP(cache-tests-isolated)).
+    let cache = HarnessCache::create("cli-explain").unwrap();
     let mut cmd = Command::new(CHEBY);
     cmd.args(["--color=never", "explain", code])
         .current_dir(repo_root())
         .env("NO_COLOR", "1");
+    cache.apply(&mut cmd);
     process::run(cmd, None, TIMEOUT).unwrap()
 }
 

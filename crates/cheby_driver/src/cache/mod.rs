@@ -25,16 +25,23 @@
 //!   deletes entries unused for five days, at most once a day (D-961).
 //! - [`CacheLog`] is `CHEBY_CACHE_LOG` (D-973): every lookup as a sorted
 //!   `<artifact> <module or constant path> hit|miss` line.
+//! - [`front`] holds the front records, their keys `F1` and `F2` and the
+//!   read-set hints (D-955), and [`replay`] the structured diagnostics
+//!   they name and their replay (D-965). The front end reads and writes
+//!   them (`frontend.rs`).
 //!
 //! Nothing here depends on an absolute path, a modification time or
 //! hash-map order except the files' own locations (D-264): keys, blob
 //! names and file contents are functions of the bytes callers pass.
 
+pub mod front;
 mod key;
 mod location;
 mod log;
+pub mod replay;
 mod store;
 mod trim;
+mod wire;
 
 #[cfg(test)]
 mod tests;

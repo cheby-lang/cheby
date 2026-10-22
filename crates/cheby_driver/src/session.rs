@@ -2188,12 +2188,17 @@ impl Session {
             let mut deps: Vec<(String, u64)> = Vec::new();
             for &module in const_modules.get(&def).map_or(&[][..], Vec::as_slice) {
                 let module_info = self.front.modules.try_get(module)?;
-                let hash = module_info
-                    .file
-                    .and_then(|file| self.sources.file(file))
-                    .map_or(0, |f| {
-                        cheby_runtime::consteval::source_hash(f.text().as_bytes())
-                    });
+                // The hash computed when the file was read (D-963); a
+                // module the session added is hashed here.
+                let hash = match self.front.source_hashes(module) {
+                    Some(hashes) => hashes.sip64,
+                    None => module_info
+                        .file
+                        .and_then(|file| self.sources.file(file))
+                        .map_or(0, |f| {
+                            cheby_runtime::consteval::source_hash(f.text().as_bytes())
+                        }),
+                };
                 deps.push((module_info.path.to_string(), hash));
             }
             deps.sort();
@@ -2443,12 +2448,14 @@ fn std_module(
         text.push_str(module.path);
         text.push('\n');
     }
+    let hashes = crate::SourceHashes::of(text.as_bytes());
     let source = parse_file(sources, SESSION_FILE, text.into_bytes(), diagnostics)?;
     let file = source.file;
     Ok((
         crate::Module {
             path: ModulePath::root(&package.manifest.name).child(SESSION_FILE),
             source,
+            hashes,
         },
         file,
     ))

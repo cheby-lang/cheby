@@ -1302,7 +1302,7 @@ impl Translator<'_, '_> {
                         // D-043: every call of a top-level function loads
                         // its slot, which is writable (no `readonly`).
                         let path = self.decls.slot_path(self.unit, *def)?;
-                        let slot = self.decls.slot(&path, &abi_sig)?.id;
+                        let slot = self.decls.slot_data(&path, &abi_sig)?;
                         let address = self.data_address(slot);
                         let code = self.b.ins().load(WORD, MemFlagsData::trusted(), address, 0);
                         CallTarget::Indirect(self.sig_ref(&abi_sig), code)

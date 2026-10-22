@@ -6,10 +6,6 @@
 use cheby_driver::cache::BuildId;
 
 /// This `cheby`'s build ID (D-957).
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "K3a opens the store with it (wave 2)")
-)]
 pub(crate) fn build_id() -> BuildId {
     BuildId(include!(concat!(env!("OUT_DIR"), "/build_id.rs")))
 }

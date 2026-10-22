@@ -26,32 +26,44 @@
 //! separate run of 5 seeds with `CHEBY_RT_STATS=1` must count reuse hits,
 //! so that reuse happens at run time too, not only in the MIR.
 //!
+//! The run the three agreed on is compared with the reference evaluator
+//! (`progen::evaluate`, D-719, D-1028), which computes each program's
+//! output from the spec in process, without `cheby`: standard output and
+//! the exit status must be equal, and standard error too wherever the
+//! evaluator predicts it exactly (an empty one, or the report of a panic
+//! that ends `main`, GAP(progen-eval-compared-output)). Every one of the
+//! 40 programs must be inside the evaluator's subset, so the three
+//! oracles agree on each.
+//!
 //! `progen_*` checks the generator itself on 200 seeds: each program
-//! checks with no diagnostic at all and finishes within the timeout.
+//! checks with no diagnostic at all and finishes within the timeout. The
+//! evaluator covers the same 200 programs in `cheby_test_support`'s own
+//! `progen_eval_covers_generator`.
 //!
 //! With the `@rc=naive` conformance variant (D-853), this test is the
 //! oracle of borrowing and reuse on generated programs (D-718, D-844).
-//! The packages stay under `CARGO_TARGET_TMPDIR/rc_differential/` for
-//! reproduction: run `cheby run` there with and without `CHEBY_RC=naive`,
-//! and with `CHEBY_RT_POISON=0`.
+//! Every `cheby` it starts gets `CHEBY_CACHE` set to one fresh cache of
+//! the test process (`progen::shared_cache`, D-959,
+//! GAP(cache-tests-isolated)). The packages stay under
+//! `CARGO_TARGET_TMPDIR/rc_differential/` for reproduction: run `cheby
+//! run` there with and without `CHEBY_RC=naive`, and with
+//! `CHEBY_RT_POISON=0`, and compare with `progen::evaluate` of
+//! `progen::program_in` of the directory.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use cheby_test_support::cache::HarnessCache;
 use cheby_test_support::process;
-use cheby_test_support::progen::{self, DiffOptions, GenConfig};
+use cheby_test_support::progen::{self, CHECK_SEEDS, DIFF_SEEDS, DiffOptions, GenConfig};
 
 const CHEBY: &str = env!("CARGO_BIN_EXE_cheby");
 const TMP: &str = env!("CARGO_TARGET_TMPDIR");
 
-/// The seeds of the stable differential.
-const DIFF_SEEDS: std::ops::Range<u64> = 1_000..1_040;
-/// The seeds of the generator's self-check.
-const CHECK_SEEDS: std::ops::Range<u64> = 0..200;
 /// The seeds of the reuse-hit run, the first 5 of the differential's.
 const STATS_SEEDS: std::ops::Range<u64> = 1_000..1_005;
 
@@ -188,6 +200,16 @@ fn projection_runs_in_text(text: &str) -> usize {
     runs
 }
 
+/// The process's fresh `CHEBY_CACHE`, which the caller holds for its run
+/// (D-959, GAP(cache-tests-isolated)).
+#[expect(
+    clippy::unwrap_used,
+    reason = "a test helper: a cache that cannot be created fails the test"
+)]
+fn cache() -> Arc<HarnessCache> {
+    progen::shared_cache().unwrap()
+}
+
 #[expect(
     clippy::unwrap_used,
     reason = "a test helper: a bad CHEBY_HARNESS_SCALE fails the test"
@@ -300,9 +322,11 @@ fn reuse_hits(stderr: &str) -> Option<u64> {
 fn rc_differential_naive_and_perceus_agree_on_40_programs() {
     let config = GenConfig::default();
     let seeds: Vec<u64> = DIFF_SEEDS.collect();
+    let cache = cache();
     let options = |dump: PathBuf| DiffOptions {
         timeout: timeout(),
         dump_dir: Some(dump),
+        cache: Some(cache.path().to_path_buf()),
     };
     let results = parallel(&seeds, |seed| {
         let dir = package_dir("diff", seed);
@@ -319,11 +343,18 @@ fn rc_differential_naive_and_perceus_agree_on_40_programs() {
     let mut reusing = 0usize;
     let mut projecting = 0usize;
     let mut lines = 0usize;
+    let mut evaluated = 0usize;
+    let mut stderr_compared = 0usize;
     for (seed, (dir, outcome, counts)) in &results {
         match outcome {
             Ok(report) => {
                 planted = planted.saturating_add(usize::from(report.planted));
                 lines = lines.saturating_add(report.stdout.lines().count());
+                // `differential_with` returns `Ok` only when the run
+                // matched the evaluator's output.
+                evaluated = evaluated.saturating_add(1);
+                stderr_compared =
+                    stderr_compared.saturating_add(usize::from(report.expected.stderr.is_some()));
             }
             Err(e) => failures.push(format!("seed {seed} ({}): {e}", dir.display())),
         }
@@ -342,8 +373,14 @@ fn rc_differential_naive_and_perceus_agree_on_40_programs() {
          {reusing} with a drop_reuse, {projecting} with a projection run",
         results.len()
     );
+    println!(
+        "the reference evaluator agrees on {evaluated} of {} programs, standard error \
+         compared on {stderr_compared}",
+        results.len()
+    );
     assert!(failures.is_empty(), "{}", failures.join("\n\n"));
     assert_eq!(results.len(), 40);
+    assert_eq!(evaluated, 40);
     assert!(
         borrowing >= MIN_BORROWING,
         "only {borrowing} of 40 programs borrow a parameter of a generated function \
@@ -373,6 +410,7 @@ fn rc_differential_naive_and_perceus_agree_on_40_programs() {
 fn rc_differential_reuse_hits_in_5_programs() {
     let config = GenConfig::default();
     let seeds: Vec<u64> = STATS_SEEDS.collect();
+    let cache = cache();
     let results = parallel(&seeds, |seed| {
         let dir = package_dir("stats", seed);
         let program = progen::generate(seed, &config);
@@ -385,6 +423,7 @@ fn rc_differential_reuse_hits_in_5_programs() {
             .env("CHEBY_RT_POISON", "0")
             .env_remove("CHEBY_RC")
             .env_remove("CHEBY_DUMP_DIR");
+        cache.apply(&mut run);
         let ran = process::run(run, None, timeout()).unwrap();
         let expected = if program.planted_panic() { 101 } else { 0 };
         if ran.status != Some(expected) {
@@ -503,6 +542,7 @@ fn rc_differential_counts_the_dump_marker() {
 fn progen_200_seeds_check_cleanly_and_finish() {
     let config = GenConfig::default();
     let seeds: Vec<u64> = CHECK_SEEDS.collect();
+    let cache = cache();
     let results = parallel(&seeds, |seed| {
         let dir = package_dir("check", seed);
         let program = progen::generate(seed, &config);
@@ -512,6 +552,7 @@ fn progen_200_seeds_check_cleanly_and_finish() {
             .args(["--color=never", "check"])
             .current_dir(&dir)
             .env("NO_COLOR", "1");
+        cache.apply(&mut check);
         let checked = process::run(check, None, timeout()).unwrap();
         if checked.status != Some(0) || !checked.stdout.is_empty() || !checked.stderr.is_empty() {
             return Err(format!(
@@ -527,6 +568,7 @@ fn progen_200_seeds_check_cleanly_and_finish() {
             .env("NO_COLOR", "1")
             .env("CHEBY_RT_POISON", "1")
             .env_remove("CHEBY_RC");
+        cache.apply(&mut run);
         let ran = process::run(run, None, timeout()).unwrap();
         let expected = if program.planted_panic() { 101 } else { 0 };
         if ran.status != Some(expected) {

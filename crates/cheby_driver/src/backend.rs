@@ -985,8 +985,12 @@ fn const_infos(
 }
 
 /// The `SipHash` of `module`'s source bytes (D-538); 0 for a module without
-/// a source file.
+/// a source file. The hash computed when the file was read, or when
+/// `cheby` was built for std (D-963), is used when there is one.
 fn module_source_hash(front: &Frontend, sources: &SourceMap, module: ModuleId) -> Result<u64, Ice> {
+    if let Some(hashes) = front.source_hashes(module) {
+        return Ok(hashes.sip64);
+    }
     let info = front.modules.try_get(module)?;
     let Some(file) = info.file else {
         return Ok(0);
@@ -1084,6 +1088,67 @@ fn main() {
   assert size == 80
 }
 ";
+
+    /// GAP(source-hash-width): constant seeds read the 64-bit hashes
+    /// computed when the files were read (package modules) or when `cheby`
+    /// was built (std), and each equals the seed computed as before from
+    /// the source map's texts (D-538), for a constant that reaches a
+    /// package module and std modules.
+    #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+    )]
+    fn front_source_hash_seed_unchanged() {
+        let dir = package(
+            "seed",
+            "",
+            "//! Root.\n\nimport app::util\n\nfn main() {\n  assert util::size == 2\n}\n",
+        );
+        std::fs::write(
+            dir.join("src/util.cheby"),
+            "//! Util.\n\nimport std::map\n\n\
+             pub const table: map::Map<Int, Int> = map::insert(map::insert(map::new(), 1, 2), 3, 4)\n\n\
+             pub const size: Int = map::size(table)\n",
+        )
+        .unwrap();
+        let (front, out) = front(&dir);
+        let module = front
+            .local_module(&cheby_package::ModulePath::root("app"))
+            .unwrap();
+        let main = front.main_of(module).unwrap();
+        let lowered = lower(
+            &front,
+            &out.sources,
+            &Roots::Main(main),
+            MirOptions::default(),
+        )
+        .unwrap();
+        let infos = const_infos(&front, &out.sources, &lowered.reach).unwrap();
+        assert_eq!(infos.len(), 2);
+        let const_modules = lowered.reach.const_modules();
+        for info in &infos {
+            let modules = const_modules.get(&info.def).unwrap();
+            let mut deps: Vec<(String, u64)> = modules
+                .iter()
+                .map(|&m| {
+                    let module = front.modules.get(m).unwrap();
+                    let text = out.sources.file(module.file.unwrap()).unwrap().text();
+                    (
+                        module.path.to_string(),
+                        cheby_runtime::consteval::source_hash(text.as_bytes()),
+                    )
+                })
+                .collect();
+            deps.sort();
+            assert!(deps.iter().any(|(p, _)| p == "app::util"), "{deps:?}");
+            assert!(deps.iter().any(|(p, _)| p.starts_with("std::")), "{deps:?}");
+            let deps: Vec<(&str, u64)> = deps.iter().map(|(p, h)| (p.as_str(), *h)).collect();
+            let seed = cheby_runtime::consteval::const_seed("app", "app::util", &info.name, &deps);
+            assert_eq!(info.seed, seed, "{}", info.name);
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     /// Plan §7.8: whichever constant forces `table` first, `table` is
     /// built under its own seed (D-535, D-538), so its key order, which

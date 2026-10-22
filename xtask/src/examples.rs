@@ -72,9 +72,10 @@ pub fn run(root: &Path) -> Result<(), String> {
 }
 
 fn check(cheby: &Path, dir: &Path) -> Result<Outcome, String> {
-    let out = Command::new(cheby)
-        .args(["--color=never", "check"])
-        .current_dir(dir)
+    let mut cmd = Command::new(cheby);
+    cmd.args(["--color=never", "check"]).current_dir(dir);
+    crate::cache::apply(&mut cmd)?;
+    let out = cmd
         .output()
         .map_err(|e| format!("cannot run {}: {e}", cheby.display()))?;
     let text = format!(

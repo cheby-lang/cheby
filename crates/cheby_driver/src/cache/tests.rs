@@ -613,6 +613,53 @@ fn cache_location_unwritable_root_falls_back_to_a_temporary_store() {
     assert!(!temp.exists(), "a temporary store is deleted on drop");
 }
 
+/// A temporary store that a killed command left behind (SIGINT and
+/// SIGTERM run no destructor) is deleted by the next command that falls
+/// back once its process is gone; a live process's store, a directory
+/// without the store's README and other names are kept
+/// (GAP(cache-temporary-sweep), wave 2 review SND-3).
+#[cfg(unix)]
+#[test]
+fn cache_location_fallback_sweeps_dead_temporaries() {
+    use super::location::temporary_pid;
+    let dir = TestDir::new("sweep");
+    let mut child = std::process::Command::new("true").spawn().unwrap();
+    let dead = child.id();
+    child.wait().unwrap();
+    let alive = std::os::unix::process::parent_id();
+    let plant = |name: &str, readme: bool| {
+        let path = dir.path().join(name);
+        fs::create_dir_all(path.join("v1/blob")).unwrap();
+        if readme {
+            fs::write(path.join("README"), super::store::README).unwrap();
+        }
+        path
+    };
+    let leftover = plant(&format!("cheby-cache-{dead}-0"), true);
+    let live = plant(&format!("cheby-cache-{alive}-0"), true);
+    let no_readme = plant(&format!("cheby-cache-{dead}-1"), false);
+    let other_name = plant(&format!("cheby-cache-{dead}"), true);
+    let store = Store::temporary(dir.path(), BUILD).unwrap();
+    assert!(!leftover.exists(), "a dead process's store is swept");
+    for kept in [&live, &no_readme, &other_name] {
+        assert!(kept.exists(), "{}", kept.display());
+    }
+    let mine = store.root().to_path_buf();
+    assert!(mine.join("README").is_file());
+    drop(store);
+    assert!(!mine.exists());
+    assert_eq!(temporary_pid("cheby-cache-12-3"), Some(12));
+    for name in [
+        "cheby-cache-12",
+        "cheby-cache--3",
+        "cheby-cache-1x-3",
+        "cheby-cache-12-3-4",
+        "cache-12-3",
+    ] {
+        assert_eq!(temporary_pid(name), None, "{name}");
+    }
+}
+
 #[test]
 fn cache_location_no_home_falls_back_with_the_reason() {
     let (store, fallback) = Store::open_or_temporary(&env(None, None, None, None), BUILD).unwrap();

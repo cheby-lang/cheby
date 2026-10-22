@@ -10,8 +10,11 @@
 //!   Two changes are the style's own and are compared as such: imports are
 //!   sorted within their block (D-1030), so the imports are compared as a
 //!   set, and a list the printer lays out gains a trailing comma when it
-//!   breaks and loses it when it fits, so that comma is left out.
+//!   breaks and loses it when it fits, so that comma is left out, except
+//!   the comma of a one-element tuple, which makes it a tuple and is
+//!   always compared (GAP(fmt-trailing-comma)).
 //!
+//! The same checks run over the UI test sources without a grammar error.
 //! The test only reads the repository.
 
 use std::path::{Path, PathBuf};
@@ -51,7 +54,26 @@ const fn is_laid_out_list(kind: SyntaxKind) -> bool {
             | SyntaxKind::IMPORT_LIST
             | SyntaxKind::VARIANT_LIST
             | SyntaxKind::RECORD_FIELD_LIST
+            | SyntaxKind::ARG_LIST
+            | SyntaxKind::LIST_EXPR
+            | SyntaxKind::RECORD_EXPR
+            | SyntaxKind::TUPLE_EXPR
+            | SyntaxKind::TYPE_ARG_LIST
+            | SyntaxKind::TUPLE_TYPE
+            | SyntaxKind::POS_PAT_LIST
+            | SyntaxKind::FIELD_PAT_LIST
+            | SyntaxKind::LIST_PAT
+            | SyntaxKind::TUPLE_PAT
     )
+}
+
+/// Whether `node` is a one-element tuple, whose comma makes it a tuple:
+/// `(x,)` is one and `(x)` is not, so that comma is always compared.
+fn is_one_element_tuple(node: SyntaxNode<'_>) -> bool {
+    matches!(
+        node.kind(),
+        SyntaxKind::TUPLE_EXPR | SyntaxKind::TUPLE_PAT | SyntaxKind::TUPLE_TYPE
+    ) && node.children().count() == 1
 }
 
 fn is_significant(kind: SyntaxKind) -> bool {
@@ -60,18 +82,23 @@ fn is_significant(kind: SyntaxKind) -> bool {
 
 /// What formatting must keep of one top-level node: its node kinds in
 /// preorder and its significant tokens, without a laid-out list's
-/// trailing comma.
+/// trailing comma; a one-element tuple's comma is kept.
 fn shape(node: SyntaxNode<'_>) -> (Vec<SyntaxKind>, Vec<String>) {
     let kinds = node.descendants().map(SyntaxNode::kind).collect();
     let tokens: Vec<_> = node.tokens().filter(|t| is_significant(t.kind())).collect();
     let mut texts = Vec::new();
     for (i, token) in tokens.iter().enumerate() {
         let trailing_comma = token.kind() == SyntaxKind::COMMA
-            && token.parent().is_some_and(|p| is_laid_out_list(p.kind()))
+            && token
+                .parent()
+                .is_some_and(|p| is_laid_out_list(p.kind()) && !is_one_element_tuple(p))
             && tokens.get(i.saturating_add(1)).is_some_and(|next| {
                 matches!(
                     next.kind(),
-                    SyntaxKind::R_PAREN | SyntaxKind::GT | SyntaxKind::R_BRACE
+                    SyntaxKind::R_PAREN
+                        | SyntaxKind::GT
+                        | SyntaxKind::R_BRACE
+                        | SyntaxKind::R_BRACK
                 ) && next.parent() == token.parent()
             });
         if !trailing_comma {
@@ -227,6 +254,28 @@ fn fmt_ui_sources_format_idempotently_and_keep_meaning() {
     assert!(failures.is_empty(), "{}", failures.join("\n\n"));
 }
 
+/// The meaning check's trailing-comma exception never covers the comma of
+/// a one-element tuple: dropping it turns `(x,)` into `(x)`.
+#[test]
+fn fmt_corpus_one_element_tuple_comma_is_compared() {
+    let shapes = |text: &str| meaning(&parse_clean(text).unwrap()).others;
+    for (tuple, paren) in [
+        ("const a: Int = (x,)\n", "const a: Int = (x)\n"),
+        (
+            "fn f() {\n  let (x,) = y\n}\n",
+            "fn f() {\n  let (x) = y\n}\n",
+        ),
+        ("type T = (Int,)\n", "type T = (Int)\n"),
+    ] {
+        assert_ne!(shapes(tuple), shapes(paren), "{tuple}");
+    }
+    // A longer tuple's trailing comma is the style's own.
+    assert_eq!(
+        shapes("const a: Int = (x, y,)\n"),
+        shapes("const a: Int = (x, y)\n")
+    );
+}
+
 /// Prints, as a Markdown table, how many nodes of each kind the printer
 /// laid out and how many it printed verbatim over the corpus at the
 /// provisional width. Run with `--nocapture` to read it.
@@ -267,4 +316,89 @@ fn fmt_corpus_coverage() {
         println!("| {:width$} | {laid:>8} | {verb:>8} |", kind.name());
     }
     assert!(total.laid_out.contains_key(&SyntaxKind::FN_DECL));
+
+    // The UI sources hold the odd comment positions and the errors the
+    // formatter keeps as written: the nodes still printed verbatim there.
+    let mut ui = Coverage::default();
+    let mut checked = 0;
+    for path in files_with_extension(&root.join("tests/ui"), "cheby").unwrap() {
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        if let Ok(c) = coverage(&text, cheby_fmt::PROVISIONAL_WIDTH) {
+            checked += 1;
+            if !c.verbatim.is_empty() || c.verbatim_items > 0 {
+                println!(
+                    "verbatim in {}: {} item(s), {:?}",
+                    display_relative(&path, &root),
+                    c.verbatim_items,
+                    c.verbatim
+                        .iter()
+                        .map(|(k, n)| format!("{} {n}", k.name()))
+                        .collect::<Vec<_>>()
+                );
+            }
+            ui.add(&c);
+        }
+    }
+    println!(
+        "{checked} UI sources; items printed verbatim: {}; nodes printed verbatim: {}",
+        ui.verbatim_items,
+        ui.verbatim.values().sum::<u64>()
+    );
+}
+
+/// How many lines of `before` are not kept unchanged in `after`: the lines
+/// outside a longest common subsequence of the two.
+fn changed_lines(before: &str, after: &str) -> usize {
+    let a: Vec<&str> = before.lines().collect();
+    let b: Vec<&str> = after.lines().collect();
+    // `row[j]`: the longest common subsequence of the lines of `a` read so
+    // far and the first `j` lines of `b`.
+    let mut row = vec![0usize; b.len().saturating_add(1)];
+    for x in &a {
+        let above = row.clone();
+        for (j, y) in b.iter().enumerate() {
+            let next = j.saturating_add(1);
+            let value = if x == y {
+                above.get(j).copied().unwrap_or(0).saturating_add(1)
+            } else {
+                let up = above.get(next).copied().unwrap_or(0);
+                up.max(row.get(j).copied().unwrap_or(0))
+            };
+            if let Some(slot) = row.get_mut(next) {
+                *slot = value;
+            }
+        }
+    }
+    a.len().saturating_sub(row.last().copied().unwrap_or(0))
+}
+
+/// Prints, as a Markdown table, how many corpus files and source lines
+/// change when the corpus is formatted at 80, 100 and 120 columns: the
+/// informative measure behind the width's choice at CP2 (D-1030). Run with
+/// `--ignored --nocapture`.
+#[test]
+#[ignore = "a measurement, printed on demand"]
+fn fmt_corpus_change_table() {
+    let root = repo_root();
+    let files = corpus(&root);
+    println!(
+        "| Width | Files that change (of {}) | Source lines that change |",
+        files.len()
+    );
+    println!("| ----: | ------------------------: | -----------------------: |");
+    for width in WIDTHS {
+        let mut changed_files = 0;
+        let mut lines = 0;
+        for path in &files {
+            let text = std::fs::read_to_string(path).unwrap();
+            let out = format_source(&text, width).unwrap();
+            if out != text {
+                changed_files += 1;
+                lines += changed_lines(&text, &out);
+            }
+        }
+        println!("| {width:>5} | {changed_files:>25} | {lines:>24} |");
+    }
 }

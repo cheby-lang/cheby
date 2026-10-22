@@ -28,7 +28,8 @@ const WORD_BYTES: u32 = 8;
 ///   count 1, the scan count (escaped above 254 value fields, D-279), and
 ///   the runtime layout id registered for the constructor (D-454). A nullary constructor's static `cb$ctor$…` is a
 ///   header with count 0. Only these objects hold user layout ids; code
-///   loads them.
+///   loads them. In a unit alone ([`crate::compile_unit`]) both hold 0
+///   where the id goes, which an executable's start fills (D-920).
 /// - A constant slot `cb$const$…` is a writable word, 0 until the
 ///   constant is evaluated (E6).
 /// - A static object (D-523) is a header with count 0, then its fields:
@@ -76,8 +77,12 @@ pub(crate) fn define_pending<M: Module>(
             .define_data(id, &desc)
             .map_err(|e| CodegenError::module(&e))?;
     }
+    let alone = decls.is_alone();
     for (layout, decl, value_fields) in std::mem::take(&mut decls.pending_layouts) {
-        let id = cx.layouts.id(&layout)?;
+        // D-920: in a unit alone the layout id is 0, and no id is looked
+        // up: an executable's start registers the layout and writes the
+        // whole header, so the unit's bytes depend on no layout id.
+        let id = if alone { 0 } else { cx.layouts.id(&layout)? };
         let word = ctor_header(abi::RC_UNIQUE, u64::from(value_fields), id);
         define_words(module, decl.word, &[word])?;
         if let Some(ctor) = decl.ctor {

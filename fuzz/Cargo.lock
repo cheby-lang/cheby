@@ -110,8 +110,10 @@ dependencies = [
  "cheby_runtime",
  "cheby_syntax",
  "cheby_types",
+ "libc",
  "rayon",
  "rustc-hash",
+ "siphasher",
 ]
 
 [[package]]
@@ -146,7 +148,6 @@ dependencies = [
  "cranelift-codegen",
  "cranelift-jit",
  "cranelift-module",
- "cranelift-native",
  "libc",
  "rustc-hash",
  "wasmtime-internal-jit-icache-coherence",
@@ -165,6 +166,9 @@ name = "cheby_link"
 version = "0.0.0"
 dependencies = [
  "cheby_codegen_clif",
+ "cranelift-codegen",
+ "cranelift-module",
+ "cranelift-object",
 ]
 
 [[package]]
@@ -224,6 +228,8 @@ dependencies = [
 name = "cheby_test_support"
 version = "0.0.0"
 dependencies = [
+ "cheby_diag",
+ "cheby_syntax",
  "toml",
 ]
 
@@ -403,10 +409,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "cranelift-object"
+version = "0.135.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fe22a1c6c8944926419f91fa4e21a548a9dfc509ac089ff9d61d26beaea8611a"
+dependencies = [
+ "anyhow",
+ "cranelift-codegen",
+ "cranelift-control",
+ "cranelift-module",
+ "gimli",
+ "log",
+ "object",
+ "target-lexicon",
+]
+
+[[package]]
 name = "cranelift-srcgen"
 version = "0.135.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2b73d7e686f3518831f88ffe88be02c6c92be09930fc5ab90a3dfd9a4de3815e"
+
+[[package]]
+name = "crc32fast"
+version = "1.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ba106e844045ddc02c20768ac4b0b7cb45f2cc2ecbd833ac9f5dacb183c2055"
+dependencies = [
+ "cfg-if",
+]
 
 [[package]]
 name = "crossbeam-deque"
@@ -586,6 +617,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "memchr"
+version = "2.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
+
+[[package]]
 name = "memmap2"
 version = "0.9.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -604,6 +641,18 @@ dependencies = [
  "log",
  "wasi",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "object"
+version = "0.39.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2e5a6c098c7a3b6547378093f5cc30bc54fd361ce711e05293a5cc589562739b"
+dependencies = [
+ "crc32fast",
+ "hashbrown 0.17.1",
+ "indexmap",
+ "memchr",
 ]
 
 [[package]]

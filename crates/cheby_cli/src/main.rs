@@ -311,15 +311,63 @@ fn package_root(out: Out) -> Result<std::path::PathBuf, ExitCode> {
     })
 }
 
+/// The note of D-959, printed once on standard error before anything
+/// else the command prints, when the cache cannot be used and the command
+/// runs on a temporary one (GAP(cache-fallback-note)).
+fn fallback_note(fallback: &cheby_driver::cache::Fallback) -> String {
+    format!(
+        "note: the build cache cannot be used ({fallback}), so this command uses a temporary \
+         cache that is deleted when it ends; set CHEBY_CACHE to a writable directory to keep \
+         the cache between commands\n"
+    )
+}
+
+/// Opens the build cache of `cheby check`, `cheby run` and `cheby test`
+/// (D-959): `CHEBY_CACHE` or the OS default, with the build ID (D-957)
+/// and the lookup log `CHEBY_CACHE_LOG` names (D-973). When it falls back
+/// to a temporary cache, the note is printed first. A relative
+/// `CHEBY_CACHE`, an unsafe root and a temporary cache that cannot be
+/// created either are tool errors.
+fn open_cache(out: Out) -> Result<cheby_driver::Cache, ExitCode> {
+    use cheby_driver::cache::{CacheEnv, CacheLog};
+    let log = CacheLog::from_var(std::env::var_os("CHEBY_CACHE_LOG"));
+    match cheby_driver::Cache::open(&CacheEnv::from_process(), build_id::build_id(), log) {
+        Ok((cache, fallback)) => {
+            if let Some(fallback) = fallback {
+                write_stderr(&fallback_note(&fallback));
+            }
+            Ok(cache)
+        }
+        Err(e) => Err(out.error(&e.to_string())),
+    }
+}
+
+/// Ends the command's use of the cache (D-959, D-961, D-973): writes the
+/// lookup log, trims when `trim`, and drops the store, which deletes a
+/// temporary one, before the process exits. A log that cannot be written
+/// is a tool error, and turns `code` into a failure.
+fn finish_cache(out: Out, cache: cheby_driver::Cache, trim: bool, code: ExitCode) -> ExitCode {
+    match cache.finish(trim) {
+        Ok(()) => code,
+        Err(e) => out.error(&format!("cannot write CHEBY_CACHE_LOG: {e}")),
+    }
+}
+
 /// `cheby check [--target T] [--deny-warnings]` (D-282, D-549, D-550):
 /// checks the package that holds the current directory with every
-/// implemented phase and prints its diagnostics.
+/// implemented phase and prints its diagnostics. It reads and writes the
+/// build cache's front records (D-955) and trims the cache at most once a
+/// day at its end (D-961).
 fn check(out: Out, options: cheby_driver::CheckOptions) -> ExitCode {
     let root = match package_root(out) {
         Ok(root) => root,
         Err(code) => return code,
     };
-    match cheby_driver::check_with(&root, &options) {
+    let cache = match open_cache(out) {
+        Ok(cache) => cache,
+        Err(code) => return code,
+    };
+    let code = match cheby_driver::check_cached(&root, &options, &cache) {
         Ok(result) => {
             out.diagnostics(&result);
             if result.has_errors() {
@@ -329,30 +377,45 @@ fn check(out: Out, options: cheby_driver::CheckOptions) -> ExitCode {
             }
         }
         Err(e) => out.error(e.message()),
-    }
+    };
+    finish_cache(out, cache, true, code)
 }
 
 /// `cheby run [module_path] [-- args]` (D-137, D-286): checks and compiles
 /// the package with the JIT, then runs the module's `main`. Compile errors
 /// are printed and exit with 1 before anything runs; warnings are printed
 /// before the program starts, or, with `--deny-warnings`, stop it like
-/// errors (D-549).
+/// errors (D-549). The build reads and writes the cache's front records
+/// (D-955); the cache is closed before the program starts, which may end
+/// the process itself, and `cheby run` never trims (D-961).
 fn run(out: Out, options: cheby_driver::RunOptions) -> ExitCode {
     let root = match package_root(out) {
         Ok(root) => root,
         Err(code) => return code,
     };
-    let mut program = match cheby_driver::prepare_run(&root, options) {
+    let cache = match open_cache(out) {
+        Ok(cache) => cache,
+        Err(code) => return code,
+    };
+    let prepared = cheby_driver::prepare_run_cached(&root, options, &cache);
+    let mut program = match prepared {
         Ok(cheby_driver::Prepared::Ready(program)) => program,
         Ok(cheby_driver::Prepared::CompileFailed(result)) => {
             out.diagnostics(&result);
-            return ExitCode::FAILURE;
+            return finish_cache(out, cache, false, ExitCode::FAILURE);
         }
-        Err(e) => return out.error(e.message()),
+        Err(e) => {
+            let code = out.error(e.message());
+            return finish_cache(out, cache, false, code);
+        }
     };
     out.diagnostics(program.output());
     // `--reuse-report` (D-717): after the warnings, before `main` runs.
     write_stderr(program.reuse_report());
+    let finished = finish_cache(out, cache, false, ExitCode::SUCCESS);
+    if finished != ExitCode::SUCCESS {
+        return finished;
+    }
     // D-797: the process exits right after `main`, so a
     // build without the leak check freezes the fibers left instead of
     // tearing them down (D-073, D-708); a debug build tears them down so
@@ -374,23 +437,37 @@ fn run(out: Out, options: cheby_driver::RunOptions) -> ExitCode {
 /// source order, a block per failure and a summary to stdout. Compile
 /// errors are printed and exit with 1 before any test runs; warnings are
 /// printed first, or, with `--deny-warnings`, stop it like errors (D-549).
-/// Exits with 0 when every selected test passes, 1 otherwise.
+/// Exits with 0 when every selected test passes, 1 otherwise. The build
+/// reads and writes the cache's front records (D-955); the cache is
+/// trimmed at most once a day (D-961) and closed when the build ends,
+/// before any test runs.
 fn test(out: Out, options: &cheby_driver::TestOptions) -> ExitCode {
     let root = match package_root(out) {
         Ok(root) => root,
         Err(code) => return code,
     };
-    let program = match cheby_driver::prepare_test(&root, options) {
+    let cache = match open_cache(out) {
+        Ok(cache) => cache,
+        Err(code) => return code,
+    };
+    let program = match cheby_driver::prepare_test_cached(&root, options, &cache) {
         Ok(cheby_driver::PreparedTests::Ready(program)) => program,
         Ok(cheby_driver::PreparedTests::CompileFailed(result)) => {
             out.diagnostics(&result);
-            return ExitCode::FAILURE;
+            return finish_cache(out, cache, true, ExitCode::FAILURE);
         }
-        Err(e) => return out.error(e.message()),
+        Err(e) => {
+            let code = out.error(e.message());
+            return finish_cache(out, cache, true, code);
+        }
     };
     out.diagnostics(program.output());
     // `--reuse-report` (D-717): after the warnings, before any test runs.
     write_stderr(program.reuse_report());
+    let finished = finish_cache(out, cache, true, ExitCode::SUCCESS);
+    if finished != ExitCode::SUCCESS {
+        return finished;
+    }
     // The tests' captured output is replayed through the process's own
     // stdout and stderr, as the tests would have written it, each test's
     // before its line (D-723, ADR-0062). A failed write of the report or of

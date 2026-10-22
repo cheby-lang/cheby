@@ -40,7 +40,10 @@
 //! fresh owner-only directory in the system's temporary directory that
 //! the harness creates when it starts and deletes when the run ends, also
 //! after failing tests, overriding the developer's own value (D-959,
-//! `cheby_test_support::cache`).
+//! `cheby_test_support::cache`). With `CHEBY_TEST_KEEP_CACHE=<absolute
+//! directory>` the harness uses that directory instead, creating it
+//! owner-only if needed, and never deletes it, so two runs share one cache
+//! (GAP(harness-kept-cache)).
 //!
 //! Every `cheby` inherits the harness's `CHEBY_RC`, so
 //! `CHEBY_RC=naive cargo test --test ui` runs the suite under naive

@@ -11,6 +11,7 @@ use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
+use cheby_test_support::cache::HarnessCache;
 use cheby_test_support::process::{self, RunOutput};
 
 const CHEBY: &str = env!("CARGO_BIN_EXE_cheby");
@@ -25,12 +26,15 @@ const TIMEOUT: Duration = Duration::from_secs(60);
 )]
 fn run_with(redirects: &str) -> RunOutput {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../cheby_driver/tests/packages/lets");
+    // A fresh build cache of this test (GAP(cache-tests-isolated)).
+    let cache = HarnessCache::create("cli-closed-streams").unwrap();
     let mut cmd = Command::new("/bin/sh");
     cmd.arg("-c")
         .arg(format!("exec \"$0\" run {redirects}"))
         .arg(CHEBY)
         .current_dir(dir)
         .env("NO_COLOR", "1");
+    cache.apply(&mut cmd);
     process::run(cmd, None, TIMEOUT).unwrap()
 }
 

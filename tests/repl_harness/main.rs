@@ -42,7 +42,9 @@
 //! directory in the system's temporary directory that the harness creates
 //! when it starts and deletes when the run ends, also after failing
 //! transcripts, overriding the developer's own value (D-959,
-//! `cheby_test_support::cache`).
+//! `cheby_test_support::cache`). With `CHEBY_TEST_KEEP_CACHE=<absolute
+//! directory>` the harness uses that directory instead, creating it
+//! owner-only if needed, and never deletes it (GAP(harness-kept-cache)).
 //!
 //! On Windows every transcript is ignored until M6 (D-545,
 //! `cheby_test_support::platform`).
