@@ -32,6 +32,7 @@ This chapter is informative. It summarizes the language and points to the normat
 | Sorted and insertion-ordered maps, sets and multimaps in the standard library | [3](03-types.md)                                      | D-331, D-332, D-336, D-337 |
 | Fibers on an M:N scheduler, structured concurrency, channels, selectors       | [10](10-concurrency.md)                               | D-003, D-012, D-040, D-054 |
 | Scope bodies and timeouts on the calling fiber, nested cancellation           | [10](10-concurrency.md)                               | D-665, D-667               |
+| Context values that every spawned fiber inherits                              | [10](10-concurrency.md)                               | D-1044                     |
 | Deadlocks detected in every build, exit status 103                            | [10](10-concurrency.md), [13](13-tooling.md)          | D-724, D-856 to D-859      |
 | Compile-time evaluated constants                                              | [4](04-declarations.md)                               | D-090                      |
 | Inline `test` blocks                                                          | [4](04-declarations.md), [13](13-tooling.md)          | D-055                      |

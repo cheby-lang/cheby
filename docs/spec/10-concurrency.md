@@ -13,6 +13,7 @@ A fiber runs a function to completion on its own stack. Every Cheby program star
 - Fibers share no mutable state, because there is none (D-004). Values passed to a fiber, captured by it or sent to it are immutable, and become shared for reference-counting purposes ([§9.4](09-memory-model.md#94-sharing-across-threads)) (D-072). So does a fiber's result, which another fiber reads with `join` (D-674).
 - A fiber ends when its function returns, when it panics ([§11.7](11-errors-and-panics.md#117-panics-and-fibers)), or when it is cancelled ([§10.7](#107-cancellation)).
 - A fiber's result is observed only through its scope or by joining it ([§10.3](#103-scopes)).
+- Each fiber has a context of values provided through `std::context`, which a spawn copies to the new fiber ([§10.11](#1011-context-values)) (D-1044).
 
 The body of a scope and the function of a timeout are not fibers. They run on the fiber that calls `fiber::scope` or `fiber::timeout` ([§10.3](#103-scopes), [§10.8](#108-timeouts)) (D-665, ADR-0057).
 
@@ -336,3 +337,16 @@ Standard output and standard error behave the same way on every target:
 - A standard stream that is closed or missing when the program starts behaves as a null device: writes and flushes succeed and discard the text, and reads see the end of input. The previous rule applies only to streams that are open at start (D-474).
 
 These rules hold for executables as for `cheby run`. An executable ignores the `SIGPIPE` signal, so a write to a pipe or socket whose reader has gone fails as described above, or with an `Err`, and never kills the process (D-925).
+
+## 10.11 Context values
+
+Each fiber has a **context**: for each context key, the value that the program has provided to the fiber, if any. A program reads and provides values through the standard-library module `std::context`, and a key is a constant with a default (D-1044, D-1045).
+
+- `context::provide(key, value, body)` binds `key` to `value` in the calling fiber while `body` runs. When `body` returns or unwinds, the fiber's context is again what it was before the call. So a `fiber::scope` or `fiber::timeout` that catches a panic continues with the context it had when it was called ([§10.3](#103-scopes), [§10.8](#108-timeouts)).
+- Every spawn, scoped or detached, gives the new fiber the spawning fiber's context at the moment of the spawn, and the new fiber keeps it when `provide` returns in the spawning fiber. The spawning fiber is the one that calls `spawn`, which may differ from the scope's owner (D-666).
+- The body of a scope, the function of a timeout and a selector's mapping function run on the calling fiber, so they see its context (D-665, D-675).
+- Context follows spawns, not messages. A fiber that receives a value over a channel keeps its own context.
+- The root fiber of a program, each test and each REPL entry start with an empty context, in which every key has its default.
+- A context holds immutable values. A value that another fiber inherits becomes shared, as a captured value does ([§9.4](09-memory-model.md#94-sharing-across-threads)) (D-072). The one exception is `std::random`'s seeded stream, which each draw advances in the drawing fiber only, and from which a spawn derives the new fiber's stream without advancing it (D-1048).
+
+Std reads only three dependencies from context: the clock of `std::time`, the stream of `std::random`'s host functions, and the logger of `std::log` once it is specified (D-1046). Context values are implemented in M4 (D-1049).

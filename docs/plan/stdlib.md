@@ -83,6 +83,17 @@ Drafted in [`docs/stdlib/`](../stdlib/README.md) and logged as D-981 to D-1024 i
 
 Tier 3 also covers the JS side of every earlier module: the `.mjs` kernels, and IO through the host's asynchronous APIs with `@async` (D-188). Every tier-3 kernel declares its JS binding now, and the `.mjs` files follow in M4 (D-986). What file IO, standard input and `std::env` do on JS hosts, including those without a process such as browsers, is OQ-P14 (OQ-io-3, OQ-env-1).
 
+### Tier 4: before M4
+
+Drafted in [`docs/stdlib/`](../stdlib/README.md) and logged as D-1044 to D-1049 in the [Scoped context values](../decisions/LOG.md#2026-10-23-scoped-context-values) session. It is implemented in M4, natively and on JS together, as workstream 4.6 of [m4-js.md](m4-js.md) (D-1049).
+
+| Module         | Spec file                            | Contents                                                                                                                   |
+| -------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| `std::context` | [`context.md`](../stdlib/context.md) | `Key<T>`, `key`, `key_without_default`, `get`, `provide`; every spawn copies the spawning fiber's context (D-1044, D-1045) |
+
+- Tier 4 also changes earlier modules: `std::time`'s `Clock`, its key `clock` and the builders `system_clock`, `fixed_clock`, `custom_clock` and `instant_at` (D-1047); `std::random`'s `with_generator` and the seeded stream that its host functions draw from (D-1048); and the spawns of `std::fiber` (D-1044).
+- `key` and `key_without_default` run in constants, and only as a constant's whole initializer. `get` and `provide` are E0077 in a constant (D-1045).
+
 ## 3. Done criteria for a module
 
 A module is done when:

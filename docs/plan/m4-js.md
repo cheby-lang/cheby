@@ -43,9 +43,18 @@ Detail level: workstreams with outcomes. This file is refined into tasks when M4
 
 - The LSP core lands with M4, starting no earlier than M3's third checkpoint, because it sits on the driver's front-end APIs that M3's cache rewrites. Its protocol questions are settled in its own design step ([m5-tooling.md](m5-tooling.md), D-1029).
 
+### 4.6 Context values (tier 4)
+
+- `std::context` on both targets: a context per fiber, held as a persistent map so that a spawn copies it in O(1), restored when `provide`'s body returns or unwinds, and empty at `main`, each test and each REPL entry (D-1044, ADR-0068).
+- The compile error for a call of `context::key` or `context::key_without_default` that is not a constant's whole initializer, with its code, its explanation and its UI test (D-1045).
+- `std::time`'s clocks in context, with timers left on the runtime's monotonic clock (D-1047).
+- `std::random`'s seeded stream per fiber, advanced by each host draw, and derived for a spawned fiber from its parent's state and spawn number without advancing the parent (D-1048).
+- The tests of these parts in `context.md`, `time.md` and `random.md` leave `PENDING_SPEC_TESTS` (D-741, D-1049).
+
 ## Exit criteria
 
 - Every example passes on Node with the native goldens, except where the JS panics of §12.4 are the expected result and the example records it.
 - Channel closing and handle drops happen at the same points on both targets, checked by dedicated UI run tests.
 - An edit to one function body regenerates only the JS of functions whose suspension status or IR changed.
 - Deno and Bun run the conformance suite in CI. Browser support is checked with a smoke test.
+- `std::context`, clocks in context and seeded random streams pass their spec tests on native and on Node (D-1049).

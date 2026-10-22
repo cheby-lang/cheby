@@ -207,9 +207,24 @@ pub const PLANNED_STD_MODULES: &[&str] = &["file", "http", "net", "process", "ti
 /// M2's first slice shipped `std::fiber`, `std::channel` and
 /// `std::duration` before cancellation, timers, selectors and detached
 /// fibers existed (D-754). Their spec tests have all moved into `std/`
-/// since, so the list is empty (D-728). An entry's comment names what its
-/// test needs and the package that brings it.
-pub const PENDING_SPEC_TESTS: &[(&str, &str, &str)] = &[];
+/// since (D-728). An entry's comment names what its test needs and the
+/// package that brings it.
+pub const PENDING_SPEC_TESTS: &[(&str, &str, &str)] = &[
+    // Seeded random streams need `std::context`, M4's workstream 4.6
+    // (D-1048, D-1049).
+    (
+        "random",
+        "with_generator makes host draws follow the seeded draws",
+        "M4",
+    ),
+    (
+        "random",
+        "with_generator gives the same draws for the same generator",
+        "M4",
+    ),
+    ("random", "a spawn leaves the parent's stream alone", "M4"),
+    ("random", "spawned fibers draw reproducibly and apart", "M4"),
+];
 
 include!(concat!(env!("OUT_DIR"), "/std_hashes.rs"));
 

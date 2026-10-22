@@ -4,7 +4,7 @@ Status: **draft**, pre-1.0. Breaking changes are allowed until 1.0 (D-075).
 
 This directory specifies the standard library, one file per module (D-204, D-220). The language specification in [`../spec/`](../spec/) fixes the language and the semantics the runtime provides. This specification fixes the names, signatures and behavior of the modules under `std`. Where a rule comes from a logged decision, the decision is cited as `(D-NNN)`.
 
-The library is written in tiers, each before the milestone that needs it (D-276). **Tier 1** holds the modules M1 needs (D-294), and **tier 2** the modules of the runtime milestone M2: fibers, channels, selectors, durations, randomness and the scheduler's settings (D-645). **Tier 3** holds files, networking, HTTP, time and processes, whose native side comes with M3 and whose JS side comes with M4 (D-985, D-986, D-987).
+The library is written in tiers, each before the milestone that needs it (D-276). **Tier 1** holds the modules M1 needs (D-294), and **tier 2** the modules of the runtime milestone M2: fibers, channels, selectors, durations, randomness and the scheduler's settings (D-645). **Tier 3** holds files, networking, HTTP, time and processes, whose native side comes with M3 and whose JS side comes with M4 (D-985, D-986, D-987). **Tier 4** holds the modules that M4 implements on both targets, starting with `std::context` (D-1049).
 
 ## Modules
 
@@ -64,6 +64,14 @@ Tier 2 is implemented on native in M2. Its JS side comes with M4: until then eve
 | [`std::process`](process.md) | `exit`                                                                                  |
 
 Tier 3 is implemented on native in M3, in the order `std::time`, `std::net`, `std::file`, `std::http` and `std::process` (D-987). Every public function is written in Cheby over private kernels, and `std::http` is written over `std::net` (D-985, D-1003). Kernels never call a Cheby closure. File operations run on the blocking pool, and socket waits and `time::sleep` on the runtime's poller and timers, where a cancellation interrupts them (D-983). The failures of tier 3 are `io::Error`s, with a predicate in `std::io` for each kind its functions cause, and `http::Error` for HTTP's own kinds (D-981, D-1016). As in tier 2, every kernel declares its JS binding now, and the `.mjs` files follow in M4 (D-986). What a host without files, sockets or processes does, such as a browser, is OQ-P14. No tier-3 kernel runs in constants, but the parts of `std::time` and `std::http` that are Cheby without kernels do (D-991).
+
+### Tier 4
+
+| Module                       | Contents                                                                                     |
+| ---------------------------- | -------------------------------------------------------------------------------------------- |
+| [`std::context`](context.md) | values provided for the duration of a callback, which every fiber spawned meanwhile inherits |
+
+Tier 4 is implemented in M4, natively and on JS together (D-1049). It also changes three earlier modules: `std::time` reads its clock from context (D-1047), `std::random`'s host functions draw from a seeded stream when one is provided (D-1048), and every spawn of `std::fiber` copies the spawning fiber's context (D-1044). Until M4, these parts are drafts with no code, and their tests in the pages of shipped modules are pending for M4 (D-741).
 
 ## Entry format
 
