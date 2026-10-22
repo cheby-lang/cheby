@@ -263,15 +263,15 @@ fn repl_follows_the_flag() {
 #[test]
 fn tool_and_usage_errors_follow_the_flag() {
     let dir = Path::new(TMP);
-    let build = cheby(dir, &["--color=always", "build"], &[]);
+    let build = cheby(dir, &["--color=always", "build", "--target", "js"], &[]);
     assert_eq!(build.status, Some(1));
     assert_eq!(
         build.stderr,
-        "\x1b[1;91merror\x1b[0m\x1b[1m: `cheby build --target native` is not available yet \
-         (planned for M3)\x1b[0m\n\x1b[1;96mhelp\x1b[0m: use `cheby check` to type-check the \
+        "\x1b[1;91merror\x1b[0m\x1b[1m: `cheby build --target js` is not available yet \
+         (planned for M4)\x1b[0m\n\x1b[1;96mhelp\x1b[0m: use `cheby check` to type-check the \
          package, or `cheby run` to run it\n"
     );
-    let plain = cheby(dir, &["build"], &[]);
+    let plain = cheby(dir, &["build", "--target", "js"], &[]);
     assert_eq!(strip_colors(&build.stderr), plain.stderr);
 
     let usage = cheby(dir, &["--color=always", "bogus"], &[]);

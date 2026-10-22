@@ -21,6 +21,12 @@
 //! a timer wakes goes to the global queue, which makes the next tick
 //! preempt the fiber running on its worker.
 //!
+//! For the same reason it polls the sockets on every tick (D-984): while a
+//! socket is registered and no worker holds the poller, a zero-timeout
+//! poll dispatches the ready sockets' events, so a fiber waiting on a
+//! socket wakes within about one tick (`PREEMPT_AFTER`) while every worker
+//! is busy.
+//!
 //! When every worker is idle the monitor backs off to 100 ms; a worker that
 //! wakes up, or a new root fiber, kicks it back to 10 ms. It also wakes a
 //! parked worker when the global queue holds fibers and nobody searches,
@@ -123,6 +129,26 @@ struct Sample {
     since: Instant,
 }
 
+/// The monitor's poll (D-984, as D-789 for timers): with every worker
+/// running a fiber nobody polls, so on each tick the monitor polls with a
+/// zero timeout while a socket is registered and no worker holds the
+/// poller; a fiber an event wakes goes to the global queue. If no worker
+/// polls after it (one may have found the poller busy meanwhile and parked
+/// on its condition variable), a parked one is woken to take the poller,
+/// as a retiring worker does (`Worker::leave`). Nothing is polled once a
+/// halt starts.
+fn poll_sockets(shared: &Shared) {
+    if shared.driver.has_sockets()
+        && !shared.halting()
+        && shared.driver.poll_now()
+        && !shared.driver.polling()
+        && let Some(index) = shared.idle.any_parked()
+        && let Some(worker) = shared.worker(index)
+    {
+        worker.unpark(shared);
+    }
+}
+
 /// The body of the monitor thread.
 pub(super) fn main(shared: &Shared) {
     // One sample per worker slot, grown as slots fill
@@ -168,6 +194,7 @@ pub(super) fn main(shared: &Shared) {
         if fire {
             shared.fire_due(now);
         }
+        poll_sockets(shared);
         let mut busy = false;
         // In the migration stress mode a lone fiber yields too, so that it
         // moves between workers (D-687).

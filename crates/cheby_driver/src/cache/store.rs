@@ -25,13 +25,22 @@
 //! Nothing locks and nothing calls `fsync` (D-960): concurrent writers of
 //! one blob or record write the same bytes (D-264), and hints are
 //! last-writer-wins.
+//!
+//! The writes run behind the command (GAP(cache-write-behind), the
+//! [`writer`](super::writer) module): a put queues the file and returns,
+//! jobs on the `-j` pool write it, and [`Store::flush`] and `Drop` wait
+//! for them. Each entry is written at most once per process with the same
+//! payload (GAP(cache-write-once-per-process)). A shard directory is made
+//! only when a rename finds it missing. A read opens the file once.
 
 use std::fs::{self, File};
-use std::io::{self, Write as _};
+use std::io::{self, Read as _, Write as _};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime};
 
+use super::writer::{EntryId, FileBytes, Submit, Writer};
 use super::{BuildId, Hash128, Key, StoreError};
 
 /// The magic of a blob file.
@@ -72,7 +81,7 @@ static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 const TMP_ATTEMPTS: u32 = 256;
 
 /// The three kinds of file, each with its directory and magic.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum FileKind {
     /// `blob/`.
     Blob,
@@ -110,6 +119,21 @@ pub struct Store {
     v1: PathBuf,
     build: BuildId,
     temporary: bool,
+    /// What the writer's jobs on the pool share with the store.
+    shared: Arc<Shared>,
+}
+
+/// The part of a store that its writes behind the command use, on any
+/// thread of the pool (GAP(cache-write-behind)).
+#[derive(Debug)]
+struct Shared {
+    v1: PathBuf,
+    build: BuildId,
+    writer: Writer,
+    /// The entry files opened to read, and written, since the store was
+    /// opened (read by tests only).
+    opened: AtomicUsize,
+    written: AtomicUsize,
 }
 
 impl Store {
@@ -140,19 +164,26 @@ impl Store {
         }
         let store = Self {
             root: root.to_path_buf(),
-            v1,
+            v1: v1.clone(),
             build,
             temporary,
+            shared: Arc::new(Shared {
+                v1,
+                build,
+                writer: Writer::default(),
+                opened: AtomicUsize::new(0),
+                written: AtomicUsize::new(0),
+            }),
         };
         let readme = root.join("README");
         if readme.is_file() {
             // A write into `tmp/` shows that the cache can be written; a
             // read-only cache falls back to a temporary one (D-959).
-            let (probe, file) = store.create_tmp()?;
+            let (probe, file) = store.shared.create_tmp()?;
             drop(file);
             fs::remove_file(&probe).map_err(|e| StoreError::io(&probe, e))?;
         } else {
-            store.write_atomically(&readme, &[README.as_bytes()])?;
+            store.shared.write_atomically(&readme, README.as_bytes())?;
         }
         Ok(store)
     }
@@ -180,11 +211,49 @@ impl Store {
         &self.v1
     }
 
+    /// Waits until every write this store queued is in place or was
+    /// skipped (a failed write is skipped: GAP(cache-write-best-effort)).
+    /// `Drop` calls it before a temporary store deletes its root (D-959).
+    ///
+    /// The queued writes are taken and written on the calling thread; it
+    /// then waits only for writes other threads have started
+    /// (GAP(cache-write-behind)), so it never waits for a job that sits in
+    /// its own worker's queue.
+    pub fn flush(&self) {
+        loop {
+            while self.shared.write_next() {}
+            if !self.shared.writer.wait() {
+                return;
+            }
+        }
+    }
+
+    /// Test-only: the entry files this store tried to open to read since
+    /// it was opened. A get that the store answers from memory opens
+    /// nothing.
+    #[cfg(test)]
+    pub(crate) fn opens(&self) -> usize {
+        self.shared.opened.load(Ordering::Relaxed)
+    }
+
+    /// Test-only: the entry files this store wrote (renamed into place)
+    /// since it was opened. It flushes first, so queued writes count.
+    #[cfg(test)]
+    pub(crate) fn writes(&self) -> usize {
+        self.flush();
+        self.shared.written.load(Ordering::Relaxed)
+    }
+
     /// Stores `bytes` as a blob and returns its name, the hash of `bytes`.
+    /// The write may happen behind the command ([`Store::flush`] waits for
+    /// it); this process's gets see the blob at once.
     ///
     /// # Errors
     ///
-    /// [`StoreError::Io`] when the file cannot be written or renamed.
+    /// [`StoreError::Io`] when the put writes on the calling thread, as it
+    /// does when too many bytes are in flight, and the file cannot be
+    /// written or renamed. A write behind the command that fails is
+    /// skipped (GAP(cache-write-best-effort)).
     pub fn put_blob(&self, bytes: &[u8]) -> Result<Hash128, StoreError> {
         let name = Hash128::of(bytes);
         self.put(FileKind::Blob, name, bytes)?;
@@ -198,15 +267,15 @@ impl Store {
     /// None today: every failure to read is a miss (D-960). The `Result`
     /// leaves room for errors the user must see.
     pub fn get_blob(&self, name: Hash128) -> Result<Option<Vec<u8>>, StoreError> {
-        let payload = self.get(FileKind::Blob, name);
-        Ok(payload.filter(|bytes| !cfg!(debug_assertions) || Hash128::of(bytes) == name))
+        Ok(self.get(FileKind::Blob, name))
     }
 
-    /// Stores `payload` as the record of `key`.
+    /// Stores `payload` as the record of `key`, as [`Store::put_blob`]
+    /// does.
     ///
     /// # Errors
     ///
-    /// [`StoreError::Io`] when the file cannot be written or renamed.
+    /// As [`Store::put_blob`].
     pub fn put_record(&self, key: &Key, payload: &[u8]) -> Result<(), StoreError> {
         self.put(FileKind::Record, key.hash(), payload)
     }
@@ -220,11 +289,12 @@ impl Store {
         Ok(self.get(FileKind::Record, key.hash()))
     }
 
-    /// Stores `payload` as the hint of `key`; the last writer wins.
+    /// Stores `payload` as the hint of `key`, as [`Store::put_blob`] does;
+    /// the last writer wins.
     ///
     /// # Errors
     ///
-    /// [`StoreError::Io`] when the file cannot be written or renamed.
+    /// As [`Store::put_blob`].
     pub fn put_hint(&self, key: &Key, payload: &[u8]) -> Result<(), StoreError> {
         self.put(FileKind::Hint, key.hash(), payload)
     }
@@ -239,32 +309,173 @@ impl Store {
     }
 
     /// The path of the entry `name` of `kind`.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "kept for the crate's other files (plan §2.2); the writer's jobs use `Shared::entry_path`"
+        )
+    )]
     pub(crate) fn entry_path(&self, kind: FileKind, name: Hash128) -> PathBuf {
+        self.shared.entry_path(kind, name)
+    }
+
+    /// Hands an entry to the writer (GAP(cache-write-behind)): written
+    /// behind the command as a job on the pool, or now on this thread when
+    /// too many bytes are in flight, and not at all when this process
+    /// already wrote or validly read the same payload
+    /// (GAP(cache-write-once-per-process)).
+    fn put(&self, kind: FileKind, name: Hash128, payload: &[u8]) -> Result<(), StoreError> {
+        let id = (kind, name);
+        let digest = match kind {
+            FileKind::Blob => name,
+            FileKind::Record | FileKind::Hint => Hash128::of(payload),
+        };
+        let writer = &self.shared.writer;
+        if writer.has(id, digest) {
+            return Ok(());
+        }
+        let mut file = Vec::with_capacity(HEADER_LEN.saturating_add(payload.len()));
+        file.extend_from_slice(&header(kind, self.build, payload.len()));
+        file.extend_from_slice(payload);
+        match writer.submit(id, digest, Arc::new(file)) {
+            Submit::Skip => Ok(()),
+            Submit::Queued => {
+                let shared = Arc::clone(&self.shared);
+                rayon::spawn(move || {
+                    shared.write_next();
+                });
+                Ok(())
+            }
+            Submit::Now(file) => self.shared.write_until_done(id, file),
+        }
+    }
+
+    /// Reads an entry, checking its header and, in debug builds, a blob's
+    /// hash against its name; touches it when it is older than an hour
+    /// (D-961). An entry this process has queued or is writing is answered
+    /// from its bytes.
+    fn get(&self, kind: FileKind, name: Hash128) -> Option<Vec<u8>> {
+        let id = (kind, name);
+        let writer = &self.shared.writer;
+        if let Some(file) = writer.pending(id) {
+            return file.get(HEADER_LEN..).map(<[u8]>::to_vec);
+        }
+        let payload = self.shared.read_entry(kind, name).filter(|bytes| {
+            kind != FileKind::Blob || !cfg!(debug_assertions) || Hash128::of(bytes) == name
+        });
+        match (&payload, kind) {
+            // A release build reads a blob without checking its hash, so a
+            // damaged payload may pass as valid; the caller then fails to
+            // decode it and puts the blob again, which must write it
+            // (D-960). Only a checked blob counts as on disk.
+            (Some(_), FileKind::Blob) => {
+                if cfg!(debug_assertions) {
+                    writer.note_valid(id, name);
+                }
+            }
+            (Some(bytes), FileKind::Record | FileKind::Hint) => {
+                writer.note_valid(id, Hash128::of(bytes));
+            }
+            (None, _) => writer.note_missing(id),
+        }
+        payload
+    }
+}
+
+impl Shared {
+    /// The path of the entry `name` of `kind`.
+    fn entry_path(&self, kind: FileKind, name: Hash128) -> PathBuf {
         let hex = name.to_hex();
         let shard = hex.get(..2).unwrap_or("00");
         self.v1.join(kind.dir()).join(shard).join(&hex)
     }
 
-    /// Writes an entry: header and payload into `tmp/`, then a rename.
-    fn put(&self, kind: FileKind, name: Hash128, payload: &[u8]) -> Result<(), StoreError> {
-        let path = self.entry_path(kind, name);
-        if let Some(shard) = path.parent() {
-            create_private_dir(shard)?;
+    /// Takes the oldest queued entry and writes it: `false` when none was
+    /// queued. Run by the writer's jobs and by [`Store::flush`].
+    fn write_next(&self) -> bool {
+        match self.writer.take() {
+            Some((id, file)) => {
+                // A write that fails is skipped (GAP(cache-write-best-effort)).
+                let _ = self.write_until_done(id, file);
+                true
+            }
+            None => false,
         }
-        let header = header(kind, self.build, payload.len());
-        self.write_atomically(&path, &[&header, payload])
     }
 
-    /// Reads an entry, checking its header; touches it when it is older
-    /// than an hour (D-961).
-    fn get(&self, kind: FileKind, name: Hash128) -> Option<Vec<u8>> {
+    /// Writes `file` as the entry `id`, again with the newest bytes when
+    /// the entry was put with other bytes meanwhile, and tells the writer
+    /// how it ended. The last write's error comes back.
+    fn write_until_done(&self, id: EntryId, file: FileBytes) -> Result<(), StoreError> {
+        let mut file = file;
+        loop {
+            let result = self.write_entry(id.0, id.1, &file);
+            match self.writer.done(id, result.is_ok()) {
+                Some(newer) => file = newer,
+                None => return result,
+            }
+        }
+    }
+
+    /// Writes one entry's whole file into `tmp/` and renames it into its
+    /// shard (D-960). The rename comes first: a shard that an earlier
+    /// command made needs no `mkdir`. When the rename finds the shard
+    /// missing, the shard is created and the rename tried once more, so
+    /// a process creates each shard at most once unless another process
+    /// deletes it meanwhile.
+    fn write_entry(&self, kind: FileKind, name: Hash128, file: &[u8]) -> Result<(), StoreError> {
         let path = self.entry_path(kind, name);
-        let mut bytes = fs::read(&path).ok()?;
+        let (tmp, mut f) = self.create_tmp()?;
+        let written = f.write_all(file);
+        drop(f);
+        if let Err(error) = written {
+            let _ = fs::remove_file(&tmp);
+            return Err(StoreError::io(tmp, error));
+        }
+        let renamed = match fs::rename(&tmp, &path) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => match path.parent() {
+                Some(shard) => create_private_dir(shard)
+                    .and_then(|()| fs::rename(&tmp, &path).map_err(|e| StoreError::io(&path, e))),
+                None => Err(StoreError::io(&path, error)),
+            },
+            other => other.map_err(|e| StoreError::io(&path, e)),
+        };
+        match renamed {
+            Ok(()) => {
+                self.written.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            }
+            Err(error) => {
+                let _ = fs::remove_file(&tmp);
+                if path.is_file() { Ok(()) } else { Err(error) }
+            }
+        }
+    }
+
+    /// Reads the entry `name` of `kind` with one open: the length from
+    /// the open file's metadata, then the header and the payload in one
+    /// read, and the touch of D-961 from the same metadata. `None` when it
+    /// is missing, unreadable or bad.
+    fn read_entry(&self, kind: FileKind, name: Hash128) -> Option<Vec<u8>> {
+        let path = self.entry_path(kind, name);
+        self.opened.fetch_add(1, Ordering::Relaxed);
+        let mut f = File::open(&path).ok()?;
+        let meta = f.metadata().ok()?;
+        let len = usize::try_from(meta.len()).ok()?;
+        if len < HEADER_LEN {
+            return None;
+        }
+        let mut bytes = vec![0u8; len];
+        f.read_exact(&mut bytes).ok()?;
+        drop(f);
         if !header_ok(&bytes, kind, self.build) {
             return None;
         }
         bytes.drain(..HEADER_LEN);
-        touch_if_old(&path, SystemTime::now());
+        if let Ok(modified) = meta.modified() {
+            touch_if_older(&path, modified, SystemTime::now());
+        }
         Some(bytes)
     }
 
@@ -300,12 +511,14 @@ impl Store {
         }))
     }
 
-    /// Writes `parts` into a new file in `tmp/` and renames it to `path`.
-    /// When the rename fails but `path` exists, another writer won, which
-    /// is as good: it wrote the same bytes, or it is a hint (D-960).
-    fn write_atomically(&self, path: &Path, parts: &[&[u8]]) -> Result<(), StoreError> {
-        let (tmp, file) = self.create_tmp()?;
-        let written = write_all(file, parts);
+    /// Writes `bytes` into a new file in `tmp/` and renames it to `path`
+    /// (the README; entries go through [`Shared::write_entry`]). When the
+    /// rename fails but `path` exists, another writer won, which is as
+    /// good: it wrote the same bytes (D-960).
+    fn write_atomically(&self, path: &Path, bytes: &[u8]) -> Result<(), StoreError> {
+        let (tmp, mut file) = self.create_tmp()?;
+        let written = file.write_all(bytes);
+        drop(file);
         if let Err(error) = written {
             let _ = fs::remove_file(&tmp);
             return Err(StoreError::io(tmp, error));
@@ -326,6 +539,7 @@ impl Store {
 
 impl Drop for Store {
     fn drop(&mut self) {
+        self.flush();
         if self.temporary {
             let _ = fs::remove_dir_all(&self.root);
         }
@@ -364,14 +578,6 @@ pub(crate) fn header_ok(bytes: &[u8], kind: FileKind, build: BuildId) -> bool {
         && u64::try_from(payload.len()).is_ok_and(|n| n == u64::from_le_bytes(len))
 }
 
-/// Writes `parts` into the new file `f`.
-fn write_all(mut f: File, parts: &[&[u8]]) -> io::Result<()> {
-    for part in parts {
-        f.write_all(part)?;
-    }
-    Ok(())
-}
-
 /// The counter value the next temporary file takes (for tests that plant
 /// a dead writer's leftovers).
 #[cfg(test)]
@@ -380,11 +586,26 @@ pub(crate) fn next_tmp_number() -> u64 {
 }
 
 /// Sets `path`'s modification time to `now` when it is older than an
-/// hour. Failures are ignored: touching only keeps trimming away.
+/// hour. Failures are ignored: touching only keeps trimming away. A read
+/// of the store takes the time from the file it opened instead
+/// ([`touch_if_older`]).
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "kept for the crate's other files (plan §2.2); reads touch from the open file's metadata"
+    )
+)]
 pub(crate) fn touch_if_old(path: &Path, now: SystemTime) {
-    let Ok(modified) = fs::metadata(path).and_then(|m| m.modified()) else {
-        return;
-    };
+    if let Ok(modified) = fs::metadata(path).and_then(|m| m.modified()) {
+        touch_if_older(path, modified, now);
+    }
+}
+
+/// Sets `path`'s modification time to `now` when `modified`, its time as
+/// the caller read it, is more than an hour before `now` (D-961).
+/// Failures are ignored.
+fn touch_if_older(path: &Path, modified: SystemTime, now: SystemTime) {
     if now
         .duration_since(modified)
         .is_ok_and(|age| age > TOUCH_AFTER)

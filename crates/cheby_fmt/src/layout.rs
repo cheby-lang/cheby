@@ -12,17 +12,19 @@
 //! `{ }`, after a `,` or a binary operator, after `=`, `=>` or `<-`, and
 //! before a leading `|>`, `&&` or `||`.
 //!
-//! A node whose layout has no place for a comment or a blank line in it is
-//! printed verbatim: its source text with its own line structure,
-//! re-indented to the new indentation, never joined or split. So is any
-//! item with a comment or a line break where the header layout has no
-//! place for one. Wave 3 of the formatter removes that fallback.
+//! Every comment and blank line has a place (`crate::gap`). A node is
+//! printed verbatim, its source text with its own line structure
+//! re-indented to the new indentation, only by rule (a gap between a unary
+//! `-` and a number, D-470; a top-level `ERROR` node such as an attribute
+//! with no item after it), or as a safety net when a layout meets a shape
+//! the grammar does not produce.
 
 use std::collections::BTreeMap;
 
 use cheby_syntax::{SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use crate::doc::Doc;
+use crate::gap::{Gap, Parts};
 use crate::source::Source;
 
 /// The indentation of one nesting level (AGENTS.md: two spaces).
@@ -347,9 +349,9 @@ impl<'t> Formatter<'t> {
         }
     }
 
-    /// An item, import or inner attribute: its header laid out, or the
-    /// whole node verbatim when the header has a comment or a line break
-    /// the layout has no place for.
+    /// An item, import or inner attribute: its header laid out; a
+    /// top-level `ERROR` node (an attribute with no item after it) is kept
+    /// verbatim.
     fn item(&mut self, node: SyntaxNode<'t>) -> Doc {
         let anchor = self.src.node_line_indent(node);
         let saved = std::mem::take(&mut self.coverage);
@@ -374,16 +376,21 @@ impl<'t> Formatter<'t> {
         self.src.node(node, anchor)
     }
 
-    /// Lays out a header-like node: leading doc comments and attributes on
-    /// lines of their own, then its parts on one line with single spaces,
-    /// the lists among them laid out at the width. `None` when the node has
-    /// a comment or a line break outside its lists and verbatim parts,
-    /// other than one line break after `=`.
+    /// Lays out a header-like node: leading doc comments, comments and
+    /// attributes on lines of their own (a comment on the line of one
+    /// stays there), then its parts on one line with single spaces, the
+    /// lists among them laid out at the width. A line break between two
+    /// parts is the layout's to place; a comment or a blank line between
+    /// them keeps its place and breaks the line there, and the parts after
+    /// it go one level deeper (GAP(fmt-comment-positions)). `None` only
+    /// when a part cannot be laid out.
     fn header(&mut self, node: SyntaxNode<'t>, anchor: usize) -> Option<Doc> {
         self.coverage.laid_out(node.kind());
-        let mut docs: Vec<Doc> = Vec::new();
-        // Line breaks since the last part, doc comment or attribute.
+        let mut parts = Parts::default();
+        // Line breaks since the last leading line, and what lies between
+        // two parts of the header proper.
         let mut newlines = 0usize;
+        let mut gap = Gap::default();
         // Whether anything was printed yet, and whether the header proper
         // (after doc comments and attributes) started.
         let mut any = false;
@@ -391,51 +398,68 @@ impl<'t> Formatter<'t> {
         let mut prev: Option<SyntaxKind> = None;
         for child in node.children_with_tokens() {
             let kind = child.kind();
+            if started && gap.take_trivia(child) {
+                continue;
+            }
             match kind {
                 SyntaxKind::WHITESPACE => continue,
                 SyntaxKind::NEWLINE => {
                     newlines = newlines.saturating_add(1);
                     continue;
                 }
-                SyntaxKind::COMMENT | SyntaxKind::MODULE_DOC => return None,
                 _ => {}
             }
-            let leading = matches!(kind, SyntaxKind::DOC_COMMENT | SyntaxKind::ATTR);
-            if leading {
-                if started {
-                    return None;
-                }
-                if any && newlines >= 2 {
-                    docs.push(Doc::hardline());
-                }
+            if !started && (is_comment(kind) || kind == SyntaxKind::ATTR) {
+                // A leading line. A comment on the line of the one before
+                // stays at its end.
                 let line = match child {
-                    SyntaxElement::Token(token) => Doc::text(comment_text(token)),
+                    SyntaxElement::Token(token) => {
+                        if any && newlines == 0 {
+                            parts.push(Doc::text(" "));
+                            parts.push(Doc::comment(comment_text(token)));
+                            continue;
+                        }
+                        Doc::text(comment_text(token))
+                    }
                     SyntaxElement::Node(attr) => {
                         let attr_anchor = self.src.node_line_indent(attr);
                         self.header(attr, attr_anchor)?
                     }
                 };
-                docs.push(line);
-                docs.push(Doc::hardline());
+                if any {
+                    parts.push(Doc::hardline());
+                    if newlines >= 2 {
+                        parts.push(Doc::hardline());
+                    }
+                }
+                parts.push(line);
                 any = true;
                 newlines = 0;
                 continue;
             }
-            // A part of the header proper. A line break after `=` is
-            // dropped: the value is laid out by the assignment rule.
-            let after_eq = prev == Some(SyntaxKind::EQ);
-            if started && newlines > 0 && !after_eq {
-                return None;
-            } else if !started && any && newlines >= 2 {
-                docs.push(Doc::hardline());
+            if !started && any {
+                parts.push(Doc::hardline());
+                if newlines >= 2 {
+                    parts.push(Doc::hardline());
+                }
             }
+            // A part of the header proper. A line break alone between two
+            // parts is dropped: the layout places line breaks, and the
+            // value after `=` is laid out by the assignment rule.
+            let after_eq = prev == Some(SyntaxKind::EQ);
+            let broke = started && parts.gap(&std::mem::take(&mut gap), false);
+            let space = started && !broke && !tight_before(kind) && !prev.is_some_and(tight_after);
             match child {
-                SyntaxElement::Node(value) if after_eq => docs.push(self.assign_tail(value)),
+                SyntaxElement::Node(value) if after_eq => parts.push(if broke {
+                    self.node(value)
+                } else {
+                    self.assign_tail(value)
+                }),
                 SyntaxElement::Token(token) => {
-                    if started && !tight_before(kind) && !prev.is_some_and(tight_after) {
-                        docs.push(Doc::text(" "));
+                    if space {
+                        parts.push(Doc::text(" "));
                     }
-                    docs.push(Doc::text(token.text()));
+                    parts.push(self.token(token));
                 }
                 SyntaxElement::Node(part) => {
                     let mut part = self.part(part, anchor)?;
@@ -445,10 +469,10 @@ impl<'t> Formatter<'t> {
                     if kind == SyntaxKind::RET_TYPE && !part.has_hard_break() {
                         part = Doc::flat(part);
                     }
-                    if started && !tight_before(kind) && !prev.is_some_and(tight_after) {
-                        docs.push(Doc::text(" "));
+                    if space {
+                        parts.push(Doc::text(" "));
                     }
-                    docs.push(part);
+                    parts.push(part);
                 }
             }
             started = true;
@@ -456,7 +480,12 @@ impl<'t> Formatter<'t> {
             newlines = 0;
             prev = Some(kind);
         }
-        Some(Doc::concat(docs))
+        // A node never ends with a comment (the tree builder puts it in the
+        // node of the next token); if one did, its place is unknown.
+        if gap.has_comment() {
+            return None;
+        }
+        Some(parts.finish(INDENT))
     }
 
     /// A node inside a header: a list, a nested header, an interface body,
@@ -489,8 +518,8 @@ impl<'t> Formatter<'t> {
     }
 
     /// Any node below an item header, laid out at the width; or, when its
-    /// layout has no place for a comment or a blank line in it, verbatim,
-    /// with its own line structure (wave 3 removes that fallback).
+    /// layout gives `None` (a gap D-470 rejects, or a shape the grammar does
+    /// not produce), verbatim, with its own line structure.
     pub(crate) fn node(&mut self, node: SyntaxNode<'t>) -> Doc {
         self.attempt(node, |f, node| {
             let kind = node.kind();
@@ -542,6 +571,20 @@ impl<'t> Formatter<'t> {
         self.src.node(node, anchor)
     }
 
+    /// A token as written. A token that holds a line break (a multi-line
+    /// raw string, as in a literal pattern) is a fragment of source whose
+    /// later lines start inside the string and are written exactly.
+    pub(crate) fn token(&self, token: SyntaxToken<'t>) -> Doc {
+        if token.text().contains('\n') {
+            let range = token.text_range();
+            let start = crate::source::to_usize(range.start());
+            let end = crate::source::to_usize(range.end());
+            self.src.fragment(start, end, self.src.line_indent(start))
+        } else {
+            Doc::text(token.text())
+        }
+    }
+
     /// A list node, its first and last children its delimiters.
     pub(crate) fn list_node(&mut self, node: SyntaxNode<'t>, style: ListStyle) -> Option<Doc> {
         self.coverage.laid_out(node.kind());
@@ -570,7 +613,7 @@ impl<'t> Formatter<'t> {
     /// Flat when it fits and has no comment, blank line or multi-line
     /// element; otherwise one element per line with a trailing comma, or,
     /// for a list that hugs, with only its last element broken. `None`
-    /// when a comment sits where the layout has no place for it.
+    /// only for a shape the grammar does not produce.
     ///
     /// GAP(fmt-trailing-comma): a laid-out list has a trailing comma exactly
     /// when it is broken over lines (AGENTS.md's style), so the formatter
@@ -807,8 +850,8 @@ enum Last {
 }
 
 /// Splits the elements between a list's delimiters into elements with
-/// their comments. `None` for a comment between an element and its comma,
-/// or two elements without a comma between them.
+/// their comments. `None` for two elements without a comma between them,
+/// or a comma without an element before it.
 fn parse_list<'t>(inner: &[SyntaxElement<'t>]) -> Option<ParsedList<'t>> {
     let mut parsed = ParsedList {
         open_comment: None,
@@ -818,8 +861,6 @@ fn parse_list<'t>(inner: &[SyntaxElement<'t>]) -> Option<ParsedList<'t>> {
     let mut phase = Last::Open;
     let mut newlines = 0usize;
     let mut pending: Vec<OwnLineComment<'t>> = Vec::new();
-    // Whether the previous item's trailing comment came before its comma.
-    let mut comment_before_comma = false;
     for &child in inner {
         match child.kind() {
             SyntaxKind::WHITESPACE => {}
@@ -837,10 +878,17 @@ fn parse_list<'t>(inner: &[SyntaxElement<'t>]) -> Option<ParsedList<'t>> {
                         Last::Elem | Last::Comma => {
                             let item = parsed.items.last_mut()?;
                             if item.trailing.is_some() || !pending.is_empty() {
-                                return None;
+                                // A second comment after one element (one
+                                // before its comma, one after it): it goes
+                                // on a line of its own, before the next
+                                // element.
+                                pending.push(OwnLineComment {
+                                    text,
+                                    blank_before: false,
+                                });
+                            } else {
+                                item.trailing = Some(text);
                             }
-                            item.trailing = Some(text);
-                            comment_before_comma = phase == Last::Elem;
                         }
                     }
                 } else {
@@ -852,7 +900,13 @@ fn parse_list<'t>(inner: &[SyntaxElement<'t>]) -> Option<ParsedList<'t>> {
                 newlines = 0;
             }
             SyntaxKind::COMMA => {
-                if phase != Last::Elem || comment_before_comma || !pending.is_empty() {
+                // GAP(fmt-comment-positions): a comment between an element
+                // and its comma goes after the comma, the list's own
+                // separator, whose place the style decides (it adds or
+                // removes the last one): a comment on the element's line
+                // stays at the end of that line, one on a line of its own
+                // goes before the next element.
+                if phase != Last::Elem {
                     return None;
                 }
                 phase = Last::Comma;
@@ -870,7 +924,6 @@ fn parse_list<'t>(inner: &[SyntaxElement<'t>]) -> Option<ParsedList<'t>> {
                     trailing: None,
                     blank_before,
                 });
-                comment_before_comma = false;
                 phase = Last::Elem;
                 newlines = 0;
             }

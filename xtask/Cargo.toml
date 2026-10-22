@@ -11,6 +11,8 @@ publish = false
 cheby_bench_gen.workspace = true
 cheby_diag.workspace = true
 cheby_driver.workspace = true
+# `check-native-libs`: the native-library list and its loader (D-933, D-943).
+cheby_link.workspace = true
 cheby_syntax.workspace = true
 cheby_test_support.workspace = true
 clap.workspace = true

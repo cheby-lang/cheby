@@ -63,6 +63,7 @@ use cheby_runtime::RunConfig;
 use cheby_runtime::entry::AtExit;
 use cheby_syntax::SyntaxTree;
 
+mod aot;
 mod backend;
 pub mod cache;
 mod frontend;
@@ -71,6 +72,7 @@ pub mod session;
 pub mod std_lib;
 mod test;
 
+pub use aot::{BuildOptions, BuildOutcome, build_cached, build_cached_with, build_target};
 pub use cheby_package::Target;
 pub use test::{
     ModuleTests, PreparedTests, TestCounts, TestOptions, TestOutcome, TestProgram, TestReport,
@@ -87,6 +89,17 @@ pub struct Cache {
     pub(crate) store: cache::Store,
     pub(crate) log: cache::CacheLog,
     pub(crate) reads: bool,
+    /// The driver's counts, never printed: the package modules each front
+    /// end of the command parsed and checked from source, by path, once
+    /// per parse and per check (GAP(cache-log-parses)).
+    counts: std::sync::Mutex<Counts>,
+}
+
+/// The package modules a command's front ends parsed and checked.
+#[derive(Debug, Default)]
+struct Counts {
+    parsed: Vec<String>,
+    checked: Vec<String>,
 }
 
 impl Cache {
@@ -117,7 +130,50 @@ impl Cache {
             store,
             log,
             reads: std::env::var_os("CHEBY_DUMP_DIR").is_none(),
+            counts: std::sync::Mutex::new(Counts::default()),
         }
+    }
+
+    /// Adds a front end's parsed and checked package modules to the
+    /// command's counts.
+    pub(crate) fn count(&self, parsed: Vec<String>, checked: Vec<String>) {
+        let mut counts = self
+            .counts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        counts.parsed.extend(parsed);
+        counts.checked.extend(checked);
+    }
+
+    /// The package modules the command's front ends parsed, by path, once
+    /// per parse, sorted: the hook the cache-hit tests read (never
+    /// printed).
+    #[cfg_attr(not(test), expect(dead_code, reason = "read by tests only"))]
+    pub(crate) fn parsed_modules(&self) -> Vec<String> {
+        let mut out = self
+            .counts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .parsed
+            .clone();
+        out.sort();
+        out
+    }
+
+    /// The package modules the command's front ends checked from source,
+    /// by path, once per check, sorted: a module listed twice was checked
+    /// twice. A crate-visible hook for tests (`build_warm_identical`
+    /// among them); never printed.
+    #[cfg_attr(not(test), expect(dead_code, reason = "read by tests only"))]
+    pub(crate) fn checked_modules(&self) -> Vec<String> {
+        let mut out = self
+            .counts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .checked
+            .clone();
+        out.sort();
+        out
     }
 
     /// This cache with every read bypassed, as `CHEBY_DUMP_DIR` makes it:
@@ -151,11 +207,23 @@ impl Cache {
     ///
     /// The log's I/O error. The store is dropped either way.
     pub fn finish(self, trim: bool) -> Result<(), cache::StoreError> {
+        self.finish_at(trim, std::time::SystemTime::now())
+    }
+
+    /// [`Cache::finish`] with the trim's clock at `now`. Every write the
+    /// store queued is in place or skipped before the trim runs, so the
+    /// trim never misses an index or an entry still queued (D-961,
+    /// GAP(cache-write-behind)); the trim keeps the blobs a recently used
+    /// package index names.
+    pub(crate) fn finish_at(
+        self,
+        trim: bool,
+        now: std::time::SystemTime,
+    ) -> Result<(), cache::StoreError> {
         let logged = self.log.finish();
-        // No package index exists yet (D-962), so no blob is kept beyond
-        // the five days.
+        self.store.flush();
         if trim {
-            let _ = self.store.trim(std::time::SystemTime::now(), &|_| false);
+            let _ = self.store.trim_keeping_indexed(now);
         }
         drop(self.store);
         logged
@@ -230,6 +298,13 @@ pub struct Module {
     pub source: ParsedFile,
     /// The hashes of the file's bytes, computed when it was read.
     pub hashes: SourceHashes,
+    /// Whether the file was parsed when the package was loaded: a warm
+    /// `cheby check` leaves the modules the package index vouches for
+    /// unparsed (D-962), and [`ParsedFile::syntax`] is then `None` with
+    /// no syntax error.
+    pub parsed: bool,
+    /// The phase-A diagnostics of the file, which loading reported.
+    pub syntax_diagnostics: Vec<Diagnostic>,
 }
 
 /// The two hashes of a source file's bytes, both SipHash-1-3 with zero
@@ -523,9 +598,96 @@ fn front_end_for(
     out: &mut CheckOutput,
     cache: Option<&Cache>,
 ) -> Result<Option<(frontend::Frontend, String)>, Error> {
-    let package = load_package(root, &mut out.sources, &mut out.diagnostics)?;
+    let family = match mode {
+        frontend::Mode::Check => cache::index::CommandFamily::Check,
+        frontend::Mode::Build | frontend::Mode::StdTests => cache::index::CommandFamily::Build,
+    };
+    front_end_family(root, mode, family, target, out, cache)
+}
+
+/// [`front_end_for`] for a command `family` (D-962): with a cache, the
+/// package index of the root and the family is read first, and in
+/// `cheby check` the modules it vouches for are not parsed. A front end
+/// that must start again ([`frontend::Stop::Restart`]) is run once more
+/// from the start, every module parsed and every hit decoded at its lookup.
+fn front_end_family(
+    root: &Path,
+    mode: frontend::Mode,
+    family: cache::index::CommandFamily,
+    target: Option<Target>,
+    out: &mut CheckOutput,
+    cache: Option<&Cache>,
+) -> Result<Option<(frontend::Frontend, String)>, Error> {
+    let deny_warnings = out.deny_warnings;
+    let index_key = cache.map(|cache| {
+        let root = std::path::absolute(root).unwrap_or_else(|_| root.to_path_buf());
+        cache::index::PackageIndex::key(&root, family, cache.store.build_id())
+    });
+    // A bad, stale or missing index is ignored (D-962).
+    let index: Option<(cache::index::PackageIndex, Vec<u8>)> = cache
+        .filter(|cache| cache.reads)
+        .zip(index_key)
+        .and_then(|(cache, key)| cache.store.get_hint(&key).ok().flatten())
+        .and_then(|bytes| cache::index::PackageIndex::decode(&bytes).map(|index| (index, bytes)));
+    for lazy in [true, false] {
+        *out = CheckOutput {
+            deny_warnings,
+            ..CheckOutput::default()
+        };
+        let use_ = cache
+            .zip(index_key)
+            .map(|(cache, index_key)| frontend::CacheUse {
+                cache,
+                index: index.as_ref(),
+                index_key,
+                lazy,
+            });
+        match front_end_once(root, mode, target, out, use_)? {
+            Attempt::Done(result) => return Ok(result),
+            Attempt::Again if lazy => {}
+            Attempt::Again => break,
+        }
+    }
+    Err(Ice::new("a front end started again twice").into())
+}
+
+/// How one run of a front end ended.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "one value per command, moved out at once"
+)]
+enum Attempt {
+    /// With its result: the front end, or `None` when it did not run to
+    /// the end (phase-A errors, a manifest that cannot be used).
+    Done(Option<(frontend::Frontend, String)>),
+    /// It must start again ([`frontend::Stop::Restart`]).
+    Again,
+}
+
+/// One run of [`front_end_family`].
+fn front_end_once(
+    root: &Path,
+    mode: frontend::Mode,
+    target: Option<Target>,
+    out: &mut CheckOutput,
+    cache: Option<frontend::CacheUse<'_>>,
+) -> Result<Attempt, Error> {
+    // Only `cheby check` leaves modules unparsed: every other command
+    // lowers every module (GAP(warm-recheck-readers)).
+    let vouched = cache
+        .filter(|use_| use_.lazy && mode == frontend::Mode::Check)
+        .and_then(|use_| use_.index)
+        .map(|(index, _)| index);
+    let skip = |path: &ModulePath, hash: cache::Hash128| {
+        vouched.is_some_and(|index| {
+            index
+                .get(&path.to_string())
+                .is_some_and(|entry| entry.source == hash)
+        })
+    };
+    let package = load_package_skipping(root, &mut out.sources, &mut out.diagnostics, &skip)?;
     let Some(mut package) = package else {
-        return Ok(None);
+        return Ok(Attempt::Done(None));
     };
     if let Some(target) = target {
         if !package.manifest.targets.contains(target) {
@@ -539,14 +701,25 @@ fn front_end_for(
     // denied by `--deny-warnings` does not, so the later phases still
     // report theirs, and the command fails after them (D-621).
     if out.diagnostics.iter().any(Diagnostic::is_error) {
-        return Ok(None);
+        // The front end, which would replay the phase-A diagnostics of the
+        // modules the index let go unparsed, does not run: start again,
+        // parsing every module, so the output is a cold check's (D-268,
+        // D-965; GAP(package-index-shape)). Only the error path pays.
+        if vouched.is_some() && package.modules.iter().any(|module| !module.parsed) {
+            return Ok(Attempt::Again);
+        }
+        return Ok(Attempt::Done(None));
     }
     let name = package.manifest.name.clone();
-    let front = frontend::run_cached(package, mode, &mut out.sources, &mut out.diagnostics, cache)?;
+    let Some(front) =
+        frontend::run_cached(package, mode, &mut out.sources, &mut out.diagnostics, cache)?
+    else {
+        return Ok(Attempt::Again);
+    };
     if !front.complete {
-        return Ok(None);
+        return Ok(Attempt::Done(None));
     }
-    Ok(Some((front, name)))
+    Ok(Attempt::Done(Some((front, name))))
 }
 
 /// What `cheby run` runs (D-137, D-286).
@@ -673,7 +846,14 @@ fn prepare_run_inner(
         deny_warnings: options.deny_warnings,
         ..CheckOutput::default()
     };
-    let front = front_end_for(root, frontend::Mode::Build, None, &mut out, cache)?;
+    let front = front_end_family(
+        root,
+        frontend::Mode::Build,
+        cache::index::CommandFamily::Run,
+        None,
+        &mut out,
+        cache,
+    )?;
     out.sources.sort(&mut out.diagnostics);
     let Some((front, package)) = front.filter(|_| !out.has_errors()) else {
         return Ok(Prepared::CompileFailed(out));
@@ -909,13 +1089,24 @@ pub fn load_package(
     sources: &mut SourceMap,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<Option<Package>, Error> {
+    load_package_skipping(root, sources, diagnostics, &|_, _| false)
+}
+
+/// [`load_package`], leaving unparsed every module whose path and source
+/// hash `skip` accepts ([`Module::parsed`]).
+fn load_package_skipping(
+    root: &Path,
+    sources: &mut SourceMap,
+    diagnostics: &mut Vec<Diagnostic>,
+    skip: &(dyn Fn(&ModulePath, cache::Hash128) -> bool + Sync),
+) -> Result<Option<Package>, Error> {
     let Some(manifest) = Manifest::load(root, sources, diagnostics)? else {
         return Ok(None);
     };
     let files = cheby_package::discover(root, &manifest.name, diagnostics)?;
     // Read, parsed and validated in parallel (D-263); file ids and
     // diagnostics follow the order of `files` (D-264).
-    let modules = frontend::read_modules(root, files, sources, diagnostics)?;
+    let modules = frontend::read_modules(root, files, sources, diagnostics, skip)?;
     Ok(Some(Package {
         root: root.to_path_buf(),
         manifest,
@@ -992,6 +1183,8 @@ pub fn parse_file(
 
 #[cfg(test)]
 mod alone_tests;
+#[cfg(test)]
+mod aot_tests;
 #[cfg(test)]
 mod cache_tests;
 #[cfg(test)]

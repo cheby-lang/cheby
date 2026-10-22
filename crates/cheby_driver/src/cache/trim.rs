@@ -7,6 +7,10 @@
 //! whether to trim at all: `cheby check`, `cheby build` and `cheby test`
 //! do, `cheby run` and the REPL never do.
 //!
+//! [`Store::trim_keeping_indexed`] keeps the blobs a recently used package
+//! index names (D-961, D-962): the indexes in `hint/` are read only when a
+//! trim is due.
+//!
 //! GAP(cache-trim-scope): besides blobs and records, hints and files left
 //! in `tmp/` by a writer that died are deleted on the same five-day rule;
 //! directories are never removed, so a writer never races a deleted shard.
@@ -15,7 +19,8 @@ use std::fs::{self, File};
 use std::path::Path;
 use std::time::{Duration, SystemTime};
 
-use super::store::{BLOB_DIR, HINT_DIR, RECORD_DIR, TMP_DIR};
+use super::index::PackageIndex;
+use super::store::{BLOB_DIR, FileKind, HINT_DIR, RECORD_DIR, TMP_DIR};
 use super::{Hash128, Store, StoreError};
 
 /// Entries unused for this long are deleted.
@@ -57,18 +62,69 @@ impl Store {
         now: SystemTime,
         keep: &dyn Fn(Hash128) -> bool,
     ) -> Result<TrimReport, StoreError> {
-        let v1 = self.layout_dir();
-        let marker = v1.join(TRIMMED);
-        let last = fs::metadata(&marker).and_then(|m| m.modified()).ok();
-        if last.is_some_and(|t| now.duration_since(t).is_ok_and(|age| age < TRIM_EVERY)) {
+        if !self.mark_trim(now)? {
             return Ok(TrimReport::default());
         }
-        // Mark first, so that commands ending meanwhile do not trim too.
+        Ok(self.sweep(now, keep))
+    }
+
+    /// [`Store::trim`] keeping the blobs that a recently used package
+    /// index names (D-961, D-962): an index in `v1/hint/` unused for less
+    /// than five days. The indexes are read only when the trim is due.
+    ///
+    /// # Errors
+    ///
+    /// As [`Store::trim`].
+    pub fn trim_keeping_indexed(&self, now: SystemTime) -> Result<TrimReport, StoreError> {
+        if !self.mark_trim(now)? {
+            return Ok(TrimReport::default());
+        }
+        let mut named = std::collections::BTreeSet::new();
+        for shard in entries(&self.layout_dir().join(HINT_DIR)) {
+            for path in entries(&shard) {
+                let recent = fs::symlink_metadata(&path)
+                    .and_then(|m| m.modified())
+                    .is_ok_and(|t| now.duration_since(t).map_or(true, |age| age < UNUSED_FOR));
+                if !recent {
+                    continue;
+                }
+                let Some(payload) = fs::read(&path)
+                    .ok()
+                    .filter(|bytes| super::store::header_ok(bytes, FileKind::Hint, self.build_id()))
+                    .and_then(|bytes| bytes.get(super::store::HEADER_LEN..).map(<[u8]>::to_vec))
+                else {
+                    continue;
+                };
+                if PackageIndex::is_index(&payload)
+                    && let Some(index) = PackageIndex::decode(&payload)
+                {
+                    named.extend(index.blobs());
+                }
+            }
+        }
+        Ok(self.sweep(now, &|blob| named.contains(&blob)))
+    }
+
+    /// Whether a trim is due at `now`, the last one being a day ago or
+    /// more; if so, marks `now` as the last trim first, so that commands
+    /// ending meanwhile do not trim too.
+    fn mark_trim(&self, now: SystemTime) -> Result<bool, StoreError> {
+        let marker = self.layout_dir().join(TRIMMED);
+        let last = fs::metadata(&marker).and_then(|m| m.modified()).ok();
+        if last.is_some_and(|t| now.duration_since(t).is_ok_and(|age| age < TRIM_EVERY)) {
+            return Ok(false);
+        }
         let f = File::create(&marker).map_err(|e| StoreError::io(&marker, e))?;
         f.set_modified(now)
             .map_err(|e| StoreError::io(&marker, e))?;
         drop(f);
+        Ok(true)
+    }
 
+    /// Deletes what is unused for five days before `now`, but blobs `keep`
+    /// names.
+    fn sweep(&self, now: SystemTime, keep: &dyn Fn(Hash128) -> bool) -> TrimReport {
+        let v1 = self.layout_dir();
         let mut report = TrimReport {
             ran: true,
             ..TrimReport::default()
@@ -110,7 +166,7 @@ impl Store {
                 report.temporary = report.temporary.saturating_add(1);
             }
         }
-        Ok(report)
+        report
     }
 }
 

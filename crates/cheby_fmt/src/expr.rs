@@ -48,15 +48,17 @@
 //!   own brackets; an arm is `patterns [when guard] => body`, the body
 //!   after `=>` laid out as a value after `=` is.
 //!
-//! A comment the layout has no place for, a blank line inside an
-//! expression, or a line break inside a token keeps the smallest node
-//! around it verbatim ([`Formatter::node`]); so does a gap between a unary
-//! `-` and a number (D-470), which the formatter does not close
-//! (GAP(fmt-negative-literal-gap)).
+//! A comment or a blank line between two parts of a node keeps its place
+//! and breaks the line there ([`crate::gap`], GAP(fmt-comment-positions),
+//! GAP(fmt-blank-lines-in-expressions)); a token that holds a line break
+//! (a multi-line raw string in a literal pattern) is kept as written. A
+//! gap between a unary `-` and a number (D-470) keeps its node verbatim:
+//! the formatter does not close it (GAP(fmt-negative-literal-gap)).
 
 use cheby_syntax::{SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use crate::doc::Doc;
+use crate::gap::{Gap, Parts};
 use crate::layout::{Delims, Formatter, INDENT, ListStyle, entries, hugs, is_comment};
 
 /// A pipeline's layouts: the usual one (flat when it fits, else one stage
@@ -145,38 +147,45 @@ fn bin_op(node: SyntaxNode<'_>) -> Option<SyntaxToken<'_>> {
         .find(|t| !t.kind().is_trivia() && t.kind() != SyntaxKind::NEWLINE)
 }
 
-/// A binary expression's operands and operator, or `None` when it holds
-/// a comment or a blank line, which the layout has no place for.
-fn bin_parts(node: SyntaxNode<'_>) -> Option<(SyntaxNode<'_>, SyntaxToken<'_>, SyntaxNode<'_>)> {
+/// A binary expression's operands and operator, with the comments and
+/// blank lines before and after the operator.
+struct BinParts<'t> {
+    lhs: SyntaxNode<'t>,
+    before: Gap<'t>,
+    op: SyntaxToken<'t>,
+    after: Gap<'t>,
+    rhs: SyntaxNode<'t>,
+}
+
+/// A binary expression's parts, or `None` when it is not one operand, an
+/// operator and an operand.
+fn bin_parts(node: SyntaxNode<'_>) -> Option<BinParts<'_>> {
     let mut nodes = Vec::new();
     let mut op = None;
-    let mut newlines = 0usize;
+    let mut before = Gap::default();
+    let mut gap = Gap::default();
     for child in node.children_with_tokens() {
+        if gap.take_trivia(child) {
+            continue;
+        }
         match child {
-            SyntaxElement::Token(t) => match t.kind() {
-                SyntaxKind::WHITESPACE => {}
-                SyntaxKind::NEWLINE => {
-                    newlines = newlines.saturating_add(1);
-                    if newlines > 1 {
-                        return None;
-                    }
+            SyntaxElement::Token(t) => {
+                if op.replace(t).is_some() || nodes.len() != 1 {
+                    return None;
                 }
-                kind if is_comment(kind) => return None,
-                _ => {
-                    if op.replace(t).is_some() {
-                        return None;
-                    }
-                    newlines = 0;
-                }
-            },
-            SyntaxElement::Node(n) => {
-                nodes.push(n);
-                newlines = 0;
+                before = std::mem::take(&mut gap);
             }
+            SyntaxElement::Node(n) => nodes.push(n),
         }
     }
     match (nodes.as_slice(), op) {
-        (&[lhs, rhs], Some(op)) => Some((lhs, op, rhs)),
+        (&[lhs, rhs], Some(op)) => Some(BinParts {
+            lhs,
+            before,
+            op,
+            after: gap,
+            rhs,
+        }),
         _ => None,
     }
 }
@@ -244,7 +253,7 @@ fn tail_doc(value: SyntaxNode<'_>, doc: Doc, arm: bool) -> Doc {
 impl<'t> Formatter<'t> {
     /// Lays out an expression, statement, pattern or type node; `None` for
     /// a kind this part of the formatter does not lay out, or a node with
-    /// a comment or blank line where its layout has no place for one.
+    /// a gap D-470 rejects or a shape the grammar does not produce.
     pub(crate) fn syntax(&mut self, node: SyntaxNode<'t>) -> Option<Doc> {
         match node.kind() {
             SyntaxKind::LITERAL | SyntaxKind::STRING_LIT => Some(self.as_written(node)),
@@ -291,53 +300,53 @@ impl<'t> Formatter<'t> {
     /// A node whose parts sit on one line, separated by single spaces or
     /// none ([`tight`]); its child nodes laid out by [`Self::node`]. With
     /// `tail`, the node after that token (`=`, `<-` or `=>`) is the value
-    /// of an assignment ([`Self::assign_tail`]). `None` for a comment, a
-    /// blank line, or a token that holds a line break.
+    /// of an assignment ([`Self::assign_tail`]). A comment or a blank line
+    /// between two parts keeps its place and breaks the line there, and
+    /// the parts after it go one level deeper (GAP(fmt-comment-positions),
+    /// GAP(fmt-blank-lines-in-expressions)); a token that holds a line
+    /// break (a multi-line raw string) is kept as written.
     pub(crate) fn seq(&mut self, node: SyntaxNode<'t>, tail: Option<SyntaxKind>) -> Option<Doc> {
         self.laid_out(node);
         let kind = node.kind();
-        let mut docs = Vec::new();
+        let mut parts = Parts::default();
         let mut prev: Option<SyntaxKind> = None;
-        let mut newlines = 0usize;
+        let mut gap = Gap::default();
         for child in node.children_with_tokens() {
             let child_kind = child.kind();
-            match child_kind {
-                SyntaxKind::WHITESPACE => continue,
-                SyntaxKind::NEWLINE => {
-                    newlines = newlines.saturating_add(1);
-                    if newlines > 1 {
-                        return None;
-                    }
-                    continue;
-                }
-                k if is_comment(k) => return None,
-                _ => {}
+            if gap.take_trivia(child) {
+                continue;
             }
-            newlines = 0;
+            let broke = parts.gap(&std::mem::take(&mut gap), prev.is_none());
             if let (Some(p), SyntaxElement::Node(value)) = (prev, child)
                 && tail == Some(p)
             {
-                docs.push(self.assign_tail(value));
+                // After a comment, the value starts its own line.
+                parts.push(if broke {
+                    self.node(value)
+                } else {
+                    self.assign_tail(value)
+                });
                 prev = Some(child_kind);
                 continue;
             }
             if let Some(p) = prev
+                && !broke
                 && !tight(kind, p, child_kind)
             {
-                docs.push(Doc::text(" "));
+                parts.push(Doc::text(" "));
             }
             match child {
-                SyntaxElement::Token(token) => {
-                    if token.text().contains('\n') {
-                        return None;
-                    }
-                    docs.push(Doc::text(token.text()));
-                }
-                SyntaxElement::Node(n) => docs.push(self.node(n)),
+                SyntaxElement::Token(token) => parts.push(self.token(token)),
+                SyntaxElement::Node(n) => parts.push(self.node(n)),
             }
             prev = Some(child_kind);
         }
-        Some(Doc::concat(docs))
+        // A node never ends with a comment (the tree builder puts it in
+        // the node of the next token); if one did, its place is unknown.
+        if gap.has_comment() {
+            return None;
+        }
+        Some(parts.finish(INDENT))
     }
 
     /// The value after `=`, `<-` or `=>`, with the space before it: on
@@ -404,7 +413,7 @@ impl<'t> Formatter<'t> {
     /// precedence, broken at every operator together when it does not
     /// fit (GAP(fmt-expression-breaks)).
     fn binary(&mut self, node: SyntaxNode<'t>) -> Option<Doc> {
-        let op = bin_parts(node)?.1.kind();
+        let op = bin_parts(node)?.op.kind();
         if op == SyntaxKind::PIPE_GT {
             let forms = self.pipe_forms(node)?;
             return Some(match forms.hug {
@@ -414,17 +423,24 @@ impl<'t> Formatter<'t> {
         }
         let chain_level = level(op);
         let mut operands = Vec::new();
+        // Each operator with the gaps before and after it.
         let mut ops = Vec::new();
         let mut cur = node;
         loop {
-            let (lhs, op, rhs) = bin_parts(cur)?;
+            let BinParts {
+                lhs,
+                before,
+                op,
+                after,
+                rhs,
+            } = bin_parts(cur)?;
             self.laid_out(cur);
             operands.push(rhs);
-            ops.push(op);
+            ops.push((before, op, after));
             let next = (lhs.kind() == SyntaxKind::BIN_EXPR)
                 .then(|| bin_parts(lhs))
                 .flatten()
-                .filter(|(_, op, _)| level(op.kind()) == chain_level && chain_level != 3);
+                .filter(|parts| level(parts.op.kind()) == chain_level && chain_level != 3);
             if next.is_some() {
                 cur = lhs;
             } else {
@@ -434,8 +450,10 @@ impl<'t> Formatter<'t> {
         }
         operands.reverse();
         ops.reverse();
-        if let ([lhs, rhs], [op]) = (operands.as_slice(), ops.as_slice())
+        if let ([lhs, rhs], [(before, op, after)]) = (operands.as_slice(), ops.as_slice())
             && !matches!(op.kind(), SyntaxKind::AMP2 | SyntaxKind::PIPE2)
+            && before.is_empty()
+            && after.is_empty()
         {
             // One operator: its right operand is laid out as a value after
             // `=` is, so `x == (` can open a tuple that breaks inside.
@@ -451,15 +469,27 @@ impl<'t> Formatter<'t> {
         let mut docs = operands.into_iter().map(|n| self.node(n));
         let first = docs.next()?;
         let mut rest = Vec::new();
-        for (op, doc) in ops.into_iter().zip(docs) {
+        // A comment or a blank line around an operator keeps its place and
+        // breaks the line there (GAP(fmt-comment-positions)); the chain's
+        // other operators then break too, as its group must.
+        for ((before, op, after), doc) in ops.into_iter().zip(docs) {
+            let before = before.doc(false);
+            let after = after.doc(false);
             if matches!(op.kind(), SyntaxKind::AMP2 | SyntaxKind::PIPE2) {
-                rest.push(Doc::line());
+                rest.push(before.unwrap_or_else(Doc::line));
                 rest.push(Doc::text(op.text()));
-                rest.push(Doc::text(" "));
+                rest.push(after.unwrap_or_else(|| Doc::text(" ")));
             } else {
-                rest.push(Doc::text(" "));
+                let op_starts_line = before.is_some();
+                rest.push(before.unwrap_or_else(|| Doc::text(" ")));
                 rest.push(Doc::text(op.text()));
-                rest.push(Doc::line());
+                rest.push(after.unwrap_or_else(|| {
+                    if op_starts_line {
+                        Doc::text(" ")
+                    } else {
+                        Doc::line()
+                    }
+                }));
             }
             rest.push(doc);
         }
@@ -469,21 +499,29 @@ impl<'t> Formatter<'t> {
         ])))
     }
 
-    /// A pipeline's layouts (GAP(fmt-pipe-chains)). Stages whose own
-    /// binary expression holds a comment end the chain: that expression
-    /// becomes the pipeline's first part and falls back by itself.
+    /// A pipeline's layouts (GAP(fmt-pipe-chains)). A comment or a blank
+    /// line before a `|>` takes the place of the line break before it; one
+    /// after a `|>` breaks the line there, and the stage goes one level
+    /// deeper (GAP(fmt-comment-positions)). Either way the pipeline is
+    /// broken, one stage per line.
     fn pipe_forms(&mut self, node: SyntaxNode<'t>) -> Option<PipeForms> {
         let mut stages = Vec::new();
         let mut cur = node;
         let head = loop {
-            let (lhs, op, rhs) = bin_parts(cur)?;
+            let BinParts {
+                lhs,
+                before,
+                op,
+                after,
+                rhs,
+            } = bin_parts(cur)?;
             if op.kind() != SyntaxKind::PIPE_GT {
                 return None;
             }
             self.laid_out(cur);
-            stages.push(rhs);
+            stages.push((before, rhs, after));
             let pipe = lhs.kind() == SyntaxKind::BIN_EXPR
-                && bin_parts(lhs).is_some_and(|(_, op, _)| op.kind() == SyntaxKind::PIPE_GT);
+                && bin_parts(lhs).is_some_and(|parts| parts.op.kind() == SyntaxKind::PIPE_GT);
             if pipe {
                 cur = lhs;
             } else {
@@ -496,15 +534,26 @@ impl<'t> Formatter<'t> {
         } else {
             INDENT
         };
-        let last_hugs = stages.last().is_some_and(|n| hugs(SyntaxElement::Node(*n)));
+        let last_hugs = stages
+            .last()
+            .is_some_and(|(_, n, _)| hugs(SyntaxElement::Node(*n)));
+        let quiet = stages.iter().all(|(b, _, a)| b.is_empty() && a.is_empty());
         let head = self.node(head);
-        let stages: Vec<Doc> = stages.into_iter().map(|n| self.node(n)).collect();
+        let mut docs = Vec::new();
         let mut broken_stages = Vec::new();
-        for stage in &stages {
-            broken_stages.push(Doc::line());
-            broken_stages.push(Doc::text("|> "));
-            broken_stages.push(stage.clone());
+        for (before, stage, after) in stages {
+            let stage = self.node(stage);
+            broken_stages.push(before.doc(false).unwrap_or_else(Doc::line));
+            broken_stages.push(Doc::text("|>"));
+            if let Some(gap) = after.doc(false) {
+                broken_stages.push(Doc::nest(INDENT, Doc::concat(vec![gap, stage.clone()])));
+            } else {
+                broken_stages.push(Doc::text(" "));
+                broken_stages.push(stage.clone());
+            }
+            docs.push(stage);
         }
+        let stages = docs;
         let normal = Doc::group(Doc::concat(vec![
             head.clone(),
             Doc::nest(indent, Doc::concat(broken_stages)),
@@ -512,6 +561,7 @@ impl<'t> Formatter<'t> {
         let hug = match stages.split_last() {
             Some((last, firsts))
                 if last_hugs
+                    && quiet
                     && normal.has_hard_break()
                     && !head.has_hard_break()
                     && !firsts.iter().any(Doc::has_hard_break) =>
@@ -546,17 +596,25 @@ impl<'t> Formatter<'t> {
         let (open, rest) = rest.split_first()?;
         let (close, inner) = rest.split_last()?;
         let mut path = None;
-        for child in before {
+        let mut gap = Gap::default();
+        for &child in before {
+            if gap.take_trivia(child) {
+                continue;
+            }
             match child {
-                SyntaxElement::Token(t) if t.kind() == SyntaxKind::WHITESPACE => {}
-                SyntaxElement::Node(n) if path.is_none() => path = Some(*n),
+                SyntaxElement::Node(n) if path.is_none() => path = Some(n),
                 _ => return None,
             }
         }
-        let path = self.node(path?);
+        let mut parts = Parts::default();
+        parts.push(self.node(path?));
+        // A comment between the type and `{` (GAP(fmt-comment-positions)).
+        if !parts.gap(&gap, false) {
+            parts.push(Doc::text(" "));
+        }
         let style = ListStyle::new(Delims::Spaced);
-        let fields = self.list(open.as_token()?, inner, close.as_token()?, style)?;
-        Some(Doc::concat(vec![path, Doc::text(" "), fields]))
+        parts.push(self.list(open.as_token()?, inner, close.as_token()?, style)?);
+        Some(parts.finish(INDENT))
     }
 
     /// A block: `{}` when empty; with `body` (an item's, a test's or a

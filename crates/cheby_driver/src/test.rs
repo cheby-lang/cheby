@@ -399,7 +399,14 @@ fn prepare_test_inner(
         deny_warnings: options.deny_warnings,
         ..CheckOutput::default()
     };
-    let front = crate::front_end_for(root, frontend::Mode::Build, None, &mut out, cache)?;
+    let front = crate::front_end_family(
+        root,
+        frontend::Mode::Build,
+        crate::cache::index::CommandFamily::Test,
+        None,
+        &mut out,
+        cache,
+    )?;
     out.sources.sort(&mut out.diagnostics);
     let Some((front, package)) = front.filter(|_| !out.has_errors()) else {
         return Ok(PreparedTests::CompileFailed(out));
@@ -1443,6 +1450,9 @@ pub(crate) fn std_test_package(
             path: ModulePath::root(STD_TEST_PACKAGE),
             source,
             hashes,
+            parsed: true,
+            // `test_std` uses no cache, the only reader of these.
+            syntax_diagnostics: Vec::new(),
         }],
     })
 }

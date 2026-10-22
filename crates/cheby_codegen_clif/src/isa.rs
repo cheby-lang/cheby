@@ -52,11 +52,10 @@ pub fn flags() -> Result<settings::Flags, CodegenError> {
 }
 
 /// The target triple this build of the compiler generates code for, which
-/// is the one it runs on (`None` on a target M3 does not support).
+/// is the one it runs on (`None` on a target M3 does not support, macOS on
+/// x86-64 included, D-892).
 const TARGET_TRIPLE: Option<&str> = if cfg!(all(target_arch = "x86_64", target_os = "linux")) {
     Some("x86_64-unknown-linux-gnu")
-} else if cfg!(all(target_arch = "x86_64", target_os = "macos")) {
-    Some("x86_64-apple-darwin")
 } else if cfg!(all(target_arch = "x86_64", target_os = "windows")) {
     Some("x86_64-pc-windows-msvc")
 } else if cfg!(all(target_arch = "aarch64", target_os = "linux")) {
@@ -111,30 +110,34 @@ const AARCH64_V8_0: &[(&str, &str)] = &[
 /// flag defaults to off). Every triple here is a valid literal, so
 /// Cranelift's lookup never panics on one.
 ///
+/// macOS is aarch64 only (D-892): macOS on x86-64 is not here.
+///
 /// GAP(isa-windows-targets): the two Windows targets use x86-64-v2 and
 /// Armv8.0 until M6 settles their sets (D-935).
 const TARGETS: &[(&str, &[(&str, &str)])] = &[
     ("x86_64-unknown-linux-gnu", X86_64_V2),
-    ("x86_64-apple-darwin", X86_64_V2),
     ("x86_64-pc-windows-msvc", X86_64_V2),
     ("aarch64-unknown-linux-gnu", AARCH64_V8_0),
     ("aarch64-apple-darwin", AARCH64_APPLE_M1),
     ("aarch64-pc-windows-msvc", AARCH64_V8_0),
 ];
 
+/// The targets of [`TARGETS`], as the unsupported-host error names them
+/// (D-892).
+const SUPPORTED: &str =
+    "code generation supports x86-64 on Linux and Windows, and aarch64 on Linux, macOS and Windows";
+
 /// The ISA the JIT, the cache and executables compile for (D-921): the
 /// target this build of the compiler runs on, as [`isa_for`] builds it.
 ///
 /// # Errors
 ///
-/// [`CodegenError::UnsupportedHost`] on a target outside the six of
-/// [`isa_for`], and a [`CodegenError`] if Cranelift refuses a flag.
+/// [`CodegenError::UnsupportedHost`] on a target outside the five of
+/// [`isa_for`] (macOS on x86-64 among them, D-892), and a
+/// [`CodegenError`] if Cranelift refuses a flag.
 pub fn host_isa() -> Result<OwnedTargetIsa, CodegenError> {
-    let triple = TARGET_TRIPLE.ok_or_else(|| {
-        CodegenError::UnsupportedHost(
-            "code generation supports x86-64 and aarch64 on Linux, macOS and Windows".to_owned(),
-        )
-    })?;
+    let triple =
+        TARGET_TRIPLE.ok_or_else(|| CodegenError::UnsupportedHost(SUPPORTED.to_owned()))?;
     isa_for(triple)
 }
 
@@ -148,9 +151,10 @@ pub fn host_isa() -> Result<OwnedTargetIsa, CodegenError> {
 /// GAP(isa-feature-flags): the exact Cranelift ISA flags per target, every
 /// other ISA flag at its default (off):
 ///
-/// - x86-64 (Linux, macOS, Windows): x86-64-v2, `has_sse3`, `has_ssse3`,
+/// - x86-64 (Linux, Windows): x86-64-v2, `has_sse3`, `has_ssse3`,
 ///   `has_cmpxchg16b`, `has_sse41`, `has_sse42`, `has_popcnt`; no AVX,
-///   FMA, BMI or LZCNT.
+///   FMA, BMI or LZCNT. macOS is aarch64 only (D-892): macOS on x86-64 is
+///   not a target, so its triple is [`CodegenError::UnsupportedHost`].
 /// - aarch64 macOS: the Apple M1's base, `has_lse`, `has_pauth`,
 ///   `has_fp16`, `has_dotprod`; `has_i8mm` off.
 /// - aarch64 Linux and Windows: Armv8.0, no flag on.
@@ -160,7 +164,7 @@ pub fn host_isa() -> Result<OwnedTargetIsa, CodegenError> {
 ///
 /// # Errors
 ///
-/// [`CodegenError::UnsupportedHost`] on a triple outside those six, or
+/// [`CodegenError::UnsupportedHost`] on a triple outside those five, or
 /// whose Cranelift backend is not built in, and a [`CodegenError`] if
 /// Cranelift refuses a flag.
 pub fn isa_for(triple: &str) -> Result<OwnedTargetIsa, CodegenError> {
@@ -168,11 +172,7 @@ pub fn isa_for(triple: &str) -> Result<OwnedTargetIsa, CodegenError> {
         .iter()
         .find(|&&(known, _)| known == triple)
         .copied()
-        .ok_or_else(|| {
-            CodegenError::UnsupportedHost(format!(
-                "{triple}: code generation supports x86-64 and aarch64 on Linux, macOS and Windows"
-            ))
-        })?;
+        .ok_or_else(|| CodegenError::UnsupportedHost(format!("{triple}: {SUPPORTED}")))?;
     let mut builder = cranelift_codegen::isa::lookup_by_name(triple)
         .map_err(|e| CodegenError::UnsupportedHost(format!("{triple}: {e}")))?;
     for &(name, value) in features {

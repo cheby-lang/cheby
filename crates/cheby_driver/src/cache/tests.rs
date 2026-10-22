@@ -178,12 +178,13 @@ fn cache_key_kind_and_build_id_enter_the_key() {
         KeyKind::Reads,
         KeyKind::LReads,
         KeyKind::CObj,
+        KeyKind::Index,
     ];
     let tags: Vec<_> = kinds.iter().map(|k| k.tag()).collect();
     assert_eq!(
         tags,
         [
-            "front", "facts", "masks", "code", "tests", "const", "reads", "lreads", "cobj"
+            "front", "facts", "masks", "code", "tests", "const", "reads", "lreads", "cobj", "index"
         ]
     );
     let mut keys: Vec<_> = kinds
@@ -198,7 +199,7 @@ fn cache_key_kind_and_build_id_enter_the_key() {
     );
     keys.sort();
     keys.dedup();
-    assert_eq!(keys.len(), 10);
+    assert_eq!(keys.len(), kinds.len() + 1);
 }
 
 #[test]
@@ -296,6 +297,7 @@ fn cache_store_round_trips() {
         let name = store.put_blob(payload).unwrap();
         assert_eq!(name, Hash128::of(payload));
         assert_eq!(store.get_blob(name).unwrap().as_deref(), Some(payload));
+        store.flush();
         let bytes = fs::read(entry(dir.path(), "blob", name)).unwrap();
         assert_eq!(bytes.len(), HEADER_LEN + payload.len());
         assert_eq!(&bytes[..8], &BLOB_MAGIC);
@@ -317,6 +319,7 @@ fn cache_store_round_trips() {
         store.get_record(&key).unwrap().as_deref(),
         Some(&b"record two"[..])
     );
+    store.flush();
     assert!(entry(dir.path(), "rec", key.hash()).is_file());
     // Hints live apart from records: the same key names both.
     assert_eq!(store.get_hint(&key).unwrap(), None);
@@ -326,6 +329,7 @@ fn cache_store_round_trips() {
         store.get_record(&key).unwrap().as_deref(),
         Some(&b"record two"[..])
     );
+    store.flush();
     assert_eq!(files_in(&dir.path().join("v1/tmp")), Vec::<PathBuf>::new());
 }
 
@@ -359,6 +363,7 @@ fn cache_store_stale_temporary_files_never_fail_a_write() {
     let key = Key::builder(KeyKind::Front, BUILD).str("app").finish();
     store.put_record(&key, b"record").unwrap();
     store.put_hint(&key, b"hint").unwrap();
+    store.flush();
     // Leftovers are skipped, never removed: trimming deletes them.
     for path in &planted {
         assert_eq!(fs::read(path).unwrap(), b"a dead writer's half");
@@ -373,6 +378,7 @@ fn cache_store_truncated_file_is_a_miss_that_a_write_replaces() {
     let name = store.put_blob(b"some blob bytes").unwrap();
     let key = Key::builder(KeyKind::Code, BUILD).str("m").finish();
     store.put_record(&key, b"payload").unwrap();
+    store.flush();
     for path in files_in(&dir.path().join("v1/blob"))
         .into_iter()
         .chain(files_in(&dir.path().join("v1/rec")))
@@ -390,6 +396,7 @@ fn cache_store_truncated_file_is_a_miss_that_a_write_replaces() {
     assert_eq!(store.get_blob(name).unwrap(), None);
     // A longer file than the header says is bad too.
     store.put_record(&key, b"payload").unwrap();
+    store.flush();
     let rec_path = files_in(&dir.path().join("v1/rec")).remove(0);
     let mut bytes = fs::read(&rec_path).unwrap();
     bytes.push(0);
@@ -414,6 +421,7 @@ fn cache_store_wrong_magic_is_a_miss() {
     let store = Store::open(dir.path(), BUILD).unwrap();
     let key = Key::builder(KeyKind::Front, BUILD).str("m").finish();
     store.put_record(&key, b"payload").unwrap();
+    store.flush();
     let path = files_in(&dir.path().join("v1/rec")).remove(0);
     let mut bytes = fs::read(&path).unwrap();
     assert_eq!(&bytes[..8], &RECORD_MAGIC);
@@ -438,6 +446,7 @@ fn cache_store_another_build_id_is_a_miss() {
     let key = Key::builder(KeyKind::Code, BUILD).str("m").finish();
     old.put_record(&key, b"payload").unwrap();
     old.put_hint(&key, b"hint").unwrap();
+    old.flush();
     let new = Store::open(dir.path(), OTHER_BUILD).unwrap();
     // Blob names do not hold the build ID, record keys do; either way the
     // header's build ID makes the file foreign.
@@ -449,6 +458,7 @@ fn cache_store_another_build_id_is_a_miss() {
         new.get_blob(name).unwrap().as_deref(),
         Some(&b"shared bytes"[..])
     );
+    new.flush();
     assert_eq!(old.get_blob(name).unwrap(), None);
 }
 
@@ -457,6 +467,7 @@ fn cache_store_renamed_blob_is_a_miss() {
     let dir = TestDir::new("renamed");
     let store = Store::open(dir.path(), BUILD).unwrap();
     let real = store.put_blob(b"the real bytes").unwrap();
+    store.flush();
     let other = Hash128::of(b"other bytes");
     let from = files_in(&dir.path().join("v1/blob")).remove(0);
     let to = entry(dir.path(), "blob", other);
@@ -478,6 +489,7 @@ fn cache_store_read_touches_entries_older_than_an_hour() {
     let store = Store::open(dir.path(), BUILD).unwrap();
     let old_name = store.put_blob(b"old").unwrap();
     let new_name = store.put_blob(b"recent").unwrap();
+    store.flush();
     let path_of = |n: Hash128| entry(dir.path(), "blob", n);
     let now = SystemTime::now();
     let two_hours_ago = now - Duration::from_hours(2);
@@ -491,6 +503,7 @@ fn cache_store_read_touches_entries_older_than_an_hour() {
     // A miss touches nothing, and a record is touched like a blob.
     let key = Key::builder(KeyKind::Front, BUILD).str("m").finish();
     store.put_record(&key, b"r").unwrap();
+    store.flush();
     let rec = files_in(&dir.path().join("v1/rec")).remove(0);
     set_mtime(&rec, two_hours_ago);
     assert!(store.get_record(&key).unwrap().is_some());
@@ -775,6 +788,7 @@ fn cache_trim_deletes_entries_unused_for_five_days() {
     store.put_record(&old_key, b"r").unwrap();
     store.put_record(&young_key, b"r").unwrap();
     store.put_hint(&old_key, b"h").unwrap();
+    store.flush();
     let path_of = |dir_name: &str, n: Hash128| entry(dir.path(), dir_name, n);
     set_mtime(&path_of("blob", old), six_days_ago);
     set_mtime(&path_of("blob", kept), six_days_ago);
@@ -818,6 +832,7 @@ fn cache_trim_runs_at_most_once_a_day() {
     let t0 = SystemTime::now() - Duration::from_hours(100);
     assert!(store.trim(t0, &|_| false).unwrap().ran);
     let name = store.put_blob(b"b").unwrap();
+    store.flush();
     let path = entry(dir.path(), "blob", name);
     set_mtime(&path, t0 - Duration::from_hours(10 * 24));
     // 23 hours later: no trim, the old blob stays.
@@ -840,6 +855,7 @@ fn cache_trim_keeps_what_reads_touched() {
     let dir = TestDir::new("trim-touch");
     let store = Store::open(dir.path(), BUILD).unwrap();
     let name = store.put_blob(b"used").unwrap();
+    store.flush();
     let path = entry(dir.path(), "blob", name);
     set_mtime(&path, SystemTime::now() - Duration::from_hours(6 * 24));
     assert!(store.get_blob(name).unwrap().is_some());

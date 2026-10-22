@@ -42,8 +42,8 @@ pub(crate) fn hang() -> Duration {
 }
 
 /// Whether the tests run under an emulator, where only correctness is
-/// asserted (`CHEBY_RT_TEST_EMULATED=1`, set by the container and Rosetta
-/// runs).
+/// asserted (`CHEBY_RT_TEST_EMULATED=1`, set by the linux/amd64 container
+/// runs; macOS x86-64 is dropped, D-892).
 pub(crate) fn emulated() -> bool {
     std::env::var_os("CHEBY_RT_TEST_EMULATED").is_some_and(|value| value == "1")
 }

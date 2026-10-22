@@ -1,6 +1,8 @@
 //! Replay tests `link_replay_*` (D-915): code records of hand-built units
 //! replayed into ELF and Mach-O objects for the host architecture (D-936),
-//! read back with the `object` crate.
+//! read back with the `object` crate. Mach-O is replayed on aarch64 hosts
+//! only: macOS is aarch64 only (D-892), so on an x86-64 host the tests
+//! cover ELF alone.
 //!
 //! The MIR builders are copied from `cheby_codegen_clif`'s tests, which
 //! another crate cannot reach (plan §2.4).
@@ -38,7 +40,14 @@ enum Format {
 }
 
 impl Format {
-    const ALL: [Self; 2] = [Self::Elf, Self::MachO];
+    /// The formats replay writes for the host architecture: ELF, and
+    /// Mach-O on aarch64 hosts only, since macOS is aarch64 only (D-892):
+    /// on an x86-64 host these tests cover ELF alone.
+    const ALL: &[Self] = if cfg!(target_arch = "aarch64") {
+        &[Self::Elf, Self::MachO]
+    } else {
+        &[Self::Elf]
+    };
 
     /// The host architecture's triple of this format (D-936: only the
     /// host's backend is compiled in).
@@ -340,8 +349,10 @@ fn link_replay_elf_keeps_names_and_linkage() {
 }
 
 /// A record replays into Mach-O for the host architecture's macOS triple,
-/// every symbol with its recorded linkage.
+/// every symbol with its recorded linkage. aarch64 hosts only: macOS is
+/// aarch64 only (D-892).
 #[test]
+#[cfg(target_arch = "aarch64")]
 fn link_replay_macho_keeps_names_and_linkage() {
     for unit in units() {
         let (record, bytes) = replayed(&unit, Format::MachO);
@@ -361,23 +372,11 @@ fn pc_relative(flags: RelocationFlags) -> bool {
                 | elf::R_X86_64_PC32
                 | elf::R_X86_64_PLT32
         ),
-        RelocationFlags::MachO {
-            r_type, r_pcrel, ..
-        } => match std::env::consts::ARCH {
-            "aarch64" => matches!(
-                r_type,
-                macho::ARM64_RELOC_PAGE21
-                    | macho::ARM64_RELOC_PAGEOFF12
-                    | macho::ARM64_RELOC_BRANCH26
-            ),
-            _ => {
-                r_pcrel
-                    && matches!(
-                        r_type,
-                        macho::X86_64_RELOC_BRANCH | macho::X86_64_RELOC_SIGNED
-                    )
-            }
-        },
+        // Mach-O is aarch64 only (D-892).
+        RelocationFlags::MachO { r_type, .. } => matches!(
+            r_type,
+            macho::ARM64_RELOC_PAGE21 | macho::ARM64_RELOC_PAGEOFF12 | macho::ARM64_RELOC_BRANCH26
+        ),
         _ => false,
     }
 }
@@ -387,7 +386,7 @@ fn pc_relative(flags: RelocationFlags) -> bool {
 /// object with relocations is never zero-fill, which no format relocates.
 #[test]
 fn link_replay_text_is_pc_relative_and_stack_is_noexec() {
-    for format in Format::ALL {
+    for &format in Format::ALL {
         let (_, bytes) = replayed(&code_model_unit(), format);
         let file = ::object::File::parse(&*bytes).unwrap();
         let mut text_relocs = 0;
@@ -425,7 +424,7 @@ fn link_replay_text_is_pc_relative_and_stack_is_noexec() {
 /// module path, never a file path.
 #[test]
 fn link_replay_is_byte_stable() {
-    for format in Format::ALL {
+    for &format in Format::ALL {
         let unit = code_model_unit();
         let (record, first) = replayed(&unit, format);
         let again = replay(&record, format.isa(), "app").unwrap();
@@ -508,7 +507,7 @@ fn link_replay_refuses_what_it_cannot_write() {
 /// (wave 2 review, SND-2).
 #[test]
 fn link_replay_refuses_huge_alignment() {
-    for format in Format::ALL {
+    for &format in Format::ALL {
         let record = record_for(&code_model_unit(), format);
         for align in [1 << 55, 1 << 63] {
             let mut function = record.clone();

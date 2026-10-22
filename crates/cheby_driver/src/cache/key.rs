@@ -33,6 +33,9 @@ pub enum KeyKind {
     LReads,
     /// A C object.
     CObj,
+    /// A package index (a hint, D-962), over the package root's absolute
+    /// path and the command family.
+    Index,
 }
 
 impl KeyKind {
@@ -49,6 +52,7 @@ impl KeyKind {
             Self::Reads => "reads",
             Self::LReads => "lreads",
             Self::CObj => "cobj",
+            Self::Index => "index",
         }
     }
 }

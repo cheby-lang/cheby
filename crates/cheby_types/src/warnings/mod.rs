@@ -46,8 +46,8 @@ mod uses;
 #[cfg(test)]
 mod tests;
 
-use cheby_diag::Diagnostic;
-use cheby_iface::{Ice, ModuleId, ModuleInterface, PackageId};
+use cheby_diag::{Diagnostic, Span};
+use cheby_iface::{DefId, DefIndex, Ice, ModuleId, ModuleInterface, Name, PackageId};
 use rayon::prelude::*;
 use rustc_hash::FxHashMap;
 
@@ -141,6 +141,86 @@ pub fn package_warnings(modules: &[PackageModule<'_>]) -> Result<Vec<Diagnostic>
     let mut out: Vec<Diagnostic> = found.into_iter().flatten().collect();
     sort(&mut out);
     Ok(out)
+}
+
+/// A package-visible item that W0005 may report (D-152, D-516).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PackageCandidate {
+    /// The item, a top-level item of the module.
+    pub index: DefIndex,
+    /// Its kind's word in the warning, such as `function`.
+    pub kind: &'static str,
+    /// Its name.
+    pub name: Name,
+    /// Its name's span.
+    pub span: Span,
+}
+
+/// What one module of the local package contributes to the build cache's
+/// summaries (D-965, D-967): the references of its THIR and of its types'
+/// hooks, and what W0005 needs from it, so that the whole-package pass can
+/// run over summaries of modules that were not checked.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ModuleRefs {
+    /// What THIR refers to, as `(owner, item)`: from the body or entry of
+    /// each function, constant and test of the module (callees, function
+    /// values, constants, constructors, dictionaries' functions and
+    /// interfaces), in THIR order.
+    pub mentions: Vec<(DefIndex, DefId)>,
+    /// The functions each type of the module names as hooks (D-342), as
+    /// `(type, function)`.
+    pub hooks: Vec<(DefIndex, DefId)>,
+    /// The top-level items of the local package that the module uses
+    /// outside their own declarations, tests included (W0005's uses,
+    /// D-516), sorted.
+    pub uses: Vec<DefId>,
+    /// The module's package-visible items W0005 may report.
+    pub candidates: Vec<PackageCandidate>,
+    /// Whether every body of the module checked: W0005 is given only when
+    /// every module's did.
+    pub complete: bool,
+}
+
+/// The references of module `input.module` (a module of the local
+/// package) for the build cache's summaries: [`ModuleRefs`]. `input.deps`
+/// should not record reads, since the module's check is over.
+///
+/// # Errors
+///
+/// An [`Ice`] if THIR, the resolution and the tree disagree.
+pub fn module_refs(
+    input: &TypesInput<'_>,
+    own: &ModuleInterface,
+    thir: &thir::Module,
+) -> Result<ModuleRefs, Ice> {
+    let paths = uses::path_uses(input)?;
+    let thir_refs = uses::thir_refs(thir);
+    let hooks = uses::hook_refs(own, input.module);
+    let refs = items::item_refs(input, &paths, &thir_refs, &hooks);
+    Ok(ModuleRefs {
+        mentions: thir_refs.iter().map(|r| (r.owner, r.def)).collect(),
+        hooks: hooks.iter().map(|r| (r.owner, r.def)).collect(),
+        uses: items::package_uses(input, &refs),
+        candidates: items::package_candidates(input, own)
+            .into_iter()
+            .map(|(index, kind, name, span)| PackageCandidate {
+                index,
+                kind,
+                name,
+                span,
+            })
+            .collect(),
+        complete: uses::thir_is_complete(input, thir),
+    })
+}
+
+/// The W0005 warning of the package-visible `kind` (a
+/// [`PackageCandidate::kind`]) `name`, whose name is at `span`, which no
+/// module of the package uses (D-152, D-516): what [`package_warnings`]
+/// reports, for a driver that runs the pass over summaries (D-965).
+#[must_use]
+pub fn unused_package_item(kind: &str, name: &str, span: Span) -> Diagnostic {
+    items::unused_package_item(kind, name, span)
 }
 
 /// Sorts warnings by primary position, then code and message, so output

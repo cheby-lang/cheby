@@ -1,0 +1,8 @@
+error[E0053]: the native symbol `app_build_missing_symbol` is not defined
+  --> tests/ui/13-tooling/build/missing_symbol.cheby:14:19
+   |
+14 | @external(native, "app_build_missing_symbol")
+   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^ nothing defines this symbol
+   |
+   = note: the symbol must be defined by the Cheby runtime or the running process
+

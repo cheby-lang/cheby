@@ -32,9 +32,13 @@
 //! the executable in the package's directory with the test's `.stdin` and
 //! `.args` (no `--`). The goldens are a run test's, standard error as the
 //! build's followed by the executable's; a failed build is the result
-//! itself, so a test can pin what `cheby build` reports. Such a test is
-//! never blessed: `CHEBY_BLESS=1` ignores it, and its goldens are written
-//! by hand. It is ignored on Windows until M6 (D-935).
+//! itself, so a test can pin what `cheby build` reports (E0053 at build
+//! time, `13-tooling/build/missing_symbol`, D-943). Such a test is never
+//! blessed: `CHEBY_BLESS=1` ignores it, and its goldens are written by
+//! hand. It is ignored on Windows until M6 (D-935). `cheby build` needs
+//! the runtime archive next to `cheby` (`cargo build -p cheby_rt_exe`,
+//! which `cargo test` does not run); a missing or stale archive fails the
+//! test with the build's tool error and never skips it (D-929, D-930).
 //!
 //! Every child, `cheby` or an executable, gets `CHEBY_CACHE` set to one
 //! fresh owner-only directory in the system's temporary directory that

@@ -20,7 +20,7 @@ crossbeam-deque.workspace = true
 crossbeam-utils.workspace = true
 getrandom.workspace = true
 libc.workspace = true
-mio.workspace = true
+mio = { workspace = true, features = ["net"] }
 parking_lot.workspace = true
 ryu.workspace = true
 siphasher.workspace = true

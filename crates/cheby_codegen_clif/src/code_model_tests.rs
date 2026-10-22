@@ -645,3 +645,23 @@ fn isa_fixed_shared_flags_follow_the_code_model() {
         cranelift_codegen::settings::OptLevel::None
     );
 }
+
+/// macOS is aarch64 only (D-892): `x86_64-apple-darwin` is not one of
+/// the fixed targets (D-921), so asking for it is the unsupported-host
+/// error, never a panic, and the error names the five targets.
+#[test]
+fn isa_x86_64_apple_darwin_is_unsupported() {
+    match isa::isa_for("x86_64-apple-darwin") {
+        Err(CodegenError::UnsupportedHost(message)) => {
+            assert!(message.starts_with("x86_64-apple-darwin: "), "{message}");
+            assert!(
+                message.contains(
+                    "x86-64 on Linux and Windows, and aarch64 on Linux, macOS and Windows"
+                ),
+                "{message}"
+            );
+        }
+        Err(other) => panic!("not the unsupported-host error: {other}"),
+        Ok(_) => panic!("x86_64-apple-darwin has an ISA"),
+    }
+}

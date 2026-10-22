@@ -246,7 +246,8 @@ fn cache_failed_fallback_is_a_tool_error() {
 
 /// `CHEBY_CACHE_LOG` gets one sorted `front <module> hit|miss` line per
 /// package module (D-973): all misses on a fresh cache, all hits on the
-/// next command.
+/// next command. A command also lists each package module it parses
+/// (`parse <module>`): both on the cold check, none on the warm one.
 #[test]
 #[cfg_attr(
     windows,
@@ -262,7 +263,7 @@ fn cache_log_lists_front_lookups() {
     assert_eq!(first.status, Some(0), "{}", first.stderr);
     assert_eq!(
         std::fs::read_to_string(&log).unwrap(),
-        "front app miss\nfront app::greet miss\n"
+        "front app miss\nfront app::greet miss\nparse app\nparse app::greet\n"
     );
     let second = cheby(&dir, &["check"], &cache, &tmp, &[("CHEBY_CACHE_LOG", &log)]);
     assert_eq!(

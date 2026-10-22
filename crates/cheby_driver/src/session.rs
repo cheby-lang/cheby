@@ -2456,6 +2456,9 @@ fn std_module(
             path: ModulePath::root(&package.manifest.name).child(SESSION_FILE),
             source,
             hashes,
+            parsed: true,
+            // The REPL uses no cache (D-964), the only reader of these.
+            syntax_diagnostics: Vec::new(),
         },
         file,
     ))

@@ -26,6 +26,9 @@ mimalloc.workspace = true
 [dev-dependencies]
 cheby_test_support.workspace = true
 libtest-mimic.workspace = true
+# `tests/build.rs` compares the load commands of two executables (D-934,
+# D-1036).
+object.workspace = true
 # `src/build_id.rs`'s tests include `build.rs` (D-957).
 siphasher.workspace = true
 

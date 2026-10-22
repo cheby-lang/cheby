@@ -87,9 +87,12 @@
 //! environment, into a fresh temporary directory of its own that is
 //! removed at the end, so no trial writes into `docs/examples/`. A failed
 //! build fails the trial with the build's status and standard error, and
-//! nothing runs: until `cheby build` exists, that is every trial's
-//! result, and no trial skips because the runtime archive is missing
-//! (D-929). Then the trial runs `<tmp>/<name>` with the example's `args`,
+//! nothing runs: that is the result of a program `cheby build` cannot
+//! build yet (constants, user types: a "not available yet" tool error,
+//! D-924). `cheby build` links the runtime archive next to `cheby`, which
+//! `cargo build -p cheby_rt_exe` builds and `cargo test` does not: build
+//! it first. No trial skips because the archive is missing or stale; the
+//! build's tool error is then the result (D-929, D-930). Then the trial runs `<tmp>/<name>` with the example's `args`,
 //! `stdin` and `env`, the example's directory as working directory
 //! (D-415), once per thread variant of the run trials (`CHEBY_THREADS`
 //! unset, 1, 2 and the harness's extra count), with `CHEBY_RT_POISON=1`

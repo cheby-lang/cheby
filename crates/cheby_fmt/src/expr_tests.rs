@@ -318,11 +318,12 @@ fn fmt_expr_strings_are_kept_as_written() {
 }
 
 #[test]
-fn fmt_expr_comment_inside_an_expression_keeps_it_verbatim() {
-    // The layout has no place for a comment between operands: that
-    // expression keeps its lines (wave 3 lays it out).
+fn fmt_expr_comment_inside_an_expression_is_laid_out() {
+    // A comment between operands keeps its place (wave 3; wave 2 kept the
+    // expression's lines verbatim).
     let src = "  let x = alpha + // why\n    beta\n";
     body(src, (20, src), src);
+    body("  let x = alpha   + // why\n beta\n", (20, src), src);
     // Comments between arguments have their place.
     body(
         "  g(\n    a, // first\n    b,\n  )\n",

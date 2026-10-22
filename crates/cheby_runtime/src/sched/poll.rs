@@ -15,19 +15,31 @@
 //!   and the holder polls again. A timer armed with a deadline earlier than
 //!   the holder's wakes it ([`Driver::timer_armed`]), and it recomputes its
 //!   timeout.
-//! - **M2 registers only the waker** (D-681): sockets come in M3 on the
-//!   same seam, and D-724's detector sees no IO registration.
+//! - **Sockets** (D-984, `sched/io.rs`): the driver keeps a clone of the
+//!   poll's `mio::Registry` ([`super::io::IoShared`]) outside the poller's
+//!   lock, through which fibers register sockets. Each poll dispatches its
+//!   events: it sets each socket's readiness bits and wakes the fibers
+//!   waiting on them. The waker keeps token 0, which dispatches nothing.
+//! - **The monitor polls too** (D-789, D-984): on each tick, while some
+//!   socket is registered and no worker holds the poller, it polls with a
+//!   zero timeout ([`Driver::poll_now`]), so a ready socket waits about one
+//!   tick while every worker runs a fiber.
 //! - **Locks.** The poller's lock is held only by the idle worker that
-//!   polls, never while a timer fires or a fiber runs, and nothing else is
-//!   taken under it.
+//!   polls, or by the monitor for a zero-timeout poll, never while a timer
+//!   fires or a fiber runs; only leaf locks (the socket table's, a socket
+//!   entry's) are taken under it, and released before a woken fiber is
+//!   queued. Every holder takes it with `try_lock`.
 
 use std::fmt;
 use std::io;
 use std::sync::atomic::{self, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
+use std::sync::Arc;
+
 use parking_lot::{Mutex, MutexGuard};
 
+use super::io::IoShared;
 use super::timer::{NO_TIMER, Timers};
 use crate::panic::fatal;
 
@@ -55,21 +67,33 @@ pub(crate) trait PollWake: Send + Sync {
     fn wake(&self) -> io::Result<()>;
 }
 
-/// The waker's token: the only registration in M2 (D-681).
+/// The waker's token; sockets' tokens are never 0 (`sched/io.rs`).
 const WAKE_TOKEN: mio::Token = mio::Token(0);
+
+/// How many events one poll takes; the rest stay queued in the kernel for
+/// the next poll.
+const EVENTS: usize = 64;
 
 /// The `mio` poller.
 struct MioPoller {
     poll: mio::Poll,
     events: mio::Events,
+    /// The sockets its events are dispatched to (D-984).
+    io: Arc<IoShared>,
 }
 
 impl Poller for MioPoller {
     fn poll(&mut self, timeout: Option<Duration>) -> io::Result<()> {
         match self.poll.poll(&mut self.events, timeout) {
             Err(error) if error.kind() != io::ErrorKind::Interrupted => Err(error),
-            // The only event is the waker's, which needs no handling.
-            _ => Ok(()),
+            // An interrupted poll returns no event.
+            Err(_) => Ok(()),
+            Ok(()) => {
+                // The waker's event needs no handling; each socket's sets
+                // its bits and wakes its waiters (D-984).
+                self.io.dispatch(&self.events);
+                Ok(())
+            }
         }
     }
 }
@@ -100,6 +124,9 @@ pub(super) struct Driver {
     /// The holder's deadline in nanoseconds since the timers' epoch, plus
     /// one (`u64::MAX`: no deadline), or [`NOT_POLLING`].
     deadline: AtomicU64,
+    /// The registry clone and the socket table (D-984); `None` for a test
+    /// driver over another poller.
+    io: Option<Arc<IoShared>>,
 }
 
 impl fmt::Debug for Driver {
@@ -111,30 +138,69 @@ impl fmt::Debug for Driver {
 }
 
 impl Driver {
-    /// A `mio` poller with its waker registered.
+    /// A `mio` poller with its waker registered, and a clone of its
+    /// registry for sockets (D-984).
     ///
     /// # Errors
     ///
-    /// The system's error if the poller or the waker cannot be made.
+    /// The system's error if the poller, the waker or the registry's clone
+    /// cannot be made.
     pub(super) fn new() -> io::Result<Self> {
         let poll = mio::Poll::new()?;
         let waker = mio::Waker::new(poll.registry(), WAKE_TOKEN)?;
-        Ok(Self::with(
+        let io = Arc::new(IoShared::new(poll.registry().try_clone()?));
+        let mut driver = Self::with(
             Box::new(MioPoller {
                 poll,
-                events: mio::Events::with_capacity(8),
+                events: mio::Events::with_capacity(EVENTS),
+                io: Arc::clone(&io),
             }),
             Box::new(MioWake(waker)),
-        ))
+        );
+        driver.io = Some(io);
+        Ok(driver)
     }
 
-    /// A driver over any poller and waker.
+    /// A driver over any poller and waker, with no sockets.
     fn with(poller: Box<dyn Poller>, waker: Box<dyn PollWake>) -> Self {
         Self {
             poller: Mutex::new(poller),
             waker,
             deadline: AtomicU64::new(NOT_POLLING),
+            io: None,
         }
+    }
+
+    /// The registry clone and the socket table (D-984), if the poller is
+    /// the system's.
+    pub(super) fn io(&self) -> Option<&Arc<IoShared>> {
+        self.io.as_ref()
+    }
+
+    /// Whether some socket is registered: the monitor polls only then.
+    pub(super) fn has_sockets(&self) -> bool {
+        self.io.as_ref().is_some_and(|io| io.has_sockets())
+    }
+
+    /// A halt started: polls dispatch nothing from now on (D-708, C-4).
+    pub(super) fn halt(&self) {
+        if let Some(io) = &self.io {
+            io.halt();
+        }
+    }
+
+    /// Polls once with a zero timeout if no worker holds the poller, which
+    /// dispatches the sockets' events: the monitor's poll (D-789, D-984).
+    /// It sets no deadline, so [`Driver::polling`] stays false and no
+    /// timer wakes it. Returns whether it polled.
+    pub(super) fn poll_now(&self) -> bool {
+        let Some(mut poller) = self.try_hold() else {
+            return false;
+        };
+        if let Err(error) = poller.poll(Some(Duration::ZERO)) {
+            fatal(format_args!("the scheduler's poller failed: {error}"));
+        }
+        true
     }
 
     /// The poller, if no other worker holds it.

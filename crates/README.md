@@ -52,7 +52,7 @@ The crates depend on each other in pipeline order (D-284, D-465). The table list
 | `cheby_codegen_clif` | `cheby_mir`, `cheby_iface`, `cheby_diag`, `cheby_runtime` (its `abi` module, the record layout of `image` and the call-site type of `locate`)                                                              |
 | `cheby_jit`          | `cheby_codegen_clif`, `cheby_runtime`, `cheby_mir`, `cheby_iface`                                                                                                                                          |
 | `cheby_consteval`    | `cheby_diag`, `cheby_iface`, `cheby_jit`, `cheby_mir`, `cheby_package`, `cheby_runtime`                                                                                                                    |
-| `cheby_link`         | `cheby_codegen_clif`, and the external `cranelift-object` (D-1036)                                                                                                                                         |
+| `cheby_link`         | `cheby_codegen_clif`, `cheby_runtime`, and the externals `cranelift-object`, `cranelift-frontend` and `object` (D-1036)                                                                                    |
 | `cheby_js`           | `cheby_mir`                                                                                                                                                                                                |
 | `cheby_driver`       | `cheby_diag`, `cheby_syntax`, `cheby_package`, `cheby_resolve`, `cheby_iface`, `cheby_types`, `cheby_mir`, `cheby_codegen_clif`, `cheby_jit`, `cheby_runtime`, `cheby_link`, `cheby_js`, `cheby_consteval` |
 | `cheby_repl`         | `cheby_diag`, `cheby_driver`, `cheby_runtime`                                                                                                                                                              |
@@ -89,25 +89,25 @@ Three rules shape the graph:
 | [`cheby_driver`](cheby_driver/README.md)             | M1        | Runs the phases over a package: `check`, `run`, `test`, REPL sessions, dumps     |
 | [`cheby_repl`](cheby_repl/README.md)                 | M1        | The interactive session of `cheby repl`                                          |
 | [`cheby_cli`](cheby_cli/README.md)                   | M1        | The `cheby` binary and the conformance, UI and REPL harnesses                    |
-| [`cheby_link`](cheby_link/README.md)                 | M3        | Replays code records into ELF and Mach-O objects; linking is to come             |
+| [`cheby_link`](cheby_link/README.md)                 | M3        | Objects from code records, the program object, and the link of `cheby build`     |
 | [`cheby_js`](cheby_js/README.md)                     | M4        | JavaScript emitter and suspension analysis (skeleton)                            |
 | [`cheby_fmt`](cheby_fmt/README.md)                   | M3, M5    | Formatter (`cheby fmt`); its later parts land beside M3 (D-1029)                 |
 | [`cheby_lsp`](cheby_lsp/README.md)                   | M5        | Language server (skeleton)                                                       |
 | [`cheby_doc`](cheby_doc/README.md)                   | M5        | Documentation generator (skeleton)                                               |
 | [`cheby_pkg`](cheby_pkg/README.md)                   | M5        | Dependency resolution, lockfile and fetching (skeleton)                          |
 
-The milestone column names the milestone that gives the crate its first real contents. Milestones are described in [`docs/plan/README.md`](../docs/plan/README.md). M1 and M2 are done and M3 is in progress. `cheby_rt_exe`, `cheby_fmt` and `cheby_link` have their first contents; the other crates of M3 to M5 are still three-line skeletons that exist so the workspace's shape is fixed from the start (D-284).
+The milestone column names the milestone that gives the crate its first real contents. Milestones are described in [`docs/plan/README.md`](../docs/plan/README.md). M1 and M2 are done and M3 is in progress. `cheby_rt_exe`, `cheby_fmt` and `cheby_link` have their first contents, and `cheby build` links executables, which needs the runtime archive next to `cheby` (`cargo build -p cheby_rt_exe`, D-929); the other crates of M3 to M5 are still three-line skeletons that exist so the workspace's shape is fixed from the start (D-284).
 
 ## Outside `crates/`
 
 The workspace has five more members. Three of them use these crates:
 
-| Member            | Uses                                                          | For                                                                      |
-| ----------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| `xtask`           | `cheby_driver`, `cheby_syntax`, `cheby_diag`, `tests/support` | Developer commands such as `bless`, `cross-check` and `bench-compile`    |
-| `bench/gen`       | `cheby_driver`                                                | The synthetic project generator for compile-speed budgets (D-291)        |
-| `fuzz`            | `cheby_driver`, `cheby_syntax`, `cheby_diag`                  | `cargo fuzz` targets, outside the workspace                              |
-| `tests/support`   | none                                                          | Shared harness code: milestones, goldens, example and transcript metadata |
+| Member          | Uses                                                                        | For                                                                       |
+| --------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| `xtask`         | `cheby_driver`, `cheby_link`, `cheby_syntax`, `cheby_diag`, `tests/support` | Developer commands such as `bless`, `cross-check` and `bench-compile`     |
+| `bench/gen`     | `cheby_driver`                                                              | The synthetic project generator for compile-speed budgets (D-291)         |
+| `fuzz`          | `cheby_driver`, `cheby_syntax`, `cheby_diag`                                | `cargo fuzz` targets, outside the workspace                               |
+| `tests/support` | none                                                                        | Shared harness code: milestones, goldens, example and transcript metadata |
 | `bench/baselines` | none                                                          | Rust baselines of the collections benchmarks in `bench/runtime` (D-664)  |
 
 The standard library in [`std/`](../std/) is Cheby source, embedded in the `cheby` binary by `cheby_driver` and bound to its native kernels in `cheby_runtime` through `@external(native, …)` (D-484).

@@ -9,11 +9,22 @@ publish = false
 
 [dependencies]
 cheby_codegen_clif.workspace = true
+# The image's layout, the runtime ID's symbol and `cheby_rt_main` (D-925,
+# D-930).
+cheby_runtime.workspace = true
 # Default features only: `x86`, `arm64` or `all-arch` would reach `cheby`
 # through `cheby_driver`, against D-936 (host architecture only).
 cranelift-codegen.workspace = true
+# The program object's C `main` (D-925).
+cranelift-frontend.workspace = true
 cranelift-module.workspace = true
 cranelift-object.workspace = true
+# The runtime archive's symbol index (D-930, D-1036).
+object.workspace = true
+
+# The build resolver of E0053 opens the archive's system libraries (D-943).
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
 
 [dev-dependencies]
 cheby_diag.workspace = true

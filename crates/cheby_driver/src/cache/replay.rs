@@ -20,8 +20,11 @@
 //! Diagnostics are rendered only at replay, so color, D-421's paths and
 //! `--deny-warnings` (D-549) apply to them as to fresh ones.
 //!
-//! A blob holds the module's diagnostics as several lists (the front end's
-//! early and late ones), so replay pushes them where a fresh check would.
+//! A blob holds the module's diagnostics as several lists (front records
+//! hold three: phase A's, which a module that is not parsed replays, and
+//! the front end's early and late ones), so replay pushes them where a
+//! fresh check would. A module without diagnostics has the blob of
+//! [`empty_blob`], whose name a reader recognizes without opening it.
 
 use cheby_diag::{Code, Diagnostic, Edit, FileId, Help, Label, LabelStyle, Severity, Span};
 use cheby_diag::{TextRange, TextSize};
@@ -199,6 +202,47 @@ pub fn decode_diagnostics(
     lists: usize,
     cx: &SpanCx<'_>,
 ) -> Option<Vec<Vec<Diagnostic>>> {
+    decode_with(bytes, lists, &mut |stored| cx.resolve(stored))
+}
+
+/// The paths of the other modules whose items a blob's spans name,
+/// sorted, without repeats: the interfaces [`decode_diagnostics`] needs
+/// besides the module's own file. `None` when the blob is malformed or
+/// holds another number of lists than `lists`.
+#[must_use]
+pub fn item_modules(bytes: &[u8], lists: usize) -> Option<Vec<String>> {
+    let mut modules = Vec::new();
+    let placeholder = Span::new(FileId::new(0), TextRange::empty(0));
+    decode_with(bytes, lists, &mut |stored| {
+        if let StoredSpan::Item { module, .. } = stored {
+            modules.push(module.clone());
+        }
+        Some(placeholder)
+    })?;
+    modules.sort();
+    modules.dedup();
+    Some(modules)
+}
+
+/// The blob of `lists` empty lists: every module without diagnostics has
+/// this one, so a reader that knows its name need not open it.
+#[must_use]
+pub fn empty_blob(lists: usize) -> Vec<u8> {
+    let mut w = Writer::new();
+    w.u8(VERSION);
+    w.len(lists);
+    for _ in 0..lists {
+        w.len(0);
+    }
+    w.finish()
+}
+
+/// [`decode_diagnostics`] with every stored span resolved by `resolve`.
+fn decode_with(
+    bytes: &[u8],
+    lists: usize,
+    resolve: &mut dyn FnMut(&StoredSpan) -> Option<Span>,
+) -> Option<Vec<Vec<Diagnostic>>> {
     let mut r = Reader::new(bytes);
     if r.u8()? != VERSION || r.len()? != lists {
         return None;
@@ -207,14 +251,17 @@ pub fn decode_diagnostics(
     for _ in 0..lists {
         let mut list = Vec::new();
         for _ in 0..r.len()? {
-            list.push(decode_one(&mut r, cx)?);
+            list.push(decode_one(&mut r, resolve)?);
         }
         out.push(list);
     }
     r.is_done().then_some(out)
 }
 
-fn decode_one(r: &mut Reader<'_>, cx: &SpanCx<'_>) -> Option<Diagnostic> {
+fn decode_one(
+    r: &mut Reader<'_>,
+    resolve: &mut dyn FnMut(&StoredSpan) -> Option<Span>,
+) -> Option<Diagnostic> {
     let letter = match r.u8()? {
         0 => 'E',
         1 => 'W',
@@ -223,7 +270,7 @@ fn decode_one(r: &mut Reader<'_>, cx: &SpanCx<'_>) -> Option<Diagnostic> {
     let code = Code::parse(&format!("{letter}{:04}", r.u16()?))?;
     let mut d = Diagnostic::new(code, r.str()?);
     for _ in 0..r.len()? {
-        let span = cx.resolve(&decode_span(r)?)?;
+        let span = resolve(&decode_span(r)?)?;
         let message = r.str()?.to_owned();
         let style = match r.u8()? {
             0 => LabelStyle::Primary,
@@ -243,7 +290,7 @@ fn decode_one(r: &mut Reader<'_>, cx: &SpanCx<'_>) -> Option<Diagnostic> {
         let message = r.str()?.to_owned();
         let mut edits = Vec::new();
         for _ in 0..r.len()? {
-            let span = cx.resolve(&decode_span(r)?)?;
+            let span = resolve(&decode_span(r)?)?;
             edits.push(Edit {
                 span,
                 replacement: r.str()?.to_owned(),

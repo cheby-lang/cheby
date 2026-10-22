@@ -3,8 +3,8 @@
 //! stealing, lost wakeups at the idle protocol, preemption, pinning and the
 //! migration stress mode, root fibers, code tokens and `CHEBY_THREADS`.
 //!
-//! `CHEBY_RT_TEST_EMULATED=1` (set by the container and Rosetta runs)
-//! keeps every check but the time bounds.
+//! `CHEBY_RT_TEST_EMULATED=1` (set by the linux/amd64 container runs; macOS
+//! x86-64 is dropped, D-892) keeps every check but the time bounds.
 
 use std::ffi::OsStr;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};

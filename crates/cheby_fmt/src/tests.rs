@@ -59,9 +59,11 @@ fn fmt_trivia_comments_stay() {
 }
 
 #[test]
-fn fmt_trivia_comment_in_header_keeps_item_verbatim() {
+fn fmt_trivia_comment_in_header_is_laid_out() {
+    // Wave 1 kept this item verbatim; wave 3 lays it out the same way.
     let src = "const k: Int = // the answer\n  42\n";
     assert_eq!(fmt(src), src);
+    assert_eq!(fmt("const   k: Int = // the answer\n      42\n"), src);
 }
 
 #[test]
@@ -110,12 +112,13 @@ fn fmt_trivia_blank_line_after_leading_comment_kept() {
 }
 
 #[test]
-fn fmt_trivia_odd_comment_positions_stay_verbatim() {
-    // A comment between an element and its comma: the list cannot be
-    // laid out, so the item keeps its source lines.
+fn fmt_trivia_odd_comment_positions_are_laid_out() {
+    // A comment between an element and its comma: the comma goes before
+    // it (wave 3; wave 1 kept the item verbatim).
     let src = "fn f(\n  a: Int // a\n  , b: Int,\n) {}\n";
-    assert_eq!(fmt(src), src);
-    // A comment inside an element: only that element is verbatim.
+    assert_eq!(fmt(src), "fn f(\n  a: Int, // a\n  b: Int,\n) {}\n");
+    // A comment inside an element keeps its place, the rest one level
+    // deeper.
     let src = "fn f(\n  a: // the a\n    Int,\n  b: Int,\n) {}\n";
     assert_eq!(fmt(src), src);
     // A comment on the line of `{`.

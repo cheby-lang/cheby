@@ -19,13 +19,14 @@
 //! not D's and is ignored (a group shared by roots of several domains). D is
 //! **deadlocked** when it has a registered, started, unreported root, every
 //! fiber of D is `PARKED` in one of D-858's waits (its wait site is set:
-//! `FiberSched::note_wait`) without the blocking mark, and both pending
-//! counts of D read 0. A fiber parked anywhere else (the runtime's own test
-//! mailbox) is never judged blocked: the survey reads it as busy.
+//! `FiberSched::note_wait`) without the blocking mark, and every pending
+//! count of D reads 0. A fiber parked anywhere else (the runtime's own test
+//! mailbox, a socket wait, D-984) is never judged blocked: the survey reads
+//! it as busy.
 //!
 //! # The pending counts ([`DomainCounts`])
 //!
-//! Two counters per domain and runtime, in a sidecar of the runtime keyed by
+//! Three counters per domain and runtime, in a sidecar of the runtime keyed by
 //! the domain (`Shared.domains`, [`DomainTable`]; the `Domain` itself is
 //! untouched). A fiber caches its domain's counters on first use
 //! (`FiberSched::domain_counts`).
@@ -58,6 +59,15 @@
 //!   `if counted.swap(false) { D.pool -= 1 }` (`SeqCst`). Its two callers are
 //!   the completion and a stuck mark (below), so a job leaves the count
 //!   once, whichever comes first.
+//! - **Armed IO waits** (`sched/io.rs`, D-984). A socket wait raises D's
+//!   count when it arms its direction, under the socket entry's lock, and
+//!   takes an [`IoPending`] token, released exactly once by the same swap:
+//!   by the dispatcher right after its wake, or by the waiting fiber once
+//!   it runs again (woken by a cancellation, or not parked after all). The
+//!   order, per dispatched wait: `D.io += 1; ... settle Claimed; wake;
+//!   release`. A registered socket nobody waits on is not counted (D-984),
+//!   and a fiber parked on a socket records no wait site, so it is never
+//!   listed (D-858).
 //!
 //! # Stuck groups (D-857's stuck-group sentence; plan §7.1, UQ-12 (b))
 //!
@@ -104,7 +114,7 @@
 //! (read through the workers' gates; a fiber of a stuck group blocked
 //! inline does not count). For each candidate domain:
 //!
-//! 1. **The O(1) look** (critique RISK-10): both counts are read, and each
+//! 1. **The O(1) look** (critique RISK-10): the counts are read, and each
 //!    root's state and resume count under its base scope's lock while the
 //!    base has not ended. A count above 0 or a root that is not `PARKED`
 //!    skips the survey. A change of the roots' resume counts since the last
@@ -119,7 +129,7 @@
 //!    `PARKED`; then the blocking mark (`SeqCst`), stopping if set; then
 //!    `resumes` (`Relaxed`); then the wait site (`Relaxed`), stopping if
 //!    none. A pass collects `(id, resumes)` only. A base scope that has ended
-//!    reads as busy (its fiber is ending). After the walk both counts are
+//!    reads as busy (its fiber is ending). After the walk the counts are
 //!    read; a count above 0 fails the pass.
 //! 4. **Confirmation**: D is deadlocked when both passes completed and
 //!    collected the same sorted `(id, resumes)` list. Soundness: let t be the
@@ -223,9 +233,9 @@ const BACKOFF: [Duration; 5] = [
     Duration::from_millis(160),
 ];
 
-/// The pending timers and blocking-pool jobs of one domain in one runtime
-/// (D-857, module documentation): a count falls only after the wake it
-/// stands for.
+/// The pending timers, blocking-pool jobs and armed IO waits of one domain
+/// in one runtime (D-857, D-984, module documentation): a count falls only
+/// after the wake it stands for.
 #[derive(Debug, Default)]
 pub(crate) struct DomainCounts {
     /// Timers armed by a fiber of the domain whose firing has not returned
@@ -234,6 +244,10 @@ pub(crate) struct DomainCounts {
     /// Pool jobs of fibers of the domain whose completion has not finished
     /// its wake, and that no stuck mark released.
     pool: CachePadded<AtomicUsize>,
+    /// Socket waits a fiber of the domain armed (`sched/io.rs`, D-984),
+    /// not registered sockets: from the arming until the wake that ends
+    /// the wait has happened ([`IoPending::release`]).
+    io: CachePadded<AtomicUsize>,
 }
 
 impl DomainCounts {
@@ -259,9 +273,25 @@ impl DomainCounts {
         self.pool.load(Ordering::SeqCst)
     }
 
-    /// Whether both counts read 0 (timers first, then the pool).
+    /// The armed IO waits (D-984).
+    pub(crate) fn io(&self) -> usize {
+        self.io.load(Ordering::SeqCst)
+    }
+
+    /// Whether every count reads 0 (timers first, then the pool, then the
+    /// armed IO waits).
     fn quiet(&self) -> bool {
-        self.timers() == 0 && self.pool() == 0
+        self.timers() == 0 && self.pool() == 0 && self.io() == 0
+    }
+
+    /// Counts one more armed IO wait and returns its token, which lowers
+    /// the count once ([`IoPending::release`]).
+    pub(super) fn io_armed(self: &Arc<Self>) -> Arc<IoPending> {
+        self.io.fetch_add(1, Ordering::SeqCst);
+        Arc::new(IoPending {
+            counts: Arc::clone(self),
+            counted: AtomicBool::new(true),
+        })
     }
 
     /// Counts one more pool job and returns its token, which lowers the
@@ -295,6 +325,33 @@ impl PoolPending {
         }
         if self.counts.pool.fetch_sub(1, Ordering::SeqCst) == 0 {
             fatal(format_args!("a domain's pending pool count fell below 0"));
+        }
+        true
+    }
+}
+
+/// One armed IO wait counted in its domain's `io` count (D-984,
+/// `sched/io.rs`): released once, by the dispatcher after its wake or by
+/// the waiting fiber once it runs again (a cancellation's wake, a re-check
+/// that found the socket ready, a refused publication), whichever comes
+/// first.
+#[derive(Debug)]
+pub(crate) struct IoPending {
+    /// Its domain's counts.
+    counts: Arc<DomainCounts>,
+    /// Whether it is still counted.
+    counted: AtomicBool,
+}
+
+impl IoPending {
+    /// Takes the wait out of its domain's count, if it is still counted;
+    /// returns whether this call did.
+    pub(crate) fn release(&self) -> bool {
+        if !self.counted.swap(false, Ordering::SeqCst) {
+            return false;
+        }
+        if self.counts.io.fetch_sub(1, Ordering::SeqCst) == 0 {
+            fatal(format_args!("a domain's armed IO wait count fell below 0"));
         }
         true
     }

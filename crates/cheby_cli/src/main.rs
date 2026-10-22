@@ -3,9 +3,15 @@
 //! Commands that are not implemented yet report the milestone that brings
 //! them and exit with status 1. Flag spellings are informative (§13).
 //!
-//! - `--deny-warnings` on `check`, `run`, `test` and `repl` renders every
-//!   warning as an error with its own code and fails the command with
-//!   status 1; `run` and `test` then run nothing (D-549).
+//! - `--deny-warnings` on `check`, `build`, `run`, `test` and `repl`
+//!   renders every warning as an error with its own code and fails the
+//!   command with status 1; `build` then links nothing, and `run` and
+//!   `test` run nothing (D-549).
+//! - `cheby build [module_path] [--target native|js] [-o PATH]` builds an
+//!   executable for the host (D-937, D-936), linked with `cc` against the
+//!   runtime archive next to `cheby`, which `cargo build -p cheby_rt_exe`
+//!   builds (D-929); `--target js` is planned for M4 (D-282), and Windows
+//!   executables for M6 (D-935).
 //! - `cheby check --target native|js` checks the code as it runs on that
 //!   target only (D-550).
 //! - `-j N`/`--jobs N`, global, sets the number of worker threads of the
@@ -81,11 +87,19 @@ enum Command {
         #[arg(long)]
         deny_warnings: bool,
     },
-    /// Compile the package for `native` (AOT) or `js` (D-006, D-007)
+    /// Compile a module's `main` into an executable for `native` (AOT) or `js` (D-006, D-937)
     Build {
-        /// Target to build for
+        /// Module path, such as `my_app::tools::migrate`; defaults to the root module
+        module_path: Option<String>,
+        /// Target to build for; `native` when the manifest allows it
         #[arg(long, value_enum)]
         target: Option<Target>,
+        /// Write the executable to PATH instead of `build/native/<name>`
+        #[arg(short = 'o', value_name = "PATH")]
+        output: Option<std::path::PathBuf>,
+        /// Treat every warning as an error and link nothing after one (D-549)
+        #[arg(long)]
+        deny_warnings: bool,
     },
     /// Compile with the JIT and run a module's `main` (D-137)
     Run {
@@ -206,7 +220,11 @@ fn run_command() -> ExitCode {
     // is global, and the commands that build nothing ignore it (D-622).
     let builds = matches!(
         cli.command,
-        Command::Check { .. } | Command::Run { .. } | Command::Repl { .. } | Command::Test { .. }
+        Command::Check { .. }
+            | Command::Build { .. }
+            | Command::Run { .. }
+            | Command::Repl { .. }
+            | Command::Test { .. }
     );
     if builds && let Err(e) = cheby_driver::configure_jobs(cli.jobs) {
         return out.error(e.message());
@@ -223,7 +241,20 @@ fn run_command() -> ExitCode {
                 deny_warnings,
             },
         ),
-        Command::Build { target } => build(out, target),
+        Command::Build {
+            module_path,
+            target,
+            output,
+            deny_warnings,
+        } => build(
+            out,
+            BuildArgs {
+                module_path,
+                target,
+                output,
+                deny_warnings,
+            },
+        ),
         Command::Run {
             module_path,
             deny_warnings,
@@ -712,18 +743,84 @@ fn package_sources(src: &std::path::Path) -> std::io::Result<Vec<std::path::Path
     Ok(files)
 }
 
-/// Until a backend exists, building for it is an error that points to
-/// `cheby check` and `cheby run` (D-282).
-fn build(out: Out, target: Option<Target>) -> ExitCode {
-    let (name, milestone) = match target {
-        None | Some(Target::Native) => ("native", "M3"),
-        Some(Target::Js) => ("js", "M4"),
+/// What `cheby build` was asked for.
+struct BuildArgs {
+    module_path: Option<String>,
+    target: Option<Target>,
+    output: Option<std::path::PathBuf>,
+    deny_warnings: bool,
+}
+
+/// `cheby build [module_path] [--target native|js] [-o PATH]
+/// [--deny-warnings]` (D-937): builds the module's `main`, the root
+/// module's by default, into an executable for the host (D-936), written
+/// to `build/native/<package>` (or `<module path with :: replaced by ->`)
+/// under the package root, or to `-o PATH`, a relative path being taken
+/// from the current directory. The default target is `native` when the
+/// manifest allows it; a target the manifest leaves out is `cheby check`'s
+/// tool error (D-550); `--target js` keeps D-282's error until M4, and
+/// `--target native` is "not available yet (M6)" on Windows (D-935).
+/// Warnings go to standard error before the link, and `--deny-warnings`
+/// stops the build after them (D-549); success prints nothing else. The
+/// build reads and writes the cache's front records (D-955) and trims the
+/// cache at most once a day at its end (D-961). It needs the runtime
+/// archive next to `cheby` (`cargo build -p cheby_rt_exe`, D-929).
+fn build(out: Out, args: BuildArgs) -> ExitCode {
+    let js_not_yet = || {
+        let code = out.error("`cheby build --target js` is not available yet (planned for M4)");
+        out.help("use `cheby check` to type-check the package, or `cheby run` to run it");
+        code
     };
-    let code = out.error(&format!(
-        "`cheby build --target {name}` is not available yet (planned for {milestone})"
-    ));
-    out.help("use `cheby check` to type-check the package, or `cheby run` to run it");
-    code
+    // D-282's error needs no package.
+    if matches!(args.target, Some(Target::Js)) {
+        return js_not_yet();
+    }
+    let root = match package_root(out) {
+        Ok(root) => root,
+        Err(code) => return code,
+    };
+    let target = match cheby_driver::build_target(&root, args.target.map(Into::into)) {
+        Ok(target) => target,
+        Err(e) => return out.error(e.message()),
+    };
+    if matches!(target, cheby_driver::Target::Js) {
+        return js_not_yet();
+    }
+    if cfg!(windows) {
+        return out.error(
+            "`cheby build --target native` is not available yet on Windows (planned for M6)",
+        );
+    }
+    let output = match args.output {
+        Some(path) if path.is_relative() => match std::env::current_dir() {
+            Ok(cwd) => Some(cwd.join(path)),
+            Err(e) => return out.error(&format!("cannot read the current directory: {e}")),
+        },
+        other => other,
+    };
+    let cache = match open_cache(out) {
+        Ok(cache) => cache,
+        Err(code) => return code,
+    };
+    let options = cheby_driver::BuildOptions {
+        module_path: args.module_path,
+        output,
+        deny_warnings: args.deny_warnings,
+    };
+    // The warnings are printed once the build has passed every check, before
+    // the link, which may still fail.
+    let built = cheby_driver::build_cached_with(&root, &options, &cache, &mut |warnings| {
+        out.diagnostics(warnings);
+    });
+    let code = match built {
+        Ok(cheby_driver::BuildOutcome::Linked { .. }) => ExitCode::SUCCESS,
+        Ok(cheby_driver::BuildOutcome::CompileFailed(result)) => {
+            out.diagnostics(&result);
+            ExitCode::FAILURE
+        }
+        Err(e) => out.error(e.message()),
+    };
+    finish_cache(out, cache, true, code)
 }
 
 #[cfg(test)]
@@ -839,6 +936,52 @@ mod tests {
         ));
         assert!(Cli::try_parse_from(["cheby", "check", "--reuse-report"]).is_err());
         assert!(Cli::try_parse_from(["cheby", "repl", "--reuse-report"]).is_err());
+    }
+
+    /// `cheby build [module_path] [--target T] [-o PATH] [--deny-warnings]`
+    /// (D-937), with the global `-j`.
+    #[test]
+    fn parses_the_build_arguments() {
+        let cli = Cli::try_parse_from(["cheby", "build"]).unwrap();
+        let Command::Build {
+            module_path,
+            target,
+            output,
+            deny_warnings,
+        } = cli.command
+        else {
+            panic!("not build");
+        };
+        assert_eq!(module_path, None);
+        assert!(target.is_none() && output.is_none() && !deny_warnings);
+        let cli = Cli::try_parse_from([
+            "cheby",
+            "-j",
+            "2",
+            "build",
+            "app::tools",
+            "--target",
+            "native",
+            "-o",
+            "out/app",
+            "--deny-warnings",
+        ])
+        .unwrap();
+        assert_eq!(cli.jobs.map(std::num::NonZeroUsize::get), Some(2));
+        let Command::Build {
+            module_path,
+            target,
+            output,
+            deny_warnings,
+        } = cli.command
+        else {
+            panic!("not build");
+        };
+        assert_eq!(module_path.as_deref(), Some("app::tools"));
+        assert!(matches!(target, Some(Target::Native)));
+        assert_eq!(output, Some(std::path::PathBuf::from("out/app")));
+        assert!(deny_warnings);
+        assert!(Cli::try_parse_from(["cheby", "build", "--target", "wasm"]).is_err());
     }
 
     /// `cheby fmt [--check] [PATH…]` with `-` for standard input

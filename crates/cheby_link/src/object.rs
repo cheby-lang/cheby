@@ -46,12 +46,39 @@ use crate::LinkError;
 /// target's format is neither ELF nor Mach-O or `cranelift-object`
 /// refuses a declaration, a definition or the emission.
 pub fn replay(record: &CodeRecord, isa: OwnedTargetIsa, name: &str) -> Result<Vec<u8>, LinkError> {
+    check_record(record, &isa)?;
+    let mut module = new_module(isa, name)?;
+    replay_into(&mut module, record)?;
+    emit(module)
+}
+
+/// Checks `record` and that `isa` is a target replay writes, with the
+/// record's text relocations among its PC-relative kinds (D-913).
+pub(crate) fn check_record(record: &CodeRecord, isa: &OwnedTargetIsa) -> Result<(), LinkError> {
     record.check()?;
-    check_target(record, &isa)?;
+    check_target(record, isa)
+}
+
+/// An empty object module for `isa` whose file symbol is `name`, without
+/// unwind info (D-913).
+pub(crate) fn new_module(isa: OwnedTargetIsa, name: &str) -> Result<ObjectModule, LinkError> {
     let mut builder = ObjectBuilder::new(isa, name, isa::libcall_names()).map_err(object_error)?;
     // D-913: no unwind info; Cheby frames unwind by return flags (D-733).
     builder.unwind_info(false);
-    let mut module = ObjectModule::new(builder);
+    Ok(ObjectModule::new(builder))
+}
+
+/// Writes the object's bytes.
+pub(crate) fn emit(module: ObjectModule) -> Result<Vec<u8>, LinkError> {
+    module
+        .finish()
+        .emit()
+        .map_err(|e| LinkError::Object(e.to_string()))
+}
+
+/// Declares and defines every symbol of `record`, checked with
+/// [`check_record`], in `module`, in record order.
+pub(crate) fn replay_into(module: &mut ObjectModule, record: &CodeRecord) -> Result<(), LinkError> {
     // A declaration's signature reaches no object; one with the target's
     // default convention serves every function.
     let signature = module.make_signature();
@@ -123,10 +150,7 @@ pub fn replay(record: &CodeRecord, isa: OwnedTargetIsa, name: &str) -> Result<Ve
         }
         module.define_data(id, &desc).map_err(object_error)?;
     }
-    module
-        .finish()
-        .emit()
-        .map_err(|e| LinkError::Object(e.to_string()))
+    Ok(())
 }
 
 /// The relocation kinds `isa`'s architecture has in a record's text: the
@@ -181,6 +205,6 @@ fn check_target(record: &CodeRecord, isa: &OwnedTargetIsa) -> Result<(), LinkErr
     clippy::needless_pass_by_value,
     reason = "passed to `map_err`, which hands over the error"
 )]
-fn object_error(error: cranelift_module::ModuleError) -> LinkError {
+pub(crate) fn object_error(error: cranelift_module::ModuleError) -> LinkError {
     LinkError::Object(error.to_string())
 }

@@ -387,8 +387,10 @@ fn write_const_dump(
     write_dump(&dir.join("consts.txt"), &out)
 }
 
-/// One E0053 at the `@external` that names each unresolved symbol (D-532).
-fn unresolved(front: &Frontend, symbols: &[String]) -> Result<Vec<Diagnostic>, Ice> {
+/// One E0053 at the `@external` that names each unresolved symbol (D-532),
+/// for `cheby run` and, with D-943's build resolver, `cheby build`
+/// (`crate::aot`).
+pub(crate) fn unresolved(front: &Frontend, symbols: &[String]) -> Result<Vec<Diagnostic>, Ice> {
     symbols
         .iter()
         .map(|symbol| {
@@ -584,6 +586,22 @@ pub(crate) fn lower(
         reach,
         reads,
     })
+}
+
+/// What `main` reaches over the program [`lower`] walks, without D-482's
+/// hook roots: `cheby build` reads it to tell the code that only a type's
+/// `@std_hooks` bring into a build (GAP(aot-layouts-not-yet)).
+///
+/// # Errors
+///
+/// An [`Ice`] if a module of the build order was not checked, or a body
+/// refers to an expression it does not have.
+pub(crate) fn reach_without_hooks(front: &Frontend, main: &thir::FnDef) -> Result<Reach, Ice> {
+    let mut program = Program::new();
+    for &module in &front.order {
+        program.insert(module, &checked(front, module)?.thir);
+    }
+    cheby_mir::reach::reachable(&program, &[Root::Fn(main)])
 }
 
 /// An empty read log per module of `jobs` outside std (D-955); std

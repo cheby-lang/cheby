@@ -1,21 +1,25 @@
 # cheby_link
 
-AOT object output, and in M3's later waves linker invocation. It replays the code records that `cheby_codegen_clif` captures (D-914) into relocatable objects (D-915); with N4 it will add the program object, link the objects with the runtime archive (`cheby_rt_exe`, D-929) and give `cheby build` its executable.
+AOT object output and linking: what `cheby build` does after code generation. It replays the code records that `cheby_codegen_clif` captures (D-914) into relocatable objects (D-915), writes the program object, finds and checks the runtime archive (`cheby_rt_exe`, D-929, D-930), and links everything into an executable with `cc` (D-933).
 
 ## Place in the pipeline
 
-`cheby_link` depends on `cheby_codegen_clif`, whose single lowering serves the JIT, AOT and constant evaluation (architecture §2.6), and on `cranelift-object` at the workspace's Cranelift version (D-1036). Only `cheby_driver` depends on it. Its Cranelift crates have their default features only: an architecture feature here would reach `cheby` through `cheby_driver`, and M3 builds for the host only (D-936).
+`cheby_link` depends on `cheby_codegen_clif`, whose single lowering serves the JIT, AOT and constant evaluation (architecture §2.6), on `cheby_runtime` for the image's layout and the runtime ID, and on `cranelift-object`, `cranelift-frontend` and `object` at the workspace's versions (D-1036). `cheby_driver` (`cheby build`) and `xtask` (`check-native-libs`) depend on it. Its Cranelift crates have their default features only: an architecture feature here would reach `cheby` through `cheby_driver`, and M3 builds for the host only (D-936).
 
 ## What it holds
 
 - `object::replay(record, isa, name)`: one code record into one ELF (Linux targets) or Mach-O (macOS) object. Every symbol keeps its recorded name and linkage, local ones included: `Local` is a local symbol, `Hidden` a global hidden one (ELF `STV_HIDDEN`, Mach-O private extern, D-917), `Import` an undefined one. Functions are defined with `define_function_bytes` and data with `define_data`, in record order, so the bytes depend only on the record, the ISA and `name`, the module path (D-264). Unwind info is off (D-913, D-733). Replay checks the record first, and refuses a relocation of another architecture or a format other than ELF and Mach-O (COFF is M6's, D-935), so it never panics on a record.
-- `LinkError`: a malformed record, or an object `cranelift-object` refuses.
+- `program::program_object(isa, spec, entries)`: the one object of a link that belongs to the program, never cached (D-964): the entries unit's record replayed with every definition local (GAP(aot-entries-in-program-object)), `cb$image` in the layout of `cheby_runtime::image`, the C `main` that returns `cheby_rt_main(argc, argv, &cb$image)` and is the only exported symbol (D-917, D-925), and an import of the runtime ID's symbol `cheby_rt_id$<hex>` (D-930). Text holds only PC-relative relocations (D-913).
+- `archive::find_archive` and `archive::check_runtime_id`: `libcheby_rt_exe.a` next to the running `cheby`, or where `CHEBY_RT_ARCHIVE` says, and its symbol index must define this compiler's runtime ID. A missing or stale archive is a tool error that names `cargo build -p cheby_rt_exe` (D-929, D-930): `cheby build` needs the archive, and `cargo test` does not build it.
+- `link::link(job)`: `cc` from `PATH` with `CC`, `LD`, `CFLAGS`, `LDFLAGS` and `MACOSX_DEPLOYMENT_TARGET` removed, fixed flags per platform, the module objects in build order, then the program object, the archive and its system libraries; the output is written under its final basename in a private directory inside the output directory and renamed into place (D-933, D-934, GAP(aot-link-line)). `link::check_copies` is D-918's check that local copies of one name agree, which debug toolchains run before linking.
+- `native_libs`: the archive's system libraries per target, each with the file the loader opens for it, and the macOS minimum version (GAP(aot-native-libs)); `undefined` is the last step of E0053's build resolver (D-943). `cargo xtask check-native-libs` checks the list against `rustc --print native-static-libs`.
+- `LinkError`: a malformed record, an object `cranelift-object` refuses, or one of `cheby build`'s tool errors (GAP(aot-build-tool-errors)).
 
 The records themselves (`cheby_codegen_clif::record`: `RecordingModule`, `CodeRecord` and its encoding, `record_unit` with the module record `cb$mod$<path>`, D-919) live in `cheby_codegen_clif`, since the JIT loads them too (D-914).
 
 ## Status
 
-M3, wave 2: replay and its tests (`link_replay_*`: linkage in ELF and Mach-O of the host architecture, PC-relative text, `.note.GNU-stack`, byte-stable output, two units compiled alone that import from each other). Nothing writes a record or an object to disk yet: N4 replays records into objects and links 001, and the cache stores records with K4c. See [`docs/plan/m3-aot-and-cache.md`](../../docs/plan/m3-aot-and-cache.md).
+M3, wave 3: `cheby build` links executables on macOS arm64 and Linux (D-935), from in-memory records; the cache stores records with K4c, and `cheby build` reads them with N9. Tests: `link_replay_*` (replay; Mach-O on aarch64 hosts only, D-892) and `link_program_*` (the program object read back with `object`, and a link against a stub archive without the runtime ID that fails). See [`docs/plan/m3-aot-and-cache.md`](../../docs/plan/m3-aot-and-cache.md).
 
 ## Read more
 

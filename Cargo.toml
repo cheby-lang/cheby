@@ -135,6 +135,9 @@ opt-level = 3
 [profile.dev.package.cranelift-native]
 opt-level = 3
 
+[profile.dev.package.cranelift-object]
+opt-level = 3
+
 [profile.dev.package.regalloc2]
 opt-level = 3
 

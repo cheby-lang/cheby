@@ -11,12 +11,19 @@
 //!    names the front end's hidden reads `R` as sorted module paths
 //!    ([`encode_hint`]). The front identity `F2` ([`front_identity`])
 //!    extends `F1` with each read's path and interface hash, and the front
-//!    record lies under `F2` ([`FrontRecord`]).
+//!    record lies under `F2` ([`FrontRecord`]). No hint is written for
+//!    empty reads, and a missing hint reads as the empty set: a lost
+//!    non-empty hint only causes a miss (GAP(hint-empty-omitted)).
 //!
 //! The record holds the interface hash, the blob names of the interface
 //! artifact (D-953) and of the module's structured diagnostics
-//! ([`super::replay`]), its imports, its native externals and its hidden
-//! reads. Nothing in a key, a record or a blob holds an absolute path, a
+//! ([`super::replay`]), its imports, its native externals, its hidden
+//! reads, and its summaries: what each function, constant, type's hooks
+//! and test mentions ([`ReferenceSummary`], D-967) and the package items
+//! the module uses with its own W0005 candidates ([`UseSummary`], D-516,
+//! D-965). A record ends with the SipHash-1-3 128 of its bytes, so a
+//! damaged one is a miss (D-960). Nothing in a key, a record or a blob
+//! holds an absolute path, a
 //! `ModuleId`, a `FileId` or an interning number (D-264): modules are
 //! named by their paths, and spans by byte ranges in the module's own file.
 //! Std modules get no record: the build ID fixes std until K6 (D-955).
@@ -27,8 +34,93 @@ use cheby_package::{Target, Targets};
 use super::wire::{Reader, Writer};
 use super::{BuildId, Hash128, Key, KeyKind};
 
-/// The version of the record's and the hint's encodings.
-const VERSION: u8 = 1;
+/// The version of the record's and the hint's encodings: 2 since records
+/// hold summaries (D-965, D-967).
+const VERSION: u8 = 2;
+
+/// An item named by its module's path and its name, as summaries name
+/// items (D-967): a top-level item by its name, a constructor or an
+/// interface function as `Parent::name`, a test by its string.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ItemRef {
+    /// The module's path, such as `app::shapes`.
+    pub module: String,
+    /// The item's name within the module.
+    pub item: String,
+}
+
+/// What kind of item a [`ReferenceSummary`] is about.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum MentionerKind {
+    /// A function.
+    Function,
+    /// A constant.
+    Constant,
+    /// A type's hooks (D-342): `item` is the type, and it mentions the
+    /// functions its `@std_hooks` names.
+    Hook,
+    /// A test.
+    Test,
+}
+
+impl MentionerKind {
+    const fn tag(self) -> u8 {
+        match self {
+            Self::Function => 0,
+            Self::Constant => 1,
+            Self::Hook => 2,
+            Self::Test => 3,
+        }
+    }
+
+    const fn of_tag(tag: u8) -> Option<Self> {
+        Some(match tag {
+            0 => Self::Function,
+            1 => Self::Constant,
+            2 => Self::Hook,
+            3 => Self::Test,
+            _ => return None,
+        })
+    }
+}
+
+/// What one function, constant, hook or test mentions: functions,
+/// constants, dictionary functions and constructors, sorted and without
+/// repeats (D-967).
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ReferenceSummary {
+    /// The mentioning item's name in its module.
+    pub item: String,
+    /// What it is.
+    pub kind: MentionerKind,
+    /// What it mentions.
+    pub mentions: Vec<ItemRef>,
+}
+
+/// A package-visible item of the module that W0005 may report (D-516): its
+/// name, the word for its kind, and its name's byte range in the module's
+/// own file.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct UnusedCandidate {
+    /// The item's name.
+    pub item: String,
+    /// The word for its kind, such as `function`.
+    pub kind: String,
+    /// Its name's span in the module's own file, as start and length.
+    pub span: (u32, u32),
+}
+
+/// The package-visible items of the package that the module uses outside
+/// their own declarations, tests included, and the module's own
+/// package-visible items that W0005 may report (D-516, D-965): what the
+/// whole-package pass reads of a module it did not check.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub struct UseSummary {
+    /// The items used, sorted, without repeats.
+    pub uses: Vec<ItemRef>,
+    /// The module's candidates, in item order.
+    pub candidates: Vec<UnusedCandidate>,
+}
 
 /// One import of a module, as its front key and record hold it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -159,6 +251,10 @@ pub struct FrontRecord {
     pub externals: Vec<External>,
     /// The front end's hidden reads, sorted paths, as in `F2`.
     pub reads: Vec<String>,
+    /// The module's reference summary, sorted by item and kind (D-967).
+    pub references: Vec<ReferenceSummary>,
+    /// The module's use summary (D-516, D-965).
+    pub uses: UseSummary,
 }
 
 impl FrontRecord {
@@ -167,6 +263,13 @@ impl FrontRecord {
     pub fn encode(&self) -> Vec<u8> {
         let mut w = Writer::new();
         w.u8(VERSION);
+        self.encode_into(&mut w);
+        sealed(w.finish())
+    }
+
+    /// The record's fields, without the version (the package index holds
+    /// records inline).
+    pub(crate) fn encode_into(&self, w: &mut Writer) {
         w.raw(&self.interface.0);
         w.raw(&self.artifact.0);
         w.raw(&self.diagnostics.0);
@@ -196,16 +299,35 @@ impl FrontRecord {
         for path in &self.reads {
             w.str(path);
         }
-        w.finish()
+        w.len(self.references.len());
+        for summary in &self.references {
+            w.str(&summary.item);
+            w.u8(summary.kind.tag());
+            write_items(w, &summary.mentions);
+        }
+        write_items(w, &self.uses.uses);
+        w.len(self.uses.candidates.len());
+        for c in &self.uses.candidates {
+            w.str(&c.item);
+            w.str(&c.kind);
+            w.u32(c.span.0);
+            w.u32(c.span.1);
+        }
     }
 
     /// The record of a payload, or `None` when it is malformed.
     #[must_use]
     pub fn decode(bytes: &[u8]) -> Option<Self> {
-        let mut r = Reader::new(bytes);
+        let mut r = Reader::new(unsealed(bytes)?);
         if r.u8()? != VERSION {
             return None;
         }
+        let record = Self::decode_from(&mut r)?;
+        r.is_done().then_some(record)
+    }
+
+    /// The record's fields, as [`FrontRecord::encode_into`] wrote them.
+    pub(crate) fn decode_from(r: &mut Reader<'_>) -> Option<Self> {
         let interface = Hash128(r.array16()?);
         let artifact = Hash128(r.array16()?);
         let diagnostics = Hash128(r.array16()?);
@@ -239,15 +361,81 @@ impl FrontRecord {
         for _ in 0..r.len()? {
             reads.push(r.str()?.to_owned());
         }
-        r.is_done().then_some(Self {
+        let mut references = Vec::new();
+        for _ in 0..r.len()? {
+            let item = r.str()?.to_owned();
+            let kind = MentionerKind::of_tag(r.u8()?)?;
+            let mentions = read_items(r)?;
+            references.push(ReferenceSummary {
+                item,
+                kind,
+                mentions,
+            });
+        }
+        let uses = read_items(r)?;
+        let mut candidates = Vec::new();
+        for _ in 0..r.len()? {
+            candidates.push(UnusedCandidate {
+                item: r.str()?.to_owned(),
+                kind: r.str()?.to_owned(),
+                span: (r.u32()?, r.u32()?),
+            });
+        }
+        Some(Self {
             interface,
             artifact,
             diagnostics,
             imports,
             externals,
             reads,
+            references,
+            uses: UseSummary { uses, candidates },
         })
     }
+
+    /// Whether the module holds a constant: its summary has one (D-534).
+    #[must_use]
+    pub fn holds_constant(&self) -> bool {
+        self.references
+            .iter()
+            .any(|s| s.kind == MentionerKind::Constant)
+    }
+}
+
+/// `payload` followed by its SipHash-1-3 128: a record or an index that a
+/// damaged byte would still let decode reads as a miss (D-960), since
+/// unlike a blob it is not named by its hash.
+pub(crate) fn sealed(mut payload: Vec<u8>) -> Vec<u8> {
+    let seal = Hash128::of(&payload);
+    payload.extend_from_slice(&seal.0);
+    payload
+}
+
+/// The payload [`sealed`] sealed, or `None` when the seal does not match.
+pub(crate) fn unsealed(bytes: &[u8]) -> Option<&[u8]> {
+    let (payload, seal) = bytes.split_at_checked(bytes.len().checked_sub(16)?)?;
+    (Hash128::of(payload).0 == *seal).then_some(payload)
+}
+
+/// Writes a list of items as module and name pairs.
+fn write_items(w: &mut Writer, items: &[ItemRef]) {
+    w.len(items.len());
+    for item in items {
+        w.str(&item.module);
+        w.str(&item.item);
+    }
+}
+
+/// Reads what [`write_items`] wrote.
+fn read_items(r: &mut Reader<'_>) -> Option<Vec<ItemRef>> {
+    let mut out = Vec::new();
+    for _ in 0..r.len()? {
+        out.push(ItemRef {
+            module: r.str()?.to_owned(),
+            item: r.str()?.to_owned(),
+        });
+    }
+    Some(out)
 }
 
 /// A C type's byte in a record.

@@ -17,6 +17,7 @@
 //! The same checks run over the UI test sources without a grammar error.
 //! The test only reads the repository.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -346,6 +347,362 @@ fn fmt_corpus_coverage() {
         ui.verbatim_items,
         ui.verbatim.values().sum::<u64>()
     );
+}
+
+/// What a source parses to, trivia aside: its significant tokens, its node
+/// kinds in preorder, and how many diagnostics validation reports.
+#[derive(PartialEq, Eq)]
+struct Parsed {
+    tokens: Vec<String>,
+    kinds: Vec<SyntaxKind>,
+    diagnostics: usize,
+}
+
+fn parsed(text: &str) -> Option<Parsed> {
+    let tree = parse_clean(text).ok()?;
+    Some(Parsed {
+        tokens: tree
+            .root()
+            .tokens()
+            .filter(|t| is_significant(t.kind()))
+            .map(|t| t.text().to_owned())
+            .collect(),
+        kinds: tree.root().descendants().map(SyntaxNode::kind).collect(),
+        diagnostics: cheby_syntax::validate(&tree).len(),
+    })
+}
+
+/// A place where the corpus test injects a comment: at the end of line
+/// `line`, or on a line of its own before it.
+#[derive(Clone, Copy)]
+enum Point {
+    End(usize),
+    Before(usize),
+}
+
+/// `text` with a comment at each of `points`: `// eN` at the end of line
+/// `N`, and `// bN` on a line of its own before it.
+fn inject(text: &str, points: &[Point]) -> String {
+    let lines: Vec<&str> = text.split('\n').collect();
+    let mut ends = vec![false; lines.len()];
+    let mut befores = vec![false; lines.len()];
+    for point in points {
+        let slot = match *point {
+            Point::End(n) => ends.get_mut(n),
+            Point::Before(n) => befores.get_mut(n),
+        };
+        if let Some(slot) = slot {
+            *slot = true;
+        }
+    }
+    let mut out = String::with_capacity(text.len().saturating_mul(2));
+    for (n, line) in lines.iter().enumerate() {
+        if n > 0 {
+            out.push('\n');
+        }
+        if befores.get(n).copied().unwrap_or(false) {
+            out.push_str("// b");
+            out.push_str(&n.to_string());
+            out.push('\n');
+        }
+        if ends.get(n).copied().unwrap_or(false) {
+            let (body, cr) = line
+                .strip_suffix('\r')
+                .map_or((*line, ""), |body| (body, "\r"));
+            out.push_str(body);
+            out.push_str(" // e");
+            out.push_str(&n.to_string());
+            out.push_str(cr);
+        } else {
+            out.push_str(line);
+        }
+    }
+    out
+}
+
+/// A source with comments injected everywhere they keep its parse.
+struct Injected {
+    text: String,
+    /// Points: two per line.
+    points: usize,
+    /// Points left after those skipped up front, and tried.
+    tried: usize,
+    /// Points where a comment was injected.
+    kept: usize,
+}
+
+/// Injects a comment at the end of every line and on a line of its own
+/// before every line of `text`, at each point where the result parses to
+/// the same tokens and node kinds, trivia aside, with as many validation
+/// diagnostics. Points inside a string literal, and the end of a line that
+/// already ends with a comment (which would only lengthen it), are skipped
+/// up front; the others are tried together, and a group that changes the
+/// parse is split until each point that does is skipped.
+#[expect(
+    clippy::unwrap_used,
+    reason = "a test helper: the corpus sources parse"
+)]
+fn inject_everywhere(text: &str) -> Injected {
+    let tree = parse_clean(text).unwrap();
+    let original = parsed(text).unwrap();
+    let breaks: Vec<usize> = text.match_indices('\n').map(|(i, _)| i).collect();
+    // The last segment is a line only if it holds something.
+    let count = if text.is_empty() || text.ends_with('\n') {
+        breaks.len()
+    } else {
+        breaks.len().saturating_add(1)
+    };
+    // The line that holds byte `offset`.
+    let line_of = |offset: usize| breaks.partition_point(|&b| b < offset);
+    // Lines that end inside a string, with a comment, and with a doc
+    // comment, and lines that hold a token.
+    let mut ends_in_string = vec![false; count.saturating_add(1)];
+    let mut ends_in_comment = vec![false; count.saturating_add(1)];
+    let mut ends_in_doc = vec![false; count.saturating_add(1)];
+    let mut has_token = vec![false; count.saturating_add(1)];
+    for token in tree.root().tokens() {
+        if token.kind() == SyntaxKind::NEWLINE {
+            continue;
+        }
+        let start = usize::try_from(token.text_range().start()).unwrap();
+        for (i, c) in token.text().char_indices() {
+            if c == '\n'
+                && let Some(slot) = ends_in_string.get_mut(line_of(start.saturating_add(i)))
+            {
+                *slot = true;
+            }
+        }
+        let line = line_of(start);
+        if token.kind() != SyntaxKind::WHITESPACE
+            && let Some(slot) = has_token.get_mut(line)
+        {
+            *slot = true;
+        }
+        if matches!(
+            token.kind(),
+            SyntaxKind::COMMENT | SyntaxKind::DOC_COMMENT | SyntaxKind::MODULE_DOC
+        ) && let Some(slot) = ends_in_comment.get_mut(line)
+        {
+            *slot = true;
+        }
+        if token.kind() == SyntaxKind::DOC_COMMENT
+            && let Some(slot) = ends_in_doc.get_mut(line)
+        {
+            *slot = true;
+        }
+    }
+    let flag = |flags: &[bool], n: usize| flags.get(n).copied().unwrap_or(false);
+    let mut candidates = Vec::new();
+    // The last line before this one that holds a token.
+    let mut last_full: Option<usize> = None;
+    for n in 0..count {
+        let starts_in_string = n.checked_sub(1).is_some_and(|p| flag(&ends_in_string, p));
+        // A comment line after a `///` comment would part it from what it
+        // documents (§2.2), and the corpus check would only skip it.
+        let after_doc = last_full.is_some_and(|p| flag(&ends_in_doc, p));
+        if !starts_in_string && !after_doc {
+            candidates.push(Point::Before(n));
+        }
+        if flag(&has_token, n) {
+            last_full = Some(n);
+        }
+        if !flag(&ends_in_string, n) && !flag(&ends_in_comment, n) {
+            candidates.push(Point::End(n));
+        }
+    }
+    let mut kept = Vec::new();
+    keep_points(text, &original, &mut kept, &candidates);
+    Injected {
+        text: inject(text, &kept),
+        points: count.saturating_mul(2),
+        tried: candidates.len(),
+        kept: kept.len(),
+    }
+}
+
+/// Adds to `kept` the points of `group` whose comments keep `original`'s
+/// parse, trying the whole group first and halving it on failure.
+fn keep_points(text: &str, original: &Parsed, kept: &mut Vec<Point>, group: &[Point]) {
+    if group.is_empty() {
+        return;
+    }
+    let mut trial = kept.clone();
+    trial.extend_from_slice(group);
+    if parsed(&inject(text, &trial)).as_ref() == Some(original) {
+        *kept = trial;
+        return;
+    }
+    if group.len() == 1 {
+        return;
+    }
+    let (left, right) = group.split_at(group.len().div_ceil(2));
+    keep_points(text, original, kept, left);
+    keep_points(text, original, kept, right);
+}
+
+/// The node counts the printer may print verbatim in `text`, by rule: a
+/// gap between a unary `-` and a number (D-470, GAP(fmt-negative-literal-gap))
+/// and an attribute with no item after it (a top-level `ERROR` node), with
+/// everything inside them; and the number of such top-level nodes.
+#[expect(
+    clippy::unwrap_used,
+    reason = "a test helper: the corpus sources parse"
+)]
+fn verbatim_by_rule(text: &str) -> (BTreeMap<SyntaxKind, u64>, u64) {
+    let tree = parse_clean(text).unwrap();
+    let mut counts: BTreeMap<SyntaxKind, u64> = BTreeMap::new();
+    let mut items = 0u64;
+    let mut add = |node: SyntaxNode<'_>| {
+        for d in node.descendants() {
+            let slot = counts.entry(d.kind()).or_insert(0);
+            *slot = slot.saturating_add(1);
+        }
+    };
+    for node in tree.root().children() {
+        if node.kind() == SyntaxKind::ERROR {
+            items = items.saturating_add(1);
+            add(node);
+        }
+    }
+    for node in tree.root().descendants() {
+        if !matches!(
+            node.kind(),
+            SyntaxKind::PREFIX_EXPR | SyntaxKind::LITERAL_PAT
+        ) || node.ancestors().any(|a| a.kind() == SyntaxKind::ERROR)
+        {
+            continue;
+        }
+        let mut parts = node.children_with_tokens();
+        let minus = parts.next().is_some_and(|c| c.kind() == SyntaxKind::MINUS);
+        let mut gap = false;
+        let mut number = false;
+        for part in parts {
+            match part.kind() {
+                SyntaxKind::WHITESPACE | SyntaxKind::NEWLINE => gap = true,
+                kind if kind.is_trivia() => gap = true,
+                SyntaxKind::INT_NUMBER | SyntaxKind::FLOAT_NUMBER => number = true,
+                SyntaxKind::LITERAL => {
+                    number = part
+                        .as_node()
+                        .and_then(SyntaxNode::first_token)
+                        .is_some_and(|t| {
+                            matches!(t.kind(), SyntaxKind::INT_NUMBER | SyntaxKind::FLOAT_NUMBER)
+                        });
+                }
+                _ => {}
+            }
+        }
+        if minus && gap && number {
+            add(node);
+        }
+    }
+    (counts, items)
+}
+
+/// Checks that the printer lays out every node of `text` but those
+/// [`verbatim_by_rule`] allows.
+fn check_no_fallback(text: &str, total: &mut Coverage) -> Result<(), String> {
+    let c = coverage(text, cheby_fmt::PROVISIONAL_WIDTH).map_err(|e| e.to_string())?;
+    total.add(&c);
+    let (allowed, items) = verbatim_by_rule(text);
+    if c.verbatim != allowed || c.verbatim_items != items {
+        return Err(format!(
+            "verbatim nodes {:?} and {} item(s), where the rules allow {:?} and {items}",
+            c.verbatim, c.verbatim_items, allowed
+        ));
+    }
+    Ok(())
+}
+
+/// The corpus with comments everywhere (D-1031, GAP(fmt-comment-positions)):
+/// every example, std and UI source, with a comment at the end of every
+/// line and a comment line before every line, wherever that keeps the
+/// parse, formats at 80, 100 and 120 columns with no error, a second pass
+/// changing nothing, the tokens, node kinds and comment texts kept, and
+/// no node printed verbatim but by rule. The plain sources are held to the
+/// last rule too. Copies in memory only: nothing is written.
+#[test]
+fn fmt_corpus_comments_everywhere() {
+    let root = repo_root();
+    let mut files = corpus(&root);
+    for path in files_with_extension(&root.join("tests/ui"), "cheby").unwrap() {
+        if std::fs::read_to_string(&path).is_ok_and(|t| parse_clean(&t).is_ok()) {
+            files.push(path);
+        }
+    }
+    let (mut points, mut tried, mut injected) = (0usize, 0usize, 0usize);
+    let mut injecting = std::time::Duration::ZERO;
+    let mut failures = Vec::new();
+    let (mut plain, mut commented_total) = (Coverage::default(), Coverage::default());
+    let mut holders: BTreeMap<SyntaxKind, u64> = BTreeMap::new();
+    for path in &files {
+        let name = display_relative(path, &root);
+        let text = std::fs::read_to_string(path).unwrap();
+        if let Err(e) = check_no_fallback(&text, &mut plain) {
+            failures.push(format!("{name}: {e}"));
+        }
+        let started = std::time::Instant::now();
+        let commented = inject_everywhere(&text);
+        injecting = injecting.saturating_add(started.elapsed());
+        points = points.saturating_add(commented.points);
+        injected = injected.saturating_add(commented.kept);
+        tried = tried.saturating_add(commented.tried);
+        for width in WIDTHS {
+            if let Err(e) = check(&commented.text, width) {
+                failures.push(format!("{name} with comments at {width}: {e}"));
+            }
+        }
+        if let Err(e) = check_no_fallback(&commented.text, &mut commented_total) {
+            failures.push(format!("{name} with comments: {e}"));
+        }
+        // Where the comments landed: the kind of the node that holds each.
+        if let Ok(tree) = parse_clean(&commented.text) {
+            for token in tree.root().tokens() {
+                if token.kind() == SyntaxKind::COMMENT
+                    && let Some(parent) = token.parent()
+                {
+                    let slot = holders.entry(parent.kind()).or_insert(0u64);
+                    *slot = slot.saturating_add(1);
+                }
+            }
+        }
+    }
+    let mut holders: Vec<_> = holders.into_iter().collect();
+    holders.sort_by_key(|&(kind, n)| (std::cmp::Reverse(n), kind));
+    println!(
+        "comments by the kind of the node that holds them: {:?}",
+        holders
+            .iter()
+            .map(|(k, n)| format!("{} {n}", k.name()))
+            .collect::<Vec<_>>()
+    );
+    for (what, c) in [("plain", &plain), ("with comments", &commented_total)] {
+        println!(
+            "verbatim, {what}: {} item(s), {} node(s) {:?}; laid out: {} node(s)",
+            c.verbatim_items,
+            c.verbatim.values().sum::<u64>(),
+            c.verbatim
+                .iter()
+                .map(|(k, n)| format!("{} {n}", k.name()))
+                .collect::<Vec<_>>(),
+            c.laid_out.values().sum::<u64>()
+        );
+    }
+    println!(
+        "comments everywhere: {} files, {points} points, {injected} comments injected, {} skipped ({} up front: in a string, after a comment, after a doc comment; {} that changed the parse), widths {WIDTHS:?}, {} failures (injecting took {:.1} s)",
+        files.len(),
+        points.saturating_sub(injected),
+        points.saturating_sub(tried),
+        tried.saturating_sub(injected),
+        failures.len(),
+        injecting.as_secs_f64()
+    );
+    assert!(files.len() > 900, "only {} files", files.len());
+    assert!(
+        injected > points / 2,
+        "only {injected} of {points} points injected"
+    );
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
 }
 
 /// How many lines of `before` are not kept unchanged in `after`: the lines

@@ -29,6 +29,12 @@ siphasher.workspace = true
 [build-dependencies]
 siphasher.workspace = true
 
+# `cheby_bench_gen`: K3b's warm check over a generated project; `object`: N4's
+# linkage test reads the program object's symbols (D-1036).
+[dev-dependencies]
+cheby_bench_gen.workspace = true
+object.workspace = true
+
 # The cache root's owner check (D-959).
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true

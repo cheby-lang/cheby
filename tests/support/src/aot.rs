@@ -24,8 +24,9 @@
 //! example's own otherwise ([`milestone`]). It runs in the serial group of
 //! a `timing` example (D-725, D-888), is never blessed and is ignored under
 //! `CHEBY_BLESS=1` (D-853), and is ignored on Windows until M6 (D-935). It
-//! never skips because the runtime archive is missing (D-929): before
-//! `cheby build` exists, the build's failure is the trial's result.
+//! never skips because the runtime archive is missing (D-929): a missing
+//! or stale archive is `cheby build`'s tool error, which is the trial's
+//! result, so `cargo build -p cheby_rt_exe` comes before the harnesses.
 //!
 //! The logic here takes the build and the runs as closures, so it is
 //! tested without `cheby`; the harnesses start the processes.

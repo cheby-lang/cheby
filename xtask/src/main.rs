@@ -6,7 +6,15 @@
 //!   trial has no goldens, so blessing only runs it.
 //! - `gen-bench`: generates a synthetic benchmark project.
 //! - `check-determinism`: checks that outputs are the same byte for byte
-//!   from different paths (D-264).
+//!   from different paths (D-264), executables of `cheby build` included
+//!   (D-934).
+//! - `check-native-libs`: checks the runtime archive's system-library list
+//!   in `cheby_link` against `rustc --print native-static-libs` and opens
+//!   each recorded file (D-933, D-943).
+//!
+//! The commands that build `cheby` ([`build_cheby`]) build the runtime
+//! archive `libcheby_rt_exe.a` in the same cargo invocation, since
+//! `cheby build` links it (D-929).
 //! - `coverage`: lists decisions cited in the spec that no UI test or REPL
 //!   transcript names, reading `@decisions` from each test's header
 //!   (`src/main.cheby` of a package test) and from each transcript's
@@ -42,6 +50,7 @@ mod cache;
 mod cross_check;
 mod determinism;
 mod examples;
+mod native_libs;
 mod sanitize;
 
 use std::num::NonZeroUsize;
@@ -99,6 +108,10 @@ enum Cmd {
     /// Run `cheby check` in every example and compare with the expected
     /// outcome
     CheckExamples,
+    /// Check the runtime archive's system-library list against
+    /// `rustc --print native-static-libs` and open each recorded file
+    /// (D-933, D-943)
+    CheckNativeLibs,
     /// List decisions cited in the spec that no UI test names
     Coverage,
     /// Parse examples and UI tests with tree-sitter-cheby at the pinned
@@ -145,6 +158,7 @@ fn main() -> ExitCode {
             determinism::run(&root, lines, filter.as_deref())
         }
         Cmd::CheckExamples => examples::run(&root),
+        Cmd::CheckNativeLibs => native_libs::run(&root),
         Cmd::Coverage => coverage(&root),
         Cmd::CrossCheck(args) => cross_check::run(&root, &args),
         Cmd::TestStd { filter } => test_std(filter.as_deref()),
@@ -261,12 +275,21 @@ fn build_cheby(root: &Path) -> Result<PathBuf, String> {
     build_cheby_profile(root, !cfg!(debug_assertions))
 }
 
-/// Builds `cheby`, optimized if `release`, and returns its path.
+/// Builds `cheby`, optimized if `release`, and returns its path. The same
+/// cargo invocation builds the runtime archive `libcheby_rt_exe.a` next to
+/// it, which `cheby build` links (D-929), so the archive never lags behind
+/// the binary.
 fn build_cheby_profile(root: &Path, release: bool) -> Result<PathBuf, String> {
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
     let mut cmd = Command::new(cargo);
-    cmd.current_dir(root)
-        .args(["build", "--quiet", "--package", "cheby_cli"]);
+    cmd.current_dir(root).args([
+        "build",
+        "--quiet",
+        "--package",
+        "cheby_cli",
+        "--package",
+        "cheby_rt_exe",
+    ]);
     if release {
         cmd.arg("--release");
     }

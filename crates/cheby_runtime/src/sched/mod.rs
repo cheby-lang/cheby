@@ -39,6 +39,7 @@ pub(crate) mod blocking;
 mod deadlock;
 mod fiber;
 mod idle;
+pub(crate) mod io;
 mod lifecycle;
 mod monitor;
 mod park;
@@ -268,8 +269,8 @@ pub(crate) struct Shared {
     /// and the deadlock detector reads them (`deadlock::RootEntry`). A
     /// leaf lock: entries are copied out under it and used after it.
     roots: Mutex<Vec<Arc<RootEntry>>>,
-    /// Each domain's pending timers and pool jobs (D-857,
-    /// `deadlock::DomainTable`).
+    /// Each domain's pending timers, pool jobs and armed IO waits (D-857,
+    /// D-984, `deadlock::DomainTable`).
     domains: DomainTable,
     /// The next root number.
     next_root: AtomicU64,
@@ -335,6 +336,8 @@ impl Shared {
     /// termination) and from the host, with no runtime lock held.
     pub(crate) fn begin_halt(&self) {
         self.halting.store(true, Ordering::SeqCst);
+        // No socket event wakes a fiber from now on, as no timer fires.
+        self.driver.halt();
         self.request_safepoints();
         self.wake_idle();
         self.monitor.stop();
@@ -1445,6 +1448,10 @@ impl Drop for Runtime {
 mod deadlock_models;
 #[cfg(test)]
 mod deadlock_tests;
+#[cfg(test)]
+mod io_models;
+#[cfg(test)]
+mod io_tests;
 #[cfg(test)]
 mod lifecycle_tests;
 #[cfg(test)]

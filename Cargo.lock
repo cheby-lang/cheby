@@ -204,6 +204,7 @@ dependencies = [
  "clap",
  "libtest-mimic",
  "mimalloc",
+ "object",
  "siphasher",
 ]
 
@@ -253,6 +254,7 @@ dependencies = [
 name = "cheby_driver"
 version = "0.0.0"
 dependencies = [
+ "cheby_bench_gen",
  "cheby_codegen_clif",
  "cheby_consteval",
  "cheby_diag",
@@ -267,6 +269,7 @@ dependencies = [
  "cheby_syntax",
  "cheby_types",
  "libc",
+ "object",
  "rayon",
  "rustc-hash",
  "siphasher",
@@ -324,9 +327,12 @@ dependencies = [
  "cheby_diag",
  "cheby_iface",
  "cheby_mir",
+ "cheby_runtime",
  "cranelift-codegen",
+ "cranelift-frontend",
  "cranelift-module",
  "cranelift-object",
+ "libc",
  "object",
 ]
 
@@ -1818,6 +1824,7 @@ dependencies = [
  "cheby_bench_gen",
  "cheby_diag",
  "cheby_driver",
+ "cheby_link",
  "cheby_syntax",
  "cheby_test_support",
  "clap",

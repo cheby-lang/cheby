@@ -119,12 +119,19 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: ./.github/actions/c-compiler
       - run: cargo build --workspace --all-targets --locked
+      # `cheby build` links the runtime archive next to `cheby`, which
+      # `cargo test` does not build (D-929).
+      - name: The runtime archive
+        run: cargo build -p cheby_rt_exe --locked
       - run: cargo clippy --workspace --all-targets --locked
       - run: cargo test --workspace --locked --no-fail-fast
         env:
           CHEBY_HARNESS_SCALE: ${{ matrix.scale || 1 }}
       - name: D-number coverage
         run: cargo xtask coverage
+      - name: The runtime archive's system libraries
+        if: runner.os != 'Windows'
+        run: cargo xtask check-native-libs
 
   fmt:
     runs-on: ubuntu-24.04
@@ -171,6 +178,9 @@ jobs:
           toolchain: "1.99.0"
       - uses: Swatinem/rust-cache@v2
       - uses: ./.github/actions/c-compiler
+      # The UI run builds executables (`@command: build`, D-929).
+      - name: The runtime archive
+        run: cargo build -p cheby_rt_exe --locked
       - name: UI tests under naive reference counting
         run: CHEBY_RC=naive cargo test -p cheby_cli --test ui
       - name: The standard library's tests under naive reference counting
@@ -192,6 +202,10 @@ jobs:
           toolchain: "1.99.0"
       - uses: Swatinem/rust-cache@v2
       - uses: ./.github/actions/c-compiler
+      # `check-determinism` builds executables (D-929, D-934); its own
+      # build of `cheby` builds the archive too.
+      - name: The runtime archive
+        run: cargo build -p cheby_rt_exe --locked
       - name: cheby check in every example
         run: cargo xtask check-examples
       - name: Deterministic builds across thread counts and paths

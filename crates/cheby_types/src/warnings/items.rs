@@ -23,7 +23,7 @@
 //! §2.3 exempts bindings whose names start with `_`, not items, so such
 //! items are reported like others (D-516).
 
-use cheby_diag::{Diagnostic, codes};
+use cheby_diag::{Diagnostic, Span, codes};
 use cheby_iface::{DefIndex, DefKind, ItemSig, ModuleId, ModuleInterface, PackageId, Vis};
 use cheby_resolve::Res;
 use rustc_hash::FxHashSet;
@@ -160,19 +160,74 @@ pub(super) fn unused_in_package(
             continue;
         };
         let name = input.globals.names.get(item.name);
-        out.push(
-            Diagnostic::new(
-                codes::UNUSED_PACKAGE_ITEM,
-                format!("the {kind} `{name}` is never used in this package"),
-            )
-            .with_primary(item.name_span, "no module of the package uses it")
-            .with_note(format!(
-                "without `pub`, only modules of this package can use the {kind}"
-            ))
-            .with_help(format!(
-                "remove the {kind}, use it, or make it `pub` if other packages should use it"
-            )),
-        );
+        out.push(unused_package_item(kind, name, item.name_span));
     }
+    out
+}
+
+/// The W0005 diagnostic of the package-visible `kind` `name` declared at
+/// `span` (its name), which no module of the package uses (D-152, D-516).
+pub(crate) fn unused_package_item(kind: &str, name: &str, span: Span) -> Diagnostic {
+    Diagnostic::new(
+        codes::UNUSED_PACKAGE_ITEM,
+        format!("the {kind} `{name}` is never used in this package"),
+    )
+    .with_primary(span, "no module of the package uses it")
+    .with_note(format!(
+        "without `pub`, only modules of this package can use the {kind}"
+    ))
+    .with_help(format!(
+        "remove the {kind}, use it, or make it `pub` if other packages should use it"
+    ))
+}
+
+/// The package-visible candidates of W0005 in module `input.module`: its
+/// top-level functions, constants, types, aliases and interfaces without
+/// `pub`, `main` and items whose signature failed excepted, each with its
+/// kind's word, its name and its name's span.
+pub(super) fn package_candidates(
+    input: &TypesInput<'_>,
+    own: &ModuleInterface,
+) -> Vec<(DefIndex, &'static str, cheby_iface::Name, Span)> {
+    candidates(input, own, Vis::Package)
+        .into_iter()
+        .filter_map(|(index, kind)| {
+            let item = input.resolved.item(index)?;
+            Some((index, kind, item.name, item.name_span))
+        })
+        .collect()
+}
+
+/// The top-level items of the local package that module `input.module`
+/// uses outside their own declarations (W0005's uses, D-516), as
+/// `(module, top-level item)`, sorted and without repeats. A reference
+/// into another module counts whatever item holds it; a reference to an
+/// item of the module itself counts unless the item's own signature or
+/// body holds it.
+pub(super) fn package_uses(input: &TypesInput<'_>, refs: &[ItemRef]) -> Vec<cheby_iface::DefId> {
+    let mut out: Vec<cheby_iface::DefId> = refs
+        .iter()
+        .filter(|r| {
+            input
+                .modules
+                .get(r.def.module)
+                .is_some_and(|info| info.package == PackageId::LOCAL)
+        })
+        .filter_map(|r| {
+            let top = if r.def.module == input.module {
+                top_level(input, r.def.index)
+            } else {
+                input
+                    .deps
+                    .item(r.def)
+                    .and_then(|item| item.parent)
+                    .unwrap_or(r.def.index)
+            };
+            let counts = r.def.module != input.module || r.owner != Some(top);
+            counts.then_some(cheby_iface::DefId::new(r.def.module, top))
+        })
+        .collect();
+    out.sort_unstable();
+    out.dedup();
     out
 }

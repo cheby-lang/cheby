@@ -11,12 +11,14 @@
 //! The formatter grows in parts (D-1029). The first part laid out the
 //! file's lines, imports and item headers (`layout`); the second lays out
 //! the expressions, statements, patterns and types below them
-//! (`expr`). A node with a comment or a blank line where its layout has
-//! no place for one is still printed verbatim, with its own line
-//! structure; the third part removes that fallback.
+//! (`expr`); the third gives every comment and blank line between two
+//! parts of a node its place (`gap`). Only a gap between a unary `-` and
+//! a number (D-470) and an attribute with no item after it are still
+//! printed verbatim, with their own line structure, by rule.
 
 pub mod doc;
 mod expr;
+mod gap;
 mod layout;
 mod source;
 
@@ -103,6 +105,8 @@ fn run(file: FileId, text: &str, width: usize) -> Result<(String, Coverage), For
     Ok((doc::print(&doc, width), formatter.coverage))
 }
 
+#[cfg(test)]
+mod comment_tests;
 #[cfg(test)]
 mod expr_tests;
 #[cfg(test)]

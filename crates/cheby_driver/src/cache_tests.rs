@@ -13,8 +13,10 @@ use cheby_iface::ModuleId;
 
 use super::*;
 use crate::cache::front::{
-    External, FrontKey, FrontRecord, ImportKey, decode_hint, encode_hint, front_identity, reads_key,
+    External, FrontKey, FrontRecord, ImportKey, ItemRef, MentionerKind, ReferenceSummary,
+    UnusedCandidate, UseSummary, decode_hint, encode_hint, front_identity, reads_key,
 };
+use crate::cache::index::{CommandFamily, PackageIndex};
 use crate::cache::replay::{self, SpanCx, StoredSpan};
 use crate::cache::{BuildId, CacheLog, Hash128, Store};
 use crate::frontend::Frontend;
@@ -103,10 +105,29 @@ impl Fixture {
     /// `cheby check` through the cache: the rendered output and the log's
     /// lines.
     fn check(&mut self) -> (String, Vec<String>) {
+        let run = self.check_counted();
+        (run.output, run.lookups)
+    }
+
+    /// `cheby check` through the cache, with what the driver counted and
+    /// the store's own counts of entry files opened and written.
+    fn check_counted(&mut self) -> Counted {
         let (cache, log) = self.open();
         let out = check_cached(self.dir(), &CheckOptions::default(), &cache).unwrap();
+        let opens = cache.store().opens();
+        let writes = cache.store().writes();
+        let parsed = cache.parsed_modules();
+        let checked = cache.checked_modules();
         cache.finish(true).unwrap();
-        (out.render(), lines(&log))
+        Counted {
+            output: out.render(),
+            lookups: lines(&log),
+            parses: parses(&log),
+            parsed,
+            checked,
+            opens,
+            writes,
+        }
     }
 
     /// The cacheless `cheby check`'s rendered output.
@@ -127,6 +148,26 @@ impl Fixture {
         out
     }
 
+    /// The key of the package's index for `family` (D-962).
+    fn index_key(&self, family: CommandFamily) -> cache::Key {
+        PackageIndex::key(self.dir(), family, BUILD)
+    }
+
+    /// The package's index for `family`, if one is stored and decodes.
+    fn index(&self, family: CommandFamily) -> Option<PackageIndex> {
+        let store = self.store();
+        PackageIndex::decode(&store.get_hint(&self.index_key(family)).unwrap()?)
+    }
+
+    /// Overwrites the package's index for `family` with bytes that are no
+    /// index, so the next command ignores it.
+    fn spoil_index(&self, family: CommandFamily, store: &Store) {
+        store
+            .put_hint(&self.index_key(family), b"not an index")
+            .unwrap();
+        store.flush();
+    }
+
     /// Every front record in the store.
     fn records(&self) -> Vec<FrontRecord> {
         self.files("rec")
@@ -136,10 +177,43 @@ impl Fixture {
     }
 }
 
+/// One `cheby check` through the cache, as [`Fixture::check_counted`]
+/// observed it.
+#[derive(Debug)]
+struct Counted {
+    /// The rendered output.
+    output: String,
+    /// The log's lookup lines.
+    lookups: Vec<String>,
+    /// The log's `parse` lines' modules.
+    parses: Vec<String>,
+    /// The driver's count of package modules parsed, sorted.
+    parsed: Vec<String>,
+    /// The driver's count of package modules checked, sorted.
+    checked: Vec<String>,
+    /// Entry files the store opened to read.
+    opens: usize,
+    /// Entry files the store wrote.
+    writes: usize,
+}
+
+/// The log's lookup lines (`front <module> hit|miss`).
 fn lines(log: &Path) -> Vec<String> {
     std::fs::read_to_string(log)
         .unwrap()
         .lines()
+        .filter(|line| line.starts_with("front "))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The package modules the log says the command parsed
+/// (GAP(cache-log-parses)), sorted.
+fn parses(log: &Path) -> Vec<String> {
+    std::fs::read_to_string(log)
+        .unwrap()
+        .lines()
+        .filter_map(|line| line.strip_prefix("parse "))
         .map(str::to_owned)
         .collect()
 }
@@ -245,13 +319,21 @@ fn front_key_of(front: &Frontend, path: &str, text: &str) -> cache::Key {
 )]
 fn cache_hit_second_run() {
     let mut f = several("second_run");
-    let (cold, log) = f.check();
-    assert_eq!(log, expect_log(&MODULES, &[]));
+    let first = f.check_counted();
+    let cold = first.output;
+    assert_eq!(first.lookups, expect_log(&MODULES, &[]));
+    assert_eq!(first.parses, MODULES);
+    assert_eq!(first.parsed, MODULES);
     assert!(cold.contains("W0002") && cold.contains("W0005"), "{cold}");
     assert_eq!(cold, f.cold_check());
-    let (warm, log) = f.check();
-    assert_eq!(log, expect_log(&MODULES, &MODULES));
-    assert_eq!(warm, cold);
+    // The second `cheby check` parses and checks no package module
+    // (D-962, D-967): the log and the driver's count agree.
+    let second = f.check_counted();
+    assert_eq!(second.lookups, expect_log(&MODULES, &MODULES));
+    assert_eq!(second.parses, Vec::<String>::new());
+    assert_eq!(second.parsed, Vec::<String>::new());
+    assert_eq!(second.checked, Vec::<String>::new());
+    assert_eq!(second.output, cold);
 
     let fresh = match prepare_run(f.dir(), RunOptions::default()).unwrap() {
         Prepared::Ready(program) => program.output().render(),
@@ -275,10 +357,10 @@ fn cache_hit_second_run() {
 /// yet; `.m3-work/wave2/answers.md` Q1): a diagnostic stored in `a`'s
 /// front record has a label on `b::target`; an edit moves `target` without
 /// changing `b`'s interface hash; `a` hits, and the replayed label lies on
-/// the span the fresh front end gives `target` now. A module with an error
-/// makes `cheby run` stop after the warm pass, which therefore prints the
-/// replayed diagnostic without checking `a` again (a check from source
-/// would not reproduce a synthetic diagnostic).
+/// the span the fresh front end gives `target` now. `cheby check` prints a
+/// hit's replayed diagnostics without checking it (a check from source
+/// would not reproduce a synthetic diagnostic); `b`, edited, is checked,
+/// and its fresh interface gives the span.
 #[test]
 fn cache_hit_moved_item() {
     const A: &str = "//! A.\n\nimport app::b\n\npub fn use_it() -> Int {\n  b::target()\n}\n";
@@ -301,14 +383,9 @@ fn cache_hit_moved_item() {
         ],
     );
     let all = ["app", "app::a", "app::b", "app::bad"];
-    let (cache, log) = f.open();
-    let Prepared::CompileFailed(_) =
-        prepare_run_cached(f.dir(), RunOptions::default(), &cache).unwrap()
-    else {
-        panic!("`bad` has an error");
-    };
-    cache.finish(false).unwrap();
-    assert_eq!(lines(&log), expect_log(&all, &[]));
+    let (first, log) = f.check();
+    assert!(first.contains("error["), "`bad` has an error: {first}");
+    assert_eq!(log, expect_log(&all, &[]));
 
     // The synthetic diagnostic, stored in `a`'s record.
     let (front, _) = front_of(f.dir());
@@ -327,16 +404,19 @@ fn cache_hit_moved_item() {
         set: &front.set,
         globals: &front.globals,
     };
-    let blob =
-        replay::encode_diagnostics(&[std::slice::from_ref(&synthetic), &[]], &span_cx).unwrap();
+    let blob = replay::encode_diagnostics(&[&[], std::slice::from_ref(&synthetic), &[]], &span_cx)
+        .unwrap();
     let store = f.store();
     let f1 = front_key_of(&front, "app::a", A);
-    let hint = decode_hint(&store.get_hint(&reads_key(f1, BUILD)).unwrap().unwrap()).unwrap();
-    assert!(hint.is_empty(), "{hint:?}");
+    // No hidden reads: no hint (GAP(hint-empty-omitted)).
+    assert_eq!(store.get_hint(&reads_key(f1, BUILD)).unwrap(), None);
     let f2 = front_identity(f1, BUILD, &[]);
     let mut record = FrontRecord::decode(&store.get_record(&f2).unwrap().unwrap()).unwrap();
     record.diagnostics = store.put_blob(&blob).unwrap();
     store.put_record(&f2, &record.encode()).unwrap();
+    // The package index holds the record inline and answers first (D-962):
+    // a bad index is ignored, so the record file answers.
+    f.spoil_index(CommandFamily::Check, &store);
     drop(store);
 
     // `target` moves; `b`'s interface hash does not change.
@@ -351,12 +431,10 @@ fn cache_hit_moved_item() {
     assert_ne!(new.range, old.range);
 
     let (cache, log) = f.open();
-    let prepared = prepare_run_cached(f.dir(), RunOptions::default(), &cache).unwrap();
+    let out = check_cached(f.dir(), &CheckOptions::default(), &cache).unwrap();
     cache.finish(false).unwrap();
     assert_eq!(lines(&log), expect_log(&all, &["app", "app::a"]));
-    let Prepared::CompileFailed(out) = prepared else {
-        panic!("`bad` has an error");
-    };
+    assert!(out.has_errors(), "`bad` has an error");
     let replayed = out
         .diagnostics
         .iter()
@@ -429,6 +507,25 @@ fn front_record_round_trip() {
             span: (10, 8),
         }],
         reads: vec!["app::c".to_owned()],
+        references: vec![ReferenceSummary {
+            item: "limit".to_owned(),
+            kind: MentionerKind::Constant,
+            mentions: vec![ItemRef {
+                module: "app::b".to_owned(),
+                item: "Shape::Square".to_owned(),
+            }],
+        }],
+        uses: UseSummary {
+            uses: vec![ItemRef {
+                module: "app::b".to_owned(),
+                item: "area".to_owned(),
+            }],
+            candidates: vec![UnusedCandidate {
+                item: "helper".to_owned(),
+                kind: "function".to_owned(),
+                span: (3, 6),
+            }],
+        },
     };
     let bytes = record.encode();
     assert_eq!(FrontRecord::decode(&bytes), Some(record));
@@ -547,8 +644,14 @@ fn front_error_writes_nothing() {
     assert_eq!(f.records().len(), MODULES.len());
 }
 
-/// A corrupted record, and then a corrupted interface artifact, are
-/// misses, and the next command writes them again (D-960).
+/// A corrupted record is a miss once the package index does not answer for
+/// it, and the next command writes it again (D-960, D-962). A corrupted
+/// interface artifact is read only when a checked module needs the
+/// interface (D-954): a warm check with no edit still hits everything and
+/// prints what a cold check prints; after an edit of the root, which needs
+/// `b`'s interface, the front end starts again, decodes every hit at its
+/// lookup, finds every artifact bad, and checks every module from source
+/// (GAP(package-index-shape)), printing what a cold check prints.
 #[test]
 fn front_corrupt_record_or_artifact_misses() {
     let mut f = several("corrupt");
@@ -559,6 +662,7 @@ fn front_corrupt_record_or_artifact_misses() {
         bytes[last] ^= 0xff;
         std::fs::write(&path, bytes).unwrap();
     }
+    f.spoil_index(CommandFamily::Check, &f.store());
     let (warm, log) = f.check();
     assert_eq!(log, expect_log(&MODULES, &[]));
     assert_eq!(warm, cold);
@@ -575,8 +679,21 @@ fn front_corrupt_record_or_artifact_misses() {
         }
     }
     let (warm, log) = f.check();
-    assert_eq!(log, expect_log(&MODULES, &[]));
+    assert_eq!(log, expect_log(&MODULES, &MODULES));
     assert_eq!(warm, cold);
+
+    f.write(
+        "main.cheby",
+        &ROOT.replace("let unused = 2", "let unused = 3"),
+    );
+    let edited_cold = f.cold_check();
+    let (warm, log) = f.check();
+    assert_eq!(log, expect_log(&MODULES, &[]));
+    assert_eq!(warm, edited_cold);
+    // The artifacts were written again: the next check hits everything.
+    let (warm, log) = f.check();
+    assert_eq!(log, expect_log(&MODULES, &MODULES));
+    assert_eq!(warm, edited_cold);
 }
 
 /// `CHEBY_DUMP_DIR` bypasses every read and still writes (D-965).
@@ -675,4 +792,682 @@ fn replay_refuses_other_spans_into_other_modules() {
     assert_eq!(span_cx.store(inside), None);
     let d = Diagnostic::new(codes::UNUSED_BINDING, "w").with_primary(inside, "");
     assert_eq!(replay::encode_diagnostics(&[&[d]], &span_cx), None);
+}
+
+/// A record with summaries of every kind, for the summary tests.
+fn summary_record() -> FrontRecord {
+    let item = |module: &str, item: &str| ItemRef {
+        module: module.to_owned(),
+        item: item.to_owned(),
+    };
+    FrontRecord {
+        interface: Hash128([1; 16]),
+        artifact: Hash128([2; 16]),
+        diagnostics: Hash128([3; 16]),
+        imports: vec![ImportKey::Module {
+            path: "app::b".to_owned(),
+            hash: Hash128([4; 16]),
+        }],
+        externals: Vec::new(),
+        reads: Vec::new(),
+        references: vec![
+            ReferenceSummary {
+                item: "Shape".to_owned(),
+                kind: MentionerKind::Hook,
+                mentions: vec![item("app::a", "shape_equal")],
+            },
+            ReferenceSummary {
+                item: "area".to_owned(),
+                kind: MentionerKind::Function,
+                mentions: vec![item("app::b", "Square::Square"), item("std::int", "abs")],
+            },
+            ReferenceSummary {
+                item: "limit".to_owned(),
+                kind: MentionerKind::Constant,
+                mentions: vec![item("app::a", "area")],
+            },
+            ReferenceSummary {
+                item: "area works".to_owned(),
+                kind: MentionerKind::Test,
+                mentions: vec![item("app::a", "area")],
+            },
+        ],
+        uses: UseSummary {
+            uses: vec![item("app::b", "Square")],
+            candidates: vec![UnusedCandidate {
+                item: "area".to_owned(),
+                kind: "function".to_owned(),
+                span: (40, 4),
+            }],
+        },
+    }
+}
+
+/// Summaries survive the record's encoding (D-967, D-965), and any damaged
+/// byte makes the record a miss (D-960).
+#[test]
+fn front_summary_round_trip() {
+    let record = summary_record();
+    assert!(record.holds_constant());
+    let bytes = record.encode();
+    assert_eq!(FrontRecord::decode(&bytes), Some(record));
+    for at in 0..bytes.len() {
+        let mut bad = bytes.clone();
+        bad[at] ^= 0x01;
+        assert_eq!(FrontRecord::decode(&bad), None, "{at}");
+    }
+}
+
+/// The record's encoding with summaries is fixed: this constant changes
+/// only with the encoding (version 2), never with the process (D-264).
+#[test]
+fn front_summary_stability() {
+    let bytes = summary_record().encode();
+    assert_eq!(
+        Hash128::of(&bytes).to_hex(),
+        "44f7e2de65392dc92ed288a925b511fb"
+    );
+}
+
+/// A body edit that changes what a function mentions changes its
+/// reference summary; names are module paths and item names (D-967).
+#[test]
+fn front_summary_body_edit_changes_mentions() {
+    const MAIN: &str = "//! Root.\n\nimport app::b\n\nfn main() {\n  let _ = b::f()\n}\n";
+    const B0: &str = "//! B.\n\npub fn f() -> Int {\n  g()\n}\n\npub fn g() -> Int {\n  1\n}\n\npub fn h() -> Int {\n  2\n}\n";
+    const B1: &str = "//! B.\n\npub fn f() -> Int {\n  h()\n}\n\npub fn g() -> Int {\n  1\n}\n\npub fn h() -> Int {\n  2\n}\n";
+    let mut f = Fixture::new("summary_edit", &[("main.cheby", MAIN), ("b.cheby", B0)]);
+    let mentions_of = |f: &Fixture, item: &str| -> Vec<ItemRef> {
+        let index = f.index(CommandFamily::Check).unwrap();
+        let entry = index.get("app::b").unwrap();
+        entry
+            .record
+            .references
+            .iter()
+            .find(|s| s.item == item && s.kind == MentionerKind::Function)
+            .unwrap()
+            .mentions
+            .clone()
+    };
+    f.check();
+    let item = |name: &str| ItemRef {
+        module: "app::b".to_owned(),
+        item: name.to_owned(),
+    };
+    assert_eq!(mentions_of(&f, "f"), [item("g")]);
+    let root = f.index(CommandFamily::Check).unwrap();
+    let main = &root.get("app").unwrap().record;
+    assert!(
+        main.references
+            .iter()
+            .any(|s| s.item == "main" && s.mentions == [item("f")]),
+        "{:?}",
+        main.references
+    );
+    assert!(main.uses.uses.contains(&item("f")), "{:?}", main.uses);
+    f.write("b.cheby", B1);
+    f.check();
+    assert_eq!(mentions_of(&f, "f"), [item("h")]);
+}
+
+/// W0005 over use summaries (D-516, D-965): a use added or removed in one
+/// module changes the warning of an item of another, which is not
+/// checked again, and a warm check prints what a cold one prints.
+#[test]
+fn w0005_warm_use_removed_and_added() {
+    const USES: &str =
+        "//! Root.\n\nimport app::util\n\nfn main() {\n  let _ = util::helper()\n}\n";
+    const NO_USE: &str =
+        "//! Root.\n\nimport app::util\n\nfn main() {\n  let _ = util::other()\n}\n";
+    const UTIL: &str =
+        "//! Util.\n\nfn helper() -> Int {\n  1\n}\n\npub fn other() -> Int {\n  2\n}\n";
+    let mut f = Fixture::new("w0005", &[("main.cheby", USES), ("util.cheby", UTIL)]);
+    let (cold, _) = f.check();
+    assert!(!cold.contains("W0005"), "{cold}");
+    f.write("main.cheby", NO_USE);
+    let removed = f.check_counted();
+    assert_eq!(removed.parsed, ["app"], "util is not parsed");
+    assert!(removed.output.contains("W0005"), "{}", removed.output);
+    assert!(removed.output.contains("helper"), "{}", removed.output);
+    assert_eq!(removed.output, f.cold_check());
+    f.write("main.cheby", USES);
+    let added = f.check_counted();
+    assert_eq!(added.parsed, ["app"], "util is not parsed");
+    assert!(!added.output.contains("W0005"), "{}", added.output);
+    assert_eq!(added.output, f.cold_check());
+}
+
+/// A package without warnings or hidden reads.
+const CLEAN_MAIN: &str =
+    "//! Root.\n\nimport app::util\n\nfn main() {\n  let _ = util::double(2)\n}\n";
+const CLEAN_UTIL: &str = "//! Util.\n\npub fn double(n: Int) -> Int {\n  n * 2\n}\n";
+
+/// D-962: a warm check with no edit reads its package index and nothing
+/// else (no record, hint or blob file is opened), and writes no file: an
+/// unchanged index is not rewritten (GAP(package-index-shape)).
+#[test]
+fn index_warm_check_opens_and_writes_nothing() {
+    let mut f = Fixture::new(
+        "index_quiet",
+        &[("main.cheby", CLEAN_MAIN), ("util.cheby", CLEAN_UTIL)],
+    );
+    let cold = f.check_counted();
+    assert!(cold.writes > 0);
+    let warm = f.check_counted();
+    assert_eq!(
+        warm.lookups,
+        expect_log(&["app", "app::util"], &["app", "app::util"])
+    );
+    assert_eq!(warm.opens, 1, "the index only");
+    assert_eq!(warm.writes, 0);
+    assert_eq!(warm.output, cold.output);
+}
+
+/// A corrupt index and a stale one are ignored, never an error (D-962):
+/// the modules' own files answer, and output equals a cold check's.
+#[test]
+fn index_stale_or_corrupt_is_ignored() {
+    let mut f = several("index_stale");
+    let (cold, _) = f.check();
+    let store = f.store();
+    let stale = store
+        .get_hint(&f.index_key(CommandFamily::Check))
+        .unwrap()
+        .unwrap();
+    f.spoil_index(CommandFamily::Check, &store);
+    drop(store);
+    let (warm, log) = f.check();
+    assert_eq!(log, expect_log(&MODULES, &MODULES));
+    assert_eq!(warm, cold);
+    // An interface edit of `c`, then the index from before it.
+    f.write(
+        "c.cheby",
+        &format!("{C}\npub fn extra() -> Int {{\n  1\n}}\n"),
+    );
+    f.check();
+    let store = f.store();
+    store
+        .put_hint(&f.index_key(CommandFamily::Check), &stale)
+        .unwrap();
+    drop(store);
+    let (warm, log) = f.check();
+    assert_eq!(log, expect_log(&MODULES, &MODULES));
+    assert_eq!(warm, f.cold_check());
+}
+
+/// An edit that closes an import cycle through modules the index let go
+/// unparsed: the front end starts again with every module parsed, and
+/// prints E0040 as a cold check does (GAP(package-index-shape)).
+#[test]
+fn index_cycle_after_edit_starts_again() {
+    let mut f = several("index_cycle");
+    f.check();
+    f.write(
+        "c.cheby",
+        &C.replacen("//! C.\n\n", "//! C.\n\nimport app::b\n\n", 1),
+    );
+    let warm = f.check_counted();
+    assert!(warm.output.contains("E0040"), "{}", warm.output);
+    assert_eq!(warm.output, f.cold_check());
+    assert_eq!(
+        warm.parsed, MODULES,
+        "every module parsed once, after the restart"
+    );
+}
+
+/// Two package roots on one cache keep two indexes (D-962), and each warm
+/// check hits every module of its package.
+#[test]
+fn index_two_roots_keep_two_indexes() {
+    let mut a = several("index_root_a");
+    let other = Fixture::new(
+        "index_root_b",
+        &[("main.cheby", CLEAN_MAIN), ("util.cheby", CLEAN_UTIL)],
+    );
+    let check_other = |a: &mut Fixture| {
+        let (cache, log) = a.open();
+        let out = check_cached(other.dir(), &CheckOptions::default(), &cache).unwrap();
+        cache.finish(false).unwrap();
+        (out.render(), lines(&log))
+    };
+    a.check();
+    let (other_cold, _) = check_other(&mut a);
+    let store = a.store();
+    let mine = store
+        .get_hint(&PackageIndex::key(a.dir(), CommandFamily::Check, BUILD))
+        .unwrap();
+    let theirs = store
+        .get_hint(&PackageIndex::key(other.dir(), CommandFamily::Check, BUILD))
+        .unwrap();
+    drop(store);
+    let (mine, theirs) = (
+        PackageIndex::decode(&mine.unwrap()).unwrap(),
+        PackageIndex::decode(&theirs.unwrap()).unwrap(),
+    );
+    assert_eq!(mine.modules.len(), MODULES.len());
+    assert_eq!(theirs.modules.len(), 2);
+    let (_, log) = a.check();
+    assert_eq!(log, expect_log(&MODULES, &MODULES));
+    let (other_warm, log) = check_other(&mut a);
+    assert_eq!(
+        log,
+        expect_log(&["app", "app::util"], &["app", "app::util"])
+    );
+    assert_eq!(other_warm, other_cold);
+}
+
+/// `Cache::finish` flushes the store's queued writes before it trims
+/// (plan §2.2): an index put just before `finish` still keeps the old blob
+/// it names, which the trim would otherwise delete (D-961).
+#[test]
+fn index_trim_waits_for_queued_writes() {
+    let dir = TempDir::new("index_trim");
+    let root = dir.path().join("cache");
+    let store = Store::open(&root, BUILD).unwrap();
+    let old = store.put_blob(b"an old artifact").unwrap();
+    let unnamed = store.put_blob(b"an old blob no index names").unwrap();
+    store.flush();
+    let week_ago = std::time::SystemTime::now() - std::time::Duration::from_hours(7 * 24);
+    for name in [old, unnamed] {
+        let path = root
+            .join("v1/blob")
+            .join(name.to_hex().get(..2).unwrap())
+            .join(name.to_hex());
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(week_ago)
+            .unwrap();
+    }
+    let mut record = summary_record();
+    record.artifact = old;
+    let index = PackageIndex {
+        modules: vec![crate::cache::index::IndexEntry {
+            path: "app".to_owned(),
+            source: Hash128([9; 16]),
+            written: Vec::new(),
+            f1: Hash128([10; 16]),
+            f2: Hash128([11; 16]),
+            record,
+        }],
+    };
+    let key = PackageIndex::key(dir.path(), CommandFamily::Check, BUILD);
+    // Queued, with more writes behind it.
+    store.put_hint(&key, &index.encode()).unwrap();
+    for n in 0..64_u32 {
+        store.put_blob(format!("filler {n}").as_bytes()).unwrap();
+    }
+    Cache::with_store(store, CacheLog::new(None))
+        .finish(true)
+        .unwrap();
+    let store = Store::open(&root, BUILD).unwrap();
+    assert!(
+        store.get_blob(old).unwrap().is_some(),
+        "the indexed blob is kept"
+    );
+    assert_eq!(
+        store.get_blob(unnamed).unwrap(),
+        None,
+        "the other is trimmed"
+    );
+    assert_eq!(
+        PackageIndex::decode(&store.get_hint(&key).unwrap().unwrap()),
+        Some(index)
+    );
+}
+
+/// D-973's interface edit: `c`'s interface changes; its importer `b` and
+/// its recorded hidden reader, the root, miss; `d` hits; only the misses
+/// are parsed, and the output equals a cold check's.
+#[test]
+fn cache_hit_interface_edit() {
+    let mut f = several("interface_edit");
+    f.check();
+    f.write(
+        "c.cheby",
+        &format!("{C}\npub fn extra() -> Int {{\n  1\n}}\n"),
+    );
+    let warm = f.check_counted();
+    assert_eq!(warm.lookups, expect_log(&MODULES, &["app::d"]));
+    assert_eq!(warm.parsed, ["app", "app::b", "app::c"]);
+    assert_eq!(warm.checked, ["app", "app::b", "app::c"]);
+    assert_eq!(warm.output, f.cold_check());
+}
+
+/// Deletes the blob `name` from the fixture's store.
+fn delete_blob(f: &Fixture, name: Hash128) {
+    let hex = name.to_hex();
+    let path = f
+        .files("blob")
+        .into_iter()
+        .find(|p| p.file_name().unwrap().to_string_lossy() == hex)
+        .unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+/// The front record of `module` in the check family's package index.
+fn indexed_record(f: &Fixture, module: &str) -> FrontRecord {
+    f.index(CommandFamily::Check)
+        .unwrap()
+        .get(module)
+        .unwrap()
+        .record
+        .clone()
+}
+
+/// A hit whose diagnostics blob is gone is a miss (D-960), also in the
+/// attempt after a restart, which decodes each hit's interface at its
+/// lookup: that hit publishes nothing before it turns into a miss, so its
+/// check from source publishes its interface once, and the warm check
+/// prints what a cold one prints. Here `x`'s import of `g` no longer
+/// resolves, which restarts the front end.
+#[test]
+fn cache_hit_lost_diagnostics_after_restart() {
+    let mut f = Fixture::new(
+        "lost_diagnostics_restart",
+        &[
+            (
+                "main.cheby",
+                "//! App.\n\nimport std::io\nimport app::a\nimport app::x\n\n\
+                 fn main() {\n  io::println(a::twice(\"x\"))\n  io::println(x::name())\n}\n",
+            ),
+            (
+                "a.cheby",
+                "//! A.\n\n/// Twice.\npub fn twice(s: String) -> String {\n  \
+                 let unused = 1\n  \"{s}{s}\"\n}\n",
+            ),
+            (
+                "x.cheby",
+                "//! X.\n\nimport app::g\n\n/// Name.\npub fn name() -> String {\n  g::name()\n}\n",
+            ),
+            (
+                "g.cheby",
+                "//! G.\n\n/// Name.\npub fn name() -> String {\n  \"g\"\n}\n",
+            ),
+        ],
+    );
+    f.check();
+    let a = indexed_record(&f, "app::a");
+    assert_ne!(a.diagnostics, Hash128::of(&replay::empty_blob(3)));
+    delete_blob(&f, a.diagnostics);
+    std::fs::remove_file(f.dir().join("src/g.cheby")).unwrap();
+    let cold = f.cold_check();
+    assert!(cold.contains("W0002"), "{cold}");
+    let (warm, _) = f.check();
+    assert_eq!(warm, cold);
+}
+
+/// `a`'s diagnostics blob and `b`'s interface artifact are gone, with no
+/// edit: `a`'s replay fails, so `a` is checked from source; that needs
+/// `b`'s interface, which cannot be decoded, so the front end starts
+/// again. In that attempt `a`'s interface decodes, but `a` is a miss
+/// again: it must not have been published before (D-960, D-954).
+#[test]
+fn cache_hit_lost_diagnostics_and_artifact() {
+    let mut f = Fixture::new(
+        "lost_diagnostics_artifact",
+        &[
+            (
+                "main.cheby",
+                "//! App.\n\nimport std::io\nimport app::a\n\n\
+                 fn main() {\n  io::println(a::twice(\"x\"))\n}\n",
+            ),
+            (
+                "a.cheby",
+                "//! A.\n\nimport app::b\n\n/// Twice.\npub fn twice(s: String) -> String {\n  \
+                 let unused = 1\n  b::join(s, s)\n}\n",
+            ),
+            (
+                "b.cheby",
+                "//! B.\n\n/// Join.\npub fn join(x: String, y: String) -> String {\n  \
+                 let unused = 2\n  \"{x}{y}\"\n}\n",
+            ),
+        ],
+    );
+    let (first, _) = f.check();
+    delete_blob(&f, indexed_record(&f, "app::a").diagnostics);
+    delete_blob(&f, indexed_record(&f, "app::b").artifact);
+    let cold = f.cold_check();
+    assert_eq!(first, cold);
+    for _ in 0..2 {
+        let (warm, _) = f.check();
+        assert_eq!(warm, cold);
+    }
+}
+
+/// A phase-A error stops the front end before it runs (D-452), and with it
+/// the replay of the phase-A diagnostics of the modules the package index
+/// let go unparsed: the warm check starts again and parses every module,
+/// so it prints `b`'s W0001 as a cold check does (D-268, D-965).
+#[test]
+fn cache_hit_phase_a_error_keeps_unparsed_warnings() {
+    let main = "//! Root.\n\nimport std::io\nimport app::b\n\n\
+                fn main() {\n  let n = b::g()\n  io::println(\"{n}\")\n}\n";
+    let b = "//! B.\n\npub fn g() -> Int {\n  let t: (Int, Int, Int, Int) = (1, 2, 3, 4)\n  \
+             let (a, _, _, _) = t\n  a\n}\n";
+    let mut f = Fixture::new("phase_a_error", &[("main.cheby", main), ("b.cheby", b)]);
+    let (first, _) = f.check();
+    assert!(first.contains("W0001"), "{first}");
+    // An error in phase A of the root, `b` unchanged.
+    f.write(
+        "main.cheby",
+        "//! Root.\n\nimport std::io\nimport app::b\n\nfn main() {\n  io::println(\"{b::g()}\")\n}\n",
+    );
+    let cold = f.cold_check();
+    assert!(cold.contains("W0001") && cold.contains("E0012"), "{cold}");
+    let (warm, _) = f.check();
+    assert_eq!(warm, cold);
+    // A module file with an invalid name, the root restored.
+    f.write("main.cheby", main);
+    f.check();
+    f.write("Bad-Name.cheby", "//! Bad.\n");
+    let cold = f.cold_check();
+    assert!(cold.contains("W0001"), "{cold}");
+    let (warm, _) = f.check();
+    assert_eq!(warm, cold);
+}
+
+/// A 10k-line `wide` project from `cheby_bench_gen`: the second
+/// `cheby check` parses no package module and hits every one (D-962).
+#[test]
+fn cache_hit_wide_project_parses_nothing() {
+    let project = cheby_bench_gen::generate(&cheby_bench_gen::Config {
+        lines: 10_000,
+        shape: cheby_bench_gen::Shape::Wide,
+        seed: 1,
+    });
+    let package = TempDir::new("wide");
+    project.write(package.path()).unwrap();
+    let cache_dir = TempDir::new("wide_cache");
+    let run = |n: u32| {
+        let log = cache_dir.path().join(format!("log-{n}"));
+        let store = Store::open(&cache_dir.path().join("cache"), BUILD).unwrap();
+        let cache = Cache::with_store(store, CacheLog::new(Some(log.clone())));
+        let out = check_cached(package.path(), &CheckOptions::default(), &cache).unwrap();
+        let parsed = cache.parsed_modules();
+        cache.finish(false).unwrap();
+        (out.render(), lines(&log), parses(&log), parsed)
+    };
+    let (cold, cold_log, cold_parses, _) = run(1);
+    assert_eq!(cold_log.len(), project.modules());
+    assert_eq!(cold_parses.len(), project.modules());
+    let (warm, warm_log, warm_parses, parsed) = run(2);
+    assert_eq!(warm, cold);
+    assert_eq!(warm_log.len(), project.modules());
+    assert!(warm_log.iter().all(|l| l.ends_with(" hit")), "{warm_log:?}");
+    assert_eq!(warm_parses, Vec::<String>::new());
+    assert_eq!(parsed, Vec::<String>::new());
+}
+
+/// Module `a` holds a constant whose initializer calls a function of `b`;
+/// `c` is unrelated.
+fn constants_fixture(name: &str) -> Fixture {
+    Fixture::new(
+        name,
+        &[
+            (
+                "main.cheby",
+                "//! Root.\n\nimport app::a\nimport app::c\nimport std::io\n\n\
+                 fn main() {\n  let n = a::limit + c::other()\n  io::println(\"{n}\")\n}\n",
+            ),
+            (
+                "a.cheby",
+                "//! A.\n\nimport app::b\n\npub const limit: Int = b::compute(3)\n",
+            ),
+            (
+                "b.cheby",
+                "//! B.\n\npub fn compute(n: Int) -> Int {\n  n * 2\n}\n",
+            ),
+            ("c.cheby", "//! C.\n\npub fn other() -> Int {\n  7\n}\n"),
+        ],
+    )
+}
+
+/// GAP(check-constants-from-summaries): a warm check parses and checks
+/// exactly the constant's module and what it imports, on fresh
+/// interfaces, so constant evaluation runs, and prints what a cold check
+/// prints.
+#[test]
+fn cache_hit_constants_parse_only_their_modules() {
+    let mut f = constants_fixture("constants");
+    let (cold, _) = f.check();
+    assert_eq!(cold, f.cold_check());
+    let warm = f.check_counted();
+    assert_eq!(
+        warm.lookups,
+        expect_log(
+            &["app", "app::a", "app::b", "app::c"],
+            &["app", "app::a", "app::b", "app::c"]
+        )
+    );
+    assert_eq!(warm.parsed, ["app::a", "app::b"]);
+    assert_eq!(warm.checked, ["app::a", "app::b"]);
+    assert_eq!(warm.output, cold);
+}
+
+/// An edit of `b`'s body that makes the constant's evaluation fail: the
+/// warm check prints the diagnostic a cold check of the edited package
+/// prints.
+#[test]
+fn cache_hit_constants_body_edit_fails_evaluation() {
+    let mut f = constants_fixture("constants_edit");
+    f.check();
+    f.write(
+        "b.cheby",
+        "//! B.\n\npub fn compute(n: Int) -> Int {\n  n / (n - 3)\n}\n",
+    );
+    let cold = f.cold_check();
+    assert!(cold.contains("error["), "{cold}");
+    let warm = f.check_counted();
+    assert_eq!(warm.output, cold);
+    assert_eq!(warm.checked, ["app::a", "app::b"]);
+}
+
+/// No module is checked twice (GAP(warm-recheck-readers)): a warm
+/// `cheby check` checks nothing, and a warm `cheby run`, `cheby test` and
+/// build-mode front end check each package module once.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn cache_hit_no_module_checked_twice() {
+    let mut f = several("checked_once");
+    f.check();
+    let warm = f.check_counted();
+    assert_eq!(warm.checked, Vec::<String>::new());
+    let once = |checked: Vec<String>| {
+        assert_eq!(checked, MODULES, "each module once");
+    };
+    for _ in 0..2 {
+        let (cache, _) = f.open();
+        let prepared = prepare_run_cached(f.dir(), RunOptions::default(), &cache).unwrap();
+        assert!(matches!(prepared, Prepared::Ready(_)));
+        once(cache.checked_modules());
+        cache.finish(false).unwrap();
+    }
+    for _ in 0..2 {
+        let (cache, _) = f.open();
+        let prepared = prepare_test_cached(f.dir(), &TestOptions::default(), &cache).unwrap();
+        assert!(matches!(prepared, PreparedTests::Ready(_)));
+        once(cache.checked_modules());
+        cache.finish(false).unwrap();
+    }
+    for _ in 0..2 {
+        let (cache, _) = f.open();
+        let mut out = CheckOutput::default();
+        let front =
+            front_end_for(f.dir(), frontend::Mode::Build, None, &mut out, Some(&cache)).unwrap();
+        assert!(front.is_some());
+        once(cache.checked_modules());
+        cache.finish(false).unwrap();
+    }
+    // After an interface edit too.
+    f.write(
+        "c.cheby",
+        &format!("{C}\npub fn extra() -> Int {{\n  1\n}}\n"),
+    );
+    let edited = f.check_counted();
+    assert_eq!(edited.checked, ["app", "app::b", "app::c"]);
+}
+
+/// GAP(hint-empty-omitted): a package without hidden reads writes no
+/// read-set hint; the store's only hint file is the package index.
+#[test]
+fn hint_empty_none_written() {
+    let mut f = Fixture::new(
+        "hint_none",
+        &[("main.cheby", CLEAN_MAIN), ("util.cheby", CLEAN_UTIL)],
+    );
+    f.check();
+    let index = f.index_key(CommandFamily::Check).hash().to_hex();
+    let hints: Vec<String> = f
+        .files("hint")
+        .iter()
+        .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(hints, [index]);
+}
+
+/// A module with a hidden read still gets its hint, and a warm check
+/// still hits it, from the index and from the files.
+#[test]
+fn hint_empty_hidden_read_kept() {
+    let mut f = several("hint_kept");
+    f.check();
+    let (front, _) = front_of(f.dir());
+    let f1 = front_key_of(&front, "app", ROOT);
+    let hint = decode_hint(&f.store().get_hint(&reads_key(f1, BUILD)).unwrap().unwrap()).unwrap();
+    assert_eq!(hint, ["app::c"]);
+    assert_eq!(f.files("hint").len(), 2, "the root's hint and the index");
+    let (_, log) = f.check();
+    assert_eq!(log, expect_log(&MODULES, &MODULES));
+    f.spoil_index(CommandFamily::Check, &f.store());
+    let (_, log) = f.check();
+    assert_eq!(log, expect_log(&MODULES, &MODULES));
+}
+
+/// A lost non-empty hint reads as the empty set, so the module misses
+/// (never a wrong hit), the output equals a cold check's, and the hint is
+/// written again.
+#[test]
+fn hint_empty_lost_hint_misses() {
+    let mut f = several("hint_lost");
+    let (cold, _) = f.check();
+    let (front, _) = front_of(f.dir());
+    let f1 = front_key_of(&front, "app", ROOT);
+    let hint_file = f
+        .files("hint")
+        .into_iter()
+        .find(|p| p.file_name().unwrap().to_string_lossy() == reads_key(f1, BUILD).hash().to_hex())
+        .unwrap();
+    std::fs::remove_file(hint_file).unwrap();
+    f.spoil_index(CommandFamily::Check, &f.store());
+    let (warm, log) = f.check();
+    assert_eq!(log, expect_log(&MODULES, &["app::b", "app::c", "app::d"]));
+    assert_eq!(warm, cold);
+    let (warm, log) = f.check();
+    assert_eq!(log, expect_log(&MODULES, &MODULES));
+    assert_eq!(warm, cold);
 }

@@ -296,7 +296,7 @@ fn record(unit: &MirModule, format: Format) -> CodeRecord {
 /// module records are hidden data.
 #[test]
 fn link_replay_two_units() {
-    for format in Format::ALL {
+    for &format in Format::ALL {
         let (a, b) = (record(&unit_a(), format), record(&unit_b(), format));
         let a_bytes = replay(&a, format.isa(), "a").unwrap();
         let b_bytes = replay(&b, format.isa(), "b").unwrap();

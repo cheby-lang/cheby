@@ -1,5 +1,6 @@
 //! `CHEBY_CACHE_LOG` (D-973): every lookup of a command as a hit or a
-//! miss, written sorted when the command ends, for the cache-hit tests.
+//! miss, and every package module it parsed (GAP(cache-log-parses)),
+//! written sorted when the command ends, for the cache-hit tests.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -51,6 +52,19 @@ impl CacheLog {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push(line);
+    }
+
+    /// Records that the command parsed package module `module`, as a line
+    /// `parse <module>` (GAP(cache-log-parses)). Std modules are not
+    /// listed (D-980).
+    pub fn parsed(&self, module: &str) {
+        if self.path.is_none() {
+            return;
+        }
+        self.lines
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(format!("parse {module}"));
     }
 
     /// The recorded lines, sorted.
