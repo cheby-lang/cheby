@@ -192,7 +192,7 @@ pub const STAGED_STD_MODULES: &[StdModule] = &[];
 /// Modules the standard-library spec plans that `std/` does not ship yet:
 /// the rest of tier 2 and tier 3 (`docs/plan/stdlib.md`). Importing one is
 /// E0038, not E0039 (D-451). Sorted.
-pub const PLANNED_STD_MODULES: &[&str] = &["file", "http", "net", "process", "time"];
+pub const PLANNED_STD_MODULES: &[&str] = &["context", "file", "http", "net", "process", "time"];
 
 /// Spec tests of shipped modules that `std/` may lack while a milestone is
 /// in progress (D-728), as `(module, test name, milestone)`: the module's
