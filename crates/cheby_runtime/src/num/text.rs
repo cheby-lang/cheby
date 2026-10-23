@@ -1,5 +1,5 @@
-//! Text of numbers: `show` and `parse` of every numeric type, and
-//! `int::parse_base` and `to_base`.
+//! Text of numbers: `show` and `parse` of every numeric type,
+//! `int::parse_base` and `to_base`, and `float::to_fixed`.
 //!
 //! - Integer text is an optional `-` and ASCII decimal digits (D-312).
 //!   `parse_base` reads digits `0`-`9` and `a`-`z` in either case for bases
@@ -8,6 +8,8 @@
 //!   read back as the same value of the type (D-228 for `F32`), in decimal
 //!   form when the decimal exponent is from −6 to 20 and in exponent form
 //!   otherwise, with `NaN`, `inf`, `-inf` and `-0.0` for the special values.
+//! - `float::to_fixed` writes the exact binary value rounded to a number of
+//!   decimals, ties away from zero, with no exponent (D-P06).
 //! - Float parsing accepts exactly D-313's grammar and rounds the decimal
 //!   value to the nearest value of the type, ties to even, with infinities
 //!   and signed zeros beyond the range (D-394).
@@ -44,6 +46,172 @@ pub(crate) fn f32_to_string(x: f32) -> String {
         return String::from(if x < 0.0 { "-inf" } else { "inf" });
     }
     finite_to_string(x)
+}
+
+/// The largest `digits` of `float::to_fixed`, which clamps it to 0 to 100
+/// (D-P06, D-298).
+const MAX_FIXED_DIGITS: i64 = 100;
+
+/// `float::to_fixed` (D-P06): `x` in decimal with exactly `digits` digits
+/// after the point, none and no point for 0, and never an exponent.
+///
+/// The digits are those of the exact binary value of `x`, rounded at
+/// `digits` with ties away from zero. Rust's `{:.N}` rounds ties to even,
+/// so this rounds the exact expansion itself: with every digit exact, the
+/// first digit dropped decides alone, rounding the magnitude up when it is
+/// 5 or more. The text starts with `-` whenever the sign bit is set, so
+/// `-0.0` gives `-0.00`, and NaN and the infinities are written as `show`
+/// writes them. `digits` is clamped to 0 to 100.
+#[must_use]
+pub(crate) fn float_to_fixed(x: f64, digits: i64) -> String {
+    if !x.is_finite() {
+        return float_to_string(x);
+    }
+    let kept = usize::try_from(digits.clamp(0, MAX_FIXED_DIGITS)).unwrap_or(0);
+    let (whole, fraction) = exact_decimal(x);
+    // The kept digits, the whole part and then `kept` fraction digits,
+    // with zeros past the last digit of the expansion.
+    let mut number = whole;
+    number.extend(
+        fraction
+            .iter()
+            .copied()
+            .chain(std::iter::repeat(b'0'))
+            .take(kept),
+    );
+    if fraction
+        .get(kept)
+        .is_some_and(|&first_dropped| first_dropped >= b'5')
+    {
+        increment_decimal(&mut number);
+    }
+    let point = number.len().saturating_sub(kept);
+    let (whole, fraction) = number.split_at_checked(point).unwrap_or_default();
+    let mut out = String::with_capacity(number.len().saturating_add(2));
+    if x.is_sign_negative() {
+        out.push('-');
+    }
+    push_digits(&mut out, whole);
+    if !fraction.is_empty() {
+        out.push('.');
+        push_digits(&mut out, fraction);
+    }
+    out
+}
+
+/// The exact decimal expansion of a finite `|x|`: the digits of its whole
+/// part, `0` when it is below 1, and every digit of its fraction, empty
+/// for a whole number. A binary64 value is `m × 2^e` with `m < 2^53`, so a
+/// whole value is `m × 2^e` and the fraction of `f / 2^k` is the `k`-digit
+/// text of `f × 5^k`, at most 1074 digits.
+fn exact_decimal(x: f64) -> (Vec<u8>, Vec<u8>) {
+    const FRACTION_BITS: u64 = 0x000f_ffff_ffff_ffff;
+    const IMPLICIT_BIT: u64 = 0x0010_0000_0000_0000;
+    let bits = x.to_bits();
+    let biased = bits.wrapping_shr(52) & 0x7ff;
+    let (mantissa, exponent) = if biased == 0 {
+        (bits & FRACTION_BITS, -1074_i64)
+    } else {
+        let biased = i64::try_from(biased).unwrap_or(0);
+        (
+            (bits & FRACTION_BITS) | IMPLICIT_BIT,
+            biased.wrapping_sub(1075),
+        )
+    };
+    if let Ok(shift) = u32::try_from(exponent) {
+        let mut whole = Decimal::from_u64(mantissa);
+        whole.mul_pow(2, 31, shift);
+        return (whole.digits(), Vec::new());
+    }
+    let k = u32::try_from(exponent.unsigned_abs()).unwrap_or(0);
+    let whole = mantissa.checked_shr(k).unwrap_or(0);
+    let fraction = mantissa & 1_u64.checked_shl(k).map_or(u64::MAX, |p| p.wrapping_sub(1));
+    if fraction == 0 {
+        return (Decimal::from_u64(whole).digits(), Vec::new());
+    }
+    let mut scaled = Decimal::from_u64(fraction);
+    scaled.mul_pow(5, 13, k);
+    let scaled = scaled.digits();
+    let width = usize::try_from(k).unwrap_or(0);
+    let mut digits = vec![b'0'; width.saturating_sub(scaled.len())];
+    digits.extend(scaled);
+    (Decimal::from_u64(whole).digits(), digits)
+}
+
+/// Adds 1 to the number whose ASCII decimal digits are `digits`, which may
+/// make it one digit longer.
+fn increment_decimal(digits: &mut Vec<u8>) {
+    for digit in digits.iter_mut().rev() {
+        if *digit == b'9' {
+            *digit = b'0';
+        } else {
+            *digit = digit.wrapping_add(1);
+            return;
+        }
+    }
+    digits.insert(0, b'1');
+}
+
+/// A natural number in base 10^9, least significant limb first, for the
+/// exact expansions of [`float_to_fixed`]. It is never empty.
+struct Decimal(Vec<u32>);
+
+impl Decimal {
+    const BASE: u64 = 1_000_000_000;
+
+    fn from_u64(n: u64) -> Self {
+        let mut limbs = Vec::with_capacity(3);
+        let mut rest = n;
+        loop {
+            limbs.push(u32::try_from(rest.wrapping_rem(Self::BASE)).unwrap_or(0));
+            rest = rest.wrapping_div(Self::BASE);
+            if rest == 0 {
+                return Self(limbs);
+            }
+        }
+    }
+
+    /// Multiplies by `factor`. A limb is below 2^30 and `factor` below
+    /// 2^32, so a product and its carry stay below 2^63.
+    fn mul_small(&mut self, factor: u32) {
+        let mut carry = 0_u64;
+        for limb in &mut self.0 {
+            let product = u64::from(*limb)
+                .wrapping_mul(u64::from(factor))
+                .wrapping_add(carry);
+            *limb = u32::try_from(product.wrapping_rem(Self::BASE)).unwrap_or(0);
+            carry = product.wrapping_div(Self::BASE);
+        }
+        while carry != 0 {
+            self.0
+                .push(u32::try_from(carry.wrapping_rem(Self::BASE)).unwrap_or(0));
+            carry = carry.wrapping_div(Self::BASE);
+        }
+    }
+
+    /// Multiplies by `base^exponent`, `step` powers at a time, where
+    /// `base^step` fits a `u32`.
+    fn mul_pow(&mut self, base: u32, step: u32, exponent: u32) {
+        let mut left = exponent;
+        while left > 0 {
+            let now = left.min(step);
+            self.mul_small(base.pow(now));
+            left = left.wrapping_sub(now);
+        }
+    }
+
+    /// The ASCII digits, with no leading zeros.
+    fn digits(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(self.0.len().saturating_mul(9));
+        let mut limbs = self.0.iter().rev();
+        if let Some(top) = limbs.next() {
+            out.extend(top.to_string().bytes());
+        }
+        for limb in limbs {
+            out.extend(format!("{limb:09}").bytes());
+        }
+        out
+    }
 }
 
 /// Lays out the shortest round-trip digits of a finite float.
@@ -521,6 +689,99 @@ mod tests {
         assert_eq!(int_to_base(10, -16), None);
     }
 
+    #[test]
+    fn increment_decimal_carries() {
+        let cases: &[(&str, &str)] = &[
+            ("0", "1"),
+            ("8", "9"),
+            ("9", "10"),
+            ("0099", "0100"),
+            ("999", "1000"),
+            ("1299", "1300"),
+        ];
+        for &(before, after) in cases {
+            let mut digits = before.as_bytes().to_vec();
+            increment_decimal(&mut digits);
+            assert_eq!(digits, after.as_bytes(), "{before}");
+        }
+    }
+
+    #[test]
+    fn exact_decimal_writes_every_digit() {
+        // The fraction of `f / 2^k` has `k` digits; the trailing zeros are
+        // dropped here.
+        let digits = |x: f64| {
+            let (whole, fraction) = exact_decimal(x);
+            let fraction = String::from_utf8(fraction).unwrap();
+            (
+                String::from_utf8(whole).unwrap(),
+                fraction.trim_end_matches('0').to_owned(),
+            )
+        };
+        let own = |whole: &str, fraction: &str| (whole.to_owned(), fraction.to_owned());
+        assert_eq!(digits(0.0), own("0", ""));
+        assert_eq!(digits(-0.0), own("0", ""));
+        assert_eq!(digits(2.0), own("2", ""));
+        assert_eq!(digits(0.125), own("0", "125"));
+        assert_eq!(digits(-2.5), own("2", "5"));
+        assert_eq!(digits(1.0e21), own("1000000000000000000000", ""));
+        assert_eq!(digits(9_007_199_254_740_993.0), own("9007199254740992", ""));
+        // 2^-1074 has 1074 fraction digits, the last a 5.
+        let (whole, fraction) = exact_decimal(5e-324);
+        let fraction = String::from_utf8(fraction).unwrap();
+        assert_eq!(whole, b"0");
+        assert_eq!(fraction.len(), 1074);
+        assert!(fraction.starts_with(&format!("{}49406564584124654", "0".repeat(323))));
+        assert!(fraction.ends_with('5'));
+        assert_eq!(digits(f64::MAX).0.len(), 309);
+    }
+
+    /// D-P06's text from an independent expansion: Rust's `{:.1100}` writes
+    /// every digit of the exact value, since none has more than 1074 after
+    /// the point, and the result rounds it at `digits`, ties away from zero.
+    fn fixed_reference(x: f64, digits: usize) -> String {
+        let full = format!("{:.1100}", x.abs());
+        let (whole, fraction) = full.split_once('.').unwrap();
+        let mut number: Vec<u8> = whole.bytes().chain(fraction.bytes().take(digits)).collect();
+        if fraction.as_bytes()[digits] >= b'5' {
+            increment_decimal(&mut number);
+        }
+        let (whole, fraction) = number.split_at(number.len() - digits);
+        let sign = if x.is_sign_negative() { "-" } else { "" };
+        let whole = std::str::from_utf8(whole).unwrap();
+        let fraction = std::str::from_utf8(fraction).unwrap();
+        if digits == 0 {
+            format!("{sign}{whole}")
+        } else {
+            format!("{sign}{whole}.{fraction}")
+        }
+    }
+
+    /// Whether `x` is exactly halfway between two values with `digits`
+    /// decimals: its expansion goes on past `digits` with a 5 and nothing
+    /// after it.
+    fn is_fixed_tie(x: f64, digits: usize) -> bool {
+        let full = format!("{:.1100}", x.abs());
+        let (_, fraction) = full.split_once('.').unwrap();
+        let rest = &fraction.as_bytes()[digits..];
+        rest.first() == Some(&b'5') && rest[1..].iter().all(|&d| d == b'0')
+    }
+
+    /// Checks `float_to_fixed` against the reference, and away from ties
+    /// against Rust's own `{:.N}`, which rounds the exact value too and
+    /// differs only at a tie, which it rounds to even (D-P06).
+    fn check_fixed(x: f64, digits: usize) -> Result<(), TestCaseError> {
+        let ours = float_to_fixed(x, i64::try_from(digits).unwrap());
+        prop_assert_eq!(&ours, &fixed_reference(x, digits), "{:e} {}", x, digits);
+        if !is_fixed_tie(x, digits) {
+            prop_assert_eq!(&ours, &format!("{x:.digits$}"), "{:e} {}", x, digits);
+        }
+        prop_assert!(!ours.contains('e'));
+        prop_assert_eq!(ours.contains('.'), digits > 0);
+        prop_assert_eq!(ours.starts_with('-'), x.is_sign_negative());
+        Ok(())
+    }
+
     /// Checks Ryu's digits (ours) against Rust's `{:e}`, which picks the
     /// same shortest, closest digits but breaks an exact tie upwards: where
     /// they differ, ours must be the even one, one below in the last digit.
@@ -589,6 +850,27 @@ mod tests {
                 prop_assert_eq!(parse_int::<i64>(text.as_bytes(), base), Some(n));
                 prop_assert_eq!(i64::from_str_radix(&text, u32::try_from(base).unwrap()).ok(), Some(n));
             }
+        }
+
+        #[test]
+        fn to_fixed_rounds_the_exact_value(bits: u64, digits in 0_usize..=100) {
+            let x = f64::from_bits(bits);
+            prop_assume!(x.is_finite());
+            check_fixed(x, digits)?;
+        }
+
+        #[test]
+        fn to_fixed_rounds_moderate_values(x in -1.0e7_f64..1.0e7, digits in 0_usize..=25) {
+            check_fixed(x, digits)?;
+        }
+
+        /// `n / 2^j` has exactly `j` fraction digits, the last a 5, so it is
+        /// a tie at `j - 1` digits.
+        #[test]
+        fn to_fixed_rounds_ties_away_from_zero(n in -1_000_000_i32..=1_000_000, j in 0_i32..=40, extra in 0_usize..=3) {
+            let x = f64::from(n) * 2.0_f64.powi(-j);
+            let digits = usize::try_from(j).unwrap().saturating_sub(1) + extra;
+            check_fixed(x, digits)?;
         }
 
         #[test]

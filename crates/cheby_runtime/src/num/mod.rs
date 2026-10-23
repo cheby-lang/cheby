@@ -3,14 +3,15 @@
 //! modules, one symbol per type (D-484), and the text of numbers.
 //!
 //! - [`text`]: `show` and `parse` of every numeric type (§3.3.6, D-312,
-//!   D-313, D-395), `int::parse_base` and `int::to_base` (D-390).
+//!   D-313, D-395), `int::parse_base` and `int::to_base` (D-390), and
+//!   `float::to_fixed` (D-P06).
 //! - `int`: `std::int` and the sized integer modules: conversions (D-308,
 //!   D-357), parsing and text, checked (D-309) and wrapping (D-025)
 //!   arithmetic, and `int::checked_pow` with its clamped exponent (D-298,
 //!   D-392).
 //! - `float`: `std::float` and `std::f32`: conversions (D-359), parsing and
-//!   text, `truncate`, `round`, `floor` and `ceil` (D-132, D-314) and
-//!   `float::sqrt`.
+//!   text, `truncate`, `round`, `floor` and `ceil` (D-132, D-314),
+//!   `float::sqrt` and `float::to_fixed`.
 //! - [`math`]: the correctly rounded functions of D-396 (`pow`, `exp`,
 //!   `ln`, `sin`, `cos`, `tan`, `atan2`), in Rust with double-double
 //!   evaluation and Ziv's rounding test (D-568), verified as D-553

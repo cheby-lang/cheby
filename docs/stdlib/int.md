@@ -8,9 +8,9 @@ pub type Int
 
 All arithmetic on `Int` is checked: a result that does not fit panics (D-025). On JS, an `Int` result outside ±(2⁵³−1) also panics (D-037), so a program panics at the same points or earlier on JS, but never computes a different value (§12.4, D-232).
 
-This module has every function of the integer families in [Numeric modules](README.md#numeric-modules), written out in full, plus `clamp`, `pow`, `checked_pow`, `to_base`, `floor_div`, `modulo`, `checked_floor_div` and `checked_modulo`. `compare`, `show` and the arithmetic functions make `Int` satisfy `Compare`, `Show`, `Add`, `Sub`, `Mul`, `Div` and `Neg` (§8.7, §8.8). On `Int` operands the compiler uses the built-in operations directly (§5.4.2), so these functions exist to be passed as values and to satisfy bounds.
+This module has every function of the integer families in [Numeric modules](README.md#numeric-modules), written out in full, plus `clamp`, `pow`, `checked_pow`, `floor_div`, `modulo`, `checked_floor_div` and `checked_modulo`. `compare`, `show` and the arithmetic functions make `Int` satisfy `Compare`, `Show`, `Add`, `Sub`, `Mul`, `Div` and `Neg` (§8.7, §8.8). On `Int` operands the compiler uses the built-in operations directly (§5.4.2), so these functions exist to be passed as values and to satisfy bounds.
 
-`clamp`, `pow`, `checked_pow`, `to_base` and the floored division functions exist only in `std::int`, because the sized types are for FFI and binary data (D-105, D-389, D-1056).
+`clamp`, `pow`, `checked_pow` and the floored division functions exist only in `std::int`, because the sized types are for FFI and binary data (D-105, D-389, D-1056). `to_base` is in every integer module, since the sized types write hex for binary data (D-P11).
 
 The bitwise operators `&`, `|`, `^`, `<<` and `>>` are built in on every integer type and cannot be overloaded (§5.4.6, D-092, D-118), so there are no functions for them. There is no `sign`, `is_even` or `gcd`: `int::compare(n, 0)` and `n % 2 == 0` say the same, and Euclid's algorithm is a three-line function (example 028).
 
@@ -84,7 +84,7 @@ test "max_safe is the largest portable Int" {
 
 ## Conversions
 
-Conversions follow D-308: from each sized integer type there is a function `from_source`, which returns `Int` when every value of the source fits and `Result<Int, Nil>` otherwise. There is no `from_float` or `from_f32`. A float becomes an `Int` through `float::truncate`, `round`, `floor` and `ceil`, and the same functions of `std::f32` (D-359).
+Conversions follow D-308: from each sized integer type there is a function `from_source`, which returns `Int` when every value of the source fits and `Result<Int, Nil>` otherwise. The two narrowing ones, from `I64` and `U64`, have wrapping twins, `wrapping_from_i64` and `wrapping_from_u64`, which keep the 64 bits of the source (D-P12). There is no `from_float` or `from_f32`. A float becomes an `Int` through `float::truncate`, `round`, `floor` and `ceil`, and the same functions of `std::f32` (D-359).
 
 ### `from_i8`
 
@@ -226,6 +226,58 @@ test "from_u64 fails above Int's range" {
 }
 ```
 
+### `wrapping_from_i64`
+
+```cheby
+pub fn wrapping_from_i64(n: I64) -> Int
+```
+
+Returns `n` as an `Int`. Every `I64` has the same 64 bits as an `Int`, so this is `from_i64` without the `Result` (D-P12).
+
+- **Panics:** on JS, when `n` is outside ±(2⁵³−1), like any other `Int` result (D-037).
+- **Cost:** O(1). Informative.
+
+```cheby
+test "wrapping_from_i64 keeps the value" {
+  assert int::wrapping_from_i64(-42) == -42
+  assert int::wrapping_from_i64(0) == 0
+}
+
+@target(native)
+test "wrapping_from_i64 keeps every I64 on native" {
+  assert int::wrapping_from_i64(9_223_372_036_854_775_807) == int::max_value
+  assert int::wrapping_from_i64(-9_223_372_036_854_775_808) == int::min_value
+}
+```
+
+### `wrapping_from_u64`
+
+```cheby
+pub fn wrapping_from_u64(n: U64) -> Int
+```
+
+Returns the `Int` whose two's-complement bits are those of `n`: `n` itself up to 2⁶³−1, and `n` − 2⁶⁴ above it (D-P12). `u64::wrapping_from_int` is the inverse.
+
+- **Panics:** on JS, when the result is outside ±(2⁵³−1), like any other `Int` result (D-037).
+- **Cost:** O(1). Informative.
+
+```cheby
+test "wrapping_from_u64 reads the bits as two's complement" {
+  assert int::wrapping_from_u64(42) == 42
+  assert int::wrapping_from_u64(18_446_744_073_709_551_615) == -1
+  assert int::wrapping_from_u64(18_446_744_073_709_551_574) == -42
+}
+
+@target(native)
+test "wrapping_from_u64 covers every Int on native" {
+  assert int::wrapping_from_u64(9_223_372_036_854_775_807) == int::max_value
+  assert int::wrapping_from_u64(9_223_372_036_854_775_808) == int::min_value
+  assert int::wrapping_from_u64(9_223_372_036_854_775_809) == int::min_value + 1
+}
+```
+
+Hashes and binary formats compute in `U64` and read the result as an `Int` this way, and `u64::wrapping_from_int` goes back.
+
 ## Parsing and text
 
 ### `parse`
@@ -320,7 +372,7 @@ test "to_base writes other bases" {
 }
 ```
 
-`to_base` is the inverse of `parse_base`. Text in another base is a different operation from `show`, so it does not break D-307 (D-390).
+`to_base` is the inverse of `parse_base`. Text in another base is a different operation from `show`, so it does not break D-307 (D-390). Every sized integer module has a `to_base` with the same digits (D-P11).
 
 ## Comparison
 

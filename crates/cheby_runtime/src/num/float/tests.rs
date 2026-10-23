@@ -21,6 +21,10 @@ fn show_f32(x: f32) -> String {
     no_leaks(|| take_string(f32_kernels::show(x)))
 }
 
+fn to_fixed(x: f64, digits: i64) -> String {
+    no_leaks(|| take_string(float_kernels::to_fixed(x, digits)))
+}
+
 fn parse(text: &str) -> Option<f64> {
     // SAFETY: `word` is the live string `with_text` made.
     no_leaks(|| {
@@ -206,6 +210,99 @@ fn conversions_follow_d359() {
     assert_eq!(
         f32_kernels::from_float(1.0 + f64::from(f32::EPSILON) * 1.5),
         1.0 + 2.0 * f32::EPSILON
+    );
+}
+
+/// The draft's table and more, checked against Python's `decimal` with
+/// `ROUND_HALF_UP` on the exact value (D-P06).
+#[test]
+fn to_fixed_rounds_the_exact_value_with_ties_away_from_zero() {
+    let cases: &[(f64, i64, &str)] = &[
+        (12.3456, 3, "12.346"),
+        (0.125, 2, "0.13"),
+        (0.375, 2, "0.38"),
+        (-0.375, 2, "-0.38"),
+        (2.5, 0, "3"),
+        (-2.5, 0, "-3"),
+        (0.5, 0, "1"),
+        (-0.5, 0, "-1"),
+        (1.5, 0, "2"),
+        (0.6, 0, "1"),
+        (0.1, 0, "0"),
+        // Not ties: the binary values are just below and above.
+        (1.005, 2, "1.00"),
+        (0.045, 2, "0.04"),
+        (123.456, 1, "123.5"),
+        (999.995, 2, "1000.00"),
+        (0.1, 20, "0.10000000000000000555"),
+        (1.0e-7, 10, "0.0000001000"),
+        (2.0, 3, "2.000"),
+        (9_007_199_254_740_993.0, 1, "9007199254740992.0"),
+        // From 1e21 up there is no exponent, as there is in `show`.
+        (1.0e21, 1, "1000000000000000000000.0"),
+        (1.0e21, 0, "1000000000000000000000"),
+        (1.0e22, 2, "10000000000000000000000.00"),
+        (1.0e23, 0, "99999999999999991611392"),
+        (
+            -1.0e300,
+            0,
+            "-1000000000000000052504760255204420248704468581108159154915854115511802457988908195786371375080447864043704443832883878176942523235360430575644792184786706982848387200926575803737830233794788090059368953234970799945081119038967640880074652742780142494579258788820056842838115669472196386865459400540160",
+        ),
+        (
+            f64::MAX,
+            0,
+            "179769313486231570814527423731704356798070567525844996598917476803157260780028538760589558632766878171540458953514382464234321326889464182768467546703537516986049910576551282076245490090389328944075868508455133942304583236903222948165808559332123348274797826204144723168738177180919299881250404026184124858368",
+        ),
+        // 2^-100 has exactly 100 decimals, and 2^-101 a tie at 100.
+        (
+            2.0_f64.powi(-100),
+            100,
+            "0.0000000000000000000000000000007888609052210118054117285652827862296732064351090230047702789306640625",
+        ),
+        (
+            2.0_f64.powi(-101),
+            100,
+            "0.0000000000000000000000000000003944304526105059027058642826413931148366032175545115023851394653320313",
+        ),
+        // Subnormals are below every kept digit.
+        (5e-324, 0, "0"),
+        (-5e-324, 3, "-0.000"),
+        (f64::MIN_POSITIVE / 2.0, 2, "0.00"),
+    ];
+    for &(x, digits, text) in cases {
+        assert_eq!(to_fixed(x, digits), text, "{x:e} {digits}");
+    }
+}
+
+#[test]
+fn to_fixed_keeps_the_sign_bit_and_spells_special_values() {
+    assert_eq!(to_fixed(0.0, 2), "0.00");
+    assert_eq!(to_fixed(-0.0, 2), "-0.00");
+    assert_eq!(to_fixed(-0.0, 0), "-0");
+    assert_eq!(to_fixed(-0.004, 2), "-0.00");
+    assert_eq!(to_fixed(-1.0e-300, 1), "-0.0");
+    assert_eq!(to_fixed(f64::NAN, 2), "NaN");
+    assert_eq!(to_fixed(-f64::NAN, 2), "NaN");
+    assert_eq!(to_fixed(f64::INFINITY, 0), "inf");
+    assert_eq!(to_fixed(f64::NEG_INFINITY, 1), "-inf");
+}
+
+/// `digits` is a count clamped to 0 to 100 (D-298).
+#[test]
+fn to_fixed_clamps_digits() {
+    let hundred = format!("1.{}", "0".repeat(100));
+    assert_eq!(to_fixed(1.0, 100), hundred);
+    assert_eq!(to_fixed(1.0, 101), hundred);
+    assert_eq!(to_fixed(1.0, i64::MAX), hundred);
+    assert_eq!(to_fixed(1.25, -1), "1");
+    assert_eq!(to_fixed(1.5, i64::MIN), "2");
+    // 0.1 with all 100 digits: its 55 significant ones, then zeros.
+    assert_eq!(
+        to_fixed(0.1, 100),
+        format!(
+            "0.1000000000000000055511151231257827021181583404541015625{}",
+            "0".repeat(45)
+        )
     );
 }
 
