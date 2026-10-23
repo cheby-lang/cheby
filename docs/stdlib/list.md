@@ -318,6 +318,70 @@ test "split_at splits after a prefix" {
 }
 ```
 
+### `take_while`
+
+```cheby
+pub fn take_while<T>(xs: List<T>, keep: fn(T) -> Bool) -> List<T>
+```
+
+Returns the longest prefix of `xs` whose elements all satisfy `keep`. It calls `keep` front to back and stops calling it at the first element for which it returns `False`.
+
+- **Cost:** O(p + log n), where p is the length of the prefix, plus the calls to `keep`. Informative.
+
+```cheby
+test "take_while keeps the matching prefix" {
+  assert list::take_while([1, 2, 5, 1], fn(n) { n < 3 }) == [1, 2]
+  assert list::take_while([5, 1], fn(n) { n < 3 }) == []
+  assert list::take_while([1, 2], fn(n) { n < 3 }) == [1, 2]
+  let stops = list::take_while([1, 5, 9], fn(n) {
+    case n {
+      9 => panic as "not reached"
+      _ => n < 3
+    }
+  })
+  assert stops == [1]
+}
+```
+
+`take_while`, `drop_while` and `split_while` are written in Cheby: `position` finds the cut, and `take`, `drop` and `split_at` make it, so a list at its last use is cut in place (D-894, D-P05).
+
+### `drop_while`
+
+```cheby
+pub fn drop_while<T>(xs: List<T>, keep: fn(T) -> Bool) -> List<T>
+```
+
+Returns `xs` without the longest prefix whose elements all satisfy `keep`. It calls `keep` front to back and stops calling it at the first element for which it returns `False`.
+
+- **Cost:** O(p + log n), where p is the length of the prefix, plus the calls to `keep`. Informative.
+
+```cheby
+test "drop_while removes the matching prefix" {
+  assert list::drop_while([1, 2, 5, 1], fn(n) { n < 3 }) == [5, 1]
+  assert list::drop_while([5, 1], fn(n) { n < 3 }) == [5, 1]
+  assert list::drop_while([1, 2], fn(n) { n < 3 }) == []
+}
+```
+
+### `split_while`
+
+```cheby
+pub fn split_while<T>(xs: List<T>, keep: fn(T) -> Bool) -> (List<T>, List<T>)
+```
+
+Splits `xs` after the longest prefix whose elements all satisfy `keep`, the same as `(take_while(xs, keep), drop_while(xs, keep))`. It calls `keep` front to back and stops calling it at the first element for which it returns `False`, so `keep` is called once per element of the prefix and once more.
+
+- **Cost:** O(p + log n), where p is the length of the prefix, plus the calls to `keep`. Informative.
+
+```cheby
+test "split_while splits after the matching prefix" {
+  let is_digit = fn(c) { c >= "0" && c <= "9" }
+  assert list::split_while(["4", "2", "+", "1"], is_digit) == (["4", "2"], ["+", "1"])
+  assert list::split_while(["x"], is_digit) == ([], ["x"])
+  assert list::split_while(list::new::<String>(), is_digit) == ([], [])
+}
+```
+
 ## Searching
 
 ### `contains`
@@ -361,6 +425,40 @@ test "find returns the first match" {
   assert stops == Some(2)
 }
 ```
+
+### `find_map`
+
+```cheby
+pub fn find_map<T, U>(xs: List<T>, f: fn(T) -> Option<U>) -> Option<U>
+```
+
+Calls `f` on the elements front to back and returns the first `Some` that it returns. It stops calling `f` at that element.
+
+- **Fails:** `None` when `f` returns `None` for every element.
+- **Cost:** O(n), plus the calls to `f`. Informative.
+
+```cheby
+test "find_map returns the first Some" {
+  let parsed = fn(text) {
+    case int::parse(text) {
+      Ok(n) => Some(n)
+      Err(_) => None
+    }
+  }
+  assert list::find_map(["a", "12", "7"], parsed) == Some(12)
+  assert list::find_map(["a", "b"], parsed) == None
+  let stops = list::find_map([1, 2, 3], fn(n) {
+    case n {
+      3 => panic as "not reached"
+      2 => Some(n * 10)
+      _ => None
+    }
+  })
+  assert stops == Some(20)
+}
+```
+
+The callback returns `Option`, as `filter_map`'s does (D-379). `list::first(list::filter_map(xs, f))` gives the same answer, but calls `f` on every element and builds a list (D-P02).
 
 ### `position`
 
@@ -653,6 +751,105 @@ test "fold combines from the front" {
   assert list::fold(["a", "b", "c"], "", fn(text, s) { text + s }) == "abc"
 }
 ```
+
+### `try_fold`
+
+```cheby
+pub fn try_fold<T, A, E>(xs: List<T>, initial: A, f: fn(A, T) -> Result<A, E>) -> Result<A, E>
+```
+
+Combines the elements from front to back like `fold`, with a callback that can fail. It calls `f` with `initial` and the first element, and while `f` returns `Ok`, with the value inside and the next element. It stops calling `f` at the first `Err` and returns that `Err`. Otherwise it returns `Ok` of the last result, which is `Ok(initial)` for `[]` (D-P01).
+
+- **Fails:** the first `Err` that `f` returns.
+- **Cost:** O(n), plus the calls to `f`. Informative.
+
+```cheby
+test "try_fold stops at the first error" {
+  fn total(texts: List<String>) -> Result<Int, Nil> {
+    use running, text <- list::try_fold(texts, 0)
+    case int::parse(text) {
+      Ok(n) => Ok(running + n)
+      Err(Nil) => Err(Nil)
+    }
+  }
+  assert total(["1", "2", "3"]) == Ok(6)
+  assert total(["1", "x", "3"]) == Err(Nil)
+  assert total([]) == Ok(0)
+  let stops = list::try_fold([1, 2, 3], 0, fn(running, n) {
+    case n {
+      3 => panic as "not reached"
+      2 => Err("stopped after {running}")
+      _ => Ok(running + n)
+    }
+  })
+  assert stops == Err("stopped after 1")
+}
+```
+
+The callback comes last, so `use` reads like a loop body, and inside it `use … <- result::try(…)` chains the steps that can fail. A search stops with its answer as `Err(answer)`. `find`, `find_map`, `any` and `all` cover the common searches without that (D-P01).
+
+### `try_map`
+
+```cheby
+pub fn try_map<T, U, E>(xs: List<T>, f: fn(T) -> Result<U, E>) -> Result<List<U>, E>
+```
+
+Calls `f` on each element, front to back, and returns `Ok` of the results in order. It stops calling `f` at the first `Err` and returns that `Err`.
+
+- **Fails:** the first `Err` that `f` returns.
+- **Cost:** O(n), plus the calls to `f`. Informative.
+
+```cheby
+test "try_map stops at the first error" {
+  assert list::try_map(["1", "2"], int::parse) == Ok([1, 2])
+  assert list::try_map(["1", "two", "x"], int::parse) == Err(Nil)
+  let stops = list::try_map([1, 2, 3], fn(n) {
+    case n {
+      3 => panic as "not reached"
+      2 => Err("two")
+      _ => Ok(n)
+    }
+  })
+  assert stops == Err("two")
+}
+```
+
+`result::all(list::map(xs, f))` gives the same answer, but keeps calling `f` after the first `Err`, so the effects of the later calls still happen (D-354, D-P02).
+
+### `try_each`
+
+```cheby
+pub fn try_each<T, E>(xs: List<T>, f: fn(T) -> Result<Nil, E>) -> Result<Nil, E>
+```
+
+Calls `f` on each element, front to back, for its effects, and returns `Ok(Nil)`. It stops calling `f` at the first `Err` and returns that `Err`.
+
+- **Fails:** the first `Err` that `f` returns.
+- **Cost:** O(n), plus the calls to `f`. Informative.
+
+```cheby
+test "try_each stops at the first error" {
+  let positive = fn(n) {
+    case n > 0 {
+      True => Ok(Nil)
+      False => Err(n)
+    }
+  }
+  assert list::try_each([1, 2], positive) == Ok(Nil)
+  assert list::try_each([1, -2, -3], positive) == Err(-2)
+  assert list::try_each([], positive) == Ok(Nil)
+  let stops = list::try_each([1, 2, 3], fn(n) {
+    case n {
+      3 => panic as "not reached"
+      2 => Err(n)
+      _ => Ok(Nil)
+    }
+  })
+  assert stops == Err(2)
+}
+```
+
+`try_fold`, `try_map` and `try_each` match `Ok` and `Err` with `case` in their bodies, because `std::result` imports `std::list` (D-145). Each is tail-recursive (D-P02).
 
 ### `sum`
 

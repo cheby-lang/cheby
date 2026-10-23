@@ -204,6 +204,76 @@ test "each calls the function once per entry" {
   each(lengths, fn(key, value) { assert string::length(key) == value })
 }
 
+/// Combines the entries like `fold`, in the map's per-process order
+/// (D-093), and stops at the first `Err` that `f` returns (D-P01, D-P03).
+/// It walks `to_list`, so the list is built before the first call.
+pub fn try_fold<K, V, A, E>(
+  m: Map<K, V>,
+  initial: A,
+  f: fn(A, K, V) -> Result<A, E>,
+) -> Result<A, E> {
+  list::try_fold(to_list(m), initial, fn(found, (key, value)) { f(found, key, value) })
+}
+
+test "try_fold stops at the first error" {
+  fn add_stock(total: Int, name: String, count: Int) -> Result<Int, String> {
+    case count {
+      0 => Err("no {name}")
+      _ => Ok(total + count)
+    }
+  }
+  let stock = from_list([("pear", 3), ("fig", 0), ("apple", 5)])
+  assert try_fold(stock, 0, add_stock) == Err("no fig")
+  assert try_fold(remove(stock, "fig"), 0, add_stock) == Ok(8)
+  assert try_fold(new(), 7, add_stock) == Ok(7)
+  let stops = try_fold(stock, 0, fn(calls, _, _) {
+    case calls {
+      0 => Err("stopped")
+      _ => panic as "not reached"
+    }
+  })
+  assert stops == Err("stopped")
+}
+
+/// Tells whether `predicate` returns `True` for some entry, stopping at
+/// the first such entry (D-P03).
+pub fn any<K, V>(m: Map<K, V>, predicate: fn(K, V) -> Bool) -> Bool {
+  list::any(to_list(m), fn((key, value)) { predicate(key, value) })
+}
+
+test "any looks for a matching entry" {
+  let ages = from_list([("ada", 36), ("alan", 41)])
+  assert any(ages, fn(_, age) { age > 40 })
+  assert !any(ages, fn(name, _) { name == "grace" })
+  assert !any(new::<String, Int>(), fn(_, _) { True })
+}
+
+/// Tells whether `predicate` returns `True` for every entry, stopping at
+/// the first entry for which it returns `False` (D-P03).
+pub fn all<K, V>(m: Map<K, V>, predicate: fn(K, V) -> Bool) -> Bool {
+  list::all(to_list(m), fn((key, value)) { predicate(key, value) })
+}
+
+test "all needs every entry to match" {
+  let ages = from_list([("ada", 36), ("alan", 41)])
+  assert all(ages, fn(_, age) { age > 30 })
+  assert !all(ages, fn(_, age) { age > 40 })
+  assert all(new::<String, Int>(), fn(_, _) { False })
+}
+
+/// Returns an entry for which `predicate` returns `True`, the first in the
+/// map's per-process order (D-093), so which of several matches it returns
+/// can change between runs (D-P03).
+pub fn find<K, V>(m: Map<K, V>, predicate: fn(K, V) -> Bool) -> Option<(K, V)> {
+  list::find(to_list(m), fn((key, value)) { predicate(key, value) })
+}
+
+test "find returns a matching entry" {
+  let ages = from_list([("ada", 36), ("alan", 41)])
+  assert find(ages, fn(_, age) { age > 40 }) == Some(("alan", 41))
+  assert find(ages, fn(_, age) { age > 50 }) == None
+}
+
 // Transforming
 
 /// Returns a map with the same keys, each value replaced by `f` of its key and value.

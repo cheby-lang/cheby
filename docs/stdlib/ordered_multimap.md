@@ -9,12 +9,12 @@ pub type OrderedMultimap<K, V>
 `OrderedMultimap` is opaque. Values are immutable, so every update returns a new multimap, and the old one stays usable.
 
 - **Values.** Each key holds a `List<V>` in the order the values were inserted, with duplicates kept, so inserting `("a", 1)` twice gives `[1, 1]` (D-332). A key is present only while it has at least one value (D-364).
-- **Order.** `keys`, `to_list`, `to_pairs`, `fold`, `each`, `show` and debug printing go from the key inserted first to the key inserted last. Inserting a value under a key that is already present appends it to that key's list, and the key keeps its position. Removing a key and inserting it again moves it to the end (D-340).
+- **Order.** `keys`, `to_list`, `to_pairs`, `fold`, `try_fold`, `each`, `any`, `all`, `find`, `show` and debug printing go from the key inserted first to the key inserted last. Inserting a value under a key that is already present appends it to that key's list, and the key keeps its position. Removing a key and inserting it again moves it to the end (D-340).
 - **Keys.** Keys need no interface. They are compared with `==` and hashed with the built-in hash, as in `Map` (§3.13), so a key that contains a function or a handle panics when it is inserted or looked up (D-233).
 - **Written in Cheby.** The module is written in Cheby over `std::ordered_map`, with no kernel of its own (D-336, D-338). Keys are hashed and compared by the runtime's built-in routines, and no `compare` of the key type is ever called.
 - **Equality, hashing and printing.** The module supplies its own `==`, hashing and debug printing through the standard-library-only attribute of D-342 (§3.13). Two ordered multimaps are `==` only when they have the same keys in the same order, and each key holds the same list of values in the same order. Their hash covers both orders (D-343). Debug printing writes `ordered_multimap::from_list([…])` with one debug-printed pair per value, in the order of `to_pairs` (D-344).
 - **Interfaces.** `OrderedMultimap<K, V>` satisfies `Show` when `K` and `V` do (D-344). It does not satisfy `Compare`.
-- **Costs.** For a multimap of n keys, a lookup takes O(log n), effectively constant as in `Map`, and an update takes O(log n), except that an insert takes O(log n + log m), where m is the number of values of the key: one descent to the key and one push onto its list (D-846). Iterating takes time in proportion to what it returns.
+- **Costs.** For a multimap of n keys, a lookup takes O(log n), effectively constant as in `Map`, and an update takes O(log n), except that an insert takes O(log n + log m), where m is the number of values of the key: one descent to the key and one push onto its list (D-846). Iterating takes time in proportion to what it returns, and a walk that stops after k keys, such as `find`, takes O(log n + k) (D-P03).
 
 The map functions `values`, `upsert`, `map_values` and `merge` have no counterpart in tier 1. `get` and `to_pairs` reach the values, and a caller can rebuild a multimap with `fold`.
 
@@ -332,6 +332,103 @@ Calls `f` once per key, in the multimap's order, with all of its values, for its
 test "each sees every key with its values" {
   let tags = ordered_multimap::from_list([("a", 1), ("b", 2), ("b", 3)])
   ordered_multimap::each(tags, fn(_, values) { assert !list::is_empty(values) })
+}
+```
+
+### `try_fold`
+
+```cheby
+pub fn try_fold<K, V, A, E>(m: OrderedMultimap<K, V>, initial: A, f: fn(A, K, List<V>) -> Result<A, E>) -> Result<A, E>
+```
+
+Combines the keys like `fold`, in the multimap's order, with a callback that can fail. It calls `f` once per key with all of its values, stops calling it at the first `Err` and returns that `Err`, and otherwise returns `Ok` of the last result, which is `Ok(initial)` for an empty multimap (D-P01).
+
+- **Fails:** the first `Err` that `f` returns.
+- **Cost:** O(n), plus the calls to `f`, and O(log n + k) when it stops after k keys. Informative.
+
+```cheby
+test "try_fold stops at the first error" {
+  fn add_single(total: Int, key: String, values: List<Int>) -> Result<Int, String> {
+    case values {
+      [n] => Ok(total + n)
+      _ => Err(key)
+    }
+  }
+  let tags = ordered_multimap::from_list([("b", 1), ("a", 2), ("b", 3)])
+  assert ordered_multimap::try_fold(tags, 0, add_single) == Err("b")
+  assert ordered_multimap::try_fold(ordered_multimap::remove(tags, "b"), 0, add_single) == Ok(2)
+  assert ordered_multimap::try_fold(ordered_multimap::new(), 7, add_single) == Ok(7)
+  let stops = ordered_multimap::try_fold(tags, 0, fn(total, key, values) {
+    case key {
+      "a" => panic as "not reached"
+      _ => Err(total + list::length(values))
+    }
+  })
+  assert stops == Err(2)
+}
+```
+
+`try_fold`, `any`, `all` and `find` walk the insertion order and look each key's values up, as `fold` does (D-848), and stop where the callback does, so the keys after the stop are never visited (D-P03).
+
+### `any`
+
+```cheby
+pub fn any<K, V>(m: OrderedMultimap<K, V>, predicate: fn(K, List<V>) -> Bool) -> Bool
+```
+
+Tells whether `predicate` returns `True` for some key with all of its values. It calls `predicate` in the multimap's order, stops at the first such key, and is `False` for an empty multimap.
+
+- **Cost:** O(n), plus the calls to `predicate`, and O(log n + k) when it stops after k keys. Informative.
+
+```cheby
+test "any stops at the first matching key" {
+  let tags = ordered_multimap::from_list([("b", 2), ("a", 1), ("b", 3), ("c", 4)])
+  assert ordered_multimap::any(tags, fn(key, values) {
+    case key {
+      "a" => panic as "not reached"
+      _ => list::length(values) > 1
+    }
+  })
+  assert !ordered_multimap::any(tags, fn(key, _) { key == "d" })
+  assert !ordered_multimap::any(ordered_multimap::new::<String, Int>(), fn(_, _) { True })
+}
+```
+
+### `all`
+
+```cheby
+pub fn all<K, V>(m: OrderedMultimap<K, V>, predicate: fn(K, List<V>) -> Bool) -> Bool
+```
+
+Tells whether `predicate` returns `True` for every key with all of its values. It calls `predicate` in the multimap's order, stops at the first key for which it returns `False`, and is `True` for an empty multimap.
+
+- **Cost:** O(n), plus the calls to `predicate`, and O(log n + k) when it stops after k keys. Informative.
+
+```cheby
+test "all needs every key to match" {
+  let tags = ordered_multimap::from_list([("a", 1), ("b", 2), ("b", 3)])
+  assert ordered_multimap::all(tags, fn(_, values) { !list::is_empty(values) })
+  assert !ordered_multimap::all(tags, fn(_, values) { list::length(values) > 1 })
+  assert ordered_multimap::all(ordered_multimap::new::<String, Int>(), fn(_, _) { False })
+}
+```
+
+### `find`
+
+```cheby
+pub fn find<K, V>(m: OrderedMultimap<K, V>, predicate: fn(K, List<V>) -> Bool) -> Option<(K, List<V>)>
+```
+
+Returns the first key, with all of its values, in the multimap's order for which `predicate` returns `True`. It stops calling `predicate` at that key.
+
+- **Fails:** `None` when no key matches.
+- **Cost:** O(n), plus the calls to `predicate`, and O(log n + k) when it stops after k keys. Informative.
+
+```cheby
+test "find returns the first matching key in order" {
+  let tags = ordered_multimap::from_list([("c", 4), ("b", 2), ("a", 1), ("b", 3)])
+  assert ordered_multimap::find(tags, fn(key, _) { key != "c" }) == Some(("b", [2, 3]))
+  assert ordered_multimap::find(tags, fn(key, _) { key == "d" }) == None
 }
 ```
 

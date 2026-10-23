@@ -9,7 +9,7 @@ pub type Set<T>
 `Set` is opaque. It is a persistent hash array mapped trie, so every update returns a new set, and the old one stays usable and shares most of its nodes with the new one (D-039).
 
 - **Elements.** Elements need no interface. They are compared with `==` and hashed with the built-in structural hash (§3.13).
-- **Order.** `to_list`, `fold`, `each` and the callbacks of `filter` and `map` visit the elements in an order that depends on a per-process random seed and changes between runs (D-093). Programs that print or compare that order sort first, for example with [`to_sorted_list`](#to_sorted_list).
+- **Order.** `to_list`, `fold`, `try_fold`, `each`, `any`, `all`, `find` and the callbacks of `filter` and `map` visit the elements in an order that depends on a per-process random seed and changes between runs (D-093). Programs that print or compare that order sort first, for example with [`to_sorted_list`](#to_sorted_list).
 - **Kernels.** `new`, `from_list`, `size`, `is_empty`, `contains`, `insert`, `remove` and `to_list` are runtime kernels, and their costs are required (D-274, D-300). The other functions are written in Cheby over them, and their costs are informative. `insert` and `remove` update the set in place when it is unique (§9.3).
 - **Equality, hashing and printing.** Two sets are `==` when they hold the same elements, in any order, and equal sets hash equally (D-093, §3.13). Debug printing writes `set::from_list([…])` with the elements sorted by their debug text, compared as UTF-8 bytes, so it is the same on every run (D-344, D-382, D-587).
 - **Interfaces.** `Set` satisfies neither `Show` nor `Compare`, because its order changes between runs (§8.8, D-344).
@@ -226,6 +226,97 @@ Calls `f` once per element, in the set's per-process order (D-093), for its effe
 ```cheby
 test "each calls the function once per element" {
   set::each(set::from_list([1, 2, 3]), fn(n) { assert n > 0 })
+}
+```
+
+### `try_fold`
+
+```cheby
+pub fn try_fold<T, A, E>(s: Set<T>, initial: A, f: fn(A, T) -> Result<A, E>) -> Result<A, E>
+```
+
+Combines the elements like `fold`, in the set's per-process order (D-093), with a callback that can fail. It calls `f` once per element, stops calling it at the first `Err` and returns that `Err`, and otherwise returns `Ok` of the last result, which is `Ok(initial)` for an empty set (D-P01).
+
+- **Fails:** the first `Err` that `f` returns.
+- **Cost:** O(n), plus the calls to `f`. Informative.
+
+```cheby
+test "try_fold stops at the first error" {
+  fn add_positive(total: Int, n: Int) -> Result<Int, Int> {
+    case n > 0 {
+      True => Ok(total + n)
+      False => Err(n)
+    }
+  }
+  assert set::try_fold(set::from_list([1, 2, 3]), 0, add_positive) == Ok(6)
+  assert set::try_fold(set::from_list([1, -2, 3]), 0, add_positive) == Err(-2)
+  assert set::try_fold(set::new(), 7, add_positive) == Ok(7)
+  let stops = set::try_fold(set::from_list([1, 2, 3]), 0, fn(calls, _) {
+    case calls {
+      0 => Err("stopped")
+      _ => panic as "not reached"
+    }
+  })
+  assert stops == Err("stopped")
+}
+```
+
+`try_fold`, `any`, `all` and `find` walk `to_list`, as `fold` does, so the list of elements is built before the first call, and stopping early saves calls but not that list (D-P03).
+
+### `any`
+
+```cheby
+pub fn any<T>(s: Set<T>, predicate: fn(T) -> Bool) -> Bool
+```
+
+Tells whether `predicate` returns `True` for some element. It calls `predicate` in the set's per-process order (D-093), stops at the first such element, and is `False` for an empty set.
+
+- **Cost:** O(n), plus the calls to `predicate`. Informative.
+
+```cheby
+test "any looks for a matching element" {
+  let digits = set::from_list([1, 2, 3])
+  assert set::any(digits, fn(n) { n > 2 })
+  assert !set::any(digits, fn(n) { n > 3 })
+  assert !set::any(set::new::<Int>(), fn(_) { True })
+}
+```
+
+### `all`
+
+```cheby
+pub fn all<T>(s: Set<T>, predicate: fn(T) -> Bool) -> Bool
+```
+
+Tells whether `predicate` returns `True` for every element. It calls `predicate` in the set's per-process order (D-093), stops at the first element for which it returns `False`, and is `True` for an empty set.
+
+- **Cost:** O(n), plus the calls to `predicate`. Informative.
+
+```cheby
+test "all needs every element to match" {
+  let digits = set::from_list([1, 2, 3])
+  assert set::all(digits, fn(n) { n > 0 })
+  assert !set::all(digits, fn(n) { n > 1 })
+  assert set::all(set::new::<Int>(), fn(_) { False })
+}
+```
+
+### `find`
+
+```cheby
+pub fn find<T>(s: Set<T>, predicate: fn(T) -> Bool) -> Option<T>
+```
+
+Returns a element for which `predicate` returns `True`: the first one in the set's per-process order (D-093). It stops calling `predicate` at that element. When several elements match, which one it returns can change between runs, as the order of `fold` does (D-P03).
+
+- **Fails:** `None` when no element matches.
+- **Cost:** O(n), plus the calls to `predicate`. Informative.
+
+```cheby
+test "find returns a matching element" {
+  let digits = set::from_list([1, 2, 3])
+  assert set::find(digits, fn(n) { n > 2 }) == Some(3)
+  assert set::find(digits, fn(n) { n > 3 }) == None
 }
 ```
 

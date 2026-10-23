@@ -9,12 +9,12 @@ pub type SortedMultimap<K, V>
 `SortedMultimap` is opaque. Values are immutable, so every update returns a new multimap, and the old one stays usable.
 
 - **Values.** Each key holds a `List<V>` in the order the values were inserted, with duplicates kept, so inserting `("a", 1)` twice gives `[1, 1]` (D-332). A key is present only while it has at least one value (D-364).
-- **Order.** `keys`, `to_list`, `to_pairs`, `fold`, `each`, `show` and debug printing go from the smallest key to the largest, by the key type's `compare`. The values of one key stay in insertion order.
+- **Order.** `keys`, `to_list`, `to_pairs`, `fold`, `try_fold`, `each`, `any`, `all`, `find`, `show` and debug printing go from the smallest key to the largest, by the key type's `compare`, and `at` counts keys in that order. The values of one key stay in insertion order.
 - **Keys.** Keys must satisfy `Compare`, and every public function has the bound `K: Compare` (D-385). The hooks of equality, hashing and debug printing take none and never call `compare` (D-845). Two keys are the same key when `compare` returns `Equal`, even if they are not `==`. A value inserted under such a key joins the list of the key already stored, which stays (D-341). A `compare` that disagrees with `==` is a program bug (§8.7). The second example of [`insert`](#insert) shows what the multimap does with one.
-- **Written in Cheby.** The module is written in Cheby over `std::sorted_map`, with no runtime kernel (D-336, D-338). Every comparison is an ordinary call to the key type's `compare` through the bound (§8.5), so a panic inside it unwinds through this module's functions like any other panic. The number and order of the calls to `compare` are not specified, but they are the same on every target (D-232, D-354).
+- **Written in Cheby.** The module is written in Cheby over `std::sorted_map`, with no runtime kernel (D-336, D-338). Every comparison is an ordinary call to the key type's `compare` through the bound (§8.5), so a panic inside it unwinds through this module's functions like any other panic. The number and order of the calls to `compare` are not specified, but they are the same on every target (D-232, D-354). The tree of `std::sorted_map` keeps the size of every subtree, which `size` and `at` need for their required costs, also if it moves into a runtime kernel (D-336, D-P04).
 - **Equality, hashing and printing.** The module supplies its own `==`, hashing and debug printing through the standard-library-only attribute of D-342 (§3.13). Two sorted multimaps are `==` when they have the same keys, and each key holds the same list of values in the same order, and equal multimaps hash equally (D-343). Debug printing writes `sorted_multimap::from_list([…])` with one debug-printed pair per value, in the order of `to_pairs`, so the text rebuilds the same multimap (D-344).
 - **Interfaces.** `SortedMultimap<K, V>` satisfies `Show` when `K` and `V` do (D-344). It does not satisfy `Compare`.
-- **Costs.** For a multimap of n keys, a lookup or an update takes O(log n) time and calls `compare` O(log n) times, except that an insert takes O(log n + log m), where m is the number of values of the key: one descent to the key and one push onto its list (D-846). Iterating takes time in proportion to what it returns and never calls `compare`.
+- **Costs.** For a multimap of n keys, a lookup or an update takes O(log n) time and calls `compare` O(log n) times, except that an insert takes O(log n + log m), where m is the number of values of the key: one descent to the key and one push onto its list (D-846). Iterating takes time in proportion to what it returns and never calls `compare`, and a walk that stops after k keys, such as `find`, takes O(log n + k).
 
 The map functions `values`, `upsert`, `map_values` and `merge` have no counterpart in tier 1. `get` and `to_pairs` reach the values, and a caller can rebuild a multimap with `fold`.
 
@@ -217,6 +217,29 @@ test "range includes start and excludes end" {
 }
 ```
 
+### `at`
+
+```cheby
+pub fn at<K: Compare, V>(m: SortedMultimap<K, V>, index: Int) -> Option<(K, List<V>)>
+```
+
+Returns the key at `index` in key order with all of its values, counting from 0. Positions count keys, as `size` does, not values (D-363).
+
+- **Fails:** `None` when `index` is outside `0` to `size - 1`, negative indexes included (D-318).
+- **Cost:** O(log n), required (D-300). It never calls `compare`.
+
+```cheby
+test "at counts keys from the smallest" {
+  let marks = sorted_multimap::from_list([(3, "c"), (1, "a"), (3, "C")])
+  assert sorted_multimap::at(marks, 0) == Some((1, ["a"]))
+  assert sorted_multimap::at(marks, 1) == Some((3, ["c", "C"]))
+  assert sorted_multimap::at(marks, 2) == None
+  assert sorted_multimap::at(marks, -1) == None
+}
+```
+
+The multimap has no `split`: the parts would need their numbers of values, which would cost O(log n + m) to count for a part of m keys, while `count` is O(1), required (D-P04).
+
 ## Updating
 
 ### `insert`
@@ -369,6 +392,103 @@ Calls `f` once per key, in key order, with all of its values, for its effects.
 test "each sees every key with its values" {
   let tags = sorted_multimap::from_list([("a", 1), ("b", 2), ("b", 3)])
   sorted_multimap::each(tags, fn(_, values) { assert !list::is_empty(values) })
+}
+```
+
+### `try_fold`
+
+```cheby
+pub fn try_fold<K: Compare, V, A, E>(m: SortedMultimap<K, V>, initial: A, f: fn(A, K, List<V>) -> Result<A, E>) -> Result<A, E>
+```
+
+Combines the keys like `fold`, in key order, with a callback that can fail. It calls `f` once per key with all of its values, stops calling it at the first `Err` and returns that `Err`, and otherwise returns `Ok` of the last result, which is `Ok(initial)` for an empty multimap (D-P01).
+
+- **Fails:** the first `Err` that `f` returns.
+- **Cost:** O(n), plus the calls to `f`, and O(log n + k) when it stops after k keys. Informative. It never calls `compare`.
+
+```cheby
+test "try_fold stops at the first error" {
+  fn add_single(total: Int, key: String, values: List<Int>) -> Result<Int, String> {
+    case values {
+      [n] => Ok(total + n)
+      _ => Err(key)
+    }
+  }
+  let tags = sorted_multimap::from_list([("b", 1), ("a", 2), ("b", 3)])
+  assert sorted_multimap::try_fold(tags, 0, add_single) == Err("b")
+  assert sorted_multimap::try_fold(sorted_multimap::remove(tags, "b"), 0, add_single) == Ok(2)
+  assert sorted_multimap::try_fold(sorted_multimap::new(), 7, add_single) == Ok(7)
+  let stops = sorted_multimap::try_fold(tags, 0, fn(total, key, values) {
+    case key {
+      "b" => panic as "not reached"
+      _ => Err(total + list::length(values))
+    }
+  })
+  assert stops == Err(1)
+}
+```
+
+`try_fold`, `any`, `all` and `find` walk the tree and stop where the callback does, so the keys after the stop are never visited (D-P03).
+
+### `any`
+
+```cheby
+pub fn any<K: Compare, V>(m: SortedMultimap<K, V>, predicate: fn(K, List<V>) -> Bool) -> Bool
+```
+
+Tells whether `predicate` returns `True` for some key with all of its values. It calls `predicate` in key order, stops at the first such key, and is `False` for an empty multimap.
+
+- **Cost:** O(n), plus the calls to `predicate`, and O(log n + k) when it stops after k keys. Informative. It never calls `compare`.
+
+```cheby
+test "any stops at the first matching key" {
+  let tags = sorted_multimap::from_list([("a", 1), ("b", 2), ("b", 3), ("c", 4)])
+  assert sorted_multimap::any(tags, fn(key, values) {
+    case key {
+      "c" => panic as "not reached"
+      _ => list::length(values) > 1
+    }
+  })
+  assert !sorted_multimap::any(tags, fn(key, _) { key == "d" })
+  assert !sorted_multimap::any(sorted_multimap::new::<String, Int>(), fn(_, _) { True })
+}
+```
+
+### `all`
+
+```cheby
+pub fn all<K: Compare, V>(m: SortedMultimap<K, V>, predicate: fn(K, List<V>) -> Bool) -> Bool
+```
+
+Tells whether `predicate` returns `True` for every key with all of its values. It calls `predicate` in key order, stops at the first key for which it returns `False`, and is `True` for an empty multimap.
+
+- **Cost:** O(n), plus the calls to `predicate`, and O(log n + k) when it stops after k keys. Informative. It never calls `compare`.
+
+```cheby
+test "all needs every key to match" {
+  let tags = sorted_multimap::from_list([("a", 1), ("b", 2), ("b", 3)])
+  assert sorted_multimap::all(tags, fn(_, values) { !list::is_empty(values) })
+  assert !sorted_multimap::all(tags, fn(_, values) { list::length(values) > 1 })
+  assert sorted_multimap::all(sorted_multimap::new::<String, Int>(), fn(_, _) { False })
+}
+```
+
+### `find`
+
+```cheby
+pub fn find<K: Compare, V>(m: SortedMultimap<K, V>, predicate: fn(K, List<V>) -> Bool) -> Option<(K, List<V>)>
+```
+
+Returns the smallest key, with all of its values, for which `predicate` returns `True`. It calls `predicate` in key order and stops calling it at that key.
+
+- **Fails:** `None` when no key matches.
+- **Cost:** O(n), plus the calls to `predicate`, and O(log n + k) when it stops after k keys. Informative. It never calls `compare`.
+
+```cheby
+test "find returns the first matching key in order" {
+  let tags = sorted_multimap::from_list([("c", 4), ("b", 2), ("a", 1), ("b", 3)])
+  assert sorted_multimap::find(tags, fn(key, _) { key > "a" }) == Some(("b", [2, 3]))
+  assert sorted_multimap::find(tags, fn(key, _) { key == "d" }) == None
 }
 ```
 

@@ -278,6 +278,85 @@ test "each sees every key with its values" {
   each(tags, fn(_, values) { assert !list::is_empty(values) })
 }
 
+/// Combines the keys in the multimap's order like `fold`, each with all of
+/// its values, and stops at the first `Err` that `f` returns (D-P01,
+/// D-P03). It walks the order tree through `ordered_map::try_fold`, so a
+/// walk that stops after k keys takes O(log n + k).
+pub fn try_fold<K, V, A, E>(
+  m: OrderedMultimap<K, V>,
+  initial: A,
+  f: fn(A, K, List<V>) -> Result<A, E>,
+) -> Result<A, E> {
+  ordered_map::try_fold(m.entries, initial, f)
+}
+
+test "try_fold stops at the first error" {
+  fn add_single(total: Int, key: String, values: List<Int>) -> Result<Int, String> {
+    case values {
+      [n] => Ok(total + n)
+      _ => Err(key)
+    }
+  }
+  let tags = from_list([("b", 1), ("a", 2), ("b", 3)])
+  assert try_fold(tags, 0, add_single) == Err("b")
+  assert try_fold(remove(tags, "b"), 0, add_single) == Ok(2)
+  assert try_fold(new(), 7, add_single) == Ok(7)
+  let stops = try_fold(tags, 0, fn(total, key, values) {
+    case key {
+      "a" => panic as "not reached"
+      _ => Err(total + list::length(values))
+    }
+  })
+  assert stops == Err(2)
+}
+
+/// Tells whether `predicate` returns `True` for some key with its values,
+/// in the multimap's order, stopping at the first such key (D-P03).
+pub fn any<K, V>(m: OrderedMultimap<K, V>, predicate: fn(K, List<V>) -> Bool) -> Bool {
+  ordered_map::any(m.entries, predicate)
+}
+
+test "any stops at the first matching key" {
+  let tags = from_list([("b", 2), ("a", 1), ("b", 3), ("c", 4)])
+  assert any(tags, fn(key, values) {
+    case key {
+      "a" => panic as "not reached"
+      _ => list::length(values) > 1
+    }
+  })
+  assert !any(tags, fn(key, _) { key == "d" })
+  assert !any(new::<String, Int>(), fn(_, _) { True })
+}
+
+/// Tells whether `predicate` returns `True` for every key with its values,
+/// in the multimap's order, stopping at the first key for which it returns
+/// `False` (D-P03).
+pub fn all<K, V>(m: OrderedMultimap<K, V>, predicate: fn(K, List<V>) -> Bool) -> Bool {
+  ordered_map::all(m.entries, predicate)
+}
+
+test "all needs every key to match" {
+  let tags = from_list([("a", 1), ("b", 2), ("b", 3)])
+  assert all(tags, fn(_, values) { !list::is_empty(values) })
+  assert !all(tags, fn(_, values) { list::length(values) > 1 })
+  assert all(new::<String, Int>(), fn(_, _) { False })
+}
+
+/// Returns the first key in the multimap's order, with its values, for
+/// which `predicate` returns `True`, stopping there (D-P03).
+pub fn find<K, V>(
+  m: OrderedMultimap<K, V>,
+  predicate: fn(K, List<V>) -> Bool,
+) -> Option<(K, List<V>)> {
+  ordered_map::find(m.entries, predicate)
+}
+
+test "find returns the first matching key in order" {
+  let tags = from_list([("c", 4), ("b", 2), ("a", 1), ("b", 3)])
+  assert find(tags, fn(key, _) { key != "c" }) == Some(("b", [2, 3]))
+  assert find(tags, fn(key, _) { key == "d" }) == None
+}
+
 // Transforming
 
 /// Returns the keys, with all their values, for which `keep` returns

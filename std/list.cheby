@@ -220,6 +220,69 @@ test "split_at splits after a prefix" {
   assert split_at([1, 2], 5) == ([1, 2], [])
 }
 
+/// The length of the longest prefix of `xs` whose elements all satisfy
+/// `keep`. It stops calling `keep` at the first element that fails, and
+/// `take`, `drop` and `split_at` make the cut (D-P05).
+priv fn prefix_length<T>(xs: List<T>, keep: fn(T) -> Bool) -> Int {
+  case position(xs, fn(item) { !keep(item) }) {
+    Some(index) => index
+    None => length(xs)
+  }
+}
+
+/// Returns the longest prefix of `xs` whose elements all satisfy `keep`,
+/// stopping at the first element that does not (D-P05).
+pub fn take_while<T>(xs: List<T>, keep: fn(T) -> Bool) -> List<T> {
+  take(xs, prefix_length(xs, keep))
+}
+
+test "take_while keeps the matching prefix" {
+  assert take_while([1, 2, 5, 1], fn(n) { n < 3 }) == [1, 2]
+  assert take_while([5, 1], fn(n) { n < 3 }) == []
+  assert take_while([1, 2], fn(n) { n < 3 }) == [1, 2]
+  let stops = take_while([1, 5, 9], fn(n) {
+    case n {
+      9 => panic as "not reached"
+      _ => n < 3
+    }
+  })
+  assert stops == [1]
+}
+
+/// Returns `xs` without the longest prefix whose elements all satisfy
+/// `keep`, stopping at the first element that does not (D-P05).
+pub fn drop_while<T>(xs: List<T>, keep: fn(T) -> Bool) -> List<T> {
+  drop(xs, prefix_length(xs, keep))
+}
+
+test "drop_while removes the matching prefix" {
+  assert drop_while([1, 2, 5, 1], fn(n) { n < 3 }) == [5, 1]
+  assert drop_while([5, 1], fn(n) { n < 3 }) == [5, 1]
+  assert drop_while([1, 2], fn(n) { n < 3 }) == []
+}
+
+/// Splits `xs` after the longest prefix whose elements all satisfy `keep`,
+/// the same as `(take_while(xs, keep), drop_while(xs, keep))` (D-P05).
+pub fn split_while<T>(xs: List<T>, keep: fn(T) -> Bool) -> (List<T>, List<T>) {
+  split_at(xs, prefix_length(xs, keep))
+}
+
+test "split_while splits after the matching prefix" {
+  let is_digit = fn(c) { c >= "0" && c <= "9" }
+  assert split_while(["4", "2", "+", "1"], is_digit) == (["4", "2"], ["+", "1"])
+  assert split_while(["x"], is_digit) == ([], ["x"])
+  assert split_while(new::<String>(), is_digit) == ([], [])
+}
+
+test "the while functions cut a long list" {
+  let numbers = range(0, 10_000)
+  let (low, high) = split_while(numbers, fn(n) { n < 9_000 })
+  assert length(low) == 9_000
+  assert first(high) == Some(9_000)
+  assert take_while(numbers, fn(n) { n < 9_000 }) == low
+  assert drop_while(numbers, fn(n) { n < 9_000 }) == high
+}
+
 // Searching
 
 /// Tells whether some element of `xs` is `==` to `item`, stopping at the first match.
@@ -254,6 +317,37 @@ test "find returns the first match" {
     }
   })
   assert stops == Some(2)
+}
+
+/// Returns the first `Some` that `f` returns, calling `f` front to back and
+/// stopping there (D-P02, D-379).
+pub fn find_map<T, U>(xs: List<T>, f: fn(T) -> Option<U>) -> Option<U> {
+  case xs {
+    [] => None
+    [head, ..tail] => case f(head) {
+      None => find_map(tail, f)
+      found => found
+    }
+  }
+}
+
+test "find_map returns the first Some" {
+  let parsed = fn(text) {
+    case int::parse(text) {
+      Ok(n) => Some(n)
+      Err(_) => None
+    }
+  }
+  assert find_map(["a", "12", "7"], parsed) == Some(12)
+  assert find_map(["a", "b"], parsed) == None
+  let stops = find_map([1, 2, 3], fn(n) {
+    case n {
+      3 => panic as "not reached"
+      2 => Some(n * 10)
+      _ => None
+    }
+  })
+  assert stops == Some(20)
 }
 
 /// Returns the index of the first element for which `predicate` returns `True` (D-378).
@@ -471,6 +565,121 @@ pub fn fold<T, A>(xs: List<T>, initial: A, f: fn(A, T) -> A) -> A {
 test "fold combines from the front" {
   assert fold([1, 2, 3], 0, int::add) == 6
   assert fold(["a", "b", "c"], "", fn(text, s) { text + s }) == "abc"
+}
+
+// The `try_` functions match `Ok` and `Err` with `case`: `std::result`
+// imports this module, so this module cannot import it (D-145, D-P02).
+
+/// Combines the elements from front to back like `fold`, stopping at the
+/// first `Err` that `f` returns (D-P01, D-P02).
+pub fn try_fold<T, A, E>(xs: List<T>, initial: A, f: fn(A, T) -> Result<A, E>) -> Result<A, E> {
+  case xs {
+    [] => Ok(initial)
+    [head, ..tail] => case f(initial, head) {
+      Ok(next) => try_fold(tail, next, f)
+      stopped => stopped
+    }
+  }
+}
+
+test "try_fold stops at the first error" {
+  fn total(texts: List<String>) -> Result<Int, Nil> {
+    use running, text <- try_fold(texts, 0)
+    case int::parse(text) {
+      Ok(n) => Ok(running + n)
+      Err(Nil) => Err(Nil)
+    }
+  }
+  assert total(["1", "2", "3"]) == Ok(6)
+  assert total(["1", "x", "3"]) == Err(Nil)
+  assert total([]) == Ok(0)
+  let stops = try_fold([1, 2, 3], 0, fn(running, n) {
+    case n {
+      3 => panic as "not reached"
+      2 => Err("stopped after {running}")
+      _ => Ok(running + n)
+    }
+  })
+  assert stops == Err("stopped after 1")
+}
+
+/// Returns the results of calling `f` on each element, in order, or the
+/// first `Err` that `f` returns, where it stops calling `f` (D-P02).
+pub fn try_map<T, U, E>(xs: List<T>, f: fn(T) -> Result<U, E>) -> Result<List<U>, E> {
+  fn step(found: List<U>, rest: List<T>) -> Result<List<U>, E> {
+    case rest {
+      [] => Ok(found)
+      [head, ..tail] => case f(head) {
+        Ok(item) => step(push(found, item), tail)
+        Err(error) => Err(error)
+      }
+    }
+  }
+  step([], xs)
+}
+
+test "try_map stops at the first error" {
+  assert try_map(["1", "2"], int::parse) == Ok([1, 2])
+  assert try_map(["1", "two", "x"], int::parse) == Err(Nil)
+  let stops = try_map([1, 2, 3], fn(n) {
+    case n {
+      3 => panic as "not reached"
+      2 => Err("two")
+      _ => Ok(n)
+    }
+  })
+  assert stops == Err("two")
+}
+
+/// Calls `f` on each element, front to back, for its effects, and stops at
+/// the first `Err` that `f` returns (D-P02).
+pub fn try_each<T, E>(xs: List<T>, f: fn(T) -> Result<Nil, E>) -> Result<Nil, E> {
+  case xs {
+    [] => Ok(Nil)
+    [head, ..tail] => case f(head) {
+      Ok(_) => try_each(tail, f)
+      stopped => stopped
+    }
+  }
+}
+
+test "try_each stops at the first error" {
+  let positive = fn(n) {
+    case n > 0 {
+      True => Ok(Nil)
+      False => Err(n)
+    }
+  }
+  assert try_each([1, 2], positive) == Ok(Nil)
+  assert try_each([1, -2, -3], positive) == Err(-2)
+  assert try_each([], positive) == Ok(Nil)
+  let stops = try_each([1, 2, 3], fn(n) {
+    case n {
+      3 => panic as "not reached"
+      2 => Err(n)
+      _ => Ok(Nil)
+    }
+  })
+  assert stops == Err(2)
+}
+
+test "the try functions walk a long list" {
+  fn add(total: Int, n: Int) -> Result<Int, Nil> {
+    Ok(total + n)
+  }
+  fn double(n: Int) -> Result<Int, Nil> {
+    Ok(n * 2)
+  }
+  fn below_last(n: Int) -> Result<Nil, Int> {
+    case n < 9_999 {
+      True => Ok(Nil)
+      False => Err(n)
+    }
+  }
+  let numbers = range(0, 10_000)
+  assert try_fold(numbers, 0, add) == Ok(49_995_000)
+  assert try_map(numbers, double) == Ok(map(numbers, fn(n) { n * 2 }))
+  assert try_each(numbers, below_last) == Err(9_999)
 }
 
 /// Adds the elements to `zero`, front to back (D-381, D-406).

@@ -9,7 +9,7 @@ pub type Map<K, V>
 `Map` is opaque. It is a persistent hash array mapped trie, so every update returns a new map, and the old one stays usable and shares most of its nodes with the new one (D-039).
 
 - **Keys.** Keys need no interface. They are compared with `==` and hashed with the built-in structural hash (§3.13).
-- **Order.** `keys`, `values`, `to_list`, `fold`, `each` and the callbacks of `filter` and `map_values` visit the entries in an order that depends on a per-process random seed and changes between runs (D-093). Programs that print or compare that order sort first, for example with [`to_sorted_list`](#to_sorted_list).
+- **Order.** `keys`, `values`, `to_list`, `fold`, `try_fold`, `each`, `any`, `all`, `find` and the callbacks of `filter` and `map_values` visit the entries in an order that depends on a per-process random seed and changes between runs (D-093). Programs that print or compare that order sort first, for example with [`to_sorted_list`](#to_sorted_list).
 - **Kernels.** `new`, `from_list`, `size`, `is_empty`, `get`, `has_key`, `insert`, `remove`, `upsert`, `keys`, `values` and `to_list` are runtime kernels, and their costs are required (D-274, D-300). The other functions are written in Cheby over them, and their costs are informative. `insert`, `remove` and `upsert` update the map in place when it is unique (§9.3).
 - **Equality, hashing and printing.** Two maps are `==` when they hold the same entries, in any order, and equal maps hash equally (D-093, §3.13). Debug printing writes `map::from_list([…])` with the entries sorted by the debug text of each `(key, value)` pair, so it is the same on every run (D-344).
 - **Interfaces.** `Map` satisfies neither `Show` nor `Compare`, because its order changes between runs (§8.8, D-344).
@@ -325,6 +325,98 @@ Calls `f` once per entry, in the map's per-process order (D-093), for its effect
 test "each calls the function once per entry" {
   let lengths = map::from_list([("a", 1), ("bb", 2)])
   map::each(lengths, fn(key, value) { assert string::length(key) == value })
+}
+```
+
+### `try_fold`
+
+```cheby
+pub fn try_fold<K, V, A, E>(m: Map<K, V>, initial: A, f: fn(A, K, V) -> Result<A, E>) -> Result<A, E>
+```
+
+Combines the entries like `fold`, in the map's per-process order (D-093), with a callback that can fail. It calls `f` once per entry, stops calling it at the first `Err` and returns that `Err`, and otherwise returns `Ok` of the last result, which is `Ok(initial)` for an empty map (D-P01).
+
+- **Fails:** the first `Err` that `f` returns.
+- **Cost:** O(n), plus the calls to `f`. Informative.
+
+```cheby
+test "try_fold stops at the first error" {
+  fn add_stock(total: Int, name: String, count: Int) -> Result<Int, String> {
+    case count {
+      0 => Err("no {name}")
+      _ => Ok(total + count)
+    }
+  }
+  let stock = map::from_list([("pear", 3), ("fig", 0), ("apple", 5)])
+  assert map::try_fold(stock, 0, add_stock) == Err("no fig")
+  assert map::try_fold(map::remove(stock, "fig"), 0, add_stock) == Ok(8)
+  assert map::try_fold(map::new(), 7, add_stock) == Ok(7)
+  let stops = map::try_fold(stock, 0, fn(calls, _, _) {
+    case calls {
+      0 => Err("stopped")
+      _ => panic as "not reached"
+    }
+  })
+  assert stops == Err("stopped")
+}
+```
+
+`try_fold`, `any`, `all` and `find` walk `to_list`, as `fold` does, so the list of entries is built before the first call, and stopping early saves calls but not that list (D-P03).
+
+### `any`
+
+```cheby
+pub fn any<K, V>(m: Map<K, V>, predicate: fn(K, V) -> Bool) -> Bool
+```
+
+Tells whether `predicate` returns `True` for some entry. It calls `predicate` in the map's per-process order (D-093), stops at the first such entry, and is `False` for an empty map.
+
+- **Cost:** O(n), plus the calls to `predicate`. Informative.
+
+```cheby
+test "any looks for a matching entry" {
+  let ages = map::from_list([("ada", 36), ("alan", 41)])
+  assert map::any(ages, fn(_, age) { age > 40 })
+  assert !map::any(ages, fn(name, _) { name == "grace" })
+  assert !map::any(map::new::<String, Int>(), fn(_, _) { True })
+}
+```
+
+### `all`
+
+```cheby
+pub fn all<K, V>(m: Map<K, V>, predicate: fn(K, V) -> Bool) -> Bool
+```
+
+Tells whether `predicate` returns `True` for every entry. It calls `predicate` in the map's per-process order (D-093), stops at the first entry for which it returns `False`, and is `True` for an empty map.
+
+- **Cost:** O(n), plus the calls to `predicate`. Informative.
+
+```cheby
+test "all needs every entry to match" {
+  let ages = map::from_list([("ada", 36), ("alan", 41)])
+  assert map::all(ages, fn(_, age) { age > 30 })
+  assert !map::all(ages, fn(_, age) { age > 40 })
+  assert map::all(map::new::<String, Int>(), fn(_, _) { False })
+}
+```
+
+### `find`
+
+```cheby
+pub fn find<K, V>(m: Map<K, V>, predicate: fn(K, V) -> Bool) -> Option<(K, V)>
+```
+
+Returns a entry for which `predicate` returns `True`: the first one in the map's per-process order (D-093). It stops calling `predicate` at that entry. When several entries match, which one it returns can change between runs, as the order of `fold` does (D-P03).
+
+- **Fails:** `None` when no entry matches.
+- **Cost:** O(n), plus the calls to `predicate`. Informative.
+
+```cheby
+test "find returns a matching entry" {
+  let ages = map::from_list([("ada", 36), ("alan", 41)])
+  assert map::find(ages, fn(_, age) { age > 40 }) == Some(("alan", 41))
+  assert map::find(ages, fn(_, age) { age > 50 }) == None
 }
 ```
 

@@ -145,6 +145,71 @@ test "each calls the function once per element" {
   each(from_list([1, 2, 3]), fn(n) { assert n > 0 })
 }
 
+/// Combines the elements like `fold`, in the set's per-process order
+/// (D-093), and stops at the first `Err` that `f` returns (D-P01, D-P03).
+/// It walks `to_list`, so the list is built before the first call.
+pub fn try_fold<T, A, E>(s: Set<T>, initial: A, f: fn(A, T) -> Result<A, E>) -> Result<A, E> {
+  list::try_fold(to_list(s), initial, f)
+}
+
+test "try_fold stops at the first error" {
+  fn add_positive(total: Int, n: Int) -> Result<Int, Int> {
+    case n > 0 {
+      True => Ok(total + n)
+      False => Err(n)
+    }
+  }
+  assert try_fold(from_list([1, 2, 3]), 0, add_positive) == Ok(6)
+  assert try_fold(from_list([1, -2, 3]), 0, add_positive) == Err(-2)
+  assert try_fold(new(), 7, add_positive) == Ok(7)
+  let stops = try_fold(from_list([1, 2, 3]), 0, fn(calls, _) {
+    case calls {
+      0 => Err("stopped")
+      _ => panic as "not reached"
+    }
+  })
+  assert stops == Err("stopped")
+}
+
+/// Tells whether `predicate` returns `True` for some element, stopping at
+/// the first such element (D-P03).
+pub fn any<T>(s: Set<T>, predicate: fn(T) -> Bool) -> Bool {
+  list::any(to_list(s), predicate)
+}
+
+test "any looks for a matching element" {
+  let digits = from_list([1, 2, 3])
+  assert any(digits, fn(n) { n > 2 })
+  assert !any(digits, fn(n) { n > 3 })
+  assert !any(new::<Int>(), fn(_) { True })
+}
+
+/// Tells whether `predicate` returns `True` for every element, stopping at
+/// the first element for which it returns `False` (D-P03).
+pub fn all<T>(s: Set<T>, predicate: fn(T) -> Bool) -> Bool {
+  list::all(to_list(s), predicate)
+}
+
+test "all needs every element to match" {
+  let digits = from_list([1, 2, 3])
+  assert all(digits, fn(n) { n > 0 })
+  assert !all(digits, fn(n) { n > 1 })
+  assert all(new::<Int>(), fn(_) { False })
+}
+
+/// Returns an element for which `predicate` returns `True`, the first in
+/// the set's per-process order (D-093), so which of several matches it
+/// returns can change between runs (D-P03).
+pub fn find<T>(s: Set<T>, predicate: fn(T) -> Bool) -> Option<T> {
+  list::find(to_list(s), predicate)
+}
+
+test "find returns a matching element" {
+  let digits = from_list([1, 2, 3])
+  assert find(digits, fn(n) { n > 2 }) == Some(3)
+  assert find(digits, fn(n) { n > 3 }) == None
+}
+
 // Transforming
 
 /// Returns the elements for which `keep` returns `True`.

@@ -338,6 +338,112 @@ test "each calls the function once per entry" {
   each(lengths, fn(key, value) { assert string::length(key) == value })
 }
 
+/// Combines the entries in the map's order like `fold`, and stops at the
+/// first `Err` that `f` returns (D-P01, D-P03). It walks `order` through
+/// `sorted_map::try_fold_entries` and looks each value up, as `fold` does
+/// (D-848), so a walk that stops after k entries takes O(log n + k).
+pub fn try_fold<K, V, A, E>(
+  m: OrderedMap<K, V>,
+  initial: A,
+  f: fn(A, K, V) -> Result<A, E>,
+) -> Result<A, E> {
+  let index = m.index
+  sorted_map::try_fold_entries(m.order, initial, fn(found, _, key) {
+    case map::get(index, key) {
+      Some((_, value)) => f(found, key, value)
+      None => Ok(found)
+    }
+  })
+}
+
+test "try_fold stops at the first error" {
+  fn add_small(total: Int, key: String, value: Int) -> Result<Int, String> {
+    case value < 10 {
+      True => Ok(total + value)
+      False => Err(key)
+    }
+  }
+  let scores = from_list([("b", 2), ("c", 30), ("a", 40)])
+  assert try_fold(scores, 0, add_small) == Err("c")
+  let small = remove(remove(scores, "c"), "a")
+  assert try_fold(small, 0, add_small) == Ok(2)
+  assert try_fold(new(), 7, add_small) == Ok(7)
+  let stops = try_fold(scores, 0, fn(total, key, value) {
+    case key {
+      "a" => panic as "not reached"
+      "c" => Err(total)
+      _ => Ok(total + value)
+    }
+  })
+  assert stops == Err(2)
+}
+
+/// Tells whether `predicate` returns `True` for some entry, in the map's
+/// order, stopping at the first such entry (D-P03).
+pub fn any<K, V>(m: OrderedMap<K, V>, predicate: fn(K, V) -> Bool) -> Bool {
+  case find(m, predicate) {
+    Some(_) => True
+    None => False
+  }
+}
+
+test "any stops at the first match" {
+  let scores = from_list([("b", 2), ("c", 3), ("a", 1)])
+  assert any(scores, fn(key, value) {
+    case key {
+      "a" => panic as "not reached"
+      _ => value == 3
+    }
+  })
+  assert !any(scores, fn(_, value) { value > 3 })
+  assert !any(new::<String, Int>(), fn(_, _) { True })
+}
+
+/// Tells whether `predicate` returns `True` for every entry, in the map's
+/// order, stopping at the first entry for which it returns `False` (D-P03).
+pub fn all<K, V>(m: OrderedMap<K, V>, predicate: fn(K, V) -> Bool) -> Bool {
+  let walked = try_fold(m, Nil, fn(_, key, value) {
+    case predicate(key, value) {
+      True => Ok(Nil)
+      False => Err(Nil)
+    }
+  })
+  walked == Ok(Nil)
+}
+
+test "all needs every entry to match" {
+  let scores = from_list([("b", 2), ("c", 3), ("a", 1)])
+  assert all(scores, fn(_, value) { value > 0 })
+  assert !all(scores, fn(key, value) {
+    case key {
+      "a" => panic as "not reached"
+      _ => value < 3
+    }
+  })
+  assert all(new::<String, Int>(), fn(_, _) { False })
+}
+
+/// Returns the first entry in the map's order for which `predicate`
+/// returns `True`, stopping there (D-P03).
+pub fn find<K, V>(m: OrderedMap<K, V>, predicate: fn(K, V) -> Bool) -> Option<(K, V)> {
+  let walked = try_fold(m, Nil, fn(_, key, value) {
+    case predicate(key, value) {
+      True => Err((key, value))
+      False => Ok(Nil)
+    }
+  })
+  case walked {
+    Err(found) => Some(found)
+    Ok(_) => None
+  }
+}
+
+test "find returns the first match in insertion order" {
+  let scores = from_list([("b", 2), ("c", 3), ("a", 1)])
+  assert find(scores, fn(_, value) { value != 2 }) == Some(("c", 3))
+  assert find(scores, fn(_, value) { value > 3 }) == None
+}
+
 // Transforming
 
 /// Returns a map with the same keys in the same order, each value replaced
