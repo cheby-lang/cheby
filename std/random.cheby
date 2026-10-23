@@ -10,10 +10,12 @@
 //! arithmetic (D-656). The seeded functions therefore run in constants,
 //! and a constant that reaches a host function is E0077 (D-090, D-537).
 //! The kernel also declares its JS binding, written with the JS back end
-//! (D-661).
+//! (D-661). `split`, `next_bool`, `choose` and `shuffle` are fixed bit for
+//! bit as well (D-P17).
 
 import std::float
 import std::int
+import std::list
 import std::u64
 
 // Types
@@ -37,6 +39,13 @@ const second_multiplier: U64 = 0x94D0_49BB_1331_11EB
 
 /// 2⁵³, the number of fractions `next_fraction` can return (D-655).
 const fractions: Float = 9_007_199_254_740_992.0
+
+/// What D-1048 adds to a state once per spawn to derive a new stream, and
+/// what `split` adds once (D-P17).
+const stream_increment: U64 = 0xD1B5_4A32_D192_ED03
+
+/// The lowest output whose highest bit is 1, 2⁶³ (D-P17).
+const highest_bit: U64 = 0x8000_0000_0000_0000
 
 // The host source
 
@@ -103,6 +112,44 @@ test "a seed always gives the same numbers" {
   assert from_seed(42) != from_seed(43)
 }
 
+/// Returns a new generator and `generator` advanced by one step, in that
+/// order (D-P17). The new generator's state is the one D-1048 gives the
+/// first fiber spawned from `generator`'s state, and the advanced one is
+/// the generator a step leaves, so the two draw different numbers and
+/// neither repeats what `generator` would have drawn first.
+pub fn split(generator: Generator) -> (Generator, Generator) {
+  let (_, advanced) = step(generator)
+  (derived(generator, 1), advanced)
+}
+
+test "split gives a new generator and the advanced one" {
+  let (child, advanced) = split(from_seed(42))
+  assert "{child:?}" == "Generator \{ state: 814261035509592648 }"
+  assert "{advanced:?}" == "Generator \{ state: 11400714819323198527 }"
+  let (_, after_one) = next_fraction(from_seed(42))
+  assert advanced == after_one
+  assert split(from_seed(42)) == (child, advanced)
+}
+
+test "split derives generators that draw apart" {
+  fn rolls(generator, count, drawn) {
+    case count {
+      0 => drawn
+      _ => {
+        let (n, next) = next_int_between(generator, 1, 6)
+        rolls(next, count - 1, [..drawn, n])
+      }
+    }
+  }
+  let (child, advanced) = split(from_seed(42))
+  assert rolls(child, 5, []) == [5, 6, 3, 3, 1]
+  assert rolls(advanced, 5, []) == [2, 1, 1, 5, 1]
+  let (grandchild, _) = split(child)
+  assert "{grandchild:?}" == "Generator \{ state: 735673624672101622 }"
+  let (from_zero, _) = split(from_seed(0))
+  assert "{from_zero:?}" == "Generator \{ state: 9370218965779684112 }"
+}
+
 /// The 64 bits of `n` in two's complement.
 fn bits_of(n: Int) -> U64 {
   case n >= 0 {
@@ -140,13 +187,27 @@ test "seeds are the two's-complement bits of every Int" {
   assert int_of(bits_of(0)) == 0
 }
 
+/// SplitMix64's output function, the mixing of a step (D-655).
+fn mix(z: U64) -> U64 {
+  let mixed = u64::wrapping_mul(z ^ (z >> 30), first_multiplier)
+  let remixed = u64::wrapping_mul(mixed ^ (mixed >> 27), second_multiplier)
+  remixed ^ (remixed >> 31)
+}
+
 /// One step of SplitMix64: its output and the generator after it
 /// (D-655).
 fn step(generator: Generator) -> (U64, Generator) {
   let state = u64::wrapping_add(generator.state, increment)
-  let mixed = u64::wrapping_mul(state ^ (state >> 30), first_multiplier)
-  let remixed = u64::wrapping_mul(mixed ^ (mixed >> 27), second_multiplier)
-  (remixed ^ (remixed >> 31), Generator { state: state })
+  (mix(state), Generator { state: state })
+}
+
+/// The generator that D-1048 derives from `generator` for the `n`th spawn
+/// since its last draw: the state `s + n × 0xD1B54A32D192ED03` modulo
+/// 2⁶⁴, put through `mix`. `split` takes the first (D-P17), and M4's
+/// seeded streams take each spawn's.
+fn derived(generator: Generator, n: U64) -> Generator {
+  let offset = u64::wrapping_mul(n, stream_increment)
+  Generator { state: mix(u64::wrapping_add(generator.state, offset)) }
 }
 
 /// Steps `generator` until an output is at least `threshold`, and returns
@@ -232,4 +293,109 @@ test "next_fraction draws from a seed" {
   let (b, _) = next_fraction(after)
   assert a == 0.7415648787718233
   assert b == 0.1599103928769201
+}
+
+/// Returns `True` or `False`, each equally likely, and the generator that
+/// comes after it. It takes one step and returns `True` when the output's
+/// highest bit is 1 (D-P17).
+pub fn next_bool(generator: Generator) -> (Bool, Generator) {
+  let (output, next) = step(generator)
+  (output >= highest_bit, next)
+}
+
+test "next_bool flips coins from a seed" {
+  fn flips(generator, count, drawn) {
+    case count {
+      0 => drawn
+      _ => {
+        let (b, next) = next_bool(generator)
+        flips(next, count - 1, [..drawn, b])
+      }
+    }
+  }
+  assert flips(from_seed(42), 10, []) == [
+    True,
+    False,
+    False,
+    False,
+    False,
+    True,
+    False,
+    True,
+    False,
+    True,
+  ]
+  assert flips(from_seed(7), 4, []) == [False, False, True, True]
+}
+
+/// Returns an element of `xs`, each position equally likely, and the
+/// generator that comes after it: the element at `next_int_between(generator,
+/// 0, length - 1)`. An empty list gives `(None, generator)` and draws
+/// nothing (D-P17).
+pub fn choose<T>(generator: Generator, xs: List<T>) -> (Option<T>, Generator) {
+  case xs {
+    [] => (None, generator)
+    _ => {
+      let (index, next) = next_int_between(generator, 0, list::length(xs) - 1)
+      (list::get(xs, index), next)
+    }
+  }
+}
+
+test "choose picks an element from a seed" {
+  fn picks(generator, count, drawn) {
+    case count {
+      0 => drawn
+      _ => {
+        let (pick, next) = choose(generator, ["a", "b", "c"])
+        picks(next, count - 1, [..drawn, pick])
+      }
+    }
+  }
+  assert picks(from_seed(42), 6, []) == [
+    Some("b"),
+    Some("b"),
+    Some("a"),
+    Some("a"),
+    Some("b"),
+    Some("a"),
+  ]
+  assert choose::<Int>(from_seed(7), []) == (None, from_seed(7))
+}
+
+/// Returns the elements of `xs` in an order drawn with every order equally
+/// likely, and the generator that comes after it. It is Fisher–Yates: for
+/// `i` from `length - 1` down to 1, it draws `j` with
+/// `next_int_between(generator, 0, i)` and swaps the elements at `i` and
+/// `j`. A list of fewer than two elements draws nothing (D-P17).
+pub fn shuffle<T>(generator: Generator, xs: List<T>) -> (List<T>, Generator) {
+  shuffle_down(generator, xs, list::length(xs) - 1)
+}
+
+/// The Fisher–Yates steps of `shuffle` from position `i` down to 1.
+fn shuffle_down<T>(generator: Generator, xs: List<T>, i: Int) -> (List<T>, Generator) {
+  case i < 1 {
+    True => (xs, generator)
+    False => {
+      let (j, next) = next_int_between(generator, 0, i)
+      shuffle_down(next, swapped(xs, i, j), i - 1)
+    }
+  }
+}
+
+/// `xs` with the elements at `i` and `j` swapped. Both are positions of
+/// `xs`.
+fn swapped<T>(xs: List<T>, i: Int, j: Int) -> List<T> {
+  let assert Some(at_i) = list::get(xs, i)
+  let assert Some(at_j) = list::get(xs, j)
+  xs |> list::set(_, i, at_j) |> list::set(_, j, at_i)
+}
+
+test "shuffle reorders a list from a seed" {
+  let (shuffled, _) = shuffle(from_seed(42), list::range(1, 11))
+  assert shuffled == [1, 10, 6, 9, 7, 5, 8, 3, 2, 4]
+  let (letters, _) = shuffle(from_seed(2026), ["a", "b", "c", "d", "e"])
+  assert letters == ["d", "a", "c", "e", "b"]
+  assert shuffle(from_seed(42), [1]) == ([1], from_seed(42))
+  assert shuffle::<Int>(from_seed(42), []) == ([], from_seed(42))
 }

@@ -8,6 +8,7 @@
 //! function is written in Cheby and runs in constants, with the same
 //! result on every target (D-090, D-232, D-650, D-651).
 
+import std::i64
 import std::int
 import std::string
 
@@ -240,6 +241,64 @@ pub fn neg(d: Duration) -> Duration {
 test "neg flips the sign" {
   assert neg(milliseconds(1_500)) == milliseconds(-1_500)
   assert -zero == zero
+}
+
+/// Returns `d` times `factor`, exactly (D-P22). `d` is split into `a`
+/// seconds and `b` nanoseconds that never have opposite signs, and
+/// `factor` into `q × 10⁹ + r` with `/` and `%`, which truncate. The
+/// result is `a × factor + b × q + (b × r) / 10⁹` seconds plus
+/// `(b × r) % 10⁹` nanoseconds, carried with floor division by
+/// `normalized`. `b × r` is below 10¹⁸ in size and is computed in `I64`,
+/// which is exact on JS too, and every other partial result has the sign
+/// of the result or is 0, so it panics only when the seconds of the
+/// result overflow `Int` (D-025, D-037, D-650).
+pub fn scale(d: Duration, factor: Int) -> Duration {
+  let (a, b) = case d.seconds < 0 && d.nanoseconds > 0 {
+    True => (d.seconds + 1, d.nanoseconds - billion)
+    False => (d.seconds, d.nanoseconds)
+  }
+  let q = factor / billion
+  let r = factor % billion
+  let product = i64::from_int(b) * i64::from_int(r)
+  let assert Ok(carried) = int::from_i64(product / 1_000_000_000)
+  let assert Ok(left_over) = int::from_i64(product % 1_000_000_000)
+  normalized(a * factor + b * q + carried, left_over)
+}
+
+test "scale multiplies a span" {
+  assert scale(milliseconds(1_500), 3) == milliseconds(4_500)
+  assert scale(nanoseconds(1), 1_000_000_007) == nanoseconds(1_000_000_007)
+  assert scale(seconds(2), 1) == seconds(2)
+}
+
+test "scale keeps the sign rules of multiplication" {
+  assert scale(milliseconds(-1_500), 3) == milliseconds(-4_500)
+  assert scale(milliseconds(1_500), -3) == milliseconds(-4_500)
+  assert scale(milliseconds(-1_500), -3) == milliseconds(4_500)
+  assert scale(milliseconds(-500), 3) == milliseconds(-1_500)
+  assert scale(nanoseconds(-1), 1) == nanoseconds(-1)
+  let almost_a_second = nanoseconds(999_999_999)
+  assert scale(almost_a_second, -1_000_000_001) == -(seconds(999_999_999) + almost_a_second)
+}
+
+test "scale by 0 is zero" {
+  assert scale(seconds(5), 0) == zero
+  assert scale(milliseconds(-250), 0) == zero
+  assert scale(zero, -7) == zero
+}
+
+@target(native)
+test "scale is exact up to the ends of Int" {
+  // 1.5 s times this is 2⁶³ − 0.5 s.
+  let factor = int::max_value / 3 * 2 + 1
+  let half = milliseconds(500)
+  let one_and_a_half = milliseconds(1_500)
+  assert scale(one_and_a_half, factor) == seconds(int::max_value) + half
+  assert scale(-one_and_a_half, factor) == seconds(int::min_value) + half
+  let one = nanoseconds(1)
+  assert scale(one, int::max_value) == nanoseconds(int::max_value)
+  assert scale(-one, int::min_value) == nanoseconds(int::max_value) + one
+  assert scale(-half, int::min_value) == seconds(-(int::min_value / 2))
 }
 
 @target(native)
