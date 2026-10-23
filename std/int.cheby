@@ -97,6 +97,59 @@ pub fn from_u32(n: U32) -> Int
 @external(js, "./int.mjs", "from_u64")
 pub fn from_u64(n: U64) -> Result<Int, Nil>
 
+/// Returns `n` as an `Int`, which keeps every bit (D-P12). On JS it panics
+/// outside ±(2⁵³−1), like `from_i64` (D-037).
+pub fn wrapping_from_i64(n: I64) -> Int {
+  let assert Ok(value) = from_i64(n)
+  value
+}
+
+test "wrapping_from_i64 keeps the value" {
+  assert wrapping_from_i64(-42) == -42
+  assert wrapping_from_i64(0) == 0
+}
+
+@target(native)
+test "wrapping_from_i64 keeps every I64 on native" {
+  assert wrapping_from_i64(9_223_372_036_854_775_807) == max_value
+  assert wrapping_from_i64(-9_223_372_036_854_775_808) == min_value
+}
+
+/// Reads the 64 bits of `n` as a two's-complement `Int` (D-P12). On JS it
+/// panics where the result is outside ±(2⁵³−1) (D-037).
+pub fn wrapping_from_u64(n: U64) -> Int {
+  case n < 0x8000_0000_0000_0000 {
+    True => {
+      let assert Ok(value) = from_u64(n)
+      value
+    }
+    False => {
+      // `0xFFFF_FFFF_FFFF_FFFF - n` fits, and minus it minus 1 is `n` - 2^64.
+      let assert Ok(complement) = from_u64(0xFFFF_FFFF_FFFF_FFFF - n)
+      -complement - 1
+    }
+  }
+}
+
+test "wrapping_from_u64 reads the bits as two's complement" {
+  assert wrapping_from_u64(42) == 42
+  assert wrapping_from_u64(18_446_744_073_709_551_615) == -1
+  assert wrapping_from_u64(18_446_744_073_709_551_574) == -42
+}
+
+test "wrapping_from_u64 keeps safe values on every target" {
+  assert wrapping_from_u64(0) == 0
+  assert wrapping_from_u64(9_007_199_254_740_991) == max_safe
+  assert wrapping_from_u64(18_437_736_874_454_810_625) == min_safe
+}
+
+@target(native)
+test "wrapping_from_u64 covers every Int on native" {
+  assert wrapping_from_u64(9_223_372_036_854_775_807) == max_value
+  assert wrapping_from_u64(9_223_372_036_854_775_808) == min_value
+  assert wrapping_from_u64(9_223_372_036_854_775_809) == min_value + 1
+}
+
 // Parsing and text
 
 /// Reads an `Int` written as an optional `-` and ASCII decimal digits (D-312).

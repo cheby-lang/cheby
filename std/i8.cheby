@@ -56,6 +56,208 @@ pub fn from_u32(n: U32) -> Result<I8, Nil>
 @external(js, "./i8.mjs", "from_u64")
 pub fn from_u64(n: U64) -> Result<I8, Nil>
 
+/// Keeps the low 8 bits of `n`'s two's-complement value and reads them as an `I8` (D-P12).
+pub fn wrapping_from_int(n: Int) -> I8 {
+  let low = n & 0xFF
+  case low < 0x80 {
+    True => {
+      let assert Ok(value) = from_int(low)
+      value
+    }
+    False => {
+      // `0xFF - low` fits, and minus it minus 1 is `low` - 2^8.
+      let assert Ok(complement) = from_int(0xFF - low)
+      -complement - 1
+    }
+  }
+}
+
+/// Keeps the low 8 bits of `n`'s two's-complement value and reads them as an `I8` (D-P12).
+pub fn wrapping_from_i16(n: I16) -> I8 {
+  let low = n & 0xFF
+  case low < 0x80 {
+    True => {
+      let assert Ok(value) = from_i16(low)
+      value
+    }
+    False => {
+      // `0xFF - low` fits, and minus it minus 1 is `low` - 2^8.
+      let assert Ok(complement) = from_i16(0xFF - low)
+      -complement - 1
+    }
+  }
+}
+
+/// Keeps the low 8 bits of `n`'s two's-complement value and reads them as an `I8` (D-P12).
+pub fn wrapping_from_i32(n: I32) -> I8 {
+  let low = n & 0xFF
+  case low < 0x80 {
+    True => {
+      let assert Ok(value) = from_i32(low)
+      value
+    }
+    False => {
+      // `0xFF - low` fits, and minus it minus 1 is `low` - 2^8.
+      let assert Ok(complement) = from_i32(0xFF - low)
+      -complement - 1
+    }
+  }
+}
+
+/// Keeps the low 8 bits of `n`'s two's-complement value and reads them as an `I8` (D-P12).
+pub fn wrapping_from_i64(n: I64) -> I8 {
+  let low = n & 0xFF
+  case low < 0x80 {
+    True => {
+      let assert Ok(value) = from_i64(low)
+      value
+    }
+    False => {
+      // `0xFF - low` fits, and minus it minus 1 is `low` - 2^8.
+      let assert Ok(complement) = from_i64(0xFF - low)
+      -complement - 1
+    }
+  }
+}
+
+/// Keeps the low 8 bits of `n`'s two's-complement value and reads them as an `I8` (D-P12).
+pub fn wrapping_from_u8(n: U8) -> I8 {
+  case n < 0x80 {
+    True => {
+      let assert Ok(value) = from_u8(n)
+      value
+    }
+    False => {
+      // `0xFF - n` fits, and minus it minus 1 is `n` - 2^8.
+      let assert Ok(complement) = from_u8(0xFF - n)
+      -complement - 1
+    }
+  }
+}
+
+/// Keeps the low 8 bits of `n`'s two's-complement value and reads them as an `I8` (D-P12).
+pub fn wrapping_from_u16(n: U16) -> I8 {
+  let low = n & 0xFF
+  case low < 0x80 {
+    True => {
+      let assert Ok(value) = from_u16(low)
+      value
+    }
+    False => {
+      // `0xFF - low` fits, and minus it minus 1 is `low` - 2^8.
+      let assert Ok(complement) = from_u16(0xFF - low)
+      -complement - 1
+    }
+  }
+}
+
+/// Keeps the low 8 bits of `n`'s two's-complement value and reads them as an `I8` (D-P12).
+pub fn wrapping_from_u32(n: U32) -> I8 {
+  let low = n & 0xFF
+  case low < 0x80 {
+    True => {
+      let assert Ok(value) = from_u32(low)
+      value
+    }
+    False => {
+      // `0xFF - low` fits, and minus it minus 1 is `low` - 2^8.
+      let assert Ok(complement) = from_u32(0xFF - low)
+      -complement - 1
+    }
+  }
+}
+
+/// Keeps the low 8 bits of `n`'s two's-complement value and reads them as an `I8` (D-P12).
+pub fn wrapping_from_u64(n: U64) -> I8 {
+  let low = n & 0xFF
+  case low < 0x80 {
+    True => {
+      let assert Ok(value) = from_u64(low)
+      value
+    }
+    False => {
+      // `0xFF - low` fits, and minus it minus 1 is `low` - 2^8.
+      let assert Ok(complement) = from_u64(0xFF - low)
+      -complement - 1
+    }
+  }
+}
+
+test "wrapping_from keeps the low 8 bits of every source" {
+  assert wrapping_from_int(-129) == 127
+  assert wrapping_from_int(-128) == -128
+  assert wrapping_from_int(-1) == -1
+  assert wrapping_from_int(0) == 0
+  assert wrapping_from_int(1) == 1
+  assert wrapping_from_int(127) == 127
+  assert wrapping_from_int(128) == -128
+  assert wrapping_from_i16(-32768) == 0
+  assert wrapping_from_i16(-12817) == -17
+  assert wrapping_from_i16(-129) == 127
+  assert wrapping_from_i16(-128) == -128
+  assert wrapping_from_i16(-1) == -1
+  assert wrapping_from_i16(0) == 0
+  assert wrapping_from_i16(1) == 1
+  assert wrapping_from_i16(127) == 127
+  assert wrapping_from_i16(128) == -128
+  assert wrapping_from_i16(12817) == 17
+  assert wrapping_from_i16(32767) == -1
+  assert wrapping_from_i32(-2_147_483_648) == 0
+  assert wrapping_from_i32(-1_985_229_329) == -17
+  assert wrapping_from_i32(-129) == 127
+  assert wrapping_from_i32(-128) == -128
+  assert wrapping_from_i32(-1) == -1
+  assert wrapping_from_i32(0) == 0
+  assert wrapping_from_i32(1) == 1
+  assert wrapping_from_i32(127) == 127
+  assert wrapping_from_i32(128) == -128
+  assert wrapping_from_i32(1_985_229_329) == 17
+  assert wrapping_from_i32(2_147_483_647) == -1
+  assert wrapping_from_i64(-9_223_372_036_854_775_808) == 0
+  assert wrapping_from_i64(-81_985_529_216_486_895) == 17
+  assert wrapping_from_i64(-129) == 127
+  assert wrapping_from_i64(-128) == -128
+  assert wrapping_from_i64(-1) == -1
+  assert wrapping_from_i64(0) == 0
+  assert wrapping_from_i64(1) == 1
+  assert wrapping_from_i64(127) == 127
+  assert wrapping_from_i64(128) == -128
+  assert wrapping_from_i64(81_985_529_216_486_895) == -17
+  assert wrapping_from_i64(9_223_372_036_854_775_807) == -1
+  assert wrapping_from_u8(0) == 0
+  assert wrapping_from_u8(1) == 1
+  assert wrapping_from_u8(127) == 127
+  assert wrapping_from_u8(128) == -128
+  assert wrapping_from_u8(239) == -17
+  assert wrapping_from_u8(255) == -1
+  assert wrapping_from_u16(0) == 0
+  assert wrapping_from_u16(1) == 1
+  assert wrapping_from_u16(127) == 127
+  assert wrapping_from_u16(128) == -128
+  assert wrapping_from_u16(52719) == -17
+  assert wrapping_from_u16(65535) == -1
+  assert wrapping_from_u32(0) == 0
+  assert wrapping_from_u32(1) == 1
+  assert wrapping_from_u32(127) == 127
+  assert wrapping_from_u32(128) == -128
+  assert wrapping_from_u32(2_309_737_967) == -17
+  assert wrapping_from_u32(4_294_967_295) == -1
+  assert wrapping_from_u64(0) == 0
+  assert wrapping_from_u64(1) == 1
+  assert wrapping_from_u64(127) == 127
+  assert wrapping_from_u64(128) == -128
+  assert wrapping_from_u64(81_985_529_216_486_895) == -17
+  assert wrapping_from_u64(18_446_744_073_709_551_615) == -1
+}
+
+@target(native)
+test "wrapping_from_int keeps the low 8 bits of every Int" {
+  assert wrapping_from_int(-9_223_372_036_854_775_808) == 0
+  assert wrapping_from_int(-81_985_529_216_486_895) == 17
+  assert wrapping_from_int(81_985_529_216_486_895) == -17
+  assert wrapping_from_int(9_223_372_036_854_775_807) == -1
+}
+
 // Parsing and text
 
 /// Reads an `I8` written as an optional `-` and ASCII decimal digits (D-312).
@@ -67,6 +269,52 @@ pub fn parse(text: String) -> Result<I8, Nil>
 @external(native, "cheby_i8_parse_base")
 @external(js, "./i8.mjs", "parse_base")
 pub fn parse_base(text: String, base: Int) -> Result<I8, Nil>
+
+/// Returns `n` written in `base`, from 2 to 36, in lowercase digits (D-390, D-P11).
+pub fn to_base(n: I8, base: Int) -> Result<String, Nil> {
+  int::to_base(int::from_i8(n), base)
+}
+
+test "to_base writes every I8 in every base" {
+  assert to_base(-128, 2) == Ok("-10000000")
+  assert to_base(-128, 8) == Ok("-200")
+  assert to_base(-128, 10) == Ok("-128")
+  assert to_base(-128, 16) == Ok("-80")
+  assert to_base(-128, 36) == Ok("-3k")
+  assert to_base(-127, 2) == Ok("-1111111")
+  assert to_base(-127, 8) == Ok("-177")
+  assert to_base(-127, 10) == Ok("-127")
+  assert to_base(-127, 16) == Ok("-7f")
+  assert to_base(-127, 36) == Ok("-3j")
+  assert to_base(-17, 2) == Ok("-10001")
+  assert to_base(-17, 8) == Ok("-21")
+  assert to_base(-17, 10) == Ok("-17")
+  assert to_base(-17, 16) == Ok("-11")
+  assert to_base(-17, 36) == Ok("-h")
+  assert to_base(-1, 2) == Ok("-1")
+  assert to_base(-1, 8) == Ok("-1")
+  assert to_base(-1, 10) == Ok("-1")
+  assert to_base(-1, 16) == Ok("-1")
+  assert to_base(-1, 36) == Ok("-1")
+  assert to_base(0, 2) == Ok("0")
+  assert to_base(0, 8) == Ok("0")
+  assert to_base(0, 10) == Ok("0")
+  assert to_base(0, 16) == Ok("0")
+  assert to_base(0, 36) == Ok("0")
+  assert to_base(1, 2) == Ok("1")
+  assert to_base(1, 8) == Ok("1")
+  assert to_base(1, 10) == Ok("1")
+  assert to_base(1, 16) == Ok("1")
+  assert to_base(1, 36) == Ok("1")
+  assert to_base(127, 2) == Ok("1111111")
+  assert to_base(127, 8) == Ok("177")
+  assert to_base(127, 10) == Ok("127")
+  assert to_base(127, 16) == Ok("7f")
+  assert to_base(127, 36) == Ok("3j")
+  assert to_base(max_value, 0) == Err(Nil)
+  assert to_base(max_value, -16) == Err(Nil)
+  assert to_base(min_value, 37) == Err(Nil)
+}
 
 /// Returns `n` in decimal. It makes `I8` satisfy `Show`.
 @external(native, "cheby_i8_show")
@@ -217,6 +465,10 @@ test "conversions to i8" {
   assert from_int(128) == Err(Nil)
   assert from_i32(-5) == Ok(-5)
   assert from_u8(200) == Err(Nil)
+  assert wrapping_from_u64(0x0123_4567_89AB_CDEF) == -17
+  assert wrapping_from_int(-1) == -1
+  assert wrapping_from_u8(255) == -1
+  assert wrapping_from_int(200) == -56
 }
 
 test "i8 parses and shows decimal digits" {
@@ -227,6 +479,11 @@ test "i8 parses and shows decimal digits" {
   assert parse_base("7f", 16) == Ok(127)
   assert show(-128) == "-128"
   assert "{small}" == "-5"
+  assert to_base(max_value, 16) == Ok("7f")
+  assert to_base(min_value, 2) == Ok("-10000000")
+  assert to_base(35, 36) == Ok("z")
+  assert to_base(max_value, 37) == Err(Nil)
+  assert to_base(max_value, 1) == Err(Nil)
 }
 
 test "comparing i8 values" {

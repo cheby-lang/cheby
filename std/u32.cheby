@@ -4,6 +4,8 @@
 //!
 //! `U32` itself is a builtin item whose home module is this one (D-447).
 
+import std::int
+
 // Constants
 
 /// The smallest `U32`.
@@ -54,6 +56,121 @@ pub fn from_u16(n: U16) -> U32
 @external(js, "./u32.mjs", "from_u64")
 pub fn from_u64(n: U64) -> Result<U32, Nil>
 
+/// Keeps the low 32 bits of `n`'s two's-complement value and reads them as a `U32` (D-P12).
+pub fn wrapping_from_int(n: Int) -> U32 {
+  let assert Ok(low) = from_int(n & 0xFFFF_FFFF)
+  low
+}
+
+/// Keeps the low 32 bits of `n`'s two's-complement value and reads them as a `U32` (D-P12).
+pub fn wrapping_from_i8(n: I8) -> U32 {
+  case n >= 0 {
+    True => {
+      let assert Ok(value) = from_i8(n)
+      value
+    }
+    False => {
+      // `-(n + 1)` fits, and `max_value` minus it is 2^32 + n.
+      let assert Ok(complement) = from_i8(-(n + 1))
+      max_value - complement
+    }
+  }
+}
+
+/// Keeps the low 32 bits of `n`'s two's-complement value and reads them as a `U32` (D-P12).
+pub fn wrapping_from_i16(n: I16) -> U32 {
+  case n >= 0 {
+    True => {
+      let assert Ok(value) = from_i16(n)
+      value
+    }
+    False => {
+      // `-(n + 1)` fits, and `max_value` minus it is 2^32 + n.
+      let assert Ok(complement) = from_i16(-(n + 1))
+      max_value - complement
+    }
+  }
+}
+
+/// Keeps the low 32 bits of `n`'s two's-complement value and reads them as a `U32` (D-P12).
+pub fn wrapping_from_i32(n: I32) -> U32 {
+  case n >= 0 {
+    True => {
+      let assert Ok(value) = from_i32(n)
+      value
+    }
+    False => {
+      // `-(n + 1)` fits, and `max_value` minus it is 2^32 + n.
+      let assert Ok(complement) = from_i32(-(n + 1))
+      max_value - complement
+    }
+  }
+}
+
+/// Keeps the low 32 bits of `n`'s two's-complement value and reads them as a `U32` (D-P12).
+pub fn wrapping_from_i64(n: I64) -> U32 {
+  let assert Ok(low) = from_i64(n & 0xFFFF_FFFF)
+  low
+}
+
+/// Keeps the low 32 bits of `n`'s two's-complement value and reads them as a `U32` (D-P12).
+pub fn wrapping_from_u64(n: U64) -> U32 {
+  let assert Ok(low) = from_u64(n & 0xFFFF_FFFF)
+  low
+}
+
+test "wrapping_from keeps the low 32 bits of every source" {
+  assert wrapping_from_int(-1) == 4_294_967_295
+  assert wrapping_from_int(0) == 0
+  assert wrapping_from_int(1) == 1
+  assert wrapping_from_int(4_294_967_295) == 4_294_967_295
+  assert wrapping_from_int(4_294_967_296) == 0
+  assert wrapping_from_i8(-128) == 4_294_967_168
+  assert wrapping_from_i8(-17) == 4_294_967_279
+  assert wrapping_from_i8(-1) == 4_294_967_295
+  assert wrapping_from_i8(0) == 0
+  assert wrapping_from_i8(1) == 1
+  assert wrapping_from_i8(17) == 17
+  assert wrapping_from_i8(127) == 127
+  assert wrapping_from_i16(-32768) == 4_294_934_528
+  assert wrapping_from_i16(-12817) == 4_294_954_479
+  assert wrapping_from_i16(-1) == 4_294_967_295
+  assert wrapping_from_i16(0) == 0
+  assert wrapping_from_i16(1) == 1
+  assert wrapping_from_i16(12817) == 12817
+  assert wrapping_from_i16(32767) == 32767
+  assert wrapping_from_i32(-2_147_483_648) == 2_147_483_648
+  assert wrapping_from_i32(-1_985_229_329) == 2_309_737_967
+  assert wrapping_from_i32(-1) == 4_294_967_295
+  assert wrapping_from_i32(0) == 0
+  assert wrapping_from_i32(1) == 1
+  assert wrapping_from_i32(1_985_229_329) == 1_985_229_329
+  assert wrapping_from_i32(2_147_483_647) == 2_147_483_647
+  assert wrapping_from_i64(-9_223_372_036_854_775_808) == 0
+  assert wrapping_from_i64(-81_985_529_216_486_895) == 1_985_229_329
+  assert wrapping_from_i64(-1) == 4_294_967_295
+  assert wrapping_from_i64(0) == 0
+  assert wrapping_from_i64(1) == 1
+  assert wrapping_from_i64(4_294_967_295) == 4_294_967_295
+  assert wrapping_from_i64(4_294_967_296) == 0
+  assert wrapping_from_i64(81_985_529_216_486_895) == 2_309_737_967
+  assert wrapping_from_i64(9_223_372_036_854_775_807) == 4_294_967_295
+  assert wrapping_from_u64(0) == 0
+  assert wrapping_from_u64(1) == 1
+  assert wrapping_from_u64(4_294_967_295) == 4_294_967_295
+  assert wrapping_from_u64(4_294_967_296) == 0
+  assert wrapping_from_u64(81_985_529_216_486_895) == 2_309_737_967
+  assert wrapping_from_u64(18_446_744_073_709_551_615) == 4_294_967_295
+}
+
+@target(native)
+test "wrapping_from_int keeps the low 32 bits of every Int" {
+  assert wrapping_from_int(-9_223_372_036_854_775_808) == 0
+  assert wrapping_from_int(-81_985_529_216_486_895) == 1_985_229_329
+  assert wrapping_from_int(81_985_529_216_486_895) == 2_309_737_967
+  assert wrapping_from_int(9_223_372_036_854_775_807) == 4_294_967_295
+}
+
 // Parsing and text
 
 /// Reads an `U32` written as an optional `-` and ASCII decimal digits (D-312).
@@ -65,6 +182,37 @@ pub fn parse(text: String) -> Result<U32, Nil>
 @external(native, "cheby_u32_parse_base")
 @external(js, "./u32.mjs", "parse_base")
 pub fn parse_base(text: String, base: Int) -> Result<U32, Nil>
+
+/// Returns `n` written in `base`, from 2 to 36, in lowercase digits (D-390, D-P11).
+pub fn to_base(n: U32, base: Int) -> Result<String, Nil> {
+  int::to_base(int::from_u32(n), base)
+}
+
+test "to_base writes every U32 in every base" {
+  assert to_base(0, 2) == Ok("0")
+  assert to_base(0, 8) == Ok("0")
+  assert to_base(0, 10) == Ok("0")
+  assert to_base(0, 16) == Ok("0")
+  assert to_base(0, 36) == Ok("0")
+  assert to_base(1, 2) == Ok("1")
+  assert to_base(1, 8) == Ok("1")
+  assert to_base(1, 10) == Ok("1")
+  assert to_base(1, 16) == Ok("1")
+  assert to_base(1, 36) == Ok("1")
+  assert to_base(2_309_737_967, 2) == Ok("10001001101010111100110111101111")
+  assert to_base(2_309_737_967, 8) == Ok("21152746757")
+  assert to_base(2_309_737_967, 10) == Ok("2309737967")
+  assert to_base(2_309_737_967, 16) == Ok("89abcdef")
+  assert to_base(2_309_737_967, 36) == Ok("1275p7z")
+  assert to_base(4_294_967_295, 2) == Ok("11111111111111111111111111111111")
+  assert to_base(4_294_967_295, 8) == Ok("37777777777")
+  assert to_base(4_294_967_295, 10) == Ok("4294967295")
+  assert to_base(4_294_967_295, 16) == Ok("ffffffff")
+  assert to_base(4_294_967_295, 36) == Ok("1z141z3")
+  assert to_base(max_value, 0) == Err(Nil)
+  assert to_base(max_value, -16) == Err(Nil)
+  assert to_base(min_value, 37) == Err(Nil)
+}
 
 /// Returns `n` in decimal. It makes `U32` satisfy `Show`.
 @external(native, "cheby_u32_show")
@@ -211,6 +359,10 @@ test "conversions to u32" {
   assert from_int(4_294_967_295) == Ok(4_294_967_295)
   assert from_int(-1) == Err(Nil)
   assert from_u64(4_294_967_296) == Err(Nil)
+  assert wrapping_from_u64(0x0123_4567_89AB_CDEF) == 0x89AB_CDEF
+  assert wrapping_from_int(-1) == max_value
+  assert wrapping_from_i32(-2_147_483_648) == 2_147_483_648
+  assert wrapping_from_int(200) == 200
 }
 
 test "u32 parses and shows decimal digits" {
@@ -220,6 +372,11 @@ test "u32 parses and shows decimal digits" {
   assert parse_base("ffffffff", 16) == Ok(max_value)
   assert show(max_value) == "4294967295"
   assert "{small}" == "7"
+  assert to_base(max_value, 16) == Ok("ffffffff")
+  assert to_base(min_value, 2) == Ok("0")
+  assert to_base(35, 36) == Ok("z")
+  assert to_base(max_value, 37) == Err(Nil)
+  assert to_base(max_value, 1) == Err(Nil)
 }
 
 test "comparing u32 values" {

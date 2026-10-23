@@ -10,6 +10,8 @@
 //!   `Err(Nil)` for NaN, the infinities and a result outside `Int`'s 64-bit
 //!   range (D-132); `round` takes halfway cases away from zero (D-314).
 //! - `float::sqrt` is IEEE 754's correctly rounded square root.
+//! - `float::to_fixed` writes fixed decimals, ties away from zero
+//!   ([`text::float_to_fixed`], D-P06).
 
 use super::{Kernel, result, text, text_arg};
 use crate::abi::Word;
@@ -280,17 +282,32 @@ mod float_kernels {
         x.sqrt()
     }
 
+    /// `float::to_fixed`: `x` with exactly `digits` decimals, clamped to 0
+    /// to 100, ties away from zero (D-P06, D-298).
+    #[unsafe(export_name = "cheby_float_to_fixed")]
+    pub(crate) extern "C" fn to_fixed(x: f64, digits: i64) -> Word {
+        guarded(None, || values::string(&text::float_to_fixed(x, digits)))
+    }
+
     #[expect(
         clippy::as_conversions,
         reason = "taking the address of a function needs an `as` cast"
     )]
     fn extra(out: &mut Vec<Kernel>) {
-        out.push(Kernel {
-            name: "cheby_float_sqrt",
-            address: sqrt as *const u8,
-            params: &["f64"],
-            result: "f64",
-        });
+        out.extend([
+            Kernel {
+                name: "cheby_float_sqrt",
+                address: sqrt as *const u8,
+                params: &["f64"],
+                result: "f64",
+            },
+            Kernel {
+                name: "cheby_float_to_fixed",
+                address: to_fixed as *const u8,
+                params: &["f64", "i64"],
+                result: "Word",
+            },
+        ]);
     }
 }
 

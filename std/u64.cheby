@@ -6,6 +6,7 @@
 
 import std::i64
 import std::int
+import std::string
 
 // Constants
 
@@ -57,6 +58,123 @@ pub fn from_u16(n: U16) -> U64
 @external(js, "./u64.mjs", "from_u32")
 pub fn from_u32(n: U32) -> U64
 
+/// Keeps the low 64 bits of `n`'s two's-complement value and reads them as a `U64` (D-P12).
+pub fn wrapping_from_int(n: Int) -> U64 {
+  case n >= 0 {
+    True => {
+      let assert Ok(value) = from_int(n)
+      value
+    }
+    False => {
+      // `-(n + 1)` fits, and `max_value` minus it is 2^64 + n.
+      let assert Ok(complement) = from_int(-(n + 1))
+      max_value - complement
+    }
+  }
+}
+
+/// Keeps the low 64 bits of `n`'s two's-complement value and reads them as a `U64` (D-P12).
+pub fn wrapping_from_i8(n: I8) -> U64 {
+  case n >= 0 {
+    True => {
+      let assert Ok(value) = from_i8(n)
+      value
+    }
+    False => {
+      // `-(n + 1)` fits, and `max_value` minus it is 2^64 + n.
+      let assert Ok(complement) = from_i8(-(n + 1))
+      max_value - complement
+    }
+  }
+}
+
+/// Keeps the low 64 bits of `n`'s two's-complement value and reads them as a `U64` (D-P12).
+pub fn wrapping_from_i16(n: I16) -> U64 {
+  case n >= 0 {
+    True => {
+      let assert Ok(value) = from_i16(n)
+      value
+    }
+    False => {
+      // `-(n + 1)` fits, and `max_value` minus it is 2^64 + n.
+      let assert Ok(complement) = from_i16(-(n + 1))
+      max_value - complement
+    }
+  }
+}
+
+/// Keeps the low 64 bits of `n`'s two's-complement value and reads them as a `U64` (D-P12).
+pub fn wrapping_from_i32(n: I32) -> U64 {
+  case n >= 0 {
+    True => {
+      let assert Ok(value) = from_i32(n)
+      value
+    }
+    False => {
+      // `-(n + 1)` fits, and `max_value` minus it is 2^64 + n.
+      let assert Ok(complement) = from_i32(-(n + 1))
+      max_value - complement
+    }
+  }
+}
+
+/// Keeps the low 64 bits of `n`'s two's-complement value and reads them as a `U64` (D-P12).
+pub fn wrapping_from_i64(n: I64) -> U64 {
+  case n >= 0 {
+    True => {
+      let assert Ok(value) = from_i64(n)
+      value
+    }
+    False => {
+      // `-(n + 1)` fits, and `max_value` minus it is 2^64 + n.
+      let assert Ok(complement) = from_i64(-(n + 1))
+      max_value - complement
+    }
+  }
+}
+
+test "wrapping_from keeps the low 64 bits of every source" {
+  assert wrapping_from_int(-1) == 18_446_744_073_709_551_615
+  assert wrapping_from_int(0) == 0
+  assert wrapping_from_int(1) == 1
+  assert wrapping_from_i8(-128) == 18_446_744_073_709_551_488
+  assert wrapping_from_i8(-17) == 18_446_744_073_709_551_599
+  assert wrapping_from_i8(-1) == 18_446_744_073_709_551_615
+  assert wrapping_from_i8(0) == 0
+  assert wrapping_from_i8(1) == 1
+  assert wrapping_from_i8(17) == 17
+  assert wrapping_from_i8(127) == 127
+  assert wrapping_from_i16(-32768) == 18_446_744_073_709_518_848
+  assert wrapping_from_i16(-12817) == 18_446_744_073_709_538_799
+  assert wrapping_from_i16(-1) == 18_446_744_073_709_551_615
+  assert wrapping_from_i16(0) == 0
+  assert wrapping_from_i16(1) == 1
+  assert wrapping_from_i16(12817) == 12817
+  assert wrapping_from_i16(32767) == 32767
+  assert wrapping_from_i32(-2_147_483_648) == 18_446_744_071_562_067_968
+  assert wrapping_from_i32(-1_985_229_329) == 18_446_744_071_724_322_287
+  assert wrapping_from_i32(-1) == 18_446_744_073_709_551_615
+  assert wrapping_from_i32(0) == 0
+  assert wrapping_from_i32(1) == 1
+  assert wrapping_from_i32(1_985_229_329) == 1_985_229_329
+  assert wrapping_from_i32(2_147_483_647) == 2_147_483_647
+  assert wrapping_from_i64(-9_223_372_036_854_775_808) == 9_223_372_036_854_775_808
+  assert wrapping_from_i64(-81_985_529_216_486_895) == 18_364_758_544_493_064_721
+  assert wrapping_from_i64(-1) == 18_446_744_073_709_551_615
+  assert wrapping_from_i64(0) == 0
+  assert wrapping_from_i64(1) == 1
+  assert wrapping_from_i64(81_985_529_216_486_895) == 81_985_529_216_486_895
+  assert wrapping_from_i64(9_223_372_036_854_775_807) == 9_223_372_036_854_775_807
+}
+
+@target(native)
+test "wrapping_from_int keeps the low 64 bits of every Int" {
+  assert wrapping_from_int(-9_223_372_036_854_775_808) == 9_223_372_036_854_775_808
+  assert wrapping_from_int(-81_985_529_216_486_895) == 18_364_758_544_493_064_721
+  assert wrapping_from_int(81_985_529_216_486_895) == 81_985_529_216_486_895
+  assert wrapping_from_int(9_223_372_036_854_775_807) == 9_223_372_036_854_775_807
+}
+
 // Parsing and text
 
 /// Reads an `U64` written as an optional `-` and ASCII decimal digits (D-312).
@@ -68,6 +186,68 @@ pub fn parse(text: String) -> Result<U64, Nil>
 @external(native, "cheby_u64_parse_base")
 @external(js, "./u64.mjs", "parse_base")
 pub fn parse_base(text: String, base: Int) -> Result<U64, Nil>
+
+/// Returns `n` written in `base`, from 2 to 36, in lowercase digits (D-390, D-P11).
+pub fn to_base(n: U64, base: Int) -> Result<String, Nil> {
+  case base >= 2 && base <= 36 {
+    False => Err(Nil)
+    True => {
+      let assert Ok(wide) = from_int(base)
+      Ok(base_digits(n, wide, base, ""))
+    }
+  }
+}
+
+/// The digits of `n` in `base`, in front of `after`. Each digit is below
+/// 36, so it fits `Int` on every target, where `n` may not.
+fn base_digits(n: U64, wide: U64, base: Int, after: String) -> String {
+  let assert Ok(digit) = int::from_u64(n % wide)
+  let assert Ok(text) = int::to_base(digit, base)
+  case n / wide {
+    0 => "{text}{after}"
+    rest => base_digits(rest, wide, base, "{text}{after}")
+  }
+}
+
+test "to_base writes every U64 in every base" {
+  assert to_base(0, 2) == Ok("0")
+  assert to_base(0, 8) == Ok("0")
+  assert to_base(0, 10) == Ok("0")
+  assert to_base(0, 16) == Ok("0")
+  assert to_base(0, 36) == Ok("0")
+  assert to_base(1, 2) == Ok("1")
+  assert to_base(1, 8) == Ok("1")
+  assert to_base(1, 10) == Ok("1")
+  assert to_base(1, 16) == Ok("1")
+  assert to_base(1, 36) == Ok("1")
+  assert to_base(81_985_529_216_486_895, 2) ==
+    Ok("100100011010001010110011110001001101010111100110111101111")
+  assert to_base(81_985_529_216_486_895, 8) == Ok("4432126361152746757")
+  assert to_base(81_985_529_216_486_895, 10) == Ok("81985529216486895")
+  assert to_base(81_985_529_216_486_895, 16) == Ok("123456789abcdef")
+  assert to_base(81_985_529_216_486_895, 36) == Ok("mf9g063v08f")
+  assert to_base(18_446_744_073_709_551_615, 2) ==
+    Ok("1111111111111111111111111111111111111111111111111111111111111111")
+  assert to_base(18_446_744_073_709_551_615, 8) == Ok("1777777777777777777777")
+  assert to_base(18_446_744_073_709_551_615, 10) == Ok("18446744073709551615")
+  assert to_base(18_446_744_073_709_551_615, 16) == Ok("ffffffffffffffff")
+  assert to_base(18_446_744_073_709_551_615, 36) == Ok("3w5e11264sgsf")
+  assert to_base(max_value, 0) == Err(Nil)
+  assert to_base(max_value, -16) == Err(Nil)
+  assert to_base(min_value, 37) == Err(Nil)
+  fn round_trips(n: U64, base: Int) -> Bool {
+    case base > 36 {
+      True => True
+      False => {
+        let assert Ok(text) = to_base(n, base)
+        parse_base(text, base) == Ok(n) && round_trips(n, base + 1)
+      }
+    }
+  }
+  assert round_trips(0, 2)
+  assert round_trips(1, 2)
+  assert round_trips(18_446_744_073_709_551_615, 2)
+}
 
 /// Returns `n` in decimal. It makes `U64` satisfy `Show`.
 @external(native, "cheby_u64_show")
@@ -209,6 +389,9 @@ test "conversions to i64" {
   assert i64::from_u64(42) == Ok(42)
   assert i64::from_u64(max_value) == Err(Nil)
   assert int::from_i64(i64::from_int(-42)) == Ok(-42)
+  assert i64::wrapping_from_u64(0x0123_4567_89AB_CDEF) == 0x0123_4567_89AB_CDEF
+  assert i64::wrapping_from_u64(18_446_744_073_709_551_615) == -1
+  assert i64::wrapping_from_u64(9_223_372_036_854_775_808) == i64::min_value
 }
 
 // Tests of `std::int` that need this module.
@@ -230,6 +413,10 @@ test "conversions to u64" {
   assert from_int(42) == Ok(42)
   assert from_int(-1) == Err(Nil)
   assert from_i64(i64::max_value) == Ok(9_223_372_036_854_775_807)
+  assert wrapping_from_int(-1) == max_value
+  assert wrapping_from_i8(-1) == max_value
+  assert wrapping_from_i64(i64::min_value) == 9_223_372_036_854_775_808
+  assert wrapping_from_int(200) == 200
 }
 
 test "u64 parses and shows decimal digits" {
@@ -239,6 +426,11 @@ test "u64 parses and shows decimal digits" {
   assert parse_base("ffffffffffffffff", 16) == Ok(max_value)
   assert show(max_value) == "18446744073709551615"
   assert "{small}" == "7"
+  assert to_base(max_value, 16) == Ok("ffffffffffffffff")
+  assert to_base(min_value, 2) == Ok("0")
+  assert to_base(35, 36) == Ok("z")
+  assert to_base(max_value, 37) == Err(Nil)
+  assert to_base(max_value, 1) == Err(Nil)
 }
 
 test "comparing u64 values" {

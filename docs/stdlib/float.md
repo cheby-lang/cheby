@@ -8,7 +8,7 @@ pub type Float
 
 Arithmetic on `Float` follows IEEE 754 with rounding to the nearest value, ties to even, so it can produce infinities and NaN and never panics (D-069). Equality is not IEEE equality: `==` is reflexive, so every NaN equals every other NaN, and `-0.0 == 0.0` (D-069). The examples below rely on this when they compare with `float::nan`.
 
-This module has every function of the float families in [Numeric modules](README.md#numeric-modules), written out in full, plus `clamp`, the conversions to `Int`, the tests for special values, square roots, powers and a few transcendental functions. `compare`, `show` and the arithmetic functions make `Float` satisfy `Compare`, `Show`, `Add`, `Sub`, `Mul`, `Div` and `Neg` (§8.7, §8.8). On `Float` operands the compiler uses the built-in operations directly (§5.4.2), so these functions exist to be passed as values and to satisfy bounds.
+This module has every function of the float families in [Numeric modules](README.md#numeric-modules), written out in full, plus `clamp`, `to_fixed`, the conversions to `Int`, the tests for special values, square roots, powers and a few transcendental functions. `compare`, `show` and the arithmetic functions make `Float` satisfy `Compare`, `Show`, `Add`, `Sub`, `Mul`, `Div` and `Neg` (§8.7, §8.8). On `Float` operands the compiler uses the built-in operations directly (§5.4.2), so these functions exist to be passed as values and to satisfy bounds.
 
 The rounding functions `truncate`, `round`, `floor` and `ceil` return `Result<Int, Nil>` (D-132). There are no rounding functions that return a `Float`. `x % 1.0` gives the fractional part of `x`.
 
@@ -402,6 +402,44 @@ test "show spells the special values" {
 ```
 
 These are the thresholds of JS's `Number.prototype.toString`, so numbers print as JSON tools print them, apart from Cheby's `.0` and exponent spelling (D-395).
+
+### `to_fixed`
+
+```cheby
+pub fn to_fixed(x: Float, digits: Int) -> String
+```
+
+Returns `x` in decimal with exactly `digits` digits after the point, with no point when `digits` is 0, and never with an exponent (D-P06).
+
+- The digits are the exact binary value of `x` rounded to `digits` decimals. A tie, which only a value exactly halfway such as 0.125 can be, is rounded away from zero, as `round` rounds (D-314). A value such as `1.005` is not a tie, because its binary value is just below 1.005, so it gives `1.00` with 2 digits.
+- The text starts with `-` whenever the sign bit of `x` is set, so `-0.0` and `-0.004` both give `-0.00` with 2 digits, as `show` writes `-0.0` (D-219).
+- NaN and the infinities are written as `show` writes them: `NaN`, `inf` and `-inf`.
+- A value from 1e21 up is written with all its digits, where `show` switches to an exponent.
+
+- **Clamps:** `digits` below 0 is 0, and above 100 is 100 (D-298).
+- **Cost:** O(1), with at most 100 digits after the point and 309 before it. Informative.
+
+```cheby
+test "to_fixed rounds the exact value with ties away from zero" {
+  assert float::to_fixed(3.14159, 2) == "3.14"
+  assert float::to_fixed(0.125, 2) == "0.13"
+  assert float::to_fixed(1.005, 2) == "1.00"
+  assert float::to_fixed(2.5, 0) == "3"
+  assert float::to_fixed(-2.5, 0) == "-3"
+  assert float::to_fixed(1.0e21, 1) == "1000000000000000000000.0"
+}
+
+test "to_fixed keeps the sign bit and writes special values as show does" {
+  let many = 500
+  assert float::to_fixed(-0.0, 2) == "-0.00"
+  assert float::to_fixed(-0.004, 2) == "-0.00"
+  assert float::to_fixed(float::nan, 2) == "NaN"
+  assert float::to_fixed(float::neg_infinity, 1) == "-inf"
+  assert float::to_fixed(0.5, many) == float::to_fixed(0.5, 100)
+}
+```
+
+`show` gives the shortest text that reads back, and interpolation has no format specifiers (D-203, D-115), so `to_fixed` is how money, percentages and timings get a fixed number of decimals. Rust's own formatting rounds ties to even and JS's `toFixed` writes `0.00` for `-0.0` and switches to an exponent from 1e21, so the rule is fixed here for every target (D-232). Text in another form is a different operation from `show`, so it does not break D-307, as for `int::to_base` (D-390). `std::f32` has no `to_fixed`: `float::to_fixed(float::from_f32(x), digits)` writes an `F32`'s exact value (D-397).
 
 ## Comparison
 

@@ -5,6 +5,7 @@
 //! `I64` itself is a builtin item whose home module is this one (D-447).
 
 import std::int
+import std::string
 
 // Constants
 
@@ -56,6 +57,30 @@ pub fn from_u32(n: U32) -> I64
 @external(js, "./i64.mjs", "from_u64")
 pub fn from_u64(n: U64) -> Result<I64, Nil>
 
+/// Keeps the low 64 bits of `n`'s two's-complement value and reads them as an `I64` (D-P12).
+pub fn wrapping_from_u64(n: U64) -> I64 {
+  case n < 0x8000_0000_0000_0000 {
+    True => {
+      let assert Ok(value) = from_u64(n)
+      value
+    }
+    False => {
+      // `0xFFFF_FFFF_FFFF_FFFF - n` fits, and minus it minus 1 is `n` - 2^64.
+      let assert Ok(complement) = from_u64(0xFFFF_FFFF_FFFF_FFFF - n)
+      -complement - 1
+    }
+  }
+}
+
+test "wrapping_from keeps the low 64 bits of every source" {
+  assert wrapping_from_u64(0) == 0
+  assert wrapping_from_u64(1) == 1
+  assert wrapping_from_u64(81_985_529_216_486_895) == 81_985_529_216_486_895
+  assert wrapping_from_u64(9_223_372_036_854_775_807) == 9_223_372_036_854_775_807
+  assert wrapping_from_u64(9_223_372_036_854_775_808) == -9_223_372_036_854_775_808
+  assert wrapping_from_u64(18_446_744_073_709_551_615) == -1
+}
+
 // Parsing and text
 
 /// Reads an `I64` written as an optional `-` and ASCII decimal digits (D-312).
@@ -67,6 +92,98 @@ pub fn parse(text: String) -> Result<I64, Nil>
 @external(native, "cheby_i64_parse_base")
 @external(js, "./i64.mjs", "parse_base")
 pub fn parse_base(text: String, base: Int) -> Result<I64, Nil>
+
+/// Returns `n` written in `base`, from 2 to 36, in lowercase digits (D-390, D-P11).
+pub fn to_base(n: I64, base: Int) -> Result<String, Nil> {
+  case base >= 2 && base <= 36 {
+    False => Err(Nil)
+    True => {
+      // The digits of `-|n|`, which fits for every `n`, `min_value` too.
+      let negative = case n > 0 {
+        True => -n
+        False => n
+      }
+      let digits = base_digits(negative, from_int(base), base, "")
+      case n < 0 {
+        True => Ok("-{digits}")
+        False => Ok(digits)
+      }
+    }
+  }
+}
+
+/// The digits of `-n` in `base`, for an `n` of 0 or below, in front of
+/// `after`. `n % wide` has the sign of `n`, so its negation is the digit.
+/// Each digit is below 36, so it fits `Int` on every target, where `n` may
+/// not.
+fn base_digits(n: I64, wide: I64, base: Int, after: String) -> String {
+  let assert Ok(digit) = int::from_i64(-(n % wide))
+  let assert Ok(text) = int::to_base(digit, base)
+  case n / wide {
+    0 => "{text}{after}"
+    rest => base_digits(rest, wide, base, "{text}{after}")
+  }
+}
+
+test "to_base writes every I64 in every base" {
+  assert to_base(-9_223_372_036_854_775_808, 2) ==
+    Ok("-1000000000000000000000000000000000000000000000000000000000000000")
+  assert to_base(-9_223_372_036_854_775_808, 8) == Ok("-1000000000000000000000")
+  assert to_base(-9_223_372_036_854_775_808, 10) == Ok("-9223372036854775808")
+  assert to_base(-9_223_372_036_854_775_808, 16) == Ok("-8000000000000000")
+  assert to_base(-9_223_372_036_854_775_808, 36) == Ok("-1y2p0ij32e8e8")
+  assert to_base(-9_223_372_036_854_775_807, 2) ==
+    Ok("-111111111111111111111111111111111111111111111111111111111111111")
+  assert to_base(-9_223_372_036_854_775_807, 8) == Ok("-777777777777777777777")
+  assert to_base(-9_223_372_036_854_775_807, 10) == Ok("-9223372036854775807")
+  assert to_base(-9_223_372_036_854_775_807, 16) == Ok("-7fffffffffffffff")
+  assert to_base(-9_223_372_036_854_775_807, 36) == Ok("-1y2p0ij32e8e7")
+  assert to_base(-1, 2) == Ok("-1")
+  assert to_base(-1, 8) == Ok("-1")
+  assert to_base(-1, 10) == Ok("-1")
+  assert to_base(-1, 16) == Ok("-1")
+  assert to_base(-1, 36) == Ok("-1")
+  assert to_base(0, 2) == Ok("0")
+  assert to_base(0, 8) == Ok("0")
+  assert to_base(0, 10) == Ok("0")
+  assert to_base(0, 16) == Ok("0")
+  assert to_base(0, 36) == Ok("0")
+  assert to_base(1, 2) == Ok("1")
+  assert to_base(1, 8) == Ok("1")
+  assert to_base(1, 10) == Ok("1")
+  assert to_base(1, 16) == Ok("1")
+  assert to_base(1, 36) == Ok("1")
+  assert to_base(81_985_529_216_486_895, 2) ==
+    Ok("100100011010001010110011110001001101010111100110111101111")
+  assert to_base(81_985_529_216_486_895, 8) == Ok("4432126361152746757")
+  assert to_base(81_985_529_216_486_895, 10) == Ok("81985529216486895")
+  assert to_base(81_985_529_216_486_895, 16) == Ok("123456789abcdef")
+  assert to_base(81_985_529_216_486_895, 36) == Ok("mf9g063v08f")
+  assert to_base(9_223_372_036_854_775_807, 2) ==
+    Ok("111111111111111111111111111111111111111111111111111111111111111")
+  assert to_base(9_223_372_036_854_775_807, 8) == Ok("777777777777777777777")
+  assert to_base(9_223_372_036_854_775_807, 10) == Ok("9223372036854775807")
+  assert to_base(9_223_372_036_854_775_807, 16) == Ok("7fffffffffffffff")
+  assert to_base(9_223_372_036_854_775_807, 36) == Ok("1y2p0ij32e8e7")
+  assert to_base(max_value, 0) == Err(Nil)
+  assert to_base(max_value, -16) == Err(Nil)
+  assert to_base(min_value, 37) == Err(Nil)
+  fn round_trips(n: I64, base: Int) -> Bool {
+    case base > 36 {
+      True => True
+      False => {
+        let assert Ok(text) = to_base(n, base)
+        parse_base(text, base) == Ok(n) && round_trips(n, base + 1)
+      }
+    }
+  }
+  assert round_trips(-9_223_372_036_854_775_808, 2)
+  assert round_trips(-9_223_372_036_854_775_807, 2)
+  assert round_trips(-1, 2)
+  assert round_trips(0, 2)
+  assert round_trips(1, 2)
+  assert round_trips(9_223_372_036_854_775_807, 2)
+}
 
 /// Returns `n` in decimal. It makes `I64` satisfy `Show`.
 @external(native, "cheby_i64_show")
@@ -219,6 +336,12 @@ test "i64 parses and shows decimal digits" {
   assert parse_base("7fffffffffffffff", 16) == Ok(max_value)
   assert show(max_value) == "9223372036854775807"
   assert "{small}" == "-5"
+  assert to_base(max_value, 16) == Ok("7fffffffffffffff")
+  assert to_base(min_value, 2) ==
+    Ok("-1000000000000000000000000000000000000000000000000000000000000000")
+  assert to_base(35, 36) == Ok("z")
+  assert to_base(max_value, 37) == Err(Nil)
+  assert to_base(max_value, 1) == Err(Nil)
 }
 
 test "comparing i64 values" {

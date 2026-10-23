@@ -236,6 +236,47 @@ test "show spells the special values" {
   assert show(-0.0) == "-0.0"
 }
 
+/// Returns `x` in decimal with exactly `digits` digits after the point, the
+/// exact binary value rounded with ties away from zero (D-P06).
+@external(native, "cheby_float_to_fixed")
+@external(js, "./float.mjs", "to_fixed")
+@std_clamped(digits)
+pub fn to_fixed(x: Float, digits: Int) -> String
+
+test "to_fixed rounds the exact value with ties away from zero" {
+  assert to_fixed(3.14159, 2) == "3.14"
+  assert to_fixed(0.125, 2) == "0.13"
+  assert to_fixed(1.005, 2) == "1.00"
+  assert to_fixed(2.5, 0) == "3"
+  assert to_fixed(-2.5, 0) == "-3"
+  assert to_fixed(1.0e21, 1) == "1000000000000000000000.0"
+}
+
+test "to_fixed keeps the sign bit and writes special values as show does" {
+  let many = 500
+  assert to_fixed(-0.0, 2) == "-0.00"
+  assert to_fixed(-0.004, 2) == "-0.00"
+  assert to_fixed(nan, 2) == "NaN"
+  assert to_fixed(neg_infinity, 1) == "-inf"
+  assert to_fixed(0.5, many) == to_fixed(0.5, 100)
+}
+
+test "to_fixed writes every digit without an exponent" {
+  let below = -3
+  assert to_fixed(0.5, 0) == "1"
+  assert to_fixed(-0.5, 0) == "-1"
+  assert to_fixed(0.375, 2) == "0.38"
+  assert to_fixed(999.995, 2) == "1000.00"
+  assert to_fixed(0.1, 20) == "0.10000000000000000555"
+  assert to_fixed(1.0e23, 0) == "99999999999999991611392"
+  assert to_fixed(-0.0, 0) == "-0"
+  assert to_fixed(5.0e-324, 3) == "0.000"
+  assert to_fixed(-5.0e-324, 0) == "-0"
+  assert to_fixed(infinity, 2) == "inf"
+  assert to_fixed(1.25, below) == "1"
+  assert show(1.0e21) == "1.0e21"
+}
+
 // Comparison
 
 /// Orders two `Float` values. It makes `Float` satisfy `Compare`.

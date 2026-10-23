@@ -4,6 +4,8 @@
 //!
 //! `I16` itself is a builtin item whose home module is this one (D-447).
 
+import std::int
+
 // Constants
 
 /// The smallest `I16`.
@@ -54,6 +56,159 @@ pub fn from_u32(n: U32) -> Result<I16, Nil>
 @external(js, "./i16.mjs", "from_u64")
 pub fn from_u64(n: U64) -> Result<I16, Nil>
 
+/// Keeps the low 16 bits of `n`'s two's-complement value and reads them as an `I16` (D-P12).
+pub fn wrapping_from_int(n: Int) -> I16 {
+  let low = n & 0xFFFF
+  case low < 0x8000 {
+    True => {
+      let assert Ok(value) = from_int(low)
+      value
+    }
+    False => {
+      // `0xFFFF - low` fits, and minus it minus 1 is `low` - 2^16.
+      let assert Ok(complement) = from_int(0xFFFF - low)
+      -complement - 1
+    }
+  }
+}
+
+/// Keeps the low 16 bits of `n`'s two's-complement value and reads them as an `I16` (D-P12).
+pub fn wrapping_from_i32(n: I32) -> I16 {
+  let low = n & 0xFFFF
+  case low < 0x8000 {
+    True => {
+      let assert Ok(value) = from_i32(low)
+      value
+    }
+    False => {
+      // `0xFFFF - low` fits, and minus it minus 1 is `low` - 2^16.
+      let assert Ok(complement) = from_i32(0xFFFF - low)
+      -complement - 1
+    }
+  }
+}
+
+/// Keeps the low 16 bits of `n`'s two's-complement value and reads them as an `I16` (D-P12).
+pub fn wrapping_from_i64(n: I64) -> I16 {
+  let low = n & 0xFFFF
+  case low < 0x8000 {
+    True => {
+      let assert Ok(value) = from_i64(low)
+      value
+    }
+    False => {
+      // `0xFFFF - low` fits, and minus it minus 1 is `low` - 2^16.
+      let assert Ok(complement) = from_i64(0xFFFF - low)
+      -complement - 1
+    }
+  }
+}
+
+/// Keeps the low 16 bits of `n`'s two's-complement value and reads them as an `I16` (D-P12).
+pub fn wrapping_from_u16(n: U16) -> I16 {
+  case n < 0x8000 {
+    True => {
+      let assert Ok(value) = from_u16(n)
+      value
+    }
+    False => {
+      // `0xFFFF - n` fits, and minus it minus 1 is `n` - 2^16.
+      let assert Ok(complement) = from_u16(0xFFFF - n)
+      -complement - 1
+    }
+  }
+}
+
+/// Keeps the low 16 bits of `n`'s two's-complement value and reads them as an `I16` (D-P12).
+pub fn wrapping_from_u32(n: U32) -> I16 {
+  let low = n & 0xFFFF
+  case low < 0x8000 {
+    True => {
+      let assert Ok(value) = from_u32(low)
+      value
+    }
+    False => {
+      // `0xFFFF - low` fits, and minus it minus 1 is `low` - 2^16.
+      let assert Ok(complement) = from_u32(0xFFFF - low)
+      -complement - 1
+    }
+  }
+}
+
+/// Keeps the low 16 bits of `n`'s two's-complement value and reads them as an `I16` (D-P12).
+pub fn wrapping_from_u64(n: U64) -> I16 {
+  let low = n & 0xFFFF
+  case low < 0x8000 {
+    True => {
+      let assert Ok(value) = from_u64(low)
+      value
+    }
+    False => {
+      // `0xFFFF - low` fits, and minus it minus 1 is `low` - 2^16.
+      let assert Ok(complement) = from_u64(0xFFFF - low)
+      -complement - 1
+    }
+  }
+}
+
+test "wrapping_from keeps the low 16 bits of every source" {
+  assert wrapping_from_int(-32769) == 32767
+  assert wrapping_from_int(-32768) == -32768
+  assert wrapping_from_int(-1) == -1
+  assert wrapping_from_int(0) == 0
+  assert wrapping_from_int(1) == 1
+  assert wrapping_from_int(32767) == 32767
+  assert wrapping_from_int(32768) == -32768
+  assert wrapping_from_i32(-2_147_483_648) == 0
+  assert wrapping_from_i32(-1_985_229_329) == -12817
+  assert wrapping_from_i32(-32769) == 32767
+  assert wrapping_from_i32(-32768) == -32768
+  assert wrapping_from_i32(-1) == -1
+  assert wrapping_from_i32(0) == 0
+  assert wrapping_from_i32(1) == 1
+  assert wrapping_from_i32(32767) == 32767
+  assert wrapping_from_i32(32768) == -32768
+  assert wrapping_from_i32(1_985_229_329) == 12817
+  assert wrapping_from_i32(2_147_483_647) == -1
+  assert wrapping_from_i64(-9_223_372_036_854_775_808) == 0
+  assert wrapping_from_i64(-81_985_529_216_486_895) == 12817
+  assert wrapping_from_i64(-32769) == 32767
+  assert wrapping_from_i64(-32768) == -32768
+  assert wrapping_from_i64(-1) == -1
+  assert wrapping_from_i64(0) == 0
+  assert wrapping_from_i64(1) == 1
+  assert wrapping_from_i64(32767) == 32767
+  assert wrapping_from_i64(32768) == -32768
+  assert wrapping_from_i64(81_985_529_216_486_895) == -12817
+  assert wrapping_from_i64(9_223_372_036_854_775_807) == -1
+  assert wrapping_from_u16(0) == 0
+  assert wrapping_from_u16(1) == 1
+  assert wrapping_from_u16(32767) == 32767
+  assert wrapping_from_u16(32768) == -32768
+  assert wrapping_from_u16(52719) == -12817
+  assert wrapping_from_u16(65535) == -1
+  assert wrapping_from_u32(0) == 0
+  assert wrapping_from_u32(1) == 1
+  assert wrapping_from_u32(32767) == 32767
+  assert wrapping_from_u32(32768) == -32768
+  assert wrapping_from_u32(2_309_737_967) == -12817
+  assert wrapping_from_u32(4_294_967_295) == -1
+  assert wrapping_from_u64(0) == 0
+  assert wrapping_from_u64(1) == 1
+  assert wrapping_from_u64(32767) == 32767
+  assert wrapping_from_u64(32768) == -32768
+  assert wrapping_from_u64(81_985_529_216_486_895) == -12817
+  assert wrapping_from_u64(18_446_744_073_709_551_615) == -1
+}
+
+@target(native)
+test "wrapping_from_int keeps the low 16 bits of every Int" {
+  assert wrapping_from_int(-9_223_372_036_854_775_808) == 0
+  assert wrapping_from_int(-81_985_529_216_486_895) == 12817
+  assert wrapping_from_int(81_985_529_216_486_895) == -12817
+  assert wrapping_from_int(9_223_372_036_854_775_807) == -1
+}
+
 // Parsing and text
 
 /// Reads an `I16` written as an optional `-` and ASCII decimal digits (D-312).
@@ -65,6 +220,52 @@ pub fn parse(text: String) -> Result<I16, Nil>
 @external(native, "cheby_i16_parse_base")
 @external(js, "./i16.mjs", "parse_base")
 pub fn parse_base(text: String, base: Int) -> Result<I16, Nil>
+
+/// Returns `n` written in `base`, from 2 to 36, in lowercase digits (D-390, D-P11).
+pub fn to_base(n: I16, base: Int) -> Result<String, Nil> {
+  int::to_base(int::from_i16(n), base)
+}
+
+test "to_base writes every I16 in every base" {
+  assert to_base(-32768, 2) == Ok("-1000000000000000")
+  assert to_base(-32768, 8) == Ok("-100000")
+  assert to_base(-32768, 10) == Ok("-32768")
+  assert to_base(-32768, 16) == Ok("-8000")
+  assert to_base(-32768, 36) == Ok("-pa8")
+  assert to_base(-32767, 2) == Ok("-111111111111111")
+  assert to_base(-32767, 8) == Ok("-77777")
+  assert to_base(-32767, 10) == Ok("-32767")
+  assert to_base(-32767, 16) == Ok("-7fff")
+  assert to_base(-32767, 36) == Ok("-pa7")
+  assert to_base(-12817, 2) == Ok("-11001000010001")
+  assert to_base(-12817, 8) == Ok("-31021")
+  assert to_base(-12817, 10) == Ok("-12817")
+  assert to_base(-12817, 16) == Ok("-3211")
+  assert to_base(-12817, 36) == Ok("-9w1")
+  assert to_base(-1, 2) == Ok("-1")
+  assert to_base(-1, 8) == Ok("-1")
+  assert to_base(-1, 10) == Ok("-1")
+  assert to_base(-1, 16) == Ok("-1")
+  assert to_base(-1, 36) == Ok("-1")
+  assert to_base(0, 2) == Ok("0")
+  assert to_base(0, 8) == Ok("0")
+  assert to_base(0, 10) == Ok("0")
+  assert to_base(0, 16) == Ok("0")
+  assert to_base(0, 36) == Ok("0")
+  assert to_base(1, 2) == Ok("1")
+  assert to_base(1, 8) == Ok("1")
+  assert to_base(1, 10) == Ok("1")
+  assert to_base(1, 16) == Ok("1")
+  assert to_base(1, 36) == Ok("1")
+  assert to_base(32767, 2) == Ok("111111111111111")
+  assert to_base(32767, 8) == Ok("77777")
+  assert to_base(32767, 10) == Ok("32767")
+  assert to_base(32767, 16) == Ok("7fff")
+  assert to_base(32767, 36) == Ok("pa7")
+  assert to_base(max_value, 0) == Err(Nil)
+  assert to_base(max_value, -16) == Err(Nil)
+  assert to_base(min_value, 37) == Err(Nil)
+}
 
 /// Returns `n` in decimal. It makes `I16` satisfy `Show`.
 @external(native, "cheby_i16_show")
@@ -216,6 +417,10 @@ test "conversions to i16" {
   assert from_int(32768) == Err(Nil)
   assert from_i32(-32768) == Ok(-32768)
   assert from_u16(65535) == Err(Nil)
+  assert wrapping_from_u64(0x0123_4567_89AB_CDEF) == -12817
+  assert wrapping_from_int(-1) == -1
+  assert wrapping_from_u16(65535) == -1
+  assert wrapping_from_int(32840) == -32696
 }
 
 test "i16 parses and shows decimal digits" {
@@ -225,6 +430,11 @@ test "i16 parses and shows decimal digits" {
   assert parse_base("-1010", 2) == Ok(-10)
   assert show(min_value) == "-32768"
   assert "{small}" == "-5"
+  assert to_base(max_value, 16) == Ok("7fff")
+  assert to_base(min_value, 2) == Ok("-1000000000000000")
+  assert to_base(35, 36) == Ok("z")
+  assert to_base(max_value, 37) == Err(Nil)
+  assert to_base(max_value, 1) == Err(Nil)
 }
 
 test "comparing i16 values" {
