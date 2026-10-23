@@ -35,6 +35,26 @@ test "try stops at the first error" {
 }
 ```
 
+### `try_with`
+
+```cheby
+pub fn try_with<T, E, F, U>(r: Result<T, E>, wrap: fn(E) -> F, next: fn(T) -> Result<U, F>) -> Result<U, F>
+```
+
+Calls `next` with the value of `r` when `r` is `Ok`, and otherwise returns `Err` of `wrap` applied to the error of `r`. It is `result::try(result::map_error(r, wrap), next)`, the step that wraps a lower error in the caller's error type, so `use config <- result::try_with(json::parse(text, decoder), InvalidConfig)` reads as `result::try` does (D-P16). `next` stays last, so `use` works as with `try`.
+
+- **Cost:** O(1), plus the call to `wrap` or `next`. Informative.
+
+```cheby
+test "try_with wraps the error before the chain stops" {
+  let bad = result::try_with(int::parse("x"), fn(_) { "not a number" }, fn(n) { Ok(n + 1) })
+  assert bad == Err("not a number")
+  assert result::try_with(int::parse("4"), fn(_) { "bad" }, fn(n) { Ok(n + 1) }) == Ok(5)
+}
+```
+
+There is no `?` operator and no implicit conversion between error types (D-018, §11.2), so `try_with` stands in for Rust's `?` with `From`. A constructor of the caller's error type, such as `InvalidConfig`, is the usual `wrap`.
+
 ### `map`
 
 ```cheby
@@ -70,6 +90,23 @@ test "map_error changes only an Err" {
   let bad: Result<Int, String> = Err("no")
   assert result::map_error(good, string::length) == Ok(2)
   assert result::map_error(bad, string::length) == Err(2)
+}
+```
+
+### `replace_error`
+
+```cheby
+pub fn replace_error<T, E, F>(r: Result<T, E>, error: F) -> Result<T, F>
+```
+
+Replaces the error of an `Err` with `error`, and returns an `Ok` unchanged. It gives a meaning to the `Err(Nil)` that `int::parse` and the conversions return, without a function that ignores its argument (D-P16).
+
+- **Cost:** O(1). Informative.
+
+```cheby
+test "replace_error gives a Nil error a meaning" {
+  assert result::replace_error(int::parse("x"), "bad") == Err("bad")
+  assert result::replace_error(int::parse("4"), "bad") == Ok(4)
 }
 ```
 
@@ -192,7 +229,7 @@ test "is_error tells Err from Ok" {
 pub fn all<T, E>(results: List<Result<T, E>>) -> Result<List<T>, E>
 ```
 
-Returns `Ok` with every value, in order, when every element is `Ok`, and otherwise the first `Err`.
+Returns `Ok` with every value, in order, when every element is `Ok`, and otherwise the first `Err`. The results are already computed, so `result::all(list::map(xs, f))` calls `f` on every element, also after the first error. [`list::try_map`](list.md#try_map) stops calling `f` at the first error (D-P02).
 
 - **Cost:** O(n). Informative.
 

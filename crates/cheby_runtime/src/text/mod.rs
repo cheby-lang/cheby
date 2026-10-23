@@ -1,11 +1,12 @@
-//! `std::string` kernels (F2): the 29 `@external(native, …)` functions of
+//! `std::string` kernels (F2): the 30 `@external(native, …)` functions of
 //! `std/string.cheby`, over UTF-8 `String` objects ([`crate::string`]).
 //! Two of them are package-visible: `std::json`'s writer uses
 //! `add_json_quoted` (D-903) and its parser `from_byte_range` (D-905).
 //!
 //! - `ops`: the semantics on Rust `&str`, with no objects: code-point
 //!   counts and positions (D-302), clamping (D-298), splitting (D-315),
-//!   padding, trimming (`White_Space`, D-310) and grapheme clusters.
+//!   padding, trimming and `words` (one `White_Space` test, D-310,
+//!   D-P13) and grapheme clusters.
 //! - `kernels`: the C entry points. Arguments are borrowed and results
 //!   owned (D-187); results are built through [`crate::values`],
 //!   [`crate::string`] and `list::from_iter` (plan §4.3.4).
@@ -25,9 +26,10 @@
 //! the Rust standard library's full mapping (`str::to_lowercase`,
 //! `str::to_uppercase`, which apply `SpecialCasing.txt`'s unconditional
 //! mappings and the language-independent `Final_Sigma` rule), whitespace is
-//! `char::is_whitespace` (`White_Space`), and grapheme clusters are
-//! `unicode-segmentation`'s extended clusters. A test asserts that both
-//! follow the same Unicode version, 17.0.0 today.
+//! `char::is_whitespace` (`White_Space`), shared by the trims and `words`,
+//! so U+0085 is whitespace and U+FEFF is not (D-P13), and grapheme
+//! clusters are `unicode-segmentation`'s extended clusters. A test asserts
+//! that both follow the same Unicode version, 17.0.0 today.
 //!
 //! Every cost of `docs/stdlib/string.md` is required (D-300): kernels read
 //! their arguments without re-validating UTF-8 (a `String` object always

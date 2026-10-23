@@ -248,6 +248,19 @@ pub unsafe extern "C" fn cheby_string_split_once(text: Word, separator: Word) ->
     })
 }
 
+/// `string::words` (D-P13): the parts of `text` between runs of
+/// `White_Space`, the whitespace `trim` removes, with no empty parts.
+/// O(n).
+///
+/// # Safety
+///
+/// `text` is a live `String`, borrowed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cheby_string_words(text: Word) -> Word {
+    // SAFETY: forwarded from the caller.
+    guarded(None, || string_list(ops::words(unsafe { arg(text) })))
+}
+
 /// `string::to_code_points` (D-302). O(n).
 ///
 /// # Safety
@@ -747,7 +760,7 @@ pub(super) type Entry = (
     reason = "taking the address of a function needs an `as` cast"
 )]
 #[expect(clippy::too_many_lines, reason = "one table row per kernel")]
-pub(super) fn all() -> [Entry; 29] {
+pub(super) fn all() -> [Entry; 30] {
     const W: &str = "Word";
     [
         (
@@ -796,6 +809,12 @@ pub(super) fn all() -> [Entry; 29] {
             "cheby_string_split_once",
             cheby_string_split_once as *const u8,
             &[W, W],
+            W,
+        ),
+        (
+            "cheby_string_words",
+            cheby_string_words as *const u8,
+            &[W],
             W,
         ),
         (

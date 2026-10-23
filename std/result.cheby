@@ -29,6 +29,36 @@ test "try stops at the first error" {
   assert add("1", "two") == Err(Nil)
 }
 
+/// Wraps the error of `r` with `wrap`, then calls `next` with the value of
+/// an `Ok`: `try(map_error(r, wrap), next)` (D-P16).
+pub fn try_with<T, E, F, U>(
+  r: Result<T, E>,
+  wrap: fn(E) -> F,
+  next: fn(T) -> Result<U, F>,
+) -> Result<U, F> {
+  case r {
+    Ok(value) => next(value)
+    Err(error) => Err(wrap(error))
+  }
+}
+
+test "try_with wraps the error before the chain stops" {
+  let bad = try_with(int::parse("x"), fn(_) { "not a number" }, fn(n) { Ok(n + 1) })
+  assert bad == Err("not a number")
+  assert try_with(int::parse("4"), fn(_) { "bad" }, fn(n) { Ok(n + 1) }) == Ok(5)
+}
+
+test "try_with reads as try with use" {
+  fn sum(a: String, b: String) -> Result<Int, String> {
+    use x <- try_with(int::parse(a), fn(_) { "bad first" })
+    use y <- try_with(int::parse(b), fn(_) { "bad second" })
+    Ok(x + y)
+  }
+  assert sum("1", "2") == Ok(3)
+  assert sum("1", "two") == Err("bad second")
+  assert sum("one", "two") == Err("bad first")
+}
+
 /// Applies `f` to the value of an `Ok`, and returns an `Err` unchanged.
 pub fn map<T, E, U>(r: Result<T, E>, f: fn(T) -> U) -> Result<U, E> {
   case r {
@@ -57,6 +87,20 @@ test "map_error changes only an Err" {
   let bad: Result<Int, String> = Err("no")
   assert map_error(good, string::length) == Ok(2)
   assert map_error(bad, string::length) == Err(2)
+}
+
+/// Replaces the error of an `Err` with `error`, and returns an `Ok`
+/// unchanged (D-P16).
+pub fn replace_error<T, E, F>(r: Result<T, E>, error: F) -> Result<T, F> {
+  case r {
+    Ok(value) => Ok(value)
+    Err(_) => Err(error)
+  }
+}
+
+test "replace_error gives a Nil error a meaning" {
+  assert replace_error(int::parse("x"), "bad") == Err("bad")
+  assert replace_error(int::parse("4"), "bad") == Ok(4)
 }
 
 /// Removes one level of nesting: `Ok(inner)` becomes `inner`.

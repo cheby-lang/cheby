@@ -111,6 +111,60 @@ test "split_once splits at the first separator" {
   assert split_once("abc", "") == Some(("a", "bc"))
 }
 
+/// Splits `text` into lines at each `\n`, removing one `\r` right before
+/// each `\n`, with no part after a final `\n` (D-P13). No other code point
+/// ends a line, as for `io::read_line` (D-305).
+pub fn lines(text: String) -> List<String> {
+  // Every part but the last was followed by `\n`, so only those lose a
+  // `\r`. The last part is `""` exactly when `text` ends with `\n` or is
+  // empty, and then it is no line.
+  fn ended(parts, done) {
+    case parts {
+      [] => done
+      [""] => done
+      [last] => [..done, last]
+      [part, ..rest] => ended(rest, [..done, remove_suffix(part, "\r")])
+    }
+  }
+  ended(split(text, "\n"), [])
+}
+
+test "lines splits at line feeds and drops the carriage return before each" {
+  assert lines("a\nb\r\nc") == ["a", "b", "c"]
+  assert lines("a\n\nb\n") == ["a", "", "b"]
+  assert lines("a\rb") == ["a\rb"]
+  assert lines("") == []
+  assert lines("\n") == [""]
+}
+
+test "lines ends a line only at a line feed" {
+  assert lines("a\r\n") == ["a"]
+  assert lines("a\r") == ["a\r"]
+  assert lines("a\r\r\nb") == ["a\r", "b"]
+  assert lines("a\u{85}b\u{2028}c\u{2029}d") == ["a\u{85}b\u{2028}c\u{2029}d"]
+  assert lines("\r\n\r\n") == ["", ""]
+}
+
+/// Splits `text` at every run of Unicode `White_Space`, the whitespace
+/// `trim` removes, with no empty parts (D-310, D-P13).
+@external(native, "cheby_string_words")
+@external(js, "./string.mjs", "words")
+pub fn words(text: String) -> List<String>
+
+test "words splits at runs of White_Space" {
+  assert words("  one\ttwo\u{3000}three \r\n") == ["one", "two", "three"]
+  assert words("a\u{85}b") == ["a", "b"]
+  assert words("\u{FEFF}x") == ["\u{FEFF}x"]
+  assert words(" \t ") == []
+}
+
+test "words keeps text that is not White_Space together" {
+  assert words("") == []
+  assert words("solo") == ["solo"]
+  assert words("a\u{200B}b\u{A0}c") == ["a\u{200B}b", "c"]
+  assert words("x\u{2028}y\u{FEFF}") == ["x", "y\u{FEFF}"]
+}
+
 /// Splits `text` into its code points, each as a one-code-point string (D-302).
 @external(native, "cheby_string_to_code_points")
 @external(js, "./string.mjs", "to_code_points")
@@ -351,6 +405,28 @@ test "from_bytes rejects invalid UTF-8" {
   assert from_bytes(bytes::from_list([0xFF])) == Err(Nil)
   assert from_bytes(bytes::from_list([0xC3])) == Err(Nil)
   assert from_bytes(bytes::from_list([0xED, 0xA0, 0x80])) == Err(Nil)
+}
+
+/// Decodes `data` as UTF-8, replacing each invalid sequence with U+FFFD by
+/// the maximal-subpart practice of `from_byte_range`, and keeping a leading
+/// U+FEFF (D-366, D-905, D-P14).
+pub fn from_bytes_lossy(data: bytes::Bytes) -> String {
+  from_byte_range(data, 0, bytes::length(data))
+}
+
+test "from_bytes_lossy replaces each invalid sequence" {
+  assert from_bytes_lossy(bytes::from_list([0x61, 0xFF, 0x62])) == "a\u{FFFD}b"
+  assert from_bytes_lossy(bytes::from_list([0xE2, 0x82])) == "\u{FFFD}"
+  assert from_bytes_lossy(bytes::from_string("café")) == "café"
+}
+
+test "from_bytes_lossy replaces maximal subparts and keeps a byte-order mark" {
+  let surrogate = bytes::from_list([0xED, 0xA0, 0x80])
+  assert from_bytes_lossy(surrogate) == "\u{FFFD}\u{FFFD}\u{FFFD}"
+  let cut = bytes::from_list([0xF0, 0x9F, 0x98, 0x41])
+  assert from_bytes_lossy(cut) == "\u{FFFD}A"
+  assert from_bytes_lossy(bytes::from_list([0xEF, 0xBB, 0xBF, 0x78])) == "\u{FEFF}x"
+  assert from_bytes_lossy(bytes::new()) == ""
 }
 
 /// Returns the bytes of `data` from `start` up to but not including `end` as

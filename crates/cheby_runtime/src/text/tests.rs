@@ -492,6 +492,11 @@ fn trimming_removes_white_space() {
         assert_eq!(s1(cheby_string_trim, "\t\r\n"), "");
         assert_eq!(s1(cheby_string_trim, "\u{3000}x"), "x");
         assert_eq!(s1(cheby_string_trim, "\u{85}x\u{A0}"), "x");
+        // U+FEFF is not `White_Space`, though ECMAScript's `trim` removes it.
+        assert_eq!(
+            s1(cheby_string_trim, "\u{FEFF}x\u{FEFF}"),
+            "\u{FEFF}x\u{FEFF}"
+        );
         assert_eq!(s1(cheby_string_trim, ""), "");
         assert_eq!(s1(cheby_string_trim_start, "  hi "), "hi ");
         assert_eq!(s1(cheby_string_trim_start, "\t\nx"), "x");
@@ -500,6 +505,59 @@ fn trimming_removes_white_space() {
         // U+200B ZERO WIDTH SPACE is not `White_Space`.
         assert_eq!(s1(cheby_string_trim, "\u{200B}x"), "\u{200B}x");
     });
+}
+
+/// `words` through its entry point.
+fn words(a: &str) -> Vec<String> {
+    // SAFETY: a live string argument.
+    take_list(call(&[a], |w| unsafe { cheby_string_words(w[0]) }))
+}
+
+/// The 25 code points with Unicode 17.0.0's `White_Space` property, the
+/// table that `trim` and `words` share on JS in M4 (D-310, D-P13).
+const WHITE_SPACE: [u32; 25] = [
+    0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x20, 0x85, 0xA0, 0x1680, 0x2000, 0x2001, 0x2002, 0x2003, 0x2004,
+    0x2005, 0x2006, 0x2007, 0x2008, 0x2009, 0x200A, 0x2028, 0x2029, 0x202F, 0x205F, 0x3000,
+];
+
+/// `words` splits at runs of `White_Space` and gives no empty parts; U+0085
+/// separates words and U+FEFF does not, unlike ECMAScript's `\s` (D-P13).
+#[test]
+fn words_split_at_runs_of_white_space() {
+    balanced(|| {
+        let none: Vec<String> = Vec::new();
+        assert_eq!(
+            words("  one\ttwo\u{3000}three \r\n"),
+            ["one", "two", "three"]
+        );
+        assert_eq!(words("a\u{85}b"), ["a", "b"]);
+        assert_eq!(words("\u{FEFF}x"), ["\u{FEFF}x"]);
+        assert_eq!(words("a\u{200B}b"), ["a\u{200B}b"]);
+        assert_eq!(words("solo"), ["solo"]);
+        assert_eq!(words(" \t "), none);
+        assert_eq!(words(""), none);
+        for point in WHITE_SPACE {
+            let space = char::from_u32(point).unwrap();
+            assert_eq!(
+                words(&format!("é{space}{space}𝄞")),
+                ["é", "𝄞"],
+                "{point:#x}"
+            );
+        }
+    });
+}
+
+/// The shared `White_Space` test holds for exactly the 25 code points of
+/// the table, so `trim`, `words` and M4's JS table agree (D-310, D-P13).
+#[test]
+#[cfg_attr(miri, ignore = "scans every code point")]
+fn white_space_is_the_table_of_25_code_points() {
+    let found: Vec<u32> = (0..=char::MAX as u32)
+        .filter_map(char::from_u32)
+        .filter(|&c| super::ops::is_white_space(c))
+        .map(u32::from)
+        .collect();
+    assert_eq!(found, WHITE_SPACE);
 }
 
 #[test]
@@ -976,6 +1034,14 @@ proptest! {
                     })
                 },
             );
+        });
+    }
+
+    #[test]
+    fn words_match_split_whitespace(text in small_text()) {
+        balanced(|| {
+            let want: Vec<&str> = text.split_whitespace().collect();
+            assert_eq!(words(&text), want);
         });
     }
 

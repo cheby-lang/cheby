@@ -1,4 +1,4 @@
-//! `std::bytes` kernels (F2, D-095, D-316, D-334): the 37
+//! `std::bytes` kernels (F2, D-095, D-316, D-334): the 38
 //! `@external(native, …)` functions of `std/bytes.cheby`, over `Bytes`
 //! objects. One of them, `json_plain_end`, is package-visible:
 //! `std::json`'s parser uses it (D-904). A `Bytes` has the shape of a
@@ -22,7 +22,9 @@
 //! Positions (D-318, D-334): `get` and the reads give `None` for a
 //! negative offset or one whose bytes pass the end; `slice` clamps both
 //! bounds to `0..=length` and is empty when `end` is not above `start`
-//! (D-298). Equality, hashing and the debug text `bytes::from_list([0x66,
+//! (D-298). `index_of` clamps its `from` in the same way, since it is
+//! where a search starts, and searches with `memchr`'s `memmem` finder,
+//! which is linear in the length of `data` and of `part` (D-P15). Equality, hashing and the debug text `bytes::from_list([0x66,
 //! 0x6f])` (D-388) are the generic operations of [`crate::generic`].
 
 pub(crate) mod kernels;

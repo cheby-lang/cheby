@@ -13,6 +13,10 @@
 //! the order the values are visited, and an error equal to one recorded
 //! already is dropped (D-404).
 //!
+//! A decoder is built eagerly, so a decoder that refers to itself goes
+//! through `lazy`, which builds the inner decoder only when it decodes a
+//! value and gives its own placeholder where no value is decoded (D-P07).
+//!
 //! A decoder records its errors as a tree, `Errors`, relative to the value
 //! it runs on. `field`, `optional_field`, `list` and `pairs` put their key
 //! or index above the errors of a member only when it has errors, so a
@@ -37,8 +41,12 @@ pub type Decoder<T> {
   /// below that value.
   Decoder(fn(tree::Tree) -> (T, Errors)),
   /// A primitive decoder: what it expects, its placeholder, whether it
-  /// accepts a value, and the result for a value it accepts.
+  /// accepts a value, and the result for a value it accepts. `json::value`
+  /// is one too (D-P08).
   Leaf(String, T, fn(tree::Tree) -> Bool, fn(tree::Tree) -> T),
+  /// A decoder made when it decodes a value: the placeholder where no value
+  /// is decoded, and the function that makes the decoder (D-P07).
+  Lazy(T, fn() -> Decoder<T>),
 }
 
 /// One value that did not fit (D-322, D-323): what the decoder `expected`,
@@ -104,6 +112,7 @@ priv fn apply<T>(decoder: Decoder<T>, value: tree::Tree) -> (T, Errors) {
       True => (take(value), NoErrors)
       False => (placeholder, mismatch(expected, value))
     }
+    Lazy(_, make) => apply(make(), value)
   }
 }
 
@@ -254,6 +263,14 @@ priv fn decode_items<T>(
         }
         decode_items(tail, decoder, index + 1, [..done, element], more)
       }
+      Lazy(_, make) => {
+        let (element, element_errors) = apply(make(), item)
+        let more = case element_errors {
+          NoErrors => found
+          _ => both(found, Under(ints::show(index), element_errors))
+        }
+        decode_items(tail, decoder, index + 1, [..done, element], more)
+      }
     }
   }
 }
@@ -330,6 +347,13 @@ priv fn find_field<T, U>(
           _ => then_errors(Under(name, errors), apply(next(decoded), value))
         }
       }
+      Lazy(_, make) => {
+        let (decoded, errors) = apply(make(), member)
+        case errors {
+          NoErrors => apply(next(decoded), value)
+          _ => then_errors(Under(name, errors), apply(next(decoded), value))
+        }
+      }
     }
     [..front, _] => find_field(front, name, decoder, next, value)
   }
@@ -337,10 +361,13 @@ priv fn find_field<T, U>(
 
 /// The placeholder for a field that is missing: what `decoder` gives for
 /// `null`, with its errors dropped (D-401). A primitive decoder accepts no
-/// `null`, so it gives its placeholder.
+/// `null`, so it gives its placeholder, and a `lazy` decoder gives its own
+/// without making its decoder, so a recursive decoder never recurses here
+/// (D-P07).
 priv fn missing_placeholder<T>(decoder: Decoder<T>) -> T {
   case decoder {
     Leaf(_, placeholder, _, _) => placeholder
+    Lazy(placeholder, _) => placeholder
     Decoder(decode_tree) => {
       let (placeholder, _) = decode_tree(tree::Null)
       placeholder
@@ -412,6 +439,57 @@ pub fn map<T, U>(decoder: Decoder<T>, f: fn(T) -> U) -> Decoder<U> {
     let (decoded, errors) = apply(decoder, value)
     (f(decoded), errors)
   })
+}
+
+/// Runs `first` and then each decoder of `others`, in order, on the same
+/// value, and gives the result of the first one that records no errors.
+/// When every one fails, it gives `first`'s result and errors (D-P09).
+pub fn one_of<T>(first: Decoder<T>, others: List<Decoder<T>>) -> Decoder<T> {
+  Decoder(fn(value) {
+    let outcome = apply(first, value)
+    case outcome {
+      (_, NoErrors) => outcome
+      _ => first_fit(others, value, outcome)
+    }
+  })
+}
+
+/// Finishes `one_of`: the outcome of the first decoder of `rest` that
+/// records no errors on `value`, or `fallback`, `first`'s outcome.
+priv fn first_fit<T>(
+  rest: List<Decoder<T>>,
+  value: tree::Tree,
+  fallback: (T, Errors),
+) -> (T, Errors) {
+  case rest {
+    [] => fallback
+    [decoder, ..tail] => {
+      let outcome = apply(decoder, value)
+      case outcome {
+        (_, NoErrors) => outcome
+        _ => first_fit(tail, value, fallback)
+      }
+    }
+  }
+}
+
+/// Decodes the member reached through the object keys of `path` with
+/// `decoder`, as nested `field` calls do, and `at([], decoder)` is
+/// `decoder` (D-P09).
+pub fn at<T>(path: List<String>, decoder: Decoder<T>) -> Decoder<T> {
+  case path {
+    [] => decoder
+    [name, ..rest] => field(name, at(rest, decoder), success)
+  }
+}
+
+/// A decoder that calls `make` each time it decodes a value and decodes the
+/// value with the decoder `make` returns. Where no value is decoded, for a
+/// missing field and for a value that is not an object, it gives
+/// `placeholder` without calling `make`, so a decoder that refers to itself
+/// is built in O(1) and its placeholder never recurses (D-P07).
+pub fn lazy<T>(placeholder: T, make: fn() -> Decoder<T>) -> Decoder<T> {
+  Lazy(placeholder, make)
 }
 
 /// A decoder that ignores the value and gives `value`.

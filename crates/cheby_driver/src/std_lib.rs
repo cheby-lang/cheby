@@ -19,6 +19,10 @@ pub struct StdModule {
 /// `std/` (a test checks it).
 pub const STD_MODULES: &[StdModule] = &[
     StdModule {
+        path: "base64",
+        source: include_str!("../../../std/base64.cheby"),
+    },
+    StdModule {
         path: "bool",
         source: include_str!("../../../std/bool.cheby"),
     },
@@ -49,6 +53,10 @@ pub const STD_MODULES: &[StdModule] = &[
     StdModule {
         path: "float",
         source: include_str!("../../../std/float.cheby"),
+    },
+    StdModule {
+        path: "hex",
+        source: include_str!("../../../std/hex.cheby"),
     },
     StdModule {
         path: "i16",

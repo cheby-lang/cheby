@@ -52,6 +52,7 @@ getrandom = "0.3"
 libc = "0.2"
 libtest-mimic = "0.8"
 loom = "0.7"
+memchr = "2.8.3"
 mimalloc = "0.1.52"
 mio = { version = "1", features = ["os-poll"] }
 object = { version = "0.39", default-features = false, features = ["read", "std"] }

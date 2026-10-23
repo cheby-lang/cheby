@@ -8,11 +8,11 @@ pub type String
 
 String literals, `+` and interpolation are part of the language (§2.5, §5.3.2, D-067). This module is how text is measured, searched, split and changed, since a string has no indexing (§3.5).
 
-Every length, position and count in this module is in code points, and grapheme clusters appear only in `to_graphemes` and `grapheme_length` (README "Text", D-302, ADR-0050). The Unicode tables that `lowercase`, `uppercase`, `trim` and the grapheme functions need come from the one Unicode version the toolchain fixes (D-310). On native, case mapping uses the Rust standard library's tables and grapheme segmentation the `unicode-segmentation` crate, and a test asserts that both follow the same version (D-552). The native runtime follows Unicode 17.0.0, the version of both Rust 1.99's tables and `unicode-segmentation` 1.13.3.
+Every length, position and count in this module is in code points, and grapheme clusters appear only in `to_graphemes` and `grapheme_length` (README "Text", D-302, ADR-0050). The Unicode tables that `lowercase`, `uppercase`, `trim`, `words` and the grapheme functions need come from the one Unicode version the toolchain fixes (D-310). On native, case mapping uses the Rust standard library's tables and grapheme segmentation the `unicode-segmentation` crate, and a test asserts that both follow the same version (D-552). The native runtime follows Unicode 17.0.0, the version of both Rust 1.99's tables and `unicode-segmentation` 1.13.3.
 
 `String` satisfies `Add` through `add`, `Compare` through `compare` and `Show` through `show` (§8.7, §8.8).
 
-A conversion between text and bytes lives in the module of its target type, as numeric conversions do (D-308): `bytes::from_string` encodes a string as UTF-8, and `string::from_bytes` decodes UTF-8. There is no `string::to_bytes`.
+A conversion between text and bytes lives in the module of its target type, as numeric conversions do (D-308): `bytes::from_string` encodes a string as UTF-8, and `string::from_bytes` and `string::from_bytes_lossy` decode UTF-8. There is no `string::to_bytes`. Bytes are written as Base64 or hex text by [`std::base64`](base64.md) and [`std::hex`](hex.md) (D-P10).
 
 Every cost in this module is **required** (D-300). `n` is the length of the first argument in code points, unless the entry says otherwise.
 
@@ -196,6 +196,49 @@ test "split_once splits at the first separator" {
 ```
 
 There is no `index_of`. A code-point position is useful only with `slice`, which scans the text again, so `split_once` cuts at a marker in one scan (D-371).
+
+### `lines`
+
+```cheby
+pub fn lines(text: String) -> List<String>
+```
+
+Splits `text` into lines. A line ends at each `\n`, and one `\r` right before a `\n` is removed with it, so both LF and CRLF endings work. A final `\n` ends the last line and gives no empty part after it, so `lines("")` is `[]`, `lines("\n")` is `[""]` and `lines("a\r\n")` is `["a"]` (D-P13). No other code point ends a line: a lone `\r`, U+0085 NEXT LINE, U+2028 LINE SEPARATOR and U+2029 PARAGRAPH SEPARATOR stay in the text. These are the line endings that `io::read_line` removes (D-305).
+
+- **Cost:** O(n), required.
+
+```cheby
+test "lines splits at line feeds and drops the carriage return before each" {
+  assert string::lines("a\nb\r\nc") == ["a", "b", "c"]
+  assert string::lines("a\n\nb\n") == ["a", "", "b"]
+  assert string::lines("a\rb") == ["a\rb"]
+  assert string::lines("") == []
+  assert string::lines("\n") == [""]
+}
+```
+
+`lines` follows `io::read_line` and Rust's `lines` rather than Unicode's full set of line terminators, as Python's `splitlines` has it, so a stray `\r` inside a field does not split it (D-P13).
+
+### `words`
+
+```cheby
+pub fn words(text: String) -> List<String>
+```
+
+Splits `text` at every run of whitespace and returns the parts between the runs, in order, with no empty parts, so `words("")` and `words(" \t ")` are `[]`. Whitespace is what `trim` removes: every code point with Unicode's `White_Space` property (D-310, D-P13). So U+0085 NEXT LINE separates words, and U+FEFF ZERO WIDTH NO-BREAK SPACE does not.
+
+- **Cost:** O(n), required.
+
+```cheby
+test "words splits at runs of White_Space" {
+  assert string::words("  one\ttwo\u{3000}three \r\n") == ["one", "two", "three"]
+  assert string::words("a\u{85}b") == ["a", "b"]
+  assert string::words("\u{FEFF}x") == ["\u{FEFF}x"]
+  assert string::words(" \t ") == []
+}
+```
+
+JS's `\s` and `String.prototype.trim` use ECMAScript's whitespace, which includes U+FEFF and excludes U+0085, so the JS kernel of `words` uses the explicit table of `White_Space` code points that `trim`'s shares, and the cases above pin the difference (D-232, D-P13).
 
 ### `to_code_points`
 
@@ -548,6 +591,26 @@ test "from_bytes rejects invalid UTF-8" {
   assert string::from_bytes(bytes::from_list([0xED, 0xA0, 0x80])) == Err(Nil)
 }
 ```
+
+### `from_bytes_lossy`
+
+```cheby
+pub fn from_bytes_lossy(data: bytes::Bytes) -> String
+```
+
+Decodes `data` as UTF-8, as `from_bytes` does, but replaces each invalid sequence with U+FFFD REPLACEMENT CHARACTER instead of failing. A sequence is replaced by the maximal-subpart practice of the Unicode standard, which Rust's `String::from_utf8_lossy` and JS's `TextDecoder` both follow, so both targets give the same text (D-905, D-P14). A byte-order mark at the start is kept as U+FEFF, as `from_bytes` keeps it (D-366). It is for text that must be shown even when it is invalid, such as what a socket, a log or another program gives, where `env::args` already replaces in the same way (D-311).
+
+- **Cost:** O(n), where n is the length of `data` in bytes, required.
+
+```cheby
+test "from_bytes_lossy replaces each invalid sequence" {
+  assert string::from_bytes_lossy(bytes::from_list([0x61, 0xFF, 0x62])) == "a\u{FFFD}b"
+  assert string::from_bytes_lossy(bytes::from_list([0xE2, 0x82])) == "\u{FFFD}"
+  assert string::from_bytes_lossy(bytes::from_string("café")) == "café"
+}
+```
+
+There is no form that takes a range of `data`: `bytes::slice` cuts one first (D-P14).
 
 ### `to_code_point_values`
 
