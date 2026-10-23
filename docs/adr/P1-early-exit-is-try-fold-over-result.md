@@ -21,7 +21,7 @@ Cheby has no loops (D-002), so stopping early must come from the library. It als
 ## Considered options
 
 - `fold_until` with a `Continue` and `Stop` type, as Gleam has it. Search code reads better, but it is a second protocol, it stops with the accumulator's type, so a search for another type still needs `Result`, and failing callbacks need `Result` anyway.
-- Both `try_fold` and `fold_until`. Each case reads best, but eleven modules carry two protocols, and every caller must choose.
+- Both `try_fold` and `fold_until`. Each case reads best, but twelve modules carry two protocols, and every caller must choose.
 - A lazy `std::seq`. Pipelines compose, but without interfaces over type constructors every collection needs its own adapters, each element costs a closure, against Perceus reuse (D-894), and Gleam moved its iterator out of its standard library.
 - A `ControlFlow` type in a module of its own. It is `Result` under another name, which every collection would import.
 

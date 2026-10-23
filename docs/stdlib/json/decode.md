@@ -334,6 +334,7 @@ pub fn one_of<T>(first: Decoder<T>, others: List<Decoder<T>>) -> Decoder<T>
 Runs `first`, and then each decoder of `others` in order, on the same value, and gives the result of the first one that records no errors. It decodes an untagged union, such as an `"id"` that is `1` in one document and `"a1"` in another. The decoders after the one that fits are not run.
 
 - **Fails:** when every decoder records errors, with `first`'s result and only `first`'s errors, so its placeholder is `first`'s (D-P09).
+- **Missing fields.** For a missing field, `one_of` is decoded on `null`, as any decoder is (D-401), so a later decoder that accepts `null`, such as an `optional`, gives the field's value.
 - **Cost:** running up to `1 + length(others)` decoders on the value. Informative.
 
 ```cheby

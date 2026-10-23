@@ -112,10 +112,10 @@ test "list encodes each element with its type's to_json" {
 ### `to_string`
 
 ```cheby
-pub fn to_string(value: Value) -> String
+pub fn to_string(document: Value) -> String
 ```
 
-Returns `value` as compact JSON text, with no whitespace between tokens. The name is not a `show` (D-307): it encodes a JSON value rather than giving a Cheby value's text.
+Returns `document` as compact JSON text, with no whitespace between tokens. The name is not a `show` (D-307): it encodes a JSON value rather than giving a Cheby value's text.
 
 - `Null`, `Bool(True)` and `Bool(False)` are `null`, `true` and `false`.
 - An `Int` is its decimal digits, with `-` when negative, as `int::show` writes them, also outside ±(2⁵³−1) (D-321).
@@ -160,10 +160,10 @@ These are the escapes `JSON.stringify` writes, so output matches the JS host (D-
 ### `to_pretty_string`
 
 ```cheby
-pub fn to_pretty_string(value: Value) -> String
+pub fn to_pretty_string(document: Value) -> String
 ```
 
-Returns `value` as JSON text indented by two spaces, with `": "` after each key (D-327). An empty array or object is `[]` or `{}`. Any other array or object is its opening bracket, then each element or member on a line of its own, indented two spaces more than the line of the bracket and followed by `,` except the last, and then the closing bracket on a line of its own at the bracket's indentation. Scalars are written as `to_string` writes them. There is no final line ending. This is the layout of `JSON.stringify(value, null, 2)`.
+Returns `document` as JSON text indented by two spaces, with `": "` after each key (D-327). An empty array or object is `[]` or `{}`. Any other array or object is its opening bracket, then each element or member on a line of its own, indented two spaces more than the line of the bracket and followed by `,` except the last, and then the closing bracket on a line of its own at the bracket's indentation. Scalars are written as `to_string` writes them. There is no final line ending. This is the layout of `JSON.stringify(value, null, 2)`.
 
 - **Cost:** O(n) in the length of the result, required (D-300).
 

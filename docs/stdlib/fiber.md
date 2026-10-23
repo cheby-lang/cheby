@@ -493,6 +493,7 @@ test "a timeout cancels the scopes inside it without their returning" {
 
 `map` and `try_map` run a function over a list on several fibers at once, with a limit on how many run together (D-P19). They are drop-ins for [`list::map`](list.md#map) and [`list::try_map`](list.md#try_map): the same results, in the same order, and a panic where `list::map` would panic. Each runs in a scope of its own, so no fiber it starts outlives the call.
 
+- **Order.** Both start the calls of `f` in the order of `xs`, and the results keep that order whatever order the calls end in (D-P19).
 - **The limit.** At most `limit` calls of `f` run at a time, each on a fiber of its own. `limit` is clamped to at least 1 (D-298), and a `limit` above the length of the list runs every call at once.
 - **Sharing.** The elements, `f`'s captures and the results cross fibers, so they become shared (§9.4).
 - **Written in Cheby.** Both are written over `scope`, `spawn`, a channel, [`cancel`](#cancel) and [`raise`](#raise), with no kernel. They call function values, so tail calls to them stay tail calls (D-1059).
@@ -707,9 +708,9 @@ test "panics compare by message and location" {
 pub fn raise(failure: Panic) -> Never
 ```
 
-Panics on the calling fiber with `failure`'s message and location (D-P18). A scope that catches it gets a `Panic` that is `==` to `failure`, and an uncaught one prints the original `panicked at <location>:` line and message ([§11.6](../spec/11-errors-and-panics.md#116-panics)). So code that catches a panic, cleans up and passes it on keeps the first panic's report, where `panic as fiber::message(p)` would report its own location.
+Panics on the calling fiber with `failure`'s message and location (D-P18). A scope that catches it gets a `Panic` that is `==` to `failure`, and an uncaught one prints the original `panicked at <location>:` line and message ([§11.6](../spec/11-errors-and-panics.md#116-panic-and-todo)). So code that catches a panic, cleans up and passes it on keeps the first panic's report, where `panic as fiber::message(p)` would report its own location.
 
-- The backtrace, when it is on, is the calling fiber's stack at the call of `raise`, since the original stack has unwound (§11.6, D-1039).
+- The backtrace, when it is on, starts with the line `  in fiber::raise`, with no location, and goes on with the calling fiber's stack at the call of `raise`, since the original stack has unwound. The report's two lines keep the original location ([§11.6](../spec/11-errors-and-panics.md#116-panic-and-todo), D-1039).
 - It is a panic that the caller asks for, like `panic as`, so it is the one deliberate exception to D-297's rule that std panics only where a language rule does. There is still no accessor for the location (D-648).
 - It is written in Cheby over a private kernel, implemented after M3 with [`map`](#map), and its tests are pending for M4 (D-741).
 - **Cost:** O(1), plus the unwinding. Informative.

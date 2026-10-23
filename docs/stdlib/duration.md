@@ -261,7 +261,7 @@ test "neg flips the sign" {
 pub fn scale(d: Duration, factor: Int) -> Duration
 ```
 
-Returns `d` times `factor`, exactly, as in a backoff that doubles a wait (D-P22). It panics only where the result does not fit, as `Duration` arithmetic does (D-650), on every target. The algorithm keeps every intermediate value within the result's range:
+Returns `d` times `factor`, exactly, as in a backoff that doubles a wait (D-P22). It panics only where the result does not fit, as `Duration` arithmetic does (D-650), with the message `integer overflow` on every target. The algorithm keeps every intermediate value within the result's range:
 
 1. Write `d` as `a` seconds plus `b` nanoseconds, such that `a` and `b` never have opposite signs. When `d` is not negative, or is negative with no nanoseconds, `a` and `b` are its seconds and nanoseconds. When `d` is negative and has nanoseconds, `a` is its seconds plus 1 and `b` its nanoseconds minus 10⁹, so −0.5 s is 0 s and `-500_000_000` ns.
 2. Write `factor` as `q × 10⁹ + r`, with `q = factor / 10⁹` and `r = factor % 10⁹`, which truncate toward zero (D-069, D-092).
@@ -270,7 +270,7 @@ Returns `d` times `factor`, exactly, as in a backoff that doubles a wait (D-P22)
 
 Every partial product and partial sum has the sign of the result or is 0, and none is larger in size than the result, so no step overflows unless the result does. A negative span or a negative factor makes `p % 10⁹` negative, which is why the carry is floored.
 
-- **Panics:** when the seconds of the result overflow `Int`, which on JS means leaving ±(2⁵³−1) (D-025, D-037).
+- **Panics:** with `integer overflow` when the seconds of the result overflow `Int` (D-025). On JS that means leaving ±(2⁵³−1), and `scale` checks that range itself, so the message is the same as on native (D-037, D-P22).
 - **Cost:** O(1). Informative.
 
 ```cheby
@@ -303,9 +303,8 @@ test "scale panics where the result does not fit" {
     use _scope <- fiber::scope()
     duration::scale(duration::hours(1), 2_562_047_788_015_216)
   }
-  // On JS the result leaves the safe-integer range first, which panics
-  // with a message of its own (D-037).
-  let assert Err(_) = outcome
+  let assert Err(failure) = outcome
+  assert fiber::message(failure) == "integer overflow"
 }
 
 @target(native)

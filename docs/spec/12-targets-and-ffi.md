@@ -34,7 +34,7 @@ The JS backend emits ES modules (D-006, D-074).
 
 ### 12.3.1 Fibers on JS
 
-JavaScript has no stackful coroutines. The compiler performs a whole-program **suspension analysis** that finds every function that can transitively reach a suspension point: channel operations, scope waits, joins, IO, timers and yield checks (D-014, ADR-0005). Only those functions are compiled to generator functions, and calls between them become delegated yields. All other functions compile to plain JS functions.
+JavaScript has no stackful coroutines. The compiler performs a whole-program **suspension analysis** that finds every function that can transitively reach a suspension point: channel operations, scope waits, joins, IO, timers, `fiber::yield_now` and yield checks (D-014, ADR-0005, D-P23). Only those functions are compiled to generator functions, and calls between them become delegated yields. All other functions compile to plain JS functions.
 
 - The coloring is internal to the generated code. Cheby source never shows it (D-003).
 - Calls through function values and `dyn` interface values are treated conservatively: if any function that could be called there may suspend, the call site is compiled as suspending (ADR-0005).
@@ -77,7 +77,7 @@ A program whose result does not depend on timing or scheduling order computes th
 | Timeouts, timers and cancellation | take effect at the next function entry | take effect only at the fiber's next real suspension point                                                | D-103, D-185, D-232 |
 | `Map`/`Set` iteration order       | random per process                     | random per process                                                                                        | D-093               |
 
-The `Int` range and recursion depth rows are the failures that happen only on JS, and both are panics. The parallelism, preemption and timeout rows affect only timing, scheduling and liveness. On JS a CPU-bound fiber holds the thread until its next real suspension point, so a timeout cannot interrupt it, and `fiber::timeout` may return `Ok` after its deadline ([§10.8](10-concurrency.md#108-timeouts)). A program that needs a timeout to bound CPU work on JS must put suspension points in that work, such as a channel operation or a timer (D-232).
+The `Int` range and recursion depth rows are the failures that happen only on JS, and both are panics. The parallelism, preemption and timeout rows affect only timing, scheduling and liveness. On JS a CPU-bound fiber holds the thread until its next real suspension point, so a timeout cannot interrupt it, and `fiber::timeout` may return `Ok` after its deadline ([§10.8](10-concurrency.md#108-timeouts)). A program that needs a timeout to bound CPU work on JS must put suspension points in that work, such as calls of `fiber::yield_now` (D-232, D-P23).
 
 Memory management differs in mechanism but not in observable behavior: handle drop functions and channel closing happen at the same points on both targets ([§9.8](09-memory-model.md#98-memory-on-the-js-target), D-100).
 

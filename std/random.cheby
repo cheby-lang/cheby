@@ -152,30 +152,13 @@ test "split derives generators that draw apart" {
 
 /// The 64 bits of `n` in two's complement.
 fn bits_of(n: Int) -> U64 {
-  case n >= 0 {
-    True => {
-      let assert Ok(bits) = u64::from_int(n)
-      bits
-    }
-    False => {
-      // `-(n + 1)` cannot overflow, and `max_value` minus it is the
-      // two's-complement bits of `n`.
-      let assert Ok(complement) = u64::from_int(-(n + 1))
-      u64::max_value - complement
-    }
-  }
+  u64::wrapping_from_int(n)
 }
 
 /// The `Int` whose two's-complement bits are `bits`, the inverse of
 /// `bits_of`. On JS it panics outside ±(2⁵³−1) (D-037).
 fn int_of(bits: U64) -> Int {
-  case int::from_u64(bits) {
-    Ok(n) => n
-    Err(Nil) => {
-      let assert Ok(complement) = int::from_u64(u64::max_value - bits)
-      -complement - 1
-    }
-  }
+  int::wrapping_from_u64(bits)
 }
 
 @target(native)

@@ -28,11 +28,14 @@ A fiber gives up its thread at **suspension points**:
 - channel sends and receives that cannot complete immediately, and waiting in `select` ([§10.6](#106-selectors)),
 - waiting for a scope or joining a fiber,
 - IO and timers ([§10.9](#109-blocking-io)),
+- `fiber::yield_now`, which suspends the fiber once and puts it behind the fibers that can run (D-P23),
 - **yield checks**, which the compiler inserts at the entry of every function (D-028). On native targets the yield check is the same compare as the stack-limit check ([§11.8.1](11-errors-and-panics.md#1181-stack-overflow)) (D-124).
 
 Because there are no loops, every repetition goes through a function call, so on native targets the entry yield check guarantees that no fiber can hold a thread indefinitely without passing a suspension point (D-028). Preemption only happens at these points; a fiber is never interrupted in the middle of a function body without calls.
 
-The JS target inserts no entry yield checks, so a JS fiber runs until its next real suspension point. Timers, including selector timer arms, fire only when the running fiber suspends, and a CPU-bound fiber can starve all others (D-185, D-232, [§12.4](12-targets-and-ffi.md#124-semantic-differences-between-targets)).
+The operations that do not wait, `channel::send_now`, `channel::receive_now` and `selector::select_now`, are not suspension points ([§10.5.4](#1054-operations-that-do-not-wait), [§10.6](#106-selectors)) (D-P20).
+
+The JS target inserts no entry yield checks, so a JS fiber runs until its next real suspension point. Timers, including selector timer arms, fire only when the running fiber suspends, and a CPU-bound fiber can starve all others unless it calls `fiber::yield_now` now and then (D-185, D-232, D-P23, [§12.4](12-targets-and-ffi.md#124-semantic-differences-between-targets)).
 
 The scheduling order of runnable fibers is unspecified. Programs must not depend on it.
 
@@ -118,7 +121,7 @@ Detached fibers are the escape hatch for long-lived background work. Leaked deta
 - The location is that of the innermost call on the fiber's stack whose function is not defined in package `std`. A function of `std` counts as `std` also where user code instantiates it. The location is written `<path>:<line>:<column>`, as in a panic report ([§11.6](11-errors-and-panics.md#116-panic-and-todo)), and is the start of the call: the callee's path for `f(x)`, the start of the chain for a pipe, and the `use` of a `use` statement. The search passes through `std` functions and the compiler's Cheby-convention shims, such as the one for a function used as a value. When it reaches the runtime or foreign code first, such as the runtime starting a spawned fiber's function or a foreign call, the location is `<unknown location>` (D-856).
 - Lines are sorted by path, compared as bytes, then by line and column as numbers, then by operation, and `<unknown location>` lines come last. Equal lines are all kept, and the report has no limit on its length. The order depends only on what the fibers wait in, never on fiber identities, workers or timing (D-858).
 
-_Note:_ a tail call replaces its caller's frame ([§5.15.3](05-expressions.md#5153-guaranteed-tail-calls)), so a wait reached through tail calls is reported at the innermost call still on the stack. A tail call from code outside `std` to a public function of `std` that can wait on a channel, a fiber, a scope or a timer and calls no function value on the calling fiber keeps its caller's frame. Today these are `channel::send`, `channel::receive`, `fiber::join`, `time::sleep` and `time::sleep_until` (D-861, D-1059). So a function such as `fn() { channel::receive(rx) }` passed to `fiber::spawn` is reported at its `channel::receive`. A waiting function that calls a function value keeps its tail call, as `selector::select`, `fiber::race`, `process::until_interrupted` and `io::copy` do, and a fiber waiting in one is located at the nearest frame outside `std` that is still on the stack (D-861, D-1059). Socket waits and work on the blocking pool never appear in a report (D-857, D-984), so the rule leaves them out. Panics raised by standard-library operations still report `<unknown location>` (D-732).
+_Note:_ a tail call replaces its caller's frame ([§5.15.3](05-expressions.md#5153-guaranteed-tail-calls)), so a wait reached through tail calls is reported at the innermost call still on the stack. A tail call from code outside `std` to a public function of `std` that can wait on a channel, a fiber, a scope or a timer and calls no function value on the calling fiber keeps its caller's frame. Today these are `channel::send`, `channel::receive`, `channel::send_all`, `channel::to_list`, `fiber::join`, `time::sleep` and `time::sleep_until` (D-861, D-1059, D-P21). So a function such as `fn() { channel::receive(rx) }` passed to `fiber::spawn` is reported at its `channel::receive`. A waiting function that calls a function value keeps its tail call, as `selector::select`, `fiber::race`, `channel::fold`, `process::until_interrupted` and `io::copy` do, and a fiber waiting in one is located at the nearest frame outside `std` that is still on the stack (D-861, D-1059). Socket waits and work on the blocking pool never appear in a report (D-857, D-984), so the rule leaves them out. Panics raised by standard-library operations still report `<unknown location>` (D-732).
 
 A root that has finished while detached fibers are blocked is not deadlocked: the program exits ([§10.10](#1010-program-entry-and-exit)).
 
@@ -207,6 +210,12 @@ fn consume(rx: Receiver<Int>, total: Int) -> Int {
 }
 ```
 
+### 10.5.4 Operations that do not wait
+
+`channel::send_now(tx, value)` and `channel::receive_now(rx)` never wait (D-P20). `send_now` enqueues `value` when the buffer has room, or hands it to a receiver or a selector that is waiting now, and returns `Ok(Nil)`. Otherwise it returns `Err(Full(value))`, or `Err(Closed(value))` when every `Receiver` has been dropped, which is checked first, so the value is given back either way (D-179). On capacity 0 it succeeds only when it wins a waiting receiver or selector, and it never waits for a selector's choice (D-206). `receive_now` returns `Some` of what `receive` would return when `receive` would not block, and `None` otherwise, so `Some(Err(Nil))` means that the channel is closed and empty.
+
+Neither is a suspension point ([§10.2](#102-scheduling)). A fiber that only polls keeps its thread, and on JS it starves the other fibers until it suspends (D-185).
+
 ## 10.6 Selectors
 
 There is no `select` statement. Waiting on several channels is done with a **selector** from the standard library (D-041). A selector is built from several receive arms, each mapping the result of a receive to a common result type, and then waited on:
@@ -230,8 +239,9 @@ case selector::select(events) {
 - A selector is an immutable value. Adding an arm returns a new selector, and the same selector can be passed to `select` any number of times (D-673). `Selector<E>` is an external type of `std::selector`, a handle that holds its receivers and mapping functions (D-647).
 - `select` blocks until at least one arm is ready, then takes exactly one value from exactly one ready arm and returns its mapped result.
 - If several arms are ready, `select` chooses one of them uniformly at random, so it favors none (D-041, D-673).
+- `selector::select_now(selector)` takes a value from a ready arm without waiting, choosing among ready arms as `select` does, calls that arm's mapping function and returns `Some` of its result, or returns `None` when no arm is ready. A timer arm is ready in `select_now` only when its duration is zero or less. It is not a suspension point, so a loop that only polls keeps its thread, and on JS it starves the other fibers (D-185, D-P20).
 - The chosen arm's mapping function is called exactly once, on the calling fiber, after the value has been taken. Before that call, `select` releases its reference to the selector, and so to the receivers it holds (D-670, D-673). A panic in the mapping function is an ordinary panic of the calling fiber at that point.
-- A timer arm ([§10.8](#108-timeouts)) is ready when its duration has elapsed since `select` started waiting (D-103). Its clock starts anew in each call of `select`, not when the arm is added, and a duration of zero or less is ready at once (D-652, D-673). A selector may have any number of timer arms.
+- A timer arm ([§10.8](#108-timeouts)) is ready when its duration has elapsed since `select` started waiting (D-103). Its clock starts anew in each call of `select`, not when the arm is added, and a duration of zero or less is ready at once (D-652, D-673). A timer arm of zero competes uniformly with the other ready arms, so it does not act as a default arm (D-1079). A selector may have any number of timer arms.
 - A selector without arms is never ready, so `select` waits until the fiber is cancelled (D-673). If no other fiber can then make progress, the program is deadlocked ([§10.4](#104-detached-fibers)) (D-724).
 - Each receive arm's mapping function takes a `Result<T, Nil>`, like `channel::receive`. A receive arm on a closed, empty channel is ready, and passes `Err(Nil)` to its mapping function, so selectors can observe closure (D-180).
 - A fiber waiting in `select` counts as a receiver on every channel it has a receive arm for (D-206). On a capacity-0 channel, a receive arm is ready while a sender is blocked on it, and a `send` does not block for want of a receiver while a selector waits on its channel. When the selector chooses that arm, the handoff completes: the value is taken and the sender's `send` returns `Ok(Nil)`. When it chooses another arm, no value is taken from the other channels, and their senders stay blocked.
@@ -289,7 +299,7 @@ The outer `Result` is the timeout's, and the inner one is `http::get`'s (D-1010)
 
 A function of the standard library that waits for a duration, such as `fiber::timeout` and `selector::after`, treats a duration of zero or less as already elapsed, and one longer than 2⁶³ − 1 nanoseconds, about 292 years, as one that never elapses, on every platform and target (D-652, D-891). A `time::sleep` that never elapses, or a `time::sleep_until` with a deadline that far away, arms no timer, so a program whose fibers all wait, one of them in such a sleep, is deadlocked ([§10.4](#104-detached-fibers)) (D-1058).
 
-On JS, a timeout cannot interrupt `f` between real suspension points, so a CPU-bound `f` may run past `d`, finish and return `Ok`. To bound CPU work on JS, the work must suspend, for example on a channel operation or a timer (D-185, D-232, [§12.4](12-targets-and-ffi.md#124-semantic-differences-between-targets)).
+On JS, a timeout cannot interrupt `f` between real suspension points, so a CPU-bound `f` may run past `d`, finish and return `Ok`. To bound CPU work on JS, the work must suspend now and then. `fiber::yield_now` suspends once per call. A `time::sleep` of zero returns at once and a timer arm of zero is ready at once, so neither is sure to suspend (D-185, D-232, D-652, D-673, D-P23, [§12.4](12-targets-and-ffi.md#124-semantic-differences-between-targets)).
 
 Selectors have a timer arm for deadlines ([§10.6](#106-selectors)). Timers use the runtime's poller ([§10.9](#109-blocking-io)).
 
